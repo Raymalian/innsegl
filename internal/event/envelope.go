@@ -57,19 +57,21 @@ const MaxIdempotencyKeyBytes = 128
 // one at all: doc 02 §1 makes absent and empty distinct states, and a field
 // left merely un-required is one a later implementation starts populating.
 //
-// The literals are deliberately not exported constants. The canonical
-// event_type enum belongs with the event types (RM-007); these are a local
-// reference to it and must be kept in step with it. See ADR-0004.
+// The sets are keyed by the canonical event_type enum, which lives with the
+// event types in types.go (RM-007). ADR-0004 fixes the membership below and
+// the golden fixtures pin it; changing either set is a schema decision, not a
+// tidy-up. ValidateEvent reads the same two sets, so the append-time gate and
+// the envelope cannot drift apart.
 var (
 	idempotencyKeyAcceptedBy = map[string]bool{
-		"run_registered":  true,
-		"tool_call":       true,
-		"commit_intent":   true,
-		"commit_recorded": true,
+		EventTypeRunRegistered:  true,
+		EventTypeToolCall:       true,
+		EventTypeCommitIntent:   true,
+		EventTypeCommitRecorded: true,
 	}
 	idempotencyKeyForbiddenOn = map[string]bool{
-		"credential_issued": true,
-		"run_retired":       true,
+		EventTypeCredentialIssued: true,
+		EventTypeRunRetired:       true,
 	}
 )
 
