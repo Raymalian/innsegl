@@ -29,9 +29,16 @@ maintainer ask "why is it like this?"
 | [0004](0004-idempotency-key-scope.md) | Scope `idempotency_key` to the MCP tools that accept one | accepted | 2026-08-28 |
 | [0005](0005-one-chain-per-database.md) | Scope a ledger chain to a database | accepted | 2026-08-28 |
 | [0006](0006-segment-object-format-and-content-addressed-segment-id.md) | Address a sealed segment by the digest of its object, and make that digest its `segment_id` | accepted | 2026-08-28 |
+| [0007](0007-protected-surfaces-gate-semantics.md) | Enforce the protected surfaces with a self-verifying gate, and define what it does before the first tag exists | accepted | 2026-08-28 |
+| [0008](0008-worm-canary-proves-refusal-by-attempting-deletion.md) | Prove the WORM configuration by attempting a real deletion, and fail closed on anything short of a refusal | accepted | 2026-08-28 |
 
 ## Open items
 
+- **ADR-0007** flags a gap it does not close: `VERSIONING.md` protects "the
+  `error_class` values they return" without enumerating them, and the only
+  enumeration is IP §4, which is local-only. `scripts/protected-surfaces.sh`
+  therefore carries the sole shipped copy of that vocabulary. Publishing the
+  list belongs with the MCP tool work (RM-022..025).
 - **ADR-0004** requires one edit outside `docs/adr/`: doc 02 §2's
   `idempotency_key` description must be narrowed to "MCP tool calls that accept
   an `idempotency_key`", and its "≤128" made explicit as bytes. Implementing
