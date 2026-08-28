@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 #
 # Self-test for the coverage floor gate (scripts/coverage-floors.sh).
 #
