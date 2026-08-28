@@ -20,7 +20,7 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 
 COVERPROFILE := cover.out
 
-.PHONY: all build test lint cover smoke clean
+.PHONY: all build test lint cover smoke spire-up spire-verify spire-down clean
 
 all: build test lint
 
@@ -41,6 +41,19 @@ lint:
 cover:
 	go test ./... -covermode=atomic -coverprofile=$(COVERPROFILE)
 	go tool cover -func=$(COVERPROFILE)
+
+## spire-up: boot the reference SPIRE stack and create its bootstrap entries
+spire-up:
+	docker compose -f deploy/compose/spire.yml up -d
+	deploy/compose/spire/register.sh
+
+## spire-verify: prove the SPIRE stack issues an SVID for an agent run
+spire-verify:
+	deploy/compose/spire/verify.sh
+
+## spire-down: tear the SPIRE stack down, volumes included
+spire-down:
+	docker compose -f deploy/compose/spire.yml --profile verify down -v
 
 ## smoke: boot the reference stack and verify a real signed commit (RM-054)
 smoke:
