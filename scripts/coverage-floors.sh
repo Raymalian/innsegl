@@ -42,6 +42,11 @@ set -euo pipefail
 # The path is matched as a prefix, so "internal/ledger" covers
 # internal/ledger/... as the issue requires.
 # ---------------------------------------------------------------------------
+# Paths excluded from floor measurement: test-helper binaries that exist to be
+# compiled into a container and exercised from the outside. They carry no tests
+# by design, and counting them understates the package they sit in.
+FLOOR_EXCLUDE="internal/spire/svidprobe"
+
 LINE_FLOORS=(
   "internal/ledger 90"
   "internal/mcp 90"
@@ -52,6 +57,7 @@ LINE_FLOORS=(
   # refactoring does not trip them.
   "internal/event 95"
   "internal/segment 88"
+  "internal/spire 85"
 )
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -113,10 +119,11 @@ fi
 # ---------------------------------------------------------------------------
 package_coverage() {
   local prefix="$1"
-  awk -v pat="/${prefix}/" '
+  awk -v pat="/${prefix}/" -v excl="${FLOOR_EXCLUDE}" '
     NR == 1 && $1 == "mode:" { next }
     NF != 3 { next }
     index($1, pat) == 0 { next }
+    excl != "" && index($1, excl) > 0 { next }
     {
       key = $1
       stmts[key] = $2

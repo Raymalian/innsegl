@@ -469,11 +469,15 @@ func TestWithRunStampsOnlyAnUnattributedError(t *testing.T) {
 	}
 
 	already := newError(ClassRunNotFound, "op", "run-1", "gone", false, nil)
+	// Identity comparison is the point: withRun must return the *same* error,
+	// not a wrapped copy. errors.Is would pass on a wrapper and defeat the test.
+	//nolint:errorlint // deliberate identity check, not an error-matching check
 	if got := withRun(already, "run-42"); got != error(already) {
 		t.Errorf("withRun overwrote an existing run id: %v", got)
 	}
 
 	plain := errors.New("not ours")
+	//nolint:errorlint // deliberate identity check: a foreign error must pass through untouched
 	if got := withRun(plain, "run-42"); got != plain {
 		t.Errorf("withRun rewrote a foreign error: %v", got)
 	}
