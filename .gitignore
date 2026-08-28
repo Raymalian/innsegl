@@ -1,0 +1,32 @@
+
+.*
+
+
+!.gitignore
+!.github/
+!.github/**
+!.golangci.yml
+!.editorconfig
+!.dockerignore
+!.env.example
+
+
+docs/*
+!docs/adr/
+
+# Go
+/innsegl
+*.test
+*.out
+coverage.*
+
+# Node / dashboard
+node_modules/
+dist/
+build/
+.next/
+*.tsbuildinfo
+
+# Local artifacts
+tmp/
+*.log
