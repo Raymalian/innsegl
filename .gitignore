@@ -33,6 +33,10 @@ build/
 # Placement is RM-059's (#67) call; ignored until then so it cannot be swept in.
 innsegl-stub/
 
+# Property-test failure repros. rapid writes these on a red run; they are
+# reproduction scratch, not fixtures, and must never be committed.
+**/testdata/rapid/
+
 # Local artifacts
 tmp/
 *.log
