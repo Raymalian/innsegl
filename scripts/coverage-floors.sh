@@ -196,7 +196,8 @@ done
 #   * signature verification
 #   * every error-return path of every MCP tool
 #
-# TODO(#10): this gate is unimplemented. `go test -cover` reports statement
+# Enforced by scripts/branch-coverage.sh (gobco), which runs as its own CI job.
+# `go test -cover` reports statement
 # coverage only; there is no branch mode in the Go toolchain, so nothing above
 # measures it. A follow-up issue must select the mechanism (a branch-coverage
 # tool such as gobco, or an explicit per-branch test-ID manifest checked
@@ -210,12 +211,14 @@ log "==> branch coverage floors — IP §2 — SEE scripts/branch-coverage.sh"
 log "    100% branch coverage is required on hash-chain append, segment sealing,"
 log "    signature verification, and every error-return path of every MCP tool."
 log "    Go measures statements, not branches: the numbers above do NOT satisfy"
-log "    this floor. Unimplemented — see TODO(#10) in $(basename "${BASH_SOURCE[0]}")."
+log "    that floor. It is enforced separately by scripts/branch-coverage.sh,"
+log "    which uses gobco and runs as its own CI job. Two of the four surfaces"
+log "    do not exist yet (RM-037, RM-022..025); they report PENDING, never pass."
 summary ""
 summary "> **Branch floor (IP §2) is NOT enforced.** Go measures statements, not"
 summary "> branches; the table above does not satisfy the 100% branch requirement."
-summary "> Tracked as TODO(#10) in \`scripts/coverage-floors.sh\`."
-annotate_warning "branch coverage floor (IP §2) is not enforced by CI yet — TODO(#10)"
+summary "> Enforced by \`scripts/branch-coverage.sh\` — see the branch coverage job."
+log "    (the branch coverage job enforces this; nothing to warn about here)"
 
 log ""
 if [ "${status}" -ne 0 ]; then
