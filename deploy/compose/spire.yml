@@ -117,6 +117,13 @@ services:
       - innsegl-spire-admin
     volumes:
       - ./spire/server.conf:/run/spire/conf/server.conf:ro
+      # The authorization policy (RM-015, #23). Two files because SPIRE's OPA
+      # engine takes two paths — the rego module and the data it queries. They
+      # are read-only and are the only reason this file changed for RM-015:
+      # `rego_path` is a filesystem path, so the policy cannot reach the server
+      # without a mount. See spire/authz-policy.rego and ADR-0012.
+      - ./spire/authz-policy.rego:/run/spire/conf/authz-policy.rego:ro
+      - ./spire/authz-policy-data.json:/run/spire/conf/authz-policy-data.json:ro
       # Read-only, and it is the *server* half of the PKI: upstream CA cert and
       # key plus the node CA certificate. The node CA key is not on this volume.
       - spire-pki-server:/run/spire/pki:ro
