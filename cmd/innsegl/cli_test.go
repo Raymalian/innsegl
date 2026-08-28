@@ -10,9 +10,16 @@ import (
 )
 
 // documentedSubcommands is the subcommand surface fixed by the deployment
-// topology (doc 05 §1): the MCP server, the reconciler, the sealer, the
-// orphan-entry reaper and the third-party verify CLI all ship as one binary.
-var documentedSubcommands = []string{"reap", "reconcile", "seal", "serve", "verify"}
+// topology: the MCP server, the reconciler, the sealer, the orphan-entry
+// reaper and the third-party verify CLI all ship as one binary (doc 05 §1),
+// and the WORM deletion canary joins them because doc 05 §2 requires SEG-005
+// to run "as a scheduled job in production, not only at deploy" — which needs
+// something an operator can schedule.
+var documentedSubcommands = []string{"canary", "reap", "reconcile", "seal", "serve", "verify"}
+
+// implementedSubcommands are the ones with a body. The rest are still stubs
+// that exit non-zero, and TestRunDispatchesEverySubcommand asserts that.
+var implementedSubcommands = map[string]bool{"canary": true}
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {
 	got := make([]string, 0, len(commands))
@@ -28,6 +35,9 @@ func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {
 
 func TestRunDispatchesEverySubcommand(t *testing.T) {
 	for _, name := range documentedSubcommands {
+		if implementedSubcommands[name] {
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 
