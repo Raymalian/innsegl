@@ -62,6 +62,19 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
+      - name: Require Docker
+        # The integration tests need real Postgres, MinIO and Rekor — doc 01 §2:
+        # a mocked dependency proves nothing. Without a daemon those tests skip
+        # silently and coverage collapses. Declare the dependency instead of
+        # inheriting it from whatever the runner image happens to ship.
+        run: |
+          docker info >/dev/null 2>&1 || {
+            echo "::error::Docker is required: the integration tests run against real"
+            echo "::error::Postgres, MinIO and Rekor containers. Without it they skip"
+            echo "::error::silently and internal/ledger falls from 92.9% to 48.7%."
+            exit 1
+          }
+          docker version --format '  docker {{.Server.Version}}'
       - name: go test -race
         run: go test ./... -race
 
@@ -111,6 +124,19 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
+      - name: Require Docker
+        # The integration tests need real Postgres, MinIO and Rekor — doc 01 §2:
+        # a mocked dependency proves nothing. Without a daemon those tests skip
+        # silently and coverage collapses. Declare the dependency instead of
+        # inheriting it from whatever the runner image happens to ship.
+        run: |
+          docker info >/dev/null 2>&1 || {
+            echo "::error::Docker is required: the integration tests run against real"
+            echo "::error::Postgres, MinIO and Rekor containers. Without it they skip"
+            echo "::error::silently and internal/ledger falls from 92.9% to 48.7%."
+            exit 1
+          }
+          docker version --format '  docker {{.Server.Version}}'
       - name: Produce coverage profile
         # -coverpkg=./... instruments every package in the module, so a package
         # with no test file at all reports 0% instead of vanishing from the
@@ -167,3 +193,22 @@ jobs:
         # Issue #10 acceptance criterion: "A deliberately uncovered branch in a
         # floored package fails CI." This asserts red-then-green on the gate.
         run: ./scripts/coverage-floors-selftest.sh
+
+  branch-coverage:
+    name: branch coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Install gobco
+        # Go has no branch coverage mode: go tool cover counts statements, and a
+        # function can reach 100% statements with an untaken `if` — exactly the
+        # case IP §2's branch floor exists to catch.
+        run: go install github.com/rillig/gobco@v1.3.4
+      - name: Enforce 100% branch coverage on the IP §2 surfaces
+        run: ./scripts/branch-coverage.sh

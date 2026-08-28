@@ -45,6 +45,13 @@ set -euo pipefail
 LINE_FLOORS=(
   "internal/ledger 90"
   "internal/mcp 90"
+  # Added after E2: these packages sat at 99.8% and 95.4% with nothing holding
+  # them there. internal/segment in particular would have dropped to 69.2% if
+  # its Docker-backed WORM and Rekor tests stopped running, and nothing would
+  # have failed. Floors set below current coverage, not at it, so ordinary
+  # refactoring does not trip them.
+  "internal/event 95"
+  "internal/segment 88"
 )
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -199,7 +206,7 @@ done
 # be mistaken for branch numbers.
 # ---------------------------------------------------------------------------
 log ""
-log "==> branch coverage floors — IP §2 — NOT ENFORCED"
+log "==> branch coverage floors — IP §2 — SEE scripts/branch-coverage.sh"
 log "    100% branch coverage is required on hash-chain append, segment sealing,"
 log "    signature verification, and every error-return path of every MCP tool."
 log "    Go measures statements, not branches: the numbers above do NOT satisfy"
