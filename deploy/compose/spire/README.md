@@ -78,11 +78,19 @@ from the old stack is gone with it — which is correct, and is why `down` witho
   declaration in `../spire.yml`.
 - **Per-run registration entries.** Doc 01 §1: one entry per run, short TTL,
   created at registration and deleted at retirement — by the MCP, over the admin
-  API. That is RM-015 (#23). `register.sh` creates infrastructure entries only
-  and must not grow a path that creates a run entry.
-- **Admin scoping to the `/agent/` subtree.** `admin_ids` grants full admin;
-  SPI-005 and threat-model AB-10 need it narrowed. See ADR-0011 and the note in
-  `server.conf`.
+  API. That lifecycle is `internal/spire` (RM-015, #23); `register.sh` creates
+  infrastructure entries only and must not grow a path that creates a run entry.
+- ~~**Admin scoping to the `/agent/` subtree.**~~ Landed with RM-015 (#23):
+  `authz-policy.rego` plus `authz-policy-data.json`, wired at
+  `server.experimental.auth_opa_policy_engine`. It narrows what an admin SPIFFE
+  ID may call and requires every entry it creates or updates to be a
+  `spiffe://innsegl.dev/agent/{type}/{task}/{run}`. The local socket keeps full
+  admin (ADR-0011's tmpfs is what contains it), and `BatchDeleteEntry` cannot be
+  scoped at all — both stated in
+  [ADR-0012](../../../docs/adr/0012-scope-the-mcp-admin-credential-with-an-opa-authorization-policy.md).
+  **On a SPIRE version bump, re-copy `authz-policy-data.json` from the matching
+  upstream tag and re-run TC-SPI:** an RPC missing from that table is denied to
+  every caller.
 - **TLS in front of `spire-oidc`.** All of `.dev` is HSTS-preloaded (doc 05 §3),
   so the production deployment must terminate TLS ahead of it. Compose serves
   plain HTTP on loopback and says so in two places
