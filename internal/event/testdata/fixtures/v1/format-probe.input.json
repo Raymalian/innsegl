@@ -1,0 +1,15 @@
+{
+  "sort_~": "tilde",
+  "sort_a": "lower",
+  "sort_A": "upper",
+  "sort_0": "digit",
+  "serializer_version": "1",
+  "schema_version": "1",
+  "int_zero": 0,
+  "int_min": -9007199254740991,
+  "int_max": 9007199254740991,
+  "genesis": "sha256:115073b347128337d7085e23cfaf0cc32d4cb60076610ee69d39faedaacf9362",
+  "escapes": "quote:\" backslash:\\\\ solidus:/ html:<&> nul:\u0000 bs:\b tab:\t lf:\n ff:\f cr:\r us:\u001f del: lsep:  psep:  latin1:é combining:é euro:€ han:中 nonbmp:😀 rtl:אב",
+  "bool_true": true,
+  "bool_false": false
+}

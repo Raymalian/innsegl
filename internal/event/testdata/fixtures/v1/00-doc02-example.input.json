@@ -1,0 +1,14 @@
+{
+  "ts": "2026-08-28T09:14:03.201Z",
+  "task_ref": "JIRA-118",
+  "spiffe_id": "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42",
+  "source": "mcp",
+  "schema_version": "1",
+  "run_id": "run-42",
+  "prev_event_hash": "sha256:115073b347128337d7085e23cfaf0cc32d4cb60076610ee69d39faedaacf9362",
+  "idempotency_key": "reg-8f21c",
+  "event_type": "run_registered",
+  "event_id": "01919f2e-8c1a-7d3b-9e4f-1a2b3c4d5e6f",
+  "chain_position": 412,
+  "agent_type": "fix-ci"
+}
