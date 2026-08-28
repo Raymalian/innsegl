@@ -38,11 +38,40 @@ const (
 	SourceSystem     = "system"
 )
 
-// MaxIdempotencyKeyBytes is doc 02 §2's "string ≤128". The document does not
-// say whether the limit counts characters or bytes; bytes is the reading taken
-// here, because bytes are what the canonical form and the store both measure,
-// and it is the stricter of the two.
+// MaxIdempotencyKeyBytes is doc 02 §2's "string ≤128", counted in bytes.
+//
+// The document does not say whether the limit counts characters or bytes, and
+// "characters" does not survive crossing a language boundary: for "\U0001d11e"
+// JavaScript answers 2 (UTF-16 code units), Python answers 1 (code point), and
+// Go answers 1 rune or 4 bytes. That is doc 04 residual risk #4 exactly. Bytes
+// is the only reading every implementation computes identically, and it is the
+// stricter of the two. See ADR-0004.
 const MaxIdempotencyKeyBytes = 128
+
+// idempotencyKeyAcceptedBy is the set of event types whose originating MCP tool
+// takes an idempotency_key argument (IP §4: register_agent, record_event and
+// sign_commit). Events from those tools must carry one.
+//
+// idempotencyKeyForbiddenOn is the set produced by the MCP tools that take no
+// such argument (get_credential and retire_agent). Those events must not carry
+// one at all: doc 02 §1 makes absent and empty distinct states, and a field
+// left merely un-required is one a later implementation starts populating.
+//
+// The literals are deliberately not exported constants. The canonical
+// event_type enum belongs with the event types (RM-007); these are a local
+// reference to it and must be kept in step with it. See ADR-0004.
+var (
+	idempotencyKeyAcceptedBy = map[string]bool{
+		"run_registered":  true,
+		"tool_call":       true,
+		"commit_intent":   true,
+		"commit_recorded": true,
+	}
+	idempotencyKeyForbiddenOn = map[string]bool{
+		"credential_issued": true,
+		"run_retired":       true,
+	}
+)
 
 var (
 	ErrReservedMemberName = errors.New("member name is reserved by the envelope")
@@ -124,8 +153,10 @@ type Envelope struct {
 
 	Source string
 
-	// IdempotencyKey is required on events created by MCP tool calls, which is
-	// to say on every event with source "mcp" (doc 02 §2).
+	// IdempotencyKey is required on events created by an MCP tool call that
+	// accepts one, and forbidden on the events of the two tools that do not
+	// (ADR-0004). doc 02 §2's broader "required on events created by MCP tool
+	// calls" is narrowed by IP §4's tool signatures.
 	IdempotencyKey *string
 
 	// PayloadDigest is present if and only if an out-of-band payload exists.
@@ -223,9 +254,17 @@ func (e Envelope) Fields() (Fields, error) {
 			"%w: %s and %s are omitted together, and only for events that reference no run",
 			ErrInvalidField, FieldRunID, FieldSpiffeID)
 	}
-	if e.Source == SourceMCP && e.IdempotencyKey == nil {
-		return nil, fmt.Errorf("%w: %s is required on events created by MCP tool calls",
-			ErrInvalidField, FieldIdempotencyKey)
+	switch {
+	case idempotencyKeyForbiddenOn[e.EventType] && e.IdempotencyKey != nil:
+		return nil, fmt.Errorf(
+			"%w: %s must be absent on %s; the MCP tool that emits it takes no "+
+				"idempotency key (ADR-0004)",
+			ErrInvalidField, FieldIdempotencyKey, e.EventType)
+	case e.Source == SourceMCP && idempotencyKeyAcceptedBy[e.EventType] &&
+		e.IdempotencyKey == nil:
+		return nil, fmt.Errorf(
+			"%w: %s is required on %s appended by the MCP server (ADR-0004)",
+			ErrInvalidField, FieldIdempotencyKey, e.EventType)
 	}
 	return f, nil
 }

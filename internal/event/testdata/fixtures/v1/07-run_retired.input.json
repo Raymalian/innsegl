@@ -4,8 +4,7 @@
   "source": "mcp",
   "schema_version": "1",
   "run_id": "run-42",
-  "prev_event_hash": "sha256:6a458ad2aa743848bea3f4456592e2d9cc2a726ebf644fc029d0d422f2921962",
-  "idempotency_key": "ret-9004f",
+  "prev_event_hash": "sha256:3a25d4c8befe1d8602f8386bb7a072d180f23df87a2a9b39b8037baf0c9280d4",
   "event_type": "run_retired",
   "event_id": "01a047ac-4e65-74d1-bd5a-b93e6976ccc9",
   "chain_position": 7

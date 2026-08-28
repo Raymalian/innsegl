@@ -6,7 +6,7 @@
   "schema_version": "1",
   "run_id": "run-42",
   "repo": "github.com/acme/api",
-  "prev_event_hash": "sha256:2753213714d742f97090e951e7623d9441eaea5023a994dc4a886b3e9f1e75cb",
+  "prev_event_hash": "sha256:0e3ebd8ebbd40806aac40f512b5b3acc2d3501439b605dcb5750375b53602d9e",
   "idempotency_key": "sign-2c5e1",
   "event_type": "commit_intent",
   "event_id": "01a047a7-62f6-7ca8-b29c-ffd68aa542e3",

@@ -8,7 +8,7 @@
   "repo": "github.com/acme/sha256-repo",
   "rekor_log_index": 9007199254740991,
   "rekor_entry_uuid": "113686d73d98edb21913598ff70106326bb619585547dcafffa69e20c6d6e022",
-  "prev_event_hash": "sha256:445fa8a10d687067d1d6c6a0438c6c6f8e509d3fb6edb72850163464a438f0e5",
+  "prev_event_hash": "sha256:d415f0f9059fe6f0a85a158531331e13430cfe937b9b7f17f03ceaba80cb346b",
   "intent_event_id": "01a047a7-62f6-7ca8-b29c-ffd68aa542e3",
   "idempotency_key": "idem-0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcde",
   "event_type": "commit_recorded",

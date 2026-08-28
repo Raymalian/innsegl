@@ -47,12 +47,12 @@ as `prev_event_hash`, and every later position carries the preceding fixture's
 | # | Fixture | Covers |
 |---|---|---|
 | 01 | `run_registered` | `source: mcp`, `idempotency_key`, genesis `prev_event_hash` |
-| 02 | `credential_issued` | `audience`, `credential_expiry` |
+| 02 | `credential_issued` | `audience`, `credential_expiry`; `idempotency_key` **absent** (ADR-0004) |
 | 03 | `tool_call` | `payload_digest` present |
 | 04 | `commit_intent` | 40-hex `tree_hash`, `repo` as `host/org/name` |
 | 05 | `commit_recorded` | `rekor_log_index` as an integer, `intent_event_id` back-reference |
 | 06 | `commit_intent_expired` | `source: reconciler`, `idempotency_key` absent |
-| 07 | `run_retired` | no type-specific fields |
+| 07 | `run_retired` | no type-specific fields; `idempotency_key` **absent** (ADR-0004) |
 | 08 | `run_expired` | `source: reaper` |
 | 09 | `unattributed_signature_detected` | system-scope alert: `run_id` **and** `spiffe_id` omitted |
 | 10 | `ledger_drift_detected` | free-text `reason` |
@@ -66,6 +66,15 @@ arrive in a *superseding* `segment_sealed`, never by mutating the original.
 Together with 09 they are the ones that pin "optional means **omitted**": there
 is no `"anchor_rekor_log_index": null` and no `"run_id": ""` anywhere in this
 directory, and there never can be.
+
+### `idempotency_key` placement (ADR-0004)
+
+`idempotency_key` appears on exactly the events whose originating MCP tool takes
+one — `run_registered`, `tool_call`, `commit_intent`, `commit_recorded` — and on
+none of the others. Fixtures 02 (`credential_issued`) and 07 (`run_retired`) do
+not carry it, because `get_credential` and `retire_agent` accept no such
+argument (IP §4). doc 02 §2's wider wording is narrowed by ADR-0004, and
+`verify.py` re-checks the placement from the committed bytes.
 
 ### Synthetic values
 
@@ -105,6 +114,12 @@ existed, by an oracle that is not Go, and can be re-checked at any time:
 ```
 python3 verify.py
 ```
+
+It re-derives every canonical byte and digest, recomputes the genesis constant,
+walks the 01–14 chain from that constant checking each `prev_event_hash`
+against its predecessor's committed `.hash`, and checks the ADR-0004
+`idempotency_key` placement — all from the committed files, with no Go
+involved.
 
 Python's `json.dumps(obj, sort_keys=True, separators=(",", ":"),
 ensure_ascii=False)` is byte-identical to RFC 8785 over the value domain doc 02

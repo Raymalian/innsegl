@@ -6,7 +6,7 @@
   "schema_version": "1",
   "run_id": "run-42",
   "reason": "commit_recorded claims a Rekor entry that the log does not contain",
-  "prev_event_hash": "sha256:0322b303567f03ca4cd5785a104540c58de7e131a8312890f3263ce1c8e577e5",
+  "prev_event_hash": "sha256:040ea71d08808a8596517f6e09df450f8dfe9e7116b8983a5ee1715f6b8eaea7",
   "event_type": "ledger_drift_detected",
   "event_id": "01a047be-839e-7c82-877b-9bcc500856be",
   "chain_position": 10

@@ -5,7 +5,7 @@
   "segment_merkle_root": "sha256:3bb8f833781dc29e374eac6b657745e240dcf6c8474287226cba97c82e53e03a",
   "segment_id": "seg-000001",
   "schema_version": "1",
-  "prev_event_hash": "sha256:cdce699f77395775df21878e4946192626b92f0cea99e8bed4aa72fed3ed7537",
+  "prev_event_hash": "sha256:90cc390bab847017a64fd53782d3644c597c9e62befeaa3a4a03d88b374233a2",
   "last_position": 10,
   "first_position": 1,
   "event_type": "segment_sealed",

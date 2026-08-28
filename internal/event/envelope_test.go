@@ -594,3 +594,106 @@ func TestSER003EnvelopeMatchesGoldenFixture(t *testing.T) {
 		t.Errorf("event_hash = %s, want %s", h, golden.hash)
 	}
 }
+
+// TestSER003IdempotencyKeyScope is ADR-0004. doc 02 §2 says idempotency_key is
+// "required on events created by MCP tool calls"; IP §4 shows that two of the
+// five tools take no such argument. IP §4 wins, so the field is carried by
+// exactly the events whose originating tool accepts one, and is forbidden on
+// the events produced by get_credential and retire_agent.
+func TestSER003IdempotencyKeyScope(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		eventType string
+		source    string
+		key       *string
+		want      error // nil means the envelope is accepted
+	}{
+		// register_agent, record_event, sign_commit: all take an
+		// idempotency_key, so their events must carry one.
+		{"run_registered from mcp carries a key", "run_registered", SourceMCP, Optional("reg-8f21c"), nil},
+		{"run_registered from mcp without a key", "run_registered", SourceMCP, nil, ErrInvalidField},
+		{"tool_call from mcp carries a key", "tool_call", SourceMCP, Optional("tool-77b03"), nil},
+		{"tool_call from mcp without a key", "tool_call", SourceMCP, nil, ErrInvalidField},
+		{"commit_intent from mcp carries a key", "commit_intent", SourceMCP, Optional("sign-2c5e1"), nil},
+		{"commit_intent from mcp without a key", "commit_intent", SourceMCP, nil, ErrInvalidField},
+		{"commit_recorded from mcp carries a key", "commit_recorded", SourceMCP, Optional("sign-2c5e1-c"), nil},
+		{"commit_recorded from mcp without a key", "commit_recorded", SourceMCP, nil, ErrInvalidField},
+
+		// A repaired commit_recorded is appended by the reconciler, which is
+		// not an MCP tool call (doc 02 §3, TC REC-002).
+		{"commit_recorded from the reconciler needs no key", "commit_recorded", SourceReconciler, nil, nil},
+
+		// get_credential takes no idempotency_key: IP §6.2 makes re-fetch after
+		// SVID expiry a legitimate repeat call, and each issuance is its own
+		// auditable fact rather than a retry to collapse.
+		{"credential_issued must not carry a key", "credential_issued", SourceMCP, Optional("cred-1a9d4"), ErrInvalidField},
+		{"credential_issued without a key", "credential_issued", SourceMCP, nil, nil},
+
+		// retire_agent takes no idempotency_key: its idempotency is intrinsic
+		// to run_id, and a run retires once.
+		{"run_retired must not carry a key", "run_retired", SourceMCP, Optional("ret-9004f"), ErrInvalidField},
+		{"run_retired without a key", "run_retired", SourceMCP, nil, nil},
+
+		// Absence is enforced on those two whatever the source claims to be —
+		// an unenforced field is one a later implementation starts populating.
+		{"credential_issued from any source must not carry a key", "credential_issued", SourceSystem, Optional("cred-1a9d4"), ErrInvalidField},
+		{"run_retired from any source must not carry a key", "run_retired", SourceReconciler, Optional("ret-9004f"), ErrInvalidField},
+
+		// Everything else is unconstrained in either direction.
+		{"run_expired from the reaper", "run_expired", SourceReaper, nil, nil},
+		{"ledger_drift_detected from the reconciler", "ledger_drift_detected", SourceReconciler, nil, nil},
+		{"commit_intent_expired from the reconciler", "commit_intent_expired", SourceReconciler, nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := validEnvelope(t)
+			e.EventType = tc.eventType
+			e.Source = tc.source
+			e.IdempotencyKey = tc.key
+
+			f, err := e.Fields()
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("err = %v, want %v", err, tc.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			_, present := f[FieldIdempotencyKey]
+			if present != (tc.key != nil) {
+				t.Errorf("%s present = %v, want %v", FieldIdempotencyKey, present, tc.key != nil)
+			}
+		})
+	}
+}
+
+// TestSER001FixturesObeyIdempotencyKeyScope holds the golden corpus itself to
+// ADR-0004, so a fixture cannot drift away from the rule the envelope enforces.
+func TestSER001FixturesObeyIdempotencyKeyScope(t *testing.T) {
+	accepts := map[string]bool{
+		"run_registered": true, "tool_call": true,
+		"commit_intent": true, "commit_recorded": true,
+	}
+	forbids := map[string]bool{"credential_issued": true, "run_retired": true}
+
+	for _, name := range fixtureNames(t) {
+		if strings.HasPrefix(name, "format-probe") {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			f := loadFixture(t, name).input
+			etype := fixtureString(t, f, FieldEventType)
+			source := fixtureString(t, f, FieldSource)
+			_, present := f[FieldIdempotencyKey]
+
+			switch {
+			case forbids[etype] && present:
+				t.Errorf("%s carries an %s; its MCP tool takes none (ADR-0004)",
+					etype, FieldIdempotencyKey)
+			case accepts[etype] && source == SourceMCP && !present:
+				t.Errorf("%s from %s has no %s (ADR-0004)", etype, source, FieldIdempotencyKey)
+			}
+		})
+	}
+}

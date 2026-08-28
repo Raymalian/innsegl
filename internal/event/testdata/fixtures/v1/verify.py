@@ -28,6 +28,9 @@ Why json.dumps is a valid RFC 8785 oracle *for this schema*:
   * whitespace       - separators=(",", ":") is JCS's "no insignificant
                        whitespace".
 
+It also walks the 01..14 hash chain and checks the ADR-0004 placement rule for
+`idempotency_key`, both from the committed bytes alone.
+
 This script only ever READS the fixtures.  Fixtures are immutable once merged
 (doc 02 §7); regenerating one is a major schema version with a migration
 attestation, never a convenience.
@@ -79,14 +82,42 @@ def main() -> int:
         check(f"{name}.hash",
               digest(got), (HERE / f"{name}.hash").read_bytes().decode("ascii"))
 
+    # --- the 01..14 chain, walked from the genesis constant (doc 02 §4.4, §4.5)
+    chain = sorted(n for n in (s.name[: -len(".input.json")] for s in inputs)
+                   if n[:2].isdigit() and n[:2] != "00")
+    prev = digest(GENESIS_SEED.encode("utf-8"))
+    for i, name in enumerate(chain, start=1):
+        obj = json.loads((HERE / f"{name}.input.json").read_text(encoding="utf-8"))
+        if obj.get("chain_position") != i:
+            failures.append(f"{name}: chain_position {obj.get('chain_position')}, want {i}")
+        check(f"{name}: prev_event_hash", obj.get("prev_event_hash"), prev)
+        prev = (HERE / f"{name}.hash").read_bytes().decode("ascii")
+
+    # --- ADR-0004: idempotency_key is carried by exactly the events whose
+    # originating MCP tool accepts one, and is absent everywhere else.
+    ACCEPTS = {"run_registered", "tool_call", "commit_intent", "commit_recorded"}
+    FORBIDS = {"credential_issued", "run_retired"}
+    for src in inputs:
+        name = src.name[: -len(".input.json")]
+        obj = json.loads(src.read_text(encoding="utf-8"))
+        etype, source = obj.get("event_type"), obj.get("source")
+        has = "idempotency_key" in obj
+        if etype in FORBIDS and has:
+            failures.append(f"{name}: {etype} carries an idempotency_key (ADR-0004)")
+        if etype in ACCEPTS and source == "mcp" and not has:
+            failures.append(f"{name}: {etype} from mcp has no idempotency_key (ADR-0004)")
+        if has and len(obj["idempotency_key"].encode("utf-8")) > 128:
+            failures.append(f"{name}: idempotency_key exceeds 128 bytes")
+
     if failures:
         print(f"FAIL: {len(failures)} fixture mismatch(es)")
         for f in failures:
             print("  - " + f)
         return 1
 
-    print(f"OK: {len(inputs)} fixtures re-derived independently, plus the "
-          f"genesis constant")
+    print(f"OK: {len(inputs)} fixtures re-derived independently; genesis "
+          f"constant computed; {len(chain)}-event chain walked from genesis; "
+          f"ADR-0004 idempotency_key placement holds")
     return 0
 
 

@@ -8,7 +8,7 @@
   "repo": "github.com/acme/api",
   "rekor_log_index": 148203377,
   "rekor_entry_uuid": "a8f225deef100e2a3cfd330abe728a747cdb5363e3d69433eda3930091c69909",
-  "prev_event_hash": "sha256:4c5dd4083b6f4da8e17d7b87a87d4ce8a4eca42d6f1eaba38ec4244e66b815b6",
+  "prev_event_hash": "sha256:523394155855cd39e327e71f13f7399f999c8159ae14875b1d51556d08fd969a",
   "intent_event_id": "01a047a7-62f6-7ca8-b29c-ffd68aa542e3",
   "idempotency_key": "sign-2c5e1-c",
   "event_type": "commit_recorded",
