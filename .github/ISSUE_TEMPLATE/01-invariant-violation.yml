@@ -1,0 +1,143 @@
+name: Invariant violation (I1-I6)
+description: Highest priority. Something breaks one of the six core invariants.
+title: "[INVARIANT] "
+labels:
+  - bug
+  - invariant-violation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Read this before filing
+
+        An invariant violation is the most serious class of defect in this
+        project. It is not a bug report with strong wording — it is a claim
+        that the system's central promise does not hold.
+
+        **If the violation is exploitable by someone who should not be able to
+        do it, stop and report it privately instead.** Use the repository's
+        **Security** tab -> **Report a vulnerability**, not this form. See
+        [SECURITY.md](https://github.com/Raymalian/innsegl/blob/HEAD/SECURITY.md). Do not attach a working
+        exploit to a public issue.
+
+        Use this form for a violation that is reachable in normal operation,
+        or that you found in the code or tests, and that is not a live
+        exploitable weakness.
+
+  - type: dropdown
+    id: invariant
+    attributes:
+      label: Which invariant is implicated?
+      description: Pick the one most directly broken. If several, pick the most severe and describe the rest below.
+      options:
+        - I1 - No identity without attestation (an SVID issued to a workload SPIRE did not attest)
+        - I2 - No signing without identity (unsigned commit, or signed with an expired, wrong-run or wrong-audience credential)
+        - I3 - No action without a record (an attributable action produced no ledger event)
+        - I4 - No record deleted or mutated (a ledger event or sealed segment changed or vanished)
+        - I5 - Verification never trusts this system (a verdict that cannot be independently re-derived, or "verified" for a forgery)
+        - I6 - No GitHub contributor is ever added (agent activity created or resolved a contributor)
+        - More than one - explain below
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Is the violation observable, or inferred from reading the code?
+      options:
+        - Observed - I have output that shows it
+        - Inferred - I read the code or tests and believe the path exists
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: State the violation plainly, then show the evidence. Measured output beats description.
+      placeholder: |
+        register_agent returned a run_id and SPIFFE ID for a workload whose
+        selectors did not match any SPIRE entry. Expected ATTESTATION_FAILED.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Exact steps, commands, and configuration. A failing test is the best possible reproduction.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: >
+        Paste the artifacts, not a summary of them - test runner output,
+        gitsign verify output, the Rekor inclusion proof query and its answer,
+        ledger rows, MCP error payloads. Redact secrets.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened instead
+      description: Cite the rule you are holding the system to, by invariant and by failure mode where you can.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Tag, or the full commit SHA if you are running from source.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment shape
+      options:
+        - Compose reference stack, unmodified
+        - Compose reference stack, modified
+        - Custom deployment
+        - Local development / test suite only
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: SPIRE version, Sigstore (public or self-hosted Fulcio/Rekor), Postgres version, OS, and anything else load-bearing.
+    validations:
+      required: false
+
+  - type: textarea
+    id: regression-test
+    attributes:
+      label: Proposed regression test
+      description: >
+        Every invariant fix ships with a regression test that was observed
+        failing first. If you can name or sketch that test, do it here - it
+        speeds the fix up considerably.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: This is not a live exploitable vulnerability. If it were, I would have used GitHub Security Advisories instead.
+          required: true
+        - label: I have not included secrets, private keys, or credentials in this report.
+          required: true

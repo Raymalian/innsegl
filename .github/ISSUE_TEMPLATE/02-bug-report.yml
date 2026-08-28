@@ -1,0 +1,79 @@
+name: Bug report
+description: Something is broken, but it does not break invariants I1-I6.
+title: "[BUG] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this breaks one of the six core invariants, use the **Invariant
+        violation** template instead. If it is a security vulnerability,
+        report it privately through the repository's **Security** tab.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Exact steps or commands. Include configuration where it matters.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs and output
+      description: Paste the actual output rather than describing it. Redact secrets.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Ledger (hash chain, sealing, anchoring)
+        - MCP server (tools, errors, idempotency)
+        - SPIRE integration and identity lifecycle
+        - Commit signing (gitsign, trailers, reconciler)
+        - verify CLI
+        - Dashboard
+        - Deployment / compose reference stack
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go or Node version, SPIRE version, Sigstore mode (public or self-hosted), Postgres version.
+    validations:
+      required: false

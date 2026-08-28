@@ -1,0 +1,80 @@
+name: Feature request
+description: Propose new behaviour or a change to existing behaviour.
+title: "[FEAT] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two things worth checking before you write this up.
+
+        **Out of scope by design.** The project deliberately does not build:
+        authorization policy or RBAC beyond protecting its own admin surface;
+        agent sandboxing or runtime behaviour control; GitHub "Verified" badge
+        parity; storage of payloads, diffs or tool-call bodies; cross-organization
+        SPIFFE federation; blockchain or ledger-database products; backfilling
+        attribution for pre-adoption commits; and key custody by the MCP server.
+        A request in one of those areas will be closed with a pointer here, not
+        because it is a bad idea, but because it is someone else's system.
+
+        **Protected surfaces.** If the proposal changes the event schema or its
+        canonical serialization, the commit trailer keys, the SPIFFE ID grammar,
+        the MCP tool names or error classes, or the `innsegl` namespace, say so
+        explicitly below. Those change only in a major release, with a migration
+        attestation. See [VERSIONING.md](https://github.com/Raymalian/innsegl/blob/HEAD/VERSIONING.md).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can you not do today? Describe the situation, not the solution you already have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including doing nothing, and why that is not enough.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: protected-surface
+    attributes:
+      label: Does this touch a protected surface?
+      options:
+        - "No"
+        - "Yes - and I understand this makes it a major-release change"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Effect on invariants I1-I6
+      description: >
+        Say how the proposal preserves each invariant it comes near, or state
+        plainly that it does not come near any. A feature that weakens an
+        invariant to gain convenience will not be accepted.
+    validations:
+      required: false
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: How would this be tested?
+      description: >
+        Production code here starts from a test observed failing first. Sketch
+        the test that would specify this behaviour, including the failure cases.
+    validations:
+      required: false
