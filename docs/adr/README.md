@@ -33,6 +33,7 @@ maintainer ask "why is it like this?"
 | [0008](0008-worm-canary-proves-refusal-by-attempting-deletion.md) | Prove the WORM configuration by attempting a real deletion, and fail closed on anything short of a refusal | accepted | 2026-08-28 |
 | [0009](0009-anchor-a-segment-as-a-signed-hashedrekord-entry.md) | Anchor a sealed segment as a signed `hashedrekord` entry, verify it from first principles, and accept at-least-once anchoring | accepted | 2026-08-28 |
 | [0010](0010-self-hosted-sigstore-is-the-shipped-default.md) | Ship self-hosted Fulcio/Rekor as the default, and demote public Sigstore to "where an accepted issuer already exists" | accepted | 2026-08-28 |
+| [0011](0011-compose-spire-admin-api-segmentation.md) | Segment the SPIRE admin API by mount and by network, and state the part SPIRE will not segment | accepted | 2026-08-28 |
 
 ## Open items
 
