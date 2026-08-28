@@ -26,9 +26,15 @@ maintainer ask "why is it like this?"
 | [0001](0001-language-and-module-path.md) | Implement the backend in Go; the dashboard in TypeScript | accepted | 2026-08-28 |
 | [0002](0002-public-sigstore-default.md) | Default to public Sigstore; self-hosted as first-class configuration | accepted | 2026-08-28 |
 | [0003](0003-apache-2-0-license.md) | License Innsegl under Apache-2.0 | accepted | 2026-08-28 |
+| [0004](0004-idempotency-key-scope.md) | Scope `idempotency_key` to the MCP tools that accept one | accepted | 2026-08-28 |
 
 ## Open items
 
+- **ADR-0004** requires one edit outside `docs/adr/`: doc 02 §2's
+  `idempotency_key` description must be narrowed to "MCP tool calls that accept
+  an `idempotency_key`", and its "≤128" made explicit as bytes. Implementing
+  agents do not edit `docs/` outside this directory, so the ADR is the operative
+  reading until a human makes that edit.
 - **ADR-0002** carries a blocking open verification item: whether public-good
   Fulcio will accept a project-operated OIDC issuer (`oidc.innsegl.dev`). It
   must be settled before Phase 3. A negative answer supersedes ADR-0002 in part

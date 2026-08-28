@@ -1,0 +1,12 @@
+{
+  "ts": "2026-08-28T09:40:12.500Z",
+  "source": "reconciler",
+  "schema_version": "1",
+  "rekor_log_index": 148203401,
+  "rekor_entry_uuid": "b922beb67aa0e7b60b448a505471eb0fe5b874f7c01f587feb122c4a5be136b4",
+  "prev_event_hash": "sha256:1a8cb63da0ea4fe696a96985248a7eab060afa30f82622f5b37400c0227c116e",
+  "event_type": "unattributed_signature_detected",
+  "event_id": "01a047bd-be54-7e8f-8a9c-7fd505ca4368",
+  "chain_position": 9,
+  "certificate_identity": "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-99"
+}

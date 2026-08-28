@@ -1,0 +1,1 @@
+{"chain_position":7,"event_id":"01a047ac-4e65-74d1-bd5a-b93e6976ccc9","event_type":"run_retired","prev_event_hash":"sha256:3a25d4c8befe1d8602f8386bb7a072d180f23df87a2a9b39b8037baf0c9280d4","run_id":"run-42","schema_version":"1","source":"mcp","spiffe_id":"spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42","ts":"2026-08-28T09:21:09.733Z"}

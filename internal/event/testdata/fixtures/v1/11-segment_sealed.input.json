@@ -1,0 +1,13 @@
+{
+  "ts": "2026-08-28T10:00:00.000Z",
+  "source": "system",
+  "segment_merkle_root": "sha256:3bb8f833781dc29e374eac6b657745e240dcf6c8474287226cba97c82e53e03a",
+  "segment_id": "seg-000001",
+  "schema_version": "1",
+  "prev_event_hash": "sha256:bcb080835949c2ab9a5b44535367a50eeec8830d7d003289428bb80606cbf861",
+  "last_position": 10,
+  "first_position": 1,
+  "event_type": "segment_sealed",
+  "event_id": "01a047cf-dd00-7421-a65c-da3e8a0b98c0",
+  "chain_position": 11
+}
