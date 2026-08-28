@@ -27,6 +27,8 @@ maintainer ask "why is it like this?"
 | [0002](0002-public-sigstore-default.md) | Default to public Sigstore; self-hosted as first-class configuration | accepted | 2026-08-28 |
 | [0003](0003-apache-2-0-license.md) | License Innsegl under Apache-2.0 | accepted | 2026-08-28 |
 | [0004](0004-idempotency-key-scope.md) | Scope `idempotency_key` to the MCP tools that accept one | accepted | 2026-08-28 |
+| [0005](0005-one-chain-per-database.md) | Scope a ledger chain to a database | accepted | 2026-08-28 |
+| [0006](0006-segment-object-format-and-content-addressed-segment-id.md) | Address a sealed segment by the digest of its object, and make that digest its `segment_id` | accepted | 2026-08-28 |
 
 ## Open items
 
@@ -35,6 +37,12 @@ maintainer ask "why is it like this?"
   an `idempotency_key`", and its "≤128" made explicit as bytes. Implementing
   agents do not edit `docs/` outside this directory, so the ADR is the operative
   reading until a human makes that edit.
+- **ADR-0005** leaves one question for the human: doc 02 §2 says
+  `chain_position` is consecutive "per chain" and never defines a chain, and
+  the envelope has no `chain_id`. The ADR defines a chain as a database, which
+  is sufficient for the single-chain deployment doc 05 describes. A deployment
+  needing several chains in one ledger requires doc 02 to say what names a
+  chain and how a verifier reading a sealed segment learns which one it holds.
 - **ADR-0002** carries a blocking open verification item: whether public-good
   Fulcio will accept a project-operated OIDC issuer (`oidc.innsegl.dev`). It
   must be settled before Phase 3. A negative answer supersedes ADR-0002 in part
