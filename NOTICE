@@ -1,0 +1,37 @@
+Innsegl
+Copyright 2026 The Innsegl Authors
+
+This product includes software developed by The Innsegl Authors
+(https://github.com/Raymalian/innsegl).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------
+
+Innsegl composes with, and depends on, upstream projects that carry their
+own copyright and licence notices. Innsegl does not fork or vendor their
+cryptography; it configures and orchestrates released upstream components.
+
+  SPIFFE / SPIRE  (https://github.com/spiffe/spire)
+    Copyright the SPIFFE authors. Licensed under Apache-2.0.
+
+  Sigstore: gitsign, Fulcio, Rekor, cosign
+    (https://github.com/sigstore)
+    Copyright the Sigstore authors. Licensed under Apache-2.0.
+
+The complete set of dependencies, with their versions and licences, is
+recorded in the module and package manifests checked into this repository.
+Attribution notices required by those dependencies are reproduced with the
+distributed artifacts that contain them.
