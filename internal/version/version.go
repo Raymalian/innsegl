@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package version reports the build identity of the innsegl binary.
 //
 // The values are stamped at link time by the Makefile:
