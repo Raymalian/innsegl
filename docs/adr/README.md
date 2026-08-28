@@ -24,7 +24,7 @@ maintainer ask "why is it like this?"
 |---|---|---|---|
 | [0000](0000-template.md) | Template | — | — |
 | [0001](0001-language-and-module-path.md) | Implement the backend in Go; the dashboard in TypeScript | accepted | 2026-08-28 |
-| [0002](0002-public-sigstore-default.md) | Default to public Sigstore; self-hosted as first-class configuration | accepted | 2026-08-28 |
+| [0002](0002-public-sigstore-default.md) | Default to public Sigstore; self-hosted as first-class configuration | accepted; superseded in part by [0010](0010-self-hosted-sigstore-is-the-shipped-default.md) | 2026-08-28 |
 | [0003](0003-apache-2-0-license.md) | License Innsegl under Apache-2.0 | accepted | 2026-08-28 |
 | [0004](0004-idempotency-key-scope.md) | Scope `idempotency_key` to the MCP tools that accept one | accepted | 2026-08-28 |
 | [0005](0005-one-chain-per-database.md) | Scope a ledger chain to a database | accepted | 2026-08-28 |
@@ -32,6 +32,7 @@ maintainer ask "why is it like this?"
 | [0007](0007-protected-surfaces-gate-semantics.md) | Enforce the protected surfaces with a self-verifying gate, and define what it does before the first tag exists | accepted | 2026-08-28 |
 | [0008](0008-worm-canary-proves-refusal-by-attempting-deletion.md) | Prove the WORM configuration by attempting a real deletion, and fail closed on anything short of a refusal | accepted | 2026-08-28 |
 | [0009](0009-anchor-a-segment-as-a-signed-hashedrekord-entry.md) | Anchor a sealed segment as a signed `hashedrekord` entry, verify it from first principles, and accept at-least-once anchoring | accepted | 2026-08-28 |
+| [0010](0010-self-hosted-sigstore-is-the-shipped-default.md) | Ship self-hosted Fulcio/Rekor as the default, and demote public Sigstore to "where an accepted issuer already exists" | accepted | 2026-08-28 |
 
 ## Open items
 
@@ -56,7 +57,20 @@ maintainer ask "why is it like this?"
   is sufficient for the single-chain deployment doc 05 describes. A deployment
   needing several chains in one ledger requires doc 02 to say what names a
   chain and how a verifier reading a sealed segment learns which one it holds.
-- **ADR-0002** carries a blocking open verification item: whether public-good
-  Fulcio will accept a project-operated OIDC issuer (`oidc.innsegl.dev`). It
-  must be settled before Phase 3. A negative answer supersedes ADR-0002 in part
-  and flips the shipped default to self-hosted Fulcio/Rekor.
+- ~~**ADR-0002** carries a blocking open verification item: whether public-good
+  Fulcio will accept a project-operated OIDC issuer (`oidc.innsegl.dev`).~~
+  **Closed 2026-08-28 by [ADR-0010](0010-self-hosted-sigstore-is-the-shipped-default.md).**
+  Measured against the live instance: public-good Fulcio accepts no issuer of
+  type `spiffe`, and the SPIFFE federation enrollment process ADR-0002's first
+  fallback assumed was closed `not_planned` upstream. The second fallback
+  triggered — self-hosted Fulcio/Rekor is now the shipped default and
+  `oidc.innsegl.dev` is not stood up.
+- **ADR-0010** leaves one question that cannot be settled from public sources:
+  whether Sigstore's maintainers would entertain a SPIFFE issuer request from a
+  project of this size if asked directly. Nobody has asked. Settling it costs
+  one issue on `sigstore/fulcio` per that project's own new-IDP process; it is
+  not on the critical path and the decision does not change if the answer is
+  friendly. ADR-0010 also names a standing re-measurement: one unauthenticated
+  `GET https://fulcio.sigstore.dev/api/v2/configuration` tells you whether a
+  `spiffe` issuer has reappeared, and belongs with the threat model §6 review
+  triggers — a human edit, outside this directory.
