@@ -28,6 +28,11 @@ build/
 .next/
 *.tsbuildinfo
 
+# PyPI namespace stub — a defensive registration so the `innsegl` name cannot be
+# squatted (threat model A6, AB-09). Published to PyPI, not shipped from this repo.
+# Placement is RM-059's (#67) call; ignored until then so it cannot be swept in.
+innsegl-stub/
+
 # Local artifacts
 tmp/
 *.log
