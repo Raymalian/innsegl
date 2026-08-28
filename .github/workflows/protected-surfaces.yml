@@ -1,0 +1,77 @@
+# Protected-surfaces drift gate (RM-013, #21; test catalog SER-005).
+#
+# VERSIONING.md: "MINOR/PATCH releases MUST NOT alter any protected surface. CI
+# enforces this: the golden fixtures (TC-SER) and the contract schemas are diffed
+# against the previous tag; any drift fails the release."
+#
+# This is that enforcement. It is a separate workflow from ci.yml rather than a
+# job inside it because it needs the full history and every tag, which the rest
+# of CI deliberately does not fetch.
+#
+# All third-party actions are pinned to a commit SHA with the human-readable tag
+# in a trailing comment, for the reason ci.yml gives: a supply-chain attack on an
+# action is an attack on the attestation chain this project exists to protect
+# (doc 04).
+name: Protected surfaces
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      # A release tag is the moment the policy actually bites: the gate resolves
+      # the candidate version from the tag and the baseline from the tag before
+      # it, and decides MAJOR against MINOR/PATCH from the two.
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protected-surfaces-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  protected-surfaces:
+    name: protected surfaces
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out with full history and every tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The gate diffs against the previous tag, so a shallow clone with no
+          # tags would silently have nothing to compare and pass vacuously.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Report the tags the gate can see
+        # Measured, not assumed: the log records what baseline was available, so
+        # a pass can be told apart from a pass-with-nothing-to-compare.
+        run: |
+          echo "tags visible to this checkout:"
+          git tag --list --sort=-v:refname | head -20 || true
+          echo "(end of tag list)"
+          echo "GITHUB_REF_TYPE=${GITHUB_REF_TYPE:-} GITHUB_REF_NAME=${GITHUB_REF_NAME:-}"
+      - name: Enforce the protected surfaces
+        # Hard gate. The script reads GITHUB_REF_TYPE/GITHUB_REF_NAME itself: on
+        # a tag push the candidate version is that tag, otherwise there is no
+        # candidate and the tree is held to the MINOR/PATCH rule.
+        run: ./scripts/protected-surfaces.sh
+
+  protected-surfaces-selftest:
+    name: protected surfaces gate self-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prove the gate fails on a deliberate fixture change
+        # Issue #21 acceptance criterion: "A deliberate fixture change on a patch
+        # version fails the release." The self-test builds a throwaway repository
+        # with its own tags, injects one synthetic drift at a time, and asserts
+        # red where the policy says red and green where it says green. A gate
+        # that has never been observed failing proves nothing.
+        run: ./scripts/protected-surfaces-selftest.sh

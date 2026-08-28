@@ -54,6 +54,13 @@ var commands = map[string]command{
 		summary: "verify a commit's attribution without access to the ledger",
 		exec:    notImplemented("verify"),
 	},
+	// The canary is the sixth: doc 05 §2 requires the SEG-005 deletion check
+	// to run "as a scheduled job in production, not only at deploy", and a
+	// subcommand whose exit status is the verdict serves both callers.
+	"canary": {
+		summary: "prove the object store refuses to delete a sealed segment (SEG-005)",
+		exec:    canaryCommand,
+	},
 }
 
 // run dispatches args (os.Args[1:]) and returns the process exit code. It
