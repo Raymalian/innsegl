@@ -17,8 +17,9 @@ docs/*
 # Go
 /innsegl
 *.test
-*.out
-coverage.*
+cover.out
+coverage.out
+coverage.html
 
 # Node / dashboard
 node_modules/
