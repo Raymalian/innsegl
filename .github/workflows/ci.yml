@@ -1,0 +1,160 @@
+# Innsegl CI — the gate every merge has to clear.
+#
+# IP §2: "CI gates on: full test suite green, coverage floors, lint, and the
+# verification checks in Section 8." Nothing here is advisory; every job that
+# fails blocks the merge.
+#
+# All third-party actions are pinned to a commit SHA with the human-readable
+# tag in a trailing comment. Floating refs (@main, @v1) are forbidden: a
+# supply-chain attack on an action is an attack on the attestation chain this
+# project exists to protect (doc 04).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a run on main: its result is the branch's recorded state.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Fail loudly on a toolchain mismatch instead of silently downloading a
+  # different Go than the one go.mod declares.
+  GOTOOLCHAIN: local
+
+jobs:
+  build:
+    name: build and vet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: go build
+        run: go build ./...
+      - name: go vet
+        run: go vet ./...
+
+  test:
+    name: test (race)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: go test -race
+        run: go test ./... -race
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          # Pinned to the version the repository is developed against.
+          version: v2.13.2
+          # Verify .golangci.yml against the JSON schema before linting, so a
+          # malformed config is a failure and not a silently reduced ruleset.
+          verify: true
+          # Every finding fails the build, including pre-existing ones.
+          only-new-issues: false
+
+  coverage:
+    name: coverage floors
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Produce coverage profile
+        # -coverpkg=./... instruments every package in the module, so a package
+        # with no test file at all reports 0% instead of vanishing from the
+        # profile and being counted as compliant by omission.
+        run: >-
+          go test ./... -race
+          -covermode=atomic
+          -coverpkg=./...
+          -coverprofile=cover.out
+      - name: Enforce coverage floors
+        # Hard gate. IP §2: 90% line coverage on the MCP server and ledger
+        # packages. The script exits non-zero when a floor is breached; it does
+        # not merely report.
+        #
+        # HONESTY NOTE: Go's tooling measures *statement* coverage, not branch
+        # coverage, and there is no branch mode in `go tool cover`. What runs
+        # here is the 90% statement floor standing in for the "line coverage"
+        # requirement. The separate IP §2 requirement of 100% *branch* coverage
+        # on hash-chain append, segment sealing, signature verification and
+        # every error-return path of every MCP tool is NOT enforced by this
+        # step and is NOT implied by the numbers it prints. See the
+        # "BRANCH FLOOR — NOT YET ENFORCED" TODO(#10) block in
+        # scripts/coverage-floors.sh.
+        run: ./scripts/coverage-floors.sh cover.out
+      - name: Human-readable coverage report
+        if: always()
+        run: go tool cover -func=cover.out || true
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-profile
+          path: cover.out
+          if-no-files-found: warn
+          retention-days: 14
+
+  coverage-gate-selftest:
+    name: coverage gate self-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Deliberately not go-version-file: this job tests the gate itself
+          # against a throwaway fixture module and must keep working
+          # independently of the repository's own module.
+          go-version: stable
+          check-latest: true
+      - name: Prove the gate fails on an uncovered branch
+        # Issue #10 acceptance criterion: "A deliberately uncovered branch in a
+        # floored package fails CI." This asserts red-then-green on the gate.
+        run: ./scripts/coverage-floors-selftest.sh

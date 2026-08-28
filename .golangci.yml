@@ -1,0 +1,116 @@
+# golangci-lint configuration for Innsegl.
+#
+# Lint is a merge gate, not advice (IP §2: "CI gates on: full test suite green,
+# coverage floors, lint, and the verification checks in Section 8").
+#
+# Schema: golangci-lint v2 configuration format.
+# Validate locally with: golangci-lint config verify
+version: "2"
+
+run:
+  # Tests are production artefacts here — the TDD mandate makes them the
+  # specification — so they are linted like everything else.
+  tests: true
+  timeout: 5m
+
+linters:
+  # "standard" = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - bodyclose
+    - contextcheck
+    - durationcheck
+    - errorlint
+    - forcetypeassert
+    - gocritic
+    - gosec
+    - makezero
+    - misspell
+    - nilerr
+    - nilnesserr
+    - noctx
+    - nolintlint
+    - predeclared
+    - reassign
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+
+  settings:
+    errcheck:
+      # A dropped error is a lost record. I3 ("no action without record") is
+      # unenforceable if error returns can be silently discarded.
+      check-type-assertions: true
+      check-blank: true
+    govet:
+      enable-all: true
+      disable:
+        # Field alignment is a micro-optimisation that fights readable structs.
+        - fieldalignment
+    nolintlint:
+      # A //nolint without a reason is an undocumented exemption.
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+    staticcheck:
+      checks:
+        - all
+
+  exclusions:
+    generated: lax
+    presets:
+      # "comments" suppresses revive's `exported` and `package-comments`
+      # findings (verified against golangci-lint 2.13.2). Doc-comment style is
+      # therefore NOT gated today — a deliberate choice so that lint fails on
+      # correctness, not prose, while the module scaffold lands. Tightening it
+      # means dropping this preset and re-adding those two revive rules.
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Test code legitimately uses weak randomness, hardcoded fixtures and
+      # unchecked helpers; it does not ship.
+      - path: _test\.go
+        linters:
+          - gosec
+          - unparam
+          - contextcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - innsegl.dev/innsegl
+
+issues:
+  # Report every finding. A truncated report is a hidden failure.
+  max-issues-per-linter: 0
+  max-same-issues: 0
