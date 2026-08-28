@@ -1,0 +1,367 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Innsegl reference compose stack — SPIRE trio (RM-014, #22)
+#
+# Doc 05 §1 is the specification for this file. It names three services here:
+#
+#   spire-server  upstream SPIRE  Trust domain `innsegl.dev` root
+#                                 SQLite datastore acceptable here only;
+#                                 admin API reachable solely from `innsegl-mcp`
+#   spire-agent   upstream SPIRE  Node/workload attestation
+#                                 Workload API socket volume-shared
+#   spire-oidc    upstream        JWT-SVID → OIDC bridge for Fulcio
+#
+# and one requirement about how they are wired:
+#
+#   "Network segmentation even in compose: `spire-server` admin API and
+#    `postgres` write role reachable only from the services that need them
+#    [...] Compose is where the least-privilege shape is first proven, not
+#    first ignored."
+#
+# The other services in doc 05 §1 (fulcio, rekor, postgres, minio, innsegl-*,
+# demo-agent) are other issues' files. This one is composable with them: it
+# declares the networks and volumes they attach to, with the membership rules
+# stated at each declaration.
+#
+# HOW TO RUN IT — see spire/README.md. Short version:
+#   docker compose -f deploy/compose/spire.yml up -d
+#   deploy/compose/spire/register.sh          # bootstrap registration entries
+#
+# ADR-0011 records the admin-API segmentation decision and its residual limit.
+# ============================================================================
+
+name: innsegl-spire
+
+# ----------------------------------------------------------------------------
+# Pinned images. Doc 05 §1: "pin versions". Pinned twice — by release tag, which
+# says what this is, and by the OCI index digest, which says what it *is*. A tag
+# alone is mutable at the registry; the digest is what docker actually verifies.
+# All three come from one SPIRE release: server, agent and the discovery
+# provider share protocol surfaces and are not independently versioned upstream.
+# ----------------------------------------------------------------------------
+x-spire-server-image: &spire-server-image
+  ghcr.io/spiffe/spire-server:1.15.3@sha256:4082f30d3e0ddc4000a171392c4ea174345ee44d161ee917c70b97b2ecfba141
+x-spire-agent-image: &spire-agent-image
+  ghcr.io/spiffe/spire-agent:1.15.3@sha256:41b0dcd8b258a69db9e2768292a060766fb76fd866e4bc925849981ea1b825ff
+x-spire-oidc-image: &spire-oidc-image
+  ghcr.io/spiffe/oidc-discovery-provider:1.15.3@sha256:bb95f13c2b4e8392d6631ff1a45a03554ba050534cd3c1045505cc80d3fb77e2
+# Used once, by the one-shot PKI bootstrapper. The SPIRE images are distroless
+# and carry no shell or OpenSSL, so the bootstrap runs somewhere that does.
+x-openssl-image: &openssl-image
+  alpine/openssl:3.5.7@sha256:19f8eb9004a1dbaec323eed6094e9b6bcc1dbf2697ecb5fb8d2fad4e3336a8f7
+
+# The issuer claim on every JWT-SVID and the issuer in the OIDC discovery
+# document. Doc 05 §3 names oidc.innsegl.dev as the production issuer; override
+# only when serving the provider from somewhere else.
+x-jwt-issuer: &jwt-issuer ${INNSEGL_SPIRE_JWT_ISSUER:-https://oidc.innsegl.dev}
+
+services:
+
+  # --------------------------------------------------------------------------
+  # One-shot PKI bootstrap. Runs to completion before anything else starts and
+  # is idempotent, so `up` is safe to repeat. Everything it does and why is in
+  # spire/bootstrap.sh — in particular why node attestation is x509pop and not
+  # a join token, and why there are three separate keys.
+  #
+  # It is the only container that ever holds the node CA key, and it exits.
+  # --------------------------------------------------------------------------
+  spire-bootstrap:
+    image: *openssl-image
+    container_name: innsegl-spire-bootstrap
+    # No network at all: it generates key material and writes files. Nothing it
+    # does requires reaching anything, so nothing can reach it either.
+    network_mode: none
+    entrypoint: ["/bin/sh"]
+    command: ["/bootstrap.sh"]
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./spire/bootstrap.sh:/bootstrap.sh:ro
+      - spire-pki-server:/out/server
+      - spire-pki-agent:/out/agent
+      # Mounted only so its ownership can be set for the unprivileged server
+      # user; no content is written to it.
+      - spire-server-data:/out/server-data
+
+  # --------------------------------------------------------------------------
+  # spire-server — the trust domain root.
+  #
+  # NETWORKS: exactly two, both internal, and that is the segmentation.
+  #   innsegl-spire-node   spire-agent reaches the Agent API here.
+  #   innsegl-spire-admin  innsegl-mcp reaches the admin API here, and is the
+  #                        only other member this network will ever have.
+  # Everything else in doc 05 §1 — postgres, minio, rekor, fulcio, the sealer,
+  # the reconciler, the dashboard, demo-agent — is on neither, so none of them
+  # can open a socket to spire-server at all.
+  #
+  # PORTS: none. The Agent API is not published to the host.
+  # --------------------------------------------------------------------------
+  spire-server:
+    image: *spire-server-image
+    container_name: innsegl-spire-server
+    depends_on:
+      spire-bootstrap:
+        condition: service_completed_successfully
+    # `run` is the image entrypoint; these are its arguments. -expandEnv is
+    # what lets server.conf read ${INNSEGL_SPIRE_JWT_ISSUER}.
+    command: ["-config", "/run/spire/conf/server.conf", "-expandEnv"]
+    environment:
+      INNSEGL_SPIRE_JWT_ISSUER: *jwt-issuer
+    networks:
+      - innsegl-spire-node
+      - innsegl-spire-admin
+    volumes:
+      - ./spire/server.conf:/run/spire/conf/server.conf:ro
+      # Read-only, and it is the *server* half of the PKI: upstream CA cert and
+      # key plus the node CA certificate. The node CA key is not on this volume.
+      - spire-pki-server:/run/spire/pki:ro
+      - spire-server-data:/run/spire/server-data
+    read_only: true
+    tmpfs:
+      - /tmp
+      # The local admin socket lives on a tmpfs private to this container, not
+      # on a volume. That is deliberate and it is the strongest form of the
+      # doc 05 §1 rule: the socket is UNAUTHENTICATED — whatever can open it
+      # has full admin over the trust domain — and a tmpfs cannot be mounted
+      # by a second container at all, so "reachable only from innsegl-mcp"
+      # is not a rule someone can quietly break by adding one line to a
+      # `volumes:` list. innsegl-mcp reaches admin over TCP with an SVID, on
+      # the innsegl-spire-admin network. See ADR-0011.
+      #
+      # uid/gid so the unprivileged server user owns it; 0700 so nothing else
+      # in the container could reach it either.
+      - /run/spire/admin:uid=1000,gid=1000,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # The image is distroless: no shell, no curl. SPIRE ships its own probe,
+      # and it asks the same question a client asks — can the API be reached
+      # and does it answer.
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck", "-socketPath", "/run/spire/admin/api.sock"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # spire-agent — node and workload attestation.
+  #
+  # This container is privileged in two specific, named ways. Both are load
+  # bearing for workload attestation and neither is incidental:
+  #
+  #   pid: host          SO_PEERCRED gives the agent the caller's PID in the
+  #                      agent's own PID namespace. In a private namespace a
+  #                      sibling container's PID does not translate and every
+  #                      attestation fails. The host namespace is also what
+  #                      makes /proc/<pid>/exe readable, which is where
+  #                      unix:path and unix:sha256 come from.
+  #   docker.sock (ro)   the docker workload attestor reads container labels
+  #                      and image identity from the Docker API.
+  #
+  # About that `:ro` — MEASURED, because it is easy to believe otherwise: a
+  # read-only bind mount of a *Unix socket* restricts nothing. Connecting to a
+  # socket is not writing to the file, and every Docker API call still goes
+  # through. Probed on 2026-08-28 through a `:ro` mount:
+  #   POST /v1.45/containers/create -> HTTP 201
+  # So `:ro` here is documentation of intent, not a control. Full Docker API
+  # access is what this container has, and the honest way to narrow it is an
+  # allowlisting socket proxy in front of the daemon — a component doc 05 §1
+  # does not name, so it is named here as follow-up rather than smuggled in.
+  #
+  # The cost is stated plainly in agent.conf: anything that can reach the
+  # Docker socket can impersonate any run on this node. Doc 05 §2 is the
+  # answer — "SPIRE hosts are the most restricted machines in the deployment".
+  #
+  # NETWORKS: innsegl-spire-node only. The agent has no route to the OIDC
+  # frontend and no route to the admin network.
+  # --------------------------------------------------------------------------
+  spire-agent:
+    image: *spire-agent-image
+    container_name: innsegl-spire-agent
+    depends_on:
+      spire-bootstrap:
+        condition: service_completed_successfully
+      spire-server:
+        condition: service_healthy
+    command: ["-config", "/run/spire/conf/agent.conf", "-expandEnv"]
+    networks:
+      - innsegl-spire-node
+    pid: host
+    volumes:
+      - ./spire/agent.conf:/run/spire/conf/agent.conf:ro
+      # The *agent* half of the PKI: its own node identity and the bootstrap
+      # trust bundle. Neither CA key is on this volume.
+      - spire-pki-agent:/run/spire/pki:ro
+      - spire-agent-data:/run/spire/agent-data
+      # Doc 05 §1: "Workload API socket volume-shared with `demo-agent`".
+      # This is that volume. Every workload that needs an SVID mounts it.
+      - spire-agent-socket:/run/spire/agent-sockets
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # SYS_PTRACE is what makes readlink(/proc/<workload pid>/exe) succeed across
+    # container boundaries, and therefore what makes unix:path and unix:sha256
+    # available at all. Without it the unix attestor does not merely lose two
+    # selectors: it errors, and SPIRE treats a failed attestor as a failed
+    # attestation, so nothing on this node gets an identity. Verified by
+    # removing it and watching every workload get "No identity issued".
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/run/spire/agent-sockets/api.sock"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # spire-oidc — the JWT-SVID → OIDC bridge Fulcio validates against.
+  #
+  # It holds no SPIRE credential of its own beyond an ordinary workload SVID,
+  # and it is on NO network with spire-server: its only channel into SPIRE is
+  # the Workload API socket, as an attested workload like any other. See
+  # oidc-discovery-provider.conf for why that is not the same as using
+  # `server_api`.
+  #
+  # It is the one SPIRE service with a public face (doc 05 §3), so it sits
+  # alone on the frontend network. Nothing else joins that network; a
+  # compromise of the reverse proxy in front of it reaches this container and
+  # stops.
+  # --------------------------------------------------------------------------
+  spire-oidc:
+    image: *spire-oidc-image
+    container_name: innsegl-spire-oidc
+    # Selector material. Compose stamps its own com.docker.compose.* labels on
+    # every container; selecting on those would tie the trust domain's identity
+    # policy to compose's internal label scheme. These are ours.
+    labels:
+      dev.innsegl.component: oidc-discovery-provider
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+    command: ["-config", "/run/spire/conf/oidc-discovery-provider.conf", "-expandEnv"]
+    environment:
+      INNSEGL_SPIRE_JWT_ISSUER: *jwt-issuer
+    networks:
+      - innsegl-oidc-frontend
+    ports:
+      # Loopback only. Production puts a TLS-terminating proxy in front
+      # (doc 05 §3.1); binding 0.0.0.0 here would put an unauthenticated
+      # http listener on every interface of a developer's machine.
+      - "127.0.0.1:${INNSEGL_SPIRE_OIDC_PORT:-8443}:8080"
+    volumes:
+      - ./spire/oidc-discovery-provider.conf:/run/spire/conf/oidc-discovery-provider.conf:ro
+      - spire-agent-socket:/run/spire/agent-sockets
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # No healthcheck: distroless image, and the provider's own /ready listener
+    # binds localhost by design so no sibling container can reach it either.
+    # Readiness is probed from outside over HTTP — the way Fulcio will probe
+    # it. See spire/README.md.
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # A workload that fetches an SVID, under the `verify` profile so it never
+  # runs as part of the stack proper.
+  #
+  # It exists to make requirement 6 of RM-014 checkable rather than asserted:
+  # boot the stack, register a run, and see a real SVID come back bearing
+  # spiffe://innsegl.dev/agent/{agent-type}/{task-id}/{run-id}. Its labels and
+  # its non-root uid are exactly the selector set an agent run is registered
+  # with, so it also demonstrates the selectors rather than describing them.
+  #
+  # This is NOT doc 05 §1's `demo-agent`. That one is built, scripted, and
+  # RM-054's; this one only proves the identity path.
+  # --------------------------------------------------------------------------
+  spire-verify-workload:
+    profiles: ["verify"]
+    image: *spire-agent-image
+    container_name: innsegl-spire-verify-workload
+    # Non-root. unix:uid:0 would be the weak selector doc 04 warns about: every
+    # container is root by default, so it would select nothing.
+    user: "10001:10001"
+    labels:
+      dev.innsegl.agent-type: ${INNSEGL_DEMO_AGENT_TYPE:-demo}
+      dev.innsegl.task-id: ${INNSEGL_DEMO_TASK_ID:-rm-014}
+      dev.innsegl.run-id: ${INNSEGL_DEMO_RUN_ID:-run-local}
+    entrypoint: ["/opt/spire/bin/spire-agent"]
+    command:
+      - "api"
+      - "fetch"
+      - "x509"
+      - "-socketPath"
+      - "/run/spire/agent-sockets/api.sock"
+    # A workload talks to SPIRE over a socket, not over the network.
+    network_mode: none
+    volumes:
+      - spire-agent-socket:/run/spire/agent-sockets
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
+# ----------------------------------------------------------------------------
+# Networks. Membership is the access-control list; keep these comments accurate
+# when adding a service, because they are the only place the rule is written
+# down in a form a reviewer can check against the `networks:` keys above.
+# ----------------------------------------------------------------------------
+networks:
+  # spire-server ↔ spire-agent. Node attestation and the Agent API.
+  # MEMBERS: spire-server, spire-agent. Nothing else, ever — a workload does
+  # not need the Agent API, it needs the Workload API socket.
+  innsegl-spire-node:
+    name: innsegl-spire-node
+    internal: true
+
+  # spire-server ↔ innsegl-mcp. The admin path.
+  # MEMBERS: spire-server, and innsegl-mcp when E4 lands. Nothing else.
+  # Declared now, with one member, precisely so that when innsegl-mcp arrives
+  # joining this network is the whole of what grants it admin reachability —
+  # rather than the stack having grown a flat network that someone has to
+  # retrofit segmentation onto.
+  innsegl-spire-admin:
+    name: innsegl-spire-admin
+    internal: true
+
+  # The public face. MEMBERS: spire-oidc, and whatever terminates TLS in front
+  # of it. Not internal: this is the one thing outside the deployment has to
+  # reach (Fulcio fetches the discovery document).
+  innsegl-oidc-frontend:
+    name: innsegl-oidc-frontend
+
+# ----------------------------------------------------------------------------
+# Volumes. As with the networks, the mount list is an access-control decision;
+# each one names who may mount it.
+# ----------------------------------------------------------------------------
+volumes:
+  # Upstream CA cert+key and the node CA certificate.
+  # MOUNTED BY: spire-bootstrap (rw), spire-server (ro).
+  spire-pki-server:
+  # The agent's node identity and its bootstrap trust bundle.
+  # MOUNTED BY: spire-bootstrap (rw), spire-agent (ro).
+  spire-pki-agent:
+  # SQLite datastore, server keys.
+  # MOUNTED BY: spire-bootstrap (to chown it), spire-server.
+  spire-server-data:
+  # MOUNTED BY: spire-agent.
+  spire-agent-data:
+  # The Workload API socket (doc 05 §1).
+  # MOUNTED BY: spire-agent (rw) and every attested workload: spire-oidc today,
+  # demo-agent and the agent runs of later epics.
+  spire-agent-socket:
