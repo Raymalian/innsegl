@@ -514,11 +514,12 @@ func TestMCP007ATakenOverClaimStillMintsOneIdentity(t *testing.T) {
 	env.identities.entered = make(chan struct{}, 4)
 	env.identities.release = make(chan struct{})
 	env.identities.mu.Unlock()
-	// Closing the gate on the way out lets any execution still waiting at it
-	// finish. Without this a failed assertion would leave an HTTP request in
-	// flight, and httptest.Server.Close waits for those — a failing test would
-	// hang instead of reporting.
-	t.Cleanup(func() { close(env.identities.release) })
+	// Closing the gate releases every execution waiting at it at once. It is
+	// also closed on the way out: without that, a failed assertion would leave
+	// an HTTP request in flight, and httptest.Server.Close waits for those, so
+	// a failing test would hang instead of reporting. Once either way.
+	releaseBoth := sync.OnceFunc(func() { close(env.identities.release) })
+	t.Cleanup(releaseBoth)
 
 	type reply struct {
 		out registerAgentOut
@@ -560,25 +561,24 @@ func TestMCP007ATakenOverClaimStillMintsOneIdentity(t *testing.T) {
 		}
 	}
 
-	// Released one at a time. The overlap that matters has already happened —
-	// both executions are inside SPIRE at once, having both appended — and
-	// serializing only the two completions avoids a race in RM-021's
-	// completeSQL that is not this tool's to fix: when two callers complete
-	// simultaneously, the loser's second UNION arm reads the pre-commit
-	// snapshot and returns a NULL response. Reported with #30; when it is
-	// fixed this test can release both at once and assert the same things.
+	// Both released at once, so the two executions race all the way to the
+	// end: they append together and they record their replies together. That
+	// last overlap used to hand the loser a NULL response out of the
+	// idempotency store's pre-commit snapshot, so this test released them one
+	// at a time; RM-066 (#83) fixed the store and the stagger is gone.
+	releaseBoth()
+
 	var outs []registerAgentOut
 	for i := 0; i < 2; i++ {
 		select {
-		case env.identities.release <- struct{}{}:
+		case got := <-results:
+			if got.err != nil {
+				t.Fatalf("call %d: %v", i, got.err)
+			}
+			outs = append(outs, got.out)
 		case <-time.After(45 * time.Second):
-			t.Fatalf("execution %d never reached the gate to be released", i)
+			t.Fatalf("call %d never returned once both executions were released", i)
 		}
-		got := <-results
-		if got.err != nil {
-			t.Fatalf("call %d: %v", i, got.err)
-		}
-		outs = append(outs, got.out)
 	}
 
 	if outs[0] != outs[1] {
