@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Compose overlay: the shipped SPIRE stack, scoped to one test process
+# (RM-065, #81)
+#
+# Applied on top of deploy/compose/spire.yml, never instead of it. A harness
+# invokes it as:
+#
+#   INNSEGL_SPIRE_TEST_STACK=innsegl-spiretest-<pid> \
+#   docker compose -p "$INNSEGL_SPIRE_TEST_STACK" \
+#     -f deploy/compose/spire.yml -f deploy/compose/spire-testscope.yml \
+#     up -d --wait spire-server spire-agent
+#
+# It changes NOTHING but names: the compose project, every container_name and
+# every network name. The images and their digests, the configs, the PKI
+# bootstrap, the selectors, the admin authorization policy and the network
+# segmentation of ADR-0011 are inherited unchanged. That is the point — an
+# integration test must run against the shipped stack, or what it proves is
+# about a different system.
+#
+# WHY EVERY NAME IS INTERPOLATED
+# ------------------------------
+# deploy/compose/spire.yml is the adopter-facing artifact and pins `name:
+# innsegl-spire` and a fixed `container_name:` per service, which is right for
+# a deployment: an operator wants to find `innsegl-spire-server` by that name.
+# But it means every test process that runs `docker compose -f
+# deploy/compose/spire.yml up` selects the SAME stack. `go test ./...` runs
+# packages concurrently, so internal/spire and internal/mcp both did — and two
+# concurrent `go test` invocations (routine while scripts/coverage-floors.sh
+# runs beside an ordinary test run) multiplied that again.
+#
+# What sharing produces is not merely a flake. MEASURED by RM-018 on the
+# failure-injection suite, which had the same defect: a control entry belonging
+# to one process appeared in another process's datastore mid-case and failed
+# SPI-006 with
+#
+#     an entry appeared 18.99s after recovery without anybody asking for one
+#     ... That is a queued identity.
+#
+# — a false accusation of exactly the thing SPI-006 exists to detect. Between
+# internal/spire and internal/mcp the observed symptom is milder and just as
+# unsound: `service "spire-server" is not running`, because one package's
+# `compose down --volumes` removed the server the other was mid-case against.
+# An assertion about what a datastore holds is only sound when the datastore
+# has exactly one writer, so each test process gets a SPIRE of its own.
+#
+# Volumes need no help here: spire.yml declares them without an explicit
+# `name:`, so compose already scopes them to the project.
+#
+# WHY IT IS REQUIRED AND NOT DEFAULTED
+# ------------------------------------
+# `:?` rather than `:-`, deliberately, and this is RM-018's reasoning adopted
+# verbatim. A default would let a hand-run `docker compose -f ... -f ...`
+# build a stack under a shared name that no test process owns or tears down —
+# which is precisely the state that leaves a later run inspecting containers
+# somebody else created. With `:?` an unset variable is a loud compose error
+# naming the fix, instead of a silently mis-namespaced stack.
+#
+# RELATIONSHIP TO test/failure/spire-isolated.yml
+# -----------------------------------------------
+# That overlay does the same renaming for the failure-injection suite (ADR-0015)
+# and additionally sets `restart: "no"` on the two services SPI-006 and SPI-007
+# SIGKILL, so Docker does not restart them before the assertion runs. This one
+# must NOT do that: internal/spire and internal/mcp kill nothing and want the
+# shipped restart policy. The two files are kept separate for that reason, and
+# because they are set by different variables — so no two suites can select the
+# same project name even by accident.
+# ============================================================================
+
+name: ${INNSEGL_SPIRE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}
+
+services:
+  spire-bootstrap:
+    container_name: ${INNSEGL_SPIRE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-spire-bootstrap
+
+  spire-server:
+    container_name: ${INNSEGL_SPIRE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-spire-server
+
+  spire-agent:
+    container_name: ${INNSEGL_SPIRE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-spire-agent
+
+  spire-oidc:
+    container_name: ${INNSEGL_SPIRE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-spire-oidc
+
+  spire-verify-workload:
+    container_name: ${INNSEGL_SPIRE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-spire-verify-workload
+
+networks:
+  innsegl-spire-node:
+    name: ${INNSEGL_SPIRE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-spire-node
+  innsegl-spire-admin:
+    name: ${INNSEGL_SPIRE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-spire-admin
+  innsegl-oidc-frontend:
+    name: ${INNSEGL_SPIRE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-oidc-frontend

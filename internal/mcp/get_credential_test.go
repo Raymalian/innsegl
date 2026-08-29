@@ -1319,14 +1319,39 @@ func TestNewSPIREMinterBindsTheSVIDAPI(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 const (
-	credComposeServer   = "innsegl-spire-server"
-	credComposeAgent    = "innsegl-spire-agent"
-	credAdminNetwork    = "innsegl-spire-admin"
+	// credStackEnv is the variable deploy/compose/spire-testscope.yml
+	// interpolates into the compose project, every container_name and every
+	// network name. The harness sets it to a value unique to this process —
+	// see credStackPrefix.
+	credStackEnv        = "INNSEGL_SPIRE_TEST_STACK"
 	credAdminSocket     = "/run/spire/admin/api.sock"
 	credAdminID         = "spiffe://innsegl.dev/innsegl/mcp"
 	credServerID        = "spiffe://innsegl.dev/spire/server"
 	credProxyImageDeflt = "alpine/socat:1.8.0.3"
 )
+
+// credStackPrefix names this process's SPIRE stack, and everything in it
+// (RM-065, #81).
+//
+// deploy/compose/spire.yml pins `name: innsegl-spire` and a fixed
+// container_name per service — right for a deployment, wrong for a test, since
+// every process that runs `docker compose -f deploy/compose/spire.yml up`
+// then selects the SAME stack. This harness and internal/spire's both did, and
+// `go test ./...` runs their packages concurrently: whichever finished first
+// ran `compose down --volumes` on the server the other was mid-case against,
+// and the reuse path below used to `restart spire-server` out from under it.
+// RM-018 measured where that ends on the failure-injection suite — one
+// process's entry in another's datastore, failing SPI-006 with "an entry
+// appeared 18.99s after recovery ... That is a queued identity", a false
+// accusation of the thing SPI-006 exists to detect.
+//
+// The suite component makes "no two packages can select the same compose
+// project name" true by reading, not merely true because two live processes
+// cannot share a pid: internal/spire uses innsegl-spiretest-<pid> and
+// test/failure uses innsegl-failure-<pid>.
+func credStackPrefix() string {
+	return fmt.Sprintf("innsegl-mcptest-%d", os.Getpid())
+}
 
 // credStack is the running compose stack plus the two things the harness has
 // to add to talk to it: a TCP proxy onto the admin network (ADR-0011 gives
@@ -1335,14 +1360,21 @@ const (
 // operator path ADR-0011 describes.
 type credStack struct {
 	composeFile string
-	startedByUs bool
-	proxyName   string
-	adminAddr   string
-	parentID    string
+	overlayFile string
+
+	// prefix is this process's stack name; every container and network in it
+	// starts with it, and it is also the compose project name.
+	prefix       string
+	adminNetwork string
+
+	proxyName string
+	adminAddr string
+	parentID  string
 }
 
 func (s *credStack) compose(ctx context.Context, args ...string) (string, error) {
-	return docker(ctx, append([]string{"compose", "-f", s.composeFile}, args...)...)
+	full := []string{"compose", "-p", s.prefix, "-f", s.composeFile, "-f", s.overlayFile}
+	return docker(ctx, append(full, args...)...)
 }
 
 func (s *credStack) spireLocal(ctx context.Context, args ...string) (string, error) {
@@ -1443,29 +1475,28 @@ func (s *credStack) adminClient(t *testing.T) *spire.Client {
 	return c
 }
 
-func credContainerRunning(ctx context.Context, name string) bool {
-	out, err := docker(ctx, "inspect", "--format", "{{.State.Running}}", name)
-	return err == nil && out == "true"
-}
-
 func startCredStack(ctx context.Context, root string) (*credStack, error) {
-	s := &credStack{composeFile: filepath.Join(root, "deploy", "compose", "spire.yml")}
-	s.startedByUs = !credContainerRunning(ctx, credComposeServer)
+	prefix := credStackPrefix()
+	// The overlay interpolates this into the project, the container names and
+	// the network names. Set before the first compose call and never changed.
+	if err := os.Setenv(credStackEnv, prefix); err != nil {
+		return nil, fmt.Errorf("set %s: %w", credStackEnv, err)
+	}
+	s := &credStack{
+		composeFile:  filepath.Join(root, "deploy", "compose", "spire.yml"),
+		overlayFile:  filepath.Join(root, "deploy", "compose", "spire-testscope.yml"),
+		prefix:       prefix,
+		adminNetwork: prefix + "-spire-admin",
+	}
 	if _, err := s.compose(ctx, "up", "--detach", "--wait", "spire-server", "spire-agent"); err != nil {
-		return nil, fmt.Errorf("compose up: %w", err)
+		return s, fmt.Errorf("compose up: %w", err)
 	}
-	if !s.startedByUs {
-		// SPIRE reads authz-policy.rego once, at startup, and the file is a
-		// bind mount — so a server left running from before an edit is still
-		// enforcing the old copy. Restarting it makes the policy under test
-		// the policy on disk, rather than whatever was on disk last week.
-		if _, err := s.compose(ctx, "restart", "spire-server"); err != nil {
-			return s, fmt.Errorf("restart spire-server: %w", err)
-		}
-		if _, err := s.compose(ctx, "up", "--detach", "--wait", "spire-server"); err != nil {
-			return s, fmt.Errorf("compose up after restart: %w", err)
-		}
-	}
+	// No reuse path, and therefore no `restart spire-server` to make one sound.
+	// SPIRE reads authz-policy.rego once, at startup, from a bind mount, so a
+	// server left running from before an edit enforces the old copy; a server
+	// this process just created cannot be. The restart is gone with the reuse
+	// it existed to repair — and with it the worst of the collision, since it
+	// used to land on whatever internal/spire was mid-case against.
 
 	// The attested node every run entry is parented to. Polled: the agent
 	// attests shortly after start.
@@ -1493,7 +1524,7 @@ func startCredStack(ctx context.Context, root string) (*credStack, error) {
 	if err != nil {
 		return s, fmt.Errorf("reserve a host port: %w", err)
 	}
-	s.proxyName = fmt.Sprintf("innsegl-test-credproxy-%d", os.Getpid()%100000)
+	s.proxyName = s.prefix + "-credproxy"
 	if _, rmErr := docker(ctx, "rm", "--force", s.proxyName); rmErr != nil {
 		_ = rmErr // a leftover from an interrupted run; absence is the normal case
 	}
@@ -1504,8 +1535,8 @@ func startCredStack(ctx context.Context, root string) (*credStack, error) {
 	); err != nil {
 		return s, fmt.Errorf("start the admin proxy: %w", err)
 	}
-	if _, err = docker(ctx, "network", "connect", credAdminNetwork, s.proxyName); err != nil {
-		return s, fmt.Errorf("join %s: %w", credAdminNetwork, err)
+	if _, err = docker(ctx, "network", "connect", s.adminNetwork, s.proxyName); err != nil {
+		return s, fmt.Errorf("join %s: %w", s.adminNetwork, err)
 	}
 	s.adminAddr = "127.0.0.1:" + port
 	return s, nil
@@ -1526,9 +1557,12 @@ func (s *credStack) stop() {
 			fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", s.proxyName, err)
 		}
 	}
-	if !s.startedByUs || os.Getenv("INNSEGL_TEST_KEEP_SPIRE") != "" {
+	if os.Getenv("INNSEGL_TEST_KEEP_SPIRE") != "" {
 		return
 	}
+	// Unconditional: this project is this process's own. Nobody else's stack is
+	// behind it, so there is nothing to preserve, and leaving it up would leak
+	// three containers, three networks and five volumes per run.
 	if _, err := s.compose(ctx, "down", "--volumes", "--remove-orphans"); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: compose down: %v\n", err)
 	}
