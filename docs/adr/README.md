@@ -47,6 +47,7 @@ maintainer ask "why is it like this?"
 | [0022](0022-a-compose-project-per-test-process-for-the-shipped-spire-stack.md) | Give every test process that drives the shipped SPIRE stack a compose project of its own, and require the project name rather than defaulting it | accepted | 2026-08-29 |
 | [0023](0023-read-the-recorded-reply-through-a-locking-read.md) | Read the recorded reply through a locking read, so a completion that loses the race is handed the winner's bytes | accepted | 2026-08-29 |
 | [0024](0024-readiness-probes-sigstore-by-fetching-its-trust-material.md) | Define Sigstore reachability as serving parseable trust material, and keep every readiness probe read-only | accepted | 2026-08-29 |
+| [0025](0025-rate-limit-register-agent-per-asserted-caller-and-alert-out-of-band.md) | Rate-limit `register_agent` per asserted caller, meter it on the ledger appender, and raise the trip out of band | accepted | 2026-08-29 |
 
 ## Open items
 
@@ -122,3 +123,15 @@ maintainer ask "why is it like this?"
   for the Sigstore half against a *real* Fulcio and Rekor, which cannot be
   written until RM-030 (#38) lands them in `deploy/compose/`; **MCP-018** is
   proposed for it.
+- **ADR-0025** leaves four items for the human. IP §6.10 says "per caller" and
+  E1 exempts the authorization that would make a caller identifiable, so the
+  bucket is keyed on the asserted (`agent_type`, `task_ref`) pair: a runaway
+  loop is bounded, an adversary who varies either value is not, and doc 04 §5's
+  residual risks should say so rather than letting AB-07 read as fully closed.
+  Doc 02 §3 has no event type for a rate-limit trip, so the trip is an operator
+  alert and not a ledger record — conformant with doc 05 §2's "an event type
+  **or** test", and `rate_limit_exceeded` is what doc 02 §3 would need if a
+  record is wanted. And IP §4 has no class for "slow down" and no `retry_after`
+  field; the refusal ships as `IDENTITY_UNAVAILABLE` with the wait in the
+  message, which is the **third** situation to share that workaround after
+  ADR-0017's and ADR-0018's — the case for a twelfth class is now cumulative.
