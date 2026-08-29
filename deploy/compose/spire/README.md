@@ -70,6 +70,20 @@ fresh trust domain root and a fresh agent identity, so every registration entry
 from the old stack is gone with it — which is correct, and is why `down` without
 `-v` is the right command when you want to keep a stack across a reboot.
 
+## The test overlay beside this file
+
+`../spire-testscope.yml` is a compose overlay used only by the Go test suite. It
+renames the project, every container and every network to
+`innsegl-<suite>test-<pid>` so that two test processes never drive the same
+SPIRE (RM-065, #81;
+[ADR-0022](../../../docs/adr/0022-a-compose-project-per-test-process-for-the-shipped-spire-stack.md)).
+
+It changes nothing else, it is never applied by anything above, and `spire.yml`
+is unchanged by its existence — the commands in this README behave exactly as
+they always have. Applying the overlay without setting
+`INNSEGL_SPIRE_TEST_STACK` is a deliberate compose error rather than a stack
+under a shared name.
+
 ## What is not here
 
 - **Fulcio, Rekor, Postgres, MinIO, and the built `innsegl-*` services.** They
