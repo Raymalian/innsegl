@@ -46,9 +46,12 @@ var commands = map[string]command{
 		summary: "seal ledger segments and anchor them in the transparency log",
 		exec:    notImplemented("seal"),
 	},
+	// The reaper is the seventh body: IP §6.7 requires orphaned entries to be
+	// expired and recorded, and doc 05 §2 runs that single-active on a
+	// schedule — which needs something an operator can schedule.
 	"reap": {
 		summary: "delete identity entries orphaned past their TTL",
-		exec:    notImplemented("reap"),
+		exec:    reapCommand,
 	},
 	"verify": {
 		summary: "verify a commit's attribution without access to the ledger",
