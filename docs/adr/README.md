@@ -40,6 +40,7 @@ maintainer ask "why is it like this?"
 | [0015](0015-failure-injection-stack-per-test-process.md) | Give SPIRE failure injection a stack per test process, and record the half of SPI-007 that `sign_commit` must finish | accepted | 2026-08-29 |
 | [0016](0016-error-class-carries-retryability-and-one-place-renders-it.md) | Make `retryable` a property of the error class, narrowable but never widenable, and render IP §4's error in exactly one place | accepted | 2026-08-29 |
 | [0017](0017-record-the-tool-call-reply-not-only-the-event.md) | Record the tool call's reply in Postgres, above the ledger's event-level dedupe | accepted | 2026-08-29 |
+| [0018](0018-record-run-registered-before-creating-the-spire-entry.md) | Record `run_registered` before creating the SPIRE entry, and derive the run id from the call | accepted | 2026-08-29 |
 
 ## Open items
 
@@ -89,3 +90,10 @@ maintainer ask "why is it like this?"
   And doc 07 has no test ID for the tool-call idempotency store itself: LED-008
   is the ledger's event-level dedupe, and MCP-007 and MCP-011 reach this layer
   only through tools that do not exist yet.
+- **ADR-0018** leaves two questions for the human. IP §4's closed vocabulary
+  has no class for "the caller sent an argument that cannot name a run";
+  `register_agent` reports `INVARIANT_VIOLATION`, following the precedent
+  already in the shipped source, which is alert-level for what may be a typo.
+  And doc 07 has no ID for the ordering the ADR fixes — that the identity is
+  never created before its record — which is the property a future reordering
+  would silently break; **MCP-017** is proposed for it.
