@@ -76,7 +76,7 @@ jobs:
           }
           docker version --format '  docker {{.Server.Version}}'
       - name: go test -race
-        run: go test ./... -race
+        run: go test -p 1 ./... -race
 
   lint:
     name: lint
@@ -142,7 +142,7 @@ jobs:
         # with no test file at all reports 0% instead of vanishing from the
         # profile and being counted as compliant by omission.
         run: >-
-          go test ./... -race
+          go test -p 1 ./... -race
           -covermode=atomic
           -coverpkg=./...
           -coverprofile=cover.out
