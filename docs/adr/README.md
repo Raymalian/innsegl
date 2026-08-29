@@ -46,6 +46,7 @@ maintainer ask "why is it like this?"
 | [0021](0021-record-event-writes-only-tool-call-and-its-event-type-argument-names-the-tool.md) | Let `record_event` write exactly one event type, `tool_call`, and read its `event_type` argument as the agent tool's name | accepted | 2026-08-29 |
 | [0022](0022-a-compose-project-per-test-process-for-the-shipped-spire-stack.md) | Give every test process that drives the shipped SPIRE stack a compose project of its own, and require the project name rather than defaulting it | accepted | 2026-08-29 |
 | [0023](0023-read-the-recorded-reply-through-a-locking-read.md) | Read the recorded reply through a locking read, so a completion that loses the race is handed the winner's bytes | accepted | 2026-08-29 |
+| [0024](0024-readiness-probes-sigstore-by-fetching-its-trust-material.md) | Define Sigstore reachability as serving parseable trust material, and keep every readiness probe read-only | accepted | 2026-08-29 |
 
 ## Open items
 
@@ -114,3 +115,10 @@ maintainer ask "why is it like this?"
   **earliest** `run_retired` for a run, because concurrent first retirements can
   append two and IP §4 requires every later call to be answered with the
   original.
+- **ADR-0024** leaves two items for the human. Readiness proves reachability,
+  never writability — a read-only Postgres, a full disk or a Fulcio that serves
+  its root and refuses to issue are all reported healthy — and that limit must
+  appear wherever the endpoint is documented for operators. And doc 07 has no ID
+  for the Sigstore half against a *real* Fulcio and Rekor, which cannot be
+  written until RM-030 (#38) lands them in `deploy/compose/`; **MCP-018** is
+  proposed for it.
