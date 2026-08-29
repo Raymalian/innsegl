@@ -45,6 +45,11 @@ maintainer ask "why is it like this?"
 | [0020](0020-retire-a-run-by-its-run-id-alone-recording-before-deleting.md) | Retire a run by its `run_id` alone, recording before deleting, and answer every later call from the ledger | accepted | 2026-08-29 |
 | [0021](0021-record-event-writes-only-tool-call-and-its-event-type-argument-names-the-tool.md) | Let `record_event` write exactly one event type, `tool_call`, and read its `event_type` argument as the agent tool's name | accepted | 2026-08-29 |
 | [0022](0022-a-compose-project-per-test-process-for-the-shipped-spire-stack.md) | Give every test process that drives the shipped SPIRE stack a compose project of its own, and require the project name rather than defaulting it | accepted | 2026-08-29 |
+| [0023](0023-read-the-recorded-reply-through-a-locking-read.md) | Read the recorded reply through a locking read, so a completion that loses the race is handed the winner's bytes | accepted | 2026-08-29 |
+| [0024](0024-readiness-probes-sigstore-by-fetching-its-trust-material.md) | Define Sigstore reachability as serving parseable trust material, and keep every readiness probe read-only | accepted | 2026-08-29 |
+| [0025](0025-rate-limit-register-agent-per-asserted-caller-and-alert-out-of-band.md) | Rate-limit `register_agent` per asserted caller, meter it on the ledger appender, and raise the trip out of band | accepted | 2026-08-29 |
+| [0026](0026-mcp-006-is-reachability-through-the-shipped-tool-and-an-unreachable-cell-is-a-finding.md) | Read MCP-006 as reachability through the shipped tool, and record an unreachable cell as a finding rather than manufacturing a path to it | accepted | 2026-08-29 |
+| [0027](0027-crash-mcp-011-by-sigkilling-a-purpose-built-server-and-hold-the-narrow-windows-open.md) | Crash MCP-011 by SIGKILLing a purpose-built MCP process, fuzz the kill timing against a measured call, and hold the two narrowest windows open rather than chase them | accepted | 2026-08-29 |
 
 ## Open items
 
@@ -113,3 +118,52 @@ maintainer ask "why is it like this?"
   **earliest** `run_retired` for a run, because concurrent first retirements can
   append two and IP §4 requires every later call to be answered with the
   original.
+- **ADR-0024** leaves two items for the human. Readiness proves reachability,
+  never writability — a read-only Postgres, a full disk or a Fulcio that serves
+  its root and refuses to issue are all reported healthy — and that limit must
+  appear wherever the endpoint is documented for operators. And doc 07 has no ID
+  for the Sigstore half against a *real* Fulcio and Rekor, which cannot be
+  written until RM-030 (#38) lands them in `deploy/compose/`; **MCP-018** is
+  proposed for it.
+- **ADR-0025** leaves four items for the human. IP §6.10 says "per caller" and
+  E1 exempts the authorization that would make a caller identifiable, so the
+  bucket is keyed on the asserted (`agent_type`, `task_ref`) pair: a runaway
+  loop is bounded, an adversary who varies either value is not, and doc 04 §5's
+  residual risks should say so rather than letting AB-07 read as fully closed.
+  Doc 02 §3 has no event type for a rate-limit trip, so the trip is an operator
+  alert and not a ledger record — conformant with doc 05 §2's "an event type
+  **or** test", and `rate_limit_exceeded` is what doc 02 §3 would need if a
+  record is wanted. And IP §4 has no class for "slow down" and no `retry_after`
+  field; the refusal ships as `IDENTITY_UNAVAILABLE` with the wait in the
+  message, which is the **third** situation to share that workaround after
+  ADR-0017's and ADR-0018's — the case for a twelfth class is now cumulative.
+- **ADR-0027** leaves three items for the human. IP §6.6 opens with "Every tool
+  call is idempotent via required `idempotency_key`", and doc 07's MCP-011 row
+  expects "Original result returned" from every tool — but ADR-0004 already
+  decided that `get_credential` and `retire_agent` take no key, and that
+  `get_credential` must *not* be deduplicated because "each issuance is a
+  distinct auditable fact". Read literally, IP §6.6 and MCP-011 therefore ask
+  for behaviour ADR-0004 forbids; read with ADR-0004, they ask for three
+  different things of four tools. The harness asserts the ADR-0004 reading and
+  names it per tool, and IP §6.6 should say "every tool call that accepts an
+  `idempotency_key`" with MCP-011 stating what the two unkeyed tools owe a
+  replay instead — which is IP §4's own words for `retire_agent` (the original
+  timestamp) and "no second identity, one record per issuance" for
+  `get_credential`. Second: IP §6.6 is written about a process and there is no
+  process — nothing wires the five tools onto a listener, which RM-026 and
+  RM-027 both flagged; `test/failure/crashd` is a test-only stand-in and the
+  real `cmd/innsegl mcp serve` should replace it. Third: `internal/mcp`
+  declares `CredentialRuns` and ships no implementation of it, so `crashd`
+  carries the second private copy after RM-028's; the reader belongs with that
+  entry point.
+- **ADR-0026** leaves two items for the human. IP §4 presents the eleven error
+  classes as one vocabulary shared by all five tools; RM-028's reachability
+  matrix found that for four of the five whole columns are empty — no MCP tool
+  can raise `ATTESTATION_FAILED` at all, because attestation happens at the
+  Workload API and the tools only ever touch SPIRE's admin APIs — so IP §4
+  should say per tool which classes a caller must handle, or state that the
+  vocabulary is deliberately shared and over-broad. And doc 07's MCP-006 says
+  "reachable per tool" without saying reachable *through what*: RM-020's matrix
+  proves each class renderable over the transport and RM-028's proves each one
+  reachable through a shipped tool, and the two readings currently collide on
+  one line.
