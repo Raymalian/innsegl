@@ -43,6 +43,7 @@ maintainer ask "why is it like this?"
 | [0018](0018-record-run-registered-before-creating-the-spire-entry.md) | Record `run_registered` before creating the SPIRE entry, and derive the run id from the call | accepted | 2026-08-29 |
 | [0019](0019-scope-mintjwtsvid-to-the-agent-subtree-and-issue-one-audience-per-credential.md) | Allow `MintJWTSVID` to the admin credential only inside the agent subtree, and issue exactly one audience per credential | accepted | 2026-08-29 |
 | [0020](0020-retire-a-run-by-its-run-id-alone-recording-before-deleting.md) | Retire a run by its `run_id` alone, recording before deleting, and answer every later call from the ledger | accepted | 2026-08-29 |
+| [0021](0021-record-event-writes-only-tool-call-and-its-event-type-argument-names-the-tool.md) | Let `record_event` write exactly one event type, `tool_call`, and read its `event_type` argument as the agent tool's name | accepted | 2026-08-29 |
 
 ## Open items
 
