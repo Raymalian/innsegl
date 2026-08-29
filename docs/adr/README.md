@@ -48,6 +48,7 @@ maintainer ask "why is it like this?"
 | [0023](0023-read-the-recorded-reply-through-a-locking-read.md) | Read the recorded reply through a locking read, so a completion that loses the race is handed the winner's bytes | accepted | 2026-08-29 |
 | [0024](0024-readiness-probes-sigstore-by-fetching-its-trust-material.md) | Define Sigstore reachability as serving parseable trust material, and keep every readiness probe read-only | accepted | 2026-08-29 |
 | [0025](0025-rate-limit-register-agent-per-asserted-caller-and-alert-out-of-band.md) | Rate-limit `register_agent` per asserted caller, meter it on the ledger appender, and raise the trip out of band | accepted | 2026-08-29 |
+| [0026](0026-mcp-006-is-reachability-through-the-shipped-tool-and-an-unreachable-cell-is-a-finding.md) | Read MCP-006 as reachability through the shipped tool, and record an unreachable cell as a finding rather than manufacturing a path to it | accepted | 2026-08-29 |
 
 ## Open items
 
@@ -135,3 +136,14 @@ maintainer ask "why is it like this?"
   field; the refusal ships as `IDENTITY_UNAVAILABLE` with the wait in the
   message, which is the **third** situation to share that workaround after
   ADR-0017's and ADR-0018's — the case for a twelfth class is now cumulative.
+- **ADR-0026** leaves two items for the human. IP §4 presents the eleven error
+  classes as one vocabulary shared by all five tools; RM-028's reachability
+  matrix found that for four of the five whole columns are empty — no MCP tool
+  can raise `ATTESTATION_FAILED` at all, because attestation happens at the
+  Workload API and the tools only ever touch SPIRE's admin APIs — so IP §4
+  should say per tool which classes a caller must handle, or state that the
+  vocabulary is deliberately shared and over-broad. And doc 07's MCP-006 says
+  "reachable per tool" without saying reachable *through what*: RM-020's matrix
+  proves each class renderable over the transport and RM-028's proves each one
+  reachable through a shipped tool, and the two readings currently collide on
+  one line.
