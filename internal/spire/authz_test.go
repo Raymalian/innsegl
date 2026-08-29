@@ -172,7 +172,11 @@ func TestSPI005AdminCredentialCannotMintOutsideTheAgentSubtree(t *testing.T) {
 // TestSPI005AdminIsDeniedTheMintAndJoinTokenAPIs covers the rest of AB-10.
 // Scoping BatchCreateEntry alone would leave three ways to obtain an identity
 // outside the agent subtree without creating an entry at all: mint an SVID
-// directly, or mint a join token and attest a node with it. The policy denies
+// directly, or mint a join token and attest a node with it.
+//
+// MintJWTSVID is the exception, since RM-023 (#31): get_credential needs it, so
+// it is allowlisted and scoped to the agent subtree rather than denied outright.
+// Its subtest below asserts the scoping. The policy denies
 // all of them to an admin SPIFFE ID; this asserts that rather than trusting the
 // allowlist to be read correctly.
 func TestSPI005AdminIsDeniedTheMintAndJoinTokenAPIs(t *testing.T) {
@@ -188,10 +192,26 @@ func TestSPI005AdminIsDeniedTheMintAndJoinTokenAPIs(t *testing.T) {
 			&svidv1.MintX509SVIDRequest{Csr: []byte{0x30, 0x00}, Ttl: 300})
 		requirePermissionDenied(t, classifyAdmin("MintX509SVID", "", err))
 	})
-	t.Run("MintJWTSVID", func(t *testing.T) {
-		// In the agent subtree, so the denial is about the method and not the ID.
-		_, err := svidv1.NewSVIDClient(c.conn).MintJWTSVID(ctx, &svidv1.MintJWTSVIDRequest{
+	t.Run("MintJWTSVID is scoped, not denied", func(t *testing.T) {
+		// RM-023 (#31) allowlisted this method and scoped it to the agent
+		// subtree (ADR-0019): get_credential mints the run's JWT-SVID with it,
+		// and an unscoped allowlist line would have been AB-10 by another road
+		// — RM-023 measured six out-of-subtree identities being minted with the
+		// scope rule removed, including the admin identity itself.
+		//
+		// So the in-subtree call must now SUCCEED and the out-of-subtree call
+		// must still be refused. The full nine-shape denial matrix lives with
+		// the tool that uses the method, in
+		// internal/mcp/get_credential_test.go's TestGetCredentialAgainstRealSPIRE.
+		svid := svidv1.NewSVIDClient(c.conn)
+		if _, err := svid.MintJWTSVID(ctx, &svidv1.MintJWTSVIDRequest{
 			Id:       &types.SPIFFEID{TrustDomain: testTrustDomain, Path: "/agent/demo/rm-015/run-1"},
+			Audience: []string{"sigstore"},
+		}); err != nil {
+			t.Fatalf("an in-subtree MintJWTSVID was refused; get_credential cannot work: %v", err)
+		}
+		_, err := svid.MintJWTSVID(ctx, &svidv1.MintJWTSVIDRequest{
+			Id:       &types.SPIFFEID{TrustDomain: testTrustDomain, Path: "/innsegl/rogue"},
 			Audience: []string{"sigstore"},
 		})
 		requirePermissionDenied(t, classifyAdmin("MintJWTSVID", "", err))

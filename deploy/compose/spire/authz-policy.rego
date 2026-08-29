@@ -48,15 +48,17 @@
 #    domain. That is denial of service and orphaning, not forged attribution —
 #    AB-10 is about minting. Detection is entry reconciliation (RM-019, AB-11).
 #    See ADR-0012.
-#  * The SVID mint APIs are denied to admin outright rather than scoped.
-#    MintX509SVID and MintWITSVID could not be scoped even if we wanted them:
-#    the SPIFFE ID lives inside a DER-encoded CSR, which rego cannot parse.
-#    MintJWTSVID could be (its request carries the ID), and will be when
-#    `get_credential` needs it — with its own test. Until then it is denied,
-#    because minting an SVID needs no registration entry and would route
-#    straight around everything this policy scopes. The LOCAL socket keeps all
-#    three: SPI-005's own harness uses `spire-server x509 mint` on that socket
-#    to obtain the admin caller SVID it then tests with.
+#  * MintX509SVID and MintWITSVID are denied to admin outright rather than
+#    scoped, and could not be scoped even if we wanted them: the SPIFFE ID
+#    lives inside a DER-encoded CSR, which rego cannot parse.
+#    MintJWTSVID IS allowed, and IS scoped — RM-023 (#31), ADR-0019. Its
+#    request carries the SPIFFE ID in `input.req.id`, so the same subtree rule
+#    that scopes an entry batch scopes it. Scoping it is not optional: minting
+#    an SVID needs no registration entry, so an unscoped MintJWTSVID would
+#    route straight around everything else this policy scopes and would be
+#    AB-10 by another road. The LOCAL socket keeps all three: SPI-005's own
+#    harness uses `spire-server x509 mint` on that socket to obtain the admin
+#    caller SVID it then tests with.
 #
 # The trust domain below is a PROTECTED STRING (doc 01 §1, VERSIONING.md). It is
 # spelled out rather than parameterised for the same reason server.conf spells
@@ -134,24 +136,23 @@ allow_if_admin = true if {
 
 # The admin surface, in full. Everything else upstream marks `allow_admin` —
 # CreateJoinToken, BanAgent, the bundle and federation APIs, the local-authority
-# APIs, MintX509SVID, MintJWTSVID — is denied to an admin SPIFFE ID by omission.
+# APIs, MintX509SVID, MintWITSVID — is denied to an admin SPIFFE ID by omission.
 # IP §6.10 is the standard being met: "least-privilege (entry create/delete
 # only, scoped to the agent subtree of the trust domain)".
 #
 # Each member is here because a tool in IP §4 or a component of E3 needs it:
 #
 #   register_agent            BatchCreateEntry; ListAgents for the parent node ID
+#   get_credential            MintJWTSVID                     (RM-023, ADR-0019)
 #   retire_agent              BatchDeleteEntry
 #   reaper (RM-017),          ListEntries, GetEntry, CountEntries,
 #   reconciler (RM-019)       BatchUpdateEntry
 #
 # Adding a member widens the blast radius of threat-model asset A2 and takes an
-# ADR plus its own denial test. In particular `get_credential` will need
-# MintJWTSVID (svid.v1.SVID/MintJWTSVID, whose request carries the SPIFFE ID in
-# `input.req.id` and so can be scoped the same way an entry batch is). It is
-# absent today because no code in this repository calls it yet, and an
-# authorization policy that permits what nothing exercises is a policy nobody
-# has tested.
+# ADR plus its own denial test. MintJWTSVID arrived with both: ADR-0019, and
+# TestGetCredentialAgainstRealSPIRE in internal/mcp/get_credential_test.go,
+# which mints in-subtree as a positive control and then asserts nine
+# out-of-subtree shapes are refused.
 mcp_admin_methods := {
 	"/spire.api.server.entry.v1.Entry/BatchCreateEntry",
 	"/spire.api.server.entry.v1.Entry/BatchUpdateEntry",
@@ -160,6 +161,7 @@ mcp_admin_methods := {
 	"/spire.api.server.entry.v1.Entry/GetEntry",
 	"/spire.api.server.entry.v1.Entry/CountEntries",
 	"/spire.api.server.agent.v1.Agent/ListAgents",
+	"/spire.api.server.svid.v1.SVID/MintJWTSVID",
 }
 
 # Methods whose request body carries the SPIFFE IDs being created or moved.
@@ -170,11 +172,21 @@ entry_batch_methods := {
 	"/spire.api.server.entry.v1.Entry/BatchUpdateEntry",
 }
 
+# Methods whose request names ONE SPIFFE ID directly, in `input.req.id`.
+# MintJWTSVID is the only one: MintX509SVID and MintWITSVID carry theirs inside
+# a DER-encoded CSR and are denied by omission from mcp_admin_methods above.
+mint_id_methods := {
+	"/spire.api.server.svid.v1.SVID/MintJWTSVID",
+}
+
 default admin_scope_ok = false
 
-# Read-only methods on the allowlist name no SPIFFE ID to scope.
+# Read-only methods on the allowlist name no SPIFFE ID to scope. Both scoped
+# sets are excluded here, so adding a method to either one cannot accidentally
+# leave it matching this rule and therefore unscoped.
 admin_scope_ok = true if {
 	not entry_batch_methods[input.full_method]
+	not mint_id_methods[input.full_method]
 }
 
 # Every entry in the batch, with no exception and no empty batch.
@@ -184,6 +196,16 @@ admin_scope_ok = true if {
 	every e in input.req.entries {
 		agent_subtree(e.spiffe_id)
 	}
+}
+
+# The one identity a mint names. Same subtree rule as an entry batch, and for
+# the same reason: an SVID minted outside spiffe://innsegl.dev/agent/{a}/{b}/{c}
+# is a forged attribution, and minting needs no registration entry, so this is
+# the only place it can be refused. `input.req.id` absent — protobuf omitempty
+# on a mint request with no id — leaves agent_subtree undefined, which denies.
+admin_scope_ok = true if {
+	mint_id_methods[input.full_method]
+	agent_subtree(input.req.id)
 }
 
 # agent_subtree holds for exactly the SPIFFE ID scheme of doc 01 §1:
