@@ -406,17 +406,43 @@ func (s *IdempotencyStore) claim(ctx context.Context, call Call, digest string) 
 // The UPDATE matches only a claim that is still in flight, so the first caller
 // to complete wins and a caller that was overtaken reads the winner's reply
 // out of the second arm rather than overwriting it.
+//
+// FOR UPDATE on that second arm is load-bearing and is why this is not the
+// obvious statement (RM-066, ADR-0023). A plain SELECT beside the UPDATE reads
+// the statement's snapshot, and the losing completer's snapshot is by
+// definition older than the winner's commit: its UPDATE blocked on the
+// winner's row lock, re-evaluated against the post-commit row, and declined,
+// while its SELECT still saw status='in_progress', response IS NULL — an empty
+// reply handed to a caller the store promised the winner's bytes. A locking
+// read is the one construct that sees past the snapshot: READ COMMITTED walks
+// the update chain to the row's current version and re-checks the WHERE
+// against it, so the loser reads what actually committed.
+//
+// `recorded` is read BEFORE the UPDATE rather than beside it, and the UPDATE
+// depends on it, so the order is fixed by the data and not by the planner: the
+// row is locked and re-read first, and the UPDATE fires only when that current
+// version is still in flight. First-completion-wins is therefore decided
+// against the committed row twice — once by the EXISTS and once by the
+// UPDATE's own `status = 'in_progress'`, which EvalPlanQual re-checks — and a
+// completed row is never touched, so the schema's IN003 guard is never
+// provoked into refusing a legitimate call.
 const completeSQL = `
-WITH done AS (
+WITH recorded AS (
+    SELECT status, response
+      FROM innsegl.idempotency
+     WHERE idempotency_key = $1
+       FOR UPDATE
+), done AS (
     UPDATE innsegl.idempotency
        SET status = 'completed', response = $2, completed_at = clock_timestamp()
-     WHERE idempotency_key = $1 AND status = 'in_progress'
+     WHERE idempotency_key = $1
+       AND status = 'in_progress'
+       AND EXISTS (SELECT 1 FROM recorded WHERE recorded.status = 'in_progress')
     RETURNING true AS mine, response
 )
 SELECT mine, response FROM done
 UNION ALL
-SELECT false, response FROM innsegl.idempotency
- WHERE idempotency_key = $1 AND NOT EXISTS (SELECT 1 FROM done)`
+SELECT false, response FROM recorded WHERE NOT EXISTS (SELECT 1 FROM done)`
 
 func (s *IdempotencyStore) complete(ctx context.Context, key string, response []byte) ([]byte, bool, error) {
 	var (

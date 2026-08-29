@@ -547,6 +547,226 @@ func TestAClaimThatCommitsDuringAnotherCallersStatementIsWaitedForNotLost(t *tes
 }
 
 // ---------------------------------------------------------------------------
+// The mirror of the race above, on the RECORDING statement (RM-066, #83).
+// ---------------------------------------------------------------------------
+
+// Two callers completing one claim at once: the loser must be handed the
+// winner's recorded bytes, which is the whole promise of the store (ADR-0017
+// §5, IP §6.6).
+//
+// The loser's UPDATE re-evaluates against the post-commit row and does not
+// match, so the data-modifying arm yields nothing; a plain SELECT beside it
+// reads the statement's PRE-commit snapshot, which still says
+// status='in_progress', response IS NULL. The loser is then handed an empty
+// reply. RM-022 measured it directly: 39 empty replies in 80 calls over 40
+// rounds.
+//
+// This makes it fire every time, the way RM-021 pinned the claim race: the
+// winning UPDATE is held open in a transaction of its own and committed only
+// once this caller is demonstrably parked on the row lock, so the loser's
+// snapshot is older than the winner's commit by construction and not by luck.
+func TestACompletionOvertakenMidStatementStillReturnsTheRecordedReply(t *testing.T) {
+	t.Parallel()
+	c := requirePG(t)
+	dsn := freshDSN(t, c)
+	migrate(t, dsn)
+	ctx := testCtx(t, 2*time.Minute)
+
+	call := probeCall("idem-complete-race")
+	digest, err := call.fingerprint()
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+
+	// A committed claim, in flight, with a lease that will not expire: the
+	// state both completers are racing to close.
+	seed := rawConn(t, dsn)
+	if _, ierr := seed.Exec(ctx, `
+		INSERT INTO innsegl.idempotency
+		       (idempotency_key, tool, request_digest, status, lease_expires_at)
+		VALUES ($1, $2, $3, 'in_progress', clock_timestamp() + interval '1 hour')`,
+		call.Key, call.Tool, digest); ierr != nil {
+		t.Fatalf("seed a claim: %v", ierr)
+	}
+
+	winner := []byte(`{"token":"` + randomToken(t) + `"}`)
+	loser := []byte(`{"token":"` + randomToken(t) + `"}`)
+
+	// The winning completion, held open. It holds the row's write lock, so the
+	// losing completion below blocks inside its own UPDATE with its snapshot
+	// already taken.
+	conn := rawConn(t, dsn)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() {
+		if rerr := tx.Rollback(ctx); rerr != nil && !errors.Is(rerr, pgx.ErrTxClosed) {
+			t.Logf("rolling back the winning completion: %v", rerr)
+		}
+	}()
+	if _, uerr := tx.Exec(ctx, `
+		UPDATE innsegl.idempotency
+		   SET status = 'completed', response = $2, completed_at = clock_timestamp()
+		 WHERE idempotency_key = $1 AND status = 'in_progress'`,
+		call.Key, winner); uerr != nil {
+		t.Fatalf("the winning completion: %v", uerr)
+	}
+
+	type completion struct {
+		stored []byte
+		mine   bool
+		err    error
+	}
+	got := make(chan completion, 1)
+	store := NewIdempotencyStore(newPool(t, dsn))
+	go func() {
+		stored, mine, cerr := store.complete(ctx, call.Key, loser)
+		got <- completion{stored, mine, cerr}
+	}()
+
+	waitForLockWaiters(ctx, t, dsn, 1)
+	if cerr := tx.Commit(ctx); cerr != nil {
+		t.Fatalf("commit the winning completion: %v", cerr)
+	}
+
+	res := <-got
+	if res.err != nil {
+		t.Fatalf("the overtaken completion failed: %v", res.err)
+	}
+	if res.mine {
+		t.Fatal("the overtaken caller reported itself the winner: it was not overtaken at all, " +
+			"and this test proved nothing about the race it exists for")
+	}
+	if !bytes.Equal(res.stored, winner) {
+		t.Fatalf("the overtaken completer was handed %q; the recorded reply is %q. "+
+			"A caller that loses the race must be given the winner's bytes, never an empty "+
+			"response read from a pre-commit snapshot (IP §6.6, ADR-0017)", res.stored, winner)
+	}
+	if bytes.Equal(res.stored, loser) {
+		t.Fatalf("the overtaken completer was handed its OWN reply %q; the recorded one is %q",
+			res.stored, winner)
+	}
+
+	rec, found, err := store.Lookup(ctx, call.Key)
+	if err != nil || !found {
+		t.Fatalf("Lookup = found %v, err %v", found, err)
+	}
+	if !bytes.Equal(rec.Response, winner) {
+		t.Fatalf("the stored response is %q, want the winner's %q: the loser overwrote it",
+			rec.Response, winner)
+	}
+}
+
+// Both callers of a taken-over claim complete at once, through the store's own
+// API, and both are given the reply that was recorded first.
+//
+// Deterministic by the same device: a transaction holds the row's lock while
+// both completions start, so both take their snapshots before either commits,
+// and whichever loses is guaranteed to be reading a stale one.
+func TestTwoCallersCompletingAtOnceAreBothGivenTheRecordedReply(t *testing.T) {
+	t.Parallel()
+	c := requirePG(t)
+	dsn := freshDSN(t, c)
+	migrate(t, dsn)
+	ctx := testCtx(t, 3*time.Minute)
+
+	// Lease zero: the claim is immediately takeable, which is what a SIGKILLed
+	// replica leaves behind and the only interleaving that really runs the tool
+	// twice (ADR-0017 §5).
+	first := NewIdempotencyStore(newPool(t, dsn), WithIdempotencyLease(0))
+	taker := NewIdempotencyStore(newPool(t, dsn), WithIdempotencyLease(0))
+	call := probeCall("idem-complete-both")
+
+	var ran atomic.Int64
+	entered := make(chan struct{}, 2)
+	hold := make(chan struct{})
+	body := func(context.Context) (any, error) {
+		ran.Add(1)
+		entered <- struct{}{}
+		<-hold
+		return map[string]any{"token": randomToken(t), "tool": probeTool}, nil
+	}
+
+	type reply struct {
+		out Outcome
+		err error
+	}
+	results := make(chan reply, 2)
+	go func() {
+		out, err := first.Do(ctx, call, body)
+		results <- reply{out, err}
+	}()
+	<-entered
+	go func() {
+		out, err := taker.Do(ctx, call, body)
+		results <- reply{out, err}
+	}()
+	<-entered
+
+	// Both executions are inside the tool. Take the row's lock before either
+	// can record, so that when they are released both park inside their
+	// recording statement with a snapshot already taken.
+	conn := rawConn(t, dsn)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() {
+		if rerr := tx.Rollback(ctx); rerr != nil && !errors.Is(rerr, pgx.ErrTxClosed) {
+			t.Logf("rolling back the lock holder: %v", rerr)
+		}
+	}()
+	if _, lerr := tx.Exec(ctx,
+		`SELECT 1 FROM innsegl.idempotency WHERE idempotency_key = $1 FOR UPDATE`,
+		call.Key); lerr != nil {
+		t.Fatalf("lock the claim: %v", lerr)
+	}
+
+	close(hold)
+	// Both are demonstrably blocked on that lock, so the one that commits
+	// second is reading a snapshot older than the first one's commit. That is
+	// the race, not an approximation of it.
+	waitForLockWaiters(ctx, t, dsn, 2)
+	if cerr := tx.Commit(ctx); cerr != nil {
+		t.Fatalf("release the lock: %v", cerr)
+	}
+
+	a, b := <-results, <-results
+	if a.err != nil || b.err != nil {
+		t.Fatalf("concurrent completion returned errors: %v and %v", a.err, b.err)
+	}
+	if len(a.out.Response) == 0 || len(b.out.Response) == 0 {
+		t.Fatalf("a concurrent completer was handed an empty reply: %q and %q. "+
+			"Every caller of a completed key gets the recorded bytes (IP §6.6)",
+			a.out.Response, b.out.Response)
+	}
+	if !bytes.Equal(a.out.Response, b.out.Response) {
+		t.Fatalf("the two callers disagree: %q and %q. Exactly one reply is the answer",
+			a.out.Response, b.out.Response)
+	}
+	if a.out.Replayed == b.out.Replayed {
+		t.Fatalf("both callers reported Replayed=%v; exactly one recorded the reply and "+
+			"exactly one was overtaken", a.out.Replayed)
+	}
+	if n := ran.Load(); n != 2 {
+		t.Fatalf("the tool ran %d times, want 2: the takeover is a second execution by "+
+			"construction, and without it there is no second completion to race", n)
+	}
+
+	rec, found, err := first.Lookup(ctx, call.Key)
+	if err != nil || !found {
+		t.Fatalf("Lookup = found %v, err %v", found, err)
+	}
+	if !bytes.Equal(rec.Response, a.out.Response) {
+		t.Fatalf("the stored response %q is neither caller's answer %q", rec.Response, a.out.Response)
+	}
+	if rec.Claims != 2 {
+		t.Fatalf("claim_count is %d, want 2", rec.Claims)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Failure and takeover.
 // ---------------------------------------------------------------------------
 
@@ -1119,4 +1339,36 @@ func waitForStatus(ctx context.Context, t *testing.T, s *IdempotencyStore, key, 
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("%q never reached status %q", key, status)
+}
+
+// waitForLockWaiters blocks until n backends in this test's own database are
+// parked on a row lock, and fails the test if they never are.
+//
+// This is the "demonstrably blocked" step. A sleep asserts nothing and would
+// leave the reproduction below to luck; this asserts the state the race needs
+// — the statement under test has taken its snapshot and is waiting on the
+// conflicting transaction — so committing that transaction next makes the
+// stale read happen every time.
+func waitForLockWaiters(ctx context.Context, t *testing.T, dsn string, n int) {
+	t.Helper()
+	conn := rawConn(t, dsn)
+	deadline := time.Now().Add(60 * time.Second)
+	var got int
+	for time.Now().Before(deadline) {
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			 WHERE datname = current_database()
+			   AND state = 'active'
+			   AND wait_event_type = 'Lock'
+			   AND pid <> pg_backend_pid()`).Scan(&got); err != nil {
+			t.Fatalf("read pg_stat_activity: %v", err)
+		}
+		if got >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("%d backend(s) are blocked on a row lock, want %d: the caller under test never "+
+		"reached the statement this race needs it to be inside, so the test would prove nothing",
+		got, n)
 }
