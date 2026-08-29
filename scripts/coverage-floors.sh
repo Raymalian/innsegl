@@ -97,14 +97,18 @@ if [ -z "${profile}" ]; then
   profile="$(mktemp "${TMPDIR:-/tmp}/innsegl-cover.XXXXXX")"
   cleanup_profile="${profile}"
   trap 'rm -f "${cleanup_profile}"' EXIT
-  log "==> go test -p 1 ./... ${GO_TEST_FLAGS} -covermode=atomic -coverpkg=./... -coverprofile=${profile}"
+  log "==> go test ./... ${GO_TEST_FLAGS} -covermode=atomic -coverpkg=./... -coverprofile=${profile}"
   # -coverpkg=./... instruments every package in the module, so a package with
   # no test file at all is reported as 0% rather than omitted from the profile.
   # Without it an entirely untested package is invisible to this gate.
-  # -p 1 until #81 (RM-065) lands: four packages drive their own SPIRE compose
-  # stack and only test/failure namespaces it per-pid, so at default parallelism
-  # they tear down each other's server. Measured: every internal/spire test fails.
-  ( cd -- "${MODULE_ROOT}" && go test -p 1 ./... ${GO_TEST_FLAGS} \
+  #
+  # Default parallelism, deliberately. Serialising packages here was a stopgap
+  # for #81 (RM-065) and was never a fix: it orders packages within ONE `go
+  # test` invocation, while the collision it was hiding is BETWEEN processes —
+  # this script running beside an ordinary test run, or two agents at once.
+  # Every package that drives a compose stack now namespaces its compose
+  # project per test process, so there is nothing left to serialise.
+  ( cd -- "${MODULE_ROOT}" && go test ./... ${GO_TEST_FLAGS} \
       -covermode=atomic -coverpkg=./... -coverprofile="${profile}" )
 elif [ ! -f "${profile}" ]; then
   fail "coverage profile not found: ${profile}"

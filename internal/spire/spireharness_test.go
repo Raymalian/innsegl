@@ -66,6 +66,28 @@ import (
 //     resulting SVID is an ordinary X509-SVID bearing
 //     spiffe://innsegl.dev/innsegl/mcp, and the server admits it for the same
 //     reason it will admit the MCP's: admin_ids says so.
+//
+// # A STACK OF ITS OWN, ONE PER TEST PROCESS (RM-065, #81)
+//
+// The shipped compose file pins `name: innsegl-spire` and a fixed
+// container_name per service, so every process that runs `docker compose -f
+// deploy/compose/spire.yml up` selects the SAME stack. This harness and
+// internal/mcp's both did, and `go test ./...` runs their packages
+// concurrently: whichever finished first ran `compose down --volumes` on the
+// server the other was mid-case against, which is the measured
+// `service "spire-server" is not running`. Two concurrent `go test`
+// invocations — routine while scripts/coverage-floors.sh runs beside an
+// ordinary test run — multiply it again, and RM-018 measured where that ends:
+// one process's entry in another's datastore, failing SPI-006 with "an entry
+// appeared 18.99s after recovery ... That is a queued identity", a false
+// accusation of the thing SPI-006 exists to detect.
+//
+// So the project, every container name and every network name carry
+// stackPrefix(), which is unique to this process. That is the whole of what
+// deploy/compose/spire-testscope.yml changes. Two consequences follow and are
+// deliberate: this harness never reuses a stack a developer already had up —
+// it cannot see one, by construction — and it therefore always tears its own
+// down.
 
 const (
 	// The trust domain and the two SPIFFE IDs below are PROTECTED STRINGS
@@ -75,11 +97,13 @@ const (
 	testAdminID     = "spiffe://innsegl.dev/innsegl/mcp"
 	testServerID    = "spiffe://innsegl.dev/spire/server"
 
-	composeServerContainer = "innsegl-spire-server"
-	composeAgentContainer  = "innsegl-spire-agent"
-	adminNetwork           = "innsegl-spire-admin"
-	adminSocket            = "/run/spire/admin/api.sock"
-	agentSocketMount       = "/run/spire/agent-sockets"
+	// stackEnv is the variable deploy/compose/spire-testscope.yml interpolates
+	// into the compose project, every container_name and every network name.
+	// The harness sets it to a value unique to this process — see stackPrefix.
+	stackEnv = "INNSEGL_SPIRE_TEST_STACK"
+
+	adminSocket      = "/run/spire/admin/api.sock"
+	agentSocketMount = "/run/spire/agent-sockets"
 
 	// defaultProbeImage only has to hold a statically linked binary and start
 	// it. Pinned by tag, like internal/ledger's postgres:16: nothing here
@@ -96,6 +120,18 @@ var (
 
 	errDockerAbsent = errors.New("docker is not available")
 )
+
+// stackPrefix names this process's stack, and everything in it.
+//
+// The suite component is not decoration: it makes "no two packages can select
+// the same compose project name" true by reading, not merely true because two
+// live processes cannot share a pid. internal/mcp's harness uses
+// innsegl-mcptest-<pid> and test/failure's uses innsegl-failure-<pid>, so the
+// three cannot collide even if one of them were somehow driven from another's
+// process.
+func stackPrefix() string {
+	return fmt.Sprintf("innsegl-spiretest-%d", os.Getpid())
+}
 
 func envOr(name, fallback string) string {
 	if v := os.Getenv(name); v != "" {
@@ -149,11 +185,16 @@ func freeHostPort(ctx context.Context) (string, error) {
 // talk to it.
 type stack struct {
 	composeFile string
-	// startedByUs is false when the developer already had the stack up, in
-	// which case teardown leaves it alone.
-	startedByUs bool
-	proxyName   string
-	adminAddr   string
+	overlayFile string
+
+	// prefix is this process's stack name; every container and network in it
+	// starts with it, and it is also the compose project name.
+	prefix         string
+	agentContainer string
+	adminNetwork   string
+
+	proxyName string
+	adminAddr string
 	// parentID is the attested node every run entry is parented to.
 	parentID string
 	// socketVolume is the docker volume carrying the Workload API socket.
@@ -164,7 +205,8 @@ type stack struct {
 }
 
 func (s *stack) compose(ctx context.Context, args ...string) (string, error) {
-	return docker(ctx, append([]string{"compose", "-f", s.composeFile}, args...)...)
+	full := []string{"compose", "-p", s.prefix, "-f", s.composeFile, "-f", s.overlayFile}
+	return docker(ctx, append(full, args...)...)
 }
 
 // spireLocal runs the SPIRE server CLI inside the server container against the
@@ -410,11 +452,6 @@ func (s *stack) probeUntilIssued(t *testing.T, run RunRef, deadline time.Duratio
 // Bring-up.
 // ---------------------------------------------------------------------------
 
-func containerRunning(ctx context.Context, name string) bool {
-	out, err := docker(ctx, "inspect", "--format", "{{.State.Running}}", name)
-	return err == nil && out == "true"
-}
-
 // buildProbe cross-compiles svidprobe for the docker daemon's platform.
 func buildProbe(ctx context.Context, root, outDir string) (string, error) {
 	goos, err := docker(ctx, "version", "--format", "{{.Server.Os}}")
@@ -438,12 +475,21 @@ func buildProbe(ctx context.Context, root, outDir string) (string, error) {
 
 // startStack brings up the shipped compose stack and everything around it.
 func startStack(ctx context.Context, root, outDir string) (*stack, error) {
+	prefix := stackPrefix()
+	// The overlay interpolates this into the project, the container names and
+	// the network names. Set before the first compose call and never changed.
+	if err := os.Setenv(stackEnv, prefix); err != nil {
+		return nil, fmt.Errorf("set %s: %w", stackEnv, err)
+	}
 	s := &stack{
-		composeFile: filepath.Join(root, "deploy", "compose", "spire.yml"),
-		probeImage:  envOr("INNSEGL_TEST_PROBE_IMAGE", defaultProbeImage),
+		composeFile:    filepath.Join(root, "deploy", "compose", "spire.yml"),
+		overlayFile:    filepath.Join(root, "deploy", "compose", "spire-testscope.yml"),
+		probeImage:     envOr("INNSEGL_TEST_PROBE_IMAGE", defaultProbeImage),
+		prefix:         prefix,
+		agentContainer: prefix + "-spire-agent",
+		adminNetwork:   prefix + "-spire-admin",
 	}
 
-	s.startedByUs = !containerRunning(ctx, composeServerContainer)
 	// Only the two services TC-SPI needs. spire-oidc publishes a host port and
 	// wants a bootstrap entry it does not have here; leaving it out keeps the
 	// harness from depending on either.
@@ -455,9 +501,9 @@ func startStack(ctx context.Context, root, outDir string) (*stack, error) {
 	// reconstructed from the compose project name.
 	vol, err := docker(ctx, "inspect", "--format",
 		`{{range .Mounts}}{{if eq .Destination "`+agentSocketMount+`"}}{{.Name}}{{end}}{{end}}`,
-		composeAgentContainer)
+		s.agentContainer)
 	if err != nil || vol == "" {
-		return nil, fmt.Errorf("find the Workload API socket volume on %s: %w", composeAgentContainer, err)
+		return nil, fmt.Errorf("find the Workload API socket volume on %s: %w", s.agentContainer, err)
 	}
 	s.socketVolume = vol
 
@@ -490,9 +536,10 @@ func startStack(ctx context.Context, root, outDir string) (*stack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reserve a host port: %w", err)
 	}
-	s.proxyName = fmt.Sprintf("innsegl-test-adminproxy-%d", os.Getpid()%100000)
-	// A leftover from an interrupted run, if there is one. Its absence is the
-	// normal case, so a failure here is not one.
+	s.proxyName = s.prefix + "-adminproxy"
+	// A leftover from an interrupted run whose pid this process inherited, if
+	// there is one. Its absence is the normal case, so a failure here is not
+	// one.
 	if _, rmErr := docker(ctx, "rm", "--force", s.proxyName); rmErr != nil {
 		_ = rmErr
 	}
@@ -503,8 +550,8 @@ func startStack(ctx context.Context, root, outDir string) (*stack, error) {
 	); err != nil {
 		return nil, fmt.Errorf("start the admin proxy: %w", err)
 	}
-	if _, err = docker(ctx, "network", "connect", adminNetwork, s.proxyName); err != nil {
-		return nil, fmt.Errorf("join %s: %w", adminNetwork, err)
+	if _, err = docker(ctx, "network", "connect", s.adminNetwork, s.proxyName); err != nil {
+		return nil, fmt.Errorf("join %s: %w", s.adminNetwork, err)
 	}
 	s.adminAddr = "127.0.0.1:" + port
 
@@ -525,9 +572,12 @@ func (s *stack) stop() {
 			fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", s.proxyName, err)
 		}
 	}
-	if !s.startedByUs || os.Getenv("INNSEGL_TEST_KEEP_SPIRE") != "" {
+	if os.Getenv("INNSEGL_TEST_KEEP_SPIRE") != "" {
 		return
 	}
+	// Unconditional: this project is this process's own. Nobody else's stack is
+	// behind it, so there is nothing to preserve, and leaving it up would leak
+	// three containers, three networks and five volumes per run.
 	if _, err := s.compose(ctx, "down", "--volumes", "--remove-orphans"); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: compose down: %v\n", err)
 	}

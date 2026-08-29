@@ -385,7 +385,14 @@ func TestACallStillInFlightIsWaitedForAndNeverRunAgain(t *testing.T) {
 	// call was a duplicate to be abandoned, which would strand a reply that
 	// does exist.
 	t.Run("a caller that gives up is told the reply is still coming", func(t *testing.T) {
-		impatient, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		// The deadline must outlast the claim round-trip, not the wait: this
+		// case is "gave up while waiting", so the caller has to reach the
+		// waiting state first. At 200ms under -coverpkg instrumentation on a
+		// loaded runner the deadline expired inside the claim statement, and
+		// the store correctly reported a deadline rather than ErrCallInFlight
+		// — it did not yet know the call was in flight. Five seconds is longer
+		// than any observed claim and far shorter than the original's hold.
+		impatient, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		replica := NewIdempotencyStore(newPool(t, dsn))
 
@@ -401,7 +408,10 @@ func TestACallStillInFlightIsWaitedForAndNeverRunAgain(t *testing.T) {
 			t.Fatal("a caller that stopped waiting is told not to retry; the recorded reply would then never be collected")
 		}
 		if !errors.Is(err, ErrCallInFlight) {
-			t.Fatalf("error %v does not wrap ErrCallInFlight", err)
+			t.Fatalf("error %v does not wrap ErrCallInFlight. If this says "+
+				"\"context deadline exceeded\", the deadline above expired "+
+				"inside the claim statement rather than during the wait, and "+
+				"the case never reached the state it means to test", err)
 		}
 	})
 
