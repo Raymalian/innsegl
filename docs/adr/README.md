@@ -41,6 +41,8 @@ maintainer ask "why is it like this?"
 | [0016](0016-error-class-carries-retryability-and-one-place-renders-it.md) | Make `retryable` a property of the error class, narrowable but never widenable, and render IP §4's error in exactly one place | accepted | 2026-08-29 |
 | [0017](0017-record-the-tool-call-reply-not-only-the-event.md) | Record the tool call's reply in Postgres, above the ledger's event-level dedupe | accepted | 2026-08-29 |
 | [0018](0018-record-run-registered-before-creating-the-spire-entry.md) | Record `run_registered` before creating the SPIRE entry, and derive the run id from the call | accepted | 2026-08-29 |
+| [0019](0019-scope-mintjwtsvid-to-the-agent-subtree-and-issue-one-audience-per-credential.md) | Allow `MintJWTSVID` to the admin credential only inside the agent subtree, and issue exactly one audience per credential | accepted | 2026-08-29 |
+| [0020](0020-retire-a-run-by-its-run-id-alone-recording-before-deleting.md) | Retire a run by its `run_id` alone, recording before deleting, and answer every later call from the ledger | accepted | 2026-08-29 |
 
 ## Open items
 
@@ -97,3 +99,15 @@ maintainer ask "why is it like this?"
   And doc 07 has no ID for the ordering the ADR fixes — that the identity is
   never created before its record — which is the property a future reordering
   would silently break; **MCP-017** is proposed for it.
+- **ADR-0020** leaves two questions for the human. Doc 07 has no ID for
+  retirement's ordering either — the same gap ADR-0018 proposed **MCP-017** for,
+  seen from the other direction: with SPIRE down the `run_retired` event exists
+  and the entry survives, and with the ledger down SPIRE is never asked. And
+  doc 07's MCP-009 row carries retirement's own idempotency in a parenthesis
+  while doc 01 §4 states it as part of the signature and RM-025 states it as an
+  acceptance criterion of its own; whether it should be a separate ID is a
+  doc 07 edit. The ADR also records a consequence a later issue must honour: a
+  run directory answering `CredentialRuns.CredentialRun` must report the
+  **earliest** `run_retired` for a run, because concurrent first retirements can
+  append two and IP §4 requires every later call to be answered with the
+  original.
