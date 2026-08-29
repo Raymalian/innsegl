@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Compose overlay: a SPIRE stack per test process, for failure injection
+# (RM-018, #26)
+#
+# Applied on top of deploy/compose/spire.yml, never instead of it. The harness
+# invokes it as:
+#
+#   INNSEGL_FAILURE_STACK=innsegl-failure-<pid> \
+#   docker compose -p "$INNSEGL_FAILURE_STACK" \
+#     -f deploy/compose/spire.yml -f test/failure/spire-isolated.yml \
+#     up -d --wait spire-server spire-agent
+#
+# WHY A SEPARATE STACK EXISTS AT ALL
+# ----------------------------------
+# SPI-006 and SPI-007 SIGKILL spire-server and spire-agent. A kill landing on
+# the shipped `innsegl-spire-server` would fail internal/spire's TC-SPI cases
+# for a reason that has nothing to do with them, destroy a developer's running
+# stack, and — the reason that actually matters — make a green SPI-006 depend
+# on scheduling. internal/ledger's LED-009 states the principle in one line:
+# "A container of its own: this test kills the server." This is that, for a
+# stack rather than a container.
+#
+# WHY IT IS SCOPED TO ONE TEST PROCESS AND NOT JUST TO THIS SUITE
+# ---------------------------------------------------------------
+# MEASURED, and it is the reason every name here is interpolated rather than
+# fixed. With one shared failure stack, two concurrent `go test ./...`
+# invocations — routine when `scripts/coverage-floors.sh` runs beside an
+# ordinary test run — start two copies of THIS test binary against the same
+# SPIRE. Observed on 2026-08-29: a control entry belonging to pid 38913
+# appeared in pid 35815's datastore mid-case and failed SPI-006 with
+#
+#     an entry appeared 18.99s after recovery without anybody asking for one
+#     ... That is a queued identity.
+#
+# which is a false accusation of the very thing SPI-006 exists to detect. The
+# assertion is "the entire datastore is unchanged, under every path and name";
+# that is only sound if the datastore has exactly one writer. So the project,
+# the container names and the network names all carry ${INNSEGL_FAILURE_STACK},
+# which the harness sets to a value unique to the process. Volumes need no
+# help: spire.yml declares them without an explicit `name:`, so compose already
+# scopes them to the project.
+#
+# ${INNSEGL_FAILURE_STACK} is REQUIRED, not defaulted, and that is deliberate.
+# A default would let a hand-run `docker compose -f ... -f ...` build a stack
+# under a shared name that no test process owns or tears down — which is
+# precisely the state that produced "No such container:
+# innsegl-failure-spire-server" for someone running this suite while an older
+# fixed-name stack was up. With `:?` an unset variable is a loud compose error
+# naming the fix instead of a silently mis-namespaced stack.
+#
+# The other change is `restart: "no"` on the two services these tests kill.
+# spire.yml sets `restart: unless-stopped`, which is right for a deployment and
+# fatal here: Docker would restart the container within a second of the kill
+# and the "server down" window would close before the assertion ran — a
+# failure-injection test that silently injects nothing. Restarting is the
+# test's job instead, so the down window is bounded by the test.
+#
+# Everything else — the images and their digests, the configs, the PKI
+# bootstrap, the selectors, the network segmentation of ADR-0011 — is
+# inherited unchanged. That is the point: this must be the shipped stack, or
+# what the failure injection proves is about a different system.
+# ============================================================================
+
+name: ${INNSEGL_FAILURE_STACK:?set by test/failure/harness_test.go to innsegl-failure-<pid>; this overlay must never build a stack under a shared name}
+
+services:
+  spire-bootstrap:
+    container_name: ${INNSEGL_FAILURE_STACK:?set by test/failure/harness_test.go to innsegl-failure-<pid>; this overlay must never build a stack under a shared name}-spire-bootstrap
+
+  spire-server:
+    container_name: ${INNSEGL_FAILURE_STACK:?set by test/failure/harness_test.go to innsegl-failure-<pid>; this overlay must never build a stack under a shared name}-spire-server
+    # See "WHY IT IS SCOPED" above: SPI-006 kills this container and the test
+    # decides when it comes back.
+    restart: "no"
+
+  spire-agent:
+    container_name: ${INNSEGL_FAILURE_STACK:?set by test/failure/harness_test.go to innsegl-failure-<pid>; this overlay must never build a stack under a shared name}-spire-agent
+    # SPI-007 kills this one.
+    restart: "no"
+
+  spire-oidc:
+    container_name: ${INNSEGL_FAILURE_STACK:?set by test/failure/harness_test.go to innsegl-failure-<pid>; this overlay must never build a stack under a shared name}-spire-oidc
+
+  spire-verify-workload:
+    container_name: ${INNSEGL_FAILURE_STACK:?set by test/failure/harness_test.go to innsegl-failure-<pid>; this overlay must never build a stack under a shared name}-spire-verify-workload
+
+networks:
+  innsegl-spire-node:
+    name: ${INNSEGL_FAILURE_STACK:?set by test/failure/harness_test.go to innsegl-failure-<pid>; this overlay must never build a stack under a shared name}-spire-node
+  innsegl-spire-admin:
+    name: ${INNSEGL_FAILURE_STACK:?set by test/failure/harness_test.go to innsegl-failure-<pid>; this overlay must never build a stack under a shared name}-spire-admin
+  innsegl-oidc-frontend:
+    name: ${INNSEGL_FAILURE_STACK:?set by test/failure/harness_test.go to innsegl-failure-<pid>; this overlay must never build a stack under a shared name}-oidc-frontend

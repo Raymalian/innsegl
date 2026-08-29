@@ -34,6 +34,10 @@ maintainer ask "why is it like this?"
 | [0009](0009-anchor-a-segment-as-a-signed-hashedrekord-entry.md) | Anchor a sealed segment as a signed `hashedrekord` entry, verify it from first principles, and accept at-least-once anchoring | accepted | 2026-08-28 |
 | [0010](0010-self-hosted-sigstore-is-the-shipped-default.md) | Ship self-hosted Fulcio/Rekor as the default, and demote public Sigstore to "where an accepted issuer already exists" | accepted | 2026-08-28 |
 | [0011](0011-compose-spire-admin-api-segmentation.md) | Segment the SPIRE admin API by mount and by network, and state the part SPIRE will not segment | accepted | 2026-08-28 |
+| [0012](0012-scope-the-mcp-admin-credential-with-an-opa-authorization-policy.md) | Scope the MCP admin credential with an OPA authorization policy | accepted | 2026-08-28 |
+| [0013](0013-record-spire-entry-drift-as-ledger-drift-detected.md) | Record SPIRE entry drift as `ledger_drift_detected` where a subject event exists, and refuse to record the unattributed case at all | accepted | 2026-08-29 |
+| [0014](0014-reaper-orphan-test-and-expiry-idempotency-key.md) | Bound a run identity by its entry's TTL plus a configured grace, and key `run_expired` by run id | accepted | 2026-08-29 |
+| [0015](0015-failure-injection-stack-per-test-process.md) | Give SPIRE failure injection a stack per test process, and record the half of SPI-007 that `sign_commit` must finish | accepted | 2026-08-29 |
 
 ## Open items
 
