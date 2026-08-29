@@ -38,6 +38,8 @@ maintainer ask "why is it like this?"
 | [0013](0013-record-spire-entry-drift-as-ledger-drift-detected.md) | Record SPIRE entry drift as `ledger_drift_detected` where a subject event exists, and refuse to record the unattributed case at all | accepted | 2026-08-29 |
 | [0014](0014-reaper-orphan-test-and-expiry-idempotency-key.md) | Bound a run identity by its entry's TTL plus a configured grace, and key `run_expired` by run id | accepted | 2026-08-29 |
 | [0015](0015-failure-injection-stack-per-test-process.md) | Give SPIRE failure injection a stack per test process, and record the half of SPI-007 that `sign_commit` must finish | accepted | 2026-08-29 |
+| [0016](0016-error-class-carries-retryability-and-one-place-renders-it.md) | Make `retryable` a property of the error class, narrowable but never widenable, and render IP §4's error in exactly one place | accepted | 2026-08-29 |
+| [0017](0017-record-the-tool-call-reply-not-only-the-event.md) | Record the tool call's reply in Postgres, above the ledger's event-level dedupe | accepted | 2026-08-29 |
 
 ## Open items
 
@@ -79,3 +81,11 @@ maintainer ask "why is it like this?"
   `GET https://fulcio.sigstore.dev/api/v2/configuration` tells you whether a
   `spiffe` issuer has reappeared, and belongs with the threat model §6 review
   triggers — a human edit, outside this directory.
+- **ADR-0017** leaves two questions for the human. IP §4's error-class
+  vocabulary is closed and has no class for "the original call has not finished
+  yet"; the MCP idempotency store returns `LEDGER_UNAVAILABLE` because it is the
+  only candidate whose `retryable` flag gives the caller the right instruction,
+  and whether IP §4 should gain a twelfth class is a protected-surface decision.
+  And doc 07 has no test ID for the tool-call idempotency store itself: LED-008
+  is the ledger's event-level dedupe, and MCP-007 and MCP-011 reach this layer
+  only through tools that do not exist yet.
