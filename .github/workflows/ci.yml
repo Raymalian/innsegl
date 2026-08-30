@@ -56,6 +56,13 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The suite includes test/e2e's I6 author gate (GH-002), which walks
+          # every non-merge commit reachable from HEAD. At the default depth of
+          # 1 it would see one commit — on a pull_request event, GitHub's
+          # synthetic refs/pull/N/merge — so it REFUSES a shallow clone rather
+          # than report a clean history it never read. The full history is 25
+          # commits; there is nothing to save here.
+          fetch-depth: 0
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -141,6 +148,13 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The suite includes test/e2e's I6 author gate (GH-002), which walks
+          # every non-merge commit reachable from HEAD. At the default depth of
+          # 1 it would see one commit — on a pull_request event, GitHub's
+          # synthetic refs/pull/N/merge — so it REFUSES a shallow clone rather
+          # than report a clean history it never read. The full history is 25
+          # commits; there is nothing to save here.
+          fetch-depth: 0
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

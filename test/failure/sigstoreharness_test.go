@@ -494,8 +494,38 @@ func (s *sigStack) startSigService(t *testing.T, service string) {
 		t.Fatalf("starting %s: %v", service, err)
 	}
 	if err := s.awaitSigTrustMaterial(ctx, 3*time.Minute); err != nil {
-		t.Fatalf("%s came back but Sigstore is not serving trust material: %v", service, err)
+		t.Fatalf("%s came back but Sigstore is not serving trust material: %v\n%s",
+			service, err, s.sigServiceDiagnostics(service))
 	}
+}
+
+// sigServiceDiagnostics answers the question a bare "connection refused"
+// cannot: is the container running, restarting, or dead?
+//
+// This exists because a restart timeout was once reported as nothing but the
+// refused dial, which is consistent with three different faults — a container
+// that never started, one crash-looping against a dependency, and one that is
+// simply slower than the wait allows. Distinguishing them after the fact is
+// impossible without the state at the moment of failure, and CI keeps no
+// stack to inspect afterwards. Best-effort by construction: a diagnostic that
+// failed the test on its own account would obscure the failure it explains.
+func (s *sigStack) sigServiceDiagnostics(service string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var b strings.Builder
+	b.WriteString("--- state of " + service + " at the moment of failure ---\n")
+	if ps, err := s.sigCompose(ctx, s.sigFiles, "ps", "--all", "--format",
+		"{{.Name}}\t{{.State}}\t{{.Status}}\t{{.Ports}}"); err == nil {
+		b.WriteString(ps + "\n")
+	} else {
+		b.WriteString("compose ps unavailable: " + err.Error() + "\n")
+	}
+	if logs, err := s.sigCompose(ctx, s.sigFiles, "logs", "--tail", "40", service); err == nil {
+		b.WriteString("--- last 40 log lines ---\n" + logs)
+	} else {
+		b.WriteString("compose logs unavailable: " + err.Error())
+	}
+	return b.String()
 }
 
 // sigPortRefuses reports whether a loopback port refuses connections outright.

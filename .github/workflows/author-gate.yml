@@ -1,0 +1,160 @@
+# The I6 gate — doc 07 GH-002, and the schedule that keeps GH-001 honest.
+#
+#   I6: No GitHub contributor is ever added. Commit author is the human
+#   operator or a deliberately unlinked address; agent identity lives only in
+#   trailers + signature. Never emit `Co-authored-by:` with a resolvable
+#   account.
+#
+# I6 is the one invariant with no cryptographic backstop. Every other invariant
+# is settled by an artefact — a hash chain, a Merkle root, a Fulcio
+# certificate, a Rekor entry — and a violation is detectable forever after the
+# fact. A contributor that should not exist is detectable only by asking
+# GitHub, long after the push, and is not undoable once the account is in the
+# graph. So it is gated before the merge, here.
+#
+# WHY A WORKFLOW OF ITS OWN, and not a job in ci.yml:
+#
+#   1. It is the only gate that reads git history, so it is the only one that
+#      needs `fetch-depth: 0`. ci.yml's jobs check out shallow by default and
+#      the two that run the suite now opt in explicitly; a third job needing it
+#      for an unrelated reason belongs where the reason is written down.
+#   2. It is the check whose NAME has to carry the finding. A red "author gate"
+#      on a pull request says I6 to a reviewer; a red "test (race)" says a test
+#      broke somewhere in a twenty-minute Docker job.
+#   3. It needs no Docker, no gitsign, no Postgres, no MinIO. It answers in
+#      under a minute, so a pull request that would add a contributor is told
+#      so immediately rather than after the integration suite.
+#   4. It carries the scheduled GH-001 re-run, which is not a merge gate at all
+#      and must not run on every push.
+#
+# All third-party actions are pinned to a commit SHA with the human-readable
+# tag in a trailing comment, as in ci.yml: a supply-chain attack on an action
+# is an attack on the attestation chain this project exists to protect (doc 04).
+name: author gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    # Monthly, for the GH-001 job below only. Threat model §5 residual risk 3:
+    # "I6's empirical guarantee (GH-001) is a snapshot of external behavior;
+    # the test is dated and re-run on a schedule." This is that schedule.
+    - cron: '17 4 1 * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: author-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  gate:
+    name: I6 author gate (GH-002)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # NOT optional, and not a performance knob. The gate walks every
+          # non-merge commit reachable from HEAD; at the default depth of 1 it
+          # would see one commit — and on a pull_request event that one commit
+          # is GitHub's synthetic refs/pull/N/merge, which exists nowhere.
+          # A gate that inspects the wrong range passes on every pull request
+          # forever, so the test REFUSES a shallow clone rather than reporting
+          # a clean history it never read.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Enforce I6 over this repository's commits
+        # -count=1 for the same reason scripts/test-no-skips.sh uses it: a
+        # cached PASS certifies a run that did not happen.
+        #
+        # The gate asks internal/signing's own question —
+        # AuthorPolicy.CheckAuthor, the call sign_commit makes before it will
+        # render a message — rather than a second question shaped like it. The
+        # allowlist it reads is test/e2e/testdata/author-policy.json, and that
+        # file is the remediation when a NEW HUMAN operator starts committing.
+        # It is never the remediation for an agent address (ADR-0028 §6).
+        run: >-
+          go test ./test/e2e
+          -run 'TestGH002|TestGH001TheRecordedRunDateIsHonest'
+          -count=1 -v
+
+  empirical:
+    name: GH-001 empirical re-run
+    # Never on a pull request: it pushes to an external repository and waits
+    # fifteen minutes for GitHub to recompute a statistic.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Require the scratch repository and its credential
+        # This job FAILS when it is not provisioned, rather than warning.
+        #
+        # It runs only on a schedule or by hand, so a failure blocks no merge —
+        # it sends the repository owner an email once a month saying that I6's
+        # empirical half has still never been measured. A warning annotation on
+        # a job nobody opens is the false green this project keeps finding;
+        # doc 07 GH-001 is a required case, and an unprovisioned gate is a case
+        # that does not run.
+        env:
+          GH001_REPO: ${{ vars.INNSEGL_GH001_REPO }}
+          GH001_TOKEN: ${{ secrets.INNSEGL_GH001_TOKEN }}
+        run: |
+          missing=0
+          [ -n "${GH001_REPO}" ]  || { echo "::error::repository variable INNSEGL_GH001_REPO is not set"; missing=1; }
+          [ -n "${GH001_TOKEN}" ] || { echo "::error::repository secret INNSEGL_GH001_TOKEN is not set"; missing=1; }
+          if [ "${missing}" -ne 0 ]; then
+            echo "::error::GH-001 cannot run. It needs a THROWAWAY GitHub repository whose"
+            echo "::error::contributor graph does not matter, and a token that can push to it"
+            echo "::error::(fine-grained: Contents read+write, that repository only)."
+            echo "::error::Until then I6's empirical half is UNPROVEN: GH-002 proves only that"
+            echo "::error::this repository follows its own author policy, not that the policy"
+            echo "::error::achieves what I6 claims. See test/e2e/doc.go and"
+            echo "::error::test/e2e/testdata/gh-001-run.json."
+            exit 1
+          fi
+      - name: Run GH-001 against real GitHub
+        env:
+          INNSEGL_GH001_REPO: ${{ vars.INNSEGL_GH001_REPO }}
+          INNSEGL_GH001_TOKEN: ${{ secrets.INNSEGL_GH001_TOKEN }}
+          INNSEGL_GH001_WAIT: ${{ vars.INNSEGL_GH001_WAIT }}
+        run: >-
+          go test ./test/e2e
+          -run TestGH001NoContributorAppearsForAnUnlinkedAuthor
+          -count=1 -v -timeout 55m
+      - name: Publish the dated record
+        if: always()
+        # The run rewrites test/e2e/testdata/gh-001-run.json with the date and
+        # every observation. This job has contents: read, so it cannot commit
+        # it — deliberately: a workflow that can write to its own repository is
+        # a larger hole than the manual step it saves. Download the artefact
+        # and commit it; TestGH001TheRecordedRunDateIsHonest reads it on every
+        # CI run and fails once it ages past rerun_after_days.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gh-001-run-record
+          path: test/e2e/testdata/gh-001-run.json
+          if-no-files-found: error
+          retention-days: 90
