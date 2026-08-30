@@ -26,8 +26,19 @@ import { StatusBadge } from "./StatusBadge";
 const ALL: readonly RunStatus[] = ["active", "retired", "expired"];
 
 /** Everything a colour could hide in. */
+// Everything a sighted user cannot perceive is removed, not merely colour.
+//
+// This first stripped class and style alone, which left data-status="expired"
+// against data-status="retired" — an attribute no reader can see, and enough
+// on its own to satisfy the comparison below. The assertion could not fail:
+// making the two badges identical apart from their colour still passed it,
+// while its sibling cases (three distinct icons, the dashed outline) were the
+// ones that actually caught the regression. A test that names the guarantee
+// has to be the test that holds it.
 function stripPresentation(html: string): string {
-  return html.replace(/ (?:class|style)="[^"]*"/g, "");
+  return html
+    .replace(/ (?:class|style)="[^"]*"/g, "")
+    .replace(/ data-status="[^"]*"/g, "");
 }
 
 function markupOf(status: RunStatus): string {

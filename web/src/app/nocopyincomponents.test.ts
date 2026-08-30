@@ -18,9 +18,11 @@
 // The files are found by pattern rather than named in a list, so a component
 // added tomorrow is scanned tomorrow without anyone remembering.
 //
-// Scope note: this scans src/app/. Extending it to the rest of web/src is one
-// pattern change, and belongs with whoever owns those directories — RM-042's
-// components are being written in parallel with this issue.
+// Scope: every .tsx under web/src, not just this directory. It began scoped to
+// src/app/ because RM-042's components were being written in parallel and were
+// not this issue's to police. Both landed in the same wave, and a discipline
+// that covers one directory is a discipline a component author escapes by
+// putting the file somewhere else.
 
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
@@ -99,7 +101,7 @@ export function findEmbeddedCopy(file: string, source: string): Finding[] {
 }
 
 const components = Object.entries(
-  import.meta.glob("./*.tsx", {
+  import.meta.glob("../**/*.tsx", {
     query: "?raw",
     import: "default",
     eager: true,
@@ -109,7 +111,11 @@ const components = Object.entries(
 describe("FE-020 the shell's components hold no copy", () => {
   it("has components to scan, so a passing run is not a vacuous one", () => {
     expect(components.length).toBeGreaterThanOrEqual(3);
-    expect(components.map(([path]) => path)).toContain("./App.tsx");
+    const paths = components.map(([path]) => path);
+    expect(paths.some((p) => p.endsWith("/App.tsx"))).toBe(true);
+    // Both trees, named explicitly: a glob that silently stopped matching one
+    // of them would otherwise leave this passing on the other alone.
+    expect(paths.some((p) => p.includes("components/common/"))).toBe(true);
   });
 
   it.each(components)("%s holds none", (path, source) => {

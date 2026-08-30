@@ -141,6 +141,42 @@ jobs:
       - name: Verify every tracked source file carries the SPDX header
         run: ./scripts/spdx-check.sh
 
+  dashboard:
+    name: dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # `npm ci` and not `npm install`: it installs the lockfile exactly and
+      # fails if package.json and the lockfile disagree, which is the whole
+      # point of committing a lockfile for a dashboard that renders
+      # attestation verdicts. ADR-0001 puts the dashboard in TypeScript;
+      # ADR-0038 chose its foundation.
+      - name: Install
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+      - name: Types
+        working-directory: web
+        run: npx tsc --noEmit
+      # The suite carries the copy discipline (no user-visible string literal
+      # in any component, across both source trees), the colour discipline
+      # (no hue word, no Tailwind default colour utility, no dark: variant),
+      # and the identifier truncation rules. None of it needs a browser.
+      - name: Test
+        working-directory: web
+        run: npx vitest run
+      - name: Build
+        working-directory: web
+        run: npm run build
+
   tokens:
     name: token sheet
     runs-on: ubuntu-latest
