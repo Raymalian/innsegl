@@ -90,6 +90,19 @@ const (
 	envHealthTimeout         = "INNSEGL_HEALTH_TIMEOUT"
 	envRequireAppendOnlyRole = "INNSEGL_REQUIRE_APPEND_ONLY_ROLE"
 	envMigrate               = "INNSEGL_MIGRATE"
+
+	// sign_commit (RM-033, #41). Every one of these is opt-in: the tool is
+	// bound unconditionally — it is one of IP §4's five — and is CONFIGURED
+	// only when a workspace is named, because a deployment without a gitsign
+	// binary and a working-tree root cannot sign and must say so at start-up
+	// rather than at an agent's first commit.
+	envWorkspace           = "INNSEGL_WORKSPACE"
+	envOIDCIssuer          = "INNSEGL_SPIRE_JWT_ISSUER"
+	envSignAuthorName      = "INNSEGL_SIGN_AUTHOR_NAME"
+	envSignAuthorEmail     = "INNSEGL_SIGN_AUTHOR_EMAIL"
+	envSignAuthorOperators = "INNSEGL_SIGN_AUTHOR_OPERATORS"
+	envSignAllowUnlinked   = "INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED"
+	envGitsignPath         = "INNSEGL_GITSIGN"
 )
 
 // Defaults that are this command's own rather than a package's.
@@ -123,6 +136,16 @@ type serveOptions struct {
 
 	fulcioURL string
 	rekorURL  string
+
+	// sign_commit's own configuration (RM-033). workspace empty means the
+	// tool is bound and unconfigured.
+	workspace           string
+	oidcIssuer          string
+	signAuthorName      string
+	signAuthorEmail     string
+	signAuthorOperators []string
+	signAllowUnlinked   bool
+	gitsignPath         string
 
 	listen       string
 	healthListen string
@@ -260,11 +283,12 @@ func runServe(parent context.Context, args []string, stdout, stderr io.Writer, d
 // reportToolSurface names what is advertised and what is not.
 //
 // ADR-0024: "An incomplete tool surface is reported and does not gate
-// readiness." `sign_commit` lands with RM-033 (#41), so v0.1 advertises four
-// of IP §4's five. `Server.MissingTools` exists for this duty and both health
-// endpoints carry the same list; an operator debugging a refused `sign_commit`
-// must be able to find out from the log why the tool is not there, rather than
-// concluding the server is broken.
+// readiness." RM-033 (#41) bound `sign_commit`, so the shipped surface is now
+// all five of IP §4 and the warning below is silent — which is the point of
+// reporting the surface rather than asserting it: `Server.MissingTools` is
+// derived from the binders that registered themselves, so if a tool ever stops
+// registering, an operator reads it here and in both health endpoints instead
+// of concluding the server is broken.
 func reportToolSurface(log *serveLog, srv servedMCP) {
 	bound := srv.BoundTools()
 	log.info("tool surface", "bound", names(bound), "count", len(bound))
@@ -277,7 +301,7 @@ func reportToolSurface(log *serveLog, srv servedMCP) {
 		"and a call to one is refused as an unknown tool",
 		"missing", names(missing),
 		"reported_at", mcp.LivePath+" and "+mcp.ReadyPath,
-		"note", "sign_commit is RM-033 (#41); a missing tool never gates readiness (ADR-0024)")
+		"note", "a missing tool never gates readiness (ADR-0024)")
 }
 
 func names(tools []mcp.ToolName) string {
@@ -316,6 +340,25 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 			"base URL of the configured Fulcio, probed by "+mcp.ReadyPath+" ($"+envFulcioURL+")")
 		rekorURL = fs.String("rekor-url", os.Getenv(envRekorURL),
 			"base URL of the configured Rekor, probed by "+mcp.ReadyPath+" ($"+envRekorURL+")")
+		workspace = fs.String("workspace", os.Getenv(envWorkspace),
+			"absolute root of the working trees sign_commit signs in; host/org/name is "+
+				"resolved beneath it. Empty leaves sign_commit unconfigured ($"+envWorkspace+")")
+		oidcIssuer = fs.String("oidc-issuer", os.Getenv(envOIDCIssuer),
+			"the OIDC issuer SPIRE stamps and Fulcio believes; all three must agree "+
+				"(ADR-0029 decision 3) ($"+envOIDCIssuer+")")
+		signAuthorName = fs.String("sign-author-name", os.Getenv(envSignAuthorName),
+			"commit author and committer name ($"+envSignAuthorName+")")
+		signAuthorEmail = fs.String("sign-author-email", os.Getenv(envSignAuthorEmail),
+			"commit author and committer email; the I6 gate admits it or refuses to start "+
+				"($"+envSignAuthorEmail+")")
+		signAuthorOperators = fs.String("sign-author-operators", os.Getenv(envSignAuthorOperators),
+			"comma-separated addresses this deployment attributes commits to (I6) "+
+				"($"+envSignAuthorOperators+")")
+		signAllowUnlinked = fs.Bool("sign-author-allow-unlinked", envBool(envSignAllowUnlinked, false),
+			"admit an author address in a reserved, undelegatable domain (.invalid, .test, "+
+				"example.com and the rest) ($"+envSignAllowUnlinked+")")
+		gitsignPath = fs.String("gitsign", os.Getenv(envGitsignPath),
+			"the gitsign binary. Empty is a PATH lookup ($"+envGitsignPath+")")
 		listen = fs.String("listen", envOr(envMCPListen, defaultMCPListen),
 			"address the MCP transport listens on ($"+envMCPListen+")")
 		healthListen = fs.String("health-listen", envOr(envMCPHealthListen, defaultHealthListen),
@@ -383,7 +426,12 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		serverID: *serverID, parentID: *parentID,
 		workloadAPI: *workloadAPI, svidFile: *svidFile, keyFile: *keyFile, bundleFile: *bundleFile,
 		fulcioURL: *fulcioURL, rekorURL: *rekorURL,
-		listen: *listen, healthListen: *healthListen, addrFile: *addrFile,
+		workspace: *workspace, oidcIssuer: *oidcIssuer,
+		signAuthorName: *signAuthorName, signAuthorEmail: *signAuthorEmail,
+		signAuthorOperators: splitOrigins(*signAuthorOperators),
+		signAllowUnlinked:   *signAllowUnlinked,
+		gitsignPath:         *gitsignPath,
+		listen:              *listen, healthListen: *healthListen, addrFile: *addrFile,
 		spireTimeout: *spireTimeout, runTTL: *runTTL, lease: *lease,
 		rateCalls: *rateCalls, rateWindow: *rateWindow,
 		clockSkewBound: *clockSkewBound, trustedOrigins: splitOrigins(*trustedOrigins),
@@ -417,6 +465,18 @@ func (o serveOptions) validate() string {
 	case o.parentID == "":
 		return "-parent-id (or $" + envParentID + ") is required: an entry with no reachable " +
 			"parent is an entry no workload can ever match"
+	case o.workspace != "" && o.oidcIssuer == "":
+		return "-oidc-issuer (or $" + envOIDCIssuer + ") is required when -workspace is set: " +
+			"Fulcio believes exactly one issuer and a verifier has to be told which " +
+			"(ADR-0029 decision 3)"
+	case o.workspace != "" && (o.signAuthorName == "" || o.signAuthorEmail == ""):
+		return "-sign-author-name and -sign-author-email (or $" + envSignAuthorName + " and $" +
+			envSignAuthorEmail + ") are required when -workspace is set: the author line is " +
+			"part of the bytes that get signed, and I6 gates the address"
+	case o.workspace != "" && len(o.signAuthorOperators) == 0 && !o.signAllowUnlinked:
+		return "-sign-author-operators (or $" + envSignAuthorOperators + "), or " +
+			"-sign-author-allow-unlinked, is required when -workspace is set: the I6 author " +
+			"policy is an allowlist whose zero value admits nothing, on purpose (ADR-0028)"
 	case o.fulcioURL == "":
 		return "-fulcio-url (or $" + envFulcioURL + ") is required: " + mcp.ReadyPath +
 			" reports Sigstore reachability and there is no default pair to fall back to (ADR-0010)"
