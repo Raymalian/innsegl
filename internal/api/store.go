@@ -32,7 +32,17 @@ type Store struct {
 // property is a claim about its source code rather than about its deployment
 // (FD §7, P6).
 func Open(ctx context.Context, dsn string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("api: parsing the query DSN: %w", err)
+	}
+	return OpenConfig(ctx, cfg)
+}
+
+// OpenConfig is Open with the pool configured by the caller, for a deployment
+// that sizes its own pool and for a test that wants to watch the wire.
+func OpenConfig(ctx context.Context, cfg *pgxpool.Config) (*Store, error) {
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("api: opening the query pool: %w", err)
 	}
