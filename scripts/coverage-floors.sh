@@ -62,6 +62,10 @@ LINE_FLOORS=(
   # refactoring does not trip them, but a silent regression does.
   "internal/signing 95"
   "internal/rundir 95"
+  # New in E5 Wave 4. internal/verify is the I5 proof; a regression there is
+  # the one this project can least afford to miss.
+  "internal/verify 95"
+  "internal/reconciler 85"
 )
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

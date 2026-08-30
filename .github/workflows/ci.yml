@@ -80,7 +80,13 @@ jobs:
         # compose stack now namespaces its project per test process
         # (RM-065, #81), so concurrent packages are the thing under test
         # rather than a hazard the runner has to be slowed down to avoid.
-        run: go test ./... -race
+        run: ./scripts/test-no-skips.sh
+      # A Go skip exits zero, and `go test` without -v prints no SKIP line for a
+      # subtest — so a skipped VER-001 is invisible in this log. Docker is
+      # required above, which makes any unexplained skip here a missing
+      # dependency rather than a pass. scripts/test-no-skips.sh reads the JSON
+      # stream and refuses one, with a short justified allowlist for the skips
+      # that are correct by construction.
 
   lint:
     name: lint
