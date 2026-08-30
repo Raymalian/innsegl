@@ -24,7 +24,11 @@ set -uo pipefail
 out="${INNSEGL_TEST_JSON:-$(mktemp -t innsegl-gotest-XXXXXX.json)}"
 
 # shellcheck disable=SC2086 # deliberate word splitting of caller-supplied flags
-go test ./... -race -json ${INNSEGL_TEST_FLAGS:-} >"${out}" 2>&1
+# -count=1 is not optional here. Without it Go serves cached results, and a
+# cached PASS means this gate certifies a run that did not happen — the exact
+# false-green it exists to prevent. RM-036 hit it: the first run reported six
+# skips that were cached from an earlier invocation.
+go test ./... -race -count=1 -json ${INNSEGL_TEST_FLAGS:-} >"${out}" 2>&1
 rc=$?
 
 # Package-level result lines, so the log still reads like a test run.
