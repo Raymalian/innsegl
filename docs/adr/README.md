@@ -54,6 +54,8 @@ maintainer ask "why is it like this?"
 | [0029](0029-compose-self-hosted-sigstore-as-its-own-project-joined-to-spires-oidc-network.md) | Compose self-hosted Sigstore as its own project joined to SPIRE's OIDC network, give the log a key that survives a restart, and issue no SCT | accepted | 2026-08-30 |
 | [0030](0030-ship-the-mcp-entry-point-and-read-a-run-out-of-the-chain.md) | Ship the MCP entry point, read a run out of the chain in its own package, and make the earliest `run_retired` the answer | accepted | 2026-08-30 |
 | [0031](0031-orchestrate-released-gitsign-through-git-commit-and-configure-around-the-absent-ct-log.md) | Orchestrate released gitsign through `git commit`, build its environment from nothing, and configure around the absent CT log | accepted | 2026-08-30 |
+| [0032](0032-inject-a-sigstore-outage-by-stopping-the-shipped-container-and-assert-the-absence-of-a-commit-against-the-object-database.md) | Inject a Sigstore outage by stopping the shipped container, inject slowness by delaying a real one, and assert the absence of a commit against the object database | accepted | 2026-08-30 |
+| [0033](0033-append-the-intent-before-the-credential-is-spent-and-derive-a-ledger-key-per-phase.md) | Order `sign_commit` so nothing that can fail cheaply happens after Phase A, and give each phase its own derived ledger key | accepted | 2026-08-30 |
 
 ## Open items
 
@@ -212,3 +214,35 @@ maintainer ask "why is it like this?"
   registration presents as Fulcio's "There was an error processing the identity
   token". And doc 07 has no ID for the wrapper's own certificate check, the
   INVARIANT_VIOLATION that arrives from our own side; proposed **SIG-010**.
+- **ADR-0032** leaves four, and two of them are questions about the spec rather
+  than about the code. IP §6.3 asks the signing path for "bounded retries with
+  backoff and jitter"; MEASURED, `internal/signing`'s trust-material probe makes
+  exactly one attempt and its Rekor lookup makes exactly five at a constant
+  500 ms — bounded, waiting, and with neither growth nor jitter — so whether
+  that sentence is a requirement is a question for the human, and RM-034 could
+  not answer it because `internal/**` is outside its scope. Doc 07's SIG-004
+  parenthesis, "assert lock released", assumes a lock that the shipped
+  `git commit --file` invocation never takes: measured, the whole-index path
+  releases `.git/index.lock` before calling the signing program, while a
+  pathspec would hold it across the signature — so the clause is satisfied
+  structurally and is one argument away from not being. A warm `Signer` maps a
+  Rekor outage to `ErrSigning` rather than `ErrTransparencyUnavailable`, which
+  RM-033's `sign_commit` has to render as `TRANSPARENCY_UNAVAILABLE` or the
+  class is right only on a run's first commit. And `test/failure` now carries a
+  second Sigstore compose overlay for the same reason ADR-0031 carried the
+  first — no ownership of `deploy/` — so the move ADR-0031 asked for now has two
+  copies to delete instead of one.
+- **ADR-0033** leaves three, and one of them is a question about the spec. IP §4
+  names `sign_commit`'s `staged_ref` argument once and no document in `docs/`
+  defines it, so reading it as "a git revision naming the tree the caller
+  staged, which must equal the index" is an INFERENCE — a caller who reads it as
+  the branch being committed to gets a refusal, and that is a question for the
+  human rather than permission to widen the reading. Doc 07 has no ID for the
+  property IP §6.5 exists to state: SIG-001's "intent+recorded events in order"
+  covers the two events, and the assertion that the SIGNATURE fell between them
+  is unnumbered — proposed **SIG-011**. And the five-selector registration of
+  `spire-oidc` that ADR-0031 had to reimplement now exists in three places
+  (`internal/signing`, `internal/mcp`, `test/failure`), because
+  `deploy/compose/spire/register.sh` still hardcodes one container name and one
+  project; parameterising it is `deploy/`'s to do and every suite that needs
+  Fulcio pays for its absence again.
