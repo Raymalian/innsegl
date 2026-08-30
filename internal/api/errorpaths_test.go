@@ -112,7 +112,7 @@ func TestNewProverRefusesAConfigurationItCouldNotAnswerWith(t *testing.T) {
 	}
 }
 
-func TestProveRefusesARequestItCannotAct0n(t *testing.T) {
+func TestProveRefusesARequestItCannotActOn(t *testing.T) {
 	s := newProofScenario(t, proofOptions{})
 	prover := s.prover(t)
 	if _, err := prover.Prove(t.Context(), "", ""); !errors.Is(err, ErrBadRequest) {
