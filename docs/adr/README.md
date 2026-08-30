@@ -50,6 +50,7 @@ maintainer ask "why is it like this?"
 | [0025](0025-rate-limit-register-agent-per-asserted-caller-and-alert-out-of-band.md) | Rate-limit `register_agent` per asserted caller, meter it on the ledger appender, and raise the trip out of band | accepted | 2026-08-29 |
 | [0026](0026-mcp-006-is-reachability-through-the-shipped-tool-and-an-unreachable-cell-is-a-finding.md) | Read MCP-006 as reachability through the shipped tool, and record an unreachable cell as a finding rather than manufacturing a path to it | accepted | 2026-08-29 |
 | [0027](0027-crash-mcp-011-by-sigkilling-a-purpose-built-server-and-hold-the-narrow-windows-open.md) | Crash MCP-011 by SIGKILLing a purpose-built MCP process, fuzz the kill timing against a measured call, and hold the two narrowest windows open rather than chase them | accepted | 2026-08-29 |
+| [0028](0028-place-commit-trailers-in-process-and-refuse-the-messages-git-places-ambiguously.md) | Place commit trailers in process, refuse the messages git places ambiguously, and read I6 as "never emit `Co-authored-by:` at all" | accepted | 2026-08-30 |
 
 ## Open items
 
