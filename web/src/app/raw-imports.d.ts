@@ -14,3 +14,13 @@ declare module "*?raw" {
   const content: string;
   export default content;
 }
+
+// `import.meta.glob(..., { query: "?raw" })`, typed. FE-020 scans every
+// component file the shell has, found by pattern rather than by a list, so a
+// file added tomorrow is scanned tomorrow.
+interface ImportMeta {
+  glob(
+    pattern: string,
+    options: { query: "?raw"; import: "default"; eager: true },
+  ): Record<string, string>;
+}

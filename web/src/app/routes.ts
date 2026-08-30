@@ -87,14 +87,35 @@ export const VIEW_ROOTS: Record<ViewName, string> = {
   verify: "/verify",
 };
 
-/** The five destinations the nav rail offers. `run` is a detail of `runs`. */
+/**
+ * The destinations the nav rail offers.
+ *
+ * Three of the six views, and the omission is a reading of doc 06 rather than
+ * an oversight. §3 asks for flat navigation across six views; §3.3, §3.4 and
+ * §3.5 each describe a view OF something — a run, a repository, an agent type
+ * — and doc 06 specifies no index for any of them. A rail item for "repos"
+ * would therefore have to invent a seventh view the spec does not define, and
+ * a disabled rail item is worse than an absent one. Those three views are
+ * reached by their links from the data that names them, which is what §3's
+ * "view → detail" describes. Reported as a question for the human.
+ */
 export const NAV_VIEWS = [
   "overview",
   "runs",
-  "repo",
-  "agentType",
   "verify",
 ] as const satisfies readonly ViewName[];
+
+/** The address a nav destination points at, with no state selected. */
+export function navRoute(view: (typeof NAV_VIEWS)[number]): Route {
+  switch (view) {
+    case "overview":
+      return { view: "overview" };
+    case "runs":
+      return { view: "runs", filters: emptyRunsFilters() };
+    case "verify":
+      return { view: "verify", commit: "", repo: "" };
+  }
+}
 
 const isRunStatus = (v: string): v is RunStatus =>
   (RUN_STATUSES as readonly string[]).includes(v);
