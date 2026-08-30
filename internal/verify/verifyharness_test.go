@@ -116,10 +116,10 @@ func dockerUsable(ctx context.Context) error {
 		return fmt.Errorf("INNSEGL_TEST_NO_DOCKER is set: %w", errDependencyAbsent)
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker is not on PATH: %v: %w", err, errDependencyAbsent)
+		return fmt.Errorf("docker is not on PATH: %w: %w", err, errDependencyAbsent)
 	}
 	if _, err := docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
-		return fmt.Errorf("no reachable docker daemon: %v: %w", err, errDependencyAbsent)
+		return fmt.Errorf("no reachable docker daemon: %w: %w", err, errDependencyAbsent)
 	}
 	return nil
 }
@@ -151,7 +151,7 @@ func freeHostPort(ctx context.Context) (string, error) {
 func findGitsign(ctx context.Context) (string, error) {
 	if p := os.Getenv("INNSEGL_GITSIGN"); p != "" {
 		if _, err := os.Stat(p); err != nil {
-			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %v: %w", p, err, errDependencyAbsent)
+			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w: %w", p, err, errDependencyAbsent)
 		}
 		return p, nil
 	}
