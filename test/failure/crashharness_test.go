@@ -426,9 +426,16 @@ func (c *campaign) sameReply(t *testing.T, why, what string, a, b any) {
 // Bring-up.
 // ---------------------------------------------------------------------------
 
+// freshDatabaseSeq numbers databases within this process. The pid separates
+// processes; this separates callers inside one. It replaced UnixNano()%100000,
+// which wraps every 100 microseconds — two databases created in the same tenth
+// of a millisecond collided with "database already exists", which is what
+// TestServeRunsUnderAnAppendOnlyDatabaseRole hit.
+var freshDatabaseSeq atomic.Uint64
+
 func (c *campaign) freshDatabase(t *testing.T) string {
 	t.Helper()
-	name := fmt.Sprintf("crash_%d_%d", os.Getpid()%100000, time.Now().UnixNano()%100000)
+	name := fmt.Sprintf("crash_%d_%d", os.Getpid()%100000, freshDatabaseSeq.Add(1))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
