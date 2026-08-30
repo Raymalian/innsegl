@@ -38,9 +38,12 @@ var commands = map[string]command{
 		summary: "run the innsegl MCP server",
 		exec:    serveCommand,
 	},
+	// The reconciler is IP §6.5's required background component: it expires
+	// dangling signing intents and repairs the records a crash between Phase B
+	// and Phase C lost. doc 05 §2 runs it single-active, from this binary.
 	"reconcile": {
 		summary: "reconcile signing intents against the transparency log",
-		exec:    notImplemented("reconcile"),
+		exec:    reconcileCommand,
 	},
 	"seal": {
 		summary: "seal ledger segments and anchor them in the transparency log",

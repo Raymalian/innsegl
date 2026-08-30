@@ -20,7 +20,7 @@ var documentedSubcommands = []string{"canary", "reap", "reconcile", "seal", "ser
 // implementedSubcommands are the ones with a body. The rest are still stubs
 // that exit non-zero, and TestRunDispatchesEverySubcommand asserts that.
 var implementedSubcommands = map[string]bool{
-	"canary": true, "reap": true, "serve": true, "verify": true,
+	"canary": true, "reap": true, "reconcile": true, "serve": true, "verify": true,
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {
