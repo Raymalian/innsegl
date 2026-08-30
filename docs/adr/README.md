@@ -53,6 +53,7 @@ maintainer ask "why is it like this?"
 | [0028](0028-place-commit-trailers-in-process-and-refuse-the-messages-git-places-ambiguously.md) | Place commit trailers in process, refuse the messages git places ambiguously, and read I6 as "never emit `Co-authored-by:` at all" | accepted | 2026-08-30 |
 | [0029](0029-compose-self-hosted-sigstore-as-its-own-project-joined-to-spires-oidc-network.md) | Compose self-hosted Sigstore as its own project joined to SPIRE's OIDC network, give the log a key that survives a restart, and issue no SCT | accepted | 2026-08-30 |
 | [0030](0030-ship-the-mcp-entry-point-and-read-a-run-out-of-the-chain.md) | Ship the MCP entry point, read a run out of the chain in its own package, and make the earliest `run_retired` the answer | accepted | 2026-08-30 |
+| [0031](0031-orchestrate-released-gitsign-through-git-commit-and-configure-around-the-absent-ct-log.md) | Orchestrate released gitsign through `git commit`, build its environment from nothing, and configure around the absent CT log | accepted | 2026-08-30 |
 
 ## Open items
 
@@ -197,3 +198,17 @@ maintainer ask "why is it like this?"
   is now ON in the shipped entry point, which makes ADR-0025's follow-up 1 — a
   twelfth error class, or a `retry_after` on IP §4's error object — a live cost
   rather than a hypothetical one.
+- **ADR-0031** leaves four. `gitsign` is a runtime dependency with no `go.mod`
+  entry, pinned only by the test harness's `harnessGitsignVersion` — deliberate,
+  and it means a version bump is invisible to `go mod` tooling.
+  `internal/signing/testdata/sigstore-testscope.yml` is a compose overlay under
+  `internal/` because RM-032 does not own `deploy/`; ADR-0029 asked for it in
+  `deploy/compose/` and moving it there is a rename that should happen the
+  moment a second suite needs it. `deploy/compose/spire/register.sh` cannot be
+  driven against a per-process stack — it hardcodes `innsegl-spire-oidc` and
+  `-f spire.yml` with no project — so the Go harness reimplements its five
+  selectors; parameterising the script is `deploy/`'s to do, and until it
+  happens every suite that needs Fulcio will rediscover that a missing OIDC
+  registration presents as Fulcio's "There was an error processing the identity
+  token". And doc 07 has no ID for the wrapper's own certificate check, the
+  INVARIANT_VIOLATION that arrives from our own side; proposed **SIG-010**.

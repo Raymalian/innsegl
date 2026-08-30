@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Compose overlay: the shipped Sigstore stack, scoped to one test process
+# (RM-032, #40)
+#
+# Applied on top of deploy/compose/sigstore.yml, never instead of it:
+#
+#   INNSEGL_SIGSTORE_TEST_STACK=innsegl-signtest-<pid> \
+#   INNSEGL_SIGSTORE_OIDC_NETWORK=innsegl-signtest-<pid>-oidc-frontend \
+#   INNSEGL_SPIRE_JWT_ISSUER=http://spire-oidc:8080 \
+#   docker compose -p "$INNSEGL_SIGSTORE_TEST_STACK" \
+#     -f deploy/compose/sigstore.yml \
+#     -f internal/signing/testdata/sigstore-testscope.yml up -d
+#
+# It changes NOTHING but names — the compose project, every container_name and
+# every network name — exactly as deploy/compose/spire-testscope.yml does for
+# the SPIRE trio, and for the same measured reason (RM-065, #81): sigstore.yml
+# pins `name: innsegl-sigstore` and a fixed container_name per service, so
+# every process that brings it up selects the SAME stack, and whichever
+# finishes first runs `compose down --volumes` on the Fulcio the other is
+# mid-signature against.
+#
+# The images and their digests, the flags, the PKI bootstrap, the missing CT
+# log and the six-network segmentation of ADR-0029 are inherited unchanged.
+# That is the point: SIG-001 must sign against the shipped stack, or what it
+# proves is about a different system.
+#
+# WHY THIS FILE IS HERE AND NOT IN deploy/compose/
+# ------------------------------------------------
+# ADR-0029's "what the project should do next" asks for exactly this overlay
+# and puts it beside sigstore.yml. RM-032 does not own deploy/, so it lives
+# with the harness that is currently its only caller. Moving it to
+# deploy/compose/sigstore-testscope.yml is a rename, and ADR-0031 records it as
+# the thing to do when a second suite needs it.
+#
+# Volumes need no help: sigstore.yml declares them without an explicit `name:`,
+# so compose already scopes them to the project.
+#
+# REQUIRED, NOT DEFAULTED. `:?` rather than `:-`, adopting spire-testscope.yml's
+# reasoning verbatim: a default would let a hand-run `docker compose -f ... -f
+# ...` build a stack under a shared name that no test process owns or tears
+# down, which is the exact state that leaves a later run inspecting containers
+# somebody else created.
+# ============================================================================
+
+name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}
+
+services:
+  sigstore-bootstrap:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-sigstore-bootstrap
+
+  fulcio:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-fulcio
+
+  rekor:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-rekor
+
+  trillian-log-server:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-trillian-log-server
+
+  # RM-012 FINDING, inherited: this service is not optional. Renaming it here
+  # rather than dropping it is deliberate — without it leaves queue forever, no
+  # inclusion proof ever exists, and gitsign's own Rekor v1 client rejects the
+  # proof-less response, so SIG-001 fails with a name instead of hanging.
+  trillian-log-signer:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-trillian-log-signer
+
+  trillian-db:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-trillian-db
+
+  rekor-redis:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-rekor-redis
+
+networks:
+  innsegl-sigstore:
+    name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-sigstore
+  innsegl-sigstore-published:
+    name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-sigstore-published
+  innsegl-rekor-log:
+    name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-rekor-log
+  innsegl-rekor-index:
+    name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-rekor-index
+  innsegl-trillian-db:
+    name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-trillian-db
