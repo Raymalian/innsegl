@@ -58,6 +58,7 @@ maintainer ask "why is it like this?"
 | [0033](0033-append-the-intent-before-the-credential-is-spent-and-derive-a-ledger-key-per-phase.md) | Order `sign_commit` so nothing that can fail cheaply happens after Phase A, and give each phase its own derived ledger key | accepted | 2026-08-30 |
 | [0034](0034-verify-against-the-logs-record-of-the-commit-sha-and-evaluate-the-certificate-at-its-signed-integration-time.md) | Verify against the log's record of the commit SHA, and evaluate the certificate at the log's signed integration time | accepted | 2026-08-30 |
 | [0035](0035-drive-the-repair-from-the-intent-and-record-an-expiry-only-on-an-answer.md) | Drive the reconciler's repair from the intent rather than from the log, and record an expiry only on an answer | accepted | 2026-08-30 |
+| [0036](0036-cross-check-the-chain-against-rekor-in-both-directions-and-sweep-a-trailing-window.md) | Cross-check the chain against Rekor in both directions, and sweep a bounded trailing window of the log | accepted | 2026-08-30 |
 
 ## Open items
 
@@ -277,3 +278,15 @@ maintainer ask "why is it like this?"
   proposed **REC-006**. And IP §6.5 does not say what to do when two signed
   commits claim one intent; the reconciler refuses and alerts, and superseding
   one with the other is a schema question and a human's.
+- **ADR-0036** leaves four, and the first is that the control ships dark.
+  `Config.Drift` is optional and `cmd/innsegl/reconcile.go` — not RM-036's —
+  does not set it, so REC-003 and REC-004 are proved by tests and are not
+  running in a deployment; wiring it, with a `-sweep-window` flag, is the
+  follow-up. Doc 07 has no ID for the negative control that makes both cases
+  mean anything (a legitimate signed commit raising nothing), proposed
+  **REC-007**, nor for the second-order fabrication — a `commit_recorded`
+  pointed at a real entry belonging to another commit or another identity —
+  proposed **REC-008**; both are written and green. And issue #44's acceptance
+  criteria claim AB-04, which doc 04 §3 assigns to MCP-008, SPI-004 and
+  MCP-014; this work closes AB-03 and is only a partial detection for AB-04,
+  and says so rather than claiming it.
