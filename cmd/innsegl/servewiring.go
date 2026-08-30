@@ -25,6 +25,7 @@ import (
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/rundir"
+	"innsegl.dev/innsegl/internal/signing"
 	"innsegl.dev/innsegl/internal/spire"
 )
 
@@ -244,7 +245,21 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		return fail("build the run directory: %w", err)
 	}
 
-	// ---- the four tools, in the one order that matters --------------------
+	// ---- Sigstore --------------------------------------------------------
+	//
+	// One probe, two consumers: /readyz reports it (ADR-0024) and sign_commit
+	// asks it before Phase A, so "Sigstore is reachable" means the same thing
+	// to an operator watching readiness and to the tool deciding whether to
+	// record an intent it may not be able to fulfil (IP §6.3, §6.5).
+	sigstore, err := mcp.NewSigstoreEndpoints(mcp.SigstoreConfig{
+		FulcioURL: o.fulcioURL,
+		RekorURL:  o.rekorURL,
+	})
+	if err != nil {
+		return fail("configure the Sigstore readiness probe: %w", err)
+	}
+
+	// ---- the five tools, in the one order that matters --------------------
 	registerCfg := mcp.RegisterAgentConfig{
 		Identities:  admin,
 		Ledger:      store,
@@ -310,6 +325,31 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 	}
 	closers = append(closers, restoreRetire)
 
+	// sign_commit (RM-033, #41). Opt-in, and never silent either way.
+	//
+	// The tool is BOUND unconditionally — it is one of IP §4's five and
+	// `mcp.New` runs its binder — but it is CONFIGURED only when -workspace
+	// names a root. Two reasons, both about failing at the right moment.
+	// `signing.NewSigner` resolves `gitsign` and `git` with exec.LookPath at
+	// construction, so a deployment without gitsign installed would otherwise
+	// fail to start for a tool it may not intend to serve; and there is no
+	// defensible default working-tree root, so a guessed one would be a path
+	// traversal waiting to be configured. Unconfigured, the tool refuses every
+	// call with INVARIANT_VIOLATION and says so — which is the ADR-0025 shape:
+	// turning a control off is an operator decision that appears in the log
+	// every time the process starts.
+	if o.workspace != "" {
+		restoreSign, serr := configureSignCommit(o, runs, store, idem, sigstore, log)
+		if serr != nil {
+			return fail("configure sign_commit: %w", serr)
+		}
+		closers = append(closers, restoreSign)
+	} else {
+		log.warn("sign_commit is NOT CONFIGURED: -workspace (or $" + envWorkspace + ") is " +
+			"unset, so the tool is advertised and refuses every call. No commit can be " +
+			"signed by this replica.")
+	}
+
 	// ---- the transport ----------------------------------------------------
 	server, err := mcp.New(mcp.Config{
 		Logger:         log.logger,
@@ -321,13 +361,6 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 	}
 
 	// ---- health -----------------------------------------------------------
-	sigstore, err := mcp.NewSigstoreEndpoints(mcp.SigstoreConfig{
-		FulcioURL: o.fulcioURL,
-		RekorURL:  o.rekorURL,
-	})
-	if err != nil {
-		return fail("configure the Sigstore readiness probe: %w", err)
-	}
 	health, err := mcp.NewHealth(mcp.HealthConfig{
 		Identities:     admin,
 		Ledger:         store,
@@ -377,6 +410,61 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		closers:         closers,
 		log:             log,
 	}, nil
+}
+
+// configureSignCommit installs the fifth tool.
+//
+// The author policy is built ONCE and handed to the signer factory; the
+// factory is what `mcp.ConfigureSignCommit` asks whether the configured author
+// is admitted, so there is exactly one statement of I6 in this process and a
+// deployment whose policy does not admit its own author refuses to start
+// rather than leaving a dangling `commit_intent` on its first signature.
+func configureSignCommit(
+	o serveOptions,
+	runs *rundir.Directory,
+	store *ledger.Store,
+	idem *mcp.IdempotencyStore,
+	sigstore *mcp.SigstoreEndpoints,
+	log *serveLog,
+) (func(), error) {
+	workspace, err := mcp.NewWorkspace(o.workspace)
+	if err != nil {
+		return nil, err
+	}
+	author := signing.AuthorPolicy{
+		Operators:     o.signAuthorOperators,
+		AllowUnlinked: o.signAllowUnlinked,
+	}
+	signers := mcp.NewGitsignSigners(signing.Config{
+		FulcioURL:   o.fulcioURL,
+		RekorURL:    o.rekorURL,
+		Issuer:      o.oidcIssuer,
+		GitsignPath: o.gitsignPath,
+		Author:      author,
+	})
+	restore, err := mcp.ConfigureSignCommit(mcp.SignCommitConfig{
+		Runs:        runs,
+		Ledger:      store,
+		Idempotency: idem,
+		Workspace:   workspace,
+		Sigstore:    sigstore,
+		// The shipped tool, not a second route to SPIRE: one audience
+		// allowlist, one retirement check, one `credential_issued` append (I3).
+		Credentials: mcp.SignCommitThroughGetCredential{},
+		Signers:     signers,
+		AuthorName:  o.signAuthorName,
+		AuthorEmail: o.signAuthorEmail,
+	})
+	if err != nil {
+		return nil, err
+	}
+	log.info("sign_commit is configured",
+		"workspace", o.workspace,
+		"issuer", o.oidcIssuer,
+		"author", o.signAuthorEmail,
+		"author_operators", len(o.signAuthorOperators),
+		"author_allow_unlinked", o.signAllowUnlinked)
+	return restore, nil
 }
 
 // ---------------------------------------------------------------------------

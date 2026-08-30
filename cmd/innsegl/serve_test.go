@@ -353,13 +353,13 @@ func TestServeShutsDownOnASignalAndReleasesEverythingItOpened(t *testing.T) {
 	}
 }
 
-// TestServeNamesTheMissingToolSurfaceAtStartUp.
+// TestServeNamesTheWholeToolSurfaceAtStartUp.
 //
-// `sign_commit` lands with RM-033. Until then the server advertises four of
-// the five IP §4 tools, and ADR-0024 makes the reporting duty explicit: an
-// incomplete surface is reported and never silent. An operator reading the log
-// of a server that will refuse `sign_commit` must be able to see why.
-func TestServeNamesTheMissingToolSurfaceAtStartUp(t *testing.T) {
+// RM-033 (#41) bound `sign_commit`, so the start-up report now names five
+// tools and warns about none. ADR-0024's duty is unchanged — an incomplete
+// surface is reported and never silent — and this case is what would catch a
+// tool that quietly stopped registering its binder.
+func TestServeNamesTheWholeToolSurfaceAtStartUp(t *testing.T) {
 	clearServeEnv(t)
 	var stdout, stderr bytes.Buffer
 	ctx, cancel := context.WithCancel(context.Background())
@@ -376,8 +376,8 @@ func TestServeNamesTheMissingToolSurfaceAtStartUp(t *testing.T) {
 			t.Errorf("the start-up report does not name %s:\n%s", name, log)
 		}
 	}
-	if !strings.Contains(log, "missing") && !strings.Contains(log, "MISSING") {
-		t.Errorf("the start-up report does not say a tool is missing:\n%s", log)
+	if strings.Contains(log, "MISSING") {
+		t.Errorf("the start-up report says a tool is missing, and all five are bound:\n%s", log)
 	}
 }
 
@@ -436,36 +436,34 @@ func TestServeRefusesAnUnparseableFlag(t *testing.T) {
 	}
 }
 
-// TestTheShippedSurfaceIsFourToolsAndSignCommitIsTheMissingOne.
+// TestTheShippedSurfaceIsTheFiveToolsOfIP4.
 //
-// `MissingTools` is derived from the binders that registered themselves, so
-// this is the shipped answer and not a list written down twice. It is asserted
-// in the entry point's own package because the entry point is what has to
-// REPORT it (ADR-0024) — and because the day RM-033 lands `sign_commit`, this
-// case fails and says so rather than the report quietly going stale.
-func TestTheShippedSurfaceIsFourToolsAndSignCommitIsTheMissingOne(t *testing.T) {
+// `BoundTools` and `MissingTools` are derived from the binders that registered
+// themselves, so this is the shipped answer and not a list written down twice.
+// It is asserted in the entry point's own package because the entry point is
+// what has to REPORT it (ADR-0024).
+//
+// RM-068 left this case asserting four bound tools and `sign_commit` missing,
+// deliberately, so that the day RM-033 (#41) bound the fifth it would fail
+// rather than let the start-up report and both health endpoints go stale. That
+// day is this commit.
+func TestTheShippedSurfaceIsTheFiveToolsOfIP4(t *testing.T) {
 	server := realSurface()
 
 	bound := server.BoundTools()
-	if len(bound) != 4 {
-		t.Errorf("the shipped server binds %d tools (%v), want 4", len(bound), bound)
+	if len(bound) != 5 {
+		t.Errorf("the shipped server binds %d tools (%v), want 5", len(bound), bound)
 	}
-	if slices.Contains(bound, mcp.ToolSignCommit) {
-		t.Errorf("%s is bound; RM-033 (#41) has not built it", mcp.ToolSignCommit)
-	}
-	for _, want := range []mcp.ToolName{
-		mcp.ToolRegisterAgent, mcp.ToolGetCredential, mcp.ToolRecordEvent, mcp.ToolRetireAgent,
-	} {
+	for _, want := range mcp.ToolNames() {
 		if !slices.Contains(bound, want) {
 			t.Errorf("the shipped server does not bind %s: %v", want, bound)
 		}
 	}
 
 	missing := server.MissingTools()
-	if len(missing) != 1 || missing[0] != mcp.ToolSignCommit {
-		t.Fatalf("MissingTools() is %v, want exactly [%s]. Either the surface changed or "+
-			"RM-033 landed, and the start-up report and both health endpoints are now saying "+
-			"something untrue.", missing, mcp.ToolSignCommit)
+	if len(missing) != 0 {
+		t.Fatalf("MissingTools() is %v, want none. The start-up report and both health "+
+			"endpoints are now saying something untrue.", missing)
 	}
 	if len(bound)+len(missing) != len(mcp.ToolNames()) {
 		t.Errorf("bound %d + missing %d != the five IP §4 tools", len(bound), len(missing))
