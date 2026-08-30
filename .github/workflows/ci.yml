@@ -141,6 +141,29 @@ jobs:
       - name: Verify every tracked source file carries the SPDX header
         run: ./scripts/spdx-check.sh
 
+  tokens:
+    name: token sheet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # FD 5.3 reserves green for cryptographic verification alone, and FD 8
+      # makes a violation a defect found in review. Review is the wrong place
+      # for a rule a machine can check: ADR-0038 chose headless primitives over
+      # Carbon precisely because Carbon ships a green named supportSuccess and
+      # spends it on toggles and progress bars, and the argument for that
+      # choice is worthless if our own sheet can drift the same way unnoticed.
+      #
+      # The gate also holds the contrast floor. Neither needs Go, Docker or
+      # Node — it is shell and awk over one CSS file.
+      - name: Token semantics and contrast floor
+        run: ./web/src/tokens/check-tokens.sh
+      # The gate is itself code, so it is tested: ten mutations of the shipped
+      # sheet that it must refuse, plus the shipped sheet, which it must
+      # accept. A gate that passes everything is the failure mode here.
+      - name: Token gate self-test
+        run: ./web/src/tokens/check-tokens-selftest.sh
+
   coverage:
     name: coverage floors
     runs-on: ubuntu-latest

@@ -1,0 +1,318 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * Innsegl design tokens — the single source of truth for every colour, type
+ * size, and unit of space in the dashboard and the public verification page.
+ *
+ * doc 06 §5.1: "all colors, spacing, and type flow through design tokens so a
+ * downstream deployment can rebrand without touching components." This file is
+ * that layer. It is plain CSS with no build step and no framework: the public
+ * verification page (§3.6) loads it directly, and the dashboard reaches the
+ * same values through Tailwind by way of tailwind-theme.css. Decided in
+ * ADR-0038.
+ *
+ * ── TWO LAYERS, AND THE RULE BETWEEN THEM ──────────────────────────────────
+ *
+ *   --innsegl-palette-*   raw values. A ramp per family. Never referenced by a
+ *                         component — only by the semantic layer below.
+ *   --innsegl-color-*     what a component uses. Always light-dark(light, dark)
+ *                         over two palette references. Never a raw value.
+ *
+ * The palette families are named for MEANING, not for hue: `verification`,
+ * `failure`, `degraded`, `accent`, `neutral`. The word "green" does not appear
+ * in this file, and cannot be typed by a component author, because there is no
+ * token spelled that way. doc 06 §5.3 governs colour as a claim:
+ *
+ *   "Green = cryptographic verification passed. Nothing else is ever green.
+ *    Not 'run completed,' not 'healthy,' not positive trends."
+ *
+ * So the only way to reach the greens is `--innsegl-color-proof-verified-*`,
+ * and anybody using that for "run completed" is visibly lying in the diff.
+ * check-tokens.sh enforces the mapping mechanically: each semantic group may
+ * draw from exactly one family, and the verification family may be drawn from
+ * by the proof-verified group alone.
+ *
+ * ── BOTH MODES, BY CONSTRUCTION ────────────────────────────────────────────
+ *
+ * Every semantic colour is a light-dark(), so a token cannot exist in one mode
+ * and not the other — the failure that stays invisible until somebody switches
+ * themes is unrepresentable rather than merely tested for. `color-scheme` on
+ * :root does the switching: `light dark` follows prefers-color-scheme, and the
+ * two [data-theme] rules below are the manual override doc 06 §5.1 asks for.
+ * No JavaScript is involved in the tokens; the shell (RM-041) sets or clears
+ * `data-theme` on <html> and nothing else has to know.
+ *
+ * ── WHAT IS DELIBERATELY ABSENT ────────────────────────────────────────────
+ *
+ * There is no success/positive/healthy colour, no second accent, no gradient
+ * token, and exactly one shadow (§5.4: "no shadows deeper than subtle
+ * elevation for popovers; no gradients"). The absence is the enforcement: a
+ * token that does not exist cannot be misused, and adding one is a visible
+ * decision rather than a CSS value nobody reviewed.
+ *
+ * Every colour pair that has to stay readable is asserted in
+ * contrast-pairs.txt and measured in both modes by check-tokens.sh.
+ */
+
+:root {
+  /* Follow the OS. The two rules after this block are the manual override. */
+  color-scheme: light dark;
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * PALETTE — raw values. Components never reference these.
+   * ═══════════════════════════════════════════════════════════════════════ */
+
+  /* Neutral. Carries structure, chrome, and run status (§5.3). Slightly cool,
+   * because a warm grey reads as a document and this is an instrument. */
+  --innsegl-palette-neutral-0: #ffffff;
+  --innsegl-palette-neutral-25: #f6f8f9;
+  --innsegl-palette-neutral-50: #eceff1;
+  --innsegl-palette-neutral-100: #dfe4e7;
+  --innsegl-palette-neutral-200: #c8d0d5;
+  --innsegl-palette-neutral-300: #aab5bc;
+  --innsegl-palette-neutral-400: #838e96;
+  --innsegl-palette-neutral-500: #626b72;
+  --innsegl-palette-neutral-600: #4d565d;
+  --innsegl-palette-neutral-700: #343c42;
+  --innsegl-palette-neutral-800: #21272b;
+  --innsegl-palette-neutral-900: #161b1f;
+  --innsegl-palette-neutral-950: #0c1013;
+
+  /* Verification. Cryptographic verification passed — and nothing else, ever.
+   * Reachable only through --innsegl-color-proof-verified-*. */
+  --innsegl-palette-verification-50: #e6f4ec;
+  --innsegl-palette-verification-100: #c6e7d5;
+  --innsegl-palette-verification-300: #6ccf95;
+  --innsegl-palette-verification-400: #3cb573;
+  --innsegl-palette-verification-600: #167a49;
+  --innsegl-palette-verification-700: #116039;
+  --innsegl-palette-verification-800: #0c462a;
+  --innsegl-palette-verification-900: #062e1c;
+
+  /* Failure. Verification failed, or an integrity alert (§5.3, P3). Never an
+   * ordinary validation nit, and never a destructive-action affordance —
+   * P6 says there are none. */
+  --innsegl-palette-failure-50: #fdecec;
+  --innsegl-palette-failure-100: #f9d2d4;
+  --innsegl-palette-failure-300: #f0989d;
+  --innsegl-palette-failure-400: #e5626a;
+  --innsegl-palette-failure-600: #c02029;
+  --innsegl-palette-failure-700: #9b1921;
+  --innsegl-palette-failure-800: #741218;
+  --innsegl-palette-failure-900: #480a0e;
+
+  /* Degraded. Verification unavailable, anchoring lag, staleness (§5.3).
+   * The colour of "we could not check", which P2 forbids collapsing into
+   * either of the other two. */
+  --innsegl-palette-degraded-50: #fbf2da;
+  --innsegl-palette-degraded-100: #f5e2ac;
+  --innsegl-palette-degraded-300: #dfb144;
+  --innsegl-palette-degraded-400: #c6951d;
+  --innsegl-palette-degraded-600: #8c6404;
+  --innsegl-palette-degraded-700: #6f4e03;
+  --innsegl-palette-degraded-800: #523902;
+  --innsegl-palette-degraded-900: #332401;
+
+  /* Accent. The one semantically meaningless hue (§5.3): links, focus,
+   * filters, selection. Indigo, deliberately outside the red-amber-green band
+   * a reader scans for a verdict — a teal or a lime accent would sit at the
+   * edge of the verification hue and invite exactly the misreading §5.3 is
+   * written to prevent. */
+  --innsegl-palette-accent-50: #ecedfc;
+  --innsegl-palette-accent-100: #d8daf7;
+  --innsegl-palette-accent-300: #a4a8ed;
+  --innsegl-palette-accent-400: #8085e4;
+  --innsegl-palette-accent-600: #4a4fc6;
+  --innsegl-palette-accent-700: #3a3ea1;
+  --innsegl-palette-accent-800: #2b2e79;
+  --innsegl-palette-accent-900: #1a1c4e;
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * SEMANTIC COLOUR — what components use. light-dark(light, dark), always.
+   * ═══════════════════════════════════════════════════════════════════════ */
+
+  /* Surfaces and text. Neutral only. */
+  --innsegl-color-surface-page: light-dark(var(--innsegl-palette-neutral-25), var(--innsegl-palette-neutral-950));
+  --innsegl-color-surface-default: light-dark(var(--innsegl-palette-neutral-0), var(--innsegl-palette-neutral-900));
+  --innsegl-color-surface-raised: light-dark(var(--innsegl-palette-neutral-0), var(--innsegl-palette-neutral-800));
+  --innsegl-color-surface-sunken: light-dark(var(--innsegl-palette-neutral-50), var(--innsegl-palette-neutral-950));
+  --innsegl-color-surface-hover: light-dark(var(--innsegl-palette-neutral-50), var(--innsegl-palette-neutral-800));
+
+  --innsegl-color-text-primary: light-dark(var(--innsegl-palette-neutral-900), var(--innsegl-palette-neutral-50));
+  --innsegl-color-text-secondary: light-dark(var(--innsegl-palette-neutral-600), var(--innsegl-palette-neutral-300));
+  --innsegl-color-text-muted: light-dark(var(--innsegl-palette-neutral-500), var(--innsegl-palette-neutral-400));
+  --innsegl-color-text-on-emphasis: light-dark(var(--innsegl-palette-neutral-0), var(--innsegl-palette-neutral-950));
+
+  --innsegl-color-border-hairline: light-dark(var(--innsegl-palette-neutral-100), var(--innsegl-palette-neutral-700));
+  --innsegl-color-border-strong: light-dark(var(--innsegl-palette-neutral-400), var(--innsegl-palette-neutral-500));
+
+  /* The verification tri-state (§4.2). Three groups, three families, never
+   * collapsed into one another (P2, §8.2). The icon in each badge uses the
+   * group's -text token; there is no separate icon colour to drift. */
+  --innsegl-color-proof-verified-text: light-dark(var(--innsegl-palette-verification-700), var(--innsegl-palette-verification-300));
+  --innsegl-color-proof-verified-surface: light-dark(var(--innsegl-palette-verification-50), var(--innsegl-palette-verification-900));
+  --innsegl-color-proof-verified-border: light-dark(var(--innsegl-palette-verification-600), var(--innsegl-palette-verification-400));
+
+  --innsegl-color-proof-failed-text: light-dark(var(--innsegl-palette-failure-700), var(--innsegl-palette-failure-300));
+  --innsegl-color-proof-failed-surface: light-dark(var(--innsegl-palette-failure-50), var(--innsegl-palette-failure-900));
+  --innsegl-color-proof-failed-border: light-dark(var(--innsegl-palette-failure-600), var(--innsegl-palette-failure-400));
+
+  --innsegl-color-proof-unavailable-text: light-dark(var(--innsegl-palette-degraded-700), var(--innsegl-palette-degraded-300));
+  --innsegl-color-proof-unavailable-surface: light-dark(var(--innsegl-palette-degraded-50), var(--innsegl-palette-degraded-900));
+  --innsegl-color-proof-unavailable-border: light-dark(var(--innsegl-palette-degraded-600), var(--innsegl-palette-degraded-400));
+
+  /* Degradation that is not a verdict: the §4.4 staleness marker and the
+   * §3.1 anchoring-lag heartbeat. Same family as "unavailable" because it is
+   * the same claim — we are serving you something we could not fully check. */
+  --innsegl-color-degraded-text: light-dark(var(--innsegl-palette-degraded-700), var(--innsegl-palette-degraded-300));
+  --innsegl-color-degraded-surface: light-dark(var(--innsegl-palette-degraded-50), var(--innsegl-palette-degraded-900));
+  --innsegl-color-degraded-border: light-dark(var(--innsegl-palette-degraded-600), var(--innsegl-palette-degraded-400));
+
+  /* P3: design the alarm first. A filled banner, not a tinted one — the §4.5
+   * alert is the most visually dominant thing on the page. Its text sits on
+   * the fill, so it comes from the pale end of the same family rather than
+   * from the neutrals: one group, one family, no exceptions to police. */
+  --innsegl-color-integrity-alert-surface: light-dark(var(--innsegl-palette-failure-700), var(--innsegl-palette-failure-800));
+  --innsegl-color-integrity-alert-text: light-dark(var(--innsegl-palette-failure-50), var(--innsegl-palette-failure-100));
+  --innsegl-color-integrity-alert-border: light-dark(var(--innsegl-palette-failure-800), var(--innsegl-palette-failure-600));
+
+  /* The differing segment in the three-check panel's trailer/certificate
+   * comparison (§4.1). Colour is never the only signal — pair it with
+   * --innsegl-text-decoration-mismatch below (§6.4, "never color alone"). */
+  --innsegl-color-mismatch-surface: light-dark(var(--innsegl-palette-failure-100), var(--innsegl-palette-failure-800));
+  --innsegl-color-mismatch-text: light-dark(var(--innsegl-palette-failure-800), var(--innsegl-palette-failure-100));
+
+  /* The accent. Interactive chrome only. It means nothing, and that is its
+   * specification. */
+  --innsegl-color-accent-text: light-dark(var(--innsegl-palette-accent-700), var(--innsegl-palette-accent-300));
+  --innsegl-color-accent-surface: light-dark(var(--innsegl-palette-accent-50), var(--innsegl-palette-accent-900));
+  --innsegl-color-accent-border: light-dark(var(--innsegl-palette-accent-600), var(--innsegl-palette-accent-400));
+  --innsegl-color-accent-emphasis: light-dark(var(--innsegl-palette-accent-600), var(--innsegl-palette-accent-300));
+  --innsegl-color-focus-ring: light-dark(var(--innsegl-palette-accent-600), var(--innsegl-palette-accent-300));
+
+  /* Run status (§3.2, §4.2). Neutral by §5.3 — none of these is a verdict.
+   * Expired is "an agent died unretired", which §3.2 requires to be styled
+   * distinctly from Retired; it is distinguished by weight, by a stronger
+   * border, and by --innsegl-border-style-status-expired, not by hue. */
+  --innsegl-color-status-active-text: light-dark(var(--innsegl-palette-neutral-800), var(--innsegl-palette-neutral-50));
+  --innsegl-color-status-active-surface: light-dark(var(--innsegl-palette-neutral-50), var(--innsegl-palette-neutral-800));
+  --innsegl-color-status-active-border: light-dark(var(--innsegl-palette-neutral-400), var(--innsegl-palette-neutral-500));
+
+  --innsegl-color-status-retired-text: light-dark(var(--innsegl-palette-neutral-500), var(--innsegl-palette-neutral-400));
+  --innsegl-color-status-retired-surface: light-dark(var(--innsegl-palette-neutral-25), var(--innsegl-palette-neutral-950));
+  --innsegl-color-status-retired-border: light-dark(var(--innsegl-palette-neutral-200), var(--innsegl-palette-neutral-700));
+
+  --innsegl-color-status-expired-text: light-dark(var(--innsegl-palette-neutral-800), var(--innsegl-palette-neutral-50));
+  --innsegl-color-status-expired-surface: light-dark(var(--innsegl-palette-neutral-25), var(--innsegl-palette-neutral-950));
+  --innsegl-color-status-expired-border: light-dark(var(--innsegl-palette-neutral-500), var(--innsegl-palette-neutral-400));
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * TYPE — §5.2. Two families, five sizes, weight before size.
+   * ═══════════════════════════════════════════════════════════════════════ */
+
+  /* No webfont, on purpose. §7's performance budget asks the public
+   * verification page to "load fast from an audit context"; a page an auditor
+   * screenshots into a report should not fetch a font from a third party to
+   * render a hash. Both stacks are what the reader's OS already has. */
+  --innsegl-font-family-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --innsegl-font-family-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Five sizes, and no sixth. Body is 14px because this is a dense audit
+   * console; prose is 16px because explanation gets air (§5.4). */
+  --innsegl-font-size-micro: 0.75rem;
+  --innsegl-font-size-body: 0.875rem;
+  --innsegl-font-size-prose: 1rem;
+  --innsegl-font-size-heading: 1.25rem;
+  --innsegl-font-size-display: 1.75rem;
+
+  --innsegl-line-height-tight: 1.25;
+  --innsegl-line-height-default: 1.45;
+  --innsegl-line-height-prose: 1.6;
+
+  /* "Weight carries hierarchy before size does" (§5.2). */
+  --innsegl-font-weight-regular: 400;
+  --innsegl-font-weight-medium: 500;
+  --innsegl-font-weight-semibold: 600;
+
+  /* §5.2 bans italics "except literal quoted material". This is the only
+   * sanctioned italic in the product; there is no other italic token. */
+  --innsegl-font-style-quotation: italic;
+
+  /* Identifiers, counts and timestamps line up column-wise or they cannot be
+   * compared by eye, which is most of what P4 is for. */
+  --innsegl-font-variant-numeric-tabular: tabular-nums;
+  --innsegl-letter-spacing-display: -0.01em;
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * SPACE, SHAPE, ELEVATION — §5.4.
+   * ═══════════════════════════════════════════════════════════════════════ */
+
+  /* A 4px base. Nine steps, geometric at the top so large gaps stay distinct. */
+  --innsegl-space-0: 0;
+  --innsegl-space-1: 0.25rem;
+  --innsegl-space-2: 0.5rem;
+  --innsegl-space-3: 0.75rem;
+  --innsegl-space-4: 1rem;
+  --innsegl-space-5: 1.5rem;
+  --innsegl-space-6: 2rem;
+  --innsegl-space-7: 3rem;
+  --innsegl-space-8: 4rem;
+
+  /* "Density belongs to data, air belongs to explanation" (§5.4). These three
+   * are where that sentence becomes a number. */
+  --innsegl-density-table-cell-y: var(--innsegl-space-2);
+  --innsegl-density-table-cell-x: var(--innsegl-space-3);
+  --innsegl-density-panel-padding: var(--innsegl-space-5);
+
+  /* "Fixed max content width for readability; tables full-width within it." */
+  --innsegl-layout-content-max: 80rem;
+  --innsegl-layout-prose-max: 68ch;
+
+  --innsegl-radius-sm: 2px;
+  --innsegl-radius-md: 4px;
+  --innsegl-radius-pill: 999px;
+
+  --innsegl-border-width-hairline: 1px;
+  --innsegl-border-width-emphasis: 2px;
+  /* Expired is distinguished from Retired without reaching for a hue (§3.2). */
+  --innsegl-border-style-status-expired: dashed;
+  /* The mismatch highlight marks the text as well as colouring it (§6.4). */
+  --innsegl-text-decoration-mismatch: underline wavy;
+
+  --innsegl-focus-ring-width: 2px;
+  --innsegl-focus-ring-offset: 2px;
+
+  /* One shadow, for popovers, and nothing deeper (§5.4). There is no
+   * elevation scale because there is no second elevation. */
+  --innsegl-shadow-popover: 0 1px 2px light-dark(rgb(12 16 19 / 0.08), rgb(0 0 0 / 0.4)), 0 6px 16px light-dark(rgb(12 16 19 / 0.10), rgb(0 0 0 / 0.5));
+
+  /* ═══════════════════════════════════════════════════════════════════════
+   * MOTION — §5.5. "State transitions and focus movement only."
+   * ═══════════════════════════════════════════════════════════════════════ */
+  --innsegl-motion-duration-fast: 120ms;
+  --innsegl-motion-duration-default: 180ms;
+  --innsegl-motion-easing-standard: cubic-bezier(0.2, 0, 0.38, 1);
+}
+
+/* The manual override doc 06 §5.1 requires, in both directions. Setting
+ * `data-theme` on <html> pins the mode; removing the attribute returns the
+ * page to prefers-color-scheme. Nothing else in the sheet has to change,
+ * because light-dark() reads color-scheme rather than a media query. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* §5.5: "Respect prefers-reduced-motion." Collapsing the durations here means
+ * a component that animates a state change gets the reduced behaviour without
+ * writing the media query itself — and a component that forgot to ask still
+ * complies. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --innsegl-motion-duration-fast: 1ms;
+    --innsegl-motion-duration-default: 1ms;
+  }
+}

@@ -60,6 +60,7 @@ maintainer ask "why is it like this?"
 | [0035](0035-drive-the-repair-from-the-intent-and-record-an-expiry-only-on-an-answer.md) | Drive the reconciler's repair from the intent rather than from the log, and record an expiry only on an answer | accepted | 2026-08-30 |
 | [0036](0036-cross-check-the-chain-against-rekor-in-both-directions-and-sweep-a-trailing-window.md) | Cross-check the chain against Rekor in both directions, and sweep a bounded trailing window of the log | accepted | 2026-08-30 |
 | [0037](0037-gate-i6-over-the-repositorys-own-commits-and-date-the-empirical-half.md) | Gate I6 over every commit the repository already has, refuse a shallow clone, and make GH-001's run date a tracked artefact that expires | accepted | 2026-08-30 |
+| [0038](0038-headless-primitives-with-a-governed-token-layer-over-ibm-carbon.md) | Build on headless primitives with a governed token layer rather than IBM Carbon, ship the tokens as plain CSS, and make doc 06 §5.3's colour rule a build failure | accepted | 2026-08-30 |
 
 ## Open items
 
@@ -307,3 +308,19 @@ maintainer ask "why is it like this?"
   half of the gate cannot see a line whose carriage return survived into the
   commit object, because `signing.CommitMessage` refuses a C0 control before it
   looks for the trailer — bounded, flagged, not resolved.
+- **ADR-0038** leaves three, and the first is a question about doc 06 rather
+  than about the code. doc 06 §3.1 puts "verification pass rate" on the overview
+  and says a rate below 100% is "rendered as a warning state, not a neutral
+  number"; it does not say what a rate *at* 100% is, and §5.3 reserves green for
+  cryptographic verification while assigning "positive trends" to neutral grey.
+  The tokens permit either reading and RM-044 (#52) has to pick one. Second,
+  doc 07 has no ID for the token layer's half of the colour rule: FE-013 scans
+  *rendered* views for green and cannot run until views exist, while the
+  structural half — that the sheet cannot express a green outside
+  `proof-verified`, and that all 32 declared contrast pairs hold in both modes —
+  runs today with no browser; proposed **FE-014** (U), with the ten-case
+  anti-vacuity self-test proposed **FE-015** (U). Both are written and green.
+  Third, the token gate is not wired into CI: `web/src/tokens/check-tokens.sh`
+  and its self-test need no Go, no Docker and no Node, and adding them is two
+  lines in a workflow RM-039 does not own — the same unowned-`.github/` and
+  unowned-`scripts/` gap ADR-0031 and ADR-0037 already recorded.

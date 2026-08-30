@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contrast pairs that must hold in BOTH modes — doc 06 §6.4.
+#
+#   "WCAG 2.1 AA contrast in both modes, including semantic colors on their
+#    backgrounds."
+#
+# Every line is one assertion, checked by check-tokens.sh against the resolved
+# value of each token in the light arm and in the dark arm of its light-dark().
+# A pair that passes in light and fails in dark is a failure: doc 06 §5.1 puts
+# both modes in scope from day one, and a mode nobody measures is a mode nobody
+# has.
+#
+# Format:  <foreground token>  <background token>  <minimum ratio>  <what it is>
+#
+# 4.5 is WCAG 2.1 AA for body text. 3 is AA for large text and for the
+# non-text contrast of a border or focus ring that carries meaning (1.4.11).
+# Nothing here is set to 3 because it was easier to pass at 3.
+
+--innsegl-color-text-primary              --innsegl-color-surface-page              4.5  body text on the page ground
+--innsegl-color-text-primary              --innsegl-color-surface-default           4.5  body text on a panel
+--innsegl-color-text-primary              --innsegl-color-surface-sunken            4.5  identifier text in a code/PEM block
+--innsegl-color-text-primary              --innsegl-color-surface-raised            4.5  text in a popover
+--innsegl-color-text-secondary            --innsegl-color-surface-default           4.5  labels and column headers
+--innsegl-color-text-secondary            --innsegl-color-surface-page              4.5  labels on the page ground
+--innsegl-color-text-muted                --innsegl-color-surface-default           4.5  timestamps and helper text
+--innsegl-color-text-muted                --innsegl-color-surface-sunken            4.5  helper text in a table header
+
+# The verification tri-state. doc 06 §4.2: three distinct visual treatments,
+# each of which has to be readable where it actually renders — inside its own
+# badge, and as bare text in a table cell.
+--innsegl-color-proof-verified-text       --innsegl-color-proof-verified-surface    4.5  "Verified" inside its badge
+--innsegl-color-proof-verified-text       --innsegl-color-surface-default           4.5  "Verified" as bare text on a panel
+--innsegl-color-proof-failed-text         --innsegl-color-proof-failed-surface      4.5  "Failed" inside its badge
+--innsegl-color-proof-failed-text         --innsegl-color-surface-default           4.5  "Failed" as bare text on a panel
+--innsegl-color-proof-unavailable-text    --innsegl-color-proof-unavailable-surface 4.5  "Verification unavailable" inside its badge
+--innsegl-color-proof-unavailable-text    --innsegl-color-surface-default           4.5  "Verification unavailable" as bare text
+
+# Degradation that is not a verification verdict: the 4.4 staleness marker and
+# the anchoring-lag heartbeat in the persistent header (§3.1).
+--innsegl-color-degraded-text             --innsegl-color-degraded-surface          4.5  "data as of …" marker
+--innsegl-color-degraded-text             --innsegl-color-surface-page              4.5  anchoring-lag heartbeat in the header
+
+# P3: the alarm is designed first. It is a filled banner, so its text sits on
+# the alert fill rather than on any page surface.
+--innsegl-color-integrity-alert-text      --innsegl-color-integrity-alert-surface   4.5  alert banner copy
+--innsegl-color-mismatch-text             --innsegl-color-mismatch-surface          4.5  the differing trailer/cert segment (§4.1)
+
+# Run status. Neutral by §5.3, which makes contrast the only thing keeping them
+# legible — there is no hue doing the work.
+--innsegl-color-status-active-text        --innsegl-color-status-active-surface     4.5  Active
+--innsegl-color-status-retired-text       --innsegl-color-status-retired-surface    4.5  Retired
+--innsegl-color-status-expired-text       --innsegl-color-status-expired-surface    4.5  Expired
+
+# The accent. Links and interactive chrome only; it means nothing.
+--innsegl-color-accent-text               --innsegl-color-surface-default           4.5  links on a panel
+--innsegl-color-accent-text               --innsegl-color-surface-page              4.5  links on the page ground
+--innsegl-color-text-on-emphasis          --innsegl-color-accent-emphasis           4.5  label on a filled accent control
+
+# Non-text contrast, WCAG 1.4.11. The focus ring is the one doc 06 §6.4 calls
+# out by name ("Visible focus states"); it has to clear 3:1 against every
+# ground it can be drawn on.
+--innsegl-color-focus-ring                --innsegl-color-surface-page              3    focus ring on the page ground
+--innsegl-color-focus-ring                --innsegl-color-surface-default           3    focus ring on a panel
+--innsegl-color-focus-ring                --innsegl-color-surface-sunken            3    focus ring in a table header
+--innsegl-color-border-strong             --innsegl-color-surface-default           3    a border that separates controls
+--innsegl-color-proof-verified-border     --innsegl-color-surface-default           3    verified badge outline
+--innsegl-color-proof-failed-border       --innsegl-color-surface-default           3    failed badge outline
+--innsegl-color-proof-unavailable-border  --innsegl-color-surface-default           3    unavailable badge outline
+--innsegl-color-status-expired-border     --innsegl-color-surface-default           3    the dashed outline that separates Expired from Retired
