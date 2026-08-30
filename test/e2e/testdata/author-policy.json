@@ -1,0 +1,9 @@
+{
+  "policy_for": "Raymalian/innsegl",
+  "documented_in": "docs/adr/0037-gate-i6-over-the-repositorys-own-commits-and-date-the-empirical-half.md",
+  "operators": [
+    "irfanon87@gmail.com",
+    "66436734+KodyMike@users.noreply.github.com"
+  ],
+  "allow_unlinked": true
+}

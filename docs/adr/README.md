@@ -59,6 +59,7 @@ maintainer ask "why is it like this?"
 | [0034](0034-verify-against-the-logs-record-of-the-commit-sha-and-evaluate-the-certificate-at-its-signed-integration-time.md) | Verify against the log's record of the commit SHA, and evaluate the certificate at the log's signed integration time | accepted | 2026-08-30 |
 | [0035](0035-drive-the-repair-from-the-intent-and-record-an-expiry-only-on-an-answer.md) | Drive the reconciler's repair from the intent rather than from the log, and record an expiry only on an answer | accepted | 2026-08-30 |
 | [0036](0036-cross-check-the-chain-against-rekor-in-both-directions-and-sweep-a-trailing-window.md) | Cross-check the chain against Rekor in both directions, and sweep a bounded trailing window of the log | accepted | 2026-08-30 |
+| [0037](0037-gate-i6-over-the-repositorys-own-commits-and-date-the-empirical-half.md) | Gate I6 over every commit the repository already has, refuse a shallow clone, and make GH-001's run date a tracked artefact that expires | accepted | 2026-08-30 |
 
 ## Open items
 
@@ -290,3 +291,19 @@ maintainer ask "why is it like this?"
   criteria claim AB-04, which doc 04 §3 assigns to MCP-008, SPI-004 and
   MCP-014; this work closes AB-03 and is only a partial detection for AB-04,
   and says so rather than claiming it.
+- **ADR-0037** leaves five, and the first is that I6 is only half demonstrated.
+  GH-001 has never been run — it needs a throwaway GitHub repository and a push
+  credential — so `test/e2e/testdata/gh-001-run.json` reads status `never-run`,
+  `TestGH001TheRecordedRunDateIsHonest` logs UNPROVEN on every CI run, and the
+  monthly job in `author-gate.yml` fails until a human provisions it. Per IP §8
+  that makes I6's outward half unimplemented, and it says so rather than
+  claiming the gate covers it. doc 07 has no ID for the anti-vacuity guard that
+  makes GH-002 mean anything — the same scan over this history under the
+  zero-value policy must refuse every commit — proposed **GH-003**, nor for the
+  honesty of the dated record itself, proposed **GH-004**; both are written and
+  green. `test/e2e/testdata/author-policy.json` is a repository-level policy
+  living under `testdata/` because RM-038 owns no better home; moving it beside
+  `CONTRIBUTING.md` belongs to whoever owns root markdown. And the co-authorship
+  half of the gate cannot see a line whose carriage return survived into the
+  commit object, because `signing.CommitMessage` refuses a C0 control before it
+  looks for the trailer — bounded, flagged, not resolved.

@@ -67,7 +67,29 @@ fi
 #       Reports PENDING for RM-072 (#95): MCP-011 does not yet fuzz sign_commit,
 #       so IP §6.6's "never a second commit" is untested. Tracked, not forgotten.
 #       Remove this line when #95 lands.
-ALLOWED='TestSEG002CrashChild|TestMCP011CrashAndReplayUnderFuzzedKillTiming/sign_commit'
+#
+#   TestGH001NoContributorAppearsForAnUnlinkedAuthor
+#       doc 07 GH-001 (RM-038, #46). It is the one case in the catalogue that
+#       measures somebody else's system: it pushes commits with an unlinked
+#       author to a scratch GitHub repository, waits out the contributor-list
+#       propagation window, and asks GitHub's contributors API whether a
+#       contributor appeared. That needs a throwaway repository, a push
+#       credential and a fifteen-minute wall-clock wait, none of which a CI
+#       runner has by default and none of which can be faked: a local
+#       substitute would re-assert what GH-002 already asserts, and the thing
+#       under test is GitHub's behaviour, not ours.
+#
+#       This entry is NOT the debt going quiet. The skip message names the two
+#       environment variables and the exact command; the dated record lives at
+#       test/e2e/testdata/gh-001-run.json and today reads status "never-run";
+#       TestGH001TheRecordedRunDateIsHonest reads that record on EVERY run,
+#       never skips, says UNPROVEN in the log while it is unset, and FAILS once
+#       a recorded run ages past its re-run interval (threat model §5, residual
+#       risk 3). The monthly job in .github/workflows/author-gate.yml fails
+#       while the credential is unprovisioned, so the debt is emailed rather
+#       than merely written down. Remove this line only if GH-001 is ever made
+#       to run unattended in CI.
+ALLOWED='TestSEG002CrashChild|TestMCP011CrashAndReplayUnderFuzzedKillTiming/sign_commit|TestGH001NoContributorAppearsForAnUnlinkedAuthor'
 
 unexpected=$(grep -F '"Action":"skip"' "${out}" | grep -F '"Test":' | grep -Ev "\"Test\":\"(${ALLOWED})\"" || true)
 skipped=$(printf '%s' "${unexpected}" | grep -c . || true)
