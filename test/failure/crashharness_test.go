@@ -33,7 +33,23 @@ import (
 
 // ---------------------------------------------------------------------------
 // MCP-011's world: a real Postgres holding one chain, a real containerised
-// SPIRE, and test/failure/crashd as a process this file is allowed to SIGKILL.
+// SPIRE, and the SHIPPED `innsegl serve` as a process this file is allowed to
+// SIGKILL.
+//
+// This used to build test/failure/crashd — a binary written for this campaign
+// because nothing in the repository wired the tools onto a listener. RM-068
+// (#89) built the real entry point, so the campaign now kills the binary a
+// deployment runs. Nothing that is ASSERTED below changed with the swap: crashd
+// called the same exported Configure* seams over the same real dependencies,
+// which is why it could be replaced by a change to which binary is built.
+//
+// Two things about the process are still the harness's and not a deployment's,
+// and both are flags the shipped binary takes rather than code written here.
+// The admin SVID arrives as PEM files, because there is no attested innsegl-mcp
+// workload on this host and the containerised agent's Workload API socket is
+// inside the container. And -fulcio-url / -rekor-url point at a closed port:
+// they are required configuration, they are read only by /readyz, and MCP-011
+// is a claim about what a SIGKILL leaves in Postgres and in SPIRE.
 //
 // HOW THE KILL TIMING IS FUZZED — IP §6.6 says "fuzz the kill timing", so a
 // hand-picked list of three points is not what is being asked for.
@@ -81,7 +97,7 @@ const (
 	crashAgentType = "crash-replay"
 	crashTaskID    = "mcp-011"
 
-	// crashLease is the idempotency lease crashd runs with. The shipped
+	// crashLease is the idempotency lease the server runs with. The shipped
 	// default is a minute (ADR-0017 §5), which is the right number for a
 	// deployment and the wrong one for a test: a replay of a claim whose owner
 	// was SIGKILLed waits out the remainder of the lease before taking it
@@ -141,7 +157,7 @@ type campaign struct {
 	stack *stack
 	// dsn names the one database this campaign's chain lives in (ADR-0005).
 	dsn string
-	// store and pool are the TEST's own readers. crashd opens its own.
+	// store and pool are the TEST's own readers. The server opens its own.
 	store *ledger.Store
 	pool  *pgxpool.Pool
 	idem  *mcp.IdempotencyStore
@@ -216,7 +232,7 @@ func requireCrashCampaign(t *testing.T) *campaign {
 	c.pool = openCrashPool(t, c.dsn)
 	c.idem = mcp.NewIdempotencyStore(c.pool, mcp.WithIdempotencyLease(crashLease))
 	c.admin = s.adminClient(t)
-	c.binary = buildCrashd(t)
+	c.binary = buildServer(t)
 	c.pemDir = c.writeAdminPEMs(t)
 
 	before, err := s.allEntrySPIFFEIDs(context.Background())
@@ -410,9 +426,16 @@ func (c *campaign) sameReply(t *testing.T, why, what string, a, b any) {
 // Bring-up.
 // ---------------------------------------------------------------------------
 
+// freshDatabaseSeq numbers databases within this process. The pid separates
+// processes; this separates callers inside one. It replaced UnixNano()%100000,
+// which wraps every 100 microseconds — two databases created in the same tenth
+// of a millisecond collided with "database already exists", which is what
+// TestServeRunsUnderAnAppendOnlyDatabaseRole hit.
+var freshDatabaseSeq atomic.Uint64
+
 func (c *campaign) freshDatabase(t *testing.T) string {
 	t.Helper()
-	name := fmt.Sprintf("crash_%d_%d", os.Getpid()%100000, time.Now().UnixNano()%100000)
+	name := fmt.Sprintf("crash_%d_%d", os.Getpid()%100000, freshDatabaseSeq.Add(1))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -459,51 +482,55 @@ func openCrashPool(t *testing.T, dsn string) *pgxpool.Pool {
 }
 
 var (
-	crashdOnce   sync.Once
-	crashdPath   string
-	crashdErr    error
-	crashdOutDir string
+	serverOnce   sync.Once
+	serverPath   string
+	serverErr    error
+	serverOutDir string
 )
 
-// buildCrashd compiles test/failure/crashd once per test process.
-func buildCrashd(t *testing.T) string {
+// buildServer compiles the SHIPPED binary once per test process.
+//
+// ./cmd/innsegl, not a purpose-built daemon: the whole value of MCP-011 is
+// that the process it kills is the process a deployment runs, so the windows
+// it lands in are the deployment's windows.
+func buildServer(t *testing.T) string {
 	t.Helper()
-	crashdOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "innsegl-crashd-")
+	serverOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "innsegl-serve-")
 		if err != nil {
-			crashdErr = err
+			serverErr = err
 			return
 		}
-		crashdOutDir = dir
-		out := filepath.Join(dir, "crashd")
+		serverOutDir = dir
+		out := filepath.Join(dir, "innsegl")
 		wd, err := os.Getwd()
 		if err != nil {
-			crashdErr = err
+			serverErr = err
 			return
 		}
 		root := filepath.Dir(filepath.Dir(wd))
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "go", "build", "-o", out, "./test/failure/crashd")
+		cmd := exec.CommandContext(ctx, "go", "build", "-o", out, "./cmd/innsegl")
 		cmd.Dir = root
 		if b, err := cmd.CombinedOutput(); err != nil {
-			crashdErr = fmt.Errorf("build crashd: %w: %s", err, b)
+			serverErr = fmt.Errorf("build ./cmd/innsegl: %w: %s", err, b)
 			return
 		}
-		crashdPath = out
+		serverPath = out
 	})
-	if crashdErr != nil {
-		t.Fatalf("MCP-011 needs a process to kill: %v", crashdErr)
+	if serverErr != nil {
+		t.Fatalf("MCP-011 needs a process to kill: %v", serverErr)
 	}
 	t.Cleanup(func() {
 		// Left until the process exits: every campaign in this binary shares it.
 	})
-	return crashdPath
+	return serverPath
 }
 
 // writeAdminPEMs mints the admin SVID and puts it where a subprocess can read
-// it. In a deployment the MCP is an attested workload and holds no files; the
-// harness note in crashd/main.go says so.
+// it. In a deployment the MCP is an attested workload and holds no files and
+// takes none of the three flags below; the note at the head of this file says so.
 func (c *campaign) writeAdminPEMs(t *testing.T) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -511,7 +538,7 @@ func (c *campaign) writeAdminPEMs(t *testing.T) string {
 
 	out, err := c.stack.spireLocal(ctx, "x509", "mint", "-spiffeID", failureAdminID, "-ttl", "2h")
 	if err != nil {
-		t.Fatalf("mint the admin SVID for crashd: %v", err)
+		t.Fatalf("mint the admin SVID for the server: %v", err)
 	}
 	svidPEM, keyPEM, rootsPEM, err := parseMint(out)
 	if err != nil {
@@ -562,30 +589,50 @@ func (b *lockedBuffer) String() string {
 	return string(b.buf)
 }
 
-// start launches one crashd and waits for it to publish its address.
+// start launches one `innsegl serve` and waits for it to publish its address.
 func (c *campaign) start(t *testing.T) *daemon {
+	t.Helper()
+	return c.startWith(t)
+}
+
+// startWith launches one `innsegl serve` with extra flags appended, so a case
+// that needs a different configuration — RM-068's metered register_agent, for
+// one — starts the same binary the same way rather than duplicating this.
+func (c *campaign) startWith(t *testing.T, extra ...string) *daemon {
 	t.Helper()
 	addrFile := filepath.Join(c.workDir, c.name("addr"))
 
 	// context.Background rather than the test's: CommandContext kills the
 	// child when the context ends, and the ONE thing that may kill this child
 	// is the SIGKILL below, whose wait status the harness then reads back.
-	cmd := exec.CommandContext(context.Background(), c.binary,
+	cmd := exec.CommandContext(context.Background(), c.binary, "serve",
 		"-dsn", c.dsn,
-		"-spire-addr", c.stack.socatAddr,
+		"-spire-address", c.stack.socatAddr,
 		"-trust-domain", failureTrustDomain,
-		"-server-id", failureServerID,
+		"-spire-server-id", failureServerID,
 		"-parent-id", c.stack.parentID,
 		"-svid", filepath.Join(c.pemDir, "svid.pem"),
 		"-key", filepath.Join(c.pemDir, "key.pem"),
 		"-bundle", filepath.Join(c.pemDir, "bundle.pem"),
+		"-listen", "127.0.0.1:0",
+		"-health-listen", "127.0.0.1:0",
 		"-addr-file", addrFile,
-		"-lease", crashLease.String(),
+		"-idempotency-lease", crashLease.String(),
+		// Required configuration that this campaign does not exercise: they
+		// are read only by /readyz, which nothing here calls. A closed port is
+		// the honest value — there is no Sigstore in this stack, and pointing
+		// them at a real one would be the only untrue thing in this command.
+		"-fulcio-url", "http://127.0.0.1:1",
+		"-rekor-url", "http://127.0.0.1:1",
+		// register_agent floods are MCP-013's subject, not this campaign's;
+		// an unmetered tool is what the crash windows are measured against.
+		"-register-rate-calls", "0",
 	)
+	cmd.Args = append(cmd.Args, extra...)
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting crashd: %v", err)
+		t.Fatalf("starting `innsegl serve`: %v", err)
 	}
 	d := &daemon{cmd: cmd, stderr: stderr}
 	t.Cleanup(func() { d.reap() })
@@ -598,16 +645,16 @@ func (c *campaign) start(t *testing.T) *daemon {
 			return d
 		}
 		if cmd.ProcessState != nil {
-			t.Fatalf("crashd exited before it served: %s", stderr.String())
+			t.Fatalf("`innsegl serve` exited before it served: %s", stderr.String())
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("crashd never published its address; stderr:\n%s", stderr.String())
+			t.Fatalf("`innsegl serve` never published its address; stderr:\n%s", stderr.String())
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
 }
 
-// connect opens an MCP session over the transport crashd is serving.
+// connect opens an MCP session over the transport the server is serving.
 func (c *campaign) connect(t *testing.T, d *daemon, endpoint string) *sdk.ClientSession {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -615,7 +662,7 @@ func (c *campaign) connect(t *testing.T, d *daemon, endpoint string) *sdk.Client
 	client := sdk.NewClient(&sdk.Implementation{Name: "innsegl-mcp-011", Version: "v0"}, nil)
 	session, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: "http://" + endpoint}, nil)
 	if err != nil {
-		t.Fatalf("connecting to crashd at %s: %v\ncrashd stderr:\n%s", endpoint, err, d.stderr.String())
+		t.Fatalf("connecting to `innsegl serve` at %s: %v\nserver stderr:\n%s", endpoint, err, d.stderr.String())
 	}
 	d.session = session
 	return session
@@ -640,16 +687,16 @@ func (d *daemon) kill(t *testing.T) {
 
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
-		t.Fatalf("crashd exited with %v, not by a signal; MCP-011 is about a process the "+
+		t.Fatalf("`innsegl serve` exited with %v, not by a signal; MCP-011 is about a process the "+
 			"operating system removed, and this one left on its own. stderr:\n%s",
 			err, d.stderr.String())
 	}
 	status, ok := exitErr.Sys().(syscall.WaitStatus)
 	if !ok {
-		t.Fatalf("no wait status for crashd: %T", exitErr.Sys())
+		t.Fatalf("no wait status for `innsegl serve`: %T", exitErr.Sys())
 	}
 	if !status.Signaled() || status.Signal() != syscall.SIGKILL {
-		t.Fatalf("crashd exited with %v; MCP-011 requires SIGKILL. stderr:\n%s",
+		t.Fatalf("`innsegl serve` exited with %v; MCP-011 requires SIGKILL. stderr:\n%s",
 			exitErr.ProcessState, d.stderr.String())
 	}
 }
@@ -663,12 +710,12 @@ func (d *daemon) reap() {
 	}
 	d.dead = true
 	if err := d.cmd.Process.Kill(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: killing crashd: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: killing the server: %v\n", err)
 		return
 	}
 	var exitErr *exec.ExitError
 	if err := d.cmd.Wait(); err != nil && !errors.As(err, &exitErr) {
-		fmt.Fprintf(os.Stderr, "warning: reaping crashd: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: reaping the server: %v\n", err)
 	}
 }
 

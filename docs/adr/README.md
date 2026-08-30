@@ -50,6 +50,9 @@ maintainer ask "why is it like this?"
 | [0025](0025-rate-limit-register-agent-per-asserted-caller-and-alert-out-of-band.md) | Rate-limit `register_agent` per asserted caller, meter it on the ledger appender, and raise the trip out of band | accepted | 2026-08-29 |
 | [0026](0026-mcp-006-is-reachability-through-the-shipped-tool-and-an-unreachable-cell-is-a-finding.md) | Read MCP-006 as reachability through the shipped tool, and record an unreachable cell as a finding rather than manufacturing a path to it | accepted | 2026-08-29 |
 | [0027](0027-crash-mcp-011-by-sigkilling-a-purpose-built-server-and-hold-the-narrow-windows-open.md) | Crash MCP-011 by SIGKILLing a purpose-built MCP process, fuzz the kill timing against a measured call, and hold the two narrowest windows open rather than chase them | accepted | 2026-08-29 |
+| [0028](0028-place-commit-trailers-in-process-and-refuse-the-messages-git-places-ambiguously.md) | Place commit trailers in process, refuse the messages git places ambiguously, and read I6 as "never emit `Co-authored-by:` at all" | accepted | 2026-08-30 |
+| [0029](0029-compose-self-hosted-sigstore-as-its-own-project-joined-to-spires-oidc-network.md) | Compose self-hosted Sigstore as its own project joined to SPIRE's OIDC network, give the log a key that survives a restart, and issue no SCT | accepted | 2026-08-30 |
+| [0030](0030-ship-the-mcp-entry-point-and-read-a-run-out-of-the-chain.md) | Ship the MCP entry point, read a run out of the chain in its own package, and make the earliest `run_retired` the answer | accepted | 2026-08-30 |
 
 ## Open items
 
@@ -167,3 +170,30 @@ maintainer ask "why is it like this?"
   proves each class renderable over the transport and RM-028's proves each one
   reachable through a shipped tool, and the two readings currently collide on
   one line.
+- **ADR-0029** leaves one spec edit for the human, and it is the second half of
+  an edit ADR-0010 already named. Doc 05 §1's `fulcio` row still reads "Compose
+  default is the **local** stack so CI needs no network; the *installed product*
+  default is public Sigstore per ADR-0002 — the compose README states this
+  asymmetry explicitly." ADR-0010 removed that asymmetry, so the row instructs
+  the compose README to state something untrue;
+  `deploy/compose/sigstore/README.md` states the current position and names the
+  row as stale instead. Doc 05 §3's `oidc.innsegl.dev` row is the same edit's
+  other half — ADR-0010 decision 1 already decided it is not built. Separately,
+  and inside the repository rather than the specs,
+  `deploy/compose/spire.yml` still defaults `INNSEGL_SPIRE_JWT_ISSUER` to
+  `https://oidc.innsegl.dev`: every path the project actually uses needs
+  `http://spire-oidc:8080`, which is why `make sigstore-up` sets it for both
+  compose files and `sigstore.yml` refuses to start without it. Changing that
+  default is RM-014's file.
+- **ADR-0030** leaves three things for the human and resolves none of them.
+  `run_expired` does not set `CredentialRun.RetiredAt`, so a run the reaper
+  expired reads as live to the run directory and is refused one layer down as
+  `RUN_NOT_FOUND` rather than `RUN_ALREADY_RETIRED`; whether an expired run
+  should be reported as retired is a question about IP §4's vocabulary and
+  doc 02 §3's two terminal events. Doc 07 has no test-catalog ID for the entry
+  point, so "the server starts and answers a real call end to end" and "the
+  served `register_agent` is metered" are unnumbered — the fourth and fifth
+  such cases since ADR-0018 proposed MCP-017. And the register_agent rate limit
+  is now ON in the shipped entry point, which makes ADR-0025's follow-up 1 — a
+  twelfth error class, or a `retry_after` on IP §4's error object — a live cost
+  rather than a hypothetical one.

@@ -58,6 +58,10 @@ LINE_FLOORS=(
   "internal/event 95"
   "internal/segment 88"
   "internal/spire 85"
+  # New in E5. Both landed at 100%; floored below that so ordinary
+  # refactoring does not trip them, but a silent regression does.
+  "internal/signing 95"
+  "internal/rundir 95"
 )
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

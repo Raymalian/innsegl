@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fulcio issuer configuration — reference compose stack (doc 05 §1, RM-030 #38).
+#
+# THIS FILE IS A TEMPLATE. sigstore/bootstrap.sh substitutes
+# ${INNSEGL_SPIRE_JWT_ISSUER} and writes the result to the fulcio PKI volume as
+# config.yaml, which is what `--config-path` reads. Fulcio has no environment
+# expansion of its own — unlike SPIRE, which takes `-expandEnv` — and the
+# issuer is the one value that MUST be identical in three places or nothing
+# works. Rendering it from the same variable spire.yml already uses is how the
+# three are kept from drifting. Everything else below is a literal.
+#
+# WHAT THIS CONFIGURATION IS FOR
+# ------------------------------
+# Doc 01 §1 component 3: JWT-SVID (audience-bound to Sigstore) →
+# SIGSTORE_ID_TOKEN → Fulcio short-lived cert → signed commit → Rekor. This
+# file is the half of that chain Fulcio owns: which issuer it will believe, and
+# what it does with a token from it.
+#
+# ADR-0010 is why the issuer is ours. Public-good Fulcio's allowlist contains
+# no issuer of type `spiffe` at all, the SPIFFE federation process was closed
+# `not_planned`, and the machinery that implemented it was deleted in 2024. A
+# project-operated SPIRE trust domain cannot be onboarded there. `type: spiffe`
+# is still fully supported in Fulcio's *code* — this file is that code path,
+# used exactly as released upstream (doc 01 §7: "configuration and
+# orchestration only").
+#
+# WHAT EACH KEY DOES, AND WHAT BREAKS IF IT IS WRONG
+# --------------------------------------------------
+# issuer-url            must equal the `iss` claim on the JWT-SVID and the
+#                       `issuer` in the discovery document spire-oidc serves.
+#                       Fulcio fetches <issuer-url>/.well-known/openid-
+#                       configuration and then the JWKS it names. A mismatch
+#                       is `invalid identity token`, with no hint which of the
+#                       three values moved.
+#
+# client-id             the audience Fulcio requires. `sigstore` is the value
+#                       every Sigstore client uses and the one the JWT-SVID
+#                       must be minted for: `spire-agent api fetch jwt
+#                       -audience sigstore`. A JWT-SVID is audience-bound by
+#                       construction, which is what stops a token minted for
+#                       one purpose being replayed at the CA.
+#
+# type: spiffe          selects pkg/identity/spiffe: the certificate's subject
+#                       becomes a URI SAN carrying the SPIFFE ID verbatim, and
+#                       the challenge claim is `sub`. That URI SAN is the whole
+#                       of I1 and half of I5 — it is what makes a commit
+#                       attributable to one agent run rather than to a machine
+#                       or a workflow.
+#
+# spiffe-trust-domain   Fulcio rejects any token whose subject is not a SPIFFE
+#                       ID in this trust domain. A PROTECTED STRING (doc 01 §1,
+#                       VERSIONING.md): `innsegl.dev` is the root of every
+#                       SPIFFE ID this system mints, it is a literal in
+#                       spire/server.conf and spire/agent.conf for the same
+#                       reason, and it is a literal here. A deployment that can
+#                       be pointed at another trust domain by an environment
+#                       variable is a deployment where attribution can be
+#                       silently re-rooted.
+#
+# WHAT IS DELIBERATELY ABSENT
+# ---------------------------
+# meta-issuers. Fulcio refuses SPIFFE meta issuers outright — "SPIFFE meta
+# issuers not supported", pkg/config/config.go — because a wildcard would
+# establish a many-to-one relationship between issuers and trust domains.
+# Nothing here wants one.
+#
+# The public-Sigstore issuers. Doc 01 §7 requires both deployments be supported
+# by configuration and ADR-0010 keeps the public path a tested switch; but that
+# switch selects a *different Fulcio* — the public good instance, with its own
+# allowlist — not a second issuer in this file. There is nothing to add here
+# for it.
+
+oidc-issuers:
+  "${INNSEGL_SPIRE_JWT_ISSUER}":
+    issuer-url: "${INNSEGL_SPIRE_JWT_ISSUER}"
+    client-id: sigstore
+    type: spiffe
+    spiffe-trust-domain: innsegl.dev
+    description: "Innsegl SPIRE OIDC discovery provider (self-hosted; ADR-0010)"
