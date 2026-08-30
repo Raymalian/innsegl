@@ -72,6 +72,7 @@ const (
 // would be a second thing to get out of step in a deployment.
 const (
 	envExpireAfter = "INNSEGL_RECONCILE_EXPIRE_AFTER"
+	envDriftWindow = "INNSEGL_DRIFT_WINDOW"
 	envInterval    = "INNSEGL_RECONCILE_INTERVAL"
 )
 
@@ -82,6 +83,7 @@ type reconcileOptions struct {
 	workspace   string
 	trustDomain string
 	expireAfter time.Duration
+	driftWindow int64
 	interval    time.Duration
 	once        bool
 }
@@ -142,6 +144,10 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 			"how long a dangling commit_intent is left alone before it is expired ($"+envExpireAfter+")")
 		interval = fs.Duration("interval", envDuration(envInterval, reconciler.DefaultInterval),
 			"time between cycles; ignored with -once ($"+envInterval+")")
+		driftWindow = fs.Int64("drift-window",
+			int64(envInt(envDriftWindow, reconciler.DefaultSweepWindow)),
+			"how many of the log's most recent entries each cycle cross-checks "+
+				"against the chain; 0 turns drift detection off ($"+envDriftWindow+")")
 		once   = fs.Bool("once", false, "run one cycle and exit, for a scheduled job")
 		asJSON = fs.Bool("json", false, "write each cycle's report as JSON")
 		quiet  = fs.Bool("quiet", false,
@@ -209,7 +215,8 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 	opts := reconcileOptions{
 		dsn: *dsn, rekorURL: *rekorURL, workspace: *workspace,
 		trustDomain: *trustDomain, expireAfter: *expireAfter,
-		interval: *interval, once: *once,
+		driftWindow: *driftWindow,
+		interval:    *interval, once: *once,
 	}
 
 	engine, closeAll, err := deps.opener()(ctx, opts)
@@ -384,10 +391,20 @@ func openReconciler(ctx context.Context, opts reconcileOptions) (cycler, func(),
 		closeAll()
 		return nil, nil, err
 	}
-	engine, err := reconciler.New(reconciler.Config{
+	// Drift detection is IP §6.5's third job and IP §6.10's proof: the Rekor
+	// cross-check that makes a compromised MCP detectable. RM-036 (#44) built
+	// it and left it optional; a reconciler that does not run it is not doing
+	// the job doc 05 §2 lists it for, so it is ON here and -drift-window 0 is
+	// the deliberate way off. Result.Drift.Enabled reports which on every
+	// cycle, so a deployment cannot believe it is watching when it is not.
+	cfg := reconciler.Config{
 		Ledger: store, Appender: store, Repos: repos, Log: log,
 		TrustDomain: opts.trustDomain, ExpireAfter: opts.expireAfter,
-	})
+	}
+	if opts.driftWindow > 0 {
+		cfg.Drift = &reconciler.DriftConfig{Sweep: log, Window: opts.driftWindow}
+	}
+	engine, err := reconciler.New(cfg)
 	if err != nil {
 		closeAll()
 		return nil, nil, err

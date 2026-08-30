@@ -1,0 +1,17 @@
+{
+  "test_id": "GH-001",
+  "invariant": "I6",
+  "status": "never-run",
+  "last_run": null,
+  "rerun_after_days": 90,
+  "scratch_repo": "",
+  "author_email": "",
+  "pushed_commits": [],
+  "propagation_wait": "",
+  "contributors_before": [],
+  "contributors_after": [],
+  "anonymous_contributors_after": [],
+  "commit_author_field": "",
+  "github_verified_badge": "",
+  "note": "GH-001 has never been run. I6's empirical half is UNPROVEN: nothing in this repository has yet observed GitHub's contributor behaviour for a commit authored by an unlinked address. Running it needs a scratch GitHub repository and a credential that can push to it; TestGH001NoContributorAppearsForAnUnlinkedAuthor names the environment variables and refuses to run without them. This file is rewritten by that test on a successful run, and TestGH001TheRecordedRunDateIsHonest fails once the recorded run is older than rerun_after_days."
+}

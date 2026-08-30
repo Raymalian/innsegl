@@ -313,6 +313,10 @@ type Result struct {
 	// Appended is the event_id of each event this cycle wrote. EMPTY on a
 	// cycle over already-reconciled state — that is REC-005 as an observable.
 	Appended []string
+	// Drift is the cross-check of the chain against the transparency log, in
+	// both directions (RM-036, #44). Zero — and `Enabled` false — when no
+	// `Config.Drift` was given.
+	Drift DriftResult
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +347,12 @@ type Config struct {
 	// Alert receives every finding that needs a human: an unresolved intent,
 	// an ambiguous one. Defaults to an error-level slog line.
 	Alert func(context.Context, Finding)
+	// Drift turns on IP §6.5's third job and IP §6.10's proof — the Rekor
+	// cross-check that makes a compromised MCP detectable (RM-036, #44,
+	// REC-003/REC-004). Nil leaves it OFF, and `Result.Drift.Enabled` says so
+	// on every cycle rather than letting a deployment believe a reconciler
+	// without it is watching for drift. See drift.go.
+	Drift *DriftConfig
 	// Observe receives every cycle Run performs, including a failed one.
 	Observe func(Result, error)
 }
@@ -383,6 +393,10 @@ func New(cfg Config) (*Reconciler, error) {
 		return fail("no transparency log: every expiry would be a negative nobody established (IP §6.5)")
 	case cfg.TrustDomain == "":
 		return fail("no trust domain: IP §6.5 scopes the repair to certificates bearing ours")
+	}
+	// RM-036: drift detection is optional, but a half-configured one is not.
+	if err := cfg.Drift.validate(); err != nil {
+		return nil, err
 	}
 	if cfg.Alert == nil {
 		cfg.Alert = defaultAlert
@@ -455,6 +469,15 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 		case OutcomeOpen:
 		}
 	}
+
+	// RM-036 (#44): the third thing IP §6.5 asks of a reconciler, and IP
+	// §6.10's demonstration that a fully compromised MCP still cannot forge
+	// attribution. It runs AFTER the repairs so that a `commit_recorded` this
+	// same cycle wrote is already on the chain when the log side asks who
+	// claimed the entry — otherwise a repair and an "unattributed signature"
+	// alert would be raised about the same entry in the same cycle.
+	result.Drift = r.detectDrift(ctx, view)
+	result.Appended = append(result.Appended, result.Drift.Appended...)
 	return result, nil
 }
 
@@ -689,11 +712,14 @@ type ledgerView struct {
 	byID  map[string]openIntent
 	// open is byID in chain order, computed by close().
 	open []openIntent
+	// drift is RM-036's fold of the same walk: the chain-derived state its
+	// two cross-checks dedupe against (drift.go). One walk, two readers.
+	drift *driftView
 }
 
 // readLedger walks the chain in bounded batches and reduces it to a view.
 func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
-	view := &ledgerView{byID: map[string]openIntent{}}
+	view := &ledgerView{byID: map[string]openIntent{}, drift: newDriftView()}
 	n, err := r.cfg.Ledger.Count(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reconciler: counting the chain: %w", err)
@@ -721,6 +747,7 @@ func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
 // Refusing to reconcile because one event was unreadable would turn a
 // forward-compatibility case into an outage of the repair.
 func (v *ledgerView) observe(record event.Fields) {
+	v.drift.observe(record) // RM-036 (#44) folds the same record; see drift.go.
 	switch recordString(record, event.FieldEventType) {
 	case event.EventTypeCommitIntent:
 		v.intents++
@@ -798,13 +825,17 @@ func defaultObserve(result Result, err error) {
 	switch {
 	case err != nil:
 		slog.Error("signing intent reconciliation cycle failed", "error", err)
-	case result.Repaired > 0 || result.Expired > 0 || result.Unresolved > 0 || result.Ambiguous > 0:
+	case result.Repaired > 0 || result.Expired > 0 || result.Unresolved > 0 ||
+		result.Ambiguous > 0 || result.Drift.Unattributed > 0 || result.Drift.Fabricated > 0:
 		slog.Warn("signing intent reconciliation acted",
 			"intents", result.Intents, "open", result.Open,
 			"repaired", result.Repaired, "expired", result.Expired,
-			"unresolved", result.Unresolved, "ambiguous", result.Ambiguous)
+			"unresolved", result.Unresolved, "ambiguous", result.Ambiguous,
+			"unattributed_signatures", result.Drift.Unattributed,
+			"fabricated_records", result.Drift.Fabricated)
 	default:
 		slog.Debug("every signing intent is accounted for",
-			"intents", result.Intents, "open", result.Open)
+			"intents", result.Intents, "open", result.Open,
+			"drift_detection", result.Drift.Enabled)
 	}
 }

@@ -57,7 +57,10 @@ const (
 var (
 	sharedStack *stack
 	stackSkip   string
-	nameSeq     atomic.Int64
+	// stackFailure is set when Docker and gitsign are both present and the
+	// stack still did not come up. It is a failure, never a skip.
+	stackFailure string
+	nameSeq      atomic.Int64
 )
 
 type stack struct {
@@ -89,17 +92,47 @@ func docker(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// errDependencyAbsent marks the only two conditions under which skipping
+// TC-VER's integration cases is honest: there is no Docker daemon, or there is
+// no gitsign binary. On a developer's machine either is a legitimate reason
+// not to run them.
+//
+// Everything else that can go wrong while standing the stack up — a compose
+// network that cannot be created, a port that cannot be bound, a container
+// that never becomes healthy — is a FAILURE, and this distinction is the
+// point. A stack that failed to start on a machine that has Docker is an
+// infrastructure fault, and reporting it as a skip converts it into a
+// pass-shaped outcome: `go test` exits zero, the package reports ok, and
+// VER-001, VER-002, VER-003 and VER-006 did not run. That happened in CI —
+// five cases skipped on a runner where the "Require Docker" step had already
+// passed and every other package's stack came up. Only scripts/test-no-skips.sh
+// caught it, and a gate outside the test is the wrong place for a test to be
+// caught. IP §2 is explicit that a mocked Fulcio proves nothing about I5; a
+// Fulcio that never started proves exactly as little.
+var errDependencyAbsent = errors.New("a required dependency is absent")
+
 func dockerUsable(ctx context.Context) error {
 	if os.Getenv("INNSEGL_TEST_NO_DOCKER") != "" {
-		return errors.New("INNSEGL_TEST_NO_DOCKER is set")
+		return fmt.Errorf("INNSEGL_TEST_NO_DOCKER is set: %w", errDependencyAbsent)
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker is not on PATH: %w", err)
+		return fmt.Errorf("docker is not on PATH: %w: %w", err, errDependencyAbsent)
 	}
 	if _, err := docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
-		return fmt.Errorf("no reachable docker daemon: %w", err)
+		return fmt.Errorf("no reachable docker daemon: %w: %w", err, errDependencyAbsent)
 	}
 	return nil
+}
+
+// oneLine collapses a multi-line subprocess error into a single line.
+//
+// `docker compose` reports progress on stderr, so a failure arrives as several
+// lines of which only the last usually names the cause. Go's test JSON stream
+// emits each line as its own event, and the CI failure that prompted this read
+// "Network innsegl-verifytest-40427-spire-admin  Creating" — compose's first
+// progress line, with the actual error on a line the summary never showed.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func freeHostPort(ctx context.Context) (string, error) {
@@ -118,7 +151,7 @@ func freeHostPort(ctx context.Context) (string, error) {
 func findGitsign(ctx context.Context) (string, error) {
 	if p := os.Getenv("INNSEGL_GITSIGN"); p != "" {
 		if _, err := os.Stat(p); err != nil {
-			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w", p, err)
+			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w: %w", p, err, errDependencyAbsent)
 		}
 		return p, nil
 	}
@@ -133,7 +166,8 @@ func findGitsign(ctx context.Context) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no gitsign binary; install the pinned release with "+
-		"`go install github.com/sigstore/gitsign@%s` or set INNSEGL_GITSIGN", harnessGitsignVer)
+		"`go install github.com/sigstore/gitsign@%s` or set INNSEGL_GITSIGN: %w",
+		harnessGitsignVer, errDependencyAbsent)
 }
 
 func (s *stack) compose(ctx context.Context, files []string, args ...string) (string, error) {
@@ -149,7 +183,7 @@ func (s *stack) compose(ctx context.Context, files []string, args ...string) (st
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(full, " "), err, strings.TrimSpace(stderr.String()))
+			strings.Join(full, " "), err, oneLine(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -417,7 +451,13 @@ func TestMain(m *testing.M) {
 		stackSkip = err.Error()
 	default:
 		if s, serr := startStack(ctx, root); serr != nil {
-			stackSkip = serr.Error()
+			// The two outcomes are not the same thing, and were treated as the
+			// same thing until CI proved the difference. See errDependencyAbsent.
+			if errors.Is(serr, errDependencyAbsent) {
+				stackSkip = serr.Error()
+			} else {
+				stackFailure = serr.Error()
+			}
 			if s != nil {
 				s.stop()
 			}
@@ -436,6 +476,13 @@ func TestMain(m *testing.M) {
 
 func requireStack(t *testing.T) *stack {
 	t.Helper()
+	if stackFailure != "" {
+		t.Fatalf("the SPIRE + Sigstore stack did not come up, and Docker and gitsign "+
+			"are both present: %s\n\nThis is a failure and not a skip. TC-VER's "+
+			"integration cases are what demonstrate I5; reporting an infrastructure "+
+			"fault as a skip exits zero and reports ok while VER-001, VER-002, "+
+			"VER-003 and VER-006 did not run.", stackFailure)
+	}
 	if sharedStack == nil {
 		t.Skipf("skipping: no real SPIRE + Sigstore from deploy/compose/ and no gitsign (%s). "+
 			"TC-VER's integration cases prove nothing about I5 against a mock — IP §2, "+
