@@ -38,9 +38,12 @@ var commands = map[string]command{
 		summary: "run the innsegl MCP server",
 		exec:    serveCommand,
 	},
+	// The reconciler is IP §6.5's required background component: it expires
+	// dangling signing intents and repairs the records a crash between Phase B
+	// and Phase C lost. doc 05 §2 runs it single-active, from this binary.
 	"reconcile": {
 		summary: "reconcile signing intents against the transparency log",
-		exec:    notImplemented("reconcile"),
+		exec:    reconcileCommand,
 	},
 	"seal": {
 		summary: "seal ledger segments and anchor them in the transparency log",
@@ -55,7 +58,7 @@ var commands = map[string]command{
 	},
 	"verify": {
 		summary: "verify a commit's attribution without access to the ledger",
-		exec:    notImplemented("verify"),
+		exec:    verifyCommand,
 	},
 	// The canary is the sixth: doc 05 §2 requires the SEG-005 deletion check
 	// to run "as a scheduled job in production, not only at deploy", and a

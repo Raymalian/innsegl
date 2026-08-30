@@ -56,6 +56,8 @@ maintainer ask "why is it like this?"
 | [0031](0031-orchestrate-released-gitsign-through-git-commit-and-configure-around-the-absent-ct-log.md) | Orchestrate released gitsign through `git commit`, build its environment from nothing, and configure around the absent CT log | accepted | 2026-08-30 |
 | [0032](0032-inject-a-sigstore-outage-by-stopping-the-shipped-container-and-assert-the-absence-of-a-commit-against-the-object-database.md) | Inject a Sigstore outage by stopping the shipped container, inject slowness by delaying a real one, and assert the absence of a commit against the object database | accepted | 2026-08-30 |
 | [0033](0033-append-the-intent-before-the-credential-is-spent-and-derive-a-ledger-key-per-phase.md) | Order `sign_commit` so nothing that can fail cheaply happens after Phase A, and give each phase its own derived ledger key | accepted | 2026-08-30 |
+| [0034](0034-verify-against-the-logs-record-of-the-commit-sha-and-evaluate-the-certificate-at-its-signed-integration-time.md) | Verify against the log's record of the commit SHA, and evaluate the certificate at the log's signed integration time | accepted | 2026-08-30 |
+| [0035](0035-drive-the-repair-from-the-intent-and-record-an-expiry-only-on-an-answer.md) | Drive the reconciler's repair from the intent rather than from the log, and record an expiry only on an answer | accepted | 2026-08-30 |
 
 ## Open items
 
@@ -246,3 +248,32 @@ maintainer ask "why is it like this?"
   `deploy/compose/spire/register.sh` still hardcodes one container name and one
   project; parameterising it is `deploy/`'s to do and every suite that needs
   Fulcio pays for its absence again.
+- **ADR-0034** leaves five, and the first is the one to act on. The verifier
+  FETCHES Fulcio's root and Rekor's log key from the URLs it is given, because
+  that is what a stranger has, which means `innsegl verify` pointed at an
+  endpoint an attacker controls proves nothing; pinning them (`--rekor-key`,
+  `--fulcio-root`, with the fetch as a named fallback) is the next serious step
+  for that package and it was not invented quietly here. A second CMS
+  certificate reader now exists, in a package that may not import the first —
+  threat model §5.4's concern, doubled. Doc 07 has no ID for the signed entry
+  timestamp, which is what makes VER-004's and VER-005's "moment" trustworthy;
+  proposed **VER-007**. `scripts/coverage-floors.sh` has no line floor for
+  `internal/verify` (the branch floor does apply); the entry to add is
+  `"internal/verify 95"`, and `scripts/` is not RM-037's to change. And
+  `register.sh` has now been reimplemented a FOURTH time, and
+  `sigstore-testscope.yml` is now referenced by a second suite from inside
+  `internal/signing/testdata/` — both are the same unowned `deploy/` work
+  ADR-0031 and ADR-0032 already asked for.
+- **ADR-0035** leaves three, and the first is a defect in shipped code. The run
+  directory (`internal/rundir`) uses `task_ref` VERBATIM as the SPIFFE ID's
+  `{task_id}`, and doc 02 §5 makes `{task_id}` lowercase — so doc 02's own
+  golden fixture 01, whose `task_ref` is `"JIRA-118"` and whose SPIFFE ID holds
+  `jira-118`, would be refused by the shipped directory as an identity that
+  "does not name run … of task …". `internal/mcp`'s SIG-001 harness lowercases
+  it and the shipped directory does not; RM-035's integration case uses an
+  already-lowercase `task_ref` and says so rather than papering over it. It is
+  RM-068's (#89) to answer. Doc 07 has no ID for the property that keeps an
+  expiry honest — that a Rekor outage produces no `commit_intent_expired` —
+  proposed **REC-006**. And IP §6.5 does not say what to do when two signed
+  commits claim one intent; the reconciler refuses and alerts, and superseding
+  one with the other is a schema question and a human's.
