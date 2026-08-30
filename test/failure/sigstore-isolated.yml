@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Compose overlay: the shipped Sigstore stack, scoped to one test process, for
+# failure injection (RM-034, #42)
+#
+# Applied on top of deploy/compose/sigstore.yml, never instead of it. The
+# harness in sigstoreharness_test.go invokes it as:
+#
+#   INNSEGL_SIGSTORE_TEST_STACK=innsegl-sigfail-<pid> \
+#   INNSEGL_SIGSTORE_OIDC_NETWORK=innsegl-sigfail-<pid>-oidc-frontend \
+#   INNSEGL_SPIRE_JWT_ISSUER=http://spire-oidc:8080 \
+#   docker compose -p "$INNSEGL_SIGSTORE_TEST_STACK" \
+#     -f deploy/compose/sigstore.yml \
+#     -f test/failure/sigstore-isolated.yml up -d
+#
+# WHY A STACK OF ITS OWN
+# ----------------------
+# SIG-002 stops `fulcio` and SIG-003 stops `rekor`. Doing that to the shipped
+# `innsegl-sigstore-fulcio` would fail internal/signing's TC-SIG cases for a
+# reason that has nothing to do with them, destroy a developer's running stack,
+# and make a green SIG-002 depend on which package `go test ./...` scheduled
+# first. That is ADR-0015's decision, verbatim, applied to the second stack
+# this project can now destroy; test/failure/spire-isolated.yml is its
+# SPIRE-shaped twin and carries the measurement that produced it.
+#
+# WHY PER PROCESS AND NOT MERELY PER SUITE
+# ----------------------------------------
+# ADR-0022's reason, unchanged: two concurrent `go test ./...` invocations —
+# routine while scripts/coverage-floors.sh runs beside an ordinary test run —
+# start two copies of THIS binary. sigstore.yml pins `name: innsegl-sigstore`
+# and a fixed container_name per service, so both would select the same Fulcio,
+# and whichever finished first would `compose down --volumes` the CA the other
+# is mid-signature against. Every name here therefore carries the per-process
+# ${INNSEGL_SIGSTORE_TEST_STACK}. Volumes need no help: sigstore.yml declares
+# them without an explicit `name:`, so compose already scopes them to the
+# project.
+#
+# REQUIRED, NOT DEFAULTED. `:?` rather than `:-`, adopting
+# spire-testscope.yml's reasoning verbatim: a default would let a hand-run
+# `docker compose -f ... -f ...` build a stack under a shared name that no test
+# process owns or tears down.
+#
+# WHY THIS FILE IS A NEAR-DUPLICATE OF internal/signing/testdata/sigstore-testscope.yml
+# ------------------------------------------------------------------------------------
+# It is, and the duplication is forced rather than chosen. ADR-0029's "what the
+# project should do next" asked for this overlay beside sigstore.yml, and
+# ADR-0031 recorded the follow-up in terms: "Moving it to
+# deploy/compose/sigstore-testscope.yml is a rename and should happen the
+# moment a second suite needs it — RM-034's failure injection is the likely
+# first." RM-034 is that second suite and does not own `deploy/`, so it brings
+# its own overlay rather than reaching into another package's testdata (which
+# would make this suite break on a file it neither owns nor is told about).
+# When `deploy/compose/sigstore-testscope.yml` exists, BOTH copies should be
+# deleted in the same change.
+#
+# Nothing here changes behaviour. The images and their digests, the flags, the
+# PKI bootstrap, the absent CT log and the six-network segmentation of ADR-0029
+# are inherited unchanged — because a failure-injection case that removed a
+# dependency from a stack assembled differently would prove something about a
+# different system.
+#
+# NOTE WHAT IS *NOT* OVERRIDDEN: the `restart:` policies. spire-isolated.yml
+# has to pin `restart: "no"` on the two containers it SIGKILLs, because
+# spire.yml's `unless-stopped` would restart them within a second and close the
+# outage window before the assertion ran. Here the injection is `docker stop`,
+# and Docker does not restart a container an operator stopped under either
+# `unless-stopped` (fulcio) or `on-failure` (rekor, which exits 0). Leaving the
+# shipped policies in place keeps the restart behaviour under test rather than
+# under the overlay — and the harness asserts the port really refuses
+# connections before any case relies on the outage.
+# ============================================================================
+
+name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}
+
+services:
+  sigstore-bootstrap:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-sigstore-bootstrap
+
+  fulcio:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-fulcio
+
+  rekor:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-rekor
+
+  trillian-log-server:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-trillian-log-server
+
+  # RM-012 FINDING, inherited: this service is not optional. Renaming it rather
+  # than dropping it is deliberate — without it, leaves queue forever, no
+  # inclusion proof ever exists, and gitsign's own Rekor v1 client rejects the
+  # proof-less response. A SIG-003 that "passed" because nothing could ever be
+  # logged would be the purest form of the vacuous pass this suite exists to
+  # avoid.
+  trillian-log-signer:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-trillian-log-signer
+
+  trillian-db:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-trillian-db
+
+  rekor-redis:
+    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-rekor-redis
+
+networks:
+  innsegl-sigstore:
+    name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-sigstore
+  innsegl-sigstore-published:
+    name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-sigstore-published
+  innsegl-rekor-log:
+    name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-rekor-log
+  innsegl-rekor-index:
+    name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-rekor-index
+  innsegl-trillian-db:
+    name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by test/failure/sigstoreharness_test.go to innsegl-sigfail-<pid>; this overlay must never build a stack under a shared name}-trillian-db

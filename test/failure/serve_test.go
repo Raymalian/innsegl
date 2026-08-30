@@ -192,8 +192,11 @@ func TestServeAnswersARealMCPCallEndToEnd(t *testing.T) {
 			t.Errorf("the server does not advertise %s; it advertises %v", want, advertised)
 		}
 	}
-	if slices.Contains(advertised, string(mcp.ToolSignCommit)) {
-		t.Errorf("the server advertises %s, which has no binder (RM-033, #41): %v",
+	// RM-033 (#41) bound the fifth tool, so the surface is now IP §4's five.
+	// This assertion ran the other way until then, and firing was how we learned
+	// the tool had landed.
+	if !slices.Contains(advertised, string(mcp.ToolSignCommit)) {
+		t.Errorf("the server does not advertise %s; it advertises %v",
 			mcp.ToolSignCommit, advertised)
 	}
 	t.Logf("advertised tools: %v", advertised)
@@ -203,12 +206,12 @@ func TestServeAnswersARealMCPCallEndToEnd(t *testing.T) {
 	if code := getJSON(t, "http://"+health+mcp.LivePath, &live); code != http.StatusOK {
 		t.Fatalf("GET %s = %d, want 200", mcp.LivePath, code)
 	}
-	if !slices.Contains(live.MissingTools, string(mcp.ToolSignCommit)) {
-		t.Errorf("%s reports missing_tools=%v; %s has no binder and must be named there "+
-			"(ADR-0024)", mcp.LivePath, live.MissingTools, mcp.ToolSignCommit)
+	if len(live.MissingTools) != 0 {
+		t.Errorf("%s reports missing_tools=%v; every IP §4 tool is bound since RM-033 (#41)",
+			mcp.LivePath, live.MissingTools)
 	}
-	if len(live.BoundTools) != 4 {
-		t.Errorf("%s reports %d bound tools (%v), want the four that exist",
+	if len(live.BoundTools) != 5 {
+		t.Errorf("%s reports %d bound tools (%v), want IP §4's five",
 			mcp.LivePath, len(live.BoundTools), live.BoundTools)
 	}
 
@@ -639,9 +642,11 @@ func TestTheHealthEndpointsThroughTheShippedServer(t *testing.T) {
 	}
 
 	// An incomplete tool surface is reported and never a reason to be unready.
-	if !slices.Contains(ready.MissingTools, string(mcp.ToolSignCommit)) {
-		t.Errorf("%s reports missing_tools=%v, want it to name %s (ADR-0024)",
-			mcp.ReadyPath, ready.MissingTools, mcp.ToolSignCommit)
+	// The surface is complete since RM-033 (#41), so the field must now be empty —
+	// the same assertion, on the other side of the fifth tool landing.
+	if len(ready.MissingTools) != 0 {
+		t.Errorf("%s reports missing_tools=%v, want none; every IP §4 tool is bound (ADR-0024)",
+			mcp.ReadyPath, ready.MissingTools)
 	}
 	t.Logf("%s: ready=%v, dependencies=%+v", mcp.ReadyPath, ready.Ready, ready.Dependencies)
 
