@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -278,6 +279,65 @@ func TestAnUnclaimedCommitIsUnattributedAndAnUnprovenClaimIsFailed(t *testing.T)
 			t.Fatalf("verdict %q on a commit claiming an identity nothing proves", p.Verdict)
 		}
 	})
+}
+
+// The proof path has no database to reach, and that is structural rather than
+// a matter of discipline.
+//
+// The package as a whole DOES hold a connection pool — it is a query API, that
+// is its job — so the assertion is scoped to the Prover, which is what answers
+// verification questions. IP §6.11: the public page "never downgrades to
+// database-only 'trust us' answers". A Prover that COULD read the ledger is
+// one field access away from doing so; this requires the field not to exist.
+//
+// The companion measurement is API-006, which puts a commit_recorded for the
+// commit under test into the ledger, takes both upstreams away, and requires
+// the answer to still be "unavailable".
+func TestTheProverHoldsNothingThatCanReachADatabase(t *testing.T) {
+	forbidden := map[string]string{
+		"*api.Store":    "this package's own read-only store",
+		"*pgxpool.Pool": "a Postgres pool",
+		"*pgx.Conn":     "a Postgres connection",
+		"api.conn":      "this package's database interface",
+		"*ledger.Store": "the ledger",
+		"sql.DB":        "the standard library's connection manager",
+	}
+	seen := map[reflect.Type]bool{}
+	var walk func(t reflect.Type, depth int, path string)
+	var found []string
+	walk = func(rt reflect.Type, depth int, path string) {
+		if rt == nil || depth > 4 || seen[rt] {
+			return
+		}
+		seen[rt] = true
+		if what, bad := forbidden[rt.String()]; bad {
+			found = append(found, path+" is "+rt.String()+" ("+what+")")
+			return
+		}
+		switch rt.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Array:
+			walk(rt.Elem(), depth+1, path+"->"+rt.Elem().String())
+		case reflect.Map:
+			walk(rt.Key(), depth+1, path+"[key]")
+			walk(rt.Elem(), depth+1, path+"[value]")
+		case reflect.Struct:
+			for i := range rt.NumField() {
+				f := rt.Field(i)
+				walk(f.Type, depth+1, path+"."+f.Name)
+			}
+		default:
+		}
+	}
+	walk(reflect.TypeOf(Prover{}), 0, "Prover")
+	if len(found) != 0 {
+		t.Fatalf("the proof BFF holds something that can reach a database:\n  %s\n\n"+
+			"IP §6.11 forbids a database-only verdict; the surest way not to give "+
+			"one is to be structurally incapable of it.", strings.Join(found, "\n  "))
+	}
+	if len(seen) < 5 {
+		t.Fatalf("the walk visited %d types, which is too few to have inspected "+
+			"anything; the assertion above would pass vacuously", len(seen))
+	}
 }
 
 // A repository this deployment does not serve is not found, not empty.
