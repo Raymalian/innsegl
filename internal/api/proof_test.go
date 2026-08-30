@@ -4,7 +4,10 @@ package api
 
 import (
 	"context"
-	"crypto/sha1" //nolint:gosec // git's object id is SHA-1; this recomputes it, it does not choose it
+	// SHA-1 is git's object name, not a choice made here; gosec's warning about
+	// it is answered by the fact that this recomputes an identifier git already
+	// assigned.
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -29,7 +32,7 @@ import (
 // does: sha1("commit " + len + "\x00" + content). It is the test's own
 // arithmetic, not the package's.
 func gitObjectID(object []byte) string {
-	h := sha1.New() //nolint:gosec // see the import comment
+	h := sha1.New()
 	h.Write([]byte("commit " + itoa(len(object)) + "\x00"))
 	h.Write(object)
 	return hex.EncodeToString(h.Sum(nil))
@@ -131,9 +134,9 @@ func TestAPI004TheProofResponseCarriesTheRawMaterial(t *testing.T) {
 	if !ok {
 		t.Fatalf("the served entry map holds no entry %s", p.Entry.UUID)
 	}
-	body, err := base64.StdEncoding.DecodeString(entry.Body)
-	if err != nil {
-		t.Fatalf("the entry body is not base64: %v", err)
+	body, berr := base64.StdEncoding.DecodeString(entry.Body)
+	if berr != nil {
+		t.Fatalf("the entry body is not base64: %v", berr)
 	}
 	digest := sha256.Sum256([]byte(p.CommitSHA))
 	if !strings.Contains(string(body), hex.EncodeToString(digest[:])) {
@@ -168,13 +171,13 @@ func TestAPI006AnUnreachableUpstreamIsUnavailableAndNeverADatabaseAnswer(t *test
 	reg[event.FieldAgentType] = "fix-ci"
 	reg[event.FieldTaskRef] = "rm-040"
 	reg[event.FieldIdempotencyKey] = "run-1-register"
-	appendOrFail(t, ctx, owner, reg)
+	appendOrFail(ctx, t, owner, reg)
 
 	intent := base(event.EventTypeCommitIntent)
 	intent[event.FieldRepo] = fixtureRepo
 	intent[event.FieldTreeHash] = strings.Repeat("a", 40)
 	intent[event.FieldIdempotencyKey] = "run-1-intent"
-	rec := appendOrFail(t, ctx, owner, intent)
+	rec := appendOrFail(ctx, t, owner, intent)
 
 	done := base(event.EventTypeCommitRecorded)
 	done[event.FieldRepo] = fixtureRepo
@@ -184,7 +187,7 @@ func TestAPI006AnUnreachableUpstreamIsUnavailableAndNeverADatabaseAnswer(t *test
 	done[event.FieldRekorEntryUUID] = strings.Repeat("b", 64)
 	done[event.FieldRekorLogIndex] = int64(1)
 	done[event.FieldIdempotencyKey] = "run-1-recorded"
-	appendOrFail(t, ctx, owner, done)
+	appendOrFail(ctx, t, owner, done)
 
 	store, _ := readStore(t, readerDSN)
 	if _, err := store.Run(ctx, "run-1"); err != nil {

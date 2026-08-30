@@ -160,15 +160,15 @@ func EnsureReadOnlyRole(ctx context.Context, adminDSN, role, password string) er
 	defer func() { _ = admin.Close(ctx) }()
 
 	var database string
-	if err := admin.QueryRow(ctx, `SELECT current_database()`).Scan(&database); err != nil {
-		return fmt.Errorf("api: reading the current database: %w", err)
+	if derr := admin.QueryRow(ctx, `SELECT current_database()`).Scan(&database); derr != nil {
+		return fmt.Errorf("api: reading the current database: %w", derr)
 	}
 
 	ident := pgx.Identifier{role}.Sanitize()
 	var exists bool
-	if err := admin.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, role).Scan(&exists); err != nil {
-		return fmt.Errorf("api: looking up the role %s: %w", role, err)
+	if lerr := admin.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, role).Scan(&exists); lerr != nil {
+		return fmt.Errorf("api: looking up the role %s: %w", role, lerr)
 	}
 	switch {
 	case !exists && password != "":
@@ -256,7 +256,7 @@ func probeOnce(ctx context.Context, c conn, p Probe) ProbeResult {
 		out.Detail = "the probe could not be run: " + err.Error()
 		return out
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { discardError(tx.Rollback(ctx)) }()
 
 	// Defeat default_transaction_read_only, so that a refusal below is the
 	// ACL's and not a setting's. If even this is refused, that too is a
@@ -279,6 +279,12 @@ func probeOnce(ctx context.Context, c conn, p Probe) ProbeResult {
 	out.Detail = "the statement succeeded and was rolled back"
 	return out
 }
+
+// discardError swallows an error a caller genuinely cannot act on. errcheck
+// runs with check-blank here, so the discard is a named function rather than a
+// blank assignment — the same idiom internal/verify's fixtures use, and for
+// the same reason: a discard should be visible and explained, not invisible.
+func discardError(error) {}
 
 func sqlState(err error) string {
 	var pgErr *pgconn.PgError

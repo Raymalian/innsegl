@@ -429,8 +429,8 @@ func entryBody(raw json.RawMessage, uuid string) (*logEntryBody, error) {
 			} `json:"signature"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, fmt.Errorf("the entry body is not JSON: %w", err)
+	if derr := json.Unmarshal(body, &decoded); derr != nil {
+		return nil, fmt.Errorf("the entry body is not JSON: %w", derr)
 	}
 	certPEM, err := base64Decode(decoded.Spec.Signature.PublicKey.Content)
 	if err != nil {

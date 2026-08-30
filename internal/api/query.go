@@ -422,8 +422,10 @@ func likePattern(search string) *string {
 }
 
 func stringOf(v any) string {
-	s, _ := v.(string)
-	return s
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // int64Of reads a JSON number out of a decoded event body. Postgres hands

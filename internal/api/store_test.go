@@ -125,14 +125,14 @@ func seed(t *testing.T, owner *ledger.Store, n int) []seededRun {
 		reg[event.FieldAgentType] = r.agentType
 		reg[event.FieldTaskRef] = r.taskRef
 		reg[event.FieldIdempotencyKey] = r.runID + "-register"
-		appendOrFail(t, ctx, owner, reg)
+		appendOrFail(ctx, t, owner, reg)
 
 		for c := range r.commits {
 			intent := base(event.EventTypeCommitIntent)
 			intent[event.FieldRepo] = r.repo
 			intent[event.FieldTreeHash] = strings.Repeat("a", 40)
 			intent[event.FieldIdempotencyKey] = fmt.Sprintf("%s-intent-%d", r.runID, c)
-			rec := appendOrFail(t, ctx, owner, intent)
+			rec := appendOrFail(ctx, t, owner, intent)
 
 			done := base(event.EventTypeCommitRecorded)
 			done[event.FieldRepo] = r.repo
@@ -142,16 +142,16 @@ func seed(t *testing.T, owner *ledger.Store, n int) []seededRun {
 			done[event.FieldRekorEntryUUID] = strings.Repeat("b", 64)
 			done[event.FieldRekorLogIndex] = int64(i*10 + c)
 			done[event.FieldIdempotencyKey] = fmt.Sprintf("%s-recorded-%d", r.runID, c)
-			appendOrFail(t, ctx, owner, done)
+			appendOrFail(ctx, t, owner, done)
 		}
 
 		switch r.status {
 		case StatusRetired:
-			appendOrFail(t, ctx, owner, base(event.EventTypeRunRetired))
+			appendOrFail(ctx, t, owner, base(event.EventTypeRunRetired))
 		case StatusExpired:
 			expired := base(event.EventTypeRunExpired)
 			expired[event.FieldSource] = event.SourceReaper
-			appendOrFail(t, ctx, owner, expired)
+			appendOrFail(ctx, t, owner, expired)
 		}
 		out = append(out, r)
 	}
@@ -159,7 +159,7 @@ func seed(t *testing.T, owner *ledger.Store, n int) []seededRun {
 	return out
 }
 
-func appendOrFail(t *testing.T, ctx context.Context, s *ledger.Store, body event.Fields) event.Fields {
+func appendOrFail(ctx context.Context, t *testing.T, s *ledger.Store, body event.Fields) event.Fields {
 	t.Helper()
 	rec, err := s.Append(ctx, body)
 	if err != nil {

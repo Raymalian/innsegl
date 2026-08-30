@@ -404,29 +404,28 @@ func (p *Prover) collect(ctx context.Context, object []byte, sha string,
 		rekor.Reachable = true
 	}
 
-	switch {
-	case rep.Entry.UUID == "":
+	if rep.Entry.UUID == "" {
 		m.Gaps = append(m.Gaps, Gap{"rekor_entry",
 			"no transparency-log entry was resolved for this commit, so there is " +
 				"none to hand over. The checks above say why."})
-	default:
-		entry, err := p.fetch(ctx, p.rekorEntries+"/"+url.PathEscape(rep.Entry.UUID))
-		if err != nil {
-			m.Gaps = append(m.Gaps, Gap{"rekor_entry",
-				"the log entry could not be fetched: " + err.Error()})
-			rekor.Reachable = false
-			if rekor.Error == "" {
-				rekor.Error = err.Error()
-			}
-			break
+		return m, []Upstream{fulcio, rekor}
+	}
+	entry, err := p.fetch(ctx, p.rekorEntries+"/"+url.PathEscape(rep.Entry.UUID))
+	if err != nil {
+		m.Gaps = append(m.Gaps, Gap{"rekor_entry",
+			"the log entry could not be fetched: " + err.Error()})
+		rekor.Reachable = false
+		if rekor.Error == "" {
+			rekor.Error = err.Error()
 		}
-		m.RekorEntry = json.RawMessage(entry)
-		if cert, cerr := certificateFromEntry(entry, rep.Entry.UUID); cerr != nil {
-			m.Gaps = append(m.Gaps, Gap{"certificate_pem",
-				"the log entry carries no readable certificate: " + cerr.Error()})
-		} else {
-			m.CertificatePEM = string(cert)
-		}
+		return m, []Upstream{fulcio, rekor}
+	}
+	m.RekorEntry = json.RawMessage(entry)
+	if cert, cerr := certificateFromEntry(entry, rep.Entry.UUID); cerr != nil {
+		m.Gaps = append(m.Gaps, Gap{"certificate_pem",
+			"the log entry carries no readable certificate: " + cerr.Error()})
+	} else {
+		m.CertificatePEM = string(cert)
 	}
 	return m, []Upstream{fulcio, rekor}
 }

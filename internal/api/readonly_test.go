@@ -84,12 +84,12 @@ func TestAPI002TheReadOnlyRoleIsRefusedEveryWriteByThePostgresServer(t *testing.
 		if err != nil {
 			t.Fatalf("%s: begin: %v", p.Name, err)
 		}
-		if _, err := tx.Exec(ctx, "SET TRANSACTION READ WRITE"); err != nil {
+		if _, serr := tx.Exec(ctx, "SET TRANSACTION READ WRITE"); serr != nil {
 			t.Fatalf("%s: the probe could not even ask for a writable transaction: %v",
-				p.Name, err)
+				p.Name, serr)
 		}
 		_, err = tx.Exec(ctx, p.SQL)
-		_ = tx.Rollback(ctx)
+		discardError(tx.Rollback(ctx))
 
 		if err == nil {
 			t.Errorf("%s: the read-only role was ALLOWED to %s. FD §7 requires a "+
