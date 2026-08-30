@@ -1,0 +1,165 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * Tailwind bridge for the Innsegl token sheet — ADR-0038.
+ *
+ * The dashboard's entry stylesheet imports this file and nothing else from
+ * here. It does two jobs, and the second one is the point:
+ *
+ *   1. It exposes every token in tokens.css as a Tailwind utility, through
+ *      `@theme inline`, so a utility compiles to `var(--innsegl-…)` rather
+ *      than to a copy of the value. There is one source of truth and this file
+ *      is not it — tokens.css is.
+ *
+ *   2. It DELETES Tailwind's default scales. `--color-*: initial` removes
+ *      every built-in colour, so `bg-green-500`, `text-red-600` and
+ *      `bg-emerald-50` stop existing. doc 06 §5.3 governs colour as a claim,
+ *      and a default palette that ships 242 unsanctioned colours — 22 of them
+ *      green — is the single most likely route to §8's anti-pattern 3. The
+ *      same applies to spacing, type, radius and shadow: doc 06 §5.1 says all
+ *      of it flows through tokens, and the only way that survives contact with
+ *      a hurried afternoon is for the alternative not to compile.
+ *
+ * What remains as an escape hatch is Tailwind's arbitrary-value syntax,
+ * `bg-[#00ff00]`. That is deliberate — it is greppable, it shows up in review
+ * as a literal colour, and RM-050's anti-pattern pass (#58) is where it gets
+ * hunted. What this file removes is the escape hatch that looks like
+ * compliance.
+ *
+ * Naming: the Tailwind name of a token drops the `--innsegl-color-` prefix and
+ * the redundant role word, so `--innsegl-color-proof-verified-text` becomes
+ * `text-proof-verified` rather than `text-proof-verified-text`. The mapping is
+ * one-to-one and mechanical; nothing here invents a value.
+ */
+
+@import "./tokens.css";
+
+@theme inline {
+  /* ── colour ─────────────────────────────────────────────────────────────
+   * Every default colour is removed first. Nothing below is a value; every
+   * entry points at the sheet. */
+  --color-*: initial;
+
+  /* Neutral structure. "ink" for text, "line" for borders. */
+  --color-page: var(--innsegl-color-surface-page);
+  --color-surface: var(--innsegl-color-surface-default);
+  --color-raised: var(--innsegl-color-surface-raised);
+  --color-sunken: var(--innsegl-color-surface-sunken);
+  --color-hover: var(--innsegl-color-surface-hover);
+  --color-ink: var(--innsegl-color-text-primary);
+  --color-ink-secondary: var(--innsegl-color-text-secondary);
+  --color-ink-muted: var(--innsegl-color-text-muted);
+  --color-ink-on-emphasis: var(--innsegl-color-text-on-emphasis);
+  --color-line: var(--innsegl-color-border-hairline);
+  --color-line-strong: var(--innsegl-color-border-strong);
+
+  /* The verification tri-state. `text-proof-verified` is the only route to a
+   * green in the entire build. */
+  --color-proof-verified: var(--innsegl-color-proof-verified-text);
+  --color-proof-verified-surface: var(--innsegl-color-proof-verified-surface);
+  --color-proof-verified-line: var(--innsegl-color-proof-verified-border);
+  --color-proof-failed: var(--innsegl-color-proof-failed-text);
+  --color-proof-failed-surface: var(--innsegl-color-proof-failed-surface);
+  --color-proof-failed-line: var(--innsegl-color-proof-failed-border);
+  --color-proof-unavailable: var(--innsegl-color-proof-unavailable-text);
+  --color-proof-unavailable-surface: var(--innsegl-color-proof-unavailable-surface);
+  --color-proof-unavailable-line: var(--innsegl-color-proof-unavailable-border);
+
+  /* Degradation that is not a verdict, and the P3 alarm. */
+  --color-degraded: var(--innsegl-color-degraded-text);
+  --color-degraded-surface: var(--innsegl-color-degraded-surface);
+  --color-degraded-line: var(--innsegl-color-degraded-border);
+  --color-integrity-alert: var(--innsegl-color-integrity-alert-text);
+  --color-integrity-alert-surface: var(--innsegl-color-integrity-alert-surface);
+  --color-integrity-alert-line: var(--innsegl-color-integrity-alert-border);
+  --color-mismatch: var(--innsegl-color-mismatch-text);
+  --color-mismatch-surface: var(--innsegl-color-mismatch-surface);
+
+  /* The accent, and run status. */
+  --color-accent: var(--innsegl-color-accent-text);
+  --color-accent-surface: var(--innsegl-color-accent-surface);
+  --color-accent-line: var(--innsegl-color-accent-border);
+  --color-accent-emphasis: var(--innsegl-color-accent-emphasis);
+  --color-focus: var(--innsegl-color-focus-ring);
+  --color-status-active: var(--innsegl-color-status-active-text);
+  --color-status-active-surface: var(--innsegl-color-status-active-surface);
+  --color-status-active-line: var(--innsegl-color-status-active-border);
+  --color-status-retired: var(--innsegl-color-status-retired-text);
+  --color-status-retired-surface: var(--innsegl-color-status-retired-surface);
+  --color-status-retired-line: var(--innsegl-color-status-retired-border);
+  --color-status-expired: var(--innsegl-color-status-expired-text);
+  --color-status-expired-surface: var(--innsegl-color-status-expired-surface);
+  --color-status-expired-line: var(--innsegl-color-status-expired-border);
+
+  /* ── type ───────────────────────────────────────────────────────────────
+   * Five sizes and no sixth: `text-xs` … `text-9xl` are removed, so the scale
+   * doc 06 §5.2 calls "restrained" cannot be widened by autocomplete. */
+  --font-*: initial;
+  --font-sans: var(--innsegl-font-family-sans);
+  --font-mono: var(--innsegl-font-family-mono);
+
+  --text-*: initial;
+  --text-micro: var(--innsegl-font-size-micro);
+  --text-body: var(--innsegl-font-size-body);
+  --text-prose: var(--innsegl-font-size-prose);
+  --text-heading: var(--innsegl-font-size-heading);
+  --text-display: var(--innsegl-font-size-display);
+
+  --font-weight-*: initial;
+  --font-weight-regular: var(--innsegl-font-weight-regular);
+  --font-weight-medium: var(--innsegl-font-weight-medium);
+  --font-weight-semibold: var(--innsegl-font-weight-semibold);
+
+  --leading-*: initial;
+  --leading-tight: var(--innsegl-line-height-tight);
+  --leading-default: var(--innsegl-line-height-default);
+  --leading-prose: var(--innsegl-line-height-prose);
+
+  --tracking-*: initial;
+  --tracking-display: var(--innsegl-letter-spacing-display);
+
+  /* ── space and shape ────────────────────────────────────────────────────
+   * The dynamic spacing multiplier is removed, so `p-13` does not exist and
+   * the nine steps below are the whole scale. */
+  --spacing-*: initial;
+  --spacing: initial;
+  --spacing-0: var(--innsegl-space-0);
+  --spacing-1: var(--innsegl-space-1);
+  --spacing-2: var(--innsegl-space-2);
+  --spacing-3: var(--innsegl-space-3);
+  --spacing-4: var(--innsegl-space-4);
+  --spacing-5: var(--innsegl-space-5);
+  --spacing-6: var(--innsegl-space-6);
+  --spacing-7: var(--innsegl-space-7);
+  --spacing-8: var(--innsegl-space-8);
+  --spacing-cell-y: var(--innsegl-density-table-cell-y);
+  --spacing-cell-x: var(--innsegl-density-table-cell-x);
+  --spacing-panel: var(--innsegl-density-panel-padding);
+
+  --radius-*: initial;
+  --radius-sm: var(--innsegl-radius-sm);
+  --radius-md: var(--innsegl-radius-md);
+  --radius-pill: var(--innsegl-radius-pill);
+
+  /* One shadow, so `shadow-2xl` is not a thing that compiles (§5.4). */
+  --shadow-*: initial;
+  --shadow-popover: var(--innsegl-shadow-popover);
+  --inset-shadow-*: initial;
+  --drop-shadow-*: initial;
+
+  /* No gradients (§5.4), so no gradient stops to interpolate through. */
+  --blur-*: initial;
+
+  --container-*: initial;
+  --container-content: var(--innsegl-layout-content-max);
+  --container-prose: var(--innsegl-layout-prose-max);
+
+  /* ── motion ─────────────────────────────────────────────────────────────
+   * §5.5: state transitions and focus movement only. No keyframe animations
+   * ship with the theme, so `animate-bounce` and its relatives are removed —
+   * P3 says success is quiet, and a celebratory animation on "verified" is
+   * §8's anti-pattern 9 wearing a different coat. */
+  --animate-*: initial;
+  --ease-*: initial;
+  --ease-standard: var(--innsegl-motion-easing-standard);
+}

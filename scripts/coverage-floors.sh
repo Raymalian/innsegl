@@ -66,6 +66,11 @@ LINE_FLOORS=(
   # the one this project can least afford to miss.
   "internal/verify 95"
   "internal/reconciler 85"
+  # New in E6 Wave 1. internal/api measured 92.97% when it landed. The floor
+  # sits below that so ordinary refactoring does not trip it, but the
+  # re-derivation that convicts a tampered BFF is the package's reason to
+  # exist and a silent regression there would be invisible from the outside.
+  "internal/api 90"
 )
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
