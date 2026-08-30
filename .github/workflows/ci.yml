@@ -75,6 +75,19 @@ jobs:
             exit 1
           }
           docker version --format '  docker {{.Server.Version}}'
+      - name: Install gitsign
+        # The signing and verification harnesses exec `gitsign` from PATH, and
+        # it is deliberately not a go.mod dependency (ADR-0031: importing it
+        # drags cosign and sigstore-go into a 14-entry module for a binary we
+        # exec). Without it every test that needs a real signature SKIPS — and
+        # a Go skip exits zero, so CI stayed green while SIG-001, VER-001 and
+        # the whole Sigstore suite never ran. scripts/test-no-skips.sh is what
+        # surfaced that; this is the missing dependency it found.
+        #
+        # Pinned to the version the harnesses assert (harnessGitsignVersion).
+        run: |
+          go install github.com/sigstore/gitsign@v0.17.1
+          gitsign --version
       - name: go test -race
         # Default parallelism, deliberately: every package that drives a
         # compose stack now namespaces its project per test process
@@ -147,6 +160,19 @@ jobs:
             exit 1
           }
           docker version --format '  docker {{.Server.Version}}'
+      - name: Install gitsign
+        # The signing and verification harnesses exec `gitsign` from PATH, and
+        # it is deliberately not a go.mod dependency (ADR-0031: importing it
+        # drags cosign and sigstore-go into a 14-entry module for a binary we
+        # exec). Without it every test that needs a real signature SKIPS — and
+        # a Go skip exits zero, so CI stayed green while SIG-001, VER-001 and
+        # the whole Sigstore suite never ran. scripts/test-no-skips.sh is what
+        # surfaced that; this is the missing dependency it found.
+        #
+        # Pinned to the version the harnesses assert (harnessGitsignVersion).
+        run: |
+          go install github.com/sigstore/gitsign@v0.17.1
+          gitsign --version
       - name: Produce coverage profile
         # -coverpkg=./... instruments every package in the module, so a package
         # with no test file at all reports 0% instead of vanishing from the

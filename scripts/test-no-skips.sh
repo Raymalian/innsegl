@@ -73,6 +73,15 @@ if [ "${skipped}" -gt 0 ]; then
   printf 'FAIL: %s test(s) skipped. Every dependency is required here, so a skip\n' "${skipped}"
   printf '      is a missing dependency rather than a pass.\n\n'
   printf '%s\n' "${unexpected}" | head -40
+  # The reason matters more than the list: a skip names its missing dependency
+  # in the message the test printed just before skipping. Without this the log
+  # says what did not run but not why, which is how `gitsign` stayed missing
+  # from CI unnoticed.
+  printf '\n--- why ---\n'
+  grep -F '"Action":"output"' "${out}" \
+    | grep -Ei 'skipping:|SKIP:' \
+    | sed -e 's/.*"Output":"//' -e 's/\\n"}$//' -e 's/\\t/  /g' \
+    | sort -u | head -20
   exit 1
 fi
 
