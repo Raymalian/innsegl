@@ -1,0 +1,587 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Innsegl reference compose stack — self-hosted Sigstore (RM-030, #38)
+#
+# Doc 05 §1 is the specification for this file. It names two rows here:
+#
+#   fulcio                          upstream Sigstore  Local CA
+#   rekor + its backing log/        upstream Sigstore  Local transparency log
+#   database services                                  "Rekor's storage
+#                                                       dependencies run as
+#                                                       sidecars per upstream's
+#                                                       own compose reference;
+#                                                       pin versions"
+#
+# and one requirement about how everything in that table is wired:
+#
+#   "Network segmentation even in compose: [...] Compose is where the
+#    least-privilege shape is first proven, not first ignored."
+#
+# ADR-0010 changed what this file *is*. It is no longer the CI-only convenience
+# doc 05 §1 describes — self-hosted Fulcio and Rekor are now the shipped
+# default, because public-good Fulcio accepts no SPIFFE issuer and the
+# federation process that would have added one was closed `not_planned`. Doc 05
+# §1's "the installed product default is public Sigstore" is therefore stale.
+# That is a spec edit for a human; see sigstore/README.md.
+#
+# HOW TO RUN IT — see sigstore/README.md. Short version:
+#   make sigstore-up          # boots SPIRE and this, wired to each other
+#   make sigstore-verify      # obtains a real Fulcio cert for a real JWT-SVID
+#
+# THIS FILE IS A SEPARATE COMPOSE PROJECT FROM spire.yml, ATTACHED TO ONE OF
+# ITS NETWORKS. See ADR-0028 for why that, rather than `-f spire.yml -f
+# sigstore.yml`, and what it costs.
+#
+# LIFTED FROM RM-012, NOT REBUILT. Everything about the five-container Rekor
+# stack below — the service list, the images, the flags, the ordering hazards —
+# is internal/segment/rekorharness_test.go, which stood it up first and
+# recorded two findings that this file has to keep carrying. They are marked
+# `RM-012 FINDING` at the settings that encode them. RM-012's report asked for
+# exactly this lift; a second stack written from upstream's compose would drift
+# from the one SEG-003 actually runs against.
+# ============================================================================
+
+name: innsegl-sigstore
+
+# ----------------------------------------------------------------------------
+# Pinned images. Doc 05 §1: "pin versions". Pinned twice, following spire.yml —
+# by release tag, which says what this is, and by digest, which says what it
+# *is*. A tag is mutable at the registry; the digest is what docker verifies.
+#
+# The four Rekor-side versions are RM-012's, unchanged and deliberately so: the
+# compose stack and the harness that proved the stack works must not be able to
+# name different Rekor releases. When one moves, both move, in one change.
+# ----------------------------------------------------------------------------
+x-fulcio-image: &fulcio-image
+  ghcr.io/sigstore/fulcio:v1.8.8@sha256:ef72cf56c64b7455ceda5268d1cc801b92992e7ce36b744b40b7761684d60753
+x-rekor-image: &rekor-image
+  ghcr.io/sigstore/rekor/rekor-server:v1.3.10@sha256:3b096d478d90224752339e4f0311e9b30e58825dcbac89de92bcda352456012c
+# RM-012 FINDING: the Trillian pair comes from the Sigstore *scaffolding*
+# repository, which publishes multi-architecture images. The
+# trillian-opensource-ci images that upstream's own compose names are
+# amd64-only, and this project is developed on arm64.
+x-trillian-log-server-image: &trillian-log-server-image
+  ghcr.io/sigstore/scaffolding/trillian_log_server:v1.7.1@sha256:8ae059cbde81aadc80aa07fb3a8e84f43a8d87e9f7e820c48dd33f6288b232fe
+x-trillian-log-signer-image: &trillian-log-signer-image
+  ghcr.io/sigstore/scaffolding/trillian_log_signer:v1.7.1@sha256:46de4e7eec9944567f688dff946569f0725e48eeb4b07093a5f3aa11c130627f
+# db_server is MySQL with Trillian's storage schema already applied. It is the
+# image upstream's compose uses, and taking it whole avoids vendoring a copy of
+# Trillian's schema that could drift from the server that reads it. It is the
+# one amd64-only image in the stack; see `platform:` on the service.
+x-trillian-db-image: &trillian-db-image
+  gcr.io/trillian-opensource-ci/db_server:v1.4.0@sha256:0794abd3bdf44a567f5d6ef18a0b76802f388611b63aae33eaf28c3b0c5964d8
+x-rekor-redis-image: &rekor-redis-image
+  redis:7.4.11-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+# Used once, by the one-shot PKI bootstrapper, and the same pin spire.yml uses.
+# The Sigstore images are distroless and carry no shell or OpenSSL, so the
+# bootstrap runs somewhere that does.
+x-openssl-image: &openssl-image
+  alpine/openssl:3.5.7@sha256:19f8eb9004a1dbaec323eed6094e9b6bcc1dbf2697ecb5fb8d2fad4e3336a8f7
+
+# ----------------------------------------------------------------------------
+# The OIDC issuer. THE SINGLE MOST IMPORTANT VALUE IN THIS FILE.
+#
+# Fulcio accepts a JWT-SVID only if it can fetch the discovery document and
+# JWKS of the issuer named in the token's `iss` claim. Three things must agree
+# on one string: spire-server's `jwt_issuer` (server.conf), the discovery
+# document spire-oidc advertises (oidc-discovery-provider.conf), and the
+# `oidc-issuers` key in fulcio's config (sigstore/fulcio-config.yaml). All
+# three read INNSEGL_SPIRE_JWT_ISSUER, so they cannot drift — spire.yml
+# established that variable and this file joins it rather than inventing a
+# second one.
+#
+# REQUIRED, NOT DEFAULTED, and that is spire-testscope.yml's reasoning adopted
+# verbatim. spire.yml defaults the variable to https://oidc.innsegl.dev, which
+# ADR-0010 decided is NOT stood up and which no Fulcio in this stack can fetch.
+# A default here would let the two stacks boot disagreeing, and the symptom
+# would be Fulcio rejecting every token with `invalid identity token` long
+# after the mistake was made. `:?` makes it a loud compose error naming the
+# fix. `make sigstore-up` sets it for both stacks in one place.
+# ----------------------------------------------------------------------------
+x-jwt-issuer: &jwt-issuer ${INNSEGL_SPIRE_JWT_ISSUER:?set it to the issuer BOTH stacks use - http://spire-oidc:8080 for the compose default; spire.yml must be brought up with the same value or Fulcio will reject every JWT-SVID. `make sigstore-up` does this for you}
+
+# ----------------------------------------------------------------------------
+# The Fulcio CA key password. Declared once, as an anchor, because it is used
+# in two places — the bootstrapper that encrypts the key and the fulcio flag
+# that decrypts it — and two copies of a default is how they come to disagree.
+#
+# NOT A SECRET BOUNDARY, and saying so is the point of writing it here. The
+# password and the key it protects live in the same compose project, and this
+# value ends up on fulcio's command line where `docker inspect` will show it.
+# What protects the CA key is the mount table: one writer, one reader,
+# read-only. The password exists because `fileca` expects an encrypted PKCS#8
+# key, and because a plaintext CA key on a volume invites being copied
+# somewhere it is not.
+# ----------------------------------------------------------------------------
+x-fulcio-ca-password: &fulcio-ca-password ${INNSEGL_FULCIO_CA_PASSWORD:-innsegl-compose-ca}
+
+# Trillian's throwaway database, inside a throwaway container, on an internal
+# network no client of the log can reach. These are upstream's compose
+# credentials and RM-012's, kept identical for the same reason the image tags
+# are: so the harness and the stack cannot describe different databases.
+x-trillian-db-name: &trillian-db-name test
+x-trillian-db-user: &trillian-db-user test
+x-trillian-db-password: &trillian-db-password zaphod
+
+services:
+
+  # --------------------------------------------------------------------------
+  # One-shot PKI bootstrap, in the shape spire.yml established: runs to
+  # completion before anything else starts, idempotent, and the only container
+  # that ever holds a private key with rw access — then it exits.
+  #
+  # It produces three things; sigstore/bootstrap.sh says why each is shaped the
+  # way it is:
+  #   fulcio ca.crt + ca.key   the local CA root. Fulcio's `fileca`.
+  #   rekor  log.key           the transparency log's signing identity.
+  #   fulcio config.yaml       rendered from sigstore/fulcio-config.yaml with
+  #                            the issuer above substituted in.
+  # --------------------------------------------------------------------------
+  sigstore-bootstrap:
+    image: *openssl-image
+    container_name: innsegl-sigstore-bootstrap
+    # No network at all: it generates key material and writes files. Nothing it
+    # does requires reaching anything, so nothing can reach it either.
+    network_mode: none
+    entrypoint: ["/bin/sh"]
+    command: ["/bootstrap.sh"]
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      INNSEGL_SPIRE_JWT_ISSUER: *jwt-issuer
+      INNSEGL_FULCIO_CA_PASSWORD: *fulcio-ca-password
+    volumes:
+      - ./sigstore/bootstrap.sh:/bootstrap.sh:ro
+      - ./sigstore/fulcio-config.yaml:/in/fulcio-config.yaml:ro
+      - sigstore-fulcio-pki:/out/fulcio
+      - sigstore-rekor-key:/out/rekor
+
+  # --------------------------------------------------------------------------
+  # fulcio — the local CA (doc 05 §1).
+  #
+  # NETWORKS: three, and that is the segmentation.
+  #   innsegl-oidc-frontend   spire-oidc lives here. This is Fulcio's ONLY
+  #                           path into SPIRE, and it is a read of two public
+  #                           documents — the discovery document and the JWKS.
+  #                           Fulcio is on no network with spire-server and
+  #                           cannot open a socket to the Agent or admin API.
+  #                           The network is declared in spire.yml and joined
+  #                           here as external; see ADR-0028.
+  #   innsegl-sigstore        where signing clients reach it: innsegl-mcp and
+  #                           the gitsign wrapper when E5 lands. Internal.
+  #   innsegl-sigstore-published
+  #                           the one non-internal network, whose only purpose
+  #                           is that a published port can exist at all. See
+  #                           its declaration at the bottom of this file for
+  #                           the measurement that forced it.
+  #
+  # Fulcio is on NEITHER of Rekor's backend networks. It has no route to
+  # Trillian, to the log's MySQL, or to Redis. The CA and the log share nothing
+  # but a client.
+  #
+  # WHY THERE IS NO CT LOG. Fulcio can submit each issued certificate to a
+  # Certificate Transparency log and embed the SCT. Doc 05 §1's table has no
+  # row for one, and `--ct-log-url=` (empty) is what turns it off; fulcio then
+  # logs "Skipping CT log upload" and returns the certificate with a detached,
+  # empty SCT. This is a REAL CONSEQUENCE, not a tidy omission: a verifier
+  # configured to require an SCT will refuse these certificates, so RM-032's
+  # gitsign wrapper and RM-037's verify CLI must be built against a trust root
+  # that lists no CT log. Recorded in ADR-0028 so it is a decision somebody
+  # took rather than a surprise somebody hits.
+  # --------------------------------------------------------------------------
+  fulcio:
+    image: *fulcio-image
+    container_name: innsegl-sigstore-fulcio
+    depends_on:
+      sigstore-bootstrap:
+        condition: service_completed_successfully
+    # `/ko-app/fulcio` is the image entrypoint; these are its arguments.
+    command:
+      - "serve"
+      - "--host=0.0.0.0"
+      - "--port=5555"
+      - "--grpc-port=5554"
+      - "--ca=fileca"
+      - "--fileca-cert=/etc/fulcio/ca.crt"
+      - "--fileca-key=/etc/fulcio/ca.key"
+      - "--fileca-key-passwd"
+      - *fulcio-ca-password
+      # See "WHY THERE IS NO CT LOG" above. Empty is the off switch; the flag's
+      # default is http://localhost:6962/test, so omitting it is not off.
+      - "--ct-log-url="
+      - "--config-path=/etc/fulcio/config.yaml"
+    networks:
+      - innsegl-oidc-frontend
+      - innsegl-sigstore
+      - innsegl-sigstore-published
+    ports:
+      # Loopback only, as in spire.yml. Binding 0.0.0.0 would put a CA that
+      # signs on presentation of a JWT on every interface of a developer's
+      # machine. Published because `innsegl verify`, the demo agent and
+      # sigstore/verify.sh all run on the host.
+      - "127.0.0.1:${INNSEGL_FULCIO_PORT:-5555}:5555"
+    volumes:
+      # Read-only, and the whole of Fulcio's secret state: the CA certificate,
+      # the encrypted CA key, and the rendered issuer config. Only
+      # sigstore-bootstrap ever mounts this rw.
+      - sigstore-fulcio-pki:/etc/fulcio:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # No healthcheck: the image is distroless — no shell, no curl, nothing to
+    # probe with. This is spire-oidc's situation and gets spire-oidc's answer:
+    # readiness is probed from outside over HTTP, by fetching the trust
+    # material, which is the way a client finds out too. ADR-0024 fixes that
+    # as the definition — GET /api/v1/rootCert must return bytes that parse as
+    # a PEM CA certificate. sigstore/verify.sh does exactly that.
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # rekor — the local transparency log (doc 05 §1).
+  #
+  # NETWORKS: four, none of them shared with the Trillian database.
+  #   innsegl-sigstore     where clients reach it: the sealer's anchorer
+  #                        (RM-012), the reconciler's cross-check, the verify
+  #                        CLI, the dashboard's proof endpoints.
+  #   innsegl-sigstore-published
+  #                        the published port. See its declaration.
+  #   innsegl-rekor-log    rekor -> trillian-log-server gRPC. Members: those
+  #                        two only. The log *signer* is deliberately absent —
+  #                        nothing calls it, it only writes.
+  #   innsegl-rekor-index  rekor -> redis, the search index. Members: those two
+  #                        only, which is why Redis needs no password: nothing
+  #                        else can open a socket to it at all.
+  #
+  # Rekor is NOT on innsegl-trillian-db. The front end — the one component a
+  # verifier talks to — has no route to the database its proofs are built from.
+  # That is the least-privilege claim in this half of the stack, and it is
+  # checkable by reading the `networks:` keys rather than by trusting a
+  # sentence.
+  # --------------------------------------------------------------------------
+  rekor:
+    image: *rekor-image
+    container_name: innsegl-sigstore-rekor
+    depends_on:
+      sigstore-bootstrap:
+        condition: service_completed_successfully
+      trillian-db:
+        condition: service_healthy
+    # RM-012 FINDING (carried from upstream, which sets `restart: always` on
+    # all three Go services): whichever service wins the race to a dependency
+    # still opening its port simply exits. A restart is how it recovers. There
+    # is no healthcheck to gate on, because the images are distroless, so this
+    # is the mechanism — without it the stack looks like it hung.
+    restart: on-failure
+    command:
+      - "serve"
+      - "--trillian_log_server.address=trillian-log-server"
+      - "--trillian_log_server.port=8090"
+      - "--redis_server.address=rekor-redis"
+      - "--redis_server.port=6379"
+      - "--host=0.0.0.0"
+      - "--port=3000"
+      - "--rekor_server.address=0.0.0.0"
+      # The log's signing identity, ON DISK — and this is the one place this
+      # file deliberately diverges from RM-012's harness, which uses
+      # `--rekor_server.signer=memory`.
+      #
+      # For a test harness, memory is right: the log's identity lasts exactly
+      # as long as the test that trusts it. For a *deployed* log it is wrong,
+      # and ADR-0009 is why. Its decision 2 verifies an anchor from first
+      # principles and ends: "the checkpoint's signature must verify under the
+      # log's key. Only the last step trusts anything, and what it trusts is a
+      # key." A memory signer mints a new key on every restart, so every
+      # segment anchored before a `docker compose restart rekor` becomes
+      # unverifiable — silently, because the entry is still there and only the
+      # signature check fails. ADR-0010 made this stack the shipped default;
+      # a shipped log may not forget who it is. See ADR-0028.
+      - "--rekor_server.signer=/etc/rekor/log.key"
+      - "--rekor_server.hostname=${INNSEGL_REKOR_ORIGIN:-rekor.innsegl.dev}"
+      # Both off, as in RM-012's harness. Attestation storage needs a bucket
+      # this stack does not have; stable checkpoints add a witness protocol
+      # nothing in v0.1 consumes. Turning either on changes what
+      # /api/v1/log/entries returns, so they are stated rather than defaulted.
+      - "--enable_attestation_storage=false"
+      - "--enable_stable_checkpoint=false"
+    networks:
+      - innsegl-sigstore
+      - innsegl-sigstore-published
+      - innsegl-rekor-log
+      - innsegl-rekor-index
+    ports:
+      # Loopback only. Same reasoning as fulcio's.
+      - "127.0.0.1:${INNSEGL_REKOR_PORT:-3000}:3000"
+    volumes:
+      - sigstore-rekor-key:/etc/rekor:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # No healthcheck — distroless, as for fulcio. ADR-0024's definition of
+    # reachable applies here too: GET /api/v1/log/publicKey must return bytes
+    # that parse as a PKIX public key.
+
+  # --------------------------------------------------------------------------
+  # trillian-log-server — the log Rekor is a front end over.
+  #
+  # NETWORKS: innsegl-rekor-log (rekor calls it) and innsegl-trillian-db (it
+  # calls MySQL). Nothing else, and in particular it is not on
+  # innsegl-sigstore: no client of the log can bypass Rekor and talk to
+  # Trillian directly.
+  # --------------------------------------------------------------------------
+  trillian-log-server:
+    image: *trillian-log-server-image
+    container_name: innsegl-sigstore-trillian-log-server
+    depends_on:
+      trillian-db:
+        condition: service_healthy
+    restart: on-failure
+    command:
+      - "--storage_system=mysql"
+      - "--mysql_uri=test:zaphod@tcp(trillian-db:3306)/test"
+      - "--rpc_endpoint=0.0.0.0:8090"
+      - "--http_endpoint=0.0.0.0:8091"
+      - "--quota_system=noop"
+    networks:
+      - innsegl-rekor-log
+      - innsegl-trillian-db
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # --------------------------------------------------------------------------
+  # trillian-log-signer — the sequencer.
+  #
+  # RM-012 FINDING, and the single most expensive thing that file learned:
+  # THIS SERVICE IS NOT OPTIONAL. Without it, leaves are queued and never
+  # integrated. The log accepts an anchor and can never prove it; there is no
+  # error anywhere, the inclusion proof simply never appears, and SEG-003 hangs
+  # rather than failing. A hang is the worst of the three outcomes because it
+  # looks like slowness. sigstore/verify.sh polls for an inclusion proof
+  # precisely so that this container's absence would be a failure with a name.
+  #
+  # NETWORKS: innsegl-trillian-db only. It writes to the database and talks to
+  # nobody; it is on neither of Rekor's networks and nothing can call it.
+  #
+  # --force_master: single-instance compose, so there is no election to hold.
+  # --------------------------------------------------------------------------
+  trillian-log-signer:
+    image: *trillian-log-signer-image
+    container_name: innsegl-sigstore-trillian-log-signer
+    depends_on:
+      trillian-db:
+        condition: service_healthy
+    restart: on-failure
+    command:
+      - "--storage_system=mysql"
+      - "--mysql_uri=test:zaphod@tcp(trillian-db:3306)/test"
+      - "--rpc_endpoint=0.0.0.0:8090"
+      - "--http_endpoint=0.0.0.0:8091"
+      - "--force_master"
+      - "--quota_system=noop"
+    networks:
+      - innsegl-trillian-db
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # --------------------------------------------------------------------------
+  # trillian-db — MySQL carrying Trillian's storage schema.
+  #
+  # NETWORKS: innsegl-trillian-db only, which has exactly three members. The
+  # database is unreachable from rekor, from fulcio, from the host and from
+  # every other doc 05 §1 service. No port is published.
+  #
+  # `platform: linux/amd64` because this is the one image in the stack with no
+  # arm64 build; it runs under emulation, which is slow to boot and is why the
+  # healthcheck below is given a long start_period.
+  # --------------------------------------------------------------------------
+  trillian-db:
+    image: *trillian-db-image
+    container_name: innsegl-sigstore-trillian-db
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: *trillian-db-password
+      MYSQL_DATABASE: *trillian-db-name
+      MYSQL_USER: *trillian-db-user
+      MYSQL_PASSWORD: *trillian-db-password
+    networks:
+      - innsegl-trillian-db
+    volumes:
+      - sigstore-trillian-db-data:/var/lib/mysql
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # RM-012 FINDING, and this is why the check is a SELECT over TCP rather
+      # than upstream's `mysqladmin ping`. The image boots twice: first a
+      # temporary server with networking disabled, against which it applies
+      # Trillian's schema, and then — after shutting that one down — the real
+      # one. A probe over the container's unix socket answers "yes" during the
+      # first boot, at a moment when nothing on the network can connect, and
+      # the Trillian pair gets started into the gap and exits. Asking the way
+      # Trillian will ask, for the table Trillian will read, is the only
+      # question whose answer means anything.
+      test:
+        - "CMD"
+        - "mysql"
+        - "--protocol=TCP"
+        - "--host=127.0.0.1"
+        - "--port=3306"
+        - "-utest"
+        - "-pzaphod"
+        - "-e"
+        - "SELECT 1 FROM test.Trees LIMIT 1"
+      interval: 5s
+      timeout: 10s
+      retries: 40
+      start_period: 60s
+
+  # --------------------------------------------------------------------------
+  # rekor-redis — Rekor's search index.
+  #
+  # NETWORKS: innsegl-rekor-index, whose only other member is rekor. No
+  # password, and that is a decision rather than an omission: upstream's
+  # compose sets `--requirepass test`, a shared secret on a shared network.
+  # A network with two members is the stronger control, and a password on the
+  # command line of a container anyone can `docker inspect` is not a second
+  # one. Nothing else in the stack can open a socket to this container.
+  #
+  # `--appendonly no --save ""`: the index is derived state, rebuildable from
+  # the log. Losing it loses search, never a proof — so it is held in memory
+  # and never written, which is also what lets the container be read-only.
+  # --------------------------------------------------------------------------
+  rekor-redis:
+    image: *rekor-redis-image
+    container_name: innsegl-sigstore-rekor-redis
+    restart: unless-stopped
+    # MEASURED, not assumed. The official redis entrypoint starts as root and
+    # drops to the `redis` user with setpriv, which needs CAP_SETUID and
+    # CAP_SETGID. With `cap_drop: ALL` and nothing else, this container fails
+    # with `setpriv: setresuid failed: Operation not permitted`, exit 127, and
+    # restarts forever. Starting AS uid 999 — the image's own `redis` user —
+    # makes the entrypoint skip the drop entirely, so the capabilities are
+    # never needed rather than being granted back.
+    user: "999:999"
+    command: ["--bind", "0.0.0.0", "--appendonly", "no", "--save", ""]
+    networks:
+      - innsegl-rekor-index
+    read_only: true
+    tmpfs:
+      # /data is where redis would write a snapshot. Persistence is off above,
+      # but the directory must exist and be writable or the server refuses to
+      # start; a tmpfs gives it one that cannot outlive the container.
+      - /data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+# ----------------------------------------------------------------------------
+# Networks. Membership is the access-control list; keep these comments accurate
+# when adding a service, because they are the only place the rule is written
+# down in a form a reviewer can check against the `networks:` keys above.
+#
+# The shape, stated once: fulcio and rekor share a client-facing network, plus
+# one non-internal network that exists only so their ports can be published.
+# Fulcio's only other network is the one spire-oidc is on. Rekor reaches
+# Trillian and Redis on two networks of two members each, and reaches the
+# database on none.
+# ----------------------------------------------------------------------------
+networks:
+  # DECLARED IN spire.yml, JOINED HERE. This is the whole of the wiring between
+  # the two stacks: Fulcio joins the network the OIDC discovery provider is
+  # already on, and reads two public documents over it. External, because
+  # spire.yml owns it and creates it; `up` before the SPIRE stack exists fails
+  # with a message naming the missing network, which is the correct failure.
+  # Overridable so a test overlay can point at a per-process SPIRE stack's
+  # frontend network (ADR-0022, spire-testscope.yml).
+  # MEMBERS: spire-oidc, fulcio, and whatever terminates TLS in production.
+  innsegl-oidc-frontend:
+    name: ${INNSEGL_SIGSTORE_OIDC_NETWORK:-innsegl-oidc-frontend}
+    external: true
+
+  # The client-facing Sigstore network.
+  # MEMBERS: fulcio, rekor, and the innsegl-* services when they land — the MCP,
+  # the sealer's anchorer, the reconciler's cross-check, the dashboard's proof
+  # endpoints. Internal: none of them needs to reach anything outside this
+  # deployment over it, and a local Sigstore that can call out is a local
+  # Sigstore that can be made to call out.
+  innsegl-sigstore:
+    name: innsegl-sigstore
+    internal: true
+
+  # MEMBERS: fulcio, rekor. Nothing else, ever.
+  #
+  # This network exists for one mechanical reason and it is worth stating so
+  # nobody "tidies" it away. MEASURED: a container attached only to `internal`
+  # networks CANNOT have a port published. With rekor on the three internal
+  # networks above and nothing else, `docker port innsegl-sigstore-rekor`
+  # printed `3000/tcp` with no host binding, `.NetworkSettings.Ports` was
+  # `{"3000/tcp":[]}`, and the host could not connect — while fulcio, which
+  # happened also to be on the non-internal OIDC frontend, published fine. An
+  # internal network has no gateway, so there is nothing for Docker to NAT
+  # through.
+  #
+  # Rather than un-internalling `innsegl-sigstore` — which would hand egress to
+  # every innsegl-* service that later joins it — the two services that must be
+  # reachable from the host get one narrow non-internal network of their own.
+  # The cost is honest and bounded: fulcio and rekor can route off-host over
+  # this network. Fulcio already could, via the OIDC frontend. Rekor is the one
+  # service that gains it, and it gains it so that `innsegl verify` and the
+  # demo agent can reach the log from outside the compose project at all.
+  innsegl-sigstore-published:
+    name: innsegl-sigstore-published
+
+  # rekor -> trillian-log-server.
+  # MEMBERS: rekor, trillian-log-server. Nothing else, ever — in particular not
+  # trillian-log-signer, which nothing calls.
+  innsegl-rekor-log:
+    name: innsegl-sigstore-rekor-log
+    internal: true
+
+  # rekor -> redis.
+  # MEMBERS: rekor, rekor-redis. This two-member network is what stands in for
+  # a Redis password; see the service.
+  innsegl-rekor-index:
+    name: innsegl-sigstore-rekor-index
+    internal: true
+
+  # The Trillian pair -> MySQL.
+  # MEMBERS: trillian-log-server, trillian-log-signer, trillian-db. Rekor is
+  # deliberately not a member: the front end has no route to the database.
+  innsegl-trillian-db:
+    name: innsegl-sigstore-trillian-db
+    internal: true
+
+# ----------------------------------------------------------------------------
+# Volumes. As with the networks, the mount list is an access-control decision;
+# each one names who may mount it and how.
+# ----------------------------------------------------------------------------
+volumes:
+  # The Fulcio CA certificate, its encrypted key, and the rendered issuer
+  # config. MOUNTED BY: sigstore-bootstrap (rw), fulcio (ro).
+  sigstore-fulcio-pki:
+  # The transparency log's signing key — the key ADR-0009's verification
+  # ultimately trusts. MOUNTED BY: sigstore-bootstrap (rw), rekor (ro).
+  sigstore-rekor-key:
+  # Trillian's MySQL data directory. MOUNTED BY: trillian-db.
+  sigstore-trillian-db-data:

@@ -20,7 +20,8 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 
 COVERPROFILE := cover.out
 
-.PHONY: all build test lint cover smoke spire-up spire-verify spire-down clean
+.PHONY: all build test lint cover smoke spire-up spire-verify spire-down \
+        sigstore-up sigstore-verify sigstore-down clean
 
 all: build test lint
 
@@ -54,6 +55,39 @@ spire-verify:
 ## spire-down: tear the SPIRE stack down, volumes included
 spire-down:
 	docker compose -f deploy/compose/spire.yml --profile verify down -v
+
+# ---------------------------------------------------------------------------
+# Self-hosted Sigstore (RM-030, #38). ADR-0010 made this the shipped default,
+# not a CI-only convenience.
+#
+# INNSEGL_SPIRE_JWT_ISSUER is passed to BOTH compose files, and that is the
+# whole reason these targets exist rather than a bare `docker compose up`.
+# Fulcio believes exactly one issuer; spire-server stamps exactly one `iss`
+# claim; spire-oidc advertises exactly one discovery document. All three read
+# this variable, and spire.yml's own default (https://oidc.innsegl.dev) is an
+# endpoint ADR-0010 decided is never stood up. Setting it in one place is what
+# stops the two stacks booting in disagreement.
+# ---------------------------------------------------------------------------
+INNSEGL_SPIRE_JWT_ISSUER ?= http://spire-oidc:8080
+
+## sigstore-up: boot SPIRE and the local Fulcio/Rekor pair, wired to each other
+sigstore-up:
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  docker compose -f deploy/compose/spire.yml up -d
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  deploy/compose/spire/register.sh
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  docker compose -f deploy/compose/sigstore.yml up -d
+
+## sigstore-verify: obtain a real Fulcio certificate for a real JWT-SVID
+sigstore-verify:
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  deploy/compose/sigstore/verify.sh
+
+## sigstore-down: tear the Sigstore stack down, volumes included
+sigstore-down:
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  docker compose -f deploy/compose/sigstore.yml down -v
 
 ## smoke: boot the reference stack and verify a real signed commit (RM-054)
 smoke:
