@@ -19,7 +19,9 @@ var documentedSubcommands = []string{"canary", "reap", "reconcile", "seal", "ser
 
 // implementedSubcommands are the ones with a body. The rest are still stubs
 // that exit non-zero, and TestRunDispatchesEverySubcommand asserts that.
-var implementedSubcommands = map[string]bool{"canary": true, "reap": true, "serve": true}
+var implementedSubcommands = map[string]bool{
+	"canary": true, "reap": true, "reconcile": true, "serve": true, "verify": true,
+}
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {
 	got := make([]string, 0, len(commands))
@@ -62,13 +64,15 @@ func TestRunDispatchesEverySubcommand(t *testing.T) {
 func TestRunRoutesOnFirstArgumentOnly(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"verify", "0f1e2d3c", "--json"}, &stdout, &stderr)
+	// `seal` is still a stub, so this asserts the routing without depending on
+	// what an implemented subcommand does with its arguments.
+	code := run([]string{"seal", "--once", "extra"}, &stdout, &stderr)
 
 	if code != exitNotImplemented {
 		t.Errorf("run with trailing arguments = %d, want %d", code, exitNotImplemented)
 	}
-	if !strings.Contains(stderr.String(), "innsegl verify: not implemented") {
-		t.Errorf("stderr = %q, want the verify stub to have been reached", stderr.String())
+	if !strings.Contains(stderr.String(), "innsegl seal: not implemented") {
+		t.Errorf("stderr = %q, want the seal stub to have been reached", stderr.String())
 	}
 }
 
