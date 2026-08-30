@@ -1,0 +1,499 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"innsegl.dev/innsegl/internal/mcp"
+	"innsegl.dev/innsegl/internal/spire"
+)
+
+// `innsegl serve` — the MCP server as a process.
+//
+// IP §1 names this component: "Innsegl MCP server (server name `innsegl`) —
+// remote MCP server (HTTP transport), the only component holding SPIRE server
+// admin credentials." Four of its five tools were built, tested against a real
+// Postgres and a real SPIRE, and until this file nothing constructed the
+// dependencies they run on: `internal/mcp` publishes `ConfigureRegisterAgent`,
+// `ConfigureGetCredential`, `ConfigureRecordEvent` and `ConfigureRetireAgent`,
+// and the only caller in the repository was a throwaway binary built so that
+// MCP-011 had something to SIGKILL.
+//
+// # What this file is responsible for
+//
+// Configuration, construction, wiring order, the two health endpoints, and the
+// lifecycle. Not behaviour: every decision an agent can observe belongs to
+// `internal/mcp` and is asserted there. What can only be got wrong HERE is the
+// order things are built in, and one order is load-bearing — see servewiring.go.
+//
+// # Nothing here is load-bearing for correctness under a crash
+//
+// IP §6.6 removes this process with SIGKILL at arbitrary points and requires
+// I1–I6 to hold afterwards without any of the shutdown below having run. That
+// is a property of the ledger's append rule, the SPIRE entry's derived id and
+// the idempotency store, and it is MCP-011's to prove. The orderly shutdown
+// exists for the ORDINARY stop — an orchestrator rolling a replica sends
+// SIGTERM and waits — and for nothing else.
+
+// Exit statuses for `innsegl serve`, continuing cli.go's contract. The canary
+// owns 3 and 4 and the reaper 5 and 6; these are the server's.
+//
+// The two are distinguished because an operator acts on them differently.
+// "The server never started" is a configuration or a dependency to fix before
+// anything can be served at all; "the server stopped serving" is a replica
+// that was carrying traffic and is not any more.
+const (
+	// exitServeUnavailable: the server could not start. Bad configuration, no
+	// credential, an unreachable SPIRE or ledger. Nothing was served.
+	exitServeUnavailable = 7
+	// exitServeFailed: the server was serving and stopped on an error.
+	exitServeFailed = 8
+)
+
+// Every flag falls back to an environment variable so a container can be
+// configured entirely by environment and never put the ledger DSN — which
+// carries a password — on a command line the process table can read. RM-011's
+// canary set that precedent and the reaper follows it; the four names the
+// reaper already defines are reused rather than spelled a second way, because
+// two names for one setting is a deployment that can set the wrong one.
+const (
+	envParentID              = "INNSEGL_SPIRE_PARENT_ID"
+	envMCPSVIDFile           = "INNSEGL_MCP_SVID_FILE"
+	envMCPKeyFile            = "INNSEGL_MCP_KEY_FILE"
+	envMCPBundleFile         = "INNSEGL_MCP_BUNDLE_FILE"
+	envFulcioURL             = "INNSEGL_FULCIO_URL"
+	envRekorURL              = "INNSEGL_REKOR_URL"
+	envMCPListen             = "INNSEGL_MCP_LISTEN"
+	envMCPHealthListen       = "INNSEGL_MCP_HEALTH_LISTEN"
+	envMCPAddrFile           = "INNSEGL_MCP_ADDR_FILE"
+	envRunTTL                = "INNSEGL_RUN_TTL"
+	envIdempotencyLease      = "INNSEGL_IDEMPOTENCY_LEASE"
+	envRegisterRateCalls     = "INNSEGL_REGISTER_RATE_CALLS"
+	envRegisterRateWindow    = "INNSEGL_REGISTER_RATE_WINDOW"
+	envClockSkewBound        = "INNSEGL_CLOCK_SKEW_BOUND"
+	envTrustedOrigins        = "INNSEGL_TRUSTED_ORIGINS"
+	envMCPSessionTimeout     = "INNSEGL_MCP_SESSION_TIMEOUT"
+	envMCPShutdownTimeout    = "INNSEGL_MCP_SHUTDOWN_TIMEOUT"
+	envHealthTimeout         = "INNSEGL_HEALTH_TIMEOUT"
+	envRequireAppendOnlyRole = "INNSEGL_REQUIRE_APPEND_ONLY_ROLE"
+	envMigrate               = "INNSEGL_MIGRATE"
+)
+
+// Defaults that are this command's own rather than a package's.
+const (
+	// defaultMCPListen and defaultHealthListen are loopback, not 0.0.0.0. This
+	// process holds SPIRE admin (IP §1), and a default that published it on
+	// every interface would make an operator's omission the exposure. A
+	// container publishes it deliberately.
+	defaultMCPListen    = "127.0.0.1:8080"
+	defaultHealthListen = "127.0.0.1:8081"
+
+	// defaultShutdownTimeout bounds the orderly stop. Longer than a tool call
+	// and shorter than any orchestrator's default grace period, so a rolled
+	// replica finishes its work rather than being SIGKILLed mid-call.
+	defaultShutdownTimeout = 15 * time.Second
+)
+
+// serveOptions is the resolved command line.
+type serveOptions struct {
+	dsn          string
+	spireAddress string
+	trustDomain  string
+	serverID     string
+	parentID     string
+
+	// The admin credential, one of two ways. See servewiring.go.
+	workloadAPI string
+	svidFile    string
+	keyFile     string
+	bundleFile  string
+
+	fulcioURL string
+	rekorURL  string
+
+	listen       string
+	healthListen string
+	addrFile     string
+
+	spireTimeout    time.Duration
+	runTTL          time.Duration
+	lease           time.Duration
+	rateCalls       int
+	rateWindow      time.Duration
+	clockSkewBound  time.Duration
+	trustedOrigins  []string
+	sessionTimeout  time.Duration
+	shutdownTimeout time.Duration
+	healthTimeout   time.Duration
+
+	requireRole bool
+	migrate     bool
+}
+
+// serveLog is the server's log. It is structured because a deployment ships
+// these lines to something that indexes them, and because
+// `internal/mcp`'s transport, health handler and rate limiter all take a
+// *slog.Logger — one logger for the process, not three formats on one stream.
+type serveLog struct {
+	w      io.Writer
+	logger *slog.Logger
+}
+
+func newServeLog(w io.Writer) *serveLog {
+	return &serveLog{
+		w:      w,
+		logger: slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+}
+
+func (l *serveLog) info(msg string, args ...any)  { l.logger.Info(msg, args...) }
+func (l *serveLog) warn(msg string, args ...any)  { l.logger.Warn(msg, args...) }
+func (l *serveLog) error(msg string, args ...any) { l.logger.Error(msg, args...) }
+
+// servedMCP is the running server, as this command needs it. It is an
+// interface so the command's own behaviour — configuration, the address file,
+// the exit statuses, the lifecycle — is testable without a Postgres and a
+// SPIRE; openServer is the production implementation, and what it wires to
+// what is asserted end to end against real dependencies.
+type servedMCP interface {
+	// Addr is the bound MCP transport address, after listening.
+	Addr() string
+	// HealthAddr is the bound health address.
+	HealthAddr() string
+	// BoundTools and MissingTools are the advertised IP §4 surface.
+	BoundTools() []mcp.ToolName
+	MissingTools() []mcp.ToolName
+	// Serve runs until ctx is done or a listener fails.
+	Serve(ctx context.Context) error
+	// Close releases everything the server opened.
+	Close()
+}
+
+// serveDeps are the seams the command's tests replace. Production wiring is
+// the zero value.
+type serveDeps struct {
+	open func(context.Context, serveOptions, *serveLog) (servedMCP, error)
+}
+
+func (d serveDeps) opener() func(context.Context, serveOptions, *serveLog) (servedMCP, error) {
+	if d.open != nil {
+		return d.open
+	}
+	return openServer
+}
+
+// serveCommand is the subcommand body wired into cli.go's dispatch table.
+func serveCommand(args []string, stdout, stderr io.Writer) int {
+	return runServeCommand(args, stdout, stderr, serveDeps{})
+}
+
+func runServeCommand(args []string, stdout, stderr io.Writer, deps serveDeps) int {
+	return runServe(context.Background(), args, stdout, stderr, deps)
+}
+
+// runServe is the whole command, with its parent context supplied so that a
+// test can drive the lifecycle without signalling its own process.
+func runServe(parent context.Context, args []string, stdout, stderr io.Writer, deps serveDeps) int {
+	o, code, ok := parseServeFlags(args, stderr)
+	if !ok {
+		return code
+	}
+
+	// SIGINT and SIGTERM stop the server; nothing else is handled. SIGKILL
+	// cannot be, which is the point of MCP-011.
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	log := newServeLog(stderr)
+
+	srv, err := deps.opener()(ctx, o, log)
+	if err != nil {
+		log.error("the MCP server did not start", "err", err)
+		fprintf(stderr, "innsegl serve: UNAVAILABLE - nothing is being served\n")
+		return exitServeUnavailable
+	}
+	defer srv.Close()
+
+	if err := announceAddress(o.addrFile, srv.Addr()); err != nil {
+		log.error("the bound address could not be published", "err", err)
+		fprintf(stderr, "innsegl serve: UNAVAILABLE - the address file is how callers find this "+
+			"replica; a server nobody can address is not serving\n")
+		return exitServeUnavailable
+	}
+
+	// The bound address on STDOUT, one line, nothing else. The structured log
+	// is on stderr; a shell that wants to know where the server came up reads
+	// this without parsing log lines, and `innsegl serve -listen 127.0.0.1:0`
+	// is then usable from a script without an address file.
+	fprintf(stdout, "%s\n", srv.Addr())
+
+	reportToolSurface(log, srv)
+	log.info("serving",
+		"mcp", srv.Addr(),
+		"health", srv.HealthAddr(),
+		"live_path", mcp.LivePath,
+		"ready_path", mcp.ReadyPath,
+		"server_name", mcp.ServerName,
+	)
+
+	if err := srv.Serve(ctx); err != nil {
+		log.error("the MCP server stopped serving", "err", err)
+		return exitServeFailed
+	}
+	log.info("stopped")
+	return exitOK
+}
+
+// reportToolSurface names what is advertised and what is not.
+//
+// ADR-0024: "An incomplete tool surface is reported and does not gate
+// readiness." `sign_commit` lands with RM-033 (#41), so v0.1 advertises four
+// of IP §4's five. `Server.MissingTools` exists for this duty and both health
+// endpoints carry the same list; an operator debugging a refused `sign_commit`
+// must be able to find out from the log why the tool is not there, rather than
+// concluding the server is broken.
+func reportToolSurface(log *serveLog, srv servedMCP) {
+	bound := srv.BoundTools()
+	log.info("tool surface", "bound", names(bound), "count", len(bound))
+
+	missing := srv.MissingTools()
+	if len(missing) == 0 {
+		return
+	}
+	log.warn("tools MISSING from the IP §4 surface: no binder is registered for them, "+
+		"and a call to one is refused as an unknown tool",
+		"missing", names(missing),
+		"reported_at", mcp.LivePath+" and "+mcp.ReadyPath,
+		"note", "sign_commit is RM-033 (#41); a missing tool never gates readiness (ADR-0024)")
+}
+
+func names(tools []mcp.ToolName) string {
+	out := make([]string, len(tools))
+	for i, t := range tools {
+		out[i] = string(t)
+	}
+	return strings.Join(out, ",")
+}
+
+// parseServeFlags resolves the command line and the environment behind it.
+func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) {
+	fs := flag.NewFlagSet("innsegl serve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var (
+		dsn = fs.String("dsn", os.Getenv(envLedgerDSN),
+			"ledger connection string — prefer the environment variable ($"+envLedgerDSN+")")
+		spireAddress = fs.String("spire-address", os.Getenv(envSPIREAddress),
+			"SPIRE server admin API, host:port ($"+envSPIREAddress+")")
+		trustDomain = fs.String("trust-domain", os.Getenv(envTrustDomain),
+			"SPIFFE trust domain name, e.g. innsegl.dev ($"+envTrustDomain+")")
+		serverID = fs.String("spire-server-id", os.Getenv(envSPIREServerID),
+			"SPIFFE ID the SPIRE server must present; empty means spiffe://{trust-domain}/spire/server ($"+envSPIREServerID+")")
+		parentID = fs.String("parent-id", os.Getenv(envParentID),
+			"attested node every run entry hangs off ($"+envParentID+")")
+		workloadAPI = fs.String("workload-api", envOr(envWorkloadAPI, spire.DefaultWorkloadAPIAddress),
+			"Workload API socket this process fetches its own admin SVID from ($"+envWorkloadAPI+")")
+		svidFile = fs.String("svid", os.Getenv(envMCPSVIDFile),
+			"PEM file holding the admin X509-SVID, instead of the Workload API ($"+envMCPSVIDFile+")")
+		keyFile = fs.String("key", os.Getenv(envMCPKeyFile),
+			"PEM file holding the admin SVID's private key ($"+envMCPKeyFile+")")
+		bundleFile = fs.String("bundle", os.Getenv(envMCPBundleFile),
+			"PEM file holding the trust bundle ($"+envMCPBundleFile+")")
+		fulcioURL = fs.String("fulcio-url", os.Getenv(envFulcioURL),
+			"base URL of the configured Fulcio, probed by "+mcp.ReadyPath+" ($"+envFulcioURL+")")
+		rekorURL = fs.String("rekor-url", os.Getenv(envRekorURL),
+			"base URL of the configured Rekor, probed by "+mcp.ReadyPath+" ($"+envRekorURL+")")
+		listen = fs.String("listen", envOr(envMCPListen, defaultMCPListen),
+			"address the MCP transport listens on ($"+envMCPListen+")")
+		healthListen = fs.String("health-listen", envOr(envMCPHealthListen, defaultHealthListen),
+			"address "+mcp.LivePath+" and "+mcp.ReadyPath+" listen on ($"+envMCPHealthListen+")")
+		addrFile = fs.String("addr-file", os.Getenv(envMCPAddrFile),
+			"file to publish the bound MCP address to, written by rename ($"+envMCPAddrFile+")")
+		spireTimeout = fs.Duration("timeout", envDuration(envSPIRETimeout, spire.DefaultTimeout),
+			"bound on one SPIRE admin RPC ($"+envSPIRETimeout+")")
+		runTTL = fs.Duration("run-ttl", envDuration(envRunTTL, 0),
+			"identity lifetime asked for per run; 0 uses internal/spire's default ($"+envRunTTL+")")
+		lease = fs.Duration("idempotency-lease", envDuration(envIdempotencyLease, mcp.DefaultIdempotencyLease),
+			"how long one idempotency claim is honoured before another caller may take it over ($"+envIdempotencyLease+")")
+		rateCalls = fs.Int("register-rate-calls", envInt(envRegisterRateCalls, mcp.DefaultRegisterAgentRateLimitCalls),
+			"register_agent calls one caller may make per window; 0 serves it UNMETERED ($"+envRegisterRateCalls+")")
+		rateWindow = fs.Duration("register-rate-window", envDuration(envRegisterRateWindow, mcp.DefaultRegisterAgentRateLimitWindow),
+			"the window -register-rate-calls is measured over ($"+envRegisterRateWindow+")")
+		clockSkewBound = fs.Duration("clock-skew-bound", envDuration(envClockSkewBound, 0),
+			"IP §6.8's skew bound, surfaced in "+mcp.ReadyPath+"; 0 reports it unconfigured ($"+envClockSkewBound+")")
+		trustedOrigins = fs.String("trusted-origins", os.Getenv(envTrustedOrigins),
+			"comma-separated browser origins allowed to make state-changing requests ($"+envTrustedOrigins+")")
+		sessionTimeout = fs.Duration("session-timeout", envDuration(envMCPSessionTimeout, 0),
+			"close MCP sessions idle this long; 0 never closes them ($"+envMCPSessionTimeout+")")
+		shutdownTimeout = fs.Duration("shutdown-timeout", envDuration(envMCPShutdownTimeout, defaultShutdownTimeout),
+			"bound on the orderly shutdown after SIGINT or SIGTERM ($"+envMCPShutdownTimeout+")")
+		healthTimeout = fs.Duration("health-timeout", envDuration(envHealthTimeout, mcp.DefaultHealthTimeout),
+			"bound on one readiness probe ($"+envHealthTimeout+")")
+		requireRole = fs.Bool("require-append-only-role", envBool(envRequireAppendOnlyRole, false),
+			"refuse to start unless the database role can INSERT and cannot UPDATE, DELETE or "+
+				"TRUNCATE the chain (doc 05 §1) ($"+envRequireAppendOnlyRole+")")
+		migrate = fs.Bool("migrate", envBool(envMigrate, false),
+			"apply the ledger migrations before serving; a deployment normally runs them as its "+
+				"own step ($"+envMigrate+")")
+	)
+
+	fs.Usage = func() {
+		fprintf(stderr, "innsegl serve - run the innsegl MCP server (IP §1, §4)\n\n")
+		fprintf(stderr, "Usage:\n  innsegl serve [flags]\n\n")
+		fprintf(stderr, "Serves the IP §4 tool surface over the MCP HTTP transport, and "+
+			mcp.LivePath+" / "+mcp.ReadyPath+" on a separate address.\n")
+		fprintf(stderr, "This process is the only component holding the SPIRE admin credential "+
+			"(IP §1, doc 05 §1); run it under a database role that can append and not delete.\n\n")
+		fprintf(stderr, "Exit status:\n")
+		fprintf(stderr, "  %d  the server shut down in an orderly way\n", exitOK)
+		fprintf(stderr, "  %d  the command line was not understood\n", exitUsage)
+		fprintf(stderr, "  %d  UNAVAILABLE - the server could not start; nothing was served\n", exitServeUnavailable)
+		fprintf(stderr, "  %d  FAILED - the server was serving and stopped on an error\n", exitServeFailed)
+		fprintf(stderr, "\nFlags:\n")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return serveOptions{}, exitOK, false
+		}
+		return serveOptions{}, exitUsage, false
+	}
+	if fs.NArg() > 0 {
+		fprintf(stderr, "innsegl serve: unexpected argument %q\n", fs.Arg(0))
+		fs.Usage()
+		return serveOptions{}, exitUsage, false
+	}
+
+	o := serveOptions{
+		dsn: *dsn, spireAddress: *spireAddress, trustDomain: *trustDomain,
+		serverID: *serverID, parentID: *parentID,
+		workloadAPI: *workloadAPI, svidFile: *svidFile, keyFile: *keyFile, bundleFile: *bundleFile,
+		fulcioURL: *fulcioURL, rekorURL: *rekorURL,
+		listen: *listen, healthListen: *healthListen, addrFile: *addrFile,
+		spireTimeout: *spireTimeout, runTTL: *runTTL, lease: *lease,
+		rateCalls: *rateCalls, rateWindow: *rateWindow,
+		clockSkewBound: *clockSkewBound, trustedOrigins: splitOrigins(*trustedOrigins),
+		sessionTimeout: *sessionTimeout, shutdownTimeout: *shutdownTimeout,
+		healthTimeout: *healthTimeout, requireRole: *requireRole, migrate: *migrate,
+	}
+	if problem := o.validate(); problem != "" {
+		fprintf(stderr, "innsegl serve: %s\n", problem)
+		return serveOptions{}, exitUsage, false
+	}
+	return o, exitOK, true
+}
+
+// validate reports the first setting that makes this configuration unusable,
+// naming the flag and its environment variable. An operator has to be told
+// WHICH one; "the server did not start" is not actionable.
+//
+// Every required setting below is required because there is no defensible
+// default for it. The Fulcio and Rekor addresses in particular: ADR-0010 makes
+// the self-hosted pair the shipped default, so a deployment that did not say
+// which Sigstore it uses has no address to fall back to, and a readiness probe
+// pointed at somebody else's log would report green about the wrong system.
+func (o serveOptions) validate() string {
+	switch {
+	case o.dsn == "":
+		return "-dsn (or $" + envLedgerDSN + ") is required"
+	case o.spireAddress == "":
+		return "-spire-address (or $" + envSPIREAddress + ") is required"
+	case o.trustDomain == "":
+		return "-trust-domain (or $" + envTrustDomain + ") is required"
+	case o.parentID == "":
+		return "-parent-id (or $" + envParentID + ") is required: an entry with no reachable " +
+			"parent is an entry no workload can ever match"
+	case o.fulcioURL == "":
+		return "-fulcio-url (or $" + envFulcioURL + ") is required: " + mcp.ReadyPath +
+			" reports Sigstore reachability and there is no default pair to fall back to (ADR-0010)"
+	case o.rekorURL == "":
+		return "-rekor-url (or $" + envRekorURL + ") is required: " + mcp.ReadyPath +
+			" reports Sigstore reachability and there is no default pair to fall back to (ADR-0010)"
+	case o.listen == "":
+		return "-listen (or $" + envMCPListen + ") is required"
+	case o.healthListen == "":
+		return "-health-listen (or $" + envMCPHealthListen + ") is required: IP §6.6 requires " +
+			"the health endpoints, and a replica with none cannot be taken out of rotation"
+	case o.rateCalls < 0:
+		return fmt.Sprintf("-register-rate-calls %d is negative; 0 serves register_agent "+
+			"unmetered and a positive number meters it (AB-07)", o.rateCalls)
+	case o.rateCalls > 0 && o.rateWindow <= 0:
+		return fmt.Sprintf("-register-rate-window %s is not positive; a limit measured over "+
+			"no time is not a limit", o.rateWindow)
+	case o.lease < 0:
+		return "-idempotency-lease is negative"
+	case o.shutdownTimeout < 0:
+		return "-shutdown-timeout is negative"
+	}
+	// One credential, and exactly one way of getting it. See servewiring.go.
+	files := 0
+	for _, f := range []string{o.svidFile, o.keyFile, o.bundleFile} {
+		if f != "" {
+			files++
+		}
+	}
+	if files != 0 && files != 3 {
+		return "-svid, -key and -bundle are one credential: supply all three or none " +
+			"(and none means the Workload API, which is what a deployment uses)"
+	}
+	return ""
+}
+
+// splitOrigins reads the comma-separated trusted-origin list.
+func splitOrigins(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// envInt reads an integer from the environment. An unparseable value falls
+// back rather than failing, matching envDuration and envBool: the flag it
+// defaults is still explicit on the command line, and flag.Parse reports a bad
+// -flag value itself.
+func envInt(name string, fallback int) int {
+	v, err := strconv.Atoi(os.Getenv(name))
+	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+// announceAddress publishes the bound address by rename, so a reader sees
+// either nothing or a complete address and never a half-written one. An empty
+// path publishes nothing, which is the ordinary deployment: an orchestrator
+// knows where it put the replica.
+func announceAddress(path, addr string) error {
+	if path == "" {
+		return nil
+	}
+	tmp := path + ".partial"
+	if err := os.WriteFile(tmp, []byte(addr), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("rename %s to %s: %w", tmp, filepath.Base(path), err)
+	}
+	return nil
+}

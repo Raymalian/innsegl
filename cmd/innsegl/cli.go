@@ -36,7 +36,7 @@ type command struct {
 var commands = map[string]command{
 	"serve": {
 		summary: "run the innsegl MCP server",
-		exec:    notImplemented("serve"),
+		exec:    serveCommand,
 	},
 	"reconcile": {
 		summary: "reconcile signing intents against the transparency log",
