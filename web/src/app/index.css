@@ -1,0 +1,57 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * The dashboard's entry stylesheet. It imports Tailwind and then the token
+ * bridge, which deletes Tailwind's default colour, type, spacing, radius,
+ * shadow and animation scales and replaces them with the sheet in
+ * src/tokens/ (ADR-0038 decision 4). After that import, `bg-green-500`
+ * compiles to nothing.
+ *
+ * Nothing below invents a value. Every declaration names a token, which is
+ * doc 06 §5.1's "all colors, spacing, and type flow through design tokens"
+ * applied to the base layer as well as to the components.
+ */
+
+@import "tailwindcss";
+@import "../tokens/tailwind-theme.css";
+
+@layer base {
+  html {
+    font-family: var(--innsegl-font-family-sans);
+    line-height: var(--innsegl-line-height-default);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--innsegl-color-surface-page);
+    color: var(--innsegl-color-text-primary);
+  }
+
+  /* doc 06 §6.4: "Visible focus states." One rule, from the tokens, so no
+   * component has to remember it and none can quietly remove it. */
+  :focus-visible {
+    outline: var(--innsegl-focus-ring-width) solid var(--innsegl-color-focus-ring);
+    outline-offset: var(--innsegl-focus-ring-offset);
+  }
+
+  /* Identifiers are verbatim technical material and never proportional
+   * (doc 06 P4, §5.2). */
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: var(--innsegl-font-family-mono);
+  }
+}
+
+/* doc 06 §5.5: "Respect prefers-reduced-motion." The theme ships no keyframe
+ * animations at all, so this covers the transitions that remain. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

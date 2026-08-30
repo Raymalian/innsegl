@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <!--
+      The wordmark, not translatable copy: doc 06 names the product "Innsegl"
+      in UI chrome. Every other string in this application comes from
+      src/app/strings.ts (doc 06 §6.3).
+    -->
+    <title>Innsegl</title>
+    <!--
+      The theme override, applied before the first paint. This has to be a
+      blocking inline script: a module, a deferred script or a React effect all
+      run after the page has been painted, which shows a reader who chose dark
+      a light page on every load. The text is exported from src/app/theme.ts as
+      THEME_BOOTSTRAP and asserted identical by FE-018, so the storage key has
+      one definition rather than two.
+    -->
+    <script>
+try{var t=localStorage.getItem("innsegl.theme");if(t==="light"||t==="dark"){document.documentElement.setAttribute("data-theme",t)}}catch(e){}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/app/main.tsx"></script>
+  </body>
+</html>
