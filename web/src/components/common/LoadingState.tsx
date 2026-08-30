@@ -28,9 +28,10 @@
  */
 
 import { useEffect, useState } from "react";
+import { ErrorState } from "./ErrorState";
 import { Icon } from "./Icon";
 import { strings } from "./strings";
-import { degraded, focusRing, hairline, mutedText, noticeBase } from "./styles";
+import { mutedText, noticeBase } from "./styles";
 import { formatDuration } from "./time";
 
 /** The bound a caller gets for free. Long enough for a cold hot-tier query,
@@ -78,21 +79,12 @@ export function LoadingState({
     );
   }
 
+  /* The timed-out render IS the dependency-error state doc 06 §4.6 specifies,
+   * so it is that component rather than a second one that could drift from it. */
   return (
-    <div role="alert" className={`${noticeBase} ${hairline} ${degraded}`}>
-      <Icon name="unreachable" className="mt-[0.15em] shrink-0" />
-      <span className="flex flex-col items-start gap-2">
-        <span>{strings.loading.timedOut(what, formatDuration(timeoutMs))}</span>
-        {onRetry === undefined ? null : (
-          <button
-            type="button"
-            onClick={onRetry}
-            className={`rounded-sm px-2 py-1 underline underline-offset-2 ${focusRing}`}
-          >
-            {strings.loading.retry}
-          </button>
-        )}
-      </span>
-    </div>
+    <ErrorState
+      title={strings.loading.timedOut(what, formatDuration(timeoutMs))}
+      {...(onRetry === undefined ? {} : { onRetry })}
+    />
   );
 }

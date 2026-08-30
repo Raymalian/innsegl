@@ -76,7 +76,7 @@ export const strings = {
     /* Deliberately not "Loading X …" any more: the sentence a reader sees
      * after the bound must not be the sentence they saw before it. */
     timedOut: (what: string, waited: string) =>
-      `Couldn't load ${what} — timed out after ${waited}. Nothing answered, so this shows nothing rather than guessing.`,
+      `Couldn't load ${what} — timed out after ${waited}`,
     retry: "Retry",
   },
 

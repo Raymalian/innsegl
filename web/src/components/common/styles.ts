@@ -35,6 +35,12 @@ export const hairline =
 export const emphasisBorder =
   "border-[length:var(--innsegl-border-width-emphasis)]";
 
+/* doc 06 §3.2 requires Expired to be "styled distinctly from retired", and
+ * doc 06 §5.3 puts both in neutral grey — so the distinction cannot be a hue
+ * and this is where it lives instead. The dashed style is a token, so a
+ * rebrand can restyle it and no component has to know. */
+export const expiredOutline = `border-[length:var(--innsegl-border-width-hairline)] [border-style:var(--innsegl-border-style-status-expired)]`;
+
 /** doc 06 §5.5: state transitions only, and the sheet collapses these to 1ms
  * under prefers-reduced-motion so a component need not ask. */
 export const stateTransition =
@@ -49,9 +55,23 @@ export const identifierText =
 export const badgeBase =
   "inline-flex items-center gap-1 rounded-pill px-2 py-0 text-micro leading-tight whitespace-nowrap";
 
+/** The three run statuses. Neutral, all of them: none is a verdict (§5.3). */
+export const statusActive =
+  "text-status-active bg-status-active-surface border-status-active-line";
+export const statusRetired =
+  "text-status-retired bg-status-retired-surface border-status-retired-line";
+export const statusExpired =
+  "text-status-expired bg-status-expired-surface border-status-expired-line";
+
 /** A block a whole view can sit under: staleness, empty, error. */
 export const noticeBase =
   "flex items-start gap-2 rounded-md p-4 text-body leading-default";
+
+/** A banner title: weight carries the hierarchy before size does (§5.2). */
+export const noticeTitle = "text-prose font-semibold leading-tight";
+
+/** The stack a notice puts its title, detail and evidence link into. */
+export const noticeBody = "flex flex-col items-start gap-1";
 
 /** The one sanctioned elevation (doc 06 §5.4: "no shadows deeper than subtle
  * elevation for popovers"). */
