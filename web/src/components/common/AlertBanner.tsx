@@ -35,7 +35,7 @@ import {
   degraded,
   hairline,
   integrityAlert,
-  link,
+  linkOnFill,
   noticeBase,
   noticeBody,
   noticeTitle,
@@ -91,7 +91,7 @@ function Banner({ alert }: { readonly alert: Alert }) {
       <span className={noticeBody}>
         <span className={noticeTitle}>{alert.title}</span>
         <span>{alert.detail}</span>
-        <a href={alert.evidenceHref} className={link}>
+        <a href={alert.evidenceHref} className={linkOnFill}>
           {alert.evidenceLabel ?? strings.alert.evidence}
         </a>
       </span>

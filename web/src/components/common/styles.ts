@@ -101,8 +101,30 @@ export const neutralSurface = "text-ink bg-surface border-line";
 export const secondaryText = "text-ink-secondary";
 export const mutedText = "text-ink-muted";
 
-/** The accent: interactive chrome, semantically meaningless (doc 06 §5.3). */
+/** The accent: interactive chrome, semantically meaningless (doc 06 §5.3).
+ *
+ * Correct on a page surface. WRONG on a filled alert, which is why `linkOnFill`
+ * exists below. */
 export const link = `text-accent underline underline-offset-2 ${focusRing}`;
+
+/** A link inside a filled alert banner.
+ *
+ * The accent is defined against the page ground, and the integrity banner is a
+ * red fill. Measured: --innsegl-color-accent-text on
+ * --innsegl-color-integrity-alert-surface is **1.07:1** in light mode
+ * (#3a3ea1 on #9b1921) — the evidence link on the product's most important
+ * alarm was effectively invisible, on the banner whose entire purpose is P1's
+ * "links directly to the evidence". doc 06 §6.4 requires AA in both modes.
+ *
+ * No gate caught it because contrast-pairs.txt asserts declared pairs, and a
+ * component may compose any token over any background. The manifest now names
+ * this pair; this class is what makes it hold.
+ *
+ * `text-inherit` takes the banner's own text colour, so the link's contrast is
+ * by construction the same assertion already made for the banner's copy, for
+ * every alert kind, including ones added later. The underline is what marks it
+ * as a link — never colour alone (§6.4). */
+export const linkOnFill = `text-inherit underline underline-offset-2 ${focusRing}`;
 
 /** Visually hidden, still announced. doc 06 §6.4 wants truncated identifiers
  * to reach assistive technology; this is how. */
