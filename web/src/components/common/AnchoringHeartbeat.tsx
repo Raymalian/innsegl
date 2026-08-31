@@ -84,7 +84,7 @@ export function AnchoringHeartbeat({
       title={formatAbsoluteUtc(anchoredAt)}
       className="font-mono"
     >
-      {`${ago} ago`}
+      {strings.heartbeat.agoSuffix(ago)}
     </time>
   );
 
@@ -93,7 +93,7 @@ export function AnchoringHeartbeat({
       <Shell state="within-bound" tone={secondaryText}>
         <Icon name="anchor-pulse" className="shrink-0" />
         <span>
-          {`Ledger segment ${segment} anchored `}
+          {strings.heartbeat.withinPrefix(segment)}
           {timestamp}
         </span>
       </Shell>
@@ -106,9 +106,9 @@ export function AnchoringHeartbeat({
     <Shell state="beyond-bound" tone={`${degraded} ${hairline} px-2`}>
       <Icon name="anchor-lag" className="shrink-0" />
       <span>
-        {`Ledger segment ${segment} anchored `}
+        {strings.heartbeat.withinPrefix(segment)}
         {timestamp}
-        {` — ${over} beyond the ${bound} anchoring-lag bound`}
+        {strings.heartbeat.beyondSuffix(over, bound)}
       </span>
     </Shell>
   );

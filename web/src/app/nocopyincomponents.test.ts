@@ -63,6 +63,26 @@ export function findEmbeddedCopy(file: string, source: string): Finding[] {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       return node.text;
     }
+    // A template with substitutions is the hole this scanner had. RM-044 found
+    // it: `Ledger segment ${segment} anchored ${minutes} min ago` in a JSX slot
+    // is copy — three English words a translator needs — and it passed, because
+    // only NoSubstitutionTemplateLiteral was recognised. The interpolations are
+    // not the copy; the text around them is.
+    if (ts.isTemplateExpression(node)) {
+      const around = [
+        node.head.text,
+        ...node.templateSpans.map((span) => span.literal.text),
+      ]
+        .join(" ")
+        .trim();
+      // Punctuation and separators joining two interpolations are not copy.
+      // `${label}: ${value}.` carries nothing a translator would change, and
+      // flagging it would push authors to move a colon into a catalogue, which
+      // makes the catalogue worse and teaches everyone to distrust this gate.
+      // Two adjacent letters is the test: it admits "ago" and "of", and
+      // rejects ":", " — ", "/" and "()".
+      return /\p{L}{2}/u.test(around) ? around : undefined;
+    }
     if (ts.isJsxExpression(node)) return literalText(node.expression);
     return undefined;
   };
