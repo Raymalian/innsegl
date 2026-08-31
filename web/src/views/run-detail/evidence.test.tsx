@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * FE-044 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
+ * FE-084 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
  *
  *   U | Run detail puts each event's own evidence next to it, and states every
  *     gap in that evidence rather than leaving it blank | Tool calls expand to
@@ -43,7 +43,7 @@ function renderNode(event: TimelineEvent) {
 const DIGEST =
   "sha256:aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
 
-describe("FE-044 tool calls expand to their digests", () => {
+describe("FE-084 tool calls expand to their digests", () => {
   const toolCall = ledgerEvent(EVENT_TYPES.toolCall, 3, {
     canonical: { tool_name: "edit_file", payload_digest: DIGEST },
   });
@@ -72,7 +72,7 @@ describe("FE-044 tool calls expand to their digests", () => {
   });
 });
 
-describe("FE-044 the tool-call count", () => {
+describe("FE-084 the tool-call count", () => {
   it("counts the tool calls exactly, beside the events themselves", async () => {
     const { RunDetailView } = await import("./RunDetailView");
     const timeline = [
@@ -106,7 +106,7 @@ describe("FE-044 the tool-call count", () => {
   });
 });
 
-describe("FE-044 a recorded commit carries its external record", () => {
+describe("FE-084 a recorded commit carries its external record", () => {
   it("shows the commit SHA, the Rekor log index and the Rekor entry", () => {
     const recorded = healthyTimeline().find(
       (event) => event.event_type === EVENT_TYPES.commitRecorded,
@@ -120,7 +120,7 @@ describe("FE-044 a recorded commit carries its external record", () => {
   });
 });
 
-describe("FE-044 canonical members, with an honest bound", () => {
+describe("FE-084 canonical members, with an honest bound", () => {
   it("offers the members and states that they are not the hashed bytes", async () => {
     const recorded = healthyTimeline()[4] as TimelineEvent;
     renderNode(recorded);

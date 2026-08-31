@@ -2,7 +2,7 @@
 /// <reference types="vite/client" />
 
 /*
- * FE-046 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
+ * FE-086 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
  *
  *   U | Static scan of web/src/views/run-detail for colour and copy that
  *     escaped the token sheet and the string catalogue | No colour literal, no
@@ -62,7 +62,7 @@ function offenders(pattern: RegExp): readonly string[] {
     .map((file) => `${file.name}: ${pattern.exec(file.code)?.[0] ?? ""}`);
 }
 
-describe("FE-046 colour discipline in web/src/views/run-detail", () => {
+describe("FE-086 colour discipline in web/src/views/run-detail", () => {
   it("is scanning real sources (a vacuous pass is not a pass)", () => {
     const names = files.map((file) => file.name);
     expect(names).toContain("styles.ts");
@@ -161,7 +161,7 @@ const PROPER_NOUNS = new Set([
   "Sigstore",
 ]);
 
-describe("FE-046 the run-detail catalogue", () => {
+describe("FE-086 the run-detail catalogue", () => {
   it("holds strings, every one trimmed and non-empty", () => {
     expect(entries.length).toBeGreaterThan(40);
     for (const [key, value] of entries) {

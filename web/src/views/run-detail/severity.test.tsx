@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * FE-043 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
+ * FE-083 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
  *
  *   U | A run-detail timeline node whose event is a failure never renders as
  *     merely informational, and a failure is never collapsed into a
@@ -66,7 +66,7 @@ const ordinary = ledgerEvent(EVENT_TYPES.toolCall, 5, {
   canonical: { tool_name: "edit_file" },
 });
 
-describe("FE-043 a failure never renders as merely informational", () => {
+describe("FE-083 a failure never renders as merely informational", () => {
   it("calls ledger drift an integrity alert, in words and with an icon", () => {
     const { text, container } = renderNode(drift);
     expect(text).toContain("Integrity alert");
@@ -99,7 +99,7 @@ describe("FE-043 a failure never renders as merely informational", () => {
   });
 });
 
-describe("FE-043 the page-level banner", () => {
+describe("FE-083 the page-level banner", () => {
   const view = (timeline: readonly TimelineEvent[]) =>
     render(
       <RunDetailView

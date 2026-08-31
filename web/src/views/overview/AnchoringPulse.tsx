@@ -177,7 +177,7 @@ export function AnchoringPulse({ anchor, lagBoundMs, now }: AnchoringPulseProps)
             title={formatAbsoluteUtc(sealedAt)}
             className="font-mono"
           >
-            {`${elapsedSince(sealedAt, at)} ago`}
+            {strings.heartbeat.agoSuffix(elapsedSince(sealedAt, at))}
           </time>
           {strings.heartbeat.sealedSuffix}
           {beyond

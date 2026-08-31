@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * FE-040 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
+ * FE-080 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
  *
  *   U | Every run-detail timeline node shows its chain position, and what can
  *     be said about its link to the preceding event is stated rather than
@@ -46,7 +46,7 @@ function renderTimeline(events: readonly TimelineEvent[]) {
   return { container, text: visibleText(container) };
 }
 
-describe("FE-040 chain position", () => {
+describe("FE-080 chain position", () => {
   it("shows the chain position of every node, exactly as the ledger holds it", () => {
     const events = healthyTimeline();
     const { text } = renderTimeline(events);
@@ -70,7 +70,7 @@ describe("FE-040 chain position", () => {
   });
 });
 
-describe("FE-040 what can be said about a chain link", () => {
+describe("FE-080 what can be said about a chain link", () => {
   const linked: readonly TimelineEvent[] = [
     ledgerEvent(EVENT_TYPES.runRegistered, 1),
     ledgerEvent(EVENT_TYPES.runRetired, 2),

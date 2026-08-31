@@ -84,6 +84,11 @@ export const strings = {
      * sealed, with the anchoring members still to arrive on a superseding
      * event. */
     sealedPrefix: (segment: number) => `Ledger segment ${segment} sealed `,
+    /* The eye's half of the sealed sentence, split where the component
+     * interleaves a <time>. Same reason as components/common's heartbeat
+     * split: a template literal with substitutions inside JSX is copy, and it
+     * escaped FE-020's scanner until the scanner was widened. */
+    agoSuffix: (ago: string) => `${ago} ago`,
     sealedSuffix: ", not yet anchored in Rekor",
     beyondBound: (over: string, bound: string) =>
       ` — ${over} beyond the ${bound} anchoring-lag bound`,

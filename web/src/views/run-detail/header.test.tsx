@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * FE-042 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
+ * FE-082 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
  *
  *   U | Run-detail header carries every field doc 06 §3.3 names | Full SPIFFE
  *     ID, untruncated and copyable; agent type; task ref; registered
@@ -43,7 +43,7 @@ function renderHeader(
   return { text: visibleText(container), container };
 }
 
-describe("FE-042 the run-detail header", () => {
+describe("FE-082 the run-detail header", () => {
   it("renders the SPIFFE ID in full, with no ellipsis anywhere in it", () => {
     const { text } = renderHeader();
     expect(text).toContain(SPIFFE_ID);

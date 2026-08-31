@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * FE-041 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
+ * FE-081 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
  *
  *   U | Every relative time in run detail carries its absolute timestamp with
  *     timezone, reachable by pointer, by keyboard and by assistive technology
@@ -34,7 +34,7 @@ function renderOne() {
   return render(<RelativeTime at={AT} now={NOW} label="Registered" />);
 }
 
-describe("FE-041 a relative time always carries its absolute one", () => {
+describe("FE-081 a relative time always carries its absolute one", () => {
   it("shows the relative time, which is what a reader scans", () => {
     const { container } = renderOne();
     expect(container.textContent).toContain("17 min ago");
@@ -102,7 +102,7 @@ describe("FE-041 a relative time always carries its absolute one", () => {
   });
 });
 
-describe("FE-041 a timestamp the dashboard cannot read", () => {
+describe("FE-081 a timestamp the dashboard cannot read", () => {
   it("shows the raw value and says it could not be read, rather than the epoch", () => {
     const { container } = render(
       <Instant value="not-a-timestamp" now={NOW} label="Registered" />,

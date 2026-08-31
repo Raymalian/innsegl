@@ -12,7 +12,7 @@
  * ── THE GREEN IS NOT HERE, AND CANNOT BE ───────────────────────────────────
  *
  * `proof-verified` does not appear in this file or anywhere else in this
- * directory, and FE-046 asserts it. doc 06 §5.3 gives green one meaning —
+ * directory, and FE-086 asserts it. doc 06 §5.3 gives green one meaning —
  * "cryptographic verification passed" — and the only component entitled to
  * make that claim is the three-check panel, which this view composes rather
  * than reimplements. A timeline node is a statement that the ledger holds an

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * FE-045 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
+ * FE-085 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
  *
  *   U | Run detail's per-commit panel never reports a retained proof as a live
  *     one | No proof is fetched until a reader opens the panel; a proof held
@@ -40,7 +40,7 @@ const open = async () => {
   await userEvent.click(screen.getByRole("button", { name: "Verify this commit" }));
 };
 
-describe("FE-045 a retained proof is never reported as a live one", () => {
+describe("FE-085 a retained proof is never reported as a live one", () => {
   it("fetches nothing until a reader asks", () => {
     const { verify } = prover();
     render(

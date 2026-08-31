@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * FE-047 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
+ * FE-087 (NEW — proposed for doc 07 TC-FE; listed in the report for #54).
  *
  *   U | Run detail's read has four states and never fewer | A bounded loading
  *     state; a run that does not exist rendered as absent and not as a fault;
@@ -31,7 +31,7 @@ function view(read: () => Promise<RunDetail>) {
   return render(<RunDetailView route={ROUTE} fetchRun={read} now={NOW} />);
 }
 
-describe("FE-047 the four read states", () => {
+describe("FE-087 the four read states", () => {
   it("says what it is loading while it loads", () => {
     view(() => new Promise<RunDetail>(() => undefined));
     expect(screen.getByRole("status")).toHaveTextContent("Loading the run…");
