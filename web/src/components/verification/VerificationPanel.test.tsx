@@ -54,7 +54,7 @@ function perceivable(html: string): string {
 function panel(proof: Proof) {
   // One id for every render, so two panels differ in what they say rather
   // than in the numbers React handed their headings.
-  return render(<VerificationPanel proof={proof} id="panel" />).container;
+  return render(<VerificationPanel liveness={{ source: "live" }} proof={proof} id="panel" />).container;
 }
 
 const STATES = [
@@ -235,14 +235,14 @@ describe("FE-003 the panel never renders a cached green", () => {
 
 describe("FE-037 (NEW) the panel is a described list with per-check status announced", () => {
   it("is a labelled region holding a real list of three items", () => {
-    render(<VerificationPanel proof={verifiedProof()} id="panel" />);
+    render(<VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="panel" />);
     const region = screen.getByRole("region", { name: strings.panel.heading });
     const list = within(region).getByRole("list");
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
   });
 
   it("announces each check's name and result as text, not as an icon", () => {
-    render(<VerificationPanel proof={proofWithResults(["verified", "failed", "unavailable"])} id="panel" />);
+    render(<VerificationPanel liveness={{ source: "live" }} proof={proofWithResults(["verified", "failed", "unavailable"])} id="panel" />);
     const items = screen.getAllByRole("listitem");
     const spoken = items.map((item) => item.textContent ?? "");
     expect(spoken[0]).toContain(strings.result.verified.label);
@@ -255,7 +255,7 @@ describe("FE-037 (NEW) the panel is a described list with per-check status annou
   });
 
   it("describes each check with the evidence behind it (doc 06 P1)", () => {
-    render(<VerificationPanel proof={verifiedProof()} id="panel" />);
+    render(<VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="panel" />);
     const region = screen.getByRole("region", { name: strings.panel.heading });
     // Facts are a description list: a name and the value it stands for.
     const terms = region.querySelectorAll("dt");
@@ -264,7 +264,7 @@ describe("FE-037 (NEW) the panel is a described list with per-check status annou
   });
 
   it("holds no control that writes (doc 06 P6)", () => {
-    render(<VerificationPanel proof={verifiedProof()} id="panel" />);
+    render(<VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="panel" />);
     const region = screen.getByRole("region", { name: strings.panel.heading });
     for (const button of region.querySelectorAll("button")) {
       // The only buttons in this product copy a value or open a disclosure.
@@ -277,7 +277,7 @@ describe("FE-037 (NEW) the panel is a described list with per-check status annou
 describe("FE-001 the summary badge always expands to the panel (§8 anti-pattern 4)", () => {
   it("shows the rollup, and the three checks are one keystroke away", () => {
     const { container } = render(
-      <VerificationSummary proof={forgedTrailerProof()} id="row" />,
+      <VerificationSummary liveness={{ source: "live" }} proof={forgedTrailerProof()} id="row" />,
     );
     const disclosure = container.querySelector("details");
     if (disclosure === null) throw new Error("the summary is not a disclosure");
@@ -292,7 +292,7 @@ describe("FE-001 the summary badge always expands to the panel (§8 anti-pattern
     // §8 anti-pattern 4 is "a verification summary that cannot be expanded to
     // the three checks and their inputs". There is no prop that turns the
     // panel off, so a table cannot produce one by accident.
-    const { container } = render(<VerificationSummary proof={verifiedProof()} id="row" />);
+    const { container } = render(<VerificationSummary liveness={{ source: "live" }} proof={verifiedProof()} id="row" />);
     expect(container.querySelector("#row-identity")).not.toBeNull();
   });
 });
