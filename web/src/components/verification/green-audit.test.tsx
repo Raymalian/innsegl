@@ -20,7 +20,8 @@
  */
 
 import { render } from "@testing-library/react";
-import { afterEach, cleanup, describe, expect, it } from "vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ReactElement } from "react";
 
 import {
@@ -133,14 +134,40 @@ describe("FE-036 green is spent only on a live cryptographic verification", () =
     expect(CASES.filter((c) => !c.green).length).toBeGreaterThan(5);
   });
 
-  it("spends no green on a per-check row whose own check did not pass", () => {
+  /*
+   * The rule the two assertions below settle, written down because the first
+   * draft of this file and of FE-004 disagreed about it.
+   *
+   * A check that passed IS a cryptographic verification, so a green on its row
+   * is not doc 06 §8's anti-pattern 3 on its face. But doc 06 P3 says failure
+   * is loud, and two green ticks beside a forged trailer are exactly the
+   * picture a forger wants a reviewer to skim. So: THE GREEN BELONGS TO THE
+   * PANEL, NOT TO THE ROW. A check row always carries its own word and its own
+   * icon — nothing is collapsed, §8 anti-pattern 2 is not touched — but the
+   * colour that means "this commit is proven" appears only where the whole
+   * panel is proven.
+   */
+  it("spends green on the check rows of a panel that verified", () => {
+    const { container } = render(<VerificationPanel proof={verifiedProof()} id="p" />);
+    const rows = Array.from(container.querySelectorAll("[data-check]"));
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row.outerHTML.includes("proof-verified")).toBe(true);
+    }
+  });
+
+  it("spends none on a passing check inside a panel that did not verify", () => {
     const { container } = render(
       <VerificationPanel proof={proofWithResults(["verified", "failed", "unavailable"])} id="p" />,
     );
-    for (const row of container.querySelectorAll("[data-check]")) {
-      const green = (row.getAttribute("class") ?? "").includes("proof-verified") ||
-        row.innerHTML.includes("proof-verified");
-      expect(green).toBe(row.getAttribute("data-check-result") === "verified");
+    const rows = Array.from(container.querySelectorAll("[data-check]"));
+    expect(rows.map((r) => r.getAttribute("data-check-result"))).toEqual([
+      "verified",
+      "failed",
+      "unavailable",
+    ]);
+    for (const row of rows) {
+      expect(row.outerHTML.includes("proof-verified")).toBe(false);
     }
   });
 });

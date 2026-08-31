@@ -100,7 +100,8 @@ describe("FE-038 sentence case and punctuation (doc 06 §5.4)", () => {
   const leaf = (key: string) => key.slice(key.lastIndexOf(".") + 1);
   const isLabel = (key: string) => ["label", "heading", "title"].includes(leaf(key));
   const isHelperText = (key: string) =>
-    ["meaning", "detail"].includes(leaf(key)) || key.startsWith("downgrade.");
+    !isLabel(key) &&
+    (["meaning", "detail"].includes(leaf(key)) || key.startsWith("downgrade."));
 
   it("gives labels no terminal punctuation", () => {
     const labels = entries.filter(([key]) => isLabel(key));

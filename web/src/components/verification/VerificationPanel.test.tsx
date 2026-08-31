@@ -32,12 +32,14 @@ import { cleanup } from "@testing-library/react";
 import {
   LOG_INDEX,
   failedProof,
+  forgedTrailerProof,
   proofWithResults,
   unavailableProof,
   verifiedProof,
 } from "./fixtures";
 import { strings } from "./strings";
 import { VerificationPanel } from "./VerificationPanel";
+import { VerificationSummary } from "./VerificationSummary";
 import type { Proof } from "./types";
 
 afterEach(cleanup);
@@ -269,6 +271,29 @@ describe("FE-037 (NEW) the panel is a described list with per-check status annou
       expect(button.getAttribute("type")).toBe("button");
     }
     expect(region.querySelectorAll("form, input, textarea, select")).toHaveLength(0);
+  });
+});
+
+describe("FE-001 the summary badge always expands to the panel (§8 anti-pattern 4)", () => {
+  it("shows the rollup, and the three checks are one keystroke away", () => {
+    const { container } = render(
+      <VerificationSummary proof={forgedTrailerProof()} id="row" />,
+    );
+    const disclosure = container.querySelector("details");
+    if (disclosure === null) throw new Error("the summary is not a disclosure");
+    const summary = disclosure.querySelector("summary");
+    expect(summary?.textContent).toContain(strings.verdict.failed.label);
+    // Native disclosure semantics: operable from the keyboard without a line
+    // of JavaScript, which is what doc 06 §6.4 asks of an expandable panel.
+    expect(disclosure.querySelectorAll("[data-check]")).toHaveLength(3);
+  });
+
+  it("cannot be rendered without the panel behind it", () => {
+    // §8 anti-pattern 4 is "a verification summary that cannot be expanded to
+    // the three checks and their inputs". There is no prop that turns the
+    // panel off, so a table cannot produce one by accident.
+    const { container } = render(<VerificationSummary proof={verifiedProof()} id="row" />);
+    expect(container.querySelector("#row-identity")).not.toBeNull();
   });
 });
 

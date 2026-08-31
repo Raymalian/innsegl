@@ -24,7 +24,8 @@
  */
 
 import { render, screen, within } from "@testing-library/react";
-import { afterEach, cleanup, describe, expect, it } from "vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   FORGED_IDENTITY,
