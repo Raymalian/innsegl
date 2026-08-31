@@ -44,7 +44,7 @@ interface Case {
 const CASES: readonly Case[] = [
   {
     name: "all three checks ran live and passed",
-    ui: <VerificationPanel proof={verifiedProof()} id="p" />,
+    ui: <VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="p" />,
     green: true,
   },
   {
@@ -54,17 +54,17 @@ const CASES: readonly Case[] = [
   },
   {
     name: "a check failed",
-    ui: <VerificationPanel proof={proofWithResults(["verified", "failed", "verified"])} id="p" />,
+    ui: <VerificationPanel liveness={{ source: "live" }} proof={proofWithResults(["verified", "failed", "verified"])} id="p" />,
     green: false,
   },
   {
     name: "a check could not run",
-    ui: <VerificationPanel proof={unavailableProof()} id="p" />,
+    ui: <VerificationPanel liveness={{ source: "live" }} proof={unavailableProof()} id="p" />,
     green: false,
   },
   {
     name: "the trailer was forged",
-    ui: <VerificationPanel proof={forgedTrailerProof()} id="p" />,
+    ui: <VerificationPanel liveness={{ source: "live" }} proof={forgedTrailerProof()} id="p" />,
     green: false,
   },
   {
@@ -86,7 +86,7 @@ const CASES: readonly Case[] = [
   {
     name: "an upstream the check needed was unreachable",
     ui: (
-      <VerificationPanel
+      <VerificationPanel liveness={{ source: "live" }}
         proof={proofWithResults(["verified", "verified", "verified"], {
           upstreamsReachable: false,
         })}
@@ -98,7 +98,7 @@ const CASES: readonly Case[] = [
   {
     name: "the response contradicts its own material",
     ui: (
-      <VerificationPanel
+      <VerificationPanel liveness={{ source: "live" }}
         proof={verifiedProof()}
         findings={[{ name: "the log index is the one the response reports", result: "contradicts" }]}
         id="p"
@@ -108,13 +108,13 @@ const CASES: readonly Case[] = [
   },
   {
     name: "the commit claims nothing at all",
-    ui: <VerificationPanel proof={{ ...verifiedProof(), verdict: "unattributed", checks: [] }} id="p" />,
+    ui: <VerificationPanel liveness={{ source: "live" }} proof={{ ...verifiedProof(), verdict: "unattributed", checks: [] }} id="p" />,
     green: false,
   },
   {
     name: "the response asserts verified over a failed check",
     ui: (
-      <VerificationPanel
+      <VerificationPanel liveness={{ source: "live" }}
         proof={proofWithResults(["failed", "verified", "verified"], { verdict: "verified" })}
         id="p"
       />
@@ -148,7 +148,7 @@ describe("FE-036 green is spent only on a live cryptographic verification", () =
    * panel is proven.
    */
   it("spends green on the check rows of a panel that verified", () => {
-    const { container } = render(<VerificationPanel proof={verifiedProof()} id="p" />);
+    const { container } = render(<VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="p" />);
     const rows = Array.from(container.querySelectorAll("[data-check]"));
     expect(rows).toHaveLength(3);
     for (const row of rows) {
@@ -158,7 +158,7 @@ describe("FE-036 green is spent only on a live cryptographic verification", () =
 
   it("spends none on a passing check inside a panel that did not verify", () => {
     const { container } = render(
-      <VerificationPanel proof={proofWithResults(["verified", "failed", "unavailable"])} id="p" />,
+      <VerificationPanel liveness={{ source: "live" }} proof={proofWithResults(["verified", "failed", "unavailable"])} id="p" />,
     );
     const rows = Array.from(container.querySelectorAll("[data-check]"));
     expect(rows.map((r) => r.getAttribute("data-check-result"))).toEqual([
