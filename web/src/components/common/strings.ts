@@ -65,6 +65,18 @@ export const strings = {
       `Ledger segment ${segment} anchored ${ago} ago`,
     beyond: (segment: number, ago: string, over: string, bound: string) =>
       `Ledger segment ${segment} anchored ${ago} ago — ${over} beyond the ${bound} anchoring-lag bound`,
+    /* The same sentences, split where the component interleaves a <time>
+     * element. The whole-sentence forms above are what assistive technology
+     * receives; these are what the eye reads, and they exist because the
+     * component previously rewrote the sentence inline to wrap the timestamp
+     * — which put three English words back into a .tsx file and out of reach
+     * of translation. FE-020's scanner did not see them: a template literal
+     * WITH substitutions was not recognised as copy until RM-044 found the
+     * hole. Splitting here keeps one source for the words. */
+    withinPrefix: (segment: number) => `Ledger segment ${segment} anchored `,
+    agoSuffix: (ago: string) => `${ago} ago`,
+    beyondSuffix: (over: string, bound: string) =>
+      ` — ${over} beyond the ${bound} anchoring-lag bound`,
     unknown: "No segment anchored yet",
     /* Named for assistive technology so the pulse is not an unlabelled string
      * of numbers in the header. */

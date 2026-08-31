@@ -75,9 +75,22 @@ import { checkIdOf } from "./types";
 
 export interface VerificationPanelProps {
   readonly proof: Proof;
-  /** Where the proof came from, and what the live attempt did. Omitted means
-   * live: the BFF holds no cache, so a caller with nothing to say has one. */
-  readonly liveness?: Liveness;
+  /** Where the proof came from, and what the live attempt did.
+   *
+   * REQUIRED, and deliberately without a default. It was optional, defaulting
+   * to live, on the reasoning that the BFF holds no cache so a caller with
+   * nothing to say has one. That reasoning is sound about the BFF and wrong
+   * about the caller: `internal/api`'s Proof carries no cache signal, so a
+   * view that retains a response — React Query, a stored result, anything —
+   * is the only thing that knows, and under a default it says nothing by
+   * saying nothing. The failure is silent and it is the one this panel exists
+   * to prevent: a green that no live check confirmed (doc 06 anti-pattern 1,
+   * FE-003).
+   *
+   * Required, a view that caches and stays quiet does not compile. Same move
+   * as ADR-0038 decision 3 — remove the step that can be wrong rather than
+   * check it afterwards. */
+  readonly liveness: Liveness;
   /** The re-derivation `internal/api` performs against the response's own
    * material. A contradiction convicts the responder, so it withholds the
    * green. */

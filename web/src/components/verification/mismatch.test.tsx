@@ -45,7 +45,7 @@ function perceivable(html: string): string {
 }
 
 const mismatch = () =>
-  render(<VerificationPanel proof={forgedTrailerProof()} id="panel" />).container;
+  render(<VerificationPanel liveness={{ source: "live" }} proof={forgedTrailerProof()} id="panel" />).container;
 
 describe("FE-004 a forged trailer fails, loudly", () => {
   it("rolls up to failed, not to unavailable and not to verified", () => {
@@ -71,7 +71,7 @@ describe("FE-004 a forged trailer fails, loudly", () => {
   });
 
   it("raises no alarm when the identities agree (P3: success is quiet)", () => {
-    render(<VerificationPanel proof={verifiedProof()} id="panel" />);
+    render(<VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="panel" />);
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
@@ -96,7 +96,7 @@ describe("FE-004 the two identities, side by side", () => {
 
   it("marks nothing when the identities agree", () => {
     const container = render(
-      <VerificationPanel proof={verifiedProof()} id="panel" />,
+      <VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="panel" />,
     ).container;
     expect(container.querySelectorAll("mark")).toHaveLength(0);
   });
@@ -139,7 +139,7 @@ describe("FE-004 an identity the panel cannot parse is still compared honestly",
   it("marks the whole value and says the two cannot be compared segment by segment", () => {
     const proof = forgedTrailerProof();
     const container = render(
-      <VerificationPanel
+      <VerificationPanel liveness={{ source: "live" }}
         proof={{ ...proof, claim: { ...proof.claim, identity: "not-an-identity" } }}
         id="panel"
       />,

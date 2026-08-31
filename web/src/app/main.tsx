@@ -16,6 +16,7 @@ import { App } from "./App";
 import { StringsProvider } from "./i18n";
 import "./index.css";
 import { applyPreference, readPreference } from "./theme";
+import { OverviewHeartbeat, views } from "./views";
 
 applyPreference(readPreference());
 
@@ -27,7 +28,7 @@ if (container === null) {
 createRoot(container).render(
   <StrictMode>
     <StringsProvider>
-      <App />
+      <App views={views} heartbeat={<OverviewHeartbeat />} />
     </StringsProvider>
   </StrictMode>,
 );
