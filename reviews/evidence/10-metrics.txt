@@ -1,0 +1,216 @@
+Probe 10 — doc 06 §8.10: metrics chosen to look good rather than to inform
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at fadaf6b.
+Node v26.8.1. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── every metric card the overview renders, and what it states ────────────────
+
+    Located in the DOM by structure — an <article> carrying a heading, a
+    value and a line of meaning — and read as a reader would read it.
+
+    cards found: 4
+
+    "Active agents"
+        value shown        3
+        meaning beside it  Runs registered and neither retired nor expired.
+        on hover           (none)
+        announced          Active agents 3 Runs registered and neither retired nor expired.
+        shape              current-state
+
+    "Runs today"
+        value shown        Not counted
+        meaning beside it  The runs index did not answer, so this shows no number rather than a guess.
+        on hover           (none)
+        announced          Runs today Not counted The runs index did not answer, so this shows no number rather than a guess.
+        shape              not-a-count
+
+    "Commits attributed"
+        value shown        4,181
+        meaning beside it  Commits the ledger holds a commit_recorded event for. A record, not a verification.
+        on hover           (none)
+        announced          Commits attributed 4,181 Commits the ledger holds a commit_recorded event for. A record, not a verification.
+        shape              cumulative
+
+    "Verification pass rate"
+        value shown        Not measured
+        meaning beside it  No live check has run over these commits. A rate counted from the ledger would assert a verification result that nothing checked, so none is shown.
+        on hover           0 of 4,181 commits checked live
+        announced          Verification pass rate 0 of 4,181 commits checked live Not measured 0 of 4,181 commits checked live No live check has run over these commits. A rate counted from the ledger would assert a verification result that nothing
+        shape              not-a-count
+
+    Read:
+        "Runs today"            windowed — the card names the period and
+                                 says so when the read did not answer.
+        "Active agents"         current-state — "runs registered and
+                                 neither retired nor expired" goes down as
+                                 well as up, so it cannot flatter.
+        "Verification pass rate" renders no number at all in this build.
+        cumulative lifetime counts with no stated window: 1
+            Commits attributed
+
+── FINDING, for a human ruling: one card is a monotonic lifetime count ───────
+
+    Commits attributed renders a number that only ever goes up,
+    with no window stated anywhere a reader can reach — not in the
+    meaning line, not on hover, not to assistive technology. Measured:
+
+    Commits attributed 4,181 Commits the ledger holds a commit_recorded event for. A record, not a verification.
+
+    doc 06 §8.10 names this shape as its first example of the defect:
+    "cumulative counts with no window". doc 06 §3.1 asks for the metric
+    by name — "Metric cards: active agents, runs today, commits
+    attributed, verification pass rate" — and states no window for it.
+    The two sentences are in tension, and this review does not resolve
+    a specification against itself.
+
+    What is measured, and is not a matter of reading:
+        - the number is a lifetime total (4,181 with the fixture's data);
+        - the card states WHAT it counts and disclaims what it is not
+          ("A record, not a verification"), so it is not a metric with
+          no statement of meaning;
+        - it states no PERIOD, and the adjacent "Runs today" card shows
+          the same view already knows how to render one;
+        - it is neutral grey, not a colour that claims anything.
+
+    Recorded as a finding rather than a clean pass. A human doing sign-
+    off should either rule that §3.1's naming of the metric settles it,
+    or file the window as work.
+
+── the hover doc 06 §6.2 asks for, and whether it is announced too ───────────
+
+    §6.2: "Verification pass rate shows numerator/denominator on hover."
+    A fact only a mouse can reach is a fact some readers do not have, so
+    both channels are measured:
+
+    "Verification pass rate"
+        title attribute: "0 of 4,181 commits checked live"
+        the same text reaches assistive technology: yes
+
+── the pass rate, in every state it has ──────────────────────────────────────
+
+    doc 06 §3.1: "Pass rate below 100% is rendered as a warning state, not
+    a neutral number." Each state below is a separate mount of the real
+    card; the colour is resolved from the built stylesheet in both modes.
+
+    nothing measured (every deployment of this build)
+        renders: "Verification pass rate Not measured No live check has run over these commits. A rate counted from the ledger would assert a verification result that nothing checked, so none is shown. Verify a commit"
+        painted  color=#6f4e03/#dfb144 (amber/amber)
+        painted  background-color=#fbf2da/#332401 (amber/amber)
+        painted  border-color=#8c6404/#c6951d (amber/amber)
+        announced: "Verification pass rate 0 of 4,181 commits checked live Not measured 0 of 4,181 commits checked live No live check has run over these commits. A rate counted from the ledger would assert a verification result that nothing checked, so none is"
+
+    a live rate with failures in it
+        renders: "Verification pass rate 90% Measured 2 min ago. 7 failed, 3 could not be checked. Verify a commit"
+        painted  color=#fdecec/#f9d2d4 (red/red)
+        painted  background-color=#9b1921/#741218 (red/red)
+        painted  border-color=#741218/#c02029 (red/red)
+        announced: "Verification pass rate 90 of 100 commits verified live 90% 90 of 100 commits verified live Measured 2 min ago. 7 failed, 3 could not be checked. Verify a commit"
+
+    a live rate with unavailables but no failures
+        renders: "Verification pass rate 93% Measured 2 min ago. 0 failed, 7 could not be checked. Verify a commit"
+        painted  color=#6f4e03/#dfb144 (amber/amber)
+        painted  background-color=#fbf2da/#332401 (amber/amber)
+        painted  border-color=#8c6404/#c6951d (amber/amber)
+        announced: "Verification pass rate 93 of 100 commits verified live 93% 93 of 100 commits verified live Measured 2 min ago. 0 failed, 7 could not be checked. Verify a commit"
+
+    a live rate at 100%
+        renders: "Verification pass rate 100% Measured 2 min ago. Verify a commit"
+        painted  background-color=#fff/#161b1f (grey/grey)
+        painted  border-color=#dfe4e7/#343c42 (grey/blue-violet)
+        painted  color=#161b1f/#eceff1 (grey/grey)
+        announced: "Verification pass rate 100 of 100 commits verified live 100% 100 of 100 commits verified live Measured 2 min ago. Verify a commit"
+
+    a rate a caller RETAINED rather than measured
+        renders: "Verification pass rate Not measured The rate in hand was retained from an earlier check rather than measured now, so it is not shown as a current rate. Verify a commit"
+        painted  color=#6f4e03/#dfb144 (amber/amber)
+        painted  background-color=#fbf2da/#332401 (amber/amber)
+        painted  border-color=#8c6404/#c6951d (amber/amber)
+        announced: "Verification pass rate 0 of 4,181 commits checked live Not measured 0 of 4,181 commits checked live The rate in hand was retained from an earlier check rather than measured now, so it is not shown as a current rate. Verify a commit"
+
+    a rate whose live attempt errored
+        renders: "Verification pass rate Not measured The rate in hand was retained from an earlier check rather than measured now, so it is not shown as a current rate. Verify a commit"
+        painted  color=#6f4e03/#dfb144 (amber/amber)
+        painted  background-color=#fbf2da/#332401 (amber/amber)
+        painted  border-color=#8c6404/#c6951d (amber/amber)
+        announced: "Verification pass rate 0 of 4,181 commits checked live Not measured 0 of 4,181 commits checked live The rate in hand was retained from an earlier check rather than measured now, so it is not shown as a current rate. Verify a commit"
+
+
+── OBSERVATION: two different reasons share one sentence ─────────────────────
+
+    Measured above, in the last two states: a rate held from a CACHE and a
+    rate whose LIVE ATTEMPT ERRORED render the identical sentence —
+
+        "The rate in hand was retained from an earlier check rather than
+         measured now, so it is not shown as a current rate."
+
+    The second is not a retained rate. It is a live measurement whose
+    attempt failed, and doc 06 §6.1 asks copy to "say what was checked and
+    what happened". The VERDICT is right in both — "Not measured", amber,
+    no number — so this is not anti-pattern 1 and not anti-pattern 2: it is
+    a reason given inaccurately, one level below the verdict. Recorded as
+    an observation for the human, not as one of the ten.
+
+    Note also what the 100% state does, since ADR-0038 left it open:
+    neutral grey, not green, not amber. That is the "narrower reading"
+    ADR-0038's last consequence called the safer default, and it is the one
+    this build shipped.
+
+── a failing rate: warning, or a neutral number? ─────────────────────────────
+
+    90 verified, 7 failed, 3 unavailable, out of 100 checked, live.
+
+    visible words: "Verification pass rate 90% Measured 2 min ago. 7 failed, 3 could not be checked. Verify a commit"
+    painted:
+        color=#fdecec/#f9d2d4 (red/red)
+        background-color=#9b1921/#741218 (red/red)
+        border-color=#741218/#c02029 (red/red)
+
+    Measured:
+        the rate is stated               true
+        the 7 failures are stated        true
+        the 3 unavailables are stated    true
+        the two are NOT collapsed        true
+        painted red, not neutral grey    true
+
+── rounding — doc 06 §6.2's "counts are exact, never rounded" ────────────────
+
+    The real formatters, over numbers that invite abbreviation:
+
+        formatCount(        0) = "0"
+        formatCount(        7) = "7"
+        formatCount(      999) = "999"
+        formatCount(     1000) = "1,000"
+        formatCount(     1234) = "1,234"
+        formatCount(   999999) = "999,999"
+        formatCount(  1000000) = "1,000,000"
+        formatCount(     4181) = "4,181"
+        formatCount( 12345678) = "12,345,678"
+
+        formatRate(90, 100) = "90%"
+        formatRate(999, 1000) = "99.9%"
+        formatRate(2, 3) = "66.6%"
+        formatRate(1, 3) = "33.3%"
+        formatRate(0, 0) = ""
+        formatRate(4180, 4181) = "99.9%"
+
+    No abbreviation (no 1.2M, no 1k), and the rate that is not quite 100%
+    does not become 100%.
+
+── the alerting overview, where a count becomes an alarm ─────────────────────
+
+    The same page with 2 open alerts. doc 06 §3.1: alerts "pin to the top
+    of this page in the P3 style". The first 400 characters of the page,
+    in document order:
+    2 open integrity alerts The reconciler recorded a signature it could not attribute, or a ledger claim with no external proof. This build has no view that lists them: the query API serves their count and not the events. See the response this count came from Overview What the ledger holds, and how far behind the public record is. Active agents 3 Runs registered and neither retired nor expired. Runs 
+
+── what this probe cannot determine ──────────────────────────────────────────
+
+    Whether a metric was CHOSEN to flatter is a judgement about what is
+    absent, and no probe can enumerate the numbers a designer did not
+    render. What is measured here is the two failures doc 06 §8.10 names
+    by example — a cumulative count with no window, and a hidden failing
+    pass rate — plus the rounding §6.2 forbids. The judgement itself is
+    recorded in the review document, with the one live conflict this
+    view carries stated there rather than resolved here.

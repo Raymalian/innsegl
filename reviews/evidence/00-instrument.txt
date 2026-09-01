@@ -1,0 +1,82 @@
+Probe 0 — the measuring instrument, and proof that it can return "present"
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at fadaf6b.
+Node v26.8.1. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── the built stylesheet this review reads ────────────────────────────────────
+
+    path                 web/dist/assets/index-BOcrhtMO.css
+    rules parsed         290
+    :root custom props   134
+    single-class rules   165 (base state; pseudo-class and media rules are indexed but never folded in)
+    --innsegl-* tokens   130
+
+── 1. the resolver, on the shipped sheet ─────────────────────────────────────
+
+    Each is a declaration the build emitted, resolved the way a browser
+    would: var() chased through :root, light-dark() evaluated per mode.
+
+    --innsegl-color-proof-verified-text        light #116039 (green, hue 150°)  dark #6ccf95 (green, hue 145°)
+    --innsegl-color-proof-verified-surface     light #e6f4ec (green, hue 146°)  dark #062e1c (green, hue 153°)
+    --innsegl-color-proof-failed-text          light #9b1921 (red, hue 356°)  dark #f0989d (red, hue 357°)
+    --innsegl-color-proof-unavailable-text     light #6f4e03 (amber, hue 42°)  dark #dfb144 (amber, hue 42°)
+    --innsegl-color-accent-text                light #3a3ea1 (blue-violet, hue 238°)  dark #a4a8ed (blue-violet, hue 237°)
+    --innsegl-color-text-primary               light #161b1f (grey, hue 207°)  dark #eceff1 (grey, hue 204°)
+
+── 2. the instrument returns "green" for a green ─────────────────────────────
+
+    A checker that cannot fail is not evidence. Three demonstrations.
+
+    (a) the shipped verification palette, classified:
+        --innsegl-palette-verification-50      #e6f4ec  hue 146°  sat 0.39  -> green
+        --innsegl-palette-verification-100     #c6e7d5  hue 147°  sat 0.41  -> green
+        --innsegl-palette-verification-300     #6ccf95  hue 145°  sat 0.51  -> green
+        --innsegl-palette-verification-400     #3cb573  hue 147°  sat 0.50  -> green
+        --innsegl-palette-verification-600     #167a49  hue 151°  sat 0.69  -> green
+        --innsegl-palette-verification-700     #116039  hue 150°  sat 0.70  -> green
+        --innsegl-palette-verification-800     #0c462a  hue 151°  sat 0.71  -> green
+        --innsegl-palette-verification-900     #062e1c  hue 153°  sat 0.77  -> green
+
+    (b) a synthetic element painted with a class the build DOES compile,
+        run through the same paintOf() the product's elements go through:
+        class="bg-[#00ff00]"  background-color: #00ff00  ->  light #00ff00 (green), dark #00ff00 (green)
+
+    (c) the whole band the classifier calls green, at 10° steps, so the
+        range is on the record rather than in a comment:
+    0°:red  10°:red  20°:amber  30°:amber  40°:amber  50°:amber  60°:amber  70°:green  80°:green  90°:green  100°:green  110°:green  120°:green  130°:green  140°:green  150°:green  160°:green  170°:green  180°:other  190°:other  200°:blue-violet  210°:blue-violet  220°:blue-violet  230°:blue-violet  240°:blue-violet  250°:blue-violet  260°:blue-violet  270°:blue-violet  280°:blue-violet  290°:blue-violet  300°:other  310°:other  320°:other  330°:other  340°:other  350°:red
+
+    A desaturated sage (hue 120°, sat 0.08) classifies as green; a true grey (sat 0.02) as grey.
+
+── 3. ADR-0038 decision 4, tested by trying to violate it ────────────────────
+
+    Each candidate below is fed to @tailwindcss/node — the same compiler
+    `npm run build` uses — over web/src/tokens/tailwind-theme.css. What
+    is printed is what that compiler emitted for it.
+
+    bg-green-500               — no CSS emitted
+    text-green-600             — no CSS emitted
+    bg-emerald-50              — no CSS emitted
+    text-emerald-500           — no CSS emitted
+    text-lime-400              — no CSS emitted
+    bg-teal-500                — no CSS emitted
+    text-red-600               — no CSS emitted
+    bg-amber-400               — no CSS emitted
+    text-xs                    — no CSS emitted
+    text-9xl                   — no CSS emitted
+    p-13                       — no CSS emitted
+    shadow-2xl                 — no CSS emitted
+    animate-bounce             — no CSS emitted
+    animate-pulse              — no CSS emitted
+    dark:text-green-500        — no CSS emitted
+    bg-[#00ff00]               background-color:#00ff00
+    text-[rgb(0,200,0)]        — no CSS emitted
+    text-proof-verified        color:var(--innsegl-color-proof-verified-text)
+    bg-proof-verified-surface  background-color:var(--innsegl-color-proof-verified-surface)
+
+    Read: every Tailwind default colour, size, spacing step, shadow and
+    keyframe in the list compiles to nothing. Two things do compile —
+    the arbitrary-value syntax, which ADR-0038 keeps deliberately as a
+    greppable escape hatch and names this review as its hunter, and the
+    token-backed utilities, which resolve to var(--innsegl-…).

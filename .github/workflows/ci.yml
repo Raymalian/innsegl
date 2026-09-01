@@ -177,6 +177,84 @@ jobs:
         working-directory: web
         run: npm run build
 
+  accessibility:
+    name: accessibility and visual regression
+    runs-on: ubuntu-latest
+    # RM-049 (#57) / doc 06 §6.4 "(gating, not aspirational)" and doc 06 §7
+    # ("automated axe pass + keyboard-path tests in CI"). The `dashboard` job
+    # above runs the jsdom suite, which resolves neither `light-dark()` nor
+    # inheritance and computes no accessible name — the two blind spots that
+    # let issue #104 ship a 1.07:1 evidence link. This job is the real browser.
+    #
+    # It runs INSIDE the official Playwright image rather than on the bare
+    # runner with `playwright install --with-deps`, for one reason: twelve
+    # committed screenshot baselines. Chromium's text rasterization depends on
+    # the fontconfig/freetype/font set of the machine that drew it, so a
+    # baseline is only meaningful against a fixed image. The runner's package
+    # set is not fixed; this image's digest is.
+    #
+    # Pinned by digest for the same reason the actions above are: the header of
+    # this file forbids floating refs, and a container image tag is mutable in
+    # exactly the way a tag on an action is. sha256:dcc5531e… is the multi-arch
+    # index; on this amd64 runner it resolves to sha256:c091b21d…, which is the
+    # manifest the committed `-chromium-linux.png` baselines were generated
+    # against.
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+      # Chromium's default /dev/shm inside a container is 64 MB, which it
+      # exhausts and then crashes in ways that look like flaky tests.
+      options: --ipc=host
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No setup-node: the image ships the Node the browsers were built
+      # against, and installing a different one is how a browser/driver
+      # mismatch gets introduced.
+      - name: Install
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+      - name: Browsers match the image
+        # The image supplies the browser binaries (PLAYWRIGHT_BROWSERS_PATH);
+        # package.json supplies the driver. If someone bumps @playwright/test
+        # without bumping the image digest above, Playwright would silently
+        # look for a browser build this image does not contain — or, worse,
+        # download a different one and invalidate every committed baseline.
+        # Fail on the mismatch instead.
+        working-directory: web
+        run: |
+          driver="$(npx playwright --version | awk '{print $2}')"
+          image="${PW_IMAGE_VERSION:-1.62.1}"
+          echo "playwright driver: $driver / image: $image"
+          if [ "$driver" != "$image" ]; then
+            echo "::error::Playwright driver $driver does not match the container image $image."
+            echo "::error::Bump BOTH web/package.json and this job's image digest together,"
+            echo "::error::then regenerate the -chromium-linux.png baselines."
+            exit 1
+          fi
+          test -d "${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}"
+        env:
+          # Kept beside the digest above so the two are edited together.
+          PW_IMAGE_VERSION: "1.62.1"
+      - name: axe, keyboard, contrast, green audit and visual regression
+        # Every `expect` in web/tests fails this job. doc 06 §6.4 is gating:
+        # a harness that reports and does not fail is what #57 replaced.
+        working-directory: web
+        run: npx playwright test -c tests/playwright.config.ts
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          # Traces, the actual/expected/diff PNGs of a failed snapshot, and the
+          # HTML report. A visual regression is unreadable without them.
+          path: |
+            web/tests/playwright-report
+            web/tests/test-results
+          if-no-files-found: warn
+          retention-days: 14
+
   tokens:
     name: token sheet
     runs-on: ubuntu-latest

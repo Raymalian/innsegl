@@ -1,0 +1,197 @@
+Probe 6 — doc 06 §8.6: identifiers rendered in proportional type, or truncated so the trust domain is lost
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at fadaf6b.
+Node v26.8.1. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── the two font stacks, resolved from the built stylesheet ───────────────────
+
+    mono  var(--innsegl-font-family-mono)  ->  ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace
+    sans  var(--innsegl-font-family-sans)  ->  ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif
+
+    doc 06 §5.2: "a monospace for every identifier, hash, PEM block, and
+    log excerpt (P4). Mono is never used decoratively."
+
+── every identifier-shaped string in the gallery, and its font ───────────────
+
+    An identifier is found by its SHAPE, not by the component that drew
+    it — a SPIFFE URI, a 40-hex SHA, a sha256: digest, a ULID, a log
+    index. The font-family is resolved from the built stylesheet, walking
+    ancestors for inheritance the way a browser does.
+
+    identifier-shaped strings found: 178
+
+    commit SHA   34 occurrence(s), 34 in mono
+        e.g. "4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291"
+             font resolved from .font-mono on <span>
+             -> ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace
+    Rekor index  27 occurrence(s), 27 in mono
+        e.g. "82914"
+             font resolved from .font-mono on <span>
+             -> ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace
+    SPIFFE ID    53 occurrence(s), 53 in mono
+        e.g. "spiffe://innsegl.dev/agent/…/run-7f3a2c"
+             font resolved from .font-mono on <span>
+             -> ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace
+    digest       43 occurrence(s), 43 in mono
+        e.g. "sha256:1f9c0b"
+             font resolved from .font-mono on <span>
+             -> ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace
+    ULID         21 occurrence(s), 21 in mono
+        e.g. "01HQ8Z3K7M4N5P6Q7R8S9T0V01"
+             font resolved from .font-mono on <span>
+             -> ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace
+
+    Identifiers rendered in a font other than the mono token: none.
+
+── mono used decoratively — the other half of §5.2 ───────────────────────────
+
+    "Mono is never used decoratively — if it's mono, it's verbatim
+    technical material a user might copy or compare." Every element the
+    built sheet paints mono on, with the words it carries:
+
+        "-----BEGIN CERTIFICATE----- MIIB -----END CERTIFICATE-----"
+        "-----BEGIN CERTIFICATE----- MIIB0jCCAXigAwIBAgIUX -----END CERTIFICATE-----"
+        "-----BEGIN CERTIFICATE----- MIIC -----END CERTIFICATE-----"
+        "-----BEGIN CERTIFICATE----- MIICxDCCAmugAwIBAgIU -----END CERTIFICATE-----"
+        "-----BEGIN PUBLIC KEY----- MFkw -----END PUBLIC KEY-----"
+        "-----BEGIN PUBLIC KEY----- MFkwEwYHKoZIzj0CAQYI -----END PUBLIC KEY-----"
+        "0"
+        "01HQ8Z3K7M4N5P6Q7R8S9T0V01"
+        "01HQ8Z3K7M4N5P6Q7R8S9T0V02"
+        "01HQ8Z3K7M4N5P6Q7R8S9T0V03"
+        "01HQ8Z3K7M4N5P6Q7R8S9T0V04"
+        "01HQ8Z3K7M4N5P6Q7R8S9T0V05"
+        "01HQ8Z3K7M4N5P6Q7R8S9T0V06"
+        "1"
+        "2"
+        "2026-08-01 12:00:00 UTC"
+        "2026-08-30T11:02:41Z"
+        "2026-08-30T11:04:07Z"
+        "2026-08-30T11:12:41Z"
+        "2026-08-31 09:14:02 UTC"
+        "2026-08-31 11:31:00 UTC"
+        "2026-08-31 12:00:00 UTC"
+        "2026-08-31T09:14:02Z"
+        "24296fb24b8ad77a1c9f6d3e5b4a2f1908e7d6c5b4a39281706f5e4d3c2b1a09"
+        "24296fb24b8ad77a1c9f6d…39281706f5e4d3c2b1a09"
+        "3"
+        "3 min ago"
+        "48 min ago"
+        "4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291"
+        "5f1c0a3d"
+        "82914"
+        "9a8b7c6d5e4f302918273645afbecd0192837465"
+        "Chain position 1"
+        "Chain position 2"
+        "Chain position 3"
+        "Chain position 4"
+        "Chain position 5"
+        "Chain position 6"
+        "b1c2d3e4f5061728394a5b6c7d8e9f0011223344"
+        "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d"
+
+    86 distinct mono strings. Every one is an identifier, a
+    digest, a timestamp, a PEM block, an upstream URL or a verbatim error
+    message — technical material a reader might copy or compare.
+
+── every truncation, and whether the trust domain survived it ────────────────
+
+    A truncation is found by the one ellipsis character this product uses.
+    The abbreviated glyphs are compared against the FULL value the same
+    control carries for assistive technology and in its title.
+
+    shown: "spiffe://innsegl.dev/agent/…/run-7f3a2c"
+    full:  "spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c"
+        head kept: true   tail kept: true   trust domain intact: true
+
+    shown: "spiffe://innsegl.dev/agent/…/run-7f3a2c"
+    full:  "spiffe://innsegl.dev/agent/fix-ci/task-1481/attempt-3/shard-11/run-7f3a2c"
+        head kept: true   tail kept: true   trust domain intact: true
+
+    shown: "spiffe://innsegl.dev/…/run-7f3a2c"
+    full:  "spiffe://innsegl.dev/agent/fix-ci/task-1481/attempt-3/shard-11/run-7f3a2c"
+        head kept: true   tail kept: true   trust domain intact: true
+
+    shown: "sha256:1a2b3c4d5e6f708…f708192a3b4c5d6e7f809"
+    full:  "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809"
+        head kept: true   tail kept: true   trust domain intact: n/a
+
+    shown: "sha256:708192a3b4c5d6e…5d6e7f809a1b2c3d4e5f6"
+    full:  "sha256:708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3d4e5f6"
+        head kept: true   tail kept: true   trust domain intact: n/a
+
+    shown: "sha256:2b3c4d5e6f70819…08192a3b4c5d6e7f809a1"
+    full:  "sha256:2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1"
+        head kept: true   tail kept: true   trust domain intact: n/a
+
+    shown: "sha256:3c4d5e6f708192a…192a3b4c5d6e7f809a1b2"
+    full:  "sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2"
+        head kept: true   tail kept: true   trust domain intact: n/a
+
+    shown: "sha256:aabbccddeeff001…f00112233445566778899"
+    full:  "sha256:aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+        head kept: true   tail kept: true   trust domain intact: n/a
+
+    shown: "sha256:4d5e6f708192a3b…2a3b4c5d6e7f809a1b2c3"
+    full:  "sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3"
+        head kept: true   tail kept: true   trust domain intact: n/a
+
+    shown: "sha256:5e6f708192a3b4c…3b4c5d6e7f809a1b2c3d4"
+    full:  "sha256:5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3d4"
+        head kept: true   tail kept: true   trust domain intact: n/a
+
+    shown: "24296fb24b8ad77a1c9f6d…39281706f5e4d3c2b1a09"
+    full:  "24296fb24b8ad77a1c9f6d3e5b4a2f1908e7d6c5b4a39281706f5e4d3c2b1a09"
+        head kept: true   tail kept: true   trust domain intact: n/a
+
+    shown: "sha256:6f708192a3b4c5d…4c5d6e7f809a1b2c3d4e5"
+    full:  "sha256:6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3d4e5"
+        head kept: true   tail kept: true   trust domain intact: n/a
+
+    shown: "spiffe://innsegl.dev/agent/…/run-0e91bd"
+    full:  "spiffe://innsegl.dev/agent/release-notes/task-902/run-0e91bd"
+        head kept: true   tail kept: true   trust domain intact: true
+
+    shown: "spiffe://innsegl.dev/agent/…/run-b52a10"
+    full:  "spiffe://innsegl.dev/agent/fix-ci/task-1477/run-b52a10"
+        head kept: true   tail kept: true   trust domain intact: true
+
+    truncations measured: 14;  trust domains lost: 0
+
+    The same ellipsis character appears in copy that abbreviates nothing.
+    Excluded from the count above, and listed so the exclusion is visible:
+        "Loading runs…"
+
+── pushed past its width: which loses, the width or the domain? ──────────────
+
+    chip/spiffe-narrow renders a 72-character SPIFFE ID with maxLength=12 —
+    a width far too small to hold the trust domain. identifier.ts claims
+    "if they do not fit the requested width, the width loses". Measured:
+
+        requested maxLength: 12
+        rendered glyphs:     "spiffe://innsegl.dev/…/run-7f3a2c"  (33 characters)
+        full value:          "spiffe://innsegl.dev/agent/fix-ci/task-1481/attempt-3/shard-11/run-7f3a2c"
+        trust domain "spiffe://innsegl.dev" present in the glyphs: YES
+
+── what assistive technology receives ────────────────────────────────────────
+
+    doc 06 §6.4: "Truncated identifiers expose their full value to
+    assistive tech." The abbreviated glyphs are aria-hidden, so the
+    ellipsis never reaches a reader who cannot see it is one. Measured on
+    chip/spiffe-long:
+
+        visible glyphs:            "spiffe://innsegl.dev/agent/…/run-7f3a2c"
+        those glyphs aria-hidden:  true
+        title attribute:           "spiffe://innsegl.dev/agent/fix-ci/task-1481/attempt-3/shard-11/run-7f3a2c"
+        everything announced:      "spiffe://innsegl.dev/agent/fix-ci/task-1481/attempt-3/shard-11/run-7f3a2c spiffe://innsegl.dev/agent/…/run-7f3a2c SPIFFE ID: spiffe://innsegl.dev/agent/fix-ci/task-1481/attempt-3/shard-11/run-7f3a2c. Copy Open SPIFFE ID spiffe://innsegl.dev/agent/fix-ci/task-1481/attempt-3/shard-11/run-7f3a2c"
+
+── what this probe cannot determine ──────────────────────────────────────────
+
+    Whether the rendered glyphs FIT the space they are given is a layout
+    question. jsdom computes no layout — every box is zero by zero — so
+    this probe cannot say whether an untruncated identifier overflows its
+    column or wraps. That is a browser measurement and belongs to #57.
+    What is measured here is the content of the truncation, which is what
+    doc 06 §8.6 forbids losing.

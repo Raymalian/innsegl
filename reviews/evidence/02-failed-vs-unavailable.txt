@@ -1,0 +1,94 @@
+Probe 2 — doc 06 §8.2: any collapse of *failed* and *unavailable* into one visual state
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at fadaf6b.
+Node v26.8.1. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── method, and why it is built this way ──────────────────────────────────────
+
+    The comparison below reads NO attribute. `class`, `style` and every
+    `data-*` are absent from all four channels by construction — a
+    perception is assembled from words, drawn geometry and the colours
+    the built stylesheet resolves, not stripped down from markup.
+
+    Falsifiability check first: the same comparison, run over a pair that
+    IS identical, must report identical.
+
+        panel/failed vs itself, sighted:   IDENTICAL
+        panel/failed vs itself, greyscale: IDENTICAL
+
+── the two panels, compared channel by channel ───────────────────────────────
+
+    sighted, light mode: differ
+    line 6
+      failed:            <span [--tw-border-style=solid background-color=#fdecec border-color=#c02029 border-style=solid border-width=1px color=#9b1921 font-size=.75rem]>
+      unavailable:       <span [--tw-border-style=solid background-color=#fbf2da border-color=#8c6404 border-style=solid border-width=1px color=#6f4e03 font-size=.75rem]>
+
+    sighted, dark mode: differ
+    line 6
+      failed:            <span [--tw-border-style=solid background-color=#480a0e border-color=#e5626a border-style=solid border-width=1px color=#f0989d font-size=.75rem]>
+      unavailable:       <span [--tw-border-style=solid background-color=#332401 border-color=#c6951d border-style=solid border-width=1px color=#dfb144 font-size=.75rem]>
+
+    greyscale (colour deleted): differ
+    line 7
+      failed:              <drawn path(d=M8 2 14.5 13.5h-13z) path(d=M8 6.5v3.5) path(d=M8 12v.5)>
+      unavailable:         <drawn circle(cx=8 cy=8 r=5.5) path(d=M6.5 6.5a1.5 1.5 0 1 1 1.5 1.5V9.5) path(d=M8 11.5v.5)>
+
+    announced: differ
+    line 6
+      failed:            <span title=A check ran and what it checked does not hold.>
+      unavailable:       <span title=A check could not run, so nothing here is proven either way.>
+
+
+── the rollup badge alone, which is what a table shows ───────────────────────
+
+    summary/verified
+        visible words   "Verified"
+    <summary>
+      <span [--tw-border-style=solid background-color=#e6f4ec border-color=#167a49 border-style=solid border-width=1px color=#116039 font-size=.75rem]>
+        <drawn circle(cx=8 cy=8 r=5.5) path(d=M5.25 8.25 7.25 10.25 10.75 5.75)>
+        <span>
+          "Verified"
+
+    summary/failed
+        visible words   "Failed"
+    <summary>
+      <span [--tw-border-style=solid background-color=#fdecec border-color=#c02029 border-style=solid border-width=1px color=#9b1921 font-size=.75rem]>
+        <drawn path(d=M8 2 14.5 13.5h-13z) path(d=M8 6.5v3.5) path(d=M8 12v.5)>
+        <span>
+          "Failed"
+
+    summary/unavailable
+        visible words   "Verification unavailable"
+    <summary>
+      <span [--tw-border-style=solid background-color=#fbf2da border-color=#8c6404 border-style=solid border-width=1px color=#6f4e03 font-size=.75rem]>
+        <drawn circle(cx=8 cy=8 r=5.5) path(d=M6.5 6.5a1.5 1.5 0 1 1 1.5 1.5V9.5) path(d=M8 11.5v.5)>
+        <span>
+          "Verification unavailable"
+
+
+── the three tri-state words, and the shape each carries ─────────────────────
+
+    doc 06 §4.2 asks for "three distinct visual treatments (color + icon
+    + label; never color alone)". Measured, per verdict:
+
+    verified     word "Verified"   shape circle+path
+    failed       word "Failed"   shape path+path+path
+    unavailable  word "Verification unavailable"   shape circle+path+path
+
+── the same distinction in the run-detail and public pages ───────────────────
+
+    view/run-detail-proof-unavailable
+        The same view when the proof endpoint does not answer.
+        visible words: Run detail Retired Agent identity spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c Run run-7f3a2c Agent type fix-ci Task JIRA-118 Registered 19 min ago Retired 14 min ago Commits recorded 1 Latest chain position 46 Repositories innsegl Credential expiry history Issued 18 min ago Expires in 42 min Audience innsegl.dev Chain position 2 Timeline 1 tool call Run registered 19 min ago Chain position 1 source: mcp Appended by the MCP server as the agent worked. First event in this response There is no earlier event here to link it to. Event 01HQ8Z3K7M4N5P6Q7R8S9T0V01 Event hash sha256:1a2b3c4d
+
+    view/public-verify-upstreams-blocked
+        doc 06 §3.6 when Fulcio and Rekor are both unreachable — the page's central honesty case.
+        visible words: Verify a commit Enter a commit SHA. The checks below run against Fulcio and Rekor at the moment you ask, and this page has no access to the ledger it would need to answer any other way. Commit SHA The object name, or any revision this deployment can resolve. Repository Optional. Left empty, every repository this deployment serves is searched. Check this commit Fulcio, Rekor unreachable — verification can't run Retry, or verify offline with the material below. Retry Verification Verification unavailable Commit 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 Fulcio certificate chain valid Unavailable t
+
+    view/public-verify-failed
+        doc 06 §3.6 with checks that ran and did not hold.
+        visible words: Verify a commit Enter a commit SHA. The checks below run against Fulcio and Rekor at the moment you ask, and this page has no access to the ledger it would need to answer any other way. Commit SHA The object name, or any revision this deployment can resolve. Repository Optional. Left empty, every repository this deployment serves is searched. Check this commit Verification Failed Commit 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 Fulcio certificate chain valid Verified the check ran and the claim holds Rekor inclusion proven Failed the check ran and the claim does not hold Log index 82914 Trailer
+
+    unreachable-upstreams page == failed-checks page? no — they differ

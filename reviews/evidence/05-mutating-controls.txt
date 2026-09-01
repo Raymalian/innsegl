@@ -1,0 +1,349 @@
+Probe 5 — doc 06 §8.5: mutating controls of any kind in the UI
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at fadaf6b.
+Node v26.8.1. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── every interactive element in the gallery ──────────────────────────────────
+
+    Enumerated from the rendered DOM: <button>, <a href>, <form>, <input>,
+    <select>, <textarea>, [role=button], [contenteditable], [onclick].
+
+    controls found: 356
+
+    <a> x1  href="#_r_13_-identity"
+        words: "See the two identities"
+        action: UNCLASSIFIED
+    <a> x1  href="/runs/run-7f3a2c"
+        words: "Open SPIFFE ID spiffe://innsegl.dev/agent/fix-ci/task-1481/attempt-3/shard-11/run-7f3a2c"
+        action: navigate
+    <a> x1  href="/api/v1/alerts/drift-1"
+        words: "See the evidence"
+        action: UNCLASSIFIED
+    <a> x2  href="/api/v1/overview"
+        words: "See the evidence"
+        action: UNCLASSIFIED
+    <a> x6  href="/verify"
+        words: "Verify a commit"
+        action: re-read — a GET, not a write
+    <a> x7  href="/runs/run-7f3a2c"
+        words: "Open Run ID run-7f3a2c"
+        action: navigate
+    <a> x7  href="/runs/run-0e91bd"
+        words: "Open Run ID run-0e91bd"
+        action: navigate
+    <a> x7  href="/runs/run-b52a10"
+        words: "Open Run ID run-b52a10"
+        action: navigate
+    <a> x1  href="/api/v1/overview"
+        words: "See the response this count came from"
+        action: UNCLASSIFIED
+    <a> x7  href="/repos/innsegl.dev%2Fcore"
+        words: "innsegl.dev/core"
+        action: UNCLASSIFIED
+    <a> x4  href="/repos/innsegl.dev%2Fdocs"
+        words: "innsegl.dev/docs"
+        action: UNCLASSIFIED
+    <a> x2  href="/runs/run-7f3a2c"
+        words: "run-7f3a2c"
+        action: UNCLASSIFIED
+    <a> x2  href="/agent-types/fix-ci"
+        words: "fix-ci"
+        action: UNCLASSIFIED
+    <a> x2  href="/runs/run-0e91bd"
+        words: "run-0e91bd"
+        action: UNCLASSIFIED
+    <a> x1  href="/agent-types/release-notes"
+        words: "release-notes"
+        action: UNCLASSIFIED
+    <a> x2  href="/runs/run-b52a10"
+        words: "run-b52a10"
+        action: UNCLASSIFIED
+    <a> x1  href="#main"
+        words: "Skip to main content"
+        action: disclosure or in-page navigation
+    <a> x1  href="/"
+        words: "Overview"
+        action: UNCLASSIFIED
+    <a> x1  href="/runs"
+        words: "Runs"
+        action: UNCLASSIFIED
+    <button> x25  type="button"
+        words: "4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 Commit S"
+        action: UNCLASSIFIED
+    <button> x27  type="button"
+        words: "82914 82914 Rekor entry index: 82914. Copy"
+        action: copy — P6 permits it explicitly
+    <button> x39  type="button"
+        words: "spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c spiffe://innsegl.dev/agent/…/run-7f"
+        action: UNCLASSIFIED
+    <button> x2  type="button"
+        words: "spiffe://innsegl.dev/agent/fix-ci/task-1481/attempt-3/shard-11/run-7f3a2c spiffe://innsegl"
+        action: UNCLASSIFIED
+    <button> x5  type="button"
+        words: "Retry"
+        action: re-read — a GET, not a write
+    <button> x4  type="button"
+        words: "sha256:1f9c0b sha256:1f9c0b Identifier: sha256:1f9c0b. Copy"
+        action: copy — P6 permits it explicitly
+    <button> x10  type="button"
+        words: "run-7f3a2c run-7f3a2c Run ID: run-7f3a2c. Copy"
+        action: copy — P6 permits it explicitly
+    <button> x7  type="button"
+        words: "run-0e91bd run-0e91bd Run ID: run-0e91bd. Copy"
+        action: copy — P6 permits it explicitly
+    <button> x7  type="button"
+        words: "run-b52a10 run-b52a10 Run ID: run-b52a10. Copy"
+        action: copy — P6 permits it explicitly
+    <button> x5  type="submit"
+        words: "Apply filters"
+        action: filter or paginate
+    <button> x5  type="button"
+        words: "Clear filters"
+        action: filter or paginate
+    <button> x3  type="button"
+        words: "spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c spiffe://innsegl.dev/agent/fix-ci/t"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "2026-08-31 11:41:00 UTC 19 min ago Registered: 2026-08-31 11:41:00 UTC, 19 min ago"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "2026-08-31 11:46:00 UTC 14 min ago Retired: 2026-08-31 11:46:00 UTC, 14 min ago"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "2026-08-31 11:42:00 UTC 18 min ago Issued: 2026-08-31 11:42:00 UTC, 18 min ago"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "2026-08-31 12:42:00 UTC in 42 min Expires: 2026-08-31 12:42:00 UTC, in 42 min"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "2026-08-31 11:41:00 UTC 19 min ago Run registered: 2026-08-31 11:41:00 UTC, 19 min ago"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "01HQ8Z3K7M4N5P6Q7R8S9T0V01 01HQ8Z3K7M4N5P6Q7R8S9T0V01 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V"
+        action: UNCLASSIFIED
+    <button> x6  type="button"
+        words: "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809 sha256:1a2b3c4d5e6"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "sha256:708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3d4e5f6 sha256:708192a3b4c"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "2026-08-31 11:42:00 UTC 18 min ago Credential issued: 2026-08-31 11:42:00 UTC, 18 min ago"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "01HQ8Z3K7M4N5P6Q7R8S9T0V02 01HQ8Z3K7M4N5P6Q7R8S9T0V02 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V"
+        action: UNCLASSIFIED
+    <button> x6  type="button"
+        words: "sha256:2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1 sha256:2b3c4d5e6f7"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "2026-08-31 11:43:00 UTC 17 min ago Tool call: 2026-08-31 11:43:00 UTC, 17 min ago"
+        action: navigate
+    <button> x3  type="button"
+        words: "01HQ8Z3K7M4N5P6Q7R8S9T0V03 01HQ8Z3K7M4N5P6Q7R8S9T0V03 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V"
+        action: UNCLASSIFIED
+    <button> x6  type="button"
+        words: "sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2 sha256:3c4d5e6f708"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "sha256:aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899 sha256:aabbccddeef"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "2026-08-31 11:44:00 UTC 16 min ago Commit intent: 2026-08-31 11:44:00 UTC, 16 min ago"
+        action: UNCLASSIFIED
+    <button> x6  type="button"
+        words: "01HQ8Z3K7M4N5P6Q7R8S9T0V04 01HQ8Z3K7M4N5P6Q7R8S9T0V04 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V"
+        action: UNCLASSIFIED
+    <button> x6  type="button"
+        words: "sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3 sha256:4d5e6f70819"
+        action: UNCLASSIFIED
+    <button> x6  type="button"
+        words: "9a8b7c6d5e4f302918273645afbecd0192837465 9a8b7c6d5e4f302918273645afbecd0192837465 Commit S"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "2026-08-31 11:45:00 UTC 15 min ago Commit recorded: 2026-08-31 11:45:00 UTC, 15 min ago"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "01HQ8Z3K7M4N5P6Q7R8S9T0V05 01HQ8Z3K7M4N5P6Q7R8S9T0V05 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V"
+        action: UNCLASSIFIED
+    <button> x6  type="button"
+        words: "sha256:5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3d4 sha256:5e6f708192a"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "24296fb24b8ad77a1c9f6d3e5b4a2f1908e7d6c5b4a39281706f5e4d3c2b1a09 24296fb24b8ad77a1c9f6d…39"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "Verify this commit"
+        action: re-read — a GET, not a write
+    <button> x3  type="button"
+        words: "2026-08-31 11:46:00 UTC 14 min ago Run retired: 2026-08-31 11:46:00 UTC, 14 min ago"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "01HQ8Z3K7M4N5P6Q7R8S9T0V06 01HQ8Z3K7M4N5P6Q7R8S9T0V06 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V"
+        action: UNCLASSIFIED
+    <button> x3  type="button"
+        words: "sha256:6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3d4e5 sha256:6f708192a3b"
+        action: UNCLASSIFIED
+    <button> x1  type="button"
+        words: "Run the checks again"
+        action: UNCLASSIFIED
+    <button> x2  type="button"
+        words: "spiffe://innsegl.dev/agent/release-notes/task-902/run-0e91bd spiffe://innsegl.dev/agent/…/"
+        action: UNCLASSIFIED
+    <button> x2  type="button"
+        words: "spiffe://innsegl.dev/agent/fix-ci/task-1477/run-b52a10 spiffe://innsegl.dev/agent/…/run-b5"
+        action: UNCLASSIFIED
+    <button> x4  type="submit"
+        words: "Check this commit"
+        action: UNCLASSIFIED
+    <form> x5  
+        words: "Filters Repository Agent type Status Any status Active Retired Expired Registered from Reg"
+        action: filter or paginate
+    <form> x4  
+        words: "Commit SHA The object name, or any revision this deployment can resolve. Repository Option"
+        action: UNCLASSIFIED
+    <input> x18  type="text"
+        words: "(no words)"
+        action: UNCLASSIFIED
+    <input> x10  type="date"
+        words: "(no words)"
+        action: UNCLASSIFIED
+    <input> x5  type="search"
+        words: "(no words)"
+        action: UNCLASSIFIED
+    <input> x3  type="radio"
+        words: "(no words)"
+        action: UNCLASSIFIED
+    <select> x5  
+        words: "Any status Active Retired Expired"
+        action: UNCLASSIFIED
+
+── anything whose words would name a mutation ────────────────────────────────
+
+    none. No control in the gallery carries a word from the mutation
+    vocabulary (delete, remove, revoke, retire, edit, update, save,
+    create, add, submit, approve, reject, disable, enable, rotate,
+    publish, upload, import, write, modify, archive, restore).
+
+── controls this probe could not classify ────────────────────────────────────
+
+    Printed for a human rather than waved through:
+    <a> "See the two identities" href="#_r_13_-identity"
+    <a> "See the evidence" href="/api/v1/alerts/drift-1"
+    <a> "See the evidence" href="/api/v1/overview"
+    <a> "See the response this count came from" href="/api/v1/overview"
+    <a> "innsegl.dev/core" href="/repos/innsegl.dev%2Fcore"
+    <a> "innsegl.dev/docs" href="/repos/innsegl.dev%2Fdocs"
+    <a> "run-7f3a2c" href="/runs/run-7f3a2c"
+    <a> "fix-ci" href="/agent-types/fix-ci"
+    <a> "run-0e91bd" href="/runs/run-0e91bd"
+    <a> "release-notes" href="/agent-types/release-notes"
+    <a> "run-b52a10" href="/runs/run-b52a10"
+    <a> "Overview" href="/"
+    <a> "Runs" href="/runs"
+    <button> "4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 Commit S" type="button"
+    <button> "spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c spiffe://innsegl.dev/agent/…/run-7f" type="button"
+    <button> "spiffe://innsegl.dev/agent/fix-ci/task-1481/attempt-3/shard-11/run-7f3a2c spiffe://innsegl" type="button"
+    <button> "spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c spiffe://innsegl.dev/agent/fix-ci/t" type="button"
+    <button> "2026-08-31 11:41:00 UTC 19 min ago Registered: 2026-08-31 11:41:00 UTC, 19 min ago" type="button"
+    <button> "2026-08-31 11:46:00 UTC 14 min ago Retired: 2026-08-31 11:46:00 UTC, 14 min ago" type="button"
+    <button> "2026-08-31 11:42:00 UTC 18 min ago Issued: 2026-08-31 11:42:00 UTC, 18 min ago" type="button"
+    <button> "2026-08-31 12:42:00 UTC in 42 min Expires: 2026-08-31 12:42:00 UTC, in 42 min" type="button"
+    <button> "2026-08-31 11:41:00 UTC 19 min ago Run registered: 2026-08-31 11:41:00 UTC, 19 min ago" type="button"
+    <button> "01HQ8Z3K7M4N5P6Q7R8S9T0V01 01HQ8Z3K7M4N5P6Q7R8S9T0V01 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V" type="button"
+    <button> "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809 sha256:1a2b3c4d5e6" type="button"
+    <button> "sha256:708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3d4e5f6 sha256:708192a3b4c" type="button"
+    <button> "2026-08-31 11:42:00 UTC 18 min ago Credential issued: 2026-08-31 11:42:00 UTC, 18 min ago" type="button"
+    <button> "01HQ8Z3K7M4N5P6Q7R8S9T0V02 01HQ8Z3K7M4N5P6Q7R8S9T0V02 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V" type="button"
+    <button> "sha256:2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1 sha256:2b3c4d5e6f7" type="button"
+    <button> "01HQ8Z3K7M4N5P6Q7R8S9T0V03 01HQ8Z3K7M4N5P6Q7R8S9T0V03 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V" type="button"
+    <button> "sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2 sha256:3c4d5e6f708" type="button"
+    <button> "sha256:aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899 sha256:aabbccddeef" type="button"
+    <button> "2026-08-31 11:44:00 UTC 16 min ago Commit intent: 2026-08-31 11:44:00 UTC, 16 min ago" type="button"
+    <button> "01HQ8Z3K7M4N5P6Q7R8S9T0V04 01HQ8Z3K7M4N5P6Q7R8S9T0V04 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V" type="button"
+    <button> "sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3 sha256:4d5e6f70819" type="button"
+    <button> "9a8b7c6d5e4f302918273645afbecd0192837465 9a8b7c6d5e4f302918273645afbecd0192837465 Commit S" type="button"
+    <button> "2026-08-31 11:45:00 UTC 15 min ago Commit recorded: 2026-08-31 11:45:00 UTC, 15 min ago" type="button"
+    <button> "01HQ8Z3K7M4N5P6Q7R8S9T0V05 01HQ8Z3K7M4N5P6Q7R8S9T0V05 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V" type="button"
+    <button> "sha256:5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3d4 sha256:5e6f708192a" type="button"
+    <button> "24296fb24b8ad77a1c9f6d3e5b4a2f1908e7d6c5b4a39281706f5e4d3c2b1a09 24296fb24b8ad77a1c9f6d…39" type="button"
+    <button> "2026-08-31 11:46:00 UTC 14 min ago Run retired: 2026-08-31 11:46:00 UTC, 14 min ago" type="button"
+    <button> "01HQ8Z3K7M4N5P6Q7R8S9T0V06 01HQ8Z3K7M4N5P6Q7R8S9T0V06 Identifier: 01HQ8Z3K7M4N5P6Q7R8S9T0V" type="button"
+    <button> "sha256:6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3d4e5 sha256:6f708192a3b" type="button"
+    <button> "Run the checks again" type="button"
+    <button> "spiffe://innsegl.dev/agent/release-notes/task-902/run-0e91bd spiffe://innsegl.dev/agent/…/" type="button"
+    <button> "spiffe://innsegl.dev/agent/fix-ci/task-1477/run-b52a10 spiffe://innsegl.dev/agent/…/run-b5" type="button"
+    <button> "Check this commit" type="submit"
+    <input> "(no words)" type="text"
+    <input> "(no words)" type="date"
+    <input> "(no words)" type="search"
+    <input> "(no words)" type="radio"
+    <select> "Any status Active Retired Expired" 
+
+── the forms, and what they would submit ─────────────────────────────────────
+
+    view/runs-ready: <form method="(none — HTML default GET)" action="(none)">  fields: input[name=repo type=text], input[name=agent_type type=text], select[name=status type=-], input[name=from type=date], input[name=to type=date], input[name=q type=search]
+    view/runs-empty: <form method="(none — HTML default GET)" action="(none)">  fields: input[name=repo type=text], input[name=agent_type type=text], select[name=status type=-], input[name=from type=date], input[name=to type=date], input[name=q type=search]
+    view/runs-failed: <form method="(none — HTML default GET)" action="(none)">  fields: input[name=repo type=text], input[name=agent_type type=text], select[name=status type=-], input[name=from type=date], input[name=to type=date], input[name=q type=search]
+    view/runs-with-proofs: <form method="(none — HTML default GET)" action="(none)">  fields: input[name=repo type=text], input[name=agent_type type=text], select[name=status type=-], input[name=from type=date], input[name=to type=date], input[name=q type=search]
+    view/runs-degraded: <form method="(none — HTML default GET)" action="(none)">  fields: input[name=repo type=text], input[name=agent_type type=text], select[name=status type=-], input[name=from type=date], input[name=to type=date], input[name=q type=search]
+    view/public-verify-idle: <form method="(none — HTML default GET)" action="(none)">  fields: input[name=commit type=text], input[name=repo type=text]
+    view/public-verify-proven: <form method="(none — HTML default GET)" action="(none)">  fields: input[name=commit type=text], input[name=repo type=text]
+    view/public-verify-upstreams-blocked: <form method="(none — HTML default GET)" action="(none)">  fields: input[name=commit type=text], input[name=repo type=text]
+    view/public-verify-failed: <form method="(none — HTML default GET)" action="(none)">  fields: input[name=commit type=text], input[name=repo type=text]
+
+── every HTTP method the built bundle contains ───────────────────────────────
+
+    A control cannot mutate without a method. This reads the shipped
+    JavaScript, not the source, so anything a dependency does is included.
+
+    method: options found in the bundle: GET
+
+    Every fetch call site in the bundle, with the options it passes:
+    fetch(m.href,v)}})()
+    fetch(eb(i),{signal:c,headers:{accept:"application/json"}}),f=await o.json().catch(()=>null)
+    fetch(i,{signal:c,headers:{Accept:"application/json"}})
+    fetch(h0(i),{signal:c,headers:{accept:"application/json"}}),f=await o.json().catch(()=>null)
+    fetch(`/api/v1/proof/${encodeURIComponent(i)}`,{signal:c})
+    fetch(`/api/v1/runs/${encodeURIComponent(i)}`,{signal:c})
+    fetch(i,{signal:c,method:"GET",cache:"no-store",headers:{accept:"application/json"}})
+
+    A fetch with no `method` is a GET. That is the HTTP default and is
+    what every call above relies on.
+
+── the same question asked of the source ─────────────────────────────────────
+
+    no non-GET method, no XMLHttpRequest, no sendBeacon anywhere in web/src
+
+── localStorage and other writes that leave the page ─────────────────────────
+
+    P6 is about the SYSTEM's state. A preference stored in the reader's
+    own browser writes nothing to the ledger, but it is a write, so it is
+    named here rather than left out:
+    src/app/App.test.tsx:39:const originalStorage = Object.getOwnPropertyDescriptor(window, "localStorage");
+    src/app/App.test.tsx:54:  Object.defineProperty(window, "localStorage", {
+    src/app/App.test.tsx:64:    Object.defineProperty(window, "localStorage", originalStorage);
+    src/app/App.test.tsx:201:    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+    src/app/App.test.tsx:210:    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
+    src/app/App.test.tsx:214:    window.localStorage.setItem(THEME_STORAGE_KEY, "light");
+    src/app/theme.ts:42: * The try/catch is not decoration. Reading localStorage throws outright in a
+    src/app/theme.ts:47:  'try{var t=localStorage.getItem("innsegl.theme");' +
+    src/app/theme.ts:62:    stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    src/app/theme.ts:77:      window.localStorage.removeItem(THEME_STORAGE_KEY);
+    src/app/theme.ts:79:      window.localStorage.setItem(THEME_STORAGE_KEY, preference);
+    src/app/theme.test.ts:29:// This vitest/jsdom environment exposes no working localStorage: `window` is
+    src/app/theme.test.ts:30:// the Node global object, and Node's own experimental `localStorage` getter —
+    src/app/theme.test.ts:34:// unchanged and reads `window.localStorage` exactly as a browser serves it.
+    src/app/theme.test.ts:57:const originalStorage = Object.getOwnPropertyDescriptor(window, "localStorage");
+    src/app/theme.test.ts:60:  Object.defineProperty(window, "localStorage", {
+    src/app/theme.test.ts:69:    Object.defineProperty(window, "localStorage", originalStorage);
+    src/app/theme.test.ts:117:    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+    src/app/theme.test.ts:126:    window.localStorage.setItem(THEME_STORAGE_KEY, "midnight");
+    src/app/theme.test.ts:133:    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
+    src/app/theme.test.ts:137:    Object.defineProperty(window, "localStorage", {
+    src/app/theme.test.ts:168:    window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
+    src/app/theme.test.ts:180:    window.localStorage.setItem(THEME_STORAGE_KEY, "light");
+    src/app/theme.test.ts:181:    Object.defineProperty(window, "localStorage", {
+    index.html:23:try{var t=localStorage.getItem("innsegl.theme");if(t==="light"||t==="dark"){document.documentElement.setAttribute("data-theme",t)}}catch(e){}

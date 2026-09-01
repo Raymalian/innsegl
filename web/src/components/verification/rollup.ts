@@ -52,15 +52,25 @@ import { CHECK_IDS, CHECK_NAMES } from "./types";
 export interface Liveness {
   /**
    * `live` — this proof is the result of a check that just ran.
-   * `cache`  — it is a retained earlier answer.
+   * `cache` — it is a retained earlier answer.
    *
-   * Defaulting to `live` is not optimism: `internal/api`'s Prover runs
-   * `internal/verify` on every request and neither of them holds a cache, so a
-   * caller with a proof and nothing to say about it has a live one. A caller
-   * holding a retained answer has to say so, and the whole of FE-003 is what
-   * happens when it does.
+   * REQUIRED. It was optional, on the reasoning that `internal/api`'s Prover
+   * runs `internal/verify` on every request and neither holds a cache, so a
+   * caller with nothing to say has a live proof. That reasoning is sound about
+   * the BFF and wrong about the caller, and making the PROP required did not
+   * finish the job: `liveness={{}}` still compiled and still painted green,
+   * because an empty object satisfied an interface whose every member was
+   * optional. RM-050's anti-pattern review found that hole by trying it.
+   *
+   * So the hole was one level down from where it was closed. An omitted prop
+   * was caught; a prop present and silent was not — which is the more likely
+   * mistake, because it looks like the author considered the question.
+   *
+   * RM-045 had already narrowed this in `views/runs/proofs.ts` rather than
+   * here, and named the hole in a comment. This is that narrowing moved to the
+   * one place every caller goes through.
    */
-  readonly source?: "live" | "cache";
+  readonly source: "live" | "cache";
   /** What the live attempt said when it failed. Rendered verbatim (P1). */
   readonly liveError?: string;
 }
@@ -114,7 +124,10 @@ function allThreePresent(checks: readonly Check[]): boolean {
  */
 export function verdictOf(
   proof: Proof,
-  liveness: Liveness = {},
+  // No default. `= {}` was the same silence the prop-level default had, one
+  // layer down: a caller that omitted it got a live reading of a proof it may
+  // have been holding for an hour.
+  liveness: Liveness,
   findings: readonly Finding[] = [],
 ): Rollup {
   if (proof.verdict === "unattributed" && proof.checks.length === 0) {
