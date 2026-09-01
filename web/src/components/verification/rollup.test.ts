@@ -98,7 +98,7 @@ describe("FE-002 the rollup of three checks", () => {
   it("refuses to say verified unless all three named checks are present", () => {
     const proof = verifiedProof();
     const missing = { ...proof, checks: proof.checks.slice(0, 2) };
-    expect(verdictOf(missing).verdict).toBe("unavailable");
+    expect(verdictOf(missing, { source: "live" }).verdict).toBe("unavailable");
     const renamed = {
       ...proof,
       checks: [
@@ -107,7 +107,7 @@ describe("FE-002 the rollup of three checks", () => {
         proof.checks[2],
       ],
     } as typeof proof;
-    expect(verdictOf(renamed).verdict).toBe("unavailable");
+    expect(verdictOf(renamed, { source: "live" }).verdict).toBe("unavailable");
   });
 
   it("ignores the verdict the response reports and rolls up the checks itself", () => {
@@ -117,12 +117,12 @@ describe("FE-002 the rollup of three checks", () => {
       verdict: "verified",
     });
     expect(lying.verdict).toBe("verified");
-    expect(verdictOf(lying).verdict).toBe("failed");
+    expect(verdictOf(lying, { source: "live" }).verdict).toBe("failed");
   });
 
   it("keeps unattributed distinct from failed (doc 06 §8 anti-pattern 2)", () => {
     const unattributed = { ...verifiedProof(), verdict: "unattributed" as const, checks: [] };
-    expect(verdictOf(unattributed).verdict).toBe("unattributed");
+    expect(verdictOf(unattributed, { source: "live" }).verdict).toBe("unattributed");
   });
 });
 
@@ -154,12 +154,15 @@ describe("FE-003 a live check that errored outranks a cached verdict", () => {
       upstreamsReachable: false,
     });
     expect(rollupChecks(proof.checks)).toBe("verified");
-    expect(verdictOf(proof).verdict).toBe("unavailable");
-    expect(verdictOf(proof).reasons).toContain("upstream-unreachable");
+    expect(verdictOf(proof, { source: "live" }).verdict).toBe("unavailable");
+    expect(verdictOf(proof, { source: "live" }).reasons).toContain("upstream-unreachable");
   });
 
   it("renders unavailable when the response contradicts its own material", () => {
-    const rolled = verdictOf(verifiedProof(), undefined, [
+    // Live, deliberately: the point of this case is that a contradiction in the
+    // response's own material withholds the verdict even when the check was
+    // genuinely live. Passing a cache here would prove the weaker thing.
+    const rolled = verdictOf(verifiedProof(), { source: "live" }, [
       { name: "the log index is the one the response reports", result: "contradicts" },
     ]);
     expect(rolled.verdict).toBe("unavailable");
@@ -189,10 +192,20 @@ describe("FE-003 a live check that errored outranks a cached verdict", () => {
     expect(rolled.verdict).toBe("failed");
   });
 
-  it("is live by default, because the backend holds no cache", () => {
-    // internal/api's Prover runs internal/verify on every request and neither
-    // holds a cache, so a caller that says nothing is reporting a live check.
-    expect(verdictOf(verifiedProof()).verdict).toBe("verified");
+  it("has no default: the caller states the source or does not compile", () => {
+    // This case used to assert the opposite — that a caller saying nothing was
+    // reporting a live check, because internal/api's Prover holds no cache.
+    // That is true of the Prover and irrelevant to the caller: the only thing
+    // that knows a proof was retained is the code retaining it, and a default
+    // let it report a cache by saying nothing.
+    //
+    // RM-050's anti-pattern review found the residue. The prop had been made
+    // required, but `Liveness.source` was still optional and this function
+    // still defaulted its parameter to `{}`, so `liveness={{}}` compiled and
+    // painted green. Both are closed now; FE-039 holds the type-level half.
     expect(verdictOf(verifiedProof(), { source: "live" }).verdict).toBe("verified");
+    expect(verdictOf(verifiedProof(), { source: "cache" }).verdict).toBe(
+      "unavailable",
+    );
   });
 });

@@ -1,0 +1,286 @@
+Probe 3 — doc 06 §8.3: green used for anything other than cryptographic verification
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at fadaf6b.
+Node v26.8.1. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── 1. every green in the rendered output ─────────────────────────────────────
+
+    50 scenes walked, element by element. For each element the
+    class attribute is joined to web/dist/assets/*.css, var() chains are
+    chased through :root and light-dark() is evaluated in BOTH modes.
+
+    elements walked            5940
+    green declarations found   78
+
+    panel/liveness-empty-object
+        <span> color via .text-proof-verified  light #116039  dark #6ccf95
+        beside the words: "Verified"
+    panel/liveness-empty-object
+        <span> background-color via .bg-proof-verified-surface  light #e6f4ec  dark #062e1c
+        beside the words: "Verified"
+    panel/liveness-empty-object
+        <span> border-color via .border-proof-verified-line  light #167a49  dark #3cb573
+        beside the words: "Verified"
+    panel/verified-live
+        <span> color via .text-proof-verified  light #116039  dark #6ccf95
+        beside the words: "Verified"
+    panel/verified-live
+        <span> background-color via .bg-proof-verified-surface  light #e6f4ec  dark #062e1c
+        beside the words: "Verified"
+    panel/verified-live
+        <span> border-color via .border-proof-verified-line  light #167a49  dark #3cb573
+        beside the words: "Verified"
+    summary/verified
+        <span> color via .text-proof-verified  light #116039  dark #6ccf95
+        beside the words: "Verified"
+    summary/verified
+        <span> background-color via .bg-proof-verified-surface  light #e6f4ec  dark #062e1c
+        beside the words: "Verified"
+    summary/verified
+        <span> border-color via .border-proof-verified-line  light #167a49  dark #3cb573
+        beside the words: "Verified"
+    view/public-verify-proven
+        <span> color via .text-proof-verified  light #116039  dark #6ccf95
+        beside the words: "Verified"
+    view/public-verify-proven
+        <span> background-color via .bg-proof-verified-surface  light #e6f4ec  dark #062e1c
+        beside the words: "Verified"
+    view/public-verify-proven
+        <span> border-color via .border-proof-verified-line  light #167a49  dark #3cb573
+        beside the words: "Verified"
+    view/run-detail-verification-open
+        <span> color via .text-proof-verified  light #116039  dark #6ccf95
+        beside the words: "Verified"
+    view/run-detail-verification-open
+        <span> background-color via .bg-proof-verified-surface  light #e6f4ec  dark #062e1c
+        beside the words: "Verified"
+    view/run-detail-verification-open
+        <span> border-color via .border-proof-verified-line  light #167a49  dark #3cb573
+        beside the words: "Verified"
+    view/runs-with-proofs
+        <span> color via .text-proof-verified  light #116039  dark #6ccf95
+        beside the words: "Verified"
+    view/runs-with-proofs
+        <span> background-color via .bg-proof-verified-surface  light #e6f4ec  dark #062e1c
+        beside the words: "Verified"
+    view/runs-with-proofs
+        <span> border-color via .border-proof-verified-line  light #167a49  dark #3cb573
+        beside the words: "Verified"
+
+    Every scene above is a live cryptographic verification that passed.
+    The scenes NOT in the list are the whole rest of the gallery, and the
+    four that matter most are named here explicitly because they are the
+    states a careless build would have made green:
+        view/overview-calm                 green present: no
+        badge/status-active                green present: no
+        heartbeat/within-bound             green present: no
+        view/runs-ready                    green present: no
+
+    scenes carrying any green: panel/liveness-empty-object, panel/verified-live, summary/verified, view/public-verify-proven, view/run-detail-verification-open, view/runs-with-proofs
+
+    The rule, asserted rather than eyeballed: every green-painted element
+    in the gallery must carry the word "Verified" — doc 06 §5.3's
+    "cryptographic verification passed" and nothing else. The words beside
+    each green, deduplicated:
+        "Verified"
+
+    Classes on rendered elements that the build compiled NOTHING for —
+    a component asking for a utility that does not exist would show up
+    here, and that is how `bg-green-500` would arrive without a colour:
+        none. Every class on every rendered element has a compiled rule.
+
+── 2. every green value in the built stylesheet, class or not ────────────────
+
+    The walk above only sees rules attached to a class an element carries.
+    This sweep reads every rule in the file, base and theme layers, media
+    and pseudo-class rules included.
+
+    green-valued declarations in the whole sheet: 30
+         :root { --innsegl-color-proof-verified-border: light-dark(var(--innsegl-palette-verification-600),var(--innsegl-palette-verification-400)) } -> dark #3cb573 (hue 147°)
+         :root { --innsegl-color-proof-verified-border: light-dark(var(--innsegl-palette-verification-600),var(--innsegl-palette-verification-400)) } -> light #167a49 (hue 151°)
+         :root { --innsegl-color-proof-verified-surface: light-dark(var(--innsegl-palette-verification-50),var(--innsegl-palette-verification-900)) } -> dark #062e1c (hue 153°)
+         :root { --innsegl-color-proof-verified-surface: light-dark(var(--innsegl-palette-verification-50),var(--innsegl-palette-verification-900)) } -> light #e6f4ec (hue 146°)
+         :root { --innsegl-color-proof-verified-text: light-dark(var(--innsegl-palette-verification-700),var(--innsegl-palette-verification-300)) } -> dark #6ccf95 (hue 145°)
+         :root { --innsegl-color-proof-verified-text: light-dark(var(--innsegl-palette-verification-700),var(--innsegl-palette-verification-300)) } -> light #116039 (hue 150°)
+         :root { --innsegl-palette-verification-100: #c6e7d5 } -> dark #c6e7d5 (hue 147°)
+         :root { --innsegl-palette-verification-100: #c6e7d5 } -> light #c6e7d5 (hue 147°)
+         :root { --innsegl-palette-verification-300: #6ccf95 } -> dark #6ccf95 (hue 145°)
+         :root { --innsegl-palette-verification-300: #6ccf95 } -> light #6ccf95 (hue 145°)
+         :root { --innsegl-palette-verification-400: #3cb573 } -> dark #3cb573 (hue 147°)
+         :root { --innsegl-palette-verification-400: #3cb573 } -> light #3cb573 (hue 147°)
+         :root { --innsegl-palette-verification-50: #e6f4ec } -> dark #e6f4ec (hue 146°)
+         :root { --innsegl-palette-verification-50: #e6f4ec } -> light #e6f4ec (hue 146°)
+         :root { --innsegl-palette-verification-600: #167a49 } -> dark #167a49 (hue 151°)
+         :root { --innsegl-palette-verification-600: #167a49 } -> light #167a49 (hue 151°)
+         :root { --innsegl-palette-verification-700: #116039 } -> dark #116039 (hue 150°)
+         :root { --innsegl-palette-verification-700: #116039 } -> light #116039 (hue 150°)
+         :root { --innsegl-palette-verification-800: #0c462a } -> dark #0c462a (hue 151°)
+         :root { --innsegl-palette-verification-800: #0c462a } -> light #0c462a (hue 151°)
+         :root { --innsegl-palette-verification-900: #062e1c } -> dark #062e1c (hue 153°)
+         :root { --innsegl-palette-verification-900: #062e1c } -> light #062e1c (hue 153°)
+        @layer components;@layer utilities .bg-\[\#00ff00\] { background-color: #0f0 } -> dark #00ff00 (hue 120°)
+        @layer components;@layer utilities .bg-\[\#00ff00\] { background-color: #0f0 } -> light #00ff00 (hue 120°)
+        @layer components;@layer utilities .bg-proof-verified-surface { background-color: var(--innsegl-color-proof-verified-surface) } -> dark #062e1c (hue 153°)
+        @layer components;@layer utilities .bg-proof-verified-surface { background-color: var(--innsegl-color-proof-verified-surface) } -> light #e6f4ec (hue 146°)
+        @layer components;@layer utilities .border-proof-verified-line { border-color: var(--innsegl-color-proof-verified-border) } -> dark #3cb573 (hue 147°)
+        @layer components;@layer utilities .border-proof-verified-line { border-color: var(--innsegl-color-proof-verified-border) } -> light #167a49 (hue 151°)
+        @layer components;@layer utilities .text-proof-verified { color: var(--innsegl-color-proof-verified-text) } -> dark #6ccf95 (hue 145°)
+        @layer components;@layer utilities .text-proof-verified { color: var(--innsegl-color-proof-verified-text) } -> light #116039 (hue 150°)
+
+    Of those, 28 name a --innsegl-palette-verification-* ramp or a
+    --innsegl-color-proof-verified-* token — the sanctioned green.
+
+    2 do not:
+        @layer components;@layer utilities .bg-\[\#00ff00\] { background-color: #0f0 } -> dark #00ff00 (hue 120°)
+        @layer components;@layer utilities .bg-\[\#00ff00\] { background-color: #0f0 } -> light #00ff00 (hue 120°)
+
+    FINDING. `.bg-[#00ff00] { background-color: #0f0 }` is in the SHIPPED
+    production stylesheet. No component uses it — the render walk in
+    section 1 found no element carrying the class, and section 3's grep
+    finds no call site. It is there because Tailwind v4 detects its own
+    sources automatically and extracts candidates from every file in the
+    project, PROSE INCLUDED. The literal appears in exactly three places,
+    all of them explanations of the rule it breaks:
+    src/components/common/colour-discipline.test.ts:19: * arbitrary-value syntax still compiles, so `bg-[#00ff00]` is legal CSS. It is
+    src/tokens/README.md:70:`bg-[#00ff00]` still compiles, deliberately. It is greppable and it looks
+    src/tokens/tailwind-theme.css:24: * `bg-[#00ff00]`. That is deliberate — it is greppable, it shows up in review
+
+    Causality, demonstrated rather than assumed. The same entry CSS is
+    compiled twice against the same theme, differing only in whether the
+    scanned directory contains a file with that string in a comment:
+
+    a directory holding one empty file
+        file contents:      "\n"
+        candidates scanned: []
+    the same directory, the literal inside a // comment
+        file contents:      "// the escape hatch this project keeps on purpose: bg-[#00ff00]\n"
+        candidates scanned: ["bg-[#00ff00]","escape","hatch","keeps","on","project","purpose","the","this"]
+    
+    the real tree, one file at a time, for the three files that carry it:
+        web/src/components/common/colour-discipline.test.ts  ->  yields bg-[#00ff00]: YES
+        web/src/tokens/README.md  ->  yields bg-[#00ff00]: YES
+        web/src/tokens/tailwind-theme.css  ->  yields bg-[#00ff00]: no
+
+── 3. the arbitrary-value escape hatch, hunted ───────────────────────────────
+
+    ADR-0038 decision 4: `bg-[#00ff00]` still compiles, deliberately —
+    "it is greppable, it reads in review as exactly what it is, and doc
+    07's FE-013 and RM-050's anti-pattern pass (#58) are where it gets
+    hunted." This is that hunt.
+
+    (a) Tailwind arbitrary COLOUR values anywhere in web/src:
+    src/components/common/colour-discipline.test.ts:19: * arbitrary-value syntax still compiles, so `bg-[#00ff00]` is legal CSS. It is
+    src/tokens/tailwind-theme.css:24: * `bg-[#00ff00]`. That is deliberate — it is greppable, it shows up in review
+
+        Classified. A hit is CODE when the matched text sits outside a
+        comment; every hit below is inside one, which is why the utility
+        exists in the stylesheet and on no element.
+        comment  src/components/common/colour-discipline.test.ts:19
+        comment  src/tokens/tailwind-theme.css:24
+
+    (b) every arbitrary-PROPERTY class in web/src, so the hatch is fully
+        enumerated rather than only searched for colours:
+    src/app/strings.ts:89:export type StringTree = { readonly [key: string]: string | StringTree };
+    src/components/verification/styles.ts:84:  "rounded-sm bg-mismatch-surface px-1 text-mismatch [text-decoration:var(--innsegl-text-decoration-mismatch)]";
+    src/components/common/styles.ts:29:  "focus-visible:outline-focus focus-visible:outline-[length:var(--innsegl-focus-ring-width)] focus-visible:outline-offset-[var(--innsegl-focus-ring-offset)]";
+    src/components/common/styles.ts:33:  "border-[length:var(--innsegl-border-width-hairline)] border-solid";
+    src/components/common/styles.ts:36:  "border-[length:var(--innsegl-border-width-emphasis)]";
+    src/components/common/styles.ts:42:export const expiredOutline = `border-[length:var(--innsegl-border-width-hairline)] [border-style:var(--innsegl-border-style-status-expired)]`;
+    src/components/common/styles.ts:51:  "font-mono text-body [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]";
+    src/views/public-verify/styles.ts:63:  "border-b-[length:var(--innsegl-border-width-hairline)] border-solid border-line px-cell-x py-cell-y text-left text-micro font-medium text-ink-muted";
+    src/views/public-verify/styles.ts:65:  "border-b-[length:var(--innsegl-border-width-hairline)] border-solid border-line px-cell-x py-cell-y align-top";
+    src/views/public-verify/styles.ts:71:  "rounded-sm border-[length:var(--innsegl-border-width-hairline)] border-solid border-line-strong bg-raised px-2 py-1 font-mono text-body text-ink";
+    src/views/public-verify/styles.ts:73:  "self-start rounded-sm border-[length:var(--innsegl-border-width-hairline)] border-solid border-accent-line bg-accent-surface px-3 py-1 font-medium text-accent";
+    src/views/run-detail/styles.ts:111:  "font-mono text-micro [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]";
+    src/views/overview/styles.ts:25:  "focus-visible:outline-focus focus-visible:outline-[length:var(--innsegl-focus-ring-width)] focus-visible:outline-offset-[var(--innsegl-focus-ring-offset)]";
+    src/views/overview/styles.ts:28:  "border-[length:var(--innsegl-border-width-hairline)] border-solid";
+    src/views/overview/styles.ts:50:  "text-display font-semibold leading-tight [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]";
+    src/views/runs/styles.ts:29:  "focus-visible:outline-focus focus-visible:outline-[length:var(--innsegl-focus-ring-width)] focus-visible:outline-offset-[var(--innsegl-focus-ring-offset)]";
+    src/views/runs/styles.ts:32:const hairlineWidth = "border-[length:var(--innsegl-border-width-hairline)]";
+    src/views/runs/styles.ts:34:  "border-b-[length:var(--innsegl-border-width-hairline)]";
+
+        Read: each names an --innsegl-* token. None carries a value.
+
+    (c) inline `style` attributes in the RENDERED output — the one route
+        to a colour that bypasses the stylesheet entirely, measured on the
+        DOM rather than grepped for:
+    none. 5940 elements across 50 scenes carry no style attribute.
+
+    (d) colour literals in the built JavaScript bundle, which is where an
+        inline style or a JS-computed colour would end up:
+    none — the bundle contains no colour literal at all
+
+── 4. the gate, tested by trying to defeat it ────────────────────────────────
+
+    (a) the shipped sheet, checked:
+    ==> Token sheet — doc 06 §§5.1, 5.3, 6.4
+        sheet /Users/kody/Applications/innsegl/web/src/tokens/tokens.css
+        pairs /Users/kody/Applications/innsegl/web/src/tokens/contrast-pairs.txt
+        45 palette values, 42 semantic colours, 66 contrast assertions (33 pairs x 2 modes)
+        tightest passing margin: --innsegl-color-border-strong on --innsegl-color-surface-default (dark) 3.19:1
+    
+    Token sheet: OK
+    
+
+    (b) the gate's own ten-case self-test, which proves it still bites:
+    ==> Self-test for the token sheet gate
+        gate  /Users/kody/Applications/innsegl/web/src/tokens/check-tokens.sh
+        sheet /Users/kody/Applications/innsegl/web/src/tokens/tokens.css
+    
+      ok   raw hex in the semantic layer      refused, naming "semantic colour must be light-dark"
+      ok   colour defined in one mode only    refused, naming "exactly two light-dark() arms"
+      ok   green for a non-verification       refused, naming "§5.3 violation"
+      ok   a token named for a claim          refused, naming "token name contains "success""
+      ok   reference to a missing token       refused, naming "names a token that does not exist"
+      ok   contrast lost in dark mode         refused, naming "below the required"
+      ok   a token named for its hue          refused, naming "token name contains "amber""
+      ok   prefers-color-scheme not honoured  refused, naming "color-scheme: light dark"
+      ok   manual override removed            refused, naming "manual override"
+      ok   the shipped sheet                  accepted, as it must be
+    
+    Token gate self-test: OK (10 cases)
+    
+
+    ATTEMPT: doc 06 §5.3's own example: a green for "run completed", spelled as a
+        status token drawing from the verification family
+
+    FAIL: 4 problem(s) in the token sheet:
+      §5.3 violation: --innsegl-color-status-retired-text (group "status", may use the "neutral" family) draws its light arm from the "verification" family via --innsegl-palette-verification-700 (line 201)
+      §5.3 violation: --innsegl-color-status-retired-text (group "status", may use the "neutral" family) draws its dark arm from the "verification" family via --innsegl-palette-verification-300 (line 201)
+      §5.3 violation: the verification (green) family is drawn from by group "status" — green is only ever cryptographic verification
+      §5.3 violation: the verification (green) family is drawn from by group "status" — green is only ever cryptographic verification
+    RESULT: refused by the gate
+
+    ATTEMPT: a raw green hex smuggled straight into a semantic token, past the palette
+
+    FAIL: 2 problem(s) in the token sheet:
+      the light arm of --innsegl-color-degraded-text is not a palette reference: #116039 (line 167)
+      the dark arm of --innsegl-color-degraded-text is not a palette reference: #6ccf95 (line 167)
+    RESULT: refused by the gate
+
+    ATTEMPT: a whole new palette family named for the claim it wants to make
+
+    FAIL: 2 problem(s) in the token sheet:
+      token name contains "success": --innsegl-palette-success-500 (line 121) — green is only ever cryptographic verification (§5.3, §8.3)
+      palette family "success" is not one of the five doc 06 §5.3 sanctions: --innsegl-palette-success-500
+    RESULT: refused by the gate
+
+    ATTEMPT: a green that exists in light mode only — the failure ADR-0038 decision 3
+        claims is unrepresentable rather than merely tested for
+
+    FAIL: 3 problem(s) in the token sheet:
+      semantic colour must be light-dark(light, dark): --innsegl-color-accent-text = var(--innsegl-palette-verification-700) (line 187)
+      contrast --innsegl-color-accent-text on --innsegl-color-surface-default in dark mode is 2.28:1, below the required 4.5:1 (#116039 on #161b1f)
+      contrast --innsegl-color-accent-text on --innsegl-color-surface-page in dark mode is 2.51:1, below the required 4.5:1 (#116039 on #0c1013)
+    RESULT: refused by the gate
+
+    ADR-0038 recorded, as a live consequence, that "the token gate is not
+    wired into CI, and until it is, it is a script somebody has to remember
+    to run". Checked rather than repeated:
+    .github/workflows/ci.yml:274:        run: ./web/src/tokens/check-tokens.sh
+    .github/workflows/ci.yml:279:        run: ./web/src/tokens/check-tokens-selftest.sh
+    
+    The gate and its self-test both run in CI. ADR-0038's caveat is
+    superseded; the ADR has not been updated to say so.
