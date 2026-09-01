@@ -1,0 +1,126 @@
+Probe 8 — doc 06 §8.8: spinners without timeout-to-error
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at 7374ebb.
+Node v26.8.1. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── the bounds this build ships, read from the modules that own them ──────────
+
+    components/common/LoadingState.DEFAULT_TIMEOUT_MS   15000 ms
+    views/public-verify/client.DEFAULT_REQUEST_TIMEOUT_MS  15000 ms
+
+    The clock below is advanced to 60 s, four times the longer of the two,
+    so a bound that exists but is longer than either would still fire.
+
+── the loading component itself, across its bound ────────────────────────────
+
+    t = 0 s
+    Loading runs…
+
+    t = 14.999 s — one millisecond short of the bound
+    Loading runs…
+
+    t = 15 s + 1 ms — one millisecond past it
+    Couldn't load runs — timed out after 15 s Showing nothing rather than guessing.
+
+    The transition happens at the bound and not before it.
+
+── the timed-out state's role, which is what an assistive reader hears ───────
+
+    role on the timed-out element: alert
+    the busy state carried aria-busy: it is replaced, not annotated
+
+── every view, with a read that never answers ────────────────────────────────
+
+    Each view below is handed a promise that never settles. The clock is
+    then advanced to 60 s. What is printed is what the view says at each
+    point, read out of the DOM.
+
+    3.1 overview
+        t = 0 s : "Loading the overview…"
+        moved out of loading: yes
+        and says so explicitly: yes
+        what changed between t=0 and t=60 s, in the visible words:
+    Couldn't load the overview — timed out after 15 s Showing nothing rather than guessing.
+    Retry
+
+    3.2 runs
+        t = 0 s : "Runs Repository Agent type Status Any status Active Retired Expired Registered from Registered to Search IDs and tasks Apply filters Clear filters Matches run IDs, SPIFFE IDs and task refs. The ledger …"
+        moved out of loading: yes
+        and says so explicitly: yes
+        what changed between t=0 and t=60 s, in the visible words:
+    Couldn't load runs — timed out after 15 s Showing nothing rather than guessing.
+    Retry
+
+    3.3 run detail
+        t = 0 s : "Loading the run…"
+        moved out of loading: yes
+        and says so explicitly: yes
+        what changed between t=0 and t=60 s, in the visible words:
+    Couldn't load the run — timed out after 15 s Showing nothing rather than guessing.
+    Retry
+
+    3.4 repo
+        t = 0 s : "Repository innsegl.dev/core The recorded value is not in the host/org/name form, so no link to a repository host can be derived from it. Window opens 2026-08-01 12:00:00 UTC Window closes 2026-08-31 1 …"
+        moved out of loading: yes
+        and says so explicitly: yes
+        what changed between t=0 and t=60 s, in the visible words:
+    Couldn't load the runs for this repository — timed out after 15 s Showing nothing rather than guessing.
+    Retry
+
+    3.5 agent type
+        t = 0 s : "Agent type fix-ci Window opens 2026-08-01 12:00:00 UTC Window closes 2026-08-31 12:00:00 UTC This address carries no usable window, so the last 30 days are shown. Aggregate verification status Nothing …"
+        moved out of loading: yes
+        and says so explicitly: yes
+        what changed between t=0 and t=60 s, in the visible words:
+    Verify a commit Couldn't load the runs of this agent type — timed out after 15 s Showing nothing rather than guessing.
+    Retry
+
+    3.6 public verification
+        t = 0 s : "Verify a commit Enter a commit SHA. The checks below run against Fulcio and Rekor at the moment you ask, and this page has no access to the ledger it would need to answer any other way. Commit SHA The …"
+        moved out of loading: yes
+        and says so explicitly: yes
+        what changed between t=0 and t=60 s, in the visible words:
+    Check this commit Couldn't load this commit's proof — timed out after 15 s Showing nothing rather than guessing.
+    Retry
+
+    views still loading after 60 s with a hung read: 0
+
+── nothing spins — the other half of the anti-pattern's name ─────────────────
+
+    doc 06 §5.5 permits motion for "state transitions and focus movement
+    only", and ADR-0038 decision 4 says the theme ships no keyframe
+    animation. Measured against the BUILT stylesheet:
+
+    @keyframes blocks in the built stylesheet:      0
+    animation / animation-* declarations:          0
+
+    So the loading indicator cannot be a spinner: there is nothing in the
+    build for it to spin with. What it draws instead, from the DOM:
+    <circle cx="3.5" cy="8" r="1.25" fill="currentColor" stroke="none"></circle>
+    <circle cx="8" cy="8" r="1.25" fill="currentColor" stroke="none"></circle>
+    <circle cx="12.5" cy="8" r="1.25" fill="currentColor" stroke="none"></circle>
+
+── prefers-reduced-motion, which is the transition's own bound ───────────────
+
+    doc 06 §5.5: "Respect prefers-reduced-motion." The token sheet
+    collapses both durations under the query rather than leaving it to
+    each component. From the built stylesheet:
+
+        @media(prefers-reduced-motion:reduce) :root { --innsegl-motion-duration-fast: 1ms }
+        @media(prefers-reduced-motion:reduce) :root { --innsegl-motion-duration-default: 1ms }
+        @media(prefers-reduced-motion:reduce) * { scroll-behavior: auto!important }
+        @media(prefers-reduced-motion:reduce) * { transition-duration: 1ms!important }
+        @media(prefers-reduced-motion:reduce) :before { scroll-behavior: auto!important }
+        @media(prefers-reduced-motion:reduce) :before { transition-duration: 1ms!important }
+        @media(prefers-reduced-motion:reduce) :after { scroll-behavior: auto!important }
+        @media(prefers-reduced-motion:reduce) :after { transition-duration: 1ms!important }
+
+── what this probe cannot determine ──────────────────────────────────────────
+
+    Whether the timed-out state is VISIBLE — painted, on screen, not
+    covered — is a rendering question jsdom cannot answer. This probe
+    measures that the DOM changes to an explicit error at the bound, and
+    that the words are there to be read. A browser is needed to confirm
+    that a reader sees them, and that is #57's harness.

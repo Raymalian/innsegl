@@ -1,16 +1,16 @@
 Probe 0 — the measuring instrument, and proof that it can return "present"
 
-Produced by reviews/probes/, RM-050 (#58). Working tree at 025b563.
-Node v26.5.0. Rendered in jsdom via @testing-library/react.
+Produced by reviews/probes/, RM-050 (#58). Working tree at 7374ebb.
+Node v26.8.1. Rendered in jsdom via @testing-library/react.
 
 ==============================================================================
 
 ── the built stylesheet this review reads ────────────────────────────────────
 
-    path                 web/dist/assets/index-DwDy3kIR.css
-    rules parsed         288
+    path                 web/dist/assets/index-BOcrhtMO.css
+    rules parsed         290
     :root custom props   134
-    single-class rules   163 (base state; pseudo-class and media rules are indexed but never folded in)
+    single-class rules   165 (base state; pseudo-class and media rules are indexed but never folded in)
     --innsegl-* tokens   130
 
 ── 1. the resolver, on the shipped sheet ─────────────────────────────────────

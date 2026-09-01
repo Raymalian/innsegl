@@ -1,0 +1,121 @@
+Probe 7 — doc 06 §8.7: silent staleness — degraded data without the §4.4 marker
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at 7374ebb.
+Node v26.8.1. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── the marker itself, in the three states it has ─────────────────────────────
+
+    staleness/healthy
+        The same component with a healthy read path — the calm state.
+        renders: (nothing at all)
+    staleness/degraded
+        doc 06 §4.4's marker while the read path is degraded.
+        renders: "Data as of 2026-08-31 11:31:00 UTC (29 min ago). The ledger read path is degraded, so this view may be behind."
+    staleness/degraded-no-timestamp
+        Degraded with no known timestamp: what the marker does when it has nothing to state.
+        renders: (nothing at all)
+
+    The degraded marker's colour, resolved from the built stylesheet:
+        color=#6f4e03/#dfb144 (amber/amber)
+        background-color=#fbf2da/#332401 (amber/amber)
+        border-color=#8c6404/#c6951d (amber/amber)
+
+    doc 06 §5.3 assigns staleness to amber, and never to green. Measured
+    above: amber in both modes.
+
+── each of doc 06 §3's six views, healthy against degraded ───────────────────
+
+    Same data, same clock, one input changed. A view that renders
+    identically in both is serving degraded data silently.
+
+    3.1 overview
+        method: wrapped in StalenessProvider, degraded=false vs degraded=true
+        healthy  and degraded renderings differ: yes
+        the degraded rendering says "data as of": yes
+        what the degradation ADDS to the visible words:
+    Data as of 2026-08-31 11:31:00 UTC (29 min ago). The ledger read path is degraded, so this view may be behind.
+
+    3.2 runs
+        method: the view's own `degraded` prop, false vs true
+        healthy  and degraded renderings differ: yes
+        the degraded rendering says "data as of": yes
+        what the degradation ADDS to the visible words:
+    Runs Data as of 2026-08-31 09:14:02 UTC (1 d 9 h ago). The ledger read path is degraded, so this view may be behind. Repository Agent type Status Any status Active Retired Expired Registered from Registered to Search IDs and tasks Apply filters Clear filters Matches run IDs, SPIFFE IDs and task refs. The ledger does the matching; nothing is filtered in this browser. Runs — showing 3 of 3 Run ID Ta
+
+    3.3 run detail
+        method: wrapped in StalenessProvider, degraded=false vs degraded=true
+        healthy  and degraded renderings differ: yes
+        the degraded rendering says "data as of": yes
+        what the degradation ADDS to the visible words:
+    Data as of 2026-08-31 11:31:00 UTC (29 min ago). The ledger read path is degraded, so this view may be behind.
+
+    3.4 repo
+        method: wrapped in StalenessProvider, degraded=false vs degraded=true
+        healthy  and degraded renderings differ: yes
+        the degraded rendering says "data as of": yes
+        what the degradation ADDS to the visible words:
+    Repository innsegl.dev/core The recorded value is not in the host/org/name form, so no link to a repository host can be derived from it. Data as of 2026-08-31 11:31:00 UTC (29 min ago). The ledger read path is degraded, so this view may be behind. Window opens 2026-08-01 12:00:00 UTC Window closes 2026-08-31 12:00:00 UTC Runs registered in this window 3 Runs drawn on this page 3 This address carri
+
+    3.5 agent type
+        method: wrapped in StalenessProvider, degraded=false vs degraded=true
+        healthy  and degraded renderings differ: yes
+        the degraded rendering says "data as of": yes
+        what the degradation ADDS to the visible words:
+    Agent type fix-ci Data as of 2026-08-31 11:31:00 UTC (29 min ago). The ledger read path is degraded, so this view may be behind. Window opens 2026-08-01 12:00:00 UTC Window closes 2026-08-31 12:00:00 UTC Runs registered in this window 3 Runs drawn on this page 3 This address carries no usable window, so the last 30 days are shown. Aggregate verification status Nothing on this page has been verifie
+
+    3.6 public verification
+        method: wrapped in StalenessProvider, degraded=false vs degraded=true
+        healthy  and degraded renderings differ: *** NO ***
+        the degraded rendering says "data as of": NO
+        what the degradation ADDS to the visible words:
+    (nothing)
+
+    views serving degraded data with no visible marker: 1
+        3.6 public verification
+
+── the one view that does not carry the marker, and why ──────────────────────
+
+    Measured above: five of the six views render the §4.4 marker when the
+    read path is degraded, and the public verification page (§3.6) does
+    not. That is a finding for a human, not a silent defect, and the
+    reason is in the specification rather than in the code:
+
+    §4.4 scopes the marker to "whenever the DASHBOARD serves data while
+    the LEDGER READ PATH is degraded". §3.6's page reads no ledger — it
+    "performs LIVE checks against Fulcio/Rekor" and "offers nothing
+    database-only in their place". So there is no ledger read for it to
+    be serving staleness from, and its honesty about a degraded
+    dependency is the unreachable-upstream state instead. What that
+    page renders when its upstreams are gone, measured:
+
+    Verify a commit Enter a commit SHA. The checks below run against Fulcio and Rekor at the moment you ask, and this page has no access to the ledger it would need to answer any other way. Commit SHA The object name, or any revision this deployment can resolve. Repository Optional. Left empty, every repository this deployment serves is searched. Check this commit Fulcio, Rekor unreachable — verification can't run Retry, or verify offline with the material below. Retry Verification Verification unavailable Commit 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 Fulcio certificate chain valid Unavailable the check could not run Rekor inclusion proven Unavailable the check could not run No transparency-log entry was resolved for this commit. Trailer matches certificate identity Verified the check ran and the claim holds Trailer and certificate identity The trailer is the identity the certificate prove
+
+    RECORDED FOR THE HUMAN: if a deployment ever routes §3.6 through a
+    cached ledger read, §4.4 begins to apply to it and nothing in the
+    view would notice. Today it does not, so this is a boundary rather
+    than a defect.
+
+── what the marker announces ─────────────────────────────────────────────────
+
+    <div>
+      <p role=status>
+        <span>
+          "Data as of"
+          <time title=2026-08-31 11:31:00 UTC>
+            "2026-08-31 11:31:00 UTC"
+          "(29 min ago). The ledger read path is degraded, so this view may be behind."
+
+── the anchoring heartbeat, the other never-hidden signal ────────────────────
+
+    doc 06 §3.1: the pulse "is never hidden". Measured across its three
+    states — there is no input for which it renders nothing:
+    heartbeat/within-bound     "Ledger segment 4181 anchored 3 min ago"
+    heartbeat/beyond-bound     "Ledger segment 4181 anchored 48 min ago — 33 min beyond the 15 min anchoring-lag bound"
+    heartbeat/unknown          "No segment anchored yet"
+
+    Past its bound, the pulse's colour:
+        color=#6f4e03/#dfb144 (amber/amber)
+        background-color=#fbf2da/#332401 (amber/amber)
+        border-color=#8c6404/#c6951d (amber/amber)

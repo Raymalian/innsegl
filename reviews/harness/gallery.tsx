@@ -646,3 +646,35 @@ export async function gallery(): Promise<readonly Scene[]> {
 }
 
 export { LONG_SPIFFE };
+
+/**
+ * Mount one node outside the gallery and hand back its container.
+ *
+ * For a probe that needs a state the gallery does not hold — the same view
+ * rendered twice with one prop changed, say. Same settling discipline as a
+ * scene: render inside act(), flush, optionally interact, flush again.
+ */
+export async function mount(
+  node: React.ReactNode,
+  after?: (host: HTMLElement) => void,
+): Promise<HTMLElement> {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  await act(async () => {
+    render(node, { container: host });
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  if (after !== undefined) {
+    await act(async () => {
+      after(host);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+  return host;
+}

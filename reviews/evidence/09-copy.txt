@@ -1,0 +1,126 @@
+Probe 9 — doc 06 §8.9: celebratory or reassuring copy substituting for evidence
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at 7374ebb.
+Node v26.8.1. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── what was scanned ──────────────────────────────────────────────────────────
+
+    scenes                     50
+    visible characters         53716
+    announced characters       87413
+        (announced includes sr-only text, title, aria-label and alt —
+         the channels a sighted scan would miss)
+
+── falsifiability: the scan on a corpus that DOES contain the copy ───────────
+
+    A scan that finds nothing is worth nothing until it is shown to find
+    something. The same patterns, over one invented sentence:
+
+    You're all set! Everything looks good — your commits were successfully verified through our seamless pipeline. Trusted by thousands. 🎉 The system is healthy, so don't worry.
+
+        FIRES  successfully
+        FIRES  seamless
+        FIRES  trusted by
+        FIRES  an exclamation mark
+        FIRES  you're all set
+        FIRES  everything looks good
+        FIRES  all good / all clear
+        silent  great / awesome / perfect / excellent
+        silent  congratulations / well done / nice work
+        FIRES  celebratory emoji
+        FIRES  don't worry / no need to worry
+        silent  everything is secure / you are protected
+        FIRES  healthy as a verdict word
+        silent  'trust us'
+        silent  simply / just / easily
+
+    10 of 15 patterns fire on it.
+
+── doc 06 §6.1's banned vocabulary, verbatim ─────────────────────────────────
+
+    successfully           not found
+    seamless               not found
+    trusted by             not found
+    an exclamation mark    not found
+
+    total occurrences: 0
+
+── the wider register doc 06 §8.9 is about ───────────────────────────────────
+
+    §6.1's four items do not include §8.9's own example, "You're all
+    set!", so the scan is widened to the register rather than the list.
+
+    you're all set                             not found
+    everything looks good                      not found
+    all good / all clear                       not found
+    great / awesome / perfect / excellent      not found
+    congratulations / well done / nice work    not found
+    celebratory emoji                          not found
+    don't worry / no need to worry             not found
+    everything is secure / you are protected   not found
+    healthy as a verdict word                  not found
+    'trust us'                                 not found
+    simply / just / easily                     not found
+
+    total occurrences: 0
+
+── the positive form: what the calm states actually say instead ──────────────
+
+    §8.9 is about reassurance SUBSTITUTING for evidence, so the test is
+    not only that the reassurance is absent but that evidence is there in
+    its place. The healthiest states in the product, quoted in full:
+
+    panel/verified-live
+    Verification Verified Commit 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 Fulcio certificate chain valid Verified the check ran and the claim holds checked against https://rekor.innsegl.dev Rekor inclusion proven Verified the check ran and the claim holds Log index 82914 checked against https://rekor.innsegl.dev Trailer matches certificate identity Verified the check ran and the claim holds checked against https://rekor.innsegl.dev Trailer and certificate identity The trailer is the identity the certificate proves. Agent-Identity trailer spiffe://innsegl.dev/agent/…/run-7f3a2c Certificate URI SAN spiffe://innsegl.dev/agent/…/run-7f3a2c Raw material Everything below is what a third party needs to
+
+    heartbeat/within-bound
+    Ledger segment 4181 anchored 3 min ago
+
+    view/overview-calm
+    Overview What the ledger holds, and how far behind the public record is. Active agents 3 Runs registered and neither retired nor expired. Runs today Not counted The runs index did not answer, so this shows no number rather than a guess. Commits attributed 4,181 Commits the ledger holds a commit_recorded event for. A record, not a verification. Verification pass rate Not measured No live check has run over these commits. A rate counted from the ledger would assert a verification result that nothing checked, so none is shown. Verify a commit Ledger segment 4181 anchored 3 min ago Anchoring Chain positions 4100 to 4181 Segment sha256:1f9c0b Rekor entry index 82914 Recent runs Active run-7f3a2c 
+
+    empty/default
+    Nothing to show No records match this view.
+
+
+── the error states, which §6.1 also governs ─────────────────────────────────
+
+    §6.1: "Errors state what failed and what the user can do." Every
+    error and unavailable state the gallery renders, quoted:
+
+    error/default
+    Can't reach the ledger Showing nothing rather than guessing. Retry See the evidence
+
+    view/runs-failed
+    Runs Repository Agent type Status Any status Active Retired Expired Registered from Registered to Search IDs and tasks Apply filters Clear filters Matches run IDs, SPIFFE IDs and task refs. The ledger does the matching; nothing is filtered in this browser. Can't reach the ledger ledger: connection refused Retry
+
+    view/overview-read-failed
+    Couldn't read the anchoring heartbeat — the query API didn't answer, so how far behind the public record is is unknown. Can't reach the ledger Showing nothing rather than guessing. The read failed with: /api/v1/overview answered 503 Retry
+
+    panel/cached-verified-live-errored
+    Verification Verification unavailable Commit 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 Reported as unavailable The live check could not run, so an earlier verdict is not repeated here. This result was not produced by a live check, so it is reported as unavailable rather than repeated as a verdict. fulcio: connection refused Fulcio certificate chain valid Verified the check ran and the claim holds checked against https://rekor.innsegl.dev Rekor inclusion proven Verified the check ran and the claim holds Log index 82914 checked against https://rekor.innsegl.dev Trailer matches certificate identity Verified the check ran and the claim holds checked against https://rekor.innsegl.dev Trailer and c
+
+    view/public-verify-upstreams-blocked
+    Verify a commit Enter a commit SHA. The checks below run against Fulcio and Rekor at the moment you ask, and this page has no access to the ledger it would need to answer any other way. Commit SHA The object name, or any revision this deployment can resolve. Repository Optional. Left empty, every repository this deployment serves is searched. Check this commit Fulcio, Rekor unreachable — verification can't run Retry, or verify offline with the material below. Retry Verification Verification unavailable Commit 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 Fulcio certificate chain valid Unavailable the check could not run Rekor inclusion proven Unavailable the check could not run No transparency-lo
+
+
+── the catalogue, as a second pass over strings no scene reached ─────────────
+
+    doc 06 §6.3 externalises every string, so the catalogue is a superset
+    of what the gallery renders. Scanned for the same vocabulary — a hit
+    here would be copy waiting to appear rather than copy on screen:
+
+    catalogue files: 9
+        web/src/app/strings.ts
+        web/src/components/common/strings.ts
+        web/src/components/verification/strings.ts
+        web/src/views/agent-type/strings.ts
+        web/src/views/overview/strings.ts
+        web/src/views/public-verify/strings.ts
+        web/src/views/repo/strings.ts
+        web/src/views/run-detail/strings.ts
+        web/src/views/runs/strings.ts
+
+    no hit in any catalogue
