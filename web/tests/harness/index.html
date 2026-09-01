@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!--
+  Test-only harness page for RM-049 (#57). It is served by the same `vite`
+  dev server as the dashboard (Vite serves any file under its project root in
+  dev mode; this file adds no entry to web/vite.config.ts's build and ships
+  in no production bundle) and mounts one component scenario at a time, so
+  FE-001's tri-state and alert-banner snapshots test the real component tree
+  without needing to mock the whole application's network layer for what is,
+  per doc 06 §7, a component-level assertion.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Innsegl — test harness</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

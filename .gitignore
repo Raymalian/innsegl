@@ -27,6 +27,18 @@ dist/
 build/
 .next/
 *.tsbuildinfo
+# Playwright's generated output. The harness writes traces, screenshots and
+# videos of every failed run into these; they are large, binary, and a record
+# of one machine's run rather than anything the repository asserts.
+test-results/
+playwright-report/
+.playwright/
+
+# Local editor/agent tool configuration. Names absolute paths under the
+# operator's home directory and enables binaries that exist only on their
+# machine, so it is machine state rather than project state — and this
+# repository is public.
+opencode.json
 
 # PyPI namespace stub — a defensive registration so the `innsegl` name cannot be
 # squatted (threat model A6, AB-09). Published to PyPI, not shipped from this repo.
@@ -39,4 +51,10 @@ innsegl-stub/
 
 # Local artifacts
 tmp/
+
+# Opencode configuration
+.opencode/
+
+# Opencode configuration
+.opencode/
 *.log

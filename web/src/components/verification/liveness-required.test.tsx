@@ -26,6 +26,7 @@ import { describe, expect, it } from "vitest";
 import { VerificationPanel } from "./VerificationPanel";
 import { VerificationSummary } from "./VerificationSummary";
 import { verifiedProof } from "./fixtures";
+import { verdictOf } from "./rollup";
 
 describe("FE-039 liveness is required, not defaulted", () => {
   it("refuses a panel that will not say where its proof came from", () => {
@@ -44,6 +45,28 @@ describe("FE-039 liveness is required, not defaulted", () => {
     // the compiler's. These keep the bindings used.
     expect(withoutLiveness).toBeDefined();
     expect(summaryWithout).toBeDefined();
+  });
+
+  it("refuses a liveness that is present but says nothing", () => {
+    const proof = verifiedProof();
+
+    // @ts-expect-error an EMPTY liveness is the likelier mistake, because it
+    // looks like the author considered the question. Requiring the prop caught
+    // an omitted one; `Liveness.source` stayed optional, so `{}` compiled and
+    // painted green. RM-050's anti-pattern review found it by trying it. If
+    // this line stops erroring, the hole is back.
+    const silent = <VerificationPanel proof={proof} liveness={{}} id="p" />;
+
+    // `verdictOf` defaulted its own parameter to `{}`, which was the same
+    // silence one layer down. Declared and never invoked: the assertion is the
+    // compiler's, and calling it would only prove that undefined has no
+    // `liveError`, which is not the property under test.
+    const rollupWithoutLiveness = () =>
+      // @ts-expect-error liveness has no default; a caller states the source.
+      verdictOf(proof);
+
+    expect(silent).toBeDefined();
+    expect(rollupWithoutLiveness).toBeTypeOf("function");
   });
 
   it("accepts both sources when they are stated", () => {
