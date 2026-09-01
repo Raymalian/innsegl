@@ -119,9 +119,12 @@ const (
 	// INNSEGL_CHAOS_WORKERS raises it.
 	k9WorkersDefault = 3
 
-	// k9StrikeWindow bounds the seeded delay between the poll seeing a claimed
-	// call and the signal going out. It is what makes the landing point inside
-	// a call random rather than always "the instant a claim appeared".
+	// k9StrikeWindow bounds the seeded delay a strike waits BEFORE it starts
+	// looking for work. It is what makes the arrival point random rather than
+	// "wherever the last restore happened to leave the workload", so a seed
+	// changes which of the running calls the kill lands on. The delay comes
+	// before the parking and not after: applied after, it is a delay the
+	// claimed call can finish inside, and measured it usually did.
 	k9StrikeWindow = 40 * time.Millisecond
 	// k9PollInterval is how often the killer re-reads the state it is waiting
 	// for. Tight on purpose: the interval is the width of the window the kill
@@ -129,6 +132,18 @@ const (
 	k9PollInterval = 2 * time.Millisecond
 	// k9BusyBudget bounds the killer's wait for work to be in flight.
 	k9BusyBudget = 30 * time.Second
+	// k9FreshClaim is how recently a claim must have been taken for the killer
+	// to treat it as a call that is still running.
+	//
+	// The bound is what keeps "park on evidence" honest. A row is left
+	// `in_progress` by a replica that died holding it, and it stays that way
+	// until somebody replays the key — so a killer that parked on "any
+	// in_progress row" could be satisfied by the WRECKAGE OF AN EARLIER KILL
+	// and fire into an idle system while believing it had found work. A claim
+	// taken inside the last quarter second is a call that is still running: the
+	// slowest tool here is register_agent, which is a SPIRE round trip and
+	// completes in tens of milliseconds.
+	k9FreshClaim = 250 * time.Millisecond
 
 	// Images. Pinned, doc 05 §1: "pin versions".
 	k9PostgresImage = "postgres:16"
@@ -794,9 +809,19 @@ type k9Campaign struct {
 	invariants     int
 	firstInvariant string
 	// runs is every run id the workload registered, and whether the workload
-	// went on to retire it. It is bookkeeping for the log line, never the
-	// source of an assertion: every assertion below reads durable state.
+	// meant to retire it.
 	runs map[string]bool
+	// outstanding is every keyed call the workload has dispatched and not yet
+	// had an answer to, by idempotency key. It is how settle knows what the
+	// soak's deadline cut off; see settle for why finishing them is part of
+	// what IP §6.6 asks and not a way of hiding anything.
+	outstanding map[string]k9Call
+}
+
+// k9Call is one tool call, as the workload issued it.
+type k9Call struct {
+	tool mcp.ToolName
+	args map[string]any
 }
 
 type k9Evidence struct {
@@ -854,12 +879,13 @@ func requireK9Campaign(t *testing.T) *k9Campaign {
 	t.Cleanup(stack.stop)
 
 	c := &k9Campaign{
-		stack:    stack,
-		workDir:  t.TempDir(),
-		byTarget: map[string]int{},
-		runs:     map[string]bool{},
-		kills:    k9EnvInt("INNSEGL_CHAOS_KILLS", k9KillsDefault),
-		workers:  k9EnvInt("INNSEGL_CHAOS_WORKERS", k9WorkersDefault),
+		stack:       stack,
+		workDir:     t.TempDir(),
+		byTarget:    map[string]int{},
+		runs:        map[string]bool{},
+		outstanding: map[string]k9Call{},
+		kills:       k9EnvInt("INNSEGL_CHAOS_KILLS", k9KillsDefault),
+		workers:     k9EnvInt("INNSEGL_CHAOS_WORKERS", k9WorkersDefault),
 	}
 	c.seed = k9Seed(t)
 	c.rng = newK9RNG(c.seed)
@@ -1101,11 +1127,16 @@ func (c *k9Campaign) startDaemon(t *testing.T) {
 	c.mu.Unlock()
 	t.Cleanup(func() { d.reap() })
 
+	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
 	deadline := time.Now().Add(90 * time.Second)
 	for {
-		conn, err := net.DialTimeout("tcp", c.mcpAddr, 500*time.Millisecond)
+		dial, cancel := context.WithTimeout(context.Background(), time.Second)
+		conn, err := dialer.DialContext(dial, "tcp", c.mcpAddr)
+		cancel()
 		if err == nil {
-			_ = conn.Close()
+			if cerr := conn.Close(); cerr != nil {
+				t.Fatalf("closing the readiness probe's connection: %v", cerr)
+			}
 			return
 		}
 		if cmd.ProcessState != nil {
@@ -1299,6 +1330,13 @@ func (c *k9Campaign) oneRun(ctx context.Context, w *k9Worker, step int) {
 func (c *k9Campaign) call(ctx context.Context, w *k9Worker,
 	tool mcp.ToolName, args map[string]any,
 ) (any, bool) {
+	key, keyed := args["idempotency_key"].(string)
+	if keyed {
+		c.mu.Lock()
+		c.outstanding[key] = k9Call{tool: tool, args: args}
+		c.mu.Unlock()
+	}
+
 	backoff := 20 * time.Millisecond
 	for ctx.Err() == nil {
 		session, err := c.session(ctx, w)
@@ -1347,6 +1385,11 @@ func (c *k9Campaign) call(ctx context.Context, w *k9Worker,
 			}
 			k9Backoff(ctx, &backoff)
 		default:
+			if keyed {
+				c.mu.Lock()
+				delete(c.outstanding, key)
+				c.mu.Unlock()
+			}
 			return res.StructuredContent, true
 		}
 	}
@@ -1427,35 +1470,38 @@ func k9Decode(v any, out any) bool {
 
 // strike lands one kill on one component.
 //
-// It never sleeps and then fires. It PARKS ON EVIDENCE: it polls
-// innsegl.idempotency until a row is `in_progress`, which is the shipped
-// server's own durable statement that a tool call has claimed a key and has not
-// yet recorded its reply. Only then does the seeded strike delay run, and the
-// in-flight count is re-checked at the instant the signal goes. That is
-// RM-066's standard — park on evidence, not on a sleep — and it is the
-// difference between a soak that killed a busy process and one that killed an
-// idle one and asserted that nothing broke.
+// It never sleeps and then fires blind. The seeded delay decides WHEN this
+// strike starts looking; the signal then goes out on EVIDENCE, the instant
+// awaitBusy sees both witnesses that a tool call is running — a claim Postgres
+// says was taken inside the last k9FreshClaim with no reply recorded, and a
+// call this process dispatched and has not had back. That is RM-066's standard,
+// park on evidence rather than on a sleep, and it is the whole difference
+// between a soak that killed a busy process and one that killed an idle process
+// and then found that nothing had broken.
+//
+// A strike that fires without both witnesses is counted as an idle kill and the
+// campaign fails on it, so the discipline cannot quietly stop applying.
 func (c *k9Campaign) strike(t *testing.T, n int, target string) {
 	t.Helper()
 
-	busy := c.awaitBusy(t, k9BusyBudget)
+	// The seeded delay comes FIRST and the parking second, so the signal goes
+	// out the moment a fresh claim is seen rather than a random interval after
+	// one — a delay applied after parking is a delay the call can finish
+	// inside, and MEASURED it usually did.
 	delay := c.rng.duration(0, k9StrikeWindow)
 	time.Sleep(delay)
-	// The delay may have let the claimed call finish. Re-park briefly so the
-	// signal still lands on work rather than on the gap after it.
-	if !c.awaitBusy(t, 5*time.Second) {
-		busy = false
-	}
+	busy := c.awaitBusy(t, k9BusyBudget)
 
 	inFlight := c.inFlight.Load()
-	claimed := c.inProgressClaims(t)
-	if !busy || inFlight == 0 {
+	claimed := c.freshClaims(t)
+	if !busy || inFlight == 0 || claimed == 0 {
 		c.mu.Lock()
 		c.idleKills++
 		c.mu.Unlock()
 	}
-	t.Logf("kill %d/%d: %s, %s after a claim appeared, with %d call(s) in flight and "+
-		"%d claimed but unfinished", n, c.kills, target, delay, inFlight, claimed)
+	t.Logf("kill %d/%d: %s, %s into the soak's own rhythm, with %d call(s) dispatched "+
+		"and unreturned and %d claim(s) taken inside the last %s and not yet answered",
+		n, c.kills, target, delay, inFlight, claimed, k9FreshClaim)
 
 	c.killTarget(t, target)
 	c.mu.Lock()
@@ -1466,13 +1512,19 @@ func (c *k9Campaign) strike(t *testing.T, n int, target string) {
 	c.restoreTarget(t, target)
 }
 
-// awaitBusy polls Postgres until a tool call has claimed a key and not yet
-// recorded its reply.
+// awaitBusy polls until the system is provably mid-call: a claim taken inside
+// the last k9FreshClaim with no reply recorded, AND a call this process
+// dispatched and has not had back.
+//
+// Two witnesses because each covers the other's blind spot. The Postgres row is
+// DURABLE and is the shipped server's own statement that a tool call is between
+// its claim and its reply; the in-process counter is LIVE and cannot be
+// satisfied by a row somebody else left behind.
 func (c *k9Campaign) awaitBusy(t *testing.T, budget time.Duration) bool {
 	t.Helper()
 	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
-		if c.inProgressClaims(t) > 0 && c.inFlight.Load() > 0 {
+		if c.inFlight.Load() > 0 && c.freshClaims(t) > 0 {
 			return true
 		}
 		time.Sleep(k9PollInterval)
@@ -1480,18 +1532,28 @@ func (c *k9Campaign) awaitBusy(t *testing.T, budget time.Duration) bool {
 	return false
 }
 
-// inProgressClaims counts the idempotency rows that are claimed and unfinished.
+// freshClaims counts the claims taken inside the last k9FreshClaim that have
+// not recorded a reply.
 //
-// A read failure is not a fatal here: Postgres is one of the things this
-// campaign kills, and asking it a question while it is down is not an error in
-// the campaign.
-func (c *k9Campaign) inProgressClaims(t *testing.T) int {
+// The window is applied by Postgres against its own clock_timestamp(), never
+// against this process's clock: doc 04 residual risk #4 is a skewed clock being
+// able to move another party's lease, and the same reasoning says a test may
+// not decide from its own clock how old a row the server wrote is.
+//
+// A read failure is not fatal here. Postgres is one of the things this campaign
+// kills, and asking it a question while it is down is not an error in the
+// campaign — it is an answer of "nothing is provably in flight", which is what
+// returning zero says.
+func (c *k9Campaign) freshClaims(t *testing.T) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var n int
-	err := c.pool.QueryRow(ctx,
-		`SELECT count(*) FROM innsegl.idempotency WHERE status = 'in_progress'`).Scan(&n)
+	err := c.pool.QueryRow(ctx, `
+		SELECT count(*) FROM innsegl.idempotency
+		 WHERE status = 'in_progress'
+		   AND claimed_at > clock_timestamp() - ($1::bigint * interval '1 millisecond')`,
+		k9FreshClaim.Milliseconds()).Scan(&n)
 	if err != nil {
 		return 0
 	}
@@ -1569,6 +1631,7 @@ func (c *k9Campaign) restoreTarget(t *testing.T, target string) {
 		}
 	case k9TargetSPIREServer:
 		c.startContainer(t, c.stack.serverContainer)
+		c.awaitHealthy(t, c.stack.serverContainer)
 		if !k9WaitFor(150*time.Second, func() bool {
 			_, err := c.stack.spireLocal(ctx, "entry", "count")
 			return err == nil
@@ -1577,11 +1640,19 @@ func (c *k9Campaign) restoreTarget(t *testing.T, target string) {
 		}
 	case k9TargetSPIREAgent:
 		c.startContainer(t, c.stack.agentContainer)
-		// The node has to re-attest, or every subsequent registration parents
-		// off a node that is not there.
+		// The container's own healthcheck, which is `spire-agent healthcheck`
+		// against the Workload API socket — the agent answering, not merely a
+		// process existing.
+		//
+		// `agent list` is NOT the readiness signal here and that is worth
+		// saying, because it looks like one: it reads the SERVER's datastore,
+		// which still holds the node's attestation record while the agent is
+		// dead, so it answers immediately after a kill and would wait for
+		// nothing.
+		c.awaitHealthy(t, c.stack.agentContainer)
 		if err := c.stack.awaitAttestedNode(ctx, 150*time.Second); err != nil {
-			t.Fatalf("the node never re-attested after the agent was killed (seed %d): %v",
-				c.seed, err)
+			t.Fatalf("the server names no attested node after the agent was killed "+
+				"(seed %d): %v", c.seed, err)
 		}
 	default:
 		t.Fatalf("no restore path for %q", target)
@@ -1615,6 +1686,32 @@ func (c *k9Campaign) startContainer(t *testing.T, name string) {
 	}
 }
 
+// awaitHealthy waits for a container's own healthcheck to pass.
+//
+// deploy/compose/spire.yml gives spire-server and spire-agent a healthcheck
+// that runs SPIRE's own probe, which asks the question a client asks: can the
+// API be reached, and does it answer. A restore that waited only for
+// `{{.State.Running}}` would hand the workload a container whose process had
+// not opened its socket yet, and the outage the soak thinks it closed would
+// still be open.
+func (c *k9Campaign) awaitHealthy(t *testing.T, name string) {
+	t.Helper()
+	if !k9WaitFor(150*time.Second, func() bool { return k9Health(name) == "healthy" }) {
+		t.Fatalf("%s never became healthy after the kill (seed %d); its healthcheck "+
+			"reports %q", name, c.seed, k9Health(name))
+	}
+}
+
+func k9Health(name string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := k9Docker(ctx, "inspect", "--format", "{{.State.Health.Status}}", name)
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
 func k9Running(name string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -1634,6 +1731,8 @@ func (c *k9Campaign) restoreEverything(t *testing.T) {
 			c.startContainer(t, name)
 		}
 	}
+	c.awaitHealthy(t, c.stack.serverContainer)
+	c.awaitHealthy(t, c.stack.agentContainer)
 	if !k9WaitFor(150*time.Second, func() bool { return k9PGReady(ctx, c.stack.pgPort) }) {
 		t.Fatalf("postgres is not reachable at the end of the soak (seed %d)", c.seed)
 	}
@@ -1671,6 +1770,45 @@ func (c *k9Campaign) restoreEverything(t *testing.T) {
 // reason to exist.
 func (c *k9Campaign) settle(t *testing.T) {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	w := &k9Worker{index: -1}
+	defer w.close()
+
+	// The keyed calls first, in key order so a seed replays them identically.
+	//
+	// An interrupted register_agent is the one that matters, and it is ADR-0018's
+	// window: `run_registered` is appended BEFORE the SPIRE entry is created,
+	// so a SIGKILL between the two leaves a chain that claims an identity SPIRE
+	// does not hold. Nothing in the deployment closes that window on its own —
+	// the reaper reaps ENTRIES, and there is no entry to reap — so the only
+	// thing that closes it is the caller replaying its key, which is exactly
+	// what IP §6.6 promises: "replaying any request after a crash returns the
+	// original result". This is that replay, and every one is required to
+	// SUCCEED. MEASURED before it existed: three runs were left registered on
+	// the chain with no entry and no retirement, one per worker, all of them
+	// calls the soak's own deadline had cut off.
+	c.mu.Lock()
+	keys := make([]string, 0, len(c.outstanding))
+	for key := range c.outstanding {
+		keys = append(keys, key)
+	}
+	c.mu.Unlock()
+	slices.Sort(keys)
+
+	for _, key := range keys {
+		c.mu.Lock()
+		call := c.outstanding[key]
+		c.mu.Unlock()
+		if _, ok := c.call(ctx, w, call.tool, call.args); !ok {
+			t.Fatalf("%s under idempotency_key %q never succeeded after the soak "+
+				"(seed %d); IP §6.6 requires a replay after a crash to return the "+
+				"original result, and this one never returned at all",
+				call.tool, key, c.seed)
+		}
+	}
+
+	// Then the retirements the workload meant to make.
 	c.mu.Lock()
 	pending := make([]string, 0, len(c.runs))
 	for runID, retire := range c.runs {
@@ -1681,10 +1819,6 @@ func (c *k9Campaign) settle(t *testing.T) {
 	c.mu.Unlock()
 	slices.Sort(pending)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	w := &k9Worker{index: -1}
-	defer w.close()
 	for _, runID := range pending {
 		if _, ok := c.call(ctx, w, mcp.ToolRetireAgent, map[string]any{"run_id": runID}); !ok {
 			t.Fatalf("retire_agent(%s) never succeeded after the soak (seed %d); IP §4 "+
@@ -1692,7 +1826,8 @@ func (c *k9Campaign) settle(t *testing.T) {
 				"the same way as the first call", runID, c.seed)
 		}
 	}
-	t.Logf("seed %d: settled %d retirement(s) the soak had begun", c.seed, len(pending))
+	t.Logf("seed %d: settled %d interrupted call(s) and %d retirement(s) the soak had begun",
+		c.seed, len(keys), len(pending))
 }
 
 func (c *k9Campaign) evidence(t *testing.T) k9Evidence {
@@ -1736,6 +1871,47 @@ func (c *k9Campaign) reaper(t *testing.T) *spire.Reaper {
 		t.Fatalf("spire.NewReaper: %v", err)
 	}
 	return r
+}
+
+// sweepUntilExpired runs the shipped reaper until it expires one named run.
+//
+// Polled rather than swept once, and the reason is a real property of the
+// environment rather than of the system under test: the reaper computes a run's
+// deadline from `created_at` AS THE SPIRE SERVER RECORDED IT, in the container's
+// clock and truncated to a whole second, while this test derives its own
+// deadline from the host clock at the instant it called RegisterRun. On a
+// Docker VM whose clock has drifted ahead of the host — routine on macOS after
+// a sleep — a one-second identity lifetime can be past by the host's reckoning
+// and not yet past by SPIRE's. MEASURED: a planted orphan the sweep function
+// convicted was still Live in the reaper's report on the same pass.
+//
+// Waiting for the two clocks to agree is not weakening the assertion. What is
+// asserted is unchanged and is the whole of IP §6.7: the reaper finds the
+// orphan, records the expiry, and deletes the entry. What is no longer asserted
+// is that it does so on the first sweep after a deadline this process computed,
+// which was never OPS-003's claim.
+func (c *k9Campaign) sweepUntilExpired(t *testing.T, run spire.RunRef, budget time.Duration) spire.Expiry {
+	t.Helper()
+	started := time.Now()
+	deadline := started.Add(budget)
+	for {
+		report := c.sweepOnce(t)
+		if expiry, found := report.FindExpired(run.RunID); found {
+			if waited := time.Since(started); waited > time.Second {
+				t.Logf("the reaper needed %s longer than this test's own derivation of "+
+					"the deadline; the SPIRE server's clock is ahead of the host's",
+					waited.Truncate(10*time.Millisecond))
+			}
+			return expiry
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the reaper never expired the planted orphan %s within %s (seed %d). "+
+				"Its entry has a one-second identity lifetime and nobody retired it, "+
+				"which is IP §6.7's orphan exactly; a reaper that does not find it is "+
+				"the finding. Last report: %s", run.RunID, budget, c.seed, report)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 func (c *k9Campaign) sweepOnce(t *testing.T) *spire.SweepReport {

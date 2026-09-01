@@ -104,19 +104,26 @@ func TestOPS003KillNineFuzzSoakAcrossEveryComponent(t *testing.T) {
 			}
 		}
 		if ev.idleKills != 0 {
-			t.Errorf("%d of %d kills were fired with nothing in flight (seed %d). The "+
-				"killer is supposed to park on an in_progress idempotency row and fire "+
-				"on it; a kill that landed on an idle process measures nothing.",
-				ev.idleKills, ev.kills, c.seed)
+			t.Errorf("%d of %d kills were fired with nothing provably in flight (seed "+
+				"%d). The killer parks until Postgres holds a claim taken inside the "+
+				"last %s with no reply recorded AND this process has a call it has not "+
+				"had back; a kill that went out without both is a kill on an idle "+
+				"system, and a soak of those would find nothing broken because nothing "+
+				"was happening.", ev.idleKills, ev.kills, c.seed, k9FreshClaim)
 		}
 		if ev.interrupted == 0 {
 			t.Errorf("no dispatched call was ever interrupted (seed %d): every one of "+
 				"%d calls returned normally. Either the kills missed or the workload "+
 				"was not calling anything.", c.seed, ev.dispatched)
 		}
-		// The durable half. ADR-0017 §5: claim_count above 1 means a lease ran
-		// out and another caller took the claim over, which is what a SIGKILLed
-		// replica leaves. Read out of Postgres, not inferred from timing.
+		// The durable half, and the one that cannot be argued with. ADR-0017 §5:
+		// claim_count above 1 means a lease ran out and another caller took the
+		// claim over, and the only thing that leaves a claim behind is a process
+		// that stopped existing while holding it. Whether the retaker was a
+		// worker retrying mid-soak or the settle pass afterwards does not change
+		// what it proves — that the key was claimed, unanswered, and ownerless,
+		// which is a kill that landed between a claim and its reply. Read out of
+		// Postgres after the fact, never inferred from when a signal was sent.
 		if ev.claims.takeovers+ev.claims.stranded == 0 {
 			t.Errorf("not one claim in innsegl.idempotency was reclaimed or stranded "+
 				"(seed %d): every one of %d keys has claim_count = 1 and a recorded "+
@@ -286,12 +293,7 @@ func TestOPS003KillNineFuzzSoakAcrossEveryComponent(t *testing.T) {
 
 		// And then the shipped reaper resolves it, which is the other half of
 		// IP §6.7: the expiry is recorded, distinctly from a retirement.
-		report := c.sweepOnce(t)
-		expiry, found := report.FindExpired(run.RunID)
-		if !found {
-			t.Fatalf("the reaper did not expire the planted orphan %s (seed %d); "+
-				"report: %s", run.RunID, c.seed, report)
-		}
+		expiry := c.sweepUntilExpired(t, run, time.Minute)
 		if !expiry.Deleted {
 			t.Errorf("the planted orphan's entry was not deleted (seed %d)", c.seed)
 		}
