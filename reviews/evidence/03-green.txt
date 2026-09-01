@@ -1,6 +1,6 @@
 Probe 3 — doc 06 §8.3: green used for anything other than cryptographic verification
 
-Produced by reviews/probes/, RM-050 (#58). Working tree at 7374ebb.
+Produced by reviews/probes/, RM-050 (#58). Working tree at fadaf6b.
 Node v26.8.1. Rendered in jsdom via @testing-library/react.
 
 ==============================================================================
@@ -279,8 +279,8 @@ Node v26.8.1. Rendered in jsdom via @testing-library/react.
     ADR-0038 recorded, as a live consequence, that "the token gate is not
     wired into CI, and until it is, it is a script somebody has to remember
     to run". Checked rather than repeated:
-    .github/workflows/ci.yml:196:        run: ./web/src/tokens/check-tokens.sh
-    .github/workflows/ci.yml:201:        run: ./web/src/tokens/check-tokens-selftest.sh
+    .github/workflows/ci.yml:274:        run: ./web/src/tokens/check-tokens.sh
+    .github/workflows/ci.yml:279:        run: ./web/src/tokens/check-tokens-selftest.sh
     
     The gate and its self-test both run in CI. ADR-0038's caveat is
     superseded; the ADR has not been updated to say so.

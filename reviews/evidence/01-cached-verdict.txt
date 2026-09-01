@@ -1,6 +1,6 @@
 Probe 1 — doc 06 §8.1: a "verified" state rendered from cache while the live check errored
 
-Produced by reviews/probes/, RM-050 (#58). Working tree at 7374ebb.
+Produced by reviews/probes/, RM-050 (#58). Working tree at fadaf6b.
 Node v26.8.1. Rendered in jsdom via @testing-library/react.
 
 ==============================================================================

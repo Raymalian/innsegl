@@ -1,6 +1,6 @@
 Probe 9 — doc 06 §8.9: celebratory or reassuring copy substituting for evidence
 
-Produced by reviews/probes/, RM-050 (#58). Working tree at 7374ebb.
+Produced by reviews/probes/, RM-050 (#58). Working tree at fadaf6b.
 Node v26.8.1. Rendered in jsdom via @testing-library/react.
 
 ==============================================================================
