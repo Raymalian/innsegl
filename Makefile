@@ -20,8 +20,8 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 
 COVERPROFILE := cover.out
 
-.PHONY: all build test lint cover smoke spire-up spire-verify spire-down \
-        sigstore-up sigstore-verify sigstore-down clean
+.PHONY: all build test lint cover smoke smoke-down spire-up spire-verify \
+        spire-down sigstore-up sigstore-verify sigstore-down clean
 
 all: build test lint
 
@@ -89,12 +89,43 @@ sigstore-down:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  docker compose -f deploy/compose/sigstore.yml down -v
 
-## smoke: boot the reference stack and verify a real signed commit (RM-054)
+# ---------------------------------------------------------------------------
+# The fresh-clone contract (RM-054, #62).
+#
+# `make smoke` is not a convenience target. VERSIONING.md and doc 08 put the
+# compose reference stack and this command inside the COMPATIBILITY SURFACE:
+# if `make smoke` from the previous minor's README fails on a new minor, that
+# is a breaking change misfiled as a minor and the release is blocked. Renaming
+# this target, or changing what it runs, is a release decision.
+#
+# It runs OPS-004, which boots the reference stack from a copy of the
+# repository's tracked-and-not-ignored files, runs the demo agent against the
+# MCP server over the real transport, and then verifies the resulting commit
+# from a container with the ledger network detached — VER-001's independence
+# property, demonstrated on first contact with the project.
+#
+# IT OWNS THE SHIPPED COMPOSE PROJECTS FOR THE LENGTH OF A RUN. To boot from
+# nothing it first takes `innsegl-spire` and `innsegl-sigstore` down WITH THEIR
+# VOLUMES, and it does so again at the end. A stack you brought up with
+# `make sigstore-up` will be removed. That is what "fresh clone" means, and it
+# is said here rather than discovered.
+#
+# Takes a few minutes and needs Docker, git and a Go toolchain. Set
+# INNSEGL_TEST_KEEP_STACK=1 to leave everything running afterwards for
+# inspection; `make smoke-down` then removes it.
+# ---------------------------------------------------------------------------
+
+## smoke: the fresh-clone contract — boot, run the demo agent, verify detached
 smoke:
-	@echo 'make smoke: not implemented until RM-054.' >&2
-	@echo 'It will boot the reference compose stack, run the demo agent, then verify' >&2
-	@echo 'the resulting commit from a container with the ledger network detached.' >&2
-	@exit 1
+	go test ./test/smoke -run TestOPS004 -count=1 -v -timeout 40m
+
+## smoke-down: remove what a kept `make smoke` stack left behind
+smoke-down:
+	-docker rm --force --volumes innsegl-smoke-mcp innsegl-smoke-postgres
+	-docker network rm innsegl-smoke-ledger
+	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  docker compose -f deploy/compose/sigstore.yml down -v
+	-docker compose -f deploy/compose/spire.yml --profile verify down -v
 
 ## clean: remove build and coverage artefacts
 clean:
