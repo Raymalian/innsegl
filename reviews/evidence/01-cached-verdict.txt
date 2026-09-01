@@ -1,0 +1,468 @@
+Probe 1 — doc 06 §8.1: a "verified" state rendered from cache while the live check errored
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at 025b563.
+Node v26.5.0. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── the four scenes, and the verdict each one paints ──────────────────────────
+
+    Every scene below carries the SAME three passing checks. Only where
+    the proof came from, and whether anything answered, differs.
+
+    panel/verified-live
+        doc 06 §4.1: three checks passing, from a check that just ran. The one place in the product entitled to a green.
+        badge reads   "Verified"
+        painted       color=#116039/#6ccf95 (green/green)
+        painted       background-color=#e6f4ec/#062e1c (green/green)
+        painted       border-color=#167a49/#3cb573 (green/green)
+
+    panel/cached-verified-live-errored
+        doc 06 §8 anti-pattern 1 exactly: three passing checks, held from a cache, whose live re-check errored.
+        badge reads   "Verification unavailable"
+        painted       color=#6f4e03/#dfb144 (amber/amber)
+        painted       background-color=#fbf2da/#332401 (amber/amber)
+        painted       border-color=#8c6404/#c6951d (amber/amber)
+
+    panel/cached-verified-no-error
+        Three passing checks from a cache, with no live error to report. The quieter half of anti-pattern 1.
+        badge reads   "Verification unavailable"
+        painted       color=#6f4e03/#dfb144 (amber/amber)
+        painted       background-color=#fbf2da/#332401 (amber/amber)
+        painted       border-color=#8c6404/#c6951d (amber/amber)
+
+    panel/live-upstream-unreachable
+        A live check whose upstream did not answer, with three passing checks in the response.
+        badge reads   "Verification unavailable"
+        painted       color=#6f4e03/#dfb144 (amber/amber)
+        painted       background-color=#fbf2da/#332401 (amber/amber)
+        painted       border-color=#8c6404/#c6951d (amber/amber)
+
+
+── the whole panel, in the anti-pattern's own scene ──────────────────────────
+
+    doc 06 §8.1's exact input: three passing checks, from a cache, with a
+    live error. Everything a sighted reader gets, with colours resolved
+    out of the built stylesheet. No class, style or data-* attribute is
+    read anywhere below.
+
+    <div>
+      <section [background-color=#fff]>
+        <div>
+          <h2 [--tw-font-weight=600 font-size=1.25rem font-weight=600]>
+            "Verification"
+          <span [--tw-border-style=solid background-color=#fbf2da border-color=#8c6404 border-style=solid border-width=1px color=#6f4e03 font-size=.75rem]>
+            <drawn circle(cx=8 cy=8 r=5.5) path(d=M6.5 6.5a1.5 1.5 0 1 1 1.5 1.5V9.5) path(d=M8 11.5v.5)>
+            <span>
+              "Verification unavailable"
+          <span [color=#626b72]>
+            "Commit"
+          <span>
+            <button>
+              <span [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                "4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291"
+              <drawn rect(height=8 rx=1.5 width=8 x=5.5 y=5.5) path(d=M10.5 3.5v-1a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1)>
+                [color=#626b72]
+        <div [--tw-border-style=solid background-color=#fbf2da border-color=#8c6404 border-style=solid border-width=1px color=#6f4e03 font-size=.875rem]>
+          <drawn circle(cx=8 cy=8 r=5.5) path(d=M6.5 6.5a1.5 1.5 0 1 1 1.5 1.5V9.5) path(d=M8 11.5v.5)>
+          <span>
+            <span [--tw-font-weight=600 font-size=1rem font-weight=600]>
+              "Reported as unavailable"
+            <span>
+              "The live check could not run, so an earlier verdict is not repeated here."
+            <span>
+              "This result was not produced by a live check, so it is reported as unavailable rather than repeated as a verdict."
+            <span [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+              "fulcio: connection refused"
+        <ul>
+          <li [--tw-border-style=solid background-color=#eceff1 border-style=solid border-width=1px]>
+            <div>
+              <span [--tw-font-weight=500 font-weight=500]>
+                "Fulcio certificate chain valid"
+              <span [--tw-border-style=solid background-color=#eceff1 border-color=#dfe4e7 border-style=solid border-width=1px color=#4d565d font-size=.75rem]>
+                <drawn circle(cx=8 cy=8 r=5.5) path(d=M5.25 8.25 7.25 10.25 10.75 5.75)>
+                <span>
+                  "Verified"
+            <p [color=#4d565d]>
+              "the check ran and the claim holds"
+            <dl>
+              <div>
+                <dt [color=#626b72]>
+                  "checked against"
+                <dd [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                  "https://rekor.innsegl.dev"
+          <li [--tw-border-style=solid background-color=#eceff1 border-style=solid border-width=1px]>
+            <div>
+              <span [--tw-font-weight=500 font-weight=500]>
+                "Rekor inclusion proven"
+              <span [--tw-border-style=solid background-color=#eceff1 border-color=#dfe4e7 border-style=solid border-width=1px color=#4d565d font-size=.75rem]>
+                <drawn circle(cx=8 cy=8 r=5.5) path(d=M5.25 8.25 7.25 10.25 10.75 5.75)>
+                <span>
+                  "Verified"
+            <p [color=#4d565d]>
+              "the check ran and the claim holds"
+            <div>
+              <span [color=#626b72]>
+                "Log index"
+              <span>
+                <button>
+                  <span [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                    "82914"
+                  <drawn rect(height=8 rx=1.5 width=8 x=5.5 y=5.5) path(d=M10.5 3.5v-1a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1)>
+                    [color=#626b72]
+            <dl>
+              <div>
+                <dt [color=#626b72]>
+                  "checked against"
+                <dd [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                  "https://rekor.innsegl.dev"
+          <li [--tw-border-style=solid background-color=#eceff1 border-style=solid border-width=1px]>
+            <div>
+              <span [--tw-font-weight=500 font-weight=500]>
+                "Trailer matches certificate identity"
+              <span [--tw-border-style=solid background-color=#eceff1 border-color=#dfe4e7 border-style=solid border-width=1px color=#4d565d font-size=.75rem]>
+                <drawn circle(cx=8 cy=8 r=5.5) path(d=M5.25 8.25 7.25 10.25 10.75 5.75)>
+                <span>
+                  "Verified"
+            <p [color=#4d565d]>
+              "the check ran and the claim holds"
+            <dl>
+              <div>
+                <dt [color=#626b72]>
+                  "checked against"
+                <dd [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                  "https://rekor.innsegl.dev"
+            <div>
+              <h4 [--tw-font-weight=500 font-weight=500]>
+                "Trailer and certificate identity"
+              <p [color=#4d565d]>
+                "The trailer is the identity the certificate proves."
+              <dl>
+                <div>
+                  <dt [color=#626b72]>
+                    "Agent-Identity trailer"
+                  <dd [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                    <span>
+                      <button>
+                        <span [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                          "spiffe://innsegl.dev/agent/…/run-7f3a2c"
+                        <drawn rect(height=8 rx=1.5 width=8 x=5.5 y=5.5) path(d=M10.5 3.5v-1a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1)>
+                          [color=#626b72]
+                <div>
+                  <dt [color=#626b72]>
+                    "Certificate URI SAN"
+                  <dd [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                    <span>
+                      <button>
+                        <span [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                          "spiffe://innsegl.dev/agent/…/run-7f3a2c"
+                        <drawn rect(height=8 rx=1.5 width=8 x=5.5 y=5.5) path(d=M10.5 3.5v-1a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1)>
+                          [color=#626b72]
+        <details>
+          <summary [color=#3a3ea1 text-decoration-line=underline]>
+            "Raw material"
+          <p [color=#4d565d]>
+            "Everything below is what a third party needs to re-derive this verdict without the dashboard."
+          <dl>
+            <div>
+              <dt [color=#626b72]>
+                "Commit object"
+              <dd>
+                <pre [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                  "tree 9a8b7c6d5e4f302918273645afbecd0192837465"
+            <div>
+              <dt [color=#626b72]>
+                "Signing certificate"
+              <dd>
+                <pre [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                  "-----BEGIN CERTIFICATE----- MIIB -----END CERTIFICATE-----"
+            <div>
+              <dt [color=#626b72]>
+                "Fulcio root"
+              <dd>
+                <pre [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                  "-----BEGIN CERTIFICATE----- MIIC -----END CERTIFICATE-----"
+            <div>
+              <dt [color=#626b72]>
+                "Rekor public key"
+              <dd>
+                <pre [font-family=ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace font-size=.875rem font-variant-numeric=tabular-nums]>
+                  "-----BEGIN PUBLIC KEY----- MFkw -----END PUBLIC KEY-----"
+
+── what the same scene announces ─────────────────────────────────────────────
+
+    <div>
+      <section>
+        <div>
+          <h2>
+            "Verification"
+          <span title=A check could not run, so nothing here is proven either way.>
+            <span>
+              "Verification unavailable"
+            <span>
+              "A check could not run, so nothing here is proven either way."
+          <span>
+            "Commit"
+          <span>
+            <button title=4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 type=button>
+              <span>
+                "Commit SHA: 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291. Copy"
+            <span role=status aria-live=polite>
+        <div role=status>
+          <span>
+            <span>
+              "Reported as unavailable"
+            <span>
+              "The live check could not run, so an earlier verdict is not repeated here."
+            <span>
+              "This result was not produced by a live check, so it is reported as unavailable rather than repeated as a verdict."
+            <span>
+              "fulcio: connection refused"
+        <ul>
+          <li>
+            <div>
+              <span>
+                "Fulcio certificate chain valid"
+              <span>
+                <span>
+                  "Verified"
+                <span>
+                  "This check ran and what it checked holds."
+            <p>
+              "the check ran and the claim holds"
+            <dl>
+              <div>
+                <dt>
+                  "checked against"
+                <dd>
+                  "https://rekor.innsegl.dev"
+          <li>
+            <div>
+              <span>
+                "Rekor inclusion proven"
+              <span>
+                <span>
+                  "Verified"
+                <span>
+                  "This check ran and what it checked holds."
+            <p>
+              "the check ran and the claim holds"
+            <div>
+              <span>
+                "Log index"
+              <span>
+                <button title=82914 type=button>
+                  <span>
+                    "Rekor entry index: 82914. Copy"
+                <span role=status aria-live=polite>
+            <dl>
+              <div>
+                <dt>
+                  "checked against"
+                <dd>
+                  "https://rekor.innsegl.dev"
+          <li>
+            <div>
+              <span>
+                "Trailer matches certificate identity"
+              <span>
+                <span>
+                  "Verified"
+                <span>
+                  "This check ran and what it checked holds."
+            <p>
+              "the check ran and the claim holds"
+            <dl>
+              <div>
+                <dt>
+                  "checked against"
+                <dd>
+                  "https://rekor.innsegl.dev"
+            <div>
+              <h4>
+                "Trailer and certificate identity"
+              <p>
+                "The trailer is the identity the certificate proves."
+              <dl>
+                <div>
+                  <dt>
+                    "Agent-Identity trailer"
+                  <dd>
+                    <span>
+                      <button title=spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c type=button>
+                        <span>
+                          "SPIFFE ID: spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c. Copy"
+                      <span role=status aria-live=polite>
+                <div>
+                  <dt>
+                    "Certificate URI SAN"
+                  <dd>
+                    <span>
+                      <button title=spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c type=button>
+                        <span>
+                          "SPIFFE ID: spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c. Copy"
+                      <span role=status aria-live=polite>
+        <details>
+          <summary>
+            "Raw material"
+          <p>
+            "Everything below is what a third party needs to re-derive this verdict without the dashboard."
+          <dl>
+            <div>
+              <dt>
+                "Commit object"
+              <dd>
+                <pre>
+                  "tree 9a8b7c6d5e4f302918273645afbecd0192837465"
+            <div>
+              <dt>
+                "Signing certificate"
+              <dd>
+                <pre>
+                  "-----BEGIN CERTIFICATE----- MIIB -----END CERTIFICATE-----"
+            <div>
+              <dt>
+                "Fulcio root"
+              <dd>
+                <pre>
+                  "-----BEGIN CERTIFICATE----- MIIC -----END CERTIFICATE-----"
+            <div>
+              <dt>
+                "Rekor public key"
+              <dd>
+                <pre>
+                  "-----BEGIN PUBLIC KEY----- MFkw -----END PUBLIC KEY-----"
+
+── verdict, measured ─────────────────────────────────────────────────────────
+
+    live check, three passes        -> "Verified"
+    cache + live error              -> "Verification unavailable"
+    cache, no error reported        -> "Verification unavailable"
+    live check, upstream unreachable-> "Verification unavailable"
+
+    The green appears once, on the live check. The other three are the
+    same three passing checks and none of them is painted green.
+
+── the structural half: `liveness` is required ───────────────────────────────
+
+    The brief records that `liveness` was once optional and defaulted to
+    live, which made the failure silent. Testing that claim means writing
+    the code it forbids and seeing what happens.
+
+    ATTEMPT: omitting the prop entirely, as a caching view would by saying nothing
+
+    import { VerificationPanel } from "../../src/components/verification/VerificationPanel";
+    import { verifiedProof } from "../../src/components/verification/fixtures";
+    
+    export const attempt = <VerificationPanel proof={verifiedProof()} />;
+
+    RESULT: refused —
+    omit-liveness.tsx(4,25): error TS2741: Property 'liveness' is missing in type '{ proof: Proof; }' but required in type 'VerificationPanelProps'.
+
+    ATTEMPT: the same omission on the table's summary badge, which wraps the panel
+
+    import { VerificationSummary } from "../../src/components/verification/VerificationSummary";
+    import { verifiedProof } from "../../src/components/verification/fixtures";
+    
+    export const attempt = <VerificationSummary proof={verifiedProof()} />;
+
+    RESULT: refused —
+    omit-liveness-summary.tsx(4,25): error TS2741: Property 'liveness' is missing in type '{ proof: Proof; }' but required in type 'VerificationPanelProps'.
+
+    ATTEMPT: the same silence one level up, on the overview's pass rate
+
+    import { PassRateCard } from "../../src/views/overview/PassRateCard";
+    
+    export const attempt = (
+      <PassRateCard
+        commitsRecorded={4181}
+        now={new Date()}
+        verifyHref="/verify"
+        rate={{
+          verified: 100,
+          failed: 0,
+          unavailable: 0,
+          checked: 100,
+          measuredAt: new Date(),
+        }}
+      />
+    );
+
+    RESULT: refused —
+    omit-passrate-liveness.tsx(8,5): error TS2741: Property 'liveness' is missing in type '{ verified: number; failed: number; unavailable: number; checked: number; measuredAt: Date; }' but required in type 'PassRate'.
+
+── FINDING: the required prop has no required field ──────────────────────────
+
+    VerificationPanel.tsx states the guarantee in these words:
+
+        "Required, a view that caches and stays quiet does not compile.
+         Same move as ADR-0038 decision 3 — remove the step that can be
+         wrong rather than check it afterwards."
+
+    Measured, that holds for an OMITTED prop and not for an EMPTY one.
+    `Liveness` declares `source?: "live" | "cache"` — optional — so:
+
+    import { VerificationPanel } from "../../src/components/verification/VerificationPanel";
+    import { verifiedProof } from "../../src/components/verification/fixtures";
+    
+    export const attempt = <VerificationPanel proof={verifiedProof()} liveness={{}} />;
+
+    RESULT: the compiler ACCEPTED it.
+
+    And this is what that empty object paints, measured the same way as
+    every other scene above:
+
+        badge reads   "Verified"
+        painted       color=#116039/#6ccf95 (green/green)
+        painted       background-color=#e6f4ec/#062e1c (green/green)
+        painted       border-color=#167a49/#3cb573 (green/green)
+
+    So a caching view that writes `liveness={{}}` gets the green, and the
+    type system does not object. Two facts bound how much this matters:
+    nothing in web/src passes an empty object (grep recorded below), and
+    the two callers that DO hold retained answers narrow the type so that
+    `source` is required — views/runs/proofs.ts's StatedLiveness and
+    views/overview/types.ts's MeasuredLiveness. The hole is in the panel's
+    own contract, not in any shipped call site.
+
+── every `liveness=` in web/src, as the build actually passes it ─────────────
+
+    src/components/verification/VerificationSummary.tsx:43:      <VerificationPanel proof={proof} liveness={liveness} findings={findings} id={id} />
+    src/components/verification/VerificationPanel.test.tsx:57:  return render(<VerificationPanel liveness={{ source: "live" }} proof={proof} id="panel" />).container;
+    src/components/verification/VerificationPanel.test.tsx:210:        liveness={{ source: "cache", liveError: "dial tcp: connection refused" }}
+    src/components/verification/VerificationPanel.test.tsx:226:        liveness={{ source: "cache", liveError: "dial tcp: connection refused" }}
+    src/components/verification/VerificationPanel.test.tsx:238:    render(<VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="panel" />);
+    src/components/verification/VerificationPanel.test.tsx:245:    render(<VerificationPanel liveness={{ source: "live" }} proof={proofWithResults(["verified", "failed", "unavailable"])} id="panel" />);
+    src/components/verification/VerificationPanel.test.tsx:258:    render(<VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="panel" />);
+    src/components/verification/VerificationPanel.test.tsx:267:    render(<VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="panel" />);
+    src/components/verification/VerificationPanel.test.tsx:280:      <VerificationSummary liveness={{ source: "live" }} proof={forgedTrailerProof()} id="row" />,
+    src/components/verification/VerificationPanel.test.tsx:295:    const { container } = render(<VerificationSummary liveness={{ source: "live" }} proof={verifiedProof()} id="row" />);
+    src/components/verification/green-audit.test.tsx:47:    ui: <VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="p" />,
+    src/components/verification/green-audit.test.tsx:52:    ui: <VerificationPanel proof={verifiedProof()} liveness={{ source: "live" }} id="p" />,
+    src/components/verification/green-audit.test.tsx:57:    ui: <VerificationPanel liveness={{ source: "live" }} proof={proofWithResults(["verified", "failed", "verified"])} id="p" />,
+    src/components/verification/green-audit.test.tsx:62:    ui: <VerificationPanel liveness={{ source: "live" }} proof={unavailableProof()} id="p" />,
+    src/components/verification/green-audit.test.tsx:67:    ui: <VerificationPanel liveness={{ source: "live" }} proof={forgedTrailerProof()} id="p" />,
+    src/components/verification/green-audit.test.tsx:72:    ui: <VerificationPanel proof={verifiedProof()} liveness={{ source: "cache" }} id="p" />,
+    src/components/verification/green-audit.test.tsx:80:        liveness={{ source: "cache", liveError: "dial tcp: connection refused" }}
+    src/components/verification/green-audit.test.tsx:89:      <VerificationPanel liveness={{ source: "live" }}
+    src/components/verification/green-audit.test.tsx:101:      <VerificationPanel liveness={{ source: "live" }}
+    src/components/verification/green-audit.test.tsx:111:    ui: <VerificationPanel liveness={{ source: "live" }} proof={{ ...verifiedProof(), verdict: "unattributed", checks: [] }} id="p" />,
+    src/components/verification/green-audit.test.tsx:117:      <VerificationPanel liveness={{ source: "live" }}
+    src/components/verification/green-audit.test.tsx:151:    const { container } = render(<VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="p" />);
+    src/components/verification/green-audit.test.tsx:161:      <VerificationPanel liveness={{ source: "live" }} proof={proofWithResults(["verified", "failed", "unavailable"])} id="p" />,
+    src/components/verification/mismatch.test.tsx:48:  render(<VerificationPanel liveness={{ source: "live" }} proof={forgedTrailerProof()} id="panel" />).container;
+    src/components/verification/mismatch.test.tsx:74:    render(<VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="panel" />);
+    src/components/verification/mismatch.test.tsx:99:      <VerificationPanel liveness={{ source: "live" }} proof={verifiedProof()} id="panel" />,
+    src/components/verification/mismatch.test.tsx:142:      <VerificationPanel liveness={{ source: "live" }}
+    src/components/verification/liveness-required.test.tsx:52:      <VerificationPanel proof={proof} liveness={{ source: "live" }} id="p" />,
+    src/components/verification/liveness-required.test.tsx:55:      <VerificationPanel proof={proof} liveness={{ source: "cache" }} id="p" />,
+    src/views/public-verify/ProofChain.tsx:111:        liveness={livenessOf(proof)}
+    src/views/run-detail/CommitVerification.tsx:221:      <VerificationPanel proof={held.proof} liveness={liveness} />
+    src/views/runs/RunsTable.tsx:184:            liveness={commit.liveness}
+    src/views/runs/verification.test.tsx:13: * itself is still optional there, so `liveness={{}}` compiles and means live.
+
+    One further attempt is not refusable by any type and is recorded as
+    such: a caller may write `liveness={{ source: "live" }}` over a proof
+    it took from a cache. No type catches a caller that lies about its own
+    state; what the required prop removes is the caller that says nothing,
+    and what the optional field lets back in is the caller that says {}.

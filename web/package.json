@@ -8,6 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test -c tests/playwright.config.ts",
+    "test:e2e:update": "playwright test -c tests/playwright.config.ts --update-snapshots",
     "tokens": "./src/tokens/check-tokens.sh && ./src/tokens/check-tokens-selftest.sh"
   },
   "dependencies": {
@@ -15,6 +17,9 @@
     "react-dom": "19.2.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1",
+    "@types/node": "22.20.1",
     "@testing-library/dom": "10.4.1",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.0",

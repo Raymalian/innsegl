@@ -1,0 +1,317 @@
+Probe 4 — doc 06 §8.4: a verification summary that cannot be expanded to the three checks and their inputs
+
+Produced by reviews/probes/, RM-050 (#58). Working tree at 025b563.
+Node v26.5.0. Rendered in jsdom via @testing-library/react.
+
+==============================================================================
+
+── every rollup badge in the gallery, and what is behind it ──────────────────
+
+    A badge is located by what it SAYS and what it DRAWS — an element whose
+    visible words are one of doc 06 §4.2's four verdict words and which
+    carries a drawn mark. No attribute is consulted.
+
+    panel/verified-live  (4 badges)
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    panel/failed  (4 badges)
+        "Failed" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Failed" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    panel/unavailable  (2 badges)
+        "Verification unavailable" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    panel/cached-verified-live-errored  (4 badges)
+        "Verification unavailable" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    panel/cached-verified-no-error  (4 badges)
+        "Verification unavailable" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    panel/liveness-empty-object  (4 badges)
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    panel/live-upstream-unreachable  (4 badges)
+        "Verification unavailable" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    panel/forged-trailer  (4 badges)
+        "Failed" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Failed" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    panel/server-asserts-verified-over-failed-check  (4 badges)
+        "Failed" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Failed" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    summary/verified  (5 badges)
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    summary/failed  (5 badges)
+        "Failed" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Failed" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Failed" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    summary/unavailable  (3 badges)
+        "Verification unavailable" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verification unavailable" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    view/runs-with-proofs  (10 badges)
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Failed" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Failed" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Failed" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — inside <details>, initially closed; opening it reveals all three checks
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    view/run-detail-verification-open  (4 badges)
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    view/public-verify-proven  (4 badges)
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    view/public-verify-upstreams-blocked  (2 badges)
+        "Verification unavailable" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    view/public-verify-failed  (4 badges)
+        "Failed" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Verified" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Failed" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+        "Failed" — not in a disclosure; the three checks are already on the page beside it
+            checks found: Fulcio certificate chain valid | Rekor inclusion proven | Trailer matches certificate identity
+
+    badges located: 71;  badges that cannot reach three checks: 0
+
+── one summary opened in full — the three checks AND their inputs ────────────
+
+    doc 06 §8.4 says "the three checks and their inputs", so the inputs are
+    measured too: the log index §4.1 requires beside check 2, the two
+    identities §4.1 requires side by side, and the raw material §3.6 and
+    §7 require for offline re-derivation.
+
+    view/runs-with-proofs holds 4 <details> rollups.
+
+    A LIMIT OF THIS HARNESS, stated before the measurement rather than
+    after it. jsdom does not implement the user-agent rule that hides a
+    closed <details>'s content, so this probe cannot show you the
+    collapsed rendering — `open` is read and set, and the text is read out
+    of the DOM either way. What it therefore measures is the question doc
+    06 §8.4 actually asks — whether the three checks and their inputs are
+    REACHABLE from the rollup — and not the separate question of whether
+    they are visually hidden until it is opened. That second question
+    needs a browser and is recorded as not determinable here.
+
+    The first rollup's own <summary> reads: "Verified"
+    Its initial open state, as the element carries it: open=false
+
+    Everything reachable behind that summary, in full:
+    Verified Verification Verified Commit 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 Fulcio certificate chain valid Verified the check ran and the claim holds checked against https://rekor.innsegl.dev Rekor inclusion proven Verified the check ran and the claim holds Log index 82914 checked against https://rekor.innsegl.dev Trailer matches certificate identity Verified the check ran and the claim holds checked against https://rekor.innsegl.dev Trailer and certificate identity The trailer is the identity the certificate proves. Agent-Identity trailer spiffe://innsegl.dev/agent/…/run-7f3a2c Certificate URI SAN spiffe://innsegl.dev/agent/…/run-7f3a2c Raw material Everything below is what a third party needs to re-derive this verdict without the dashboard. Commit object tree 9a8b7c6d5e4f302918273645afbecd0192837465 Signing certificate -----BEGIN CERTIFICATE----- MIIB -----END CERTIFICATE----- Fulcio root -----BEGIN CERTIFICATE----- MIIC -----END CERTIFICATE----- Rekor public key -----BEGIN PUBLIC KEY----- MFkw -----END PUBLIC KEY-----
+
+        present  all three check names
+        present  the Rekor log index
+        present  the commit SHA
+        present  the trailer identity
+        present  a raw-material disclosure
+        present  a per-check tri-state word
+
+── what a screen reader reaches at the closed rollup ─────────────────────────
+
+    <details>
+      <summary>
+        <span title=All three checks ran live against Fulcio and Rekor, and all three hold.>
+          <span>
+            "Verified"
+          <span>
+            "All three checks ran live against Fulcio and Rekor, and all three hold."
+      <section>
+        <div>
+          <h2>
+            "Verification"
+          <span title=All three checks ran live against Fulcio and Rekor, and all three hold.>
+            <span>
+              "Verified"
+            <span>
+              "All three checks ran live against Fulcio and Rekor, and all three hold."
+          <span>
+            "Commit"
+          <span>
+            <button title=4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291 type=button>
+              <span>
+                "Commit SHA: 4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291. Copy"
+            <span role=status aria-live=polite>
+        <ul>
+
+── the structural half, tested by trying to turn the panel off ───────────────
+
+    VerificationSummary.tsx claims: "There is no prop that turns the panel
+    off and no variant that renders the badge alone: a table author who
+    reaches for a summary gets the three checks with it, and the only way
+    to ship anti-pattern 4 is to write a different component on purpose."
+
+    ATTEMPT: asking the summary not to render its panel
+    import { VerificationSummary } from "../../src/components/verification/VerificationSummary";
+    import { verifiedProof } from "../../src/components/verification/fixtures";
+    
+    export const attempt = (
+      <VerificationSummary
+        proof={verifiedProof()}
+        liveness={{ source: "live" }}
+        panel={false}
+      />
+    );
+
+    RESULT: refused —
+    summary-panel-off.tsx(8,5): error TS2322: Type '{ proof: Proof; liveness: { source: "live"; }; panel: boolean; }' is not assignable to type 'IntrinsicAttributes & VerificationPanelProps'.
+      Property 'panel' does not exist on type 'IntrinsicAttributes & VerificationPanelProps'.
+
+    ATTEMPT: asking for a badge-only variant
+    import { VerificationSummary } from "../../src/components/verification/VerificationSummary";
+    import { verifiedProof } from "../../src/components/verification/fixtures";
+    
+    export const attempt = (
+      <VerificationSummary
+        proof={verifiedProof()}
+        liveness={{ source: "live" }}
+        variant="badge"
+      />
+    );
+
+    RESULT: refused —
+    summary-collapsed-only.tsx(8,5): error TS2322: Type '{ proof: Proof; liveness: { source: "live"; }; variant: string; }' is not assignable to type 'IntrinsicAttributes & VerificationPanelProps'.
+      Property 'variant' does not exist on type 'IntrinsicAttributes & VerificationPanelProps'.
+
+── FINDING: the badge-alone route the claim does not close ───────────────────
+
+    `VerificationBadge` is exported from the package index. A table author
+    who imports it directly gets a green rollup with nothing behind it —
+    anti-pattern 4 exactly — and the compiler does not object:
+
+    import { VerificationBadge } from "../../src/components/verification";
+    
+    export const attempt = <VerificationBadge verdict="verified" />;
+
+    RESULT: ACCEPTED by the compiler
+
+    The index says so itself: "there is no exported badge that skips the
+    panel except `VerificationBadge`, which `VerificationSummary` uses and
+    which a table should not reach for on its own (doc 06 §8 anti-pattern
+    4)". Measured, no view does: every import of it in web/src is —
+    src/components/verification/VerificationSummary.tsx:25:import { VerificationBadge } from "./VerificationBadge";
+    src/components/verification/VerificationSummary.tsx:41:        <VerificationBadge verdict={rollup.verdict} />
+    src/components/verification/VerificationBadge.tsx:38:export interface VerificationBadgeProps {
+    src/components/verification/VerificationBadge.tsx:42:export function VerificationBadge({ verdict }: VerificationBadgeProps) {
+    src/components/verification/index.ts:8: * badge that skips the panel except `VerificationBadge`, which
+    src/components/verification/index.ts:22:export { VerificationBadge } from "./VerificationBadge";
+    src/components/verification/index.ts:23:export type { VerificationBadgeProps } from "./VerificationBadge";
+    src/views/agent-type/AgentTypeView.tsx:295: * And no VerificationBadge. doc 06 §4.1 permits a rollup badge only where it
+    src/views/repo/discipline.test.ts:132:    expect(offenders(/VerificationBadge|VerificationPanel|VerificationSummary/)).toEqual([]);
+
+    So the anti-pattern is absent from the rendered product, and the
+    barrier against it is a comment rather than a type.
