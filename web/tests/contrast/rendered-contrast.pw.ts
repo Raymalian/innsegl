@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * FE-091 (proposed; doc 07 has no id for this — see the PR/issue report) —
+ * FE-100 (proposed; doc 07 has no id for this — see the PR/issue report) —
  * WCAG 2.1 AA contrast, measured from RENDERED output, in both colour-scheme
  * modes, across every composed foreground/background pair a component
  * actually paints. Proves doc 06 §6.4 ("WCAG 2.1 AA contrast in both modes,
@@ -70,7 +70,7 @@ const HARNESS_SCENARIOS = [
 ] as const;
 
 for (const mode of ["light", "dark"] as const) {
-  test.describe(`FE-091: rendered contrast, all six views (${mode})`, () => {
+  test.describe(`FE-100: rendered contrast, all six views (${mode})`, () => {
     test.use({ colorScheme: mode });
 
     for (const view of VIEWS) {
@@ -93,7 +93,7 @@ for (const mode of ["light", "dark"] as const) {
     }
   });
 
-  test.describe(`FE-091: rendered contrast, component scenarios (${mode})`, () => {
+  test.describe(`FE-100: rendered contrast, component scenarios (${mode})`, () => {
     test.use({ colorScheme: mode });
 
     for (const scenario of HARNESS_SCENARIOS) {
@@ -111,7 +111,7 @@ for (const mode of ["light", "dark"] as const) {
   });
 }
 
-test.describe("FE-091: the issue #104 regression, held explicitly", () => {
+test.describe("FE-100: the issue #104 regression, held explicitly", () => {
   test("the alert banner's evidence link measures at least 4.5:1 against the integrity fill, in both modes", async ({
     page,
   }) => {

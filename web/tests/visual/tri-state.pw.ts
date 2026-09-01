@@ -82,3 +82,42 @@ test.describe("FE-001: the three tri-states are visually distinct from one anoth
     expect(failed?.equals(unavailable ?? Buffer.alloc(0))).toBe(false);
   });
 });
+
+/*
+ * FE-106 (proposed; doc 07 has no id for this — see the report for #57).
+ *
+ * The six scenarios above are captured twice, once per colour scheme, and
+ * twelve baselines are committed. Nothing in `toHaveScreenshot` checks that
+ * the two modes actually differ: if `test.use({ colorScheme })` ever stopped
+ * applying — a Playwright upgrade, a `<meta name="color-scheme">` change, a
+ * `[data-theme]` attribute written by a stray bootstrap — every dark baseline
+ * would be regenerated as a copy of its light twin and twelve tests would go
+ * on passing while dark mode was never rendered at all. doc 06 §5.1 puts both
+ * modes in scope from day one; ADR-0038 decision 3 makes every semantic colour
+ * a `light-dark()` pair specifically so a mode cannot go missing silently.
+ *
+ * This is a same-run comparison, so it needs no baseline of its own and
+ * cannot be satisfied by regenerating one.
+ */
+test.describe("FE-106: each scenario renders differently in light and dark", () => {
+  for (const scenario of SCENARIOS) {
+    test(`${scenario.label} differs between the two colour schemes`, async ({ page }) => {
+      const shots: Record<"light" | "dark", Buffer> = {
+        light: Buffer.alloc(0),
+        dark: Buffer.alloc(0),
+      };
+      for (const mode of ["light", "dark"] as const) {
+        await page.emulateMedia({ colorScheme: mode });
+        await page.goto(`/tests/harness/index.html?scenario=${scenario.name}`);
+        await expect(page.locator("[data-harness-unknown]")).toHaveCount(0);
+        await expect(page.locator("[data-harness-root] > *")).toBeVisible();
+        shots[mode] = await page.screenshot({ fullPage: true });
+      }
+      expect(
+        shots.light.equals(shots.dark),
+        `${scenario.name} renders identically in light and dark — prefers-color-scheme is not ` +
+          `reaching the page, so its dark baseline asserts nothing about dark mode`,
+      ).toBe(false);
+    });
+  }
+});
