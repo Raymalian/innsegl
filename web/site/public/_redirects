@@ -1,0 +1,23 @@
+# Cloudflare Pages redirect rules for innsegl.dev (RM-058, #66; doc 05 §3).
+#
+# Order matters: the first matching rule wins.
+
+# doc 05 §3 asks the root host to serve "a redirect to
+# github.com/Raymalian/innsegl". 302 rather than 301 — a permanent redirect is
+# cached by browsers forever and this project may not host its source in the
+# same place for the rest of time.
+/repo                    https://github.com/Raymalian/innsegl  302
+/repo/*                  https://github.com/Raymalian/innsegl/:splat  302
+
+# Every path under the module root answers with the module page, which carries
+# the go-import tag. Status 200 is a rewrite, not a redirect: the go command
+# reads the tag out of the body of THIS response.
+#
+# Without this rule, resolving innsegl.dev/innsegl/cmd/innsegl still works —
+# the toolchain walks the path down to the module root — but it spends a 404
+# per path element to get there. With it, a subpackage resolves in one request.
+#
+# `/innsegl` itself is deliberately not matched here. It is a static file
+# (innsegl.html, served at /innsegl by Pages' clean URLs) and nothing may
+# stand between the go command and it.
+/innsegl/*               /innsegl  200

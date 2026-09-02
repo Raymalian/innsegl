@@ -1,0 +1,27 @@
+{
+  "name": "innsegl",
+  "version": "0.0.2",
+  "description": "Innsegl — non-repudiable identity and attribution for AI agents (SPIFFE/SPIRE + Sigstore). Name reservation held by the project; the implementation is Go, at innsegl.dev/innsegl.",
+  "keywords": [
+    "agents",
+    "attribution",
+    "spiffe",
+    "spire",
+    "sigstore",
+    "mcp",
+    "non-repudiation",
+    "provenance",
+    "supply-chain"
+  ],
+  "homepage": "https://innsegl.dev",
+  "bugs": { "url": "https://github.com/Raymalian/innsegl/issues" },
+  "repository": { "type": "git", "url": "git+https://github.com/Raymalian/innsegl.git" },
+  "license": "Apache-2.0",
+  "author": "Raymalian",
+  "type": "module",
+  "main": "index.js",
+  "bin": { "innsegl": "bin/innsegl.js" },
+  "files": ["index.js", "bin/", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "publishConfig": { "access": "public" }
+}

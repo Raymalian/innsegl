@@ -1,0 +1,243 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="Innsegl issues a single-purpose cryptographic identity to each AI agent run and makes the attribution of its commits checkable by someone who trusts nothing about the system that produced it." />
+    <title>Innsegl — verifiable identity and attribution for AI agents</title>
+    <link rel="stylesheet" href="/tokens.css" />
+    <link rel="stylesheet" href="/site.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header>
+        <h1>Innsegl</h1>
+        <p class="tagline">Verifiable identity and attribution for AI agents.</p>
+        <p class="lede">
+          Innsegl issues a single-purpose cryptographic identity to each agent
+          run, attributes every action and every commit to that identity, and
+          records the attribution somewhere a third party can check it
+          <em>without trusting the system that produced it</em> — including
+          without trusting whoever operates that system.
+        </p>
+        <p class="footnote">
+          <em>Innsegl</em> is Norwegian, from Old Norse <em>innsigli</em>: the
+          seal pressed on a document to prove who issued it.
+        </p>
+      </header>
+
+      <section aria-labelledby="status">
+        <div class="panel panel--status">
+          <h2 id="status">Status: pre-1.0, and several things below are not built</h2>
+          <p>
+            This is an in-progress open-source project, not a product. The
+            honest inventory, as of this page:
+          </p>
+          <ul>
+            <li>
+              <strong>Nothing is released.</strong> There is no tagged version,
+              so <code>@latest</code> resolves to a pseudo-version of the
+              default branch. Every interface that is not named as protected
+              below can still change without notice.
+            </li>
+            <li>
+              <strong>Nothing is hosted.</strong> <code>innsegl.dev</code>
+              serves this page and the Go module path. The public verification
+              page and the operator dashboard are written but are not deployed
+              at any address, and there is no instance of the server you can
+              point an agent at.
+            </li>
+            <li>
+              <strong>There is no public Go API.</strong> Every package except
+              <code>cmd/innsegl</code> is under <code>internal/</code>, so the
+              module is a program rather than a library. Do not plan to import
+              it.
+            </li>
+            <li>
+              <strong><code>innsegl seal</code> is listed in the CLI's help and
+              exits non-zero.</strong> Segment sealing and Rekor anchoring exist
+              as code; the subcommand an operator would schedule does not yet.
+            </li>
+            <li>
+              <strong>The end-to-end claim is not yet demonstrable by you.</strong>
+              The signing and anchoring paths are exercised against real SPIRE
+              and a real Fulcio and Rekor in this project's own test
+              containers. That is not the same as a deployment you can run and
+              check, and it should not be read as one.
+            </li>
+          </ul>
+          <p class="footnote">
+            If something on this page is not a command you can run yourself,
+            read it as a design intention rather than a shipped feature.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="what">
+        <h2 id="what">What it is</h2>
+        <p>
+          Agent work is unattributed. Nobody can prove which agent did what,
+          and nothing stops an operator from disputing the attribution
+          afterwards. Innsegl is one identity service and one append-only
+          ledger, arranged so that issuance is centralized and verification is
+          not.
+        </p>
+        <ul>
+          <li>
+            <strong>One identity per run.</strong> SPIRE attests the workload
+            and issues a short-lived SVID for the SPIFFE ID
+            <code>spiffe://{trust-domain}/agent/{agent-type}/{task-id}/{run-id}</code>.
+            One registration entry per run, created at registration and deleted
+            at retirement: identity, run and purpose are the same thing.
+          </li>
+          <li>
+            <strong>An MCP server with five tools</strong> —
+            <code>register_agent</code>, <code>get_credential</code>,
+            <code>record_event</code>, <code>sign_commit</code>,
+            <code>retire_agent</code>. Agents talk only to it, and never see
+            SPIRE's admin API. It never holds, caches or proxies an agent's
+            private key.
+          </li>
+          <li>
+            <strong>Commits signed, not asserted.</strong> A JWT-SVID bound to
+            Sigstore's audience buys a short-lived Fulcio certificate; the
+            commit is signed with it and its entry lands in the Rekor
+            transparency log. The commit carries
+            <code>Agent-Identity</code>, <code>Agent-Run</code> and
+            <code>Agent-Task</code> trailers. The trailer is the claim; the
+            signature is the proof; verification requires that they agree.
+          </li>
+          <li>
+            <strong>A ledger with no delete or update path.</strong> Events are
+            hash-chained, sealed into content-addressed segments, and each
+            segment's Merkle root is anchored in Rekor. Corrections are new
+            events that supersede old ones. Nothing is ever rewritten.
+          </li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="proves">
+        <h2 id="proves">What it proves, and what it does not</h2>
+        <p>Verification is three checks, against public infrastructure only:</p>
+        <ol>
+          <li>the signing certificate chains to Fulcio;</li>
+          <li>the commit's entry is provably included in Rekor;</li>
+          <li>the identity claimed in the commit trailer is the identity in that certificate.</li>
+        </ol>
+        <p>
+          All three run against git, Fulcio and Rekor. None of them reads this
+          system's database — the verifier has no flag with which to point it at
+          one, deliberately. A verification you can only perform by asking the
+          operator's server is not a verification.
+        </p>
+        <h3>Limits worth knowing before you adopt it</h3>
+        <ul>
+          <li>
+            It answers <em>who did it</em>, not <em>whether it was allowed</em>.
+            There is no policy engine and no authorization model beyond
+            protecting the server's own admin surface.
+          </li>
+          <li>
+            Attestation proves what a workload <em>is</em>, not that it
+            behaved. Innsegl is not a sandbox.
+          </li>
+          <li>
+            GitHub's interface does not render gitsign signatures with its
+            <em>Verified</em> badge, and this project does not chase that.
+            <code>innsegl verify</code>, <code>gitsign verify</code> and a Rekor
+            inclusion proof are the verification.
+          </li>
+          <li>
+            The ledger stores digests and references — commit SHA, tree hash,
+            payload digest — never diffs, code or tool-call bodies.
+          </li>
+          <li>
+            Commits made before adoption stay unattributed. Nothing is
+            backfilled or inferred.
+          </li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="install">
+        <h2 id="install">Install</h2>
+        <pre><code>go install innsegl.dev/innsegl/cmd/innsegl@latest</code></pre>
+        <p>
+          <code>innsegl.dev/innsegl</code> is the module path; the code is at
+          <a href="https://github.com/Raymalian/innsegl">github.com/Raymalian/innsegl</a>.
+          With no tag published yet, <code>@latest</code> gives you a
+          pseudo-version of the default branch — pin a commit if you need the
+          same bytes twice.
+        </p>
+
+        <h3>Verify a commit, with no Innsegl deployment at all</h3>
+        <pre><code>innsegl verify &lt;commit&gt; -repo .</code></pre>
+        <p>
+          The exit status is the verdict, so it composes into a script without
+          parsing anything: <code>0</code> verified, <code>3</code> failed,
+          <code>4</code> verification unavailable, <code>5</code> the commit
+          makes no attribution claim, <code>6</code> unusable — no such commit,
+          or a configuration that cannot verify. <code>4</code> is never
+          collapsed into <code>3</code>: <em>we could not check</em> is a
+          different answer from <em>it does not hold</em>.
+        </p>
+
+        <h3>Run the reference stack</h3>
+        <p>
+          The repository carries a Docker Compose stack — SPIRE, Postgres,
+          object storage, a self-hosted Sigstore, and the server itself — under
+          <code>deploy/compose/</code>. Read its README there; it is the part of
+          this project that changes fastest.
+        </p>
+      </section>
+
+      <section aria-labelledby="names">
+        <h2 id="names">Two names that look alike and are not</h2>
+        <dl class="facts">
+          <dt><code>innsegl.dev/innsegl</code></dt>
+          <dd>
+            The Go module path. It is a real URL and it resolves: this domain
+            serves the <code>go-import</code> meta tag that sends the toolchain
+            to the repository. <a href="/innsegl">See the tag</a>.
+          </dd>
+          <dt><code>spiffe://innsegl.dev</code></dt>
+          <dd>
+            The reference trust domain — and it is
+            <strong>not an endpoint</strong>. It has no DNS record, nothing
+            listens on it, and nothing ever connects to it. A SPIFFE trust
+            domain is a <em>name</em>: it identifies which root a
+            <code>spiffe://innsegl.dev/agent/…</code> identity belongs to.
+            Owning the matching DNS name is worth doing only because it
+            guarantees no one else can create ambiguity about that root.
+          </dd>
+        </dl>
+      </section>
+
+      <section aria-labelledby="stability">
+        <h2 id="stability">What is frozen already</h2>
+        <p>
+          Some surfaces are protected from the first release onward, because
+          changing them retroactively would invalidate proofs that were already
+          made: the event schema field names and enum values, the canonical
+          serialization of an event, the commit trailer keys, the SPIFFE ID
+          grammar, and the MCP tool names and error classes. Those change only
+          in a major release, with a migration attestation. Everything else on
+          this page is pre-1.0 and may move.
+        </p>
+      </section>
+
+      <footer>
+        <p>
+          Apache-2.0. Source, issues and the security policy:
+          <a href="https://github.com/Raymalian/innsegl">github.com/Raymalian/innsegl</a>.
+        </p>
+        <p>
+          This page is static HTML and two stylesheets served from this domain.
+          It runs no JavaScript, loads nothing from a third party, and carries
+          no analytics.
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+
+    <!--
+      THE LOAD-BEARING LINE OF THIS ENTIRE SITE.
+
+      go.mod says `module innsegl.dev/innsegl`. When anyone runs
+      `go get innsegl.dev/innsegl`, the go command issues
+
+          GET https://innsegl.dev/innsegl?go-get=1
+
+      and reads this tag out of the response to learn where the code actually
+      lives. Without it the module path resolves to nothing and the project is
+      un-gettable by its own name.
+
+      The three fields are: the module root, the version control system, and
+      the repository URL. The root must be the module path exactly — the go
+      command requires the import path being resolved to have it as a prefix,
+      so `innsegl.dev` alone or a trailing slash both break resolution.
+
+      web/site/check-site.sh reads the path out of go.mod and asserts this
+      line matches it, so a module rename cannot silently orphan the tag.
+    -->
+    <meta name="go-import" content="innsegl.dev/innsegl git https://github.com/Raymalian/innsegl">
+
+    <!--
+      Not load-bearing, and cheap. go-source tells documentation hosts how to
+      turn a symbol into a link to the line that defines it: the four fields
+      are the module root, the repository home page, a directory template and
+      a file template. pkg.go.dev can already derive these for a github.com
+      repository from the go-import tag above; this makes the mapping explicit
+      and keeps working for any tool that reads it, including one pointed at a
+      future mirror.
+    -->
+    <meta name="go-source" content="innsegl.dev/innsegl https://github.com/Raymalian/innsegl https://github.com/Raymalian/innsegl/tree/main{/dir} https://github.com/Raymalian/innsegl/blob/main{/dir}/{file}#L{line}">
+
+    <meta name="description" content="innsegl.dev/innsegl is the Go module path for Innsegl. The code is at github.com/Raymalian/innsegl." />
+    <title>innsegl.dev/innsegl — Go module path</title>
+
+    <link rel="stylesheet" href="/tokens.css" />
+    <link rel="stylesheet" href="/site.css" />
+  </head>
+  <body>
+    <main class="page page--narrow">
+      <p class="eyebrow"><a href="/">Innsegl</a></p>
+      <h1 class="display"><code>innsegl.dev/innsegl</code></h1>
+
+      <p class="lede">
+        This page exists so that the Go toolchain can resolve the module path
+        <code>innsegl.dev/innsegl</code>. The code is hosted at
+        <a href="https://github.com/Raymalian/innsegl">github.com/Raymalian/innsegl</a>;
+        the path above is the name the module is imported by, and it is served
+        from a domain the project controls so the name cannot be taken over by
+        whoever happens to own a code-hosting account later.
+      </p>
+
+      <h2>Resolution</h2>
+      <p>
+        <code>go get</code> requests <code>https://innsegl.dev/innsegl?go-get=1</code>
+        and reads a single meta tag out of the response:
+      </p>
+      <pre><code>&lt;meta name="go-import"
+      content="innsegl.dev/innsegl git https://github.com/Raymalian/innsegl"&gt;</code></pre>
+      <p>
+        That tag is in the head of this document. Every path under the module
+        root — <code>innsegl.dev/innsegl/cmd/innsegl</code> and the rest —
+        is answered by this same page, so a subpackage resolves in one request
+        rather than walking the toolchain up the path a 404 at a time.
+      </p>
+
+      <h2>Elsewhere</h2>
+      <ul class="links">
+        <li><a href="https://pkg.go.dev/innsegl.dev/innsegl">pkg.go.dev/innsegl.dev/innsegl</a> — generated API documentation</li>
+        <li><a href="https://github.com/Raymalian/innsegl">github.com/Raymalian/innsegl</a> — source, issues, licence</li>
+        <li><a href="/">innsegl.dev</a> — what the project is and what it proves</li>
+      </ul>
+    </main>
+  </body>
+</html>

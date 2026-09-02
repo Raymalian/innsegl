@@ -1,0 +1,25 @@
+# Innsegl — the canonical names, enumerated in exactly one place.
+#
+# Doc 04 asset A6 is this list. Squatting or typosquatting the namespace of an
+# attribution tool poisons the supply chain of the one project whose product is
+# supply-chain truth, so these names are defended rather than administered.
+# VERSIONING.md surface 5 makes the shipped ones PROTECTED: they change only in
+# a major release, with a migration attestation (doc 08 §3).
+#
+# Format: kind|name|where it is held
+# Read by namespace/verify-namespace.sh. Keep it parseable: one row per line,
+# three pipe-separated fields, no trailing spaces.
+#
+# Adding a name here without registering it is worse than not listing it: the
+# list is what the operator defends, and a row nobody owns is a row nobody
+# notices is missing. Register first, then add the row.
+
+go-module|innsegl.dev/innsegl|go.mod, this repository
+cli-binary|innsegl|Makefile BINARY, cmd/innsegl/
+mcp-server|innsegl|VERSIONING.md surface 5, the MCP server name
+npm-package|innsegl|https://www.npmjs.com/package/innsegl
+npm-scope|@innsegl|https://www.npmjs.com/org/innsegl (org locks the whole scope)
+pypi-project|innsegl|https://pypi.org/project/innsegl/
+domain|innsegl.dev|registrar account, operator-held
+github-repo|Raymalian/innsegl|https://github.com/Raymalian/innsegl
+licence|Apache-2.0|LICENSE, doc 08 §1
