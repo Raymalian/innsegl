@@ -18,7 +18,10 @@ and only with a migration attestation.
    `get_credential`, `record_event`, `sign_commit`, `retire_agent`, and the
    `error_class` values they return.
 5. **The project namespace**: the `innsegl` MCP server name, the package
-   names, and the CLI binary name.
+   names, and the CLI binary name. The canonical names are enumerated in
+   exactly one place — `namespace/canonical-names.txt` — together with where
+   each one is registered; `namespace/verify-namespace.sh` asserts that this
+   repository and the published stub packages agree with that enumeration.
 
 The normative, byte-level definition of surface 1 is not prose — it is the
 **golden serialization fixtures** (test-catalog `TC-SER`) and the **MCP
