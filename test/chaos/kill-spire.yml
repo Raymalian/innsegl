@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Compose overlay: a SPIRE stack per test process, for OPS-003's kill soak
+# (RM-053, #61)
+#
+# Applied on top of deploy/compose/spire.yml, never instead of it. The harness
+# invokes it as:
+#
+#   INNSEGL_CHAOS_KILL_STACK=innsegl-kill9-<pid> \
+#   docker compose -p "$INNSEGL_CHAOS_KILL_STACK" \
+#     -f deploy/compose/spire.yml -f test/chaos/kill-spire.yml \
+#     up -d --wait spire-server spire-agent
+#
+# WHY THIS FILE EXISTS AND NOT deploy/compose/spire-testscope.yml
+# ---------------------------------------------------------------
+# The two differ in one line that decides whether OPS-003 measures anything.
+# spire.yml sets `restart: unless-stopped`, which is right for a deployment and
+# fatal for a kill campaign: Docker restarts the container within a second of
+# the SIGKILL, so the outage window closes before the workload has noticed it
+# and the soak "kills" a component that was never down. spire-testscope.yml
+# deliberately does NOT set `restart: "no"` — its comment says so in as many
+# words — because internal/spire and internal/mcp kill nothing.
+#
+# test/failure/spire-isolated.yml does set it, and this file is that file's
+# shape. It is not that file because it is selected by a different variable:
+# two suites that could resolve to the same compose project would be two
+# processes writing one SPIRE datastore, and every assertion here is about what
+# a datastore holds after a kill. RM-018 measured that exact collision producing
+# a FALSE ACCUSATION — "an entry appeared 18.99s after recovery without anybody
+# asking for one" — against a test whose whole job was to detect stray entries.
+# OPS-003's orphan sweep would fail the same way, and a chaos suite that can
+# blame another process for an orphan is a chaos suite nobody can act on.
+#
+# WHY EVERY NAME IS INTERPOLATED AND THE VARIABLE IS REQUIRED
+# -----------------------------------------------------------
+# Same reasoning as the other two overlays, adopted rather than re-argued:
+# `go test ./...` runs packages concurrently and two concurrent `go test`
+# invocations are routine, so the project, every container_name and every
+# network name carry a value unique to this process. `:?` rather than `:-`
+# because a default would let a hand-run compose build a stack under a shared
+# name that no test process owns or tears down.
+#
+# Everything else — images and their digests, the configs, the PKI bootstrap,
+# the selectors, ADR-0011's network segmentation — is inherited unchanged. That
+# is the point: the soak must kill the shipped stack, or what it proves is
+# about a different system.
+# ============================================================================
+
+name: ${INNSEGL_CHAOS_KILL_STACK:?set by test/chaos/killharness_test.go to innsegl-kill9-<pid>; this overlay must never build a stack under a shared name}
+
+services:
+  spire-bootstrap:
+    container_name: ${INNSEGL_CHAOS_KILL_STACK:?set by test/chaos/killharness_test.go to innsegl-kill9-<pid>; this overlay must never build a stack under a shared name}-spire-bootstrap
+
+  spire-server:
+    container_name: ${INNSEGL_CHAOS_KILL_STACK:?set by test/chaos/killharness_test.go to innsegl-kill9-<pid>; this overlay must never build a stack under a shared name}-spire-server
+    # OPS-003 SIGKILLs this container and decides when it comes back. See the
+    # header: with the shipped policy the outage window closes before the
+    # workload observes it.
+    restart: "no"
+
+  spire-agent:
+    container_name: ${INNSEGL_CHAOS_KILL_STACK:?set by test/chaos/killharness_test.go to innsegl-kill9-<pid>; this overlay must never build a stack under a shared name}-spire-agent
+    # And this one.
+    restart: "no"
+
+  spire-oidc:
+    container_name: ${INNSEGL_CHAOS_KILL_STACK:?set by test/chaos/killharness_test.go to innsegl-kill9-<pid>; this overlay must never build a stack under a shared name}-spire-oidc
+
+  spire-verify-workload:
+    container_name: ${INNSEGL_CHAOS_KILL_STACK:?set by test/chaos/killharness_test.go to innsegl-kill9-<pid>; this overlay must never build a stack under a shared name}-spire-verify-workload
+
+networks:
+  innsegl-spire-node:
+    name: ${INNSEGL_CHAOS_KILL_STACK:?set by test/chaos/killharness_test.go to innsegl-kill9-<pid>; this overlay must never build a stack under a shared name}-spire-node
+  innsegl-spire-admin:
+    name: ${INNSEGL_CHAOS_KILL_STACK:?set by test/chaos/killharness_test.go to innsegl-kill9-<pid>; this overlay must never build a stack under a shared name}-spire-admin
+  innsegl-oidc-frontend:
+    name: ${INNSEGL_CHAOS_KILL_STACK:?set by test/chaos/killharness_test.go to innsegl-kill9-<pid>; this overlay must never build a stack under a shared name}-oidc-frontend
