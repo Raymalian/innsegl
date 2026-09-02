@@ -15,7 +15,14 @@ import (
 // and the WORM deletion canary joins them because doc 05 §2 requires SEG-005
 // to run "as a scheduled job in production, not only at deploy" — which needs
 // something an operator can schedule.
-var documentedSubcommands = []string{"canary", "reap", "reconcile", "seal", "serve", "verify"}
+//
+// `api` is doc 05 §1's `innsegl-dashboard` row, backend half. RM-076 (#109)
+// shipped the UI half alone because nothing in the module constructed an
+// api.Server, so every query-API view rendered its own load-failure state
+// permanently (RM-083, #121).
+var documentedSubcommands = []string{
+	"api", "canary", "reap", "reconcile", "seal", "serve", "verify",
+}
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {
 	got := make([]string, 0, len(commands))
