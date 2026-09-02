@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "innsegl"
+version = "0.0.2"
+description = "Innsegl - non-repudiable identity and attribution for AI agents (SPIFFE/SPIRE + Sigstore). Name reservation held by the project; the implementation is Go, at innsegl.dev/innsegl."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Raymalian" }]
+keywords = ["agents", "attribution", "spiffe", "spire", "sigstore", "mcp", "non-repudiation", "provenance", "supply-chain"]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Topic :: Security",
+  "Topic :: Software Development :: Version Control :: Git",
+]
+
+[project.urls]
+Homepage = "https://innsegl.dev"
+Repository = "https://github.com/Raymalian/innsegl"
+Issues = "https://github.com/Raymalian/innsegl/issues"
+
+[project.scripts]
+innsegl = "innsegl:main"
+
+# Pin exactly what ships. A sdist that picks its own contents by walking the
+# directory is a sdist whose bytes depend on what happened to be lying around
+# when it was built; for a package whose only job is to hold a name honestly,
+# that is the wrong default.
+[tool.hatch.build.targets.sdist]
+include = ["src/innsegl", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/innsegl"]
