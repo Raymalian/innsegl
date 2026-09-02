@@ -137,7 +137,11 @@ const (
 	k9BusyBudget = 90 * time.Second
 	// k9AimAttempts bounds how many extra shots the campaign takes at the one
 	// window it refuses to leave to luck. See aimAtAClaimedCall.
-	k9AimAttempts = 6
+	k9AimAttempts = 10
+	// k9AimFreshness is how recently the claim an aimed shot fires at must have
+	// been taken. Much tighter than k9FreshClaim: the aimed shot wants most of
+	// the call still ahead of it, not merely some of it.
+	k9AimFreshness = 40 * time.Millisecond
 	// k9FreshClaim is how recently a claim must have been taken for the killer
 	// to treat it as a call that is still running.
 	//
@@ -175,6 +179,20 @@ const (
 )
 
 var k9Targets = []string{k9TargetMCP, k9TargetPostgres, k9TargetSPIREServer, k9TargetSPIREAgent}
+
+// k9AnyTool and k9AimTool are the two tool sets freshClaims is asked about.
+//
+// Only the tools that take an idempotency_key ever appear in innsegl.idempotency
+// at all; get_credential and retire_agent are intrinsically idempotent and claim
+// nothing, so a kill inside one of them leaves no trace of having interrupted
+// anything. The aimed shot narrows further, to register_agent alone: it is the
+// one keyed tool whose claimed section contains a SPIRE round trip, so its
+// window is tens of milliseconds where record_event's is a few, and a shot aimed
+// at the wide window lands far more often than one aimed at the narrow one.
+var (
+	k9AnyTool = []string{string(mcp.ToolRegisterAgent), string(mcp.ToolRecordEvent)}
+	k9AimTool = []string{string(mcp.ToolRegisterAgent)}
+)
 
 // errK9DependencyAbsent marks the ONLY condition under which OPS-003 may skip:
 // there is no Docker daemon. On a developer's machine that is a legitimate
@@ -807,11 +825,17 @@ type k9Campaign struct {
 	inFlight    atomic.Int64
 	interrupted atomic.Int64
 
-	mu             sync.Mutex
-	daemon         *k9Daemon
-	killCount      int
-	byTarget       map[string]int
-	idleKills      int
+	mu        sync.Mutex
+	daemon    *k9Daemon
+	killCount int
+	byTarget  map[string]int
+	// authorised counts the kills fired on an observation of work in flight.
+	// Every kill must be one: a strike that cannot find work does not fire at
+	// all, it stops the campaign. See strike.
+	authorised int
+	// orphaned counts the claims observed still unanswered at the instant the
+	// process that held them had provably ceased to exist. See killTarget.
+	orphaned       int
 	invariants     int
 	firstInvariant string
 	// runs is every run id the workload registered, and whether the workload
@@ -833,12 +857,22 @@ type k9Call struct {
 type k9Evidence struct {
 	kills               int
 	byTarget            map[string]int
-	idleKills           int
+	authorised          int
 	dispatched          int64
 	interrupted         int64
 	invariantViolations int
 	firstInvariant      string
+	orphaned            int
 	claims              k9Claims
+}
+
+// witnessed is how many times a kill was OBSERVED to land between a claim and
+// its reply. Any one of the three counts is proof on its own, and they are
+// summed because they are three views of one event: a claim left ownerless at
+// the instant of death, a key another caller had to reclaim afterwards, and a
+// claim nobody ever came back for.
+func (e k9Evidence) witnessed() int {
+	return e.orphaned + e.claims.takeovers + e.claims.stranded
 }
 
 // requireK9Campaign brings up everything OPS-003 needs, or says exactly which
@@ -1499,24 +1533,33 @@ func (c *k9Campaign) strike(t *testing.T, n int, target string) {
 	// inside, and MEASURED it usually did.
 	delay := c.rng.duration(0, k9StrikeWindow)
 	time.Sleep(delay)
-	if !c.awaitBusy(t, k9BusyBudget) {
+
+	// The shot is authorised by the observation awaitBusy FIRED ON, and that
+	// observation is carried back here rather than re-read.
+	//
+	// It used to be re-read, and that was a false accusation waiting to happen:
+	// the second sample is a later instant, so a claim that was live when the
+	// killer decided to shoot can complete in the microseconds before it is
+	// counted, and the campaign would then convict itself of firing at an idle
+	// system it had in fact aimed at correctly. MEASURED, seed
+	// 1788310569983908000: kill 3 of 8 logged "3 calls dispatched and unreturned
+	// and 0 claims" and failed the run — a properly aimed kill, reported as an
+	// idle one. Nine keys were reclaimed in that same run, so the kills were
+	// landing exactly where they were supposed to.
+	seen, ok := c.awaitBusy(t, k9BusyBudget)
+	if !ok {
 		t.Fatalf("no tool call was provably in flight at any point in %s, so kill %d/%d "+
 			"was never fired (seed %d). The workload has stalled — the last restore "+
 			"left a component the workers cannot reach — and killing an idle system "+
 			"would measure nothing, so the campaign stops here instead of certifying "+
 			"a soak over a system that was not working.", k9BusyBudget, n, c.kills, c.seed)
 	}
-
-	inFlight := c.inFlight.Load()
-	claimed := c.freshClaims(t, false)
-	if inFlight == 0 || claimed == 0 {
-		c.mu.Lock()
-		c.idleKills++
-		c.mu.Unlock()
-	}
-	t.Logf("kill %d/%d: %s, %s into the soak's own rhythm, with %d call(s) dispatched "+
-		"and unreturned and %d claim(s) taken inside the last %s and not yet answered",
-		n, c.kills, target, delay, inFlight, claimed, k9FreshClaim)
+	c.mu.Lock()
+	c.authorised++
+	c.mu.Unlock()
+	t.Logf("kill %d/%d: %s, %s into the soak's own rhythm, fired on %d call(s) "+
+		"dispatched and unreturned and %d claim(s) taken inside the last %s and not "+
+		"yet answered", n, c.kills, target, delay, seen.inFlight, seen.claims, k9FreshClaim)
 
 	c.killTarget(t, target)
 	c.mu.Lock()
@@ -1535,16 +1578,29 @@ func (c *k9Campaign) strike(t *testing.T, n int, target string) {
 // DURABLE and is the shipped server's own statement that a tool call is between
 // its claim and its reply; the in-process counter is LIVE and cannot be
 // satisfied by a row somebody else left behind.
-func (c *k9Campaign) awaitBusy(t *testing.T, budget time.Duration) bool {
+func (c *k9Campaign) awaitBusy(t *testing.T, budget time.Duration) (k9Busy, bool) {
 	t.Helper()
 	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
-		if c.inFlight.Load() > 0 && c.freshClaims(t, false) > 0 {
-			return true
+		// Both values are kept from the pass that satisfied the condition. The
+		// pair IS the authorisation for the shot; re-reading either afterwards
+		// asks a different question at a different instant.
+		if inFlight := c.inFlight.Load(); inFlight > 0 {
+			if claims := c.freshClaims(t, k9AnyTool, k9FreshClaim); claims > 0 {
+				return k9Busy{inFlight: inFlight, claims: claims}, true
+			}
 		}
 		time.Sleep(k9PollInterval)
 	}
-	return false
+	return k9Busy{}, false
+}
+
+// k9Busy is one observation that the system is mid-call: how many calls this
+// process had dispatched and not had back, and how many claims Postgres held
+// unanswered, at one instant.
+type k9Busy struct {
+	inFlight int64
+	claims   int
 }
 
 // freshClaims counts the claims taken inside the last k9FreshClaim that have
@@ -1559,94 +1615,178 @@ func (c *k9Campaign) awaitBusy(t *testing.T, budget time.Duration) bool {
 // kills, and asking it a question while it is down is not an error in the
 // campaign — it is an answer of "nothing is provably in flight", which is what
 // returning zero says.
-// keyedOnly restricts the count to the two tools that take an idempotency_key.
-// get_credential and retire_agent are intrinsically idempotent and claim
-// nothing, so a kill landing inside one of them leaves no claim behind and no
-// durable trace of having interrupted anything.
-func (c *k9Campaign) freshClaims(t *testing.T, keyedOnly bool) int {
+// freshClaims counts claims taken inside `within` by one of `tools` that have
+// not yet recorded a reply.
+func (c *k9Campaign) freshClaims(t *testing.T, tools []string, within time.Duration) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	tools := []string{
-		string(mcp.ToolRegisterAgent), string(mcp.ToolGetCredential),
-		string(mcp.ToolRecordEvent), string(mcp.ToolRetireAgent), string(mcp.ToolSignCommit),
-	}
-	if keyedOnly {
-		tools = []string{string(mcp.ToolRegisterAgent), string(mcp.ToolRecordEvent)}
-	}
 	var n int
 	err := c.pool.QueryRow(ctx, `
 		SELECT count(*) FROM innsegl.idempotency
 		 WHERE status = 'in_progress'
 		   AND tool = ANY($2)
 		   AND claimed_at > clock_timestamp() - ($1::bigint * interval '1 millisecond')`,
-		k9FreshClaim.Milliseconds(), tools).Scan(&n)
+		within.Milliseconds(), tools).Scan(&n)
 	if err != nil {
 		return 0
 	}
 	return n
 }
 
-// aimAtAClaimedCall guarantees the campaign's one durable witness rather than
+// liveClaimKeys is the set of keys claimed inside `within` with no reply yet —
+// the calls that are running at this instant.
+//
+// Retried like claims, and for the same reason: these two queries decide whether
+// the campaign's durable witness is recorded at all, so a connection this
+// campaign broke by killing Postgres must not silently cost it the evidence.
+func (c *k9Campaign) liveClaimKeys(t *testing.T, within time.Duration) []string {
+	t.Helper()
+	for attempt := 1; attempt <= 5; attempt++ {
+		if keys, ok := c.liveClaimKeysOnce(t, within); ok {
+			return keys
+		}
+		time.Sleep(time.Duration(attempt) * 250 * time.Millisecond)
+	}
+	return nil
+}
+
+func (c *k9Campaign) liveClaimKeysOnce(t *testing.T, within time.Duration) ([]string, bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := c.pool.Query(ctx, `
+		SELECT idempotency_key FROM innsegl.idempotency
+		 WHERE status = 'in_progress'
+		   AND claimed_at > clock_timestamp() - ($1::bigint * interval '1 millisecond')`,
+		within.Milliseconds())
+	if err != nil {
+		return nil, false
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var k string
+		if serr := rows.Scan(&k); serr != nil {
+			return nil, false
+		}
+		keys = append(keys, k)
+	}
+	if rows.Err() != nil {
+		return nil, false
+	}
+	return keys, true
+}
+
+// stillUnanswered counts how many of `keys` are still claimed with no reply.
+func (c *k9Campaign) stillUnanswered(t *testing.T, keys []string) int {
+	t.Helper()
+	if len(keys) == 0 {
+		return 0
+	}
+	for attempt := 1; attempt <= 5; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		var n int
+		err := c.pool.QueryRow(ctx, `
+			SELECT count(*) FROM innsegl.idempotency
+			 WHERE status = 'in_progress' AND idempotency_key = ANY($1)`, keys).Scan(&n)
+		cancel()
+		if err == nil {
+			return n
+		}
+		time.Sleep(time.Duration(attempt) * 250 * time.Millisecond)
+	}
+	return 0
+}
+
+// aimAtAClaimedCall guarantees the campaign's durable witness rather than
 // leaving it to luck.
 //
-// The witness is a key in innsegl.idempotency that was claimed and unanswered
-// when its holder stopped existing (ADR-0017 §5), and only a kill on the MCP
-// while it is inside register_agent or record_event produces one:
-// get_credential and retire_agent are intrinsically idempotent and claim
+// The witness is a claim that was unanswered when the process holding it ceased
+// to exist; killTarget observes it directly. Only a kill on the MCP while it is
+// inside a keyed tool can produce one — get_credential and retire_agent claim
 // nothing, and a kill on Postgres or SPIRE leaves the server alive to finish or
-// fail the call. The soak's schedule guarantees the MCP is killed, but not that
-// those two kills land inside a KEYED call — MEASURED, a full-suite run under
-// four concurrent agents produced eight well-aimed kills and no takeover, and
-// the campaign correctly refused to certify it.
+// fail the call. The schedule guarantees the MCP is killed twice, but not that
+// either kill lands inside the CLAIMED SECTION of a keyed call.
 //
-// So the window is aimed at, and the shot repeated until it lands, which is
-// test/failure/crashharness_test.go's `aim` discipline: park until a keyed call
-// has a fresh claim, fire, let the workers replay, and look. What is asserted
-// is unchanged; what is removed is the dependence on which of five tools three
-// workers happened to be inside at two arbitrary moments.
+// It did not, often enough to matter. MEASURED: with #59's suite running in the
+// same package, a whole-package run failed this gate about one run in two, while
+// the same test standalone passed every time — package-level load shifts the
+// workers' timing, and two arbitrary moments are not enough shots at a window a
+// few milliseconds wide. The gate was right to fail those runs; what was wrong
+// was leaving the window to chance.
+//
+// So it is aimed at, and the shot repeated until it lands, which is
+// test/failure/crashharness_test.go's `aim` discipline. Three things make a shot
+// land that did not before:
+//
+//   - it fires only when a REGISTER_AGENT claim is live, the one keyed tool
+//     whose claimed section contains a SPIRE round trip, so the window is tens
+//     of milliseconds rather than a few;
+//   - the claim must have been taken inside k9AimFreshness, so most of the call
+//     is still ahead of the signal rather than behind it;
+//   - the outcome is read from the rows the dead process left behind, not from a
+//     `claim_count` that only rises once some worker wins a race with its own
+//     backoff.
+//
+// An earlier version of this function was a no-op and nobody noticed, which is
+// worth recording because it is the same class of defect the whole file exists
+// to prevent: its success condition included `stranded`, the count of rows that
+// are in_progress right now — and while three workers are running that is never
+// zero, so it returned on the first check having fired nothing at all. A gate
+// that cannot fire is a gate that is not there. It now waits on counts that only
+// a kill can raise.
+//
+// What is asserted is unchanged. What is removed is the dependence on which of
+// five tools three workers happened to be inside at two arbitrary moments.
 func (c *k9Campaign) aimAtAClaimedCall(t *testing.T) {
 	t.Helper()
-	for attempt := 1; attempt <= k9AimAttempts; attempt++ {
-		if got := c.claims(t); got.takeovers+got.stranded > 0 {
-			if attempt > 1 {
-				t.Logf("the durable witness took %d aimed shot(s)", attempt-1)
+
+	witness := func() int {
+		c.mu.Lock()
+		orphaned := c.orphaned
+		c.mu.Unlock()
+		// Deliberately NOT c.claims().stranded: while the workers are running,
+		// in_progress rows are live calls and that count is never zero. Only
+		// these two can be raised by a kill and by nothing else.
+		return orphaned + c.claims(t).takeovers
+	}
+
+	shots := 0
+	for range k9AimAttempts {
+		if n := witness(); n > 0 {
+			if shots > 0 {
+				t.Logf("the durable witness took %d aimed shot(s); %d claim(s) were "+
+					"ownerless or reclaimed after their holder died", shots, n)
 			}
 			return
 		}
 		deadline := time.Now().Add(k9BusyBudget)
-		for c.freshClaims(t, true) == 0 || c.inFlight.Load() == 0 {
+		for c.freshClaims(t, k9AimTool, k9AimFreshness) == 0 || c.inFlight.Load() == 0 {
 			if time.Now().After(deadline) {
-				t.Fatalf("no keyed tool call was in flight at any point in %s, so the "+
-					"campaign could not aim at the window that leaves a durable trace "+
-					"(seed %d)", k9BusyBudget, c.seed)
+				t.Fatalf("no register_agent call held a claim taken inside the last %s at "+
+					"any point in %s, so the campaign could not aim at the window that "+
+					"leaves a durable trace (seed %d). The workload has stalled.",
+					k9AimFreshness, k9BusyBudget, c.seed)
 			}
 			time.Sleep(k9PollInterval)
 		}
-		t.Logf("aimed shot %d/%d: SIGKILL on %s while a keyed call holds a fresh claim",
-			attempt, k9AimAttempts, k9TargetMCP)
+		shots++
+		t.Logf("aimed shot %d/%d: SIGKILL on %s while a register_agent holds a claim "+
+			"taken inside the last %s", shots, k9AimAttempts, k9TargetMCP, k9AimFreshness)
 		c.killTarget(t, k9TargetMCP)
 		c.mu.Lock()
 		c.killCount++
 		c.byTarget[k9TargetMCP]++
 		c.mu.Unlock()
 		c.restoreTarget(t, k9TargetMCP)
-
-		// The takeover appears when a worker replays the key it lost. They
-		// retry on their own; this only waits for one of them to get there.
-		until := time.Now().Add(20 * time.Second)
-		for time.Now().Before(until) {
-			if got := c.claims(t); got.takeovers+got.stranded > 0 {
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
 	}
-	t.Errorf("%d aimed SIGKILLs on `innsegl serve`, every one of them fired while a "+
-		"register_agent or record_event held a claim taken inside the last %s, and not "+
-		"one of them left a reclaimed or stranded key behind (seed %d). Either the "+
-		"claim is not written before the tool runs or it is not durable across the "+
-		"process that wrote it.", k9AimAttempts, k9FreshClaim, c.seed)
+	t.Errorf("%d aimed SIGKILLs on `innsegl serve`, every one fired while a "+
+		"register_agent held a claim taken inside the last %s, and not one left a "+
+		"claim ownerless or reclaimed behind it (seed %d). Either the claim is not "+
+		"written to Postgres before the tool runs, or it does not survive the process "+
+		"that wrote it — and IP §6.6's replay contract rests on it doing both.",
+		shots, k9AimFreshness, c.seed)
 }
 
 // k9Claims is what innsegl.idempotency holds after the soak, which is the
@@ -1665,31 +1805,69 @@ type k9Claims struct {
 	maxClaims int
 }
 
+// claims reads the campaign's durable record of what the kills interrupted.
+//
+// RETRIED, because Postgres is one of the things this campaign kills. A pool
+// holding connections to the server when it was SIGKILLed hands the first
+// caller after the restart a dead one; pgxpool discards it and dials again, but
+// that caller still sees the corpse. MEASURED, seed 1788310868531445000: a whole
+// run failed on "reading innsegl.idempotency: unexpected EOF", one query after
+// an eighth kill that had been on Postgres. That is the campaign failing to read
+// a database it had itself just restarted — not a finding about the system — and
+// a chaos test that cannot survive its own chaos is measuring its own plumbing.
 func (c *k9Campaign) claims(t *testing.T) k9Claims {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	var out k9Claims
-	err := c.pool.QueryRow(ctx, `
-		SELECT count(*),
-		       count(*) FILTER (WHERE claim_count > 1),
-		       count(*) FILTER (WHERE status = 'in_progress'),
-		       coalesce(max(claim_count), 0)
-		  FROM innsegl.idempotency`).
-		Scan(&out.rows, &out.takeovers, &out.stranded, &out.maxClaims)
-	if err != nil {
-		t.Fatalf("reading innsegl.idempotency: %v", err)
+	var last error
+	for attempt := 1; attempt <= 5; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		var out k9Claims
+		err := c.pool.QueryRow(ctx, `
+			SELECT count(*),
+			       count(*) FILTER (WHERE claim_count > 1),
+			       count(*) FILTER (WHERE status = 'in_progress'),
+			       coalesce(max(claim_count), 0)
+			  FROM innsegl.idempotency`).
+			Scan(&out.rows, &out.takeovers, &out.stranded, &out.maxClaims)
+		cancel()
+		if err == nil {
+			return out
+		}
+		last = err
+		time.Sleep(time.Duration(attempt) * 250 * time.Millisecond)
 	}
-	return out
+	t.Fatalf("reading innsegl.idempotency, after 5 attempts (seed %d): %v", c.seed, last)
+	return k9Claims{}
 }
 
+// killTarget destroys one component and — for the MCP — measures what its death
+// left behind, while it is still lying there.
+//
+// That measurement is the campaign's strongest witness, and it is an
+// OBSERVATION rather than an inference. Immediately before the signal it lists
+// the keys claimed with no reply recorded: those are the calls running inside
+// the process about to die. `kill` returns only after wait(2) has confirmed the
+// process died OF SIGKILL and reaped it, so when the second query runs there is
+// no `innsegl serve` in existence at all — and any of those keys still marked
+// in_progress is a claim whose owner was destroyed mid-call, which nothing can
+// complete except a replay.
+//
+// This replaced waiting for `claim_count` to reach 2, which needs some worker to
+// win a race with its own backoff before anybody looks. That was the campaign's
+// only durable witness and it was probabilistic: with #59's suite running in the
+// same package it failed about one whole-package run in two.
 func (c *k9Campaign) killTarget(t *testing.T, target string) {
 	t.Helper()
 	if target == k9TargetMCP {
 		c.mu.Lock()
 		d := c.daemon
 		c.mu.Unlock()
+		running := c.liveClaimKeys(t, k9FreshClaim)
 		d.kill(t)
+		if n := c.stillUnanswered(t, running); n > 0 {
+			c.mu.Lock()
+			c.orphaned += n
+			c.mu.Unlock()
+		}
 		return
 	}
 	name := c.containerFor(t, target)
@@ -1925,11 +2103,12 @@ func (c *k9Campaign) evidence(t *testing.T) k9Evidence {
 	ev := k9Evidence{
 		kills:               c.killCount,
 		byTarget:            maps.Clone(c.byTarget),
-		idleKills:           c.idleKills,
+		authorised:          c.authorised,
 		dispatched:          c.dispatched.Load(),
 		interrupted:         c.interrupted.Load(),
 		invariantViolations: c.invariants,
 		firstInvariant:      c.firstInvariant,
+		orphaned:            c.orphaned,
 	}
 	c.mu.Unlock()
 	ev.claims = c.claims(t)

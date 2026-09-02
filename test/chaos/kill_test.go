@@ -40,16 +40,18 @@ import (
 //     satisfied by a row an earlier kill left behind. A strike that fires
 //     without both is counted as an idle kill and the campaign fails on it.
 //
-//     Afterwards the campaign reads innsegl.idempotency and counts the keys
-//     whose `claim_count` reached 2 or more. ADR-0017 §5 makes a second claim
-//     the trace of a replica that stopped existing while holding the first, so
-//     that count is durable proof, recovered from the database rather than
-//     inferred from when a signal was sent, that a kill landed between a claim
-//     and its reply. The campaign FAILS if it is zero. "The test called kill"
-//     and "a kill interrupted a write" are different claims, and only the
-//     second is OPS-003's. MEASURED on the committed tree, seed
-//     1788306719298575000: 4,537 calls dispatched, 8 kills evenly across the
-//     four components, 0 idle, 9 keys reclaimed after a holder died.
+//     Afterwards the campaign reads innsegl.idempotency for a claim that was
+//     unanswered when the process holding it had provably ceased to exist —
+//     killTarget lists the running claims, SIGKILLs the MCP, waits for wait(2)
+//     to confirm the death, and reads the same keys back with no `innsegl serve`
+//     left in existence to complete them. A key another caller had to reclaim
+//     (ADR-0017 §5's claim_count above 1) and a claim nobody came back for count
+//     equally; all three are one event seen three ways. The campaign FAILS if
+//     the total is zero. "The test called kill" and "a kill interrupted a write"
+//     are different claims, and only the second is OPS-003's.
+//
+//     That window is AIMED at rather than hoped for — see aimAtAClaimedCall,
+//     and the measurement that made it necessary.
 //
 //  2. THE SWEEP IS SHOWN TO FAIL. Every check below is a named function over
 //     gathered state, and the last subtest runs those same functions over
@@ -95,10 +97,12 @@ func TestOPS003KillNineFuzzSoakAcrossEveryComponent(t *testing.T) {
 	t.Run("the soak interrupted work that was genuinely in flight", func(t *testing.T) {
 		ev := c.evidence(t)
 		t.Logf("seed %d: %d kills across %v; %d calls dispatched, %d interrupted "+
-			"mid-call; innsegl.idempotency holds %d key(s), %d reclaimed after a "+
-			"holder died (deepest %d claims), %d still stranded in flight",
+			"mid-call; innsegl.idempotency holds %d key(s), of which %d were "+
+			"ownerless at the instant their holder was destroyed, %d were reclaimed "+
+			"afterwards (deepest %d claims), and %d are still stranded",
 			c.seed, ev.kills, ev.byTarget, ev.dispatched, ev.interrupted,
-			ev.claims.rows, ev.claims.takeovers, ev.claims.maxClaims, ev.claims.stranded)
+			ev.claims.rows, ev.orphaned, ev.claims.takeovers, ev.claims.maxClaims,
+			ev.claims.stranded)
 
 		if ev.kills == 0 {
 			t.Fatalf("the soak landed no kills at all (seed %d). OPS-003 is a claim about "+
@@ -111,34 +115,42 @@ func TestOPS003KillNineFuzzSoakAcrossEveryComponent(t *testing.T) {
 					"\"across all components\"", target, c.seed)
 			}
 		}
-		if ev.idleKills != 0 {
-			t.Errorf("%d of %d kills were fired with nothing provably in flight (seed "+
-				"%d). The killer parks until Postgres holds a claim taken inside the "+
-				"last %s with no reply recorded AND this process has a call it has not "+
-				"had back; a kill that went out without both is a kill on an idle "+
-				"system, and a soak of those would find nothing broken because nothing "+
-				"was happening.", ev.idleKills, ev.kills, c.seed, k9FreshClaim)
+		// Every kill must have been fired on an observation of work in flight.
+		// The killer refuses to shoot without one — it waits, and stops the
+		// campaign if the workload never comes back — so this is the assertion
+		// that the refusal is actually wired up rather than commented.
+		if ev.authorised != ev.kills {
+			t.Errorf("%d of %d kills were not authorised by an observation of work in "+
+				"flight (seed %d). The killer is supposed to park until Postgres holds "+
+				"a claim taken inside the last %s with no reply recorded AND this "+
+				"process has a call it has not had back; a kill fired without both is "+
+				"a kill on an idle system, and a soak of those would find nothing "+
+				"broken because nothing was happening.",
+				ev.kills-ev.authorised, ev.kills, c.seed, k9FreshClaim)
 		}
 		if ev.interrupted == 0 {
 			t.Errorf("no dispatched call was ever interrupted (seed %d): every one of "+
 				"%d calls returned normally. Either the kills missed or the workload "+
 				"was not calling anything.", c.seed, ev.dispatched)
 		}
-		// The durable half, and the one that cannot be argued with. ADR-0017 §5:
-		// claim_count above 1 means a lease ran out and another caller took the
-		// claim over, and the only thing that leaves a claim behind is a process
-		// that stopped existing while holding it. Whether the retaker was a
-		// worker retrying mid-soak or the settle pass afterwards does not change
-		// what it proves — that the key was claimed, unanswered, and ownerless,
-		// which is a kill that landed between a claim and its reply. Read out of
-		// Postgres after the fact, never inferred from when a signal was sent.
-		if ev.claims.takeovers+ev.claims.stranded == 0 {
-			t.Errorf("not one claim in innsegl.idempotency was reclaimed or stranded "+
-				"(seed %d): every one of %d keys has claim_count = 1 and a recorded "+
-				"reply. No kill provably landed between a claim and its reply, so the "+
-				"soak may have killed only processes that were waiting rather than "+
-				"writing, and every assertion below would be about an undisturbed "+
-				"system.", c.seed, ev.claims.rows)
+		// The durable half, and the one that cannot be argued with: a claim
+		// observed unanswered at the instant the process holding it had provably
+		// ceased to exist (killTarget reads the rows after wait(2) confirms the
+		// SIGKILL), a key another caller had to reclaim afterwards (ADR-0017 §5's
+		// claim_count above 1), or a claim nobody ever came back for. Each is a
+		// kill that landed between a claim and its reply, recovered from Postgres
+		// after the fact rather than inferred from when a signal was sent.
+		//
+		// aimAtAClaimedCall guarantees this rather than hoping for it, so a zero
+		// here is not bad luck — it is the claim not surviving the process that
+		// wrote it, and IP §6.6's replay contract rests on it doing so.
+		if ev.witnessed() == 0 {
+			t.Errorf("not one claim in innsegl.idempotency was ownerless, reclaimed or "+
+				"stranded (seed %d): every one of %d keys has claim_count = 1 and a "+
+				"recorded reply, including after every aimed shot. No kill provably "+
+				"landed between a claim and its reply, so the soak may have killed only "+
+				"processes that were waiting rather than writing, and every assertion "+
+				"below would be about an undisturbed system.", c.seed, ev.claims.rows)
 		}
 		if ev.invariantViolations != 0 {
 			t.Errorf("the server answered INVARIANT_VIOLATION %d time(s) during the soak "+
