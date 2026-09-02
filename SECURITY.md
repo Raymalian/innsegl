@@ -64,3 +64,19 @@ with the supported lines at that point.
 Releases are signed with the project's own tooling; the release page
 documents the expected signing identity. An unsigned or mismatched release
 artifact is itself a security event — report it.
+
+## The project's canonical names
+
+Innsegl publishes under exactly the names enumerated in
+`namespace/canonical-names.txt` — the Go module path, the CLI binary, the MCP
+server name, the npm package and `@innsegl` scope, the PyPI project, the
+domain, and this repository. That file is the single authority; anything not
+in it is not ours.
+
+Squatting or typosquatting the namespace of an attribution tool poisons the
+supply chain of the one project whose product is supply-chain truth, so **a
+package published under the project's name that is not linked from this
+repository is a security report, not a nuisance**. Report it through the
+channel above, and to the registry hosting it. The same applies to any host
+serving `innsegl.dev` content or a trust bundle for `spiffe://innsegl.dev`
+that this repository does not point at.

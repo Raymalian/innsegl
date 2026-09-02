@@ -1,0 +1,22 @@
+# Cloudflare Pages response headers for innsegl.dev (RM-058, #66).
+
+/*
+  # The site is HTML and CSS from this origin and nothing else. `default-src
+  # 'none'` is what makes that a property of the deployment rather than a
+  # promise in a comment: no script can execute on these pages even if one is
+  # someday pasted in, which is the same argument ADR-0038 made for deleting
+  # Tailwind's colour defaults instead of writing a lint rule about them.
+  Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  # All of .dev is in the HSTS preload list, so browsers already refuse plain
+  # HTTP for this host before the first request. This header adds nothing for
+  # a browser; it is here for the non-browser clients that read it and for the
+  # subdomains doc 05 §3 will add later, none of which may ever be plaintext.
+  Strict-Transport-Security: max-age=63072000; includeSubDomains
+
+/innsegl
+  # The go-import tag is a pointer to where the source lives. If that ever
+  # moves, a stale cache is a toolchain resolving to the wrong repository, so
+  # this one page is cached in minutes rather than in days.
+  Cache-Control: public, max-age=300

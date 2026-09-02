@@ -1,0 +1,248 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * Page styles for the innsegl.dev root site (RM-058, #66).
+ *
+ * Every colour, size, space and radius below is a reference into
+ * tokens.css — a byte-identical copy of web/src/tokens/tokens.css, which
+ * ADR-0038 decision 2 makes the single source of truth for the design
+ * language, deliberately expressed as plain CSS with no build step so that a
+ * page like this one can load it directly.
+ *
+ * There is no raw hex in this file, and web/site/check-site.sh fails the build
+ * if one appears. In particular there is no green: doc 06 §5.3 spends the
+ * verification family on cryptographic verification and on nothing else, and
+ * this page verifies nothing — it is a project page. The accent is indigo,
+ * which is what a link is allowed to be.
+ *
+ * ADR-0038 argued that a single-purpose page "takes no component library at
+ * all — it is HTML plus tokens.css, no React, no Lit, no framework runtime".
+ * That argument was written about the public verification page and applies
+ * here unchanged, which is why this site is seven static files.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--innsegl-color-surface-page);
+  color: var(--innsegl-color-text-primary);
+  font-family: var(--innsegl-font-family-sans);
+  font-size: var(--innsegl-font-size-prose);
+  line-height: var(--innsegl-line-height-prose);
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+
+.page {
+  max-width: var(--innsegl-layout-prose-max);
+  margin: 0 auto;
+  padding: var(--innsegl-space-7) var(--innsegl-space-5) var(--innsegl-space-8);
+}
+
+.page--narrow {
+  max-width: 56ch;
+}
+
+section {
+  margin-block-start: var(--innsegl-space-7);
+}
+
+/* ── Type ────────────────────────────────────────────────────────────────── */
+
+.eyebrow {
+  margin: 0 0 var(--innsegl-space-4);
+  font-size: var(--innsegl-font-size-micro);
+  font-weight: var(--innsegl-font-weight-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--innsegl-color-text-muted);
+}
+
+h1,
+.display {
+  margin: 0;
+  font-size: var(--innsegl-font-size-display);
+  font-weight: var(--innsegl-font-weight-semibold);
+  line-height: var(--innsegl-line-height-tight);
+  letter-spacing: var(--innsegl-letter-spacing-display);
+}
+
+h2 {
+  margin: 0 0 var(--innsegl-space-3);
+  font-size: var(--innsegl-font-size-heading);
+  font-weight: var(--innsegl-font-weight-semibold);
+  line-height: var(--innsegl-line-height-tight);
+}
+
+h3 {
+  margin: var(--innsegl-space-5) 0 var(--innsegl-space-2);
+  font-size: var(--innsegl-font-size-prose);
+  font-weight: var(--innsegl-font-weight-semibold);
+}
+
+p {
+  margin: 0 0 var(--innsegl-space-4);
+}
+
+.lede {
+  margin-block-start: var(--innsegl-space-4);
+  color: var(--innsegl-color-text-secondary);
+}
+
+.tagline {
+  margin-block-start: var(--innsegl-space-3);
+  font-size: var(--innsegl-font-size-prose);
+  color: var(--innsegl-color-text-secondary);
+}
+
+small,
+.footnote {
+  font-size: var(--innsegl-font-size-body);
+  color: var(--innsegl-color-text-muted);
+}
+
+/* ── Links ───────────────────────────────────────────────────────────────── */
+
+a {
+  color: var(--innsegl-color-accent-text);
+  text-underline-offset: 0.15em;
+}
+
+a:hover {
+  text-decoration-thickness: var(--innsegl-border-width-emphasis);
+}
+
+a:focus-visible {
+  outline: var(--innsegl-focus-ring-width) solid var(--innsegl-color-focus-ring);
+  outline-offset: var(--innsegl-focus-ring-offset);
+  border-radius: var(--innsegl-radius-sm);
+}
+
+/* ── Code ────────────────────────────────────────────────────────────────── */
+
+code,
+kbd,
+pre {
+  font-family: var(--innsegl-font-family-mono);
+  font-variant-numeric: var(--innsegl-font-variant-numeric-tabular);
+}
+
+code {
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  margin: 0 0 var(--innsegl-space-4);
+  padding: var(--innsegl-space-4);
+  background: var(--innsegl-color-surface-sunken);
+  border: var(--innsegl-border-width-hairline) solid var(--innsegl-color-border-hairline);
+  border-radius: var(--innsegl-radius-md);
+  font-size: var(--innsegl-font-size-body);
+  line-height: var(--innsegl-line-height-default);
+  overflow-x: auto;
+}
+
+pre code {
+  font-size: inherit;
+}
+
+/* ── Lists ───────────────────────────────────────────────────────────────── */
+
+ul,
+ol {
+  margin: 0 0 var(--innsegl-space-4);
+  padding-inline-start: var(--innsegl-space-5);
+}
+
+li {
+  margin-block-end: var(--innsegl-space-2);
+}
+
+.links {
+  list-style: none;
+  padding-inline-start: 0;
+}
+
+/* ── Panels ──────────────────────────────────────────────────────────────── */
+
+.panel {
+  margin: var(--innsegl-space-5) 0;
+  padding: var(--innsegl-density-panel-padding);
+  background: var(--innsegl-color-surface-default);
+  border: var(--innsegl-border-width-hairline) solid var(--innsegl-color-border-hairline);
+  border-radius: var(--innsegl-radius-md);
+}
+
+/*
+ * The status panel. doc 06 §5.3 assigns "we could not fully check this" to the
+ * degraded family, and pre-1.0 software whose claims are not yet demonstrable
+ * end to end is exactly that reading — it is not a failure and it is certainly
+ * not a verification. The left rule carries the weight; the panel is not a
+ * filled banner, which §5.3 reserves for an integrity alert.
+ */
+.panel--status {
+  border-inline-start: var(--innsegl-border-width-emphasis) solid var(--innsegl-color-degraded-border);
+}
+
+.panel--status h2 {
+  color: var(--innsegl-color-degraded-text);
+}
+
+.panel :last-child {
+  margin-block-end: 0;
+}
+
+/* ── Definition rows ─────────────────────────────────────────────────────── */
+
+.facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--innsegl-density-table-cell-y) var(--innsegl-density-table-cell-x);
+  font-size: var(--innsegl-font-size-body);
+}
+
+.facts dt {
+  font-weight: var(--innsegl-font-weight-medium);
+  color: var(--innsegl-color-text-secondary);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+@media (max-width: 30rem) {
+  .facts {
+    grid-template-columns: 1fr;
+    gap: var(--innsegl-space-1);
+  }
+
+  .facts dd {
+    margin-block-end: var(--innsegl-space-3);
+  }
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+
+footer {
+  margin-block-start: var(--innsegl-space-8);
+  padding-block-start: var(--innsegl-space-5);
+  border-top: var(--innsegl-border-width-hairline) solid var(--innsegl-color-border-hairline);
+  font-size: var(--innsegl-font-size-body);
+  color: var(--innsegl-color-text-muted);
+}
+
+footer p {
+  margin-block-end: var(--innsegl-space-2);
+}
