@@ -16,11 +16,51 @@ doc 05 §1's other seven rows, none of which existed as a compose service before
 | `innsegl-dashboard` | service, **UI half only** | the BFF has no `cmd/` entry point — see below |
 | `demo-agent` | service, `--profile demo` | a curl MCP client; runs to completion |
 
-Three services here are not doc 05 §1 rows. `innsegl-db-init` and
-`innsegl-object-init` are one-shots that exist for the same reason
-`spire-bootstrap` does — something has to run once, before anything else.
-`innsegl-canary` (`--profile canary`) is doc 05 §2's requirement that SEG-005's
-deletion check "runs as a scheduled job in production, not only at deploy".
+Four services here are not doc 05 §1 rows. `innsegl-db-init`,
+`innsegl-object-init` and `innsegl-identity-init` are one-shots that exist for
+the same reason `spire-bootstrap` does — something has to run once, before
+anything else. `innsegl-canary` (`--profile canary`) is doc 05 §2's requirement
+that SEG-005's deletion check "runs as a scheduled job in production, not only
+at deploy".
+
+---
+
+## This deployment's pseudonymisation secret
+
+**This is the part of #124 that is a privacy control rather than plumbing.**
+
+`innsegl serve` defaults to `-identity-mode pseudonymous`, and in that mode
+`internal/identity` refuses to start without a deployment secret of at least
+16 bytes. #119 introduced that refusal deliberately — #116 chose it over a
+silent fall back to literal values, which would have read as "private" while
+every ticket reference went into Rekor — and this file was not updated to
+supply one, so `innsegl-mcp` crashlooped on a clean `up`.
+
+The fix is not a constant in `innsegl.yml`, and that is the whole of the
+reasoning. A pseudonym is `HMAC(deployment_secret, field ‖ ":" ‖ value)`, so a
+secret shipped in this repository would give **every deployment the same
+pseudonyms**: `a7f3c91b` would mean one particular ticket reference in every
+installation, and anyone who resolved one mapping — by registering one run
+against their own copy of this stack — would hold it for everybody else's. That
+is worse than not pseudonymising at all, because it looks private and is not.
+
+| | |
+|---|---|
+| [`identity-init.sh`](identity-init.sh) | `openssl rand -hex 32` into the `innsegl-identity-secret` volume, **only if absent**; `network_mode: none`, `read_only: true`, the only rw mount of that volume anywhere |
+| `innsegl-mcp` | gates on its completion and reads the file through `INNSEGL_IDENTITY_SECRET_FILE`, mounted read-only |
+
+An existing secret is left alone, because pseudonyms must be stable: `down -v`
+is the only rotation, exactly as for the Fulcio CA and the Rekor log key.
+ADR-0041 records that a rotation is survivable — resolution goes through the
+ledger's `run_registered` row and never through this key, so no history is
+orphaned — but a secret regenerated under a live run would derive a *second*
+SPIFFE ID for a run id SPIRE already holds an entry for.
+
+The path is read from a file rather than a value because compose can mount a
+volume and cannot read one into an environment variable; that is
+`INNSEGL_MCP_SVID_FILE`'s convention, joined rather than re-invented. Supplying
+both `INNSEGL_IDENTITY_SECRET` and `INNSEGL_IDENTITY_SECRET_FILE` is refused
+rather than resolved in favour of one.
 
 ---
 
@@ -197,6 +237,10 @@ mergeable are deliberately not:
 The MCP is on no network with MinIO. The dashboard is on no network with the
 MCP — one shared frontend network would give it a route to the write surface,
 which is the one thing doc 05 §1's dashboard note forbids.
+
+`innsegl-identity-init` is on no network at all — `network_mode: none`, which
+costs zero of #100's twenty-nine. It generates key material and writes a file;
+nothing it does requires reaching anything, so nothing can reach it either.
 
 MEASURED: this file adds exactly five networks (17 -> 22 on a machine already
 running the two dependency stacks and one test harness). The full reference

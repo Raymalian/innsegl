@@ -100,6 +100,15 @@ const (
 	envIdentityMode   = "INNSEGL_IDENTITY_MODE"
 	envIdentitySecret = "INNSEGL_IDENTITY_SECRET" //nolint:gosec // the NAME of the variable, not a secret
 
+	// envIdentitySecretFile names the FILE the secret is in, and exists
+	// because a deployment cannot use the variable above (RM-084, #124).
+	// Compose can mount a volume and it cannot read one into an environment
+	// variable, so a stack that generates its own secret — which is the only
+	// way each deployment gets a different one — has nothing to put in
+	// $INNSEGL_IDENTITY_SECRET. This is `INNSEGL_MCP_SVID_FILE`'s convention,
+	// joined rather than re-invented.
+	envIdentitySecretFile = "INNSEGL_IDENTITY_SECRET_FILE" //nolint:gosec // the NAME of the variable, not a secret
+
 	// sign_commit (RM-033, #41). Every one of these is opt-in: the tool is
 	// bound unconditionally — it is one of IP §4's five — and is CONFIGURED
 	// only when a workspace is named, because a deployment without a gitsign
@@ -175,8 +184,14 @@ type serveOptions struct {
 	migrate     bool
 
 	// Identity mode and its secret (RM-079, #116). See serveOptions.pseudonyms.
-	identityMode   string
-	identitySecret string
+	//
+	// identitySecretFile is the other way of supplying the same secret
+	// (RM-084, #124). It is resolved INTO identitySecret before validate runs,
+	// so everything downstream — pseudonyms(), the wiring, the start-up log —
+	// sees one field and cannot be written to prefer a source.
+	identityMode       string
+	identitySecret     string
+	identitySecretFile string
 }
 
 // pseudonyms builds what decides whether the SPIFFE ID — and so the Fulcio
@@ -189,6 +204,62 @@ type serveOptions struct {
 // package.
 func (o serveOptions) pseudonyms() (*identity.Pseudonymiser, error) {
 	return identity.New(identity.Mode(o.identityMode), o.identitySecret)
+}
+
+// resolveIdentitySecret reads -identity-secret-file into identitySecret, or
+// reports the configuration problem that stops the server starting (RM-084,
+// #124).
+//
+// # Why a file at all
+//
+// A pseudonym is deployment-scoped by construction, so each deployment must
+// mint its own secret, so the shipped compose stack generates one into a
+// volume — and compose can mount a volume but cannot read one into an
+// environment variable. Without this the only way to configure the stack was a
+// constant in a tracked file, which would have given every deployment the same
+// pseudonyms.
+//
+// # Why BOTH is refused rather than resolved
+//
+// Two disagreeing sources and a rule about which wins is a configuration that
+// quietly does something other than what it says. That is precisely how #124
+// shipped: `-identity-mode` said `pseudonymous`, the stack supplied no secret,
+// and nothing reconciled the two until the container was already crashlooping.
+// A deployment that names two secrets does not know which one it means, and
+// guessing for it would make the wrong pseudonyms — permanently, and silently,
+// since every one of them is still a valid eight hex characters.
+//
+// # Whitespace
+//
+// Trimmed, because every way of writing a key file ends it with a newline:
+// `openssl rand -hex 32 > secret`, a heredoc, an editor. A secret one byte
+// longer than the operator believes changes every pseudonym this deployment
+// mints, and would look like nothing at all.
+func (o *serveOptions) resolveIdentitySecret() string {
+	if o.identitySecretFile == "" {
+		return ""
+	}
+	if o.identitySecret != "" {
+		return "-identity-secret and -identity-secret-file (or $" + envIdentitySecret +
+			" and $" + envIdentitySecretFile + ") are both set: two sources for one " +
+			"secret is a configuration that can disagree with itself, and choosing " +
+			"between them would key every pseudonym with a value the deployment did " +
+			"not mean to use. Supply exactly one"
+	}
+	body, err := os.ReadFile(o.identitySecretFile)
+	if err != nil {
+		return "-identity-secret-file (or $" + envIdentitySecretFile + "): " + err.Error() +
+			". A deployment that generates the secret into a volume must run that " +
+			"one-shot to completion before this process starts"
+	}
+	secret := strings.TrimSpace(string(body))
+	if secret == "" {
+		return "-identity-secret-file (or $" + envIdentitySecretFile + ") " +
+			o.identitySecretFile + " holds no secret: an empty or half-written file " +
+			"must not become a zero-length key"
+	}
+	o.identitySecret = secret
+	return ""
 }
 
 // serveLog is the server's log. It is structured because a deployment ships
@@ -424,6 +495,11 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 				"It is needed to CREATE a pseudonym and never to resolve one: resolution goes "+
 				"through the ledger's run_registered row, so losing or rotating this does not "+
 				"orphan history ($"+envIdentitySecret+")")
+		identitySecretFile = fs.String("identity-secret-file", os.Getenv(envIdentitySecretFile),
+			"file holding that secret, for a deployment that generates one into a volume "+
+				"and so has nothing to put in the variable above. Leading and trailing "+
+				"whitespace is not part of the key. Setting both this and -identity-secret "+
+				"is refused ($"+envIdentitySecretFile+")")
 		migrate = fs.Bool("migrate", envBool(envMigrate, false),
 			"apply the ledger migrations before serving; a deployment normally runs them as its "+
 				"own step ($"+envMigrate+")")
@@ -474,6 +550,14 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		sessionTimeout: *sessionTimeout, shutdownTimeout: *shutdownTimeout,
 		healthTimeout: *healthTimeout, requireRole: *requireRole, migrate: *migrate,
 		identityMode: *identityMode, identitySecret: *identitySecret,
+		identitySecretFile: *identitySecretFile,
+	}
+	// Before validate, because validate builds a Pseudonymiser out of the
+	// resolved secret and would otherwise refuse a deployment that supplied
+	// one perfectly well — on a volume.
+	if problem := o.resolveIdentitySecret(); problem != "" {
+		fprintf(stderr, "innsegl serve: %s\n", problem)
+		return serveOptions{}, exitUsage, false
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl serve: %s\n", problem)
@@ -540,8 +624,9 @@ func (o serveOptions) validate() string {
 	// set no secret is refused here rather than starting with the ticket
 	// references going into Rekor.
 	if _, err := o.pseudonyms(); err != nil {
-		return "-identity-mode / -identity-secret (or $" + envIdentityMode + " / $" +
-			envIdentitySecret + "): " + err.Error()
+		return "-identity-mode / -identity-secret / -identity-secret-file (or $" +
+			envIdentityMode + " / $" + envIdentitySecret + " / $" + envIdentitySecretFile +
+			"): " + err.Error()
 	}
 	// One credential, and exactly one way of getting it. See servewiring.go.
 	files := 0
