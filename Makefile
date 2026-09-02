@@ -21,7 +21,9 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 COVERPROFILE := cover.out
 
 .PHONY: all build test lint cover smoke smoke-down spire-up spire-verify \
-        spire-down sigstore-up sigstore-verify sigstore-down clean
+        spire-down sigstore-up sigstore-verify sigstore-down \
+        innsegl-up innsegl-verify innsegl-canary innsegl-demo \
+        innsegl-verify-commit innsegl-down innsegl-stack-clean clean
 
 all: build test lint
 
@@ -69,6 +71,8 @@ spire-down:
 # stops the two stacks booting in disagreement.
 # ---------------------------------------------------------------------------
 INNSEGL_SPIRE_JWT_ISSUER ?= http://spire-oidc:8080
+# The tag deploy/compose/innsegl.yml builds and register.sh registers.
+INNSEGL_IMAGE ?= innsegl:local
 
 ## sigstore-up: boot SPIRE and the local Fulcio/Rekor pair, wired to each other
 sigstore-up:
@@ -116,16 +120,115 @@ sigstore-down:
 # ---------------------------------------------------------------------------
 
 ## smoke: the fresh-clone contract — boot, run the demo agent, verify detached
-smoke:
+smoke: innsegl-stack-clean
 	go test ./test/smoke -run TestOPS004 -count=1 -v -timeout 40m
 
+# `make smoke` owns the shipped compose projects for the length of a run, and
+# since RM-076 (#109) there are THREE of them rather than two.
+#
+# MEASURED, and it is why this prerequisite exists: `innsegl-mcp` mounts
+# spire.yml's Workload API socket volume, because doc 05 §1 makes it an
+# attested workload. A container holding that volume — running or merely
+# stopped — makes the SPIRE project's `down -v` unable to remove it, and
+# OPS-004 then fails, correctly and confusingly:
+#
+#   volumes from a previous run survived `down -v`:
+#   [innsegl-spire_spire-agent-socket]
+#
+# OPS-004 itself removes only the two projects it knows about, and it is
+# test/smoke's file. Removing the third here is what keeps `make smoke` the one
+# command an adopter can always run — the promise doc 08 measures a release
+# against. Errors are ignored: on a machine with no Docker, or with no innsegl
+# stack, there is nothing to remove and that is not a failure.
+innsegl-stack-clean:
+	-@INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  INNSEGL_SPIRE_PARENT_ID=unset \
+	  $(INNSEGL_COMPOSE) --profile demo --profile canary down -v \
+	  --remove-orphans >/dev/null 2>&1 || true
+
 ## smoke-down: remove what a kept `make smoke` stack left behind
-smoke-down:
+smoke-down: innsegl-stack-clean
 	-docker rm --force --volumes innsegl-smoke-mcp innsegl-smoke-ledger-relay innsegl-smoke-postgres
 	-docker network rm innsegl-smoke-ledger
 	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  docker compose -f deploy/compose/sigstore.yml down -v
 	-docker compose -f deploy/compose/spire.yml --profile verify down -v
+
+# ---------------------------------------------------------------------------
+# The components this project IS (RM-076, #109).
+#
+# doc 05 §1 lists twelve services. spire.yml and sigstore.yml are the five
+# dependency rows; innsegl.yml is the other seven — postgres, minio, the MCP,
+# the reconciler, the sealer, the dashboard and the demo agent — and until #109
+# none of them existed as a compose service.
+#
+# These targets sit on top of the sigstore ones rather than replacing them: the
+# innsegl stack attaches to networks and a volume the other two own, so it
+# cannot be brought up on its own and says so if you try.
+# ---------------------------------------------------------------------------
+
+INNSEGL_COMPOSE := docker compose -f deploy/compose/innsegl.yml
+
+# The repository the demo agent commits into, as doc 02 §5 spells a repo: an
+# identifier, resolved beneath the deployment's workspace root.
+DEMO_REPO ?= github.com/innsegl-demo/scratch
+
+## innsegl-up: build the images, register the MCP, and boot the seven rows
+innsegl-up: sigstore-up
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) build
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  deploy/compose/spire/register.sh
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) up -d
+
+## innsegl-verify: ask the server what the MCP's database credential can do
+#
+# doc 05 §1 requires a role that appends and cannot delete. This does not read
+# the GRANTs, it attempts the writes and classifies the refusals by SQLSTATE —
+# see deploy/compose/innsegl/verify-role.sh for why a check that asked "did it
+# fail?" would pass the database owner. It writes nothing: every probe runs in
+# a transaction that is rolled back.
+innsegl-verify:
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  $(INNSEGL_COMPOSE) run --rm --entrypoint sh innsegl-db-init \
+	  /innsegl/init/verify-role.sh
+
+## innsegl-canary: SEG-005 — prove the object store refuses to delete a segment
+innsegl-canary:
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  $(INNSEGL_COMPOSE) --profile canary run --rm innsegl-canary
+
+## innsegl-demo: register an identity, sign a commit under it, retire it
+innsegl-demo:
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  $(INNSEGL_COMPOSE) --profile demo run --rm demo-agent
+
+## innsegl-verify-commit: verify a commit with NO route to the ledger
+#
+# COMMIT=<sha> is required; `make innsegl-demo` prints the one it just signed.
+#
+# This is VER-001's independence property, run the way doc 05 §1's smoke
+# describes it: a container joined ONLY to the Sigstore stack's published
+# network, holding a read-only copy of the working tree and no database
+# credential of any kind. It is on none of the three ledger networks, so the
+# ledger is not merely unused — it is unreachable.
+innsegl-verify-commit:
+	@test -n "$(COMMIT)" || { \
+	  echo 'usage: make innsegl-verify-commit COMMIT=<sha> [DEMO_REPO=host/org/name]'; \
+	  exit 2; }
+	docker run --rm \
+	  --network innsegl-sigstore-published \
+	  --user 1000:1000 \
+	  --volume innsegl-core_innsegl-workspace:/work:ro \
+	  --env INNSEGL_FULCIO_URL=http://fulcio:5555 \
+	  --env INNSEGL_REKOR_URL=http://rekor:3000 \
+	  --env INNSEGL_OIDC_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  $(INNSEGL_IMAGE) verify $(COMMIT) -repo /work/$(DEMO_REPO)
+
+## innsegl-down: tear the innsegl stack down, volumes included
+innsegl-down:
+	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  INNSEGL_SPIRE_PARENT_ID=unset \
+	  $(INNSEGL_COMPOSE) --profile demo --profile canary down -v
 
 ## clean: remove build and coverage artefacts
 clean:

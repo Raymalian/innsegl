@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build context for the Dockerfiles at the repository root and under
+# deploy/docker/ (RM-076, #109).
+#
+# The Go build needs the module and its sources and nothing else; the dashboard
+# build needs web/ and nothing else. Everything below is either large, secret,
+# or a host artifact that must never end up in an image — and a build context
+# is uploaded to the daemon whole, so an exclusion here is a real cost saved
+# and not tidiness.
+
+.git
+.github
+.claude
+.codemap
+.wave-guard
+.wrangler
+
+# docs/ is local-only and never published (see .claude/CLAUDE.md); it has no
+# business in a build context that produces a distributable image.
+docs
+runbooks
+reviews
+
+# Host build artifacts. `innsegl` is `make build`'s output and would shadow
+# nothing, but copying a darwin binary into a linux image context is pure
+# waste; cover.out likewise.
+innsegl
+innsegl-stub
+cover.out
+
+# The dashboard's dependencies and its previous build. Both are regenerated
+# inside the image from package-lock.json, and node_modules is by far the
+# largest directory in the tree.
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report
+
+**/.DS_Store
