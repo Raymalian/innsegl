@@ -62,6 +62,7 @@ maintainer ask "why is it like this?"
 | [0037](0037-gate-i6-over-the-repositorys-own-commits-and-date-the-empirical-half.md) | Gate I6 over every commit the repository already has, refuse a shallow clone, and make GH-001's run date a tracked artefact that expires | accepted | 2026-08-30 |
 | [0038](0038-headless-primitives-with-a-governed-token-layer-over-ibm-carbon.md) | Build on headless primitives with a governed token layer rather than IBM Carbon, ship the tokens as plain CSS, and make doc 06 §5.3's colour rule a build failure | accepted | 2026-08-30 |
 | [0039](0039-size-from-ops-002s-measurements-and-retire-doc-05-4s-estimates.md) | Size the deployment from OPS-002's measurements, and record what each measured number replaces in doc 05 §4 | accepted | 2026-09-02 |
+| [0040](0040-threat-model-review.md) | Close doc 04's open abuse cases against tests that exist, assign REL-001 to release signing, and pin the framework mappings to documents fetched on the review date | accepted | 2026-09-02 |
 
 ## Open items
 
@@ -325,3 +326,24 @@ maintainer ask "why is it like this?"
   and its self-test need no Go, no Docker and no Node, and adding them is two
   lines in a workflow RM-039 does not own — the same unowned-`.github/` and
   unowned-`scripts/` gap ADR-0031 and ADR-0037 already recorded.
+- **ADR-0040** is the Phase 5 threat-model review and leaves five things for a
+  human, four of them edits to normative documents the ADR is not allowed to
+  make. doc 04 §2, §3 and §4 still read "open — add TC", "open — CI check" and
+  "Open: add release-signing test/CI check ID" for abuse cases the review closed
+  against `SPI-008`, `SER-005` and the newly assigned `REL-001`; the full list
+  of rows doc 04 must be given is in that ADR's last section. doc 07 has no row
+  for `SPI-008` and no `TC-REL` family for `REL-001`/`REL-002`/`REL-003`, and it
+  is now sixty-six IDs behind the source — every `FE-016`…`FE-107`, `OPS-005`
+  and `OPS-006` — which means an artifact that ships cites IDs the catalogue
+  cannot resolve. `REL-001` is assigned but unimplemented: RM-056 (#64) built
+  the release workflow in the same wave without being able to see this ADR, so
+  whoever reconciles the wave has to decide whether what it built matches the
+  six obligations §"REL-001" states, and rename it if not. AB-12's first control
+  as doc 04 words it — "signed instruction files" — has nothing in the public
+  tree to sign, because `.gitignore` excludes `.*` and all of `docs/` bar this
+  directory; the ADR records that as a residual rather than as pending work, and
+  doc 04 should either strike the control or say why it cannot exist. And one
+  OWASP identifier is deliberately blank: doc 04's "identity-spoofing/
+  impersonation" is pinned to `ASI03`, which is primary-sourced, but its
+  T-number could not be read from any OWASP document reachable on 2026-09-02 and
+  was left unguessed.

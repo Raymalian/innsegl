@@ -1,0 +1,1071 @@
+# Innsegl release — the pipeline that signs what this project ships.
+#
+# Innsegl exists to make attribution checkable. A project that enforces signed,
+# attributed commits and then ships unsigned tarballs has refuted itself, so
+# doc 08 §2 puts the promise in SECURITY.md in the imperative:
+#
+#   "Releases are signed with the project's own tooling; the release page
+#    documents the expected signing identity. An unsigned or mismatched
+#    release artifact is itself a security event — report it."
+#
+# and doc 04 §2 "Supply chain (of Innsegl itself)" names the four controls this
+# file is: pinned checksummed dependencies, releases signed with the project's
+# own tooling, protected branches, CI provenance.
+#
+# THE ORDER OF THE JOBS IS THE SECURITY PROPERTY. build → sign → verify →
+# publish. `publish` is the only job that can write to the repository and it
+# runs last, so an artifact that fails verification is never published at all.
+# "Unsigned or mismatched" is not a warning printed beside a release; it is the
+# absence of a release, plus `security-event`, which files an issue and pulls
+# back anything that did reach the page.
+#
+# WHAT "THE PROJECT'S OWN TOOLING" MEANS HERE, PRECISELY. Innsegl signs commits
+# with gitsign (ADR-0031) against Fulcio and Rekor, and verifies them with the
+# three checks `innsegl verify` performs. gitsign is a `gpg.x509.program`: it
+# signs git objects and nothing else — there is no gitsign invocation that signs
+# a tarball. The blob signer of the same Sigstore stack is cosign, so the
+# release artifacts are signed with cosign, keyless, against the same Fulcio and
+# the same Rekor: identical machinery, identical three checks (certificate
+# identity, signature, transparency-log inclusion), a different artifact type.
+#
+# It is PUBLIC Sigstore here and not the self-hosted stack ADR-0010 made the
+# shipped default, and that is deliberate: ADR-0010's Fulcio exists to accept
+# SPIFFE identities from one deployment, and a stranger downloading a tarball
+# has no route to it. I5 — "verification never trusts this system" — is only
+# true of a release if the trust root is one the verifier already has. Public
+# Fulcio refuses `spiffe` issuers (ADR-0002 addendum, measured under RM-016),
+# but it accepts GitHub Actions' OIDC issuer, which is the identity a release
+# built in CI actually has.
+#
+# ALL THIRD-PARTY ACTIONS ARE PINNED TO A COMMIT SHA with the human-readable tag
+# in a trailing comment, matching ci.yml. Every SHA below was resolved with
+# `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` and its object type checked to
+# be `commit` (an annotated tag's ref returns a tag object that has to be
+# dereferenced first). `preflight` re-audits that mechanically, over every
+# workflow in this repository, and fails a release on any floating ref.
+name: Release
+
+on:
+  push:
+    tags:
+      # Semantic versions only. The exact grammar is asserted in preflight;
+      # this filter is the coarse one that decides whether to start at all.
+      - "v*"
+  # A rehearsal. Everything except `publish` runs, so the signing and
+  # verification path can be exercised — with a real Fulcio certificate and a
+  # real Rekor entry — before a tag is cut and without cutting one. The
+  # certificate it obtains names the branch it ran on, so its signature is not
+  # interchangeable with a release's; nothing it produces can become a release.
+  workflow_dispatch:
+
+# Least privilege by default. Each job re-declares exactly what it needs and
+# nothing else; only `publish` and `security-event` can write.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel a release run. A half-cancelled release is the state this file
+  # exists to make impossible, and a Rekor entry cannot be un-created.
+  cancel-in-progress: false
+
+env:
+  # Fail loudly on a toolchain mismatch instead of silently downloading a
+  # different Go than the one go.mod declares. A release binary built by a
+  # toolchain nobody chose is not a release binary anybody can reproduce.
+  GOTOOLCHAIN: local
+
+  # The blob signer, pinned by version AND by the SHA-256 of the exact binary
+  # this workflow downloads. The checksum was read out of
+  # https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign_checksums.txt
+  # and verified against the downloaded artifact on 2026-09-02.
+  #
+  # HONEST ABOUT WHAT THE PIN BUYS: the checksum was fetched over the same TLS
+  # channel the binary is fetched over, so it is not independent evidence about
+  # the release as published. What it does buy is immutability — a GitHub
+  # release asset can be replaced in place by whoever owns the repository, and
+  # a recorded hash turns that swap into a hard failure here instead of a
+  # silent substitution. The `cosign verifies itself` step below adds the
+  # independent half: cosign's own Sigstore bundle, checked against the identity
+  # that signed it, which no asset swap can reproduce.
+  COSIGN_VERSION: "3.1.3"
+  COSIGN_LINUX_AMD64_SHA256: "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71"
+  # MEASURED: openssl on cosign-linux-amd64.sigstore.json for v3.1.3 shows a SAN
+  # of email:keyless@projectsigstore.iam.gserviceaccount.com issued by
+  # https://accounts.google.com. cosign's releases are signed by a Google
+  # service account, NOT by a GitHub Actions workflow identity — writing the
+  # GitHub issuer here would look right and verify nothing.
+  COSIGN_RELEASE_IDENTITY: "keyless@projectsigstore.iam.gserviceaccount.com"
+  COSIGN_RELEASE_ISSUER: "https://accounts.google.com"
+
+  # The issuer of a GitHub Actions OIDC token, and therefore the issuer named in
+  # the Fulcio certificate this workflow signs under. Deliberately NOT spelled
+  # SIGSTORE_* : that prefix is cosign's own configuration namespace (it reads
+  # SIGSTORE_ROOT_FILE, SIGSTORE_REKOR_PUBLIC_KEY and friends), and a workflow
+  # variable that lands in it is a trust anchor changed by accident.
+  RELEASE_OIDC_ISSUER: "https://token.actions.githubusercontent.com"
+
+  # The public Sigstore endpoints a stranger can reach. `innsegl verify` reads
+  # these two names (cmd/innsegl/verify.go), so the smoke test below needs no
+  # flags. An operator releasing from a self-hosted deployment changes them here.
+  INNSEGL_FULCIO_URL: "https://fulcio.sigstore.dev"
+  INNSEGL_REKOR_URL: "https://rekor.sigstore.dev"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. preflight — refuse to start on anything that is not a releasable tag.
+  #
+  # Everything here is cheap and everything here is a hard gate. A release that
+  # fails at the signing step has already burned a tag; these checks are the
+  # ones that can still be answered with "do not release this".
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      commit: ${{ steps.identity.outputs.commit }}
+      epoch: ${{ steps.identity.outputs.epoch }}
+      date: ${{ steps.identity.outputs.date }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
+      releasable: ${{ steps.identity.outputs.releasable }}
+      identity: ${{ steps.identity.outputs.identity }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The tag-lineage check walks history to prove the tagged commit is
+          # reachable from main, and `git cat-file -t` needs the tag OBJECT, not
+          # just the commit it points at. Neither survives a shallow clone.
+          fetch-depth: 0
+          # This job pushes nothing.
+          persist-credentials: false
+
+      - name: Every action in every workflow is pinned to a commit SHA
+        # doc 04 §2: "pinned, checksummed dependencies". A floating `@v4` is a
+        # standing grant to whoever can move that tag — on a workflow that holds
+        # an OIDC token able to obtain a Fulcio certificate in this project's
+        # name. The audit runs over EVERY workflow in the repository, not only
+        # this one, because the token this file spends is only as good as the
+        # weakest workflow that shares the repository with it.
+        #
+        # The audit is itself code, so it is tested here rather than trusted:
+        # three mutations of a real workflow that it must refuse, and the real
+        # workflows, which it must accept. A gate that passes everything is the
+        # failure mode.
+        run: |
+          set -euo pipefail
+
+          # POSIX bracket classes are avoided: ubuntu-latest's `awk` is mawk,
+          # which does not support [[:space:]].
+          audit() {
+            awk '
+              /^[ \t]*-?[ \t]*uses:[ \t]/ {
+                ref = $0
+                sub(/^[^:]*uses:[ \t]*/, "", ref)
+                comment = ""
+                if (match(ref, /#/)) { comment = substr(ref, RSTART); ref = substr(ref, 1, RSTART - 1) }
+                gsub(/[ \t]+$/, "", ref)
+                if (ref ~ /^\.\//) next
+                n = split(ref, part, "@")
+                if (n != 2 || part[2] !~ /^[0-9a-f]{40}$/) {
+                  printf "  %s:%d: uses: is not pinned to a 40-hex commit SHA -- %s\n", FILENAME, FNR, ref
+                  bad++; next
+                }
+                if (comment !~ /[0-9]/) {
+                  printf "  %s:%d: pinned, but no human-readable tag in a trailing comment -- %s\n", FILENAME, FNR, ref
+                  bad++
+                }
+                next
+              }
+              /^[ \t]+image:[ \t]/ {
+                img = $0
+                sub(/^[ \t]*image:[ \t]*/, "", img)
+                gsub(/[ \t]+$/, "", img)
+                if (img !~ /@sha256:[0-9a-f]{64}$/) {
+                  printf "  %s:%d: container image is not pinned by digest -- %s\n", FILENAME, FNR, img
+                  bad++
+                }
+              }
+              END { exit (bad > 0) }
+            ' "$@"
+          }
+
+          echo "==> pin audit self-test (three mutations that MUST be refused)"
+          mutants="$(mktemp -d)"
+          sed 's|uses: actions/checkout@[0-9a-f]\{40\}|uses: actions/checkout@v7|' \
+            .github/workflows/ci.yml > "$mutants/floating-ref.yml"
+          sed 's|# v7\.0\.1||' \
+            .github/workflows/ci.yml > "$mutants/no-tag-comment.yml"
+          sed 's|@sha256:[0-9a-f]\{64\}||' \
+            .github/workflows/ci.yml > "$mutants/undigested-image.yml"
+          for m in "$mutants"/*.yml; do
+            if audit "$m" >/dev/null 2>&1; then
+              echo "::error::the pin audit ACCEPTED $(basename "$m"). The gate is broken;"
+              echo "::error::a green result from it would mean nothing. Fix the audit."
+              exit 1
+            fi
+            echo "    refused $(basename "$m")"
+          done
+
+          echo "==> pin audit over .github/workflows"
+          if ! audit .github/workflows/*.yml; then
+            echo "::error::A workflow in this repository references an action by a mutable"
+            echo "::error::ref, or pins one without recording which tag the SHA was. Both are"
+            echo "::error::release blockers: doc 04 §2 requires pinned, checksummed"
+            echo "::error::dependencies, and this workflow holds an OIDC token."
+            exit 1
+          fi
+          echo "    every uses: is a commit SHA with a tag comment; every image: carries a digest"
+
+      - name: Establish the release identity
+        id: identity
+        # Everything downstream reads these outputs rather than re-deriving
+        # them, so the version stamped into the binary, the version in the
+        # archive names, the version in the release title and the version the
+        # certificate is bound to cannot disagree.
+        env:
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT" = "push" ] && [ "${REF#refs/tags/}" != "$REF" ]; then
+            releasable=true
+            version="$REF_NAME"
+          else
+            # Rehearsal. The version is deliberately one that cannot be mistaken
+            # for a release and cannot be published: `publish` is gated on
+            # releasable, and semver orders 0.0.0-rehearsal below everything.
+            releasable=false
+            version="v0.0.0-rehearsal.$(git rev-parse --short HEAD)"
+          fi
+
+          commit="$(git rev-parse HEAD)"
+          epoch="$(git log -1 --format=%ct "$commit")"
+          # The COMMIT date, not wall clock: the Makefile already made that
+          # choice so a rebuild of the same source produces the same binary.
+          date="$(git log -1 --format=%cI "$commit")"
+
+          case "$version" in
+            *-*) prerelease=true ;;
+            *)   prerelease=false ;;
+          esac
+
+          # The identity a Fulcio certificate issued to this workflow will
+          # carry, and the identity the release page tells verifiers to expect.
+          # MEASURED against a real GitHub Actions keyless signature: the
+          # certificate for sigstore/gitsign v0.17.1 carries
+          #   URI:https://github.com/sigstore/gitsign/.github/workflows/release.yml@refs/tags/v0.17.1
+          #
+          # The workflow path is a LITERAL and not ${{ github.workflow_ref }} on
+          # purpose. Derived from the run, it would say whatever ran; written
+          # out, a signature produced by any other workflow in this repository
+          # fails the comparison in `verify`.
+          identity="https://github.com/${REPO}/.github/workflows/release.yml@${REF}"
+
+          {
+            echo "version=$version"
+            echo "commit=$commit"
+            echo "epoch=$epoch"
+            echo "date=$date"
+            echo "prerelease=$prerelease"
+            echo "releasable=$releasable"
+            echo "identity=$identity"
+          } >> "$GITHUB_OUTPUT"
+
+          printf '    version    %s\n    commit     %s\n    date       %s\n' \
+            "$version" "$commit" "$date"
+          printf '    releasable %s (prerelease %s)\n    identity   %s\n' \
+            "$releasable" "$prerelease" "$identity"
+
+      - name: The release ref is an annotated tag naming a semantic version
+        if: steps.identity.outputs.releasable == 'true'
+        # Two separate requirements.
+        #
+        # ANNOTATED: a lightweight tag is a pointer with no author, no date and
+        # no message. For a project whose subject is attribution, a release
+        # marker that records nobody having made it is the wrong artifact. An
+        # annotated tag also carries a signature when the tagger signs one, and
+        # `git describe` — which the Makefile uses — reports it.
+        #
+        # SEMANTIC: VERSIONING.md (doc 08 §3) is written in terms of MAJOR,
+        # MINOR and PATCH, and the protected-surfaces rule is stated as a
+        # property of the major number. A tag that is not a semantic version
+        # makes that rule unevaluable.
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          type="$(git cat-file -t "refs/tags/$TAG")"
+          if [ "$type" != "tag" ]; then
+            echo "::error::refs/tags/$TAG is a $type, not an annotated tag object."
+            echo "::error::Re-cut it with 'git tag -a $TAG' (or -s) so the release records"
+            echo "::error::who made it. A release marker with no tagger is not attribution."
+            exit 1
+          fi
+          echo "    annotated by: $(git for-each-ref --format='%(taggername) %(taggeremail) %(taggerdate:iso)' "refs/tags/$TAG")"
+
+          if ! printf '%s' "$TAG" | grep -qE '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            echo "::error::$TAG is not v<major>.<minor>.<patch>[-prerelease][+build]."
+            echo "::error::VERSIONING.md states its rules in terms of those numbers."
+            exit 1
+          fi
+          echo "    semantic version: ok"
+
+      - name: The tagged commit is on main
+        if: steps.identity.outputs.releasable == 'true'
+        # doc 04 §2 lists protected branches among the supply-chain controls.
+        # Branch protection stops an unreviewed commit reaching main; it does
+        # nothing about a tag placed on a commit that never went there. This is
+        # the other half: a release comes from the branch the required checks
+        # guard, or it does not happen.
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet origin/main >/dev/null; then
+            echo "::error::origin/main is not present in this clone, so the lineage of the"
+            echo "::error::tagged commit cannot be established. This check refuses to pass"
+            echo "::error::on a history it never read."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::The tagged commit $(git rev-parse --short HEAD) is not reachable from"
+            echo "::error::origin/main. Releases are cut from the protected branch (doc 04 §2)."
+            exit 1
+          fi
+          echo "    $(git rev-parse --short HEAD) is an ancestor of origin/main"
+
+      - name: Protected surfaces have not drifted since the previous tag
+        # VERSIONING.md (doc 08 §3): "MINOR/PATCH releases MUST NOT alter any
+        # protected surface. CI enforces this: golden fixtures (TC-SER) and
+        # contract schemas are diffed against the previous tag; ANY DRIFT FAILS
+        # THE RELEASE."
+        #
+        # protected-surfaces.yml already runs this script on a `v*` tag, and it
+        # is the right home for the gate. But it is a SEPARATE workflow, and a
+        # separate workflow going red does not stop this one from publishing —
+        # so the sentence above would be false of the only thing that can make
+        # it true. This is not a second implementation: it invokes the same
+        # scripts/protected-surfaces.sh, which resolves the candidate version
+        # from the tag and the baseline from the tag before it, so a release
+        # cannot outrun its own drift gate.
+        if: steps.identity.outputs.releasable == 'true'
+        run: ./scripts/protected-surfaces.sh
+
+      - name: CHANGELOG records this version
+        if: steps.identity.outputs.releasable == 'true'
+        # doc 08 §4: "CHANGELOG discipline from the first tag (Keep-a-Changelog
+        # format)." A release with no changelog entry is a release nobody can
+        # read, and the deprecation rules in VERSIONING.md are announced there.
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          bare="${VERSION#v}"
+          if ! grep -qE "^##[[:space:]]+\[?v?${bare//./\\.}\]?([[:space:]]|$|\])" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$bare]' section. doc 08 §4 requires an"
+            echo "::error::entry from the first tag onward; write it before tagging."
+            exit 1
+          fi
+          echo "    CHANGELOG.md carries a section for $bare"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Dependencies match go.sum
+        # `go mod verify` re-hashes every module in the download cache and
+        # compares against go.sum — the "checksummed dependencies" half of doc
+        # 04 §2, asserted rather than assumed. `-mod=readonly` makes a build
+        # that would need to EDIT go.mod fail instead of quietly adding a
+        # dependency to a release.
+        env:
+          GOFLAGS: -mod=readonly
+        run: |
+          set -euo pipefail
+          go mod download
+          go mod verify
+
+  # ---------------------------------------------------------------------------
+  # 2. build — compile the artifacts. Deliberately has no signing credential.
+  #
+  # `id-token: write` is NOT granted here, and that is the point of the job
+  # boundary: the job that runs the module's own build (and therefore anything
+  # a compromised dependency's toolchain hooks could reach) cannot obtain a
+  # Fulcio certificate in this project's name.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build
+    needs: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build every target twice and require the two to be identical
+        # The ldflags are the Makefile's, with VERSION/COMMIT/DATE supplied by
+        # preflight instead of by `git describe`, so the stamp inside the binary
+        # is the tag the certificate will be bound to.
+        #
+        # -trimpath removes the checkout's absolute paths, and CGO_ENABLED=0
+        # removes the host's C toolchain, from the output. Both are required for
+        # the second half of this step to mean anything.
+        #
+        # THE DOUBLE BUILD IS THE CHECK. Byte-identical output from two
+        # independent invocations is evidence that nothing in the build read the
+        # clock, a temporary path, or the environment. It is same-runner
+        # determinism and NOT a claim of full reproducibility by a third party
+        # on different hardware — that needs a rebuilder, which this project
+        # does not have. It is still the check that catches the day a
+        # dependency starts embedding a timestamp.
+        #
+        # Windows is absent because nothing in doc 05 claims it. An artifact for
+        # a platform the project does not test is a promise it cannot keep.
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DATE: ${{ needs.preflight.outputs.date }}
+          SOURCE_DATE_EPOCH: ${{ needs.preflight.outputs.epoch }}
+          GOFLAGS: -mod=readonly
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          go mod verify
+
+          pkg=innsegl.dev/innsegl/internal/version
+          ldflags="-X $pkg.version=$VERSION -X $pkg.commit=$COMMIT -X $pkg.date=$DATE"
+          targets="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64"
+
+          for pass in a b; do
+            for t in $targets; do
+              os="${t%/*}"; arch="${t#*/}"
+              mkdir -p "build/$pass/$os-$arch"
+              GOOS="$os" GOARCH="$arch" go build -trimpath \
+                -ldflags "$ldflags" \
+                -o "build/$pass/$os-$arch/innsegl" ./cmd/innsegl
+            done
+          done
+
+          for t in $targets; do
+            os="${t%/*}"; arch="${t#*/}"
+            if ! cmp -s "build/a/$os-$arch/innsegl" "build/b/$os-$arch/innsegl"; then
+              echo "::error::Two builds of $os/$arch from the same source produced different"
+              echo "::error::bytes. Something in the build is reading the clock, a path or the"
+              echo "::error::environment; a release nobody can rebuild is not verifiable."
+              exit 1
+            fi
+            echo "    $os/$arch reproducible on this runner"
+          done
+
+      - name: Package
+        # Deterministic archives: fixed member order, no uid/gid/uname, the
+        # commit's timestamp on every entry, and gzip -n so the compressor does
+        # not stamp its own. Without these the tarball differs on every run and
+        # the SHA256SUMS below would be a checksum of the weather.
+        #
+        # LICENSE and NOTICE travel with the binary because Apache-2.0 §4
+        # requires it of every distribution, and doc 08 §1 makes the NOTICE file
+        # this project's attribution carrier.
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          SOURCE_DATE_EPOCH: ${{ needs.preflight.outputs.epoch }}
+        run: |
+          set -euo pipefail
+          bare="${VERSION#v}"
+          mkdir -p dist
+
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${t%/*}"; arch="${t#*/}"
+            stage="stage/innsegl_${bare}_${os}_${arch}"
+            mkdir -p "$stage"
+            cp "build/a/$os-$arch/innsegl" "$stage/innsegl"
+            cp LICENSE NOTICE SECURITY.md "$stage/"
+            tar --sort=name --owner=0 --group=0 --numeric-owner \
+                --mtime="@${SOURCE_DATE_EPOCH}" \
+                -cf - -C stage "innsegl_${bare}_${os}_${arch}" \
+              | gzip -n -9 > "dist/innsegl_${bare}_${os}_${arch}.tar.gz"
+          done
+
+          # ONE manifest, and it is the thing that gets signed. Every artifact
+          # is bound to the release by its hash appearing here, so a single
+          # signature covers the whole set and a swapped tarball fails
+          # `sha256sum -c` before any signature is even consulted.
+          ( cd dist && sha256sum *.tar.gz | sort -k2 > SHA256SUMS )
+          cat dist/SHA256SUMS
+
+      - name: Upload the unsigned artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-artifacts
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # 3. sign — the only job that holds an OIDC token.
+  #
+  # It compiles nothing and checks out nothing. Its whole input is the artifact
+  # bundle produced by `build`, so the code that runs while a Fulcio-capable
+  # token is in the environment is this file plus cosign at a pinned hash.
+  # ---------------------------------------------------------------------------
+  sign:
+    name: sign
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The Fulcio exchange. This is the credential the whole file is arranged
+      # around: it is granted to one job, for one step, and never to a job that
+      # runs the project's own build.
+      id-token: write
+      # actions/attest-build-provenance writes the SLSA provenance record.
+      attestations: write
+    steps:
+      - name: Download the unsigned artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-artifacts
+          path: dist
+
+      - name: Install cosign at a pinned version and hash
+        # Not `go install`: that resolves through the module proxy, which would
+        # make the signer's identity depend on GOTOOLCHAIN and on a build we do
+        # not check. A released binary at a recorded hash is the smaller,
+        # checkable thing. See the COSIGN_* comments at the top of this file for
+        # what the hash does and does not prove.
+        run: |
+          set -euo pipefail
+          base="https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}"
+          curl -fsSL -o cosign "$base/cosign-linux-amd64"
+          curl -fsSL -o cosign.sigstore.json "$base/cosign-linux-amd64.sigstore.json"
+
+          echo "${COSIGN_LINUX_AMD64_SHA256}  cosign" | sha256sum -c -
+          chmod +x cosign
+          ./cosign version
+
+          # The independent half of the pin, and a live probe of the path this
+          # workflow is about to depend on: if public Rekor or the TUF root are
+          # unreachable, this fails HERE, before a certificate exists and before
+          # any artifact has been signed — the same ordering ADR-0031 decision 2
+          # uses to keep a failed dependency from leaving a half-made artifact.
+          ./cosign verify-blob \
+            --bundle cosign.sigstore.json \
+            --certificate-identity "${COSIGN_RELEASE_IDENTITY}" \
+            --certificate-oidc-issuer "${COSIGN_RELEASE_ISSUER}" \
+            cosign
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      - name: Sign the checksum manifest
+        # `--oidc-provider github-actions` is pinned rather than left to
+        # ambient detection, for ADR-0031 decision 3's reason: cosign's provider
+        # auto-detection will find a filesystem token, a SPIFFE socket or a
+        # buildkite agent if one happens to exist, and sign as somebody other
+        # than this run, silently, on the machines where that happens to be
+        # true. Naming the provider makes the identity a decision.
+        #
+        # SHA256SUMS is the only thing signed. It names every artifact by hash,
+        # so one certificate and one Rekor entry cover the release, and the
+        # verifier's second step (`sha256sum -c`) is what binds each file to it.
+        run: |
+          set -euo pipefail
+          cd dist
+          cosign sign-blob \
+            --yes \
+            --oidc-provider github-actions \
+            --bundle SHA256SUMS.sigstore.json \
+            SHA256SUMS
+          test -s SHA256SUMS.sigstore.json
+
+      - name: CI provenance
+        # doc 04 §2's fourth supply-chain control. A SLSA v1 provenance
+        # statement, signed keylessly and recorded in Rekor, saying which
+        # workflow at which commit produced these exact bytes. It is a different
+        # claim from the signature above — that one says "we signed this", this
+        # one says "this is how it was built" — and `verify` checks both.
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          # Every artifact named in the manifest becomes a subject, so the
+          # provenance and the signature cover exactly the same set.
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Upload the signed artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-signed
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # 4. verify — re-derive the verdict on a machine with no signing credential.
+  #
+  # This job is the acceptance criterion of the whole file. It has no
+  # id-token, so it cannot make a signature; it can only check one. If this job
+  # is red, no release exists — `publish` needs it — and `security-event` runs.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: verify
+    needs: [preflight, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reading the provenance record back out of GitHub's attestation store.
+      attestations: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `innsegl verify` reads the commit object and its parents out of a
+          # real repository.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the signed artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-signed
+          path: dist
+
+      - name: Install cosign at a pinned version and hash
+        run: |
+          set -euo pipefail
+          base="https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}"
+          curl -fsSL -o cosign "$base/cosign-linux-amd64"
+          curl -fsSL -o cosign.sigstore.json "$base/cosign-linux-amd64.sigstore.json"
+          echo "${COSIGN_LINUX_AMD64_SHA256}  cosign" | sha256sum -c -
+          chmod +x cosign
+          ./cosign verify-blob \
+            --bundle cosign.sigstore.json \
+            --certificate-identity "${COSIGN_RELEASE_IDENTITY}" \
+            --certificate-oidc-issuer "${COSIGN_RELEASE_ISSUER}" \
+            cosign
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      - name: Every artifact matches the signed manifest
+        # Run BEFORE the signature check, deliberately. If a tarball was
+        # replaced, this is the step that says so, and it says it about the
+        # file rather than about the signature — a clearer failure than
+        # "signature invalid" on a manifest that is itself intact.
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -c SHA256SUMS
+
+      - name: The manifest carries this workflow's signature
+        # The three checks `innsegl verify` performs on a commit, performed on a
+        # release artifact by the same Sigstore machinery:
+        #   1. the certificate chains to Fulcio      (cosign, against public TUF)
+        #   2. the signature is over these bytes     (cosign)
+        #   3. the certificate names the expected identity, and no other
+        #      (--certificate-identity, exact match, no regex)
+        # plus Rekor inclusion, which cosign requires by default and which this
+        # step does NOT disable: --insecure-ignore-tlog is absent on purpose.
+        env:
+          IDENTITY: ${{ needs.preflight.outputs.identity }}
+        run: |
+          set -euo pipefail
+          cd dist
+          echo "    expecting identity: $IDENTITY"
+          echo "    expecting issuer:   $RELEASE_OIDC_ISSUER"
+          cosign verify-blob \
+            --bundle SHA256SUMS.sigstore.json \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer "$RELEASE_OIDC_ISSUER" \
+            SHA256SUMS
+
+      - name: The signature check is not vacuous
+        # A verifier that passes everything proves nothing, and this one is
+        # about to be quoted on the release page as the thing a stranger should
+        # run. So: alter one byte of the manifest and require a refusal. Same
+        # discipline as ci.yml's token-gate self-test.
+        env:
+          IDENTITY: ${{ needs.preflight.outputs.identity }}
+        run: |
+          set -euo pipefail
+          cd dist
+          mkdir -p ../negative
+          sed 's/^\(.\)/X/' SHA256SUMS > ../negative/SHA256SUMS
+          cp SHA256SUMS.sigstore.json ../negative/
+          if cosign verify-blob \
+              --bundle ../negative/SHA256SUMS.sigstore.json \
+              --certificate-identity "$IDENTITY" \
+              --certificate-oidc-issuer "$RELEASE_OIDC_ISSUER" \
+              ../negative/SHA256SUMS >/dev/null 2>&1; then
+            echo "::error::cosign accepted a MUTATED manifest under this release's identity."
+            echo "::error::The verification the release page documents does not distinguish"
+            echo "::error::a signed artifact from an altered one. Do not publish."
+            exit 1
+          fi
+          echo "    a mutated manifest is refused"
+
+          if cosign verify-blob \
+              --bundle SHA256SUMS.sigstore.json \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/not-the-release-workflow.yml@${GITHUB_REF}" \
+              --certificate-oidc-issuer "$RELEASE_OIDC_ISSUER" \
+              SHA256SUMS >/dev/null 2>&1; then
+            echo "::error::cosign accepted this signature under an identity that did not make"
+            echo "::error::it. --certificate-identity is not constraining anything. Do not publish."
+            exit 1
+          fi
+          echo "    a wrong expected identity is refused"
+
+      - name: The provenance names this workflow and this commit
+        # `gh attestation verify` fetches the record from GitHub's attestation
+        # API and checks it against Sigstore's public-good trust root. The
+        # constraints are stated explicitly rather than left to --repo alone:
+        # --cert-identity pins the exact signer, --source-ref pins the ref, and
+        # --deny-self-hosted-runners refuses a provenance minted anywhere but
+        # GitHub's own runners.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IDENTITY: ${{ needs.preflight.outputs.identity }}
+        run: |
+          set -euo pipefail
+          for f in dist/*.tar.gz; do
+            echo "==> $f"
+            gh attestation verify "$f" \
+              --repo "$GITHUB_REPOSITORY" \
+              --cert-identity "$IDENTITY" \
+              --cert-oidc-issuer "$RELEASE_OIDC_ISSUER" \
+              --source-ref "$GITHUB_REF" \
+              --deny-self-hosted-runners
+          done
+
+      - name: The binary in the archive is the version it claims
+        # An artifact that verifies cryptographically and contains the wrong
+        # build is still a mismatched release artifact. This unpacks the one
+        # target this runner can execute and asks it.
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+        run: |
+          set -euo pipefail
+          bare="${VERSION#v}"
+          tar -xzf "dist/innsegl_${bare}_linux_amd64.tar.gz"
+          out="$(./innsegl_${bare}_linux_amd64/innsegl version)"
+          echo "    $out"
+          case "$out" in
+            *"innsegl $VERSION "*) ;;
+            *) echo "::error::The shipped binary reports '$out', which does not name $VERSION."
+               echo "::error::The ldflags stamp and the tag disagree; the artifact is mislabelled."
+               exit 1 ;;
+          esac
+          case "$out" in
+            *"$COMMIT"*) ;;
+            *) echo "::error::The shipped binary does not name the released commit $COMMIT."
+               exit 1 ;;
+          esac
+
+      - name: Smoke — the shipped verifier runs and returns a defined verdict
+        # DOGFOOD, AND HONESTLY LABELLED. This runs the release binary's own
+        # `innsegl verify` against the commit being released and records the
+        # verdict in the run summary. It is a SMOKE TEST OF THE ARTIFACT, not an
+        # attribution gate, and the difference is a measurement:
+        #
+        #   MEASURED 2026-09-02 on this repository's HEAD — `innsegl verify`
+        #   returns VERDICT: FAILED, exit 3, "the commit's signature is not
+        #   PEM". The repository's commits carry GitHub's PGP merge signature,
+        #   which is not a Fulcio certificate. That is a true statement about a
+        #   real gap, not a defect in this workflow.
+        #
+        # So gating a release on "verified" would block every release this
+        # project can currently cut, and gating on "not failed" would be a gate
+        # that is green because it was written around the answer. What IS gated
+        # is that the binary runs and lands on one of the four verdicts doc 06
+        # §4.1 defines: exit 2 (usage) or 6 (unusable) means the shipped
+        # verifier is broken, and that blocks the release.
+        #
+        # Closing the gap — releasing from a commit whose attribution verifies
+        # against the trust root the release page names — needs the release
+        # commit to be gitsign-signed. Reported with this issue; not invented here.
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+        run: |
+          set -euo pipefail
+          bare="${VERSION#v}"
+          bin="./innsegl_${bare}_linux_amd64/innsegl"
+
+          set +e
+          report="$("$bin" verify "$COMMIT" --repo . 2>&1)"
+          status=$?
+          set -e
+
+          printf '%s\n' "$report"
+          case "$status" in
+            0) verdict="verified" ;;
+            3) verdict="failed" ;;
+            4) verdict="verification unavailable" ;;
+            5) verdict="unattributed" ;;
+            *) echo "::error::innsegl verify exited $status — not one of the four verdicts."
+               echo "::error::The shipped binary's verifier is broken. Do not publish."
+               exit 1 ;;
+          esac
+
+          {
+            echo "### Release commit attribution"
+            echo
+            echo "\`innsegl verify $COMMIT\` against public Fulcio and Rekor: **$verdict** (exit $status)."
+            echo
+            echo "Recorded, not gated — see the step's comment for why."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # 5. publish — the only job that can write to the repository, and the last.
+  #
+  # It cannot start unless `verify` was green, which is how "an unsigned or
+  # mismatched release artifact is a security event" is enforced structurally:
+  # such an artifact never becomes a release in the first place.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: publish
+    needs: [preflight, verify]
+    if: needs.preflight.outputs.releasable == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating the release and uploading its assets. Nothing else in this
+      # file has it.
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the signed artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-signed
+          path: dist
+
+      - name: Write the release notes
+        # doc 08 §2: "the release page documents the expected signing identity."
+        # Not a link to a page that documents it — the identity itself, on the
+        # release, beside the artifacts it describes, together with the exact
+        # commands that check it and the exact hash of the cosign that was used
+        # to make it. A verifier who has to go looking for the identity has been
+        # handed a verification they cannot complete.
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          IDENTITY: ${{ needs.preflight.outputs.identity }}
+        run: |
+          set -euo pipefail
+          bare="${VERSION#v}"
+
+          {
+            echo "## Verifying this release"
+            echo
+            echo "Innsegl attributes Innsegl. These artifacts are signed with the same"
+            echo "Sigstore machinery the project uses for agent commits — a short-lived"
+            echo "Fulcio certificate bound to an OIDC identity, and a Rekor transparency"
+            echo "log entry — and the identity below is the one that made them."
+            echo
+            echo "### Expected signing identity"
+            echo
+            echo '```'
+            echo "certificate identity  ${IDENTITY}"
+            echo "OIDC issuer           ${RELEASE_OIDC_ISSUER}"
+            echo "signed artifact       SHA256SUMS  (covers every archive by hash)"
+            echo "signature bundle      SHA256SUMS.sigstore.json"
+            echo "signer                cosign v${COSIGN_VERSION}"
+            echo "                      sha256:${COSIGN_LINUX_AMD64_SHA256}  (cosign-linux-amd64)"
+            echo "released commit       ${COMMIT}"
+            echo '```'
+            echo
+            echo "### Check it"
+            echo
+            echo '```sh'
+            echo "# 1. the signature over the manifest, and the identity that made it"
+            echo "cosign verify-blob \\"
+            echo "  --bundle SHA256SUMS.sigstore.json \\"
+            echo "  --certificate-identity '${IDENTITY}' \\"
+            echo "  --certificate-oidc-issuer '${RELEASE_OIDC_ISSUER}' \\"
+            echo "  SHA256SUMS"
+            echo
+            echo "# 2. the archive you downloaded against the manifest you just verified"
+            echo "sha256sum -c SHA256SUMS --ignore-missing"
+            echo
+            echo "# 3. the build provenance: which workflow, at which commit, made these bytes"
+            echo "gh attestation verify innsegl_${bare}_linux_amd64.tar.gz \\"
+            echo "  --repo ${GITHUB_REPOSITORY} \\"
+            echo "  --cert-identity '${IDENTITY}' \\"
+            echo "  --deny-self-hosted-runners"
+            echo '```'
+            echo
+            echo "Step 1 without step 2 proves only that the manifest is ours; step 2"
+            echo "without step 1 proves only that a file matches a list anyone could"
+            echo "have written. Run both."
+            echo
+            echo "### If it does not verify"
+            echo
+            echo "An unsigned or mismatched release artifact is **itself a security event**"
+            echo "— not a warning and not a note. Report it privately through GitHub"
+            echo "Security Advisories on this repository, per"
+            echo "[SECURITY.md](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${VERSION}/SECURITY.md),"
+            echo "and do not run the binary."
+            echo
+            echo "Every artifact here was checked on a runner holding no signing"
+            echo "credential before this page existed: the manifest against each archive,"
+            echo "the signature against the identity above, the identity against two"
+            echo "deliberate negative controls, and the provenance against GitHub's"
+            echo "attestation store. The release exists because those passed."
+            echo
+            echo "---"
+            echo
+            echo "See [CHANGELOG.md](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${VERSION}/CHANGELOG.md) for what changed."
+          } > release-notes.md
+
+          cat release-notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          # --verify-tag: refuse to invent a tag. If the tag this run was
+          # triggered by is somehow absent from the remote, that is a state
+          # nobody should paper over by creating one here.
+          flags=(--verify-tag --notes-file release-notes.md --title "$VERSION")
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease --latest=false)
+          else
+            flags+=(--latest)
+          fi
+          gh release create "$TAG" "${flags[@]}" \
+            dist/*.tar.gz \
+            dist/SHA256SUMS \
+            dist/SHA256SUMS.sigstore.json
+
+  # ---------------------------------------------------------------------------
+  # 6. security-event — what "not a warning, not a note" costs.
+  #
+  # doc 08 §2 says an unsigned or mismatched release artifact is a security
+  # event. A red X on a workflow run is a warning. This job is the difference:
+  # it withdraws anything that reached the release page and files an issue on
+  # the same repository, with the same label as any other invariant violation,
+  # so the event is in the tracker rather than in a log nobody reopens.
+  # ---------------------------------------------------------------------------
+  security-event:
+    name: security event
+    needs: [preflight, build, sign, verify, publish]
+    # Precisely scoped. A preflight or build failure is an ordinary release
+    # blocker — nothing was signed, nothing was published, there is no artifact
+    # to be wrong about. The security event is the failure that happens once a
+    # signature exists or should: `sign` could not produce one, `verify` could
+    # not re-derive it, or `publish` broke part-way through putting artifacts on
+    # a page. `always()` rather than `failure()` so this job still evaluates
+    # when an upstream job was skipped by one of the others failing.
+    if: >-
+      always() && github.ref_type == 'tag' &&
+      (needs.sign.result == 'failure' ||
+       needs.verify.result == 'failure' ||
+       needs.publish.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      # To pull a published release back to draft. This job is the only reason
+      # that permission is here.
+      contents: write
+      issues: write
+    steps:
+      - name: Withdraw any release that reached the page
+        # `publish` runs after `verify`, so this should find nothing. "Should"
+        # is why it runs: if publish failed part-way, a release with an
+        # incomplete or unverified asset set may exist, and it must stop being
+        # public before anyone is told about it.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # This job checks nothing out, so `gh` has no git remote to infer the
+          # repository from. Naming it is the difference between withdrawing a
+          # release and failing to.
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --draft
+            echo "    $TAG pulled back to draft"
+          else
+            echo "    no release exists for $TAG — nothing published, as designed"
+          fi
+
+      - name: File the security event
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          IDENTITY: ${{ needs.preflight.outputs.identity }}
+          R_PREFLIGHT: ${{ needs.preflight.result }}
+          R_BUILD: ${{ needs.build.result }}
+          R_SIGN: ${{ needs.sign.result }}
+          R_VERIFY: ${{ needs.verify.result }}
+          R_PUBLISH: ${{ needs.publish.result }}
+        run: |
+          set -euo pipefail
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          {
+            echo "The release pipeline for \`$TAG\` did not produce a verifiable artifact."
+            echo
+            echo "doc 08 §2 (SECURITY.md, \"Verifying releases\"): *an unsigned or mismatched"
+            echo "release artifact is itself a security event*. This issue is that event."
+            echo
+            echo "| job | result |"
+            echo "|---|---|"
+            echo "| preflight | $R_PREFLIGHT |"
+            echo "| build | $R_BUILD |"
+            echo "| sign | $R_SIGN |"
+            echo "| verify | $R_VERIFY |"
+            echo "| publish | $R_PUBLISH |"
+            echo
+            echo "Expected signing identity: \`$IDENTITY\`"
+            echo
+            echo "Run: $run_url"
+            echo
+            echo "**Invariant implicated: I5** — verification never trusts this system. A"
+            echo "release artifact whose signature or provenance cannot be re-derived by a"
+            echo "third party is a verification verdict that cannot be independently"
+            echo "re-derived, which is the first item on SECURITY.md's severity list."
+            echo
+            echo "Before anything else:"
+            echo
+            echo "1. Confirm no release for \`$TAG\` is public. This run pulls one back to"
+            echo "   draft if it found one; check by hand that it did."
+            echo "2. Determine whether the failure is infrastructural (Fulcio, Rekor or the"
+            echo "   attestation store unreachable) or substantive (a signature that does"
+            echo "   not verify, an identity that is not this workflow's, an artifact that"
+            echo "   does not match the manifest). Only the first is safe to retry."
+            echo "3. If substantive, treat the tag as burned: do not re-run this workflow"
+            echo "   on it. Investigate first, then cut a new patch version."
+          } > body.md
+
+          title="SECURITY: release $TAG produced no verifiable artifact"
+
+          # The label is applied if the repository has it, and its absence never
+          # swallows the event: an unfiled security event is worse than an
+          # unlabelled one.
+          if ! gh issue create --title "$title" --body-file body.md --label invariant-violation; then
+            echo "::warning::could not apply the invariant-violation label; filing unlabelled"
+            gh issue create --title "$title" --body-file body.md
+          fi
