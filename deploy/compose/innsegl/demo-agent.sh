@@ -58,6 +58,20 @@ fail() { printf 'demo-agent: FAIL: %s\n' "$*" >&2; exit 1; }
 
 SESSION=""
 
+# SESSION_FILE is where rpc() leaves the Mcp-Session-Id it saw.
+#
+# IT IS A FILE AND NOT A VARIABLE FOR ONE REASON, and it is the kind of thing
+# that costs an hour if it is not written down: every caller below invokes rpc
+# inside a command substitution — `init="$(rpc ...)"` — and a command
+# substitution runs in a SUBSHELL. An assignment to SESSION inside rpc would be
+# discarded the moment rpc returned, and the session id would be silently empty
+# on every request after initialize. Measured, on the first run of this script
+# against the real server: "no Mcp-Session-Id on the initialize response",
+# reported while the response in the same message plainly carried one.
+SESSION_FILE="$(mktemp)"
+cleanup() { rm -f "${SESSION_FILE}"; }
+trap cleanup EXIT
+
 # rpc METHOD PARAMS_JSON — posts one JSON-RPC message and prints the response
 # payload. The transport answers a POST with a text/event-stream frame, so the
 # payload is the `data:` line; internal/mcp/server_test.go's sseData does the
@@ -77,9 +91,8 @@ rpc() {
       --data-binary "${body}" \
       "${MCP_URL}")" || { rm -f "${headers}"; fail "POST ${method}: ${raw:-transport error}"; }
 
-  if [ -z "${SESSION}" ]; then
-    SESSION="$(sed -n 's/^[Mm]cp-[Ss]ession-[Ii]d:[[:space:]]*//p' "${headers}" | tr -d '\r')"
-  fi
+  sed -n 's/^[Mm]cp-[Ss]ession-[Ii]d:[[:space:]]*//p' "${headers}" \
+    | tr -d '\r' | head -n 1 > "${SESSION_FILE}"
   rm -f "${headers}"
 
   # Either an SSE frame or bare JSON, depending on what the server chose.
@@ -154,6 +167,7 @@ done
 # 1. The MCP session.
 # ---------------------------------------------------------------------------
 init="$(rpc "initialize" '{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"innsegl-demo-agent","version":"v0"}}')"
+SESSION="$(cat "${SESSION_FILE}")"
 [ -n "${SESSION}" ] || fail "no Mcp-Session-Id on the initialize response: ${init}"
 notify "notifications/initialized"
 log "session with $(printf '%s' "${init}" | jq -r '.result.serverInfo.name // "?"') at ${MCP_URL}"

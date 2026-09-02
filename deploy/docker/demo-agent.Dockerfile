@@ -30,6 +30,11 @@ RUN addgroup -g 1000 innsegl \
 COPY deploy/compose/innsegl/demo-agent.sh /usr/local/bin/demo-agent
 RUN chmod 0555 /usr/local/bin/demo-agent
 
+# The shared workspace root, owned by the image's user — see the root
+# Dockerfile for why an empty named volume takes its ownership from whichever
+# image mounts it first, and why that has to be uid 1000 in both of them.
+RUN mkdir -p /work && chown 1000:1000 /work
+
 ENV HOME=/home/innsegl
 USER 1000:1000
 WORKDIR /home/innsegl

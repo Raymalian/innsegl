@@ -55,9 +55,12 @@
 #     this module that constructs an api.Server, so there is nothing to put in
 #     a container. The dashboard row ships as its UI half and holds no database
 #     credential at all. See the service.
-#   * `innsegl seal`'s operator surface is #112's, landing in parallel with
-#     this file. The flags below are this file's best reading of the
-#     conventions `reconcile` and `reap` already set; see the service.
+#
+# `innsegl seal`'s operator surface was #112's, written in parallel with this
+# file. The sealer service below was written against the conventions
+# `reconcile` and `reap` had already set, before #112 landed, and then checked
+# against it: every variable it sets is one cmd/innsegl/seal.go reads, and it
+# passes no flags. See the service for the full note.
 # ============================================================================
 
 name: innsegl-core
@@ -301,7 +304,10 @@ services:
       # enough that SEG-005's deletion canary has something real to be refused
       # by, short enough that a developer's laptop is not carrying undeletable
       # demo objects for seven years. A deployment sets its own.
-      INNSEGL_OBJECT_STORE_RETENTION: ${INNSEGL_OBJECT_STORE_RETENTION:-1d}
+      #
+      # THE WINDOW IS SET HERE AND ONLY HERE, and the variable is deliberately
+      # not $INNSEGL_OBJECT_STORE_RETENTION — see the sealer service below.
+      INNSEGL_OBJECT_LOCK_RETENTION: ${INNSEGL_OBJECT_LOCK_RETENTION:-1d}
       INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
     volumes:
       - ./innsegl:/innsegl/init:ro
@@ -516,7 +522,26 @@ services:
       INNSEGL_OBJECT_STORE_TLS: "false"
       INNSEGL_OBJECT_STORE_PREFIX: ${INNSEGL_OBJECT_STORE_PREFIX:-segments/}
       INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
-      INNSEGL_OBJECT_STORE_RETENTION: ${INNSEGL_OBJECT_STORE_RETENTION:-1d}
+      INNSEGL_SEAL_INTERVAL: ${INNSEGL_SEAL_INTERVAL:-1m}
+      # NO $INNSEGL_OBJECT_STORE_RETENTION HERE, AND THAT IS THE FIX RATHER
+      # THAN AN OMISSION. Found by #112's review of this file:
+      #
+      #   cmd/innsegl parses it as a GO DURATION (time.ParseDuration).
+      #   `mc retention set` — innsegl/object-init.sh — parses `1d`, `30d`.
+      #   Go has no `d` unit. time.ParseDuration("1d") is `unknown unit "d"`,
+      #   and cmd/innsegl's envDuration falls back to its default WITHOUT AN
+      #   ERROR.
+      #
+      # The default is 0, which means "inherit the bucket rule" — so a value
+      # like `7d` set here would be silently ignored and the bucket default
+      # used instead. Two grammars for one value, and the wrong one failing
+      # quietly, is worse than no setting.
+      #
+      # So the bucket rule is the single source: object-init sets it once, at
+      # creation, under $INNSEGL_OBJECT_LOCK_RETENTION, and the sealer inherits
+      # it. A deployment that wants a per-object window longer than the
+      # bucket's sets $INNSEGL_OBJECT_STORE_RETENTION itself, in GO's grammar
+      # (`24h`, not `1d`).
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -651,7 +676,10 @@ services:
       INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-password
       INNSEGL_OBJECT_STORE_TLS: "false"
       INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
-      INNSEGL_OBJECT_STORE_RETENTION: ${INNSEGL_OBJECT_STORE_RETENTION:-1d}
+      # No $INNSEGL_OBJECT_STORE_RETENTION, for the reason spelled out on the
+      # sealer: `1d` is mc's grammar and not Go's. The canary's own default is
+      # 0, which requires whatever retention the bucket rule gives the probe —
+      # which is exactly the question SEG-005 asks.
     security_opt:
       - no-new-privileges:true
     cap_drop:

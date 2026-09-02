@@ -30,7 +30,22 @@ fail() { printf 'object-init: FAIL: %s\n' "$*" >&2; exit 1; }
 BUCKET="${INNSEGL_OBJECT_STORE_BUCKET:-innsegl-segments}"
 ENDPOINT="${INNSEGL_OBJECT_STORE_URL:-http://minio:9000}"
 MODE="${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}"
-RETENTION="${INNSEGL_OBJECT_STORE_RETENTION:-1d}"
+
+# THE RETENTION WINDOW, IN mc's GRAMMAR — and the variable is deliberately NOT
+# called INNSEGL_OBJECT_STORE_RETENTION.
+#
+# cmd/innsegl reads $INNSEGL_OBJECT_STORE_RETENTION as a GO DURATION, through
+# time.ParseDuration. `mc retention set` reads its window as `1d` / `30d` /
+# `1y`. Go has no `d` unit: time.ParseDuration("1d") returns
+# `unknown unit "d"`, and cmd/innsegl's envDuration helper falls back to its
+# default — 0, meaning "inherit whatever the bucket says" — WITHOUT AN ERROR.
+#
+# So the same-looking value means two different things to the two consumers,
+# and the wrong one fails silently. Two grammars, two names. This one is mc's;
+# nothing in deploy/compose/innsegl.yml passes a retention to the sealer or the
+# canary at all, so the bucket rule set here is the single source of truth and
+# the Go services inherit it. See the sealer service for the full note.
+RETENTION="${INNSEGL_OBJECT_LOCK_RETENTION:-1d}"
 
 case "${MODE}" in
   COMPLIANCE|GOVERNANCE) : ;;

@@ -180,7 +180,8 @@ func readFile(t *testing.T, path string) string {
 // repoRoot finds the module root from the test's working directory.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	out, err := exec.CommandContext(t.Context(),
+		"git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		t.Fatalf("locating the repository root: %v", err)
 	}

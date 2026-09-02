@@ -151,28 +151,28 @@ func TestOPS009TheAppendOnlyRoleIsProvisionedAndProven(t *testing.T) {
 	}
 
 	root := repoRoot(t)
-	if err := pg.copyDeployScripts(ctx, root); err != nil {
-		t.Fatalf("staging the shipped deploy scripts: %v", err)
+	if stageErr := pg.copyDeployScripts(ctx, root); stageErr != nil {
+		t.Fatalf("staging the shipped deploy scripts: %v", stageErr)
 	}
 
 	// ---- provisioning, by the shipped script and nothing else --------------
-	out, err := pg.runInit(ctx, "db-init.sh")
+	out, initErr := pg.runInit(ctx, "db-init.sh")
 	t.Logf("--- deploy/compose/innsegl/db-init.sh ---\n%s", out)
-	if err != nil {
-		t.Fatalf("db-init.sh failed: %v", err)
+	if initErr != nil {
+		t.Fatalf("db-init.sh failed: %v", initErr)
 	}
 
 	// ---- the measurement ---------------------------------------------------
-	conn, err := pgx.Connect(ctx, pg.appenderDSN())
-	if err != nil {
-		t.Fatalf("the append-only credential could not connect at all: %v", err)
+	conn, connErr := pgx.Connect(ctx, pg.appenderDSN())
+	if connErr != nil {
+		t.Fatalf("the append-only credential could not connect at all: %v", connErr)
 	}
-	defer func() { _ = conn.Close(ctx) }()
+	defer func() { discardRollback(conn.Close(ctx)) }()
 
 	var role, superuser string
-	if err := conn.QueryRow(ctx,
-		`SELECT current_user, current_setting('is_superuser')`).Scan(&role, &superuser); err != nil {
-		t.Fatalf("reading the session's own identity: %v", err)
+	if idErr := conn.QueryRow(ctx,
+		`SELECT current_user, current_setting('is_superuser')`).Scan(&role, &superuser); idErr != nil {
+		t.Fatalf("reading the session's own identity: %v", idErr)
 	}
 	if role != appenderRole {
 		t.Errorf("connected as %q, wanted %q", role, appenderRole)
@@ -212,7 +212,7 @@ func probeOnce(ctx context.Context, t *testing.T, conn *pgx.Conn, sql string) (b
 	if err != nil {
 		return true, "the probe could not be run: " + err.Error()
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { discardRollback(tx.Rollback(ctx)) }()
 
 	if _, err := tx.Exec(ctx, "SET TRANSACTION READ WRITE"); err != nil {
 		return false, "refused before the statement ran (" + sqlState(err) + ")"
@@ -227,6 +227,12 @@ func probeOnce(ctx context.Context, t *testing.T, conn *pgx.Conn, sql string) (b
 	}
 	return true, "the statement succeeded and was rolled back"
 }
+
+// discardRollback swallows the rollback of a probe transaction. The probe's
+// verdict is already recorded and a rollback that failed changes none of it;
+// errcheck's check-blank makes the discard a named function rather than a
+// blank assignment (internal/api/readonly.go's idiom).
+func discardRollback(error) {}
 
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
@@ -276,28 +282,28 @@ func TestOPS010TheRoleCheckBitesAndTheSchemaIsTheRunners(t *testing.T) {
 	}
 
 	root := repoRoot(t)
-	if err := pg.copyDeployScripts(ctx, root); err != nil {
-		t.Fatalf("staging the shipped deploy scripts: %v", err)
+	if stageErr := pg.copyDeployScripts(ctx, root); stageErr != nil {
+		t.Fatalf("staging the shipped deploy scripts: %v", stageErr)
 	}
-	if out, err := pg.runInit(ctx, "db-init.sh"); err != nil {
-		t.Fatalf("db-init.sh failed: %v\n%s", err, out)
+	if out, initErr := pg.runInit(ctx, "db-init.sh"); initErr != nil {
+		t.Fatalf("db-init.sh failed: %v\n%s", initErr, out)
 	}
 
 	// ---- the gate passes on the role the deployment provisioned ------------
-	if out, err := pg.runInit(ctx, "verify-role.sh"); err != nil {
+	if out, gateErr := pg.runInit(ctx, "verify-role.sh"); gateErr != nil {
 		t.Fatalf("verify-role.sh rejected the role db-init.sh had just provisioned: %v\n%s",
-			err, out)
+			gateErr, out)
 	} else {
 		t.Logf("--- verify-role.sh, as provisioned ---\n%s", out)
 	}
 
 	// ---- and it has to bite ------------------------------------------------
-	if err := pg.psqlAsOwner(ctx,
-		`GRANT DELETE ON innsegl.events TO `+appenderRole); err != nil {
-		t.Fatalf("widening the role for the negative case: %v", err)
+	if grantErr := pg.psqlAsOwner(ctx,
+		`GRANT DELETE ON innsegl.events TO `+appenderRole); grantErr != nil {
+		t.Fatalf("widening the role for the negative case: %v", grantErr)
 	}
-	out, err := pg.runInit(ctx, "verify-role.sh")
-	if err == nil {
+	out, wideErr := pg.runInit(ctx, "verify-role.sh")
+	if wideErr == nil {
 		t.Errorf("verify-role.sh passed a role holding DELETE on innsegl.events.\n"+
 			"A gate that cannot fail is not a gate, and this is the exact single "+
 			"GRANT #109 is about — invisible to code review, caught only by asking "+
@@ -308,25 +314,25 @@ func TestOPS010TheRoleCheckBitesAndTheSchemaIsTheRunners(t *testing.T) {
 			"told which privilege to revoke.\n%s", out)
 	}
 	t.Logf("--- verify-role.sh, one GRANT later ---\n%s", out)
-	if err := pg.psqlAsOwner(ctx,
-		`REVOKE DELETE ON innsegl.events FROM `+appenderRole); err != nil {
-		t.Fatalf("restoring the role: %v", err)
+	if revokeErr := pg.psqlAsOwner(ctx,
+		`REVOKE DELETE ON innsegl.events FROM `+appenderRole); revokeErr != nil {
+		t.Fatalf("restoring the role: %v", revokeErr)
 	}
 
 	// ---- the schema is the migration runner's own --------------------------
-	store, err := ledger.Open(ctx, pg.ownerDSN())
-	if err != nil {
-		t.Fatalf("opening the ledger the deploy scripts built: %v", err)
+	store, openErr := ledger.Open(ctx, pg.ownerDSN())
+	if openErr != nil {
+		t.Fatalf("opening the ledger the deploy scripts built: %v", openErr)
 	}
 	defer store.Close()
 
 	before := migrationCount(ctx, t, pg)
-	if err := store.Migrate(ctx); err != nil {
+	if migrateErr := store.Migrate(ctx); migrateErr != nil {
 		t.Fatalf("the shipped migration runner rejected the schema deploy/compose "+
 			"built: %v\n\nThe compose stack applies migrations/*.sql itself, so its "+
 			"bookkeeping has to be the runner's bookkeeping — otherwise a later "+
 			"`innsegl serve -migrate` re-applies migration 0001 over a schema that "+
-			"already has it.", err)
+			"already has it.", migrateErr)
 	}
 	if after := migrationCount(ctx, t, pg); after != before {
 		t.Errorf("Migrate() applied %d migration(s) over a schema the deploy scripts "+
@@ -342,11 +348,11 @@ func migrationCount(ctx context.Context, t *testing.T, pg *ledgerContainer) int 
 	if err != nil {
 		t.Fatalf("connecting as the owner: %v", err)
 	}
-	defer func() { _ = conn.Close(ctx) }()
+	defer func() { discardRollback(conn.Close(ctx)) }()
 	var n int
-	if err := conn.QueryRow(ctx,
-		`SELECT count(*) FROM innsegl.schema_migrations`).Scan(&n); err != nil {
-		t.Fatalf("counting applied migrations: %v", err)
+	if countErr := conn.QueryRow(ctx,
+		`SELECT count(*) FROM innsegl.schema_migrations`).Scan(&n); countErr != nil {
+		t.Fatalf("counting applied migrations: %v", countErr)
 	}
 	return n
 }

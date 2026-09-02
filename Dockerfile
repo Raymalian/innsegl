@@ -106,9 +106,23 @@ RUN addgroup -g 1000 innsegl \
 COPY --from=build /out/innsegl /usr/local/bin/innsegl
 COPY --from=build /out/gitsign /usr/local/bin/gitsign
 
+# The workspace root, owned by the image's user.
+#
+# MEASURED, and it is the reason this line exists rather than being obvious:
+# Docker initialises an EMPTY named volume from the image's content AND
+# OWNERSHIP at the mount path. If /work does not exist in the image, the daemon
+# creates the mountpoint root-owned, and every container that mounts it as uid
+# 1000 — the MCP, the reconciler, the demo agent — gets "Permission denied" on
+# the first mkdir. Creating it here is what makes `innsegl-workspace` writable
+# by the three services doc 05 §1 shares it between.
+RUN mkdir -p /work && chown 1000:1000 /work
+
 # git and gitsign both want a writable HOME, and gitsign writes its cache
-# there. A read-only root filesystem with a writable /home/innsegl is the
-# intended shape; deploy/compose/innsegl.yml runs it that way.
+# there, so HOME is a real directory this user owns rather than `/`.
+#
+# INNSEGL_GITSIGN is the path internal/signing execs as git's
+# `gpg.x509.program`. Set in the image rather than in the compose file because
+# it is a property of THIS image's layout, not of a deployment's choices.
 ENV HOME=/home/innsegl \
     INNSEGL_GITSIGN=/usr/local/bin/gitsign
 

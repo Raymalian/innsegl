@@ -158,7 +158,7 @@ func startLedger(ctx context.Context, t *testing.T) (*ledgerContainer, error) {
 	name := fmt.Sprintf("innsegl-deploy-pg-%d", os.Getpid())
 	// A previous run that was killed rather than torn down leaves the name
 	// taken; removing it is not an error worth reporting.
-	_, _ = docker(ctx, "rm", "--force", "--volumes", name)
+	discardError(docker(ctx, "rm", "--force", "--volumes", name))
 
 	if _, err := docker(ctx, "run", "--detach",
 		"--name", name,
@@ -196,8 +196,14 @@ func (c *ledgerContainer) stop() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	_, _ = docker(ctx, "rm", "--force", "--volumes", c.name)
+	discardError(docker(ctx, "rm", "--force", "--volumes", c.name))
 }
+
+// discardError swallows an error a caller genuinely cannot act on. errcheck
+// runs with check-blank in this repository, so the discard is a NAMED function
+// rather than a blank assignment — internal/api/readonly.go's idiom, and for
+// its stated reason: a discard should be visible and explained, not invisible.
+func discardError(string, error) {}
 
 // copyDeployScripts puts the SHIPPED migrations and the SHIPPED init scripts
 // into the container at the paths deploy/compose/innsegl.yml mounts them.

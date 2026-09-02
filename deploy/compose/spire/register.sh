@@ -228,13 +228,12 @@ register_oidc() {
 register_mcp() {
   local parent="$1"
 
-  if entry_exists "${MCP_SPIFFE_ID}"; then
-    log "entry already present: ${MCP_SPIFFE_ID}"
-    spire entry show -spiffeID "${MCP_SPIFFE_ID}"
-    return 0
-  fi
-
   if ! docker image inspect "${MCP_IMAGE}" >/dev/null 2>&1; then
+    if entry_exists "${MCP_SPIFFE_ID}"; then
+      log "entry already present: ${MCP_SPIFFE_ID}"
+      spire entry show -spiffeID "${MCP_SPIFFE_ID}"
+      return 0
+    fi
     log "SKIPPING ${MCP_SPIFFE_ID}: the image ${MCP_IMAGE} is not built yet."
     log '  build it and re-run this script, which is idempotent:'
     log '    docker compose -f deploy/compose/innsegl.yml build'
@@ -244,6 +243,31 @@ register_mcp() {
 
   local image_config_digest
   image_config_digest="$(docker image inspect --format '{{.Id}}' "${MCP_IMAGE}")"
+
+  # ------------------------------------------------------------------
+  # A STALE ENTRY IS WORSE THAN NO ENTRY, and this is the case that produces
+  # one. `innsegl:local` is BUILT here rather than pulled, so every rebuild
+  # gives it a new image config digest — and an entry naming the previous one
+  # matches nothing. The MCP then starts, fails to fetch an SVID, and restarts
+  # forever with a message about the Workload API rather than about an entry
+  # somebody needs to replace.
+  #
+  # spire-oidc has no equivalent case: its image is pinned by digest upstream
+  # and does not move. So the freshness check lives here and only here.
+  # ------------------------------------------------------------------
+  local existing_id
+  existing_id="$(spire entry show -spiffeID "${MCP_SPIFFE_ID}" 2>/dev/null \
+    | sed -n 's/^Entry ID *: *//p' | head -n 1 | tr -d '[:space:]')"
+  if [ -n "${existing_id}" ]; then
+    if spire entry show -spiffeID "${MCP_SPIFFE_ID}" 2>/dev/null \
+        | grep -q "docker:image_config_digest:${image_config_digest}"; then
+      log "entry already present and current: ${MCP_SPIFFE_ID}"
+      spire entry show -spiffeID "${MCP_SPIFFE_ID}"
+      return 0
+    fi
+    log "the ${MCP_SPIFFE_ID} entry names a different build of ${MCP_IMAGE}; replacing it"
+    spire entry delete -entryID "${existing_id}"
+  fi
 
   # The SHA-256 of the binary the MCP actually runs, taken out of a container
   # that is created and removed WITHOUT EVER BEING STARTED. `docker cp` reads a
