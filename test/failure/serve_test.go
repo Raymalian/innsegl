@@ -869,6 +869,11 @@ func runServeToCompletion(t *testing.T, c *campaign, extra ...string) (int, stri
 		"-health-listen", "127.0.0.1:0",
 		"-fulcio-url", "http://127.0.0.1:1",
 		"-rekor-url", "http://127.0.0.1:1",
+		// Identity mode `literal`, as c.startWith uses. Stated here as well
+		// because these cases assert that the server REFUSES for the reason
+		// under test: without it the server would refuse for want of an
+		// identity secret and every one of them would pass vacuously.
+		"-identity-mode", "literal",
 	}, extra...)
 
 	cmd := exec.CommandContext(ctx, c.binary, args...)

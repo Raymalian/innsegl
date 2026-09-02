@@ -13,6 +13,22 @@ Deprecations are announced here one minor release ahead of removal.
 
 ### Added
 
+- **Pseudonymous agent identity, on by default** (#116). `register_agent` now
+  fills the SPIFFE ID's `{agent_type}` and `{task_id}` with
+  `HMAC-SHA256(deployment_secret, "<field>:" ‖ value)` truncated to eight hex
+  characters, so a ticket reference no longer reaches the Fulcio certificate,
+  the Rekor entry or the `Agent-Identity` / `Agent-Task` trailers. Configured
+  with `INNSEGL_IDENTITY_MODE` (`pseudonymous` by default, `literal` for the
+  previous behaviour) and `INNSEGL_IDENTITY_SECRET`; **a deployment in
+  `pseudonymous` mode with no secret refuses to start** rather than falling
+  back to literal values. The real `agent_type` and `task_ref` still reach the
+  `run_registered` event unchanged and are the only mapping back — the secret
+  is needed to create a pseudonym and never to resolve one, so losing or
+  rotating it orphans nothing. No protected surface moves: the grammar, the
+  trailer keys, the event schema and the canonical serialization are untouched,
+  and a third party's three verification checks are unchanged. See ADR-0041 for
+  what it costs — the attested link from a commit to a tracker now lives in the
+  ledger rather than in `git log`.
 - Apache-2.0 licence, `NOTICE`, security policy, versioning policy,
   contribution guide, code of conduct, and issue templates.
 - `internal/event`: the common event envelope, RFC 8785 (JCS) canonical

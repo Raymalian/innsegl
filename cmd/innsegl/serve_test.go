@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/mcp"
 )
 
@@ -30,7 +31,13 @@ var serveEnv = []string{
 	envRegisterRateWindow, envClockSkewBound, envTrustedOrigins,
 	envMCPSessionTimeout, envMCPShutdownTimeout, envHealthTimeout,
 	envRequireAppendOnlyRole, envMigrate,
+	envIdentityMode, envIdentitySecret,
 }
+
+// testIdentitySecret is a 32-byte fixture for RM-079's pseudonymous default.
+// The default mode needs a secret and refuses to start without one, which is
+// the behaviour TestServeRefusesPseudonymousIdentityWithNoSecret pins.
+const testIdentitySecret = "serve-test-fixture-secret-012345"
 
 func clearServeEnv(t *testing.T) {
 	t.Helper()
@@ -50,6 +57,7 @@ func completeServeArgs(extra ...string) []string {
 		"-parent-id", "spiffe://innsegl.dev/spire/agent/x509pop/abc",
 		"-fulcio-url", "http://127.0.0.1:5555",
 		"-rekor-url", "http://127.0.0.1:5556",
+		"-identity-secret", testIdentitySecret,
 	}, extra...)
 }
 
@@ -150,6 +158,10 @@ func TestServeRefusesEachMissingRequirementByName(t *testing.T) {
 		{"-parent-id", envParentID},
 		{"-fulcio-url", envFulcioURL},
 		{"-rekor-url", envRekorURL},
+		// RM-079 (#116). The mode defaults to pseudonymous, so a deployment
+		// that named no secret is refused by name here — not started with the
+		// caller's ticket references going into every Rekor entry.
+		{"-identity-secret", envIdentitySecret},
 	}
 
 	for _, req := range required {
@@ -181,6 +193,68 @@ func TestServeRefusesEachMissingRequirementByName(t *testing.T) {
 	}
 }
 
+// TestPRI002ServeRefusesPseudonymousIdentityWithNoSecret, and starts under
+// `literal` when an operator asks for it on purpose.
+//
+// RM-079 (#116). The two failure shapes this pins out of existence are a
+// silent fall back to literal values — the configuration would say the
+// deployment is private while every ticket number went into Rekor — and a
+// per-process random secret, which would give one run a second SPIFFE ID after
+// a restart and leave SPIRE holding two entries for it.
+func TestPRI002ServeRefusesPseudonymousIdentityWithNoSecret(t *testing.T) {
+	drop := func(args []string, flag string) []string {
+		out := args[:1:1]
+		for i := 1; i < len(args); i += 2 {
+			if args[i] != flag {
+				out = append(out, args[i], args[i+1])
+			}
+		}
+		return out
+	}
+
+	t.Run("no secret refuses", func(t *testing.T) {
+		clearServeEnv(t)
+		args := drop(completeServeArgs(), "-identity-secret")
+		var stdout, stderr bytes.Buffer
+		code := runServeCommand(args[1:], &stdout, &stderr, fakeDeps(&fakeServer{}, nil))
+		if code != exitUsage {
+			t.Fatalf("serve with no identity secret = %d, want %d (exitUsage). "+
+				"Starting would have put this deployment's ticket references into "+
+				"every certificate and every Rekor entry, permanently.", code, exitUsage)
+		}
+		if !strings.Contains(stderr.String(), string(identity.ModeLiteral)) {
+			t.Errorf("the refusal does not name %q, so an operator is not told how to ask "+
+				"for the old behaviour deliberately:\n%s", identity.ModeLiteral, stderr.String())
+		}
+	})
+
+	t.Run("literal starts, with no secret", func(t *testing.T) {
+		clearServeEnv(t)
+		args := drop(completeServeArgs(), "-identity-secret")
+		args = append(args, "-identity-mode", string(identity.ModeLiteral))
+		var stdout, stderr bytes.Buffer
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if code := runServe(ctx, args[1:], &stdout, &stderr,
+			fakeDeps(&fakeServer{}, nil)); code != exitOK {
+			t.Fatalf("serve in %s mode = %d, want %d. stderr:\n%s",
+				identity.ModeLiteral, code, exitOK, stderr.String())
+		}
+	})
+
+	t.Run("a secret in literal mode refuses", func(t *testing.T) {
+		clearServeEnv(t)
+		args := append(completeServeArgs(), "-identity-mode", string(identity.ModeLiteral))
+		var stdout, stderr bytes.Buffer
+		if code := runServeCommand(args[1:], &stdout, &stderr,
+			fakeDeps(&fakeServer{}, nil)); code != exitUsage {
+			t.Fatalf("serve with a secret in %s mode = %d, want %d (exitUsage): an "+
+				"operator who set a secret asked for pseudonyms",
+				identity.ModeLiteral, code, exitUsage)
+		}
+	})
+}
+
 // TestEverySettingIsReadableFromTheEnvironment. doc 05 runs this as a
 // container; RM-011's canary set the precedent that a secret is never put on a
 // command line the process table can read, and the ledger DSN carries a
@@ -193,6 +267,7 @@ func TestEverySettingIsReadableFromTheEnvironment(t *testing.T) {
 	t.Setenv(envParentID, "spiffe://innsegl.dev/spire/agent/x509pop/abc")
 	t.Setenv(envFulcioURL, "http://127.0.0.1:5555")
 	t.Setenv(envRekorURL, "http://127.0.0.1:5556")
+	t.Setenv(envIdentitySecret, testIdentitySecret)
 
 	var captured serveOptions
 	deps := serveDeps{open: func(_ context.Context, o serveOptions, _ *serveLog) (servedMCP, error) {
@@ -210,7 +285,8 @@ func TestEverySettingIsReadableFromTheEnvironment(t *testing.T) {
 			code, exitOK, stderr.String())
 	}
 	if captured.dsn == "" || captured.spireAddress == "" || captured.trustDomain == "" ||
-		captured.parentID == "" || captured.fulcioURL == "" || captured.rekorURL == "" {
+		captured.parentID == "" || captured.fulcioURL == "" || captured.rekorURL == "" ||
+		captured.identitySecret == "" {
 		t.Fatalf("the environment was not read into the options: %+v", captured)
 	}
 }

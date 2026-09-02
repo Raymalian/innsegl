@@ -627,6 +627,12 @@ func (c *campaign) startWith(t *testing.T, extra ...string) *daemon {
 		// register_agent floods are MCP-013's subject, not this campaign's;
 		// an unmetered tool is what the crash windows are measured against.
 		"-register-rate-calls", "0",
+		// Identity mode `literal` (RM-079, #116). This campaign composes and
+		// looks up SPIFFE IDs from the agent type and task it passed in —
+		// runRefFor does — and the crash windows it measures are about the
+		// ledger, the idempotency store and the SPIRE entry, not about what
+		// the identity says. PRI-003 and PRI-004 measure `pseudonymous`.
+		"-identity-mode", "literal",
 	)
 	cmd.Args = append(cmd.Args, extra...)
 	stderr := &lockedBuffer{}

@@ -281,7 +281,7 @@ func (c *recordEventService) append(ctx context.Context, runID, toolName, digest
 	// The directory's answer is checked, not trusted — the same check
 	// get_credential makes, from the one implementation of it, so that an
 	// event cannot be attributed to another run's identity (I2).
-	spiffeID, err := credentialRunIdentity(runID, run)
+	spiffeID, _, err := credentialRunIdentity(runID, run)
 	if err != nil {
 		return nil, err
 	}

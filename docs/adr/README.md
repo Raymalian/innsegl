@@ -63,6 +63,7 @@ maintainer ask "why is it like this?"
 | [0038](0038-headless-primitives-with-a-governed-token-layer-over-ibm-carbon.md) | Build on headless primitives with a governed token layer rather than IBM Carbon, ship the tokens as plain CSS, and make doc 06 §5.3's colour rule a build failure | accepted | 2026-08-30 |
 | [0039](0039-size-from-ops-002s-measurements-and-retire-doc-05-4s-estimates.md) | Size the deployment from OPS-002's measurements, and record what each measured number replaces in doc 05 §4 | accepted | 2026-09-02 |
 | [0040](0040-threat-model-review.md) | Close doc 04's open abuse cases against tests that exist, assign REL-001 to release signing, and pin the framework mappings to documents fetched on the review date | accepted | 2026-09-02 |
+| [0041](0041-pseudonymise-agent-type-and-task-ref-in-the-spiffe-id-and-resolve-through-the-ledger-row.md) | Pseudonymise `agent_type` and `task_ref` in the SPIFFE ID, and resolve them through the ledger row rather than a key | accepted | 2026-09-02 |
 
 ## Open items
 
@@ -347,3 +348,16 @@ maintainer ask "why is it like this?"
   impersonation" is pinned to `ASI03`, which is primary-sourced, but its
   T-number could not be read from any OWASP document reachable on 2026-09-02 and
   was left unguessed.
+- **ADR-0041** pseudonymises the SPIFFE ID's `{agent_type}` and `{task_id}` and
+  leaves three things for a human. doc 07 has no IDs for it: `PRI-001`…`PRI-004`
+  are used in the code and are not in the catalogue, which is a new family and
+  not only four more rows. doc 02 §6's golden fixture 01 still shows
+  `spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42` beside `task_ref`
+  `JIRA-118`; the fixture is immutable bytes and correct as bytes, but the
+  section reads as though that composition is what `register_agent` produces,
+  which is now true only under identity mode `literal`. And the ADR narrows one
+  invariant check — `mcp.credentialRunIdentity` can no longer compare the
+  identity's first two segments against the recorded values — with the residue
+  asserted as a test; whether that trade is acceptable is a human's call to
+  ratify, and re-tightening it needs a way to make the comparison without
+  holding the deployment secret on a read path.

@@ -19,6 +19,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/signing"
 )
 
@@ -252,6 +253,12 @@ type SignCommitConfig struct {
 	// constrains them and Signers.Admits gates them at start-up.
 	AuthorName  string
 	AuthorEmail string
+	// Pseudonyms renders the caller's task reference into the Agent-Task
+	// trailer the way register_agent rendered it into the SPIFFE ID's
+	// {task_id}. Required, and it MUST be the same one register_agent holds:
+	// a claim whose task segment disagrees with the identity is one this tool
+	// refuses. RM-079 (#116).
+	Pseudonyms *identity.Pseudonymiser
 }
 
 // signCommitService is the configured tool.
@@ -266,6 +273,7 @@ type signCommitService struct {
 	signers     SignCommitSigners
 	authorName  string
 	authorEmail string
+	pseudonyms  *identity.Pseudonymiser
 }
 
 // newSignCommitService checks the configuration and returns the tool.
@@ -297,6 +305,10 @@ func newSignCommitService(cfg SignCommitConfig) (*signCommitService, error) {
 		return refuse("no author name: a commit's author line is part of the bytes that get signed")
 	case cfg.AuthorEmail == "":
 		return refuse("no author email: I6 constrains it and an empty one is not a value the policy can admit")
+	case cfg.Pseudonyms == nil:
+		return refuse("no pseudonymiser: nothing would render the Agent-Task trailer the way " +
+			"register_agent rendered the identity's {task_id}, so every claim would be refused " +
+			"as inconsistent (RM-079, #116)")
 	}
 	if err := cfg.Signers.Admits(cfg.AuthorEmail); err != nil {
 		return refuse(fmt.Sprintf(
@@ -319,6 +331,7 @@ func newSignCommitService(cfg SignCommitConfig) (*signCommitService, error) {
 		signers:     cfg.Signers,
 		authorName:  cfg.AuthorName,
 		authorEmail: cfg.AuthorEmail,
+		pseudonyms:  cfg.Pseudonyms,
 	}, nil
 }
 
@@ -438,7 +451,24 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 	// What the trailers will claim, checked here rather than inside the
 	// wrapper so a claim this run cannot make is refused before an intent
 	// exists (IP §6.9's spoofing, seen from our own side).
-	claim := signing.Claim{Identity: spiffeID, Run: run.RunID, Task: in.TaskRef}
+	//
+	// The task the trailer CARRIES is the caller's reference put through the
+	// same pseudonymiser register_agent put it through, because Agent-Task
+	// must lowercase to the identity's {task_id} segment (ADR-0018 §6) and
+	// since RM-079 (#116) that segment is a pseudonym. So the ticket number
+	// leaves `git log` as well as Rekor: it is resolved through the ledger's
+	// `run_registered` row, or through the dashboard, and no longer read off
+	// the commit. A deployment that wants the old, human-legible trailer asks
+	// for identity mode `literal` and accepts the Rekor entry that comes with
+	// it; there is no half-way setting, because a literal trailer against a
+	// pseudonymous certificate is precisely the mismatch check 3 exists to
+	// refuse.
+	claimedTask, err := c.pseudonyms.ClaimedTask(in.TaskRef)
+	if err != nil {
+		return nil, Errorf(ClassInvariantViolation, run.RunID,
+			"task_ref %q is not a run identity component (doc 02 §5): %w", in.TaskRef, err)
+	}
+	claim := signing.Claim{Identity: spiffeID, Run: run.RunID, Task: claimedTask}
 	trailers, err := claim.Trailers()
 	if err != nil {
 		return nil, Errorf(ClassInvariantViolation, run.RunID,
@@ -577,7 +607,7 @@ func (c *signCommitService) resolveRun(ctx context.Context, runID string) (Crede
 			"run %q was retired at %s; retirement is effective immediately (IP §6.2)",
 			runID, event.NewTimestamp(run.RetiredAt))
 	}
-	spiffeID, err := credentialRunIdentity(runID, run)
+	spiffeID, _, err := credentialRunIdentity(runID, run)
 	if err != nil {
 		return CredentialRun{}, "", err
 	}

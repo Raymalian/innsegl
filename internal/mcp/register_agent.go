@@ -14,6 +14,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/spire"
 )
@@ -138,6 +139,9 @@ type RegisterAgentConfig struct {
 	TTL time.Duration
 	// Now reads the clock. Nil means time.Now.
 	Now func() time.Time
+	// Pseudonyms decides what the SPIFFE ID's {agent_type} and {task_id}
+	// SAY. Required. RM-079 (#116).
+	Pseudonyms *identity.Pseudonymiser
 }
 
 // DefaultRegisterAgentSelectors binds a run's entry to the workload carrying
@@ -187,6 +191,12 @@ func ConfigureRegisterAgent(cfg RegisterAgentConfig) (func(), error) {
 	if cfg.ParentID == "" {
 		return nil, registerAgentMisconfigured(
 			"no parent id: an entry with no attested parent is one no workload can match (I1)")
+	}
+	if cfg.Pseudonyms == nil {
+		return nil, registerAgentMisconfigured(
+			"no pseudonymiser: nothing would decide what the SPIFFE ID says about the run, " +
+				"and a nil one defaulting to the caller's values would put the ticket " +
+				"reference in a permanent public record (RM-079, #116)")
 	}
 	if cfg.Selectors == nil {
 		cfg.Selectors = DefaultRegisterAgentSelectors
@@ -240,7 +250,7 @@ func registerAgent(ctx context.Context, _ *sdk.CallToolRequest, in registerAgent
 
 // register is the tool, once its dependencies are known.
 func (c *RegisterAgentConfig) register(ctx context.Context, in registerAgentIn) (registerAgentOut, error) {
-	run, err := registerAgentRun(in)
+	run, err := registerAgentRun(in, c.Pseudonyms)
 	if err != nil {
 		return registerAgentOut{}, err
 	}
@@ -353,10 +363,15 @@ func registerAgentEvent(run spire.RunRef, spiffeID string, in registerAgentIn) e
 		event.FieldRunID:          run.RunID,
 		event.FieldSpiffeID:       spiffeID,
 		event.FieldIdempotencyKey: in.IdempotencyKey,
-		event.FieldAgentType:      run.AgentType,
-		// The caller's reference, verbatim. doc 02 §3's `task_ref` is an
-		// external reference and deliberately not the SPIFFE ID's {task-id}.
-		event.FieldTaskRef: in.TaskID,
+		// The caller's OWN values, verbatim, and never the SPIFFE ID's
+		// segments. doc 02 §3's `task_ref` is an external reference and
+		// deliberately not the SPIFFE ID's {task-id}; since RM-079 (#116)
+		// `agent_type` is deliberately not its {agent-type} either. This one
+		// row is the whole mapping from the pseudonymous identity back to what
+		// the run actually was — there is no second table — and it is why
+		// losing the deployment secret cannot orphan history.
+		event.FieldAgentType: in.AgentType,
+		event.FieldTaskRef:   in.TaskID,
 	}
 }
 
@@ -393,25 +408,36 @@ func registerAgentRunID(in registerAgentIn) string {
 
 // registerAgentRun turns IP §4's arguments into the run they name.
 //
-// agent_type is used as given: doc 02 §3 holds it to the identifier grammar
-// because it is a component of the SPIFFE ID, and silently rewriting it would
-// make the recorded agent_type differ from the one the caller believes it
-// registered. task_id is lowercased for the SPIFFE ID's {task-id} and kept
-// verbatim for the event's task_ref, which is the split golden fixture 01
-// shows.
-func registerAgentRun(in registerAgentIn) (spire.RunRef, error) {
-	if err := event.ValidateIdentifier(in.AgentType); err != nil {
+// Both arguments are checked against doc 02 §5's identifier grammar and then
+// handed to the deployment's Pseudonymiser, which decides what the SPIFFE ID
+// SAYS (RM-079, #116). In `literal` mode it says what it always said: the
+// agent type as given, the task id lowercased. In `pseudonymous` mode — the
+// default — it says eight hex characters of a keyed digest, so the certificate
+// that ends up in Rekor names neither the ticket nor the kind of work.
+//
+// The grammar is checked BEFORE the pseudonym is taken, and by the
+// pseudonymiser rather than here, so that the two modes are one tool contract:
+// a 4 KB task reference is refused in both, even though eight hex characters
+// would have carried it.
+//
+// Nothing about the CALLER'S values is rewritten. They go into the event
+// verbatim — see registerAgentEvent — which is the split golden fixture 01
+// shows and, since RM-079, the only mapping from a public pseudonym back to a
+// ticket.
+func registerAgentRun(in registerAgentIn, p *identity.Pseudonymiser) (spire.RunRef, error) {
+	agentType, err := p.AgentType(in.AgentType)
+	if err != nil {
 		return spire.RunRef{}, Errorf(ClassInvariantViolation, "",
 			"agent_type is not a run identity component (doc 02 §5): %w", err)
 	}
-	taskID := strings.ToLower(in.TaskID)
-	if err := event.ValidateIdentifier(taskID); err != nil {
+	taskID, err := p.TaskID(in.TaskID)
+	if err != nil {
 		return spire.RunRef{}, Errorf(ClassInvariantViolation, "",
 			"task_id %q is not a run identity component once lowercased (doc 02 §5): %w",
 			in.TaskID, err)
 	}
 	return spire.RunRef{
-		AgentType: in.AgentType,
+		AgentType: agentType,
 		TaskID:    taskID,
 		RunID:     registerAgentRunID(in),
 	}, nil

@@ -42,9 +42,18 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	trustDomain   = "innsegl.dev"
-	demoAgentType = "demo"
-	demoTaskRef   = "ops-004"
+	trustDomain = "innsegl.dev"
+	// demoAgentType and demoTaskRef are what the demo agent registers as, and
+	// since RM-079 (#116) they are also what OPS-004 SCANS the public record
+	// for. They are deliberately distinctive strings rather than "demo" and
+	// "ops-004": a scan for a substring that occurs elsewhere in a certificate,
+	// a transcript or a commit object is a scan that can pass by accident.
+	demoAgentType = "refactor-billing"
+	demoTaskRef   = "ACME-90210"
+
+	// smokeIdentitySecret keys the demo deployment's pseudonyms. A fixture:
+	// the stack it configures lives for the length of one test binary.
+	smokeIdentitySecret = "ops004-smoke-fixture-secret-0123"
 	// demoRepo is doc 02 §5's host/org/name, not a path. The MCP resolves it
 	// beneath the workspace root it was configured with.
 	demoRepo = "github.com/innsegl-demo/scratch"
@@ -813,6 +822,11 @@ func (s *stack) startMCP(ctx context.Context, t *testing.T) error {
 		"--env", "INNSEGL_SIGN_AUTHOR_EMAIL=demo-agent@innsegl.invalid",
 		"--env", "INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED=true",
 		"--env", "INNSEGL_GITSIGN=/innsegl/gitsign",
+		// RM-079 (#116). Pseudonymous identity is the shipped default, so the
+		// server refuses to start without a secret — which is the point: an
+		// adopter's first run cannot silently put its ticket references into
+		// Rekor. The reference stack generates one; this is the fixture's.
+		"--env", "INNSEGL_IDENTITY_SECRET=" + smokeIdentitySecret,
 		"--env", "HOME=/tmp",
 		"--entrypoint", "/innsegl/innsegl",
 		runnerImage, "serve",

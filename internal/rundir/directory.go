@@ -35,11 +35,22 @@
 // Every value here comes out of a `run_registered` event: the identity, the
 // agent type and the task. Nothing is derived from anything else — in
 // particular `agent_type` and `task_ref` are READ from the event rather than
-// parsed back out of `spiffe_id`. That is what makes `mcp.credentialRunIdentity`
-// a real check: it requires `spiffe_id` to end in
-// `/agent/{agent_type}/{task_id}/{run_id}`, and a directory that had split the
-// SPIFFE ID to obtain those three components would satisfy that check by
-// construction, whatever the ledger actually held.
+// parsed back out of `spiffe_id`.
+//
+// Since RM-079 (#116) they CANNOT be parsed back out of it. Under identity
+// mode `pseudonymous` — the default — the SPIFFE ID's {agent_type} and
+// {task_id} are keyed pseudonyms of the recorded values, and only the
+// deployment secret relates the two. So this package reads the caller's real
+// values, `internal/mcp` reads the identity's segments off the identity
+// (mcp.CredentialRun.Ref), and neither needs the secret: that is what makes
+// the secret a thing you need to CREATE an identity and never to READ one, and
+// it is why rotating it cannot strand a live run or orphan a finished one.
+//
+// The cost is that `mcp.credentialRunIdentity` can no longer require
+// `spiffe_id` to end in `/agent/{agent_type}/{task_id}/{run_id}`; it requires
+// a well-formed identity in the /agent/ subtree ending in `/{run_id}`. That
+// narrowing, and why it was chosen over holding the secret on a read path, is
+// documented at that function.
 package rundir
 
 import (
