@@ -61,6 +61,7 @@ maintainer ask "why is it like this?"
 | [0036](0036-cross-check-the-chain-against-rekor-in-both-directions-and-sweep-a-trailing-window.md) | Cross-check the chain against Rekor in both directions, and sweep a bounded trailing window of the log | accepted | 2026-08-30 |
 | [0037](0037-gate-i6-over-the-repositorys-own-commits-and-date-the-empirical-half.md) | Gate I6 over every commit the repository already has, refuse a shallow clone, and make GH-001's run date a tracked artefact that expires | accepted | 2026-08-30 |
 | [0038](0038-headless-primitives-with-a-governed-token-layer-over-ibm-carbon.md) | Build on headless primitives with a governed token layer rather than IBM Carbon, ship the tokens as plain CSS, and make doc 06 §5.3's colour rule a build failure | accepted | 2026-08-30 |
+| [0039](0039-size-from-ops-002s-measurements-and-retire-doc-05-4s-estimates.md) | Size the deployment from OPS-002's measurements, and record what each measured number replaces in doc 05 §4 | accepted | 2026-09-02 |
 
 ## Open items
 
