@@ -388,7 +388,8 @@ func (g *prtGate) accept(ln net.Listener) {
 }
 
 func (g *prtGate) forward(client net.Conn) {
-	backend, err := net.DialTimeout("tcp", g.backend, 10*time.Second)
+	d := net.Dialer{Timeout: 10 * time.Second}
+	backend, err := d.DialContext(context.Background(), "tcp", g.backend)
 	if err != nil {
 		prtReset(client)
 		return
@@ -399,8 +400,16 @@ func (g *prtGate) forward(client net.Conn) {
 		return
 	}
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(backend, client); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(client, backend); done <- struct{}{} }()
+	go func() {
+		_, cerr := io.Copy(backend, client)
+		prtDropped(cerr)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, cerr := io.Copy(client, backend)
+		prtDropped(cerr)
+		done <- struct{}{}
+	}()
 	<-done
 	g.untrack(client, backend)
 	prtReset(client)
@@ -432,10 +441,23 @@ func (g *prtGate) untrack(conns ...net.Conn) {
 // get an orderly half-close it could mistake for a completed response.
 func prtReset(c net.Conn) {
 	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetLinger(0)
+		// A platform that will not set SO_LINGER gives an orderly FIN instead
+		// of a reset, which is a weaker partition and not a wrong one.
+		prtDropped(tc.SetLinger(0))
 	}
-	_ = c.Close()
+	prtDropped(c.Close())
 }
+
+// prtDropped names what happens to an error this harness deliberately does not
+// act on, so that the discard is a decision in the source rather than a blank
+// identifier a reader has to interpret.
+//
+// Every use is a place where there is no caller to tell and nothing to do: a
+// forwarding copy that ended because the route was severed (which is this
+// gate's whole purpose), a socket teardown, the final close of a gate at the
+// end of the suite, and the SIGKILL of a subprocess that is already going away.
+// Anything an assertion could act on is returned, never dropped here.
+func prtDropped(error) {}
 
 // sever takes the route away and does not return until it is provably gone.
 //
@@ -501,9 +523,7 @@ func (g *prtGate) refuses() bool {
 	return false
 }
 
-func (g *prtGate) close() {
-	_ = g.sever()
-}
+func (g *prtGate) close() { prtDropped(g.sever()) }
 
 // ---------------------------------------------------------------------------
 // The world.
@@ -1255,8 +1275,8 @@ func (w *prtWorld) startDaemon(t *testing.T) *prtDaemon {
 	)
 	stderr := &prtBuffer{}
 	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting `innsegl serve`: %v", err)
+	if serr := cmd.Start(); serr != nil {
+		t.Fatalf("starting `innsegl serve`: %v", serr)
 	}
 	d := &prtDaemon{cmd: cmd, stderr: stderr}
 	w.daemon = d
@@ -1317,10 +1337,12 @@ func (d *prtDaemon) reap() {
 	}
 	d.dead = true
 	if d.session != nil {
-		_ = d.session.Close()
+		prtDropped(d.session.Close())
 	}
-	_ = d.cmd.Process.Kill()
-	_, _ = d.cmd.Process.Wait()
+	prtDropped(d.cmd.Process.Kill())
+	if _, werr := d.cmd.Process.Wait(); werr != nil {
+		prtDropped(werr)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1428,8 +1450,8 @@ func (w *prtWorld) openLedger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ledger.Open: %v", err)
 	}
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatalf("ledger.Migrate: %v", err)
+	if merr := store.Migrate(ctx); merr != nil {
+		t.Fatalf("ledger.Migrate: %v", merr)
 	}
 	w.store = store
 
@@ -1552,8 +1574,9 @@ func (w *prtWorld) openWORM(t *testing.T) {
 	}
 	// Object lock on, because doc 05 §2 says a segment store has it and a
 	// bucket without it is a different store than the one under test.
-	if err := cl.MakeBucket(ctx, w.bucket, minio.MakeBucketOptions{ObjectLocking: true}); err != nil {
-		t.Fatalf("create bucket %s: %v", w.bucket, err)
+	if berr := cl.MakeBucket(ctx, w.bucket,
+		minio.MakeBucketOptions{ObjectLocking: true}); berr != nil {
+		t.Fatalf("create bucket %s: %v", w.bucket, berr)
 	}
 
 	// The WORM the SEALER writes through addresses the GATE. It is built while

@@ -463,8 +463,8 @@ func (w *prtWorld) prepare(t *testing.T, cell string) prtFixtures {
 	defer cancel()
 
 	fx := prtFixtures{cell: cell}
-	fx.runA = w.mustRegister(t, ctx, "a")
-	fx.runB = w.mustRegister(t, ctx, "b")
+	fx.runA = w.mustRegister(ctx, t, "a")
+	fx.runB = w.mustRegister(ctx, t, "b")
 	fx.stagedRef = w.stage(t)
 
 	// A segment to seal, taken off the chain the server has actually written.
@@ -944,8 +944,8 @@ func prtCountType(records []map[string]any, kind string) int {
 func prtOpenIntents(records []map[string]any) []string {
 	intents := map[string]bool{}
 	for _, r := range records {
-		kind, _ := r[event.FieldEventType].(string)
-		if kind != event.EventTypeCommitIntent {
+		kind, ok := r[event.FieldEventType].(string)
+		if !ok || kind != event.EventTypeCommitIntent {
 			continue
 		}
 		if id, ok := r[event.FieldEventID].(string); ok {
@@ -953,8 +953,9 @@ func prtOpenIntents(records []map[string]any) []string {
 		}
 	}
 	for _, r := range records {
-		kind, _ := r[event.FieldEventType].(string)
-		if kind != event.EventTypeCommitRecorded && kind != event.EventTypeCommitIntentExpired {
+		kind, ok := r[event.FieldEventType].(string)
+		if !ok || (kind != event.EventTypeCommitRecorded &&
+			kind != event.EventTypeCommitIntentExpired) {
 			continue
 		}
 		if id, ok := r[event.FieldIntentEventID].(string); ok {
@@ -1484,7 +1485,7 @@ func (w *prtWorld) staleLocks(t *testing.T) []string {
 	return stale
 }
 
-func (w *prtWorld) mustRegister(t *testing.T, ctx context.Context, suffix string) string {
+func (w *prtWorld) mustRegister(ctx context.Context, t *testing.T, suffix string) string {
 	t.Helper()
 	o := w.call(ctx, prtOpRegister, mcp.ToolRegisterAgent, map[string]any{
 		"agent_type":      prtAgentType,
@@ -1498,8 +1499,8 @@ func (w *prtWorld) mustRegister(t *testing.T, ctx context.Context, suffix string
 		t.Fatalf("preparing a run failed with everything reachable (%s: %s)",
 			o.fail.Class, o.fail.Message)
 	}
-	runID, _ := o.reply["run_id"].(string)
-	if runID == "" {
+	runID, ok := o.reply["run_id"].(string)
+	if !ok || runID == "" {
 		t.Fatalf("register_agent returned no run_id: %v", o.reply)
 	}
 	return runID
