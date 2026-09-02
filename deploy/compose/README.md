@@ -1,16 +1,18 @@
 # The Innsegl reference stack
 
-This is the first thing to run after cloning. Two commands, from nothing, and
-you will have watched a real agent identity be issued, a real commit be signed
-under it, and that commit be verified by a container with **no route to our
-database**.
+This is the first thing to run after cloning. One block of commands, from
+nothing, and you will have watched a real agent identity be issued, a real
+commit be signed under it, and that commit be verified by a container with **no
+route to our database**.
 
 That last part is the whole point of the project, so it is what the first run
 demonstrates rather than what the documentation asserts.
 
-MEASURED on a warm machine: the boot block below takes about 25 seconds and
-`make smoke` about 55 seconds. A genuinely first run is longer, and the extra
-time is a dozen image pulls rather than anything this project does.
+MEASURED on a warm machine: `docker compose -f deploy/compose/innsegl.yml up -d`
+takes about 8 seconds once the images exist, the whole boot block about a
+minute, and `make smoke` about 55 seconds. A genuinely first run is longer, and
+the extra time is a dozen image pulls plus one Go build and one npm build
+rather than anything this project does at runtime.
 
 > **This is a contract, not a tutorial.** `VERSIONING.md` puts the compose
 > reference stack and `make smoke` inside the compatibility surface: if
@@ -25,7 +27,7 @@ time is a dozen image pulls rather than anything this project does.
 
 | | |
 |---|---|
-| Docker | a running daemon. The stack is nine containers; on Apple Silicon one of them is emulated |
+| Docker | a running daemon. The stack is fifteen containers — nine dependencies, six of ours; on Apple Silicon one of them is emulated |
 | git | any recent version |
 | Go, and `make` | the toolchain `go.mod` names — `make smoke` builds the binary it verifies with |
 | `curl` | only for the readiness checks below |
@@ -64,10 +66,13 @@ export INNSEGL_SPIRE_JWT_ISSUER=http://spire-oidc:8080
 docker compose -f deploy/compose/spire.yml up -d
 deploy/compose/spire/register.sh
 docker compose -f deploy/compose/sigstore.yml up -d
+docker compose -f deploy/compose/innsegl.yml build
+deploy/compose/spire/register.sh
+docker compose -f deploy/compose/innsegl.yml up -d
 ```
 
-That is the whole of `docker compose up` for this project, and every line of it
-matters:
+`make innsegl-up` runs exactly that. It is the whole of `docker compose up` for
+this project, and every line of it matters:
 
 - **The export comes first.** Three files must name the same issuer — the `iss`
   claim SPIRE stamps, the issuer in the OIDC discovery document, and the
@@ -77,14 +82,30 @@ matters:
   cannot validate. `sigstore.yml` therefore *requires* the variable rather than
   defaulting it: if you forget the export, compose refuses to start rather than
   starting something subtly wrong.
-- **`register.sh` is not optional.** It creates the one bootstrap registration
-  entry the stack needs — `spire-oidc`'s own identity — without which the
-  discovery provider has no JWKS to publish and Fulcio refuses every token. It
-  is idempotent, so if it says `no attested agent yet`, the agent has not
-  finished attesting: wait a moment and run it again.
+- **`register.sh` is not optional.** It creates the two bootstrap registration
+  entries the stack needs: `spire-oidc`'s own identity, without which the
+  discovery provider has no JWKS to publish and Fulcio refuses every token, and
+  `innsegl-mcp`'s. It is idempotent, so if it says `no attested agent yet`, the
+  agent has not finished attesting: wait a moment and run it again.
 - **Order.** `sigstore.yml` attaches to a network `spire.yml` declares and
-  owns, so bringing Sigstore up first fails naming the missing network. That is
-  the correct failure and not a bug.
+  owns, and `innsegl.yml` attaches to networks *both* of them own plus the
+  SPIRE agent's Workload API socket. Bringing a later stack up first fails
+  naming the missing network. That is the correct failure and not a bug.
+- **`register.sh` runs twice, and the second run is not a mistake.** Its first
+  job is `spire-oidc`'s identity. Its second is `innsegl-mcp`'s — doc 05 §1's
+  "only service holding SPIRE admin credential" — and that entry's selectors
+  are derived from the `innsegl:local` **image**, which the line above it
+  builds. Running it before the build is harmless: it registers `spire-oidc`,
+  says the image is not built yet, and exits 0.
+
+  It also writes `deploy/compose/.env`. `innsegl serve` requires the attested
+  node's SPIFFE ID, which is not knowable before the stack boots — it is
+  `.../spire/agent/x509pop/<sha1 of the agent certificate>`, freshly minted on
+  every `up` after a `down -v`. `register.sh` puts it where compose reads it
+  for you. The file is gitignored, because it describes one booted stack.
+- **`build` before `up`.** Three of the seven services in `innsegl.yml` are the
+  same locally-built `innsegl` image and one is the dashboard, so the first
+  boot compiles rather than pulls. About a minute, warm.
 
 ### Check it came up
 
@@ -92,6 +113,8 @@ matters:
 curl -s http://127.0.0.1:8443/keys                  # a JWKS with a key in it
 curl -s http://127.0.0.1:5555/api/v1/rootCert       # a PEM CA certificate
 curl -s http://127.0.0.1:3000/api/v1/log/publicKey  # a PKIX public key
+curl -s http://127.0.0.1:8081/readyz                # the MCP's own readiness
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/  # the dashboard
 ```
 
 Bytes that parse, not a status code
@@ -112,10 +135,15 @@ Takes a few minutes. Exit status is the verdict. It runs **OPS-004** from the
 test catalogue, which does four things in order:
 
 1. **Boots this stack from a fresh clone.** It copies the repository's tracked
-   and not-ignored files into a temporary directory, takes both shipped compose
-   projects down *with their volumes*, and then runs the boot block above —
-   through a shell, from that copy. Nothing gitignored and no leftover volume
-   can carry the run.
+   and not-ignored files into a temporary directory, takes the two dependency
+   compose projects down *with their volumes*, and then runs the **first four
+   lines** of the boot block above — through a shell, from that copy. Nothing
+   gitignored and no leftover volume can carry the run.
+
+   It does not run `innsegl.yml`. OPS-004 predates those services and stands up
+   its own Postgres and its own `innsegl serve` with plain `docker run`; that
+   is the gap named under "What the reference stack still does not contain",
+   and closing it is a change to a compatibility surface rather than a tidy-up.
 2. **Runs the demo agent.** An MCP client, over the real HTTP transport,
    calling the five tools by their published names: `register_agent`,
    `get_credential`, `sign_commit`, `retire_agent`, and a refusal check that
@@ -141,7 +169,10 @@ of ours except a git repository and two public endpoints.
 > **`make smoke` owns the shipped compose projects for the length of a run.**
 > To boot from nothing it removes `innsegl-spire` and `innsegl-sigstore` and
 > their volumes, before and after. A stack you brought up by hand will be
-> taken down. Set `INNSEGL_TEST_KEEP_STACK=1` to leave everything running
+> taken down. **Run `make innsegl-down` first** if you have the innsegl stack
+> up: it attaches to networks the two dependency projects own, so a `down`
+> underneath it leaves those networks alive with an active endpoint and the
+> next boot reuses them rather than recreating them. Set `INNSEGL_TEST_KEEP_STACK=1` to leave everything running
 > afterwards for inspection; `make smoke-down` then removes it.
 >
 > For the same reason only one `make smoke` can run on a machine at a time.
@@ -154,9 +185,17 @@ of ours except a git repository and two public endpoints.
 
 ```sh
 export INNSEGL_SPIRE_JWT_ISSUER=http://spire-oidc:8080
+INNSEGL_SPIRE_PARENT_ID=unset docker compose -f deploy/compose/innsegl.yml \
+  --profile demo --profile canary down -v
 docker compose -f deploy/compose/sigstore.yml down -v
 docker compose -f deploy/compose/spire.yml --profile verify down -v
 ```
+
+`make innsegl-down sigstore-down spire-down` runs the same three. The
+`INNSEGL_SPIRE_PARENT_ID=unset` is only there so `down` works after a `down -v`
+has already removed the trust material `.env` describes: `innsegl.yml` requires
+that variable rather than defaulting it, and a teardown block that cannot tear
+down is a worse problem than no teardown block.
 
 `-v` removes the volumes, including the bootstrap PKI. The next boot generates
 a fresh trust domain root and a fresh agent identity, so every registration
@@ -167,62 +206,121 @@ entry from the old stack is gone with it — which is correct, and is why `down`
 
 ## What is in it
 
-Nine containers in two compose projects, both of them
-[doc 05 §1](../../docs/05-innsegl-deployment-topology.md)'s reference topology.
-Each has its own README, and the reasoning lives next to the setting it
-explains rather than in a summary:
+[doc 05 §1](../../docs/05-innsegl-deployment-topology.md) names twelve services.
+**All twelve ship**, in three compose projects. Each project has its own README,
+and the reasoning lives next to the setting it explains rather than in a
+summary:
 
 | | |
 |---|---|
 | [`spire/README.md`](spire/README.md) | `spire-server`, `spire-agent`, `spire-oidc` — the trust domain, workload attestation, and the JWT-SVID → OIDC bridge |
 | [`sigstore/README.md`](sigstore/README.md) | `fulcio`, `rekor` and Rekor's backing Trillian log and database — the CA and the transparency log |
+| [`innsegl/README.md`](innsegl/README.md) | `postgres`, `minio`, `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-dashboard`, `demo-agent` — **the components this project is**, and the append-only database role they run under |
 
-Both stacks are segmented rather than flat: network membership is the
+The first two are Innsegl's dependencies. The third is Innsegl.
+
+All three stacks are segmented rather than flat: network membership is the
 access-control list, and the rule is written at each `networks:` declaration in
 the compose files. Fulcio has no route into SPIRE beyond fetching two public
 documents; Rekor has no route to Trillian's database; the SPIRE admin API is
-reachable from one network with one intended member. Compose is where the
-least-privilege shape is first proven, not first ignored.
+reachable from one network with two members, and the second is the MCP it was
+declared for. The MCP is on no network with MinIO, and the dashboard is on no
+network with the MCP. Neither Postgres nor MinIO publishes a host port, because
+a published port is reachable by address from an unrelated bridge network —
+measured, and explained in [`innsegl/README.md`](innsegl/README.md). Compose is
+where the least-privilege shape is first proven, not first ignored.
+
+MEASURED: thirteen docker networks between the three projects — three for
+SPIRE, five more for Sigstore, five more for Innsegl. Docker's default address
+pools run out at roughly twenty-nine, and this repository's per-process test
+harnesses take up to eight each, so a machine running both may need
+`docker network prune` between runs (#100).
 
 ---
 
-## What the reference stack does not contain yet
+## See it work
 
-doc 05 §1 lists twelve services. The two compose files here ship five of those
-rows — nine running containers, because Rekor's row carries its own log and
-database sidecars. The **seven** rows that are not compose services at all are
-named here, because a first-run experience that quietly omits half its topology
-is worse than one that says so:
+```sh
+make innsegl-demo
+```
 
-| Missing | Consequence for a first run |
-|---|---|
-| `postgres` (the ledger's hot tier) | `make smoke` starts one itself, on a network of its own, publishing no host port; the MCP applies the shipped migrations to it with its own `-migrate` |
-| `innsegl-mcp` | `make smoke` runs `innsegl serve` in a container joined to the three networks doc 05 §1 puts it on, with the shipped binary bind-mounted. There is no Dockerfile and no compose service |
-| `innsegl-reconciler`, `innsegl-sealer` | not exercised by the smoke at all; both are the same `innsegl` binary under another subcommand |
-| `innsegl-dashboard` | not exercised by the smoke at all; it is the separate TypeScript application under `web/` |
-| `minio` (object storage, object lock on) | segment sealing and the SEG-005 deletion canary are not part of the first run |
-| `demo-agent` | is the smoke test body itself rather than a container |
+An MCP client — `curl` and a JSON-RPC envelope, sharing nothing with the server
+but the protocol — calls the four IP §4 tools by their published names. It
+registers an identity, gets a JWT-SVID, stages a commit in the deployment's
+workspace, has it signed by the Fulcio you booted and logged in the Rekor you
+booted, retires the run, and then proves the retired run cannot spend a
+credential. It prints the commit SHA.
 
-Two related consequences you will see with your own eyes on a first run:
+Then verify that commit **with no route to the ledger**:
 
-- **`innsegl serve` prints `DATABASE ROLE IS OVER-PRIVILEGED` at start-up.**
-  doc 05 §1 runs the MCP under a database role that can append and cannot
-  delete. Nothing here creates that role, so the smoke's MCP connects as the
-  database owner and the server says so, loudly, rather than letting the
-  topology's claim go unmeasured. The append-only trigger in
-  `migrations/0001_ledger.sql` still refuses `UPDATE`, `DELETE` and `TRUNCATE`
-  on the chain — but a trigger is disableable by a superuser and a revoke does
-  not bind the table owner, so the deployment really is one `psql` prompt
-  weaker than the topology says. Warned, not hidden.
-- **The MCP's admin credential is three PEM files, not an attested SVID.** A
-  deployment attests the MCP through the Workload API and gets rotation with
-  it. That needs a registration entry carrying the MCP container's own
-  selectors, which needs the container to exist first — the same circularity
-  `register.sh` already solves for `spire-oidc`, and it would have to grow a
-  second case. Until it does, the smoke mints the credential over the server's
-  local admin socket, as an operator action.
+```sh
+make innsegl-verify-commit COMMIT=<the sha it printed>
+```
+
+That container joins one network — the Sigstore stack's published one — holds a
+read-only copy of the working tree and no database credential of any kind, and
+is on none of the three ledger networks. All three checks pass: certificate
+chain, transparency-log inclusion, and trailer-to-certificate identity.
+
+Two more things worth running once, because both are measurements rather than
+claims:
+
+```sh
+make innsegl-verify   # ask the server what the MCP's DB credential can do
+make innsegl-canary   # SEG-005: prove a sealed segment cannot be deleted
+```
 
 ---
+
+## The append-only database role
+
+**doc 05 §1 runs the MCP under a database role that can append and cannot
+delete.** Until [#109](https://github.com/Raymalian/innsegl/issues/109) nothing
+created one, so this stack ran the MCP as the database owner and
+`innsegl serve` printed `DATABASE ROLE IS OVER-PRIVILEGED` on an adopter's
+first contact with an attestation system.
+
+It does not any more. `innsegl-db-init` creates the role, applies the grants,
+and then **connects as the role and asks the server what it can actually do**,
+exiting non-zero if the answer is "delete". `innsegl-mcp` gates on its
+completion and runs with `-require-append-only-role`, so the server refuses to
+start behind anything else. The first line of the MCP's log is now:
+
+```
+level=INFO msg="database role is append-only on the chain (doc 05 §1)" role=innsegl_appender granted=[INSERT]
+```
+
+The reasoning, the measurement it rests on, and why a check that asked "did the
+statement fail?" would pass the database owner are in
+[`innsegl/README.md`](innsegl/README.md).
+
+---
+
+## What the reference stack still does not contain
+
+Two things, named here because a first-run experience that quietly omits part
+of its topology is worse than one that says so.
+
+**The dashboard's BFF.** `innsegl-dashboard` ships as its UI half. The BFF is
+`internal/api` — it serves `GET /api/v1/runs` and `GET /api/v1/proof/{sha}`,
+and its `readonly.go` both provisions the read-only role doc 05 §1's dashboard
+note is about *and* refuses to serve a request if the server says that
+credential can write. It has **no `cmd/` entry point**: no `main` in this
+module constructs an `api.Server`, so there is nothing to containerise. Until
+there is, the dashboard holds **no database credential at all** — which
+satisfies "no write credentials mounted" by having none — and every view that
+reads the query API renders its own load-failure state. Visible, and honest.
+
+**`make smoke` still prints the over-privileged warning.** OPS-004 does not run
+`innsegl.yml`: it starts its own Postgres and its own `innsegl serve` with
+plain `docker run`, as the database owner, because it predates these services.
+The reference deployment is fixed; the smoke's ad-hoc MCP is not. The fix is
+three lines in `test/smoke/smokestack_test.go` — run
+`deploy/compose/innsegl/db-init.sh` against the Postgres it already starts,
+hand the MCP the `innsegl_appender` DSN, and set
+`INNSEGL_REQUIRE_APPEND_ONLY_ROLE` — and it belongs to whoever owns that file,
+because `make smoke` is a compatibility surface and changing what it runs is a
+release decision.
 
 ## Compose defaults versus shipped defaults
 
@@ -310,8 +408,12 @@ Four things worth knowing before you choose:
 | compose refuses, naming `INNSEGL_SPIRE_JWT_ISSUER` | the export was skipped. This refusal is deliberate; see above |
 | `innsegl serve` refuses, naming `-identity-mode / -identity-secret` | `INNSEGL_IDENTITY_SECRET` is unset or under 16 bytes. See "What an agent's identity says about it" |
 | `register: FAIL: no attested agent yet` | the SPIRE agent has not finished attesting. Re-run `register.sh`; it is idempotent |
-| ports 8443, 5555 or 3000 already bound | the stack publishes those three on loopback. Free them, or bring your own stack down first |
-| `all predefined address pools have been fully subnetted` | Docker is out of network address space, at roughly the twenty-ninth network. `docker network prune` |
+| ports 8443, 5555, 3000, 8080, 8081 or 8082 already bound | the stack publishes those six on loopback. Free them, or override: `INNSEGL_SPIRE_OIDC_PORT`, `INNSEGL_MCP_PORT`, `INNSEGL_MCP_HEALTH_PORT`, `INNSEGL_DASHBOARD_PORT` |
+| `all predefined address pools have been fully subnetted` | Docker is out of network address space, at roughly the twenty-ninth network. The three stacks hold twelve between them. `docker network prune` |
+| compose refuses, naming `INNSEGL_SPIRE_PARENT_ID` | `register.sh` has not run since this stack booted. It writes `deploy/compose/.env`; re-run it |
+| `innsegl-mcp` restarts, logging that the Workload API gave it no SVID | its registration entry is missing or names an older build of `innsegl:local`. Re-run `register.sh` — it detects a stale entry and replaces it |
+| `innsegl-db-init` exits non-zero naming a privilege | the ledger's role can do more than append. The message names which privilege; `make innsegl-verify` re-runs the check on its own |
+| `innsegl-sealer` restarts | it exits when it cannot reach MinIO or Rekor. `docker compose -f deploy/compose/innsegl.yml logs innsegl-sealer` |
 | Fulcio answers `invalid identity token` | the two stacks disagree about the issuer. Bring both down with `-v` and boot again with the export set |
 | `trillian-db` never becomes healthy on Apple Silicon | it is emulated; give it longer on the first pull |
 | `make smoke` removed a stack you were using | expected — see the note above `make smoke` |
