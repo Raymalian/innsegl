@@ -1272,6 +1272,10 @@ func (w *prtWorld) startDaemon(t *testing.T) *prtDaemon {
 		// matrix measures error classes against; a limiter would add a class
 		// nothing here is asking about.
 		"-register-rate-calls", "0",
+		// Identity mode `literal` (RM-079, #116): this matrix measures error
+		// classes under partition, and what the identity says is not one of
+		// them. PRI-003 and PRI-004 measure `pseudonymous`.
+		"-identity-mode", "literal",
 	)
 	stderr := &prtBuffer{}
 	cmd.Stderr = stderr

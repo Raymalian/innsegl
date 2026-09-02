@@ -57,19 +57,33 @@ func TestOPS004FreshCloneBootstrap(t *testing.T) {
 	// ---- 2. the demo agent ------------------------------------------------
 	run := s.demoAgent(t)
 
-	if want := "spiffe://" + trustDomain + "/agent/" + demoAgentType + "/" +
-		run.taskRef + "/" + run.runID; run.spiffeID != want {
-		t.Errorf("register_agent minted %q; the SPIFFE ID grammar (VERSIONING.md "+
-			"protected surface 3) requires %q", run.spiffeID, want)
+	if err := event.ValidateSPIFFEID(run.spiffeID); err != nil {
+		t.Errorf("register_agent minted %q, which is not "+
+			"spiffe://{trust_domain}/agent/{agent_type}/{task_id}/{run_id} "+
+			"(VERSIONING.md protected surface 3): %v", run.spiffeID, err)
+	}
+	if !strings.HasPrefix(run.spiffeID, "spiffe://"+trustDomain+"/agent/") ||
+		!strings.HasSuffix(run.spiffeID, "/"+run.runID) {
+		t.Errorf("register_agent minted %q; it must be this trust domain's, in the "+
+			"/agent/ subtree, and name this run", run.spiffeID)
 	}
 	for key, want := range map[string]string{
 		signing.TrailerAgentIdentity: run.spiffeID,
 		signing.TrailerAgentRun:      run.runID,
-		signing.TrailerAgentTask:     run.taskRef,
 	} {
 		if got := run.trailers[key]; got != want {
 			t.Errorf("sign_commit returned %s=%q, want %q", key, got, want)
 		}
+	}
+	// Agent-Task is not compared to the ticket reference any more. It is the
+	// identity's {task_id} segment, which under RM-079's default is a
+	// pseudonym; what has to hold is that the three trailers still agree with
+	// each other, because that agreement is what lets check 3 settle all three
+	// from the certificate alone.
+	if got, want := run.trailers[signing.TrailerAgentTask], taskSegmentOf(run.spiffeID); got != want {
+		t.Errorf("sign_commit returned %s=%q; it must be the {task_id} segment of %q, "+
+			"which is %q — otherwise check 3 compares two strings that cannot match",
+			signing.TrailerAgentTask, got, run.spiffeID, want)
 	}
 	// The trailers are on the object, not merely in the tool's answer. A
 	// commit is what a third party reads; the response is what we say.
@@ -175,6 +189,69 @@ func TestOPS004FreshCloneBootstrap(t *testing.T) {
 				"than two rows", got, want)
 		}
 	}
+
+	// ---- 5. PRI-004: the ticket reference is in none of it ----------------
+	//
+	// RM-079 (#116). Everything scanned here is an artifact this run really
+	// produced, on the real stack, and every one of them is public somewhere:
+	//
+	//   - the commit object, which is `git log` and, in a public repository,
+	//     the internet;
+	//   - the verification transcript, whose `identity` line and whose check-1
+	//     `certificate identity` fact are read OFF THE FULCIO CERTIFICATE by
+	//     internal/verify (uriSANOf), and whose check-2 facts come from the
+	//     Rekor entry the log returned. So this scan covers the certificate's
+	//     URI SAN — and with it the certificate inside the Rekor entry, which
+	//     is the only part of that entry any of these values could reach —
+	//     without this package having to parse either.
+	//
+	// The scan is not vacuous: stage 3 above already REQUIRES the transcript to
+	// contain run.spiffeID, so a transcript with no identity in it fails there
+	// before it can pass silently here.
+	//
+	// Revert the pseudonymisation and all of them carry ACME-90210 again.
+	for what, text := range map[string]string{
+		"the commit object":                     object,
+		"the verification transcript":           out,
+		"the spiffe_id register_agent returned": run.spiffeID,
+	} {
+		for _, private := range []string{demoTaskRef, demoAgentType} {
+			if strings.Contains(strings.ToLower(text), strings.ToLower(private)) {
+				t.Errorf("%s carries %q. Under public Sigstore that is a PERMANENT "+
+					"PUBLIC RECORD of which ticket this run came from and what kind of "+
+					"work it was (RM-079, #116):\n%s", what, private, text)
+			}
+		}
+	}
+
+	// And the other half: the ledger still holds both, unchanged. The
+	// `run_registered` row IS the mapping from the pseudonymous identity back
+	// to the ticket — there is no second table — so a system that had simply
+	// thrown the values away would pass the scan above and fail here.
+	if reg, ok := byType[event.EventTypeRunRegistered]; ok {
+		if got := memberString(t, reg, event.FieldAgentType); got != demoAgentType {
+			t.Errorf("run_registered carries agent_type %q, want %q", got, demoAgentType)
+		}
+		if got := memberString(t, reg, event.FieldTaskRef); got != demoTaskRef {
+			t.Errorf("run_registered carries task_ref %q, want the caller's own %q",
+				got, demoTaskRef)
+		}
+		if got := memberString(t, reg, event.FieldSpiffeID); got != run.spiffeID {
+			t.Errorf("run_registered carries spiffe_id %q and register_agent returned %q; "+
+				"the mapping only works if the row names the identity that is public",
+				got, run.spiffeID)
+		}
+	}
+}
+
+// taskSegmentOf returns the {task_id} component of a SPIFFE ID that has
+// already passed event.ValidateSPIFFEID, which guarantees the five parts.
+func taskSegmentOf(spiffeID string) string {
+	parts := strings.Split(strings.TrimPrefix(spiffeID, "spiffe://"), "/")
+	if len(parts) != 5 {
+		return ""
+	}
+	return parts[3]
 }
 
 // memberString and memberInt64 read one member of an appended event.

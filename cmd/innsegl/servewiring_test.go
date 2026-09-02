@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/internal/identity"
 )
 
 // The parts of the wiring that can be decided without a Postgres and a SPIRE:
@@ -193,6 +195,7 @@ func TestValidateRefusesEveryUnusableCombination(t *testing.T) {
 		parentID: "spiffe://innsegl.dev/spire/agent/x", fulcioURL: "http://f", rekorURL: "http://r",
 		listen: "127.0.0.1:0", healthListen: "127.0.0.1:0",
 		rateCalls: 1, rateWindow: 60_000_000_000,
+		identityMode: string(identity.ModePseudonymous), identitySecret: testIdentitySecret,
 	}
 	if problem := base.validate(); problem != "" {
 		t.Fatalf("the complete configuration was refused: %s", problem)
@@ -213,6 +216,19 @@ func TestValidateRefusesEveryUnusableCombination(t *testing.T) {
 		{"a credential with no bundle", func(o *serveOptions) {
 			o.svidFile, o.keyFile = "svid.pem", "key.pem"
 		}, "-svid, -key and -bundle"},
+		// RM-079 (#116). All three look configured and are not.
+		{"pseudonymous identity with no secret", func(o *serveOptions) {
+			o.identitySecret = ""
+		}, "-identity-mode / -identity-secret"},
+		{"pseudonymous identity with a short secret", func(o *serveOptions) {
+			o.identitySecret = "short"
+		}, "-identity-mode / -identity-secret"},
+		{"an identity mode that is neither", func(o *serveOptions) {
+			o.identityMode = "anonymous"
+		}, "-identity-mode / -identity-secret"},
+		{"a secret in literal mode", func(o *serveOptions) {
+			o.identityMode = string(identity.ModeLiteral)
+		}, "-identity-mode / -identity-secret"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := base
@@ -225,6 +241,13 @@ func TestValidateRefusesEveryUnusableCombination(t *testing.T) {
 				t.Errorf("refusal %q does not name %q", problem, tc.want)
 			}
 		})
+	}
+
+	// Literal identity, chosen deliberately and with no secret, is accepted.
+	lit := base
+	lit.identityMode, lit.identitySecret = string(identity.ModeLiteral), ""
+	if problem := lit.validate(); problem != "" {
+		t.Errorf("identity mode %s with no secret was refused: %s", identity.ModeLiteral, problem)
 	}
 
 	// All three together is the one credential the file source needs.

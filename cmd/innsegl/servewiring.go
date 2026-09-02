@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/rundir"
@@ -259,6 +260,36 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		return fail("configure the Sigstore readiness probe: %w", err)
 	}
 
+	// ---- pseudonymous identity (RM-079, #116) -----------------------------
+	//
+	// ONE pseudonymiser for the process, handed to both register_agent and
+	// sign_commit. Two would be a way for the Agent-Task trailer to disagree
+	// with the identity's {task_id}, and check 3 — the comparison a stranger
+	// settles all three trailers with — is exactly that comparison.
+	//
+	// The choice is logged either way. A privacy control whose state nobody
+	// can see is one nobody can audit, and `literal` in particular is a
+	// deliberate decision to put this deployment's ticket references into
+	// every Fulcio certificate and every Rekor entry, permanently.
+	pseudonyms, err := o.pseudonyms()
+	if err != nil {
+		return fail("configure identity mode: %w", err)
+	}
+	switch pseudonyms.Mode() {
+	case identity.ModePseudonymous:
+		log.info("agent identities are PSEUDONYMOUS: the SPIFFE ID, the Fulcio certificate "+
+			"and the Agent-Identity trailer carry keyed pseudonyms of agent_type and "+
+			"task_ref. The real values are in the ledger's run_registered row, which is "+
+			"the only mapping back (RM-079)",
+			"mode", string(pseudonyms.Mode()))
+	default:
+		log.warn("agent identities are LITERAL: every agent_type and task_ref goes into the " +
+			"SPIFFE ID, so into the Fulcio certificate, so into the Rekor entry — a " +
+			"PERMANENT PUBLIC RECORD under public Sigstore — and into the Agent-Identity " +
+			"trailer of every commit. Set -identity-mode " + string(identity.ModePseudonymous) +
+			" with a secret to stop that (RM-079)")
+	}
+
 	// ---- the five tools, in the one order that matters --------------------
 	registerCfg := mcp.RegisterAgentConfig{
 		Identities:  admin,
@@ -266,6 +297,7 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		Idempotency: idem,
 		ParentID:    o.parentID,
 		TTL:         o.runTTL,
+		Pseudonyms:  pseudonyms,
 	}
 	if o.rateCalls > 0 {
 		limiter, lerr := mcp.NewRateLimiter(mcp.RateLimit{
@@ -339,7 +371,7 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 	// turning a control off is an operator decision that appears in the log
 	// every time the process starts.
 	if o.workspace != "" {
-		restoreSign, serr := configureSignCommit(o, runs, store, idem, sigstore, log)
+		restoreSign, serr := configureSignCommit(o, runs, store, idem, sigstore, pseudonyms, log)
 		if serr != nil {
 			return fail("configure sign_commit: %w", serr)
 		}
@@ -425,6 +457,7 @@ func configureSignCommit(
 	store *ledger.Store,
 	idem *mcp.IdempotencyStore,
 	sigstore *mcp.SigstoreEndpoints,
+	pseudonyms *identity.Pseudonymiser,
 	log *serveLog,
 ) (func(), error) {
 	workspace, err := mcp.NewWorkspace(o.workspace)
@@ -454,6 +487,8 @@ func configureSignCommit(
 		Signers:     signers,
 		AuthorName:  o.signAuthorName,
 		AuthorEmail: o.signAuthorEmail,
+		// The SAME pseudonymiser register_agent holds. See above.
+		Pseudonyms: pseudonyms,
 	})
 	if err != nil {
 		return nil, err

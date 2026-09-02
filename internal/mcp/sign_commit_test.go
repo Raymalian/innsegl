@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/signing"
 	"innsegl.dev/innsegl/internal/spire"
@@ -438,6 +439,16 @@ func newSCWiring() *scWiring {
 		store:  &scSigstore{},
 	}
 	w.signers = &scSigners{signer: w.signer}
+	// Identity mode `literal`: this file's fixtures are scTaskRef "RM-033"
+	// against scTaskID "rm-033", which is what `literal` produces and what
+	// every assertion below is written in terms of. PRI-003 measures
+	// `pseudonymous` end to end.
+	literal, err := identity.New(identity.ModeLiteral, "")
+	if err != nil {
+		// newSCWiring has no *testing.T; a fixture that cannot be built is a
+		// defect in the fixture, not a case outcome.
+		panic("newSCWiring: " + err.Error())
+	}
 	w.cfg = SignCommitConfig{
 		Runs:        w.runs,
 		Idempotency: NewIdempotencyStore(nil),
@@ -449,6 +460,7 @@ func newSCWiring() *scWiring {
 		Signers:     w.signers,
 		AuthorName:  scAuthorName,
 		AuthorEmail: scAuthorEmail,
+		Pseudonyms:  literal,
 	}
 	return w
 }
@@ -923,6 +935,72 @@ func TestSignCommitRefusesAMalformedRequest(t *testing.T) {
 	}
 }
 
+// TestPRI003ATaskRefTheGrammarWillNotCarryIsRefusedBeforePhaseA. RM-079 (#116).
+//
+// `signCommitCheckRequest` bounds `task_ref` by emptiness and by
+// event.MaxReferenceBytes (256) and NOT by doc 02 §5's identifier grammar. So a
+// task reference with a slash in it, or one of 64 legal characters, passes the
+// request gate and is refused one step later — where it is rendered into the
+// Agent-Task trailer, which must lowercase to the identity's {task_id}.
+//
+// The first half of each case is the part that stops this test being vacuous:
+// it asserts that the tool's own request gate ADMITS the value. Without that,
+// a later tightening of signCommitCheckRequest would make this branch dead and
+// the test would still pass, which is the shape IP §2's branch floor exists to
+// catch.
+//
+// The class is asserted, not merely the failure: INVARIANT_VIOLATION and not
+// retryable is what IP §4's vocabulary — a protected surface — says a malformed
+// argument is, and it is what this input produced before RM-079 too, when
+// signing.Claim.Trailers refused it one line further on.
+func TestPRI003ATaskRefTheGrammarWillNotCarryIsRefusedBeforePhaseA(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		taskRef string
+	}{
+		{"a separator the grammar has no place for", "JIRA/118"},
+		{"a space", "ACME 90210"},
+		{"64 legal characters, one over the 63 the grammar allows", strings.Repeat("a", 64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := scIn()
+			in.TaskRef = tc.taskRef
+
+			// (1) The request gate admits it, so the refusal below is one this
+			// tool can really reach.
+			if err := signCommitCheckRequest(in); err != nil {
+				t.Fatalf("signCommitCheckRequest rejected %q (%v), so the refusal this "+
+					"case is about is unreachable and the case proves nothing",
+					tc.taskRef, err)
+			}
+
+			// (2) And the tool refuses it, in IP §4's vocabulary.
+			w := newSCWiring()
+			_, err := w.call(t, in)
+			if err == nil {
+				t.Fatal("sign_commit accepted a task_ref the SPIFFE ID grammar cannot carry; " +
+					"the Agent-Task trailer must lowercase to the identity's {task_id}")
+			}
+			classified := requireClassed(t, err, ClassInvariantViolation)
+			if classified.Retryable {
+				t.Errorf("the refusal is retryable; a malformed argument does not become "+
+					"well formed on a retry (ADR-0016): %v", err)
+			}
+
+			// (3) Nothing durable happened. The refusal is before Phase A, so
+			// there is no intent for the reconciler to resolve and no
+			// credential was fetched.
+			if got := w.ledger.ofType(event.EventTypeCommitIntent); len(got) != 0 {
+				t.Errorf("the refused call appended %d commit_intent event(s); a refusal "+
+					"before Phase A must leave the reconciler nothing to resolve", len(got))
+			}
+			if steps := w.phases.all(); len(steps) != 0 {
+				t.Errorf("the refused call ran %v; it must refuse before any of them", steps)
+			}
+		})
+	}
+}
+
 // TestSignCommitRefusesAClaimThisRunCannotMake.
 //
 // task_ref becomes the Agent-Task trailer and must lowercase to the task
@@ -1183,6 +1261,11 @@ func TestConfigureSignCommitRefusesAnIncompleteConfiguration(t *testing.T) {
 		{"no signers", func(c *SignCommitConfig) { c.Signers = nil }},
 		{"no author name", func(c *SignCommitConfig) { c.AuthorName = "" }},
 		{"no author email", func(c *SignCommitConfig) { c.AuthorEmail = "" }},
+		// RM-079 (#116), reachable exactly as the nine rows above are:
+		// SignCommitConfig and ConfigureSignCommit are exported, so a wiring
+		// site can leave this nil, and catching that AT START-UP rather than
+		// at an agent's first commit is the whole job of these guards.
+		{"no pseudonymiser", func(c *SignCommitConfig) { c.Pseudonyms = nil }},
 		{"an author the policy does not admit", func(c *SignCommitConfig) {
 			c.Signers = &scSigners{signer: &scSigner{}, admitErr: signing.ErrAuthorNotAdmitted}
 		}},
@@ -1971,6 +2054,17 @@ func (r scChainRuns) CredentialRun(_ context.Context, runID string) (CredentialR
 	return r.run, true, nil
 }
 
+// scLiteral is identity mode `literal`, which is what every fixture in this
+// file is written in terms of.
+func scLiteral(t *testing.T) *identity.Pseudonymiser {
+	t.Helper()
+	p, err := identity.New(identity.ModeLiteral, "")
+	if err != nil {
+		t.Fatalf("identity.New: %v", err)
+	}
+	return p
+}
+
 // scOpenEntries is the SPIRE registration-entry gate. The entry check is
 // TC-SPI's and get_credential's own subject and is measured against a real
 // SPIRE in TestGetCredentialAgainstRealSPIRE; this case is about the ledger and
@@ -2093,6 +2187,10 @@ func TestSIG001AgainstRealSigstoreAndARealChain(t *testing.T) {
 		}),
 		AuthorName:  scAuthorName,
 		AuthorEmail: scAuthorEmail,
+		// Identity mode `literal`: this case seeds the chain with a literal
+		// SPIFFE ID and asserts the literal trailers against it. PRI-004,
+		// below, is the same real stack under `pseudonymous`.
+		Pseudonyms: scLiteral(t),
 	})
 	if err != nil {
 		t.Fatalf("newSignCommitService: %v", err)

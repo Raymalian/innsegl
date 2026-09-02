@@ -66,9 +66,30 @@ const AudienceSigstore = "sigstore"
 // Retired reports whether the run has been retired.
 func (r CredentialRun) Retired() bool { return !r.RetiredAt.IsZero() }
 
-// Ref renders the run as the reference internal/spire takes.
-func (r CredentialRun) Ref() spire.RunRef {
-	return spire.RunRef{AgentType: r.AgentType, TaskID: r.TaskID, RunID: r.RunID}
+// Ref renders the run as the reference internal/spire takes: the three PATH
+// SEGMENTS of its SPIFFE ID, read off the ID itself.
+//
+// Not off AgentType and TaskID, which since RM-079 (#116) are the ledger's
+// record of what the run really was and not what its identity says. SPIRE
+// holds the segments and nothing else, so a lookup or a deletion built from
+// the recorded values would address an entry that does not exist. Reading them
+// off the recorded SPIFFE ID also means no read path needs the deployment
+// secret: rotating it cannot strand a live run.
+//
+// It refuses an identity that is not one rather than returning a zero RunRef,
+// which would ask SPIRE about `spiffe://{td}/agent///`. That refusal is REACHED
+// — the run directory is an interface, and one that answers with a malformed
+// identity, or with none, is refused here. credentialRunIdentity is the only
+// caller and this is the only place the grammar is checked on that path; an
+// earlier revision of RM-079 checked it there as well, which made this branch
+// dead and failed IP §2's 100%-branch floor.
+func (r CredentialRun) Ref() (spire.RunRef, error) {
+	run, err := spire.RunRefOf(r.SPIFFEID)
+	if err != nil {
+		return spire.RunRef{}, Errorf(ClassInvariantViolation, r.RunID,
+			"run %q has no usable identity: %v", r.RunID, err)
+	}
+	return run, nil
 }
 
 // MintedCredential is one JWT-SVID as SPIRE handed it over.
@@ -276,14 +297,16 @@ func (c *credentialService) issue(ctx context.Context, in getCredentialIn) (getC
 	// SPIRE's authorization policy cannot see. The policy refuses it too
 	// (deploy/compose/spire/authz-policy.rego); this is the same refusal one
 	// layer up, so neither alone is load-bearing.
-	spiffeID, err := credentialRunIdentity(in.RunID, run)
+	spiffeID, ref, err := credentialRunIdentity(in.RunID, run)
 	if err != nil {
 		return getCredentialOut{}, err
 	}
 
 	// Gate 4 — SPIRE still holds the entry. Asked of the server, whose answer
-	// changes the instant a delete commits.
-	if active := c.entries.RequireActiveRun(ctx, run.Ref()); active != nil {
+	// changes the instant a delete commits. `ref` is the identity's own path
+	// segments, from the parse the gate above already made — SPIRE holds those
+	// and not the ledger's `agent_type` / `task_ref` (RM-079, #116).
+	if active := c.entries.RequireActiveRun(ctx, ref); active != nil {
 		return getCredentialOut{}, active
 	}
 

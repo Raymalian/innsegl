@@ -71,6 +71,11 @@ LINE_FLOORS=(
   # re-derivation that convicts a tampered BFF is the package's reason to
   # exist and a silent regression there would be invisible from the outside.
   "internal/api 90"
+  # New in RM-079 (#116). internal/identity is what decides whether a ticket
+  # reference reaches a permanent public record; it is 60 lines of logic and
+  # measured 100.0% when it landed, so the floor is the highest in the table.
+  # A statement in it that nothing exercises is a mode nobody has tested.
+  "internal/identity 100"
 )
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

@@ -1154,6 +1154,11 @@ func (c *k9Campaign) startDaemon(t *testing.T) {
 		// register_agent floods are MCP-013's subject; an unmetered tool is
 		// what the soak's throughput is measured against.
 		"-register-rate-calls", "0",
+		// Identity mode `literal` (RM-079, #116). This campaign plants and
+		// reaps entries whose SPIFFE IDs it composes itself, and what it
+		// measures is what survives a SIGKILL — not what the identity says.
+		// PRI-003 and PRI-004 measure `pseudonymous`.
+		"-identity-mode", "literal",
 	)
 	stderr := &k9Buffer{}
 	cmd.Stderr = stderr
