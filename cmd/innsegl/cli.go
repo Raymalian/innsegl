@@ -38,6 +38,15 @@ type command struct {
 // `innsegl verify`. Adding or renaming an entry changes an operator-visible
 // surface, so the set is asserted by test.
 var commands = map[string]command{
+	// The dashboard's backend half: doc 05 §1's `innsegl-dashboard` row is
+	// "Read-only UI + BFF proof checks", and RM-076 (#109) shipped the UI
+	// alone because nothing in the module constructed an api.Server. It runs
+	// under a read-only database role and refuses to start without one
+	// (RM-083, #121).
+	"api": {
+		summary: "serve the dashboard's read-only query API and proof BFF",
+		exec:    apiCommand,
+	},
 	"serve": {
 		summary: "run the innsegl MCP server",
 		exec:    serveCommand,
