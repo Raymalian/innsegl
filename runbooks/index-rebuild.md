@@ -515,7 +515,7 @@ reasonably expect to exist and does not.
 
 | Wanted | Status |
 |---|---|
-| `innsegl seal` | **wired but not implemented.** `innsegl seal` prints `innsegl seal: not implemented` and exits 1. `internal/segment` has the sealer, the anchorer and the WORM writer; nothing in `cmd/innsegl` calls them. A production deployment therefore has no segments yet, and this runbook's §6 is written against the format, not against a live sealer. |
+| `innsegl seal` | **implemented (#112).** Runs as a loop by default, `-once` for a single cycle. Exit `0` sealed and anchored, `9` UNANCHORED, `10` INCONCLUSIVE. A production deployment now produces segments, and `deploy/compose/innsegl.yml` runs it as the `innsegl-sealer` service. §6 below was written against the format before the sealer existed; it has since been exercised against real segments, and the roots it re-derives were independently confirmed against a live Rekor entry. |
 | `innsegl migrate` | absent. Apply `migrations/*.sql` with `psql`, or start `innsegl serve -migrate`. |
 | `innsegl verify-segment` / an anchor check | absent. §6.3 is a manual `curl`. |
 | a rebuild/import subcommand | absent. §4.1 is `psql`. |

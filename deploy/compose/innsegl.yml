@@ -1,0 +1,776 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Innsegl reference compose stack — the components this project IS (RM-076,
+# #109). deploy/compose/spire.yml and deploy/compose/sigstore.yml are its
+# dependencies; this file is Innsegl.
+#
+# Doc 05 §1 is the specification for this file. It names seven rows here:
+#
+#   postgres            upstream   Ledger hot tier
+#                                  Single instance; volume-backed
+#   minio               upstream   Object storage with object lock enabled
+#                                  Buckets created with lock on; SEG-005 canary
+#                                  runs against it
+#   innsegl-mcp         built      The MCP server (register/credential/event/
+#                                  sign/retire). ONLY SERVICE HOLDING THE SPIRE
+#                                  ADMIN CREDENTIAL
+#   innsegl-reconciler  built      Intent expiry, Rekor cross-check, drift
+#                                  detection (same binary, subcommand)
+#   innsegl-sealer      built      Segment sealing + anchoring
+#                                  (same binary, subcommand)
+#   innsegl-dashboard   built      Read-only UI + BFF proof checks. No write
+#                                  credentials mounted — enforced by giving it
+#                                  a read-only DB role
+#   demo-agent          built      Scripted agent that registers, makes a
+#                                  scratch-repo commit, retires. This is the
+#                                  OPS-004 smoke test body
+#
+# and one requirement about how they are wired:
+#
+#   "Network segmentation even in compose: `spire-server` admin API and
+#    `postgres` write role reachable only from the services that need them;
+#    `innsegl-dashboard` on a network with read-only DB role and the proof
+#    endpoints. Compose is where the least-privilege shape is first proven, not
+#    first ignored."
+#
+# NONE OF THESE SEVEN EXISTED BEFORE #109. What shipped was the two dependency
+# stacks plus whatever each test harness stood up for itself with plain
+# `docker run` — so "the reference deployment" named no artifact anyone could
+# point at, and the MCP ran as the database owner while printing
+# DATABASE ROLE IS OVER-PRIVILEGED on an adopter's first contact with it.
+#
+# HOW TO RUN IT — see innsegl/README.md and ../README.md. Short version:
+#   export INNSEGL_SPIRE_JWT_ISSUER=http://spire-oidc:8080
+#   docker compose -f deploy/compose/spire.yml up -d
+#   deploy/compose/spire/register.sh
+#   docker compose -f deploy/compose/sigstore.yml up -d
+#   docker compose -f deploy/compose/innsegl.yml build
+#   deploy/compose/spire/register.sh          # now registers innsegl-mcp too
+#   docker compose -f deploy/compose/innsegl.yml up -d
+#
+# WHAT IS STILL NOT HERE, said plainly rather than left to be discovered:
+#   * the dashboard's BFF. `internal/api` serves GET /api/v1/runs and
+#     /api/v1/proof/{sha} and has NO `cmd/` entry point — there is no `main` in
+#     this module that constructs an api.Server, so there is nothing to put in
+#     a container. The dashboard row ships as its UI half and holds no database
+#     credential at all. See the service.
+#
+# `innsegl seal`'s operator surface was #112's, written in parallel with this
+# file. The sealer service below was written against the conventions
+# `reconcile` and `reap` had already set, before #112 landed, and then checked
+# against it: every variable it sets is one cmd/innsegl/seal.go reads, and it
+# passes no flags. See the service for the full note.
+# ============================================================================
+
+name: innsegl-core
+
+# ----------------------------------------------------------------------------
+# Pinned images. Doc 05 §1: "pin versions". Pinned twice — by release tag,
+# which says what this is, and by digest, which says what it *is*. A tag alone
+# is mutable at the registry; the digest is what docker actually verifies.
+# Same discipline as spire.yml and sigstore.yml.
+# ----------------------------------------------------------------------------
+x-postgres-image: &postgres-image
+  postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+# MEASURED-VERSION PIN, not a convenience pin. internal/segment's WORM harness
+# pins this exact release because "the whole subject of SEG-005 is one server's
+# object-lock enforcement, so the version that enforcement was observed in is
+# part of the evidence". The reference deployment runs the version the evidence
+# was taken against.
+x-minio-image: &minio-image
+  minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+x-minio-client-image: &minio-client-image
+  minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+
+# ----------------------------------------------------------------------------
+# The ledger's credentials.
+#
+# NOT A SECRET BOUNDARY, and saying so is the point of writing it here. These
+# values sit in a compose file and end up in `docker inspect`. What protects
+# the ledger in this stack is the network membership below — `innsegl-ledger`
+# is internal and has five members — and, for the MCP specifically, the
+# append-only ROLE, which is a boundary a leaked password does not cross: the
+# credential the MCP holds cannot delete an event no matter who holds it.
+#
+# A real deployment overrides both from a secret store. doc 05 §2's production
+# sketch is where that belongs; this is the compose default.
+# ----------------------------------------------------------------------------
+x-ledger-database: &ledger-database innsegl
+x-ledger-owner: &ledger-owner innsegl
+x-ledger-owner-password: &ledger-owner-password ${INNSEGL_LEDGER_OWNER_PASSWORD:-innsegl-compose-owner}
+
+# doc 05 §1's append-only role. The MCP, the reconciler and the sealer connect
+# as this and nothing else connects as it. innsegl/appendonly.sql is what it
+# may do and innsegl/verify-role.sh is what proves it.
+x-appender-role: &appender-role innsegl_appender
+x-appender-password: &appender-password ${INNSEGL_LEDGER_APPENDER_PASSWORD:-innsegl-compose-appender}
+
+x-object-store-user: &object-store-user ${INNSEGL_OBJECT_STORE_ACCESS_KEY:-innsegl}
+x-object-store-password: &object-store-password ${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}
+x-object-store-bucket: &object-store-bucket ${INNSEGL_OBJECT_STORE_BUCKET:-innsegl-segments}
+
+# ----------------------------------------------------------------------------
+# The trust domain and the two Sigstore endpoints, as reached from INSIDE the
+# container networks. `fulcio` and `rekor` are sigstore.yml's service names on
+# the `innsegl-sigstore` network this file joins.
+# ----------------------------------------------------------------------------
+x-trust-domain: &trust-domain innsegl.dev
+x-fulcio-url: &fulcio-url http://fulcio:5555
+x-rekor-url: &rekor-url http://rekor:3000
+
+# The issuer, and the same variable spire.yml and sigstore.yml read. `innsegl
+# verify` is handed it so a certificate naming a different issuer is a failure
+# rather than a curiosity (ADR-0029 decision 3).
+x-jwt-issuer: &jwt-issuer ${INNSEGL_SPIRE_JWT_ISSUER:?set it to the issuer ALL THREE stacks use - http://spire-oidc:8080 for the compose default. `make innsegl-up` does this for you}
+
+# ----------------------------------------------------------------------------
+# THE ATTESTED NODE.
+#
+# Every SPIRE entry the MCP creates is parented to the attested agent, and an
+# entry with no reachable parent is an entry no workload can ever match — which
+# is why `innsegl serve` requires this and refuses to start without it.
+#
+# It is not knowable in advance: the agent's SPIFFE ID is
+# spiffe://innsegl.dev/spire/agent/x509pop/<sha1 of the agent certificate>, and
+# spire/bootstrap.sh mints a fresh certificate for every `up` after a `down -v`.
+# So `deploy/compose/spire/register.sh` writes it to deploy/compose/.env, which
+# compose reads automatically, and this is `:?` rather than defaulted for the
+# same reason sigstore.yml's issuer is: a wrong value here fails much later and
+# much less legibly than a missing one.
+# ----------------------------------------------------------------------------
+x-parent-id: &parent-id ${INNSEGL_SPIRE_PARENT_ID:?run deploy/compose/spire/register.sh first - it writes deploy/compose/.env with the attested node ID this stack must parent its entries to}
+
+# ----------------------------------------------------------------------------
+# The one image the three innsegl-* services share. doc 05 §1 says "same
+# binary, subcommand" for the reconciler and the sealer; they differ from the
+# MCP and from each other only by `command:`.
+# ----------------------------------------------------------------------------
+x-innsegl-build: &innsegl-build
+  image: ${INNSEGL_IMAGE:-innsegl:local}
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    args:
+      VERSION: ${INNSEGL_VERSION:-compose}
+      COMMIT: ${INNSEGL_COMMIT:-unknown}
+      DATE: ${INNSEGL_BUILD_DATE:-unknown}
+
+services:
+
+  # --------------------------------------------------------------------------
+  # postgres — doc 05 §1's ledger hot tier.
+  #
+  # IT PUBLISHES NO HOST PORT, AND THAT IS LOAD-BEARING RATHER THAN TIDY.
+  # MEASURED by RM-054 (#62): publishing a container's port to the host inserts
+  # an ACCEPT rule for that container's address into Docker's own filter chain,
+  # and the rule is matched BEFORE the isolation rules that keep one bridge
+  # network out of another. A published Postgres is reachable, BY ADDRESS, from
+  # a container on an unrelated network — so `ports:` here would not be a
+  # convenience, it would be a hole in the segmentation that no `networks:`
+  # declaration describes.
+  #
+  # An operator who needs psql uses `docker compose exec postgres psql`, which
+  # crosses no network at all.
+  #
+  # NETWORKS: innsegl-ledger (the writers) and innsegl-ledger-readonly (the
+  # dashboard's BFF). Both internal.
+  # --------------------------------------------------------------------------
+  postgres:
+    image: *postgres-image
+    container_name: innsegl-postgres
+    restart: unless-stopped
+    networks:
+      - innsegl-ledger
+      - innsegl-ledger-readonly
+    environment:
+      POSTGRES_USER: *ledger-owner
+      POSTGRES_PASSWORD: *ledger-owner-password
+      POSTGRES_DB: *ledger-database
+      # The initdb locale, fixed. A collation that varies by host is a text
+      # index that sorts differently on two machines reading one volume.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - innsegl-ledger-data:/var/lib/postgresql/data
+    # fsync stays ON. LED-009 asserts that an acknowledged append survives a
+    # SIGKILL, and a ledger that loses a committed event is not a ledger.
+    command: ["-c", "fsync=on"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U innsegl -d innsegl"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+  # --------------------------------------------------------------------------
+  # innsegl-db-init — one-shot. Not a doc 05 §1 row; the same kind of thing as
+  # spire.yml's spire-bootstrap and sigstore.yml's sigstore-bootstrap.
+  #
+  # It applies the shipped migrations AS THE OWNER, provisions doc 05 §1's
+  # append-only role, and then — the part that matters — connects as that role
+  # and asks the server what it can actually do. It exits non-zero if the
+  # answer is "delete", and everything that touches the ledger below gates on
+  # its completion, so an over-privileged MCP cannot start at all.
+  #
+  # innsegl/db-init.sh has the reasoning; internal/api/readonly.go is the model
+  # and says why the assertion matters more than the provisioning.
+  # --------------------------------------------------------------------------
+  innsegl-db-init:
+    image: *postgres-image
+    container_name: innsegl-db-init
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - innsegl-ledger
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: *ledger-owner
+      PGPASSWORD: *ledger-owner-password
+      PGDATABASE: *ledger-database
+      INNSEGL_APPENDER_ROLE: *appender-role
+      INNSEGL_APPENDER_PASSWORD: *appender-password
+    volumes:
+      - ./innsegl:/innsegl/init:ro
+      # The SHIPPED migrations, read straight from the repository. Not a copy:
+      # a second copy of migrations/*.sql is a schema that can drift from the
+      # code that writes to it, which is the whole reason the Go runner embeds
+      # them rather than reading them from disk.
+      - ../../migrations:/innsegl/migrations:ro
+    entrypoint: ["sh", "/innsegl/init/db-init.sh"]
+    security_opt:
+      - no-new-privileges:true
+
+  # --------------------------------------------------------------------------
+  # minio — doc 05 §1's "Object storage with object lock enabled. Buckets
+  # created with lock on; SEG-005 canary runs against it."
+  #
+  # "Created with lock on" is not a preference: S3 object lock can only be
+  # enabled AT BUCKET CREATION. A bucket made without it can never be given it,
+  # so innsegl-object-init below creates it with `--with-lock` and there is no
+  # repair path if that step is skipped.
+  #
+  # NETWORKS: innsegl-objects, internal, three members. No published port and
+  # no console: see postgres for why a published port is a segmentation hole
+  # here rather than a convenience.
+  # --------------------------------------------------------------------------
+  minio:
+    image: *minio-image
+    container_name: innsegl-minio
+    restart: unless-stopped
+    networks:
+      - innsegl-objects
+    environment:
+      MINIO_ROOT_USER: *object-store-user
+      MINIO_ROOT_PASSWORD: *object-store-password
+      # No browser. The console is an authenticated write surface on a service
+      # whose entire job is refusing writes to sealed objects.
+      MINIO_BROWSER: "off"
+    volumes:
+      - innsegl-object-data:/data
+    command: ["server", "/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+  # --------------------------------------------------------------------------
+  # innsegl-object-init — one-shot. Creates the segment bucket WITH OBJECT LOCK
+  # and sets a default retention, then proves the lock took.
+  # --------------------------------------------------------------------------
+  innsegl-object-init:
+    image: *minio-client-image
+    container_name: innsegl-object-init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - innsegl-objects
+    environment:
+      MINIO_ROOT_USER: *object-store-user
+      MINIO_ROOT_PASSWORD: *object-store-password
+      INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
+      # doc 05 §2: "Object lock in compliance mode with a retention window >=
+      # the organization's audit horizon". One day is the COMPOSE window — long
+      # enough that SEG-005's deletion canary has something real to be refused
+      # by, short enough that a developer's laptop is not carrying undeletable
+      # demo objects for seven years. A deployment sets its own.
+      #
+      # THE WINDOW IS SET HERE AND ONLY HERE, and the variable is deliberately
+      # not $INNSEGL_OBJECT_STORE_RETENTION — see the sealer service below.
+      INNSEGL_OBJECT_LOCK_RETENTION: ${INNSEGL_OBJECT_LOCK_RETENTION:-1d}
+      INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
+    volumes:
+      - ./innsegl:/innsegl/init:ro
+    entrypoint: ["sh", "/innsegl/init/object-init.sh"]
+    security_opt:
+      - no-new-privileges:true
+
+  # --------------------------------------------------------------------------
+  # innsegl-mcp — doc 05 §1's "The MCP server (register/credential/event/sign/
+  # retire). Only service holding SPIRE admin credential."
+  #
+  # NETWORKS: four, and the list IS the access-control list.
+  #   innsegl-ledger          the chain, as the append-only role
+  #   innsegl-spire-admin     the admin API. DECLARED BY spire.yml WITH ONE
+  #                           MEMBER precisely so that joining it is the whole
+  #                           of what grants admin reachability. This is the
+  #                           service it was declared for.
+  #   innsegl-sigstore        fulcio and rekor
+  #   innsegl-mcp-clients     the agents, and the only non-internal one
+  #
+  # It is on NO network with minio, and none with the dashboard.
+  #
+  # ITS IDENTITY IS ATTESTED, not minted by hand. It mounts the Workload API
+  # socket and nothing else from SPIRE, and `register.sh` creates the one entry
+  # — spiffe://innsegl.dev/innsegl/mcp, server.conf's single admin_ids value —
+  # whose five selectors it must match. deploy/compose/README.md used to record
+  # a circularity here; register.sh's header explains why there is not one.
+  #
+  # THE DATABASE ROLE. `-require-append-only-role` is SET, which is the whole
+  # of #109's resolution: cmd/innsegl already measured the role at start-up and
+  # defaulted to warning because nothing created one. Something creates one
+  # now, so the server refuses to start behind anything else.
+  # --------------------------------------------------------------------------
+  innsegl-mcp:
+    <<: *innsegl-build
+    container_name: innsegl-mcp
+    restart: unless-stopped
+    depends_on:
+      innsegl-db-init:
+        condition: service_completed_successfully
+    networks:
+      - innsegl-ledger
+      - innsegl-spire-admin
+      - innsegl-sigstore
+      - innsegl-mcp-clients
+    labels:
+      # The selector register.sh registers. Ours, not compose's own label
+      # scheme, and part of the attestation surface rather than metadata.
+      dev.innsegl.component: mcp
+    # uid 1000 — the image's user and `unix:uid:1000`, one of the five
+    # selectors. Not uid 0: agent.conf calls unix:uid:0 the textbook weak
+    # selector, because every container runs as root by default.
+    user: "1000:1000"
+    # The image has no default subcommand — see the Dockerfile on why a default
+    # would make one of the five rows the silent case.
+    command: ["serve"]
+    environment:
+      INNSEGL_LEDGER_DSN: postgres://innsegl_appender:${INNSEGL_LEDGER_APPENDER_PASSWORD:-innsegl-compose-appender}@postgres:5432/innsegl?sslmode=disable
+      # #109: refuse to start on an over-privileged role rather than warn.
+      INNSEGL_REQUIRE_APPEND_ONLY_ROLE: "1"
+      # innsegl-db-init migrated, as the owner. The MCP's own role has no DDL
+      # rights at all, which is exactly the posture doc 05 §1 asks for.
+      INNSEGL_MIGRATE: "0"
+
+      INNSEGL_SPIRE_ADDRESS: spire-server:8081
+      INNSEGL_TRUST_DOMAIN: *trust-domain
+      INNSEGL_SPIRE_PARENT_ID: *parent-id
+      INNSEGL_WORKLOAD_API_ADDRESS: unix:///run/spire/agent-sockets/api.sock
+
+      INNSEGL_FULCIO_URL: *fulcio-url
+      INNSEGL_REKOR_URL: *rekor-url
+      INNSEGL_SPIRE_JWT_ISSUER: *jwt-issuer
+
+      INNSEGL_MCP_LISTEN: 0.0.0.0:8080
+      INNSEGL_MCP_HEALTH_LISTEN: 0.0.0.0:8081
+
+      INNSEGL_WORKSPACE: /work
+      INNSEGL_SIGN_AUTHOR_NAME: ${INNSEGL_SIGN_AUTHOR_NAME:-Innsegl Demo Agent}
+      # A .invalid address. I6's author gate admits a reserved, undelegatable
+      # domain only when told to, and a reference deployment must not claim a
+      # real person.
+      INNSEGL_SIGN_AUTHOR_EMAIL: ${INNSEGL_SIGN_AUTHOR_EMAIL:-demo-agent@innsegl.invalid}
+      INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED: ${INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED:-true}
+    volumes:
+      # The Workload API socket, from spire.yml's project. Read-write because
+      # a Unix socket is connected to, not read.
+      - spire-agent-socket:/run/spire/agent-sockets
+      # The working trees `repo` resolves under, shared with the reconciler
+      # (which re-checks intents against them) and with demo-agent (which
+      # stages into them).
+      - innsegl-workspace:/work
+    ports:
+      # Loopback only, like every other published port in this deployment.
+      - "127.0.0.1:${INNSEGL_MCP_PORT:-8080}:8080"
+      - "127.0.0.1:${INNSEGL_MCP_HEALTH_PORT:-8081}:8081"
+    healthcheck:
+      # /readyz and not a TCP dial: ADR-0024's rule, that a readiness probe
+      # must fetch something it can parse. An unexamined 200 passes against any
+      # listening socket, including a proxy in front of a dead server.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8081/readyz >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # --------------------------------------------------------------------------
+  # innsegl-reconciler — doc 05 §1's "Intent expiry, Rekor cross-check, drift
+  # detection", from the same binary under another subcommand.
+  #
+  # doc 05 §2 runs it SINGLE-ACTIVE via leader election. Compose has one
+  # replica and therefore needs none; the property that makes failover safe is
+  # REC-005's idempotence, not the election, and it holds here too.
+  #
+  # NO SPIRE. The reconciler creates no identities and holds no admin
+  # credential; it reads the chain, reads the log, and appends. It is on
+  # neither SPIRE network, which is the difference between "it does not use
+  # the admin API" and "it cannot reach it".
+  # --------------------------------------------------------------------------
+  innsegl-reconciler:
+    <<: *innsegl-build
+    container_name: innsegl-reconciler
+    restart: unless-stopped
+    depends_on:
+      innsegl-db-init:
+        condition: service_completed_successfully
+    networks:
+      - innsegl-ledger
+      - innsegl-sigstore
+    labels:
+      dev.innsegl.component: reconciler
+    user: "1000:1000"
+    command: ["reconcile"]
+    environment:
+      INNSEGL_LEDGER_DSN: postgres://innsegl_appender:${INNSEGL_LEDGER_APPENDER_PASSWORD:-innsegl-compose-appender}@postgres:5432/innsegl?sslmode=disable
+      INNSEGL_REKOR_URL: *rekor-url
+      INNSEGL_TRUST_DOMAIN: *trust-domain
+      INNSEGL_WORKSPACE: /work
+      INNSEGL_RECONCILE_INTERVAL: ${INNSEGL_RECONCILE_INTERVAL:-1m}
+      INNSEGL_RECONCILE_EXPIRE_AFTER: ${INNSEGL_RECONCILE_EXPIRE_AFTER:-10m}
+    volumes:
+      - innsegl-workspace:/work
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # --------------------------------------------------------------------------
+  # innsegl-sealer — doc 05 §1's "Segment sealing + anchoring".
+  #
+  # ================= WHERE THESE SETTINGS CAME FROM =======================
+  # `innsegl seal`'s operator surface is #112's, written in parallel with this
+  # file. When this service was first written `innsegl seal` still printed
+  # "not implemented", so nothing here was read off the implementation: it is
+  # the most defensible reading of the conventions the two already-wired
+  # background subcommands set —
+  #
+  #   from `reconcile`  -dsn/$INNSEGL_LEDGER_DSN, -rekor-url/$INNSEGL_REKOR_URL,
+  #                     -interval, -once, -json, -quiet
+  #   from `canary`     the whole $INNSEGL_OBJECT_STORE_* family — endpoint,
+  #                     bucket, access-key, secret-key, region, prefix, tls,
+  #                     retention-mode, retention, timeout
+  #
+  # — and it passes only environment variables, no flags.
+  #
+  # CONFIRMED against #112's landed cmd/innsegl/seal.go: every variable below
+  # is one it reads, with the spelling above. It adds four of its own, of which
+  # this file sets one ($INNSEGL_SEAL_INTERVAL); the other three
+  # ($INNSEGL_SEAL_SEGMENT_EVENTS, $INNSEGL_SEAL_MAX_SEGMENT_AGE,
+  # $INNSEGL_SEAL_SCAN_WINDOW) keep their defaults, which are doc 05 §4's
+  # sizing rather than anything this file should second-guess.
+  #
+  # $INNSEGL_ANCHOR_KEY is deliberately NOT set. Empty generates an ephemeral
+  # anchoring key per process, which is right for a compose stack whose whole
+  # trust root is regenerated by `down -v`; a deployment that wants its
+  # anchoring identity to outlive a restart mounts a PEM and sets it.
+  # ========================================================================
+  #
+  # doc 05 §2 runs it single-active; SEG-002's idempotence is what makes a
+  # double-run harmless, and compose has one replica in any case.
+  # --------------------------------------------------------------------------
+  innsegl-sealer:
+    <<: *innsegl-build
+    container_name: innsegl-sealer
+    restart: unless-stopped
+    depends_on:
+      innsegl-db-init:
+        condition: service_completed_successfully
+      innsegl-object-init:
+        condition: service_completed_successfully
+    networks:
+      - innsegl-ledger
+      - innsegl-objects
+      - innsegl-sigstore
+    labels:
+      dev.innsegl.component: sealer
+    user: "1000:1000"
+    command: ["seal"]
+    environment:
+      INNSEGL_LEDGER_DSN: postgres://innsegl_appender:${INNSEGL_LEDGER_APPENDER_PASSWORD:-innsegl-compose-appender}@postgres:5432/innsegl?sslmode=disable
+      INNSEGL_REKOR_URL: *rekor-url
+      INNSEGL_OBJECT_STORE_ENDPOINT: minio:9000
+      INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
+      INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-user
+      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-password
+      # Plain HTTP to a MinIO on an internal network with three members. A
+      # deployment whose object store is off-box sets this to true and gets a
+      # trust store from the image's ca-certificates.
+      INNSEGL_OBJECT_STORE_TLS: "false"
+      INNSEGL_OBJECT_STORE_PREFIX: ${INNSEGL_OBJECT_STORE_PREFIX:-segments/}
+      INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
+      INNSEGL_SEAL_INTERVAL: ${INNSEGL_SEAL_INTERVAL:-1m}
+      # NO $INNSEGL_OBJECT_STORE_RETENTION HERE, AND THAT IS THE FIX RATHER
+      # THAN AN OMISSION. Found by #112's review of this file:
+      #
+      #   cmd/innsegl parses it as a GO DURATION (time.ParseDuration).
+      #   `mc retention set` — innsegl/object-init.sh — parses `1d`, `30d`.
+      #   Go has no `d` unit. time.ParseDuration("1d") is `unknown unit "d"`,
+      #   and cmd/innsegl's envDuration falls back to its default WITHOUT AN
+      #   ERROR.
+      #
+      # The default is 0, which means "inherit the bucket rule" — so a value
+      # like `7d` set here would be silently ignored and the bucket default
+      # used instead. Two grammars for one value, and the wrong one failing
+      # quietly, is worse than no setting.
+      #
+      # So the bucket rule is the single source: object-init sets it once, at
+      # creation, under $INNSEGL_OBJECT_LOCK_RETENTION, and the sealer inherits
+      # it. A deployment that wants a per-object window longer than the
+      # bucket's sets $INNSEGL_OBJECT_STORE_RETENTION itself, in GO's grammar
+      # (`24h`, not `1d`).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # --------------------------------------------------------------------------
+  # innsegl-dashboard — doc 05 §1's "Read-only UI + BFF proof checks. No write
+  # credentials mounted — enforced by giving it a read-only DB role."
+  #
+  # THIS IS THE UI HALF ONLY, and it is worth stating in the compose file
+  # rather than only in the image's Dockerfile, because an operator reads this.
+  #
+  # `internal/api` is the BFF: server.go serves GET /api/v1/runs and
+  # GET /api/v1/proof/{sha}, and readonly.go both provisions the read-only role
+  # doc 05 §1's note is about AND refuses to serve a request if the server says
+  # that credential can write. It has no `cmd/` entry point — no `main` in this
+  # module constructs an api.Server — so there is nothing to containerise yet.
+  # Adding one is a `cmd/**` change and belongs to whoever owns that tree.
+  #
+  # Until then this service holds NO database credential, which satisfies "no
+  # write credentials mounted" in the only way currently available: by having
+  # none. Every view that reads the query API renders its own load-failure
+  # state, visibly, which is the honest outcome rather than a service that
+  # claims to be this row and quietly is not.
+  #
+  # NETWORKS: doc 05 §1 puts the dashboard "on a network with read-only DB role
+  # and the proof endpoints", so it joins innsegl-ledger-readonly (where the
+  # BFF's credential will be used, and where the WRITE network's five members
+  # are not) and innsegl-sigstore (fulcio and rekor, for the proof checks). It
+  # is on NO network with the MCP.
+  # --------------------------------------------------------------------------
+  innsegl-dashboard:
+    image: ${INNSEGL_DASHBOARD_IMAGE:-innsegl-dashboard:local}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/dashboard.Dockerfile
+    container_name: innsegl-dashboard
+    restart: unless-stopped
+    networks:
+      - innsegl-ledger-readonly
+      - innsegl-sigstore
+      - innsegl-dashboard-frontend
+    labels:
+      dev.innsegl.component: dashboard
+    ports:
+      - "127.0.0.1:${INNSEGL_DASHBOARD_PORT:-8082}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # --------------------------------------------------------------------------
+  # demo-agent — doc 05 §1's "Scripted agent that registers, makes a
+  # scratch-repo commit, retires."
+  #
+  # UNDER A PROFILE, because it is a job and not a service: it runs to
+  # completion and exits, the way spire.yml's spire-verify-workload does. A
+  # long-lived container that finished thirty seconds after `up` and shows as
+  # `exited (0)` for the rest of the day is a worse first-run experience than a
+  # command an operator runs when they want to watch it happen.
+  #
+  #   docker compose -f deploy/compose/innsegl.yml --profile demo run --rm demo-agent
+  #
+  # It holds NOTHING. No SPIRE socket, no database credential, no object store
+  # key: one network with one other member, and an MCP address. Everything it
+  # can do, it does by calling the four IP §4 tools by their published names —
+  # which is the property that makes it a demonstration rather than a fixture.
+  # --------------------------------------------------------------------------
+  demo-agent:
+    profiles: ["demo"]
+    image: ${INNSEGL_DEMO_AGENT_IMAGE:-innsegl-demo-agent:local}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/demo-agent.Dockerfile
+    container_name: innsegl-demo-agent
+    depends_on:
+      innsegl-mcp:
+        condition: service_healthy
+    networks:
+      - innsegl-mcp-clients
+    labels:
+      dev.innsegl.component: demo-agent
+    # The same uid as the MCP. Both write into one shared working tree, and two
+    # uids on one tree is git's "dubious ownership" — which the signer cannot
+    # work around, because it builds its child environment as a whitelist and
+    # there is no safe.directory to inject.
+    user: "1000:1000"
+    environment:
+      INNSEGL_MCP_URL: http://innsegl-mcp:8080
+      INNSEGL_WORKSPACE: /work
+      INNSEGL_DEMO_REPO: ${INNSEGL_DEMO_REPO:-github.com/innsegl-demo/scratch}
+    volumes:
+      - innsegl-workspace:/work
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # --------------------------------------------------------------------------
+  # innsegl-canary — SEG-005's deletion canary, under a profile.
+  #
+  # Not a doc 05 §1 row, but doc 05 §2 requires it: "SEG-005's deletion canary
+  # runs as a scheduled job in production, not only at deploy". A subcommand
+  # whose exit status is the verdict serves both callers, and having it here
+  # means the object-lock claim can be MEASURED on a first run rather than read:
+  #
+  #   docker compose -f deploy/compose/innsegl.yml --profile canary run --rm innsegl-canary
+  # --------------------------------------------------------------------------
+  innsegl-canary:
+    profiles: ["canary"]
+    <<: *innsegl-build
+    container_name: innsegl-canary
+    depends_on:
+      innsegl-object-init:
+        condition: service_completed_successfully
+    networks:
+      - innsegl-objects
+    labels:
+      dev.innsegl.component: canary
+    user: "1000:1000"
+    command: ["canary"]
+    environment:
+      INNSEGL_OBJECT_STORE_ENDPOINT: minio:9000
+      INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
+      INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-user
+      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-password
+      INNSEGL_OBJECT_STORE_TLS: "false"
+      INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
+      # No $INNSEGL_OBJECT_STORE_RETENTION, for the reason spelled out on the
+      # sealer: `1d` is mc's grammar and not Go's. The canary's own default is
+      # 0, which requires whatever retention the bucket rule gives the probe —
+      # which is exactly the question SEG-005 asks.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+# ----------------------------------------------------------------------------
+# Networks. doc 05 §1: "Network segmentation even in compose [...] Compose is
+# where the least-privilege shape is first proven, not first ignored."
+#
+# The membership rule is written at each declaration, the way spire.yml and
+# sigstore.yml write theirs. Five new networks; #100 — this machine tops out at
+# roughly twenty-nine — so each one below has to earn its place, and one that
+# would have (a dashboard/MCP shared frontend) is deliberately two.
+# ----------------------------------------------------------------------------
+networks:
+
+  # THE WRITE PATH. doc 05 §1's "postgres write role reachable only from the
+  # services that need them".
+  # MEMBERS: postgres, innsegl-db-init, innsegl-mcp, innsegl-reconciler,
+  # innsegl-sealer. Nothing else — in particular not the dashboard, which is
+  # the point of the second ledger network below.
+  innsegl-ledger:
+    name: innsegl-ledger
+    internal: true
+
+  # THE READ PATH. doc 05 §1: "innsegl-dashboard on a network with read-only DB
+  # role and the proof endpoints."
+  # MEMBERS: postgres, innsegl-dashboard. Two members and one direction: the
+  # dashboard's BFF connects as internal/api's read-only role when it exists,
+  # and the credential it will hold is proven read-only by readonly.go before
+  # it serves a request.
+  innsegl-ledger-readonly:
+    name: innsegl-ledger-readonly
+    internal: true
+
+  # MEMBERS: minio, innsegl-object-init, innsegl-sealer, innsegl-canary.
+  # The MCP is deliberately not a member: sealing is the sealer's, and an MCP
+  # that could write to the segment store could write a segment nothing sealed.
+  innsegl-objects:
+    name: innsegl-objects
+    internal: true
+
+  # The agents' network, and the MCP's only non-internal one — a container on
+  # internal networks alone CANNOT have a port published (measured, see
+  # sigstore.yml), and the MCP is the service agents have to reach.
+  # MEMBERS: innsegl-mcp, demo-agent, and whatever terminates TLS in front.
+  innsegl-mcp-clients:
+    name: innsegl-mcp-clients
+
+  # The dashboard's public face. SEPARATE from innsegl-mcp-clients on purpose:
+  # sharing one frontend network would give the dashboard a route to the MCP's
+  # write surface, which is the one thing doc 05 §1's dashboard note forbids.
+  # MEMBERS: innsegl-dashboard, and whatever terminates TLS in front.
+  innsegl-dashboard-frontend:
+    name: innsegl-dashboard-frontend
+
+  # DECLARED IN spire.yml, JOINED HERE. spire.yml declared it with one member
+  # and said why: "when innsegl-mcp arrives joining this network is the whole
+  # of what grants it admin reachability". This is that arrival.
+  # MEMBERS: spire-server, innsegl-mcp. Nothing else, ever.
+  innsegl-spire-admin:
+    name: ${INNSEGL_SPIRE_ADMIN_NETWORK:-innsegl-spire-admin}
+    external: true
+
+  # DECLARED IN sigstore.yml, JOINED HERE. Its own comment named the members it
+  # was waiting for: "fulcio, rekor, and the innsegl-* services when they land
+  # — the MCP, the sealer's anchorer, the reconciler's cross-check, the
+  # dashboard's proof endpoints". All four have landed.
+  innsegl-sigstore:
+    name: ${INNSEGL_SIGSTORE_NETWORK:-innsegl-sigstore}
+    external: true
+
+# ----------------------------------------------------------------------------
+# Volumes.
+# ----------------------------------------------------------------------------
+volumes:
+  # The ledger. MOUNTED BY: postgres.
+  innsegl-ledger-data:
+  # Sealed segments, under object lock. MOUNTED BY: minio.
+  innsegl-object-data:
+  # The working trees `repo` resolves under (doc 02 §5: `repo` is an
+  # identifier, and the tree it names is the DEPLOYMENT's, not the caller's).
+  # MOUNTED BY: innsegl-mcp (rw), innsegl-reconciler (rw), demo-agent (rw).
+  innsegl-workspace:
+
+  # DECLARED IN spire.yml, JOINED HERE, and the only thing this stack takes
+  # from SPIRE besides one network. Compose names a project's volume
+  # <project>_<key>, so spire.yml's `spire-agent-socket` is
+  # `innsegl-spire_spire-agent-socket`; overridable so an ADR-0022 test overlay
+  # can point at a per-process SPIRE stack's socket.
+  # MOUNTED BY: spire-agent (rw, in its own project) and innsegl-mcp.
+  spire-agent-socket:
+    name: ${INNSEGL_SPIRE_AGENT_SOCKET_VOLUME:-innsegl-spire_spire-agent-socket}
+    external: true
