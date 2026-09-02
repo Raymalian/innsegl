@@ -34,7 +34,7 @@ func TestOPS005TheREADMEIsWhatTheSmokeCommandRuns(t *testing.T) {
 	root := repoRoot(t)
 
 	readmePath := filepath.Join(root, "deploy", "compose", "README.md")
-	readme, err := os.ReadFile(readmePath) //nolint:gosec // a fixed path under the repo root
+	readme, err := os.ReadFile(readmePath)
 	if err != nil {
 		t.Fatalf("deploy/compose/README.md is the front door of the project and the "+
 			"document doc 08 measures a release against; it must exist: %v", err)
@@ -54,13 +54,13 @@ func TestOPS005TheREADMEIsWhatTheSmokeCommandRuns(t *testing.T) {
 		}
 	}
 
-	makefile, err := os.ReadFile(filepath.Join(root, "Makefile")) //nolint:gosec // a fixed path under the repo root
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
 	if err != nil {
 		t.Fatalf("reading the Makefile: %v", err)
 	}
-	make := string(makefile)
+	rules := string(makefile)
 
-	if !strings.Contains(make, "\nsmoke:") {
+	if !strings.Contains(rules, "\nsmoke:") {
 		t.Error("the Makefile declares no `smoke` target. doc 08 names `make smoke` " +
 			"as the compatibility surface by that exact spelling.")
 	}
@@ -68,7 +68,7 @@ func TestOPS005TheREADMEIsWhatTheSmokeCommandRuns(t *testing.T) {
 	// TestOPS004FreshCloneBootstrap are two names for one thing; if they ever
 	// stop being, the release gate is measuring a command nobody runs.
 	for _, want := range []string{"./test/smoke", "TestOPS004"} {
-		if !strings.Contains(make, want) {
+		if !strings.Contains(rules, want) {
 			t.Errorf("the Makefile's smoke target does not mention %q; `make smoke` "+
 				"must run OPS-004 itself", want)
 		}

@@ -1,12 +1,16 @@
 # The Innsegl reference stack
 
-This is the first thing to run after cloning. Two commands and about five
-minutes, from nothing, and you will have watched a real agent identity be
-issued, a real commit be signed under it, and that commit be verified by a
-container with **no route to our database**.
+This is the first thing to run after cloning. Two commands, from nothing, and
+you will have watched a real agent identity be issued, a real commit be signed
+under it, and that commit be verified by a container with **no route to our
+database**.
 
 That last part is the whole point of the project, so it is what the first run
 demonstrates rather than what the documentation asserts.
+
+MEASURED on a warm machine: the boot block below takes about 25 seconds and
+`make smoke` about 55 seconds. A genuinely first run is longer, and the extra
+time is a dozen image pulls rather than anything this project does.
 
 > **This is a contract, not a tutorial.** `VERSIONING.md` puts the compose
 > reference stack and `make smoke` inside the compatibility surface: if
@@ -21,18 +25,33 @@ demonstrates rather than what the documentation asserts.
 
 | | |
 |---|---|
-| Docker | a running daemon, with about 4 GB to give containers |
+| Docker | a running daemon. The stack is nine containers; on Apple Silicon one of them is emulated |
 | git | any recent version |
-| Go | the toolchain `go.mod` names — `make smoke` builds the binary it verifies with |
+| Go, and `make` | the toolchain `go.mod` names — `make smoke` builds the binary it verifies with |
+| `curl` | only for the readiness checks below |
 
-Nothing else. No account, no network access to anything outside your machine
-after the images are pulled, and no Sigstore public-good infrastructure: this
-stack runs its **own** Fulcio and its **own** Rekor
+No account, and no Sigstore public-good infrastructure: this stack runs its
+**own** Fulcio and its **own** Rekor
 ([ADR-0010](../../docs/adr/0010-self-hosted-sigstore-is-the-shipped-default.md)).
+Nothing here talks to a service anyone else operates.
 
-The first run pulls about a dozen images. On Apple Silicon one of them,
-Trillian's database, has no arm64 build and runs under emulation — it is slow
-to become healthy the first time, and that is expected rather than broken.
+**The first run does need the network, for two things**, and it is worth
+knowing which so that a failure is legible rather than mysterious:
+
+- **About a dozen container images.** Every one is pinned by tag *and* by
+  digest, so what you get is byte-for-byte what this was tested against.
+- **Go modules** — the project's own dependencies, and `gitsign` at the pinned
+  version `v0.17.1`. `gitsign` is deliberately *not* a `go.mod` dependency
+  (importing it would drag cosign and sigstore-go into a fourteen-entry module
+  for a binary we exec), so `make smoke` fetches and cross-compiles it for the
+  container platform on first use. On a warm module cache this is a compile
+  rather than a download.
+
+After that first run, nothing leaves your machine.
+
+On Apple Silicon one image, Trillian's database, has no arm64 build and runs
+under emulation — it is slow to become healthy the first time, and that is
+expected rather than broken.
 
 ---
 
@@ -124,6 +143,10 @@ of ours except a git repository and two public endpoints.
 > their volumes, before and after. A stack you brought up by hand will be
 > taken down. Set `INNSEGL_TEST_KEEP_STACK=1` to leave everything running
 > afterwards for inspection; `make smoke-down` then removes it.
+>
+> For the same reason only one `make smoke` can run on a machine at a time.
+> A second one waits on an advisory lock and says so, rather than tearing down
+> the first one's stack half way through.
 
 ---
 
@@ -165,16 +188,18 @@ least-privilege shape is first proven, not first ignored.
 
 ## What the reference stack does not contain yet
 
-doc 05 §1 lists thirteen services. The two compose files here ship nine of
-them. The four that are **not** compose services are named here because a
-first-run experience that quietly omits half its topology is worse than one
-that says so:
+doc 05 §1 lists twelve services. The two compose files here ship five of those
+rows — nine running containers, because Rekor's row carries its own log and
+database sidecars. The **seven** rows that are not compose services at all are
+named here, because a first-run experience that quietly omits half its topology
+is worse than one that says so:
 
 | Missing | Consequence for a first run |
 |---|---|
-| `postgres` (the ledger's hot tier) | `make smoke` starts one itself, on a network of its own, and applies the shipped migrations to it |
+| `postgres` (the ledger's hot tier) | `make smoke` starts one itself, on a network of its own, publishing no host port; the MCP applies the shipped migrations to it with its own `-migrate` |
 | `innsegl-mcp` | `make smoke` runs `innsegl serve` in a container joined to the three networks doc 05 §1 puts it on, with the shipped binary bind-mounted. There is no Dockerfile and no compose service |
-| `innsegl-reconciler`, `innsegl-sealer`, `innsegl-dashboard` | not exercised by the smoke at all; they are the same binary under other subcommands |
+| `innsegl-reconciler`, `innsegl-sealer` | not exercised by the smoke at all; both are the same `innsegl` binary under another subcommand |
+| `innsegl-dashboard` | not exercised by the smoke at all; it is the separate TypeScript application under `web/` |
 | `minio` (object storage, object lock on) | segment sealing and the SEG-005 deletion canary are not part of the first run |
 | `demo-agent` | is the smoke test body itself rather than a container |
 
@@ -238,6 +263,8 @@ in use beside it.
 | Fulcio answers `invalid identity token` | the two stacks disagree about the issuer. Bring both down with `-v` and boot again with the export set |
 | `trillian-db` never becomes healthy on Apple Silicon | it is emulated; give it longer on the first pull |
 | `make smoke` removed a stack you were using | expected — see the note above `make smoke` |
+| `make smoke` sits saying it is waiting for a lock | another `make smoke` is running on this machine; there is only one `innsegl-spire` for them to share |
+| `go install github.com/sigstore/gitsign` fails | the first `make smoke` needs the network for Go modules; see "What you need" |
 
 Nothing here is published on a routable interface: every port is bound to
 `127.0.0.1`. `spire-oidc` in particular serves plain HTTP and says so in two

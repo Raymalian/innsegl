@@ -121,7 +121,7 @@ smoke:
 
 ## smoke-down: remove what a kept `make smoke` stack left behind
 smoke-down:
-	-docker rm --force --volumes innsegl-smoke-mcp innsegl-smoke-postgres
+	-docker rm --force --volumes innsegl-smoke-mcp innsegl-smoke-ledger-relay innsegl-smoke-postgres
 	-docker network rm innsegl-smoke-ledger
 	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  docker compose -f deploy/compose/sigstore.yml down -v

@@ -131,7 +131,7 @@ func TestOPS004FreshCloneBootstrap(t *testing.T) {
 	types := make([]string, 0, len(events))
 	byType := map[string]event.Fields{}
 	for _, e := range events {
-		typ, _ := e[event.FieldEventType].(string)
+		typ := memberString(t, e, event.FieldEventType)
 		types = append(types, typ)
 		byType[typ] = e
 	}
@@ -151,15 +151,15 @@ func TestOPS004FreshCloneBootstrap(t *testing.T) {
 	}
 	intent, recorded := byType[event.EventTypeCommitIntent], byType[event.EventTypeCommitRecorded]
 	if intent != nil && recorded != nil {
-		ip, _ := intent[event.FieldChainPosition].(int64)
-		rp, _ := recorded[event.FieldChainPosition].(int64)
+		ip := memberInt64(t, intent, event.FieldChainPosition)
+		rp := memberInt64(t, recorded, event.FieldChainPosition)
 		if ip >= rp {
 			t.Errorf("commit_intent is at chain position %d and commit_recorded at %d; "+
 				"doc 07 SIG-001 requires intent+recorded IN ORDER, and IP §6.5's "+
 				"two-phase protocol is what lets the reconciler tell a crash from a "+
 				"lie", ip, rp)
 		}
-		if got, _ := recorded[event.FieldCommitSHA].(string); got != run.commitSHA {
+		if got := memberString(t, recorded, event.FieldCommitSHA); got != run.commitSHA {
 			t.Errorf("commit_recorded names commit %q; sign_commit returned %q",
 				got, run.commitSHA)
 		}
@@ -168,11 +168,46 @@ func TestOPS004FreshCloneBootstrap(t *testing.T) {
 				"BEFORE the commit exists and naming one would mean the two-phase "+
 				"protocol collapsed into one", intent[event.FieldCommitSHA])
 		}
-		if got, _ := recorded[event.FieldIntentEventID].(string); got == "" ||
-			got != intent[event.FieldEventID] {
+		got := memberString(t, recorded, event.FieldIntentEventID)
+		if want := memberString(t, intent, event.FieldEventID); got == "" || got != want {
 			t.Errorf("commit_recorded's intent_event_id is %q and the intent's "+
-				"event_id is %v; the link is what makes the pair a protocol rather "+
-				"than two rows", got, intent[event.FieldEventID])
+				"event_id is %q; the link is what makes the pair a protocol rather "+
+				"than two rows", got, want)
 		}
 	}
+}
+
+// memberString and memberInt64 read one member of an appended event.
+//
+// They FAIL on a member of the wrong type rather than returning a zero value,
+// because doc 02 §5 fixes the type of every field and a `chain_position` that
+// is not an integer is a protected-surface violation — while a silent zero
+// would turn OPS-004's ordering assertion (`ip >= rp` on two zeroes) into a
+// comparison that can only ever be trivially satisfied. An absent member is a
+// different thing and is answered with the zero value, because absence is what
+// several of these assertions are about: `commit_intent` carries no commit_sha.
+func memberString(t *testing.T, e event.Fields, name string) string {
+	t.Helper()
+	raw, present := e[name]
+	if !present {
+		return ""
+	}
+	s, ok := raw.(string)
+	if !ok {
+		t.Fatalf("the ledger's %s is %T; doc 02 §5 makes it a string", name, raw)
+	}
+	return s
+}
+
+func memberInt64(t *testing.T, e event.Fields, name string) int64 {
+	t.Helper()
+	raw, present := e[name]
+	if !present {
+		t.Fatalf("the ledger's event carries no %s at all", name)
+	}
+	n, ok := raw.(int64)
+	if !ok {
+		t.Fatalf("the ledger's %s is %T; doc 02 §5 makes it an integer", name, raw)
+	}
+	return n
 }

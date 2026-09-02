@@ -100,13 +100,13 @@ func (s *stack) demoAgent(t *testing.T) demoRun {
 	// because `repo` is an identifier and the working tree it resolves to is
 	// the deployment's, not the caller's.
 	run.worktree = filepath.Join(s.workspace, filepath.FromSlash(demoRepo))
-	if err := os.MkdirAll(run.worktree, 0o750); err != nil {
-		t.Fatal(err)
+	if mkErr := os.MkdirAll(run.worktree, 0o750); mkErr != nil {
+		t.Fatal(mkErr)
 	}
 	s.git(t, run.worktree, "init", "-q", "-b", "main")
-	if err := os.WriteFile(filepath.Join(run.worktree, "work.txt"),
-		[]byte("innsegl OPS-004: the first thing an adopter's agent ever wrote\n"), 0o600); err != nil {
-		t.Fatal(err)
+	if wErr := os.WriteFile(filepath.Join(run.worktree, "work.txt"),
+		[]byte("innsegl OPS-004: the first thing an adopter's agent ever wrote\n"), 0o600); wErr != nil {
+		t.Fatal(wErr)
 	}
 	s.git(t, run.worktree, "add", "work.txt")
 	staged := s.git(t, run.worktree, "write-tree")

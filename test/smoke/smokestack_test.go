@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -81,7 +82,7 @@ const (
 	relayContainer  = "innsegl-smoke-ledger-relay"
 
 	ledgerUser     = "innsegl"
-	ledgerPassword = "innsegl-smoke" //nolint:gosec // a throwaway container's password
+	ledgerPassword = "innsegl-smoke"
 	ledgerDatabase = "innsegl"
 
 	// runnerImage carries git and busybox's `nc`, and nothing of ours. It is
@@ -272,33 +273,42 @@ func startStack(ctx context.Context, t *testing.T) (*stack, error) {
 	if err := dockerUsable(ctx); err != nil {
 		return nil, err
 	}
-	arch, err := docker(ctx, "version", "--format", "{{.Server.Arch}}")
-	if err != nil {
+	if err := lockTheShippedStack(ctx, t); err != nil {
 		return nil, err
 	}
 
-	root := repoRoot(t)
-	clone, err := freshClone(ctx, root)
+	// From here on every error returns a non-nil stack, because requireStack
+	// only calls stop() — which releases the lock taken above — when it gets
+	// one. An error path that returned nil would hold the lock for the rest of
+	// the process.
+	s := &stack{}
+	arch, err := docker(ctx, "version", "--format", "{{.Server.Arch}}")
 	if err != nil {
-		return nil, err
+		return s, err
 	}
-	s := &stack{clone: clone, arch: arch}
+	s.arch = arch
+
+	clone, err := freshClone(ctx, repoRoot(t))
+	if err != nil {
+		return s, err
+	}
+	s.clone = clone
 
 	// 1. The clean slate. Both shipped projects down WITH THEIR VOLUMES, and
 	//    this harness's own containers removed, before anything starts. What
 	//    it proves is narrow and worth stating exactly: no volume, container
 	//    or network left by an earlier run of this repository is carrying the
 	//    boot below.
-	if err := s.cleanSlate(ctx, t); err != nil {
-		return s, err
+	if cleanErr := s.cleanSlate(ctx, t); cleanErr != nil {
+		return s, cleanErr
 	}
 
 	// 2. The README's boot block, run as shell.
-	if err := s.boot(ctx, t); err != nil {
-		return s, err
+	if bootErr := s.boot(ctx, t); bootErr != nil {
+		return s, bootErr
 	}
-	if err := s.awaitTrustMaterial(ctx); err != nil {
-		return s, err
+	if trustErr := s.awaitTrustMaterial(ctx); trustErr != nil {
+		return s, trustErr
 	}
 	parent, err := s.attestedNode(ctx)
 	if err != nil {
@@ -319,6 +329,78 @@ func startStack(ctx context.Context, t *testing.T) (*stack, error) {
 		return s, err
 	}
 	return s, nil
+}
+
+// ---------------------------------------------------------------------------
+// One OPS-004 at a time, per machine.
+// ---------------------------------------------------------------------------
+
+// smokeLockPath is a fixed path, deliberately: the thing being serialized is
+// not this process's stack but the machine's `innsegl-spire` and
+// `innsegl-sigstore` compose projects, which every invocation shares.
+const smokeLockPath = "/tmp/innsegl-ops004.lock"
+
+var smokeLockFile *os.File
+
+// lockTheShippedStack serializes OPS-004 against every other process on this
+// machine.
+//
+// This package drives the SHIPPED compose project names on purpose — the
+// adopter has no ADR-0022 overlay and register.sh addresses the shipped
+// container names — and the price is that two invocations would tear each
+// other's stack down mid-run. That is RM-065's finding (#81, "a single
+// invocation passing where two concurrent ones failed") arriving from the one
+// direction a per-process overlay cannot cover, because the overlay is exactly
+// what OPS-004 must not use.
+//
+// MEASURED, not anticipated: while this was being written two `go test ./...`
+// runs were in flight on the same machine, each of them reaching this package.
+//
+// So the stack is built under an advisory lock. A second invocation waits and
+// says so; a crashed one releases the lock when the kernel closes its
+// descriptor, so there is no stale lock to clear by hand.
+func lockTheShippedStack(ctx context.Context, t *testing.T) error {
+	f, err := os.OpenFile(smokeLockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening the OPS-004 lock at %s: %w", smokeLockPath, err)
+	}
+	deadline := time.Now().Add(30 * time.Minute)
+	announced := false
+	for {
+		if lerr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); lerr == nil {
+			smokeLockFile = f
+			return nil
+		}
+		if !announced {
+			t.Logf("OPS-004 is waiting for %s: another process on this machine holds "+
+				"the shipped compose projects. Only one fresh-clone bootstrap can run "+
+				"at a time, because there is only one `innsegl-spire`.", smokeLockPath)
+			announced = true
+		}
+		if time.Now().After(deadline) {
+			_ = f.Close()
+			return fmt.Errorf("another process held %s for 30 minutes", smokeLockPath)
+		}
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
+func unlockTheShippedStack() {
+	if smokeLockFile == nil {
+		return
+	}
+	// Closing the descriptor releases the advisory lock: there is no separate
+	// unlock step to get wrong, and a process that dies is released the same
+	// way, so there is never a stale lock to clear by hand.
+	if err := smokeLockFile.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: releasing %s: %v\n", smokeLockPath, err)
+	}
+	smokeLockFile = nil
 }
 
 func dockerUsable(ctx context.Context) error {
@@ -425,15 +507,15 @@ func probeTrustMaterial(ctx context.Context) error {
 	if block == nil {
 		return errors.New("fulcio: /api/v1/rootCert did not return PEM")
 	}
-	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
-		return fmt.Errorf("fulcio: /api/v1/rootCert did not return a certificate: %w", err)
+	if _, parseErr := x509.ParseCertificate(block.Bytes); parseErr != nil {
+		return fmt.Errorf("fulcio: /api/v1/rootCert did not return a certificate: %w", parseErr)
 	}
 	key, err := httpGET(ctx, rekorURL+"/api/v1/log/publicKey")
 	if err != nil {
 		return fmt.Errorf("rekor: %w", err)
 	}
-	if _, err := segment.ParseLogPublicKey(key); err != nil {
-		return fmt.Errorf("rekor: /api/v1/log/publicKey does not parse: %w", err)
+	if _, parseErr := segment.ParseLogPublicKey(key); parseErr != nil {
+		return fmt.Errorf("rekor: /api/v1/log/publicKey does not parse: %w", parseErr)
 	}
 	jwks, err := httpGET(ctx, oidcURL+"/keys")
 	if err != nil {
@@ -492,9 +574,9 @@ func (s *stack) buildBinaries(ctx context.Context) error {
 		"-o", filepath.Join(dir, "innsegl"), "./cmd/innsegl")
 	build.Dir = s.clone
 	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+s.arch, "CGO_ENABLED=0")
-	if out, err := build.CombinedOutput(); err != nil {
+	if out, buildErr := build.CombinedOutput(); buildErr != nil {
 		return fmt.Errorf("cross-compiling the clone's innsegl for linux/%s: %w\n%s",
-			s.arch, err, out)
+			s.arch, buildErr, out)
 	}
 
 	gitsign, err := buildGitsign(ctx, s.arch)
@@ -628,7 +710,7 @@ func (s *stack) openLedgerThroughARelay(t *testing.T) (*ledger.Store, func()) {
 	); err != nil {
 		t.Fatalf("starting the ledger read relay: %v", err)
 	}
-	stop := func() { _, _ = docker(context.Background(), "rm", "--force", relayContainer) }
+	stop := func() { dockerIgnore(docker(context.Background(), "rm", "--force", relayContainer)) }
 
 	dsn := fmt.Sprintf("postgres://%s:%s@127.0.0.1:%s/%s?sslmode=disable",
 		ledgerUser, ledgerPassword, port, ledgerDatabase)
@@ -747,7 +829,10 @@ func (s *stack) startMCP(ctx context.Context, t *testing.T) error {
 		return fmt.Errorf("starting the MCP container: %w", err)
 	}
 	if err := s.awaitReady(ctx); err != nil {
-		logs, _ := docker(ctx, "logs", mcpContainer)
+		logs, logErr := docker(ctx, "logs", mcpContainer)
+		if logErr != nil {
+			logs = "the server's own logs could not be read either: " + logErr.Error()
+		}
 		return fmt.Errorf("%w\n--- innsegl serve ---\n%s", err, logs)
 	}
 	t.Logf("OPS-004 MCP: serving on %s, health on %s", s.mcpURL, s.healthURL)
@@ -896,14 +981,15 @@ func (s *stack) stop() {
 				_ = os.RemoveAll(dir)
 			}
 		}
+		unlockTheShippedStack()
 	})
 }
 
 func (s *stack) teardownContainers(ctx context.Context) {
 	for _, name := range []string{mcpContainer, relayContainer, ledgerContainer} {
-		_, _ = docker(ctx, "rm", "--force", "--volumes", name)
+		dockerIgnore(docker(ctx, "rm", "--force", "--volumes", name))
 	}
-	_, _ = docker(ctx, "network", "rm", ledgerNetwork)
+	dockerIgnore(docker(ctx, "network", "rm", ledgerNetwork))
 }
 
 // ---------------------------------------------------------------------------
@@ -971,12 +1057,12 @@ func freshClone(ctx context.Context, root string) (string, error) {
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src) //nolint:gosec // paths come from git ls-files under the repo root
+	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode) //nolint:gosec // ditto
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
@@ -1018,6 +1104,11 @@ func (s *stack) dockerIn(ctx context.Context, args ...string) (string, error) {
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// dockerIgnore discards the result of a best-effort cleanup command, in the
+// one place where failing to remove something already absent is the expected
+// outcome rather than an error worth reporting.
+func dockerIgnore(string, error) {}
 
 func docker(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "docker", args...)
