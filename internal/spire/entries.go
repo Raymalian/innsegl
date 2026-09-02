@@ -55,6 +55,33 @@ func (r RunRef) SPIFFEID(trustDomain string) (string, error) {
 	return id, nil
 }
 
+// RunRefOf reads a run's three path components back out of its SPIFFE ID.
+//
+// PROTECTED STRING (doc 01 §1): the grammar is
+// spiffe://{trust-domain}/agent/{agent-type}/{task-id}/{run-id}, and this
+// defers to event.ValidateSPIFFEID for it rather than growing a second
+// definition — the same reason RunRef.SPIFFEID does. It checks shape only;
+// whether the trust domain is one this deployment owns is a policy question
+// its callers answer (parseRunIdentity does, because the reaper deletes).
+//
+// It exists because since RM-079 (#116) the SPIFFE ID's {agent-type} and
+// {task-id} may be PSEUDONYMS of the caller's agent type and task reference,
+// generated under a deployment secret. SPIRE knows only the segments, so a
+// caller holding a run's recorded SPIFFE ID and needing to look the entry up,
+// or delete it, must read the segments off the ID. Deriving them any other way
+// would need the secret on a read path, and then losing or rotating the secret
+// would strand live runs — the exact failure the ledger-row mapping exists to
+// avoid.
+func RunRefOf(spiffeID string) (RunRef, error) {
+	if err := event.ValidateSPIFFEID(spiffeID); err != nil {
+		return RunRef{}, err
+	}
+	// ValidateSPIFFEID has already established five components, the second of
+	// which is "agent"; nothing below can be out of range.
+	parts := strings.Split(strings.TrimPrefix(spiffeID, "spiffe://"), "/")
+	return RunRef{AgentType: parts[2], TaskID: parts[3], RunID: parts[4]}, nil
+}
+
 // Selector is one SPIRE selector, e.g. {Type: "docker", Value:
 // "label:dev.innsegl.run-id:run-42"}.
 type Selector struct {

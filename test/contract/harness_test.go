@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/spire"
@@ -571,8 +572,11 @@ func (c *fakeConn) failWith(code codes.Code, msg string) {
 const (
 	testTrustDomain = "innsegl.dev"
 	testParentID    = "spiffe://innsegl.dev/spire/agent/x509pop/contract"
-	testAgentType   = "fix-ci"
-	testTaskID      = "jira-118"
+	// testIdentitySecret keys the pseudonyms. A fixture, not a credential:
+	// nothing outside this test binary ever sees an identity keyed with it.
+	testIdentitySecret = "contract-fixture-secret-0123456"
+	testAgentType      = "fix-ci"
+	testTaskID         = "jira-118"
 )
 
 type stack struct {
@@ -602,8 +606,19 @@ func newStackOn(t *testing.T, dsn string) *stack {
 
 	s := &stack{store: store, idem: idem, spire: fake, conn: conn, dsn: dsn}
 
+	// The SHIPPED default: pseudonymous identity (RM-079, #116). The contract
+	// matrix is where a tool's observable behaviour is pinned, so it is pinned
+	// under the mode a deployment gets when it configures nothing. Nothing in
+	// this package asserts the CONTENT of a SPIFFE ID's first two segments —
+	// ledgerRuns reads them back off the ID itself, which is what every
+	// consumer must now do.
+	pseudonyms, err := identity.New(identity.ModePseudonymous, testIdentitySecret)
+	if err != nil {
+		t.Fatalf("identity.New: %v", err)
+	}
 	restoreRegister, err := mcp.ConfigureRegisterAgent(mcp.RegisterAgentConfig{
 		Identities: fake, Ledger: store, Idempotency: idem, ParentID: testParentID,
+		Pseudonyms: pseudonyms,
 	})
 	if err != nil {
 		t.Fatalf("ConfigureRegisterAgent: %v", err)

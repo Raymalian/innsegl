@@ -21,6 +21,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/reconciler"
@@ -643,6 +644,17 @@ func newWorld(ctx context.Context, t *testing.T, st *stack, store *ledger.Store,
 }
 
 // configureSignCommit installs the shipped tool with one dependency swapped.
+// literalIdentity is identity mode `literal` — what the system did before
+// RM-079 (#116), and what this harness's fixtures are written in terms of.
+func literalIdentity(t *testing.T) *identity.Pseudonymiser {
+	t.Helper()
+	p, err := identity.New(identity.ModeLiteral, "")
+	if err != nil {
+		t.Fatalf("identity.New: %v", err)
+	}
+	return p
+}
+
 func (w *world) configureSignCommit(t *testing.T, appender mcp.SignCommitLedger, probe mcp.HealthSigstore) {
 	t.Helper()
 	workspace, err := mcp.NewWorkspace(w.root)
@@ -659,6 +671,10 @@ func (w *world) configureSignCommit(t *testing.T, appender mcp.SignCommitLedger,
 		Signers:     w.signers,
 		AuthorName:  testAuthorName,
 		AuthorEmail: testAuthorEmail,
+		// Identity mode `literal`: this harness seeds literal SPIFFE IDs and
+		// asserts against them. RM-079's pseudonymous default is measured in
+		// internal/mcp (PRI-003) and in test/smoke (PRI-004).
+		Pseudonyms: literalIdentity(t),
 	})
 	if err != nil {
 		t.Fatalf("ConfigureSignCommit: %v", err)

@@ -951,6 +951,10 @@ func TestAMalformedRunIDNamesNoRun(t *testing.T) {
 // the AB-10 route this tool opens: even a run directory that answers with
 // another run's identity, or with an identity outside the /agent/ subtree,
 // cannot make the MCP ask SPIRE to mint it.
+//
+// RM-079 (#116) removed one case from this table — an identity naming another
+// TASK. See TestADirectoryNamingAnotherTaskIsNoLongerDetectable directly below
+// for what that costs and why it is not detectable any more.
 func TestADirectoryThatAnswersForTheWrongRunIsRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -966,10 +970,6 @@ func TestADirectoryThatAnswersForTheWrongRunIsRefused(t *testing.T) {
 		{"an identity naming another run", CredentialRun{
 			RunID: "run-a", AgentType: credAgentType, TaskID: credTaskID, SPIFFEID: credSPIFFEID("run-b"),
 		}},
-		{"an identity naming another task", CredentialRun{
-			RunID: "run-a", AgentType: credAgentType, TaskID: credTaskID,
-			SPIFFEID: "spiffe://innsegl.dev/agent/demo/rm-999/run-a",
-		}},
 		{"no identity at all", CredentialRun{
 			RunID: "run-a", AgentType: credAgentType, TaskID: credTaskID,
 		}},
@@ -982,6 +982,37 @@ func TestADirectoryThatAnswersForTheWrongRunIsRefused(t *testing.T) {
 				t.Errorf("minted %d credentials for %q", got, tc.run.SPIFFEID)
 			}
 		})
+	}
+}
+
+// TestADirectoryNamingAnotherTaskIsNoLongerDetectable records, as a test
+// rather than as a comment, what RM-079 (#116) cost.
+//
+// Before it, credentialRunIdentity required the identity to end in
+// `/agent/{agent_type}/{task_id}/{run_id}` built from the directory's OWN
+// values, so a directory naming run-a's id under another task's segments was
+// refused. Since RM-079 those segments are keyed pseudonyms of the recorded
+// `agent_type` and `task_ref` under `pseudonymous`, so reproducing them would
+// mean holding the deployment secret on a READ path — and a rotated or lost
+// secret would then stop every live run getting a credential and stop it being
+// retired. The mapping deliberately lives in the ledger row precisely so that
+// cannot happen, and the price is this case.
+//
+// It is asserted rather than deleted so the residue is visible: if anyone
+// re-tightens the check, this test fails and they have to say how they made
+// the comparison without the secret.
+func TestADirectoryNamingAnotherTaskIsNoLongerDetectable(t *testing.T) {
+	f := newCredFixture(t)
+	f.runs.putAs("run-a", CredentialRun{
+		RunID: "run-a", AgentType: credAgentType, TaskID: credTaskID,
+		SPIFFEID: "spiffe://innsegl.dev/agent/demo/rm-999/run-a",
+	})
+	f.mustIssue(t, "run-a", AudienceSigstore)
+	// The credential was minted for the identity the DIRECTORY named, which is
+	// still this run's — same {run_id}, same trust domain, still inside the
+	// /agent/ subtree. That is the whole of what remains checkable.
+	if got := f.minter.count(); got != 1 {
+		t.Errorf("minted %d credentials, want 1", got)
 	}
 }
 
