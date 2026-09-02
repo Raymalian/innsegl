@@ -589,7 +589,7 @@ func appendAnchored(
 }
 
 // anchorAndWatch anchors one segment while polling the heartbeat as fast as it
-// can be read.
+// can be read. Proposed doc 07 ID: OPS-002d, layer F.
 //
 // This is the deterministic half of "the heartbeat stays accurate": a
 // heartbeat pinned at zero pending would satisfy every per-sample rule, and

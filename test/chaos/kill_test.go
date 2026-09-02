@@ -32,16 +32,24 @@ import (
 // hoped away.
 //
 //  1. EVERY KILL LANDS ON WORK IN FLIGHT, AND THE PROOF IS DURABLE. The killer
-//     never sleeps and then fires. It polls Postgres and fires the instant the
-//     idempotency table holds an `in_progress` row — a claim taken by a tool
-//     call that has not recorded its reply. That row is durable evidence,
-//     written by the shipped server, that the process about to die is between
-//     the start and the end of a tool call. After the soak the campaign counts
-//     the keys whose `claim_count` reached 2 or more: ADR-0017 §5 makes a
-//     second claim the trace of a replica that was killed holding the first
-//     one, and the campaign FAILS if that count is zero. "The test called kill"
-//     and "a kill interrupted a write" are different claims and only the
-//     second is OPS-003's.
+//     never sleeps and then fires. It parks until TWO witnesses agree: Postgres
+//     holds a claim taken inside the last k9FreshClaim with no reply recorded,
+//     and this process has a call it dispatched and has not had back. The row
+//     is durable and is the shipped server's own statement that a tool call is
+//     between its claim and its reply; the counter is live and cannot be
+//     satisfied by a row an earlier kill left behind. A strike that fires
+//     without both is counted as an idle kill and the campaign fails on it.
+//
+//     Afterwards the campaign reads innsegl.idempotency and counts the keys
+//     whose `claim_count` reached 2 or more. ADR-0017 §5 makes a second claim
+//     the trace of a replica that stopped existing while holding the first, so
+//     that count is durable proof, recovered from the database rather than
+//     inferred from when a signal was sent, that a kill landed between a claim
+//     and its reply. The campaign FAILS if it is zero. "The test called kill"
+//     and "a kill interrupted a write" are different claims, and only the
+//     second is OPS-003's. MEASURED on the committed tree, seed
+//     1788306719298575000: 4,537 calls dispatched, 8 kills evenly across the
+//     four components, 0 idle, 9 keys reclaimed after a holder died.
 //
 //  2. THE SWEEP IS SHOWN TO FAIL. Every check below is a named function over
 //     gathered state, and the last subtest runs those same functions over
@@ -259,7 +267,10 @@ func TestOPS003KillNineFuzzSoakAcrossEveryComponent(t *testing.T) {
 	t.Run("the sweep catches a planted backwards timestamp", func(t *testing.T) {
 		bad := k9Clone(state)
 		i := len(bad.records) - 1
-		bad.records[i][event.FieldTS] = "2000-01-01T00:00:00.000000Z"
+		// Well formed on purpose — doc 02's `ts` is RFC 3339 UTC at exactly
+		// millisecond precision — so what convicts this record is the ordering
+		// check and not the envelope validator.
+		bad.records[i][event.FieldTS] = "2000-01-01T00:00:00.000Z"
 		c.requireViolation(t, k9CheckMonotonicTS, k9SweepChain(bad))
 	})
 

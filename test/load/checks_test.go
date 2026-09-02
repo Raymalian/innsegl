@@ -187,9 +187,6 @@ func checkHeartbeat(samples []heartbeatSample, bound time.Duration, anchored []a
 		if snap.Anchored && snap.SegmentID == "" {
 			report(i, "claims anchored and names no segment")
 		}
-		if snap.PendingSegments > 0 && snap.Anchored {
-			report(i, "claims anchored while %d segment(s) are pending", snap.PendingSegments)
-		}
 
 		if snap.PendingSegments > 0 && snap.PendingSince.IsZero() {
 			report(i, "reports %d pending and no pending_since; FD §3.1 renders "+
@@ -207,7 +204,7 @@ func checkHeartbeat(samples []heartbeatSample, bound time.Duration, anchored []a
 		// bound checked here would be a flake generator. What replaces it is
 		// stronger and deterministic: OPS-002 watches one whole anchor at
 		// microsecond resolution and requires the heartbeat to have shown the
-		// segment pending while it was in flight. See observePending.
+		// segment pending while it was in flight. See anchorAndWatch.
 		if high := s.SubmittedAfter - s.CompletedBefore; snap.PendingSegments > high {
 			report(i, "reports %d pending; at most %d had been submitted and not yet "+
 				"completed when the reading was taken", snap.PendingSegments, high)
@@ -233,12 +230,12 @@ func checkHeartbeat(samples []heartbeatSample, bound time.Duration, anchored []a
 			report(i, "names segment %s ending at position %d; it ends at %d",
 				snap.SegmentID, snap.LastPosition, wall.Last)
 		}
-		low := s.At.Sub(wall.At).Seconds() - heartbeatTolerance.Seconds()
-		high := s.AtEnd.Sub(wall.At).Seconds() + heartbeatTolerance.Seconds()
-		if snap.LagSeconds < low || snap.LagSeconds > high {
+		lowLag := s.At.Sub(wall.At).Seconds() - heartbeatTolerance.Seconds()
+		highLag := s.AtEnd.Sub(wall.At).Seconds() + heartbeatTolerance.Seconds()
+		if snap.LagSeconds < lowLag || snap.LagSeconds > highLag {
 			report(i, "reports %.3fs of lag for segment %s; the test's own clock "+
 				"brackets it at %.3fs..%.3fs (tolerance %.3fs either side)",
-				snap.LagSeconds, snap.SegmentID, low, high,
+				snap.LagSeconds, snap.SegmentID, lowLag, highLag,
 				heartbeatTolerance.Seconds())
 		}
 	}

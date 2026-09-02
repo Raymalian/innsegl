@@ -130,8 +130,14 @@ const (
 	// for. Tight on purpose: the interval is the width of the window the kill
 	// can overshoot by.
 	k9PollInterval = 2 * time.Millisecond
-	// k9BusyBudget bounds the killer's wait for work to be in flight.
-	k9BusyBudget = 30 * time.Second
+	// k9BusyBudget bounds the killer's wait for work to be in flight. Generous,
+	// because a loaded machine starves the workload rather than stopping it and
+	// a strike that cannot find work must WAIT rather than fire: a kill into an
+	// idle system is the one thing this campaign must never do.
+	k9BusyBudget = 90 * time.Second
+	// k9AimAttempts bounds how many extra shots the campaign takes at the one
+	// window it refuses to leave to luck. See aimAtAClaimedCall.
+	k9AimAttempts = 6
 	// k9FreshClaim is how recently a claim must have been taken for the killer
 	// to treat it as a call that is still running.
 	//
@@ -1232,6 +1238,9 @@ func (c *k9Campaign) soak(t *testing.T) {
 	for i, target := range c.schedule() {
 		c.strike(t, i+1, target)
 	}
+	// The workers are still running here, deliberately: the aimed shot needs a
+	// keyed call in flight to aim at, and after cancel() there are none.
+	c.aimAtAClaimedCall(t)
 	cancel()
 	wg.Wait()
 	t.Logf("seed %d: soak finished in %s", c.seed, time.Since(started).Truncate(time.Millisecond))
@@ -1490,11 +1499,17 @@ func (c *k9Campaign) strike(t *testing.T, n int, target string) {
 	// inside, and MEASURED it usually did.
 	delay := c.rng.duration(0, k9StrikeWindow)
 	time.Sleep(delay)
-	busy := c.awaitBusy(t, k9BusyBudget)
+	if !c.awaitBusy(t, k9BusyBudget) {
+		t.Fatalf("no tool call was provably in flight at any point in %s, so kill %d/%d "+
+			"was never fired (seed %d). The workload has stalled — the last restore "+
+			"left a component the workers cannot reach — and killing an idle system "+
+			"would measure nothing, so the campaign stops here instead of certifying "+
+			"a soak over a system that was not working.", k9BusyBudget, n, c.kills, c.seed)
+	}
 
 	inFlight := c.inFlight.Load()
-	claimed := c.freshClaims(t)
-	if !busy || inFlight == 0 || claimed == 0 {
+	claimed := c.freshClaims(t, false)
+	if inFlight == 0 || claimed == 0 {
 		c.mu.Lock()
 		c.idleKills++
 		c.mu.Unlock()
@@ -1524,7 +1539,7 @@ func (c *k9Campaign) awaitBusy(t *testing.T, budget time.Duration) bool {
 	t.Helper()
 	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
-		if c.inFlight.Load() > 0 && c.freshClaims(t) > 0 {
+		if c.inFlight.Load() > 0 && c.freshClaims(t, false) > 0 {
 			return true
 		}
 		time.Sleep(k9PollInterval)
@@ -1544,20 +1559,94 @@ func (c *k9Campaign) awaitBusy(t *testing.T, budget time.Duration) bool {
 // kills, and asking it a question while it is down is not an error in the
 // campaign — it is an answer of "nothing is provably in flight", which is what
 // returning zero says.
-func (c *k9Campaign) freshClaims(t *testing.T) int {
+// keyedOnly restricts the count to the two tools that take an idempotency_key.
+// get_credential and retire_agent are intrinsically idempotent and claim
+// nothing, so a kill landing inside one of them leaves no claim behind and no
+// durable trace of having interrupted anything.
+func (c *k9Campaign) freshClaims(t *testing.T, keyedOnly bool) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	tools := []string{
+		string(mcp.ToolRegisterAgent), string(mcp.ToolGetCredential),
+		string(mcp.ToolRecordEvent), string(mcp.ToolRetireAgent), string(mcp.ToolSignCommit),
+	}
+	if keyedOnly {
+		tools = []string{string(mcp.ToolRegisterAgent), string(mcp.ToolRecordEvent)}
+	}
 	var n int
 	err := c.pool.QueryRow(ctx, `
 		SELECT count(*) FROM innsegl.idempotency
 		 WHERE status = 'in_progress'
+		   AND tool = ANY($2)
 		   AND claimed_at > clock_timestamp() - ($1::bigint * interval '1 millisecond')`,
-		k9FreshClaim.Milliseconds()).Scan(&n)
+		k9FreshClaim.Milliseconds(), tools).Scan(&n)
 	if err != nil {
 		return 0
 	}
 	return n
+}
+
+// aimAtAClaimedCall guarantees the campaign's one durable witness rather than
+// leaving it to luck.
+//
+// The witness is a key in innsegl.idempotency that was claimed and unanswered
+// when its holder stopped existing (ADR-0017 §5), and only a kill on the MCP
+// while it is inside register_agent or record_event produces one:
+// get_credential and retire_agent are intrinsically idempotent and claim
+// nothing, and a kill on Postgres or SPIRE leaves the server alive to finish or
+// fail the call. The soak's schedule guarantees the MCP is killed, but not that
+// those two kills land inside a KEYED call — MEASURED, a full-suite run under
+// four concurrent agents produced eight well-aimed kills and no takeover, and
+// the campaign correctly refused to certify it.
+//
+// So the window is aimed at, and the shot repeated until it lands, which is
+// test/failure/crashharness_test.go's `aim` discipline: park until a keyed call
+// has a fresh claim, fire, let the workers replay, and look. What is asserted
+// is unchanged; what is removed is the dependence on which of five tools three
+// workers happened to be inside at two arbitrary moments.
+func (c *k9Campaign) aimAtAClaimedCall(t *testing.T) {
+	t.Helper()
+	for attempt := 1; attempt <= k9AimAttempts; attempt++ {
+		if got := c.claims(t); got.takeovers+got.stranded > 0 {
+			if attempt > 1 {
+				t.Logf("the durable witness took %d aimed shot(s)", attempt-1)
+			}
+			return
+		}
+		deadline := time.Now().Add(k9BusyBudget)
+		for c.freshClaims(t, true) == 0 || c.inFlight.Load() == 0 {
+			if time.Now().After(deadline) {
+				t.Fatalf("no keyed tool call was in flight at any point in %s, so the "+
+					"campaign could not aim at the window that leaves a durable trace "+
+					"(seed %d)", k9BusyBudget, c.seed)
+			}
+			time.Sleep(k9PollInterval)
+		}
+		t.Logf("aimed shot %d/%d: SIGKILL on %s while a keyed call holds a fresh claim",
+			attempt, k9AimAttempts, k9TargetMCP)
+		c.killTarget(t, k9TargetMCP)
+		c.mu.Lock()
+		c.killCount++
+		c.byTarget[k9TargetMCP]++
+		c.mu.Unlock()
+		c.restoreTarget(t, k9TargetMCP)
+
+		// The takeover appears when a worker replays the key it lost. They
+		// retry on their own; this only waits for one of them to get there.
+		until := time.Now().Add(20 * time.Second)
+		for time.Now().Before(until) {
+			if got := c.claims(t); got.takeovers+got.stranded > 0 {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	t.Errorf("%d aimed SIGKILLs on `innsegl serve`, every one of them fired while a "+
+		"register_agent or record_event held a claim taken inside the last %s, and not "+
+		"one of them left a reclaimed or stranded key behind (seed %d). Either the "+
+		"claim is not written before the tool runs or it is not durable across the "+
+		"process that wrote it.", k9AimAttempts, k9FreshClaim, c.seed)
 }
 
 // k9Claims is what innsegl.idempotency holds after the soak, which is the
@@ -2101,6 +2190,12 @@ func k9SweepChain(st k9State) []k9Violation {
 				"the %dth record carries chain_position %d", i+1, got)
 		}
 
+		// Compared as strings, which is sound and not a shortcut: doc 02 §2's
+		// `ts` is RFC 3339 UTC at exactly millisecond precision with a literal
+		// Z (internal/event/envelope.go says so and validates it), so every
+		// value is the same width and lexicographic order is chronological
+		// order. A format that allowed variable fractional digits would make
+		// this comparison quietly wrong.
 		ts := k9Str(rec, event.FieldTS)
 		if lastTS != "" && ts < lastTS {
 			k9Fire(&vs, k9CheckMonotonicTS,

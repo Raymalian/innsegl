@@ -1,7 +1,7 @@
 # ADR-0039: Size the deployment from OPS-002's measurements, and record what each measured number replaces in doc 05 §4
 
 - Status: accepted
-- Date: 2026-09-01
+- Date: 2026-09-02
 - Deciders: Mike
 
 ## Context
@@ -52,11 +52,12 @@ first principles by a client holding no key of ours).
 **doc 05 §4's estimates are superseded by the measurements in the appendix
 below.** Concretely:
 
-1. The hot tier is sized at **1467 B per event**, not at the ≤1 KB canonical
-   event size. The canonical event is 600 B on average; the rest is Postgres
-   row overhead and the four indexes the schema carries. At doc 05 §4's own
-   workload of 10⁶ runs/year × ~20 events/run this is **≈29.3 GB/year**, where
-   the section estimated ~20 GB/year.
+1. The hot tier is sized at **1466 B per event**, not at the ≤1 KB canonical
+   event size. The canonical event is 600 B on average; the other 866 B are
+   Postgres row overhead and the **eight indexes measured on `innsegl.events`**,
+   which together cost 539 B per event. At doc 05 §4's own workload of 10⁶
+   runs/year × ~20 events/run this is **≈29.3 GB/year**, where the section
+   estimated ~20 GB/year.
 2. Segment objects are sized at **74 B per event**, which is a number doc 05 §4
    did not carry at all. At the same workload that is **≈1.5 GB/year** of
    object storage.
@@ -65,8 +66,8 @@ below.** Concretely:
    containerised Postgres sustained **580–730 appends/s** — roughly **1000×**
    the average rate.
 4. doc 05 §4's "Events are ≤1 KB canonical (LED-011)" is **confirmed**, not
-   replaced: the largest canonical event observed across ~23,000 events was
-   769 B.
+   replaced: the largest canonical event observed across the 33 894 events of
+   the seven runs below was 769 B.
 
 The measurement is not a one-off. OPS-002 runs on every CI build at a sizing
 that drives four real rollovers, and re-derives every number above; the
@@ -78,10 +79,18 @@ that contradicts this ADR supersedes it with a new one.
 **Estimate from the canonical event size and be done.** This is what doc 05 §4
 already did, and the measurement shows why it was not enough: the stored cost
 of an event is **2.4× its canonical bytes**, because a ledger row is a row in a
-heap with four indexes over it and not a byte string in a file. An estimate
+heap with eight indexes over it and not a byte string in a file. An estimate
 built from the serialized size understates the hot tier by that factor, and the
 error is systematic rather than random — it grows with the number of indexes,
 which is exactly the direction a query-serving ledger evolves in.
+
+The index count itself is measured rather than counted off the migration. An
+earlier draft of this ADR said "four indexes", read from the three
+`CREATE INDEX` statements in `migrations/0001_ledger.sql` plus the primary key
+— and it was wrong, because four of the table's columns carry `UNIQUE`
+constraints, each of which Postgres implements as an index that the DDL never
+names. `pg_stat_all_indexes` says eight, and the table in the appendix is what
+it said.
 
 **Measure against an in-memory ledger and object store, and run in seconds.**
 Rejected on the same ground IP §2 rejects a mocked Fulcio. Every number this
@@ -112,10 +121,10 @@ figure would be a measurement of a different product.
 
 **Easier.** doc 05 §4's revisit clause is discharged, and the sizing question
 now has an answer with a machine behind it. Anyone provisioning a deployment
-can multiply 1467 B by their expected event count. The hot-tier pruning doc 05
+can multiply 1466 B by their expected event count. The hot-tier pruning doc 05
 §4 mentions ("before pruning to index-only for sealed ranges") is now
 quantifiable: pruning a sealed range to index-only removes the `canonical`
-column, which is 600 of the 1467 bytes — a **41% reduction**, and it can be
+column, which is 600 of the 1466 bytes — a **41% reduction**, and it can be
 stated instead of hoped for.
 
 **Harder.** OPS-002 costs CI time. It stands up eight containers — Postgres,
@@ -160,7 +169,7 @@ one line of sizing in `test/load/ops002_test.go`, not a design.
 
 ### Conditions
 
-Every number below was taken on one machine on **2026-09-01**. A throughput
+Every number below was taken on one machine on **2026-09-01 (UTC)**. A throughput
 figure without its conditions is not a measurement, so they are stated once
 here and repeated in the test's own output on every run.
 
@@ -179,8 +188,9 @@ Two conditions matter enough to name separately.
 **The race detector.** CI builds with `-race`, which instruments every memory
 access in a process whose append path is Go all the way down to the socket.
 Every run below records which build produced it. The race-detector numbers are
-**lower bounds** on the same code built without it: 533 appends/s with, 724
-without, at the same concurrency — a **26% cost**.
+**lower bounds** on the same code built without it: 533 appends/s with, against
+643 and 724 in the two plain soaks at the same concurrency — a **17–26% cost**,
+which is a range because the plain soaks themselves are a range.
 
 **Docker Desktop is a VM.** Postgres's storage is the VM's, and every published
 port is proxied. The round-trip floor — a `SELECT 1` through the same pool and
@@ -189,17 +199,39 @@ append. That floor is part of what the append latencies below contain.
 
 ### What was run
 
-Six runs. All twenty-one rollovers sealed, anchored and verified; **no run
-produced a gap, a duplicate or an out-of-order chain position.**
+Seven runs, 33 894 events, 26 segment rollovers. **Every rollover sealed,
+anchored and verified, and no run produced a gap, a duplicate or an
+out-of-order chain position.** Every run also re-walked its whole chain through
+`ledger.Verify`, so "no gaps" is the positions being contiguous *and* the
+hashes linking, not the first without the second.
 
-| Run | Build | Writers | Rollovers × events | Appends | Wall |
+| Run | Build | Writers | Rollovers × events | Writer appends | Wall |
 |---|---|---|---|---|---|
 | A (CI default) | `-race` | 8 | 4 × 200 | 905 | 1.70 s |
 | B (soak) | plain | 8 | 5 × 2000 | 10 146 | 14.02 s |
+| B′ (soak, repeat) | plain | 8 | 5 × 2000 | 10 183 | 15.85 s |
 | C1 | plain | 1 | 3 × 1000 | 3 073 | 5.29 s |
 | C4 | plain | 4 | 3 × 1000 | 3 119 | 4.78 s |
 | C16 | plain | 16 | 3 × 1000 | 3 150 | 5.14 s |
 | C32 | plain | 32 | 3 × 1000 | 3 266 | 4.49 s |
+
+All seven were taken on an otherwise idle machine; the "writer appends" column
+excludes the two system events each rollover adds to the chain, which is why
+the chain totals 33 894 events: 33 842 worker appends plus the 52 the 26
+rollovers added.
+
+B′ is the run every storage number below is taken from, because it is the
+largest. B and B′ are the same run twice, and they disagree on throughput by
+11% (724 vs 643 appends/s) — which is why §4 below reports a **band** rather
+than a point. They agree on bytes-per-event to within 0.1%, because storage is
+not a timing measurement.
+
+One run is deliberately absent from this table: a third soak was taken while
+the repository's full test suite was running on the same Docker daemon, and it
+measured 628 appends/s. It is excluded because its conditions were not the
+conditions stated above, and quoting it beside the others would put a number
+in this ADR that the header does not describe. Its storage figures agreed with
+B′ to 0.01%, which is the evidence that the exclusion costs nothing.
 
 ### 1. Event size — doc 05 §4's "Events are ≤1 KB canonical (LED-011)"
 
@@ -221,22 +253,51 @@ bounds on those members are what keeps the bound a bound.
 
 ### 2. Hot tier — doc 05 §4's "~20 GB/year"
 
-**Superseded.** Measured over run B, after `VACUUM (ANALYZE)`:
+**Superseded.** Measured over run B′'s 10 193 events, after `VACUUM (ANALYZE)`:
 
 | Relation | total size | per event |
 |---|---|---|
-| `innsegl.events` (heap + 4 indexes + toast) | 14 802 944 B | 1457.6 B |
+| `innsegl.events` (heap + toast + 8 indexes) | 14 843 904 B | 1456.3 B |
 | `innsegl.chain` | 32 768 B | 3.2 B |
 | `innsegl.idempotency` | 32 768 B | 3.2 B |
 | `innsegl.schema_migrations` | 32 768 B | 3.2 B |
-| **Whole `innsegl` schema** | **14 901 248 B** | **1467.2 B** |
+| **Whole `innsegl` schema** | **14 942 208 B** | **1465.9 B** |
 
-**1467 B per event, against a 600 B canonical event: a 2.4× multiplier.** That
-multiplier is the finding. It is Postgres's 24-byte row header and alignment,
-the primary key on `chain_position`, and the three indexes migration 0001
-creates (`events_run_id_idx`, `events_event_type_idx`, `events_ts_idx`).
+**1466 B per event, against a 600 B canonical event: a 2.4× multiplier.** That
+multiplier is the finding, and it decomposes — measured, not inferred:
 
-Two honesty notes on this table.
+| | bytes/event | |
+|---|---|---|
+| canonical event, as doc 05 §4 counts it | 600.0 | the `canonical` column |
+| the rest of the heap row | 317.0 | row header, alignment, the ten other columns |
+| **heap + toast** | **917.0** | |
+| **indexes (8 of them)** | **539.3** | table below |
+| **`innsegl.events` total** | **1456.3** | |
+
+The eight indexes, read from `pg_stat_all_indexes` rather than counted off the
+migration:
+
+| Index | size | per event | why it exists |
+|---|---|---|---|
+| `events_prev_event_hash_key` | 1 277 952 B | 125.4 B | `UNIQUE` — the anti-fork constraint (0001) |
+| `events_event_hash_key` | 1 269 760 B | 124.6 B | `UNIQUE` — two events cannot be the same event |
+| `events_idempotency_key_key` | 704 512 B | 69.1 B | `UNIQUE` — ADR-0004's conditional key |
+| `events_run_id_idx` | 704 512 B | 69.1 B | partial index, run-scoped reads |
+| `events_event_id_key` | 614 400 B | 60.3 B | `UNIQUE` — the UUIDv7 |
+| `events_event_type_idx` | 434 176 B | 42.6 B | type-scoped reads |
+| `events_pkey` | 245 760 B | 24.1 B | `chain_position` |
+| `events_ts_idx` | 245 760 B | 24.1 B | time-ordered reads |
+| **total** | **5 496 832 B** | **539.3 B** | |
+
+**Four of those eight are not in the DDL as indexes at all.** They are `UNIQUE`
+constraints on `event_id`, `event_hash`, `prev_event_hash` and
+`idempotency_key`, and together they cost **379 B per event** — 26% of the hot
+tier. Three of them are invariant machinery rather than query support: the
+uniqueness of `prev_event_hash` is what makes a second branch off any position
+a constraint violation instead of something a verifier finds later. **I4 has a
+storage price, and this is it, in bytes.**
+
+Two honesty notes on the relation table.
 
 - The three small relations are all at **32 768 B, which is four 8 KiB pages —
   their floor.** They are empty or near-empty. `innsegl.idempotency` is the MCP
@@ -245,27 +306,27 @@ Two honesty notes on this table.
 - **Small runs overstate bytes-per-event, and the effect is visible in the
   data.** Run A's 913 events measured **1758.6 B/event**, because ~98 KiB of
   fixed relation floor is divided by 913. Run C's ~3100-event runs measured
-  1476–1517 B. Run B's 10 156 events measured 1467 B. The number to size from
-  is the largest run's, and the trend is why.
+  1476–1517 B. The two 10 000-event soaks measured 1465.9 and 1467.2 B. The
+  number to size from is the largest run's, and the trend is why.
 
 **Extrapolation, and it is arithmetic rather than measurement.** Nothing here
 ran for a year. Taking doc 05 §4's own workload — 10⁶ runs/year × ~20
 events/run = 2 × 10⁷ events/year — and multiplying by the measured
 bytes-per-event:
 
-- hot tier: 1467.2 B × 2 × 10⁷ = **29.3 GB/year (27.3 GiB/year)**
+- hot tier: 1465.9 B × 2 × 10⁷ = **29.3 GB/year (27.3 GiB/year)**
 - doc 05 §4 estimated **~20 GB/year**, so the estimate was low by **≈1.47×**
 
 The estimate was not unreasonable; it was the canonical size times the event
 count, and it omitted what a database costs to keep a row in.
 
 The pruning doc 05 §4 anticipates ("before pruning to index-only for sealed
-ranges") removes the `canonical` column, which the table above measures at 600
-of the 1467 bytes. **That the remainder is therefore ~867 B/event, or ≈17.3
-GB/year, is arithmetic on a measurement and not itself measured** — nothing in
-this run pruned anything, and a real prune leaves row headers and page
-fragmentation behind. It is recorded as the direction and rough size of the
-saving, not as a figure to provision against.
+ranges") removes the `canonical` column, which the decomposition above measures
+at 600 of the 1466 bytes. **That the remainder is therefore ~866 B/event, or
+≈17.3 GB/year, is arithmetic on a measurement and not itself measured** —
+nothing in this run pruned anything, and a real prune leaves row headers, the
+eight indexes and page fragmentation behind. It is recorded as the direction
+and rough size of the saving, not as a figure to provision against.
 
 ### 3. Segment objects — a number doc 05 §4 did not carry
 
@@ -292,13 +353,19 @@ at this size, the lifecycle policy is about retention rather than about cost.
 | 1 | 580 /s | 1.68 ms | 1.91 ms | 2.82 ms | 6.06 ms |
 | 4 | 652 /s | 5.47 ms | 10.71 ms | 14.01 ms | 18.37 ms |
 | 8 (run B) | 724 /s | 10.70 ms | 12.51 ms | 18.85 ms | 58.64 ms |
+| 8 (run B′) | 643 /s | 10.83 ms | 21.69 ms | 40.16 ms | 62.77 ms |
 | 16 | 613 /s | 25.14 ms | 33.87 ms | 46.32 ms | 87.54 ms |
 | 32 | 728 /s | 43.10 ms | 47.56 ms | 51.41 ms | 82.01 ms |
 | 8, `-race` (run A) | 533 /s | 14.51 ms | 16.72 ms | 22.29 ms | 46.30 ms |
 
+**The figure to quote is the band, 580–730 appends/s, not any one row.** Two
+identical 8-writer soaks measured 724 and 643, an 11% spread with nothing
+changed between them; on a laptop under a hypervisor that is the resolution
+this measurement has, and a single decimal-precise number would be a false one.
+
 Single-writer serialized append, measured separately on a chain of its own with
-the first fifth discarded as warm-up: **p50 1.70 ms**, a ceiling of **589
-appends/s**.
+the first fifth discarded as warm-up: **p50 1.70–1.72 ms**, a ceiling of
+**581–589 appends/s**.
 
 Against doc 05 §4's workload, 2 × 10⁷ events/year is **0.63 appends/s** on
 average. The measured sustained rate is **roughly 1000× that**. Even a
@@ -318,23 +385,24 @@ it: the writers kept appending through every rollover, which is IP §6.4's
 
 ### 6. The anchoring heartbeat — FD §3.1
 
-Sampled every 5 ms for the whole of every run, with **2804 readings in run B
+Sampled every 5 ms for the whole of every run, with **3170 readings in run B′
 and 340 in run A, every one of them checked**. Checked means: the bound is the
 configured bound, `over_bound` follows from the lag, `anchored` is never
 claimed while a segment is pending, the pending count never exceeds what had
 been submitted and not completed, the reported segment is the one the driver
 anchored and ends where it says, `last_position` never walks backwards, and the
-reported lag agrees with the *test's own* clock to within 500 ms.
+reported lag falls inside the interval the *test's own* clock brackets the
+reading with, plus a 250 ms tolerance either side.
 
 | | |
 |---|---|
-| Maximum lag observed, 2000-event segments at 724 appends/s | **2.695 s** |
+| Maximum lag observed, 2000-event segments (runs B, B′) | **2.695 s / 3.679 s** |
 | Maximum lag observed, 1000-event segments | 1.20–1.63 s |
 | FD §3.1's default amber bound | 15 min |
 
 The steady-state lag is the interval between rollovers, which is what it should
 be: it grows while the next segment fills and drops when that segment anchors.
-At these segment sizes the default bound has roughly **330× of headroom**, and
+At these segment sizes the default bound has roughly **250× of headroom**, and
 an operator choosing a segment size can now read the lag off the segment size
 and the append rate rather than guess it.
 
@@ -351,7 +419,7 @@ evidence.
 
 **1. The writers were inside the ledger essentially all the time.** The
 fraction of writer wall time spent inside `ledger.Store.Append` was **99.97%**
-in run B, **99.63%** in run A, and never below **99.54%** in any run including
+in both soaks, **99.63%** in run A, and never below **99.54%** in any run including
 the 32-writer one. Everything the generator does — building a body, scheduling,
 recording a latency — is the remaining 0.03–0.46%. The run **fails** if this
 falls below 90%, so a future regression that made the generator the constraint
@@ -370,12 +438,25 @@ writers if the writers are always queued at the same resource:
 | Writers | throughput × p50 |
 |---|---|
 | 1 | 0.97 |
-| 4 | 3.57 |
+| 4 | 3.56 |
 | 16 | 15.4 |
 | 32 | 31.4 |
 
 Every writer is queued at the ledger essentially all the time. **The number
 being reported is the ledger's, not the generator's.**
+
+**4. The harness share does not move when the system's throughput does.** A
+later CI-sizing run taken while another agent's containers were competing for
+the same Docker daemon measured **233 appends/s** — a third of the idle-machine
+rate — and the writers were still inside `store.Append` **99.54%** of the time.
+If the generator were the constraint, a slower database would *raise* the share
+of time spent outside it, not leave it unchanged. This is the cleanest form of
+the argument available: the quantity that would move if the harness were the
+bottleneck was held constant across a 3× change in the quantity being measured.
+It is also the sharpest warning attached to every figure here — the same code
+on the same machine spans 233 to 728 appends/s depending on what else the
+daemon is doing, which is why §4 reports a band and why the conditions block
+exists at all.
 
 What this does *not* establish is which part of the append costs the 1.70 ms.
 The round-trip floor puts 0.21 ms of it in the driver and the socket; the

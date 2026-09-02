@@ -13,6 +13,10 @@ import (
 
 // The OPS-002 assertions, convicted of being able to fail.
 //
+// Proposed doc 07 IDs: OPS-002a (the position scan) and OPS-002b (the
+// heartbeat checker), both layer U. ADR-0039 carries the proposed rows; doc 07
+// is normative and is not edited from here.
+//
 // A load test's assertions are the easiest thing in a repository to write
 // vacuously: "no gaps" passes when nothing was appended, and "the heartbeat is
 // accurate" passes when the heartbeat was never read. So every check in
@@ -28,6 +32,7 @@ func positionsAt(positions ...int64) []event.Fields {
 	return out
 }
 
+// OPS-002a.
 func TestScanPositionsConvictsAGapADuplicateAndAReversal(t *testing.T) {
 	t.Run("a contiguous run is clean", func(t *testing.T) {
 		scan, err := scanPositions(positionsAt(1, 2, 3, 4, 5))
@@ -141,6 +146,7 @@ func honestSamples(t0 time.Time, bound time.Duration) ([]heartbeatSample, []anch
 	}, wall
 }
 
+// OPS-002b.
 func TestCheckHeartbeatConvictsEveryWayItCouldBeWrong(t *testing.T) {
 	const bound = 15 * time.Minute
 	t0 := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
@@ -257,6 +263,7 @@ func TestCheckHeartbeatConvictsEveryWayItCouldBeWrong(t *testing.T) {
 
 // segmentsNamed is what catches a heartbeat frozen on an old segment, so it
 // too is required to be able to notice.
+// OPS-002b, the stall half.
 func TestSegmentsNamedSeesTheHeartbeatAdvanceAndSeesItStall(t *testing.T) {
 	const bound = 15 * time.Minute
 	t0 := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)

@@ -10,6 +10,9 @@ import (
 
 // The harness's own routing, measured.
 //
+// Proposed doc 07 ID: OPS-002c, layer U. ADR-0039 carries the proposed row;
+// doc 07 is normative and is not edited from here.
+//
 // #101 was a branch nothing exercised: eight TestMains send "no Docker" and
 // "the stack did not start" to the same variable, and the second silently
 // becomes a skip. This package does not add a ninth, and the fix is only a fix
