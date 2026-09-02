@@ -607,7 +607,7 @@ func (c *signCommitService) resolveRun(ctx context.Context, runID string) (Crede
 			"run %q was retired at %s; retirement is effective immediately (IP §6.2)",
 			runID, event.NewTimestamp(run.RetiredAt))
 	}
-	spiffeID, err := credentialRunIdentity(runID, run)
+	spiffeID, _, err := credentialRunIdentity(runID, run)
 	if err != nil {
 		return CredentialRun{}, "", err
 	}

@@ -268,7 +268,7 @@ func (s *retireService) retire(ctx context.Context, in retireAgentIn) (retireAge
 	// that answered with another run's identity would otherwise be a way to
 	// delete an entry that is not this run's. It is deliberately the same
 	// function and not a second copy of the rule.
-	spiffeID, err := credentialRunIdentity(in.RunID, run)
+	spiffeID, ref, err := credentialRunIdentity(in.RunID, run)
 	if err != nil {
 		return retireAgentOut{}, err
 	}
@@ -289,10 +289,8 @@ func (s *retireService) retire(ctx context.Context, in retireAgentIn) (retireAge
 	// A failure here is reported with internal/spire's own class (IP §6.1:
 	// SPIRE unreachable is IDENTITY_UNAVAILABLE and retryable). The record
 	// stands regardless — I4 — so the retry is a convergence, not a repeat.
-	ref, err := run.Ref()
-	if err != nil {
-		return retireAgentOut{}, err
-	}
+	// `ref` is the identity's own path segments, from gate 3's parse: SPIRE
+	// holds those, not the ledger's `agent_type` / `task_ref` (RM-079, #116).
 	if _, err := s.entries.RetireRun(ctx, ref); err != nil {
 		return retireAgentOut{}, err
 	}

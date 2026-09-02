@@ -77,10 +77,12 @@ func (r CredentialRun) Retired() bool { return !r.RetiredAt.IsZero() }
 // secret: rotating it cannot strand a live run.
 //
 // It refuses an identity that is not one rather than returning a zero RunRef,
-// which would ask SPIRE about `spiffe://{td}/agent///`. Both callers have
-// already put the same string through credentialRunIdentity, so the error is
-// unreachable from them — and it is returned rather than asserted because the
-// directory is an interface and the next implementation of it is not this one.
+// which would ask SPIRE about `spiffe://{td}/agent///`. That refusal is REACHED
+// — the run directory is an interface, and one that answers with a malformed
+// identity, or with none, is refused here. credentialRunIdentity is the only
+// caller and this is the only place the grammar is checked on that path; an
+// earlier revision of RM-079 checked it there as well, which made this branch
+// dead and failed IP §2's 100%-branch floor.
 func (r CredentialRun) Ref() (spire.RunRef, error) {
 	run, err := spire.RunRefOf(r.SPIFFEID)
 	if err != nil {
@@ -295,17 +297,15 @@ func (c *credentialService) issue(ctx context.Context, in getCredentialIn) (getC
 	// SPIRE's authorization policy cannot see. The policy refuses it too
 	// (deploy/compose/spire/authz-policy.rego); this is the same refusal one
 	// layer up, so neither alone is load-bearing.
-	spiffeID, err := credentialRunIdentity(in.RunID, run)
+	spiffeID, ref, err := credentialRunIdentity(in.RunID, run)
 	if err != nil {
 		return getCredentialOut{}, err
 	}
 
 	// Gate 4 — SPIRE still holds the entry. Asked of the server, whose answer
-	// changes the instant a delete commits.
-	ref, err := run.Ref()
-	if err != nil {
-		return getCredentialOut{}, err
-	}
+	// changes the instant a delete commits. `ref` is the identity's own path
+	// segments, from the parse the gate above already made — SPIRE holds those
+	// and not the ledger's `agent_type` / `task_ref` (RM-079, #116).
 	if active := c.entries.RequireActiveRun(ctx, ref); active != nil {
 		return getCredentialOut{}, active
 	}

@@ -5,11 +5,10 @@ package mcp
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
-	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/ledger"
+	"innsegl.dev/innsegl/internal/spire"
 )
 
 // CredentialRuns resolves a run_id to the run it names.
@@ -56,9 +55,15 @@ type CredentialRun struct {
 	RetiredAt time.Time
 }
 
-// credentialRunIdentity returns the SPIFFE ID to mint for, having checked that
-// the run directory answered about the run that was asked for and that the
-// identity it named is that run's own, inside the /agent/ subtree.
+// credentialRunIdentity returns the SPIFFE ID to mint for AND the run
+// reference SPIRE is addressed by, having checked that the run directory
+// answered about the run that was asked for and that the identity it named is
+// that run's own, inside the /agent/ subtree.
+//
+// Both come out of ONE parse of one string. An earlier revision of RM-079
+// validated the identity here and parsed it a second time at each call site,
+// which left the second parse's error branch unreachable — a dead error path is
+// exactly what IP §2's 100%-branch floor exists to find, and it found it.
 //
 // # What this check can still see, and what RM-079 took away from it
 //
@@ -76,24 +81,24 @@ type CredentialRun struct {
 // ANOTHER RUN'S identity is still refused, because the identity must be a
 // well-formed SPIFFE ID in the /agent/ subtree whose {run_id} is this run's.
 // That is what stops a directory being a second route to AB-10.
-func credentialRunIdentity(runID string, run CredentialRun) (string, error) {
+func credentialRunIdentity(runID string, run CredentialRun) (string, spire.RunRef, error) {
 	if run.RunID != runID {
-		return "", Errorf(ClassInvariantViolation, runID,
+		return "", spire.RunRef{}, Errorf(ClassInvariantViolation, runID,
 			"the run directory answered for run %q", run.RunID)
 	}
 	// The grammar of doc 01 §1 / doc 02 §5, from the one definition of it in
-	// this repository. It already requires the /agent/ subtree and four
-	// components; the suffix check below requires the last of them to be THIS
-	// run's.
-	if err := event.ValidateSPIFFEID(run.SPIFFEID); err != nil {
-		return "", Errorf(ClassInvariantViolation, runID,
-			"run %q has no usable identity: %v", runID, err)
+	// this repository, applied ONCE. It already requires the /agent/ subtree
+	// and four components; the comparison below requires the last of them to
+	// be THIS run's.
+	ref, err := run.Ref()
+	if err != nil {
+		return "", spire.RunRef{}, err
 	}
-	if !strings.HasSuffix(run.SPIFFEID, "/"+run.RunID) {
-		return "", Errorf(ClassInvariantViolation, runID,
+	if ref.RunID != run.RunID {
+		return "", spire.RunRef{}, Errorf(ClassInvariantViolation, runID,
 			"identity %q does not name run %q", run.SPIFFEID, run.RunID)
 	}
-	return run.SPIFFEID, nil
+	return run.SPIFFEID, ref, nil
 }
 
 // credentialLedgerError carries the ledger's own classification across.
