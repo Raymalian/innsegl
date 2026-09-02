@@ -56,16 +56,15 @@
               it.
             </li>
             <li>
-              <strong><code>innsegl seal</code> is listed in the CLI's help and
-              exits non-zero.</strong> Segment sealing and Rekor anchoring exist
-              as code; the subcommand an operator would schedule does not yet.
-            </li>
-            <li>
-              <strong>The end-to-end claim is not yet demonstrable by you.</strong>
-              The signing and anchoring paths are exercised against real SPIRE
-              and a real Fulcio and Rekor in this project's own test
-              containers. That is not the same as a deployment you can run and
-              check, and it should not be read as one.
+              <strong>The end-to-end claim is demonstrable, and nothing is
+              released.</strong> <code>make smoke</code> boots the reference
+              stack from this repository, registers an agent, signs a commit,
+              records it in a real Rekor, retires the agent, and then verifies
+              that commit from a container with no route to the ledger. It
+              takes about a minute. That is the claim, and you can run it —
+              but it runs from a clone of the default branch, not from a
+              release, and it is a stack on your machine rather than a service
+              anyone operates.
             </li>
           </ul>
           <p class="footnote">
