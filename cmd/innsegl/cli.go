@@ -15,8 +15,12 @@ import (
 // compose smoke test distinguish "the command refused" from "you asked for
 // something that does not exist".
 const (
-	exitOK             = 0 // the command completed
-	exitNotImplemented = 1 // the command exists but has no behaviour yet
+	exitOK = 0 // the command completed
+	// exitNotImplemented was the placeholder body's status. RM-078 (#112)
+	// removed the last stub, so nothing returns it any more; it stays reserved
+	// so that a caller's `!= 1` check keeps meaning what it meant, and the
+	// tests below assert no subcommand has gone back to it.
+	exitNotImplemented = 1
 	exitUsage          = 2 // the command line was not understood
 )
 
@@ -45,9 +49,13 @@ var commands = map[string]command{
 		summary: "reconcile signing intents against the transparency log",
 		exec:    reconcileCommand,
 	},
+	// The sealer is doc 05 §1's `innsegl-sealer` row: IP §6.4's segment
+	// sealing and Rekor anchoring, wired to something a deployment can run.
+	// Until RM-078 (#112) nothing the shipped binary ran ever produced a
+	// segment, so doc 05 §2's two-tier premise had no artifact behind it.
 	"seal": {
 		summary: "seal ledger segments and anchor them in the transparency log",
-		exec:    notImplemented("seal"),
+		exec:    sealCommand,
 	},
 	// The reaper is the seventh body: IP §6.7 requires orphaned entries to be
 	// expired and recorded, and doc 05 §2 runs that single-active on a
@@ -94,16 +102,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return cmd.exec(args[1:], stdout, stderr)
-}
-
-// notImplemented builds the placeholder body for a subcommand that is wired
-// up but not yet built. It fails loudly rather than exiting zero: a caller
-// must never be able to mistake "nothing happened" for success.
-func notImplemented(name string) func(args []string, stdout, stderr io.Writer) int {
-	return func(_ []string, _, stderr io.Writer) int {
-		fprintf(stderr, "innsegl %s: not implemented\n", name)
-		return exitNotImplemented
-	}
 }
 
 // usage writes the help block to w. Subcommands are listed in a stable order
