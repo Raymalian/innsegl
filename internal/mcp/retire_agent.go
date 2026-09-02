@@ -289,7 +289,11 @@ func (s *retireService) retire(ctx context.Context, in retireAgentIn) (retireAge
 	// A failure here is reported with internal/spire's own class (IP §6.1:
 	// SPIRE unreachable is IDENTITY_UNAVAILABLE and retryable). The record
 	// stands regardless — I4 — so the retry is a convergence, not a repeat.
-	if _, err := s.entries.RetireRun(ctx, run.Ref()); err != nil {
+	ref, err := run.Ref()
+	if err != nil {
+		return retireAgentOut{}, err
+	}
+	if _, err := s.entries.RetireRun(ctx, ref); err != nil {
 		return retireAgentOut{}, err
 	}
 

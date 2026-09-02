@@ -17,6 +17,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/spire"
 )
@@ -200,6 +201,15 @@ func raSetup(t *testing.T, lease time.Duration, mutate func(*RegisterAgentConfig
 		clock:      &raClock{at: time.Date(2026, 8, 29, 9, 14, 3, 0, time.UTC)},
 		ttl:        5 * time.Minute,
 	}
+	// Identity mode `literal` unless a case says otherwise. Every assertion in
+	// this file predates RM-079 (#116) and is about golden fixture 01's own
+	// values — `fix-ci`, `jira-118` — so the fixture states the mode that
+	// produces them rather than letting the assertions quietly become
+	// assertions about a hash. PRI-003 is where `pseudonymous` is measured.
+	literal, err := identity.New(identity.ModeLiteral, "")
+	if err != nil {
+		t.Fatalf("identity.New: %v", err)
+	}
 	cfg := RegisterAgentConfig{
 		Identities:  env.identities,
 		Ledger:      env.ledger,
@@ -207,6 +217,7 @@ func raSetup(t *testing.T, lease time.Duration, mutate func(*RegisterAgentConfig
 		ParentID:    raParentID,
 		TTL:         env.ttl,
 		Now:         env.clock.Now,
+		Pseudonyms:  literal,
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -784,12 +795,17 @@ func TestRegisterAgentIsNotServedUntilItIsConfigured(t *testing.T) {
 
 // TestConfigureRegisterAgentRefusesAnIncompleteConfiguration.
 func TestConfigureRegisterAgentRefusesAnIncompleteConfiguration(t *testing.T) {
+	literal, err := identity.New(identity.ModeLiteral, "")
+	if err != nil {
+		t.Fatalf("identity.New: %v", err)
+	}
 	complete := func() RegisterAgentConfig {
 		return RegisterAgentConfig{
 			Identities:  newRASPIRE(raTrustDomain),
 			Ledger:      raFailingLedger{err: errors.New("unused")},
 			Idempotency: &IdempotencyStore{},
 			ParentID:    raParentID,
+			Pseudonyms:  literal,
 		}
 	}
 	cases := []struct {
@@ -800,6 +816,11 @@ func TestConfigureRegisterAgentRefusesAnIncompleteConfiguration(t *testing.T) {
 		{"no ledger", func(c *RegisterAgentConfig) { c.Ledger = nil }},
 		{"no idempotency store", func(c *RegisterAgentConfig) { c.Idempotency = nil }},
 		{"no parent id", func(c *RegisterAgentConfig) { c.ParentID = "" }},
+		// RM-079 (#116). A nil pseudonymiser cannot default to anything: the
+		// two defaults available are "put the ticket reference in the
+		// certificate" and "refuse to start", and only one of them is a
+		// privacy control.
+		{"no pseudonymiser", func(c *RegisterAgentConfig) { c.Pseudonyms = nil }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -821,9 +842,9 @@ func TestConfigureRegisterAgentRefusesAnIncompleteConfiguration(t *testing.T) {
 	}
 
 	// The whole configuration is accepted, and the previous one comes back.
-	restore, err := ConfigureRegisterAgent(complete())
-	if err != nil {
-		t.Fatalf("ConfigureRegisterAgent refused a complete configuration: %v", err)
+	restore, cerr := ConfigureRegisterAgent(complete())
+	if cerr != nil {
+		t.Fatalf("ConfigureRegisterAgent refused a complete configuration: %v", cerr)
 	}
 	restore()
 }

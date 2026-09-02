@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/spire"
 )
@@ -91,6 +92,14 @@ const (
 	envRequireAppendOnlyRole = "INNSEGL_REQUIRE_APPEND_ONLY_ROLE"
 	envMigrate               = "INNSEGL_MIGRATE"
 
+	// Pseudonymous identity (RM-079, #116). The secret is a secret: it is read
+	// from the environment first for the same reason the ledger DSN is —
+	// nothing that grants anything belongs on a command line the process table
+	// can read — and the flag exists only so that a one-off invocation can set
+	// it without exporting it.
+	envIdentityMode   = "INNSEGL_IDENTITY_MODE"
+	envIdentitySecret = "INNSEGL_IDENTITY_SECRET" //nolint:gosec // the NAME of the variable, not a secret
+
 	// sign_commit (RM-033, #41). Every one of these is opt-in: the tool is
 	// bound unconditionally — it is one of IP §4's five — and is CONFIGURED
 	// only when a workspace is named, because a deployment without a gitsign
@@ -164,6 +173,22 @@ type serveOptions struct {
 
 	requireRole bool
 	migrate     bool
+
+	// Identity mode and its secret (RM-079, #116). See serveOptions.pseudonyms.
+	identityMode   string
+	identitySecret string
+}
+
+// pseudonyms builds what decides whether the SPIFFE ID — and so the Fulcio
+// certificate, and so the Rekor entry, and so the Agent-Identity trailer —
+// names the caller's task and agent type or a keyed pseudonym of them.
+//
+// It is called from validate() as well as from the wiring, so that a
+// deployment that asked for pseudonyms and gave no secret is refused with a
+// usage message naming the flag rather than with a start-up failure naming a
+// package.
+func (o serveOptions) pseudonyms() (*identity.Pseudonymiser, error) {
+	return identity.New(identity.Mode(o.identityMode), o.identitySecret)
 }
 
 // serveLog is the server's log. It is structured because a deployment ships
@@ -388,6 +413,17 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		requireRole = fs.Bool("require-append-only-role", envBool(envRequireAppendOnlyRole, false),
 			"refuse to start unless the database role can INSERT and cannot UPDATE, DELETE or "+
 				"TRUNCATE the chain (doc 05 §1) ($"+envRequireAppendOnlyRole+")")
+		identityMode = fs.String("identity-mode", envOr(envIdentityMode, string(identity.ModePseudonymous)),
+			"what the SPIFFE ID says about a run: "+string(identity.ModePseudonymous)+
+				" puts a keyed pseudonym of agent_type and task_ref in it, "+string(identity.ModeLiteral)+
+				" puts the caller's own values in and so puts your ticket references into "+
+				"every Fulcio certificate and every Rekor entry, permanently ($"+envIdentityMode+")")
+		identitySecret = fs.String("identity-secret", os.Getenv(envIdentitySecret),
+			"the deployment secret the pseudonyms are keyed with, at least "+
+				strconv.Itoa(identity.MinSecretBytes)+" bytes — prefer the environment variable. "+
+				"It is needed to CREATE a pseudonym and never to resolve one: resolution goes "+
+				"through the ledger's run_registered row, so losing or rotating this does not "+
+				"orphan history ($"+envIdentitySecret+")")
 		migrate = fs.Bool("migrate", envBool(envMigrate, false),
 			"apply the ledger migrations before serving; a deployment normally runs them as its "+
 				"own step ($"+envMigrate+")")
@@ -437,6 +473,7 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		clockSkewBound: *clockSkewBound, trustedOrigins: splitOrigins(*trustedOrigins),
 		sessionTimeout: *sessionTimeout, shutdownTimeout: *shutdownTimeout,
 		healthTimeout: *healthTimeout, requireRole: *requireRole, migrate: *migrate,
+		identityMode: *identityMode, identitySecret: *identitySecret,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl serve: %s\n", problem)
@@ -498,6 +535,13 @@ func (o serveOptions) validate() string {
 		return "-idempotency-lease is negative"
 	case o.shutdownTimeout < 0:
 		return "-shutdown-timeout is negative"
+	}
+	// RM-079 (#116). The mode defaults to pseudonymous, so a deployment that
+	// set no secret is refused here rather than starting with the ticket
+	// references going into Rekor.
+	if _, err := o.pseudonyms(); err != nil {
+		return "-identity-mode / -identity-secret (or $" + envIdentityMode + " / $" +
+			envIdentitySecret + "): " + err.Error()
 	}
 	// One credential, and exactly one way of getting it. See servewiring.go.
 	files := 0

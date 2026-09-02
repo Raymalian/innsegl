@@ -252,11 +252,63 @@ in use beside it.
 
 ---
 
+## What an agent's identity says about it
+
+The SPIFFE ID grammar is
+`spiffe://{trust_domain}/agent/{agent_type}/{task_id}/{run_id}`. That string is
+the URI SAN of the Fulcio certificate every commit is signed under, so it is in
+the Rekor entry, and it is the `Agent-Identity` trailer, so it is in `git log`.
+
+Filled in literally it reads `spiffe://innsegl.dev/agent/fix-ci/jira-118/run-…`,
+and under public Sigstore that ticket number is a permanent public record. So
+`innsegl serve` fills those two fields with **keyed pseudonyms** by default
+(RM-079):
+
+```
+spiffe://innsegl.dev/agent/a7f3c91b/e2d5f004/run-850d52ce…
+```
+
+Two settings control it:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `INNSEGL_IDENTITY_MODE` | `pseudonymous` | `pseudonymous` puts `HMAC-SHA256(secret, "<field>:" ‖ value)`, truncated to 8 hex characters, in `{agent_type}` and `{task_id}`. `literal` puts the caller's own values in. |
+| `INNSEGL_IDENTITY_SECRET` | — | the deployment secret, at least 16 bytes. **Required** in `pseudonymous` mode; the server refuses to start without one. |
+
+```sh
+export INNSEGL_IDENTITY_SECRET="$(openssl rand -hex 32)"
+```
+
+Four things worth knowing before you choose:
+
+- **The server will not start without a secret.** It does not fall back to
+  literal values: a configuration that said "private" while every ticket number
+  went into Rekor is the failure this default exists to prevent. Choosing
+  `literal` is a decision an operator writes down.
+- **The real `agent_type` and `task_ref` are still in the ledger**, verbatim, on
+  the run's `run_registered` event, beside the pseudonymous `spiffe_id`. That
+  row is the whole mapping; there is no second table, and the dashboard resolves
+  through it.
+- **The secret creates a pseudonym and never resolves one.** Resolution goes
+  through that ledger row, so losing or rotating the secret does not orphan
+  history and does not strand a running run. Keep the same secret across
+  replicas, though: two replicas with different secrets would mint two
+  identities for one run.
+- **`Agent-Task` carries the pseudonym too**, because it must lowercase to the
+  identity's `{task_id}` for the third verification check to settle. The
+  attested link from a commit to your tracker therefore lives in the ledger
+  rather than in `git log`. Put the ticket in the commit *message* if humans
+  need to read it there — that is unattested, and in a public repository it
+  leaks, which is why it is a choice rather than a default.
+
+---
+
 ## When the first run goes wrong
 
 | Symptom | Cause |
 |---|---|
 | compose refuses, naming `INNSEGL_SPIRE_JWT_ISSUER` | the export was skipped. This refusal is deliberate; see above |
+| `innsegl serve` refuses, naming `-identity-mode / -identity-secret` | `INNSEGL_IDENTITY_SECRET` is unset or under 16 bytes. See "What an agent's identity says about it" |
 | `register: FAIL: no attested agent yet` | the SPIRE agent has not finished attesting. Re-run `register.sh`; it is idempotent |
 | ports 8443, 5555 or 3000 already bound | the stack publishes those three on loopback. Free them, or bring your own stack down first |
 | `all predefined address pools have been fully subnetted` | Docker is out of network address space, at roughly the twenty-ninth network. `docker network prune` |

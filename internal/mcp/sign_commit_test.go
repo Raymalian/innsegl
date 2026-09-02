@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/signing"
 	"innsegl.dev/innsegl/internal/spire"
@@ -438,6 +439,16 @@ func newSCWiring() *scWiring {
 		store:  &scSigstore{},
 	}
 	w.signers = &scSigners{signer: w.signer}
+	// Identity mode `literal`: this file's fixtures are scTaskRef "RM-033"
+	// against scTaskID "rm-033", which is what `literal` produces and what
+	// every assertion below is written in terms of. PRI-003 measures
+	// `pseudonymous` end to end.
+	literal, err := identity.New(identity.ModeLiteral, "")
+	if err != nil {
+		// newSCWiring has no *testing.T; a fixture that cannot be built is a
+		// defect in the fixture, not a case outcome.
+		panic("newSCWiring: " + err.Error())
+	}
 	w.cfg = SignCommitConfig{
 		Runs:        w.runs,
 		Idempotency: NewIdempotencyStore(nil),
@@ -449,6 +460,7 @@ func newSCWiring() *scWiring {
 		Signers:     w.signers,
 		AuthorName:  scAuthorName,
 		AuthorEmail: scAuthorEmail,
+		Pseudonyms:  literal,
 	}
 	return w
 }
@@ -1971,6 +1983,17 @@ func (r scChainRuns) CredentialRun(_ context.Context, runID string) (CredentialR
 	return r.run, true, nil
 }
 
+// scLiteral is identity mode `literal`, which is what every fixture in this
+// file is written in terms of.
+func scLiteral(t *testing.T) *identity.Pseudonymiser {
+	t.Helper()
+	p, err := identity.New(identity.ModeLiteral, "")
+	if err != nil {
+		t.Fatalf("identity.New: %v", err)
+	}
+	return p
+}
+
 // scOpenEntries is the SPIRE registration-entry gate. The entry check is
 // TC-SPI's and get_credential's own subject and is measured against a real
 // SPIRE in TestGetCredentialAgainstRealSPIRE; this case is about the ledger and
@@ -2093,6 +2116,10 @@ func TestSIG001AgainstRealSigstoreAndARealChain(t *testing.T) {
 		}),
 		AuthorName:  scAuthorName,
 		AuthorEmail: scAuthorEmail,
+		// Identity mode `literal`: this case seeds the chain with a literal
+		// SPIFFE ID and asserts the literal trailers against it. PRI-004,
+		// below, is the same real stack under `pseudonymous`.
+		Pseudonyms: scLiteral(t),
 	})
 	if err != nil {
 		t.Fatalf("newSignCommitService: %v", err)

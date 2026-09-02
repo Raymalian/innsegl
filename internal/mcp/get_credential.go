@@ -66,9 +66,28 @@ const AudienceSigstore = "sigstore"
 // Retired reports whether the run has been retired.
 func (r CredentialRun) Retired() bool { return !r.RetiredAt.IsZero() }
 
-// Ref renders the run as the reference internal/spire takes.
-func (r CredentialRun) Ref() spire.RunRef {
-	return spire.RunRef{AgentType: r.AgentType, TaskID: r.TaskID, RunID: r.RunID}
+// Ref renders the run as the reference internal/spire takes: the three PATH
+// SEGMENTS of its SPIFFE ID, read off the ID itself.
+//
+// Not off AgentType and TaskID, which since RM-079 (#116) are the ledger's
+// record of what the run really was and not what its identity says. SPIRE
+// holds the segments and nothing else, so a lookup or a deletion built from
+// the recorded values would address an entry that does not exist. Reading them
+// off the recorded SPIFFE ID also means no read path needs the deployment
+// secret: rotating it cannot strand a live run.
+//
+// It refuses an identity that is not one rather than returning a zero RunRef,
+// which would ask SPIRE about `spiffe://{td}/agent///`. Both callers have
+// already put the same string through credentialRunIdentity, so the error is
+// unreachable from them — and it is returned rather than asserted because the
+// directory is an interface and the next implementation of it is not this one.
+func (r CredentialRun) Ref() (spire.RunRef, error) {
+	run, err := spire.RunRefOf(r.SPIFFEID)
+	if err != nil {
+		return spire.RunRef{}, Errorf(ClassInvariantViolation, r.RunID,
+			"run %q has no usable identity: %v", r.RunID, err)
+	}
+	return run, nil
 }
 
 // MintedCredential is one JWT-SVID as SPIRE handed it over.
@@ -283,7 +302,11 @@ func (c *credentialService) issue(ctx context.Context, in getCredentialIn) (getC
 
 	// Gate 4 — SPIRE still holds the entry. Asked of the server, whose answer
 	// changes the instant a delete commits.
-	if active := c.entries.RequireActiveRun(ctx, run.Ref()); active != nil {
+	ref, err := run.Ref()
+	if err != nil {
+		return getCredentialOut{}, err
+	}
+	if active := c.entries.RequireActiveRun(ctx, ref); active != nil {
 		return getCredentialOut{}, active
 	}
 

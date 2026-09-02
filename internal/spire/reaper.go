@@ -461,17 +461,17 @@ func entryDeadline(c Candidate, grace time.Duration) (time.Time, bool) {
 // reaper deletes things: an identity from a trust domain that is not ours is
 // not ours to expire.
 func parseRunIdentity(spiffeID, trustDomain string) (RunRef, error) {
-	if err := event.ValidateSPIFFEID(spiffeID); err != nil {
+	run, err := RunRefOf(spiffeID)
+	if err != nil {
 		return RunRef{}, err
 	}
-	parts := strings.Split(strings.TrimPrefix(spiffeID, "spiffe://"), "/")
-	// ValidateSPIFFEID has already established five components, the second of
-	// which is "agent"; nothing below can be out of range.
-	if parts[0] != trustDomain {
+	td := strings.TrimPrefix(spiffeID, "spiffe://")
+	td = td[:strings.IndexByte(td, '/')]
+	if td != trustDomain {
 		return RunRef{}, fmt.Errorf("%q is in trust domain %q, not %q",
-			spiffeID, parts[0], trustDomain)
+			spiffeID, td, trustDomain)
 	}
-	return RunRef{AgentType: parts[2], TaskID: parts[3], RunID: parts[4]}, nil
+	return run, nil
 }
 
 // reap records one orphaned run's expiry and then deletes its entry.
