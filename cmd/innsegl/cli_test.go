@@ -21,7 +21,7 @@ import (
 // api.Server, so every query-API view rendered its own load-failure state
 // permanently (RM-083, #121).
 var documentedSubcommands = []string{
-	"api", "canary", "reap", "reconcile", "seal", "serve", "verify",
+	"api", "canary", "init", "reap", "reconcile", "seal", "serve", "verify",
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {
