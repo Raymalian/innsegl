@@ -67,15 +67,34 @@ import (
 //     thought to name, and every landing is CLASSIFIED FROM DURABLE STATE
 //     afterwards rather than assumed from the delay.
 //
-//  2. AN OBSERVED TRIGGER. For each window this project has actually reasoned
+//  2. A DRIVEN WINDOW. For each window this project has actually reasoned
 //     about — ADR-0018's "the event is on the chain and the SPIRE entry is
 //     not", ADR-0017's "the reply is recorded and the caller has not got it",
-//     ADR-0020's mirror of the first — the kill is fired by POLLING POSTGRES
-//     OR SPIRE and sending the signal the moment the state appears, and is
-//     then verified against durable state after the fact. That is RM-066's
-//     waitForLockWaiters standard: park on evidence, not on a sleep. A blind
-//     campaign alone could not promise to reach these, and a test that only
-//     reached them by luck would be green for reasons nobody could reproduce.
+//     ADR-0020's mirror of the first — the process is HELD INSIDE the window
+//     and the kill is then fired on a state read out of Postgres or SPIRE.
+//     That is RM-066's waitForLockWaiters standard: park on evidence, not on
+//     a sleep. A blind campaign alone could not promise to reach these, and a
+//     test that only reached them by luck would be green for reasons nobody
+//     could reproduce.
+//
+//     HELD, not chased, and RM-082 (#120) is why the distinction is written
+//     out here. Polling for a state the process is passing THROUGH and
+//     signalling the instant it appears is a race between this harness and
+//     the process, so which window a kill lands in becomes a property of how
+//     fast Postgres and SPIRE answer on the machine of the day rather than of
+//     the campaign's seed — reproducible in what it DOES and not in what it
+//     HITS. Three devices remove the race, each documented where it is
+//     defined: a Postgres row lock that parks the server inside the statement
+//     recording its reply (device 1), a proxy that withholds the server's
+//     response so the caller provably never sees it (device 2), and a proxy
+//     that withholds the server's request to SPIRE so an append cannot be
+//     followed by the SPIRE call that closes the window (device 3). What is
+//     left over is one window — `credential_issued` on the chain and the
+//     token undelivered — where there is nothing to park: the append is the
+//     last durable act of the call, the chain is append-only, and device 2
+//     already makes non-delivery certain, so a shot that reaches that state
+//     cannot leave it however late the poll is. drivenWindowsHoldOpen is the
+//     case that proves the devices drive rather than race.
 //
 // REPRODUCING A FAILURE. The seed is printed at the head of every run and
 // again with every failure. INNSEGL_CRASH_SEED=<seed> replays the identical
@@ -122,6 +141,16 @@ const (
 	// crashTargetAttempts is how many times a targeted window is attempted
 	// before the campaign gives up and says so.
 	crashTargetAttempts = 8
+
+	// crashSettleProof is how long the campaign deliberately DELAYS the signal
+	// after the trigger has seen its state, in the one case that exists to
+	// prove the driven windows are driven. It is more than an order of
+	// magnitude wider than a whole uninterrupted call on this stack — measured
+	// at 50-70ms for register_agent and retire_agent — so a window that was
+	// merely being raced for would certainly have closed inside it. It stays
+	// well under internal/spire's 15s DefaultTimeout, which is the real bound
+	// on how long a withheld request can park the server.
+	crashSettleProof = time.Second
 )
 
 // ---------------------------------------------------------------------------
@@ -175,6 +204,12 @@ type campaign struct {
 	rng   *deterministicRNG
 	blind int
 
+	// settle delays the signal after an observed trigger has seen its state.
+	// Zero for every ordinary shot: the campaign fires the instant the state
+	// appears. It is set only by drivenWindowsHoldOpen, whose whole subject is
+	// that a driven window does not close while the harness waits inside it.
+	settle time.Duration
+
 	// entriesAtStart is the whole SPIRE datastore before the campaign ran, so
 	// "no second identity" can be asked of the datastore and not only of the
 	// runs this file happens to know about.
@@ -187,8 +222,15 @@ type campaign struct {
 	mu            sync.Mutex
 	landings      map[string]int
 	blindLandings map[string]int
-	nameSeq       int
-	killCount     int
+	// firedAt counts the shots the campaign took at a named window. It is not
+	// a count of successes: it separates "the shot was taken and did not land
+	// where it says it lands", which is a defect in this harness, from "the
+	// shot was never taken", which is a consequence of the subtest that owns
+	// it failing first. A shot that fails before it can be classified is
+	// counted, because it was taken. See windowCensus and census.
+	firedAt   map[string]int
+	nameSeq   int
+	killCount int
 	// originals counts how many times the headline comparison was actually
 	// made: a replay's bytes against the bytes recorded before the crash. It
 	// is a gate, not a statistic — see census.
@@ -220,6 +262,7 @@ func requireCrashCampaign(t *testing.T) *campaign {
 		stack:         s,
 		landings:      map[string]int{},
 		blindLandings: map[string]int{},
+		firedAt:       map[string]int{},
 		blind:         envInt("INNSEGL_CRASH_BLIND", crashBlindDefault),
 		workDir:       t.TempDir(),
 	}
@@ -389,26 +432,43 @@ func (c *campaign) gone(spiffeID string) {
 
 // aim fires shots at one named window until one of them lands in it.
 //
-// A targeted shot can overshoot: between the poll seeing the state and the
-// signal arriving, the process may have moved on. That is a property of a real
-// kill against a running process and is not smoothed over — the shot is
-// credited with where it ACTUALLY landed, and aim simply tries again. What
-// fails is the budget running out, which means the trigger cannot reach the
-// state it names.
+// Every named window is DRIVEN — the server is held inside it by a device of
+// this harness's own (a Postgres row lock, a proxy that withholds the reply, a
+// proxy that withholds the SPIRE request) or the state that defines it is
+// durable and monotone, so a shot cannot leave the window once the trigger
+// sees it. The retry that follows is therefore a belt on top of braces rather
+// than the mechanism: it exists so that a device which stops working says so
+// after several tries instead of once, and every attempt is credited with
+// where it ACTUALLY landed, never with what it aimed at.
+//
+// Firing the shot at all is recorded before the first attempt. A window with
+// no landings means one thing if the shot was taken and another if the
+// campaign never got to it, and census reports the two differently.
 func (c *campaign) aim(t *testing.T, target string, shoot func(*testing.T) string) {
 	t.Helper()
 	for attempt := 1; attempt <= crashTargetAttempts; attempt++ {
+		// Counted BEFORE the shot: a shot that fails outright never returns
+		// here, and it was still taken.
+		c.fireAt(target)
 		got := shoot(t)
 		if got == target {
 			t.Logf("attempt %d landed in %q", attempt, target)
 			return
 		}
-		t.Logf("attempt %d aimed at %q and landed in %q; the process moved on between the "+
-			"poll and the signal, so this is retried", attempt, target, got)
+		t.Logf("attempt %d aimed at %q and landed in %q; the device that drives this window "+
+			"did not hold the server inside it, so this is retried", attempt, target, got)
 	}
 	t.Errorf("%d attempts to interrupt the server in %q all overshot (seed %d). The window "+
-		"exists — the poll saw the state every time — but the signal never arrived inside it.",
-		crashTargetAttempts, target, c.seed)
+		"exists — the trigger saw the state every time — but the server was not held inside "+
+		"it when the signal arrived, so the device that drives this window has stopped "+
+		"driving it.", crashTargetAttempts, target, c.seed)
+}
+
+// fireAt records that the campaign took one more shot at a named window.
+func (c *campaign) fireAt(target string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.firedAt[target]++
 }
 
 // sameReply insists two replies are the same reply, byte for byte in the
@@ -600,6 +660,14 @@ func (c *campaign) start(t *testing.T) *daemon {
 // one — starts the same binary the same way rather than duplicating this.
 func (c *campaign) startWith(t *testing.T, extra ...string) *daemon {
 	t.Helper()
+	return c.startVia(t, c.stack.socatAddr, extra...)
+}
+
+// startVia is startWith with the SPIRE API address named, so that one shot can
+// route the server's SPIRE traffic through a proxy of this harness's own
+// without every other shot doing the same. See stallingProxy.
+func (c *campaign) startVia(t *testing.T, spireAddr string, extra ...string) *daemon {
+	t.Helper()
 	addrFile := filepath.Join(c.workDir, c.name("addr"))
 
 	// context.Background rather than the test's: CommandContext kills the
@@ -607,7 +675,7 @@ func (c *campaign) startWith(t *testing.T, extra ...string) *daemon {
 	// is the SIGKILL below, whose wait status the harness then reads back.
 	cmd := exec.CommandContext(context.Background(), c.binary, "serve",
 		"-dsn", c.dsn,
-		"-spire-address", c.stack.socatAddr,
+		"-spire-address", spireAddr,
 		"-trust-domain", failureTrustDomain,
 		"-spire-server-id", failureServerID,
 		"-parent-id", c.stack.parentID,
@@ -867,6 +935,11 @@ type killWhen struct {
 	// forwarding the server's bytes once the tool call is dispatched, so the
 	// caller provably cannot receive the reply. See holdingProxy.
 	hold bool
+	// stall puts a proxy between the server and the SPIRE API which stops
+	// forwarding the server's REQUEST once the tool call is dispatched, so the
+	// server is parked inside its SPIRE call and cannot leave the window the
+	// trigger is watching for. See stallingProxy.
+	stall bool
 }
 
 // shot is what one dispatch-and-kill produced.
@@ -882,12 +955,25 @@ type shot struct {
 	triggerFired bool
 	// killedAfter is how long after dispatch the signal went.
 	killedAfter time.Duration
+	// withheld is how many bytes of the server's own request to the SPIRE API
+	// the stalling proxy was holding when the signal went. Non-zero is the
+	// direct evidence that the server was PARKED inside its SPIRE call rather
+	// than presumed to be somewhere by the harness. Zero when no stall was
+	// asked for.
+	withheld int64
 }
 
 func (c *campaign) fire(t *testing.T, tool mcp.ToolName, args map[string]any, when killWhen) shot {
 	t.Helper()
 
-	d := c.start(t)
+	spireAddr := c.stack.socatAddr
+	var stall *stallingProxy
+	if when.stall {
+		stall = c.stallingProxyToSPIRE(t)
+		spireAddr = stall.addr()
+	}
+
+	d := c.startVia(t, spireAddr)
 	endpoint := d.addr
 	if when.hold {
 		endpoint = c.holdingProxyTo(t, d.addr)
@@ -895,6 +981,21 @@ func (c *campaign) fire(t *testing.T, tool mcp.ToolName, args map[string]any, wh
 	session := c.connect(t, d, endpoint)
 	if when.hold {
 		c.holdNow()
+	}
+	// Armed AFTER the session exists and BEFORE the call is dispatched. The
+	// server's own start-up dial of the SPIRE admin API has to get through;
+	// what must not get through is the request the tool is about to make.
+	//
+	// From this instant the window is pinned: whenever the server gets to its
+	// SPIRE call, the request goes into the proxy and no further. The trigger
+	// is then widened to wait for that to have HAPPENED — see stalledUntil —
+	// so the signal goes on proof that the server is inside the call rather
+	// than on proof only that the append before it has landed. Both are inside
+	// the window; only the second is evidence, and a shot that cannot show
+	// evidence is a shot this campaign has to treat as unproven.
+	if when.stall {
+		stall.arm()
+		when.trigger = stalledUntil(when.trigger, stall)
 	}
 
 	type outcome struct {
@@ -916,6 +1017,9 @@ func (c *campaign) fire(t *testing.T, tool mcp.ToolName, args map[string]any, wh
 	s := shot{}
 	if when.trigger != nil {
 		s.triggerFired = c.waitForState(t, when.trigger)
+		if s.triggerFired && c.settle > 0 {
+			time.Sleep(c.settle)
+		}
 	} else {
 		remaining := when.after - time.Since(dispatched)
 		if remaining > 0 {
@@ -924,10 +1028,21 @@ func (c *campaign) fire(t *testing.T, tool mcp.ToolName, args map[string]any, wh
 		s.triggerFired = true
 	}
 	s.killedAfter = time.Since(dispatched)
+	if stall != nil {
+		// Read BEFORE the signal: this is the evidence that the server was
+		// parked at the instant it was killed, and reading it afterwards would
+		// be a claim about a process that no longer exists.
+		s.withheld = stall.withheld()
+	}
 	d.kill(t)
 	c.countKill()
 	if when.release != nil {
 		when.release()
+	}
+	if stall != nil {
+		// The replay starts a fresh server on the stack's own SPIRE address;
+		// nothing may still be holding a request when it does.
+		stall.close()
 	}
 
 	out := <-done
@@ -1460,4 +1575,228 @@ func (c *campaign) pruneIdempotency(t *testing.T, key string) {
 	if tag.RowsAffected() != 1 {
 		t.Fatalf("pruning the completed row for %q removed %d rows, want 1", key, tag.RowsAffected())
 	}
+}
+
+// censusVerdict is what the census concludes about one named window.
+type censusVerdict int
+
+const (
+	windowCovered censusVerdict = iota
+	windowNeverReached
+	windowNeverFiredAt
+)
+
+func (v censusVerdict) String() string {
+	switch v {
+	case windowCovered:
+		return "covered"
+	case windowNeverReached:
+		return "never reached"
+	case windowNeverFiredAt:
+		return "never fired at"
+	}
+	return "unknown"
+}
+
+// windowCensus decides what the campaign proved about one named window.
+//
+// A window that a kill landed in is covered, however it got there — a blind
+// stratum counts, and so does an aimed shot that overshot into it. A window
+// nothing landed in is one of two different findings: the campaign fired the
+// shot that drives it and the shot did not do what it says it does, or the
+// campaign never fired that shot at all because the subtest that owns it
+// failed first. Only the first is evidence about the harness.
+func windowCensus(landings, firedAt map[string]int, window string) censusVerdict {
+	switch {
+	case landings[window] > 0:
+		return windowCovered
+	case firedAt[window] > 0:
+		return windowNeverReached
+	default:
+		return windowNeverFiredAt
+	}
+}
+
+// stalledUntil widens a trigger so that it also waits for the server to be
+// PROVABLY inside its SPIRE call: the state the window is named for is on the
+// chain, and a byte of the server's own request to the SPIRE API is sitting in
+// this harness's proxy.
+//
+// Both halves are needed and neither is enough. The chain event alone fires as
+// soon as the append commits, which can be before the server has written a
+// single byte towards SPIRE — that is still inside the window, because the
+// stall is already armed and the request has nowhere to go, but it is a shot
+// with no evidence behind it, and MEASURED: it happened on 1 campaign in 13.
+// The withheld bytes alone would admit anything the server sends to SPIRE,
+// including traffic that has nothing to do with the tool call. Together they
+// say the one thing this campaign wants to be able to state: the append has
+// landed and the SPIRE call that would close the window is in flight and
+// stopped.
+func stalledUntil(inner func(context.Context) (bool, error), p *stallingProxy) func(context.Context) (bool, error) {
+	return func(ctx context.Context) (bool, error) {
+		if inner != nil {
+			ok, err := inner(ctx)
+			if err != nil || !ok {
+				return false, err
+			}
+		}
+		return p.withheld() > 0, nil
+	}
+}
+
+// requireParked insists a shot that asked for a stall was actually parked.
+//
+// The distinction this makes is the whole of RM-082 (#120): a window driven by
+// a device that has stopped driving it degrades silently into a window raced
+// for, which passes on a fast machine and fails on a loaded one. So the device
+// is MEASURED at the instant the signal went — bytes of the server's own
+// request to SPIRE that this harness was holding — and never assumed from the
+// fact that the harness asked for a stall. stalledUntil is what makes this
+// hold; this is the check that it held.
+func (c *campaign) requireParked(t *testing.T, why string, when killWhen, s shot) {
+	t.Helper()
+	if !when.stall {
+		return
+	}
+	if s.withheld <= 0 {
+		t.Fatalf("%s: the SIGKILL went with no byte of the server's request to the SPIRE API "+
+			"withheld, so the server was not parked inside its SPIRE call and this window was "+
+			"raced for rather than driven. (seed %d)", why, c.seed)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Device 3: a proxy that withholds the server's request to the SPIRE API, so
+// the server is PARKED in the window rather than raced through it.
+//
+// Two of this campaign's named windows are the gap between a ledger append and
+// the SPIRE call that follows it: ADR-0018's "run_registered is on the chain
+// and the entry is not", and ADR-0020's mirror, "run_retired is on the chain
+// and the entry is still there". Both are one SPIRE round trip wide, and both
+// used to be reached by polling the chain and signalling the instant the event
+// appeared — which is a race between this harness's poll and a SPIRE round
+// trip, and a race is a property of how fast the machine is rather than of the
+// campaign's seed. RM-082 (#120) is the report of exactly that: a hard gate
+// that can fail on a loaded runner and pass on a developer's machine with no
+// change to the code under test.
+//
+// So the window is held open instead. The proxy forwards everything until it
+// is armed — the server's own start-up dial of the SPIRE admin API has to
+// succeed — and from the moment the tool call is dispatched it stops
+// forwarding bytes travelling FROM the server TO SPIRE. The append has already
+// happened by then in both tools; the SPIRE call that would close the window
+// cannot complete, because its request is sitting in this proxy. The poll that
+// follows is then reading a state the server cannot leave, and the SIGKILL is
+// a real SIGKILL of a real process at a point read out of Postgres.
+//
+// STATED PLAINLY, AS DEVICE 2 IS: in a real crash the SPIRE call is unfinished
+// BECAUSE the process died; here it is unfinished because the harness held its
+// request, and the process is then killed. The durable state at the instant of
+// the kill — the event on the chain, no entry in SPIRE, the claim still
+// in_progress — is identical, and that state is the whole of what MCP-011
+// asserts on. What is NOT demonstrated by this device is anything about SPIRE
+// being slow or unreachable; that is OPS-002's subject, not this one.
+//
+// The bytes withheld are counted and read back before the signal goes, so
+// "the server was parked" is measured rather than assumed. See requireParked.
+// ---------------------------------------------------------------------------
+
+type stallingProxy struct {
+	ln      net.Listener
+	target  string
+	armed   atomic.Bool
+	held    atomic.Int64
+	closed  atomic.Bool
+	closing chan struct{}
+}
+
+func (c *campaign) stallingProxyToSPIRE(t *testing.T) *stallingProxy {
+	t.Helper()
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for the stalling proxy: %v", err)
+	}
+	p := &stallingProxy{ln: ln, target: c.stack.socatAddr, closing: make(chan struct{})}
+	go p.accept()
+	t.Cleanup(p.close)
+	return p
+}
+
+func (p *stallingProxy) addr() string { return p.ln.Addr().String() }
+
+// arm stops the proxy forwarding anything further from the server to SPIRE.
+func (p *stallingProxy) arm() { p.armed.Store(true) }
+
+// withheld is how many bytes of the server's request the proxy is holding.
+// Non-zero means the server is inside a SPIRE call whose request never left
+// this machine, which is the direct evidence that it is parked.
+func (p *stallingProxy) withheld() int64 { return p.held.Load() }
+
+func (p *stallingProxy) accept() {
+	for {
+		client, err := p.ln.Accept()
+		if err != nil {
+			return
+		}
+		go p.serve(client)
+	}
+}
+
+func (p *stallingProxy) serve(client net.Conn) {
+	var dialer net.Dialer
+	server, err := dialer.DialContext(context.Background(), "tcp", p.target)
+	if err != nil {
+		_ = client.Close()
+		return
+	}
+	var once sync.Once
+	shut := func() {
+		once.Do(func() {
+			_ = client.Close()
+			_ = server.Close()
+		})
+	}
+	// Closing the listener does not close a connection already accepted, and a
+	// stalled connection has no traffic to notice it with; this is what lets
+	// close() return rather than wait for a peer that is being withheld from.
+	go func() {
+		<-p.closing
+		shut()
+	}()
+	go func() {
+		p.pipe(client, server, false)
+		shut()
+	}()
+	p.pipe(server, client, true)
+	shut()
+}
+
+// pipe copies src to dst. When honourArm is set and the proxy is armed, the
+// bytes are read and COUNTED rather than forwarded: the server has sent its
+// SPIRE request and SPIRE will never see it, so the server waits inside the
+// call and the window stays open.
+func (p *stallingProxy) pipe(dst io.Writer, src io.Reader, honourArm bool) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			if honourArm && p.armed.Load() {
+				p.held.Add(int64(n))
+			} else if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if rerr != nil {
+			return
+		}
+	}
+}
+
+func (p *stallingProxy) close() {
+	if p.closed.Swap(true) {
+		return
+	}
+	_ = p.ln.Close()
+	close(p.closing)
 }

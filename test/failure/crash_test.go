@@ -67,6 +67,7 @@ func TestMCP011CrashAndReplayUnderFuzzedKillTiming(t *testing.T) {
 	t.Run("get_credential", c.getCredential)
 	t.Run("sign_commit", c.signCommit)
 
+	t.Run("the driven kill windows hold open", c.drivenWindowsHoldOpen)
 	t.Run("every named kill window was reached", c.census)
 	t.Run("the chain verifies", c.verifyChain)
 	t.Run("SPIRE holds exactly the identities the campaign asked for", c.entryCensus)
@@ -96,16 +97,25 @@ func (c *campaign) registerAgent(t *testing.T) {
 	t.Logf("register_agent completes uninterrupted in %s; blind kills are drawn from [0, %s) "+
 		"across %d strata, seed %d", took, window, c.blind, c.seed)
 
-	for i, delay := range c.strata(window, c.blind) {
-		t.Logf("blind stratum %d/%d: kill %s after dispatch → %s",
-			i+1, c.blind, delay,
-			c.registerShot(t, fmt.Sprintf("blind stratum %d, +%s", i+1, delay), "", delay))
-	}
-
+	// THE AIMED SHOTS GO FIRST, and RM-082 (#120) is why. Every named window
+	// below is covered by these shots and by these shots alone — measured: one
+	// landing per run for the narrowest of them, none of them blind — so a
+	// blind stratum that fails on an unrelated assertion used to abort this
+	// subtest before its aimed shots ran, and the census then reported a
+	// window "never reached" as though the interrupting device had failed.
+	// Ordering them first costs nothing: an aimed shot draws no number from
+	// the campaign's generator, so INNSEGL_CRASH_SEED still replays the
+	// identical blind schedule.
 	for _, target := range []string{winEventNoEntry, winEntryNoReply, winReplyUnseen} {
 		c.aim(t, target, func(t *testing.T) string {
 			return c.registerShot(t, "observed trigger for "+target, target, 0)
 		})
+	}
+
+	for i, delay := range c.strata(window, c.blind) {
+		t.Logf("blind stratum %d/%d: kill %s after dispatch → %s",
+			i+1, c.blind, delay,
+			c.registerShot(t, fmt.Sprintf("blind stratum %d, +%s", i+1, delay), "", delay))
 	}
 }
 
@@ -121,8 +131,14 @@ func (c *campaign) registerShot(t *testing.T, why, target string, delay time.Dur
 	switch target {
 	case "":
 	case winEventNoEntry:
-		// The window is a whole SPIRE round trip wide, so the poll wins it.
-		when.trigger = c.eventKeyed(key)
+		// register_agent appends `run_registered` and THEN asks SPIRE for the
+		// entry (ADR-0018's ordering). Withholding the server's request to
+		// SPIRE therefore parks it in exactly this window: the event is on the
+		// chain and the entry cannot be created while the request is held. The
+		// poll that follows is reading a state the server cannot leave, so it
+		// cannot overshoot — this used to be a race against a SPIRE round trip
+		// and is RM-082 (#120).
+		when.trigger, when.stall = c.eventKeyed(key), true
 	case winEntryNoReply:
 		// One Postgres round trip wide: held open with the row lock rather
 		// than chased.
@@ -140,6 +156,7 @@ func (c *campaign) registerShot(t *testing.T, why, target string, delay time.Dur
 		t.Fatalf("%s: the state to interrupt never appeared within %s (seed %d)",
 			why, crashTriggerBudget, c.seed)
 	}
+	c.requireParked(t, why, when, s)
 
 	// --- what the SIGKILL actually left behind -----------------------------
 	rec, claimed := c.idemRecord(t, key)
@@ -256,14 +273,16 @@ func (c *campaign) recordEvent(t *testing.T) {
 	t.Logf("record_event completes uninterrupted in %s; blind kills are drawn from [0, %s) "+
 		"across %d strata, seed %d", took, window, c.blind, c.seed)
 
-	for i, delay := range c.strata(window, c.blind) {
-		t.Logf("blind stratum %d/%d: kill %s after dispatch → %s", i+1, c.blind, delay,
-			c.recordShot(t, fmt.Sprintf("blind stratum %d, +%s", i+1, delay), "", delay, run.RunID, recordArgs))
-	}
+	// The aimed shots go first. See registerAgent.
 	for _, target := range []string{winRecEventNoReply, winReplyUnseen} {
 		c.aim(t, target, func(t *testing.T) string {
 			return c.recordShot(t, "observed trigger for "+target, target, 0, run.RunID, recordArgs)
 		})
+	}
+
+	for i, delay := range c.strata(window, c.blind) {
+		t.Logf("blind stratum %d/%d: kill %s after dispatch → %s", i+1, c.blind, delay,
+			c.recordShot(t, fmt.Sprintf("blind stratum %d, +%s", i+1, delay), "", delay, run.RunID, recordArgs))
 	}
 }
 
@@ -360,13 +379,15 @@ func (c *campaign) retireAgent(t *testing.T) {
 	t.Logf("retire_agent completes uninterrupted in %s; blind kills are drawn from [0, %s) "+
 		"across %d strata, seed %d", took, window, c.blind, c.seed)
 
+	// The aimed shot goes first. See registerAgent.
+	c.aim(t, winRetireNoDelete, func(t *testing.T) string {
+		return c.retireShot(t, "observed trigger for "+winRetireNoDelete, winRetireNoDelete, 0)
+	})
+
 	for i, delay := range c.strata(window, c.blind) {
 		t.Logf("blind stratum %d/%d: kill %s after dispatch → %s", i+1, c.blind, delay,
 			c.retireShot(t, fmt.Sprintf("blind stratum %d, +%s", i+1, delay), "", delay))
 	}
-	c.aim(t, winRetireNoDelete, func(t *testing.T) string {
-		return c.retireShot(t, "observed trigger for "+winRetireNoDelete, winRetireNoDelete, 0)
-	})
 }
 
 func (c *campaign) retireShot(t *testing.T, why, target string, delay time.Duration) string {
@@ -377,7 +398,12 @@ func (c *campaign) retireShot(t *testing.T, why, target string, delay time.Durat
 
 	when := killWhen{label: why, after: delay}
 	if target == winRetireNoDelete {
+		// retire_agent records the retirement and THEN deletes the entry
+		// (ADR-0020's ordering), so withholding the server's request to SPIRE
+		// parks it between the two. As with winEventNoEntry, the poll then
+		// reads a state the server cannot leave rather than racing it.
 		when.trigger = c.eventAppendedAfter(from, event.EventTypeRunRetired, run.RunID)
+		when.stall = true
 	} else if target != "" {
 		t.Fatalf("retire_agent has no trigger for %q", target)
 	}
@@ -387,6 +413,7 @@ func (c *campaign) retireShot(t *testing.T, why, target string, delay time.Durat
 		t.Fatalf("%s: `run_retired` for %q never appeared within %s (seed %d)",
 			why, run.RunID, crashTriggerBudget, c.seed)
 	}
+	c.requireParked(t, why, when, s)
 
 	records := c.chain(t)
 	retired := countEvents(records, event.EventTypeRunRetired, run.RunID)
@@ -458,13 +485,18 @@ func (c *campaign) getCredential(t *testing.T) {
 	t.Logf("get_credential completes uninterrupted in %s; blind kills are drawn from [0, %s) "+
 		"across %d strata, seed %d", took, window, c.blind, c.seed)
 
+	// The aimed shot goes first, and this is the window RM-082 (#120) was
+	// filed about: it is the ONE named window no blind stratum ever reaches —
+	// measured at 1 landing, 0 of them blind, in every run of this campaign —
+	// so until this shot is fired the campaign has no coverage of it at all.
+	c.aim(t, winCredNoReply, func(t *testing.T) string {
+		return c.credentialShot(t, "observed trigger for "+winCredNoReply, winCredNoReply, 0, run)
+	})
+
 	for i, delay := range c.strata(window, c.blind) {
 		t.Logf("blind stratum %d/%d: kill %s after dispatch → %s", i+1, c.blind, delay,
 			c.credentialShot(t, fmt.Sprintf("blind stratum %d, +%s", i+1, delay), "", delay, run))
 	}
-	c.aim(t, winCredNoReply, func(t *testing.T) string {
-		return c.credentialShot(t, "observed trigger for "+winCredNoReply, winCredNoReply, 0, run)
-	})
 }
 
 func (c *campaign) credentialShot(t *testing.T, why, target string, delay time.Duration, run registerReply) string {
@@ -608,24 +640,41 @@ func (c *campaign) census(t *testing.T) {
 	c.mu.Lock()
 	all := maps.Clone(c.landings)
 	blind := maps.Clone(c.blindLandings)
+	fired := maps.Clone(c.firedAt)
 	c.mu.Unlock()
 
 	for _, w := range slices.Sorted(maps.Keys(all)) {
 		t.Logf("%4d landings (%d of them blind) — %s", all[w], blind[w], w)
 	}
 
-	// Every window this project has reasoned about is fired by an observed
-	// trigger, so "never reached" here means the trigger did not do what it
-	// claims and not that the campaign was unlucky.
+	// Every named window is DRIVEN and not raced for: the server is held
+	// inside it by a device of this harness's own, or the state that defines
+	// it is durable and monotone so that a shot which reaches it cannot leave.
+	// A window with no landings is therefore a device that stopped working —
+	// UNLESS the campaign never fired the shot that drives it, which is a
+	// consequence of an earlier failure in the subtest that owns it and says
+	// nothing about the harness at all. Both fail. They do not say the same
+	// thing, and RM-082 (#120) is the report of a campaign where this said the
+	// wrong one.
 	for _, w := range []string{
 		winEventNoEntry, winEntryNoReply, winReplyUnseen,
 		winRecEventNoReply, winRetireNoDelete, winCredNoReply,
 	} {
-		if all[w] == 0 {
-			t.Errorf("the kill never landed in %q. Every named window is fired by polling "+
-				"Postgres or SPIRE and signalling the moment the state appears, so a window "+
-				"that was never reached is a harness that is not interrupting what it says "+
-				"it interrupts. (seed %d)", w, c.seed)
+		switch windowCensus(all, fired, w) {
+		case windowCovered:
+		case windowNeverReached:
+			t.Errorf("the kill never landed in %q, and the campaign fired the shot that "+
+				"drives it %d time(s). The window is driven — the server is held inside it, "+
+				"or the state that defines it is durable and cannot be left — so every one "+
+				"of those shots either landed somewhere else or failed before it could be "+
+				"classified. This one IS evidence about the interrupting device. (seed %d)",
+				w, fired[w], c.seed)
+		case windowNeverFiredAt:
+			t.Errorf("the kill never landed in %q and the campaign never fired the aimed shot "+
+				"that drives it: the subtest that owns that shot failed before reaching it. "+
+				"Read the failure above this one — it is the cause, and this line is its "+
+				"consequence. Nothing here is evidence about the interrupting device. "+
+				"(seed %d)", w, c.seed)
 		}
 	}
 
@@ -890,4 +939,108 @@ func TestMCP011PruningTheRecordedReplyReopensTheKeyAndStillMintsOneIdentity(t *t
 	t.Logf("with the recorded reply pruned, register_agent re-executed and answered %s instead "+
 		"of %s, and the chain still holds exactly one run_registered for %s with exactly one "+
 		"SPIRE entry", canonical(t, reran), canonical(t, original), before.RunID)
+}
+
+// ---------------------------------------------------------------------------
+// MCP-011-C1 — the census tells "the aimed shot was fired and never landed in
+// this window" apart from "the aimed shot was never fired at all".
+//
+// The two are different findings and only the first one is about the harness.
+// A campaign whose `get_credential` subtest fails on any earlier assertion
+// never reaches the shot that is this campaign's ONLY coverage of
+// winCredNoReply — measured: one landing per run, none of them blind, in every
+// run of this file — and the census then reported "a window that was never
+// reached is a harness that is not interrupting what it says it interrupts",
+// which in that case is a diagnosis of something that did not happen. Both
+// stay failures; only one of them accuses the harness.
+//
+// This is the pure half of RM-082 (#120) and needs no Docker.
+func TestMCP011TheCensusSeparatesAWindowNeverFiredAtFromOneNeverReached(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		landings map[string]int
+		firedAt  map[string]int
+		want     censusVerdict
+	}{
+		{
+			name:     "landed",
+			landings: map[string]int{winCredNoReply: 1},
+			firedAt:  map[string]int{winCredNoReply: 1},
+			want:     windowCovered,
+		},
+		{
+			name:     "fired at once and never reached",
+			landings: map[string]int{},
+			firedAt:  map[string]int{winCredNoReply: 1},
+			want:     windowNeverReached,
+		},
+		{
+			name:     "fired at to exhaustion and never reached",
+			landings: map[string]int{},
+			firedAt:  map[string]int{winCredNoReply: crashTargetAttempts},
+			want:     windowNeverReached,
+		},
+		{
+			name:     "never fired at",
+			landings: map[string]int{},
+			firedAt:  map[string]int{},
+			want:     windowNeverFiredAt,
+		},
+		{
+			name:     "landed blind although never fired at",
+			landings: map[string]int{winCredNoReply: 2},
+			firedAt:  map[string]int{},
+			want:     windowCovered,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := windowCensus(tc.landings, tc.firedAt, winCredNoReply); got != tc.want {
+				t.Errorf("windowCensus(%v, %v, %q) = %v, want %v",
+					tc.landings, tc.firedAt, winCredNoReply, got, tc.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MCP-011-C2 — the driven windows do not close while the harness waits inside
+// them.
+//
+// This is the case RM-082 (#120) turns on. A window reached by POLLING for a
+// state and signalling the instant it appears is reached by winning a race
+// against the process, and a race is a property of how fast the machine is,
+// not of the campaign's seed: it passes on a developer's laptop and fails on a
+// loaded CI runner with no change to the code under test. A window reached by
+// HOLDING THE PROCESS INSIDE IT is a property of the harness.
+//
+// The two are indistinguishable when the signal follows the trigger by
+// microseconds, which is what every other shot in this file does. So this one
+// deliberately waits crashSettleProof — more than an order of magnitude longer
+// than a whole uninterrupted call — between seeing the state and sending the
+// signal. A raced window would have closed many times over; a driven one is
+// still open, because the SPIRE request that would close it is sitting in this
+// harness's proxy and SPIRE has never seen it.
+//
+// It fails if the window has closed, and the failure means the device has
+// stopped driving and the campaign is back to racing.
+func (c *campaign) drivenWindowsHoldOpen(t *testing.T) {
+	c.settle = crashSettleProof
+	defer func() { c.settle = 0 }()
+
+	why := "the window held open for " + crashSettleProof.String() + " before the signal"
+	for _, tc := range []struct {
+		window string
+		shoot  func() string
+	}{
+		{winEventNoEntry, func() string { return c.registerShot(t, why, winEventNoEntry, 0) }},
+		{winRetireNoDelete, func() string { return c.retireShot(t, why, winRetireNoDelete, 0) }},
+	} {
+		if got := tc.shoot(); got != tc.window {
+			t.Errorf("the signal went %s after the trigger saw the state and the kill landed "+
+				"in %q, not %q. The server left the window while this harness was holding it "+
+				"open, so the window is being raced for and not driven, and its coverage is a "+
+				"property of how fast this machine is. (seed %d)",
+				crashSettleProof, got, tc.window, c.seed)
+		}
+	}
 }

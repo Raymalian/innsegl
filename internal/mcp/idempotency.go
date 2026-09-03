@@ -71,6 +71,22 @@ import (
 type IdempotencyStore struct {
 	pool  *pgxpool.Pool
 	lease time.Duration
+	// onEnteringWait, when set, is called each time this caller has found the
+	// key held by a call that is still running, immediately before it waits for
+	// it. Nil on every shipped path — only this package's own tests can set it,
+	// and nothing here consults it for a decision — so no real caller's
+	// behaviour turns on it.
+	//
+	// It exists because "this caller is now waiting" is otherwise observable
+	// from nowhere. A waiter takes no lock, bumps no claim_count and writes no
+	// row: the claim it just made was declined, so the database has nothing new
+	// to be asked about. Without this the only way to exercise the give-up path
+	// below was to hand a caller a deadline and hope it expired inside the 25ms
+	// wait rather than inside one of the sub-millisecond claim statements on
+	// either side of it — and both landings produce the same in-flight error,
+	// so the case could not tell them apart while the branch coverage gate
+	// could. That is #128, and two tunings of that deadline did not fix it.
+	onEnteringWait func()
 }
 
 const (
@@ -184,6 +200,18 @@ func WithIdempotencyLease(d time.Duration) IdempotencyOption {
 	return func(s *IdempotencyStore) { s.lease = d }
 }
 
+// withWaitObserver installs f, called each time a caller of this store finds
+// the key held by a call that is still running and is about to wait for it.
+//
+// Unexported on purpose: it is a test seam and not a feature. It lets a case
+// DRIVE the moment a waiting caller gives up — cancel its context, or take its
+// database away — instead of racing a clock into a window that moves with load
+// (#128). It observes; it decides nothing, and a store built without it runs
+// exactly as it did before this existed.
+func withWaitObserver(f func()) IdempotencyOption {
+	return func(s *IdempotencyStore) { s.onEnteringWait = f }
+}
+
 // NewIdempotencyStore returns a store over a pool the caller owns.
 //
 // The pool is not opened or closed here. An MCP replica has one pool for one
@@ -252,6 +280,9 @@ func (s *IdempotencyStore) Do(ctx context.Context, call Call, fn func(context.Co
 		// the next pass returns its reply, or its lease runs out and the next
 		// pass takes the claim over.
 		waiting = true
+		if s.onEnteringWait != nil {
+			s.onEnteringWait()
+		}
 		if werr := waitBeforeRetry(ctx, replayPollInterval); werr != nil {
 			return Outcome{}, inFlightError(call.Key, werr)
 		}

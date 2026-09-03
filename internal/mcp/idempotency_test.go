@@ -384,21 +384,37 @@ func TestACallStillInFlightIsWaitedForAndNeverRunAgain(t *testing.T) {
 	// is still running, in a class that says a retry can help — never that the
 	// call was a duplicate to be abandoned, which would strand a reply that
 	// does exist.
+	//
+	// The window is DRIVEN, never aimed at (#128, and OPS-003's aimAtAClaimedCall
+	// is the precedent). The earlier shape gave this caller a deadline and hoped
+	// it would expire inside the 25ms wait rather than inside one of the
+	// sub-millisecond claim statements on either side of it. Every assertion
+	// below passes either way — a claim that fails once `waiting` is already true
+	// reports the very same in-flight error — so the case stayed green while the
+	// branch it exists to reach was taken only when the dice fell right, and
+	// `scripts/branch-coverage.sh` was the thing that went red on a loaded
+	// runner. Two tunings of that deadline, 200ms and then 5s, bought time and
+	// not correctness. So the store now says when it has entered the wait, and
+	// the caller gives up exactly then: no clock decides which statement the
+	// giving-up lands in.
 	t.Run("a caller that gives up is told the reply is still coming", func(t *testing.T) {
-		// The deadline must outlast the claim round-trip, not the wait: this
-		// case is "gave up while waiting", so the caller has to reach the
-		// waiting state first. At 200ms under -coverpkg instrumentation on a
-		// loaded runner the deadline expired inside the claim statement, and
-		// the store correctly reported a deadline rather than ErrCallInFlight
-		// — it did not yet know the call was in flight. Five seconds is longer
-		// than any observed claim and far shorter than the original's hold.
-		impatient, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		replica := NewIdempotencyStore(newPool(t, dsn))
+		impatient, giveUp := context.WithCancel(ctx)
+		defer giveUp()
+
+		var waits atomic.Int64
+		replica := NewIdempotencyStore(newPool(t, dsn), withWaitObserver(func() {
+			waits.Add(1)
+			giveUp()
+		}))
 
 		_, err := replica.Do(impatient, call, mustNotRun(t))
 		if err == nil {
 			t.Fatal("a second call ran the tool while the first was still in flight")
+		}
+		if waits.Load() == 0 {
+			t.Fatalf("the store never entered the wait, so this caller gave up "+
+				"somewhere else and the case never reached the state it means to "+
+				"test; it reported %v", err)
 		}
 		e := mcpError(t, err)
 		if e.Class != ClassLedgerUnavailable {
@@ -408,30 +424,35 @@ func TestACallStillInFlightIsWaitedForAndNeverRunAgain(t *testing.T) {
 			t.Fatal("a caller that stopped waiting is told not to retry; the recorded reply would then never be collected")
 		}
 		if !errors.Is(err, ErrCallInFlight) {
-			t.Fatalf("error %v does not wrap ErrCallInFlight. If this says "+
-				"\"context deadline exceeded\", the deadline above expired "+
-				"inside the claim statement rather than during the wait, and "+
-				"the case never reached the state it means to test", err)
+			t.Fatalf("error %v does not wrap ErrCallInFlight: the caller was told "+
+				"something other than \"the reply is still coming\"", err)
+		}
+		// The cause is the caller's own context and not the store's, so the
+		// message an operator reads names the right party.
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error %v does not name the caller's own context as the reason it stopped waiting", err)
 		}
 	})
 
-	// The same report when it is the store, not the clock, that ends the wait.
+	// The same report when it is the store, not the caller, that ends the wait.
+	// Driven the same way: the pool is closed at the moment this caller is
+	// inside the wait, so what fails next is a claim made WHILE waiting, and not
+	// a sleep hoping to have landed there.
 	t.Run("a waiter that loses the database is told the same thing", func(t *testing.T) {
 		pool := newPool(t, dsn)
-		replica := NewIdempotencyStore(pool)
-		failed := make(chan error, 1)
-		go func() {
-			_, err := replica.Do(ctx, call, mustNotRun(t))
-			failed <- err
-		}()
-		// Long enough that the caller is inside the wait rather than inside
-		// its first claim, so what fails is a claim made while waiting.
-		time.Sleep(200 * time.Millisecond)
-		pool.Close()
+		var waits atomic.Int64
+		replica := NewIdempotencyStore(pool, withWaitObserver(func() {
+			waits.Add(1)
+			pool.Close()
+		}))
 
-		err := <-failed
+		_, err := replica.Do(ctx, call, mustNotRun(t))
 		if err == nil {
 			t.Fatal("a waiter whose pool was closed reported success")
+		}
+		if waits.Load() == 0 {
+			t.Fatalf("the pool was never closed from inside the wait, so this is "+
+				"not a claim made while waiting; it reported %v", err)
 		}
 		e := mcpError(t, err)
 		if e.Class != ClassLedgerUnavailable || !e.Retryable {
@@ -445,7 +466,11 @@ func TestACallStillInFlightIsWaitedForAndNeverRunAgain(t *testing.T) {
 	// A caller that does wait gets the original reply, and the tool is not run
 	// a second time.
 	patient := make(chan Outcome, 1)
-	replica := NewIdempotencyStore(newPool(t, dsn))
+	reachedWait := make(chan struct{})
+	var announce sync.Once
+	replica := NewIdempotencyStore(newPool(t, dsn), withWaitObserver(func() {
+		announce.Do(func() { close(reachedWait) })
+	}))
 	go func() {
 		out, err := replica.Do(ctx, call, mustNotRun(t))
 		if err != nil {
@@ -453,9 +478,14 @@ func TestACallStillInFlightIsWaitedForAndNeverRunAgain(t *testing.T) {
 		}
 		patient <- out
 	}()
-	// Let the patient caller reach the wait before the original finishes, so
-	// it is the wait path and not a plain completed read that is exercised.
-	time.Sleep(150 * time.Millisecond)
+	// The patient caller must be demonstrably inside the wait before the
+	// original finishes, so that it is the wait path and not a plain completed
+	// read that is exercised. Waited for, not slept through.
+	select {
+	case <-reachedWait:
+	case <-ctx.Done():
+		t.Fatalf("the patient caller never entered the wait: %v", ctx.Err())
+	}
 	close(hold)
 
 	first := <-done
