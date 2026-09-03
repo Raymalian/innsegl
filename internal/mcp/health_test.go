@@ -64,10 +64,9 @@ import (
 
 func TestMCP012ReadinessNamesTheFailingDependency(t *testing.T) {
 	// No t.Parallel: this test kills containers.
-	if sharedPG == nil {
-		t.Skipf("skipping: no real Postgres (%s); MCP-012 cannot be proved without "+
-			"a ledger that can actually be taken away", dockerSkip)
-	}
+	// requirePG, not a bare nil check: a Postgres that failed to start on a
+	// machine that has Docker is a failure, not a skip (#101).
+	requirePG(t)
 	ctx := testCtx(t, 15*time.Minute)
 
 	// --- the ledger: a Postgres of this test's own, because it gets killed.
@@ -92,9 +91,9 @@ func TestMCP012ReadinessNamesTheFailingDependency(t *testing.T) {
 	stack, err := startHealthSPIRE(ctx, healthRepoRoot(t))
 	if err != nil {
 		stack.stop()
-		t.Skipf("skipping: could not start deploy/compose/spire.yml (%v). "+
+		requireStartup(t, fmt.Errorf("starting deploy/compose/spire.yml: %w", err),
 			"MCP-012's SPIRE half proves nothing without a real spire-server; "+
-			"start Docker and re-run.", err)
+				"start Docker and re-run.")
 	}
 	t.Cleanup(stack.stop)
 	identities := stack.client(t)
