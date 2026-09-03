@@ -556,14 +556,77 @@ func TestCheckThreeFailsWhenTheRedundantTrailersDisagreeWithTheCertificate(t *te
 }
 
 // A certificate whose SAN is not a SPIFFE ID at all: the redundant-trailer
-// check has nothing to compare against and must say nothing rather than
-// inventing a disagreement.
-func TestTheRedundantTrailerCheckIsSilentWhenTheSANHasNoGrammar(t *testing.T) {
-	if got := (Claim{Run: "run-1"}).disagreesWith("https://example.com/not-spiffe"); got != "" {
-		t.Errorf("disagreesWith a non-SPIFFE SAN = %q, want \"\"", got)
+// check has nothing to compare its Run/Task trailers' segments against, and
+// (#137) must say so rather than treating an identity it cannot parse as one
+// that agrees. A claim carrying neither trailer has nothing to check either
+// way, parseable identity or not, and stays silent.
+func TestTheRedundantTrailerCheckFailsClosedWhenTheSANHasNoGrammar(t *testing.T) {
+	const nonSPIFFE = "https://example.com/not-spiffe"
+	if got := (Claim{}).disagreesWith(nonSPIFFE); got != "" {
+		t.Errorf("disagreesWith an empty claim against a non-SPIFFE SAN = %q, want \"\"", got)
 	}
 	if got := (Claim{}).disagreesWith(fixtureIdentity); got != "" {
 		t.Errorf("disagreesWith an empty claim = %q, want \"\"", got)
+	}
+
+	cases := []struct {
+		name  string
+		claim Claim
+	}{
+		{"run trailer present", Claim{Run: "run-1"}},
+		{"task trailer present", Claim{Task: "rm-037"}},
+		{"both trailers present", Claim{Run: "run-1", Task: "rm-037"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.claim.disagreesWith(nonSPIFFE)
+			if got == "" {
+				t.Fatalf("disagreesWith(%q) = \"\", want a fail-closed message naming what "+
+					"could not be checked", nonSPIFFE)
+			}
+			if strings.Contains(got, "disagree") {
+				t.Errorf("message = %q, implies a disagreement that was never established", got)
+			}
+			if !strings.Contains(got, "SPIFFE") {
+				t.Errorf("message = %q, want it to say the identity could not be read as a SPIFFE ID", got)
+			}
+		})
+	}
+}
+
+// VER-008: check 3 fails closed end to end when the certificate's URI SAN is
+// not a SPIFFE ID at all, so the redundant Agent-Run and Agent-Task trailers
+// cannot be confirmed against it — the scenario ADR-0042 measured (#137):
+// bogus Agent-Run and Agent-Task trailers next to an Agent-Identity trailer
+// that is byte-identical to a non-SPIFFE SAN, which lets DiffIdentity's
+// string-equality short circuit skip straight to disagreesWith. Before this
+// fix, an identity disagreesWith could not parse was treated as one that
+// agrees, and the commit verified with two of its three trailers never
+// checked.
+func TestCheckThreeFailsClosedWhenTheCertificateSANIsNotASPIFFEID(t *testing.T) {
+	const nonSPIFFE = "https://github.com/Raymalian/innsegl/.github/workflows/sign.yml@refs/heads/main"
+	s := newScenario(t, scenarioOptions{
+		identity: nonSPIFFE,
+		message: "VER-008: a commit signed under a non-SPIFFE certificate\n\n" +
+			"Agent-Identity: " + nonSPIFFE + "\n" +
+			"Agent-Run: totally-bogus-run\n" +
+			"Agent-Task: totally-bogus-task\n",
+	})
+	c := s.report(t).check(t, CheckTrailerIdentity)
+	if c.Result != Failed {
+		t.Fatalf("check 3 = %s (%s), want %s: a non-SPIFFE certificate identity must not "+
+			"let the Agent-Run and Agent-Task trailers go unchecked", c.Result, c.Detail, Failed)
+	}
+	if strings.Contains(c.Detail, "disagree") {
+		t.Errorf("detail = %q, implies the trailers disagreed with something; they were "+
+			"never checked", c.Detail)
+	}
+	if !strings.Contains(c.Detail, "SPIFFE") {
+		t.Errorf("detail = %q, want it to say the certificate's identity could not be read "+
+			"as a SPIFFE ID", c.Detail)
+	}
+	if !strings.Contains(c.Detail, trailerAgentRun) || !strings.Contains(c.Detail, trailerAgentTask) {
+		t.Errorf("detail = %q, want it to name both trailers that could not be checked", c.Detail)
 	}
 }
 

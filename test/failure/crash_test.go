@@ -519,15 +519,30 @@ func (c *campaign) credentialShot(t *testing.T, why, target string, delay time.D
 			why, run.RunID, crashTriggerBudget, c.seed)
 	}
 
-	records := c.chain(t)
-	issuedAfter := countEvents(records, event.EventTypeCredentialIssued, run.RunID)
+	// RM-069 (#90): a single read here, taken the instant `fire` returns, can
+	// undercount by one — a COMMIT the dying client already handed to
+	// Postgres before the SIGKILL landed, but which has not yet become
+	// visible to this particular query. countSettled polls until the count
+	// stops moving instead of trusting the first answer, so `delta` below
+	// reflects what the chain actually holds once the dust settles, not a
+	// snapshot that a slightly later read would have contradicted.
+	issuedAfter, settled := c.countSettled(t, event.EventTypeCredentialIssued, run.RunID)
+	if !settled {
+		t.Fatalf("%s: the `credential_issued` count for run %q was still changing after %s of "+
+			"polling (last seen %d, started at %d). That is a DIFFERENT finding from a duplicate "+
+			"issuance: a commit landing a little late settles to a fixed number, and this one "+
+			"never did, so this is reported as unproven rather than guessed either way. (seed %d)",
+			why, run.RunID, crashSettleBudget, issuedAfter, issuedBefore, c.seed)
+	}
 	delta := issuedAfter - issuedBefore
 
 	window := ""
 	switch {
 	case delta > 1:
-		t.Fatalf("%s: one get_credential call left %d `credential_issued` events on the chain. "+
-			"IP §6.6: never a second event. (seed %d)", why, delta, c.seed)
+		t.Fatalf("%s: one get_credential call left the settled `credential_issued` count %d "+
+			"higher for run %q. This is a SECOND ISSUANCE from one call, not a commit landing "+
+			"late — the count was polled until it stopped moving before this was checked. IP "+
+			"§6.6: never a second event. (seed %d)", why, delta, run.RunID, c.seed)
 	case delta == 0 && s.delivered != nil:
 		t.Fatalf("%s: a credential was released and no `credential_issued` is on the chain. "+
 			"I3, and get_credential records BEFORE it returns the token. (seed %d)", why, c.seed)
@@ -547,11 +562,14 @@ func (c *campaign) credentialShot(t *testing.T, why, target string, delay time.D
 	c.requireCredentialFor(t, why+": first replay", first, run.SPIFFEID)
 	c.requireCredentialFor(t, why+": second replay", second, run.SPIFFEID)
 
-	records = c.chain(t)
+	records := c.chain(t)
 	if got, want := countEvents(records, event.EventTypeCredentialIssued, run.RunID), issuedBefore+delta+2; got != want {
-		t.Fatalf("%s: the chain holds %d `credential_issued` events for run %q and %d calls "+
-			"reached the append. Each issuance is one auditable fact and no more (ADR-0004). (seed %d)",
-			why, got, run.RunID, want, c.seed)
+		t.Fatalf("%s: the chain holds %d `credential_issued` events for run %q; %d were expected "+
+			"— the SETTLED delta from the crashed call (%d, polled until it stopped moving, not a "+
+			"single racy read) plus one per replay. This is not a commit landing late; that was "+
+			"already absorbed before delta was computed above, so a mismatch here is a genuine "+
+			"extra issuance. Each issuance is one auditable fact and no more (ADR-0004). (seed %d)",
+			why, got, run.RunID, want, delta, c.seed)
 	}
 	if !c.hasEntry(t, crashRunRef(run.RunID)) {
 		t.Fatalf("%s: SPIRE holds no entry for run %q after the replay (seed %d)", why, run.RunID, c.seed)
@@ -1042,5 +1060,100 @@ func (c *campaign) drivenWindowsHoldOpen(t *testing.T) {
 				"property of how fast this machine is. (seed %d)",
 				crashSettleProof, got, tc.window, c.seed)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MCP-011-C3 — settleReads resolves a COMMIT that lands late without either
+// half of RM-069 (#90)'s false accusation: it must not report a duplicate for
+// a commit that was merely slow to become visible, and it must not mistake a
+// count that is genuinely still climbing for one that has settled.
+//
+// This is the pure half of RM-069 (#90) and needs no Docker. #90 was filed
+// from one observation under coverage-floors.sh and did not reproduce in nine
+// further attempts across two trees, and it did not reproduce on the machine
+// that fixed it either — three plain runs, clean — so a test that depends on
+// actually winning that race belongs nowhere near a merge gate. What can be
+// driven deterministically is the ALGORITHM credentialShot now leans on:
+// settleReads is the exact function countSettled calls, so a scripted
+// sequence of reads standing in for "the chain, sampled every crashPollInterval"
+// exercises the real decision it makes, with no timing left to chance.
+//
+// lateCommit's shape is the seed 1788461835736099584 failure from CI run
+// #140: a couple of reads still see the OLD count — the dying client's COMMIT
+// is durable in Postgres but not yet visible to this particular query — and
+// then the new count appears and holds.
+func TestMCP011SettleReadsResolvesALateCommitWithoutMistakingItForADuplicate(t *testing.T) {
+	lateCommit := []int{13, 13, 14, 14, 14, 14, 14, 14, 14, 14}
+
+	// stillClimbing is what an ACTUAL duplicate-issuance bug looks like: the
+	// count never stops moving, because something keeps appending. This must
+	// never be reported as settled, whatever value it happens to be on when
+	// the budget runs out — reporting one would convict nothing, and
+	// reporting nothing would clear a bug that is actually there.
+	stillClimbing := []int{13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24}
+
+	for _, tc := range []struct {
+		name        string
+		reads       []int
+		stableFor   int
+		maxReads    int
+		wantValue   int
+		wantSettled bool
+	}{
+		{
+			name:        "a late commit settles to the count it was always going to reach",
+			reads:       lateCommit,
+			stableFor:   4,
+			maxReads:    len(lateCommit),
+			wantValue:   14,
+			wantSettled: true,
+		},
+		{
+			name:        "already stable needs no extra reads to say so",
+			reads:       []int{13, 13, 13, 13, 13, 13, 13, 13},
+			stableFor:   4,
+			maxReads:    8,
+			wantValue:   13,
+			wantSettled: true,
+		},
+		{
+			// stableFor: 1 is what credentialShot did before this fix — trust
+			// the first read outright. Run over the exact same lateCommit
+			// sequence as the first case, it reports the stale count: this IS
+			// RM-069 (#90), reproduced deterministically rather than raced
+			// for. The bug this table row names is not aspirational; it is
+			// what settleReads replaces.
+			name:        "single read is the pre-fix bug this replaces: it reports the stale count",
+			reads:       lateCommit,
+			stableFor:   1,
+			maxReads:    len(lateCommit),
+			wantValue:   13, // WRONG. The count settles to 14; see the first case.
+			wantSettled: true,
+		},
+		{
+			name:        "a count that never stops moving is reported unsettled, not guessed at",
+			reads:       stillClimbing,
+			stableFor:   4,
+			maxReads:    len(stillClimbing),
+			wantValue:   24,
+			wantSettled: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := -1
+			read := func() int {
+				i++
+				if i >= len(tc.reads) {
+					i = len(tc.reads) - 1
+				}
+				return tc.reads[i]
+			}
+			gotValue, gotSettled := settleReads(read, tc.stableFor, tc.maxReads, func() {})
+			if gotValue != tc.wantValue || gotSettled != tc.wantSettled {
+				t.Errorf("settleReads(stableFor=%d, maxReads=%d) over %v = (%d, %v), want (%d, %v)",
+					tc.stableFor, tc.maxReads, tc.reads, gotValue, gotSettled, tc.wantValue, tc.wantSettled)
+			}
+		})
 	}
 }
