@@ -77,6 +77,14 @@ var commands = map[string]command{
 		summary: "verify a commit's attribution without access to the ledger",
 		exec:    verifyCommand,
 	},
+	// `init` is RM-080 (#117): the sequence every adopter otherwise assembles
+	// by hand from documentation — install gitsign, decide a trust root,
+	// decide whether identities are pseudonymous, complete an OIDC flow, sign
+	// a commit, prove it verifies — run once, `--local` only, reversible.
+	"init": {
+		summary: "set up signed commits in this repository end to end",
+		exec:    initCommand,
+	},
 	// The canary is the sixth: doc 05 §2 requires the SEG-005 deletion check
 	// to run "as a scheduled job in production, not only at deploy", and a
 	// subcommand whose exit status is the verdict serves both callers.
