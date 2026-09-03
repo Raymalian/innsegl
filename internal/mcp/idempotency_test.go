@@ -170,9 +170,9 @@ func TestReplayReturnsTheStoredResponseAndNotARecomputedOne(t *testing.T) {
 // database and nowhere else (IP §6.6: "no in-memory-only state that matters").
 func TestARecordedResponseSurvivesAPostgresSIGKILL(t *testing.T) {
 	t.Parallel()
-	if sharedPG == nil {
-		t.Skipf("skipping: no real Postgres (%s); crash survival cannot be proved without one", dockerSkip)
-	}
+	// requirePG, not a bare nil check: a Postgres that failed to start on a
+	// machine that has Docker is a failure, not a skip (#101).
+	requirePG(t)
 	ctx := testCtx(t, 6*time.Minute)
 
 	// A container of its own: this test kills the server.

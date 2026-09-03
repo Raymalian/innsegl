@@ -38,8 +38,10 @@ var (
 	pgContainer string
 	pgPort      string
 	pgSkip      string
-	pgDBSeq     int
-	pgDBSeqMu   sync.Mutex
+	// pgFailure: Docker is present and the database still did not start (#101).
+	pgFailure string
+	pgDBSeq   int
+	pgDBSeqMu sync.Mutex
 )
 
 const (
@@ -104,14 +106,21 @@ func requireLedger(t *testing.T) *ledger.Store {
 		}
 		id, port, err := startPostgres(ctx)
 		if err != nil {
-			pgSkip = err.Error()
+			// Docker works; the database did not start. A failure (#101).
+			pgSkip, pgFailure = startupOutcome(err)
 			return
 		}
 		pgContainer, pgPort = id, port
 	})
-	if pgContainer == "" {
+	switch harnessNeed(pgContainer != "", pgSkip, pgFailure) {
+	case harnessFailTest:
+		t.Fatalf("the test Postgres did not come up, and Docker is present and "+
+			"working: %s\n\nThis is a FAILURE and not a skip (#101): I4 goes "+
+			"undemonstrated while the package reports ok.", pgFailure)
+	case harnessSkipTest:
 		t.Skipf("skipping the ledger half of this case: no real Postgres (%s). "+
 			"I4 is not demonstrated without one.", pgSkip)
+	case harnessProceed:
 	}
 
 	pgDBSeqMu.Lock()

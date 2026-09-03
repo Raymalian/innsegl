@@ -419,9 +419,10 @@ func TestLED008KeyReuseForADifferentEventIsRefused(t *testing.T) {
 
 func TestLED009PostgresDownDuringAppend(t *testing.T) {
 	t.Parallel()
-	if sharedPG == nil {
-		t.Skipf("skipping: no real Postgres (%s); LED-009 cannot be proved without one", dockerSkip)
-	}
+	// requirePG, not a bare nil check: a Postgres that failed to start on a
+	// machine that has Docker is a failure, and LED-009 is exactly the case
+	// that must not silently not run (#101).
+	requirePG(t)
 
 	ctx := testCtx(t, 6*time.Minute)
 

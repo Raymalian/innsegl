@@ -114,7 +114,10 @@ var (
 	sigOnce   sync.Once
 	sigShared *sigStack
 	sigSkip   string
-	sigSeq    atomic.Int64
+	// sigFailure: Docker and gitsign are both present and the pair of stacks
+	// still did not come up. A failure, never a skip (#101).
+	sigFailure string
+	sigSeq     atomic.Int64
 )
 
 // sigStack is one process's pair of compose projects: a SPIRE trio configured
@@ -145,7 +148,7 @@ func sigStackPrefix() string { return fmt.Sprintf("innsegl-sigfail-%d", os.Getpi
 func findSigGitsign(ctx context.Context) (string, error) {
 	if p := os.Getenv("INNSEGL_GITSIGN"); p != "" {
 		if _, err := os.Stat(p); err != nil {
-			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w", p, err)
+			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w: %w", p, err, errDependencyAbsent)
 		}
 		return p, nil
 	}
@@ -160,8 +163,8 @@ func findSigGitsign(ctx context.Context) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no gitsign binary; install the pinned release with "+
-		"`go install github.com/sigstore/gitsign@%s` or set INNSEGL_GITSIGN",
-		sigGitsignVersion)
+		"`go install github.com/sigstore/gitsign@%s` or set INNSEGL_GITSIGN: %w",
+		sigGitsignVersion, errDependencyAbsent)
 }
 
 // sigCompose runs one docker compose command against one of this stack's two
@@ -181,7 +184,7 @@ func (s *sigStack) sigCompose(ctx context.Context, files []string, args ...strin
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(full, " "), err, strings.TrimSpace(stderr.String()))
+			strings.Join(full, " "), err, oneLine(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -1075,17 +1078,21 @@ func requireSigStack(t *testing.T) *sigStack {
 		defer cancel()
 		wd, err := os.Getwd()
 		if err != nil {
-			sigSkip = err.Error()
+			// Not an absent dependency: a working directory that cannot be
+			// read is a fault (#101).
+			sigFailure = err.Error()
 			return
 		}
 		root := filepath.Dir(filepath.Dir(wd))
 		if derr := dockerUsable(ctx); derr != nil {
+			// The only honest skip: there is no daemon to ask.
 			sigSkip = derr.Error()
 			return
 		}
 		s, serr := startSigStack(ctx, root)
 		if serr != nil {
-			sigSkip = serr.Error()
+			// An absent gitsign is still a skip; anything else is a FAILURE.
+			sigSkip, sigFailure = startupOutcome(serr)
 			if s != nil {
 				s.stop()
 			}
@@ -1093,12 +1100,19 @@ func requireSigStack(t *testing.T) *sigStack {
 		}
 		sigShared = s
 	})
-	if sigShared == nil {
+	switch harnessNeed(sigShared != nil, sigSkip, sigFailure) {
+	case harnessFailTest:
+		t.Fatalf("the SPIRE + Sigstore stacks did not come up, and Docker and "+
+			"gitsign are both present: %s\n\nThis is a FAILURE and not a skip "+
+			"(#101): an infrastructure fault reported as a skip exits zero and "+
+			"reports ok while TC-SIG's layer-F cases did not run.", sigFailure)
+	case harnessSkipTest:
 		t.Skipf("skipping: no real SPIRE + Sigstore from deploy/compose/ and no gitsign (%s). "+
 			"A failure-injection case with no dependency to remove proves nothing, and "+
 			"IP §2 is explicit that \"a mocked Fulcio proves nothing about I5\". Start "+
 			"Docker, `go install github.com/sigstore/gitsign@%s`, and re-run.",
 			sigSkip, sigGitsignVersion)
+	case harnessProceed:
 	}
 	t.Cleanup(func() {
 		sigShared.stop()
