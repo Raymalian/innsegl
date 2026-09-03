@@ -97,9 +97,17 @@ func rekorDocker(ctx context.Context, args ...string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+			strings.Join(args, " "), err, rekorOneLine(stderr.String()))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// rekorOneLine collapses a multi-line subprocess error onto one line, so the
+// line naming the fault survives the test JSON stream (#101, #126). Kept
+// separate from the WORM harness's oneLine for the reason above: this file has
+// to stay liftable into deploy/compose on its own.
+func rekorOneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // rekorDockerUsable reports whether a docker daemon is reachable.
@@ -319,8 +327,13 @@ func (s *rekorStack) waitForRekor(ctx context.Context, timeout time.Duration) er
 
 // requireRekor starts the stack for one test and tears it down after it.
 //
-// It skips, naming what went unproven, rather than letting an integration case
-// pass without the thing it integrates with.
+// The two outcomes are not the same thing (#126). No Docker at all is a skip
+// naming what went unproven. A stack that would not come up on a machine that
+// HAS Docker is a FAILURE: reporting it as a skip exits zero and reports ok
+// while SEG-003 — the case that asks a real transparency log — never ran.
+// errRekorDockerAbsent is wrapped by the absent-dependency conditions and by
+// nothing else; TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure pins
+// both branches.
 func requireRekor(t *testing.T) *rekorStack {
 	t.Helper()
 
