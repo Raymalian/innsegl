@@ -91,6 +91,13 @@ x-minio-image: &minio-image
   minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
 x-minio-client-image: &minio-client-image
   minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+# Used once, by the one-shot that mints this deployment's pseudonymisation
+# secret, and it is the SAME pin sigstore.yml uses for sigstore-bootstrap. The
+# innsegl image could have generated the secret itself, but that would put key
+# generation inside the binary that holds SPIRE admin; a short shell script in
+# a container with no network at all is a smaller thing to get right.
+x-openssl-image: &openssl-image
+  alpine/openssl:3.5.7@sha256:19f8eb9004a1dbaec323eed6094e9b6bcc1dbf2697ecb5fb8d2fad4e3336a8f7
 
 # ----------------------------------------------------------------------------
 # The ledger's credentials.
@@ -163,6 +170,33 @@ x-jwt-issuer: &jwt-issuer ${INNSEGL_SPIRE_JWT_ISSUER:?set it to the issuer ALL T
 # much less legibly than a missing one.
 # ----------------------------------------------------------------------------
 x-parent-id: &parent-id ${INNSEGL_SPIRE_PARENT_ID:?run deploy/compose/spire/register.sh first - it writes deploy/compose/.env with the attested node ID this stack must parent its entries to}
+
+# ----------------------------------------------------------------------------
+# THIS DEPLOYMENT'S PSEUDONYMISATION SECRET — the PATH to it, never the value.
+#
+# `innsegl serve` defaults to `-identity-mode pseudonymous`, and in that mode
+# `internal/identity` refuses to start without a secret of at least 16 bytes.
+# #119 introduced that refusal deliberately; this file was not updated to
+# supply one, so innsegl-mcp crashlooped on a clean `up` (#124).
+#
+# WHY THERE IS NO SECRET IN THIS FILE. A pseudonym is
+# `HMAC(deployment_secret, field ‖ ":" ‖ value)` and the DEPLOYMENT half is the
+# entire design (ADR-0041). A constant shipped here would give every
+# installation the same pseudonyms — `a7f3c91b` would mean one particular
+# ticket reference everywhere, and one resolved mapping would resolve it for
+# everybody — which is worse than not pseudonymising at all, because it looks
+# private and is not. So innsegl-identity-init below mints one per deployment
+# into a volume, and this is the path it writes and innsegl-mcp reads.
+#
+# DECLARED ONCE, AS AN ANCHOR, for sigstore.yml's stated reason: it is used by
+# a writer and a reader, and two copies of a default is how they come to
+# disagree. It is also the variable NAME `innsegl serve` reads the path from
+# (`INNSEGL_IDENTITY_SECRET_FILE`, joining `INNSEGL_MCP_SVID_FILE` and its two
+# siblings), because compose cannot inject a file's contents into an
+# environment variable and a secret does not belong on a command line the
+# process table can read.
+# ----------------------------------------------------------------------------
+x-identity-secret-file: &identity-secret-file /run/innsegl/identity/secret
 
 # ----------------------------------------------------------------------------
 # The one image the three innsegl-* services share. doc 05 §1 says "same
@@ -356,6 +390,47 @@ services:
       - no-new-privileges:true
 
   # --------------------------------------------------------------------------
+  # innsegl-identity-init — one-shot. Mints THIS deployment's pseudonymisation
+  # secret (RM-084, #124), in sigstore-bootstrap's shape and for its reasons.
+  #
+  # Not a doc 05 §1 row, and the same kind of thing as innsegl-db-init: it runs
+  # to completion, everything that needs what it produced gates on that, and it
+  # exits. It is the only container that ever mounts the secret rw.
+  #
+  # NO NETWORK AT ALL, which is sigstore-bootstrap's line verbatim: "it
+  # generates key material and writes files. Nothing it does requires reaching
+  # anything, so nothing can reach it either." It is also worth #100's
+  # arithmetic — this machine tops out at roughly twenty-nine Docker networks
+  # and the three shipped stacks already hold twelve — that `network_mode:
+  # none` costs ZERO of them.
+  #
+  # IDEMPOTENT. An existing secret is left alone; `down -v` is the only
+  # rotation, exactly as for the Fulcio CA and the Rekor log key. See
+  # innsegl/identity-init.sh for why a rotation is survivable (ADR-0041:
+  # resolution goes through the ledger row, never the key) and still not
+  # something to do on every boot.
+  # --------------------------------------------------------------------------
+  innsegl-identity-init:
+    image: *openssl-image
+    container_name: innsegl-identity-init
+    network_mode: none
+    entrypoint: ["/bin/sh"]
+    command: ["/identity-init.sh"]
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # The path it writes. innsegl-mcp reads the same anchor.
+      INNSEGL_IDENTITY_SECRET_FILE: *identity-secret-file
+    volumes:
+      - ./innsegl/identity-init.sh:/identity-init.sh:ro
+      # THE ONLY rw MOUNT OF THIS VOLUME ANYWHERE IN THE STACK.
+      - innsegl-identity-secret:/run/innsegl/identity
+
+  # --------------------------------------------------------------------------
   # innsegl-mcp — doc 05 §1's "The MCP server (register/credential/event/sign/
   # retire). Only service holding SPIRE admin credential."
   #
@@ -387,6 +462,11 @@ services:
     restart: unless-stopped
     depends_on:
       innsegl-db-init:
+        condition: service_completed_successfully
+      # #124: without the secret this process REFUSES TO START — correctly, and
+      # then crashloops. Gating on the one-shot's completion is what makes a
+      # clean `docker compose up` need no manual step.
+      innsegl-identity-init:
         condition: service_completed_successfully
     networks:
       - innsegl-ledger
@@ -424,6 +504,14 @@ services:
       INNSEGL_MCP_LISTEN: 0.0.0.0:8080
       INNSEGL_MCP_HEALTH_LISTEN: 0.0.0.0:8081
 
+      # The PATH to this deployment's secret, not the secret. See the anchor.
+      # `-identity-mode` is left at its default, `pseudonymous`: the SPIFFE ID,
+      # the Fulcio certificate, the Rekor entry and the `Agent-Identity` trailer
+      # carry a keyed pseudonym of agent_type and task_ref rather than the
+      # caller's ticket reference (ADR-0041). An operator who wants the literal
+      # values sets INNSEGL_IDENTITY_MODE=literal deliberately and removes this.
+      INNSEGL_IDENTITY_SECRET_FILE: *identity-secret-file
+
       INNSEGL_WORKSPACE: /work
       INNSEGL_SIGN_AUTHOR_NAME: ${INNSEGL_SIGN_AUTHOR_NAME:-Innsegl Demo Agent}
       # A .invalid address. I6's author gate admits a reserved, undelegatable
@@ -439,6 +527,10 @@ services:
       # (which re-checks intents against them) and with demo-agent (which
       # stages into them).
       - innsegl-workspace:/work
+      # READ-ONLY, and the only other mount of this volume is
+      # innsegl-identity-init's rw one. One writer, one reader — the control the
+      # Fulcio CA key and the Rekor log key have.
+      - innsegl-identity-secret:/run/innsegl/identity:ro
     ports:
       # Loopback only, like every other published port in this deployment.
       - "127.0.0.1:${INNSEGL_MCP_PORT:-8080}:8080"
@@ -926,6 +1018,14 @@ volumes:
   # identifier, and the tree it names is the DEPLOYMENT's, not the caller's).
   # MOUNTED BY: innsegl-mcp (rw), innsegl-reconciler (rw), demo-agent (rw).
   innsegl-workspace:
+
+  # THIS DEPLOYMENT's pseudonymisation secret, and the reason it is a volume
+  # rather than a value in this file: a secret in the file would be the same
+  # secret in every deployment (#124, ADR-0041).
+  # MOUNTED BY: innsegl-identity-init (rw), innsegl-mcp (ro). Nothing else,
+  # ever — the secret CREATES a pseudonym and is needed to resolve one never,
+  # so no read path in this stack has any use for it.
+  innsegl-identity-secret:
 
   # DECLARED IN spire.yml, JOINED HERE, and the only thing this stack takes
   # from SPIRE besides one network. Compose names a project's volume
