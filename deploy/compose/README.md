@@ -387,15 +387,31 @@ and under public Sigstore that ticket number is a permanent public record. So
 spiffe://innsegl.dev/agent/a7f3c91b/e2d5f004/run-850d52ce…
 ```
 
-Two settings control it:
+**You do not have to do anything to get this.** `innsegl-identity-init`, a
+one-shot with no network at all, mints 32 random bytes into the
+`innsegl-identity-secret` volume on the first `up` and leaves them alone on
+every `up` after that; `innsegl-mcp` gates on its completion and reads the
+file. That is the whole of the setup, and it is a one-shot rather than a value
+in `innsegl.yml` for one reason: **a secret shipped in this repository would
+give every deployment the same pseudonyms.** `a7f3c91b` would mean one
+particular ticket reference in every installation on earth, so resolving one
+mapping would resolve it for everybody — worse than not pseudonymising at all,
+because it looks private and is not (#124).
+
+Three settings control it:
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `INNSEGL_IDENTITY_MODE` | `pseudonymous` | `pseudonymous` puts `HMAC-SHA256(secret, "<field>:" ‖ value)`, truncated to 8 hex characters, in `{agent_type}` and `{task_id}`. `literal` puts the caller's own values in. |
-| `INNSEGL_IDENTITY_SECRET` | — | the deployment secret, at least 16 bytes. **Required** in `pseudonymous` mode; the server refuses to start without one. |
+| `INNSEGL_IDENTITY_SECRET_FILE` | set by the stack | the file holding the deployment secret. This is what the compose stack uses, because compose can mount a volume and cannot read one into an environment variable — the `INNSEGL_MCP_SVID_FILE` convention. |
+| `INNSEGL_IDENTITY_SECRET` | — | the secret as a value, for an invocation that has one to hand. At least 16 bytes. **Setting both this and `INNSEGL_IDENTITY_SECRET_FILE` is refused**, rather than resolved in favour of one: a configuration that quietly picks between two disagreeing sources is how #124 shipped. |
+
+To supply your own instead of the generated one — from a secret store, say:
 
 ```sh
-export INNSEGL_IDENTITY_SECRET="$(openssl rand -hex 32)"
+export INNSEGL_IDENTITY_SECRET="$(openssl rand -hex 32)"   # then remove
+                                                           # INNSEGL_IDENTITY_SECRET_FILE
+                                                           # from innsegl-mcp
 ```
 
 Four things worth knowing before you choose:
@@ -427,7 +443,7 @@ Four things worth knowing before you choose:
 | Symptom | Cause |
 |---|---|
 | compose refuses, naming `INNSEGL_SPIRE_JWT_ISSUER` | the export was skipped. This refusal is deliberate; see above |
-| `innsegl serve` refuses, naming `-identity-mode / -identity-secret` | `INNSEGL_IDENTITY_SECRET` is unset or under 16 bytes. See "What an agent's identity says about it" |
+| `innsegl serve` refuses, naming `-identity-mode / -identity-secret / -identity-secret-file` | the deployment secret is unset, under 16 bytes, or supplied twice. In the shipped stack `innsegl-identity-init` writes it, so check that one-shot's logs first. See "What an agent's identity says about it" |
 | `register: FAIL: no attested agent yet` | the SPIRE agent has not finished attesting. Re-run `register.sh`; it is idempotent |
 | ports 8443, 5555, 3000, 8080, 8081 or 8082 already bound | the stack publishes those six on loopback. Free them, or override: `INNSEGL_SPIRE_OIDC_PORT`, `INNSEGL_MCP_PORT`, `INNSEGL_MCP_HEALTH_PORT`, `INNSEGL_DASHBOARD_PORT` |
 | `all predefined address pools have been fully subnetted` | Docker is out of network address space, at roughly the twenty-ninth network. The three stacks hold twelve between them. `docker network prune` |

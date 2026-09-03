@@ -31,7 +31,7 @@ var serveEnv = []string{
 	envRegisterRateWindow, envClockSkewBound, envTrustedOrigins,
 	envMCPSessionTimeout, envMCPShutdownTimeout, envHealthTimeout,
 	envRequireAppendOnlyRole, envMigrate,
-	envIdentityMode, envIdentitySecret,
+	envIdentityMode, envIdentitySecret, envIdentitySecretFile,
 }
 
 // testIdentitySecret is a 32-byte fixture for RM-079's pseudonymous default.
@@ -544,4 +544,179 @@ func TestTheShippedSurfaceIsTheFiveToolsOfIP4(t *testing.T) {
 	if len(bound)+len(missing) != len(mcp.ToolNames()) {
 		t.Errorf("bound %d + missing %d != the five IP §4 tools", len(bound), len(missing))
 	}
+}
+
+// TestPRI005ServeReadsTheDeploymentSecretFromAFile.
+//
+// RM-084 (#124). #119 made the secret mandatory in the default mode and the
+// shipped compose stack set neither variable, so `innsegl-mcp` crashlooped on
+// a clean `docker compose up`. The stack's fix is a one-shot that writes 32
+// random bytes into a volume, and a volume is a FILE — compose cannot inject a
+// file's contents into an environment variable, so the server has to be able
+// to read one.
+//
+// `INNSEGL_MCP_SVID_FILE`, `INNSEGL_MCP_KEY_FILE` and `INNSEGL_MCP_BUNDLE_FILE`
+// are the same convention already in this file; this joins them rather than
+// inventing a second spelling.
+//
+// THE CASE THAT MATTERS IS "both at once is refused". A configuration that
+// quietly prefers one of two sources is how #124 happened in the first place:
+// the deployment said one thing and the process did another, and nothing
+// reported the difference.
+func TestPRI005ServeReadsTheDeploymentSecretFromAFile(t *testing.T) {
+	withoutSecret := func(extra ...string) []string {
+		full := completeServeArgs()
+		out := full[:1:1]
+		for i := 1; i < len(full); i += 2 {
+			if full[i] != "-identity-secret" {
+				out = append(out, full[i], full[i+1])
+			}
+		}
+		return append(out[1:], extra...)
+	}
+
+	// captureOptions runs serve to a cancelled context and hands back the
+	// resolved configuration, so the SECRET ITSELF can be compared rather than
+	// only the exit status.
+	captureOptions := func(t *testing.T, args []string) (serveOptions, int, string) {
+		t.Helper()
+		var captured serveOptions
+		deps := serveDeps{open: func(_ context.Context, o serveOptions, _ *serveLog) (servedMCP, error) {
+			captured = o
+			return &fakeServer{}, nil
+		}}
+		var stdout, stderr bytes.Buffer
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		code := runServe(ctx, args, &stdout, &stderr, deps)
+		return captured, code, stderr.String()
+	}
+
+	secretFile := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "identity-secret")
+		if err := os.WriteFile(path, []byte(body), 0o400); err != nil {
+			t.Fatalf("writing the secret fixture: %v", err)
+		}
+		return path
+	}
+
+	t.Run("the file's contents are the secret", func(t *testing.T) {
+		clearServeEnv(t)
+		path := secretFile(t, testIdentitySecret)
+
+		o, code, stderr := captureOptions(t, withoutSecret("-identity-secret-file", path))
+
+		if code != exitOK {
+			t.Fatalf("serve -identity-secret-file = %d, want %d. A stack that can only put "+
+				"the secret on a volume cannot start at all:\n%s", code, exitOK, stderr)
+		}
+		if o.identitySecret != testIdentitySecret {
+			t.Errorf("the resolved secret is %q, want the file's %q",
+				o.identitySecret, testIdentitySecret)
+		}
+	})
+
+	t.Run("the environment variable is read", func(t *testing.T) {
+		clearServeEnv(t)
+		t.Setenv(envIdentitySecretFile, secretFile(t, testIdentitySecret))
+
+		o, code, stderr := captureOptions(t, withoutSecret())
+
+		if code != exitOK {
+			t.Fatalf("serve with $"+envIdentitySecretFile+" = %d, want %d. A container is "+
+				"configured by environment (doc 05 §1):\n%s", code, exitOK, stderr)
+		}
+		if o.identitySecret != testIdentitySecret {
+			t.Errorf("the resolved secret is %q, want the file's %q",
+				o.identitySecret, testIdentitySecret)
+		}
+	})
+
+	t.Run("a trailing newline is not part of the secret", func(t *testing.T) {
+		clearServeEnv(t)
+		// `openssl rand -hex 32 > secret` and every heredoc that ever wrote a
+		// key file end it with a newline. A secret one byte longer than the
+		// operator believes changes EVERY pseudonym, silently and forever.
+		path := secretFile(t, testIdentitySecret+"\n")
+
+		o, code, stderr := captureOptions(t, withoutSecret("-identity-secret-file", path))
+
+		if code != exitOK {
+			t.Fatalf("serve with a newline-terminated secret file = %d, want %d:\n%s",
+				code, exitOK, stderr)
+		}
+		if o.identitySecret != testIdentitySecret {
+			t.Errorf("the resolved secret is %q, want %q — the trailing newline is not "+
+				"part of the key", o.identitySecret, testIdentitySecret)
+		}
+	})
+
+	t.Run("both sources at once is refused", func(t *testing.T) {
+		clearServeEnv(t)
+		path := secretFile(t, "a-different-32-byte-fixture-0123")
+
+		args := completeServeArgs("-identity-secret-file", path)[1:]
+		var stdout, stderr bytes.Buffer
+		code := runServeCommand(args, &stdout, &stderr, fakeDeps(&fakeServer{}, nil))
+
+		if code != exitUsage {
+			t.Fatalf("serve with -identity-secret AND -identity-secret-file = %d, want %d "+
+				"(exitUsage). Silently preferring one of two disagreeing sources is how "+
+				"#124 shipped: the deployment says one thing and the process does another.",
+				code, exitUsage)
+		}
+		for _, want := range []string{"-identity-secret", "-identity-secret-file"} {
+			if !strings.Contains(stderr.String(), want) {
+				t.Errorf("the refusal does not name %s:\n%s", want, stderr.String())
+			}
+		}
+	})
+
+	t.Run("an unreadable file is refused by name", func(t *testing.T) {
+		clearServeEnv(t)
+		missing := filepath.Join(t.TempDir(), "never-written")
+
+		args := withoutSecret("-identity-secret-file", missing)
+		var stdout, stderr bytes.Buffer
+		code := runServeCommand(args, &stdout, &stderr, fakeDeps(&fakeServer{}, nil))
+
+		if code != exitUsage {
+			t.Fatalf("serve with an unreadable -identity-secret-file = %d, want %d "+
+				"(exitUsage): the one-shot that writes it did not run, and that is a "+
+				"deployment fault to be named rather than a start-up mystery", code, exitUsage)
+		}
+		if !strings.Contains(stderr.String(), missing) {
+			t.Errorf("the refusal does not name the path it could not read:\n%s", stderr.String())
+		}
+	})
+
+	t.Run("an empty file is refused", func(t *testing.T) {
+		clearServeEnv(t)
+		path := secretFile(t, "\n\n")
+
+		args := withoutSecret("-identity-secret-file", path)
+		var stdout, stderr bytes.Buffer
+		code := runServeCommand(args, &stdout, &stderr, fakeDeps(&fakeServer{}, nil))
+
+		if code != exitUsage {
+			t.Fatalf("serve with an empty -identity-secret-file = %d, want %d (exitUsage): "+
+				"a half-written secret file must not become a zero-length key", code, exitUsage)
+		}
+	})
+
+	t.Run("a short secret is still refused when it comes from a file", func(t *testing.T) {
+		clearServeEnv(t)
+		path := secretFile(t, "tooshort")
+
+		args := withoutSecret("-identity-secret-file", path)
+		var stdout, stderr bytes.Buffer
+		code := runServeCommand(args, &stdout, &stderr, fakeDeps(&fakeServer{}, nil))
+
+		if code != exitUsage {
+			t.Fatalf("serve with an 8-byte secret file = %d, want %d (exitUsage): "+
+				"identity.MinSecretBytes is %d and reading the secret from a file must not "+
+				"be a way around the floor", code, exitUsage, identity.MinSecretBytes)
+		}
+	})
 }
