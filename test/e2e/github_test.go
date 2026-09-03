@@ -32,15 +32,55 @@ import (
 // here" is the whole remediation.
 const authorPolicyPath = "testdata/author-policy.json"
 
+// noreplyOperator is the address these fixtures author as. It is the operator's
+// GitHub noreply address — the one GitHub issues precisely so a commit need not
+// carry a personal mailbox — and it is what the policy lists.
+//
+// Fixtures used to hardcode a personal address instead. Every one of them was
+// printed by the case log below on every run of a public repository's CI, which
+// is republishing what the policy is arranged not to publish.
+const noreplyOperator = "66436734+KodyMike@users.noreply.github.com"
+
 // authorPolicyFile is the on-disk form of signing.AuthorPolicy. It is decoded
 // strictly: an unknown key is a failure rather than a silently ignored one,
 // for the same reason ADR-0028 refuses an unparseable Operators entry — a typo
 // in a policy with no cryptographic backstop must be loud.
 type authorPolicyFile struct {
-	PolicyFor     string   `json:"policy_for"`
-	DocumentedIn  string   `json:"documented_in"`
-	Operators     []string `json:"operators"`
-	AllowUnlinked bool     `json:"allow_unlinked"`
+	PolicyFor    string   `json:"policy_for"`
+	DocumentedIn string   `json:"documented_in"`
+	Operators    []string `json:"operators"`
+
+	// GrandfatheredNote and GrandfatheredCommits admit, one hash at a time,
+	// the commits that predate this policy and were authored with an address
+	// that is not listed above and must not be.
+	//
+	// Listing the address instead would put it in this file, in every refusal
+	// message, and in the author census below — on a public repository, on
+	// every CI run, forever. Naming the commits keeps the gate honest about
+	// them without republishing what it is trying not to republish.
+	//
+	// The list is CLOSED, and TestGH002ThisRepositorysCommitHistorySatisfiesI6
+	// enforces that: an entry matching no commit in the history is a failure,
+	// so the list cannot quietly grow into a general exemption.
+	GrandfatheredNote    string   `json:"grandfathered_note"`
+	GrandfatheredCommits []string `json:"grandfathered_commits"`
+
+	AllowUnlinked bool `json:"allow_unlinked"`
+}
+
+func loadAuthorPolicyFile(t *testing.T) authorPolicyFile {
+	t.Helper()
+	raw, err := os.ReadFile(authorPolicyPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", authorPolicyPath, err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var f authorPolicyFile
+	if err := dec.Decode(&f); err != nil {
+		t.Fatalf("decode %s: %v", authorPolicyPath, err)
+	}
+	return f
 }
 
 func loadAuthorPolicy(t *testing.T) signing.AuthorPolicy {
@@ -246,12 +286,12 @@ func TestGH002TheAuthorGateRejectsAForbiddenAuthor(t *testing.T) {
 		message string
 		refused bool
 	}{{
-		label:   "the human operator, listed by address",
-		email:   "irfanon87@gmail.com",
+		label:   "the operator, listed by address",
+		email:   noreplyOperator,
 		message: "feat: a commit by the operator\n",
 	}, {
-		label:   "the operator's GitHub noreply address, listed by address",
-		email:   "66436734+KodyMike@users.noreply.github.com",
+		label:   "the same operator on a squash merge",
+		email:   noreplyOperator,
 		message: "chore: a squash merge performed by the operator\n",
 	}, {
 		label:   "an unlinked address in a reserved TLD (RFC 2606)",
@@ -278,12 +318,12 @@ func TestGH002TheAuthorGateRejectsAForbiddenAuthor(t *testing.T) {
 		refused: true,
 	}, {
 		label:   "an admitted author, but the message co-authors a resolvable account",
-		email:   "irfanon87@gmail.com",
+		email:   noreplyOperator,
 		message: "feat: a commit with a co-author\n\nCo-authored-by: A Bot <bot@gmail.com>\n",
 		refused: true,
 	}, {
 		label: "an admitted author whose PROSE mentions the trailer key mid-line",
-		email: "irfanon87@gmail.com",
+		email: noreplyOperator,
 		message: "docs: explain the rule\n\nSIG-006 asserts no Co-authored-by is ever emitted, and\n" +
 			"Agent-Task exactly as ADR-0028 §5 describes.\n",
 	}}
@@ -372,7 +412,7 @@ func TestGH002ARangeThatSelectsNothingIsAFailure(t *testing.T) {
 	if _, err := runGit(ctx, dir, env, "init", "-q", "-b", "main"); err != nil {
 		t.Fatalf("git init: %v", err)
 	}
-	commitAs(ctx, t, dir, env, "irfanon87@gmail.com", "feat: something\n")
+	commitAs(ctx, t, dir, env, noreplyOperator, "feat: something\n")
 
 	if _, err := collect(ctx, dir, env, "HEAD..HEAD"); !errors.Is(err, errEmptyRange) {
 		t.Fatalf("an empty range returned %v, want %v", err, errEmptyRange)
@@ -437,21 +477,75 @@ func TestGH002ThisRepositorysCommitHistorySatisfiesI6(t *testing.T) {
 	}
 
 	policy := loadAuthorPolicy(t)
+	file := loadAuthorPolicyFile(t)
 	t.Logf("I6 gate: %d non-merge commits reachable from HEAD, policy %s", len(commits), authorPolicyPath)
 	seen := map[string]int{}
 	for _, c := range commits {
 		seen[c.Author]++
 	}
+	// The census prints an address in full only when the policy admits it, and
+	// an admitted address is a listed operator or a reserved domain — neither
+	// of which is anybody's personal mail. Every other address is a commit
+	// author this repository is not claiming as its own, and printing it here
+	// would republish it in the log of every run on a public repository. The
+	// domain and the count are what the census is read for.
 	for _, a := range sortedKeys(seen) {
-		t.Logf("  %4d  %s", seen[a], a)
+		t.Logf("  %4d  %s", seen[a], censusLabel(policy, a))
+	}
+
+	// A grandfathered commit is admitted by hash, so the address that authored
+	// it never appears. The entries are checked against the history first: one
+	// that matches nothing is a stale exemption, and a list of those is how a
+	// closed exception becomes an open one.
+	grandfathered := map[string]bool{}
+	for _, sha := range file.GrandfatheredCommits {
+		grandfathered[sha] = true
+	}
+	present := map[string]bool{}
+	for _, c := range commits {
+		if grandfathered[c.SHA] {
+			present[c.SHA] = true
+		}
+	}
+	for _, sha := range file.GrandfatheredCommits {
+		if !present[sha] {
+			t.Errorf("%s grandfathers %s, which is not a non-merge commit reachable from "+
+				"HEAD. An entry that matches nothing exempts nothing and hides that it is "+
+				"doing so; remove it.", authorPolicyPath, sha)
+		}
+	}
+	if n := len(file.GrandfatheredCommits); n > 0 {
+		t.Logf("%d commit(s) admitted by hash: they predate the policy and their author is "+
+			"deliberately not listed in it", n)
 	}
 
 	for _, f := range scanCommits(policy, commits) {
+		if grandfathered[f.SHA] {
+			continue
+		}
 		t.Errorf("I6 VIOLATION: %s\n"+
 			"      If this address is a human operator of this deployment, add it to %s.\n"+
 			"      It is never correct to add an agent address there (ADR-0028 §6).",
 			f, authorPolicyPath)
 	}
+}
+
+// censusLabel renders one author for the census above: in full when the policy
+// admits it, and as its domain alone when it does not.
+//
+// An admitted address is a listed operator or an address in a reserved domain,
+// and neither is personal. An address the policy does not admit is one this
+// repository is not claiming, and the census is a distribution rather than a
+// contact list — the domain and the count carry what it is read for.
+func censusLabel(p signing.AuthorPolicy, addr string) string {
+	if p.CheckAuthor(addr) == nil {
+		return addr
+	}
+	at := strings.LastIndex(addr, "@")
+	if at < 0 {
+		return "(not an address)"
+	}
+	return "(withheld)@" + addr[at+1:]
 }
 
 func repoRoot(ctx context.Context, t *testing.T, env []string) string {
