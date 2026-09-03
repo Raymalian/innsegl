@@ -361,3 +361,19 @@ maintainer ask "why is it like this?"
   asserted as a test; whether that trade is acceptable is a human's call to
   ratify, and re-tightening it needs a way to make the comparison without
   holding the deployment secret on a read path.
+- **ADR-0042** answers #117's "anyone can verify" with a public Rekor anchor
+  over a self-hosted Fulcio root, and is **proposed** rather than accepted: the
+  arrangement it recommends is a maintainer's call, not an inference. It rests
+  on two measurements — public Fulcio's allowlist enrolls no `spiffe` issuer
+  (ADR-0010, re-cited), and public Rekor performs no issuer or chain validation
+  on submission (`sigstore/rekor` read at `main` on 2026-09-03, with the three
+  call sites quoted). It leaves four things for a human. Where the Fulcio root
+  is published and how a verifier survives its rotation is unsettled, and a
+  verification story resting on a certificate nobody can fetch is not one. doc
+  05 §1's twelve rows assume a local Rekor and do not describe a deployment
+  whose log is somebody else's. doc 07 has no IDs, and what can honestly be
+  tested is a smaller claim than the arrangement makes, so naming them is not a
+  mechanical addition. And one empirical point is deliberately left open: no
+  already-published entry in the public log bearing a foreign CA's certificate
+  was located, and the ADR says so rather than presenting the source finding as
+  though an example had been seen.
