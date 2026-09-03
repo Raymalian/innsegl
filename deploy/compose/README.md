@@ -103,7 +103,7 @@ this project, and every line of it matters:
   `.../spire/agent/x509pop/<sha1 of the agent certificate>`, freshly minted on
   every `up` after a `down -v`. `register.sh` puts it where compose reads it
   for you. The file is gitignored, because it describes one booted stack.
-- **`build` before `up`.** Three of the seven services in `innsegl.yml` are the
+- **`build` before `up`.** Four of the eight services in `innsegl.yml` are the
   same locally-built `innsegl` image and one is the dashboard, so the first
   boot compiles rather than pulls. About a minute, warm.
 
@@ -115,7 +115,18 @@ curl -s http://127.0.0.1:5555/api/v1/rootCert       # a PEM CA certificate
 curl -s http://127.0.0.1:3000/api/v1/log/publicKey  # a PKIX public key
 curl -s http://127.0.0.1:8081/readyz                # the MCP's own readiness
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/  # the dashboard
+curl -s http://127.0.0.1:8082/api/v1/health         # its backend, and what its
+                                                    # credential may do
 ```
+
+The last line goes through the dashboard's own nginx to `innsegl-api`, so it
+answers two questions at once: the proxy is wired, and the query API is up. The
+body is the report `api.Open` measured **on the server** — `"role":
+"innsegl_reader"`, `"superuser": false`, and eight write probes each refused
+with SQLSTATE `42501`. doc 05 §1's "no write credentials mounted" is a fact you
+read back rather than a claim in a README; `innsegl api` refuses to start at
+all on a credential any of those probes gets past, and there is no flag to turn
+that off.
 
 Bytes that parse, not a status code
 ([ADR-0024](../../docs/adr/0024-readiness-probes-sigstore-by-fetching-its-trust-material.md)):
@@ -215,7 +226,7 @@ summary:
 |---|---|
 | [`spire/README.md`](spire/README.md) | `spire-server`, `spire-agent`, `spire-oidc` — the trust domain, workload attestation, and the JWT-SVID → OIDC bridge |
 | [`sigstore/README.md`](sigstore/README.md) | `fulcio`, `rekor` and Rekor's backing Trillian log and database — the CA and the transparency log |
-| [`innsegl/README.md`](innsegl/README.md) | `postgres`, `minio`, `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-dashboard`, `demo-agent` — **the components this project is**, and the append-only database role they run under |
+| [`innsegl/README.md`](innsegl/README.md) | `postgres`, `minio`, `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api`, `innsegl-dashboard`, `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
 
 The first two are Innsegl's dependencies. The third is Innsegl.
 
@@ -301,15 +312,25 @@ statement fail?" would pass the database owner are in
 Two things, named here because a first-run experience that quietly omits part
 of its topology is worse than one that says so.
 
-**The dashboard's BFF.** `innsegl-dashboard` ships as its UI half. The BFF is
-`internal/api` — it serves `GET /api/v1/runs` and `GET /api/v1/proof/{sha}`,
-and its `readonly.go` both provisions the read-only role doc 05 §1's dashboard
-note is about *and* refuses to serve a request if the server says that
-credential can write. It has **no `cmd/` entry point**: no `main` in this
-module constructs an `api.Server`, so there is nothing to containerise. Until
-there is, the dashboard holds **no database credential at all** — which
-satisfies "no write credentials mounted" by having none — and every view that
-reads the query API renders its own load-failure state. Visible, and honest.
+**Authentication.** Neither the dashboard nor the query API authenticates
+anybody. `innsegl api` authenticates nobody and authorises nothing, and says so
+in its own `--help`; doc 05 §3 puts `dashboard.innsegl.dev` behind Cloudflare
+Access, and RM-062 (#70) is the issue that does it. Nothing here invents a
+scheme in the meantime, and every published port in the stack is bound to
+loopback. What *is* enforced is the half that survives a misconfigured proxy:
+the credential the query API holds cannot write, whoever reaches it — a
+Postgres role the server itself certifies, not the absence of write code.
+
+The dashboard's BFF used to be on this list. It is here now: `innsegl-api`
+runs `innsegl api` against `innsegl_reader`, the read-only role
+`innsegl-db-init` provisions from `internal/api/readonly.sql`, and
+`innsegl-dashboard`'s nginx proxies `/api/v1/` to it. Ask it what its own
+credential can do:
+
+```bash
+docker compose -f deploy/compose/innsegl.yml exec innsegl-api \
+  wget -q -O- http://127.0.0.1:8082/api/v1/health
+```
 
 **`make smoke` still prints the over-privileged warning.** OPS-004 does not run
 `innsegl.yml`: it starts its own Postgres and its own `innsegl serve` with

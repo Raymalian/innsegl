@@ -13,7 +13,7 @@ doc 05 §1's other seven rows, none of which existed as a compose service before
 | `innsegl-mcp` | service | attested through the Workload API; append-only DB role |
 | `innsegl-reconciler` | service | same binary, `reconcile` |
 | `innsegl-sealer` | service | same binary, `seal` |
-| `innsegl-dashboard` | service, **UI half only** | the BFF has no `cmd/` entry point — see below |
+| `innsegl-dashboard` | **two services** | `innsegl-dashboard` is the UI — nginx and the built React bundle, holding no database credential at all — and `innsegl-api` is the BFF, the only holder of the read-only role. The row's "No write credentials mounted" is satisfied by both at once: nothing is mounted on the UI, and what is mounted next door cannot write |
 | `demo-agent` | service, `--profile demo` | a curl MCP client; runs to completion |
 
 Three services here are not doc 05 §1 rows. `innsegl-db-init` and
@@ -99,25 +99,66 @@ happened to be.
 
 ---
 
+## The other database role: `innsegl_reader`
+
+doc 05 §1's dashboard row ends "No write credentials mounted — enforced by
+giving it a read-only DB role". That role is `innsegl_reader`, and
+`innsegl-api` is the only thing that connects as it.
+
+Its grants are **`internal/api/readonly.sql`** — not a copy of them.
+`innsegl.yml` mounts that file into `innsegl-db-init` exactly as it mounts
+`migrations/`, and for the same reason: `api.EnsureReadOnlyRole` `go:embed`s
+it, and `innsegl api` probes the credential against what it produced before it
+will serve a request. A second set of GRANTs under `deploy/` would be a
+read-only posture that could drift from the one the API measures against, and
+the failure mode of that drift is an `innsegl-api` that exits **13 WRITABLE**
+in a stack whose own bootstrap reported the role fine. `db-init.sh` translates
+Go's two `fmt` verbs into psql's `:"role"` and `:"db"` on the way in, and
+refuses loudly if the file ever grows a third.
+
+Then it asks the server, exactly as it does for the appender:
+`verify-reader-role.sh` connects **as** `innsegl_reader` and attempts every
+write `api.Open` attempts, plus the I4 verbs. MEASURED on postgres:16:
+
+| role | statement | result |
+|---|---|---|
+| `innsegl_reader` | `INSERT INTO innsegl.events` | ERROR **42501** permission denied (the ACL) |
+| `innsegl_reader` | `UPDATE innsegl.events` | ERROR **42501** permission denied (the ACL) |
+| `innsegl_reader` | `DELETE FROM innsegl.events` | ERROR **42501** permission denied (the ACL) |
+| owner | `INSERT INTO innsegl.events` | ERROR **IN002** the chain-link trigger |
+| owner | `UPDATE innsegl.events` | ERROR **IN001** the append-only trigger |
+| owner | `DELETE FROM innsegl.events` | ERROR **IN001** the append-only trigger |
+
+Both are refused; only one is refused **by privilege**. A check that asked "did
+the write fail?" would pass the database owner — the credential the gate exists
+to catch. So `42501` and `25006` are the only refusals that count, and anything
+else, success included, means the ACL let the statement through. `innsegl api`
+uses the same rule, and it has no flag to switch the check off.
+
+Ask a running stack yourself:
+
+```bash
+docker compose -f deploy/compose/innsegl.yml exec innsegl-api \
+  wget -q -O- http://127.0.0.1:8082/api/v1/health
+```
+
+The body is the report `api.Open` measured — role, `superuser`,
+`default_transaction_read_only`, and every probe with its SQLSTATE. "No write
+credentials mounted" is a fact you read back rather than a claim in a README.
+
+---
+
 ## What is not here
 
-**The dashboard's BFF.** `internal/api` serves `GET /api/v1/runs` and
-`GET /api/v1/proof/{sha}`, and `readonly.go` both provisions the read-only role
-doc 05 §1's dashboard note is about *and* refuses to serve a request if the
-server says that credential can write. It has **no `cmd/` entry point** — no
-`main` in this module constructs an `api.Server` — so there is nothing to put
-in a container.
+**Authentication.** Neither `innsegl-dashboard` nor `innsegl-api` authenticates
+anybody. `innsegl api` says so in its own `--help`, and doc 05 §3 puts
+`dashboard.innsegl.dev` behind Cloudflare Access — RM-062 (#70) is the issue
+that does it. Nothing here invents a scheme in the meantime, and both services
+publish on loopback only.
 
-Until there is, `innsegl-dashboard` serves the built React application and
-holds **no database credential at all**, which satisfies "no write credentials
-mounted" in the only way currently available: by having none. Every view that
-reads the query API renders its own load-failure state. That is visible and
-honest; a service that claimed to be this row and quietly was not would be
-worse.
-
-The `innsegl-ledger-readonly` network is declared with `postgres` and the
-dashboard on it, so that when the BFF lands, joining it and holding
-`api.EnsureReadOnlyRole`'s credential is the whole of what changes.
+What *is* enforced, and it is the half that survives a misconfigured proxy: the
+credential the query API holds **cannot write**, whoever reaches it. See
+"The other database role" above.
 
 ---
 
@@ -160,6 +201,22 @@ make innsegl-verify-commit COMMIT=<sha>   # verify with NO route to the ledger
 make innsegl-down
 ```
 
+`make innsegl-verify` asks about the **appender**. The reader has the same
+question and no Makefile target of its own yet; ask it directly:
+
+```sh
+docker compose -f deploy/compose/innsegl.yml \
+  run --rm --entrypoint sh innsegl-db-init /innsegl/init/verify-reader-role.sh
+```
+
+Or ask the running service, which reports what `api.Open` measured when it
+started rather than re-measuring:
+
+```sh
+docker compose -f deploy/compose/innsegl.yml exec innsegl-api \
+  wget -q -O- http://127.0.0.1:8082/api/v1/health
+```
+
 ### Two ordering requirements, and why they exist
 
 **`register.sh` must run after the image is built.** The MCP is an attested
@@ -189,7 +246,7 @@ mergeable are deliberately not:
 | network | members |
 |---|---|
 | `innsegl-ledger` (internal) | postgres, db-init, mcp, reconciler, sealer |
-| `innsegl-ledger-readonly` (internal) | postgres, dashboard |
+| `innsegl-ledger-readonly` (internal) | postgres, api, dashboard |
 | `innsegl-objects` (internal) | minio, object-init, sealer, canary |
 | `innsegl-mcp-clients` | mcp, demo-agent |
 | `innsegl-dashboard-frontend` | dashboard |
@@ -197,6 +254,14 @@ mergeable are deliberately not:
 The MCP is on no network with MinIO. The dashboard is on no network with the
 MCP — one shared frontend network would give it a route to the write surface,
 which is the one thing doc 05 §1's dashboard note forbids.
+
+`innsegl-api` **adds no network**. It joins `innsegl-ledger-readonly`, which
+#109 declared in advance for exactly this arrival, and `innsegl-sigstore`,
+which the proof BFF needs. The UI→BFF hop rides `innsegl-ledger-readonly`
+because both containers are already members of it for reasons doc 05 §1 gives,
+and a sixth network would buy no isolation the membership list does not already
+describe — unlike the dashboard/MCP frontend split, which buys the one thing
+that note forbids.
 
 MEASURED: this file adds exactly five networks (17 -> 22 on a machine already
 running the two dependency stacks and one test harness). The full reference

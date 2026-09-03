@@ -208,24 +208,8 @@ func TestOPS009TheAppendOnlyRoleIsProvisionedAndProven(t *testing.T) {
 // reason it is the right one is the measurement in this file's header.
 func probeOnce(ctx context.Context, t *testing.T, conn *pgx.Conn, sql string) (bool, string) {
 	t.Helper()
-	tx, err := conn.Begin(ctx)
-	if err != nil {
-		return true, "the probe could not be run: " + err.Error()
-	}
-	defer func() { discardRollback(tx.Rollback(ctx)) }()
-
-	if _, err := tx.Exec(ctx, "SET TRANSACTION READ WRITE"); err != nil {
-		return false, "refused before the statement ran (" + sqlState(err) + ")"
-	}
-	if _, err := tx.Exec(ctx, sql); err != nil {
-		state := sqlState(err)
-		if isPrivilegeRefusal(state) {
-			return false, "refused by privilege (" + state + ")"
-		}
-		return true, "the ACL allowed the statement; it failed for another reason (" +
-			state + "): " + firstLine(err.Error())
-	}
-	return true, "the statement succeeded and was rolled back"
+	out := probe(ctx, t, conn, sql)
+	return out.allowed, out.detail
 }
 
 // discardRollback swallows the rollback of a probe transaction. The probe's
