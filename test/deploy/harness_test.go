@@ -42,6 +42,14 @@ const (
 	// parameter, exactly as api.EnsureReadOnlyRole takes the reader's name.
 	appenderRole     = "innsegl_appender"
 	appenderPassword = "innsegl-deploy-test-appender"
+
+	// readerRole is the role `innsegl api` connects as — api.ReadOnlyRole,
+	// spelled here rather than imported for the same reason appenderRole is
+	// spelled: the deployment takes it as a parameter and a test that read its
+	// expectation out of the code under test would agree with it by
+	// construction.
+	readerRole     = "innsegl_reader"
+	readerPassword = "innsegl-deploy-test-reader"
 )
 
 var errDependencyAbsent = errors.New("a required dependency is absent")
@@ -146,6 +154,13 @@ func (c *ledgerContainer) appenderDSN() string {
 		appenderRole, appenderPassword, c.port, ownerDatabase)
 }
 
+// readerDSN is the credential doc 05 §1 mounts on the dashboard — $INNSEGL_API_DSN
+// and never $INNSEGL_LEDGER_DSN.
+func (c *ledgerContainer) readerDSN() string {
+	return fmt.Sprintf("postgres://%s:%s@127.0.0.1:%s/%s?sslmode=disable",
+		readerRole, readerPassword, c.port, ownerDatabase)
+}
+
 func startLedger(ctx context.Context, t *testing.T) (*ledgerContainer, error) {
 	t.Helper()
 	if err := dockerUsable(ctx); err != nil {
@@ -217,8 +232,18 @@ func (c *ledgerContainer) copyDeployScripts(ctx context.Context, root string) er
 	for _, cp := range [][2]string{
 		{root + "/migrations/.", "/innsegl/migrations"},
 		{root + "/deploy/compose/innsegl/.", "/innsegl/init"},
+		// internal/api/readonly.sql, at the path deploy/compose/innsegl.yml
+		// mounts it. NOT A COPY, for the reason the migrations are not a copy:
+		// api.EnsureReadOnlyRole embeds this exact file, and a second set of
+		// GRANTs in deploy/ would be a read-only posture that could drift from
+		// the one the API's own start-up assertion measures against.
+		{root + "/internal/api/readonly.sql", "/innsegl/api/readonly.sql"},
 	} {
-		if _, err := docker(ctx, "exec", c.name, "mkdir", "-p", cp[1]); err != nil {
+		dir := cp[1]
+		if strings.HasSuffix(dir, ".sql") {
+			dir = dir[:strings.LastIndexByte(dir, '/')]
+		}
+		if _, err := docker(ctx, "exec", c.name, "mkdir", "-p", dir); err != nil {
 			return err
 		}
 		if _, err := docker(ctx, "cp", cp[0], c.name+":"+cp[1]); err != nil {
@@ -239,6 +264,9 @@ func (c *ledgerContainer) runInit(ctx context.Context, script string, extra ...s
 		"--env", "PGDATABASE=" + ownerDatabase,
 		"--env", "INNSEGL_APPENDER_ROLE=" + appenderRole,
 		"--env", "INNSEGL_APPENDER_PASSWORD=" + appenderPassword,
+		"--env", "INNSEGL_READER_ROLE=" + readerRole,
+		"--env", "INNSEGL_READER_PASSWORD=" + readerPassword,
+		"--env", "INNSEGL_READONLY_SQL=/innsegl/api/readonly.sql",
 	}
 	args = append(args, extra...)
 	args = append(args, c.name, "sh", "/innsegl/init/"+script)
