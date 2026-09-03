@@ -62,10 +62,18 @@ func (c Claim) Present() bool {
 // the identity's run segment and Agent-Task to its task segment), and that
 // redundancy is what lets check 3 settle all three from the certificate alone,
 // with no access to this system's database — which is I5.
+//
+// An identity that does not parse into the six named segments is one this
+// comparison cannot settle Agent-Run or Agent-Task against — it is not one
+// that agrees with them (#137). This fails closed: whichever of the two
+// trailers is present is reported as unconfirmable, in those words, rather
+// than as a disagreement that was never established. ADR-0042 records why
+// this matters and why it is not, by itself, support for non-SPIFFE
+// identities: a public Fulcio root issuing such a SAN remains refused.
 func (c Claim) disagreesWith(san string) string {
 	parts, err := splitSPIFFEID(san)
 	if err != nil {
-		return ""
+		return c.unconfirmable(san, err)
 	}
 	if c.Run != "" && c.Run != parts[runSegment] {
 		return fmt.Sprintf("the %s trailer is %q; the certificate's identity names the run %q",
@@ -76,6 +84,30 @@ func (c Claim) disagreesWith(san string) string {
 			"in the certificate's identity", trailerAgentTask, c.Task, parts[taskSegment])
 	}
 	return ""
+}
+
+// unconfirmable names the redundant trailers this claim carries that
+// disagreesWith could not check against san, because san does not parse as a
+// SPIFFE ID, or "" when the claim carries neither — nothing was owed a
+// verdict, so nothing is reported.
+func (c Claim) unconfirmable(san string, parseErr error) string {
+	var trailers []string
+	if c.Run != "" {
+		trailers = append(trailers, trailerAgentRun)
+	}
+	if c.Task != "" {
+		trailers = append(trailers, trailerAgentTask)
+	}
+	if len(trailers) == 0 {
+		return ""
+	}
+	noun := "trailer"
+	if len(trailers) > 1 {
+		noun = "trailers"
+	}
+	return fmt.Sprintf("the certificate's identity %q could not be read as a SPIFFE ID (%v), "+
+		"so the %s %s could not be checked against it",
+		san, parseErr, strings.Join(trailers, " and "), noun)
 }
 
 // ReadClaim reads the three trailers out of a commit message.

@@ -151,6 +151,23 @@ const (
 	// well under internal/spire's 15s DefaultTimeout, which is the real bound
 	// on how long a withheld request can park the server.
 	crashSettleProof = time.Second
+
+	// crashSettleBudget bounds how long countSettled polls a count before
+	// giving up on it ever stopping. RM-069 (#90): a COMMIT the dying client
+	// had already handed to Postgres before its SIGKILL landed can become
+	// visible to a fresh read a few instructions AFTER the harness's own
+	// first read of the chain, not before it — coverage instrumentation
+	// widens that gap enough to observe it, though a plain `go test` rarely
+	// does. Wide enough to absorb that; short enough that a shot with
+	// nothing racing pays only crashSettleStableReads polls, a millisecond
+	// apiece.
+	crashSettleBudget = 5 * time.Second
+
+	// crashSettleStableReads is how many consecutive equal reads
+	// countSettled requires before it calls a count settled. Two in a row is
+	// not proof the value has stopped moving — it can just as well have been
+	// sampled between two changes — so this asks for more.
+	crashSettleStableReads = 20
 )
 
 // ---------------------------------------------------------------------------
@@ -829,6 +846,29 @@ func countEvents(records []event.Fields, eventType, runID string) int {
 		n++
 	}
 	return n
+}
+
+// countSettled polls the chain for the number of eventType events carrying
+// runID until the count has stopped moving — crashSettleStableReads equal
+// reads in a row — or gives up after crashSettleBudget. See RM-069 (#90):
+// reading the chain exactly once, immediately after a SIGKILL, can undercount
+// by one event that is already durable in Postgres but not yet visible to
+// that particular read, because the dying client had already handed its
+// COMMIT to the kernel's socket buffer before the signal landed.
+//
+// settled is false only when the count never finished moving inside the
+// budget. That is a harness finding — the budget was too small, or the count
+// truly never stops — and it is deliberately not folded into "a duplicate was
+// found": the caller checks that separately, once the count this function
+// returns can be trusted.
+func (c *campaign) countSettled(t *testing.T, eventType, runID string) (value int, settled bool) {
+	t.Helper()
+	maxReads := int(crashSettleBudget/crashPollInterval) + 1
+	return settleReads(
+		func() int { return countEvents(c.chain(t), eventType, runID) },
+		crashSettleStableReads, maxReads,
+		func() { time.Sleep(crashPollInterval) },
+	)
 }
 
 // eventByKey finds the single event an idempotency key names, if it is there.
@@ -1615,6 +1655,41 @@ func windowCensus(landings, firedAt map[string]int, window string) censusVerdict
 	default:
 		return windowNeverFiredAt
 	}
+}
+
+// settleReads polls read until it returns the same value stableFor times in a
+// row, or gives up once it has called read maxReads times in total —
+// whichever comes first.
+//
+// This is the pure half of RM-069 (#90). The race it exists to close: a value
+// read once, immediately after some external event, can be one behind a value
+// that is already fixed but has not yet become visible to that particular
+// read — so a single call to read is not evidence of anything, and this
+// function asks read to stop moving before trusting what it says. stableFor
+// == 1 is the OLD behaviour — trust the first read outright — kept reachable
+// here on purpose so a caller (or a test) can name the regression it replaces
+// rather than only the fix that replaces it.
+func settleReads(read func() int, stableFor, maxReads int, wait func()) (value int, settled bool) {
+	if stableFor < 1 {
+		stableFor = 1
+	}
+	last := read()
+	streak := 1
+	reads := 1
+	for streak < stableFor {
+		if reads >= maxReads {
+			return last, false
+		}
+		wait()
+		next := read()
+		reads++
+		if next == last {
+			streak++
+		} else {
+			last, streak = next, 1
+		}
+	}
+	return last, true
 }
 
 // stalledUntil widens a trigger so that it also waits for the server to be
