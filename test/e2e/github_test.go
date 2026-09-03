@@ -50,37 +50,7 @@ type authorPolicyFile struct {
 	DocumentedIn string   `json:"documented_in"`
 	Operators    []string `json:"operators"`
 
-	// GrandfatheredNote and GrandfatheredCommits admit, one hash at a time,
-	// the commits that predate this policy and were authored with an address
-	// that is not listed above and must not be.
-	//
-	// Listing the address instead would put it in this file, in every refusal
-	// message, and in the author census below — on a public repository, on
-	// every CI run, forever. Naming the commits keeps the gate honest about
-	// them without republishing what it is trying not to republish.
-	//
-	// The list is CLOSED, and TestGH002ThisRepositorysCommitHistorySatisfiesI6
-	// enforces that: an entry matching no commit in the history is a failure,
-	// so the list cannot quietly grow into a general exemption.
-	GrandfatheredNote    string   `json:"grandfathered_note"`
-	GrandfatheredCommits []string `json:"grandfathered_commits"`
-
 	AllowUnlinked bool `json:"allow_unlinked"`
-}
-
-func loadAuthorPolicyFile(t *testing.T) authorPolicyFile {
-	t.Helper()
-	raw, err := os.ReadFile(authorPolicyPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", authorPolicyPath, err)
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	var f authorPolicyFile
-	if err := dec.Decode(&f); err != nil {
-		t.Fatalf("decode %s: %v", authorPolicyPath, err)
-	}
-	return f
 }
 
 func loadAuthorPolicy(t *testing.T) signing.AuthorPolicy {
@@ -477,7 +447,6 @@ func TestGH002ThisRepositorysCommitHistorySatisfiesI6(t *testing.T) {
 	}
 
 	policy := loadAuthorPolicy(t)
-	file := loadAuthorPolicyFile(t)
 	t.Logf("I6 gate: %d non-merge commits reachable from HEAD, policy %s", len(commits), authorPolicyPath)
 	seen := map[string]int{}
 	for _, c := range commits {
@@ -493,36 +462,7 @@ func TestGH002ThisRepositorysCommitHistorySatisfiesI6(t *testing.T) {
 		t.Logf("  %4d  %s", seen[a], censusLabel(policy, a))
 	}
 
-	// A grandfathered commit is admitted by hash, so the address that authored
-	// it never appears. The entries are checked against the history first: one
-	// that matches nothing is a stale exemption, and a list of those is how a
-	// closed exception becomes an open one.
-	grandfathered := map[string]bool{}
-	for _, sha := range file.GrandfatheredCommits {
-		grandfathered[sha] = true
-	}
-	present := map[string]bool{}
-	for _, c := range commits {
-		if grandfathered[c.SHA] {
-			present[c.SHA] = true
-		}
-	}
-	for _, sha := range file.GrandfatheredCommits {
-		if !present[sha] {
-			t.Errorf("%s grandfathers %s, which is not a non-merge commit reachable from "+
-				"HEAD. An entry that matches nothing exempts nothing and hides that it is "+
-				"doing so; remove it.", authorPolicyPath, sha)
-		}
-	}
-	if n := len(file.GrandfatheredCommits); n > 0 {
-		t.Logf("%d commit(s) admitted by hash: they predate the policy and their author is "+
-			"deliberately not listed in it", n)
-	}
-
 	for _, f := range scanCommits(policy, commits) {
-		if grandfathered[f.SHA] {
-			continue
-		}
 		t.Errorf("I6 VIOLATION: %s\n"+
 			"      If this address is a human operator of this deployment, add it to %s.\n"+
 			"      It is never correct to add an agent address there (ADR-0028 §6).",
