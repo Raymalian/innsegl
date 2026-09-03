@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -44,12 +45,102 @@ const (
 	postgresDB       = "innsegl"
 )
 
+// dockerSkip is set when there is no Docker daemon to ask; dockerFailure when
+// Docker is present and the container still did not start. Two outcomes, two
+// verdicts (#101).
 var (
-	sharedPG        *pgContainer
-	dockerSkip      string
-	testDBSeq       atomic.Int64
-	errDockerAbsent = errors.New("docker is not available")
+	sharedPG      *pgContainer
+	dockerSkip    string
+	dockerFailure string
+	testDBSeq     atomic.Int64
 )
+
+// ---------------------------------------------------------------------------
+// #101: a failed dependency is not a skip.
+//
+// errDependencyAbsent marks the ONLY conditions under which skipping is
+// honest: there is no Docker daemon (or INNSEGL_TEST_NO_DOCKER asks for none),
+// or there is no gitsign binary. Nothing else wraps it.
+//
+// Everything else that can go wrong while standing a dependency up — an image
+// that cannot be pulled, a port that cannot be bound, a network Docker refuses
+// to create because its predefined address pools are used up, a container that
+// never becomes healthy — is a FAILURE. Reporting one of those as a skip turns
+// it into a pass-shaped outcome: `go test` exits zero, the package reports ok,
+// and the idempotency store, SIG-001, MCP-012 and the get_credential
+// authorization case did not run. That is what CI produced on a runner whose
+// "Require Docker" step had already passed.
+//
+// internal/verify/verifyharness_test.go carries the reference shape; both
+// branches here are exercised by
+// TestHAR002AnAbsentDependencyIsASkipAndAFaultIsAFailure.
+// ---------------------------------------------------------------------------
+var errDependencyAbsent = errors.New("a required dependency is absent")
+
+// startupOutcome routes a start-up error to exactly one of the two variables.
+// An absent dependency is a skip; anything else is a failure. There is no
+// third answer, and the third answer is how this package came to report ok
+// with nothing having run.
+func startupOutcome(err error) (skip, failure string) {
+	switch {
+	case err == nil:
+		return "", ""
+	case errors.Is(err, errDependencyAbsent):
+		return err.Error(), ""
+	default:
+		return "", err.Error()
+	}
+}
+
+// harnessRequirement is what a require-function must do for the calling test.
+type harnessRequirement int
+
+const (
+	harnessProceed harnessRequirement = iota
+	harnessSkipTest
+	harnessFailTest
+)
+
+// harnessNeed decides between the three. A failure outranks a skip: if the
+// dependency broke, the reason it broke is what the developer needs to read.
+func harnessNeed(up bool, skip, failure string) harnessRequirement {
+	switch {
+	case failure != "":
+		return harnessFailTest
+	case !up:
+		return harnessSkipTest
+	default:
+		return harnessProceed
+	}
+}
+
+// requireStartup ends the calling test the honest way when a per-test stack
+// did not come up. The lazily-built stacks in this package (get_credential's,
+// sign_commit's, health's) cannot use TestMain — it belongs to the idempotency
+// harness — so they route through here instead.
+func requireStartup(t *testing.T, err error, unproven string) {
+	t.Helper()
+	skip, failure := startupOutcome(err)
+	if failure != "" {
+		t.Fatalf("a dependency this case needs did not come up, and Docker is "+
+			"present and working: %s\n\nThis is a FAILURE and not a skip "+
+			"(#101). %s", failure, unproven)
+	}
+	if skip != "" {
+		t.Skipf("skipping: %s. %s", skip, unproven)
+	}
+}
+
+// oneLine collapses a multi-line subprocess error into a single line.
+//
+// docker and `docker compose` report progress on stderr, so a failure arrives
+// as several lines of which only the last usually names the cause. Go's test
+// JSON stream emits each line as its own event, and the CI failure behind #101
+// read "Network innsegl-verifytest-40427-spire-admin  Creating" — compose's
+// first progress line, with the fault itself on a line the summary never showed.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
 
 func postgresImage() string {
 	if v := os.Getenv("INNSEGL_TEST_POSTGRES_IMAGE"); v != "" {
@@ -65,20 +156,20 @@ func docker(ctx context.Context, args ...string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+			strings.Join(args, " "), err, oneLine(stderr.String()))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
 func dockerUsable(ctx context.Context) error {
 	if os.Getenv("INNSEGL_TEST_NO_DOCKER") != "" {
-		return fmt.Errorf("%w: INNSEGL_TEST_NO_DOCKER is set", errDockerAbsent)
+		return fmt.Errorf("%w: INNSEGL_TEST_NO_DOCKER is set", errDependencyAbsent)
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("%w: %w", errDockerAbsent, err)
+		return fmt.Errorf("%w: %w", errDependencyAbsent, err)
 	}
 	if _, err := docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
-		return fmt.Errorf("%w: no reachable daemon: %w", errDockerAbsent, err)
+		return fmt.Errorf("%w: no reachable daemon: %w", errDependencyAbsent, err)
 	}
 	return nil
 }
@@ -182,9 +273,14 @@ func (c *pgContainer) remove() error {
 func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	if err := dockerUsable(ctx); err != nil {
+		// The only honest skip: there is no daemon to ask.
 		dockerSkip = err.Error()
 	} else if pg, err := startPG(ctx); err != nil {
-		dockerSkip = fmt.Sprintf("could not start %s: %v", postgresImage(), err)
+		// Docker is present and working and the container still did not come
+		// up. That is an infrastructure FAILURE, not an absent dependency, and
+		// conflating the two is #101.
+		dockerSkip, dockerFailure = startupOutcome(
+			fmt.Errorf("could not start %s: %w", postgresImage(), err))
 	} else {
 		sharedPG = pg
 	}
@@ -204,11 +300,19 @@ func TestMain(m *testing.M) {
 // what went unproven. It never lets a storage test pass without a database.
 func requirePG(t *testing.T) *pgContainer {
 	t.Helper()
-	if sharedPG == nil {
+	switch harnessNeed(sharedPG != nil, dockerSkip, dockerFailure) {
+	case harnessFailTest:
+		t.Fatalf("the test Postgres did not come up, and Docker is present and "+
+			"working: %s\n\nThis is a FAILURE and not a skip (#101): an "+
+			"infrastructure fault reported as a skip exits zero and reports ok "+
+			"while the idempotency store, SIG-001 and MCP-012 did not run.",
+			dockerFailure)
+	case harnessSkipTest:
 		t.Skipf("skipping: no real Postgres (%s). "+
 			"This test proves nothing about the idempotency store without one; "+
 			"start Docker, or set INNSEGL_TEST_POSTGRES_IMAGE, and re-run.",
 			dockerSkip)
+	case harnessProceed:
 	}
 	return sharedPG
 }
@@ -317,4 +421,89 @@ func mcpError(t *testing.T, err error) *Error {
 		t.Fatalf("error %v (%T) is not an *Error; there is no error_class to report (IP §4)", err, err)
 	}
 	return e
+}
+
+// ---------------------------------------------------------------------------
+// HAR-002 — #101. Both branches of the routing rule, exercised.
+//
+// A routing rule nothing exercises is a routing rule nobody has checked, which
+// is exactly how #101 survived in nine harnesses at once. This case pins the
+// two outcomes apart: an ABSENT dependency is a skip, and anything else is a
+// failure that says so.
+// ---------------------------------------------------------------------------
+
+func TestHAR002AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
+	t.Run("no docker is a skip", func(t *testing.T) {
+		t.Setenv("INNSEGL_TEST_NO_DOCKER", "1")
+		err := dockerUsable(t.Context())
+		if err == nil {
+			t.Fatal("dockerUsable answered nil with INNSEGL_TEST_NO_DOCKER set")
+		}
+		if !errors.Is(err, errDependencyAbsent) {
+			t.Fatalf("%v does not wrap errDependencyAbsent, so it would be routed to a "+
+				"FAILURE and a developer with no Docker could not run this package", err)
+		}
+		skip, failure := startupOutcome(err)
+		if skip == "" || failure != "" {
+			t.Fatalf("startupOutcome(%v) = (%q, %q), want a skip and no failure", err, skip, failure)
+		}
+	})
+
+	t.Run("no gitsign is a skip", func(t *testing.T) {
+		t.Setenv("INNSEGL_GITSIGN", filepath.Join(t.TempDir(), "no-such-gitsign"))
+		_, err := scFindGitsign(t.Context())
+		if err == nil {
+			t.Fatal("scFindGitsign accepted a path that does not exist")
+		}
+		if !errors.Is(err, errDependencyAbsent) {
+			t.Fatalf("%v does not wrap errDependencyAbsent; a machine without gitsign "+
+				"would be told the suite FAILED", err)
+		}
+		skip, failure := startupOutcome(err)
+		if skip == "" || failure != "" {
+			t.Fatalf("startupOutcome(%v) = (%q, %q), want a skip and no failure", err, skip, failure)
+		}
+	})
+
+	t.Run("a dependency that did not start is a failure", func(t *testing.T) {
+		// The exact shape #100 produces on this machine, and the shape the CI
+		// run in #101 produced: Docker is present, working, and refuses to
+		// create the network because its address pools are used up.
+		err := fmt.Errorf("could not start the idempotency store's postgres: %w",
+			errors.New("Error response from daemon: could not find an available, "+
+				"non-overlapping IPv4 address pool among the defaults to assign "+
+				"to the network"))
+		if errors.Is(err, errDependencyAbsent) {
+			t.Fatal("an exhausted Docker address pool wraps errDependencyAbsent; it would " +
+				"be reported as a skip and the idempotency, SIG-001 and MCP-012 cases would silently not run")
+		}
+		skip, failure := startupOutcome(err)
+		if failure == "" || skip != "" {
+			t.Fatalf("startupOutcome(%v) = (%q, %q), want a failure and no skip", err, skip, failure)
+		}
+	})
+
+	t.Run("a healthy start-up is neither", func(t *testing.T) {
+		if skip, failure := startupOutcome(nil); skip != "" || failure != "" {
+			t.Fatalf("startupOutcome(nil) = (%q, %q), want both empty", skip, failure)
+		}
+	})
+
+	t.Run("a failure outranks a skip", func(t *testing.T) {
+		for _, tc := range []struct {
+			name          string
+			up            bool
+			skip, failure string
+			want          harnessRequirement
+		}{
+			{"a failure outranks everything", false, "no docker", "boom", harnessFailTest},
+			{"nothing up and no failure is a skip", false, "no docker", "", harnessSkipTest},
+			{"a live dependency proceeds", true, "", "", harnessProceed},
+		} {
+			if got := harnessNeed(tc.up, tc.skip, tc.failure); got != tc.want {
+				t.Errorf("%s: harnessNeed(%v, %q, %q) = %d, want %d",
+					tc.name, tc.up, tc.skip, tc.failure, got, tc.want)
+			}
+		}
+	})
 }

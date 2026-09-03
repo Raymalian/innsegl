@@ -237,8 +237,8 @@ func TestREC003AndREC004AgainstARealRekorAndARealSignature(t *testing.T) {
 	defer cancel()
 
 	if err := dockerUsable(ctx); err != nil {
-		t.Skipf("skipping: no docker (%v). REC-004 is the claim that a compromised MCP "+
-			"cannot forge attribution; a mocked Rekor cannot prove it — IP §2.", err)
+		requireStartup(t, err, "REC-004 is the claim that a compromised MCP cannot "+
+			"forge attribution; a mocked Rekor cannot prove it — IP §2.")
 	}
 	store, _ := freshStore(t)
 
@@ -247,9 +247,13 @@ func TestREC003AndREC004AgainstARealRekorAndARealSignature(t *testing.T) {
 		t.Cleanup(st.stop)
 	}
 	if err != nil {
-		t.Skipf("skipping: could not start the SPIRE and Sigstore stacks (%v). REC-003 and "+
-			"REC-004 go unproven against a real log. Start Docker, "+
-			"`go install github.com/sigstore/gitsign@%s`, and re-run.", err, harnessGitsign)
+		// This is the gate that bit: a Docker network failure was reported here
+		// as a skip, the package read `pass`, and this case — REC-003 and
+		// REC-004, against a real Rekor — never ran (#101).
+		requireStartup(t, fmt.Errorf("bringing up the SPIRE and Sigstore stacks: %w", err),
+			fmt.Sprintf("REC-003 and REC-004 go unproven against a real log. "+
+				"Start Docker, `go install github.com/sigstore/gitsign@%s`, and "+
+				"re-run.", harnessGitsign))
 	}
 	root := t.TempDir()
 

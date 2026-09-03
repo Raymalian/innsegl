@@ -1635,9 +1635,9 @@ func TestGetCredentialAgainstRealSPIRE(t *testing.T) {
 	defer cancel()
 
 	if err := dockerUsable(ctx); err != nil {
-		t.Skipf("skipping: no docker (%v). This case is the only place the "+
-			"MintJWTSVID authorization scope in deploy/compose/spire/authz-policy.rego "+
-			"is measured; without it, AB-10 by way of the mint API goes unproven.", err)
+		requireStartup(t, err, "This case is the only place the MintJWTSVID "+
+			"authorization scope in deploy/compose/spire/authz-policy.rego is "+
+			"measured; without it, AB-10 by way of the mint API goes unproven.")
 	}
 	stack, err := startCredStack(ctx, credRepoRoot(t))
 	if stack != nil {
@@ -1646,8 +1646,8 @@ func TestGetCredentialAgainstRealSPIRE(t *testing.T) {
 		t.Cleanup(stack.stop)
 	}
 	if err != nil {
-		t.Skipf("skipping: could not start deploy/compose/spire.yml (%v). "+
-			"The MintJWTSVID authorization scope goes unproven.", err)
+		requireStartup(t, fmt.Errorf("starting deploy/compose/spire.yml: %w", err),
+			"The MintJWTSVID authorization scope goes unproven.")
 	}
 
 	admin := stack.adminClient(t)
