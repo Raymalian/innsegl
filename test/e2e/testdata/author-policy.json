@@ -4,15 +4,5 @@
   "operators": [
     "66436734+KodyMike@users.noreply.github.com"
   ],
-  "grandfathered_note": "Seven commits predate this policy and were authored with a personal address that is not listed above and must not be. They are admitted here by hash, one at a time, so the address itself appears nowhere in this repository. The list is closed: a commit made from now on must use a listed operator address or a reserved domain, and TestGH002 fails on an entry that no longer matches a commit in the history.",
-  "grandfathered_commits": [
-    "7ca4af36faec480f9389193ba34074d89dcd2898",
-    "06333d36fec00beda9095ba0c6a5fa1df491698c",
-    "c136401e9510e621ff5283aea527ad981458bc82",
-    "11f8b449d8f445196514244cffdc98f15db679cc",
-    "d13b21e028645ac91a48959de0aad9d640f03c88",
-    "5c63a898f5f328e8e43019d180b749f292cee59e",
-    "b4182fb1629e4293061a9a5ac78237961c5cb13f"
-  ],
   "allow_unlinked": true
 }
