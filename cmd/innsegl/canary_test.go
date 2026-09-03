@@ -325,47 +325,118 @@ type cliMinIO struct {
 
 var cliBucketSeq atomic.Int64
 
-func requireMinIOForCLI(t *testing.T) *cliMinIO {
-	t.Helper()
+// ---------------------------------------------------------------------------
+// #101: a failed dependency is not a skip.
+//
+// errCLIDependencyAbsent marks the ONLY conditions under which skipping the
+// canary's object-store cases is honest: there is no Docker daemon, or
+// INNSEGL_TEST_NO_DOCKER asks for none. Nothing else wraps it.
+//
+// Every other thing this function used to report as a skip — a port that could
+// not be reserved, an image that would not pull, a MinIO that never became
+// ready — happens on a machine that HAS Docker, and is a FAILURE. Reporting
+// one as a skip turns it into a pass-shaped outcome: `go test` exits zero, the
+// package reports ok, and the canary's exit status went unmeasured against a
+// real object store.
+//
+// Both branches are exercised by
+// TestHAR009AnAbsentDependencyIsASkipAndAFaultIsAFailure.
+// ---------------------------------------------------------------------------
+var errCLIDependencyAbsent = errors.New("a required dependency is absent")
 
+// cliStartupOutcome routes a start-up error to exactly one of two outcomes.
+func cliStartupOutcome(err error) (skip, failure string) {
+	switch {
+	case err == nil:
+		return "", ""
+	case errors.Is(err, errCLIDependencyAbsent):
+		return err.Error(), ""
+	default:
+		return "", err.Error()
+	}
+}
+
+// cliRequirement is what requireMinIOForCLI must do for the calling test.
+type cliRequirement int
+
+const (
+	cliProceed cliRequirement = iota
+	cliSkipTest
+	cliFailTest
+)
+
+// cliNeed decides between the three. A failure outranks a skip: if the
+// dependency broke, the reason it broke is what the developer needs to read.
+func cliNeed(up bool, skip, failure string) cliRequirement {
+	switch {
+	case failure != "":
+		return cliFailTest
+	case !up:
+		return cliSkipTest
+	default:
+		return cliProceed
+	}
+}
+
+// cliDockerUsable reports whether a docker daemon is reachable. Its error is
+// the ONLY one here wrapped as an absent dependency.
+func cliDockerUsable(ctx context.Context) error {
 	if os.Getenv("INNSEGL_TEST_NO_DOCKER") != "" {
-		t.Skip("skipping: INNSEGL_TEST_NO_DOCKER is set. " +
-			"The canary's exit status is unproven against a real object store.")
+		return fmt.Errorf("INNSEGL_TEST_NO_DOCKER is set: %w", errCLIDependencyAbsent)
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("skipping: no docker (%v). "+
-			"The canary's exit status is unproven against a real object store.", err)
+		return fmt.Errorf("docker is not on PATH: %w: %w", err, errCLIDependencyAbsent)
 	}
+	cmd := exec.CommandContext(ctx, "docker", "version", "--format", "{{.Server.Version}}")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if _, err := cmd.Output(); err != nil {
+		return fmt.Errorf("no reachable docker daemon: %w: %s: %w",
+			err, cliOneLine(stderr.String()), errCLIDependencyAbsent)
+	}
+	return nil
+}
 
+// cliOneLine collapses a multi-line subprocess error into a single line, so
+// the line naming the fault survives the test JSON stream (#101).
+func cliOneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// startCLIMinIO brings up one MinIO and waits for it. Every error it returns
+// is a fault on a machine that has Docker; none of them wrap
+// errCLIDependencyAbsent.
+func startCLIMinIO(ctx context.Context, t *testing.T) (*cliMinIO, error) {
+	t.Helper()
 	image := cliMinIOImage
 	if v := os.Getenv("INNSEGL_TEST_MINIO_IMAGE"); v != "" {
 		image = v
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
 	var lc net.ListenConfig
 	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Skipf("skipping: could not reserve a port: %v", err)
+		return nil, fmt.Errorf("reserving a host port: %w", err)
 	}
 	_, port, err := net.SplitHostPort(l.Addr().String())
 	if err != nil {
-		t.Skipf("skipping: could not read the reserved port: %v", err)
+		_ = l.Close()
+		return nil, fmt.Errorf("reading the reserved port: %w", err)
 	}
 	if cerr := l.Close(); cerr != nil {
-		t.Skipf("skipping: could not release the reserved port: %v", cerr)
+		return nil, fmt.Errorf("releasing the reserved port: %w", cerr)
 	}
 
-	out, err := exec.CommandContext(ctx, "docker", "run", "--detach",
+	run := exec.CommandContext(ctx, "docker", "run", "--detach",
 		"--publish", "127.0.0.1:"+port+":9000",
 		"--env", "MINIO_ROOT_USER="+cliMinIOUser,
 		"--env", "MINIO_ROOT_PASSWORD="+cliMinIOPassword,
-		image, "server", "/data").Output()
+		image, "server", "/data")
+	var stderr strings.Builder
+	run.Stderr = &stderr
+	out, err := run.Output()
 	if err != nil {
-		t.Skipf("skipping: could not start %s: %v. "+
-			"The canary's exit status is unproven against a real object store.", image, err)
+		return nil, fmt.Errorf("starting %s: %w: %s", image, err, cliOneLine(stderr.String()))
 	}
 
 	c := &cliMinIO{id: strings.TrimSpace(string(out)), endpoint: "127.0.0.1:" + port}
@@ -378,6 +449,7 @@ func requireMinIOForCLI(t *testing.T) *cliMinIO {
 	})
 
 	deadline := time.Now().Add(90 * time.Second)
+	var last error
 	for time.Now().Before(deadline) {
 		cl, cerr := c.client()
 		if cerr == nil {
@@ -386,13 +458,44 @@ func requireMinIOForCLI(t *testing.T) *cliMinIO {
 			attemptCancel()
 		}
 		if cerr == nil {
-			return c
+			return c, nil
 		}
-		err = cerr
+		last = cerr
 		time.Sleep(250 * time.Millisecond)
 	}
-	t.Skipf("skipping: minio never became ready: %v", err)
-	return nil
+	return nil, fmt.Errorf("%s never became ready: %w", image, last)
+}
+
+// requireMinIOForCLI hands the calling test a real object store, or ends the
+// test the honest way: a skip when there is no Docker, a FAILURE when Docker
+// is there and MinIO is not.
+func requireMinIOForCLI(t *testing.T) *cliMinIO {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	var c *cliMinIO
+	skip, failure := cliStartupOutcome(cliDockerUsable(ctx))
+	if skip == "" && failure == "" {
+		var err error
+		c, err = startCLIMinIO(ctx, t)
+		skip, failure = cliStartupOutcome(err)
+	}
+
+	switch cliNeed(c != nil, skip, failure) {
+	case cliFailTest:
+		t.Fatalf("the canary's object store did not come up, and Docker is present "+
+			"and working: %s\n\nThis is a FAILURE and not a skip (#101): an "+
+			"infrastructure fault reported as a skip exits zero and reports ok "+
+			"while the canary's exit status went unmeasured against a real "+
+			"object store.", failure)
+	case cliSkipTest:
+		t.Skipf("skipping: %s. "+
+			"The canary's exit status is unproven against a real object store.", skip)
+	case cliProceed:
+	}
+	return c
 }
 
 func (c *cliMinIO) client() (*minio.Client, error) {
@@ -417,4 +520,73 @@ func makeBucket(t *testing.T, c *cliMinIO, objectLock bool) string {
 		t.Fatalf("create bucket %s (object lock %v): %v", name, objectLock, err)
 	}
 	return name
+}
+
+// ---------------------------------------------------------------------------
+// HAR-009 — #101. Both branches of the routing rule, exercised.
+//
+// A routing rule nothing exercises is a routing rule nobody has checked, which
+// is exactly how #101 survived in nine harnesses at once. This case pins the
+// two outcomes apart: an ABSENT dependency is a skip, and anything else is a
+// failure that says so.
+// ---------------------------------------------------------------------------
+
+func TestHAR009AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
+	t.Run("no docker is a skip", func(t *testing.T) {
+		t.Setenv("INNSEGL_TEST_NO_DOCKER", "1")
+		err := cliDockerUsable(t.Context())
+		if err == nil {
+			t.Fatal("cliDockerUsable answered nil with INNSEGL_TEST_NO_DOCKER set")
+		}
+		if !errors.Is(err, errCLIDependencyAbsent) {
+			t.Fatalf("%v does not wrap errCLIDependencyAbsent, so it would be routed to a "+
+				"FAILURE and a developer with no Docker could not run this package", err)
+		}
+		skip, failure := cliStartupOutcome(err)
+		if skip == "" || failure != "" {
+			t.Fatalf("cliStartupOutcome(%v) = (%q, %q), want a skip and no failure", err, skip, failure)
+		}
+	})
+
+	t.Run("a dependency that did not start is a failure", func(t *testing.T) {
+		// The exact shape #100 produces on this machine, and the shape the CI
+		// run in #101 produced: Docker is present, working, and refuses to
+		// create the network because its address pools are used up.
+		err := fmt.Errorf("could not start the canary's minio: %w",
+			errors.New("Error response from daemon: could not find an available, "+
+				"non-overlapping IPv4 address pool among the defaults to assign "+
+				"to the network"))
+		if errors.Is(err, errCLIDependencyAbsent) {
+			t.Fatal("an exhausted Docker address pool wraps errCLIDependencyAbsent; it would " +
+				"be reported as a skip and the canary's exit-status cases would silently not run")
+		}
+		skip, failure := cliStartupOutcome(err)
+		if failure == "" || skip != "" {
+			t.Fatalf("cliStartupOutcome(%v) = (%q, %q), want a failure and no skip", err, skip, failure)
+		}
+	})
+
+	t.Run("a healthy start-up is neither", func(t *testing.T) {
+		if skip, failure := cliStartupOutcome(nil); skip != "" || failure != "" {
+			t.Fatalf("cliStartupOutcome(nil) = (%q, %q), want both empty", skip, failure)
+		}
+	})
+
+	t.Run("a failure outranks a skip", func(t *testing.T) {
+		for _, tc := range []struct {
+			name          string
+			up            bool
+			skip, failure string
+			want          cliRequirement
+		}{
+			{"a failure outranks everything", false, "no docker", "boom", cliFailTest},
+			{"nothing up and no failure is a skip", false, "no docker", "", cliSkipTest},
+			{"a live dependency proceeds", true, "", "", cliProceed},
+		} {
+			if got := cliNeed(tc.up, tc.skip, tc.failure); got != tc.want {
+				t.Errorf("%s: cliNeed(%v, %q, %q) = %d, want %d",
+					tc.name, tc.up, tc.skip, tc.failure, got, tc.want)
+			}
+		}
+	})
 }

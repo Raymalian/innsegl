@@ -183,8 +183,8 @@ func TestREC001And002And005AgainstRealSigstoreAndARealChain(t *testing.T) {
 	defer cancel()
 
 	if err := dockerUsable(ctx); err != nil {
-		t.Skipf("skipping: no docker (%v). REC-002 proves nothing about I3 or I5 "+
-			"against a mock — IP §2, \"a mocked Fulcio proves nothing about I5\".", err)
+		requireStartup(t, err, "REC-002 proves nothing about I3 or I5 against a "+
+			"mock — IP §2, \"a mocked Fulcio proves nothing about I5\".")
 	}
 	store, dsn := freshStore(t)
 
@@ -193,9 +193,10 @@ func TestREC001And002And005AgainstRealSigstoreAndARealChain(t *testing.T) {
 		t.Cleanup(st.stop)
 	}
 	if err != nil {
-		t.Skipf("skipping: could not start the SPIRE and Sigstore stacks (%v). "+
-			"Both crash windows go unproven against a real signature. Start Docker, "+
-			"`go install github.com/sigstore/gitsign@%s`, and re-run.", err, harnessGitsign)
+		requireStartup(t, fmt.Errorf("bringing up the SPIRE and Sigstore stacks: %w", err),
+			fmt.Sprintf("Both crash windows go unproven against a real signature. "+
+				"Start Docker, `go install github.com/sigstore/gitsign@%s`, and "+
+				"re-run.", harnessGitsign))
 	}
 
 	w := newWorld(ctx, t, st, store, dsn)

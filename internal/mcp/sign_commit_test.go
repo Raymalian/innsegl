@@ -1721,7 +1721,7 @@ func (s *scStack) compose(ctx context.Context, files []string, args ...string) (
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(full, " "), err, strings.TrimSpace(stderr.String()))
+			strings.Join(full, " "), err, oneLine(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -1737,7 +1737,7 @@ func (s *scStack) spireServer(ctx context.Context, args ...string) (string, erro
 func scFindGitsign(ctx context.Context) (string, error) {
 	if p := os.Getenv("INNSEGL_GITSIGN"); p != "" {
 		if _, err := os.Stat(p); err != nil {
-			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w", p, err)
+			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w: %w", p, err, errDependencyAbsent)
 		}
 		return p, nil
 	}
@@ -1752,8 +1752,8 @@ func scFindGitsign(ctx context.Context) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no gitsign binary; install the pinned release with "+
-		"`go install github.com/sigstore/gitsign@%s` or set INNSEGL_GITSIGN",
-		scHarnessGitsignVersion)
+		"`go install github.com/sigstore/gitsign@%s` or set INNSEGL_GITSIGN: %w",
+		scHarnessGitsignVersion, errDependencyAbsent)
 }
 
 // scSigstoreOverlay finds the per-process Sigstore overlay. ADR-0031 records
@@ -2087,18 +2087,18 @@ func TestSIG001AgainstRealSigstoreAndARealChain(t *testing.T) {
 	defer cancel()
 
 	if err := dockerUsable(ctx); err != nil {
-		t.Skipf("skipping: no docker (%v). SIG-001 proves nothing about I2, I3 or I5 "+
-			"against a mock — IP §2, \"a mocked Fulcio proves nothing about I5\".", err)
+		requireStartup(t, err, "SIG-001 proves nothing about I2, I3 or I5 against "+
+			"a mock — IP §2, \"a mocked Fulcio proves nothing about I5\".")
 	}
 	stack, err := scStartStack(ctx, credRepoRoot(t))
 	if stack != nil {
 		t.Cleanup(stack.stop)
 	}
 	if err != nil {
-		t.Skipf("skipping: could not start the SPIRE and Sigstore stacks (%v). "+
-			"The two-phase protocol goes unproven against a real signature. "+
-			"Start Docker, `go install github.com/sigstore/gitsign@%s`, and re-run.",
-			err, scHarnessGitsignVersion)
+		requireStartup(t, fmt.Errorf("bringing up the SPIRE and Sigstore stacks: %w", err),
+			fmt.Sprintf("The two-phase protocol goes unproven against a real "+
+				"signature. Start Docker, `go install github.com/sigstore/gitsign@%s`, "+
+				"and re-run.", scHarnessGitsignVersion))
 	}
 
 	// ---- a real chain -----------------------------------------------------

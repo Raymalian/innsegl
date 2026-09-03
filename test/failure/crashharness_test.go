@@ -203,10 +203,10 @@ func requireCrashCampaign(t *testing.T) *campaign {
 
 	ctx := context.Background()
 	if err := dockerUsable(ctx); err != nil {
-		t.Skipf("skipping MCP-011: %v. Crash-and-replay is a claim about what a SIGKILLed "+
-			"process leaves in Postgres and in SPIRE; with neither running there is nothing "+
-			"to leave anything in, and a green test here would mean nothing. Start Docker "+
-			"and re-run.", err)
+		requireStartup(t, err, "Crash-and-replay is a claim about what a SIGKILLed "+
+			"process leaves in Postgres and in SPIRE; with neither running there is "+
+			"nothing to leave anything in, and a green test here would mean nothing. "+
+			"Start Docker and re-run.")
 	}
 	s := requireStack(t)
 
