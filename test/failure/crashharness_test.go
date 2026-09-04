@@ -169,6 +169,21 @@ const (
 	// sampled between two changes — so this asks for more.
 	crashSettleStableReads = 20
 
+	// crashSignBlindDefault is how many blind strata sign_commit's OWN
+	// campaign uses. Far fewer than crashBlindDefault: sign_commit is a real
+	// Fulcio round trip plus a Rekor upload, not a Postgres round trip, and
+	// its own calibration (measured before any stratum is drawn, exactly as
+	// the other four tools measure theirs) is what the window is actually cut
+	// from — this only bounds how many slices of it are fired blind.
+	crashSignBlindDefault = 3
+
+	// signHoldGrace bounds how long a sign_commit hold-proxy withholds a
+	// request before giving up on its own. Wide margin over
+	// crashTriggerBudget: the proxy is released explicitly the instant this
+	// harness has read what it needs (signHoldProxy.close), so this is a
+	// backstop against the proxy itself, never the intended release path.
+	signHoldGrace = 2 * time.Minute
+
 	// crashSettleMinStableDuration is the WALL-CLOCK floor settleReads holds
 	// a value to before trusting crashSettleStableReads' streak. RM-093
 	// (#145): crashSettleStableReads alone bounds how many reads agree, not
@@ -208,6 +223,16 @@ const (
 	winCredNoRecord = "no credential_issued: the token, if minted, was dropped"
 	winCredNoReply  = "credential_issued on the chain, the token not delivered"
 	winCredSeen     = "credential delivered"
+
+	// sign_commit (RM-072, #95). Named after IP §6.5's own two windows rather
+	// than after the idempotency claim's states, because those are what this
+	// tool's own doc comment names and what the reconciler (RM-035) is built
+	// around.
+	winSignBeforeIntent    = "no commit_intent: before Phase A"
+	winSignIntentNoObject  = "commit_intent on the chain, no commit object (Phase A -> B, IP §6.5)"
+	winSignObjectNoRecord  = "commit object and Rekor entry exist, no commit_recorded (Phase B -> C, IP §6.5)"
+	winSignRecordedNoReply = "commit_recorded on the chain, the caller never saw it"
+	winSignSeen            = "commit signed, recorded and delivered"
 )
 
 // ---------------------------------------------------------------------------
@@ -700,12 +725,7 @@ func (c *campaign) startWith(t *testing.T, extra ...string) *daemon {
 // without every other shot doing the same. See stallingProxy.
 func (c *campaign) startVia(t *testing.T, spireAddr string, extra ...string) *daemon {
 	t.Helper()
-	addrFile := filepath.Join(c.workDir, c.name("addr"))
-
-	// context.Background rather than the test's: CommandContext kills the
-	// child when the context ends, and the ONE thing that may kill this child
-	// is the SIGKILL below, whose wait status the harness then reads back.
-	cmd := exec.CommandContext(context.Background(), c.binary, "serve",
+	args := []string{
 		"-dsn", c.dsn,
 		"-spire-address", spireAddr,
 		"-trust-domain", failureTrustDomain,
@@ -716,7 +736,6 @@ func (c *campaign) startVia(t *testing.T, spireAddr string, extra ...string) *da
 		"-bundle", filepath.Join(c.pemDir, "bundle.pem"),
 		"-listen", "127.0.0.1:0",
 		"-health-listen", "127.0.0.1:0",
-		"-addr-file", addrFile,
 		"-idempotency-lease", crashLease.String(),
 		// Required configuration that this campaign does not exercise: they
 		// are read only by /readyz, which nothing here calls. A closed port is
@@ -733,8 +752,26 @@ func (c *campaign) startVia(t *testing.T, spireAddr string, extra ...string) *da
 		// ledger, the idempotency store and the SPIRE entry, not about what
 		// the identity says. PRI-003 and PRI-004 measure `pseudonymous`.
 		"-identity-mode", "literal",
-	)
-	cmd.Args = append(cmd.Args, extra...)
+	}
+	return c.launch(t, append(args, extra...)...)
+}
+
+// launch starts one `innsegl serve` with args plus a fresh -addr-file, and
+// waits for it to publish its address.
+//
+// Factored out of startVia so that signCommit (RM-072, #95) can launch its
+// OWN daemon — pointed at a real Sigstore rather than startVia's closed port —
+// without duplicating the process-management half of this: starting it,
+// capturing stderr, waiting for the address file, and reaping it on cleanup.
+func (c *campaign) launch(t *testing.T, args ...string) *daemon {
+	t.Helper()
+	addrFile := filepath.Join(c.workDir, c.name("addr"))
+
+	// context.Background rather than the test's: CommandContext kills the
+	// child when the context ends, and the ONE thing that may kill this child
+	// is the SIGKILL below, whose wait status the harness then reads back.
+	cmd := exec.CommandContext(context.Background(), c.binary,
+		append([]string{"serve", "-addr-file", addrFile}, args...)...)
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {

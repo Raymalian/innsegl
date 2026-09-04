@@ -53,11 +53,26 @@ import (
 //	                         other two: no second identity, and exactly one
 //	                         `credential_issued` per call that reached the
 //	                         append — never one per crash.
-//	sign_commit     RM-033 (#41). Does not exist; deferred, and measured as
-//	                         absent rather than assumed.
+//	sign_commit     keyed.   RM-072 (#95). IP §6.5's two-phase protocol is
+//	                         appended-into rather than replied-from: Phase A
+//	                         (commit_intent) and Phase C (commit_recorded)
+//	                         carry a key DERIVED from the caller's, so this
+//	                         file identifies a shot's own events by the tree
+//	                         hash it staged rather than by idempotency_key —
+//	                         see signEventByTree. A replay redoes the commit
+//	                         exactly once in total UNLESS the crash landed
+//	                         between Phase B and Phase C, in which case IP
+//	                         §6.6's replay guarantee yields to ADR-0031
+//	                         decision 6: the takeover is REFUSED rather than
+//	                         repaired, because repairing it needs a Rekor
+//	                         search internal/signing keeps unexported on
+//	                         purpose. signcommitharness_test.go carries the
+//	                         Sigstore-capable daemon this needs and the two
+//	                         devices that drive its named windows.
 //
-// "no duplicate commit" is therefore unproven by this file and stays unproven
-// until sign_commit ships.
+// "no duplicate commit" is IP §6.6's third clause, and this file is what
+// proves it: never a second commit object, in the crash-and-replay case and
+// in the one case that is refused rather than repaired alike.
 func TestMCP011CrashAndReplayUnderFuzzedKillTiming(t *testing.T) {
 	c := requireCrashCampaign(t)
 
@@ -620,29 +635,10 @@ func jwtSubject(token string) (string, error) {
 	return claims.Sub, nil
 }
 
-// ---------------------------------------------------------------------------
-// sign_commit — measured absent rather than assumed absent.
-// ---------------------------------------------------------------------------
-
-func (c *campaign) signCommit(t *testing.T) {
-	srv, err := mcp.New(mcp.Config{Version: "v0.0.0-mcp-011"})
-	if err != nil {
-		t.Fatalf("mcp.New: %v", err)
-	}
-	if !slices.Contains(srv.MissingTools(), mcp.ToolSignCommit) {
-		// PENDING, not silently skipped. RM-033 (#41) bound sign_commit, so MCP-011
-		// must fuzz it and assert IP §6.6's third clause — "never a second commit" —
-		// which has never been tested because until now no tool made one. That is
-		// RM-072 (#95); it needs a Sigstore stack this harness does not yet carry.
-		// Reported every run so the gap cannot be forgotten.
-		t.Logf("PENDING: sign_commit is bound and MCP-011 does not fuzz it. " +
-			"IP §6.6's \"never a second commit\" is untested. Tracked as RM-072 (#95). " +
-			"This is a coverage gap, not a pass.")
-	}
-	t.Skipf("sign_commit is RM-033 (#41) and mcp.New reports it missing %v. "+
-		"MCP-011's \"no duplicate commit\" half is deferred with it and is UNPROVEN here.",
-		srv.MissingTools())
-}
+// sign_commit's own campaign lives in signcommitharness_test.go
+// (campaign.signCommit): RM-072 (#95) needs a real Sigstore, which this file
+// does not stand up, and the daemon it kills is launched differently as a
+// result. See that file's header comment for why.
 
 // ---------------------------------------------------------------------------
 // The census — the gate that makes a vacuous campaign fail.
@@ -652,7 +648,9 @@ func (c *campaign) signCommit(t *testing.T) {
 // anything durable. A campaign that only ever produced these would pass every
 // per-iteration assertion while proving nothing at all, because a call that
 // never started cannot leave a second identity behind.
-var inertWindows = []string{winBeforeClaim, winClaimedNoWork, winRetireNoRecord, winCredNoRecord}
+var inertWindows = []string{
+	winBeforeClaim, winClaimedNoWork, winRetireNoRecord, winCredNoRecord, winSignBeforeIntent,
+}
 
 func (c *campaign) census(t *testing.T) {
 	c.mu.Lock()
@@ -677,6 +675,7 @@ func (c *campaign) census(t *testing.T) {
 	for _, w := range []string{
 		winEventNoEntry, winEntryNoReply, winReplyUnseen,
 		winRecEventNoReply, winRetireNoDelete, winCredNoReply,
+		winSignIntentNoObject, winSignObjectNoRecord,
 	} {
 		switch windowCensus(all, fired, w) {
 		case windowCovered:
