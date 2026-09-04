@@ -6,12 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"innsegl.dev/innsegl/internal/event"
@@ -557,30 +555,6 @@ func waitBeforeRetry(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// classifyStorage maps a database failure onto IP §4's vocabulary.
-//
-// The policy is internal/ledger's, because it is the same database and a
-// caller must not have to know which layer answered: a refusal the schema
-// raised is an invariant violation and never retryable; anything else is
-// LEDGER_UNAVAILABLE, retryable only when the ledger might answer next time.
-// Callers check err != nil first — this is never handed a nil.
-func classifyStorage(op string, err error) *Error {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		// No answer from the database at all: an unreachable or closed pool.
-		return classifyAs(ClassLedgerUnavailable, "",
-			fmt.Sprintf("idempotency store %s: %v", op, err), true, storeSource, err)
-	}
-	if pgErr.Code == IdempotencyStateSQLState || strings.HasPrefix(pgErr.Code, "23") {
-		// The database refused to break the store's own rules. Never a
-		// transport problem, and never worth retrying.
-		return classifyAs(ClassInvariantViolation, "",
-			fmt.Sprintf("idempotency store %s refused by the schema (SQLSTATE %s): %s",
-				op, pgErr.Code, pgErr.Message), false, storeSource, err)
-	}
-	// The database answered, but not usefully — a missing table, a syntax
-	// error, a privilege refusal. Retrying cannot change any of those.
-	return classifyAs(ClassLedgerUnavailable, "",
-		fmt.Sprintf("idempotency store %s: SQLSTATE %s: %s", op, pgErr.Code, pgErr.Message),
-		false, storeSource, err)
-}
+// classifyStorage maps a database failure this store observed onto IP §4's
+// vocabulary. Moved to errors.go (RM-067, #87): it is a classification path,
+// alongside Classify and classifyAs, not idempotency-store logic.

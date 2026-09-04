@@ -737,20 +737,28 @@ func newDeadLedgerStack(t *testing.T) (*stack, *pgContainer) {
 // postmaster died, so that what the matrix asserts afterwards is a SETTLED
 // outage and not a race with a stale socket.
 //
-// FINDING (RM-028), and the reason this function exists rather than a sleep:
-// the two states do not classify the same. Once no stale connection is left,
-// every new dial is refused and both internal/ledger's classify and
-// internal/mcp's classifyStorage report LEDGER_UNAVAILABLE **retryable**,
-// which is the value ADR-0016 requires of a dependency outage. On the FIRST
-// call after the kill the server may still deliver `SQLSTATE 57P01:
-// terminating connection due to unexpected postmaster exit`, and
-// classifyStorage sends every SQLSTATE that is not a constraint violation to
-// LEDGER_UNAVAILABLE with retryable=**false** — "the database answered, but
-// not usefully" — while internal/ledger, over the same database, gets the same
-// condition right. One outage, two layers, opposite advice to the caller. That
-// is precisely "a false on a dependency outage turns a thirty-second Postgres
-// restart into a failed run" (ADR-0016). It is reported, not fixed:
-// internal/mcp is not this issue's to edit.
+// FORMER FINDING (RM-028, #36; fixed by RM-067, #87): the two states used to
+// classify differently. Once no stale connection was left, every new dial was
+// refused and both internal/ledger's classify and internal/mcp's
+// classifyStorage reported LEDGER_UNAVAILABLE **retryable**, which is the
+// value ADR-0016 requires of a dependency outage. On the FIRST call after the
+// kill the server could still deliver `SQLSTATE 57P01: terminating connection
+// due to unexpected postmaster exit`, and classifyStorage sent every SQLSTATE
+// that was not a constraint violation to LEDGER_UNAVAILABLE with
+// retryable=**false** — "the database answered, but not usefully" — while
+// internal/ledger, over the same database, got the same condition right. One
+// outage, two layers, opposite advice to the caller: precisely "a false on a
+// dependency outage turns a thirty-second Postgres restart into a failed run"
+// (ADR-0016). RM-067 made classifyStorage apply the same SQLSTATE-class rule
+// internal/ledger.classify does, so this is no longer a *transitional*
+// disagreement tolerated on the way to a settled state — every iteration
+// below, settled or not, is now asserted to agree, and this function fails
+// loudly the moment one does not.
+//
+// The drain loop itself stays: reaching the state where every new dial is
+// refused is still useful groundwork for the matrix that runs after this, and
+// costs nothing now that it is also a live regression check rather than a
+// tolerated log line.
 func settleOutage(t *testing.T, s *stack) {
 	t.Helper()
 	ctx := testCtx(t, time.Minute)
@@ -758,11 +766,19 @@ func settleOutage(t *testing.T, s *stack) {
 	// Bounded by the pools' size, not by a clock: a pool holds a finite number
 	// of connections and each one surfaces its death exactly once.
 	const drain = 64
-	report := func(layer string, err error) {
+	assertAgrees := func(layer string, err error) {
+		t.Helper()
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			t.Logf("transitional: %s answered the outage with SQLSTATE %s (%s) — %v",
-				layer, pgErr.Code, pgErr.Message, err)
+		if !errors.As(err, &pgErr) {
+			return
+		}
+		ce := mcp.Classify(err)
+		t.Logf("%s answered the outage with SQLSTATE %s (%s) — %s retryable=%v",
+			layer, pgErr.Code, pgErr.Message, ce.Class, ce.Retryable)
+		if ce.Class != mcp.ClassLedgerUnavailable || !ce.Retryable {
+			t.Fatalf("RM-067 (#87): %s reported SQLSTATE %s as %s retryable=%v; a Postgres "+
+				"outage must classify LEDGER_UNAVAILABLE retryable=true on every call, settled "+
+				"or not (ADR-0016)", layer, pgErr.Code, ce.Class, ce.Retryable)
 		}
 	}
 	for i := 0; i < drain; i++ {
@@ -770,7 +786,7 @@ func settleOutage(t *testing.T, s *stack) {
 		if err == nil {
 			t.Fatalf("the ledger still answers after the container was killed")
 		}
-		report("internal/ledger", err)
+		assertAgrees("internal/ledger", err)
 		var pgErr *pgconn.PgError
 		if !errors.As(err, &pgErr) {
 			break
@@ -781,7 +797,7 @@ func settleOutage(t *testing.T, s *stack) {
 		if err == nil {
 			t.Fatalf("the idempotency store still answers after the container was killed")
 		}
-		report("internal/mcp idempotency store", err)
+		assertAgrees("internal/mcp idempotency store", err)
 		var pgErr *pgconn.PgError
 		if !errors.As(err, &pgErr) {
 			break

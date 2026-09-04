@@ -9,6 +9,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/spire"
 )
 
@@ -239,7 +242,12 @@ func Errorf(class Class, runID, format string, args ...any) *Error {
 // Classify or, worse, by rendering IP §4's object themselves. There is one
 // vocabulary and one place that writes it to the wire.
 //
-// internal/spire predates this interface and is carried across explicitly.
+// internal/spire and internal/ledger both predate this interface, and neither
+// can implement it: ErrorClass's signature names this package's own Class
+// type, and internal/mcp already imports both of them, so either importing
+// mcp back would be a cycle. Both are carried across explicitly in Classify
+// instead — the same move, made twice, because Go's import graph forbids the
+// interface where it would otherwise apply.
 type Classified interface {
 	error
 	// ErrorClass reports the IP §4 class, the run the failure is scoped to
@@ -274,6 +282,17 @@ func Classify(err error) *Error {
 	if errors.As(err, &fromSPIRE) {
 		return classifyAs(Class(fromSPIRE.Class), fromSPIRE.RunID, fromSPIRE.Message,
 			fromSPIRE.Retryable, "internal/spire", fromSPIRE)
+	}
+	// internal/ledger measured whether the database was gone or the schema was
+	// wrong (RM-067, #87) and keeps that verdict as a field rather than
+	// deriving it a second time here — *ledger.StoreError carries no run_id of
+	// its own, so a caller that has one (register_agent.go, runs.go) attaches
+	// it before this is ever reached; this case is the fallback for a ledger
+	// failure that reaches Classify unwrapped.
+	var fromLedger *ledger.StoreError
+	if errors.As(err, &fromLedger) {
+		return classifyAs(Class(fromLedger.Class), "", fromLedger.Error(),
+			fromLedger.Retryable, "internal/ledger", fromLedger)
 	}
 	var self Classified
 	if errors.As(err, &self) {
@@ -313,4 +332,91 @@ func classifyAs(class Class, runID, message string, retryable bool, source strin
 		RunID:     runID,
 		Err:       cause,
 	}
+}
+
+// classifyStorage maps a database failure the MCP idempotency store (RM-021)
+// observed directly — over its own pool, never through internal/ledger — onto
+// IP §4's vocabulary.
+//
+// # RM-067 (#87): the rule this now shares with internal/ledger.classify
+//
+// Before this fix, every SQLSTATE that was not a constraint violation fell
+// through to LEDGER_UNAVAILABLE with retryable FALSE, on the reasoning "the
+// database answered, but not usefully". That reasoning does not hold for
+// SQLSTATE class 08 (connection exception), 53 (insufficient resources), 57
+// (operator intervention) or 58 (system error): those codes are not the
+// database refusing a statement, they ARE the outage — 57P01, "terminating
+// connection due to unexpected postmaster exit", is what a stale pooled
+// connection receives on the first call after Postgres is genuinely killed.
+// internal/ledger.classify already recognised this shape and reported it
+// retryable; this function did not, so the same real outage produced opposite
+// advice depending on which layer's pool happened to answer first — measured
+// against a real killed Postgres, not a stub (test/contract's settleOutage,
+// and this package's TestMCP021...).
+//
+// ADR-0016 §2 permits a layer closer to the failure to NARROW retryable, never
+// to widen it, but narrowing has to be earned by evidence that a retry cannot
+// help — a specific SQLSTATE class saying so. Treating "the database sent a
+// structured answer" itself as that evidence was an over-application: nearly
+// every failure on an established connection arrives as a *pgconn.PgError,
+// so the blanket rule silently discarded LEDGER_UNAVAILABLE's class default
+// (retryable, ADR-0016 §1) for almost every real Postgres failure, dependency
+// outages included. isConnectionLifecycleSQLState below is the narrower,
+// evidence-based rule instead: only the SQLSTATE classes that name a server
+// leaving or gone are treated as retryable, exactly as internal/ledger.classify
+// already treats them, so the two layers agree by construction rather than by
+// coincidence.
+//
+// A missing table, a bad privilege grant or a syntax error (SQLSTATE 42, 22)
+// stays retryable=false: nothing about those improves on a retry, and this
+// function's default case is unchanged from before this fix.
+func classifyStorage(op string, err error) *Error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		// No answer from the database at all: an unreachable or closed pool.
+		return classifyAs(ClassLedgerUnavailable, "",
+			fmt.Sprintf("idempotency store %s: %v", op, err), true, storeSource, err)
+	}
+	if pgErr.Code == IdempotencyStateSQLState || strings.HasPrefix(pgErr.Code, "23") {
+		// The database refused to break the store's own rules. Never a
+		// transport problem, and never worth retrying.
+		return classifyAs(ClassInvariantViolation, "",
+			fmt.Sprintf("idempotency store %s refused by the schema (SQLSTATE %s): %s",
+				op, pgErr.Code, pgErr.Message), false, storeSource, err)
+	}
+	if isConnectionLifecycleSQLState(pgErr.Code) {
+		// The server answered, and the answer IS that it is going away or
+		// already gone — not a refusal of this statement. Retrying is exactly
+		// what a caller should do (RM-067, #87).
+		return classifyAs(ClassLedgerUnavailable, "",
+			fmt.Sprintf("idempotency store %s: SQLSTATE %s: %s", op, pgErr.Code, pgErr.Message),
+			true, storeSource, err)
+	}
+	// The database answered, but not usefully — a missing table, a syntax
+	// error, a privilege refusal. Retrying cannot change any of those.
+	return classifyAs(ClassLedgerUnavailable, "",
+		fmt.Sprintf("idempotency store %s: SQLSTATE %s: %s", op, pgErr.Code, pgErr.Message),
+		false, storeSource, err)
+}
+
+// isConnectionLifecycleSQLState reports whether code names the SERVER itself
+// arriving or leaving, rather than the server refusing the statement it was
+// sent. This is exactly the set internal/ledger.classify (postgres.go) treats
+// as retryable LEDGER_UNAVAILABLE, named here by the same prefixes so a future
+// change to one has to change the other to stay in sync (RM-067, #87):
+//
+//   - 08 connection exception (08006 connection failure, 08003 connection
+//     does not exist)
+//   - 53 insufficient resources
+//   - 57 operator intervention (57P01 admin shutdown / unexpected postmaster
+//     exit, 57P02 crash shutdown, 57P03 cannot connect now)
+//   - 58 system error
+//   - 40 transaction rollback / serialization failure
+func isConnectionLifecycleSQLState(code string) bool {
+	for _, prefix := range []string{"08", "53", "57", "58", "40"} {
+		if strings.HasPrefix(code, prefix) {
+			return true
+		}
+	}
+	return false
 }

@@ -566,8 +566,14 @@ func TestClassifyMapsDatabaseFailuresOntoErrorClasses(t *testing.T) {
 		{"serialization failure", &pgconn.PgError{Code: "40001"}, ClassLedgerUnavailable, true},
 		{"too many connections", &pgconn.PgError{Code: "53300"}, ClassLedgerUnavailable, true},
 		{"admin shutdown", &pgconn.PgError{Code: "57P01"}, ClassLedgerUnavailable, true},
+		// LED-014 (RM-067, #87): the rest of the connection-lifecycle set
+		// RM-028 (#36) found internal/mcp.classifyStorage disagreeing on.
+		// classify already got these right; this just proves it.
+		{"crash shutdown", &pgconn.PgError{Code: "57P02"}, ClassLedgerUnavailable, true},
+		{"cannot connect now", &pgconn.PgError{Code: "57P03"}, ClassLedgerUnavailable, true},
 		{"system error", &pgconn.PgError{Code: "58030"}, ClassLedgerUnavailable, true},
 		{"connection exception", &pgconn.PgError{Code: "08006"}, ClassLedgerUnavailable, true},
+		{"connection does not exist", &pgconn.PgError{Code: "08003"}, ClassLedgerUnavailable, true},
 		{"read-only transaction", &pgconn.PgError{Code: "25006"}, ClassLedgerUnavailable, false},
 		{"a bare transport error", errors.New("unexpected EOF"), ClassLedgerUnavailable, true},
 	}
