@@ -1117,6 +1117,39 @@ func TestClassifyMapsDatabaseFailuresOntoTheLedgersVocabulary(t *testing.T) {
 			&pgconn.PgError{Code: "42P01", Message: "relation does not exist"},
 			ClassLedgerUnavailable, false,
 		},
+		// MCP-020 (RM-067, #87): the connection-lifecycle SQLSTATEs RM-028
+		// (#36) found this function disagreeing with internal/ledger.classify
+		// on. A stale pooled connection's first call after a genuine Postgres
+		// SIGKILL gets exactly one of these; all five must come back retryable
+		// here for the same reason internal/ledger.classify already reports
+		// them retryable — the server answering with a code that names its own
+		// shutdown or absence is not "the database answered, but not usefully",
+		// it is the outage itself.
+		{
+			"admin shutdown / unexpected postmaster exit",
+			&pgconn.PgError{Code: "57P01", Message: "terminating connection due to unexpected postmaster exit"},
+			ClassLedgerUnavailable, true,
+		},
+		{
+			"crash shutdown",
+			&pgconn.PgError{Code: "57P02", Message: "terminating connection due to crash of another server process"},
+			ClassLedgerUnavailable, true,
+		},
+		{
+			"cannot connect now",
+			&pgconn.PgError{Code: "57P03", Message: "the database system is not yet accepting connections"},
+			ClassLedgerUnavailable, true,
+		},
+		{
+			"connection failure",
+			&pgconn.PgError{Code: "08006", Message: "connection failure"},
+			ClassLedgerUnavailable, true,
+		},
+		{
+			"connection does not exist",
+			&pgconn.PgError{Code: "08003", Message: "connection does not exist"},
+			ClassLedgerUnavailable, true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
