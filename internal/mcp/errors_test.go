@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/spire"
 )
 
@@ -333,6 +334,56 @@ func TestClassifyMapsEverySPIREClass(t *testing.T) {
 			}
 			if !strings.Contains(got.Message, "from spire") {
 				t.Errorf("Classify(spire %s).Message = %q, want the spire message", row.from, got.Message)
+			}
+		})
+	}
+}
+
+// TestClassifyCarriesTheLedgersOwnClassification (RM-067, #87): a raw,
+// unwrapped *ledger.StoreError that reaches Classify — never funnelled
+// through register_agent.go's or runs.go's own carrying helper first — is
+// classified from the field internal/ledger already measured, not defaulted
+// to INVARIANT_VIOLATION. *ledger.StoreError cannot implement Classified
+// (ErrorClass's signature names this package's own Class type, and
+// internal/ledger importing internal/mcp back would cycle), so Classify names
+// the type explicitly, the same move it already makes for *spire.Error.
+func TestClassifyCarriesTheLedgersOwnClassification(t *testing.T) {
+	cases := []struct {
+		name          string
+		storeErr      *ledger.StoreError
+		wantClass     Class
+		wantRetryable bool
+	}{
+		{
+			"a dependency outage carries across retryable",
+			&ledger.StoreError{Class: string(ClassLedgerUnavailable), Op: "head", Retryable: true, Err: errors.New("connection exception")},
+			ClassLedgerUnavailable, true,
+		},
+		{
+			"a schema refusal carries across not retryable",
+			&ledger.StoreError{Class: string(ClassInvariantViolation), Op: "append", Retryable: false, Err: errors.New("chain link refused")},
+			ClassInvariantViolation, false,
+		},
+		{
+			"the ledger's own narrowing is honoured, never widened",
+			&ledger.StoreError{Class: string(ClassLedgerUnavailable), Op: "append", Retryable: false, Err: errors.New("syntax error")},
+			ClassLedgerUnavailable, false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Classify(fmt.Errorf("wrapped: %w", tc.storeErr))
+			if got.Class != tc.wantClass {
+				t.Errorf("Classify(%v).Class = %s, want %s", tc.storeErr, got.Class, tc.wantClass)
+			}
+			if got.Retryable != tc.wantRetryable {
+				t.Errorf("Classify(%v).Retryable = %v, want %v", tc.storeErr, got.Retryable, tc.wantRetryable)
+			}
+			if got.RunID != "" {
+				t.Errorf("Classify(%v).RunID = %q, want empty: *ledger.StoreError carries no run_id of its own", tc.storeErr, got.RunID)
+			}
+			if !errors.Is(got, tc.storeErr) {
+				t.Errorf("Classify(%v) dropped the ledger error from the chain", tc.storeErr)
 			}
 		})
 	}

@@ -24,14 +24,15 @@ import (
 // outage, over the same database, on the first call each pool makes
 // afterwards.
 //
-// Before RM-067's fix this test failed exactly as measured (captured live,
-// third of four runs against the pre-fix code; the other three could not even
-// reach the premise, see roundsToObserveBoth below): internal/ledger reported
-// LEDGER_UNAVAILABLE retryable=TRUE for SQLSTATE 57P01 ("terminating
-// connection due to unexpected postmaster exit"), and this package's
-// classifyStorage reported the same class retryable=FALSE for the identical
-// SQLSTATE — one outage, two answers, and which one a caller got depended on
-// connection-pool state (ADR-0016 §2, §5).
+// Before RM-067's fix this test failed exactly as measured (captured live: of
+// four runs against the pre-fix code, one reproduced the disagreement itself
+// and the other three could not even reach the premise — the race this file's
+// retry loop below exists for): internal/ledger reported LEDGER_UNAVAILABLE
+// retryable=TRUE for SQLSTATE 57P01 ("terminating connection due to
+// unexpected postmaster exit"), and this package's classifyStorage reported
+// the same class retryable=FALSE for the identical SQLSTATE — one outage, two
+// answers, and which one a caller got depended on connection-pool state
+// (ADR-0016 §2, §5).
 //
 // # Why this retries the whole container, and why that is honest
 //
@@ -159,9 +160,9 @@ func runOutageProbeRound(t *testing.T, round int) outageProbeResult {
 
 	var result outageProbeResult
 	result.ledgerClass, result.ledgerRetryable, result.ledgerCode, result.ledgerSeen =
-		firstPgErrorFromLedger(t, probeCtx, ledgerStore, attempts)
+		firstPgErrorFromLedger(probeCtx, t, ledgerStore, attempts)
 	result.mcpClass, result.mcpRetryable, result.mcpCode, result.mcpSeen =
-		firstPgErrorFromIdempotencyStore(t, probeCtx, idem, attempts)
+		firstPgErrorFromIdempotencyStore(probeCtx, t, idem, attempts)
 	return result
 }
 
@@ -169,7 +170,7 @@ func runOutageProbeRound(t *testing.T, round int) outageProbeResult {
 // retryable flag and SQLSTATE of the first answer that carries a
 // *pgconn.PgError. Head can never succeed once the container is truly dead,
 // so a nil error is itself a failure of the premise, not a pass.
-func firstPgErrorFromLedger(t *testing.T, ctx context.Context, s *ledger.Store, attempts int) (
+func firstPgErrorFromLedger(ctx context.Context, t *testing.T, s *ledger.Store, attempts int) (
 	class string, retryable bool, code string, seen bool,
 ) {
 	t.Helper()
@@ -196,7 +197,7 @@ func firstPgErrorFromLedger(t *testing.T, ctx context.Context, s *ledger.Store, 
 // MCP idempotency store: it calls Lookup with a fresh key each attempt (the
 // key space does not matter — an absent key and an unreachable database both
 // answer through the same error path here) until it sees a *pgconn.PgError.
-func firstPgErrorFromIdempotencyStore(t *testing.T, ctx context.Context, s *IdempotencyStore, attempts int) (
+func firstPgErrorFromIdempotencyStore(ctx context.Context, t *testing.T, s *IdempotencyStore, attempts int) (
 	class Class, retryable bool, code string, seen bool,
 ) {
 	t.Helper()
