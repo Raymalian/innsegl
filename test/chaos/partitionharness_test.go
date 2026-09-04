@@ -368,9 +368,24 @@ func prtPortAllocated(err error) bool {
 		return false
 	}
 	msg := err.Error()
+	// Three daemons, three wordings for one condition, and the third was
+	// found by RM-092-3 failing on a CI runner rather than by reading docs:
+	//
+	//   older        "Bind for 127.0.0.1:33971 failed: port is already allocated"
+	//   29.6.2 here  "ports are not available: ... bind: address already in use"
+	//   the runner   "failed to bind host port for 127.0.0.1:37481:...: address already in use"
+	//
+	// The last one carries "address already in use" WITHOUT the "bind: "
+	// prefix, so the pattern written for this machine did not match it. That
+	// is why the phrase matched below is the daemon's own "failed to bind
+	// host port", which names the operation rather than its errno: matching
+	// "address already in use" alone would be broad enough to catch faults
+	// that have nothing to do with publishing a port, and #101 requires that
+	// those keep failing on the first attempt.
 	return strings.Contains(msg, "port is already allocated") ||
 		strings.Contains(msg, "ports are not available") ||
-		strings.Contains(msg, "bind: address already in use")
+		strings.Contains(msg, "bind: address already in use") ||
+		strings.Contains(msg, "failed to bind host port")
 }
 
 // prtPortRaceRetries bounds how many times a bring-up step may re-pick a

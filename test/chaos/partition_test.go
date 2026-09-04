@@ -1567,6 +1567,20 @@ func TestRM092PortAllocatedClassifiesOnlyTheDaemonsOwnMessage(t *testing.T) {
 			want: true,
 		},
 		{
+			// Observed on a GitHub-hosted runner by RM-092-3 below, which
+			// failed rather than passing vacuously: this daemon says
+			// "address already in use" with no "bind: " prefix, so the
+			// pattern written against a local Docker 29.6.2 did not match
+			// it and the retry never engaged.
+			name: "the runner's daemon: failed to bind host port",
+			err: errors.New("docker run ...: exit status 125: docker: Error response " +
+				"from daemon: failed to set up container networking: driver failed " +
+				"programming external connectivity on endpoint innsegl-rm092-repro-45356: " +
+				"failed to bind host port for 127.0.0.1:37481:172.17.0.2:80/tcp: " +
+				"address already in use"),
+			want: true,
+		},
+		{
 			name: "a genuine fault: no such image",
 			err: errors.New("docker run ...: exit status 125: Unable to find image " +
 				"'nope:latest' locally"),
