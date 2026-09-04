@@ -197,6 +197,17 @@ type retireRuns struct {
 	source   *retireLedger
 	err      error
 	calls    int
+
+	// rendezvous, when armed, holds every one of the next rendezvousN calls to
+	// CredentialRun until ALL of them have performed their own read of the
+	// chain — so two (or more) concurrent callers can be PROVEN to have each
+	// independently decided "not retired" before any of them is allowed to
+	// proceed to record() and append. Without this, two goroutines racing
+	// gate 2 might just as easily serialize by luck, and a test built on that
+	// luck would be exactly the kind of vacuous timing-dependent case RM-082
+	// (#120) warns about. See armRendezvous.
+	rendezvous  *sync.WaitGroup
+	rendezvousN int
 }
 
 func newRetireRuns(source *retireLedger, runs ...CredentialRun) *retireRuns {
@@ -213,21 +224,59 @@ func newRetireRuns(source *retireLedger, runs ...CredentialRun) *retireRuns {
 
 func (d *retireRuns) CredentialRun(_ context.Context, runID string) (CredentialRun, bool, error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	d.calls++
 	if d.err != nil {
-		return CredentialRun{}, false, d.err
+		err := d.err
+		d.mu.Unlock()
+		return CredentialRun{}, false, err
 	}
-	if r, ok := d.override[runID]; ok {
-		return r, true, nil
+	var (
+		r  CredentialRun
+		ok bool
+	)
+	if or, has := d.override[runID]; has {
+		r, ok = or, true
+	} else {
+		r, ok = d.runs[runID]
 	}
-	r, ok := d.runs[runID]
+	if ok {
+		// Read from the chain, never from a field this test set.
+		r.RetiredAt = d.source.retiredAt(runID)
+	}
+	// The rendezvous is joined and the lock released BEFORE returning, so a
+	// second concurrent call to this same method — which also needs d.mu —
+	// can make its own progress while this one waits. Holding the lock across
+	// the wait would deadlock the second caller against the first.
+	var wait *sync.WaitGroup
+	if d.rendezvous != nil && d.rendezvousN > 0 {
+		wait = d.rendezvous
+		d.rendezvousN--
+		if d.rendezvousN == 0 {
+			d.rendezvous = nil
+		}
+	}
+	d.mu.Unlock()
+	if wait != nil {
+		wait.Done()
+		wait.Wait()
+	}
 	if !ok {
 		return CredentialRun{}, false, nil
 	}
-	// Read from the chain, never from a field this test set.
-	r.RetiredAt = d.source.retiredAt(runID)
 	return r, true, nil
+}
+
+// armRendezvous holds the next n calls to CredentialRun at a barrier: each one
+// completes its own read, then blocks until all n have done the same, and only
+// then do any of them return. It is how a test forces ADR-0020 §5's window —
+// two genuinely concurrent FIRST retirements — deterministically, instead of
+// hoping two goroutines interleave the right way.
+func (d *retireRuns) armRendezvous(n int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	wg := &sync.WaitGroup{}
+	wg.Add(n)
+	d.rendezvous, d.rendezvousN = wg, n
 }
 
 func (d *retireRuns) answerWith(runID string, r CredentialRun) {
@@ -909,6 +958,133 @@ func retireCanonicalBytes(t *testing.T, records []event.Fields) []string {
 		out = append(out, string(b))
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0020 §5 — two genuinely concurrent FIRST retirements of one run.
+//
+// The decision: "Two genuinely concurrent FIRST retirements of one run can
+// therefore both find no record and both append, leaving two `run_retired`
+// events in the chain. ... both callers are told the same instant, because
+// the directory answers with the earliest." RM-095 (#150) is that the second
+// half was never implemented: retire() answered a winning first-time caller
+// with its OWN append's ts, never re-querying the directory for the earliest.
+//
+// New test ID, not in doc 07 (which is not edited by this issue's scope):
+// MCP-019 (C) two concurrent first retirements of one run report the same,
+// earliest instant.
+// ---------------------------------------------------------------------------
+
+// TestMCP019ConcurrentFirstRetirementsReportTheEarliestInstant drives the
+// window rather than assuming it. armRendezvous holds two goroutines calling
+// retire_agent for the SAME run at a barrier inside the run directory's
+// CredentialRun, so BOTH have read "not retired" before EITHER is free to
+// proceed to record() and append — the exact race ADR-0020 §5 accepts,
+// forced instead of hoped for.
+//
+// The mechanism is checked before the consequence is: if the rendezvous
+// failed to force a genuine double append, the chain would hold one
+// run_retired event and the comparison below would prove nothing. Two
+// investigations on this same campaign (RM-069, and #145's first answer)
+// concluded from a confident reading of the code that the harness was at
+// fault, and fault injection reversed both — so this case refuses to trust
+// its own barrier without checking what it left on the chain.
+func TestMCP019ConcurrentFirstRetirementsReportTheEarliestInstant(t *testing.T) {
+	chain := newRetireLedger()
+	runs := newRetireRuns(chain, retireRunRef("run-a"))
+	entries := newRetireEntries("run-a")
+	svc := &retireService{runs: runs, entries: entries, ledger: chain}
+	runs.armRendezvous(2)
+
+	type outcome struct {
+		out retireAgentOut
+		err error
+	}
+	results := make(chan outcome, 2)
+	for range 2 {
+		go func() {
+			out, err := svc.retire(context.Background(), retireAgentIn{RunID: "run-a"})
+			results <- outcome{out, err}
+		}()
+	}
+	first := <-results
+	second := <-results
+	if first.err != nil {
+		t.Fatalf("first concurrent retire_agent(run-a) failed: %v", first.err)
+	}
+	if second.err != nil {
+		t.Fatalf("second concurrent retire_agent(run-a) failed: %v", second.err)
+	}
+
+	// The mechanism, confirmed rather than assumed: the rendezvous forced
+	// both callers to observe "not retired" before either appended, so the
+	// chain must hold two run_retired events for the one run.
+	recorded := chain.of(event.EventTypeRunRetired, "run-a")
+	if len(recorded) != 2 {
+		t.Fatalf("the rendezvous did not force two genuinely concurrent first retirements of "+
+			"run-a: %d run_retired events on the chain, want 2 — ADR-0020 §5's window was not "+
+			"actually driven, and nothing below this line would be evidence of anything", len(recorded))
+	}
+
+	earliest := event.NewTimestamp(chain.retiredAt("run-a")).String()
+
+	// ADR-0020 §5: "both callers are told the same instant, because the
+	// directory answers with the earliest."
+	if first.out.RetiredAt != second.out.RetiredAt {
+		t.Errorf("two concurrent first retirements of run-a reported different instants: "+
+			"%q and %q. ADR-0020 §5: both callers must be told the same, earliest instant.",
+			first.out.RetiredAt, second.out.RetiredAt)
+	}
+	for i, got := range []string{first.out.RetiredAt, second.out.RetiredAt} {
+		if got != earliest {
+			t.Errorf("concurrent caller %d reported retired_at %q; the earliest run_retired on "+
+				"the chain is %q (ADR-0020 §5)", i+1, got, earliest)
+		}
+	}
+}
+
+// TestMCP019SecondRetirementAfterAConcurrentPairStillReadsTheEarliest.
+// ADR-0020 §5's reconciliation has to survive past the two racing callers
+// too: doc 07 MCP-009 promises "idempotent success with original timestamp"
+// to every LATER caller, and "original" is ambiguous on its own when two
+// `run_retired` events exist. It means the earliest, same as the two racing
+// callers were told.
+func TestMCP019SecondRetirementAfterAConcurrentPairStillReadsTheEarliest(t *testing.T) {
+	chain := newRetireLedger()
+	runs := newRetireRuns(chain, retireRunRef("run-a"))
+	entries := newRetireEntries("run-a")
+	svc := &retireService{runs: runs, entries: entries, ledger: chain}
+	runs.armRendezvous(2)
+
+	results := make(chan retireAgentOut, 2)
+	for range 2 {
+		go func() {
+			out, err := svc.retire(context.Background(), retireAgentIn{RunID: "run-a"})
+			if err != nil {
+				t.Errorf("concurrent retire_agent(run-a): %v", err)
+			}
+			results <- out
+		}()
+	}
+	<-results
+	<-results
+
+	if n := len(chain.of(event.EventTypeRunRetired, "run-a")); n != 2 {
+		t.Fatalf("the rendezvous did not force two run_retired events: got %d, want 2", n)
+	}
+	earliest := event.NewTimestamp(chain.retiredAt("run-a")).String()
+
+	later, err := svc.retire(context.Background(), retireAgentIn{RunID: "run-a"})
+	if err != nil {
+		t.Fatalf("the later, uncontested retire_agent(run-a) failed: %v", err)
+	}
+	if later.RetiredAt != earliest {
+		t.Errorf("a later retire_agent(run-a) returned %q, want the earliest of the two "+
+			"concurrent appends, %q (ADR-0020 §5)", later.RetiredAt, earliest)
+	}
+	if n := len(chain.of(event.EventTypeRunRetired, "run-a")); n != 2 {
+		t.Errorf("the later call appended a third run_retired event: %d total, want 2", n)
+	}
 }
 
 // ---------------------------------------------------------------------------
