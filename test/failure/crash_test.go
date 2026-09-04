@@ -1149,11 +1149,89 @@ func TestMCP011SettleReadsResolvesALateCommitWithoutMistakingItForADuplicate(t *
 				}
 				return tc.reads[i]
 			}
-			gotValue, gotSettled := settleReads(read, tc.stableFor, tc.maxReads, func() {})
+			// minStableDuration: 0 — these cases are about the READ-COUNT half
+			// of settleReads, so the wall-clock floor is disabled (it is
+			// satisfied the instant the streak starts) and time.Now is real
+			// but unused for anything these cases check. See
+			// TestMCP011SettleReadsHoldsAStreakForAMinimumRealDurationTooRM093
+			// for the half this table does not cover.
+			gotValue, gotSettled := settleReads(read, tc.stableFor, tc.maxReads, 0, time.Now, func() {})
 			if gotValue != tc.wantValue || gotSettled != tc.wantSettled {
 				t.Errorf("settleReads(stableFor=%d, maxReads=%d) over %v = (%d, %v), want (%d, %v)",
 					tc.stableFor, tc.maxReads, tc.reads, gotValue, gotSettled, tc.wantValue, tc.wantSettled)
 			}
 		})
+	}
+}
+
+// MCP-011-C4 — settleReads must not mistake "stableFor reads agreed" for
+// "enough real time passed for a pending COMMIT to land". RM-093 (#145):
+// under coverage-floors.sh, MCP-011 reported a `credential_issued` count one
+// higher than `issuedBefore + delta + 2` where delta itself came from a
+// SETTLED read — crashSettleStableReads (20) consecutive equal reads a
+// millisecond apart. On an unloaded machine that streak completes in a
+// couple of milliseconds, which is comfortably SHORTER than a COMMIT that is
+// genuinely still in flight can take to land under the contention
+// coverage-floors.sh's whole-module run produces: get_credential's own
+// commit-before-reply ordering (internal/mcp/get_credential.go) and
+// internal/ledger's conservative pgconn.SafeToRetry-gated retry loop both
+// rule out get_credential issuing twice for one call (see #145's report), so
+// a count that is one too high after a settled delta plus two replays is
+// the delta itself having settled on a stale value — not a duplicate.
+//
+// This is the pure half of that finding, driven exactly the way MCP-011-C3
+// drives RM-069's: a scripted read sequence and a scripted clock, no Docker
+// and no timing left to chance. The clock advances by a REALISTIC per-poll
+// increment (matching crashPollInterval) so that crashSettleStableReads
+// reads complete in LESS wall-clock time than crashSettleMinStableDuration —
+// exactly the gap the constant exists to close — and the value changes once
+// more, later, than that: standing in for a COMMIT that lands after the
+// streak would otherwise have declared victory.
+func TestMCP011SettleReadsHoldsAStreakForAMinimumRealDurationTooRM093(t *testing.T) {
+	// reads: 20 consecutive 13s (a full crashSettleStableReads streak, which
+	// at crashPollInterval takes far less than crashSettleMinStableDuration
+	// of simulated wall-clock time to accumulate) and THEN a 14 — the exact
+	// shape of a genuinely pending commit that a read-count-only streak
+	// would miss. read clamps to the slice's last element once it runs out,
+	// so the 14 repeats for as long as maxReads lets the loop keep polling.
+	reads := make([]int, 0, crashSettleStableReads+1)
+	for i := 0; i < crashSettleStableReads; i++ {
+		reads = append(reads, 13)
+	}
+	reads = append(reads, 14)
+
+	clock := time.Unix(0, 0)
+	now := func() time.Time { return clock }
+	i := -1
+	read := func() int {
+		i++
+		if i >= len(reads) {
+			i = len(reads) - 1
+		}
+		return reads[i]
+	}
+	// Each poll advances the clock by crashPollInterval, exactly as
+	// countSettled's production wait does via time.Sleep — so
+	// crashSettleStableReads polls advance the clock by LESS than
+	// crashSettleMinStableDuration, and only the reads AFTER that floor
+	// should be trusted to declare settling.
+	wait := func() { clock = clock.Add(crashPollInterval) }
+
+	// maxReads has to afford the full minStableDuration floor AFTER the
+	// value settles at 14, not just crashSettleStableReads reads of it —
+	// that is the whole property under test — plus the (much shorter) false
+	// streak of 13s ahead of it and a margin against off-by-ones.
+	maxReads := crashSettleStableReads + int(crashSettleMinStableDuration/crashPollInterval) + 50
+
+	gotValue, gotSettled := settleReads(
+		read, crashSettleStableReads, maxReads, crashSettleMinStableDuration, now, wait)
+	if !gotSettled {
+		t.Fatalf("settleReads gave up on a sequence that does stop moving; got settled=false")
+	}
+	if gotValue != 14 {
+		t.Errorf("settleReads reported the count settled at %d after %d reads agreed for less than "+
+			"%s of real time; the sequence's true final value is 14, which a floor on wall-clock "+
+			"stability — not merely on read count — is what makes this catch (RM-093, #145)",
+			gotValue, crashSettleStableReads, crashSettleMinStableDuration)
 	}
 }

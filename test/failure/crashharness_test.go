@@ -168,6 +168,21 @@ const (
 	// not proof the value has stopped moving — it can just as well have been
 	// sampled between two changes — so this asks for more.
 	crashSettleStableReads = 20
+
+	// crashSettleMinStableDuration is the WALL-CLOCK floor settleReads holds
+	// a value to before trusting crashSettleStableReads' streak. RM-093
+	// (#145): crashSettleStableReads alone bounds how many reads agree, not
+	// how much real time passed while they did — on a fast, idle machine
+	// crashPollInterval * crashSettleStableReads can elapse in a few
+	// milliseconds, which is comfortably SHORTER than a COMMIT that is
+	// genuinely still in flight can take to land under the contention
+	// coverage-floors.sh's whole-module run produces. A streak that finishes
+	// early is not evidence the value has stopped moving; it is evidence
+	// only that it did not move DURING that streak. This floor is more than
+	// an order of magnitude past RM-069's "a few instructions", and stays
+	// far inside crashSettleBudget, so a shot with nothing racing still
+	// settles in well under a second.
+	crashSettleMinStableDuration = 150 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------
@@ -850,11 +865,12 @@ func countEvents(records []event.Fields, eventType, runID string) int {
 
 // countSettled polls the chain for the number of eventType events carrying
 // runID until the count has stopped moving — crashSettleStableReads equal
-// reads in a row — or gives up after crashSettleBudget. See RM-069 (#90):
-// reading the chain exactly once, immediately after a SIGKILL, can undercount
-// by one event that is already durable in Postgres but not yet visible to
-// that particular read, because the dying client had already handed its
-// COMMIT to the kernel's socket buffer before the signal landed.
+// reads in a row, held for at least crashSettleMinStableDuration of real
+// time — or gives up after crashSettleBudget. See RM-069 (#90): reading the
+// chain exactly once, immediately after a SIGKILL, can undercount by one
+// event that is already durable in Postgres but not yet visible to that
+// particular read, because the dying client had already handed its COMMIT to
+// the kernel's socket buffer before the signal landed.
 //
 // settled is false only when the count never finished moving inside the
 // budget. That is a harness finding — the budget was too small, or the count
@@ -866,7 +882,7 @@ func (c *campaign) countSettled(t *testing.T, eventType, runID string) (value in
 	maxReads := int(crashSettleBudget/crashPollInterval) + 1
 	return settleReads(
 		func() int { return countEvents(c.chain(t), eventType, runID) },
-		crashSettleStableReads, maxReads,
+		crashSettleStableReads, maxReads, crashSettleMinStableDuration, time.Now,
 		func() { time.Sleep(crashPollInterval) },
 	)
 }
@@ -1658,25 +1674,42 @@ func windowCensus(landings, firedAt map[string]int, window string) censusVerdict
 }
 
 // settleReads polls read until it returns the same value stableFor times in a
-// row, or gives up once it has called read maxReads times in total —
-// whichever comes first.
+// row AND that streak has held for at least minStableDuration of real time,
+// or gives up once it has called read maxReads times in total — whichever
+// comes first.
 //
-// This is the pure half of RM-069 (#90). The race it exists to close: a value
-// read once, immediately after some external event, can be one behind a value
-// that is already fixed but has not yet become visible to that particular
-// read — so a single call to read is not evidence of anything, and this
-// function asks read to stop moving before trusting what it says. stableFor
-// == 1 is the OLD behaviour — trust the first read outright — kept reachable
-// here on purpose so a caller (or a test) can name the regression it replaces
-// rather than only the fix that replaces it.
-func settleReads(read func() int, stableFor, maxReads int, wait func()) (value int, settled bool) {
+// This is the pure half of RM-069 (#90) and RM-093 (#145). The race it exists
+// to close: a value read once, immediately after some external event, can be
+// one behind a value that is already fixed but has not yet become visible to
+// that particular read — so a single call to read is not evidence of
+// anything, and this function asks read to stop moving before trusting what
+// it says. stableFor == 1 is the OLD behaviour — trust the first read
+// outright — kept reachable here on purpose so a caller (or a test) can name
+// the regression it replaces rather than only the fix that replaces it.
+//
+// minStableDuration is why the streak is not enough by itself. stableFor
+// counts READS, not TIME: on a fast, idle machine, stableFor reads a
+// millisecond apart can all complete before a genuinely pending COMMIT — one
+// already handed to Postgres, still landing — has had a realistic chance to
+// become visible. A streak that finishes quickly is evidence only that
+// nothing changed DURING that streak, not that nothing is still in flight.
+// Requiring the streak to also span a minimum WALL-CLOCK duration closes
+// that gap: however fast reads happen to run, settling cannot be declared
+// before minStableDuration of real time has passed with no change observed.
+// now is threaded through rather than calling time.Now directly so a test can
+// drive it without depending on real timing (RM-093, #145).
+func settleReads(
+	read func() int, stableFor, maxReads int, minStableDuration time.Duration,
+	now func() time.Time, wait func(),
+) (value int, settled bool) {
 	if stableFor < 1 {
 		stableFor = 1
 	}
 	last := read()
 	streak := 1
 	reads := 1
-	for streak < stableFor {
+	streakStart := now()
+	for streak < stableFor || now().Sub(streakStart) < minStableDuration {
 		if reads >= maxReads {
 			return last, false
 		}
@@ -1687,6 +1720,7 @@ func settleReads(read func() int, stableFor, maxReads int, wait func()) (value i
 			streak++
 		} else {
 			last, streak = next, 1
+			streakStart = now()
 		}
 	}
 	return last, true
