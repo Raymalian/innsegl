@@ -69,10 +69,23 @@ const (
 
 	// The shipped stack's published loopback endpoints, as spire.yml and
 	// sigstore.yml default them. OPS-004 runs the README's commands verbatim,
-	// which means it takes the README's ports.
+	// which means it takes the README's ports — for oidc and fulcio, which
+	// are not this defect's subject.
 	oidcURL   = "http://127.0.0.1:8443"
 	fulcioURL = "http://127.0.0.1:5555"
-	rekorURL  = "http://127.0.0.1:3000"
+
+	// Rekor is different (#131). Host port 3000 is a common development
+	// port, and a hardcoded rekorURL silently redirected OPS-004's trust
+	// material probe at whatever else already held it — measured on this
+	// machine as juice-authz, not hypothetical. So Rekor's host port is
+	// chosen fresh per run (stack.rekorPort, stack.rekorURL) and threaded
+	// through INNSEGL_REKOR_PORT, which sigstore.yml already reads
+	// (deploy/compose/sigstore.yml:320). rekorContainerName is that
+	// service's container_name there, fixed regardless of compose project
+	// name, and is what assertRekorPortIsOurs checks the chosen port
+	// against before anything is allowed to treat a response on it as
+	// evidence about Innsegl.
+	rekorContainerName = "innsegl-sigstore-rekor"
 
 	// Inside the container network the same two services answer to their
 	// compose names. The MCP and the verifier both use these.
@@ -213,6 +226,13 @@ type stack struct {
 	arch      string
 	mcpURL    string
 	healthURL string
+	// rekorPort and rekorURL are chosen fresh per run rather than taking the
+	// compose default (#131): a fixed host port silently hands OPS-004's
+	// trust-material probe to whatever else already holds it. rekorPort is
+	// threaded through INNSEGL_REKOR_PORT to `docker compose ... up` via
+	// stack.sh, and rekorURL is the host-side URL built from it.
+	rekorPort string
+	rekorURL  string
 	// ledgerIP is the ledger's address on its own network. It is the address
 	// the verifier's container is shown to have no route to. NOTHING on the
 	// ledger network publishes a host port while that is being measured — see
@@ -313,8 +333,31 @@ func startStack(ctx context.Context, t *testing.T) (*stack, error) {
 	}
 
 	// 2. The README's boot block, run as shell.
+	//
+	// Rekor's host port is picked here, immediately before it is used, to
+	// keep the window between choosing it and `docker compose up` binding
+	// it as small as this harness can make it. #143 measured that a
+	// probed-then-released port can be taken before it is bound; this does
+	// not close that window, it only declines to widen it — and (below)
+	// does not trust anything that answers in it without checking first.
+	rekorPort, err := freeHostPort(ctx)
+	if err != nil {
+		return s, fmt.Errorf("choosing a host port for Rekor: %w", err)
+	}
+	s.rekorPort = rekorPort
+	s.rekorURL = "http://127.0.0.1:" + rekorPort
+
 	if bootErr := s.boot(ctx, t); bootErr != nil {
 		return s, bootErr
+	}
+	// #131's fix, the part that matters: a response on the port this
+	// harness chose is not evidence about Innsegl until Docker itself says
+	// our own Rekor container is what is bound to it. This runs once, right
+	// after boot and before any probe, so a conflict is reported in seconds
+	// and by name — not after minutes of retries that end in a Rekor fault
+	// that never happened.
+	if conflictErr := s.assertRekorPortIsOurs(ctx); conflictErr != nil {
+		return s, conflictErr
 	}
 	if trustErr := s.awaitTrustMaterial(ctx); trustErr != nil {
 		return s, trustErr
@@ -494,7 +537,7 @@ func (s *stack) awaitTrustMaterial(ctx context.Context) error {
 	deadline := time.Now().Add(4 * time.Minute)
 	var last error
 	for time.Now().Before(deadline) {
-		last = probeTrustMaterial(ctx)
+		last = s.probeTrustMaterial(ctx)
 		if last == nil {
 			return nil
 		}
@@ -507,7 +550,12 @@ func (s *stack) awaitTrustMaterial(ctx context.Context) error {
 	return fmt.Errorf("the booted stack never served parseable trust material: %w", last)
 }
 
-func probeTrustMaterial(ctx context.Context) error {
+// probeTrustMaterial does not re-check who owns s.rekorURL's port: that is
+// assertRekorPortIsOurs's job, and startStack runs it once, right after boot
+// and before the first call here — so by the time this ever asks Rekor
+// anything, "who is answering" is already a settled question, not one this
+// retry loop reopens on every 2-second attempt.
+func (s *stack) probeTrustMaterial(ctx context.Context) error {
 	root, err := httpGET(ctx, fulcioURL+"/api/v1/rootCert")
 	if err != nil {
 		return fmt.Errorf("fulcio: %w", err)
@@ -519,7 +567,7 @@ func probeTrustMaterial(ctx context.Context) error {
 	if _, parseErr := x509.ParseCertificate(block.Bytes); parseErr != nil {
 		return fmt.Errorf("fulcio: /api/v1/rootCert did not return a certificate: %w", parseErr)
 	}
-	key, err := httpGET(ctx, rekorURL+"/api/v1/log/publicKey")
+	key, err := httpGET(ctx, s.rekorURL+"/api/v1/log/publicKey")
 	if err != nil {
 		return fmt.Errorf("rekor: %w", err)
 	}
@@ -534,6 +582,65 @@ func probeTrustMaterial(ctx context.Context) error {
 		return errors.New("spire-oidc: /keys served no JWKS, so register.sh's entry is missing")
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// #131 — a response on Rekor's port is not evidence about Rekor unless the
+// container answering it is ours.
+//
+// MEASURED on this machine: `curl 127.0.0.1:3000/api/v1/log/publicKey`
+// returned HTTP 500 titled "Unexpected path: /api/v1/log/publicKey" from
+// bkimminich/juice-shop, not from Rekor, because juice-authz already held
+// the host port sigstore.yml was hardcoded to. Picking a free port (above)
+// removes today's collision; it cannot remove every future one — the next
+// thing running on whatever port this harness happens to pick reproduces
+// the identical false report unless the harness checks who is actually
+// there before it trusts anything the port says. So it does, once, right
+// after boot and before the first probe.
+// ---------------------------------------------------------------------------
+
+// assertRekorPortIsOurs asks Docker, not HTTP, who is bound to the host port
+// this run chose for Rekor. Docker's own port-publish table settles the
+// question in a way no HTTP response can: a 500, a 200, a hang and a
+// connection reset are all equally consistent with "someone else is there,"
+// so none of them is asked first.
+func (s *stack) assertRekorPortIsOurs(ctx context.Context) error {
+	out, err := docker(ctx, "ps", "--filter", "publish="+s.rekorPort,
+		"--format", "{{.Names}}\t{{.Image}}")
+	if err != nil {
+		return fmt.Errorf("checking what Docker has bound to host port %s before "+
+			"trusting anything that answers on it: %w", s.rekorPort, err)
+	}
+	return rekorPortConflict(s.rekorPort, out)
+}
+
+// rekorPortConflict is assertRekorPortIsOurs's decision, pulled out as a pure
+// function of `docker ps`'s own output so OPS-014 can exercise every branch
+// without a container, and OPS-015 can exercise it against a real one.
+func rekorPortConflict(port, psOutput string) error {
+	var owners []string
+	for _, line := range strings.Split(strings.TrimSpace(psOutput), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		name, _, _ := strings.Cut(line, "\t")
+		if name == rekorContainerName {
+			return nil
+		}
+		owners = append(owners, line)
+	}
+	if len(owners) == 0 {
+		return fmt.Errorf("host port %s was chosen for Rekor and passed as "+
+			"INNSEGL_REKOR_PORT, but no container has it published — %s never came "+
+			"up on it. This is a port conflict or a boot failure, not a Rekor fault "+
+			"(#131)", port, rekorContainerName)
+	}
+	return fmt.Errorf("host port %s was chosen for Rekor and passed as "+
+		"INNSEGL_REKOR_PORT, but Docker has it bound to %s, not %s. Whatever answers "+
+		"on 127.0.0.1:%s is that container, not our Rekor, and nothing it says is "+
+		"evidence about Innsegl (#131)",
+		port, strings.Join(owners, "; "), rekorContainerName, port)
 }
 
 // attestedNode is the SPIFFE ID every run entry hangs off.
@@ -1096,6 +1203,15 @@ func copyFile(src, dst string, mode os.FileMode) error {
 func (s *stack) sh(ctx context.Context, script string) (string, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-e", "-c", script)
 	cmd.Dir = s.clone
+	// INNSEGL_REKOR_PORT is the escape hatch deploy/compose/sigstore.yml
+	// already offers (line 320). This is the one place a chosen port reaches
+	// it, through the process environment rather than a line appended to
+	// documentedBootCommands — an appended line is exactly what OPS-005
+	// would then have to find, verbatim, in the README, and a per-run port
+	// number cannot be.
+	if s.rekorPort != "" {
+		cmd.Env = append(os.Environ(), "INNSEGL_REKOR_PORT="+s.rekorPort)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("sh: %w", err)
