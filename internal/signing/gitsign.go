@@ -496,6 +496,37 @@ func (s *Signer) checkCredential(c Credential, claim Claim, now time.Time) error
 // "Rekor is down" (TRANSPARENCY_UNAVAILABLE) without reading a subprocess's
 // prose, and it runs BEFORE git does, so neither failure can leave a commit
 // object behind (IP §6.3).
+//
+// # Why this makes exactly one attempt at each endpoint (RM-070, #93)
+//
+// IP §6.3 lists three Sigstore failure modes: "Fulcio down" and "Rekor down"
+// each get one clean, immediate, correctly-classed error — RETRYABLE as a
+// property of the error class, which is a statement about the CALLER, not a
+// promise that this function loops. "Slow Sigstore" is the third and
+// separate clause, and it is the one that asks for "explicit timeouts,
+// bounded retries with backoff and jitter" — which #93 gives the Rekor
+// lookup below findRekorEntry, the operation that is actually racing an
+// eventually-consistent write (see rekorLookupPolicy's comment in
+// sigstore.go). This probe is not racing anything: it is asking "is the
+// service here right now", once, with an explicit timeout (the ctx this
+// function is given, bounded by Config.Timeout), which already satisfies
+// §6.3's "explicit timeouts" half on its own.
+//
+// Retrying that question would trade away the property the "down" clauses
+// exist for — a caller gets a clean, fast, correctly-classed refusal it can
+// itself retry (sign_commit's error class is documented as retryable for
+// exactly this) — in exchange for absorbing single-request network blips at
+// the cost of doing so inside every first Sign() call, since this result is
+// cached per Signer for its lifetime (line above: `if s.trust != nil`) and
+// so pays this cost once, not once per signature.
+//
+// The conclusion drawn here is that a single attempt is correct, not an
+// oversight — but IP §6.3's text does not say so: a reader could plausibly
+// take "bounded retries with backoff and jitter" as covering every Sigstore
+// interaction, this probe included. That reading gap is a finding for
+// doc 01's maintainer to resolve in the spec, not something resolved by
+// changing this function to match one interpretation of an ambiguous
+// sentence.
 func (s *Signer) trustMaterial(ctx context.Context) (*trustFiles, error) {
 	if s.trust != nil {
 		return s.trust, nil

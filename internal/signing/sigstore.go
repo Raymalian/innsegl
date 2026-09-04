@@ -17,10 +17,13 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	mathrand "math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"innsegl.dev/innsegl/internal/segment"
 )
 
 // What this file does, and what it deliberately does not.
@@ -68,7 +71,103 @@ const (
 	// been acknowledged, not a wait for work that has not started.
 	rekorLookupAttempts = 5
 	rekorLookupDelay    = 500 * time.Millisecond
+
+	// rekorLookupMaxDelay and rekorLookupMultiplier turn rekorLookupDelay from
+	// a flat wait into the Base of an exponential backoff (IP §6.3: "bounded
+	// retries with backoff and jitter"). RM-034 (#42) measured the flat wait
+	// on the wire: four gaps identical to within a millisecond, no growth, no
+	// jitter (#93) — against exactly the reasoning above. A race with an
+	// already-acknowledged write does not, on its own, need either. What does
+	// need it is doc 05 §2's fact that every MCP replica shares one Rekor: a
+	// fleet retrying the same write on the same fixed schedule can still
+	// synchronise into the thundering herd doc 04 lists under asset A5.
+	//
+	// Multiplier is pinned at 2: rekorWait.jittered's equal-jitter
+	// construction only guarantees non-overlapping, strictly growing
+	// intervals when the multiplier is at least 2 — see the comment there.
+	// Lowering it would turn TestRekorWaitJitteredGapsAlwaysGrow's guarantee
+	// from structural into merely statistical.
+	rekorLookupMaxDelay   = 5 * time.Second
+	rekorLookupMultiplier = 2.0
 )
+
+// rekorLookupPolicy is the Rekor lookup's retry policy.
+// internal/segment/anchor.go already defines this exact shape for Rekor
+// anchoring (RM-012, ADR-0009) — Attempts, a Base, a Max and a Multiplier,
+// walked by Backoff — and it is reused here rather than reinvented: two
+// retry policies against the same log is exactly the divergence doc 04 §5.4
+// warns about. What anchor.go's shape does not carry is jitter — ADR-0009's
+// anchoring is a background retry with no sibling racing it moment to
+// moment, so it never needed any — and rekorWait below adds the half
+// anchor.go's shape does not supply.
+var rekorLookupPolicy = segment.RetryPolicy{
+	Attempts:   rekorLookupAttempts,
+	Base:       rekorLookupDelay,
+	Max:        rekorLookupMaxDelay,
+	Multiplier: rekorLookupMultiplier,
+}
+
+// rekorWait turns one plain backoff into the interval a lookup attempt
+// actually waits, adding the jitter anchor.go's RetryPolicy does not.
+//
+// Equal jitter — wait = backoff/2 + rand()·backoff/2 — rather than full
+// jitter: it keeps a hard floor under every attempt, so a real blip still
+// gets a real wait, while still de-synchronising a fleet of replicas. And
+// because Multiplier is pinned at 2, the floor of attempt n+1 is exactly the
+// ceiling of attempt n:
+//
+//	jittered(Backoff(n))   ∈ [Backoff(n)/2, Backoff(n))
+//	jittered(Backoff(n+1)) ∈ [Backoff(n),   2·Backoff(n))
+//
+// so gap n is always strictly less than gap n+1, for ANY draw from Rand.
+// That is what makes "intervals grow" a structural fact rather than a
+// statistical one — TestRekorWaitJitteredGapsAlwaysGrow needs no seed and
+// cannot flake.
+//
+// randFn and sleepFn are substitutable for the reason
+// internal/segment.Anchorer.Sleep is substitutable: a test drives the wait
+// rather than living through it — postgres_ambiguouscommit_test.go's
+// pattern, applied to time instead of a commit acknowledgment — and drives
+// the randomness with an injected, logged sequence rather than trusting a
+// flake to reproduce — test/chaos/kill_test.go's pattern, applied to one
+// float instead of a kill target. nil means the real thing: math/rand/v2's
+// auto-seeded, concurrency-safe top-level source, and a real context-aware
+// timer.
+type rekorWait struct {
+	randFn  func() float64
+	sleepFn func(context.Context, time.Duration) error
+}
+
+func (w rekorWait) rand() float64 {
+	if w.randFn != nil {
+		return w.randFn()
+	}
+	return mathrand.Float64() //nolint:gosec // G404: jitter timing, not a security decision — predictability here costs nothing an attacker could use
+}
+
+func (w rekorWait) sleep(ctx context.Context, d time.Duration) error {
+	if w.sleepFn != nil {
+		return w.sleepFn(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// jittered applies equal jitter to one plain backoff. A non-positive backoff
+// waits zero rather than going negative.
+func (w rekorWait) jittered(backoff time.Duration) time.Duration {
+	if backoff <= 0 {
+		return 0
+	}
+	half := float64(backoff) / 2
+	return time.Duration(half + w.rand()*half)
+}
 
 // Fulcio's certificate extensions, from
 // https://github.com/sigstore/fulcio/blob/main/docs/oid-info.md. Only the two
@@ -396,6 +495,14 @@ type rekorBody struct {
 // of a subprocess's output would name an entry without establishing anything
 // about it.
 func findRekorEntry(ctx context.Context, client *http.Client, base, commitSHA string, leaf *x509.Certificate) (RekorEntry, error) {
+	return findRekorEntryWaiting(ctx, client, base, commitSHA, leaf, rekorWait{})
+}
+
+// findRekorEntryWaiting is findRekorEntry with the wait between attempts
+// substitutable (see rekorWait). Production signing goes through
+// findRekorEntry, which uses the real clock and real randomness; only tests
+// construct a rekorWait directly.
+func findRekorEntryWaiting(ctx context.Context, client *http.Client, base, commitSHA string, leaf *x509.Certificate, wait rekorWait) (RekorEntry, error) {
 	digest := sha256.Sum256([]byte(commitSHA))
 	want := hex.EncodeToString(digest[:])
 
@@ -409,12 +516,11 @@ func findRekorEntry(ctx context.Context, client *http.Client, base, commitSHA st
 	query := []byte(`{"hash":"` + rekorSHA256 + ":" + want + `"}`)
 
 	var last error
-	for attempt := range rekorLookupAttempts {
+	for attempt := range rekorLookupPolicy.Attempts {
 		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return RekorEntry{}, ctx.Err()
-			case <-time.After(rekorLookupDelay):
+			d := wait.jittered(rekorLookupPolicy.Backoff(attempt))
+			if serr := wait.sleep(ctx, d); serr != nil {
+				return RekorEntry{}, serr
 			}
 		}
 		raw, err := httpPostJSON(ctx, client, indexURL, query)
