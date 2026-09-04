@@ -484,12 +484,23 @@ func sig004SlowSigstore(t *testing.T, s *sigStack) {
 
 		const injected = 8 * time.Second
 		const clientTimeout = time.Second
-		// internal/signing pins these: rekorLookupAttempts = 5,
-		// rekorLookupDelay = 500ms. They are unexported, so they are written
-		// out here — which is deliberate: a harness that read the bound out of
-		// the code under test could not notice the bound changing.
+		// internal/signing pins these: rekorLookupPolicy.Attempts = 5, Base =
+		// 500ms, Multiplier = 2 (#93). They are unexported, so they are
+		// written out here — which is deliberate: a harness that read the
+		// bound out of the code under test could not notice the bound
+		// changing.
 		const wantAttempts = 5
-		const wantDelay = 500 * time.Millisecond
+		// wantFloors are Backoff(1..4)/2. rekorWait applies equal jitter —
+		// wait = backoff/2 + rand()·backoff/2 — on top of the exponential
+		// backoff those constants describe, so backoff/2 is a genuine floor
+		// for each attempt no matter what the jitter drew, the same way
+		// wantDelay used to be a flat floor for every attempt.
+		wantFloors := []time.Duration{
+			250 * time.Millisecond,
+			500 * time.Millisecond,
+			1000 * time.Millisecond,
+			2000 * time.Millisecond,
+		}
 
 		rekor := newSigFailProxy(t, s.rekorURL)
 		cfg := s.sigConfig()
@@ -549,25 +560,65 @@ func sig004SlowSigstore(t *testing.T, s *sigStack) {
 				"(internal/signing.rekorLookupAttempts):%s",
 				len(attempts), wantAttempts, rekor.describe())
 		}
-		// THE WAIT BETWEEN THEM, MEASURED. Each gap must be at least the
-		// shipped delay; a loop that hammered the log with no wait would show
-		// gaps of about clientTimeout alone.
-		//
-		// What the measurement also shows is that this wait is CONSTANT. IP
-		// §6.3 asks for "bounded retries with backoff and jitter"; the shipped
-		// loop is bounded and waits, and the four gaps come out identical to
-		// within a millisecond, so there is neither growth nor jitter. That is
-		// recorded in ADR-0032 and left as a finding rather than asserted
-		// here: a test that demanded jitter would fail against shipped code
-		// this issue may not change, and a test that asserted the gaps are
-		// equal would make the defect a requirement.
+		// THE WAIT BETWEEN THEM, MEASURED. RM-034 (#42) recorded this as a
+		// finding rather than an assertion: the four gaps came out identical
+		// to within a millisecond — no growth, no jitter — against shipped
+		// code that issue had no mandate to change, and a test asserting the
+		// gaps were EQUAL would have turned the defect into a requirement.
+		// #93 is that mandate, and these are the two assertions RM-034
+		// withheld.
 		gaps := rekor.gapsAfter(mark, sigRekorIndexPath)
+		if len(gaps) != len(wantFloors) {
+			t.Fatalf("%d gaps measured, want %d (one less than wantAttempts)", len(gaps), len(wantFloors))
+		}
+
+		// THE FLOOR, PER ATTEMPT — still enforced, now growing instead of
+		// flat. A loop that hammered the log with no wait, or one that
+		// regressed to jittering around a flat delay, would show a gap below
+		// its attempt's floor sooner or later across the four.
 		for i, g := range gaps {
-			if g < wantDelay {
-				t.Errorf("attempts %d and %d were %s apart, and the shipped delay "+
-					"between them is %s: this loop is not waiting at all",
-					i+1, i+2, g.Truncate(time.Millisecond), wantDelay)
+			if g < wantFloors[i] {
+				t.Errorf("attempts %d and %d were %s apart, and the shipped backoff's "+
+					"floor for that attempt is %s: this loop is not backing off",
+					i+1, i+2, g.Truncate(time.Millisecond), wantFloors[i])
 			}
+		}
+
+		// GROWTH — RM-034's first withheld assertion. Compared across the
+		// extremes rather than every adjacent pair: internal/signing's own
+		// unit tests (TestRekorWaitJitteredGapsAlwaysGrow) prove the
+		// requested wait grows on EVERY adjacent pair by construction, with no
+		// real network latency in the way; this measurement is real wire time
+		// through a proxy, where two adjacent gaps near a boundary could be
+		// separated by less than the container scheduler's own jitter. First
+		// vs. last leaves a wide margin — the floors above guarantee at least
+		// a 4x spread (2000ms/500ms) even at the jitter's own extremes — so
+		// 3x tolerates real network noise without tolerating a flat interval.
+		if first, last := gaps[0], gaps[len(gaps)-1]; last <= first*3 {
+			t.Errorf("gaps grew from %s to %s; the shipped backoff (base 500ms, "+
+				"multiplier 2, 4 steps) guarantees more than 3x growth even at its "+
+				"jitter's own extremes, so this is not growing: %v",
+				first.Truncate(time.Millisecond), last.Truncate(time.Millisecond), gaps)
+		}
+
+		// JITTER — RM-034's second withheld assertion: repeated attempts do
+		// not produce identical intervals. Asserted directly against the
+		// defect as measured: RM-034 found all four gaps within a millisecond
+		// of each other. If backoff has genuinely replaced the flat wait,
+		// that clustering is not just unlikely, it is precluded by the floors
+		// above (250ms apart at a minimum, attempt 1 to attempt 2) — so this
+		// also catches a regression to a flat, but still jittered, delay.
+		clustered := true
+		for _, g := range gaps[1:] {
+			if d := g - gaps[0]; d > time.Millisecond || d < -time.Millisecond {
+				clustered = false
+				break
+			}
+		}
+		if clustered {
+			t.Errorf("all %d gaps landed within 1ms of each other (%v): RM-034's "+
+				"original measurement — a flat, unjittered interval — appears to have "+
+				"returned", len(gaps), gaps)
 		}
 		if uploads := rekor.callsAfter(mark, sigRekorEntryPath); len(uploads) == 0 {
 			t.Errorf("gitsign made no request to %s, so the log was never asked "+
