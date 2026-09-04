@@ -142,7 +142,7 @@ func (w rekorWait) rand() float64 {
 	if w.randFn != nil {
 		return w.randFn()
 	}
-	return mathrand.Float64()
+	return mathrand.Float64() //nolint:gosec // G404: jitter timing, not a security decision — predictability here costs nothing an attacker could use
 }
 
 func (w rekorWait) sleep(ctx context.Context, d time.Duration) error {
