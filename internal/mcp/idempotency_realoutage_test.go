@@ -51,7 +51,13 @@ import (
 func TestMCP021TheSamePostgresOutageClassifiesTheSameOnBothLayers(t *testing.T) {
 	requirePG(t) // honest skip/failure split (#101) before anything is started
 
-	const maxRounds = 8
+	// A generous bound: each round is cheap when it succeeds (typically 1-4
+	// rounds in practice), and the graceful-shutdown window this test is
+	// racing for narrows further under heavy concurrent Docker load — a
+	// second agent's containers, or the rest of this package's own real-
+	// Postgres tests running alongside this one. More rounds buys back the
+	// margin load costs, without slowing a quiet machine's runs at all.
+	const maxRounds = 24
 	var lastLedgerSeen, lastMCPSeen bool
 	for round := 1; round <= maxRounds; round++ {
 		result := runOutageProbeRound(t, round)
