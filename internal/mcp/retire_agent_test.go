@@ -208,6 +208,23 @@ type retireRuns struct {
 	// (#120) warns about. See armRendezvous.
 	rendezvous  *sync.WaitGroup
 	rendezvousN int
+
+	// atCall overrides exactly one call to CredentialRun, numbered from 1. It
+	// exists to drive retire()'s post-append re-query (earliestRetiredAt) into
+	// its own defensive error paths — a directory disagreeing with itself
+	// immediately after this tool's own append is not a scenario the shipped
+	// rundir.Directory produces (it reads the same chain this tool just wrote
+	// to), but retire()'s refusal to trust it anyway is exactly what IP §2's
+	// 100%-branch floor on "every error-return path of every MCP tool" holds
+	// open. See answerAtCall.
+	atCall map[int]retireRunsAnswer
+}
+
+// retireRunsAnswer is one forced answer for one call number.
+type retireRunsAnswer struct {
+	run CredentialRun
+	ok  bool
+	err error
 }
 
 func newRetireRuns(source *retireLedger, runs ...CredentialRun) *retireRuns {
@@ -225,6 +242,12 @@ func newRetireRuns(source *retireLedger, runs ...CredentialRun) *retireRuns {
 func (d *retireRuns) CredentialRun(_ context.Context, runID string) (CredentialRun, bool, error) {
 	d.mu.Lock()
 	d.calls++
+	call := d.calls
+	if forced, has := d.atCall[call]; has {
+		delete(d.atCall, call)
+		d.mu.Unlock()
+		return forced.run, forced.ok, forced.err
+	}
 	if d.err != nil {
 		err := d.err
 		d.mu.Unlock()
@@ -277,6 +300,18 @@ func (d *retireRuns) armRendezvous(n int) {
 	wg := &sync.WaitGroup{}
 	wg.Add(n)
 	d.rendezvous, d.rendezvousN = wg, n
+}
+
+// answerAtCall forces call number `call` (1-indexed, across every run_id) to
+// answer exactly (run, ok, err) instead of consulting the chain. It is a
+// one-shot: the entry is consumed the first time that call number is reached.
+func (d *retireRuns) answerAtCall(call int, run CredentialRun, ok bool, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.atCall == nil {
+		d.atCall = map[int]retireRunsAnswer{}
+	}
+	d.atCall[call] = retireRunsAnswer{run: run, ok: ok, err: err}
 }
 
 func (d *retireRuns) answerWith(runID string, r CredentialRun) {
@@ -1084,6 +1119,70 @@ func TestMCP019SecondRetirementAfterAConcurrentPairStillReadsTheEarliest(t *test
 	}
 	if n := len(chain.of(event.EventTypeRunRetired, "run-a")); n != 2 {
 		t.Errorf("the later call appended a third run_retired event: %d total, want 2", n)
+	}
+}
+
+// TestRetireAgentRefusesWhenTheEarliestReQueryFails. earliestRetiredAt's own
+// three refusals: doc 02 §5's directory read can fail, can forget a run whose
+// retirement this very call just appended, or can answer as though that
+// append never happened. None of these three is a scenario the shipped
+// rundir.Directory produces on its own — it reads the same chain this tool
+// just wrote to — but IP §2's 100%-branch floor asks for every error-return
+// path of every MCP tool, this one included, and answerAtCall is what makes
+// each one reachable without inventing a second implementation of the
+// directory to get there.
+func TestRetireAgentRefusesWhenTheEarliestReQueryFails(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		force func(runs *retireRuns)
+		class Class
+	}{
+		{
+			name: "the re-query itself fails",
+			force: func(runs *retireRuns) {
+				runs.answerAtCall(2, CredentialRun{}, false, &ledger.StoreError{
+					Class: ledger.ClassLedgerUnavailable, Op: "read", Retryable: true,
+					Err: fmt.Errorf("connection refused"),
+				})
+			},
+			class: ClassLedgerUnavailable,
+		},
+		{
+			name: "the re-query no longer finds the run",
+			force: func(runs *retireRuns) {
+				runs.answerAtCall(2, CredentialRun{}, false, nil)
+			},
+			class: ClassInvariantViolation,
+		},
+		{
+			name: "the re-query reports the run not retired",
+			force: func(runs *retireRuns) {
+				runs.answerAtCall(2, CredentialRun{RunID: "run-a", SPIFFEID: retireSPIFFEID("run-a")}, true, nil)
+			},
+			class: ClassInvariantViolation,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chain := newRetireLedger()
+			runs := newRetireRuns(chain, retireRunRef("run-a"))
+			entries := newRetireEntries("run-a")
+			svc := &retireService{runs: runs, entries: entries, ledger: chain}
+			tc.force(runs)
+
+			_, err := svc.retire(context.Background(), retireAgentIn{RunID: "run-a"})
+			if err == nil {
+				t.Fatalf("retire_agent(run-a) succeeded; the forced re-query answer should have "+
+					"refused it with %s", tc.class)
+			}
+			if got := Classify(err).Class; got != tc.class {
+				t.Errorf("class = %s, want %s (error: %v)", got, tc.class, err)
+			}
+			// The append this call made before the re-query is I4: it stands
+			// regardless of what the re-query itself does afterward.
+			if n := len(chain.of(event.EventTypeRunRetired, "run-a")); n != 1 {
+				t.Errorf("the call's own run_retired should still stand: %d events, want 1", n)
+			}
+		})
 	}
 }
 
