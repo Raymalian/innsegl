@@ -276,7 +276,19 @@ func (s *retireService) retire(ctx context.Context, in retireAgentIn) (retireAge
 	retiredAt := event.NewTimestamp(run.RetiredAt)
 	if !run.Retired() {
 		// Ledger first. See the ordering note at the top of this file.
-		if retiredAt, err = s.record(ctx, run, spiffeID); err != nil {
+		if _, err = s.record(ctx, run, spiffeID); err != nil {
+			return retireAgentOut{}, err
+		}
+		// ADR-0020 §5. The check above is not atomic with the append below it —
+		// the mechanism that would fuse them is the idempotency_key ADR-0004
+		// forbids — so two genuinely concurrent FIRST retirements of this run
+		// can both have read "not retired" here and both be about to append.
+		// This call's own append is not necessarily the one the ADR promises
+		// every caller: re-reading the directory is what makes it so. The
+		// directory answers with the EARLIEST `run_retired` for the run
+		// (rundir.Directory.CredentialRun), so a caller that lost this race is
+		// told the winner's instant, never its own.
+		if retiredAt, err = s.earliestRetiredAt(ctx, run.RunID); err != nil {
 			return retireAgentOut{}, err
 		}
 	}
@@ -320,6 +332,44 @@ func (s *retireService) record(ctx context.Context, run CredentialRun, spiffeID 
 		return event.Timestamp{}, credentialLedgerError(run.RunID, err)
 	}
 	return retireAgentInstant(run.RunID, record)
+}
+
+// earliestRetiredAt re-reads the run directory immediately after this call's
+// own `run_retired` append, and answers with what it says now — never with
+// the ts this call's own append happened to carry.
+//
+// ADR-0020 §5's reconciliation, executed: "both callers are told the same
+// instant, because the directory answers with the earliest." The directory
+// (mcp.CredentialRuns, shipped as internal/rundir.Directory) computes that by
+// scanning every `run_retired` for the run and keeping the earliest ts, which
+// is the same rule doc 02 requires readers of a doubled event to apply (I4).
+// Calling it again here — rather than trusting this goroutine's own append —
+// is what makes a caller that lost the race be told the winner's instant
+// instead of its own: the two are otherwise indistinguishable from inside
+// record(), which only ever sees its own append.
+//
+// On the ordinary, uncontested path this is one extra read that returns
+// exactly what this call already appended, because no other `run_retired`
+// exists to be earlier. The cost is paid on every first-time retirement, not
+// only a raced one, because a retirement has no way to know in advance
+// whether it was raced.
+func (s *retireService) earliestRetiredAt(ctx context.Context, runID string) (event.Timestamp, error) {
+	run, found, err := s.runs.CredentialRun(ctx, runID)
+	if err != nil {
+		return event.Timestamp{}, credentialLedgerError(runID, err)
+	}
+	if !found {
+		// This call's own append just happened; a directory that no longer
+		// knows the run is a defect in the directory or the ledger it reads,
+		// not a normal outcome for this tool to paper over.
+		return event.Timestamp{}, Errorf(ClassInvariantViolation, runID,
+			"the run directory no longer knows run %q immediately after appending its retirement", runID)
+	}
+	if !run.Retired() {
+		return event.Timestamp{}, Errorf(ClassInvariantViolation, runID,
+			"the run directory reports %q not retired immediately after appending its retirement", runID)
+	}
+	return event.NewTimestamp(run.RetiredAt), nil
 }
 
 // retireAgentInstant reads the `ts` the ledger assigned to the retirement.
