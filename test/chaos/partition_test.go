@@ -1505,3 +1505,222 @@ func (w *prtWorld) mustRegister(ctx context.Context, t *testing.T, suffix string
 	}
 	return runID
 }
+
+// ===========================================================================
+// RM-092 (#143): OPS-001's bring-up loses a probe-then-bind race for a
+// loopback port. The harness picks a free ephemeral port, releases it, and
+// Docker binds it seconds later; anything else on the machine can take it in
+// between, and the CI failure this issue reports (`Bind for
+// 127.0.0.1:33971 failed: port is already allocated`) is exactly that.
+//
+// These are not doc 07 cases — doc 07 names OPS-001's PRODUCT behaviour, and
+// this is the harness's own plumbing — so they are numbered off the issue
+// instead of the catalog: RM-092-1 through RM-092-3. prtFreePort,
+// prtPortAllocated, prtRetryPortRace and prtRemoveContainerIfExists, the
+// code under test here, live in partitionharness_test.go beside the rest of
+// the bring-up.
+// ===========================================================================
+
+// RM-092-1: the classifier matches ONLY the docker daemon's own,
+// distinguishable port-conflict messages — in both the wording an older
+// Docker Engine uses and the wording a newer one uses — and nothing else.
+// Both positive cases were reproduced locally against a real daemon
+// (Docker 29.6.2) while diagnosing #143; RM-092-3 below reproduces the
+// newer one live. #101 is why the negative cases matter as much as the
+// positive ones: a classifier that matched too broadly would turn a genuine
+// fault into a silent retry loop instead of the fast, loud failure OPS-001
+// requires.
+func TestRM092PortAllocatedClassifiesOnlyTheDaemonsOwnMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			// Verbatim from #143's CI log, an older Docker Engine's
+			// network-driver-programming failure.
+			name: "older docker engine: driver failed programming external connectivity",
+			err: fmt.Errorf("bringing up the Sigstore stack: %w", fmt.Errorf(
+				"docker compose -p innsegl-partition-43999 -f sigstore.yml up -d: "+
+					"exit status 1: %s",
+				"Error response from daemon: failed to set up container networking: "+
+					"driver failed programming external connectivity on endpoint "+
+					"innsegl-partition-43999-fulcio: Bind for 127.0.0.1:33971 failed: "+
+					"port is already allocated")),
+			want: true,
+		},
+		{
+			// Reproduced locally (RM-092-3) against Docker 29.6.2's
+			// pre-flight port-availability check, which fires before the
+			// network-driver step above and reports a different message.
+			name: "newer docker engine: ports are not available pre-flight check",
+			err: fmt.Errorf("start postgres: %w", errors.New(
+				"docker run --detach --name x --publish 127.0.0.1:50320:5432 postgres:16: "+
+					"exit status 125: Error response from daemon: ports are not available: "+
+					"exposing port TCP 127.0.0.1:50320 -> 127.0.0.1:0: listen tcp4 "+
+					"127.0.0.1:50320: bind: address already in use")),
+			want: true,
+		},
+		{
+			name: "a genuine fault: no such image",
+			err: errors.New("docker run ...: exit status 125: Unable to find image " +
+				"'nope:latest' locally"),
+			want: false,
+		},
+		{
+			name: "a genuine fault: daemon not reachable",
+			err:  errors.New("no reachable docker daemon: exit status 1: Cannot connect to the Docker daemon"),
+			want: false,
+		},
+		{
+			// This is exactly what a naive retry of a `docker run` step
+			// would hit on its SECOND attempt if it did not clean up the
+			// container a failed first attempt left behind (RM-092-3's
+			// finding) — a real, but different and unretriable, fault.
+			name: "a genuine fault: stale container name from an earlier attempt",
+			err: errors.New("docker run ...: exit status 125: Error response from " +
+				"daemon: Conflict. The container name \"/innsegl-partition-43999-postgres\" " +
+				"is already in use"),
+			want: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := prtPortAllocated(c.err); got != c.want {
+				t.Errorf("prtPortAllocated(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
+	}
+}
+
+// RM-092-2: prtRetryPortRace retries ONLY on prtPortAllocated's class, gives
+// a fresh port every attempt (attempt owns its own selection — see its doc
+// comment), reports how many attempts it took, and fails on the FIRST
+// attempt — no retry, no delay — for anything else. Per #101, an
+// unrecoverable bring-up, or one that was never racing a port at all, has to
+// fail loudly, not disappear into a retry loop.
+func TestRM092RetryPortRaceRetriesOnlyThePortRace(t *testing.T) {
+	t.Run("succeeds on the first try, no retry reported", func(t *testing.T) {
+		calls := 0
+		attempts, err := prtRetryPortRace("case", func() error {
+			calls++
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if attempts != 1 || calls != 1 {
+			t.Fatalf("attempts=%d calls=%d, want 1 and 1", attempts, calls)
+		}
+	})
+
+	t.Run("recovers after losing the race twice", func(t *testing.T) {
+		calls := 0
+		attempts, err := prtRetryPortRace("case", func() error {
+			calls++
+			if calls < 3 {
+				return errors.New("Bind for 127.0.0.1:1 failed: port is already allocated")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if attempts != 3 || calls != 3 {
+			t.Fatalf("attempts=%d calls=%d, want 3 and 3: a fresh port every attempt, "+
+				"succeeding on the third", attempts, calls)
+		}
+	})
+
+	t.Run("fails fast on a genuine fault, no retry", func(t *testing.T) {
+		calls := 0
+		_, err := prtRetryPortRace("case", func() error {
+			calls++
+			return errors.New("Unable to find image 'nope:latest' locally")
+		})
+		if err == nil {
+			t.Fatalf("expected the genuine fault to be returned, not swallowed")
+		}
+		if calls != 1 {
+			t.Fatalf("calls=%d, want 1: a genuine fault must not be retried (#101)", calls)
+		}
+	})
+
+	t.Run("gives up loudly after exhausting its retries", func(t *testing.T) {
+		calls := 0
+		attempts, err := prtRetryPortRace("case", func() error {
+			calls++
+			return errors.New("port is already allocated")
+		})
+		if err == nil {
+			t.Fatalf("expected an error once the race is never won")
+		}
+		if calls != prtPortRaceRetries {
+			t.Fatalf("calls=%d, want exactly prtPortRaceRetries=%d: no silent extra "+
+				"tries and none skipped", calls, prtPortRaceRetries)
+		}
+		if attempts != prtPortRaceRetries {
+			t.Fatalf("reported attempts=%d, want %d, so a machine that needed the "+
+				"full budget is visible in the log rather than silently slower",
+				attempts, prtPortRaceRetries)
+		}
+	})
+}
+
+// RM-092-3 is the real-Docker reproduction: hold a loopback port in this
+// test process, then ask the actual docker daemon to publish a real
+// container onto it — the same operation this harness's bring-up performs.
+// This is #143's mechanism, reproduced rather than merely asserted: the
+// daemon refuses, and its refusal is the exact message class
+// prtPortAllocated exists to recognise.
+//
+// It also answers the issue's first question directly, empirically: nothing
+// can hand this port to Docker while this process holds it open — "ports
+// are not available: ... bind: address already in use" is Docker saying so.
+// So "hold the port until Docker takes it over" is not a listener a SEPARATE
+// process can keep; Docker needs the port free at the instant it binds, and
+// the fix here is the retry in prtRetryPortRace, not a hold.
+//
+// Not an OPS-001 case — doc 07 does not name it — and it needs only Docker,
+// not gitsign or the rest of OPS-001's world, so it uses the one honest skip
+// condition (#101) on its own rather than requirePartitionWorld's.
+func TestRM092PortRaceRealDockerReproduction(t *testing.T) {
+	ctx := context.Background()
+	if err := prtDockerUsable(ctx); err != nil {
+		t.Skipf("skipping: %v", err)
+	}
+
+	var lc net.ListenConfig
+	held, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("hold a loopback port: %v", err)
+	}
+	defer func() { _ = held.Close() }()
+	_, port, err := net.SplitHostPort(held.Addr().String())
+	if err != nil {
+		t.Fatalf("split %s: %v", held.Addr().String(), err)
+	}
+
+	name := fmt.Sprintf("innsegl-rm092-repro-%d", os.Getpid())
+	t.Cleanup(func() {
+		_, cerr := prtDocker(context.Background(), "rm", "--force", name)
+		prtDropped(cerr)
+	})
+
+	_, runErr := prtDocker(ctx, "run", "--detach", "--name", name,
+		"--publish", "127.0.0.1:"+port+":80", "alpine:3.20", "sleep", "5")
+	if runErr == nil {
+		t.Fatalf("docker bound port %s while this test process was holding it open "+
+			"with its own listener; the race #143 is about did not reproduce here", port)
+	}
+	if !prtPortAllocated(runErr) {
+		t.Fatalf("docker refused the held port %s, but not with the message class "+
+			"#143's retry depends on — prtPortAllocated needs a new case: %v", port, runErr)
+	}
+	t.Logf("RM-092-3 reproduced #143 against a live docker daemon: %v", runErr)
+}

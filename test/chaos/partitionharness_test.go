@@ -11,11 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -276,7 +278,67 @@ func prtDockerUsable(ctx context.Context) error {
 // the summary never shows.
 func prtOneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
+// prtEphemeralAvoidLow and prtEphemeralAvoidHigh bound a fixed band this
+// harness tries FIRST, before falling back to a kernel-assigned ephemeral
+// port. #143's root cause names why this helps: Linux's default ephemeral
+// range (net.ipv4.ip_local_port_range, typically 32768-60999) and macOS/
+// BSD's (typically 49152-65535) both overlap what net.Listen(":0") hands
+// out, so a port this harness "frees" by closing its own probe listener can
+// be handed straight back out by the SAME kernel allocator to an unrelated
+// process before Docker gets to it -- which is what put 33971 back in play
+// in the CI log. 20000-29999 sits below both defaults, so a port drawn from
+// here is no longer competing with the kernel's own dynamic allocations.
+//
+// This narrows the probe-then-release-then-bind window; it cannot close it
+// -- a fixed, deliberate user of a port in this band, or the band being
+// exhausted under enough concurrent packages, both fall back to a true
+// ephemeral pick below. prtRetryPortRace is what actually survives whatever
+// window is left.
+const (
+	prtEphemeralAvoidLow   = 20000
+	prtEphemeralAvoidHigh  = 29999
+	prtEphemeralAvoidTries = 25
+)
+
+// prtFreePort reserves one loopback port. It prefers
+// prtEphemeralAvoidLow..prtEphemeralAvoidHigh (see above) and falls back to
+// a kernel-assigned ephemeral port if that band is exhausted. Either way the
+// port is released before this returns -- Docker, or this process's own
+// re-listen, binds it afterwards, and that gap is the race #143 is about.
 func prtFreePort(ctx context.Context) (string, error) {
+	if port, err := prtFreePortInBand(ctx, prtEphemeralAvoidLow, prtEphemeralAvoidHigh); err == nil {
+		return port, nil
+	}
+	return prtFreeEphemeralPort(ctx)
+}
+
+// prtFreePortInBand tries a bounded number of random ports in [low, high]
+// and returns the first one this process could bind and release. A scan of
+// every port in a ten-thousand-wide band would be slower than simply
+// falling back, so this is a handful of tries, not a guarantee.
+func prtFreePortInBand(ctx context.Context, low, high int) (string, error) {
+	span := high - low + 1
+	for range prtEphemeralAvoidTries {
+		candidate := low + rand.IntN(span)
+		var lc net.ListenConfig
+		l, err := lc.Listen(ctx, "tcp", "127.0.0.1:"+strconv.Itoa(candidate))
+		if err != nil {
+			continue
+		}
+		if cerr := l.Close(); cerr != nil {
+			continue
+		}
+		return strconv.Itoa(candidate), nil
+	}
+	return "", fmt.Errorf("no free port in %d-%d after %d tries", low, high, prtEphemeralAvoidTries)
+}
+
+// prtFreeEphemeralPort is the original probe: ask the kernel for a free
+// port, read it back, and release it. prtFreePort falls back to this when
+// the avoided band is exhausted, and it carries the SAME race prtFreePort as
+// a whole exists to narrow, because a kernel-assigned ephemeral port is, by
+// definition, drawn from the pool #143 is about.
+func prtFreeEphemeralPort(ctx context.Context) (string, error) {
 	var lc net.ListenConfig
 	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -287,6 +349,88 @@ func prtFreePort(ctx context.Context) (string, error) {
 		err = cerr
 	}
 	return port, err
+}
+
+// prtPortAllocated reports whether err is the docker daemon's own,
+// distinguishable complaint that a port this harness just published was
+// already taken by something else on the machine between the probe and the
+// bind -- the race #143 exists to survive. The exact wording differs by
+// Docker Engine version: older daemons fail late, while programming the
+// network driver, with "... failed: port is already allocated"; newer ones
+// fail a pre-flight check first, with "ports are not available: ... bind:
+// address already in use" (both reproduced locally against Docker 29.6.2
+// while diagnosing #143 -- see RM092 in partition_test.go). Anything else --
+// a bad compose file, a missing image, a daemon that is not there at all --
+// is a genuine fault and must not match: it has to fail on the first
+// attempt, loudly, per #101.
+func prtPortAllocated(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "port is already allocated") ||
+		strings.Contains(msg, "ports are not available") ||
+		strings.Contains(msg, "bind: address already in use")
+}
+
+// prtPortRaceRetries bounds how many times a bring-up step may re-pick a
+// port after losing the race #143 describes. A daemon that is simply gone,
+// or any other genuine fault, reports a different message and never reaches
+// this loop (see prtPortAllocated), so there is no real failure this bound
+// could be hiding behind a retry.
+const prtPortRaceRetries = 5
+
+// prtPortRaceBackoff is the pause between retries: a moment for whatever won
+// the race to either finish binding or let the port go again.
+const prtPortRaceBackoff = 200 * time.Millisecond
+
+// prtRetryPortRace runs attempt up to prtPortRaceRetries times. attempt owns
+// its OWN port selection and must pick a fresh one on every call -- retrying
+// the exact port the daemon just refused would just lose the same race
+// again. prtRetryPortRace's only job is deciding whether a failure is the
+// race #143 names (prtPortAllocated) or something else: only the race is
+// retried, and everything else returns on the first attempt, per #101 --
+// an infrastructure fault that is not this race must still fail, and fail
+// fast, not disappear into a retry loop.
+//
+// It reports how many attempts were needed, on stderr, so a machine that
+// needs several is visible in the test log rather than silently slower.
+func prtRetryPortRace(label string, attempt func() error) (attempts int, err error) {
+	for attempts = 1; attempts <= prtPortRaceRetries; attempts++ {
+		if err = attempt(); err == nil {
+			if attempts > 1 {
+				fmt.Fprintf(os.Stderr,
+					"port race (#143): %s needed %d attempt(s) before it won the "+
+						"probe-then-bind race for a loopback port\n", label, attempts)
+			}
+			return attempts, nil
+		}
+		if !prtPortAllocated(err) {
+			return attempts, err
+		}
+		if attempts < prtPortRaceRetries {
+			fmt.Fprintf(os.Stderr,
+				"port race (#143): %s lost a probe-then-bind race on attempt %d/%d, "+
+					"retrying with a new port: %v\n", label, attempts, prtPortRaceRetries, err)
+			time.Sleep(prtPortRaceBackoff)
+		}
+	}
+	return prtPortRaceRetries, fmt.Errorf(
+		"%s: still losing the port-allocation race after %d attempts: %w",
+		label, prtPortRaceRetries, err)
+}
+
+// prtRemoveContainerIfExists force-removes a container by name, ignoring
+// "no such container". It runs before a docker-run (not compose) bring-up
+// step's first attempt -- a no-op, nothing exists yet -- and before every
+// retry after a port-race loss (#143): a `docker run --publish` that fails
+// at the port-bind step still leaves the container behind in "Created"
+// state (confirmed locally against Docker 29.6.2), and a retry reusing the
+// same --name would then fail on "the container name is already in use",
+// masking the actual, retriable race as a different and unretriable error.
+func prtRemoveContainerIfExists(ctx context.Context, name string) {
+	_, err := prtDocker(ctx, "rm", "--force", name)
+	prtDropped(err)
 }
 
 func prtFindGitsign(ctx context.Context) (string, error) {
@@ -455,8 +599,10 @@ func prtReset(c net.Conn) {
 // Every use is a place where there is no caller to tell and nothing to do: a
 // forwarding copy that ended because the route was severed (which is this
 // gate's whole purpose), a socket teardown, the final close of a gate at the
-// end of the suite, and the SIGKILL of a subprocess that is already going away.
-// Anything an assertion could act on is returned, never dropped here.
+// end of the suite, the SIGKILL of a subprocess that is already going away,
+// and a best-effort `docker rm --force` (#143) whose only two outcomes are
+// "removed" and "was not there to remove" — a bring-up retry proceeds either
+// way. Anything an assertion could act on is returned, never dropped here.
 func prtDropped(error) {}
 
 // sever takes the route away and does not return until it is provably gone.
@@ -571,6 +717,22 @@ type prtWorld struct {
 
 func prtProject() string { return fmt.Sprintf("innsegl-partition-%d", os.Getpid()) }
 
+// setEnv sets or replaces one KEY=VALUE entry in w.env. Bring-up steps that
+// publish a host port use it to hand the compose invocation that follows a
+// FRESH port on a #143 retry: w.env is built once, but a port-race retry
+// needs the next `docker compose up` to see the new port, not the one
+// Docker just refused.
+func (w *prtWorld) setEnv(key, value string) {
+	entry := key + "=" + value
+	for i, e := range w.env {
+		if strings.HasPrefix(e, key+"=") {
+			w.env[i] = entry
+			return
+		}
+	}
+	w.env = append(w.env, entry)
+}
+
 func (w *prtWorld) compose(ctx context.Context, files []string, args ...string) (string, error) {
 	full := []string{"compose", "-p", w.project}
 	for _, f := range files {
@@ -609,15 +771,12 @@ func prtStartWorld(ctx context.Context, root, workDir string) (*prtWorld, error)
 		return nil, err
 	}
 
-	ports := make([]string, 0, 8)
-	for range 8 {
-		p, perr := prtFreePort(ctx)
-		if perr != nil {
-			return nil, fmt.Errorf("reserve a loopback port: %w", perr)
-		}
-		ports = append(ports, p)
-	}
-
+	// Ports are no longer reserved up front (#143): each bring-up step below
+	// picks its own port immediately before the docker call that consumes
+	// it, and retries with a fresh one if that call loses the probe-then-
+	// bind race. Reserving all of them here, seconds to minutes before the
+	// slowest of them (Sigstore's) was actually used, is what made that
+	// window wide enough to lose in the first place.
 	project := prtProject()
 	w := &prtWorld{
 		root:    root,
@@ -640,21 +799,12 @@ func prtStartWorld(ctx context.Context, root, workDir string) (*prtWorld, error)
 			"INNSEGL_SIGSTORE_TEST_STACK=" + project,
 			"INNSEGL_SIGSTORE_OIDC_NETWORK=" + project + "-oidc-frontend",
 			"INNSEGL_SPIRE_JWT_ISSUER=" + prtIssuer,
-			"INNSEGL_SPIRE_OIDC_PORT=" + ports[0],
-			"INNSEGL_FULCIO_PORT=" + ports[1],
-			"INNSEGL_REKOR_PORT=" + ports[2],
 		},
-		oidcURL:      "http://127.0.0.1:" + ports[0],
-		fulcioDirect: "127.0.0.1:" + ports[1],
-		rekorDirect:  "127.0.0.1:" + ports[2],
-		spireDirect:  "127.0.0.1:" + ports[3],
-		pgDirect:     "127.0.0.1:" + ports[4],
-		minioDirect:  "127.0.0.1:" + ports[5],
-		socatName:    project + "-adminproxy",
-		pgName:       project + "-postgres",
-		minioName:    project + "-minio",
-		gitsignPath:  gitsign,
-		gates:        map[string]*prtGate{},
+		socatName:   project + "-adminproxy",
+		pgName:      project + "-postgres",
+		minioName:   project + "-minio",
+		gitsignPath: gitsign,
+		gates:       map[string]*prtGate{},
 	}
 
 	// The two compose projects and the two plain containers come up together.
@@ -703,9 +853,20 @@ func prtStartWorld(ctx context.Context, root, workDir string) (*prtWorld, error)
 }
 
 func (w *prtWorld) startSPIRE(ctx context.Context) error {
-	if _, err := w.compose(ctx, w.spireFiles, "up", "-d", "--wait",
-		"spire-server", "spire-agent", "spire-oidc"); err != nil {
-		return fmt.Errorf("bringing up the SPIRE stack: %w", err)
+	if _, err := prtRetryPortRace("bringing up the SPIRE stack", func() error {
+		port, perr := prtFreePort(ctx)
+		if perr != nil {
+			return fmt.Errorf("reserve a port for spire-oidc: %w", perr)
+		}
+		w.oidcURL = "http://127.0.0.1:" + port
+		w.setEnv("INNSEGL_SPIRE_OIDC_PORT", port)
+		if _, cerr := w.compose(ctx, w.spireFiles, "up", "-d", "--wait",
+			"spire-server", "spire-agent", "spire-oidc"); cerr != nil {
+			return fmt.Errorf("bringing up the SPIRE stack: %w", cerr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	if err := w.registerOIDCProvider(ctx); err != nil {
 		return fmt.Errorf("registering the OIDC discovery provider: %w", err)
@@ -720,20 +881,31 @@ func (w *prtWorld) startSPIRE(ctx context.Context) error {
 // internal. So a socat container is created on the default bridge, joined to
 // the admin network, and the SPIRE gate forwards to it.
 func (w *prtWorld) startAdminBridge(ctx context.Context) error {
+	if _, err := prtRetryPortRace("starting the SPIRE admin bridge", func() error {
+		prtRemoveContainerIfExists(ctx, w.socatName)
+		port, perr := prtFreePort(ctx)
+		if perr != nil {
+			return fmt.Errorf("reserve a port for the SPIRE admin bridge: %w", perr)
+		}
+		w.spireDirect = "127.0.0.1:" + port
+		if _, derr := prtDocker(ctx, "run", "--detach", "--name", w.socatName,
+			"--publish", w.spireDirect+":8081",
+			prtEnvOr("INNSEGL_TEST_PROXY_IMAGE", prtSocatImage),
+			"TCP-LISTEN:8081,fork,reuseaddr", "TCP:spire-server:8081",
+		); derr != nil {
+			return fmt.Errorf("start the SPIRE admin bridge: %w", derr)
+		}
+		if _, derr := prtDocker(ctx, "network", "connect",
+			w.project+prtSPIREAdminNet, w.socatName); derr != nil {
+			return fmt.Errorf("join %s: %w", w.project+prtSPIREAdminNet, derr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	_, port, err := net.SplitHostPort(w.spireDirect)
 	if err != nil {
 		return err
-	}
-	if _, err := prtDocker(ctx, "run", "--detach", "--name", w.socatName,
-		"--publish", w.spireDirect+":8081",
-		prtEnvOr("INNSEGL_TEST_PROXY_IMAGE", prtSocatImage),
-		"TCP-LISTEN:8081,fork,reuseaddr", "TCP:spire-server:8081",
-	); err != nil {
-		return fmt.Errorf("start the SPIRE admin bridge: %w", err)
-	}
-	if _, err := prtDocker(ctx, "network", "connect",
-		w.project+prtSPIREAdminNet, w.socatName); err != nil {
-		return fmt.Errorf("join %s: %w", w.project+prtSPIREAdminNet, err)
 	}
 	if !prtWaitFor(60*time.Second, func() bool {
 		var d net.Dialer
@@ -840,8 +1012,25 @@ func (w *prtWorld) awaitJWKS(ctx context.Context) error {
 }
 
 func (w *prtWorld) startSigstore(ctx context.Context) error {
-	if _, err := w.compose(ctx, w.sigFiles, "up", "-d"); err != nil {
-		return fmt.Errorf("bringing up the Sigstore stack: %w", err)
+	if _, err := prtRetryPortRace("bringing up the Sigstore stack", func() error {
+		fulcioPort, ferr := prtFreePort(ctx)
+		if ferr != nil {
+			return fmt.Errorf("reserve a port for fulcio: %w", ferr)
+		}
+		rekorPort, rerr := prtFreePort(ctx)
+		if rerr != nil {
+			return fmt.Errorf("reserve a port for rekor: %w", rerr)
+		}
+		w.fulcioDirect = "127.0.0.1:" + fulcioPort
+		w.rekorDirect = "127.0.0.1:" + rekorPort
+		w.setEnv("INNSEGL_FULCIO_PORT", fulcioPort)
+		w.setEnv("INNSEGL_REKOR_PORT", rekorPort)
+		if _, cerr := w.compose(ctx, w.sigFiles, "up", "-d"); cerr != nil {
+			return fmt.Errorf("bringing up the Sigstore stack: %w", cerr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	deadline := time.Now().Add(3 * time.Minute)
 	var last error
@@ -859,14 +1048,25 @@ func (w *prtWorld) startSigstore(ctx context.Context) error {
 }
 
 func (w *prtWorld) startPostgres(ctx context.Context) error {
-	if _, err := prtDocker(ctx, "run", "--detach", "--name", w.pgName,
-		"--publish", w.pgDirect+":5432",
-		"--env", "POSTGRES_USER="+prtPGUser,
-		"--env", "POSTGRES_PASSWORD="+prtPGPassword,
-		"--env", "POSTGRES_DB="+prtPGDatabase,
-		prtEnvOr("INNSEGL_TEST_POSTGRES_IMAGE", prtPostgresImage),
-	); err != nil {
-		return fmt.Errorf("start postgres: %w", err)
+	if _, err := prtRetryPortRace("starting postgres", func() error {
+		prtRemoveContainerIfExists(ctx, w.pgName)
+		port, perr := prtFreePort(ctx)
+		if perr != nil {
+			return fmt.Errorf("reserve a port for postgres: %w", perr)
+		}
+		w.pgDirect = "127.0.0.1:" + port
+		if _, derr := prtDocker(ctx, "run", "--detach", "--name", w.pgName,
+			"--publish", w.pgDirect+":5432",
+			"--env", "POSTGRES_USER="+prtPGUser,
+			"--env", "POSTGRES_PASSWORD="+prtPGPassword,
+			"--env", "POSTGRES_DB="+prtPGDatabase,
+			prtEnvOr("INNSEGL_TEST_POSTGRES_IMAGE", prtPostgresImage),
+		); derr != nil {
+			return fmt.Errorf("start postgres: %w", derr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	deadline := time.Now().Add(150 * time.Second)
 	var last error
@@ -901,13 +1101,24 @@ func prtPingPostgres(ctx context.Context, dsn string) error {
 }
 
 func (w *prtWorld) startMinIO(ctx context.Context) error {
-	if _, err := prtDocker(ctx, "run", "--detach", "--name", w.minioName,
-		"--publish", w.minioDirect+":9000",
-		"--env", "MINIO_ROOT_USER="+prtMinIOUser,
-		"--env", "MINIO_ROOT_PASSWORD="+prtMinIOPassword,
-		prtEnvOr("INNSEGL_TEST_MINIO_IMAGE", prtMinIOImage), "server", "/data",
-	); err != nil {
-		return fmt.Errorf("start minio: %w", err)
+	if _, err := prtRetryPortRace("starting minio", func() error {
+		prtRemoveContainerIfExists(ctx, w.minioName)
+		port, perr := prtFreePort(ctx)
+		if perr != nil {
+			return fmt.Errorf("reserve a port for minio: %w", perr)
+		}
+		w.minioDirect = "127.0.0.1:" + port
+		if _, derr := prtDocker(ctx, "run", "--detach", "--name", w.minioName,
+			"--publish", w.minioDirect+":9000",
+			"--env", "MINIO_ROOT_USER="+prtMinIOUser,
+			"--env", "MINIO_ROOT_PASSWORD="+prtMinIOPassword,
+			prtEnvOr("INNSEGL_TEST_MINIO_IMAGE", prtMinIOImage), "server", "/data",
+		); derr != nil {
+			return fmt.Errorf("start minio: %w", derr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	deadline := time.Now().Add(150 * time.Second)
 	var last error
