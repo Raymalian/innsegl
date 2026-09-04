@@ -277,6 +277,19 @@ func (s *Store) Chain(ctx context.Context) (ChainIdentity, error) {
 // When body carries an idempotency_key that has already been appended, the
 // original event is returned unchanged and nothing is written: a replay is a
 // success, not an error (LED-008, IP §6.6).
+//
+// RM-093 (#145, #148): an event with NO idempotency_key is retried at most
+// once — see appendSafeToRetry — because for that shape pgx's own
+// SafeToRetry is not a sufficient guarantee here, measured directly (LED-012):
+// a COMMIT can reach Postgres and fully complete while the client's read of
+// the acknowledgment fails (a severed connection, indistinguishable on the
+// wire from the SIGKILL case RM-069 (#90) names), and pgconn still reports
+// that failure as safe to retry. For a keyed event that is harmless — the
+// retried attempt's readByKey finds the row the first attempt already wrote
+// and returns it rather than inserting again (LED-008, and see LED-013). For
+// an unkeyed event there is no such fallback, so retrying is how a caller
+// making ONE call ends up with TWO rows on the chain — the exact violation of
+// "one issuance, one auditable fact" ADR-0004 exists to forbid.
 func (s *Store) Append(ctx context.Context, body event.Fields) (event.Fields, error) {
 	p, err := prepare(body)
 	if err != nil {
@@ -290,11 +303,24 @@ func (s *Store) Append(ctx context.Context, body event.Fields) (event.Fields, er
 			return record, nil
 		}
 		last = err
-		if !safeToRetry(ctx, err) {
+		if !appendSafeToRetry(ctx, p, err) {
 			return nil, err
 		}
 	}
 	return nil, last
+}
+
+// appendSafeToRetry is safeToRetry narrowed by whether this append has a
+// dedupe fallback to land on. p.idempotencyKey == "" means it does not: see
+// the note on Append. That check runs before pgx's own, and independently of
+// it, because it is the one this package can prove from its own contract
+// rather than trust a driver to report — RM-093 (#145, #148) measured that
+// the driver's report alone is not enough.
+func appendSafeToRetry(ctx context.Context, p pending, err error) bool {
+	if p.idempotencyKey == "" {
+		return false
+	}
+	return safeToRetry(ctx, err)
 }
 
 // pending is one append after the caller's half has been checked: the body the
