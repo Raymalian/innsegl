@@ -602,6 +602,20 @@ func recordString(record event.Fields, name string) string {
 	return value
 }
 
+// parseTS reads an event's `ts` as a time.Time, zero when it is absent or
+// unparseable. The same tolerance recordString documents applies here: a
+// record this control cannot date is skipped by its caller rather than
+// treated as a reason to abandon the cycle, and oldEnough treats a zero time
+// as "cannot judge, don't accuse" — the same fail-safe reaper.go's classify
+// applies to an entry it cannot date.
+func parseTS(record event.Fields) time.Time {
+	ts, err := event.ParseTimestamp(recordString(record, event.FieldTS))
+	if err != nil {
+		return time.Time{}
+	}
+	return ts.Time()
+}
+
 // readLedger walks the chain in bounded batches and reduces it to a view.
 func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
 	view := &ledgerView{
@@ -642,14 +656,13 @@ func (v *ledgerView) observe(record event.Fields) {
 		if eventID == "" || spiffeID == "" || runID == "" {
 			return
 		}
-		at, _ := event.ParseTimestamp(recordString(record, event.FieldTS))
 		// A registration replaces whatever came before for this identity: it
 		// re-opens a run whose closing event is now spent.
 		v.runs[spiffeID] = &ledgerRun{
 			runID:             runID,
 			spiffeID:          spiffeID,
 			registeredEventID: eventID,
-			registeredAt:      at.Time(),
+			registeredAt:      parseTS(record),
 		}
 	case event.EventTypeRunRetired, event.EventTypeRunExpired:
 		eventID := recordString(record, event.FieldEventID)
@@ -658,7 +671,6 @@ func (v *ledgerView) observe(record event.Fields) {
 		if eventID == "" || spiffeID == "" {
 			return
 		}
-		at, _ := event.ParseTimestamp(recordString(record, event.FieldTS))
 		run, known := v.runs[spiffeID]
 		if !known {
 			// A closing event with no registration is itself a ledger defect,
@@ -669,7 +681,7 @@ func (v *ledgerView) observe(record event.Fields) {
 			v.runs[spiffeID] = run
 		}
 		run.closedEventID = eventID
-		run.closedAt = at.Time()
+		run.closedAt = parseTS(record)
 	case event.EventTypeLedgerDriftDetected:
 		subject := recordString(record, event.FieldSubjectEventID)
 		reason := recordString(record, event.FieldReason)
