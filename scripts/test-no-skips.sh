@@ -92,11 +92,6 @@ fi
 #       It skips unless its parent invoked it with the step env var set, which
 #       is exactly right — run directly it has nothing to do.
 #
-#   TestMCP011CrashAndReplayUnderFuzzedKillTiming/sign_commit
-#       Reports PENDING for RM-072 (#95): MCP-011 does not yet fuzz sign_commit,
-#       so IP §6.6's "never a second commit" is untested. Tracked, not forgotten.
-#       Remove this line when #95 lands.
-#
 #   TestGH001NoContributorAppearsForAnUnlinkedAuthor
 #       doc 07 GH-001 (RM-038, #46). It is the one case in the catalogue that
 #       measures somebody else's system: it pushes commits with an unlinked
@@ -118,7 +113,7 @@ fi
 #       while the credential is unprovisioned, so the debt is emailed rather
 #       than merely written down. Remove this line only if GH-001 is ever made
 #       to run unattended in CI.
-ALLOWED='TestSEG002CrashChild|TestMCP011CrashAndReplayUnderFuzzedKillTiming/sign_commit|TestGH001NoContributorAppearsForAnUnlinkedAuthor'
+ALLOWED='TestSEG002CrashChild|TestGH001NoContributorAppearsForAnUnlinkedAuthor'
 
 unexpected=$(grep -F '"Action":"skip"' "${out}" | grep -F '"Test":' | grep -Ev "\"Test\":\"(${ALLOWED})\"" || true)
 skipped=$(printf '%s' "${unexpected}" | grep -c . || true)
