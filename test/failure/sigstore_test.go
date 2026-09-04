@@ -590,15 +590,27 @@ func sig004SlowSigstore(t *testing.T, s *sigStack) {
 		// requested wait grows on EVERY adjacent pair by construction, with no
 		// real network latency in the way; this measurement is real wire time
 		// through a proxy, where two adjacent gaps near a boundary could be
-		// separated by less than the container scheduler's own jitter. First
-		// vs. last leaves a wide margin — the floors above guarantee at least
-		// a 4x spread (2000ms/500ms) even at the jitter's own extremes — so
-		// 3x tolerates real network noise without tolerating a flat interval.
-		if first, last := gaps[0], gaps[len(gaps)-1]; last <= first*3 {
-			t.Errorf("gaps grew from %s to %s; the shipped backoff (base 500ms, "+
-				"multiplier 2, 4 steps) guarantees more than 3x growth even at its "+
-				"jitter's own extremes, so this is not growing: %v",
-				first.Truncate(time.Millisecond), last.Truncate(time.Millisecond), gaps)
+		// separated by less than the container scheduler's own jitter.
+		//
+		// Compared as a DIFFERENCE and not a ratio, and that is the whole
+		// point. A gap here is a wait PLUS one round trip to a deliberately
+		// slow Rekor, and that round trip is roughly constant across the four.
+		// A constant addend leaves differences untouched and compresses ratios
+		// towards 1, so a ratio derived from the waits does not hold for the
+		// gaps: measured once at 1.486s → 3.477s, a true 4.9x spread in the
+		// waits underneath reads as only 2.34x on the wire.
+		//
+		// The floors above are Backoff(n)/2, so the smallest spread the policy
+		// can produce is the last attempt's floor minus the first attempt's
+		// ceiling — 2000ms − 500ms — whatever the jitter drew and whatever the
+		// round trip cost.
+		const wantSpread = 1500 * time.Millisecond
+		if first, last := gaps[0], gaps[len(gaps)-1]; last-first < wantSpread {
+			t.Errorf("gaps ran %s to %s, a spread of %s; the shipped backoff "+
+				"(base 500ms, multiplier 2, 4 steps) cannot spread less than %s "+
+				"even at its jitter's own extremes, so this is not backing off: %v",
+				first.Truncate(time.Millisecond), last.Truncate(time.Millisecond),
+				(last - first).Truncate(time.Millisecond), wantSpread, gaps)
 		}
 
 		// JITTER — RM-034's second withheld assertion: repeated attempts do
