@@ -143,13 +143,21 @@ func driftEvents(t *testing.T, store *ledger.Store) []event.Fields {
 
 // newReconcilerFor builds a reconciler over a real SPIRE client and a real
 // ledger, collecting the drifts the schema cannot record.
-func newReconcilerFor(t *testing.T, c *Client, store *ledger.Store) (*Reconciler, *[]Drift) {
+//
+// minAge is Config.MinAge, passed explicitly rather than left at
+// DefaultMinAge (six minutes): SPI-008's cases construct a state that is
+// already, fully, the thing being detected — an entry deleted or replanted out
+// of band — and asserting that immediately is what proves the detection logic
+// itself. Waiting out DefaultMinAge is #108/RM-075's own test's job, not
+// SPI-008's; see TestSPI009 and TestSPI010 below.
+func newReconcilerFor(t *testing.T, c *Client, store *ledger.Store, minAge time.Duration) (*Reconciler, *[]Drift) {
 	t.Helper()
 	var loud []Drift
 	rec, err := NewReconciler(ReconcilerConfig{
 		Entries:  c,
 		Ledger:   store,
 		Appender: store,
+		MinAge:   minAge,
 		Alert: func(_ context.Context, d Drift) {
 			loud = append(loud, d)
 		},
@@ -244,7 +252,7 @@ func TestSPI008UnexplainedEntryIsDetectedAndALegitimateRunIsNot(t *testing.T) {
 		fmt.Sprint(nameSeq.Add(1))
 	plantedEntryID := plantEntry(t, s, rogue)
 
-	rec, loud := newReconcilerFor(t, c, store)
+	rec, loud := newReconcilerFor(t, c, store, time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -336,7 +344,7 @@ func TestSPI008DeletedEntryForAnActiveRunIsRecordedAndIsIdempotent(t *testing.T)
 	}
 	deleteEntryLocally(t, s, victimEntry.ID)
 
-	rec, _ := newReconcilerFor(t, c, store)
+	rec, _ := newReconcilerFor(t, c, store, time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -394,7 +402,7 @@ func TestSPI008DeletedEntryForAnActiveRunIsRecordedAndIsIdempotent(t *testing.T)
 	// And a reconciler with no memory of the first cycle appends nothing
 	// either: the dedupe is the ledger's own record, not an in-process set.
 	t.Run("FreshReconcilerAppendsNothing", func(t *testing.T) {
-		fresh, _ := newReconcilerFor(t, c, store)
+		fresh, _ := newReconcilerFor(t, c, store, time.Millisecond)
 		third, terr := fresh.Reconcile(ctx)
 		if terr != nil {
 			t.Fatalf("third Reconcile: %v", terr)
@@ -436,7 +444,7 @@ func TestSPI008ReplantedEntryForARetiredRunIsRecorded(t *testing.T) {
 	// The attacker puts it back, on the socket the MCP never touches.
 	plantEntry(t, s, spiffeID, "unix:uid:0")
 
-	rec, _ := newReconcilerFor(t, c, store)
+	rec, _ := newReconcilerFor(t, c, store, time.Millisecond)
 	result, err := rec.Reconcile(ctx)
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -530,21 +538,45 @@ func fakeSPIFFEID(runID string) string {
 	return "spiffe://innsegl.dev/agent/fix-ci/jira-1/" + runID
 }
 
+// wellPastMinAge is comfortably older than DefaultMinAge, so a fixture built
+// with it is never mistaken for a call still inside the ADR-0018 window
+// (#108, RM-075) — the state every pre-existing test in this file means to
+// construct: a registration or a closure that is already, unambiguously, old
+// news.
+var wellPastMinAge = time.Now().Add(-DefaultMinAge - time.Hour)
+
+// registered appends the run_registered event the MCP would append for run,
+// dated wellPastMinAge. Use registeredAt directly to date one otherwise.
 func (f *fakeLedger) registered(eventID, runID string) *fakeLedger {
+	return f.registeredAt(eventID, runID, wellPastMinAge)
+}
+
+// registeredAt is registered with an explicit `ts`, for a test that cares
+// where a run sits relative to Config.MinAge.
+func (f *fakeLedger) registeredAt(eventID, runID string, at time.Time) *fakeLedger {
 	return f.add(eventID, event.Fields{
 		event.FieldEventType: event.EventTypeRunRegistered,
 		event.FieldSource:    event.SourceMCP,
 		event.FieldRunID:     runID,
 		event.FieldSpiffeID:  fakeSPIFFEID(runID),
+		event.FieldTS:        event.NewTimestamp(at).String(),
 	})
 }
 
+// closed appends a run_retired/run_expired event dated wellPastMinAge. Use
+// closedAt directly to date one otherwise.
 func (f *fakeLedger) closed(eventID, runID, eventType string) *fakeLedger {
+	return f.closedAt(eventID, runID, eventType, wellPastMinAge)
+}
+
+// closedAt is closed with an explicit `ts`.
+func (f *fakeLedger) closedAt(eventID, runID, eventType string, at time.Time) *fakeLedger {
 	return f.add(eventID, event.Fields{
 		event.FieldEventType: eventType,
 		event.FieldSource:    event.SourceMCP,
 		event.FieldRunID:     runID,
 		event.FieldSpiffeID:  fakeSPIFFEID(runID),
+		event.FieldTS:        event.NewTimestamp(at).String(),
 	})
 }
 
@@ -650,6 +682,178 @@ func TestReconcileClassifiesEveryDriftKind(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// SPI-009 and SPI-010 (#108, RM-075) — the age gate on DriftEntryMissing.
+//
+// NOT YET IN DOC 07, the same footnote SPI-008 carries above: docs/ is
+// local-only to the implementing agent, so the rows are written here and must
+// be added to doc 07 §TC-SPI by a human:
+//
+//	| SPI-009 | U | run_registered with no SPIRE entry, inside Config.MinAge |
+//	  No drift; a later cycle over the same unaged state is still quiet | #108,
+//	  RM-075, ADR-0018 |
+//	| SPI-010 | U | run_registered with no SPIRE entry, past Config.MinAge, and
+//	  the idempotency key never replayed | ledger_drift_detected, naming the
+//	  run_registered event, appended exactly once across repeated cycles | I3,
+//	  I4, #108, RM-075 |
+//
+// # The caller that does not replay
+//
+// register_agent's mint() (internal/mcp/register_agent.go) appends
+// run_registered and then creates the SPIRE entry. Simulating a caller that
+// crashed in between means writing the first half only — the ledger event —
+// and never the second: no RegisterRun, no LookupRun, and critically no
+// second call under the same idempotency_key, because that is what ADR-0018
+// documents as the only thing that closes this window today, and it is
+// exactly the case OPS-003 found closing for nothing. Neither test below ever
+// constructs a second call. That absence is the whole of what makes this a
+// caller that has died for good rather than one still retrying — the same
+// distinction the file comment above draws between MCP-011/REC-002 (a caller
+// that comes back) and this one (a caller that does not).
+//
+// # The failing red this fix was driven by
+//
+// Before Config.MinAge existed (added by this change), compareEntries had no
+// notion of age at all: DriftEntryMissing fired for ANY run_registered with no
+// entry, the instant a cycle observed it — including one appended a
+// millisecond earlier. TestSPI009RegistrationInsideTheWindowRaisesNoDrift is
+// that red, verbatim, against the pre-fix compareEntries(view, entries)
+// two-argument form:
+//
+//	reconcile_test.go:NNN: a run 1s into its legitimate register_agent window
+//	  was reported as spire_entry_missing: {Kind:spire_entry_missing
+//	  SPIFFEID:spiffe://innsegl.dev/agent/fix-ci/jira-1/run-inflight
+//	  RunID:run-inflight EntryIDs:[] SubjectEventID:...
+//	  Reason:spire_entry_missing: the ledger shows this run registered and not
+//	  retired or expired, and SPIRE holds no registration entry for it}
+//
+// That is a false accusation against a run doing nothing wrong — RM-018 and
+// RM-065 are this project's standing reminder that convicting a healthy
+// system is worse than the gap being closed.
+
+// TestSPI009RegistrationInsideTheWindowRaisesNoDrift proves the negative that
+// matters most: a run mid-registration, well inside Config.MinAge, is never
+// swept, on the first cycle or any later one that still finds it unaged.
+func TestSPI009RegistrationInsideTheWindowRaisesNoDrift(t *testing.T) {
+	base := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	led := &fakeLedger{}
+	led.registeredAt("01a047a5-cc41-7c45-86fd-000000000001", "run-inflight", base)
+	src := &fakeEntries{td: "innsegl.dev"} // no entry: register_agent has not created it yet.
+
+	for _, elapsed := range []time.Duration{0, time.Second, DefaultMinAge - time.Second} {
+		t.Run(elapsed.String(), func(t *testing.T) {
+			r, err := NewReconciler(ReconcilerConfig{
+				Entries: src, Ledger: led, Appender: led,
+				Now: func() time.Time { return base.Add(elapsed) },
+			})
+			if err != nil {
+				t.Fatalf("NewReconciler: %v", err)
+			}
+			result, err := r.Reconcile(context.Background())
+			if err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if got := driftsFor(result, fakeSPIFFEID("run-inflight")); len(got) != 0 {
+				t.Fatalf("a run %s into its legitimate register_agent window was reported as "+
+					"%+v", elapsed, got)
+			}
+			if len(result.Appended) != 0 {
+				t.Errorf("appended %v over a run still inside its window", result.Appended)
+			}
+		})
+	}
+
+	// Live and healthy is not a one-shot property: a second cycle that still
+	// finds the registration unaged must be exactly as quiet as the first.
+	r, err := NewReconciler(ReconcilerConfig{
+		Entries: src, Ledger: led, Appender: led,
+		Now: func() time.Time { return base.Add(time.Second) },
+	})
+	if err != nil {
+		t.Fatalf("NewReconciler: %v", err)
+	}
+	for i := range 3 {
+		result, rerr := r.Reconcile(context.Background())
+		if rerr != nil {
+			t.Fatalf("cycle %d: %v", i, rerr)
+		}
+		if got := driftsFor(result, fakeSPIFFEID("run-inflight")); len(got) != 0 {
+			t.Fatalf("cycle %d: still inside the window and reported as %+v", i, got)
+		}
+	}
+}
+
+// TestSPI010OrphanedRegistrationPastTheWindowIsRecordedAndNeverReplayed is the
+// positive: the same shape, aged past Config.MinAge, with the caller's
+// idempotency key never replayed (see the file comment). It must be recorded
+// exactly once, however many cycles run afterward — REC-005's rule, applied
+// to the state OPS-003 found.
+func TestSPI010OrphanedRegistrationPastTheWindowIsRecordedAndNeverReplayed(t *testing.T) {
+	base := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	registeredEvent := "01a047a5-cc41-7c45-86fd-000000000001"
+
+	led := &fakeLedger{}
+	led.registeredAt(registeredEvent, "run-orphan", base)
+	src := &fakeEntries{td: "innsegl.dev"} // no entry, ever: the caller died before creating one.
+
+	now := base.Add(DefaultMinAge + time.Minute)
+	newReconciler := func(t *testing.T) *Reconciler {
+		t.Helper()
+		r, err := NewReconciler(ReconcilerConfig{
+			Entries: src, Ledger: led, Appender: led,
+			Now: func() time.Time { return now },
+		})
+		if err != nil {
+			t.Fatalf("NewReconciler: %v", err)
+		}
+		return r
+	}
+
+	first, err := newReconciler(t).Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("first Reconcile: %v", err)
+	}
+	got := driftsFor(first, fakeSPIFFEID("run-orphan"))
+	if len(got) != 1 || got[0].Kind != DriftEntryMissing {
+		t.Fatalf("an orphaned registration %s past MinAge produced %+v, want one %s",
+			DefaultMinAge+time.Minute, got, DriftEntryMissing)
+	}
+	if got[0].SubjectEventID != registeredEvent {
+		t.Errorf("drift names subject %q, want the run_registered event %q",
+			got[0].SubjectEventID, registeredEvent)
+	}
+	if len(first.Appended) != 1 {
+		t.Fatalf("first cycle appended %v, want the one ledger_drift_detected", first.Appended)
+	}
+	body := led.records[len(led.records)-1]
+	if et := recordString(body, event.FieldEventType); et != event.EventTypeLedgerDriftDetected {
+		t.Fatalf("appended a %s, want %s", et, event.EventTypeLedgerDriftDetected)
+	}
+	if subj := recordString(body, event.FieldSubjectEventID); subj != registeredEvent {
+		t.Errorf("appended event names subject %q, want %q", subj, registeredEvent)
+	}
+
+	// No replay ever happens — see the file comment — so nothing but this
+	// control's own idempotency should ever produce a second event, across as
+	// many cycles as run afterward, fresh reconciler or not.
+	t.Run("SecondCycleAppendsNothing", func(t *testing.T) {
+		second, serr := newReconciler(t).Reconcile(context.Background())
+		if serr != nil {
+			t.Fatalf("second Reconcile: %v", serr)
+		}
+		if len(second.Appended) != 0 {
+			t.Errorf("second cycle appended %v, want nothing", second.Appended)
+		}
+		if got := driftsFor(second, fakeSPIFFEID("run-orphan")); len(got) != 1 {
+			t.Errorf("the orphan stopped being reported once recorded: %+v", got)
+		}
+	})
+	if n := len(led.records); n != 2 {
+		t.Errorf("ledger holds %d records after two cycles, want 2 (registration + one drift alert)", n)
+	}
+}
+
 // TestReconcileAppendsAValidLedgerDriftEvent holds the appended body to the
 // closed schema rather than to this package's idea of it.
 func TestReconcileAppendsAValidLedgerDriftEvent(t *testing.T) {
@@ -688,6 +892,7 @@ func TestReconcileOmitsARunItCannotNameInTheAlert(t *testing.T) {
 		event.FieldRunID:     "run-a",
 		// Three path segments, not four: not a run identity.
 		event.FieldSpiffeID: "spiffe://innsegl.dev/agent/fix-ci",
+		event.FieldTS:       event.NewTimestamp(wellPastMinAge).String(),
 	})
 	src := &fakeEntries{td: "innsegl.dev"}
 

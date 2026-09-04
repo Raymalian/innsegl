@@ -98,6 +98,42 @@ import (
 // migration attestation (doc 02 §7). That is a decision for a human, and it is
 // written up in ADR-0013.
 //
+// # Two of the four kinds need an age, not just a state (#108, RM-075)
+//
+// ADR-0018 has the ledger write precede the SPIRE mutation, in both
+// directions: register_agent appends `run_registered` and only then creates
+// the entry; retire_agent and the reaper record `run_retired`/`run_expired`
+// and only then delete it. So for exactly two of the four drift kinds — the
+// ones asking "is the ledger's claim missing its SPIRE-side counterpart?" —
+// the state a healthy, still-in-flight call leaves behind is IDENTICAL to the
+// state this control exists to catch:
+//
+//	DriftEntryMissing      a run_registered with no entry: indistinguishable,
+//	                       by state alone, from register_agent between its
+//	                       append and its create.
+//	DriftEntryNotDeleted   a run_retired/run_expired with an entry still there:
+//	                       indistinguishable from retire_agent or the reaper
+//	                       between their record and their delete.
+//
+// OPS-003 found three runs sitting in the first shape at the end of a soak —
+// `run_registered`, no entry, no closing event — left by callers that crashed
+// before the create and never came back to replay their idempotency key. No
+// existing control closed it: the reaper has no entry to reap, and REC-003/004
+// cross-check Rekor, which a run that never signed anything never touches.
+//
+// A read order cannot fix this. DriftEntryUnattributed and DriftEntryDuplicated
+// stay immediate: reading SPIRE before the ledger (below) means any entry this
+// cycle finds was preceded by a ledger append that happened even earlier, so
+// the ledger read is guaranteed to have it — that direction has no window to
+// wait out. DriftEntryMissing and DriftEntryNotDeleted have the opposite
+// shape: the ledger is allowed to be ahead of SPIRE, by an amount no read
+// ordering bounds, so the only way to tell "still in flight" from "orphaned"
+// is to wait long enough that the legitimate window could not still be open.
+// That is Config.MinAge, resolved against DefaultMinAge; see oldEnough.
+// Flagging one of these two kinds before its event has aged past MinAge would
+// be a false accusation against a run that is doing nothing wrong — treated in
+// this project as worse than the gap detection closes (RM-018, RM-065).
+//
 // # Idempotency
 //
 // A cycle appends nothing it has already appended. The dedupe key is
@@ -117,10 +153,15 @@ type DriftKind string
 // and the source enum are protected strings.
 const (
 	// DriftEntryMissing: the ledger says the run is registered and not closed;
-	// SPIRE holds no entry. ADR-0012's unscopeable BatchDeleteEntry.
+	// SPIRE holds no entry. ADR-0012's unscopeable BatchDeleteEntry, and — the
+	// case with no entry ever created at all — #108/RM-075's register_agent
+	// crash window. Gated by Config.MinAge against the run_registered event's
+	// own age; see the file comment.
 	DriftEntryMissing DriftKind = "spire_entry_missing"
 	// DriftEntryNotDeleted: the ledger says the run is retired or expired;
-	// SPIRE holds an entry anyway.
+	// SPIRE holds an entry anyway. Gated by Config.MinAge against the closing
+	// event's own age, for the same reason DriftEntryMissing is; see the file
+	// comment.
 	DriftEntryNotDeleted DriftKind = "spire_entry_not_deleted"
 	// DriftEntryDuplicated: one active run, more than one entry. IP §1 allows
 	// one, and the extra one is identity this deployment never granted.
@@ -258,6 +299,20 @@ type ReconcilerConfig struct {
 	Observe func(Result, error)
 	// Batch bounds one read of the chain. Zero means defaultLedgerBatch.
 	Batch int64
+	// MinAge is how long a run_registered or a closing event must stand before
+	// a disagreeing SPIRE state counts as DriftEntryMissing or
+	// DriftEntryNotDeleted rather than an ordinary in-flight register_agent,
+	// retire_agent or reap (#108, RM-075; see the file comment). Zero means
+	// DefaultMinAge — unlike ReaperConfig.Grace, a zero here is NOT honoured as
+	// "no grace period", because that is exactly today's bug: every
+	// registration would be accused the instant a cycle catches it mid-flight.
+	// A deployment that has measured its own worst-case register_agent latency
+	// and wants a different margin sets this explicitly.
+	MinAge time.Duration
+	// Now reads the clock Config.MinAge is measured against. Nil means
+	// time.Now. Exists so a test can move the clock instead of sleeping six
+	// minutes.
+	Now func() time.Time
 }
 
 const (
@@ -271,11 +326,38 @@ const (
 	maxEntryPages = 10_000
 )
 
+// DefaultMinAge is how long a run_registered or a closing event is left alone
+// before a SPIRE state that disagrees with it counts as drift instead of an
+// ordinary call still in flight (#108, RM-075).
+//
+// The floor is the worst legitimate gap the ledger can run ahead of SPIRE.
+// register_agent's identity() step (internal/mcp/register_agent.go) makes at
+// most two admin RPCs after the append that a healthy call can still be
+// making: RegisterRun, and — only on SPIRE's own DUPLICATE_REQUEST, taken as
+// adoption rather than failure (ADR-0018 decision 3) — a LookupRun to fetch
+// the entry it adopts. Each is bounded by Client.Timeout, DefaultTimeout
+// (15s), so 30s covers the RPC work of either the register or the retire/reap
+// side, whichever this drift kind is asking about (retire_agent and the
+// reaper each make one such RPC, BatchDeleteEntry, so 30s is generous for
+// them too). Add IP §6.8's 60-second clock-skew tolerance for the gap between
+// the host that wrote the event's `ts` and the host running this cycle — the
+// same kind of skew OPS-003 measured at 1.65-1.87s in its soak, comfortably
+// inside this bound. 30s + 60s = 90s is the worst-case legitimate gap.
+//
+// DefaultMinAge is four times that floor — six minutes — the same margin
+// internal/reconciler's DefaultExpireAfter takes over its own floor: enough
+// that a slow SPIRE and a skewed clock together cannot reach it, short enough
+// that doc 05 §4's "SPIRE entry count vs expected" monitoring still means an
+// operator learns of a genuine orphan inside a reasonable number of cycles.
+const DefaultMinAge = 6 * time.Minute
+
 // Reconciler compares SPIRE's registration entries against the ledger's record
 // of them, periodically, and alerts on every disagreement.
 type Reconciler struct {
-	cfg   ReconcilerConfig
-	batch int64
+	cfg    ReconcilerConfig
+	batch  int64
+	minAge time.Duration
+	now    func() time.Time
 
 	mu   sync.Mutex
 	seen map[string]struct{}
@@ -305,23 +387,37 @@ func NewReconciler(cfg ReconcilerConfig) (*Reconciler, error) {
 	if cfg.Observe == nil {
 		cfg.Observe = defaultObserve
 	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
 	batch := cfg.Batch
 	if batch <= 0 {
 		batch = defaultLedgerBatch
 	}
-	return &Reconciler{cfg: cfg, batch: batch, seen: map[string]struct{}{}}, nil
+	minAge := cfg.MinAge
+	if minAge <= 0 {
+		minAge = DefaultMinAge
+	}
+	return &Reconciler{cfg: cfg, batch: batch, minAge: minAge, now: cfg.Now, seen: map[string]struct{}{}}, nil
 }
 
 // Reconcile runs one cycle: read both sides, compare, alert on every
 // disagreement that is not already recorded.
 //
-// SPIRE is read first and the ledger second, which is the safe order for the
-// race that matters. A run registered between the two reads has its
-// `run_registered` event in the ledger view and no entry in the SPIRE list,
-// which would be a spurious spire_entry_missing — except that the MCP writes
-// the event only after SPIRE has the entry (IP §6.5), so an event this cycle
-// sees is an entry the SPIRE read already covered. The other order has no such
-// guarantee.
+// SPIRE is read first and the ledger second. That order is what keeps
+// DriftEntryUnattributed and DriftEntryDuplicated race-free: ADR-0018 has the
+// ledger write precede the SPIRE mutation in both directions, so any entry
+// this cycle's SPIRE read finds was preceded by a ledger append that already
+// happened — and the ledger read, taken after, is guaranteed to see it.
+//
+// It does NOT make DriftEntryMissing or DriftEntryNotDeleted race-free, and no
+// read order can: ADR-0018's whole point is that the ledger is allowed to run
+// ahead of SPIRE, so a run_registered (or a closing event) this cycle's ledger
+// read sees can predate a SPIRE change that has not happened yet by the time
+// of this cycle's SPIRE read, whichever half is read first. Those two kinds
+// are instead gated by age — r.minAge, against the event that would have to
+// precede the SPIRE change — in compareEntries. See the file comment and
+// DefaultMinAge.
 func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	entries, err := r.cfg.Entries.ListAgentEntries(ctx)
 	if err != nil {
@@ -338,7 +434,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 			result.ActiveRuns++
 		}
 	}
-	result.Drifts = compareEntries(view, entries)
+	result.Drifts = compareEntries(view, entries, r.now(), r.minAge)
 
 	for _, drift := range result.Drifts {
 		if !drift.Recordable() {
@@ -466,9 +562,16 @@ type ledgerRun struct {
 	runID             string
 	spiffeID          string
 	registeredEventID string
+	// registeredAt is the run_registered event's own `ts`, zero when it could
+	// not be read. It is what DriftEntryMissing's age gate is measured
+	// against — see oldEnough.
+	registeredAt time.Time
 	// closedEventID is the run_retired or run_expired event that ended it,
 	// empty while the run is active.
 	closedEventID string
+	// closedAt is the closing event's own `ts`, zero when it could not be
+	// read or the run is still active. DriftEntryNotDeleted's age gate.
+	closedAt time.Time
 }
 
 // ledgerView is the whole chain reduced to the two things reconciliation needs.
@@ -497,6 +600,20 @@ func recordString(record event.Fields, name string) string {
 		return ""
 	}
 	return value
+}
+
+// parseTS reads an event's `ts` as a time.Time, zero when it is absent or
+// unparseable. The same tolerance recordString documents applies here: a
+// record this control cannot date is skipped by its caller rather than
+// treated as a reason to abandon the cycle, and oldEnough treats a zero time
+// as "cannot judge, don't accuse" — the same fail-safe reaper.go's classify
+// applies to an entry it cannot date.
+func parseTS(record event.Fields) time.Time {
+	ts, err := event.ParseTimestamp(recordString(record, event.FieldTS))
+	if err != nil {
+		return time.Time{}
+	}
+	return ts.Time()
 }
 
 // readLedger walks the chain in bounded batches and reduces it to a view.
@@ -545,6 +662,7 @@ func (v *ledgerView) observe(record event.Fields) {
 			runID:             runID,
 			spiffeID:          spiffeID,
 			registeredEventID: eventID,
+			registeredAt:      parseTS(record),
 		}
 	case event.EventTypeRunRetired, event.EventTypeRunExpired:
 		eventID := recordString(record, event.FieldEventID)
@@ -563,6 +681,7 @@ func (v *ledgerView) observe(record event.Fields) {
 			v.runs[spiffeID] = run
 		}
 		run.closedEventID = eventID
+		run.closedAt = parseTS(record)
 	case event.EventTypeLedgerDriftDetected:
 		subject := recordString(record, event.FieldSubjectEventID)
 		reason := recordString(record, event.FieldReason)
@@ -579,7 +698,13 @@ func (v *ledgerView) observe(record event.Fields) {
 
 // compareEntries is expected against actual, both directions, in SPIFFE ID
 // order so a Result is the same for the same state.
-func compareEntries(view *ledgerView, entries []Entry) []Drift {
+//
+// now and minAge gate the two drift kinds ADR-0018 lets the ledger run ahead
+// of SPIRE on — DriftEntryMissing and DriftEntryNotDeleted, see oldEnough and
+// the file comment (#108, RM-075). The other two, DriftEntryUnattributed and
+// DriftEntryDuplicated, are reported the instant they are seen: nothing about
+// them is a window a healthy call is still inside.
+func compareEntries(view *ledgerView, entries []Entry, now time.Time, minAge time.Duration) []Drift {
 	byID := make(map[string][]string, len(entries))
 	for _, entry := range entries {
 		byID[entry.SPIFFEID] = append(byID[entry.SPIFFEID], entry.ID)
@@ -595,6 +720,13 @@ func compareEntries(view *ledgerView, entries []Entry) []Drift {
 		case !known:
 			drifts = append(drifts, newDrift(DriftEntryUnattributed, spiffeID, "", "", entryIDs))
 		case run.closedEventID != "":
+			if !oldEnough(run.closedAt, now, minAge) {
+				// retire_agent or the reaper may still be between recording
+				// the closure and deleting the entry (ADR-0018). Not drift
+				// yet — the next cycle re-derives this from the chain, so
+				// nothing is lost by waiting.
+				continue
+			}
 			drifts = append(drifts, newDrift(DriftEntryNotDeleted, spiffeID, run.runID,
 				run.closedEventID, entryIDs))
 		case len(entryIDs) > 1:
@@ -611,10 +743,32 @@ func compareEntries(view *ledgerView, entries []Entry) []Drift {
 		if _, held := byID[spiffeID]; held {
 			continue
 		}
+		if !oldEnough(run.registeredAt, now, minAge) {
+			// register_agent may still be between the append and the create
+			// (ADR-0018) — the legitimate window #108/RM-075 is about. Not
+			// drift yet; a later cycle sees the same run_registered event and
+			// tries again.
+			continue
+		}
 		drifts = append(drifts, newDrift(DriftEntryMissing, spiffeID, run.runID,
 			run.registeredEventID, nil))
 	}
 	return drifts
+}
+
+// oldEnough reports whether at is far enough in the past of now to rule out
+// the legitimate ADR-0018 window — the only thing that lets compareEntries
+// tell an orphan from a call still in flight.
+//
+// A zero at — the event's `ts` was absent or unparseable — answers false, the
+// same way the reaper's classify refuses to judge an entry it cannot date
+// (reaper.go): a run this control cannot age is one it has no basis to
+// accuse, and silence is the safer failure.
+func oldEnough(at, now time.Time, minAge time.Duration) bool {
+	if at.IsZero() {
+		return false
+	}
+	return now.Sub(at) >= minAge
 }
 
 func newDrift(kind DriftKind, spiffeID, runID, subjectEventID string, entryIDs []string) Drift {
