@@ -410,6 +410,37 @@ jobs:
       - name: Enforce 100% branch coverage on the IP §2 surfaces
         run: ./scripts/branch-coverage.sh
 
+  init-e2e:
+    name: init end-to-end signing
+    # Its OWN job, and that is the point. INIT-008/INIT-009 stand up a real
+    # SPIRE, Fulcio and Rekor — roughly eight Docker networks — so they are
+    # opt-in via INNSEGL_RUN_INIT_E2E rather than running inside the default
+    # matrix, where this machine's address-pool ceiling (#100) would collide
+    # with the suites that already hold eight each.
+    #
+    # Opt-in must not mean never. A runner is not a developer's laptop: it
+    # starts with an empty Docker and runs this package alone, so the budget
+    # that justifies the gate locally does not apply here. A control that is
+    # tested and never executed is absent from every deployment while looking
+    # present in every survey — RM-096 (#153) is this project's own report of
+    # exactly that, found the same week.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Install gitsign
+        run: go install github.com/sigstore/gitsign@v0.17.1
+      - name: Drive innsegl init against a real SPIRE, Fulcio and Rekor
+        env:
+          INNSEGL_RUN_INIT_E2E: "1"
+          INNSEGL_TEST_FLAGS: "-p 1"
+        run: go test ./cmd/innsegl/ -run 'TestINIT00[89]' -race -count=1 -v
+
   branch-coverage-gate-selftest:
     name: branch coverage gate self-test
     runs-on: ubuntu-latest
