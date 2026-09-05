@@ -107,18 +107,57 @@ func (g gitLocal) configList(ctx context.Context) ([]string, error) {
 // ---------------------------------------------------------------------------
 
 // The three git config keys ADR-0031 decision 1 passes to gitsign with `-c`
-// for the wrapper's own subprocess. `init` writes the SAME three, but
-// PERSISTENTLY and REPOSITORY-LOCAL, because it configures plain `git commit`
-// for a human running it directly — the wrapper deliberately bypasses repo
-// config (ADR-0028), and this is the other half: the surface a human's own
-// git actually reads.
+// for the wrapper's own subprocess — but `-c` outranks repository config
+// (ADR-0028), so nothing written here ever competes with, or is read by, an
+// orchestrated commit. That leaves these keys meaning exactly one thing: what
+// a human's OWN plain `git commit`, typed by hand in this repository, does.
+//
+// # Why `init` writes two of the three, and never the third (#158)
+//
+// The settled design (#158, resolving #117's "who must be able to verify"
+// framing): the MCP server issues identities, the orchestrator asks it for
+// one scoped to the work it is dispatching and signs through the
+// `sign_commit` MCP tool, and sub-agents hold no credential at all. The human
+// is the owner of the deployment, not a signer — they never sign as
+// themselves, and nothing about their own identity is what this project
+// proves.
+//
+// `commit.gpgsign=true` is therefore the wrong setting, not an incomplete
+// one: it makes EVERY commit a human makes here demand a credential the
+// architecture deliberately never gives them, and the failure lands on their
+// very next `git commit` with nothing attached explaining why. `init` used to
+// write it; it no longer does, and apply() below never backs it up or
+// restores it either — a pre-existing opinion about it (the operator's own,
+// set before init ever ran) is simply left alone, because apply never
+// touches it.
+//
+// `gpg.format=x509` and `gpg.x509.program=<verified path>` are kept. Both are
+// INERT on their own — without commit.gpgsign, or an explicit `-S` on a
+// single commit, git never invokes a signing program — so writing them
+// creates no ambient failure the way commit.gpgsign did. What they buy: a
+// verifiable, on-disk record of exactly which pinned, SHA-256-checked
+// gitsign binary this deployment trusts (matching what locateOrInstallGitsign
+// in initgitsign.go just verified), readable by `git config --local --list`
+// without re-running init. The counter-argument — that leaving them behind
+// invites a human to pass `-S` by hand and hit the same missing-credential
+// wall `commit.gpgsign` did — is real, but it is now an OPT-IN failure on one
+// commit the operator explicitly asked to sign, not an ambient default that
+// ambushes every commit they make; gitsign's own error at that point is far
+// more legible than the generic "failed to write commit object" the ambient
+// setting produced.
 const (
 	keyGPGFormat      = "gpg.format"
 	keyGPGX509Program = "gpg.x509.program"
-	keyCommitGPGSign  = "commit.gpgsign"
+	// keyCommitGPGSign is NOT written by apply() (see above, #158) — it is
+	// still named here for #117's bookkeeping shape and so INIT-002/010 can
+	// assert its absence by key name rather than by a bare string literal.
+	keyCommitGPGSign = "commit.gpgsign"
 )
 
-var signingKeys = [...]string{keyGPGFormat, keyGPGX509Program, keyCommitGPGSign}
+// signingKeys is what apply() writes, backs up and restores — deliberately
+// just the two inert keys (#158). commit.gpgsign is excluded on purpose: see
+// the package comment above.
+var signingKeys = [...]string{keyGPGFormat, keyGPGX509Program}
 
 // The bookkeeping section. Everything --undo needs to restore the repository
 // EXACTLY lives here, inside --local config itself — not a side file — so the
@@ -219,7 +258,6 @@ func (r *gitSigningRecorder) apply(ctx context.Context, setup gitsignSetup) erro
 	target := map[string]string{
 		keyGPGFormat:      "x509",
 		keyGPGX509Program: setup.GitsignPath,
-		keyCommitGPGSign:  "true",
 	}
 	for _, key := range signingKeys {
 		if err := r.g.configSet(ctx, key, target[key]); err != nil {

@@ -416,7 +416,14 @@ func createVerificationCommit(ctx context.Context, gitPath, repo string, signer 
 	if writeErr := os.WriteFile(marker, []byte(body), 0o600); writeErr != nil {
 		return "", cleanup, fmt.Errorf("innsegl init: writing the verification marker: %w", writeErr)
 	}
-	if stageErr := runGit(ctx, gitPath, tmp, "add", ".innsegl-init-verify"); stageErr != nil {
+	// -f because this repository's own .gitignore may cover the marker, and
+	// most do: a leading-dot name is exactly what a `.*` rule catches, and
+	// `.*` is a common policy — this project ships it. Without -f, `git add`
+	// refuses a file init created itself, for its own use, seconds earlier,
+	// and the verification commit never happens. The file is init's, it is
+	// written into a throwaway worktree, and it is gone when this returns, so
+	// there is nothing here for an ignore rule to protect (#117).
+	if stageErr := runGit(ctx, gitPath, tmp, "add", "-f", ".innsegl-init-verify"); stageErr != nil {
 		return "", cleanup, fmt.Errorf("innsegl init: staging the verification marker: %w", stageErr)
 	}
 
