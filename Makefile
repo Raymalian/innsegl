@@ -23,7 +23,8 @@ COVERPROFILE := cover.out
 .PHONY: all build test lint cover smoke smoke-down spire-up spire-verify \
         spire-down sigstore-up sigstore-verify sigstore-down \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo \
-        innsegl-verify-commit innsegl-down innsegl-purge innsegl-stack-clean clean
+        innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
+        innsegl-stack-clean clean
 
 all: build test lint
 
@@ -245,6 +246,32 @@ innsegl-purge:
 	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_SPIRE_PARENT_ID=unset \
 	  $(INNSEGL_COMPOSE) --profile demo --profile canary down -v
+
+# ---------------------------------------------------------------------------
+# The ledger backup (issue #160, RM-099).
+#
+# runbooks/index-rebuild.md §0: losing Postgres loses the event bodies -- the
+# agent_type, task_ref, run_id and every tool_call a sealed segment cannot
+# give back -- and nothing else in this repository holds a second copy. This
+# is why innsegl-down (above) takes the stack down WITHOUT -v: a backup is the
+# only other thing standing between an operator and permanent loss, and
+# nothing shipped here took one before now.
+#
+# scripts/backup-ledger.sh does not call itself done on "pg_dump exited 0".
+# It restores the dump into a throwaway database in the same container and
+# checks the restored chain against the sealed segments with
+# runbooks/verify-rebuilt-index.sh before writing anything to
+# $(INNSEGL_BACKUP_DIR) (default ./backups) -- the adjudication
+# runbooks/index-rebuild.md §0 describes for a restore, run here at backup
+# time instead. See that script's header for the exit-status contract and
+# scripts/backup-ledger-selftest.sh for BAK-001..004, which prove it red on a
+# chain that disagrees with a sealed segment and green on one that matches.
+# ---------------------------------------------------------------------------
+INNSEGL_BACKUP_DIR ?= backups
+
+## innsegl-backup: pg_dump the ledger and verify it against the sealed segments
+innsegl-backup:
+	INNSEGL_BACKUP_DIR='$(INNSEGL_BACKUP_DIR)' scripts/backup-ledger.sh --out '$(INNSEGL_BACKUP_DIR)'
 
 ## clean: remove build and coverage artefacts
 clean:
