@@ -1017,6 +1017,23 @@ func (c *campaign) signRefusedTakeover(
 // ---------------------------------------------------------------------------
 
 func (c *campaign) signCommit(t *testing.T) {
+	// PENDING for RM-072 (#95), second attempt. The orphan handling below is
+	// correct and stays: gitsign survives the SIGKILL as git's grandchild and
+	// keeps working, and waiting on .git/index.lock does not see one that has
+	// not reached the lock yet. That was a real cause and it is fixed.
+	//
+	// It is not the only one. On CI, a blind stratum killed 3ms in — before
+	// Phase A, with nothing of its own done — still found its staged tree
+	// already at HEAD: the PREVIOUS shot's orphan finished and committed an
+	// index that by then held this shot's file. Ten of eleven local runs pass
+	// and CI fails, which is the same shape that cost hours before.
+	//
+	// So IP §6.6's "never a second commit" stays untested, which is what #95
+	// exists to say. A subtest that intermittently accuses the tool of an
+	// invariant violation the harness caused is worse than one that says
+	// plainly it is not running.
+	t.Skip("PENDING RM-072 (#95): sign_commit is not yet fuzzed; see the note above")
+
 	sig := requireSigStack(t)
 
 	root, repoDir := signWorkspace(t)
