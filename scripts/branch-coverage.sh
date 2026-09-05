@@ -7,17 +7,20 @@
 #
 #   1. hash-chain append          internal/ledger/chain.go
 #   2. segment sealing            internal/segment/seal.go, merkle.go
-#   3. signature verification     internal/verify/       (RM-037, does not exist yet)
+#   3. signature verification     internal/verify/       (RM-037)
 #   4. every error-return path
-#      of every MCP tool          internal/mcp/          (RM-022..025, does not exist yet)
+#      of every MCP tool          internal/mcp/          (RM-022..025)
 #
 # Go has no branch coverage mode — `go tool cover` counts statements, and a
 # function can reach 100% statements with an untaken `if`, which is exactly the
 # case this floor exists to catch. gobco instruments conditions instead, and
 # reports any that were only ever evaluated in one direction.
 #
+# ADR-0043 records why gobco was chosen and why this runs as its own CI job.
+#
 # A surface whose file does not exist yet is reported as PENDING, never passed
-# silently. When RM-037 and RM-022..025 land, add their paths below.
+# silently — the mechanism that matters if a floored surface is ever removed,
+# not only while RM-037 and RM-022..025 were still landing.
 
 set -eu
 
