@@ -319,8 +319,25 @@ func signWorkspace(t *testing.T) (root, repoDir string) {
 // signStage stages a uniquely named file so every shot's tree differs from
 // every other's — StagedTree refuses an empty commit, which is exactly the
 // state a successful PRIOR shot in the SAME repository leaves the index in.
+//
+// The index is reset to HEAD first, and a unique filename is not enough
+// without it. A shot that was refused or killed leaves its own file staged;
+// the next shot that COMMITS sweeps that file in along with its own, because
+// git commits the whole index. The first shot's replay then finds its file
+// already committed, write-tree returns HEAD's own tree, and the server
+// refuses an empty commit — a harness sequencing fault reported as though the
+// tool had violated an invariant.
+//
+// Seen on CI at seed 1788593655011433377, where a blind stratum drew a delay
+// past the uninterrupted call's own duration (744ms against 669ms), completed,
+// and committed an earlier refused shot's file with its own.
 func signStage(t *testing.T, repo, tag string) (tree string) {
 	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", "-C", repo, "reset", "-q")
+	cmd.Env = sigGitEnv(repo)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git reset in %s: %v: %s", repo, err, out)
+	}
 	stageSigFile(t, repo, "shot-"+tag+".txt", "innsegl RM-072 "+tag+"\n")
 	return sigGitOut(t, repo, "write-tree")
 }
