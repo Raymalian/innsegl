@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"innsegl.dev/innsegl/internal/identity"
@@ -275,6 +276,19 @@ func runInitApply(ctx context.Context, o initOptions, stdout, stderr io.Writer, 
 	if o.repo == "" {
 		fprintf(stderr, "innsegl init: -repo is required\n")
 		return exitUsage
+	}
+	// Absolute, and this is not tidiness. -repo defaults to ".", and the
+	// gitsign path derived from it is written into gpg.x509.program, which git
+	// resolves against the worktree it is committing in — not the one init was
+	// run from. The verification commit is made in a temporary linked worktree
+	// where `.git` is a FILE, so a relative ".git/innsegl/bin/…" resolves to
+	// nothing and git reports `cannot exec …: Not a directory`. The default
+	// invocation was the broken one.
+	if abs, aerr := filepath.Abs(o.repo); aerr == nil {
+		o.repo = abs
+	} else {
+		fprintf(stderr, "innsegl init: resolving -repo %q: %v\n", o.repo, aerr)
+		return exitInitInconclusive
 	}
 
 	root, err := resolveTrustRoot(trustRootPrompt{
