@@ -342,15 +342,21 @@ jobs:
         # packages. The script exits non-zero when a floor is breached; it does
         # not merely report.
         #
-        # HONESTY NOTE: Go's tooling measures *statement* coverage, not branch
-        # coverage, and there is no branch mode in `go tool cover`. What runs
-        # here is the 90% statement floor standing in for the "line coverage"
-        # requirement. The separate IP §2 requirement of 100% *branch* coverage
-        # on hash-chain append, segment sealing, signature verification and
-        # every error-return path of every MCP tool is NOT enforced by this
-        # step and is NOT implied by the numbers it prints. See the
-        # "BRANCH FLOOR — NOT YET ENFORCED" TODO(#10) block in
-        # scripts/coverage-floors.sh.
+        # WHAT THIS STEP DOES AND DOES NOT MEASURE. Go's tooling measures
+        # *statement* coverage, and there is no branch mode in `go tool cover`,
+        # so the 90% floor here stands in for IP §2's "line coverage"
+        # requirement and nothing more. IP §2's separate 100% *branch* floor on
+        # hash-chain append, segment sealing, signature verification and every
+        # error-return path of every MCP tool is enforced by the "branch
+        # coverage" job, which runs gobco — not by this step, and not implied
+        # by the numbers it prints (RM-064, #72).
+        #
+        # COVERAGE_REQUIRE_PACKAGES=1 so a floored package that disappears
+        # fails instead of silently skipping. A floor over a package that is no
+        # longer there is a gate reporting on nothing, which is the false green
+        # this repository keeps finding (#101, RM-035).
+        env:
+          COVERAGE_REQUIRE_PACKAGES: "1"
         run: ./scripts/coverage-floors.sh cover.out
       - name: Human-readable coverage report
         if: always()
