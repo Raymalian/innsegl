@@ -68,8 +68,30 @@ func TestINIT007SuccessfulRunWritesConfigAndReportsVerified(t *testing.T) {
 	if gerr != nil || !ok || v != "/fake/gitsign" {
 		t.Errorf("gpg.x509.program = (%q, %v, %v), want (/fake/gitsign, true, nil)", v, ok, gerr)
 	}
+	// commit.gpgsign is NOT one of the keys init writes (#158): the settled
+	// design signs through the orchestrator's `sign_commit` MCP tool, using an
+	// identity the MCP server issued — never through a human's own plain
+	// `git commit`. Configuring commit.gpgsign here would demand of the
+	// operator exactly the credential the architecture deliberately never
+	// gives them, and their very next commit would fail with no explanation
+	// attached to it.
+	if _, ok, gerr := g.configGet(ctx, "commit.gpgsign"); gerr != nil || ok {
+		t.Errorf("commit.gpgsign = (ok=%v, err=%v), want ok=false: init must not configure "+
+			"a human's git to sign (#158)", ok, gerr)
+	}
 	if _, statErr := os.Stat(deployConfigPath(repo)); statErr != nil {
 		t.Errorf("deploy config was not written: %v", statErr)
+	}
+
+	// The report must not read as "this repository now signs" (#158): it must
+	// be unmistakable that what was proved is the DEPLOYMENT's signing path —
+	// through the orchestrator and sign_commit — not the operator's own.
+	report := stdout.String()
+	if !strings.Contains(report, "sign_commit") {
+		t.Errorf("report %q does not name sign_commit as the path that signs", report)
+	}
+	if !strings.Contains(report, "commit.gpgsign") || !strings.Contains(report, "not") {
+		t.Errorf("report %q does not say plainly that commit.gpgsign was not configured", report)
 	}
 }
 
