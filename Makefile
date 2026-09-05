@@ -23,7 +23,7 @@ COVERPROFILE := cover.out
 .PHONY: all build test lint cover smoke smoke-down spire-up spire-verify \
         spire-down sigstore-up sigstore-verify sigstore-down \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo \
-        innsegl-verify-commit innsegl-down innsegl-stack-clean clean
+        innsegl-verify-commit innsegl-down innsegl-purge innsegl-stack-clean clean
 
 all: build test lint
 
@@ -224,8 +224,24 @@ innsegl-verify-commit:
 	  --env INNSEGL_OIDC_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  $(INNSEGL_IMAGE) verify $(COMMIT) -repo /work/$(DEMO_REPO)
 
-## innsegl-down: tear the innsegl stack down, volumes included
+## innsegl-down: stop the innsegl stack, keeping the ledger and the segments
+# No -v, and that is the whole point. The ledger's event bodies — agent_type,
+# task_ref, run_id, every tool_call — live in Postgres and NOWHERE ELSE.
+# runbooks/index-rebuild.md §0 is explicit: a sealed segment adjudicates a
+# backup, it does not supply one, and "there is no rebuild-from-segments-alone".
+# So `down -v` here does not stop a deployment, it destroys the only copy of
+# what the agents actually did. What survives is attribution — every commit
+# still verifies from git, Fulcio and Rekor — and not the history behind it.
+#
+# Use innsegl-purge when destroying the data is what you mean.
 innsegl-down:
+	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  INNSEGL_SPIRE_PARENT_ID=unset \
+	  $(INNSEGL_COMPOSE) --profile demo --profile canary down
+
+## innsegl-purge: tear the innsegl stack down AND delete its data volumes
+# Everything innsegl-down's comment says will happen, on purpose.
+innsegl-purge:
 	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_SPIRE_PARENT_ID=unset \
 	  $(INNSEGL_COMPOSE) --profile demo --profile canary down -v

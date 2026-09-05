@@ -202,7 +202,14 @@ docker compose -f deploy/compose/sigstore.yml down -v
 docker compose -f deploy/compose/spire.yml --profile verify down -v
 ```
 
-`make innsegl-down sigstore-down spire-down` runs the same three. The
+`make innsegl-purge sigstore-down spire-down` runs the same three.
+
+**`make innsegl-down` does not delete the ledger's volume**, and that is
+deliberate: the event bodies — `agent_type`, `task_ref`, every `tool_call` —
+live in Postgres and nowhere else, and §0 of `runbooks/index-rebuild.md` is
+explicit that a sealed segment adjudicates a backup rather than supplying one.
+`innsegl-purge` is the one that destroys them, named so that doing it is a
+choice. The
 `INNSEGL_SPIRE_PARENT_ID=unset` is only there so `down` works after a `down -v`
 has already removed the trust material `.env` describes: `innsegl.yml` requires
 that variable rather than defaulting it, and a teardown block that cannot tear
