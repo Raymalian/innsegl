@@ -92,6 +92,20 @@ fi
 #       It skips unless its parent invoked it with the step env var set, which
 #       is exactly right — run directly it has nothing to do.
 #
+#   TestINIT008SigningPathAgainstRealSPIREFulcioRekor
+#       RM-089 (#134). It stands up a real SPIRE, Fulcio and Rekor — roughly
+#       eight Docker networks — so it is opt-in via INNSEGL_RUN_INIT_E2E and
+#       does not run inside this suite, where RM-035's address-pool exhaustion
+#       is exactly what several eight-network suites already risk.
+#
+#       This entry is NOT the debt going quiet, and the distinction matters
+#       because RM-096 (#153) is this project's own report of a control that
+#       was tested and never executed. The `init end-to-end signing` job in
+#       .github/workflows/ci.yml runs it on every push, alone, on a runner
+#       with an empty Docker — so the opt-in bounds WHERE it runs, not
+#       WHETHER. Remove this line if that job is ever removed, and let this
+#       gate go red rather than let the test go quiet.
+#
 #   TestGH001NoContributorAppearsForAnUnlinkedAuthor
 #       doc 07 GH-001 (RM-038, #46). It is the one case in the catalogue that
 #       measures somebody else's system: it pushes commits with an unlinked
@@ -113,7 +127,7 @@ fi
 #       while the credential is unprovisioned, so the debt is emailed rather
 #       than merely written down. Remove this line only if GH-001 is ever made
 #       to run unattended in CI.
-ALLOWED='TestSEG002CrashChild|TestMCP011CrashAndReplayUnderFuzzedKillTiming/sign_commit|TestGH001NoContributorAppearsForAnUnlinkedAuthor'
+ALLOWED='TestSEG002CrashChild|TestMCP011CrashAndReplayUnderFuzzedKillTiming/sign_commit|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor'
 
 unexpected=$(grep -F '"Action":"skip"' "${out}" | grep -F '"Test":' | grep -Ev "\"Test\":\"(${ALLOWED})\"" || true)
 skipped=$(printf '%s' "${unexpected}" | grep -c . || true)
