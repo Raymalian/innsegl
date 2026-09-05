@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/reconciler"
+	"innsegl.dev/innsegl/internal/spire"
 )
 
 // `innsegl reconcile` — the flag handling, the exit statuses and the report.
@@ -39,15 +40,46 @@ func (f *fakeCycles) Reconcile(context.Context) (reconciler.Result, error) {
 	return result, err
 }
 
+// fakeSpireCycles is spireCycler's test double, cycler's fakeCycles mirrored
+// for the identity pass.
+type fakeSpireCycles struct {
+	results []spire.Result
+	errs    []error
+	calls   int
+}
+
+func (f *fakeSpireCycles) Reconcile(context.Context) (spire.Result, error) {
+	i := f.calls
+	f.calls++
+	var (
+		result spire.Result
+		err    error
+	)
+	if i < len(f.results) {
+		result = f.results[i]
+	}
+	if i < len(f.errs) {
+		err = f.errs[i]
+	}
+	return result, err
+}
+
 func runReconcile(t *testing.T, args []string, cycles *fakeCycles, openErr error) (int, string, string) {
+	t.Helper()
+	return runReconcileWithEngines(t, args, reconcileEngines{Rekor: cycles}, openErr)
+}
+
+// runReconcileWithEngines is runReconcile's general form, for tests that also
+// need to fake the identity pass.
+func runReconcileWithEngines(t *testing.T, args []string, engines reconcileEngines, openErr error) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	code := runReconcileCommand(args, &stdout, &stderr, reconcileDeps{
-		open: func(context.Context, reconcileOptions) (cycler, func(), error) {
+		open: func(context.Context, reconcileOptions) (reconcileEngines, func(), error) {
 			if openErr != nil {
-				return nil, nil, openErr
+				return reconcileEngines{}, nil, openErr
 			}
-			return cycles, func() {}, nil
+			return engines, func() {}, nil
 		},
 	})
 	return code, stdout.String(), stderr.String()
@@ -178,8 +210,8 @@ func TestWithoutOnceItRunsContinuously(t *testing.T) {
 	defer cancel()
 	code := runReconcileLoop(ctx, append(validReconcileArgs(t), "-interval", "20ms"),
 		&stdout, &stderr, reconcileDeps{
-			open: func(context.Context, reconcileOptions) (cycler, func(), error) {
-				return cycles, func() {}, nil
+			open: func(context.Context, reconcileOptions) (reconcileEngines, func(), error) {
+				return reconcileEngines{Rekor: cycles}, func() {}, nil
 			},
 		})
 	if code != exitOK {
