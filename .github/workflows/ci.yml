@@ -409,3 +409,29 @@ jobs:
         run: go install github.com/rillig/gobco@v1.3.4
       - name: Enforce 100% branch coverage on the IP §2 surfaces
         run: ./scripts/branch-coverage.sh
+
+  branch-coverage-gate-selftest:
+    name: branch coverage gate self-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Deliberately not go-version-file: this job tests the gate itself
+          # against a throwaway fixture module and must keep working
+          # independently of the repository's own module.
+          go-version: stable
+          check-latest: true
+      - name: Install gobco
+        run: go install github.com/rillig/gobco@v1.3.4
+      - name: Prove the gate fails on an uncovered branch
+        # RM-064 (#72) acceptance criterion: "The self-test demonstrates
+        # red-then-green for the branch floor, not only the line floor."
+        # scripts/coverage-floors-selftest.sh already proves it for the
+        # statement floor above; this is its sibling for the branch floor
+        # ADR-0043 chose gobco to enforce.
+        run: ./scripts/branch-coverage-selftest.sh
