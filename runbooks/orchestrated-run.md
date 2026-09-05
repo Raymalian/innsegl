@@ -72,11 +72,11 @@ not `demo-agent` has to make them itself.
 
 ## 3. The four calls
 
-The MCP server speaks streamable HTTP on `127.0.0.1:8080`, at `/` — not
-`/mcp`. Open a session first; every later call carries its id.
+The MCP server speaks streamable HTTP on `127.0.0.1:28080`, at `/` — not
+`/mcp`. Override with `INNSEGL_MCP_PORT`. Open a session first; every later call carries its id.
 
 ```sh
-curl -sD /tmp/h -X POST http://127.0.0.1:8080/ \
+curl -sD /tmp/h -X POST http://127.0.0.1:28080/ \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{
@@ -189,8 +189,14 @@ signed integration time rather than the verifier's clock.
 
 Attribution says *who*. The ledger says *what they did*.
 
+**The query API is not published to the host.** `innsegl-api` listens on 8082
+inside the compose network and nothing maps it out; only the dashboard is
+reachable, on `127.0.0.1:8082`. So from the host either browse the dashboard,
+or reach the API from inside the network:
+
 ```sh
-curl -s http://127.0.0.1:8081/api/v1/runs/run-dd41951f222496a135241a77d1430237
+docker exec innsegl-dashboard \
+  wget -qO- http://innsegl-api:8082/api/v1/runs/run-dd41951f222496a135241a77d1430237
 ```
 
 The `run_registered` row carries `agent_type` and `task_ref` in clear, which is
@@ -222,8 +228,9 @@ Backing the ledger up is tracked as #160 and is not shipped.
 
 | gap | what to do instead |
 |---|---|
-| No `.mcp.json` ships, so an MCP client has nothing to point at. | Write one against `http://127.0.0.1:8080/`. It is a dotfile and `.gitignore` covers it. |
+| No `.mcp.json` ships, so an MCP client has nothing to point at. | Write one against `http://127.0.0.1:28080/`. It is a dotfile and `.gitignore` covers it. |
 | `register_agent` takes `task_id`; `sign_commit` takes `task_ref`. | Pass the same value under both names. |
 | The MCP workspace is empty on a fresh stack. | Place the repository under `/work/<host>/<org>/<name>` in the `innsegl-workspace` volume before calling `sign_commit`. |
 | `innsegl init` cannot reach the SPIRE admin API in the shipped deployment (#156). | Not needed for this runbook. Only `innsegl init` needs it. |
 | Nothing backs up the ledger (#160). | `pg_dump` by hand until it ships. |
+| The query API is not published to the host, so §5 needs `docker exec`. | Reach it through the compose network, or publish 8082 yourself. |
