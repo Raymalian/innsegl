@@ -113,7 +113,7 @@ this project, and every line of it matters:
 curl -s http://127.0.0.1:8443/keys                  # a JWKS with a key in it
 curl -s http://127.0.0.1:5555/api/v1/rootCert       # a PEM CA certificate
 curl -s http://127.0.0.1:3000/api/v1/log/publicKey  # a PKIX public key
-curl -s http://127.0.0.1:8081/readyz                # the MCP's own readiness
+curl -s http://127.0.0.1:28081/readyz               # the MCP's own readiness
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/  # the dashboard
 curl -s http://127.0.0.1:8082/api/v1/health         # its backend, and what its
                                                     # credential may do
@@ -202,7 +202,14 @@ docker compose -f deploy/compose/sigstore.yml down -v
 docker compose -f deploy/compose/spire.yml --profile verify down -v
 ```
 
-`make innsegl-down sigstore-down spire-down` runs the same three. The
+`make innsegl-purge sigstore-down spire-down` runs the same three.
+
+**`make innsegl-down` does not delete the ledger's volume**, and that is
+deliberate: the event bodies — `agent_type`, `task_ref`, every `tool_call` —
+live in Postgres and nowhere else, and §0 of `runbooks/index-rebuild.md` is
+explicit that a sealed segment adjudicates a backup rather than supplying one.
+`innsegl-purge` is the one that destroys them, named so that doing it is a
+choice. The
 `INNSEGL_SPIRE_PARENT_ID=unset` is only there so `down` works after a `down -v`
 has already removed the trust material `.env` describes: `innsegl.yml` requires
 that variable rather than defaulting it, and a teardown block that cannot tear
@@ -445,7 +452,7 @@ Four things worth knowing before you choose:
 | compose refuses, naming `INNSEGL_SPIRE_JWT_ISSUER` | the export was skipped. This refusal is deliberate; see above |
 | `innsegl serve` refuses, naming `-identity-mode / -identity-secret / -identity-secret-file` | the deployment secret is unset, under 16 bytes, or supplied twice. In the shipped stack `innsegl-identity-init` writes it, so check that one-shot's logs first. See "What an agent's identity says about it" |
 | `register: FAIL: no attested agent yet` | the SPIRE agent has not finished attesting. Re-run `register.sh`; it is idempotent |
-| ports 8443, 5555, 3000, 8080, 8081 or 8082 already bound | the stack publishes those six on loopback. Free them, or override: `INNSEGL_SPIRE_OIDC_PORT`, `INNSEGL_MCP_PORT`, `INNSEGL_MCP_HEALTH_PORT`, `INNSEGL_DASHBOARD_PORT` |
+| ports 8443, 5555, 3000, 28080, 28081 or 8082 already bound | the stack publishes those six on loopback. Free them, or override: `INNSEGL_SPIRE_OIDC_PORT`, `INNSEGL_MCP_PORT`, `INNSEGL_MCP_HEALTH_PORT`, `INNSEGL_DASHBOARD_PORT` |
 | `all predefined address pools have been fully subnetted` | Docker is out of network address space, at roughly the twenty-ninth network. The three stacks hold twelve between them. `docker network prune` |
 | compose refuses, naming `INNSEGL_SPIRE_PARENT_ID` | `register.sh` has not run since this stack booted. It writes `deploy/compose/.env`; re-run it |
 | `innsegl-mcp` restarts, logging that the Workload API gave it no SVID | its registration entry is missing or names an older build of `innsegl:local`. Re-run `register.sh` — it detects a stale entry and replaces it |
