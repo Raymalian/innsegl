@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"innsegl.dev/innsegl/internal/identity"
@@ -276,6 +277,19 @@ func runInitApply(ctx context.Context, o initOptions, stdout, stderr io.Writer, 
 		fprintf(stderr, "innsegl init: -repo is required\n")
 		return exitUsage
 	}
+	// Absolute, and this is not tidiness. -repo defaults to ".", and the
+	// gitsign path derived from it is written into gpg.x509.program, which git
+	// resolves against the worktree it is committing in — not the one init was
+	// run from. The verification commit is made in a temporary linked worktree
+	// where `.git` is a FILE, so a relative ".git/innsegl/bin/…" resolves to
+	// nothing and git reports `cannot exec …: Not a directory`. The default
+	// invocation was the broken one.
+	if abs, aerr := filepath.Abs(o.repo); aerr == nil {
+		o.repo = abs
+	} else {
+		fprintf(stderr, "innsegl init: resolving -repo %q: %v\n", o.repo, aerr)
+		return exitInitInconclusive
+	}
 
 	root, err := resolveTrustRoot(trustRootPrompt{
 		Flag: o.trustRootFlag, In: os.Stdin, Out: stdout,
@@ -345,7 +359,14 @@ func runInitApply(ctx context.Context, o initOptions, stdout, stderr io.Writer, 
 		fprintf(stderr, "innsegl init: %v\n", aerr)
 		return exitInitInconclusive
 	}
-	fprintf(stdout, "git config --local: gpg.format=x509, gpg.x509.program=%s, commit.gpgsign=true\n", gitsignPath)
+	// commit.gpgsign is deliberately NOT set (#158): this repository's git
+	// commit continues to sign nothing on its own, because the human running
+	// this command is the deployment's owner, not its signer. What signs is
+	// the orchestrator, through the `sign_commit` MCP tool, using an identity
+	// the MCP server issued for the work it is dispatching.
+	fprintf(stdout, "git config --local: gpg.format=x509, gpg.x509.program=%s "+
+		"(recorded, not activated — commit.gpgsign is not set, and this command does not set it)\n",
+		gitsignPath)
 
 	depCfg := deployConfig{
 		FulcioURL: fulcioURL, RekorURL: rekorURL, OIDCIssuer: oidcIssuer, IdentityMode: string(mode),
@@ -410,7 +431,17 @@ func runInitApply(ctx context.Context, o initOptions, stdout, stderr io.Writer, 
 		return exitInitInconclusive
 	}
 
-	fprintf(stdout, "VERIFIED: %s signed a real commit (%s) and `innsegl verify` accepted it\n",
+	// This line is what got run, measured, three ways: it names WHAT was
+	// proved (the deployment's signing path, not the operator's), WHO signs
+	// going forward (orchestrated agents, through sign_commit — never the
+	// person who just ran this command), and WHERE the evidence lives (the
+	// throwaway ref, not this repository's real history). "This repository
+	// now signs" would be false; what is true is narrower and this says it.
+	fprintf(stdout, "VERIFIED: this deployment can sign. %s signed a real commit (%s) as an "+
+		"orchestrated identity, and `innsegl verify` accepted it. Commits authored through the "+
+		"orchestrator's `sign_commit` MCP tool will carry a verifiable identity issued for that "+
+		"work; plain `git commit` in this repository still does not sign, and was not configured "+
+		"to — the operator is never asked to sign as themselves (#158).\n",
 		result.Ref, result.CommitSHA)
 	return exitOK
 }
