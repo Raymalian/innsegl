@@ -12,8 +12,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/spiffe/go-spiffe/v2/workloadapi"
-
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/spire"
 )
@@ -346,32 +344,13 @@ func writeReapJSON(out, stderr io.Writer, report *spire.SweepReport) {
 // any other workload, and a process that cannot attest gets no credential and
 // reaps nothing.
 func openReaper(ctx context.Context, opts reapOptions) (sweeper, func(), error) {
-	source, err := workloadapi.NewX509Source(ctx,
-		workloadapi.WithClientOptions(workloadapi.WithAddr(opts.workloadAPI)))
+	// The dial is shared with `reconcile`'s identity pass (#153/RM-096) rather
+	// than written twice; see spiredial.go.
+	client, unwind, err := dialSPIREAdmin(ctx, "the reaper",
+		opts.spireAddress, opts.trustDomain, opts.serverID, opts.workloadAPI, opts.timeout)
 	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"no SVID from the Workload API at %s: the reaper is an attested workload "+
-				"and without an identity it holds no SPIRE admin: %w", opts.workloadAPI, err)
+		return nil, nil, err
 	}
-	closers := []func(){func() { _ = source.Close() }}
-	unwind := func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i]()
-		}
-	}
-
-	client, err := spire.Dial(ctx, spire.Config{
-		Address:     opts.spireAddress,
-		TrustDomain: opts.trustDomain,
-		ServerID:    opts.serverID,
-		Source:      source,
-		Timeout:     opts.timeout,
-	})
-	if err != nil {
-		unwind()
-		return nil, nil, fmt.Errorf("dial the SPIRE admin API at %s: %w", opts.spireAddress, err)
-	}
-	closers = append(closers, func() { _ = client.Close() })
 
 	// Open, never Migrate. The reaper is not the schema's owner and must not
 	// create one: a reaper that quietly migrated an empty database would
@@ -381,7 +360,10 @@ func openReaper(ctx context.Context, opts reapOptions) (sweeper, func(), error) 
 		unwind()
 		return nil, nil, fmt.Errorf("open the ledger: %w", err)
 	}
-	closers = append(closers, store.Close)
+	unwindAll := func() {
+		store.Close()
+		unwind()
+	}
 
 	reaper, err := spire.NewReaper(spire.ReaperConfig{
 		Client: client,
@@ -389,8 +371,8 @@ func openReaper(ctx context.Context, opts reapOptions) (sweeper, func(), error) 
 		Grace:  opts.grace,
 	})
 	if err != nil {
-		unwind()
+		unwindAll()
 		return nil, nil, err
 	}
-	return reaper, unwind, nil
+	return reaper, unwindAll, nil
 }
