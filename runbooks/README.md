@@ -12,6 +12,7 @@ around.
 
 | | |
 |---|---|
+| [`orchestrated-run.md`](orchestrated-run.md) | Putting one agent's work through Innsegl end to end: the four MCP calls an orchestrator makes, checked from outside with no route to the ledger. Written from a run on 2026-09-05, with its real output. |
 | [`index-rebuild.md`](index-rebuild.md) | Rebuilding the Postgres hot tier from a backup, and adjudicating the result against the sealed segments and their Rekor anchors. Doc 05 §2's required deliverable. |
 | [`trust-domain-re-rooting.md`](trust-domain-re-rooting.md) | Recovery from a trust-domain root compromise (threat model A1). What is recoverable, what is not, and what an operator must not pretend. Doc 04 §5.1's required deliverable. |
 | [`verify-rebuilt-index.sh`](verify-rebuilt-index.sh) | The executable check `index-rebuild.md` §6 runs: does the index you just rebuilt hold the event hashes the segments sealed? |

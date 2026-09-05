@@ -540,16 +540,35 @@ func TestAClaimThatCommitsDuringAnotherCallersStatementIsWaitedForNotLost(t *tes
 
 	// This caller blocks inside its INSERT until the transaction above
 	// commits, and then finds neither arm of its statement returned a row.
-	brief, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	store := NewIdempotencyStore(newPool(t, dsn))
+	//
+	// Both edges are DRIVEN, never aimed at (#128, #136). The earlier shape
+	// gave the seeded transaction a 300ms sleep before committing, hoping the
+	// caller's INSERT would already be parked on the lock by then, and gave
+	// the caller a 3s deadline, hoping it would expire only after that INSERT
+	// had unblocked and been reported in-flight rather than while it was still
+	// running. Missing either window failed the case visibly (as opposed to
+	// #128's silent failure, since a claim that fails outright, before
+	// `waiting` is ever set, is not reported as ErrCallInFlight at all) — but
+	// it could still miss on a loaded machine. Now: the commit waits for
+	// pg_stat_activity to show this caller's backend actually blocked on the
+	// row lock (waitForLockWaiters, the same device the two completion races
+	// below use), and the caller gives up the instant its own Do() loop
+	// reports it has reached the in-flight state (withWaitObserver), so no
+	// clock decides either boundary.
+	impatient, giveUp := context.WithCancel(ctx)
+	defer giveUp()
+	var waits atomic.Int64
+	store := NewIdempotencyStore(newPool(t, dsn), withWaitObserver(func() {
+		waits.Add(1)
+		giveUp()
+	}))
 	failed := make(chan error, 1)
 	go func() {
-		_, derr := store.Do(brief, call, mustNotRun(t))
+		_, derr := store.Do(impatient, call, mustNotRun(t))
 		failed <- derr
 	}()
 
-	time.Sleep(300 * time.Millisecond)
+	waitForLockWaiters(ctx, t, dsn, 1)
 	if cerr := tx.Commit(ctx); cerr != nil {
 		t.Fatalf("commit the seeded claim: %v", cerr)
 	}
@@ -557,6 +576,11 @@ func TestAClaimThatCommitsDuringAnotherCallersStatementIsWaitedForNotLost(t *tes
 	derr := <-failed
 	if derr == nil {
 		t.Fatal("the caller ran the tool under a key another claim already held")
+	}
+	if waits.Load() == 0 {
+		t.Fatalf("the store never entered the wait, so this caller gave up "+
+			"somewhere else and the case never reached the state it means to "+
+			"test; it reported %v", derr)
 	}
 	if !errors.Is(derr, ErrCallInFlight) {
 		t.Fatalf("a claim that committed mid-statement was reported as %v, "+

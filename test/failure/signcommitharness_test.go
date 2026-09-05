@@ -13,8 +13,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -98,8 +100,15 @@ import (
 // held proxy is closed EXPLICITLY the instant this file has read what it
 // needs from it (never left to the subtest's own t.Cleanup, which would
 // leave it open for the rest of signCommit), and every shot then waits for
-// every lock in the repository to clear (signAwaitLocksClear) before
-// touching that repository again.
+// every lock in the repository to clear AND for the killed daemon's own
+// process tree to have fully exited (signAwaitLocksClear) before touching
+// that repository again or reading its state to classify a shot.
+//
+// The lock alone is not enough (RM-072, #95): an orphan that has not yet
+// reached the point of taking it — still doing its own Fulcio or Rekor round
+// trip — leaves nothing for sigStaleLocks to see, and a kill landing anywhere
+// before Phase B is exactly a kill that can leave one there. signAwaitLocksClear's
+// own comment has the mechanism and the two CI seeds it explains.
 type signHoldProxy struct {
 	ln   net.Listener
 	srv  *http.Server
@@ -342,25 +351,216 @@ func signStage(t *testing.T, repo, tag string) (tree string) {
 	return sigGitOut(t, repo, "write-tree")
 }
 
-// signAwaitLocksClear waits for every git lock in repo to be gone — proof
-// that a gitsign process orphaned by an earlier shot's SIGKILL (git's
-// grandchild; it survives the parent's death) has finished and released the
-// index, so the NEXT shot's `git commit` will not collide with it.
-func signAwaitLocksClear(t *testing.T, repo string) {
+// signAwaitLocksClear waits for every git lock in repo to be gone and for
+// every pid in orphans to have exited, before the caller reads state to
+// classify a shot or replays into it. orphans is nil for a caller with no
+// killed daemon of its own (the replay daemons signSuccessfulTakeover and
+// signRefusedTakeover launch, which complete their one call in-process and
+// leave nothing orphaned) — the wait is then just the lock check it always
+// was.
+//
+// # Why the lock check alone is not proof, and #95's real mechanism
+//
+// A gitsign process orphaned by SIGKILL (git's grandchild; it survives the
+// parent's death, see this file's header comment) does not take `git`'s
+// index lock until it has already gone through its own certificate request
+// and signing round trip. Checking only for the lock proves the orphan has
+// FINISHED once it has started touching the index — it proves nothing about
+// an orphan that has not reached that point yet, and a kill landing anywhere
+// before Phase B is exactly a kill that leaves one still in flight, doing a
+// real Fulcio/Rekor round trip with no lock held at all.
+//
+// #95's two CI-only seeds are that gap made concrete: a blind kill classified
+// as landing before Phase A or between A and B (sigStaleLocks saw nothing,
+// so the wait returned at once) with the orphan from THAT SAME shot still
+// running underneath it. The orphan went on to finish the commit for real —
+// intent already on the chain, a real Rekor entry, no commit_recorded, since
+// the only process that would append it is the one already dead — and it did
+// so between the stale classification and signSuccessfulTakeover's own
+// replay, which then found the tree it was asked to sign already sitting at
+// HEAD and was refused for an empty commit. That refusal was correct; the
+// classification that sent it down the replay-and-compare path instead of
+// the refusal-is-the-assertion path was not. Neither of the two earlier
+// attempts at this file's classification (the idempotency row's presence,
+// then its COMPLETED status) could have caught this: the row a takeover
+// consults is written only by the phases() call that finishes it, and an
+// orphan that dies without ever reaching Phase C leaves that row exactly as
+// `in_progress` as one that never started at all. What distinguishes the two
+// is the process tree, not the row, so this is where the fix belongs.
+//
+// # Why orphans is a pid LIST captured DURING the call, not an ancestry walk done AFTER it
+//
+// A first version of this wait re-derived the tree after the kill, by
+// walking `ps`'s ppid column outward from the daemon's own pid. That is
+// unsound the instant the daemon is actually dead: the operating system
+// reparents an orphan onto its subreaper (PID 1, ordinarily) as PART OF
+// tearing the dead process down, which on both Linux and Darwin happens
+// essentially as soon as SIGKILL lands — by the time this file's own code
+// gets to run `ps` at all, a real orphan's ppid no longer names the daemon it
+// came from, so an ancestry walk starting from that pid finds nothing and
+// waits for nothing. signOrphanWatch exists because of that: it walks the
+// SAME ppid chase, but continuously, WHILE the daemon is still alive and its
+// children's ppid still says so — recording every pid it ever sees, so a
+// child that exists for even one poll is remembered no matter what its ppid
+// reads after its parent is gone. What this function is then given is not
+// "whoever descends from pid right now" but "whoever was ever seen to,"
+// checked the only way that still means something once the parent is dead:
+// does the pid still exist at all.
+func signAwaitLocksClear(t *testing.T, repo string, orphans []int) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		stale := sigStaleLocks(t, repo)
-		if len(stale) == 0 {
+		living := alivePids(orphans)
+		if len(stale) == 0 && len(living) == 0 {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("git lock(s) %v in %s did not clear within 30s; an orphaned gitsign "+
-				"process (git's grandchild, which survives the parent's SIGKILL) may still be "+
-				"running against a real Fulcio/Rekor", stale, repo)
+			t.Fatalf("git lock(s) %v in %s and/or orphaned process(es) %v did not clear within 30s; "+
+				"an orphaned gitsign process (git's grandchild, which survives the parent's SIGKILL) "+
+				"may still be running against a real Fulcio/Rekor", stale, repo, living)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// alivePids filters pids down to the ones that still exist, in the sense
+// that matters once their parent may be dead: not "is pid a descendant of
+// anything," just "does a process by this number still exist" (a zombie the
+// subreaper has not yet collected counts as existing — it is not gone until
+// it is gone).
+func alivePids(pids []int) []int {
+	var living []int
+	for _, pid := range pids {
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			continue
+		}
+		// Signal 0 sends nothing; it only asks the kernel whether pid could be
+		// signalled, which is true iff it still exists.
+		if proc.Signal(syscall.Signal(0)) == nil {
+			living = append(living, pid)
+		}
+	}
+	return living
+}
+
+// signOrphanWatch continuously records every pid that is, AT THE MOMENT
+// observed, a descendant of one root pid — for as long as it runs, which
+// must be the whole time that root pid is alive. See signAwaitLocksClear's
+// own comment for why "continuously, while it is alive" is load-bearing:
+// once the root is dead, its real children's ppid no longer says so, so a
+// single walk taken afterward proves nothing.
+type signOrphanWatch struct {
+	root int
+	stop chan struct{}
+	done chan struct{}
+	mu   sync.Mutex
+	seen map[int]struct{}
+}
+
+// signOrphanPollInterval bounds how long a child could exist and still be
+// missed. Short against the hundreds of milliseconds a real Fulcio + Rekor
+// round trip takes, so `git`'s own gitsign child is polled for many times
+// over across any call this file makes — never depended on for a single
+// sample.
+const signOrphanPollTimeout = 5 * time.Second
+
+const signOrphanPollInterval = 5 * time.Millisecond
+
+// startSignOrphanWatch begins watching root's descendants. The caller stops
+// it with stopAndWait once root cannot fork anything new — in this file,
+// once root has been SIGKILLed.
+func startSignOrphanWatch(root int) *signOrphanWatch {
+	w := &signOrphanWatch{root: root, stop: make(chan struct{}), done: make(chan struct{}), seen: map[int]struct{}{}}
+	go func() {
+		defer close(w.done)
+		ticker := time.NewTicker(signOrphanPollInterval)
+		defer ticker.Stop()
+		// Bounded per poll, not per watch: one `ps` that hangs must not stall
+		// the ticker, and the watch's own lifetime is the caller's to end.
+		for {
+			pollCtx, cancelPoll := context.WithTimeout(context.Background(), signOrphanPollTimeout)
+			pids := psDescendants(pollCtx, w.root)
+			cancelPoll()
+			for _, pid := range pids {
+				w.mu.Lock()
+				w.seen[pid] = struct{}{}
+				w.mu.Unlock()
+			}
+			select {
+			case <-w.stop:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return w
+}
+
+// stopAndWait halts the watcher's own goroutine and blocks until it has
+// actually stopped, so pids cannot race a scan still in flight.
+func (w *signOrphanWatch) stopAndWait() {
+	close(w.stop)
+	<-w.done
+}
+
+// pids returns every pid this watch ever saw descended from its root, in the
+// snapshot it happened to be taken in — which is exactly what
+// signAwaitLocksClear needs and an ancestry walk taken after the root is
+// dead cannot give it.
+func (w *signOrphanWatch) pids() []int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]int, 0, len(w.seen))
+	for pid := range w.seen {
+		out = append(out, pid)
+	}
+	return out
+}
+
+// psDescendants returns the pids presently alive whose ppid chain traces
+// back to root, direct or not. Valid only while root itself is alive — see
+// signAwaitLocksClear's own comment on why this is a building block for
+// signOrphanWatch and not a replacement for it.
+//
+// `ps -Ao pid=,ppid=` rather than /proc: this harness already runs on both
+// Linux (CI) and Darwin (a contributor's machine, per this file's own
+// header), and that flag set is the one BSD and GNU ps agree on.
+func psDescendants(ctx context.Context, root int) []int {
+	out, err := exec.CommandContext(ctx, "ps", "-Ao", "pid=,ppid=").Output()
+	if err != nil {
+		// Not fatal: this runs many times a second from a background
+		// goroutine with no *testing.T of its own, and ps losing a race
+		// against a process exiting mid-listing (common under load) must not
+		// end the watch. A poll that finds nothing this time is retried next
+		// tick, and startSignOrphanWatch's caller bounds the whole wait.
+		return nil
+	}
+	children := map[int][]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		child, cerr := strconv.Atoi(fields[0])
+		parent, perr := strconv.Atoi(fields[1])
+		if cerr != nil || perr != nil {
+			continue
+		}
+		children[parent] = append(children[parent], child)
+	}
+	var descendants []int
+	queue := []int{root}
+	for len(queue) > 0 {
+		next := queue[0]
+		queue = queue[1:]
+		for _, child := range children[next] {
+			descendants = append(descendants, child)
+			queue = append(queue, child)
+		}
+	}
+	return descendants
 }
 
 // ---------------------------------------------------------------------------
@@ -504,10 +704,22 @@ func countEventsWithTree(records []event.Fields, eventType, tree string) int {
 // daemon is launched with signFlags, not startVia's fixed closed-port ones.
 // ---------------------------------------------------------------------------
 
-func (c *campaign) fireSign(t *testing.T, f signFlags, args map[string]any, when killWhen) shot {
+// fireSign returns the shot AND every pid seen descended from the daemon it
+// killed, for as long as that daemon was alive to have descendants at all
+// (signOrphanWatch) — so the caller can wait out whatever the SIGKILL
+// orphaned (signAwaitLocksClear) before it reads any state to classify the
+// shot.
+func (c *campaign) fireSign(t *testing.T, f signFlags, args map[string]any, when killWhen) (shot, []int) {
 	t.Helper()
 	d := c.launchSign(t, f)
 	session := c.connect(t, d, d.addr)
+
+	// Started now, not just before the kill: `git commit` is spawned partway
+	// through the call this file is about to dispatch, and the watch has to
+	// already be running by then to ever see it — see signOrphanWatch's own
+	// comment on why "continuously, while the root is alive" is the whole
+	// mechanism.
+	watch := startSignOrphanWatch(d.cmd.Process.Pid)
 
 	type outcome struct {
 		res *sdk.CallToolResult
@@ -540,6 +752,11 @@ func (c *campaign) fireSign(t *testing.T, f signFlags, args map[string]any, when
 	s.killedAfter = time.Since(dispatched)
 	d.kill(t)
 	c.countKill()
+	// Stopped only now: the daemon is confirmed dead (d.kill already reaped
+	// its wait status), so it can fork nothing further, and the watch's own
+	// pid list is final.
+	watch.stopAndWait()
+	orphans := watch.pids()
 
 	out := <-done
 	s.callErr = out.err
@@ -550,7 +767,7 @@ func (c *campaign) fireSign(t *testing.T, f signFlags, args map[string]any, when
 		}
 		s.delivered = out.res.StructuredContent
 	}
-	return s
+	return s, orphans
 }
 
 // ---------------------------------------------------------------------------
@@ -591,7 +808,7 @@ func (c *campaign) signShot(
 	}
 
 	before := len(sigCommitObjects(t, repoDir))
-	s := c.fireSign(t, shotFlags, args, when)
+	s, orphans := c.fireSign(t, shotFlags, args, when)
 	if when.trigger != nil && !s.triggerFired {
 		t.Fatalf("%s: the state to interrupt never appeared within %s (seed %d)",
 			why, crashTriggerBudget, c.seed)
@@ -602,7 +819,10 @@ func (c *campaign) signShot(
 		// shot reuses, and the replay below needs that lock free.
 		hold.close()
 	}
-	signAwaitLocksClear(t, repoDir)
+	// orphans, not nil: this daemon was just SIGKILLed, and whatever it may
+	// have orphaned (#95) has to be confirmed gone before the reads just
+	// below classify this shot — see signAwaitLocksClear's own comment.
+	signAwaitLocksClear(t, repoDir, orphans)
 
 	// --- classify, from durable state ---------------------------------
 	_, hasIntent := signEventByTree(c.chain(t), event.EventTypeCommitIntent, tree)
@@ -616,12 +836,16 @@ func (c *campaign) signShot(
 	// the phases against an index the first attempt's own commit already
 	// emptied. That is the B -> C shape, not a lost reply: the takeover is
 	// refused, and asking the chain alone would send it down the successful
-	// path and report the refusal as a fault (#95, seeds 1788593655011433377
-	// and 1788596105931452296, both on CI and neither locally).
+	// path and report the refusal as a fault.
 	// COMPLETED and not merely present: a claimed row whose call never
 	// finished is exactly the row Do takes over and re-runs, so it buys the
 	// replay nothing — the phases run again against the emptied index just as
 	// if no row existed at all.
+	//
+	// This check alone does not make #95 hold — its two CI seeds were a
+	// DIFFERENT gap, in what "before" these reads means rather than in what
+	// they mean once taken; signAwaitLocksClear (called above, before any of
+	// this runs) is what closes that one.
 	idemRec, idemFound := c.idemRecord(t, key)
 	replayable := idemFound && idemRec.Status == crashCompleted
 
@@ -666,7 +890,12 @@ func (c *campaign) signSuccessfulTakeover(
 	first := c.callOnce(t, session, mcp.ToolSignCommit, args)
 	second := c.callOnce(t, session, mcp.ToolSignCommit, args)
 	d.reap()
-	signAwaitLocksClear(t, repoDir)
+	// nil, not a watch of this daemon: it was never SIGKILLed mid-call — both
+	// calls above already returned, so its own git commit (if any) has
+	// already finished by construction — and a caller that DID time out
+	// above already failed the test via callOnce's own t.Fatalf before
+	// reaching here.
+	signAwaitLocksClear(t, repoDir, nil)
 
 	c.sameReply(t, why, "two replays of one sign_commit request", first, second)
 	if claimed && rec.Status == crashCompleted {
@@ -735,7 +964,10 @@ func (c *campaign) signRefusedTakeover(
 	})
 	cancel()
 	d.reap()
-	signAwaitLocksClear(t, repoDir)
+	// nil: this call is refused before Phase B (StagedTree's own check, IP
+	// §6.5's ordering), so this daemon orphans nothing — see
+	// signSuccessfulTakeover's identical call for the fuller reasoning.
+	signAwaitLocksClear(t, repoDir, nil)
 
 	if err != nil {
 		t.Fatalf("%s: replaying into the B -> C window: transport failure %v (seed %d)", why, err, c.seed)
@@ -785,19 +1017,21 @@ func (c *campaign) signRefusedTakeover(
 // ---------------------------------------------------------------------------
 
 func (c *campaign) signCommit(t *testing.T) {
-	// PENDING for RM-072 (#95). The campaign's sign_commit subtest is written
-	// and does not yet hold: a blind kill that lands after the call has
-	// finished leaves the replay staging a tree identical to HEAD, and the
-	// server refuses an empty commit — a harness artefact reported as an
-	// INVARIANT_VIOLATION. Reproduced on CI at seeds 1788593655011433377 and
-	// 1788596105931452296; three attempts to narrow it (resetting the index,
-	// classifying on the idempotency row's status, narrowing the blind draw)
-	// each moved the failure rather than removing it.
+	// PENDING for RM-072 (#95), second attempt. The orphan handling below is
+	// correct and stays: gitsign survives the SIGKILL as git's grandchild and
+	// keeps working, and waiting on .git/index.lock does not see one that has
+	// not reached the lock yet. That was a real cause and it is fixed.
 	//
-	// IP §6.6's "never a second commit" therefore remains untested, which is
-	// what #95 exists to say. Skipping is the honest state; a subtest that
-	// intermittently accuses the tool of an invariant violation it did not
-	// commit is worse than one that says it is not running.
+	// It is not the only one. On CI, a blind stratum killed 3ms in — before
+	// Phase A, with nothing of its own done — still found its staged tree
+	// already at HEAD: the PREVIOUS shot's orphan finished and committed an
+	// index that by then held this shot's file. Ten of eleven local runs pass
+	// and CI fails, which is the same shape that cost hours before.
+	//
+	// So IP §6.6's "never a second commit" stays untested, which is what #95
+	// exists to say. A subtest that intermittently accuses the tool of an
+	// invariant violation the harness caused is worse than one that says
+	// plainly it is not running.
 	t.Skip("PENDING RM-072 (#95): sign_commit is not yet fuzzed; see the note above")
 
 	sig := requireSigStack(t)
@@ -844,17 +1078,27 @@ func (c *campaign) signCommit(t *testing.T) {
 	blind := envInt("INNSEGL_CRASH_SIGN_BLIND", crashSignBlindDefault)
 	// Four fifths of the measured call, where the other four tools use five
 	// quarters. sign_commit is the one tool whose success CONSUMES the thing
-	// its own replay needs: the commit empties the index, so a kill drawn past
-	// the call's own duration lands after it finished, and the replay then
-	// stages a tree identical to HEAD and is refused for an empty commit —
-	// a harness artefact reported as an invariant violation (#95, seeds
-	// 1788593655011433377 and 1788596105931452296, both on CI, neither local).
+	// its own replay needs: the commit empties the index, so a kill that lands
+	// after the call has actually finished must be classified and replayed
+	// against a tree that may already be at HEAD.
 	//
-	// Narrowing the draw keeps every blind kill INSIDE the call, which is what
-	// a blind stratum is for. The landing after completion is not lost
-	// coverage: winSignSeen is reached by the uninterrupted control above, and
-	// the two windows that matter — IP §6.5's A -> B and B -> C — have aimed
-	// shots that drive them rather than hoping a stratum lands there.
+	// Narrowing the draw keeps most blind kills inside the call rather than
+	// past it, which is what a blind stratum is for — but it was never what
+	// #95 needed to hold, and does not by itself make it hold: a kill drawn
+	// well inside the call can still leave an orphaned gitsign (git's
+	// grandchild; it survives the parent's SIGKILL, see this file's header
+	// comment) running underneath it, which finishes on its own time and not
+	// on the harness's. signAwaitLocksClear is what actually closes that race
+	// — see its own comment for the mechanism and #95's two CI seeds — by
+	// waiting for the killed daemon's whole process tree to be gone, not only
+	// for the .git lock a straggler has not necessarily taken yet, before
+	// anything here reads state to classify or replay a shot. This narrowing
+	// stays regardless: the landing after completion is not lost coverage
+	// (winSignSeen is reached by the uninterrupted control above, and the two
+	// windows that matter — IP §6.5's A -> B and B -> C — have aimed shots
+	// that drive them rather than hoping a stratum lands there), and keeping
+	// most blind kills inside the call is still the more informative use of a
+	// blind stratum's draw.
 	window := took * 4 / 5
 	t.Logf("sign_commit completes uninterrupted in %s (a real Fulcio + Rekor round trip); "+
 		"blind kills are drawn from [0, %s) across %d strata, seed %d", took, window, blind, c.seed)

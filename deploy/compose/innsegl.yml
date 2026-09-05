@@ -533,8 +533,21 @@ services:
       - innsegl-identity-secret:/run/innsegl/identity:ro
     ports:
       # Loopback only, like every other published port in this deployment.
-      - "127.0.0.1:${INNSEGL_MCP_PORT:-8080}:8080"
-      - "127.0.0.1:${INNSEGL_MCP_HEALTH_PORT:-8081}:8081"
+      #
+      # 28080 and not 8080 on the HOST side. The container keeps 8080 — inside
+      # its own network nothing else is there — but a published 8080 is a
+      # default that collides with almost every development server there is,
+      # and the failure it produces is a bind error during bring-up that names
+      # a port rather than a cause. This deployment has already been bitten by
+      # exactly that on 3000 (#131): a foreign container answered a probe and
+      # the harness read the reply as a fault in our own Rekor.
+      #
+      # 28080/28081 keep the mnemonic and sit below both Linux's ephemeral
+      # range (32768+) and macOS's (49152+), so the kernel will not hand the
+      # same number to something else mid-bring-up — the race RM-092 (#143)
+      # measured and fixed on the test side.
+      - "127.0.0.1:${INNSEGL_MCP_PORT:-28080}:8080"
+      - "127.0.0.1:${INNSEGL_MCP_HEALTH_PORT:-28081}:8081"
     healthcheck:
       # /readyz and not a TCP dial: ADR-0024's rule, that a readiness probe
       # must fetch something it can parse. An unexamined 200 passes against any
