@@ -64,7 +64,7 @@ maintainer ask "why is it like this?"
 | [0039](0039-size-from-ops-002s-measurements-and-retire-doc-05-4s-estimates.md) | Size the deployment from OPS-002's measurements, and record what each measured number replaces in doc 05 §4 | accepted | 2026-09-02 |
 | [0040](0040-threat-model-review.md) | Close doc 04's open abuse cases against tests that exist, assign REL-001 to release signing, and pin the framework mappings to documents fetched on the review date | accepted | 2026-09-02 |
 | [0041](0041-pseudonymise-agent-type-and-task-ref-in-the-spiffe-id-and-resolve-through-the-ledger-row.md) | Pseudonymise `agent_type` and `task_ref` in the SPIFFE ID, and resolve them through the ledger row rather than a key | accepted | 2026-09-02 |
-| [0042](0042-answer-anyone-can-verify-with-a-public-rekor-anchor-over-a-self-hosted-fulcio-root.md) | Answer #117's "anyone can verify" with a public Rekor anchor over a self-hosted Fulcio root | proposed | 2026-09-03 |
+| [0042](0042-answer-anyone-can-verify-with-a-public-rekor-anchor-over-a-self-hosted-fulcio-root.md) | Answer #117's "anyone can verify" with a public Rekor anchor over a self-hosted Fulcio root | accepted | 2026-09-05 |
 | [0043](0043-enforce-the-branch-floor-with-gobco-as-a-separate-rerunning-ci-job.md) | Enforce IP §2's 100% branch floor with gobco, in a job that reruns the tests | accepted | 2026-09-05 |
 
 ## Open items
@@ -364,12 +364,11 @@ maintainer ask "why is it like this?"
   ratify, and re-tightening it needs a way to make the comparison without
   holding the deployment secret on a read path.
 - **ADR-0042** answers #117's "anyone can verify" with a public Rekor anchor
-  over a self-hosted Fulcio root, and is **proposed** rather than accepted: the
-  arrangement it recommends is a maintainer's call, not an inference. It rests
+  over a self-hosted Fulcio root, **accepted on 2026-09-05**. It rests
   on two measurements — public Fulcio's allowlist enrolls no `spiffe` issuer
   (ADR-0010, re-cited), and public Rekor performs no issuer or chain validation
   on submission (`sigstore/rekor` read at `main` on 2026-09-03, with the three
-  call sites quoted). It leaves four things for a human. Where the Fulcio root
+  call sites quoted). It leaves four things for a human, all still open. Where the Fulcio root
   is published and how a verifier survives its rotation is unsettled, and a
   verification story resting on a certificate nobody can fetch is not one. doc
   05 §1's twelve rows assume a local Rekor and do not describe a deployment

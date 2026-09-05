@@ -1,7 +1,8 @@
 # ADR-0042: Answer "anyone can verify" with a public Rekor anchor over a self-hosted Fulcio root, and record that a public Fulcio root cannot issue this project's identities
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-03
+- Accepted: 2026-09-05
 - Deciders: Mike
 
 ## Context
@@ -111,6 +112,23 @@ by parties with no relationship to this project.
 
 It does not make identity independent. That still rests on the deployment's own
 Fulcio root.
+
+## Accepted, and one thing the decision was not
+
+Accepted on 2026-09-05. One proposal was raised and declined during that
+discussion, recorded here so it is not raised again: encrypting what reaches
+the public log, with a local record acting as the key.
+
+There is nothing there to encrypt. A segment anchor uploads a `hashedrekord` —
+a SHA-256 and a signature over it, not content. A hash is already opaque: it
+can be checked against, and nothing can be read out of it.
+
+The arrangement that proposal describes — opaque in public, readable only
+locally — is what **ADR-0041** already does, one layer up. The certificate
+carries `spiffe://…/agent/4799d6f0/01a32f1e/run-…`; the ledger row carries
+`agent_type` and `task_ref` in clear. Adding encryption below that would cost a
+key that must outlive the log, and would make the entry uncheckable by an
+outsider — which is the whole reason for putting it there.
 
 ## Decision
 
