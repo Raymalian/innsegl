@@ -675,9 +675,11 @@ func (c *campaign) census(t *testing.T) {
 	for _, w := range []string{
 		winEventNoEntry, winEntryNoReply, winReplyUnseen,
 		winRecEventNoReply, winRetireNoDelete, winCredNoReply,
-		// winSignIntentNoObject and winSignObjectNoRecord are NOT here while
-		// the sign_commit subtest is pending (#95): a required window whose
-		// subtest does not run is a census reporting on nothing.
+		// winSignIntentNoObject and winSignObjectNoRecord (RM-072, #95): the
+		// sign_commit subtest now runs, and both are driven by its own aimed
+		// shots (signcommitharness_test.go's signShot), so a census reporting
+		// on them is a census reporting on something.
+		winSignIntentNoObject, winSignObjectNoRecord,
 	} {
 		switch windowCensus(all, fired, w) {
 		case windowCovered:
