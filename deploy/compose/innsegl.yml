@@ -557,10 +557,41 @@ services:
   # replica and therefore needs none; the property that makes failover safe is
   # REC-005's idempotence, not the election, and it holds here too.
   #
-  # NO SPIRE. The reconciler creates no identities and holds no admin
-  # credential; it reads the chain, reads the log, and appends. It is on
-  # neither SPIRE network, which is the difference between "it does not use
-  # the admin API" and "it cannot reach it".
+  # #153/RM-096 gave `reconcile` a SECOND pass: internal/spire.Reconciler,
+  # comparing SPIRE's registration entries against the ledger's record of
+  # them (AB-11, RM-019, SPI-008), which previously had no caller anywhere
+  # this binary reached. It is one command, one schedule, one thing to
+  # deploy — no new row here — and it is OFF by default (-spire-address
+  # empty), reported as off on every cycle rather than silently skipped.
+  #
+  # IT IS STILL OFF HERE, DELIBERATELY, and this is a topology question
+  # reported rather than settled by this wiring:
+  #
+  #   * server.conf's admin_ids names exactly one identity,
+  #     spiffe://innsegl.dev/innsegl/mcp, matched by register.sh's five
+  #     selectors for the innsegl-mcp CONTAINER specifically (one of them is
+  #     docker:label:dev.innsegl.component:mcp — this service's label is
+  #     "reconciler", so it cannot match that entry).
+  #   * doc 05 §1 states, for that row, "Only service holding SPIRE admin
+  #     credential". Turning this pass on for a second, separately-labelled
+  #     container needs a decision this file cannot make on its own: register
+  #     a second, narrowly-scoped admin identity for the reconciler (a
+  #     register.sh addition, an admin_ids entry, and — since
+  #     authz-policy.rego authorizes an admin identity for its whole method
+  #     set rather than per-identity — either accepting that this container
+  #     then also holds BatchCreateEntry/BatchDeleteEntry/MintJWTSVID, or
+  #     extending the policy to scope methods per admin identity) or issue it
+  #     the SAME mcp identity (two containers presenting one credential).
+  #     Either is a threat-model change (ADR-0011/ADR-0012's territory), not
+  #     a wiring one, and #153 leaves it to the maintainer rather than
+  #     deciding it here. See the pull request for the full writeup.
+  #
+  # An operator who HAS made that decision turns this pass on with three
+  # variables — INNSEGL_SPIRE_ADDRESS (host:port), INNSEGL_TRUST_DOMAIN
+  # (already set below), and INNSEGL_WORKLOAD_API_ADDRESS (defaults to the
+  # same socket innsegl-mcp reads) — plus this service joining
+  # innsegl-spire-admin and mounting spire-agent-socket the way innsegl-mcp
+  # does. None of that is done here while the identity question stands.
   # --------------------------------------------------------------------------
   innsegl-reconciler:
     <<: *innsegl-build
