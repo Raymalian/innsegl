@@ -464,6 +464,8 @@ type signOrphanWatch struct {
 // round trip takes, so `git`'s own gitsign child is polled for many times
 // over across any call this file makes — never depended on for a single
 // sample.
+const signOrphanPollTimeout = 5 * time.Second
+
 const signOrphanPollInterval = 5 * time.Millisecond
 
 // startSignOrphanWatch begins watching root's descendants. The caller stops
@@ -475,8 +477,13 @@ func startSignOrphanWatch(root int) *signOrphanWatch {
 		defer close(w.done)
 		ticker := time.NewTicker(signOrphanPollInterval)
 		defer ticker.Stop()
+		// Bounded per poll, not per watch: one `ps` that hangs must not stall
+		// the ticker, and the watch's own lifetime is the caller's to end.
 		for {
-			for _, pid := range psDescendants(root) {
+			pollCtx, cancelPoll := context.WithTimeout(context.Background(), signOrphanPollTimeout)
+			pids := psDescendants(pollCtx, w.root)
+			cancelPoll()
+			for _, pid := range pids {
 				w.mu.Lock()
 				w.seen[pid] = struct{}{}
 				w.mu.Unlock()
@@ -520,8 +527,8 @@ func (w *signOrphanWatch) pids() []int {
 // `ps -Ao pid=,ppid=` rather than /proc: this harness already runs on both
 // Linux (CI) and Darwin (a contributor's machine, per this file's own
 // header), and that flag set is the one BSD and GNU ps agree on.
-func psDescendants(root int) []int {
-	out, err := exec.Command("ps", "-Ao", "pid=,ppid=").Output()
+func psDescendants(ctx context.Context, root int) []int {
+	out, err := exec.CommandContext(ctx, "ps", "-Ao", "pid=,ppid=").Output()
 	if err != nil {
 		// Not fatal: this runs many times a second from a background
 		// goroutine with no *testing.T of its own, and ps losing a race
