@@ -307,16 +307,46 @@ func New(cfg Config) (*Verifier, error) {
 // is a Report with a verdict, because "this does not verify" is an answer and
 // not a failure to answer.
 func (v *Verifier) Verify(ctx context.Context, repo, revision string) (Report, error) {
-	commit, err := readCommit(ctx, v.cfg.GitPath, repo, revision)
+	c, err := readCommit(ctx, v.cfg.GitPath, repo, revision)
 	if err != nil {
 		return Report{}, err
 	}
-	rep := Report{Repo: repo, CommitSHA: commit.SHA, TreeHash: commit.Tree}
-	claim, claimErr := ReadClaim(commit.Message)
+	return v.verifyCommit(ctx, repo, c)
+}
+
+// VerifyCommit performs the same three checks as Verify, against commit data
+// the caller already holds rather than a local git repository.
+//
+// This is the seam RM-061 (verify.innsegl.dev, #69) needs: a serverless
+// verifier has no working copy to run git in, and this package's own rule
+// (see the package doc) is that git is the reader, never a hand-rolled parser
+// of git's object format. What the three checks actually read out of a
+// commit is narrower than the object git would hand readCommit: the SHA
+// (the Rekor artifact itself, ADR-0031 decision 6), the message (the
+// Agent-* trailers) and the raw gpgsig signature (the certificate). Tree is
+// carried only for VER-003's tree-hash recovery, which needs a repository to
+// walk and degrades to a note — never an error — when repoLabel is not one
+// (see recover, whose commitObjects failure is already a soft path).
+//
+// repoLabel is not read from disk. It is recorded on the report and handed
+// to recover() exactly as Verify's repo argument is; a caller with no local
+// path passes whatever identifies the source to a reader (a repository URL).
+func (v *Verifier) VerifyCommit(ctx context.Context, repoLabel, sha, tree, message string, signature []byte) (Report, error) {
+	if sha == "" {
+		return Report{}, fmt.Errorf("%w: a commit SHA is required", ErrRevision)
+	}
+	return v.verifyCommit(ctx, repoLabel, commit{SHA: sha, Tree: tree, Message: message, Signature: signature})
+}
+
+// verifyCommit is the check pipeline shared by Verify and VerifyCommit. It
+// never touches git itself — everything it reads comes from c.
+func (v *Verifier) verifyCommit(ctx context.Context, repo string, c commit) (Report, error) {
+	rep := Report{Repo: repo, CommitSHA: c.SHA, TreeHash: c.Tree}
+	claim, claimErr := ReadClaim(c.Message)
 	rep.Claim = claim
 
 	claims := claim.Present() || claimErr != nil
-	if len(commit.Signature) == 0 && !claims {
+	if len(c.Signature) == 0 && !claims {
 		rep.Verdict = VerdictUnattributed
 		rep.Notes = append(rep.Notes,
 			"This commit carries no signature and no Agent-* trailer, so it makes no "+
@@ -326,16 +356,16 @@ func (v *Verifier) Verify(ctx context.Context, repo, revision string) (Report, e
 		return rep, nil
 	}
 
-	leaf, intermediates, certErr := commitCertificate(commit.Signature)
+	leaf, intermediates, certErr := commitCertificate(c.Signature)
 	if certErr != nil {
 		rep.Checks = refusedChecks(certErr)
 		rep.Verdict = VerdictFailed
-		rep.Recovered, rep.Notes = v.recover(ctx, repo, commit, rep.Notes)
+		rep.Recovered, rep.Notes = v.recover(ctx, repo, c, rep.Notes)
 		return rep, nil
 	}
 	rep.Certificate = describeCertificate(leaf)
 
-	entry, rekorCheck := v.checkInclusion(ctx, commit.SHA, leaf)
+	entry, rekorCheck := v.checkInclusion(ctx, c.SHA, leaf)
 	rep.Entry = entry
 	chainCheck := v.checkChain(ctx, leaf, intermediates, entry)
 	identityCheck := checkIdentity(claim, claimErr, leaf)
@@ -343,7 +373,7 @@ func (v *Verifier) Verify(ctx context.Context, repo, revision string) (Report, e
 	rep.Checks = []Check{chainCheck, rekorCheck, identityCheck}
 	rep.Verdict = rollup(rep.Checks)
 	if rekorCheck.Result == Failed {
-		rep.Recovered, rep.Notes = v.recover(ctx, repo, commit, rep.Notes)
+		rep.Recovered, rep.Notes = v.recover(ctx, repo, c, rep.Notes)
 	}
 	return rep, nil
 }
