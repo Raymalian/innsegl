@@ -332,3 +332,132 @@ func TestTheDirectoryAsksTheLedgerForTheRunItWasAskedAbout(t *testing.T) {
 		t.Fatalf("the directory asked the ledger for %v, want exactly [run-7]", events.asked)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RM-073 (#98): doc 02's golden fixture 01 carries task_ref "JIRA-118" against
+// spiffe_id spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42 — the caller's
+// casing next to its lowercased form. An earlier revision of the run
+// directory's one caller (mcp.credentialRunIdentity, before RM-079/#116)
+// reconstructed the identity by concatenating the recorded task_ref back onto
+// "/agent/{agent_type}/{task_id}/{run_id}" and required an exact suffix match
+// against the real spiffe_id. Run against these exact values that comparison
+// is:
+//
+//	spiffeID     = "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42"
+//	want(suffix) = "/agent/fix-ci/JIRA-118/run-42"
+//	HasSuffix    = false
+//
+// which is golden fixture 01 refused by the shipped run directory, exactly as
+// RM-073 found. Since RM-079 neither this package nor its caller reconstructs
+// an identity that way any more: this package reads agent_type and task_ref
+// off the event verbatim (see the package doc), and mcp.CredentialRun.Ref
+// reads its three segments back OFF the recorded spiffe_id
+// (spire.RunRefOf) instead of off AgentType/TaskID. The tests below pin that
+// the case difference doc 02 §5 creates between task_ref and {task_id} can
+// never again be compared to itself and found wanting.
+// ---------------------------------------------------------------------------
+
+const (
+	fixture01AgentType = "fix-ci"
+	fixture01TaskRef   = "JIRA-118"
+	fixture01RunID     = "run-42"
+	fixture01SPIFFEID  = "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42"
+)
+
+// fixture01Registered is a `run_registered` record carrying golden fixture
+// 01's own values, unmodified.
+func fixture01Registered() event.Fields {
+	return event.Fields{
+		event.FieldSchemaVersion: event.SchemaVersion,
+		event.FieldEventID:       "01930000-0000-7000-8000-000000000fx1",
+		event.FieldChainPosition: int64(1),
+		event.FieldEventType:     event.EventTypeRunRegistered,
+		event.FieldTS:            "2026-08-29T10:00:00.000Z",
+		event.FieldRunID:         fixture01RunID,
+		event.FieldSpiffeID:      fixture01SPIFFEID,
+		event.FieldSource:        event.SourceMCP,
+		event.FieldAgentType:     fixture01AgentType,
+		event.FieldTaskRef:       fixture01TaskRef,
+	}
+}
+
+// TestFixture01ResolvesThroughTheRunDirectory is MCP-022 (RM-073, #98): the
+// normative example doc 02's whole serialization is pinned to must resolve
+// through the shipped run directory, verbatim casing and all.
+func TestFixture01ResolvesThroughTheRunDirectory(t *testing.T) {
+	d := newDirectory(t, []event.Fields{fixture01Registered()})
+
+	run, found, err := d.CredentialRun(context.Background(), fixture01RunID)
+	if err != nil {
+		t.Fatalf("CredentialRun refused golden fixture 01's own values: %v", err)
+	}
+	if !found {
+		t.Fatal("CredentialRun did not find golden fixture 01's run")
+	}
+	if run.AgentType != fixture01AgentType {
+		t.Errorf("AgentType is %q, want %q", run.AgentType, fixture01AgentType)
+	}
+	if run.TaskID != fixture01TaskRef {
+		t.Errorf("TaskID is %q, want the caller's own casing %q", run.TaskID, fixture01TaskRef)
+	}
+	if run.SPIFFEID != fixture01SPIFFEID {
+		t.Errorf("SPIFFEID is %q, want %q", run.SPIFFEID, fixture01SPIFFEID)
+	}
+}
+
+// TestFixture01SIdentityResolvesThroughRef is MCP-023 (RM-073, #98):
+// mcp.CredentialRun.Ref is the run directory's one caller, and it is the
+// caller that used to fail on this fixture. It must resolve the SPIFFE ID's
+// own (lowercased) segment rather than the recorded task_ref, and it must
+// resolve it without error.
+func TestFixture01SIdentityResolvesThroughRef(t *testing.T) {
+	d := newDirectory(t, []event.Fields{fixture01Registered()})
+
+	run, found, err := d.CredentialRun(context.Background(), fixture01RunID)
+	if err != nil || !found {
+		t.Fatalf("CredentialRun(%q): found=%v err=%v", fixture01RunID, found, err)
+	}
+
+	ref, err := run.Ref()
+	if err != nil {
+		t.Fatalf("Ref refused golden fixture 01's identity: %v", err)
+	}
+	if ref.AgentType != fixture01AgentType {
+		t.Errorf("Ref().AgentType is %q, want %q", ref.AgentType, fixture01AgentType)
+	}
+	if ref.TaskID != "jira-118" {
+		t.Errorf("Ref().TaskID is %q, want the SPIFFE ID's own lowercased segment %q", ref.TaskID, "jira-118")
+	}
+	if ref.RunID != fixture01RunID {
+		t.Errorf("Ref().RunID is %q, want %q", ref.RunID, fixture01RunID)
+	}
+}
+
+// TestAGenerallyMismatchedRecordStillResolves is a companion to MCP-022 that
+// generalizes past this one fixture: it is not fixture 01's specific letters
+// that make this safe, it is that agent_type/task_ref are never compared
+// against the SPIFFE ID's segments at all any more. An agent_type recorded
+// with different casing than its SPIFFE segment — something fixture 01 does
+// not exercise, because "fix-ci" is already lowercase — must resolve exactly
+// the same way.
+func TestAGenerallyMismatchedRecordStillResolves(t *testing.T) {
+	rec := fixture01Registered()
+	rec[event.FieldAgentType] = "Fix-CI"
+	d := newDirectory(t, []event.Fields{rec})
+
+	run, found, err := d.CredentialRun(context.Background(), fixture01RunID)
+	if err != nil || !found {
+		t.Fatalf("CredentialRun(%q): found=%v err=%v", fixture01RunID, found, err)
+	}
+	if run.AgentType != "Fix-CI" {
+		t.Errorf("AgentType is %q, want the caller's own casing %q", run.AgentType, "Fix-CI")
+	}
+
+	ref, err := run.Ref()
+	if err != nil {
+		t.Fatalf("Ref refused a record whose agent_type casing differs from the SPIFFE ID's segment: %v", err)
+	}
+	if ref.AgentType != fixture01AgentType {
+		t.Errorf("Ref().AgentType is %q, want the SPIFFE ID's own segment %q", ref.AgentType, fixture01AgentType)
+	}
+}

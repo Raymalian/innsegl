@@ -52,6 +52,12 @@ innsegl-stub/
 # Local artifacts
 tmp/
 
+# scripts/backup-ledger.sh's default output (issue #160, RM-099). A ledger
+# dump holds every event body — agent_type, task_ref, run_id, tool_call
+# digests — so it is evidence, not merely local build state, and it never
+# belongs in a public repository regardless.
+/backups/
+
 # Opencode configuration
 .opencode/
 

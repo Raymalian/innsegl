@@ -671,6 +671,13 @@ type stack struct {
 	server  *mcp.Server
 	session *sdk.ClientSession
 	dsn     string
+
+	// scRoot is the sign_commit workspace root (RM-071, #94): a fresh
+	// directory per stack, under which signCommitRepo (sign_commit_test.go)
+	// creates one real git repository per fixture. scSigner is the fake
+	// SignCommitSigner every sign_commit matrix cell drives through.
+	scRoot   string
+	scSigner *fakeSCSigner
 }
 
 // newStack wires the four shipped tools onto a fresh chain and serves them.
@@ -730,6 +737,34 @@ func newStackOn(t *testing.T, dsn string) *stack {
 		t.Fatalf("ConfigureRetireAgent: %v", err)
 	}
 	t.Cleanup(restoreRetire)
+
+	// sign_commit (RM-071, #94). Workspace and Repos are the SHIPPED
+	// implementations over a real, disposable git repository per fixture
+	// (signCommitRepo); Credentials is the shipped SignCommitThroughGetCredential,
+	// reusing the get_credential wiring above verbatim — one mint path, one
+	// place it can fail. Sigstore and Signers are fakes: see the block comment
+	// on the sign_commit matrix cells in contract_test.go for why, and which
+	// claim that is and is not making.
+	scRoot := t.TempDir()
+	workspace, err := mcp.NewWorkspace(scRoot)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	scSigner := &fakeSCSigner{}
+	restoreSignCommit, err := mcp.ConfigureSignCommit(mcp.SignCommitConfig{
+		Runs: runs, Ledger: store, Idempotency: idem,
+		Workspace:   workspace,
+		Sigstore:    fakeSCSigstore{},
+		Credentials: mcp.SignCommitThroughGetCredential{},
+		Signers:     fakeSCSigners{signer: scSigner},
+		AuthorName:  scAuthorName, AuthorEmail: scAuthorEmail,
+		Pseudonyms: pseudonyms,
+	})
+	if err != nil {
+		t.Fatalf("ConfigureSignCommit: %v", err)
+	}
+	t.Cleanup(restoreSignCommit)
+	s.scRoot, s.scSigner = scRoot, scSigner
 
 	srv, err := mcp.New(mcp.Config{Version: "v0.0.0-contract"})
 	if err != nil {
