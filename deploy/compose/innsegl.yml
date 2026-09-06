@@ -563,6 +563,77 @@ services:
       - ALL
 
   # --------------------------------------------------------------------------
+  # innsegl-init — RM-097 (#156), option 2 of that issue: run `innsegl init`
+  # AS the deployment, on innsegl-spire-admin, instead of reaching it from the
+  # host. NOT A DOC 05 §1 ROW — a job, the same shape as demo-agent and
+  # innsegl-canary above: it runs once, under a profile, and exits.
+  #
+  # REUSES innsegl-mcp's image, uid and dev.innsegl.component LABEL ON
+  # PURPOSE. Those five properties are exactly the selectors register.sh's
+  # bootstrap entry matches (spiffe://innsegl.dev/innsegl/mcp, server.conf's
+  # only admin_ids value) — see register_mcp() there. So this container
+  # attests as the SAME identity the running innsegl-mcp holds; no second
+  # admin identity is registered and neither server.conf nor
+  # authz-policy.rego changes. cmd/innsegl/initsignharness_test.go's own
+  # comment on signE2EAdminID calls this "the right impersonation, not a
+  # shortcut": `init`'s admin credential is meant to resolve exactly like
+  # `serve`'s, and this is that, run inside the deployment instead of a test
+  # harness minting the same identity by hand.
+  #
+  # WHAT IT DOES NOT NEED: no published port, ever — `docker compose run` has
+  # nothing to publish and nothing to forget to unpublish. Two networks only,
+  # both already declared for innsegl-mcp: the admin path and Fulcio/Rekor.
+  # No route to postgres, minio, or the dashboard.
+  #
+  # THE COST, MEASURED (see runbooks/spire-admin-access.md for the full
+  # account): the repository `init` sets up is passed in as a HOST BIND MOUNT
+  # at run time (`-v <path>:/target`), which is new to this compose stack —
+  # every other mount here is a named volume. A repository whose files are not
+  # owned by uid 1000, or that git will not treat as safe across that uid
+  # boundary, needs the operator's own `git config --global --add
+  # safe.directory` first; this file cannot fix that from the inside. And
+  # `-gitsign-path` must be passed explicitly — the image already carries a
+  # verified gitsign at /usr/local/bin/gitsign (see ../../Dockerfile), but
+  # this network has no route to GitHub for `init` to fall back to its own
+  # download-and-verify path, so the flag is not optional here the way it is
+  # on the host.
+  #
+  #   docker compose -f deploy/compose/innsegl.yml --profile init run --rm \
+  #     -v "$(pwd)":/target innsegl-init \
+  #     init -repo /target -trust-root self-hosted -gitsign-path /usr/local/bin/gitsign \
+  #     -non-interactive -identity-mode pseudonymous
+  # --------------------------------------------------------------------------
+  innsegl-init:
+    profiles: ["init"]
+    <<: *innsegl-build
+    container_name: innsegl-init
+    networks:
+      - innsegl-spire-admin
+      - innsegl-sigstore
+    labels:
+      dev.innsegl.component: mcp
+    user: "1000:1000"
+    environment:
+      INNSEGL_SPIRE_ADDRESS: spire-server:8081
+      INNSEGL_TRUST_DOMAIN: *trust-domain
+      INNSEGL_FULCIO_URL: *fulcio-url
+      INNSEGL_REKOR_URL: *rekor-url
+      # init.go's flag is -oidc-issuer, but its env fallback is the SAME
+      # variable server.conf and every other service in this file already
+      # read (envOIDCIssuer == "INNSEGL_SPIRE_JWT_ISSUER") — one issuer, one
+      # name, everywhere it is read. Not *jwt-issuer's own anchor: that one is
+      # `:?required`, and this service must still give a clear "-oidc-issuer
+      # is required" refusal rather than compose's own missing-variable error
+      # if an operator invokes it before exporting the variable at all.
+      INNSEGL_SPIRE_JWT_ISSUER: ${INNSEGL_SPIRE_JWT_ISSUER:-}
+    volumes:
+      - spire-agent-socket:/run/spire/agent-sockets
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # --------------------------------------------------------------------------
   # innsegl-reconciler — doc 05 §1's "Intent expiry, Rekor cross-check, drift
   # detection", from the same binary under another subcommand.
   #
