@@ -21,8 +21,9 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 COVERPROFILE := cover.out
 
 .PHONY: all build test lint cover smoke smoke-down spire-up spire-verify \
-        spire-down sigstore-up sigstore-verify sigstore-down \
-        innsegl-up innsegl-verify innsegl-canary innsegl-demo \
+        spire-down spire-admin-relay-up spire-admin-relay-down \
+        sigstore-up sigstore-verify sigstore-down \
+        innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
         innsegl-stack-clean clean
 
@@ -58,6 +59,21 @@ spire-verify:
 ## spire-down: tear the SPIRE stack down, volumes included
 spire-down:
 	docker compose -f deploy/compose/spire.yml --profile verify down -v
+
+# ---------------------------------------------------------------------------
+# The admin relay (RM-097, #156). OFF unless asked for: see spire.yml's
+# spire-admin-relay service comment and runbooks/spire-admin-access.md for
+# what it exposes, for how long, and the two other options this issue tried.
+# ---------------------------------------------------------------------------
+
+## spire-admin-relay-up: publish the SPIRE admin API to 127.0.0.1 (off by default)
+spire-admin-relay-up:
+	docker compose -f deploy/compose/spire.yml --profile adminrelay up -d spire-admin-relay
+
+## spire-admin-relay-down: remove the admin relay — always run this when done
+spire-admin-relay-down:
+	docker compose -f deploy/compose/spire.yml --profile adminrelay rm --force --stop spire-admin-relay
+	docker network rm innsegl-spire-admin-relay >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
 # Self-hosted Sigstore (RM-030, #38). ADR-0010 made this the shipped default,
@@ -202,6 +218,27 @@ innsegl-canary:
 innsegl-demo:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  $(INNSEGL_COMPOSE) --profile demo run --rm demo-agent
+
+## innsegl-init: run `innsegl init` as a one-shot workload on the admin network
+#
+# RM-097 (#156), option 2. REPO=<host path> is required — it is bind-mounted
+# read-write at /target, because the repository `init` sets up is the
+# operator's, not this deployment's. ARGS carries the rest of `innsegl init`'s
+# own flags verbatim (-trust-root, -gitsign-path, the identity questions —
+# all yours to answer; nothing here defaults -trust-root for you). See the
+# innsegl-init service comment in innsegl.yml and
+# runbooks/spire-admin-access.md for what this costs.
+#
+#   make innsegl-init REPO=/path/to/repo ARGS='-trust-root self-hosted \
+#     -gitsign-path /usr/local/bin/gitsign -non-interactive -identity-mode pseudonymous'
+innsegl-init:
+	@test -n "$(REPO)" || { \
+	  echo "usage: make innsegl-init REPO=/path/to/repo ARGS='[innsegl init flags]'"; \
+	  exit 2; }
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  $(INNSEGL_COMPOSE) --profile init run --rm \
+	  --volume '$(REPO)':/target \
+	  innsegl-init init -repo /target $(ARGS)
 
 ## innsegl-verify-commit: verify a commit with NO route to the ledger
 #

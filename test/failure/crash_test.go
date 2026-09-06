@@ -675,10 +675,7 @@ func (c *campaign) census(t *testing.T) {
 	for _, w := range []string{
 		winEventNoEntry, winEntryNoReply, winReplyUnseen,
 		winRecEventNoReply, winRetireNoDelete, winCredNoReply,
-		// winSignIntentNoObject and winSignObjectNoRecord are NOT here while
-		// the sign_commit subtest is pending (RM-072, #95). A required window
-		// whose subtest does not run is a census reporting on nothing, and it
-		// would report the skip as though the interrupting device had failed.
+		winSignIntentNoObject, winSignObjectNoRecord,
 	} {
 		switch windowCensus(all, fired, w) {
 		case windowCovered:

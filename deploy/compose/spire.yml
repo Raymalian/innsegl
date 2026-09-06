@@ -50,6 +50,12 @@ x-spire-oidc-image: &spire-oidc-image
 # and carry no shell or OpenSSL, so the bootstrap runs somewhere that does.
 x-openssl-image: &openssl-image
   alpine/openssl:3.5.7@sha256:19f8eb9004a1dbaec323eed6094e9b6bcc1dbf2697ecb5fb8d2fad4e3336a8f7
+# spire-admin-relay's carrier (RM-097, #156) — the same pinned tag every test
+# harness in this repository already runs as its own throwaway admin proxy
+# (grep `socat` under test/ and internal/*/*harness_test.go). Pinned by digest
+# too, like every other image here.
+x-spire-socat-image: &spire-socat-image
+  alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e
 
 # The issuer claim on every JWT-SVID and the issuer in the OIDC discovery
 # document. Doc 05 §3 names oidc.innsegl.dev as the production issuer; override
@@ -157,6 +163,64 @@ services:
       retries: 24
       start_period: 10s
     restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # spire-admin-relay — RM-097 (#156), option 1 of that issue: ship the socat
+  # admin relay every test harness in this repository already builds for
+  # itself (grep `socat` under test/ and internal/*/*harness_test.go), as a
+  # profile an operator switches on for setup and off again afterwards.
+  #
+  # WHAT IT DOES NOT CHANGE. It carries bytes from 127.0.0.1 on the host to
+  # spire-server:8081 on the admin network — nothing else. spire-server's own
+  # authorization is untouched: admin_ids still names exactly one SPIFFE ID
+  # (server.conf), and authz-policy.rego still scopes what an admin identity
+  # may call. A caller on the other end of this relay still needs a real
+  # admin credential — see runbooks/spire-admin-access.md for how `innsegl
+  # init` gets one. This container does not hold one itself; it is `socat`,
+  # not a client.
+  #
+  # OFF BY DEFAULT: the `adminrelay` profile, so a plain `up` (or `make
+  # innsegl-up`) never starts it — matching the constraint that made this a
+  # question in the first place (ADR-0011, restated in spire-server's own
+  # comment above): "an unauthenticated admin listener on a developer's
+  # machine is worse than the inconvenience it removes."
+  #
+  #   make spire-admin-relay-up      # or: docker compose -f deploy/compose/spire.yml
+  #                                  #     --profile adminrelay up -d spire-admin-relay
+  #   ... innsegl init -spire-address 127.0.0.1:${INNSEGL_SPIRE_ADMIN_RELAY_PORT:-18081} ...
+  #   make spire-admin-relay-down
+  #
+  # NETWORKS: two, and MEASURED (see sigstore.yml's own note on
+  # innsegl-sigstore-published): a container attached only to `internal`
+  # networks cannot have a port published — there is no gateway for Docker to
+  # NAT through. innsegl-spire-admin stays internal; the second network below
+  # exists for the one mechanical reason sigstore.yml's does, narrowed to this
+  # one container.
+  #
+  # FORGETTING `spire-admin-relay-down` leaves an unauthenticated admin
+  # listener bound to 127.0.0.1 running until it is removed by hand — loopback
+  # limits it to processes ON THIS MACHINE, not to nobody. See
+  # runbooks/spire-admin-access.md for the measured consequence and why that
+  # is still the smallest cost of the three options RM-097 considered.
+  # --------------------------------------------------------------------------
+  spire-admin-relay:
+    profiles: ["adminrelay"]
+    image: *spire-socat-image
+    container_name: innsegl-spire-admin-relay
+    networks:
+      - innsegl-spire-admin
+      - innsegl-spire-admin-relay
+    ports:
+      - "127.0.0.1:${INNSEGL_SPIRE_ADMIN_RELAY_PORT:-18081}:8081"
+    command:
+      - "tcp-listen:8081,fork,reuseaddr"
+      - "tcp-connect:spire-server:8081"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
 
   # --------------------------------------------------------------------------
   # spire-agent — node and workload attestation.
@@ -345,6 +409,17 @@ networks:
   innsegl-spire-admin:
     name: innsegl-spire-admin
     internal: true
+
+  # RM-097 (#156). MEMBERS: spire-admin-relay. Nothing else, ever — this is
+  # not a route to the trust domain, only the one narrow non-internal network
+  # sigstore.yml's own innsegl-sigstore-published note describes: it exists
+  # solely so a container that is ALSO on innsegl-spire-admin can have a port
+  # published. Not internal, so the relay's published loopback port has a
+  # gateway to NAT through; the relay never uses it for anything else, and
+  # nothing routes from it back into innsegl-spire-admin except the one
+  # container that is a member of both.
+  innsegl-spire-admin-relay:
+    name: innsegl-spire-admin-relay
 
   # The public face. MEMBERS: spire-oidc, and whatever terminates TLS in front
   # of it. Not internal: this is the one thing outside the deployment has to
