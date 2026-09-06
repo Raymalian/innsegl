@@ -96,11 +96,11 @@ import (
 // exec.CommandContext delivers the signal to the immediate child (`git`) and
 // this process is killed before it can run that cleanup at all. While a
 // held request is still open, the orphaned process is still holding
-// .git/index.lock in the SAME repository every later shot reuses. So a
+// .git/index.lock in the repository THIS shot alone owns (signNewRepo). So a
 // held proxy is closed EXPLICITLY the instant this file has read what it
 // needs from it (never left to the subtest's own t.Cleanup, which would
 // leave it open for the rest of signCommit), and every shot then waits for
-// every lock in the repository to clear AND for the killed daemon's own
+// every lock in its own repository to clear AND for the killed daemon's own
 // process tree to have fully exited (signAwaitLocksClear) before touching
 // that repository again or reading its state to classify a shot.
 //
@@ -108,7 +108,10 @@ import (
 // reached the point of taking it — still doing its own Fulcio or Rekor round
 // trip — leaves nothing for sigStaleLocks to see, and a kill landing anywhere
 // before Phase B is exactly a kill that can leave one there. signAwaitLocksClear's
-// own comment has the mechanism and the two CI seeds it explains.
+// own comment has the mechanism, and #95's two CI seeds. Neither of them is
+// this shot's own orphan misclassified, though — see signNewRepo's own
+// comment for the gap those two seeds actually found, and why the fix is a
+// repository per shot rather than a longer wait.
 type signHoldProxy struct {
 	ln   net.Listener
 	srv  *http.Server
@@ -303,17 +306,47 @@ func signAdminProxy(t *testing.T, sig *sigStack) string {
 // The workspace sign_commit signs in.
 // ---------------------------------------------------------------------------
 
-// signRepo is doc 02 §5's grammar: three lowercase-host segments, so
-// sign_commit's Workspace resolves it under root without a filesystem path
-// ever crossing the wire.
-const signRepo = "signtest.invalid/mcp011/repo"
+// signRepoBase is doc 02 §5's grammar: three lowercase-host segments. Every
+// shot gets its OWN leaf under it (signNewRepo) — never one shared across
+// shots. See this file's header comment on why sharing one is unsafe: an
+// orphaned gitsign (git's grandchild; it survives the parent's SIGKILL) is
+// left running on the CI runner's own schedule, not this harness's, and the
+// only thing that makes when it finally reads or writes a repository's index
+// safe to ignore is that no OTHER shot's work is there to be read or written.
+const signRepoBase = "signtest.invalid/mcp011"
 
-// signWorkspace makes the working tree sign_commit's -workspace root
-// resolves signRepo to.
-func signWorkspace(t *testing.T) (root, repoDir string) {
+// signWorkspace makes the root sign_commit's -workspace flag resolves every
+// shot's own repository under.
+func signWorkspace(t *testing.T) (root string) {
 	t.Helper()
-	root = t.TempDir()
-	repoDir = filepath.Join(root, filepath.FromSlash(signRepo))
+	return t.TempDir()
+}
+
+// signNewRepo creates and git-inits a fresh working tree for one shot's
+// exclusive, one-time use, and returns both the identifier sign_commit's own
+// `repo` argument names (doc 02 §5's grammar; Workspace.Worktree requires it
+// to already exist as a git working tree — RM-072, #95, third attempt) and
+// the filesystem path this file reads git plumbing from.
+//
+// # Why a repository per shot, and not a wait harder than signAwaitLocksClear's
+//
+// The second attempt's fix (signAwaitLocksClear, this file's header comment)
+// is correct and stays: it is real proof that a KNOWN, watched orphan has
+// exited. What it cannot be proof of is what that orphan did on ITS OWN
+// schedule, at a time this harness does not control, if there was anywhere
+// else for that action to land. `git commit` fixes the tree it will commit
+// from whatever the index holds at the point IT gets around to reading it —
+// not at the point it was spawned — and on a contended CI runner that point
+// can arrive well after several later shots have already reset and staged
+// their own files in the SAME repository, if there is only one. A repository
+// used by exactly one shot removes the "anywhere else" rather than trying to
+// win a race against it: whatever a delayed orphan eventually reads or
+// writes, it is reading and writing a repository nothing else will ever touch
+// again.
+func signNewRepo(t *testing.T, c *campaign, root string) (repoName, repoDir string) {
+	t.Helper()
+	repoName = signRepoBase + "/" + c.name("repo")
+	repoDir = filepath.Join(root, filepath.FromSlash(repoName))
 	if err := os.MkdirAll(repoDir, 0o700); err != nil {
 		t.Fatalf("mkdir %s: %v", repoDir, err)
 	}
@@ -322,24 +355,18 @@ func signWorkspace(t *testing.T) (root, repoDir string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init %s: %v: %s", repoDir, err, out)
 	}
-	return root, repoDir
+	return repoName, repoDir
 }
 
-// signStage stages a uniquely named file so every shot's tree differs from
-// every other's — StagedTree refuses an empty commit, which is exactly the
-// state a successful PRIOR shot in the SAME repository leaves the index in.
+// signStage stages a uniquely named file in a repository that is otherwise
+// empty (signNewRepo's whole point), so StagedTree's "the index is already
+// the tree at HEAD" refusal can only ever mean what IP §6.5's B -> C window
+// means: this shot's own crashed attempt already committed it.
 //
-// The index is reset to HEAD first, and a unique filename is not enough
-// without it. A shot that was refused or killed leaves its own file staged;
-// the next shot that COMMITS sweeps that file in along with its own, because
-// git commits the whole index. The first shot's replay then finds its file
-// already committed, write-tree returns HEAD's own tree, and the server
-// refuses an empty commit — a harness sequencing fault reported as though the
-// tool had violated an invariant.
-//
-// Seen on CI at seed 1788593655011433377, where a blind stratum drew a delay
-// past the uninterrupted call's own duration (744ms against 669ms), completed,
-// and committed an earlier refused shot's file with its own.
+// The index is reset first anyway, defensively: a fresh repository has
+// nothing staged, so this is ordinarily a no-op, and it costs nothing to keep
+// it that way rather than assume no caller of this function is ever handed a
+// repository with something already in its index.
 func signStage(t *testing.T, repo, tag string) (tree string) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", "-C", repo, "reset", "-q")
@@ -581,10 +608,10 @@ type signReply struct {
 	} `json:"trailers"`
 }
 
-func signArgs(runID, tree, message, key string) map[string]any {
+func signArgs(runID, repo, tree, message, key string) map[string]any {
 	return map[string]any{
 		"run_id":          runID,
-		"repo":            signRepo,
+		"repo":            repo,
 		"staged_ref":      tree,
 		"message":         message,
 		"task_ref":        crashTaskID,
@@ -777,13 +804,18 @@ func (c *campaign) fireSign(t *testing.T, f signFlags, args map[string]any, when
 // signShot runs one crash-and-replay of sign_commit and returns the window
 // the kill actually landed in, read back from the object database and the
 // chain — never inferred from the delay or from what was aimed at.
+//
+// It creates its own repository (signNewRepo) rather than taking one from its
+// caller: every shot's repository is used by that shot and by no other, ever
+// (RM-072, #95, third attempt) — see signNewRepo's own comment for why.
 func (c *campaign) signShot(
-	t *testing.T, f signFlags, repoDir string, runID, why, target string, delay time.Duration,
+	t *testing.T, f signFlags, runID, why, target string, delay time.Duration,
 ) string {
 	t.Helper()
+	repoName, repoDir := signNewRepo(t, c, f.workspace)
 	key := c.name("sign-key")
 	tree := signStage(t, repoDir, strings.NewReplacer("/", "-", "_", "-").Replace(key))
-	args := signArgs(runID, tree, "commit for "+key, key)
+	args := signArgs(runID, repoName, tree, "commit for "+key, key)
 
 	shotFlags := f
 	var hold *signHoldProxy
@@ -815,8 +847,8 @@ func (c *campaign) signShot(
 	}
 	if hold != nil {
 		// Released HERE, not at the subtest's own cleanup: an orphaned
-		// gitsign holds .git/index.lock in the SAME repository every later
-		// shot reuses, and the replay below needs that lock free.
+		// gitsign holds .git/index.lock in THIS shot's own repository, and
+		// the replay below needs that lock free.
 		hold.close()
 	}
 	// orphans, not nil: this daemon was just SIGKILLed, and whatever it may
@@ -842,10 +874,10 @@ func (c *campaign) signShot(
 	// replay nothing — the phases run again against the emptied index just as
 	// if no row existed at all.
 	//
-	// This check alone does not make #95 hold — its two CI seeds were a
-	// DIFFERENT gap, in what "before" these reads means rather than in what
-	// they mean once taken; signAwaitLocksClear (called above, before any of
-	// this runs) is what closes that one.
+	// This check alone does not make #95 hold. What closes it is this shot
+	// never sharing a repository with any other (signNewRepo) — see that
+	// function's own comment for why signAwaitLocksClear alone, waiting only
+	// for THIS shot's own orphan, could not.
 	idemRec, idemFound := c.idemRecord(t, key)
 	replayable := idemFound && idemRec.Status == crashCompleted
 
@@ -865,9 +897,9 @@ func (c *campaign) signShot(
 	c.landed(target, window)
 
 	if window == winSignObjectNoRecord {
-		c.signRefusedTakeover(t, why, f, repoDir, tree, key, runID, before)
+		c.signRefusedTakeover(t, why, f, repoName, repoDir, tree, key, runID, before)
 	} else {
-		c.signSuccessfulTakeover(t, why, f, repoDir, tree, key, runID, s, before)
+		c.signSuccessfulTakeover(t, why, f, repoName, repoDir, tree, key, runID, s, before)
 	}
 	return window
 }
@@ -878,10 +910,10 @@ func (c *campaign) signShot(
 // crashed attempt did nothing at all, left a dangling intent, or already
 // finished and only the reply was lost.
 func (c *campaign) signSuccessfulTakeover(
-	t *testing.T, why string, f signFlags, repoDir, tree, key, runID string, s shot, before int,
+	t *testing.T, why string, f signFlags, repoName, repoDir, tree, key, runID string, s shot, before int,
 ) {
 	t.Helper()
-	args := signArgs(runID, tree, "commit for "+key, key)
+	args := signArgs(runID, repoName, tree, "commit for "+key, key)
 
 	rec, claimed := c.idemRecord(t, key)
 
@@ -944,10 +976,10 @@ func (c *campaign) signSuccessfulTakeover(
 // commit` already moved HEAD to this shot's tree before the ledger append
 // that would have closed Phase C).
 func (c *campaign) signRefusedTakeover(
-	t *testing.T, why string, f signFlags, repoDir, tree, key, runID string, before int,
+	t *testing.T, why string, f signFlags, repoName, repoDir, tree, key, runID string, before int,
 ) {
 	t.Helper()
-	args := signArgs(runID, tree, "commit for "+key, key)
+	args := signArgs(runID, repoName, tree, "commit for "+key, key)
 
 	// The lease is short (crashLease) and the other four subtests take it
 	// over with no explicit wait, because starting and connecting a fresh
@@ -1017,26 +1049,29 @@ func (c *campaign) signRefusedTakeover(
 // ---------------------------------------------------------------------------
 
 func (c *campaign) signCommit(t *testing.T) {
-	// PENDING for RM-072 (#95), second attempt. The orphan handling below is
-	// correct and stays: gitsign survives the SIGKILL as git's grandchild and
-	// keeps working, and waiting on .git/index.lock does not see one that has
-	// not reached the lock yet. That was a real cause and it is fixed.
+	// RM-072 (#95), third attempt. The first two attempts' orphan handling
+	// (signAwaitLocksClear, this file's header comment) is correct and stays:
+	// gitsign survives the SIGKILL as git's grandchild and keeps working, and
+	// waiting on .git/index.lock does not see one that has not reached the
+	// lock yet. That was a real cause and it is fixed.
 	//
-	// It is not the only one. On CI, a blind stratum killed 3ms in — before
+	// It was not the only one. On CI, a blind stratum killed 3ms in — before
 	// Phase A, with nothing of its own done — still found its staged tree
-	// already at HEAD: the PREVIOUS shot's orphan finished and committed an
-	// index that by then held this shot's file. Ten of eleven local runs pass
-	// and CI fails, which is the same shape that cost hours before.
+	// already at HEAD, because every shot shared one repository: a `git
+	// commit` an EARLIER shot's orphan gitsign left running fixes the tree it
+	// will commit only when it actually gets around to reading the index, not
+	// when it was spawned, and on a contended CI runner that can arrive after
+	// several later shots have already staged their own files there. No
+	// amount of waiting for a KNOWN orphan closes that, because the orphan
+	// that matters is exactly the one no later shot's own wait was ever
+	// watching.
 	//
-	// So IP §6.6's "never a second commit" stays untested, which is what #95
-	// exists to say. A subtest that intermittently accuses the tool of an
-	// invariant violation the harness caused is worse than one that says
-	// plainly it is not running.
-	t.Skip("PENDING RM-072 (#95): sign_commit is not yet fuzzed; see the note above")
-
+	// The fix in this attempt is signNewRepo: every shot gets its own
+	// repository, used once, by it alone. Whatever a delayed orphan
+	// eventually does, it is doing it somewhere no other shot will ever look.
 	sig := requireSigStack(t)
 
-	root, repoDir := signWorkspace(t)
+	root := signWorkspace(t)
 	f := signFlags{
 		spireAddr: signAdminProxy(t, sig),
 		pemDir:    signAdminPEMs(t, sig),
@@ -1053,10 +1088,12 @@ func (c *campaign) signCommit(t *testing.T) {
 	// Calibration. The blind campaign's window is THIS deployment's measured
 	// call duration — a real Fulcio round trip plus a Rekor upload, far
 	// slower than the other four tools' Postgres round trips — not a number
-	// typed in.
-	before := len(sigCommitObjects(t, repoDir))
-	tree := signStage(t, repoDir, "warm")
-	args := signArgs(run.RunID, tree, "warm commit", c.name("sign-warm-key"))
+	// typed in. Its own repository, like every shot below: nothing about
+	// calibration needs to share one either.
+	warmRepoName, warmRepoDir := signNewRepo(t, c, root)
+	before := len(sigCommitObjects(t, warmRepoDir))
+	tree := signStage(t, warmRepoDir, "warm")
+	args := signArgs(run.RunID, warmRepoName, tree, "warm commit", c.name("sign-warm-key"))
 
 	d := c.launchSign(t, f)
 	session := c.connect(t, d, d.addr)
@@ -1071,7 +1108,7 @@ func (c *campaign) signCommit(t *testing.T) {
 		t.Fatalf("the uninterrupted control replied %+v; IP §4 requires commit_sha and "+
 			"rekor_entry.uuid", warm)
 	}
-	if after := len(sigCommitObjects(t, repoDir)); after != before+1 {
+	if after := len(sigCommitObjects(t, warmRepoDir)); after != before+1 {
 		t.Fatalf("the uninterrupted control left %d new commit object(s), want exactly 1", after-before)
 	}
 
@@ -1088,12 +1125,10 @@ func (c *campaign) signCommit(t *testing.T) {
 	// well inside the call can still leave an orphaned gitsign (git's
 	// grandchild; it survives the parent's SIGKILL, see this file's header
 	// comment) running underneath it, which finishes on its own time and not
-	// on the harness's. signAwaitLocksClear is what actually closes that race
-	// — see its own comment for the mechanism and #95's two CI seeds — by
-	// waiting for the killed daemon's whole process tree to be gone, not only
-	// for the .git lock a straggler has not necessarily taken yet, before
-	// anything here reads state to classify or replay a shot. This narrowing
-	// stays regardless: the landing after completion is not lost coverage
+	// on the harness's. signAwaitLocksClear closes the race against THIS
+	// shot's own orphan before its state is read; signNewRepo (see its own
+	// comment) is what closes the race against every OTHER shot's. This
+	// narrowing stays regardless: the landing after completion is not lost coverage
 	// (winSignSeen is reached by the uninterrupted control above, and the two
 	// windows that matter — IP §6.5's A -> B and B -> C — have aimed shots
 	// that drive them rather than hoping a stratum lands there), and keeping
@@ -1109,13 +1144,13 @@ func (c *campaign) signCommit(t *testing.T) {
 	// INNSEGL_CRASH_SEED still replays the identical blind schedule.
 	for _, target := range []string{winSignIntentNoObject, winSignObjectNoRecord} {
 		c.aim(t, target, func(t *testing.T) string {
-			return c.signShot(t, f, repoDir, run.RunID, "observed trigger for "+target, target, 0)
+			return c.signShot(t, f, run.RunID, "observed trigger for "+target, target, 0)
 		})
 	}
 
 	for i, delay := range c.strata(window, blind) {
 		t.Logf("blind stratum %d/%d: kill %s after dispatch -> %s", i+1, blind, delay,
-			c.signShot(t, f, repoDir, run.RunID,
+			c.signShot(t, f, run.RunID,
 				fmt.Sprintf("blind stratum %d, +%s", i+1, delay), "", delay))
 	}
 }

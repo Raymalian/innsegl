@@ -231,6 +231,6 @@ Backing the ledger up is tracked as #160 and is not shipped.
 | No `.mcp.json` ships, so an MCP client has nothing to point at. | Write one against `http://127.0.0.1:28080/`. It is a dotfile and `.gitignore` covers it. |
 | `register_agent` takes `task_id`; `sign_commit` takes `task_ref`. | Pass the same value under both names. |
 | The MCP workspace is empty on a fresh stack. | Place the repository under `/work/<host>/<org>/<name>` in the `innsegl-workspace` volume before calling `sign_commit`. |
-| `innsegl init` cannot reach the SPIRE admin API in the shipped deployment (#156). | Not needed for this runbook. Only `innsegl init` needs it. |
+| `innsegl init` cannot reach the SPIRE admin API in the shipped deployment (#156). | Not needed for this runbook — only `innsegl init` needs it. Three ways to give it one are in `runbooks/spire-admin-access.md`; `make innsegl-init REPO=...` (option 2 there) is the recommended one. |
 | Nothing backs up the ledger (#160). | `pg_dump` by hand until it ships. |
 | The query API is not published to the host, so §5 needs `docker exec`. | Reach it through the compose network, or publish 8082 yourself. |
