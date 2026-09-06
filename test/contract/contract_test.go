@@ -17,6 +17,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/mcp"
+	"innsegl.dev/innsegl/internal/signing"
 	"innsegl.dev/innsegl/internal/spire"
 )
 
@@ -58,6 +59,14 @@ var ip4Retryable = map[mcp.Class]retryRule{
 // ---------------------------------------------------------------------------
 
 // verdict is what this issue concluded about one tool × class cell.
+//
+// RM-028 (#36) also had a third value, deferred, for the eleven sign_commit
+// cells the tool did not yet exist to decide. RM-071 (#94) decided all
+// eleven — see the sign_commit block below — and removed the value along
+// with it: IP §4 has exactly five tools and all five are now bound, so a
+// verdict of "the tool does not exist yet" can never be constructed again.
+// Keeping a case that cannot fire is exactly the vacuous-branch shape this
+// project's branch floor exists to catch.
 type verdict int
 
 const (
@@ -68,8 +77,6 @@ const (
 	// is a finding about the document, not a hole in the tests. why says which
 	// dependency or argument the tool does not have.
 	unreachable
-	// deferred: the tool does not exist yet (sign_commit, RM-033, #41).
-	deferred
 )
 
 // runIDRule is what IP §4's optional `run_id` must do on this cell. doc 02 §1
@@ -86,7 +93,7 @@ type cell struct {
 	tool    mcp.ToolName
 	class   mcp.Class
 	verdict verdict
-	// why explains an unreachable or deferred cell. It is the finding.
+	// why explains an unreachable cell. It is the finding.
 	why string
 	// runID is what the wire must carry. Only read when verdict is reachable.
 	runID runIDRule
@@ -452,18 +459,266 @@ var matrix = []cell{
 
 	// -----------------------------------------------------------------------
 	// sign_commit(run_id, repo, staged_ref, message, task_ref, idempotency_key)
-	// -----------------------------------------------------------------------
-	{tool: mcp.ToolSignCommit, class: mcp.ClassAttestationFailed, verdict: deferred},
-	{tool: mcp.ToolSignCommit, class: mcp.ClassIdentityUnavailable, verdict: deferred},
-	{tool: mcp.ToolSignCommit, class: mcp.ClassCredentialExpired, verdict: deferred},
-	{tool: mcp.ToolSignCommit, class: mcp.ClassAudienceMismatch, verdict: deferred},
-	{tool: mcp.ToolSignCommit, class: mcp.ClassLedgerUnavailable, verdict: deferred},
-	{tool: mcp.ToolSignCommit, class: mcp.ClassSigningUnavailable, verdict: deferred},
-	{tool: mcp.ToolSignCommit, class: mcp.ClassTransparencyUnavailable, verdict: deferred},
-	{tool: mcp.ToolSignCommit, class: mcp.ClassRunNotFound, verdict: deferred},
-	{tool: mcp.ToolSignCommit, class: mcp.ClassRunAlreadyRetired, verdict: deferred},
-	{tool: mcp.ToolSignCommit, class: mcp.ClassDuplicateRequest, verdict: deferred},
-	{tool: mcp.ToolSignCommit, class: mcp.ClassInvariantViolation, verdict: deferred},
+	//
+	// RM-071 (#94): the tripwire below fired the day RM-033 bound sign_commit,
+	// and these eleven cells are the answer.
+	//
+	//	MissingTools() = []; sign_commit is bound, so its eleven matrix cells
+	//	must stop being deferred and start being decided (RM-033, #41)
+	//
+	// RM-033's own reading of three cells (ATTESTATION_FAILED and
+	// AUDIENCE_MISMATCH unreachable, the other nine reachable) is CONFIRMED by
+	// every cell below, by measurement rather than by adoption — each why or
+	// drive states the code path that was actually read.
+	//
+	// # Fakes versus the real Sigstore stack, argued once here
+	//
+	// test/contract has no Sigstore. SIGNING_UNAVAILABLE and
+	// TRANSPARENCY_UNAVAILABLE are reached below by handing the fake
+	// SignCommitSigner (fakeSCSigner, sign_commit_test.go) the exact sentinel
+	// errors internal/signing defines for a dead Fulcio/Rekor — the same two
+	// sentinels test/failure's SIG-002 and SIG-003 have already measured a REAL
+	// blocked Fulcio and Rekor to actually raise. What is proved here is
+	// narrower than what SIG-002/003 prove, and the two claims are kept
+	// distinct on purpose:
+	//
+	//   - "the tool maps this dependency failure onto this class" — proved
+	//     HERE, through the real transport, mcp.New, and the exported
+	//     ConfigureSignCommit seam, driving signCommitService.signingError's
+	//     shipped classification switch for real. Only the boundary the
+	//     signer sits behind is a double.
+	//   - "the real dependency can produce that failure" — already proved by
+	//     SIG-002/SIG-003 against a real Fulcio and Rekor, in test/failure.
+	//
+	// A fake that returned Errorf(ClassSigningUnavailable, ...) directly would
+	// be the manufacture RM-028's rule forbids — it would test nothing but
+	// itself. A fake that returns internal/signing's own sentinel and lets the
+	// tool's own code decide the class is the same move ADR-0026 already made
+	// for ATTESTATION_FAILED: mcp.NewSPIREMinter, the shipped classifier, over
+	// a faked grpc.ClientConnInterface. Reachability here is honest about
+	// which of the two claims above it is making, and does not pretend to be
+	// the other one.
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassAttestationFailed, verdict: unreachable,
+		why: "RM-033's reading, confirmed. sign_commit's only path to SPIRE is IssueForSigning, " +
+			"which is SignCommitThroughGetCredential calling the SHIPPED get_credential in " +
+			"process — the same admin SVID mint path get_credential's own ATTESTATION_FAILED cell " +
+			"already reaches, and TestMCP006TheMintPathNeverProducesAttestationFailed already " +
+			"sweeps every gRPC code through the shipped minter to prove it never produces this " +
+			"class. sign_commit holds no spire.Client of its own and calls no Workload API, which " +
+			"is where attestation happens (SPI-002's territory, not an MCP tool's). " +
+			"TestMCP006SignCommitsCredentialPathNeverProducesAttestationFailed " +
+			"(sign_commit_test.go) re-runs the same sweep DRIVING SIGN_COMMIT ITSELF rather than " +
+			"get_credential, because sign_commit's own request path runs four gates " +
+			"get_credential does not — the task claim, the workspace, the staged tree, the " +
+			"pre-Phase-A Sigstore probe — before the credential is ever touched, and a claim " +
+			"about this tool is only honest once measured through this tool.",
+	},
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassIdentityUnavailable, verdict: reachable,
+		// FINDING, inherited rather than new: sign_commit's only route to
+		// IDENTITY_UNAVAILABLE is IssueForSigning -> get_credential's mint
+		// path, and src.prime returns get_credential's *mcp.Error unchanged.
+		// get_credential's own cell already carries no run_id
+		// (credentialMintError("", err)), so the same empty run_id reappears
+		// here — it is get_credential's finding surfacing through a second
+		// tool, not a second one.
+		runID: runIDAbsent,
+		drive: func(t *testing.T, s *stack) wireError {
+			run := s.registerRun(t, "sc-ident-down-register")
+			repo, tree := s.signCommitRepo(t)
+			s.conn.failWith(codes.Unavailable, "spire-server is not accepting connections")
+			got := s.callExpectingError(t, mcp.ToolSignCommit, signCommitArgs(run.RunID, repo, tree, "sc-ident-down"))
+			// Mutation guard: IP §6.1 requires the abort BEFORE Phase A. A
+			// regression that moved the credential fetch after the intent
+			// append would still return this class — the check above would
+			// not catch it — but would leave a commit_intent behind for a
+			// signature that was never attempted. This line is what catches
+			// that.
+			if n := s.countEvents(t, run.RunID, event.EventTypeCommitIntent); n != 0 {
+				t.Errorf("%d commit_intent events for a credential failure that IP §6.1 "+
+					"requires to abort BEFORE Phase A", n)
+			}
+			return got
+		},
+	},
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassCredentialExpired, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			run := s.registerRun(t, "sc-cred-expired-register")
+			repo, tree := s.signCommitRepo(t)
+			// IP §6.2: never sign with an expired credential. The same fake
+			// SPIRE connection get_credential's own cell uses, hit through
+			// sign_commit's IssueForSigning -> get_credential path.
+			s.conn.set(func(f *fakeConn) { f.expiry = time.Now().Add(-time.Minute) })
+			got := s.callExpectingError(t, mcp.ToolSignCommit, signCommitArgs(run.RunID, repo, tree, "sc-cred-expired"))
+			if n := s.countEvents(t, run.RunID, event.EventTypeCommitIntent); n != 0 {
+				t.Errorf("%d commit_intent events for a credential failure that IP §6.1 "+
+					"requires to abort BEFORE Phase A", n)
+			}
+			return got
+		},
+	},
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassAudienceMismatch, verdict: unreachable,
+		why: "RM-033's reading, confirmed. IP §4 gives sign_commit no audience argument, and its " +
+			"advertised input schema carries none — asserted by " +
+			"TestMCP006OnlyGetCredentialTakesAnAudience, which now includes sign_commit. " +
+			"Structurally, not only by schema: SignCommitThroughGetCredential.IssueForSigning " +
+			"always requests mcp.AudienceSigstore, a constant none of sign_commit's six " +
+			"arguments can influence, so even the credential fetch it makes internally has no " +
+			"caller-controlled audience to mismatch.",
+	},
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassLedgerUnavailable, verdict: reachable,
+		// sign_commit's idempotency claim (ADR-0004/ADR-0017) wraps the WHOLE
+		// tool, the same way register_agent's and record_event's do — so a
+		// dead Postgres is found at IdempotencyStore.claim, before
+		// resolveRun ever runs. That is why this cell carries no run_id,
+		// exactly the reason register_agent's and record_event's own
+		// LEDGER_UNAVAILABLE cells do not either, and unlike get_credential's
+		// and retire_agent's, which have no idempotency wrapper in the way.
+		runID: runIDAbsent, deadLedger: true,
+		drive: func(t *testing.T, s *stack) wireError {
+			return s.callExpectingError(t, mcp.ToolSignCommit, map[string]any{
+				"run_id": deadLedgerRunID, "repo": scPlaceholderRepo, "staged_ref": scPlaceholderStagedRef,
+				"message": "fix(contract): ledger outage probe", "task_ref": testTaskID,
+				"idempotency_key": "sc-after-outage",
+			})
+		},
+	},
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassSigningUnavailable, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			run := s.registerRun(t, "sc-fulcio-down-register")
+			repo, tree := s.signCommitRepo(t)
+			// The fake signer stands in for gitsign refusing because Fulcio
+			// died between the pre-Phase-A probe and Phase B — the exact
+			// sentinel internal/signing raises for it, letting
+			// signCommitService.signingError's SHIPPED switch decide the
+			// class. See the block comment above this section.
+			s.scSigner.failWith(fmt.Errorf("gitsign: %w", signing.ErrSigningUnavailable))
+			got := s.callExpectingError(t, mcp.ToolSignCommit, signCommitArgs(run.RunID, repo, tree, "sc-fulcio-down"))
+			// Mutation guard: this must be a PHASE B failure and not a
+			// coincidence from an earlier gate. If some other gate produced
+			// this class for an unrelated reason, the signer would never run
+			// and no intent would exist — both are checked.
+			if n := s.scSigner.callCount(); n != 1 {
+				t.Errorf("the signer ran %d times, want exactly 1: this cell is about a Phase B "+
+					"failure, not an earlier gate", n)
+			}
+			if n := s.countEvents(t, run.RunID, event.EventTypeCommitIntent); n != 1 {
+				t.Errorf("%d commit_intent events, want exactly 1: the intent is what IP §6.5 "+
+					"leaves for the reconciler when Phase B fails", n)
+			}
+			if n := s.countEvents(t, run.RunID, event.EventTypeCommitRecorded); n != 0 {
+				t.Errorf("%d commit_recorded events for a commit that was never signed", n)
+			}
+			return got
+		},
+	},
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassTransparencyUnavailable, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			run := s.registerRun(t, "sc-rekor-down-register")
+			repo, tree := s.signCommitRepo(t)
+			s.scSigner.failWith(fmt.Errorf("gitsign: %w", signing.ErrTransparencyUnavailable))
+			got := s.callExpectingError(t, mcp.ToolSignCommit, signCommitArgs(run.RunID, repo, tree, "sc-rekor-down"))
+			if n := s.scSigner.callCount(); n != 1 {
+				t.Errorf("the signer ran %d times, want exactly 1: this cell is about a Phase B "+
+					"failure, not an earlier gate", n)
+			}
+			if n := s.countEvents(t, run.RunID, event.EventTypeCommitIntent); n != 1 {
+				t.Errorf("%d commit_intent events, want exactly 1: the intent is what IP §6.5 "+
+					"leaves for the reconciler when Phase B fails", n)
+			}
+			if n := s.countEvents(t, run.RunID, event.EventTypeCommitRecorded); n != 0 {
+				t.Errorf("%d commit_recorded events for a commit that was never signed", n)
+			}
+			return got
+		},
+	},
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassRunNotFound, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// resolveRun fails before Workspace is ever touched, so the
+			// repo/staged_ref below name nothing real and never have to.
+			return s.callExpectingError(t, mcp.ToolSignCommit, map[string]any{
+				"run_id": unknownRunID, "repo": scPlaceholderRepo, "staged_ref": scPlaceholderStagedRef,
+				"message": "fix(contract): unknown run probe", "task_ref": testTaskID,
+				"idempotency_key": "sc-unknown-run",
+			})
+		},
+	},
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassRunAlreadyRetired, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			run := s.registerRun(t, "sc-retired")
+			s.retireRun(t, run.RunID)
+			return s.callExpectingError(t, mcp.ToolSignCommit, map[string]any{
+				"run_id": run.RunID, "repo": scPlaceholderRepo, "staged_ref": scPlaceholderStagedRef,
+				"message": "fix(contract): retired run probe", "task_ref": testTaskID,
+				"idempotency_key": "sc-retired-call",
+			})
+		},
+	},
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassDuplicateRequest, verdict: reachable,
+		runID: runIDAbsent,
+		drive: func(t *testing.T, s *stack) wireError {
+			run := s.registerRun(t, "sc-dupe-setup")
+			repo, tree := s.signCommitRepo(t)
+			args := signCommitArgs(run.RunID, repo, tree, "sc-dupe")
+
+			var out struct {
+				CommitSHA string `json:"commit_sha"`
+			}
+			s.callExpectingSuccess(t, mcp.ToolSignCommit, args, &out)
+			if out.CommitSHA == "" {
+				t.Fatal("the first call produced no commit_sha; the duplicate this case is " +
+					"about would prove nothing")
+			}
+
+			// The same key, a different request (IP §6.6: two different
+			// messages under one key are two different commits).
+			args["message"] = "fix(contract): a different message under the same key"
+			got := s.callExpectingError(t, mcp.ToolSignCommit, args)
+
+			// Mutation guard: ADR-0017's whole point is that the replay does
+			// not sign a second commit. If it did, the class check above
+			// would not catch it — DUPLICATE_REQUEST would still come back —
+			// but the chain would hold two commit_intent/commit_recorded
+			// pairs instead of one.
+			if n := s.countEvents(t, run.RunID, event.EventTypeCommitIntent); n != 1 {
+				t.Errorf("%d commit_intent events after a duplicate request, want exactly 1: "+
+					"a replay that re-executed would sign a second commit (IP §6.6)", n)
+			}
+			if n := s.countEvents(t, run.RunID, event.EventTypeCommitRecorded); n != 1 {
+				t.Errorf("%d commit_recorded events after a duplicate request, want exactly 1", n)
+			}
+			return got
+		},
+	},
+	{
+		tool: mcp.ToolSignCommit, class: mcp.ClassInvariantViolation, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// Refused by signCommitCheckRequest before any dependency is
+			// touched — an empty message can never be signed (IP §4) — so
+			// run_id is echoed back verbatim and need not name a real run,
+			// the same reason register_agent's own INVARIANT_VIOLATION cell
+			// needs no dependency either.
+			return s.callExpectingError(t, mcp.ToolSignCommit, map[string]any{
+				"run_id": scInvariantRunID, "repo": scPlaceholderRepo, "staged_ref": scPlaceholderStagedRef,
+				"message": "", "task_ref": testTaskID, "idempotency_key": "sc-empty-message",
+			})
+		},
+	},
 
 	// -----------------------------------------------------------------------
 	// retire_agent(run_id)
@@ -608,10 +863,6 @@ func TestMCP006TheMatrixIsExactlyToolsTimesClasses(t *testing.T) {
 			}
 			if len(c.why) < 40 {
 				t.Errorf("%s is marked unreachable with no explanation; the finding IS the value", key)
-			}
-		case deferred:
-			if c.tool != mcp.ToolSignCommit {
-				t.Errorf("%s is deferred, but only sign_commit is (RM-033, #41)", key)
 			}
 		}
 	}
@@ -819,7 +1070,7 @@ func TestMCP006AnInputTheSchemaRefusesNeverReachesTheTool(t *testing.T) {
 	s := newStack(t)
 
 	for _, tool := range []mcp.ToolName{
-		mcp.ToolRegisterAgent, mcp.ToolGetCredential, mcp.ToolRecordEvent, mcp.ToolRetireAgent,
+		mcp.ToolRegisterAgent, mcp.ToolGetCredential, mcp.ToolRecordEvent, mcp.ToolSignCommit, mcp.ToolRetireAgent,
 	} {
 		t.Run(string(tool), func(t *testing.T) {
 			res := s.call(t, tool, map[string]any{})
@@ -892,6 +1143,28 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 			{"run_id": retired.RunID, "event_type": "bash", "payload_digest": digestA, "idempotency_key": "k7"},
 			{"run_id": live.RunID, "event_type": "bash", "payload_digest": digestA, "idempotency_key": long},
 		},
+		mcp.ToolSignCommit: {
+			{},
+			{"run_id": "", "repo": "", "staged_ref": "", "message": "", "task_ref": "", "idempotency_key": ""},
+			{"run_id": live.RunID, "repo": "not-a-repo", "staged_ref": scPlaceholderStagedRef,
+				"message": "m", "task_ref": testTaskID, "idempotency_key": "sc-battery-1"},
+			{"run_id": live.RunID, "repo": scPlaceholderRepo, "staged_ref": "--evil",
+				"message": "m", "task_ref": testTaskID, "idempotency_key": "sc-battery-2"},
+			{"run_id": live.RunID, "repo": scPlaceholderRepo, "staged_ref": scPlaceholderStagedRef,
+				"message": long, "task_ref": testTaskID, "idempotency_key": "sc-battery-3"},
+			{"run_id": live.RunID, "repo": scPlaceholderRepo, "staged_ref": scPlaceholderStagedRef,
+				"message": "m", "task_ref": long, "idempotency_key": "sc-battery-4"},
+			{"run_id": live.RunID, "repo": scPlaceholderRepo, "staged_ref": scPlaceholderStagedRef,
+				"message": "m", "task_ref": "", "idempotency_key": "sc-battery-5"},
+			{"run_id": unknownRunID, "repo": scPlaceholderRepo, "staged_ref": scPlaceholderStagedRef,
+				"message": "m", "task_ref": testTaskID, "idempotency_key": "sc-battery-6"},
+			{"run_id": retired.RunID, "repo": scPlaceholderRepo, "staged_ref": scPlaceholderStagedRef,
+				"message": "m", "task_ref": testTaskID, "idempotency_key": "sc-battery-7"},
+			{"run_id": live.RunID, "repo": "../../etc", "staged_ref": scPlaceholderStagedRef,
+				"message": "m", "task_ref": testTaskID, "idempotency_key": "sc-battery-8"},
+			{"run_id": "Run 42", "repo": scPlaceholderRepo, "staged_ref": scPlaceholderStagedRef,
+				"message": "m", "task_ref": testTaskID, "idempotency_key": "sc-battery-9"},
+		},
 		mcp.ToolRetireAgent: {
 			{},
 			{"run_id": ""},
@@ -902,10 +1175,20 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 		},
 	}
 
+	// Mutation guard: a battery whose sign_commit rows are ALL refused by the
+	// transport's own schema validation (see
+	// TestMCP006AnInputTheSchemaRefusesNeverReachesTheTool) would never reach
+	// signCommitCheckRequest or resolveRun at all, and the closure claim below
+	// would hold for sign_commit for no reason — the vacuous-pass shape this
+	// whole file is written against. At least one row below must reach the
+	// tool and come back with a structured IP §4 error.
+	sawSignCommitStructuredError := false
+
 	for _, tool := range mcp.ToolNames() {
 		inputs, ok := battery[tool]
 		if !ok {
-			continue // sign_commit — RM-033.
+			t.Fatalf("the battery has no entry for %s; every one of the five tools must be "+
+				"driven by this closure test", tool)
 		}
 		allowed := reachableClasses(tool)
 		for i, args := range inputs {
@@ -928,8 +1211,17 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 						tool, args, got.Class, got.Message)
 				}
 				assertNotWidened(t, got)
+				if tool == mcp.ToolSignCommit {
+					sawSignCommitStructuredError = true
+				}
 			})
 		}
+	}
+
+	if !sawSignCommitStructuredError {
+		t.Fatal("every sign_commit row in the battery was refused by the transport's own schema " +
+			"validation; none of them reached signCommitCheckRequest or resolveRun, so this " +
+			"test's closure claim for sign_commit was never actually exercised")
 	}
 }
 
@@ -1050,6 +1342,7 @@ func TestMCP006AToolWithNoIdempotencyKeyCannotReachDuplicateRequest(t *testing.T
 		mcp.ToolRegisterAgent: true,
 		mcp.ToolGetCredential: false,
 		mcp.ToolRecordEvent:   true,
+		mcp.ToolSignCommit:    true,
 		mcp.ToolRetireAgent:   false,
 	}
 	for tool, takesKey := range want {
@@ -1075,7 +1368,7 @@ func TestMCP006OnlyGetCredentialTakesAnAudience(t *testing.T) {
 	s := newStack(t)
 
 	for _, tool := range []mcp.ToolName{
-		mcp.ToolRegisterAgent, mcp.ToolGetCredential, mcp.ToolRecordEvent, mcp.ToolRetireAgent,
+		mcp.ToolRegisterAgent, mcp.ToolGetCredential, mcp.ToolRecordEvent, mcp.ToolSignCommit, mcp.ToolRetireAgent,
 	} {
 		properties := s.inputProperties(t, tool)
 		_, has := properties["audience"]
@@ -1092,37 +1385,46 @@ func TestMCP006OnlyGetCredentialTakesAnAudience(t *testing.T) {
 	}
 }
 
-// TestMCP006SignCommitIsDeferredNotForgotten.
+// TestMCP006SignCommitIsBoundAndItsElevenCellsAreDecided is
+// TestMCP006SignCommitIsDeferredNotForgotten, inverted (RM-071, #94).
 //
-// Eleven cells of this matrix are blank because sign_commit does not exist
-// (RM-033, #41). That is only acceptable while it is TRUE, so it is asserted:
-// the server reports the tool as missing rather than advertising it. The day
-// RM-033 binds it, this test fails and the matrix has to grow its eleven rows
-// instead of quietly carrying eleven lies.
-func TestMCP006SignCommitIsDeferredNotForgotten(t *testing.T) {
+// That test asserted the eleven cells stayed blank while sign_commit did not
+// exist, and was written to FAIL the day RM-033 bound it — RM-028's tripwire:
+//
+//	MissingTools() = []; sign_commit is bound, so its eleven matrix cells
+//	must stop being deferred and start being decided (RM-033, #41)
+//
+// The tripwire fired and this issue is the answer. What is asserted now is
+// the opposite fact, permanently: sign_commit is advertised, not missing, and
+// none of its eleven cells carries the verdict that stood in for "not decided
+// yet" — a verdict that no longer exists in this package (see the removal
+// note on the verdict type above) precisely so this can never regress
+// silently.
+func TestMCP006SignCommitIsBoundAndItsElevenCellsAreDecided(t *testing.T) {
 	requirePG(t)
 	s := newStack(t)
 
-	if got := s.server.MissingTools(); !slices.Contains(got, mcp.ToolSignCommit) {
-		// PENDING, not silently skipped. RM-033 (#41) bound sign_commit, so the
-		// eleven cells this matrix deferred must now be decided — that is RM-071
-		// (#94). Reported on every run so it cannot be forgotten, the same way
-		// scripts/branch-coverage.sh reports an unimplemented surface.
-		t.Logf("PENDING: sign_commit is bound and its eleven matrix cells are not " +
-			"yet decided. Tracked as RM-071 (#94). This is a coverage gap, not a pass.")
+	if got := s.server.MissingTools(); slices.Contains(got, mcp.ToolSignCommit) {
+		t.Fatalf("MissingTools() = %v includes sign_commit; its eleven matrix cells were "+
+			"decided against a tool this run cannot even reach", got)
 	}
-	if got := s.server.BoundTools(); slices.Contains(got, mcp.ToolSignCommit) {
-		t.Logf("PENDING: BoundTools() = %v includes sign_commit; the eleven cells "+
-			"below are still marked deferred and no longer describe the surface.", got)
+	if got := s.server.BoundTools(); !slices.Contains(got, mcp.ToolSignCommit) {
+		t.Fatalf("BoundTools() = %v does not include sign_commit", got)
 	}
-	// Still marked deferred, deliberately. Changing them without driving the calls
-	// would be the lie this test exists to prevent — eleven verdicts asserted from
-	// nothing. RM-071 (#94) decides them by measurement.
+
+	n := 0
 	for _, c := range matrix {
-		if c.tool == mcp.ToolSignCommit && c.verdict != deferred {
-			t.Errorf("%s/%s is not marked deferred; RM-071 (#94) has not landed, so a "+
-				"verdict here would be asserted rather than measured", c.tool, c.class)
+		if c.tool != mcp.ToolSignCommit {
+			continue
 		}
+		n++
+		if c.verdict != reachable && c.verdict != unreachable {
+			t.Errorf("%s/%s carries verdict %d, which is neither reachable nor unreachable",
+				c.tool, c.class, c.verdict)
+		}
+	}
+	if n != len(mcp.Classes()) {
+		t.Fatalf("the matrix carries %d sign_commit cells, want one per class (%d)", n, len(mcp.Classes()))
 	}
 }
 
