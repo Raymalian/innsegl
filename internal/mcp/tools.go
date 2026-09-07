@@ -63,9 +63,19 @@ func ToolNames() []ToolName { return slices.Clone(toolOrder) }
 // staged_ref must equal the repository's own index — git, not the caller,
 // decides what it signs.
 var (
-	adminOrder = []ToolName{ToolRegisterAgent, ToolRetireAgent}
-	agentOrder = []ToolName{ToolGetCredential, ToolRecordEvent, ToolSignCommit}
+	adminOrder = []ToolName{ToolRegisterAgent, ToolRecordEvent, ToolRetireAgent}
+	agentOrder = []ToolName{ToolGetCredential, ToolSignCommit}
 )
+
+// record_event moved to the admin side when #171 made the harness record tool
+// calls rather than the model reporting them. It is the one tool whose place
+// follows from WHO CALLS IT rather than from what it can do: it cannot create
+// or destroy an identity, so by the rule above it belongs with the agent — but
+// a record the model writes about itself is the thing #171 exists to replace.
+//
+// Left on the agent side it would be a second, unobserved channel into the
+// same event stream, and a reader could not tell an observed call from a
+// reported one. doc 04 AB-14 is that gap.
 
 // AdminTools returns the identity lifecycle: the tools that create and destroy
 // runs, and therefore the ones a model must not reach (#170).

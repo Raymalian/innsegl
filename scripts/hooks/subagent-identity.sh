@@ -41,11 +41,20 @@
 # that cannot retire logs and moves on; the run expires on its own TTL, which
 # is what the TTL is for.
 #
-# NO EVENT RECORDING. It registers and retires, and that is all. Recording each
-# tool call was the other half of #171 and it is not built, because a file
-# written through `Bash` fires no file-write hook — so a hook-based record is
-# structurally incomplete, while the tree the run signs is not. The work is
-# read from the diff, not from the narrative.
+# EVENT RECORDING IS BEST-EFFORT AND SAYS SO. PostToolUse records each tool
+# call against the run, but a hook-based record is structurally incomplete and
+# that is not a bug to be fixed: a file written through `Bash` — `echo ... >
+# file` — fires the Bash hook and no file-write hook, so the record shows a
+# shell command and not the write inside it.
+#
+# The tree the run signs has no such gap. So the record is a convenience for
+# reading a run back, and the DIFF is the evidence. A reader who needs to know
+# what a run produced reads the commit; a reader who wants to know what order
+# it worked in reads this. Only the first is proof.
+#
+# It never blocks. A tool call refused because the ledger was briefly
+# unreachable would make every agent's work hostage to a bookkeeping write —
+# and the identity, which IS load-bearing, was already checked at start.
 
 set -u
 
@@ -115,24 +124,28 @@ mcp_call() {
 case "$EVENT" in
 
   SubagentStart)
-    # The task comes from the BRANCH, not from the hook input. The hook is
-    # never told what the subagent was asked to do — it gets a type and a
-    # generated id and nothing else. A branch name is git state that outlives
-    # the session and that the model does not choose at spawn time.
+    # The task comes from the BRANCH, and from the MAIN worktree's branch
+    # rather than this agent's own.
     #
-    # A branch name is not a task_id, though, and the first run of this hook
-    # proved it: doc 02 §5's grammar is [a-z0-9][a-z0-9-]{0,62}, and
-    # `dev/rm105-caller-split` was refused for the slash. So it is derived,
-    # not used raw:
+    # Measured 2026-09-07: a subagent spawned with worktree isolation runs in
+    # .claude/worktrees/agent-<id> on a branch called worktree-agent-<id>.
+    # Reading the branch at $CWD therefore gave every subagent its own
+    # throwaway task — `worktree-agent-af9a60aaad38d71b2` in the ledger, where
+    # `rm105` belonged. Every agent working on one task must name that one
+    # task, or the ledger records a task per agent and answers no question
+    # anyone would ask of it.
     #
-    #   1. an RM number if the branch carries one — dev/rm105-x -> rm105 —
-    #      because that is this project's own task identifier, and two branches
-    #      for one issue should name one task.
-    #   2. otherwise the branch, lowercased, with everything outside the
-    #      grammar folded to a hyphen and the result trimmed to 63.
-    BRANCH="$(git -C "${CWD:-.}" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    # `git worktree list` reports the main worktree first, from inside any
+    # linked one, so this resolves the same branch wherever it runs.
+    MAIN="$(git -C "${CWD:-.}" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
+    [ -n "$MAIN" ] || MAIN="${CWD:-.}"
+    BRANCH="$(git -C "$MAIN" rev-parse --abbrev-ref HEAD 2>/dev/null)"
     [ -n "$BRANCH" ] && [ "$BRANCH" != "HEAD" ] || BRANCH="detached"
 
+    # A branch name is not a task_id: doc 02 §5 is [a-z0-9][a-z0-9-]{0,62} and
+    # `dev/rm105-caller-split` is refused for the slash. An RM number is this
+    # project's own task identifier and is preferred where the branch carries
+    # one; otherwise the branch is folded into the grammar.
     TASK="$(printf '%s' "$BRANCH" | tr 'A-Z' 'a-z' | sed -n 's/.*\(rm[0-9][0-9]*\).*/\1/p')"
     if [ -z "$TASK" ]; then
       TASK="$(printf '%s' "$BRANCH" | tr 'A-Z' 'a-z' \
@@ -140,6 +153,25 @@ case "$EVENT" in
         | cut -c1-63)"
     fi
     [ -n "$TASK" ] || TASK="unnamed"
+
+    # #172: refuse a subagent that is not in its own worktree, when asked to.
+    #
+    # The harness decides where a subagent runs and a hook cannot change it —
+    # but it CAN refuse. With INNSEGL_REQUIRE_WORKTREE=1 a subagent sharing the
+    # operator's tree gets no identity and does no work, so what each run
+    # produced stays readable as the diff of its own worktree rather than
+    # having to be untangled from everyone else's.
+    #
+    # Off by default: turning it on means every subagent must be spawned with
+    # worktree isolation, and a caller that does not know that sees only
+    # refusals.
+    if [ "${INNSEGL_REQUIRE_WORKTREE:-0}" = "1" ] && [ "$MAIN" = "$(cd "${CWD:-.}" 2>/dev/null && pwd -P)" ]; then
+      echo "innsegl: refused — this subagent shares the operator's working tree." >&2
+      echo "innsegl:   With INNSEGL_REQUIRE_WORKTREE=1 a run must have a tree of its own," >&2
+      echo "innsegl:   so that what it produced is its own diff (#172). Spawn it with" >&2
+      echo "innsegl:   worktree isolation." >&2
+      exit 2
+    fi
 
     KEY="harness-$AGENT_ID"
     ARGS="$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' \
@@ -178,6 +210,41 @@ case "$EVENT" in
     else
       echo "innsegl: could not retire $RUN_ID; it will expire on its TTL" >&2
     fi
+    exit 0
+    ;;
+
+  PostToolUse)
+    # Records what the harness OBSERVED, not what the model reported. The model
+    # never calls this: it is invoked by the harness after the tool has already
+    # run, and it reads the run id from the marker SubagentStart wrote.
+    [ -f "$RUNFILE" ] || exit 0
+    RUN_ID="$(head -n 1 "$RUNFILE")"
+    [ -n "$RUN_ID" ] || exit 0
+
+    TOOL="$(field tool_name)"
+    [ -n "$TOOL" ] || exit 0
+
+    # doc 02 §1's digest form, over the tool's own input. The BODY is never
+    # sent — record_event takes a digest and nothing else, which is why the
+    # MCP knows that a file was written and never what was in it.
+    DIGEST="sha256:$(printf '%s' "$EVENT_JSON" | shasum -a 256 2>/dev/null | awk '{print $1}')"
+    case "$DIGEST" in
+      sha256:????????????????????????????????????????????????????????????????) : ;;
+      *) exit 0 ;;   # no usable digest, and a bad one is worse than none
+    esac
+
+    # event_type is the AGENT TOOL that was invoked, not a ledger event type.
+    # record_event writes exactly one kind of event and the caller does not
+    # choose it; passing "tool_call" here is refused, with that explanation.
+    SAFE_TOOL="$(printf '%s' "$TOOL" | sed -e 's/[^A-Za-z0-9_-]//g' | cut -c1-63)"
+    [ -n "$SAFE_TOOL" ] || exit 0
+
+    KEY="harness-$AGENT_ID-$(printf '%s' "$DIGEST" | cut -c8-27)"
+    mcp_call record_event "$(printf '{"run_id":"%s","event_type":"%s","payload_digest":"%s","idempotency_key":"%s"}' \
+      "$RUN_ID" "$SAFE_TOOL" "$DIGEST" "$KEY")" >/dev/null 2>&1 || true
+
+    # ALWAYS 0. See the header: the identity is load-bearing and was checked at
+    # start; a bookkeeping write is not, and must never hold up an agent's work.
     exit 0
     ;;
 
