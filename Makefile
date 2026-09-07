@@ -25,7 +25,8 @@ COVERPROFILE := cover.out
         sigstore-up sigstore-verify sigstore-down \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
-        innsegl-stack-clean innsegl-up-here verify-branch verify-branch-selftest clean
+        innsegl-stack-clean innsegl-up-here innsegl-link verify-branch \
+        verify-branch-selftest start link sign clean
 
 all: build test lint
 
@@ -219,6 +220,7 @@ innsegl-up: sigstore-up
 # same class of reason -- make counts them.
 #
 # git@host:org/name.git and https://host/org/name.git both become host/org/name.
+INNSEGL_PROJECTS ?= $(HOME)/Applications
 REPO_PATH ?= $(shell git rev-parse --show-toplevel)
 REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
 
@@ -235,8 +237,83 @@ innsegl-up-here: sigstore-up
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  INNSEGL_REPO_PATH='$(REPO_PATH)' INNSEGL_REPO_ID='$(REPO)' \
+	  INNSEGL_PROJECTS='$(INNSEGL_PROJECTS)' \
 	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml $(ONEPROCESS_FILE) up -d
+	@$(MAKE) --no-print-directory innsegl-link DIR='$(REPO_PATH)'
+
+# ---------------------------------------------------------------------------
+# innsegl-link: make one repository signable, without restarting anything.
+#
+# The MCP resolves `host/org/name` beneath /work. This puts a symlink there
+# pointing into the projects mount, so the repository becomes signable while
+# the stack is running. A mount per repository would need the container
+# recreated to add one.
+#
+# The identifier is read from that repository's own `origin` rather than from
+# its directory name, because on this machine two do not match: `helmward` is
+# `helmwart` and `Tessera` is `oktarays`.
+# ---------------------------------------------------------------------------
+
+# ===========================================================================
+# The three commands.
+#
+# Everything below this line is one deployment's worth of settings that an
+# operator should not have to know about. The targets above are the reference
+# stack, documented and unchanged; these are the easy path onto it.
+#
+#   make start                      bring it up, ready to sign
+#   make link DIR=~/Applications/x  make a project signable
+#   make sign -- -m "message"       commit, signed
+#
+# The opinions baked in here, and each is a real choice rather than a default
+# nobody thought about:
+#
+#   - the admin listener is ON. Without it nothing can register a run, and
+#     since RM-105 the model cannot register for itself. A deployment with it
+#     off can sign nothing.
+#   - the sealer and the reconciler run inside the MCP. Two fewer containers,
+#     and doc 05 §2's N-replica topology is not what a laptop is.
+#   - your projects are mounted. Signing in a copy of your repository was four
+#     of the seven steps this used to take.
+#   - Rekor's host port is chosen at run time from what is free. 3000 is the
+#     compose default and is taken by a great many development servers; the
+#     failure is a bind error during bring-up that reads like a broken stack.
+# ===========================================================================
+
+## start: bring the whole thing up, ready to sign, with no setup
+start:
+	@port=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'); \
+	 echo "innsegl: rekor on 127.0.0.1:$$port, projects from $(INNSEGL_PROJECTS)"; \
+	 INNSEGL_REKOR_PORT=$$port \
+	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 \
+	 $(MAKE) --no-print-directory innsegl-up-here ONEPROCESS=1
+	@echo
+	@echo "ready. Next:"
+	@echo "   make link DIR=~/Applications/<project>     make another project signable"
+	@echo "   make sign -- -m 'your message'             commit, signed"
+
+## link: make a project signable — make link DIR=~/Applications/foo
+link:
+	@$(MAKE) --no-print-directory innsegl-link DIR='$(DIR)'
+
+## sign: stage first, then — make sign -- -m "your message"
+sign:
+	@scripts/innsegl-commit.sh $(filter-out $@,$(MAKECMDGOALS)) $(ARGS)
+
+## innsegl-link: make a repository signable — make innsegl-link DIR=~/Applications/foo
+innsegl-link:
+	@test -n "$(DIR)" || { echo 'innsegl-link: pass DIR=<path to a git repository>'; exit 2; }
+	@d="$$(cd '$(DIR)' && pwd -P)"; \
+	 id="$$(git -C "$$d" remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')"; \
+	 test -n "$$id" || { echo "innsegl-link: $$d has no origin remote"; exit 2; }; \
+	 base="$$(cd '$(INNSEGL_PROJECTS)' && pwd -P)"; \
+	 case "$$d" in "$$base"/*) : ;; *) echo "innsegl-link: $$d is not under INNSEGL_PROJECTS ($$base); the MCP would see a dangling link"; exit 2 ;; esac; \
+	 rel="$${d#$$base/}"; \
+	 docker exec innsegl-mcp sh -c "mkdir -p /work/$$(dirname $$id) && rm -rf /work/$$id && ln -s /projects/$$rel /work/$$id" \
+	   || { echo 'innsegl-link: is the stack up? make innsegl-up-here'; exit 1; }; \
+	 docker exec innsegl-mcp test -e "/work/$$id/.git" \
+	   || { echo "innsegl-link: linked, but /work/$$id/.git does not resolve — is $$d inside INNSEGL_PROJECTS?"; exit 1; }; \
+	 echo "linked  $$id  ->  $$rel"
 
 ## innsegl-verify: ask the server what the MCP's database credential can do
 #

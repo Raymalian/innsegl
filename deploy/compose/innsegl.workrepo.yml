@@ -1,51 +1,56 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Sign in the repository you are actually working in.
+# Sign in the repositories you actually work in — all of them, not one.
 #
 # WHAT THIS SOLVES. Without it, `sign_commit` resolves a repository beneath the
-# MCP's own workspace volume, which starts empty. So signing one commit meant:
-# copy the repository into the volume, stage there, call the tool, then tar
-# `.git` back out and fetch the commit into the real repository. Four of the
-# seven steps were moving files between two copies of the same repository.
+# MCP's own workspace volume, which starts empty. Signing one commit meant
+# copying the repository in, staging there, calling the tool, then tarring
+# `.git` back out and fetching the commit. Four of seven steps were moving
+# files between two copies of one repository.
 #
-# WHAT IT DOES. Bind-mounts one working tree at the path the MCP already
-# resolves that repository to — `internal/mcp.Workspace.Worktree` is
-# `filepath.Join(root, repo)`, and root is `/work`. Nothing in the Go changes.
-# The MCP signs where the work already is.
+# HOW. One bind mount of the directory your projects live in, plus one symlink
+# per project inside the workspace volume at the path the MCP already resolves
+# that repository to — `internal/mcp.Workspace.Worktree` is
+# `filepath.Join(root, repo)` with root `/work`. Nothing in the Go changes.
+#
+#   /work/github.com/KodyMike/Stilla  ->  /projects/Stilla
+#
+# WHY SYMLINKS AND NOT A MOUNT PER REPOSITORY. A mount per repository needs the
+# container recreated to add one. A symlink does not, so a project becomes
+# signable while the stack is running.
+#
+# WHY NOT MOUNT THE PARENT AT /work/github.com/<org>. Measured against this
+# machine, and it is why the obvious shortcut is not here: projects live under
+# TWO orgs (`KodyMike` and `Raymalian`), and two directory names do not match
+# their repositories — `helmward` is `helmwart`, `Tessera` is `oktarays`. A
+# parent mount assumes one org and matching names, and silently resolves the
+# wrong thing when either is false.
 #
 # USE IT
 #
-#   make innsegl-up-here                     this repository, ids read from git
-#   make innsegl-up-here REPO=github.com/org/name REPO_PATH=/abs/path
+#   make innsegl-up-here                       brings the stack up with this file
+#   make innsegl-link DIR=~/Applications/Stilla    make one project signable
+#   make innsegl-link DIR=.                        the one you are standing in
 #
-# or by hand:
+# The link target is read from that repository's own `origin`, so a fork or a
+# rename is followed rather than assumed.
 #
-#   INNSEGL_REPO_PATH=/abs/path/to/worktree \
-#   INNSEGL_REPO_ID=github.com/org/name \
-#     docker compose -f deploy/compose/innsegl.yml \
-#                    -f deploy/compose/innsegl.workrepo.yml up -d
+# WHAT YOU ARE AGREEING TO, AND IT IS BIGGER THAN IT LOOKS
 #
-# WHAT YOU ARE AGREEING TO. The MCP gets write access to that working tree. It
-# already had write access to its own copy; the difference is that this copy is
-# the one you are editing. `sign_commit` creates its commit in a linked
-# worktree and does not move your HEAD, your branch or your index — that
-# isolation is asserted by INIT-008 — but the process can write there, and an
-# operator should decide that deliberately rather than inherit it. That is why
-# this is a separate file you opt into and not a default.
+# The MCP gets WRITE access to everything under the projects root — not only
+# the repositories you have linked. It cannot be read-only: creating a commit
+# is a write.
 #
-# ONE TREE, NOT A DIRECTORY OF THEM. Mounting a parent directory would let the
-# MCP reach every repository under it. One repository, one mount, named
-# explicitly.
+# `sign_commit` writes into a linked worktree and does not move your HEAD, your
+# branch or your index (asserted by INIT-008), so nothing it does is meant to
+# touch your work. But the process CAN write there, and an operator should
+# agree to that deliberately rather than inherit it. Point INNSEGL_PROJECTS at
+# a narrower directory if that is too much.
+#
+# This is why the file is an override you opt into and not a default.
 
 services:
   innsegl-mcp:
     volumes:
-      # Compose merges service volumes by target path, so this is added to the
-      # workspace volume rather than replacing it: other repositories still
-      # resolve inside `innsegl-workspace` as before, and only this one is the
-      # host's.
-      #
-      # Both variables are required with no default. A default here would be a
-      # silent bind mount of somebody's home directory the first time the
-      # override file was included by accident.
-      - ${INNSEGL_REPO_PATH:?set it to the absolute path of the working tree to sign in}:/work/${INNSEGL_REPO_ID:?set it to the repository identifier, host/org/name}
+      # Read-write, and it has to be: a commit is a write. See above.
+      - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:/projects
