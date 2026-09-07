@@ -147,7 +147,33 @@ x-object-store-bucket: &object-store-bucket ${INNSEGL_OBJECT_STORE_BUCKET:-innse
 # ----------------------------------------------------------------------------
 x-trust-domain: &trust-domain innsegl.dev
 x-fulcio-url: &fulcio-url http://fulcio:5555
-x-rekor-url: &rekor-url http://rekor:3000
+# The transparency log. Defaults to the Rekor this compose file starts, which
+# is what a development stack wants: fast, offline, and free to destroy.
+#
+# ADR-0042 is the reason this is a variable rather than a constant. It decides
+# that "anyone can verify" means a PUBLIC Rekor anchor over this deployment's
+# own Fulcio root — Sigstore's documented bring-your-own-PKI path — and the Go
+# side already supports it: INNSEGL_REKOR_URL is read by serve, seal, reconcile
+# and verify, and cmd/innsegl/init.go already carries
+# defaultPublicRekorURL = "https://rekor.sigstore.dev". This line was the only
+# thing standing in the way.
+#
+#   INNSEGL_REKOR_URL=https://rekor.sigstore.dev
+#
+# Two things follow from setting it, and both are permanent:
+#
+#   - Rekor is append-only and public. Nothing submitted can be withdrawn. What
+#     is published is the certificate, its timestamp and the log index; the
+#     SPIFFE ID it carries is pseudonymised under ADR-0041, so it is opaque
+#     without this deployment's ledger. ADR-0042 is materially worse without
+#     ADR-0041 and the two should be read together.
+#   - The deployment's Fulcio root has to be published and reachable, or the
+#     entry proves a time for a certificate nobody can chain. ADR-0042 leaves
+#     where and how deliberately unsettled.
+#
+# The sigstore Rekor containers keep running when this is set. Stopping them is
+# a separate operator decision, not something this line makes for anyone.
+x-rekor-url: &rekor-url ${INNSEGL_REKOR_URL:-http://rekor:3000}
 
 # The issuer, and the same variable spire.yml and sigstore.yml read. `innsegl
 # verify` is handed it so a certificate naming a different issuer is a failure
