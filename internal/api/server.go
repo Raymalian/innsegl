@@ -81,6 +81,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	s.mux.HandleFunc("GET /api/v1/runs", s.handleRuns)
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}", s.handleRun)
 	s.mux.HandleFunc("GET /api/v1/overview", s.handleOverview)
+	s.mux.HandleFunc("GET /api/v1/alerts", s.handleAlerts)
 	s.mux.HandleFunc("GET /api/v1/proof/{commit_sha}", s.handleProof)
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	return s, nil
@@ -141,6 +142,23 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, o)
 }
 
+// handleAlerts serves #167's list endpoint: a paged, type-filterable read of
+// the two alert event types. Read-only like every other route here — it never
+// writes a resolution, see ADR-0044 for why that lives outside this server.
+func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	filter, err := alertFilterFrom(r)
+	if err != nil {
+		writeProblem(w, err)
+		return
+	}
+	page, err := s.store.ListAlerts(r.Context(), filter)
+	if err != nil {
+		writeProblem(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
 // handleProof is FD §3.6's public page, server side. The verdict is live and
 // the material comes with it; an unreachable upstream is an "unavailable"
 // verdict in a 200, not an HTTP error, because "we could not check" is an
@@ -196,6 +214,24 @@ func runFilterFrom(r *http.Request) (RunFilter, error) {
 				ErrBadRequest, bound.name, v)
 		}
 		*bound.into = t
+	}
+	return f, nil
+}
+
+// alertFilterFrom reads the alerts feed's state out of the URL, matching
+// runFilterFrom's shape and the query API's own parameter names.
+func alertFilterFrom(r *http.Request) (AlertFilter, error) {
+	q := r.URL.Query()
+	f := AlertFilter{
+		EventType: q.Get("event_type"),
+		Cursor:    q.Get("cursor"),
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return AlertFilter{}, fmt.Errorf("%w: limit=%q is not a positive number", ErrBadRequest, v)
+		}
+		f.Limit = n
 	}
 	return f, nil
 }

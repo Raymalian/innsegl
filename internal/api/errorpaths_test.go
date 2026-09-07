@@ -373,6 +373,15 @@ func TestTheStoreRefusesAQueryItCannotMakeSenseOf(t *testing.T) {
 		t.Errorf("Run accepted an empty run id: %v", err)
 	}
 
+	// ALR-002: ListAlerts holds the same two cursor refusals ListRuns does —
+	// same keyset-cursor shape, same ErrBadRequest.
+	if _, err := s.ListAlerts(ctx, AlertFilter{Cursor: "not-a-number"}); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("ListAlerts accepted a cursor it never issued: %v", err)
+	}
+	if _, err := s.ListAlerts(ctx, AlertFilter{Cursor: "-4"}); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("ListAlerts accepted a negative cursor: %v", err)
+	}
+
 	// A date window is applied, and one that excludes everything returns an
 	// empty page rather than an error: "no runs match these filters" is FD
 	// §4.6's empty state, not a failure.
