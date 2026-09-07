@@ -25,7 +25,7 @@ COVERPROFILE := cover.out
         sigstore-up sigstore-verify sigstore-down \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
-        innsegl-stack-clean clean
+        innsegl-stack-clean innsegl-up-here verify-branch verify-branch-selftest clean
 
 all: build test lint
 
@@ -196,6 +196,42 @@ innsegl-up: sigstore-up
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) up -d
+
+# ---------------------------------------------------------------------------
+# innsegl-up-here: the stack, signing in THIS working tree.
+#
+# Without it, sign_commit resolves a repository beneath the MCP's own empty
+# workspace volume, so signing one commit meant copying the repository in,
+# staging there, calling the tool, and tarring .git back out. Four of seven
+# steps were moving files between two copies of one repository.
+#
+# REPO and REPO_PATH default to this checkout, read from git rather than
+# assumed: the identifier comes from `origin`, so a fork or a rename is
+# followed instead of hardcoded.
+#
+# Read deploy/compose/innsegl.workrepo.yml before using it. It gives the MCP
+# write access to the tree you are editing, which is a deliberate choice.
+# ---------------------------------------------------------------------------
+# The sed delimiter is `|` and not `#`, and that is the whole trick: `#` starts
+# a comment in a Makefile even inside $(shell ...), so make never sees the
+# closing parenthesis and reports "unterminated call to function `shell'" from
+# a line that looks perfectly balanced. Escaped parentheses are avoided for the
+# same class of reason -- make counts them.
+#
+# git@host:org/name.git and https://host/org/name.git both become host/org/name.
+REPO_PATH ?= $(shell git rev-parse --show-toplevel)
+REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
+
+## innsegl-up-here: bring the stack up signing in this working tree, not a copy
+innsegl-up-here: sigstore-up
+	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
+	@echo "signing in $(REPO_PATH)  as  $(REPO)"
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) build
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  deploy/compose/spire/register.sh
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  INNSEGL_REPO_PATH='$(REPO_PATH)' INNSEGL_REPO_ID='$(REPO)' \
+	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml up -d
 
 ## innsegl-verify: ask the server what the MCP's database credential can do
 #

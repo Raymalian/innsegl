@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Sign in the repository you are actually working in.
+#
+# WHAT THIS SOLVES. Without it, `sign_commit` resolves a repository beneath the
+# MCP's own workspace volume, which starts empty. So signing one commit meant:
+# copy the repository into the volume, stage there, call the tool, then tar
+# `.git` back out and fetch the commit into the real repository. Four of the
+# seven steps were moving files between two copies of the same repository.
+#
+# WHAT IT DOES. Bind-mounts one working tree at the path the MCP already
+# resolves that repository to — `internal/mcp.Workspace.Worktree` is
+# `filepath.Join(root, repo)`, and root is `/work`. Nothing in the Go changes.
+# The MCP signs where the work already is.
+#
+# USE IT
+#
+#   make innsegl-up-here                     this repository, ids read from git
+#   make innsegl-up-here REPO=github.com/org/name REPO_PATH=/abs/path
+#
+# or by hand:
+#
+#   INNSEGL_REPO_PATH=/abs/path/to/worktree \
+#   INNSEGL_REPO_ID=github.com/org/name \
+#     docker compose -f deploy/compose/innsegl.yml \
+#                    -f deploy/compose/innsegl.workrepo.yml up -d
+#
+# WHAT YOU ARE AGREEING TO. The MCP gets write access to that working tree. It
+# already had write access to its own copy; the difference is that this copy is
+# the one you are editing. `sign_commit` creates its commit in a linked
+# worktree and does not move your HEAD, your branch or your index — that
+# isolation is asserted by INIT-008 — but the process can write there, and an
+# operator should decide that deliberately rather than inherit it. That is why
+# this is a separate file you opt into and not a default.
+#
+# ONE TREE, NOT A DIRECTORY OF THEM. Mounting a parent directory would let the
+# MCP reach every repository under it. One repository, one mount, named
+# explicitly.
+
+services:
+  innsegl-mcp:
+    volumes:
+      # Compose merges service volumes by target path, so this is added to the
+      # workspace volume rather than replacing it: other repositories still
+      # resolve inside `innsegl-workspace` as before, and only this one is the
+      # host's.
+      #
+      # Both variables are required with no default. A default here would be a
+      # silent bind mount of somebody's home directory the first time the
+      # override file was included by accident.
+      - ${INNSEGL_REPO_PATH:?set it to the absolute path of the working tree to sign in}:/work/${INNSEGL_REPO_ID:?set it to the repository identifier, host/org/name}
