@@ -98,6 +98,12 @@ const (
 	publishedNetwork = "innsegl-sigstore-published"
 
 	// The containers this harness owns beyond the compose stacks.
+	// smokeComposeProject is the project the SHIPPED compose files run under
+	// while this harness drives them (#168). Not `innsegl-sigstore` and
+	// `innsegl-spire`, which are what a developer's own stack uses and what
+	// this test's `down -v` would otherwise delete.
+	smokeComposeProject = "innsegl-smoke-stack"
+
 	ledgerNetwork   = "innsegl-smoke-ledger"
 	ledgerContainer = "innsegl-smoke-postgres"
 	mcpContainer    = "innsegl-smoke-mcp"
@@ -1209,9 +1215,28 @@ func (s *stack) sh(ctx context.Context, script string) (string, error) {
 	// documentedBootCommands — an appended line is exactly what OPS-005
 	// would then have to find, verbatim, in the README, and a per-run port
 	// number cannot be.
+	// COMPOSE_PROJECT_NAME is here for the same reason and by the same
+	// argument (#168, RM-103).
+	//
+	// deploy/compose/sigstore.yml and spire.yml pin their own project names,
+	// so the documented commands ALWAYS act on `innsegl-sigstore` and
+	// `innsegl-spire` — the very projects `make innsegl-up` brings up. The
+	// teardown block this harness runs verbatim ends in `down -v`, so running
+	// this test on a machine with the stack up deleted the developer's Rekor,
+	// Fulcio PKI and SPIRE data. Measured twice on 2026-09-07: the second time
+	// it destroyed the Rekor entry for an agent-signed commit, which is not
+	// recoverable — the commit can never verify again.
+	//
+	// The environment overrides the pinned name (checked: `config` reports
+	// the override), so the commands stay verbatim and OPS-005 still finds
+	// every one of them in the README. Only the namespace they act in
+	// changes, and it moves under this harness's own `innsegl-smoke` prefix,
+	// beside the containers it already names that way.
+	env := append(os.Environ(), "COMPOSE_PROJECT_NAME="+smokeComposeProject)
 	if s.rekorPort != "" {
-		cmd.Env = append(os.Environ(), "INNSEGL_REKOR_PORT="+s.rekorPort)
+		env = append(env, "INNSEGL_REKOR_PORT="+s.rekorPort)
 	}
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("sh: %w", err)
