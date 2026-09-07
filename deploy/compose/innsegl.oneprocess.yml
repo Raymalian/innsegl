@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Run the sealer and the reconciler inside the MCP process.
+#
+# WHY THIS EXISTS. `docker inspect` reports that four of doc 05 §1's services
+# are one image run four ways — `innsegl:local` as serve, api, seal and
+# reconcile. They are four containers because this compose file starts them
+# four times, not because they need to be four processes.
+#
+#   docker inspect innsegl-mcp        innsegl:local :: serve
+#   docker inspect innsegl-api        innsegl:local :: api
+#   docker inspect innsegl-sealer     innsegl:local :: seal
+#   docker inspect innsegl-reconciler innsegl:local :: reconcile
+#
+# USE IT
+#
+#   docker compose -f deploy/compose/innsegl.yml \
+#                  -f deploy/compose/innsegl.oneprocess.yml up -d
+#
+# or `make innsegl-up ONEPROCESS=1`.
+#
+# WHY ONLY TWO OF THE THREE. `seal` and `reconcile` are background loops with
+# no inbound port, so moving them changes nothing any other service can see.
+# `api` listens on 8082 and the dashboard's nginx is configured to reach it at
+# `innsegl-api`, so folding it in needs that upstream changed too — a separate
+# step, and one worth doing on its own rather than hidden in this file.
+#
+# WHAT YOU GIVE UP. Three things, and none of them is theoretical:
+#
+#   - One log stream instead of three. `docker logs innsegl-sealer` stops being
+#     a thing; it is all in `docker logs innsegl-mcp`, tagged by subcommand.
+#   - One restart instead of three. A companion that stops takes the process
+#     down deliberately (see serve.go) — a replica that served every tool and
+#     sealed nothing would be worse, but it does mean a sealer fault now
+#     restarts the MCP.
+#   - No independent scaling. doc 05 §2 contemplates N replicas of the MCP; a
+#     deployment doing that must NOT use this file, or it runs N sealers.
+#
+# For a single-machine deployment none of that costs anything. For the topology
+# doc 05 §2 describes, all three matter. That is why this is an override file
+# and not the default.
+
+services:
+  innsegl-mcp:
+    # The sealer reaches MinIO and the MCP did not, because until now it never
+    # needed to. Measured rather than assumed — `docker compose config` reports
+    # innsegl-sealer on innsegl-objects and innsegl-mcp not.
+    networks:
+      innsegl-ledger:
+      innsegl-mcp-clients:
+      innsegl-sigstore:
+      innsegl-spire-admin:
+      innsegl-objects:
+    environment:
+      # Subcommand names, not container names. `innsegl serve` refuses a name
+      # it does not recognise at parse time rather than starting cleanly and
+      # silently never running it.
+      INNSEGL_MCP_ALSO: seal,reconcile
+
+      # A companion reads the same environment this process was given, so the
+      # MCP now needs everything all three subcommands read. The first run
+      # without these failed honestly and immediately:
+      #
+      #   innsegl seal: -endpoint (or $INNSEGL_OBJECT_STORE_ENDPOINT) is required
+      #   a companion subcommand stopped; this replica cannot do its whole job
+      #
+      # which is the behaviour serve.go chose deliberately — a replica that
+      # served every tool and sealed nothing would be worse than one that stops.
+      #
+      # These are the sealer's, copied from its own service block. They are
+      # duplicated rather than shared through a YAML anchor because an anchor
+      # cannot cross files, and a value that drifts between the two is a
+      # deployment whose sealer writes to a different bucket than its operator
+      # thinks.
+      INNSEGL_OBJECT_STORE_ENDPOINT: minio:9000
+      INNSEGL_OBJECT_STORE_BUCKET: innsegl-segments
+      INNSEGL_OBJECT_STORE_PREFIX: segments/
+      INNSEGL_OBJECT_STORE_ACCESS_KEY: ${INNSEGL_OBJECT_STORE_ACCESS_KEY:-innsegl}
+      INNSEGL_OBJECT_STORE_SECRET_KEY: ${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}
+      INNSEGL_OBJECT_STORE_TLS: "false"
+      INNSEGL_OBJECT_STORE_RETENTION_MODE: COMPLIANCE
+      INNSEGL_SEAL_INTERVAL: 1m
+
+      # And the reconciler's.
+      INNSEGL_RECONCILE_INTERVAL: 1m
+      INNSEGL_RECONCILE_EXPIRE_AFTER: 10m
+
+  # Compose has no way to remove a service an included file defines, so these
+  # are scaled to zero instead. `docker compose ps` still lists them, with no
+  # container behind them, which is the honest picture: the service is defined
+  # and nothing is running it here.
+  innsegl-sealer:
+    deploy:
+      replicas: 0
+
+  innsegl-reconciler:
+    deploy:
+      replicas: 0

@@ -222,6 +222,11 @@ innsegl-up: sigstore-up
 REPO_PATH ?= $(shell git rev-parse --show-toplevel)
 REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
 
+# ONEPROCESS=1 folds the sealer and the reconciler into the MCP process, which
+# is two fewer containers for two background loops that were already the same
+# binary. deploy/compose/innsegl.oneprocess.yml says what that costs.
+ONEPROCESS_FILE = $(if $(ONEPROCESS),-f deploy/compose/innsegl.oneprocess.yml,)
+
 ## innsegl-up-here: bring the stack up signing in this working tree, not a copy
 innsegl-up-here: sigstore-up
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
@@ -231,7 +236,7 @@ innsegl-up-here: sigstore-up
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REPO_PATH='$(REPO_PATH)' INNSEGL_REPO_ID='$(REPO)' \
-	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml up -d
+	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml $(ONEPROCESS_FILE) up -d
 
 ## innsegl-verify: ask the server what the MCP's database credential can do
 #
