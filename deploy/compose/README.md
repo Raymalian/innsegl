@@ -256,6 +256,40 @@ harnesses take up to eight each, so a machine running both may need
 
 ---
 
+## Do not put this on the internet
+
+Nothing here is published beyond loopback, and that is doing more work than it
+looks like.
+
+**The query API has no authentication** (#174). It answers every caller, and it
+is safe today only because it publishes no host port — the dashboard reaches it
+over the compose network and nothing else can.
+
+Publish it, or put the dashboard on a public address, and the whole ledger is
+world-readable: `agent_type` and `task_ref` in clear, every run's timeline,
+every payload digest, every repository signed in and when.
+
+**Pseudonymisation does not cover this, and it is easy to assume it does.**
+ADR-0041 protects the identity that reaches the *public log* —
+`cb590b02/e7cbb3a9` rather than `orchestrator/RM-101`. The ledger is where
+those pseudonyms are resolved, and resolving them is what the API is for.
+
+| | publishes | safe to expose |
+|---|---|---|
+| Rekor | pseudonyms | yes — ADR-0042 rests on it |
+| this API | the resolution | **no** |
+
+If you need it reachable, **put your own authenticating proxy in front**. This
+project ships no token check on purpose: an authentication mechanism nobody has
+threat-modelled looks like a control and is not one, and stating plainly what
+the software does is worth more than a header comparison.
+
+The public verification page (#69) is different and is fine to expose — it
+serves only what Rekor already made public, which doc 04 §2 says in as many
+words.
+
+---
+
 ## How much of it you actually have to run
 
 Fourteen containers is the full stack. It is not the floor, and the difference

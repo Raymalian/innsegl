@@ -888,6 +888,29 @@ services:
   # the same volume the same way. A read-only mount is not the control — the
   # database role is — but a BFF that could write into the tree it verifies
   # would be answering questions about its own output.
+  #
+  # THIS API HAS NO AUTHENTICATION, AND MUST NOT BE PUBLISHED DIRECTLY (#174).
+  #
+  # It answers every caller. That is safe here only because it publishes no
+  # host port: the dashboard reaches it over this network and nothing else can.
+  # Publish 8082, or put the dashboard on a public address, and the whole
+  # ledger is world-readable -- agent_type and task_ref IN CLEAR, every run's
+  # timeline, every payload digest, every repository signed in and when.
+  #
+  # ADR-0041's pseudonymisation does not help here and it is easy to think it
+  # does. It protects the SPIFFE ID that reaches the PUBLIC LOG --
+  # `cb590b02/e7cbb3a9` rather than `orchestrator/RM-101`. The ledger is where
+  # those pseudonyms are RESOLVED, and resolving them is what this API is for.
+  # The two surfaces have opposite properties:
+  #
+  #   Rekor    publishes pseudonyms      safe to expose (ADR-0042)
+  #   this     publishes the resolution  not
+  #
+  # If you need it reachable from elsewhere, put your own authenticating proxy
+  # in front of it. This project deliberately ships no token check: an
+  # authentication mechanism nobody has threat-modelled looks like a control
+  # and is not one, and saying plainly what the software does is worth more
+  # than a header comparison.
   # --------------------------------------------------------------------------
   innsegl-api:
     <<: *innsegl-build
