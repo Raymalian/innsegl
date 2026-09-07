@@ -16,6 +16,7 @@ around.
 | [`index-rebuild.md`](index-rebuild.md) | Rebuilding the Postgres hot tier from a backup, and adjudicating the result against the sealed segments and their Rekor anchors. Doc 05 §2's required deliverable. |
 | [`backup-ledger.md`](backup-ledger.md) | Taking that backup in the first place, checked against the sealed segments before it is called good rather than only when it is restored. Issue #160 (RM-099)'s deliverable. |
 | [`trust-domain-re-rooting.md`](trust-domain-re-rooting.md) | Recovery from a trust-domain root compromise (threat model A1). What is recoverable, what is not, and what an operator must not pretend. Doc 04 §5.1's required deliverable. |
+| [`object-store-worm.md`](object-store-worm.md) | What a green `innsegl canary` proves about the object store, and the door it cannot see. Measured against SeaweedFS on 2026-09-06: S3 refused the deletion twice, the Filer performed it with one unauthenticated `curl`. |
 | [`verify-rebuilt-index.sh`](verify-rebuilt-index.sh) | The executable check `index-rebuild.md` §6 runs: does the index you just rebuilt hold the event hashes the segments sealed? |
 | [`verify-rebuilt-index-selftest.sh`](verify-rebuilt-index-selftest.sh) | The gate, watched failing. Twenty-two cases: green on good material, red on each defect, and the Merkle derivation pinned against the constants the Go sealer commits. |
 
