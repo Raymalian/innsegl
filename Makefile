@@ -310,6 +310,46 @@ INNSEGL_BACKUP_DIR ?= backups
 innsegl-backup:
 	INNSEGL_BACKUP_DIR='$(INNSEGL_BACKUP_DIR)' scripts/backup-ledger.sh --out '$(INNSEGL_BACKUP_DIR)'
 
+# ---------------------------------------------------------------------------
+# The merge gate for agent-signed commits (#173, RM-108).
+#
+# Until this existed, `innsegl verify` was a command nobody ran: agents signed
+# commits, Rekor logged them, and no merge path checked one. The decision on
+# #173 is that main does not have to carry signatures -- squash-merge detaches
+# them, and that is accepted -- because verification happens HERE, before the
+# merge, while the deployment that issued the identity is still reachable.
+#
+# It runs locally and not in CI on purpose: commits signed by a local
+# deployment are logged in that deployment's Rekor, which a GitHub runner
+# cannot reach. A gate that returned "inconclusive" on every commit forever
+# would be an absent gate that looks present.
+#
+# Exit statuses are cmd/innsegl/verify.go's: 3 an attribution claim does not
+# hold, 4 Fulcio or Rekor unreachable so nothing was proved either way. 4 fails
+# the gate too -- doc 06 P2 and AB-08 forbid reading "could not check" as
+# "checked" -- and the remedy is `make innsegl-up` and run it again.
+# ---------------------------------------------------------------------------
+
+# The compose default, so the two targets below resolve to a real URL when
+# nothing is exported. Without it $(INNSEGL_REKOR_PORT) is empty, the URL is
+# `http://127.0.0.1:` and the gate returns 4 for a reason that has nothing to
+# do with the commits -- honest, since 4 is inconclusive rather than green, but
+# a poor thing to hand someone running this for the first time. Override it the
+# same way the runbook does when 3000 is taken.
+INNSEGL_REKOR_PORT ?= 3000
+
+## verify-branch: verify every agent-signed commit on this branch before merging
+verify-branch:
+	INNSEGL_FULCIO_URL='$(or $(INNSEGL_FULCIO_URL),http://127.0.0.1:5555)' \
+	  INNSEGL_REKOR_URL='$(or $(INNSEGL_REKOR_URL),http://127.0.0.1:$(INNSEGL_REKOR_PORT))' \
+	  scripts/verify-branch.sh $(BASE)
+
+## verify-branch-selftest: the gate, watched failing -- green, forged, unreachable
+verify-branch-selftest:
+	INNSEGL_FULCIO_URL='$(or $(INNSEGL_FULCIO_URL),http://127.0.0.1:5555)' \
+	  INNSEGL_REKOR_URL='$(or $(INNSEGL_REKOR_URL),http://127.0.0.1:$(INNSEGL_REKOR_PORT))' \
+	  scripts/verify-branch-selftest.sh
+
 ## clean: remove build and coverage artefacts
 clean:
 	rm -f $(BINARY) $(COVERPROFILE)
