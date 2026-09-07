@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -76,6 +77,12 @@ type runningServer struct {
 	mcpLn     net.Listener
 	healthLn  net.Listener
 
+	// admin and adminLn are #170's identity-lifecycle listener. Both nil when
+	// -admin-listen is unset, which is the single-listener shape every
+	// deployment had before it.
+	admin   *http.Server
+	adminLn net.Listener
+
 	server          *mcp.Server
 	shutdownTimeout time.Duration
 
@@ -98,7 +105,24 @@ func (s *runningServer) MissingTools() []mcp.ToolName { return s.server.MissingT
 // only signal it has for taking the replica out of rotation, which turns one
 // failure into an outage nobody is told about.
 func (s *runningServer) Serve(ctx context.Context) error {
-	failed := make(chan error, 2)
+	type listening struct {
+		name string
+		srv  *http.Server
+		ln   net.Listener
+	}
+	running := []listening{
+		{"the MCP transport", s.transport, s.mcpLn},
+		{"the health endpoint", s.health, s.healthLn},
+	}
+	if s.admin != nil {
+		// #170's listener is watched on the same terms as the other two. A
+		// deployment that split the surface and then silently lost the half
+		// that issues identities would look healthy while nothing could
+		// register a run.
+		running = append(running, listening{"the identity-lifecycle listener", s.admin, s.adminLn})
+	}
+
+	failed := make(chan error, len(running))
 	serveOne := func(srv *http.Server, ln net.Listener) {
 		err := srv.Serve(ln)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -106,8 +130,9 @@ func (s *runningServer) Serve(ctx context.Context) error {
 		}
 		failed <- err
 	}
-	go serveOne(s.transport, s.mcpLn)
-	go serveOne(s.health, s.healthLn)
+	for _, l := range running {
+		go serveOne(l.srv, l.ln)
+	}
 
 	var (
 		first    error
@@ -125,14 +150,13 @@ func (s *runningServer) Serve(ctx context.Context) error {
 	// cancelled by the time we get here on the ordinary path.
 	shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.shutdownTimeout)
 	defer cancel()
-	if err := s.transport.Shutdown(shutCtx); err != nil {
-		s.log.warn("the MCP transport did not drain within the shutdown bound", "err", err)
-	}
-	if err := s.health.Shutdown(shutCtx); err != nil {
-		s.log.warn("the health endpoint did not drain within the shutdown bound", "err", err)
+	for _, l := range running {
+		if err := l.srv.Shutdown(shutCtx); err != nil {
+			s.log.warn(l.name+" did not drain within the shutdown bound", "err", err)
+		}
 	}
 
-	for ; received < 2; received++ {
+	for ; received < len(running); received++ {
 		if err := <-failed; err != nil && first == nil {
 			first = err
 		}
@@ -383,13 +407,41 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 	}
 
 	// ---- the transport ----------------------------------------------------
+	//
+	// #170: with -admin-listen set, this process serves two surfaces. The main
+	// listener gets the three tools that need a run_id that already exists;
+	// the identity lifecycle — register_agent, retire_agent — moves to a
+	// listener the model's MCP client is never pointed at, so a caller doing
+	// the work can use an identity it was given and cannot mint one.
+	//
+	// Unset, one listener serves all five, exactly as before. The split is
+	// opt-in because turning it on without also arranging for something to do
+	// the registering leaves nothing able to register at all.
+	mainTools := []mcp.ToolName(nil)
+	if o.adminListen != "" {
+		mainTools = mcp.AgentTools()
+	}
 	server, err := mcp.New(mcp.Config{
 		Logger:         log.logger,
 		TrustedOrigins: o.trustedOrigins,
 		SessionTimeout: o.sessionTimeout,
+		Tools:          mainTools,
 	})
 	if err != nil {
 		return fail("build the MCP server: %w", err)
+	}
+
+	var adminServer *mcp.Server
+	if o.adminListen != "" {
+		adminServer, err = mcp.New(mcp.Config{
+			Logger:         log.logger,
+			TrustedOrigins: o.trustedOrigins,
+			SessionTimeout: o.sessionTimeout,
+			Tools:          mcp.AdminTools(),
+		})
+		if err != nil {
+			return fail("build the identity-lifecycle server: %w", err)
+		}
 	}
 
 	// ---- health -----------------------------------------------------------
@@ -421,7 +473,29 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 	}
 	closers = append(closers, func() { _ = healthLn.Close() })
 
+	var (
+		adminLn        net.Listener
+		adminTransport *http.Server
+	)
+	if adminServer != nil {
+		adminLn, err = lc.Listen(boot, "tcp", o.adminListen)
+		if err != nil {
+			return fail("listen on %s for the identity lifecycle: %w", o.adminListen, err)
+		}
+		closers = append(closers, func() { _ = adminLn.Close() })
+		adminTransport = &http.Server{
+			Handler:           adminServer.Handler(),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		log.warn("the identity lifecycle is on a separate listener: " +
+			strings.Join(toolStrings(mcp.AdminTools()), ", ") + " are served on " +
+			adminLn.Addr().String() + " and NOT on the MCP transport. A client pointed only at " +
+			"the transport cannot register or retire a run (#170).")
+	}
+
 	return &runningServer{
+		admin:   adminTransport,
+		adminLn: adminLn,
 		transport: &http.Server{
 			Handler: server.Handler(),
 			// IP §6.3 forbids indefinite hangs. These bound the TRANSPORT;
@@ -442,6 +516,15 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		closers:         closers,
 		log:             log,
 	}, nil
+}
+
+// toolStrings renders tool names for an operator-facing line.
+func toolStrings(names []mcp.ToolName) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = string(n)
+	}
+	return out
 }
 
 // configureSignCommit installs the fifth tool.

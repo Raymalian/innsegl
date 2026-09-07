@@ -503,6 +503,15 @@ services:
 
       INNSEGL_MCP_LISTEN: 0.0.0.0:8080
       INNSEGL_MCP_HEALTH_LISTEN: 0.0.0.0:8081
+      # #170. Empty serves all five tools on 8080, which is what every
+      # deployment did before it and what this one still does by default.
+      #
+      # Set it to 0.0.0.0:8090 and register_agent and retire_agent move to that
+      # listener, leaving 8080 the three tools that need a run_id someone else
+      # issued. Do NOT turn this on until something is arranged to do the
+      # registering — a harness hook (#171), or an operator — because with the
+      # split on and nothing registering, no run can be created at all.
+      INNSEGL_MCP_ADMIN_LISTEN: ${INNSEGL_MCP_ADMIN_LISTEN:-}
 
       # The PATH to this deployment's secret, not the secret. See the anchor.
       # `-identity-mode` is left at its default, `pseudonymous`: the SPIFFE ID,
@@ -548,6 +557,23 @@ services:
       # measured and fixed on the test side.
       - "127.0.0.1:${INNSEGL_MCP_PORT:-28080}:8080"
       - "127.0.0.1:${INNSEGL_MCP_HEALTH_PORT:-28081}:8081"
+      # #170's identity lifecycle. Published only when INNSEGL_MCP_ADMIN_LISTEN
+      # is set on the service below; the mapping is harmless when it is not,
+      # because nothing is listening on 8090 in that case.
+      #
+      # WHAT THIS SEPARATION IS, AND WHAT IT IS NOT. It closes the leak for a
+      # client that speaks only to the address it was configured with: an MCP
+      # client pointed at 28080 has no register_agent to call, so the model
+      # driving it cannot mint an identity for itself.
+      #
+      # It does NOT constrain a model holding a shell on this host. Loopback is
+      # reachable from anything running here, so a model that decides to curl
+      # 28090 will reach it. On a single-user laptop this is a convention with
+      # a mechanism behind it, not a boundary. It becomes a boundary when the
+      # model and the harness are on different hosts — which is the deployment
+      # #68 contemplates, and the reason this is worth wiring now rather than
+      # after.
+      - "127.0.0.1:${INNSEGL_MCP_ADMIN_PORT:-28090}:8090"
     healthcheck:
       # /readyz and not a TCP dial: ADR-0024's rule, that a readiness probe
       # must fetch something it can parse. An unexamined 200 passes against any

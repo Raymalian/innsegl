@@ -78,6 +78,7 @@ const (
 	envFulcioURL             = "INNSEGL_FULCIO_URL"
 	envRekorURL              = "INNSEGL_REKOR_URL"
 	envMCPListen             = "INNSEGL_MCP_LISTEN"
+	envMCPAdminListen        = "INNSEGL_MCP_ADMIN_LISTEN"
 	envMCPHealthListen       = "INNSEGL_MCP_HEALTH_LISTEN"
 	envMCPAddrFile           = "INNSEGL_MCP_ADDR_FILE"
 	envRunTTL                = "INNSEGL_RUN_TTL"
@@ -166,6 +167,7 @@ type serveOptions struct {
 	gitsignPath         string
 
 	listen       string
+	adminListen  string
 	healthListen string
 	addrFile     string
 
@@ -457,6 +459,10 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 			"the gitsign binary. Empty is a PATH lookup ($"+envGitsignPath+")")
 		listen = fs.String("listen", envOr(envMCPListen, defaultMCPListen),
 			"address the MCP transport listens on ($"+envMCPListen+")")
+		adminListen = fs.String("admin-listen", os.Getenv(envMCPAdminListen),
+			"address the identity lifecycle listens on. Empty serves all five tools on -listen, "+
+				"as before #170. Set it and register_agent and retire_agent move here, leaving "+
+				"-listen the three tools that need a run_id that already exists ($"+envMCPAdminListen+")")
 		healthListen = fs.String("health-listen", envOr(envMCPHealthListen, defaultHealthListen),
 			"address "+mcp.LivePath+" and "+mcp.ReadyPath+" listen on ($"+envMCPHealthListen+")")
 		addrFile = fs.String("addr-file", os.Getenv(envMCPAddrFile),
@@ -543,7 +549,8 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		signAuthorOperators: splitOrigins(*signAuthorOperators),
 		signAllowUnlinked:   *signAllowUnlinked,
 		gitsignPath:         *gitsignPath,
-		listen:              *listen, healthListen: *healthListen, addrFile: *addrFile,
+		listen:              *listen, adminListen: *adminListen,
+		healthListen: *healthListen, addrFile: *addrFile,
 		spireTimeout: *spireTimeout, runTTL: *runTTL, lease: *lease,
 		rateCalls: *rateCalls, rateWindow: *rateWindow,
 		clockSkewBound: *clockSkewBound, trustedOrigins: splitOrigins(*trustedOrigins),
