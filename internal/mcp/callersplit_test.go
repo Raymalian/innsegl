@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -169,5 +170,53 @@ func TestMCP027AnUnsetToolSetStillServesAllFive(t *testing.T) {
 	}
 	if !equalToolNames(srv.BoundTools(), ToolNames()) {
 		t.Errorf("BoundTools() = %v, want all five %v", srv.BoundTools(), ToolNames())
+	}
+}
+
+// TestMCP028AnUnknownToolNameIsRefused (proposed for doc 07; doc 07 is not
+// modified here).
+//
+// The branch-coverage gate found this hole rather than a reviewer: two
+// conditions in the construction path had never once been true.
+//
+//	internal/mcp/server.go:114:5: "err != nil" was 126 times false but never true
+//	internal/mcp/server.go:162:6: "!name.Valid()" was 7 times false but never true
+//
+// Both are the same case, and it is the one a deployment actually hits. A tool
+// list is written by hand into a compose file. `sign_commmit` with three m's is
+// a plausible typo, and if it were dropped instead of refused the server would
+// start, advertise four tools, and look EXACTLY like a deliberate #170 split.
+// The operator would find out when an agent could not sign.
+//
+// So the name is checked at construction and the server refuses to exist. The
+// message names the offending value and the five it could have been, because a
+// typo is only obvious once you can see both.
+func TestMCP028AnUnknownToolNameIsRefused(t *testing.T) {
+	withEmptyToolRegistry(t)
+	for _, n := range ToolNames() {
+		name := n
+		RegisterTool(name, func(s *Server) error {
+			return Bind(s, &sdk.Tool{Name: string(name), Description: "probe"}, probeHandler(name))
+		})
+	}
+
+	for _, bad := range []ToolName{
+		"sign_commmit",   // the typo
+		"",               // an empty entry from a trailing comma
+		"REGISTER_AGENT", // the right name, wrong case
+		"tools/list",     // a protocol method mistaken for a tool
+	} {
+		srv, err := New(Config{Version: "v0.0.0-test", Tools: []ToolName{ToolSignCommit, bad}})
+		if err == nil {
+			t.Errorf("New(Tools=[sign_commit %q]) succeeded; an unknown name must not be dropped, "+
+				"because a server missing one tool is indistinguishable from a deliberate split", bad)
+			continue
+		}
+		if srv != nil {
+			t.Errorf("New(Tools=[sign_commit %q]) returned both a server and an error", bad)
+		}
+		if !strings.Contains(err.Error(), string(bad)) && bad != "" {
+			t.Errorf("New(Tools=[sign_commit %q]) said %q, which does not name the offending value", bad, err)
+		}
 	}
 }

@@ -681,7 +681,10 @@ func (c *campaign) writeAdminPEMs(t *testing.T) string {
 // ---------------------------------------------------------------------------
 
 type daemon struct {
-	cmd     *exec.Cmd
+	cmd *exec.Cmd
+	// pgid is the daemon's process group, which every process it starts
+	// inherits. Zero only if Setpgid failed. See launch.
+	pgid    int
 	addr    string
 	stderr  *lockedBuffer
 	session *sdk.ClientSession
@@ -774,10 +777,30 @@ func (c *campaign) launch(t *testing.T, args ...string) *daemon {
 		append([]string{"serve", "-addr-file", addrFile}, args...)...)
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
+	// ITS OWN PROCESS GROUP, and this is what makes an orphan findable.
+	//
+	// #95's orphan is `gitsign`, git's child and this daemon's grandchild. It
+	// survives the daemon's SIGKILL and finishes on its own time. The harness
+	// used to look for it two ways, and both have a blind spot at exactly the
+	// moment that matters: signOrphanWatch polls the descendant tree, so a
+	// process forked between two polls is never recorded; sigStaleLocks reads
+	// .git/index.lock, which does not exist until git takes it. A `gitsign`
+	// forked one millisecond before the kill is invisible to both, and then
+	// commits — after the shot has been classified as "nothing happened".
+	//
+	// Measured 2026-09-08 (seed 1788853950166792168): a blind kill at 60ms
+	// landed as "no commit_intent: before Phase A", and the replay was then
+	// refused with "nothing is staged: the index is already the tree at HEAD".
+	// The orphan had committed in between.
+	//
+	// A process group is assigned by fork, before any exec, any poll and any
+	// lock, and children inherit it. So `kill(-pgid, 0)` answers "is anything
+	// this daemon started still alive" with no window at all.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting `innsegl serve`: %v", err)
 	}
-	d := &daemon{cmd: cmd, stderr: stderr}
+	d := &daemon{cmd: cmd, stderr: stderr, pgid: cmd.Process.Pid}
 	t.Cleanup(func() { d.reap() })
 
 	deadline := time.Now().Add(60 * time.Second)
