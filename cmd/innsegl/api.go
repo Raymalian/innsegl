@@ -115,6 +115,8 @@ const (
 	envAPIDSN             = "INNSEGL_API_DSN"
 	envAPIListen          = "INNSEGL_API_LISTEN"
 	envAPIRepos           = "INNSEGL_API_REPOS"
+	envAPILogDir          = "INNSEGL_API_LOG_DIR"
+	envAPILogDays         = "INNSEGL_API_LOG_DAYS"
 	envAPIShutdownTimeout = "INNSEGL_API_SHUTDOWN_TIMEOUT"
 	envAPIUpstreamTimeout = "INNSEGL_API_UPSTREAM_TIMEOUT"
 	envAPIGit             = "INNSEGL_GIT"
@@ -155,6 +157,10 @@ type apiOptions struct {
 	rekorURL  string
 	issuer    string
 	gitPath   string
+	// logDir is the harness's local tool-call bodies, read-only. Empty means
+	// this deployment keeps none, which is a valid answer and not a fault.
+	logDir  string
+	logDays int
 
 	shutdownTimeout time.Duration
 	upstreamTimeout time.Duration
@@ -296,6 +302,12 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 				"probe finds capable of writing is refused ($"+envAPIDSN+")")
 		listen = fs.String("listen", envOr(envAPIListen, defaultAPIListen),
 			"address the query API listens on ($"+envAPIListen+")")
+		logDir = fs.String("log-dir", envOr(envAPILogDir, ""),
+			"directory of harness-written tool-call bodies, one directory per run, "+
+				"read-only; empty serves no bodies ($"+envAPILogDir+")")
+		logDays = fs.Int("log-retention-days", envIntOr(envAPILogDays, 90),
+			"how long the harness keeps those bodies, reported so a reader can tell an "+
+				"expired body from one that never existed ($"+envAPILogDays+")")
 		repos = fs.String("repos", os.Getenv(envAPIRepos),
 			"comma-separated name=path pairs naming the repositories the proof BFF answers "+
 				"about, e.g. github.com/acme/app=/srv/repos/github.com/acme/app. A commit in "+
@@ -341,6 +353,7 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		dsn: *dsn, listen: *listen, repos: parsed,
 		fulcioURL: *fulcioURL, rekorURL: *rekorURL, issuer: *issuer, gitPath: *gitPath,
 		shutdownTimeout: *shutdownTimeout, upstreamTimeout: *upstreamTimeout,
+		logDir: *logDir, logDays: *logDays,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl api: %s\n", problem)
