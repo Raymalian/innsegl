@@ -183,6 +183,71 @@ derive_task() {
 
 case "$EVENT" in
 
+  PreToolUse)
+    # PLAIN `git commit` IS REFUSED, AND THE REFUSAL IS THE INSTRUCTION.
+    #
+    # ADR-0046. Measured 2026-09-08: subagents had made 1979 recorded tool calls
+    # and signed nothing, ever. `sign_commit` was available the whole time and
+    # went unused, which is the same failure the project exists to answer, one
+    # level out -- IP §6.1 says attributed work must be impossible without an
+    # identity, NOT merely inconvenient, and an instruction in a prompt is the
+    # definition of merely inconvenient.
+    #
+    # Exit 2 on PreToolUse blocks the call and hands this stderr back to the
+    # model as the reason, so the instruction arrives at the only moment it
+    # matters. Nothing has to be pre-loaded into a subagent's prompt and nothing
+    # can be forgotten, because nothing is remembered.
+    #
+    # ASYMMETRIC, as identity is: blocking for a subagent, a warning for the
+    # operator's own session. Refusing a subagent costs nothing. Refusing the
+    # human stops them working on their own machine.
+    #
+    # AND IT FAILS OPEN. If the deployment is unreachable or the repository is
+    # not linked, this warns and allows: an agent that can neither commit nor
+    # sign is worse than an unsigned commit, and scripts/verify-branch.sh still
+    # refuses to merge what was not signed.
+    CMD="$(printf '%s' "$EVENT_JSON" | python3 -c '
+import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if d.get("tool_name") != "Bash":
+    sys.exit(0)
+print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
+
+    case "$CMD" in
+      *"git commit"*|*"git "*" commit"*) : ;;
+      *) exit 0 ;;
+    esac
+
+    # innsegl-commit.sh does not shell out to `git commit` -- sign_commit builds
+    # the object inside the MCP -- so this cannot block the signing path itself.
+    case "$CMD" in *innsegl-commit*) exit 0 ;; esac
+
+    if [ -z "$AGENT_ID" ]; then
+      echo "innsegl: this is a plain git commit. It will not carry an agent identity." >&2
+      echo "innsegl:   scripts/innsegl-commit.sh -m \"...\" signs it instead." >&2
+      exit 0
+    fi
+
+    [ -f "$RUNFILE" ] || {
+      echo "innsegl: no run for this agent, so signing is not available; allowing." >&2
+      exit 0
+    }
+
+    echo "innsegl: refused. Use scripts/innsegl-commit.sh, not git commit." >&2
+    echo "innsegl:" >&2
+    echo "innsegl:   git add -A" >&2
+    echo "innsegl:   scripts/innsegl-commit.sh -m \"<type>(<scope>): <what changed>\"" >&2
+    echo "innsegl:" >&2
+    echo "innsegl: It stages exactly what you staged, signs the commit under this" >&2
+    echo "innsegl: run's identity, and logs it in Rekor. A plain git commit produces" >&2
+    echo "innsegl: work nobody can attribute, which is the one thing this" >&2
+    echo "innsegl: deployment exists to prevent (IP §6.1)." >&2
+    exit 2
+    ;;
+
   SessionStart)
     # THE OPERATOR'S OWN SESSION, which had no identity at all until now.
     #
@@ -214,6 +279,26 @@ case "$EVENT" in
 
     printf '%s\n' "$RUN_ID" > "$SESSIONFILE"
     echo "innsegl: this session is $RUN_ID (task $TASK)" >&2
+
+    # AND LINK THE REPOSITORY, so signing is possible here at all.
+    #
+    # ADR-0046 mechanism 1. sign_commit resolves a repository beneath the MCP's
+    # workspace volume, and a repository that was never linked is simply not
+    # there -- so an agent that WANTED to sign could not, which is half the
+    # reason 1979 tool calls produced no signatures. The link is a symlink and
+    # needs no restart, so doing it here costs a fraction of a second and
+    # removes the setup step entirely.
+    #
+    # Best-effort: a failure here is not a reason to fail the session. The
+    # PreToolUse gate fails open for exactly this case.
+    if [ -n "$MAIN" ] && [ -d "$MAIN" ]; then
+      ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)"
+      if [ -f "$ROOT/Makefile" ]; then
+        make -C "$ROOT" --no-print-directory innsegl-link DIR="$MAIN" >/dev/null 2>&1 \
+          && echo "innsegl: $MAIN is signable" >&2 \
+          || echo "innsegl: could not link $MAIN; signing here will not work yet" >&2
+      fi
+    fi
     exit 0
     ;;
 
