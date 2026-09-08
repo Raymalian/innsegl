@@ -14,15 +14,17 @@ nothing else does. A run that registers, does work and retires without signing
 has no repository anywhere in the ledger. Measured 2026-09-08:
 
 ```
-task_ref        agent_type        runs  last seen
-stilla-main     general-purpose      1  2026-09-08 07:28:27
-helmwart-main   general-purpose      1  2026-09-08 07:28:27
-main            general-purpose     14  2026-09-08 07:27:58
+task_ref          agent_type        runs  last seen
+<repo-a>-main     general-purpose      1  2026-09-08 07:28:27
+<repo-b>-main     general-purpose      1  2026-09-08 07:28:27
+main              general-purpose     14  2026-09-08 07:27:58
 ```
 
-Fourteen runs called `main`. Two more that name a repository only because the
-harness hook squeezes it into `task_ref` as a hyphenated prefix. The operator's
-words: "jeg ser Still-main, og issue er stilla er ikke kjørt engang".
+Fourteen runs called `main`, from more than one project, indistinguishable from
+each other. Two more that name a repository at all only because the harness hook
+squeezes it into `task_ref` as a hyphenated prefix — and the operator's reaction
+to those two was that one of them named a project they had not been working in,
+which the label cannot confirm or deny.
 
 **Which branch?** Nowhere, except inside that same squeezed string. `task_ref`
 is one field with an invented grammar — `<repo>-<branch>` — which is ambiguous

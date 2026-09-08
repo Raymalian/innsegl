@@ -314,8 +314,8 @@ innsegl-up-here: sigstore-up
 # recreated to add one.
 #
 # The identifier is read from that repository's own `origin` rather than from
-# its directory name, because on this machine two do not match: `helmward` is
-# `helmwart` and `Tessera` is `oktarays`.
+# its directory name, because a clone's directory may be named anything and on
+# a real machine several of them do not match.
 # ---------------------------------------------------------------------------
 
 # ===========================================================================

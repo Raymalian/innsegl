@@ -13,7 +13,7 @@
 # that repository to — `internal/mcp.Workspace.Worktree` is
 # `filepath.Join(root, repo)` with root `/work`. Nothing in the Go changes.
 #
-#   /work/github.com/KodyMike/Stilla  ->  /projects/Stilla
+#   /work/github.com/<org>/<name>  ->  /projects/<directory>
 #
 # WHY SYMLINKS AND NOT A MOUNT PER REPOSITORY. A mount per repository needs the
 # container recreated to add one. A symlink does not, so a project becomes
@@ -22,14 +22,14 @@
 # WHY NOT MOUNT THE PARENT AT /work/github.com/<org>. Measured against this
 # machine, and it is why the obvious shortcut is not here: projects live under
 # TWO orgs (`KodyMike` and `Raymalian`), and two directory names do not match
-# their repositories — `helmward` is `helmwart`, `Tessera` is `oktarays`. A
-# parent mount assumes one org and matching names, and silently resolves the
-# wrong thing when either is false.
+# their repositories, because a clone may be named anything. A parent mount
+# assumes one org and matching names, and silently resolves the wrong thing
+# when either is false.
 #
 # USE IT
 #
 #   make innsegl-up-here                       brings the stack up with this file
-#   make innsegl-link DIR=~/Applications/Stilla    make one project signable
+#   make innsegl-link DIR=~/Applications/<project>  make one project signable
 #   make innsegl-link DIR=.                        the one you are standing in
 #
 # The link target is read from that repository's own `origin`, so a fork or a

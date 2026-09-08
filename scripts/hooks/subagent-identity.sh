@@ -163,7 +163,7 @@ derive_task() {
   [ -n "$TASK" ] || TASK="unnamed"
 
   # Prefix the repository, because without it the ledger cannot answer "what
-  # did agents do in helmward today".
+  # did agents do in that other project today".
   #
   # A run_registered event carries agent_type and task_ref and NOTHING about
   # the repository -- the repo is only recorded when a run signs a commit,
@@ -173,8 +173,8 @@ derive_task() {
   #
   # doc 02 §3's fields are a protected surface, so adding a repo field to
   # run_registered would be a major version. The repository name goes into
-  # the task_id instead, which is a field that already exists -- helmwart-main
-  # rather than main.
+  # the task_id instead, which is a field that already exists --
+  # `<repo>-<branch>` rather than a bare `main`.
   REPONAME="$(git -C "$MAIN" remote get-url origin 2>/dev/null \
     | sed -e 's|.*[/:]||' -e 's|\.git$||' | tr 'A-Z' 'a-z' \
     | sed -e 's/[^a-z0-9-]/-/g' -e 's/^[^a-z0-9]*//' -e 's/-*$//')"
