@@ -19,7 +19,7 @@
 #
 # or `make innsegl-up ONEPROCESS=1`.
 #
-# WHY ONLY TWO OF THE THREE. `seal` and `reconcile` are background loops with
+# WHY NOT `api` TOO. `seal`, `reconcile` and `reap` are background loops with
 # no inbound port, so moving them changes nothing any other service can see.
 # `api` listens on 8082 and the dashboard's nginx is configured to reach it at
 # `innsegl-api`, so folding it in needs that upstream changed too — a separate
@@ -27,9 +27,9 @@
 #
 # WHAT YOU GIVE UP. Three things, and none of them is theoretical:
 #
-#   - One log stream instead of three. `docker logs innsegl-sealer` stops being
+#   - One log stream instead of four. `docker logs innsegl-sealer` stops being
 #     a thing; it is all in `docker logs innsegl-mcp`, tagged by subcommand.
-#   - One restart instead of three. A companion that stops takes the process
+#   - One restart instead of four. A companion that stops takes the process
 #     down deliberately (see serve.go) — a replica that served every tool and
 #     sealed nothing would be worse, but it does mean a sealer fault now
 #     restarts the MCP.
@@ -55,7 +55,7 @@ services:
       # Subcommand names, not container names. `innsegl serve` refuses a name
       # it does not recognise at parse time rather than starting cleanly and
       # silently never running it.
-      INNSEGL_MCP_ALSO: seal,reconcile
+      INNSEGL_MCP_ALSO: seal,reconcile,reap
 
       # A companion reads the same environment this process was given, so the
       # MCP now needs everything all three subcommands read. The first run
@@ -84,6 +84,16 @@ services:
       # And the reconciler's.
       INNSEGL_RECONCILE_INTERVAL: 1m
       INNSEGL_RECONCILE_EXPIRE_AFTER: 10m
+
+      # The reaper's. It expires runs whose TTL has passed and deletes their
+      # SPIRE entries -- IP §6.7's orphaned-entry requirement.
+      #
+      # NOTHING RAN IT UNTIL NOW, and compose ships no service for it either.
+      # A subagent that dies without a clean stop leaves its run un-retired,
+      # and with no reaper that run stays Active forever and keeps collecting
+      # tool calls. Measured 2026-09-08: one open for 13 hours with 257 tool
+      # calls.
+      INNSEGL_REAP_GRACE: ${INNSEGL_REAP_GRACE:-5m}
 
   # Compose has no way to remove a service an included file defines, so these
   # are scaled to zero instead. `docker compose ps` still lists them, with no

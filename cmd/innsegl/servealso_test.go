@@ -37,6 +37,8 @@ func TestCLI011ServeAlsoAcceptsTheThreeCompanionCommands(t *testing.T) {
 		{"reconcile"},
 		{"seal", "reconcile"},
 		{"api", "seal", "reconcile"},
+		{"reap"},
+		{"seal", "reconcile", "reap"},
 	} {
 		got, err := parseAlso(joinComma(want))
 		if err != nil {

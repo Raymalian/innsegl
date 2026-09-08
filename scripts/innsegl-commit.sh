@@ -84,10 +84,18 @@ if [ "$TREE" = "$(git rev-parse HEAD^{tree} 2>/dev/null || echo none)" ]; then
   exit 1
 fi
 
-# A key that is stable for one attempt and different across attempts. Same
-# staged tree twice is the same commit and must not become two runs; a retry
-# after a failure is a new attempt and must not be answered from the first.
-KEY="commit-$(printf '%s' "$TREE$MESSAGE" | shasum -a 256 | cut -c1-32)"
+# TWO KEYS, because the two calls want opposite things and one key cannot do
+# both. This is the bug that made retrying impossible: a single key derived
+# from the content is the SAME on every attempt, so a retry after a failure
+# asked for the run the failed attempt had already retired on its way out --
+# and got RUN_ALREADY_RETIRED, forever, with no way forward but a new message.
+#
+#   RUN_KEY  is per ATTEMPT. A retry is a new attempt and deserves a live run.
+#   SIGN_KEY is per CONTENT. Signing the same staged tree twice must not
+#            produce two commits.
+CONTENT="$(printf '%s' "$TREE$MESSAGE" | shasum -a 256 | cut -c1-32)"
+RUN_KEY="run-$CONTENT-$$-$(date -u +%s)"
+SIGN_KEY="commit-$CONTENT"
 
 # ---------------------------------------------------------------------------
 # One MCP call. Session per call: this is a short-lived process with nowhere to
@@ -124,9 +132,14 @@ d=json.loads(raw)
 if "error" in d:
     print(d["error"].get("message","")[:400], file=sys.stderr); sys.exit(1)
 r=d.get("result",{})
-body=json.loads(r["content"][0]["text"])
+text=r.get("content",[{}])[0].get("text","")
+# isError FIRST. A refusal carries a plain-sentence reason, not JSON, so
+# parsing before checking crashes on the very case the reason explains -- and
+# the operator sees a Python traceback instead of what the tool said. Cost an
+# hour twice: sign_commit refused, and the refusal was invisible.
 if r.get("isError"):
-    print(str(body)[:400], file=sys.stderr); sys.exit(1)
+    print(text[:600], file=sys.stderr); sys.exit(1)
+body=json.loads(text)
 v=body
 for part in name.split("."):
     v=v[part]
@@ -137,7 +150,7 @@ fail() { echo "innsegl-commit: $*" >&2; exit 1; }
 
 # ---- 1. an identity ---------------------------------------------------------
 OUT="$(mcp "$ADMIN_URL" register_agent \
-  "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' "$AGENT_TYPE" "$TASK" "$KEY-reg")")" \
+  "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' "$AGENT_TYPE" "$TASK" "$RUN_KEY")")" \
   || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
 RUN="$(printf '%s' "$OUT" | field run_id)" || fail "register_agent refused"
 echo "innsegl-commit: run $RUN  (agent $AGENT_TYPE, task $TASK)"
@@ -155,8 +168,8 @@ import json,sys
 run,repo,tree,task,key=sys.argv[1:6]
 print(json.dumps({"run_id":run,"repo":repo,"staged_ref":tree,
                   "message":sys.stdin.read(),"task_ref":task,
-                  "idempotency_key":key+"-sign"}))' \
-  "$RUN" "$REPO" "$TREE" "$TASK" "$KEY" <<EOF
+                  "idempotency_key":key}))' \
+  "$RUN" "$REPO" "$TREE" "$TASK" "$SIGN_KEY" <<EOF
 $MESSAGE
 EOF
 )"

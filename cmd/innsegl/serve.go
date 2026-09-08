@@ -327,6 +327,14 @@ func (d serveDeps) opener() func(context.Context, serveOptions, *serveLog) (serv
 // containers because the compose file starts them separately, not because they
 // need separate processes.
 //
+// `reap` was missing from this map until 2026-09-08, and the omission had
+// teeth. A subagent that dies without a clean stop leaves its run un-retired;
+// the reaper is what expires one; and with no reaper anywhere in the
+// deployment — compose ships no service for it either — such a run stays
+// Active forever and keeps collecting tool calls. Measured: a run open for 13
+// hours with 257 tool calls, which the dashboard reported accurately and which
+// read as a display bug.
+//
 // The names here are SUBCOMMAND names and not container names, and the
 // difference is the thing parseAlso exists to catch: a deployment that asked
 // for `sealer` rather than `seal` would otherwise start cleanly and silently
@@ -336,6 +344,7 @@ var alsoCommands = map[string]func([]string, io.Writer, io.Writer) int{
 	"api":       apiCommand,
 	"seal":      sealCommand,
 	"reconcile": reconcileCommand,
+	"reap":      reapCommand,
 }
 
 // parseAlso resolves -also into a list of companion subcommands, in the order
@@ -354,7 +363,7 @@ func parseAlso(s string) ([]string, error) {
 		if _, ok := alsoCommands[name]; !ok {
 			return nil, fmt.Errorf(
 				"-also: %q is not a companion subcommand. These are subcommand names, "+
-					"not container names: api, seal, reconcile", name)
+					"not container names: api, seal, reconcile, reap", name)
 		}
 		if slices.Contains(out, name) {
 			return nil, fmt.Errorf("-also: %q named twice", name)

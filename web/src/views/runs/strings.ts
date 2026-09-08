@@ -46,7 +46,12 @@ export const strings = {
     columns: {
       runId: "Run ID",
       task: "Task",
-      repo: "Repositories",
+      /* "Signed in" and not "Repositories". The column holds the repositories
+         this run CREATED COMMITS IN, which is not the same question as which
+         project the agent belongs to — and most runs sign nothing, so
+         "Repositories: none" read as "this agent belongs nowhere". Where an
+         agent belongs is in Task, which carries the project name. */
+      repo: "Signed in",
       commits: "Commits and verification",
       status: "Status",
     },
@@ -71,7 +76,10 @@ export const strings = {
     },
 
     table: {
-      noRepos: "No repository recorded",
+      /* Says what happened rather than what is absent. "No repository
+         recorded" describes a missing field; "Signed nothing" describes the
+         run, which is what a reader is asking about. */
+      noRepos: "Signed nothing",
     },
 
     verification: {
