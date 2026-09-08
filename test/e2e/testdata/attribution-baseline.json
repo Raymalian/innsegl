@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "Commits this repository's own gates knowingly excuse, with the reason.",
+    "",
+    "An entry here is NOT a way to make a build green. It is a statement that a",
+    "specific commit already in shared history cannot be corrected, and why. Every",
+    "entry needs a date and a reason; the loader refuses one without both.",
+    "",
+    "Nothing is ever added here to unblock a change. If a NEW commit trips a gate,",
+    "the commit is wrong -- fix the commit."
+  ],
+  "excused": [
+    {
+      "commit": "4ab53d0d9833f35364edd75c547316184aa25c51",
+      "date": "2026-09-08",
+      "reason": "GitHub's squash merge rewrote an agent-signed commit. Squashing writes a NEW commit object: the Agent-Identity trailers survived because they are message text, the gitsign signature did not because it covers the object that no longer exists, and GitHub signed the replacement with its own web-flow PGP key and inserted 'Co-authored-by: Innsegl <agent@innsegl.invalid>', which ADR-0028 §5 forbids from any source. Both gates are right and the commit cannot be fixed: main is a protected branch and rewriting shared history to make a gate green teaches the wrong lesson. Squash merging was disabled on the repository the same day (ADR-0046) and GH-003 was written so the next one fails the build instead of landing."
+    }
+  ]
+}

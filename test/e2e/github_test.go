@@ -462,11 +462,22 @@ func TestGH002ThisRepositorysCommitHistorySatisfiesI6(t *testing.T) {
 		t.Logf("  %4d  %s", seen[a], censusLabel(policy, a))
 	}
 
+	// The SAME baseline GH-003 reads, and deliberately one file rather than
+	// two: a reader asking "what does this repository knowingly excuse, and
+	// why" should have one place to look, not one per gate. An entry is dated
+	// and carries a reason, and the loader refuses one without both.
+	excused := loadAttributionBaseline(t)
 	for _, f := range scanCommits(policy, commits) {
+		if reason, ok := excused[f.SHA]; ok {
+			t.Logf("  baseline  %s  %s", f.SHA[:12], reason)
+			continue
+		}
 		t.Errorf("I6 VIOLATION: %s\n"+
 			"      If this address is a human operator of this deployment, add it to %s.\n"+
-			"      It is never correct to add an agent address there (ADR-0028 §6).",
-			f, authorPolicyPath)
+			"      It is never correct to add an agent address there (ADR-0028 §6).\n"+
+			"      It is never correct to add a NEW commit to %s either: that file records\n"+
+			"      history that cannot be fixed, not changes that have not landed yet.",
+			f, authorPolicyPath, attributionBaselinePath)
 	}
 }
 
@@ -1022,3 +1033,129 @@ func pushUnlinkedCommits(ctx context.Context, t *testing.T, token, repo, branch 
 	}
 	return shas
 }
+
+// GH-003 (proposed for doc 07; doc 07 is not modified here).
+//
+// A commit that CLAIMS an agent identity must carry the signature that backs
+// the claim.
+//
+// # What this catches, measured rather than imagined
+//
+// On 2026-09-08 a correctly signed agent commit was merged with GitHub's squash
+// button. Squashing does not move a commit; it writes a NEW one. The trailers
+// survived, because they are message text. The gitsign signature did not,
+// because it covers the commit object that no longer exists. What landed on
+// `main` was `4ab53d0`, which says:
+//
+//	Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/c1c85725/run-ed343721...
+//
+// and carries a PGP signature made by GitHub's own web-flow key. GitHub renders
+// it as "Verified". The shipped verifier answers `failed` on all three checks,
+// with "the commit's signature is not PEM".
+//
+// That is worse than an unsigned commit. An unsigned commit claims nothing; this
+// one claims an agent did the work and offers a signature by somebody else.
+//
+// # Why the check is the signature's TYPE and not a full verification
+//
+// gitsign writes a PKCS#7/x509 signature, which begins `BEGIN SIGNED MESSAGE`.
+// PGP begins `BEGIN PGP SIGNATURE`. Telling them apart needs no network, no
+// Fulcio and no Rekor, so this gate is cheap enough to run on every build --
+// and it is exactly the distinction the failure mode turns on. Whether a
+// well-formed x509 signature actually verifies is the verifier's question, and
+// it is asked where the answers can be trusted: against a live log.
+//
+// ADR-0046 disabled squash merging for this reason. This is the half that does
+// not depend on which button somebody clicks.
+func TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	env := gitEnv(t.TempDir())
+	root := repoRoot(ctx, t, env)
+
+	commits, err := collect(ctx, root, env, "--no-merges", "HEAD")
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+
+	baseline := loadAttributionBaseline(t)
+	claimed, checked := 0, 0
+	for _, c := range commits {
+		if !strings.Contains(c.Message, "Agent-Identity:") {
+			continue
+		}
+		claimed++
+		if reason, excused := baseline[c.SHA]; excused {
+			t.Logf("  baseline  %s  %s", c.SHA[:12], reason)
+			continue
+		}
+		checked++
+
+		raw, err := runGit(ctx, root, env, "cat-file", "commit", c.SHA)
+		if err != nil {
+			t.Fatalf("cat-file commit %s: %v", c.SHA, err)
+		}
+		header, _, _ := strings.Cut(raw, "\n\n")
+		switch {
+		case !strings.Contains(header, "gpgsig"):
+			t.Errorf("ATTRIBUTION VIOLATION: %s claims an agent identity and carries no "+
+				"signature at all. The trailers are message text and survive a rewrite; "+
+				"the signature does not.", c.SHA[:12])
+		case !strings.Contains(header, "BEGIN SIGNED MESSAGE"):
+			t.Errorf("ATTRIBUTION VIOLATION: %s claims an agent identity and is signed by "+
+				"something that is not gitsign — its signature is not x509/PEM. A rewritten "+
+				"commit keeps the claim and loses the evidence; use a merge commit, which "+
+				"preserves the commit object the signature covers (ADR-0046).", c.SHA[:12])
+		}
+	}
+
+	t.Logf("GH-003: %d of %d commits claim an agent identity, %d checked, %d on the baseline",
+		claimed, len(commits), checked, claimed-checked)
+
+	// An absence-shaped assertion passes when it reads nothing, so prove it
+	// read something. This repository's whole point is agent-signed commits;
+	// a history with none of them means the scan is looking in the wrong place.
+	if claimed == 0 {
+		t.Fatal("no commit reachable from HEAD claims an agent identity, so this gate " +
+			"asserted nothing. Either the scan is reading the wrong range, or the " +
+			"trailer key changed and this test was not updated with it")
+	}
+}
+
+// loadAttributionBaseline reads the commits GH-003 knowingly excuses.
+//
+// A gate with an undocumented exception is a gate nobody trusts, so the file is
+// a map from full SHA to the REASON, and a commit with no reason is not on the
+// baseline. Nothing is added to it to make a build green: an entry is a
+// statement that a specific historical commit cannot be fixed, and why.
+func loadAttributionBaseline(t *testing.T) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(attributionBaselinePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]string{}
+	}
+	if err != nil {
+		t.Fatalf("reading %s: %v", attributionBaselinePath, err)
+	}
+	var file struct {
+		Excused []struct {
+			Commit string `json:"commit"`
+			Date   string `json:"date"`
+			Reason string `json:"reason"`
+		} `json:"excused"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatalf("parsing %s: %v", attributionBaselinePath, err)
+	}
+	out := map[string]string{}
+	for _, e := range file.Excused {
+		if e.Reason == "" || e.Date == "" {
+			t.Fatalf("%s: %s has no date or no reason. An exception without either is "+
+				"an exception nobody can review", attributionBaselinePath, e.Commit)
+		}
+		out[e.Commit] = e.Date + ": " + e.Reason
+	}
+	return out
+}
+
+const attributionBaselinePath = "testdata/attribution-baseline.json"
