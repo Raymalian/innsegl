@@ -79,6 +79,8 @@ type RunFilter struct {
 	Repo      string
 	AgentType string
 	Status    string
+	// Order is "asc" or "desc"; empty means newest-first.
+	Order     string
 	Search    string
 	From, To  time.Time
 	Cursor    string
@@ -223,6 +225,48 @@ SELECT run_id, spiffe_id, agent_type, task_ref, status, repos, commits,
  ORDER BY chain_position DESC
  LIMIT $8`
 
+// listRunsSQLAsc is listRunsSQL's ascending twin.
+//
+// TWO COMPLETE STATEMENTS RATHER THAN ONE WITH THE DIRECTION PASTED IN, and
+// the reason is the cursor rather than injection. Paging here is keyset:
+// `chain_position < $7` is correct for DESC and WRONG for ASC. Interpolating
+// only the ORDER BY would leave the comparison behind, and the failure is
+// silent -- page one is right, page two is empty or repeats, and nothing
+// raises an error. Keeping both statements whole means the two halves cannot
+// drift apart, and API-021 reads them to check.
+var listRunsSQLAsc = strings.Replace(
+	strings.Replace(listRunsSQL, "chain_position < $7", "chain_position > $7", 1),
+	"ORDER BY chain_position DESC", "ORDER BY chain_position ASC", 1)
+
+// The two directions the runs table sorts in. A closed set: the value reaches
+// SQL, so it is checked at the edge rather than carried as a string.
+const (
+	OrderDesc = "desc"
+	OrderAsc  = "asc"
+)
+
+// runsOrder resolves the requested direction. Empty means newest-first, which
+// is what the table did before this existed and what an unset parameter must
+// keep doing.
+func runsOrder(s string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", OrderDesc:
+		return OrderDesc, nil
+	case OrderAsc:
+		return OrderAsc, nil
+	default:
+		return "", fmt.Errorf("order %q is neither %q nor %q", s, OrderAsc, OrderDesc)
+	}
+}
+
+// runsQuery returns the statement for one direction.
+func runsQuery(order string) string {
+	if order == OrderAsc {
+		return listRunsSQLAsc
+	}
+	return listRunsSQL
+}
+
 // ListRuns serves one page of FD §3.2's runs table.
 func (s *Store) ListRuns(ctx context.Context, f RunFilter) (RunPage, error) {
 	limit := f.Limit
@@ -246,7 +290,12 @@ func (s *Store) ListRuns(ctx context.Context, f RunFilter) (RunPage, error) {
 		cursor = &n
 	}
 
-	rows, err := s.pool.Query(ctx, listRunsSQL,
+	order, err := runsOrder(f.Order)
+	if err != nil {
+		return RunPage{}, fmt.Errorf("%w: %w", ErrBadRequest, err)
+	}
+
+	rows, err := s.pool.Query(ctx, runsQuery(order),
 		nullable(f.AgentType), nullable(f.Repo), nullable(f.Status),
 		nullableTime(f.From), nullableTime(f.To), likePattern(f.Search),
 		cursor, limit)

@@ -33,6 +33,16 @@ export const strings = {
     },
 
     /* doc 06 §3.2's five columns, in its order. */
+    /* The order control. It sits on the Run ID column because that is the
+       column the ledger actually sorts by — chain position, which is
+       registration order. Labelling it "Run ID" and sorting by chain position
+       would be two different claims, so the control says what it does. */
+    order: {
+      newestFirst: "Newest first",
+      oldestFirst: "Oldest first",
+      switchToOldest: "Sort oldest first",
+      switchToNewest: "Sort newest first",
+    },
     columns: {
       runId: "Run ID",
       task: "Task",
