@@ -36,7 +36,14 @@ import { PassRateCard } from "./PassRateCard";
 import { RecentRuns } from "./RecentRuns";
 import { strings } from "./strings";
 import { cardGrid, heading, page, prose } from "./styles";
-import type { OverviewData, PassRate, RunSummary, WindowedCount } from "./types";
+import type { AlertRecord, OverviewData, PassRate, RunSummary, WindowedCount } from "./types";
+
+/** doc 06 §3.1's "drift/alert feed": how many individual alerts the page
+ * renders as their own banner before it stops naming them one by one and
+ * summarises the rest (FE-111). P3 makes this the loudest thing on the
+ * page — a banner per row past this bound would defeat "the calm state is
+ * what's left" for everything below it. */
+const MAX_ALERT_BANNERS = 10;
 
 export interface OverviewProps {
   readonly data: OverviewData;
@@ -47,6 +54,10 @@ export interface OverviewProps {
   /** Null when the runs index did not answer; an empty array when it did and
    * there are none. */
   readonly recentRuns?: readonly RunSummary[] | null;
+  /** RM-102, #167. Null (or omitted) when the alerts read did not answer —
+   * the banner falls back to `data.open_alerts`'s aggregate count rather than
+   * rendering nothing. */
+  readonly alerts?: readonly AlertRecord[] | null;
   /** A LIVE pass rate, if anything ever measures one. Nothing does. */
   readonly passRate?: PassRate;
   /** The configured anchoring-lag bound. Not served by the query API today —
@@ -64,6 +75,7 @@ export function Overview({
   data,
   runsToday,
   recentRuns = null,
+  alerts = null,
   passRate,
   lagBoundMs = DEFAULT_LAG_BOUND_MS,
   apiBase,
@@ -75,7 +87,7 @@ export function Overview({
   return (
     <div className={page}>
       {/* P3, and §3.1's "alerts pin to the top of this page". */}
-      <AlertBanner alerts={alertsOf(data.open_alerts, apiBase)} />
+      <AlertBanner alerts={alertsOf(data, alerts, apiBase)} />
 
       <StalenessIndicator />
 
@@ -131,26 +143,83 @@ export function Overview({
 }
 
 /**
- * doc 06 §4.5's banner, from the one thing the query API says about drift.
+ * doc 06 §3.1's "drift/alert feed" and §4.5's banner — RM-102, #167.
  *
- * `open_alerts` is a COUNT of `unattributed_signature_detected` and
- * `ledger_drift_detected` events, and there is no endpoint that lists them —
- * they carry no `run_id`, so the runs index does not hold them either. P1 asks
- * every alert to link to its evidence; the closest honest link is the response
- * this count came from, and the copy says in as many words that the events
- * themselves are not exposed. Reported as a gap rather than papered over with
- * a link that goes nowhere.
+ * One AlertBanner entry per OPEN alert event, newest first, each carrying the
+ * identifying fields #167 names and a link to its own evidence (P1): a drift
+ * alert whose subject is a run's own record links to that run's detail view;
+ * an unattributed alert names no run (doc 02 §3) and links to the filtered
+ * raw record instead, the closest thing to "this alert's own page" that
+ * exists without inventing a seventh view (doc 06 §3's six are fixed, and
+ * FE-016 measures the count).
+ *
+ * `alerts === null` means the richer read did not answer, and the banner
+ * falls back to `data.open_alerts`'s aggregate count (FE-111) — P2: a failed
+ * list must not make the page say less than the count it already has.
  */
-function alertsOf(openAlerts: number, apiBase: string): readonly Alert[] {
-  if (openAlerts <= 0) return [];
+function alertsOf(
+  data: OverviewData,
+  alerts: readonly AlertRecord[] | null,
+  apiBase: string,
+): readonly Alert[] {
+  if (alerts === null) {
+    if (data.open_alerts <= 0) return [];
+    return [
+      {
+        id: "open-alerts",
+        kind: "integrity",
+        title: strings.alerts.title(data.open_alerts),
+        detail: strings.alerts.detail,
+        evidenceHref: `${apiBase}/overview`,
+        evidenceLabel: strings.alerts.evidenceLabel,
+      },
+    ];
+  }
+
+  const open = alerts.filter((a) => !a.resolved);
+  if (open.length === 0) return [];
+
+  const shown = open.slice(0, MAX_ALERT_BANNERS).map((a) => alertBannerOf(a, apiBase));
+  const remaining = Math.max(data.open_alerts - shown.length, open.length - shown.length);
+  if (remaining <= 0) return shown;
+
   return [
+    ...shown,
     {
-      id: "open-alerts",
+      id: "more-open-alerts",
       kind: "integrity",
-      title: strings.alerts.title(openAlerts),
-      detail: strings.alerts.detail,
-      evidenceHref: `${apiBase}/overview`,
+      title: strings.alerts.moreTitle(remaining),
+      detail: strings.alerts.moreDetail,
+      evidenceHref: `${apiBase}/alerts`,
       evidenceLabel: strings.alerts.evidenceLabel,
     },
   ];
+}
+
+/** One alert event as one AlertBanner entry, per #167's identifying fields. */
+function alertBannerOf(alert: AlertRecord, apiBase: string): Alert {
+  if (alert.event_type === "ledger_drift_detected") {
+    return {
+      id: alert.event_id,
+      kind: "integrity",
+      title: strings.alerts.driftTitle,
+      detail: strings.alerts.driftDetail(alert.reason ?? "", alert.subject_event_id ?? ""),
+      evidenceHref: alert.run_id
+        ? routeToPath({ view: "run", runId: alert.run_id })
+        : `${apiBase}/alerts?event_type=ledger_drift_detected`,
+      evidenceLabel: alert.run_id ? strings.alerts.viewRun : strings.alerts.rawRecord,
+    };
+  }
+  return {
+    id: alert.event_id,
+    kind: "integrity",
+    title: strings.alerts.unattributedTitle,
+    detail: strings.alerts.unattributedDetail(
+      alert.certificate_identity ?? "",
+      alert.rekor_entry_uuid ?? "",
+      alert.rekor_log_index ?? 0,
+    ),
+    evidenceHref: `${apiBase}/alerts?event_type=unattributed_signature_detected`,
+    evidenceLabel: strings.alerts.rawRecord,
+  };
 }

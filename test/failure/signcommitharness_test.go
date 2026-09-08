@@ -433,22 +433,36 @@ func signStage(t *testing.T, repo, tag string) (tree string) {
 // "whoever descends from pid right now" but "whoever was ever seen to,"
 // checked the only way that still means something once the parent is dead:
 // does the pid still exist at all.
-func signAwaitLocksClear(t *testing.T, repo string, orphans []int) {
+func signAwaitLocksClear(t *testing.T, repo string, orphans []int, pgid int) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		stale := sigStaleLocks(t, repo)
 		living := alivePids(orphans)
-		if len(stale) == 0 && len(living) == 0 {
+		group := pgidAlive(pgid)
+		if len(stale) == 0 && len(living) == 0 && !group {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("git lock(s) %v in %s and/or orphaned process(es) %v did not clear within 30s; "+
-				"an orphaned gitsign process (git's grandchild, which survives the parent's SIGKILL) "+
-				"may still be running against a real Fulcio/Rekor", stale, repo, living)
+			t.Fatalf("git lock(s) %v in %s, orphaned process(es) %v and/or process group %d "+
+				"did not clear within 30s; an orphaned gitsign process (git's grandchild, "+
+				"which survives the parent's SIGKILL) may still be running against a real "+
+				"Fulcio/Rekor", stale, repo, living, pgid)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// pgidAlive reports whether ANY process is still in the group, which is the
+// only one of the three checks with no blind spot: a group is assigned at fork,
+// so a process is in it before it can be polled for or take a lock. Signal 0
+// sends nothing and only asks the kernel the question. A pgid of 0 means the
+// caller has no group to ask about — the replay path, where nothing was killed.
+func pgidAlive(pgid int) bool {
+	if pgid <= 0 {
+		return false
+	}
+	return syscall.Kill(-pgid, 0) == nil
 }
 
 // alivePids filters pids down to the ones that still exist, in the sense
@@ -736,7 +750,10 @@ func countEventsWithTree(records []event.Fields, eventType, tree string) int {
 // (signOrphanWatch) — so the caller can wait out whatever the SIGKILL
 // orphaned (signAwaitLocksClear) before it reads any state to classify the
 // shot.
-func (c *campaign) fireSign(t *testing.T, f signFlags, args map[string]any, when killWhen) (shot, []int) {
+// The third return is the SIGKILLed daemon's process group. Every process it
+// started is in it, from fork, so it is the one handle on #95's orphan that has
+// no window in which the orphan is invisible. See signAwaitLocksClear.
+func (c *campaign) fireSign(t *testing.T, f signFlags, args map[string]any, when killWhen) (shot, []int, int) {
 	t.Helper()
 	d := c.launchSign(t, f)
 	session := c.connect(t, d, d.addr)
@@ -794,7 +811,7 @@ func (c *campaign) fireSign(t *testing.T, f signFlags, args map[string]any, when
 		}
 		s.delivered = out.res.StructuredContent
 	}
-	return s, orphans
+	return s, orphans, d.pgid
 }
 
 // ---------------------------------------------------------------------------
@@ -840,7 +857,7 @@ func (c *campaign) signShot(
 	}
 
 	before := len(sigCommitObjects(t, repoDir))
-	s, orphans := c.fireSign(t, shotFlags, args, when)
+	s, orphans, pgid := c.fireSign(t, shotFlags, args, when)
 	if when.trigger != nil && !s.triggerFired {
 		t.Fatalf("%s: the state to interrupt never appeared within %s (seed %d)",
 			why, crashTriggerBudget, c.seed)
@@ -854,7 +871,7 @@ func (c *campaign) signShot(
 	// orphans, not nil: this daemon was just SIGKILLed, and whatever it may
 	// have orphaned (#95) has to be confirmed gone before the reads just
 	// below classify this shot — see signAwaitLocksClear's own comment.
-	signAwaitLocksClear(t, repoDir, orphans)
+	signAwaitLocksClear(t, repoDir, orphans, pgid)
 
 	// --- classify, from durable state ---------------------------------
 	_, hasIntent := signEventByTree(c.chain(t), event.EventTypeCommitIntent, tree)
@@ -927,7 +944,7 @@ func (c *campaign) signSuccessfulTakeover(
 	// already finished by construction — and a caller that DID time out
 	// above already failed the test via callOnce's own t.Fatalf before
 	// reaching here.
-	signAwaitLocksClear(t, repoDir, nil)
+	signAwaitLocksClear(t, repoDir, nil, 0)
 
 	c.sameReply(t, why, "two replays of one sign_commit request", first, second)
 	if claimed && rec.Status == crashCompleted {
@@ -999,7 +1016,7 @@ func (c *campaign) signRefusedTakeover(
 	// nil: this call is refused before Phase B (StagedTree's own check, IP
 	// §6.5's ordering), so this daemon orphans nothing — see
 	// signSuccessfulTakeover's identical call for the fuller reasoning.
-	signAwaitLocksClear(t, repoDir, nil)
+	signAwaitLocksClear(t, repoDir, nil, 0)
 
 	if err != nil {
 		t.Fatalf("%s: replaying into the B -> C window: transport failure %v (seed %d)", why, err, c.seed)

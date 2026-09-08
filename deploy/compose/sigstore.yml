@@ -303,6 +303,31 @@ services:
       # signature check fails. ADR-0010 made this stack the shipped default;
       # a shipped log may not forget who it is. See ADR-0028.
       - "--rekor_server.signer=/etc/rekor/log.key"
+      # WHICH TREE, and it is the other half of the problem the signer solves.
+      #
+      # ADR-0028 pinned the log's KEY so a restart could not change who the log
+      # is. Nothing pinned WHICH TREE it serves, and rekor creates a new one
+      # whenever this is 0. Measured 2026-09-08, after a `make innsegl-up-here`
+      # that recreated this container:
+      #
+      #   Trees: 764352302889562348  created 2026-09-07 09:14   7 leaves
+      #          7948105276163666382 created 2026-09-07 12:54  43 leaves
+      #          4823871246461361054 created 2026-09-08 11:41   0 leaves  <- served
+      #
+      #   GET /api/v1/log -> rootHash e3b0c442... (the empty tree), size 0
+      #
+      # Fifty entries were in the database and none of them were in the log the
+      # verifier was asking. Every proof answered "the log's entry could not be
+      # read", which reads as a verdict about the commit and is a statement
+      # about which tree this process picked at boot. NOTHING WAS DELETED --
+      # the log forgot which tree it was, three times, and each restart cost
+      # another day of history.
+      #
+      # 0 still means "create one", which is what a first boot needs. `make
+      # rekor-tlog-id` prints the id of the tree in use and writes it to
+      # deploy/compose/.rekor-tlog-id, and the innsegl-up targets pass it back
+      # in, so the pin happens once and holds.
+      - "--trillian_log_server.tlog_id=${INNSEGL_REKOR_TLOG_ID:-0}"
       - "--rekor_server.hostname=${INNSEGL_REKOR_ORIGIN:-rekor.innsegl.dev}"
       # Both off, as in RM-012's harness. Attestation storage needs a bucket
       # this stack does not have; stable checkpoints add a witness protocol

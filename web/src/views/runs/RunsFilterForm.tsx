@@ -135,6 +135,10 @@ export function RunsFilterForm({ filters }: RunsFilterFormProps) {
         // A cursor is a position in the set the OLD filters described.
         cursor: "",
         limit: filters.limit,
+        // The direction is not a filter and is carried through untouched:
+        // applying a filter while reading oldest-first must not silently flip
+        // the table back to newest-first.
+        order: filters.order,
       }),
     );
   };

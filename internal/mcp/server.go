@@ -58,6 +58,25 @@ type Config struct {
 	// SessionTimeout closes sessions idle for this long. Zero never closes
 	// them.
 	SessionTimeout time.Duration
+	// Tools is the subset of the IP §4 surface this server serves. Nil or
+	// empty serves all five, which is what every deployment before #170 did
+	// and what any deployment that does not opt in keeps doing.
+	//
+	// It exists so one process can run two listeners with different reach
+	// (#170, RM-105): the identity lifecycle — register_agent and
+	// retire_agent, which CREATE and DESTROY identities — on a listener the
+	// model's MCP client is never pointed at, and the remaining three, which
+	// can only act on a run_id that already exists, on the one it is.
+	//
+	// This narrows WHO MAY CALL a tool. It does not change what the tools are:
+	// the five names are IP §2's surface and doc 08 protects them, so a name
+	// here that is not one of the five fails New rather than being ignored.
+	//
+	// A tool withheld through this field is NOT reported by MissingTools. That
+	// field means the registered surface is incomplete, which is a defect; a
+	// tool left out here is a decision. Conflating them would make a correctly
+	// configured server report itself broken.
+	Tools []ToolName
 }
 
 // Server is the innsegl MCP server. Build one with New and serve
@@ -91,7 +110,11 @@ func New(cfg Config) (*Server, error) {
 		Logger:       cfg.Logger,
 	})
 
-	for _, name := range ToolNames() {
+	serve, err := selectedTools(cfg.Tools)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range serve {
 		bind, ok := lookupToolBinder(name)
 		if !ok {
 			s.missing = append(s.missing, name)
@@ -121,6 +144,34 @@ func New(cfg Config) (*Server, error) {
 			SessionTimeout: cfg.SessionTimeout,
 		}))
 	return s, nil
+}
+
+// selectedTools resolves Config.Tools to the surface a server serves, in IP §4
+// order so that two listeners advertise their tools in the same order the
+// single listener always did.
+//
+// Nil or empty means all five. An unknown name is an error rather than a
+// silent omission: a typo in a deployment's tool list would otherwise remove a
+// tool from the surface and look exactly like a deliberate split (#170).
+func selectedTools(want []ToolName) ([]ToolName, error) {
+	if len(want) == 0 {
+		return ToolNames(), nil
+	}
+	chosen := make(map[ToolName]bool, len(want))
+	for _, name := range want {
+		if !name.Valid() {
+			return nil, fmt.Errorf(
+				"mcp.Config.Tools: %q is not one of the five IP §4 tool names %v", string(name), ToolNames())
+		}
+		chosen[name] = true
+	}
+	out := make([]ToolName, 0, len(chosen))
+	for _, name := range ToolNames() {
+		if chosen[name] {
+			out = append(out, name)
+		}
+	}
+	return out, nil
 }
 
 // Name returns the protected server name.

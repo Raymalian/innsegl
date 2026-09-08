@@ -56,11 +56,51 @@ export interface OverviewData {
   readonly expired_runs: number;
   readonly commits_recorded: number;
   /** How many `unattributed_signature_detected` and `ledger_drift_detected`
-   * events the ledger holds. A COUNT: the query API exposes no endpoint that
-   * lists them, so this view can report that they exist and cannot link to
-   * each one. Reported as a gap. */
+   * events carry no row in `innsegl.alert_resolutions` — #167's "open".
+   * `GET /api/v1/alerts` (below) is what lists the events themselves. */
   readonly open_alerts: number;
   readonly anchor: AnchorHeartbeat;
+  readonly data_as_of: string;
+}
+
+/**
+ * One alert event, as `GET /api/v1/alerts` serves it (`internal/api/query.go`'s
+ * `Alert`) — RM-102, #167.
+ *
+ * Exactly one of the two field triples is populated, matching `event_type`:
+ * `subject_event_id`/`run_id`/`reason` for `ledger_drift_detected`,
+ * `certificate_identity`/`rekor_entry_uuid`/`rekor_log_index` for
+ * `unattributed_signature_detected`. `run_id` is doc 02 §2's envelope member
+ * and is absent on every unattributed alert — it names no run, by
+ * construction (doc 02 §3).
+ */
+export interface AlertRecord {
+  readonly chain_position: number;
+  readonly event_id: string;
+  readonly event_type: "unattributed_signature_detected" | "ledger_drift_detected";
+  readonly ts: string;
+  readonly run_id?: string;
+  readonly subject_event_id?: string;
+  readonly reason?: string;
+  readonly certificate_identity?: string;
+  readonly rekor_entry_uuid?: string;
+  readonly rekor_log_index?: number;
+  /** Whether `innsegl.alert_resolutions` carries a row for this event_id.
+   * The field to branch on: like `AnchorHeartbeat.sealed_at`, Go's
+   * `omitempty` does not omit a zero-valued struct, so `resolved_at` still
+   * arrives as "0001-01-01T00:00:00Z" on an alert nobody has resolved. */
+  readonly resolved: boolean;
+  readonly resolved_by?: string;
+  readonly resolved_at?: string;
+  readonly resolved_reason?: string;
+}
+
+/** One page of `GET /api/v1/alerts`. */
+export interface AlertsPage {
+  readonly alerts: readonly AlertRecord[];
+  readonly total: number;
+  readonly limit: number;
+  readonly next_cursor?: string;
   readonly data_as_of: string;
 }
 

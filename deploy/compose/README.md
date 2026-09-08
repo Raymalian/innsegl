@@ -256,6 +256,80 @@ harnesses take up to eight each, so a machine running both may need
 
 ---
 
+## Do not put this on the internet
+
+Nothing here is published beyond loopback, and that is doing more work than it
+looks like.
+
+**The query API has no authentication** (#174). It answers every caller, and it
+is safe today only because it publishes no host port — the dashboard reaches it
+over the compose network and nothing else can.
+
+Publish it, or put the dashboard on a public address, and the whole ledger is
+world-readable: `agent_type` and `task_ref` in clear, every run's timeline,
+every payload digest, every repository signed in and when.
+
+**Pseudonymisation does not cover this, and it is easy to assume it does.**
+ADR-0041 protects the identity that reaches the *public log* —
+`cb590b02/e7cbb3a9` rather than `orchestrator/RM-101`. The ledger is where
+those pseudonyms are resolved, and resolving them is what the API is for.
+
+| | publishes | safe to expose |
+|---|---|---|
+| Rekor | pseudonyms | yes — ADR-0042 rests on it |
+| this API | the resolution | **no** |
+
+If you need it reachable, **put your own authenticating proxy in front**. This
+project ships no token check on purpose: an authentication mechanism nobody has
+threat-modelled looks like a control and is not one, and stating plainly what
+the software does is worth more than a header comparison.
+
+The public verification page (#69) is different and is fine to expose — it
+serves only what Rekor already made public, which doc 04 §2 says in as many
+words.
+
+---
+
+## How much of it you actually have to run
+
+Fourteen containers is the full stack. It is not the floor, and the difference
+matters if you are deciding whether this is worth adopting.
+
+Measured on 2026-09-07, `docker stats` at rest:
+
+| | containers | why they are there |
+|---|---|---|
+| the full stack | 14 | everything below, plus the dashboard |
+| **without the UI** | **12** | `innsegl-dashboard` and `innsegl-api` serve the web view. Signing and verifying never touch them. |
+| **one process** | **10** | `ONEPROCESS=1` runs the sealer and the reconciler inside the MCP. See `innsegl.oneprocess.yml`. |
+| **public Rekor** | **~5** | ADR-0042. `rekor`, `rekor-redis` and the three Trillian containers exist only because the log is ours. |
+
+**The nine that are hardest to remove are SPIRE and Sigstore**, and they are
+there for one reason: this deployment runs its own identity. Public Sigstore
+will not accept SPIRE as a login provider, so self-hosting the identity forces
+self-hosting Fulcio, and Fulcio's log has to come from somewhere.
+
+**One of them is emulated.** `trillian-db` is
+`gcr.io/trillian-opensource-ci/db_server`, which ships amd64 only. On an arm64
+machine it runs under emulation and is the largest CPU consumer in the whole
+stack — 7.4% of a core at rest, for a log receiving about one entry a day. It
+is the only emulated container here.
+
+**Verifying needs none of this.** `innsegl verify` reaches Fulcio and Rekor over
+HTTP and reads a git repository. Point it at public Sigstore and it needs no
+containers at all:
+
+```sh
+INNSEGL_FULCIO_URL=https://fulcio.sigstore.dev \
+INNSEGL_REKOR_URL=https://rekor.sigstore.dev \
+  innsegl verify <commit-sha>
+```
+
+That asymmetry is the honest summary: **checking a commit costs a binary;
+issuing an identity costs a deployment.**
+
+---
+
 ## See it work
 
 ```sh

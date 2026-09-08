@@ -47,6 +47,44 @@ var toolOrder = []ToolName{
 // ToolNames returns the five tool names of IP §4, in IP §4 order.
 func ToolNames() []ToolName { return slices.Clone(toolOrder) }
 
+// adminOrder and agentOrder are #170's caller split, in IP §4 order.
+//
+// The line falls between tools that CREATE or DESTROY an identity and tools
+// that can only act on one that already exists. register_agent mints a run;
+// retire_agent ends one. The other three take a run_id as an argument and can
+// do nothing without a run some other caller made — so a caller holding a
+// run_id it was given may use them, and cannot conjure a run to use them
+// against.
+//
+// That is why the split is drawn here and not around sign_commit alone: the
+// leak doc 04's AB-13 and AB-15 describe is a model minting identities for
+// itself, and it is closed by taking away the minting rather than the signing.
+// sign_commit is additionally the hardest of the five to misuse, because
+// staged_ref must equal the repository's own index — git, not the caller,
+// decides what it signs.
+var (
+	adminOrder = []ToolName{ToolRegisterAgent, ToolRecordEvent, ToolRetireAgent}
+	agentOrder = []ToolName{ToolGetCredential, ToolSignCommit}
+)
+
+// record_event moved to the admin side when #171 made the harness record tool
+// calls rather than the model reporting them. It is the one tool whose place
+// follows from WHO CALLS IT rather than from what it can do: it cannot create
+// or destroy an identity, so by the rule above it belongs with the agent — but
+// a record the model writes about itself is the thing #171 exists to replace.
+//
+// Left on the agent side it would be a second, unobserved channel into the
+// same event stream, and a reader could not tell an observed call from a
+// reported one. doc 04 AB-14 is that gap.
+
+// AdminTools returns the identity lifecycle: the tools that create and destroy
+// runs, and therefore the ones a model must not reach (#170).
+func AdminTools() []ToolName { return slices.Clone(adminOrder) }
+
+// AgentTools returns the tools that operate on an existing run and are safe to
+// expose to the caller doing the work (#170).
+func AgentTools() []ToolName { return slices.Clone(agentOrder) }
+
 // Valid reports whether n is one of the five.
 func (n ToolName) Valid() bool { return slices.Contains(toolOrder, n) }
 

@@ -107,11 +107,30 @@ export const strings = {
   },
 
   alerts: {
+    // The fallback banner: rendered only when the alerts list itself could
+    // not be read, so the page still says what it knows — the count — rather
+    // than nothing (P2, FE-111).
     title: (count: number) =>
       count === 1 ? "1 open integrity alert" : `${count} open integrity alerts`,
     detail:
-      "The reconciler recorded a signature it could not attribute, or a ledger claim with no external proof. This build has no view that lists them: the query API serves their count and not the events.",
+      "The reconciler recorded a signature it could not attribute, or a ledger claim with no external proof. The list of individual alerts could not be read, so only the count is shown.",
     evidenceLabel: "See the response this count came from",
+
+    // Per-alert banners (RM-102, #167): one of these per open alert, in the
+    // order the query API returns them (newest first).
+    driftTitle: "Ledger drift detected",
+    driftDetail: (reason: string, subjectEventId: string) =>
+      `${reason} Ledger claim: ${subjectEventId}.`,
+    unattributedTitle: "Unattributed signature detected",
+    unattributedDetail: (certificateIdentity: string, rekorEntryUuid: string, rekorLogIndex: number) =>
+      `Certificate identity ${certificateIdentity}. Rekor entry ${rekorEntryUuid}, log index ${rekorLogIndex}.`,
+    viewRun: "View the run this claim concerns",
+    rawRecord: "See this alert's raw record",
+
+    // The overflow note when more alerts are open than the feed renders.
+    moreTitle: (count: number) =>
+      count === 1 ? "1 more open integrity alert" : `${count} more open integrity alerts`,
+    moreDetail: "Not shown individually here; the full, paged list is at the query API.",
   },
 
   error: {

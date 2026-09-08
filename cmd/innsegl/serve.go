@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -78,6 +79,8 @@ const (
 	envFulcioURL             = "INNSEGL_FULCIO_URL"
 	envRekorURL              = "INNSEGL_REKOR_URL"
 	envMCPListen             = "INNSEGL_MCP_LISTEN"
+	envMCPAdminListen        = "INNSEGL_MCP_ADMIN_LISTEN"
+	envMCPAlso               = "INNSEGL_MCP_ALSO"
 	envMCPHealthListen       = "INNSEGL_MCP_HEALTH_LISTEN"
 	envMCPAddrFile           = "INNSEGL_MCP_ADDR_FILE"
 	envRunTTL                = "INNSEGL_RUN_TTL"
@@ -166,6 +169,8 @@ type serveOptions struct {
 	gitsignPath         string
 
 	listen       string
+	adminListen  string
+	also         []string
 	healthListen string
 	addrFile     string
 
@@ -315,6 +320,59 @@ func (d serveDeps) opener() func(context.Context, serveOptions, *serveLog) (serv
 }
 
 // serveCommand is the subcommand body wired into cli.go's dispatch table.
+// alsoCommands are the companion subcommands `-also` can run in this process.
+//
+// Four of doc 05 §1's services are this same binary run four ways, which
+// `docker inspect` reports plainly: one image, four commands. They are separate
+// containers because the compose file starts them separately, not because they
+// need separate processes.
+//
+// `reap` was missing from this map until 2026-09-08, and the omission had
+// teeth. A subagent that dies without a clean stop leaves its run un-retired;
+// the reaper is what expires one; and with no reaper anywhere in the
+// deployment — compose ships no service for it either — such a run stays
+// Active forever and keeps collecting tool calls. Measured: a run open for 13
+// hours with 257 tool calls, which the dashboard reported accurately and which
+// read as a display bug.
+//
+// The names here are SUBCOMMAND names and not container names, and the
+// difference is the thing parseAlso exists to catch: a deployment that asked
+// for `sealer` rather than `seal` would otherwise start cleanly and silently
+// never seal anything, which no other component reports as an error — from
+// their side the sealer has simply not run yet.
+var alsoCommands = map[string]func([]string, io.Writer, io.Writer) int{
+	"api":       apiCommand,
+	"seal":      sealCommand,
+	"reconcile": reconcileCommand,
+	"reap":      reapCommand,
+}
+
+// parseAlso resolves -also into a list of companion subcommands, in the order
+// given. Empty means none, which is what every deployment before this did.
+func parseAlso(s string) ([]string, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		name := strings.TrimSpace(p)
+		if name == "" {
+			return nil, fmt.Errorf("-also: empty entry in %q; a doubled or trailing comma is a typo", s)
+		}
+		if _, ok := alsoCommands[name]; !ok {
+			return nil, fmt.Errorf(
+				"-also: %q is not a companion subcommand. These are subcommand names, "+
+					"not container names: api, seal, reconcile, reap", name)
+		}
+		if slices.Contains(out, name) {
+			return nil, fmt.Errorf("-also: %q named twice", name)
+		}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
 func serveCommand(args []string, stdout, stderr io.Writer) int {
 	return runServeCommand(args, stdout, stderr, serveDeps{})
 }
@@ -368,8 +426,42 @@ func runServe(parent context.Context, args []string, stdout, stderr io.Writer, d
 		"server_name", mcp.ServerName,
 	)
 
-	if err := srv.Serve(ctx); err != nil {
-		log.error("the MCP server stopped serving", "err", err)
+	// The companions, if any were asked for. Each is the same subcommand a
+	// separate container would run, in a goroutine here instead.
+	//
+	// A COMPANION THAT STOPS STOPS THE PROCESS. A sealer that exited would
+	// otherwise leave a replica that answers /readyz, serves every tool, and
+	// seals nothing — and no other component reports that, because from their
+	// side the sealer has simply not run yet. The orchestrator's restart is the
+	// remedy, and it only gets one if this process ends.
+	//
+	// Nothing is started when -also is empty, which is every deployment that
+	// has not opted in.
+	companionFailed := make(chan struct{})
+	for _, name := range o.also {
+		companion := alsoCommands[name]
+		go func(name string, companion func([]string, io.Writer, io.Writer) int) {
+			log.info("running a companion subcommand in this process", "subcommand", name)
+			// No arguments: each reads the same environment this process was
+			// given, which is how the separate containers were configured too.
+			if code := companion(nil, stdout, stderr); code != exitOK {
+				log.error("a companion subcommand stopped; this replica cannot do its whole job",
+					"subcommand", name, "exit", code)
+				close(companionFailed)
+			}
+		}(name, companion)
+	}
+
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ctx) }()
+
+	select {
+	case err := <-served:
+		if err != nil {
+			log.error("the MCP server stopped serving", "err", err)
+			return exitServeFailed
+		}
+	case <-companionFailed:
 		return exitServeFailed
 	}
 	log.info("stopped")
@@ -457,6 +549,14 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 			"the gitsign binary. Empty is a PATH lookup ($"+envGitsignPath+")")
 		listen = fs.String("listen", envOr(envMCPListen, defaultMCPListen),
 			"address the MCP transport listens on ($"+envMCPListen+")")
+		also = fs.String("also", os.Getenv(envMCPAlso),
+			"companion subcommands to run in THIS process, comma separated: api, seal, "+
+				"reconcile. Empty runs none, which is one container per service as before. "+
+				"They are subcommand names, not container names ($"+envMCPAlso+")")
+		adminListen = fs.String("admin-listen", os.Getenv(envMCPAdminListen),
+			"address the identity lifecycle listens on. Empty serves all five tools on -listen, "+
+				"as before #170. Set it and register_agent and retire_agent move here, leaving "+
+				"-listen the three tools that need a run_id that already exists ($"+envMCPAdminListen+")")
 		healthListen = fs.String("health-listen", envOr(envMCPHealthListen, defaultHealthListen),
 			"address "+mcp.LivePath+" and "+mcp.ReadyPath+" listen on ($"+envMCPHealthListen+")")
 		addrFile = fs.String("addr-file", os.Getenv(envMCPAddrFile),
@@ -533,6 +633,15 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		return serveOptions{}, exitUsage, false
 	}
 
+	// Validated here rather than at use, so `-also sealer` is exit 2 with
+	// nothing opened rather than a server that came up and silently never
+	// sealed. See parseAlso.
+	alsoRun, alsoErr := parseAlso(*also)
+	if alsoErr != nil {
+		fprintf(stderr, "innsegl serve: %v\n", alsoErr)
+		return serveOptions{}, exitUsage, false
+	}
+
 	o := serveOptions{
 		dsn: *dsn, spireAddress: *spireAddress, trustDomain: *trustDomain,
 		serverID: *serverID, parentID: *parentID,
@@ -543,7 +652,8 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		signAuthorOperators: splitOrigins(*signAuthorOperators),
 		signAllowUnlinked:   *signAllowUnlinked,
 		gitsignPath:         *gitsignPath,
-		listen:              *listen, healthListen: *healthListen, addrFile: *addrFile,
+		listen:              *listen, adminListen: *adminListen, also: alsoRun,
+		healthListen: *healthListen, addrFile: *addrFile,
 		spireTimeout: *spireTimeout, runTTL: *runTTL, lease: *lease,
 		rateCalls: *rateCalls, rateWindow: *rateWindow,
 		clockSkewBound: *clockSkewBound, trustedOrigins: splitOrigins(*trustedOrigins),
