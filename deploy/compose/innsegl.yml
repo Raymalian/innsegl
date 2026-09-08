@@ -548,11 +548,30 @@ services:
       INNSEGL_IDENTITY_SECRET_FILE: *identity-secret-file
 
       INNSEGL_WORKSPACE: /work
-      INNSEGL_SIGN_AUTHOR_NAME: ${INNSEGL_SIGN_AUTHOR_NAME:-Innsegl Demo Agent}
-      # A .invalid address. I6's author gate admits a reserved, undelegatable
-      # domain only when told to, and a reference deployment must not claim a
-      # real person.
-      INNSEGL_SIGN_AUTHOR_EMAIL: ${INNSEGL_SIGN_AUTHOR_EMAIL:-demo-agent@innsegl.invalid}
+      # THE AUTHOR NAMES THE DEPLOYMENT, NOT THE AGENT.
+      #
+      # Which agent did the work is in the Agent-Identity trailer and in the
+      # certificate, per run. The author is fixed when this file is read, so it
+      # cannot name a run and must not try: two places claiming to say who did
+      # something, one of them stale, is worse than one.
+      #
+      # It said "Innsegl Demo Agent" until 2026-09-08 and that was a bad
+      # default -- it put the word "Demo" into the history of every deployment
+      # that never changed it, including real ones. test/smoke sets its own,
+      # because that one IS a demo.
+      INNSEGL_SIGN_AUTHOR_NAME: ${INNSEGL_SIGN_AUTHOR_NAME:-Innsegl}
+      # THE .invalid DOMAIN IS NOT DECORATION AND MUST NOT BE CHANGED TO A REAL
+      # ONE. It is how I6 holds: "No GitHub contributor is ever added."
+      #
+      # GitHub creates a contributor by resolving a commit's author address to
+      # an account. `.invalid` is reserved by RFC 2606 and can never be
+      # delegated, so there is no account to resolve to and no contributor
+      # appears -- for an agent that never consented to being one, and cannot.
+      #
+      # I6's author gate refuses such an address unless told to admit it, which
+      # is what INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED below does. Setting a real
+      # address here would put an agent's work under a person's name.
+      INNSEGL_SIGN_AUTHOR_EMAIL: ${INNSEGL_SIGN_AUTHOR_EMAIL:-agent@innsegl.invalid}
       INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED: ${INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED:-true}
     volumes:
       # The Workload API socket, from spire.yml's project. Read-write because
