@@ -12,6 +12,13 @@
     -->
     <title>Innsegl</title>
     <!--
+      The mark: a seal, which is what the word means. Two files because an SVG
+      favicon scales ONE drawing and a tab is 16px — public/favicon.svg carries
+      heavier strokes so the rim and the rune survive there, and
+      public/innsegl-mark.svg is the reading-size version for anywhere else.
+    -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
       The theme override, applied before the first paint. This has to be a
       blocking inline script: a module, a deferred script or a React effect all
       run after the page has been painted, which shows a reader who chose dark

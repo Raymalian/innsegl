@@ -79,10 +79,12 @@ type RunFilter struct {
 	Repo      string
 	AgentType string
 	Status    string
-	Search    string
-	From, To  time.Time
-	Cursor    string
-	Limit     int
+	// Order is "asc" or "desc"; empty means newest-first.
+	Order    string
+	Search   string
+	From, To time.Time
+	Cursor   string
+	Limit    int
 }
 
 // RunSummary is one row of the runs table.
@@ -223,6 +225,48 @@ SELECT run_id, spiffe_id, agent_type, task_ref, status, repos, commits,
  ORDER BY chain_position DESC
  LIMIT $8`
 
+// listRunsSQLAsc is listRunsSQL's ascending twin.
+//
+// TWO COMPLETE STATEMENTS RATHER THAN ONE WITH THE DIRECTION PASTED IN, and
+// the reason is the cursor rather than injection. Paging here is keyset:
+// `chain_position < $7` is correct for DESC and WRONG for ASC. Interpolating
+// only the ORDER BY would leave the comparison behind, and the failure is
+// silent -- page one is right, page two is empty or repeats, and nothing
+// raises an error. Keeping both statements whole means the two halves cannot
+// drift apart, and API-021 reads them to check.
+var listRunsSQLAsc = strings.Replace(
+	strings.Replace(listRunsSQL, "chain_position < $7", "chain_position > $7", 1),
+	"ORDER BY chain_position DESC", "ORDER BY chain_position ASC", 1)
+
+// The two directions the runs table sorts in. A closed set: the value reaches
+// SQL, so it is checked at the edge rather than carried as a string.
+const (
+	OrderDesc = "desc"
+	OrderAsc  = "asc"
+)
+
+// runsOrder resolves the requested direction. Empty means newest-first, which
+// is what the table did before this existed and what an unset parameter must
+// keep doing.
+func runsOrder(s string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", OrderDesc:
+		return OrderDesc, nil
+	case OrderAsc:
+		return OrderAsc, nil
+	default:
+		return "", fmt.Errorf("order %q is neither %q nor %q", s, OrderAsc, OrderDesc)
+	}
+}
+
+// runsQuery returns the statement for one direction.
+func runsQuery(order string) string {
+	if order == OrderAsc {
+		return listRunsSQLAsc
+	}
+	return listRunsSQL
+}
+
 // ListRuns serves one page of FD §3.2's runs table.
 func (s *Store) ListRuns(ctx context.Context, f RunFilter) (RunPage, error) {
 	limit := f.Limit
@@ -246,7 +290,12 @@ func (s *Store) ListRuns(ctx context.Context, f RunFilter) (RunPage, error) {
 		cursor = &n
 	}
 
-	rows, err := s.pool.Query(ctx, listRunsSQL,
+	order, err := runsOrder(f.Order)
+	if err != nil {
+		return RunPage{}, fmt.Errorf("%w: %w", ErrBadRequest, err)
+	}
+
+	rows, err := s.pool.Query(ctx, runsQuery(order),
 		nullable(f.AgentType), nullable(f.Repo), nullable(f.Status),
 		nullableTime(f.From), nullableTime(f.To), likePattern(f.Search),
 		cursor, limit)
@@ -349,8 +398,15 @@ SELECT
     count(*) FILTER (WHERE expired AND NOT retired)::int,
     (SELECT count(*) FROM innsegl.events
       WHERE event_type = 'commit_recorded')::int,
-    (SELECT count(*) FROM innsegl.events
-      WHERE event_type IN ('unattributed_signature_detected', 'ledger_drift_detected'))::int
+    -- #167: "open" is derived, not stored — an alert event with no row in
+    -- innsegl.alert_resolutions. The alert events themselves are untouched by
+    -- this: a resolved alert stays in innsegl.events forever, it just stops
+    -- being counted here.
+    (SELECT count(*) FROM innsegl.events e
+      WHERE e.event_type IN ('unattributed_signature_detected', 'ledger_drift_detected')
+        AND NOT EXISTS (
+            SELECT 1 FROM innsegl.alert_resolutions r WHERE r.event_id = e.event_id
+        ))::int
   FROM rollup`
 
 const anchorSQL = `
@@ -391,6 +447,174 @@ func (s *Store) Overview(ctx context.Context) (Overview, error) {
 	}
 	_, o.Anchor.Anchored = body[event.FieldAnchorRekorEntryUUID]
 	return o, nil
+}
+
+// The alerts feed (RM-102, #167).
+//
+// `unattributed_signature_detected` and `ledger_drift_detected` are the two
+// event types doc 02 §3 marks "Alert:". Before this, the only thing the query
+// API said about them was OpenAlerts above — a count with no endpoint that
+// lists the events behind it. #167: "reading them currently requires database
+// access... An operator who must reach for psql to learn why their deployment
+// is showing red has the posture backwards."
+//
+// Like the runs table, every identifying field is read out of `canonical`
+// (convert_from(...)::jsonb) rather than duplicated into new storage — this
+// package's own rule, stated once above the run index. `resolved` and its
+// three fields are the one exception: they come from
+// innsegl.alert_resolutions (migration 0003), a table #167's decision put
+// outside innsegl.events on purpose. See ADR-0044.
+
+// AlertFilter is the alerts feed's query. EventType is one of the two alert
+// event_type values, or empty for both.
+type AlertFilter struct {
+	EventType string
+	Cursor    string
+	Limit     int
+}
+
+// Alert is one alert event, joined against its resolution if it has one.
+//
+// The type-specific fields are #167's own list: SubjectEventID, RunID and
+// Reason for a ledger_drift_detected; CertificateIdentity, RekorEntryUUID and
+// RekorLogIndex for an unattributed_signature_detected. Exactly one triple is
+// populated per row — never both, never neither — because EventType is one of
+// the two and nothing here guesses.
+type Alert struct {
+	ChainPosition int64     `json:"chain_position"`
+	EventID       string    `json:"event_id"`
+	EventType     string    `json:"event_type"`
+	TS            time.Time `json:"ts"`
+	// RunID is doc 02 §2's envelope member, present on a drift alert whose
+	// subject is a run's own record and absent on a system-scope alert — an
+	// unattributed_signature_detected always omits it (doc 02 §3).
+	RunID string `json:"run_id,omitempty"`
+
+	// ledger_drift_detected only.
+	SubjectEventID string `json:"subject_event_id,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+
+	// unattributed_signature_detected only.
+	CertificateIdentity string `json:"certificate_identity,omitempty"`
+	RekorEntryUUID      string `json:"rekor_entry_uuid,omitempty"`
+	RekorLogIndex       int64  `json:"rekor_log_index,omitempty"`
+
+	// Resolved and the three fields below come from
+	// innsegl.alert_resolutions, never from innsegl.events. Resolved is false
+	// and the rest are zero when no resolution row exists — which, per #167,
+	// is what "open" means. Resolved is the field to branch on: like
+	// AnchorHeartbeat.SealedAt, Go's `omitempty` does not omit a struct, so an
+	// unresolved alert's ResolvedAt still marshals as "0001-01-01T00:00:00Z"
+	// rather than being absent.
+	Resolved       bool      `json:"resolved"`
+	ResolvedBy     string    `json:"resolved_by,omitempty"`
+	ResolvedAt     time.Time `json:"resolved_at,omitempty"`
+	ResolvedReason string    `json:"resolved_reason,omitempty"`
+}
+
+// AlertPage is one page of the alerts feed.
+type AlertPage struct {
+	Alerts []Alert `json:"alerts"`
+	Total  int     `json:"total"`
+	Limit  int     `json:"limit"`
+	// NextCursor is empty at the end of the set, matching RunPage's keyset
+	// cursor: the chain position of the last row served.
+	NextCursor string    `json:"next_cursor,omitempty"`
+	DataAsOf   time.Time `json:"data_as_of"`
+}
+
+const listAlertsSQL = `
+WITH alerts AS (
+    SELECT chain_position, event_id, event_type, run_id, ts,
+           convert_from(canonical, 'UTF8')::jsonb AS body
+      FROM innsegl.events
+     WHERE event_type IN ('unattributed_signature_detected', 'ledger_drift_detected')
+), filtered AS (
+    SELECT alerts.*, count(*) OVER ()::int AS total
+      FROM alerts
+     WHERE ($1::text IS NULL OR event_type = $1)
+)
+SELECT f.chain_position, f.event_id, f.event_type, f.run_id, f.ts, f.body, f.total,
+       r.resolved_by, r.resolved_at, r.reason
+  FROM filtered f
+  LEFT JOIN innsegl.alert_resolutions r ON r.event_id = f.event_id
+ WHERE ($2::bigint IS NULL OR f.chain_position < $2)
+ ORDER BY f.chain_position DESC
+ LIMIT $3`
+
+// ListAlerts serves one page of the alerts feed, newest first.
+func (s *Store) ListAlerts(ctx context.Context, f AlertFilter) (AlertPage, error) {
+	limit := f.Limit
+	switch {
+	case limit <= 0:
+		limit = DefaultPageSize
+	case limit > MaxPageSize:
+		limit = MaxPageSize
+	}
+	if f.EventType != "" &&
+		f.EventType != event.EventTypeUnattributedSignatureDetected &&
+		f.EventType != event.EventTypeLedgerDriftDetected {
+		return AlertPage{}, fmt.Errorf("%w: event_type %q is not one of %s, %s",
+			ErrBadRequest, f.EventType,
+			event.EventTypeUnattributedSignatureDetected, event.EventTypeLedgerDriftDetected)
+	}
+	var cursor *int64
+	if f.Cursor != "" {
+		n, err := strconv.ParseInt(f.Cursor, 10, 64)
+		if err != nil || n < 0 {
+			return AlertPage{}, fmt.Errorf("%w: %q is not a cursor this API issued", ErrBadRequest, f.Cursor)
+		}
+		cursor = &n
+	}
+
+	rows, err := s.pool.Query(ctx, listAlertsSQL, nullable(f.EventType), cursor, limit)
+	if err != nil {
+		return AlertPage{}, fmt.Errorf("api: listing alerts: %w", err)
+	}
+	defer rows.Close()
+
+	page := AlertPage{Limit: limit, DataAsOf: time.Now().UTC(), Alerts: []Alert{}}
+	for rows.Next() {
+		var a Alert
+		var runID, resolvedBy, resolvedReason *string
+		var resolvedAt *time.Time
+		var body map[string]any
+		if err := rows.Scan(&a.ChainPosition, &a.EventID, &a.EventType, &runID, &a.TS,
+			&body, &page.Total, &resolvedBy, &resolvedAt, &resolvedReason); err != nil {
+			return AlertPage{}, fmt.Errorf("api: reading an alert: %w", err)
+		}
+		a.TS = a.TS.UTC()
+		if runID != nil {
+			a.RunID = *runID
+		}
+		switch a.EventType {
+		case event.EventTypeLedgerDriftDetected:
+			a.SubjectEventID = stringOf(body[event.FieldSubjectEventID])
+			a.Reason = stringOf(body[event.FieldReason])
+		case event.EventTypeUnattributedSignatureDetected:
+			a.CertificateIdentity = stringOf(body[event.FieldCertificateIdentity])
+			a.RekorEntryUUID = stringOf(body[event.FieldRekorEntryUUID])
+			a.RekorLogIndex = int64Of(body[event.FieldRekorLogIndex])
+		}
+		if resolvedBy != nil {
+			a.Resolved = true
+			a.ResolvedBy = *resolvedBy
+			if resolvedAt != nil {
+				a.ResolvedAt = resolvedAt.UTC()
+			}
+			if resolvedReason != nil {
+				a.ResolvedReason = *resolvedReason
+			}
+		}
+		page.Alerts = append(page.Alerts, a)
+	}
+	if err := rows.Err(); err != nil {
+		return AlertPage{}, fmt.Errorf("api: listing alerts: %w", err)
+	}
+	if len(page.Alerts) == limit && len(page.Alerts) > 0 {
+		page.NextCursor = strconv.FormatInt(page.Alerts[len(page.Alerts)-1].ChainPosition, 10)
+	}
+	return page, nil
 }
 
 // nullable turns an empty filter value into an SQL NULL, which every predicate

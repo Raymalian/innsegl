@@ -73,6 +73,15 @@ var commands = map[string]command{
 		summary: "delete identity entries orphaned past their TTL",
 		exec:    reapCommand,
 	},
+	// resolve-alert is RM-102 (#167, ADR-0044): the write half of alert
+	// resolution. It is not a route on `api` — that binary IS doc 05 §1's
+	// read-only `innsegl-dashboard` row, and FD P6 forbids a mutating UI
+	// action categorically. This is an operator command, run the way `reap`
+	// and `reconcile` are: from a trusted host, holding the ledger DSN.
+	"resolve-alert": {
+		summary: "record that a human reviewed an integrity alert",
+		exec:    resolveAlertCommand,
+	},
 	"verify": {
 		summary: "verify a commit's attribution without access to the ledger",
 		exec:    verifyCommand,

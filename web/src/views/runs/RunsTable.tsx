@@ -46,11 +46,14 @@ import { StatusBadge } from "../../components/common";
 import { VerificationSummary } from "../../components/verification";
 import { Link } from "../../app/router";
 import { routeToPath } from "../../app/routes";
+import type { RunsFilters } from "../../app/routes";
 
 import type { RunSummary } from "./api";
+import { runsLinkPath } from "./api";
 import type { CommitProof, RunProofSource } from "./proofs";
 import { strings } from "./strings";
 import {
+  orderToggle,
   cell,
   cellList,
   cellStack,
@@ -69,12 +72,17 @@ import {
 
 export interface RunsTableProps {
   readonly runs: readonly RunSummary[];
+  /** The filters this page was fetched with. The order control needs them so
+   *  that flipping the direction keeps every filter and drops only the cursor,
+   *  which is a position in the OLD ordering and means nothing in the new one. */
+  readonly filters?: RunsFilters;
   /** The number of runs the FILTER matched, which is not the number on screen. */
   readonly total: number;
   readonly proofs?: RunProofSource;
 }
 
-export function RunsTable({ runs, total, proofs }: RunsTableProps) {
+export function RunsTable({ runs, total, proofs, filters }: RunsTableProps) {
+  const ascending = filters?.order === "asc";
   return (
     <div className={tableScroll}>
       <table className={table}>
@@ -84,8 +92,33 @@ export function RunsTable({ runs, total, proofs }: RunsTableProps) {
         </caption>
         <thead>
           <tr>
-            <th scope="col" className={columnHeader}>
+            <th
+              scope="col"
+              className={columnHeader}
+              /* The direction the LEDGER sorted in, announced rather than
+                 inferred from the rows on screen — a reader must not have to
+                 work it out from a page that could be one of many. */
+              aria-sort={ascending ? "ascending" : "descending"}
+            >
               {strings.labels.columns.runId}
+              {filters ? (
+                <>
+                  {" "}
+                  <a
+                    className={orderToggle}
+                    href={runsLinkPath({
+                      ...filters,
+                      order: ascending ? "desc" : "asc",
+                      // A cursor is a position in the ordering being left.
+                      cursor: "",
+                    })}
+                  >
+                    {ascending
+                      ? strings.labels.order.switchToNewest
+                      : strings.labels.order.switchToOldest}
+                  </a>
+                </>
+              ) : null}
             </th>
             <th scope="col" className={columnHeader}>
               {strings.labels.columns.task}
