@@ -33,10 +33,25 @@ export const strings = {
     },
 
     /* doc 06 §3.2's five columns, in its order. */
+    /* The order control. It sits on the Run ID column because that is the
+       column the ledger actually sorts by — chain position, which is
+       registration order. Labelling it "Run ID" and sorting by chain position
+       would be two different claims, so the control says what it does. */
+    order: {
+      newestFirst: "Newest first",
+      oldestFirst: "Oldest first",
+      switchToOldest: "Sort oldest first",
+      switchToNewest: "Sort newest first",
+    },
     columns: {
       runId: "Run ID",
       task: "Task",
-      repo: "Repositories",
+      /* "Signed in" and not "Repositories". The column holds the repositories
+         this run CREATED COMMITS IN, which is not the same question as which
+         project the agent belongs to — and most runs sign nothing, so
+         "Repositories: none" read as "this agent belongs nowhere". Where an
+         agent belongs is in Task, which carries the project name. */
+      repo: "Signed in",
       commits: "Commits and verification",
       status: "Status",
     },
@@ -61,7 +76,10 @@ export const strings = {
     },
 
     table: {
-      noRepos: "No repository recorded",
+      /* Says what happened rather than what is absent. "No repository
+         recorded" describes a missing field; "Signed nothing" describes the
+         run, which is what a reader is asking about. */
+      noRepos: "Signed nothing",
     },
 
     verification: {

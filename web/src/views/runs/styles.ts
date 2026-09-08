@@ -92,3 +92,9 @@ export const srOnly = "sr-only";
 
 /** A list inside a cell: no marker, no indent, the cell's own rhythm. */
 export const cellList = "flex flex-col items-start gap-1 list-none p-0";
+
+/* The order control in the Run ID header. A link and not a button: it
+   navigates, so it must be copyable and middle-clickable like every other
+   filter in this view. Follows repoLink and pagerLink rather than inventing
+   a third link idiom. */
+export const orderToggle = `text-accent underline underline-offset-2 ${focusRing}`;

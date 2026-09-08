@@ -22,10 +22,11 @@ COVERPROFILE := cover.out
 
 .PHONY: all build test lint cover smoke smoke-down spire-up spire-verify \
         spire-down spire-admin-relay-up spire-admin-relay-down \
-        sigstore-up sigstore-verify sigstore-down \
+        sigstore-up sigstore-verify sigstore-down rekor-tlog-id \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
-        innsegl-stack-clean clean
+        innsegl-stack-clean innsegl-up-here innsegl-link verify-branch \
+        verify-branch-selftest start link sign clean
 
 all: build test lint
 
@@ -91,6 +92,26 @@ INNSEGL_SPIRE_JWT_ISSUER ?= http://spire-oidc:8080
 # The tag deploy/compose/innsegl.yml builds and register.sh registers.
 INNSEGL_IMAGE ?= innsegl:local
 
+# WHICH TREE REKOR SERVES, remembered between boots.
+#
+# rekor mints a NEW Trillian tree whenever tlog_id is 0, so a restart moved the
+# log to an empty tree and left every earlier entry stranded in the database --
+# three times in two days, 50 entries. sigstore.yml carries the measurement.
+#
+# The id is written to a gitignored file on first boot and passed back in on
+# every boot after that. A fresh clone has no file, passes 0, gets a tree, and
+# records it; there is nothing to do by hand.
+REKOR_TLOG_FILE = deploy/compose/.rekor-tlog-id
+INNSEGL_REKOR_TLOG_ID ?= $(shell cat $(REKOR_TLOG_FILE) 2>/dev/null || echo 0)
+
+## rekor-tlog-id: print the tree rekor is serving and pin it for later boots
+rekor-tlog-id:
+	@id=$$(curl -sS --max-time 5 http://127.0.0.1:$(INNSEGL_REKOR_PORT)/api/v1/log \
+	  | sed -n 's/.*"signedTreeHead":"[^ ]* - \([0-9][0-9]*\).*/\1/p'); \
+	  [ -n "$$id" ] || { echo "rekor is not answering on port $(INNSEGL_REKOR_PORT)" >&2; exit 1; }; \
+	  printf '%s\n' "$$id" > $(REKOR_TLOG_FILE); \
+	  echo "$$id  (pinned in $(REKOR_TLOG_FILE))"
+
 ## sigstore-up: boot SPIRE and the local Fulcio/Rekor pair, wired to each other
 sigstore-up:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
@@ -98,7 +119,9 @@ sigstore-up:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
 	  docker compose -f deploy/compose/sigstore.yml up -d
+	@$(MAKE) --no-print-directory rekor-tlog-id >/dev/null 2>&1 || true
 
 ## sigstore-verify: obtain a real Fulcio certificate for a real JWT-SVID
 sigstore-verify:
@@ -196,6 +219,165 @@ innsegl-up: sigstore-up
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) up -d
+
+# ---------------------------------------------------------------------------
+# innsegl-up-here: the stack, signing in THIS working tree.
+#
+# Without it, sign_commit resolves a repository beneath the MCP's own empty
+# workspace volume, so signing one commit meant copying the repository in,
+# staging there, calling the tool, and tarring .git back out. Four of seven
+# steps were moving files between two copies of one repository.
+#
+# REPO and REPO_PATH default to this checkout, read from git rather than
+# assumed: the identifier comes from `origin`, so a fork or a rename is
+# followed instead of hardcoded.
+#
+# Read deploy/compose/innsegl.workrepo.yml before using it. It gives the MCP
+# write access to the tree you are editing, which is a deliberate choice.
+# ---------------------------------------------------------------------------
+# The sed delimiter is `|` and not `#`, and that is the whole trick: `#` starts
+# a comment in a Makefile even inside $(shell ...), so make never sees the
+# closing parenthesis and reports "unterminated call to function `shell'" from
+# a line that looks perfectly balanced. Escaped parentheses are avoided for the
+# same class of reason -- make counts them.
+#
+# git@host:org/name.git and https://host/org/name.git both become host/org/name.
+INNSEGL_PROJECTS ?= $(HOME)/Applications
+REPO_PATH ?= $(shell git rev-parse --show-toplevel)
+REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
+
+# ONEPROCESS=1 folds the sealer and the reconciler into the MCP process, which
+# is two fewer containers for two background loops that were already the same
+# binary. deploy/compose/innsegl.oneprocess.yml says what that costs.
+ONEPROCESS_FILE = $(if $(ONEPROCESS),-f deploy/compose/innsegl.oneprocess.yml,)
+
+# The proof BFF serves an ALLOWLIST of repositories, not whatever is on disk,
+# and a repository missing from it makes every proof request about it a 404.
+# cmd/innsegl/api.go says why that is bad: it "reads as a verdict about the
+# commit and is a statement about the configuration". Measured 2026-09-08 --
+# the dashboard's "Verify this commit" answered 404 Not Found for a perfectly
+# good commit, because the list still held only the demo repository.
+#
+# So the list is computed from the projects that are actually there: every git
+# repository directly under INNSEGL_PROJECTS that has an origin, mapped to its
+# path under the /projects mount. Sorted, so the value does not churn between
+# runs and force a needless recreate.
+#
+# /projects/<dir> and NOT /work/<id>: the workspace path is a symlink that only
+# exists after `make innsegl-link`, so a repository would be in the allowlist
+# and still 404 until someone linked it. The API reads the real directory.
+API_REPOS = $(shell { echo 'github.com/innsegl-demo/scratch|0|/work/github.com/innsegl-demo/scratch'; \
+  for d in '$(INNSEGL_PROJECTS)'/*/; do \
+    id=$$(git -C "$$d" remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||'); \
+    [ -n "$$id" ] || continue; \
+    base=$$(basename "$$d"); \
+    name=$$(echo "$$id" | sed 's|.*/||'); \
+    if [ "$$base" = "$$name" ]; then k=0; else k=1; fi; \
+    echo "$$id|$$k|/projects/$$base"; \
+  done; } | sort -t'|' -k1,1 -k2,2n -k3,3 \
+    | awk -F'|' '!seen[$$1]++ { print $$1 "=" $$3 }' | paste -sd, -)
+
+# THE IDENTITY LISTENER, on for this target and not for the shipped default.
+#
+# innsegl.yml leaves INNSEGL_MCP_ADMIN_LISTEN empty and says why: with the split
+# on and nothing registering, no run can be created at all. This target is the
+# one where something does register -- scripts/innsegl-commit.sh and the harness
+# hook both call register_agent -- and without it innsegl-commit.sh refuses:
+#
+#   innsegl-commit: the identity service at http://127.0.0.1:28090/ could not
+#   be reached. No identity, no attributed work (IP §6.1).
+#
+# which is honest and was a dead end, because the target that exists to make
+# signing work did not start the listener signing needs.
+INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
+
+## innsegl-up-here: bring the stack up signing in this working tree, not a copy
+innsegl-up-here: sigstore-up
+	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
+	@echo "signing in $(REPO_PATH)  as  $(REPO)"
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) build
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  deploy/compose/spire/register.sh
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  INNSEGL_PROJECTS='$(INNSEGL_PROJECTS)' \
+	  INNSEGL_API_REPOS='$(API_REPOS)' \
+	  INNSEGL_MCP_ADMIN_LISTEN='$(INNSEGL_MCP_ADMIN_LISTEN)' \
+	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml $(ONEPROCESS_FILE) up -d
+	@$(MAKE) --no-print-directory innsegl-link DIR='$(REPO_PATH)'
+
+# ---------------------------------------------------------------------------
+# innsegl-link: make one repository signable, without restarting anything.
+#
+# The MCP resolves `host/org/name` beneath /work. This puts a symlink there
+# pointing into the projects mount, so the repository becomes signable while
+# the stack is running. A mount per repository would need the container
+# recreated to add one.
+#
+# The identifier is read from that repository's own `origin` rather than from
+# its directory name, because a clone's directory may be named anything and on
+# a real machine several of them do not match.
+# ---------------------------------------------------------------------------
+
+# ===========================================================================
+# The three commands.
+#
+# Everything below this line is one deployment's worth of settings that an
+# operator should not have to know about. The targets above are the reference
+# stack, documented and unchanged; these are the easy path onto it.
+#
+#   make start                      bring it up, ready to sign
+#   make link DIR=~/Applications/x  make a project signable
+#   make sign -- -m "message"       commit, signed
+#
+# The opinions baked in here, and each is a real choice rather than a default
+# nobody thought about:
+#
+#   - the admin listener is ON. Without it nothing can register a run, and
+#     since RM-105 the model cannot register for itself. A deployment with it
+#     off can sign nothing.
+#   - the sealer and the reconciler run inside the MCP. Two fewer containers,
+#     and doc 05 §2's N-replica topology is not what a laptop is.
+#   - your projects are mounted. Signing in a copy of your repository was four
+#     of the seven steps this used to take.
+#   - Rekor's host port is chosen at run time from what is free. 3000 is the
+#     compose default and is taken by a great many development servers; the
+#     failure is a bind error during bring-up that reads like a broken stack.
+# ===========================================================================
+
+## start: bring the whole thing up, ready to sign, with no setup
+start:
+	@port=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'); \
+	 echo "innsegl: rekor on 127.0.0.1:$$port, projects from $(INNSEGL_PROJECTS)"; \
+	 INNSEGL_REKOR_PORT=$$port \
+	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 \
+	 $(MAKE) --no-print-directory innsegl-up-here ONEPROCESS=1
+	@echo
+	@echo "ready. Next:"
+	@echo "   make link DIR=~/Applications/<project>     make another project signable"
+	@echo "   make sign -- -m 'your message'             commit, signed"
+
+## link: make a project signable — make link DIR=~/Applications/foo
+link:
+	@$(MAKE) --no-print-directory innsegl-link DIR='$(DIR)'
+
+## sign: stage first, then — make sign -- -m "your message"
+sign:
+	@scripts/innsegl-commit.sh $(filter-out $@,$(MAKECMDGOALS)) $(ARGS)
+
+## innsegl-link: make a repository signable — make innsegl-link DIR=~/Applications/foo
+innsegl-link:
+	@test -n "$(DIR)" || { echo 'innsegl-link: pass DIR=<path to a git repository>'; exit 2; }
+	@d="$$(cd '$(DIR)' && pwd -P)"; \
+	 id="$$(git -C "$$d" remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')"; \
+	 test -n "$$id" || { echo "innsegl-link: $$d has no origin remote"; exit 2; }; \
+	 base="$$(cd '$(INNSEGL_PROJECTS)' && pwd -P)"; \
+	 case "$$d" in "$$base"/*) : ;; *) echo "innsegl-link: $$d is not under INNSEGL_PROJECTS ($$base); the MCP would see a dangling link"; exit 2 ;; esac; \
+	 rel="$${d#$$base/}"; \
+	 docker exec innsegl-mcp sh -c "mkdir -p /work/$$(dirname $$id) && rm -rf /work/$$id && ln -s /projects/$$rel /work/$$id" \
+	   || { echo 'innsegl-link: is the stack up? make innsegl-up-here'; exit 1; }; \
+	 docker exec innsegl-mcp test -e "/work/$$id/.git" \
+	   || { echo "innsegl-link: linked, but /work/$$id/.git does not resolve — is $$d inside INNSEGL_PROJECTS?"; exit 1; }; \
+	 echo "linked  $$id  ->  $$rel"
 
 ## innsegl-verify: ask the server what the MCP's database credential can do
 #
@@ -309,6 +491,46 @@ INNSEGL_BACKUP_DIR ?= backups
 ## innsegl-backup: pg_dump the ledger and verify it against the sealed segments
 innsegl-backup:
 	INNSEGL_BACKUP_DIR='$(INNSEGL_BACKUP_DIR)' scripts/backup-ledger.sh --out '$(INNSEGL_BACKUP_DIR)'
+
+# ---------------------------------------------------------------------------
+# The merge gate for agent-signed commits (#173, RM-108).
+#
+# Until this existed, `innsegl verify` was a command nobody ran: agents signed
+# commits, Rekor logged them, and no merge path checked one. The decision on
+# #173 is that main does not have to carry signatures -- squash-merge detaches
+# them, and that is accepted -- because verification happens HERE, before the
+# merge, while the deployment that issued the identity is still reachable.
+#
+# It runs locally and not in CI on purpose: commits signed by a local
+# deployment are logged in that deployment's Rekor, which a GitHub runner
+# cannot reach. A gate that returned "inconclusive" on every commit forever
+# would be an absent gate that looks present.
+#
+# Exit statuses are cmd/innsegl/verify.go's: 3 an attribution claim does not
+# hold, 4 Fulcio or Rekor unreachable so nothing was proved either way. 4 fails
+# the gate too -- doc 06 P2 and AB-08 forbid reading "could not check" as
+# "checked" -- and the remedy is `make innsegl-up` and run it again.
+# ---------------------------------------------------------------------------
+
+# The compose default, so the two targets below resolve to a real URL when
+# nothing is exported. Without it $(INNSEGL_REKOR_PORT) is empty, the URL is
+# `http://127.0.0.1:` and the gate returns 4 for a reason that has nothing to
+# do with the commits -- honest, since 4 is inconclusive rather than green, but
+# a poor thing to hand someone running this for the first time. Override it the
+# same way the runbook does when 3000 is taken.
+INNSEGL_REKOR_PORT ?= 3000
+
+## verify-branch: verify every agent-signed commit on this branch before merging
+verify-branch:
+	INNSEGL_FULCIO_URL='$(or $(INNSEGL_FULCIO_URL),http://127.0.0.1:5555)' \
+	  INNSEGL_REKOR_URL='$(or $(INNSEGL_REKOR_URL),http://127.0.0.1:$(INNSEGL_REKOR_PORT))' \
+	  scripts/verify-branch.sh $(BASE)
+
+## verify-branch-selftest: the gate, watched failing -- green, forged, unreachable
+verify-branch-selftest:
+	INNSEGL_FULCIO_URL='$(or $(INNSEGL_FULCIO_URL),http://127.0.0.1:5555)' \
+	  INNSEGL_REKOR_URL='$(or $(INNSEGL_REKOR_URL),http://127.0.0.1:$(INNSEGL_REKOR_PORT))' \
+	  scripts/verify-branch-selftest.sh
 
 ## clean: remove build and coverage artefacts
 clean:

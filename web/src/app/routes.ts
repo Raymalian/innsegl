@@ -53,6 +53,17 @@ export interface RunsFilters {
   to: string;
   cursor: string;
   limit: string;
+  /** "asc" or "desc"; empty means newest-first, which is what the table did
+   *  before ordering existed and what an unset parameter keeps doing. The
+   *  LEDGER sorts — see views/runs/api.ts on why the browser must not. */
+  order: RunOrder | "";
+}
+
+/** The two directions internal/api/query.go will accept. */
+export type RunOrder = "asc" | "desc";
+
+function isRunOrder(v: string): v is RunOrder {
+  return v === "asc" || v === "desc";
 }
 
 export function emptyRunsFilters(): RunsFilters {
@@ -65,6 +76,7 @@ export function emptyRunsFilters(): RunsFilters {
     to: "",
     cursor: "",
     limit: "",
+    order: "",
   };
 }
 
@@ -181,6 +193,7 @@ export function parseRoute(pathWithQuery: string): Route {
 function filtersFrom(q: URLSearchParams): RunsFilters {
   const status = q.get("status") ?? "";
   const limit = q.get("limit") ?? "";
+  const order = q.get("order") ?? "";
   return {
     repo: q.get("repo") ?? "",
     agentType: q.get("agent_type") ?? "",
@@ -190,6 +203,7 @@ function filtersFrom(q: URLSearchParams): RunsFilters {
     to: q.get("to") ?? "",
     cursor: q.get("cursor") ?? "",
     limit: isPositiveWholeNumber(limit) ? limit : "",
+    order: isRunOrder(order) ? order : "",
   };
 }
 
@@ -212,6 +226,7 @@ export function routeToPath(route: Route): string {
         ["to", route.filters.to],
         ["cursor", route.filters.cursor],
         ["limit", route.filters.limit],
+        ["order", route.filters.order],
       ]);
     case "run":
       return `/runs/${encodeURIComponent(route.runId)}`;

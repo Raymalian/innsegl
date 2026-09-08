@@ -8,13 +8,18 @@
  *          |   | every metric, banner-level, linked to their material | FD §3.1, P3
  *   FE-075 | U | The overview asserts no verification verdict | No green, no
  *          |   | verification tri-state anywhere on the view | FD §5.3, P2, IP §6.11
+ *   FE-110 | U | The alerts feed (RM-102, #167) | One banner per open alert,
+ *          |   | type-specific detail, evidence link per type | FD P1, P3
+ *   FE-111 | U | The alerts feed degrades honestly | Falls back to the
+ *          |   | aggregate count when the list read fails; notes an overflow
+ *          |   | when more are open than shown | FD P2, §8 anti-pattern 10
  */
 
 import { render, screen, within } from "@testing-library/react";
 
 import { StalenessProvider } from "../../components/common";
 import { Overview } from "./Overview";
-import type { OverviewData, RunSummary } from "./types";
+import type { AlertRecord, OverviewData, RunSummary } from "./types";
 
 const NOW = new Date("2026-08-30T14:44:05Z");
 
@@ -83,6 +88,106 @@ describe("FE-074 alerts pin to the top", () => {
   it("raises no alarm when the ledger holds none (P3: the calm state is quiet)", () => {
     view({ open_alerts: 0 });
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+const DRIFT_ALERT: AlertRecord = {
+  chain_position: 25,
+  event_id: "01a077c2-eff1-7762-8a61-91a3a5c390e8",
+  event_type: "ledger_drift_detected",
+  ts: "2026-09-06T17:27:39.249Z",
+  run_id: "run-dd41951f222496a135241a77d1430237",
+  subject_event_id: "01a072b2-cdda-774e-a0e2-889ec5ac33fa",
+  reason: "commit_recorded claims a Rekor entry that the log does not contain",
+  resolved: false,
+};
+
+const UNATTRIBUTED_ALERT: AlertRecord = {
+  chain_position: 32,
+  event_id: "01a077dd-7004-7ef5-befc-b91fe55d3f59",
+  event_type: "unattributed_signature_detected",
+  ts: "2026-09-06T17:56:35.972Z",
+  certificate_identity: "spiffe://innsegl.dev/agent/38830790/831c43f5/run-4d060209a64e0aa508f13e9f1fe193f5",
+  rekor_entry_uuid: "628d17d6783490c97e42fb59ab4d3f6d7a1550d945e2bed280f455bca226de78f76205cc0c68c131",
+  rekor_log_index: 2,
+  resolved: false,
+};
+
+function viewWithAlerts(alerts: readonly AlertRecord[] | null, over: Partial<OverviewData> = {}) {
+  return render(
+    <Overview
+      data={{ ...DATA, open_alerts: alerts?.filter((a) => !a.resolved).length ?? 0, ...over }}
+      alerts={alerts}
+      now={NOW}
+      apiBase="/api/v1"
+    />,
+  );
+}
+
+describe("FE-110 the alerts feed lists individual alerts", () => {
+  it("renders one banner per open alert rather than a single aggregate count", () => {
+    viewWithAlerts([DRIFT_ALERT, UNATTRIBUTED_ALERT]);
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
+  });
+
+  it("a drift alert carries its reason and subject, and links to the run", () => {
+    viewWithAlerts([DRIFT_ALERT]);
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/commit_recorded claims a Rekor entry/);
+    expect(alert).toHaveTextContent(DRIFT_ALERT.subject_event_id!);
+    expect(within(alert).getByRole("link")).toHaveAttribute(
+      "href",
+      `/runs/${DRIFT_ALERT.run_id}`,
+    );
+  });
+
+  it("an unattributed alert carries the certificate identity and Rekor entry, with no run to link", () => {
+    viewWithAlerts([UNATTRIBUTED_ALERT]);
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(UNATTRIBUTED_ALERT.certificate_identity!);
+    expect(alert).toHaveTextContent(String(UNATTRIBUTED_ALERT.rekor_log_index));
+    expect(within(alert).getByRole("link")).toHaveAttribute(
+      "href",
+      "/api/v1/alerts?event_type=unattributed_signature_detected",
+    );
+  });
+
+  it("excludes a resolved alert from the feed", () => {
+    viewWithAlerts([DRIFT_ALERT, { ...UNATTRIBUTED_ALERT, resolved: true }], { open_alerts: 1 });
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent(DRIFT_ALERT.subject_event_id!);
+  });
+
+  it("raises no alarm when every fetched alert is resolved (P3: the calm state is quiet)", () => {
+    viewWithAlerts([{ ...DRIFT_ALERT, resolved: true }], { open_alerts: 0 });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("FE-111 the alerts feed degrades honestly", () => {
+  it("falls back to the aggregate count when the list read did not answer (P2)", () => {
+    const { container } = view({ open_alerts: 4 });
+    expect(container.querySelector("[data-alert-kind]")).not.toBeNull();
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/4 open integrity alerts/);
+    expect(
+      within(alert).getByRole("link"),
+    ).toHaveAttribute("href", "/api/v1/overview");
+  });
+
+  it("notes an overflow when more alerts are open than the feed shows", () => {
+    render(
+      <Overview
+        data={{ ...DATA, open_alerts: 50 }}
+        alerts={[DRIFT_ALERT, UNATTRIBUTED_ALERT]}
+        now={NOW}
+        apiBase="/api/v1"
+      />,
+    );
+    // Two named alerts, plus one note for the rest.
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(3);
+    expect(alerts[2]).toHaveTextContent(/48/);
   });
 });
 

@@ -87,6 +87,7 @@ describe("FE-010 URL carries every view's state", () => {
         to: "2026-08-30T00:00:00Z",
         cursor: "4821",
         limit: "25",
+        order: "",
       },
     });
   });
@@ -103,6 +104,7 @@ describe("FE-010 URL carries every view's state", () => {
         to: "2026-08-30T00:00:00Z",
         cursor: "4821",
         limit: "25",
+        order: "",
       },
     });
     const names = [...new URL(path, "https://x").searchParams.keys()];

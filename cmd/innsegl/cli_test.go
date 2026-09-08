@@ -20,8 +20,16 @@ import (
 // shipped the UI half alone because nothing in the module constructed an
 // api.Server, so every query-API view rendered its own load-failure state
 // permanently (RM-083, #121).
+//
+// `resolve-alert` is RM-102 (#167, ADR-0044): the write half of alert
+// resolution. It is a CLI subcommand and not a route on `api` because `api`
+// IS doc 05 §1's `innsegl-dashboard` — "No write credentials mounted", FD §7,
+// enforced at Open by AssertReadOnly (RM-083) — and FD P6 forbids a mutating
+// action anywhere in the UI. An operator runs this the way they run `reap` or
+// `reconcile`: from a trusted host, holding the ledger DSN, not through the
+// dashboard.
 var documentedSubcommands = []string{
-	"api", "canary", "init", "reap", "reconcile", "seal", "serve", "verify",
+	"api", "canary", "init", "reap", "reconcile", "resolve-alert", "seal", "serve", "verify",
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {

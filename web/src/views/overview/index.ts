@@ -31,8 +31,10 @@ export { RecentRuns } from "./RecentRuns";
 export type { RecentRunsProps } from "./RecentRuns";
 
 export {
+  ALERTS_FEED_LIMIT,
   DEFAULT_API_BASE,
   RECENT_RUNS_LIMIT,
+  fetchAlerts,
   fetchOverview,
   fetchRecentRuns,
   fetchRunsToday,
@@ -46,6 +48,8 @@ export { strings } from "./strings";
 export type { OverviewStrings } from "./strings";
 
 export type {
+  AlertRecord,
+  AlertsPage,
   AnchorHeartbeat,
   MeasuredLiveness,
   OverviewData,

@@ -98,6 +98,12 @@ const (
 	publishedNetwork = "innsegl-sigstore-published"
 
 	// The containers this harness owns beyond the compose stacks.
+	// smokeComposeProject is the project the SHIPPED compose files run under
+	// while this harness drives them (#168). Not `innsegl-sigstore` and
+	// `innsegl-spire`, which are what a developer's own stack uses and what
+	// this test's `down -v` would otherwise delete.
+	smokeComposeProject = "innsegl-smoke-stack"
+
 	ledgerNetwork   = "innsegl-smoke-ledger"
 	ledgerContainer = "innsegl-smoke-postgres"
 	mcpContainer    = "innsegl-smoke-mcp"
@@ -492,7 +498,12 @@ func (s *stack) cleanSlate(ctx context.Context, t *testing.T) error {
 	}
 	var stale []string
 	for _, v := range strings.Fields(left) {
-		if strings.HasPrefix(v, "innsegl-spire_") || strings.HasPrefix(v, "innsegl-sigstore_") {
+		// The SMOKE project's prefix, not the shipped ones. Under #168's
+		// override the documented `down -v` removes `innsegl-smoke-stack_*`,
+		// and a developer's own `innsegl-sigstore_*` volumes are none of this
+		// test's business — asserting on those would fail the test on any
+		// machine with the stack up and call the developer's data a leak.
+		if strings.HasPrefix(v, smokeComposeProject+"_") {
 			stale = append(stale, v)
 		}
 	}
@@ -1200,6 +1211,22 @@ func copyFile(src, dst string, mode os.FileMode) error {
 
 // sh runs a block of shell from the fresh clone, which is how the README's
 // commands are executed rather than re-implemented.
+// stackEnv is the environment EVERY command this harness runs against the
+// shipped compose files must carry — the ones that boot the stack and the ones
+// that read it alike.
+//
+// One function because two were wrong. #168 set COMPOSE_PROJECT_NAME on the
+// boot path only, so the harness created one project and then asked a
+// different one whether it was running. Anything that speaks to compose from
+// here goes through this.
+func stackEnv(rekorPort string) []string {
+	env := append(os.Environ(), "COMPOSE_PROJECT_NAME="+smokeComposeProject)
+	if rekorPort != "" {
+		env = append(env, "INNSEGL_REKOR_PORT="+rekorPort)
+	}
+	return env
+}
+
 func (s *stack) sh(ctx context.Context, script string) (string, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-e", "-c", script)
 	cmd.Dir = s.clone
@@ -1209,9 +1236,24 @@ func (s *stack) sh(ctx context.Context, script string) (string, error) {
 	// documentedBootCommands — an appended line is exactly what OPS-005
 	// would then have to find, verbatim, in the README, and a per-run port
 	// number cannot be.
-	if s.rekorPort != "" {
-		cmd.Env = append(os.Environ(), "INNSEGL_REKOR_PORT="+s.rekorPort)
-	}
+	// COMPOSE_PROJECT_NAME is here for the same reason and by the same
+	// argument (#168, RM-103).
+	//
+	// deploy/compose/sigstore.yml and spire.yml pin their own project names,
+	// so the documented commands ALWAYS act on `innsegl-sigstore` and
+	// `innsegl-spire` — the very projects `make innsegl-up` brings up. The
+	// teardown block this harness runs verbatim ends in `down -v`, so running
+	// this test on a machine with the stack up deleted the developer's Rekor,
+	// Fulcio PKI and SPIRE data. Measured twice on 2026-09-07: the second time
+	// it destroyed the Rekor entry for an agent-signed commit, which is not
+	// recoverable — the commit can never verify again.
+	//
+	// The environment overrides the pinned name (checked: `config` reports
+	// the override), so the commands stay verbatim and OPS-005 still finds
+	// every one of them in the README. Only the namespace they act in
+	// changes, and it moves under this harness's own `innsegl-smoke` prefix,
+	// beside the containers it already names that way.
+	cmd.Env = stackEnv(s.rekorPort)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("sh: %w", err)
@@ -1224,7 +1266,11 @@ func (s *stack) sh(ctx context.Context, script string) (string, error) {
 func (s *stack) dockerIn(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = s.clone
-	cmd.Env = append(os.Environ(), "INNSEGL_SPIRE_JWT_ISSUER="+jwtIssuer)
+	// stackEnv, not os.Environ(): this is how the harness READS the stack the
+	// documented block booted, and it has to name the same project. It did not,
+	// and the whole of OPS-004 failed as "the stack did not come up" while the
+	// stack was up and named something else. See TestOPS004HarnessReadsTheProjectItBoots.
+	cmd.Env = append(stackEnv(s.rekorPort), "INNSEGL_SPIRE_JWT_ISSUER="+jwtIssuer)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

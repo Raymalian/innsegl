@@ -147,7 +147,33 @@ x-object-store-bucket: &object-store-bucket ${INNSEGL_OBJECT_STORE_BUCKET:-innse
 # ----------------------------------------------------------------------------
 x-trust-domain: &trust-domain innsegl.dev
 x-fulcio-url: &fulcio-url http://fulcio:5555
-x-rekor-url: &rekor-url http://rekor:3000
+# The transparency log. Defaults to the Rekor this compose file starts, which
+# is what a development stack wants: fast, offline, and free to destroy.
+#
+# ADR-0042 is the reason this is a variable rather than a constant. It decides
+# that "anyone can verify" means a PUBLIC Rekor anchor over this deployment's
+# own Fulcio root — Sigstore's documented bring-your-own-PKI path — and the Go
+# side already supports it: INNSEGL_REKOR_URL is read by serve, seal, reconcile
+# and verify, and cmd/innsegl/init.go already carries
+# defaultPublicRekorURL = "https://rekor.sigstore.dev". This line was the only
+# thing standing in the way.
+#
+#   INNSEGL_REKOR_URL=https://rekor.sigstore.dev
+#
+# Two things follow from setting it, and both are permanent:
+#
+#   - Rekor is append-only and public. Nothing submitted can be withdrawn. What
+#     is published is the certificate, its timestamp and the log index; the
+#     SPIFFE ID it carries is pseudonymised under ADR-0041, so it is opaque
+#     without this deployment's ledger. ADR-0042 is materially worse without
+#     ADR-0041 and the two should be read together.
+#   - The deployment's Fulcio root has to be published and reachable, or the
+#     entry proves a time for a certificate nobody can chain. ADR-0042 leaves
+#     where and how deliberately unsettled.
+#
+# The sigstore Rekor containers keep running when this is set. Stopping them is
+# a separate operator decision, not something this line makes for anyone.
+x-rekor-url: &rekor-url ${INNSEGL_REKOR_URL:-http://rekor:3000}
 
 # The issuer, and the same variable spire.yml and sigstore.yml read. `innsegl
 # verify` is handed it so a certificate naming a different issuer is a failure
@@ -503,6 +529,15 @@ services:
 
       INNSEGL_MCP_LISTEN: 0.0.0.0:8080
       INNSEGL_MCP_HEALTH_LISTEN: 0.0.0.0:8081
+      # #170. Empty serves all five tools on 8080, which is what every
+      # deployment did before it and what this one still does by default.
+      #
+      # Set it to 0.0.0.0:8090 and register_agent and retire_agent move to that
+      # listener, leaving 8080 the three tools that need a run_id someone else
+      # issued. Do NOT turn this on until something is arranged to do the
+      # registering — a harness hook (#171), or an operator — because with the
+      # split on and nothing registering, no run can be created at all.
+      INNSEGL_MCP_ADMIN_LISTEN: ${INNSEGL_MCP_ADMIN_LISTEN:-}
 
       # The PATH to this deployment's secret, not the secret. See the anchor.
       # `-identity-mode` is left at its default, `pseudonymous`: the SPIFFE ID,
@@ -513,11 +548,30 @@ services:
       INNSEGL_IDENTITY_SECRET_FILE: *identity-secret-file
 
       INNSEGL_WORKSPACE: /work
-      INNSEGL_SIGN_AUTHOR_NAME: ${INNSEGL_SIGN_AUTHOR_NAME:-Innsegl Demo Agent}
-      # A .invalid address. I6's author gate admits a reserved, undelegatable
-      # domain only when told to, and a reference deployment must not claim a
-      # real person.
-      INNSEGL_SIGN_AUTHOR_EMAIL: ${INNSEGL_SIGN_AUTHOR_EMAIL:-demo-agent@innsegl.invalid}
+      # THE AUTHOR NAMES THE DEPLOYMENT, NOT THE AGENT.
+      #
+      # Which agent did the work is in the Agent-Identity trailer and in the
+      # certificate, per run. The author is fixed when this file is read, so it
+      # cannot name a run and must not try: two places claiming to say who did
+      # something, one of them stale, is worse than one.
+      #
+      # It said "Innsegl Demo Agent" until 2026-09-08 and that was a bad
+      # default -- it put the word "Demo" into the history of every deployment
+      # that never changed it, including real ones. test/smoke sets its own,
+      # because that one IS a demo.
+      INNSEGL_SIGN_AUTHOR_NAME: ${INNSEGL_SIGN_AUTHOR_NAME:-Innsegl}
+      # THE .invalid DOMAIN IS NOT DECORATION AND MUST NOT BE CHANGED TO A REAL
+      # ONE. It is how I6 holds: "No GitHub contributor is ever added."
+      #
+      # GitHub creates a contributor by resolving a commit's author address to
+      # an account. `.invalid` is reserved by RFC 2606 and can never be
+      # delegated, so there is no account to resolve to and no contributor
+      # appears -- for an agent that never consented to being one, and cannot.
+      #
+      # I6's author gate refuses such an address unless told to admit it, which
+      # is what INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED below does. Setting a real
+      # address here would put an agent's work under a person's name.
+      INNSEGL_SIGN_AUTHOR_EMAIL: ${INNSEGL_SIGN_AUTHOR_EMAIL:-agent@innsegl.invalid}
       INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED: ${INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED:-true}
     volumes:
       # The Workload API socket, from spire.yml's project. Read-write because
@@ -548,6 +602,23 @@ services:
       # measured and fixed on the test side.
       - "127.0.0.1:${INNSEGL_MCP_PORT:-28080}:8080"
       - "127.0.0.1:${INNSEGL_MCP_HEALTH_PORT:-28081}:8081"
+      # #170's identity lifecycle. Published only when INNSEGL_MCP_ADMIN_LISTEN
+      # is set on the service below; the mapping is harmless when it is not,
+      # because nothing is listening on 8090 in that case.
+      #
+      # WHAT THIS SEPARATION IS, AND WHAT IT IS NOT. It closes the leak for a
+      # client that speaks only to the address it was configured with: an MCP
+      # client pointed at 28080 has no register_agent to call, so the model
+      # driving it cannot mint an identity for itself.
+      #
+      # It does NOT constrain a model holding a shell on this host. Loopback is
+      # reachable from anything running here, so a model that decides to curl
+      # 28090 will reach it. On a single-user laptop this is a convention with
+      # a mechanism behind it, not a boundary. It becomes a boundary when the
+      # model and the harness are on different hosts — which is the deployment
+      # #68 contemplates, and the reason this is worth wiring now rather than
+      # after.
+      - "127.0.0.1:${INNSEGL_MCP_ADMIN_PORT:-28090}:8090"
     healthcheck:
       # /readyz and not a TCP dial: ADR-0024's rule, that a readiness probe
       # must fetch something it can parse. An unexamined 200 passes against any
@@ -836,6 +907,29 @@ services:
   # the same volume the same way. A read-only mount is not the control — the
   # database role is — but a BFF that could write into the tree it verifies
   # would be answering questions about its own output.
+  #
+  # THIS API HAS NO AUTHENTICATION, AND MUST NOT BE PUBLISHED DIRECTLY (#174).
+  #
+  # It answers every caller. That is safe here only because it publishes no
+  # host port: the dashboard reaches it over this network and nothing else can.
+  # Publish 8082, or put the dashboard on a public address, and the whole
+  # ledger is world-readable -- agent_type and task_ref IN CLEAR, every run's
+  # timeline, every payload digest, every repository signed in and when.
+  #
+  # ADR-0041's pseudonymisation does not help here and it is easy to think it
+  # does. It protects the SPIFFE ID that reaches the PUBLIC LOG --
+  # `cb590b02/e7cbb3a9` rather than `orchestrator/RM-101`. The ledger is where
+  # those pseudonyms are RESOLVED, and resolving them is what this API is for.
+  # The two surfaces have opposite properties:
+  #
+  #   Rekor    publishes pseudonyms      safe to expose (ADR-0042)
+  #   this     publishes the resolution  not
+  #
+  # If you need it reachable from elsewhere, put your own authenticating proxy
+  # in front of it. This project deliberately ships no token check: an
+  # authentication mechanism nobody has threat-modelled looks like a control
+  # and is not one, and saying plainly what the software does is worth more
+  # than a header comparison.
   # --------------------------------------------------------------------------
   innsegl-api:
     <<: *innsegl-build
