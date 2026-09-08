@@ -154,6 +154,24 @@ case "$EVENT" in
     fi
     [ -n "$TASK" ] || TASK="unnamed"
 
+    # Prefix the repository, because without it the ledger cannot answer "what
+    # did agents do in helmward today".
+    #
+    # A run_registered event carries agent_type and task_ref and NOTHING about
+    # the repository -- the repo is only recorded when a run signs a commit,
+    # and a run that signs nothing never gets one. Measured 2026-09-08: five
+    # runs from other projects all read `main` with no repository, and were
+    # indistinguishable from each other.
+    #
+    # doc 02 §3's fields are a protected surface, so adding a repo field to
+    # run_registered would be a major version. The repository name goes into
+    # the task_id instead, which is a field that already exists -- helmwart-main
+    # rather than main.
+    REPONAME="$(git -C "$MAIN" remote get-url origin 2>/dev/null \
+      | sed -e 's|.*[/:]||' -e 's|\.git$||' | tr 'A-Z' 'a-z' \
+      | sed -e 's/[^a-z0-9-]/-/g' -e 's/^[^a-z0-9]*//' -e 's/-*$//')"
+    [ -n "$REPONAME" ] && TASK="$(printf '%s-%s' "$REPONAME" "$TASK" | cut -c1-63)"
+
     # #172: refuse a subagent that is not in its own worktree, when asked to.
     #
     # The harness decides where a subagent runs and a hook cannot change it —
