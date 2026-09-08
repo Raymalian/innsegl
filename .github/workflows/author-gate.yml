@@ -77,7 +77,7 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
-      - name: Enforce I6 over this repository's commits
+      - name: Enforce I6 and agent attribution over this repository's commits
         # -count=1 for the same reason scripts/test-no-skips.sh uses it: a
         # cached PASS certifies a run that did not happen.
         #
@@ -89,7 +89,7 @@ jobs:
         # It is never the remediation for an agent address (ADR-0028 §6).
         run: >-
           go test ./test/e2e
-          -run 'TestGH002|TestGH001TheRecordedRunDateIsHonest'
+          -run 'TestGH002|TestGH003|TestGH001TheRecordedRunDateIsHonest'
           -count=1 -v
 
   empirical:
