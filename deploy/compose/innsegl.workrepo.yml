@@ -90,7 +90,23 @@ services:
       - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:${INNSEGL_PROJECTS}
 
   innsegl-api:
+    environment:
+      # The harness's tool-call bodies, which the LEDGER may never hold: doc 02
+      # §3 gives a tool_call no member for its body and IP E4 makes that
+      # mechanical, so a `tool_call` event says `"tool_name": "Edit"` and a
+      # digest and nothing more.
+      #
+      # The bodies live on the operator's own disk with a 90-day life, and the
+      # digest already in the chain is what proves one has not been altered.
+      # Deleting them later costs nothing, because verification reads the
+      # digest. Identity is unaffected and never expires -- it is in the chain.
+      INNSEGL_API_LOG_DIR: /agentlog
+      INNSEGL_API_LOG_DAYS: ${INNSEGL_LOG_DAYS:-90}
     volumes:
+      # READ-ONLY, and it matters more here than for the workspace: retention
+      # belongs to the hook that writes these. A read path that could delete
+      # would be one misconfiguration away from pruning on another schedule.
+      - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/agentlog:ro
       # READ-ONLY, matching how this service already mounts the workspace. doc
       # 05's proof BFF reads commit objects with git plumbing and must not be
       # able to write into the tree it verifies.
