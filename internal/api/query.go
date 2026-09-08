@@ -80,11 +80,11 @@ type RunFilter struct {
 	AgentType string
 	Status    string
 	// Order is "asc" or "desc"; empty means newest-first.
-	Order     string
-	Search    string
-	From, To  time.Time
-	Cursor    string
-	Limit     int
+	Order    string
+	Search   string
+	From, To time.Time
+	Cursor   string
+	Limit    int
 }
 
 // RunSummary is one row of the runs table.

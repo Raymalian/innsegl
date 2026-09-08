@@ -189,7 +189,7 @@ func runFilterFrom(r *http.Request) (RunFilter, error) {
 	// The direction is validated in the store, beside the two statements it
 	// chooses between, so the check and the SQL cannot drift apart.
 	f := RunFilter{
-		Order: q.Get("order"),
+		Order:     q.Get("order"),
 		Repo:      q.Get("repo"),
 		AgentType: q.Get("agent_type"),
 		Status:    q.Get("status"),
