@@ -68,6 +68,26 @@ services:
     volumes:
       # Read-write, and it has to be: a commit is a write. See above.
       - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:/projects
+      # THE SAME DIRECTORY, MOUNTED AGAIN AT ITS HOST PATH, and this is the
+      # only way a LINKED WORKTREE can be signed.
+      #
+      # A linked worktree's `.git` is a file holding an ABSOLUTE path to the
+      # real git directory, written by whoever ran `git worktree add` -- on the
+      # host. Measured 2026-09-08 with the worktree resolved correctly at
+      # /projects/innsegl/.claude/worktrees/agent-probe:
+      #
+      #   fatal: not a git repository:
+      #   /Users/kody/Applications/innsegl/.git/worktrees/agent-probe
+      #
+      # The path inside the file is the host's and means nothing in a container
+      # that mounted the same directory somewhere else. Rewriting the file
+      # would corrupt it for the host, and `git commit` offers no way to
+      # override that pointer, so the fix is to make the host's path true in
+      # here as well. Both mounts are the same directory; neither is a copy.
+      #
+      # This is what makes a subagent under worktree isolation signable at all
+      # (MCP-029, ADR-0046).
+      - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:${INNSEGL_PROJECTS}
 
   innsegl-api:
     volumes:

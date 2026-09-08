@@ -368,16 +368,90 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
       exit 2
     fi
 
-    printf '%s\n' "$RUN_ID" > "$RUNFILE"
+    # THREE LINES, because SubagentStop has to find this agent's work and the
+    # stop payload cannot be relied on to say where it was. The marker is
+    # already being written here; it costs nothing to write down what was
+    # resolved while it is still known.
+    #
+    #   1  run_id
+    #   2  the main worktree, which is the repository sign_commit resolves
+    #   3  this agent's worktree RELATIVE to it, empty when it shares the tree
+    #   4  the task it was REGISTERED with -- sign_commit checks Agent-Task
+    #      against the identity, and re-deriving it at stop reads the
+    #      worktree's own branch instead of the one the run was minted from
+    #   5  its agent_type -- the stop payload does not carry it, and a commit
+    #      message that says "work left by  run ..." has a hole in it
+    REL=""
+    case "$CWD" in
+      "$MAIN") : ;;
+      "$MAIN"/*) REL="${CWD#"$MAIN"/}" ;;
+    esac
+    printf '%s\n%s\n%s\n%s\n%s\n' "$RUN_ID" "$MAIN" "$REL" "$TASK" "$AGENT_TYPE" > "$RUNFILE"
     echo "innsegl: $AGENT_TYPE is $RUN_ID (task $TASK)" >&2
     exit 0
     ;;
 
   SubagentStop)
     [ -f "$RUNFILE" ] || exit 0
-    RUN_ID="$(head -n 1 "$RUNFILE")"
+    RUN_ID="$(sed -n 1p "$RUNFILE")"
+    MAIN="$(sed -n 2p "$RUNFILE")"
+    REL="$(sed -n 3p "$RUNFILE")"
+    TASK="$(sed -n 4p "$RUNFILE")"
+    [ -n "$AGENT_TYPE" ] || AGENT_TYPE="$(sed -n 5p "$RUNFILE")"
     rm -f "$RUNFILE"
     [ -n "$RUN_ID" ] || exit 0
+
+    # CAPTURE WHAT THIS AGENT LEFT, in the order the operator asked for.
+    #
+    # ADR-0046. Measured 2026-09-08: subagents had 314 Edit and 33 Write calls
+    # and zero commits. The work was never lost -- it sat in the worktree -- but
+    # it was never attributed to the agent that did it either, and an
+    # orchestrator committing it later signs it as its own.
+    #
+    # NOTHING HERE EVER EXITS 2. Blocking on stop produced a nine-deep retry
+    # storm once already. Every failure below warns and gets out of the way.
+    capture_dir="${MAIN:-}"
+    [ -n "$REL" ] && capture_dir="$MAIN/$REL"
+    if [ -n "$capture_dir" ] && [ -d "$capture_dir" ]; then
+      # 1. did it already commit under its own identity? Ask the ledger, not
+      #    the worktree: a commit that was signed and then had its branch moved
+      #    is still this run's commit.
+      committed="$(curl -sS --max-time 5 \
+        "${INNSEGL_API_URL:-http://127.0.0.1:8082}/api/v1/runs/$RUN_ID" 2>/dev/null \
+        | sed -n 's/.*"commits"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)"
+      # 2. is there anything to capture at all?
+      dirty="$(git -C "$capture_dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+
+      if [ "${committed:-0}" = "0" ] && [ "${dirty:-0}" != "0" ]; then
+        echo "innsegl: $RUN_ID left $dirty uncommitted path(s) and signed nothing; capturing" >&2
+        git -C "$capture_dir" add -A 2>/dev/null || true
+        HOOK_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+        MSG="chore(agent): work left by $AGENT_TYPE run $RUN_ID
+
+Captured by the harness at SubagentStop because the run ended with $dirty
+uncommitted path(s) and no commit of its own. Signed under that run's identity
+so the work is attributed to the agent that did it rather than to whoever
+commits next (ADR-0046).
+
+The build was not run. A subagent's work is recorded as it was left; the branch
+gate is what decides whether it may merge."
+        # 3. sign it under THIS RUN, not a new one -- and do not retire it here,
+        #    the retirement below is the one that belongs to this stop.
+        if ( cd "$capture_dir" && "$HOOK_DIR/../innsegl-commit.sh" \
+               -r "$RUN_ID" ${TASK:+-t "$TASK"} ${REL:+-w "$REL"} -m "$MSG" ) >&2 2>&1; then
+          :
+        else
+          # 4. the orchestrator's fallback. The work stays staged and a marker
+          #    names it, so the next session signs it with this run named
+          #    rather than losing the attribution entirely.
+          mkdir -p "$RUNS_DIR/pending" 2>/dev/null || true
+          printf '%s\n%s\n%s\n%s\n' "$RUN_ID" "$capture_dir" "$dirty" "$AGENT_TYPE" \
+            > "$RUNS_DIR/pending/$RUN_ID" 2>/dev/null || true
+          echo "innsegl: could not sign $RUN_ID's work; left staged and recorded in" >&2
+          echo "innsegl:   $RUNS_DIR/pending/$RUN_ID" >&2
+        fi
+      fi
+    fi
 
     # Never exit 2 here. See the header.
     if mcp_call retire_agent "$(printf '{"run_id":"%s"}' "$RUN_ID")" >/dev/null 2>&1; then

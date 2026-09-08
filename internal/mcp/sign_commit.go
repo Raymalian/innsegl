@@ -125,6 +125,19 @@ type signCommitIn struct {
 	TaskRef string `json:"task_ref"`
 	// IdempotencyKey makes the call repeatable (IP §6.6, ADR-0004).
 	IdempotencyKey string `json:"idempotency_key"`
+	// Worktree optionally names a LINKED WORKTREE of Repo, relative to it —
+	// `.claude/worktrees/agent-af9a60`. Absent means the repository itself.
+	//
+	// Repo stays the real `host/org/name` and is what the ledger records; this
+	// only says which of that repository's working trees the commit is made in.
+	// Without it an isolated subagent could not be signed at all except by
+	// inventing a repository name that does not exist (ADR-0046).
+	// omitempty, and it is load-bearing: the schema is generated from this
+	// struct and the generator marks every member without it REQUIRED. Adding
+	// the field without this made the tool refuse every existing caller --
+	// `validating root: required: missing properties: ["worktree"]` -- which is
+	// a compatibility break dressed as a new feature.
+	Worktree string `json:"worktree,omitempty"`
 }
 
 // SignCommitTrailer is one rendered commit trailer.
@@ -476,6 +489,9 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 	}
 
 	worktree, err := c.workspace.Worktree(ctx, in.Repo)
+	if err == nil {
+		worktree, err = resolveWorktree(worktree, in.Worktree)
+	}
 	if err != nil {
 		return nil, Errorf(ClassInvariantViolation, run.RunID,
 			"no working tree for %s: %w", in.Repo, err)
@@ -989,6 +1005,62 @@ func NewWorkspace(root string) (*Workspace, error) {
 			"whatever directory this process happens to be in", root)
 	}
 	return &Workspace{root: filepath.Clean(root)}, nil
+}
+
+// resolveWorktree resolves an optional LINKED WORKTREE beneath a repository's
+// working tree, and refuses everything that is not one.
+//
+// The empty string means the repository itself, so a caller that never heard of
+// this argument signs exactly where it always did.
+//
+// WHY EVERY FAILURE IS A REFUSAL. The path this returns is where `git commit`
+// runs, so it is where a commit gets WRITTEN. signCommitIn.Repo's own comment
+// says the point of resolving through a workspace is that "a caller cannot name
+// a directory the deployment did not publish" — a `..`, an absolute path or a
+// symlink would hand that back. Clamping instead of refusing would sign
+// something, report success, and never tell the caller its path was wrong.
+//
+// Symlinks are resolved before the containment check rather than after, because
+// a symlink inside the repository pointing out of it passes a purely lexical
+// test: `filepath.Join` and `Clean` operate on text and know nothing about what
+// the filesystem will do with it.
+func resolveWorktree(root, sub string) (string, error) {
+	if sub == "" {
+		return root, nil
+	}
+	if filepath.IsAbs(sub) {
+		return "", fmt.Errorf("worktree %q is absolute; it must be a path relative to the "+
+			"repository, because the repository is what names where a commit may be written", sub)
+	}
+
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolving the repository at %s: %w", root, err)
+	}
+	dir := filepath.Clean(filepath.Join(rootReal, filepath.FromSlash(sub)))
+	// Best effort: a path that does not exist yet cannot be resolved, and the
+	// `.git` check below is what refuses it. Only an existing symlink matters
+	// here, and only because it can point out of the repository.
+	if resolved, rerr := filepath.EvalSymlinks(dir); rerr == nil {
+		dir = resolved
+	}
+
+	// filepath.Rel over a string compare: "/a/repo-two" has "/a/repo" as a
+	// string prefix and is not inside it.
+	rel, err := filepath.Rel(rootReal, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("worktree %q escapes %s; a commit may only be written inside "+
+			"the repository the run named", sub, root)
+	}
+
+	// The same check Worktree makes, and for the same reason: `.git` is a
+	// directory in an ordinary clone and a FILE in a linked worktree, so its
+	// existence is the test and its kind is not. This is the whole point of the
+	// argument — an isolated subagent's tree is the file case.
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return "", fmt.Errorf("%s is not a git working tree: %w", dir, err)
+	}
+	return dir, nil
 }
 
 // Worktree returns the working tree for a repository.
