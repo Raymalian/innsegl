@@ -291,6 +291,21 @@ API_REPOS = $(shell { echo 'github.com/innsegl-demo/scratch|0|/work/github.com/i
 # signing work did not start the listener signing needs.
 INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
 
+# THE REAPER IS OFF, and it must stay off until #180 is fixed.
+#
+# It was turned on here for one minute on 2026-09-08 and expired two subagents
+# that were alive and working -- 183 and 130 tool calls, last activity in the
+# same second it killed them:
+#
+#   reap at 13:15:52Z: 2 entries in the agent subtree, 0 live, 2 expired
+#
+# It counts a run's age from registration and never looks at whether the run is
+# doing anything, so with a five-minute grace every subagent that works longer
+# than five minutes loses its identity mid-task. Not running it leaves orphans
+# (IP §6.7 unenforced); running it as it stands kills live agents. The second
+# is worse.
+INNSEGL_MCP_ALSO ?=
+
 ## innsegl-up-here: bring the stack up signing in this working tree, not a copy
 innsegl-up-here: sigstore-up
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
@@ -302,6 +317,7 @@ innsegl-up-here: sigstore-up
 	  INNSEGL_PROJECTS='$(INNSEGL_PROJECTS)' \
 	  INNSEGL_API_REPOS='$(API_REPOS)' \
 	  INNSEGL_MCP_ADMIN_LISTEN='$(INNSEGL_MCP_ADMIN_LISTEN)' \
+	  INNSEGL_MCP_ALSO='$(INNSEGL_MCP_ALSO)' \
 	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml $(ONEPROCESS_FILE) up -d
 	@$(MAKE) --no-print-directory innsegl-link DIR='$(REPO_PATH)'
 

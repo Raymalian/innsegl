@@ -539,6 +539,22 @@ services:
       # split on and nothing registering, no run can be created at all.
       INNSEGL_MCP_ADMIN_LISTEN: ${INNSEGL_MCP_ADMIN_LISTEN:-}
 
+      # Companion subcommands to run inside this process (serve.go's -also).
+      #
+      # EMPTY BY DEFAULT, which is what every deployment did before this, and
+      # the reason it is a variable at all is that the reaper had no way to run:
+      # this file ships no reaper service, and nothing else started one. IP §6.7
+      # requires orphaned identities to expire, and measured 2026-09-08 nothing
+      # was expiring them — a subagent that dies without a clean stop left its
+      # run Active forever, one of them for 13 hours while it kept collecting
+      # tool calls.
+      #
+      # `make innsegl-up-here` sets this to `reap`. A deployment that wants the
+      # sealer and reconciler in here too has innsegl.oneprocess.yml, which
+      # states what folding them in costs.
+      INNSEGL_MCP_ALSO: ${INNSEGL_MCP_ALSO:-}
+      INNSEGL_REAP_GRACE: ${INNSEGL_REAP_GRACE:-5m}
+
       # The PATH to this deployment's secret, not the secret. See the anchor.
       # `-identity-mode` is left at its default, `pseudonymous`: the SPIFFE ID,
       # the Fulcio certificate, the Rekor entry and the `Agent-Identity` trailer

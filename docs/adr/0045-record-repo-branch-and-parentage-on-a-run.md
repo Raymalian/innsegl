@@ -1,6 +1,6 @@
 # ADR-0045: Record which repository, which branch, and which agent started it
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-08
 - Deciders: the operator, on evidence from the running deployment
 
@@ -104,15 +104,32 @@ itself, at the moment it is created* — the same category as `agent_type` and
 
 ## Decision
 
-Not yet taken. The operator chose A when asked. This ADR exists because the
-precedent runs the other way twice, and a major release is not a thing to enter
-without the trade above stated in one place.
+**A.** Provenance a verifier cannot check is not provenance. The precedent in
+#118 and ADR-0044 stands for what it decided — metadata *about* a record lives
+outside the chain — and this is not that: where a run works is a property of the
+run at the moment it is created, the same category as `agent_type` and
+`task_ref`, which are already in the event.
 
-Recommendation: **A**, on the argument that provenance a verifier cannot check
-is not provenance. If the release ceremony is the blocker rather than the
-design, B is a defensible interim that does not preclude A later — but a run
-recorded under B and later re-recorded under A will have two answers, and the
-unchained one will be the older.
+Three sub-decisions follow, and they are the ones with teeth.
+
+**`repo` and `branch` are REQUIRED, not optional.** An optional field leaves the
+hole open: the first caller that omits it is indistinguishable from today. A
+caller that cannot say where it is working cannot register, which is IP §6.1's
+own argument one level out — attributed work must be impossible without an
+identity, and an identity that cannot say where it worked is half an identity.
+The cost is real and accepted: a repository with no origin remote cannot host a
+registered run until it has one.
+
+**`branch` is stored verbatim and is NOT folded into the SPIFFE grammar.**
+`dev/rm105-caller-split` is a branch; `dev-rm105-caller-split` is a different
+one. The hook's hyphen-squeezing was a workaround for having nowhere to put the
+value, and it stops.
+
+**§7's migration attestation needs an event type, and doc 02 §3 defined none.**
+`schema_migrated` carries `from_schema_version`, `to_schema_version` and
+`cutover_position`. Adding it is itself part of this major release; doc 02
+§7 required the attestation without giving it a shape, and a release cannot
+satisfy a clause that has no vocabulary.
 
 ## Consequences if A is taken
 
