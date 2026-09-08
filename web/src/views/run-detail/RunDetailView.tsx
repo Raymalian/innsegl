@@ -31,6 +31,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { ActivityLog } from "./ActivityLog";
 import { AlertBanner } from "../../components/common/AlertBanner";
 import type { Alert } from "../../components/common/AlertBanner";
 import { EmptyState } from "../../components/common/EmptyState";
@@ -185,6 +186,10 @@ function Loaded({
           {...(freshnessMs === undefined ? {} : { freshnessMs })}
         />
       </section>
+      {/* BELOW the timeline, deliberately. The timeline is the evidence chain
+        * and is what this page is for; this is the readable detail behind it,
+        * and doc 06 P3 puts the strongest claim first. */}
+      <ActivityLog runId={detail.run_id} />
     </>
   );
 }

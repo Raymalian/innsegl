@@ -213,6 +213,30 @@ export const strings = {
     noCommit: "This event records no commit SHA, so there is nothing to verify.",
   },
 
+  /* The activity log. Every word here has to carry the difference between a
+   * body that aged out and a body that was changed, because those look
+   * identical if the copy is careless and only one of them is a problem. */
+  activity: {
+    heading: "What this agent did",
+    /* Says the window, so an empty panel reads as "older than this" rather
+     * than "nothing happened". */
+    retention: (days: number) =>
+      `The ledger records that a tool was called and never what it was called with. The detail below is kept on this machine for ${days} days; identity and signatures are in the ledger and do not expire.`,
+    counts: (verified: number, altered: number, expired: number) =>
+      `${verified} checked against the ledger, ${altered} altered, ${expired} past the window.`,
+    empty: "No detail is kept for this run",
+    /* Two sentences because the reason matters: an operator seeing this after
+     * an agent ran should know whether to look for a fault or not. */
+    emptyDetail:
+      "Either the run predates local recording, or its detail is past the window. The ledger still holds the run, its identity and every signature.",
+    failed: "The activity log could not be read. Showing nothing rather than guessing.",
+    integrity: {
+      verified: "matches the ledger",
+      altered: "does not match the ledger",
+      expired: "past the window",
+    },
+  },
+
   view: {
     heading: "Run detail",
     loading: "the run",

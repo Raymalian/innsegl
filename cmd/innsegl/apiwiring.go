@@ -143,7 +143,10 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 	}
 
 	// ---- the routes -------------------------------------------------------
-	handler, err := api.NewServer(api.ServerConfig{Store: store, Prover: prover})
+	handler, err := api.NewServer(api.ServerConfig{
+		Store: store, Prover: prover,
+		LogDir: o.logDir, LogRetentionDays: o.logDays,
+	})
 	if err != nil {
 		unwind()
 		return nil, fmt.Errorf("wire the query API routes: %w", err)

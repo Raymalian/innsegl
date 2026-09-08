@@ -36,6 +36,18 @@ import (
 type ServerConfig struct {
 	Store  *Store
 	Prover *Prover
+	// LogDir is where the harness writes tool-call bodies, one directory per
+	// run, each file named by its own digest. Empty disables the route: a
+	// deployment that keeps no bodies answers "no log" rather than pretending
+	// to have one.
+	//
+	// READ-ONLY here, and mounted that way. Retention belongs to the hook that
+	// writes them; a read path able to delete would be one misconfiguration
+	// away from pruning on somebody else's schedule.
+	LogDir string
+	// LogRetentionDays is reported so a reader can tell a body that aged out
+	// from one that never existed.
+	LogRetentionDays int
 }
 
 // Health is what an operator reads to see that "read-only" is a measured fact
@@ -63,9 +75,11 @@ const (
 
 // Server is the read-only HTTP surface.
 type Server struct {
-	store  *Store
-	prover *Prover
-	mux    *http.ServeMux
+	store     *Store
+	prover    *Prover
+	mux       *http.ServeMux
+	logDir    string
+	logRetain int
 }
 
 // NewServer wires the routes.
@@ -77,9 +91,17 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("%w: a query API with no prover would have to answer "+
 			"verification questions out of the database, which IP §6.11 forbids", ErrBadRequest)
 	}
-	s := &Server{store: cfg.Store, prover: cfg.Prover, mux: http.NewServeMux()}
+	retain := cfg.LogRetentionDays
+	if retain <= 0 {
+		retain = 90
+	}
+	s := &Server{
+		store: cfg.Store, prover: cfg.Prover, mux: http.NewServeMux(),
+		logDir: cfg.LogDir, logRetain: retain,
+	}
 	s.mux.HandleFunc("GET /api/v1/runs", s.handleRuns)
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}", s.handleRun)
+	s.mux.HandleFunc("GET /api/v1/runs/{run_id}/log", s.handleRunLog)
 	s.mux.HandleFunc("GET /api/v1/overview", s.handleOverview)
 	s.mux.HandleFunc("GET /api/v1/alerts", s.handleAlerts)
 	s.mux.HandleFunc("GET /api/v1/proof/{commit_sha}", s.handleProof)
@@ -131,6 +153,36 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+// handleRunLog serves what the agent actually did, checked against the chain.
+//
+// The bodies are not in the ledger and never will be (doc 02 §3, IP E4), so
+// this reads them from the operator's own disk and reports, per line, whether
+// they still hash to the digest the chain recorded. That check is the reason
+// the route exists — rendering the files without it would be a log; with it,
+// it is a record.
+func (s *Server) handleRunLog(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("run_id")
+	if s.logDir == "" {
+		// Not an error. A deployment may legitimately keep no bodies, and an
+		// empty log says so rather than failing the page around it.
+		writeJSON(w, http.StatusOK, RunLog{
+			RunID: runID, RetentionDays: s.logRetain, Entries: []LogEntry{},
+		})
+		return
+	}
+	detail, err := s.store.Run(r.Context(), runID)
+	if err != nil {
+		writeProblem(w, err)
+		return
+	}
+	log, err := BuildRunLog(runID, s.logDir, s.logRetain, detail.Timeline)
+	if err != nil {
+		writeProblem(w, fmt.Errorf("%w: %w", ErrBadRequest, err))
+		return
+	}
+	writeJSON(w, http.StatusOK, log)
 }
 
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {

@@ -263,6 +263,26 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
     [ -n "$SESSION_ID" ] || exit 0
     [ -f "$SESSIONFILE" ] && exit 0
 
+    # RETENTION, by age alone: 90 days and no other rule. A log whose depth
+    # depends on how full the disk happens to be cannot be reasoned about, and
+    # this one is evidence.
+    #
+    # WHAT EXPIRES AND WHAT NEVER DOES. Only the BODIES expire -- the commands,
+    # the file contents, the chat-shaped detail of what an agent was doing.
+    # Identity does not, and cannot: `run_registered`, the SPIFFE ID, the
+    # Agent-Identity trailer and every digest live in the hash chain, which is
+    # append-only by construction. So "who was this agent and what did it sign"
+    # is answerable forever, and "what exactly did it type three months ago" is
+    # not. That is the intended shape, not a limitation of it.
+    #
+    # Once per session rather than on every tool call. The policy is the same
+    # -- nothing survives 90 days either way -- but a `find` across a quarter of
+    # a year of files, run before every Edit, would be a tax on every keystroke.
+    # Deleting a body is safe at any time: the chain keeps its digest.
+    _log="${INNSEGL_LOG_DIR:-$HOME/.innsegl/log}"
+    [ -d "$_log" ] && find "$_log" -type f -name '*.json' -mtime +"${INNSEGL_LOG_DAYS:-90}" -delete 2>/dev/null
+    [ -d "$_log" ] && find "$_log" -type d -empty -delete 2>/dev/null
+
     derive_task
 
     OUT="$(mcp_call register_agent "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"session-%s"}' \
@@ -491,6 +511,31 @@ gate is what decides whether it may merge."
     KEY="harness-$AGENT_ID-$(printf '%s' "$DIGEST" | cut -c8-27)"
     mcp_call record_event "$(printf '{"run_id":"%s","event_type":"%s","payload_digest":"%s","idempotency_key":"%s"}' \
       "$RUN_ID" "$SAFE_TOOL" "$DIGEST" "$KEY")" >/dev/null 2>&1 || true
+
+    # AND THE BODY, LOCALLY, because the ledger may never hold it.
+    #
+    # A tool_call event says `"tool_name": "Edit"` and a digest. It does not say
+    # which file or what changed, and it never will: doc 02 §3 gives the body no
+    # member and IP E4 makes that mechanical. That is not an oversight to route
+    # around -- the chain is append-only, so anything written there can never be
+    # deleted, and this is data with a 90-day life.
+    #
+    # So the two halves live apart, and the split pays for itself: the digest in
+    # the chain PROVES this file has not been altered, and deleting the file
+    # later breaks nothing, because verification reads the digest and not the
+    # body.
+    #
+    # The name IS the digest, so a reader needs no index to check one.
+    #
+    # ON DISK IN THE CLEAR. These bodies carry tool inputs -- file contents,
+    # commands, paths. That is the point of keeping them and the reason they
+    # stay on the operator's own machine and are never sent anywhere.
+    if [ -n "${INNSEGL_LOG_DIR:-$HOME/.innsegl/log}" ]; then
+      _d="${INNSEGL_LOG_DIR:-$HOME/.innsegl/log}/$RUN_ID"
+      if mkdir -p "$_d" 2>/dev/null; then
+        printf '%s' "$EVENT_JSON" > "$_d/$(printf '%s' "$DIGEST" | cut -c8-).json" 2>/dev/null || true
+      fi
+    fi
 
     # ALWAYS 0. See the header: the identity is load-bearing and was checked at
     # start; a bookkeeping write is not, and must never hold up an agent's work.

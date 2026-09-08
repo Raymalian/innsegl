@@ -231,6 +231,21 @@ func writeCanaryJSON(out, stderr io.Writer, report *segment.CanaryReport) {
 	fprintf(out, "%s\n", encoded)
 }
 
+// envIntOr reads a whole number from the environment.
+//
+// A value that is not a number falls back rather than failing: this is a
+// retention window reported to a reader, and refusing to start a query API
+// over a typo in a display hint would be the wrong trade. The flag is where a
+// deliberate value belongs.
+func envIntOr(name string, fallback int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
 func envOr(name, fallback string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
