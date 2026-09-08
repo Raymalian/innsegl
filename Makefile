@@ -22,7 +22,7 @@ COVERPROFILE := cover.out
 
 .PHONY: all build test lint cover smoke smoke-down spire-up spire-verify \
         spire-down spire-admin-relay-up spire-admin-relay-down \
-        sigstore-up sigstore-verify sigstore-down \
+        sigstore-up sigstore-verify sigstore-down rekor-tlog-id \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
         innsegl-stack-clean innsegl-up-here innsegl-link verify-branch \
@@ -92,6 +92,26 @@ INNSEGL_SPIRE_JWT_ISSUER ?= http://spire-oidc:8080
 # The tag deploy/compose/innsegl.yml builds and register.sh registers.
 INNSEGL_IMAGE ?= innsegl:local
 
+# WHICH TREE REKOR SERVES, remembered between boots.
+#
+# rekor mints a NEW Trillian tree whenever tlog_id is 0, so a restart moved the
+# log to an empty tree and left every earlier entry stranded in the database --
+# three times in two days, 50 entries. sigstore.yml carries the measurement.
+#
+# The id is written to a gitignored file on first boot and passed back in on
+# every boot after that. A fresh clone has no file, passes 0, gets a tree, and
+# records it; there is nothing to do by hand.
+REKOR_TLOG_FILE = deploy/compose/.rekor-tlog-id
+INNSEGL_REKOR_TLOG_ID ?= $(shell cat $(REKOR_TLOG_FILE) 2>/dev/null || echo 0)
+
+## rekor-tlog-id: print the tree rekor is serving and pin it for later boots
+rekor-tlog-id:
+	@id=$$(curl -sS --max-time 5 http://127.0.0.1:$(INNSEGL_REKOR_PORT)/api/v1/log \
+	  | sed -n 's/.*"signedTreeHead":"[^ ]* - \([0-9][0-9]*\).*/\1/p'); \
+	  [ -n "$$id" ] || { echo "rekor is not answering on port $(INNSEGL_REKOR_PORT)" >&2; exit 1; }; \
+	  printf '%s\n' "$$id" > $(REKOR_TLOG_FILE); \
+	  echo "$$id  (pinned in $(REKOR_TLOG_FILE))"
+
 ## sigstore-up: boot SPIRE and the local Fulcio/Rekor pair, wired to each other
 sigstore-up:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
@@ -99,7 +119,9 @@ sigstore-up:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
 	  docker compose -f deploy/compose/sigstore.yml up -d
+	@$(MAKE) --no-print-directory rekor-tlog-id >/dev/null 2>&1 || true
 
 ## sigstore-verify: obtain a real Fulcio certificate for a real JWT-SVID
 sigstore-verify:
@@ -229,6 +251,46 @@ REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' 
 # binary. deploy/compose/innsegl.oneprocess.yml says what that costs.
 ONEPROCESS_FILE = $(if $(ONEPROCESS),-f deploy/compose/innsegl.oneprocess.yml,)
 
+# The proof BFF serves an ALLOWLIST of repositories, not whatever is on disk,
+# and a repository missing from it makes every proof request about it a 404.
+# cmd/innsegl/api.go says why that is bad: it "reads as a verdict about the
+# commit and is a statement about the configuration". Measured 2026-09-08 --
+# the dashboard's "Verify this commit" answered 404 Not Found for a perfectly
+# good commit, because the list still held only the demo repository.
+#
+# So the list is computed from the projects that are actually there: every git
+# repository directly under INNSEGL_PROJECTS that has an origin, mapped to its
+# path under the /projects mount. Sorted, so the value does not churn between
+# runs and force a needless recreate.
+#
+# /projects/<dir> and NOT /work/<id>: the workspace path is a symlink that only
+# exists after `make innsegl-link`, so a repository would be in the allowlist
+# and still 404 until someone linked it. The API reads the real directory.
+API_REPOS = $(shell { echo 'github.com/innsegl-demo/scratch|0|/work/github.com/innsegl-demo/scratch'; \
+  for d in '$(INNSEGL_PROJECTS)'/*/; do \
+    id=$$(git -C "$$d" remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||'); \
+    [ -n "$$id" ] || continue; \
+    base=$$(basename "$$d"); \
+    name=$$(echo "$$id" | sed 's|.*/||'); \
+    if [ "$$base" = "$$name" ]; then k=0; else k=1; fi; \
+    echo "$$id|$$k|/projects/$$base"; \
+  done; } | sort -t'|' -k1,1 -k2,2n -k3,3 \
+    | awk -F'|' '!seen[$$1]++ { print $$1 "=" $$3 }' | paste -sd, -)
+
+# THE IDENTITY LISTENER, on for this target and not for the shipped default.
+#
+# innsegl.yml leaves INNSEGL_MCP_ADMIN_LISTEN empty and says why: with the split
+# on and nothing registering, no run can be created at all. This target is the
+# one where something does register -- scripts/innsegl-commit.sh and the harness
+# hook both call register_agent -- and without it innsegl-commit.sh refuses:
+#
+#   innsegl-commit: the identity service at http://127.0.0.1:28090/ could not
+#   be reached. No identity, no attributed work (IP §6.1).
+#
+# which is honest and was a dead end, because the target that exists to make
+# signing work did not start the listener signing needs.
+INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
+
 ## innsegl-up-here: bring the stack up signing in this working tree, not a copy
 innsegl-up-here: sigstore-up
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
@@ -238,6 +300,8 @@ innsegl-up-here: sigstore-up
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_PROJECTS='$(INNSEGL_PROJECTS)' \
+	  INNSEGL_API_REPOS='$(API_REPOS)' \
+	  INNSEGL_MCP_ADMIN_LISTEN='$(INNSEGL_MCP_ADMIN_LISTEN)' \
 	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml $(ONEPROCESS_FILE) up -d
 	@$(MAKE) --no-print-directory innsegl-link DIR='$(REPO_PATH)'
 

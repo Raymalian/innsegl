@@ -49,8 +49,33 @@
 #
 # This is why the file is an override you opt into and not a default.
 
+# EVERY SERVICE THAT MOUNTS THE WORKSPACE NEEDS THIS MOUNT TOO, and forgetting
+# one is silent. A repository in the workspace is a SYMLINK into /projects, so
+# a container with /work and without /projects sees a dangling link and reports
+# the repository as absent.
+#
+# Measured 2026-09-08, after this file introduced the symlinks: innsegl-api had
+# /work and not /projects, so the dashboard's "Verify this commit" answered
+# 404 Not Found for a commit that was perfectly fine. The same mistake had
+# already been made and fixed in the innsegl-verify-commit target an hour
+# earlier, and was repeated here.
+#
+# `docker compose config` names the three: innsegl-mcp, innsegl-api and
+# innsegl-reconciler. Check that list again if a service is added.
+
 services:
   innsegl-mcp:
     volumes:
       # Read-write, and it has to be: a commit is a write. See above.
       - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:/projects
+
+  innsegl-api:
+    volumes:
+      # READ-ONLY, matching how this service already mounts the workspace. doc
+      # 05's proof BFF reads commit objects with git plumbing and must not be
+      # able to write into the tree it verifies.
+      - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:/projects:ro
+
+  innsegl-reconciler:
+    volumes:
+      - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:/projects:ro
