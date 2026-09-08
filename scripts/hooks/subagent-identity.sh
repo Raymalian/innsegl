@@ -24,6 +24,8 @@
 # an agent working in the repository can edit and therefore switch off:
 #
 #   "hooks": {
+#     "SessionStart":  [{"hooks":[{"type":"command","command":"<abs path>"}]}],
+#     "SessionEnd":    [{"hooks":[{"type":"command","command":"<abs path>"}]}],
 #     "SubagentStart": [{"hooks":[{"type":"command","command":"<abs path>"}]}],
 #     "SubagentStop":  [{"hooks":[{"type":"command","command":"<abs path>"}]}]
 #   }
@@ -72,12 +74,26 @@ AGENT_ID="$(field agent_id)"
 AGENT_TYPE="$(field agent_type)"
 CWD="$(field cwd)"
 
-# No agent_id means this fired for the parent session, not a subagent. Nothing
-# to do, and refusing here would block the operator's own session.
-[ -n "$AGENT_ID" ] || exit 0
+SESSION_ID="$(field session_id)"
 
 mkdir -p "$RUNS_DIR" 2>/dev/null || true
-RUNFILE="$RUNS_DIR/$AGENT_ID"
+
+# TWO MARKERS, because there are two kinds of run.
+#
+#   $RUNS_DIR/<agent_id>            a subagent's run
+#   $RUNS_DIR/session-<session_id>  the operator's own session
+#
+# Until now only the first existed, and the hook exited early whenever
+# agent_id was absent — which is every event the main session fires. The
+# consequence was measured 2026-09-08: work in one repository produced no run
+# at all, and the operator's words were "jeg kjørte ting i raymalian. ingen
+# agent fikk identitet der. ingenting ble registrert."
+SESSIONFILE="$RUNS_DIR/session-${SESSION_ID:-unknown}"
+if [ -n "$AGENT_ID" ]; then
+  RUNFILE="$RUNS_DIR/$AGENT_ID"
+else
+  RUNFILE="$SESSIONFILE"
+fi
 
 # ---------------------------------------------------------------------------
 # One MCP call over the streamable-HTTP transport.
@@ -121,7 +137,97 @@ mcp_call() {
   printf '%s' "$_payload"
 }
 
+# derive_task sets BRANCH, TASK and REPONAME from the MAIN worktree.
+#
+# A function because two events need it now: a subagent's registration and the
+# operator's own session. It was inline in SubagentStart when only subagents
+# had identities.
+derive_task() {
+  # `git worktree list` reports the main worktree first, from inside any
+  # linked one, so this resolves the same branch wherever it runs.
+  MAIN="$(git -C "${CWD:-.}" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
+  [ -n "$MAIN" ] || MAIN="${CWD:-.}"
+  BRANCH="$(git -C "$MAIN" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  [ -n "$BRANCH" ] && [ "$BRANCH" != "HEAD" ] || BRANCH="detached"
+
+  # A branch name is not a task_id: doc 02 §5 is [a-z0-9][a-z0-9-]{0,62} and
+  # `dev/rm105-caller-split` is refused for the slash. An RM number is this
+  # project's own task identifier and is preferred where the branch carries
+  # one; otherwise the branch is folded into the grammar.
+  TASK="$(printf '%s' "$BRANCH" | tr 'A-Z' 'a-z' | sed -n 's/.*\(rm[0-9][0-9]*\).*/\1/p')"
+  if [ -z "$TASK" ]; then
+    TASK="$(printf '%s' "$BRANCH" | tr 'A-Z' 'a-z' \
+      | sed -e 's/[^a-z0-9-]/-/g' -e 's/^[^a-z0-9]*//' -e 's/--*/-/g' -e 's/-*$//' \
+      | cut -c1-63)"
+  fi
+  [ -n "$TASK" ] || TASK="unnamed"
+
+  # Prefix the repository, because without it the ledger cannot answer "what
+  # did agents do in helmward today".
+  #
+  # A run_registered event carries agent_type and task_ref and NOTHING about
+  # the repository -- the repo is only recorded when a run signs a commit,
+  # and a run that signs nothing never gets one. Measured 2026-09-08: five
+  # runs from other projects all read `main` with no repository, and were
+  # indistinguishable from each other.
+  #
+  # doc 02 §3's fields are a protected surface, so adding a repo field to
+  # run_registered would be a major version. The repository name goes into
+  # the task_id instead, which is a field that already exists -- helmwart-main
+  # rather than main.
+  REPONAME="$(git -C "$MAIN" remote get-url origin 2>/dev/null \
+    | sed -e 's|.*[/:]||' -e 's|\.git$||' | tr 'A-Z' 'a-z' \
+    | sed -e 's/[^a-z0-9-]/-/g' -e 's/^[^a-z0-9]*//' -e 's/-*$//')"
+  [ -n "$REPONAME" ] && TASK="$(printf '%s-%s' "$REPONAME" "$TASK" | cut -c1-63)"
+}
+
 case "$EVENT" in
+
+  SessionStart)
+    # THE OPERATOR'S OWN SESSION, which had no identity at all until now.
+    #
+    # WHY THIS NEVER BLOCKS, when SubagentStart does. IP §6.1 is that
+    # attributed work must be impossible without an identity, and a subagent
+    # exists only to do work this system is meant to attribute — refusing it
+    # costs nothing that matters. This session is the human's. Refusing it
+    # because a container is down would stop them working on their own machine,
+    # over a ledger. So it warns and gets out of the way, and the enforcement
+    # stays where the attribution actually happens: scripts/innsegl-commit.sh
+    # refuses to commit without a run, and the branch gate refuses to merge
+    # what was not signed.
+    [ -n "$SESSION_ID" ] || exit 0
+    [ -f "$SESSIONFILE" ] && exit 0
+
+    derive_task
+
+    OUT="$(mcp_call register_agent "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"session-%s"}' \
+      "${INNSEGL_SESSION_AGENT_TYPE:-session}" "$TASK" "$SESSION_ID")" 2>/dev/null)" || {
+      echo "innsegl: no identity for this session — the deployment at $ADMIN_URL is not answering." >&2
+      echo "innsegl:   Work is not blocked, but nothing you do here is in the ledger" >&2
+      echo "innsegl:   until it is. Bring it up with: make innsegl-up-here" >&2
+      exit 0
+    }
+
+    RUN_ID="$(printf '%s' "$OUT" | sed -n 's/.*\\"run_id\\":\\"\([^\\]*\)\\".*/\1/p' | head -n 1)"
+    [ -n "$RUN_ID" ] || RUN_ID="$(printf '%s' "$OUT" | sed -n 's/.*"run_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    [ -n "$RUN_ID" ] || exit 0
+
+    printf '%s\n' "$RUN_ID" > "$SESSIONFILE"
+    echo "innsegl: this session is $RUN_ID (task $TASK)" >&2
+    exit 0
+    ;;
+
+  SessionEnd)
+    [ -n "$SESSION_ID" ] || exit 0
+    [ -f "$SESSIONFILE" ] || exit 0
+    RUN_ID="$(head -n 1 "$SESSIONFILE")"
+    rm -f "$SESSIONFILE"
+    [ -n "$RUN_ID" ] || exit 0
+    mcp_call retire_agent "$(printf '{"run_id":"%s"}' "$RUN_ID")" >/dev/null 2>&1 \
+      && echo "innsegl: retired $RUN_ID" >&2 \
+      || echo "innsegl: could not retire $RUN_ID; it will expire on its TTL" >&2
+    exit 0
+    ;;
 
   SubagentStart)
     # The task comes from the BRANCH, and from the MAIN worktree's branch
@@ -135,42 +241,8 @@ case "$EVENT" in
     # task, or the ledger records a task per agent and answers no question
     # anyone would ask of it.
     #
-    # `git worktree list` reports the main worktree first, from inside any
-    # linked one, so this resolves the same branch wherever it runs.
-    MAIN="$(git -C "${CWD:-.}" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
-    [ -n "$MAIN" ] || MAIN="${CWD:-.}"
-    BRANCH="$(git -C "$MAIN" rev-parse --abbrev-ref HEAD 2>/dev/null)"
-    [ -n "$BRANCH" ] && [ "$BRANCH" != "HEAD" ] || BRANCH="detached"
+    derive_task
 
-    # A branch name is not a task_id: doc 02 §5 is [a-z0-9][a-z0-9-]{0,62} and
-    # `dev/rm105-caller-split` is refused for the slash. An RM number is this
-    # project's own task identifier and is preferred where the branch carries
-    # one; otherwise the branch is folded into the grammar.
-    TASK="$(printf '%s' "$BRANCH" | tr 'A-Z' 'a-z' | sed -n 's/.*\(rm[0-9][0-9]*\).*/\1/p')"
-    if [ -z "$TASK" ]; then
-      TASK="$(printf '%s' "$BRANCH" | tr 'A-Z' 'a-z' \
-        | sed -e 's/[^a-z0-9-]/-/g' -e 's/^[^a-z0-9]*//' -e 's/--*/-/g' -e 's/-*$//' \
-        | cut -c1-63)"
-    fi
-    [ -n "$TASK" ] || TASK="unnamed"
-
-    # Prefix the repository, because without it the ledger cannot answer "what
-    # did agents do in helmward today".
-    #
-    # A run_registered event carries agent_type and task_ref and NOTHING about
-    # the repository -- the repo is only recorded when a run signs a commit,
-    # and a run that signs nothing never gets one. Measured 2026-09-08: five
-    # runs from other projects all read `main` with no repository, and were
-    # indistinguishable from each other.
-    #
-    # doc 02 §3's fields are a protected surface, so adding a repo field to
-    # run_registered would be a major version. The repository name goes into
-    # the task_id instead, which is a field that already exists -- helmwart-main
-    # rather than main.
-    REPONAME="$(git -C "$MAIN" remote get-url origin 2>/dev/null \
-      | sed -e 's|.*[/:]||' -e 's|\.git$||' | tr 'A-Z' 'a-z' \
-      | sed -e 's/[^a-z0-9-]/-/g' -e 's/^[^a-z0-9]*//' -e 's/-*$//')"
-    [ -n "$REPONAME" ] && TASK="$(printf '%s-%s' "$REPONAME" "$TASK" | cut -c1-63)"
 
     # #172: refuse a subagent that is not in its own worktree, when asked to.
     #
