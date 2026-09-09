@@ -1073,9 +1073,51 @@ func TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature(t *testing.T
 	env := gitEnv(t.TempDir())
 	root := repoRoot(ctx, t, env)
 
-	commits, err := collect(ctx, root, env, "--no-merges", "HEAD")
+	// THE RANGE IS THE PULL REQUEST, not the whole history.
+	//
+	// Written to walk everything reachable from HEAD, this gate turned main red
+	// the moment the first pull request merged: nine ATTRIBUTION VIOLATIONs,
+	// every one of them a commit it had passed a day earlier. Nothing had gone
+	// wrong. GitHub's rebase button rewrites each commit, so the signature that
+	// covered the old object is gone -- measured against the button itself --
+	// while the trailers survive because they are message text.
+	//
+	// So the question has to be asked while the evidence still exists. In a
+	// pull request the commits are the ones that were signed; after a merge
+	// they are not, and no amount of scanning brings the signature back.
+	//
+	// This is a narrowing and not a weakening: every commit still passes
+	// through it exactly once, before it can reach main, and a commit that
+	// claims an identity it cannot prove is still refused there. What it stops
+	// doing is re-asking a question whose answer was destroyed in between.
+	// Checking main again becomes possible under ADR-0047, which anchors
+	// attribution to the change rather than to the commit object; #196 rebuilds
+	// this gate on it.
+	rangeSpec := "HEAD"
+	if base := strings.TrimSpace(os.Getenv("GITHUB_BASE_REF")); base != "" {
+		rangeSpec = "origin/" + base + "..HEAD"
+	}
+	// Counted before collecting, because collect treats an empty range as an
+	// error -- reasonable when the range is all of history, wrong when it is a
+	// pull request that has not added a commit yet.
+	countOut, err := runGit(ctx, root, env, "rev-list", "--no-merges", "--count", rangeSpec)
 	if err != nil {
-		t.Fatalf("collect: %v", err)
+		t.Fatalf("rev-list --count %s: %v", rangeSpec, err)
+	}
+	if strings.TrimSpace(countOut) == "0" {
+		t.Logf("GH-003: %s adds no commits; nothing to check", rangeSpec)
+		return
+	}
+	commits, err := collect(ctx, root, env, "--no-merges", rangeSpec)
+	if err != nil {
+		t.Fatalf("collect %s: %v", rangeSpec, err)
+	}
+	if rangeSpec == "HEAD" {
+		t.Skipf("GH-003 checks the commits a pull request adds, where the signature "+
+			"covering each commit object still exists. This run has no GITHUB_BASE_REF, "+
+			"so there is no such range: on a merged branch every commit object is new "+
+			"and its signature was dropped by the merge (ADR-0047). %d commits reachable "+
+			"from HEAD were not checked.", len(commits))
 	}
 
 	baseline := loadAttributionBaseline(t)
@@ -1112,13 +1154,16 @@ func TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature(t *testing.T
 	t.Logf("GH-003: %d of %d commits claim an agent identity, %d checked, %d on the baseline",
 		claimed, len(commits), checked, claimed-checked)
 
-	// An absence-shaped assertion passes when it reads nothing, so prove it
-	// read something. This repository's whole point is agent-signed commits;
-	// a history with none of them means the scan is looking in the wrong place.
+	// A pull request with no agent-authored commits is normal -- a dependency
+	// bump is exactly that -- so an empty count is not a fault.
+	//
+	// It WAS a fault while this gate scanned all of history: a repository whose
+	// whole point is agent-signed commits, showing none, meant the scan was
+	// looking in the wrong place. Narrowing to the pull request took that
+	// meaning away, and keeping the check would have failed every dependency
+	// bump for the crime of containing no agent work.
 	if claimed == 0 {
-		t.Fatal("no commit reachable from HEAD claims an agent identity, so this gate " +
-			"asserted nothing. Either the scan is reading the wrong range, or the " +
-			"trailer key changed and this test was not updated with it")
+		t.Logf("GH-003: no commit in %s claims an agent identity; nothing to check", rangeSpec)
 	}
 }
 
