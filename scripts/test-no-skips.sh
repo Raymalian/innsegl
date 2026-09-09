@@ -127,7 +127,30 @@ fi
 #       while the credential is unprovisioned, so the debt is emailed rather
 #       than merely written down. Remove this line only if GH-001 is ever made
 #       to run unattended in CI.
-ALLOWED='TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor'
+#
+#   TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature
+#       doc 07 GH-003. It refuses a commit that claims an agent identity in its
+#       trailers and carries no gitsign signature to back it. ADR-0047 measured
+#       why that question can only be asked on a pull request: GitHub's rebase
+#       button writes a NEW commit object for every commit, so the signature
+#       covering the old one is deleted while the trailers survive as message
+#       text. On a push to main every commit has already been through that, and
+#       no range is left whose answer means anything.
+#
+#       This entry is NOT the debt going quiet, and unlike the two above it is
+#       bounded by an assertion rather than by this paragraph. Nothing reaches
+#       main except through a pull request, so the pull-request run is where
+#       GH-003 answers — and `pullRequestRange` FAILS rather than skipping when
+#       the event IS a pull request and GITHUB_BASE_REF is missing, which is the
+#       only way this gate could go quiet where it matters.
+#       TestGH003TheRangeIsAPullRequestsOrTheGateSaysItDidNotRun pins that and
+#       never skips. ADR-0037 §2 draws the same line for GH-002's shallow clone
+#       and empty range.
+#
+#       Remove this line when #195 rebuilds the gate on ADR-0047's content
+#       check, where a rebased commit is matched by patch-id and main becomes
+#       checkable again.
+ALLOWED='TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature'
 
 unexpected=$(grep -F '"Action":"skip"' "${out}" | grep -F '"Test":' | grep -Ev "\"Test\":\"(${ALLOWED})\"" || true)
 skipped=$(printf '%s' "${unexpected}" | grep -c . || true)
