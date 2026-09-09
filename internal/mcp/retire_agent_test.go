@@ -1463,3 +1463,45 @@ func TestConfigureRetireAgentRefusesAnIncompleteConfiguration(t *testing.T) {
 		t.Errorf("restore() left the new configuration installed")
 	}
 }
+
+// MCP-030 (proposed for doc 07; doc 07 is not modified here).
+//
+// A refused SECOND retirement is a successful answer, not a fault.
+//
+// migrations/0004 makes the ledger refuse a second `run_retired` for one run,
+// because reading before writing cannot close a race between a read and a
+// write — MCP-011 killed this call 58ms in and the chain took two. The refusal
+// arrives here as ledger.ErrAlreadyRetired, and it means the read at the top of
+// `retire` was overtaken: by this call's own earlier attempt after a crash,
+// most often, since a SIGKILL does not cancel a transaction already sent.
+//
+// IP §6.6 says a replay returns the ORIGINAL result. So the answer is the
+// retirement that won, and reporting a failure would tell a caller its run is
+// unretired while the ledger says the opposite — the one wrong answer this
+// whole mechanism exists to prevent.
+func TestMCP030ARefusedSecondRetirementAnswersWithTheFirst(t *testing.T) {
+	chain := newRetireLedger()
+	runs := newRetireRuns(chain, retireRunRef("run-a"))
+	entries := newRetireEntries("run-a")
+	svc := &retireService{runs: runs, entries: entries, ledger: chain}
+
+	// Call 1: the directory has not caught up, so `retire` takes the append
+	// path. Call 2 is `earliestRetiredAt`, which must find the winner.
+	won := time.Date(2026, 8, 29, 11, 59, 0, 0, time.UTC)
+	runs.answerAtCall(2, CredentialRun{
+		RunID: "run-a", AgentType: retireAgentType, TaskID: retireTaskID,
+		SPIFFEID: retireSPIFFEID("run-a"), RetiredAt: won,
+	}, true, nil)
+	chain.err = ledger.ErrAlreadyRetired
+
+	out, err := svc.retire(context.Background(), retireAgentIn{RunID: "run-a"})
+	if err != nil {
+		t.Fatalf("a refused second retirement was reported as a failure: %v\n"+
+			"IP §6.6: a replay returns the original result, and the run IS retired", err)
+	}
+	if got := out.RetiredAt; !strings.Contains(got, "11:59") {
+		t.Errorf("answered %q; it must be the instant of the retirement that WON, "+
+			"not this call's own — a caller that lost the race and was told its own "+
+			"time would disagree with the ledger", got)
+	}
+}

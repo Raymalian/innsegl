@@ -225,9 +225,19 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
     # the object inside the MCP -- so this cannot block the signing path itself.
     case "$CMD" in *innsegl-commit*) exit 0 ;; esac
 
+    # THE ABSOLUTE PATH, resolved from this hook's own location.
+    #
+    # This said `scripts/innsegl-commit.sh`, which resolves only inside the
+    # innsegl repository. Reported 2026-09-09 by an agent working in another
+    # project: that project has no `scripts/` directory at all, so the refusal
+    # pointed at a file that does not exist. The agent had nineteen finished
+    # files and no way forward -- a gate that blocks and offers nothing is worse
+    # than no gate, because the work is stranded rather than merely unsigned.
+    SIGNER="$(CDPATH= cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd -P)/innsegl-commit.sh"
+
     if [ -z "$AGENT_ID" ]; then
       echo "innsegl: this is a plain git commit. It will not carry an agent identity." >&2
-      echo "innsegl:   scripts/innsegl-commit.sh -m \"...\" signs it instead." >&2
+      echo "innsegl:   $SIGNER -m \"...\" signs it instead." >&2
       exit 0
     fi
 
@@ -236,15 +246,28 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
       exit 0
     }
 
-    echo "innsegl: refused. Use scripts/innsegl-commit.sh, not git commit." >&2
+    # NEVER BLOCK WITHOUT A WAY THROUGH. If the signer is not there, this agent
+    # cannot sign no matter what it is told, and refusing would only lose the
+    # work. The branch gate still refuses to merge what was not signed, so the
+    # guarantee is kept where it can be kept.
+    [ -x "$SIGNER" ] || {
+      echo "innsegl: this commit will not carry an agent identity: the signer is not" >&2
+      echo "innsegl: reachable at $SIGNER, so refusing would strand your work rather" >&2
+      echo "innsegl: than sign it. Allowing, and scripts/verify-branch.sh will refuse" >&2
+      echo "innsegl: to merge it." >&2
+      exit 0
+    }
+
+    echo "innsegl: refused. Sign it instead of committing plainly:" >&2
     echo "innsegl:" >&2
     echo "innsegl:   git add -A" >&2
-    echo "innsegl:   scripts/innsegl-commit.sh -m \"<type>(<scope>): <what changed>\"" >&2
+    echo "innsegl:   $SIGNER -m \"<type>(<scope>): <what changed>\"" >&2
     echo "innsegl:" >&2
-    echo "innsegl: It stages exactly what you staged, signs the commit under this" >&2
-    echo "innsegl: run's identity, and logs it in Rekor. A plain git commit produces" >&2
-    echo "innsegl: work nobody can attribute, which is the one thing this" >&2
-    echo "innsegl: deployment exists to prevent (IP §6.1)." >&2
+    echo "innsegl: That path is absolute on purpose -- the signer lives in the innsegl" >&2
+    echo "innsegl: deployment, not in the repository you are working in. It stages what" >&2
+    echo "innsegl: you staged, signs under this run's identity, and logs it in Rekor." >&2
+    echo "innsegl: A plain git commit produces work nobody can attribute, which is the" >&2
+    echo "innsegl: one thing this deployment exists to prevent (IP §6.1)." >&2
     exit 2
     ;;
 
