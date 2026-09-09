@@ -118,6 +118,20 @@ func (e *StoreError) Unwrap() error { return e.Err }
 // not ask, so the reuse is refused instead.
 var ErrIdempotencyKeyConflict = errors.New("idempotency_key already names a different event")
 
+// ErrAlreadyRetired reports that the run already has a `run_retired` event.
+//
+// It is a distinct error rather than a generic constraint violation because a
+// caller acts on it: `retire_agent` is documented idempotent, so the right
+// answer to "this run is already retired" is the ORIGINAL retirement, not a
+// failure. IP §6.6 requires exactly that after a crash — "replaying any request
+// after a crash returns the original result". See migrations/0004.
+var ErrAlreadyRetired = errors.New("the run is already retired")
+
+// retirementIndex is the partial unique index migrations/0004 creates. Matched
+// by name so that a DIFFERENT unique violation is not quietly reported as a
+// duplicate retirement.
+const retirementIndex = "events_one_run_retired_per_run"
+
 // ledgerAssignedByStore are the members the store assigns on top of the three
 // chain.Append assigns. doc 02 §2 calls event_id "assigned by the ledger", so
 // a caller supplying one is refused rather than overwritten.
@@ -304,6 +318,13 @@ func (s *Store) Append(ctx context.Context, body event.Fields) (event.Fields, er
 		}
 		last = err
 		if !appendSafeToRetry(ctx, p, err) {
+			// The run id is added here and not in classify, which sees only an
+			// error: a caller told "the run is already retired" without being
+			// told WHICH run cannot act on it, and this is the one refusal a
+			// caller is expected to turn into a successful answer.
+			if errors.Is(err, ErrAlreadyRetired) {
+				return nil, fmt.Errorf("%w: %s", err, p.runID)
+			}
 			return nil, err
 		}
 	}
@@ -782,6 +803,15 @@ func classify(op string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch {
+		case pgErr.ConstraintName == retirementIndex:
+			// Not a fault, and not a generic constraint violation. The run was
+			// retired already — by an earlier attempt of this same call, most
+			// likely, since that is the window migrations/0004 exists to close.
+			// The caller turns this into the original retirement.
+			return &StoreError{
+				Class: ClassInvariantViolation, Op: op, Retryable: false,
+				Err: ErrAlreadyRetired,
+			}
 		case pgErr.Code == AppendOnlySQLState, pgErr.Code == ChainLinkSQLState:
 			// The database refused to break the ledger. That is never a
 			// transport problem and never worth retrying.

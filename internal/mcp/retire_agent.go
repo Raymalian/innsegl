@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -78,15 +79,18 @@ import (
 // retirement at the mercy of a caller that happened to use the same string for
 // something else.
 //
-// The cost is that the check and the append are two steps rather than one, and
-// the mechanism that would fuse them is the one ADR-0004 forbids. Two
-// genuinely concurrent FIRST retirements of one run can therefore both find no
-// record and both append, leaving two `run_retired` events. Both callers are
-// still told the same instant, because the directory answers with the
-// earliest; at most one deletion finds an entry, and the other is the success
-// with nothing deleted that IP §4 already requires; and every later call is
-// answered from the earliest record. What the window cannot produce is a
-// retirement that is not recorded, or an entry deleted without a record.
+// The cost is that the check and the append are two steps rather than one.
+// This header used to say the resulting window was acceptable, and it was
+// wrong: MCP-011's fuzz campaign killed this call 58ms in and the chain took
+// two `run_retired` events for one run, which IP §6.6 forbids without
+// exception -- "never a second identity, second event, or second commit".
+//
+// migrations/0004 closes it with a partial unique index on `run_retired` per
+// run. That needs no key from any caller, so it does not reintroduce what
+// ADR-0004 forbids; the run is the key, which is what ADR-0004 said it should
+// be. A loser of the race is told the winner's instant, because the directory
+// answers with the earliest record, and its append is refused rather than
+// recorded (ledger.ErrAlreadyRetired, handled below as success).
 //
 // # Immediacy is this layer's obligation
 //
@@ -277,12 +281,25 @@ func (s *retireService) retire(ctx context.Context, in retireAgentIn) (retireAge
 	if !run.Retired() {
 		// Ledger first. See the ordering note at the top of this file.
 		if _, err = s.record(ctx, run, spiffeID); err != nil {
-			return retireAgentOut{}, err
+			// ErrAlreadyRetired means the ledger refused a SECOND retirement,
+			// which is not a fault and is the whole point of migrations/0004.
+			// The read above said "not retired" and was overtaken -- by this
+			// call's own earlier attempt after a crash, most often, because a
+			// SIGKILL does not cancel a transaction already sent.
+			//
+			// IP §6.6 says a replay returns the ORIGINAL result, so the answer
+			// is the retirement that won, fetched below, and not this error.
+			// Reporting a failure here would tell a caller its run is unretired
+			// while the ledger says otherwise.
+			if !errors.Is(err, ledger.ErrAlreadyRetired) {
+				return retireAgentOut{}, err
+			}
 		}
-		// ADR-0020 §5. The check above is not atomic with the append below it —
-		// the mechanism that would fuse them is the idempotency_key ADR-0004
-		// forbids — so two genuinely concurrent FIRST retirements of this run
-		// can both have read "not retired" here and both be about to append.
+		// ADR-0020 §5. The check above is not atomic with the append below it,
+		// and migrations/0004 is what fuses them — a partial unique index on
+		// `run_retired` per run, which needs no idempotency_key and so does not
+		// touch what ADR-0004 forbids. Before it, two retirements of one run
+		// could both land, and MCP-011 measured exactly that.
 		// This call's own append is not necessarily the one the ADR promises
 		// every caller: re-reading the directory is what makes it so. The
 		// directory answers with the EARLIEST `run_retired` for the run

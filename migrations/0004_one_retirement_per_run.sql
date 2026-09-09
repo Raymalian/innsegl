@@ -1,0 +1,41 @@
+-- SPDX-License-Identifier: Apache-2.0
+--
+-- A run retires once (RM-112, #179, IP §6.6).
+--
+-- WHY THIS IS A CONSTRAINT AND NOT MORE CHECKING IN THE CALLER
+--
+-- `retire_agent` reads the chain to see whether the run has already been
+-- retired, and appends if it has not. That is two steps, and a SIGKILL between
+-- them is not hypothetical -- MCP-011's fuzz campaign found it:
+--
+--   blind stratum 6, +58.394362ms: the chain holds 2 `run_retired` events for run
+--
+-- A killed process does not cancel a transaction it has already sent. The first
+-- attempt's INSERT can commit after the process is gone, and a replay that
+-- reads before that commit lands finds nothing and appends a second. No amount
+-- of reading before writing closes a race between a read and a write; the check
+-- and the append have to be one act, and the database is the only place that
+-- can be true.
+--
+-- WHY NOT AN IDEMPOTENCY KEY, WHICH IS HOW EVERY OTHER TOOL SOLVES THIS
+--
+-- ADR-0004 forbids one here, and the envelope enforces it: "idempotency_key
+-- must be absent on run_retired; the MCP tool that emits it takes no
+-- idempotency key". Its argument is that a caller-supplied key would invent a
+-- way for two retirements of one run to disagree, which is a contradiction the
+-- ledger would then have to record. Idempotency was to be intrinsic to the run.
+--
+-- This index is that intention made mechanical. It needs no key from anybody:
+-- the run is the key, which is exactly what ADR-0004 said it should be.
+--
+-- WHAT THIS DOES NOT DO
+--
+-- It does not delete anything, and it cannot. innsegl.events is append-only by
+-- trigger and by I4. On a deployment that already carries a duplicate
+-- retirement this migration will FAIL, loudly, and that is the correct
+-- behaviour: a chain holding two retirements of one run has an integrity
+-- finding that an operator must see, not one to paper over on the way past.
+
+CREATE UNIQUE INDEX events_one_run_retired_per_run
+    ON innsegl.events (run_id)
+    WHERE event_type = 'run_retired';

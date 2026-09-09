@@ -106,10 +106,10 @@ func TestMCP029AWorktreeMustStayInsideItsRepository(t *testing.T) {
 	})
 
 	for _, tc := range []struct{ name, sub, want string }{
-		{"a parent traversal", "../elsewhere", "escapes"},
-		{"a traversal that returns", ".claude/../../elsewhere", "escapes"},
+		{"a parent traversal", "../elsewhere", "is outside"},
+		{"a traversal that returns", ".claude/../../elsewhere", "is outside"},
 		{"an absolute path", escape, "absolute"},
-		{"a symlink out of the repository", "out", "escapes"},
+		{"a symlink out of the repository", "out", "is outside"},
 		{"a directory that is not a working tree", ".claude", "not a git working tree"},
 		{"a path that does not exist", ".claude/worktrees/agent-nope", "not a git working tree"},
 	} {
@@ -121,6 +121,16 @@ func TestMCP029AWorktreeMustStayInsideItsRepository(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("resolveWorktree(%q) said %q, which does not say %q", tc.sub, err, tc.want)
+			}
+			// A REFUSAL MUST NAME THE FIX. Reported 2026-09-09: the old wording
+			// ("escapes ... a commit may only be written inside the repository
+			// the run named") read as a permissions boundary, so an agent whose
+			// worktree sat beside the repository concluded it was forbidden and
+			// stopped working. The remedy — put the worktree inside the
+			// repository — was nowhere in the message.
+			if strings.Contains(tc.want, "outside") && !strings.Contains(err.Error(), "worktree add") {
+				t.Errorf("resolveWorktree(%q) refused without saying what to do instead: %q",
+					tc.sub, err)
 			}
 		})
 	}
