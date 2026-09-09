@@ -64,19 +64,6 @@ func appendRetired(t *testing.T, store *ledger.Store, runID string) event.Fields
 	return rec
 }
 
-func tsOf(t *testing.T, rec event.Fields) time.Time {
-	t.Helper()
-	raw, ok := rec[event.FieldTS].(string)
-	if !ok {
-		t.Fatalf("the appended record carries no ts: %#v", rec)
-	}
-	ts, err := event.ParseTimestamp(raw)
-	if err != nil {
-		t.Fatalf("ParseTimestamp(%q): %v", raw, err)
-	}
-	return ts.Time()
-}
-
 // The real-chain case for ADR-0020 §5's "earliest retirement wins" USED TO BE
 // here, appending four `run_retired` events for one run. migrations/0004 makes
 // that impossible — a partial unique index refuses a second retirement, because
