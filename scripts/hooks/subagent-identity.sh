@@ -233,7 +233,23 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
     # pointed at a file that does not exist. The agent had nineteen finished
     # files and no way forward -- a gate that blocks and offers nothing is worse
     # than no gate, because the work is stranded rather than merely unsigned.
-    SIGNER="$(CDPATH= cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd -P)/innsegl-commit.sh"
+    # RESOLUTION ORDER, most portable first.
+    #
+    #   1  $INNSEGL_SIGNER            an operator who put it somewhere else
+    #   2  innsegl-commit on PATH     `make innsegl-install-signer` puts it there
+    #   3  this hook's own repository the fallback, and the only one that
+    #                                 assumed a layout the agent may not have
+    #
+    # 2 is why this exists. The message named a path relative to the innsegl
+    # repository, which an agent working anywhere else cannot resolve, and it
+    # was pointed at a file that does not exist while holding finished work.
+    if [ -n "${INNSEGL_SIGNER:-}" ] && [ -x "${INNSEGL_SIGNER}" ]; then
+      SIGNER="$INNSEGL_SIGNER"
+    elif command -v innsegl-commit >/dev/null 2>&1; then
+      SIGNER="innsegl-commit"
+    else
+      SIGNER="$(CDPATH= cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd -P)/innsegl-commit.sh"
+    fi
 
     if [ -z "$AGENT_ID" ]; then
       echo "innsegl: this is a plain git commit. It will not carry an agent identity." >&2
@@ -250,21 +266,21 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
     # cannot sign no matter what it is told, and refusing would only lose the
     # work. The branch gate still refuses to merge what was not signed, so the
     # guarantee is kept where it can be kept.
-    [ -x "$SIGNER" ] || {
+    if [ "$SIGNER" = "innsegl-commit" ] || [ -x "$SIGNER" ]; then :; else
       echo "innsegl: this commit will not carry an agent identity: the signer is not" >&2
       echo "innsegl: reachable at $SIGNER, so refusing would strand your work rather" >&2
       echo "innsegl: than sign it. Allowing, and scripts/verify-branch.sh will refuse" >&2
       echo "innsegl: to merge it." >&2
       exit 0
-    }
+    fi
 
     echo "innsegl: refused. Sign it instead of committing plainly:" >&2
     echo "innsegl:" >&2
     echo "innsegl:   git add -A" >&2
     echo "innsegl:   $SIGNER -m \"<type>(<scope>): <what changed>\"" >&2
     echo "innsegl:" >&2
-    echo "innsegl: That path is absolute on purpose -- the signer lives in the innsegl" >&2
-    echo "innsegl: deployment, not in the repository you are working in. It stages what" >&2
+    echo "innsegl: The signer belongs to the innsegl deployment, not to the repository" >&2
+    echo "innsegl: you are working in, so it is reachable from anywhere. It stages what" >&2
     echo "innsegl: you staged, signs under this run's identity, and logs it in Rekor." >&2
     echo "innsegl: A plain git commit produces work nobody can attribute, which is the" >&2
     echo "innsegl: one thing this deployment exists to prevent (IP §6.1)." >&2
@@ -468,7 +484,11 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
       if [ "${committed:-0}" = "0" ] && [ "${dirty:-0}" != "0" ]; then
         echo "innsegl: $RUN_ID left $dirty uncommitted path(s) and signed nothing; capturing" >&2
         git -C "$capture_dir" add -A 2>/dev/null || true
-        HOOK_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+        if command -v innsegl-commit >/dev/null 2>&1; then
+          CAPTURE_SIGNER="innsegl-commit"
+        else
+          CAPTURE_SIGNER="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)/../innsegl-commit.sh"
+        fi
         MSG="chore(agent): work left by $AGENT_TYPE run $RUN_ID
 
 Captured by the harness at SubagentStop because the run ended with $dirty
@@ -480,7 +500,7 @@ The build was not run. A subagent's work is recorded as it was left; the branch
 gate is what decides whether it may merge."
         # 3. sign it under THIS RUN, not a new one -- and do not retire it here,
         #    the retirement below is the one that belongs to this stop.
-        if ( cd "$capture_dir" && "$HOOK_DIR/../innsegl-commit.sh" \
+        if ( cd "$capture_dir" && "$CAPTURE_SIGNER" \
                -r "$RUN_ID" ${TASK:+-t "$TASK"} ${REL:+-w "$REL"} -m "$MSG" ) >&2 2>&1; then
           :
         else

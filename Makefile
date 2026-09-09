@@ -25,7 +25,7 @@ COVERPROFILE := cover.out
         sigstore-up sigstore-verify sigstore-down rekor-tlog-id \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
-        innsegl-stack-clean innsegl-up-here innsegl-link verify-branch \
+        innsegl-stack-clean innsegl-up-here innsegl-link innsegl-install-signer verify-branch \
         verify-branch-selftest start link sign clean
 
 all: build test lint
@@ -381,6 +381,28 @@ sign:
 	@scripts/innsegl-commit.sh $(filter-out $@,$(MAKECMDGOALS)) $(ARGS)
 
 ## innsegl-link: make a repository signable — make innsegl-link DIR=~/Applications/foo
+# WHERE THE SIGNER LIVES, and it is not in this repository.
+#
+# The harness gate refuses a plain `git commit` and tells the agent to sign
+# instead. It used to name `scripts/innsegl-commit.sh`, a path that resolves
+# only here -- reported 2026-09-09 by an agent working in a project that has no
+# `scripts/` directory at all. It had nineteen finished files and was pointed at
+# a file that does not exist.
+#
+# A SYMLINK, not a copy: a copy goes stale the moment the script changes, and a
+# stale signer is worse than an absent one because it fails in ways nobody is
+# looking for. ~/.local/bin is already on PATH, so `innsegl-commit` becomes a
+# plain command in every repository.
+INNSEGL_BIN ?= $(HOME)/.local/bin
+
+## innsegl-install-signer: put `innsegl-commit` on PATH for every project
+innsegl-install-signer:
+	@mkdir -p '$(INNSEGL_BIN)'
+	@ln -sf '$(CURDIR)/scripts/innsegl-commit.sh' '$(INNSEGL_BIN)/innsegl-commit'
+	@command -v innsegl-commit >/dev/null 2>&1 \
+	  && echo "innsegl-commit -> $$(command -v innsegl-commit)" \
+	  || echo "installed to $(INNSEGL_BIN)/innsegl-commit, which is NOT on your PATH"
+
 innsegl-link:
 	@test -n "$(DIR)" || { echo 'innsegl-link: pass DIR=<path to a git repository>'; exit 2; }
 	@d="$$(cd '$(DIR)' && pwd -P)"; \
