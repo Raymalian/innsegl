@@ -1091,11 +1091,20 @@ func TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature(t *testing.T
 	// claims an identity it cannot prove is still refused there. What it stops
 	// doing is re-asking a question whose answer was destroyed in between.
 	// Checking main again becomes possible under ADR-0047, which anchors
-	// attribution to the change rather than to the commit object; #196 rebuilds
+	// attribution to the change rather than to the commit object; #195 rebuilds
 	// this gate on it.
-	rangeSpec := "HEAD"
-	if base := strings.TrimSpace(os.Getenv("GITHUB_BASE_REF")); base != "" {
-		rangeSpec = "origin/" + base + "..HEAD"
+	rangeSpec, err := pullRequestRange(os.Getenv("GITHUB_EVENT_NAME"), os.Getenv("GITHUB_BASE_REF"))
+	if err != nil {
+		t.Fatalf("GH-003 did not run: %v", err)
+	}
+	if rangeSpec == "" {
+		t.Skipf("GH-003 checks the commits a pull request adds, where the signature " +
+			"covering each commit object still exists. This run is not a pull request, " +
+			"so there is no such range: on a merged branch every commit object is new " +
+			"and the merge dropped the signature that covered the old one (ADR-0047). " +
+			"scripts/test-no-skips.sh allows this skip and states the reason; the " +
+			"pull-request run is where the question is answerable, and #195 rebuilds " +
+			"the gate on content so main can be checked again.")
 	}
 	// Counted before collecting, because collect treats an empty range as an
 	// error -- reasonable when the range is all of history, wrong when it is a
@@ -1111,13 +1120,6 @@ func TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature(t *testing.T
 	commits, err := collect(ctx, root, env, "--no-merges", rangeSpec)
 	if err != nil {
 		t.Fatalf("collect %s: %v", rangeSpec, err)
-	}
-	if rangeSpec == "HEAD" {
-		t.Skipf("GH-003 checks the commits a pull request adds, where the signature "+
-			"covering each commit object still exists. This run has no GITHUB_BASE_REF, "+
-			"so there is no such range: on a merged branch every commit object is new "+
-			"and its signature was dropped by the merge (ADR-0047). %d commits reachable "+
-			"from HEAD were not checked.", len(commits))
 	}
 
 	baseline := loadAttributionBaseline(t)
@@ -1164,6 +1166,97 @@ func TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature(t *testing.T
 	// bump for the crime of containing no agent work.
 	if claimed == 0 {
 		t.Logf("GH-003: no commit in %s claims an agent identity; nothing to check", rangeSpec)
+	}
+}
+
+// pullRequestRange is the commit range GH-003 can honestly ask about, decided
+// from the two variables GitHub Actions sets: GITHUB_EVENT_NAME and
+// GITHUB_BASE_REF.
+//
+// An empty spec and no error means this run is not a pull request, and the
+// caller skips: the merge button rewrote every commit on the way to main, so
+// there is no range left whose signatures mean anything (ADR-0047).
+//
+// A pull-request event with no base ref returns an ERROR instead, because that
+// combination is the one way this gate can go quiet where it matters. Nothing
+// reaches main except through a pull request, so the pull-request run is the
+// only place GH-003 ever runs; a skip there is the gate not running rather than
+// the gate having nothing to ask, and ADR-0037 §2 already draws that line for
+// GH-002's shallow clone and empty range. It is also what bounds the entry
+// scripts/test-no-skips.sh carries for this test: the skip is allowed exactly
+// where the question is unanswerable, and refused where it is not.
+//
+// The range is never returned alongside an error, for the reason ADR-0028 §7
+// gives for the author guard: a caller that ignores the error still has nothing
+// to scan.
+func pullRequestRange(event, base string) (string, error) {
+	if base = strings.TrimSpace(base); base != "" {
+		return "origin/" + base + "..HEAD", nil
+	}
+	if strings.HasPrefix(strings.TrimSpace(event), "pull_request") {
+		return "", fmt.Errorf("GITHUB_EVENT_NAME is %q and GITHUB_BASE_REF is empty, so "+
+			"there is no pull-request range to check. Every commit reaches main through a "+
+			"pull request, so this run is where GH-003 has to answer; skipping it would "+
+			"retire the gate silently. Check out with fetch-depth: 0 and leave "+
+			"GITHUB_BASE_REF to the event (see .github/workflows/author-gate.yml)", event)
+	}
+	return "", nil
+}
+
+// TestGH003TheRangeIsAPullRequestsOrTheGateSaysItDidNotRun pins the one
+// decision that keeps GH-003's skip honest.
+//
+// GH-003 asks its question only where the answer still exists: inside a pull
+// request, before the merge button rewrites each commit and drops the signature
+// that covered it (ADR-0047). Everywhere else it skips, and
+// scripts/test-no-skips.sh allows that skip by name.
+//
+// An allowlisted skip is the shape this project has been bitten by, so the
+// allowance is bounded by an assertion rather than by a comment: on a
+// pull-request event the range MUST resolve, and a missing GITHUB_BASE_REF
+// there is a failure, not a skip. Every commit reaches main through a pull
+// request, so that run is the only place GH-003 ever runs; a skip there would
+// be the gate not running rather than the gate having nothing to ask. ADR-0037
+// §2 draws the same line for GH-002's shallow clone and empty range.
+func TestGH003TheRangeIsAPullRequestsOrTheGateSaysItDidNotRun(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		event   string
+		base    string
+		want    string
+		wantErr bool
+	}{
+		{"a pull request names its base", "pull_request", "main", "origin/main..HEAD", false},
+		{"a pull request onto a release branch", "pull_request", "release/v0.2", "origin/release/v0.2..HEAD", false},
+		{"whitespace around the base ref is not a base ref", "pull_request", "  main  ", "origin/main..HEAD", false},
+		{"a pull request with no base ref is a gate that did not run", "pull_request", "", "", true},
+		{"and so is pull_request_target", "pull_request_target", "", "", true},
+		{"a push to main has no range, and skips", "push", "", "", false},
+		{"neither does a developer's laptop", "", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := pullRequestRange(tc.event, tc.base)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("event %q with base %q returned %q and no error; a "+
+						"pull-request run with no base ref means GH-003 did not run, "+
+						"which is a failure and not a skip", tc.event, tc.base, got)
+				}
+				if got != "" {
+					t.Errorf("returned range %q alongside the error; a caller that "+
+						"ignores the error must still have nothing to scan", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("event %q with base %q: unexpected error %v", tc.event, tc.base, err)
+			}
+			if got != tc.want {
+				t.Errorf("event %q with base %q gave %q, want %q", tc.event, tc.base, got, tc.want)
+			}
+		})
 	}
 }
 
