@@ -11,7 +11,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/spiffe/go-spiffe/v2 v2.7.0
 	github.com/spiffe/spire-api-sdk v1.15.3
-	google.golang.org/grpc v1.83.1
+	google.golang.org/grpc v1.83.2
 	pgregory.net/rapid v1.3.0
 )
 
