@@ -135,6 +135,12 @@ func TestCredentialRunReadsTheRunOffTheChain(t *testing.T) {
 // because `ts` is read inside the serialized append. So the disagreement is
 // constructed here on purpose: it is the only shape that separates "earliest"
 // from "first".
+// This is the ONLY home for ADR-0020 §5 since migrations/0004. A real-chain
+// variant lived in directory_pg_test.go and appended four retirements for one
+// run; the ledger now refuses the second, so the state can no longer be built
+// through the store. It can still be READ: a deployment that hit the bug the
+// index closes carries its duplicates forever, because records are never
+// rewritten (I4). That is why the rule stays and why it is tested here.
 func TestTheEarliestRunRetiredWinsWhenSeveralArePresent(t *testing.T) {
 	const earliest = "2026-08-29T10:00:01.000Z"
 	d := newDirectory(t, []event.Fields{
