@@ -42,7 +42,23 @@ set -eu
 
 ADMIN_URL="${INNSEGL_MCP_ADMIN_URL:-http://127.0.0.1:28090/}"
 AGENT_URL="${INNSEGL_MCP_URL:-http://127.0.0.1:28080/}"
-AGENT_TYPE="${INNSEGL_AGENT_TYPE:-orchestrator}"
+# `signer`, not `orchestrator`, and the distinction is the point.
+#
+# This script mints a THROWAWAY identity per commit: register, sign, retire, in
+# about half a second. Measured across the ledger on 2026-09-09 -- 95 such runs
+# with a median life of 0.58s, against 44 real agent runs with a median of
+# 11m38s. They are 87% of everything registered in a working day.
+#
+# Typed `orchestrator` they were indistinguishable from a real agent, so a
+# dashboard listing runs newest-first buried the four live agents under a
+# hundred half-second signers, and the operator read that as "everything dies
+# immediately". Nothing was dying. Filtering them out happened to work only
+# because no real subagent had used that type yet, which is luck rather than
+# design.
+#
+# doc 02 §5 gives agent_type a grammar, not an enum -- its own example is
+# `fix-ci` -- so this is a new value and not a protected-string change.
+AGENT_TYPE="${INNSEGL_AGENT_TYPE:-signer}"
 
 usage() {
   echo "usage: innsegl-commit.sh -m <message> | -F <file>" >&2
