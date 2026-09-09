@@ -51,6 +51,16 @@ type authorPolicyFile struct {
 	Operators    []string `json:"operators"`
 
 	AllowUnlinked bool `json:"allow_unlinked"`
+
+	// InstalledBots are third-party bots the operator installed, admitted by
+	// exact address. A CODING AGENT is never listed here — see the field's
+	// documentation in internal/signing.
+	InstalledBots []string `json:"installed_bots"`
+
+	// InstalledBotsNote carries the rule in the file itself. Whoever adds an
+	// entry is editing JSON, not reading Go, and the one thing they must know
+	// is which actors may never be listed.
+	InstalledBotsNote string `json:"installed_bots_note"`
 }
 
 func loadAuthorPolicy(t *testing.T) signing.AuthorPolicy {
@@ -70,7 +80,9 @@ func loadAuthorPolicy(t *testing.T) signing.AuthorPolicy {
 		// turn the gate into an unconditional failure rather than a check.
 		t.Fatalf("%s admits nothing: no operators and allow_unlinked false", authorPolicyPath)
 	}
-	return signing.AuthorPolicy{Operators: f.Operators, AllowUnlinked: f.AllowUnlinked}
+	return signing.AuthorPolicy{
+		Operators: f.Operators, AllowUnlinked: f.AllowUnlinked, InstalledBots: f.InstalledBots,
+	}
 }
 
 // ---------------------------------------------------------------------------

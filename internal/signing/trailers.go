@@ -212,13 +212,54 @@ type AuthorPolicy struct {
 	// that form is precisely how GitHub attaches a commit to an account. It
 	// is admissible as an operator, by being listed, never as "unlinked".
 	AllowUnlinked bool
+
+	// InstalledBots are third-party bots the operator deliberately installed,
+	// admitted by EXACT address and nothing else.
+	//
+	// I6 exists so that an agent WRITING CODE here cannot become a GitHub
+	// identity: "agent identity lives only in trailers + signature". The
+	// actors that threaten it are the ones that produce code. If one of those
+	// is attributed as an author, "who wrote this" has two answers — one
+	// cryptographic, one social — and they can disagree. The design exists so
+	// there is exactly one.
+	//
+	// A dependency bot is not that. It raises a version number in a manifest
+	// under a policy the operator set. Refusing it enforces the letter of I6
+	// against something the rule was not written for, and the cost is a
+	// security product that cannot take security updates.
+	//
+	// EXACT ADDRESSES, NEVER A PATTERN. A rule over "[bot]" or over the
+	// noreply domain would admit every bot GitHub installs, including one that
+	// writes code — which is the thing this must never do. Each entry is a
+	// decision about one actor, taken once, in writing.
+	//
+	// A CODING AGENT IS NEVER LISTED HERE. Not Claude Code, not Copilot, not
+	// this deployment's own agents, which use an unlinked address instead and
+	// carry their identity in the trailer and the signature.
+	InstalledBots []string
 }
 
 var (
+	// SQUARE BRACKETS are outside RFC 5322's unquoted dot-atom and are here on
+	// purpose: GitHub writes a bot's address as `123+name[bot]@...`, unquoted,
+	// so a parser holding strictly to the grammar cannot even READ one. It
+	// reported "has a local part outside the unquoted dot-atom grammar" and
+	// stopped before any policy decision was made.
+	//
+	// Being able to parse an address admits nothing. Admission is an exact
+	// match against Operators or InstalledBots, so widening what can be READ
+	// cannot widen what is ALLOWED -- and AllowUnlinked needs a reserved
+	// domain, which `users.noreply.github.com` is not.
+	//
 	// localPattern is RFC 5322's dot-atom: the unquoted local part. Quoted
 	// and comment forms are refused — they can contain the characters that
 	// break a commit object's `Name <email>` author line.
-	localPattern = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+$")
+	localPattern = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.\\[\\]-]+$")
+
+	// githubBotLocal is GitHub's bot form: `<account id>+<name>[bot]`. It is
+	// here to be REFUSED BY NAME rather than by accident -- see the note on
+	// square brackets above localPattern.
+	githubBotLocal = regexp.MustCompile(`^[0-9]+\+[A-Za-z0-9-]+\[bot\]$`)
 
 	// domainPattern is a dotted host name, at least two labels. A single
 	// label has no registrable domain to reason about, so it cannot be shown
@@ -254,6 +295,28 @@ func (p AuthorPolicy) CheckAuthor(email string) error {
 		if local == opLocal && strings.EqualFold(domain, opDomain) {
 			return nil
 		}
+	}
+	// Exact match, and the same comparison the operator list uses: the local
+	// part is case-sensitive, the domain is not.
+	for _, bot := range p.InstalledBots {
+		botLocal, botDomain, botErr := splitAddress(bot)
+		if botErr != nil {
+			return fmt.Errorf("%w: the policy lists %q as an installed bot, which is not "+
+				"an address: %w", ErrAuthorNotAdmitted, bot, botErr)
+		}
+		if local == botLocal && strings.EqualFold(domain, botDomain) {
+			return nil
+		}
+	}
+	// A GitHub BOT address that is not on the list gets a pointed refusal
+	// rather than the general one. This is the moment somebody is tempted to
+	// add an entry, so the message says which actors must never get one.
+	if githubBotLocal.MatchString(local) {
+		return fmt.Errorf("%w: %q is a GitHub bot and is not listed as an installed bot. "+
+			"A dependency bot may be listed, by exact address. A CODING AGENT may not: "+
+			"an actor that writes code must never become a GitHub identity, which is "+
+			"what I6 exists to prevent — its identity belongs in the trailer and the "+
+			"signature", ErrAuthorNotAdmitted, email)
 	}
 	if p.AllowUnlinked && isReservedDomain(domain) {
 		return nil
