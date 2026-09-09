@@ -1049,8 +1049,16 @@ func resolveWorktree(root, sub string) (string, error) {
 	// string prefix and is not inside it.
 	rel, err := filepath.Rel(rootReal, dir)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("worktree %q escapes %s; a commit may only be written inside "+
-			"the repository the run named", sub, root)
+		// SAY WHAT TO DO, not only what was refused. Reported 2026-09-09: this
+		// message reads as a permissions boundary, so an agent whose worktree
+		// sat beside the repository concluded it was not allowed to sign and
+		// stopped. The fix was to move the directory, and nothing here hinted
+		// at it. A refusal an operator cannot act on is a dead end with an
+		// explanation attached.
+		return "", fmt.Errorf("worktree %q is outside %s. A commit is written inside the "+
+			"repository the run named, so the worktree has to live there too — create it "+
+			"under the repository, for example `git worktree add .worktrees/%s`, and pass "+
+			"that path instead", sub, root, filepath.Base(sub))
 	}
 
 	// The same check Worktree makes, and for the same reason: `.git` is a
