@@ -4,5 +4,9 @@
   "operators": [
     "66436734+KodyMike@users.noreply.github.com"
   ],
-  "allow_unlinked": true
+  "allow_unlinked": true,
+  "installed_bots": [
+    "49699333+dependabot[bot]@users.noreply.github.com"
+  ],
+  "installed_bots_note": "Third-party bots this repository installed, admitted by EXACT address. A coding agent is NEVER listed here - not Claude Code, not Copilot, not this deployment's own agents, which use an unlinked address and carry their identity in the trailer and the signature. I6 exists to stop an actor that WRITES CODE from becoming a GitHub identity; a dependency bot raising a version number is not that actor."
 }
