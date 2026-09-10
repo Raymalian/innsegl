@@ -119,3 +119,36 @@ type ContentRecord struct {
 	CommitSHA string
 	EventID   string
 }
+
+// HoldsAnyPatchID reports whether this chain has ever recorded a change
+// identity.
+//
+// # Why a gate asks this before it asks anything else
+//
+// `patch_id` arrives with schema 2 (ADR-0047). A deployment that has not been
+// upgraded writes `commit_recorded` without one, and every commit it signed is
+// therefore outside the content scheme — not because the content changed, but
+// because nothing ever recorded what the content was.
+//
+// Measured on this deployment on 2026-09-10: 126 `commit_recorded` events, none
+// carrying a patch id. A content check run against that chain would report every
+// one of those commits as unattributable, which is a false accusation about 126
+// genuine signatures. Asking once, up front, turns that into a single sentence
+// about the deployment.
+//
+// LIMIT 1 on an index-free predicate is deliberate: the answer is "has this ever
+// happened", so the first row that carries one ends the scan.
+func HoldsAnyPatchID(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
+	var recorded bool
+	err := pool.QueryRow(ctx,
+		`SELECT EXISTS (
+		     SELECT 1 FROM innsegl.events
+		      WHERE event_type = ANY($1)
+		        AND convert_from(canonical, 'UTF8')::jsonb ? 'patch_id'
+		      LIMIT 1)`,
+		[]string{event.EventTypeCommitIntent, event.EventTypeCommitRecorded}).Scan(&recorded)
+	if err != nil {
+		return false, classify("holds_any_patch_id", err)
+	}
+	return recorded, nil
+}
