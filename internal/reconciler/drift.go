@@ -352,6 +352,16 @@ type recordedCommit struct {
 	commitSHA string
 	uuid      string
 	logIndex  int64
+	// supersedes is the `commit_recorded` this one replaces, empty on an
+	// original. ADR-0047's rebase pass sets it: the change moved to a new
+	// object, so `commit_sha` moved with it while the signature did not.
+	supersedes string
+	// signedSHA is the commit whose artifact hash the named Rekor entry must
+	// attest. It is commitSHA on an original and the SUPERSEDED record's
+	// commitSHA on a superseding one, because a rebase cannot carry a
+	// signature across and no entry for the rewritten object exists.
+	// Filled by driftView.signedSHAOf, not by observe.
+	signedSHA string
 }
 
 // driftView is what the chain says, as far as drift detection is concerned. It
@@ -367,13 +377,41 @@ type driftView struct {
 	// chain rather than remembered.
 	reported map[string]struct{}
 	subjects map[string]struct{}
+	// shaByEvent maps a `commit_recorded`'s event id to its `commit_sha`, so a
+	// superseding record can be judged against the object that was signed.
+	shaByEvent map[string]string
+}
+
+// signedSHAOf is the commit whose artifact hash the entry a record names must
+// attest.
+//
+// On an original that is the record's own `commit_sha`. On a superseding record
+// (ADR-0047) it is the SUPERSEDED record's, because a rebase rewrites the commit
+// object and gitsign signed the object: the entry is real, it proves the change,
+// and it names the sha the change used to have. Comparing it against the new sha
+// is a comparison that is false by construction, and a check that is always
+// false is an alert that always fires.
+//
+// A `supersedes` naming something this walk never saw falls back to the record's
+// own `commit_sha`, so the artifact check still runs and still bites. That is
+// deliberate: it denies a fabricated record an exemption bought by pointing
+// `supersedes` at nothing.
+func (v *driftView) signedSHAOf(record recordedCommit) string {
+	if record.supersedes == "" {
+		return record.commitSHA
+	}
+	if sha := v.shaByEvent[record.supersedes]; sha != "" {
+		return sha
+	}
+	return record.commitSHA
 }
 
 func newDriftView() *driftView {
 	return &driftView{
-		claimed:  map[string]struct{}{},
-		reported: map[string]struct{}{},
-		subjects: map[string]struct{}{},
+		claimed:    map[string]struct{}{},
+		reported:   map[string]struct{}{},
+		subjects:   map[string]struct{}{},
+		shaByEvent: map[string]string{},
 	}
 }
 
@@ -392,13 +430,16 @@ func (v *driftView) observe(record event.Fields) {
 		if eventID == "" {
 			return
 		}
+		commitSHA := recordString(record, event.FieldCommitSHA)
+		v.shaByEvent[eventID] = commitSHA
 		v.records = append(v.records, recordedCommit{
-			eventID:   eventID,
-			runID:     recordString(record, event.FieldRunID),
-			spiffeID:  recordString(record, event.FieldSpiffeID),
-			commitSHA: recordString(record, event.FieldCommitSHA),
-			uuid:      uuid,
-			logIndex:  recordInt64(record, event.FieldRekorLogIndex),
+			eventID:    eventID,
+			runID:      recordString(record, event.FieldRunID),
+			spiffeID:   recordString(record, event.FieldSpiffeID),
+			commitSHA:  commitSHA,
+			uuid:       uuid,
+			logIndex:   recordInt64(record, event.FieldRekorLogIndex),
+			supersedes: recordString(record, event.FieldSupersedes),
 		})
 	case event.EventTypeUnattributedSignatureDetected:
 		if uuid := recordString(record, event.FieldRekorEntryUUID); uuid != "" {
@@ -489,6 +530,7 @@ func (r *Reconciler) checkRecords(ctx context.Context, view *ledgerView, result 
 		if _, already := view.drift.subjects[record.eventID]; already {
 			continue
 		}
+		record.signedSHA = view.drift.signedSHAOf(record)
 		reason, finding, ok := r.judge(ctx, record)
 		if !ok {
 			// Either the record holds up, or the log could not be asked and
@@ -586,14 +628,14 @@ func (r *Reconciler) judge(ctx context.Context, record recordedCommit) (string, 
 	finding.RekorEntryUUID = entry.UUID
 	finding.CertificateIdentity = entry.CertificateIdentity
 	switch {
-	case entry.ArtifactHash != artifactHashOf(record.commitSHA):
+	case entry.ArtifactHash != artifactHashOf(record.signedSHA):
 		finding.Reason = reasonOtherArtifact
 		finding.Detail = fmt.Sprintf(
 			"commit_recorded %s names entry %s as the signature of commit %s, whose artifact "+
 				"hash is sha256:%s. The log holds that entry attesting sha256:%s. The entry is "+
 				"real and it is not this commit's",
-			record.eventID, entry.UUID, record.commitSHA,
-			artifactHashOf(record.commitSHA), entry.ArtifactHash)
+			record.eventID, entry.UUID, record.signedSHA,
+			artifactHashOf(record.signedSHA), entry.ArtifactHash)
 	case entry.CertificateIdentity != record.spiffeID:
 		finding.Reason = reasonOtherIdentity
 		finding.Detail = fmt.Sprintf(
