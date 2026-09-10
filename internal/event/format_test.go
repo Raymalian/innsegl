@@ -78,8 +78,8 @@ func typeCheckGate(t *testing.T, serializerVersion, schemaVersion string) error 
 // TestSER005UnregisteredVersionIsRejected is SER-005: a version tag with no
 // registered spec cannot serialize anything.
 func TestSER005UnregisteredVersionIsRejected(t *testing.T) {
-	if _, err := LookupFormat("2"); !errors.Is(err, ErrUnregisteredSerializer) {
-		t.Errorf(`LookupFormat("2"): err = %v, want %v`, err, ErrUnregisteredSerializer)
+	if _, err := LookupFormat("3"); !errors.Is(err, ErrUnregisteredSerializer) {
+		t.Errorf(`LookupFormat("3"): err = %v, want %v`, err, ErrUnregisteredSerializer)
 	}
 	if _, err := LookupFormat(""); !errors.Is(err, ErrUnregisteredSerializer) {
 		t.Errorf(`LookupFormat(""): err = %v, want %v`, err, ErrUnregisteredSerializer)
@@ -174,6 +174,25 @@ func TestSER005FormatFingerprintIsFrozen(t *testing.T) {
 	}
 	if want := readFixtureFile(t, "format-probe.canonical.json"); !bytes.Equal(probe, want) {
 		t.Errorf("format probe bytes differ\n got  %s\n want %s", probe, want)
+	}
+
+	// AND EVERY EARLIER VERSION STAYS FROZEN, which is the half a
+	// current-version check cannot make: doc 08 accepts a new version
+	// ALONGSIDE all previous ones, so a v1 record read back today must still
+	// re-derive to the fingerprint v1 was released with. Comparing the
+	// registry to the committed v1 probe is what makes that a test rather
+	// than an intention.
+	for _, version := range []string{"1"} {
+		spec, lerr := LookupFormat(version)
+		if lerr != nil {
+			t.Fatalf("LookupFormat(%q): %v; a released serializer version was "+
+				"removed from the registry, and every record written under it "+
+				"has become unverifiable (doc 08)", version, lerr)
+		}
+		if want := string(readV1FixtureFile(t, "format-probe.hash")); spec.Fingerprint != want {
+			t.Errorf("the registered fingerprint for serializer %s is %s, but its "+
+				"committed probe hashes to %s", version, spec.Fingerprint, want)
+		}
 	}
 }
 

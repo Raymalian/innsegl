@@ -23,7 +23,7 @@
  * cannot be moved.
  */
 
-/** doc 02 §3's eleven event types, in document order. */
+/** doc 02 §3's twelve event types, in document order. */
 export const EVENT_TYPES = {
   runRegistered: "run_registered",
   credentialIssued: "credential_issued",
@@ -33,6 +33,7 @@ export const EVENT_TYPES = {
   commitIntentExpired: "commit_intent_expired",
   runRetired: "run_retired",
   runExpired: "run_expired",
+  schemaMigrated: "schema_migrated",
   unattributedSignatureDetected: "unattributed_signature_detected",
   ledgerDriftDetected: "ledger_drift_detected",
   segmentSealed: "segment_sealed",
@@ -49,6 +50,7 @@ export const EVENT_TYPE_IDS: readonly EventTypeId[] = [
   "commitIntentExpired",
   "runRetired",
   "runExpired",
+  "schemaMigrated",
   "unattributedSignatureDetected",
   "ledgerDriftDetected",
   "segmentSealed",
@@ -85,6 +87,7 @@ export const EMITTED_BY: Record<EventTypeId, readonly SourceId[]> = {
   commitIntentExpired: ["reconciler"],
   runRetired: ["mcp"],
   runExpired: ["reaper"],
+  schemaMigrated: ["system"],
   unattributedSignatureDetected: ["reconciler"],
   ledgerDriftDetected: ["reconciler"],
   segmentSealed: ["system"],
@@ -108,6 +111,13 @@ export const MEMBERS = {
   reason: "reason",
   payloadDigest: "payload_digest",
   supersedes: "supersedes",
+  // Schema 2 (ADR-0045, ADR-0047, doc 02 §7).
+  branch: "branch",
+  parentRunID: "parent_run_id",
+  patchID: "patch_id",
+  fromSchemaVersion: "from_schema_version",
+  toSchemaVersion: "to_schema_version",
+  cutoverPosition: "cutover_position",
 } as const;
 
 /** One ledger event, as `internal/api`'s TimelineEvent serialises.

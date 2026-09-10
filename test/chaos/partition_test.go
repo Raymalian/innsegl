@@ -548,6 +548,7 @@ func (w *prtWorld) mixedWorkload(t *testing.T, fx prtFixtures) map[string]prtOut
 			"agent_type":      prtAgentType,
 			"task_id":         prtTaskID,
 			"idempotency_key": w.key("reg"),
+			"repo":            v2Repo, "branch": v2Branch,
 		})
 	})
 	run(func() prtOutcome {
@@ -1491,6 +1492,7 @@ func (w *prtWorld) mustRegister(ctx context.Context, t *testing.T, suffix string
 		"agent_type":      prtAgentType,
 		"task_id":         prtTaskID,
 		"idempotency_key": w.key("prep-" + suffix),
+		"repo":            v2Repo, "branch": v2Branch,
 	})
 	if o.transport != nil {
 		t.Fatalf("preparing a run: %v", o.transport)

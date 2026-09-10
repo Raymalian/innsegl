@@ -94,7 +94,12 @@ const (
 	// The soak's own agent type and task. Held to doc 02 §5's identifier
 	// grammar, because they become components of a SPIFFE ID.
 	k9AgentType = "chaos-soak"
-	k9TaskID    = "ops-003"
+	// ADR-0045: run_registered carries where the run works, required
+	// under schema 2. One pair per suite so every registration in it
+	// names the same repository.
+	v2Repo   = "github.com/acme/api"
+	v2Branch = "main"
+	k9TaskID = "ops-003"
 
 	// k9RunTTL is the identity lifetime every run in the soak is registered
 	// with. Short on purpose and well under spire.MaxRunTTL: IP §6.7's orphan
@@ -167,6 +172,10 @@ const (
 	// tree they claim. doc 02 §5's `host/org/name`, and a git object id.
 	k9Repo = "example.test/innsegl/chaos"
 	k9Tree = "1111111111111111111111111111111111111111"
+	// ADR-0047's patch id, required on both commit events under schema 2. A
+	// planted intent and the record that completes it name the same change,
+	// because a plant that did not would be caught for the wrong reason.
+	k9PatchID = "2222222222222222222222222222222222222222"
 )
 
 // The four components a kill can land on. Doc 07 OPS-003 says "across all
@@ -1321,6 +1330,7 @@ func (c *k9Campaign) oneRun(ctx context.Context, w *k9Worker, step int) {
 
 	reply, ok := c.call(ctx, w, mcp.ToolRegisterAgent, map[string]any{
 		"agent_type": k9AgentType, "task_id": k9TaskID, "idempotency_key": base + "/reg",
+		"repo": v2Repo, "branch": v2Branch,
 	})
 	if !ok {
 		return
@@ -2605,6 +2615,8 @@ func (c *k9Campaign) plantOrphan(t *testing.T) (spire.RunRef, spire.Candidate) {
 		event.FieldSpiffeID:       spiffeID,
 		event.FieldAgentType:      run.AgentType,
 		event.FieldTaskRef:        run.TaskID,
+		event.FieldRepo:           k9Repo,
+		event.FieldBranch:         v2Branch,
 		event.FieldIdempotencyKey: "ops-003/orphan/" + run.RunID,
 	}); err != nil {
 		t.Fatalf("recording the planted orphan's registration: %v", err)
@@ -2665,6 +2677,7 @@ func (c *k9Campaign) plantIntent(t *testing.T, runID, spiffeID, key string) even
 		event.FieldIdempotencyKey: key,
 		event.FieldRepo:           k9Repo,
 		event.FieldTreeHash:       k9Tree,
+		event.FieldPatchID:        k9PatchID,
 	})
 	if err != nil {
 		t.Fatalf("planting a commit_intent: %v", err)
@@ -2688,6 +2701,7 @@ func (c *k9Campaign) plantFabricatedRecord(t *testing.T, intent event.Fields) ev
 		event.FieldIdempotencyKey: "ops-003/fabricated/" + member(t, intent, event.FieldEventID),
 		event.FieldRepo:           k9Repo,
 		event.FieldTreeHash:       k9Tree,
+		event.FieldPatchID:        k9PatchID,
 		event.FieldCommitSHA:      "2222222222222222222222222222222222222222",
 		event.FieldIntentEventID:  member(t, intent, event.FieldEventID),
 		event.FieldRekorEntryUUID: strings.Repeat("3", 64),

@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"innsegl.dev/innsegl/internal/ledger"
 )
 
 // conn is the read surface AssertReadOnly needs: a single connection or a
@@ -50,6 +52,17 @@ func OpenConfig(ctx context.Context, cfg *pgxpool.Config) (*Store, error) {
 	if err != nil {
 		pool.Close()
 		return nil, err
+	}
+	// And the other half of "this build can answer for this chain": a chain
+	// migrated to a schema_version this binary predates is one whose later
+	// events it cannot fully check, and a query API that started anyway would
+	// serve verdicts it is in no position to give (#188, E9's exit criterion).
+	// Refused at startup rather than per request, for AssertReadOnly's reason:
+	// a property asserted once at boot is a property of the deployment, not a
+	// claim about the source code.
+	if serr := ledger.AssertReadableSchema(ctx, pool); serr != nil {
+		pool.Close()
+		return nil, serr
 	}
 	return &Store{pool: pool, readOnly: report}, nil
 }

@@ -96,6 +96,7 @@ func TestMCP011CrashAndReplayUnderFuzzedKillTiming(t *testing.T) {
 func (c *campaign) registerArgs(key string) map[string]any {
 	return map[string]any{
 		"agent_type": crashAgentType, "task_id": crashTaskID, "idempotency_key": key,
+		"repo": v2Repo, "branch": v2Branch,
 	}
 }
 

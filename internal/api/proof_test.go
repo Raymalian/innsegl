@@ -171,18 +171,23 @@ func TestAPI006AnUnreachableUpstreamIsUnavailableAndNeverADatabaseAnswer(t *test
 	reg := base(event.EventTypeRunRegistered)
 	reg[event.FieldAgentType] = "fix-ci"
 	reg[event.FieldTaskRef] = "rm-040"
+	// ADR-0045, required under schema 2.
+	reg[event.FieldRepo] = fixtureRepo
+	reg[event.FieldBranch] = "main"
 	reg[event.FieldIdempotencyKey] = "run-1-register"
 	appendOrFail(ctx, t, owner, reg)
 
 	intent := base(event.EventTypeCommitIntent)
 	intent[event.FieldRepo] = fixtureRepo
 	intent[event.FieldTreeHash] = strings.Repeat("a", 40)
+	intent[event.FieldPatchID] = strings.Repeat("c", 40)
 	intent[event.FieldIdempotencyKey] = "run-1-intent"
 	rec := appendOrFail(ctx, t, owner, intent)
 
 	done := base(event.EventTypeCommitRecorded)
 	done[event.FieldRepo] = fixtureRepo
 	done[event.FieldTreeHash] = strings.Repeat("a", 40)
+	done[event.FieldPatchID] = strings.Repeat("c", 40)
 	done[event.FieldCommitSHA] = s.commit
 	done[event.FieldIntentEventID] = rec[event.FieldEventID]
 	done[event.FieldRekorEntryUUID] = strings.Repeat("b", 64)

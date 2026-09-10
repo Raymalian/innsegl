@@ -1,0 +1,11 @@
+{
+  "ts": "2026-08-28T09:21:09.733Z",
+  "spiffe_id": "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42",
+  "source": "mcp",
+  "schema_version": "2",
+  "run_id": "run-42",
+  "prev_event_hash": "sha256:34c2bdb884685ea7e502b3718ba1491c92c65de8dc24b1c1528e7de0d6f66cf9",
+  "event_type": "run_retired",
+  "event_id": "01a047ac-4e65-74d1-bd5a-b93e6976ccc9",
+  "chain_position": 7
+}

@@ -28,8 +28,15 @@ import (
 // action anywhere in the UI. An operator runs this the way they run `reap` or
 // `reconcile`: from a trusted host, holding the ledger DSN, not through the
 // dashboard.
+// `migrate-schema` is doc 08 §3(c): a MAJOR schema release must append a
+// migration attestation to the ledger marking the cutover position. That is
+// the one of §3's four requirements that lives in a DEPLOYMENT's chain rather
+// than in this repository, so no test here can produce it and an operator has
+// to run something. Like `reap` and `resolve-alert`, it runs from a trusted
+// host holding the ledger DSN.
 var documentedSubcommands = []string{
-	"api", "canary", "init", "reap", "reconcile", "resolve-alert", "seal", "serve", "verify",
+	"api", "canary", "init", "migrate-schema", "reap", "reconcile", "resolve-alert",
+	"seal", "serve", "verify",
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {

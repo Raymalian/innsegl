@@ -209,6 +209,7 @@ func (f *driftFixture) recordCommit(t *testing.T, runID, intentID, commitSHA, uu
 		event.FieldIdempotencyKey: "sign_commit/recorded/" + runID,
 		event.FieldRepo:           testRepo,
 		event.FieldTreeHash:       driftTree,
+		event.FieldPatchID:        "ffffffffffffffffffffffffffffffffffffffff",
 		event.FieldCommitSHA:      commitSHA,
 		event.FieldRekorEntryUUID: uuid,
 		event.FieldRekorLogIndex:  index,

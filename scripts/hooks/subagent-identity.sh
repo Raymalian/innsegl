@@ -145,7 +145,7 @@ mcp_call() {
   printf '%s' "$_payload"
 }
 
-# derive_task sets BRANCH, TASK and REPONAME from the MAIN worktree.
+# derive_task sets BRANCH, TASK and REPO from the MAIN worktree.
 #
 # A function because two events need it now: a subagent's registration and the
 # operator's own session. It was inline in SubagentStart when only subagents
@@ -155,7 +155,16 @@ derive_task() {
   # linked one, so this resolves the same branch wherever it runs.
   MAIN="$(git -C "${CWD:-.}" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
   [ -n "$MAIN" ] || MAIN="${CWD:-.}"
-  BRANCH="$(git -C "$MAIN" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  # symbolic-ref before rev-parse: on an UNBORN branch -- a repository whose
+  # first commit has not been made -- rev-parse fails and the branch would be
+  # recorded as "detached", which under ADR-0045 is not a shrug in a log line
+  # any more but a wrong value in an append-only record. symbolic-ref reads the
+  # name HEAD points at whether or not anything is committed there yet.
+  BRANCH="$(git -C "$MAIN" symbolic-ref --short --quiet HEAD 2>/dev/null)"
+  [ -n "$BRANCH" ] || BRANCH="$(git -C "$MAIN" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  # A genuinely detached HEAD has no branch, and "detached" is the honest
+  # answer rather than a name: doc 02 stores `branch` verbatim, so inventing
+  # one would put a branch in the ledger that does not exist.
   [ -n "$BRANCH" ] && [ "$BRANCH" != "HEAD" ] || BRANCH="detached"
 
   # A branch name is not a task_id: doc 02 §5 is [a-z0-9][a-z0-9-]{0,62} and
@@ -170,23 +179,40 @@ derive_task() {
   fi
   [ -n "$TASK" ] || TASK="unnamed"
 
-  # Prefix the repository, because without it the ledger cannot answer "what
-  # did agents do in that other project today".
+  # THE REPOSITORY, as its own member (ADR-0045, schema 2).
   #
-  # A run_registered event carries agent_type and task_ref and NOTHING about
-  # the repository -- the repo is only recorded when a run signs a commit,
-  # and a run that signs nothing never gets one. Measured 2026-09-08: five
-  # runs from other projects all read `main` with no repository, and were
+  # This used to be squeezed into task_id as a `<repo>-<branch>` prefix, and
+  # the comment here said why: run_registered carried agent_type and task_ref
+  # and NOTHING about the repository, doc 02 §3's fields are a protected
+  # surface, and adding one would be a major version. Measured 2026-09-08,
+  # five runs from other projects all read `main` with no repository and were
   # indistinguishable from each other.
   #
-  # doc 02 §3's fields are a protected surface, so adding a repo field to
-  # run_registered would be a major version. The repository name goes into
-  # the task_id instead, which is a field that already exists --
-  # `<repo>-<branch>` rather than a bare `main`.
-  REPONAME="$(git -C "$MAIN" remote get-url origin 2>/dev/null \
-    | sed -e 's|.*[/:]||' -e 's|\.git$||' | tr 'A-Z' 'a-z' \
-    | sed -e 's/[^a-z0-9-]/-/g' -e 's/^[^a-z0-9]*//' -e 's/-*$//')"
-  [ -n "$REPONAME" ] && TASK="$(printf '%s-%s' "$REPONAME" "$TASK" | cut -c1-63)"
+  # Schema 2 IS that major version, so the squeeze is gone and task_ref goes
+  # back to naming the task -- which is ADR-0045's own consequence, written
+  # down there before it was written here.
+  #
+  # doc 02 §5's grammar for `repo` is `host/org/name` with the HOST lowercased
+  # and the other two left alone: `github.com/KodyMike/Repo` is correct and
+  # lowercasing the org would be a repository that does not exist on a
+  # case-sensitive forge.
+  REPO="$(git -C "$MAIN" remote get-url origin 2>/dev/null \
+    | sed -e 's|^[a-z][a-z0-9+.-]*://||' -e 's|^git@||' -e 's|:|/|' \
+          -e 's|\.git$||' -e 's|/*$||')"
+  case "$REPO" in
+    */*/*)
+      REPO="$(printf '%s' "$REPO" | awk -F/ '{
+        h = tolower($1); p = $2
+        for (i = 3; i <= NF; i++) p = p "/" $i
+        print h "/" p
+      }')"
+      ;;
+    # Not host/org/name: a local clone with no origin, or a remote in a shape
+    # doc 02 §5 has no grammar for. Empty rather than guessed -- the tool
+    # refuses a missing repo by name, which is a better failure than a
+    # plausible wrong one in an append-only record.
+    *) REPO="" ;;
+  esac
 }
 
 case "$EVENT" in
@@ -356,8 +382,9 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
 
     derive_task
 
-    OUT="$(mcp_call register_agent "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"session-%s"}' \
-      "${INNSEGL_SESSION_AGENT_TYPE:-session}" "$TASK" "$SESSION_ID")" 2>/dev/null)" || {
+    OUT="$(mcp_call register_agent "$(printf \
+      '{"agent_type":"%s","task_id":"%s","idempotency_key":"session-%s","repo":"%s","branch":"%s"}' \
+      "${INNSEGL_SESSION_AGENT_TYPE:-session}" "$TASK" "$SESSION_ID" "$REPO" "$BRANCH")" 2>/dev/null)" || {
       echo "innsegl: no identity for this session — the deployment at $ADMIN_URL is not answering." >&2
       echo "innsegl:   Work is not blocked, but nothing you do here is in the ledger" >&2
       echo "innsegl:   until it is. Bring it up with: make innsegl-up-here" >&2
@@ -440,8 +467,24 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
     fi
 
     KEY="harness-$AGENT_ID"
-    ARGS="$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' \
-      "${AGENT_TYPE:-subagent}" "$TASK" "$KEY")"
+
+    # THE PARENT RUN, when this session has one.
+    #
+    # ADR-0045's third member, and the reason a `git log` can be read as a
+    # tree rather than a list: without it a subagent's work and its
+    # orchestrator's are two unrelated runs that happen to share a repository.
+    # The session marker SessionStart wrote is where the parent's run id is,
+    # and its absence is not an error -- a session with no parent is a root
+    # run, which is why parent_run_id is the one optional member of the three.
+    PARENT=""
+    [ -f "$SESSIONFILE" ] && PARENT="$(head -n 1 "$SESSIONFILE" 2>/dev/null)"
+
+    ARGS="$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s","repo":"%s","branch":"%s"}' \
+      "${AGENT_TYPE:-subagent}" "$TASK" "$KEY" "$REPO" "$BRANCH")"
+    if [ -n "$PARENT" ]; then
+      ARGS="$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s","repo":"%s","branch":"%s","parent_run_id":"%s"}' \
+        "${AGENT_TYPE:-subagent}" "$TASK" "$KEY" "$REPO" "$BRANCH" "$PARENT")"
+    fi
 
     OUT="$(mcp_call register_agent "$ARGS")" || {
       echo "innsegl: refused — the identity service could not be reached at $ADMIN_URL." >&2

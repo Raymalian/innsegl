@@ -223,6 +223,7 @@ func TestServeAnswersARealMCPCallEndToEnd(t *testing.T) {
 			"agent_type":      crashAgentType,
 			"task_id":         serveTaskID,
 			"idempotency_key": key,
+			"repo":            v2Repo, "branch": v2Branch,
 		})
 		var reply registerReply
 		decodeInto(t, out, &reply)
@@ -467,6 +468,7 @@ func TestTheServedRegisterAgentIsMetered(t *testing.T) {
 				"agent_type":      crashAgentType,
 				"task_id":         task,
 				"idempotency_key": c.name(fmt.Sprintf("rm068-meter-%d", n)),
+				"repo":            v2Repo, "branch": v2Branch,
 			},
 		})
 		if err != nil {
@@ -532,6 +534,7 @@ func TestTheServedRegisterAgentIsMetered(t *testing.T) {
 				"agent_type":      crashAgentType,
 				"task_id":         controlTask,
 				"idempotency_key": c.name(fmt.Sprintf("rm068-control-%d", n)),
+				"repo":            v2Repo, "branch": v2Branch,
 			},
 		})
 		cancel()
@@ -717,6 +720,7 @@ func TestServeRunsUnderAnAppendOnlyDatabaseRole(t *testing.T) {
 		"agent_type":      crashAgentType,
 		"task_id":         task,
 		"idempotency_key": key,
+		"repo":            v2Repo, "branch": v2Branch,
 	})
 	var reply registerReply
 	decodeInto(t, out, &reply)
