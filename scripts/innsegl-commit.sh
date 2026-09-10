@@ -92,6 +92,8 @@ done
 
 ROOT="$(git rev-parse --show-toplevel)"
 
+
+
 # THE RUN THIS TREE BELONGS TO, discovered rather than remembered.
 #
 # Without this the script mints a throwaway identity per commit, and the work is
@@ -129,14 +131,34 @@ REPO="${INNSEGL_REPO_ID:-$(git remote get-url origin 2>/dev/null \
   | awk -F/ 'NF>=3 { h = tolower($1); p = $2; for (i = 3; i <= NF; i++) p = p "/" $i; print h "/" p }')}"
 [ -n "$REPO" ] || { echo "innsegl-commit: no origin remote; set INNSEGL_REPO_ID" >&2; exit 2; }
 
+# THE TREE EVERY GIT READ BELOW IS ABOUT.
+#
+# `-w` names the working tree this run works in, and until now the script took
+# it, passed it to sign_commit, and then read the INDEX from wherever it
+# happened to be invoked. A field agent hit exactly that: run from the
+# repository root with `-w` pointing at a worktree whose index was full, and
+# the script answered "nothing staged" about a tree that was staged somewhere
+# else. The message pointed the wrong way, twice, and CLAUDE.md says to pass
+# `-w` -- it does not say the shell also has to be standing in that directory.
+#
+# So `-w` decides where git reads, not only what sign_commit is told. Absolute
+# is taken as given; relative is MCP-029's meaning, a linked worktree of this
+# repository.
+case "$WORKTREE" in
+  "")  WT="$ROOT" ;;
+  /*)  WT="$WORKTREE" ;;
+  *)   WT="$ROOT/$WORKTREE" ;;
+esac
+[ -d "$WT" ] || { echo "innsegl-commit: -w $WORKTREE is not a directory ($WT)" >&2; exit 2; }
+
 # The task, from the branch. Same derivation the harness hook uses, and for the
 # same reason: doc 02 §5's grammar is [a-z0-9][a-z0-9-]{0,62}, so a branch name
 # with a slash is refused. An RM number is this project's own task identifier.
 # symbolic-ref first: on an unborn branch rev-parse fails and the branch would
 # be recorded as "detached", and under ADR-0045 `branch` is a member of
 # run_registered rather than a log line.
-BRANCH="$(git symbolic-ref --short --quiet HEAD 2>/dev/null)"
-[ -n "$BRANCH" ] || BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
+BRANCH="$(git -C "$WT" symbolic-ref --short --quiet HEAD 2>/dev/null)"
+[ -n "$BRANCH" ] || BRANCH="$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
 [ -n "$BRANCH" ] && [ "$BRANCH" != "HEAD" ] || BRANCH="detached"
 TASK="$(printf '%s' "$BRANCH" | tr 'A-Z' 'a-z' | sed -n 's/.*\(rm[0-9][0-9]*\).*/\1/p')"
 if [ -z "$TASK" ]; then
@@ -148,9 +170,16 @@ fi
 
 # The staged tree, and a refusal when there is nothing staged. `git commit`
 # refuses an empty commit by default and so does this.
-TREE="$(git write-tree)"
-if [ "$TREE" = "$(git rev-parse HEAD^{tree} 2>/dev/null || echo none)" ]; then
-  echo "innsegl-commit: nothing staged — the tree is identical to HEAD" >&2
+TREE="$(git -C "$WT" write-tree)"
+if [ "$TREE" = "$(git -C "$WT" rev-parse HEAD^{tree} 2>/dev/null || echo none)" ]; then
+  # NAMING THE TREE IS THE POINT. "nothing staged" without it sent an agent
+  # looking for a staging mistake it had not made; the mistake was that this
+  # script was reading a different index from the one it had been told about.
+  echo "innsegl-commit: nothing staged in $WT — its index is identical to HEAD." >&2
+  if [ "$WT" != "$ROOT" ]; then
+    echo "innsegl-commit:   That is the tree -w named. If you staged your work" >&2
+    echo "innsegl-commit:   somewhere else, pass -w for THAT tree instead." >&2
+  fi
   exit 1
 fi
 
@@ -308,5 +337,5 @@ SIGNED="$(mcp "$AGENT_URL" sign_commit "$ARGS")" || fail "the MCP at $AGENT_URL 
 SHA="$(printf '%s' "$SIGNED" | field commit_sha)" || fail "sign_commit refused — nothing was committed"
 IDX="$(printf '%s' "$SIGNED" | field rekor_entry.log_index 2>/dev/null || echo '?')"
 
-echo "innsegl-commit: signed $(git rev-parse --short "$SHA")  rekor index $IDX"
+echo "innsegl-commit: signed $(git -C "$WT" rev-parse --short "$SHA")  rekor index $IDX"
 git --no-pager log -1 --format='  %s' "$SHA"
