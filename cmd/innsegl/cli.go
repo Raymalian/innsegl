@@ -73,6 +73,14 @@ var commands = map[string]command{
 		summary: "delete identity entries orphaned past their TTL",
 		exec:    reapCommand,
 	},
+	// migrate-schema is doc 08 §3(c), the one thing a major schema release
+	// owes that lives in a deployment's ledger rather than in this
+	// repository: the attestation naming the position where this chain begins
+	// carrying the new schema_version.
+	"migrate-schema": {
+		summary: "attest a major schema cutover in this chain",
+		exec:    migrateSchemaCommand,
+	},
 	// resolve-alert is RM-102 (#167, ADR-0044): the write half of alert
 	// resolution. It is not a route on `api` — that binary IS doc 05 §1's
 	// read-only `innsegl-dashboard` row, and FD P6 forbids a mutating UI

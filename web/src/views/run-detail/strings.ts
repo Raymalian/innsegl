@@ -73,6 +73,7 @@ export const strings = {
     commitIntentExpired: "Commit intent expired",
     runRetired: "Run retired",
     runExpired: "Run expired",
+    schemaMigrated: "Schema migrated",
     unattributedSignatureDetected: "Unattributed signature detected",
     ledgerDriftDetected: "Ledger drift detected",
     segmentSealed: "Segment sealed",

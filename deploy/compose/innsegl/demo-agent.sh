@@ -175,9 +175,18 @@ log "session with $(printf '%s' "${init}" | jq -r '.result.serverInfo.name // "?
 # ---------------------------------------------------------------------------
 # 2. register_agent — I1: no identity without attestation.
 # ---------------------------------------------------------------------------
+# repo and branch are required members of run_registered under schema 2
+# (ADR-0045): a run says where it works from the moment it exists, rather than
+# only if it later signs something. This demo signs, so it always did record a
+# repository -- but it recorded it three steps later, and a demo that models
+# the old shape teaches the old shape.
+#
+# `main` is the branch step 4 creates below, named here rather than read back
+# because the working tree does not exist yet at this point in the script.
 registered="$(tool "${TOOL_REGISTER}" "$(jq -nc \
   --arg t "${AGENT_TYPE}" --arg k "${TASK_REF}" --arg i "demo-${RUN_TAG}-register" \
-  '{agent_type:$t, task_id:$k, idempotency_key:$i}')")"
+  --arg r "${REPO}" --arg b "main" \
+  '{agent_type:$t, task_id:$k, idempotency_key:$i, repo:$r, branch:$b}')")"
 RUN_ID="$(printf '%s' "${registered}" | jq -r '.run_id')"
 SPIFFE_ID="$(printf '%s' "${registered}" | jq -r '.spiffe_id')"
 [ -n "${RUN_ID}" ] && [ "${RUN_ID}" != "null" ] || fail "register_agent returned no run_id: ${registered}"

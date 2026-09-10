@@ -940,6 +940,8 @@ func TestRetireAgentNeverDeletesLedgerContent(t *testing.T) {
 			event.FieldIdempotencyKey: "reg-run-a",
 			event.FieldAgentType:      retireAgentType,
 			event.FieldTaskRef:        "RM-025",
+			event.FieldRepo:           "github.com/acme/api",
+			event.FieldBranch:         "main",
 		},
 		{
 			event.FieldSchemaVersion:    event.SchemaVersion,

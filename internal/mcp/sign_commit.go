@@ -212,6 +212,12 @@ type SignCommitRepos interface {
 	StagedTree(ctx context.Context, worktree, stagedRef string) (string, error)
 	// CommitTree returns the tree of one commit.
 	CommitTree(ctx context.Context, worktree, commit string) (string, error)
+	// StagedPatchID is the patch id of the staged change, and CommitPatchID
+	// the patch id of a commit's own. Both are `git patch-id --verbatim`
+	// (ADR-0047): the commit object does not survive a rebase and the change
+	// does, so the change is what attribution is anchored to. See patchid.go.
+	StagedPatchID(ctx context.Context, worktree string) (string, error)
+	CommitPatchID(ctx context.Context, worktree, commit string) (string, error)
 }
 
 // SignCommitCredentials issues the audience-bound credential one signature is
@@ -529,6 +535,16 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 			"the staged tree is not a git object id: %v", verr)
 	}
 
+	// The change's own identity, computed from the index for the same reason
+	// the tree is: this is what `git commit` is about to make. Phase C
+	// recomputes it from the commit object and refuses a disagreement --
+	// ADR-0047.
+	patchID, err := c.repos.StagedPatchID(ctx, worktree)
+	if err != nil {
+		return nil, Errorf(ClassInvariantViolation, run.RunID,
+			"the staged change of %s has no patch id: %w", in.Repo, err)
+	}
+
 	// ADR-0024's definition of "Sigstore is reachable", asked BEFORE the
 	// intent so that IP §6.3's two outages — which are the commonest cause of
 	// a failed signature — do not each leave an intent for the reconciler.
@@ -566,6 +582,7 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 		event.FieldIdempotencyKey: signCommitPhaseKey(signCommitIntentKeyPrefix, in.IdempotencyKey),
 		event.FieldRepo:           in.Repo,
 		event.FieldTreeHash:       tree,
+		event.FieldPatchID:        patchID,
 	})
 	if err != nil {
 		return nil, err
@@ -590,11 +607,30 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 	if err != nil {
 		return nil, c.signingError(ctx, run.RunID, err)
 	}
-	if err := c.checkResult(ctx, run.RunID, worktree, tree, result, trailers); err != nil {
-		return nil, err
+	if cerr := c.checkResult(ctx, run.RunID, worktree, tree, result, trailers); cerr != nil {
+		return nil, cerr
 	}
 
 	// ---- PHASE C ----------------------------------------------------------
+	//
+	// The patch id is recomputed from the commit object rather than carried
+	// over from Phase A. Carrying it over would record the intent's claim
+	// twice and prove nothing; recomputing it asks whether the commit that now
+	// exists is the change that was intended, which is a question with a real
+	// wrong answer -- a hook that rewrote the tree, a signer given the wrong
+	// worktree, an index that moved between the phases.
+	committed, err := c.repos.CommitPatchID(ctx, worktree, result.CommitSHA)
+	if err != nil {
+		return nil, Errorf(ClassInvariantViolation, run.RunID,
+			"the signed commit %s has no patch id: %w", result.CommitSHA, err)
+	}
+	if committed != patchID {
+		return nil, Errorf(ClassInvariantViolation, run.RunID,
+			"commit %s carries patch id %s, and the intent recorded %s: the commit that "+
+				"was signed is not the change that was intended",
+			result.CommitSHA, committed, patchID)
+	}
+
 	if _, err := c.append(ctx, run.RunID, event.EventTypeCommitRecorded, event.Fields{
 		event.FieldSchemaVersion:  event.SchemaVersion,
 		event.FieldEventType:      event.EventTypeCommitRecorded,
@@ -605,6 +641,7 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 		event.FieldRepo:           in.Repo,
 		event.FieldCommitSHA:      result.CommitSHA,
 		event.FieldTreeHash:       tree,
+		event.FieldPatchID:        committed,
 		event.FieldRekorLogIndex:  result.Rekor.LogIndex,
 		event.FieldRekorEntryUUID: result.Rekor.UUID,
 		// The link. Without it a `commit_recorded` is a claim about a commit;

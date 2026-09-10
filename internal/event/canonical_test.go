@@ -183,19 +183,22 @@ func TestSER001EmptyFields(t *testing.T) {
 // TestSER001Doc02Section6 is SER-001: the canonical form must reproduce the
 // example in doc 02 §6 exactly.
 func TestSER001Doc02Section6(t *testing.T) {
-	genesis := string(readFixtureFile(t, "genesis.hash"))
+	genesis := string(readV1FixtureFile(t, "genesis.hash"))
 	want := strings.Replace(doc02Section6Example, HashPrefix+"…", genesis, 1)
 	if want == doc02Section6Example {
 		t.Fatal("doc 02 §6 substitution did not apply")
 	}
 
 	// The committed fixture is the spec's own bytes.
-	if got := string(readFixtureFile(t, "00-doc02-example.canonical.json")); got != want {
+	if got := string(readV1FixtureFile(t, "00-doc02-example.canonical.json")); got != want {
 		t.Errorf("fixture 00 has drifted from doc 02 §6\n got  %s\n want %s", got, want)
 	}
 
 	// And the serializer reproduces them from the parsed object.
-	f := loadFixture(t, "00-doc02-example")
+	// v1 explicitly: §6's example is a version 1 event, and doc 02 is normative
+	// and not edited to match this package. Regenerating it under v2 would make
+	// it reproduce nothing.
+	f := loadFixtureV1(t, "00-doc02-example")
 	got, err := Canonicalize(f.input)
 	if err != nil {
 		t.Fatalf("Canonicalize: %v", err)
@@ -209,7 +212,7 @@ func TestSER001Doc02Section6(t *testing.T) {
 // so the vectors also pin doc 02 §4.4 and §4.5.
 func TestSER001FixtureChain(t *testing.T) {
 	prev := GenesisPrevEventHash()
-	if want := string(readFixtureFile(t, "genesis.hash")); prev != want {
+	if want := string(readV1FixtureFile(t, "genesis.hash")); prev != want {
 		t.Fatalf("GenesisPrevEventHash() = %s, want %s", prev, want)
 	}
 

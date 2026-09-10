@@ -140,6 +140,7 @@ var matrix = []cell{
 			}
 			return s.callExpectingError(t, mcp.ToolRegisterAgent, map[string]any{
 				"agent_type": testAgentType, "task_id": testTaskID, "idempotency_key": "ident-down",
+				"repo": testRepo, "branch": testBranch,
 			})
 		},
 	},
@@ -161,6 +162,7 @@ var matrix = []cell{
 		drive: func(t *testing.T, s *stack) wireError {
 			return s.callExpectingError(t, mcp.ToolRegisterAgent, map[string]any{
 				"agent_type": testAgentType, "task_id": testTaskID, "idempotency_key": "after-outage",
+				"repo": testRepo, "branch": testBranch,
 			})
 		},
 	},
@@ -187,6 +189,7 @@ var matrix = []cell{
 			}
 			return s.callExpectingError(t, mcp.ToolRegisterAgent, map[string]any{
 				"agent_type": testAgentType, "task_id": testTaskID, "idempotency_key": "no-parent",
+				"repo": testRepo, "branch": testBranch,
 			})
 		},
 	},
@@ -202,6 +205,7 @@ var matrix = []cell{
 			s.spire.vanishOnLookup = true
 			return s.callExpectingError(t, mcp.ToolRegisterAgent, map[string]any{
 				"agent_type": testAgentType, "task_id": testTaskID, "idempotency_key": "vanished",
+				"repo": testRepo, "branch": testBranch,
 			})
 		},
 	},
@@ -215,6 +219,7 @@ var matrix = []cell{
 			// ask. Real Postgres, real UNIQUE index.
 			return s.callExpectingError(t, mcp.ToolRegisterAgent, map[string]any{
 				"agent_type": "other-agent", "task_id": testTaskID, "idempotency_key": "reused-key",
+				"repo": testRepo, "branch": testBranch,
 			})
 		},
 	},
@@ -812,6 +817,8 @@ var matrix = []cell{
 				event.FieldIdempotencyKey: "forged-directory",
 				event.FieldAgentType:      testAgentType,
 				event.FieldTaskRef:        testTaskID,
+				event.FieldRepo:           testRepo,
+				event.FieldBranch:         testBranch,
 			})
 			return s.callExpectingError(t, mcp.ToolRetireAgent, map[string]any{"run_id": forged})
 		},
@@ -1606,6 +1613,7 @@ func TestMCP001to005ValidInputYieldsTheDocumentedResultShape(t *testing.T) {
 	}{
 		{mcp.ToolRegisterAgent, map[string]any{
 			"agent_type": testAgentType, "task_id": testTaskID, "idempotency_key": "shape-register",
+			"repo": testRepo, "branch": testBranch,
 		}, []string{"expires_at", "run_id", "spiffe_id"}},
 	}
 

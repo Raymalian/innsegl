@@ -176,6 +176,9 @@ func seedRun(t *testing.T, m *memLedger, runID string) {
 		event.FieldIdempotencyKey: "reg-" + runID,
 		event.FieldAgentType:      "demo",
 		event.FieldTaskRef:        "RM-035",
+		// ADR-0045, required under schema 2.
+		event.FieldRepo:   "github.com/acme/api",
+		event.FieldBranch: "main",
 	}); err != nil {
 		t.Fatalf("seed run_registered: %v", err)
 	}
@@ -194,6 +197,7 @@ func seedIntent(t *testing.T, m *memLedger, runID, tree string) event.Fields {
 		event.FieldIdempotencyKey: "sign_commit/intent/" + runID,
 		event.FieldRepo:           testRepo,
 		event.FieldTreeHash:       tree,
+		event.FieldPatchID:        "ffffffffffffffffffffffffffffffffffffffff",
 	})
 	if err != nil {
 		t.Fatalf("seed commit_intent: %v", err)

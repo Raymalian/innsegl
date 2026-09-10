@@ -263,6 +263,11 @@ type scRepos struct {
 	stagedErr  error
 	commitTree string
 	commitErr  error
+	// patchID is what both phases see unless commitPatchID is set, which is
+	// how a test makes the two disagree (ADR-0047's Phase A/Phase C check).
+	patchID       string
+	commitPatchID string
+	patchErr      error
 }
 
 func (r scRepos) StagedTree(context.Context, string, string) (string, error) {
@@ -274,6 +279,32 @@ func (r scRepos) CommitTree(context.Context, string, string) (string, error) {
 		return r.tree, nil
 	}
 	return r.commitTree, r.commitErr
+}
+
+func (r scRepos) StagedPatchID(context.Context, string) (string, error) {
+	if r.patchErr != nil {
+		return "", r.patchErr
+	}
+	return scPatchIDOr(r.patchID), nil
+}
+
+func (r scRepos) CommitPatchID(context.Context, string, string) (string, error) {
+	if r.patchErr != nil {
+		return "", r.patchErr
+	}
+	if r.commitPatchID != "" {
+		return r.commitPatchID, nil
+	}
+	return scPatchIDOr(r.patchID), nil
+}
+
+// scPatchIDOr supplies a well-formed default, so that a test about something
+// else does not have to know ADR-0047 exists.
+func scPatchIDOr(id string) string {
+	if id != "" {
+		return id
+	}
+	return strings.Repeat("d", 40)
 }
 
 // scCredentials is get_credential, as sign_commit sees it.
@@ -2134,6 +2165,8 @@ func TestSIG001AgainstRealSigstoreAndARealChain(t *testing.T) {
 		event.FieldIdempotencyKey: "sig001-register",
 		event.FieldAgentType:      agentType,
 		event.FieldTaskRef:        taskRef,
+		event.FieldRepo:           "github.com/innsegl/demo",
+		event.FieldBranch:         "main",
 	})
 	if err != nil {
 		t.Fatalf("seed run_registered: %v", err)

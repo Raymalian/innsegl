@@ -1,0 +1,1 @@
+{"chain_position":16,"cutover_position":1,"event_id":"01a047a5-cc41-7c45-86fd-a88c8c2b5400","event_type":"schema_migrated","from_schema_version":"1","prev_event_hash":"sha256:c3d19776f618cd25e9b13e8166e2a24375dd857c9197adb59a9fe31d9dd9d9f0","schema_version":"2","source":"system","to_schema_version":"2","ts":"2026-09-09T12:00:00.000Z"}

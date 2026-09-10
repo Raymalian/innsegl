@@ -648,6 +648,7 @@ func (r *Reconciler) record(ctx context.Context, in openIntent, finding Finding)
 			event.FieldIdempotencyKey: RepairKey(in.eventID, in.idempotencyKey),
 			event.FieldRepo:           in.repo,
 			event.FieldTreeHash:       in.treeHash,
+			event.FieldPatchID:        in.patchID,
 			event.FieldCommitSHA:      finding.CommitSHA,
 			event.FieldRekorEntryUUID: finding.RekorEntryUUID,
 			event.FieldRekorLogIndex:  finding.RekorLogIndex,
@@ -694,11 +695,18 @@ func (r *Reconciler) record(ctx context.Context, in openIntent, finding Finding)
 
 // openIntent is one `commit_intent` the chain has not yet resolved.
 type openIntent struct {
-	eventID        string
-	runID          string
-	spiffeID       string
-	repo           string
-	treeHash       string
+	eventID  string
+	runID    string
+	spiffeID string
+	repo     string
+	treeHash string
+	// patchID is the intent's own `git patch-id --verbatim` (ADR-0047). The
+	// repair carries it forward rather than recomputing it: the repair is the
+	// COMPLETION of this intent, and the change it names is the change the
+	// intent named. Recomputing it would need the working tree, which the
+	// reconciler does not have and must not need -- it repairs from the ledger
+	// and Rekor alone.
+	patchID        string
 	idempotencyKey string
 	at             time.Time
 }
@@ -763,6 +771,7 @@ func (v *ledgerView) observe(record event.Fields) {
 			spiffeID:       recordString(record, event.FieldSpiffeID),
 			repo:           recordString(record, event.FieldRepo),
 			treeHash:       recordString(record, event.FieldTreeHash),
+			patchID:        recordString(record, event.FieldPatchID),
 			idempotencyKey: recordString(record, event.FieldIdempotencyKey),
 			at:             at.Time(),
 		}

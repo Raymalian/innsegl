@@ -82,6 +82,8 @@ func registerInLedger(t *testing.T, store *ledger.Store, run RunRef) string {
 		event.FieldIdempotencyKey: "reg-" + run.RunID,
 		event.FieldAgentType:      run.AgentType,
 		event.FieldTaskRef:        strings.ToUpper(run.TaskID),
+		event.FieldRepo:           "github.com/acme/api",
+		event.FieldBranch:         "main",
 	})
 	if err != nil {
 		t.Fatalf("append run_registered for %s: %v", spiffeID, err)

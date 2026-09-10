@@ -825,7 +825,7 @@ func signCredentialPrelude(t *testing.T, l *credLedger, cred MintedCredential, r
 		event.FieldSpiffeID:       run.SPIFFEID,
 		event.FieldSource:         event.SourceMCP,
 		event.FieldIdempotencyKey: "mcp014-" + run.RunID,
-		event.FieldRepo:           "github.com/raymalian/innsegl",
+		event.FieldRepo:           "github.com/innsegl/demo",
 		event.FieldTreeHash:       strings.Repeat("a1b2", 10),
 	})
 	if err != nil {

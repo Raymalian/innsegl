@@ -43,6 +43,11 @@ const (
 	EventTypeRunRetired = "run_retired"
 	// EventTypeRunExpired: TTL expiry of an unretired run.
 	EventTypeRunExpired = "run_expired"
+	// EventTypeSchemaMigrated: doc 02 §7's migration attestation, appended
+	// once per major schema change at the position where events begin
+	// carrying the new version. Schema "2" and later -- it is the record OF
+	// the bump, so it cannot exist under the version it superseded.
+	EventTypeSchemaMigrated = "schema_migrated"
 	// EventTypeUnattributedSignatureDetected: alert, a trust-domain signature
 	// with no intent.
 	EventTypeUnattributedSignatureDetected = "unattributed_signature_detected"
@@ -57,7 +62,20 @@ const (
 const (
 	FieldAgentType = "agent_type"
 	FieldTaskRef   = "task_ref"
-	FieldAudience  = "audience"
+
+	// Schema 2's members (ADR-0045, ADR-0047). Protected strings from the
+	// moment they ship, like every other name in this table.
+	//
+	// FieldBranch is stored VERBATIM and is not folded into the SPIFFE
+	// grammar: `dev/rm105-caller-split` and `dev-rm105-caller-split` are two
+	// branches and a normalised one is neither.
+	FieldBranch = "branch"
+	// FieldParentRunID is the run that started this one; absent on a root run.
+	FieldParentRunID = "parent_run_id"
+	// FieldPatchID identifies the CHANGE rather than the commit object, so
+	// attribution survives a rebase. `git patch-id --verbatim` (ADR-0047).
+	FieldPatchID  = "patch_id"
+	FieldAudience = "audience"
 	// Same G101 false positive as EventTypeCredentialIssued above.
 	FieldCredentialExpiry     = "credential_expiry" //nolint:gosec // protected member name, not a credential
 	FieldToolName             = "tool_name"
@@ -76,6 +94,11 @@ const (
 	FieldLastPosition         = "last_position"
 	FieldAnchorRekorLogIndex  = "anchor_rekor_log_index"
 	FieldAnchorRekorEntryUUID = "anchor_rekor_entry_uuid"
+
+	// doc 02 §3's `schema_migrated` members, schema "2" and later.
+	FieldFromSchemaVersion = "from_schema_version"
+	FieldToSchemaVersion   = "to_schema_version"
+	FieldCutoverPosition   = "cutover_position"
 )
 
 // runScope says whether an event type must name the run it belongs to.
@@ -100,12 +123,26 @@ type memberSpec struct {
 	name     string
 	required bool
 	check    func(name string, v any) error
+	// since is the schema_version this member first appears in. Empty means
+	// "1", so every member that predates ADR-0045 is unchanged.
+	//
+	// A member is not merely optional under an older version — it is NOT A
+	// MEMBER. The schema is closed (doc 02 §1), so a v1 event carrying a v2
+	// member is refused, and a v1 event lacking one is complete. That is what
+	// lets both versions be validated by one table without either judging the
+	// other by its own rules (doc 08: verification of old records is supported
+	// forever, without exception).
+	since string
 }
 
 // typeSpec is one row of doc 02 §3.
 type typeSpec struct {
 	eventType string
 	runScope  runScope
+	// since is the schema_version this TYPE first appears in, on memberSpec's
+	// terms and for its reason: under an earlier version it is not a type at
+	// all, so an event claiming it is refused rather than validated loosely.
+	since string
 	// members are the type-specific ones only, sorted by name so that
 	// RequiredFields and AllowedFields are deterministic.
 	members []memberSpec
@@ -117,6 +154,31 @@ func required(name string, check func(string, any) error) memberSpec {
 
 func optional(name string, check func(string, any) error) memberSpec {
 	return memberSpec{name: name, required: false, check: check}
+}
+
+// requiredV2 and optionalV2 are the same, for a member schema 2 introduced.
+func requiredV2(name string, check func(string, any) error) memberSpec {
+	return memberSpec{name: name, required: true, check: check, since: "2"}
+}
+
+func optionalV2(name string, check func(string, any) error) memberSpec {
+	return memberSpec{name: name, required: false, check: check, since: "2"}
+}
+
+// presentIn reports whether this member exists at all in the given version.
+func (m memberSpec) presentIn(version string) bool {
+	if m.since == "" {
+		return true
+	}
+	return version >= m.since
+}
+
+// presentIn reports whether this event type exists at all in the given version.
+func (t typeSpec) presentIn(version string) bool {
+	if t.since == "" {
+		return true
+	}
+	return version >= t.since
 }
 
 // typeSpecOrder is the enum in doc 02 §3's order. Order is part of what is
@@ -131,6 +193,7 @@ var typeSpecOrder = []string{
 	EventTypeCommitIntentExpired,
 	EventTypeRunRetired,
 	EventTypeRunExpired,
+	EventTypeSchemaMigrated,
 	EventTypeUnattributedSignatureDetected,
 	EventTypeLedgerDriftDetected,
 	EventTypeSegmentSealed,
@@ -154,6 +217,14 @@ var typeSpecs = map[string]typeSpec{
 			// ID, which is the lowercased "jira-118". doc 02 gives it no
 			// grammar, so it is a bounded reference and nothing more.
 			required(FieldTaskRef, checkReference),
+			// ADR-0045. A run that signs nothing used to record nowhere it
+			// worked: 26 subagent runs and 1979 tool calls, not one of them
+			// saying which repository. REQUIRED, because an optional field
+			// leaves the hole open for the first caller that omits it.
+			requiredV2(FieldRepo, checkRepo),
+			requiredV2(FieldBranch, checkBranch),
+			// Optional by nature: a root run has no parent.
+			optionalV2(FieldParentRunID, checkParentRunID),
 		},
 	},
 	EventTypeCredentialIssued: {
@@ -179,6 +250,9 @@ var typeSpecs = map[string]typeSpec{
 		members: []memberSpec{
 			required(FieldRepo, checkRepo),
 			required(FieldTreeHash, checkGitObjectID),
+			// ADR-0047: the change's own identity, which survives the rebase
+			// that destroys the signature over the commit object.
+			requiredV2(FieldPatchID, checkPatchID),
 		},
 	},
 	EventTypeCommitRecorded: {
@@ -191,6 +265,7 @@ var typeSpecs = map[string]typeSpec{
 			required(FieldRekorLogIndex, checkLogIndex),
 			required(FieldRepo, checkRepo),
 			required(FieldTreeHash, checkGitObjectID),
+			requiredV2(FieldPatchID, checkPatchID),
 		},
 	},
 	EventTypeCommitIntentExpired: {
@@ -207,6 +282,22 @@ var typeSpecs = map[string]typeSpec{
 	EventTypeRunExpired: {
 		eventType: EventTypeRunExpired,
 		runScope:  runRequired,
+	},
+	EventTypeSchemaMigrated: {
+		eventType: EventTypeSchemaMigrated,
+		since:     "2",
+		// No run, and it could not have one: the bump is a property of the
+		// chain, not of anything an agent did. doc 02 §3 gives its source as
+		// `system` for the same reason `segment_sealed` has one.
+		runScope: runOptional,
+		members: []memberSpec{
+			// The versions are the schema_version grammar, not free text: an
+			// attestation naming a version that was never released describes
+			// no cutover.
+			requiredV2(FieldCutoverPosition, checkChainPositionValue),
+			requiredV2(FieldFromSchemaVersion, checkSchemaVersionValue),
+			requiredV2(FieldToSchemaVersion, checkSchemaVersionValue),
+		},
 	},
 	EventTypeUnattributedSignatureDetected: {
 		eventType: EventTypeUnattributedSignatureDetected,
@@ -301,7 +392,7 @@ func lookupType(eventType string) (typeSpec, error) {
 // ADR-0004 resolves the condition against the event's `source` as well as its
 // type, so it is not a property of the type alone. checkCrossMemberRules
 // enforces it.
-func requiredFor(spec typeSpec) []string {
+func requiredFor(spec typeSpec, version string) []string {
 	names := make([]string, 0, len(envelopeSpecs)+len(spec.members))
 	for _, m := range envelopeSpecs {
 		if m.required {
@@ -312,7 +403,7 @@ func requiredFor(spec typeSpec) []string {
 		names = append(names, FieldRunID, FieldSpiffeID)
 	}
 	for _, m := range spec.members {
-		if m.required {
+		if m.required && m.presentIn(version) {
 			names = append(names, m.name)
 		}
 	}
@@ -321,13 +412,15 @@ func requiredFor(spec typeSpec) []string {
 }
 
 // allowedFor returns every member an event of this type may carry, by name.
-func allowedFor(spec typeSpec) map[string]memberSpec {
+func allowedFor(spec typeSpec, version string) map[string]memberSpec {
 	allowed := make(map[string]memberSpec, len(envelopeSpecs)+len(spec.members))
 	for _, m := range envelopeSpecs {
 		allowed[m.name] = m
 	}
 	for _, m := range spec.members {
-		allowed[m.name] = m
+		if m.presentIn(version) {
+			allowed[m.name] = m
+		}
 	}
 	return allowed
 }
@@ -339,7 +432,7 @@ func RequiredFields(eventType string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return requiredFor(spec), nil
+	return requiredFor(spec, SchemaVersion), nil
 }
 
 // AllowedFields returns every member an event of the given type may carry,
@@ -351,7 +444,7 @@ func AllowedFields(eventType string) ([]string, error) {
 		return nil, err
 	}
 	names := make([]string, 0, len(envelopeSpecs)+len(spec.members))
-	for name := range allowedFor(spec) {
+	for name := range allowedFor(spec, SchemaVersion) {
 		names = append(names, name)
 	}
 	slices.Sort(names)

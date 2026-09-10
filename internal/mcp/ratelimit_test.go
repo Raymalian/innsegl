@@ -98,6 +98,8 @@ func rlArgs(agentType, taskID, key string) map[string]any {
 		"agent_type":      agentType,
 		"task_id":         taskID,
 		"idempotency_key": key,
+		"repo":            raRepo,
+		"branch":          raBranch,
 	}
 }
 

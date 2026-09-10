@@ -225,6 +225,9 @@ func seedDriftRun(ctx context.Context, t *testing.T, store *ledger.Store, runID 
 		event.FieldIdempotencyKey: "rm036/register/" + runID,
 		event.FieldAgentType:      driftAgentType,
 		event.FieldTaskRef:        driftTaskID,
+		// ADR-0045, required under schema 2.
+		event.FieldRepo:   "github.com/acme/api",
+		event.FieldBranch: "main",
 	})
 }
 
@@ -272,6 +275,7 @@ func TestREC003AndREC004AgainstARealRekorAndARealSignature(t *testing.T) {
 		event.FieldIdempotencyKey: "rm036/intent/" + driftLegitRun,
 		event.FieldRepo:           "github.com/innsegl/" + driftLegitRun,
 		event.FieldTreeHash:       legit.treeHash,
+		event.FieldPatchID:        "ffffffffffffffffffffffffffffffffffffffff",
 	})
 	legitRecord := appendDrift(ctx, t, store, event.Fields{
 		event.FieldSchemaVersion:  event.SchemaVersion,
@@ -282,6 +286,7 @@ func TestREC003AndREC004AgainstARealRekorAndARealSignature(t *testing.T) {
 		event.FieldIdempotencyKey: "rm036/recorded/" + driftLegitRun,
 		event.FieldRepo:           "github.com/innsegl/" + driftLegitRun,
 		event.FieldTreeHash:       legit.treeHash,
+		event.FieldPatchID:        "ffffffffffffffffffffffffffffffffffffffff",
 		event.FieldCommitSHA:      legit.commitSHA,
 		event.FieldRekorEntryUUID: legit.uuid,
 		event.FieldRekorLogIndex:  legit.logIndex,
@@ -325,6 +330,7 @@ func TestREC003AndREC004AgainstARealRekorAndARealSignature(t *testing.T) {
 		event.FieldIdempotencyKey: "rm036/intent/" + driftFramedRun,
 		event.FieldRepo:           "github.com/innsegl/" + driftFramedRun,
 		event.FieldTreeHash:       legit.treeHash,
+		event.FieldPatchID:        "ffffffffffffffffffffffffffffffffffffffff",
 	})
 	fabricated := appendDrift(ctx, t, store, event.Fields{
 		event.FieldSchemaVersion:  event.SchemaVersion,
@@ -335,6 +341,7 @@ func TestREC003AndREC004AgainstARealRekorAndARealSignature(t *testing.T) {
 		event.FieldIdempotencyKey: "rm036/recorded/" + driftFramedRun,
 		event.FieldRepo:           "github.com/innsegl/" + driftFramedRun,
 		event.FieldTreeHash:       legit.treeHash,
+		event.FieldPatchID:        "ffffffffffffffffffffffffffffffffffffffff",
 		event.FieldCommitSHA:      fabricatedCommit,
 		event.FieldRekorEntryUUID: fabricatedUUID,
 		event.FieldRekorLogIndex:  9999,

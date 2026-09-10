@@ -114,7 +114,12 @@ const (
 	// The campaign's own agent type and task. Held to doc 02 §5's identifier
 	// grammar, because they become components of a SPIFFE ID.
 	crashAgentType = "crash-replay"
-	crashTaskID    = "mcp-011"
+	// ADR-0045: run_registered carries where the run works, required
+	// under schema 2. One pair per suite so every registration in it
+	// names the same repository.
+	v2Repo      = "github.com/acme/api"
+	v2Branch    = "main"
+	crashTaskID = "mcp-011"
 
 	// crashLease is the idempotency lease the server runs with. The shipped
 	// default is a minute (ADR-0017 §5), which is the right number for a

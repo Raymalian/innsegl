@@ -37,6 +37,8 @@ func appendRegistered(t *testing.T, store *ledger.Store, runID, key string) even
 		event.FieldIdempotencyKey: key,
 		event.FieldAgentType:      pgAgent,
 		event.FieldTaskRef:        pgTask,
+		event.FieldRepo:           "github.com/acme/api",
+		event.FieldBranch:         "main",
 	})
 	if err != nil {
 		t.Fatalf("append run_registered for %s: %v", runID, err)

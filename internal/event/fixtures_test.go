@@ -12,10 +12,30 @@ import (
 	"testing"
 )
 
-// fixtureDir holds the golden vectors. They are immutable once merged (doc 02
-// §7): a failing fixture test means the serializer changed, and the serializer
-// is what must be reverted.
-const fixtureDir = "testdata/fixtures/v1"
+// The golden vectors, one directory per schema version. They are immutable
+// once merged (doc 02 §7): a failing fixture test means the serializer changed,
+// and the serializer is what must be reverted.
+//
+// # Why there is a directory per version rather than one that moves
+//
+// doc 08 is unconditional -- a new version is accepted ALONGSIDE all previous
+// ones, and verification of old records is supported forever. The chain still
+// holds every v1 event ever appended and I4 forbids rewriting them, so v1's
+// bytes and hashes have to stay under test after v2 ships. A single directory
+// that was regenerated at each bump would delete exactly the evidence that
+// old records still verify, and would do it silently.
+//
+// So the two questions are asked separately and the helpers below say which is
+// which at every call site:
+//
+//	fixtureDirV1     what the ledger already holds, frozen forever
+//	currentFixtureDir()  what this build emits, which the append path requires
+const fixtureDirV1 = "testdata/fixtures/v1"
+
+// currentFixtureDir holds the vectors for the version this build emits.
+// ValidateEvent refuses anything else at append, so an append-path test can
+// only start from these.
+func currentFixtureDir() string { return "testdata/fixtures/v" + SchemaVersion }
 
 // goldenFixture is one committed vector: the event object without event_hash,
 // the exact canonical bytes it must serialize to, and the resulting event_hash.
@@ -32,6 +52,19 @@ type goldenFixture struct {
 // test would only ever prove the code agrees with itself. Decoding here is
 // plain encoding/json with UseNumber, and integers are converted explicitly.
 func loadFixture(t *testing.T, name string) goldenFixture {
+	t.Helper()
+	return loadFixtureFrom(t, currentFixtureDir(), name)
+}
+
+// loadFixtureV1 reads a vector from the frozen v1 set. It is how a test says
+// "this is a record the ledger already holds", which is a different claim from
+// "this is what we write now" and must not silently become it.
+func loadFixtureV1(t *testing.T, name string) goldenFixture {
+	t.Helper()
+	return loadFixtureFrom(t, fixtureDirV1, name)
+}
+
+func loadFixtureFrom(t *testing.T, fixtureDir, name string) goldenFixture {
 	t.Helper()
 
 	raw, err := os.ReadFile(filepath.Join(fixtureDir, name+".input.json"))
@@ -76,8 +109,20 @@ func loadFixture(t *testing.T, name string) goldenFixture {
 	}
 }
 
-// fixtureNames returns every committed vector, in sorted order.
+// fixtureNames returns every committed vector for the version this build
+// emits, in sorted order.
 func fixtureNames(t *testing.T) []string {
+	t.Helper()
+	return fixtureNamesIn(t, currentFixtureDir())
+}
+
+// fixtureNamesV1 returns the frozen v1 set.
+func fixtureNamesV1(t *testing.T) []string {
+	t.Helper()
+	return fixtureNamesIn(t, fixtureDirV1)
+}
+
+func fixtureNamesIn(t *testing.T, fixtureDir string) []string {
 	t.Helper()
 
 	entries, err := os.ReadDir(fixtureDir)
@@ -118,10 +163,28 @@ func fixtureInt(t *testing.T, f Fields, name string) int64 {
 	return v
 }
 
-// readFixtureFile returns the exact bytes of a fixture file.
+// readFixtureFile returns the exact bytes of a file in the current version's
+// set.
 func readFixtureFile(t *testing.T, name string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(fixtureDir, name))
+	b, err := os.ReadFile(filepath.Join(currentFixtureDir(), name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return b
+}
+
+// readV1FixtureFile returns the exact bytes of a file in the frozen v1 set.
+//
+// Named for its version rather than defaulting to one, because every current
+// caller wants v1 SPECIFICALLY and for a reason that survives the bump:
+// `genesis.hash` is the root of the one chain and is not a property of any
+// schema version (doc 02 §4.4), and `format-probe` is the serializer's own
+// vector, whose v2 form is the registered fingerprint constant rather than a
+// fixture triple.
+func readV1FixtureFile(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(fixtureDirV1, name))
 	if err != nil {
 		t.Fatalf("read %s: %v", name, err)
 	}

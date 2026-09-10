@@ -119,6 +119,13 @@ func validateEvent(f Fields, verifying bool) error {
 	if err != nil {
 		return err
 	}
+	// The event's OWN version decides which members it has, not this build's.
+	// doc 08: verification of old records is supported forever, so a v1 event
+	// is judged by v1's table even in a binary that emits a later version.
+	version, err := memberString(f, FieldSchemaVersion)
+	if err != nil {
+		return err
+	}
 
 	eventType, err := memberString(f, FieldEventType)
 	if err != nil {
@@ -128,7 +135,15 @@ func validateEvent(f Fields, verifying bool) error {
 	if err != nil {
 		return err
 	}
-	allowed := allowedFor(spec)
+	// A type schema 2 introduced is not a type under schema 1 -- the same rule
+	// memberSpec.since states for members, and for the same reason: the schema
+	// is closed, so an event claiming a type its own version never had is
+	// refused rather than validated against a table it predates.
+	if !spec.presentIn(version) {
+		return fmt.Errorf("%w: %s is a schema %s event type, and this event declares "+
+			"schema_version %q", ErrUnknownEventType, eventType, spec.since, version)
+	}
+	allowed := allowedFor(spec, version)
 
 	if !tolerateUnknown {
 		for _, name := range slices.Sorted(maps.Keys(f)) {
@@ -141,7 +156,23 @@ func validateEvent(f Fields, verifying bool) error {
 		}
 	}
 
-	for _, name := range requiredFor(spec) {
+	// A NEWER VERSION'S REQUIREMENTS ARE UNKNOWABLE, so they are not enforced.
+	//
+	// tolerateUnknown means the event says it comes from a schema this build
+	// does not have. doc 02 §1 already has such an event's unknown MEMBERS
+	// tolerated; the same argument covers its required ones. This build cannot
+	// know what version 3 requires, and judging a version-3 event by version
+	// 2's table would refuse a valid record on the strength of a guess — which
+	// is the opposite of doc 08's "verification of old records is supported
+	// forever" pointed at the future instead of the past.
+	//
+	// Everything in the envelope is still checked: those members are common to
+	// every version by construction (doc 02 §2).
+	required := requiredFor(spec, version)
+	if tolerateUnknown {
+		required = nil
+	}
+	for _, name := range required {
 		if _, ok := f[name]; !ok {
 			return fmt.Errorf("%w: %s requires %q (doc 02 §2, §3)",
 				ErrMissingMember, eventType, name)
@@ -196,7 +227,22 @@ func resolveSchemaVersion(f Fields, verifying bool) (bool, error) {
 // constant of this package, not an input, and a parse of it would be an error
 // path no test could ever reach. The two are held together by
 // TestSchemaVersionConstantsAgree, in the same spirit as the SER-005 gate.
-const currentSchemaVersion = 1
+const currentSchemaVersion = 2
+
+// CanRead reports whether this build can fully verify events of a schema
+// version, and refuses a string that is not a version at all.
+//
+// "Fully" is the operative word and is why this is not simply `<=`: a version
+// this build predates is one whose required members it does not know, so an
+// event of that version passes its checks by having none applied. Everything up
+// to and including this build's own is fully known.
+func CanRead(version string) (bool, error) {
+	n, err := parseSchemaVersion(version)
+	if err != nil {
+		return false, err
+	}
+	return n <= currentSchemaVersion, nil
+}
 
 // parseSchemaVersion reads a schema_version as the integer doc 02 §7's major
 // versioning makes it. "1.0" is not a spelling of "1": it is not a version.
@@ -207,6 +253,24 @@ func parseSchemaVersion(s string) (int, error) {
 			ErrInvalidField, FieldSchemaVersion, s)
 	}
 	return n, nil
+}
+
+// checkSchemaVersionValue holds a `schema_migrated` version member to the same
+// grammar `schema_version` itself has: a major version number and nothing else.
+//
+// It is not checked against the versions this build knows. An attestation is a
+// record of what happened to THIS chain, and a verifier reading a chain that
+// was migrated twice must be able to read the first attestation without
+// needing the second's target to be a version it has heard of.
+func checkSchemaVersionValue(name string, v any) error {
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("%w: %s must be a string, got %T", ErrInvalidField, name, v)
+	}
+	if _, err := parseSchemaVersion(s); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
 }
 
 // checkCrossMemberRules holds the rules that relate members to one another, and
@@ -481,6 +545,40 @@ func checkRepo(name string, v any) error {
 	return nil
 }
 
+// checkBranch, checkPatchID and checkParentRunID are schema 2's members.
+func checkBranch(name string, v any) error {
+	s, err := checkBoundedString(name, v, MaxReferenceBytes)
+	if err != nil {
+		return err
+	}
+	if err := ValidateBranch(s); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+func checkPatchID(name string, v any) error {
+	s, err := checkBoundedString(name, v, MaxReferenceBytes)
+	if err != nil {
+		return err
+	}
+	if err := ValidatePatchID(s); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+func checkParentRunID(name string, v any) error {
+	s, err := checkBoundedString(name, v, MaxReferenceBytes)
+	if err != nil {
+		return err
+	}
+	if err := ValidateParentRunID(s); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
 func checkGitObjectID(name string, v any) error {
 	s, err := checkBoundedString(name, v, MaxReferenceBytes)
 	if err != nil {
@@ -557,4 +655,107 @@ func ValidateGitObjectID(s string) error {
 			ErrInvalidGitObjectID, s)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Schema 2's new grammars (ADR-0045, ADR-0047).
+// ---------------------------------------------------------------------------
+
+// ErrInvalidBranch rejects a value that git would not accept as a ref name.
+var ErrInvalidBranch = errors.New("not a git branch name")
+
+// ErrInvalidPatchID rejects a value that is not a full patch identity.
+var ErrInvalidPatchID = errors.New("not a patch id")
+
+// branchForbidden are the characters git-check-ref-format(1) refuses outright.
+// Space is separate below so its message can name it, because it is the one a
+// human produces by accident.
+const branchForbidden = "~^:?*[\\\x7f"
+
+// patchIDPattern is `git patch-id`'s output: SHA-1 over the diff, lowercase.
+var patchIDPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// ValidateBranch checks doc 02 §5's branch: a git reference name, stored
+// VERBATIM.
+//
+// # Why this is not the identifier grammar, which is the mistake it replaces
+//
+// The harness hook used to fold a branch into `task_ref`, which is held to the
+// SPIFFE grammar `[a-z0-9][a-z0-9-]{0,62}`. That turns `dev/rm105-caller-split`
+// into `dev-rm105-caller-split` — a different branch, and one that may also
+// exist. A branch that has been normalised is no longer the branch, so this
+// accepts what git accepts and refuses what git refuses.
+//
+// The rules are git-check-ref-format(1)'s, minus the ones that cannot apply to
+// a single component read from `rev-parse --abbrev-ref`.
+func ValidateBranch(s string) error {
+	bad := func(why string) error {
+		return fmt.Errorf("%w: %q %s (doc 02 §5)", ErrInvalidBranch, s, why)
+	}
+	switch {
+	case s == "":
+		return bad("is empty")
+	case len(s) > 255:
+		return bad("is longer than 255 bytes")
+	case strings.Contains(s, " "):
+		return bad("contains a space")
+	case strings.ContainsAny(s, branchForbidden):
+		// The OFFENDING character, not the whole set. A reader fixing a branch
+		// name needs to know which byte to remove, and a message that quotes
+		// `"~^:?*[\\\x7f"` makes them find it themselves.
+		i := strings.IndexAny(s, branchForbidden)
+		return bad("contains " + branchName(rune(s[i])))
+	case strings.Contains(s, "{"), strings.Contains(s, "}"):
+		return bad("contains { or }")
+	case strings.HasPrefix(s, "/"), strings.HasPrefix(s, "."):
+		return bad("cannot begin with / or .")
+	case strings.HasSuffix(s, "/"), strings.HasSuffix(s, "."):
+		return bad("cannot end with / or .")
+	case strings.Contains(s, "//"):
+		return bad("contains an empty segment")
+	case strings.Contains(s, ".."):
+		return bad("contains ..")
+	case strings.HasSuffix(s, ".lock"), strings.Contains(s, ".lock/"):
+		return bad("has a component ending in .lock")
+	}
+	return nil
+}
+
+// branchName spells a character a reader can search for. A backslash rendered
+// as `\\` inside a quoted Go string is four characters on screen and none of
+// them is obviously the one in the branch name.
+func branchName(r rune) string {
+	switch r {
+	case '\\':
+		return "a backslash"
+	case '\x7f':
+		return "a delete character"
+	default:
+		return strconv.QuoteRune(r)
+	}
+}
+
+// ValidatePatchID checks doc 02 §5's patch_id: `git patch-id --verbatim`'s
+// output, which is a full 40-hex SHA-1 over the diff.
+//
+// --verbatim and not --stable is ADR-0047's decision and it is measured: the
+// default normalises whitespace, so `hello world` and `hello   world` produce
+// one id. In Python, YAML and a Makefile that is two different programs.
+//
+// Abbreviation is refused for ValidateGitObjectID's reason: a prefix names
+// whatever is unique in one repository at one moment.
+func ValidatePatchID(s string) error {
+	if !patchIDPattern.MatchString(s) {
+		return fmt.Errorf("%w: %q is not a full 40-hex lowercase patch id from "+
+			"`git patch-id --verbatim` (doc 02 §5)", ErrInvalidPatchID, s)
+	}
+	return nil
+}
+
+// ValidateParentRunID checks doc 02 §5's parent_run_id.
+//
+// Deliberately the run grammar and not a second one beside it: the parent of a
+// run is a run, and two grammars for one thing drift.
+func ValidateParentRunID(s string) error {
+	return ValidateIdentifier(s)
 }

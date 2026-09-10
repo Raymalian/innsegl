@@ -661,6 +661,9 @@ const (
 	testIdentitySecret = "contract-fixture-secret-0123456"
 	testAgentType      = "fix-ci"
 	testTaskID         = "jira-118"
+	// ADR-0045, required members of run_registered under schema 2.
+	testRepo   = "github.com/acme/api"
+	testBranch = "main"
 )
 
 type stack struct {
@@ -891,6 +894,7 @@ func (s *stack) registerRun(t *testing.T, key string) registerAgentResult {
 	var out registerAgentResult
 	s.callExpectingSuccess(t, mcp.ToolRegisterAgent, map[string]any{
 		"agent_type": testAgentType, "task_id": testTaskID, "idempotency_key": key,
+		"repo": testRepo, "branch": testBranch,
 	}, &out)
 	if out.RunID == "" || out.SPIFFEID == "" || out.ExpiresAt == "" {
 		t.Fatalf("register_agent returned %+v; IP §4 requires all three members", out)

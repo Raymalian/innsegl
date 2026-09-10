@@ -26,6 +26,8 @@ var doc02EventTypes = []string{
 	"commit_intent_expired",
 	"run_retired",
 	"run_expired",
+	// §7's migration attestation, in doc 02 §3's own order.
+	"schema_migrated",
 	"unattributed_signature_detected",
 	"ledger_drift_detected",
 	"segment_sealed",
@@ -36,14 +38,18 @@ var doc02EventTypes = []string{
 // members, "opt until anchored") are not required and appear below in
 // doc02TypeSpecificOptional instead.
 var doc02TypeSpecificRequired = map[string][]string{
-	"run_registered":                  {"agent_type", "task_ref"},
-	"credential_issued":               {"audience", "credential_expiry"},
-	"tool_call":                       {"tool_name"},
-	"commit_intent":                   {"repo", "tree_hash"},
-	"commit_recorded":                 {"commit_sha", "intent_event_id", "rekor_entry_uuid", "rekor_log_index", "repo", "tree_hash"},
-	"commit_intent_expired":           {"intent_event_id"},
-	"run_retired":                     {},
-	"run_expired":                     {},
+	"run_registered":        {"agent_type", "task_ref"},
+	"credential_issued":     {"audience", "credential_expiry"},
+	"tool_call":             {"tool_name"},
+	"commit_intent":         {"repo", "tree_hash"},
+	"commit_recorded":       {"commit_sha", "intent_event_id", "rekor_entry_uuid", "rekor_log_index", "repo", "tree_hash"},
+	"commit_intent_expired": {"intent_event_id"},
+	"run_retired":           {},
+	"run_expired":           {},
+	// Version 2 introduced the type itself, so version 1 has no row for it and
+	// membershipFor answers "not a type here" rather than "a type with no
+	// members" -- see requiredForVersion below.
+	"schema_migrated":                 {},
 	"unattributed_signature_detected": {"certificate_identity", "rekor_entry_uuid", "rekor_log_index"},
 	"ledger_drift_detected":           {"reason", "subject_event_id"},
 	"segment_sealed":                  {"first_position", "last_position", "segment_id", "segment_merkle_root"},
@@ -53,6 +59,52 @@ var doc02TypeSpecificRequired = map[string][]string{
 // anchoring fields a `segment_sealed` gains in its superseding update event.
 var doc02TypeSpecificOptional = map[string][]string{
 	"segment_sealed": {"anchor_rekor_entry_uuid", "anchor_rekor_log_index"},
+}
+
+// What schema 2 adds.
+//
+// doc 02 §3's table now carries these members and is the authority for them --
+// `run_registered` reads "agent_type, task_ref, repo, branch; parent_run_id
+// (opt) ... Schema "2" and later", and the two commit types carry `patch_id` on
+// the same terms. ADR-0045 and ADR-0047 are the decisions behind them (doc 08
+// §3(d)'s superseding ADRs), and doc 02 is where they became normative.
+//
+// The tables ABOVE are kept as doc 02 §3 read before the bump, because that is
+// what the version-1 events already in the chain were written against and what
+// they must still be judged by. Splitting the two is the whole of doc 08's
+// "accepted alongside all previous ones, without exception": one table cannot
+// answer for both versions, so the test below asks each version its own
+// question.
+var adrTypeSpecificRequired = map[string][]string{
+	// ADR-0045: a run records where it worked.
+	"run_registered": {"branch", "repo"},
+	// ADR-0047: the change is identified by its content, so attribution can
+	// outlive the rebase that destroys the signature.
+	"commit_intent":   {"patch_id"},
+	"commit_recorded": {"patch_id"},
+	// doc 02 §7's migration attestation. The whole TYPE is new in schema 2, so
+	// all three of its members are.
+	"schema_migrated": {"cutover_position", "from_schema_version", "to_schema_version"},
+}
+
+// adrTypeSpecificOptional is ADR-0045's one optional member: a root run has no
+// parent, so requiring it would make every root run invalid.
+var adrTypeSpecificOptional = map[string][]string{
+	"run_registered": {"parent_run_id"},
+}
+
+// membershipFor returns the required and optional type-specific members one
+// schema version's table must hold, sorted.
+func membershipFor(version, eventType string) (required, optional []string) {
+	required = slices.Clone(doc02TypeSpecificRequired[eventType])
+	optional = slices.Clone(doc02TypeSpecificOptional[eventType])
+	if version != "1" {
+		required = append(required, adrTypeSpecificRequired[eventType]...)
+		optional = append(optional, adrTypeSpecificOptional[eventType]...)
+	}
+	slices.Sort(required)
+	slices.Sort(optional)
+	return required, optional
 }
 
 // eventFixtures returns every golden fixture that is an event. The format probe
@@ -112,52 +164,90 @@ func TestEventTypeEnumMatchesDoc02(t *testing.T) {
 	}
 }
 
-// TestTypeSpecificFieldsMatchDoc02 pins each type's own membership to doc 02
-// §3's table: everything in the "Extra required fields" column is required, the
-// two anchoring members are allowed but not required, and nothing else exists.
+// TestTypeSpecificFieldsMatchDoc02 pins each type's own membership, per schema
+// version: everything in doc 02 §3's "Extra required fields" column is required
+// under version 1, the ADRs' additions join it under version 2, the anchoring
+// members are allowed but not required in both, and nothing else exists in
+// either.
+//
+// # Why both versions are asked, every run
+//
+// A table that only described the current version would let a v1 event become
+// invalid the moment v2 shipped, and the ledger is full of v1 events that I4
+// forbids rewriting. doc 08 says a new version is accepted ALONGSIDE all
+// previous ones "without exception", and this is where that stops being a
+// sentence: delete the version-1 arm and the v1 fixtures fail.
 func TestTypeSpecificFieldsMatchDoc02(t *testing.T) {
 	envelope := EnvelopeFieldNames()
 
-	for _, et := range doc02EventTypes {
-		t.Run(et, func(t *testing.T) {
+	for _, version := range []string{"1", SchemaVersion} {
+		for _, et := range doc02EventTypes {
+			t.Run("v"+version+"/"+et, func(t *testing.T) {
+				spec, err := lookupType(et)
+				if err != nil {
+					t.Fatalf("lookupType: %v", err)
+				}
+				wantRequired, wantOptional := membershipFor(version, et)
+
+				var typeSpecific []string
+				for _, name := range requiredFor(spec, version) {
+					if !slices.Contains(envelope, name) {
+						typeSpecific = append(typeSpecific, name)
+					}
+				}
+				if len(wantRequired) == 0 && len(typeSpecific) == 0 {
+					typeSpecific, wantRequired = nil, nil
+				}
+				if !slices.Equal(typeSpecific, wantRequired) {
+					t.Errorf("type-specific required under schema %s = %q\nwant %q",
+						version, typeSpecific, wantRequired)
+				}
+
+				allowed := allowedFor(spec, version)
+				for _, name := range append(slices.Clone(wantRequired), wantOptional...) {
+					if _, ok := allowed[name]; !ok {
+						t.Errorf("schema %s omits %q from %s", version, name, et)
+					}
+				}
+				for name := range allowed {
+					if slices.Contains(envelope, name) || name == EventHashField {
+						continue
+					}
+					if slices.Contains(wantRequired, name) || slices.Contains(wantOptional, name) {
+						continue
+					}
+					t.Errorf("schema %s admits %q on %s, which neither doc 02 §3 nor "+
+						"an accepted ADR lists", version, name, et)
+				}
+			})
+		}
+	}
+
+	// And the exported readers answer for the version this build emits, which
+	// is what every caller outside this package gets.
+	t.Run("the exported readers answer for the current version", func(t *testing.T) {
+		for _, et := range doc02EventTypes {
+			wantRequired, wantOptional := membershipFor(SchemaVersion, et)
 			required, err := RequiredFields(et)
 			if err != nil {
-				t.Fatalf("RequiredFields: %v", err)
+				t.Fatalf("RequiredFields(%q): %v", et, err)
 			}
-			var typeSpecific []string
-			for _, name := range required {
-				if !slices.Contains(envelope, name) {
-					typeSpecific = append(typeSpecific, name)
+			for _, name := range wantRequired {
+				if !slices.Contains(required, name) {
+					t.Errorf("RequiredFields(%q) omits %q", et, name)
 				}
 			}
-			want := doc02TypeSpecificRequired[et]
-			if len(want) == 0 && len(typeSpecific) == 0 {
-				typeSpecific, want = nil, nil
-			}
-			if !slices.Equal(typeSpecific, want) {
-				t.Errorf("type-specific required = %q\nwant %q", typeSpecific, want)
-			}
-
 			allowed, err := AllowedFields(et)
 			if err != nil {
-				t.Fatalf("AllowedFields: %v", err)
+				t.Fatalf("AllowedFields(%q): %v", et, err)
 			}
-			for _, name := range append(slices.Clone(want), doc02TypeSpecificOptional[et]...) {
+			for _, name := range append(slices.Clone(wantRequired), wantOptional...) {
 				if !slices.Contains(allowed, name) {
 					t.Errorf("AllowedFields(%q) omits %q", et, name)
 				}
 			}
-			for _, name := range allowed {
-				if slices.Contains(envelope, name) || name == EventHashField {
-					continue
-				}
-				if slices.Contains(want, name) || slices.Contains(doc02TypeSpecificOptional[et], name) {
-					continue
-				}
-				t.Errorf("AllowedFields(%q) admits %q, which doc 02 §3 does not list", et, name)
-			}
-		})
-	}
+		}
+	})
 }
 
 // TestLED011EventSizeGuard is LED-011: "Event size guard: event type embedding a
@@ -307,7 +397,12 @@ func TestVerifiersTolerateUnknownMembersOnlyForANewerSchema(t *testing.T) {
 
 	t.Run("newer version", func(t *testing.T) {
 		f := base.Clone()
-		f[FieldSchemaVersion] = "2"
+		// "3" and not "2". This said "2" when 2 did not exist; ADR-0045 and
+		// ADR-0047 gave it members, so an event LABELLED 2 is now judged by
+		// version 2's table and a v1 body relabelled as v2 is genuinely
+		// invalid — it has no `repo` and no `branch`. The case is about a
+		// version this build knows nothing about, which is now 3.
+		f[FieldSchemaVersion] = "3"
 		f["future_member"] = "x"
 		if err := ValidateEventForVerification(f); err != nil {
 			t.Errorf("ValidateEventForVerification = %v, want nil", err)
@@ -428,6 +523,9 @@ func TestValidateEventRunScope(t *testing.T) {
 		EventTypeSegmentSealed:                 true,
 		EventTypeUnattributedSignatureDetected: true,
 		EventTypeLedgerDriftDetected:           true,
+		// doc 02 §3 gives it `system` and no run: a schema bump is a property
+		// of the chain, not of anything an agent did.
+		EventTypeSchemaMigrated: true,
 	}
 
 	for _, et := range doc02EventTypes {
@@ -509,7 +607,7 @@ func TestValidateEventAnchoringFieldsArriveTogether(t *testing.T) {
 // is deliberately not an event: it has no envelope at all, and a validator that
 // accepted it would be accepting arbitrary objects.
 func TestValidateEventRejectsTheFormatProbe(t *testing.T) {
-	probe := loadFixture(t, "format-probe")
+	probe := loadFixtureV1(t, "format-probe")
 	if err := ValidateEvent(probe.input); err == nil {
 		t.Fatal("ValidateEvent accepted the format probe, which is not an event")
 	}

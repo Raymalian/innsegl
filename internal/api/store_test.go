@@ -124,6 +124,10 @@ func seed(t *testing.T, owner *ledger.Store, n int) []seededRun {
 		reg := base(event.EventTypeRunRegistered)
 		reg[event.FieldAgentType] = r.agentType
 		reg[event.FieldTaskRef] = r.taskRef
+		// ADR-0045: the run records where it worked, from the moment it exists
+		// rather than only if it later signs something.
+		reg[event.FieldRepo] = r.repo
+		reg[event.FieldBranch] = "main"
 		reg[event.FieldIdempotencyKey] = r.runID + "-register"
 		appendOrFail(ctx, t, owner, reg)
 
@@ -131,12 +135,14 @@ func seed(t *testing.T, owner *ledger.Store, n int) []seededRun {
 			intent := base(event.EventTypeCommitIntent)
 			intent[event.FieldRepo] = r.repo
 			intent[event.FieldTreeHash] = strings.Repeat("a", 40)
+			intent[event.FieldPatchID] = strings.Repeat("b", 40)
 			intent[event.FieldIdempotencyKey] = fmt.Sprintf("%s-intent-%d", r.runID, c)
 			rec := appendOrFail(ctx, t, owner, intent)
 
 			done := base(event.EventTypeCommitRecorded)
 			done[event.FieldRepo] = r.repo
 			done[event.FieldTreeHash] = strings.Repeat("a", 40)
+			done[event.FieldPatchID] = strings.Repeat("b", 40)
 			done[event.FieldCommitSHA] = fmt.Sprintf("%040d", i*10+c)
 			done[event.FieldIntentEventID] = rec[event.FieldEventID]
 			done[event.FieldRekorEntryUUID] = strings.Repeat("b", 64)
@@ -279,8 +285,15 @@ func TestAPI003PaginationFilteringAndSearchHappenServerSide(t *testing.T) {
 		}{
 			{"agent type", RunFilter{AgentType: "release-bot"},
 				func(r seededRun) bool { return r.agentType == "release-bot" }},
+			// `&& r.commits > 0` until schema 2. A run's repository used to
+			// reach the ledger only as a side effect of signing, so a run that
+			// signed nothing was in no repository as far as this filter was
+			// concerned -- which is the hole ADR-0045 was written to close.
+			// `run_registered` now carries it, so a run that registered against
+			// a repository and did nothing else is a run of that repository,
+			// and the filter says so.
 			{"repo", RunFilter{Repo: "github.com/innsegl/two"},
-				func(r seededRun) bool { return r.repo == "github.com/innsegl/two" && r.commits > 0 }},
+				func(r seededRun) bool { return r.repo == "github.com/innsegl/two" }},
 			{"status", RunFilter{Status: StatusExpired},
 				func(r seededRun) bool { return r.status == StatusExpired }},
 			{"free text over the task", RunFilter{Search: "JIRA-11"},

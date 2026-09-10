@@ -1,0 +1,15 @@
+{
+  "ts": "2026-08-28T09:15:47.318Z",
+  "tree_hash": "5dda8fd290f4d08d527bbe82c310a27fc0cddadb",
+  "spiffe_id": "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42",
+  "source": "mcp",
+  "schema_version": "2",
+  "run_id": "run-42",
+  "repo": "github.com/acme/api",
+  "prev_event_hash": "sha256:43b0436c80172284a6bb028f786829bb3cd7883380ef4cf23b81a201fc1cbb74",
+  "patch_id": "5e4c6c1f0a2d9b3e8f7a1c4d6b0e9f2a3c5d7e81",
+  "idempotency_key": "sign-2c5e1",
+  "event_type": "commit_intent",
+  "event_id": "01a047a7-62f6-7ca8-b29c-ffd68aa542e3",
+  "chain_position": 4
+}
