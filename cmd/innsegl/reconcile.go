@@ -461,6 +461,30 @@ func renderReconcileResult(result reconciler.Result) string {
 	fmt.Fprintf(&b, "intents %d  open %d  repaired %d  expired %d  unresolved %d  ambiguous %d\n",
 		result.Intents, result.Open, result.Repaired, result.Expired,
 		result.Unresolved, result.Ambiguous)
+
+	// ADR-0047's pass, reported every cycle including when it is off.
+	//
+	// "A control a deployment cannot see the state of is a control it does not
+	// have" — this file's own words about drift. The pass shipped without
+	// this and recorded five superseding events on a live chain in silence;
+	// the only way to know it had worked was to query Postgres by hand.
+	//
+	// OFF is as important as any count. A deployment that has not configured
+	// it is one where lookup by SHA stops working at the next merge, and
+	// silence reads exactly like "there was nothing to record".
+	if result.Rebase.Enabled {
+		fmt.Fprintf(&b, "rebase: %d recorded  %d already recorded  %d unmatched\n",
+			result.Rebase.Recorded, result.Rebase.AlreadyRecorded, result.Rebase.Unmatched)
+		for _, repo := range result.Rebase.Unreadable {
+			fmt.Fprintf(&b, "  UNREADABLE %s — a repository that cannot be read looks "+
+				"exactly like a branch with no rewrites, so it is named rather than "+
+				"counted\n", repo)
+		}
+	} else {
+		fmt.Fprintf(&b, "rebase: OFF - -rebase-branch (or $%s) is not set, so a commit "+
+			"rewritten by a merge is not being recorded and lookup by its new SHA will "+
+			"fail (ADR-0047)\n", envRebaseBranch)
+	}
 	for _, f := range result.Findings {
 		if f.Outcome == reconciler.OutcomeOpen {
 			continue
