@@ -106,6 +106,19 @@ fi
 #       WHETHER. Remove this line if that job is ever removed, and let this
 #       gate go red rather than let the test go quiet.
 #
+#   TestGenerateV2Fixtures
+#       A GENERATOR, not a gate. It writes the schema 2 golden fixtures and
+#       skips unless INNSEGL_WRITE_V2_FIXTURES=1, because running it by
+#       accident would rewrite the byte-level definition of a protected
+#       surface — the one thing the fixture README says never to do to make a
+#       test pass.
+#
+#       It is not the coverage going quiet. What it produces is asserted on
+#       every run by TestSER024EveryReleasedVersionHasAFixtureSetThatStillVerifies,
+#       which re-derives every committed vector of every released version and
+#       fails if one stops verifying. The generator writes; that test reads,
+#       and it is the one that must never skip.
+#
 #   TestGH001NoContributorAppearsForAnUnlinkedAuthor
 #       doc 07 GH-001 (RM-038, #46). It is the one case in the catalogue that
 #       measures somebody else's system: it pushes commits with an unlinked
@@ -150,7 +163,7 @@ fi
 #       Remove this line when #195 rebuilds the gate on ADR-0047's content
 #       check, where a rebased commit is matched by patch-id and main becomes
 #       checkable again.
-ALLOWED='TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature'
+ALLOWED='TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures'
 
 unexpected=$(grep -F '"Action":"skip"' "${out}" | grep -F '"Test":' | grep -Ev "\"Test\":\"(${ALLOWED})\"" || true)
 skipped=$(printf '%s' "${unexpected}" | grep -c . || true)
