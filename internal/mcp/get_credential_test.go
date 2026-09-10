@@ -1899,15 +1899,19 @@ type credRestorer struct {
 	mu      sync.Mutex
 	entries *credEntries
 	calls   int
-	inert   bool // restores nothing, to prove SPIRE's second answer still decides
+	inert   bool  // restores nothing, to prove SPIRE's second answer still decides
+	err     error // the repair itself fails
 }
 
 func (r *credRestorer) RestoreRun(_ context.Context, run spire.RunRef) error {
 	r.mu.Lock()
 	r.calls++
-	inert := r.inert
+	inert, failure := r.inert, r.err
 	entries := r.entries
 	r.mu.Unlock()
+	if failure != nil {
+		return failure
+	}
 	if inert {
 		return nil
 	}
@@ -2124,4 +2128,102 @@ func (f *credFixture) callWithToken(t *testing.T, runID, audience, token string)
 		t.Fatalf("structuredContent is %T", res.StructuredContent)
 	}
 	return credReply{isError: res.IsError, wire: wire}
+}
+
+// A run abandoned long enough is not restored, however live the ledger says it is.
+//
+// Removing the ten-minute timer is what made agents survive a usage limit, and
+// its cost is that a SIGKILLed process fires no retirement hook — so nothing
+// ever ends that run and its identity would stay mintable forever. An identity
+// nobody is watching is what IP §6.7's reaper exists to prevent.
+//
+// The horizon is days, not minutes. A short timer is exactly what was removed.
+func TestGetCredentialDoesNotRestoreALongAbandonedRun(t *testing.T) {
+	run := credRun("run-a")
+	// Expired a fortnight before the fixture's clock, with a one-week horizon.
+	run.ExpiredAt = time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	rest := &credRestorer{}
+	f := newAbandonFixture(t, 7*24*time.Hour, rest, run)
+	rest.entries = f.entries
+	f.entries.delete("run-a")
+
+	if r := f.call(t, "run-a", AudienceSigstore); !r.isError {
+		t.Fatal("a run abandoned for a fortnight was restored and minted a credential")
+	}
+	if got := rest.count(); got != 0 {
+		t.Fatalf("the restorer ran %d times for an abandoned run, want 0", got)
+	}
+}
+
+// Inside the horizon it still heals: this must not become the short timer again.
+func TestGetCredentialStillRestoresARecentlyExpiredRun(t *testing.T) {
+	run := credRun("run-a")
+	// Expired an hour before the fixture's clock.
+	run.ExpiredAt = time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC)
+	rest := &credRestorer{}
+	f := newAbandonFixture(t, 7*24*time.Hour, rest, run)
+	rest.entries = f.entries
+	f.entries.delete("run-a")
+
+	if r := f.call(t, "run-a", AudienceSigstore); r.isError {
+		t.Fatalf("a run quiet for an hour was refused: %v — that is the timer this "+
+			"work removed, reintroduced", r.wire)
+	}
+}
+
+// With no horizon configured, nothing expires out of restorability.
+func TestGetCredentialWithNoHorizonRestoresAnyUnretiredRun(t *testing.T) {
+	run := credRun("run-a")
+	run.ExpiredAt = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	rest := &credRestorer{}
+	f := newAbandonFixture(t, 0, rest, run)
+	rest.entries = f.entries
+	f.entries.delete("run-a")
+
+	if r := f.call(t, "run-a", AudienceSigstore); r.isError {
+		t.Fatalf("a deployment with no horizon refused a six-year-old run: %v", r.wire)
+	}
+}
+
+func newAbandonFixture(
+	t *testing.T, abandon time.Duration, rest CredentialRestorer, runs ...CredentialRun,
+) *credFixture {
+	t.Helper()
+	f := &credFixture{
+		t:       t,
+		runs:    newCredRuns(runs...),
+		entries: newCredEntries(),
+		ledger:  &credLedger{},
+		clock:   time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC),
+	}
+	f.minter = newCredMinter(func() time.Time { return f.clock })
+	withCredentialConfig(t, CredentialConfig{
+		Runs:         f.runs,
+		Entries:      f.entries,
+		Restorer:     rest,
+		Minter:       f.minter,
+		Ledger:       f.ledger,
+		AbandonAfter: abandon,
+		Now:          func() time.Time { return f.clock },
+	})
+	f.session = serveGetCredential(t)
+	return f
+}
+
+// A repair that fails is refused as the gate refused it, never reported as
+// something else: an operator reading RUN_NOT_FOUND for a run whose restore
+// errored would go looking for a missing run rather than a broken SPIRE.
+func TestGetCredentialRefusesWhenTheRestoreItselfFails(t *testing.T) {
+	rest := &credRestorer{err: errors.New("spire-server refused the entry")}
+	f := newRestoringFixture(t, rest, credRun("run-a"))
+	rest.entries = f.entries
+	f.entries.delete("run-a")
+
+	r := f.call(t, "run-a", AudienceSigstore)
+	if !r.isError {
+		t.Fatal("a credential was minted although the entry could not be restored")
+	}
+	if got := rest.count(); got != 1 {
+		t.Errorf("the restorer ran %d times, want 1", got)
+	}
 }

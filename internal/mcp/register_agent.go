@@ -144,6 +144,20 @@ var (
 type RegisterAgentConfig struct {
 	// Identities is the SPIRE admin client. Required.
 	Identities RegisterAgentIdentities
+	// AbandonAfter bounds how long a run whose authorisation the reaper
+	// withdrew may still be restored by a replay.
+	//
+	// A process that is SIGKILLed fires no retirement hook, so nothing ever
+	// ends its run: without a horizon its identity stays mintable forever, and
+	// an identity nobody is watching is exactly what an attacker wants
+	// (IP §6.7). This is the horizon, measured from the `run_expired`.
+	//
+	// It is deliberately NOT a short timer. The short timer is what was just
+	// removed — it killed working agents. This is measured in days and exists
+	// only so abandonment is eventually terminal.
+	//
+	// Zero means no horizon: a run stays restorable until it is retired.
+	AbandonAfter time.Duration
 	// RunTokenSecret keys the per-run token handed back at registration. Empty
 	// means no token is issued and get_credential requires none — the state
 	// every deployment before this was in. See runtoken.go.
@@ -366,6 +380,11 @@ func (c *RegisterAgentConfig) heal(ctx context.Context, run spire.RunRef) error 
 		return err
 	}
 	if !found || !known.RetiredAt.IsZero() {
+		return nil
+	}
+	// Abandoned long enough that nothing is coming back for it.
+	if c.AbandonAfter > 0 && !known.ExpiredAt.IsZero() &&
+		c.Now().Sub(known.ExpiredAt) > c.AbandonAfter {
 		return nil
 	}
 	_, hasEntry, err := c.Identities.LookupRun(ctx, run)

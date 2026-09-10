@@ -229,3 +229,36 @@ func TestAttributeContentAnswersFromAnIntentAlone(t *testing.T) {
 		t.Errorf("detail names an empty commit: %q", got.Detail)
 	}
 }
+
+// The record that names the commit wins, whichever order the chain holds them
+// in — and once one is found a later intent must not displace it.
+//
+// The forward case (intent first, record second) is above. This is the other
+// direction, which is what the branch floor found missing: with the record
+// already chosen, the condition that would replace it must be exercised as
+// FALSE, or the preference is only ever tested one way and a rewrite that
+// inverted it would pass.
+func TestAttributeContentKeepsTheRecordWhenAnIntentFollowsIt(t *testing.T) {
+	repo := t.TempDir()
+	sha, runID := seedRebasedCommit(t, repo)
+	patchID := patchIDOfCommit(t, repo, sha)
+	const original = "10c437e3609618f2eb7e06c744b7203d0370b0f8"
+
+	src := fakeContentSource{records: []verify.ContentRecord{
+		{RunID: runID, PatchID: patchID, CommitSHA: original, EventID: "recorded"},
+		{RunID: runID, PatchID: patchID, CommitSHA: "", EventID: "intent"},
+	}}
+	got := verify.AttributeContent(context.Background(),
+		verify.ContentConfig{Source: src}, repo, sha, runID)
+
+	if got.Result != verify.Verified {
+		t.Fatalf("result %v (%s), want Verified", got.Result, got.Detail)
+	}
+	if got.RecordedAs != original {
+		t.Errorf("RecordedAs is %q, want %q — an intent seen after the record must not "+
+			"displace it", got.RecordedAs, original)
+	}
+	if got.EventID != "recorded" {
+		t.Errorf("EventID is %q, want the record's", got.EventID)
+	}
+}

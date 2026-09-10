@@ -102,13 +102,31 @@ const SCENARIOS: Record<string, () => ReactElement> = {
  * defects is a composition the sheet permits and cannot see.
  */
 const PROBES: Record<string, () => ReactElement> = {
-  /* Issue #104, reconstructed. `text-accent` is the interactive accent,
-   * defined against the page ground; `bg-integrity-alert-surface` is the
-   * integrity banner's red fill. Measured at the time: 1.07:1 in light mode.
-   * Composed here through the same Tailwind utilities AlertBanner used, so
-   * this is the real cascade and the real tokens, not a hand-picked hex. */
+  /* Issue #104, reconstructed. `text-accent` is the interactive accent, defined
+   * against the page ground; the fill is the integrity banner's red. Measured at
+   * the time: 1.07:1 in light mode.
+   *
+   * The fill is reached through the TOKEN rather than through
+   * `bg-integrity-alert-surface`, and that is a deliberate change from how this
+   * probe was first written. The utility now rebinds the ink and accent tokens
+   * within itself, so composing `text-accent` inside it is readable and this
+   * probe stopped reproducing anything — the detector's own self-test went
+   * green because the bait was fixed, which is the one way a self-test can lie.
+   *
+   * The token pair is unchanged and still permitted: the sheet defines
+   * accent-text #3a3ea1 and integrity-alert-surface #9b1921, and nothing stops a
+   * component reaching that red by any other route. That is precisely the defect
+   * class this scan exists for — "a composition the sheet permits and cannot
+   * see" — so the probe now composes it the way a component still can.
+   *
+   * Still real tokens and still the real cascade. No hand-picked hex: change
+   * either token and this probe changes with it. */
   "probe-issue-104": () => (
-    <div data-probe="issue-104" className="bg-integrity-alert-surface p-4">
+    <div
+      data-probe="issue-104"
+      className="p-4"
+      style={{ background: "var(--innsegl-color-integrity-alert-surface)" }}
+    >
       <a data-probe-target="evidence-link" href="#evidence" className="text-accent underline">
         View evidence
       </a>
