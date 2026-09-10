@@ -42,23 +42,7 @@ set -eu
 
 ADMIN_URL="${INNSEGL_MCP_ADMIN_URL:-http://127.0.0.1:28090/}"
 AGENT_URL="${INNSEGL_MCP_URL:-http://127.0.0.1:28080/}"
-# `signer`, not `orchestrator`, and the distinction is the point.
-#
-# This script mints a THROWAWAY identity per commit: register, sign, retire, in
-# about half a second. Measured across the ledger on 2026-09-09 -- 95 such runs
-# with a median life of 0.58s, against 44 real agent runs with a median of
-# 11m38s. They are 87% of everything registered in a working day.
-#
-# Typed `orchestrator` they were indistinguishable from a real agent, so a
-# dashboard listing runs newest-first buried the four live agents under a
-# hundred half-second signers, and the operator read that as "everything dies
-# immediately". Nothing was dying. Filtering them out happened to work only
-# because no real subagent had used that type yet, which is luck rather than
-# design.
-#
-# doc 02 §5 gives agent_type a grammar, not an enum -- its own example is
-# `fix-ci` -- so this is a new value and not a protected-string change.
-AGENT_TYPE="${INNSEGL_AGENT_TYPE:-signer}"
+AGENT_TYPE="${INNSEGL_AGENT_TYPE:-orchestrator}"
 
 usage() {
   echo "usage: innsegl-commit.sh -m <message> | -F <file>" >&2
@@ -107,6 +91,32 @@ done
 [ -n "$MESSAGE" ] || { echo "innsegl-commit: empty message" >&2; exit 2; }
 
 ROOT="$(git rev-parse --show-toplevel)"
+
+# THE RUN THIS TREE BELONGS TO, discovered rather than remembered.
+#
+# Without this the script mints a throwaway identity per commit, and the work is
+# credited to something with no link back to the agent that produced it.
+# Measured 2026-09-09 in another project: 53 signed commits in the ledger, every
+# one under an ephemeral run, while all 16 agent runs that did the work showed
+# "Signed nothing". Attribution existed and answered nothing.
+#
+# A shell command cannot discover which agent it is inside -- no environment
+# variable carries an agent or session id. The WORKING TREE is the one thing
+# both sides can see: the harness hook knows which run works in which directory
+# and publishes a pointer at registration; this reads it back.
+#
+# An explicit -r still wins, and an absent pointer still falls back to minting a
+# run, so nothing that worked before stops working.
+if [ -z "$RUN_GIVEN" ] && [ -n "$ROOT" ]; then
+  _key="$(printf '%s' "$(CDPATH= cd -- "$ROOT" && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
+  _ptr="${INNSEGL_RUNS_DIR:-$HOME/.innsegl/runs}/by-tree/$_key"
+  if [ -f "$_ptr" ]; then
+    RUN_GIVEN="$(sed -n 1p "$_ptr")"
+    [ -n "$TASK_GIVEN" ] || TASK_GIVEN="$(sed -n 2p "$_ptr")"
+    [ -n "$WORKTREE" ] || WORKTREE="$(sed -n 3p "$_ptr")"
+    echo "innsegl-commit: this tree belongs to $RUN_GIVEN; signing under it" >&2
+  fi
+fi
 
 # The repository identifier the MCP resolves against its workspace: host/org/name.
 REPO="${INNSEGL_REPO_ID:-$(git remote get-url origin 2>/dev/null \

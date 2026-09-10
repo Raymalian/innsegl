@@ -88,6 +88,14 @@ mkdir -p "$RUNS_DIR" 2>/dev/null || true
 # consequence was measured 2026-09-08: work in one repository produced no run
 # at all, and the operator's words were "jeg kjørte ting i raymalian. ingen
 # agent fikk identitet der. ingenting ble registrert."
+# tree_key turns a working tree into a stable file name. The RESOLVED path, so
+# a symlinked route to the same tree does not look like a different one.
+tree_key() {
+  _t="$(CDPATH= cd -- "${1:-.}" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$_t" ] || return 1
+  printf '%s' "$_t" | shasum -a 256 2>/dev/null | cut -c1-32
+}
+
 SESSIONFILE="$RUNS_DIR/session-${SESSION_ID:-unknown}"
 if [ -n "$AGENT_ID" ]; then
   RUNFILE="$RUNS_DIR/$AGENT_ID"
@@ -274,10 +282,34 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
       exit 0
     fi
 
-    echo "innsegl: refused. Sign it instead of committing plainly:" >&2
+    # THE RUN GOES IN THE INSTRUCTION, and this is what makes the commit the
+    # AGENT's rather than a stranger's.
+    #
+    # Without -r the signer mints a fresh throwaway identity per commit, so the
+    # work is attributed to something with no link back to whoever produced it.
+    # Measured 2026-09-09 in another project: 53 signed commits in the ledger,
+    # every one of them under an ephemeral `orchestrator` or `signer` run, while
+    # all 16 agent runs that did the work showed "Signed nothing". Attribution
+    # existed and answered nothing.
+    #
+    # A shell command cannot discover which agent it is inside -- no environment
+    # variable carries it. But this hook knows, because it wrote the marker at
+    # SubagentStart, and this message is read by the model. So the identity
+    # travels in the instruction.
+    GATE_RUN="$(sed -n 1p "$RUNFILE" 2>/dev/null)"
+    GATE_TASK="$(sed -n 4p "$RUNFILE" 2>/dev/null)"
+    echo "innsegl: refused. Sign it under THIS agent's identity:" >&2
     echo "innsegl:" >&2
-    echo "innsegl:   git add -A" >&2
-    echo "innsegl:   $SIGNER -m \"<type>(<scope>): <what changed>\"" >&2
+    # NOT `git add -A`. It said that, and it was wrong twice over: it
+    # contradicts staging deliberately, and it arrives at the moment an agent
+    # is most suggestible -- mid-refusal, looking for the shortest way out.
+    # An agent that stages everything sweeps up whatever else is in the tree,
+    # which is how a commit ends up carrying work nobody meant to sign.
+    echo "innsegl:   git add <the files you changed>" >&2
+    echo "innsegl:   $SIGNER -r $GATE_RUN${GATE_TASK:+ -t $GATE_TASK} -m \"<type>(<scope>): <what changed>\"" >&2
+    echo "innsegl:" >&2
+    echo "innsegl: The -r is this run. Without it the signer mints a throwaway" >&2
+    echo "innsegl: identity and the work is credited to nobody in particular." >&2
     echo "innsegl:" >&2
     echo "innsegl: The signer belongs to the innsegl deployment, not to the repository" >&2
     echo "innsegl: you are working in, so it is reachable from anywhere. It stages what" >&2
@@ -446,6 +478,28 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
       "$MAIN"/*) REL="${CWD#"$MAIN"/}" ;;
     esac
     printf '%s\n%s\n%s\n%s\n%s\n' "$RUN_ID" "$MAIN" "$REL" "$TASK" "$AGENT_TYPE" > "$RUNFILE"
+
+    # AND A POINTER KEYED BY THE WORKING TREE.
+    #
+    # This is what makes attribution automatic instead of remembered. A shell
+    # command cannot discover which agent it is inside -- no environment
+    # variable carries an agent or session id, checked -- so innsegl-commit
+    # used to mint a throwaway identity per commit. Measured 2026-09-09 in
+    # another project: 53 signed commits, every one under an ephemeral run,
+    # while all 16 agent runs that did the work showed "Signed nothing".
+    # Attribution existed and answered nothing.
+    #
+    # The tree is the one thing both sides can see. The hook knows which run
+    # works in which directory; the signer knows which directory it is in.
+    tree_key "$CWD" > /dev/null 2>&1 && {
+      mkdir -p "$RUNS_DIR/by-tree" 2>/dev/null
+      # THREE lines: the run, its task, and the worktree RELATIVE to the
+      # repository. The third is not optional -- sign_commit runs `git commit`
+      # in the tree it resolves from the repo id, so an agent working in a
+      # linked worktree must say which one, or the index it staged and the
+      # index that gets committed are different trees (MCP-029).
+      printf '%s\n%s\n%s\n' "$RUN_ID" "$TASK" "$REL" > "$RUNS_DIR/by-tree/$(tree_key "$CWD")" 2>/dev/null || true
+    }
     echo "innsegl: $AGENT_TYPE is $RUN_ID (task $TASK)" >&2
     exit 0
     ;;
@@ -458,6 +512,12 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
     TASK="$(sed -n 4p "$RUNFILE")"
     [ -n "$AGENT_TYPE" ] || AGENT_TYPE="$(sed -n 5p "$RUNFILE")"
     rm -f "$RUNFILE"
+    # The pointer goes with the run. A stale one would credit this agent for
+    # work done after it stopped.
+    if [ -n "$MAIN" ]; then
+      _k="$(tree_key "${REL:+$MAIN/$REL}${REL:-$MAIN}")" 2>/dev/null
+      [ -n "$_k" ] && rm -f "$RUNS_DIR/by-tree/$_k" 2>/dev/null
+    fi
     [ -n "$RUN_ID" ] || exit 0
 
     # CAPTURE WHAT THIS AGENT LEFT, in the order the operator asked for.
