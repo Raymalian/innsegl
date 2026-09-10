@@ -113,6 +113,33 @@
   --innsegl-palette-degraded-800: #523902;
   --innsegl-palette-degraded-900: #332401;
 
+  /* Content. ADR-0047's fourth verification state: the commit OBJECT was
+   * rewritten and its signature is gone, and the CHANGE it makes is one a
+   * signed run recorded (doc 06 §4.2, amended 2026-09-10).
+   *
+   * VIOLET, and the choice is constrained on every side. It may not be the
+   * verification green — doc 06 §5.3 spends that on a live verification
+   * passing and on nothing else, and this is a weaker claim than that. It may
+   * not be the failure red, which would accuse a genuine signature, nor the
+   * degraded amber, which means "we could not check" when this checked and
+   * held. It may not be the accent indigo, which is the link and focus colour
+   * and would put a verdict in the one hue §5.3 calls semantically
+   * meaningless. And it may not be a teal, for the reason written below the
+   * accent family: a teal sits at the edge of the verification hue and invites
+   * exactly the misreading that section exists to prevent.
+   *
+   * Violet is outside the red-amber-green band a reader scans for a verdict,
+   * far enough from indigo to read as a different thing, and nowhere near
+   * green. */
+  --innsegl-palette-content-50: #f5eefc;
+  --innsegl-palette-content-100: #e8d9f8;
+  --innsegl-palette-content-300: #c093e4;
+  --innsegl-palette-content-400: #a871d6;
+  --innsegl-palette-content-600: #7635ad;
+  --innsegl-palette-content-700: #5d2a88;
+  --innsegl-palette-content-800: #451f65;
+  --innsegl-palette-content-900: #2b1341;
+
   /* Accent. The one semantically meaningless hue (§5.3): links, focus,
    * filters, selection. Indigo, deliberately outside the red-amber-green band
    * a reader scans for a verdict — a teal or a lime accent would sit at the
@@ -156,6 +183,10 @@
   --innsegl-color-proof-failed-text: light-dark(var(--innsegl-palette-failure-700), var(--innsegl-palette-failure-300));
   --innsegl-color-proof-failed-surface: light-dark(var(--innsegl-palette-failure-50), var(--innsegl-palette-failure-900));
   --innsegl-color-proof-failed-border: light-dark(var(--innsegl-palette-failure-600), var(--innsegl-palette-failure-400));
+
+  --innsegl-color-proof-content-text: light-dark(var(--innsegl-palette-content-700), var(--innsegl-palette-content-300));
+  --innsegl-color-proof-content-surface: light-dark(var(--innsegl-palette-content-50), var(--innsegl-palette-content-900));
+  --innsegl-color-proof-content-border: light-dark(var(--innsegl-palette-content-600), var(--innsegl-palette-content-400));
 
   --innsegl-color-proof-unavailable-text: light-dark(var(--innsegl-palette-degraded-700), var(--innsegl-palette-degraded-300));
   --innsegl-color-proof-unavailable-surface: light-dark(var(--innsegl-palette-degraded-50), var(--innsegl-palette-degraded-900));

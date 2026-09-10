@@ -61,6 +61,9 @@
   --color-proof-failed: var(--innsegl-color-proof-failed-text);
   --color-proof-failed-surface: var(--innsegl-color-proof-failed-surface);
   --color-proof-failed-line: var(--innsegl-color-proof-failed-border);
+  --color-proof-content: var(--innsegl-color-proof-content-text);
+  --color-proof-content-surface: var(--innsegl-color-proof-content-surface);
+  --color-proof-content-line: var(--innsegl-color-proof-content-border);
   --color-proof-unavailable: var(--innsegl-color-proof-unavailable-text);
   --color-proof-unavailable-surface: var(--innsegl-color-proof-unavailable-surface);
   --color-proof-unavailable-line: var(--innsegl-color-proof-unavailable-border);

@@ -30,8 +30,9 @@ export const strings = {
     checkedAt: "Checked",
   },
 
-  /* The rollup (doc 06 §4.2). Four states, because a commit that claims
-   * nothing is not a commit that failed (VER-006, E7). */
+  /* The rollup (doc 06 §4.2). Five states: a commit that claims nothing is
+   * not a commit that failed (VER-006, E7), and a commit whose object was
+   * rewritten is not one either (ADR-0047). */
   verdict: {
     verified: {
       label: "Verified",
@@ -44,6 +45,11 @@ export const strings = {
     unavailable: {
       label: "Verification unavailable",
       meaning: "A check could not run, so nothing here is proven either way.",
+    },
+    "content-verified": {
+      label: "Content verified",
+      meaning:
+        "The commit on this branch is not the object that was signed \u2014 a rebase or a merge rewrote it \u2014 but the change it makes is one a signed run recorded. What this does not prove is that the agent wrote this commit's message, parent or author.",
     },
     unattributed: {
       label: "Unattributed",

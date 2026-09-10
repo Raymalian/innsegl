@@ -86,6 +86,11 @@ function init_policy() {
   allowed["proof-failed"]        = "failure"
   allowed["integrity-alert"]     = "failure"
   allowed["mismatch"]            = "failure"
+  # Violet — content verified (§5.3, §4.2, ADR-0047): the commit object was
+  # rewritten and its signature is gone, and the change it makes is one a
+  # signed run recorded. Its own family precisely so it cannot borrow the
+  # green, which is spent on a live verification of THIS OBJECT passing.
+  allowed["proof-content"]       = "content"
   # Amber — degraded/unavailable: verification unavailable, anchoring lag,
   # staleness (§5.3).
   allowed["proof-unavailable"]   = "degraded"
@@ -101,7 +106,8 @@ function init_policy() {
   allowed["border"]              = "neutral"
   allowed["status"]              = "neutral"
 
-  # A palette family that is not in this list is a fifth hue nobody decided on.
+  # A palette family that is not in this list is a hue nobody decided on.
+  known_family["content"]     = 1
   known_family["neutral"]     = 1
   known_family["verification"] = 1
   known_family["failure"]      = 1
