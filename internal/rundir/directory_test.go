@@ -476,3 +476,99 @@ func TestAGenerallyMismatchedRecordStillResolves(t *testing.T) {
 		t.Errorf("Ref().AgentType is %q, want the SPIFFE ID's own segment %q", ref.AgentType, fixture01AgentType)
 	}
 }
+
+// expired is a `run_expired` record as the reaper leaves one.
+func expired(position int64, ts string) event.Fields {
+	return event.Fields{
+		event.FieldSchemaVersion: event.SchemaVersion,
+		event.FieldEventID:       "01930000-0000-7000-8000-00000000002" + fmt.Sprint(position),
+		event.FieldChainPosition: position,
+		event.FieldEventType:     event.EventTypeRunExpired,
+		event.FieldTS:            ts,
+		event.FieldRunID:         testRunID,
+		event.FieldSpiffeID:      testSPIFFEID,
+		event.FieldSource:        event.SourceReaper,
+	}
+}
+
+// Expiry is not retirement, and the directory must keep them apart.
+//
+// The reaper withdraws the authorisation of a run that went quiet; a quiet agent
+// is often one waiting on a usage limit or a human, so a resumed run may have its
+// entry restored. Retirement is the agent saying it finished, and is final. A
+// directory that reported expiry as retirement would make every reaped agent
+// permanently unusable — which is the ten-minute death this work removed.
+func TestCredentialRunReportsAnExpiryWithoutRetiringTheRun(t *testing.T) {
+	d := newDirectory(t, []event.Fields{
+		registered(1, "2026-08-29T09:00:00.000Z"),
+		expired(2, "2026-08-29T10:00:00.000Z"),
+	})
+
+	run, found, err := d.CredentialRun(context.Background(), testRunID)
+	if err != nil {
+		t.Fatalf("CredentialRun: %v", err)
+	}
+	if !found {
+		t.Fatal("a registered run that was expired is not found")
+	}
+	if !run.RetiredAt.IsZero() {
+		t.Errorf("RetiredAt is %v for an EXPIRED run — expiry withdraws a credential, "+
+			"retirement ends the agent, and conflating them makes every reaped run "+
+			"permanently dead", run.RetiredAt)
+	}
+	if want := mustParse(t, "2026-08-29T10:00:00.000Z"); !run.ExpiredAt.Equal(want) {
+		t.Errorf("ExpiredAt is %v, want %v", run.ExpiredAt, want)
+	}
+}
+
+// Two reapers that both acted leave two events, and every caller must be told
+// the same instant — the EARLIEST, for the reason retirement uses.
+func TestCredentialRunReportsTheEarliestExpiry(t *testing.T) {
+	d := newDirectory(t, []event.Fields{
+		registered(1, "2026-08-29T09:00:00.000Z"),
+		expired(2, "2026-08-29T11:00:00.000Z"),
+		expired(3, "2026-08-29T10:00:00.000Z"),
+	})
+
+	run, _, err := d.CredentialRun(context.Background(), testRunID)
+	if err != nil {
+		t.Fatalf("CredentialRun: %v", err)
+	}
+	if want := mustParse(t, "2026-08-29T10:00:00.000Z"); !run.ExpiredAt.Equal(want) {
+		t.Errorf("ExpiredAt is %v, want the earliest %v — two reapers must not be "+
+			"reported as two different expiries", run.ExpiredAt, want)
+	}
+}
+
+// A run that was expired and then retired is retired: the terminal fact wins.
+func TestCredentialRunRetirementSurvivesAnEarlierExpiry(t *testing.T) {
+	d := newDirectory(t, []event.Fields{
+		registered(1, "2026-08-29T09:00:00.000Z"),
+		expired(2, "2026-08-29T10:00:00.000Z"),
+		retired(3, "2026-08-29T12:00:00.000Z"),
+	})
+
+	run, _, err := d.CredentialRun(context.Background(), testRunID)
+	if err != nil {
+		t.Fatalf("CredentialRun: %v", err)
+	}
+	if run.RetiredAt.IsZero() {
+		t.Fatal("a retired run reports no retirement")
+	}
+	if run.ExpiredAt.IsZero() {
+		t.Error("the expiry was dropped; both facts happened and the chain holds both")
+	}
+}
+
+// An expiry whose ts cannot be read is a chain that does not describe the run it
+// claims, and is refused rather than read as "never expired" — which would hand
+// an abandoned run an unbounded life.
+func TestCredentialRunRefusesAnUnreadableExpiryInstant(t *testing.T) {
+	broken := expired(2, "2026-08-29T10:00:00.000Z")
+	broken[event.FieldTS] = "not-a-timestamp"
+	d := newDirectory(t, []event.Fields{registered(1, "2026-08-29T09:00:00.000Z"), broken})
+
+	if _, _, err := d.CredentialRun(context.Background(), testRunID); err == nil {
+		t.Fatal("an unreadable run_expired ts was accepted")
+	}
+}
