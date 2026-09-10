@@ -165,3 +165,132 @@ func TestMCP032AnUnresolvableRunIsStillRefused(t *testing.T) {
 		t.Errorf("said %q, which does not name the run", err)
 	}
 }
+
+// TestMCP038TheAbsoluteWorktreePathAndEveryRefusalOnIt — IP §2's branch floor.
+//
+// fillFromWorktree's ABSOLUTE branch is the one a harness integration takes:
+// "this is where I am, work the rest out". Every condition inside it was
+// unevaluated, which means the path that exists to make this portable had
+// never been executed by a test — and it is the path a caller reaches on their
+// first attempt, from a directory this server has never seen.
+func TestMCP038TheAbsoluteWorktreePathAndEveryRefusalOnIt(t *testing.T) {
+	repoRoot := t.TempDir()
+	gitInit(t, repoRoot, "git@github.com:Example-Org/Example-Repo.git")
+	if err := os.WriteFile(filepath.Join(repoRoot, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, repoRoot, "add", "-A")
+
+	taskOK := func(context.Context, string) (string, error) { return "jira-118", nil }
+
+	t.Run("an absolute worktree fills in everything", func(t *testing.T) {
+		got, err := fillFromWorktree(t.Context(),
+			signCommitIn{RunID: "run-42", Message: "m", Worktree: repoRoot}, taskOK)
+		if err != nil {
+			t.Fatalf("fillFromWorktree: %v", err)
+		}
+		if got.Repo != "github.com/Example-Org/Example-Repo" {
+			t.Errorf("repo = %q", got.Repo)
+		}
+		if len(got.StagedRef) != 40 {
+			t.Errorf("staged_ref = %q, want the index's tree", got.StagedRef)
+		}
+		if got.TaskRef != "jira-118" {
+			t.Errorf("task_ref = %q", got.TaskRef)
+		}
+		// The repository IS the worktree, so the argument is emptied: it only
+		// ever says "which of its trees".
+		if got.Worktree != "" {
+			t.Errorf("worktree = %q, want empty when it is the repository itself", got.Worktree)
+		}
+	})
+
+	t.Run("what the caller already supplied is not overwritten", func(t *testing.T) {
+		// The other side of each `== ""` condition: a caller who knows a value
+		// keeps it, and the server fills only the gaps.
+		got, err := fillFromWorktree(t.Context(), signCommitIn{
+			RunID:     "run-42",
+			Message:   "m",
+			Worktree:  repoRoot,
+			Repo:      "github.com/other/repo",
+			StagedRef: strings.Repeat("b", 40),
+			TaskRef:   "given",
+		}, func(context.Context, string) (string, error) {
+			t.Error("the task was looked up although the caller supplied one")
+			return "", nil
+		})
+		if err != nil {
+			t.Fatalf("fillFromWorktree: %v", err)
+		}
+		if got.Repo != "github.com/other/repo" || got.TaskRef != "given" {
+			t.Errorf("the server overwrote what the caller supplied: %+v", got)
+		}
+		if got.StagedRef != strings.Repeat("b", 40) {
+			t.Errorf("staged_ref was overwritten: %q", got.StagedRef)
+		}
+	})
+
+	t.Run("an absolute path that is no working tree is refused", func(t *testing.T) {
+		_, err := fillFromWorktree(t.Context(),
+			signCommitIn{RunID: "run-42", Message: "m", Worktree: t.TempDir()}, taskOK)
+		if err == nil {
+			t.Fatal("a directory that is not a git working tree was accepted")
+		}
+	})
+
+	t.Run("an absolute worktree with no origin is refused by name", func(t *testing.T) {
+		dir := t.TempDir()
+		gitInit(t, dir, "")
+		_, err := fillFromWorktree(t.Context(),
+			signCommitIn{RunID: "run-42", Message: "m", Worktree: dir}, taskOK)
+		if err == nil {
+			t.Fatal("a worktree with no origin was accepted")
+		}
+		if !strings.Contains(err.Error(), "origin") {
+			t.Errorf("said %q, which does not name what is missing", err)
+		}
+	})
+
+	t.Run("a linked worktree is re-expressed relative to the repository", func(t *testing.T) {
+		linked := filepath.Join(repoRoot, "wt", "child")
+		run(t, repoRoot, "-c", "user.email=t@t", "-c", "user.name=t",
+			"commit", "-q", "-m", "base")
+		run(t, repoRoot, "worktree", "add", "-q", "-b", "child", linked)
+		if err := os.WriteFile(filepath.Join(linked, "b.txt"), []byte("two\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		run(t, linked, "add", "-A")
+
+		got, err := fillFromWorktree(t.Context(),
+			signCommitIn{RunID: "run-42", Message: "m", Worktree: linked}, taskOK)
+		if err != nil {
+			t.Fatalf("fillFromWorktree: %v", err)
+		}
+		if got.Worktree != filepath.Join("wt", "child") {
+			t.Errorf("worktree = %q, want it relative to the repository; an absolute "+
+				"path names a directory the server cannot see", got.Worktree)
+		}
+	})
+
+	t.Run("mainWorktreeOf refuses a directory that is not one", func(t *testing.T) {
+		if _, err := mainWorktreeOf(t.Context(), t.TempDir()); err == nil {
+			t.Fatal("a directory with no repository was accepted")
+		}
+	})
+
+	t.Run("stagedTreeOf refuses a directory that is not one", func(t *testing.T) {
+		if _, err := stagedTreeOf(t.Context(), t.TempDir()); err == nil {
+			t.Fatal("a directory with no repository produced a tree")
+		}
+	})
+
+	t.Run("a remote with no path is not a repository identifier", func(t *testing.T) {
+		dir := t.TempDir()
+		gitInit(t, dir, "")
+		run(t, dir, "remote", "add", "origin", "github.com")
+		_, err := repoIDFromWorktree(t.Context(), dir)
+		if err == nil {
+			t.Fatal("a remote with no org or name was accepted as host/org/name")
+		}
+	})
+}

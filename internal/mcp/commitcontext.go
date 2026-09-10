@@ -158,9 +158,18 @@ func fillFromWorktree(
 		// Re-expressed relative to the repository, or emptied when it IS the
 		// repository. sign_commit resolves the repository itself; the argument
 		// only ever says "which of its trees".
-		rel, err := filepath.Rel(root, in.Worktree)
-		if err != nil || rel == "." {
-			rel = ""
+		//
+		// BOTH SIDES ARE RESOLVED THROUGH THEIR SYMLINKS FIRST. On macOS
+		// `git worktree list` answers with /private/var/... where the caller
+		// passed /var/..., and filepath.Rel over the two produces a path made
+		// of eight `..` segments -- a correct answer to the wrong question,
+		// and one sign_commit would refuse for escaping the workspace. The
+		// same class of bug as the `-w` doubling reported from the field on
+		// 2026-09-10, and it is only ever caught by a test that runs where the
+		// two spellings differ.
+		rel, err := relativeWorktree(root, in.Worktree)
+		if err != nil {
+			return in, err
 		}
 		in.Worktree = rel
 	}
@@ -173,6 +182,38 @@ func fillFromWorktree(
 		in.TaskRef = task
 	}
 	return in, nil
+}
+
+// relativeWorktree expresses a working tree as a path under its repository.
+//
+// Empty when the two are the same directory. An error when the tree is not
+// under the repository at all: that is not a path to be rendered with `..`
+// segments, it is a caller naming somewhere sign_commit has no business
+// writing, and the refusal says so rather than handing on a path that would
+// fail later and further away.
+func relativeWorktree(root, worktree string) (string, error) {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		resolvedRoot = filepath.Clean(root)
+	}
+	resolvedTree, err := filepath.EvalSymlinks(worktree)
+	if err != nil {
+		resolvedTree = filepath.Clean(worktree)
+	}
+
+	rel, err := filepath.Rel(resolvedRoot, resolvedTree)
+	if err != nil {
+		return "", fmt.Errorf("%s is not under the repository at %s: %w",
+			worktree, root, err)
+	}
+	if rel == "." {
+		return "", nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s is outside the repository at %s; a worktree "+
+			"argument names one of the repository's own trees", worktree, root)
+	}
+	return rel, nil
 }
 
 // mainWorktreeOf returns the repository a working tree belongs to.
