@@ -13,7 +13,7 @@ All three were run against a stack booted with:
 
 ```sh
 export INNSEGL_SPIRE_JWT_ISSUER=http://spire-oidc:8080
-export INNSEGL_REKOR_PORT=3010   # only if 3000 is already taken
+export INNSEGL_REKOR_PORT=3010   # only if 23000 is already taken
 make innsegl-up
 ```
 

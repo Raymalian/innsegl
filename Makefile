@@ -599,7 +599,15 @@ innsegl-backup:
 # do with the commits -- honest, since 4 is inconclusive rather than green, but
 # a poor thing to hand someone running this for the first time. Override it the
 # same way the runbook does when 3000 is taken.
-INNSEGL_REKOR_PORT ?= 3000
+# 23000 and not rekor's own 3000. Host port 3000 is among the most contested on
+# a developer's machine -- a Node dev server, Grafana and OWASP Juice Shop all
+# take it by default -- and a collision does not degrade gracefully: compose
+# fails to bind, the recreate leaves rekor in `Created`, and signing stops until
+# someone reads the error. MEASURED 2026-09-10: an unrelated container holding
+# 3000 broke `innsegl-up-here` exactly that way. The MCP moved off 8080 for the
+# same reason and landed on 280xx; this is the same move. The port INSIDE the
+# container is still 3000 -- only the host binding moved.
+INNSEGL_REKOR_PORT ?= 23000
 
 ## verify-branch: verify every agent-signed commit on this branch before merging
 verify-branch:
