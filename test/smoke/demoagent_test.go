@@ -68,6 +68,12 @@ func (s *stack) demoAgent(t *testing.T) demoRun {
 		"agent_type":      demoAgentType,
 		"task_id":         demoTaskRef,
 		"idempotency_key": "ops-004-register",
+		// ADR-0045, required under schema 2. The same repository the run signs
+		// in below, so the adopter's first run records where it worked from
+		// the moment it exists rather than only if the signature succeeds --
+		// which is the hole ADR-0045 was written to close.
+		"repo":   demoRepo,
+		"branch": "main",
 	}, &registered)
 	t.Logf("OPS-004 demo agent: registered %s (expires %s)",
 		registered.SPIFFEID, registered.ExpiresAt)
