@@ -268,6 +268,10 @@ type scRepos struct {
 	patchID       string
 	commitPatchID string
 	patchErr      error
+	// commitPatchErr fails only the SECOND computation, which is the only way
+	// to reach Phase C's error return: with patchErr set, Phase A refuses
+	// first and Phase C is never reached.
+	commitPatchErr error
 }
 
 func (r scRepos) StagedTree(context.Context, string, string) (string, error) {
@@ -291,6 +295,9 @@ func (r scRepos) StagedPatchID(context.Context, string) (string, error) {
 func (r scRepos) CommitPatchID(context.Context, string, string) (string, error) {
 	if r.patchErr != nil {
 		return "", r.patchErr
+	}
+	if r.commitPatchErr != nil {
+		return "", r.commitPatchErr
 	}
 	if r.commitPatchID != "" {
 		return r.commitPatchID, nil
