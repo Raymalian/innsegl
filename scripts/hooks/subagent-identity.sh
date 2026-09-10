@@ -145,6 +145,18 @@ mcp_call() {
   printf '%s' "$_payload"
 }
 
+# run_id_of reads the run id out of a register_agent reply, in either of the
+# two shapes the transport delivers: the SSE frame escapes the JSON inside a
+# JSON string, and a direct reply does not. An empty answer is not an error
+# here -- the caller decides what a missing run id means, and for a
+# not-yet-restarted deployment it means "try again without ADR-0045's members".
+run_id_of() {
+  _out="$1"
+  _id="$(printf '%s' "$_out" | sed -n 's/.*\\"run_id\\":\\"\([^\\]*\)\\".*/\1/p' | head -n 1)"
+  [ -n "$_id" ] || _id="$(printf '%s' "$_out" | sed -n 's/.*"run_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  printf '%s' "$_id"
+}
+
 # derive_task sets BRANCH, TASK and REPO from the MAIN worktree.
 #
 # A function because two events need it now: a subagent's registration and the
@@ -391,8 +403,16 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
       exit 0
     }
 
-    RUN_ID="$(printf '%s' "$OUT" | sed -n 's/.*\\"run_id\\":\\"\([^\\]*\)\\".*/\1/p' | head -n 1)"
-    [ -n "$RUN_ID" ] || RUN_ID="$(printf '%s' "$OUT" | sed -n 's/.*"run_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    RUN_ID="$(run_id_of "$OUT")"
+    # The session branch never blocks: refusing the operator's own session
+    # stops them working on their own machine, and a session that could not
+    # register simply has no identity to write down.
+    if [ -z "$RUN_ID" ]; then
+      OUT="$(mcp_call register_agent "$(printf \
+        '{"agent_type":"%s","task_id":"%s","idempotency_key":"session-%s"}' \
+        "${INNSEGL_SESSION_AGENT_TYPE:-session}" "$TASK" "$SESSION_ID")" 2>/dev/null)" || exit 0
+      RUN_ID="$(run_id_of "$OUT")"
+    fi
     [ -n "$RUN_ID" ] || exit 0
 
     printf '%s\n' "$RUN_ID" > "$SESSIONFILE"
@@ -493,8 +513,29 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
       exit 2
     }
 
-    RUN_ID="$(printf '%s' "$OUT" | sed -n 's/.*\\"run_id\\":\\"\([^\\]*\)\\".*/\1/p' | head -n 1)"
-    [ -n "$RUN_ID" ] || RUN_ID="$(printf '%s' "$OUT" | sed -n 's/.*"run_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    RUN_ID="$(run_id_of "$OUT")"
+
+    # A DEPLOYMENT THAT HAS NOT BEEN RESTARTED YET.
+    #
+    # The MCP SDK validates a call against the tool's advertised inputSchema
+    # and refuses additional properties outright:
+    #
+    #   validating "arguments": validating root: unexpected additional
+    #   properties ["repo" "branch"]
+    #
+    # So a hook carrying ADR-0045's members against a server that predates them
+    # does not get a lesser identity, it gets NONE -- and a subagent with no
+    # identity cannot commit at all, which is the one outcome this hook exists
+    # to prevent. Registering without them writes the schema 1 event that
+    # server still accepts: nothing is lost that was not already absent before
+    # ADR-0045, and a restart restores the full record.
+    if [ -z "$RUN_ID" ]; then
+      OUT="$(mcp_call register_agent "$(printf \
+        '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' \
+        "${AGENT_TYPE:-subagent}" "$TASK" "$KEY")")" || true
+      RUN_ID="$(run_id_of "$OUT")"
+      [ -n "$RUN_ID" ] && echo "innsegl: this deployment records no repository for a run yet; restart it (make innsegl-up-here)." >&2
+    fi
 
     if [ -z "$RUN_ID" ]; then
       echo "innsegl: refused — register_agent returned no run_id." >&2
