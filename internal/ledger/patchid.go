@@ -152,3 +152,61 @@ func HoldsAnyPatchID(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	}
 	return recorded, nil
 }
+
+// SchemaSpan reports where a schema version's events begin and whether any
+// event at or after that position carries a different one.
+//
+// # Why the cutover is FOUND rather than assumed
+//
+// `innsegl migrate-schema` used to compute the cutover as head + 1 and require
+// the attestation to land exactly there, which is only correct when it runs
+// before a single upgraded writer starts. On 2026-09-10 the deployment was
+// rebuilt first and eight schema 2 events landed before anyone thought about
+// the attestation. head + 1 would then have recorded a boundary with events of
+// the new version on the wrong side of it — a false statement in a chain that
+// cannot be edited.
+//
+// doc 02 §3 defines `cutover_position` as "the position where events begin
+// carrying the new version". That is a fact about the chain, and the chain can
+// be asked.
+//
+// `mixed` is the guard: if anything at or after `first` carries a different
+// version, then no single position separates the two and the attestation would
+// be wrong however it was computed. An operator has to see that rather than
+// have a number chosen for them.
+func SchemaSpan(ctx context.Context, pool *pgxpool.Pool, version string) (first int64, mixed bool, err error) {
+	if version == "" {
+		return 0, false, &StoreError{
+			Class: ClassInvariantViolation, Op: "schema_span", Retryable: false,
+			Err: fmt.Errorf("an empty schema_version names no version"),
+		}
+	}
+
+	var found *int64
+	if qerr := pool.QueryRow(ctx,
+		`SELECT min(chain_position) FROM innsegl.events
+		  WHERE convert_from(canonical, 'UTF8')::jsonb->>'schema_version' = $1`,
+		version).Scan(&found); qerr != nil {
+		return 0, false, classify("schema_span", qerr)
+	}
+	if found == nil {
+		return 0, false, nil
+	}
+
+	var others int64
+	if qerr := pool.QueryRow(ctx,
+		`SELECT count(*) FROM innsegl.events
+		  WHERE chain_position >= $1
+		    AND convert_from(canonical, 'UTF8')::jsonb->>'schema_version' <> $2`,
+		*found, version).Scan(&others); qerr != nil {
+		return 0, false, classify("schema_span", qerr)
+	}
+	return *found, others > 0, nil
+}
+
+// Pool exposes the connection pool for the reads this package offers over one.
+//
+// Narrow on purpose: the pool-taking functions here exist because the read-only
+// query API holds a pool and no *Store, and a caller that already has a *Store
+// should not have to build a second one to reach them.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
