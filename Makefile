@@ -291,7 +291,7 @@ API_REPOS = $(shell { echo 'github.com/innsegl-demo/scratch|0|/work/github.com/i
 # signing work did not start the listener signing needs.
 INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
 
-# THE REAPER IS OFF, and it must stay off until #180 is fixed.
+# THE REAPER IS BACK ON (#180 fixed, 2026-09-09).
 #
 # It was turned on here for one minute on 2026-09-08 and expired two subagents
 # that were alive and working -- 183 and 130 tool calls, last activity in the
@@ -299,12 +299,20 @@ INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
 #
 #   reap at 13:15:52Z: 2 entries in the agent subtree, 0 live, 2 expired
 #
-# It counts a run's age from registration and never looks at whether the run is
-# doing anything, so with a five-minute grace every subagent that works longer
-# than five minutes loses its identity mid-task. Not running it leaves orphans
-# (IP §6.7 unenforced); running it as it stands kills live agents. The second
-# is worse.
-INNSEGL_MCP_ALSO ?=
+# It judged a run by its AGE, and a subagent works for hours on one registration
+# and re-registers never. It now asks the ledger whether the run is still doing
+# anything and reaps only a run that is past its TTL AND has gone quiet for the
+# grace on top (internal/spire/silence.go). SPI-013 holds it to that against a
+# real SPIRE and a real ledger: two runs, same agent type, same TTL, registered
+# in the same second, both past the same deadline at the sweep -- one appends a
+# tool_call and keeps its identity, the other is reaped.
+#
+# WHY THE SIGNAL CAN BE TRUSTED HERE. The hook that registers a run is the same
+# hook that records every tool call it makes (scripts/hooks/subagent-identity.sh,
+# #171). Measured on this deployment: working runs append every ~14 seconds,
+# while a run that finished or died goes quiet immediately. No hook means no
+# registration, so there is no run for the reaper to get wrong.
+INNSEGL_MCP_ALSO ?= reap
 
 ## innsegl-up-here: bring the stack up signing in this working tree, not a copy
 innsegl-up-here: sigstore-up
