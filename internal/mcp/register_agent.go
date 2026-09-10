@@ -98,6 +98,15 @@ type registerAgentOut struct {
 	// timestamp form. It is read off the entry rather than off the request, so
 	// it never promises a lifetime SPIRE did not grant.
 	ExpiresAt string `json:"expires_at"`
+	// RunToken is the secret this run authenticates with (runtoken.go), present
+	// only when the deployment configures one.
+	//
+	// It is derived rather than stored, so a REPLAYED registration returns the
+	// same token — which is what lets a resumed agent keep working without a
+	// second identity. The recorded reply is not where it comes from: it is
+	// recomputed on the way out, so a token is never at rest in the idempotency
+	// store either.
+	RunToken string `json:"run_token,omitempty"`
 }
 
 // RegisterAgentIdentities is the SPIRE surface this tool needs — RM-015's
@@ -135,6 +144,10 @@ var (
 type RegisterAgentConfig struct {
 	// Identities is the SPIRE admin client. Required.
 	Identities RegisterAgentIdentities
+	// RunTokenSecret keys the per-run token handed back at registration. Empty
+	// means no token is issued and get_credential requires none — the state
+	// every deployment before this was in. See runtoken.go.
+	RunTokenSecret string
 	// Runs resolves run_id to what the ledger knows about it, and is how a
 	// replay tells a REAPED run from a RETIRED one before restoring its entry.
 	//
@@ -309,6 +322,9 @@ func (c *RegisterAgentConfig) register(ctx context.Context, in registerAgentIn) 
 			return registerAgentOut{}, err
 		}
 	}
+	// Recomputed here rather than read from the recorded reply, so the token is
+	// never written to the idempotency store and a replay still returns it.
+	out.RunToken = RunToken(c.RunTokenSecret, out.RunID)
 	return out, nil
 }
 
