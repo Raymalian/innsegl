@@ -47,6 +47,18 @@ export const proofVerified =
 export const proofFailed =
   "text-proof-failed bg-proof-failed-surface border-proof-failed-line";
 
+/**
+ * Violet. ADR-0047's fourth state: the commit object was rewritten and its
+ * signature is gone, and the change it makes is one a signed run recorded.
+ *
+ * Not the green, which doc 06 §5.3 spends on a live verification passing and
+ * nothing else — this is a weaker claim, and saying so in colour is the point.
+ * Not the red, which would accuse a genuine signature. Not the amber, which
+ * means the check could not run when this one ran and held.
+ */
+export const proofContent =
+  "text-proof-content bg-proof-content-surface border-proof-content-line";
+
 /** Amber. A check could not run — never either of the other two (P2). */
 export const proofUnavailable =
   "text-proof-unavailable bg-proof-unavailable-surface border-proof-unavailable-line";
