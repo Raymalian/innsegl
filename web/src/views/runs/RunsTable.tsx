@@ -46,6 +46,7 @@ import { StatusBadge } from "../../components/common";
 import { VerificationSummary } from "../../components/verification";
 import { Link } from "../../app/router";
 import { routeToPath } from "../../app/routes";
+import { lastSeen } from "./lastseen";
 import type { RunsFilters } from "../../app/routes";
 
 import type { RunSummary } from "./api";
@@ -172,9 +173,33 @@ function RunRow({
       </td>
       <td className={cell}>
         <StatusBadge status={run.status} />
+        <LastSeen at={run.last_event_at} />
       </td>
     </tr>
   );
+}
+
+/**
+ * How old the ledger's claim about this run is (doc 06 P2).
+ *
+ * Beside the badge rather than in a column of its own, because doc 06 §3.2
+ * names five columns and this is not a sixth thing to know — it is the
+ * qualification on the fifth. The verification cell already stacks a second
+ * line the same way.
+ *
+ * Renders nothing for a run that is doing something now: an annotation on
+ * every healthy row is one a reader learns to skip, and then skips on the row
+ * that mattered.
+ *
+ * The words come from lastseen.ts rather than strings.ts because the sentence
+ * is COMPUTED from a duration — "last seen 17 hours ago" is not a label with a
+ * hole in it, it is a rendering of a number, which is what overview/format.ts
+ * already does for every other quantity on this dashboard.
+ */
+function LastSeen({ at }: { readonly at: string }) {
+  const age = lastSeen(at, new Date());
+  if (age === null) return null;
+  return <span className={mutedCell}>{age}</span>;
 }
 
 function Repos({ repos }: { readonly repos: readonly string[] }) {
