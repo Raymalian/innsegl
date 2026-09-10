@@ -424,9 +424,15 @@ func TestMCP002GetCredentialSchemaConformance(t *testing.T) {
 		t.Fatalf("tools/list does not advertise get_credential: %+v", tools.Tools)
 	}
 
+	// IP §4's two, plus `run_token`. Arguments are additive and are not a
+	// protected surface (ADR-0045; doc 08 protects tool NAMES and error
+	// classes), and line 77 was amended to name it. Optional in the schema: a
+	// deployment that configures no run-token secret requires none, and a client
+	// that does not know the argument simply does not send it.
 	in := credSchemaMembers(t, advertised.InputSchema)
-	if want := []string{"audience", "run_id"}; !equalStrings(in, want) {
-		t.Errorf("input schema members = %v, IP §4 says get_credential(run_id, audience) = %v", in, want)
+	if want := []string{"audience", "run_id", "run_token"}; !equalStrings(in, want) {
+		t.Errorf("input schema members = %v, IP §4 says "+
+			"get_credential(run_id, audience, run_token?) = %v", in, want)
 	}
 	out := credSchemaMembers(t, advertised.OutputSchema)
 	if want := []string{"expires_at", "jwt_svid"}; !equalStrings(out, want) {
@@ -2007,4 +2013,115 @@ func TestGetCredentialWithoutARestorerRefusesAsBefore(t *testing.T) {
 	if r := f.call(t, "run-a", AudienceSigstore); !r.isError {
 		t.Fatal("a deployment with no restorer wired gained a resurrection it did not ask for")
 	}
+}
+
+// THE HOLE THIS CLOSES.
+//
+// get_credential mints a JWT-SVID for whatever run_id it is handed, without
+// SPIFFE workload attestation — it calls SPIRE's admin mint API — so the entry's
+// selectors are not the control. The only control was the listener's bind
+// address, and a run id is not a secret: it is in the Agent-Run trailer of every
+// commit, on the dashboard, and in the query API. Anything that could reach the
+// MCP could mint any agent's credential by reading a run id off a commit.
+func TestGetCredentialRefusesAKnownRunIDWithoutItsToken(t *testing.T) {
+	const secret = "server-held"
+	f := newTokenFixture(t, secret, credRun("run-a"))
+
+	// Everything an attacker has: the public run id.
+	if r := f.call(t, "run-a", AudienceSigstore); !r.isError {
+		t.Fatal("a credential was minted from the run id alone — the run id is public, " +
+			"so this is every agent's identity available to anything on the machine")
+	}
+}
+
+func TestGetCredentialAcceptsTheTokenRegistrationIssued(t *testing.T) {
+	const secret = "server-held"
+	f := newTokenFixture(t, secret, credRun("run-a"))
+
+	r := f.callWithToken(t, "run-a", AudienceSigstore, RunToken(secret, "run-a"))
+	if r.isError {
+		t.Fatalf("the run's own token was refused: %v", r.wire)
+	}
+}
+
+// Another run's token must not work, or the secret would authenticate the
+// SERVER rather than the run and one compromised agent would hold every
+// identity.
+func TestGetCredentialRefusesAnotherRunsToken(t *testing.T) {
+	const secret = "server-held"
+	f := newTokenFixture(t, secret, credRun("run-a"), credRun("run-b"))
+
+	r := f.callWithToken(t, "run-a", AudienceSigstore, RunToken(secret, "run-b"))
+	if !r.isError {
+		t.Fatal("run-b's token minted run-a's credential")
+	}
+}
+
+// The refusal must not be an oracle. A caller with no token learns the same
+// thing about a run that exists and one that does not.
+func TestGetCredentialTellsAnUnauthenticatedCallerNothing(t *testing.T) {
+	const secret = "server-held"
+	f := newTokenFixture(t, secret, credRun("run-a"))
+
+	known := f.call(t, "run-a", AudienceSigstore)
+	unknown := f.call(t, "run-does-not-exist", AudienceSigstore)
+	if !known.isError || !unknown.isError {
+		t.Fatal("an unauthenticated call succeeded")
+	}
+	if known.wire["error_class"] != unknown.wire["error_class"] {
+		t.Errorf("a known run answers %v and an unknown one %v — the difference is an "+
+			"oracle over every run id read off a commit trailer",
+			known.wire["error_class"], unknown.wire["error_class"])
+	}
+}
+
+// With no secret configured the tool behaves exactly as it did, so enabling
+// authentication is an operator's decision and not a silent break of every
+// running agent.
+func TestGetCredentialWithoutASecretRequiresNoToken(t *testing.T) {
+	f := newCredFixture(t, credRun("run-a"))
+	if r := f.call(t, "run-a", AudienceSigstore); r.isError {
+		t.Fatalf("a deployment with no run-token secret refused an untokened call: %v", r.wire)
+	}
+}
+
+// newTokenFixture is newCredFixture with run-token authentication required.
+func newTokenFixture(t *testing.T, secret string, runs ...CredentialRun) *credFixture {
+	t.Helper()
+	f := &credFixture{
+		t:       t,
+		runs:    newCredRuns(runs...),
+		entries: newCredEntries(),
+		ledger:  &credLedger{},
+		clock:   time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC),
+	}
+	f.minter = newCredMinter(func() time.Time { return f.clock })
+	withCredentialConfig(t, CredentialConfig{
+		Runs:           f.runs,
+		Entries:        f.entries,
+		Minter:         f.minter,
+		Ledger:         f.ledger,
+		RunTokenSecret: secret,
+		Now:            func() time.Time { return f.clock },
+	})
+	f.session = serveGetCredential(t)
+	return f
+}
+
+func (f *credFixture) callWithToken(t *testing.T, runID, audience, token string) credReply {
+	t.Helper()
+	res, err := f.session.CallTool(t.Context(), &sdk.CallToolParams{
+		Name: string(ToolGetCredential),
+		Arguments: map[string]any{
+			"run_id": runID, "audience": audience, "run_token": token,
+		},
+	})
+	if err != nil {
+		t.Fatalf("tools/call get_credential: %v", err)
+	}
+	wire, ok := res.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent is %T", res.StructuredContent)
+	}
+	return credReply{isError: res.IsError, wire: wire}
 }

@@ -321,12 +321,13 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		// entry the reaper took from one that was deliberately retired. Without
 		// it healing is off and a resumed agent gets the name of an identity
 		// with no authorisation behind it.
-		Runs:        runs,
-		Ledger:      store,
-		Idempotency: idem,
-		ParentID:    o.parentID,
-		TTL:         o.runTTL,
-		Pseudonyms:  pseudonyms,
+		Runs:           runs,
+		Ledger:         store,
+		Idempotency:    idem,
+		RunTokenSecret: o.runTokenSecret,
+		ParentID:       o.parentID,
+		TTL:            o.runTTL,
+		Pseudonyms:     pseudonyms,
 	}
 	if o.rateCalls > 0 {
 		limiter, lerr := mcp.NewRateLimiter(mcp.RateLimit{
@@ -375,10 +376,26 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 			ttl:       o.runTTL,
 			selectors: registerCfg.Selectors,
 		},
-		Minter: mcp.NewSPIREMinter(mintConn),
-		Ledger: store,
+		Minter:         mcp.NewSPIREMinter(mintConn),
+		Ledger:         store,
+		RunTokenSecret: o.runTokenSecret,
 	}); cerr != nil {
 		return fail("configure get_credential: %w", cerr)
+	}
+
+	// An unauthenticated credential surface says so, every start.
+	//
+	// get_credential does not go through workload attestation — it mints
+	// through SPIRE's admin API — so the entry's selectors are not the control.
+	// Without a run-token secret the only control is the bind address, and a
+	// run id is public: it is in the Agent-Run trailer of every commit, on the
+	// dashboard, and in the query API. Anything that can reach this listener can
+	// mint any agent's credential.
+	if o.runTokenSecret == "" {
+		log.warn("get_credential is UNAUTHENTICATED: no -run-token-secret is set, so any " +
+			"caller that can reach " + o.listen + " can mint a credential for any run_id, " +
+			"and run ids are public. Set $INNSEGL_RUN_TOKEN_SECRET to require the token " +
+			"register_agent issues.")
 	}
 
 	restoreRecord, err := mcp.ConfigureRecordEvent(mcp.RecordEventConfig{
