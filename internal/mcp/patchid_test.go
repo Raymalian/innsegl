@@ -3,6 +3,8 @@
 package mcp
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -238,4 +240,272 @@ func TestMCP036TheRecordedPatchIDIsTheCommitsOwn(t *testing.T) {
 			t.Errorf("%s recorded patch_id %q, want the change's own id", et, seen[et])
 		}
 	}
+}
+
+// TestMCP037EveryErrorReturnOfThePatchIDPath is IP §2's branch floor, which is
+// a merge gate and not a preference: "100% branch on ... every error-return
+// path of every MCP tool".
+//
+// Each case drives one condition to the side the happy path never reaches. A
+// branch nothing has ever taken is a branch nobody has read; these are the
+// paths that run on the day something is already wrong, and they are the worst
+// place to discover a typo.
+func TestMCP037EveryErrorReturnOfThePatchIDPath(t *testing.T) {
+	t.Run("a git that is not there", func(t *testing.T) {
+		// `gitPath == ""` false, and the diff command fails: two conditions in
+		// one, both reached only when git cannot run.
+		dir := t.TempDir()
+		patchIDInit(t, dir)
+		_, err := GitRepos{GitPath: "/nonexistent/git"}.StagedPatchID(t.Context(), dir)
+		if err == nil {
+			t.Fatal("a git binary that does not exist produced a patch id")
+		}
+	})
+
+	t.Run("a directory that is not a repository", func(t *testing.T) {
+		_, err := GitRepos{}.StagedPatchID(t.Context(), t.TempDir())
+		if err == nil {
+			t.Fatal("a directory with no repository produced a patch id")
+		}
+	})
+
+	t.Run("a commit id that is not one", func(t *testing.T) {
+		dir := t.TempDir()
+		patchIDInit(t, dir)
+		for _, bad := range []string{"", "HEAD", "nope", strings.Repeat("z", 40)} {
+			if _, err := (GitRepos{}).CommitPatchID(t.Context(), dir, bad); err == nil {
+				t.Errorf("CommitPatchID(%q) was accepted; a revision that is not an "+
+					"object id names whatever the repository happens to resolve it to,"+
+					" which is not the same commit everywhere", bad)
+			}
+		}
+	})
+
+	t.Run("a commit the repository does not hold", func(t *testing.T) {
+		dir := t.TempDir()
+		patchIDInit(t, dir)
+		absent := strings.Repeat("a", 40)
+		if _, err := (GitRepos{}).CommitPatchID(t.Context(), dir, absent); err == nil {
+			t.Fatal("a commit that is not in the repository produced a patch id")
+		}
+	})
+
+	t.Run("a cancelled context stops the pipeline", func(t *testing.T) {
+		dir := t.TempDir()
+		patchIDInit(t, dir)
+		patchIDWrite(t, dir, "a.txt", "one\n")
+		patchIDGit(t, dir, "add", "-A")
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if _, err := (GitRepos{}).StagedPatchID(ctx, dir); err == nil {
+			t.Fatal("a cancelled context produced a patch id")
+		}
+	})
+}
+
+// TestMCP039EveryErrorReturnSignCommitAddedForADR0047 — IP §2's branch floor
+// over the tool's own error paths.
+func TestMCP039EveryErrorReturnSignCommitAddedForADR0047(t *testing.T) {
+	t.Run("the staged change has no patch id", func(t *testing.T) {
+		// Phase A cannot name the change, so nothing is appended and nothing
+		// is signed: the refusal happens before the intent exists.
+		w := newSCWiring()
+		w.repos.patchErr = errors.New("git is not on PATH")
+
+		_, err := w.call(t, scIn())
+		requireClass(t, err, ClassInvariantViolation)
+		if !strings.Contains(err.Error(), "patch id") {
+			t.Errorf("said %q, which does not say what could not be computed", err)
+		}
+		if got := len(w.ledger.records); got != 0 {
+			t.Errorf("%d events were appended for a change that could not be identified", got)
+		}
+	})
+
+	t.Run("task_ref cannot be resolved without a run directory", func(t *testing.T) {
+		// The seam a harness reaches when it asks the server to fill in the
+		// task: no directory, no answer, and a refusal rather than a blank
+		// that would reach the Agent-Task trailer.
+		c := &signCommitService{}
+		if _, err := c.taskRefOf(t.Context(), "run-42"); err == nil {
+			t.Fatal("task_ref was resolved with no run directory configured")
+		}
+	})
+}
+
+// gitShim writes a `git` that delegates to the real one except for the
+// subcommands named, which it fails or silences.
+//
+// It exists for one reason: `patch-id` runs AFTER a diff has already
+// succeeded, so its error return and its empty-output return are unreachable
+// while both commands are the same working binary. A shim is the only way to
+// make the second fail without the first, and those two branches are what runs
+// when a deployment's git is older, sandboxed, or broken in exactly one place.
+func gitShim(t *testing.T, mode string) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("no git on PATH: %v", err)
+	}
+	path := filepath.Join(dir, "git")
+	script := "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in\n" +
+		"  patch-id) " + mode + " ;;\n" +
+		"esac; done\nexec " + gitBin + " \"$@\"\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestMCP044WhenPatchIDItselfFails covers the two conditions that only the
+// second command in the pipeline can reach.
+func TestMCP044WhenPatchIDItselfFails(t *testing.T) {
+	stage := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		patchIDInit(t, dir)
+		patchIDWrite(t, dir, "a.txt", "one\n")
+		patchIDGit(t, dir, "add", "-A")
+		return dir
+	}
+
+	t.Run("patch-id exits non-zero", func(t *testing.T) {
+		dir := stage(t)
+		_, err := GitRepos{GitPath: gitShim(t, "exit 3")}.StagedPatchID(t.Context(), dir)
+		if err == nil {
+			t.Fatal("a failing patch-id produced an identity")
+		}
+		if !strings.Contains(err.Error(), "patch-id") {
+			t.Errorf("said %q, which does not name the command that failed", err)
+		}
+	})
+
+	t.Run("patch-id prints nothing for a diff that is not empty", func(t *testing.T) {
+		// Anomalous, and refused rather than shrugged at: the diff above it
+		// was NOT empty, so silence here is git failing to identify a change
+		// that exists. Returning "" would put an empty patch_id in the ledger,
+		// and the caller cannot tell that from "this commit changes nothing".
+		dir := stage(t)
+		_, err := GitRepos{GitPath: gitShim(t, "exit 0")}.StagedPatchID(t.Context(), dir)
+		if !errors.Is(err, ErrNoChange) {
+			t.Fatalf("err = %v, want one wrapping ErrNoChange", err)
+		}
+	})
+}
+
+// TestMCP046TheLastErrorReturnsOfSignCommit — IP §2's floor, finished.
+func TestMCP046TheLastErrorReturnsOfSignCommit(t *testing.T) {
+	t.Run("the signed commit's change cannot be identified", func(t *testing.T) {
+		// Phase C's own refusal: the commit exists and is signed, and git
+		// cannot say what change it makes. The intent stands (I4); no
+		// commit_recorded is written, so the reconciler sees an open intent
+		// rather than a completed one it cannot check.
+		w := newSCWiring()
+		w.repos.commitPatchErr = errors.New("git patch-id: broken pipe")
+
+		_, err := w.call(t, scIn())
+		requireClass(t, err, ClassInvariantViolation)
+		var recorded int
+		for _, rec := range w.ledger.records {
+			if rec[event.FieldEventType] == event.EventTypeCommitRecorded {
+				recorded++
+			}
+		}
+		if recorded != 0 {
+			t.Errorf("%d commit_recorded events for a commit whose change is unknown", recorded)
+		}
+	})
+
+	t.Run("an absolute worktree the server cannot resolve", func(t *testing.T) {
+		// fillFromWorktree's error, through the tool: the caller said "work it
+		// out" about a directory that is not a working tree.
+		w := newSCWiring()
+		in := scIn()
+		in.Worktree = t.TempDir()
+		if _, err := w.call(t, in); err == nil {
+			t.Fatal("an absolute worktree that is not a git tree was accepted")
+		}
+	})
+
+	t.Run("a run the directory cannot answer for", func(t *testing.T) {
+		c := &signCommitService{runs: &scRuns{err: errors.New("the ledger is unreachable")}}
+		if _, err := c.taskRefOf(t.Context(), "run-42"); err == nil {
+			t.Fatal("a run directory that could not answer produced a task_ref")
+		}
+	})
+
+	t.Run("a run the directory does not hold", func(t *testing.T) {
+		c := &signCommitService{runs: &scRuns{found: false}}
+		_, err := c.taskRefOf(t.Context(), "run-nobody")
+		if err == nil {
+			t.Fatal("an unknown run produced a task_ref; the Agent-Task trailer would " +
+				"carry a blank")
+		}
+		if !strings.Contains(err.Error(), "run-nobody") {
+			t.Errorf("said %q, which does not name the run", err)
+		}
+	})
+
+	t.Run("a request with no task_ref is refused by name", func(t *testing.T) {
+		// Reached only when nothing filled it in: no worktree to derive from
+		// and no run directory to ask.
+		in := scIn()
+		in.TaskRef = ""
+		w := newSCWiring()
+		w.runs = &scRuns{}
+		_, err := w.call(t, in)
+		if err == nil {
+			t.Fatal("a request with no task_ref was accepted")
+		}
+		if !strings.Contains(err.Error(), "task_ref") {
+			t.Errorf("said %q, which does not name the missing argument", err)
+		}
+	})
+}
+
+// TestMCP048SignReachesItsOwnRefusals covers the two conditions inside sign(),
+// which phases() bypasses: the worktree fill and the task_ref it may leave
+// empty.
+func TestMCP048SignReachesItsOwnRefusals(t *testing.T) {
+	t.Run("an absolute worktree the server cannot work out", func(t *testing.T) {
+		w := newSCWiring()
+		in := scIn()
+		in.Worktree = t.TempDir() // absolute, and not a git working tree
+		if _, err := w.service(t).sign(t.Context(), in); err == nil {
+			t.Fatal("sign accepted a worktree it could not resolve")
+		}
+	})
+
+	t.Run("a run that IS held returns its task", func(t *testing.T) {
+		// The side an unknown run never reaches. taskRefOf is the one source
+		// of task_ref (see its comment), so the path that SUCCEEDS is as much
+		// a merge-gate surface as the two that refuse.
+		c := &signCommitService{runs: &scRuns{found: true, run: CredentialRun{
+			RunID: scRunID, TaskID: "jira-118",
+		}}}
+		got, err := c.taskRefOf(t.Context(), scRunID)
+		if err != nil {
+			t.Fatalf("taskRefOf: %v", err)
+		}
+		if got != "jira-118" {
+			t.Errorf("task_ref = %q, want the run's own task", got)
+		}
+	})
+
+	t.Run("a request with no task_ref is refused by name", func(t *testing.T) {
+		// Reached when nothing filled it in. Checked against the validator
+		// directly: the surrounding service would need a ledger, and this
+		// condition is about the argument, not about the deployment.
+		in := scIn()
+		in.TaskRef = ""
+		err := signCommitCheckRequest(in)
+		if err == nil {
+			t.Fatal("a request with no task_ref was accepted")
+		}
+		if !strings.Contains(err.Error(), "task_ref") {
+			t.Errorf("said %q, which does not name the missing argument", err)
+		}
+	})
 }

@@ -116,9 +116,24 @@ const (
 type Verdict string
 
 const (
-	VerdictVerified    Verdict = "verified"
-	VerdictFailed      Verdict = "failed"
-	VerdictUnavailable Verdict = "unavailable"
+	VerdictVerified Verdict = "verified"
+	// VerdictContentVerified: the commit OBJECT was rewritten and its
+	// signature did not survive, and the CHANGE the commit makes is one a
+	// signed run recorded (ADR-0047, doc 06 §4.2).
+	//
+	// A weaker claim than Verified, and the difference is the point: Verified
+	// proves this agent wrote this commit; this proves this agent produced
+	// this change, while the message, the parent and the author belong to
+	// whoever merged it.
+	//
+	// It is the ORDINARY state of an agent's commit once it reaches a default
+	// branch, because every merge strategy GitHub offers rewrites the object.
+	// Reporting it as Failed accuses a genuine signature; collapsing it into
+	// Verified overstates what is known. doc 06 §4.2 gives it its own badge
+	// for exactly that reason.
+	VerdictContentVerified Verdict = "content-verified"
+	VerdictFailed          Verdict = "failed"
+	VerdictUnavailable     Verdict = "unavailable"
 	// VerdictUnattributed is a commit that makes no attribution claim: no
 	// signature and no Agent-* trailer. It is not a failure, and reporting it
 	// as one would make every pre-adoption commit look like an attack (E7).
@@ -370,9 +385,18 @@ func (v *Verifier) verifyCommit(ctx context.Context, repo string, c commit) (Rep
 
 	leaf, intermediates, certErr := commitCertificate(c.Signature)
 	if certErr != nil {
+		// THE PATH A REBASED COMMIT ALWAYS TAKES, and the one the content
+		// check exists for. It used to return here, before the check ran: the
+		// question written for exactly this commit was the one question this
+		// commit was never asked (#196).
 		rep.Checks = refusedChecks(certErr)
 		rep.Verdict = VerdictFailed
 		rep.Recovered, rep.Notes = v.recover(ctx, repo, c, rep.Notes)
+		v.attributeByContent(ctx, repo, c, claim, &rep)
+		if rep.Content != nil && rep.Content.Result == Verified {
+			rep.Verdict = VerdictContentVerified
+			rep.Notes = append(rep.Notes, contentVerifiedNote(*rep.Content))
+		}
 		return rep, nil
 	}
 	rep.Certificate = describeCertificate(leaf)
@@ -389,6 +413,23 @@ func (v *Verifier) verifyCommit(ctx context.Context, repo string, c commit) (Rep
 	}
 	v.attributeByContent(ctx, repo, c, claim, &rep)
 	return rep, nil
+}
+
+// contentVerifiedNote says what a rewritten-but-attributed commit means, in
+// the words a reader needs rather than the mechanism.
+//
+// "the commit's signature is not PEM" describes machinery and reads as an
+// accusation; #196 exists because a reader could not tell a rebased commit
+// from a forged one. Naming the commit the ledger holds is what makes the
+// claim checkable rather than reassuring.
+func contentVerifiedNote(content ContentAttribution) string {
+	return "The commit on this branch is NOT the object that was signed: a rebase or " +
+		"a merge rewrote it, and a gitsign signature covers the object it was made " +
+		"over. That is normal, and it is not a finding. What was signed is the CHANGE, " +
+		"and run " + content.RunID + " recorded this exact change as commit " +
+		content.RecordedAs + " (ADR-0047). What this does NOT prove is that the agent " +
+		"wrote this commit's message, parent or author — those belong to whoever " +
+		"merged it."
 }
 
 // attributeByContent adds ADR-0047's answer to a report.

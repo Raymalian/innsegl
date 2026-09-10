@@ -1082,3 +1082,47 @@ func TestRegisterAgentRunIDIsAPureFunctionOfTheCallItNames(t *testing.T) {
 		seen[id] = fmt.Sprintf("%+v", other)
 	}
 }
+
+// TestMCP040ADR0045sMembersAreOmittedWhenAbsent — IP §2's branch floor over
+// register_agent's own conditions.
+//
+// Each of the three is written only when supplied. The FALSE side of each is
+// the compatibility case a deployment mid-upgrade reaches, and the true side of
+// parent_run_id is a subagent: neither had ever been executed.
+func TestMCP040ADR0045sMembersAreOmittedWhenAbsent(t *testing.T) {
+	t.Run("a root run carries no parent, a subagent does", func(t *testing.T) {
+		root := registerAgentEvent(
+			spire.RunRef{AgentType: raAgentType, TaskID: "jira-118", RunID: "run-42"},
+			"spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42",
+			registerAgentIn{AgentType: raAgentType, TaskID: raTaskID, Repo: raRepo, Branch: raBranch})
+		if _, present := root[event.FieldParentRunID]; present {
+			t.Error("a root run recorded a parent_run_id; doc 02 §3 has it absent on one")
+		}
+
+		child := registerAgentEvent(
+			spire.RunRef{AgentType: raAgentType, TaskID: "jira-118", RunID: "run-43"},
+			"spiffe://innsegl.dev/agent/fix-ci/jira-118/run-43",
+			registerAgentIn{AgentType: raAgentType, TaskID: raTaskID, Repo: raRepo,
+				Branch: raBranch, ParentRunID: "run-42"})
+		if got := child[event.FieldParentRunID]; got != "run-42" {
+			t.Errorf("parent_run_id = %v, want run-42", got)
+		}
+	})
+
+	t.Run("omitted repo and branch are absent, never empty", func(t *testing.T) {
+		// The client talking to a server that predates ADR-0045 registers
+		// without them. doc 02 §1 admits no empty-string placeholder, so the
+		// members must be ABSENT -- an empty string would be refused at
+		// append and the caller would get an invariant violation instead of a
+		// schema 1 event.
+		body := registerAgentEvent(
+			spire.RunRef{AgentType: raAgentType, TaskID: "jira-118", RunID: "run-44"},
+			"spiffe://innsegl.dev/agent/fix-ci/jira-118/run-44",
+			registerAgentIn{AgentType: raAgentType, TaskID: raTaskID})
+		for _, member := range []string{event.FieldRepo, event.FieldBranch, event.FieldParentRunID} {
+			if _, present := body[member]; present {
+				t.Errorf("%s is present although the caller supplied none", member)
+			}
+		}
+	})
+}
