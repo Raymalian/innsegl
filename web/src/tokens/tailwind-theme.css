@@ -75,6 +75,7 @@
   --color-integrity-alert: var(--innsegl-color-integrity-alert-text);
   --color-integrity-alert-surface: var(--innsegl-color-integrity-alert-surface);
   --color-integrity-alert-line: var(--innsegl-color-integrity-alert-border);
+  --color-integrity-alert-secondary: var(--innsegl-color-integrity-alert-text-secondary);
   --color-mismatch: var(--innsegl-color-mismatch-text);
   --color-mismatch-surface: var(--innsegl-color-mismatch-surface);
 
@@ -165,4 +166,24 @@
   --animate-*: initial;
   --ease-*: initial;
   --ease-standard: var(--innsegl-motion-easing-standard);
+}
+
+
+/* THE INK TOKENS ARE REBOUND INSIDE A FILLED ALERT.
+ *
+ * The page's ink scale is defined against the page's ground. A filled integrity
+ * alert is its own ground, so every one of those tokens is wrong inside it --
+ * MEASURED on the light fill (#9b1921): text-secondary 1.10:1, text-muted
+ * 1.51:1, against doc 06 §6.4's AA floor of 4.5:1.
+ *
+ * `linkOnFill` fixed one instance of this by hand. Fixing it per call site
+ * leaves the hole open, because the hole is that a component may compose ANY
+ * token over ANY background and contrast-pairs.txt only asserts DECLARED pairs.
+ * Rebinding at the surface closes the class: anything rendered inside a filled
+ * alert, including components written later, resolves to the fill's own scale
+ * without knowing it is on a fill. */
+.bg-integrity-alert-surface {
+  --innsegl-color-text-primary: var(--innsegl-color-integrity-alert-text);
+  --innsegl-color-text-secondary: var(--innsegl-color-integrity-alert-text-secondary);
+  --innsegl-color-text-muted: var(--innsegl-color-integrity-alert-text-secondary);
 }

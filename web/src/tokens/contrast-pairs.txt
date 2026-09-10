@@ -46,6 +46,7 @@
 # P3: the alarm is designed first. It is a filled banner, so its text sits on
 # the alert fill rather than on any page surface.
 --innsegl-color-integrity-alert-text      --innsegl-color-integrity-alert-surface   4.5  alert banner copy
+--innsegl-color-integrity-alert-text-secondary --innsegl-color-integrity-alert-surface 4.5  alert banner secondary copy
 # The evidence link sits on that same fill. It first used the accent, which is
 # defined against the page ground: measured 1.07:1 in light mode, an invisible
 # link on the one banner whose purpose is to point at the evidence. It now
