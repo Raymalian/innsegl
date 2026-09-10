@@ -170,3 +170,62 @@ func output(t *testing.T, dir string, args ...string) string {
 	}
 	return string(out)
 }
+
+// A run's intent and its record both carry the change. The record names the
+// commit; the intent cannot.
+//
+// RunsForPatchID returns both on purpose — an intent proves the change was
+// claimed even when the chain crashed before the signature. But matching the
+// intent first produced the right verdict with an empty commit in it:
+// "recorded this exact change, as commit ." MEASURED against the running
+// ledger on 2026-09-10, on the very commit this endpoint was built to answer
+// about. Naming the object the change was signed as is the useful half of the
+// answer.
+func TestAttributeContentPrefersTheRecordThatNamesTheCommit(t *testing.T) {
+	repo := t.TempDir()
+	sha, runID := seedRebasedCommit(t, repo)
+	patchID := patchIDOfCommit(t, repo, sha)
+	const original = "10c437e3609618f2eb7e06c744b7203d0370b0f8"
+
+	// Intent first, exactly as the chain orders them.
+	src := fakeContentSource{records: []verify.ContentRecord{
+		{RunID: runID, PatchID: patchID, CommitSHA: "", EventID: "intent"},
+		{RunID: runID, PatchID: patchID, CommitSHA: original, EventID: "recorded"},
+	}}
+
+	got := verify.AttributeContent(context.Background(),
+		verify.ContentConfig{Source: src}, repo, sha, runID)
+
+	if got.Result != verify.Verified {
+		t.Fatalf("result %v (%s), want Verified", got.Result, got.Detail)
+	}
+	if got.RecordedAs != original {
+		t.Errorf("RecordedAs is %q, want %q — the intent has no commit_sha and must not "+
+			"win over the record that does", got.RecordedAs, original)
+	}
+	if strings.Contains(got.Detail, "as commit .") {
+		t.Errorf("detail names an empty commit: %q", got.Detail)
+	}
+}
+
+// An intent alone still answers: the content is attributed, and the message
+// says plainly that the object it was signed as is not on the chain.
+func TestAttributeContentAnswersFromAnIntentAlone(t *testing.T) {
+	repo := t.TempDir()
+	sha, runID := seedRebasedCommit(t, repo)
+	patchID := patchIDOfCommit(t, repo, sha)
+
+	src := fakeContentSource{records: []verify.ContentRecord{
+		{RunID: runID, PatchID: patchID, CommitSHA: "", EventID: "intent"},
+	}}
+	got := verify.AttributeContent(context.Background(),
+		verify.ContentConfig{Source: src}, repo, sha, runID)
+
+	if got.Result != verify.Verified {
+		t.Fatalf("result %v (%s), want Verified — an intent proves the change was claimed",
+			got.Result, got.Detail)
+	}
+	if strings.Contains(got.Detail, "as commit .") {
+		t.Errorf("detail names an empty commit: %q", got.Detail)
+	}
+}

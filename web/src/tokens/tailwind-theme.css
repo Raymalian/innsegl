@@ -186,4 +186,14 @@
   --innsegl-color-text-primary: var(--innsegl-color-integrity-alert-text);
   --innsegl-color-text-secondary: var(--innsegl-color-integrity-alert-text-secondary);
   --innsegl-color-text-muted: var(--innsegl-color-integrity-alert-text-secondary);
+  /* And the ACCENT, which is where this was first found and only half fixed.
+   * `linkOnFill` exists because --innsegl-color-accent-text on this fill is
+   * 1.07:1 — measured then, and measured again here on the run timeline's
+   * "Canonical members" link, which uses the ordinary `link` class. Fixing it
+   * one class at a time leaves every future link to rediscover it, so the token
+   * is rebound with the others: a link on a filled alert takes the banner's own
+   * text colour, and the underline is what marks it as a link (doc 06 §6.4,
+   * never colour alone). */
+  --innsegl-color-accent-text: var(--innsegl-color-integrity-alert-text);
+  --innsegl-color-accent-emphasis: var(--innsegl-color-integrity-alert-text);
 }
