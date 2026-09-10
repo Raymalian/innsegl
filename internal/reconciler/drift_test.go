@@ -712,3 +712,143 @@ func TestDriftConfigWithoutASweeperIsRefused(t *testing.T) {
 			"the log is one that reports agreement it never checked")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0047: a superseding `commit_recorded` is not drift.
+// ---------------------------------------------------------------------------
+
+// rebasedCommit is driftCommit's content after a rebase moved it: the same
+// change, a different object, and so a different sha.
+const rebasedCommit = "5ea7c0de00112233445566778899aabbccddeeff"
+
+// supersede appends the superseding `commit_recorded` the reconciler's rebase
+// pass writes when it finds the original's change living at a new sha.
+//
+// Every member is the original's except `commit_sha`, `source` and
+// `supersedes` — which is precisely what makes it interesting here: it carries
+// the ORIGINAL's `rekor_entry_uuid`, because the signature was over the
+// original object and no signature over the rewritten one exists or can.
+func (f *driftFixture) supersede(t *testing.T, original event.Fields, newSHA string) event.Fields {
+	t.Helper()
+	body := original.Clone()
+	delete(body, event.FieldEventID)
+	delete(body, event.FieldChainPosition)
+	delete(body, event.FieldTS)
+	delete(body, event.FieldPrevEventHash)
+	delete(body, event.EventHashField)
+
+	originalID := str(original, event.FieldEventID)
+	body[event.FieldSource] = event.SourceReconciler
+	body[event.FieldCommitSHA] = newSHA
+	body[event.FieldSupersedes] = originalID
+	body[event.FieldIdempotencyKey] = reconciler.RebaseKey(originalID, newSHA)
+
+	record, err := f.ledger.Append(context.Background(), body)
+	if err != nil {
+		t.Fatalf("append superseding commit_recorded: %v", err)
+	}
+	return record
+}
+
+// A rebase rewrites the commit object and preserves the change. ADR-0047 makes
+// that the normal case rather than a fault: the reconciler records the new sha
+// as a superseding `commit_recorded`, and the Rekor entry it carries forward
+// still attests the ORIGINAL object, because that is the object that was
+// signed.
+//
+// So on a superseding record the sweep's "the entry attests this commit_sha"
+// premise is false BY CONSTRUCTION, and a sweep that does not know about
+// `supersedes` reports every legitimately rebased commit as drift, forever.
+// That is the always-firing alert this file's negative control exists to
+// forbid — an integrity alert that fires on correct behaviour is worse than
+// none, because it teaches an operator to ignore red (doc 06 §5.3).
+func TestDriftRaisesNothingOnARebasedCommitRecordedBySupersession(t *testing.T) {
+	f := newDriftFixture(t)
+	original, entry := f.legitimate(t)
+	superseding := f.supersede(t, original, rebasedCommit)
+
+	before, err := f.ledger.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	result := f.cycle(t)
+	after, err := f.ledger.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+
+	if len(result.Drift.Findings) != 0 {
+		t.Fatalf("drift detection raised %d finding(s) about a legitimately rebased commit "+
+			"(original %s at %s, superseding %s at %s, entry %s): %+v — the entry attests "+
+			"the object that was signed, which is the original, and ADR-0047 makes that "+
+			"correct rather than drift",
+			len(result.Drift.Findings), str(original, event.FieldEventID), driftCommit,
+			str(superseding, event.FieldEventID), rebasedCommit, entry.UUID,
+			result.Drift.Findings)
+	}
+	if len(result.Drift.Appended) != 0 || after != before {
+		t.Fatalf("drift detection appended %v and grew the chain from %d to %d",
+			result.Drift.Appended, before, after)
+	}
+	if len(f.alerts) != 0 {
+		t.Fatalf("drift detection alerted an operator about a legitimately rebased commit: %+v",
+			f.alerts)
+	}
+	// And it did look at both records — zero findings from a sweep that skipped
+	// the superseding record would pass for the wrong reason.
+	if result.Drift.Records != 2 {
+		t.Fatalf("the cycle examined %d records, want 2 (the original and the superseding "+
+			"one) — zero findings from a detector that examined one record proves nothing",
+			result.Drift.Records)
+	}
+}
+
+// The exemption above is bounded, and this is the test that bounds it.
+//
+// If "carries `supersedes`" alone silenced the artifact check, a compromised
+// MCP (IP §6.10, threat AB-03) would frame an agent by appending a fabricated
+// `commit_recorded` with `supersedes` pointing at nothing — buying silence for
+// the price of one member it is free to write. So the exemption is granted only
+// when the superseded record is ON THE CHAIN and its `commit_sha` is what the
+// entry attests; anything else falls back to judging the record on its own sha,
+// where the check still bites.
+func TestDriftStillFiresWhenSupersedesNamesNoRecordOnTheChain(t *testing.T) {
+	f := newDriftFixture(t)
+	original, _ := f.legitimate(t)
+
+	// Same shape as the legitimate supersession, except `supersedes` names an
+	// event id that was never appended.
+	body := original.Clone()
+	delete(body, event.FieldEventID)
+	delete(body, event.FieldChainPosition)
+	delete(body, event.FieldTS)
+	delete(body, event.FieldPrevEventHash)
+	delete(body, event.EventHashField)
+	body[event.FieldSource] = event.SourceReconciler
+	body[event.FieldCommitSHA] = rebasedCommit
+	body[event.FieldSupersedes] = "01a08b19-0000-7000-8000-000000000000"
+	body[event.FieldIdempotencyKey] = "reconciler:rebased:forged"
+	forged, err := f.ledger.Append(context.Background(), body)
+	if err != nil {
+		t.Fatalf("append forged commit_recorded: %v", err)
+	}
+
+	result := f.cycle(t)
+
+	var found *reconciler.DriftFinding
+	for i := range result.Drift.Findings {
+		if result.Drift.Findings[i].SubjectEventID == str(forged, event.FieldEventID) {
+			found = &result.Drift.Findings[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("a `commit_recorded` whose `supersedes` names no event on the chain raised "+
+			"no drift: %+v — pointing `supersedes` at nothing must not buy silence",
+			result.Drift.Findings)
+	}
+	if found.Reason != "the transparency log entry this commit_recorded names attests a "+
+		"different artifact from its commit_sha" {
+		t.Fatalf("forged supersession raised reason %q, want the other-artifact reason",
+			found.Reason)
+	}
+}
