@@ -95,8 +95,27 @@ const (
 const (
 	envExpireAfter = "INNSEGL_RECONCILE_EXPIRE_AFTER"
 	envDriftWindow = "INNSEGL_DRIFT_WINDOW"
-	envInterval    = "INNSEGL_RECONCILE_INTERVAL"
+	// ADR-0047 decision 4's two controls. Both required together: half a
+	// configuration is the shape that looks enabled and does nothing.
+	envRebaseBranch = "INNSEGL_REBASE_BRANCH"
+	envRebaseRepos  = "INNSEGL_REBASE_REPOS"
+	envInterval     = "INNSEGL_RECONCILE_INTERVAL"
 )
+
+// splitRepos reads a comma-separated repository list.
+//
+// Empty entries are dropped rather than passed on: a trailing comma is a typo,
+// and an empty repository identifier would send the pass looking for a
+// directory named nothing.
+func splitRepos(list string) []string {
+	var out []string
+	for _, r := range strings.Split(list, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
 
 // reconcileOptions is the resolved command line.
 type reconcileOptions struct {
@@ -106,8 +125,12 @@ type reconcileOptions struct {
 	trustDomain string
 	expireAfter time.Duration
 	driftWindow int64
-	interval    time.Duration
-	once        bool
+	// rebaseBranch and rebaseRepos turn on ADR-0047's pass. Empty leaves it
+	// off, and Result.Rebase.Enabled says so every cycle.
+	rebaseBranch string
+	rebaseRepos  []string
+	interval     time.Duration
+	once         bool
 
 	// The identity pass's own configuration. Mirrors reapOptions' four SPIRE
 	// fields by name — spireAddress, spireServerID, workloadAPI, timeout — so
@@ -199,6 +222,10 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 			"how long a dangling commit_intent is left alone before it is expired ($"+envExpireAfter+")")
 		interval = fs.Duration("interval", envDuration(envInterval, reconciler.DefaultInterval),
 			"time between cycles; ignored with -once ($"+envInterval+")")
+		rebaseBranch = fs.String("rebase-branch", os.Getenv(envRebaseBranch),
+			"branch to walk for commits a merge rewrote; empty leaves ADR-0047's pass OFF ($"+envRebaseBranch+")")
+		rebaseRepos = fs.String("rebase-repos", os.Getenv(envRebaseRepos),
+			"comma-separated repository identifiers to walk, as host/org/name ($"+envRebaseRepos+")")
 		driftWindow = fs.Int64("drift-window",
 			int64(envInt(envDriftWindow, reconciler.DefaultSweepWindow)),
 			"how many of the log's most recent entries each cycle cross-checks "+
@@ -254,6 +281,21 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 		return exitUsage
 	}
 
+	// BOTH OR NEITHER. A repo list with no branch has nothing to walk, and a
+	// branch with no repositories has nowhere to walk it. Either alone is a
+	// configuration that looks enabled and records nothing, which is the one
+	// outcome an operator cannot detect from the outside.
+	if (*rebaseBranch != "") != (*rebaseRepos != "") {
+		if *rebaseBranch == "" {
+			fprintf(stderr, "innsegl reconcile: -rebase-repos needs -rebase-branch; "+
+				"there is nothing to walk without a branch (ADR-0047)\n")
+		} else {
+			fprintf(stderr, "innsegl reconcile: -rebase-branch needs -rebase-repos; "+
+				"there is nowhere to walk it without a repository (ADR-0047)\n")
+		}
+		return exitUsage
+	}
+
 	missing := ""
 	switch {
 	case *dsn == "":
@@ -288,8 +330,10 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 	opts := reconcileOptions{
 		dsn: *dsn, rekorURL: *rekorURL, workspace: *workspace,
 		trustDomain: *trustDomain, expireAfter: *expireAfter,
-		driftWindow: *driftWindow,
-		interval:    *interval, once: *once,
+		driftWindow:  *driftWindow,
+		rebaseBranch: strings.TrimSpace(*rebaseBranch),
+		rebaseRepos:  splitRepos(*rebaseRepos),
+		interval:     *interval, once: *once,
 		spireAddress: *spireAddress, spireServerID: *spireServerID,
 		workloadAPI: *workloadAPI, spireTimeout: *spireTimeout,
 	}
@@ -610,6 +654,12 @@ func openReconciler(ctx context.Context, opts reconcileOptions) (reconcileEngine
 	}
 	if opts.driftWindow > 0 {
 		cfg.Drift = &reconciler.DriftConfig{Sweep: log, Window: opts.driftWindow}
+	}
+	if opts.rebaseBranch != "" {
+		cfg.Rebase = &reconciler.RebaseConfig{
+			Branch: opts.rebaseBranch,
+			Repos:  opts.rebaseRepos,
+		}
 	}
 	engine, err := reconciler.New(cfg)
 	if err != nil {

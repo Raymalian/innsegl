@@ -785,6 +785,21 @@ services:
       INNSEGL_WORKSPACE: /work
       INNSEGL_RECONCILE_INTERVAL: ${INNSEGL_RECONCILE_INTERVAL:-1m}
       INNSEGL_RECONCILE_EXPIRE_AFTER: ${INNSEGL_RECONCILE_EXPIRE_AFTER:-10m}
+      # ADR-0047 decision 4: record a rewritten commit's new SHA as a
+      # SUPERSEDING commit_recorded, so lookup by SHA keeps working after a
+      # merge. OFF unless BOTH are set, and off is the compose default because
+      # this pass reads repositories and writes to the chain — a deployment
+      # opts into that deliberately.
+      #
+      # Set them to the branch merges land on and the repositories to walk:
+      #
+      #   INNSEGL_REBASE_BRANCH=main
+      #   INNSEGL_REBASE_REPOS=github.com/<org>/<name>,github.com/<org>/<other>
+      #
+      # The repositories must be reachable under /work, which is what
+      # `make innsegl-link` puts there.
+      INNSEGL_REBASE_BRANCH: ${INNSEGL_REBASE_BRANCH:-}
+      INNSEGL_REBASE_REPOS: ${INNSEGL_REBASE_REPOS:-}
     volumes:
       - innsegl-workspace:/work
     security_opt:

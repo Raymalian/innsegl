@@ -314,6 +314,22 @@ INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
 # registration, so there is no run for the reaper to get wrong.
 INNSEGL_MCP_ALSO ?= reap
 
+# ADR-0047 decision 4, and the reason it is on here.
+#
+# PR #200 merged on 2026-09-10 by rebase, which is the only strategy `main`
+# permits: required_linear_history forbids a merge commit and squash is
+# disabled. All fifteen commits were rewritten, every gitsign signature
+# destroyed, every Agent-* trailer intact. Nothing recorded the new SHAs,
+# because nothing was configured to -- so `main` now carries fifteen commits
+# that claim an identity with nothing on the object to back it, and no record
+# tying them to the changes that were signed.
+#
+# Those fifteen cannot be recovered: they were signed before schema 2, so no
+# patch_id was ever recorded for them. Everything signed from the cutover
+# onwards can be, and this is what does it.
+INNSEGL_REBASE_BRANCH ?= main
+INNSEGL_REBASE_REPOS ?= $(REPO)
+
 ## test-clean: remove containers a killed test run left behind
 #
 # A test package brings up its own Postgres (and sometimes a SPIRE or a
@@ -343,6 +359,8 @@ innsegl-up-here: sigstore-up
 	  INNSEGL_API_REPOS='$(API_REPOS)' \
 	  INNSEGL_MCP_ADMIN_LISTEN='$(INNSEGL_MCP_ADMIN_LISTEN)' \
 	  INNSEGL_MCP_ALSO='$(INNSEGL_MCP_ALSO)' \
+	  INNSEGL_REBASE_BRANCH='$(INNSEGL_REBASE_BRANCH)' \
+	  INNSEGL_REBASE_REPOS='$(INNSEGL_REBASE_REPOS)' \
 	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml $(ONEPROCESS_FILE) up -d
 	@$(MAKE) --no-print-directory innsegl-link DIR='$(REPO_PATH)'
 
