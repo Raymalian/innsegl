@@ -72,6 +72,13 @@ export const commitCount = "text-ink";
 /** A cell saying what it does not hold: no repository, no check. */
 export const mutedCell = "text-micro text-ink-muted";
 
+/* The age of the ledger's claim, under the status badge rather than beside it.
+   Inline, it wrapped mid-phrase — "last seen 17 / hours ago" — which reads as
+   two facts and is exactly the kind of ambiguity this line exists to remove.
+   `block` with a little space above puts it on its own line, the way the
+   verification cell already stacks its second line. */
+export const lastSeenLine = "mt-1 block text-micro text-ink-muted";
+
 /* ── the row's verification cell ──────────────────────────────────────────── */
 
 /* Neutral, deliberately. doc 06 §5.3 gives amber to "verification unavailable"

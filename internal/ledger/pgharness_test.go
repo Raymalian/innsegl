@@ -194,6 +194,18 @@ func startPG(ctx context.Context) (*pgContainer, error) {
 		return nil, fmt.Errorf("reserve a host port: %w", err)
 	}
 	id, err := docker(ctx, "run", "--detach",
+		// A LABEL, SO A LEAK IS FINDABLE.
+		//
+		// TestMain removes this container when the package finishes, and a
+		// test run that is KILLED never gets there. On 2026-09-10 that left
+		// seven throwaway databases running, two of them fourteen hours old,
+		// and the only way to tell them from a real one was the random name
+		// Docker had given them. With the label:
+		//
+		//   docker rm -f $(docker ps -aq --filter label=dev.innsegl.test)
+		//
+		// which is what `make test-clean` runs.
+		"--label", "dev.innsegl.test=1",
 		"--publish", "127.0.0.1:"+port+":5432",
 		"--env", "POSTGRES_USER="+postgresUser,
 		"--env", "POSTGRES_PASSWORD="+postgresPassword,
