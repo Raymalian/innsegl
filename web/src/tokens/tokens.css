@@ -206,6 +206,20 @@
   --innsegl-color-integrity-alert-surface: light-dark(var(--innsegl-palette-failure-700), var(--innsegl-palette-failure-800));
   --innsegl-color-integrity-alert-text: light-dark(var(--innsegl-palette-failure-50), var(--innsegl-palette-failure-100));
   --innsegl-color-integrity-alert-border: light-dark(var(--innsegl-palette-failure-800), var(--innsegl-palette-failure-600));
+  /* Secondary copy INSIDE the filled alert.
+   *
+   * A filled alarm is its own ground, and the page's ink tokens are defined
+   * against the page's. MEASURED on the light fill (#9b1921):
+   * --innsegl-color-text-secondary is 1.10:1 and --innsegl-color-text-muted is
+   * 1.51:1 -- the gloss under "Ledger drift detected" was effectively invisible,
+   * worse than the 1.07:1 link that `linkOnFill` exists to fix. Same hole, same
+   * reason it was missed: contrast-pairs.txt asserts DECLARED pairs, and a
+   * component may compose any token over any background.
+   *
+   * Dimmer than the primary so the hierarchy the muted class was reaching for
+   * survives, and declared below so the gate checks it: 5.95:1 light, 5.26:1
+   * dark, against a primary of 7.20:1 and 8.25:1. */
+  --innsegl-color-integrity-alert-text-secondary: light-dark(var(--innsegl-palette-failure-100), var(--innsegl-palette-failure-300));
 
   /* The differing segment in the three-check panel's trailer/certificate
    * comparison (§4.1). Colour is never the only signal — pair it with
