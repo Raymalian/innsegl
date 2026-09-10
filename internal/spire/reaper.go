@@ -39,12 +39,20 @@ import (
 // Client.RegisterRun carries two durable facts and nothing else: when the
 // server created it, and the TTL of the SVIDs it issues. There is no field
 // that says "the workload behind this entry is still running", and there is no
-// callback when one stops. So the reaper cannot detect a crash. What it can do
-// is bound a lifetime: an entry that has outlived the identity lifetime it was
-// registered with, plus a configured grace, is orphaned by definition, because
-// a run that was still working would have been retired or re-registered.
+// callback when one stops. So the reaper cannot detect a crash from SPIRE. What
+// it can do is bound a lifetime: an entry that has outlived the identity
+// lifetime it was registered with, plus a configured grace, is PAST ITS
+// DEADLINE.
 //
-// That bound is a policy, and it is deliberately a knob rather than a derived
+// It is not thereby orphaned. This file used to say it was — "because a run
+// that was still working would have been retired or re-registered" — and that
+// clause was measured false on 2026-09-08, when the first production sweep
+// deleted the identities of two agents mid-task. A subagent works for hours on
+// one registration and re-registers never. See silence.go, which holds the
+// decision and the measurement: past the deadline the LEDGER is asked when the
+// run last did something, and only a run that has also gone quiet is orphaned.
+//
+// The bound is a policy, and it is deliberately a knob rather than a derived
 // constant — see ADR-0014 and the open question it records.
 //
 // # Ordering: record first, delete second
@@ -121,8 +129,15 @@ type Candidate struct {
 	// Client.RegisterRun does not set one, so it is normally zero; an entry
 	// that carries one is believed over the computed deadline.
 	ExpiresAt time.Time
-	// Deadline is the instant after which the run is orphaned.
+	// Deadline is the instant after which the run is past its identity
+	// lifetime. Past it the run is a SUSPECTED orphan, not a confirmed one —
+	// see silence.go.
 	Deadline time.Time
+	// LastActivity is when the ledger last saw this run do something, zero
+	// when no activity source was configured or the ledger knows nothing of
+	// the run. A candidate in a report's Live list carrying one was spared by
+	// its own work rather than by its TTL.
+	LastActivity time.Time
 }
 
 // Expiry is one orphaned run, as reaped.
@@ -222,8 +237,9 @@ func (r *SweepReport) String() string {
 			orNone(e.EventID), e.Recorded, e.Deleted)
 	}
 	for _, c := range r.Live {
-		fmt.Fprintf(&b, "  live     %s entry=%s deadline=%s\n",
-			c.Entry.SPIFFEID, c.Entry.ID, c.Deadline.UTC().Format(time.RFC3339))
+		fmt.Fprintf(&b, "  live     %s entry=%s deadline=%s%s\n",
+			c.Entry.SPIFFEID, c.Entry.ID, c.Deadline.UTC().Format(time.RFC3339),
+			activeNote(c))
 	}
 	for _, s := range r.Skipped {
 		fmt.Fprintf(&b, "  skipped  %s entry=%s: %s\n", orNone(s.SPIFFEID), s.EntryID, s.Reason)
@@ -232,6 +248,16 @@ func (r *SweepReport) String() string {
 		fmt.Fprintf(&b, "  FAILED   %s entry=%s: %v\n", orNone(f.SPIFFEID), f.EntryID, f.Err)
 	}
 	return b.String()
+}
+
+// activeNote spells out the case an operator would otherwise misread: an entry
+// listed as live with a deadline already in the past. It was spared because the
+// run is still working, and the report has to say so or it looks like a bug.
+func activeNote(c Candidate) string {
+	if c.LastActivity.IsZero() {
+		return ""
+	}
+	return " last-active=" + c.LastActivity.UTC().Format(time.RFC3339)
 }
 
 func plural(n int, one, many string) string {
@@ -261,13 +287,20 @@ type ReaperConfig struct {
 	// orphaned. Zero means zero — see DefaultReapGrace. Negative is refused:
 	// it would reap entries before their TTL had elapsed.
 	Grace time.Duration
+	// Activity is where the reaper asks whether a run past its deadline is
+	// nonetheless still working. OPTIONAL, and its absence is the behaviour
+	// every deployment had before #180: the deadline decides alone. Supplying
+	// one is what stops a long-running agent losing its identity mid-task.
+	// See silence.go.
+	Activity ActivitySource
 }
 
 // Reaper deletes orphaned run entries and records each expiry.
 type Reaper struct {
-	client *Client
-	ledger EventSink
-	grace  time.Duration
+	client   *Client
+	ledger   EventSink
+	grace    time.Duration
+	activity ActivitySource
 }
 
 // NewReaper builds a reaper. Every rejection here is an INVARIANT_VIOLATION: a
@@ -286,7 +319,12 @@ func NewReaper(cfg ReaperConfig) (*Reaper, error) {
 	if cfg.Grace < 0 {
 		return fail("grace %s is negative; that reaps entries before their TTL has elapsed", cfg.Grace)
 	}
-	return &Reaper{client: cfg.Client, ledger: cfg.Ledger, grace: cfg.Grace}, nil
+	return &Reaper{
+		client:   cfg.Client,
+		ledger:   cfg.Ledger,
+		grace:    cfg.Grace,
+		activity: cfg.Activity,
+	}, nil
 }
 
 // Grace returns the slack this reaper adds to each entry's TTL.
@@ -315,7 +353,12 @@ func (r *Reaper) Sweep(ctx context.Context) (*SweepReport, error) {
 			report.Skipped = append(report.Skipped, *skipped)
 			continue
 		}
-		if !now.After(cand.Deadline) {
+		reap, unknown := r.orphanedNow(ctx, now, &cand)
+		if unknown != nil {
+			report.Skipped = append(report.Skipped, *unknown)
+			continue
+		}
+		if !reap {
 			report.Live = append(report.Live, cand)
 			continue
 		}
