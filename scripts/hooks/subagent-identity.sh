@@ -346,6 +346,20 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
     echo "innsegl:   git add <the files you changed>" >&2
     echo "innsegl:   $SIGNER -r $GATE_RUN${GATE_TASK:+ -t $GATE_TASK} -m \"<type>(<scope>): <what changed>\"" >&2
     echo "innsegl:" >&2
+    # THE WHOLE CALL WAS REFUSED, NOT THE GIT PART OF IT.
+    #
+    # A hook can allow or refuse a tool call; it cannot run half of one. So a
+    # command that wrote a message file and then committed loses BOTH -- and
+    # the agent's next move is to reach for the file it believes it just
+    # wrote. Measured in the field: `msg.txt` did not exist, and the agent
+    # counted that as a second refusal from this deployment rather than a
+    # consequence of the first.
+    #
+    # Saying so costs three lines and removes an entire class of confusion.
+    echo "innsegl: NOTHING in that command ran, not just the git part. If you were" >&2
+    echo "innsegl: writing a message file in the same call, write it in its own call" >&2
+    echo "innsegl: first -- then sign. Long messages: -F <file> rather than -m." >&2
+    echo "innsegl:" >&2
     echo "innsegl: The -r is this run. Without it the signer mints a throwaway" >&2
     echo "innsegl: identity and the work is credited to nobody in particular." >&2
     echo "innsegl:" >&2
@@ -595,14 +609,11 @@ print(d.get("tool_input", {}).get("command", ""))' 2>/dev/null)"
     REL="$(sed -n 3p "$RUNFILE")"
     TASK="$(sed -n 4p "$RUNFILE")"
     [ -n "$AGENT_TYPE" ] || AGENT_TYPE="$(sed -n 5p "$RUNFILE")"
-    rm -f "$RUNFILE"
-    # The pointer goes with the run. A stale one would credit this agent for
-    # work done after it stopped.
-    if [ -n "$MAIN" ]; then
-      _k="$(tree_key "${REL:+$MAIN/$REL}${REL:-$MAIN}")" 2>/dev/null
-      [ -n "$_k" ] && rm -f "$RUNS_DIR/by-tree/$_k" 2>/dev/null
-    fi
-    [ -n "$RUN_ID" ] || exit 0
+    # The marker and the by-tree pointer are removed together, and only once
+    # the run is retired -- see the retirement below. A stale pointer would
+    # credit this agent for work done after it stopped, and a marker deleted
+    # before the retirement succeeds loses the run entirely.
+    [ -n "$RUN_ID" ] || { rm -f "$RUNFILE"; exit 0; }
 
     # CAPTURE WHAT THIS AGENT LEFT, in the order the operator asked for.
     #
@@ -661,10 +672,34 @@ gate is what decides whether it may merge."
     fi
 
     # Never exit 2 here. See the header.
+    #
+    # THE MARKER OUTLIVES A FAILED RETIREMENT, and it did not used to.
+    #
+    # This branch deleted $RUNFILE on its way in, before the retirement was
+    # attempted. When retire_agent then failed -- the deployment down for a
+    # moment, a refusal -- the run was never retired AND the only record of it
+    # was gone, so nothing could ever retry. The line below promised the TTL
+    # would catch it, and the reaper that does that has been off since
+    # 2026-09-08 (#180). Two safety nets, neither present.
+    #
+    # Measured on 2026-09-10: three runs registered the previous afternoon,
+    # still Active seventeen hours later, no marker left to retry from.
+    #
+    # So the marker is removed only once the run really is retired. A stop that
+    # could not retire leaves it in place, and the next stop for the same agent
+    # id -- or a human reading the directory -- still has the run id.
     if mcp_call retire_agent "$(printf '{"run_id":"%s"}' "$RUN_ID")" >/dev/null 2>&1; then
+      rm -f "$RUNFILE"
+      if [ -n "$MAIN" ]; then
+        _k="$(tree_key "${REL:+$MAIN/$REL}${REL:-$MAIN}")" 2>/dev/null
+        [ -n "$_k" ] && rm -f "$RUNS_DIR/by-tree/$_k" 2>/dev/null
+      fi
       echo "innsegl: retired $RUN_ID" >&2
     else
-      echo "innsegl: could not retire $RUN_ID; it will expire on its TTL" >&2
+      echo "innsegl: could not retire $RUN_ID. Its marker is kept at" >&2
+      echo "innsegl:   $RUNFILE" >&2
+      echo "innsegl:   so the run id is not lost: a later stop for this agent retries," >&2
+      echo "innsegl:   and the reaper expires it as run_expired if nothing does (IP §6.7)." >&2
     fi
     exit 0
     ;;
