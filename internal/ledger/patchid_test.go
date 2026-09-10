@@ -101,3 +101,45 @@ func commitRecordedBody(runID, patchID, n string) event.Fields {
 		event.FieldRekorLogIndex:  int64(1),
 	}
 }
+
+// TestLED039HoldsAnyPatchIDSeparatesAnOldChainFromAChangedOne.
+//
+// The two states a content check must never confuse: a chain that recorded no
+// change identities at all (an older deployment) and a chain that recorded some
+// and does not hold this one (the content changed). The first is a fact about
+// the deployment; the second is a finding about a commit.
+func TestLED039HoldsAnyPatchIDSeparatesAnOldChainFromAChangedOne(t *testing.T) {
+	s, _ := newStore(t)
+	ctx := testCtx(t, 60*time.Second)
+
+	recorded, err := HoldsAnyPatchID(ctx, s.pool)
+	if err != nil {
+		t.Fatalf("HoldsAnyPatchID on an empty chain: %v", err)
+	}
+	if recorded {
+		t.Fatal("an empty chain reported holding a patch id")
+	}
+
+	// THE THIRD STATE CANNOT BE SYNTHESIZED HERE, and that is itself the
+	// point. A chain holding `commit_recorded` without a patch id is one
+	// written before the cutover: the append path refuses schema 1 outright
+	// (SER-026) and schema 2 requires the member, so only real history
+	// produces it. The evidence for that case is a measurement rather than a
+	// fixture — on this project's own deployment on 2026-09-10, 126
+	// `commit_recorded` events and zero patch ids, which is exactly the state
+	// this function exists to report before a gate accuses all 126 of them.
+	//
+	// What is testable is the boundary either side of it, and both are below.
+
+	if _, aerr := s.Append(ctx, commitRecordedBody("run-new", strings.Repeat("e", 40), "4")); aerr != nil {
+		t.Fatalf("append a schema 2 commit_recorded: %v", aerr)
+	}
+	recorded, err = HoldsAnyPatchID(ctx, s.pool)
+	if err != nil {
+		t.Fatalf("HoldsAnyPatchID: %v", err)
+	}
+	if !recorded {
+		t.Error("a chain holding a patch id reported none, so a content check would " +
+			"stand down on a deployment that can answer it")
+	}
+}

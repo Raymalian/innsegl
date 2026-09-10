@@ -20,6 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/signing"
 )
 
@@ -123,6 +126,22 @@ func runGit(ctx context.Context, dir string, env []string, args ...string) (stri
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("git %s (in %s): %w\n%s",
+			strings.Join(args, " "), dir, err, stderr.String())
+	}
+	return stdout.String(), nil
+}
+
+// runGitStdin is runGit with something on the child's stdin, which `git
+// patch-id` needs: it reads a diff and prints an identity for it.
+func runGitStdin(ctx context.Context, dir string, env []string, stdin string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -1105,18 +1124,35 @@ func TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature(t *testing.T
 	// Checking main again becomes possible under ADR-0047, which anchors
 	// attribution to the change rather than to the commit object; #195 rebuilds
 	// this gate on it.
+	// TWO MODES, AND THE REPORT SAYS WHICH ONE RAN (#195).
+	//
+	// With a ledger, the question is ADR-0047's and it can be asked anywhere:
+	// does a signed run's record carry the change this commit makes? That
+	// survives a rebase, so `main` becomes checkable again.
+	//
+	// Without one, the question is the old one — is the signature on the
+	// object — and it is only answerable inside a pull request, because the
+	// merge destroys the object it was asked about. That is a real limit of
+	// the environment rather than of the gate, and the skip below now says so
+	// by name instead of describing it as unanswerable in principle.
+	if dsn := os.Getenv("INNSEGL_LEDGER_DSN"); dsn != "" {
+		gh003ByContent(t, root, env, dsn)
+		return
+	}
+
 	rangeSpec, err := pullRequestRange(os.Getenv("GITHUB_EVENT_NAME"), os.Getenv("GITHUB_BASE_REF"))
 	if err != nil {
 		t.Fatalf("GH-003 did not run: %v", err)
 	}
 	if rangeSpec == "" {
-		t.Skipf("GH-003 checks the commits a pull request adds, where the signature " +
-			"covering each commit object still exists. This run is not a pull request, " +
-			"so there is no such range: on a merged branch every commit object is new " +
-			"and the merge dropped the signature that covered the old one (ADR-0047). " +
-			"scripts/test-no-skips.sh allows this skip and states the reason; the " +
-			"pull-request run is where the question is answerable, and #195 rebuilds " +
-			"the gate on content so main can be checked again.")
+		t.Skipf("GH-003 ran in OBJECT mode, which can only ask about a pull request: " +
+			"after a merge every commit object is new and the merge dropped the " +
+			"signature that covered the old one (ADR-0047). This run is not a pull " +
+			"request, so there is no such range.\n" +
+			"      Set INNSEGL_LEDGER_DSN and it runs in CONTENT mode instead, which " +
+			"asks whether a signed run recorded the CHANGE each commit makes — a " +
+			"question a rebase does not destroy, and one `main` can answer. " +
+			"scripts/test-no-skips.sh allows this skip and states the reason.")
 	}
 	// Counted before collecting, because collect treats an empty range as an
 	// error -- reasonable when the range is all of history, wrong when it is a
@@ -1309,3 +1345,217 @@ func loadAttributionBaseline(t *testing.T) map[string]string {
 }
 
 const attributionBaselinePath = "testdata/attribution-baseline.json"
+
+// gh003ByContent is GH-003 asked the way ADR-0047 makes it answerable
+// anywhere: not "is the signature on this object" but "did a signed run record
+// the change this commit makes" (#195, RM-123).
+//
+// # Why this can check `main` where the object check cannot
+//
+// A gitsign signature covers the commit object, and every merge strategy
+// GitHub offers rewrites it. The object check therefore has exactly one moment
+// where it is answerable — inside the pull request, before the button — and
+// after that the evidence is gone. The change is not: `git patch-id --verbatim`
+// names it, it survives a rebase, and the ledger records it against the run
+// that made it (#192, #193).
+//
+// # Both halves, for the third time and the same reason
+//
+// The patch id says WHAT and cannot say who; the trailer says WHO and is text
+// anybody can type. A commit passes only when a record carries this change AND
+// names the run this commit claims. gh003MutantContentCheck below removes one
+// half at a time and asserts a forgery gets through, which is the mutation the
+// issue asks for.
+func gh003ByContent(t *testing.T, root string, env []string, dsn string) {
+	t.Helper()
+	ctx := t.Context()
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("GH-003 content mode: opening the ledger: %v", err)
+	}
+	defer pool.Close()
+
+	// BEFORE ANYTHING ELSE: has this deployment ever recorded a change?
+	//
+	// `patch_id` arrives with schema 2. A chain written by an older server
+	// holds none, and every commit it signed is outside the content scheme —
+	// not because the content changed, but because nothing recorded what the
+	// content was. Measured on 2026-09-10 against this project's own
+	// deployment: 126 `commit_recorded` events, zero patch ids. Without this
+	// question, content mode would accuse all 126 genuine signatures.
+	anyPatchID, err := ledger.HoldsAnyPatchID(ctx, pool)
+	if err != nil {
+		t.Fatalf("GH-003 content mode: asking the ledger about patch ids: %v", err)
+	}
+	if !anyPatchID {
+		t.Skipf("GH-003 CONTENT mode: this ledger holds no patch_id on any commit " +
+			"event, so it was written by a deployment older than schema 2 and there " +
+			"is nothing to check a change against (ADR-0047).\n" +
+			"      Upgrade the deployment and run `innsegl migrate-schema`; commits " +
+			"signed after the cutover are checkable, and commits signed before it stay " +
+			"exactly as valid as they were — I4 does not let them change.")
+	}
+
+	commits, err := collect(ctx, root, env, "--no-merges", "HEAD")
+	if err != nil {
+		t.Fatalf("collect HEAD: %v", err)
+	}
+
+	baseline := loadAttributionBaseline(t)
+	claimed, checked, confirmed := 0, 0, 0
+	for _, c := range commits {
+		if !strings.Contains(c.Message, "Agent-Identity:") {
+			continue
+		}
+		claimed++
+		if reason, excused := baseline[c.SHA]; excused {
+			t.Logf("  baseline  %s  %s", c.SHA[:12], reason)
+			continue
+		}
+		checked++
+
+		run := gh003RunOf(c.Message)
+		if run == "" {
+			t.Errorf("ATTRIBUTION VIOLATION: %s claims an agent identity and carries no "+
+				"Agent-Run trailer, so there is no run to check the change against. "+
+				"ADR-0028 §5 requires all three trailers together.", c.SHA[:12])
+			continue
+		}
+		patchID, perr := gh003PatchID(ctx, root, env, c.SHA)
+		if perr != nil {
+			t.Fatalf("computing the change made by %s: %v", c.SHA[:12], perr)
+		}
+		if patchID == "" {
+			t.Logf("  empty     %s  changes nothing, so it is outside the scheme", c.SHA[:12])
+			continue
+		}
+
+		records, rerr := ledger.RunsForPatchID(ctx, pool, patchID)
+		if rerr != nil {
+			// A ledger that cannot answer is not a commit that failed. Fatal
+			// rather than an error on this commit: every commit after it would
+			// report the same thing, and a hundred identical failures hide the
+			// one fact that matters.
+			t.Fatalf("GH-003 content mode: the ledger could not be asked about %s: %v",
+				c.SHA[:12], rerr)
+		}
+		if gh003Confirms(records, run, patchID) {
+			confirmed++
+			continue
+		}
+		t.Errorf("ATTRIBUTION VIOLATION: %s claims run %s, and no record in the ledger "+
+			"carries that run against this change (patch id %s).\n"+
+			"      Either the content changed after it was signed, or the claim is not "+
+			"this run's to make. ADR-0047: a conflicted rebase reads as the content "+
+			"changing; an edit reads the same way, and both are the commit's problem "+
+			"rather than the gate's.", c.SHA[:12], run, patchID[:12])
+	}
+
+	t.Logf("GH-003 CONTENT mode: %d of %d commits claim an agent identity, %d checked, "+
+		"%d confirmed by content, %d on the baseline",
+		claimed, len(commits), checked, confirmed, claimed-checked)
+	if claimed == 0 {
+		t.Log("GH-003: no commit reachable from HEAD claims an agent identity")
+	}
+}
+
+// gh003Confirms is the rule, alone in a function so a mutation test can remove
+// half of it.
+func gh003Confirms(records []ledger.ContentRecord, run, patchID string) bool {
+	for _, r := range records {
+		if r.RunID == run && r.PatchID == patchID {
+			return true
+		}
+	}
+	return false
+}
+
+// gh003RunOf reads the Agent-Run trailer.
+func gh003RunOf(message string) string {
+	for _, line := range strings.Split(message, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "Agent-Run:"); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
+}
+
+// gh003PatchID computes a commit's change identity with the same two commands
+// and the same flags sign_commit and the reconciler use. An empty string means
+// the commit changes nothing.
+func gh003PatchID(ctx context.Context, root string, env []string, sha string) (string, error) {
+	patch, err := runGit(ctx, root, env,
+		"diff-tree", "-p", "--root", "--no-color", "--no-ext-diff", sha)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(patch) == "" {
+		return "", nil
+	}
+	out, err := runGitStdin(ctx, root, env, patch, "patch-id", "--verbatim")
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return "", nil
+	}
+	return fields[0], nil
+}
+
+// TestGH003BothHalvesOfTheContentCheckAreLoadBearing is the mutation the issue
+// asks for, run as a test rather than by hand: "removing the content check
+// admits an unattributable commit".
+//
+// gh003Confirms is the whole rule, in one function, so each half can be removed
+// in isolation and the forgery it was holding back can be named. A gate whose
+// mutation coverage is a note in a pull request is a gate nobody re-checks.
+func TestGH003BothHalvesOfTheContentCheckAreLoadBearing(t *testing.T) {
+	const (
+		theRun   = "run-42"
+		thePatch = "5e4c6c1f0a2d9b3e8f7a1c4d6b0e9f2a3c5d7e81"
+		other    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	)
+	records := []ledger.ContentRecord{{RunID: theRun, PatchID: thePatch}}
+
+	if !gh003Confirms(records, theRun, thePatch) {
+		t.Fatal("the genuine case is refused, so nothing below means anything")
+	}
+
+	// MUTANT 1: match on the change alone. An impostor attaches their own
+	// Agent-Run to somebody else's change and the gate confirms it.
+	matchesChangeOnly := func(records []ledger.ContentRecord, _, patchID string) bool {
+		for _, r := range records {
+			if r.PatchID == patchID {
+				return true
+			}
+		}
+		return false
+	}
+	if !matchesChangeOnly(records, "run-impostor", thePatch) {
+		t.Error("the change-only mutant did not admit the forgery it exists to " +
+			"demonstrate; the mutation proves nothing")
+	}
+	if gh003Confirms(records, "run-impostor", thePatch) {
+		t.Error("GH-003 confirmed a commit claiming a run that recorded no such change")
+	}
+
+	// MUTANT 2: match on the run alone. Any commit carrying a genuine
+	// Agent-Run passes, whatever it actually changed — which is the edited
+	// commit keeping the attribution of the one it was edited from.
+	matchesRunOnly := func(records []ledger.ContentRecord, run, _ string) bool {
+		for _, r := range records {
+			if r.RunID == run {
+				return true
+			}
+		}
+		return false
+	}
+	if !matchesRunOnly(records, theRun, other) {
+		t.Error("the run-only mutant did not admit the forgery it exists to demonstrate")
+	}
+	if gh003Confirms(records, theRun, other) {
+		t.Error("GH-003 confirmed a commit whose change no run recorded")
+	}
+}
