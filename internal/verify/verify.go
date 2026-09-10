@@ -215,7 +215,13 @@ type Report struct {
 	Certificate CertificateInfo `json:"certificate"`
 	Entry       EntryInfo       `json:"entry"`
 	Recovered   []Recovered     `json:"recovered,omitempty"`
-	Notes       []string        `json:"notes,omitempty"`
+	// Content is ADR-0047's answer: did a signed run produce this CHANGE?
+	// Reported beside the three checks and deliberately not as a fourth one --
+	// doc 06 §4.1 names exactly three and forbids collapsing any two, and a
+	// spec is not amended to match this package. It carries its own tri-state
+	// result, and it is absent when no ledger was configured to ask.
+	Content *ContentAttribution `json:"content,omitempty"`
+	Notes   []string            `json:"notes,omitempty"`
 }
 
 // Config is everything the verifier is allowed to know. Two URLs, a clock and
@@ -241,6 +247,12 @@ type Config struct {
 	Now func() time.Time
 	// HTTPClient bounds the two network calls.
 	HTTPClient *http.Client
+	// Content, when set, is where the verifier asks whether a signed run
+	// produced this change (ADR-0047, #193). OPTIONAL and nil by default:
+	// VER-001 is "verifies with the database unreachable", and a verifier that
+	// began requiring a ledger would be one a stranger cannot run. Without it
+	// the three checks are exactly what they were.
+	Content ContentSource
 }
 
 // Verifier performs the three checks. It holds no state between calls: there
@@ -375,7 +387,34 @@ func (v *Verifier) verifyCommit(ctx context.Context, repo string, c commit) (Rep
 	if rekorCheck.Result == Failed {
 		rep.Recovered, rep.Notes = v.recover(ctx, repo, c, rep.Notes)
 	}
+	v.attributeByContent(ctx, repo, c, claim, &rep)
 	return rep, nil
+}
+
+// attributeByContent adds ADR-0047's answer to a report.
+//
+// It does not change the verdict, and that is a deliberate limit rather than an
+// oversight: doc 06 §4.2's badge vocabulary is Verified / Failed / Verification
+// unavailable, and introducing a fourth answer is a change to a normative
+// document, which this package does not get to make on its own. What it does is
+// put the evidence in the report, where the gate that has to act on it (#195)
+// and the surface that has to render it (#196) can read it.
+//
+// It runs on EVERY report, not only on a failed one. A commit whose object
+// still carries its signature and whose content the ledger also records is
+// doubly attested, and a reader learning that from the same field either way is
+// better served than one who has to know which path produced the answer.
+func (v *Verifier) attributeByContent(ctx context.Context, repo string, c commit, claim Claim, rep *Report) {
+	if v.cfg.Content == nil {
+		return
+	}
+	content := checkContent(ctx, contentInput{
+		gitPath: v.cfg.GitPath,
+		repo:    repo,
+		sha:     c.SHA,
+		runID:   claim.Run,
+	}, v.cfg.Content)
+	rep.Content = &content
 }
 
 // refusedChecks is the report for a commit whose attribution cannot be checked
