@@ -130,6 +130,9 @@ func TestSPI004RetireDeletesEntryAndLeavesTheLedgerAlone(t *testing.T) {
 		extra: event.Fields{
 			event.FieldAgentType: run.AgentType,
 			event.FieldTaskRef:   "RM-015",
+			// ADR-0045, required under schema 2.
+			event.FieldRepo:   "github.com/acme/api",
+			event.FieldBranch: "main",
 		},
 	})
 

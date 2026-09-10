@@ -48,7 +48,11 @@ const (
 	// "JIRA-118", and a SPIFFE ID whose {task_id} is the lowercased "jira-118".
 	raAgentType = "fix-ci"
 	raTaskID    = "JIRA-118"
-	raParentID  = "spiffe://innsegl.dev/spire/agent/x509pop/node-1"
+	// ADR-0045's members, required under schema 2. Fixture 01 carries the
+	// same repository, so a reader comparing the two sees one value.
+	raRepo     = "github.com/acme/api"
+	raBranch   = "main"
+	raParentID = "spiffe://innsegl.dev/spire/agent/x509pop/node-1"
 )
 
 // raSPIRE stands in for RM-015's admin client.
@@ -275,6 +279,10 @@ func raArgs(key string) map[string]any {
 		"agent_type":      raAgentType,
 		"task_id":         raTaskID,
 		"idempotency_key": key,
+		// Required under schema 2 (ADR-0045). A run says where it works from
+		// the moment it exists, not only if it later signs something.
+		"repo":   raRepo,
+		"branch": raBranch,
 	}
 }
 
@@ -409,8 +417,13 @@ func TestMCP001RegisterAgentAdvertisesTheDocumentedSchemas(t *testing.T) {
 	if tool == nil {
 		t.Fatalf("tools/list does not advertise register_agent: %+v", res.Tools)
 	}
+	// IP §4's three, plus the three ADR-0045 adds. The ADR says why that is
+	// allowed where a renamed tool would not be: "Tool names and error classes
+	// are protected; arguments are additive, so this is not itself a protected
+	// surface change." The OUTPUT shape is IP §4's and unchanged -- a client
+	// written against version 1 still reads every field it expects.
 	assertSchemaProperties(t, "inputSchema", tool.InputSchema,
-		[]string{"agent_type", "task_id", "idempotency_key"})
+		[]string{"agent_type", "task_id", "idempotency_key", "repo", "branch", "parent_run_id"})
 	assertSchemaProperties(t, "outputSchema", tool.OutputSchema,
 		[]string{"spiffe_id", "run_id", "expires_at"})
 }

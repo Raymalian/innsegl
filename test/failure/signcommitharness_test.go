@@ -679,6 +679,7 @@ func (c *campaign) signRegister(t *testing.T, f signFlags, prefix string) regist
 	out := c.callOnce(t, session, mcp.ToolRegisterAgent, map[string]any{
 		"agent_type": crashAgentType, "task_id": crashTaskID,
 		"idempotency_key": c.name(prefix),
+		"repo":            v2Repo, "branch": v2Branch,
 	})
 	d.reap()
 	var reply registerReply

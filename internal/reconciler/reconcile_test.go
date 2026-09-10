@@ -222,6 +222,7 @@ func TestREC002AnIntentWithARealLogEntryIsRepairedNotExpired(t *testing.T) {
 		event.FieldIntentEventID:  intentID,
 		event.FieldRepo:           testRepo,
 		event.FieldTreeHash:       testTree,
+		event.FieldPatchID:        "ffffffffffffffffffffffffffffffffffffffff",
 		event.FieldCommitSHA:      testCommit,
 		event.FieldRekorEntryUUID: f.log.entries[testCommit].UUID,
 		event.FieldRunID:          f.runID,
@@ -313,6 +314,9 @@ func TestAnIntentClaimingAnotherTrustDomainIsNeverActedOn(t *testing.T) {
 		event.FieldIdempotencyKey: "reg-" + runID,
 		event.FieldAgentType:      "demo",
 		event.FieldTaskRef:        "RM-035",
+		// ADR-0045, required under schema 2.
+		event.FieldRepo:   "github.com/acme/api",
+		event.FieldBranch: "main",
 	}); err != nil {
 		t.Fatalf("seed run_registered: %v", err)
 	}
@@ -325,6 +329,7 @@ func TestAnIntentClaimingAnotherTrustDomainIsNeverActedOn(t *testing.T) {
 		event.FieldIdempotencyKey: "sign_commit/intent/" + runID,
 		event.FieldRepo:           testRepo,
 		event.FieldTreeHash:       testTree,
+		event.FieldPatchID:        "ffffffffffffffffffffffffffffffffffffffff",
 	})
 	if err != nil {
 		t.Fatalf("seed commit_intent: %v", err)
@@ -472,6 +477,7 @@ func TestAnIntentWhoseKeyIsNotSignCommitsFallsBackToTheReconcilersOwnNamespace(t
 		event.FieldSpiffeID:      spiffeIDFor("run-nokey"),
 		event.FieldRepo:          testRepo,
 		event.FieldTreeHash:      testTree,
+		event.FieldPatchID:       "ffffffffffffffffffffffffffffffffffffffff",
 	})
 	if err != nil {
 		t.Fatalf("seed: %v", err)

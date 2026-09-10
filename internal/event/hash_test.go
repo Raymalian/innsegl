@@ -31,7 +31,7 @@ func TestSER001GenesisConstantIsDerived(t *testing.T) {
 	}
 
 	// And the same value, frozen as a fixture.
-	if got := string(readFixtureFile(t, "genesis.hash")); got != want {
+	if got := string(readV1FixtureFile(t, "genesis.hash")); got != want {
 		t.Errorf("genesis.hash fixture = %s, want %s", got, want)
 	}
 

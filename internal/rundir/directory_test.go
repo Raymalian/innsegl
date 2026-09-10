@@ -35,9 +35,12 @@ func (f *fakeEvents) EventsForRun(_ context.Context, runID string) ([]event.Fiel
 }
 
 const (
-	testRunID    = "run-42"
-	testAgent    = "fix-ci"
-	testTask     = "jira-118"
+	testRunID = "run-42"
+	testAgent = "fix-ci"
+	testTask  = "jira-118"
+	// ADR-0045, required under schema 2: a run records where it worked.
+	testRepo     = "github.com/acme/api"
+	testBranch   = "main"
 	testSPIFFEID = "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42"
 )
 
@@ -54,6 +57,8 @@ func registered(position int64, ts string) event.Fields {
 		event.FieldSource:        event.SourceMCP,
 		event.FieldAgentType:     testAgent,
 		event.FieldTaskRef:       testTask,
+		event.FieldRepo:          testRepo,
+		event.FieldBranch:        testBranch,
 	}
 }
 
@@ -366,6 +371,8 @@ func TestTheDirectoryAsksTheLedgerForTheRunItWasAskedAbout(t *testing.T) {
 const (
 	fixture01AgentType = "fix-ci"
 	fixture01TaskRef   = "JIRA-118"
+	fixture01Repo      = "github.com/acme/api"
+	fixture01Branch    = "main"
 	fixture01RunID     = "run-42"
 	fixture01SPIFFEID  = "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42"
 )
@@ -384,6 +391,8 @@ func fixture01Registered() event.Fields {
 		event.FieldSource:        event.SourceMCP,
 		event.FieldAgentType:     fixture01AgentType,
 		event.FieldTaskRef:       fixture01TaskRef,
+		event.FieldRepo:          fixture01Repo,
+		event.FieldBranch:        fixture01Branch,
 	}
 }
 

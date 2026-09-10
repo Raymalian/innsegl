@@ -285,7 +285,12 @@ func TestSER003EnvelopeShape(t *testing.T) {
 		mut  func(*Envelope)
 		want error
 	}{
-		{"wrong schema_version", func(e *Envelope) { e.SchemaVersion = "2" }, ErrInvalidField},
+		// A version this build does not emit. "1" is deliberate: it is a
+		// version this build can READ and must not WRITE, which is the whole
+		// of doc 08's rule -- a new version is accepted alongside the old one
+		// on the read path and emitted alone on the write path.
+		{"an earlier schema_version", func(e *Envelope) { e.SchemaVersion = "1" }, ErrInvalidField},
+		{"a later schema_version", func(e *Envelope) { e.SchemaVersion = "3" }, ErrInvalidField},
 		{"missing schema_version", func(e *Envelope) { e.SchemaVersion = "" }, ErrInvalidField},
 		{"upper-case event_id", func(e *Envelope) {
 			e.EventID = strings.ToUpper(e.EventID)
@@ -574,6 +579,12 @@ func TestSER003EnvelopeMatchesGoldenFixture(t *testing.T) {
 	f, err := e.FieldsWith(Fields{
 		"agent_type": golden.input["agent_type"],
 		"task_ref":   golden.input["task_ref"],
+		// ADR-0045's members are type-specific, so they arrive through
+		// FieldsWith exactly as agent_type and task_ref always have. The
+		// envelope itself is unchanged by schema 2, which is the point:
+		// doc 02 §2's envelope is common to every version by construction.
+		FieldRepo:   golden.input[FieldRepo],
+		FieldBranch: golden.input[FieldBranch],
 	})
 	if err != nil {
 		t.Fatalf("FieldsWith: %v", err)

@@ -97,6 +97,8 @@ func TestPRI003NoTicketReferenceReachesAPublicRecord(t *testing.T) {
 		"agent_type":      priAgentType,
 		"task_id":         priTaskRef,
 		"idempotency_key": "pri-003",
+		"repo":            raRepo,
+		"branch":          raBranch,
 	})
 
 	// (1) The SPIFFE ID. This string IS the certificate's URI SAN and IS the
@@ -219,6 +221,8 @@ func TestPRI003LiteralModeIsWhatTheSystemDidBefore(t *testing.T) {
 		"agent_type":      raAgentType,
 		"task_id":         raTaskID,
 		"idempotency_key": "pri-003-literal",
+		"repo":            raRepo,
+		"branch":          raBranch,
 	})
 	want := "spiffe://" + raTrustDomain + "/agent/" + raAgentType + "/" +
 		strings.ToLower(raTaskID) + "/" + out.RunID
@@ -244,6 +248,8 @@ func TestPRI003AReplayMintsTheSameIdentity(t *testing.T) {
 		"agent_type":      priAgentType,
 		"task_id":         priTaskRef,
 		"idempotency_key": "pri-003-replay",
+		"repo":            raRepo,
+		"branch":          raBranch,
 	}
 	first := raCallOK(t, session, args)
 	second := raCallOK(t, session, args)

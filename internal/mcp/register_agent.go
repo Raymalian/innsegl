@@ -75,6 +75,18 @@ type registerAgentIn struct {
 	TaskID string `json:"task_id"`
 	// IdempotencyKey makes the call repeatable (IP §6.6, ADR-0004).
 	IdempotencyKey string `json:"idempotency_key"`
+	// Repo and Branch say WHERE this run works, from the moment it exists.
+	//
+	// Required under schema 2 (ADR-0045). Before it, a repository was recorded
+	// only as a side effect of signing, so a run that signed nothing recorded
+	// nowhere it had been: 26 subagent runs and 1979 tool calls, not one of
+	// them saying which repository. An optional field would leave that hole
+	// open for the first caller that omitted it.
+	Repo   string `json:"repo,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	// ParentRunID is the run that started this one. Absent on a root run,
+	// which is why it is optional where the other two are not.
+	ParentRunID string `json:"parent_run_id,omitempty"`
 }
 
 // registerAgentOut is IP §4's result shape, verbatim.
@@ -356,7 +368,7 @@ func (c *RegisterAgentConfig) identity(ctx context.Context, run spire.RunRef) (s
 // one. event_id, ts, chain_position, prev_event_hash and event_hash are the
 // ledger's to assign and are deliberately absent.
 func registerAgentEvent(run spire.RunRef, spiffeID string, in registerAgentIn) event.Fields {
-	return event.Fields{
+	body := event.Fields{
 		event.FieldSchemaVersion:  event.SchemaVersion,
 		event.FieldEventType:      event.EventTypeRunRegistered,
 		event.FieldSource:         event.SourceMCP,
@@ -373,6 +385,19 @@ func registerAgentEvent(run spire.RunRef, spiffeID string, in registerAgentIn) e
 		event.FieldAgentType: in.AgentType,
 		event.FieldTaskRef:   in.TaskID,
 	}
+	// Written only when supplied. Under schema 1 these are not members at all,
+	// so a v1 event carrying one is refused by the closed schema; under 2 the
+	// first two are required and the validator says so by name.
+	if in.Repo != "" {
+		body[event.FieldRepo] = in.Repo
+	}
+	if in.Branch != "" {
+		body[event.FieldBranch] = in.Branch
+	}
+	if in.ParentRunID != "" {
+		body[event.FieldParentRunID] = in.ParentRunID
+	}
+	return body
 }
 
 // registerAgentRunPrefix and registerAgentRunIDHexDigits shape the derived run

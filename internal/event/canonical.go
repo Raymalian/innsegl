@@ -48,13 +48,13 @@ import (
 
 const (
 	// SchemaVersion is the schema_version this package emits (doc 02 §2).
-	SchemaVersion = "1"
+	SchemaVersion = "2"
 
 	// SerializerVersion is the version tag of the canonical serializer. It is
 	// the same number as SchemaVersion by construction: the serialization is
 	// part of the schema, so there is no such thing as a new serializer under
 	// an unchanged schema version.
-	SerializerVersion = "1"
+	SerializerVersion = "2"
 
 	// HashPrefix is the algorithm prefix on every hash string (doc 02 §1).
 	HashPrefix = "sha256:"
@@ -377,6 +377,19 @@ type FormatSpec struct {
 // changed, and the serializer is what must be reverted.
 const formatFingerprintV1 = "sha256:c7b107b02fd51e19e85e08d3c91c98fbb60ba501211ac7fb6249dcf0bf3d4f44"
 
+// formatFingerprintV2 is the same probe under serializer version 2.
+//
+// It differs from V1 for one reason and only one: the probe embeds
+// `schema_version` and `serializer_version`, which are now "2". The
+// serialization itself is untouched -- RFC 8785 JCS, the same member ordering,
+// the same escaping -- which is what doc 02 §4 means by "the part that can never
+// change".
+//
+// Computed once from the live serializer and frozen here. The same rule as V1
+// applies from now on: do not update it to make a test pass. A mismatch means
+// the serializer changed, and the serializer is what must be reverted.
+const formatFingerprintV2 = "sha256:50db195a0c3df3c58e950eba3d8e5fc3bcc3f2565768de2cfa7d4a4db50ac54b"
+
 // serializerRegistry holds one entry per serializer version that has ever
 // existed. Entries are never removed: verification of old records is supported
 // forever, without exception (VERSIONING.md).
@@ -386,6 +399,17 @@ var serializerRegistry = map[string]FormatSpec{
 		SchemaVersion: "1",
 		GenesisSeed:   "innsegl-genesis-v1",
 		Fingerprint:   formatFingerprintV1,
+	},
+	"2": {
+		Version:       "2",
+		SchemaVersion: "2",
+		// THE GENESIS SEED DOES NOT CHANGE, and must not. It is the root of
+		// this chain, not a property of a schema version: doc 02 §4.4 ties it
+		// to `chain_position` 1, and every event ever appended hanges off it.
+		// Changing it would orphan the entire history, which is the one thing
+		// a schema bump may never do (I4).
+		GenesisSeed: "innsegl-genesis-v1",
+		Fingerprint: formatFingerprintV2,
 	},
 }
 

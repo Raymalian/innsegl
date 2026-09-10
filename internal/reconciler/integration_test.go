@@ -361,6 +361,8 @@ func TestREC001And002And005AgainstRealSigstoreAndARealChain(t *testing.T) {
 	}
 	t.Logf("REC-002 state diff: the two runs are identical except %v", want)
 
+	assertRepairCarriesTheIntentsPatchID(t, crashedEvents)
+
 	// -----------------------------------------------------------------------
 	// REC-005: a fresh reconciler over the reconciled state appends nothing.
 	// -----------------------------------------------------------------------
@@ -494,6 +496,11 @@ func (p projection) normalise(t *testing.T) []event.Fields {
 		// differ per run on purpose, so that the two runs cannot accidentally
 		// share a commit. It is checked directly against git instead.
 		event.FieldTreeHash: true,
+		// And the patch id for exactly that reason: it identifies the CHANGE
+		// (ADR-0047), and the two runs make deliberately different changes.
+		// The claim worth making about it is WITHIN a run rather than across
+		// the two, and assertRepairCarriesTheIntentsPatchID below makes it.
+		event.FieldPatchID: true,
 	}
 
 	out := make([]event.Fields, 0, len(p.events))
@@ -700,6 +707,9 @@ func (w *world) run(ctx context.Context, t *testing.T, runID string) testRun {
 		event.FieldIdempotencyKey: "register-" + runID,
 		event.FieldAgentType:      agentType,
 		event.FieldTaskRef:        testTaskRef,
+		// ADR-0045, required under schema 2.
+		event.FieldRepo:   "github.com/acme/api",
+		event.FieldBranch: "main",
 	}); err != nil {
 		t.Fatalf("seed run_registered for %s: %v", runID, err)
 	}
@@ -835,4 +845,50 @@ func commitObjects(t *testing.T, worktree string) int {
 		}
 	}
 	return n
+}
+
+// memberString reads a string member, reporting a wrong type rather than
+// silently reading it as absent -- an empty patch id and a missing one lead to
+// different conclusions below.
+func memberString(t *testing.T, rec event.Fields, name string) string {
+	t.Helper()
+	if rec[name] == nil {
+		return ""
+	}
+	s, ok := rec[name].(string)
+	if !ok {
+		t.Fatalf("%s is %T, want a string", name, rec[name])
+	}
+	return s
+}
+
+// assertRepairCarriesTheIntentsPatchID is ADR-0047 through the repair path.
+//
+// The reconciler has no working tree and must never need one: it repairs from
+// the ledger and Rekor alone. So it cannot recompute a patch id, and carries
+// the intent's forward — which is correct precisely because the repair is the
+// COMPLETION of that intent and names the change the intent named. A repair
+// that invented a different id, or none, would break the join #193's verifier
+// makes between a rebased commit and the run that produced it.
+func assertRepairCarriesTheIntentsPatchID(t *testing.T, events []event.Fields) {
+	t.Helper()
+
+	var intent, recorded string
+	for _, rec := range events {
+		switch rec[event.FieldEventType] {
+		case event.EventTypeCommitIntent:
+			intent = memberString(t, rec, event.FieldPatchID)
+		case event.EventTypeCommitRecorded:
+			recorded = memberString(t, rec, event.FieldPatchID)
+		}
+	}
+	if intent == "" {
+		t.Fatal("the crashed run's commit_intent carries no patch_id, so this case " +
+			"cannot say anything about the repair carrying it forward")
+	}
+	if recorded != intent {
+		t.Errorf("the repair recorded patch_id %q and the intent it completes recorded "+
+			"%q; the change the ledger names is not the change that was intended",
+			recorded, intent)
+	}
 }

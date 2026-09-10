@@ -567,8 +567,10 @@ func (s *stack) signCommitPrelude(t *testing.T, store *ledger.Store, run spire.R
 		event.FieldSpiffeID:       probe.Outcome.SPIFFEID,
 		event.FieldSource:         event.SourceMCP,
 		event.FieldIdempotencyKey: fmt.Sprintf("spi007-%s-%d", run.RunID, n),
-		event.FieldRepo:           "github.com/raymalian/innsegl",
+		event.FieldRepo:           "github.com/innsegl/spi007",
 		event.FieldTreeHash:       strings.Repeat("a1b2", 10),
+		// ADR-0047, required on commit_intent under schema 2.
+		event.FieldPatchID: strings.Repeat("c3d4", 10),
 	})
 	if err != nil {
 		t.Fatalf("appending commit_intent for %+v: %v", run, err)

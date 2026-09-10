@@ -119,14 +119,25 @@ if [ -z "$RUN_GIVEN" ] && [ -n "$ROOT" ]; then
 fi
 
 # The repository identifier the MCP resolves against its workspace: host/org/name.
+# doc 02 §5 lowercases the HOST and leaves the org and the name alone, so
+# `github.com/KodyMike/Repo` is correct and lowercasing all three would name a
+# repository that does not exist on a case-sensitive forge. The hook applies
+# the same rule; a difference between the two would show up as a refusal from
+# the tool with no obvious cause.
 REPO="${INNSEGL_REPO_ID:-$(git remote get-url origin 2>/dev/null \
-  | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$||')}"
+  | sed -e 's|^[a-z][a-z0-9+.-]*://||' -e 's|^git@||' -e 's|:|/|' -e 's|\.git$||' -e 's|/*$||' \
+  | awk -F/ 'NF>=3 { h = tolower($1); p = $2; for (i = 3; i <= NF; i++) p = p "/" $i; print h "/" p }')}"
 [ -n "$REPO" ] || { echo "innsegl-commit: no origin remote; set INNSEGL_REPO_ID" >&2; exit 2; }
 
 # The task, from the branch. Same derivation the harness hook uses, and for the
 # same reason: doc 02 §5's grammar is [a-z0-9][a-z0-9-]{0,62}, so a branch name
 # with a slash is refused. An RM number is this project's own task identifier.
-BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
+# symbolic-ref first: on an unborn branch rev-parse fails and the branch would
+# be recorded as "detached", and under ADR-0045 `branch` is a member of
+# run_registered rather than a log line.
+BRANCH="$(git symbolic-ref --short --quiet HEAD 2>/dev/null)"
+[ -n "$BRANCH" ] || BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
+[ -n "$BRANCH" ] && [ "$BRANCH" != "HEAD" ] || BRANCH="detached"
 TASK="$(printf '%s' "$BRANCH" | tr 'A-Z' 'a-z' | sed -n 's/.*\(rm[0-9][0-9]*\).*/\1/p')"
 if [ -z "$TASK" ]; then
   TASK="$(printf '%s' "$BRANCH" | tr 'A-Z' 'a-z' \
@@ -214,8 +225,13 @@ if [ -n "$RUN_GIVEN" ]; then
   RUN="$RUN_GIVEN"
   echo "innsegl-commit: signing under the existing run $RUN (task $TASK)"
 else
+  # repo and branch are required members of run_registered under schema 2
+  # (ADR-0045), and this script already resolves both -- it just used to keep
+  # them to itself, so a run it registered recorded nowhere it worked unless
+  # the signature that followed happened to succeed.
   OUT="$(mcp "$ADMIN_URL" register_agent \
-    "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' "$AGENT_TYPE" "$TASK" "$RUN_KEY")")" \
+    "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s","repo":"%s","branch":"%s"}' \
+      "$AGENT_TYPE" "$TASK" "$RUN_KEY" "$REPO" "$BRANCH")")" \
     || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
   RUN="$(printf '%s' "$OUT" | field run_id)" || fail "register_agent refused"
   echo "innsegl-commit: run $RUN  (agent $AGENT_TYPE, task $TASK)"
