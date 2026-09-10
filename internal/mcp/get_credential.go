@@ -160,6 +160,10 @@ type CredentialConfig struct {
 	// Restorer re-creates the entry of a live, unretired run whose
 	// authorisation the reaper withdrew. Optional; nil keeps the old refusal.
 	Restorer CredentialRestorer
+	// AbandonAfter bounds how long a run whose authorisation the reaper
+	// withdrew may still be restored here. See RegisterAgentConfig.AbandonAfter
+	// for why a horizon exists at all; zero means none.
+	AbandonAfter time.Duration
 	// RunTokenSecret keys the per-run token this tool requires (runtoken.go).
 	//
 	// EMPTY MEANS NO AUTHENTICATION, and that is the state every deployment
@@ -189,6 +193,7 @@ type credentialService struct {
 	entries   CredentialEntries
 	restorer  CredentialRestorer
 	runSecret string
+	abandon   time.Duration
 	minter    CredentialMinter
 	ledger    CredentialLedger
 	audiences []string
@@ -245,6 +250,7 @@ func ConfigureGetCredential(cfg CredentialConfig) error {
 		entries:   cfg.Entries,
 		restorer:  cfg.Restorer,
 		runSecret: cfg.RunTokenSecret,
+		abandon:   cfg.AbandonAfter,
 		minter:    cfg.Minter,
 		ledger:    cfg.Ledger,
 		audiences: slices.Clone(audiences),
@@ -369,6 +375,13 @@ func (c *credentialService) issue(ctx context.Context, in getCredentialIn) (getC
 		// nothing still refuses.
 		class, known := spire.ClassOf(active)
 		if c.restorer == nil || !known || class != spire.ClassRunNotFound {
+			return getCredentialOut{}, active
+		}
+		// Abandoned long enough that nothing is coming back for it. Refused as
+		// the gate already refused it, so an abandoned run is indistinguishable
+		// from one SPIRE simply has no entry for.
+		if c.abandon > 0 && !run.ExpiredAt.IsZero() &&
+			c.now().Sub(run.ExpiredAt) > c.abandon {
 			return getCredentialOut{}, active
 		}
 		if rerr := c.restorer.RestoreRun(ctx, ref); rerr != nil {

@@ -192,18 +192,30 @@ type raEnv struct {
 type raRuns struct {
 	mu      sync.Mutex
 	retired map[string]time.Time
+	expired map[string]time.Time
 	known   map[string]bool
 	err     error
 }
 
 func newRARuns() *raRuns {
-	return &raRuns{retired: map[string]time.Time{}, known: map[string]bool{}}
+	return &raRuns{
+		retired: map[string]time.Time{},
+		expired: map[string]time.Time{},
+		known:   map[string]bool{},
+	}
 }
 
 func (r *raRuns) remember(runID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.known[runID] = true
+}
+
+func (r *raRuns) expire(runID string, at time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.known[runID] = true
+	r.expired[runID] = at
 }
 
 func (r *raRuns) retire(runID string, at time.Time) {
@@ -225,6 +237,9 @@ func (r *raRuns) CredentialRun(_ context.Context, runID string) (CredentialRun, 
 	out := CredentialRun{RunID: runID}
 	if at, ok := r.retired[runID]; ok {
 		out.RetiredAt = at
+	}
+	if at, ok := r.expired[runID]; ok {
+		out.ExpiredAt = at
 	}
 	return out, true, nil
 }
@@ -1304,5 +1319,82 @@ func TestRegisterAgentReplayLeavesAHealthyEntryAlone(t *testing.T) {
 	}
 	if got := env.identities.entryCount(); got != 1 {
 		t.Errorf("SPIRE holds %d entries, want 1", got)
+	}
+}
+
+// The error paths of healing, which IP §2's branch floor requires be reachable
+// and not merely written. Each is a way the repair can fail, and none of them
+// may be answered by pretending the run is fine.
+
+// A directory that cannot be asked is not an answer that the run is healthy.
+func TestRegisterAgentReplaySurfacesADirectoryFailure(t *testing.T) {
+	env := raSetup(t, DefaultIdempotencyLease, nil)
+	session := raServe(t)
+	const key = "reg-directory-down"
+
+	first := raCallOK(t, session, raArgs(key))
+	env.runs.remember(first.RunID)
+	env.identities.reapAll()
+	env.runs.err = errors.New("the ledger is unreachable")
+
+	wire := raCallFail(t, session, raArgs(key))
+	if wire == nil {
+		t.Fatal("a replay whose directory was unreachable succeeded; the entry is still gone")
+	}
+}
+
+// A SPIRE that cannot be asked whether an entry exists is likewise not an answer.
+func TestRegisterAgentReplaySurfacesALookupFailure(t *testing.T) {
+	env := raSetup(t, DefaultIdempotencyLease, nil)
+	session := raServe(t)
+	const key = "reg-lookup-down"
+
+	first := raCallOK(t, session, raArgs(key))
+	env.runs.remember(first.RunID)
+	env.identities.reapAll()
+	env.identities.lookupErr = errors.New("spire-server is unreachable")
+
+	if wire := raCallFail(t, session, raArgs(key)); wire == nil {
+		t.Fatal("a replay whose SPIRE lookup failed succeeded")
+	}
+}
+
+// A run abandoned past the horizon is not healed. See CredentialRun.ExpiredAt:
+// a killed process fires no retirement hook, so without a horizon its identity
+// stays mintable forever.
+func TestRegisterAgentReplayDoesNotHealALongAbandonedRun(t *testing.T) {
+	env := raSetup(t, DefaultIdempotencyLease, func(cfg *RegisterAgentConfig) {
+		cfg.AbandonAfter = 7 * 24 * time.Hour
+	})
+	session := raServe(t)
+	const key = "reg-abandoned"
+
+	first := raCallOK(t, session, raArgs(key))
+	env.runs.remember(first.RunID)
+	env.runs.expire(first.RunID, env.clock.at.Add(-30*24*time.Hour))
+	env.identities.reapAll()
+
+	raCallOK(t, session, raArgs(key))
+	if got := env.identities.entryCount(); got != 0 {
+		t.Fatalf("SPIRE holds %d entries after resuming a run abandoned for a month, want 0",
+			got)
+	}
+}
+
+// With no directory wired, healing does nothing at all — a deployment gains no
+// resurrection it did not configure.
+func TestRegisterAgentReplayWithoutADirectoryHealsNothing(t *testing.T) {
+	env := raSetup(t, DefaultIdempotencyLease, func(cfg *RegisterAgentConfig) {
+		cfg.Runs = nil
+	})
+	session := raServe(t)
+	const key = "reg-no-directory"
+
+	raCallOK(t, session, raArgs(key))
+	env.identities.reapAll()
+	raCallOK(t, session, raArgs(key))
+
+	if got := env.identities.entryCount(); got != 0 {
+		t.Fatalf("SPIRE holds %d entries with no run directory wired, want 0", got)
 	}
 }

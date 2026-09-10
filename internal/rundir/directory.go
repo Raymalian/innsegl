@@ -159,8 +159,19 @@ func (d *Directory) CredentialRun(ctx context.Context, runID string) (mcp.Creden
 			run.TaskID = identity.taskRef
 			registered = true
 
+		case event.EventTypeRunExpired:
+			// EARLIEST, for retiredAt's reason: two reapers that both acted
+			// leave two events, and every caller must be told the same instant.
+			at, err := instantOf(rec, runID, event.EventTypeRunExpired)
+			if err != nil {
+				return mcp.CredentialRun{}, false, err
+			}
+			if run.ExpiredAt.IsZero() || at.Before(run.ExpiredAt) {
+				run.ExpiredAt = at
+			}
+
 		case event.EventTypeRunRetired:
-			at, err := retiredAt(rec, runID)
+			at, err := instantOf(rec, runID, event.EventTypeRunRetired)
 			if err != nil {
 				return mcp.CredentialRun{}, false, err
 			}
@@ -242,15 +253,15 @@ func runIdentity(rec event.Fields, runID string) (identity, error) {
 // INVARIANT_VIOLATION, not an empty `retired_at`. The reply's entire content
 // is one instant, and a blank one is exactly the shape a vacuously-passing
 // idempotency test takes."
-func retiredAt(rec event.Fields, runID string) (time.Time, error) {
+func instantOf(rec event.Fields, runID, kind string) (time.Time, error) {
 	raw, ok := rec[event.FieldTS].(string)
 	if !ok {
-		return time.Time{}, malformed(runID, "run_retired for %q carries no readable ts", runID)
+		return time.Time{}, malformed(runID, "%s for %q carries no readable ts", kind, runID)
 	}
 	ts, err := event.ParseTimestamp(raw)
 	if err != nil {
-		return time.Time{}, malformed(runID, "run_retired for %q carries the unreadable ts %q: %v",
-			runID, raw, err)
+		return time.Time{}, malformed(runID, "%s for %q carries the unreadable ts %q: %v",
+			kind, runID, raw, err)
 	}
 	return ts.Time(), nil
 }

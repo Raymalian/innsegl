@@ -53,6 +53,19 @@ type CredentialRun struct {
 	// RetiredAt is the instant `run_retired` was appended, zero for a live
 	// run. I4: retirement removes the identity, never the record.
 	RetiredAt time.Time
+	// ExpiredAt is the EARLIEST `run_expired`, zero if the reaper never took
+	// this run's authorisation.
+	//
+	// It is not retirement and must never be read as it: expiry withdraws a
+	// credential from a run that went quiet, and a quiet agent is often one
+	// waiting on a usage limit or a human. That is why a resumed run can have
+	// its entry restored at all.
+	//
+	// It is kept because that restoration cannot be unbounded. A run whose
+	// process was killed fires no retirement hook, so nothing ever ends it, and
+	// without a horizon its identity stays mintable forever. This is the
+	// instant that horizon is measured from.
+	ExpiredAt time.Time
 }
 
 // credentialRunIdentity returns the SPIFFE ID to mint for AND the run
