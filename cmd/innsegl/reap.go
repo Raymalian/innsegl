@@ -121,7 +121,7 @@ func runReapCommand(args []string, stdout, stderr io.Writer, deps reapDeps) int 
 		dsn = fs.String("dsn", os.Getenv(envLedgerDSN),
 			"ledger connection string — prefer the environment variable ($"+envLedgerDSN+")")
 		grace = fs.Duration("grace", envDuration(envReapGrace, spire.DefaultReapGrace),
-			"slack added to each entry's own TTL before its run is called orphaned ($"+envReapGrace+")")
+			"how long a run may be silent past its TTL before it is called orphaned ($"+envReapGrace+")")
 		timeout = fs.Duration("timeout", envDuration(envSPIRETimeout, spire.DefaultTimeout),
 			"bound on one SPIRE admin RPC ($"+envSPIRETimeout+")")
 		asJSON   = fs.Bool("json", false, "write the report as JSON")
@@ -131,7 +131,8 @@ func runReapCommand(args []string, stdout, stderr io.Writer, deps reapDeps) int 
 	fs.Usage = func() {
 		fprintf(stderr, "innsegl reap - delete identity entries orphaned past their TTL (IP §6.7)\n\n")
 		fprintf(stderr, "Usage:\n  innsegl reap [flags]\n\n")
-		fprintf(stderr, "Sweeps once and exits. Run it on a schedule, single-active; see doc 05 §2.\n\n")
+		fprintf(stderr, "Sweeps once and exits. Run it on a schedule, single-active; see doc 05 §2.\n")
+		fprintf(stderr, "A run past its TTL that is still appending to the ledger is NOT reaped (#180).\n\n")
 		fprintf(stderr, "Exit status:\n")
 		fprintf(stderr, "  %d  the sweep completed; every orphan found was reaped\n", exitOK)
 		fprintf(stderr, "  %d  the command line was not understood\n", exitUsage)
@@ -269,6 +270,10 @@ type reapRunJSON struct {
 	SPIFFEID string `json:"spiffe_id"`
 	EntryID  string `json:"entry_id"`
 	Deadline string `json:"deadline"`
+	// LastActive is present when the run was spared by its own work rather
+	// than by its TTL (#180). A monitor seeing a live entry whose deadline has
+	// passed needs this field to tell "still working" from "reaper broken".
+	LastActive string `json:"last_active,omitempty"`
 }
 
 type reapNoteJSON struct {
@@ -297,12 +302,16 @@ func reapReportView(report *spire.SweepReport) reapReportJSON {
 		})
 	}
 	for _, c := range report.Live {
-		view.Live = append(view.Live, reapRunJSON{
+		run := reapRunJSON{
 			RunID:    c.Run.RunID,
 			SPIFFEID: c.Entry.SPIFFEID,
 			EntryID:  c.Entry.ID,
 			Deadline: c.Deadline.UTC().Format(time.RFC3339),
-		})
+		}
+		if !c.LastActivity.IsZero() {
+			run.LastActive = c.LastActivity.UTC().Format(time.RFC3339)
+		}
+		view.Live = append(view.Live, run)
 	}
 	for _, s := range report.Skipped {
 		view.Skipped = append(view.Skipped, reapNoteJSON{
@@ -369,6 +378,12 @@ func openReaper(ctx context.Context, opts reapOptions) (sweeper, func(), error) 
 		Client: client,
 		Ledger: store,
 		Grace:  opts.grace,
+		// The same store, asked a second question: not "record this expiry"
+		// but "is this run still working?" (#180). Without it the sweep judges
+		// an entry by its age alone, which is what deleted two working agents'
+		// identities on 2026-09-08 -- a subagent works for hours on one
+		// registration and re-registers never. See internal/spire/silence.go.
+		Activity: store,
 	})
 	if err != nil {
 		unwindAll()
