@@ -151,10 +151,14 @@ type Proof struct {
 	Certificate verify.CertificateInfo `json:"certificate"`
 	Entry       verify.EntryInfo       `json:"entry"`
 	Recovered   []verify.Recovered     `json:"recovered,omitempty"`
-	Notes       []string               `json:"notes,omitempty"`
-	Upstreams   []Upstream             `json:"upstreams"`
-	Material    Material               `json:"material"`
-	DataAsOf    time.Time              `json:"data_as_of"`
+	// Content is ADR-0047's answer: did a signed run produce this CHANGE?
+	// Absent when no ledger was configured to ask, which is a different thing
+	// from "no" and is why it is a pointer (doc 06 P2).
+	Content   *verify.ContentAttribution `json:"content,omitempty"`
+	Notes     []string                   `json:"notes,omitempty"`
+	Upstreams []Upstream                 `json:"upstreams"`
+	Material  Material                   `json:"material"`
+	DataAsOf  time.Time                  `json:"data_as_of"`
 }
 
 // The upstream paths this BFF fetches material from.
@@ -284,6 +288,7 @@ func (p *Prover) Prove(ctx context.Context, repo, revision string) (Proof, error
 		CommitSHA:   rep.CommitSHA,
 		TreeHash:    rep.TreeHash,
 		Verdict:     string(rep.Verdict),
+		Content:     rep.Content,
 		Checks:      rep.Checks,
 		Claim:       rep.Claim,
 		Certificate: rep.Certificate,

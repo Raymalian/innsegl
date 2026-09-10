@@ -24,7 +24,7 @@ import { Icon } from "../common/Icon";
 import type { IconName } from "../common/Icon";
 import type { Verdict } from "./types";
 
-const SHARED: Record<Exclude<Verdict, "verified">, IconName> = {
+const SHARED: Record<Exclude<Verdict, "verified" | "content-verified">, IconName> = {
   failed: "integrity-alert",
   unavailable: "unknown",
   unattributed: "empty",
@@ -37,6 +37,39 @@ export interface ProofIconProps {
 }
 
 export function ProofIcon({ verdict, className }: ProofIconProps) {
+  // ADR-0047's state gets its own silhouette, drawn here for the same reason
+  // the verification mark is: it is a claim about a verification, and doc 06
+  // §6.4 forbids colour being the only signal. A reader in greyscale, or with
+  // a colour-vision deficiency, must still see that this is not the mark that
+  // means "this commit is proven".
+  //
+  // THE TICK WITHOUT THE RING, and the silhouette carries the meaning: the
+  // verified mark is a ring enclosing a tick, and here the tick survives while
+  // the ring — the commit object the signature sat in — does not. Legible at
+  // 1em, which a busier drawing was not: an earlier attempt put a small arrow
+  // under the tick and at badge size the two ran together.
+  if (verdict === "content-verified") {
+    return (
+      <svg
+        aria-hidden="true"
+        focusable="false"
+        data-icon="content-mark"
+        viewBox="0 0 16 16"
+        width="1em"
+        height="1em"
+        className={className}
+      >
+        <path
+          d="M2.5 8.5 L6.5 12.5 L13.5 3.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
   if (verdict !== "verified") {
     return <Icon name={SHARED[verdict]} className={className} />;
   }

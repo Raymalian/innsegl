@@ -15,7 +15,8 @@
  * simplification:
  *
  *   Result   verified | failed | unavailable        (doc 06 §4.1, P2)
- *   Verdict  the same three, plus `unattributed`    (VER-006)
+ *   Verdict  the same three, plus `unattributed` (VER-006) and
+ *            `content-verified` (ADR-0047, doc 06 §4.2)
  *   Agreement agrees | contradicts | underivable    (#48's re-derivation)
  *
  * `unattributed` is not a fourth verdict about a verification; it is a
@@ -28,8 +29,18 @@
 /** One check's outcome. doc 06 §4.1 requires exactly these three. */
 export type CheckResult = "verified" | "failed" | "unavailable";
 
-/** The rollup, plus the commit-level state VER-006 requires. */
-export type Verdict = CheckResult | "unattributed";
+/**
+ * The rollup, plus two states that are not about a check's outcome.
+ *
+ * `content-verified` is ADR-0047's, added to doc 06 §4.2 on 2026-09-10: the
+ * commit OBJECT was rewritten and its signature did not survive, and the
+ * CHANGE the commit makes is one a signed run recorded. Every merge strategy
+ * GitHub offers rewrites the object, so this is the ordinary state of an
+ * agent's commit once it reaches a default branch. It is weaker than
+ * `verified` — the message, the parent and the author belong to whoever merged
+ * it — and it is not `failed`, which would accuse a genuine signature.
+ */
+export type Verdict = CheckResult | "unattributed" | "content-verified";
 
 /** One piece of evidence behind a check (doc 06 P1). */
 export interface Fact {

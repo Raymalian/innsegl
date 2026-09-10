@@ -19,6 +19,7 @@ import { strings } from "./strings";
 import {
   badgeBase,
   hairline,
+  proofContent,
   proofFailed,
   proofNeutral,
   proofUnavailable,
@@ -31,6 +32,8 @@ const TONE: Record<Verdict, string> = {
   verified: proofVerified,
   failed: proofFailed,
   unavailable: proofUnavailable,
+  // Violet: proven, but a weaker claim than the green (ADR-0047, §4.2).
+  "content-verified": proofContent,
   // Not a verdict about cryptography, so not one of the three hues (§5.3).
   unattributed: proofNeutral,
 };

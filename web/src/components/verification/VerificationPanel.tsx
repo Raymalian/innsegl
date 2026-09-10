@@ -63,6 +63,7 @@ import {
   noticeBody,
   noticeTitle,
   panelShell,
+  proofContent,
   proofFailed,
   proofNeutral,
   proofUnavailable,
@@ -183,6 +184,7 @@ const VERDICT_TONE: Record<Verdict, string> = {
   failed: proofFailed,
   unavailable: proofUnavailable,
   unattributed: proofNeutral,
+  "content-verified": proofContent,
 };
 
 function VerdictBadge({ verdict }: { readonly verdict: Verdict }) {

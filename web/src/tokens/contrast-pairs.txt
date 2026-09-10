@@ -33,6 +33,8 @@
 --innsegl-color-proof-verified-text       --innsegl-color-surface-default           4.5  "Verified" as bare text on a panel
 --innsegl-color-proof-failed-text         --innsegl-color-proof-failed-surface      4.5  "Failed" inside its badge
 --innsegl-color-proof-failed-text         --innsegl-color-surface-default           4.5  "Failed" as bare text on a panel
+--innsegl-color-proof-content-text        --innsegl-color-proof-content-surface     4.5  "Content verified" inside its badge
+--innsegl-color-proof-content-text        --innsegl-color-surface-default           4.5  "Content verified" as bare text on a panel
 --innsegl-color-proof-unavailable-text    --innsegl-color-proof-unavailable-surface 4.5  "Verification unavailable" inside its badge
 --innsegl-color-proof-unavailable-text    --innsegl-color-surface-default           4.5  "Verification unavailable" as bare text
 
