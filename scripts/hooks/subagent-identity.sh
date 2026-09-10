@@ -157,23 +157,55 @@ run_id_of() {
   printf '%s' "$_id"
 }
 
-# derive_task sets BRANCH, TASK and REPO from the MAIN worktree.
+# branch_at names the branch checked out in one worktree, or the empty string.
+#
+# symbolic-ref before rev-parse: on an UNBORN branch -- a repository whose first
+# commit has not been made -- rev-parse fails and the branch would be recorded as
+# "detached", which under ADR-0045 is not a shrug in a log line any more but a
+# wrong value in an append-only record. symbolic-ref reads the name HEAD points
+# at whether or not anything is committed there yet.
+branch_at() {
+  _b="$(git -C "$1" symbolic-ref --short --quiet HEAD 2>/dev/null)"
+  [ -n "$_b" ] || _b="$(git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  printf '%s' "$_b"
+}
+
+# derive_task sets BRANCH from the agent's OWN worktree, and TASK and REPO from
+# what that implies.
 #
 # A function because two events need it now: a subagent's registration and the
 # operator's own session. It was inline in SubagentStart when only subagents
 # had identities.
 derive_task() {
   # `git worktree list` reports the main worktree first, from inside any
-  # linked one, so this resolves the same branch wherever it runs.
+  # linked one, so MAIN resolves the same path wherever this runs. The
+  # REPOSITORY is read from there, because the origin remote is the repository's
+  # and not a worktree's.
   MAIN="$(git -C "${CWD:-.}" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
   [ -n "$MAIN" ] || MAIN="${CWD:-.}"
-  # symbolic-ref before rev-parse: on an UNBORN branch -- a repository whose
-  # first commit has not been made -- rev-parse fails and the branch would be
-  # recorded as "detached", which under ADR-0045 is not a shrug in a log line
-  # any more but a wrong value in an append-only record. symbolic-ref reads the
-  # name HEAD points at whether or not anything is committed there yet.
-  BRANCH="$(git -C "$MAIN" symbolic-ref --short --quiet HEAD 2>/dev/null)"
-  [ -n "$BRANCH" ] || BRANCH="$(git -C "$MAIN" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+
+  # THE BRANCH IS THE ONE THE AGENT IS ACTUALLY ON.
+  #
+  # doc 02 stores `branch` verbatim in an append-only record, so it has to be
+  # the branch the agent's commits land on -- which is the branch of the
+  # worktree it is standing in, not the trunk the repository happens to have
+  # checked out somewhere else.
+  #
+  # Measured 2026-09-10: four subagents, each in its own worktree on its own
+  # feature branch, all registered `branch: main`. The ledger said every agent
+  # was working on the trunk while not one of them was, and `task_ref` -- which
+  # is folded from the branch -- was wrong in the same four rows.
+  #
+  # The one exception is Claude Code's OWN worktree isolation, measured
+  # 2026-09-07: it puts a subagent in .claude/worktrees/agent-<id> on a
+  # throwaway branch named worktree-agent-<id>. Nobody works on that branch and
+  # it is deleted with the agent, so recording it gave every agent its own junk
+  # task where one shared task belonged. THAT shape, and only that shape, falls
+  # back to the main worktree's branch.
+  BRANCH="$(branch_at "${CWD:-.}")"
+  case "$BRANCH" in
+    worktree-agent-*|"") BRANCH="$(branch_at "$MAIN")" ;;
+  esac
   # A genuinely detached HEAD has no branch, and "detached" is the honest
   # answer rather than a name: doc 02 stores `branch` verbatim, so inventing
   # one would put a branch in the ledger that does not exist.
@@ -226,6 +258,11 @@ derive_task() {
     *) REPO="" ;;
   esac
 }
+
+# Sourcing this file defines its functions and dispatches nothing, so the
+# derivation above can be driven by a test with no harness, no MCP and no
+# network. Set only by tests; the harness never sets it.
+[ -n "${INNSEGL_HOOK_LIB:-}" ] && return 0
 
 case "$EVENT" in
 
