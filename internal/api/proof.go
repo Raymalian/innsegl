@@ -245,6 +245,43 @@ func NewProver(cfg ProofConfig) (*Prover, error) {
 	return p, nil
 }
 
+// RepoPath is the local path holding a served repository's objects, and false
+// for a name this deployment does not serve.
+//
+// Read-only and additive: it hands out what ProofConfig was already given, so a
+// caller can run git against the same checkout the Prover uses. It gives away no
+// database and creates no route to one — invariant 3 above is untouched, and
+// deliberately: the reason a Prover holds no ledger is that it must be incapable
+// of a database-only answer, not that its repository map is a secret.
+func (p *Prover) RepoPath(name string) (string, bool) {
+	path, ok := p.cfg.Repos[name]
+	return path, ok
+}
+
+// GitPath is the git binary the Prover resolved, so a caller runs the same one.
+func (p *Prover) GitPath() string { return p.gitPath }
+
+// CommitMessage resolves a revision in a served repository and returns its full
+// SHA and its message.
+//
+// It runs through the Prover's own git helper so the caller-supplied revision
+// gets the same fencing every other read gets: a timeout, a literal argv and
+// `--end-of-options`. Reading a commit's message is not verification and needs
+// no ledger, so it does not touch invariant 3.
+func (p *Prover) CommitMessage(ctx context.Context, repo, rev string) (string, string, error) {
+	out, err := p.git(ctx, repo, "show", "-s", "--format=%H%n%B", "--end-of-options",
+		rev+"^{commit}")
+	if err != nil {
+		return "", "", err
+	}
+	text := string(out)
+	nl := strings.IndexByte(text, '\n')
+	if nl < 0 {
+		return "", "", fmt.Errorf("git show produced no message for %s", rev)
+	}
+	return strings.TrimSpace(text[:nl]), text[nl+1:], nil
+}
+
 // Repos returns the repository names this BFF serves, sorted. The public page
 // needs them to say what it can answer about.
 func (p *Prover) Repos() []string {
