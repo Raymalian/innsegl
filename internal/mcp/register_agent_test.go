@@ -466,12 +466,19 @@ func TestMCP001RegisterAgentAdvertisesTheDocumentedSchemas(t *testing.T) {
 	// IP §4's three, plus the three ADR-0045 adds. The ADR says why that is
 	// allowed where a renamed tool would not be: "Tool names and error classes
 	// are protected; arguments are additive, so this is not itself a protected
-	// surface change." The OUTPUT shape is IP §4's and unchanged -- a client
-	// written against version 1 still reads every field it expects.
+	// surface change."
+	//
+	// The OUTPUT now carries a fourth, `run_token`, and that is a change to IP
+	// §4 rather than an inference from it: the operator amended line 76 to
+	// admit it. The compatibility argument is the one ADR-0045 already made for
+	// arguments — a client written against version 1 still reads every field it
+	// expects, and one that does not know `run_token` simply does not send it,
+	// which is exactly the deployment that configures no secret. It is OPTIONAL
+	// in the schema for that reason.
 	assertSchemaProperties(t, "inputSchema", tool.InputSchema,
 		[]string{"agent_type", "task_id", "idempotency_key", "repo", "branch", "parent_run_id"})
 	assertSchemaProperties(t, "outputSchema", tool.OutputSchema,
-		[]string{"spiffe_id", "run_id", "expires_at"})
+		[]string{"spiffe_id", "run_id", "expires_at", "run_token"})
 }
 
 // assertSchemaProperties reads the advertised schema the way a client does —

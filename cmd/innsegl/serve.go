@@ -103,6 +103,17 @@ const (
 	envIdentityMode   = "INNSEGL_IDENTITY_MODE"
 	envIdentitySecret = "INNSEGL_IDENTITY_SECRET" //nolint:gosec // the NAME of the variable, not a secret
 
+	// envRunTokenSecret keys the per-run token get_credential requires
+	// (internal/mcp/runtoken.go).
+	//
+	// UNSET MEANS NO AUTHENTICATION, which is the state this deployment was in
+	// before the variable existed: get_credential mints for whatever run_id it
+	// is handed, without workload attestation, and a run id is public — it is in
+	// the Agent-Run trailer of every commit. Setting this makes the token
+	// mandatory. It is deliberately NOT defaulted to the identity secret: one
+	// key with two purposes is a key whose compromise means two things.
+	envRunTokenSecret = "INNSEGL_RUN_TOKEN_SECRET" //nolint:gosec // the NAME of the variable, not a secret
+
 	// envIdentitySecretFile names the FILE the secret is in, and exists
 	// because a deployment cannot use the variable above (RM-084, #124).
 	// Compose can mount a volume and it cannot read one into an environment
@@ -197,6 +208,7 @@ type serveOptions struct {
 	identityMode       string
 	identitySecret     string
 	identitySecretFile string
+	runTokenSecret     string
 }
 
 // pseudonyms builds what decides whether the SPIFFE ID — and so the Fulcio
@@ -595,6 +607,12 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 				"It is needed to CREATE a pseudonym and never to resolve one: resolution goes "+
 				"through the ledger's run_registered row, so losing or rotating this does not "+
 				"orphan history ($"+envIdentitySecret+")")
+		runTokenSecret = fs.String("run-token-secret", os.Getenv(envRunTokenSecret),
+			"the deployment secret the per-run credential token is keyed with. UNSET "+
+				"MEANS NO AUTHENTICATION: get_credential mints for whatever run_id it is "+
+				"handed, and a run id is public — it is in the Agent-Run trailer of every "+
+				"commit. Set it and every caller must present the token register_agent "+
+				"returned for that run ($"+envRunTokenSecret+")")
 		identitySecretFile = fs.String("identity-secret-file", os.Getenv(envIdentitySecretFile),
 			"file holding that secret, for a deployment that generates one into a volume "+
 				"and so has nothing to put in the variable above. Leading and trailing "+
@@ -661,6 +679,7 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		healthTimeout: *healthTimeout, requireRole: *requireRole, migrate: *migrate,
 		identityMode: *identityMode, identitySecret: *identitySecret,
 		identitySecretFile: *identitySecretFile,
+		runTokenSecret:     *runTokenSecret,
 	}
 	// Before validate, because validate builds a Pseudonymiser out of the
 	// resolved secret and would otherwise refuse a deployment that supplied

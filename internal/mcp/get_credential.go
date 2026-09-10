@@ -160,6 +160,14 @@ type CredentialConfig struct {
 	// Restorer re-creates the entry of a live, unretired run whose
 	// authorisation the reaper withdrew. Optional; nil keeps the old refusal.
 	Restorer CredentialRestorer
+	// RunTokenSecret keys the per-run token this tool requires (runtoken.go).
+	//
+	// EMPTY MEANS NO AUTHENTICATION, and that is the state every deployment
+	// before this was in: a run id is public, so anything that could reach this
+	// listener could mint any agent's credential. Set it and the token becomes
+	// mandatory. Left empty the tool behaves exactly as it did, so enabling it
+	// is an operator's decision and not a silent break of every running agent.
+	RunTokenSecret string
 	// Minter mints the JWT-SVID. Required.
 	Minter CredentialMinter
 	// Ledger records the issuance. Required — I3 admits no action without a
@@ -180,6 +188,7 @@ type credentialService struct {
 	runs      CredentialRuns
 	entries   CredentialEntries
 	restorer  CredentialRestorer
+	runSecret string
 	minter    CredentialMinter
 	ledger    CredentialLedger
 	audiences []string
@@ -235,6 +244,7 @@ func ConfigureGetCredential(cfg CredentialConfig) error {
 		runs:      cfg.Runs,
 		entries:   cfg.Entries,
 		restorer:  cfg.Restorer,
+		runSecret: cfg.RunTokenSecret,
 		minter:    cfg.Minter,
 		ledger:    cfg.Ledger,
 		audiences: slices.Clone(audiences),
@@ -248,6 +258,11 @@ func ConfigureGetCredential(cfg CredentialConfig) error {
 type getCredentialIn struct {
 	RunID    string `json:"run_id"`
 	Audience string `json:"audience"`
+	// RunToken is the secret register_agent handed this run once. Required
+	// when the deployment configures RunTokenSecret; ignored when it does not.
+	// Tool ARGUMENTS are additive and are not a protected surface (doc 08); the
+	// tool name and its error classes are, and neither moves.
+	RunToken string `json:"run_token,omitempty"`
 }
 
 // getCredentialOut is IP §4's result shape, exactly: {jwt_svid, expires_at}.
@@ -306,6 +321,18 @@ func (c *credentialService) issue(ctx context.Context, in getCredentialIn) (getC
 	// Gate 3 — the run exists and has not been retired. The ledger is what
 	// knows the difference between a run that was retired and one that never
 	// existed; SPIRE cannot tell them apart, because both have no entry.
+	// Gate 0 — the run's own token, when the deployment requires one.
+	//
+	// Before every other gate on purpose. The gates below report whether a run
+	// exists, whether it was retired and when: answered for an unauthenticated
+	// caller they are an oracle over every run id read off a commit trailer.
+	// One refusal, before anything is looked up, tells a caller nothing it did
+	// not already know.
+	if c.runSecret != "" && !RunTokenValid(c.runSecret, in.RunID, in.RunToken) {
+		return getCredentialOut{}, Errorf(ClassRunNotFound, in.RunID,
+			"no run %q", in.RunID)
+	}
+
 	run, found, err := c.runs.CredentialRun(ctx, in.RunID)
 	if err != nil {
 		return getCredentialOut{}, credentialLedgerError(in.RunID, err)
