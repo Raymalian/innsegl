@@ -144,12 +144,62 @@ REPO="${INNSEGL_REPO_ID:-$(git remote get-url origin 2>/dev/null \
 # So `-w` decides where git reads, not only what sign_commit is told. Absolute
 # is taken as given; relative is MCP-029's meaning, a linked worktree of this
 # repository.
+# RELATIVE TO THE MAIN WORKTREE, NEVER TO WHERE YOU HAPPEN TO STAND.
+#
+# `git rev-parse --show-toplevel` answers with the LINKED worktree when you are
+# standing in one, and MCP-029's `worktree` is relative to the REPOSITORY. Join
+# the two and you get the path twice:
+#
+#   .worktrees/583/.worktrees/583
+#
+# reported from the field on 2026-09-10, along with the other half: run from a
+# linked worktree with no -w at all, the script read that worktree's index while
+# sign_commit committed in the main checkout, and the staged_ref check refused
+# the mismatch. Between them there was no way to sign from a worktree, which is
+# where a subagent works.
+#
+# `git worktree list` reports the main worktree first from inside any linked
+# one, so it is the one stable base both cases can be resolved against.
+MAIN_WT="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
+[ -n "$MAIN_WT" ] || MAIN_WT="$ROOT"
+HERE_WT="$(cd "$ROOT" 2>/dev/null && pwd -P)"
+MAIN_WT="$(cd "$MAIN_WT" 2>/dev/null && pwd -P)"
+
+# AND IT DERIVES ITSELF WHEN YOU DID NOT PASS IT. Standing in a linked worktree
+# is the whole signal; asking the caller to say so as well is asking them to
+# repeat what the shell already knows, and the field report is what that costs.
+if [ -z "$WORKTREE" ] && [ -n "$HERE_WT" ] && [ "$HERE_WT" != "$MAIN_WT" ]; then
+  case "$HERE_WT" in
+    "$MAIN_WT"/*) WORKTREE="${HERE_WT#"$MAIN_WT"/}" ;;
+  esac
+fi
+
 case "$WORKTREE" in
-  "")  WT="$ROOT" ;;
+  "")  WT="$MAIN_WT" ;;
   /*)  WT="$WORKTREE" ;;
-  *)   WT="$ROOT/$WORKTREE" ;;
+  *)
+    # Against the main worktree first, because that is what -w means. Then
+    # against where you are standing, because a caller who typed the path they
+    # can see is not wrong in any way worth refusing over.
+    if [ -d "$MAIN_WT/$WORKTREE" ]; then WT="$MAIN_WT/$WORKTREE"
+    elif [ "$HERE_WT" != "${HERE_WT%/"$WORKTREE"}" ]; then WT="$HERE_WT"
+    elif [ -d "$PWD/$WORKTREE" ]; then WT="$PWD/$WORKTREE"
+    else WT="$MAIN_WT/$WORKTREE"
+    fi
+    ;;
 esac
-[ -d "$WT" ] || { echo "innsegl-commit: -w $WORKTREE is not a directory ($WT)" >&2; exit 2; }
+if [ ! -d "$WT" ]; then
+  echo "innsegl-commit: -w $WORKTREE names no directory." >&2
+  echo "innsegl-commit:   tried $MAIN_WT/$WORKTREE" >&2
+  [ "$HERE_WT" != "$MAIN_WT" ] && echo "innsegl-commit:   and    $HERE_WT" >&2
+  exit 2
+fi
+# Re-expressed relative to the repository, which is what sign_commit's argument
+# means; an absolute path here would name a directory the server cannot see.
+case "$WT" in
+  "$MAIN_WT")   WORKTREE="" ;;
+  "$MAIN_WT"/*) WORKTREE="${WT#"$MAIN_WT"/}" ;;
+esac
 
 # The task, from the branch. Same derivation the harness hook uses, and for the
 # same reason: doc 02 §5's grammar is [a-z0-9][a-z0-9-]{0,62}, so a branch name
