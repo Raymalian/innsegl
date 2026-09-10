@@ -142,12 +142,40 @@ func runMigrateSchemaCommand(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 
-	head, err := store.Head(ctx)
+	// THE CUTOVER IS FOUND, NOT ASSUMED.
+	//
+	// It used to be head + 1, which is right only when this runs before a
+	// single upgraded writer starts. On 2026-09-10 this deployment was rebuilt
+	// first and eight schema 2 events landed before anyone reached for the
+	// attestation; head + 1 would then have recorded a boundary with events of
+	// the new version on the wrong side of it, in a chain that cannot be
+	// edited. doc 02 §3 defines cutover_position as "the position where events
+	// begin carrying the new version" — a fact about the chain, so the chain
+	// is asked.
+	cutover, mixed, err := ledger.SchemaSpan(ctx, store.Pool(), event.SchemaVersion)
 	if err != nil {
-		fprintf(stderr, "innsegl migrate-schema: reading the head: %v\n", err)
+		fprintf(stderr, "innsegl migrate-schema: finding the cutover: %v\n", err)
 		return exitReapInconclusive
 	}
-	cutover := head.Position + 1
+	if mixed {
+		fprintf(stderr, "innsegl migrate-schema: REFUSED — this chain interleaves "+
+			"schema %s with an earlier version after position %d, so no single "+
+			"position separates them and any cutover_position would be wrong. "+
+			"Stop the writers still emitting the old version, then run this again.\n",
+			event.SchemaVersion, cutover)
+		return exitReapIncomplete
+	}
+	if cutover == 0 {
+		// Nothing of the new version yet: this is the documented order, run
+		// before the upgraded writers, and the attestation is itself the first
+		// event to carry it.
+		head, herr := store.Head(ctx)
+		if herr != nil {
+			fprintf(stderr, "innsegl migrate-schema: reading the head: %v\n", herr)
+			return exitReapInconclusive
+		}
+		cutover = head.Position + 1
+	}
 
 	record, err := store.Append(ctx, event.Fields{
 		event.FieldSchemaVersion:     event.SchemaVersion,
@@ -172,21 +200,24 @@ func runMigrateSchemaCommand(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		fprintf(stderr, "innsegl migrate-schema: the ledger stored the attestation "+
 			"without an integer chain_position (%T); it cannot be confirmed to name "+
-			"the position it occupies\n", record[event.FieldChainPosition])
+			"a position at all\n", record[event.FieldChainPosition])
 		return exitReapIncomplete
 	}
-	if landed != cutover {
+	// The attestation may land after the cutover it names -- that is the case
+	// where the writers were upgraded first -- but never BEFORE it, which
+	// would claim a boundary that had not happened yet.
+	if landed < cutover {
 		fprintf(stderr, "innsegl migrate-schema: INCONSISTENT - the attestation names "+
-			"position %d as the cutover and landed at %d. Something appended to this "+
-			"chain between the two, so the attestation is wrong and I4 forbids "+
-			"removing it; append a superseding one with the writers stopped.\n",
-			cutover, landed)
+			"position %d as the cutover and landed at %d, which is before it. I4 "+
+			"forbids removing it; append a superseding one with the writers "+
+			"stopped.\n", cutover, landed)
 		return exitReapIncomplete
 	}
 
-	fprintf(stdout, "innsegl migrate-schema: schema %s -> %s attested at position %d "+
-		"(event %v)\n", *from, event.SchemaVersion, landed, record[event.FieldEventID])
+	fprintf(stdout, "innsegl migrate-schema: schema %s -> %s attested: the cutover is "+
+		"position %d, recorded by event %v at position %d\n",
+		*from, event.SchemaVersion, cutover, record[event.FieldEventID], landed)
 	fprintf(stdout, "  Events before %d stay valid under schema %s, forever (doc 08, I4).\n",
-		landed, *from)
+		cutover, *from)
 	return exitOK
 }

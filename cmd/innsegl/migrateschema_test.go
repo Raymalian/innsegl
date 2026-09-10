@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -143,4 +144,82 @@ func openLedgerForTest(t *testing.T, dsn string) *ledger.Store {
 	}
 	t.Cleanup(store.Close)
 	return store
+}
+
+// TestLED040TheCutoverIsFoundWhenTheWritersWentFirst — RM-119, #191.
+//
+// The documented order is: attest, then upgrade the writers. The order that
+// actually happened on 2026-09-10 was the other one — the deployment was
+// rebuilt and eight schema 2 events landed before anyone reached for the
+// attestation.
+//
+// head + 1 would then have recorded a boundary with events of the NEW version
+// on the wrong side of it. doc 02 §3 defines cutover_position as "the position
+// where events begin carrying the new version"; that is a fact about the chain
+// rather than about when this command was run, so the chain is asked.
+func TestLED040TheCutoverIsFoundWhenTheWritersWentFirst(t *testing.T) {
+	dsn, _ := freshLedgerDB(t)
+	ctx := t.Context()
+	store := openLedgerForTest(t, dsn)
+
+	// Writers first: three events of the current version, then the attestation.
+	for i := range 3 {
+		if _, err := store.Append(ctx, event.Fields{
+			event.FieldSchemaVersion:  event.SchemaVersion,
+			event.FieldEventType:      event.EventTypeToolCall,
+			event.FieldSource:         event.SourceMCP,
+			event.FieldRunID:          "run-a",
+			event.FieldSpiffeID:       "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-a",
+			event.FieldIdempotencyKey: fmt.Sprintf("tool-%d", i),
+			event.FieldToolName:       "record_event",
+			event.FieldPayloadDigest: "sha256:" +
+				"0000000000000000000000000000000000000000000000000000000000000000",
+		}); err != nil {
+			t.Fatalf("seed event %d: %v", i, err)
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	if code := runMigrateSchemaCommand([]string{"-dsn", dsn}, &out, &errOut); code != exitOK {
+		t.Fatalf("migrate-schema = %d\n%s", code, errOut.String())
+	}
+
+	att := lastSchemaMigrated(t, store)
+	cutover, ok := att[event.FieldCutoverPosition].(int64)
+	if !ok {
+		t.Fatalf("cutover_position is %T", att[event.FieldCutoverPosition])
+	}
+	position, _ := att[event.FieldChainPosition].(int64) //nolint:errcheck // asserted below
+	if cutover != 1 {
+		t.Errorf("cutover_position = %d, want 1: the first event of this version is "+
+			"at position 1, and that is where the version begins whatever position "+
+			"the attestation itself occupies", cutover)
+	}
+	if position <= cutover {
+		t.Errorf("the attestation is at %d and names %d; here it must land AFTER the "+
+			"cutover, because the writers went first", position, cutover)
+	}
+	if !strings.Contains(out.String(), "cutover is position 1") {
+		t.Errorf("the report does not name the cutover it found:\n%s", out.String())
+	}
+}
+
+// lastSchemaMigrated returns the newest attestation in the chain.
+func lastSchemaMigrated(t *testing.T, store *ledger.Store) event.Fields {
+	t.Helper()
+	n, err := store.Count(t.Context())
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	events, err := store.Events(t.Context(), 1, n)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i][event.FieldEventType] == event.EventTypeSchemaMigrated {
+			return events[i]
+		}
+	}
+	t.Fatal("the chain holds no schema_migrated event")
+	return nil
 }
