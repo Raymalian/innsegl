@@ -246,3 +246,97 @@ func (w *GitWorkspace) run(ctx context.Context, dir string, stdin *strings.Reade
 	}
 	return strings.TrimRight(string(out), "\n"), nil
 }
+
+// CommitsOnBranch is ADR-0047's walk: every commit on a branch, with the change
+// it makes and the run it claims.
+//
+// # Why the run comes from the trailer and not from a lookup
+//
+// `Agent-Run` is what the COMMIT says about itself. The pass then checks that
+// claim against the ledger, and a claim checked against a record is the whole
+// mechanism; reading the run from the ledger instead would be checking the
+// ledger against itself.
+//
+// # Two invocations, not one per commit
+//
+// `git log` emits the SHAs and the trailers in one pass, and `git patch-id`
+// reads a stream of diffs in another. A branch has thousands of commits, and a
+// process per commit would make the pass cost more than the merge it records.
+func (w *GitWorkspace) CommitsOnBranch(ctx context.Context, repo, branch string) ([]RepoCommit, error) {
+	if branch == "" {
+		return nil, fmt.Errorf("reconciler: no branch to walk in %s; a pass that "+
+			"guessed one would record rewrites from a history nobody asked about", repo)
+	}
+	dir, err := w.worktree(repo)
+	if err != nil {
+		return nil, err
+	}
+
+	// %H and the Agent-Run trailer, one commit per record. The NUL separator
+	// is git's own, because a commit message may contain anything else.
+	out, err := w.run(ctx, dir, nil, "log", "--no-merges", "-z",
+		"--format=%H %(trailers:key=Agent-Run,valueonly=true,separator=%x2C)", branch)
+	if err != nil {
+		return nil, fmt.Errorf("reconciler: walking %s in %s: %w", branch, repo, err)
+	}
+
+	var commits []RepoCommit
+	for _, record := range strings.Split(out, "\x00") {
+		record = strings.TrimSpace(record)
+		if record == "" {
+			continue
+		}
+		sha, run, _ := strings.Cut(record, " ")
+		if err := event.ValidateGitObjectID(sha); err != nil {
+			continue
+		}
+		if len(commits) >= maxRepoCommits {
+			return nil, fmt.Errorf("reconciler: %s holds more than %d commits on %s; "+
+				"raise the bound deliberately rather than recording a truncated view",
+				repo, maxRepoCommits, branch)
+		}
+		commits = append(commits, RepoCommit{SHA: sha, RunID: strings.TrimSpace(run)})
+	}
+	if len(commits) == 0 {
+		return nil, nil
+	}
+	return w.withPatchIDs(ctx, dir, commits)
+}
+
+// withPatchIDs fills in each commit's change identity.
+//
+// `git patch-id` reads a stream of diffs and prints one line per patch, so the
+// whole branch goes through one invocation. Its second column is the commit the
+// diff came from, which is what lets the answers be matched back.
+//
+// `--verbatim` for sign_commit's reason: the default folds whitespace, and in
+// Python or a Makefile that is a different program. A commit with no output is
+// one that changes nothing, and it keeps an empty patch id — outside the scheme
+// rather than an error.
+func (w *GitWorkspace) withPatchIDs(ctx context.Context, dir string, commits []RepoCommit) ([]RepoCommit, error) {
+	shas := make([]string, 0, len(commits))
+	for _, c := range commits {
+		shas = append(shas, c.SHA)
+	}
+	patch, err := w.run(ctx, dir, strings.NewReader(strings.Join(shas, "\n")+"\n"),
+		"diff-tree", "-p", "--root", "--no-color", "--no-ext-diff", "--stdin")
+	if err != nil {
+		return nil, fmt.Errorf("reconciler: reading the changes in %s: %w", dir, err)
+	}
+	ids, err := w.run(ctx, dir, strings.NewReader(patch), "patch-id", "--verbatim")
+	if err != nil {
+		return nil, fmt.Errorf("reconciler: git patch-id --verbatim in %s: %w", dir, err)
+	}
+
+	byCommit := make(map[string]string, len(commits))
+	for _, line := range strings.Split(ids, "\n") {
+		patchID, commit, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if ok {
+			byCommit[commit] = patchID
+		}
+	}
+	for i := range commits {
+		commits[i].PatchID = byCommit[commits[i].SHA]
+	}
+	return commits, nil
+}
