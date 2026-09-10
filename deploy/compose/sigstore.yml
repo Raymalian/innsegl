@@ -342,7 +342,7 @@ services:
       - innsegl-rekor-index
     ports:
       # Loopback only. Same reasoning as fulcio's.
-      - "127.0.0.1:${INNSEGL_REKOR_PORT:-3000}:3000"
+      - "127.0.0.1:${INNSEGL_REKOR_PORT:-23000}:3000"
     volumes:
       - sigstore-rekor-key:/etc/rekor:ro
     read_only: true
