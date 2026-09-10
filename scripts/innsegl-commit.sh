@@ -229,11 +229,37 @@ else
   # (ADR-0045), and this script already resolves both -- it just used to keep
   # them to itself, so a run it registered recorded nowhere it worked unless
   # the signature that followed happened to succeed.
+  #
+  # AND IT FALLS BACK, because a client and a server upgrade at different
+  # moments. The MCP SDK validates arguments against the tool's advertised
+  # inputSchema and refuses additional properties outright:
+  #
+  #   validating "arguments": validating root: unexpected additional
+  #   properties ["repo" "branch"]
+  #
+  # So a new script against a not-yet-restarted server does not degrade, it
+  # STOPS -- and stopping means no identity, which means the human cannot
+  # commit at all. The second attempt drops the two members and registers the
+  # schema 1 event that server still writes. Nothing is lost that was not
+  # already absent before ADR-0045, and the moment the deployment is restarted
+  # the first attempt succeeds again.
+  # The retry is driven by the PAYLOAD, not by the exit status: `mcp` returns
+  # 0 for a JSON-RPC error, because the transport worked and the server
+  # answered. `field` is what reads the answer, so `field` is what decides.
+  V1ARGS="$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' \
+    "$AGENT_TYPE" "$TASK" "$RUN_KEY")"
   OUT="$(mcp "$ADMIN_URL" register_agent \
     "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s","repo":"%s","branch":"%s"}' \
       "$AGENT_TYPE" "$TASK" "$RUN_KEY" "$REPO" "$BRANCH")")" \
     || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
-  RUN="$(printf '%s' "$OUT" | field run_id)" || fail "register_agent refused"
+  if ! RUN="$(printf '%s' "$OUT" | field run_id 2>/dev/null)"; then
+    OUT="$(mcp "$ADMIN_URL" register_agent "$V1ARGS")" \
+      || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
+    RUN="$(printf '%s' "$OUT" | field run_id)" || fail "register_agent refused"
+    echo "innsegl-commit: this deployment does not accept repo/branch yet, so the run" >&2
+    echo "innsegl-commit:   records no repository (schema 1). Restart it to fix that:" >&2
+    echo "innsegl-commit:   make innsegl-up-here" >&2
+  fi
   echo "innsegl-commit: run $RUN  (agent $AGENT_TYPE, task $TASK)"
 
   # retire whatever happens next, including a failure. An identity left live
