@@ -279,3 +279,62 @@ export function conditionsOf(events: readonly TimelineEvent[]): readonly Conditi
 
   return found;
 }
+
+/* ---------------------------------------------------------------------------
+ * Collapsing runs of tool calls — doc 06 §3.3
+ * ------------------------------------------------------------------------ */
+
+/** One row of the timeline: either a single event, or a run of tool calls. */
+export type TimelineRow =
+  | { readonly kind: "event"; readonly event: TimelineEvent; readonly index: number }
+  | {
+      readonly kind: "tool-calls";
+      readonly events: readonly TimelineEvent[];
+      /** Index of the first member, so a caller can still ask for its chain link. */
+      readonly index: number;
+    };
+
+/** Below this many consecutive tool calls, they are left as ordinary nodes.
+ *
+ * Collapsing two rows behind a disclosure costs a click and saves nothing. The
+ * problem this solves only appears in the hundreds. */
+export const toolCallRunThreshold = 4;
+
+/** groupTimeline folds consecutive `tool_call` events into one row.
+ *
+ * doc 06 §3.3 asks for "tool-call events (count, expandable to digests)", and
+ * rendering every one as its own node was never that. MEASURED on a real run:
+ * 1220 tool calls, each a card carrying its source, chain link, tool name and
+ * two disclosures, so the events that the timeline exists to show — the
+ * registration, the intents, the recorded commits, the retirement — were
+ * hundreds of screens apart and unreachable in practice.
+ *
+ * Only CONSECUTIVE calls fold. A tool call between two commits stays where the
+ * chain put it, because the order is the evidence and this must never reorder
+ * or coalesce across another event.
+ */
+export function groupTimeline(events: readonly TimelineEvent[]): readonly TimelineRow[] {
+  const rows: TimelineRow[] = [];
+  let i = 0;
+  while (i < events.length) {
+    const event = events[i];
+    if (event === undefined) break;
+    if (event.event_type !== EVENT_TYPES.toolCall) {
+      rows.push({ kind: "event", event, index: i });
+      i += 1;
+      continue;
+    }
+    let end = i;
+    while (end < events.length && events[end]?.event_type === EVENT_TYPES.toolCall) end += 1;
+    const span = events.slice(i, end);
+    if (span.length < toolCallRunThreshold) {
+      span.forEach((member, offset) =>
+        rows.push({ kind: "event", event: member, index: i + offset }),
+      );
+    } else {
+      rows.push({ kind: "tool-calls", events: span, index: i });
+    }
+    i = end;
+  }
+  return rows;
+}

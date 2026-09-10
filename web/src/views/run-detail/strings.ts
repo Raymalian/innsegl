@@ -60,6 +60,14 @@ export const strings = {
     prevEventHash: "Previous event hash",
     empty: "This run has no events in the ledger.",
     emptyDetail: "A run with no events is a run that was never registered.",
+    /* doc 06 §3.3: "tool-call events (count, expandable to digests)". The
+     * count is the row; the calls are behind it. */
+    toolCallRun: (n: number, from: number, to: number) =>
+      `${n} tool calls · chain positions ${from} to ${to}`,
+    toolCallRunLinks: (broken: number) =>
+      broken === 0
+        ? "every chain link in this run holds"
+        : `${broken} chain link${broken === 1 ? "" : "s"} in this run cannot be checked here`,
   },
 
   event: {
