@@ -325,6 +325,7 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		Ledger:         store,
 		Idempotency:    idem,
 		RunTokenSecret: o.runTokenSecret,
+		AbandonAfter:   o.abandonAfter,
 		ParentID:       o.parentID,
 		TTL:            o.runTTL,
 		Pseudonyms:     pseudonyms,
@@ -379,6 +380,7 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		Minter:         mcp.NewSPIREMinter(mintConn),
 		Ledger:         store,
 		RunTokenSecret: o.runTokenSecret,
+		AbandonAfter:   o.abandonAfter,
 	}); cerr != nil {
 		return fail("configure get_credential: %w", cerr)
 	}

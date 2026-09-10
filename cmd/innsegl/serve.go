@@ -114,6 +114,10 @@ const (
 	// key with two purposes is a key whose compromise means two things.
 	envRunTokenSecret = "INNSEGL_RUN_TOKEN_SECRET" //nolint:gosec // the NAME of the variable, not a secret
 
+	// envAbandonAfter bounds how long a run whose authorisation the reaper
+	// withdrew may still be restored. See RegisterAgentConfig.AbandonAfter.
+	envAbandonAfter = "INNSEGL_ABANDON_AFTER"
+
 	// envIdentitySecretFile names the FILE the secret is in, and exists
 	// because a deployment cannot use the variable above (RM-084, #124).
 	// Compose can mount a volume and it cannot read one into an environment
@@ -209,6 +213,7 @@ type serveOptions struct {
 	identitySecret     string
 	identitySecretFile string
 	runTokenSecret     string
+	abandonAfter       time.Duration
 }
 
 // pseudonyms builds what decides whether the SPIFFE ID — and so the Fulcio
@@ -607,6 +612,12 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 				"It is needed to CREATE a pseudonym and never to resolve one: resolution goes "+
 				"through the ledger's run_registered row, so losing or rotating this does not "+
 				"orphan history ($"+envIdentitySecret+")")
+		abandonAfter = fs.Duration("abandon-after", envDuration(envAbandonAfter, 30*24*time.Hour),
+			"how long after the reaper withdraws a run's authorisation that run may still "+
+				"be restored by resuming it. A killed process fires no retirement hook, so "+
+				"without this an abandoned identity stays mintable forever. Deliberately "+
+				"DAYS: a short timer here is the bug this replaced, which killed working "+
+				"agents. 0 disables the horizon ($"+envAbandonAfter+")")
 		runTokenSecret = fs.String("run-token-secret", os.Getenv(envRunTokenSecret),
 			"the deployment secret the per-run credential token is keyed with. UNSET "+
 				"MEANS NO AUTHENTICATION: get_credential mints for whatever run_id it is "+
@@ -680,6 +691,7 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		identityMode: *identityMode, identitySecret: *identitySecret,
 		identitySecretFile: *identitySecretFile,
 		runTokenSecret:     *runTokenSecret,
+		abandonAfter:       *abandonAfter,
 	}
 	// Before validate, because validate builds a Pseudonymiser out of the
 	// resolved secret and would otherwise refuse a deployment that supplied
