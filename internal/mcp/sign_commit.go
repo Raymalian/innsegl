@@ -111,18 +111,28 @@ type signCommitIn struct {
 	// is NOT a filesystem path: the working tree is resolved from it by the
 	// configured workspace, so a caller cannot name a directory the deployment
 	// did not publish.
-	Repo string `json:"repo"`
+	//
+	// OPTIONAL since #199. Omit it and pass an absolute `worktree` instead:
+	// the server reads that tree's origin and derives this. Five of the six
+	// refusals a field agent hit were values the server already held, and this
+	// was the first of them.
+	Repo string `json:"repo,omitempty"`
 	// StagedRef names the tree the caller staged, as a git revision. It is
 	// resolved to a tree and required to equal the repository's own index, so
 	// the tree Phase A records is the tree Phase B signs.
-	StagedRef string `json:"staged_ref"`
+	// Optional since #199: omitted, the server reads the index of the worktree
+	// it resolved. `git commit` commits the index, so there is exactly one
+	// right answer and the caller cannot supply a better one.
+	StagedRef string `json:"staged_ref,omitempty"`
 	// Message is the commit message before trailers. It never reaches the
 	// ledger: doc 02 §3's `commit_intent` and `commit_recorded` have no member
 	// for it, which is IP E4 made mechanical.
 	Message string `json:"message"`
 	// TaskRef is the caller's task reference. It becomes the `Agent-Task`
 	// trailer and must lowercase to the task segment of the run's SPIFFE ID.
-	TaskRef string `json:"task_ref"`
+	// Optional since #199: omitted, it is read from the run's own ledger row,
+	// which is where it was recorded at registration.
+	TaskRef string `json:"task_ref,omitempty"`
 	// IdempotencyKey makes the call repeatable (IP §6.6, ADR-0004).
 	IdempotencyKey string `json:"idempotency_key"`
 	// Worktree optionally names a LINKED WORKTREE of Repo, relative to it —
@@ -412,6 +422,18 @@ func signCommit(ctx context.Context, _ *sdk.CallToolRequest, in signCommitIn) (s
 // result and a run retired since the first call must not turn a completed
 // call's replay into a refusal.
 func (c *signCommitService) sign(ctx context.Context, in signCommitIn) (signCommitOut, error) {
+	// DERIVE BEFORE VALIDATING. #199: five of the six refusals a field agent
+	// hit were values this server already held, and it reconstructed them from
+	// error text and by listing the server's own workspace. Filling them here
+	// means the refusals never happen rather than reading better.
+	//
+	// Nothing supplied is overwritten -- an explicit argument always wins, so
+	// every existing caller behaves exactly as before.
+	filled, ferr := fillFromWorktree(ctx, in, c.taskRefOf)
+	if ferr != nil {
+		return signCommitOut{}, Errorf(ClassInvariantViolation, in.RunID, "%v", ferr)
+	}
+	in = filled
 	if err := signCommitCheckRequest(in); err != nil {
 		return signCommitOut{}, err
 	}
@@ -789,6 +811,26 @@ func signCommitPhaseKey(prefix, key string) string {
 // the preimage of a signature, and an argument with no limit is one an
 // exhausted disk turns into an outage.
 const MaxSignCommitMessageBytes = 64 << 10
+
+// taskRefOf reads a run's task from the ledger row that registered it.
+//
+// The caller used to pass this, and passing it is how a mismatch happens: an
+// agent in a linked worktree derived the task from ITS branch rather than the
+// one the run was minted from, and sign_commit refused the claim -- correctly,
+// and after the fact. The value has one source and this is it.
+func (c *signCommitService) taskRefOf(ctx context.Context, runID string) (string, error) {
+	if c.runs == nil {
+		return "", errors.New("no run directory is configured, so task_ref cannot be resolved")
+	}
+	run, found, err := c.runs.CredentialRun(ctx, runID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("no run %q", runID)
+	}
+	return run.TaskID, nil
+}
 
 // signCommitCheckRequest holds IP §4's arguments to their grammars.
 //

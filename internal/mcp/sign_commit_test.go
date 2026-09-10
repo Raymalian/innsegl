@@ -910,7 +910,15 @@ func TestSignCommitRefusesAMalformedRequest(t *testing.T) {
 		{"message that is too long", func(in *signCommitIn) {
 			in.Message = strings.Repeat("m", MaxSignCommitMessageBytes+1)
 		}, ClassInvariantViolation},
-		{"no task ref", func(in *signCommitIn) { in.TaskRef = "" }, ClassInvariantViolation},
+		// `no task ref` was here and is gone: since #199 an absent task_ref is
+		// DERIVED from the run's own ledger row rather than refused. Passing it
+		// is how a mismatch happened in the field -- an agent in a linked
+		// worktree derived the task from its own branch instead of the one the
+		// run was minted from, and sign_commit refused the claim after the
+		// fact. The value has one source, and the caller is not it.
+		//
+		// The refusal it used to assert now lives where it belongs: a run this
+		// server cannot resolve is refused by taskRefOf, exercised below.
 		{"task ref that is too long", func(in *signCommitIn) {
 			in.TaskRef = strings.Repeat("t", event.MaxReferenceBytes+1)
 		}, ClassInvariantViolation},
