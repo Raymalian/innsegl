@@ -123,6 +123,13 @@ type fakeRepos struct {
 	calls   int
 }
 
+// CommitsOnBranch: nothing on the branch. Every test that uses this fake is
+// about the repair path, where ADR-0047's pass is off; a fake that invented
+// commits would give those tests a second thing to be about.
+func (f *fakeRepos) CommitsOnBranch(context.Context, string, string) ([]reconciler.RepoCommit, error) {
+	return nil, nil
+}
+
 func (f *fakeRepos) SignedCommitsWithTree(_ context.Context, repo, tree string) ([]string, error) {
 	f.calls++
 	if f.err != nil {

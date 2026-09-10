@@ -222,6 +222,11 @@ type Repos interface {
 	// treeHash and which carries a signature, sorted. An error means the
 	// repository could not be read, which is never grounds for an expiry.
 	SignedCommitsWithTree(ctx context.Context, repo, treeHash string) ([]string, error)
+	// CommitsOnBranch returns every commit on a branch with the two things
+	// ADR-0047's pass matches on: the change it makes and the run it claims.
+	// An error means the repository could not be read, which is never grounds
+	// for recording anything about it.
+	CommitsOnBranch(ctx context.Context, repo, branch string) ([]RepoCommit, error)
 }
 
 // TransparencyLog is Rekor, read-only. *RekorLog is the shipped
@@ -317,6 +322,9 @@ type Result struct {
 	// both directions (RM-036, #44). Zero — and `Enabled` false — when no
 	// `Config.Drift` was given.
 	Drift DriftResult
+	// Rebase is what ADR-0047's pass recorded. Zero — and `Enabled` false —
+	// when no `Config.Rebase` was given.
+	Rebase RebaseReport
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +361,12 @@ type Config struct {
 	// on every cycle rather than letting a deployment believe a reconciler
 	// without it is watching for drift. See drift.go.
 	Drift *DriftConfig
+	// Rebase turns on ADR-0047 decision 4: walk each named branch, and record
+	// a rewritten commit's new SHA as a SUPERSEDING `commit_recorded`. Nil
+	// leaves it OFF, and `Result.Rebase.Enabled` says so on every cycle rather
+	// than letting a deployment believe a reconciler without it is keeping
+	// lookup-by-SHA working after a merge. See rebase.go.
+	Rebase *RebaseConfig
 	// Observe receives every cycle Run performs, including a failed one.
 	Observe func(Result, error)
 }
@@ -478,6 +492,14 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	// alert would be raised about the same entry in the same cycle.
 	result.Drift = r.detectDrift(ctx, view)
 	result.Appended = append(result.Appended, result.Drift.Appended...)
+
+	// ADR-0047 decision 4, and AFTER the repairs for the same reason drift is:
+	// a `commit_recorded` this cycle wrote is on the chain by now, so a commit
+	// whose phase C was repaired minutes ago and then rebased is matched in
+	// one cycle rather than two.
+	if r.cfg.Rebase != nil {
+		result.Rebase = r.recordRebases(ctx, view.rebase)
+	}
 	return result, nil
 }
 
@@ -723,11 +745,18 @@ type ledgerView struct {
 	// drift is RM-036's fold of the same walk: the chain-derived state its
 	// two cross-checks dedupe against (drift.go). One walk, two readers.
 	drift *driftView
+	// rebase is ADR-0047's fold of the same walk: which run recorded which
+	// change, as which commit (rebase.go). Nil when the pass is off, so a
+	// deployment that does not want it does not pay to build the index.
+	rebase *rebaseView
 }
 
 // readLedger walks the chain in bounded batches and reduces it to a view.
 func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
 	view := &ledgerView{byID: map[string]openIntent{}, drift: newDriftView()}
+	if r.cfg.Rebase != nil {
+		view.rebase = newRebaseView()
+	}
 	n, err := r.cfg.Ledger.Count(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reconciler: counting the chain: %w", err)
@@ -756,6 +785,9 @@ func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
 // forward-compatibility case into an outage of the repair.
 func (v *ledgerView) observe(record event.Fields) {
 	v.drift.observe(record) // RM-036 (#44) folds the same record; see drift.go.
+	if v.rebase != nil {
+		v.rebase.observe(record) // ADR-0047 folds it too; see rebase.go.
+	}
 	switch recordString(record, event.FieldEventType) {
 	case event.EventTypeCommitIntent:
 		v.intents++
