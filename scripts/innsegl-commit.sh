@@ -171,6 +171,18 @@ MAIN_WT="$(cd "$MAIN_WT" 2>/dev/null && pwd -P)"
 if [ -z "$WORKTREE" ] && [ -n "$HERE_WT" ] && [ "$HERE_WT" != "$MAIN_WT" ]; then
   case "$HERE_WT" in
     "$MAIN_WT"/*) WORKTREE="${HERE_WT#"$MAIN_WT"/}" ;;
+    # A worktree that is NOT under the main one -- a SIBLING, which is what
+    # `git worktree add ../name` makes and what an operator gets by default.
+    # The case above only matched a nested worktree, so standing in a sibling
+    # fell through with WORKTREE empty, WT became the MAIN worktree, and the
+    # commit was made from the wrong tree's index entirely; the branch recorded
+    # was the trunk's. MEASURED 2026-09-10 on a sibling worktree: branch came
+    # out `main` where `feat/apts-se-005` was checked out under the cursor.
+    #
+    # Absolute, because it cannot be expressed relative to the main worktree.
+    # The re-expression below leaves an absolute path alone, and sign_commit
+    # refuses one it cannot see rather than signing the wrong tree quietly.
+    *) WORKTREE="$HERE_WT" ;;
   esac
 fi
 
@@ -199,6 +211,25 @@ fi
 case "$WT" in
   "$MAIN_WT")   WORKTREE="" ;;
   "$MAIN_WT"/*) WORKTREE="${WT#"$MAIN_WT"/}" ;;
+  *)
+    # A worktree of this repository that is not INSIDE it. sign_commit resolves
+    # a worktree beneath the repository the MCP has linked, so there is no
+    # argument that names this one and the server cannot reach it.
+    #
+    # Refused loudly rather than passed on. Before sibling worktrees were
+    # recognised at all this fell through to the MAIN worktree and signed THAT
+    # tree's index under this tree's name: the wrong content, attributed
+    # confidently. A refusal an operator can act on is the better failure.
+    echo "innsegl-commit: $WT is a worktree of this repository but is not inside it." >&2
+    echo "innsegl-commit:   sign_commit reaches a worktree beneath the linked repository," >&2
+    echo "innsegl-commit:   so this one has no name it can resolve." >&2
+    echo "innsegl-commit:" >&2
+    echo "innsegl-commit:   Either link it as a repository of its own:" >&2
+    echo "innsegl-commit:     make -C <innsegl> innsegl-link DIR=$WT" >&2
+    echo "innsegl-commit:   or keep worktrees inside the repository:" >&2
+    echo "innsegl-commit:     git worktree add .worktrees/<name> -b <branch>" >&2
+    exit 2
+    ;;
 esac
 
 # The task, from the branch. Same derivation the harness hook uses, and for the
