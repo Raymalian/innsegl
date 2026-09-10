@@ -20,7 +20,7 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 
 COVERPROFILE := cover.out
 
-.PHONY: all build test lint cover smoke smoke-down spire-up spire-verify \
+.PHONY: all build test test-clean lint cover smoke smoke-down spire-up spire-verify \
         spire-down spire-admin-relay-up spire-admin-relay-down \
         sigstore-up sigstore-verify sigstore-down rekor-tlog-id \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
@@ -313,6 +313,23 @@ INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
 # while a run that finished or died goes quiet immediately. No hook means no
 # registration, so there is no run for the reaper to get wrong.
 INNSEGL_MCP_ALSO ?= reap
+
+## test-clean: remove containers a killed test run left behind
+#
+# A test package brings up its own Postgres (and sometimes a SPIRE or a
+# Sigstore) in TestMain and removes it when the package finishes. A run that is
+# KILLED never gets there, and Ctrl-C during a long suite is normal.
+#
+# Measured 2026-09-10: seven throwaway databases still running, two of them
+# fourteen hours old, indistinguishable from a real one except by the random
+# name Docker had given them. They are labelled now, so this is one line and it
+# cannot touch the deployment -- innsegl-postgres carries no such label.
+test-clean:
+	@ids="$$(docker ps -aq --filter label=dev.innsegl.test 2>/dev/null)"; \
+	if [ -z "$$ids" ]; then echo "test-clean: nothing left behind"; else \
+	  echo "test-clean: removing $$(printf '%s\n' "$$ids" | grep -c .) container(s) from killed test runs"; \
+	  docker rm --force --volumes $$ids >/dev/null; fi
+	@docker network prune -f >/dev/null 2>&1 || true
 
 ## innsegl-up-here: bring the stack up signing in this working tree, not a copy
 innsegl-up-here: sigstore-up

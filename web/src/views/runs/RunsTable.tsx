@@ -60,6 +60,7 @@ import {
   cellStack,
   columnHeader,
   commitCount,
+  lastSeenLine,
   mutedCell,
   notChecked,
   repoLink,
@@ -199,7 +200,7 @@ function RunRow({
 function LastSeen({ at }: { readonly at: string }) {
   const age = lastSeen(at, new Date());
   if (age === null) return null;
-  return <span className={mutedCell}>{age}</span>;
+  return <span className={lastSeenLine}>{age}</span>;
 }
 
 function Repos({ repos }: { readonly repos: readonly string[] }) {

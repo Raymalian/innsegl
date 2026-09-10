@@ -207,6 +207,9 @@ func startPG(ctx context.Context) (*pgContainer, error) {
 		return nil, fmt.Errorf("reserve a host port: %w", err)
 	}
 	id, err := docker(ctx, "run", "--detach",
+		// Labelled so a killed run's leak is findable; see
+		// internal/ledger/pgharness_test.go and `make test-clean`.
+		"--label", "dev.innsegl.test=1",
 		"--publish", "127.0.0.1:"+port+":5432",
 		"--env", "POSTGRES_USER="+postgresUser,
 		"--env", "POSTGRES_PASSWORD="+postgresPassword,
