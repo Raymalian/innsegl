@@ -176,6 +176,7 @@ func (c *raClock) Now() time.Time {
 
 type raEnv struct {
 	identities *raSPIRE
+	runs       *raRuns
 	ledger     *ledger.Store
 	idem       *IdempotencyStore
 	dsn        string
@@ -185,6 +186,49 @@ type raEnv struct {
 
 // raSetup wires register_agent onto a real ledger, a real idempotency store
 // and a fake SPIRE, and installs the configuration for the test's duration.
+// raRuns is the run directory register_agent consults before healing a
+// replayed run's entry. It answers from what the test put in it, so a case can
+// say "this run is retired" without a second ledger.
+type raRuns struct {
+	mu      sync.Mutex
+	retired map[string]time.Time
+	known   map[string]bool
+	err     error
+}
+
+func newRARuns() *raRuns {
+	return &raRuns{retired: map[string]time.Time{}, known: map[string]bool{}}
+}
+
+func (r *raRuns) remember(runID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.known[runID] = true
+}
+
+func (r *raRuns) retire(runID string, at time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.known[runID] = true
+	r.retired[runID] = at
+}
+
+func (r *raRuns) CredentialRun(_ context.Context, runID string) (CredentialRun, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return CredentialRun{}, false, r.err
+	}
+	if !r.known[runID] {
+		return CredentialRun{}, false, nil
+	}
+	out := CredentialRun{RunID: runID}
+	if at, ok := r.retired[runID]; ok {
+		out.RetiredAt = at
+	}
+	return out, true, nil
+}
+
 func raSetup(t *testing.T, lease time.Duration, mutate func(*RegisterAgentConfig)) *raEnv {
 	t.Helper()
 	idem, dsn := newStore(t, WithIdempotencyLease(lease))
@@ -199,6 +243,7 @@ func raSetup(t *testing.T, lease time.Duration, mutate func(*RegisterAgentConfig
 
 	env := &raEnv{
 		identities: newRASPIRE(raTrustDomain),
+		runs:       newRARuns(),
 		ledger:     lg,
 		idem:       idem,
 		dsn:        dsn,
@@ -216,6 +261,7 @@ func raSetup(t *testing.T, lease time.Duration, mutate func(*RegisterAgentConfig
 	}
 	cfg := RegisterAgentConfig{
 		Identities:  env.identities,
+		Runs:        env.runs,
 		Ledger:      env.ledger,
 		Idempotency: env.idem,
 		ParentID:    raParentID,
@@ -1125,4 +1171,131 @@ func TestMCP040ADR0045sMembersAreOmittedWhenAbsent(t *testing.T) {
 			}
 		}
 	})
+}
+
+// reapAll deletes every entry, which is what the TTL reaper does to a run that
+// went quiet: the ledger keeps the run, SPIRE forgets the authorisation.
+func (f *raSPIRE) reapAll() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.entries = make(map[string]spire.Entry)
+}
+
+// A run whose SPIRE entry was reaped must get it BACK, not get a new run.
+//
+// # The failure this prevents
+//
+// An agent's session is killed — a usage limit, a crash, the operator closing
+// the laptop — and resumes hours later. The reaper has removed its entry,
+// because the entry is the authorisation and the reaper's job is that an
+// abandoned one does not live forever (IP §6.7).
+//
+// Re-registering under the same `idempotency_key` returns the same run_id and
+// the same SPIFFE ID, exactly as ADR-0017 requires. But the reply came from the
+// idempotency store, so the tool body never ran, so `identity` never ran, and
+// the entry stayed deleted. The caller was handed the NAME of an identity with
+// nothing behind it: no entry, therefore no SVID, therefore no signing. The only
+// escape was to mint a fresh run, and one logical task fragmented into several
+// identities for no reason but a timer.
+//
+// The identity itself is never lost and never could be: the SPIFFE ID is derived
+// from the run (`spiffe://{td}/agent/{type}/{task}/{run}`) and the run lives in
+// an append-only ledger. Only the authorisation is removable, and it is
+// re-creatable from the same three strings. So a replay heals it.
+//
+// The reply is still the RECORDED one, byte for byte — ADR-0017 §3 is not being
+// loosened here, and TestRegisterAgentReplayReturnsTheRecordedReply still holds.
+// Healing is a repair to SPIRE, not a recomputation of the answer.
+func TestRegisterAgentReplayRestoresAReapedEntry(t *testing.T) {
+	env := raSetup(t, DefaultIdempotencyLease, nil)
+	session := raServe(t)
+	const key = "reg-resume-after-reap"
+
+	first := raCallOK(t, session, raArgs(key))
+	env.runs.remember(first.RunID)
+	if env.identities.entryCount() != 1 {
+		t.Fatalf("SPIRE holds %d entries after registration, want 1", env.identities.entryCount())
+	}
+
+	// The session dies and the reaper takes the entry.
+	env.identities.reapAll()
+	if env.identities.entryCount() != 0 {
+		t.Fatalf("the reap left %d entries; this test proves nothing unless the entry is gone",
+			env.identities.entryCount())
+	}
+
+	// The session resumes and re-registers under the same key.
+	second := raCallOK(t, session, raArgs(key))
+
+	if second.RunID != first.RunID {
+		t.Fatalf("resuming returned run %q, want the original %q — a fresh run for a task "+
+			"that never ended is exactly the fragmentation this prevents",
+			second.RunID, first.RunID)
+	}
+	if second.SPIFFEID != first.SPIFFEID {
+		t.Fatalf("resuming returned spiffe id %q, want %q", second.SPIFFEID, first.SPIFFEID)
+	}
+	if got := env.identities.entryCount(); got != 1 {
+		t.Fatalf("SPIRE holds %d entries after the resume, want 1 — the run was handed the "+
+			"name of an identity with no authorisation behind it, so it cannot sign", got)
+	}
+	if got := len(env.runRegisteredFor(t, first.RunID)); got != 1 {
+		t.Errorf("the ledger holds %d run_registered events for %s, want exactly 1: healing "+
+			"SPIRE must not append a second registration (I3)", got, first.RunID)
+	}
+}
+
+// F9. A RETIRED run is never resurrected by a replay.
+//
+// Retirement is deliberate and its entry was deleted on purpose (IP §1). If a
+// replay healed one, anybody holding the original `idempotency_key` could hand
+// back a credential someone chose to destroy — and the retirement would have
+// been a suggestion rather than an act. The reply is still the recorded one, so
+// the caller learns the run's name and get_credential refuses it, which is what
+// MCP-009 asks every tool to agree about.
+func TestRegisterAgentReplayNeverResurrectsARetiredRun(t *testing.T) {
+	env := raSetup(t, DefaultIdempotencyLease, nil)
+	session := raServe(t)
+	const key = "reg-no-resurrection"
+
+	first := raCallOK(t, session, raArgs(key))
+	env.runs.remember(first.RunID)
+
+	// Retirement: the entry is deleted on purpose, and the directory says so.
+	env.identities.reapAll()
+	env.runs.retire(first.RunID, time.Date(2026, 8, 29, 10, 0, 0, 0, time.UTC))
+
+	second := raCallOK(t, session, raArgs(key))
+
+	if second.RunID != first.RunID {
+		t.Errorf("the replay returned run %q, want the recorded %q", second.RunID, first.RunID)
+	}
+	if got := env.identities.entryCount(); got != 0 {
+		t.Fatalf("SPIRE holds %d entries after replaying a RETIRED run's key, want 0 — "+
+			"healing must never hand back a credential a retirement destroyed", got)
+	}
+}
+
+// A replay whose entry is still there must not touch SPIRE at all: healing is a
+// repair, and a repair that runs when nothing is broken is a second mint
+// waiting to happen. This is what keeps MCP-007's "one RegisterRun per replay"
+// assertion true.
+func TestRegisterAgentReplayLeavesAHealthyEntryAlone(t *testing.T) {
+	env := raSetup(t, DefaultIdempotencyLease, nil)
+	session := raServe(t)
+	const key = "reg-healthy-replay"
+
+	first := raCallOK(t, session, raArgs(key))
+	env.runs.remember(first.RunID)
+	before := env.identities.registerAttempts()
+
+	raCallOK(t, session, raArgs(key))
+
+	if got := env.identities.registerAttempts(); got != before {
+		t.Errorf("a replay with a healthy entry made %d RegisterRun attempts, want %d — "+
+			"nothing was broken, so nothing should have been repaired", got, before)
+	}
+	if got := env.identities.entryCount(); got != 1 {
+		t.Errorf("SPIRE holds %d entries, want 1", got)
+	}
 }

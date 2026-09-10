@@ -135,6 +135,17 @@ var (
 type RegisterAgentConfig struct {
 	// Identities is the SPIRE admin client. Required.
 	Identities RegisterAgentIdentities
+	// Runs resolves run_id to what the ledger knows about it, and is how a
+	// replay tells a REAPED run from a RETIRED one before restoring its entry.
+	//
+	// It is get_credential's directory interface and deliberately not a second
+	// one: MCP-009 is every tool agreeing about what a run is and whether it is
+	// retired, and two definitions are two things that can disagree.
+	//
+	// OPTIONAL. Nil disables healing entirely, so a deployment that has not
+	// wired a directory keeps exactly today's behaviour rather than gaining a
+	// resurrection it did not ask for.
+	Runs CredentialRuns
 	// Ledger is the append-only event store. Required.
 	Ledger RegisterAgentLedger
 	// Idempotency records the reply of each keyed call (ADR-0017). Required.
@@ -293,7 +304,63 @@ func (c *RegisterAgentConfig) register(ctx context.Context, in registerAgentIn) 
 			"the recorded reply for idempotency_key %q is not a register_agent result: %w",
 			in.IdempotencyKey, err)
 	}
+	if outcome.Replayed {
+		if err := c.heal(ctx, run); err != nil {
+			return registerAgentOut{}, err
+		}
+	}
 	return out, nil
+}
+
+// heal gives a resumed run its SPIRE entry back.
+//
+// # The failure it repairs
+//
+// A replayed call is answered from the idempotency store, so the tool body never
+// runs and `identity` is never reached. That is right for the REPLY — ADR-0017 §3
+// requires the recorded one, byte for byte — and wrong for SPIRE, because the
+// entry may be gone since: the reaper deletes the entry of a run that went quiet
+// (IP §6.7), and a session killed by a usage limit and resumed hours later is
+// exactly that. Without this the caller is handed the NAME of an identity with
+// no authorisation behind it: no entry, so no SVID, so no signing, and the only
+// escape was to mint a fresh run — one logical task fragmenting into several
+// identities because of a timer.
+//
+// Nothing is lost by design: the SPIFFE ID is derived from (agent_type, task_id,
+// run_id) and the run is in an append-only ledger, so the authorisation is
+// re-creatable from the record at any distance in time. This is that repair.
+//
+// # A RETIRED run is never resurrected
+//
+// Retirement is a deliberate act and its entry was deleted on purpose (IP §1).
+// Healing one would hand back a credential someone chose to destroy, so the
+// directory is asked first and a retired run is left exactly as it is. The
+// reply is still the recorded one: the caller learns the run's name, and
+// get_credential refuses it, which is MCP-009's whole point.
+//
+// Without a directory configured this does nothing, so a deployment that has not
+// wired one keeps today's behaviour rather than gaining a resurrection it did
+// not ask for.
+func (c *RegisterAgentConfig) heal(ctx context.Context, run spire.RunRef) error {
+	if c.Runs == nil {
+		return nil
+	}
+	known, found, err := c.Runs.CredentialRun(ctx, run.RunID)
+	if err != nil {
+		return err
+	}
+	if !found || !known.RetiredAt.IsZero() {
+		return nil
+	}
+	_, hasEntry, err := c.Identities.LookupRun(ctx, run)
+	if err != nil {
+		return err
+	}
+	if hasEntry {
+		return nil
+	}
+	_, err = c.identity(ctx, run)
+	return err
 }
 
 // mint records the issuance and then creates the identity, in that order.

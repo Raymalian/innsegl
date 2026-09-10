@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,7 +33,7 @@ import (
 func hookDeriveTask(t *testing.T, hook, dir string) (branch, task string) {
 	t.Helper()
 	script := `. "$1" ; CWD="$2" ; derive_task ; printf '%s\n%s\n' "$BRANCH" "$TASK"`
-	cmd := exec.Command("sh", "-c", script, "sh", hook, dir)
+	cmd := exec.CommandContext(context.Background(), "sh", "-c", script, "sh", hook, dir)
 	cmd.Env = append(os.Environ(), "INNSEGL_HOOK_LIB=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -47,7 +48,7 @@ func hookDeriveTask(t *testing.T, hook, dir string) (branch, task string) {
 
 func gitAt(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
@@ -76,8 +77,8 @@ func TestHookRegistersTheBranchTheAgentIsActuallyOn(t *testing.T) {
 	gitAt(t, main, "commit", "-q", "-m", "seed", "--no-gpg-sign")
 
 	// The operator's shape: a real feature branch cut into its own worktree.
-	real := filepath.Join(root, "wt-se-001")
-	gitAt(t, main, "worktree", "add", "-q", "-b", "feat/apts-se-001", real)
+	feature := filepath.Join(root, "wt-se-001")
+	gitAt(t, main, "worktree", "add", "-q", "-b", "feat/apts-se-001", feature)
 
 	// Claude Code's shape: a throwaway isolation branch.
 	iso := filepath.Join(root, "wt-agent")
@@ -96,7 +97,7 @@ func TestHookRegistersTheBranchTheAgentIsActuallyOn(t *testing.T) {
 			why: "unchanged behaviour where the agent is in the main checkout",
 		},
 		{
-			name: "a real feature branch in a linked worktree names itself", dir: real,
+			name: "a real feature branch in a linked worktree names itself", dir: feature,
 			wantBranch: "feat/apts-se-001", wantTask: "feat-apts-se-001",
 			why: "this is the case that was recording `main` for every agent",
 		},

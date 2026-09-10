@@ -115,6 +115,29 @@ type CredentialEntries interface {
 	RequireActiveRun(ctx context.Context, run spire.RunRef) error
 }
 
+// CredentialRestorer re-creates the SPIRE entry of a run that still exists and
+// was never retired.
+//
+// # Why the credential path repairs anything at all
+//
+// By the time gate 4 runs, gates 1 and 2 have already established that the
+// ledger knows this run and that nothing retired it. A missing entry at that
+// point has exactly one cause: the reaper withdrew the authorisation of an
+// agent that went quiet (IP §6.7). The agent is not finished and its identity
+// is not gone — the SPIFFE ID is derived from the run and the run is in an
+// append-only chain — so the authorisation is re-creatable from the record.
+//
+// register_agent heals the same way on a replayed registration. That is not
+// enough on its own: an agent resuming through scripts/innsegl-commit.sh signs
+// under a run it already has and never re-registers, so it reached this gate
+// with a run the ledger calls live and SPIRE calls absent, and could do nothing
+// but mint a fresh identity. MEASURED on a real tree, 2026-09-10.
+//
+// OPTIONAL. Nil restores nothing and gate 4 refuses exactly as before.
+type CredentialRestorer interface {
+	RestoreRun(ctx context.Context, run spire.RunRef) error
+}
+
 // CredentialMinter mints one audience-bound JWT-SVID for one identity.
 // NewSPIREMinter is the implementation; the interface exists so that the four
 // gates above can be tested exhaustively without a container per case.
@@ -134,6 +157,9 @@ type CredentialConfig struct {
 	Runs CredentialRuns
 	// Entries is SPIRE's answer to "does this run still exist?". Required.
 	Entries CredentialEntries
+	// Restorer re-creates the entry of a live, unretired run whose
+	// authorisation the reaper withdrew. Optional; nil keeps the old refusal.
+	Restorer CredentialRestorer
 	// Minter mints the JWT-SVID. Required.
 	Minter CredentialMinter
 	// Ledger records the issuance. Required — I3 admits no action without a
@@ -153,6 +179,7 @@ type CredentialConfig struct {
 type credentialService struct {
 	runs      CredentialRuns
 	entries   CredentialEntries
+	restorer  CredentialRestorer
 	minter    CredentialMinter
 	ledger    CredentialLedger
 	audiences []string
@@ -207,6 +234,7 @@ func ConfigureGetCredential(cfg CredentialConfig) error {
 	credentialActive = &credentialService{
 		runs:      cfg.Runs,
 		entries:   cfg.Entries,
+		restorer:  cfg.Restorer,
 		minter:    cfg.Minter,
 		ledger:    cfg.Ledger,
 		audiences: slices.Clone(audiences),
@@ -307,7 +335,21 @@ func (c *credentialService) issue(ctx context.Context, in getCredentialIn) (getC
 	// segments, from the parse the gate above already made — SPIRE holds those
 	// and not the ledger's `agent_type` / `task_ref` (RM-079, #116).
 	if active := c.entries.RequireActiveRun(ctx, ref); active != nil {
-		return getCredentialOut{}, active
+		// Gates 1 and 2 already proved the ledger knows this run and nothing
+		// retired it, so a missing entry here is a withdrawn authorisation and
+		// not a finished agent. Restore it once and ask SPIRE again; the second
+		// answer is the one that decides, so a restore that silently did
+		// nothing still refuses.
+		class, known := spire.ClassOf(active)
+		if c.restorer == nil || !known || class != spire.ClassRunNotFound {
+			return getCredentialOut{}, active
+		}
+		if rerr := c.restorer.RestoreRun(ctx, ref); rerr != nil {
+			return getCredentialOut{}, active
+		}
+		if active := c.entries.RequireActiveRun(ctx, ref); active != nil {
+			return getCredentialOut{}, active
+		}
 	}
 
 	cred, err := c.minter.MintJWTSVID(ctx, spiffeID, in.Audience)
