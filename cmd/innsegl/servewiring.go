@@ -316,7 +316,12 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 
 	// ---- the five tools, in the one order that matters --------------------
 	registerCfg := mcp.RegisterAgentConfig{
-		Identities:  admin,
+		Identities: admin,
+		// The run directory, so a REPLAYED registration can tell a run whose
+		// entry the reaper took from one that was deliberately retired. Without
+		// it healing is off and a resumed agent gets the name of an identity
+		// with no authorisation behind it.
+		Runs:        runs,
 		Ledger:      store,
 		Idempotency: idem,
 		ParentID:    o.parentID,
@@ -359,8 +364,19 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 	if cerr := mcp.ConfigureGetCredential(mcp.CredentialConfig{
 		Runs:    runs,
 		Entries: admin,
-		Minter:  mcp.NewSPIREMinter(mintConn),
-		Ledger:  store,
+		// Restoring a withdrawn authorisation needs the parent, the selectors
+		// and the TTL a registration was made with, and those live here rather
+		// than in the credential path. They are register_agent's own values,
+		// read from the same options, so a restored entry is the entry that
+		// was there and not a second shape of it.
+		Restorer: runRestorer{
+			admin:     admin,
+			parentID:  o.parentID,
+			ttl:       o.runTTL,
+			selectors: registerCfg.Selectors,
+		},
+		Minter: mcp.NewSPIREMinter(mintConn),
+		Ledger: store,
 	}); cerr != nil {
 		return fail("configure get_credential: %w", cerr)
 	}
@@ -789,4 +805,42 @@ func dialSVIDAPI(o serveOptions, source spire.Source) (*grpc.ClientConn, error) 
 		return nil, fmt.Errorf("dial %s for MintJWTSVID: %w", o.spireAddress, err)
 	}
 	return conn, nil
+}
+
+// runRestorer re-creates the SPIRE entry of a live, unretired run.
+//
+// It exists because an agent that resumes through scripts/innsegl-commit.sh
+// signs under a run it already holds and never re-registers, so register_agent's
+// own healing is never reached. It arrives at get_credential's fourth gate with
+// a run the ledger calls live and SPIRE calls absent, and before this could do
+// nothing but mint a fresh identity — fragmenting one task across several.
+//
+// DUPLICATE_REQUEST is success: two callers racing to restore one run converge
+// on the one entry SPIRE already has, which is the same property register_agent
+// relies on.
+type runRestorer struct {
+	admin     *spire.Client
+	parentID  string
+	ttl       time.Duration
+	selectors func(spire.RunRef) []spire.Selector
+}
+
+func (r runRestorer) RestoreRun(ctx context.Context, run spire.RunRef) error {
+	sel := mcp.DefaultRegisterAgentSelectors
+	if r.selectors != nil {
+		sel = r.selectors
+	}
+	_, err := r.admin.RegisterRun(ctx, spire.Registration{
+		Run:       run,
+		ParentID:  r.parentID,
+		Selectors: sel(run),
+		TTL:       r.ttl,
+	})
+	if err == nil {
+		return nil
+	}
+	if class, ok := spire.ClassOf(err); ok && class == spire.ClassDuplicateRequest {
+		return nil
+	}
+	return err
 }

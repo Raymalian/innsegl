@@ -74,14 +74,42 @@ import (
 // already gone is a success with nothing deleted. Two reapers produce one
 // `run_expired` and one deletion between them.
 
-// DefaultReapGrace is the slack a caller normally adds to an entry's own TTL
-// before treating it as orphaned — one further identity lifetime, so that a run
-// finishing as its TTL elapses is not reaped out from under itself.
+// DefaultReapGrace is how long a run may be SILENT before it is called
+// orphaned.
+//
+// # It is deliberately not DefaultRunTTL any more
+//
+// It used to be exactly that — one SVID lifetime — and the two have nothing to
+// do with each other. `DefaultRunTTL` is how often a certificate ROTATES: five
+// minutes is normal and healthy for SPIFFE, and the agent gets a fresh SVID
+// under the same SPIFFE ID without noticing. How long an agent may go quiet
+// before we conclude it is dead is a completely different question, and
+// answering it with the rotation period made an agent mortal after ten minutes
+// of wall clock.
+//
+// MEASURED, and it is why this changed: an operator's session was killed and
+// resumed hours later. The run was never retired and its work was not finished,
+// but its entry had been reaped, so the tooling could only mint a NEW run — and
+// one logical task fragmented into several identities for no reason but a
+// timer. A usage limit, an overnight pause and a lunch break all do this.
+//
+// # What the reaper is still for
+//
+// IP §6.7's purpose is intact: an agent that crashes without `retire_agent`
+// must not keep a usable identity forever, because an abandoned credential
+// nobody is watching is exactly what an attacker wants. Twelve hours bounds
+// that while being longer than any pause a working agent takes. An operator who
+// wants the old aggressiveness sets $INNSEGL_REAP_GRACE.
+//
+// Note this is measured against the run's last observed ACTIVITY in the ledger
+// (RM-... , #180), not against its age — so a run that is genuinely working is
+// never reaped however long it has been alive, and this bound only ever applies
+// to silence.
 //
 // It is NOT applied by ReaperConfig: a zero Grace there means zero grace, so
 // that no caller can be surprised into a policy it did not ask for. The default
 // belongs to the operator surface, and `innsegl reap` is where it is applied.
-const DefaultReapGrace = DefaultRunTTL
+const DefaultReapGrace = 12 * time.Hour
 
 // reapPageSize bounds one ListEntries page. SPIRE may return fewer.
 const reapPageSize = 500
