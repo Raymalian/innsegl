@@ -66,7 +66,7 @@ func RunsForPatchID(ctx context.Context, pool *pgxpool.Pool, patchID string) ([]
 	defer rows.Close()
 
 	var out []ContentRecord
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	for rows.Next() {
 		var canonical []byte
 		if serr := rows.Scan(&canonical); serr != nil {
@@ -83,13 +83,9 @@ func RunsForPatchID(ctx context.Context, pool *pgxpool.Pool, patchID string) ([]
 		if !isString {
 			continue
 		}
-		if runID == "" || seen[runID] {
-			// One row per run. A run's intent and its recorded event name the
-			// same change, and a verifier asking "did this run make this
-			// change" is answered once.
+		if runID == "" {
 			continue
 		}
-		seen[runID] = true
 
 		// Both are strings by the time an event is in the chain -- the schema
 		// is closed and validated at append -- so a wrong type here means the
@@ -97,6 +93,28 @@ func RunsForPatchID(ctx context.Context, pool *pgxpool.Pool, patchID string) ([]
 		// answer is the honest report of that.
 		eventID, _ := record[event.FieldEventID].(string) //nolint:errcheck // see above
 		sha, _ := record[event.FieldCommitSHA].(string)   //nolint:errcheck // see above
+
+		// ONE ROW PER RUN, and it is the row that names the commit.
+		//
+		// A run's intent and its recorded event name the same change, and a
+		// verifier asking "did this run make this change" is answered once. But
+		// only `commit_recorded` carries `commit_sha`, and the intent is
+		// EARLIER in chain order — so keeping the first row seen kept the one
+		// that cannot say what the change was signed as, and the answer read
+		// "recorded this exact change, as commit ." MEASURED on the running
+		// ledger 2026-09-10, on the commit this lookup exists to answer about.
+		//
+		// An intent alone is still an answer: it proves the change was claimed
+		// when the chain crashed before the signature (IP §6.5's A -> B
+		// window). It is the fallback, not the winner.
+		if i, ok := seen[runID]; ok {
+			if out[i].CommitSHA == "" && sha != "" {
+				out[i].CommitSHA = sha
+				out[i].EventID = eventID
+			}
+			continue
+		}
+		seen[runID] = len(out)
 		out = append(out, ContentRecord{
 			RunID:     runID,
 			PatchID:   patchID,

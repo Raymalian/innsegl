@@ -145,16 +145,39 @@ func checkContent(ctx context.Context, in contentInput, source ContentSource) Co
 		return out
 	}
 
-	for _, r := range records {
-		if r.RunID == in.runID {
-			out.Result = Verified
-			out.RecordedAs = r.CommitSHA
-			out.EventID = r.EventID
-			out.Detail = fmt.Sprintf("run %s recorded this exact change, as commit %s. "+
-				"This commit is a rewrite of that one: same content, different object.",
-				r.RunID, r.CommitSHA)
+	// The run's records for this change, best first.
+	//
+	// RunsForPatchID returns `commit_intent` as well as `commit_recorded`, on
+	// purpose: an intent proves the change was claimed even when the chain
+	// crashed before the signature (IP §6.5's A -> B window). But an intent
+	// carries no `commit_sha`, so matching one first reported the right verdict
+	// with an empty commit in it -- "recorded this exact change, as commit ."
+	// MEASURED against the running ledger 2026-09-10. Naming the commit the
+	// change was signed as is the useful half of the answer, so a record that
+	// has one wins; an intent still answers when it is all there is.
+	var match *ContentRecord
+	for i := range records {
+		if records[i].RunID != in.runID {
+			continue
+		}
+		if match == nil || (match.CommitSHA == "" && records[i].CommitSHA != "") {
+			match = &records[i]
+		}
+	}
+	if match != nil {
+		out.Result = Verified
+		out.RecordedAs = match.CommitSHA
+		out.EventID = match.EventID
+		if match.CommitSHA == "" {
+			out.Detail = fmt.Sprintf("run %s claimed this exact change, and the chain holds "+
+				"its intent but no completed record of the commit it became. The content is "+
+				"attributed; the object it was signed as is not on the chain.", match.RunID)
 			return out
 		}
+		out.Detail = fmt.Sprintf("run %s recorded this exact change, as commit %s. "+
+			"This commit is a rewrite of that one: same content, different object.",
+			match.RunID, match.CommitSHA)
+		return out
 	}
 
 	// Two different findings, and the message says which. ADR-0047: "A
