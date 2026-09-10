@@ -32,12 +32,12 @@ export INNSEGL_SPIRE_JWT_ISSUER=http://spire-oidc:8080
 make innsegl-up
 ```
 
-`INNSEGL_REKOR_PORT` moves Rekor off host port 3000 if something already holds
+`INNSEGL_REKOR_PORT` moves Rekor off its default host port 23000 if something already holds
 it. The default collides with a great many development servers, and the failure
 is a bind error during bring-up, not later:
 
 ```sh
-export INNSEGL_REKOR_PORT=3010     # only if 3000 is taken
+export INNSEGL_REKOR_PORT=3010     # only if 23000 is taken
 ```
 
 **Take it down with `make innsegl-down`, not `make innsegl-purge`.** The first
