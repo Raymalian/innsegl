@@ -1886,3 +1886,125 @@ func credUnwrapAll(err error) error {
 		err = next
 	}
 }
+
+// credRestorer stands in for the wiring layer's runRestorer: it makes an absent
+// entry present again, exactly as re-registering the run would.
+type credRestorer struct {
+	mu      sync.Mutex
+	entries *credEntries
+	calls   int
+	inert   bool // restores nothing, to prove SPIRE's second answer still decides
+}
+
+func (r *credRestorer) RestoreRun(_ context.Context, run spire.RunRef) error {
+	r.mu.Lock()
+	r.calls++
+	inert := r.inert
+	entries := r.entries
+	r.mu.Unlock()
+	if inert {
+		return nil
+	}
+	entries.mu.Lock()
+	delete(entries.absent, run.RunID)
+	entries.mu.Unlock()
+	return nil
+}
+
+func (r *credRestorer) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// newRestoringFixture is newCredFixture with a restorer wired.
+func newRestoringFixture(t *testing.T, rest CredentialRestorer, runs ...CredentialRun) *credFixture {
+	t.Helper()
+	f := &credFixture{
+		t:       t,
+		runs:    newCredRuns(runs...),
+		entries: newCredEntries(),
+		ledger:  &credLedger{},
+		clock:   time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC),
+	}
+	f.minter = newCredMinter(func() time.Time { return f.clock })
+	withCredentialConfig(t, CredentialConfig{
+		Runs:     f.runs,
+		Entries:  f.entries,
+		Restorer: rest,
+		Minter:   f.minter,
+		Ledger:   f.ledger,
+		Now:      func() time.Time { return f.clock },
+	})
+	f.session = serveGetCredential(t)
+	return f
+}
+
+// An agent that resumes and signs under a run it already holds never
+// re-registers, so register_agent's healing is never reached. It arrives here
+// with a run the ledger calls live and SPIRE calls absent.
+//
+// Gates 1 and 2 have already established that the run exists and was not
+// retired, so a missing entry at gate 4 is a withdrawn authorisation (IP §6.7)
+// and not a finished agent. MEASURED on a real tree 2026-09-10: signing failed
+// RUN_NOT_FOUND and the only escape was minting a fresh identity, fragmenting
+// one task across several.
+func TestGetCredentialRestoresAWithdrawnAuthorisation(t *testing.T) {
+	rest := &credRestorer{}
+	f := newRestoringFixture(t, rest, credRun("run-a"))
+	rest.entries = f.entries
+	f.entries.delete("run-a")
+
+	r := f.call(t, "run-a", AudienceSigstore)
+	if r.isError {
+		t.Fatalf("get_credential refused a live, unretired run whose entry was reaped: %v — "+
+			"the authorisation is re-creatable from the ledger and the agent is not finished",
+			r.wire)
+	}
+	if got := rest.count(); got != 1 {
+		t.Errorf("the restorer ran %d times, want exactly 1", got)
+	}
+}
+
+// A RETIRED run must never reach the restorer: gate 2 refuses first, so
+// retirement stays irreversible however the credential path is entered.
+func TestGetCredentialNeverRestoresARetiredRun(t *testing.T) {
+	retired := credRun("run-a")
+	retired.RetiredAt = time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC)
+	rest := &credRestorer{}
+	f := newRestoringFixture(t, rest, retired)
+	rest.entries = f.entries
+	f.entries.delete("run-a")
+
+	if r := f.call(t, "run-a", AudienceSigstore); !r.isError {
+		t.Fatal("get_credential issued a credential for a RETIRED run")
+	}
+	if got := rest.count(); got != 0 {
+		t.Fatalf("the restorer ran %d times for a retired run, want 0 — retirement is "+
+			"deliberate and its entry was deleted on purpose", got)
+	}
+}
+
+// A restorer that silently creates nothing must not become a way past gate 4:
+// SPIRE's SECOND answer is the one that decides.
+func TestGetCredentialStillRefusesWhenTheRestoreDidNothing(t *testing.T) {
+	rest := &credRestorer{inert: true}
+	f := newRestoringFixture(t, rest, credRun("run-a"))
+	rest.entries = f.entries
+	f.entries.delete("run-a")
+
+	if r := f.call(t, "run-a", AudienceSigstore); !r.isError {
+		t.Fatal("a restore that created no entry still produced a credential — gate 4 was " +
+			"passed on an assumption rather than on SPIRE's answer")
+	}
+}
+
+// Without a restorer configured the refusal is exactly what it was.
+func TestGetCredentialWithoutARestorerRefusesAsBefore(t *testing.T) {
+	f := newCredFixture(t, credRun("run-a"))
+	f.entries.delete("run-a")
+
+	if r := f.call(t, "run-a", AudienceSigstore); !r.isError {
+		t.Fatal("a deployment with no restorer wired gained a resurrection it did not ask for")
+	}
+}
