@@ -115,3 +115,8 @@ services:
   innsegl-reconciler:
     volumes:
       - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:/projects:ro
+      # RM-104 (#169): the harness's retained tool-call bodies. READ-ONLY, and
+      # read-only is load-bearing — this is the evidence the check judges, and
+      # a process that could rewrite it could also make its own findings go
+      # away. The reconciler opens only the files a run's own events name.
+      - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/harness-log:ro

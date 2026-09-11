@@ -47,6 +47,10 @@ func (r *rebaseRepo) SignedCommitsWithTree(context.Context, string, string) ([]s
 	return nil, nil
 }
 
+func (r *rebaseRepo) ReachableBlobs(context.Context, string) (map[string]struct{}, error) {
+	return nil, nil
+}
+
 func (r *rebaseRepo) TreeBlobs(context.Context, string, string) (map[string]struct{}, error) {
 	return nil, nil
 }

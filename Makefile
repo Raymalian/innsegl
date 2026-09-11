@@ -329,6 +329,19 @@ INNSEGL_MCP_ALSO ?= reap
 # onwards can be, and this is what does it.
 INNSEGL_REBASE_BRANCH ?= main
 INNSEGL_REBASE_REPOS ?= $(REPO)
+# RM-104 (#169): where the reconciler finds the retained bodies INSIDE the
+# container. The host path is mounted read-only by innsegl.workrepo.yml.
+# RM-104 (#169). Safe to enable because the check now only COUNTS: it appends
+# nothing to the chain and therefore cannot accuse anyone. It was briefly
+# enabled while it still appended and wrote 617 findings from 1121 claims —
+# every one an honest write whose content a squash, a rebase or a later edit
+# had moved. What is worth watching is the corroboration RATE, not any single
+# uncorroborated write.
+INNSEGL_WRITES_LOG_DIR ?= /harness-log
+# The repositories RM-104's check may read: every project the API already
+# serves, because that is where agents WORK. The rebase list is this repository
+# alone, which is the wrong set — measured: 0 of 66 tool-call runs were in it.
+INNSEGL_WRITES_REPOS ?= $(shell printf '%s' '$(API_REPOS)' | tr ',' '\n' | cut -d= -f1 | paste -sd, -)
 
 ## test-clean: remove containers a killed test run left behind
 #
@@ -361,6 +374,9 @@ innsegl-up-here: sigstore-up
 	  INNSEGL_MCP_ALSO='$(INNSEGL_MCP_ALSO)' \
 	  INNSEGL_REBASE_BRANCH='$(INNSEGL_REBASE_BRANCH)' \
 	  INNSEGL_REBASE_REPOS='$(INNSEGL_REBASE_REPOS)' \
+	  INNSEGL_WRITES_LOG_DIR='$(INNSEGL_WRITES_LOG_DIR)' \
+	  INNSEGL_WRITES_REPOS='$(INNSEGL_WRITES_REPOS)' \
+	  INNSEGL_LOG_DIR='$(INNSEGL_LOG_DIR)' \
 	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml $(ONEPROCESS_FILE) up -d
 	@$(MAKE) --no-print-directory innsegl-link DIR='$(REPO_PATH)'
 

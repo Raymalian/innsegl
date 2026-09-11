@@ -97,6 +97,18 @@ const (
 	envDriftWindow = "INNSEGL_DRIFT_WINDOW"
 	// ADR-0047 decision 4's two controls. Both required together: half a
 	// configuration is the shape that looks enabled and does nothing.
+	// envWritesLogDir turns on RM-104's check (#169): the harness's retained
+	// tool-call bodies, read-only. Empty leaves the check OFF.
+	envWritesLogDir = "INNSEGL_WRITES_LOG_DIR"
+
+	// envWritesRepos are the repositories RM-104's check may read. Separate
+	// from the rebase list on purpose: that one is the repository whose merges
+	// rewrite commits, and this one is every repository agents WORK in — which
+	// on a real deployment is not the same set, and using the rebase list gave
+	// the check a served list containing none of the repositories its claims
+	// were about.
+	envWritesRepos = "INNSEGL_WRITES_REPOS"
+
 	envRebaseBranch = "INNSEGL_REBASE_BRANCH"
 	envRebaseRepos  = "INNSEGL_REBASE_REPOS"
 	envInterval     = "INNSEGL_RECONCILE_INTERVAL"
@@ -127,6 +139,12 @@ type reconcileOptions struct {
 	driftWindow int64
 	// rebaseBranch and rebaseRepos turn on ADR-0047's pass. Empty leaves it
 	// off, and Result.Rebase.Enabled says so every cycle.
+	// writesLogDir turns on RM-104's check. Empty leaves it OFF, and the
+	// report says so on every cycle rather than letting a deployment believe a
+	// reconciler without it is checking what its agents claim to have written.
+	writesLogDir string
+	writesRepos  []string
+
 	rebaseBranch string
 	rebaseRepos  []string
 	interval     time.Duration
@@ -222,6 +240,16 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 			"how long a dangling commit_intent is left alone before it is expired ($"+envExpireAfter+")")
 		interval = fs.Duration("interval", envDuration(envInterval, reconciler.DefaultInterval),
 			"time between cycles; ignored with -once ($"+envInterval+")")
+		writesLogDir = fs.String("writes-log-dir", os.Getenv(envWritesLogDir),
+			"the harness's retained tool-call bodies, read-only. Turns on RM-104's check "+
+				"(#169): the content a run REPORTS writing is checked against the trees it "+
+				"SIGNED, so a reported write becomes falsifiable. Empty leaves it OFF "+
+				"($"+envWritesLogDir+")")
+		writesRepos = fs.String("writes-repos", os.Getenv(envWritesRepos),
+			"comma-separated repositories RM-104's check may read. Empty falls back to "+
+				"-rebase-repos, which is usually the wrong set: the repository whose merges "+
+				"rewrite commits is not the set of repositories agents work in "+
+				"($"+envWritesRepos+")")
 		rebaseBranch = fs.String("rebase-branch", os.Getenv(envRebaseBranch),
 			"branch to walk for commits a merge rewrote; empty leaves ADR-0047's pass OFF ($"+envRebaseBranch+")")
 		rebaseRepos = fs.String("rebase-repos", os.Getenv(envRebaseRepos),
@@ -331,6 +359,8 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 		dsn: *dsn, rekorURL: *rekorURL, workspace: *workspace,
 		trustDomain: *trustDomain, expireAfter: *expireAfter,
 		driftWindow:  *driftWindow,
+		writesLogDir: strings.TrimSpace(*writesLogDir),
+		writesRepos:  splitRepos(*writesRepos),
 		rebaseBranch: strings.TrimSpace(*rebaseBranch),
 		rebaseRepos:  splitRepos(*rebaseRepos),
 		interval:     *interval, once: *once,
@@ -472,6 +502,24 @@ func renderReconcileResult(result reconciler.Result) string {
 	// OFF is as important as any count. A deployment that has not configured
 	// it is one where lookup by SHA stops working at the next merge, and
 	// silence reads exactly like "there was nothing to record".
+	// RM-104 (#169). A COUNT, never an accusation: "not found" is not evidence
+	// that anything was fabricated — a squash or rebase rewrites content, and a
+	// run's last write to a path is often not the final state. What is worth
+	// watching is the RATE, and a fall in it.
+	//
+	// OFF is as important as any count: a deployment that has not configured it
+	// is one where nothing is corroborated, and silence reads exactly like
+	// "every write held up".
+	if result.Writes.Enabled {
+		fmt.Fprintf(&b, "writes: %d checked  %d corroborated  %d not found  "+
+			"%d uncheckable  %d unreadable\n",
+			result.Writes.Checked, result.Writes.Supported, result.Writes.Unsupported,
+			result.Writes.Uncheckable, result.Writes.Unreadable)
+	} else {
+		fmt.Fprintf(&b, "writes: OFF - -writes-log-dir (or $%s) is not set, so no "+
+			"reported write is corroborated against the repository\n", envWritesLogDir)
+	}
+
 	if result.Rebase.Enabled {
 		fmt.Fprintf(&b, "rebase: %d recorded  %d already recorded  %d unmatched\n",
 			result.Rebase.Recorded, result.Rebase.AlreadyRecorded, result.Rebase.Unmatched)
@@ -678,6 +726,19 @@ func openReconciler(ctx context.Context, opts reconcileOptions) (reconcileEngine
 	}
 	if opts.driftWindow > 0 {
 		cfg.Drift = &reconciler.DriftConfig{Sweep: log, Window: opts.driftWindow}
+	}
+	if opts.writesLogDir != "" {
+		// The repositories whose trees may be read are the ones the rebase
+		// pass already names: a check that discovered its own repositories
+		// would read trees nobody asked it to.
+		repos := opts.writesRepos
+		if len(repos) == 0 {
+			repos = opts.rebaseRepos
+		}
+		cfg.Writes = &reconciler.WritesConfig{
+			LogDir: opts.writesLogDir,
+			Repos:  repos,
+		}
 	}
 	if opts.rebaseBranch != "" {
 		cfg.Rebase = &reconciler.RebaseConfig{

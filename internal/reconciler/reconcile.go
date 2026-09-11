@@ -232,6 +232,10 @@ type Repos interface {
 	// machine — which RM-104's check treats as "nothing to check against" and
 	// never as a finding about the agent.
 	TreeBlobs(ctx context.Context, repo, treeHash string) (map[string]struct{}, error)
+	// ReachableBlobs returns every blob object reachable from any ref in repo.
+	// An error means the repository could not be read, which RM-104's check
+	// treats as "nothing to check against" and never as a finding.
+	ReachableBlobs(ctx context.Context, repo string) (map[string]struct{}, error)
 }
 
 // TransparencyLog is Rekor, read-only. *RekorLog is the shipped

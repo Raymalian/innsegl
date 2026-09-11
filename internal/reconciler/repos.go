@@ -358,3 +358,32 @@ func (w *GitWorkspace) TreeBlobs(
 	}
 	return TreeBlobs(ctx, w.git, dir, treeHash)
 }
+
+// ReachableBlobs is every blob reachable from any ref — RM-104 (#169).
+//
+// One walk per repository per cycle, not one lookup per claim: a cycle with a
+// thousand claims against one repository is one invocation.
+//
+// `--all` rather than a branch: the question this answers is whether the
+// content exists anywhere in the repository's history, and a change that landed
+// on a branch nobody named is still content this repository holds.
+func (w *GitWorkspace) ReachableBlobs(
+	ctx context.Context, repo string,
+) (map[string]struct{}, error) {
+	dir, err := w.worktree(repo)
+	if err != nil {
+		return nil, err
+	}
+	out, err := w.run(ctx, dir, nil, "rev-list", "--objects", "--all", "--filter=object:type=blob")
+	if err != nil {
+		return nil, fmt.Errorf("listing reachable blobs in %s: %w", repo, err)
+	}
+	blobs := map[string]struct{}{}
+	for _, line := range strings.Split(out, "\n") {
+		id, _, _ := strings.Cut(line, " ")
+		if len(id) == 40 {
+			blobs[id] = struct{}{}
+		}
+	}
+	return blobs, nil
+}
