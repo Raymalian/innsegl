@@ -47,6 +47,10 @@ func (r *rebaseRepo) SignedCommitsWithTree(context.Context, string, string) ([]s
 	return nil, nil
 }
 
+func (r *rebaseRepo) TreeBlobs(context.Context, string, string) (map[string]struct{}, error) {
+	return nil, nil
+}
+
 func (r *rebaseRepo) CommitsOnBranch(_ context.Context, repo, branch string) ([]reconciler.RepoCommit, error) {
 	r.walked = append(r.walked, repo+"@"+branch)
 	if r.err != nil {

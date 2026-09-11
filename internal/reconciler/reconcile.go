@@ -227,6 +227,11 @@ type Repos interface {
 	// An error means the repository could not be read, which is never grounds
 	// for recording anything about it.
 	CommitsOnBranch(ctx context.Context, repo, branch string) ([]RepoCommit, error)
+	// TreeBlobs returns every blob object id reachable from treeHash. An error
+	// means the tree could not be read — the repository may not be on this
+	// machine — which RM-104's check treats as "nothing to check against" and
+	// never as a finding about the agent.
+	TreeBlobs(ctx context.Context, repo, treeHash string) (map[string]struct{}, error)
 }
 
 // TransparencyLog is Rekor, read-only. *RekorLog is the shipped
@@ -325,6 +330,10 @@ type Result struct {
 	// Rebase is what ADR-0047's pass recorded. Zero — and `Enabled` false —
 	// when no `Config.Rebase` was given.
 	Rebase RebaseReport
+	// Writes is RM-104's check that a reported write is in a tree the run
+	// signed (#169). Zero — and `Enabled` false — when no `Config.Writes` was
+	// given, so a reader never mistakes "not run" for "nothing to find".
+	Writes WritesReport
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +376,10 @@ type Config struct {
 	// than letting a deployment believe a reconciler without it is keeping
 	// lookup-by-SHA working after a merge. See rebase.go.
 	Rebase *RebaseConfig
+	// Writes turns on RM-104 (#169): read each run's retained tool-call
+	// bodies and check the content they claim to have written against the
+	// trees that run signed. Nil leaves it OFF. See writes.go.
+	Writes *WritesConfig
 	// Observe receives every cycle Run performs, including a failed one.
 	Observe func(Result, error)
 }
@@ -497,6 +510,9 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	// a `commit_recorded` this cycle wrote is on the chain by now, so a commit
 	// whose phase C was repaired minutes ago and then rebased is matched in
 	// one cycle rather than two.
+	if r.cfg.Writes != nil {
+		result.Writes = r.checkWrites(ctx, view.writes, r.cfg.Writes)
+	}
 	if r.cfg.Rebase != nil {
 		result.Rebase = r.recordRebases(ctx, view.rebase)
 	}
@@ -745,6 +761,10 @@ type ledgerView struct {
 	// drift is RM-036's fold of the same walk: the chain-derived state its
 	// two cross-checks dedupe against (drift.go). One walk, two readers.
 	drift *driftView
+	// writes is RM-104's fold of the same walk: which trees each run signed,
+	// and which tool calls claimed to write something (writes.go). Never nil
+	// -- the fold is cheap and a nil check at every observe is not.
+	writes *writesView
 	// rebase is ADR-0047's fold of the same walk: which run recorded which
 	// change, as which commit (rebase.go). Nil when the pass is off, so a
 	// deployment that does not want it does not pay to build the index.
@@ -753,7 +773,7 @@ type ledgerView struct {
 
 // readLedger walks the chain in bounded batches and reduces it to a view.
 func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
-	view := &ledgerView{byID: map[string]openIntent{}, drift: newDriftView()}
+	view := &ledgerView{byID: map[string]openIntent{}, drift: newDriftView(), writes: newWritesView()}
 	if r.cfg.Rebase != nil {
 		view.rebase = newRebaseView()
 	}
@@ -784,7 +804,8 @@ func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
 // Refusing to reconcile because one event was unreadable would turn a
 // forward-compatibility case into an outage of the repair.
 func (v *ledgerView) observe(record event.Fields) {
-	v.drift.observe(record) // RM-036 (#44) folds the same record; see drift.go.
+	v.drift.observe(record)  // RM-036 (#44) folds the same record; see drift.go.
+	v.writes.observe(record) // RM-104 (#169) folds it too; see writes.go.
 	if v.rebase != nil {
 		v.rebase.observe(record) // ADR-0047 folds it too; see rebase.go.
 	}

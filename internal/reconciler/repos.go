@@ -340,3 +340,21 @@ func (w *GitWorkspace) withPatchIDs(ctx context.Context, dir string, commits []R
 	}
 	return commits, nil
 }
+
+// TreeBlobs is every blob object id reachable from one tree — RM-104 (#169).
+//
+// One `ls-tree -r` per tree rather than one lookup per claim: a run with a
+// thousand Edits against a handful of trees would otherwise be a thousand git
+// invocations, and the answer is the same set either way.
+func (w *GitWorkspace) TreeBlobs(
+	ctx context.Context, repo, treeHash string,
+) (map[string]struct{}, error) {
+	if err := event.ValidateGitObjectID(treeHash); err != nil {
+		return nil, fmt.Errorf("reconciler: %q is not a git object id: %w", treeHash, err)
+	}
+	dir, err := w.worktree(repo)
+	if err != nil {
+		return nil, err
+	}
+	return TreeBlobs(ctx, w.git, dir, treeHash)
+}
