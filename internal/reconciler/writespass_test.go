@@ -16,9 +16,10 @@ import (
 	"innsegl.dev/innsegl/internal/reconciler"
 )
 
-// writesRepo is a Repos whose trees hold exactly the blobs a case plants.
+// writesRepo is a Repos holding exactly the blobs a case plants.
 type writesRepo struct {
-	blobs map[string]map[string]struct{} // tree -> blob ids
+	// holds is the repository's reachable blobs, keyed by repo id.
+	holds map[string]map[string]struct{}
 	err   error
 }
 
@@ -30,11 +31,15 @@ func (w *writesRepo) CommitsOnBranch(context.Context, string, string) ([]reconci
 	return nil, nil
 }
 
-func (w *writesRepo) TreeBlobs(_ context.Context, _, tree string) (map[string]struct{}, error) {
+func (w *writesRepo) TreeBlobs(context.Context, string, string) (map[string]struct{}, error) {
+	return nil, nil
+}
+
+func (w *writesRepo) ReachableBlobs(_ context.Context, repo string) (map[string]struct{}, error) {
 	if w.err != nil {
 		return nil, w.err
 	}
-	return w.blobs[tree], nil
+	return w.holds[repo], nil
 }
 
 // plantBody writes a retained body where the pass will look for it and returns
@@ -113,8 +118,8 @@ func TestWritesPassReportsOnlyTheUnsupportedWrite(t *testing.T) {
 	forgedEvent := seedTool(t, m, runID, forgedDigest)
 	seedSigned(t, m, runID, repoID, tree)
 
-	repos := &writesRepo{blobs: map[string]map[string]struct{}{
-		tree: {reconciler.BlobID(honest): {}},
+	repos := &writesRepo{holds: map[string]map[string]struct{}{
+		repoID: {reconciler.BlobID(honest): {}},
 	}}
 
 	report := runWritesPass(t, m, repos, logDir, repoID)
@@ -134,18 +139,22 @@ func TestWritesPassReportsOnlyTheUnsupportedWrite(t *testing.T) {
 			report.Unsupported)
 	}
 
-	subjects := driftSubjects(t, m)
-	if _, named := subjects[forgedEvent]; !named {
-		t.Errorf("no finding names the forged write %s", forgedEvent)
+	// AND NOTHING IS APPENDED. Corroboration is a number, never an accusation:
+	// measured on a real deployment, judging a claim against what a repository
+	// holds is wrong about a third of honest work, because a squash or rebase
+	// rewrites the content and a run's last write is often not the final state.
+	// An alert wrong that often is noise that teaches an operator to ignore red.
+	if got := len(driftSubjects(t, m)); got != 0 {
+		t.Errorf("the pass appended %d findings; it must only count. %s was not "+
+			"corroborated, which is not evidence that anything was fabricated",
+			got, forgedEvent)
 	}
-	if _, named := subjects[honestEvent]; named {
-		t.Errorf("a finding names the HONEST write %s — git corroborates it", honestEvent)
-	}
+	_ = honestEvent
 }
 
-// A run that signed no tree is not accused. An absence of evidence reported as
-// evidence is the failure doc 06 P2 exists to forbid.
-func TestWritesPassDoesNotAccuseARunThatSignedNothing(t *testing.T) {
+// A repository that cannot be read is not an accusation. An absence of evidence
+// reported as evidence is the failure doc 06 P2 exists to forbid.
+func TestWritesPassDoesNotAccuseWhenTheRepositoryCannotBeRead(t *testing.T) {
 	const repoID = "github.com/acme/api"
 	const runID = "run-writes-2"
 	logDir := t.TempDir()
@@ -161,7 +170,7 @@ func TestWritesPassDoesNotAccuseARunThatSignedNothing(t *testing.T) {
 	report := runWritesPass(t, m, &writesRepo{}, logDir, repoID)
 
 	if report.Unsupported != 0 {
-		t.Fatalf("a run that signed no tree produced %d findings, want 0",
+		t.Fatalf("an unreadable repository produced %d findings, want 0",
 			report.Unsupported)
 	}
 	if report.Uncheckable != 1 {
@@ -169,11 +178,12 @@ func TestWritesPassDoesNotAccuseARunThatSignedNothing(t *testing.T) {
 			report.Uncheckable)
 	}
 	if len(driftSubjects(t, m)) != 0 {
-		t.Error("a finding was appended about a run there was nothing to check")
+		t.Error("a finding was appended when there was nothing to check against")
 	}
 }
 
-// A second pass appends nothing. REC-005 as an observable.
+// A second pass reports the same thing and still appends nothing. REC-005 as an
+// observable: a fresh process behaves identically to one running for a week.
 func TestWritesPassIsIdempotent(t *testing.T) {
 	const repoID = "github.com/acme/api"
 	const runID = "run-writes-3"
@@ -188,22 +198,23 @@ func TestWritesPassIsIdempotent(t *testing.T) {
 	seedRegistered(t, m, runID)
 	seedTool(t, m, runID, digest)
 	seedSigned(t, m, runID, repoID, tree)
-	repos := &writesRepo{blobs: map[string]map[string]struct{}{tree: {}}}
+	repos := &writesRepo{holds: map[string]map[string]struct{}{
+		repoID: {reconciler.BlobID("something else\n"): {}},
+	}}
 
 	first := runWritesPass(t, m, repos, logDir, repoID)
-	before := len(driftSubjects(t, m))
 	second := runWritesPass(t, m, repos, logDir, repoID)
-	after := len(driftSubjects(t, m))
 
 	if first.Unsupported != 1 {
-		t.Fatalf("the first pass found %d, want 1", first.Unsupported)
+		t.Fatalf("the first pass counted %d uncorroborated, want 1", first.Unsupported)
 	}
-	if second.Unsupported != 0 {
-		t.Errorf("the second pass found %d, want 0 — the finding is already on the chain",
-			second.Unsupported)
+	if second.Unsupported != first.Unsupported {
+		t.Errorf("the second pass counted %d and the first %d; the same chain and the "+
+			"same repository must produce the same number",
+			second.Unsupported, first.Unsupported)
 	}
-	if after != before {
-		t.Errorf("the chain grew from %d findings to %d on a second pass", before, after)
+	if got := len(driftSubjects(t, m)); got != 0 {
+		t.Errorf("the chain holds %d findings; this pass appends nothing", got)
 	}
 }
 
@@ -221,7 +232,9 @@ func TestWritesPassCountsAMissingBodyAsUnreadable(t *testing.T) {
 	seedSigned(t, m, runID, repoID, tree)
 
 	report := runWritesPass(t, m, &writesRepo{
-		blobs: map[string]map[string]struct{}{tree: {}},
+		holds: map[string]map[string]struct{}{
+			repoID: {reconciler.BlobID("anything at all\n"): {}},
+		},
 	}, t.TempDir(), repoID)
 
 	if report.Unsupported != 0 {

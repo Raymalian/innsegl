@@ -800,6 +800,18 @@ services:
       # `make innsegl-link` puts there.
       INNSEGL_REBASE_BRANCH: ${INNSEGL_REBASE_BRANCH:-}
       INNSEGL_REBASE_REPOS: ${INNSEGL_REBASE_REPOS:-}
+      # RM-104 (#169). The harness's retained tool-call bodies, READ-ONLY.
+      # With it, the content a run REPORTS writing is checked against the trees
+      # it SIGNED, so a reported write becomes falsifiable; without it
+      # `payload_digest` is compared to nothing and the ledger records what the
+      # caller said it did.
+      #
+      # OFF unless set, and off is the compose default because these bodies are
+      # the operator's own file contents and commands: a deployment opts into
+      # reading them deliberately. The repositories checked are the ones
+      # INNSEGL_REBASE_REPOS already names.
+      INNSEGL_WRITES_LOG_DIR: ${INNSEGL_WRITES_LOG_DIR:-}
+      INNSEGL_WRITES_REPOS: ${INNSEGL_WRITES_REPOS:-}
     volumes:
       - innsegl-workspace:/work
     security_opt:
