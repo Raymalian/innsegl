@@ -130,6 +130,13 @@ func (f *fakeRepos) CommitsOnBranch(context.Context, string, string) ([]reconcil
 	return nil, nil
 }
 
+// TreeBlobs: no trees. Every test that uses this fake is about the repair path,
+// where RM-104's check is off; a fake that invented blobs would give those tests
+// a second thing to be about.
+func (f *fakeRepos) TreeBlobs(context.Context, string, string) (map[string]struct{}, error) {
+	return nil, nil
+}
+
 func (f *fakeRepos) SignedCommitsWithTree(_ context.Context, repo, tree string) ([]string, error) {
 	f.calls++
 	if f.err != nil {
