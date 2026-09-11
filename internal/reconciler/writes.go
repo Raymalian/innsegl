@@ -17,7 +17,7 @@ import (
 	"innsegl.dev/innsegl/internal/event"
 )
 
-// Making a reported write falsifiable — RM-104 (#169).
+// Corroborating a reported write against the repository — RM-104 (#169).
 //
 // # What was unfalsifiable
 //
@@ -44,8 +44,9 @@ import (
 //
 // # What this buys, and what it does not
 //
-//   - A reported write becomes FALSIFIABLE. That is strictly more than today
-//     and strictly less than proof.
+//   - A reported write can be CORROBORATED, which is strictly more than today
+//     and strictly less than proof. Its ABSENCE is not evidence of anything —
+//     see "WHY THIS PASS APPENDS NOTHING" for the measurement that settled it.
 //   - OMISSION stays invisible. A write never reported leaves a blob nobody
 //     claimed, which is indistinguishable from a build artifact.
 //   - `Read` and `Bash` produce no blob and stay uncheckable. A model that
@@ -263,42 +264,42 @@ type WritesReport struct {
 	Unreadable int
 }
 
-// reasonUnsupportedWrite is a `ledger_drift_detected` reason.
+// WHY THIS PASS APPENDS NOTHING.
 //
-// PROTECTED-ADJACENT, exactly as the reasons in drift.go are: `reason` is part
-// of the canonical preimage of an event in an append-only chain, and it is
-// operator-facing text. A CONSTANT, carrying no path, digest or run id — what
-// varies goes in the event's run scope and in the finding's Detail.
+// It was built to append a `ledger_drift_detected` for a claim the repository
+// does not corroborate. That was wrong, and it was measured wrong on a real
+// deployment: 617 findings from 1121 claims.
 //
-// It reuses `ledger_drift_detected` rather than introducing a twelfth event
-// type. doc 02 §3's type list is a protected surface and a new value is a major
-// schema version; this is already the vocabulary for a ledger claim that
-// external evidence contradicts, which is exactly what this is.
-const reasonUnsupportedWrite = "the content this tool_call reports writing is in no tree the run signed"
-
-// unsupportedWriteKeyPrefix namespaces this pass's idempotency keys, so a
-// second pass over the same claim appends nothing.
-const unsupportedWriteKeyPrefix = "reconciler:unsupported_write:"
-
-// UnsupportedWriteKey is the `idempotency_key` such a finding carries: the
-// subject event's id, which is unique on the chain by construction.
-func UnsupportedWriteKey(eventID string) string {
-	return unsupportedWriteKeyPrefix + eventID
-}
+// Narrowing to the LAST write per path — the state that should end up committed
+// — brings it to 85 of 267. Still a third of honest work, and those 85 are
+// honest for reasons no rule removes: a run's last write to a path is not the
+// final state, because another run edits it before anyone commits; a squash or
+// rebase REWRITES the content, so the blob that was written never appears in
+// the repository at all; and work gets abandoned.
+//
+// An alert that is wrong a third of the time is not an alert. It is noise that
+// teaches an operator to ignore red, which this project deleted once already on
+// the same day this was written. So corroboration is a NUMBER, never an
+// accusation:
+//
+//   - A write the repository corroborates is evidence. It is counted.
+//   - A write it does not is not evidence of anything. It is counted too.
+//   - A corroboration RATE that falls is a signal a human can act on. A single
+//     uncorroborated write is not.
+//
+// #169 is therefore half-answered, and it is the honest half: a reported write
+// can be CORROBORATED, and its absence cannot be read as a lie.
 
 // readRunBody opens one retained tool-call body.
 //
 // The same layout internal/api/runlog.go reads: one directory per run, one file
 // per digest. The digest is validated before it is used as a path element and
-// the run id is taken by base — these two strings arrive from the ledger, and
-// the guard belongs on the line that opens the file rather than forty lines
-// away where a later caller can miss it.
+// the run id is taken by base — both arrive from the ledger, and the guard
+// belongs on the line that opens the file.
 //
-// The body is NOT checked against its digest here. That check is the run log's
-// job and its answer is already on the dashboard; a body that has been altered
-// on disk produces a claim that will not match any tree, which this pass would
-// then report as an unsupported write — the wrong finding. So a mismatch is
-// treated as unreadable instead.
+// A body that does not match its digest is treated as unreadable rather than as
+// a claim: it would reconstruct content no tree holds, and counting that as
+// uncorroborated would report the wrong thing about the agent.
 func readRunBody(dir, runID, digest string) ([]byte, bool) {
 	hexPart, ok := strings.CutPrefix(digest, "sha256:")
 	if !ok || len(hexPart) != 64 {
@@ -335,9 +336,6 @@ type writesView struct {
 	// claims are the tool calls that might have written something. Whether
 	// they did is decided from the body, which the chain does not hold.
 	claims []claimRef
-	// reported is the set of subject event ids a finding already names, read
-	// back off the chain rather than remembered between cycles.
-	reported map[string]struct{}
 }
 
 // claimRef is a tool call as the chain holds it: enough to find its body.
@@ -350,10 +348,9 @@ type claimRef struct {
 
 func newWritesView() *writesView {
 	return &writesView{
-		trees:    map[string]map[string]struct{}{},
-		repoOf:   map[string]string{},
-		claims:   nil,
-		reported: map[string]struct{}{},
+		trees:  map[string]map[string]struct{}{},
+		repoOf: map[string]string{},
+		claims: nil,
 	}
 }
 
@@ -361,6 +358,17 @@ func newWritesView() *writesView {
 func (v *writesView) observe(record event.Fields) {
 	runID := recordString(record, event.FieldRunID)
 	switch recordString(record, event.FieldEventType) {
+	case event.EventTypeRunRegistered:
+		// The repository a run worked in, from ADR-0045's `repo`. Read HERE and
+		// not only from `commit_recorded`, because the runs this check is about
+		// are mostly runs that never signed: taking the repository only from a
+		// signing event left every subagent's claims with nothing to check.
+		if runID != "" {
+			if repo := recordString(record, event.FieldRepo); repo != "" {
+				v.repoOf[runID] = repo
+			}
+		}
+
 	case event.EventTypeCommitRecorded:
 		// The trees a run signed are the evidence every claim of that run is
 		// judged against. A superseding record names the same tree as the
@@ -389,14 +397,6 @@ func (v *writesView) observe(record event.Fields) {
 			spiffeID: recordString(record, event.FieldSpiffeID),
 			digest:   digest,
 		})
-
-	case event.EventTypeLedgerDriftDetected:
-		// Dedupe read back off the chain, never remembered: a fresh process
-		// must behave identically to one that has been running for a week,
-		// which is the property REC-005 rests on.
-		if subject := recordString(record, event.FieldSubjectEventID); subject != "" {
-			v.reported[subject] = struct{}{}
-		}
 	}
 }
 
@@ -422,9 +422,6 @@ func (r *Reconciler) checkWrites(
 	blobsFor := map[string][]map[string]struct{}{}
 
 	for _, claim := range view.claims {
-		if _, already := view.reported[claim.eventID]; already {
-			continue
-		}
 		raw, ok := readRunBody(cfg.LogDir, claim.runID, claim.digest)
 		if !ok {
 			report.Unreadable++
@@ -437,78 +434,54 @@ func (r *Reconciler) checkWrites(
 			continue
 		}
 
-		signed, known := blobsFor[claim.runID]
+		repo := view.repoOf[claim.runID]
+		holdings, known := blobsFor[repo]
 		if !known {
-			signed = r.signedBlobs(ctx, view, claim.runID, served)
-			blobsFor[claim.runID] = signed
+			holdings = r.repoBlobs(ctx, repo, served)
+			blobsFor[repo] = holdings
 		}
 
 		report.Checked++
-		switch JudgeWrite(write, signed) {
+		switch JudgeWrite(write, holdings) {
 		case WriteSupported:
 			report.Supported++
 		case WriteUncheckable:
 			report.Uncheckable++
 		case WriteUnsupported:
+			// Counted, never appended. See "WHY THIS PASS APPENDS NOTHING".
 			report.Unsupported++
-			write.SPIFFEID = claim.spiffeID
-			r.reportUnsupportedWrite(ctx, write)
 		}
 	}
 	return report
 }
 
-// signedBlobs is every blob in every tree a run signed, in a repository this
-// pass was asked to read.
+// repoBlobs is every blob one repository holds, or nothing.
 //
-// A tree that cannot be read contributes nothing and is NOT an error for the
-// run: the repository may simply not be on this machine. What that produces is
-// an "uncheckable" verdict, which is the honest answer — not an accusation.
-func (r *Reconciler) signedBlobs(
-	ctx context.Context, view *writesView, runID string, served map[string]struct{},
+// A repository this pass was not asked to read, or one that cannot be read,
+// contributes nothing and is NOT an error: it may simply not be on this
+// machine. That produces an "uncheckable" count, which is the honest answer.
+//
+// Repository-wide rather than per-run, and that widening was measured: scoped
+// to the trees a run itself signed, the check saw nothing at all on a real
+// deployment — 63 runs made tool calls, 165 signed commits, and 15 did both,
+// because subagents do the work and a separate run signs it. Following
+// parent_run_id does not help; a subagent's parent is its session, and sessions
+// sign nothing.
+//
+// The cost of widening is stated where it matters: corroboration now means the
+// content EXISTS in this repository, not that this run produced it.
+func (r *Reconciler) repoBlobs(
+	ctx context.Context, repo string, served map[string]struct{},
 ) []map[string]struct{} {
-	repo := view.repoOf[runID]
+	if repo == "" {
+		return nil
+	}
 	if _, ok := served[repo]; !ok {
 		return nil
 	}
-	var out []map[string]struct{}
-	for tree := range view.trees[runID] {
-		blobs, err := r.cfg.Repos.TreeBlobs(ctx, repo, tree)
-		if err != nil {
-			continue
-		}
-		out = append(out, blobs)
+	blobs, err := r.cfg.Repos.ReachableBlobs(ctx, repo)
+	if err != nil || len(blobs) == 0 {
+		return nil
 	}
-	return out
-}
-
-// reportUnsupportedWrite appends the finding, once per subject.
-func (r *Reconciler) reportUnsupportedWrite(ctx context.Context, write WriteClaim) {
-	body := event.Fields{
-		event.FieldSchemaVersion:  event.SchemaVersion,
-		event.FieldEventType:      event.EventTypeLedgerDriftDetected,
-		event.FieldSource:         event.SourceReconciler,
-		event.FieldSubjectEventID: write.EventID,
-		event.FieldReason:         reasonUnsupportedWrite,
-		event.FieldIdempotencyKey: UnsupportedWriteKey(write.EventID),
-	}
-	// doc 02 §2: run_id and spiffe_id are omitted TOGETHER. The subject is a
-	// run's own tool call, so both are present and the feed names the agent
-	// whose claim this is — unless the subject was unreadable, where inventing
-	// a run scope would be a second falsehood on top of the one reported.
-	if write.RunID != "" && write.SPIFFEID != "" {
-		body[event.FieldRunID] = write.RunID
-		body[event.FieldSpiffeID] = write.SPIFFEID
-	}
-	_, err := r.cfg.Appender.Append(ctx, body)
-	if err != nil {
-		if r.cfg.Alert != nil {
-			r.cfg.Alert(ctx, Finding{
-				Outcome: OutcomeUnresolved,
-				RunID:   write.RunID,
-				Detail: fmt.Sprintf("recording an unsupported write for tool_call %s: %v",
-					write.EventID, err),
-			})
-		}
-	}
+	return []map[string]struct{}{blobs}
 }
