@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -60,13 +62,18 @@ var ip4Retryable = map[mcp.Class]retryRule{
 
 // verdict is what this issue concluded about one tool × class cell.
 //
-// RM-028 (#36) also had a third value, deferred, for the eleven sign_commit
-// cells the tool did not yet exist to decide. RM-071 (#94) decided all
-// eleven — see the sign_commit block below — and removed the value along
-// with it: IP §4 has exactly five tools and all five are now bound, so a
-// verdict of "the tool does not exist yet" can never be constructed again.
-// Keeping a case that cannot fire is exactly the vacuous-branch shape this
-// project's branch floor exists to catch.
+// RM-028 (#36) had a third value, deferred, for the eleven sign_commit cells
+// the tool did not yet exist to decide. RM-071 (#94) decided all eleven and
+// removed the value with it, on this reasoning: IP §4 has exactly five tools
+// and all five are now bound, so a verdict of "the tool does not exist yet"
+// can never be constructed again.
+//
+// RM-131 (#210) made that premise false. The surface is eight names and
+// observe_session (#207) has no implementation, so the state deferred
+// described exists again and the value comes back with it. It is not a vacuous
+// branch now: TestMCP006TheMatrixIsExactlyToolsTimesClasses refuses it on any
+// tool that HAS a binder, so it can only describe a tool that genuinely is not
+// there, and it disappears again — permanently — when #207 binds the eighth.
 type verdict int
 
 const (
@@ -77,6 +84,12 @@ const (
 	// is a finding about the document, not a hole in the tests. why says which
 	// dependency or argument the tool does not have.
 	unreachable
+	// deferred: the tool is on the surface and has no implementation, so there
+	// is nothing to decide the cell against. Only a tool with no binder may
+	// carry it, and why must say which issue removes it. Deciding these cells
+	// against an unwritten tool would be writing down a guess and calling it a
+	// contract.
+	deferred
 )
 
 // runIDRule is what IP §4's optional `run_id` must do on this cell. doc 02 §1
@@ -111,7 +124,7 @@ const (
 	digestB = "sha256:bb00000000000000000000000000000000000000000000000000000000000000"
 )
 
-// matrix is every tool of IP §4 against every class of IP §4: 5 × 11 = 55.
+// matrix is every tool of IP §4 against every class of IP §4: 8 × 11 = 88.
 //
 // It is written out in full, in IP §4 order, rather than generated from the
 // reachable cases — so that a class nobody thought about is a row that says so
@@ -823,6 +836,296 @@ var matrix = []cell{
 			return s.callExpectingError(t, mcp.ToolRetireAgent, map[string]any{"run_id": forged})
 		},
 	},
+
+	// -----------------------------------------------------------------------
+	// observe_tool_call(run_id, tool, body, run_token?)
+	//
+	// RM-127 (#206), E11. The tool takes an observed call WITH its body, digests
+	// and stores the body on the operator's own volume, and appends the
+	// `tool_call` by reference. Two consequences decide most of these eleven.
+	//
+	// It holds no credential and reaches no remote service. ObserveToolCallConfig
+	// has four members — a run directory, the ledger, the idempotency store and
+	// a body volume — and a run-token secret; there is no SPIRE client, no
+	// minter, no Fulcio and no Rekor. Five of the eleven classes name a
+	// dependency this tool does not have.
+	//
+	// And it writes to TWO stores, not one. That is why LEDGER_UNAVAILABLE is
+	// driven below through the volume rather than through Postgres: a broken
+	// volume is a failure no other tool on the surface can produce, and the
+	// class it returns is the whole of I3's converse — a body that could not be
+	// kept must not be recorded as observed.
+	// -----------------------------------------------------------------------
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassAttestationFailed, verdict: unreachable,
+		why: "ObserveToolCallConfig has no SPIRE client of any kind: a run directory, the ledger, " +
+			"the idempotency store and a body volume. observe_tool_call attests nothing — it " +
+			"records what a harness ALREADY observed, after the fact.",
+	},
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassIdentityUnavailable, verdict: unreachable,
+		why: "same reason: no SPIRE dependency. The run's identity is read off the `run_registered` " +
+			"the ledger already holds, so SPIRE being down cannot stop an observation being " +
+			"stored and recorded.",
+	},
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassCredentialExpired, verdict: unreachable,
+		why: "no credential is presented and none is minted. The optional run_token is an HMAC " +
+			"over the run id (runtoken.go) and carries no validity window at all, so there is " +
+			"nothing here whose expiry could have passed — a wrong token is RUN_NOT_FOUND.",
+	},
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassAudienceMismatch, verdict: unreachable,
+		why: "doc 01 §4 gives observe_tool_call four arguments and none is an audience; it presents " +
+			"no credential to a relying party, so there is no audience to be mismatched. Asserted " +
+			"on the advertised input schema by TestMCP006OnlyGetCredentialTakesAnAudience.",
+	},
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassLedgerUnavailable, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// The BODY VOLUME is the second store this tool writes to, and the
+			// only one of the two that is not Postgres. IP §4's vocabulary is
+			// closed (doc 08 §3), so there is no BODY_STORE_UNAVAILABLE to add
+			// and this is the class that carries it: a mount that came back
+			// clears it, which is exactly what retryable tells the caller.
+			//
+			// What the cell pins is the refusal, not the message: a volume
+			// this tool cannot write to must stop the call, because a
+			// `tool_call` naming a digest whose body never landed is a
+			// permanent claim about evidence that never existed (I3).
+			//
+			// A dead Postgres reaches the same class here as it does for
+			// record_event, one gate earlier — the idempotency claim is taken
+			// before the run is resolved — and the dead-ledger group below
+			// pins that shape. This drive is the half of the class only this
+			// tool has.
+			run := s.registerRun(t, "observe-volume-gone")
+			observeOnBlockedVolume(t, s)
+			return s.callExpectingError(t, mcp.ToolObserveToolCall, map[string]any{
+				"run_id": run.RunID, "tool": "Edit", "body": observedBody,
+			})
+		},
+	},
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassSigningUnavailable, verdict: unreachable,
+		why: "observe_tool_call signs nothing: it writes a body to a local volume and appends a " +
+			"`tool_call` by reference. There is no Fulcio dependency in its configuration to be " +
+			"down; IP §6.3's case belongs to sign_commit.",
+	},
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassTransparencyUnavailable, verdict: unreachable,
+		why: "observe_tool_call never reaches Rekor. It appends to the innsegl chain, and it is the " +
+			"SEGMENT that is anchored, asynchronously and not on this path; the stored body is " +
+			"evidence held locally and is deliberately published nowhere (doc 05).",
+	},
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassRunNotFound, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// The same refusal a bad run_token produces, which is the point of
+			// it: a run_id is public, so the two must be indistinguishable.
+			observeOnVolume(t, s)
+			return s.callExpectingError(t, mcp.ToolObserveToolCall, map[string]any{
+				"run_id": unknownRunID, "tool": "Edit", "body": observedBody,
+			})
+		},
+	},
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassRunAlreadyRetired, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			observeOnVolume(t, s)
+			run := s.registerRun(t, "observe-retired")
+			s.retireRun(t, run.RunID)
+			// I4: a retired run's history stays readable; it stops growing.
+			// An observation arriving after the retirement is refused rather
+			// than appended late.
+			return s.callExpectingError(t, mcp.ToolObserveToolCall, map[string]any{
+				"run_id": run.RunID, "tool": "Edit", "body": observedBody,
+			})
+		},
+	},
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassDuplicateRequest, verdict: reachable,
+		runID: runIDAbsent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// A REPLAY is not this class and must never be: doc 01 §4 makes the
+			// tool idempotent on (run_id, digest), so the same body observed
+			// twice returns the stored reply and appends nothing (IP §6.6).
+			// That is the same reading record_event's cell takes — its replay
+			// returns the original event id too — and in both tools the class
+			// is reached the other way: one key presented for a request that is
+			// not the one it named.
+			//
+			// Here the key is DERIVED from (run_id, digest) rather than
+			// supplied, so the caller cannot present it against anything by
+			// choice. It still happens, and this is how: the same body under
+			// the same run, reported as a different tool. The key is
+			// necessarily the same and the fingerprint is not, and answering
+			// with the first call's reply would attest a tool this caller never
+			// named.
+			observeOnVolume(t, s)
+			run := s.registerRun(t, "observe-dupe-setup")
+			var out struct {
+				Digest string `json:"digest"`
+				Stored bool   `json:"stored"`
+			}
+			s.callExpectingSuccess(t, mcp.ToolObserveToolCall, map[string]any{
+				"run_id": run.RunID, "tool": "Edit", "body": observedBody,
+			}, &out)
+			if !out.Stored {
+				t.Fatalf("the setup call did not store the body: %+v", out)
+			}
+			return s.callExpectingError(t, mcp.ToolObserveToolCall, map[string]any{
+				"run_id": run.RunID, "tool": "Bash", "body": observedBody,
+			})
+		},
+	},
+	{
+		tool: mcp.ToolObserveToolCall, class: mcp.ClassInvariantViolation, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// IP E4 at this tool's own narrowest point. `tool` names the agent
+			// tool that was observed and becomes doc 02 §3's `tool_name`, under
+			// record_event's grammar; `body` is where a body goes, and it goes
+			// to the volume and nowhere else. A body sent where the name
+			// belongs is refused before the run is ever looked up — which is
+			// why an unknown run id here is not the failure that comes back.
+			observeOnVolume(t, s)
+			return s.callExpectingError(t, mcp.ToolObserveToolCall, map[string]any{
+				"run_id": unknownRunID, "tool": observedBody, "body": observedBody,
+			})
+		},
+	},
+
+	// -----------------------------------------------------------------------
+	// observe_session(session_id, phase, cwd, agent_type?, task?)
+	//
+	// RM-131 (#210) put the name on the surface; #207 (RM-128) writes the tool.
+	// All eleven cells are deferred and none may stay that way once it binds —
+	// TestMCP006TheMatrixIsExactlyToolsTimesClasses refuses a deferred cell on
+	// a bound tool, so #207 fails here on the day it registers its binder.
+	// -----------------------------------------------------------------------
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassAttestationFailed, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it and replaces this cell with a real verdict; until then any verdict " +
+			"here would be a guess about code nobody has written.",
+	},
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassIdentityUnavailable, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it; phase=start will reach SPIRE through register_agent's path, but " +
+			"which classes survive that call is not decidable before the code exists.",
+	},
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassCredentialExpired, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it and replaces this cell with a real verdict; until then any verdict " +
+			"here would be a guess about code nobody has written.",
+	},
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassAudienceMismatch, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it and replaces this cell with a real verdict; until then any verdict " +
+			"here would be a guess about code nobody has written.",
+	},
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassLedgerUnavailable, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it; its stop path is required never to block, so whether this class is " +
+			"returned or swallowed is precisely what that issue must decide and prove.",
+	},
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassSigningUnavailable, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it and replaces this cell with a real verdict; until then any verdict " +
+			"here would be a guess about code nobody has written.",
+	},
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassTransparencyUnavailable, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it and replaces this cell with a real verdict; until then any verdict " +
+			"here would be a guess about code nobody has written.",
+	},
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassRunNotFound, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it; a stop for a session that never started is required to succeed " +
+			"rather than raise this, which is exactly the behaviour that issue must prove.",
+	},
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassRunAlreadyRetired, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it; a second stop is required to return the original timestamp rather " +
+			"than raise this, which is exactly the behaviour that issue must prove.",
+	},
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassDuplicateRequest, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it; a duplicate start is required to return the same run, so whether " +
+			"this class is ever on the wire is that issue's to settle.",
+	},
+	{
+		tool: mcp.ToolObserveSession, class: mcp.ClassInvariantViolation, verdict: deferred,
+		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
+			"binds it and replaces this cell with a real verdict; until then any verdict " +
+			"here would be a guess about code nobody has written.",
+	},
+}
+
+// ---------------------------------------------------------------------------
+// observe_tool_call's fixture (RM-127, #206).
+// ---------------------------------------------------------------------------
+
+// observedBody is a tool-call body of the kind a harness forwards: a file
+// write, carrying the file's own contents. doc 05 keeps these on the operator's
+// machine, which is why the cells above also send it where a tool NAME belongs
+// — a body has exactly one destination and the ledger is not it.
+const observedBody = `{"tool_name":"Edit","tool_input":` +
+	`{"file_path":"/w/a.go","new_string":"apiKey := \"redacted\""}}`
+
+// observeOnVolume configures observe_tool_call on s against a body volume that
+// works.
+//
+// The wiring is beside the cells rather than in newStack because nothing
+// configures this tool yet: RM-127 (#206) bound it, and the entry point wires
+// it when the reference shim moves onto it (#208). Everything it wires is the
+// shipped path — the shipped ConfigureObserveToolCall, this stack's real
+// ledger and real idempotency store, the real transport — so the cells drive
+// the tool a deployment will serve and not a stand-in. When the battery in
+// TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable gains an
+// observe_tool_call entry it must call this first, or every hostile input
+// meets an unconfigured tool and the closure claim holds for nothing.
+func observeOnVolume(t *testing.T, s *stack) {
+	t.Helper()
+	observeConfigured(t, s, t.TempDir())
+}
+
+// observeOnBlockedVolume configures it against a volume that genuinely cannot
+// be written to: the run directory's parent is a regular file, so MkdirAll
+// fails whatever uid the tests run as. Nothing here is stubbed — the same
+// reason the dead-ledger cells kill a real Postgres.
+func observeOnBlockedVolume(t *testing.T, s *stack) {
+	t.Helper()
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("the volume is not mounted"), 0o600); err != nil {
+		t.Fatalf("preparing the blocked volume: %v", err)
+	}
+	observeConfigured(t, s, filepath.Join(blocked, "bodies"))
+}
+
+func observeConfigured(t *testing.T, s *stack, bodyDir string) {
+	t.Helper()
+	restore, err := mcp.ConfigureObserveToolCall(mcp.ObserveToolCallConfig{
+		Runs: ledgerRuns{store: s.store}, Ledger: s.store, Idempotency: s.idem,
+		BodyDir: bodyDir,
+	})
+	if err != nil {
+		t.Fatalf("ConfigureObserveToolCall: %v", err)
+	}
+	t.Cleanup(restore)
 }
 
 // deadLedgerRunID is the run registered on the dead-ledger stack while
@@ -834,14 +1137,33 @@ var deadLedgerRunID string
 // MCP-006.
 // ---------------------------------------------------------------------------
 
+// shippedTools is the tool names that actually have a registered binder, which
+// is what makes a deferred cell honest or dishonest (RM-131, #210). It is read
+// from a real server rather than written down, so a tool that stopped
+// registering itself shows up here as unbound instead of being assumed present.
+func shippedTools(t *testing.T) []mcp.ToolName {
+	t.Helper()
+	srv, err := mcp.New(mcp.Config{Version: "v0.0.0-contract"})
+	if err != nil {
+		t.Fatalf("mcp.New: %v", err)
+	}
+	return srv.BoundTools()
+}
+
 // TestMCP006TheMatrixIsExactlyToolsTimesClasses keeps the matrix honest before
-// anything is run against it: 5 × 11, every pair once, no pair missing, and
+// anything is run against it: 8 × 11, every pair once, no pair missing, and
 // every non-reachable cell carrying the reason it is not.
 func TestMCP006TheMatrixIsExactlyToolsTimesClasses(t *testing.T) {
 	tools, classes := mcp.ToolNames(), mcp.Classes()
 	if want := len(tools) * len(classes); len(matrix) != want {
 		t.Fatalf("matrix has %d cells, IP §4 has %d tools × %d classes = %d",
 			len(matrix), len(tools), len(classes), want)
+	}
+	// bound is the tools that actually ship an implementation. A deferred cell
+	// is only honest about a tool that is not one of them (RM-131, #210).
+	bound := map[mcp.ToolName]bool{}
+	for _, n := range shippedTools(t) {
+		bound[n] = true
 	}
 	seen := map[string]bool{}
 	for _, c := range matrix {
@@ -851,7 +1173,7 @@ func TestMCP006TheMatrixIsExactlyToolsTimesClasses(t *testing.T) {
 		}
 		seen[key] = true
 		if !c.tool.Valid() {
-			t.Errorf("%q is not one of the five IP §4 tool names", c.tool)
+			t.Errorf("%q is not one of the eight IP §4 tool names", c.tool)
 		}
 		if !c.class.Valid() {
 			t.Errorf("%q is not one of the eleven IP §4 error classes", c.class)
@@ -870,6 +1192,17 @@ func TestMCP006TheMatrixIsExactlyToolsTimesClasses(t *testing.T) {
 			}
 			if len(c.why) < 40 {
 				t.Errorf("%s is marked unreachable with no explanation; the finding IS the value", key)
+			}
+		case deferred:
+			if c.drive != nil {
+				t.Errorf("%s is marked deferred and carries an input", key)
+			}
+			if len(c.why) < 40 {
+				t.Errorf("%s is marked deferred with no explanation of which issue removes it", key)
+			}
+			if bound[c.tool] {
+				t.Errorf("%s is marked deferred and %s IS bound; a shipped tool's cells "+
+					"must be decided, not postponed", key, c.tool)
 			}
 		}
 	}
