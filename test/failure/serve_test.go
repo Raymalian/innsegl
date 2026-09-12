@@ -134,9 +134,16 @@ type readinessWire struct {
 }
 
 // outstandingTools are the names on IP §4's surface with no implementation
-// yet. RM-131 (#210) put three names there; each is removed by the issue that
-// binds it (#205, #206, #207), and the list is empty again after that.
-var outstandingTools = []string{"observe_session"}
+// yet. RM-131 (#210) put three names there; each was removed by the issue that
+// binds it (#205, #206, #207), and #207 was the last — so the list is empty,
+// which is the state it was in before the surface opened.
+//
+// It is kept as an empty list rather than deleted with the assertions around
+// it. assertShippedSplit reads it to decide which side each of the eight
+// belongs on, and an empty list makes that read "every tool is bound" without
+// any of those assertions having to be rewritten the next time a name is added
+// ahead of its implementation.
+var outstandingTools []string
 
 // assertShippedSplit checks a health endpoint's bound/missing split against
 // what the binary actually ships, and says which issue owns the difference.
@@ -681,8 +688,11 @@ func TestTheHealthEndpointsThroughTheShippedServer(t *testing.T) {
 	}
 
 	// An incomplete tool surface is reported and never a reason to be unready.
-	// The surface is complete since RM-033 (#41), so the field must now be empty —
-	// the same assertion, on the other side of the fifth tool landing.
+	// The surface was complete at five since RM-033 (#41), incomplete again at
+	// eight from RM-131 (#210), and complete once more since #207 bound the
+	// last of the three — so the field must be empty again. The assertion has
+	// not changed through any of that: it compares against outstandingTools,
+	// which is the one place the answer is written down.
 	if len(ready.MissingTools) != len(outstandingTools) {
 		t.Errorf("%s reports missing_tools=%v, want none; every IP §4 tool is bound (ADR-0024)",
 			mcp.ReadyPath, ready.MissingTools)
