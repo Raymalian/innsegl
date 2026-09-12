@@ -838,6 +838,115 @@ var matrix = []cell{
 	},
 
 	// -----------------------------------------------------------------------
+	// describe_workspace(cwd)
+	//
+	// RM-126 (#205), E11. The tool answers what repository, worktree, branch
+	// and task a path names. It is a PURE DERIVATION: it reads git plumbing on
+	// a local filesystem, returns the answer, and writes nothing anywhere.
+	//
+	// One fact decides ten of these eleven. DescribeWorkspaceConfig has two
+	// members and both of them are directories — the host root and the mount
+	// it corresponds to. There is no SPIRE client, no ledger, no idempotency
+	// store, no credential, no Fulcio and no Rekor; IP §4 gives the tool one
+	// argument and it is a path. Nine of the eleven classes name a dependency
+	// or an argument this tool does not have, and RUN_NOT_FOUND and
+	// RUN_ALREADY_RETIRED name a run it is never told about — this is the tool
+	// a harness calls BEFORE it has an identity, because its answer is what
+	// register_agent's `repo` and `branch` are built from.
+	//
+	// So exactly one class is reachable, and that is the finding rather than a
+	// gap: a tool with no dependencies has no dependency outage to report, and
+	// IP §4's closed vocabulary leaves INVARIANT_VIOLATION as the only thing
+	// it can say when a caller asks something it cannot answer. Every refusal
+	// in workspace.go is that class, which is also why none was invented for
+	// it — the vocabulary is a protected surface (doc 08 §3).
+	// -----------------------------------------------------------------------
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassAttestationFailed, verdict: unreachable,
+		why: "DescribeWorkspaceConfig holds two directories and nothing else: the host root and " +
+			"the mount it corresponds to. There is no SPIRE client and no Workload API on this " +
+			"path — the tool describes a filesystem, and a filesystem does not attest.",
+	},
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassIdentityUnavailable, verdict: unreachable,
+		why: "the same absence: no SPIRE dependency of any kind. This is the tool a harness calls " +
+			"BEFORE it has an identity — its answer is what register_agent's repo and branch " +
+			"arguments are built from — so SPIRE being unreachable cannot stop it answering.",
+	},
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassCredentialExpired, verdict: unreachable,
+		why: "no credential is presented, minted or held. doc 01 §4 gives describe_workspace one " +
+			"argument and it is a path; there is nothing here carrying a validity window whose " +
+			"end could have passed, and no run token either — the tool authenticates nothing.",
+	},
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassAudienceMismatch, verdict: unreachable,
+		why: "the tool presents no credential to a relying party, so there is no audience to be " +
+			"mismatched, and its single argument is not one. Asserted on the advertised input " +
+			"schema by TestMCP006OnlyGetCredentialTakesAnAudience.",
+	},
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassLedgerUnavailable, verdict: unreachable,
+		why: "a pure derivation: it appends no event, resolves no run and holds neither a ledger " +
+			"nor an idempotency store in its configuration. It is the one tool on the surface " +
+			"that answers identically with Postgres gone, which is why it has no dead-ledger cell.",
+	},
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassSigningUnavailable, verdict: unreachable,
+		why: "describe_workspace signs nothing and has no Fulcio in its configuration. Every " +
+			"external call it makes is local read-only git plumbing — `worktree list`, " +
+			"`symbolic-ref`, `rev-parse`, `remote get-url` — and none of them reaches a CA.",
+	},
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassTransparencyUnavailable, verdict: unreachable,
+		why: "no Rekor dependency, and nothing on this path is published anywhere: the answer is " +
+			"derived from the filesystem, returned to the caller and not recorded. There is no " +
+			"transparency entry for it to be missing.",
+	},
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassRunNotFound, verdict: unreachable,
+		why: "the tool takes no run_id. It runs before any run exists — a harness that knows only " +
+			"its own cwd calls this first and register_agent second — so there is no run for it " +
+			"to look up and fail to find.",
+	},
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassRunAlreadyRetired, verdict: unreachable,
+		why: "the same absent argument, for the same reason: no run is named, resolved or written " +
+			"to, so none can be found already retired. I4 protects a retired run's history from " +
+			"growing, and this tool appends nothing to any run's history at all.",
+	},
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassDuplicateRequest, verdict: unreachable,
+		why: "the tool takes no idempotency_key, and ADR-0004 requires one on exactly the tools " +
+			"whose call has an effect. This one has none: the same cwd answers the same twice, " +
+			"so a repeated call is not a replay and cannot key a request it did not name.",
+	},
+	{
+		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassInvariantViolation, verdict: reachable,
+		runID: runIDAbsent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// THE ONLY CLASS THIS TOOL CAN PRODUCE, driven through the refusal
+			// it exists for: a cwd outside the directory the deployment mounts.
+			//
+			// A harness reports a path on its OWN machine, and the translation
+			// onto this process's mount is the one thing the container cannot
+			// work out for itself. Every way it can fail — the host root unset,
+			// the path outside it, the tree not a working tree, the repository
+			// with no `origin` — is a refusal rather than a guess, because a
+			// guessed translation describes the wrong repository confidently
+			// and the answer is on its way into an append-only record.
+			//
+			// run_id is ABSENT and not empty: the failure is scoped to a path,
+			// there is no run to scope it to, and doc 02 §1 distinguishes the
+			// two states.
+			projects, _ := describeOnProjects(t)
+			return s.callExpectingError(t, mcp.ToolDescribeWorkspace, map[string]any{
+				"cwd": filepath.Join(projects, "..", "outside-the-mount"),
+			})
+		},
+	},
+
+	// -----------------------------------------------------------------------
 	// observe_tool_call(run_id, tool, body, run_token?)
 	//
 	// RM-127 (#206), E11. The tool takes an observed call WITH its body, digests
@@ -1073,6 +1182,55 @@ var matrix = []cell{
 			"binds it and replaces this cell with a real verdict; until then any verdict " +
 			"here would be a guess about code nobody has written.",
 	},
+}
+
+// ---------------------------------------------------------------------------
+// describe_workspace's fixture (RM-126, #205).
+// ---------------------------------------------------------------------------
+
+// describeOnProjects configures describe_workspace against a real projects
+// root with one real git repository under it, and returns both.
+//
+// The wiring is here rather than in newStack for the same reason
+// observeOnVolume's is: nothing configures this tool yet. RM-126 (#205) bound
+// it and deploy/compose/innsegl.workrepo.yml sets INNSEGL_HOST_PROJECTS on the
+// container, but the serve entry point installs no DescribeWorkspaceConfig, so
+// a stack that called newStack alone would meet a tool falling back to an
+// environment variable this process does not set — every input would produce
+// the same "the host root is unset" refusal and the cells would be measuring
+// the fixture rather than the tool. That gap is #211 and is not closed here.
+// Everything below is the SHIPPED path: the shipped ConfigureDescribeWorkspace,
+// real git plumbing, the real transport.
+//
+// The two roots are the SAME directory, which is the one thing about it that
+// is not a deployment's shape. A container path does not exist on the machine
+// running this test, so a host root that differs from the mount could only be
+// paired with a tree that is not there. The translation itself is pinned by
+// MCP-039 in internal/mcp, against a host root that is deliberately not the
+// mount; what these cells are about is the tool's error surface, which the
+// translation reaches identically either way.
+func describeOnProjects(t *testing.T) (projects, worktree string) {
+	t.Helper()
+	projects = t.TempDir()
+	worktree = filepath.Join(projects, fmt.Sprintf("contract-workspace-%d", scRepoSeq.Add(1)))
+	if err := os.MkdirAll(worktree, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", worktree, err)
+	}
+	scGit(t, worktree, "init", "-q", "-b", "main")
+	// An origin, because `repo` is read from it and must satisfy doc 02 §5's
+	// three-segment host/org/name. A repository without one is a refusal, not
+	// a blank — describe_workspace never synthesises an identifier from a
+	// directory name.
+	scGit(t, worktree, "remote", "add", "origin", "git@github.com:innsegl/contract-workspace.git")
+
+	restore, err := mcp.ConfigureDescribeWorkspace(mcp.DescribeWorkspaceConfig{
+		HostProjects: projects, Projects: projects,
+	})
+	if err != nil {
+		t.Fatalf("ConfigureDescribeWorkspace: %v", err)
+	}
+	t.Cleanup(restore)
+	return projects, worktree
 }
 
 // ---------------------------------------------------------------------------
@@ -1449,6 +1607,14 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 
 	long := strings.Repeat("x", 4096)
 
+	// describe_workspace needs its configuration installed before any of its
+	// rows run. The shipped entry point does not install one (#211), so
+	// without this every input below would meet a tool that refuses on the
+	// missing host root and the closure claim would hold for the fixture
+	// rather than for the tool — the vacuous-pass shape this whole file is
+	// written against. Same reasoning as observeOnVolume's doc comment.
+	dwProjects, dwWorktree := describeOnProjects(t)
+
 	battery := map[mcp.ToolName][]map[string]any{
 		mcp.ToolRegisterAgent: {
 			{},
@@ -1512,6 +1678,22 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 			{"run_id": unknownRunID},
 			{"run_id": "Run-42"},
 			{"run_id": "../../etc/passwd"},
+		},
+		// Every way a path can be wrong, plus one that is right. The last row
+		// is the one that keeps the rest honest: it SUCCEEDS, which is how
+		// this entry shows the tool was reachable and configured and that the
+		// refusals above are refusals of the input rather than of the fixture.
+		mcp.ToolDescribeWorkspace: {
+			{},
+			{"cwd": ""},
+			{"cwd": "relative/path"},
+			{"cwd": long},
+			{"cwd": "/etc"},
+			{"cwd": "../../etc/passwd"},
+			{"cwd": filepath.Join(dwProjects, "..", "outside-the-mount")},
+			{"cwd": filepath.Join(dwProjects, "no-such-directory")},
+			{"cwd": dwProjects},
+			{"cwd": dwWorktree},
 		},
 	}
 
