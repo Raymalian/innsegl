@@ -14,9 +14,17 @@
 # down. The rule had no gate, so it relied on remembering, and was forgotten
 # twice. Every other rule in this repository that matters has a script.
 #
-# WHAT IT LOOKS FOR. An absolute path under a user home directory — `/Users/x/`
-# or `/home/x/`. That is the shape a real checkout has and an anonymised example
-# does not: `<repo>`, `<host-checkout>` and `<org>/<name>` all pass.
+# WHAT IT LOOKS FOR. An absolute path under a user home directory: a home root,
+# then a user name, then a further segment. That is the shape a real checkout
+# has and an anonymised example does not — `<repo>`, `<host-checkout>` and
+# `<org>/<name>` all pass, because `<` and `>` fall outside the name class.
+#
+# This comment names no example path on purpose, and the first draft of it did
+# — twice, and then once more inside the sentence explaining why it must not.
+# The gate reads git-tracked files and its own file is one of them, so an
+# illustrative path here fails the build. That is not a limitation to work
+# around: a gate that cannot describe a violation without committing one is
+# telling you the rule is real. PATTERN below is the precise statement anyway.
 #
 # WHAT IT DELIBERATELY ALLOWS.
 #

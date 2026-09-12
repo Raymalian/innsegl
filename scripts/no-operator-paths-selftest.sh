@@ -22,8 +22,8 @@
 #   4. GREEN on /home/innsegl/... — the container image's OWN user, which
 #      appears in both Dockerfiles and is not an operator path. A gate that
 #      fires on it would be turned off within a week.
-#   5. RED on /home/innsegluser/... — the allowlist must match the container's
-#      user and not merely start with it.
+#   5. RED on a user whose name merely BEGINS with the container's user —
+#      the allowlist must match a whole name, not a prefix.
 #   6. GREEN on a path inside docs/, which is local-only and never pushed.
 #
 # Case 4 carries a TRAILING SEGMENT deliberately. It was first written as
@@ -113,11 +113,15 @@ fi
 unplant "selftest-plant-container.txt"
 
 # --- case 5: the allowlist matches a user, not a prefix ---------------------
-plant "selftest-plant-prefix.txt" "measured at $HOMEL/innsegluser/src/thing"
+# The name is assembled, like every other plant in this file: writing it out
+# would put a violation in a tracked file and fail the gate this very script
+# tests. See the note beside HOMES/HOMEL above.
+PREFIXUSER="innsegl""user"
+plant "selftest-plant-prefix.txt" "measured at $HOMEL/$PREFIXUSER/src/thing"
 if run_gate; then
-  bad "THE ALLOWLIST OVER-MATCHES — /home/innsegluser/ was accepted"
+  bad "THE ALLOWLIST OVER-MATCHES — a name merely beginning with the image's user was accepted"
 else
-  ok "red on $HOMEL/innsegluser/..., which merely starts with the image's user"
+  ok "red on a user name that merely starts with the image's user"
 fi
 unplant "selftest-plant-prefix.txt"
 
