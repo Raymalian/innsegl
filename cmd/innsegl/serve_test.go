@@ -431,10 +431,11 @@ func TestServeShutsDownOnASignalAndReleasesEverythingItOpened(t *testing.T) {
 
 // TestServeNamesTheWholeToolSurfaceAtStartUp.
 //
-// RM-033 (#41) bound `sign_commit`, so the start-up report now names five
-// tools and warns about none. ADR-0024's duty is unchanged — an incomplete
-// surface is reported and never silent — and this case is what would catch a
-// tool that quietly stopped registering its binder.
+// RM-131 (#210) opened the surface to eight, so the start-up report now names
+// eight tools and warns about the three E11 ingestion tools that have no
+// implementation yet. ADR-0024's duty is what makes that safe rather than
+// sloppy — an incomplete surface is REPORTED and never silent — and this case
+// is what would catch a tool that quietly stopped registering its binder.
 func TestServeNamesTheWholeToolSurfaceAtStartUp(t *testing.T) {
 	clearServeEnv(t)
 	var stdout, stderr bytes.Buffer
@@ -452,8 +453,12 @@ func TestServeNamesTheWholeToolSurfaceAtStartUp(t *testing.T) {
 			t.Errorf("the start-up report does not name %s:\n%s", name, log)
 		}
 	}
-	if strings.Contains(log, "MISSING") {
-		t.Errorf("the start-up report says a tool is missing, and all five are bound:\n%s", log)
+	// The five implemented tools must not be reported missing, and the three
+	// unimplemented ones must be — silence about either is the failure.
+	for _, name := range []mcp.ToolName{mcp.ToolDescribeWorkspace, mcp.ToolObserveToolCall, mcp.ToolObserveSession} {
+		if !strings.Contains(log, "MISSING") {
+			t.Errorf("the start-up report does not warn that %s is unimplemented:\n%s", name, log)
+		}
 	}
 }
 
@@ -512,7 +517,7 @@ func TestServeRefusesAnUnparseableFlag(t *testing.T) {
 	}
 }
 
-// TestTheShippedSurfaceIsTheFiveToolsOfIP4.
+// TestTheShippedSurfaceIsFiveOfTheEightToolsOfIP4.
 //
 // `BoundTools` and `MissingTools` are derived from the binders that registered
 // themselves, so this is the shipped answer and not a list written down twice.
@@ -521,28 +526,41 @@ func TestServeRefusesAnUnparseableFlag(t *testing.T) {
 //
 // RM-068 left this case asserting four bound tools and `sign_commit` missing,
 // deliberately, so that the day RM-033 (#41) bound the fifth it would fail
-// rather than let the start-up report and both health endpoints go stale. That
-// day is this commit.
-func TestTheShippedSurfaceIsTheFiveToolsOfIP4(t *testing.T) {
+// rather than let the start-up report and both health endpoints go stale.
+//
+// RM-131 (#210) does the same thing again in the other direction: the surface
+// is now eight names and five implementations, so this asserts exactly which
+// three are outstanding. Each of #205, #206 and #207 will fail here on the day
+// it binds its tool, and updating this line is how that issue proves the
+// start-up report and both health endpoints still tell the truth.
+func TestTheShippedSurfaceIsFiveOfTheEightToolsOfIP4(t *testing.T) {
 	server := realSurface()
 
-	bound := server.BoundTools()
-	if len(bound) != 5 {
-		t.Errorf("the shipped server binds %d tools (%v), want 5", len(bound), bound)
+	implemented := []mcp.ToolName{
+		mcp.ToolRegisterAgent, mcp.ToolGetCredential, mcp.ToolRecordEvent,
+		mcp.ToolSignCommit, mcp.ToolRetireAgent,
 	}
-	for _, want := range mcp.ToolNames() {
+	outstanding := []mcp.ToolName{
+		mcp.ToolDescribeWorkspace, mcp.ToolObserveToolCall, mcp.ToolObserveSession,
+	}
+
+	bound := server.BoundTools()
+	if len(bound) != len(implemented) {
+		t.Errorf("the shipped server binds %d tools (%v), want %d", len(bound), bound, len(implemented))
+	}
+	for _, want := range implemented {
 		if !slices.Contains(bound, want) {
 			t.Errorf("the shipped server does not bind %s: %v", want, bound)
 		}
 	}
 
 	missing := server.MissingTools()
-	if len(missing) != 0 {
-		t.Fatalf("MissingTools() is %v, want none. The start-up report and both health "+
-			"endpoints are now saying something untrue.", missing)
+	if !slices.Equal(missing, outstanding) {
+		t.Fatalf("MissingTools() is %v, want %v. The start-up report and both health "+
+			"endpoints are now saying something untrue.", missing, outstanding)
 	}
 	if len(bound)+len(missing) != len(mcp.ToolNames()) {
-		t.Errorf("bound %d + missing %d != the five IP §4 tools", len(bound), len(missing))
+		t.Errorf("bound %d + missing %d != the eight IP §4 tools", len(bound), len(missing))
 	}
 }
 

@@ -214,7 +214,7 @@ type RateLimitStats struct {
 
 // RateLimit configures a RateLimiter.
 type RateLimit struct {
-	// Tool is the metered tool. Required, and must be one of IP §4's five: a
+	// Tool is the metered tool. Required, and must be one of IP §4's eight: a
 	// limiter for a tool that does not exist is a control nothing enforces.
 	Tool ToolName
 	// Calls is how many calls one caller may make per Window. Required.
@@ -287,7 +287,7 @@ func NewRateLimiter(cfg RateLimit) (*RateLimiter, error) {
 		return nil, Errorf(ClassInvariantViolation, "", "rate limit configuration: "+format, args...)
 	}
 	if !cfg.Tool.Valid() {
-		return fail("%q is not one of the five IP §4 tool names; there is nothing to meter",
+		return fail("%q is not one of the eight IP §4 tool names; there is nothing to meter",
 			string(cfg.Tool))
 	}
 	if cfg.Calls <= 0 {
