@@ -65,6 +65,21 @@
 
 services:
   innsegl-mcp:
+    environment:
+      # WHAT THE MOUNT BELOW IS A MOUNT OF, which is the one thing a container
+      # cannot work out for itself.
+      #
+      # `describe_workspace` (RM-126) is handed a harness's OWN working
+      # directory -- a path on the host -- and has to answer about the same
+      # tree in here. It knows where the mount IS; nothing in the container
+      # says what it CORRESPONDS TO. So it is told, from the same variable the
+      # mount is written from, and the two cannot drift apart.
+      #
+      # Unset, the tool refuses every call and says so by name. That is the
+      # point: the plausible guesses all describe a repository confidently and
+      # may describe the wrong one, and the answer is on its way into an
+      # append-only record.
+      INNSEGL_HOST_PROJECTS: ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}
     volumes:
       # Read-write, and it has to be: a commit is a write. See above.
       - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:/projects
