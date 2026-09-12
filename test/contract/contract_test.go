@@ -62,18 +62,27 @@ var ip4Retryable = map[mcp.Class]retryRule{
 
 // verdict is what this issue concluded about one tool × class cell.
 //
-// RM-028 (#36) had a third value, deferred, for the eleven sign_commit cells
-// the tool did not yet exist to decide. RM-071 (#94) decided all eleven and
-// removed the value with it, on this reasoning: IP §4 has exactly five tools
-// and all five are now bound, so a verdict of "the tool does not exist yet"
-// can never be constructed again.
+// TWO VALUES, AND THE HISTORY OF THE THIRD IS WHY.
 //
-// RM-131 (#210) made that premise false. The surface is eight names and
-// observe_session (#207) has no implementation, so the state deferred
-// described exists again and the value comes back with it. It is not a vacuous
-// branch now: TestMCP006TheMatrixIsExactlyToolsTimesClasses refuses it on any
-// tool that HAS a binder, so it can only describe a tool that genuinely is not
-// there, and it disappears again — permanently — when #207 binds the eighth.
+// RM-028 (#36) had a third, deferred, for the eleven sign_commit cells the tool
+// did not yet exist to decide. RM-071 (#94) decided all eleven and removed the
+// value with it, on this reasoning: IP §4 has exactly five tools and all five
+// are now bound, so a verdict of "the tool does not exist yet" can never be
+// constructed again.
+//
+// RM-131 (#210) made that premise false — the surface became eight names with
+// three implementations outstanding — and put the value back, with the
+// safeguard that TestMCP006TheMatrixIsExactlyToolsTimesClasses refused it on
+// any tool that HAD a binder, so it could only ever describe a tool that
+// genuinely was not there.
+//
+// RM-128 (#207) bound the eighth, so the premise holds again and the value is
+// gone again. This time the assertion that replaced it is the positive one:
+// the count test requires every name on the surface to HAVE a binder, which is
+// the thing the deferred branch was really protecting. A ninth name added
+// ahead of its implementation will fail there rather than be quietly
+// describable, and whoever adds it can read this paragraph to see what the
+// third value was for.
 type verdict int
 
 const (
@@ -84,12 +93,6 @@ const (
 	// is a finding about the document, not a hole in the tests. why says which
 	// dependency or argument the tool does not have.
 	unreachable
-	// deferred: the tool is on the surface and has no implementation, so there
-	// is nothing to decide the cell against. Only a tool with no binder may
-	// carry it, and why must say which issue removes it. Deciding these cells
-	// against an unwritten tool would be writing down a guess and calling it a
-	// contract.
-	deferred
 )
 
 // runIDRule is what IP §4's optional `run_id` must do on this cell. doc 02 §1
@@ -1111,76 +1114,229 @@ var matrix = []cell{
 	// -----------------------------------------------------------------------
 	// observe_session(session_id, phase, cwd, agent_type?, task?)
 	//
-	// RM-131 (#210) put the name on the surface; #207 (RM-128) writes the tool.
-	// All eleven cells are deferred and none may stay that way once it binds —
-	// TestMCP006TheMatrixIsExactlyToolsTimesClasses refuses a deferred cell on
-	// a bound tool, so #207 fails here on the day it registers its binder.
+	// RM-128 (#207), E11. The eighth and last tool of IP §4's surface, and the
+	// only one that is a COMPOSITION: a start resolves the workspace through
+	// describe_workspace and mints the run through register_agent; a stop ends
+	// it through retire_agent. All three are the shipped tools called in
+	// process, so this tool's error surface is very nearly theirs.
+	//
+	// Two facts decide all eleven, and they pull in opposite directions.
+	//
+	// THE START PATH INHERITS register_agent's CLASSES, unchanged — this tool
+	// rewraps nothing, because IP §4's vocabulary is closed (doc 08 §3) and a
+	// second wording for one failure sends a shim author to the wrong file. So
+	// four classes that would be absurd for a tool "about sessions" are
+	// reachable here for exactly the reasons they are reachable for
+	// register_agent, and each cell below drives them the same way.
+	//
+	// THE STOP PATH PRODUCES NO CLASS AT ALL. IP §4: "a stop never blocks."
+	// A refused stop was answered by a harness with nine repeated invocations,
+	// and an MCP tool's equivalent of the shim's exit 2 is an error result — so
+	// every failure on that path comes back as a SUCCESSFUL reply carrying the
+	// class and the message in `detail`. Nothing a stop meets appears on this
+	// side of the matrix, which is why the unreachable cells below keep saying
+	// "and the stop path cannot raise it either".
+	//
+	// It is also the tool's own second store. The session-to-run mapping lives
+	// on a local volume, so LEDGER_UNAVAILABLE is driven through that volume
+	// rather than through Postgres, the same half of the class observe_tool_call
+	// has and no other tool on the surface can produce.
 	// -----------------------------------------------------------------------
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassAttestationFailed, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it and replaces this cell with a real verdict; until then any verdict " +
-			"here would be a guess about code nobody has written.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassAttestationFailed, verdict: unreachable,
+		why: "the start path reaches SPIRE only through register_agent, and internal/spire's " +
+			"classifyAdmin has no path to ATTESTATION_FAILED — the class is raised by " +
+			"classifyWorkload on the Workload API, which no MCP tool calls. The stop path " +
+			"reaches SPIRE only to DELETE an entry, and raises nothing at all: every failure " +
+			"there is reported in the reply. Same finding as register_agent's own cell.",
 	},
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassIdentityUnavailable, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it; phase=start will reach SPIRE through register_agent's path, but " +
-			"which classes survive that call is not decidable before the code exists.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassIdentityUnavailable, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// IP §6.1's headline case, met through a session start: the run is
+			// minted by register_agent, so spire-server being down stops a
+			// session getting an identity exactly as it stops an agent getting
+			// one. A START MAY REFUSE — IP §6.1 admits no attributed work
+			// without an identity, and this is the refusal that enforces it.
+			observeSessionOnMarkers(t)
+			_, worktree := describeOnProjects(t)
+			s.spire.failRegister = &spire.Error{
+				Class: spire.ClassIdentityUnavailable, Op: "register_agent",
+				Message: "connection refused", Retryable: true,
+			}
+			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
+				"session_id": "ident-down", "phase": mcp.ObserveSessionPhaseStart, "cwd": worktree,
+			})
+		},
 	},
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassCredentialExpired, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it and replaces this cell with a real verdict; until then any verdict " +
-			"here would be a guess about code nobody has written.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassCredentialExpired, verdict: unreachable,
+		why: "no credential is presented and none is minted. What a start returns is a " +
+			"credential HANDLE — the run's SPIFFE ID, the expiry SPIRE granted its entry, and " +
+			"the derived run token — and none of those is checked against a clock here; " +
+			"get_credential is where a credential is issued, and this tool never calls it.",
 	},
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassAudienceMismatch, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it and replaces this cell with a real verdict; until then any verdict " +
-			"here would be a guess about code nobody has written.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassAudienceMismatch, verdict: unreachable,
+		why: "doc 01 §4 gives observe_session five arguments and none is an audience; it " +
+			"presents no credential to a relying party, so there is nothing to be mismatched. " +
+			"Asserted on the advertised input schema by TestMCP006OnlyGetCredentialTakesAnAudience.",
 	},
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassLedgerUnavailable, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it; its stop path is required never to block, so whether this class is " +
-			"returned or swallowed is precisely what that issue must decide and prove.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassLedgerUnavailable, verdict: reachable,
+		runID: runIDAbsent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// THE MARKER VOLUME, which is this tool's own second store and the
+			// one of the two that is not Postgres. IP §4's vocabulary is closed
+			// (doc 08 §3), so there is no MARKER_STORE_UNAVAILABLE to add and
+			// this is the class that carries it: a mount that came back clears
+			// it, which is what retryable tells the caller.
+			//
+			// What the cell pins is the REFUSAL. A session whose mapping was
+			// never written is a run no stop will ever find — the reference
+			// shim measured that as three runs still Active seventeen hours
+			// later — so a start that cannot record the mapping refuses rather
+			// than handing back an identity nothing can retire.
+			//
+			// run_id is ABSENT here and not empty: the volume is checked before
+			// anything is registered, so there is no run to scope the failure
+			// to and doc 02 §1 distinguishes the two states. Registered-and-
+			// unmapped is the other half of the same class, and it carries a
+			// run id; it is driven in internal/mcp, where the partial file name
+			// it needs is reachable.
+			//
+			// A dead Postgres reaches the same class one gate later, inside
+			// register_agent, and the dead-ledger group pins that shape there.
+			sessionOnBlockedMarkers(t)
+			_, worktree := describeOnProjects(t)
+			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
+				"session_id": "markers-gone", "phase": mcp.ObserveSessionPhaseStart, "cwd": worktree,
+			})
+		},
 	},
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassSigningUnavailable, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it and replaces this cell with a real verdict; until then any verdict " +
-			"here would be a guess about code nobody has written.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassSigningUnavailable, verdict: unreachable,
+		why: "observe_session signs nothing and has no Fulcio in any of the three configurations " +
+			"it composes. It begins and ends the session a commit is later signed under; the " +
+			"signing is sign_commit's, and so is IP §6.3's case.",
 	},
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassTransparencyUnavailable, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it and replaces this cell with a real verdict; until then any verdict " +
-			"here would be a guess about code nobody has written.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassTransparencyUnavailable, verdict: unreachable,
+		why: "no Rekor dependency on either path. The events a session causes — run_registered " +
+			"and run_retired — go into the innsegl chain, and it is the SEGMENT that is " +
+			"anchored, asynchronously and not while a harness is waiting for its identity.",
 	},
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassRunNotFound, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it; a stop for a session that never started is required to succeed " +
-			"rather than raise this, which is exactly the behaviour that issue must prove.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassRunNotFound, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// NOT the missing session. A stop for a session that never started
+			// is required to SUCCEED with the terminal state (IP §4), because a
+			// shim cannot guarantee ordering and a refusal would be answered
+			// with a retry storm — so that, the obvious reading of this class
+			// for this tool, is a BUG here rather than a case.
+			//
+			// The class survives anyway, from register_agent: classifyAdmin
+			// maps codes.NotFound to RUN_NOT_FOUND, and a registration whose
+			// attested PARENT node is gone is exactly that. SPIRE has nothing
+			// to hang the session's entry off.
+			observeSessionOnMarkers(t)
+			_, worktree := describeOnProjects(t)
+			s.spire.failRegister = &spire.Error{
+				Class: spire.ClassRunNotFound, Op: "register_agent",
+				Message: "no such parent entry " + testParentID, Retryable: false,
+			}
+			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
+				"session_id": "no-parent", "phase": mcp.ObserveSessionPhaseStart, "cwd": worktree,
+			})
+		},
 	},
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassRunAlreadyRetired, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it; a second stop is required to return the original timestamp rather " +
-			"than raise this, which is exactly the behaviour that issue must prove.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassRunAlreadyRetired, verdict: reachable,
+		runID: runIDPresent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// Neither of the two paths this tool owns can produce it. A stop
+			// for a retired session answers with the original instant, and a
+			// START for one answers with the terminal state rather than
+			// re-registering — which is not politeness: a run id is a pure
+			// function of (agent_type, task, key), so re-deriving would name
+			// the SAME retired run and hand back an identity that can no
+			// longer sign (#213's collision, from this tool's side).
+			//
+			// It survives from register_agent's fail-closed branch: SPIRE
+			// reports an existing entry and then holds none, which only
+			// retirement and the reaper cause, so it refuses rather than
+			// resurrecting an identity somebody chose to destroy.
+			observeSessionOnMarkers(t)
+			_, worktree := describeOnProjects(t)
+			s.spire.duplicateOnRegister = true
+			s.spire.vanishOnLookup = true
+			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
+				"session_id": "vanished", "phase": mcp.ObserveSessionPhaseStart, "cwd": worktree,
+			})
+		},
 	},
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassDuplicateRequest, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it; a duplicate start is required to return the same run, so whether " +
-			"this class is ever on the wire is that issue's to settle.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassDuplicateRequest, verdict: reachable,
+		runID: runIDAbsent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// A DUPLICATE START IS NOT THIS CLASS and must never be: IP §6.6
+			// requires the same run back, never a second identity, and the
+			// derived key is what delivers it. The caller cannot present that
+			// key against another request by choice either — it is derived from
+			// the session id, exactly so that one session cannot be recorded
+			// twice under two keys.
+			//
+			// It still happens, and this is the way: the mapping is lost while
+			// the ledger keeps the registration — a container recreated without
+			// its marker volume — and the session then starts again describing
+			// itself differently. The key is necessarily the same and the
+			// fingerprint is not, and answering with the first call's reply
+			// would hand this caller a run registered as something it did not
+			// ask for.
+			//
+			// run_id is absent because the idempotency store refuses before any
+			// run is resolved (ADR-0017 §3).
+			markers := observeSessionOnMarkers(t)
+			_, worktree := describeOnProjects(t)
+			var first struct {
+				RunID string `json:"run_id"`
+			}
+			s.callExpectingSuccess(t, mcp.ToolObserveSession, map[string]any{
+				"session_id": "lost-mapping", "phase": mcp.ObserveSessionPhaseStart, "cwd": worktree,
+			}, &first)
+			if first.RunID == "" {
+				t.Fatalf("the setup start registered no run: %+v", first)
+			}
+			if err := os.RemoveAll(markers); err != nil {
+				t.Fatalf("losing the marker volume: %v", err)
+			}
+			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
+				"session_id": "lost-mapping", "phase": mcp.ObserveSessionPhaseStart,
+				"cwd": worktree, "agent_type": "reviewer",
+			})
+		},
 	},
 	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassInvariantViolation, verdict: deferred,
-		why: "observe_session has no implementation to decide this against. #207 (RM-128) " +
-			"binds it and replaces this cell with a real verdict; until then any verdict " +
-			"here would be a guess about code nobody has written.",
+		tool: mcp.ToolObserveSession, class: mcp.ClassInvariantViolation, verdict: reachable,
+		runID: runIDAbsent,
+		drive: func(t *testing.T, s *stack) wireError {
+			// The one argument the tool switches on. A phase that is neither
+			// `start` nor `stop` is not a session event this tool can act on,
+			// and guessing which was meant would either register a run nobody
+			// asked for or retire one that is still working.
+			//
+			// It does not touch the never-block rule: a malformed phase is not
+			// a stop, whatever it was meant to be, so there is nothing to
+			// retire and no terminal state to report. run_id is ABSENT, because
+			// the refusal happens before any run exists.
+			observeSessionOnMarkers(t)
+			_, worktree := describeOnProjects(t)
+			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
+				"session_id": "bad-phase", "phase": "restart", "cwd": worktree,
+			})
+		},
 	},
 }
 
@@ -1286,6 +1442,57 @@ func observeConfigured(t *testing.T, s *stack, bodyDir string) {
 	t.Cleanup(restore)
 }
 
+// ---------------------------------------------------------------------------
+// observe_session's fixture (RM-128, #207).
+// ---------------------------------------------------------------------------
+
+// observeSessionOnMarkers configures observe_session against a marker volume
+// that works, and returns it.
+//
+// It takes no *stack, and that is the interesting part. observe_session is a
+// COMPOSITION: it resolves the workspace through describe_workspace, mints the
+// run through register_agent and ends it through retire_agent, all in process.
+// Those three are reached through the package state ADR-0016 §5 fixes as the
+// seam, so the configurations newStack already installed are the ones this
+// tool runs on — there is nothing stack-shaped left for this helper to wire.
+//
+// The wiring is beside the cells rather than in newStack for the reason
+// observeOnVolume's and describeOnProjects' doc comments give: nothing
+// configures this tool in the entry point yet (#211), so a cell that skipped
+// this would meet an unconfigured tool answering one INVARIANT_VIOLATION from
+// its config gate to every input, and the verdicts would be measuring the
+// fixture rather than the tool. A cell that needs a working tree to start a
+// session in calls describeOnProjects as well — once, because each call
+// installs a new host root over the last.
+func observeSessionOnMarkers(t *testing.T) string {
+	t.Helper()
+	markers := t.TempDir()
+	observeSessionConfigured(t, markers)
+	return markers
+}
+
+// sessionOnBlockedMarkers configures it against a volume that genuinely cannot
+// be used: the marker directory's parent is a regular file, so MkdirAll fails
+// whatever uid the tests run as. Nothing is stubbed — the same reason the
+// dead-ledger cells kill a real Postgres.
+func sessionOnBlockedMarkers(t *testing.T) {
+	t.Helper()
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("the volume is not mounted"), 0o600); err != nil {
+		t.Fatalf("preparing the blocked marker volume: %v", err)
+	}
+	observeSessionConfigured(t, filepath.Join(blocked, "sessions"))
+}
+
+func observeSessionConfigured(t *testing.T, markerDir string) {
+	t.Helper()
+	restore, err := mcp.ConfigureObserveSession(mcp.ObserveSessionConfig{MarkerDir: markerDir})
+	if err != nil {
+		t.Fatalf("ConfigureObserveSession: %v", err)
+	}
+	t.Cleanup(restore)
+}
+
 // deadLedgerRunID is the run registered on the dead-ledger stack while
 // Postgres was still up, so that the reads that fail afterwards are reads for
 // a run that genuinely exists.
@@ -1317,11 +1524,24 @@ func TestMCP006TheMatrixIsExactlyToolsTimesClasses(t *testing.T) {
 		t.Fatalf("matrix has %d cells, IP §4 has %d tools × %d classes = %d",
 			len(matrix), len(tools), len(classes), want)
 	}
-	// bound is the tools that actually ship an implementation. A deferred cell
-	// is only honest about a tool that is not one of them (RM-131, #210).
+	// EVERY NAME ON THE SURFACE HAS A BINDER, which is what makes the eighty-
+	// eight verdicts below verdicts about code that runs.
+	//
+	// This is the positive form of a check RM-131 (#210) needed the negative
+	// of: while three names had no implementation, the `deferred` verdict
+	// described them and this loop refused it on any tool that DID bind. #207
+	// bound the eighth, so the state that verdict described cannot exist, and
+	// the honest assertion is the direct one. A ninth name advertised ahead of
+	// its implementation fails here.
 	bound := map[mcp.ToolName]bool{}
 	for _, n := range shippedTools(t) {
 		bound[n] = true
+	}
+	for _, tool := range tools {
+		if !bound[tool] {
+			t.Errorf("%s is on IP §4's surface and registers no binder; every cell below it "+
+				"would be a verdict about code that does not run", tool)
+		}
 	}
 	seen := map[string]bool{}
 	for _, c := range matrix {
@@ -1350,17 +1570,6 @@ func TestMCP006TheMatrixIsExactlyToolsTimesClasses(t *testing.T) {
 			}
 			if len(c.why) < 40 {
 				t.Errorf("%s is marked unreachable with no explanation; the finding IS the value", key)
-			}
-		case deferred:
-			if c.drive != nil {
-				t.Errorf("%s is marked deferred and carries an input", key)
-			}
-			if len(c.why) < 40 {
-				t.Errorf("%s is marked deferred with no explanation of which issue removes it", key)
-			}
-			if bound[c.tool] {
-				t.Errorf("%s is marked deferred and %s IS bound; a shipped tool's cells "+
-					"must be decided, not postponed", key, c.tool)
 			}
 		}
 	}
@@ -1622,6 +1831,13 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 	// config gate and prove nothing about the tool.
 	observeOnVolume(t, s)
 
+	// And observe_session, the third of RM-131's names and the last to bind.
+	// It reuses dwWorktree above rather than calling describeOnProjects again:
+	// each call installs a new host root over the previous one, so a second
+	// would leave the describe_workspace rows pointing at a tree outside the
+	// mount and quietly turn their two successes into refusals.
+	observeSessionOnMarkers(t)
+
 	battery := map[mcp.ToolName][]map[string]any{
 		mcp.ToolRegisterAgent: {
 			{},
@@ -1702,6 +1918,29 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 			{"cwd": dwProjects},
 			{"cwd": dwWorktree},
 		},
+		// Every way a session call can be wrong, and three that are right. The
+		// last three keep the rest honest: a stop for a session nobody started
+		// SUCCEEDS with the terminal state, and a start followed by its own
+		// stop succeeds twice — so this entry shows the tool was reachable and
+		// configured, and that the refusals above are refusals of the input.
+		mcp.ToolObserveSession: {
+			{},
+			{"session_id": "", "phase": "", "cwd": ""},
+			{"session_id": "battery-session", "phase": "", "cwd": dwWorktree},
+			{"session_id": "battery-session", "phase": "restart", "cwd": dwWorktree},
+			{"session_id": long, "phase": mcp.ObserveSessionPhaseStart, "cwd": dwWorktree},
+			{"session_id": "../../etc/passwd", "phase": mcp.ObserveSessionPhaseStart, "cwd": dwWorktree},
+			{"session_id": "battery-no-cwd", "phase": mcp.ObserveSessionPhaseStart},
+			{"session_id": "battery-outside", "phase": mcp.ObserveSessionPhaseStart, "cwd": "/etc"},
+			{"session_id": "battery-relative", "phase": mcp.ObserveSessionPhaseStart, "cwd": "relative/path"},
+			{"session_id": "battery-bad-type", "phase": mcp.ObserveSessionPhaseStart,
+				"cwd": dwWorktree, "agent_type": "Not An Identifier!"},
+			{"session_id": "battery-bad-task", "phase": mcp.ObserveSessionPhaseStart,
+				"cwd": dwWorktree, "task": long},
+			{"session_id": "battery-never-started", "phase": mcp.ObserveSessionPhaseStop},
+			{"session_id": "battery-live", "phase": mcp.ObserveSessionPhaseStart, "cwd": dwWorktree},
+			{"session_id": "battery-live", "phase": mcp.ObserveSessionPhaseStop},
+		},
 		mcp.ToolObserveToolCall: {
 			{},
 			{"run_id": "", "tool": "", "body": ""},
@@ -1725,23 +1964,24 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 	// tool and come back with a structured IP §4 error.
 	sawSignCommitStructuredError := false
 
-	// A tool with no binder cannot be driven: the transport answers
-	// `unknown tool`, which s.call turns into a transport failure rather than
-	// an IP §4 class. RM-131 (#210) put three names on the surface ahead of
-	// their implementations, so the loop skips what does not ship — the same
-	// rule the count assertion applies to a deferred cell, and it stops
-	// applying to each tool on the day that tool binds.
-	bound := map[mcp.ToolName]bool{}
-	for _, n := range shippedTools(t) {
-		bound[n] = true
-	}
+	// The same guard for observe_session, and it is the sharper of the two.
+	// Nothing wires this tool in the entry point (#211), so an unconfigured one
+	// answers INVARIANT_VIOLATION from its config gate to EVERY input — which
+	// the matrix calls reachable, so all fourteen rows below would pass while
+	// proving nothing at all about the tool. The three rows that must succeed
+	// are what separates "the inputs were refused" from "the fixture was".
+	sawObserveSessionSuccess := false
 
+	// NO TOOL IS SKIPPED. RM-131 (#210) put three names on the surface ahead of
+	// their implementations and this loop skipped what did not ship, because a
+	// tool with no binder cannot be driven at all — the transport answers
+	// `unknown tool`, which s.call turns into a transport failure rather than
+	// an IP §4 class. #205, #206 and #207 bound all three, so the skip is gone
+	// and every one of the eight is driven. That the skip existed at all is
+	// recorded here rather than in a deleted line: it is the shape a future
+	// addition would need again, and the count assertion above is what refuses
+	// it in the meantime.
 	for _, tool := range mcp.ToolNames() {
-		if !bound[tool] {
-			t.Logf("%s is on the surface with no implementation; #207 binds it "+
-				"and this skip stops applying", tool)
-			continue
-		}
 		inputs, ok := battery[tool]
 		if !ok {
 			t.Fatalf("the battery has no entry for %s; every SHIPPED tool must be "+
@@ -1752,7 +1992,11 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", tool, i), func(t *testing.T) {
 				res := s.call(t, tool, args)
 				if !res.IsError {
-					return // A success is not a class; the matrix is about failures.
+					// A success is not a class; the matrix is about failures.
+					if tool == mcp.ToolObserveSession {
+						sawObserveSessionSuccess = true
+					}
+					return
 				}
 				if res.StructuredContent == nil {
 					// The transport's own schema validation refused the
@@ -1779,6 +2023,12 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 		t.Fatal("every sign_commit row in the battery was refused by the transport's own schema " +
 			"validation; none of them reached signCommitCheckRequest or resolveRun, so this " +
 			"test's closure claim for sign_commit was never actually exercised")
+	}
+	if !sawObserveSessionSuccess {
+		t.Fatal("every observe_session row in the battery was refused, including the stop for a " +
+			"session nobody started and the start/stop pair that must both succeed. That is what " +
+			"an UNCONFIGURED tool looks like — one INVARIANT_VIOLATION to every input — so this " +
+			"test's closure claim for observe_session held for the fixture, not for the tool")
 	}
 }
 
