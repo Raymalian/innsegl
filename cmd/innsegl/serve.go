@@ -139,6 +139,36 @@ const (
 	envSignAuthorOperators = "INNSEGL_SIGN_AUTHOR_OPERATORS"
 	envSignAllowUnlinked   = "INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED"
 	envGitsignPath         = "INNSEGL_GITSIGN"
+
+	// E11's three ingestion tools (#205, #206, #207), wired here by #211.
+	// Every one is opt-in for sign_commit's reason: there is no defensible
+	// default for any of them, and a guessed one is a confident answer about
+	// the wrong directory on its way into an append-only record.
+	//
+	// The HOST ROOT has no constant here on purpose. `mcp.EnvHostProjects` is
+	// the name describe_workspace itself reads when nothing is installed over
+	// it, and deploy/compose/innsegl.workrepo.yml already sets that name beside
+	// the mount it is a translation of. A second spelling would be a deployment
+	// that can set the wrong one.
+	//
+	// envProjectsMount is where that same directory is mounted INSIDE this
+	// process's filesystem. It defaults to what the compose override mounts it
+	// at, and exists so a deployment that mounts it elsewhere — or runs this
+	// binary on the host, where the two paths are one directory — can say so.
+	envProjectsMount = "INNSEGL_PROJECTS_MOUNT"
+
+	// envObserveBodyDir is the local volume observe_tool_call writes bodies to.
+	//
+	// It joins INNSEGL_API_LOG_DIR and INNSEGL_WRITES_LOG_DIR rather than
+	// inventing a family: all three name the SAME host directory, mounted once
+	// per service, and this is the only one of the three that is mounted
+	// read-write — the MCP writes the bodies the other two read.
+	envObserveBodyDir = "INNSEGL_MCP_LOG_DIR"
+
+	// envSessionDir is the local volume observe_session keeps its session-to-run
+	// mapping on. It has no reader outside this process, by design: the mapping
+	// moving inside the MCP is what RM-128 (#207) exists to do.
+	envSessionDir = "INNSEGL_MCP_SESSION_DIR"
 )
 
 // Defaults that are this command's own rather than a package's.
@@ -172,6 +202,16 @@ type serveOptions struct {
 
 	fulcioURL string
 	rekorURL  string
+
+	// The three E11 ingestion tools' own configuration (#211). Each is empty
+	// when the deployment did not opt in, which leaves that tool bound,
+	// advertised, and refusing every call by name — the same shape sign_commit
+	// has had since RM-033, and a decision the wiring records and logs rather
+	// than one it stumbles into. See toolWiring in servewiring.go.
+	hostProjects   string
+	projectsMount  string
+	observeBodyDir string
+	sessionDir     string
 
 	// sign_commit's own configuration (RM-033). workspace empty means the
 	// tool is bound and unconfigured.
@@ -564,6 +604,21 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 				"example.com and the rest) ($"+envSignAllowUnlinked+")")
 		gitsignPath = fs.String("gitsign", os.Getenv(envGitsignPath),
 			"the gitsign binary. Empty is a PATH lookup ($"+envGitsignPath+")")
+		hostProjects = fs.String("host-projects", os.Getenv(mcp.EnvHostProjects),
+			"the HOST directory the projects mount is a mount of. describe_workspace is "+
+				"handed a harness's own working directory — a path on the host — and cannot "+
+				"work out for itself what its mount corresponds to. Empty leaves "+
+				"describe_workspace unconfigured ($"+mcp.EnvHostProjects+")")
+		projectsMount = fs.String("projects-mount", envOr(envProjectsMount, mcp.DefaultProjectsMount),
+			"where that same directory is mounted in THIS process's filesystem ($"+envProjectsMount+")")
+		observeBodyDir = fs.String("observe-body-dir", os.Getenv(envObserveBodyDir),
+			"the local volume observe_tool_call writes tool-call bodies to. They carry file "+
+				"contents and commands and are sent nowhere else, ever (doc 05). Empty leaves "+
+				"observe_tool_call unconfigured ($"+envObserveBodyDir+")")
+		sessionDir = fs.String("session-dir", os.Getenv(envSessionDir),
+			"the local volume observe_session keeps its session-to-run mapping on. A mapping "+
+				"that was never written is a run nothing will ever retire. Empty leaves "+
+				"observe_session unconfigured ($"+envSessionDir+")")
 		listen = fs.String("listen", envOr(envMCPListen, defaultMCPListen),
 			"address the MCP transport listens on ($"+envMCPListen+")")
 		also = fs.String("also", os.Getenv(envMCPAlso),
@@ -676,6 +731,8 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		serverID: *serverID, parentID: *parentID,
 		workloadAPI: *workloadAPI, svidFile: *svidFile, keyFile: *keyFile, bundleFile: *bundleFile,
 		fulcioURL: *fulcioURL, rekorURL: *rekorURL,
+		hostProjects: *hostProjects, projectsMount: *projectsMount,
+		observeBodyDir: *observeBodyDir, sessionDir: *sessionDir,
 		workspace: *workspace, oidcIssuer: *oidcIssuer,
 		signAuthorName: *signAuthorName, signAuthorEmail: *signAuthorEmail,
 		signAuthorOperators: splitOrigins(*signAuthorOperators),
@@ -739,6 +796,32 @@ func (o serveOptions) validate() string {
 		return "-sign-author-operators (or $" + envSignAuthorOperators + "), or " +
 			"-sign-author-allow-unlinked, is required when -workspace is set: the I6 author " +
 			"policy is an allowlist whose zero value admits nothing, on purpose (ADR-0028)"
+	// E11's three (#211). Each is opt-in and each is refused here when it is
+	// set to something that cannot be true, rather than at the first call by a
+	// harness: a relative path resolves against whatever directory this
+	// process happens to be standing in, which is not a thing an operator can
+	// have meant by any of them.
+	case o.hostProjects != "" && !filepath.IsAbs(o.hostProjects):
+		return "-host-projects (or $" + mcp.EnvHostProjects + ") " + o.hostProjects +
+			" is not an absolute path: it names a directory on the host, and nothing " +
+			"can be resolved against a relative one"
+	case o.projectsMount != "" && !filepath.IsAbs(o.projectsMount):
+		return "-projects-mount (or $" + envProjectsMount + ") " + o.projectsMount +
+			" is not an absolute path: it names where the projects directory is mounted " +
+			"in this process's own filesystem"
+	case o.observeBodyDir != "" && !filepath.IsAbs(o.observeBodyDir):
+		return "-observe-body-dir (or $" + envObserveBodyDir + ") " + o.observeBodyDir +
+			" is not an absolute path: a body volume that moved with the working directory " +
+			"would scatter the evidence a digest in the chain is checked against"
+	case o.sessionDir != "" && !filepath.IsAbs(o.sessionDir):
+		return "-session-dir (or $" + envSessionDir + ") " + o.sessionDir +
+			" is not an absolute path: the mapping every session stop depends on would " +
+			"move with whatever directory this process happens to be in"
+	case o.sessionDir != "" && o.hostProjects == "":
+		return "-host-projects (or $" + mcp.EnvHostProjects + ") is required when " +
+			"-session-dir is set: observe_session resolves the workspace through " +
+			"describe_workspace on every start, so without the host root every session " +
+			"this deployment configured the tool for would refuse"
 	case o.fulcioURL == "":
 		return "-fulcio-url (or $" + envFulcioURL + ") is required: " + mcp.ReadyPath +
 			" reports Sigstore reachability and there is no default pair to fall back to (ADR-0010)"
