@@ -216,8 +216,8 @@ Node v26.8.1. Rendered in jsdom via @testing-library/react.
 
     (a) the shipped sheet, checked:
     ==> Token sheet — doc 06 §§5.1, 5.3, 6.4
-        sheet /Users/kody/Applications/innsegl/web/src/tokens/tokens.css
-        pairs /Users/kody/Applications/innsegl/web/src/tokens/contrast-pairs.txt
+        sheet <repo>/web/src/tokens/tokens.css
+        pairs <repo>/web/src/tokens/contrast-pairs.txt
         45 palette values, 42 semantic colours, 66 contrast assertions (33 pairs x 2 modes)
         tightest passing margin: --innsegl-color-border-strong on --innsegl-color-surface-default (dark) 3.19:1
     
@@ -226,8 +226,8 @@ Node v26.8.1. Rendered in jsdom via @testing-library/react.
 
     (b) the gate's own ten-case self-test, which proves it still bites:
     ==> Self-test for the token sheet gate
-        gate  /Users/kody/Applications/innsegl/web/src/tokens/check-tokens.sh
-        sheet /Users/kody/Applications/innsegl/web/src/tokens/tokens.css
+        gate  <repo>/web/src/tokens/check-tokens.sh
+        sheet <repo>/web/src/tokens/tokens.css
     
       ok   raw hex in the semantic layer      refused, naming "semantic colour must be light-dark"
       ok   colour defined in one mode only    refused, naming "exactly two light-dark() arms"
