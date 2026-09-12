@@ -431,11 +431,15 @@ func TestServeShutsDownOnASignalAndReleasesEverythingItOpened(t *testing.T) {
 
 // TestServeNamesTheWholeToolSurfaceAtStartUp.
 //
-// RM-131 (#210) opened the surface to eight, so the start-up report now names
-// eight tools and warns about the three E11 ingestion tools that have no
-// implementation yet. ADR-0024's duty is what makes that safe rather than
-// sloppy — an incomplete surface is REPORTED and never silent — and this case
-// is what would catch a tool that quietly stopped registering its binder.
+// RM-131 (#210) opened the surface to eight and left three names with no
+// implementation, so this case asserted that the start-up report WARNED about
+// them. RM-128 (#207) bound the last of the three, so the assertion turns
+// over: the report names eight tools and says nothing is missing.
+//
+// It is the same duty either way. ADR-0024 requires an incomplete surface to
+// be REPORTED and never silent, and the value of reporting rather than
+// asserting is that a tool which quietly stopped registering its binder shows
+// up here — which is exactly what the silence below now protects.
 func TestServeNamesTheWholeToolSurfaceAtStartUp(t *testing.T) {
 	clearServeEnv(t)
 	var stdout, stderr bytes.Buffer
@@ -453,12 +457,13 @@ func TestServeNamesTheWholeToolSurfaceAtStartUp(t *testing.T) {
 			t.Errorf("the start-up report does not name %s:\n%s", name, log)
 		}
 	}
-	// The five implemented tools must not be reported missing, and the three
-	// unimplemented ones must be — silence about either is the failure.
-	for _, name := range []mcp.ToolName{mcp.ToolDescribeWorkspace, mcp.ToolObserveToolCall, mcp.ToolObserveSession} {
-		if !strings.Contains(log, "MISSING") {
-			t.Errorf("the start-up report does not warn that %s is unimplemented:\n%s", name, log)
-		}
+	// And nothing is missing. Every one of the eight has a binder since #207,
+	// so a report that still warned would be telling an operator its surface
+	// is incomplete when it is not — which is the same failure as staying
+	// silent about one that really had gone, read from the other side.
+	if strings.Contains(log, "MISSING") {
+		t.Errorf("the start-up report still warns about a missing tool, and all %d IP §4 "+
+			"tools are bound:\n%s", len(mcp.ToolNames()), log)
 	}
 }
 
@@ -517,40 +522,42 @@ func TestServeRefusesAnUnparseableFlag(t *testing.T) {
 	}
 }
 
-// TestTheShippedSurfaceIsFiveOfTheEightToolsOfIP4.
+// TestTheShippedSurfaceIsAllEightToolsOfIP4.
 //
 // `BoundTools` and `MissingTools` are derived from the binders that registered
 // themselves, so this is the shipped answer and not a list written down twice.
 // It is asserted in the entry point's own package because the entry point is
 // what has to REPORT it (ADR-0024).
 //
-// RM-068 left this case asserting four bound tools and `sign_commit` missing,
-// deliberately, so that the day RM-033 (#41) bound the fifth it would fail
-// rather than let the start-up report and both health endpoints go stale.
+// The name of this case has now changed three times, and each change was a
+// ratchet firing rather than a rename. RM-068 left it asserting four bound
+// tools and `sign_commit` missing, so that the day RM-033 (#41) bound the
+// fifth it would fail rather than let the start-up report and both health
+// endpoints go stale. RM-131 (#210) reopened the same mechanism in the other
+// direction — eight names, implementations arriving one issue at a time — and
+// #205, #206 and #207 each fired it on the day they bound their tool.
 //
-// RM-131 (#210) does the same thing again in the other direction: the surface
-// is eight names and implementations arrive one issue at a time, so this
-// asserts exactly which are outstanding. #205 and #206 each fired it on the
-// day they bound their tool; #207 is the last one left, and updating this list
-// is how each issue proves the start-up report and both health endpoints still
-// tell the truth.
+// #207 is the last, so `outstanding` is empty and this case goes back to being
+// what it was before the surface opened: an assertion that every IP §4 tool
+// ships. There is no list left to go stale.
 //
-// BOUND IS NOT CONFIGURED. Both new tools bind and neither is wired into the
+// BOUND IS NOT CONFIGURED. The three E11 tools bind and none is wired into the
 // entry point, so they answer INVARIANT_VIOLATION to every input until #211
 // configures them. That gap is why #211 exists and why it adds a start-up
 // refusal: this assertion can only see that a binder registered, which is
 // exactly as far as it should reach.
-func TestTheShippedSurfaceIsSevenOfTheEightToolsOfIP4(t *testing.T) {
+func TestTheShippedSurfaceIsAllEightToolsOfIP4(t *testing.T) {
 	server := realSurface()
 
 	implemented := []mcp.ToolName{
 		mcp.ToolRegisterAgent, mcp.ToolGetCredential, mcp.ToolRecordEvent,
 		mcp.ToolSignCommit, mcp.ToolRetireAgent,
-		// #205 and #206 bound theirs. Each landing fired this assertion, which
-		// is what it is for.
-		mcp.ToolDescribeWorkspace, mcp.ToolObserveToolCall,
+		// #205, #206 and #207 bound theirs. Each landing fired this assertion,
+		// which is what it is for.
+		mcp.ToolDescribeWorkspace, mcp.ToolObserveToolCall, mcp.ToolObserveSession,
 	}
-	outstanding := []mcp.ToolName{mcp.ToolObserveSession}
+	// Empty since #207: no name on IP §4's surface is without a binder.
+	var outstanding []mcp.ToolName
 
 	bound := server.BoundTools()
 	if len(bound) != len(implemented) {
