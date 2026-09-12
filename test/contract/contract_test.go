@@ -1615,6 +1615,13 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 	// written against. Same reasoning as observeOnVolume's doc comment.
 	dwProjects, dwWorktree := describeOnProjects(t)
 
+	// observe_tool_call needs the same treatment, for the same reason, and
+	// commit 6a37998 said so in observeOnVolume's own doc comment: "When the
+	// battery gains an observe_tool_call entry it must call this first."
+	// Unconfigured, every row below would meet one INVARIANT_VIOLATION from the
+	// config gate and prove nothing about the tool.
+	observeOnVolume(t, s)
+
 	battery := map[mcp.ToolName][]map[string]any{
 		mcp.ToolRegisterAgent: {
 			{},
@@ -1695,6 +1702,18 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 			{"cwd": dwProjects},
 			{"cwd": dwWorktree},
 		},
+		mcp.ToolObserveToolCall: {
+			{},
+			{"run_id": "", "tool": "", "body": ""},
+			{"run_id": live.RunID, "tool": "", "body": "{}"},
+			{"run_id": live.RunID, "tool": "Edit", "body": ""},
+			{"run_id": live.RunID, "tool": long, "body": "{}"},
+			{"run_id": live.RunID, "tool": "Edit", "body": long},
+			{"run_id": "../../etc", "tool": "Edit", "body": "{}"},
+			{"run_id": "run-no-such-run-0000000000000000", "tool": "Edit", "body": "{}"},
+			{"run_id": retired.RunID, "tool": "Edit", "body": "{}"},
+			{"run_id": live.RunID, "tool": "Edit", "body": "{\"file\":\"a\"}"},
+		},
 	}
 
 	// Mutation guard: a battery whose sign_commit rows are ALL refused by the
@@ -1706,10 +1725,26 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 	// tool and come back with a structured IP §4 error.
 	sawSignCommitStructuredError := false
 
+	// A tool with no binder cannot be driven: the transport answers
+	// `unknown tool`, which s.call turns into a transport failure rather than
+	// an IP §4 class. RM-131 (#210) put three names on the surface ahead of
+	// their implementations, so the loop skips what does not ship — the same
+	// rule the count assertion applies to a deferred cell, and it stops
+	// applying to each tool on the day that tool binds.
+	bound := map[mcp.ToolName]bool{}
+	for _, n := range shippedTools(t) {
+		bound[n] = true
+	}
+
 	for _, tool := range mcp.ToolNames() {
+		if !bound[tool] {
+			t.Logf("%s is on the surface with no implementation; #207 binds it "+
+				"and this skip stops applying", tool)
+			continue
+		}
 		inputs, ok := battery[tool]
 		if !ok {
-			t.Fatalf("the battery has no entry for %s; every one of the five tools must be "+
+			t.Fatalf("the battery has no entry for %s; every SHIPPED tool must be "+
 				"driven by this closure test", tool)
 		}
 		allowed := reachableClasses(tool)
