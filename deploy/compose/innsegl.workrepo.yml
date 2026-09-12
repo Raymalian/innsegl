@@ -92,7 +92,7 @@ services:
       # /projects/innsegl/.claude/worktrees/agent-probe:
       #
       #   fatal: not a git repository:
-      #   /Users/kody/Applications/innsegl/.git/worktrees/agent-probe
+      #   <host-checkout>/.git/worktrees/agent-probe
       #
       # The path inside the file is the host's and means nothing in a container
       # that mounted the same directory somewhere else. Rewriting the file

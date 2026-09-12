@@ -133,6 +133,35 @@ type readinessWire struct {
 	} `json:"dependencies"`
 }
 
+// outstandingTools are the names on IP §4's surface with no implementation
+// yet. RM-131 (#210) put three names there; each is removed by the issue that
+// binds it (#205, #206, #207), and the list is empty again after that.
+var outstandingTools = []string{"observe_session"}
+
+// assertShippedSplit checks a health endpoint's bound/missing split against
+// what the binary actually ships, and says which issue owns the difference.
+//
+// It is deliberately not a count. RM-068 asserted "four bound, sign_commit
+// missing" and RM-033's landing is what made it fire; a bare number would have
+// gone stale silently instead.
+func assertShippedSplit(t *testing.T, path string, bound, missing []string) {
+	t.Helper()
+	for _, name := range mcp.ToolNames() {
+		outstanding := slices.Contains(outstandingTools, string(name))
+		switch {
+		case outstanding && !slices.Contains(missing, string(name)):
+			t.Errorf("%s does not report %s missing, and nothing binds it: missing=%v",
+				path, name, missing)
+		case !outstanding && !slices.Contains(bound, string(name)):
+			t.Errorf("%s does not report %s bound: bound=%v", path, name, bound)
+		}
+	}
+	if len(bound)+len(missing) != len(mcp.ToolNames()) {
+		t.Errorf("%s reports %d bound + %d missing, and IP §4 has %d tools",
+			path, len(bound), len(missing), len(mcp.ToolNames()))
+	}
+}
+
 // retireRun puts a run back, so this file leaves the shared SPIRE datastore as
 // it found it and the crash campaign's whole-datastore census is not answering
 // for entries another test created.
@@ -199,6 +228,15 @@ func TestServeAnswersARealMCPCallEndToEnd(t *testing.T) {
 		t.Errorf("the server does not advertise %s; it advertises %v",
 			mcp.ToolSignCommit, advertised)
 	}
+	// RM-131 (#210) opened the surface to eight names. Every name is
+	// advertised, bound or not — the point of ADR-0024 is that an incomplete
+	// surface is REPORTED and never hidden, so a harness sees the tool and is
+	// told plainly it has no implementation yet.
+	for _, want := range mcp.ToolNames() {
+		if !slices.Contains(advertised, string(want)) {
+			t.Errorf("the server does not advertise %s; it advertises %v", want, advertised)
+		}
+	}
 	t.Logf("advertised tools: %v", advertised)
 
 	health := healthAddr(t, d)
@@ -206,14 +244,12 @@ func TestServeAnswersARealMCPCallEndToEnd(t *testing.T) {
 	if code := getJSON(t, "http://"+health+mcp.LivePath, &live); code != http.StatusOK {
 		t.Fatalf("GET %s = %d, want 200", mcp.LivePath, code)
 	}
-	if len(live.MissingTools) != 0 {
-		t.Errorf("%s reports missing_tools=%v; every IP §4 tool is bound since RM-033 (#41)",
-			mcp.LivePath, live.MissingTools)
-	}
-	if len(live.BoundTools) != 5 {
-		t.Errorf("%s reports %d bound tools (%v), want IP §4's five",
-			mcp.LivePath, len(live.BoundTools), live.BoundTools)
-	}
+	// RM-131 (#210) opened the surface to eight and implementations follow one
+	// issue at a time, so these two are asserted against the SHIPPED split
+	// rather than against a count. Each of #205, #206, #207 and #211 fails here
+	// on the day it changes that split — which is the only way the health
+	// endpoints can be trusted to keep saying something true.
+	assertShippedSplit(t, mcp.LivePath, live.BoundTools, live.MissingTools)
 
 	// --- register_agent, and the chain and SPIRE afterwards ---------------
 	key := c.name("rm068-register")
@@ -647,7 +683,7 @@ func TestTheHealthEndpointsThroughTheShippedServer(t *testing.T) {
 	// An incomplete tool surface is reported and never a reason to be unready.
 	// The surface is complete since RM-033 (#41), so the field must now be empty —
 	// the same assertion, on the other side of the fifth tool landing.
-	if len(ready.MissingTools) != 0 {
+	if len(ready.MissingTools) != len(outstandingTools) {
 		t.Errorf("%s reports missing_tools=%v, want none; every IP §4 tool is bound (ADR-0024)",
 			mcp.ReadyPath, ready.MissingTools)
 	}

@@ -529,20 +529,28 @@ func TestServeRefusesAnUnparseableFlag(t *testing.T) {
 // rather than let the start-up report and both health endpoints go stale.
 //
 // RM-131 (#210) does the same thing again in the other direction: the surface
-// is now eight names and five implementations, so this asserts exactly which
-// three are outstanding. Each of #205, #206 and #207 will fail here on the day
-// it binds its tool, and updating this line is how that issue proves the
-// start-up report and both health endpoints still tell the truth.
-func TestTheShippedSurfaceIsFiveOfTheEightToolsOfIP4(t *testing.T) {
+// is eight names and implementations arrive one issue at a time, so this
+// asserts exactly which are outstanding. #205 and #206 each fired it on the
+// day they bound their tool; #207 is the last one left, and updating this list
+// is how each issue proves the start-up report and both health endpoints still
+// tell the truth.
+//
+// BOUND IS NOT CONFIGURED. Both new tools bind and neither is wired into the
+// entry point, so they answer INVARIANT_VIOLATION to every input until #211
+// configures them. That gap is why #211 exists and why it adds a start-up
+// refusal: this assertion can only see that a binder registered, which is
+// exactly as far as it should reach.
+func TestTheShippedSurfaceIsSevenOfTheEightToolsOfIP4(t *testing.T) {
 	server := realSurface()
 
 	implemented := []mcp.ToolName{
 		mcp.ToolRegisterAgent, mcp.ToolGetCredential, mcp.ToolRecordEvent,
 		mcp.ToolSignCommit, mcp.ToolRetireAgent,
+		// #205 and #206 bound theirs. Each landing fired this assertion, which
+		// is what it is for.
+		mcp.ToolDescribeWorkspace, mcp.ToolObserveToolCall,
 	}
-	outstanding := []mcp.ToolName{
-		mcp.ToolDescribeWorkspace, mcp.ToolObserveToolCall, mcp.ToolObserveSession,
-	}
+	outstanding := []mcp.ToolName{mcp.ToolObserveSession}
 
 	bound := server.BoundTools()
 	if len(bound) != len(implemented) {
