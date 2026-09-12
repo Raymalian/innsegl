@@ -80,6 +80,35 @@ services:
       # may describe the wrong one, and the answer is on its way into an
       # append-only record.
       INNSEGL_HOST_PROJECTS: ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}
+
+      # WHERE `observe_tool_call` KEEPS THE BODIES, and it is the same
+      # directory innsegl-api and innsegl-reconciler below read. One directory,
+      # one writer, two readers -- the api serves them to the dashboard and the
+      # reconciler judges writes against them, and both re-derive the path from
+      # a digest in the chain, so this is a layout and not a preference.
+      #
+      # The LEDGER may never hold one: doc 02 §3 gives a `tool_call` no member
+      # for a body and IP E4 makes that mechanical. A body carries file
+      # contents and commands, which is the most sensitive data this system
+      # touches, so it is written to the operator's own disk and sent nowhere.
+      #
+      # Unset, the tool is advertised, refuses every call by name, and says so
+      # in the start-up log. It is not silent either way (#211).
+      INNSEGL_MCP_LOG_DIR: /agentlog
+
+      # WHERE `observe_session` KEEPS THE SESSION-TO-RUN MAPPING.
+      #
+      # A named volume and not a bind mount: nothing outside this process reads
+      # it, which is the point of RM-128 (#207) -- the bookkeeping moved off
+      # every harness and into the MCP, so a shim never has to know which files
+      # exist or what is on which line of them.
+      #
+      # It OUTLIVES the stack deliberately. A mapping that was never written,
+      # or was thrown away, is a run nothing will ever retire: measured before
+      # this existed, three runs registered one afternoon were still Active
+      # seventeen hours later. `docker compose down -v` removes it, and that is
+      # the one command that should.
+      INNSEGL_MCP_SESSION_DIR: /sessions
     volumes:
       # Read-write, and it has to be: a commit is a write. See above.
       - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:/projects
@@ -103,6 +132,15 @@ services:
       # This is what makes a subagent under worktree isolation signable at all
       # (MCP-029, ADR-0046).
       - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:${INNSEGL_PROJECTS}
+      # READ-WRITE, and it is the ONLY read-write mount of this directory in
+      # the stack. innsegl-api and innsegl-reconciler mount the same directory
+      # read-only below, because retention belongs to whoever writes the
+      # bodies and a read path that could delete would be one misconfiguration
+      # away from pruning on another schedule. Since #211 the writer is this
+      # service rather than a harness hook.
+      - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/agentlog
+      # The session markers. See INNSEGL_MCP_SESSION_DIR above.
+      - innsegl-sessions:/sessions
 
   innsegl-api:
     environment:
@@ -135,3 +173,12 @@ services:
       # a process that could rewrite it could also make its own findings go
       # away. The reconciler opens only the files a run's own events name.
       - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/harness-log:ro
+
+# An override file may declare volumes of its own, and this one does: the
+# session markers exist only where the ingestion tools are configured, which is
+# exactly where this file applies.
+volumes:
+  # observe_session's session-to-run mapping (RM-128, #207; wired by #211).
+  # MOUNTED BY: innsegl-mcp (rw). Nothing else, ever -- no other component has
+  # any business knowing which harness session a run came from.
+  innsegl-sessions:

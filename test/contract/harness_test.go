@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -681,9 +682,20 @@ type stack struct {
 	// SignCommitSigner every sign_commit matrix cell drives through.
 	scRoot   string
 	scSigner *fakeSCSigner
+
+	// E11's three tools, configured by the stack since #211 (see
+	// stackIngestion). projects is the host root describe_workspace
+	// translates against and the mount it translates onto — one directory,
+	// because a container path does not exist on the machine running this
+	// test. worktree is one real git repository under it. bodyDir and
+	// markerDir are observe_tool_call's and observe_session's local volumes.
+	projects  string
+	worktree  string
+	bodyDir   string
+	markerDir string
 }
 
-// newStack wires the four shipped tools onto a fresh chain and serves them.
+// newStack wires all eight shipped tools onto a fresh chain and serves them.
 func newStack(t *testing.T) *stack {
 	t.Helper()
 	return newStackOn(t, freshDSN(t, requirePG(t)))
@@ -769,6 +781,9 @@ func newStackOn(t *testing.T, dsn string) *stack {
 	t.Cleanup(restoreSignCommit)
 	s.scRoot, s.scSigner = scRoot, scSigner
 
+	// E11's three, on the same terms as the five above (#211).
+	stackIngestion(t, s, runs)
+
 	srv, err := mcp.New(mcp.Config{Version: "v0.0.0-contract"})
 	if err != nil {
 		t.Fatalf("mcp.New: %v", err)
@@ -787,6 +802,73 @@ func newStackOn(t *testing.T, dsn string) *stack {
 	t.Cleanup(func() { _ = session.Close() })
 	s.session = session
 	return s
+}
+
+// stackIngestion configures describe_workspace, observe_tool_call and
+// observe_session on s, through their own shipped Configure functions.
+//
+// # Why this is in the stack and no longer beside the cells
+//
+// It was not, and that was the defect #211 closes. RM-126, RM-127 and RM-128
+// (#205, #206, #207) each bound a tool that `cmd/innsegl/servewiring.go` never
+// configured, so nothing in this package could reach any of the three through
+// the wiring a deployment serves — each test that wanted one installed the
+// configuration itself, and a test that FORGOT met a tool answering one
+// INVARIANT_VIOLATION from its config gate to every input. The matrix calls
+// that class reachable for every tool, so every hostile row would have passed
+// while proving nothing whatever. Three doc comments in contract_test.go said
+// so in as many words and could do nothing about it.
+//
+// Now the stack wires all eight, exactly as `serve` does, and a cell that
+// needs a HOSTILE configuration — a volume that genuinely cannot be written to
+// — installs that over the top for its own duration. That is a different thing
+// from a missing one, and the difference is now visible: TestMCP060 drives
+// every bound tool and refuses any that answers its own unwired gate.
+//
+// The host root and the mount are the SAME directory, which is the one thing
+// here that is not a deployment's shape: a container path does not exist on
+// the machine running this test, so a host root that differed from the mount
+// could only be paired with a tree that is not there. The translation itself
+// is pinned by MCP-039 in internal/mcp against a host root that is
+// deliberately not the mount.
+func stackIngestion(t *testing.T, s *stack, runs ledgerRuns) {
+	t.Helper()
+
+	s.projects = t.TempDir()
+	s.worktree = filepath.Join(s.projects, fmt.Sprintf("contract-workspace-%d", scRepoSeq.Add(1)))
+	if err := os.MkdirAll(s.worktree, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", s.worktree, err)
+	}
+	scGit(t, s.worktree, "init", "-q", "-b", "main")
+	// An origin, because `repo` is read from it and must satisfy doc 02 §5's
+	// three-segment host/org/name. A repository without one is a refusal, not
+	// a blank — describe_workspace never synthesises an identifier from a
+	// directory name.
+	scGit(t, s.worktree, "remote", "add", "origin", "git@github.com:innsegl/contract-workspace.git")
+
+	restoreDescribe, err := mcp.ConfigureDescribeWorkspace(mcp.DescribeWorkspaceConfig{
+		HostProjects: s.projects, Projects: s.projects,
+	})
+	if err != nil {
+		t.Fatalf("ConfigureDescribeWorkspace: %v", err)
+	}
+	t.Cleanup(restoreDescribe)
+
+	s.bodyDir = t.TempDir()
+	restoreObserve, err := mcp.ConfigureObserveToolCall(mcp.ObserveToolCallConfig{
+		Runs: runs, Ledger: s.store, Idempotency: s.idem, BodyDir: s.bodyDir,
+	})
+	if err != nil {
+		t.Fatalf("ConfigureObserveToolCall: %v", err)
+	}
+	t.Cleanup(restoreObserve)
+
+	s.markerDir = t.TempDir()
+	restoreSession, err := mcp.ConfigureObserveSession(mcp.ObserveSessionConfig{MarkerDir: s.markerDir})
+	if err != nil {
+		t.Fatalf("ConfigureObserveSession: %v", err)
+	}
+	t.Cleanup(restoreSession)
 }
 
 // call invokes one tool over the transport and returns the raw result.

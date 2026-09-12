@@ -3,12 +3,16 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"innsegl.dev/innsegl/internal/identity"
+	"innsegl.dev/innsegl/internal/mcp"
 )
 
 // The parts of the wiring that can be decided without a Postgres and a SPIRE:
@@ -270,5 +274,182 @@ func TestEnvIntFallsBackOnAnythingUnreadable(t *testing.T) {
 		if got := envInt(name, 7); got != tc.want {
 			t.Errorf("envInt(%q=%q) = %d, want %d", name, tc.set, got, tc.want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MCP-058 — a bound tool nothing configured is refused at START-UP.
+// ---------------------------------------------------------------------------
+
+// TestMCP058ABoundToolNothingConfiguredIsRefusedAtStartUp.
+//
+// # The defect this is the guard for
+//
+// Three tools (#205, #206, #207) reached the shipped surface, were advertised
+// on `tools/list`, were accepted by the transport — and answered
+// INVARIANT_VIOLATION to every input, because nothing in this file ever called
+// their Configure function. That is worse than an absent tool: `MissingTools()`
+// reports it as present, so every report an operator can read says the surface
+// is complete. Nobody noticed for three tools and two waves.
+//
+// The fix is not "wire those three". It is that the NEXT one cannot happen: a
+// tool on a served surface that this process made no decision about stops the
+// process, by name, before a listener opens.
+//
+// # Why the record is a by-product and not a list
+//
+// A hand-written list of tool names to check would be the same bug one layer
+// up — a second place that has to be kept in step with the first, and that
+// goes stale in exactly the way the tool surface just did. So `install` takes a
+// Configure call's OWN two return values, which means a tool counts as
+// configured precisely when its configuration was installed, and `withhold`
+// records the opposite decision at the one place the deployment's opt-in is
+// read. A tool nobody wrote either line for is in neither set, which is the
+// state this refuses.
+func TestMCP058ABoundToolNothingConfiguredIsRefusedAtStartUp(t *testing.T) {
+	surface := "the MCP transport"
+
+	t.Run("a wiring that decided nothing refuses every advertised tool by name", func(t *testing.T) {
+		w := newToolWiring(newServeLog(io.Discard))
+
+		undecided := w.undecided(mcp.ToolNames())
+		if len(undecided) != len(mcp.ToolNames()) {
+			t.Fatalf("undecided = %v, want all %d IP §4 tools", undecided, len(mcp.ToolNames()))
+		}
+
+		err := w.requireDecided(surface, mcp.ToolNames())
+		if err == nil {
+			t.Fatal("a wiring that configured nothing started a server advertising eight tools")
+		}
+		for _, name := range mcp.ToolNames() {
+			if !strings.Contains(err.Error(), string(name)) {
+				t.Errorf("the refusal does not name %s; an operator cannot act on it:\n%s", name, err)
+			}
+		}
+		if !strings.Contains(err.Error(), surface) {
+			t.Errorf("the refusal does not say which surface advertises them:\n%s", err)
+		}
+	})
+
+	t.Run("a configured tool is decided", func(t *testing.T) {
+		w := newToolWiring(newServeLog(io.Discard))
+		restored := 0
+		restore, err := w.install(mcp.ToolRecordEvent)(func() { restored++ }, nil)
+		if err != nil {
+			t.Fatalf("install: %v", err)
+		}
+		// The caller's own unwind still gets the Configure call's restore func,
+		// unchanged: the record is a by-product of installing and never a
+		// substitute for releasing what was installed.
+		restore()
+		if restored != 1 {
+			t.Errorf("the restore func was not passed through: ran %d times, want 1", restored)
+		}
+		if got := w.undecided([]mcp.ToolName{mcp.ToolRecordEvent}); len(got) != 0 {
+			t.Errorf("undecided = %v after configuring record_event", got)
+		}
+		if err := w.requireDecided(surface, []mcp.ToolName{mcp.ToolRecordEvent}); err != nil {
+			t.Errorf("a surface of one configured tool was refused: %v", err)
+		}
+	})
+
+	t.Run("a configuration that FAILED is not a decision", func(t *testing.T) {
+		w := newToolWiring(newServeLog(io.Discard))
+		boom := errors.New("no body volume")
+		if _, err := w.install(mcp.ToolObserveToolCall)(nil, boom); !errors.Is(err, boom) {
+			t.Fatalf("install returned %v, want the Configure call's own error", err)
+		}
+		// A Configure call that refused installed nothing, so the tool is in
+		// the state this whole case exists to refuse — not in the state a
+		// bookkeeping bug would put it in.
+		if got := w.undecided([]mcp.ToolName{mcp.ToolObserveToolCall}); len(got) != 1 {
+			t.Fatalf("undecided = %v after a FAILED ConfigureObserveToolCall; a refused "+
+				"configuration must not count as one", got)
+		}
+	})
+
+	t.Run("a deliberately unconfigured tool is decided, and says so every start", func(t *testing.T) {
+		var log bytes.Buffer
+		w := newToolWiring(newServeLog(&log))
+		w.withhold(mcp.ToolSignCommit, "-workspace is unset, so no commit can be signed")
+
+		if got := w.undecided([]mcp.ToolName{mcp.ToolSignCommit}); len(got) != 0 {
+			t.Errorf("undecided = %v; an operator who left a tool unconfigured decided that", got)
+		}
+		if err := w.requireDecided(surface, []mcp.ToolName{mcp.ToolSignCommit}); err != nil {
+			t.Errorf("a deliberately unconfigured tool stopped the server: %v", err)
+		}
+		// ADR-0025's shape: turning a control off is an operator decision that
+		// appears in the log every time the process starts.
+		line := log.String()
+		if !strings.Contains(line, string(mcp.ToolSignCommit)) || !strings.Contains(line, "NOT CONFIGURED") {
+			t.Errorf("withholding a tool was silent:\n%s", line)
+		}
+	})
+
+	t.Run("one undecided tool among seven decided ones is still a refusal", func(t *testing.T) {
+		w := newToolWiring(newServeLog(io.Discard))
+		for _, name := range mcp.ToolNames() {
+			if name == mcp.ToolObserveSession {
+				continue
+			}
+			if _, err := w.install(name)(func() {}, nil); err != nil {
+				t.Fatalf("install %s: %v", name, err)
+			}
+		}
+		err := w.requireDecided(surface, mcp.ToolNames())
+		if err == nil {
+			t.Fatal("a server advertising one unwired tool started")
+		}
+		if !strings.Contains(err.Error(), string(mcp.ToolObserveSession)) {
+			t.Errorf("the refusal does not name the one tool at fault:\n%s", err)
+		}
+		for _, name := range mcp.ToolNames() {
+			if name == mcp.ToolObserveSession {
+				continue
+			}
+			if strings.Contains(err.Error(), string(name)) {
+				t.Errorf("the refusal names %s, which IS wired:\n%s", name, err)
+			}
+		}
+	})
+
+	t.Run("a tool this surface does not advertise is not its problem", func(t *testing.T) {
+		// #170 splits the surface across two listeners. Each is checked
+		// against what IT advertises, or a deployment that moved the identity
+		// lifecycle to its own listener would be refused for tools the other
+		// one serves.
+		w := newToolWiring(newServeLog(io.Discard))
+		for _, name := range mcp.AgentTools() {
+			if _, err := w.install(name)(func() {}, nil); err != nil {
+				t.Fatalf("install %s: %v", name, err)
+			}
+		}
+		if err := w.requireDecided(surface, mcp.AgentTools()); err != nil {
+			t.Errorf("the agent-side listener was refused for tools it does not serve: %v", err)
+		}
+	})
+}
+
+// TestNoRestoreAdaptsAConfigureCallThatReturnsOnlyAnError.
+//
+// `ConfigureGetCredential` is the one of the eight that returns no restore
+// func — it is the one tool that installs no package state a later
+// configuration would have to put back. The adapter exists so the wiring has
+// ONE way of recording a decision rather than two, and so the odd one out
+// cannot be the one somebody forgets.
+func TestNoRestoreAdaptsAConfigureCallThatReturnsOnlyAnError(t *testing.T) {
+	restore, err := noRestore(nil)
+	if err != nil {
+		t.Fatalf("noRestore(nil) = %v", err)
+	}
+	if restore == nil {
+		t.Fatal("noRestore returned a nil restore func; the unwind list would panic on it")
+	}
+	restore() // must be safe to call: the unwind list runs every closer it holds.
+
+	boom := errors.New("no run directory")
+	if _, err := noRestore(boom); !errors.Is(err, boom) {
+		t.Errorf("noRestore(err) = %v, want the error it was given", err)
 	}
 }
