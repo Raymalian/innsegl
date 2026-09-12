@@ -8,14 +8,23 @@ import (
 	"sync"
 )
 
-// ToolName is one of the five MCP tool names of IP §4.
+// ToolName is one of the eight MCP tool names of IP §4.
 //
 // The names are a PROTECTED SURFACE (VERSIONING.md surface 4, doc 08 §3). The
-// surface is closed: Bind refuses anything that is not one of these five, so a
-// sixth tool cannot be advertised by adding a file.
+// surface is closed: Bind refuses anything that is not one of these eight, so
+// a ninth tool cannot be advertised by adding a file.
+//
+// It was five until RM-131 (#210). The three ingestion tools were added so a
+// harness other than the reference one can participate: every derivation they
+// perform was previously done in the reference shim, which is why only that
+// shim could produce an activity log. doc 08 surface 4 protects the names
+// against rename and removal; it does not forbid an addition, so opening the
+// surface is not a major release. The new names are not pinned in
+// scripts/protected-surfaces.sh until a second shim has driven them (#209) —
+// a name locked before it has been used is a name locked on a guess.
 type ToolName string
 
-// The five tool names of IP §4.
+// The eight tool names of IP §4.
 const (
 	// ToolRegisterAgent: register_agent(agent_type, task_id, idempotency_key)
 	// → {spiffe_id, run_id, expires_at}. RM-022.
@@ -32,6 +41,15 @@ const (
 	ToolSignCommit ToolName = "sign_commit"
 	// ToolRetireAgent: retire_agent(run_id) → {retired_at}. RM-025.
 	ToolRetireAgent ToolName = "retire_agent"
+	// ToolDescribeWorkspace: describe_workspace(cwd) → {repo, worktree,
+	// branch, task}. Pure derivation, no writes. RM-126, E11.
+	ToolDescribeWorkspace ToolName = "describe_workspace"
+	// ToolObserveToolCall: observe_tool_call(run_id, tool, body) → {digest}.
+	// Digests and stores the body locally, appends the tool_call. RM-127, E11.
+	ToolObserveToolCall ToolName = "observe_tool_call"
+	// ToolObserveSession: observe_session(session_id, phase, cwd) → the run.
+	// Harness session start/stop, replacing marker bookkeeping. RM-128, E11.
+	ToolObserveSession ToolName = "observe_session"
 )
 
 // toolOrder is the surface in IP §4 order. Binders run in this order, so the
@@ -42,9 +60,12 @@ var toolOrder = []ToolName{
 	ToolRecordEvent,
 	ToolSignCommit,
 	ToolRetireAgent,
+	ToolDescribeWorkspace,
+	ToolObserveToolCall,
+	ToolObserveSession,
 }
 
-// ToolNames returns the five tool names of IP §4, in IP §4 order.
+// ToolNames returns the eight tool names of IP §4, in IP §4 order.
 func ToolNames() []ToolName { return slices.Clone(toolOrder) }
 
 // adminOrder and agentOrder are #170's caller split, in IP §4 order.
@@ -63,10 +84,21 @@ func ToolNames() []ToolName { return slices.Clone(toolOrder) }
 // staged_ref must equal the repository's own index — git, not the caller,
 // decides what it signs.
 var (
-	adminOrder = []ToolName{ToolRegisterAgent, ToolRecordEvent, ToolRetireAgent}
+	adminOrder = []ToolName{
+		ToolRegisterAgent, ToolRecordEvent, ToolRetireAgent,
+		ToolDescribeWorkspace, ToolObserveToolCall, ToolObserveSession,
+	}
 	agentOrder = []ToolName{ToolGetCredential, ToolSignCommit}
 )
 
+// The three ingestion tools (E11) are admin for the same reason record_event
+// is. They are driven by the harness OBSERVING the agent, never by the model
+// reporting on itself; a model that could call observe_tool_call could write
+// its own activity log, and a reader could not tell an observed call from a
+// claimed one. That gap is doc 04 AB-14. describe_workspace writes nothing at
+// all, but it is the tool that makes the other two addressable, so exposing it
+// to the model would hand over the addressing without the recording.
+//
 // record_event moved to the admin side when #171 made the harness record tool
 // calls rather than the model reporting them. It is the one tool whose place
 // follows from WHO CALLS IT rather than from what it can do: it cannot create
@@ -85,12 +117,12 @@ func AdminTools() []ToolName { return slices.Clone(adminOrder) }
 // expose to the caller doing the work (#170).
 func AgentTools() []ToolName { return slices.Clone(agentOrder) }
 
-// Valid reports whether n is one of the five.
+// Valid reports whether n is one of the eight.
 func (n ToolName) Valid() bool { return slices.Contains(toolOrder, n) }
 
 // ToolBinder attaches one tool to a server, normally with a single call to
-// Bind. It is the seam between this package's transport and the five tool
-// implementations, which live in five separate files.
+// Bind. It is the seam between this package's transport and the eight tool
+// implementations, which live in eight separate files.
 //
 // A tool file owns exactly one file and registers itself from that file's
 // init, so four agents can add four tools concurrently without any of them
@@ -120,13 +152,13 @@ var (
 // RegisterTool records the binder for name, to be run by New.
 //
 // It panics — at init, before any request is served — if name is not one of
-// the five IP §4 tool names, if bind is nil, or if a binder for name is
+// the eight IP §4 tool names, if bind is nil, or if a binder for name is
 // already registered. All three are programming errors in the tool surface
 // itself, and a server that served a partial or doubled surface would be
 // advertising a contract it does not implement.
 func RegisterTool(name ToolName, bind ToolBinder) {
 	if !name.Valid() {
-		panic(fmt.Sprintf("mcp.RegisterTool: %q is not one of the five IP §4 tool names %v", string(name), toolOrder))
+		panic(fmt.Sprintf("mcp.RegisterTool: %q is not one of the eight IP §4 tool names %v", string(name), toolOrder))
 	}
 	if bind == nil {
 		panic(fmt.Sprintf("mcp.RegisterTool: nil binder for %s", name))
