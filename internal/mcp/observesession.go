@@ -732,16 +732,23 @@ func observeSessionReadMarker(dir, sessionID string) (observeSessionMarker, bool
 // randomised. Two writers for one session are two calls for one session id,
 // and the worst they can do to each other is write the same bytes twice.
 func observeSessionWriteMarker(dir string, marker observeSessionMarker) error {
-	// The encoding and the directory share ONE branch, deliberately.
-	// json.Marshal cannot fail for a struct of ten strings, so a branch of its
-	// own would be one no input can drive — and a dead error path is exactly
-	// what IP §2's branch floor exists to find. The failure is still reported
-	// if this type ever grows a member that does not encode.
-	raw, err := json.Marshal(marker)
-	if err == nil {
-		err = os.MkdirAll(dir, observeSessionDirMode)
-	}
-	if err != nil {
+	// The marshal error is dropped, deliberately, and a test holds the ground
+	// it would have covered.
+	//
+	// json.Marshal cannot fail for a struct of plain strings, so ANY branch on
+	// it is one no input can drive. Folding it into the next condition does not
+	// fix that — it only moves the undriveable half onto `err == nil`, which is
+	// what IP §2's branch floor caught here. A dead error path is dead wherever
+	// it is written.
+	//
+	// What the branch was protecting against is this type growing a member that
+	// does not encode. That is a change to the struct, so it is caught by a test
+	// over the struct — TestObserveSessionMarkerAlwaysEncodes — rather than by a
+	// runtime path that would have to stay uncovered forever to exist at all.
+	//nolint:errcheck // No value of this type can produce an error; see above.
+	raw, _ := json.Marshal(marker)
+
+	if err := os.MkdirAll(dir, observeSessionDirMode); err != nil {
 		return fmt.Errorf("preparing the marker volume: %w", err)
 	}
 
