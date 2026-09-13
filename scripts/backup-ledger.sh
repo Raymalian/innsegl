@@ -89,7 +89,7 @@ readonly EXIT_DUMP_FAILED=5
 # read from the compose file so this script has no YAML-parsing dependency.
 # Kept in one place: grep this string in deploy/compose/innsegl.yml when
 # bumping it there.
-readonly DEFAULT_MC_IMAGE="minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
+readonly DEFAULT_MC_IMAGE="quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
 
 usage() {
   cat <<'USAGE'

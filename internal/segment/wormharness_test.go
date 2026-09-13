@@ -38,7 +38,7 @@ const (
 	// has been stable for a decade. This is the opposite case: the whole
 	// subject of SEG-005 is one server's object-lock enforcement, so the
 	// version that enforcement was observed in is part of the evidence.
-	defaultMinIOImage = "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+	defaultMinIOImage = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
 
 	minioRootUser     = "innsegl"
 	minioRootPassword = "innsegl-test-secret"
