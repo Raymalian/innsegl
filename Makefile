@@ -242,6 +242,14 @@ innsegl-up: sigstore-up
 # same class of reason -- make counts them.
 #
 # git@host:org/name.git and https://host/org/name.git both become host/org/name.
+#
+# INNSEGL_PROJECTS is TWO things and has to stay one variable: the directory
+# mounted into the containers, and — since RM-126 — what the MCP is told that
+# mount corresponds to, as $INNSEGL_HOST_PROJECTS. deploy/compose/innsegl.workrepo.yml
+# writes both from this value, so a deployment cannot mount one directory and
+# describe another. `describe_workspace` refuses rather than guess when it is
+# unset, so the failure of forgetting it is a named refusal and not a wrong
+# repository in the ledger.
 INNSEGL_PROJECTS ?= $(HOME)/Applications
 REPO_PATH ?= $(shell git rev-parse --show-toplevel)
 REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')

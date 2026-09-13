@@ -50,7 +50,7 @@ const (
 	// number and a bytes-per-event number are both properties of the server
 	// that produced them, and ADR-0039 quotes these tags beside the numbers.
 	defaultPostgresImage = "postgres:16"
-	defaultMinIOImage    = "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+	defaultMinIOImage    = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
 	// The Rekor stack, matching internal/segment/rekorharness_test.go so that
 	// OPS-002 anchors against the same log SEG-003 does.
 	defaultRekorImage             = "ghcr.io/sigstore/rekor/rekor-server:v1.3.10"
