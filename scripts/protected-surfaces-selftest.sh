@@ -141,7 +141,7 @@ const (
 )
 
 // MCP tool names: register_agent, get_credential, record_event, sign_commit,
-// retire_agent.
+// retire_agent, describe_workspace, observe_tool_call, observe_session.
 const (
 	ClassLedgerUnavailable  = "LEDGER_UNAVAILABLE"
 	ClassInvariantViolation = "INVARIANT_VIOLATION"
@@ -311,6 +311,26 @@ printf '# TC-SER golden fixtures\n\nThese files are immutable. Typo fixed.\n' \
   >"${FIX}/README.md"
 run_gate 'v0.1.1'
 expect green 'the prose beside the vectors is not itself a protected surface'
+reset_tree
+
+# --- phase 11: OPS-023, the three ingestion tool names are pinned ------------
+#
+# E11 added describe_workspace, observe_tool_call and observe_session and
+# deliberately left them out of the gate's vocabulary while the surface was
+# being shaped: the gate fails on a PARTIAL set and does not forbid a sixth
+# name, so adding tools needs no major release, and a name pinned before
+# anything other than the reference harness has used it is a name pinned on a
+# guess. RM-130 (#209) drove them from a second harness and pinned them.
+#
+# A pin that has never been observed failing is not known to be live. This
+# renames one of the three in the shipped source and requires the gate to catch
+# it — the same rename that, before the pin, passed in silence.
+begin 'tagged, one of the three ingestion tool names renamed, candidate v0.1.1 -> fails'
+sed -e 's/observe_tool_call/observe_toolcall/' \
+  "${repo}/internal/event/schema.go" >"${workdir}/schema.go.tmp"
+mv -- "${workdir}/schema.go.tmp" "${repo}/internal/event/schema.go"
+run_gate 'v0.1.1'
+expect red 'renaming observe_tool_call breaks the mcp-tool set (OPS-023)'
 reset_tree
 
 printf 'protected-surfaces gate self-test: PASS (%d phases)\n' "${phase}"
