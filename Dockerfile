@@ -106,16 +106,23 @@ RUN addgroup -g 1000 innsegl \
 COPY --from=build /out/innsegl /usr/local/bin/innsegl
 COPY --from=build /out/gitsign /usr/local/bin/gitsign
 
-# The workspace root, owned by the image's user.
+# The named volumes' mountpoints, owned by the image's user.
 #
 # MEASURED, and it is the reason this line exists rather than being obvious:
 # Docker initialises an EMPTY named volume from the image's content AND
-# OWNERSHIP at the mount path. If /work does not exist in the image, the daemon
-# creates the mountpoint root-owned, and every container that mounts it as uid
-# 1000 — the MCP, the reconciler, the demo agent — gets "Permission denied" on
-# the first mkdir. Creating it here is what makes `innsegl-workspace` writable
-# by the three services doc 05 §1 shares it between.
-RUN mkdir -p /work && chown 1000:1000 /work
+# OWNERSHIP at the mount path. If the directory does not exist in the image, the
+# daemon creates the mountpoint root-owned, and every container that mounts it
+# as uid 1000 — the MCP, the reconciler, the demo agent — gets "Permission
+# denied" on the first mkdir. Creating them here is what makes
+# `innsegl-workspace` writable by the three services doc 05 §1 shares it
+# between.
+#
+# /sessions is observe_session's marker volume (#207, #211) and was the same
+# defect a second time, found by RM-129's live run: every SubagentStart refused
+# with `open /sessions/....part: permission denied`, so the tool that moved the
+# bookkeeping into the MCP could not write any of it. A refusal at the start of
+# a run is loud, which is the only reason it was one command to find.
+RUN mkdir -p /work /sessions && chown 1000:1000 /work /sessions
 
 # git and gitsign both want a writable HOME, and gitsign writes its cache
 # there, so HOME is a real directory this user owns rather than `/`.

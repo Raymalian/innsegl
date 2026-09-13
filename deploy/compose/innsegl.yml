@@ -88,9 +88,9 @@ x-postgres-image: &postgres-image
 # part of the evidence". The reference deployment runs the version the evidence
 # was taken against.
 x-minio-image: &minio-image
-  minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+  quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
 x-minio-client-image: &minio-client-image
-  minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+  quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
 # Used once, by the one-shot that mints this deployment's pseudonymisation
 # secret, and it is the SAME pin sigstore.yml uses for sigstore-bootstrap. The
 # innsegl image could have generated the secret itself, but that would put key

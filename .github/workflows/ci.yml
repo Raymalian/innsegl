@@ -141,6 +141,43 @@ jobs:
       - name: Verify every tracked source file carries the SPDX header
         run: ./scripts/spdx-check.sh
 
+  operator-paths:
+    name: operator paths
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify no shipped file names a directory on the operator's machine
+        run: ./scripts/no-operator-paths.sh
+
+  operator-paths-selftest:
+    name: operator paths gate self-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A content gate's failure mode is silent: a grep that matches nothing
+      # passes everything and reports success. This plants a violation and
+      # requires the gate to catch it.
+      - name: Watch the gate fail on a planted operator path
+        run: ./scripts/no-operator-paths-selftest.sh
+
+  reference-shim:
+    name: reference shim
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-019, OPS-020 and OPS-021. The shim is the only thing capturing
+      # identity and activity, and its failure mode is silent: a shim that
+      # registers runs and records nothing looks exactly like a shim that
+      # works. This drives it with a synthetic payload for each of the six
+      # harness events against a stub that records every tools/call, so a
+      # derivation that creeps back in fails here rather than in a blank
+      # activity log nobody reads for a week. No Docker, no MCP, no network.
+      - name: Drive the reference shim through all six harness events
+        run: ./scripts/hooks/shim-selftest.sh
+
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest

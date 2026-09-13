@@ -23,29 +23,6 @@ func withEmptyToolRegistry(t *testing.T) {
 	})
 }
 
-// TestIP4ToolSurfaceIsExactlyTheFiveNames. The names are a protected surface
-// (doc 08 §3, VERSIONING.md surface 4); the order is IP §4's.
-func TestIP4ToolSurfaceIsExactlyTheFiveNames(t *testing.T) {
-	want := []string{"register_agent", "get_credential", "record_event", "sign_commit", "retire_agent"}
-	got := ToolNames()
-	if len(got) != len(want) {
-		t.Fatalf("ToolNames() has %d members, IP §4 lists %d: %v", len(got), len(want), got)
-	}
-	for i := range want {
-		if string(got[i]) != want[i] {
-			t.Errorf("ToolNames()[%d] = %q, IP §4 says %q", i, got[i], want[i])
-		}
-		if !ToolName(want[i]).Valid() {
-			t.Errorf("ToolName(%q).Valid() = false", want[i])
-		}
-	}
-	for _, bad := range []ToolName{"", "registerAgent", "register_agent ", "list_runs"} {
-		if bad.Valid() {
-			t.Errorf("ToolName(%q).Valid() = true; it is not on the surface", string(bad))
-		}
-	}
-}
-
 // TestRegisterToolIsTheSeamFourAgentsShare: a tool file registers its own
 // binder from its own init, touching no shared list.
 func TestRegisterToolIsTheSeamFourAgentsShare(t *testing.T) {
@@ -71,12 +48,17 @@ func TestRegisterToolIsTheSeamFourAgentsShare(t *testing.T) {
 	if want := []ToolName{ToolRegisterAgent, ToolRecordEvent, ToolRetireAgent}; !equalToolNames(order, want) {
 		t.Errorf("binders ran in order %v, want IP §4 order %v", order, want)
 	}
-	if want := []ToolName{ToolGetCredential, ToolSignCommit}; !equalToolNames(srv.MissingTools(), want) {
+	// The three E11 ingestion tools have no binder in this test's empty
+	// registry either, and MissingTools names every unbound tool on the
+	// surface — that is its whole duty (ADR-0024).
+	want2 := []ToolName{ToolGetCredential, ToolSignCommit,
+		ToolDescribeWorkspace, ToolObserveToolCall, ToolObserveSession}
+	if want := want2; !equalToolNames(srv.MissingTools(), want) {
 		t.Errorf("MissingTools() = %v, want %v", srv.MissingTools(), want)
 	}
 }
 
-// TestRegisterToolPanicsOnAnUnknownName keeps a sixth tool off the surface.
+// TestRegisterToolPanicsOnAnUnknownName keeps a ninth tool off the surface.
 func TestRegisterToolPanicsOnAnUnknownName(t *testing.T) {
 	withEmptyToolRegistry(t)
 	defer func() {

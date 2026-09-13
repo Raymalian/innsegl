@@ -150,7 +150,7 @@ func New(cfg Config) (*Server, error) {
 // order so that two listeners advertise their tools in the same order the
 // single listener always did.
 //
-// Nil or empty means all five. An unknown name is an error rather than a
+// Nil or empty means all eight. An unknown name is an error rather than a
 // silent omission: a typo in a deployment's tool list would otherwise remove a
 // tool from the surface and look exactly like a deliberate split (#170).
 func selectedTools(want []ToolName) ([]ToolName, error) {
@@ -161,7 +161,7 @@ func selectedTools(want []ToolName) ([]ToolName, error) {
 	for _, name := range want {
 		if !name.Valid() {
 			return nil, fmt.Errorf(
-				"mcp.Config.Tools: %q is not one of the five IP §4 tool names %v", string(name), ToolNames())
+				"mcp.Config.Tools: %q is not one of the eight IP §4 tool names %v", string(name), ToolNames())
 		}
 		chosen[name] = true
 	}

@@ -313,7 +313,7 @@ func TestSEG005CanarySubcommandIsADeployGate(t *testing.T) {
 // code can be written against by mistake.
 
 const (
-	cliMinIOImage    = "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+	cliMinIOImage    = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
 	cliMinIOUser     = "innsegl"
 	cliMinIOPassword = "innsegl-test-secret"
 )

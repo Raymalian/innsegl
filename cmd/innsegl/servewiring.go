@@ -31,8 +31,30 @@ import (
 	"innsegl.dev/innsegl/internal/spire"
 )
 
-// The wiring: every dependency the four tools run on, constructed once, in the
-// one order that is load-bearing.
+// The wiring: every dependency the eight tools run on, constructed once, in
+// the one order that is load-bearing.
+//
+// # Every tool is decided about, and a tool nobody decided stops the process
+//
+// This file is the only place a tool's configuration is installed, and for
+// three tools it was the only place nothing happened at all. RM-126, RM-127
+// and RM-128 (#205, #206, #207) each shipped a bound tool: advertised on
+// `tools/list`, accepted by the transport, reported present by
+// `MissingTools()` — and answering INVARIANT_VIOLATION to every input, because
+// nothing here ever called its Configure function. That is worse than an
+// absent tool, because every report an operator can read says the surface is
+// complete. It survived two waves and was found sideways, by contract tests
+// that could not drive the tools through the shipped wiring and had to install
+// the configuration themselves.
+//
+// So `toolWiring` below records what this process DID about each tool, and
+// openServer refuses to start when a name on a served surface is one it never
+// decided. The record is a by-product rather than a list: `install` takes a
+// Configure call's own two return values, `withhold` is written at the one
+// place a deployment's opt-in is read, and a tool nobody wrote either line for
+// is in neither set. A hand-written list of names to check would be the same
+// defect one layer up — a second place to keep in step, going stale in exactly
+// the way the tool surface just did.
 //
 // # The order that matters
 //
@@ -69,6 +91,110 @@ import (
 // a replica that hangs at start-up is worse than one that exits: an
 // orchestrator can restart the second.
 const serveBootTimeout = 60 * time.Second
+
+// ---------------------------------------------------------------------------
+// What this process decided about each IP §4 tool.
+// ---------------------------------------------------------------------------
+
+// toolWiring is the record of which tools this process configured, which it
+// deliberately left unconfigured, and — the point of it — which it never
+// considered at all.
+//
+// A tool may legitimately be served unconfigured: sign_commit without a
+// working-tree root cannot resolve a repository, describe_workspace without a
+// host root cannot translate a path, and both refuse every call by name and
+// say so. What may NOT happen is that nobody chose. The difference between
+// "the operator did not opt in" and "the wiring forgot" is invisible from
+// outside the process and identical from a caller's side, and the second is
+// what #205, #206 and #207 each shipped.
+type toolWiring struct {
+	log *serveLog
+	// decided maps a tool to why it is not configured; the empty string means
+	// it is. A name absent from the map is one nothing decided.
+	decided map[mcp.ToolName]string
+}
+
+func newToolWiring(log *serveLog) *toolWiring {
+	return &toolWiring{log: log, decided: make(map[mcp.ToolName]string, len(mcp.ToolNames()))}
+}
+
+// install returns the recorder for name. Hand it a Configure call and it
+// records the decision and passes that call's own results straight back:
+//
+//	restore, err := tools.install(mcp.ToolRecordEvent)(mcp.ConfigureRecordEvent(cfg))
+//
+// It is curried so the Configure call can be written INSIDE it, which is what
+// makes the record a by-product rather than a line beside one. The only way to
+// get a restore func into the caller's unwind list is through here, and a
+// Configure call that FAILED records nothing — that tool is still undecided,
+// which is the state openServer refuses, rather than a configured one with a
+// broken configuration behind it.
+func (w *toolWiring) install(name mcp.ToolName) func(func(), error) (func(), error) {
+	return func(restore func(), err error) (func(), error) {
+		if err != nil {
+			return nil, err
+		}
+		w.decided[name] = ""
+		return restore, nil
+	}
+}
+
+// withhold records that this deployment deliberately did not configure name,
+// and says so on stderr every time the process starts.
+//
+// ADR-0025's shape, applied to a tool rather than to a rate limit: turning
+// something off is an operator decision, and a decision nobody can see is one
+// nobody can audit. The tool stays advertised and answers its own named
+// refusal — internal/mcp writes those messages so a caller is told what to
+// set — which is why this is a decision and not an omission.
+func (w *toolWiring) withhold(name mcp.ToolName, why string) {
+	w.decided[name] = why
+	w.log.warn(string(name) + " is NOT CONFIGURED: " + why)
+}
+
+// undecided returns the advertised tools this wiring never decided about, in
+// the order they were advertised.
+func (w *toolWiring) undecided(advertised []mcp.ToolName) []mcp.ToolName {
+	var out []mcp.ToolName
+	for _, name := range advertised {
+		if _, ok := w.decided[name]; !ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// requireDecided is the start-up refusal.
+//
+// It is checked per SURFACE rather than once for the process because #170
+// splits the tools across two listeners, and a deployment that moved the
+// identity lifecycle to its own listener must not be refused for tools the
+// other one serves.
+func (w *toolWiring) requireDecided(surface string, advertised []mcp.ToolName) error {
+	undecided := w.undecided(advertised)
+	if len(undecided) == 0 {
+		return nil
+	}
+	them := "it"
+	if len(undecided) > 1 {
+		them = "them"
+	}
+	return fmt.Errorf(
+		"%s advertises %s, and nothing in this process configured %s or recorded a decision "+
+			"not to. A bound tool with no configuration behind it is accepted by the transport, "+
+			"reported present by the health endpoints, and refuses every call — so it is worse "+
+			"than an absent one. Wire it in cmd/innsegl/servewiring.go, or withhold it there "+
+			"deliberately",
+		surface, strings.Join(toolStrings(undecided), ", "), them)
+}
+
+// noRestore adapts a Configure call that returns only an error.
+//
+// ConfigureGetCredential is the one of the eight with no restore func to
+// return — it installs nothing a later configuration would have to put back —
+// and this exists so the wiring has one way of recording a decision rather
+// than two. The odd one out is exactly the one that gets forgotten.
+func noRestore(err error) (func(), error) { return func() {}, err }
 
 // runningServer is the shipped servedMCP.
 type runningServer struct {
@@ -314,7 +440,14 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 			" with a secret to stop that (RM-079)")
 	}
 
-	// ---- the five tools, in the one order that matters --------------------
+	// ---- the eight tools, in the one order that matters -------------------
+	//
+	// Every Configure call below goes through `tools`, and every deliberate
+	// non-configuration through tools.withhold. That is what lets the check
+	// after the servers are built know the difference between a tool an
+	// operator left off and a tool this file forgot. See toolWiring above.
+	tools := newToolWiring(log)
+
 	registerCfg := mcp.RegisterAgentConfig{
 		Identities: admin,
 		// The run directory, so a REPLAYED registration can tell a run whose
@@ -357,13 +490,13 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 			"register runs without limit (AB-07 is not controlled in this deployment)")
 	}
 
-	restoreRegister, err := mcp.ConfigureRegisterAgent(registerCfg)
+	restoreRegister, err := tools.install(mcp.ToolRegisterAgent)(mcp.ConfigureRegisterAgent(registerCfg))
 	if err != nil {
 		return fail("configure register_agent: %w", err)
 	}
 	closers = append(closers, restoreRegister)
 
-	if cerr := mcp.ConfigureGetCredential(mcp.CredentialConfig{
+	if _, cerr := tools.install(mcp.ToolGetCredential)(noRestore(mcp.ConfigureGetCredential(mcp.CredentialConfig{
 		Runs:    runs,
 		Entries: admin,
 		// Restoring a withdrawn authorisation needs the parent, the selectors
@@ -381,7 +514,7 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		Ledger:         store,
 		RunTokenSecret: o.runTokenSecret,
 		AbandonAfter:   o.abandonAfter,
-	}); cerr != nil {
+	}))); cerr != nil {
 		return fail("configure get_credential: %w", cerr)
 	}
 
@@ -400,17 +533,17 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 			"register_agent issues.")
 	}
 
-	restoreRecord, err := mcp.ConfigureRecordEvent(mcp.RecordEventConfig{
+	restoreRecord, err := tools.install(mcp.ToolRecordEvent)(mcp.ConfigureRecordEvent(mcp.RecordEventConfig{
 		Runs: runs, Ledger: store, Idempotency: idem,
-	})
+	}))
 	if err != nil {
 		return fail("configure record_event: %w", err)
 	}
 	closers = append(closers, restoreRecord)
 
-	restoreRetire, err := mcp.ConfigureRetireAgent(mcp.RetireAgentConfig{
+	restoreRetire, err := tools.install(mcp.ToolRetireAgent)(mcp.ConfigureRetireAgent(mcp.RetireAgentConfig{
 		Runs: runs, Entries: admin, Ledger: store,
-	})
+	}))
 	if err != nil {
 		return fail("configure retire_agent: %w", err)
 	}
@@ -430,15 +563,89 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 	// turning a control off is an operator decision that appears in the log
 	// every time the process starts.
 	if o.workspace != "" {
-		restoreSign, serr := configureSignCommit(o, runs, store, idem, sigstore, pseudonyms, log)
+		restoreSign, serr := tools.install(mcp.ToolSignCommit)(
+			configureSignCommit(o, runs, store, idem, sigstore, pseudonyms, log))
 		if serr != nil {
 			return fail("configure sign_commit: %w", serr)
 		}
 		closers = append(closers, restoreSign)
 	} else {
-		log.warn("sign_commit is NOT CONFIGURED: -workspace (or $" + envWorkspace + ") is " +
-			"unset, so the tool is advertised and refuses every call. No commit can be " +
-			"signed by this replica.")
+		tools.withhold(mcp.ToolSignCommit, "-workspace (or $"+envWorkspace+") is unset, so "+
+			"the tool is advertised and refuses every call. No commit can be signed by this replica.")
+	}
+
+	// ---- the three ingestion tools (E11, #205/#206/#207, wired by #211) ----
+	//
+	// Every one is opt-in on the same terms as sign_commit and for the same
+	// reason: none has a defensible default, and a guessed one is a confident
+	// answer that may be about the wrong directory. Left off, each is
+	// advertised and refuses every call with a message naming what to set —
+	// internal/mcp writes those — and the decision appears in this log every
+	// start.
+	//
+	// describe_workspace first, because the other two reach it: observe_session
+	// resolves a workspace on every start through the shipped tool rather than
+	// deriving one a second time, and a harness that has neither has nothing to
+	// address the rest of the surface with.
+	if o.hostProjects != "" {
+		restoreDescribe, derr := tools.install(mcp.ToolDescribeWorkspace)(
+			mcp.ConfigureDescribeWorkspace(mcp.DescribeWorkspaceConfig{
+				HostProjects: o.hostProjects,
+				Projects:     o.projectsMount,
+			}))
+		if derr != nil {
+			return fail("configure describe_workspace: %w", derr)
+		}
+		closers = append(closers, restoreDescribe)
+		log.info("describe_workspace is configured",
+			"host_projects", o.hostProjects, "projects_mount", o.projectsMount)
+	} else {
+		tools.withhold(mcp.ToolDescribeWorkspace, "-host-projects (or $"+mcp.EnvHostProjects+
+			") is unset, so this deployment has not been told which host directory its "+
+			"projects mount corresponds to. No harness can resolve a repository, a worktree "+
+			"or a branch through this replica.")
+	}
+
+	if o.observeBodyDir != "" {
+		restoreObserve, oerr := tools.install(mcp.ToolObserveToolCall)(
+			mcp.ConfigureObserveToolCall(mcp.ObserveToolCallConfig{
+				Runs: runs, Ledger: store, Idempotency: idem,
+				// The volume is a LOCAL one and the bodies stay on it. doc 05
+				// keeps tool-call bodies on the operator's machine: they carry
+				// file contents and commands, the chain gets the digest and
+				// the tool name and nothing else (IP E4), and nothing in this
+				// process sends one anywhere.
+				BodyDir: o.observeBodyDir,
+				// get_credential's secret, not a second one. One token per
+				// run, issued once by register_agent, checked the same way
+				// everywhere it is checked.
+				RunTokenSecret: o.runTokenSecret,
+			}))
+		if oerr != nil {
+			return fail("configure observe_tool_call: %w", oerr)
+		}
+		closers = append(closers, restoreObserve)
+		log.info("observe_tool_call is configured", "body_dir", o.observeBodyDir)
+	} else {
+		tools.withhold(mcp.ToolObserveToolCall, "-observe-body-dir (or $"+envObserveBodyDir+
+			") is unset, so there is nowhere to keep a body. A tool_call naming a digest "+
+			"whose body was never stored is a permanent record of evidence nobody has (I3), "+
+			"so the tool refuses rather than appending one.")
+	}
+
+	if o.sessionDir != "" {
+		restoreSession, serr := tools.install(mcp.ToolObserveSession)(
+			mcp.ConfigureObserveSession(mcp.ObserveSessionConfig{MarkerDir: o.sessionDir}))
+		if serr != nil {
+			return fail("configure observe_session: %w", serr)
+		}
+		closers = append(closers, restoreSession)
+		log.info("observe_session is configured", "marker_dir", o.sessionDir)
+	} else {
+		tools.withhold(mcp.ToolObserveSession, "-session-dir (or $"+envSessionDir+") is unset, "+
+			"so the session-to-run mapping has nowhere to live. Every stop would find nothing "+
+			"and every run a harness started would stay Active until the reaper took it "+
+			"(IP §6.7).")
 	}
 
 	// ---- the transport ----------------------------------------------------
@@ -476,6 +683,34 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		})
 		if err != nil {
 			return fail("build the identity-lifecycle server: %w", err)
+		}
+	}
+
+	// ---- the start-up refusal ---------------------------------------------
+	//
+	// EVERY TOOL EITHER LISTENER ADVERTISES HAS BEEN DECIDED ABOUT. This is the
+	// check #211 exists for: three tools reached a shipped surface with no
+	// wiring at all, and nothing anywhere reported it — `MissingTools()` calls
+	// a bound tool present, both health endpoints agree, and the only symptom
+	// is one INVARIANT_VIOLATION per call, at a harness, later.
+	//
+	// It is made here, before any listener opens, so an operator who added a
+	// tool and forgot this file is told by the process that will not start
+	// rather than by the agent whose work was not recorded. A tool deliberately
+	// left unconfigured passes: that is a decision, it is in the log above, and
+	// the tool says so itself on every call.
+	for _, surface := range []struct {
+		name   string
+		server *mcp.Server
+	}{
+		{"the MCP transport", server},
+		{"the identity-lifecycle listener", adminServer},
+	} {
+		if surface.server == nil {
+			continue
+		}
+		if derr := tools.requireDecided(surface.name, surface.server.BoundTools()); derr != nil {
+			return fail("%w", derr)
 		}
 	}
 

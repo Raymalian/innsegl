@@ -175,7 +175,7 @@ const (
 	prtRekorKeyPath   = "/api/v1/log/publicKey"
 
 	prtPostgresImage = "postgres:16"
-	prtMinIOImage    = "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+	prtMinIOImage    = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
 	prtSocatImage    = "alpine/socat:1.8.0.3"
 
 	prtPGUser     = "innsegl"
