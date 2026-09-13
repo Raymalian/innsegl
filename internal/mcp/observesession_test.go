@@ -4,10 +4,12 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1429,5 +1431,35 @@ func TestObserveSessionIsOnTheSurfaceAndBinds(t *testing.T) {
 	}
 	if len(bound) != len(ToolNames()) {
 		t.Errorf("the server binds %d of the %d IP §4 tools", len(bound), len(ToolNames()))
+	}
+}
+
+// TestObserveSessionMarkerAlwaysEncodes is the guard that replaced a dead
+// branch (RM-128, #207).
+//
+// observeSessionWriteMarker drops json.Marshal's error because no value of this
+// type can produce one. That is only true while every member encodes, and this
+// is what makes adding a channel, a func or a chan-bearing member fail here
+// rather than silently write an empty marker.
+func TestObserveSessionMarkerAlwaysEncodes(t *testing.T) {
+	full := observeSessionMarker{}
+	v := reflect.ValueOf(&full).Elem()
+	for i := range v.NumField() {
+		f := v.Field(i)
+		if f.Kind() != reflect.String {
+			t.Fatalf("observeSessionMarker.%s is %s, not a string; "+
+				"observeSessionWriteMarker drops the marshal error on the promise that "+
+				"every member is one", v.Type().Field(i).Name, f.Kind())
+		}
+		f.SetString("x")
+	}
+	raw, err := json.Marshal(full)
+	if err != nil {
+		t.Fatalf("json.Marshal(observeSessionMarker) = %v; the dropped error in "+
+			"observeSessionWriteMarker is no longer safe to drop", err)
+	}
+	var back observeSessionMarker
+	if err := json.Unmarshal(raw, &back); err != nil || back != full {
+		t.Errorf("marker did not round-trip: %v, %+v", err, back)
 	}
 }
