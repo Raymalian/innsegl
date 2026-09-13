@@ -484,9 +484,18 @@ services:
   # command line of a container anyone can `docker inspect` is not a second
   # one. Nothing else in the stack can open a socket to this container.
   #
-  # `--appendonly no --save ""`: the index is derived state, rebuildable from
-  # the log. Losing it loses search, never a proof — so it is held in memory
-  # and never written, which is also what lets the container be read-only.
+  # THE INDEX IS PERSISTED. It was held in memory and never written, on the
+  # reasoning that "losing it loses search, never a proof". RM-138 (#219)
+  # measured that premise false. A verifier proves inclusion by ASKING the log
+  # for the entry whose artifact is this commit; with the index gone the log
+  # answers "no such entry" and `innsegl verify` reports FAILED —
+  # indistinguishable from a signature that was never logged. Trillian still
+  # held every record; nothing could find one.
+  #
+  # I5 says a third party verifies with no access to
+  # this system's database, and check 2 is the half the transparency log
+  # answers: a log that holds the record and cannot serve it fails that claim
+  # exactly as completely as a log that lost it.
   # --------------------------------------------------------------------------
   rekor-redis:
     image: *rekor-redis-image
@@ -500,15 +509,18 @@ services:
     # makes the entrypoint skip the drop entirely, so the capabilities are
     # never needed rather than being granted back.
     user: "999:999"
-    command: ["--bind", "0.0.0.0", "--appendonly", "no", "--save", ""]
+    # appendonly, not snapshots: the index is a write-per-entry workload, and
+    # an RDB snapshot loses everything written since the last one — which is
+    # precisely the failure this is fixing, only smaller.
+    command: ["--bind", "0.0.0.0", "--appendonly", "yes", "--save", ""]
     networks:
       - innsegl-rekor-index
     read_only: true
-    tmpfs:
-      # /data is where redis would write a snapshot. Persistence is off above,
-      # but the directory must exist and be writable or the server refuses to
-      # start; a tmpfs gives it one that cannot outlive the container.
-      - /data
+    volumes:
+      # /data holds the append-only file. A named volume rather than a tmpfs:
+      # the point is that it outlives the container, which a tmpfs by
+      # definition does not.
+      - sigstore-rekor-search:/data
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -610,3 +622,8 @@ volumes:
   sigstore-rekor-key:
   # Trillian's MySQL data directory. MOUNTED BY: trillian-db.
   sigstore-trillian-db-data:
+  # Rekor's search index — the map from artifact digest and certificate
+  # identity to entry UUID. Rebuildable from Trillian by walking the log
+  # (scripts/rekor-reindex.sh), but not rebuilt automatically: Rekor indexes an
+  # entry when it is written and never afterwards. MOUNTED BY: rekor-redis.
+  sigstore-rekor-search:
