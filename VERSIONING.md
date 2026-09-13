@@ -15,8 +15,10 @@ and only with a migration attestation.
 3. **The SPIFFE ID grammar**:
    `spiffe://{trust-domain}/agent/{agent-type}/{task-id}/{run-id}`.
 4. **The MCP tool names and their error-class vocabulary** — `register_agent`,
-   `get_credential`, `record_event`, `sign_commit`, `retire_agent`, and the
-   `error_class` values they return.
+   `get_credential`, `record_event`, `sign_commit`, `retire_agent`,
+   `describe_workspace`, `observe_tool_call`, `observe_session`, and the
+   `error_class` values they return. Adding a tool is not a change to this
+   surface; renaming or removing one is.
 5. **The project namespace**: the `innsegl` MCP server name, the package
    names, and the CLI binary name. The canonical names are enumerated in
    exactly one place — `namespace/canonical-names.txt` — together with where

@@ -178,6 +178,22 @@ jobs:
       - name: Drive the reference shim through all six harness events
         run: ./scripts/hooks/shim-selftest.sh
 
+  second-shim:
+    name: second harness shim
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-022. E11's claim is that the three ingestion tools are
+      # harness-neutral, and the reference shim cannot demonstrate that: the
+      # tools were extracted from it. This drives the second harness's shim
+      # over a transcript against the same stub, and asserts both what it
+      # forwards and — the half that carries the weight — that it never
+      # registers, never resolves a workspace and never digests a body itself.
+      # A derivation creeping back into a shim fails here. ADR-0048.
+      - name: Drive the second harness's shim over a rollout transcript
+        run: ./scripts/hooks/rollout-shim-selftest.sh
+
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest

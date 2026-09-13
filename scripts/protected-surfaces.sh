@@ -74,6 +74,15 @@ set -euo pipefail
 # The error classes are transcribed from IP §4, which is a local-only document.
 # The script is therefore the only shipped enumeration of that vocabulary; see
 # ADR-0007.
+#
+# WHY THE LAST THREE TOOL NAMES WERE PINNED LATE. describe_workspace,
+# observe_tool_call and observe_session were held out of this list while the
+# ingestion surface was being shaped, and joined it in RM-130 (#209). The gate
+# fails on a PARTIAL set and does not forbid an additional name, so adding a
+# tool needs no major release — which means a name can safely wait here until
+# something other than the harness it was extracted from has actually called
+# it. A name pinned before that is pinned on a guess. A second harness's shim
+# drove all three end to end, and only then were they written down. ADR-0048.
 # ---------------------------------------------------------------------------
 PROTECTED_VOCAB='trailer-key|Agent-Identity|VERSIONING.md
 trailer-key|Agent-Run|VERSIONING.md
@@ -83,6 +92,9 @@ mcp-tool|get_credential|VERSIONING.md
 mcp-tool|record_event|VERSIONING.md
 mcp-tool|sign_commit|VERSIONING.md
 mcp-tool|retire_agent|VERSIONING.md
+mcp-tool|describe_workspace|VERSIONING.md
+mcp-tool|observe_tool_call|VERSIONING.md
+mcp-tool|observe_session|VERSIONING.md
 error-class|ATTESTATION_FAILED|IP4
 error-class|IDENTITY_UNAVAILABLE|IP4
 error-class|CREDENTIAL_EXPIRED|IP4
