@@ -45,7 +45,6 @@ export interface OverviewViewProps {
 
 export function OverviewView({
   apiBase = DEFAULT_API_BASE,
-  lagBoundMs = DEFAULT_LAG_BOUND_MS,
   now,
 }: OverviewViewProps = {}) {
   const resource = useOverview({ base: apiBase, now });
@@ -55,17 +54,20 @@ export function OverviewView({
   }
 
   /* The ledger did not answer. doc 06 §4.6: "showing nothing rather than
-   * guessing" — but the heartbeat is still rendered, because §3.1 says it is
-   * never hidden and a failed read is a state it has words for. */
+   * guessing".
+   *
+   * The heartbeat is NOT re-rendered here, and §3.1's "never hidden" is still
+   * kept — by the header, which is where §3.1 puts it and which has its own
+   * read and its own words for a failed one (`OverviewHeartbeat` below). A
+   * second pulse in the body was the duplicate FE-114 removed, and this path
+   * is where it did the most damage: the body said "couldn't read" beside a
+   * header that had already said it. */
   if (resource.overview === null) {
     return (
-      <div className="flex flex-col gap-4">
-        <AnchoringPulse anchor={null} lagBoundMs={lagBoundMs} now={now} />
-        <ErrorState
-          detail={strings.error.withReason(resource.error)}
-          onRetry={resource.reload}
-        />
-      </div>
+      <ErrorState
+        detail={strings.error.withReason(resource.error)}
+        onRetry={resource.reload}
+      />
     );
   }
 
@@ -75,7 +77,6 @@ export function OverviewView({
       runsToday={resource.runsToday}
       recentRuns={resource.recentRuns}
       alerts={resource.alerts}
-      lagBoundMs={lagBoundMs}
       apiBase={apiBase}
       now={now}
     />

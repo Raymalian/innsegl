@@ -81,8 +81,10 @@ import { fetchProof } from "./client";
 import type { ProofOutcome } from "./client";
 import { strings } from "./strings";
 import {
+  fieldGrow,
   fieldInput,
   fieldLabel,
+  fieldRow,
   fieldStack,
   focusRing,
   identifierText,
@@ -183,33 +185,45 @@ export function PublicVerifyView({ route, timeoutMs }: PublicVerifyViewProps) {
 
   return (
     <section aria-labelledby={headingId} className={pageShell}>
+      {/* The QUESTION, not the nav item's words — doc 06 §3.6 and §6.1, and
+        * FE-119. A stranger arrives here with a SHA and no context; the first
+        * line of the artifact they screenshot has to say what the page
+        * answers. The navigation label and the document title keep their own
+        * string, because naming the tool is what those are for. */}
       <h1 id={headingId} className={pageHeading}>
-        {strings.page.heading}
+        {strings.page.question}
       </h1>
       <p className={proseText}>{strings.page.intro}</p>
 
       <form onSubmit={submit} className="flex flex-col gap-3">
-        <div className={fieldStack}>
-          <label htmlFor={commitId} className={fieldLabel}>
-            {strings.form.commitLabel}
-          </label>
-          <input
-            id={commitId}
-            name="commit"
-            type="text"
-            spellCheck={false}
-            autoComplete="off"
-            aria-describedby={commitHintId}
-            value={draft.commit}
-            onChange={(event) =>
-              setDraft((d) => ({ ...d, commit: event.target.value }))
-            }
-            className={`${fieldInput} ${focusRing}`}
-          />
-          <span id={commitHintId} className={secondaryText}>
-            {strings.form.commitHint}
-          </span>
+        {/* The SHA and the control that acts on it are one row: they are one
+          * step, and stacking them read as two. */}
+        <div data-testid="verify-field-row" className={fieldRow}>
+          <div className={fieldGrow}>
+            <label htmlFor={commitId} className={fieldLabel}>
+              {strings.form.commitLabel}
+            </label>
+            <input
+              id={commitId}
+              name="commit"
+              type="text"
+              spellCheck={false}
+              autoComplete="off"
+              aria-describedby={commitHintId}
+              value={draft.commit}
+              onChange={(event) =>
+                setDraft((d) => ({ ...d, commit: event.target.value }))
+              }
+              className={`${fieldInput} ${focusRing}`}
+            />
+          </div>
+          <button type="submit" className={`${submitButton} ${focusRing}`}>
+            {strings.form.submit}
+          </button>
         </div>
+        <span id={commitHintId} className={secondaryText}>
+          {strings.form.commitHint}
+        </span>
 
         <div className={fieldStack}>
           <label htmlFor={repoId} className={fieldLabel}>
@@ -230,10 +244,6 @@ export function PublicVerifyView({ route, timeoutMs }: PublicVerifyViewProps) {
             {strings.form.repoHint}
           </span>
         </div>
-
-        <button type="submit" className={`${submitButton} ${focusRing}`}>
-          {strings.form.submit}
-        </button>
       </form>
 
       <Result phase={shown.phase} onRetry={retry} />

@@ -35,6 +35,9 @@ export const hairline =
 export const emphasisBorder =
   "border-[length:var(--innsegl-border-width-emphasis)]";
 
+/** The same rule, on one edge. Table rows separate downwards. */
+const hairlineBottom = "border-b-[length:var(--innsegl-border-width-hairline)]";
+
 /* doc 06 §3.2 requires Expired to be "styled distinctly from retired", and
  * doc 06 §5.3 puts both in neutral grey — so the distinction cannot be a hue
  * and this is where it lives instead. The dashed style is a token, so a
@@ -72,6 +75,51 @@ export const noticeTitle = "text-prose font-semibold leading-tight";
 
 /** The stack a notice puts its title, detail and evidence link into. */
 export const noticeBody = "flex flex-col items-start gap-1";
+
+/* ── tables ─────────────────────────────────────────────────────────────────
+ *
+ * ONE table treatment, used by every table in the product (FE-121).
+ *
+ * doc 06 §5.4 puts the density in the sheet — "compact rows in tables" — and
+ * §5.1 puts every value behind a token so "a downstream deployment can rebrand
+ * without touching components". Two tables that reached for the same tokens
+ * independently still drift: one grows a header ground, the other keeps a
+ * plain rule, and a reader two clicks apart is looking at two products. The
+ * runs table (§3.2) and the overview's recent runs (§3.1) draw from here and
+ * from nowhere else, so restyling a table restyles both.
+ *
+ * doc 06 §6.4: "tables are real tables." These classes decorate <table>,
+ * <caption>, <th scope="col"> and <th scope="row">; none of them makes a div
+ * look like a row.
+ */
+
+/** The card a table sits in: a hairline, a rounded corner, and the table's own
+ * rules clipped to it (doc 06 §5.4, "hairline borders and background steps for
+ * structure"). Both tables sit in one of these, which is most of what makes
+ * them read as one treatment. */
+export const tablePanel = `${hairline} overflow-hidden rounded-md bg-surface border-line`;
+/** A strip above the table, for a heading and its qualification. */
+export const tablePanelHeader = `${hairline} flex flex-wrap items-baseline gap-2 border-0 border-b border-line px-cell-x py-3`;
+
+/** doc 06 §5.4: "tables full-width within it." A table that outgrows its
+ * column scrolls inside its own shell rather than pushing the page sideways. */
+export const tableScroll = "w-full overflow-x-auto";
+export const table = "w-full border-collapse text-body text-ink";
+/** The table's accessible name. Visible, because doc 06 §6.2 wants the counts
+ * a caption carries in front of the eye as well as in the tree. */
+export const tableCaption = "px-cell-x py-cell-y text-left text-micro text-ink-muted";
+/** Small, uppercase, tracked open, on the sunken ground: a column name is a
+ * label about the data and not part of it, and the step in ground is what
+ * doc 06 §5.4 means by "background steps for structure". Muted rather than
+ * secondary because muted-on-sunken is the pair contrast-pairs.txt asserts. */
+export const columnHeader = `bg-sunken px-cell-x py-cell-y text-left align-bottom text-micro font-semibold uppercase tracking-label text-ink-muted border-line border-solid ${hairlineBottom}`;
+export const cell = `px-cell-x py-cell-y align-top border-line border-solid ${hairlineBottom}`;
+/** A row header is a heading in the accessibility tree, not in the type scale:
+ * doc 06 §5.2 puts weight before size and a bolded identifier in every row
+ * would be noise. */
+export const rowHeader = `${cell} text-left font-regular`;
+/** A count lines up down the column or it cannot be compared by eye (§6.2). */
+export const numericCell = `${cell} text-right [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]`;
 
 /** The one sanctioned elevation (doc 06 §5.4: "no shadows deeper than subtle
  * elevation for popovers"). */

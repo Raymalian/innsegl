@@ -60,8 +60,12 @@ export const viewShell = "flex flex-col gap-4";
 /** A block: header, timeline, each with a hairline and a raised ground. */
 export const block = "flex flex-col gap-3 rounded-md bg-surface p-panel";
 
-/** doc 06 §5.2: weight carries hierarchy before size does. */
-export const pageHeading = "text-heading font-semibold leading-tight text-ink";
+/** doc 06 §5.2: weight carries hierarchy before size does — and since the
+ * amendment of 2026-09-14, a view heading is set in the display serif. This is
+ * a heading and not an identifier: the run's SPIFFE ID is rendered under it in
+ * mono, where P4 puts it. */
+export const pageHeading =
+  "font-serif text-display font-semibold leading-tight tracking-display text-ink";
 export const sectionHeading = "text-prose font-semibold leading-tight text-ink";
 export const fieldLabel = "text-micro text-ink-muted";
 

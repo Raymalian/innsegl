@@ -30,6 +30,16 @@
 
 export const strings = {
   page: {
+    /* The QUESTION, which is what a stranger arriving with a SHA actually has.
+     * doc 06 §3.6 makes this page "the adoptability showcase: it must work as
+     * a standalone artifact someone screenshots into an audit report", and the
+     * first line of that artifact has to say what the page answers rather than
+     * name the tool. §6.1: "Factual, unvarnished, specific."
+     *
+     * `heading` below is kept and still used — it is the NAVIGATION label and
+     * the document title, where naming the tool is exactly right. Two jobs,
+     * two strings, neither borrowed for the other. */
+    question: "Who produced this commit?",
     heading: "Verify a commit",
     /* The page's whole claim, stated before any result so a reader knows what
      * they are about to be shown. doc 06 P1: evidence over assertion. */

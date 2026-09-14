@@ -140,6 +140,25 @@ export const strings = {
 
   recentRuns: {
     heading: "Recent runs",
+    /* The qualification on the heading. doc 06 §6.2: a window, always — a list
+     * that does not say which ten it is showing is §8 anti-pattern 10's
+     * "cumulative counts with no window" in a smaller frame. */
+    order: "newest first",
+    /* The table's accessible name. Exact, never rounded (doc 06 §6.2). */
+    caption: (count: number) =>
+      count === 1
+        ? "The 1 most recent run, newest first."
+        : `The ${count} most recent runs, newest first.`,
+    /* doc 06 §5.4: sentence case, and a label carries no terminal punctuation.
+     * They are SET uppercase by the column-header style; the catalogue holds
+     * the words a translator reads, not their casing. */
+    columns: {
+      status: "Status",
+      run: "Run",
+      agent: "Agent",
+      task: "Task",
+      commits: "Commits",
+    },
     emptyTitle: "No runs yet",
     emptyDetail: "The ledger holds no run_registered event.",
     commits: (count: number) =>

@@ -1,0 +1,54 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * The three faces, declared once — doc 06 §5.2, amended 2026-09-14.
+ *
+ *   "The families are bundled, never fetched. The dashboard ships as a
+ *    container and is expected to work offline; a runtime request to a font
+ *    host would be both an outside dependency and a record of who opened the
+ *    page, sent to a third party. Self-hosted or it does not ship."
+ *
+ * Every line below resolves to a file in this build. There is no `@import` of
+ * a host, no `<link>` to one, and nothing here reaches the network at runtime:
+ * the bundler copies the woff2 files into the image's own asset directory and
+ * the browser fetches them from the deployment it is already talking to. The
+ * privacy half is the one worth restating — a dashboard whose whole subject is
+ * who did what, which tells a third party who is reading it, is a product
+ * arguing against its own thesis.
+ *
+ * FE-116 parses this file and refuses a remote reference. FE-117 loads all six
+ * views in a real Chromium and refuses a cross-origin request of any kind,
+ * which is the half that catches a face pulled in by a dependency rather than
+ * by a line somebody wrote here.
+ *
+ * WHY THESE WEIGHTS AND NO OTHERS. doc 06 §5.2: "Weight carries hierarchy
+ * before size does." Three weights of the sans (400 body, 500 the medium a
+ * label and a control take, 600 the semibold every heading takes), two of the
+ * mono (400, and 500 where an identifier is emphasised), two of the serif (600
+ * for every heading and headline figure, 400 so that a serif element asking
+ * for the regular weight gets a drawn regular rather than the semibold's
+ * glyphs at the wrong colour). Seven files. Every weight this product actually
+ * sets has a face, and no weight it does not set costs the reader a download.
+ *
+ * LATIN ONLY, and that is a limit rather than a decision. doc 06 §6.3 is
+ * "English-first; all strings externalized from components so translation is
+ * possible" — translation is possible, and the day a catalogue arrives that
+ * needs Cyrillic or Greek, the subset imports widen here. Naming the subset in
+ * the import rather than taking the whole family is what keeps that a visible
+ * edit: the unsubsetted `400.css` pulls every script IBM Plex covers, which is
+ * a payload nobody chose against doc 06 §7's performance budget.
+ *
+ * IBM Plex is licensed OFL-1.1, which is compatible with this project's
+ * Apache-2.0 (doc 08 §1) and imposes no obligation on the rendered page. The
+ * packages are declared in package.json and carry their own LICENSE files.
+ */
+
+@import "@fontsource/ibm-plex-serif/latin-400.css";
+@import "@fontsource/ibm-plex-serif/latin-600.css";
+
+@import "@fontsource/ibm-plex-sans/latin-400.css";
+@import "@fontsource/ibm-plex-sans/latin-500.css";
+@import "@fontsource/ibm-plex-sans/latin-600.css";
+
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+@import "@fontsource/ibm-plex-mono/latin-500.css";
