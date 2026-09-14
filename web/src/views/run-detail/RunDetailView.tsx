@@ -42,9 +42,10 @@ import type { Route } from "../../app/routes";
 import type { VerifyCommit } from "./CommitVerification";
 import { fetchProof } from "./CommitVerification";
 import { RunHeader } from "./RunHeader";
+import { Tabs } from "./Tabs";
 import { Timeline } from "./Timeline";
 import { strings } from "./strings";
-import { block, factRow, secondaryText, sectionHeading, viewShell } from "./styles";
+import { block, viewShell } from "./styles";
 import { conditionsOf, toolCallCount } from "./events";
 import type { Condition } from "./events";
 import type { RunDetail } from "./types";
@@ -166,30 +167,60 @@ function Loaded({
   const events = detail.timeline ?? [];
   return (
     <>
-      {/* doc 06 P3: design the alarm first, and put it first. */}
+      {/* doc 06 P3: design the alarm first, and put it first.
+        *
+        * OUTSIDE the tab control below, and that is the point of putting it
+        * here rather than in a panel. doc 06 §4.5 makes this banner
+        * "page-level, persistent until the underlying condition clears"; a tab
+        * control is a new way to fail that, because a condition behind an
+        * unselected tab is a condition the reader is not told about at all.
+        * The scroll this change removed was bad; a silent alarm would be
+        * worse. FE-113 holds it here with either tab open. */}
       <AlertBanner alerts={alertsFor(conditionsOf(events))} />
       <RunHeader run={detail} events={events} now={now} />
-      <section className={block}>
-        <div className={factRow}>
-          <h2 className={sectionHeading}>{strings.timeline.heading}</h2>
-          {/* doc 06 §3.3 asks for the tool-call COUNT beside the events
-            * themselves: "tool-call events (count, expandable to digests)".
-            * Exact, never rounded (§6.2). */}
-          <span className={secondaryText}>
-            {strings.toolCall.count(toolCallCount(events))}
-          </span>
-        </div>
-        <Timeline
-          events={events}
-          now={now}
-          verifyCommit={verifyCommit}
-          {...(freshnessMs === undefined ? {} : { freshnessMs })}
-        />
-      </section>
-      {/* BELOW the timeline, deliberately. The timeline is the evidence chain
-        * and is what this page is for; this is the readable detail behind it,
-        * and doc 06 P3 puts the strongest claim first. */}
-      <ActivityLog runId={detail.run_id} />
+      {/* THE TIMELINE IS STILL FIRST, and still selected.
+        *
+        * The stacking this replaced was right about the order and wrong about
+        * the reach. The timeline is the evidence chain and is what this page
+        * is for; the activity log is the readable detail behind it, and doc 06
+        * P3 puts the strongest claim first — so the timeline is tab one and
+        * the tab that is open when the page loads, and nothing about that has
+        * changed. What changed is what "second" costs. MEASURED on a real run:
+        * 1220 tool calls, so "below the timeline" put the activity log several
+        * hundred screens down and a reader had to scroll to the bottom of the
+        * page to find out it existed. Second is now one key away.
+        *
+        * The counts live on the tabs for the same reason: §6.2's exact counts
+        * are what tell a reader what is behind the tab they are not looking
+        * at, which is the one thing a tab control takes away. doc 06 §3.3's
+        * tool-call count is one of the two, and it now labels the panel that
+        * actually holds the tool calls. */}
+      <Tabs
+        label={strings.tabs.region}
+        tabs={[
+          {
+            id: "timeline",
+            label: strings.timeline.heading,
+            count: strings.tabs.events(events.length),
+            panel: (
+              <section className={block}>
+                <Timeline
+                  events={events}
+                  now={now}
+                  verifyCommit={verifyCommit}
+                  {...(freshnessMs === undefined ? {} : { freshnessMs })}
+                />
+              </section>
+            ),
+          },
+          {
+            id: "activity",
+            label: strings.activity.heading,
+            count: strings.toolCall.count(toolCallCount(events)),
+            panel: <ActivityLog runId={detail.run_id} />,
+          },
+        ]}
+      />
     </>
   );
 }

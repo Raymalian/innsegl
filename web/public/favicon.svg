@@ -6,8 +6,12 @@
        innsegl-mark.svg because at 16px the reading-size strokes disappear; an SVG
        favicon scales ONE drawing, so the weights have to suit the smallest use.
 
-       The wax is #167a49 — the same --innsegl-palette-verification-600 the
-       dashboard uses for a passing verdict. Red is deliberately absent: in
+       The wax is #167a49 — the value the dashboard's own
+       innsegl-palette-verification-600 token holds for a passing verdict. (The
+       custom property carries the usual two-dash prefix, which is spelled out
+       here rather than written, because an XML comment may not contain a
+       double hyphen and a browser refuses the whole document over one.)
+       Red is deliberately absent: in
        this palette red means FAILED, and a mark carrying it would say so
        every time it sat beside a verdict.
 

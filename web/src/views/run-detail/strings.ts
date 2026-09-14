@@ -51,6 +51,14 @@ export const strings = {
     noEnd: "This run has no retirement or expiry event in the ledger.",
   },
 
+  /* The tab control that holds the timeline and the activity log. The label is
+   * the accessible name of the tablist (doc 06 §6.4); the count is what is
+   * behind each tab, exact and never rounded (§6.2). */
+  tabs: {
+    region: "Run detail sections",
+    events: (n: number) => (n === 1 ? `${n} event` : `${n} events`),
+  },
+
   timeline: {
     heading: "Timeline",
     /* doc 06 §3.3: "Each timeline node shows its chain position." */
