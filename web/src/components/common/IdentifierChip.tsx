@@ -93,7 +93,14 @@ export function IdentifierChip({
   const truncated = display !== value;
 
   return (
-    <span className="relative inline-flex items-center gap-1">
+    /* `min-w-0`: this wrapper is a flex item wherever it is used, and a flex
+       item's min-width is `auto` — "no smaller than your content". Without it
+       the button's `max-w-full` below can never take effect, because the
+       wrapper refuses to be narrower than the identifier inside it, and the
+       identifier then pushes the card holding it out of the page. MEASURED at
+       720px on the repo view: a full SPIFFE ID in a 432px group needed 448px
+       and took it. FE-128 is the gate that now catches it. */
+    <span className="relative inline-flex min-w-0 items-center gap-1">
       <button
         type="button"
         title={value}

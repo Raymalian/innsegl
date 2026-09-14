@@ -11,18 +11,41 @@
  * asserting that the two orders agree, which is one of the things a reader
  * comes here to check.
  *
- * The chain-link state of each node is computed here rather than in the node,
- * because it is a fact about a PAIR of events and a node cannot see its
- * neighbour. See timeline.ts for why three of the four states exist.
+ * ── IT IS A RAIL, AND THE RAIL IS THE ORDER DRAWN ──────────────────────────
+ *
+ * A stack of panels shows a SET. The reader has to infer the sequence from the
+ * chain positions printed inside each one, which is exactly the work doc 06 P1
+ * says a dashboard should be doing on their behalf. The rail draws it: a marker
+ * per event, a connector between markers, content beside both.
+ *
+ * The connector is a property of the ROW ABOVE it, so this component decides
+ * it rather than the node: a node cannot see whether it is the last, and a line
+ * running past the last marker would be a stroke asserting the chain continues
+ * beyond what this response holds. `last` is therefore computed over the ROWS —
+ * a fold of two hundred tool calls is one row and takes one connector — and
+ * never over the events.
+ *
+ * The chain-link state of each node is computed here for the same reason: it is
+ * a fact about a PAIR of events and a node cannot see its neighbour. See
+ * events.ts for why three of the four states exist.
  */
 
 import type { ReactElement } from "react";
 
 import { EmptyState } from "../../components/common/EmptyState";
+import { Icon } from "../../components/common/Icon";
 import type { VerifyCommit } from "./CommitVerification";
+import { RailGutter } from "./Rail";
 import { TimelineNode } from "./TimelineNode";
 import { strings } from "./strings";
-import { disclosure, focusRing, timelineList } from "./styles";
+import {
+  chainMarker,
+  foldCount,
+  foldPill,
+  nodeBody,
+  railRow,
+  timelineList,
+} from "./styles";
 import { chainLinkAt, groupTimeline } from "./events";
 import type { TimelineEvent } from "./types";
 
@@ -42,12 +65,15 @@ export function Timeline({ events, now, verifyCommit, freshnessMs }: TimelinePro
     );
   }
 
-  const node = (event: TimelineEvent, index: number) => (
+  const rows = groupTimeline(events);
+
+  const node = (event: TimelineEvent, index: number, last: boolean) => (
     <TimelineNode
       key={`${event.chain_position}-${event.event_id}`}
       event={event}
       link={chainLinkAt(events, index)}
       now={now}
+      last={last}
       {...(verifyCommit === undefined ? {} : { verifyCommit })}
       {...(freshnessMs === undefined ? {} : { freshnessMs })}
     />
@@ -55,17 +81,21 @@ export function Timeline({ events, now, verifyCommit, freshnessMs }: TimelinePro
 
   return (
     <ol className={timelineList}>
-      {groupTimeline(events).map((row) =>
-        row.kind === "event" ? (
-          node(row.event, row.index)
+      {rows.map((row, position) => {
+        const last = position === rows.length - 1;
+        return row.kind === "event" ? (
+          node(row.event, row.index, last)
         ) : (
           <ToolCallRun
             key={`run-${row.index}`}
             events={row.events}
-            renderNode={(event, offset) => node(event, row.index + offset)}
+            last={last}
+            renderNode={(event, offset, innerLast) =>
+              node(event, row.index + offset, innerLast)
+            }
           />
-        ),
-      )}
+        );
+      })}
     </ol>
   );
 }
@@ -79,37 +109,55 @@ export function Timeline({ events, now, verifyCommit, freshnessMs }: TimelinePro
  * practice.
  *
  * Closed by default, so a reader arrives at the evidence chain rather than at
- * the noise. Every call is still here, in the ledger's order, one click away,
- * and each is the same node with the same chain link it had before: this
- * changes what is on screen first, never what the timeline says. */
+ * the noise. The summary is a pill rather than a line of text because it is the
+ * one thing on the rail a reader can open and it has to look like it; it
+ * carries the exact count and the exact span of chain positions behind it, so
+ * the fold states what it is folding rather than merely that it folded
+ * something (doc 06 §6.2).
+ *
+ * Every call is still here, in the ledger's order, one click away, and each is
+ * the same node with the same chain link it had before: this changes what is on
+ * screen first, never what the timeline says. */
 function ToolCallRun({
   events,
+  last,
   renderNode,
 }: {
   readonly events: readonly TimelineEvent[];
-  readonly renderNode: (event: TimelineEvent, offset: number) => ReactElement;
+  readonly last: boolean;
+  readonly renderNode: (
+    event: TimelineEvent,
+    offset: number,
+    last: boolean,
+  ) => ReactElement;
 }) {
   const first = events[0];
-  const last = events[events.length - 1];
-  if (first === undefined || last === undefined) return <></>;
+  const final = events[events.length - 1];
+  if (first === undefined || final === undefined) return <></>;
   return (
-    <li>
-      <details>
-        <summary
-          className={`${disclosure} ${focusRing} flex flex-wrap items-baseline gap-x-3 rounded-md p-3`}
-        >
-          <span className="font-medium text-ink">
-            {strings.timeline.toolCallRun(
-              events.length,
-              first.chain_position,
-              last.chain_position,
+    <li className={railRow}>
+      <RailGutter icon="fold" last={last} />
+      <div className={nodeBody} data-node-body>
+        <details>
+          <summary className={foldPill}>
+            <Icon name="fold" className="shrink-0" />
+            <span className={foldCount}>
+              {strings.toolCall.count(events.length)}
+            </span>
+            <span className={chainMarker}>
+              {strings.timeline.toolCallRange(
+                first.chain_position,
+                final.chain_position,
+              )}
+            </span>
+          </summary>
+          <ol className={`${timelineList} mt-2`}>
+            {events.map((event, offset) =>
+              renderNode(event, offset, offset === events.length - 1),
             )}
-          </span>
-        </summary>
-        <ol className={`${timelineList} mt-2`}>
-          {events.map((event, offset) => renderNode(event, offset))}
-        </ol>
-      </details>
+          </ol>
+        </details>
+      </div>
     </li>
   );
 }

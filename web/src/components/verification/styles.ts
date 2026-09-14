@@ -124,7 +124,11 @@ export const verdictAside =
 export const checkGrid = "grid list-none grid-cols-1 gap-0 p-0 md:grid-cols-3";
 /** One check, one card. The hairline is on the leading edge so the three read
  * as divisions of one row rather than as three separate panels. */
-export const checkRow = `${rule} flex flex-col gap-2 border-0 border-t p-4 md:border-t-0 md:border-l md:first:border-l-0`;
+// `min-w-0`: a grid item's min-width is `auto`, which means "no smaller than
+// your content". An unbreakable identifier inside then widens the track
+// rather than wrapping, whatever the text is told to do. Both halves are
+// needed — see identifierText.
+export const checkRow = `${rule} flex min-w-0 flex-col gap-2 border-0 border-t p-4 md:border-t-0 md:border-l md:first:border-l-0`;
 /** What the check is called. Weight before size (doc 06 §5.2). */
 export const checkName = "font-medium leading-tight";
 /** The result word above it: small, uppercase, tracked open — the same

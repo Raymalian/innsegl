@@ -30,12 +30,19 @@
 export const strings = {
   header: {
     /* doc 06 §3.3: "Header: full SPIFFE ID (mono, copyable), agent type, task
-     * ref, registered/retired timestamps, credential expiry history." */
-    identity: "Agent identity",
-    agentType: "Agent type",
+     * ref, registered/retired timestamps, credential expiry history."
+     *
+     * The identity carries no label of its own — it is the first thing under
+     * the heading, in mono, and a word above it would restate the URI scheme
+     * for a reader who can already read one (P4). The rest are the strip's
+     * column names, so they are short: a label in a four-column strip that
+     * wraps to two lines pushes its value out of alignment with its
+     * neighbours, and the strip is read across as well as down. */
+    agentType: "Agent",
     taskRef: "Task",
+    toolCalls: "Tool calls",
     repos: "Repositories",
-    commits: "Commits recorded",
+    commits: "Commits",
     registered: "Registered",
     retired: "Retired",
     expired: "Expired",
@@ -70,8 +77,8 @@ export const strings = {
     emptyDetail: "A run with no events is a run that was never registered.",
     /* doc 06 §3.3: "tool-call events (count, expandable to digests)". The
      * count is the row; the calls are behind it. */
-    toolCallRun: (n: number, from: number, to: number) =>
-      `${n} tool calls · chain positions ${from} to ${to}`,
+    toolCallRange: (from: number, to: number) =>
+      `chain positions ${from} to ${to}`,
     toolCallRunLinks: (broken: number) =>
       broken === 0
         ? "every chain link in this run holds"
@@ -98,6 +105,11 @@ export const strings = {
 
     /** doc 06 §3.3's literal label. The enum value passes through untouched. */
     source: (source: string) => `source: ${source}`,
+    /* A writer doc 02 §3's "Emitted by" column does not give this event type.
+     * Not an alert — the dashboard is not entitled to call the ledger wrong on
+     * the strength of a table it holds a copy of — but not the ordinary case
+     * either, and P2 forbids rendering it as one. */
+    unexpectedWriter: "Not a writer this event type is emitted by",
     /* Who each writer is, for a reader who has not read doc 02. */
     writer: {
       mcp: "Appended by the MCP server as the agent worked.",
@@ -198,6 +210,13 @@ export const strings = {
     alertMeaning: "The reconciler found something the external record does not support.",
     degraded: "Ended without completing",
     degradedMeaning: "What this event describes was started and never finished.",
+    /* doc 06 §3.2: expired "means an agent died unretired". Its own words, not
+     * the ones above: a promised commit that never arrived and an identity that
+     * ran out under an agent still working are two different degradations, and
+     * P2 forbids collapsing them into one. */
+    expired: "Credential ran out",
+    expiredMeaning:
+      "The reaper withdrew this run's credential because it reached its expiry. Anything the agent did afterwards had no identity behind it.",
   },
 
   time: {
@@ -241,6 +260,10 @@ export const strings = {
       `The ledger records that a tool was called and never what it was called with. The detail below is kept on this machine for ${days} days; identity and signatures are in the ledger and do not expire.`,
     counts: (verified: number, altered: number, expired: number) =>
       `${verified} checked against the ledger, ${altered} altered, ${expired} past the window.`,
+    /* Said on the tab row rather than inside the panel, because the panel is
+     * behind a tab and doc 06 §4.5 does not let a condition hide there. */
+    mismatch: (n: number) =>
+      n === 1 ? `${n} call does not match` : `${n} calls do not match`,
     empty: "No detail is kept for this run",
     /* Two sentences because the reason matters: an operator seeing this after
      * an agent ran should know whether to look for a fault or not. */

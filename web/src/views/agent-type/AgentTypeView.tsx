@@ -68,6 +68,7 @@ import {
   mutedText,
   sectionHeading,
   sectionShell,
+  tableScroll,
   secondaryText,
   table,
   tableCaption,
@@ -352,29 +353,33 @@ function Frequency({
   const counts = bucketCounts(cumulative);
   return (
     <section className={sectionShell}>
-      <table className={table}>
-        <caption className={tableCaption}>{strings.labels.frequency}</caption>
-        <thead>
-          <tr>
-            <th scope="col" className={tableHeader}>{strings.labels.bucketFrom}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.bucketTo}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.bucketRuns}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {buckets.map((bucket, index) => (
-            <tr key={bucket.to.toISOString()}>
-              <td className={tableCell}>
-                <Instant at={bucket.from} />
-              </td>
-              <td className={tableCell}>
-                <Instant at={bucket.to} />
-              </td>
-              <td className={`${tableCell} ${identifierText}`}>{counts[index] ?? 0}</td>
+      {/* doc 06 §5.4: a table scrolls inside its own shell rather than
+        * pushing the page sideways. FE-128, measured at 720px. */}
+      <div className={tableScroll}>
+        <table className={table}>
+          <caption className={tableCaption}>{strings.labels.frequency}</caption>
+          <thead>
+            <tr>
+              <th scope="col" className={tableHeader}>{strings.labels.bucketFrom}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.bucketTo}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.bucketRuns}</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {buckets.map((bucket, index) => (
+              <tr key={bucket.to.toISOString()}>
+                <td className={tableCell}>
+                  <Instant at={bucket.from} />
+                </td>
+                <td className={tableCell}>
+                  <Instant at={bucket.to} />
+                </td>
+                <td className={`${tableCell} ${identifierText}`}>{counts[index] ?? 0}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <p className={explanation}>{strings.sentences.bucketBounds}</p>
     </section>
   );
@@ -423,25 +428,29 @@ function Runs({
 }) {
   return (
     <section className={sectionShell}>
-      <table className={table}>
-        <caption className={tableCaption}>{strings.labels.runs}</caption>
-        <thead>
-          <tr>
-            <th scope="col" className={tableHeader}>{strings.labels.runId}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.identity}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.task}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.status}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.commits}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.repos}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.registered}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((run) => (
-            <Row key={run.run_id} run={run} />
-          ))}
-        </tbody>
-      </table>
+      {/* doc 06 §5.4: a table scrolls inside its own shell rather than
+        * pushing the page sideways. FE-128, measured at 720px. */}
+      <div className={tableScroll}>
+        <table className={table}>
+          <caption className={tableCaption}>{strings.labels.runs}</caption>
+          <thead>
+            <tr>
+              <th scope="col" className={tableHeader}>{strings.labels.runId}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.identity}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.task}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.status}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.commits}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.repos}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.registered}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((run) => (
+              <Row key={run.run_id} run={run} />
+            ))}
+          </tbody>
+        </table>
+      </div>
       <p className={explanation}>
         {complete ? strings.sentences.runsComplete : strings.sentences.runsTruncated}
       </p>

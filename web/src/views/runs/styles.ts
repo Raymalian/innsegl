@@ -46,6 +46,8 @@ export {
   tableScroll,
 } from "../../components/common/styles";
 
+import { labelText } from "../../components/common/styles";
+
 /* ── the view ─────────────────────────────────────────────────────────────── */
 
 export const view = "flex flex-col gap-4";
@@ -56,7 +58,13 @@ export const heading = "font-serif text-display font-semibold leading-tight trac
 export const filterForm = `flex flex-col gap-3 rounded-md p-4 bg-surface border-line border-solid ${hairlineWidth}`;
 export const filterGrid = "flex flex-wrap gap-3";
 export const filterField = "flex min-w-0 flex-col gap-1";
-export const filterLabel = "text-micro font-medium text-ink-secondary";
+/* ONE field label in the product (FE-122). A filter's label, a table's column
+   header and a cell of the run header's facts strip are the same thing — a
+   small word ABOUT a value rather than part of it — and doc 06 §5.4 governs
+   all three together. Two views that reached for the same tokens separately
+   still drift; this is the same argument FE-121 makes about the two tables,
+   one level down. */
+export const filterLabel = labelText;
 export const filterControl = `rounded-sm bg-page px-2 py-1 text-body text-ink border-line border-solid ${hairlineWidth} ${focusRing}`;
 export const filterActions = "flex flex-wrap items-center gap-3";
 export const filterHint = "text-micro text-ink-muted";

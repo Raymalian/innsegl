@@ -126,6 +126,58 @@ export function isRepairedHistory(event: TimelineEvent): boolean {
   return EMITTED_BY[id].includes("mcp");
 }
 
+/* ── who wrote it, and whether saying so tells the reader anything ──────── */
+
+/**
+ * Whether this event's writer is one doc 02 §3's "Emitted by" column gives its
+ * type. False is not an accusation — the dashboard holds a copy of that table
+ * and the ledger is the authority — but it is not the ordinary case either, and
+ * doc 06 P2 forbids rendering the two the same way.
+ *
+ * An event type this build does not recognise has no row to check against, so
+ * nothing can be said about its writer and `false` is the honest answer: the
+ * label goes where a reader will see it rather than behind a disclosure.
+ */
+export function writerIsExpected(event: TimelineEvent): boolean {
+  const id = eventTypeIdOf(event.event_type);
+  if (id === undefined) return false;
+  const source = sourceIdOf(event.source);
+  return source !== undefined && EMITTED_BY[id].includes(source);
+}
+
+/**
+ * Whether `source: <value>` belongs on the rail rather than in the event's own
+ * evidence disclosure — doc 06 §3.3, read with P3.
+ *
+ * §3.3 asks for reconciler-sourced events to be "labelled `source: reconciler`
+ * so repaired history is visible as repaired". The label is still rendered for
+ * every event, always; what this decides is WHERE, and the reason there is a
+ * decision at all is that the label on every one of a thousand rows is what
+ * makes the exceptional one unreadable. MEASURED on a real run: 1220 tool
+ * calls, every one of them carrying `source: mcp` and a sentence explaining
+ * what the MCP server is.
+ *
+ * It is informative when the ledger could honestly have written something else:
+ *
+ *   - the type has more than one legal emitter. doc 02 §3 gives that to
+ *     `commit_recorded` alone — "mcp or reconciler ... `source: reconciler`
+ *     when repaired" — which is precisely the row where the writer is a fact
+ *     about the world rather than a restatement of the event type;
+ *   - or the writer is not one the type permits, which is the ledger saying
+ *     something the schema does not sanction and is never the ordinary case.
+ *
+ * For the other eleven types written by their one legal emitter, `source:`
+ * carries exactly as much information as the event's own name, and P1's
+ * "evidence next to the claim" is satisfied by the disclosure that already
+ * holds the event id and both chain hashes.
+ */
+export function writerIsInformative(event: TimelineEvent): boolean {
+  const id = eventTypeIdOf(event.event_type);
+  if (id === undefined) return true;
+  if (EMITTED_BY[id].length > 1) return true;
+  return !writerIsExpected(event);
+}
+
 /* ── severity ──────────────────────────────────────────────────────────── */
 
 /** doc 06 §5.3's three bands, as they apply to an event. Never four, and never
@@ -137,11 +189,23 @@ const ALERT_TYPES: readonly EventTypeId[] = [
   "ledgerDriftDetected",
 ];
 
+/**
+ * The degradations. Neither is a failure and neither is calm.
+ *
+ * `commit_intent_expired` is a promise nobody kept: doc 02 §3's phase B with no
+ * phase C, and nothing was violated. `run_expired` is doc 06 §3.2's "an agent
+ * died unretired" — the reaper withdrew the credential while the agent was
+ * still working, so every tool call after it had no identity behind it. Both
+ * are doc 06 §5.3's amber; neither is the other, and TimelineNode gives them
+ * different words for that reason (P2).
+ */
+const DEGRADED_TYPES: readonly EventTypeId[] = ["commitIntentExpired", "runExpired"];
+
 export function severityOf(event: TimelineEvent): Severity {
   const id = eventTypeIdOf(event.event_type);
   if (id === undefined) return "neutral";
   if (ALERT_TYPES.includes(id)) return "alert";
-  if (id === "commitIntentExpired") return "degraded";
+  if (DEGRADED_TYPES.includes(id)) return "degraded";
   return "neutral";
 }
 

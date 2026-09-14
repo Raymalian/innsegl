@@ -58,6 +58,15 @@ export const factTerm = "text-ink-muted text-micro";
 export const stackedList = "flex flex-col gap-1";
 
 /** Compact rows: density belongs to data (doc 06 §5.4). */
+/* doc 06 §5.4: "tables full-width within it." A table whose widest cell is a
+   full SPIFFE ID outgrows a narrow window, and without a shell of its own it
+   pushes the whole PAGE sideways rather than scrolling inside itself —
+   MEASURED at 720px, where this view's run table took the body with it. The
+   shell is the shared one (components/common), the same one the runs table and
+   the overview's recent runs sit in, so there is one answer to this in the
+   product rather than three. FE-128 is the gate. */
+export { tableScroll } from "../../components/common/styles";
+
 export const table = "w-full border-collapse text-body";
 export const tableHeader =
   "border-b border-line px-cell-x py-cell-y text-left font-medium text-ink-secondary";
