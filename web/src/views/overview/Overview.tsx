@@ -16,6 +16,28 @@
  * verdict-shaped number — the verification pass rate — is a genuine conflict
  * with doc 06 P2 and IP §6.11, and PassRateCard carries the argument.
  *
+ * ── THE PULSE IS NOT ON THIS PAGE (FE-114) ─────────────────────────────────
+ *
+ * doc 06 §3.1 puts the anchoring heartbeat in ONE place and says which:
+ * "Anchoring heartbeat in the persistent header (all views)". The shell owns
+ * that header and takes the pulse as a prop; `OverviewHeartbeat` fills the
+ * slot. This page rendered a second `AnchoringPulse` of its own, so a reader
+ * on "/" saw the same sentence twice.
+ *
+ * Two renderings of one fact is not redundancy here, it is a second place the
+ * fact can be wrong: the two read the same endpoint through two independent
+ * hooks, so a slow or failing second read put "Ledger segment 8421 anchored 3
+ * min ago" directly above "Couldn't read the anchoring heartbeat" on one
+ * screen — which is P2's collapse of "current" and "unknown" arrived at by
+ * accident rather than by design. The approved artboard shows one pulse per
+ * screen and puts it beside the view heading, because that artboard has no
+ * persistent header to put it in; this application does, and §3.1 names it.
+ *
+ * `AnchoringEvidence` stays, and is not the pulse: the chain positions, the
+ * segment digest and the Rekor index are the MATERIAL behind the claim (P1),
+ * they appear nowhere else in the product, and a one-line header cannot carry
+ * them.
+ *
  * Presentational on purpose: it takes data and renders it. The fetching lives
  * in `data.ts` and the wiring in `OverviewView.tsx`, so every state this page
  * has is reachable in a test without a network.
@@ -29,7 +51,7 @@ import {
 import type { Alert } from "../../components/common";
 import { useStrings } from "../../app/i18n";
 import { routeToPath } from "../../app/routes";
-import { AnchoringEvidence, AnchoringPulse, DEFAULT_LAG_BOUND_MS } from "./AnchoringPulse";
+import { AnchoringEvidence } from "./AnchoringPulse";
 import { formatCount } from "./format";
 import { MetricCard } from "./MetricCard";
 import { PassRateCard } from "./PassRateCard";
@@ -60,11 +82,6 @@ export interface OverviewProps {
   readonly alerts?: readonly AlertRecord[] | null;
   /** A LIVE pass rate, if anything ever measures one. Nothing does. */
   readonly passRate?: PassRate;
-  /** The configured anchoring-lag bound. Not served by the query API today —
-   * `internal/segment`'s LagSnapshot has it and nothing exposes it — so this
-   * defaults to the same 15 minutes `internal/segment/anchor.go` defaults to.
-   * Reported as a gap. */
-  readonly lagBoundMs?: number;
   /** Where the query API lives, for the links that point at raw material. */
   readonly apiBase: string;
   /** Injected for determinism; defaults to the wall clock. */
@@ -77,7 +94,6 @@ export function Overview({
   recentRuns = null,
   alerts = null,
   passRate,
-  lagBoundMs = DEFAULT_LAG_BOUND_MS,
   apiBase,
   now,
 }: OverviewProps) {
@@ -132,10 +148,11 @@ export function Overview({
         />
       </section>
 
-      <section className="flex flex-col gap-2">
-        <AnchoringPulse anchor={data.anchor} lagBoundMs={lagBoundMs} now={at} />
-        <AnchoringEvidence anchor={data.anchor} />
-      </section>
+      {/* The PULSE is not here — see the note on the duplicate below. The
+        * material behind it is: doc 06 P1 wants the claim and its evidence
+        * together, and a one-line header cannot carry a chain range, a segment
+        * digest and a Rekor index. */}
+      <AnchoringEvidence anchor={data.anchor} />
 
       <RecentRuns runs={recentRuns} />
     </div>

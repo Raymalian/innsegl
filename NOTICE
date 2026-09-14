@@ -31,6 +31,19 @@ cryptography; it configures and orchestrates released upstream components.
     (https://github.com/sigstore)
     Copyright the Sigstore authors. Licensed under Apache-2.0.
 
+  IBM Plex Serif, IBM Plex Sans, IBM Plex Mono
+    (https://github.com/IBM/plex)
+    Copyright 2017 IBM Corp. Licensed under the SIL Open Font License,
+    Version 1.1 (OFL-1.1).
+
+    These faces are BUNDLED with the dashboard rather than fetched from a
+    font host at runtime: the dashboard ships as a container and is expected
+    to work offline, and a request to a third party to render a page would
+    also be a record of who opened it. The font files are therefore part of
+    the distributed artifact, and this notice travels with them as the OFL
+    requires. They are redistributed unmodified, are not sold on their own,
+    and no Reserved Font Name is used for a modified version.
+
 The complete set of dependencies, with their versions and licences, is
 recorded in the module and package manifests checked into this repository.
 Attribution notices required by those dependencies are reproduced with the

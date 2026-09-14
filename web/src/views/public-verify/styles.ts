@@ -41,7 +41,10 @@ export const pageShell = "flex flex-col gap-6";
 /** doc 06 §5.4: "Generous line height in prose panels". */
 export const proseText = "max-w-prose leading-prose text-ink-secondary";
 
-export const pageHeading = "text-display font-semibold leading-tight tracking-display";
+/** The question the page asks. doc 06 §5.2's display serif: a view heading,
+ * and the largest thing on a page a stranger screenshots into a report. */
+export const pageHeading =
+  "font-serif text-display font-semibold leading-tight tracking-display text-balance";
 
 /** One block of the proof chain. */
 export const sectionShell = "flex flex-col gap-2 rounded-md bg-surface p-panel";
@@ -68,6 +71,18 @@ export const tableCell =
 export const fieldStack = "flex flex-col gap-1";
 export const fieldLabel = "font-medium";
 export const fieldInput =
-  "rounded-sm border-[length:var(--innsegl-border-width-hairline)] border-solid border-line-strong bg-raised px-2 py-1 font-mono text-body text-ink";
+  "w-full rounded-sm border-[length:var(--innsegl-border-width-hairline)] border-solid border-line-strong bg-raised px-3 py-2 font-mono text-body text-ink";
 export const submitButton =
-  "self-start rounded-sm border-[length:var(--innsegl-border-width-hairline)] border-solid border-accent-line bg-accent-surface px-3 py-1 font-medium text-accent";
+  "self-start rounded-sm border-[length:var(--innsegl-border-width-hairline)] border-solid border-accent-line bg-accent-surface px-4 py-2 font-medium text-accent whitespace-nowrap";
+
+/** The SHA and its control on one row (doc 06 §3.6, the approved artboard).
+ *
+ * A commit SHA is 40 characters of mono and the control that acts on it is two
+ * words: stacking them put the button under a field the width of the page,
+ * which reads as two separate steps. `items-end` rather than `items-center`
+ * because the field carries a label above it and a hint below, and the control
+ * has to line up with the input rather than with the block. Wraps on a narrow
+ * viewport, where a full-width control is the right answer instead. */
+export const fieldRow = "flex flex-wrap items-end gap-3";
+/** The field half of that row: it takes the space, the control does not. */
+export const fieldGrow = "flex min-w-[16rem] flex-1 flex-col gap-1";

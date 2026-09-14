@@ -28,6 +28,33 @@ export const strings = {
     heading: "Verification",
     commit: "Commit",
     checkedAt: "Checked",
+    /* The name of the row the three checks sit in, for a reader who arrives at
+     * it by landmark rather than by reading down the panel (doc 06 §6.4). */
+    checksLabel: "The three checks",
+  },
+
+  /* Who the panel attributes this commit to — doc 06 §3.6's "Output: ... the
+   * full proof chain", §4.1, and P1.
+   *
+   * The identity named here is the CERTIFICATE's, never the trailer's. A
+   * trailer is a claim anybody can type into a commit message; the certificate
+   * is what Fulcio issued and Rekor logged. Rendering the claim under a label
+   * that says "attributed to" would be the database-only answer I5 forbids,
+   * arrived at by way of a heading.
+   */
+  attribution: {
+    heading: "Attributed to",
+    agent: "agent",
+    task: "task",
+    seeRun: "See what it did",
+    /* No certificate resolved, so nothing proved an identity. Said plainly:
+     * an empty block reads as "nobody checked", and doc 06 P2 wants the
+     * difference between "nothing to show" and "nothing was established"
+     * visible. */
+    none: "No certificate proved an identity for this commit, so the ledger attributes it to nobody.",
+    /* A certificate whose URI SAN is not a SPIFFE ID this build can parse.
+     * The identity is still shown verbatim; what is missing is the breakdown. */
+    unparsed: "The certificate names an identity that is not in this deployment's SPIFFE grammar, so it is shown whole rather than split.",
   },
 
   /* The rollup (doc 06 §4.2). Five states: a commit that claims nothing is

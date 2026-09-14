@@ -120,6 +120,24 @@ expect_refusal "manual override removed" \
   "manual override" \
   's|:root\[data-theme="dark"\]|:root[data-theme="forced"]|'
 
+# 10, 11 and 12. doc 06 §5.2's amendment of 2026-09-14: three families,
+#                bundled rather than fetched, each with a generic fallback.
+#                The first is the one that actually happens — a `url()` in a
+#                family value is one line, it renders, it passes every other
+#                check, and the only symptom is a request to somebody else's
+#                server carrying the reader's address.
+expect_refusal "a family fetched from a host" \
+  "fetches a face rather than naming one" \
+  's|--innsegl-font-family-serif: "IBM Plex Serif", Georgia, "Times New Roman", serif;|--innsegl-font-family-serif: url(https://fonts.example/plex-serif.woff2);|'
+
+expect_refusal "a family with no generic fallback" \
+  "does not end in the generic" \
+  's|--innsegl-font-family-serif: "IBM Plex Serif", Georgia, "Times New Roman", serif;|--innsegl-font-family-serif: "IBM Plex Serif", Georgia;|'
+
+expect_refusal "a family doc 06 does not name" \
+  "is not one of the three" \
+  's|--innsegl-font-family-serif:|--innsegl-font-family-display:|'
+
 # The positive control. Without it, a gate that refuses everything would pass
 # every case above and be entirely useless.
 ncase=$((ncase + 1))

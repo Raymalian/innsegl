@@ -106,13 +106,16 @@ describe("FE-076 the overview's reads", () => {
     expect(screen.queryByTestId("metric-active-agents")).toBeNull();
   });
 
-  it("keeps the heartbeat visible through a failed read (§3.1)", async () => {
+  it("leaves the heartbeat to the header through a failed read (§3.1, FE-114)", async () => {
+    // §3.1's "never hidden" is kept by the HEADER, which is where §3.1 puts
+    // the pulse and which has its own read and its own words for a failed one
+    // — see the OverviewHeartbeat cases below. The body rendered a second copy
+    // until FE-114, and this path is where it did the most damage: the page
+    // said "couldn't read" directly under a header that had already said it.
     api((url) => (url.includes("/overview") ? dead(503) : ok(RUNS)));
-    render(<OverviewView now={NOW} />);
+    const { container } = render(<OverviewView now={NOW} />);
     await screen.findByRole("alert");
-    expect(screen.getByTestId("overview-heartbeat")).toHaveTextContent(
-      /couldn't read the anchoring heartbeat/i,
-    );
+    expect(container.querySelector("[data-testid='overview-heartbeat']")).toBeNull();
   });
 
   it("does not let a failed runs read blank the counts that arrived (P2)", async () => {
