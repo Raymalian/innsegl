@@ -41,7 +41,9 @@ export type IconName =
   | "integrity-alert"
   | "busy"
   | "empty"
-  | "unreachable";
+  | "unreachable"
+  | "node"
+  | "fold";
 
 /*
  * One 16x16 path per name, stroked. The shapes are chosen to differ in
@@ -135,6 +137,17 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M2.5 11.5h11" strokeDasharray="2 2" />
     </>
   ),
+  /* An ordinary event on the run timeline's rail (doc 06 §3.3). A bare ring,
+   * and deliberately the least distinctive shape in the set: a node is a
+   * statement that the ledger holds an event, which is not a verdict about
+   * anything, and a marker that looked like one would be doc 06 §8's
+   * anti-pattern 2 drawn in 16 pixels. The shapes that mean something — the
+   * dashed ring, the triangle — are told apart from this by silhouette. */
+  node: <circle cx="8" cy="8" r="4" />,
+  /* A run of events folded behind a disclosure. A chevron, because that is what
+   * a disclosure is everywhere else; it points at the content rather than
+   * claiming anything about it. */
+  fold: <path d="M6 3.5 10.5 8 6 12.5" />,
   /* A severed link: the dependency is not there. */
   unreachable: (
     <>

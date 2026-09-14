@@ -25,6 +25,7 @@
 --innsegl-color-text-secondary            --innsegl-color-surface-page              4.5  labels on the page ground
 --innsegl-color-text-muted                --innsegl-color-surface-default           4.5  timestamps and helper text
 --innsegl-color-text-muted                --innsegl-color-surface-sunken            4.5  helper text in a table header
+--innsegl-color-text-muted                --innsegl-color-surface-page              4.5  chain positions and helper text on the run timeline's rail
 
 # The verification tri-state. doc 06 §4.2: three distinct visual treatments,
 # each of which has to be readable where it actually renders — inside its own

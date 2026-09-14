@@ -39,7 +39,7 @@
 
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
-import { tabCount, tabIdle, tabSelected, tabStrip } from "./styles";
+import { tabCount, tabIdle, tabRow, tabSelected, tabStrip } from "./styles";
 
 export interface TabSpec {
   /** Stable across renders — it becomes part of the tab's and the panel's id. */
@@ -55,9 +55,20 @@ export interface TabsProps {
    * move to is a landmark that has to be named. */
   readonly label: string;
   readonly tabs: readonly TabSpec[];
+  /**
+   * What must stay on screen beside the tabs, whichever one is open.
+   *
+   * FE-113's argument about the integrity banner, made available to anything
+   * else with the same problem: a condition behind an unselected tab is a
+   * condition the reader is not told about at all. It is rendered OUTSIDE the
+   * `role="tablist"` element and not inside it — a tablist's children are its
+   * tabs, and an extra child there would make the control announce a tab that
+   * is not one, which is the promise `role="tab"` makes to a screen reader.
+   */
+  readonly aside?: ReactNode;
 }
 
-export function Tabs({ label, tabs }: TabsProps) {
+export function Tabs({ label, tabs, aside }: TabsProps) {
   /* One generated prefix for the whole control, so a page with two of them
    * cannot produce two tabs with the same id — which would make every
    * aria-controls on the page point at whichever panel parsed first. */
@@ -109,30 +120,33 @@ export function Tabs({ label, tabs }: TabsProps) {
 
   return (
     <>
-      <div role="tablist" aria-label={label} className={tabStrip}>
-        {tabs.map((tab, index) => (
-          <button
-            key={tab.id}
-            ref={(node) => {
-              if (node === null) buttons.current.delete(index);
-              else buttons.current.set(index, node);
-            }}
-            type="button"
-            role="tab"
-            id={tabId(tab.id)}
-            aria-selected={index === selected}
-            aria-controls={panelId(tab.id)}
-            tabIndex={index === selected ? 0 : -1}
-            onClick={() => {
-              setSelected(index);
-            }}
-            onKeyDown={onKeyDown}
-            className={index === selected ? tabSelected : tabIdle}
-          >
-            <span>{tab.label}</span>
-            <span className={tabCount}>{tab.count}</span>
-          </button>
-        ))}
+      <div className={tabRow}>
+        <div role="tablist" aria-label={label} className={tabStrip}>
+          {tabs.map((tab, index) => (
+            <button
+              key={tab.id}
+              ref={(node) => {
+                if (node === null) buttons.current.delete(index);
+                else buttons.current.set(index, node);
+              }}
+              type="button"
+              role="tab"
+              id={tabId(tab.id)}
+              aria-selected={index === selected}
+              aria-controls={panelId(tab.id)}
+              tabIndex={index === selected ? 0 : -1}
+              onClick={() => {
+                setSelected(index);
+              }}
+              onKeyDown={onKeyDown}
+              className={index === selected ? tabSelected : tabIdle}
+            >
+              <span>{tab.label}</span>
+              <span className={tabCount}>{tab.count}</span>
+            </button>
+          ))}
+        </div>
+        {aside ?? null}
       </div>
       {tabs.map((tab, index) => (
         <div
