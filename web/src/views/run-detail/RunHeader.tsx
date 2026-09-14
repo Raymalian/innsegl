@@ -149,7 +149,7 @@ export function RunHeader({ run, events, now }: RunHeaderProps) {
         </Fact>
 
         {repos.length === 0 ? null : (
-          <Fact label={strings.header.repos}>
+          <Fact label={strings.header.repos} wide>
             <span className={factRow}>
               {repos.map((repo) => (
                 <span key={repo}>{repo}</span>
@@ -243,13 +243,19 @@ function Fact({
   label,
   value,
   children,
+  wide = false,
 }: {
   readonly label: string;
   readonly value?: string;
   readonly children?: React.ReactNode;
+  /** Take the whole row rather than one column. A fact that lands alone on a
+   * final row sits beside three empty cells, which reads as missing data
+   * rather than as the end of the strip — measured in a browser on a run with
+   * nine facts in a four-column grid. */
+  readonly wide?: boolean;
 }) {
   return (
-    <div className={factCell} data-fact>
+    <div className={`${factCell}${wide ? " md:col-span-4" : ""}`} data-fact>
       <dt className={fieldLabel}>{label}</dt>
       <dd className={factValue}>{value === undefined ? children : value}</dd>
     </div>
