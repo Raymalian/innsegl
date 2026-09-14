@@ -124,3 +124,37 @@ export const timeTrigger =
 /** A node's outline. Hairline by default; the alert and degraded tones bring
  * their own border colour and this brings the width. */
 export const nodeOutline = rule;
+
+/* ── the tab control ────────────────────────────────────────────────────── */
+
+/** The strip. It sits on the page ground, above the panels, which are the
+ * surfaces — so a tab's own ground is what tells the two states apart. */
+export const tabStrip = "flex flex-wrap items-center gap-1";
+
+const tabBase =
+  `inline-flex items-center gap-2 rounded-sm px-3 py-2 text-prose leading-tight ${focus} ${transition}`;
+
+/** Not the tab you are on. */
+export const tabIdle = `${tabBase} font-normal text-ink-secondary hover:bg-hover`;
+
+/**
+ * The tab you are on — the same treatment the shell's nav rail gives the view
+ * you are on, because it is the same statement.
+ *
+ * doc 06 §5.3 gives the accent to interactive chrome and gives it no meaning,
+ * which is exactly what "this is the one that is open" needs: a tab is not a
+ * verdict and must not be coloured like one. And the state is never carried by
+ * the colour alone (§6.4) — the weight changes too, so it survives greyscale,
+ * and `aria-selected` carries it to a screen reader.
+ */
+export const tabSelected = `${tabBase} font-semibold bg-accent-surface text-accent`;
+
+/**
+ * The count on a tab: what is behind the tab, for a reader who is not looking
+ * at it. Smaller than the label, because it is not what the tab IS — but it
+ * takes the tab's own colour rather than a muted one, so it cannot end up as
+ * the one pair on this page that nobody measured against the selected tab's
+ * ground. Tabular figures so two tabs' counts sit on the same rhythm.
+ */
+export const tabCount =
+  "text-micro [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]";

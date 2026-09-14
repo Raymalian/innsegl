@@ -21,6 +21,7 @@
 
 import { useEffect, type ComponentType, type ReactNode } from "react";
 
+import { AppMark } from "./AppMark";
 import { ThemeToggle } from "./ThemeToggle";
 import { useStrings } from "./i18n";
 import { Link, useRoute } from "./router";
@@ -68,7 +69,11 @@ export function App({ views = {}, heartbeat }: AppProps) {
       </a>
 
       <header className="flex flex-wrap items-center gap-4 border-b border-line px-4 py-3">
-        <span className="text-heading font-semibold tracking-display">
+        {/* The mark and the wordmark are one thing, so they are one element:
+          * the seal never wraps away from the word it belongs to. The seal is
+          * silent — see AppMark.tsx — so this span reads "Innsegl" once. */}
+        <span className="flex items-center gap-2 text-heading font-semibold tracking-display">
+          <AppMark />
           {strings.labels.app.name}
         </span>
         <div
