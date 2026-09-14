@@ -35,6 +35,7 @@ import {
   cardLabel,
   cardMeaning,
   cardValue,
+  cardValueWord,
   degraded,
   hairline,
   integrityAlert,
@@ -86,6 +87,16 @@ export interface MetricCardProps {
    * mouse can reach is a fact some readers do not have. */
   readonly hover?: string;
   readonly tone?: MetricTone;
+  /**
+   * Whether the headline slot holds a figure or a word.
+   *
+   * Both are set in doc 06 §5.2's display serif — the slot is the card's
+   * headline either way — but a word takes one step down the scale. "Not
+   * measured" at the figure size wraps across two lines in a four-up grid,
+   * which makes the card with the least to say the loudest thing in the row,
+   * and doc 06 P3 says the calm state is what is left over after the alarm.
+   */
+  readonly headline?: "figure" | "word";
   /** Further evidence lines: a breakdown, a link to the material. */
   readonly children?: ReactNode;
 }
@@ -97,6 +108,7 @@ export function MetricCard({
   meaning,
   hover,
   tone = "neutral",
+  headline = "figure",
   children,
 }: MetricCardProps) {
   const skin = PRESENTATION[tone];
@@ -107,7 +119,10 @@ export function MetricCard({
       className={`${cardBase} ${hairline} ${skin.surface}`}
     >
       <h2 className={`${cardLabel} ${skin.label}`}>{label}</h2>
-      <p className={cardValue} title={hover}>
+      <p
+        className={headline === "word" ? cardValueWord : cardValue}
+        title={hover}
+      >
         {skin.icon === undefined ? null : (
           <Icon name={skin.icon} className="mr-2 inline-block shrink-0 align-baseline" />
         )}

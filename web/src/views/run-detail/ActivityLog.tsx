@@ -28,11 +28,16 @@
  * chain. This panel going empty after ninety days is the system working.
  */
 
-import { useEffect, useState } from "react";
-
 import { EmptyState } from "../../components/common/EmptyState";
 import { strings } from "./strings";
-import { block, secondaryText, sectionHeading, srOnly } from "./styles";
+import {
+  alarmText,
+  block,
+  mutedText,
+  secondaryText,
+  sectionHeading,
+  srOnly,
+} from "./styles";
 
 export interface LogEntry {
   chain_position: number;
@@ -62,11 +67,25 @@ export async function fetchRunLog(runId: string, signal?: AbortSignal): Promise<
 
 /* One line's mark. Colour is not the only carrier — doc 06 requires the word
  * to stand alone, because a reader who cannot separate the hues must still be
- * able to tell an altered body from an expired one. */
+ * able to tell an altered body from an expired one.
+ *
+ * `verified` IS NOT GREEN, and cannot be. doc 06 §5.3 gives green one meaning
+ * and FE-086 makes it unreachable from this directory: the green in this
+ * product belongs to the three-check panel, which verifies a signature against
+ * Fulcio and Rekor. This comparison is a different one — a digest the ledger
+ * recorded against bytes this deployment happens to have kept — and dressing it
+ * in the same colour would make two different claims look like one.
+ *
+ * `altered` IS red, and used not to be: it named `text-alarm`, a utility no
+ * token backs, so it compiled to nothing and the one line on this panel that
+ * reports a failed check rendered in ordinary ink. doc 06 §5.3 gives red to
+ * "verification failed", which is exactly what a body that does not hash to its
+ * recorded digest is.
+ */
 const markStyle: Record<LogEntry["integrity"], string> = {
-  verified: "text-ok",
-  altered: "text-alarm font-semibold",
-  expired: "text-ink-muted",
+  verified: secondaryText,
+  altered: `${alarmText} font-semibold`,
+  expired: mutedText,
 };
 
 /** The integrity of one entry: said once loudly, or shown once quietly.
@@ -115,20 +134,24 @@ function summarise(body: unknown): string {
   return "";
 }
 
-export function ActivityLog({ runId }: { runId: string }): React.JSX.Element {
-  const [log, setLog] = useState<RunLog | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchRunLog(runId, controller.signal)
-      .then(setLog)
-      .catch(() => {
-        if (!controller.signal.aborted) setFailed(true);
-      });
-    return () => controller.abort();
-  }, [runId]);
-
+/**
+ * The panel, as a function of what was read — never a reader of its own.
+ *
+ * The read was lifted into `RunDetailView` deliberately (FE-127). This panel
+ * lives behind a tab, and one of the things it knows is a condition doc 06 §4.5
+ * does not allow to hide there: a body that does not hash to the digest the
+ * ledger recorded. A component that fetched its own data could only report that
+ * inside itself, which is to say only to a reader who had already chosen the
+ * tab. The count now reaches the tab row, and this panel renders what it is
+ * given.
+ */
+export function ActivityLog({
+  log,
+  failed = false,
+}: {
+  readonly log: RunLog | null;
+  readonly failed?: boolean;
+}): React.JSX.Element {
   if (failed) {
     return (
       <section className={block}>

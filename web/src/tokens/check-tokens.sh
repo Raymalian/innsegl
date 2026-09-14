@@ -46,6 +46,24 @@
 # F. Contrast. Every pair in contrast-pairs.txt, in the light arm AND in the
 #    dark arm, against WCAG 2.1 relative luminance.
 #
+# G. Type families. doc 06 §5.2 was amended on 2026-09-14 from two families to
+#    three, and the amendment carries two rules a sheet can break silently.
+#
+#    "The families are bundled, never fetched ... a runtime request to a font
+#     host would be both an outside dependency and a record of who opened the
+#     page, sent to a third party."
+#
+#    A `url()` or a host in a family value is that request, written in the one
+#    file every Innsegl surface loads — including the standalone page in
+#    web/site/, which has no build step and would fetch it verbatim. And every
+#    family must end in a generic keyword, because that standalone page bundles
+#    no faces at all: without the fallback it renders in whatever the browser
+#    defaults to rather than in the nearest thing the reader has.
+#
+#    The faces themselves are declared in web/src/app/fonts.css, not here, and
+#    FE-116/FE-117 are the tests that prove nothing is fetched at runtime. This
+#    part guards the sheet, which is the file that travels furthest.
+#
 # Usage:
 #   web/src/tokens/check-tokens.sh                 # check the shipped sheet
 #   web/src/tokens/check-tokens.sh path/to/x.css   # check another sheet (self-test)
@@ -332,6 +350,33 @@ END {
     if (vusers[i] != "" && vusers[i] != "proof-verified")
       fail("§5.3 violation: the verification (green) family is drawn from by group \"" vusers[i] "\" — green is only ever cryptographic verification")
 
+  # ---- G. type families ---------------------------------------------------
+  # The three doc 06 §5.2 names, and the generic each must fall back to.
+  generic["serif"] = "serif"
+  generic["sans"]  = "sans-serif"
+  generic["mono"]  = "monospace"
+  for (i = 1; i <= ntok; i++) {
+    name = order[i]
+    if (name !~ /^--innsegl-font-family-/) continue
+    stem = name; sub(/^--innsegl-font-family-/, "", stem)
+    v = val[name]
+    seen_generic[stem] = 1
+    if (!(stem in generic)) {
+      fail("font family \"" stem "\" is not one of the three doc 06 §5.2 names — serif, sans, mono (line " lineno[name] ")")
+      continue
+    }
+    # "Bundled, never fetched": a sheet may name a face, never go and get one.
+    if (v ~ /url[ \t]*\(/ || v ~ /https?:/ || v ~ /\/\//)
+      fail("§5.2 violation: " name " fetches a face rather than naming one: " v " (line " lineno[name] ") — faces are declared in web/src/app/fonts.css, out of packages in this build")
+    # And it must degrade to something the reader already has.
+    want = generic[stem]
+    if (v !~ want "[ \t]*$")
+      fail("§5.2: " name " does not end in the generic \"" want "\" — the standalone page bundles no faces and needs the fallback (line " lineno[name] ")")
+  }
+  for (stem in generic)
+    if (!(stem in seen_generic))
+      fail("doc 06 §5.2 names three families and --innsegl-font-family-" stem " is missing")
+
   # ---- E. theme mechanics -------------------------------------------------
   if (raw !~ /color-scheme:[ \t]*light[ \t]+dark/)
     fail("no `color-scheme: light dark` on :root — prefers-color-scheme is not honoured and light-dark() has nothing to switch on (§5.1)")
@@ -359,6 +404,7 @@ END {
   }
 
   printf "    %d palette values, %d semantic colours, %d contrast assertions (%d pairs x 2 modes)\n", npalette, nsemantic, nchecked, npair
+  printf "    3 type families, each bundled rather than fetched and each with a generic fallback\n"
   if (worst_ratio > 0) printf "    tightest passing margin: %s\n", worst_desc
 
   if (nfail > 0) {

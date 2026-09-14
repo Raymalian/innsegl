@@ -113,6 +113,33 @@
   --innsegl-palette-degraded-800: #523902;
   --innsegl-palette-degraded-900: #332401;
 
+  /* Content. ADR-0047's fourth verification state: the commit OBJECT was
+   * rewritten and its signature is gone, and the CHANGE it makes is one a
+   * signed run recorded (doc 06 §4.2, amended 2026-09-10).
+   *
+   * VIOLET, and the choice is constrained on every side. It may not be the
+   * verification green — doc 06 §5.3 spends that on a live verification
+   * passing and on nothing else, and this is a weaker claim than that. It may
+   * not be the failure red, which would accuse a genuine signature, nor the
+   * degraded amber, which means "we could not check" when this checked and
+   * held. It may not be the accent indigo, which is the link and focus colour
+   * and would put a verdict in the one hue §5.3 calls semantically
+   * meaningless. And it may not be a teal, for the reason written below the
+   * accent family: a teal sits at the edge of the verification hue and invites
+   * exactly the misreading that section exists to prevent.
+   *
+   * Violet is outside the red-amber-green band a reader scans for a verdict,
+   * far enough from indigo to read as a different thing, and nowhere near
+   * green. */
+  --innsegl-palette-content-50: #f5eefc;
+  --innsegl-palette-content-100: #e8d9f8;
+  --innsegl-palette-content-300: #c093e4;
+  --innsegl-palette-content-400: #a871d6;
+  --innsegl-palette-content-600: #7635ad;
+  --innsegl-palette-content-700: #5d2a88;
+  --innsegl-palette-content-800: #451f65;
+  --innsegl-palette-content-900: #2b1341;
+
   /* Accent. The one semantically meaningless hue (§5.3): links, focus,
    * filters, selection. Indigo, deliberately outside the red-amber-green band
    * a reader scans for a verdict — a teal or a lime accent would sit at the
@@ -157,6 +184,10 @@
   --innsegl-color-proof-failed-surface: light-dark(var(--innsegl-palette-failure-50), var(--innsegl-palette-failure-900));
   --innsegl-color-proof-failed-border: light-dark(var(--innsegl-palette-failure-600), var(--innsegl-palette-failure-400));
 
+  --innsegl-color-proof-content-text: light-dark(var(--innsegl-palette-content-700), var(--innsegl-palette-content-300));
+  --innsegl-color-proof-content-surface: light-dark(var(--innsegl-palette-content-50), var(--innsegl-palette-content-900));
+  --innsegl-color-proof-content-border: light-dark(var(--innsegl-palette-content-600), var(--innsegl-palette-content-400));
+
   --innsegl-color-proof-unavailable-text: light-dark(var(--innsegl-palette-degraded-700), var(--innsegl-palette-degraded-300));
   --innsegl-color-proof-unavailable-surface: light-dark(var(--innsegl-palette-degraded-50), var(--innsegl-palette-degraded-900));
   --innsegl-color-proof-unavailable-border: light-dark(var(--innsegl-palette-degraded-600), var(--innsegl-palette-degraded-400));
@@ -175,6 +206,20 @@
   --innsegl-color-integrity-alert-surface: light-dark(var(--innsegl-palette-failure-700), var(--innsegl-palette-failure-800));
   --innsegl-color-integrity-alert-text: light-dark(var(--innsegl-palette-failure-50), var(--innsegl-palette-failure-100));
   --innsegl-color-integrity-alert-border: light-dark(var(--innsegl-palette-failure-800), var(--innsegl-palette-failure-600));
+  /* Secondary copy INSIDE the filled alert.
+   *
+   * A filled alarm is its own ground, and the page's ink tokens are defined
+   * against the page's. MEASURED on the light fill (#9b1921):
+   * --innsegl-color-text-secondary is 1.10:1 and --innsegl-color-text-muted is
+   * 1.51:1 -- the gloss under "Ledger drift detected" was effectively invisible,
+   * worse than the 1.07:1 link that `linkOnFill` exists to fix. Same hole, same
+   * reason it was missed: contrast-pairs.txt asserts DECLARED pairs, and a
+   * component may compose any token over any background.
+   *
+   * Dimmer than the primary so the hierarchy the muted class was reaching for
+   * survives, and declared below so the gate checks it: 5.95:1 light, 5.26:1
+   * dark, against a primary of 7.20:1 and 8.25:1. */
+  --innsegl-color-integrity-alert-text-secondary: light-dark(var(--innsegl-palette-failure-100), var(--innsegl-palette-failure-300));
 
   /* The differing segment in the three-check panel's trailer/certificate
    * comparison (§4.1). Colour is never the only signal — pair it with
@@ -207,23 +252,52 @@
   --innsegl-color-status-expired-border: light-dark(var(--innsegl-palette-neutral-500), var(--innsegl-palette-neutral-400));
 
   /* ═══════════════════════════════════════════════════════════════════════
-   * TYPE — §5.2. Two families, five sizes, weight before size.
+   * TYPE — §5.2. Three families, five sizes, weight before size.
    * ═══════════════════════════════════════════════════════════════════════ */
 
-  /* No webfont, on purpose. §7's performance budget asks the public
-   * verification page to "load fast from an audit context"; a page an auditor
-   * screenshots into a report should not fetch a font from a third party to
-   * render a hash. Both stacks are what the reader's OS already has. */
-  --innsegl-font-family-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --innsegl-font-family-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Three families, amended 2026-09-14 by the operator, from the original two.
+   * A display serif for view headings and the largest metric figures; the sans
+   * for UI text; the mono for every identifier, hash, PEM block and log
+   * excerpt (P4).
+   *
+   * The serif is RESTRICTED and the restriction is the interesting half: §5.2
+   * says it "never sets body copy, never sets a label, and never sets anything
+   * a reader might copy". A display face is pleasant and the failure mode is
+   * drift — twenty small defensible decisions ending with a digest set in a
+   * book face, which is a value nobody can compare by eye. The token is the
+   * easy part; `src/app/serif-discipline.test.ts` is the part that holds,
+   * naming every style in the product entitled to spend it.
+   *
+   * BUNDLED, NEVER FETCHED. §5.2: "The dashboard ships as a container and is
+   * expected to work offline; a runtime request to a font host would be both
+   * an outside dependency and a record of who opened the page, sent to a third
+   * party." The faces are declared in src/app/fonts.css out of packages in
+   * this build; this file only NAMES them, so the sheet stays a portable list
+   * of values that the standalone page in web/site/ can load without pulling a
+   * face it does not ship (ADR-0038 decision 2 makes that copy byte-identical).
+   *
+   * Which is why every family ends in a generic keyword. A surface that
+   * bundles nothing still renders, in whatever the reader's OS has — a
+   * degradation, said out loud in the value, rather than a blank page. */
+  --innsegl-font-family-serif: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+  --innsegl-font-family-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --innsegl-font-family-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
-  /* Five sizes, and no sixth. Body is 14px because this is a dense audit
-   * console; prose is 16px because explanation gets air (§5.4). */
+  /* Five sizes, and no sixth — §5.2 asks for a "restrained scale (4-5 sizes)"
+   * and this is the top of that range. Body is 14px because this is a dense
+   * audit console; prose is 16px because explanation gets air (§5.4).
+   *
+   * `display` is 32px rather than 28px since the serif landed. It is the size
+   * a view heading and a headline metric figure share, and at 28px a figure
+   * set in a serif read as a heading that had wandered into a card. Raising
+   * the one size both use was the alternative to adding a sixth, which §5.2
+   * does not have room for: "the serif adds a voice, not a licence to carry
+   * hierarchy by size alone." */
   --innsegl-font-size-micro: 0.75rem;
   --innsegl-font-size-body: 0.875rem;
   --innsegl-font-size-prose: 1rem;
   --innsegl-font-size-heading: 1.25rem;
-  --innsegl-font-size-display: 1.75rem;
+  --innsegl-font-size-display: 2rem;
 
   --innsegl-line-height-tight: 1.25;
   --innsegl-line-height-default: 1.45;
@@ -242,6 +316,10 @@
    * compared by eye, which is most of what P4 is for. */
   --innsegl-font-variant-numeric-tabular: tabular-nums;
   --innsegl-letter-spacing-display: -0.01em;
+  /* The small uppercase label over a metric figure and above a table column.
+   * Uppercase at 12px closes up and stops being scannable; this is the one
+   * place the sheet opens tracking rather than tightening it. */
+  --innsegl-letter-spacing-label: 0.07em;
 
   /* ═══════════════════════════════════════════════════════════════════════
    * SPACE, SHAPE, ELEVATION — §5.4.

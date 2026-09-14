@@ -235,14 +235,17 @@ describe("FE-075 the overview asserts no verification verdict", () => {
 });
 
 describe("the overview's heartbeat and staleness", () => {
-  it("shows the anchoring pulse on the page, never hidden (§3.1)", () => {
-    view();
-    expect(screen.getByTestId("overview-heartbeat")).toHaveTextContent(
-      /ledger segment 8421 anchored 3 min ago/i,
-    );
+  it("renders no pulse of its own: §3.1 puts it in the persistent header", () => {
+    // FE-114. This page rendered a SECOND AnchoringPulse under the header's,
+    // reading the same endpoint through a second hook — so a slow or failing
+    // second read put "anchored 3 min ago" above "couldn't read the anchoring
+    // heartbeat" on one screen. The shell owns the pulse; heartbeat-once.test
+    // .tsx holds the whole argument.
+    const { container } = view();
+    expect(container.querySelector("[data-testid='overview-heartbeat']")).toBeNull();
   });
 
-  it("puts the segment's own material beside the pulse (P1, P4)", () => {
+  it("puts the segment's own material on the page (P1, P4)", () => {
     view();
     expect(screen.getByText(/chain positions 8001 to 8421/i)).toBeInTheDocument();
     // The chip renders the value twice: once for the eye, once for assistive
@@ -274,12 +277,16 @@ describe("the overview's heartbeat and staleness", () => {
 });
 
 describe("the overview's recent runs", () => {
-  it("lists the runs it was given, with status and commit count", () => {
+  it("tables the runs it was given, with status, agent, task and commits", () => {
+    // A table since FE-118 — doc 06 §6.4, "tables are real tables". The
+    // structure has its own test in recentruns.test.tsx; what this asserts is
+    // that the overview still puts the runs it was handed on the page.
     view({}, { recentRuns: [RUN] });
-    const row = screen.getByRole("listitem");
+    const row = screen.getAllByRole("row")[1] as HTMLElement;
     expect(row).toHaveTextContent(/fix-ci/);
     expect(row).toHaveTextContent(/active/i);
-    expect(row).toHaveTextContent(/3 commits/);
+    expect(row).toHaveTextContent(/JIRA-118/);
+    expect(within(row).getByText("3")).toBeInTheDocument();
   });
 
   it("says the ledger is empty rather than rendering a blank panel (§4.6)", () => {

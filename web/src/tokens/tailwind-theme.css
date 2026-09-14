@@ -96,9 +96,18 @@
   --color-status-expired-line: var(--innsegl-color-status-expired-border);
 
   /* ── type ───────────────────────────────────────────────────────────────
-   * Five sizes and no sixth: `text-xs` … `text-9xl` are removed, so the scale
-   * doc 06 §5.2 calls "restrained" cannot be widened by autocomplete. */
+   * Three families and five sizes, and no more of either: `text-xs` …
+   * `text-9xl` are removed, so the scale doc 06 §5.2 calls "restrained" cannot
+   * be widened by autocomplete, and `font-display`/`font-body` do not exist to
+   * be reached for. */
   --font-*: initial;
+  /* Three families and no fourth. `font-serif` is the ONLY route to the
+   * display face in the build, the same way `text-proof-verified` is the only
+   * route to a green — and it is governed the same way, by a policy table in
+   * src/app/serif-discipline.test.ts naming every style entitled to it
+   * (doc 06 §5.2: the serif "never sets body copy, never sets a label, and
+   * never sets anything a reader might copy"). */
+  --font-serif: var(--innsegl-font-family-serif);
   --font-sans: var(--innsegl-font-family-sans);
   --font-mono: var(--innsegl-font-family-mono);
 
@@ -121,6 +130,7 @@
 
   --tracking-*: initial;
   --tracking-display: var(--innsegl-letter-spacing-display);
+  --tracking-label: var(--innsegl-letter-spacing-label);
 
   /* ── space and shape ────────────────────────────────────────────────────
    * The dynamic spacing multiplier is removed, so `p-13` does not exist and

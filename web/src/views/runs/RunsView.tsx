@@ -208,8 +208,8 @@ function Answer({
         runs={result.page.runs}
         total={result.page.total}
         proofs={proofs}
-      
-          filters={filters}/>
+        filters={filters}
+      />
       <RunsPager filters={filters} page={result.page} />
     </>
   );

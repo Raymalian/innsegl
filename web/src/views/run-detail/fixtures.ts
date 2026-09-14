@@ -16,8 +16,25 @@
 import { EVENT_TYPES, SOURCES } from "./types";
 import type { RunDetail, TimelineEvent } from "./types";
 
-export const SPIFFE_ID = "spiffe://innsegl.dev/agent/fix-ci/task-1481/run-7f3a2c";
-export const RUN_ID = "run-7f3a2c";
+/*
+ * FULL-LENGTH, DELIBERATELY.
+ *
+ * These used to be `run-7f3a2c` and a SPIFFE ID built around it — short enough
+ * to fit anywhere, and therefore short enough that no layout was ever tested.
+ * A real run id is a 32-character hex value and a real SPIFFE ID is the whole
+ * grammar wrapped around it, and MEASURED in a browser: with the real values,
+ * the identifier ran through the card it was in and collided with the labels
+ * beneath it, while every visual-regression baseline stayed green because the
+ * fixtures were short.
+ *
+ * A fixture that cannot reproduce the product's own hardest case is a fixture
+ * that certifies nothing. The run id below is the length the MCP actually
+ * issues; the digest and the chain hashes below are full width for the same
+ * reason.
+ */
+export const SPIFFE_ID =
+  "spiffe://innsegl.dev/agent/fix-ci/JIRA-118/run-72b6665addd7409d8b1bf62e54754ecd";
+export const RUN_ID = "run-72b6665addd7409d8b1bf62e54754ecd";
 export const COMMIT_SHA = "4f2c1d9b8a7e6f5d4c3b2a1908f7e6d5c4b3a291";
 
 const HASHES = [

@@ -75,6 +75,7 @@ import {
   sectionShell,
   secondaryText,
   table,
+  tableScroll,
   tableCaption,
   tableCell,
   tableHeader,
@@ -337,24 +338,28 @@ function Identity({
         </dl>
       ) : null}
 
-      <table className={table}>
-        <caption className={tableCaption}>{strings.labels.runsTable}</caption>
-        <thead>
-          <tr>
-            <th scope="col" className={tableHeader}>{strings.labels.runId}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.agentType}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.task}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.status}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.commits}</th>
-            <th scope="col" className={tableHeader}>{strings.labels.registered}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {group.runs.map((run) => (
-            <Row key={run.run_id} run={run} />
-          ))}
-        </tbody>
-      </table>
+      {/* doc 06 §5.4: a table scrolls inside its own shell rather than pushing
+        * the page sideways. FE-128, measured at 720px. */}
+      <div className={tableScroll}>
+        <table className={table}>
+          <caption className={tableCaption}>{strings.labels.runsTable}</caption>
+          <thead>
+            <tr>
+              <th scope="col" className={tableHeader}>{strings.labels.runId}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.agentType}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.task}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.status}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.commits}</th>
+              <th scope="col" className={tableHeader}>{strings.labels.registered}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {group.runs.map((run) => (
+              <Row key={run.run_id} run={run} />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

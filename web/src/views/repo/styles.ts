@@ -58,6 +58,14 @@ export const factTerm = "text-ink-muted text-micro";
 export const identityGroup = "flex flex-col gap-2 rounded-md bg-sunken p-3";
 
 /** Compact rows: density belongs to data (doc 06 §5.4). */
+/* doc 06 §5.4: "tables full-width within it." A table whose widest cell is a
+   full SPIFFE ID outgrows a narrow window, and without a shell of its own it
+   widens the group that holds it and then the page — MEASURED at 720px, where
+   this table needed 436px inside a 408px group. The shell is the shared one
+   (components/common), the same one every other table in the product sits in.
+   FE-128 is the gate. */
+export { tableScroll } from "../../components/common/styles";
+
 export const table = "w-full border-collapse text-body";
 export const tableHeader =
   "border-b border-line px-cell-x py-cell-y text-left font-medium text-ink-secondary";

@@ -31,6 +31,19 @@ import { documentTitle, type Strings } from "./strings";
 /** Where the main region begins, and where the skip link lands. */
 const MAIN_ID = "main";
 
+/**
+ * The wordmark — the one place in the shell that spends doc 06 §5.2's display
+ * serif, and the only serif in this file.
+ *
+ * It is a NAME, set once, in the chrome. It is not copy a reader reads in
+ * sentences and not a value anybody compares by eye, which is what §5.2's
+ * restriction is protecting ("never sets body copy, never sets a label, and
+ * never sets anything a reader might copy"). `src/app/serif-discipline.test.ts`
+ * holds the whole product's list and this is its row.
+ */
+const wordmark =
+  "flex items-center gap-2 font-serif text-heading font-semibold tracking-display";
+
 export interface ViewProps {
   route: Route;
 }
@@ -68,18 +81,26 @@ export function App({ views = {}, heartbeat }: AppProps) {
         {strings.labels.app.skipToContent}
       </a>
 
-      <header className="flex flex-wrap items-center gap-4 border-b border-line px-4 py-3">
+      <header className="flex flex-wrap items-center gap-4 border-b border-line bg-surface px-4 py-3">
         {/* The mark and the wordmark are one thing, so they are one element:
           * the seal never wraps away from the word it belongs to. The seal is
           * silent — see AppMark.tsx — so this span reads "Innsegl" once. */}
-        <span className="flex items-center gap-2 text-heading font-semibold tracking-display">
+        <span className={wordmark}>
           <AppMark />
           {strings.labels.app.name}
         </span>
+        {/* doc 06 §3.1's anchoring heartbeat, and the ONLY rendering of it in
+          * the product: "Anchoring heartbeat in the persistent header (all
+          * views) ... never hidden". The overview's body carried a second copy
+          * until FE-114; see views/overview/Overview.tsx for what that cost.
+          *
+          * Pushed to the trailing edge rather than left against the wordmark:
+          * it is a standing readout of how far behind the public record the
+          * ledger is, not a subtitle of the product name. */}
         <div
           role="status"
           aria-label={strings.labels.header.anchoring}
-          className="min-w-0 flex-1 text-micro text-ink-secondary"
+          className="min-w-0 flex-1 text-micro text-ink-secondary sm:text-right"
         >
           {heartbeat}
         </div>

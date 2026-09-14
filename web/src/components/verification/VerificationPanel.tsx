@@ -51,8 +51,16 @@ import { ProofIcon } from "./ProofIcon";
 import { verdictOf } from "./rollup";
 import type { Liveness, Rollup } from "./rollup";
 import { strings } from "./strings";
+import { routeToPath } from "../../app/routes";
+import { splitSPIFFEID } from "./identity";
 import {
-  badgeBase,
+  attributionBlock,
+  attributionFactName,
+  attributionFacts,
+  attributionLabel,
+  checkGrid,
+  checkName,
+  checkResultLabel,
   checkRow,
   degradedNotice,
   hairline,
@@ -62,6 +70,7 @@ import {
   noticeBase,
   noticeBody,
   noticeTitle,
+  panelBody,
   panelShell,
   proofContent,
   proofFailed,
@@ -70,6 +79,10 @@ import {
   proofVerified,
   secondaryText,
   srOnly,
+  verdictAside,
+  verdictBand,
+  verdictHeadline,
+  verdictMeaning,
 } from "./styles";
 import type { Check, CheckId, CheckResult, Finding, Proof, Verdict } from "./types";
 import { checkIdOf } from "./types";
@@ -124,60 +137,158 @@ export function VerificationPanel({ proof, liveness, findings, id }: Verificatio
   // upgrades or downgrades one.
   const mismatch = identityCheck?.result === "failed" && trailer !== certificate;
 
+  const hasEntry = (proof.entry.uuid ?? "") !== "" || proof.entry.log_index > 0;
+
   return (
     <section aria-labelledby={`${anchor}-heading`} className={panelShell}>
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 id={`${anchor}-heading`} className="text-heading font-semibold leading-tight">
-          {strings.panel.heading}
-        </h2>
-        <VerdictBadge verdict={rollup.verdict} />
-        <span className={mutedText}>{strings.panel.commit}</span>
-        <IdentifierChip value={proof.commit_sha} kind="sha" />
+      {/* THE VERDICT BAND. doc 06 P3: design the alarm first, and the calm
+        * state is what is left — so every verdict renders in the same shape
+        * and only the tone, the glyph and the word change (§6.4, never colour
+        * alone). The heading is here rather than above it because the band IS
+        * the panel's heading: the word it carries is what the panel says. */}
+      <div
+        data-verdict={rollup.verdict}
+        className={`${verdictBand} ${VERDICT_TONE[rollup.verdict]}`}
+      >
+        {/* Icon, word and colour, all three, in every state — doc 06 §6.4's
+          * "never color alone" read as a shape rather than as a rule to
+          * remember. The band IS the rollup: there is no separate badge that
+          * could disagree with the ground it sits on. */}
+        <ProofIcon verdict={rollup.verdict} className="mt-[0.2em] shrink-0" />
+        <div className="flex min-w-0 flex-col gap-1">
+          <h2 id={`${anchor}-heading`} className={srOnly}>
+            {strings.panel.heading}
+          </h2>
+          <p data-testid="proof-verdict-headline" className={verdictHeadline}>
+            {strings.verdict[rollup.verdict].label}
+          </p>
+          <p className={verdictMeaning}>{strings.verdict[rollup.verdict].meaning}</p>
+        </div>
+        <div className={verdictAside}>
+          <span>{strings.panel.commit}</span>
+          <IdentifierChip value={proof.commit_sha} kind="sha" />
+        </div>
       </div>
 
-      {/* doc 06 P3: design the alarm first. */}
-      {mismatch ? (
-        <AlertBanner
-          alerts={[
-            {
-              id: `${anchor}-mismatch`,
-              kind: "integrity",
-              title: strings.mismatch.title,
-              detail: strings.mismatch.detail,
-              evidenceHref: `#${anchor}-identity`,
-              evidenceLabel: strings.mismatch.evidence,
-            },
-          ]}
-        />
-      ) : null}
+      <div className={panelBody}>
+        {mismatch ? (
+          <AlertBanner
+            alerts={[
+              {
+                id: `${anchor}-mismatch`,
+                kind: "integrity",
+                title: strings.mismatch.title,
+                detail: strings.mismatch.detail,
+                evidenceHref: `#${anchor}-identity`,
+                evidenceLabel: strings.mismatch.evidence,
+              },
+            ]}
+          />
+        ) : null}
 
-      {rollup.downgraded ? <Downgrade rollup={rollup} /> : null}
+        {rollup.downgraded ? <Downgrade rollup={rollup} /> : null}
+      </div>
 
-      <ul className="flex list-none flex-col gap-2 p-0">
+      {/* THE THREE CHECKS, side by side. doc 06 §4.1: "the three checks never
+        * collapse into a single icon at detail level". One row, three cards,
+        * each with its own name, its own tri-state word and its own icon —
+        * including when all three say the same thing. */}
+      <ul
+        data-testid="proof-checks"
+        aria-label={strings.panel.checksLabel}
+        className={checkGrid}
+      >
         {proof.checks.map((check, index) => (
           <CheckItem
             key={`${index}-${check.name}`}
             check={check}
             verdict={rollup.verdict}
             logIndex={proof.entry.log_index}
-            hasEntry={(proof.entry.uuid ?? "") !== "" || proof.entry.log_index > 0}
-          >
-            {checkIdOf(check.name) === "trailerIdentity" ? comparison : null}
-          </CheckItem>
+            hasEntry={hasEntry}
+          />
         ))}
       </ul>
 
-      {/* A comparison with no check to sit under still belongs on the page. */}
-      {identityCheck === undefined ? comparison : null}
+      {/* WHO THE COMMIT IS ATTRIBUTED TO. The one fact a stranger came for,
+        * named under a label rather than left to be read out of a comparison
+        * widget (doc 06 §3.6, P1). */}
+      <Attribution proof={proof} />
 
-      <Unreachable proof={proof} />
-      <Notes proof={proof} />
-      <RawMaterial proof={proof} />
+      <div className={panelBody}>
+        {/* The trailer/certificate comparison (§4.1). Below the row rather
+          * than inside the third card: it is two full SPIFFE IDs shown
+          * without truncation — "truncation could hide the very segment that
+          * differs" — and a third of a row is not a width they fit in. The
+          * mismatch banner links to it by id either way. */}
+        {comparison}
+
+        <Unreachable proof={proof} />
+        <Notes proof={proof} />
+        <RawMaterial proof={proof} />
+      </div>
     </section>
   );
 }
 
-/* ── the rollup badge ─────────────────────────────────────────────────────── */
+/**
+ * The identity the CERTIFICATE proves, and the run behind it.
+ *
+ * Never the trailer's. A trailer is a claim anybody can type into a commit
+ * message; the certificate is what Fulcio issued and Rekor logged, and I5
+ * forbids answering "who produced this" from anything weaker. When no
+ * certificate resolved, this says so — an empty block reads as "nobody
+ * checked", and doc 06 P2 wants "nothing to show" and "nothing was
+ * established" told apart.
+ *
+ * The agent type, the task and the run come out of the identity itself rather
+ * than from a second field, because the SPIFFE grammar (IP §1, doc 02 §5) is
+ * where they are defined: a response could disagree with its own certificate,
+ * and then the panel would be rendering the disagreement as fact.
+ */
+function Attribution({ proof }: { readonly proof: Proof }) {
+  const identity = proof.certificate.spiffe_id ?? "";
+  const segments = identity === "" ? null : splitSPIFFEID(identity);
+  const agentType = segments?.[3];
+  const taskId = segments?.[4];
+  const runId = segments?.[5];
+
+  return (
+    <div data-testid="proof-attribution" className={attributionBlock}>
+      <span className={attributionLabel}>{strings.attribution.heading}</span>
+      {identity === "" ? (
+        <p className={secondaryText}>{strings.attribution.none}</p>
+      ) : (
+        <>
+          {/* Whole, never truncated: doc 06 §8 anti-pattern 6 is an identifier
+            * "truncated so the trust domain is lost", and this is the one
+            * rendering of it the reader is meant to compare against a cert. */}
+          <p className={`${identifierText} break-all`}>{identity}</p>
+          {segments === null ? (
+            <p className={secondaryText}>{strings.attribution.unparsed}</p>
+          ) : (
+            <div className={attributionFacts}>
+              <span>
+                <span className={attributionFactName}>{strings.attribution.agent}</span>{" "}
+                {agentType}
+              </span>
+              <span>
+                <span className={attributionFactName}>{strings.attribution.task}</span>{" "}
+                {taskId}
+              </span>
+              {runId === undefined ? null : (
+                <a className={link} href={routeToPath({ view: "run", runId })}>
+                  {strings.attribution.seeRun}
+                </a>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ── the rollup's tone ────────────────────────────────────────────────────── */
 
 const VERDICT_TONE: Record<Verdict, string> = {
   verified: proofVerified,
@@ -186,21 +297,6 @@ const VERDICT_TONE: Record<Verdict, string> = {
   unattributed: proofNeutral,
   "content-verified": proofContent,
 };
-
-function VerdictBadge({ verdict }: { readonly verdict: Verdict }) {
-  const { label, meaning } = strings.verdict[verdict];
-  return (
-    <span
-      data-verdict={verdict}
-      title={meaning}
-      className={`${badgeBase} ${hairline} ${VERDICT_TONE[verdict]}`}
-    >
-      <ProofIcon verdict={verdict} className="shrink-0" />
-      <span>{label}</span>
-      <span className={srOnly}>{meaning}</span>
-    </span>
-  );
-}
 
 /* ── one check ────────────────────────────────────────────────────────────── */
 
@@ -221,13 +317,11 @@ function CheckItem({
   verdict,
   logIndex,
   hasEntry,
-  children,
 }: {
   readonly check: Check;
   readonly verdict: Verdict;
   readonly logIndex: number;
   readonly hasEntry: boolean;
-  readonly children?: React.ReactNode;
 }) {
   const id = checkIdOf(check.name);
   // A check name this build does not know is rendered under the server's own
@@ -241,16 +335,25 @@ function CheckItem({
       : RESULT_TONE[check.result];
 
   return (
-    <li data-check={id ?? "unrecognised"} data-check-result={check.result} className={`${checkRow} ${hairline}`}>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">{label}</span>
-        <span className={`${badgeBase} ${hairline} ${tone}`}>
-          <ProofIcon verdict={check.result} className="shrink-0" />
-          <span>{word}</span>
-          <span className={srOnly}>{meaning}</span>
-        </span>
-      </div>
+    <li
+      data-check={id ?? "unrecognised"}
+      data-check-result={check.result}
+      className={checkRow}
+    >
+      {/* The result first, then the name: the artboard's order, and the right
+        * one — a reader scanning three cards is looking for the three words,
+        * and the name is what they read once a word has stopped them. Colour,
+        * glyph and word together in every state (doc 06 §6.4). */}
+      <span className={`${checkResultLabel} ${toneText(tone)}`}>
+        <ProofIcon verdict={check.result} className="shrink-0" />
+        <span>{word}</span>
+        <span className={srOnly}>{meaning}</span>
+      </span>
 
+      <span className={checkName}>{label}</span>
+
+      {/* What it checked. doc 06 §6.1: "Say what was checked and what
+        * happened", which is the sentence, not the word above it. */}
       {check.detail === undefined || check.detail === "" ? null : (
         <p className={secondaryText}>{check.detail}</p>
       )}
@@ -268,9 +371,28 @@ function CheckItem({
       ) : null}
 
       <Facts check={check} />
-      {children}
     </li>
   );
+}
+
+/**
+ * A tone class reduced to its text half.
+ *
+ * The three groups in styles.ts each name a text colour, a ground and a
+ * border, because a badge needs all three. A check card IS the ground — it
+ * has its own — so spending the group's surface again would tint a tint, and
+ * spending its border would draw a box inside a box. The colour still has to
+ * be there: doc 06 §6.4 is icon AND label AND colour, in every state.
+ *
+ * Derived rather than declared, so there is no second list of tones to keep in
+ * agreement with the first, and no way to add a fourth group that has a badge
+ * treatment and no card treatment.
+ */
+function toneText(tone: string): string {
+  return tone
+    .split(" ")
+    .filter((utility) => utility.startsWith("text-"))
+    .join(" ");
 }
 
 /** doc 06 P1: a badge with no expandable proof is an assertion, not evidence. */
