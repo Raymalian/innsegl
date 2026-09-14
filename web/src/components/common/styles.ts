@@ -35,6 +35,9 @@ export const hairline =
 export const emphasisBorder =
   "border-[length:var(--innsegl-border-width-emphasis)]";
 
+/** The same rule, on one edge. Table rows separate downwards. */
+const hairlineBottom = "border-b-[length:var(--innsegl-border-width-hairline)]";
+
 /* doc 06 §3.2 requires Expired to be "styled distinctly from retired", and
  * doc 06 §5.3 puts both in neutral grey — so the distinction cannot be a hue
  * and this is where it lives instead. The dashed style is a token, so a
@@ -48,7 +51,14 @@ export const stateTransition =
 
 /** The chip's shell (doc 06 §4.3): monospace, tabular, one-click copyable. */
 export const identifierText =
-  "font-mono text-body [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]";
+  // `break-all` is load-bearing, not cosmetic. An identifier — a SPIFFE ID, a
+  // digest, an entry UUID — has no spaces, so without it the string cannot
+  // wrap, forces its track wider than the card, and overflows into the
+  // neighbouring one. Measured on the live verify page: the Rekor artifact
+  // digest ran through two cards and the labels beneath it collided with the
+  // values above. The visual-regression fixtures use short values and did not
+  // catch it, which is why a rendered check is not optional (doc 06 P4).
+  "font-mono text-body break-all [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]";
 
 /** Badge geometry, shared by all three run statuses so only the non-colour
  * cues distinguish them (doc 06 §3.2). */
@@ -63,6 +73,53 @@ export const statusRetired =
 export const statusExpired =
   "text-status-expired bg-status-expired-surface border-status-expired-line";
 
+/* ── labels and fact strips ─────────────────────────────────────────────────
+ *
+ * ONE field label, used wherever a view names a value (FE-122).
+ *
+ * This is FE-121's argument about the two tables, applied one level down. A
+ * column header, a filter's label and a cell of the run header's facts strip
+ * are all the same thing — a small word ABOUT a value rather than part of it —
+ * and doc 06 §5.4's "sentence case everywhere; labels without terminal
+ * punctuation" governs all three. Two views that reached for the same tokens
+ * independently still drift: one keeps the tracking, the other drops it, and a
+ * reader two clicks apart is looking at two products.
+ *
+ * Uppercase and tracked open rather than merely small: at `text-micro` a label
+ * set in sentence case is hard to tell from the value beneath it, and the
+ * distinction between the two is the whole job. Muted rather than secondary
+ * because muted is the pair contrast-pairs.txt asserts against both the panel
+ * and the sunken ground.
+ */
+export const labelText =
+  "text-micro font-semibold uppercase tracking-label text-ink-muted";
+
+/**
+ * A strip of facts: one outlined panel, its cells divided by hairlines.
+ *
+ * doc 06 §5.4 asks for "hairline borders and background steps for structure"
+ * and for density in data. A loose grid of label/value pairs has neither — it
+ * reads as a form, and a reader cannot tell where the facts about this thing
+ * stop. The strip is the structure: one border around the set, one rule
+ * between the members, four to a row so a short fact does not claim a column
+ * of its own.
+ *
+ * The cell divider is drawn on the leading edge of every cell and removed from
+ * the first of each row by the grid's own `nth-child`, which is what keeps the
+ * three internal rules and no outer one — the same trick `checkRow` uses in
+ * components/verification, and for the same reason: the rules have to read as
+ * divisions of one strip rather than as four separate panels.
+ */
+export const factStrip = `${hairline} grid grid-cols-2 gap-y-4 rounded-md border-line bg-surface py-4 md:grid-cols-4`;
+/** One fact. `min-w-0` so an unbreakable identifier wraps instead of widening
+ * its track — see identifierText for the measured failure that rule exists
+ * for. */
+export const factCell = `${hairline} flex min-w-0 flex-col gap-1 border-0 border-l border-line px-4 [&:nth-child(2n+1)]:border-l-0 md:[&:nth-child(2n+1)]:border-l md:[&:nth-child(4n+1)]:border-l-0`;
+/** The value under the label. Tabular, because a count in a strip of four is
+ * read down the row against its neighbours (doc 06 §6.2). */
+export const factValue =
+  "text-body text-ink [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]";
+
 /** A block a whole view can sit under: staleness, empty, error. */
 export const noticeBase =
   "flex items-start gap-2 rounded-md p-4 text-body leading-default";
@@ -72,6 +129,51 @@ export const noticeTitle = "text-prose font-semibold leading-tight";
 
 /** The stack a notice puts its title, detail and evidence link into. */
 export const noticeBody = "flex flex-col items-start gap-1";
+
+/* ── tables ─────────────────────────────────────────────────────────────────
+ *
+ * ONE table treatment, used by every table in the product (FE-121).
+ *
+ * doc 06 §5.4 puts the density in the sheet — "compact rows in tables" — and
+ * §5.1 puts every value behind a token so "a downstream deployment can rebrand
+ * without touching components". Two tables that reached for the same tokens
+ * independently still drift: one grows a header ground, the other keeps a
+ * plain rule, and a reader two clicks apart is looking at two products. The
+ * runs table (§3.2) and the overview's recent runs (§3.1) draw from here and
+ * from nowhere else, so restyling a table restyles both.
+ *
+ * doc 06 §6.4: "tables are real tables." These classes decorate <table>,
+ * <caption>, <th scope="col"> and <th scope="row">; none of them makes a div
+ * look like a row.
+ */
+
+/** The card a table sits in: a hairline, a rounded corner, and the table's own
+ * rules clipped to it (doc 06 §5.4, "hairline borders and background steps for
+ * structure"). Both tables sit in one of these, which is most of what makes
+ * them read as one treatment. */
+export const tablePanel = `${hairline} overflow-hidden rounded-md bg-surface border-line`;
+/** A strip above the table, for a heading and its qualification. */
+export const tablePanelHeader = `${hairline} flex flex-wrap items-baseline gap-2 border-0 border-b border-line px-cell-x py-3`;
+
+/** doc 06 §5.4: "tables full-width within it." A table that outgrows its
+ * column scrolls inside its own shell rather than pushing the page sideways. */
+export const tableScroll = "w-full overflow-x-auto";
+export const table = "w-full border-collapse text-body text-ink";
+/** The table's accessible name. Visible, because doc 06 §6.2 wants the counts
+ * a caption carries in front of the eye as well as in the tree. */
+export const tableCaption = "px-cell-x py-cell-y text-left text-micro text-ink-muted";
+/** Small, uppercase, tracked open, on the sunken ground: a column name is a
+ * label about the data and not part of it, and the step in ground is what
+ * doc 06 §5.4 means by "background steps for structure". Muted rather than
+ * secondary because muted-on-sunken is the pair contrast-pairs.txt asserts. */
+export const columnHeader = `${labelText} bg-sunken px-cell-x py-cell-y text-left align-bottom border-line border-solid ${hairlineBottom}`;
+export const cell = `px-cell-x py-cell-y align-top border-line border-solid ${hairlineBottom}`;
+/** A row header is a heading in the accessibility tree, not in the type scale:
+ * doc 06 §5.2 puts weight before size and a bolded identifier in every row
+ * would be noise. */
+export const rowHeader = `${cell} text-left font-regular`;
+/** A count lines up down the column or it cannot be compared by eye (§6.2). */
+export const numericCell = `${cell} text-right [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]`;
 
 /** The one sanctioned elevation (doc 06 §5.4: "no shadows deeper than subtle
  * elevation for popovers"). */
@@ -95,6 +197,21 @@ export const degradedText = "text-degraded";
 /** Red, filled. The P3 alarm and nothing else. */
 export const integrityAlert =
   "text-integrity-alert bg-integrity-alert-surface border-integrity-alert-line";
+
+/**
+ * Red as TEXT on a panel, for one line that says a check did not hold.
+ *
+ * Not a second red. doc 06 §5.3 gives red one meaning — "verification failed or
+ * integrity alert" — and this is that meaning at the weight a line of text
+ * needs. `integrityAlert` above cannot be reused for it: that group's text
+ * token is the near-white designed to sit ON the fill, and on a page surface it
+ * would be invisible. The pair proof-failed-text / surface-default is declared
+ * in contrast-pairs.txt and checked in both modes.
+ *
+ * It carries no ground, so a caller must give it a word and an icon of its own
+ * (doc 06 §6.4, never colour alone).
+ */
+export const alarmText = "text-proof-failed";
 
 /** Neutral. Structure, chrome, and every run status (doc 06 §5.3). */
 export const neutralSurface = "text-ink bg-surface border-line";

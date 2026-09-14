@@ -32,8 +32,10 @@ export const srOnly = "sr-only";
 
 /* ── the page ──────────────────────────────────────────────────────────── */
 
-export const page = "flex flex-col gap-4";
-export const heading = "text-heading font-semibold leading-tight";
+export const page = "flex flex-col gap-5";
+/** The view heading. doc 06 §5.2, amended 2026-09-14: the display serif sets
+ * view headings and headline figures, and this is one of the two. */
+export const heading = "font-serif text-display font-semibold leading-tight tracking-display";
 /** doc 06 §5.4: "air belongs to explanation". */
 export const prose = "max-w-prose leading-prose text-ink-secondary";
 
@@ -43,11 +45,27 @@ export const prose = "max-w-prose leading-prose text-ink-secondary";
  * shadows and no gradients. */
 export const cardGrid = "grid gap-4 sm:grid-cols-2 lg:grid-cols-4";
 export const cardBase = "flex flex-col gap-1 rounded-md p-4";
-export const cardLabel = "text-micro font-medium";
-/** A count is a number, not an identifier, so it is not mono (doc 06 §5.2) —
- * but it is tabular, so a column of them lines up. */
+/** Small, uppercase, tracked open — the same treatment a table column header
+ * gets, because it is the same thing: a name for the value under it, and not
+ * part of the value. Never the serif: doc 06 §5.2 keeps the serif off labels. */
+export const cardLabel = "text-micro font-semibold uppercase tracking-label";
+/** The headline figure. doc 06 §5.2's second sanctioned serif: "a display
+ * serif for view headings and the largest metric figures".
+ *
+ * A count is a number and not an identifier, so it is not mono (doc 06 §5.2,
+ * P4) — but it is tabular, so a column of them lines up. */
 export const cardValue =
-  "text-display font-semibold leading-tight [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]";
+  "font-serif text-display font-semibold leading-tight tracking-display [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]";
+/** The same slot, holding a WORD rather than a figure.
+ *
+ * doc 06 P2's third state — "not verified, not failed, not checked" — is a
+ * sentence and not a number, and "Not measured" set at the figure size wraps
+ * across two lines in a four-up grid, which makes the card that has the least
+ * to say the loudest thing in the row. One step down, same face, same weight:
+ * it is still the card's headline, so it is still doc 06 §5.2's headline slot
+ * and not a label. */
+export const cardValueWord =
+  "font-serif text-heading font-semibold leading-tight tracking-display";
 /** What the number counts and over what window. doc 06 P1: the meaning travels
  * with the claim. */
 export const cardMeaning = "text-micro leading-default";
@@ -61,11 +79,34 @@ export const pulseShell =
   "inline-flex items-center gap-2 rounded-md py-1 text-body leading-tight";
 export const pulseBreach = `${hairline} px-2`;
 
-/* ── the recent runs list ──────────────────────────────────────────────── */
+/* ── the recent runs table ─────────────────────────────────────────────── */
 
-export const listBase = "flex flex-col rounded-md";
-export const listRow = `${hairline} flex flex-wrap items-center gap-3 border-0 border-t px-2 py-cell-y first:border-t-0`;
-export const listHeading = "text-prose font-semibold leading-tight";
+/* The table's own classes belong to one module and this view is not it — see
+ * components/common/styles.ts and FE-121. doc 06 §3.1's recent runs and doc 06
+ * §3.2's runs table are one treatment; keeping two copies of it in agreement
+ * by hand is what drifts. */
+export {
+  cell,
+  columnHeader,
+  numericCell,
+  rowHeader,
+  table,
+  tableCaption,
+  tablePanel,
+  tablePanelHeader,
+  tableScroll,
+} from "../../components/common/styles";
+
+/** A panel heading. doc 06 §5.2's serif, and the last of the three places this
+ * view spends it. */
+export const listHeading = "font-serif text-prose font-semibold leading-tight";
+/** The qualification beside a heading — "newest first". Not the serif: it is a
+ * sentence about the table, which is copy. */
+export const listNote = "text-micro text-ink-muted";
+
+/** A run's agent type and task in a table cell: neither is an identifier a
+ * reader recomputes, so neither is mono (doc 06 P4 read the right way round). */
+export const cellText = "text-ink";
 
 /*
  * ── the semantic groups ────────────────────────────────────────────────────

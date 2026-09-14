@@ -14,6 +14,9 @@
 
 @import "tailwindcss";
 @import "../tokens/tailwind-theme.css";
+/* The three faces the token sheet names. Bundled out of packages in this
+ * build, never fetched from a host — see fonts.css and doc 06 §5.2. */
+@import "./fonts.css";
 
 @layer base {
   html {

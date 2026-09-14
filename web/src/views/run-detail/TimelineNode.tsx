@@ -9,32 +9,49 @@
  *    position; reconciler-sourced events are labelled `source: reconciler` so
  *    repaired history is visible as repaired, per P1."
  *
- * ── FOUR THINGS EVERY NODE SAYS, WHATEVER THE EVENT IS ─────────────────────
+ * ── THE ORDINARY EVENT IS NOT A PANEL ──────────────────────────────────────
  *
- *   its chain position — doc 06 §3.3 in as many words;
- *   who wrote it       — `source: {value}`, plus a sentence saying what that
- *                        writer is, because "reaper" is not self-explanatory
- *                        to an auditor who has not read doc 02;
- *   what can be said about its link to the event above it — including, in the
- *                        common case, that nothing can be (see timeline.ts);
- *   its canonical members — doc 06 P1: the evidence sits next to the claim.
+ * It sits on the rail as plain content: a title, a time, a chain position, and
+ * whatever members doc 02 §3 gives its type. No ground, no border, no card.
  *
- * ── AND TWO THINGS ONLY SOME NODES SAY ─────────────────────────────────────
+ * That is doc 06 P3 followed through rather than a preference. "Design the
+ * alarm first" has a consequence for everything that is not the alarm: a
+ * timeline that draws every event as a panel has spent its entire visual
+ * vocabulary on the ordinary case, and the amber band and the red fill then
+ * land on a page where every row already has a border and the eye has nowhere
+ * to go. The bands work because the rows around them are bare.
  *
- * REPAIRED HISTORY. A `commit_recorded` the reconciler wrote is a fact the
- * agent never recorded and the ledger got back from Rekor afterwards. It
- * carries the label, a badge with its own icon, its own amber ground, and a
- * sentence saying what happened — four cues, of which three survive greyscale
- * and two survive a screen reader. doc 06 §3.3 asks for repaired history to be
- * "visible as repaired"; a label a reader has to already know how to read is
- * not visible in that sense.
+ * Three things earn a box, and only three:
  *
- * SEVERITY. doc 06 §8's anti-pattern 2 forbids a node whose event is a failure
- * rendering as merely informational. doc 02 §3's two "Alert:" rows are
- * integrity alerts and take red, filled, with the word "Integrity alert" in
- * visible text; `commit_intent_expired` takes amber and says what it means.
- * Neither is ever the calm neutral the rest of the timeline uses, and neither
- * is ever the other (P2).
+ *   alert      doc 02 §3's two "Alert:" rows. Red, filled, with the words
+ *              "Integrity alert" in visible text (doc 06 §5.3, §8's
+ *              anti-pattern 2).
+ *   degraded   an expired commit intent, and an expired run. Amber, and they
+ *              carry DIFFERENT words: a promise nobody kept and an identity
+ *              that ran out under an agent still working are two facts, and P2
+ *              forbids collapsing them.
+ *   a commit   neutral, outlined. Not emphasis — doc 06 §3.3 makes the
+ *              three-check panel "the load-bearing component" and this node is
+ *              where a reader reaches it, so the node is a document: repo,
+ *              SHA, Rekor entry, and the control that runs the checks. §5.3 is
+ *              explicit that a commit the ledger holds is not a verification,
+ *              so the card stays neutral and the green stays behind the panel.
+ *
+ * ── AND ONE THING MOVED, WITHOUT ANYTHING BEING DROPPED ────────────────────
+ *
+ * `source: <value>` used to be on every row, with a sentence under it saying
+ * who that writer is. doc 06 §3.3 asks for the label so that "repaired history
+ * is visible as repaired" — and the same label on all 1220 rows of a real run
+ * is what made the repaired one unreadable.
+ *
+ * So the label is rendered for every event, always, and `writerIsInformative`
+ * decides where: on the rail when doc 02 §3 permits the type more than one
+ * writer (`commit_recorded` alone — "source: reconciler when repaired"), or
+ * when the writer is not one the type permits at all; otherwise inside the
+ * evidence disclosure that already holds the event id and both chain hashes.
+ * REPAIRED HISTORY IS UNAFFECTED: `commit_recorded` is exactly the two-writer
+ * type, so a repair keeps its label, its badge, its amber ground and its
+ * sentence on the rail where a reader cannot miss them.
  */
 
 import type { ReactNode } from "react";
@@ -46,10 +63,12 @@ import type { IdentifierKind } from "../../components/common/identifier";
 import { CommitVerification } from "./CommitVerification";
 import type { VerifyCommit } from "./CommitVerification";
 import { Instant } from "./RelativeTime";
+import { RailGutter } from "./Rail";
 import { strings } from "./strings";
 import {
   badgeBase,
   chainMarker,
+  commitCard,
   degraded,
   disclosure,
   expiredOutline,
@@ -61,11 +80,11 @@ import {
   integrityAlert,
   link,
   mutedText,
+  nodeBand,
+  nodeBody,
   nodeHeadline,
-  nodeNeutral,
-  nodeOutline,
-  nodeShell,
   nodeTitle,
+  railRow,
   secondaryText,
   srOnly,
 } from "./styles";
@@ -76,6 +95,8 @@ import {
   memberString,
   nodeAnchorId,
   severityOf,
+  writerIsExpected,
+  writerIsInformative,
   type ChainLink,
 } from "./events";
 import {
@@ -90,6 +111,9 @@ export interface TimelineNodeProps {
   readonly event: TimelineEvent;
   readonly link: ChainLink;
   readonly now: Date;
+  /** Whether this is the last row of its rail. The connector is drawn by the
+   * row ABOVE it, so a node cannot decide this for itself — see Timeline.tsx. */
+  readonly last?: boolean;
   /** Absent when the deployment offers no proof endpoint; the node then says
    * nothing about verification rather than implying there is nothing to say. */
   readonly verifyCommit?: VerifyCommit;
@@ -123,109 +147,164 @@ const MEMBER_VIEWS: readonly {
   { member: MEMBERS.supersedes, label: strings.detail.supersedes, kind: "generic" },
 ];
 
+/** The rail marker for an event. Neutral in every case — a node is a statement
+ * that the ledger holds an event and not a verdict on it — but the SHAPE still
+ * carries the exception, so the two alarms are findable by running an eye down
+ * the gutter and survive greyscale (doc 06 §6.4). */
+function markerFor(event: TimelineEvent): "node" | "status-expired" | "integrity-alert" {
+  const severity = severityOf(event);
+  if (severity === "alert") return "integrity-alert";
+  if (severity === "degraded") return "status-expired";
+  return "node";
+}
+
 export function TimelineNode({
   event,
   link: chainLink,
   now,
+  last = false,
   verifyCommit,
   freshnessMs,
 }: TimelineNodeProps) {
   const typeId = eventTypeIdOf(event.event_type);
-  const sourceId = sourceIdOf(event.source);
   const severity = severityOf(event);
   const repaired = isRepairedHistory(event);
   const canonical = canonicalOf(event);
   const title = typeId === undefined ? event.event_type : strings.event[typeId];
   const commitSHA = commitSHAOf(event);
+  const isCommit = event.event_type === EVENT_TYPES.commitRecorded;
 
-  const tone =
-    severity === "alert"
-      ? integrityAlert
-      : severity === "degraded" || repaired
-        ? degraded
-        : nodeNeutral;
   /* doc 06 §3.2 requires expired to be told from retired without a hue, and
    * StatusBadge carries that distinction as a dashed outline. The same fact on
    * the timeline gets the same cue rather than a second invented one. */
-  const outline = typeId === "runExpired" ? expiredOutline : nodeOutline;
+  const outline = typeId === "runExpired" ? ` ${expiredOutline}` : "";
+  const treatment =
+    severity === "alert"
+      ? `${nodeBand} ${integrityAlert}${outline}`
+      : severity === "degraded" || repaired
+        ? `${nodeBand} ${degraded}${outline}`
+        : isCommit
+          ? commitCard
+          : "";
 
   return (
-    <li
-      id={nodeAnchorId(event)}
-      data-event-type={event.event_type}
-      data-source={event.source}
-      data-chain-position={event.chain_position}
-      className={`${nodeShell} ${outline} ${tone}`}
-    >
-      <div className={nodeHeadline}>
-        <span className={nodeTitle}>{title}</span>
-        {typeId === undefined ? (
-          <span className={secondaryText}>{strings.event.unrecognised}</span>
-        ) : null}
-        <Instant value={event.ts} now={now} label={title} />
-        {/* doc 06 §3.3: each node shows its chain position. */}
-        <span className={chainMarker}>
-          {strings.timeline.chainPosition(event.chain_position)}
-        </span>
-      </div>
+    <li id={nodeAnchorId(event)} className={railRow}>
+      <RailGutter icon={markerFor(event)} last={last} />
+      <div
+        data-event-type={event.event_type}
+        data-source={event.source}
+        data-chain-position={event.chain_position}
+        data-node-body
+        className={`${nodeBody}${treatment === "" ? "" : ` ${treatment}`}`}
+      >
+        <div className={nodeHeadline}>
+          <span className={nodeTitle}>{title}</span>
+          {typeId === undefined ? (
+            <span className={secondaryText}>{strings.event.unrecognised}</span>
+          ) : null}
+          <Instant value={event.ts} now={now} label={title} />
+          {/* doc 06 §3.3: each node shows its chain position. */}
+          <span className={chainMarker}>
+            {strings.timeline.chainPosition(event.chain_position)}
+          </span>
+        </div>
 
-      {severity === "neutral" ? null : (
+        {severity === "neutral" ? null : <SeverityMark event={event} />}
+
+        {/* doc 06 §3.3's label, with the ledger's own enum value inside it —
+          * on the rail only where it says something the event type does not
+          * already say. See the file comment, and `writerIsInformative`. */}
+        {writerIsInformative(event) ? <Writer event={event} /> : null}
+
+        {repaired ? (
+          <div className={factList}>
+            <Mark
+              icon="staleness"
+              tone={degraded}
+              label={strings.event.repaired}
+              meaning={strings.event.repairedDetail}
+            />
+            <p>{strings.event.repairedDetail}</p>
+          </div>
+        ) : null}
+
+        <ChainLinkLine link={chainLink} event={event} />
+
+        <Members event={event} />
+
+        {event.event_type === EVENT_TYPES.toolCall ? (
+          <ToolCallDigests event={event} />
+        ) : null}
+
+        {isCommit ? (
+          commitSHA === undefined ? (
+            <p className={secondaryText}>{strings.verification.noCommit}</p>
+          ) : verifyCommit === undefined ? null : (
+            <CommitVerification
+              commitSHA={commitSHA}
+              verifyCommit={verifyCommit}
+              {...(freshnessMs === undefined ? {} : { freshnessMs })}
+            />
+          )
+        ) : null}
+
+        <CanonicalMembers canonical={canonical} />
+      </div>
+    </li>
+  );
+}
+
+/** What the severity of this event is, in words, with its own icon.
+ *
+ * The two degradations get different sentences. doc 06 §3.2's expired run —
+ * "an agent died unretired" — is not the same fact as a commit intent that
+ * never became a commit, and P2 forbids one set of words standing for both. */
+function SeverityMark({ event }: { readonly event: TimelineEvent }) {
+  const severity = severityOf(event);
+  if (severity === "alert") {
+    return (
+      <Mark
+        icon="integrity-alert"
+        tone={integrityAlert}
+        label={strings.severity.alert}
+        meaning={strings.severity.alertMeaning}
+      />
+    );
+  }
+  const ranOut = eventTypeIdOf(event.event_type) === "runExpired";
+  return (
+    <Mark
+      icon="status-expired"
+      tone={degraded}
+      label={ranOut ? strings.severity.expired : strings.severity.degraded}
+      meaning={ranOut ? strings.severity.expiredMeaning : strings.severity.degradedMeaning}
+    />
+  );
+}
+
+/** `source: <value>`, and who that writer is. One component, used in two
+ * places — on the rail where the writer is a fact, and inside the evidence
+ * disclosure where it is a restatement of the event type. The markup is the
+ * same in both, so moving it cannot change what it says. */
+function Writer({ event }: { readonly event: TimelineEvent }) {
+  const sourceId = sourceIdOf(event.source);
+  return (
+    <p className={factRow}>
+      <span className={identifierText}>{strings.event.source(event.source)}</span>
+      <span className={secondaryText}>
+        {sourceId === undefined
+          ? strings.event.writer.unrecognised
+          : strings.event.writer[sourceId]}
+      </span>
+      {writerIsExpected(event) ? null : (
         <Mark
-          icon={severity === "alert" ? "integrity-alert" : "status-expired"}
-          tone={severity === "alert" ? integrityAlert : degraded}
-          label={severity === "alert" ? strings.severity.alert : strings.severity.degraded}
-          meaning={
-            severity === "alert"
-              ? strings.severity.alertMeaning
-              : strings.severity.degradedMeaning
-          }
+          icon="unknown"
+          tone={degraded}
+          label={strings.event.unexpectedWriter}
+          meaning={strings.event.unexpectedWriter}
         />
       )}
-
-      {/* doc 06 §3.3's label, with the ledger's own enum value inside it. */}
-      <p className={factRow}>
-        <span className={identifierText}>{strings.event.source(event.source)}</span>
-        <span className={secondaryText}>
-          {sourceId === undefined
-            ? strings.event.writer.unrecognised
-            : strings.event.writer[sourceId]}
-        </span>
-      </p>
-
-      {repaired ? (
-        <div className={factList}>
-          <Mark
-            icon="staleness"
-            tone={degraded}
-            label={strings.event.repaired}
-            meaning={strings.event.repairedDetail}
-          />
-          <p>{strings.event.repairedDetail}</p>
-        </div>
-      ) : null}
-
-      <ChainLinkLine link={chainLink} event={event} />
-
-      <Members event={event} />
-
-      {event.event_type === EVENT_TYPES.toolCall ? (
-        <ToolCallDigests event={event} />
-      ) : null}
-
-      {event.event_type === EVENT_TYPES.commitRecorded ? (
-        commitSHA === undefined ? (
-          <p className={secondaryText}>{strings.verification.noCommit}</p>
-        ) : verifyCommit === undefined ? null : (
-          <CommitVerification
-            commitSHA={commitSHA}
-            verifyCommit={verifyCommit}
-            {...(freshnessMs === undefined ? {} : { freshnessMs })}
-          />
-        )
-      ) : null}
-
-      <CanonicalMembers canonical={canonical} />
-    </li>
+    </p>
   );
 }
 
@@ -251,8 +330,9 @@ function Mark({
   );
 }
 
-/** What can be said about this event's link to the one above it. Four states,
- * because three of them would mean asserting a chain nobody followed. */
+/** What can be said about this event's link to the one above it, and — for the
+ * eleven types with one legal writer — who wrote it. Four link states, because
+ * three of them would mean asserting a chain nobody followed. */
 function ChainLinkLine({
   link: chainLink,
   event,
@@ -304,6 +384,10 @@ function ChainLinkLine({
         )}
       </summary>
       <p className={secondaryText}>{detail}</p>
+      {/* Moved here, not dropped: P1 puts the evidence next to the claim, and
+        * this disclosure is the event's own evidence. The value is still the
+        * ledger's own enum value, passed through untouched. */}
+      {writerIsInformative(event) ? null : <Writer event={event} />}
       <dl className={factList}>
         <Fact label={strings.timeline.eventId} value={event.event_id} kind="generic" />
         <Fact label={strings.timeline.eventHash} value={event.event_hash} kind="generic" />

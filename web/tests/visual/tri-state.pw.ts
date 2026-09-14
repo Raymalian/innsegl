@@ -51,6 +51,12 @@ for (const mode of ["light", "dark"] as const) {
         // was actually racing.
         await expect(page.locator("[data-harness-unknown]")).toHaveCount(0);
         await expect(page.locator("[data-harness-root] > *")).toBeVisible();
+        // The three families are bundled and declared `font-display: swap`
+        // (doc 06 §5.2, src/app/fonts.css), so the first paint can be the
+        // fallback stack and the second the real face. Waiting for the font
+        // set to settle is what keeps a baseline a statement about the design
+        // rather than about how fast this machine read seven files.
+        await page.evaluate(() => document.fonts.ready);
         await expect(page).toHaveScreenshot(`${scenario.name}-${mode}.png`, {
           // The full harness body, not the viewport: a panel taller than the
           // viewport must not silently crop out of the comparison.
@@ -74,6 +80,7 @@ test.describe("FE-001: the three tri-states are visually distinct from one anoth
     for (const scenario of ["panel-verified", "panel-failed", "panel-unavailable"] as const) {
       await page.goto(`/tests/harness/index.html?scenario=${scenario}`);
       await expect(page.locator("[data-harness-unknown]")).toHaveCount(0);
+      await page.evaluate(() => document.fonts.ready);
       shots.push(await page.screenshot({ fullPage: true }));
     }
     const [verified, failed, unavailable] = shots;

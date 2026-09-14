@@ -102,6 +102,8 @@ export function PassRateCard({
           formatCount(commitsRecorded),
         )}
         tone="degraded"
+        /* A state, not a figure — see MetricCard's `headline`. */
+        headline="word"
       >
         <VerifyLink href={verifyHref} />
       </MetricCard>

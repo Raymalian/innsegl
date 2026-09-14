@@ -30,20 +30,41 @@ export const focusRing =
 
 /** A 1px rule that separates without claiming anything. */
 const hairlineWidth = "border-[length:var(--innsegl-border-width-hairline)]";
-const hairlineBottom =
-  "border-b-[length:var(--innsegl-border-width-hairline)]";
+
+/* The table itself is not this view's to style — FE-121. doc 06 §3.1's recent
+ * runs and doc 06 §3.2's runs table are the same treatment, and two copies of
+ * it kept in agreement by hand is the thing that drifts. Both draw from
+ * components/common/styles.ts and neither restyles a cell alone. */
+export {
+  cell,
+  columnHeader,
+  numericCell,
+  rowHeader,
+  table,
+  tableCaption,
+  tablePanel,
+  tableScroll,
+} from "../../components/common/styles";
+
+import { labelText } from "../../components/common/styles";
 
 /* ── the view ─────────────────────────────────────────────────────────────── */
 
 export const view = "flex flex-col gap-4";
-export const heading = "text-heading font-semibold text-ink";
+export const heading = "font-serif text-display font-semibold leading-tight tracking-display text-ink";
 
 /* ── the filter form ──────────────────────────────────────────────────────── */
 
 export const filterForm = `flex flex-col gap-3 rounded-md p-4 bg-surface border-line border-solid ${hairlineWidth}`;
 export const filterGrid = "flex flex-wrap gap-3";
 export const filterField = "flex min-w-0 flex-col gap-1";
-export const filterLabel = "text-micro font-medium text-ink-secondary";
+/* ONE field label in the product (FE-122). A filter's label, a table's column
+   header and a cell of the run header's facts strip are the same thing — a
+   small word ABOUT a value rather than part of it — and doc 06 §5.4 governs
+   all three together. Two views that reached for the same tokens separately
+   still drift; this is the same argument FE-121 makes about the two tables,
+   one level down. */
+export const filterLabel = labelText;
 export const filterControl = `rounded-sm bg-page px-2 py-1 text-body text-ink border-line border-solid ${hairlineWidth} ${focusRing}`;
 export const filterActions = "flex flex-wrap items-center gap-3";
 export const filterHint = "text-micro text-ink-muted";
@@ -52,18 +73,9 @@ export const secondaryButton = `rounded-sm px-3 py-1 text-body text-ink-secondar
 
 /* ── the table ────────────────────────────────────────────────────────────── */
 
-/* doc 06 §5.4: "tables full-width within it ... compact rows in tables". The
- * cell padding is the sheet's own table-density token, so a rebrand changes
- * the density of every table at once. */
-export const tableScroll = "w-full overflow-x-auto";
-export const table = "w-full border-collapse text-body text-ink";
-export const tableCaption = "text-left text-micro text-ink-secondary pb-2";
-export const columnHeader = `px-cell-x py-cell-y text-left align-bottom font-semibold text-ink-secondary border-line border-solid ${hairlineBottom}`;
-export const cell = `px-cell-x py-cell-y align-top border-line border-solid ${hairlineBottom}`;
-/* A row header is a heading in the accessibility tree, not in the type scale:
- * doc 06 §5.2 puts weight before size and a bolded run id in every row would
- * be noise. */
-export const rowHeader = `${cell} text-left font-regular`;
+/* The table's own classes are re-exported above, from the one module that owns
+ * them. What is left here is what belongs to a RUN row rather than to a table:
+ * the stack inside a cell, the task, the repository link, the count. */
 export const cellStack = "flex flex-col items-start gap-1";
 export const taskText = "text-ink";
 export const repoLink = `text-accent underline underline-offset-2 ${focusRing}`;

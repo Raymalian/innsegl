@@ -68,6 +68,7 @@ import {
   srOnly,
   table,
   tableCaption,
+  tablePanel,
   tableScroll,
   taskText,
 } from "./styles";
@@ -86,62 +87,67 @@ export interface RunsTableProps {
 export function RunsTable({ runs, total, proofs, filters }: RunsTableProps) {
   const ascending = filters?.order === "asc";
   return (
-    <div className={tableScroll}>
-      <table className={table}>
-        {/* The table's accessible name, with both exact counts (doc 06 §6.2). */}
-        <caption className={tableCaption}>
-          {strings.formats.caption(runs.length, total)}
-        </caption>
-        <thead>
-          <tr>
-            <th
-              scope="col"
-              className={columnHeader}
-              /* The direction the LEDGER sorted in, announced rather than
-                 inferred from the rows on screen — a reader must not have to
-                 work it out from a page that could be one of many. */
-              aria-sort={ascending ? "ascending" : "descending"}
-            >
-              {strings.labels.columns.runId}
-              {filters ? (
-                <>
-                  {" "}
-                  <a
-                    className={orderToggle}
-                    href={runsLinkPath({
-                      ...filters,
-                      order: ascending ? "desc" : "asc",
-                      // A cursor is a position in the ordering being left.
-                      cursor: "",
-                    })}
-                  >
-                    {ascending
-                      ? strings.labels.order.switchToNewest
-                      : strings.labels.order.switchToOldest}
-                  </a>
-                </>
-              ) : null}
-            </th>
-            <th scope="col" className={columnHeader}>
-              {strings.labels.columns.task}
-            </th>
-            <th scope="col" className={columnHeader}>
-              {strings.labels.columns.repo}
-            </th>
-            <th scope="col" className={columnHeader}>
-              {strings.labels.columns.commits}
-            </th>
-            <th scope="col" className={columnHeader}>
-              {strings.labels.columns.status}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((run) => (
-            <RunRow key={run.run_id} run={run} proofs={proofs?.(run) ?? []} />
-          ))}
-        </tbody>
-      </table>
+    /* The same card the overview's recent runs sit in, from the same module
+       (FE-121). doc 06 §3.1 and §3.2 are one treatment; two copies kept in
+       agreement by hand is what drifts. */
+    <div className={tablePanel}>
+      <div className={tableScroll}>
+        <table className={table}>
+          {/* The table's accessible name, with both exact counts (doc 06 §6.2). */}
+          <caption className={tableCaption}>
+            {strings.formats.caption(runs.length, total)}
+          </caption>
+          <thead>
+            <tr>
+              <th
+                scope="col"
+                className={columnHeader}
+                /* The direction the LEDGER sorted in, announced rather than
+                   inferred from the rows on screen — a reader must not have to
+                   work it out from a page that could be one of many. */
+                aria-sort={ascending ? "ascending" : "descending"}
+              >
+                {strings.labels.columns.runId}
+                {filters ? (
+                  <>
+                    {" "}
+                    <a
+                      className={orderToggle}
+                      href={runsLinkPath({
+                        ...filters,
+                        order: ascending ? "desc" : "asc",
+                        // A cursor is a position in the ordering being left.
+                        cursor: "",
+                      })}
+                    >
+                      {ascending
+                        ? strings.labels.order.switchToNewest
+                        : strings.labels.order.switchToOldest}
+                    </a>
+                  </>
+                ) : null}
+              </th>
+              <th scope="col" className={columnHeader}>
+                {strings.labels.columns.task}
+              </th>
+              <th scope="col" className={columnHeader}>
+                {strings.labels.columns.repo}
+              </th>
+              <th scope="col" className={columnHeader}>
+                {strings.labels.columns.commits}
+              </th>
+              <th scope="col" className={columnHeader}>
+                {strings.labels.columns.status}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((run) => (
+              <RunRow key={run.run_id} run={run} proofs={proofs?.(run) ?? []} />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

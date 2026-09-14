@@ -31,8 +31,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { ActivityLog } from "./ActivityLog";
+import { ActivityLog, fetchRunLog } from "./ActivityLog";
+import type { RunLog } from "./ActivityLog";
 import { AlertBanner } from "../../components/common/AlertBanner";
+import { Icon } from "../../components/common/Icon";
 import type { Alert } from "../../components/common/AlertBanner";
 import { EmptyState } from "../../components/common/EmptyState";
 import { ErrorState } from "../../components/common/ErrorState";
@@ -45,7 +47,13 @@ import { RunHeader } from "./RunHeader";
 import { Tabs } from "./Tabs";
 import { Timeline } from "./Timeline";
 import { strings } from "./strings";
-import { block, viewShell } from "./styles";
+import {
+  alertChip,
+  integrityAlert,
+  srOnly,
+  timelinePanel,
+  viewShell,
+} from "./styles";
 import { conditionsOf, toolCallCount } from "./events";
 import type { Condition } from "./events";
 import type { RunDetail } from "./types";
@@ -55,6 +63,11 @@ import type { RunDetail } from "./types";
 export class RunNotFound extends Error {}
 
 export type FetchRun = (runID: string, signal: AbortSignal) => Promise<RunDetail>;
+
+/** How the activity log is read. Injected for the same reason `FetchRun` is:
+ * a test never touches the network, and a deployment can route through its own
+ * BFF. */
+export type FetchLog = (runID: string, signal: AbortSignal) => Promise<RunLog>;
 
 /** The default read: `internal/api`'s `GET /api/v1/runs/{run_id}`. */
 export const fetchRun: FetchRun = async (runID, signal) => {
@@ -70,6 +83,7 @@ export interface RunDetailViewProps {
   /** The shell's route. Only `{ view: "run" }` names a run. */
   readonly route: Route;
   readonly fetchRun?: FetchRun;
+  readonly fetchLog?: FetchLog;
   readonly verifyCommit?: VerifyCommit;
   /** Injected so a render is deterministic; defaults to the wall clock. */
   readonly now?: Date;
@@ -85,6 +99,7 @@ type Read =
 export function RunDetailView({
   route,
   fetchRun: read = fetchRun,
+  fetchLog: readLog = fetchRunLog,
   verifyCommit = fetchProof,
   now,
   freshnessMs,
@@ -145,6 +160,7 @@ export function RunDetailView({
         <Loaded
           detail={result.detail}
           now={clock}
+          readLog={readLog}
           verifyCommit={verifyCommit}
           {...(freshnessMs === undefined ? {} : { freshnessMs })}
         />
@@ -156,15 +172,48 @@ export function RunDetailView({
 function Loaded({
   detail,
   now,
+  readLog,
   verifyCommit,
   freshnessMs,
 }: {
   readonly detail: RunDetail;
   readonly now: Date;
+  readonly readLog: FetchLog;
   readonly verifyCommit: VerifyCommit;
   readonly freshnessMs?: number;
 }) {
   const events = detail.timeline ?? [];
+  const runId = detail.run_id;
+  /* THE ACTIVITY LOG IS READ HERE, NOT IN THE PANEL THAT SHOWS IT.
+   *
+   * FE-127. The panel is behind a tab, and one of the things the read returns
+   * is a condition doc 06 §4.5 does not let hide behind one: a tool-call body
+   * that does not hash to the digest the ledger recorded. That count has to
+   * reach the tab ROW, which is outside both panels, so the read has to live
+   * above both. It is also the tab the page does not open with, and it is the
+   * only place the condition can be found at all — doc 02 §3 gives a
+   * `tool_call` event no member for its body, so the timeline has nothing to
+   * compare and cannot raise it. */
+  const [log, setLog] = useState<RunLog | null>(null);
+  const [logFailed, setLogFailed] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLog(null);
+    setLogFailed(false);
+    readLog(runId, controller.signal).then(
+      (read) => {
+        if (!controller.signal.aborted) setLog(read);
+      },
+      () => {
+        if (!controller.signal.aborted) setLogFailed(true);
+      },
+    );
+    return () => controller.abort();
+  }, [readLog, runId]);
+
+  const altered = log?.altered ?? 0;
+
   return (
     <>
       {/* doc 06 P3: design the alarm first, and put it first.
@@ -197,13 +246,37 @@ function Loaded({
         * actually holds the tool calls. */}
       <Tabs
         label={strings.tabs.region}
+        /* doc 06 P3 and §4.5, the same argument the banner above is placed by:
+         * a condition behind an unselected tab is a condition the reader is
+         * never told about. Red because a body that does not hash to its
+         * recorded digest is doc 06 §5.3's "verification failed"; absent
+         * entirely at zero, because the calm state is quiet and a green tick
+         * saying nothing is wrong is §5.3's green spent on a claim that is not
+         * a cryptographic verification. */
+        aside={
+          altered === 0 ? undefined : (
+            <span className={`${alertChip} ${integrityAlert}`} data-integrity-chip>
+              <Icon name="integrity-alert" className="shrink-0" />
+              <span>{strings.activity.mismatch(altered)}</span>
+              <span className={srOnly}>{strings.activity.integrity.altered}</span>
+            </span>
+          )
+        }
         tabs={[
           {
             id: "timeline",
             label: strings.timeline.heading,
             count: strings.tabs.events(events.length),
+            /* NO PANEL AROUND THE RAIL.
+             *
+             * The timeline used to sit on a raised surface, and that is what
+             * made the treatment below it impossible: a commit card and an
+             * amber band drawn on a ground that is already a card have nothing
+             * to step away from. On the page ground the exceptions read as
+             * cards and the ordinary rows read as what they are (doc 06 §5.4's
+             * "background steps for structure", P3). */
             panel: (
-              <section className={block}>
+              <section className={timelinePanel}>
                 <Timeline
                   events={events}
                   now={now}
@@ -217,7 +290,7 @@ function Loaded({
             id: "activity",
             label: strings.activity.heading,
             count: strings.toolCall.count(toolCallCount(events)),
-            panel: <ActivityLog runId={detail.run_id} />,
+            panel: <ActivityLog log={log} failed={logFailed} />,
           },
         ]}
       />
