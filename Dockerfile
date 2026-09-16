@@ -141,3 +141,51 @@ WORKDIR /home/innsegl
 # operator who mistyped `innsegl-reconciler` would get an MCP server.
 ENTRYPOINT ["/usr/local/bin/innsegl"]
 CMD ["help"]
+
+# ---------------------------------------------------------------------------
+# The backup's runtime (RM-146, #237).
+# ---------------------------------------------------------------------------
+# A SEPARATE TARGET AND NOT THE DEFAULT ONE, because the backup is the only row
+# that needs two clients nothing else here wants: a Postgres client to take and
+# restore the dump, and an S3 client to fetch the sealed segments it is
+# adjudicated against.
+#
+# WHAT THIS REPLACES IS THE POINT. The backup used to run on the HOST, from a
+# scheduler, and reached both of those through the container runtime — ten
+# `docker exec`, two `docker cp` and a `docker run`. A process holding the
+# runtime socket is root on the machine, and that is not a trade a backup may
+# make. Everything below is a NETWORK client: it holds no socket, and
+# OPS-044 asserts the call is refused.
+#
+# BOTH CLIENTS COME FROM THE SAME PINNED BASE, so there is one digest to audit
+# rather than three images to keep in step:
+#
+#   postgresql16-client  matches the server major the deployment runs. A client
+#                        older than the server cannot read its dumps, and
+#                        pg_dump refuses the mismatch rather than truncating.
+#   aws-cli              the reference implementation of the protocol, which is
+#                        the same argument innsegl-object-init's image makes:
+#                        the store's own tool cannot outlive the store.
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS backup
+
+# bash, because scripts/backup-ledger.sh is a bash script and has been since it
+# was written for the host. Converting 380 lines of working shell to POSIX to
+# save a megabyte would be a change with real risk and no benefit; the shell it
+# declares is the shell it gets.
+RUN apk add --no-cache bash postgresql16-client aws-cli ca-certificates
+
+RUN addgroup -g 1000 innsegl \
+ && adduser -D -u 1000 -G innsegl -h /home/innsegl innsegl
+
+# The dumps' mountpoint, owned by the image's user, for the reason the runtime
+# stage creates /work: an empty named volume inherits the image's ownership at
+# the mount path, and a missing directory is created root-owned.
+RUN mkdir -p /backups && chown 1000:1000 /backups
+
+ENV HOME=/home/innsegl
+USER 1000:1000
+WORKDIR /home/innsegl
+
+# No default command, for the reason the runtime stage gives: the scripts are
+# mounted, and a default would make a mistyped command the silent case.
+ENTRYPOINT ["/bin/sh"]

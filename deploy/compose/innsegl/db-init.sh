@@ -20,6 +20,9 @@
 #      internal/api/readonly.sql to it — THE SAME FILE api.EnsureReadOnlyRole
 #      embeds, mounted here rather than copied (see $READONLY_SQL below for how,
 #      and why a second copy of those GRANTs would be the wrong answer);
+#   6. creates the BACKUP role, gives it the reader's grants plus CREATEDB,
+#      and runs verify-backup-role.sh, which asks the server whether that
+#      credential can do the backup's whole job and still not write the ledger.
 #   5. runs verify-reader-role.sh, which connects AS the reader and does the
 #      same thing step 3 does.
 #
@@ -57,6 +60,24 @@ ROLE="${INNSEGL_APPENDER_ROLE:-innsegl_appender}"
 # EnsureReadOnlyRole takes the name as an argument", and so does this script.
 READER_ROLE="${INNSEGL_READER_ROLE:-innsegl_reader}"
 : "${INNSEGL_READER_PASSWORD:?db-init: INNSEGL_READER_PASSWORD must be set}"
+
+# The backup's role (RM-146, #237). Like the other two, a default and not a
+# protected string.
+#
+# IT IS THE READER PLUS CREATEDB, AND NOTHING ELSE. The backup does two things:
+# it dumps the ledger, which needs exactly what the reader has, and it restores
+# that dump into a THROWAWAY database to prove the dump restores at all — which
+# needs a database of its own to own. internal/api/readonly.sql's line 58 says
+# NOCREATEDB, correctly, for the role it was written for; the CREATEDB below is
+# applied AFTER it and is the one deliberate difference between these two roles.
+#
+# Undoing a line of somebody else's grants file is only safe because nothing
+# here is trusted: verify-backup-role.sh asks the SERVER what this credential
+# can do, and it asserts both halves — that the backup's whole job succeeds, and
+# that writing the live ledger is still refused BY PRIVILEGE. Provisioning is a
+# claim; the measurement is the gate.
+BACKUP_ROLE="${INNSEGL_BACKUP_ROLE:-innsegl_backup}"
+: "${INNSEGL_BACKUP_PASSWORD:?db-init: INNSEGL_BACKUP_PASSWORD must be set}"
 
 # internal/api/readonly.sql, reached BY MOUNT and not by copy.
 #
@@ -231,6 +252,7 @@ SQL
 # `%[3]s` swallowed by a comment. Refusing loudly here is what makes the mount
 # safe to rely on.
 apply_readonly_sql() {
+  apply_role="$1"
   grants="$(sed -e 's/%\[1\]s/:"role"/g' -e 's/%\[2\]s/:"db"/g' "${READONLY_SQL}")"
   if printf '%s\n' "${grants}" | grep -Eq '%(\[|[A-Za-z])'; then
     printf 'db-init: untranslated:\n%s\n' \
@@ -238,14 +260,49 @@ apply_readonly_sql() {
     fail "${READONLY_SQL} still contains an fmt verb after translation. It is internal/api's file and it has changed shape; teach the sed in apply_readonly_sql about the new verb rather than copying the GRANTs into deploy/, which is how the two would drift"
   fi
   printf '%s\n' "${grants}" |
-    psql_owner -v role="${READER_ROLE}" -v db="${PGDATABASE}" -f -
+    psql_owner -v role="${apply_role}" -v db="${PGDATABASE}" -f -
 }
 
 log "applying ${READONLY_SQL} to ${READER_ROLE}"
-apply_readonly_sql
+apply_readonly_sql "${READER_ROLE}"
+
+# ---------------------------------------------------------------------------
+# 5b. The backup's role: the reader's grants, then CREATEDB. See BACKUP_ROLE.
+# ---------------------------------------------------------------------------
+backup_exists="$(psql_owner -A -t -c "SELECT 1 FROM pg_roles WHERE rolname = '${BACKUP_ROLE}'")"
+if [ -z "${backup_exists}" ]; then
+  backup_verb=CREATE
+  log "creating role ${BACKUP_ROLE}"
+else
+  backup_verb=ALTER
+  log "role ${BACKUP_ROLE} already exists; resetting its password and its grants"
+fi
+
+psql_owner -v pass="${INNSEGL_BACKUP_PASSWORD}" -v role="${BACKUP_ROLE}" <<SQL
+${backup_verb} ROLE :"role" LOGIN PASSWORD :'pass';
+SQL
+
+log "applying ${READONLY_SQL} to ${BACKUP_ROLE}"
+apply_readonly_sql "${BACKUP_ROLE}"
+
+# AFTER the grants, never before: readonly.sql ends with NOCREATEDB and the
+# order is what makes this the effective state rather than a line that was
+# silently overwritten.
+log "granting CREATEDB to ${BACKUP_ROLE} (throwaway restore databases only)"
+psql_owner -v role="${BACKUP_ROLE}" <<'SQL'
+ALTER ROLE :"role" CREATEDB;
+SQL
 
 # ---------------------------------------------------------------------------
 # 6. Ask the server about the reader, for the same reason as step 4.
 # ---------------------------------------------------------------------------
 log "verifying the read-only credential against the server"
-exec sh "${HERE}/verify-reader-role.sh"
+sh "${HERE}/verify-reader-role.sh"
+
+# ---------------------------------------------------------------------------
+# 7. And the backup's, which is the one role whose POSITIVE case matters as
+#    much as its refusals: a scope too narrow to take a backup fails at 3am in
+#    a service nobody is watching. OPS-043.
+# ---------------------------------------------------------------------------
+log "verifying the backup credential against the server"
+exec sh "${HERE}/verify-backup-role.sh"

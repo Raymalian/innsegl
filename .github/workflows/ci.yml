@@ -229,6 +229,25 @@ jobs:
       - name: Resolve the repository from a worktree, and refuse linking one
         run: ./scripts/worktree-link-selftest.sh
 
+  backup-service:
+    name: backup service
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-044, OPS-046 and OPS-047. The backup moved off a host scheduler and
+      # into the deployment; these assert that the host scheduler is gone, that
+      # the service holds no container-runtime socket -- a process holding that
+      # socket is root on the host, which is the whole reason for the move --
+      # and that readiness names a backup which has not run inside its window.
+      # The last case is what keeps the rest honest: `unverified` must be
+      # HEALTHY, or a healthcheck that failed on everything would pass every
+      # negative case and take a stack down for the ordinary state of a ledger
+      # whose tail has not sealed yet.
+      # No Docker: the healthcheck is a pure function of a marker and a clock.
+      - name: The backup runs in the deployment and holds no socket
+        run: ./scripts/backup-service-selftest.sh
+
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest
