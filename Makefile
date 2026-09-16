@@ -25,8 +25,7 @@ COVERPROFILE := cover.out
         sigstore-up sigstore-verify sigstore-down rekor-tlog-id rekor-reindex \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
-        innsegl-trust-volumes innsegl-trust-status innsegl-backup-schedule \
-        innsegl-backup-schedule-status innsegl-backup-unschedule \
+        innsegl-trust-volumes innsegl-trust-status \
         innsegl-stack-clean innsegl-up-here innsegl-link innsegl-install-signer verify-branch \
         verify-branch-selftest start link sign clean
 
@@ -701,29 +700,33 @@ innsegl-purge:
 INNSEGL_BACKUP_DIR ?= backups
 
 ## innsegl-backup: pg_dump the ledger and verify it against the sealed segments
+# THROUGH THE SERVICE'S OWN IMAGE, so this is the same command on both
+# platforms and needs nothing installed on the machine. The script became a
+# network client and wants a Postgres client wherever it runs; the service
+# carries one, and the alternative — "install postgresql-client first" — is the
+# host dependency this issue exists to remove.
 innsegl-backup:
-	INNSEGL_BACKUP_DIR='$(INNSEGL_BACKUP_DIR)' scripts/backup-ledger.sh --out '$(INNSEGL_BACKUP_DIR)'
+	$(INNSEGL_COMPOSE) run --rm --entrypoint /innsegl/scripts/backup-ledger.sh \
+	  innsegl-backup --out /backups
 
-# The same script, on a timer (#160 finished; OPS-035). It had a self-test and
-# a verified exit-status contract and had never once run unattended: a backup
-# that happens when someone remembers has not happened since the last time
-# someone remembered. doc 05 §2 wants the dump off the box in production;
-# locally the value is a directory OUTSIDE the checkout, so a `git clean` or a
-# re-clone does not take the copy with it. INNSEGL_BACKUP_DIR is not defaulted
-# here to a path: scripts/backup-schedule.sh computes one at install time,
-# because a shipped file may not name a directory on the operator's machine.
-
-## innsegl-backup-schedule: run the ledger backup on a timer, off the checkout
-innsegl-backup-schedule:
-	scripts/backup-schedule.sh install
-
-## innsegl-backup-schedule-status: what is on the timer, read out of the unit
-innsegl-backup-schedule-status:
-	@scripts/backup-schedule.sh status
-
-## innsegl-backup-unschedule: take the ledger backup off the timer
-innsegl-backup-unschedule:
-	scripts/backup-schedule.sh uninstall
+# THE SCHEDULE IS NOT HERE ANY MORE (RM-146, #237). It was a host scheduler —
+# launchd on one platform, systemd on the other, two unit layouts, and a
+# scheduler that has to exist at all; three CI failures in one day came from
+# that split, every one of them in the harness rather than in the thing being
+# tested. It also reached the ledger through the container runtime, so the
+# thing taking backups held a socket that is root on the machine.
+#
+# `innsegl-backup` in deploy/compose/innsegl.yml is the schedule now: it starts
+# and stops with the stack, holds no socket, and reports through its own
+# healthcheck when a backup has not happened inside its window. The target
+# above stays for the one-off run an operator wants to take by hand.
+#
+# It needs a Postgres client, because it stopped reaching into containers and
+# became a network client. The service carries one; on a machine that does not,
+# run it the way the service does:
+#
+#   docker compose -f deploy/compose/innsegl.yml run --rm \
+#     --entrypoint /innsegl/scripts/backup-ledger.sh innsegl-backup --out /backups
 
 # ---------------------------------------------------------------------------
 # The merge gate for agent-signed commits (#173, RM-108).
