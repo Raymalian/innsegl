@@ -27,6 +27,7 @@
 #
 #   INNSEGL_MCP_ADMIN_URL   default http://127.0.0.1:28090/   register, retire
 #   INNSEGL_MCP_URL         default http://127.0.0.1:28080/   sign
+#   INNSEGL_API_URL         default http://127.0.0.1:8082     is a run still live
 #
 # The two URLs are not a mistake. #170 put the identity lifecycle on a listener
 # the model's MCP client is never pointed at, so registering and signing happen
@@ -43,6 +44,11 @@ set -eu
 ADMIN_URL="${INNSEGL_MCP_ADMIN_URL:-http://127.0.0.1:28090/}"
 AGENT_URL="${INNSEGL_MCP_URL:-http://127.0.0.1:28080/}"
 AGENT_TYPE="${INNSEGL_AGENT_TYPE:-orchestrator}"
+# The READ side, and the only question this script asks it: is the run on this
+# tree's pointer still one that may sign? It is a third address because it is a
+# third service — the two MCP listeners write, `innsegl api` reads — and the
+# harness hook already reaches it at this default.
+API_URL="${INNSEGL_API_URL:-http://127.0.0.1:8082}"
 
 usage() {
   echo "usage: innsegl-commit.sh -m <message> | -F <file>" >&2
@@ -109,6 +115,12 @@ ROOT="$(git rev-parse --show-toplevel)"
 #
 # An explicit -r still wins, and an absent pointer still falls back to minting a
 # run, so nothing that worked before stops working.
+#
+# THE POINTER IS KEPT, not just read. RM-134 (#213): a pointer whose run has
+# been retired strands the tree, and the answer is a successor written back
+# here — so the file it was read from and the key that names it stay in scope.
+PTR_FILE=""
+RUN_FROM_POINTER=""
 if [ -z "$RUN_GIVEN" ] && [ -n "$ROOT" ]; then
   _key="$(printf '%s' "$(CDPATH= cd -- "$ROOT" && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
   _ptr="${INNSEGL_RUNS_DIR:-$HOME/.innsegl/runs}/by-tree/$_key"
@@ -116,7 +128,13 @@ if [ -z "$RUN_GIVEN" ] && [ -n "$ROOT" ]; then
     RUN_GIVEN="$(sed -n 1p "$_ptr")"
     [ -n "$TASK_GIVEN" ] || TASK_GIVEN="$(sed -n 2p "$_ptr")"
     [ -n "$WORKTREE" ] || WORKTREE="$(sed -n 3p "$_ptr")"
-    echo "innsegl-commit: this tree belongs to $RUN_GIVEN; signing under it" >&2
+    PTR_FILE="$_ptr"
+    TREE_KEY="$_key"
+    RUN_FROM_POINTER=1
+    # It says what it FOUND and not what it is about to do. Whether this run
+    # may still sign is decided below, and the line used to promise "signing
+    # under it" several hundred lines before anything had asked.
+    echo "innsegl-commit: this tree's pointer names $RUN_GIVEN" >&2
   fi
 fi
 
@@ -329,51 +347,199 @@ print(v)' "$1"
 
 fail() { echo "innsegl-commit: $*" >&2; exit 1; }
 
+# register_run KEY -- one registration, setting REGISTERED_RUN.
+#
+# It is a function because there are now two callers: the run this script mints
+# for a tree with no pointer, and the SUCCESSOR a retired pointer needs. Two
+# copies would be two things that can disagree about repo, branch or the
+# schema-1 fallback below -- and the fallback is the half nobody exercises
+# until a deployment is mid-upgrade, which is exactly when a divergence bites.
+#
+# repo and branch are required members of run_registered under schema 2
+# (ADR-0045), and this script already resolves both -- it just used to keep
+# them to itself, so a run it registered recorded nowhere it worked unless the
+# signature that followed happened to succeed.
+#
+# AND IT FALLS BACK, because a client and a server upgrade at different
+# moments. The MCP SDK validates arguments against the tool's advertised
+# inputSchema and refuses additional properties outright:
+#
+#   validating "arguments": validating root: unexpected additional
+#   properties ["repo" "branch"]
+#
+# So a new script against a not-yet-restarted server does not degrade, it
+# STOPS -- and stopping means no identity, which means the human cannot commit
+# at all. The second attempt drops the two members and registers the schema 1
+# event that server still writes. Nothing is lost that was not already absent
+# before ADR-0045, and the moment the deployment is restarted the first attempt
+# succeeds again.
+#
+# The retry is driven by the PAYLOAD, not by the exit status: `mcp` returns 0
+# for a JSON-RPC error, because the transport worked and the server answered.
+# `field` is what reads the answer, so `field` is what decides.
+REGISTERED_RUN=""
+register_run() {
+  _rk="$1"
+  _out="$(mcp "$ADMIN_URL" register_agent \
+    "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s","repo":"%s","branch":"%s"}' \
+      "$AGENT_TYPE" "$TASK" "$_rk" "$REPO" "$BRANCH")")" \
+    || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
+  if REGISTERED_RUN="$(printf '%s' "$_out" | field run_id 2>/dev/null)"; then
+    return 0
+  fi
+  _out="$(mcp "$ADMIN_URL" register_agent \
+    "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' \
+      "$AGENT_TYPE" "$TASK" "$_rk")")" \
+    || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
+  REGISTERED_RUN="$(printf '%s' "$_out" | field run_id)" || fail "register_agent refused"
+  echo "innsegl-commit: this deployment does not accept repo/branch yet, so the run" >&2
+  echo "innsegl-commit:   records no repository (schema 1). Restart it to fix that:" >&2
+  echo "innsegl-commit:   make innsegl-up-here" >&2
+}
+
+# run_state RUN -- what the ledger says about a run, in one word:
+#
+#   active   registered, not retired, not expired -- it may sign
+#   retired  `run_retired` is on the chain (IP §6.2)
+#   expired  `run_expired` is -- the reaper took it (IP §6.7)
+#   absent   this ledger holds no such run
+#   unknown  the question could not be asked
+#
+# It asks the READ api and nothing else. The alternatives were worse: every
+# write tool that refuses a retired run also does something to a live one, so
+# probing with `get_credential` would append a `credential_issued` on the happy
+# path, and probing by calling `sign_commit` and reading the refusal is exactly
+# the "after the fact" this exists to get in front of.
+#
+# `unknown` is deliberately not `retired`. A probe that did not run is not
+# evidence that a run is dead, and treating it as one would strand every tree
+# in the deployment whenever the read API was down -- the same bug as #213 with
+# a wider blast radius.
+run_state() {
+  _rs="$(curl -s --connect-timeout 2 --max-time 5 -w '\n%{http_code}' \
+    "$API_URL/api/v1/runs/$1" 2>/dev/null)" || { echo unknown; return 0; }
+  case "$(printf '%s' "$_rs" | tail -n 1)" in
+    200)
+      printf '%s' "$_rs" | sed '$d' | python3 -c '
+import json,sys
+try:
+    s = json.load(sys.stdin).get("status", "")
+except Exception:
+    s = ""
+print(s if s in ("active", "retired", "expired") else "unknown")' 2>/dev/null \
+        || echo unknown
+      ;;
+    404) echo absent ;;
+    *)   echo unknown ;;
+  esac
+}
+
+# ---- 0. the run this tree points at has to be one that may still sign -------
+#
+# RM-134 (#213). Until now whatever the pointer said went straight to
+# `sign_commit`, and when the run had been retired the tool refused -- rightly,
+# IP §6.2 makes retirement effective immediately -- leaving the tree
+# uncommittable by anyone until somebody deleted the pointer by hand. Three
+# separate callers hit that in one day and all three invented the same
+# workaround. A workaround three people invent on the spot is a missing feature.
+#
+# WHY A SUCCESSOR AND NOT A RE-REGISTRATION. A run id is a pure function of
+# (agent_type, task, idempotency_key) -- registerAgentRunID -- so asking again
+# with the same three values DERIVES THE SAME RETIRED ID, `register_agent`
+# replays its recorded reply, and the caller is handed the dead run a second
+# time. Deleting the pointer does not help for the same reason: the next
+# derivation names the same run. The successor therefore has to differ in
+# something the derivation SEES, and the one thing free to vary is the key.
+#
+# SO THE KEY NAMES THE RUN IT SUCCEEDS. That makes it distinct -- no key that
+# produced the predecessor can contain the predecessor's own id -- and it makes
+# the succession a RECORD rather than a log line: register_agent writes the
+# idempotency key into `run_registered`, so the chain itself says which run
+# this one continues. observe_session made the same move for its markers, and
+# for the same reason.
+#
+# It is also DETERMINISTIC, keyed on the retired run and the tree. A crash
+# between the registration and the pointer rewrite, or a pointer that cannot be
+# written at all, leaves the next attempt deriving the same successor instead
+# of minting a second identity for one tree (IP §6.6).
+#
+# Only a run resolved FROM THE POINTER is succeeded. An explicit -r means that
+# run and nothing else -- the harness signs a subagent's leftover work under it
+# so the work is attributed to the agent that did it (ADR-0046) -- and quietly
+# turning that into a different agent's commit is precisely the swap this
+# project exists not to make. A retired -r still goes to `sign_commit` and is
+# still refused there, by the tool, naming the run the caller named.
+if [ -n "$RUN_GIVEN" ] && [ -n "$RUN_FROM_POINTER" ]; then
+  case "$(run_state "$RUN_GIVEN")" in
+    retired|expired)
+      SUPERSEDED="$RUN_GIVEN"
+      echo "innsegl-commit: $SUPERSEDED is no longer a run that may sign." >&2
+      echo "innsegl-commit:   Registering a SUCCESSOR for this tree rather than" >&2
+      echo "innsegl-commit:   re-deriving, which would name the same dead run." >&2
+      register_run "succeeds-$SUPERSEDED-$TREE_KEY"
+      RUN_GIVEN="$REGISTERED_RUN"
+      echo "innsegl-commit: $SUPERSEDED  ->  $RUN_GIVEN" >&2
+      echo "innsegl-commit:   this tree's work now spans two runs, and the successor's" >&2
+      echo "innsegl-commit:   run_registered carries the key that names the first." >&2
+      # THE POINTER CARRIES THE SUCCESSION TOO. Line 4 is new and inert: the
+      # hook writes three lines and this script reads three, so a reader that
+      # predates it is unaffected, and a human opening the file can see the
+      # tree did not always belong to the run at the top of it.
+      if printf '%s\n%s\n%s\nsuperseded %s\n' \
+           "$RUN_GIVEN" "$TASK" "$WORKTREE" "$SUPERSEDED" > "$PTR_FILE" 2>/dev/null; then
+        :
+      else
+        echo "innsegl-commit: the pointer could not be rewritten; it still names $SUPERSEDED." >&2
+        echo "innsegl-commit:   Harmless: the successor is derived from that run and this" >&2
+        echo "innsegl-commit:   tree, so the next commit finds $RUN_GIVEN again rather than" >&2
+        echo "innsegl-commit:   registering a second identity for one tree (IP §6.6)." >&2
+      fi
+      ;;
+    absent)
+      # NOT a retirement, and not something to register over. A pointer naming
+      # a run the ledger never held means the pointer is wrong or it belongs to
+      # another deployment; inventing an identity here would attribute this
+      # tree's work to a run whose own history cannot be found, which is the
+      # opposite of what the pointer is for.
+      echo "innsegl-commit: this tree's pointer names $RUN_GIVEN, which the ledger" >&2
+      echo "innsegl-commit:   at $API_URL has never held." >&2
+      echo "innsegl-commit:" >&2
+      echo "innsegl-commit:   A run that never existed is a broken pointer, not a" >&2
+      echo "innsegl-commit:   retirement, so nothing is registered in its place." >&2
+      echo "innsegl-commit:" >&2
+      echo "innsegl-commit:   Either this is the wrong deployment -- check INNSEGL_API_URL" >&2
+      echo "innsegl-commit:   and INNSEGL_RUNS_DIR name the same one -- or the pointer is" >&2
+      echo "innsegl-commit:   stale and removing it lets this script mint a run:" >&2
+      echo "innsegl-commit:     rm $PTR_FILE" >&2
+      exit 1
+      ;;
+    unknown)
+      echo "innsegl-commit: whether $RUN_GIVEN may still sign could not be asked of" >&2
+      echo "innsegl-commit:   $API_URL, so this goes ahead as it always did. If the run" >&2
+      echo "innsegl-commit:   has been retired, sign_commit is what will say so." >&2
+      ;;
+  esac
+fi
+
 # ---- 1. an identity ---------------------------------------------------------
 if [ -n "$RUN_GIVEN" ]; then
   # Somebody else's run, and somebody else's to retire. See -r.
   RUN="$RUN_GIVEN"
   echo "innsegl-commit: signing under the existing run $RUN (task $TASK)"
 else
-  # repo and branch are required members of run_registered under schema 2
-  # (ADR-0045), and this script already resolves both -- it just used to keep
-  # them to itself, so a run it registered recorded nowhere it worked unless
-  # the signature that followed happened to succeed.
-  #
-  # AND IT FALLS BACK, because a client and a server upgrade at different
-  # moments. The MCP SDK validates arguments against the tool's advertised
-  # inputSchema and refuses additional properties outright:
-  #
-  #   validating "arguments": validating root: unexpected additional
-  #   properties ["repo" "branch"]
-  #
-  # So a new script against a not-yet-restarted server does not degrade, it
-  # STOPS -- and stopping means no identity, which means the human cannot
-  # commit at all. The second attempt drops the two members and registers the
-  # schema 1 event that server still writes. Nothing is lost that was not
-  # already absent before ADR-0045, and the moment the deployment is restarted
-  # the first attempt succeeds again.
-  # The retry is driven by the PAYLOAD, not by the exit status: `mcp` returns
-  # 0 for a JSON-RPC error, because the transport worked and the server
-  # answered. `field` is what reads the answer, so `field` is what decides.
-  V1ARGS="$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' \
-    "$AGENT_TYPE" "$TASK" "$RUN_KEY")"
-  OUT="$(mcp "$ADMIN_URL" register_agent \
-    "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s","repo":"%s","branch":"%s"}' \
-      "$AGENT_TYPE" "$TASK" "$RUN_KEY" "$REPO" "$BRANCH")")" \
-    || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
-  if ! RUN="$(printf '%s' "$OUT" | field run_id 2>/dev/null)"; then
-    OUT="$(mcp "$ADMIN_URL" register_agent "$V1ARGS")" \
-      || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
-    RUN="$(printf '%s' "$OUT" | field run_id)" || fail "register_agent refused"
-    echo "innsegl-commit: this deployment does not accept repo/branch yet, so the run" >&2
-    echo "innsegl-commit:   records no repository (schema 1). Restart it to fix that:" >&2
-    echo "innsegl-commit:   make innsegl-up-here" >&2
-  fi
+  register_run "$RUN_KEY"
+  RUN="$REGISTERED_RUN"
   echo "innsegl-commit: run $RUN  (agent $AGENT_TYPE, task $TASK)"
 
   # retire whatever happens next, including a failure. An identity left live
   # after a failed signature is exactly the orphan retirement exists to prevent.
+  #
+  # A SUCCESSOR IS NOT RETIRED HERE, and that is why it is registered above
+  # this branch rather than inside it. The pointer now names it, so the tree's
+  # next commit has to find it alive; retiring it on the way out would leave
+  # the pointer naming a retired run again, which is the bug. It ends the way
+  # the harness's own run ends -- retired by whoever owns the session, or
+  # expired by the reaper as run_expired (IP §6.7).
   retire() {
     mcp "$ADMIN_URL" retire_agent "$(printf '{"run_id":"%s"}' "$RUN")" >/dev/null 2>&1 || true
   }
