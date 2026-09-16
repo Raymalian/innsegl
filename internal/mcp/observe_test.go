@@ -398,8 +398,12 @@ func TestObserveToolCallAdvertisesTheDocumentedSchemas(t *testing.T) {
 	if tool == nil {
 		t.Fatalf("tools/list does not advertise observe_tool_call: %+v", res.Tools)
 	}
+	// RM-142 (#226) added session_id, and cwd and agent_type with it: a call
+	// that registers a session on first sight needs exactly what a start needs.
+	// Arguments are additive and are not a protected surface; tool names and
+	// error classes are, and neither moved.
 	assertSchemaProperties(t, "inputSchema", tool.InputSchema,
-		[]string{"run_id", "tool", "body", "run_token"})
+		[]string{"run_id", "session_id", "tool", "body", "cwd", "agent_type", "run_token"})
 	assertSchemaProperties(t, "outputSchema", tool.OutputSchema,
 		[]string{"digest", "stored"})
 }
@@ -805,9 +809,14 @@ func TestObserveToolCallRefusesARunIDThatNamesNoRun(t *testing.T) {
 	env := otcSetup(t, nil)
 	session := otcServe(t)
 
+	// "empty" is gone from this table, deliberately. RM-142 (#226) made an
+	// empty run_id legal when a session_id names the run, so an empty one with
+	// NEITHER given is no longer "that run does not exist" — it is "you named
+	// no run at all", which MCP-064 asserts with its own class and message.
+	// Leaving it here would have asserted RUN_NOT_FOUND for a caller who named
+	// nothing, which reads as a verdict about a run rather than about the call.
 	for name, runID := range map[string]string{
 		"not an identifier": "Run With Spaces",
-		"empty":             "",
 		"too long":          strings.Repeat("r", 64),
 		"unknown":           "run-nobody",
 	} {
