@@ -17,7 +17,7 @@ import (
 // retention is a separate check on the bucket configuration.
 const probeRetention = 2 * time.Minute
 
-func newTestWORM(t *testing.T, c *minioContainer, bucket string, mode RetentionMode, retention time.Duration) *WORM {
+func newTestWORM(t *testing.T, c *objectStoreContainer, bucket string, mode RetentionMode, retention time.Duration) *WORM {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -25,8 +25,8 @@ func newTestWORM(t *testing.T, c *minioContainer, bucket string, mode RetentionM
 
 	w, err := NewWORM(ctx, WORMConfig{
 		Endpoint:  c.endpoint,
-		AccessKey: minioRootUser,
-		SecretKey: minioRootPassword,
+		AccessKey: storeRootUser,
+		SecretKey: storeRootPassword,
 		Bucket:    bucket,
 		Mode:      mode,
 		Retention: retention,
@@ -84,7 +84,7 @@ func mustFail(t *testing.T, r *CanaryReport, name string) {
 //  3. The probe's bytes are read back and compared after the refusal. "Refused"
 //     is only true if the object is still there and unchanged.
 func TestSEG005DeletionCanaryRequiresTheStoreToRefuseDeletion(t *testing.T) {
-	c := requireMinIO(t)
+	c := requireObjectStore(t)
 	ctx := context.Background()
 
 	t.Run("object lock on: the store refuses and the canary passes", func(t *testing.T) {
@@ -182,7 +182,7 @@ func TestSEG005DeletionCanaryRequiresTheStoreToRefuseDeletion(t *testing.T) {
 // The canary must refuse to certify a store it could not exercise. An error
 // reaching the object store is not a refusal to delete.
 func TestSEG005CanaryFailsWhenItCannotReachTheStore(t *testing.T) {
-	c := requireMinIO(t)
+	c := requireObjectStore(t)
 	bucket := freshBucket(t, c, true)
 	w := newTestWORM(t, c, bucket, RetentionCompliance, probeRetention)
 
@@ -201,7 +201,7 @@ func TestSEG005CanaryFailsWhenItCannotReachTheStore(t *testing.T) {
 // a second write of identical bytes is a no-op, and a second write of
 // different bytes under the same name is refused.
 func TestWORMStoreIsWriteOnceAndRoundTrips(t *testing.T) {
-	c := requireMinIO(t)
+	c := requireObjectStore(t)
 	bucket := freshBucket(t, c, true)
 	w := newTestWORM(t, c, bucket, RetentionCompliance, probeRetention)
 
@@ -252,7 +252,7 @@ func TestWORMStoreIsWriteOnceAndRoundTrips(t *testing.T) {
 // opt-in — and an opt-in check that never fires is decoration, so this asserts
 // it fires.
 func TestCanaryChecksTheBucketRetentionWindowWhenAskedTo(t *testing.T) {
-	c := requireMinIO(t)
+	c := requireObjectStore(t)
 	ctx := context.Background()
 
 	t.Run("a default rule shorter than required fails", func(t *testing.T) {

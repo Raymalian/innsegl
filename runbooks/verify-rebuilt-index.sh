@@ -74,7 +74,7 @@ Usage:
 Options:
   --segments DIR       directory of sealed segment objects, each file named by
                        its segment_id -- which is the object key in the bucket,
-                       so `mc cp --recursive` produces this layout unchanged
+                       so `aws s3 cp --recursive` produces this layout unchanged
   --index-hashes FILE  event_hash values from the rebuilt index, one per line,
                        in ascending chain_position order. Produce it with:
                          psql "$DSN" -Atc \
