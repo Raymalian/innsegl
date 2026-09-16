@@ -17,7 +17,8 @@ import (
 //
 // #109: seven of the twelve were not compose services at all. The consequence
 // was not untidiness. `test/smoke`, `internal/segment`, `cmd/innsegl` and
-// `test/chaos` each stood up their own Postgres, their own MinIO and their own
+// `test/chaos` each stood up their own Postgres, their own object store and
+// their own
 // `innsegl serve` with plain `docker run`, so "the reference deployment" named
 // no artifact anyone could point at — and E8 is scheduled to raise
 // verify.innsegl.dev and dashboard.innsegl.dev *from* it.
@@ -49,7 +50,15 @@ var doc05Rows = []struct {
 	{"fulcio", "local CA"},
 	{"rekor", "local transparency log"},
 	{"postgres", "ledger hot tier"},
-	{"minio", "object storage with object lock enabled"},
+	// doc 05 §1's object-store row is THREE services since RM-143 (#227), and
+	// naming all three here is the point rather than an expansion of one row:
+	// the split is what makes object lock enforceable at all. The gateway is
+	// where the lock lives; the Filer is a second door to the same bytes with
+	// no credential on it, and OPS-029 is the case that measures which of them
+	// anything else can reach.
+	{"innsegl-object-store", "object storage with object lock enabled"},
+	{"innsegl-object-filer", "object storage with object lock enabled"},
+	{"innsegl-s3", "object storage with object lock enabled"},
 	{"innsegl-mcp", "the MCP server"},
 	{"innsegl-reconciler", "intent expiry, Rekor cross-check, drift detection"},
 	{"innsegl-sealer", "segment sealing and anchoring"},

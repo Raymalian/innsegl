@@ -196,7 +196,7 @@ reachable from outside get one narrow network of their own.
   it, it needs a per-process overlay — the external network name is already
   parameterised (`INNSEGL_SIGSTORE_OIDC_NETWORK`) so that is a rename, not a
   rework.
-- **Postgres, MinIO and the built `innsegl-*` services.** The rest of doc 05 §1,
+- **Postgres, the object store and the built `innsegl-*` services.** The rest of doc 05 §1,
   and other issues' files.
 
 ## Lifted from RM-012, not rebuilt

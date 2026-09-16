@@ -79,7 +79,7 @@ segments, and the issue names it as this dump's eventual home too, but
 shipping upload credentials for a bucket this repository does not operate,
 to a destination the maintainer has not chosen, is a bigger decision than a
 backup script should make silently. Moving the file to WORM storage
-afterwards is one `mc cp`, regardless of which bucket is decided on.
+afterwards is one `aws s3 cp`, regardless of which bucket is decided on.
 
 **What is in the dump.** The whole `innsegl` database, not a
 `innsegl.events`/`innsegl.chain` extract. `index-rebuild.md` §4's restore path
@@ -133,7 +133,7 @@ changing either script.
   cron-invoked command; nothing here adds a scheduled job.
 - Does not upload anywhere. See "where the dump goes" above.
 - Does not touch the sealed segments. Fetching them is read-only, the same
-  `mc cp` `index-rebuild.md` §6.1 documents by hand.
+  `aws s3 cp` `index-rebuild.md` §6.1 documents by hand.
 - Does not replace `index-rebuild.md`. That runbook is still what an operator
   reads to restore this dump during an incident; this one is what produces a
   dump worth restoring.

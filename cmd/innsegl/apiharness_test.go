@@ -34,7 +34,7 @@ import (
 //
 // Eight harnesses in this repository treat "Docker is absent" and "the
 // container failed to start" as the same outcome and skip for both — including
-// `requireMinIOForCLI` in this very package, which is one of the eight. The
+// `requireObjectStoreForCLI` in this very package, which is one of the eight. The
 // second is an infrastructure fault: skipping it makes `go test` exit zero and
 // print `ok` while the cases that carry the guarantee never ran.
 //

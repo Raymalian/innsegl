@@ -86,7 +86,7 @@ under a shared name.
 
 ## What is not here
 
-- **Fulcio, Rekor, Postgres, MinIO, and the built `innsegl-*` services.** They
+- **Fulcio, Rekor, Postgres, the object store, and the built `innsegl-*` services.** They
   are the rest of doc 05 §1 and other issues' files. This file declares the
   networks and volumes they attach to; see the membership rules written at each
   declaration in `../spire.yml`.

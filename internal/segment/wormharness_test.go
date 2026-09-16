@@ -29,19 +29,42 @@ import (
 // Postgres.
 //
 // Without Docker these tests skip with a message naming what was not proven,
-// rather than passing quietly. With Docker present and MinIO refusing to
-// start, they FAIL — see errDependencyAbsent.
+// rather than passing quietly. With Docker present and the object store
+// refusing to start, they FAIL — see errDependencyAbsent.
 
 const (
-	// defaultMinIOImage is pinned to a release tag rather than `latest`.
-	// RM-009 pins Postgres by major version because it asserts behaviour that
-	// has been stable for a decade. This is the opposite case: the whole
-	// subject of SEG-005 is one server's object-lock enforcement, so the
-	// version that enforcement was observed in is part of the evidence.
-	defaultMinIOImage = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+	// defaultObjectStoreImage is pinned to a release digest rather than
+	// `latest`. RM-009 pins Postgres by major version because it asserts
+	// behaviour that has been stable for a decade. This is the opposite case:
+	// the whole subject of SEG-005 is one server's object-lock enforcement, so
+	// the version that enforcement was observed in is part of the evidence.
+	//
+	// The store itself changed in RM-143 (#227). The previous one was archived
+	// upstream and delisted from the registry this file pulled it from, so the
+	// pin stopped resolving at all. The replacement below was measured against
+	// SEG-005 under the same configuration — the same buckets, compliance and
+	// governance modes, the same canary — and that measurement is what this
+	// version is pinned on.
+	defaultObjectStoreImage = "chrislusf/seaweedfs:4.46@sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62"
 
-	minioRootUser     = "innsegl"
-	minioRootPassword = "innsegl-test-secret"
+	storeRootUser     = "innsegl"
+	storeRootPassword = "innsegl-test-secret"
+
+	// storeIdentities is the S3 identity file this harness's store is started
+	// with. The store has no default account, so without this file there is no
+	// credential that can do anything at all (see startObjectStore).
+	//
+	// The grant is deliberately whole-server admin. SEG-005 measures a refusal
+	// by OBJECT LOCK, and a refusal for want of permission is the same
+	// AccessDenied on the wire; the canary's own anti-vacuity guard — it
+	// permanently deletes a version before it will call a refusal a refusal —
+	// can only run if these credentials really could delete. Scoping an
+	// identity down is a separate property of the shipped deployment, measured
+	// against the shipped identity file in test/deploy; an under-privileged
+	// identity here would manufacture a pass.
+	storeIdentities = `{"identities":[{"name":"innsegl","credentials":[` +
+		`{"accessKey":"` + storeRootUser + `","secretKey":"` + storeRootPassword + `"}],` +
+		`"actions":["Admin","Read","Write","List","Tagging"]}]}`
 )
 
 var bucketSeq atomic.Int64
@@ -54,14 +77,14 @@ var bucketSeq atomic.Int64
 // INNSEGL_TEST_NO_DOCKER asks for none. Nothing else wraps it, and that
 // distinction is the point.
 //
-// Everything else that can go wrong bringing MinIO up — a port that cannot be
-// reserved, an image that will not resolve, an exhausted Docker address pool,
-// a server that never becomes ready — happens on a machine that HAS Docker,
-// and is a FAILURE. Reporting one as a skip turns it into a pass-shaped
-// outcome: `go test` exits zero, the package reports ok, and SEG-005's
-// deletion canary — the control that proves WORM refuses deletion — never
-// asked. #101 fixed this in nine harnesses; this package was outside that
-// issue's ownership and kept it until #126.
+// Everything else that can go wrong bringing the object store up — a port that
+// cannot be reserved, an image that will not resolve, an exhausted Docker
+// address pool, a server that never becomes ready — happens on a machine that
+// HAS Docker, and is a FAILURE. Reporting one as a skip turns it into a
+// pass-shaped outcome: `go test` exits zero, the package reports ok, and
+// SEG-005's deletion canary — the control that proves WORM refuses deletion —
+// never asked. #101 fixed this in nine harnesses; this package was outside
+// that issue's ownership and kept it until #126.
 //
 // Both branches are exercised by
 // TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure.
@@ -80,7 +103,7 @@ func startupOutcome(err error) (skip, failure string) {
 	}
 }
 
-// harnessRequirement is what requireMinIO must do for the calling test.
+// harnessRequirement is what requireObjectStore must do for the calling test.
 type harnessRequirement int
 
 const (
@@ -114,11 +137,11 @@ func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-func minioImage() string {
-	if v := os.Getenv("INNSEGL_TEST_MINIO_IMAGE"); v != "" {
+func objectStoreImage() string {
+	if v := os.Getenv("INNSEGL_TEST_OBJECT_STORE_IMAGE"); v != "" {
 		return v
 	}
-	return defaultMinIOImage
+	return defaultObjectStoreImage
 }
 
 // dockerCmd runs one docker command and returns its trimmed stdout.
@@ -163,14 +186,33 @@ func freeHostPort(ctx context.Context) (string, error) {
 	return port, err
 }
 
-// minioContainer is one containerised MinIO.
-type minioContainer struct {
+// objectStoreContainer is one containerised object store.
+type objectStoreContainer struct {
 	id       string
 	image    string
 	endpoint string
 }
 
-// startMinIO launches MinIO on a fixed host port and waits until it serves.
+// startObjectStore launches the object store on a fixed host port and waits
+// until it serves.
+//
+// THIS STORE SHIPS NO DEFAULT CREDENTIALS, and that is the trap here. Started
+// without an identity file it refuses every signed request with "Signed
+// request requires setting up SeaweedFS S3 authentication", which arrives at
+// the caller as AccessDenied on a write — indistinguishable from object lock
+// working. A harness that omitted the identity file would see SEG-005 report
+// the same refusals while measuring authentication, not the lock. So the file
+// is written into the container before the server is exec'd, and waitReady
+// will not let a test start until a signed request has been answered.
+//
+// ONE CONTAINER HERE, THREE IN THE REFERENCE DEPLOYMENT (a store, a Filer and
+// an S3 gateway across two networks), and which difference that is matters.
+// What this package measures is the GATEWAY's object-lock enforcement, which
+// is the gateway's alone: the same binary, the same identity file, the same
+// bucket. The split is about REACHABILITY of the Filer's own API — a second
+// door to the same bytes with no lock on it — and that is measured by OPS-029
+// in test/deploy against the compose file, where networks exist. The Filer's
+// port is not published here either way.
 //
 // Every error it returns is a fault on a machine that has Docker; none of them
 // wrap errDependencyAbsent.
@@ -180,22 +222,41 @@ type minioContainer struct {
 // (crash_test.go), and a TestMain that started a container would start one in
 // every one of those children. A container per test function is slower and
 // unambiguous.
-func startMinIO(ctx context.Context) (*minioContainer, error) {
-	image := minioImage()
+func startObjectStore(ctx context.Context) (*objectStoreContainer, error) {
+	image := objectStoreImage()
 	port, err := freeHostPort(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reserve a host port: %w", err)
 	}
+	// The identity file is written and then the server replaces the shell, so
+	// nothing can answer a signed request before the credentials exist.
+	//
+	// THREE LISTENERS ARE TURNED OFF: -s3.iam=false is an IAM API served on
+	// the S3 port itself, -s3.port.iceberg=0 an Iceberg REST catalog and
+	// -s3.port.lance=0 a Lance namespace server. None of them is part of
+	// storing a sealed segment, and each is an authenticated write surface on
+	// a service whose entire job here is refusing writes to sealed objects.
 	id, err := dockerCmd(ctx, "run", "--detach",
-		"--publish", "127.0.0.1:"+port+":9000",
-		"--env", "MINIO_ROOT_USER="+minioRootUser,
-		"--env", "MINIO_ROOT_PASSWORD="+minioRootPassword,
-		image, "server", "/data",
+		"--publish", "127.0.0.1:"+port+":8333",
+		"--env", "INNSEGL_S3_IDENTITIES="+storeIdentities,
+		"--entrypoint", "sh",
+		image, "-c",
+		"printf %s \"$INNSEGL_S3_IDENTITIES\" > /tmp/s3-identities.json && "+
+			// -volume.max: EACH BUCKET IS A COLLECTION AND A NEW COLLECTION
+			// IMMEDIATELY RESERVES SEVEN VOLUMES. The store's default cap is
+			// EIGHT, so the second bucket in one container gets one volume and
+			// the third gets none — and a write with nowhere to go comes back as
+			// HTTP 500 "We encountered an internal error, please try again",
+			// which in this package reads exactly like object lock refusing a
+			// write. Measured. Volumes are sparse (eight of them were 256 KiB on
+			// disk), so the cap is raised rather than the buckets reused.
+			"exec weed server -dir=/data -volume.max=100 -s3 -s3.config=/tmp/s3-identities.json "+
+			"-s3.port=8333 -s3.iam=false -s3.port.iceberg=0 -s3.port.lance=0",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("starting %s: %w", image, err)
 	}
-	c := &minioContainer{id: id, image: image, endpoint: "127.0.0.1:" + port}
+	c := &objectStoreContainer{id: id, image: image, endpoint: "127.0.0.1:" + port}
 	if err := c.waitReady(ctx, 90*time.Second); err != nil {
 		if rerr := c.remove(); rerr != nil {
 			return nil, errors.Join(err, rerr)
@@ -205,16 +266,21 @@ func startMinIO(ctx context.Context) (*minioContainer, error) {
 	return c, nil
 }
 
-// client returns a MinIO client for the container, as the root account.
-func (c *minioContainer) client() (*minio.Client, error) {
+// client returns an S3 client for the container, as the account declared in
+// storeIdentities.
+func (c *objectStoreContainer) client() (*minio.Client, error) {
 	return minio.New(c.endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(minioRootUser, minioRootPassword, ""),
+		Creds:  credentials.NewStaticV4(storeRootUser, storeRootPassword, ""),
 		Secure: false,
 	})
 }
 
 // waitReady polls until the server answers an authenticated request.
-func (c *minioContainer) waitReady(ctx context.Context, timeout time.Duration) error {
+//
+// Authenticated on purpose: an unauthenticated health probe would go green on
+// a store that has no credentials at all, which is the state every later
+// refusal would then be misread from.
+func (c *objectStoreContainer) waitReady(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var last error
 	for time.Now().Before(deadline) {
@@ -230,31 +296,31 @@ func (c *minioContainer) waitReady(ctx context.Context, timeout time.Duration) e
 		last = err
 		time.Sleep(250 * time.Millisecond)
 	}
-	return fmt.Errorf("minio in %s never became ready: %w", c.id, last)
+	return fmt.Errorf("the object store in %s never became ready: %w", c.id, last)
 }
 
-func (c *minioContainer) remove() error {
+func (c *objectStoreContainer) remove() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	_, err := dockerCmd(ctx, "rm", "--force", "--volumes", c.id)
 	return err
 }
 
-// requireMinIO hands the calling test a real object store, or ends the test
-// the honest way: a skip when there is no Docker, a FAILURE when Docker is
-// there and MinIO is not. It never lets a WORM test pass without a server, and
-// never reports an infrastructure fault as a skip (#126).
-func requireMinIO(t *testing.T) *minioContainer {
+// requireObjectStore hands the calling test a real object store, or ends the
+// test the honest way: a skip when there is no Docker, a FAILURE when Docker is
+// there and the store is not. It never lets a WORM test pass without a server,
+// and never reports an infrastructure fault as a skip (#126).
+func requireObjectStore(t *testing.T) *objectStoreContainer {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	var c *minioContainer
+	var c *objectStoreContainer
 	skip, failure := startupOutcome(dockerUsable(ctx))
 	if skip == "" && failure == "" {
 		var err error
-		c, err = startMinIO(ctx)
+		c, err = startObjectStore(ctx)
 		skip, failure = startupOutcome(err)
 	}
 
@@ -268,7 +334,7 @@ func requireMinIO(t *testing.T) *minioContainer {
 	case harnessSkipTest:
 		t.Skipf("skipping: no real object store (%s). "+
 			"This test proves nothing about WORM without one; "+
-			"start Docker, or set INNSEGL_TEST_MINIO_IMAGE, and re-run.", skip)
+			"start Docker, or set INNSEGL_TEST_OBJECT_STORE_IMAGE, and re-run.", skip)
 	case harnessProceed:
 	}
 
@@ -285,13 +351,13 @@ func requireMinIO(t *testing.T) *minioContainer {
 // `locked` false is not a degenerate case to be tidied away later: it is the
 // misconfigured deployment SEG-005 exists to catch, and the canary is pointed
 // at one on purpose to prove the check can fail.
-func freshBucket(t *testing.T, c *minioContainer, locked bool) string {
+func freshBucket(t *testing.T, c *objectStoreContainer, locked bool) string {
 	t.Helper()
 
 	name := fmt.Sprintf("seg-%d-%d", os.Getpid()%100000, bucketSeq.Add(1))
 	cl, err := c.client()
 	if err != nil {
-		t.Fatalf("minio client: %v", err)
+		t.Fatalf("object store client: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -305,12 +371,12 @@ func freshBucket(t *testing.T, c *minioContainer, locked bool) string {
 // setBucketRetention gives a bucket the default retention rule a production
 // bucket has (doc 05 §2), so the canary's window check is exercised against a
 // rule the store actually holds rather than one a test asserted about.
-func setBucketRetention(t *testing.T, c *minioContainer, bucket string, mode RetentionMode, days uint) {
+func setBucketRetention(t *testing.T, c *objectStoreContainer, bucket string, mode RetentionMode, days uint) {
 	t.Helper()
 
 	cl, err := c.client()
 	if err != nil {
-		t.Fatalf("minio client: %v", err)
+		t.Fatalf("object store client: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -357,7 +423,7 @@ func TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 		// The exact shape #100 produces on this machine, and the shape the CI
 		// run in #101 produced: Docker is present, working, and refuses to
 		// create the network because its address pools are used up.
-		err := fmt.Errorf("could not start the WORM harness's minio: %w",
+		err := fmt.Errorf("could not start the WORM harness's object store: %w",
 			errors.New("Error response from daemon: could not find an available, "+
 				"non-overlapping IPv4 address pool among the defaults to assign "+
 				"to the network"))
@@ -374,7 +440,7 @@ func TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 	t.Run("an image that does not exist is a failure", func(t *testing.T) {
 		// The shape #126 was reported against, and the one the fix is
 		// demonstrated with: Docker is present and the container did not start.
-		err := fmt.Errorf("starting %s: %w: %s", "minio/minio:NO-SUCH-TAG",
+		err := fmt.Errorf("starting %s: %w: %s", "chrislusf/seaweedfs:NO-SUCH-TAG",
 			errors.New("exit status 125"),
 			"docker: Error response from daemon: failed to resolve reference: not found")
 		if errors.Is(err, errDependencyAbsent) {
@@ -445,7 +511,7 @@ func TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 	// only the first survives the test JSON stream, so the line naming the
 	// fault has to be folded onto it.
 	t.Run("a multi-line docker error is collapsed onto one line", func(t *testing.T) {
-		raw := "Unable to find image 'minio/minio:NO-SUCH-TAG' locally\n" +
+		raw := "Unable to find image 'chrislusf/seaweedfs:NO-SUCH-TAG' locally\n" +
 			"docker: Error response from daemon: failed to resolve reference\n\n" +
 			"Run 'docker run --help' for more information.\n"
 		got := oneLine(raw)

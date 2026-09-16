@@ -65,11 +65,11 @@ import (
 //
 // The whole case runs in CI, at the default sizing: four rollovers of 200
 // events each, driven by eight concurrent writers against a real Postgres, a
-// real MinIO with object lock on, and a real Rekor over a real Trillian.
-// Nothing here skips and nothing here is behind a flag — a load test that only
-// runs when somebody remembers to run it is a load test that has stopped
-// running, and #101 is this repository's evidence for how quietly that
-// happens.
+// real object store with object lock on, and a real Rekor over a real
+// Trillian. Nothing here skips and nothing here is behind a flag — a load
+// test that only runs when somebody remembers to run it is a load test that
+// has stopped running, and #101 is this repository's evidence for how quietly
+// that happens.
 //
 // The soak is the same case with bigger numbers. It is opt-in only in the
 // sense that a longer run costs more wall clock:
@@ -246,9 +246,9 @@ func newHarness(t *testing.T, s *stack) *harness {
 
 	bucket := freshLockedBucket(t, s)
 	worm, err := segment.NewWORM(ctx, segment.WORMConfig{
-		Endpoint:  s.minioAddr,
-		AccessKey: minioRootUser,
-		SecretKey: minioRootPassword,
+		Endpoint:  s.objectStoreAddr,
+		AccessKey: storeRootUser,
+		SecretKey: storeRootPassword,
 		Bucket:    bucket,
 		Mode:      segment.RetentionCompliance,
 		// Long enough to outlast the run. Compliance mode refuses a deletion
@@ -257,7 +257,7 @@ func newHarness(t *testing.T, s *stack) *harness {
 		Retention: time.Hour,
 	})
 	if err != nil {
-		t.Fatalf("segment.NewWORM against %s/%s: %v", s.minioAddr, bucket, err)
+		t.Fatalf("segment.NewWORM against %s/%s: %v", s.objectStoreAddr, bucket, err)
 	}
 
 	signer, err := segment.GenerateAnchorSigner()
@@ -1135,7 +1135,7 @@ func runtimeConditions(s *stack) string {
 		runtime.Version(), runtime.GOOS, runtime.GOARCH,
 		runtime.GOMAXPROCS(0), runtime.NumCPU(), raceDetectorState,
 		s.dockerVersion, s.dockerOS, s.dockerCPUs, s.dockerMemory,
-		postgresImage(), minioImage(), rekorImage())
+		postgresImage(), objectStoreImage(), rekorImage())
 }
 
 // percentile returns the p-th percentile of a sorted slice.

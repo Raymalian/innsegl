@@ -172,9 +172,18 @@ const (
 	// JSON of ADR-0006's format.
 	segmentContentType = "application/json"
 
-	// canaryProbePrefix keeps probes out of the segment namespace. Segment
+	// CanaryProbePrefix keeps probes out of the segment namespace. Segment
 	// names are `sha256:`-prefixed digests, so nothing can collide with this.
-	canaryProbePrefix = "innsegl-worm-canary/"
+	//
+	// EXPORTED BECAUSE THE DEPLOYMENT HAS TO GRANT IT (RM-143, #227). The
+	// reference stack runs the canary on a credential whose write access is
+	// scoped to two key prefixes — the sealer's, and this one — because the
+	// store it runs on has no permission to withhold by name and a prefix is
+	// what separates writing a segment from setting the bucket's own
+	// configuration. deploy/compose/innsegl/s3-identities.sh names this string,
+	// and test/deploy asserts the two still agree; a rename here that the
+	// identity file did not follow would be a canary refused its own probe.
+	CanaryProbePrefix = "innsegl-worm-canary/"
 )
 
 // WORMConfig is everything needed to write segments to an S3-compatible
@@ -659,7 +668,7 @@ func probeName() (string, error) {
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return "", fmt.Errorf("generate a probe name: %w", err)
 	}
-	return canaryProbePrefix + time.Now().UTC().Format("20060102T150405Z") + "-" + hex.EncodeToString(nonce[:]), nil
+	return CanaryProbePrefix + time.Now().UTC().Format("20060102T150405Z") + "-" + hex.EncodeToString(nonce[:]), nil
 }
 
 // probeBody is what the probe object contains: enough for whoever finds one in
@@ -730,8 +739,10 @@ func (c *canaryRun) checkBucketLock(ctx context.Context) {
 // there is a probe to go on with, which is not the same question as whether
 // the check passed.
 //
-// A store with no object lock refuses the retained write outright — MinIO
-// answers "Bucket is missing ObjectLockConfiguration" — and stopping there
+// A store with no object lock refuses the retained write outright — the
+// deployed one answers "Invalid Request" and the one before it answered
+// "Bucket is missing ObjectLockConfiguration", both measured — and stopping
+// there
 // would leave the most important sentence in a misconfiguration report
 // unwritten. So the probe is written again without retention, purely so the
 // run can go on to attempt the deletion and report what actually happens: that

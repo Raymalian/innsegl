@@ -31,7 +31,7 @@ import (
 // It is built from segment.CanaryCheckNames() rather than a literal list so
 // that a check added to the canary cannot quietly stop being required here.
 func passingReport() *segment.CanaryReport {
-	r := &segment.CanaryReport{Bucket: "bucket", Endpoint: "store:9000"}
+	r := &segment.CanaryReport{Bucket: "bucket", Endpoint: "store:8333"}
 	for _, name := range segment.CanaryCheckNames() {
 		r.Checks = append(r.Checks, segment.CanaryCheck{Name: name, Passed: true, Detail: "held"})
 	}
@@ -56,7 +56,7 @@ func failingReport() *segment.CanaryReport {
 
 func minimalCanaryArgs(extra ...string) []string {
 	return append([]string{
-		"-endpoint", "store:9000",
+		"-endpoint", "store:8333",
 		"-bucket", "segments",
 		"-access-key", "key",
 		"-secret-key", "secret",
@@ -273,7 +273,7 @@ func TestCanaryIsInconclusiveWhenTheStoreIsUnreachable(t *testing.T) {
 // observes reaches the exit status, which is the only thing a deploy step
 // reads.
 func TestSEG005CanarySubcommandIsADeployGate(t *testing.T) {
-	c := requireMinIOForCLI(t)
+	c := requireObjectStoreForCLI(t)
 
 	for _, tc := range []struct {
 		name       string
@@ -291,8 +291,8 @@ func TestSEG005CanarySubcommandIsADeployGate(t *testing.T) {
 				"canary",
 				"-endpoint", c.endpoint,
 				"-bucket", bucket,
-				"-access-key", cliMinIOUser,
-				"-secret-key", cliMinIOPassword,
+				"-access-key", cliObjectStoreUser,
+				"-secret-key", cliObjectStorePassword,
 				"-tls=false",
 				"-retention", "2m",
 			}, &stdout, &stderr)
@@ -306,19 +306,53 @@ func TestSEG005CanarySubcommandIsADeployGate(t *testing.T) {
 	}
 }
 
-// A containerised MinIO for the command-level gate test. The plumbing is
+// A containerised object store for the command-level gate test. The plumbing is
 // deliberately duplicated from internal/segment's harness rather than exported
 // from it: test harnesses are not part of a package's API, and a seam opened
 // between packages so that a test can reach through it is a seam production
 // code can be written against by mistake.
+//
+// THE STORE RUNS AS ONE CONTAINER HERE AND AS THREE IN THE REFERENCE DEPLOYMENT
+// — store, Filer and S3 gateway, across two networks — and saying which
+// difference that is matters. What this file measures is the gateway's
+// object-lock enforcement and the exit status of `innsegl canary`, and both are
+// the gateway's alone. The Filer split is about REACHABILITY, and it is measured
+// by OPS-029 in test/deploy against the compose file, where networks exist.
 
 const (
-	cliMinIOImage    = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
-	cliMinIOUser     = "innsegl"
-	cliMinIOPassword = "innsegl-test-secret"
+	// cliObjectStoreImage is pinned by digest rather than to `latest`, for the
+	// reason internal/segment gives for pinning its own: the whole subject of
+	// SEG-005 is one server's object-lock enforcement, so the version that
+	// enforcement was observed in is part of the evidence.
+	//
+	// RM-143 (#227) changed the store. The previous one was archived upstream
+	// and delisted from the registry this file pulled it from, so the pin it
+	// named no longer resolves. The replacement was measured against SEG-005
+	// under the same configuration.
+	cliObjectStoreImage = "chrislusf/seaweedfs:4.46@sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62"
+
+	cliObjectStoreUser     = "innsegl"
+	cliObjectStorePassword = "innsegl-test-secret"
+
+	// cliStoreIdentities is the gateway's identity file, and it is not
+	// optional.
+	//
+	// THIS STORE SHIPS NO DEFAULT CREDENTIALS. Started without an identity
+	// file, it refuses every signed request with "Signed request requires
+	// setting up SeaweedFS S3 authentication", which arrives at the caller as
+	// AccessDenied on a write — indistinguishable from object lock working,
+	// which is precisely the failure `innsegl canary` exists to detect. A
+	// misconfigured store would turn the "bucket without object lock" case
+	// green and the gate would be measuring its own misconfiguration.
+	//
+	// The identity carries every action the store has, so a refusal this test
+	// sees is object lock and not a missing grant.
+	cliStoreIdentities = `{"identities":[{"name":"innsegl","credentials":[` +
+		`{"accessKey":"` + cliObjectStoreUser + `","secretKey":"` + cliObjectStorePassword + `"}],` +
+		`"actions":["Admin","Read","Write","List","Tagging"]}]}`
 )
 
-type cliMinIO struct {
+type cliObjectStore struct {
 	id       string
 	endpoint string
 }
@@ -333,11 +367,11 @@ var cliBucketSeq atomic.Int64
 // INNSEGL_TEST_NO_DOCKER asks for none. Nothing else wraps it.
 //
 // Every other thing this function used to report as a skip — a port that could
-// not be reserved, an image that would not pull, a MinIO that never became
-// ready — happens on a machine that HAS Docker, and is a FAILURE. Reporting
-// one as a skip turns it into a pass-shaped outcome: `go test` exits zero, the
-// package reports ok, and the canary's exit status went unmeasured against a
-// real object store.
+// not be reserved, an image that would not pull, an object store that never
+// became ready — happens on a machine that HAS Docker, and is a FAILURE.
+// Reporting one as a skip turns it into a pass-shaped outcome: `go test` exits
+// zero, the package reports ok, and the canary's exit status went unmeasured
+// against a real object store.
 //
 // Both branches are exercised by
 // TestHAR009AnAbsentDependencyIsASkipAndAFaultIsAFailure.
@@ -356,7 +390,7 @@ func cliStartupOutcome(err error) (skip, failure string) {
 	}
 }
 
-// cliRequirement is what requireMinIOForCLI must do for the calling test.
+// cliRequirement is what requireObjectStoreForCLI must do for the calling test.
 type cliRequirement int
 
 const (
@@ -403,13 +437,13 @@ func cliOneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// startCLIMinIO brings up one MinIO and waits for it. Every error it returns
-// is a fault on a machine that has Docker; none of them wrap
+// startCLIObjectStore brings up one object store and waits for it. Every error
+// it returns is a fault on a machine that has Docker; none of them wrap
 // errCLIDependencyAbsent.
-func startCLIMinIO(ctx context.Context, t *testing.T) (*cliMinIO, error) {
+func startCLIObjectStore(ctx context.Context, t *testing.T) (*cliObjectStore, error) {
 	t.Helper()
-	image := cliMinIOImage
-	if v := os.Getenv("INNSEGL_TEST_MINIO_IMAGE"); v != "" {
+	image := cliObjectStoreImage
+	if v := os.Getenv("INNSEGL_TEST_OBJECT_STORE_IMAGE"); v != "" {
 		image = v
 	}
 
@@ -427,11 +461,34 @@ func startCLIMinIO(ctx context.Context, t *testing.T) (*cliMinIO, error) {
 		return nil, fmt.Errorf("releasing the reserved port: %w", cerr)
 	}
 
+	// The identity file is written into the container and the gateway is then
+	// told to read it, in that order: nothing may answer a signed request
+	// before the file exists (see cliStoreIdentities).
+	//
+	// THREE LISTENERS ARE TURNED OFF because none of them is part of storing a
+	// sealed segment and each is an authenticated write surface on a service
+	// whose whole job here is refusing writes:
+	//
+	//   -s3.iam=false       an IAM API served on the S3 port itself
+	//   -s3.port.iceberg=0  an Iceberg REST catalog
+	//   -s3.port.lance=0    a Lance namespace server
 	run := exec.CommandContext(ctx, "docker", "run", "--detach",
-		"--publish", "127.0.0.1:"+port+":9000",
-		"--env", "MINIO_ROOT_USER="+cliMinIOUser,
-		"--env", "MINIO_ROOT_PASSWORD="+cliMinIOPassword,
-		image, "server", "/data")
+		"--publish", "127.0.0.1:"+port+":8333",
+		"--env", "INNSEGL_S3_IDENTITIES="+cliStoreIdentities,
+		"--entrypoint", "sh",
+		image, "-c",
+		"printf %s \"$INNSEGL_S3_IDENTITIES\" > /tmp/s3-identities.json && "+
+			// -volume.max: EACH BUCKET IS A COLLECTION AND A NEW COLLECTION
+			// IMMEDIATELY RESERVES SEVEN VOLUMES. The store's default cap is
+			// EIGHT, so the second bucket in one container gets one volume and
+			// the third gets none — and a write with nowhere to go comes back as
+			// HTTP 500 "We encountered an internal error, please try again",
+			// which in this package reads exactly like object lock refusing a
+			// write. Measured. Volumes are sparse (eight of them were 256 KiB on
+			// disk), so the cap is raised rather than the buckets reused.
+			"exec weed server -dir=/data -volume.max=100 -s3 -s3.config=/tmp/s3-identities.json "+
+			"-s3.port=8333 -s3.iam=false -s3.port.iceberg=0 -s3.port.lance=0",
+	)
 	var stderr strings.Builder
 	run.Stderr = &stderr
 	out, err := run.Output()
@@ -439,7 +496,7 @@ func startCLIMinIO(ctx context.Context, t *testing.T) (*cliMinIO, error) {
 		return nil, fmt.Errorf("starting %s: %w: %s", image, err, cliOneLine(stderr.String()))
 	}
 
-	c := &cliMinIO{id: strings.TrimSpace(string(out)), endpoint: "127.0.0.1:" + port}
+	c := &cliObjectStore{id: strings.TrimSpace(string(out)), endpoint: "127.0.0.1:" + port}
 	t.Cleanup(func() {
 		removeCtx, removeCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer removeCancel()
@@ -466,20 +523,20 @@ func startCLIMinIO(ctx context.Context, t *testing.T) (*cliMinIO, error) {
 	return nil, fmt.Errorf("%s never became ready: %w", image, last)
 }
 
-// requireMinIOForCLI hands the calling test a real object store, or ends the
-// test the honest way: a skip when there is no Docker, a FAILURE when Docker
-// is there and MinIO is not.
-func requireMinIOForCLI(t *testing.T) *cliMinIO {
+// requireObjectStoreForCLI hands the calling test a real object store, or ends
+// the test the honest way: a skip when there is no Docker, a FAILURE when
+// Docker is there and the object store is not.
+func requireObjectStoreForCLI(t *testing.T) *cliObjectStore {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	var c *cliMinIO
+	var c *cliObjectStore
 	skip, failure := cliStartupOutcome(cliDockerUsable(ctx))
 	if skip == "" && failure == "" {
 		var err error
-		c, err = startCLIMinIO(ctx, t)
+		c, err = startCLIObjectStore(ctx, t)
 		skip, failure = cliStartupOutcome(err)
 	}
 
@@ -498,20 +555,22 @@ func requireMinIOForCLI(t *testing.T) *cliMinIO {
 	return c
 }
 
-func (c *cliMinIO) client() (*minio.Client, error) {
+// client is an S3 client for the container. minio-go is the S3 client this
+// repository uses; the store it is pointed at is the thing RM-143 changed.
+func (c *cliObjectStore) client() (*minio.Client, error) {
 	return minio.New(c.endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cliMinIOUser, cliMinIOPassword, ""),
+		Creds:  credentials.NewStaticV4(cliObjectStoreUser, cliObjectStorePassword, ""),
 		Secure: false,
 	})
 }
 
-func makeBucket(t *testing.T, c *cliMinIO, objectLock bool) string {
+func makeBucket(t *testing.T, c *cliObjectStore, objectLock bool) string {
 	t.Helper()
 
 	name := fmt.Sprintf("cli-%d-%d", os.Getpid()%100000, cliBucketSeq.Add(1))
 	cl, err := c.client()
 	if err != nil {
-		t.Fatalf("minio client: %v", err)
+		t.Fatalf("object store client: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -552,7 +611,7 @@ func TestHAR009AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 		// The exact shape #100 produces on this machine, and the shape the CI
 		// run in #101 produced: Docker is present, working, and refuses to
 		// create the network because its address pools are used up.
-		err := fmt.Errorf("could not start the canary's minio: %w",
+		err := fmt.Errorf("could not start the canary's object store: %w",
 			errors.New("Error response from daemon: could not find an available, "+
 				"non-overlapping IPv4 address pool among the defaults to assign "+
 				"to the network"))

@@ -502,7 +502,7 @@ func (w *prtWorld) prepare(t *testing.T, cell string) prtFixtures {
 
 // prtMemStore is an in-memory Store used ONLY to precompute a segment_sealed
 // body for the anchorer. It is never the store under test: the sealer under
-// test writes through w.worm, which is a real MinIO behind a real gate.
+// test writes through w.worm, which is a real object store behind a real gate.
 type prtMemStore map[string][]byte
 
 func (m prtMemStore) Get(name string) ([]byte, error) {
@@ -765,7 +765,7 @@ func (w *prtWorld) probeThroughGate(dep string) func(context.Context) error {
 	case prtRekor:
 		return func(ctx context.Context) error { return w.probeRekorAt(ctx, g.url()) }
 	case prtObject:
-		return func(ctx context.Context) error { return prtMinIOReady(ctx, g.addr()) }
+		return func(ctx context.Context) error { return prtObjectStoreReady(ctx, g.addr()) }
 	}
 	panic("probeThroughGate: no probe for " + dep)
 }
