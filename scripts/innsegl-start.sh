@@ -76,14 +76,20 @@ report() {
     say "dashboard    NOT answering on $PORT (http $code)"; bad=1
   fi
 
-  # The tree the log is serving, and how many entries are in it. A restart that
-  # lost the pin shows up here as a small number rather than as a silent
-  # verification failure days later (#176, #219).
-  log=$(curl -s --max-time 5 "http://127.0.0.1:${INNSEGL_REKOR_PORT:-23000}/api/v1/log" 2>/dev/null)
-  if [ -n "$log" ]; then
-    size=$(printf '%s' "$log" | sed -n 's/.*"treeSize":\([0-9]*\).*/\1/p')
-    say "transparency log holds ${size:-?} entr$([ "${size:-0}" = 1 ] && echo y || echo ies)"
-  fi
+  # THE TREE THIS DEPLOYMENT PINNED, and whether it is still there.
+  #
+  # Reporting the size of whatever tree Rekor happens to be serving is what
+  # this used to do, and it is the question that hid the fault on 2026-09-16:
+  # a recreated Trillian database left the pin naming a tree that no longer
+  # existed, Rekor answered HTTP 500 to every request, and nothing said why.
+  # scripts/rekor-tlog-health.sh asks for the PINNED tree by id and reports
+  # its absence in those words (#176, #219, OPS-034).
+  #
+  # An absent tree is a fault in the readiness report, not a warning beside a
+  # green line: nothing signed after it can be anchored where anything else
+  # is looking.
+  INNSEGL_REKOR_PORT="${INNSEGL_REKOR_PORT:-23000}" \
+    "$(dirname "$0")/rekor-tlog-health.sh" || bad=1
   return $bad
 }
 

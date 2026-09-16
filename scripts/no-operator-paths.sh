@@ -31,8 +31,28 @@
 #   * /home/innsegl — the container image's OWN user. Both Dockerfiles set
 #     HOME and WORKDIR to it. A gate that called those violations would be
 #     switched off within a week, and a gate nobody runs protects nothing.
-#   * docs/ — the eight numbered specifications are local-only and never
-#     pushed (CLAUDE.md). They are not shipped, so they carry no obligation.
+#   * docs/, EXCEPT docs/adr/ — the eight numbered specifications are
+#     local-only and never pushed (CLAUDE.md), so they carry no obligation.
+#     ADRs are the exception and are excluded FROM the exception.
+#
+# WHY docs/adr/ IS CARVED BACK OUT, and it is the same class of mistake this
+# gate exists to catch. The skip was written as `docs/*` with the comment
+# "local-only, never pushed". That was TRUE of docs/ when it was written and
+# stopped being true when ADRs started shipping: docs/adr/ is tracked, is in
+# every clone, and CLAUDE.md names it — "That includes `docs/adr/`, which is
+# the one docs directory that does ship." So the one docs directory that
+# reaches the public repository was the one directory the gate skipped.
+#
+# Measured before the fix: a file carrying an operator home path inside
+# docs/adr/ produced "none names an operator path". A false pass, in the gate
+# whose whole job is to prevent one. Case 7 of the selftest holds it, and case
+# 6 holds the other direction, because an exclusion with only one test beside
+# it gets widened back by the next person who finds it inconvenient.
+#
+# The lesson is in the comment that was wrong rather than in the code: a
+# comment stating a FACT goes stale silently, while one stating the REASON
+# fails out loud when the reason stops holding. That is why the paragraph
+# above gives the reason.
 #
 # Scope is git-tracked files only, for the same reason spdx-check.sh uses it:
 # anything gitignored is not published.
@@ -64,7 +84,11 @@ scanned=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   case "$f" in
-    docs/*) continue ;;          # local-only, never pushed
+    # docs/adr/ SHIPS — it is tracked and in every clone, so it is scanned like
+    # any other shipped file. The header says why this line is two cases and
+    # not one.
+    docs/adr/*) : ;;
+    docs/*) continue ;;          # local-only, never pushed (CLAUDE.md)
   esac
   [ -f "$f" ] || continue
   # Skip anything that is not text: a binary match is noise, not a leak we can

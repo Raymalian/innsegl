@@ -1578,8 +1578,22 @@ networks:
 # Volumes.
 # ----------------------------------------------------------------------------
 volumes:
-  # The ledger. MOUNTED BY: postgres.
+  # THE FOURTH OF THE IRREPLACEABLE FOUR (doc 05 §2; OPS-032).
+  #
+  # The ledger, and the reason it is on this list rather than the object
+  # store: runbooks/index-rebuild.md §0 says "there is no
+  # rebuild-from-segments-alone". A sealed segment ADJUDICATES a restore, it
+  # does not supply one — the event bodies (agent_type, task_ref, run_id and
+  # every tool_call) live here and nowhere else. On 2026-09-16 a `down -v`
+  # took it from 19,595 chain positions to 60.
+  #
+  # Brought up through `make` this resolves to a volume declared OUTSIDE this
+  # project, so `down -v` can only detach it. The default below reproduces
+  # this project's own name exactly; see the same block in sigstore.yml.
+  # MOUNTED BY: postgres.
   innsegl-ledger-data:
+    name: ${INNSEGL_TRUST_LEDGER_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-ledger-data}
+    external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
   # Sealed segments' BYTES, under object lock. MOUNTED BY: innsegl-object-store.
   innsegl-object-data:
 
@@ -1605,7 +1619,18 @@ volumes:
   # MOUNTED BY: innsegl-identity-init (rw), innsegl-mcp (ro). Nothing else,
   # ever — the secret CREATES a pseudonym and is needed to resolve one never,
   # so no read path in this stack has any use for it.
+  #
+  # IRREPLACEABLE, and it took losing it to see why (doc 05 §2; OPS-032). A
+  # `down -v` removed it, the deployment minted a new one, and the SAME task
+  # string pseudonymised to a different id — so a run registered minutes
+  # earlier could no longer claim a commit. Nothing already signed stopped
+  # verifying; what broke is attribution. Every agent and task pseudonym
+  # already in the ledger names something no future run can reproduce, and
+  # ADR-0041 makes the secret per-deployment on purpose, which is exactly what
+  # makes it unrecoverable.
   innsegl-identity-secret:
+    name: ${INNSEGL_TRUST_IDENTITY_SECRET_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-identity-secret}
+    external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
 
   # DECLARED IN spire.yml, JOINED HERE, and the only thing this stack takes
   # from SPIRE besides one network. Compose names a project's volume
