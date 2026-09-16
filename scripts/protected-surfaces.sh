@@ -510,7 +510,21 @@ fi
 ns_ok=yes
 gomod="$(cat_at "${HEAD_REF}" go.mod || true)"
 if [ -n "${gomod}" ]; then
-  if ! printf '%s\n' "${gomod}" | grep -qx "module ${MODULE_PATH}"; then
+  # A HERE-DOC AND NOT A PIPE, and the reason is subtle enough to write down.
+  #
+  # `grep -q` exits the moment it matches and closes its end of the pipe. The
+  # writer is then still writing, takes EPIPE, and under `set -o pipefail` the
+  # pipeline's status is non-zero — so `!` reads a SUCCESSFUL match as a failed
+  # one and the gate reports a breach that did not happen. Whether it fires
+  # depends on the pipe buffer against the size of the text, which is to say it
+  # depends on the machine: this passed here and failed on CI, twice, and cost
+  # two pull requests a re-run each while the tree was correct throughout.
+  #
+  # A here-doc has no second process to close anything.
+  if ! grep -qx "module ${MODULE_PATH}" <<GOMOD
+${gomod}
+GOMOD
+  then
     fail "go.mod does not declare module ${MODULE_PATH} (VERSIONING.md surface 5: the package names)"
     ns_ok=no
   fi
@@ -520,7 +534,13 @@ else
 fi
 makefile="$(cat_at "${HEAD_REF}" Makefile || true)"
 if [ -n "${makefile}" ]; then
-  if ! printf '%s\n' "${makefile}" | grep -qE "^BINARY[[:space:]]*:?=[[:space:]]*${NAMESPACE}[[:space:]]*$"; then
+  # Same reason as the module check above, and this is the one that fired:
+  # the Makefile is 40 KB and BINARY is on its sixth line, so grep is done
+  # after a couple of hundred bytes while the writer still has the rest.
+  if ! grep -qE "^BINARY[[:space:]]*:?=[[:space:]]*${NAMESPACE}[[:space:]]*$" <<MAKEFILE
+${makefile}
+MAKEFILE
+  then
     fail "the Makefile no longer builds a binary named ${NAMESPACE} (VERSIONING.md surface 5: the CLI binary name)"
     ns_ok=no
   fi
