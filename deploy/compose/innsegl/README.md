@@ -318,15 +318,16 @@ SPIRE and Sigstore are up:
 
 ```sh
 make innsegl-up             # build, register the MCP, boot the seven rows
-make innsegl-verify         # ask the server about the MCP's DB credential
+make innsegl-verify         # ask about the MCP's DB credential and the sealer's store credential
 make innsegl-canary         # SEG-005: prove a sealed segment cannot be deleted
 make innsegl-demo           # register -> sign -> retire, over the real transport
 make innsegl-verify-commit COMMIT=<sha>   # verify with NO route to the ledger
 make innsegl-down
 ```
 
-`make innsegl-verify` asks about the **appender**. The reader has the same
-question and no Makefile target of its own yet; ask it directly:
+`make innsegl-verify` asks about the **appender** and about the sealer's
+object-store credential. The reader has the same question and no Makefile
+target of its own yet; ask it directly:
 
 ```sh
 docker compose -f deploy/compose/innsegl.yml \
