@@ -415,7 +415,41 @@ EOF
 )"
 
 SIGNED="$(mcp "$AGENT_URL" sign_commit "$ARGS")" || fail "the MCP at $AGENT_URL could not be reached"
-SHA="$(printf '%s' "$SIGNED" | field commit_sha)" || fail "sign_commit refused — nothing was committed"
+# The refusal must not claim a rollback that did not happen (RM-145, #229). sign_commit
+# creates the commit and then verifies it, so a Phase C failure leaves the commit
+# AT HEAD, carrying its identity trailers, and absent from the ledger. Telling an
+# operator "nothing was committed" is exactly what makes them commit again or
+# reset, on the strength of a claim this tool never honoured. So ask git what is
+# actually there rather than asserting it.
+if ! SHA="$(printf '%s' "$SIGNED" | field commit_sha)"; then
+  HEAD_NOW="$(git -C "$WT" rev-parse --short HEAD 2>/dev/null || echo '?')"
+  HEAD_SUBJ="$(git -C "$WT" log -1 --format='%s' 2>/dev/null || echo '')"
+  # AN EMPTY INDEX IS THE TELL. This script refuses at the top unless the index
+  # differs from HEAD, so if it matches HEAD now, the commit happened between
+  # then and this line -- which is Phase B, and Phase B is where the Rekor entry
+  # is made too. There is no other way to reach this state.
+  if git -C "$WT" diff --cached --quiet 2>/dev/null; then
+    echo "innsegl-commit: sign_commit refused AFTER the commit was made." >&2
+    echo "innsegl-commit:" >&2
+    echo "innsegl-commit:   ${HEAD_NOW}${HEAD_SUBJ:+  $HEAD_SUBJ}" >&2
+    echo "innsegl-commit:" >&2
+    echo "innsegl-commit:   is at HEAD, carrying its identity trailers, and Rekor holds" >&2
+    echo "innsegl-commit:   its entry. What is missing is the ledger's commit_recorded." >&2
+    echo "innsegl-commit:   Nothing rolls back: the two phases are narrow by ordering and" >&2
+    echo "innsegl-commit:   not by cleanup, so no failure here undoes a commit." >&2
+    echo "innsegl-commit:" >&2
+    echo "innsegl-commit:   DO NOT commit again and DO NOT reset. A second commit is a" >&2
+    echo "innsegl-commit:   second signature for one change; a reset destroys a commit" >&2
+    echo "innsegl-commit:   whose Rekor entry is already public and permanent." >&2
+    echo "innsegl-commit:" >&2
+    echo "innsegl-commit:   The repair is the reconciler's. It matches the Rekor entry to" >&2
+    echo "innsegl-commit:   the intent and appends the record that is missing:" >&2
+    echo "innsegl-commit:" >&2
+    echo "innsegl-commit:     innsegl reconcile -once" >&2
+    exit 1
+  fi
+  fail "sign_commit refused and the index is still staged; HEAD is $HEAD_NOW. Nothing was committed."
+fi
 IDX="$(printf '%s' "$SIGNED" | field rekor_entry.log_index 2>/dev/null || echo '?')"
 
 echo "innsegl-commit: signed $(git -C "$WT" rev-parse --short "$SHA")  rekor index $IDX"
