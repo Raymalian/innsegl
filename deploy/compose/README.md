@@ -358,7 +358,7 @@ Two more things worth running once, because both are measurements rather than
 claims:
 
 ```sh
-make innsegl-verify   # ask the server what the MCP's DB credential can do
+make innsegl-verify   # ask both servers what this stack's credentials can do
 make innsegl-canary   # SEG-005: prove a sealed segment cannot be deleted
 ```
 
