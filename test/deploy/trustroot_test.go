@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -638,94 +637,75 @@ func TestOPS036BringUpRebuildsTheSearchIndex(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// OPS-035 — the backup runs on a timer.
+// OPS-047 — the backup runs in the deployment, and there is no host timer.
+//
+// THIS REPLACES OPS-035, which installed a host scheduler and read the unit
+// back. There is no host scheduler any more (RM-146, #237): it was launchd on
+// one platform and systemd on the other, two unit layouts and a scheduler that
+// has to exist at all, and it reached the ledger through the container runtime
+// — a socket that is root on the host, held by the thing taking backups.
+//
+// What is asserted here is the shape of the replacement, from the repository:
+// the scheduler is gone, and the deployment declares a backup service that
+// holds no runtime socket. The behaviour of that service — its verdicts, its
+// window, its refusals — is scripts/backup-service-selftest.sh, which needs no
+// Docker; and OPS-045 is the live half, a backup taken by the service and
+// adjudicated against the sealed segments.
 // ---------------------------------------------------------------------------
 
-func TestOPS035TheLedgerBackupIsScheduled(t *testing.T) {
+func TestOPS047TheBackupRunsInTheDeploymentNotOnTheHost(t *testing.T) {
 	root := repoRoot(t)
-	sched := filepath.Join(root, "scripts", "backup-schedule.sh")
 
-	dir := t.TempDir()
-	mirror := filepath.Join(dir, "second-copy")
-	env := []string{
-		"INNSEGL_SCHEDULE_DIR=" + dir,
-		"INNSEGL_BACKUP_DIR=" + mirror,
+	if _, err := os.Stat(filepath.Join(root, "scripts", "backup-schedule.sh")); err == nil {
+		t.Error("scripts/backup-schedule.sh still exists. The host scheduler is what " +
+			"RM-146 removed: two unit layouts, a scheduler that has to exist, and a " +
+			"backup holding the container-runtime socket to reach the ledger")
 	}
 
-	out, code := run(t, sched, env, "install", "--no-load")
-	if code != 0 {
-		t.Fatalf("install exited %d:\n%s", code, out)
+	mk := readFile(t, filepath.Join(root, "Makefile"))
+	for _, installer := range []string{"launchctl", "crontab", "systemctl --user"} {
+		if strings.Contains(mk, installer) {
+			t.Errorf("the Makefile still installs a host timer with %q", installer)
+		}
 	}
 
-	out, code = run(t, sched, env, "status")
-	if code != 0 {
-		t.Fatalf("status exited %d after a successful install:\n%s", code, out)
-	}
-	if !strings.Contains(out, "backup-ledger.sh") {
-		t.Errorf("the installed schedule does not name scripts/backup-ledger.sh. "+
-			"The script is written, tested and self-tested; scheduling a second "+
-			"implementation of it would be the one mistake worth avoiding:\n%s", out)
-	}
-	if !strings.Contains(out, mirror) {
-		t.Errorf("the installed schedule does not write to the second directory "+
-			"it was given (%s):\n%s", mirror, out)
-	}
-	if strings.Contains(out, filepath.Join(root, "backups")) {
-		t.Errorf("the schedule writes into the checkout. doc 05 §2 wants the copy "+
-			"off the box; a copy in the working tree shares its fate:\n%s", out)
+	compose := readFile(t, filepath.Join(root, "deploy", "compose", "innsegl.yml"))
+	if !strings.Contains(compose, "\n  innsegl-backup:\n") {
+		t.Fatal("the deployment declares no innsegl-backup service. The schedule has to " +
+			"live somewhere, and the point of the move was that it lives where the " +
+			"deployment lives")
 	}
 
-	// THE JOB MUST BE ABLE TO FIND DOCKER, and this is measured rather than
-	// assumed. A launchd user agent inherits /usr/bin:/bin:/usr/sbin:/sbin and
-	// nothing else, and Docker Desktop is on none of them. The first install
-	// of this schedule fired on demand and wrote exactly one line:
-	//
-	//	backup-ledger: no container named innsegl-postgres -- is the stack up?
-	//
-	// A backup that cannot run is the failure scripts/backup-ledger.sh's own
-	// header is about, arriving through the door that was supposed to fix it.
-	// READ THE UNIT THAT CARRIES THE COMMAND, which is not always the one the
-	// scheduler is pointed at. launchd puts the program, its arguments and its
-	// PATH in one plist; systemd splits a timer from the service it triggers,
-	// and PATH lives in the service. Reading the timer looked right on the
-	// machine this was written on and asserted against a file that could never
-	// contain a PATH on the other platform.
-	unit := readFile(t, filepath.Join(dir, installedJobUnitName()))
-	dockerPath, err := exec.LookPath("docker")
-	if err != nil {
-		t.Fatalf("docker is not on this machine's PATH, so this case cannot run: %v", err)
-	}
-	dockerDir := filepath.Dir(dockerPath)
-	if !strings.Contains(unit, dockerDir) {
-		t.Errorf("the installed unit never mentions %s, the directory docker is in. "+
-			"A scheduled job gets a minimal PATH and will not find it:\n%s",
-			dockerDir, unit)
+	// OPS-044's static half. The live half attempts the call inside the running
+	// container; this is the one that fails a PULL REQUEST, which is where a
+	// socket would be added.
+	block := composeServiceBlock(t, compose, "innsegl-backup")
+	for _, forbidden := range []string{"docker.sock", "/var/run/docker", "containerd.sock", "DOCKER_HOST"} {
+		if strings.Contains(block, forbidden) {
+			t.Errorf("the backup service names %q. A process holding the container-runtime "+
+				"socket is root on the host, and that is the trade this service exists to "+
+				"stop making", forbidden)
+		}
 	}
 
-	if out, code := run(t, sched, env, "uninstall"); code != 0 {
-		t.Fatalf("uninstall exited %d:\n%s", code, out)
-	}
-	if _, code := run(t, sched, env, "status"); code == 0 {
-		t.Errorf("status still reports a schedule after uninstall")
+	// And the script it runs no longer reaches for one either.
+	script := readFile(t, filepath.Join(root, "scripts", "backup-ledger.sh"))
+	for _, line := range strings.Split(script, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		for _, call := range []string{"docker run", "docker exec", "docker cp", "docker inspect"} {
+			if strings.Contains(trimmed, call) {
+				t.Errorf("backup-ledger.sh still makes a runtime call: %q", trimmed)
+			}
+		}
 	}
 }
 
 // ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
-
-// installedUnitName is the file scripts/backup-schedule.sh writes, per platform.
-// installedJobUnitName is the file holding the command and its environment.
-// On launchd that is the same plist the scheduler reads; on systemd the timer
-// only says WHEN, and the service says WHAT and with which PATH — which is why
-// there is no second helper for the timer's own name: nothing asserts on it,
-// and a helper kept "for symmetry" is the one the next reader picks by mistake.
-func installedJobUnitName() string {
-	if runtime.GOOS == "darwin" {
-		return "dev.innsegl.backup-ledger.plist"
-	}
-	return "dev.innsegl.backup-ledger.service"
-}
 
 // composeVolume is the part of compose's resolved config this package reads.
 type composeVolume struct {
