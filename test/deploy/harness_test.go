@@ -50,6 +50,13 @@ const (
 	// construction.
 	readerRole     = "innsegl_reader"
 	readerPassword = "innsegl-deploy-test-reader"
+
+	// backupRole is the role the backup service connects as (RM-146, #237):
+	// the reader's grants over the ledger plus CREATEDB, because the backup
+	// proves a dump restores by restoring it into a throwaway database of its
+	// own. Spelled here for the same reason the other two are.
+	backupRole     = "innsegl_backup"
+	backupPassword = "innsegl-deploy-test-backup"
 )
 
 var errDependencyAbsent = errors.New("a required dependency is absent")
@@ -266,6 +273,8 @@ func (c *ledgerContainer) runInit(ctx context.Context, script string, extra ...s
 		"--env", "INNSEGL_APPENDER_PASSWORD=" + appenderPassword,
 		"--env", "INNSEGL_READER_ROLE=" + readerRole,
 		"--env", "INNSEGL_READER_PASSWORD=" + readerPassword,
+		"--env", "INNSEGL_BACKUP_ROLE=" + backupRole,
+		"--env", "INNSEGL_BACKUP_PASSWORD=" + backupPassword,
 		"--env", "INNSEGL_READONLY_SQL=/innsegl/api/readonly.sql",
 	}
 	args = append(args, extra...)
