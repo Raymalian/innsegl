@@ -245,6 +245,16 @@ func (c DescribeWorkspaceConfig) describe(ctx context.Context, cwd string) (desc
 			"describe_workspace cannot resolve %s: %w", cwd, err)
 	}
 
+	// INTO THIS PROCESS'S NAMESPACE, before anything reads it. git answers a
+	// linked worktree with the repository's HOST spelling, and all three uses
+	// below run against this process's own filesystem: the containment check,
+	// the origin read, and the branch fallback. See localWorktreePath.
+	main, err = c.localWorktreePath(main)
+	if err != nil {
+		return describeWorkspaceOut{}, Errorf(ClassInvariantViolation, "",
+			"describe_workspace cannot address the repository holding %s: %w", cwd, err)
+	}
+
 	// The tree expressed under its repository. A tree that is not under it at
 	// all is REFUSED rather than answered with an empty worktree: sign_commit
 	// reads an empty one as "the repository itself" (MCP-029), so an empty
@@ -452,4 +462,93 @@ func describeWorkspaceFold(lower string) string {
 		folded = folded[:describeWorkspaceTaskBytes]
 	}
 	return folded
+}
+
+// localWorktreePath translates a path GIT reported into this process's own
+// namespace.
+//
+// WHY GIT'S ANSWER NEEDS TRANSLATING AT ALL. `git worktree list` does not
+// answer in one namespace. Measured on 2026-09-16 against the running
+// deployment: asked from the MAIN tree git echoes the path it was handed, so
+// the answer is already the mount's spelling; asked from a LINKED worktree it
+// answers the RECORDED path — the spelling written into `.git` when the
+// worktree was created, which is the HOST's. The same repository therefore
+// comes back under two different roots depending on where the caller stands.
+//
+// Before this, the second case was refused: filepath.Rel over the mount's
+// spelling of the tree and the host's spelling of the repository produces a
+// path of `..` segments, which relativeWorktree correctly reads as "not under
+// the repository". Correct about the paths, wrong about the world — and what
+// it refused was an agent's own worktree, which is the arrangement agents
+// actually run in.
+//
+// SYMLINK RESOLUTION IS NOT THE ANSWER and is already tried: relativeWorktree
+// resolves both sides, which is what fixed the macOS /var vs /private/var case
+// it was written for. It cannot reach this one. The two roots are separate
+// bind mounts of one directory, so neither is a symlink of the other and
+// EvalSymlinks returns both unchanged.
+//
+// The translation the tool already owns is the answer. A deployment is told
+// once what its mount corresponds to, and that mapping is as true of git's
+// answer as it is of the caller's cwd.
+func (c DescribeWorkspaceConfig) localWorktreePath(reported string) (string, error) {
+	projects := c.Projects
+	if projects == "" {
+		projects = DefaultProjectsMount
+	}
+	path := filepath.Clean(reported)
+
+	// ALREADY LOCAL, which is the ordinary case and must not translate twice:
+	// a second translation would prepend the mount to a path that carries it.
+	//
+	// Symlinks are resolved on BOTH sides for this test, because one directory
+	// having two spellings is exactly what the whole function is about and the
+	// symlink shape of it is real: on macOS a temporary directory is handed
+	// out as /var/... and reported by git as /private/var/.... That case is
+	// already handled downstream by relativeWorktree, and a purely lexical
+	// test here would declare it untranslatable before it ever got there,
+	// replacing a precise refusal with a misleading one.
+	if pathUnder(projects, path) {
+		return path, nil
+	}
+
+	// Otherwise it is the host's spelling, and gets the caller's own
+	// translation.
+	if local, err := c.containerPath(path); err == nil {
+		return local, nil
+	}
+
+	// NEITHER ROOT. Not a guess: a repository this deployment cannot address
+	// is one whose identifier would be invented, and the identifier goes into
+	// an append-only record. Both roots are named so the reader can tell which
+	// of the two is wrong.
+	return "", Errorf(ClassInvariantViolation, "",
+		"git reports this repository at %q, which is under neither %s — this process's "+
+			"projects mount — nor %s=%q, the host directory that mount is of. A linked "+
+			"worktree records the repository's path as it stood when the worktree was "+
+			"created, so a repository outside both roots cannot be addressed from here. "+
+			"Either point the mount and %s at the directory this repository is actually "+
+			"in, or recreate the worktree from a repository under it",
+		path, projects, EnvHostProjects, c.HostProjects, EnvHostProjects)
+}
+
+// pathUnder reports whether path is root itself or lives beneath it, with
+// symlinks resolved on both sides.
+//
+// filepath.Rel over a string compare, for the reason resolveWorktree gives:
+// "/a/repo-two" has "/a/repo" as a string prefix and is not inside it. A path
+// that cannot be resolved falls back to its cleaned form, because a path that
+// does not exist in THIS process is the ordinary case here — the host's
+// spelling of a directory is not reachable from inside the container.
+func pathUnder(root, path string) bool {
+	rel, err := filepath.Rel(resolvePath(root), resolvePath(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// resolvePath is EvalSymlinks with Clean as the fallback.
+func resolvePath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
 }
