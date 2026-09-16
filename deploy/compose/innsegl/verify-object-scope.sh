@@ -2,26 +2,38 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Ask the object store what the sealer's credential can actually do
-# (RM-144, #228, AB-17; doc 05 §2).
+# (RM-144, #228; RM-143, #227; AB-17; doc 05 §2).
 #
 # WHY THIS EXISTS AT ALL
 # ----------------------
-# object-init.sh attaches a policy that grants less. That is provisioning, and
-# provisioning is a claim. verify-role.sh makes the argument for the database
-# role and it is the argument this file implements, in the other medium:
+# innsegl/s3-identities.sh writes an identity file that grants less. That is
+# provisioning, and provisioning is a claim. verify-role.sh makes the argument
+# for the database role and it is the argument this file implements, in the
+# other medium:
 #
 #     "A role is provisioned once and then lives in somebody's deployment; a
 #      later GRANT by an operator who wanted to 'just fix one thing' is
 #      invisible to any amount of code review."
 #
-# The object store's version of that GRANT is one command:
-# `mc admin policy attach <store> readwrite --user <sealer>`. It leaves no
-# trace in this repository and no trace in the compose file, and after it the
-# running stack again holds a credential that can downgrade the bucket's
-# object-lock rule from COMPLIANCE to GOVERNANCE. So object-init.sh ends by
-# execing this, and the compose stack gates the sealer on object-init.sh
-# completing — which means the sealer does not start behind a scope nobody
-# measured.
+# The object store's version of that GRANT is one word. Change
+#
+#     "Write:<bucket>/<prefix>*"      to      "Write"
+#
+# in the identity file and the running stack again holds a credential that can
+# set the bucket's object-lock configuration and downgrade it from COMPLIANCE
+# to GOVERNANCE. It leaves no trace in this repository and none in the compose
+# file. So object-init.sh ends by execing this, and the compose stack gates the
+# sealer on object-init.sh completing — which means the sealer does not start
+# behind a scope nobody measured.
+#
+# WHY THE SCOPE IS A PREFIX ON THIS STORE
+# ---------------------------------------
+# Measured on the pinned image: this store's permission model has no separate
+# action for setting a bucket's object-lock configuration. An identity granted
+# a bucket-wide `Write` may set it. There is no permission to withhold by name,
+# so the narrowing is expressed as the only thing that does distinguish the two
+# calls — the prefix the write is scoped to — and checks 2 and 3 below are what
+# prove that separates them on this server rather than in this comment.
 #
 # WHY IT PROVES A PERMISSION IT HAS BEFORE IT PROVES THE ONES IT HAS NOT
 # ----------------------------------------------------------------------
@@ -48,9 +60,6 @@
 # finding; if it is present the call succeeds and the bucket is left exactly as
 # it was, which is also the finding. Attempting a downgrade in order to detect
 # that a downgrade is possible would be performing the attack to report it.
-#
-# NOTE ON THE TOOLING: the minio/mc image carries mc, a shell, `cut`, `tr` and
-# `printf` — and no sed, no grep and no awk. Nothing below is a pipeline.
 
 set -eu
 
@@ -61,19 +70,27 @@ fail() { printf 'verify-object-scope: FAIL: %s\n' "$*" >&2; }
 : "${INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY:?verify-object-scope: INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY must be set}"
 
 BUCKET="${INNSEGL_OBJECT_STORE_BUCKET:-innsegl-segments}"
-ENDPOINT="${INNSEGL_OBJECT_STORE_URL:-http://minio:9000}"
+ENDPOINT="${INNSEGL_OBJECT_STORE_URL:-http://innsegl-s3:8333}"
 MODE="${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}"
 RETENTION="${INNSEGL_OBJECT_LOCK_RETENTION:-1d}"
+PREFIX="${INNSEGL_OBJECT_STORE_PREFIX:-segments/}"
 
-MC="mc --config-dir /tmp/mc-scope"
+case "${RETENTION}" in
+  *d) RETENTION_UNIT=Days;  RETENTION_COUNT="${RETENTION%d}" ;;
+  *y) RETENTION_UNIT=Years; RETENTION_COUNT="${RETENTION%y}" ;;
+  *)  RETENTION_UNIT=Days;  RETENTION_COUNT=1 ;;
+esac
 
 # EVERYTHING BELOW CONNECTS AS THE IDENTITY UNDER TEST, never as the root
 # account. verify-role.sh's rule, and for its reason: a probe run under a
 # second credential measures that credential.
-${MC} alias set scoped "${ENDPOINT}" \
-  "${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY}" \
-  "${INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY}" >/dev/null 2>&1 \
-  || { fail "the scoped identity ${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY} cannot reach ${ENDPOINT} at all"; exit 1; }
+export AWS_ACCESS_KEY_ID="${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY}"
+export AWS_SECRET_ACCESS_KEY="${INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY}"
+export AWS_DEFAULT_REGION="${INNSEGL_OBJECT_STORE_REGION:-us-east-1}"
+export AWS_REQUEST_CHECKSUM_CALCULATION="${AWS_REQUEST_CHECKSUM_CALCULATION:-when_required}"
+export AWS_RESPONSE_CHECKSUM_VALIDATION="${AWS_RESPONSE_CHECKSUM_VALIDATION:-when_required}"
+
+s3api() { aws --endpoint-url "${ENDPOINT}" s3api "$@"; }
 
 failures=0
 
@@ -86,8 +103,9 @@ failures=0
 # make undoable. And it is bucket-specific and authenticated, so a refusal
 # below cannot be an unreachable server or a dead credential.
 # ---------------------------------------------------------------------------
-if rule="$(${MC} retention info "scoped/${BUCKET}" 2>&1)"; then
-  log "CAN read the bucket's object-lock rule: ${rule}"
+if rule="$(s3api get-object-lock-configuration --bucket "${BUCKET}" 2>&1)"; then
+  log "CAN read the bucket's object-lock rule:"
+  printf '%s\n' "${rule}"
 else
   fail "the scoped identity cannot read ${BUCKET}'s object-lock rule: ${rule}"
   fail "nothing below this line would mean anything, because a refusal would be indistinguishable from an unreachable bucket"
@@ -95,49 +113,82 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2. IT MUST NOT BE ABLE TO SET THAT RULE. This is #228.
+# 2. IT MUST NOT BE ABLE TO SET THAT RULE. This is #228, and on this store it
+#    is what the prefix-scoped write grant buys (#227).
 #
 # The value written is the one just read back, so a deployment whose scope has
 # been widened is reported and is not further weakened by the reporting.
 # ---------------------------------------------------------------------------
-if out="$(${MC} retention set --default "${MODE}" "${RETENTION}" "scoped/${BUCKET}" 2>&1)"; then
+if out="$(s3api put-object-lock-configuration --bucket "${BUCKET}" \
+      --object-lock-configuration "ObjectLockEnabled=Enabled,Rule={DefaultRetention={Mode=${MODE},${RETENTION_UNIT}=${RETENTION_COUNT}}}" 2>&1)"; then
   fail "the scoped identity SET the bucket's object-lock configuration."
   fail "  AB-17: an identity permitted this can downgrade the default rule from COMPLIANCE"
   fail "  to GOVERNANCE, and every segment written afterwards is deletable by a holder of a"
   fail "  bypass-capable credential. Sealed history survives; future protection does not."
-  fail "  Revoke s3:PutBucketObjectLockConfiguration from ${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY}."
+  fail "  On this store the fix is the SCOPE OF THE WRITE GRANT and not a permission name:"
+  fail "  the identity file must say Write:${BUCKET}/${PREFIX}* and not a bucket-wide Write."
   failures=$((failures + 1))
 else
   log "CANNOT set the bucket's object-lock configuration: ${out}"
 fi
 
 # ---------------------------------------------------------------------------
-# 3. IT MUST NOT BE ABLE TO MAKE A BUCKET OF ITS OWN.
+# 3. IT MUST NOT BE ABLE TO WRITE OUTSIDE THE SEGMENT AND PROBE PREFIXES.
+#
+# On this store that is check 2's grant seen from the other side, and measuring
+# both is what makes the finding a scope rather than a coincidence: a credential
+# refused the bucket configuration but permitted a write anywhere in the bucket
+# would mean the server distinguishes the two calls by something other than the
+# prefix, and the whole argument for this shape would be wrong.
+# ---------------------------------------------------------------------------
+# --body TAKES A PATH AND NOT A STREAM. Piping into `--body /dev/stdin` is
+# rejected by the client before a request is made — "Blob values must be a path
+# to a file" — which this script would have reported as a refusal by the
+# server. Measured, and caught by OPS-029's run of this script: a check whose
+# failure mode is a false PASS is worse than no check.
+probe_key="innsegl-scope-probe-$$"
+probe_body="/tmp/${probe_key}"
+printf 'scope probe\n' > "${probe_body}"
+if out="$(s3api put-object --bucket "${BUCKET}" --key "${probe_key}" --body "${probe_body}" 2>&1)"; then
+  fail "the scoped identity WROTE ${BUCKET}/${probe_key}, which is outside ${PREFIX} and outside the canary's probe prefix."
+  fail "  The grant is meant to be Write:${BUCKET}/${PREFIX}*, not a bucket-wide Write."
+  fail "  That object now carries the bucket's default retention and cannot be removed; it will expire."
+  failures=$((failures + 1))
+else
+  log "CANNOT write outside the segment and probe prefixes: ${out}"
+fi
+rm -f "${probe_body}"
+
+# ---------------------------------------------------------------------------
+# 4. IT MUST NOT BE ABLE TO MAKE A BUCKET OF ITS OWN.
 #
 # A credential that can create a bucket can create one WITHOUT object lock and
 # write there instead, which is the same outcome as a downgrade reached by a
-# different route. The name is per-run so a refused attempt leaves nothing and
-# a permitted one is visible.
+# different route. The name is derived from the bucket so a refused attempt
+# leaves nothing and a permitted one is visible.
 # ---------------------------------------------------------------------------
 probe_bucket="${BUCKET}-scope-probe"
-if out="$(${MC} mb "scoped/${probe_bucket}" 2>&1)"; then
-  fail "the scoped identity CREATED bucket ${probe_bucket}. A credential that can make a bucket can make one with no object lock and write segments there; remove s3:CreateBucket. Delete ${probe_bucket} by hand."
+if out="$(s3api create-bucket --bucket "${probe_bucket}" 2>&1)"; then
+  fail "the scoped identity CREATED bucket ${probe_bucket}. A credential that can make a bucket can make one with no object lock and write segments there. Delete ${probe_bucket} by hand."
   failures=$((failures + 1))
 else
   log "CANNOT create a bucket: ${out}"
 fi
 
 # ---------------------------------------------------------------------------
-# 4. IT MUST NOT REACH THE STORE'S ADMIN SURFACE.
+# 5. IT MUST NOT BE ABLE TO TURN VERSIONING OFF.
 #
-# An identity that can list or attach policies can widen itself, and then
-# every check above is a check it can switch off.
+# Object lock is defined over versions. A credential that can suspend
+# versioning cannot delete what is already sealed, but everything written after
+# it has one overwritable version and nothing to refuse a delete of — the same
+# loss as a downgraded rule, reached by a third route.
 # ---------------------------------------------------------------------------
-if out="$(${MC} admin user list scoped 2>&1)"; then
-  fail "the scoped identity can list the store's users, which means it holds admin permissions: ${out}"
+if out="$(s3api put-bucket-versioning --bucket "${BUCKET}" --versioning-configuration Status=Suspended 2>&1)"; then
+  fail "the scoped identity SUSPENDED versioning on ${BUCKET}. Re-enable it immediately:"
+  fail "  aws --endpoint-url ${ENDPOINT} s3api put-bucket-versioning --bucket ${BUCKET} --versioning-configuration Status=Enabled"
   failures=$((failures + 1))
 else
-  log "CANNOT reach the admin surface: ${out}"
+  log "CANNOT suspend versioning: ${out}"
 fi
 
 if [ "${failures}" -ne 0 ]; then
@@ -145,4 +196,4 @@ if [ "${failures}" -ne 0 ]; then
   exit 1
 fi
 
-log "${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY} writes and reads ${BUCKET} and can weaken nothing about it — measured, not asserted"
+log "${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY} writes ${BUCKET}/${PREFIX} and can weaken nothing about the bucket — measured, not asserted"

@@ -33,7 +33,7 @@
 # for postgres and doc 05 §1's segmentation note explains. It does not touch
 # object storage: every case below passes scripts/backup-ledger.sh a
 # `--segments` directory already staged on disk, so this test needs nothing
-# from minio and creates no docker network of its own (RM-100's ~29-network
+# from the object store and creates no docker network of its own (RM-100's ~29-network
 # ceiling stays untouched).
 #
 # THE MISMATCH FIXTURE (BAK-002)
