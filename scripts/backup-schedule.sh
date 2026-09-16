@@ -72,6 +72,31 @@ usage() { sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; }
 default_backup_dir() { printf '%s/.innsegl/backups' "${HOME}"; }
 BACKUP_DIR="${INNSEGL_BACKUP_DIR:-$(default_backup_dir)}"
 
+# THE PATH THE JOB RUNS WITH, and it is the whole difference between a
+# schedule and a schedule that works.
+#
+# A launchd user agent inherits /usr/bin:/bin:/usr/sbin:/sbin and nothing else,
+# and Docker Desktop is on none of them. MEASURED: the first install of this
+# fired on demand and wrote one line to its log -- "backup-ledger: no container
+# named innsegl-postgres -- is the stack up?" -- which is a backup that cannot
+# run, arriving through the door meant to fix backups that never run.
+#
+# So the directories of `docker` and `git` are resolved at INSTALL time and
+# written into the unit. Resolved and not hardcoded, because a shipped file may
+# not name a directory on the operator's machine (CLAUDE.md,
+# scripts/no-operator-paths.sh) and because Docker Desktop, Colima, Homebrew
+# and a Linux package manager each put it somewhere different.
+job_path() {
+  p="/usr/bin:/bin:/usr/sbin:/sbin"
+  for tool in docker git; do
+    d="$(command -v "$tool" 2>/dev/null)" || continue
+    [ -n "$d" ] || continue
+    d="$(dirname "$d")"
+    case ":$p:" in *":$d:"*) : ;; *) p="$d:$p" ;; esac
+  done
+  printf '%s' "$p"
+}
+
 platform() {
   case "$(uname -s)" in
     Darwin) printf 'launchd' ;;
@@ -164,6 +189,10 @@ write_launchd() {
     <string>--quiet</string>
   </array>
   <key>WorkingDirectory</key><string>${REPO_ROOT}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$(job_path)</string>
+  </dict>
   <key>StartInterval</key><integer>${EVERY}</integer>
   <key>RunAtLoad</key><false/>
   <key>StandardOutPath</key><string>${BACKUP_DIR}/schedule.log</string>
@@ -180,6 +209,7 @@ Description=Innsegl ledger backup, verified against the sealed segments
 
 [Service]
 Type=oneshot
+Environment=PATH=$(job_path)
 WorkingDirectory=${REPO_ROOT}
 ExecStart=${REPO_ROOT}/scripts/backup-ledger.sh --out ${BACKUP_DIR} --quiet
 UNIT
@@ -214,10 +244,12 @@ cmd_status() {
         | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p' \
         | tr '\n' ' ' | sed 's/^/  runs  /;s/ $//'
       echo
-      sed -n 's/.*<key>StartInterval<\/key><integer>\([0-9]*\)<\/integer>.*/  every \1s/p' "$u" ;;
+      sed -n 's/.*<key>StartInterval<\/key><integer>\([0-9]*\)<\/integer>.*/  every \1s/p' "$u"
+      sed -n '/<key>PATH<\/key>/s/.*<string>\(.*\)<\/string>.*/  path  \1/p' "$u" ;;
     systemd)
       sed -n 's/^ExecStart=/  runs  /p' "$(service_path)" 2>/dev/null
-      sed -n 's/^OnUnitActiveSec=/  every /p' "$u" ;;
+      sed -n 's/^OnUnitActiveSec=/  every /p' "$u"
+      sed -n 's/^Environment=PATH=/  path  /p' "$(service_path)" 2>/dev/null ;;
   esac
   return "$EXIT_OK"
 }
