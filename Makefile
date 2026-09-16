@@ -484,17 +484,27 @@ innsegl-link:
 	   || { echo "innsegl-link: linked, but /work/$$id/.git does not resolve — is $$d inside INNSEGL_PROJECTS?"; exit 1; }; \
 	 echo "linked  $$id  ->  $$rel"
 
-## innsegl-verify: ask the server what the MCP's database credential can do
+## innsegl-verify: ask the two servers what this deployment's credentials can do
 #
-# doc 05 §1 requires a role that appends and cannot delete. This does not read
-# the GRANTs, it attempts the writes and classifies the refusals by SQLSTATE —
-# see deploy/compose/innsegl/verify-role.sh for why a check that asked "did it
-# fail?" would pass the database owner. It writes nothing: every probe runs in
-# a transaction that is rolled back.
+# doc 05 §1 requires a database role that appends and cannot delete. This does
+# not read the GRANTs, it attempts the writes and classifies the refusals by
+# SQLSTATE — see deploy/compose/innsegl/verify-role.sh for why a check that
+# asked "did it fail?" would pass the database owner. It writes nothing: every
+# probe runs in a transaction that is rolled back.
+#
+# The second half asks the object store the same kind of question about the
+# sealer's credential (#228): it must be able to read the bucket's object-lock
+# rule and must not be able to set it. Both run at provisioning time already;
+# this is how an operator re-asks a stack that has been up for a year, because
+# a policy attached once lives in somebody's deployment and one later
+# `mc admin policy attach` leaves no trace in this repository.
 innsegl-verify:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  $(INNSEGL_COMPOSE) run --rm --entrypoint sh innsegl-db-init \
 	  /innsegl/init/verify-role.sh
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  $(INNSEGL_COMPOSE) run --rm --entrypoint sh innsegl-object-init \
+	  /innsegl/init/verify-object-scope.sh
 
 ## innsegl-canary: SEG-005 — prove the object store refuses to delete a segment
 innsegl-canary:
