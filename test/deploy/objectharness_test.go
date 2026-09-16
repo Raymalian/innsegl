@@ -285,6 +285,10 @@ func composeUsable(ctx context.Context) error {
 }
 
 // interpolateCompose resolves the shipped compose files the way the daemon
+// composeParentIDPlaceholder stands in for the attested node id. It is never
+// dialled: interpolation needs a value, not a real parent.
+const composeParentIDPlaceholder = "spiffe://innsegl.dev/spire/agent/placeholder/interpolation-only"
+
 // would, with the object store's root credential as the deployment's, and
 // returns what every service would actually be handed.
 func interpolateCompose(ctx context.Context, t *testing.T, bucket string, files ...string) composeConfig {
@@ -303,6 +307,14 @@ func interpolateCompose(ctx context.Context, t *testing.T, bucket string, files 
 		"INNSEGL_OBJECT_STORE_ACCESS_KEY="+storeRootUser,
 		"INNSEGL_OBJECT_STORE_SECRET_KEY="+storeRootPassword,
 		"INNSEGL_OBJECT_STORE_BUCKET="+bucket,
+		// The attested node id, which register.sh writes into
+		// deploy/compose/.env when a stack is brought up. This reads the
+		// CREDENTIAL WIRING out of the compose file and never starts SPIRE, so
+		// the value is irrelevant and only its presence matters — but the file
+		// refuses to interpolate without it, and that file does not exist on a
+		// machine that has never run the stack. Which is every CI runner:
+		// these tests passed locally and failed in CI for exactly this.
+		"INNSEGL_SPIRE_PARENT_ID="+composeParentIDPlaceholder,
 	)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
