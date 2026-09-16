@@ -22,9 +22,11 @@ COVERPROFILE := cover.out
 
 .PHONY: all build test test-clean lint cover smoke smoke-down spire-up spire-verify \
         spire-down spire-admin-relay-up spire-admin-relay-down \
-        sigstore-up sigstore-verify sigstore-down rekor-tlog-id \
+        sigstore-up sigstore-verify sigstore-down rekor-tlog-id rekor-reindex \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
+        innsegl-trust-volumes innsegl-trust-status innsegl-backup-schedule \
+        innsegl-backup-schedule-status innsegl-backup-unschedule \
         innsegl-stack-clean innsegl-up-here innsegl-link innsegl-install-signer verify-branch \
         verify-branch-selftest start link sign clean
 
@@ -48,6 +50,43 @@ cover:
 	go test ./... -covermode=atomic -coverprofile=$(COVERPROFILE)
 	go tool cover -func=$(COVERPROFILE)
 
+# ---------------------------------------------------------------------------
+# THE DURABLE TRUST ROOT (doc 05 §2; OPS-031..OPS-033).
+#
+# On 2026-09-16 a teardown with volumes removed, in one command, took the
+# ledger from 19,595 chain positions to 60 and the transparency log from 525
+# entries to 3, and minted a new Fulcio CA key and a new Rekor signing key.
+# Every commit signed the previous day stopped verifying — the signature is
+# intact and the trailer still matches the certificate; the CA that issued it
+# and the log that recorded it are gone, and there is no repair. Four merged
+# branches had to be re-signed from scratch to pass the merge gate. It happened
+# twice the same day.
+#
+# The rule that follows is one sentence: THE TRUST ROOT MUST NOT LIVE WHERE THE
+# TEARDOWN REACHES. Two lines below are what puts it out of reach.
+#
+# INNSEGL_TRUST_ENV names the four volumes and turns on their external
+# declaration, so every compose invocation in this file resolves them to
+# volumes DECLARED OUTSIDE the project: `down -v` can only detach them.
+# The names come from the script rather than being repeated here, because a
+# second copy of a volume name is a second thing that goes stale, and the one
+# it goes stale against is a CA key.
+#
+# GUARD stands in front of every teardown. It refuses to remove a volume
+# holding a key or the chain, names what it would have destroyed, and takes
+# INNSEGL_DESTROY_TRUST_ROOT=<volume> from an operator who means it.
+# ---------------------------------------------------------------------------
+INNSEGL_TRUST_ENV := $(shell deploy/compose/trust-volumes.sh env | tr '\n' ' ')
+GUARD             := scripts/teardown-guard.sh
+
+## innsegl-trust-volumes: create the four volumes the trust root lives in
+innsegl-trust-volumes:
+	deploy/compose/trust-volumes.sh ensure
+
+## innsegl-trust-status: what exists, whose deployment it is, and what it holds
+innsegl-trust-status:
+	@deploy/compose/trust-volumes.sh list
+
 ## spire-up: boot the reference SPIRE stack and create its bootstrap entries
 spire-up:
 	docker compose -f deploy/compose/spire.yml up -d
@@ -59,7 +98,7 @@ spire-verify:
 
 ## spire-down: tear the SPIRE stack down, volumes included
 spire-down:
-	docker compose -f deploy/compose/spire.yml --profile verify down -v
+	$(GUARD) docker compose -f deploy/compose/spire.yml --profile verify down -v
 
 # ---------------------------------------------------------------------------
 # The admin relay (RM-097, #156). OFF unless asked for: see spire.yml's
@@ -113,15 +152,46 @@ rekor-tlog-id:
 	  echo "$$id  (pinned in $(REKOR_TLOG_FILE))"
 
 ## sigstore-up: boot SPIRE and the local Fulcio/Rekor pair, wired to each other
-sigstore-up:
+#
+# The trust volumes are ensured FIRST and not as a convenience: compose will
+# not create an external volume, so a machine that has never run this needs
+# them made before anything is brought up. `ensure` is a no-op on the second
+# run and refuses rather than adopt a set stamped for another deployment.
+sigstore-up: innsegl-trust-volumes
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  docker compose -f deploy/compose/spire.yml up -d
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
-	  docker compose -f deploy/compose/sigstore.yml up -d
+	  $(INNSEGL_TRUST_ENV) docker compose -f deploy/compose/sigstore.yml up -d
 	@$(MAKE) --no-print-directory rekor-tlog-id >/dev/null 2>&1 || true
+	@$(MAKE) --no-print-directory rekor-reindex
+
+# REBUILDING THE SEARCH INDEX, and why bring-up does it every time.
+#
+# sigstore-rekor-search is Redis's map from artifact digest to entry UUID. It is
+# DERIVED — rebuildable from Trillian by walking the log — which is exactly why
+# it is not one of the four volumes doc 05 §2 puts outside the project. But
+# rebuildable is worth nothing if nothing rebuilds it, and `down -v` removes it
+# while leaving every entry in place.
+#
+# MEASURED 2026-09-16, proving OPS-032: after a `down -v` the log held the same
+# tree and the same 25 entries, and `innsegl verify` reported of a perfectly
+# good commit "the log answered, and it holds no entry whose artifact is
+# sha256:d8b5… Nothing ever logged a signature over this commit object."
+#
+# That is a FALSE ACCUSATION and not an unavailable verdict — doc 06 P2's
+# tri-state has no room for one, and AB-08 is about the opposite confusion.
+# Rekor indexes an entry when it is written and never afterwards, so nothing
+# was going to fix this on its own. The rebuild is idempotent and took under a
+# second for 25 entries; it is best-effort because a log that is not answering
+# yet is a race and not a fault, and the readiness report asks again.
+
+## rekor-reindex: rebuild Rekor's digest->entry index from the log itself
+rekor-reindex:
+	-@INNSEGL_REKOR_URL='$(or $(INNSEGL_REKOR_URL),http://127.0.0.1:$(INNSEGL_REKOR_PORT))' \
+	  scripts/rekor-reindex.sh 2>&1 | tail -1
 
 ## sigstore-verify: obtain a real Fulcio certificate for a real JWT-SVID
 sigstore-verify:
@@ -131,7 +201,7 @@ sigstore-verify:
 ## sigstore-down: tear the Sigstore stack down, volumes included
 sigstore-down:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  docker compose -f deploy/compose/sigstore.yml down -v
+	  $(INNSEGL_TRUST_ENV) $(GUARD) docker compose -f deploy/compose/sigstore.yml down -v
 
 # ---------------------------------------------------------------------------
 # The fresh-clone contract (RM-054, #62).
@@ -183,7 +253,8 @@ smoke: innsegl-stack-clean
 innsegl-stack-clean:
 	-@INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_SPIRE_PARENT_ID=unset \
-	  $(INNSEGL_COMPOSE) --profile demo --profile canary down -v \
+	  $(INNSEGL_TRUST_ENV) $(GUARD) docker compose -f deploy/compose/innsegl.yml \
+	  --profile demo --profile canary down -v \
 	  --remove-orphans >/dev/null 2>&1 || true
 
 ## smoke-down: remove what a kept `make smoke` stack left behind
@@ -191,8 +262,8 @@ smoke-down: innsegl-stack-clean
 	-docker rm --force --volumes innsegl-smoke-mcp innsegl-smoke-ledger-relay innsegl-smoke-postgres
 	-docker network rm innsegl-smoke-ledger
 	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  docker compose -f deploy/compose/sigstore.yml down -v
-	-docker compose -f deploy/compose/spire.yml --profile verify down -v
+	  $(INNSEGL_TRUST_ENV) $(GUARD) docker compose -f deploy/compose/sigstore.yml down -v
+	-$(GUARD) docker compose -f deploy/compose/spire.yml --profile verify down -v
 
 # ---------------------------------------------------------------------------
 # The components this project IS (RM-076, #109).
@@ -209,7 +280,7 @@ smoke-down: innsegl-stack-clean
 # cannot be brought up on its own and says so if you try.
 # ---------------------------------------------------------------------------
 
-INNSEGL_COMPOSE := docker compose -f deploy/compose/innsegl.yml
+INNSEGL_COMPOSE := $(INNSEGL_TRUST_ENV) docker compose -f deploy/compose/innsegl.yml
 
 # The repository the demo agent commits into, as doc 02 §5 spells a repo: an
 # identifier, resolved beneath the deployment's workspace root.
@@ -582,7 +653,8 @@ innsegl-down:
 innsegl-purge:
 	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_SPIRE_PARENT_ID=unset \
-	  $(INNSEGL_COMPOSE) --profile demo --profile canary down -v
+	  $(INNSEGL_TRUST_ENV) $(GUARD) docker compose -f deploy/compose/innsegl.yml \
+	  --profile demo --profile canary down -v
 
 # ---------------------------------------------------------------------------
 # The ledger backup (issue #160, RM-099).
@@ -609,6 +681,27 @@ INNSEGL_BACKUP_DIR ?= backups
 ## innsegl-backup: pg_dump the ledger and verify it against the sealed segments
 innsegl-backup:
 	INNSEGL_BACKUP_DIR='$(INNSEGL_BACKUP_DIR)' scripts/backup-ledger.sh --out '$(INNSEGL_BACKUP_DIR)'
+
+# The same script, on a timer (#160 finished; OPS-035). It had a self-test and
+# a verified exit-status contract and had never once run unattended: a backup
+# that happens when someone remembers has not happened since the last time
+# someone remembered. doc 05 §2 wants the dump off the box in production;
+# locally the value is a directory OUTSIDE the checkout, so a `git clean` or a
+# re-clone does not take the copy with it. INNSEGL_BACKUP_DIR is not defaulted
+# here to a path: scripts/backup-schedule.sh computes one at install time,
+# because a shipped file may not name a directory on the operator's machine.
+
+## innsegl-backup-schedule: run the ledger backup on a timer, off the checkout
+innsegl-backup-schedule:
+	scripts/backup-schedule.sh install
+
+## innsegl-backup-schedule-status: what is on the timer, read out of the unit
+innsegl-backup-schedule-status:
+	@scripts/backup-schedule.sh status
+
+## innsegl-backup-unschedule: take the ledger backup off the timer
+innsegl-backup-unschedule:
+	scripts/backup-schedule.sh uninstall
 
 # ---------------------------------------------------------------------------
 # The merge gate for agent-signed commits (#173, RM-108).
