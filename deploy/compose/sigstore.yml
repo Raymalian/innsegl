@@ -614,14 +614,45 @@ networks:
 # each one names who may mount it and how.
 # ----------------------------------------------------------------------------
 volumes:
+  # ---------------------------------------------------------------------
+  # THREE OF THE IRREPLACEABLE FOUR (doc 05 §2; OPS-032).
+  #
+  # A compose project's volumes are exactly what `down -v` removes. On
+  # 2026-09-16 one such command minted a new Fulcio CA key and a new Rekor
+  # signing key and took the transparency log from 525 entries to 3, and
+  # every commit signed the previous day stopped verifying: the signature
+  # is intact and the trailer still matches the certificate; the CA that
+  # issued it and the log that recorded it are gone. There is no repair.
+  #
+  # Brought up through `make`, these three resolve to volumes DECLARED
+  # OUTSIDE this project, so `down -v` can only detach them — measured, and
+  # the measurement is OPS-032. deploy/compose/trust-volumes.sh creates and
+  # stamps them; scripts/teardown-guard.sh refuses to remove one by name.
+  #
+  # The DEFAULTS reproduce this project's own names exactly, so a file read
+  # on its own behaves as it always has and the README's boot block is
+  # unchanged. The durable path is opt-IN because it needs the volumes to
+  # exist first, and compose will not create an external volume.
+  # ---------------------------------------------------------------------
+
   # The Fulcio CA certificate, its encrypted key, and the rendered issuer
   # config. MOUNTED BY: sigstore-bootstrap (rw), fulcio (ro).
   sigstore-fulcio-pki:
+    name: ${INNSEGL_TRUST_FULCIO_PKI_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-sigstore}_sigstore-fulcio-pki}
+    external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
   # The transparency log's signing key — the key ADR-0009's verification
   # ultimately trusts. MOUNTED BY: sigstore-bootstrap (rw), rekor (ro).
   sigstore-rekor-key:
-  # Trillian's MySQL data directory. MOUNTED BY: trillian-db.
+    name: ${INNSEGL_TRUST_REKOR_KEY_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-sigstore}_sigstore-rekor-key}
+    external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
+  # Trillian's MySQL data directory — the log ITSELF, and not a cache of it.
+  # The tree deploy/compose/.rekor-tlog-id pins lives here; lose this and the
+  # pin names a tree that does not exist, which is how Rekor came to answer
+  # HTTP 500 to every request on 2026-09-16 (see scripts/rekor-tlog-health.sh).
+  # MOUNTED BY: trillian-db.
   sigstore-trillian-db-data:
+    name: ${INNSEGL_TRUST_TRILLIAN_DB_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-sigstore}_sigstore-trillian-db-data}
+    external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
   # Rekor's search index — the map from artifact digest and certificate
   # identity to entry UUID. Rebuildable from Trillian by walking the log
   # (scripts/rekor-reindex.sh), but not rebuilt automatically: Rekor indexes an
