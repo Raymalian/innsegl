@@ -73,12 +73,79 @@ func (g GitRepos) StagedPatchID(ctx context.Context, worktree string) (string, e
 // `commit_intent` that preceded it — `git diff --cached` in a repository with
 // no HEAD diffs against the empty tree, which is what `--root` makes
 // diff-tree do too.
+// A MERGE is diffed against its FIRST PARENT, because `diff-tree -p` prints
+// nothing at all for a commit with more than one parent, and the Phase C
+// invariant then fires on a perfectly ordinary commit (RM-145, #229).
+//
+// First-parent is not a workaround chosen to make the check pass; it is the
+// same question Phase A already asked. `StagedPatchID` runs `git diff --cached`,
+// which compares the index against HEAD — and when a merge is committed, HEAD
+// *is* the first parent. So both phases were always asking about the
+// first-parent change; only Phase C had no way to express it. Measured: the
+// first-parent diff of a merge yields the same patch id as the branch commit
+// it brought in.
+//
+// `--cc` is the obvious thing to reach for and does not work. On a clean merge
+// it emits the commit sha and no patch — 41 bytes, no diff — and `git patch-id`
+// returns nothing for it, so the empty-diff error only moves one step later. It
+// is a combined diff of the hunks differing from *every* parent, which for a
+// merge that resolved no conflicts is none.
+//
+// `-m` does work but answers a different question: one patch per parent, so
+// `patch-id` emits one id per patch and the caller must choose among them
+// anyway. Choosing the first is what this function does.
 func (g GitRepos) CommitPatchID(ctx context.Context, worktree, commit string) (string, error) {
 	if err := event.ValidateGitObjectID(commit); err != nil {
 		return "", fmt.Errorf("%q is not a commit id: %w", commit, err)
 	}
+
+	firstParent, err := g.firstParentOfMerge(ctx, worktree, commit)
+	if err != nil {
+		return "", err
+	}
+	if firstParent != "" {
+		// Two-tree form, and no `--root`: a merge has a parent by definition,
+		// and the flag means nothing between two named trees.
+		return g.patchIDOf(ctx, worktree,
+			[]string{"diff-tree", "-p", "--no-color", "--no-ext-diff", firstParent, commit})
+	}
+
+	// Unchanged for every non-merge commit, deliberately. This is the input
+	// every patch id already in the ledger was computed from; a different
+	// invocation here would make history disagree with itself even where it
+	// happened to produce the same bytes.
 	return g.patchIDOf(ctx, worktree,
 		[]string{"diff-tree", "-p", "--root", "--no-color", "--no-ext-diff", commit})
+}
+
+// firstParentOfMerge returns the first parent of `commit` when it is a merge,
+// and "" when it has one parent or none.
+//
+// `rev-list --parents -n 1` prints the commit followed by its parents on a
+// single line, so the field count is the parent count plus one. `cat-file -p`
+// would answer too, but it returns the whole object and would have to be parsed
+// past the tree, author and committer lines to reach the same fact.
+func (g GitRepos) firstParentOfMerge(ctx context.Context, worktree, commit string) (string, error) {
+	path := g.GitPath
+	if path == "" {
+		path = "git"
+	}
+
+	cmd := exec.CommandContext(ctx, path, "-C", worktree,
+		"rev-list", "--parents", "-n", "1", commit)
+	cmd.Env = signCommitGitEnv(worktree)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-list --parents %s in %s: %w", commit, worktree, err)
+	}
+
+	fields := strings.Fields(string(out))
+	if len(fields) < 3 {
+		// One field is a root commit, two an ordinary commit. Neither is a
+		// merge, and the `--root` invocation already handles both.
+		return "", nil
+	}
+	return fields[1], nil
 }
 
 // patchIDOf pipes a diff into `git patch-id --verbatim` and reads the id back.
