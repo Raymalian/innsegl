@@ -464,3 +464,161 @@ func shimDeriveTask(t *testing.T, hook, dir string) (branch, task string) {
 	}
 	return lines[len(lines)-2], lines[len(lines)-1]
 }
+
+// MCP-071..MCP-074 — the repository git reports lives in the HOST namespace.
+//
+// MEASURED on 2026-09-16 inside the running deployment, not reasoned about.
+// The projects directory is bind-mounted at more than one path in the
+// container, and those spellings are not symlinks of one another:
+//
+//	asked from the MAIN tree     git answers the path it was handed
+//	asked from a LINKED worktree git answers the RECORDED path — the host
+//	                             spelling written into `.git` at creation
+//
+// So a linked worktree resolved to a repository this process addresses under
+// its mount and git names under the host root; filepath.Rel over the two
+// produced a path of `..` segments and the call was refused. The refusal was
+// correct for what the code could see and wrong about the world.
+//
+// Symlink resolution cannot reach this. It is what the code already does, and
+// neither path is a symlink — that is the whole difference between this and
+// the /private/var case relativeWorktree was written for. The answer is the
+// translation the tool ALREADY owns for `cwd`, applied to git's answer too.
+//
+// These drive the derivation directly, with the values measured above, because
+// two bind mounts of one directory cannot be made inside a test process.
+
+// hostNamespace is the shape measured above: a host root that is not this
+// process's mount, and a repository under it.
+const (
+	hostNamespaceRoot = "/host-checkout/projects"
+	mountNamespace    = "/projects"
+)
+
+// MCP-071: a linked worktree whose repository git names in the host namespace.
+func TestMCP071LinkedWorktreeResolvesAcrossNamespaces(t *testing.T) {
+	cfg := DescribeWorkspaceConfig{HostProjects: hostNamespaceRoot, Projects: mountNamespace}
+
+	got, err := cfg.localWorktreePath(hostNamespaceRoot + "/example-repo")
+	if err != nil {
+		t.Fatalf("translating the repository git reports: %v", err)
+	}
+	if want := mountNamespace + "/example-repo"; got != want {
+		t.Errorf("the repository translated to %q, want %q; a linked worktree records "+
+			"the host spelling and this process reads the mount", got, want)
+	}
+}
+
+// MCP-072: the main tree, where git echoes the host spelling it was handed.
+//
+// The symmetric case, so the translation is not a rule that fires only for
+// linked trees: the same repository reached as the repository itself has to
+// come back as the mount's spelling of it, or the worktree would be computed
+// relative to a path this process cannot read.
+func TestMCP072MainTreeResolvesAcrossNamespaces(t *testing.T) {
+	cfg := DescribeWorkspaceConfig{HostProjects: hostNamespaceRoot, Projects: mountNamespace}
+
+	got, err := cfg.localWorktreePath(hostNamespaceRoot + "/example-repo")
+	if err != nil {
+		t.Fatalf("translating the repository git reports: %v", err)
+	}
+	rel, err := relativeWorktree(got, mountNamespace+"/example-repo")
+	if err != nil {
+		t.Fatalf("expressing the main tree under itself: %v", err)
+	}
+	if rel != "" {
+		t.Errorf("the main tree came back as worktree %q, want empty; sign_commit reads "+
+			"an empty worktree as the repository itself (MCP-029)", rel)
+	}
+}
+
+// MCP-073: a repository under neither root is REFUSED, not guessed.
+func TestMCP073RepositoryOutsideBothRootsIsRefused(t *testing.T) {
+	cfg := DescribeWorkspaceConfig{HostProjects: hostNamespaceRoot, Projects: mountNamespace}
+
+	got, err := cfg.localWorktreePath("/somewhere/else/example-repo")
+	if err == nil {
+		t.Fatalf("a repository under neither root was translated to %q; a guessed "+
+			"repository is the wrong name in an append-only record", got)
+	}
+	var classified *Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("refused with %T (%v), not an IP §4 classified error", err, err)
+	}
+	if !classified.Class.Valid() {
+		t.Errorf("refused with class %q, which is not one of IP §4's eleven",
+			string(classified.Class))
+	}
+	// SAY WHAT TO DO: the reader has to be able to tell which of the two roots
+	// is wrong, so both are named.
+	for _, want := range []string{mountNamespace, hostNamespaceRoot, EnvHostProjects} {
+		if !strings.Contains(classified.Message, want) {
+			t.Errorf("the refusal never names %q; it reads %q", want, classified.Message)
+		}
+	}
+}
+
+// MCP-074: a repository ALREADY under the mount is returned unchanged.
+//
+// Measured: asked from the main tree, git echoes the path it was handed, so
+// this is the ordinary case. Translating it a second time would prepend the
+// mount to a path that already carries it.
+func TestMCP074RepositoryUnderTheMountIsNotTranslatedTwice(t *testing.T) {
+	cfg := DescribeWorkspaceConfig{HostProjects: hostNamespaceRoot, Projects: mountNamespace}
+
+	want := mountNamespace + "/example-repo"
+	got, err := cfg.localWorktreePath(want)
+	if err != nil {
+		t.Fatalf("translating a repository already under the mount: %v", err)
+	}
+	if got != want {
+		t.Errorf("a local path translated to %q, want %q unchanged", got, want)
+	}
+}
+
+// MCP-073, through the tool: a worktree UNDER the mount whose repository is
+// outside it.
+//
+// The arrangement is legitimate and reachable without any container: `git
+// worktree add` takes any path, so a repository living outside the projects
+// directory can put one of its trees inside it. The tree is then addressable
+// and its repository is not, and the honest answer is a refusal — the
+// alternative is a repository identifier read from a tree this deployment
+// cannot reach, recorded append-only.
+//
+// It is also what gives the refusal inside describe its own coverage: the
+// error return the translation added is not reachable from the cases above,
+// which exercise the translation directly.
+func TestMCP073DescribeRefusesARepositoryOutsideTheMount(t *testing.T) {
+	root := t.TempDir()
+	projects := filepath.Join(root, "projects")
+	if err := os.Mkdir(projects, 0o755); err != nil {
+		t.Fatalf("creating the projects directory: %v", err)
+	}
+
+	// The repository is a sibling of the mount, not under it.
+	outside := filepath.Join(root, "outside-repo")
+	if err := os.Mkdir(outside, 0o755); err != nil {
+		t.Fatalf("creating the repository directory: %v", err)
+	}
+	gitInit(t, outside, "git@github.com:Example-Org/Example-Repo.git")
+	if err := os.WriteFile(filepath.Join(outside, "seed"), []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("seeding a file: %v", err)
+	}
+	run(t, outside, "add", "seed")
+	run(t, outside, "commit", "-q", "-m", "seed", "--no-gpg-sign")
+
+	// ...with one of its trees inside the mount.
+	inside := filepath.Join(projects, "tree")
+	run(t, outside, "worktree", "add", "-b", "dev/rm149", inside)
+
+	configureWorkspace(t, projects, projects)
+	message := refusalMessage(t, inside, "a worktree whose repository is outside the mount")
+	if !strings.Contains(message, "under neither") {
+		t.Errorf("the refusal is %q; it does not say the repository is outside both roots",
+			message)
+	}
+	if !strings.Contains(message, "outside-repo") {
+		t.Errorf("the refusal is %q; it never names the repository git reported", message)
+	}
+}
