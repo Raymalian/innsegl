@@ -141,6 +141,21 @@ else
   KEY="session-${SESSION_ID:-unknown}"
 fi
 
+# THE ID THE MCP KNOWS THIS RUN BY, which is not the marker's filename above.
+# SubagentStart calls observe_session with the AGENT id and SessionStart with
+# the SESSION id, so anything naming a run by session has to make the same
+# choice or it names the wrong one. Passing $SESSION_ID unconditionally would
+# attribute a subagent's tool calls to the run of the session that spawned it —
+# caught by the selftest, and the reason this is one variable and not a
+# decision repeated at each call site.
+if [ -n "$AGENT_ID" ]; then
+  IDENT="$AGENT_ID"
+  IDENT_TYPE="${AGENT_TYPE:-subagent}"
+else
+  IDENT="$SESSION_ID"
+  IDENT_TYPE="${INNSEGL_SESSION_AGENT_TYPE:-session}"
+fi
+
 warn() { echo "innsegl: $*" >&2; }
 
 # say_detail passes on a reply's `detail`, which is how observe_session reports
@@ -538,14 +553,33 @@ gate is what decides whether it may merge."
     # the `$LOG/<run>/<digest>.json` layout, or that a body is kept at all. The
     # body still never leaves this machine; it is now the MCP that holds it.
     #
+    # NAMED BY SESSION, NOT BY RUN — RM-142 (#226).
+    #
+    # This block used to read the marker first and `exit 0` when there was
+    # none. A marker is absent exactly when registration was refused, which is
+    # exactly when the deployment was down at SessionStart — so the session lost
+    # its identity AND every tool call it went on to make, silently, after one
+    # warning at the beginning. Measured: the ledger held 101 orchestrator runs,
+    # 69 general-purpose, and 3 session.
+    #
+    # The session id is something this harness always has, whether or not a
+    # registration ever succeeded. Handing it over lets the MCP resolve the run
+    # it already holds, or register the session on first sight — so a refused
+    # start recovers on the next tool call instead of being terminal, and this
+    # file needs no retry, no backoff and no "did it work" check. That is the
+    # point: a retry written here is a retry every future shim reimplements.
+    #
+    # The marker is still read when it exists, for the run token alone. Where
+    # the caller names a session rather than a run, the token is not required —
+    # a session id is not the public value a run id is.
+    #
     # ALWAYS 0. See the header.
+    [ -n "$TOOL" ] && [ -n "$IDENT" ] || exit 0
     MARK="$(recall)"
-    [ -n "$MARK" ] || exit 0
-    RUN_ID="$(reply_field "$MARK" run_id)"
-    [ -n "$RUN_ID" ] && [ -n "$TOOL" ] || exit 0
     mcp_call observe_tool_call \
-      run_id "$RUN_ID" tool "$TOOL" body "$EVENT_JSON" \
-      run_token "$(reply_field "$MARK" run_token)" >/dev/null 2>&1 || true
+      session_id "$IDENT" cwd "$CWD" tool "$TOOL" body "$EVENT_JSON" \
+      agent_type "$IDENT_TYPE" \
+      run_token "$(reply_field "${MARK:-}" run_token)" >/dev/null 2>&1 || true
     exit 0
     ;;
 

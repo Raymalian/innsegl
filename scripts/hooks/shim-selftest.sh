@@ -164,13 +164,38 @@ else
   bad "SubagentStart returned $STATUS for a refused registration; IP §6.1 wants 2"
 fi
 
-# 5. PostToolUse forwards the observed call, body and all.
+# 5. PostToolUse forwards the observed call, body and all — NAMED BY SESSION.
+#    RM-142 (#226): it named the run, which it could only do when registration
+#    had succeeded. A marker is absent exactly when the deployment was down at
+#    start, so the session lost its identity AND every call it went on to make.
 script_tool observe_tool_call ok '{"digest":"sha256:'"$(printf 'a%.0s' $(seq 1 64))"'","stored":true}'
 drive '{"hook_event_name":"PostToolUse","session_id":"sess-1","agent_id":"agent-7","tool_name":"Edit","tool_input":{"file_path":"x"}}'
-if [ "$STATUS" -eq 0 ] && called observe_tool_call '"run_id": "run-bbbb2222"' '"tool": "Edit"' '"body":'; then
-  ok "PostToolUse calls observe_tool_call with the run, the tool and the body"
+if [ "$STATUS" -eq 0 ] && called observe_tool_call '"session_id": "agent-7"' '"tool": "Edit"' '"body":'; then
+  ok "PostToolUse calls observe_tool_call with the session, the tool and the body"
 else
   bad "PostToolUse: status $STATUS, calls: $(cat "$CALLS")"
+fi
+
+# 5b. AND IT NAMES THE RIGHT ONE. There are two kinds of run: a subagent's,
+#     keyed on the agent id, and the operator's own session, keyed on the
+#     session id. A payload carrying BOTH must name the agent — passing the
+#     session id unconditionally attributes a subagent's tool calls to the run
+#     of the session that spawned it, which is a misattribution written into an
+#     append-only record. Caught exactly this way while RM-142 was written.
+if called observe_tool_call '"session_id": "agent-7"' && ! called observe_tool_call '"session_id": "sess-1"'; then
+  ok "a subagent's call names the AGENT, never the session that spawned it"
+else
+  bad "PostToolUse named the wrong identity: $(cat "$CALLS")"
+fi
+
+# 5c. and the operator's own session, which carries no agent id, names itself.
+: > "$CALLS"
+script_tool observe_tool_call ok '{"digest":"sha256:'"$(printf 'b%.0s' $(seq 1 64))"'","stored":true}'
+drive '{"hook_event_name":"PostToolUse","session_id":"sess-1","tool_name":"Edit","tool_input":{"file_path":"x"}}'
+if called observe_tool_call '"session_id": "sess-1"' '"agent_type": "session"'; then
+  ok "the operator's own session names itself, with no marker required"
+else
+  bad "main-session PostToolUse: $(cat "$CALLS")"
 fi
 
 # 6. and it does not record the event itself any more.
