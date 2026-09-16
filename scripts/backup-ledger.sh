@@ -16,10 +16,11 @@
 # time, per the issue: "A backup nobody has verified is the same shape as a
 # gate nobody has watched fail." It does four things, in order:
 #
-#   1. pg_dump the whole `innsegl` database from the running container.
-#   2. Restore that dump into a throwaway database in the SAME container --
-#      never the live one (runbooks/index-rebuild.md §2.2) -- which proves the
-#      dump actually restores rather than merely that pg_dump exited 0.
+#   1. pg_dump the whole `innsegl` database OVER THE NETWORK, as a role that
+#      can read it and cannot write it.
+#   2. Restore that dump into a throwaway database on the SAME server -- never
+#      the live one (runbooks/index-rebuild.md §2.2) -- which proves the dump
+#      actually restores rather than merely that pg_dump exited 0.
 #   3. Extract the restored event_hash column, in chain_position order.
 #   4. Adjudicate it against the sealed segments with the gate this repository
 #      already ships and already self-tests: runbooks/verify-rebuilt-index.sh.
@@ -85,16 +86,6 @@ readonly EXIT_MISMATCH=3
 readonly EXIT_UNVERIFIED=4
 readonly EXIT_DUMP_FAILED=5
 
-# The pin deploy/compose/innsegl.yml uses for its S3 client, copied rather than
-# read from the compose file so this script has no YAML-parsing dependency.
-# Kept in one place: grep this string in deploy/compose/innsegl.yml when
-# bumping it there.
-#
-# IT IS THE REFERENCE CLIENT AND NOT ANY ONE STORE'S OWN (RM-143, #227). What
-# was here was the client that shipped with the store this deployment used to
-# run, and when that store was archived upstream this script's fetch went with
-# it. `aws s3 cp --recursive` is the same operation over the protocol.
-readonly DEFAULT_S3_CLIENT_IMAGE="amazon/aws-cli:2.31.19@sha256:4532e423f4e4f1092b3b1fb7819278a1f4baa3564f428182e399669d9c8f9e95"
 
 usage() {
   cat <<'USAGE'
@@ -108,20 +99,22 @@ Options:
   --out DIR               directory to write the dump and its verification
                           report into (default: $INNSEGL_BACKUP_DIR or
                           ./backups)
-  --postgres-container N  container to pg_dump from (default: innsegl-postgres)
+  --postgres-host H       ledger host to connect to (default: $PGHOST or
+                          postgres). A NETWORK client: this script holds no
+                          container-runtime socket and launches no container.
+  --postgres-port P       (default: $PGPORT or 5432)
   --database NAME         database to dump (default: innsegl)
-  --owner NAME             database role pg_dump/pg_restore/createdb run as,
-                          via the container's own unix socket (default: innsegl)
+  --role NAME             database role to connect as (default:
+                          $INNSEGL_BACKUP_ROLE or innsegl_backup). Its password
+                          comes from $INNSEGL_BACKUP_PASSWORD, never an
+                          argument, so it cannot reach a process listing.
   --segments DIR          a directory of already-fetched sealed segment
                           objects (see runbooks/index-rebuild.md §6.1). Skips
                           fetching from object storage -- use this for a
                           restore you already staged, or in a test.
-  --object-network NAME   docker network the object store's S3 GATEWAY is
-                          reachable on, used only when --segments is not given
-                          (default: innsegl-objects). Not the network the
-                          Filer and the volume server are on: those have one
-                          route in and it is the gateway (doc 05 §1).
-  --object-store-endpoint host:port inside --object-network
+  --object-store-endpoint host:port of the object store's S3 GATEWAY. Not the
+                          Filer or the volume server: those have one route in
+                          and it is the gateway (doc 05 §1)
                           (default: innsegl-s3:8333)
   --object-store-bucket NAME   segment bucket (default: innsegl-segments)
   --object-store-prefix P      key prefix segments are stored under, matching
@@ -130,7 +123,6 @@ Options:
                           default -- the innsegl binary's own default is "")
   --object-store-access-key K  (default: innsegl)
   --object-store-secret-key K  (default: innsegl-compose-objects)
-  --s3-client-image REF   S3 client image reference used to fetch segments
   --quiet                 print less on success; failures are always reported
   -h, --help              this text
 
@@ -143,34 +135,32 @@ USAGE
 # ---------------------------------------------------------------------------
 
 out_dir="${INNSEGL_BACKUP_DIR:-${REPO_ROOT}/backups}"
-pg_container="innsegl-postgres"
-database="innsegl"
-owner="innsegl"
+pg_host="${PGHOST:-postgres}"
+pg_port="${PGPORT:-5432}"
+database="${PGDATABASE:-innsegl}"
+role="${INNSEGL_BACKUP_ROLE:-innsegl_backup}"
 segments_dir=""
-object_network="innsegl-objects"
 object_store_endpoint="innsegl-s3:8333"
 object_store_bucket="innsegl-segments"
 object_store_prefix="segments/"
 object_store_access_key="innsegl"
 object_store_secret_key="innsegl-compose-objects"
 object_store_region="${INNSEGL_OBJECT_STORE_REGION:-us-east-1}"
-s3_client_image="${DEFAULT_S3_CLIENT_IMAGE}"
 quiet=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --out)                     out_dir="${2-}"; shift 2 || true ;;
-    --postgres-container)      pg_container="${2-}"; shift 2 || true ;;
+    --postgres-host)           pg_host="${2-}"; shift 2 || true ;;
+    --postgres-port)           pg_port="${2-}"; shift 2 || true ;;
     --database)                database="${2-}"; shift 2 || true ;;
-    --owner)                   owner="${2-}"; shift 2 || true ;;
+    --role)                    role="${2-}"; shift 2 || true ;;
     --segments)                segments_dir="${2-}"; shift 2 || true ;;
-    --object-network)          object_network="${2-}"; shift 2 || true ;;
     --object-store-endpoint)   object_store_endpoint="${2-}"; shift 2 || true ;;
     --object-store-bucket)     object_store_bucket="${2-}"; shift 2 || true ;;
     --object-store-prefix)     object_store_prefix="${2-}"; shift 2 || true ;;
     --object-store-access-key) object_store_access_key="${2-}"; shift 2 || true ;;
     --object-store-secret-key) object_store_secret_key="${2-}"; shift 2 || true ;;
-    --s3-client-image)         s3_client_image="${2-}"; shift 2 || true ;;
     --quiet)                   quiet=1; shift ;;
     -h|--help)                 usage; exit "${EXIT_OK}" ;;
     *)
@@ -185,9 +175,17 @@ if [ ! -x "${GATE}" ]; then
   printf 'backup-ledger: %s is missing or not executable\n' "${GATE}" >&2
   exit "${EXIT_USAGE}"
 fi
-if ! docker inspect "${pg_container}" >/dev/null 2>&1; then
-  printf 'backup-ledger: no container named %s -- is the stack up? (make innsegl-up)\n' \
-    "${pg_container}" >&2
+if [ -z "${INNSEGL_BACKUP_PASSWORD:-}" ]; then
+  printf 'backup-ledger: INNSEGL_BACKUP_PASSWORD is unset. This connects over the network as\n' >&2
+  printf '  %s and needs its password; it is never an argument, because an argument\n' "${role}" >&2
+  printf '  is visible in a process listing to everything else on the machine.\n' >&2
+  exit "${EXIT_USAGE}"
+fi
+export PGPASSWORD="${INNSEGL_BACKUP_PASSWORD}"
+if ! psql -X -q -A -t -h "${pg_host}" -p "${pg_port}" -U "${role}" -d "${database}" \
+     -c 'SELECT 1' >/dev/null 2>&1; then
+  printf 'backup-ledger: cannot reach the ledger as %s at %s:%s/%s -- is the stack up?\n' \
+    "${role}" "${pg_host}" "${pg_port}" "${database}" >&2
   exit "${EXIT_DUMP_FAILED}"
 fi
 if [ -n "${segments_dir}" ] && [ ! -d "${segments_dir}" ]; then
@@ -205,37 +203,50 @@ cleanup_scratch_db=""
 cleanup() {
   status=$?
   if [ -n "${cleanup_scratch_db}" ]; then
-    docker exec "${pg_container}" dropdb -U "${owner}" --if-exists "${cleanup_scratch_db}" \
-      >/dev/null 2>&1 || true
+    pg_rw dropdb --if-exists "${cleanup_scratch_db}" >/dev/null 2>&1 || true
   fi
-  docker exec "${pg_container}" rm -f "/tmp/${dump_basename:-innsegl-backup-none}" \
-    "/tmp/${dump_basename:-innsegl-backup-none}.restore" >/dev/null 2>&1 || true
   rm -rf "${work}"
   exit "${status}"
 }
 trap cleanup EXIT
 
+# THE TWO WAYS THIS TALKS TO THE LEDGER, and the difference between them is
+# the whole of what the backup role may do.
+#
+# pg_ro is the role as it is: internal/api/readonly.sql leaves it with
+# default_transaction_read_only = on, so a session that never turns that off
+# cannot write anywhere, and the dump does not need to.
+#
+# pg_rw turns it off, which the restore must, because a restore writes. That is
+# safe because the setting is NOT the boundary: the ACL is, and
+# verify-backup-role.sh proves it by issuing SET TRANSACTION READ WRITE and
+# still being refused 42501 on every ledger write. With it off this credential
+# can write exactly one place — a database it created and owns.
+pg_ro() {
+  cmd="$1"; shift
+  "${cmd}" -h "${pg_host}" -p "${pg_port}" -U "${role}" "$@"
+}
+pg_rw() {
+  cmd="$1"; shift
+  PGOPTIONS='-c default_transaction_read_only=off' \
+    "${cmd}" -h "${pg_host}" -p "${pg_port}" -U "${role}" "$@"
+}
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-dump_basename="innsegl-${timestamp}-$$.dump"
 dumpfile="${out_dir}/innsegl-${timestamp}.dump"
 report_file="${dumpfile}.verify.txt"
 
 # ---------------------------------------------------------------------------
-# 1. pg_dump, inside the container, over its own unix socket -- the same
-#    reason deploy/compose/innsegl.yml publishes no host port for postgres:
-#    a published port is a segmentation hole, not a convenience, and an
-#    operator who needs psql already uses `docker compose exec`.
+# 1. pg_dump, over the network as the backup role -- reachable only on the
+#    ledger network, which is the same reason deploy/compose/innsegl.yml
+#    publishes no host port for postgres: a published port is a segmentation
+#    hole, not a convenience. Reaching it from inside the deployment needs no
+#    such hole, and needs no runtime socket either.
 # ---------------------------------------------------------------------------
-say "==> pg_dump ${database} from ${pg_container}"
-if ! docker exec "${pg_container}" \
-    pg_dump -U "${owner}" -d "${database}" -Fc -f "/tmp/${dump_basename}" 2>"${work}/dump.err"; then
+say "==> pg_dump ${database} from ${pg_host}:${pg_port} as ${role}"
+if ! pg_ro pg_dump -d "${database}" -Fc -f "${dumpfile}" 2>"${work}/dump.err"; then
   warn "FAIL: pg_dump did not complete:"
   sed 's/^/    /' "${work}/dump.err" >&2 || true
-  exit "${EXIT_DUMP_FAILED}"
-fi
-if ! docker cp "${pg_container}:/tmp/${dump_basename}" "${dumpfile}" 2>"${work}/cp.err"; then
-  warn "FAIL: could not copy the dump out of ${pg_container}:"
-  sed 's/^/    /' "${work}/cp.err" >&2 || true
   exit "${EXIT_DUMP_FAILED}"
 fi
 if [ ! -s "${dumpfile}" ]; then
@@ -252,20 +263,20 @@ say "    wrote ${dumpfile} ($(wc -c <"${dumpfile}" | tr -d ' ') bytes)"
 # ---------------------------------------------------------------------------
 scratch_db="innsegl_backup_verify_${timestamp}_$$"
 say "==> restoring into throwaway database ${scratch_db}"
-if ! docker cp "${dumpfile}" "${pg_container}:/tmp/${dump_basename}.restore" 2>"${work}/cp2.err"; then
-  warn "FAIL: could not stage the dump back into ${pg_container} for restore-verification:"
-  sed 's/^/    /' "${work}/cp2.err" >&2 || true
-  exit "${EXIT_DUMP_FAILED}"
-fi
-if ! docker exec "${pg_container}" createdb -U "${owner}" "${scratch_db}" 2>"${work}/createdb.err"; then
+if ! pg_rw createdb "${scratch_db}" 2>"${work}/createdb.err"; then
   warn "FAIL: could not create ${scratch_db}:"
   sed 's/^/    /' "${work}/createdb.err" >&2 || true
   exit "${EXIT_DUMP_FAILED}"
 fi
 cleanup_scratch_db="${scratch_db}"
-if ! docker exec "${pg_container}" \
-    pg_restore -U "${owner}" -d "${scratch_db}" --exit-on-error "/tmp/${dump_basename}.restore" \
-    2>"${work}/restore.err"; then
+# --no-owner --no-acl, MEASURED and not defensive. The dump's objects belong to
+# the schema owner, and this role is not a superuser, so it cannot SET SESSION
+# AUTHORIZATION to become them: without these two flags every ALTER ... OWNER TO
+# and every GRANT in the dump fails and --exit-on-error stops the restore. With
+# them the objects are owned by the backup role inside a database only it can
+# see, which is all the restore has to prove.
+if ! pg_rw pg_restore -d "${scratch_db}" --no-owner --no-acl --exit-on-error \
+    "${dumpfile}" 2>"${work}/restore.err"; then
   warn "FAIL: the dump does not restore -- it is not a usable backup:"
   sed 's/^/    /' "${work}/restore.err" >&2 || true
   exit "${EXIT_DUMP_FAILED}"
@@ -276,7 +287,7 @@ say "    restore held"
 # 3. Extract the restored chain, in chain_position order -- exactly the query
 #    runbooks/index-rebuild.md §6.2 documents for a rebuilt index.
 # ---------------------------------------------------------------------------
-if ! docker exec "${pg_container}" psql -U "${owner}" -d "${scratch_db}" -Atc \
+if ! pg_ro psql -d "${scratch_db}" -X -q -A -t -c \
     'SELECT event_hash FROM innsegl.events ORDER BY chain_position' \
     >"${work}/index.hashes" 2>"${work}/select.err"; then
   warn "FAIL: could not read innsegl.events back from the restore:"
@@ -286,7 +297,7 @@ fi
 event_count="$(grep -c . "${work}/index.hashes" || true)"
 say "    restored ${event_count} event(s)"
 
-docker exec "${pg_container}" dropdb -U "${owner}" "${scratch_db}" >/dev/null 2>&1 || true
+pg_rw dropdb "${scratch_db}" >/dev/null 2>&1 || true
 cleanup_scratch_db=""
 
 # ---------------------------------------------------------------------------
@@ -300,31 +311,30 @@ else
   segments_dir="${work}/segments"
   mkdir -p "${segments_dir}"
   fetched_segments=1
-  say "==> fetching sealed segments from ${object_store_bucket}/${object_store_prefix} via ${object_network}"
-  # --entrypoint sh: the client image's own ENTRYPOINT is `aws`, so a bare
-  # `docker run image sh -c ...` would run `aws sh -c ...` rather than a shell.
-  # Credentials travel as container environment, not as shell string
-  # interpolation, so a value containing a quote cannot break the command.
+  say "==> fetching sealed segments from ${object_store_bucket}/${object_store_prefix} at ${object_store_endpoint}"
+  # A NETWORK CLIENT, not a launched container. This used to be a `docker run`
+  # on a named network, which meant the backup held the container-runtime
+  # socket — root on the host — for the sake of copying some files it is only
+  # allowed to read. The image this runs in carries the S3 client instead and
+  # is on the object network itself, so the same fetch is one command with no
+  # privilege attached to it.
+  #
+  # Credentials travel as environment, not as shell string interpolation, so a
+  # value containing a quote cannot break the command.
   #
   # THE CREDENTIAL THIS RUNS AS IS A READER. It needs GetObject and ListBucket
   # under the segment prefix and nothing else; the scoped identity the sealer
-  # holds is enough, and so is the store's root account. Neither can delete
-  # what it is copying -- COMPLIANCE retention refuses that to everyone -- so
-  # the fetch cannot damage what it is verifying against.
-  docker run --rm --network "${object_network}" \
-      -v "${segments_dir}:/out" \
-      -e AWS_ENDPOINT_URL="http://${object_store_endpoint}" \
-      -e AWS_ACCESS_KEY_ID="${object_store_access_key}" \
-      -e AWS_SECRET_ACCESS_KEY="${object_store_secret_key}" \
-      -e AWS_DEFAULT_REGION="${object_store_region}" \
-      -e AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
-      -e AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
-      -e S3_BUCKET="${object_store_bucket}" \
-      -e S3_PREFIX="${object_store_prefix}" \
-      --entrypoint sh \
-      "${s3_client_image}" \
-      -c 'set -e
-        aws s3 cp --recursive "s3://$S3_BUCKET/$S3_PREFIX" /out/' \
+  # holds is enough. Neither it nor anything else can delete what it is copying
+  # -- COMPLIANCE retention refuses that to everyone -- so the fetch cannot
+  # damage what it is verifying against.
+  AWS_ENDPOINT_URL="http://${object_store_endpoint}" \
+  AWS_ACCESS_KEY_ID="${object_store_access_key}" \
+  AWS_SECRET_ACCESS_KEY="${object_store_secret_key}" \
+  AWS_DEFAULT_REGION="${object_store_region}" \
+  AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+  AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
+    aws s3 cp --recursive \
+      "s3://${object_store_bucket}/${object_store_prefix}" "${segments_dir}/" \
       >"${work}/s3-fetch.log" 2>&1 || true
   n_fetched="$(find "${segments_dir}" -type f 2>/dev/null | grep -c . || true)"
   if [ "${n_fetched}" -eq 0 ]; then
@@ -347,7 +357,7 @@ gate_status=0
   printf 'innsegl backup verification report\n'
   printf 'generated  %s\n' "${timestamp}"
   printf 'dump       %s\n' "${dumpfile}"
-  printf 'database   %s (container %s)\n' "${database}" "${pg_container}"
+  printf 'database   %s (%s:%s as %s)\n' "${database}" "${pg_host}" "${pg_port}" "${role}"
   printf 'events     %s\n' "${event_count}"
   printf 'segments   %s%s\n' "${segments_dir}" "$( [ -n "${fetched_segments}" ] && printf ' (fetched)' || printf ' (staged)')"
   printf '\n'

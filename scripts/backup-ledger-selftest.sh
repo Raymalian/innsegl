@@ -89,6 +89,7 @@ mkdir -p "${outdir}"
 cleanup() {
   status=$?
   docker rm -f "${PG}" >/dev/null 2>&1 || true
+  docker rmi -f "${BACKUP_IMAGE:-innsegl-backup-selftest-none}" >/dev/null 2>&1 || true
   rm -rf "${workdir}"
   exit "${status}"
 }
@@ -127,6 +128,10 @@ expect_says() {
 # Boot a throwaway Postgres and load the golden fixtures as real rows.
 # ---------------------------------------------------------------------------
 printf '==> booting a throwaway postgres (%s) for the self-test\n' "${PG_IMAGE}"
+# NO PUBLISHED PORT, still. The script under test became a network client, but
+# it runs in a container that shares this one's network namespace, so the ledger
+# is reachable at loopback without opening anything to the machine — the same
+# discipline deploy/compose/innsegl.yml keeps for postgres.
 docker run -d --name "${PG}" \
   -e POSTGRES_USER=innsegl -e POSTGRES_PASSWORD=innsegl-selftest -e POSTGRES_DB=innsegl \
   "${PG_IMAGE}" >/dev/null
@@ -137,6 +142,55 @@ until docker exec "${PG}" pg_isready -U innsegl -d innsegl >/dev/null 2>&1; do
   [ "${waited}" -lt 60 ] || { printf 'FAIL: postgres never became ready\n' >&2; exit 1; }
   sleep 1
 done
+
+# THE SCRIPT RUNS IN THE IMAGE THAT WILL RUN IT, not on this machine.
+#
+# It stopped reaching into containers and became a network client, which means
+# it now needs a Postgres client wherever it runs. In the deployment that is the
+# backup image, which carries one; on a developer's machine it is whatever
+# happens to be installed, and on THIS machine there was none — the first run of
+# the rewritten selftest failed nine cases with "cannot reach the ledger", which
+# is what a missing psql looks like from the outside.
+#
+# Running it in the image fixes that and is the more faithful test anyway: the
+# thing under test is the command the compose service runs, in the filesystem it
+# runs in. The harness needs only Docker.
+#
+# --network container:PG SHARES THE LEDGER'S NETWORK NAMESPACE rather than
+# creating a network. The header's promise holds — no network is created, so
+# RM-100's ceiling is untouched — and 127.0.0.1:5432 inside the backup container
+# is the throwaway Postgres.
+#
+# Both directories are mounted AT THEIR OWN PATHS, so every path argument below
+# means the same thing inside and out and the cases did not have to be rewritten
+# around the move.
+printf '==> building the backup image (target: backup)\n'
+BACKUP_IMAGE="innsegl-backup-selftest:$$"
+docker build -q --target backup -t "${BACKUP_IMAGE}" "${REPO_ROOT}" >/dev/null
+
+# The role the script connects AS in this harness is the fixture database's
+# owner. The deployment gives the backup its own scoped role; here there is one
+# database that exists for ninety seconds, and provisioning a second role in it
+# would test this harness rather than the script.
+INNSEGL_BACKUP_PASSWORD=innsegl-selftest
+
+# The same run with NO password, for the one case that asserts it is required.
+# A wrapper rather than `env VAR= run_backup`, because env execs a program and
+# run_backup is a shell function — which exits 127 and looks exactly like the
+# script being missing.
+run_backup_nopass() {
+  INNSEGL_BACKUP_PASSWORD="" run_backup "$@"
+}
+
+run_backup() {
+  docker run --rm --network "container:${PG}" \
+    --user "$(id -u):$(id -g)" \
+    -e INNSEGL_BACKUP_PASSWORD="${INNSEGL_BACKUP_PASSWORD}" \
+    -v "${REPO_ROOT}:${REPO_ROOT}:ro" \
+    -v "${workdir}:${workdir}" \
+    --entrypoint "${REPO_ROOT}/scripts/backup-ledger.sh" \
+    "${BACKUP_IMAGE}" "$@"
+}
 
 docker cp "${REPO_ROOT}/migrations/0001_ledger.sql" "${PG}:/tmp/0001.sql"
 docker cp "${REPO_ROOT}/migrations/0002_idempotency.sql" "${PG}:/tmp/0002.sql"
@@ -218,36 +272,36 @@ printf '    postgres  %s (container %s)\n' "${PG_IMAGE}" "${PG}"
 printf '\n-- BAK-001: a matching chain is accepted --\n'
 load_fixtures 0
 expect 0 "BAK-001 clean dump matches the sealed segment" -- \
-  "${BACKUP_SH}" --postgres-container "${PG}" --database innsegl --owner innsegl \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role innsegl \
   --out "${outdir}" --segments "${good_segments}" --quiet
 expect_says "OK -- " "BAK-001 says it is OK" -- \
-  "${BACKUP_SH}" --postgres-container "${PG}" --database innsegl --owner innsegl \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role innsegl \
   --out "${outdir}" --segments "${good_segments}"
 
 printf '\n-- BAK-002: a chain that disagrees with a sealed segment is refused (RED) --\n'
 load_fixtures 14
 expect 3 "BAK-002 corrupted dump vs the sealed segment" -- \
-  "${BACKUP_SH}" --postgres-container "${PG}" --database innsegl --owner innsegl \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role innsegl \
   --out "${outdir}" --segments "${good_segments}" --quiet
 expect_says "position 14" "BAK-002 names the disagreeing position" -- \
-  "${BACKUP_SH}" --postgres-container "${PG}" --database innsegl --owner innsegl \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role innsegl \
   --out "${outdir}" --segments "${good_segments}"
 expect_says "MISMATCH" "BAK-002 calls it a mismatch, not a pass" -- \
-  "${BACKUP_SH}" --postgres-container "${PG}" --database innsegl --owner innsegl \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role innsegl \
   --out "${outdir}" --segments "${good_segments}"
 
 printf '\n-- BAK-001 again: back to a clean chain, back to green --\n'
 load_fixtures 0
 expect 0 "BAK-001 recovers once the chain matches again" -- \
-  "${BACKUP_SH}" --postgres-container "${PG}" --database innsegl --owner innsegl \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role innsegl \
   --out "${outdir}" --segments "${good_segments}" --quiet
 
 printf '\n-- BAK-003: no sealed segments -> kept, but unverified, not silently green --\n'
 expect 4 "BAK-003 no segments available" -- \
-  "${BACKUP_SH}" --postgres-container "${PG}" --database innsegl --owner innsegl \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role innsegl \
   --out "${outdir}" --segments "${empty_segments}" --quiet
 expect_says "UNVERIFIED" "BAK-003 says it is unverified" -- \
-  "${BACKUP_SH}" --postgres-container "${PG}" --database innsegl --owner innsegl \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role innsegl \
   --out "${outdir}" --segments "${empty_segments}"
 n_dumps_before_check="$(find "${outdir}" -maxdepth 1 -name '*.dump' | wc -l | tr -d ' ')"
 if [ "${n_dumps_before_check}" -lt 1 ]; then
@@ -259,11 +313,20 @@ else
 fi
 
 printf '\n-- BAK-004: the backup cannot be taken at all -> fails closed --\n'
-expect 5 "BAK-004 no such container" -- \
-  "${BACKUP_SH}" --postgres-container "innsegl-backup-selftest-does-not-exist" \
+# An unreachable ledger, which is what "no such container" became when the
+# script stopped reaching into containers. Port 1 is reserved and nothing
+# listens on it, so this is a connection refused rather than a timeout.
+expect 5 "BAK-004 an unreachable ledger" -- \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 1 --role innsegl \
+  --out "${outdir}" --segments "${good_segments}" --quiet
+# And the password is required, because it is the one input that may not be an
+# argument: an argument is visible in a process listing.
+expect 2 "BAK-004 a missing password is a usage error" -- \
+  run_backup_nopass \
+  --postgres-host 127.0.0.1 --postgres-port 5432 --role innsegl \
   --out "${outdir}" --segments "${good_segments}" --quiet
 expect 2 "BAK-004 unknown flag is a usage error" -- \
-  "${BACKUP_SH}" --this-flag-does-not-exist
+  run_backup --this-flag-does-not-exist
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 if [ "${fail}" -gt 0 ]; then
