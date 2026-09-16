@@ -492,10 +492,13 @@ func describeWorkspaceFold(lower string) string {
 // once what its mount corresponds to, and that mapping is as true of git's
 // answer as it is of the caller's cwd.
 func (c DescribeWorkspaceConfig) localWorktreePath(reported string) (string, error) {
+	// c.Projects is read, not defaulted. Both ways a configuration reaches this
+	// — ConfigureDescribeWorkspace and describeWorkspaceConfigured — set it
+	// before anything can call in, which is why containerPath beside it reads
+	// c.Projects directly too. A default here would be a branch no call can
+	// take, and an untakeable branch is a claim about the code that no test can
+	// check.
 	projects := c.Projects
-	if projects == "" {
-		projects = DefaultProjectsMount
-	}
 	path := filepath.Clean(reported)
 
 	// ALREADY LOCAL, which is the ordinary case and must not translate twice:
