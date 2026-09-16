@@ -155,6 +155,24 @@ x-appender-password: &appender-password ${INNSEGL_LEDGER_APPENDER_PASSWORD:-inns
 x-reader-role: &reader-role innsegl_reader
 x-reader-password: &reader-password ${INNSEGL_LEDGER_READER_PASSWORD:-innsegl-compose-reader}
 
+# doc 05 §1's BACKUP role (RM-146, #237). The reader's grants over the ledger,
+# plus CREATEDB — and CREATEDB only because the backup proves a dump restores by
+# restoring it into a throwaway database of its own. `innsegl-backup` connects as
+# this and NOTHING ELSE DOES.
+#
+# WHAT IT REPLACES IS WORSE. Until now the backup ran on the HOST, from a
+# scheduler, reaching the database through the container runtime — so the thing
+# taking backups held the runtime socket, which is root on the machine. This
+# credential can read the ledger and own throwaway databases. It cannot write
+# the ledger, and innsegl/verify-backup-role.sh proves both halves against the
+# server rather than trusting the GRANTs that produced them.
+#
+# ITS OWN VARIABLE, for the reason the reader's is its own: "One name for two
+# different roles is a deployment that can hand the dashboard the writer by
+# copying a line."
+x-backup-role: &backup-role innsegl_backup
+x-backup-password: &backup-password ${INNSEGL_LEDGER_BACKUP_PASSWORD:-innsegl-compose-backup}
+
 # THE OBJECT STORE'S ROOT ACCOUNT. It reaches TWO things: the server, and the
 # one-shot that creates the locked bucket. Nothing that stays up holds it, and
 # that separation is the whole of RM-144 (#228).
@@ -412,6 +430,8 @@ services:
       INNSEGL_APPENDER_PASSWORD: *appender-password
       INNSEGL_READER_ROLE: *reader-role
       INNSEGL_READER_PASSWORD: *reader-password
+      INNSEGL_BACKUP_ROLE: *backup-role
+      INNSEGL_BACKUP_PASSWORD: *backup-password
     volumes:
       - ./innsegl:/innsegl/init:ro
       # The SHIPPED migrations, read straight from the repository. Not a copy:
