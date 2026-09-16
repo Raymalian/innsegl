@@ -79,6 +79,14 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
                 -X innsegl.dev/innsegl/internal/version.date=${DATE}" \
       -o /out/innsegl ./cmd/innsegl
 
+# The CA bootstrapper (RM-147, #238). Built here and shipped in its own target
+# below, never in the runtime image: it is the program that decides what the
+# CA's certificate says, and it has no business in the binary that holds SPIRE
+# admin. Same argument innsegl.yml makes for generating the pseudonymisation
+# secret in a container of its own.
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
+      -ldflags "-s -w" -o /out/ca-bootstrap ./cmd/ca-bootstrap
+
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOBIN=/out \
       go install github.com/sigstore/gitsign@${GITSIGN_VERSION} \
  && ls /out/gitsign
@@ -189,3 +197,28 @@ WORKDIR /home/innsegl
 # No default command, for the reason the runtime stage gives: the scripts are
 # mounted, and a default would make a mistyped command the silent case.
 ENTRYPOINT ["/bin/sh"]
+
+# ---------------------------------------------------------------------------
+# The CA bootstrapper's runtime (RM-147, #238) — rung 3.
+# ---------------------------------------------------------------------------
+# One static binary and a trust store, because all it does is speak HTTPS to a
+# secret store and write a certificate. It runs once per bring-up of the
+# key-custody profile and exits.
+#
+# WHAT IT DELIBERATELY DOES NOT CONTAIN: any way to read a private key. The CA
+# key is created inside the store and never leaves it; this program holds a URL,
+# a token and a key name, asks for signatures over digests, and mints a
+# self-signed root from the answers. Reading this container yields the token —
+# which is revocable and auditable — and never the key.
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS ca-bootstrap
+
+RUN apk add --no-cache ca-certificates
+
+RUN addgroup -g 1000 innsegl \
+ && adduser -D -u 1000 -G innsegl -h /home/innsegl innsegl
+
+COPY --from=build /out/ca-bootstrap /usr/local/bin/ca-bootstrap
+
+USER 1000:1000
+WORKDIR /home/innsegl
+ENTRYPOINT ["/usr/local/bin/ca-bootstrap"]
