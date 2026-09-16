@@ -1158,6 +1158,101 @@ services:
   # doc 05 §2 runs it single-active; SEG-002's idempotence is what makes a
   # double-run harmless, and compose has one replica in any case.
   # --------------------------------------------------------------------------
+  # --------------------------------------------------------------------------
+  # innsegl-backup — the ledger backup, ON THE SCHEDULE THE DEPLOYMENT KEEPS
+  # (RM-146, #237).
+  #
+  # WHAT THIS REPLACES. The backup ran from a HOST scheduler: launchd on one
+  # platform, systemd on the other, two unit layouts, and a scheduler that has
+  # to exist at all. It reached the ledger and the object store through the
+  # container runtime — ten `docker exec`, two `docker cp` and a `docker run`.
+  #
+  # SO IT HOLDS NO RUNTIME SOCKET, and that is the point rather than a detail:
+  # a process holding it is root on the host, which is not a trade a backup may
+  # make. There is no /var/run/docker.sock below and there must never be one;
+  # OPS-044 attempts the call and requires the refusal.
+  #
+  # ON BOTH LEDGER AND OBJECT NETWORKS, because the job is both halves: dump
+  # the ledger, and adjudicate the dump against the sealed segments. It is on
+  # neither the Filer's network nor the volume server's — those have one route
+  # in and it is the gateway (doc 05 §1).
+  #
+  # THE CREDENTIALS IT HOLDS ARE BOTH READERS. innsegl_backup can read the
+  # ledger and own throwaway databases and cannot write the ledger
+  # (verify-backup-role.sh, OPS-043); the object identity needs GetObject and
+  # ListBucket under the segment prefix, and nothing on this store can delete a
+  # retained segment in any case.
+  #
+  # THE HEALTHCHECK IS THE READINESS THIS DESIGN OWES. Running only while the
+  # stack is up makes the backup's liveness the stack's liveness, so a stack
+  # that was down for three days has a three-day-old backup; backup-health.sh
+  # says so rather than leaving it to be assumed.
+  # --------------------------------------------------------------------------
+  innsegl-backup:
+    image: ${INNSEGL_BACKUP_IMAGE:-innsegl-backup:local}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: backup
+    container_name: innsegl-backup
+    restart: unless-stopped
+    depends_on:
+      innsegl-db-init:
+        condition: service_completed_successfully
+    networks:
+      - innsegl-ledger
+      - innsegl-objects
+    labels:
+      dev.innsegl.component: backup
+    user: "1000:1000"
+    entrypoint: ["/innsegl/init/backup-loop.sh"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: *ledger-database
+      INNSEGL_BACKUP_ROLE: *backup-role
+      INNSEGL_BACKUP_PASSWORD: *backup-password
+      INNSEGL_BACKUP_SCRIPT: /innsegl/scripts/backup-ledger.sh
+      INNSEGL_BACKUP_DIR: /backups
+      INNSEGL_BACKUP_MARKER: /backups/.last-run
+      # Daily, and a window of twice that: one slow or skipped run is not an
+      # alert, two in a row are. An alert that fires on ordinary jitter is one
+      # an operator learns to ignore.
+      INNSEGL_BACKUP_INTERVAL: ${INNSEGL_BACKUP_INTERVAL:-86400}
+      INNSEGL_BACKUP_WINDOW: ${INNSEGL_BACKUP_WINDOW:-172800}
+      # The segment half. The same gateway the sealer writes through, read with
+      # an identity that can only read.
+      INNSEGL_OBJECT_STORE_REGION: ${INNSEGL_OBJECT_STORE_REGION:-us-east-1}
+    command:
+      - --object-store-endpoint
+      - innsegl-s3:8333
+      - --object-store-bucket
+      - *object-store-bucket
+      - --object-store-prefix
+      - *object-store-prefix
+      - --object-store-access-key
+      - *object-store-sealer-user
+      - --object-store-secret-key
+      - *object-store-sealer-password
+    healthcheck:
+      test: ["CMD", "/innsegl/init/backup-health.sh"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      # A backup takes as long as it takes, and the first one runs at start-up.
+      # A start period shorter than that reports unhealthy while the very first
+      # backup is still being written.
+      start_period: 300s
+    volumes:
+      - ./innsegl:/innsegl/init:ro
+      # The script and the gate it adjudicates with, read straight from the
+      # repository for the reason the migrations are: a copy is a thing that
+      # drifts. backup-ledger.sh resolves its gate relative to its own parent,
+      # so these two paths are what make /innsegl the repository root it sees.
+      - ../../scripts:/innsegl/scripts:ro
+      - ../../runbooks:/innsegl/runbooks:ro
+      - innsegl-backups:/backups
+
   innsegl-sealer:
     <<: *innsegl-build
     container_name: innsegl-sealer
@@ -1598,6 +1693,21 @@ networks:
 # Volumes.
 # ----------------------------------------------------------------------------
 volumes:
+  # The dumps and their verification reports (RM-146, #237).
+  #
+  # NOT one of doc 05 §2's irreplaceable four, and deliberately so: a backup is
+  # a COPY, and the thing it is a copy of is on that list. Losing this volume
+  # costs the backup history and nothing that cannot be taken again from the
+  # ledger it was taken from — which is the opposite of the ledger's own case,
+  # where "there is no rebuild-from-segments-alone".
+  #
+  # A deployment that wants these dumps off the box binds a host path here, or
+  # copies them onward; doc 05 §2 names WORM object storage as the eventual
+  # home, and this volume is the local default that works with no
+  # configuration.
+  # MOUNTED BY: innsegl-backup.
+  innsegl-backups:
+
   # THE FOURTH OF THE IRREPLACEABLE FOUR (doc 05 §2; OPS-032).
   #
   # The ledger, and the reason it is on this list rather than the object
