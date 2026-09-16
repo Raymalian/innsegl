@@ -684,7 +684,13 @@ func TestOPS035TheLedgerBackupIsScheduled(t *testing.T) {
 	//
 	// A backup that cannot run is the failure scripts/backup-ledger.sh's own
 	// header is about, arriving through the door that was supposed to fix it.
-	unit := readFile(t, filepath.Join(dir, installedUnitName()))
+	// READ THE UNIT THAT CARRIES THE COMMAND, which is not always the one the
+	// scheduler is pointed at. launchd puts the program, its arguments and its
+	// PATH in one plist; systemd splits a timer from the service it triggers,
+	// and PATH lives in the service. Reading the timer looked right on the
+	// machine this was written on and asserted against a file that could never
+	// contain a PATH on the other platform.
+	unit := readFile(t, filepath.Join(dir, installedJobUnitName()))
 	dockerPath, err := exec.LookPath("docker")
 	if err != nil {
 		t.Fatalf("docker is not on this machine's PATH, so this case cannot run: %v", err)
@@ -714,6 +720,16 @@ func installedUnitName() string {
 		return "dev.innsegl.backup-ledger.plist"
 	}
 	return "dev.innsegl.backup-ledger.timer"
+}
+
+// installedJobUnitName is the file holding the command and its environment.
+// On launchd that is the same plist the scheduler reads; on systemd the timer
+// only says WHEN, and the service says WHAT and with which PATH.
+func installedJobUnitName() string {
+	if runtime.GOOS == "darwin" {
+		return "dev.innsegl.backup-ledger.plist"
+	}
+	return "dev.innsegl.backup-ledger.service"
 }
 
 // composeVolume is the part of compose's resolved config this package reads.
