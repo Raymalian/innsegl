@@ -14,7 +14,7 @@
 # stated trap: "a comment that says 'measured on this machine' is exactly where
 # a real project name gets written down."
 #
-# Five cases, and the last two are the ones usually left out:
+# Seven cases, and the last two are the ones usually left out:
 #
 #   1. GREEN on the repository as it stands.
 #   2. RED on a planted /Users/<name>/... path.
@@ -25,6 +25,10 @@
 #   5. RED on a user whose name merely BEGINS with the container's user —
 #      the allowlist must match a whole name, not a prefix.
 #   6. GREEN on a path inside docs/, which is local-only and never pushed.
+#   7. RED on a path inside docs/adr/, which SHIPS. Both directions, because
+#      one without the other is how the exclusion got too wide in the first
+#      place: `docs/` was local-only when that line was written, and stopped
+#      being local-only when ADRs started shipping.
 #
 # Case 4 carries a TRAILING SEGMENT deliberately. It was first written as
 # `HOME=/home/innsegl`, which the gate's pattern — a home directory followed by
@@ -68,6 +72,12 @@ run_gate() { ( cd "$ROOT" && "$GATE" >/dev/null 2>&1 ); }
 plant() {  # plant PATH CONTENT
   printf '%s\n' "$2" > "$ROOT/$1"
   ( cd "$ROOT" && git add -- "$1" >/dev/null 2>&1 )
+}
+# plantf forces the file into the index, for a path .gitignore covers. The
+# gate reads `git ls-files`, so an ignored plant is no plant at all.
+plantf() {  # plantf PATH CONTENT
+  printf '%s\n' "$2" > "$ROOT/$1"
+  ( cd "$ROOT" && git add -f -- "$1" >/dev/null 2>&1 )
 }
 unplant() {
   ( cd "$ROOT" && git rm -q --cached --force -- "$1" >/dev/null 2>&1 || true )
@@ -125,15 +135,41 @@ else
 fi
 unplant "selftest-plant-prefix.txt"
 
-# --- case 6: green on docs/, which never ships ------------------------------
+# --- case 6: green on the rest of docs/, which never ships -------------------
+#
+# `git add -f`, and it is not a detail. `docs/*` is gitignored, so a plain
+# `git add` here adds NOTHING, the gate never sees the file, and the case
+# passes on a green that says nothing about the skip it exists to test. Forced
+# into the index the file is genuinely tracked, and only the gate's own
+# exclusion can keep it from being read.
 if [ -d "$ROOT/docs" ]; then
-  plant "docs/selftest-plant-doc.txt" "measured at $HOMES/someone/Applications/thing"
+  plantf "docs/selftest-plant-doc.txt" "measured at $HOMES/someone/Applications/thing"
   if run_gate; then
     ok "green on a path inside docs/, which is local-only and never pushed"
   else
     bad "THE GATE FIRED ON docs/, which does not ship"
   fi
   unplant "docs/selftest-plant-doc.txt"
+fi
+
+# --- case 7: red on docs/adr/, which SHIPS ----------------------------------
+#
+# The one docs directory that reaches the public repository was the one
+# directory the gate skipped. `docs/adr/` is tracked, is in every clone, and
+# CLAUDE.md names it out loud: "That includes `docs/adr/`, which is the one
+# docs directory that does ship."
+#
+# Measured before the fix: a file carrying an operator home path at
+# docs/adr/0099-probe.md produced "784 shipped files, none names an operator
+# path". A false pass, in the gate whose entire job is to prevent one.
+if [ -d "$ROOT/docs/adr" ]; then
+  plant "docs/adr/9999-selftest-plant.md" "measured at $HOMES/someone/Applications/thing"
+  if run_gate; then
+    bad "THE GATE SKIPPED docs/adr/, WHICH SHIPS — the one docs directory in every clone"
+  else
+    ok "red on a path inside docs/adr/, which ships"
+  fi
+  unplant "docs/adr/9999-selftest-plant.md"
 fi
 
 echo "no-operator-paths-selftest: $pass passed, $fail failed"
