@@ -202,6 +202,90 @@ credential the query API holds **cannot write**, whoever reaches it. See
 
 ---
 
+## The object store's scoped identity
+
+**#228.** Everything above about the database roles is an argument about the
+object store too, and until now the object store did not have it. The compose
+file gave `innsegl-sealer` and `innsegl-canary` the same value it gave the
+server as `MINIO_ROOT_USER`, so the sealer ran as the store's root account for
+the whole life of the deployment.
+
+Two files, and the split is the same one the database roles use:
+
+| | |
+|---|---|
+| [`object-init.sh`](object-init.sh) | creates the locked bucket **as root**, sets the default rule, then creates the scoped identity and attaches its policy |
+| [`verify-object-scope.sh`](verify-object-scope.sh) | **connects as that identity and asks the server what it can actually do** |
+
+### What it may do, and the two things withheld by name
+
+| | |
+|---|---|
+| read and write objects | `s3:PutObject`, `s3:GetObject`, `s3:GetObjectVersion` |
+| set and read their retention | `s3:PutObjectRetention`, `s3:GetObjectRetention` |
+| list the bucket and its versions | `s3:ListBucket`, `s3:ListBucketVersions` |
+| delete versions | `s3:DeleteObject`, `s3:DeleteObjectVersion` |
+| read the bucket's lock rule | `s3:GetBucketObjectLockConfiguration` |
+| **NOT** set that rule | `s3:PutBucketObjectLockConfiguration` |
+| **NOT** delete under a bypass | `s3:BypassGovernanceRetention` |
+
+`s3:DeleteObjectVersion` in a policy whose point is that nothing can be deleted
+looks wrong and is not. SEG-005's canary needs it to prove its own refusal
+means anything: it writes a delete marker, which carries no retention, and
+permanently removes that marker version with the same credential in the same
+bucket. Without that control a refusal is indistinguishable from a missing
+permission, and an inconclusive canary fails. It buys an attacker nothing — a
+retained version refuses deletion under `COMPLIANCE` whoever asks, which the
+canary measures on every run.
+
+### Why bucket creation stays with root
+
+S3 object lock can only be enabled **at bucket creation**, and only an account
+that may set a bucket configuration can put the default retention rule on it.
+That is a one-time setup step and `object-init.sh` is the one-shot that
+performs it. What was wrong was not that root created the bucket; it was that
+root then stayed.
+
+### What this protects, and what it does not
+
+It does **not** protect sealed history. `COMPLIANCE` retention already refuses
+deletion by anyone, the account that wrote it included — measured, and the
+canary re-measures it every run. What it protects is **future** writes: an
+identity permitted to set the bucket's object-lock configuration can downgrade
+the default rule to `GOVERNANCE`, after which everything written afterwards is
+deletable by a holder of a bypass-capable credential. Nothing long-running now
+holds such an identity.
+
+The network segmentation below is real and it assumes an attacker who is not
+on the deployment's host. A process **on** that host with a container runtime
+is effectively root there, so the defensible position is not that the
+credential cannot be reached — it is that the one it finds cannot weaken
+anything, and that a weakening that did happen surfaces on the canary's next
+scheduled run.
+
+### Configuring it, or not
+
+| variable | default |
+|---|---|
+| `INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY` | `innsegl-sealer` |
+| `INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY` | derived from `INNSEGL_OBJECT_STORE_SECRET_KEY` |
+
+**Unset, the scoped credential is derived rather than required.** An operator
+upgrading an existing deployment set a root credential once and never heard of
+this issue; a narrowing that needed a new variable before the stack came up
+would be switched off rather than adopted. `innsegl.yml` and `object-init.sh`
+derive the same value the same way, and OPS-025 measures that they agree by
+authenticating with the credential **compose** resolves against the identity
+**the script** provisioned.
+
+A store reached over plain S3 has no admin API and no identities to create.
+`object-init.sh` refuses rather than degrades there: supply an identity with
+the policy above and set both variables, or the one-shot fails and says so.
+A deployment that quietly kept running as root would be indistinguishable from
+one that had been narrowed.
+
+---
+
 ## One trap worth knowing about: two retention grammars
 
 `mc retention set` takes `1d`, `30d`, `1y`. `cmd/innsegl` takes a **Go
