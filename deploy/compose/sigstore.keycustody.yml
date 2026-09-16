@@ -1,0 +1,151 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# RUNG 3 — the CA's private key never enters the CA process (RM-147, #238).
+#
+# AN OVERLAY, NOT A PROFILE, AND NOT THE DEFAULT. It is applied with a second
+# `-f` and it changes exactly one thing about Fulcio: where its key is. Without
+# it the stack is byte-for-byte what it was, which is what OPS-051 asserts —
+# `docker compose up` must stay the adopter's first experience, and a deployment
+# that needs a secret store unsealed before it starts is not that.
+#
+# WHAT THIS BUYS, and what it does not. Rungs 1 and 2 keep the key from being
+# DESTROYED by accident. Only this one changes what an attacker who reads the
+# CA's container GETS: the ability to ask for signatures while a token is valid,
+# instead of the key. That is revocable and auditable; a stolen key is neither.
+# It is not "the CA cannot be abused" — it is "abuse has an expiry and a log".
+#
+# THE STORE STARTS SEALED, AND THAT IS THE DESIGN RATHER THAN AN INCONVENIENCE.
+# #238 is explicit: "A dev-mode store that unseals with a known key is theatre
+# and must not be what ships." A store whose unseal key is in this file, or in
+# an image, or derived from anything in the repository, protects the CA key
+# from nobody — it just spells the key differently. So there is no
+# `server -dev` here, no root token in an environment variable, and no unseal
+# key anywhere in this repository. The operator holds it, supplies it per start,
+# and losing it costs the CA exactly as losing the key would.
+#
+#   make innsegl-ca-custody-init    once: initialise, print the keys ONCE
+#   make innsegl-ca-custody-up      per start: unseal, mint, run Fulcio on it
+#
+# WHY A SEPARATE NETWORK. The store is reachable from the CA and the
+# bootstrapper and from nothing else — the same shape doc 05 §1 gives the object
+# store's Filer. A secret store on the network every service shares is a secret
+# store whose token is worth stealing from any of them.
+
+services:
+
+  innsegl-ca-store:
+    image: openbao/openbao:2.4.1@sha256:2e4a5c84c4d2b6f1f8e4fd0fdbb0dca0f06bd0e4e40b2b5ee8fdbb0e1b9bd2e4
+    container_name: innsegl-ca-store
+    restart: unless-stopped
+    # NO `server -dev`. Dev mode holds everything in memory, unseals itself and
+    # prints a root token to the log; every one of those is the opposite of what
+    # this overlay is for.
+    command: ["server", "-config=/openbao/config/store.hcl"]
+    networks:
+      - innsegl-ca-store
+    labels:
+      dev.innsegl.component: ca-store
+    cap_add:
+      # The store locks its memory so secrets cannot be paged to disk. Without
+      # this it warns and carries on, which is a quieter failure than it sounds:
+      # the whole point here is that the key is not on a disk anyone can read.
+      - IPC_LOCK
+    volumes:
+      - ./sigstore/ca-store.hcl:/openbao/config/store.hcl:ro
+      - innsegl-ca-store-data:/openbao/data
+    healthcheck:
+      # 501 is "sealed", 200 is "unsealed and ready". Both mean the process is
+      # answering, and a sealed store is a correct resting state here — the
+      # operator has not unsealed it yet — so both are healthy. A store that is
+      # not answering at all is not.
+      test: ["CMD-SHELL", "bao status >/dev/null 2>&1 || [ $$? -eq 2 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # One-shot. Creates the CA key inside the store if it is not there, mints the
+  # self-signed root from it, and writes the certificate — public by
+  # construction — where Fulcio reads it. Idempotent: a second run leaves an
+  # existing root alone, because re-minting would hand Fulcio a new root and
+  # every certificate already issued would chain to one nobody has.
+  innsegl-ca-bootstrap:
+    image: ${INNSEGL_CA_BOOTSTRAP_IMAGE:-innsegl-ca-bootstrap:local}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: ca-bootstrap
+    container_name: innsegl-ca-bootstrap
+    restart: "no"
+    depends_on:
+      innsegl-ca-store:
+        condition: service_healthy
+    networks:
+      - innsegl-ca-store
+    environment:
+      INNSEGL_CA_STORE_ADDR: http://innsegl-ca-store:8200
+      # NOT DEFAULTED, and there is no value for it in this repository. It is
+      # the token `make innsegl-ca-custody-up` mints from the operator's own
+      # credentials, scoped to the transit key and nothing else.
+      INNSEGL_CA_STORE_TOKEN: ${INNSEGL_CA_STORE_TOKEN:?the key-custody overlay needs a store token scoped to the CA key. `make innsegl-ca-custody-up` mints one; there is deliberately no default, because a default would be a shipped credential}
+      INNSEGL_CA_STORE_KEY: ${INNSEGL_CA_STORE_KEY:-innsegl-ca}
+      INNSEGL_TRUST_DOMAIN: ${INNSEGL_TRUST_DOMAIN:-innsegl.dev}
+      INNSEGL_CA_CHAIN_PATH: /etc/fulcio-kms/chain.pem
+      # Copied, not mounted: the generated issuer config lives beside ca.key in
+      # the file CA's volume, and mounting that volume into the CA is the exact
+      # thing this overlay exists to stop.
+      INNSEGL_CA_CONFIG_SRC: /etc/fulcio-src/config.yaml
+    volumes:
+      - sigstore-fulcio-pki:/etc/fulcio-src:ro
+      - sigstore-fulcio-kms:/etc/fulcio-kms
+
+  # Fulcio, with its key somewhere else. Everything else about it — the ports,
+  # the networks, the read-only root, the dropped capabilities — is sigstore.yml's
+  # and is not restated here, because an overlay that repeated them would be a
+  # second copy to keep in step.
+  fulcio:
+    depends_on:
+      innsegl-ca-bootstrap:
+        condition: service_completed_successfully
+    networks:
+      - innsegl-ca-store
+    environment:
+      VAULT_ADDR: http://innsegl-ca-store:8200
+      VAULT_TOKEN: ${INNSEGL_CA_STORE_TOKEN:?see innsegl-ca-bootstrap above}
+    command:
+      - "serve"
+      - "--host=0.0.0.0"
+      - "--port=5555"
+      - "--grpc-port=5554"
+      # THE WHOLE OF THE CHANGE. No --fileca-key, so there is no key to mount
+      # and none in the container: OPS-049 reads its filesystem and requires to
+      # find none.
+      - "--ca=kmsca"
+      - "--kms-resource=hashivault://${INNSEGL_CA_STORE_KEY:-innsegl-ca}"
+      - "--kms-cert-chain-path=/etc/fulcio/chain.pem"
+      - "--ct-log-url="
+      - "--config-path=/etc/fulcio/config.yaml"
+    volumes:
+      # THE FILE CA'S VOLUME IS NOT HERE. It holds ca.key, and mounting it would
+      # leave a private key in the container of a CA that is not using one —
+      # which is what OPS-049 reads the filesystem for. This volume holds the
+      # certificate and the issuer config, both public.
+      - sigstore-fulcio-kms:/etc/fulcio:ro
+
+networks:
+  innsegl-ca-store:
+    name: ${INNSEGL_CA_STORE_NETWORK:-innsegl-ca-store}
+
+volumes:
+  # What the CA mounts under this overlay: a certificate and an issuer config,
+  # and nothing that is a secret.
+  sigstore-fulcio-kms:
+
+  # The store's own storage. NOT one of doc 05 §2's irreplaceable four by
+  # accident — it is a fifth thing of exactly that kind, and it is on the trust
+  # root's list when this overlay is used: losing it loses the CA key, which is
+  # what rung 1 and rung 2 exist to prevent. `make innsegl-ca-custody-init` puts
+  # it under the trust root for that reason.
+  innsegl-ca-store-data:
+    name: ${INNSEGL_TRUST_CA_STORE_VOLUME:-innsegl-trust-ca-store}
+    external: true
