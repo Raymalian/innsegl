@@ -324,7 +324,18 @@ innsegl-up: sigstore-up
 # unset, so the failure of forgetting it is a named refusal and not a wrong
 # repository in the ledger.
 INNSEGL_PROJECTS ?= $(HOME)/Applications
-REPO_PATH ?= $(shell git rev-parse --show-toplevel)
+# The repository's MAIN working tree, which is NOT the tree this command was
+# run from. `git rev-parse --show-toplevel` answers the latter, so running
+# bring-up from inside a linked worktree linked the WORKTREE — and because the
+# link is what every caller on the machine resolves through, one wrong link
+# stopped signing everywhere, not just in the worktree that made it.
+#
+# `git worktree list` reports the main worktree first from inside any linked
+# one. That is the same rule mainWorktreeOf uses in Go; keeping one rule means
+# the Makefile and the MCP cannot disagree about which tree is the repository.
+# The rule itself lives in scripts/repo-main-worktree.sh, so this and the
+# refusal in innsegl-link below cannot drift apart.
+REPO_PATH ?= $(shell $(CURDIR)/scripts/repo-main-worktree.sh)
 REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
 
 # ONEPROCESS=1 folds the sealer and the reconciler into the MCP process, which
@@ -548,6 +559,16 @@ innsegl-link:
 	@d="$$(cd '$(DIR)' && pwd -P)"; \
 	 id="$$(git -C "$$d" remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')"; \
 	 test -n "$$id" || { echo "innsegl-link: $$d has no origin remote"; exit 2; }; \
+	 main="$$($(CURDIR)/scripts/repo-main-worktree.sh "$$d" || true)"; \
+	 if [ -n "$$main" ] && [ "$$main" != "$$d" ]; then \
+	   echo "innsegl-link: $$d is a linked worktree, not a repository."; \
+	   echo "  Linking a worktree makes the wrong path signable, and every caller on this"; \
+	   echo "  machine resolves through that one link — so signing breaks everywhere, not"; \
+	   echo "  only here, and the failure shows up later as a doubled path in someone"; \
+	   echo "  else's signing error."; \
+	   echo "  Link the repository instead:  make innsegl-link DIR=$$main"; \
+	   exit 2; \
+	 fi; \
 	 base="$$(cd '$(INNSEGL_PROJECTS)' && pwd -P)"; \
 	 case "$$d" in "$$base"/*) : ;; *) echo "innsegl-link: $$d is not under INNSEGL_PROJECTS ($$base); the MCP would see a dangling link"; exit 2 ;; esac; \
 	 rel="$${d#$$base/}"; \
@@ -628,6 +649,7 @@ innsegl-verify-commit:
 	  --network innsegl-sigstore-published \
 	  --user 1000:1000 \
 	  --volume innsegl-core_innsegl-workspace:/work:ro \
+	  --volume '$(INNSEGL_PROJECTS)':/projects:ro \
 	  --env INNSEGL_FULCIO_URL=http://fulcio:5555 \
 	  --env INNSEGL_REKOR_URL=http://rekor:3000 \
 	  --env INNSEGL_OIDC_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \

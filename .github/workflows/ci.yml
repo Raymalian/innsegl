@@ -211,6 +211,24 @@ jobs:
       - name: Drive the signer through every state of a by-tree pointer
         run: ./scripts/innsegl-commit-selftest.sh
 
+  worktree-link:
+    name: worktree link
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-040 and OPS-041. Bring-up chose the directory to make signable with
+      # `git rev-parse --show-toplevel`, which answers the tree you are standing
+      # in -- so run from inside a linked worktree it linked the WORKTREE. The
+      # link is one symlink every caller on the machine resolves through, so
+      # signing then failed for everybody, including from the main checkout,
+      # and surfaced later as a doubled path in an unrelated caller's error.
+      # The last case is what keeps the others honest: a plain repository must
+      # get PAST the guard, or a guard that refused everything would pass.
+      # No Docker: every case exits before the link step reaches a container.
+      - name: Resolve the repository from a worktree, and refuse linking one
+        run: ./scripts/worktree-link-selftest.sh
+
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest
