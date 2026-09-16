@@ -197,10 +197,12 @@ smoke-down: innsegl-stack-clean
 # ---------------------------------------------------------------------------
 # The components this project IS (RM-076, #109).
 #
-# doc 05 §1 lists twelve services. spire.yml and sigstore.yml are the five
-# dependency rows; innsegl.yml is the other seven — postgres, minio, the MCP,
-# the reconciler, the sealer, the dashboard and the demo agent — and until #109
-# none of them existed as a compose service.
+# spire.yml and sigstore.yml are doc 05 §1's dependency rows; innsegl.yml is
+# the rest — postgres, the object store, the MCP, the reconciler, the sealer,
+# the dashboard and the demo agent — and until #109 none of them existed as a
+# compose service. The object store is three of those services since RM-143
+# (#227): the bytes, the metadata, and the S3 gateway that is the only one of
+# the three enforcing object lock and the only one anything else can reach.
 #
 # These targets sit on top of the sigstore ones rather than replacing them: the
 # innsegl stack attaches to networks and a volume the other two own, so it
@@ -496,8 +498,9 @@ innsegl-link:
 # sealer's credential (#228): it must be able to read the bucket's object-lock
 # rule and must not be able to set it. Both run at provisioning time already;
 # this is how an operator re-asks a stack that has been up for a year, because
-# a policy attached once lives in somebody's deployment and one later
-# `mc admin policy attach` leaves no trace in this repository.
+# an identity file written once lives in somebody's deployment and one line
+# changed in it later — a bucket-wide write grant in place of the prefix-scoped
+# one — leaves no trace in this repository.
 innsegl-verify:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  $(INNSEGL_COMPOSE) run --rm --entrypoint sh innsegl-db-init \

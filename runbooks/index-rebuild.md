@@ -90,37 +90,43 @@ instead rather than a warning.
 A segment object's name is the SHA-256 of its bytes. There is no such thing as
 a corrected segment: different bytes are a different segment.
 
-**Measured** against MinIO with object lock in COMPLIANCE mode:
+**Measured** against the deployed store with object lock in COMPLIANCE mode
+(re-measured on 2026-09-16 after RM-143, #227, and unchanged):
 
 ```
-$ mc rm --force --version-id <v> rb/innsegl-segments/sha256:86c80ddc…
-mc: <ERROR> Failed to remove …
-    Object … is WORM protected and cannot be overwritten
+$ aws s3api delete-object --bucket "$BUCKET" --key sha256:86c80ddc… \
+      --version-id <v>
+An error occurred (AccessDenied) …
 ```
 
-But the ordinary delete is **not** refused:
+Refused for every identity, the store's own root account included. But the
+ordinary delete is **not** refused:
 
 ```
-$ mc rm rb/innsegl-segments/sha256:86c80ddc…
-Created delete marker … (versionId=c9686339-…)
+$ aws s3api delete-object --bucket "$BUCKET" --key sha256:86c80ddc…
+{ "DeleteMarker": true, "VersionId": "c9686339-…" }
 
-$ mc ls rb/innsegl-segments/          # the segment is gone
-$ mc ls --versions rb/innsegl-segments/sha256:86c80ddc…
-… c9686339-… v2 DEL sha256:86c80ddc…
-… 2eeb88ee-… v1 PUT sha256:86c80ddc…   ← still there
+$ aws s3api head-object --bucket "$BUCKET" --key sha256:86c80ddc…
+An error occurred (404) … Not Found            ← the segment looks gone
+
+$ aws s3api list-object-versions --bucket "$BUCKET" --prefix sha256:86c80ddc…
+  DeleteMarkers: c9686339-…  IsLatest: true
+  Versions:      2eeb88ee-…  IsLatest: false  Size: …   ← still there
 ```
 
 Object lock protects **versions**, not **keys**. A missing segment during an
 incident is very often a delete marker, not a destroyed object. The repair is
-to remove the *marker*:
+to remove the *marker* — which is permitted, because a delete marker carries no
+retention:
 
 ```bash
-mc ls --versions "$ALIAS/$BUCKET/$SEGMENT_ID"          # find the DEL version
-mc rm --force --version-id "<the DEL version>" "$ALIAS/$BUCKET/$SEGMENT_ID"
+aws s3api list-object-versions --bucket "$BUCKET" --prefix "$SEGMENT_ID"
+aws s3api delete-object --bucket "$BUCKET" --key "$SEGMENT_ID" \
+      --version-id "<the delete marker's version id>"
 ```
 
-Never `mc cp` the object back. You would be writing a new version of an
-immutable record, and the version history would show you doing it.
+Never copy the object back. You would be writing a new version of an immutable
+record, and the version history would show you doing it.
 
 ### 2.2 Never restore over a live ledger database
 
@@ -346,10 +352,14 @@ something outside it can.
 
 ```bash
 mkdir -p ./segments
-mc alias set seg "https://$INNSEGL_OBJECT_STORE_ENDPOINT" \
-  "$INNSEGL_OBJECT_STORE_ACCESS_KEY" "$INNSEGL_OBJECT_STORE_SECRET_KEY"
-mc cp --recursive "seg/$INNSEGL_OBJECT_STORE_BUCKET/" ./segments/
+export AWS_ACCESS_KEY_ID="$INNSEGL_OBJECT_STORE_ACCESS_KEY"
+export AWS_SECRET_ACCESS_KEY="$INNSEGL_OBJECT_STORE_SECRET_KEY"
+aws --endpoint-url "https://$INNSEGL_OBJECT_STORE_ENDPOINT" \
+    s3 cp --recursive "s3://$INNSEGL_OBJECT_STORE_BUCKET/" ./segments/
 ```
+
+`scripts/backup-ledger.sh` does exactly this, in a container on the object
+network, and is the scripted form of this step.
 
 Each file is named by its `segment_id`, which is its object key, which is the
 SHA-256 of its own bytes. Do not rename them; the name is a check.
@@ -362,7 +372,7 @@ deploy-time ritual:
 innsegl canary -min-bucket-retention 720h
 ```
 
-**Measured** against MinIO with COMPLIANCE lock: exit 0, eight named checks,
+**Measured** against the deployed store with COMPLIANCE lock: exit 0, eight named checks,
 including `version_delete_refused` and `privileged_bypass_delete_refused`.
 Exit 3 means the store permits deletion — that is a bigger incident than your
 outage. Exit 4 means nothing was proved.
@@ -520,5 +530,5 @@ reasonably expect to exist and does not.
 | `innsegl verify-segment` / an anchor check | absent. §6.3 is a manual `curl`. |
 | a rebuild/import subcommand | absent. §4.1 is `psql`. |
 | carrying `chain_id` across a fresh migrate | impossible today — see §4.1. |
-| object storage in the reference stack | absent. `deploy/compose/` ships SPIRE (`spire.yml`) and self-hosted Sigstore (`sigstore.yml`) only. Doc 05 §1 lists twelve services; `postgres`, `minio`, `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-dashboard` and `demo-agent` are not among the shipped compose services — the smoke test creates Postgres and the MCP itself. Tracked as issue #109. Commands here that name a bucket or a DSN assume your deployment, not the shipped stack. |
+| object storage in the reference stack | absent. `deploy/compose/` ships SPIRE (`spire.yml`) and self-hosted Sigstore (`sigstore.yml`) only. Doc 05 §1 lists the stack's services; `postgres`, the object store, `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-dashboard` and `demo-agent` are not among the shipped compose services — the smoke test creates Postgres and the MCP itself. Tracked as issue #109. Commands here that name a bucket or a DSN assume your deployment, not the shipped stack. |
 | CI wiring for `verify-rebuilt-index-selftest.sh` | not wired. Run it by hand after changing the gate. `.github/` is owned elsewhere. |

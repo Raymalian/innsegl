@@ -42,9 +42,12 @@
 
 services:
   innsegl-mcp:
-    # The sealer reaches MinIO and the MCP did not, because until now it never
-    # needed to. Measured rather than assumed — `docker compose config` reports
-    # innsegl-sealer on innsegl-objects and innsegl-mcp not.
+    # The sealer reaches the object store's gateway and the MCP did not,
+    # because until now it never needed to. Measured rather than assumed —
+    # `docker compose config` reports innsegl-sealer on innsegl-objects and
+    # innsegl-mcp not. innsegl-objects and NOT innsegl-object-backend: the
+    # gateway is what enforces object lock, and #227 put the Filer somewhere
+    # nothing but the gateway can reach.
     networks:
       innsegl-ledger:
       innsegl-mcp-clients:
@@ -72,7 +75,7 @@ services:
       # cannot cross files, and a value that drifts between the two is a
       # deployment whose sealer writes to a different bucket than its operator
       # thinks.
-      INNSEGL_OBJECT_STORE_ENDPOINT: minio:9000
+      INNSEGL_OBJECT_STORE_ENDPOINT: innsegl-s3:8333
       INNSEGL_OBJECT_STORE_BUCKET: innsegl-segments
       INNSEGL_OBJECT_STORE_PREFIX: segments/
       # THE SCOPED IDENTITY, NOT THE STORE'S ROOT ACCOUNT (#228), and this

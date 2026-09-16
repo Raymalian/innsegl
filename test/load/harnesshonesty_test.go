@@ -67,8 +67,11 @@ func TestRequireStackFailsOnAnInfrastructureFaultAndSkipsOnlyOnAnAbsentOne(t *te
 // function in the harness allowed to produce one, so an error from anywhere
 // else must not satisfy errors.Is.
 func TestOnlyAbsenceWrapsTheSentinel(t *testing.T) {
+	// The wording is the one startObjectStore produces, image pin and all, so
+	// that a change to how the harness reports a store that would not start is
+	// a change this case sees.
 	fromStartup := fmt.Errorf("the OPS-002 stack did not come up: %w",
-		errors.New("start minio: no space left on device"))
+		errors.New("start "+objectStoreImage()+": no space left on device"))
 	if errors.Is(fromStartup, errDependencyAbsent) {
 		t.Fatal("a start-up failure wraps errDependencyAbsent; it would be routed to a " +
 			"skip and OPS-002 would report ok having measured nothing")

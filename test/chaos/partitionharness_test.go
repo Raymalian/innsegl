@@ -58,7 +58,7 @@ import (
 //     deploy/compose/sigstore.yml, scoped by
 //     internal/signing/testdata/sigstore-testscope.yml.
 //   - Postgres is a real postgres:16 container.
-//   - Object storage is a real MinIO with a real object-lock bucket.
+//   - Object storage is a real object store with a real object-lock bucket.
 //   - The system under test is the SHIPPED `innsegl serve` binary as a
 //     subprocess, reached over the MCP transport by the SDK client, with all
 //     five tools bound.
@@ -119,7 +119,7 @@ import (
 // The consequence is that bring-up counts against the package's test timeout
 // instead of running before the clock starts. That is measured in the report
 // for #59, and it is why requirePartitionWorld brings up the two compose
-// projects CONCURRENTLY with Postgres and MinIO.
+// projects CONCURRENTLY with Postgres and the object store.
 //
 // ISSUE #101: A FAILED DEPENDENCY IS NOT A SKIP
 // ----------------------------------------------
@@ -175,15 +175,34 @@ const (
 	prtRekorKeyPath   = "/api/v1/log/publicKey"
 
 	prtPostgresImage = "postgres:16"
-	prtMinIOImage    = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
 	prtSocatImage    = "alpine/socat:1.8.0.3"
+
+	// RM-143 (#227) changed the object store: the previous one was archived
+	// upstream and delisted from the registry this file pulled it from. The
+	// replacement is measured against doc 07 SEG-005 under the same
+	// configuration, so the store this matrix partitions is still the store
+	// the sealing case writes through.
+	prtObjectStoreImage = "chrislusf/seaweedfs:4.46@sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62"
 
 	prtPGUser     = "innsegl"
 	prtPGPassword = "innsegl-partition-test"
 	prtPGDatabase = "innsegl"
 
-	prtMinIOUser     = "innsegl"
-	prtMinIOPassword = "innsegl-partition-secret"
+	prtStoreUser     = "innsegl"
+	prtStorePassword = "innsegl-partition-secret"
+
+	// THIS STORE SHIPS NO DEFAULT CREDENTIALS. Started without an identity
+	// file it refuses every signed request with "Signed request requires
+	// setting up SeaweedFS S3 authentication", and that arrives at the caller
+	// as AccessDenied on a write — which is indistinguishable from object lock
+	// holding, and in a PARTITION matrix indistinguishable from the partition
+	// itself. A misconfiguration here would therefore read as the very thing
+	// doc 07 OPS-001 is measuring. So the identities are handed to the
+	// container at start, and the readiness probe below is a signed call that
+	// fails loudly if they did not take.
+	prtStoreIdentities = `{"identities":[{"name":"innsegl","credentials":[` +
+		`{"accessKey":"` + prtStoreUser + `","secretKey":"` + prtStorePassword + `"}],` +
+		`"actions":["Admin","Read","Write","List","Tagging"]}]}`
 
 	// prtExpireAfter is the reconciler's bounded window for this suite.
 	prtExpireAfter = 250 * time.Millisecond
@@ -702,16 +721,16 @@ type prtWorld struct {
 	// The DIRECT addresses of the real dependencies. Nothing the system under
 	// test is configured with ever names one of these; they exist so a severed
 	// cell can prove the dependency behind the gate is still healthy.
-	oidcURL      string
-	fulcioDirect string
-	rekorDirect  string
-	spireDirect  string
-	pgDirect     string
-	minioDirect  string
+	oidcURL           string
+	fulcioDirect      string
+	rekorDirect       string
+	spireDirect       string
+	pgDirect          string
+	objectStoreDirect string
 
-	socatName string
-	pgName    string
-	minioName string
+	socatName       string
+	pgName          string
+	objectStoreName string
 
 	// The gates. Every address the system under test holds is one of these.
 	gates map[string]*prtGate
@@ -815,11 +834,11 @@ func prtStartWorld(ctx context.Context, root, workDir string) (*prtWorld, error)
 			"INNSEGL_SIGSTORE_OIDC_NETWORK=" + project + "-oidc-frontend",
 			"INNSEGL_SPIRE_JWT_ISSUER=" + prtIssuer,
 		},
-		socatName:   project + "-adminproxy",
-		pgName:      project + "-postgres",
-		minioName:   project + "-minio",
-		gitsignPath: gitsign,
-		gates:       map[string]*prtGate{},
+		socatName:       project + "-adminproxy",
+		pgName:          project + "-postgres",
+		objectStoreName: project + "-objectstore",
+		gitsignPath:     gitsign,
+		gates:           map[string]*prtGate{},
 	}
 
 	// The two compose projects and the two plain containers come up together.
@@ -827,8 +846,8 @@ func prtStartWorld(ctx context.Context, root, workDir string) (*prtWorld, error)
 	// with no TestMain to hide behind (see the header) every second of it is
 	// charged to the ten-minute test timeout.
 	var (
-		wg                              sync.WaitGroup
-		spireErr, sigErr, pgErr, minErr error
+		wg                                sync.WaitGroup
+		spireErr, sigErr, pgErr, storeErr error
 	)
 	wg.Add(2)
 	go func() {
@@ -839,7 +858,7 @@ func prtStartWorld(ctx context.Context, root, workDir string) (*prtWorld, error)
 		defer wg.Done()
 		pgErr = w.startPostgres(ctx)
 		if pgErr == nil {
-			minErr = w.startMinIO(ctx)
+			storeErr = w.startObjectStore(ctx)
 		}
 	}()
 	wg.Wait()
@@ -849,8 +868,8 @@ func prtStartWorld(ctx context.Context, root, workDir string) (*prtWorld, error)
 	if pgErr != nil {
 		return w, pgErr
 	}
-	if minErr != nil {
-		return w, minErr
+	if storeErr != nil {
+		return w, storeErr
 	}
 	// Sigstore's fulcio joins the SPIRE stack's OIDC frontend network, so it
 	// cannot start until that network exists. Sequential by construction.
@@ -1115,21 +1134,40 @@ func prtPingPostgres(ctx context.Context, dsn string) error {
 	return cerr
 }
 
-func (w *prtWorld) startMinIO(ctx context.Context) error {
-	if _, err := prtRetryPortRace("starting minio", func() error {
-		prtRemoveContainerIfExists(ctx, w.minioName)
+func (w *prtWorld) startObjectStore(ctx context.Context) error {
+	if _, err := prtRetryPortRace("starting the object store", func() error {
+		prtRemoveContainerIfExists(ctx, w.objectStoreName)
 		port, perr := prtFreePort(ctx)
 		if perr != nil {
-			return fmt.Errorf("reserve a port for minio: %w", perr)
+			return fmt.Errorf("reserve a port for the object store: %w", perr)
 		}
-		w.minioDirect = "127.0.0.1:" + port
-		if _, derr := prtDocker(ctx, "run", "--detach", "--name", w.minioName,
-			"--publish", w.minioDirect+":9000",
-			"--env", "MINIO_ROOT_USER="+prtMinIOUser,
-			"--env", "MINIO_ROOT_PASSWORD="+prtMinIOPassword,
-			prtEnvOr("INNSEGL_TEST_MINIO_IMAGE", prtMinIOImage), "server", "/data",
+		w.objectStoreDirect = "127.0.0.1:" + port
+		if _, derr := prtDocker(ctx, "run", "--detach", "--name", w.objectStoreName,
+			"--publish", w.objectStoreDirect+":8333",
+			// The identity file arrives through the environment and is written
+			// inside the container. A bind mount would have to name a path on
+			// the machine running the suite, and this harness has none to name.
+			"--env", "INNSEGL_S3_IDENTITIES="+prtStoreIdentities,
+			"--entrypoint", "sh",
+			prtEnvOr("INNSEGL_TEST_OBJECT_STORE_IMAGE", prtObjectStoreImage), "-c",
+			// The three -s3.* switches turn off surfaces that are no part of
+			// storing a sealed segment: an IAM API served on the S3 port, an
+			// Iceberg REST catalog, and a Lance namespace server. Each is an
+			// authenticated write surface, on a service whose whole job in
+			// this matrix is refusing writes.
+			"printf %s \"$INNSEGL_S3_IDENTITIES\" > /tmp/s3-identities.json && "+
+				// -volume.max: EACH BUCKET IS A COLLECTION AND A NEW COLLECTION
+				// IMMEDIATELY RESERVES SEVEN VOLUMES. The store's default cap is
+				// EIGHT, so the second bucket in one container gets one volume and
+				// the third gets none — and a write with nowhere to go comes back as
+				// HTTP 500 "We encountered an internal error, please try again",
+				// which in this package reads exactly like object lock refusing a
+				// write. Measured. Volumes are sparse (eight of them were 256 KiB on
+				// disk), so the cap is raised rather than the buckets reused.
+				"exec weed server -dir=/data -volume.max=100 -s3 -s3.config=/tmp/s3-identities.json "+
+				"-s3.port=8333 -s3.iam=false -s3.port.iceberg=0 -s3.port.lance=0",
 		); derr != nil {
-			return fmt.Errorf("start minio: %w", derr)
+			return fmt.Errorf("start the object store: %w", derr)
 		}
 		return nil
 	}); err != nil {
@@ -1138,24 +1176,27 @@ func (w *prtWorld) startMinIO(ctx context.Context) error {
 	deadline := time.Now().Add(150 * time.Second)
 	var last error
 	for time.Now().Before(deadline) {
-		last = prtMinIOReady(ctx, w.minioDirect)
+		last = prtObjectStoreReady(ctx, w.objectStoreDirect)
 		if last == nil {
 			return nil
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	return fmt.Errorf("minio never became ready: %w", last)
+	return fmt.Errorf("the object store never became ready: %w", last)
 }
 
-func prtMinIOClient(endpoint string) (*minio.Client, error) {
+// prtObjectStoreClient dials the store with minio-go, which is an S3 client and
+// not a client for one implementation of S3. RM-143 (#227) changed the
+// container and left this untouched.
+func prtObjectStoreClient(endpoint string) (*minio.Client, error) {
 	return minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(prtMinIOUser, prtMinIOPassword, ""),
+		Creds:  credentials.NewStaticV4(prtStoreUser, prtStorePassword, ""),
 		Secure: false,
 	})
 }
 
-func prtMinIOReady(ctx context.Context, endpoint string) error {
-	cl, err := prtMinIOClient(endpoint)
+func prtObjectStoreReady(ctx context.Context, endpoint string) error {
+	cl, err := prtObjectStoreClient(endpoint)
 	if err != nil {
 		return err
 	}
@@ -1191,8 +1232,8 @@ func (w *prtWorld) buildGates(ctx context.Context) error {
 		{prtRekor, w.rekorDirect, func(c context.Context) error {
 			return w.probeRekorAt(c, "http://"+w.rekorDirect)
 		}},
-		{prtObject, w.minioDirect, func(c context.Context) error {
-			return prtMinIOReady(c, w.minioDirect)
+		{prtObject, w.objectStoreDirect, func(c context.Context) error {
+			return prtObjectStoreReady(c, w.objectStoreDirect)
 		}},
 	}
 	for _, s := range spec {
@@ -1301,7 +1342,7 @@ func (w *prtWorld) stop() {
 	if os.Getenv("INNSEGL_TEST_KEEP_STACK") != "" {
 		return
 	}
-	for _, name := range []string{w.socatName, w.pgName, w.minioName} {
+	for _, name := range []string{w.socatName, w.pgName, w.objectStoreName} {
 		if name == "" {
 			continue
 		}
@@ -1360,8 +1401,8 @@ func requirePartitionWorld(t *testing.T) *prtWorld {
 			"cell of the matrix ran (#101).", prtFailure)
 	}
 	if prtShared == nil {
-		t.Skipf("skipping OPS-001: no real SPIRE + Sigstore + Postgres + MinIO and no "+
-			"gitsign (%s). A partition matrix with no dependency to partition proves "+
+		t.Skipf("skipping OPS-001: no real SPIRE + Sigstore + Postgres + object store "+
+			"and no gitsign (%s). A partition matrix with no dependency to partition proves "+
 			"nothing, and IP §2 is explicit that \"a mocked Fulcio proves nothing about "+
 			"I5\". Start Docker, `go install github.com/sigstore/gitsign@%s`, and re-run.",
 			prtSkip, prtGitsignVersion)
@@ -1798,9 +1839,9 @@ func (w *prtWorld) openWORM(t *testing.T) {
 	defer cancel()
 
 	w.bucket = fmt.Sprintf("ops001-%d", os.Getpid()%100000)
-	cl, err := prtMinIOClient(w.minioDirect)
+	cl, err := prtObjectStoreClient(w.objectStoreDirect)
 	if err != nil {
-		t.Fatalf("minio client: %v", err)
+		t.Fatalf("object store client: %v", err)
 	}
 	// Object lock on, because doc 05 §2 says a segment store has it and a
 	// bucket without it is a different store than the one under test.
@@ -1815,8 +1856,8 @@ func (w *prtWorld) openWORM(t *testing.T) {
 	worm, err := segment.NewWORM(ctx, segment.WORMConfig{
 		Endpoint:  w.gate(prtObject).addr(),
 		Bucket:    w.bucket,
-		AccessKey: prtMinIOUser,
-		SecretKey: prtMinIOPassword,
+		AccessKey: prtStoreUser,
+		SecretKey: prtStorePassword,
 		UseTLS:    false,
 		Mode:      segment.RetentionCompliance,
 		Retention: 2 * time.Minute,

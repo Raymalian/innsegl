@@ -48,7 +48,7 @@
 # holding credentials for a bucket it does not operate, for a destination the
 # maintainer has not chosen. A local path is the smallest correct default: it
 # works with no configuration, on the laptop this is most likely to be run
-# from first, and moving the file to WORM storage afterwards is one `mc cp`
+# from first, and moving the file to WORM storage afterwards is one `aws s3 cp`
 # regardless of which bucket is decided on.
 #
 # WHAT "VERIFIED" MEANS WHEN THE SEGMENTS ARE MISSING
@@ -85,11 +85,16 @@ readonly EXIT_MISMATCH=3
 readonly EXIT_UNVERIFIED=4
 readonly EXIT_DUMP_FAILED=5
 
-# The pin deploy/compose/innsegl.yml uses for minio/mc, copied rather than
+# The pin deploy/compose/innsegl.yml uses for its S3 client, copied rather than
 # read from the compose file so this script has no YAML-parsing dependency.
 # Kept in one place: grep this string in deploy/compose/innsegl.yml when
 # bumping it there.
-readonly DEFAULT_MC_IMAGE="quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
+#
+# IT IS THE REFERENCE CLIENT AND NOT ANY ONE STORE'S OWN (RM-143, #227). What
+# was here was the client that shipped with the store this deployment used to
+# run, and when that store was archived upstream this script's fetch went with
+# it. `aws s3 cp --recursive` is the same operation over the protocol.
+readonly DEFAULT_S3_CLIENT_IMAGE="amazon/aws-cli:2.31.19@sha256:4532e423f4e4f1092b3b1fb7819278a1f4baa3564f428182e399669d9c8f9e95"
 
 usage() {
   cat <<'USAGE'
@@ -111,10 +116,13 @@ Options:
                           objects (see runbooks/index-rebuild.md §6.1). Skips
                           fetching from object storage -- use this for a
                           restore you already staged, or in a test.
-  --minio-network NAME    docker network the object store is reachable on,
-                          used only when --segments is not given
-                          (default: innsegl-objects)
-  --object-store-endpoint host:port inside --minio-network (default: minio:9000)
+  --object-network NAME   docker network the object store's S3 GATEWAY is
+                          reachable on, used only when --segments is not given
+                          (default: innsegl-objects). Not the network the
+                          Filer and the volume server are on: those have one
+                          route in and it is the gateway (doc 05 §1).
+  --object-store-endpoint host:port inside --object-network
+                          (default: innsegl-s3:8333)
   --object-store-bucket NAME   segment bucket (default: innsegl-segments)
   --object-store-prefix P      key prefix segments are stored under, matching
                           $INNSEGL_OBJECT_STORE_PREFIX on the sealer
@@ -122,7 +130,7 @@ Options:
                           default -- the innsegl binary's own default is "")
   --object-store-access-key K  (default: innsegl)
   --object-store-secret-key K  (default: innsegl-compose-objects)
-  --mc-image REF          minio/mc image reference used to fetch segments
+  --s3-client-image REF   S3 client image reference used to fetch segments
   --quiet                 print less on success; failures are always reported
   -h, --help              this text
 
@@ -139,13 +147,14 @@ pg_container="innsegl-postgres"
 database="innsegl"
 owner="innsegl"
 segments_dir=""
-minio_network="innsegl-objects"
-object_store_endpoint="minio:9000"
+object_network="innsegl-objects"
+object_store_endpoint="innsegl-s3:8333"
 object_store_bucket="innsegl-segments"
 object_store_prefix="segments/"
 object_store_access_key="innsegl"
 object_store_secret_key="innsegl-compose-objects"
-mc_image="${DEFAULT_MC_IMAGE}"
+object_store_region="${INNSEGL_OBJECT_STORE_REGION:-us-east-1}"
+s3_client_image="${DEFAULT_S3_CLIENT_IMAGE}"
 quiet=0
 
 while [ $# -gt 0 ]; do
@@ -155,13 +164,13 @@ while [ $# -gt 0 ]; do
     --database)                database="${2-}"; shift 2 || true ;;
     --owner)                   owner="${2-}"; shift 2 || true ;;
     --segments)                segments_dir="${2-}"; shift 2 || true ;;
-    --minio-network)           minio_network="${2-}"; shift 2 || true ;;
+    --object-network)          object_network="${2-}"; shift 2 || true ;;
     --object-store-endpoint)   object_store_endpoint="${2-}"; shift 2 || true ;;
     --object-store-bucket)     object_store_bucket="${2-}"; shift 2 || true ;;
     --object-store-prefix)     object_store_prefix="${2-}"; shift 2 || true ;;
     --object-store-access-key) object_store_access_key="${2-}"; shift 2 || true ;;
     --object-store-secret-key) object_store_secret_key="${2-}"; shift 2 || true ;;
-    --mc-image)                mc_image="${2-}"; shift 2 || true ;;
+    --s3-client-image)         s3_client_image="${2-}"; shift 2 || true ;;
     --quiet)                   quiet=1; shift ;;
     -h|--help)                 usage; exit "${EXIT_OK}" ;;
     *)
@@ -291,28 +300,35 @@ else
   segments_dir="${work}/segments"
   mkdir -p "${segments_dir}"
   fetched_segments=1
-  say "==> fetching sealed segments from ${object_store_bucket}/${object_store_prefix} via ${minio_network}"
-  # --entrypoint sh: the minio/mc image's own ENTRYPOINT is `mc`, so a bare
-  # `docker run image sh -c ...` would run `mc sh -c ...` rather than a shell
-  # (measured). Credentials travel as container environment, not as shell
-  # string interpolation, so a value containing a quote cannot break the
-  # command.
-  docker run --rm --network "${minio_network}" \
+  say "==> fetching sealed segments from ${object_store_bucket}/${object_store_prefix} via ${object_network}"
+  # --entrypoint sh: the client image's own ENTRYPOINT is `aws`, so a bare
+  # `docker run image sh -c ...` would run `aws sh -c ...` rather than a shell.
+  # Credentials travel as container environment, not as shell string
+  # interpolation, so a value containing a quote cannot break the command.
+  #
+  # THE CREDENTIAL THIS RUNS AS IS A READER. It needs GetObject and ListBucket
+  # under the segment prefix and nothing else; the scoped identity the sealer
+  # holds is enough, and so is the store's root account. Neither can delete
+  # what it is copying -- COMPLIANCE retention refuses that to everyone -- so
+  # the fetch cannot damage what it is verifying against.
+  docker run --rm --network "${object_network}" \
       -v "${segments_dir}:/out" \
-      -e MC_ENDPOINT="http://${object_store_endpoint}" \
-      -e MC_ACCESS_KEY="${object_store_access_key}" \
-      -e MC_SECRET_KEY="${object_store_secret_key}" \
-      -e MC_BUCKET="${object_store_bucket}" \
-      -e MC_PREFIX="${object_store_prefix}" \
+      -e AWS_ENDPOINT_URL="http://${object_store_endpoint}" \
+      -e AWS_ACCESS_KEY_ID="${object_store_access_key}" \
+      -e AWS_SECRET_ACCESS_KEY="${object_store_secret_key}" \
+      -e AWS_DEFAULT_REGION="${object_store_region}" \
+      -e AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+      -e AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
+      -e S3_BUCKET="${object_store_bucket}" \
+      -e S3_PREFIX="${object_store_prefix}" \
       --entrypoint sh \
-      "${mc_image}" \
+      "${s3_client_image}" \
       -c 'set -e
-        mc --config-dir /tmp/mc alias set src "$MC_ENDPOINT" "$MC_ACCESS_KEY" "$MC_SECRET_KEY" >/dev/null
-        mc --config-dir /tmp/mc cp --recursive "src/$MC_BUCKET/$MC_PREFIX" /out/' \
-      >"${work}/mc.log" 2>&1 || true
+        aws s3 cp --recursive "s3://$S3_BUCKET/$S3_PREFIX" /out/' \
+      >"${work}/s3-fetch.log" 2>&1 || true
   n_fetched="$(find "${segments_dir}" -type f 2>/dev/null | grep -c . || true)"
   if [ "${n_fetched}" -eq 0 ]; then
-    warn "    could not fetch any sealed segments (see ${work}/mc.log if this is unexpected)"
+    warn "    could not fetch any sealed segments (see ${work}/s3-fetch.log if this is unexpected)"
   else
     say "    fetched ${n_fetched} segment object(s)"
   fi

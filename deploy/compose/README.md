@@ -233,7 +233,7 @@ summary:
 |---|---|
 | [`spire/README.md`](spire/README.md) | `spire-server`, `spire-agent`, `spire-oidc` — the trust domain, workload attestation, and the JWT-SVID → OIDC bridge |
 | [`sigstore/README.md`](sigstore/README.md) | `fulcio`, `rekor` and Rekor's backing Trillian log and database — the CA and the transparency log |
-| [`innsegl/README.md`](innsegl/README.md) | `postgres`, `minio`, `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api`, `innsegl-dashboard`, `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
+| [`innsegl/README.md`](innsegl/README.md) | `postgres`, the object store (`innsegl-object-store`, `innsegl-object-filer`, `innsegl-s3`), `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api`, `innsegl-dashboard`, `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
 
 The first two are Innsegl's dependencies. The third is Innsegl.
 
@@ -242,8 +242,12 @@ access-control list, and the rule is written at each `networks:` declaration in
 the compose files. Fulcio has no route into SPIRE beyond fetching two public
 documents; Rekor has no route to Trillian's database; the SPIRE admin API is
 reachable from one network with two members, and the second is the MCP it was
-declared for. The MCP is on no network with MinIO, and the dashboard is on no
-network with the MCP. Neither Postgres nor MinIO publishes a host port, because
+declared for. The MCP is on no network with the object store, and the dashboard
+is on no network with the MCP. The object store's Filer and volume server are on
+a network whose only other member is its S3 gateway, because object lock is
+enforced at the gateway and the Filer's own API destroys a retained object with
+no credential at all (#227). Neither Postgres nor the object store publishes a
+host port, because
 a published port is reachable by address from an unrelated bridge network —
 measured, and explained in [`innsegl/README.md`](innsegl/README.md). Compose is
 where the least-privilege shape is first proven, not first ignored.
@@ -531,7 +535,7 @@ Four things worth knowing before you choose:
 | compose refuses, naming `INNSEGL_SPIRE_PARENT_ID` | `register.sh` has not run since this stack booted. It writes `deploy/compose/.env`; re-run it |
 | `innsegl-mcp` restarts, logging that the Workload API gave it no SVID | its registration entry is missing or names an older build of `innsegl:local`. Re-run `register.sh` — it detects a stale entry and replaces it |
 | `innsegl-db-init` exits non-zero naming a privilege | the ledger's role can do more than append. The message names which privilege; `make innsegl-verify` re-runs the check on its own |
-| `innsegl-sealer` restarts | it exits when it cannot reach MinIO or Rekor. `docker compose -f deploy/compose/innsegl.yml logs innsegl-sealer` |
+| `innsegl-sealer` restarts | it exits when it cannot reach the object store's gateway or Rekor. `docker compose -f deploy/compose/innsegl.yml logs innsegl-sealer` |
 | Fulcio answers `invalid identity token` | the two stacks disagree about the issuer. Bring both down with `-v` and boot again with the export set |
 | `trillian-db` never becomes healthy on Apple Silicon | it is emulated; give it longer on the first pull |
 | `make smoke` removed a stack you were using | expected — see the note above `make smoke` |

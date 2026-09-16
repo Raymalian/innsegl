@@ -19,7 +19,8 @@
 #    [...] Compose is where the least-privilege shape is first proven, not
 #    first ignored."
 #
-# The other services in doc 05 §1 (fulcio, rekor, postgres, minio, innsegl-*,
+# The other services in doc 05 §1 (fulcio, rekor, postgres, the object store,
+# innsegl-*,
 # demo-agent) are other issues' files. This one is composable with them: it
 # declares the networks and volumes they attach to, with the membership rules
 # stated at each declaration.
@@ -101,7 +102,8 @@ services:
   #   innsegl-spire-node   spire-agent reaches the Agent API here.
   #   innsegl-spire-admin  innsegl-mcp reaches the admin API here, and is the
   #                        only other member this network will ever have.
-  # Everything else in doc 05 §1 — postgres, minio, rekor, fulcio, the sealer,
+  # Everything else in doc 05 §1 — postgres, the object store, rekor, fulcio,
+  # the sealer,
   # the reconciler, the dashboard, demo-agent — is on neither, so none of them
   # can open a socket to spire-server at all.
   #

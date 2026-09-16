@@ -50,7 +50,11 @@ const (
 	// number and a bytes-per-event number are both properties of the server
 	// that produced them, and ADR-0039 quotes these tags beside the numbers.
 	defaultPostgresImage = "postgres:16"
-	defaultMinIOImage    = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+	// The object store changed in RM-143 (#227): the previous one was archived
+	// upstream and delisted from the registry this file pulled it from, so the
+	// pin stopped resolving at all. The replacement was measured against
+	// SEG-005 under the same configuration before it was adopted here.
+	defaultObjectStoreImage = "chrislusf/seaweedfs:4.46@sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62"
 	// The Rekor stack, matching internal/segment/rekorharness_test.go so that
 	// OPS-002 anchors against the same log SEG-003 does.
 	defaultRekorImage             = "ghcr.io/sigstore/rekor/rekor-server:v1.3.10"
@@ -63,8 +67,26 @@ const (
 	postgresPassword = "innsegl-load-test"
 	postgresDB       = "innsegl"
 
-	minioRootUser     = "innsegl"
-	minioRootPassword = "innsegl-load-test-secret"
+	storeRootUser     = "innsegl"
+	storeRootPassword = "innsegl-load-test-secret"
+
+	// storeIdentities is the S3 identity file the object store is started with.
+	//
+	// THIS STORE SHIPS NO DEFAULT CREDENTIALS. Started without an identity
+	// file it refuses every signed request with "Signed request requires
+	// setting up SeaweedFS S3 authentication", which arrives at the caller as
+	// AccessDenied on a write — indistinguishable from object lock working.
+	// OPS-002 writes sealed segments into a locked bucket, so a harness that
+	// forgot this file would watch every write be refused and have no way to
+	// tell that from the refusal the WORM writer exists to produce.
+	//
+	// The grant is whole-server admin because this package measures throughput
+	// and bytes, not authorization: scoping the identity down is a property of
+	// the shipped deployment and is measured there, against the shipped
+	// identity file.
+	storeIdentities = `{"identities":[{"name":"innsegl","credentials":[` +
+		`{"accessKey":"` + storeRootUser + `","secretKey":"` + storeRootPassword + `"}],` +
+		`"actions":["Admin","Read","Write","List","Tagging"]}]}`
 
 	trillianDBName     = "test"
 	trillianDBUser     = "test"
@@ -97,8 +119,11 @@ func envImage(name, fallback string) string {
 }
 
 func postgresImage() string { return envImage("INNSEGL_TEST_POSTGRES_IMAGE", defaultPostgresImage) }
-func minioImage() string    { return envImage("INNSEGL_TEST_MINIO_IMAGE", defaultMinIOImage) }
 func rekorImage() string    { return envImage("INNSEGL_TEST_REKOR_IMAGE", defaultRekorImage) }
+
+func objectStoreImage() string {
+	return envImage("INNSEGL_TEST_OBJECT_STORE_IMAGE", defaultObjectStoreImage)
+}
 
 // docker runs one docker command and returns its trimmed stdout.
 func docker(ctx context.Context, args ...string) (string, error) {
@@ -170,15 +195,15 @@ func stackRequirement(s *stack, skip, failure string) requirement {
 	}
 }
 
-// stack is the whole OPS-002 deployment: one Postgres, one MinIO, and Rekor
-// with everything under it.
+// stack is the whole OPS-002 deployment: one Postgres, one object store, and
+// Rekor with everything under it.
 type stack struct {
 	network    string
 	containers []string
 
-	pgPort       string
-	minioAddr    string
-	rekorBaseURL string
+	pgPort          string
+	objectStoreAddr string
+	rekorBaseURL    string
 
 	dockerVersion string
 	dockerOS      string
@@ -191,9 +216,12 @@ func (s *stack) adminDSN(database string) string {
 		postgresUser, postgresPassword, s.pgPort, database)
 }
 
-func (s *stack) minioClient() (*minio.Client, error) {
-	return minio.New(s.minioAddr, &minio.Options{
-		Creds:  credentials.NewStaticV4(minioRootUser, minioRootPassword, ""),
+// objectStoreClient is an S3 client for the stack's store, as the account
+// storeIdentities grants. minio-go is an S3 client library and nothing more:
+// RM-143 changed the server this talks to and not the code that talks to it.
+func (s *stack) objectStoreClient() (*minio.Client, error) {
+	return minio.New(s.objectStoreAddr, &minio.Options{
+		Creds:  credentials.NewStaticV4(storeRootUser, storeRootPassword, ""),
 		Secure: false,
 	})
 }
@@ -248,9 +276,9 @@ func freeHostPort(ctx context.Context) (string, error) {
 // This machine refuses roughly the 29th Docker network (#100), and every
 // package in this repository that stands a compose project up spends several.
 // OPS-002 needs Trillian to reach MySQL and Rekor to reach Trillian, which is
-// the only reason it needs a network at all; Postgres and MinIO are reached
-// from the test process over published ports and are on it only because
-// putting them there costs nothing.
+// the only reason it needs a network at all; Postgres and the object store are
+// reached from the test process over published ports and are on it only
+// because putting them there costs nothing.
 func startStack(ctx context.Context) (*stack, error) {
 	suffix := fmt.Sprintf("%d-%d", os.Getpid(), nameSeq.Add(1))
 	s := &stack{network: "innsegl-load-" + suffix}
@@ -264,7 +292,7 @@ func startStack(ctx context.Context) (*stack, error) {
 	if err := s.startPostgres(ctx, suffix); err != nil {
 		return s, err
 	}
-	if err := s.startMinIO(ctx, suffix); err != nil {
+	if err := s.startObjectStore(ctx, suffix); err != nil {
 		return s, err
 	}
 	if err := s.startRekor(ctx, suffix); err != nil {
@@ -333,28 +361,67 @@ func (s *stack) waitForPostgres(ctx context.Context, timeout time.Duration) erro
 	return fmt.Errorf("postgres never became ready: %w", last)
 }
 
-func (s *stack) startMinIO(ctx context.Context, suffix string) error {
+// startObjectStore brings up the S3 gateway the sealed segments are written
+// to.
+//
+// ONE CONTAINER HERE, THREE IN THE REFERENCE DEPLOYMENT (store, Filer, S3
+// gateway across two networks), and saying which difference that is matters.
+// What this package measures is sustained append load through the gateway: the
+// bytes a sealed segment costs and the time a seal and an anchor take, all of
+// which are the gateway's alone. The Filer split is about REACHABILITY — the
+// Filer is a second door to the same bytes with no object lock on it — and
+// that is measured by OPS-029 in test/deploy, against the compose file, where
+// networks exist. Running three containers here would cost three more on a
+// machine #100 already has arithmetic about and would move no number.
+func (s *stack) startObjectStore(ctx context.Context, suffix string) error {
 	port, err := freeHostPort(ctx)
 	if err != nil {
-		return fmt.Errorf("reserve a host port for minio: %w", err)
+		return fmt.Errorf("reserve a host port for the object store: %w", err)
 	}
-	s.minioAddr = "127.0.0.1:" + port
-	if err := s.run(ctx, "innsegl-load-minio-"+suffix,
-		"--publish", "127.0.0.1:"+port+":9000",
-		"--env", "MINIO_ROOT_USER="+minioRootUser,
-		"--env", "MINIO_ROOT_PASSWORD="+minioRootPassword,
-		minioImage(), "server", "/data",
+	s.objectStoreAddr = "127.0.0.1:" + port
+	if err := s.run(ctx, "innsegl-load-obj-"+suffix,
+		"--publish", "127.0.0.1:"+port+":8333",
+		// The identity file is handed in through the environment and written
+		// before the server starts, because this store has NO DEFAULT
+		// CREDENTIALS: without it every signed request is refused with "Signed
+		// request requires setting up SeaweedFS S3 authentication", which
+		// reaches the caller as AccessDenied on a write. That is the same
+		// answer a locked object gives, so a store started without an identity
+		// file looks exactly like one whose object lock is working. See
+		// storeIdentities.
+		"--env", "INNSEGL_S3_IDENTITIES="+storeIdentities,
+		"--entrypoint", "sh",
+		objectStoreImage(), "-c",
+		// The three -s3.* off-switches are an IAM API served on the S3 port,
+		// an Iceberg REST catalog and a Lance namespace server. None of them
+		// is part of storing a sealed segment, and each is an authenticated
+		// write surface on a service whose job is refusing writes.
+		"printf %s \"$INNSEGL_S3_IDENTITIES\" > /tmp/s3-identities.json && "+
+			// -volume.max: EACH BUCKET IS A COLLECTION AND A NEW COLLECTION
+			// IMMEDIATELY RESERVES SEVEN VOLUMES. The store's default cap is
+			// EIGHT, so the second bucket in one container gets one volume and
+			// the third gets none — and a write with nowhere to go comes back as
+			// HTTP 500 "We encountered an internal error, please try again",
+			// which in this package reads exactly like object lock refusing a
+			// write. Measured. Volumes are sparse (eight of them were 256 KiB on
+			// disk), so the cap is raised rather than the buckets reused.
+			"exec weed server -dir=/data -volume.max=100 -s3 -s3.config=/tmp/s3-identities.json "+
+			"-s3.port=8333 -s3.iam=false -s3.port.iceberg=0 -s3.port.lance=0",
 	); err != nil {
-		return fmt.Errorf("start %s: %w", minioImage(), err)
+		return fmt.Errorf("start %s: %w", objectStoreImage(), err)
 	}
-	return s.waitForMinIO(ctx, 2*time.Minute)
+	return s.waitForObjectStore(ctx, 2*time.Minute)
 }
 
-func (s *stack) waitForMinIO(ctx context.Context, timeout time.Duration) error {
+// waitForObjectStore polls until the store answers an AUTHENTICATED request.
+// An unauthenticated probe would answer as soon as the port was open, and on a
+// store with no default credentials that says nothing about whether the
+// identity file was read.
+func (s *stack) waitForObjectStore(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var last error
 	for time.Now().Before(deadline) {
-		cl, err := s.minioClient()
+		cl, err := s.objectStoreClient()
 		if err == nil {
 			attempt, cancel := context.WithTimeout(ctx, 3*time.Second)
 			_, err = cl.ListBuckets(attempt)
@@ -366,7 +433,7 @@ func (s *stack) waitForMinIO(ctx context.Context, timeout time.Duration) error {
 		last = err
 		time.Sleep(250 * time.Millisecond)
 	}
-	return fmt.Errorf("minio never became ready: %w", last)
+	return fmt.Errorf("the object store never became ready: %w", last)
 }
 
 // startRekor brings up MySQL, the Trillian log server and sequencer, Redis and
@@ -575,9 +642,9 @@ func freshLockedBucket(t *testing.T, s *stack) string {
 	t.Helper()
 	name := fmt.Sprintf("load-%d-%d", os.Getpid()%100000, nameSeq.Add(1))
 
-	cl, err := s.minioClient()
+	cl, err := s.objectStoreClient()
 	if err != nil {
-		t.Fatalf("minio client: %v", err)
+		t.Fatalf("object store client: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

@@ -26,11 +26,35 @@ import (
 //
 // What that reaches is what the running stack HOLDS. Before this issue,
 // deploy/compose/innsegl.yml gave `innsegl-sealer` and `innsegl-canary` the
-// same value it gave the server as MINIO_ROOT_USER, so the sealer ran as the
-// store's root account and an identity read off a container could set the
+// same value it gave the server as its root credential, so the sealer ran as
+// the store's root account and an identity read off a container could set the
 // bucket's object-lock configuration — downgrading the default rule from
 // COMPLIANCE to GOVERNANCE, after which everything written is deletable by a
 // holder of a bypass-capable credential.
+//
+// THE NARROWING IS A KEY PREFIX AND NOT A PERMISSION NAME (RM-143, #227), and
+// that is the store's doing rather than a preference. Measured on the shipped
+// image: its permission model has NO separate action for setting a bucket's
+// object-lock configuration. An identity granted a bucket-wide `Write` may set
+// it, and the downgrade succeeds. There is nothing to withhold by name.
+//
+// What it does have is prefix-scoped grants, and they draw the line in exactly
+// the right place. Measured, same image, same bucket, one identity granted
+// `Read:<bucket>`, `List:<bucket>` and `Write:<bucket>/<prefix>*`:
+//
+//	GetObjectLockConfiguration    allowed   the canary reads it every run
+//	PutObject under the prefix    allowed   the sealer's whole job
+//	PutObject anywhere else       REFUSED
+//	PutObjectLockConfiguration    REFUSED   the downgrade itself
+//	CreateBucket, DeleteBucket    REFUSED
+//	PutBucketVersioning           REFUSED
+//	PutBucketPolicy, Lifecycle    REFUSED
+//	PutObjectRetention            REFUSED
+//	DeleteObjectVersion (bypass)  REFUSED
+//
+// So the migration did not cost OPS-026, and it bought two refusals the policy
+// it replaced did not have: that identity could write anywhere in the bucket
+// and this one cannot.
 //
 // SEALED HISTORY IS NOT WHAT IS AT RISK and saying so matters, because it is
 // what decides how much narrowing is worth doing. Compliance retention refuses
@@ -273,7 +297,32 @@ func TestOPS026TheScopedStoreIdentityCannotWeakenTheBucket(t *testing.T) {
 			firstLine(minio.ToErrorResponse(scopedErr).Message))
 	}
 
+	// ---- the other side of the same grant ---------------------------------
+	//
+	// On this store the two calls are separated by the PREFIX and by nothing
+	// else. A credential refused the bucket configuration but permitted a write
+	// anywhere in the bucket would mean the server distinguishes them some
+	// other way, and the reason the identity file is shaped as it is would be
+	// wrong — so both halves are measured, and a pass needs both.
+	outside := "innsegl-scope-probe-ops026"
+	_, outsideErr := scoped.PutObject(ctx, store.bucket, outside,
+		bytes.NewReader([]byte("outside the segment prefix")), 26, minio.PutObjectOptions{})
+	if outsideErr == nil {
+		t.Errorf("the scoped credential WROTE %s/%s, outside %s and outside the canary's "+
+			"probe prefix.\n\nThe grant is meant to be prefix-scoped. A bucket-wide write "+
+			"grant is also what lets this identity set the bucket's object-lock "+
+			"configuration on this store, so this and the refusal above stand or fall "+
+			"together.", store.bucket, outside, cred.prefix)
+	} else {
+		t.Logf("OPS-026 %-14s PutObject outside %s refused: %s", cred.access, cred.prefix,
+			minio.ToErrorResponse(outsideErr).Code)
+	}
+
 	// ---- and the refusal is the scope, not the bucket ---------------------
+	//
+	// The root identity is the one the shipped identity file grants Admin to
+	// and the one object-init.sh runs as. It has to keep this permission or no
+	// bucket could ever be created with a default rule on it.
 	if rootErr := root.SetBucketObjectLockConfig(ctx, store.bucket, &same, &days, &sameUnit); rootErr != nil {
 		t.Errorf("the ROOT credential could not set the bucket's object-lock configuration "+
 			"either: %v\n\nThen the refusal above says nothing about the scope — it says "+
@@ -392,8 +441,9 @@ func TestOPS027TheScopedStoreIdentityCannotDestroyARetainedSegment(t *testing.T)
 //
 // It reads the compose files through `docker compose config` rather than as
 // text. RM-144's defect was not a misspelling: `x-object-store-user` was an
-// ANCHOR whose value was the same string the server got as MINIO_ROOT_USER, and
-// a text match would have read the anchor's name and been satisfied.
+// ANCHOR whose value was the same string the server was given as its root
+// credential, and a text match would have read the anchor's name and been
+// satisfied.
 // ---------------------------------------------------------------------------
 
 // storeCredentialHolders is every shipped arrangement of the stack, by the
@@ -418,6 +468,20 @@ var storeCredentialHolders = []struct {
 			"service holding the store credential there. A narrowing applied only to " +
 			"innsegl-sealer would leave this arrangement running as root",
 	},
+}
+
+// rootCredentialHolders is every service that is SUPPOSED to be handed the
+// store's root credential. Both are one-shots: they run to completion and exit,
+// and everything that stays up gates on them.
+var rootCredentialHolders = []string{"innsegl-s3-identities", "innsegl-object-init"}
+
+func isRootCredentialHolder(name string) bool {
+	for _, holder := range rootCredentialHolders {
+		if name == holder {
+			return true
+		}
+	}
+	return false
 }
 
 func TestOPS028NothingLongRunningHoldsTheStoreRootCredential(t *testing.T) {
@@ -454,27 +518,39 @@ func TestOPS028NothingLongRunningHoldsTheStoreRootCredential(t *testing.T) {
 			}
 		}
 
-		// And the root credential still reaches the two that need it: the
-		// server itself, and the one-time init that creates the locked bucket.
-		// A stack where nothing holds it is a stack with no bucket.
-		for _, service := range []string{"minio", "innsegl-object-init"} {
-			if _, ok := cfg.env(service, "MINIO_ROOT_PASSWORD"); !ok {
+		// And the root credential still reaches the ones that need it: the
+		// one-shot that writes the gateway's identity file, and the one-time
+		// init that creates the locked bucket. A stack where nothing holds it
+		// is a stack with no bucket.
+		for _, service := range rootCredentialHolders {
+			secret, ok := cfg.env(service, "INNSEGL_OBJECT_STORE_SECRET_KEY")
+			if !ok || secret != storeRootPassword {
 				t.Errorf("%v gives %s no root credential. The bucket can only be created "+
-					"with object lock at creation, and only the root account may set the "+
+					"with object lock at creation, and only an Admin identity may set the "+
 					"default rule — so this is not a tighter deployment, it is one with no "+
 					"locked bucket.", arrangement.files, service)
 			}
 		}
 
 		// Nothing else may carry it. This is the check that catches a third
-		// service quietly acquiring MINIO_ROOT_* later.
+		// service quietly acquiring the root credential later.
+		//
+		// THE GATEWAY IS NOT ON THE ALLOWED LIST AND DOES NOT NEED TO BE: this
+		// store reads its identities from a FILE, so innsegl-s3 holds the root
+		// credential the way the old store's server held it — inside itself,
+		// because it is the thing that authenticates against it — and takes no
+		// credential through its environment at all. That is strictly better
+		// than the arrangement this case was written for, and the loop below
+		// is what keeps it that way.
 		for name, service := range cfg.Services {
-			if name == "minio" || name == "innsegl-object-init" {
+			if isRootCredentialHolder(name) {
 				continue
 			}
-			if _, ok := service.Environment["MINIO_ROOT_PASSWORD"]; ok {
-				t.Errorf("%v gives %s the store's root password. Only the server and the "+
-					"one-time init may hold it.", arrangement.files, name)
+			if secret, ok := service.Environment["INNSEGL_OBJECT_STORE_SECRET_KEY"]; ok &&
+				secret != nil && *secret == storeRootPassword {
+				t.Errorf("%v gives %s the store's ROOT credential. Only the one-shot that "+
+					"writes the identity file and the one-time bucket init may hold it, and "+
+					"neither of them stays up.", arrangement.files, name)
 			}
 		}
 	}
@@ -488,4 +564,78 @@ func deref[T any](p *T) any {
 		return "<none>"
 	}
 	return *p
+}
+
+// ---------------------------------------------------------------------------
+// OPS-030 — the init's gate is the configuration read back, never an exit
+// status.
+//
+// S3 object lock can only be enabled AT BUCKET CREATION. A bucket made without
+// it can never be given it, and there is no repair path short of creating a
+// second bucket and copying every sealed segment into it. So the one thing
+// deploy/compose/innsegl/object-init.sh must never do is complete against a
+// bucket that is not locked — the sealer gates on it, and everything written
+// after that point is deletable.
+//
+// WHY THIS IS NOT A THEORETICAL CASE. The init this one replaced ran a create
+// command that took a flag asking for object lock, reported success, and left
+// a bucket with no lock configuration at all (measured, on the store RM-143
+// replaced). Nothing about that was visible from the command's exit status.
+// The shipped init now asks the SERVER what the bucket is, three times — lock
+// enabled, mode, window — and treats every answer as the gate.
+//
+// THE SECOND HALF IS THE CONTROL. "The init failed" is also true of a broken
+// script, a wrong endpoint and an absent credential. So the same init, in the
+// same container, against the same server, on a fresh bucket name, must
+// SUCCEED — and then the failure above is the bucket's state.
+// ---------------------------------------------------------------------------
+
+func TestOPS030TheObjectInitRefusesABucketWithNoLock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	if err := composeUsable(ctx); err != nil {
+		t.Skipf("skipping OPS-030: %v", err)
+	}
+	// requireObjectStore runs the shipped init once against its own bucket,
+	// which is this case's control that the script works at all on this store.
+	store := requireObjectStore(ctx, t, "OPS-030", "innsegl-segments-ops030")
+
+	root, err := store.clientAs(storeRootUser, storeRootPassword)
+	if err != nil {
+		t.Fatalf("building a client for the root credential: %v", err)
+	}
+
+	// A bucket created the way an operator creates one by accident: no lock.
+	const unlocked = "innsegl-ops030-unlocked"
+	if mkErr := root.MakeBucket(ctx, unlocked, minio.MakeBucketOptions{}); mkErr != nil {
+		t.Fatalf("creating an unlocked bucket to point the init at: %v", mkErr)
+	}
+	if _, _, _, _, lockErr := root.GetObjectLockConfig(ctx, unlocked); lockErr == nil {
+		t.Fatalf("the store reports an object-lock configuration on a bucket created without "+
+			"one (%s). This case cannot construct the state it is about; it must be "+
+			"rewritten against what the store actually does, not removed.", unlocked)
+	}
+
+	out, initErr := store.runObjectInit(ctx, "--env", "INNSEGL_OBJECT_STORE_BUCKET="+unlocked)
+	t.Logf("--- object-init.sh against an unlocked bucket ---\n%s", out)
+	if initErr == nil {
+		t.Errorf("object-init.sh COMPLETED against %s, which carries no object-lock "+
+			"configuration.\n\nEverything downstream gates on this one-shot: the sealer "+
+			"would start and write segments nothing can refuse a delete of. Object lock "+
+			"cannot be enabled after creation, so a stack that gets this far has no repair "+
+			"path short of a new bucket and a copy of every sealed segment.", unlocked)
+	} else {
+		t.Logf("OPS-030 object-init.sh refused the unlocked bucket: %v", initErr)
+	}
+
+	// And it left it alone. An init that "fixed" the bucket would be reporting
+	// a state it had just created, and on a store where the fix is impossible
+	// it would be reporting one that is not there.
+	if _, _, _, _, lockErr := root.GetObjectLockConfig(ctx, unlocked); lockErr == nil {
+		t.Errorf("%s now reports an object-lock configuration. object-init.sh must refuse an "+
+			"unlocked bucket, not appear to repair one: S3 cannot enable object lock after "+
+			"creation, so whatever it wrote is not the protection the sealer will assume it "+
+			"has.", unlocked)
+	}
 }
