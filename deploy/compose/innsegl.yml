@@ -136,9 +136,52 @@ x-appender-password: &appender-password ${INNSEGL_LEDGER_APPENDER_PASSWORD:-inns
 x-reader-role: &reader-role innsegl_reader
 x-reader-password: &reader-password ${INNSEGL_LEDGER_READER_PASSWORD:-innsegl-compose-reader}
 
+# THE OBJECT STORE'S ROOT ACCOUNT. It reaches TWO things: the server, and the
+# one-shot that creates the locked bucket. Nothing that stays up holds it, and
+# that separation is the whole of RM-144 (#228).
+#
+# Bucket creation is a one-time setup step. S3 object lock can only be enabled
+# at creation and only an account that may set a bucket configuration can put
+# the default retention rule on it, so the init genuinely needs this credential
+# — for the length of one container that exits. The sealer writes objects and
+# does nothing else, and it used to be handed this same value.
+#
+# WHY IT MATTERS ON A STACK WHOSE STORE HAS NO PUBLISHED PORT. The network
+# below is `internal:` with three members and that control is real. It assumes
+# an attacker who is not on the host. A process ON the host with a container
+# runtime is effectively root there — it reads a running container's
+# environment and attaches a container of its own to any network — so the
+# defensible position is not that the credential cannot be reached, but that
+# the one it finds cannot weaken anything. doc 04 AB-17.
 x-object-store-user: &object-store-user ${INNSEGL_OBJECT_STORE_ACCESS_KEY:-innsegl}
 x-object-store-password: &object-store-password ${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}
 x-object-store-bucket: &object-store-bucket ${INNSEGL_OBJECT_STORE_BUCKET:-innsegl-segments}
+
+# THE SCOPED IDENTITY every long-running service that talks to the store runs
+# as. innsegl/object-init.sh creates it and attaches a policy that grants
+# exactly what the sealer and the canary do — read and write objects and their
+# retention, list versions, delete versions — and WITHHOLDS two permissions by
+# name: s3:PutBucketObjectLockConfiguration, which is the downgrade itself, and
+# s3:BypassGovernanceRetention, which is deleting under a rule already
+# downgraded. innsegl/verify-object-scope.sh then asks the server whether that
+# is what the credential can really do, because a policy attached once lives in
+# somebody's deployment and a later `mc admin policy attach readwrite` is
+# invisible to any amount of review.
+#
+# NOTE WHAT IS NOT CLAIMED. This does not protect sealed history: COMPLIANCE
+# retention already refuses deletion by anyone, the account that wrote it
+# included. What it protects is FUTURE writes, by making the rule that governs
+# them unreachable from anything long-running.
+#
+# THE SECRET IS DERIVED WHEN UNSET, NOT REQUIRED, and object-init.sh derives it
+# the same way from $MINIO_ROOT_PASSWORD. An operator upgrading an existing
+# deployment has set $INNSEGL_OBJECT_STORE_SECRET_KEY once and never heard of
+# this issue; a narrowing that needed a new variable before the stack came up
+# would be switched off rather than adopted. Setting
+# $INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY takes over from the derivation, which
+# is what a deployment holding the two in a secret manager wants.
+x-object-store-sealer-user: &object-store-sealer-user ${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY:-innsegl-sealer}
+x-object-store-sealer-password: &object-store-sealer-password ${INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY:-${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}-sealer}
 
 # ----------------------------------------------------------------------------
 # The trust domain and the two Sigstore endpoints, as reached from INSIDE the
@@ -399,6 +442,13 @@ services:
       MINIO_ROOT_USER: *object-store-user
       MINIO_ROOT_PASSWORD: *object-store-password
       INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
+      # The scoped identity this one-shot provisions and then measures. Passed
+      # rather than left to the script's own default so that the value the
+      # sealer is handed and the value that gets created are ONE interpolation
+      # of ONE expression; two copies of a derivation rule is a stack that
+      # starts and then cannot authenticate.
+      INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY: *object-store-sealer-user
+      INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY: *object-store-sealer-password
       # doc 05 §2: "Object lock in compliance mode with a retention window >=
       # the organization's audit horizon". One day is the COMPOSE window — long
       # enough that SEG-005's deletion canary has something real to be refused
@@ -875,8 +925,11 @@ services:
       INNSEGL_REKOR_URL: *rekor-url
       INNSEGL_OBJECT_STORE_ENDPOINT: minio:9000
       INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
-      INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-user
-      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-password
+      # THE SCOPED IDENTITY, NOT THE STORE'S ROOT ACCOUNT (#228). See the
+      # anchor declaration at the head of this file for what it may do and for
+      # the two permissions withheld from it by name.
+      INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-sealer-user
+      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-sealer-password
       # Plain HTTP to a MinIO on an internal network with three members. A
       # deployment whose object store is off-box sets this to true and gets a
       # trust store from the image's ca-certificates.
@@ -1168,8 +1221,11 @@ services:
     environment:
       INNSEGL_OBJECT_STORE_ENDPOINT: minio:9000
       INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
-      INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-user
-      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-password
+      # THE SCOPED IDENTITY, NOT THE STORE'S ROOT ACCOUNT (#228). See the
+      # anchor declaration at the head of this file for what it may do and for
+      # the two permissions withheld from it by name.
+      INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-sealer-user
+      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-sealer-password
       INNSEGL_OBJECT_STORE_TLS: "false"
       INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
       # No $INNSEGL_OBJECT_STORE_RETENTION, for the reason spelled out on the
