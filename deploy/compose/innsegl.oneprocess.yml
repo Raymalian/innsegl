@@ -75,8 +75,17 @@ services:
       INNSEGL_OBJECT_STORE_ENDPOINT: minio:9000
       INNSEGL_OBJECT_STORE_BUCKET: innsegl-segments
       INNSEGL_OBJECT_STORE_PREFIX: segments/
-      INNSEGL_OBJECT_STORE_ACCESS_KEY: ${INNSEGL_OBJECT_STORE_ACCESS_KEY:-innsegl}
-      INNSEGL_OBJECT_STORE_SECRET_KEY: ${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}
+      # THE SCOPED IDENTITY, NOT THE STORE'S ROOT ACCOUNT (#228), and this
+      # file is the reason that narrowing could not be made in one place: with
+      # the fold on, the MCP process IS the sealer, so a change applied only to
+      # the innsegl-sealer service would leave this arrangement running as the
+      # store's root account and nothing would have said so.
+      #
+      # The expression is innsegl.yml's, duplicated for the reason every value
+      # above it is duplicated: an anchor cannot cross files. OPS-028 measures
+      # both arrangements so the two cannot drift silently.
+      INNSEGL_OBJECT_STORE_ACCESS_KEY: ${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY:-innsegl-sealer}
+      INNSEGL_OBJECT_STORE_SECRET_KEY: ${INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY:-${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}-sealer}
       INNSEGL_OBJECT_STORE_TLS: "false"
       INNSEGL_OBJECT_STORE_RETENTION_MODE: COMPLIANCE
       INNSEGL_SEAL_INTERVAL: 1m
