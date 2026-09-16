@@ -453,6 +453,14 @@ case "$EVENT" in
     # index, in its own three-line format, and the one piece of local file
     # layout E11 has not taken.
     #
+    # THREE LINES ARE WHAT IS WRITTEN; A FOURTH MAY BE READ. When the run named
+    # here is retired, the signer registers a successor and rewrites this file
+    # with a fourth line saying which run it superseded (RM-134, #213). Nothing
+    # reads line 4 — it is there for a human opening the file — and a
+    # SubagentStart for this tree truncates it back to three, which loses
+    # nothing: the succession is recorded on the chain, in the successor's
+    # `run_registered` idempotency key.
+    #
     # It is what makes attribution automatic instead of remembered. A shell
     # command cannot discover which agent it is inside — no environment variable
     # carries an agent or session id — so without this the signer mints a

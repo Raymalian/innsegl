@@ -194,6 +194,23 @@ jobs:
       - name: Drive the second harness's shim over a rollout transcript
         run: ./scripts/hooks/rollout-shim-selftest.sh
 
+  commit-signer:
+    name: commit signer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-037 and OPS-038. The signer resolves a tree's run from a pointer
+      # the harness wrote, and a pointer whose run has been retired used to
+      # strand the tree for everybody until someone deleted the file by hand.
+      # This drives the pointer through every state its run can be in against
+      # a stub MCP and a stub read API, and asserts WHICH run_id each call
+      # carried -- a script that registered a successor and then signed under
+      # the retired run would pass every exit-status check and fix nothing.
+      # No Docker, no MCP, no network beyond loopback.
+      - name: Drive the signer through every state of a by-tree pointer
+        run: ./scripts/innsegl-commit-selftest.sh
+
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest
