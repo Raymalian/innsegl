@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -674,6 +675,27 @@ func TestOPS035TheLedgerBackupIsScheduled(t *testing.T) {
 			"off the box; a copy in the working tree shares its fate:\n%s", out)
 	}
 
+	// THE JOB MUST BE ABLE TO FIND DOCKER, and this is measured rather than
+	// assumed. A launchd user agent inherits /usr/bin:/bin:/usr/sbin:/sbin and
+	// nothing else, and Docker Desktop is on none of them. The first install
+	// of this schedule fired on demand and wrote exactly one line:
+	//
+	//	backup-ledger: no container named innsegl-postgres -- is the stack up?
+	//
+	// A backup that cannot run is the failure scripts/backup-ledger.sh's own
+	// header is about, arriving through the door that was supposed to fix it.
+	unit := readFile(t, filepath.Join(dir, installedUnitName()))
+	dockerPath, err := exec.LookPath("docker")
+	if err != nil {
+		t.Fatalf("docker is not on this machine's PATH, so this case cannot run: %v", err)
+	}
+	dockerDir := filepath.Dir(dockerPath)
+	if !strings.Contains(unit, dockerDir) {
+		t.Errorf("the installed unit never mentions %s, the directory docker is in. "+
+			"A scheduled job gets a minimal PATH and will not find it:\n%s",
+			dockerDir, unit)
+	}
+
 	if out, code := run(t, sched, env, "uninstall"); code != 0 {
 		t.Fatalf("uninstall exited %d:\n%s", code, out)
 	}
@@ -685,6 +707,14 @@ func TestOPS035TheLedgerBackupIsScheduled(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
+
+// installedUnitName is the file scripts/backup-schedule.sh writes, per platform.
+func installedUnitName() string {
+	if runtime.GOOS == "darwin" {
+		return "dev.innsegl.backup-ledger.plist"
+	}
+	return "dev.innsegl.backup-ledger.timer"
+}
 
 // composeVolume is the part of compose's resolved config this package reads.
 type composeVolume struct {
