@@ -649,6 +649,7 @@ innsegl-verify-commit:
 	  --network innsegl-sigstore-published \
 	  --user 1000:1000 \
 	  --volume innsegl-core_innsegl-workspace:/work:ro \
+	  --volume '$(INNSEGL_PROJECTS)':/projects:ro \
 	  --env INNSEGL_FULCIO_URL=http://fulcio:5555 \
 	  --env INNSEGL_REKOR_URL=http://rekor:3000 \
 	  --env INNSEGL_OIDC_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
