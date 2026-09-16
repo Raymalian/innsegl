@@ -97,10 +97,27 @@ job_path() {
   printf '%s' "$p"
 }
 
+# WHICH SCHEDULER THIS HOST HAS, and separately which LAYOUT its OS uses.
+#
+# The two are not the same question and conflating them broke CI. A Linux
+# container usually has no `systemctl`, so `platform` answered empty, install
+# refused as unsupported, and OPS-035 failed having proven nothing about the
+# unit it exists to check. Writing a unit needs only the layout; loading one
+# needs the scheduler.
 platform() {
   case "$(uname -s)" in
     Darwin) printf 'launchd' ;;
     Linux)  command -v systemctl >/dev/null 2>&1 && printf 'systemd' || printf '' ;;
+    *)      printf '' ;;
+  esac
+}
+
+# The layout this OS would use, whether or not its scheduler is installed.
+# Only ever used to WRITE a unit; loading still goes through `platform`.
+layout() {
+  case "$(uname -s)" in
+    Darwin) printf 'launchd' ;;
+    Linux)  printf 'systemd' ;;
     *)      printf '' ;;
   esac
 }
@@ -126,6 +143,12 @@ service_path() { printf '%s/%s.service' "$(schedule_dir)" "$LABEL"; }
 
 cmd_install() {
   p="$(platform)"
+  # With --no-load nothing is handed to a scheduler, so the absence of one is
+  # not a reason to refuse: the unit is still worth writing and still worth
+  # asserting on. Without it, a host with no scheduler cannot install.
+  if [ -z "$p" ] && [ -z "${LOAD:-}" ]; then
+    p="$(layout)"
+  fi
   if [ -z "$p" ]; then
     echo "backup-schedule: no user scheduler on this platform ($(uname -s))." >&2
     echo "  Run scripts/backup-ledger.sh --out <dir> from whatever timer you have." >&2
