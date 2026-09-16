@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -61,6 +62,29 @@ func run() int {
 		return exitOK
 	}
 
+	// ADOPT BEFORE MINTING. A deployment that already has a root keeps it: the
+	// key has just been imported into the store, so the SAME key still signs and
+	// the same certificate still presents. Minting here instead would hand
+	// Fulcio a new root and every certificate already issued would chain to one
+	// the deployment no longer presents — a migration, which #238 says a custody
+	// change must not be.
+	if src := os.Getenv("INNSEGL_CA_CERT_SRC"); src != "" {
+		adopted, adoptErr := adoptExistingRoot(src, out)
+		if adoptErr != nil {
+			fmt.Fprintf(os.Stderr, "ca-bootstrap: %v\n", adoptErr)
+			return exitMintFail
+		}
+		if adopted {
+			fmt.Printf("ca-bootstrap: adopted the existing root from %s; the chain is unchanged\n", src)
+			if cfgErr := copyIssuerConfig(out); cfgErr != nil {
+				fmt.Fprintf(os.Stderr, "ca-bootstrap: %v\n", cfgErr)
+				return exitMintFail
+			}
+			fmt.Printf("ca-bootstrap: its private key is now in the store under %q\n", key)
+			return exitOK
+		}
+	}
+
 	der, err := mintRootCA(signer, trustDomain)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ca-bootstrap: %v\n", err)
@@ -86,11 +110,9 @@ func run() int {
 	// and a Fulcio that mounted it would be running kmsca with a private key
 	// sitting next to it. So the issuer config is COPIED into this directory and
 	// the CA mounts only this one. OPS-049 reads the container's filesystem.
-	if src := os.Getenv("INNSEGL_CA_CONFIG_SRC"); src != "" {
-		if err := copyConfig(src, filepath.Dir(out), "config.yaml"); err != nil {
-			fmt.Fprintf(os.Stderr, "ca-bootstrap: %v\n", err)
-			return exitMintFail
-		}
+	if err := copyIssuerConfig(out); err != nil {
+		fmt.Fprintf(os.Stderr, "ca-bootstrap: %v\n", err)
+		return exitMintFail
 	}
 
 	fmt.Printf("ca-bootstrap: minted the root for %s into %s\n", trustDomain, out)
@@ -173,4 +195,53 @@ func copyConfig(src, dstDir, name string) error {
 		return fmt.Errorf("writing the issuer config to %s: %w", name, err)
 	}
 	return f.Close()
+}
+
+// copyIssuerConfig places Fulcio's issuer configuration beside the certificate,
+// when the deployment has one to place.
+func copyIssuerConfig(out string) error {
+	src := os.Getenv("INNSEGL_CA_CONFIG_SRC")
+	if src == "" {
+		return nil
+	}
+	return copyConfig(src, filepath.Dir(out), "config.yaml")
+}
+
+// adoptExistingRoot copies a root the deployment already has into place,
+// reporting whether there was one.
+//
+// AN ABSENT ROOT IS NOT AN ERROR — that is a fresh deployment, and minting is
+// the right answer for it. An EMPTY one is: a zero-byte ca.crt is a deployment
+// mid-bootstrap or a broken volume, and minting over it would replace a root
+// that is about to exist with one nothing has seen.
+func adoptExistingRoot(src, out string) (bool, error) {
+	body, err := os.ReadFile(filepath.Clean(src))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading the existing root at %s: %w", src, err)
+	}
+	if len(body) == 0 {
+		return false, fmt.Errorf("the existing root at %s is empty. That is a deployment "+
+			"part-way through its own bootstrap or a volume that did not mount; minting "+
+			"over it would replace a root that is about to exist", src)
+	}
+	if mkErr := os.MkdirAll(filepath.Dir(out), 0o755); mkErr != nil {
+		return false, fmt.Errorf("creating %s: %w", filepath.Dir(out), mkErr)
+	}
+	root, err := os.OpenRoot(filepath.Dir(out))
+	if err != nil {
+		return false, fmt.Errorf("opening %s: %w", filepath.Dir(out), err)
+	}
+	defer func() { _ = root.Close() }()
+	f, err := root.Create(filepath.Base(out))
+	if err != nil {
+		return false, fmt.Errorf("creating %s: %w", out, err)
+	}
+	if _, err := f.Write(body); err != nil {
+		_ = f.Close()
+		return false, fmt.Errorf("writing %s: %w", out, err)
+	}
+	return true, f.Close()
 }

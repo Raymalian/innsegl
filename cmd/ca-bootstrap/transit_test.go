@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -13,6 +14,8 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -222,5 +225,71 @@ func TestOPS052AnUnreachableStoreIsRefusedAtStartup(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "transit") {
 		t.Errorf("the refusal is %q; it never names the store", err)
+	}
+}
+
+// OPS-050's other half: an EXISTING root is adopted, not replaced.
+//
+// This is the case that makes the custody change a configuration rather than a
+// migration. The deployment already has a CA certificate and a key; the key is
+// imported into the store, and the certificate is carried across unchanged. If
+// this minted a new root instead, every certificate already issued would chain
+// to a root the deployment had stopped presenting — which is a migration, and
+// is what the acceptance criterion "same chain" forbids.
+func TestOPS050AnExistingRootIsAdoptedNotReplaced(t *testing.T) {
+	dir := t.TempDir()
+
+	// The root the deployment already has. Its bytes are what must survive.
+	existing := filepath.Join(dir, "ca.crt")
+	original := []byte("-----BEGIN CERTIFICATE-----\nMIIBexisting\n-----END CERTIFICATE-----\n")
+	if err := os.WriteFile(existing, original, 0o600); err != nil {
+		t.Fatalf("writing the existing root: %v", err)
+	}
+
+	out := filepath.Join(dir, "out", "chain.pem")
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		t.Fatalf("creating the output directory: %v", err)
+	}
+
+	adopted, err := adoptExistingRoot(existing, out)
+	if err != nil {
+		t.Fatalf("adopting the existing root: %v", err)
+	}
+	if !adopted {
+		t.Fatal("an existing root was not adopted; a new one would have been minted")
+	}
+
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("reading the adopted chain: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Errorf("the chain is not the existing root byte for byte:\n got %q\nwant %q", got, original)
+	}
+}
+
+// And with no existing root there is nothing to adopt, so minting is correct.
+func TestOPS050NoExistingRootIsNotAnError(t *testing.T) {
+	dir := t.TempDir()
+	adopted, err := adoptExistingRoot(filepath.Join(dir, "absent.crt"), filepath.Join(dir, "chain.pem"))
+	if err != nil {
+		t.Fatalf("an absent root should not be an error, got %v", err)
+	}
+	if adopted {
+		t.Error("an absent root was reported as adopted")
+	}
+}
+
+// An existing root that is empty is a REFUSAL, not a mint. A zero-byte ca.crt
+// is a deployment mid-bootstrap or a broken volume, and minting over it would
+// replace a root that is about to exist.
+func TestOPS050AnEmptyExistingRootIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "ca.crt")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatalf("writing the empty root: %v", err)
+	}
+	if _, err := adoptExistingRoot(empty, filepath.Join(dir, "chain.pem")); err == nil {
+		t.Fatal("an empty existing root was accepted")
 	}
 }
