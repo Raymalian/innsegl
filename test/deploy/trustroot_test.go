@@ -715,16 +715,11 @@ func TestOPS035TheLedgerBackupIsScheduled(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // installedUnitName is the file scripts/backup-schedule.sh writes, per platform.
-func installedUnitName() string {
-	if runtime.GOOS == "darwin" {
-		return "dev.innsegl.backup-ledger.plist"
-	}
-	return "dev.innsegl.backup-ledger.timer"
-}
-
 // installedJobUnitName is the file holding the command and its environment.
 // On launchd that is the same plist the scheduler reads; on systemd the timer
-// only says WHEN, and the service says WHAT and with which PATH.
+// only says WHEN, and the service says WHAT and with which PATH — which is why
+// there is no second helper for the timer's own name: nothing asserts on it,
+// and a helper kept "for symmetry" is the one the next reader picks by mistake.
 func installedJobUnitName() string {
 	if runtime.GOOS == "darwin" {
 		return "dev.innsegl.backup-ledger.plist"
