@@ -25,7 +25,18 @@ listener "tcp" {
   tls_disable = true
 }
 
+# NO `disable_mlock`, AND NOT BECAUSE IT DEFAULTS WELL. MEASURED on the pinned
+# version: it refuses to start at all with the line present —
+#
+#   "OpenBao has dropped support for mlock. Please remove the line
+#    disable_mlock = false from your config and disable or encrypt swap instead."
+#
+# So the protection that line used to buy has moved off this file and onto the
+# host: a machine running this should have encrypted swap, and doc 05 §2 is
+# where that belongs rather than in a config comment nobody reads. Written down
+# here because the absence of a line is invisible, and the next person to add it
+# back will get a store that will not boot with no idea why.
+
 # No `default_lease_ttl` heroics: the CA's token is minted per start by
 # `make innsegl-ca-custody-up` with its own TTL, and that is the lease that
 # matters — it is what bounds a reader of the CA container.
-disable_mlock = false

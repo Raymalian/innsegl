@@ -45,11 +45,10 @@ services:
       - innsegl-ca-store
     labels:
       dev.innsegl.component: ca-store
-    cap_add:
-      # The store locks its memory so secrets cannot be paged to disk. Without
-      # this it warns and carries on, which is a quieter failure than it sounds:
-      # the whole point here is that the key is not on a disk anyone can read.
-      - IPC_LOCK
+    # NO cap_add: IPC_LOCK. The pinned store has dropped mlock entirely and
+    # refuses to start if its config mentions it — measured, see ca-store.hcl.
+    # Keeping the capability would grant a privilege for a feature that no
+    # longer exists, which is the worst of both.
     volumes:
       - ./sigstore/ca-store.hcl:/openbao/config/store.hcl:ro
       - innsegl-ca-store-data:/openbao/data
@@ -63,6 +62,79 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # --------------------------------------------------------------------------
+  # Two one-shots that move the EXISTING CA key into the store, so adopting
+  # custody is a configuration change and not a migration.
+  #
+  # WHY THE EXISTING KEY AND NOT A NEW ONE. Every certificate already issued
+  # chains to the root this deployment already has. Minting a new one would
+  # leave that root unpresented and those certificates chaining to something
+  # nobody serves — #238's "same chain" is what forbids that. Measured: after
+  # the import, Fulcio on the store serves a root whose SHA-256 fingerprint is
+  # byte-identical to the file CA's, and a transit signature verifies under that
+  # certificate's public key.
+  #
+  # WHY TWO CONTAINERS. The store's image has no openssl and the openssl image
+  # has no store client. The plaintext key passes between them on a TMPFS volume
+  # and touches no disk; both one-shots exit, and the volume dies with the
+  # project. The key is plaintext for the length of one import and in memory
+  # only, which is the same trust boundary the encrypted-on-a-volume key had —
+  # its password is in this repository and has never been a secret.
+  # --------------------------------------------------------------------------
+  innsegl-ca-export:
+    image: alpine/openssl:3.5.7@sha256:19f8eb9004a1dbaec323eed6094e9b6bcc1dbf2697ecb5fb8d2fad4e3336a8f7
+    container_name: innsegl-ca-export
+    restart: "no"
+    profiles: ["ca-import"]
+    # --entrypoint sh: the image's own entrypoint is `openssl`, so a bare
+    # command would be read as an openssl subcommand. The same trap the object
+    # store's client image sets, and the same answer.
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ ! -s /pki/ca.key ]; then
+          echo "ca-export: /pki/ca.key is absent or empty; there is no existing key to import."
+          echo "  A deployment with no file CA does not need this: ca-bootstrap mints a root"
+          echo "  from a key the store generates, which never had a password at all."
+          exit 1
+        fi
+        # base64 DER, which is what `bao transit import` reads. Measured: it
+        # refuses PEM with "illegal base64 data at input byte 0".
+        openssl pkcs8 -in /pki/ca.key -passin "pass:$${INNSEGL_FULCIO_CA_PASSWORD}" \
+          -topk8 -nocrypt -outform DER -out /scratch/ca.der
+        base64 /scratch/ca.der | tr -d '\n' > /scratch/ca.b64
+        rm -f /scratch/ca.der
+        echo "ca-export: the existing key is staged in memory for import"
+    environment:
+      INNSEGL_FULCIO_CA_PASSWORD: ${INNSEGL_FULCIO_CA_PASSWORD:-innsegl-compose-ca}
+    volumes:
+      - sigstore-fulcio-pki:/pki:ro
+      - innsegl-ca-import-scratch:/scratch
+
+  innsegl-ca-import:
+    image: openbao/openbao:2.4.1
+    container_name: innsegl-ca-import
+    restart: "no"
+    profiles: ["ca-import"]
+    depends_on:
+      innsegl-ca-export:
+        condition: service_completed_successfully
+    networks:
+      - innsegl-ca-store
+    entrypoint: ["bao"]
+    command:
+      - "transit"
+      - "import"
+      - "transit/keys/${INNSEGL_CA_STORE_KEY:-innsegl-ca}"
+      - "@/scratch/ca.b64"
+      - "type=ecdsa-p256"
+    environment:
+      BAO_ADDR: http://innsegl-ca-store:8200
+      BAO_TOKEN: ${INNSEGL_CA_STORE_TOKEN:?see innsegl-ca-bootstrap below}
+    volumes:
+      - innsegl-ca-import-scratch:/scratch:ro
 
   # One-shot. Creates the CA key inside the store if it is not there, mints the
   # self-signed root from it, and writes the certificate — public by
@@ -95,6 +167,11 @@ services:
       # the file CA's volume, and mounting that volume into the CA is the exact
       # thing this overlay exists to stop.
       INNSEGL_CA_CONFIG_SRC: /etc/fulcio-src/config.yaml
+      # ADOPT THE EXISTING ROOT where there is one. With the key imported above,
+      # the same key still signs and the same certificate still presents, so
+      # nothing already issued changes. Absent, a root is minted instead, which
+      # is the fresh-deployment case.
+      INNSEGL_CA_CERT_SRC: /etc/fulcio-src/ca.crt
     volumes:
       - sigstore-fulcio-pki:/etc/fulcio-src:ro
       - sigstore-fulcio-kms:/etc/fulcio-kms
@@ -137,6 +214,16 @@ networks:
     name: ${INNSEGL_CA_STORE_NETWORK:-innsegl-ca-store}
 
 volumes:
+  # The plaintext key's only resting place, and it is memory. tmpfs so the
+  # export cannot leave a decrypted CA key on a disk; both one-shots exit and
+  # it goes with the project.
+  innsegl-ca-import-scratch:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=1m
+
   # What the CA mounts under this overlay: a certificate and an issuer config,
   # and nothing that is a secret.
   sigstore-fulcio-kms:
