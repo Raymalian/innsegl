@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 #
 # The eight numbered specifications are local only. This refuses to let them be
@@ -37,7 +37,17 @@
 # USAGE
 #   scripts/no-published-specs.sh [repo]
 
-set -uo pipefail
+# POSIX sh, NOT bash, and that is load-bearing rather than tidiness. This
+# repository sets core.hooksPath, so the pre-commit hook that calls this runs
+# WHEREVER git runs in this repository — including inside the MCP's container,
+# which is Alpine and has no bash. Measured the hard way on 2026-09-17: the
+# first version was `#!/usr/bin/env bash`, and every signed commit began failing
+# with `gitsign refused to sign` and `env: can't execute 'bash'`. A gate that
+# breaks signing is worse than the hole it closes.
+#
+# `set -u` without `pipefail`: pipefail is not POSIX, and the pipelines below
+# are greps whose failure is a normal "found nothing".
+set -u
 
 ROOT="${1:-$(cd -- "$(dirname -- "$0")/.." && pwd -P)}"
 
