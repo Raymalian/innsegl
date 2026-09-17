@@ -155,6 +155,27 @@ else
   bad "SubagentStart: status $STATUS, calls: $(cat "$CALLS")"
 fi
 
+# 3b. AND IT NAMES THE RUN THAT SPAWNED IT — ADR-0045's third member (#214).
+# Case 1 registered sess-1 as run-aaaa1111 and wrote its marker; this subagent
+# is keyed on agent-7, so the parent is the sibling marker named by the session.
+# Without this the ledger holds two runs and no relation between them.
+if called observe_session '"parent_run_id": "run-aaaa1111"'; then
+  ok "SubagentStart names the session's run as its parent"
+else
+  bad "SubagentStart sent no parent_run_id: $(grep observe_session "$CALLS" | tail -1)"
+fi
+
+# 3c. AND A SUBAGENT WITH NO PARENT STAYS A ROOT RUN. absent is not an error,
+# and an EMPTY parent is not the same as none (doc 02 §1) — a root run naming an
+# empty parent would be claiming one it does not have.
+script_tool observe_session ok '{"session_id":"agent-orphan","phase":"start","known":true,"registered":true,"run_id":"run-cccc3333","task":"e11","worktree":"","repo":"example.test/org/name","branch":"dev/e11","agent_type":"prober","spiffe_id":"spiffe://innsegl.dev/agent/a/b/run-cccc3333"}'
+drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-never-registered\",\"agent_id\":\"agent-orphan\",\"agent_type\":\"prober\",\"cwd\":\"$CWD\"}"
+if [ "$STATUS" -eq 0 ] && ! grep observe_session "$CALLS" | tail -1 | grep -q 'parent_run_id'; then
+  ok "a subagent whose parent never registered sends no parent at all"
+else
+  bad "orphan subagent: status $STATUS, call: $(grep observe_session "$CALLS" | tail -1)"
+fi
+
 # 4. A subagent that cannot be given an identity does no work (IP §6.1).
 script_tool observe_session err '{"error_class":"LEDGER_UNAVAILABLE","message":"no","retryable":true}'
 drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-1\",\"agent_id\":\"agent-9\",\"agent_type\":\"prober\",\"cwd\":\"$CWD\"}"
