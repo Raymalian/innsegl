@@ -141,8 +141,15 @@ INNSEGL_IMAGE ?= innsegl:local
 # The id is written to a gitignored file on first boot and passed back in on
 # every boot after that. A fresh clone has no file, passes 0, gets a tree, and
 # records it; there is nothing to do by hand.
-REKOR_TLOG_FILE = deploy/compose/.rekor-tlog-id
-INNSEGL_REKOR_TLOG_ID ?= $(shell cat $(REKOR_TLOG_FILE) 2>/dev/null || echo 0)
+# RESOLVED AGAINST THE REPOSITORY, NOT THE TREE THIS RAN FROM (RM-150, #242).
+# The pin is gitignored, so a git worktree is a checkout that does not have it —
+# and the fallback for "no pin" is 0, which is the value that means MINT A NEW
+# TREE. Bring-up from a worktree therefore re-pointed Rekor at an empty log:
+# measured 2026-09-16, 74 entries became 1 and every commit ever signed answered
+# `unavailable`. Nothing was destroyed and everything stopped being findable,
+# which reads the same from outside.
+REKOR_TLOG_FILE = $(shell scripts/rekor-tlog-pin.sh path 2>/dev/null || echo deploy/compose/.rekor-tlog-id)
+INNSEGL_REKOR_TLOG_ID ?= $(shell scripts/rekor-tlog-pin.sh read 2>/dev/null || echo 0)
 
 ## rekor-tlog-id: print the tree rekor is serving and pin it for later boots
 rekor-tlog-id:
@@ -159,6 +166,11 @@ rekor-tlog-id:
 # them made before anything is brought up. `ensure` is a no-op on the second
 # run and refuses rather than adopt a set stamped for another deployment.
 sigstore-up: innsegl-trust-volumes
+	@# RULE 1 above puts the pin back where a worktree can find it. This is rule
+	@# 2, and it is the one that covers the CLASS: any way of losing the pin — a
+	@# `git clean -x`, a clone beside an existing deployment — puts 0 back in
+	@# front of a live log. Minting is only ever right when there is no log yet.
+	@test -n '$(INNSEGL_REKOR_ALLOW_NEW_TREE)' || scripts/rekor-tlog-pin.sh guard
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  docker compose -f deploy/compose/spire.yml up -d
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
