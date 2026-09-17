@@ -19,7 +19,7 @@ import (
 // Measured against the real binary rather than a second implementation of the
 // same formula: a test that recomputed `blob %d\x00` here would agree with the
 // code for the same wrong reason.
-func TestBlobIDEqualsGitHashObject(t *testing.T) {
+func TestREC006BlobIDEqualsGitHashObject(t *testing.T) {
 	for _, content := range []string{
 		"",
 		"one line\n",
@@ -72,7 +72,7 @@ func editBody(t *testing.T, path, original, oldText, newText string, all bool) [
 }
 
 // A Write states the content outright.
-func TestClaimFromBodyReadsAWrite(t *testing.T) {
+func TestREC007ClaimFromBodyReadsAWrite(t *testing.T) {
 	claim, ok := reconciler.ClaimFromBody(writeBody(t, "/repo/a.go", "package a\n"), "e1", "run-1")
 	if !ok {
 		t.Fatal("a Write body produced no claim")
@@ -86,7 +86,7 @@ func TestClaimFromBodyReadsAWrite(t *testing.T) {
 }
 
 // An Edit is DERIVED from its own before-and-after rather than taken on trust.
-func TestClaimFromBodyDerivesAnEdit(t *testing.T) {
+func TestREC008ClaimFromBodyDerivesAnEdit(t *testing.T) {
 	original := "alpha\nbeta\ngamma\n"
 	claim, ok := reconciler.ClaimFromBody(
 		editBody(t, "/repo/b.go", original, "beta", "BETA", false), "e2", "run-1")
@@ -98,7 +98,7 @@ func TestClaimFromBodyDerivesAnEdit(t *testing.T) {
 	}
 }
 
-func TestClaimFromBodyHonoursReplaceAll(t *testing.T) {
+func TestREC012ClaimFromBodyHonoursReplaceAll(t *testing.T) {
 	original := "x\nx\nx\n"
 	one, _ := reconciler.ClaimFromBody(editBody(t, "/f", original, "x", "y", false), "e", "r")
 	all, _ := reconciler.ClaimFromBody(editBody(t, "/f", original, "x", "y", true), "e", "r")
@@ -114,7 +114,7 @@ func TestClaimFromBodyHonoursReplaceAll(t *testing.T) {
 // An Edit whose old_string is not in the original contradicts itself. There is
 // nothing to check it against, and reporting a missing blob would name the
 // wrong fault.
-func TestClaimFromBodyRefusesAnEditThatDoesNotApply(t *testing.T) {
+func TestREC013ClaimFromBodyRefusesAnEditThatDoesNotApply(t *testing.T) {
 	if _, ok := reconciler.ClaimFromBody(
 		editBody(t, "/f", "alpha\n", "not-present", "z", false), "e", "r"); ok {
 		t.Fatal("an Edit whose old_string is absent produced a claim")
@@ -124,7 +124,7 @@ func TestClaimFromBodyRefusesAnEditThatDoesNotApply(t *testing.T) {
 // Everything that claims no file content yields no claim. These are the bulk of
 // the log — Bash alone is 6689 of 8904 events on this deployment — and a check
 // that reported them would be noise, not evidence.
-func TestClaimFromBodyIgnoresWhatItCannotCheck(t *testing.T) {
+func TestREC014ClaimFromBodyIgnoresWhatItCannotCheck(t *testing.T) {
 	cases := map[string][]byte{
 		"a Bash call": []byte(`{"tool_name":"Bash","tool_input":{"command":"ls"}}`),
 		"a Read call": []byte(`{"tool_name":"Read","tool_input":{"file_path":"/f"}}`),
@@ -145,7 +145,7 @@ func TestClaimFromBodyIgnoresWhatItCannotCheck(t *testing.T) {
 // End to end against a real repository: a claimed write that IS in the tree the
 // run signed is supported, one that is not is the finding, and a run that
 // signed nothing is uncheckable rather than accused.
-func TestJudgeWriteAgainstARealTree(t *testing.T) {
+func TestREC015JudgeWriteAgainstARealTree(t *testing.T) {
 	repo := t.TempDir()
 	run := func(args ...string) string {
 		t.Helper()
@@ -205,7 +205,7 @@ func TestJudgeWriteAgainstARealTree(t *testing.T) {
 // A tree the repository does not hold is an error, not an empty set. "This
 // repository does not have that object" and "that content was never written"
 // are different findings and only one is about the agent.
-func TestTreeBlobsRefusesATreeItCannotRead(t *testing.T) {
+func TestREC016TreeBlobsRefusesATreeItCannotRead(t *testing.T) {
 	repo := t.TempDir()
 	cmd := exec.CommandContext(t.Context(), "git", "init", "-q", "-b", "main")
 	cmd.Dir = repo

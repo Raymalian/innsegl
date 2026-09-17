@@ -27,7 +27,7 @@ COVERPROFILE := cover.out
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
         innsegl-trust-volumes innsegl-trust-status \
         innsegl-ca-custody-init innsegl-ca-custody-unseal innsegl-ca-custody-status \
-        innsegl-ca-custody-import innsegl-ca-custody-revoke \
+        innsegl-ca-custody-import innsegl-ca-custody-revoke test-ids \
         innsegl-stack-clean innsegl-up-here innsegl-link innsegl-install-signer verify-branch \
         install-hooks \
         verify-branch-selftest start link sign clean
@@ -668,6 +668,15 @@ install-hooks:
 	   echo "  The CI gate is the enforcement in any case; this is only the fast answer." >&2; \
 	   exit 1; \
 	 fi
+
+## test-ids: every test id in the code has a row in doc 07
+# LOCAL ONLY, and not a CI gate, because doc 07 is local only: `docs/*` is
+# gitignored and never pushed, so a runner has no catalog to check against.
+# #167 and #169 both record the reason it is wanted — "nothing in this
+# repository enforces test-ID uniqueness, and three collisions have already been
+# caught by hand this week."
+test-ids:
+	@scripts/test-ids.sh
 
 ## innsegl-verify: ask the two servers what this deployment's credentials can do
 #
