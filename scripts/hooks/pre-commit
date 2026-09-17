@@ -1,0 +1,18 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+#
+# Refuse a commit that would track a local-only specification.
+#
+# THE FAST ANSWER, NOT THE ENFORCEMENT. scripts/no-published-specs.sh also runs
+# in CI, where it applies to whatever was actually pushed rather than to whoever
+# remembered to configure a checkout.
+#
+# IT LIVES HERE BECAUSE THIS REPOSITORY SETS core.hooksPath TO scripts/hooks.
+# Measured on 2026-09-17, the hard way: `install-hooks` first copied into
+# .git/hooks, git never looked there, and the probe that was supposed to be
+# refused committed the THREAT MODEL onto main instead. A hook in .git/hooks is
+# silently dead when core.hooksPath is set, and nothing says so.
+#
+# Being here also means it is TRACKED, so it travels with a clone and with every
+# worktree — which .git/hooks never does.
+exec "$(git rev-parse --show-toplevel)/scripts/no-published-specs.sh"
