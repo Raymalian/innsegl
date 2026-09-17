@@ -83,6 +83,25 @@ readonly EXIT_REFUSED=7
 readonly DEFAULT_PREFIX='innsegl-trust'
 PREFIX="${INNSEGL_TRUST_VOLUME_PREFIX:-$DEFAULT_PREFIX}"
 
+# RUNG 2 (RM-147, #238). Where the BYTES live, when an operator wants them off
+# the runtime's own storage entirely.
+#
+# WHAT RUNG 1 DOES NOT COVER. Declaring these volumes external means `down -v`
+# can only detach them, which is the accident that happened. It does not mean
+# they cannot be removed: `docker volume prune` and `docker volume rm` still
+# reach a named volume, and the second of those is what an operator reaches for
+# after the first one refuses.
+#
+# With this set, each volume is a bind to <dir>/<suffix>. The volume handle is
+# still removable — nothing can stop that — but removing it now removes a
+# POINTER. The bytes are on a path the runtime does not own, outside the
+# checkout, where `git clean` and every volume command are equally powerless.
+#
+# THIS IS STILL ONLY A DEFENCE AGAINST ACCIDENT, and doc 05 §2 is where that is
+# said plainly. Anything that can read the path has the CA key exactly as
+# before; what changes what a READER gets is the key-custody profile, not this.
+TRUST_ROOT_DIR="${INNSEGL_TRUST_ROOT_DIR:-}"
+
 # "<suffix>|<compose env var>|<legacy project volume>|<what it holds>".
 #
 # The legacy column is where the bytes are on a deployment that predates this
@@ -284,6 +303,21 @@ cmd_ensure() {
     echo "trust-volumes: deployment $stamp"
   fi
 
+  if [ -n "$TRUST_ROOT_DIR" ]; then
+    case "$TRUST_ROOT_DIR" in
+      /*) : ;;
+      *)  echo "trust-volumes: INNSEGL_TRUST_ROOT_DIR is \"$TRUST_ROOT_DIR\", which is not an" >&2
+          echo "  absolute path. It names a directory on the machine and resolving a relative" >&2
+          echo "  one would put the trust root wherever this happened to be run from." >&2
+          return "$EXIT_USAGE" ;;
+    esac
+    if ! mkdir -p "$TRUST_ROOT_DIR" 2>/dev/null; then
+      echo "trust-volumes: could not create $TRUST_ROOT_DIR" >&2
+      return 1
+    fi
+    echo "trust-volumes: the bytes live under $TRUST_ROOT_DIR (rung 2)"
+  fi
+
   rc=0
   while IFS='|' read -r suffix _ legacy what; do
     n=$(volume_name "$suffix")
@@ -299,19 +333,44 @@ cmd_ensure() {
       migrate "$from" "$n" "$what" || rc="$EXIT_REFUSED"
       continue
     fi
-    if ! docker volume create \
-        --label "$TRUST_LABEL=$what" \
-        --label "$DEPLOY_LABEL=$stamp" "$n" >/dev/null; then
+    if ! create_volume "$n" "$what" "$stamp" "$suffix"; then
       echo "trust-volumes: could not create $n" >&2
       rc=1
       continue
     fi
-    printf '  %-34s created\n' "$n"
+    if [ -n "$TRUST_ROOT_DIR" ]; then
+      printf '  %-34s created -> %s\n' "$n" "$TRUST_ROOT_DIR/$suffix"
+    else
+      printf '  %-34s created\n' "$n"
+    fi
     migrate "$from" "$n" "$what" || rc="$EXIT_REFUSED"
   done <<EOT
 $VOLUMES
 EOT
   return "$rc"
+}
+
+# create_volume makes one trust volume, on the runtime's own storage or bound to
+# a path outside it.
+#
+# `type=none,o=bind,device=<path>` is the local driver's bind mode. The volume
+# is still a named volume with the labels the guard reads, so nothing else in
+# this repository has to know which mode it is in — and that is the point: the
+# rung is a deployment choice, not a second code path through the stack.
+create_volume() {
+  _n="$1"; _what="$2"; _stamp="$3"; _suffix="$4"
+  if [ -z "$TRUST_ROOT_DIR" ]; then
+    docker volume create \
+      --label "$TRUST_LABEL=$_what" \
+      --label "$DEPLOY_LABEL=$_stamp" "$_n" >/dev/null
+    return $?
+  fi
+  mkdir -p "$TRUST_ROOT_DIR/$_suffix" || return 1
+  docker volume create \
+    --driver local \
+    --opt type=none --opt o=bind --opt device="$TRUST_ROOT_DIR/$_suffix" \
+    --label "$TRUST_LABEL=$_what" \
+    --label "$DEPLOY_LABEL=$_stamp" "$_n" >/dev/null
 }
 
 # ---------------------------------------------------------------------------

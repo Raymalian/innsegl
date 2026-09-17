@@ -26,6 +26,8 @@ COVERPROFILE := cover.out
         innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
         innsegl-trust-volumes innsegl-trust-status \
+        innsegl-ca-custody-init innsegl-ca-custody-unseal innsegl-ca-custody-status \
+        innsegl-ca-custody-import innsegl-ca-custody-revoke \
         innsegl-stack-clean innsegl-up-here innsegl-link innsegl-install-signer verify-branch \
         verify-branch-selftest start link sign clean
 
@@ -576,6 +578,44 @@ innsegl-link:
 	 docker exec innsegl-mcp test -e "/work/$$id/.git" \
 	   || { echo "innsegl-link: linked, but /work/$$id/.git does not resolve — is $$d inside INNSEGL_PROJECTS?"; exit 1; }; \
 	 echo "linked  $$id  ->  $$rel"
+
+# ---------------------------------------------------------------------------
+# The CA's key custody — rung 3 (RM-147, #238). OPT-IN, and nothing above
+# changes because of it: the default stack is the file CA it has always been,
+# which is what OPS-051 asserts.
+#
+# The store starts SEALED and there is no unseal key in this repository. That
+# is the design and not a rough edge: a store that unseals itself holds a key
+# something on this machine can read, which is the property this rung exists to
+# remove. Losing the unseal key loses the CA exactly as losing a key file would
+# — the same loss, a different custodian, and the custodian is now a person.
+CA_CUSTODY_COMPOSE = -f deploy/compose/sigstore.yml -f deploy/compose/sigstore.keycustody.yml
+
+## innsegl-ca-custody-init: once — start the store and mint its keys
+innsegl-ca-custody-init:
+	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store
+	@scripts/ca-custody.sh init
+
+## innsegl-ca-custody-unseal: per start — unseal the store (prompts, never an argument)
+innsegl-ca-custody-unseal:
+	@scripts/ca-custody.sh unseal
+
+## innsegl-ca-custody-status: sealed or not, and whether the CA key is in
+innsegl-ca-custody-status:
+	@scripts/ca-custody.sh status
+
+## innsegl-ca-custody-import: move the EXISTING CA key into the store, keeping the root
+innsegl-ca-custody-import:
+	@test -n "$(INNSEGL_CA_STORE_TOKEN)" || { \
+	  echo 'innsegl-ca-custody-import: set INNSEGL_CA_STORE_TOKEN to a token scoped to'; \
+	  echo '  the CA key: INNSEGL_CA_STORE_TOKEN=$$(INNSEGL_CA_STORE_ROOT_TOKEN=... scripts/ca-custody.sh token)'; \
+	  exit 2; }
+	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) --profile ca-import up \
+	  --exit-code-from innsegl-ca-import innsegl-ca-import
+
+## innsegl-ca-custody-revoke: stop the CA signing (OPS-052)
+innsegl-ca-custody-revoke:
+	@scripts/ca-custody.sh revoke
 
 ## innsegl-verify: ask the two servers what this deployment's credentials can do
 #
