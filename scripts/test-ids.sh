@@ -51,7 +51,23 @@ rc=0
 for p in ${prefixes}; do
   in_code="$(grep -rhoE "func Test${p}[0-9]{3}" --include='*_test.go' "${ROOT}" 2>/dev/null |
     sed "s/func Test${p}/${p}-/" | sort -u)"
-  in_doc="$(grep -ohE "^\| ${p}-[0-9]{3}" "${DOC}" | sed 's/| //' | sort -u)"
+  # RANGED ROWS ARE ROWS. doc 07 writes one row for a family of cases —
+  # `| MCP-001..005 | C | Schema conformance per tool ...` covers five. A reader
+  # that took only the first id reported the other four as uncatalogued, which
+  # is how this script first claimed 75 orphans; the real number is smaller and
+  # the difference was entirely its own parsing.
+  in_doc="$(awk -v pre="${p}" '
+    match($0, "^\\| " pre "-[0-9][0-9][0-9]\\.\\.[0-9][0-9][0-9]") {
+      split(substr($0, RSTART + length(pre) + 3, RLENGTH), _x, "")
+      line = substr($0, RSTART, RLENGTH)
+      sub("^\\| " pre "-", "", line)
+      split(line, r, "\\.\\.")
+      for (i = r[1] + 0; i <= r[2] + 0; i++) printf "%s-%03d\n", pre, i
+      next
+    }
+    match($0, "^\\| " pre "-[0-9][0-9][0-9]") {
+      print substr($0, RSTART + 2, RLENGTH - 2)
+    }' "${DOC}" | sort -u)"
 
   # THE REVERSE DIRECTION CANNOT LOOK ONLY FOR GO FUNCTIONS. Shell self-tests
   # carry their ids in comments and headings (OPS-040 lives in
