@@ -269,6 +269,30 @@ jobs:
       - name: No exemption is built
         run: ./scripts/exemptions.sh
 
+  published-specs:
+    name: no published specs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The eight numbered specifications are local only, and until now the
+      # whole of that was one .gitignore line with nothing behind it. Measured
+      # on 2026-09-17 against the real repository: `git add -f docs/07-...`
+      # stages a spec, and commenting out `docs/*` then `git add -A` stages all
+      # thirty-four. Neither is exotic, and no existing gate caught either --
+      # no-operator-paths passed with a spec staged, because it asks whether a
+      # tracked file NAMES an operator path, not whether a document that must
+      # never ship has become tracked.
+      # A threat model in a public repository is a map of where to look, and it
+      # cannot be unpublished.
+      # The self-test runs first and is the reason to believe the gate: it
+      # reproduces both bypasses and requires red, and requires an ADR -- the
+      # one docs directory that ships -- to leave it green.
+      - name: The specs gate catches both ways a spec becomes tracked
+        run: ./scripts/no-published-specs-selftest.sh
+      - name: No local-only specification is tracked
+        run: ./scripts/no-published-specs.sh
+
   rekor-tlog-pin:
     name: rekor tlog pin
     runs-on: ubuntu-latest
