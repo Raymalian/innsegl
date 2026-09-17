@@ -268,6 +268,36 @@ body = json.load(sys.stdin); body["dir"] = sys.argv[1]; print(json.dumps(body))
 
 recall() { cat "$MARKER" 2>/dev/null; }
 
+# parent_run prints the run that STARTED this one, or nothing.
+#
+# ADR-0045's third member (RM-135, #214). A subagent is keyed by its agent id
+# and the session that spawned it is keyed by the session id, so the parent's
+# marker is the sibling file named by SESSION_ID — this shim already writes one
+# per identity and this reads the other one.
+#
+# NOTHING IS PRINTED WHEN THERE IS NO PARENT, and that is three cases, not one:
+# a main session (whose KEY already IS the session id), a subagent whose parent
+# session never registered because the deployment was down, and a harness that
+# reports no session id at all. All three are root runs, absent is not an error,
+# and mcp_call omits an empty value rather than sending one — doc 02 §1
+# distinguishes absent from empty, and a root run naming an empty parent would
+# be claiming one it does not have.
+# THE PARENT'S MARKER IS NAMED `session-<id>`, NOT `<id>`, and getting that
+# wrong is silent: parent_run simply found no file and every subagent stayed a
+# root run, which is indistinguishable from having no parent. Measured — the
+# first version of this read $RUNS_DIR/$SESSION_ID and the selftest case that
+# asserts the edge went red against a shim that looked correct.
+#
+# The prefix exists because a subagent's marker is keyed on its AGENT id and a
+# session's on its session id, and the two id spaces are not guaranteed
+# disjoint. The same reason IDENT exists above.
+parent_run() {
+  [ -n "${SESSION_ID:-}" ] || return 0
+  _parent_key="session-${SESSION_ID}"
+  [ "$_parent_key" != "$KEY" ] || return 0
+  reply_field "$(cat "$RUNS_DIR/$_parent_key" 2>/dev/null)" run_id
+}
+
 # ---------------------------------------------------------------------------
 # The signer, resolved most portable first.
 #
@@ -408,13 +438,17 @@ case "$EVENT" in
     # that refuses, and the refusal is the enforcement.
     [ -n "$AGENT_ID" ] || exit 0
 
-    # The parent run: a session marker is what the run belongs under, and
-    # observe_session takes no parent_run_id, so a subagent registered through
-    # it is a root run. ADR-0045's third member is not carried by this path and
-    # #208's closing comment says so rather than leaving it to be discovered.
+    # THE PARENT RUN (RM-135, #214). The subagent's work was always attributed;
+    # what was missing is the EDGE — a reader could see both runs and not see
+    # that one produced the other, which is what "who did this work" resolves to
+    # the moment an orchestrator delegates.
+    #
+    # An empty value is omitted by mcp_call, so a subagent whose parent never
+    # registered stays a root run rather than naming a parent that is not there.
     REPLY="$(mcp_call observe_session \
       session_id "$AGENT_ID" phase start cwd "$CWD" \
-      agent_type "${AGENT_TYPE:-subagent}")" || {
+      agent_type "${AGENT_TYPE:-subagent}" \
+      parent_run_id "$(parent_run)")" || {
       warn "refused — no identity could be issued for this subagent."
       [ -n "${REPLY:-}" ] && warn "  $(reply_field "$REPLY" message | cut -c1-300)"
       warn "  No identity, no attributed work (IP §6.1). Bring the deployment up:"
