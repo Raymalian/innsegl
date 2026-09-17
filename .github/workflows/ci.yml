@@ -269,6 +269,24 @@ jobs:
       - name: No exemption is built
         run: ./scripts/exemptions.sh
 
+  rekor-tlog-pin:
+    name: rekor tlog pin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-055. The pin is gitignored, so a git worktree is a checkout that
+      # does not carry it -- and the fallback for "absent" is 0, the value that
+      # means MINT A NEW TREE. Bring-up from a worktree therefore re-pointed the
+      # log at an empty one: 74 entries became 1 and every commit ever signed
+      # answered `unavailable`. Nothing was destroyed and everything stopped
+      # being findable, which reads the same from outside.
+      # The test builds a REAL worktree: a fixture that only wrote and read a
+      # file would pass against the broken code, which also read a file -- the
+      # wrong one.
+      - name: The log's pin survives a worktree, and an unpinned mint is refused
+        run: ./scripts/rekor-tlog-pin-selftest.sh
+
   ca-custody:
     name: ca custody
     runs-on: ubuntu-latest
