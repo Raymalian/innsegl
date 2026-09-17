@@ -176,6 +176,20 @@ type observeSessionIn struct {
 	// Task is the caller's task reference. Absent, it is the task
 	// describe_workspace folds out of the branch.
 	Task string `json:"task,omitempty"`
+	// ParentRunID is the run that started this one — ADR-0045's third member,
+	// which this path could not record until RM-135 (#214).
+	//
+	// OPTIONAL, AND ABSENT IS NOT AN ERROR. A session with no parent is a root
+	// run, which is the ordinary case for an orchestrator's own session. It is
+	// threaded to register_agent unchanged, which sets the member only when it
+	// is non-empty — doc 02 §1 distinguishes absent from empty, and a root run
+	// recording an empty parent would be claiming one it does not have.
+	//
+	// WHAT IT BUYS is the edge, not the attribution. A subagent's work is
+	// attributed either way; without this a reader sees two runs and cannot see
+	// that one produced the other, which is what "who did this work" resolves
+	// to the moment an orchestrator delegates.
+	ParentRunID string `json:"parent_run_id,omitempty"`
 }
 
 // observeSessionOut is doc 01 §4's "the run": the identity, the workspace it
@@ -428,6 +442,12 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 
 	agentType, task := in.AgentType, in.Task
 	repo, worktree, branch := marker.Repo, marker.Worktree, marker.Branch
+	// PASSED ON EVERY START, INCLUDING A DUPLICATE, and inert on the second.
+	// register_agent replays the recorded reply for a key it has seen, and the
+	// run id derives from (agent_type, task, idempotency_key) and not from the
+	// parent — so a second start cannot move a run to a different parent, and
+	// does not need the marker to remember one.
+	parentRunID := in.ParentRunID
 	if found {
 		// A SESSION IS REGISTERED ONCE, AND ITS TASK IS FIXED THEN. Re-deriving
 		// the workspace on every start would let a session that moved between
@@ -465,6 +485,10 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 		IdempotencyKey: observeSessionKey(sessionID),
 		Repo:           repo,
 		Branch:         branch,
+		// Unchanged and unvalidated here on purpose: register_agent owns what a
+		// parent may be, and a second opinion about it in this file is a second
+		// thing that can disagree with the first.
+		ParentRunID: parentRunID,
 	})
 	if err != nil {
 		return observeSessionOut{}, err
