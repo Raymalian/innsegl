@@ -29,6 +29,7 @@ COVERPROFILE := cover.out
         innsegl-ca-custody-init innsegl-ca-custody-unseal innsegl-ca-custody-status \
         innsegl-ca-custody-import innsegl-ca-custody-revoke \
         innsegl-stack-clean innsegl-up-here innsegl-link innsegl-install-signer verify-branch \
+        install-hooks \
         verify-branch-selftest start link sign clean
 
 all: build test lint
@@ -628,6 +629,45 @@ innsegl-ca-custody-import:
 ## innsegl-ca-custody-revoke: stop the CA signing (OPS-052)
 innsegl-ca-custody-revoke:
 	@scripts/ca-custody.sh revoke
+
+## install-hooks: refuse a commit that would track a local-only spec
+# The gate in CI is the enforcement; this is the fast answer. Hooks do not
+# travel with a clone, so this has to be run per checkout — and a subagent on a
+# checkout that never ran it is exactly why the gate exists as well.
+#
+# IT DOES NOT COPY INTO .git/hooks, and that is the whole lesson. This
+# repository sets core.hooksPath to scripts/hooks, so .git/hooks is never
+# consulted — a hook installed there is silently dead and nothing reports it.
+# Measured on 2026-09-17 by installing one, watching a commit that should have
+# been refused succeed, and finding the threat model committed onto main.
+#
+# `git rev-parse --git-path hooks/pre-commit` answers where git will ACTUALLY
+# look, honouring core.hooksPath, so the check at the end is the real question
+# rather than a restatement of what was just done.
+install-hooks:
+	@dest="$$(git config core.hooksPath 2>/dev/null)"; \
+	 if [ -n "$$dest" ]; then \
+	   echo "core.hooksPath is $$dest; the hook is tracked there already"; \
+	 else \
+	   git config core.hooksPath scripts/hooks; \
+	   echo "core.hooksPath set to scripts/hooks, where the tracked hooks live"; \
+	 fi
+	@chmod +x scripts/hooks/pre-commit 2>/dev/null || true
+	@# THE ONLY QUESTION WORTH ASKING is where git will actually look, which
+	@# --git-path answers by honouring core.hooksPath. Reporting "installed"
+	@# because a file was copied is what put a hook in .git/hooks and let the
+	@# threat model through.
+	@live="$$(git rev-parse --git-path hooks/pre-commit)"; \
+	 if [ -x "$$live" ]; then \
+	   echo "active: $$live"; \
+	   echo "a commit tracking anything under docs/ except docs/adr/ is refused"; \
+	 else \
+	   echo "NOT ACTIVE: git looks at $$live and there is no executable hook there." >&2; \
+	   echo "  core.hooksPath is an absolute path, so a linked worktree uses the" >&2; \
+	   echo "  main checkout's directory — this hook becomes live once it is merged." >&2; \
+	   echo "  The CI gate is the enforcement in any case; this is only the fast answer." >&2; \
+	   exit 1; \
+	 fi
 
 ## innsegl-verify: ask the two servers what this deployment's credentials can do
 #
