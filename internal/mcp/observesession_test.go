@@ -1463,3 +1463,112 @@ func TestObserveSessionMarkerAlwaysEncodes(t *testing.T) {
 		t.Errorf("marker did not round-trip: %v, %+v", err, back)
 	}
 }
+
+// MCP-075..MCP-077 — a subagent session records the run that started it
+// (RM-135, #214).
+//
+// ADR-0045's third member is `parent_run_id`, and until now the session path
+// had nowhere to put it: `observe_session` took no parent, so every session it
+// registered was a root run. Before #208 the shim registered subagents itself
+// and could pass one; the rewrite moved registration into the tool and the
+// argument was left behind.
+//
+// What that costs is not attribution — a subagent's work is attributed either
+// way. It is the EDGE. A reader of the ledger can see both runs and cannot see
+// that one produced the other, which is what "who did this work" resolves to
+// the moment an orchestrator delegates.
+
+// osStartWithParent is a start carrying a parent, which the helpers above do
+// not, so that their callers keep reading as root-run cases.
+func osStartWithParent(t *testing.T, e *osEnv, sessionID, parent string) (observeSessionOut, error) {
+	t.Helper()
+	return observeSession(t.Context(), nil, observeSessionIn{
+		SessionID:   sessionID,
+		Phase:       ObserveSessionPhaseStart,
+		CWD:         e.tree.repo,
+		ParentRunID: parent,
+	})
+}
+
+// registeredBody returns the `run_registered` this run recorded.
+func registeredBody(t *testing.T, e *osEnv, runID string) event.Fields {
+	t.Helper()
+	for _, body := range e.chain(t) {
+		if body[event.FieldEventType] == event.EventTypeRunRegistered &&
+			body[event.FieldRunID] == runID {
+			return body
+		}
+	}
+	t.Fatalf("no run_registered for %s", runID)
+	return nil
+}
+
+// MCP-075: a session started under a parent records it.
+func TestMCP075ASessionStartedUnderAParentRecordsIt(t *testing.T) {
+	env := osSetup(t, nil)
+
+	parent := env.mustStart(t, "parent-session")
+	if parent.RunID == "" {
+		t.Fatal("the parent session has no run id")
+	}
+
+	child, err := osStartWithParent(t, env, "child-session", parent.RunID)
+	if err != nil {
+		t.Fatalf("starting a session under %s: %v", parent.RunID, err)
+	}
+	if child.RunID == parent.RunID {
+		t.Fatal("the child reused the parent's run id; two sessions are two runs")
+	}
+
+	body := registeredBody(t, env, child.RunID)
+	got, ok := body[event.FieldParentRunID]
+	if !ok {
+		t.Fatalf("run_registered for the child carries no %s; the edge is what this "+
+			"records, and without it the ledger holds two runs and no relation",
+			event.FieldParentRunID)
+	}
+	if got != parent.RunID {
+		t.Errorf("%s = %v, want the parent's run id %s", event.FieldParentRunID, got, parent.RunID)
+	}
+}
+
+// MCP-076: no parent means the member is ABSENT, not empty.
+//
+// doc 02 §1 distinguishes the two, and the distinction is the whole reason this
+// is asserted separately: a root run that recorded an empty parent would be
+// claiming a parent it does not have, in a record nothing can amend.
+func TestMCP076ASessionWithNoParentRecordsNoParent(t *testing.T) {
+	env := osSetup(t, nil)
+
+	root := env.mustStart(t, osSessionID)
+	body := registeredBody(t, env, root.RunID)
+
+	if v, ok := body[event.FieldParentRunID]; ok {
+		t.Errorf("a root run recorded %s = %q; absent and empty are different (doc 02 §1), "+
+			"and this run has no parent to name", event.FieldParentRunID, v)
+	}
+}
+
+// MCP-077: a parent that cannot name a run is refused, and nothing registers.
+func TestMCP077AnUnusableParentIsRefusedAndRegistersNothing(t *testing.T) {
+	env := osSetup(t, nil)
+
+	before := len(env.chain(t))
+	out, err := osStartWithParent(t, env, "child-session", "not a run id")
+	if err == nil {
+		t.Fatalf("a parent that is not an identifier was accepted, and returned %+v.\n"+
+			"A parent is a reference into this same ledger; one that cannot name a run "+
+			"is a dangling edge recorded forever", out)
+	}
+	var classified *Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("refused with %T (%v), not an IP §4 classified error", err, err)
+	}
+	if !classified.Class.Valid() {
+		t.Errorf("refused with class %q, which is not one of IP §4's eleven", string(classified.Class))
+	}
+	if after := len(env.chain(t)); after != before {
+		t.Errorf("the chain grew from %d to %d on a refused start; a refusal appends nothing (I3)",
+			before, after)
+	}
+}
