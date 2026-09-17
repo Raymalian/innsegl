@@ -248,6 +248,27 @@ jobs:
       - name: The backup runs in the deployment and holds no socket
         run: ./scripts/backup-service-selftest.sh
 
+  exemptions:
+    name: exemptions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-053 and OPS-054. doc 01 §3 says "Do not build these. If you find
+      # yourself building them, stop." A rule about what the repository must NOT
+      # grow has no failing test to write: nothing breaks the day someone adds a
+      # policy engine. It stops being true in a pull request that looks like a
+      # feature, and the only thing that can notice is something reading the
+      # repository on every change.
+      # The self-test runs first and is the reason to believe the gate: it
+      # plants each exemption in a fixture and requires the gate to go red, and
+      # requires it to stay green on a comment that merely names one -- this
+      # repository has to be able to discuss its own exemptions.
+      - name: The exemptions gate catches what it claims to
+        run: ./scripts/exemptions-selftest.sh
+      - name: No exemption is built
+        run: ./scripts/exemptions.sh
+
   ca-custody:
     name: ca custody
     runs-on: ubuntu-latest
