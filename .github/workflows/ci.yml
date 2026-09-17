@@ -248,6 +248,21 @@ jobs:
       - name: The backup runs in the deployment and holds no socket
         run: ./scripts/backup-service-selftest.sh
 
+  ca-custody:
+    name: ca custody
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-049 and OPS-051, the halves a pull request can break silently. The
+      # live halves -- reading the CA container's filesystem, and issuing a
+      # certificate -- run against a deployment.
+      # The FIRST case is the control: the overlay must actually change the CA
+      # to a KMS-backed one, or every "no key material" check below would pass
+      # because nothing had changed.
+      - name: The default keeps its file CA, and the overlay hands the CA no key
+        run: ./scripts/ca-custody-selftest.sh
+
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest
