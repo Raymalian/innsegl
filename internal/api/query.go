@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/ledger"
 )
 
 // The query surface, and why every clause of it is in SQL.
@@ -52,7 +52,7 @@ import (
 // that could. Verification lives in proof.go, it runs live against Fulcio and
 // Rekor through internal/verify, and it never consults these tables.
 
-// The four lifecycle states (#256), and why there are four rather than three.
+// The four lifecycle states (#256), and the one place they are decided (#258).
 //
 // "Active / retired / expired" cannot express the difference between a run
 // that is QUIET and a run that is OVER. Nothing in this system can observe an
@@ -61,75 +61,57 @@ import (
 // credential is the system acting on silence, not the agent stopping. Three
 // words forced those two into one, and the one they landed in read as death.
 //
-// Each of the four below is DERIVED FROM RECORDED FACTS AND THEIR ORDER. None
-// is stored: there is no state column and no state table, and there must not
-// be one — a stored state is a fact nobody appended (doc 08, IP §6.1).
+// The rule that derives the four is NOT WRITTEN HERE. It is internal/ledger's
+// RunStateOf / RunStateSQL, and it is written there because this package was
+// not the only component deciding: the SPIRE reconciler decided too, on its
+// own terms, and reported a run this API showed as active as an entry that
+// should have been deleted (RM-155, #258). What this file keeps is the
+// spelling the wire uses; what it consumes is the rule.
 //
-//	Active     not ended; and either never withdrawn, or activity newer than
-//	           the newest withdrawal.
-//	Lapsed     the newest fact is a withdrawal, and the restore horizon has
-//	           not passed. Resuming the run restores its identity.
-//	Abandoned  the newest fact is a withdrawal, and the horizon has passed,
-//	           so the identity can no longer be restored. This says nothing
-//	           about the agent; it says what this system will no longer do.
-//	Retired    the run was ended by its harness or a human. Someone SAID stop,
-//	           so it is terminal in a way silence never is.
+// Each of the four is DERIVED FROM RECORDED FACTS AND THEIR ORDER. None is
+// stored: there is no state column and no state table, and there must not be
+// one — a stored state is a fact nobody appended (doc 08, IP §6.1).
 //
 // `expired` is gone from this vocabulary and stays gone. It survives as the
 // name of the `run_expired` EVENT, which is a protected string (doc 02 §3) and
 // is untouched — the event is what these states are derived from.
 const (
-	StatusActive    = "active"
-	StatusLapsed    = "lapsed"
-	StatusAbandoned = "abandoned"
-	StatusRetired   = "retired"
+	StatusActive    = ledger.RunActive
+	StatusLapsed    = ledger.RunLapsed
+	StatusAbandoned = ledger.RunAbandoned
+	StatusRetired   = ledger.RunRetired
 )
 
 // RunStatuses is the closed set, in lifecycle order. The value reaches SQL, so
 // it is checked against this at the edge rather than carried as a string.
-var RunStatuses = []string{StatusActive, StatusLapsed, StatusAbandoned, StatusRetired}
+var RunStatuses = ledger.RunStates
 
 // DefaultRestoreHorizon is how long after a withdrawal a run may still be
 // restored when the deployment names no other bound.
 //
-// It matches `innsegl serve`'s own `--abandon-after` default, and it has to:
-// the horizon this API divides Lapsed from Abandoned with is the horizon
-// get_credential actually refuses a restore at, and two numbers that were
-// meant to be one is a dashboard that says "restorable" about a run the MCP
-// will turn away. The number reaches the answer as evidence — see
-// RunPage.RestoreHorizonSeconds — so a reader can check that claim rather than
-// take it.
-//
-// Deliberately DAYS. A short horizon here is the defect this epic replaced: it
-// killed working agents, and tuning the window only chooses which error to
-// make.
-const DefaultRestoreHorizon = 30 * 24 * time.Hour
+// The number reaches the answer as evidence — see RunPage.RestoreHorizonSeconds
+// — so a reader can check the Lapsed/Abandoned claim rather than take it. It is
+// internal/ledger's constant, not a second copy of it: the horizon this API
+// divides Lapsed from Abandoned with is the horizon get_credential actually
+// refuses a restore at, and two numbers that were meant to be one is a
+// dashboard that says "restorable" about a run the MCP will turn away.
+const DefaultRestoreHorizon = ledger.DefaultRestoreHorizon
 
 // EnvRestoreHorizon is the environment variable the horizon is read from, and
 // it is `innsegl serve`'s own — the same process configures both halves, so
 // reading the same variable is what keeps them one number rather than two.
+// Since #258 the SPIRE reconciler reads it as well, from the same function.
 //
-// READ HERE RATHER THAN PASSED IN, and that is a gap stated rather than
-// hidden: `cmd/innsegl` parses this variable into a flag and hands it to
+// READ RATHER THAN PASSED IN, and that is a gap stated rather than hidden:
+// `cmd/innsegl` parses this variable into a flag and hands it to
 // register_agent, and the query API's wiring has no field to carry it. Giving
 // ServerConfig one is the right shape and belongs to whoever owns that wiring;
-// until then a deployment that sets the variable gets one horizon in both
-// places, and a deployment that sets neither gets the same default in both.
-const EnvRestoreHorizon = "INNSEGL_ABANDON_AFTER"
+// until then a deployment that sets the variable gets one horizon everywhere,
+// and a deployment that sets neither gets the same default everywhere.
+const EnvRestoreHorizon = ledger.EnvRestoreHorizon
 
 // restoreHorizonFromEnv reads EnvRestoreHorizon, falling back to the default.
-//
-// Unset, unparsable and negative all land on the default rather than on zero:
-// zero means "no horizon, a run stays restorable until it is retired", which
-// is a real setting a deployment can choose and not something a typo should
-// select by accident. It is chosen by writing `0`, which parses.
-func restoreHorizonFromEnv() time.Duration {
-	d, err := time.ParseDuration(os.Getenv(EnvRestoreHorizon))
-	if err != nil || d < 0 {
-		return DefaultRestoreHorizon
-	}
-	return d
-}
+func restoreHorizonFromEnv() time.Duration { return ledger.RestoreHorizonFromEnv() }
 
 // abandonedBefore is the instant a withdrawal has to predate for its run to be
 // past the horizon, or nil when the deployment set no horizon.
@@ -139,11 +121,7 @@ func restoreHorizonFromEnv() time.Duration {
 // A page whose first row was measured against a different "now" than its last
 // is a page that can show the same run twice in two states.
 func abandonedBefore(horizon time.Duration, now time.Time) *time.Time {
-	if horizon <= 0 {
-		return nil
-	}
-	at := now.Add(-horizon)
-	return &at
+	return ledger.AbandonedBefore(horizon, now)
 }
 
 // restorableUntil is when a withdrawn run stops being restorable, or nil when
@@ -378,27 +356,29 @@ WITH scoped AS (
                     FILTER (WHERE body->>'repo' IS NOT NULL), '{}'::text[]) AS repos
       FROM scoped
      GROUP BY run_id
+), cutoff AS (
+    -- $1, named. internal/ledger's RunStateSQL reads four columns by name and
+    -- pastes no table aliases, so the abandonment cutoff arrives as a one-row
+    -- CTE cross-joined in rather than as a parameter written into the rule.
+    SELECT $1::timestamptz AS abandoned_before
 ), runs AS (
     SELECT r.run_id, r.chain_position, r.registered_at, r.spiffe_id,
            r.agent_type, r.task_ref, r.parent_run_id,
            g.last_event_at, g.commits, g.repos,
            g.withdrawn_at, g.last_activity_at,
-           -- The four states of #256, in the only order they can be asked in.
+           -- THE RULE, from the one place it is written: internal/ledger's
+           -- RunStateSQL, which is internal/ledger's RunStateOf as a SQL
+           -- expression. It is here rather than inline because the SPIRE
+           -- reconciler decides the same question in Go, and the two used to
+           -- disagree — a run this query showed as active was reported there as
+           -- an entry that should have been deleted (RM-155, #258).
            --
-           -- Retired first and unconditionally: someone SAID stop, and a
-           -- straggling call after a retirement must not resurrect the run.
-           -- Then the withdrawal test, which holds only while the run has
-           -- stayed quiet since — and if it holds, the horizon decides which
-           -- of the two withdrawn states this is. Everything else is active.
-           CASE WHEN g.retired THEN 'retired'
-                WHEN g.withdrawn_at IS NOT NULL
-                     AND (g.last_activity_at IS NULL
-                          OR g.last_activity_at <= g.withdrawn_at)
-                     THEN CASE WHEN $1::timestamptz IS NOT NULL
-                                    AND g.withdrawn_at <= $1::timestamptz
-                               THEN 'abandoned' ELSE 'lapsed' END
-                ELSE 'active' END AS status
-      FROM registered r JOIN rollup g USING (run_id)
+           -- It is an expression rather than a value computed in Go per row
+           -- because FD §7 requires the filter, the count and the page bound to
+           -- be the SERVER's: a status the handler computes cannot be a WHERE
+           -- clause.
+           ` + ledger.RunStateSQL + ` AS status
+      FROM registered r JOIN rollup g USING (run_id) CROSS JOIN cutoff
 )`
 
 const listRunsSQL = runIndexCTE + `, filtered AS (
@@ -630,25 +610,21 @@ WITH scoped AS (
            max(ts) FILTER (WHERE event_type = 'run_expired') AS withdrawn_at,
            max(ts) FILTER (WHERE source IS DISTINCT FROM 'reaper') AS last_activity_at
       FROM scoped GROUP BY run_id
+), cutoff AS (
+    SELECT $1::timestamptz AS abandoned_before
 ), state AS (
-    -- THE SAME RULE AS runIndexCTE, and it has to be the same or the overview
-    -- would say "0 active" over a table listing active runs. A withdrawal only
-    -- stands while the run has stayed quiet since it; a run that spoke
-    -- afterwards is counted alive here too. $1 is the abandonment cutoff, as
-    -- it is there.
-    SELECT registered, retired,
-           (withdrawn_at IS NOT NULL
-            AND (last_activity_at IS NULL OR last_activity_at <= withdrawn_at)) AS withdrawn,
-           (withdrawn_at IS NOT NULL
-            AND $1::timestamptz IS NOT NULL
-            AND withdrawn_at <= $1::timestamptz) AS past_horizon
-      FROM rollup
+    -- THE SAME RULE, LITERALLY THE SAME STRING, as runIndexCTE uses: the
+    -- overview saying "0 active" over a table listing active runs was one of
+    -- the ways three copies of this rule made themselves felt. There is one
+    -- copy now and it is internal/ledger's.
+    SELECT registered, ` + ledger.RunStateSQL + ` AS status
+      FROM rollup CROSS JOIN cutoff
 )
 SELECT
-    count(*) FILTER (WHERE registered AND NOT retired AND NOT withdrawn)::int,
-    count(*) FILTER (WHERE withdrawn AND NOT retired AND NOT past_horizon)::int,
-    count(*) FILTER (WHERE withdrawn AND NOT retired AND past_horizon)::int,
-    count(*) FILTER (WHERE retired)::int,
+    count(*) FILTER (WHERE registered AND status = '` + ledger.RunActive + `')::int,
+    count(*) FILTER (WHERE status = '` + ledger.RunLapsed + `')::int,
+    count(*) FILTER (WHERE status = '` + ledger.RunAbandoned + `')::int,
+    count(*) FILTER (WHERE status = '` + ledger.RunRetired + `')::int,
     (SELECT count(*) FROM innsegl.events
       WHERE event_type = 'commit_recorded')::int,
     -- #167: "open" is derived, not stored — an alert event with no row in
