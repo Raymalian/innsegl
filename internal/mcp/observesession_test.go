@@ -139,7 +139,11 @@ func osSetup(t *testing.T, mutate func(*ObserveSessionConfig)) *osEnv {
 	}
 	t.Cleanup(restoreRetire)
 
-	cfg := ObserveSessionConfig{MarkerDir: env.markerDir}
+	// Descendants is the SHIPPED parentage lookup over the SHIPPED index
+	// (RM-157, #260). "Every descendant" is a claim about the edges the chain
+	// holds, so a stand-in here would make the cascade's cases assertions
+	// about a fixture's bookkeeping rather than about migration 0005.
+	cfg := ObserveSessionConfig{MarkerDir: env.markerDir, Descendants: lg}
 	if mutate != nil {
 		mutate(&cfg)
 	}
@@ -231,13 +235,30 @@ type osSPIRE struct {
 	// as though it guarded the entries it does not.
 	stopMu    sync.Mutex
 	retireErr error
-	retired   []spire.RunRef
+	// retireErrFor fails the deletion for NAMED runs only. RM-157 (#260) needs
+	// a PARTIAL failure — one descendant that cannot be ended while the rest
+	// are — and a switch that fails every deletion cannot express one.
+	retireErrFor map[string]error
+	retired      []spire.RunRef
+}
+
+// failRun makes this run's entry deletion fail, and no other's.
+func (f *osSPIRE) failRun(runID string, err error) {
+	f.stopMu.Lock()
+	defer f.stopMu.Unlock()
+	if f.retireErrFor == nil {
+		f.retireErrFor = map[string]error{}
+	}
+	f.retireErrFor[runID] = err
 }
 
 func (f *osSPIRE) RetireRun(_ context.Context, run spire.RunRef) (spire.Retirement, error) {
 	f.stopMu.Lock()
 	f.retired = append(f.retired, run)
 	failure := f.retireErr
+	if failure == nil {
+		failure = f.retireErrFor[run.RunID]
+	}
 	f.stopMu.Unlock()
 	if failure != nil {
 		return spire.Retirement{}, failure
