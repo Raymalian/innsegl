@@ -90,6 +90,15 @@ var commands = map[string]command{
 		summary: "record that a human reviewed an integrity alert",
 		exec:    resolveAlertCommand,
 	},
+	// retire is RM-154 (#257): the one way positive knowledge that a run is
+	// over gets into the record without an MCP client. The reaper can only
+	// observe silence, and silence is not an ending at any threshold; a
+	// harness's stop hook speaks for the process it owned and nothing else.
+	// An operator who knows the machine is gone had no way to say so.
+	"retire": {
+		summary: "end a run an operator knows is over",
+		exec:    retireCommand,
+	},
 	"verify": {
 		summary: "verify a commit's attribution without access to the ledger",
 		exec:    verifyCommand,

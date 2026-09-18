@@ -34,9 +34,15 @@ import (
 // than in this repository, so no test here can produce it and an operator has
 // to run something. Like `reap` and `resolve-alert`, it runs from a trusted
 // host holding the ledger DSN.
+//
+// `retire` is RM-154 (#257): the ONLY way an operator's positive knowledge
+// that a run is over reaches the ledger without an MCP client. It is unlike
+// its neighbours in what it holds — no ledger DSN, no SPIRE admin credential,
+// only the address of the identity-lifecycle listener — because the retirement
+// is `retire_agent`'s and this is a client of it.
 var documentedSubcommands = []string{
 	"api", "canary", "init", "migrate-schema", "reap", "reconcile", "resolve-alert",
-	"seal", "serve", "verify",
+	"retire", "seal", "serve", "verify",
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {
