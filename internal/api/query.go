@@ -174,7 +174,7 @@ type Overview struct {
 // that disagreed with the row that linked to it would be a bug nobody sees.
 const runIndexCTE = `
 WITH scoped AS (
-    SELECT chain_position, run_id, ts, event_type,
+    SELECT chain_position, run_id, ts, event_type, source,
            convert_from(canonical, 'UTF8')::jsonb AS body
       FROM innsegl.events
      WHERE run_id IS NOT NULL
@@ -190,7 +190,21 @@ WITH scoped AS (
            max(ts) AS last_event_at,
            count(*) FILTER (WHERE event_type = 'commit_recorded')::int AS commits,
            bool_or(event_type = 'run_retired') AS retired,
-           bool_or(event_type = 'run_expired') AS expired,
+           -- EXPIRY IS NOT PERMANENT, because being expired is not the same as
+           -- being over. The reaper withdraws a credential from a run that went
+           -- quiet; a run that speaks again has answered the only question the
+           -- reaper was asking, and get_credential restores its entry. Reading
+           -- "expired" as terminal made the dashboard call a working agent dead:
+           -- measured 2026-09-18, two runs expired on 2026-09-16 carried 656 and
+           -- 876 tool calls afterwards, the newest landing in the same minute the
+           -- operator was told nothing was active.
+           --
+           -- This infers nothing about liveness (E7). It is two recorded facts and
+           -- their order: an expiry at one timestamp, an event the reaper did not
+           -- write at a later one. The expiry stays in the timeline either way;
+           -- what changes is whether the newest fact or the oldest names the state.
+           max(ts) FILTER (WHERE event_type = 'run_expired') AS expired_at,
+           max(ts) FILTER (WHERE source IS DISTINCT FROM 'reaper') AS last_live_at,
            coalesce(array_agg(DISTINCT body->>'repo')
                     FILTER (WHERE body->>'repo' IS NOT NULL), '{}'::text[]) AS repos
       FROM scoped
@@ -200,7 +214,9 @@ WITH scoped AS (
            r.agent_type, r.task_ref,
            g.last_event_at, g.commits, g.repos,
            CASE WHEN g.retired THEN 'retired'
-                WHEN g.expired THEN 'expired'
+                WHEN g.expired_at IS NOT NULL
+                     AND (g.last_live_at IS NULL OR g.last_live_at <= g.expired_at)
+                     THEN 'expired'
                 ELSE 'active' END AS status
       FROM registered r JOIN rollup g USING (run_id)
 )`
@@ -384,12 +400,19 @@ func (s *Store) Run(ctx context.Context, runID string) (RunDetail, error) {
 
 const overviewSQL = `
 WITH scoped AS (
-    SELECT run_id, event_type FROM innsegl.events WHERE run_id IS NOT NULL
+    SELECT run_id, event_type, ts, source FROM innsegl.events WHERE run_id IS NOT NULL
 ), rollup AS (
     SELECT run_id,
            bool_or(event_type = 'run_registered') AS registered,
            bool_or(event_type = 'run_retired')    AS retired,
-           bool_or(event_type = 'run_expired')    AS expired
+           -- THE SAME RULE AS runIndexCTE, and it has to be the same or the
+           -- overview would say "0 active" over a table listing active runs.
+           -- An expiry only stands while the run has stayed quiet since it;
+           -- a run that spoke afterwards is counted alive here too.
+           (max(ts) FILTER (WHERE event_type = 'run_expired') IS NOT NULL
+            AND (max(ts) FILTER (WHERE source IS DISTINCT FROM 'reaper') IS NULL
+                 OR max(ts) FILTER (WHERE source IS DISTINCT FROM 'reaper')
+                    <= max(ts) FILTER (WHERE event_type = 'run_expired'))) AS expired
       FROM scoped GROUP BY run_id
 )
 SELECT

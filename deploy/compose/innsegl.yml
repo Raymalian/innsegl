@@ -194,6 +194,26 @@ x-object-store-user: &object-store-user ${INNSEGL_OBJECT_STORE_ACCESS_KEY:-innse
 x-object-store-password: &object-store-password ${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}
 x-object-store-bucket: &object-store-bucket ${INNSEGL_OBJECT_STORE_BUCKET:-innsegl-segments}
 
+# GATES THE FILER'S IAM gRPC SERVICE. The filer registers CreateUser, PutPolicy
+# and CreateAccessKey on its gRPC port and says so itself at start-up:
+# "Registered IAM gRPC service on filer (unauthenticated; set jwt.filer_signing.key
+# ... to require admin Bearer token)". `-disableHttp` does not reach it — that
+# closes the HTTP surface and this is gRPC on 18888.
+#
+# Upstream's own rule is "set the key ... if the gRPC port is reachable beyond a
+# trusted network", and here it is not: innsegl-object-backend is `internal:`
+# with three members, and measured 2026-09-18 the name does not resolve from the
+# MCP while it does from innsegl-s3. So this is a second lock rather than the
+# only one — the same position telemetry ended up in on the same day.
+#
+# A SHIPPED DEFAULT, for the reason AB-17 gives above for the object store's own
+# credentials: the network control assumes an attacker who is not on the host,
+# and a process on the host reads any container's environment anyway. What
+# matters is that what this gates cannot weaken anything — it admits IAM calls
+# to a gateway run with -iam=false against a static identities file, so there is
+# no user or policy for them to create.
+x-object-filer-jwt: &object-filer-jwt ${INNSEGL_OBJECT_FILER_JWT_KEY:-innsegl-compose-filer-admin}
+
 # THE SCOPED IDENTITY every long-running service that talks to the store runs
 # as. innsegl/s3-identities.sh writes it into the gateway's identity file, and
 # innsegl/verify-object-scope.sh then asks the server what that credential can
@@ -342,6 +362,10 @@ x-innsegl-build: &innsegl-build
   build:
     context: ../..
     dockerfile: Dockerfile
+    # PINNED, because the default is whatever stage is last in the Dockerfile,
+    # and that is not a property this file should depend on. See the Runtime
+    # stage's own comment for what it cost when a stage was appended after it.
+    target: runtime
     args:
       VERSION: ${INNSEGL_VERSION:-compose}
       COMMIT: ${INNSEGL_COMMIT:-unknown}
@@ -527,6 +551,32 @@ services:
       # measured 256 KiB on disk. Raising the cap costs nothing and moves the
       # failure to a place an operator can read.
       - -volume.max=32
+
+      # TELEMETRY, OFF. The master reports cluster statistics to
+      # https://telemetry.seaweedfs.com/api/collect every 24h once 10 GiB are
+      # stored, and the upstream default is ON. The payload is the cluster's
+      # shape — version, host OS, volume-server/volume/filer counts, total bytes
+      # — and, unavoidably, the source address, which is the operator's. None of
+      # that is this deployment's to send.
+      #
+      # innsegl-object-backend is `internal: true`, so the call cannot leave and
+      # the hostname does not even resolve (measured 2026-09-18: SERVFAIL, so not
+      # even the DNS query escapes). This flag is the second lock. The network is
+      # a property of the topology and a topology gets edited; this is a property
+      # of the process, and the two fail independently.
+      #
+      # THE FLAG IS NOT THE ONE THE LOG SUGGESTS. The startup banner says "use
+      # -telemetry=false to opt out". That is the standalone `weed master`
+      # spelling. This deployment runs `weed server`, which prefixes every master
+      # flag and rejects the banner's advice outright — measured against the
+      # pinned image:
+      #
+      #   weed server -telemetry=false  ->  flag provided but not defined
+      #
+      # which does not warn, it crashloops the object store. Anyone acting on the
+      # log line alone breaks the deployment, so the working spelling is written
+      # down here next to the reason.
+      - -master.telemetry=false
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9333/cluster/healthz || exit 1"]
       interval: 3s
@@ -563,6 +613,12 @@ services:
       - innsegl-object-backend
     volumes:
       - innsegl-object-filer-data:/data
+    environment:
+      # See x-object-filer-jwt. Set here and NOT on innsegl-s3: the gateway runs
+      # -iam=false against a static identities file and makes no IAM call, and
+      # this same key doubles as the S3 STS fallback signer — behaviour this
+      # deployment has no reason to acquire.
+      WEED_JWT_FILER_SIGNING_KEY: *object-filer-jwt
     command:
       - filer
       - -master=innsegl-object-store:9333
@@ -858,7 +914,29 @@ services:
       # sealer and reconciler in here too has innsegl.oneprocess.yml, which
       # states what folding them in costs.
       INNSEGL_MCP_ALSO: ${INNSEGL_MCP_ALSO:-}
-      INNSEGL_REAP_GRACE: ${INNSEGL_REAP_GRACE:-5m}
+      # HOW LONG SILENCE IS ALLOWED BEFORE IT IS CALLED ORPHANED. This was 5m
+      # and 5m is not silence, it is a long tool call: PostToolUse fires when a
+      # tool RETURNS, so a build, a test run or a slow network makes a perfectly
+      # live agent look dead. Measured 2026-09-18 on this deployment, the first
+      # sweep after the reaper was fixed expired run-f0ac88f8 at 07:17 and that
+      # run was recording tool calls again at 07:20.
+      #
+      # `run_expired` is permanent and append-only (I4), so a grace that is too
+      # short writes a false statement about a live agent into a chain that
+      # cannot take it back. The code's own documented default is 12h and that
+      # is what this now uses. The cost is the other direction — a genuinely
+      # dead run holds its SPIRE entry for up to 12h — and that is the cheaper
+      # mistake: an idle entry is untidy, a false expiry is a lie in the record.
+      INNSEGL_REAP_GRACE: ${INNSEGL_REAP_GRACE:-12h}
+
+      # HOW OFTEN THE COMPANION SWEEPS. `reap` sweeps once and exits unless it is
+      # given an interval, and as a companion that meant one sweep per container
+      # start: measured 2026-09-18, one sweep in 34 hours and about fifty runs
+      # standing Active with their agents long gone. Unset leaves the CLI's
+      # one-shot default for anyone running `innsegl reap` by hand; the companion
+      # needs a number, and it needs to be well under the grace, or an orphan
+      # waits a whole interval past its deadline.
+      INNSEGL_REAP_INTERVAL: ${INNSEGL_REAP_INTERVAL:-1m}
 
       # The PATH to this deployment's secret, not the secret. See the anchor.
       # `-identity-mode` is left at its default, `pseudonymous`: the SPIFFE ID,

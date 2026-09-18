@@ -501,11 +501,23 @@ func runServe(parent context.Context, args []string, stdout, stderr io.Writer, d
 			log.info("running a companion subcommand in this process", "subcommand", name)
 			// No arguments: each reads the same environment this process was
 			// given, which is how the separate containers were configured too.
-			if code := companion(nil, stdout, stderr); code != exitOK {
-				log.error("a companion subcommand stopped; this replica cannot do its whole job",
-					"subcommand", name, "exit", code)
-				close(companionFailed)
-			}
+			//
+			// ANY RETURN IS A FAILURE, INCLUDING A SUCCESSFUL ONE. A companion
+			// here is a component of a long-running process; one that finishes
+			// has stopped doing its job just as surely as one that crashes, and
+			// it does so without a non-zero status to notice it by.
+			//
+			// This guard used to fire only on a non-zero exit, and `reap` walked
+			// straight through it: it was a one-shot sweep with no interval, so
+			// it swept once at start-up, returned 0, and its goroutine ended in
+			// silence while /readyz kept answering. Measured 2026-09-18: one
+			// sweep in 34 hours, about fifty runs Active with their agents long
+			// gone. A component that exits cleanly and is never heard from again
+			// is the hardest kind of outage to see, so it is reported loudly.
+			code := companion(nil, stdout, stderr)
+			log.error("a companion subcommand stopped; this replica cannot do its whole job",
+				"subcommand", name, "exit", code)
+			close(companionFailed)
 		}(name, companion)
 	}
 

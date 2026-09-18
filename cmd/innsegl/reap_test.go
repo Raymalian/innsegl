@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -424,5 +425,101 @@ func TestOpenReaperFailsWithoutAnIdentity(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Workload API") {
 		t.Errorf("error %q does not say what could not be obtained", err)
+	}
+}
+
+// countingSweeper records how many sweeps it was asked for and stops the
+// command by failing the Nth one, so a looping command terminates in a test.
+type countingSweeper struct {
+	mu     sync.Mutex
+	n      int
+	stopAt int
+}
+
+func (c *countingSweeper) Sweep(context.Context) (*spire.SweepReport, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	if c.n >= c.stopAt {
+		// INCONCLUSIVE is the one verdict that stops the loop, which is how
+		// this test ends rather than running forever.
+		return nil, errors.New("stop the loop")
+	}
+	return &spire.SweepReport{StartedAt: time.Now()}, nil
+}
+
+func (c *countingSweeper) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// OPS-066: `reap` with no interval sweeps exactly once.
+//
+// This is the CLI's and cron's contract and it must not change: the fix for the
+// companion added a loop, and a loop that also became the default would make
+// `innsegl reap` at a terminal never return.
+func TestOPS066ReapWithoutIntervalSweepsOnce(t *testing.T) {
+	sw := &countingSweeper{stopAt: 99}
+	deps := reapDeps{open: func(context.Context, reapOptions) (sweeper, func(), error) {
+		return sw, func() {}, nil
+	}}
+	var out, errOut bytes.Buffer
+	code := runReapCommand([]string{
+		"-spire-address", "localhost:8081", "-trust-domain", "innsegl.dev",
+		"-dsn", "postgres://x", "-quiet",
+	}, &out, &errOut, deps)
+	if code != exitOK {
+		t.Fatalf("exit = %d, want %d; stderr=%s", code, exitOK, errOut.String())
+	}
+	if got := sw.count(); got != 1 {
+		t.Fatalf("swept %d times, want exactly 1", got)
+	}
+}
+
+// OPS-067: `reap -interval` keeps sweeping.
+//
+// The bug this pins, measured 2026-09-18: the deployment set
+// INNSEGL_MCP_ALSO=reap, the companion ran this command once at start-up, it
+// returned 0, and nothing swept for the next 34 hours while about fifty runs
+// stood Active with their agents long gone. One sweep is what a companion must
+// never do.
+func TestOPS067ReapWithIntervalKeepsSweeping(t *testing.T) {
+	sw := &countingSweeper{stopAt: 3}
+	deps := reapDeps{open: func(context.Context, reapOptions) (sweeper, func(), error) {
+		return sw, func() {}, nil
+	}}
+	var out, errOut bytes.Buffer
+	code := runReapCommand([]string{
+		"-spire-address", "localhost:8081", "-trust-domain", "innsegl.dev",
+		"-dsn", "postgres://x", "-interval", "1ms", "-quiet",
+	}, &out, &errOut, deps)
+	if code != exitReapInconclusive {
+		t.Fatalf("exit = %d, want %d (the loop ends on INCONCLUSIVE); stderr=%s",
+			code, exitReapInconclusive, errOut.String())
+	}
+	if got := sw.count(); got != 3 {
+		t.Fatalf("swept %d times, want 3 — the interval did not repeat the sweep", got)
+	}
+}
+
+// OPS-068: the interval comes from the environment too, which is how the
+// companion is configured — it is given no arguments at all.
+func TestOPS068ReapIntervalFromEnvironment(t *testing.T) {
+	t.Setenv(envReapInterval, "1ms")
+	sw := &countingSweeper{stopAt: 2}
+	deps := reapDeps{open: func(context.Context, reapOptions) (sweeper, func(), error) {
+		return sw, func() {}, nil
+	}}
+	var out, errOut bytes.Buffer
+	code := runReapCommand([]string{
+		"-spire-address", "localhost:8081", "-trust-domain", "innsegl.dev",
+		"-dsn", "postgres://x", "-quiet",
+	}, &out, &errOut, deps)
+	if code != exitReapInconclusive {
+		t.Fatalf("exit = %d, want %d; stderr=%s", code, exitReapInconclusive, errOut.String())
+	}
+	if got := sw.count(); got != 2 {
+		t.Fatalf("swept %d times, want 2 — $%s was not read", got, envReapInterval)
 	}
 }
