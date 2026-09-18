@@ -17,6 +17,13 @@
 # NOTE ON THE FIXTURES. No fixture contains a real person's name or address.
 # The strings below are invented, which is also the proof that the gate works by
 # allowlist: it refuses them without ever having been told about them.
+#
+# AND THAT INCLUDES THE PERMITTED ONES. This file is tracked, so an identity
+# written here is published — the exact thing the gate exists to stop. An
+# earlier version of this selftest carried the operator's real display name as
+# the fixture for "a permitted identity passes", which published a name in the
+# course of testing that names are not published. Every permitted identity below
+# is invented and is handed to the gate through INNSEGL_ALLOWED_NAMES_FILE.
 
 set -uo pipefail
 
@@ -27,6 +34,22 @@ bad() { fail=$((fail + 1)); printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && print
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
+
+# An invented permitted set, in the syntax internal/signing defines: a bare name
+# is admitted on any address the gate otherwise admits; `Name <address>` pins.
+PINS="${TMP}/pinned-names"
+cat >"${PINS}" <<'LIST'
+# invented fixtures; no line here is a person
+Innsegl
+Fixture Alpha <12345+alpha@users.noreply.github.com>
+Fixture Beta <67890+beta@users.noreply.github.com>
+LIST
+
+# EVERY case below reads this list unless it deliberately overrides it. The
+# selftest must not depend on whatever the machine it runs on happens to
+# permit: on a fresh checkout there is no list at all, and a gate that refuses
+# everything would make every negative case pass for the wrong reason.
+export INNSEGL_ALLOWED_NAMES_FILE="${PINS}"
 
 # fixture NAME AUTHOR_NAME AUTHOR_EMAIL -> a repo with one commit by that identity
 fixture() {
@@ -46,9 +69,43 @@ d="$(fixture agent    "Innsegl"    "agent@innsegl.invalid")"
 "${GATE}" "${d}" >/dev/null 2>&1 && ok "an agent identity passes" \
   || bad "an agent identity passes" "$("${GATE}" "${d}" 2>&1 | head -2)"
 
-d="$(fixture account  "Kody Mike"  "66436734+KodyMike@users.noreply.github.com")"
-"${GATE}" "${d}" >/dev/null 2>&1 && ok "the account's noreply address passes" \
-  || bad "the account's noreply address passes" "$("${GATE}" "${d}" 2>&1 | head -2)"
+# A GitHub account's noreply address, under the display name pinned to it.
+d="$(fixture account "Fixture Alpha" "12345+alpha@users.noreply.github.com")"
+"${GATE}" "${d}" >/dev/null 2>&1 \
+  && ok "a pinned name on its own address passes" \
+  || bad "a pinned name on its own address passes" \
+       "$("${GATE}" "${d}" 2>&1 | head -2)"
+
+# THE LEAK RM-159 CLOSED. The address is admitted and the display name is not
+# the one pinned to it. The old gate saw the address, found it on the list, and
+# passed — which is how a real name reached four merge commits on origin/main
+# under a green CI gate.
+d="$(fixture pinwrong "Someone Else" "12345+alpha@users.noreply.github.com")"
+"${GATE}" "${d}" >/dev/null 2>&1 \
+  && bad "a different name on a pinned address is refused" \
+  || ok "a different name on a pinned address is refused"
+
+# A PINNED NAME IS PINNED TO ONE ADDRESS. Otherwise the pairs collapse back into
+# a flat list of names and the pin says nothing.
+d="$(fixture pinelsewhere "Fixture Alpha" "67890+beta@users.noreply.github.com")"
+"${GATE}" "${d}" >/dev/null 2>&1 \
+  && bad "a pinned name on another operator's address is refused" \
+  || ok "a pinned name on another operator's address is refused"
+
+# A BARE NAME IS NOT ADMITTED ON A PINNED ADDRESS EITHER. An agent name is
+# admitted where no pin applies; a pinned address admits its own name only.
+d="$(fixture freeonpinned "Innsegl" "12345+alpha@users.noreply.github.com")"
+"${GATE}" "${d}" >/dev/null 2>&1 \
+  && bad "a bare permitted name is refused on a pinned address" \
+  || ok "a bare permitted name is refused on a pinned address"
+
+# And the bare name still works where nothing is pinned — the agent case, which
+# cannot be pinned at all because the local part is minted per run.
+d="$(fixture freeok "Innsegl" "run-7f3a@innsegl.invalid")"
+"${GATE}" "${d}" >/dev/null 2>&1 \
+  && ok "a bare permitted name passes on an unpinned address" \
+  || bad "a bare permitted name passes on an unpinned address" \
+       "$("${GATE}" "${d}" 2>&1 | head -2)"
 
 # The leak that actually happened: a real mail address on a real name.
 d="$(fixture realmail "Jane Q Person" "jane.person@example.com")"
@@ -56,7 +113,7 @@ d="$(fixture realmail "Jane Q Person" "jane.person@example.com")"
   || ok "a real mail address is refused"
 
 # The leak that reached origin/main: the noreply address, but a person's name.
-d="$(fixture realname "Jane Q Person" "66436734+KodyMike@users.noreply.github.com")"
+d="$(fixture realname "Jane Q Person" "12345+alpha@users.noreply.github.com")"
 "${GATE}" "${d}" >/dev/null 2>&1 && bad "a person's name on a permitted address is refused" \
   || ok "a person's name on a permitted address is refused"
 
@@ -146,10 +203,45 @@ d="$(fixture auditclean "Innsegl" "agent@innsegl.invalid")"
 # ---- the gate must not publish what it refuses --------------------------------
 # The whole reason this is an allowlist: a denylist would have to name the real
 # identity in a tracked file in a public repository.
-if grep -qiE 'irfan|@gmail\.com' "${GATE}"; then
-  bad "the gate names no real personal identity" "the gate contains one"
+#
+# THIS CHECK USED TO BE A DENYLIST ITSELF. It grepped the gate for a fragment of
+# the operator's real mail address — writing that fragment into a tracked file
+# in a public repository, which is the exact move the gate exists to refuse.
+#
+# It is BEHAVIOURAL now, which is the only form that can tell a fixture from a
+# leak. A tracked file may contain something identity-SHAPED; the fixtures above
+# do. What it may not contain is an identity the gate ADMITS. So every
+# `Name <address>` written into a tracked half of the gate is put through the
+# gate under this machine's real list, and every one of them has to be refused.
+REAL_LIST="$(cd -- "$(dirname -- "${GATE}")/.." && pwd -P)/.innsegl/allowed-names"
+SELF="$(cd -- "$(dirname -- "$0")" && pwd -P)/no-personal-identity-selftest.sh"
+if [ -r "${REAL_LIST}" ]; then
+  admitted=""; n=0
+  while IFS= read -r ident; do
+    [ -n "${ident}" ] || continue
+    iname="${ident%%<*}"; iname="$(printf '%s' "${iname}" | sed 's/[[:space:]]*$//')"
+    imail="${ident##*<}"; imail="${imail%>}"
+    # An address with no name pins nothing, and git refuses an empty ident
+    # name, so there is no fixture to drive. The gate rejects that entry at
+    # parse time already.
+    [ -n "${iname}" ] || continue
+    n=$((n + 1))
+    d="$(fixture "shaped${n}" "${iname}" "${imail}")"
+    if (unset INNSEGL_ALLOWED_NAMES_FILE; "${GATE}" "${d}") >/dev/null 2>&1; then
+      admitted="${admitted} ${imail}"
+    fi
+  done <<EOF
+$(grep -ohE '[^[:space:]#/*][^<]*<[^@[:space:]>]+@[^[:space:]>]+>' "${GATE}" "${SELF}" | sort -u)
+EOF
+  if [ -n "${admitted}" ]; then
+    bad "no identity written into the tracked gate is one the gate admits" \
+        "admitted:${admitted}"
+  else
+    ok "no identity written into the tracked gate is one the gate admits (${n} checked)"
+  fi
 else
-  ok "the gate names no real personal identity"
+  bad "no identity written into the tracked gate is one the gate admits" \
+      "no list at ${REAL_LIST}, so this could not be asked"
 fi
 
 # AND NOT THE PERMITTED ONES EITHER. An allowlist is safe to publish as a
@@ -165,10 +257,16 @@ if [ -r "${NAMES_FILE}" ]; then
     # Only human-shaped names matter here; the agent and bot identities are the
     # deployment's own and are named in the specs already.
     case "${n}" in Innsegl*|GitHub|'dependabot[bot]') continue ;; esac
-    grep -qF "${n}" "${GATE}" && leaked="${leaked} ${n}"
+    # Both tracked halves. The selftest is as published as the gate, and it is
+    # where the real name actually was.
+    for f in "${GATE}" "$(cd -- "$(dirname -- "$0")" && pwd -P)/no-personal-identity-selftest.sh"; do
+      grep -qF "${n}" "${f}" && leaked="${leaked} $(basename "${f}")"
+    done
   done <"${NAMES_FILE}"
   if [ -n "${leaked}" ]; then
-    bad "the tracked gate holds no permitted display name" "found:${leaked}"
+    # The NAME is not printed. Saying which file is enough to act on; saying
+    # which name would publish it a second time.
+    bad "the tracked gate holds no permitted display name" "found in:${leaked}"
   else
     ok "the tracked gate holds no permitted display name"
   fi
@@ -209,12 +307,47 @@ INNSEGL_ALLOWED_NAMES_FILE="${TMP}/tidy-names" "${GATE}" "${d}" >/dev/null 2>&1 
   && bad "a name is matched whole, not as a prefix" \
   || ok "a name is matched whole, not as a prefix"
 
-# Its refusal output must not echo the address either — CI logs are public.
-d="$(fixture noecho "Jane Q Person" "jane.person@example.com")"
+# AN ENTRY THAT DOES NOT PARSE REFUSES, for the reason an empty list does: a
+# typo must not quietly become a narrower allowlist that nobody notices until
+# the day it matters.
+d="$(fixture badentry "Innsegl" "agent@innsegl.invalid")"
+for broken in 'Fixture Alpha <>' '<12345+alpha@users.noreply.github.com>' 'A Name <a@b> tail'; do
+  printf 'Innsegl\n%s\n' "${broken}" >"${TMP}/broken-names"
+  if INNSEGL_ALLOWED_NAMES_FILE="${TMP}/broken-names" "${GATE}" "${d}" >/dev/null 2>&1; then
+    bad "an unparseable entry refuses rather than passes" "passed on: ${broken}"
+  else
+    ok "an unparseable entry refuses rather than passes"
+  fi
+done
+
+# ---- the refusal itself publishes nothing -------------------------------------
+# The gate runs in CI, and a CI log is as public as the repository. Printing
+# what it refused would make the gate the leak.
+
+# Not the address.
+d="$(fixture noechomail "Jane Q Person" "jane.person@example.com")"
 if "${GATE}" "${d}" 2>&1 | grep -q 'jane.person@example.com'; then
   bad "the refusal does not echo the address" "it printed the address"
 else
   ok "the refusal does not echo the address"
+fi
+
+# NOT THE NAME. This is the half RM-159 added: the gate used to print
+# "\"<name>\" is not a permitted name", which published the display name it
+# had just stopped.
+d="$(fixture noechoname "Jane Q Person" "12345+alpha@users.noreply.github.com")"
+if "${GATE}" "${d}" 2>&1 | grep -q 'Jane Q Person'; then
+  bad "the refusal does not echo the name" "it printed the name it refused"
+else
+  ok "the refusal does not echo the name"
+fi
+
+# AND NOT THE PERMITTED NAME EITHER. "expected Fixture Alpha" would republish
+# the list that is kept out of the repository on purpose.
+if "${GATE}" "${d}" 2>&1 | grep -q 'Fixture Alpha'; then
+  bad "the refusal does not echo the permitted name" "it printed the pinned name"
+else
+  ok "the refusal does not echo the permitted name"
 fi
 
 printf '\n  %d passed, %d failed\n' "${pass}" "${fail}"

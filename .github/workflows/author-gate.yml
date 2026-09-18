@@ -87,9 +87,18 @@ jobs:
         # allowlist it reads is test/e2e/testdata/author-policy.json, and that
         # file is the remediation when a NEW HUMAN operator starts committing.
         # It is never the remediation for an agent address (ADR-0028 §6).
+        #
+        # GH-005 is the DISPLAY NAME half (RM-159). The address alone admitted a
+        # real name onto origin/main under a green gate; an operator entry is a
+        # pair now. Two of its four cases run everywhere — the commit-time gate
+        # fails closed with no configuration, and its refusal publishes neither
+        # the name it stopped nor the one it expected. The other two need the
+        # permitted list, which is deliberately not in this repository, so on a
+        # fresh checkout they log what they could not ask rather than skipping
+        # or passing quietly.
         run: >-
           go test ./test/e2e
-          -run 'TestGH002|TestGH003|TestGH001TheRecordedRunDateIsHonest'
+          -run 'TestGH002|TestGH003|TestGH005|TestGH001TheRecordedRunDateIsHonest'
           -count=1 -v
 
   empirical:

@@ -43,11 +43,39 @@
 #
 #   INNSEGL_ALLOWED_NAMES_FILE, or .innsegl/allowed-names beside this repository
 #
-# One name per line; blank lines and # comments ignored. A MISSING OR EMPTY FILE
-# REFUSES EVERY NAME rather than admitting every name: a gate whose
-# configuration has gone missing must not silently become a pass.
+# One entry per line; blank lines and # comments ignored. A MISSING OR EMPTY
+# FILE REFUSES EVERY NAME rather than admitting every name: a gate whose
+# configuration has gone missing must not silently become a pass. An entry that
+# does not parse refuses too, for the same reason — a typo must not become a
+# silently narrower allowlist.
 #
-# A name is allowed only if it is in that set. That is strict on purpose: a new
+# AN ENTRY IS EITHER A NAME OR A PINNED PAIR, in git's own identity syntax:
+#
+#   Innsegl                        a name admitted on any address this gate
+#                                  otherwise admits. Agents need this: the local
+#                                  part is minted per run and cannot be listed.
+#   Fixture Alpha <a@b.example>    a PINNED PAIR. That address admits that name
+#                                  and no other; that name is admitted on that
+#                                  address and no other.
+#
+# THE PIN IS WHY THIS FILE CHANGED SHAPE. Measured on this repository on
+# 2026-09-18: an operator's real name is the author AND the committer of four
+# merge commits on origin/main, and the I6 gate in internal/signing was green
+# throughout, because it admitted by ADDRESS ALONE. A flat list of names would
+# not have caught it either — the name was on the list, it was simply on an
+# address that had no business carrying it. The pair is what makes "this name,
+# on this address" answerable.
+#
+# ONE RULE, ONE PLACE. internal/signing owns it: AuthorPolicy.Operators is a
+# pair and CheckIdentity decides. This script cannot call that — it is POSIX sh
+# so that it runs wherever git runs — so it CONSUMES the rule: the same syntax,
+# the same file, the same fail-closed reading. doc 07 GH-005 drives the same
+# identities through both halves and requires the same verdict, so the two
+# cannot drift. Where they differ deliberately — this gate also holds a line on
+# addresses internal/signing leaves unpinned, because here the name is free text
+# in a git config — GH-005 records that as a decision.
+#
+# A name is allowed only if the set allows it. That is strict on purpose: a new
 # name reaching a commit is the event this exists to catch, and answering "is
 # this string a real person's name" is not something a script can do.
 #
@@ -95,27 +123,77 @@ noreply@github.com'
 
 # The permitted display names, read from outside the repository. See above.
 NAMES_FILE="${INNSEGL_ALLOWED_NAMES_FILE:-$(cd -- "$(dirname -- "$0")/.." && pwd -P)/.innsegl/allowed-names}"
+
+# US (0x1f) separates the fields of a parsed entry, for the reason the audit
+# uses it below: a display name is text a person typed and may contain any
+# printable character, so a printable separator could be forged into a second
+# field and slip a name past the allowlist.
+US="$(printf '\037')"
+
+# Parse once, into one tagged line per entry:
+#
+#   P<US>address<US>name   a pinned pair
+#   F<US>name              a name pinned to no address
+#   E<US>the line          an entry that does not parse
+#
+# awk, not a shell loop, because --audit asks about every identity in the
+# history and re-parsing the list per identity was what made the first batched
+# audit take 14.7s. It is parsed here, once.
 if [ -r "${NAMES_FILE}" ]; then
-  ALLOWED_NAME="$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "${NAMES_FILE}" | grep -v '^$' || true)"
+  ENTRIES="$(awk -v us="${US}" '
+    { sub(/#.*/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
+    $0 == "" { next }
+    index($0, "<") || index($0, ">") {
+      if ($0 !~ /^[^<>]*[^ \t<>][ \t]*<[^<>@ \t]+@[^<>@ \t]+>$/) { print "E" us $0; next }
+      addr = $0; sub(/^[^<]*</, "", addr); sub(/>$/, "", addr)
+      name = $0; sub(/[ \t]*<[^<>]*>$/, "", name)
+      print "P" us addr us name
+      next
+    }
+    { print "F" us $0 }
+  ' "${NAMES_FILE}" || true)"
 else
-  ALLOWED_NAME=""
+  ENTRIES=""
 fi
 
-if [ -z "${ALLOWED_NAME}" ]; then
-  printf 'refusing: no permitted-name list at %s\n' "${NAMES_FILE}" >&2
+if [ -z "${ENTRIES}" ]; then
+  printf 'refusing: no permitted-identity list at %s\n' "${NAMES_FILE}" >&2
   printf '  A gate whose configuration is missing refuses; it does not pass.\n' >&2
-  printf '  One name per line. This file is deliberately untracked.\n' >&2
+  printf '  One entry per line: a name, or `Name <address>`. Deliberately untracked.\n' >&2
   exit 1
 fi
 
+# An entry that does not parse refuses everything. The line itself is NOT
+# echoed: it is a permitted identity, and this output reaches a CI log.
+if printf '%s\n' "${ENTRIES}" | awk -v us="${US}" 'BEGIN { FS = us } $1 == "E" { found = 1 }
+  END { exit found ? 0 : 1 }'; then
+  _n="$(printf '%s\n' "${ENTRIES}" | awk -v us="${US}" 'BEGIN { FS = us } $1 == "E"' | wc -l)"
+  printf 'refusing: %s has %s entr%s that will not parse.\n' \
+    "${NAMES_FILE}" "$(printf '%s' "${_n}" | tr -d ' ')" \
+    "$([ "$(printf '%s' "${_n}" | tr -d ' ')" = "1" ] && printf 'y' || printf 'ies')" >&2
+  printf '  An entry is a name, or `Name <address>`. A list that cannot be read\n' >&2
+  printf '  admits nothing rather than quietly admitting less than it says.\n' >&2
+  exit 1
+fi
+
+PINNED="$(printf '%s\n' "${ENTRIES}" |
+  awk -v us="${US}" 'BEGIN { FS = us; OFS = us } $1 == "P" { print $2, $3 }')"
+PINNED_NAME="$(printf '%s\n' "${ENTRIES}" |
+  awk -v us="${US}" 'BEGIN { FS = us } $1 == "P" { print $3 }')"
+FREE_NAME="$(printf '%s\n' "${ENTRIES}" |
+  awk -v us="${US}" 'BEGIN { FS = us } $1 == "F" { print $2 }')"
+
 bad=0
 
-# report prints one refusal. It deliberately does NOT echo the offending mail
-# address: the gate's output lands in CI logs, which are as public as the repo,
-# and printing the address there would publish what the gate just stopped. The
-# role and the commit are enough to act on.
+# report prints one refusal. It deliberately echoes NEITHER the offending mail
+# address NOR the offending display name: the gate's output lands in CI logs,
+# which are as public as the repo, and printing either there would publish what
+# the gate just stopped — the gate would become the leak. It does not print the
+# PERMITTED name either, for the same reason: "expected X" republishes the list
+# that is kept out of the repository on purpose. The role and the commit are
+# enough to act on.
 report() {
-  printf '  %s %s: name %s\n' "$1" "$2" "$3" >&2
+  printf '  %s %s: %s\n' "$1" "$2" "$3" >&2
   bad=1
 }
 
@@ -129,15 +207,37 @@ check_ident() {
   done
   [ "${_ok}" -eq 1 ] || report "${_role}" "${_where}" "is not a permitted address"
 
-  _ok=0
   # Split on newline only, so a name with a space stays one field.
   _IFS="${IFS}"; IFS='
 '
-  for _allowed in ${ALLOWED_NAME}; do
-    [ "${_name}" = "${_allowed}" ] && _ok=1
+  # Is a name PINNED to this address? If so it is the only one admitted here,
+  # and every other permitted name is refused — which is the case the address
+  # allowlist alone could never see.
+  _pinned=0; _pin=""
+  for _entry in ${PINNED}; do
+    case "${_entry}" in
+      "${_mail}${US}"*) _pinned=1; _pin="${_entry#*${US}}" ;;
+    esac
   done
+
+  if [ "${_pinned}" -eq 1 ]; then
+    [ "${_name}" = "${_pin}" ] ||
+      report "${_role}" "${_where}" "is not the name pinned to this address"
+  else
+    _ok=0
+    for _allowed in ${FREE_NAME}; do
+      [ "${_name}" = "${_allowed}" ] && _ok=1
+    done
+    # A PINNED NAME IS PINNED. It is admitted on its own address and nowhere
+    # else, or the pair would be a flat list again and the pin would say
+    # nothing.
+    for _allowed in ${PINNED_NAME}; do
+      [ "${_name}" = "${_allowed}" ] && _ok=0
+    done
+    [ "${_ok}" -eq 1 ] ||
+      report "${_role}" "${_where}" "is not a permitted name on this address"
+  fi
   IFS="${_IFS}"
-  [ "${_ok}" -eq 1 ] || report "${_role}" "${_where}" "\"${_name}\" is not a permitted name"
 }
 
 if [ "${RANGE}" = "--audit" ]; then
@@ -212,17 +312,22 @@ fi
 if [ "${bad}" -ne 0 ]; then
   cat >&2 <<'MSG'
 
-refusing: a commit here would name a person.
+refusing: a commit here would carry an identity this repository does not permit.
 
 I6 keeps humans out of attribution, and a pushed commit cannot be unpublished —
-rewriting one that is already signed orphans its Rekor entry. Set an identity
-this repository permits:
+rewriting one that is already signed orphans its Rekor entry. Both halves of the
+author line are checked: the address, and the display name beside it. A name is
+admitted on the address it is pinned to and on no other.
 
-  git config user.name  "<a permitted name>"
+Set an identity this repository permits:
+
+  git config user.name  "<the name pinned to the address below>"
   git config user.email "<account>@users.noreply.github.com"
 
-The permitted set is at the top of scripts/no-personal-identity.sh. Widening it
-is a deliberate edit, not a workaround.
+The permitted ADDRESS SUFFIXES are at the top of this script. The permitted
+NAMES are not, and never will be: a name in a tracked file is a published name.
+Widening either is a deliberate edit, not a workaround. The list is at:
 MSG
+  printf '\n  %s\n' "${NAMES_FILE}" >&2
   exit 1
 fi
