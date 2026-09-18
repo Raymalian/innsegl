@@ -33,7 +33,8 @@ export type IconName =
   | "open"
   | "status-active"
   | "status-retired"
-  | "status-expired"
+  | "status-lapsed"
+  | "status-abandoned"
   | "staleness"
   | "anchor-pulse"
   | "anchor-lag"
@@ -73,16 +74,32 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M5.5 8h5" />
     </>
   ),
-  /* Expired: a DASHED ring with a clock hand past the hour. Different
-   * silhouette from Retired, not a different hue — doc 06 §3.2 requires the
-   * two to be told apart, and §5.3 assigns both to neutral grey. */
-  "status-expired": (
+  /* Lapsed: a DASHED ring with a clock hand past the hour. The credential was
+   * withdrawn and the run can still be resumed, so the ring is open rather
+   * than closed. Different silhouette from Retired, not a different hue — doc
+   * 06 §3.2 requires the two to be told apart, and §5.3 assigns every run
+   * state to neutral grey. */
+  "status-lapsed": (
     <>
       <path d="M8 3a5 5 0 0 1 4.33 2.5" />
       <path d="M13 8a5 5 0 0 1-2.5 4.33" />
       <path d="M8 13a5 5 0 0 1-4.33-2.5" />
       <path d="M3 8a5 5 0 0 1 2.5-4.33" />
       <path d="M8 5.5V8l2 1.5" />
+    </>
+  ),
+  /* Abandoned: the same dashed ring, with the horizon drawn THROUGH it and out
+   * past both sides. Nothing else in the set has a line that leaves its own
+   * bounds, so it reads apart from Lapsed at a glance and in greyscale — which
+   * is the whole requirement, since §5.3 gives both the same neutral. The line
+   * is the horizon, and crossing it is the only thing that separates the two. */
+  "status-abandoned": (
+    <>
+      <path d="M8 3a5 5 0 0 1 4.33 2.5" />
+      <path d="M13 8a5 5 0 0 1-2.5 4.33" />
+      <path d="M8 13a5 5 0 0 1-4.33-2.5" />
+      <path d="M3 8a5 5 0 0 1 2.5-4.33" />
+      <path d="M1 10.5h14" />
     </>
   ),
   /* Staleness: a clock with a rewind arrow. The data is from the past. */

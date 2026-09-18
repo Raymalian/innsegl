@@ -30,7 +30,7 @@ import { railGutter, railLine, railMarker } from "./styles";
 /** The four shapes the rail can take. Named rather than open to any `IconName`
  * so that a caller cannot quietly introduce a fifth marker whose meaning nobody
  * decided. */
-export type RailMarker = "node" | "fold" | "status-expired" | "integrity-alert";
+export type RailMarker = "node" | "fold" | "status-lapsed" | "integrity-alert";
 
 export function RailGutter({
   icon,

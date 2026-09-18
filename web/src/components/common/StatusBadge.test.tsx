@@ -1,34 +1,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * FE-030 (NEW — proposed for doc 07 TC-FE; see the report for #50).
- *
- *   U | Run status badges Active / Retired / Expired | Three distinct renders;
- *     Expired and Retired still differ with every colour removed | FD §3.2,
- *     §4.2, §5.3, §6.4
+ * FE-030 | U | Run state badges | Four distinct renders; a withdrawn state and
+ *   Retired still differ with every colour removed | FD §3.2, §4.2, §5.3, §6.4
  *
  * doc 06 §3.2: "status badge (Active / Retired / Expired — expired styled
  * distinctly from retired, since it means an agent died unretired)."
  *
- * That parenthesis is the whole test. Retired and Expired are two different
- * facts about a run — one ended deliberately, one ended by running out of
- * credential — and doc 06 §5.3 assigns BOTH to neutral grey, because neither
- * is a verdict. So the distinction cannot be carried by hue even in principle,
+ * The first half of that parenthesis is the whole test, and #256 refused the
+ * second half: a withdrawal and a retirement are two different facts — one run
+ * ended because something retired it, the other went quiet and had its
+ * credential withdrawn — and nothing here knows what became of the agent.
+ * doc 06 §5.3 assigns every run state to neutral grey, because none of them is
+ * a verdict. So the distinction cannot be carried by hue even in principle,
  * and the assertion below removes every class and inline style before
- * comparing the two: whatever tells them apart has to survive a greyscale
- * printout and a colour-blind reader (§6.4, "never color alone").
+ * comparing: whatever tells them apart has to survive a greyscale printout and
+ * a colour-blind reader (§6.4, "never color alone").
+ *
+ * FE-129 is the four-state successor and covers the whole set; this file keeps
+ * FE-030's original pair assertion, which is the one that caught a regression.
  */
 
 import { render, screen } from "@testing-library/react";
 import type { RunStatus } from "./StatusBadge";
 import { StatusBadge } from "./StatusBadge";
 
-const ALL: readonly RunStatus[] = ["active", "retired", "expired"];
+const ALL: readonly RunStatus[] = ["active", "lapsed", "abandoned", "retired"];
 
 /** Everything a colour could hide in. */
 // Everything a sighted user cannot perceive is removed, not merely colour.
 //
-// This first stripped class and style alone, which left data-status="expired"
+// This first stripped class and style alone, which left data-status="lapsed"
 // against data-status="retired" — an attribute no reader can see, and enough
 // on its own to satisfy the comparison below. The assertion could not fail:
 // making the two badges identical apart from their colour still passed it,
@@ -58,23 +60,25 @@ describe("FE-030 StatusBadge", () => {
     }
   });
 
-  it("labels them Active, Retired and Expired", () => {
+  it("labels them Active, Lapsed, Abandoned and Retired", () => {
     render(
       <>
         <StatusBadge status="active" />
+        <StatusBadge status="lapsed" />
+        <StatusBadge status="abandoned" />
         <StatusBadge status="retired" />
-        <StatusBadge status="expired" />
       </>,
     );
     expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.getByText("Lapsed")).toBeInTheDocument();
+    expect(screen.getByText("Abandoned")).toBeInTheDocument();
     expect(screen.getByText("Retired")).toBeInTheDocument();
-    expect(screen.getByText("Expired")).toBeInTheDocument();
   });
 
-  it("EXPIRED still differs from RETIRED with every colour removed", () => {
+  it("a WITHDRAWN state still differs from RETIRED with every colour removed", () => {
     const retired = stripPresentation(markupOf("retired"));
-    const expired = stripPresentation(markupOf("expired"));
-    expect(expired).not.toBe(retired);
+    expect(stripPresentation(markupOf("lapsed"))).not.toBe(retired);
+    expect(stripPresentation(markupOf("abandoned"))).not.toBe(retired);
   });
 
   it("distinguishes them by icon, not only by word", () => {
@@ -87,23 +91,23 @@ describe("FE-030 StatusBadge", () => {
       return icon;
     };
     const icons = ALL.map(iconOf);
-    expect(new Set(icons).size).toBe(3);
+    expect(new Set(icons).size).toBe(ALL.length);
     expect(icons.every((name) => name !== null)).toBe(true);
   });
 
-  it("gives Expired the dashed outline the token sheet defines for it", () => {
-    const { container } = render(<StatusBadge status="expired" />);
-    const badge = container.querySelector("[data-status='expired']");
+  it("gives a withdrawn state the dashed outline the token sheet defines", () => {
+    const { container } = render(<StatusBadge status="lapsed" />);
+    const badge = container.querySelector("[data-status='lapsed']");
     expect(badge?.getAttribute("class")).toContain(
       "var(--innsegl-border-style-status-expired)",
     );
   });
 
-  it("says what each status MEANS, not just its name (§6.1)", () => {
-    const { container } = render(<StatusBadge status="expired" />);
-    const badge = container.querySelector("[data-status='expired']");
-    expect(badge).toHaveAttribute("title", expect.stringMatching(/unretired/i));
-    expect(container.textContent).toMatch(/unretired/i);
+  it("says what each state MEANS, not just its name (§6.1)", () => {
+    const { container } = render(<StatusBadge status="lapsed" />);
+    const badge = container.querySelector("[data-status='lapsed']");
+    expect(badge).toHaveAttribute("title", expect.stringMatching(/withdraw/i));
+    expect(container.textContent).toMatch(/withdraw/i);
   });
 
   it("is neutral: no status is a verdict colour (§5.3)", () => {
@@ -119,9 +123,9 @@ describe("FE-030 StatusBadge", () => {
   it("is inert — a badge is a fact, not a control (P6)", () => {
     render(
       <>
-        <StatusBadge status="active" />
-        <StatusBadge status="retired" />
-        <StatusBadge status="expired" />
+        {ALL.map((status) => (
+          <StatusBadge key={status} status={status} />
+        ))}
       </>,
     );
     expect(screen.queryAllByRole("button")).toHaveLength(0);

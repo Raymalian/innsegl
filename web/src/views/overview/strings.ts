@@ -39,7 +39,25 @@ export const strings = {
     regionLabel: "System metrics",
     activeAgents: {
       label: "Active agents",
-      meaning: "Runs registered and neither retired nor expired.",
+      meaning:
+        "Runs whose newest recorded fact is not a retirement and not a credential withdrawal.",
+      /* #256's two counts, on the card whose number a reader reads first,
+       * because the question that number has to survive is "and the rest?".
+       *
+       * Rendered only when there are any. doc 06 P3: the calm state is what is
+       * left over, and "0 lapsed, 0 abandoned" on every healthy deployment is
+       * a line readers learn to skip — and then skip on the day it is not
+       * zero. Neither number is added into the figure above it. */
+      breakdown: (lapsed: string, abandoned: string) =>
+        `${lapsed} lapsed and ${abandoned} abandoned, counted apart from this number.`,
+      /* The horizon that split the two. A reader told "abandoned" without it
+       * has been handed a verdict they cannot check (doc 06 P1). */
+      horizon: (horizon: string) =>
+        `A withdrawn run is counted abandoned once a ${horizon} restore horizon has passed.`,
+      noHorizon:
+        "No restore horizon is set, so a withdrawn run stays restorable until it is retired.",
+      horizonUnknown:
+        "The query API did not report the horizon these were counted with.",
     },
     runsToday: {
       label: "Runs today",

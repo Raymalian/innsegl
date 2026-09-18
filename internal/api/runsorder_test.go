@@ -19,7 +19,7 @@ import "testing"
 //
 // # The part that breaks silently
 //
-// Paging is a keyset cursor: `chain_position < $7`, which is correct for
+// Paging is a keyset cursor: `chain_position < $8`, which is correct for
 // DESC and wrong for ASC. Flip the order without flipping the comparison and
 // the first page is right, the second page is empty or repeats, and nothing
 // reports an error. API-021 is that case, and it is the reason this is a pair
@@ -52,13 +52,13 @@ func TestAPI020OrderDefaultsToNewestFirst(t *testing.T) {
 func TestAPI021TheCursorComparisonFollowsTheOrder(t *testing.T) {
 	desc, asc := runsQuery(OrderDesc), runsQuery(OrderAsc)
 
-	if !contains(desc, "chain_position < $7") {
-		t.Error("the descending query does not page with `chain_position < $7`")
+	if !contains(desc, "chain_position < $8") {
+		t.Error("the descending query does not page with `chain_position < $8`")
 	}
 	if !contains(desc, "ORDER BY chain_position DESC") {
 		t.Error("the descending query does not order descending")
 	}
-	if !contains(asc, "chain_position > $7") {
+	if !contains(asc, "chain_position > $8") {
 		t.Error("the ascending query pages with the descending comparison; " +
 			"page two would be empty and nothing would say so")
 	}

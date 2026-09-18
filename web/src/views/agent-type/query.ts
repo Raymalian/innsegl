@@ -30,14 +30,18 @@
  * request carried) or is refused in as many words.
  */
 
+import type { RunStatus } from "../../app/routes";
+
 /** One row of internal/api's runs table. */
 export interface RunSummary {
   readonly run_id: string;
   readonly spiffe_id: string;
   readonly agent_type: string;
   readonly task_ref: string;
-  /** internal/api/query.go's StatusActive / StatusRetired / StatusExpired. */
-  readonly status: "active" | "retired" | "expired";
+  /** internal/api/query.go's four lifecycle states (#256): Active, Lapsed,
+   * Abandoned, Retired. Shared with the URL vocabulary in app/routes.ts, so
+   * there is one closed set rather than one per view. */
+  readonly status: RunStatus;
   readonly repos: readonly string[];
   /** Commits this RUN recorded, across every repository it touched. */
   readonly commits: number;

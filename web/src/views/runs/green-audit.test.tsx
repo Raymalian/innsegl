@@ -113,15 +113,15 @@ describe("FE-055 green means a live cryptographic verification, and nothing else
 });
 
 describe("FE-055 nothing else in the view is ever green", () => {
-  it("not an active run, not a retired one, not an expired one", () => {
+  it("not an active run, not a retired one, not a lapsed one", () => {
     const { container } = render(<RunsTable runs={threeRuns()} total={3} />);
-    // All three statuses are on screen; doc 06 §5.3 puts every one of them in
-    // neutral grey, because none of them is a verdict about cryptography.
+    // Three of the four states are on screen; doc 06 §5.3 puts every one of
+    // them in neutral grey, because none is a verdict about cryptography.
     expect(
       [...container.querySelectorAll("[data-status]")].map((n) =>
         n.getAttribute("data-status"),
       ),
-    ).toEqual(["active", "retired", "expired"]);
+    ).toEqual(["active", "retired", "lapsed"]);
     expect(container.innerHTML).not.toContain("proof-verified");
   });
 

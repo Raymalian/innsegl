@@ -56,11 +56,12 @@
 --innsegl-color-degraded-text             --innsegl-color-degraded-surface          4.5  degraded banner copy
 --innsegl-color-mismatch-text             --innsegl-color-mismatch-surface          4.5  the differing trailer/cert segment (§4.1)
 
-# Run status. Neutral by §5.3, which makes contrast the only thing keeping them
-# legible — there is no hue doing the work.
+# Run state. Neutral by §5.3, which makes contrast the only thing keeping them
+# legible — there is no hue doing the work. The third family is named for the
+# `run_expired` event and dresses both withdrawn states, Lapsed and Abandoned.
 --innsegl-color-status-active-text        --innsegl-color-status-active-surface     4.5  Active
 --innsegl-color-status-retired-text       --innsegl-color-status-retired-surface    4.5  Retired
---innsegl-color-status-expired-text       --innsegl-color-status-expired-surface    4.5  Expired
+--innsegl-color-status-expired-text       --innsegl-color-status-expired-surface    4.5  Lapsed
 
 # The accent. Links and interactive chrome only; it means nothing.
 --innsegl-color-accent-text               --innsegl-color-surface-default           4.5  links on a panel
@@ -77,4 +78,4 @@
 --innsegl-color-proof-verified-border     --innsegl-color-surface-default           3    verified badge outline
 --innsegl-color-proof-failed-border       --innsegl-color-surface-default           3    failed badge outline
 --innsegl-color-proof-unavailable-border  --innsegl-color-surface-default           3    unavailable badge outline
---innsegl-color-status-expired-border     --innsegl-color-surface-default           3    the dashed outline that separates Expired from Retired
+--innsegl-color-status-expired-border     --innsegl-color-surface-default           3    the dashed outline that separates a withdrawn run from Retired
