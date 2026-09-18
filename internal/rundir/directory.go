@@ -137,6 +137,35 @@ func (d *Directory) CredentialRun(ctx context.Context, runID string) (mcp.Creden
 				"an event for run %q carries no readable event_type", runID)
 		}
 
+		// The newest thing the run itself did (RM-155, #258).
+		//
+		// An event the REAPER wrote is not the run doing something: doc 02 §2
+		// makes `source` "who appended it", so counting `run_expired` here
+		// would let the reaper's own withdrawal stand as evidence that the run
+		// it withdrew from is working, and no withdrawal would ever stand.
+		// Every other source counts, which is the read API's own discriminator
+		// (`source IS DISTINCT FROM 'reaper'`) taken verbatim rather than
+		// re-decided — the two answers are asserted equal over one chain in
+		// REC-018 and must not be two rules.
+		//
+		// A source or a `ts` this reader cannot read is skipped rather than
+		// refused, which is the one place this package tolerates an unreadable
+		// member. The reason is what the member is FOR: the three refusals
+		// above guard values a credential is minted, appended or deleted
+		// against, and a missing one of those is a guess about identity (I2).
+		// This one only narrows the window in which a withdrawn run still reads
+		// as withdrawn, so the failure is a run that looks quieter than it was
+		// — never a credential minted for the wrong run.
+		if source, known := rec[event.FieldSource].(string); !known || source != event.SourceReaper {
+			if raw, dated := rec[event.FieldTS].(string); dated {
+				if ts, err := event.ParseTimestamp(raw); err == nil {
+					if at := ts.Time(); at.After(run.LastActivityAt) {
+						run.LastActivityAt = at
+					}
+				}
+			}
+		}
+
 		switch kind {
 		case event.EventTypeRunRegistered:
 			if registered {

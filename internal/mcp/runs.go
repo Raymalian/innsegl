@@ -78,6 +78,42 @@ type CredentialRun struct {
 	// worked for longer than the horizon is refused restore on its next lapse
 	// however recently it was alive — doc 07 MCP-078.
 	ExpiredAt time.Time
+	// LastActivityAt is the newest event on this run that the REAPER DID NOT
+	// WRITE, zero for a run whose entire record is the reaper's.
+	//
+	// It is the member that makes ExpiredAt answerable. A withdrawal on its own
+	// says only that the run was quiet at some instant; whether that is still
+	// true is decided by whether anything the run did is newer. Without this
+	// the MCP could tell a lapse from a retirement but not a lapse from a
+	// RESTORED lapse, which is the distinction #258 exists for.
+	LastActivityAt time.Time
+}
+
+// State is the run's lifecycle state — active, lapsed, abandoned or retired —
+// by the one rule, at the given instant and restore horizon.
+//
+// # Why the MCP asks rather than answers
+//
+// Three components used to decide independently whether a run was closed and
+// they disagreed: the reconciler read a withdrawal as final, the read API read
+// it as reversible, and an operator was shown both about the same run (RM-155,
+// #258). The rule is internal/ledger's now, in one place, and this method is
+// the MCP's way of consulting it rather than a fourth opinion.
+//
+// The facts are exactly what CredentialRun already holds, read off this run's
+// own events by the run directory (internal/rundir): a retirement, a newest
+// withdrawal, and the newest thing the run itself did.
+//
+// horizon is `innsegl serve`'s `--abandon-after`. Zero or less means the
+// deployment set none, and a withdrawn run then stays Lapsed until something
+// ends it — the same reading get_credential's fourth gate gives a zero.
+func (r CredentialRun) State(now time.Time, horizon time.Duration) string {
+	return ledger.RunStateOf(ledger.RunFacts{
+		Retired:        r.Retired(),
+		RetiredAt:      r.RetiredAt,
+		WithdrawnAt:    r.ExpiredAt,
+		LastActivityAt: r.LastActivityAt,
+	}, now, horizon)
 }
 
 // credentialRunIdentity returns the SPIFFE ID to mint for AND the run
