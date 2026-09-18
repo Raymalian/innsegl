@@ -225,11 +225,22 @@ mcp_call() {
 # of an observed tool call travels in argv, so a harness event larger than
 # ARG_MAX fails the call rather than being silently truncated — the tool bounds
 # one body at a mebibyte in any case.
+#
+# EVERY VALUE IS A STRING EXCEPT `bool:true` AND `bool:false`, which are sent as
+# JSON booleans. A tool schema that declares a boolean refuses the string
+# "true", and the refusal would arrive as a stop that did not happen — silent,
+# because a stop never blocks. The prefix is explicit rather than inferred:
+# coercing every value that happens to read `true` would rewrite a harness
+# event body, a task or a branch name that spelled it.
 MCP_CLIENT='
 import json, sys, urllib.request
 
 url, tool = sys.argv[1], sys.argv[2]
-args = {k: v for k, v in zip(sys.argv[3::2], sys.argv[4::2]) if v != ""}
+args = {}
+for name, value in zip(sys.argv[3::2], sys.argv[4::2]):
+    if value == "":
+        continue
+    args[name] = value == "bool:true" if value in ("bool:true", "bool:false") else value
 
 def post(payload, session=None, timeout=60):
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
@@ -475,7 +486,27 @@ case "$EVENT" in
     # after a successful stop and the hook reports the retirement and its own
     # failure in the same breath. Measured in RM-129's live run, which printed
     # "retired <run>" and "could not retire <run>" one after the other.
-    if REPLY="$(mcp_call observe_session session_id "$SESSION_ID" phase stop)"; then
+    # AND IT ENDS WHAT IT STARTED — RM-157 (#260).
+    #
+    # THIS HOOK IS THE ONLY PARTY THAT KNOWS. A subagent killed with its session
+    # fires no SubagentStop, so nothing ever ends its run: measured, five
+    # subagent runs sat Active for between three and nine hours after the
+    # processes were gone, and an operator closed them by hand. The reaper is
+    # not the answer — its grace is twelve hours by policy, and shortening it
+    # kills working agents, which is the whole of E9.
+    #
+    # WHAT THIS HOOK IS CLAIMING by sending it: the processes behind the runs
+    # this session started are gone, because this session is what started them
+    # and it is ending now. That is true at SessionEnd and it is not true
+    # anywhere else, which is why no other branch of this file sends it — not
+    # PostToolUse, not PreToolUse, and not a start. A harness that sent it while
+    # its subagents were still working would end live agents under its own
+    # identity, permanently.
+    #
+    # It defaults to off in the MCP, so a harness that never learns about it
+    # keeps exactly today's behaviour.
+    if REPLY="$(mcp_call observe_session session_id "$SESSION_ID" phase stop \
+      ends_descendants bool:true)"; then
       warn "retired $(reply_field "$REPLY" run_id)"
       say_detail "$REPLY"
     else
@@ -686,8 +717,13 @@ gate is what decides whether it may merge."
       fi
     fi
 
-    # See SessionEnd for why this is an if and not a `&& { } ||`.
-    if REPLY="$(mcp_call observe_session session_id "$AGENT_ID" phase stop)"; then
+    # See SessionEnd for why this is an if and not a `&& { } ||`, and for the
+    # contract `ends_descendants` carries. A SUBAGENT SENDS IT TOO, because a
+    # subagent can itself start others and they die with it exactly the same
+    # way. A leaf subagent — which is most of them — has nothing below it, so
+    # the MCP resolves no descendants and the flag costs one field.
+    if REPLY="$(mcp_call observe_session session_id "$AGENT_ID" phase stop \
+      ends_descendants bool:true)"; then
       warn "retired $(reply_field "$REPLY" run_id)"
       say_detail "$REPLY"
     else

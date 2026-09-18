@@ -55,8 +55,12 @@ import (
 // path here would be a second thing that can disagree about any of them, and
 // E11's whole rule is that a derivation exists once.
 //
-// It follows that this file has no SPIRE client, no ledger and no idempotency
-// store of its own. Its one dependency is the volume the markers live on.
+// It follows that this file has no SPIRE client and no idempotency store of
+// its own. Its dependencies are the volume the markers live on and, since
+// RM-157 (#260), one read-only parentage lookup — `which runs did this run
+// start` — which is the ledger's own and is used for nothing else. It appends
+// no event anywhere: every record this tool causes is appended by the shipped
+// tool that owns it.
 //
 // # A stop NEVER blocks, and that decides the shape of the whole tool
 //
@@ -212,6 +216,31 @@ type observeSessionIn struct {
 	// has no member for one, and it gains none: what is recorded is the run it
 	// resolves to.
 	ParentSessionID string `json:"parent_session_id,omitempty"`
+	// EndsDescendants asserts, on a STOP, that the runs this one started are
+	// over too — RM-157 (#260). Read on `stop` and nowhere else.
+	//
+	// # What a harness is claiming by sending it
+	//
+	//	"The processes behind the runs this run started are gone. I know
+	//	 that because I am the thing that started them and I am now ending."
+	//
+	// Send it when a SESSION ends, and when a subagent that itself started
+	// others stops. Send it nowhere else. It is NOT "probably finished", "idle"
+	// or "quiet for a while": every ending it causes is a `run_retired` on an
+	// append-only chain, appended under the identity the caller is acting as,
+	// terminal (IP §6.2, I4), and indistinguishable afterwards from a truthful
+	// one. A harness that sets it on a run whose children are still working has
+	// ended live agents and cannot take it back.
+	//
+	// DEFAULT OFF. Absent — which is what every harness that has not been
+	// changed sends — this stop behaves exactly as it always did: it ends its
+	// own run and touches nothing else.
+	//
+	// AN ASSERTION, NOT AN INFERENCE (IP §3 E7). Nothing in this server reads a
+	// parent's retirement and concludes anything about a child's; the only
+	// thing that ends a descendant is a stop that carried this, at the moment
+	// it carried it. cascade.go is the contract in full.
+	EndsDescendants bool `json:"ends_descendants,omitempty"`
 }
 
 // observeSessionOut is doc 01 §4's "the run": the identity, the workspace it
@@ -316,7 +345,7 @@ func (m observeSessionMarker) reply(phase string, registered bool, detail string
 // ObserveSessionConfig is what observe_session runs on. Install it with
 // ConfigureObserveSession before serving.
 //
-// One member, because this tool composes the other three rather than holding
+// Two members, because this tool composes the other three rather than holding
 // their dependencies a second time. describe_workspace, register_agent and
 // retire_agent are configured separately and reached in process; a deployment
 // that has not installed them meets their own refusals, by name.
@@ -330,10 +359,29 @@ type ObserveSessionConfig struct {
 	// day later. A deployment with nowhere to put the mapping must not serve
 	// this tool at all.
 	MarkerDir string
+	// Descendants resolves which runs a run started, for a stop that asserts
+	// it ends what it started (RM-157, #260). *ledger.Store satisfies it.
+	//
+	// OPTIONAL, and nil is not a misconfiguration. A deployment without one
+	// behaves exactly as it did before the flag existed: every stop ends its
+	// own run, and a stop that asserts more is answered with a `detail` saying
+	// this replica could not act on it. Required would have meant every
+	// deployment that has not been rewired losing observe_session entirely,
+	// over a field none of their harnesses sends.
+	//
+	// READ-ONLY, AND DELIBERATELY NARROW. It answers one question — which runs
+	// named this one as their parent — and cannot be asked anything about
+	// timing, working directories or what happened to be running at the time.
+	// A lookup that could answer those is the shape of the inference IP §3 E7
+	// forbids.
+	Descendants ObserveSessionDescendants
 }
 
 // observeSessionService is the configured tool.
-type observeSessionService struct{ markerDir string }
+type observeSessionService struct {
+	markerDir   string
+	descendants ObserveSessionDescendants
+}
 
 // observeSessionActive holds the installed configuration.
 //
@@ -363,7 +411,7 @@ func ConfigureObserveSession(cfg ObserveSessionConfig) (func(), error) {
 				"move with it", cfg.MarkerDir))
 	}
 
-	svc := &observeSessionService{markerDir: cfg.MarkerDir}
+	svc := &observeSessionService{markerDir: cfg.MarkerDir, descendants: cfg.Descendants}
 	observeSessionMu.Lock()
 	defer observeSessionMu.Unlock()
 	previous := observeSessionActive
@@ -388,7 +436,11 @@ func bindObserveSession(s *Server) error {
 			"names; `stop` retires the run found by that session id, so the caller never has to " +
 			"have kept it. A duplicate start returns the same run. A stop for a session that " +
 			"never started, or one already stopped, succeeds with the terminal state — a stop " +
-			"never refuses.",
+			"never refuses. On a stop, `ends_descendants` ASSERTS that the runs this one " +
+			"started are over too, and ends every one of them that is still open; it is a " +
+			"claim the caller makes under its own identity, so send it when a session ends " +
+			"or when a subagent that itself started others stops, and nowhere else. It " +
+			"defaults to off, and nothing here ever ends a run because its parent ended.",
 	}, observeSession)
 }
 
@@ -419,7 +471,7 @@ func observeSession(ctx context.Context, _ *sdk.CallToolRequest, in observeSessi
 	case ObserveSessionPhaseStart:
 		return svc.start(ctx, sessionID, in)
 	case ObserveSessionPhaseStop:
-		return svc.stop(ctx, sessionID)
+		return svc.stop(ctx, sessionID, in)
 	default:
 		return observeSessionOut{}, observeSessionPhaseError(in.Phase)
 	}
@@ -650,9 +702,36 @@ func (c *observeSessionService) parentRun(sessionID string, in observeSessionIn)
 // NOTHING HERE EVER REFUSES. Every return below is a successful reply, and the
 // ones that did not finish say so in `detail`. See the note at the top of the
 // file for the measurement that decided it.
-func (c *observeSessionService) stop(ctx context.Context, sessionID string) (observeSessionOut, error) {
+//
+// # `ends_descendants` is read here and nowhere else (RM-157, #260)
+//
+// The cascade runs on a STOP that carries the flag, whatever else that stop
+// managed — including one whose own retirement failed, and one for a session
+// that had already ended. Two reasons, and neither is tidiness:
+//
+//   - The assertion is about the runs BELOW this one and is not conditional on
+//     this one's own record landing. A ledger that refused this retirement may
+//     take the next; refusing to try would leave live-looking runs behind over
+//     a failure that has nothing to do with them.
+//   - Running it on the already-retired path is what makes "safe to repeat"
+//     literally true rather than true by never trying twice: a second stop
+//     re-walks, finds everything retired, and appends nothing.
+//
+// It is NOT read on a start. A session that is starting has not ended, so
+// there is nothing for anyone to have asserted — see cascade.go.
+func (c *observeSessionService) stop(ctx context.Context, sessionID string, in observeSessionIn) (observeSessionOut, error) {
 	unknown := func(detail string) observeSessionOut {
 		return observeSessionOut{SessionID: sessionID, Phase: ObserveSessionPhaseStop, Detail: detail}
+	}
+
+	// cascaded is the flag's whole effect, in one place. Off — the default,
+	// and what every harness that has not been changed sends — it is the empty
+	// string, and every reply below reads exactly as it did before.
+	cascaded := func(runID string) string {
+		if !in.EndsDescendants {
+			return ""
+		}
+		return c.endsWhatItStarted(ctx, runID)
 	}
 
 	marker, found, err := observeSessionReadMarker(c.markerDir, sessionID)
@@ -675,7 +754,8 @@ func (c *observeSessionService) stop(ctx context.Context, sessionID string) (obs
 	if marker.RetiredAt != "" {
 		// IP §4's idempotency, answered from the instant the ledger stamped on
 		// the first retirement rather than from a clock read now.
-		return marker.reply(ObserveSessionPhaseStop, false, observeSessionRetiredDetail(marker)), nil
+		return marker.reply(ObserveSessionPhaseStop, false, observeSessionDetails(
+			observeSessionRetiredDetail(marker), cascaded(marker.RunID))), nil
 	}
 
 	// retire_agent, in process: one retirement path, one gate, one
@@ -683,20 +763,21 @@ func (c *observeSessionService) stop(ctx context.Context, sessionID string) (obs
 	// update does not cost a second event.
 	reply, err := retireAgent(ctx, nil, retireAgentIn{RunID: marker.RunID})
 	if err != nil {
-		return marker.reply(ObserveSessionPhaseStop, false, observeSessionStopFailed(err)), nil
+		return marker.reply(ObserveSessionPhaseStop, false, observeSessionDetails(
+			observeSessionStopFailed(err), cascaded(marker.RunID))), nil
 	}
 
 	marker.RetiredAt = reply.RetiredAt
-	detail := ""
+	detail := cascaded(marker.RunID)
 	if err := observeSessionWriteMarker(c.markerDir, marker); err != nil {
 		// The run IS retired — the ledger says so and that is what counts — so
 		// this is reported and moved past. The consequence is bounded: the
 		// next stop for this session retires an already-retired run, which
 		// retire_agent answers with the original instant and no second event.
-		detail = fmt.Sprintf(
+		detail = observeSessionDetails(detail, fmt.Sprintf(
 			"the run was retired at %s and the marker could not be updated: %v. The retirement "+
 				"stands; a later stop for this session will be answered with the same instant",
-			reply.RetiredAt, err)
+			reply.RetiredAt, err))
 	}
 	return marker.reply(ObserveSessionPhaseStop, false, detail), nil
 }

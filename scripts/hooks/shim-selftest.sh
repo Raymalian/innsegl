@@ -413,6 +413,114 @@ else
   bad "OPS-021: a Read exited $STATUS and called $(cat "$CALLS")"
 fi
 
+# --- OPS-056: a harness that ends a session ends what it started --------------
+#
+# RM-157 (#260). MEASURED: five subagent runs sat Active for between three and
+# nine hours after the processes behind them were gone, and an operator closed
+# them by hand. A killed subagent fires no SubagentStop, so its own stop never
+# happens; the reaper's grace is twelve hours by policy and shortening it kills
+# working agents. The one party that KNEW is the session that started them.
+#
+# BOTH HALVES ARE DRIVEN HERE, and the second is the one that matters. Ending a
+# run because its parent ended would be the inference IP \u00a73 E7 forbids; what
+# makes this an ASSERTION is that it is made once, by the session, at the moment
+# the session ends \u2014 and at no other moment. So a whole session is played out
+# with a subagent left open, and every event before the end is checked for
+# having asserted nothing.
+
+SESS=sess-56
+AGENT=agent-56
+
+script_tool observe_session ok '{"session_id":"sess-56","phase":"start","known":true,"registered":true,"run_id":"run-5656aaaa","task":"e9","worktree":"","repo":"example.test/org/name","branch":"dev/e9","agent_type":"session"}'
+drive "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"$SESS\",\"cwd\":\"$CWD\"}"
+if [ "$STATUS" -eq 0 ] && ! grep -q 'ends_descendants' "$CALLS"; then
+  ok "OPS-056: a session that is STARTING asserts nothing about what it started"
+else
+  bad "OPS-056: SessionStart sent ends_descendants: $(cat "$CALLS")"
+fi
+
+# The subagent starts, and is then KILLED: no SubagentStop is ever driven for
+# it, which is exactly the shape the five stranded runs had.
+script_tool observe_session ok '{"session_id":"agent-56","phase":"start","known":true,"registered":true,"run_id":"run-5656bbbb","task":"e9","worktree":"","repo":"example.test/org/name","branch":"dev/e9","agent_type":"prober"}'
+drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"$SESS\",\"agent_id\":\"$AGENT\",\"agent_type\":\"prober\",\"cwd\":\"$CWD\"}"
+if [ "$STATUS" -eq 0 ] && ! grep -q 'ends_descendants' "$CALLS"; then
+  ok "OPS-056: starting a subagent asserts nothing about ending one"
+else
+  bad "OPS-056: SubagentStart sent ends_descendants: $(cat "$CALLS")"
+fi
+
+# THE SESSION IS STILL RUNNING. Every event it fires while it works must leave
+# the killed subagent's run exactly where it is: no stop at all, and nothing
+# asserting anything about descendants.
+script_tool observe_tool_call ok '{"digest":"sha256:'"$(printf 'c%.0s' $(seq 1 64))"'","stored":true}'
+drive "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$SESS\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"x\"}}"
+still_running_calls="$(cat "$CALLS")"
+drive "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"$SESS\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"x\"}}"
+still_running_calls="$still_running_calls
+$(cat "$CALLS")"
+if ! printf '%s' "$still_running_calls" | grep -q 'ends_descendants' \
+   && ! printf '%s' "$still_running_calls" | grep -q '"phase": "stop"'; then
+  ok "OPS-056: nothing is ended while the session is still running"
+else
+  bad "OPS-056: a working session asserted an ending: $still_running_calls"
+fi
+
+# AND AT THE NEXT SESSION END, IT SAYS SO \u2014 once, for itself, naming no child.
+script_tool observe_session ok '{"session_id":"sess-56","phase":"stop","known":true,"retired":true,"run_id":"run-5656aaaa","retired_at":"2026-09-18T00:00:00.000Z","detail":"this stop ends what it started: 1 run(s) below this one are recorded as ended"}'
+drive "{\"hook_event_name\":\"SessionEnd\",\"session_id\":\"$SESS\"}"
+if [ "$STATUS" -eq 0 ] && called observe_session '"phase": "stop"' "\"session_id\": \"$SESS\"" '"ends_descendants": true'; then
+  ok "OPS-056: SessionEnd asserts that it ends the runs it started"
+else
+  bad "OPS-056: SessionEnd: status $STATUS, calls: $(cat "$CALLS")"
+fi
+
+# A JSON BOOLEAN, NOT THE STRING "true". The tool declares a boolean, so a
+# string is refused \u2014 and the refusal would arrive as a stop that silently did
+# not happen, because a stop never blocks and never reports one as a failure the
+# harness can act on.
+if ! grep -q '"ends_descendants": "true"' "$CALLS"; then
+  ok "OPS-056: the assertion is sent as a JSON boolean, not as a string"
+else
+  bad "OPS-056: ends_descendants was sent as a string: $(cat "$CALLS")"
+fi
+
+# ONE CALL, AND NO RUN IDS. The shim does not enumerate the session's subagents,
+# does not hold their run ids and does not retire anything itself: resolving
+# which runs a run started is the MCP's, which is the whole of E11. A shim that
+# walked its own marker directory would pass the assertion above and be the
+# lookup back in the harness.
+if [ "$(grep -c '^observe_session ' "$CALLS")" = "1" ] && ! grep -q '^retire_agent ' "$CALLS"; then
+  ok "OPS-056: one stop, and the shim resolves no descendants of its own"
+else
+  bad "OPS-056: SessionEnd made $(grep -c '^observe_session ' "$CALLS") session calls: $(cat "$CALLS")"
+fi
+
+# AND THE SUBAGENT'S OWN STOP ASSERTS IT TOO, because a subagent can itself have
+# started others and they die with it the same way.
+script_tool observe_session ok '{"session_id":"agent-56","phase":"stop","known":true,"retired":true,"run_id":"run-5656bbbb","retired_at":"2026-09-18T00:00:00.000Z"}'
+drive "{\"hook_event_name\":\"SubagentStop\",\"session_id\":\"$SESS\",\"agent_id\":\"$AGENT\",\"agent_type\":\"prober\"}"
+if [ "$STATUS" -eq 0 ] && called observe_session '"phase": "stop"' '"ends_descendants": true'; then
+  ok "OPS-056: a subagent's stop ends what that subagent started"
+else
+  bad "OPS-056: SubagentStop: status $STATUS, calls: $(cat "$CALLS")"
+fi
+
+# AND A REFUSED START RETIRES WITHOUT ASSERTING ANYTHING. The worktree gate
+# stops a subagent on its way in and retires the run it just registered; that
+# run started nothing, and a stop that claimed otherwise would be a claim made
+# about nothing at all.
+script_tool observe_session ok '{"session_id":"agent-57","phase":"start","known":true,"registered":true,"run_id":"run-5757cccc","task":"e9","worktree":"","repo":"example.test/org/name","branch":"dev/e9","agent_type":"prober"}'
+: > "$CALLS"
+printf '%s' "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"$SESS\",\"agent_id\":\"agent-57\",\"agent_type\":\"prober\",\"cwd\":\"$CWD\"}" | env \
+  INNSEGL_MCP_ADMIN_URL="$ADMIN" INNSEGL_RUNS_DIR="$RUNS" INNSEGL_LOG_DIR="$LOG" \
+  INNSEGL_SIGNER="$WORK/signer" INNSEGL_REQUIRE_WORKTREE=1 \
+  "$SHIM" > "$WORK/out" 2> "$WORK/err"
+if [ "$?" -eq 2 ] && grep -q '"phase": "stop"' "$CALLS" && ! grep -q 'ends_descendants' "$CALLS"; then
+  ok "OPS-056: the worktree gate's own stop asserts nothing about descendants"
+else
+  bad "OPS-056: the worktree gate's stop: $(cat "$CALLS")"
+fi
+
 # --- The rewrite's own bound --------------------------------------------------
 #
 # 12 and 13 are what a half-finished rewrite fails. They read the shim as TEXT,

@@ -635,7 +635,15 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 
 	if o.sessionDir != "" {
 		restoreSession, serr := tools.install(mcp.ToolObserveSession)(
-			mcp.ConfigureObserveSession(mcp.ObserveSessionConfig{MarkerDir: o.sessionDir}))
+			mcp.ConfigureObserveSession(mcp.ObserveSessionConfig{
+				MarkerDir: o.sessionDir,
+				// The parentage lookup a stop uses when it asserts it ends
+				// what it started (RM-157, #260). The ledger's own read, and
+				// the only thing this tool asks it: which runs named this one
+				// as their parent. Unwired, the flag is inert and every stop
+				// ends exactly its own run.
+				Descendants: store,
+			}))
 		if serr != nil {
 			return fail("configure observe_session: %w", serr)
 		}
