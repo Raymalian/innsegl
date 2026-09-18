@@ -366,6 +366,88 @@ else
   bad "-r retired: status $STATUS, calls: $(cat "$CALLS")"
 fi
 
+# --- RM-156 (#259): the run this script mints has a parent ------------------
+#
+# Measured 2026-09-18: 87 `orchestrator` runs in the ledger, every one of them
+# registered by this script, and not one carrying a parent. The reason was not
+# that they had none — it is that a shell command cannot discover which agent
+# it is inside, so this script had nothing to name and nothing the MCP could
+# resolve for it.
+#
+# SessionStart now publishes the session's run under a SIBLING of the pointer
+# above, keyed on the same working tree and suffixed `.session`. The suffix is
+# the whole safety of it: SubagentStop removes the 32 hex characters exactly,
+# so a subagent starting and stopping in this tree cannot take the session's
+# pointer with it.
+
+SESSION_PTR="$PTR.session"
+SESSION_RUN=run-session0000000000000000000000
+
+# point_session RUN — the two-line pointer SessionStart writes. Line 2 is not
+# read by anything; it is there so a human can see whose run line 1 is.
+point_session() { printf '%s\n%s\n' "$1" "sess-1" > "$SESSION_PTR"; }
+
+# 12. A tree with no subagent pointer mints a run, and that run names the
+#     session's.
+rm -f "$PTR"
+point_session "$SESSION_RUN"
+state "$SESSION_RUN" active
+script_tool register_agent ok "{\"run_id\":\"$SUCCESSOR\",\"spiffe_id\":\"spiffe://innsegl.dev/agent/orchestrator/rm134/$SUCCESSOR\",\"expires_at\":\"2026-09-16T00:00:00.000Z\"}"
+drive
+if [ "$STATUS" -eq 0 ] && called register_agent "\"parent_run_id\": \"$SESSION_RUN\""; then
+  ok "a run the signer mints names this tree's session as its parent"
+else
+  bad "signer parent: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+
+# 13. and the pointer is READ, never written. It belongs to the session, and a
+#     signer that rewrote it would end the session's claim on its own tree.
+if [ "$(sed -n 1p "$SESSION_PTR")" = "$SESSION_RUN" ] && [ "$(wc -l < "$SESSION_PTR")" -eq 2 ]; then
+  ok "the session pointer is left exactly as the harness wrote it"
+else
+  bad "the signer rewrote the session pointer: $(cat "$SESSION_PTR")"
+fi
+
+# 14. NO POINTER, NO PARENT. A tree whose session never registered — or a
+#     machine with no harness at all — mints a root run, exactly as before.
+#     doc 02 §1 distinguishes absent from empty, so the member must not appear.
+rm -f "$SESSION_PTR"
+drive
+if [ "$STATUS" -eq 0 ] && ! grep '^register_agent ' "$CALLS" | grep -q 'parent_run_id'; then
+  ok "a tree with no session pointer mints a root run, and claims no parent"
+else
+  bad "no-pointer parent: status $STATUS, calls: $(grep '^register_agent ' "$CALLS")"
+fi
+
+# 15. A STALE POINTER COSTS THE EDGE AND NOT THE COMMIT.
+#
+#     register_agent refuses a parent that is retired or that the ledger has
+#     never held (RM-156), which is right: an edge is permanent, and one
+#     naming a run that is not there is permanently wrong. But this parent came
+#     off a disk, and a session that ended without its hook running leaves a
+#     pointer behind. Refusing the COMMIT over that would strand the work for a
+#     bookkeeping edge, so the edge is what gives way.
+#
+#     The stub answers every register_agent the same way, so what is asserted
+#     is the LADDER: three attempts, each dropping what the one before it was
+#     refused for. A signer that gave up after the first would show one call.
+point_session "$SESSION_RUN"
+script_tool register_agent err '{"error_class":"RUN_ALREADY_RETIRED","message":"parent_run_id was retired","retryable":false}'
+drive
+ATTEMPTS="$(grep -c '^register_agent ' "$CALLS")"
+if [ "${ATTEMPTS:-0}" -eq 3 ]; then
+  ok "a refused registration drops the parent, then repo and branch, in that order"
+else
+  bad "the fallback ladder made $ATTEMPTS attempts, want 3: $(grep '^register_agent ' "$CALLS")"
+fi
+if grep '^register_agent ' "$CALLS" | sed -n 1p | grep -q 'parent_run_id' \
+   && ! grep '^register_agent ' "$CALLS" | sed -n 2p | grep -q 'parent_run_id' \
+   && grep '^register_agent ' "$CALLS" | sed -n 2p | grep -q '"repo"'; then
+  ok "the second attempt drops the parent and keeps the repository"
+else
+  bad "the ladder dropped the wrong member: $(grep '^register_agent ' "$CALLS")"
+fi
+
 echo
 echo "commit-selftest: $pass ok, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
