@@ -1,11 +1,12 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 #
-# Refuse a commit that would track a local-only specification.
+# The fast answer for the two things a commit here must never do: track a
+# local-only specification, or name a person.
 #
-# THE FAST ANSWER, NOT THE ENFORCEMENT. scripts/no-published-specs.sh also runs
-# in CI, where it applies to whatever was actually pushed rather than to whoever
-# remembered to configure a checkout.
+# THE FAST ANSWER, NOT THE ENFORCEMENT. Both gates also run in CI, where they
+# apply to whatever was actually pushed rather than to whoever remembered to
+# configure a checkout.
 #
 # IT LIVES HERE BECAUSE THIS REPOSITORY SETS core.hooksPath TO scripts/hooks.
 # Measured on 2026-09-17, the hard way: `install-hooks` first copied into
@@ -15,4 +16,13 @@
 #
 # Being here also means it is TRACKED, so it travels with a clone and with every
 # worktree — which .git/hooks never does.
-exec "$(git rev-parse --show-toplevel)/scripts/no-published-specs.sh"
+#
+# BOTH GATES RUN, and the hook does not stop at the first refusal. Two separate
+# mistakes are worth hearing about together rather than one per attempt.
+ROOT="$(git rev-parse --show-toplevel)"
+rc=0
+
+"${ROOT}/scripts/no-published-specs.sh"  || rc=1
+"${ROOT}/scripts/no-personal-identity.sh" || rc=1
+
+exit "${rc}"

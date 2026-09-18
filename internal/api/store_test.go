@@ -407,3 +407,101 @@ func TestTheOverviewCountsWithoutInventingAVerdict(t *testing.T) {
 			"on every view that can be serving degraded data")
 	}
 }
+
+// API-029 — an expired run that speaks again reads as active, not as dead.
+//
+// THE BUG THIS PINS. `bool_or(event_type = 'run_expired')` made expiry a
+// terminal state, so once the reaper had withdrawn a credential the run read
+// "expired" for the rest of its life however hard it went on working. Measured
+// on the operator's own deployment, 2026-09-18: two runs expired on 2026-09-16
+// carried 656 and 876 tool calls afterwards, the newest of them landing in the
+// same minute the dashboard was telling the operator that nothing was active.
+//
+// The reaper withdraws a credential from a run that went QUIET. A run that
+// speaks again has answered the only question the reaper was asking, and
+// get_credential restores its entry, so the deployment already treats it as
+// alive — the read side was the last place still calling it dead.
+//
+// This is not a liveness inference (E7): it is two recorded facts and their
+// order. The expiry stays in the timeline; only which fact names the state
+// changes. A retirement is different and stays terminal — someone SAID stop.
+func TestAPI029AnExpiredRunThatSpeaksAgainIsActive(t *testing.T) {
+	owner, _, readerDSN := migrated(t)
+	ctx := t.Context()
+	s, _ := readStore(t, readerDSN)
+
+	mk := func(runID, eventType, source string) event.Fields {
+		f := event.Fields{
+			event.FieldEventType: eventType,
+			event.FieldRunID:     runID,
+			event.FieldSpiffeID:  "spiffe://innsegl.dev/agent/fix-ci/jira-1/" + runID,
+			event.FieldSource:    source,
+		}
+		switch eventType {
+		case event.EventTypeRunRegistered:
+			// ADR-0004: only the registration carries one. run_retired and
+			// run_expired are refused outright if given a key.
+			f[event.FieldIdempotencyKey] = runID + "-register"
+			f[event.FieldAgentType] = "fix-ci"
+			f[event.FieldTaskRef] = "JIRA-1"
+			f[event.FieldRepo] = "github.com/innsegl/one"
+			f[event.FieldBranch] = "main"
+		case event.EventTypeToolCall:
+			f[event.FieldToolName] = "observe_tool_call"
+			f[event.FieldIdempotencyKey] = runID + "-call"
+		}
+		return f
+	}
+
+	// came-back: registered, expired by the reaper, then works again.
+	for _, step := range []struct{ typ, src string }{
+		{event.EventTypeRunRegistered, event.SourceMCP},
+		{event.EventTypeRunExpired, event.SourceReaper},
+		{event.EventTypeToolCall, event.SourceMCP},
+	} {
+		f := mk("run-cameback", step.typ, step.src)
+		appendOrFail(ctx, t, owner, f)
+	}
+
+	// stayed-quiet: the control. Without it this test would pass on a status
+	// column that had simply stopped saying "expired" at all.
+	for _, step := range []struct{ typ, src string }{
+		{event.EventTypeRunRegistered, event.SourceMCP},
+		{event.EventTypeRunExpired, event.SourceReaper},
+	} {
+		f := mk("run-quiet", step.typ, step.src)
+		appendOrFail(ctx, t, owner, f)
+	}
+
+	// retired-then-noisy: a retirement is a decision, not an observation of
+	// silence, so a straggling call after it must NOT resurrect the run.
+	for _, step := range []struct{ typ, src string }{
+		{event.EventTypeRunRegistered, event.SourceMCP},
+		{event.EventTypeRunRetired, event.SourceMCP},
+		{event.EventTypeToolCall, event.SourceMCP},
+	} {
+		f := mk("run-retired", step.typ, step.src)
+		appendOrFail(ctx, t, owner, f)
+	}
+
+	want := map[string]string{
+		"run-cameback": StatusActive,
+		"run-quiet":    StatusExpired,
+		"run-retired":  StatusRetired,
+	}
+	page, err := s.ListRuns(ctx, RunFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range page.Runs {
+		if _, ours := want[r.RunID]; ours {
+			got[r.RunID] = r.Status
+		}
+	}
+	for id, expect := range want {
+		if got[id] != expect {
+			t.Errorf("%s: status = %q, want %q", id, got[id], expect)
+		}
+	}
+}
