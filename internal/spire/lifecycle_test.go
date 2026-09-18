@@ -22,8 +22,8 @@ import (
 //
 // # ID COLLISION, for a human to settle
 //
-// This issue's acceptance criteria name SPI-008 for "second lapse records a
-// second withdrawal". `internal/spire/reconcile_test.go` already claims SPI-008
+// This issue's acceptance criteria name SPI-014 for "second lapse records a
+// second withdrawal". `internal/spire/reconcile_test.go` already claims SPI-014
 // for SPIRE entry reconciliation (RM-019, #27), in a header that says the row
 // is "NOT YET IN DOC 07" and must be added by a human. Doc 07 §TC-SPI still
 // stops at SPI-007, so neither claim is in the catalogue and neither can be
@@ -31,7 +31,7 @@ import (
 // collision is reported rather than silently renumbered.
 
 // ---------------------------------------------------------------------------
-// SPI-008 — a run that lapses twice is recorded twice.
+// SPI-014 — a run that lapses twice is recorded twice.
 //
 //	A run lapses, is restored, works, and lapses again
 //	→ a SECOND `run_expired` is appended, and the entry is never deleted
