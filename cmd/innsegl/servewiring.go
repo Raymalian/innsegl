@@ -821,6 +821,20 @@ func configureSignCommit(
 		Operators:     o.signAuthorOperators,
 		AllowUnlinked: o.signAllowUnlinked,
 	}
+	// THE WHOLE IDENTITY, not only the address (RM-159). `mcp.ConfigureSignCommit`
+	// asks the signer factory about the address, because that is what
+	// `sign_commit` holds at the moment it decides; the display name is
+	// configuration, it is known here, and here is the last place a deployment
+	// can be told that its own author line would be refused. A commit object
+	// carries `Name <address>` and gitsign writes this one name into BOTH the
+	// author and the committer field (internal/signing/gitsign.go), so one
+	// check at start-up covers both roles for every commit this process makes.
+	//
+	// The refusal is deliberately nameless: it reaches a process log.
+	if identErr := author.CheckIdentity(o.signAuthorName, o.signAuthorEmail); identErr != nil {
+		return nil, fmt.Errorf("the configured commit author is not admitted by the I6 "+
+			"policy, so this deployment would refuse its own first signature: %w", identErr)
+	}
 	signers := mcp.NewGitsignSigners(signing.Config{
 		FulcioURL:   o.fulcioURL,
 		RekorURL:    o.rekorURL,

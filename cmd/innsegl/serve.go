@@ -20,6 +20,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/mcp"
+	"innsegl.dev/innsegl/internal/signing"
 	"innsegl.dev/innsegl/internal/spire"
 )
 
@@ -219,7 +220,7 @@ type serveOptions struct {
 	oidcIssuer          string
 	signAuthorName      string
 	signAuthorEmail     string
-	signAuthorOperators []string
+	signAuthorOperators []signing.Operator
 	signAllowUnlinked   bool
 	gitsignPath         string
 
@@ -609,8 +610,12 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 			"commit author and committer email; the I6 gate admits it or refuses to start "+
 				"($"+envSignAuthorEmail+")")
 		signAuthorOperators = fs.String("sign-author-operators", os.Getenv(envSignAuthorOperators),
-			"comma-separated addresses this deployment attributes commits to (I6) "+
-				"($"+envSignAuthorOperators+")")
+			"comma-separated identities this deployment attributes commits to (I6), each "+
+				"`Name <address>` in git's own syntax. The display name is PINNED to the "+
+				"address: a commit on that address under any other name is refused. A bare "+
+				"address still parses and still admits the address, but pins no name and so "+
+				"admits no identity - state the pair. Never put a person's name in a tracked "+
+				"file; this is configuration ($"+envSignAuthorOperators+")")
 		signAllowUnlinked = fs.Bool("sign-author-allow-unlinked", envBool(envSignAllowUnlinked, false),
 			"admit an author address in a reserved, undelegatable domain (.invalid, .test, "+
 				"example.com and the rest) ($"+envSignAllowUnlinked+")")
@@ -738,6 +743,16 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		return serveOptions{}, exitUsage, false
 	}
 
+	// Same reason, and internal/signing's own parser rather than a second one
+	// shaped like it: an entry that will not read is exit 2 with nothing
+	// opened, not a policy that quietly admits less than the operator wrote.
+	operators, opErr := signing.ParseOperators(splitOrigins(*signAuthorOperators))
+	if opErr != nil {
+		fprintf(stderr, "innsegl serve: -sign-author-operators (or $%s): %v\n",
+			envSignAuthorOperators, opErr)
+		return serveOptions{}, exitUsage, false
+	}
+
 	o := serveOptions{
 		dsn: *dsn, spireAddress: *spireAddress, trustDomain: *trustDomain,
 		serverID: *serverID, parentID: *parentID,
@@ -747,7 +762,7 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		observeBodyDir: *observeBodyDir, sessionDir: *sessionDir,
 		workspace: *workspace, oidcIssuer: *oidcIssuer,
 		signAuthorName: *signAuthorName, signAuthorEmail: *signAuthorEmail,
-		signAuthorOperators: splitOrigins(*signAuthorOperators),
+		signAuthorOperators: operators,
 		signAllowUnlinked:   *signAllowUnlinked,
 		gitsignPath:         *gitsignPath,
 		listen:              *listen, adminListen: *adminListen, also: alsoRun,

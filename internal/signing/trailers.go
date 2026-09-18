@@ -192,12 +192,24 @@ type Commit struct {
 // should not exist is detected only by GH-001's empirical test against a real
 // GitHub repository, long after the commit was pushed.
 type AuthorPolicy struct {
-	// Operators are the exact addresses this deployment attributes commits
+	// Operators are the exact identities this deployment attributes commits
 	// to — the human operator's, in whatever form that operator uses,
 	// including a GitHub `@users.noreply.github.com` address. Membership is
 	// something only the operator can state, so it is enumerated rather than
 	// matched by pattern.
-	Operators []string
+	//
+	// AN ENTRY IS A PAIR, address AND display name, because the address alone
+	// was not enough. Measured on this repository on 2026-09-18: an operator's
+	// real name is the author and the committer of four merge commits on
+	// origin/main, and this gate was green throughout — it took an email and
+	// the display name beside it was compared to nothing. See Operator and
+	// CheckIdentity in authoridentity.go.
+	//
+	// CheckAuthor still reads the address half alone, and deliberately: a
+	// commit read back with `git log --format=%ae` has no name in it, and so
+	// does the `sign_commit` call site. The pin is reached through
+	// CheckIdentity, by a caller that holds both.
+	Operators []Operator
 
 	// AllowUnlinked admits an address that CANNOT be attached to any GitHub
 	// account, because its domain is one of the names RFC 2606 §2 and
@@ -279,22 +291,44 @@ var reservedDomains = [...]string{"example.com", "example.net", "example.org"}
 // repo-level CI gate IP §6.9 requires can ask the same question this package
 // asks at signing time, rather than a second question shaped like it.
 func (p AuthorPolicy) CheckAuthor(email string) error {
+	return p.admit(email, "", false)
+}
+
+// admit is the gate, asked with or without a display name.
+//
+// ONE WALK, NOT TWO. CheckIdentity used to re-split the address and re-walk the
+// operator list to find out which entry had admitted it, which meant two copies
+// of "does this address match this entry" — the exact duplication this whole
+// issue is about, one layer down, and two error branches no test could reach
+// because the first walk had already rejected them. There is one walk, and
+// pinned decides whether it also asks about the name.
+func (p AuthorPolicy) admit(email, name string, pinned bool) error {
 	local, domain, err := splitAddress(email)
 	if err != nil {
 		return err
 	}
 	for _, op := range p.Operators {
-		opLocal, opDomain, opErr := splitAddress(op)
+		if op.Address == "" {
+			// A permitted display name that pins no address. It says nothing
+			// about who may author a commit, so the address half skips it —
+			// see Operator's documentation for what states one.
+			continue
+		}
+		opLocal, opDomain, opErr := splitAddress(op.Address)
 		if opErr != nil {
 			// A policy that cannot be read is a policy that admits nothing.
 			// Skipping the entry would turn a configuration typo into a
 			// silently narrower allowlist.
 			return fmt.Errorf("%w: the policy lists %q, which is not an address: %w",
-				ErrAuthorNotAdmitted, op, opErr)
+				ErrAuthorNotAdmitted, op.Address, opErr)
 		}
-		if local == opLocal && strings.EqualFold(domain, opDomain) {
+		if local != opLocal || !strings.EqualFold(domain, opDomain) {
+			continue
+		}
+		if !pinned {
 			return nil
 		}
+		return op.admitName(name, email)
 	}
 	// Exact match, and the same comparison the operator list uses: the local
 	// part is case-sensitive, the domain is not.
