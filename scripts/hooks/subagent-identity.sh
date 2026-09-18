@@ -543,8 +543,59 @@ case "$EVENT" in
         TASK="$(reply_field "$MARK" task)"
         WT="$(reply_field "$MARK" worktree)"
         TYPE="${AGENT_TYPE:-$(reply_field "$MARK" agent_type)}"
-        warn "$RUN_ID left $dirty uncommitted path(s) and signed nothing; capturing"
-        git -C "$DIR" add -A 2>/dev/null || true
+        # ONLY WHAT THIS RUN WROTE (#261). `git add -A` staged the whole tree, so
+        # a run became the signed author of whatever else happened to be
+        # uncommitted. Measured three times on 2026-09-18: a read-only review
+        # subagent signed 12 files and ~890 lines it had only read; a second
+        # capture took another agent's in-flight work, which that agent had to
+        # soft-reset and re-commit; a third took a one-line edit the session made.
+        # Each verified against Fulcio and Rekor under the wrong identity — worse
+        # than unsigned, because it is confidently wrong and permanent.
+        #
+        # The bound is the run's OWN record: its tool-call bodies name the files
+        # it wrote. NO RECORD, NO CAPTURE — a run that cannot say what it touched
+        # must not have the tree signed on its behalf, which is the bug itself.
+        # Refusing leaves the work in place and names the run to sign it under,
+        # which is what the old path reached only by luck when signing failed.
+        _bodies="${INNSEGL_LOG_DIR:-$HOME/.innsegl/log}/$RUN_ID"
+        _mine=""
+        if [ -d "$_bodies" ]; then
+          _mine="$(python3 - "$_bodies" "$DIR" <<'PYEOF' 2>/dev/null
+import json, os, pathlib, sys
+bodies, root = sys.argv[1], os.path.realpath(sys.argv[2])
+out = []
+for f in pathlib.Path(bodies).glob("*.json"):
+    try:
+        d = json.loads(f.read_text())
+    except Exception:
+        continue
+    if d.get("tool_name") not in ("Edit", "Write", "NotebookEdit"):
+        continue
+    fp = (d.get("tool_input") or {}).get("file_path")
+    if not isinstance(fp, str) or not fp:
+        continue
+    real = os.path.realpath(fp)
+    if real == root or real.startswith(root + os.sep):
+        out.append(os.path.relpath(real, root))
+print("\n".join(sorted(set(out))))
+PYEOF
+)"
+        else
+          warn "$RUN_ID left $dirty path(s) but its tool-call bodies are unreadable at $_bodies"
+          warn "  refusing to capture rather than sign work it may not have done (#261)"
+          warn "  the work is in $DIR; signing it later needs -r $RUN_ID"
+        fi
+
+        if [ -n "$_mine" ]; then
+          printf '%s\n' "$_mine" | while IFS= read -r _f; do
+            [ -n "$_f" ] && git -C "$DIR" add -- "$_f" 2>/dev/null || true
+          done
+        fi
+        _staged="$(git -C "$DIR" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')"
+        if [ "${_staged:-0}" = "0" ]; then
+          [ -d "$_bodies" ] && warn "$RUN_ID wrote nothing in $DIR that is uncommitted; capturing nothing of the $dirty path(s) there"
+        else
+          warn "$RUN_ID left $dirty uncommitted path(s); capturing the $_staged it wrote"
         MSG="chore(agent): work left by $TYPE run $RUN_ID
 
 Captured by the harness at SubagentStop because the run ended with $dirty
@@ -561,6 +612,7 @@ gate is what decides whether it may merge."
         # rather than written to a file nothing has ever read.
         ( cd "$DIR" && "$(signer)" -r "$RUN_ID" ${TASK:+-t "$TASK"} ${WT:+-w "$WT"} -m "$MSG" ) >&2 \
           || warn "could not sign $RUN_ID's work; it is staged in $DIR and signing it later needs -r $RUN_ID"
+        fi
       fi
     fi
 

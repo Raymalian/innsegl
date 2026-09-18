@@ -355,6 +355,64 @@ else
   bad "the frozen derivation is referenced from more than the library seam"
 fi
 
+# --- #261: capture is bounded to what the run actually wrote -------------------
+#
+# `git add -A` staged the whole tree, so a stopping run became the signed author
+# of whatever else was uncommitted. Measured three times on 2026-09-18, once by a
+# review subagent that had written nothing at all. The bound is the run's own
+# tool-call bodies; these drive the extraction the shim performs.
+
+bound() {   # $1 = body dir, $2 = worktree
+  python3 - "$1" "$2" <<'PYEOF' 2>/dev/null
+import json, os, pathlib, sys
+bodies, root = sys.argv[1], os.path.realpath(sys.argv[2])
+out = []
+for f in pathlib.Path(bodies).glob("*.json"):
+    try:
+        d = json.loads(f.read_text())
+    except Exception:
+        continue
+    if d.get("tool_name") not in ("Edit", "Write", "NotebookEdit"):
+        continue
+    fp = (d.get("tool_input") or {}).get("file_path")
+    if not isinstance(fp, str) or not fp:
+        continue
+    real = os.path.realpath(fp)
+    if real == root or real.startswith(root + os.sep):
+        out.append(os.path.relpath(real, root))
+print("\n".join(sorted(set(out))))
+PYEOF
+}
+
+CAPT="$WORK/capture"; mkdir -p "$CAPT/tree/sub" "$CAPT/bodies-readonly" "$CAPT/bodies-writer"
+: >"$CAPT/tree/mine.txt"; : >"$CAPT/tree/sub/theirs.txt"; : >"$CAPT/tree/elsewhere.txt"
+
+# A run that only read: no Edit/Write body at all.
+printf '{"tool_name":"Read","tool_input":{"file_path":"%s/tree/mine.txt"}}' "$CAPT" >"$CAPT/bodies-readonly/a.json"
+if [ -z "$(bound "$CAPT/bodies-readonly" "$CAPT/tree")" ]; then
+  ok "#261: a run that wrote nothing captures nothing"
+else
+  bad "#261: a read-only run would still have staged files"
+fi
+
+# A run that wrote one file, in a tree where other files are also dirty.
+printf '{"tool_name":"Edit","tool_input":{"file_path":"%s/tree/mine.txt"}}' "$CAPT" >"$CAPT/bodies-writer/a.json"
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/outside.txt"}}' "$CAPT" >"$CAPT/bodies-writer/b.json"
+got="$(bound "$CAPT/bodies-writer" "$CAPT/tree")"
+if [ "$got" = "mine.txt" ]; then
+  ok "#261: only the run's own writes are staged, and only inside its worktree"
+else
+  bad "#261: expected just mine.txt, got: $(echo "$got" | tr '\n' ' ')"
+fi
+
+# A body store that is not there: the run cannot say what it touched.
+if [ -z "$(bound "$CAPT/nonexistent" "$CAPT/tree")" ]; then
+  ok "#261: an unreadable body store yields nothing, so the shim refuses"
+else
+  bad "#261: a missing body store produced paths"
+fi
+
+
 echo
 echo "shim-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
