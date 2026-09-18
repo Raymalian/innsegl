@@ -45,7 +45,6 @@ export const strings = {
     commits: "Commits",
     registered: "Registered",
     retired: "Retired",
-    expired: "Expired",
     stillRunning: "Not ended",
     runId: "Run",
     chainPosition: "Latest chain position",
@@ -54,8 +53,62 @@ export const strings = {
     credentialExpiry: "Expires",
     credentialAudience: "Audience",
     noCredentials: "No credential was issued to this run.",
-    /* P2: the reason an end timestamp is absent is a fact, not a blank. */
-    noEnd: "This run has no retirement or expiry event in the ledger.",
+    /* P2: the reason an end timestamp is absent is a fact, not a blank.
+     *
+     * RETIREMENT ONLY. A withdrawal is not an ending and has its own cells
+     * below — collapsing the two into one "ended" fact is the conflation #256
+     * exists to undo. */
+    noEnd: "This run has no retirement event in the ledger.",
+  },
+
+  /* The lifecycle state, and the facts it was derived from (#256).
+   *
+   * ── THE RULE THESE SENTENCES OBEY ──────────────────────────────────────
+   *
+   * A page that states a conclusion must be able to state its evidence. Each
+   * sentence below therefore names the instants it rests on, in absolute UTC,
+   * on the page rather than behind a hover — the strip beside it carries the
+   * same instants as relative times, and a reader should not have to reach for
+   * a pointer to see what the word was derived from.
+   *
+   * ── AND THE CLAIM THEY DO NOT MAKE ─────────────────────────────────────
+   *
+   * None of them says an agent stopped. IP E7 forbids inferring liveness, and
+   * the reason is not delicacy: an agent waiting on a provider usage limit,
+   * running a long build, or on a sleeping machine is silent and alive.
+   * "Abandoned" is a statement about what THIS SYSTEM will no longer do —
+   * restore an identity — and never about what became of the agent. FE-132
+   * scans every string here for the vocabulary that would break that.
+   */
+  state: {
+    lastActivity: "Last activity",
+    withdrawn: "Credential withdrawn",
+    restorableUntil: "Restorable until",
+    parent: "Parent run",
+    horizon: "Restore horizon",
+    /* P2: each of these says WHY the cell beside it is empty. */
+    noActivity: "Nothing but the reaper has ever been recorded for this run.",
+    noWithdrawal: "The reaper has never withdrawn this run's credential.",
+    noHorizon:
+      "No restore horizon is set, so a withdrawn run stays restorable until it is retired.",
+    /* Not the same as the line above, and the difference matters: one is a
+     * deployment's choice, the other is this dashboard not having been told. */
+    horizonUnknown:
+      "The query API did not report the horizon this state was computed with.",
+    /* The conclusion, in one sentence, for each state. */
+    active: (heard: string) => `Last heard from at ${heard}.`,
+    activeAfterWithdrawal: (heard: string, withdrawn: string) =>
+      `Last heard from at ${heard}, which is later than the credential withdrawal at ${withdrawn}. The lapse is in the timeline below.`,
+    lapsed: (heard: string, until: string) =>
+      `Nothing heard since ${heard}. The identity can be restored by resuming this run until ${until}.`,
+    lapsedUnbounded: (heard: string) =>
+      `Nothing heard since ${heard}. No horizon is set, so the identity can be restored by resuming this run.`,
+    abandoned: (heard: string) =>
+      `Nothing heard since ${heard}; the identity can no longer be restored.`,
+    retired: (at: string) =>
+      `Ended at ${at} by its harness or by a person, which is a decision someone stated rather than silence this system observed.`,
+    unrecognised:
+      "This dashboard does not recognise the state the query API reported for this run.",
   },
 
   /* The tab control that holds the timeline and the activity log. The label is
@@ -210,13 +263,17 @@ export const strings = {
     alertMeaning: "The reconciler found something the external record does not support.",
     degraded: "Ended without completing",
     degradedMeaning: "What this event describes was started and never finished.",
-    /* doc 06 §3.2: expired "means an agent died unretired". Its own words, not
-     * the ones above: a promised commit that never arrived and an identity that
-     * ran out under an agent still working are two different degradations, and
-     * P2 forbids collapsing them into one. */
-    expired: "Credential ran out",
+    /* The `run_expired` node's own words, not the ones above: a promised
+     * commit that never arrived and a credential withdrawn from a run that
+     * went quiet are two different degradations, and P2 forbids collapsing
+     * them into one.
+     *
+     * It says what the REAPER did, which is the only thing recorded. It does
+     * not say the run ended — see the `state` catalogue above for why this
+     * system is not entitled to that. */
+    expired: "Credential withdrawn",
     expiredMeaning:
-      "The reaper withdrew this run's credential because it reached its expiry. Anything the agent did afterwards had no identity behind it.",
+      "The reaper withdrew this run's credential after it went quiet past policy. Anything done under that identity afterwards had nothing behind it until the run was resumed.",
   },
 
   time: {

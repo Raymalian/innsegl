@@ -47,7 +47,9 @@ export function overview(): OverviewData {
   return {
     active_runs: 3,
     retired_runs: 41,
-    expired_runs: 1,
+    lapsed_runs: 1,
+    abandoned_runs: 0,
+    restore_horizon_seconds: 30 * 24 * 60 * 60,
     commits_recorded: 12,
     open_alerts: 0,
     anchor: anchor(),
@@ -72,8 +74,9 @@ function runSummary(overrides: Partial<RunSummary> = {}): RunSummary {
 }
 
 /** One page of the runs table: the retired run every other fixture agrees
- * with, plus an active one — so both StatusBadge treatments are on screen for
- * the a11y and green-audit walkthroughs, not just one. */
+ * with, plus one of each remaining lifecycle state — so every StatusBadge
+ * treatment is on screen for the a11y, contrast and green-audit walkthroughs
+ * rather than one of them (#256). */
 export function runPage(overrides: Partial<RunPage> = {}): RunPage {
   const runs = [
     runSummary(),
@@ -87,11 +90,37 @@ export function runPage(overrides: Partial<RunPage> = {}): RunPage {
       registered_at: "2026-08-31T11:55:00.000Z",
       last_event_at: "2026-08-31T11:55:00.000Z",
     }),
+    runSummary({
+      run_id: "run-d4e5f6",
+      spiffe_id: "spiffe://innsegl.dev/agent/fix-ci/task-1477/run-d4e5f6",
+      task_ref: "JIRA-122",
+      status: "lapsed",
+      commits: 0,
+      registered_at: "2026-08-31T09:02:00.000Z",
+      last_event_at: "2026-08-31T10:30:00.000Z",
+      last_activity_at: "2026-08-31T09:40:00.000Z",
+      withdrawn_at: "2026-08-31T10:30:00.000Z",
+      restorable_until: "2026-09-30T10:30:00.000Z",
+    }),
+    runSummary({
+      run_id: "run-7a8b9c",
+      spiffe_id: "spiffe://innsegl.dev/agent/release-notes/task-902/run-7a8b9c",
+      agent_type: "release-notes",
+      task_ref: "JIRA-090",
+      status: "abandoned",
+      commits: 0,
+      registered_at: "2026-07-01T08:00:00.000Z",
+      last_event_at: "2026-07-01T09:00:00.000Z",
+      last_activity_at: "2026-07-01T08:30:00.000Z",
+      withdrawn_at: "2026-07-01T09:00:00.000Z",
+      restorable_until: "2026-07-31T09:00:00.000Z",
+    }),
   ];
   return {
     runs,
     total: runs.length,
     limit: 200,
+    restore_horizon_seconds: 30 * 24 * 60 * 60,
     data_as_of: "2026-08-31T12:00:00.000Z",
     ...overrides,
   };
@@ -106,7 +135,10 @@ export function windowedCount(total: number): RunPage {
 /** `GET /api/v1/runs/{run_id}` — the run this suite's run-detail fixtures
  * name (RUN_ID, "run-7f3a2c"), reused verbatim rather than re-specified. */
 export function detail(): RunDetail {
-  return runDetail();
+  return runDetail(undefined, "retired", {
+    last_activity_at: "2026-08-31T11:46:00.000Z",
+    restore_horizon_seconds: 30 * 24 * 60 * 60,
+  });
 }
 
 /** `GET /api/v1/proof/{commit_sha}` — every check verified, the only proof

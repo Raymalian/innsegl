@@ -50,7 +50,8 @@ interface Case {
 const CASES: readonly Case[] = [
   { name: "status: active", ui: <StatusBadge status="active" />, semantic: true },
   { name: "status: retired", ui: <StatusBadge status="retired" />, semantic: true },
-  { name: "status: expired", ui: <StatusBadge status="expired" />, semantic: true },
+  { name: "status: lapsed", ui: <StatusBadge status="lapsed" />, semantic: true },
+  { name: "status: abandoned", ui: <StatusBadge status="abandoned" />, semantic: true },
   {
     name: "staleness marker",
     ui: (

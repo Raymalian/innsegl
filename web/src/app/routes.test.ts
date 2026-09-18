@@ -58,7 +58,7 @@ describe("FE-010 URL carries every view's state", () => {
     "/",
     "/runs",
     "/runs?repo=acme%2Fwidgets",
-    "/runs?repo=acme%2Fwidgets&agent_type=fix-ci&status=expired&q=flake&from=2026-08-01T00%3A00%3A00Z&to=2026-08-30T00%3A00%3A00Z&cursor=4821&limit=25",
+    "/runs?repo=acme%2Fwidgets&agent_type=fix-ci&status=lapsed&q=flake&from=2026-08-01T00%3A00%3A00Z&to=2026-08-30T00%3A00%3A00Z&cursor=4821&limit=25",
     "/runs/run-7f3a",
     "/repos/acme%2Fwidgets",
     "/repos/acme%2Fwidgets?from=2026-08-01T00%3A00%3A00Z&to=2026-08-30T00%3A00%3A00Z",
@@ -74,14 +74,14 @@ describe("FE-010 URL carries every view's state", () => {
 
   it("restores every runs filter from a copied link", () => {
     const route = parseRoute(
-      "/runs?repo=acme%2Fwidgets&agent_type=fix-ci&status=expired&q=flake&from=2026-08-01T00%3A00%3A00Z&to=2026-08-30T00%3A00%3A00Z&cursor=4821&limit=25",
+      "/runs?repo=acme%2Fwidgets&agent_type=fix-ci&status=lapsed&q=flake&from=2026-08-01T00%3A00%3A00Z&to=2026-08-30T00%3A00%3A00Z&cursor=4821&limit=25",
     );
     expect(route).toEqual({
       view: "runs",
       filters: {
         repo: "acme/widgets",
         agentType: "fix-ci",
-        status: "expired",
+        status: "lapsed",
         search: "flake",
         from: "2026-08-01T00:00:00Z",
         to: "2026-08-30T00:00:00Z",

@@ -38,11 +38,18 @@ export const emphasisBorder =
 /** The same rule, on one edge. Table rows separate downwards. */
 const hairlineBottom = "border-b-[length:var(--innsegl-border-width-hairline)]";
 
-/* doc 06 §3.2 requires Expired to be "styled distinctly from retired", and
- * doc 06 §5.3 puts both in neutral grey — so the distinction cannot be a hue
- * and this is where it lives instead. The dashed style is a token, so a
- * rebrand can restyle it and no component has to know. */
-export const expiredOutline = `border-[length:var(--innsegl-border-width-hairline)] [border-style:var(--innsegl-border-style-status-expired)]`;
+/* doc 06 §3.2 requires a withdrawn run to be "styled distinctly from retired",
+ * and doc 06 §5.3 puts every run state in neutral grey — so the distinction
+ * cannot be a hue and this is where it lives instead. The dashed style is a
+ * token, so a rebrand can restyle it and no component has to know.
+ *
+ * Both withdrawn states wear it (#256): Lapsed and Abandoned differ from
+ * Retired in the same way — the reaper took the credential, nobody said stop —
+ * and they differ from each other by word and by icon. The TOKEN is still
+ * named for the `run_expired` event that produces the outline, which is the
+ * one place that word is still correct.
+ */
+export const withdrawnOutline = `border-[length:var(--innsegl-border-width-hairline)] [border-style:var(--innsegl-border-style-status-expired)]`;
 
 /** doc 06 §5.5: state transitions only, and the sheet collapses these to 1ms
  * under prefers-reduced-motion so a component need not ask. */
@@ -60,17 +67,28 @@ export const identifierText =
   // catch it, which is why a rendered check is not optional (doc 06 P4).
   "font-mono text-body break-all [font-variant-numeric:var(--innsegl-font-variant-numeric-tabular)]";
 
-/** Badge geometry, shared by all three run statuses so only the non-colour
- * cues distinguish them (doc 06 §3.2). */
+/** Badge geometry, shared by all four run states so only the non-colour cues
+ * distinguish them (doc 06 §3.2). */
 export const badgeBase =
   "inline-flex items-center gap-1 rounded-pill px-2 py-0 text-micro leading-tight whitespace-nowrap";
 
-/** The three run statuses. Neutral, all of them: none is a verdict (§5.3). */
+/* The four run states. Neutral, all of them: none is a verdict (§5.3).
+ *
+ * Three tones for four states, on purpose. The tone answers "is there anything
+ * still to expect from this run", and Abandoned and Retired answer it the same
+ * way — quietly — while differing in word, icon and outline. Spending a fourth
+ * neutral on a distinction the reader already has in three other channels
+ * would be a colour carrying nothing.
+ *
+ * The token family is still spelled `status-expired`. It is named for the
+ * `run_expired` event the outline belongs to (doc 02 §3, protected), not for a
+ * state: no run reads "Expired" any more.
+ */
 export const statusActive =
   "text-status-active bg-status-active-surface border-status-active-line";
 export const statusRetired =
   "text-status-retired bg-status-retired-surface border-status-retired-line";
-export const statusExpired =
+export const statusWithdrawn =
   "text-status-expired bg-status-expired-surface border-status-expired-line";
 
 /* ── labels and fact strips ─────────────────────────────────────────────────

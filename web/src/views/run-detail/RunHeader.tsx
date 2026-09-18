@@ -33,12 +33,24 @@
  *
  * ── REGISTERED AND RETIRED ARE NOT THE SAME KIND OF FACT ───────────────────
  *
- * `registered_at` is a column of the run index. The end of a run is not: it is
- * a `run_retired` or a `run_expired` EVENT, and which of the two it is changes
- * what the reader should conclude — doc 06 §3.2, "expired ... means an agent
- * died unretired". So the end is read out of the timeline, labelled with the
- * word that matches the event that ended it, and a run with neither says so in
- * a sentence rather than showing an empty cell (doc 06 P2, §4.6).
+ * `registered_at` is a column of the run index. The END of a run is not: it is
+ * a `run_retired` EVENT, read out of the timeline, and a run without one says
+ * so in a sentence rather than showing an empty cell (doc 06 P2, §4.6).
+ *
+ * A `run_expired` is NOT an end and is no longer labelled as one (#256). The
+ * reaper withdrawing a credential from a run that went quiet is this system
+ * acting on silence; the run may be resumed, and the header now says exactly
+ * that under `Credential withdrawn` rather than filing it beside a retirement.
+ *
+ * ── THE STATE CARRIES ITS EVIDENCE, ON THE PAGE ────────────────────────────
+ *
+ * The badge is one word and the words are close together: Lapsed and Abandoned
+ * are the same run seen against two different horizons. A word without the
+ * horizon is a verdict a reader cannot check, which is doc 06 P1 one level up
+ * from a verification. So the state sentence names the instants it rests on in
+ * absolute UTC — on the page, not behind a hover, because a pointer is not
+ * something every reader has — and the strip repeats them as relative times
+ * with the absolute available four ways (see RelativeTime).
  *
  * ── THE CREDENTIAL HISTORY IS A TABLE ──────────────────────────────────────
  *
@@ -51,6 +63,10 @@
 import { IdentifierChip } from "../../components/common/IdentifierChip";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import type { RunStatus } from "../../components/common/StatusBadge";
+import {
+  formatAbsoluteUtc,
+  formatDuration,
+} from "../../components/common/time";
 import { Instant } from "./RelativeTime";
 import { strings } from "./strings";
 import {
@@ -71,8 +87,8 @@ import {
   tablePanel,
   tableScroll,
 } from "./styles";
-import { credentialHistory, runEnd, toolCallCount } from "./events";
-import type { RunSummary, TimelineEvent } from "./types";
+import { credentialHistory, parseInstant, runEnd, toolCallCount } from "./events";
+import type { RunDetail, TimelineEvent } from "./types";
 
 /**
  * Wider than any identifier can be, so `truncateIdentifier` returns the value
@@ -81,12 +97,30 @@ import type { RunSummary, TimelineEvent } from "./types";
  */
 const NEVER_TRUNCATED = Number.MAX_SAFE_INTEGER;
 
-/** The three the API can return (`internal/api/query.go`). Anything else is
+/**
+ * How many cells the strip always has, before the conditional ones.
+ *
+ * Agent, Task, Tool calls, Commits, Registered, the end of the run, Last
+ * activity, Credential withdrawn, Restore horizon, Latest chain position,
+ * Run. Repositories is excluded: it takes the whole row already.
+ *
+ * It is a constant so the orphan check below can be read against the JSX
+ * rather than inferred from it. A count that drifts out of step shows up as a
+ * ragged final row in a browser, which is what FE-128 walks every view for.
+ */
+const FIXED_FACTS = 11;
+
+/** The four the API can return (`internal/api/query.go`). Anything else is
  * rendered without a badge rather than mapped to a guess. */
-const KNOWN_STATUSES: readonly RunStatus[] = ["active", "retired", "expired"];
+const KNOWN_STATUSES: readonly RunStatus[] = [
+  "active",
+  "lapsed",
+  "abandoned",
+  "retired",
+];
 
 export interface RunHeaderProps {
-  readonly run: RunSummary;
+  readonly run: RunDetail;
   readonly events: readonly TimelineEvent[];
   readonly now: Date;
 }
@@ -94,14 +128,25 @@ export interface RunHeaderProps {
 export function RunHeader({ run, events, now }: RunHeaderProps) {
   const status = KNOWN_STATUSES.find((known) => known === run.status);
   const end = runEnd(events);
+  const retirement = end !== null && end.kind === "retired" ? end : null;
   const credentials = credentialHistory(events);
   const repos = run.repos ?? [];
+  const parent =
+    run.parent_run_id === undefined || run.parent_run_id === ""
+      ? undefined
+      : run.parent_run_id;
+  /* A fact that lands alone on the final row sits beside three empty cells,
+   * which reads as missing data rather than as the end of the strip — the
+   * argument `wide` was added for. The strip's length now varies with how much
+   * evidence the run has (#256), so the last ordinary cell takes the row when
+   * it would otherwise be the only thing on it. MEASURED in a browser: a run
+   * with both a restorable-until and a parent left "Run" alone. */
+  const factCount =
+    FIXED_FACTS +
+    (run.restorable_until === undefined ? 0 : 1) +
+    (parent === undefined ? 0 : 1);
   const endLabel =
-    end === null
-      ? strings.header.stillRunning
-      : end.kind === "retired"
-        ? strings.header.retired
-        : strings.header.expired;
+    retirement === null ? strings.header.stillRunning : strings.header.retired;
 
   return (
     <header className={headerStack}>
@@ -117,6 +162,10 @@ export function RunHeader({ run, events, now }: RunHeaderProps) {
           maxLength={NEVER_TRUNCATED}
         />
       </div>
+
+      <p className={secondaryText} data-run-state={run.status}>
+        {stateSentence(run)}
+      </p>
 
       <dl className={factStrip}>
         <Fact label={strings.header.agentType} value={run.agent_type} />
@@ -134,17 +183,65 @@ export function RunHeader({ run, events, now }: RunHeaderProps) {
           />
         </Fact>
         <Fact label={endLabel}>
-          {end === null ? (
+          {retirement === null ? (
             <span className={secondaryText}>{strings.header.noEnd}</span>
           ) : (
-            <Instant value={end.at} now={now} label={endLabel} />
+            <Instant value={retirement.at} now={now} label={endLabel} />
           )}
         </Fact>
+
+        {/* The evidence for the badge (#256). Five facts, and every one of
+          * them is a recorded instant, a recorded id, or arithmetic over the
+          * two — nothing here is an inference about an agent. */}
+        <Fact label={strings.state.lastActivity}>
+          {run.last_activity_at === undefined ? (
+            <span className={secondaryText}>{strings.state.noActivity}</span>
+          ) : (
+            <Instant
+              value={run.last_activity_at}
+              now={now}
+              label={strings.state.lastActivity}
+            />
+          )}
+        </Fact>
+        <Fact label={strings.state.withdrawn}>
+          {run.withdrawn_at === undefined ? (
+            <span className={secondaryText}>{strings.state.noWithdrawal}</span>
+          ) : (
+            <Instant
+              value={run.withdrawn_at}
+              now={now}
+              label={strings.state.withdrawn}
+            />
+          )}
+        </Fact>
+        {run.restorable_until === undefined ? null : (
+          <Fact label={strings.state.restorableUntil}>
+            <Instant
+              value={run.restorable_until}
+              now={now}
+              label={strings.state.restorableUntil}
+            />
+          </Fact>
+        )}
+        <Fact label={strings.state.horizon}>
+          {horizonOf(run) === undefined ? (
+            <span className={secondaryText}>{horizonSentence(run)}</span>
+          ) : (
+            horizonOf(run)
+          )}
+        </Fact>
+        {parent === undefined ? null : (
+          <Fact label={strings.state.parent}>
+            <IdentifierChip value={parent} kind="run" maxLength={NEVER_TRUNCATED} />
+          </Fact>
+        )}
+
         <Fact
           label={strings.header.chainPosition}
           value={String(run.chain_position)}
         />
-        <Fact label={strings.header.runId}>
+        <Fact label={strings.header.runId} wide={factCount % 4 === 1}>
           <IdentifierChip value={run.run_id} kind="run" maxLength={NEVER_TRUNCATED} />
         </Fact>
 
@@ -234,6 +331,80 @@ export function RunHeader({ run, events, now }: RunHeaderProps) {
       </section>
     </header>
   );
+}
+
+/* ── the state, and the facts under it ──────────────────────────────────────
+ *
+ * Four functions over data, no JSX between them. They are here rather than in
+ * events.ts because every one of them reads the run INDEX rather than the
+ * event chain — events.ts is the module that decides things from the timeline,
+ * and mixing the two sources in one file is how a view ends up with two
+ * answers to the same question.
+ */
+
+/** The instant a reader means by "nothing heard since".
+ *
+ * `last_activity_at` is the newest event the reaper did not write. A run whose
+ * whole record is the reaper's has none, and then the honest answer is the
+ * moment it registered — which is still a recorded fact and still the last
+ * time anything but the reaper said anything about it. */
+function heardAt(run: RunDetail): string {
+  return formatAbsoluteUtc(
+    parseInstant(run.last_activity_at) ??
+      parseInstant(run.registered_at) ??
+      new Date(0),
+  );
+}
+
+/** The horizon as a duration, or undefined when there is no number to show —
+ * either because the deployment set none or because the query API did not say.
+ * The two are different facts and `horizonSentence` tells them apart (P2). */
+function horizonOf(run: RunDetail): string | undefined {
+  const seconds = run.restore_horizon_seconds;
+  if (seconds === undefined || seconds <= 0) return undefined;
+  return formatDuration(seconds * 1000);
+}
+
+/** Which absence this is. */
+function horizonSentence(run: RunDetail): string {
+  return run.restore_horizon_seconds === undefined
+    ? strings.state.horizonUnknown
+    : strings.state.noHorizon;
+}
+
+/**
+ * What this page concludes, and what it concluded it from.
+ *
+ * One sentence per state, each naming its instants. The two withdrawn states
+ * open the same way — "Nothing heard since X" — because that is the fact they
+ * share; they part on what can still be done about it, which is the only thing
+ * the horizon decides and the only thing this system is entitled to say.
+ */
+function stateSentence(run: RunDetail): string {
+  const heard = heardAt(run);
+  const withdrawn = parseInstant(run.withdrawn_at);
+  const until = parseInstant(run.restorable_until);
+
+  switch (run.status) {
+    case "active":
+      return withdrawn === null
+        ? strings.state.active(heard)
+        : strings.state.activeAfterWithdrawal(heard, formatAbsoluteUtc(withdrawn));
+    case "lapsed":
+      return until === null
+        ? strings.state.lapsedUnbounded(heard)
+        : strings.state.lapsed(heard, formatAbsoluteUtc(until));
+    case "abandoned":
+      return strings.state.abandoned(heard);
+    case "retired":
+      return strings.state.retired(
+        formatAbsoluteUtc(parseInstant(run.last_event_at) ?? new Date(0)),
+      );
+    default:
+      // A word this build does not know. Said plainly rather than mapped to
+      // the nearest one it does (P2).
+      return strings.state.unrecognised;
+  }
 }
 
 /** One cell of the strip: a label, and the value under it. Both halves come

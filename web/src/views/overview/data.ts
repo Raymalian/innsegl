@@ -217,6 +217,12 @@ function isOverview(body: unknown): body is OverviewData {
   const o = body as Record<string, unknown>;
   return (
     typeof o["active_runs"] === "number" &&
+    // #256's two counts are required, not optional: a build that rendered
+    // `undefined` as a count would print "NaN" where a number belongs, and a
+    // server that does not send them is a server this dashboard cannot report
+    // the lifecycle of. Saying so beats guessing (P2).
+    typeof o["lapsed_runs"] === "number" &&
+    typeof o["abandoned_runs"] === "number" &&
     typeof o["commits_recorded"] === "number" &&
     typeof o["open_alerts"] === "number" &&
     typeof o["anchor"] === "object" &&

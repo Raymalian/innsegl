@@ -66,7 +66,13 @@ export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 200;
 
 /** One row of the runs table — internal/api/query.go's RunSummary, field for
- * field and spelling for spelling. */
+ * field and spelling for spelling.
+ *
+ * The four optional members are the EVIDENCE for `status` (#256). Optional
+ * here because `omitempty` omits them there: a run that was never withdrawn
+ * carries no withdrawal instant, and the alternative — Go's zero time on the
+ * wire — would reach a reader as "0001-01-01T00:00:00Z", a timestamp they have
+ * every right to read as a timestamp. */
 export interface RunSummary {
   readonly run_id: string;
   readonly spiffe_id: string;
@@ -78,6 +84,14 @@ export interface RunSummary {
   readonly chain_position: number;
   readonly registered_at: string;
   readonly last_event_at: string;
+  /** The newest event on this run the reaper did NOT write. */
+  readonly last_activity_at?: string;
+  /** The newest `run_expired`: when the reaper last withdrew the credential. */
+  readonly withdrawn_at?: string;
+  /** `withdrawn_at` plus the restore horizon. */
+  readonly restorable_until?: string;
+  /** The run that started this one, where `run_registered` recorded one. */
+  readonly parent_run_id?: string;
 }
 
 /** One page of the runs table — internal/api/query.go's RunPage. */
@@ -87,6 +101,10 @@ export interface RunPage {
   readonly limit: number;
   /** Absent at the end of the set. A keyset cursor, not an offset. */
   readonly next_cursor?: string;
+  /** The horizon every `status` on this page was computed with, in seconds; 0
+   * means the deployment set none. One number for the whole answer, because
+   * Lapsed and Abandoned differ by nothing else (#256). */
+  readonly restore_horizon_seconds?: number;
   readonly data_as_of: string;
 }
 
