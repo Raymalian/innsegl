@@ -156,6 +156,45 @@ else
   IDENT_TYPE="${INNSEGL_SESSION_AGENT_TYPE:-session}"
 fi
 
+# THE SESSION THAT STARTED THIS ONE, in this harness's own vocabulary — and
+# nothing more than that. RM-156 (#259).
+#
+# This used to be a LOOKUP. The shim read a sibling marker file out of its own
+# cache and sent the run id it found there, which worked on the one path it was
+# written for: measured, 21 registrations out of 185 carried a parent and every
+# one came through SubagentStart. The first-sight registration a tool call
+# makes had none, because this file has no run id to give it at that point, and
+# neither has any other harness.
+#
+# So the lookup moved into the MCP, which is the only component holding the
+# durable session → run mapping. What is left here is the identifier this
+# harness already has. A subagent's parent is the session that spawned it; the
+# operator's own session has no parent, and absent is not an error — mcp_call
+# omits an empty value rather than sending one, and doc 02 §1 distinguishes
+# absent from empty.
+if [ -n "$AGENT_ID" ]; then
+  PARENT_IDENT="$SESSION_ID"
+else
+  PARENT_IDENT=""
+fi
+# A harness that reports one id for both is reporting no parent. Sending it
+# would be a session naming itself, which the MCP refuses — and a refused
+# SubagentStart is a subagent that does no work.
+[ "$PARENT_IDENT" != "$IDENT" ] || PARENT_IDENT=""
+
+# tree_key names the pointer a working tree is indexed by, in one place.
+#
+# Three callers now write or remove one — SessionStart, SubagentStart and
+# SubagentStop — and scripts/innsegl-commit.sh reads them. A derivation
+# repeated at each site is a derivation that can disagree at one of them, and a
+# pointer written under a key nobody reads is silent: attribution simply goes
+# back to being a throwaway identity per commit.
+tree_key() {
+  _t="$(CDPATH= cd -- "${1:-.}" 2>/dev/null && pwd -P)"
+  [ -n "$_t" ] || return 1
+  printf '%s' "$_t" | shasum -a 256 2>/dev/null | cut -c1-32
+}
+
 warn() { echo "innsegl: $*" >&2; }
 
 # say_detail passes on a reply's `detail`, which is how observe_session reports
@@ -268,35 +307,15 @@ body = json.load(sys.stdin); body["dir"] = sys.argv[1]; print(json.dumps(body))
 
 recall() { cat "$MARKER" 2>/dev/null; }
 
-# parent_run prints the run that STARTED this one, or nothing.
+# THE PARENT LOOKUP THAT USED TO BE HERE IS GONE — RM-156 (#259).
 #
-# ADR-0045's third member (RM-135, #214). A subagent is keyed by its agent id
-# and the session that spawned it is keyed by the session id, so the parent's
-# marker is the sibling file named by SESSION_ID — this shim already writes one
-# per identity and this reads the other one.
-#
-# NOTHING IS PRINTED WHEN THERE IS NO PARENT, and that is three cases, not one:
-# a main session (whose KEY already IS the session id), a subagent whose parent
-# session never registered because the deployment was down, and a harness that
-# reports no session id at all. All three are root runs, absent is not an error,
-# and mcp_call omits an empty value rather than sending one — doc 02 §1
-# distinguishes absent from empty, and a root run naming an empty parent would
-# be claiming one it does not have.
-# THE PARENT'S MARKER IS NAMED `session-<id>`, NOT `<id>`, and getting that
-# wrong is silent: parent_run simply found no file and every subagent stayed a
-# root run, which is indistinguishable from having no parent. Measured — the
-# first version of this read $RUNS_DIR/$SESSION_ID and the selftest case that
-# asserts the edge went red against a shim that looked correct.
-#
-# The prefix exists because a subagent's marker is keyed on its AGENT id and a
-# session's on its session id, and the two id spaces are not guaranteed
-# disjoint. The same reason IDENT exists above.
-parent_run() {
-  [ -n "${SESSION_ID:-}" ] || return 0
-  _parent_key="session-${SESSION_ID}"
-  [ "$_parent_key" != "$KEY" ] || return 0
-  reply_field "$(cat "$RUNS_DIR/$_parent_key" 2>/dev/null)" run_id
-}
+# It read a sibling marker file, pulled `run_id` out of it, and sent that run id
+# to observe_session. Everything about it was right except where it lived: it
+# resolved a run, which is the one thing E11 says no harness should have to
+# know about, and so the two registration paths that hold no run id — the
+# first-sight registration a tool call makes, and the signer — could not have
+# an edge at all. See PARENT_IDENT above: this file now forwards the session
+# identifier it already has, and the MCP resolves it.
 
 # ---------------------------------------------------------------------------
 # The signer, resolved most portable first.
@@ -384,6 +403,39 @@ case "$EVENT" in
     RUN_ID="$(reply_field "$REPLY" run_id)"
     [ -n "$RUN_ID" ] || exit 0
     remember "$REPLY" "$CWD" || warn "could not write this session's marker under $RUNS_DIR"
+
+    # AND A POINTER KEYED BY THE WORKING TREE, so that the SIGNER has a parent
+    # to name — RM-156 (#259).
+    #
+    # Measured 2026-09-18: 87 `orchestrator` runs in the ledger, every one of
+    # them registered by scripts/innsegl-commit.sh, and not one carrying a
+    # parent. That is not because they had none. A shell command cannot
+    # discover which agent it is inside — no environment variable carries an
+    # agent or a session id — and the signer has neither, so it had nothing to
+    # send and nothing the MCP could resolve for it.
+    #
+    # The working tree is the one thing both sides can see, which is the same
+    # observation the subagent pointer below rests on. This is its sibling, and
+    # it answers a different question: not "which run signs here" but "which
+    # session is this tree's".
+    #
+    # IT CANNOT COLLIDE WITH THE SUBAGENT POINTER. That one's name is exactly
+    # the 32 hex characters of the tree key, and SubagentStop removes that exact
+    # name; this one carries a `.session` suffix, which no tree key can spell.
+    # Getting that wrong would be silent in the worst way — a SubagentStop would
+    # delete the session's pointer and every later commit in the tree would go
+    # back to being parentless, which is indistinguishable from this change
+    # never having been made.
+    #
+    # Line 2 is not read by anything. It is there so a human opening the file
+    # can see which session the run at the top of it belongs to.
+    _key="$(tree_key "$CWD" || true)"
+    if [ -n "$_key" ] && mkdir -p "$RUNS_DIR/by-tree" 2>/dev/null; then
+      printf '%s\n%s\n' "$RUN_ID" "$SESSION_ID" \
+        > "$RUNS_DIR/by-tree/$_key.session" 2>/dev/null \
+        || warn "could not write this tree's session pointer; commits here will name no parent"
+    fi
+
     warn "this session is $RUN_ID (task $(reply_field "$REPLY" task))"
     say_detail "$REPLY"
 
@@ -415,6 +467,9 @@ case "$EVENT" in
     # Never exit 2. See the header.
     [ -n "$SESSION_ID" ] || exit 0
     [ -f "$MARKER" ] || exit 0
+    # READ BEFORE THE MARKER IS REMOVED. It is the only record of which tree
+    # this session's pointer was keyed on, and it is deleted a few lines below.
+    END_DIR="$(reply_field "$(recall)" dir)"
     # if/else rather than `&& { ... } || ...`: a block whose LAST command is a
     # conditional warn returns that condition's status, so the `||` arm fires
     # after a successful stop and the hook reports the retirement and its own
@@ -430,6 +485,17 @@ case "$EVENT" in
     # the mapping a later stop retries from, so removing this loses nothing —
     # which is precisely what moving the bookkeeping bought.
     rm -f "$MARKER"
+    # AND THE TREE'S SESSION POINTER GOES WITH IT. The run it names has just
+    # been retired, and register_agent refuses a retired parent: a pointer left
+    # behind would make every commit in this tree take the fallback path, warn
+    # about a stale pointer, and register with no parent anyway. The reply's own
+    # cwd is not available on this event, so the marker's is what names the tree
+    # — the same value SessionStart keyed it on, read above before the marker
+    # went.
+    if [ -n "$END_DIR" ]; then
+      _key="$(tree_key "$END_DIR" || true)"
+      [ -n "$_key" ] && rm -f "$RUNS_DIR/by-tree/$_key.session" 2>/dev/null
+    fi
     exit 0
     ;;
 
@@ -438,17 +504,22 @@ case "$EVENT" in
     # that refuses, and the refusal is the enforcement.
     [ -n "$AGENT_ID" ] || exit 0
 
-    # THE PARENT RUN (RM-135, #214). The subagent's work was always attributed;
-    # what was missing is the EDGE — a reader could see both runs and not see
-    # that one produced the other, which is what "who did this work" resolves to
-    # the moment an orchestrator delegates.
+    # THE PARENT SESSION (RM-135, #214; RM-156, #259). The subagent's work was
+    # always attributed; what was missing is the EDGE — a reader could see both
+    # runs and not see that one produced the other, which is what "who did this
+    # work" resolves to the moment an orchestrator delegates.
     #
-    # An empty value is omitted by mcp_call, so a subagent whose parent never
-    # registered stays a root run rather than naming a parent that is not there.
+    # THE SESSION ID, NOT A RUN ID. This file used to resolve the run itself and
+    # send that; the resolution is the MCP's now, because it is the part every
+    # other harness would otherwise have to reimplement. An empty value is
+    # omitted by mcp_call, so a subagent whose harness reports no session stays
+    # a root run rather than naming a parent that is not there — and so does one
+    # whose parent session this deployment has never seen, which the MCP answers
+    # with a root run and a `detail` rather than with a refusal.
     REPLY="$(mcp_call observe_session \
       session_id "$AGENT_ID" phase start cwd "$CWD" \
       agent_type "${AGENT_TYPE:-subagent}" \
-      parent_run_id "$(parent_run)")" || {
+      parent_session_id "$PARENT_IDENT")" || {
       warn "refused — no identity could be issued for this subagent."
       [ -n "${REPLY:-}" ] && warn "  $(reply_field "$REPLY" message | cut -c1-300)"
       warn "  No identity, no attributed work (IP §6.1). Bring the deployment up:"
@@ -501,10 +572,9 @@ case "$EVENT" in
     # throwaway identity per commit: 53 signed commits under ephemeral runs
     # while all 16 agent runs that did the work showed "Signed nothing". The
     # tree is the one thing both sides can see.
-    _tree="$(CDPATH= cd -- "${CWD:-.}" 2>/dev/null && pwd -P)"
-    if [ -n "$_tree" ] && mkdir -p "$RUNS_DIR/by-tree" 2>/dev/null; then
-      _key="$(printf '%s' "$_tree" | shasum -a 256 2>/dev/null | cut -c1-32)"
-      [ -n "$_key" ] && printf '%s\n%s\n%s\n' \
+    _key="$(tree_key "$CWD" || true)"
+    if [ -n "$_key" ] && mkdir -p "$RUNS_DIR/by-tree" 2>/dev/null; then
+      printf '%s\n%s\n%s\n' \
         "$RUN_ID" "$(reply_field "$REPLY" task)" "$WT" \
         > "$RUNS_DIR/by-tree/$_key" 2>/dev/null
     fi
@@ -631,7 +701,11 @@ gate is what decides whether it may merge."
     # retry from. observe_session holds that mapping now.
     rm -f "$MARKER"
     if [ -n "${DIR:-}" ]; then
-      _key="$(printf '%s' "$(CDPATH= cd -- "$DIR" 2>/dev/null && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
+      # THE SUBAGENT'S POINTER AND NOT THE SESSION'S. This removes exactly the
+      # 32 hex characters of the tree key; the session pointer SessionStart
+      # writes carries a `.session` suffix and outlives every subagent that
+      # worked in the same tree (RM-156, #259).
+      _key="$(tree_key "$DIR" || true)"
       [ -n "$_key" ] && rm -f "$RUNS_DIR/by-tree/$_key" 2>/dev/null
     fi
     exit 0
@@ -668,11 +742,18 @@ gate is what decides whether it may merge."
     # a session id is not the public value a run id is.
     #
     # ALWAYS 0. See the header.
+    # AND IT CARRIES THE PARENT TOO — RM-156 (#259). This call REGISTERS when
+    # the session is one the deployment has never seen, which is precisely the
+    # case a refused start leaves behind, and until now every run registered
+    # that way was a root run: the path that recovers a lost identity lost the
+    # edge instead. It costs one more argument, and the MCP ignores it for a
+    # session it already holds.
     [ -n "$TOOL" ] && [ -n "$IDENT" ] || exit 0
     MARK="$(recall)"
     mcp_call observe_tool_call \
       session_id "$IDENT" cwd "$CWD" tool "$TOOL" body "$EVENT_JSON" \
       agent_type "$IDENT_TYPE" \
+      parent_session_id "$PARENT_IDENT" \
       run_token "$(reply_field "${MARK:-}" run_token)" >/dev/null 2>&1 || true
     exit 0
     ;;

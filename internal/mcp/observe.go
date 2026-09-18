@@ -215,6 +215,25 @@ type observeToolCallIn struct {
 	// labelled every session `session` would answer the wrong question for a
 	// harness whose sessions are not.
 	AgentType string `json:"agent_type,omitempty"`
+	// ParentSessionID is the harness's own identifier for the session that
+	// started this one, read for the same case as CWD and AgentType: the call
+	// that has to REGISTER the session (RM-156, #259).
+	//
+	// # Why the first-sight path needs it
+	//
+	// This is the path that registers a run nobody announced, and until now it
+	// registered every one of them as a root run — observe_session's start was
+	// called with no parent at all, because this tool had none to give. So a
+	// harness whose SubagentStart was refused recovered its identity and its
+	// activity record on the next tool call and lost the edge permanently,
+	// which is exactly the case where knowing what spawned the run matters
+	// most.
+	//
+	// It is resolved by observe_session against the marker store and is NOT
+	// stored (E4): doc 02 §3 has no member for a harness's session id, and
+	// gains none. Ignored on a call that names a run id, which is already
+	// resolved and registers nothing.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
 }
 
 // observeToolCallOut is doc 01 §4's result shape, verbatim.
@@ -514,6 +533,11 @@ func observeRunForSession(ctx context.Context, in observeToolCallIn) (string, er
 		Phase:     ObserveSessionPhaseStart,
 		CWD:       in.CWD,
 		AgentType: in.AgentType,
+		// Forwarded unchanged and unresolved here: observe_session owns the
+		// marker store the parent is looked up in, and a second lookup in this
+		// file is a second thing that can disagree with the first. Inert on a
+		// session that is already registered, for the same reason CWD is.
+		ParentSessionID: in.ParentSessionID,
 	})
 	if err != nil {
 		// Unchanged, and deliberately: these are describe_workspace's and

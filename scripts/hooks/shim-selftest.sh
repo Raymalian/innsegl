@@ -155,25 +155,52 @@ else
   bad "SubagentStart: status $STATUS, calls: $(cat "$CALLS")"
 fi
 
-# 3b. AND IT NAMES THE RUN THAT SPAWNED IT — ADR-0045's third member (#214).
-# Case 1 registered sess-1 as run-aaaa1111 and wrote its marker; this subagent
-# is keyed on agent-7, so the parent is the sibling marker named by the session.
-# Without this the ledger holds two runs and no relation between them.
-if called observe_session '"parent_run_id": "run-aaaa1111"'; then
-  ok "SubagentStart names the session's run as its parent"
+# 3b. AND IT NAMES THE SESSION THAT SPAWNED IT — ADR-0045's third member
+# (#214), resolved in the MCP since RM-156 (#259).
+#
+# THE SESSION ID, NOT A RUN ID. The shim used to read a sibling marker file and
+# send the run id it found there, which is a lookup only this harness could
+# perform: the first-sight registration a tool call makes holds no run id, so
+# that path could never carry an edge at all. What is sent now is the identifier
+# this harness already has, and the MCP resolves it against the durable
+# session → run mapping it alone holds.
+if called observe_session '"parent_session_id": "sess-1"'; then
+  ok "SubagentStart names the session that spawned it, in its own vocabulary"
 else
-  bad "SubagentStart sent no parent_run_id: $(grep observe_session "$CALLS" | tail -1)"
+  bad "SubagentStart sent no parent_session_id: $(grep observe_session "$CALLS" | tail -1)"
 fi
 
-# 3c. AND A SUBAGENT WITH NO PARENT STAYS A ROOT RUN. absent is not an error,
-# and an EMPTY parent is not the same as none (doc 02 §1) — a root run naming an
-# empty parent would be claiming one it does not have.
+# 3c. AND IT RESOLVES NOTHING ITSELF. This is the negative that catches the
+# lookup quietly coming back: a shim that sends a run id is a shim that had to
+# know what a run is, which is the work every other harness would then copy.
+if ! grep observe_session "$CALLS" | tail -1 | grep -q 'parent_run_id'; then
+  ok "SubagentStart resolves no run id of its own — the lookup moved (#259)"
+else
+  bad "SubagentStart still sends a resolved parent_run_id: $(grep observe_session "$CALLS" | tail -1)"
+fi
+
+# 3d. A SUBAGENT WHOSE HARNESS REPORTS NO SESSION STAYS A ROOT RUN. absent is
+# not an error, and an EMPTY parent is not the same as none (doc 02 §1) — a root
+# run naming an empty parent would be claiming one it does not have. A parent
+# session the DEPLOYMENT has never seen is the MCP's case, not this file's: it
+# answers with a root run and a detail rather than with a refusal.
 script_tool observe_session ok '{"session_id":"agent-orphan","phase":"start","known":true,"registered":true,"run_id":"run-cccc3333","task":"e11","worktree":"","repo":"example.test/org/name","branch":"dev/e11","agent_type":"prober","spiffe_id":"spiffe://innsegl.dev/agent/a/b/run-cccc3333"}'
-drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-never-registered\",\"agent_id\":\"agent-orphan\",\"agent_type\":\"prober\",\"cwd\":\"$CWD\"}"
-if [ "$STATUS" -eq 0 ] && ! grep observe_session "$CALLS" | tail -1 | grep -q 'parent_run_id'; then
-  ok "a subagent whose parent never registered sends no parent at all"
+drive "{\"hook_event_name\":\"SubagentStart\",\"agent_id\":\"agent-orphan\",\"agent_type\":\"prober\",\"cwd\":\"$CWD\"}"
+if [ "$STATUS" -eq 0 ] && ! grep observe_session "$CALLS" | tail -1 | grep -q 'parent_'; then
+  ok "a subagent whose harness reports no session sends no parent at all"
 else
   bad "orphan subagent: status $STATUS, call: $(grep observe_session "$CALLS" | tail -1)"
+fi
+
+# 3e. AND A HARNESS THAT REPORTS ONE ID FOR BOTH REPORTS NO PARENT. A session
+# naming itself is a cycle of length one; the MCP refuses it, and a refused
+# SubagentStart is a subagent that does no work.
+script_tool observe_session ok '{"session_id":"same-id","phase":"start","known":true,"registered":true,"run_id":"run-dddd4444","task":"e11","worktree":"","repo":"example.test/org/name","branch":"dev/e11","agent_type":"prober"}'
+drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"same-id\",\"agent_id\":\"same-id\",\"agent_type\":\"prober\",\"cwd\":\"$CWD\"}"
+if [ "$STATUS" -eq 0 ] && ! grep observe_session "$CALLS" | tail -1 | grep -q 'parent_'; then
+  ok "an agent id equal to the session id is no parent, not a self-reference"
+else
+  bad "self-referencing ids: status $STATUS, call: $(grep observe_session "$CALLS" | tail -1)"
 fi
 
 # 4. A subagent that cannot be given an identity does no work (IP §6.1).
@@ -209,6 +236,16 @@ else
   bad "PostToolUse named the wrong identity: $(cat "$CALLS")"
 fi
 
+# 5b-ii. AND IT CARRIES THE PARENT — RM-156 (#259). This call REGISTERS when the
+# session is one the deployment has never seen, which is exactly what a refused
+# start leaves behind, and every run registered that way used to be a root run.
+# The path that recovers a lost identity lost the edge instead.
+if called observe_tool_call '"parent_session_id": "sess-1"'; then
+  ok "a subagent's tool call names the session that spawned it, for first sight"
+else
+  bad "PostToolUse sent no parent_session_id: $(cat "$CALLS")"
+fi
+
 # 5c. and the operator's own session, which carries no agent id, names itself.
 : > "$CALLS"
 script_tool observe_tool_call ok '{"digest":"sha256:'"$(printf 'b%.0s' $(seq 1 64))"'","stored":true}'
@@ -217,6 +254,14 @@ if called observe_tool_call '"session_id": "sess-1"' '"agent_type": "session"'; 
   ok "the operator's own session names itself, with no marker required"
 else
   bad "main-session PostToolUse: $(cat "$CALLS")"
+fi
+
+# 5c-ii. and it names NO parent. The operator's own session is a root run, and
+# a session that named itself as its own parent would be a cycle of length one.
+if ! grep observe_tool_call "$CALLS" | tail -1 | grep -q 'parent_'; then
+  ok "the operator's own session is a root run, and names no parent"
+else
+  bad "the main session named a parent: $(cat "$CALLS")"
 fi
 
 # 6. and it does not record the event itself any more.
@@ -244,6 +289,37 @@ else
   bad "SubagentStop: status $STATUS, calls: $(cat "$CALLS")"
 fi
 
+# 8b. THE TWO TREE POINTERS, AND THE COLLISION THAT WOULD HAVE BEEN SILENT.
+#
+# RM-156 (#259). The signer has no agent or session id in its environment — a
+# shell command cannot discover which agent it is inside — so SessionStart
+# publishes the session's run under a key derived from the working tree, and
+# the signer reads it as the parent of whatever it registers. Measured before
+# this: 87 orchestrator runs, all of them the signer's, none with a parent.
+#
+# SubagentStart publishes ITS run under the same tree key and SubagentStop
+# removes it. If the two shared a name, the stop just driven would have taken
+# the session's pointer with it and every later commit in this tree would go
+# back to naming no parent — which is indistinguishable, from the outside, from
+# this change never having been made. So both files are asserted by name, after
+# a subagent in the same tree has started and stopped.
+TREE_HASH="$(printf '%s' "$(cd "$CWD" && pwd -P)" | shasum -a 256 | cut -c1-32)"
+if [ -f "$RUNS/by-tree/$TREE_HASH.session" ]; then
+  ok "SessionStart publishes this tree's session pointer, for the signer"
+else
+  bad "no session pointer at $RUNS/by-tree/$TREE_HASH.session; the signer has no parent to name"
+fi
+if [ "$(sed -n 1p "$RUNS/by-tree/$TREE_HASH.session" 2>/dev/null)" = "run-aaaa1111" ]; then
+  ok "the session pointer names the SESSION's run, on line 1 where the signer reads it"
+else
+  bad "session pointer line 1 = $(sed -n 1p "$RUNS/by-tree/$TREE_HASH.session" 2>/dev/null), want run-aaaa1111"
+fi
+if [ ! -f "$RUNS/by-tree/$TREE_HASH" ]; then
+  ok "SubagentStop removed the subagent's pointer and left the session's"
+else
+  bad "the subagent's tree pointer survived its stop: $(cat "$RUNS/by-tree/$TREE_HASH")"
+fi
+
 # 9. SessionEnd likewise.
 script_tool observe_session ok '{"session_id":"sess-1","phase":"stop","known":true,"retired":true,"run_id":"run-aaaa1111","retired_at":"2026-09-12T00:00:00.000Z"}'
 drive '{"hook_event_name":"SessionEnd","session_id":"sess-1"}'
@@ -262,6 +338,16 @@ if grep -q 'retired run-aaaa1111' "$WORK/err" && ! grep -q 'could not' "$WORK/er
   ok "a successful stop reports exactly one outcome"
 else
   bad "a successful stop reported both outcomes: $(cat "$WORK/err")"
+fi
+
+# 9b. AND THE SESSION POINTER GOES WITH THE SESSION. The run it names has just
+# been retired, and register_agent refuses a retired parent — a pointer left
+# behind would make every later commit in this tree take the signer's fallback
+# path and register with no parent anyway, after a warning about a stale file.
+if [ ! -f "$RUNS/by-tree/$TREE_HASH.session" ]; then
+  ok "SessionEnd removes this tree's session pointer with the session"
+else
+  bad "the session pointer outlived its session: $(cat "$RUNS/by-tree/$TREE_HASH.session")"
 fi
 
 # --- OPS-020: a stop never blocks ---------------------------------------------

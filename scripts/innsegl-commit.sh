@@ -119,23 +119,55 @@ ROOT="$(git rev-parse --show-toplevel)"
 # THE POINTER IS KEPT, not just read. RM-134 (#213): a pointer whose run has
 # been retired strands the tree, and the answer is a successor written back
 # here — so the file it was read from and the key that names it stay in scope.
+RUNS_DIR="${INNSEGL_RUNS_DIR:-$HOME/.innsegl/runs}"
+TREE_KEY=""
+if [ -n "$ROOT" ]; then
+  TREE_KEY="$(printf '%s' "$(CDPATH= cd -- "$ROOT" && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
+fi
+
 PTR_FILE=""
 RUN_FROM_POINTER=""
-if [ -z "$RUN_GIVEN" ] && [ -n "$ROOT" ]; then
-  _key="$(printf '%s' "$(CDPATH= cd -- "$ROOT" && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
-  _ptr="${INNSEGL_RUNS_DIR:-$HOME/.innsegl/runs}/by-tree/$_key"
+if [ -z "$RUN_GIVEN" ] && [ -n "$TREE_KEY" ]; then
+  _ptr="$RUNS_DIR/by-tree/$TREE_KEY"
   if [ -f "$_ptr" ]; then
     RUN_GIVEN="$(sed -n 1p "$_ptr")"
     [ -n "$TASK_GIVEN" ] || TASK_GIVEN="$(sed -n 2p "$_ptr")"
     [ -n "$WORKTREE" ] || WORKTREE="$(sed -n 3p "$_ptr")"
     PTR_FILE="$_ptr"
-    TREE_KEY="$_key"
     RUN_FROM_POINTER=1
     # It says what it FOUND and not what it is about to do. Whether this run
     # may still sign is decided below, and the line used to promise "signing
     # under it" several hundred lines before anything had asked.
     echo "innsegl-commit: this tree's pointer names $RUN_GIVEN" >&2
   fi
+fi
+
+# THE SESSION THIS TREE BELONGS TO, and so the parent of any run registered
+# here -- RM-156 (#259).
+#
+# Measured 2026-09-18: 87 `orchestrator` runs in the ledger, every one of them
+# registered by this script, and not one carrying a parent. The reason was not
+# that they had none. It is that a shell command cannot discover which agent it
+# is inside: no environment variable carries an agent or a session id, which is
+# the same gap the by-tree pointer above was written to close for identity.
+#
+# So the harness hook writes a SECOND pointer at SessionStart, keyed on the
+# same working tree and answering a different question: not "which run signs
+# here" but "which session is this tree's". Line 1 is that session's run, and
+# it is what this script names as the parent of whatever it registers.
+#
+# WHY IT CANNOT COLLIDE WITH THE POINTER ABOVE. The subagent pointer's name is
+# exactly the 32 hex characters of the tree key, and SubagentStop removes that
+# exact name; this one carries a `.session` suffix, which no tree key can
+# spell. Two pointers, two lifetimes: the subagent's lasts as long as the
+# subagent, this one as long as the session.
+#
+# Absent is not an error, and it is the ordinary state of a tree whose session
+# started before the hook wrote one, or on a machine with no harness at all.
+# The run is then registered as a root run, exactly as it always was.
+PARENT_RUN=""
+if [ -n "$TREE_KEY" ] && [ -f "$RUNS_DIR/by-tree/$TREE_KEY.session" ]; then
+  PARENT_RUN="$(sed -n 1p "$RUNS_DIR/by-tree/$TREE_KEY.session")"
 fi
 
 # The repository identifier the MCP resolves against its workspace: host/org/name.
@@ -378,20 +410,71 @@ fail() { echo "innsegl-commit: $*" >&2; exit 1; }
 # for a JSON-RPC error, because the transport worked and the server answered.
 # `field` is what reads the answer, so `field` is what decides.
 REGISTERED_RUN=""
+
+# try_register KEY REPO BRANCH PARENT -- one attempt, 0 iff a run came back.
+#
+# The arguments are assembled by python3 and an EMPTY ONE IS OMITTED, because
+# doc 02 §1 distinguishes absent from empty: a run that recorded an empty
+# parent would be claiming one it does not have, and the closed schema refuses
+# an empty `repo` outright. A transport failure is fatal here and not a fallback
+# case -- a deployment that cannot be reached is not a deployment that might
+# accept fewer members.
+try_register() {
+  _out="$(mcp "$ADMIN_URL" register_agent "$(python3 -c '
+import json, sys
+key, repo, branch, parent, agent_type, task = sys.argv[1:7]
+args = {"agent_type": agent_type, "task_id": task, "idempotency_key": key}
+if repo: args["repo"] = repo
+if branch: args["branch"] = branch
+if parent: args["parent_run_id"] = parent
+print(json.dumps(args))' "$1" "$2" "$3" "$4" "$AGENT_TYPE" "$TASK")")" \
+    || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
+  REGISTERED_RUN="$(printf '%s' "$_out" | field run_id 2>/dev/null)" || return 1
+  return 0
+}
+
+# register_run KEY -- one registration, setting REGISTERED_RUN.
+#
+# THREE ATTEMPTS, EACH DROPPING WHAT THE PREVIOUS ONE WAS REFUSED FOR, and none
+# of them optional:
+#
+#   1  repo, branch and the parent    what this script actually knows
+#   2  without the parent             the pointer names a run that may no
+#                                     longer be one (see below)
+#   3  without repo and branch        a server that predates ADR-0045
+#
+# WHY THE PARENT IS DROPPED RATHER THAN FATAL. Since RM-156 register_agent
+# REFUSES a parent that is retired or that the ledger has never held, which is
+# right -- an edge in an append-only record is permanent, and one that names a
+# run that is not there is permanently wrong. But the parent here comes from a
+# pointer on a disk, and a pointer is exactly the thing that goes stale: a
+# session that ended without its hook running leaves one behind. Refusing the
+# COMMIT over that would strand the work for a bookkeeping edge, so the edge is
+# what gives way. The run is registered as a root run and the operator is told
+# which pointer to look at.
+#
+# The retry is driven by the PAYLOAD, not by the exit status: `mcp` returns 0
+# for a JSON-RPC error, because the transport worked and the server answered.
+# `field` is what reads the answer, so `field` is what decides.
 register_run() {
   _rk="$1"
-  _out="$(mcp "$ADMIN_URL" register_agent \
-    "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s","repo":"%s","branch":"%s"}' \
-      "$AGENT_TYPE" "$TASK" "$_rk" "$REPO" "$BRANCH")")" \
-    || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
-  if REGISTERED_RUN="$(printf '%s' "$_out" | field run_id 2>/dev/null)"; then
+  # `if`, never `cmd && return`: under `set -e` an AND-list whose left side
+  # fails takes the whole script down, and the left side failing is the case
+  # every line below exists for.
+  if try_register "$_rk" "$REPO" "$BRANCH" "$PARENT_RUN"; then
     return 0
   fi
-  _out="$(mcp "$ADMIN_URL" register_agent \
-    "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' \
-      "$AGENT_TYPE" "$TASK" "$_rk")")" \
-    || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
-  REGISTERED_RUN="$(printf '%s' "$_out" | field run_id)" || fail "register_agent refused"
+
+  if [ -n "$PARENT_RUN" ] && try_register "$_rk" "$REPO" "$BRANCH" ""; then
+    echo "innsegl-commit: this tree's session pointer names $PARENT_RUN, which is not a" >&2
+    echo "innsegl-commit:   run that may be a parent -- retired, or one this ledger has" >&2
+    echo "innsegl-commit:   never held. The run was registered with no parent rather than" >&2
+    echo "innsegl-commit:   with a wrong edge, which nothing could amend." >&2
+    echo "innsegl-commit:   The stale pointer is $RUNS_DIR/by-tree/$TREE_KEY.session" >&2
+    return 0
+  fi
+
+  try_register "$_rk" "" "" "" || fail "register_agent refused"
   echo "innsegl-commit: this deployment does not accept repo/branch yet, so the run" >&2
   echo "innsegl-commit:   records no repository (schema 1). Restart it to fix that:" >&2
   echo "innsegl-commit:   make innsegl-up-here" >&2

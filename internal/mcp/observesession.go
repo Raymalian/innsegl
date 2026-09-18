@@ -190,6 +190,28 @@ type observeSessionIn struct {
 	// that one produced the other, which is what "who did this work" resolves
 	// to the moment an orchestrator delegates.
 	ParentRunID string `json:"parent_run_id,omitempty"`
+	// ParentSessionID is the same edge, named the way a HARNESS knows it: the
+	// harness's OWN identifier for the session that started this one. The MCP
+	// resolves it to a run through the marker store this file already keeps.
+	//
+	// # Why this exists beside ParentRunID
+	//
+	// The reference shim resolved the parent itself — it read a sibling marker
+	// file out of its own cache and sent the run id it found. That worked on
+	// the ONE path it was written for and nowhere else: measured on 2026-09-18,
+	// 21 registrations out of 185 carried a parent, and every one of them came
+	// through SubagentStart. The other two paths a run can be registered by —
+	// the first-sight registration observe_tool_call makes, and the signer —
+	// recorded none, ever, because neither holds a run id to send.
+	//
+	// The lookup is the part a second harness would have to copy, so the lookup
+	// moves in here. A harness keeps speaking its own vocabulary: it sends the
+	// session id it already has, and only the MCP knows about runs.
+	//
+	// RESOLVED AND NOT STORED (E4). This is a harness's identifier, doc 02 §3
+	// has no member for one, and it gains none: what is recorded is the run it
+	// resolves to.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
 }
 
 // observeSessionOut is doc 01 §4's "the run": the identity, the workspace it
@@ -447,7 +469,10 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 	// run id derives from (agent_type, task, idempotency_key) and not from the
 	// parent — so a second start cannot move a run to a different parent, and
 	// does not need the marker to remember one.
-	parentRunID := in.ParentRunID
+	parentRunID, parentDetail, err := c.parentRun(sessionID, in)
+	if err != nil {
+		return observeSessionOut{}, err
+	}
 	if found {
 		// A SESSION IS REGISTERED ONCE, AND ITS TASK IS FIXED THEN. Re-deriving
 		// the workspace on every start would let a session that moved between
@@ -485,8 +510,10 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 		IdempotencyKey: observeSessionKey(sessionID),
 		Repo:           repo,
 		Branch:         branch,
-		// Unchanged and unvalidated here on purpose: register_agent owns what a
-		// parent may be, and a second opinion about it in this file is a second
+		// RESOLVED HERE, VALIDATED THERE. parentRun turns a harness's session
+		// identifier into a run, because the marker store that can answer that
+		// lives in this file; whether the run it names may be a parent at all
+		// is register_agent's, and a second opinion about it here is a second
 		// thing that can disagree with the first.
 		ParentRunID: parentRunID,
 	})
@@ -515,12 +542,107 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 		return observeSessionOut{}, observeSessionMappingNotWritten(reg.RunID, err)
 	}
 
-	out := next.reply(ObserveSessionPhaseStart, !found, "")
+	out := next.reply(ObserveSessionPhaseStart, !found, parentDetail)
 	// Off the reply and never out of the marker: a token at rest is a token
 	// that can be read off a disk. register_agent recomputes it from the
 	// deployment secret on every call, replays included.
 	out.RunToken = reg.RunToken
 	return out, nil
+}
+
+// parentRun decides which run this session's registration will name as its
+// parent, and says so when it names none.
+//
+// # This is the lookup that moved out of the shim (RM-156, #259)
+//
+// A harness sends `parent_session_id`: its OWN identifier for the session that
+// started this one. The marker store keyed by session id is already here — it
+// is what a stop finds a run by — so resolving the parent is one read of a
+// sibling marker, and no harness has to know that a run id exists.
+// `parent_run_id` is still accepted, unchanged, for a caller that holds one.
+//
+// # The three answers, and why only one of them is a refusal
+//
+//	REFUSED   the two arguments name DIFFERENT runs, or the session names
+//	          itself. Both are the caller contradicting itself about an edge
+//	          that is about to become permanent, and picking one would attribute
+//	          the run to whichever argument this file happened to read first.
+//	          A malformed parent_session_id is refused for observe_session's own
+//	          reason — it is held to the same grammar as any session id, so an
+//	          id this tool would resolve and refuse to start is impossible.
+//	NO PARENT the named session has no marker here, or its marker says the
+//	          session has ended. This is a ROOT RUN and a `detail`, never an
+//	          error.
+//	THE RUN   the marker's own run id, which register_agent then validates.
+//
+// # Why an unknown or ended parent session is not a refusal
+//
+// Because the cost is not symmetric. A start that refuses gives the session no
+// identity: the reference shim's SubagentStart exits 2 on a refused start and
+// the subagent does no work, and observe_tool_call's first-sight path records
+// nothing at all. Trading a whole session's identity and activity record for
+// an edge is the wrong way round — the edge is what a reader would have LIKED
+// to have, and the record is what this system exists to keep.
+//
+// A parent whose session ended is dropped here rather than sent on, and that
+// is deliberate rather than lenient: register_agent refuses a retired parent
+// (see checkParent), so sending it would turn an ended parent session into a
+// refused child. What this file knows about is the marker, so what it can drop
+// is a retirement THIS tool performed; a parent retired by a direct
+// retire_agent call still reaches register_agent's refusal. That limit is the
+// marker's, and it is the same one the start path already states for a session
+// retired out from under it.
+func (c *observeSessionService) parentRun(sessionID string, in observeSessionIn) (string, string, error) {
+	if in.ParentSessionID == "" {
+		return in.ParentRunID, "", nil
+	}
+	if _, err := observeSessionCheckID(in.ParentSessionID); err != nil {
+		return "", "", err
+	}
+	if in.ParentSessionID == sessionID {
+		return "", "", Errorf(ClassInvariantViolation, "",
+			"parent_session_id names this session itself. A session cannot have started "+
+				"itself, and the edge would be a cycle a reader walking parents never leaves")
+	}
+
+	marker, found, err := observeSessionReadMarker(c.markerDir, in.ParentSessionID)
+	if err != nil {
+		// A start refuses on an unreadable marker of its OWN session, because
+		// registering over one gives a session a second identity. This is a
+		// DIFFERENT session's marker and nothing is about to be written to it,
+		// so the cost of continuing is one missing edge rather than a duplicate
+		// run — and the cost of refusing is this session's whole record.
+		return in.ParentRunID, fmt.Sprintf(
+			"the marker for parent session %q cannot be read: %v. This run was registered "+
+				"with no parent rather than with a guessed one", in.ParentSessionID, err), nil
+	}
+	switch {
+	case !found || marker.RunID == "":
+		return in.ParentRunID, fmt.Sprintf(
+			"no run is recorded for parent session %q, so this run was registered as a root "+
+				"run. That is not a failure: the parent's own start may never have reached "+
+				"this deployment, and a refusal would cost this session its identity over an "+
+				"edge", in.ParentSessionID), nil
+	case marker.RetiredAt != "":
+		return in.ParentRunID, fmt.Sprintf(
+			"parent session %q ended at %s and run %s was retired then, so no parent was "+
+				"recorded: retirement is terminal (IP §6.2, I4) and a run that has ended did "+
+				"not start this one", in.ParentSessionID, marker.RetiredAt, marker.RunID), nil
+	case in.ParentRunID != "" && in.ParentRunID != marker.RunID:
+		// TWO PARENTS FOR ONE RUN, and no precedence order. The answer is on
+		// its way into an append-only record, so a tool that picked one would
+		// record whichever argument this file happened to read first, for ever.
+		//
+		// The resolved run is not quoted back, for the reason observe_tool_call
+		// gives about the same collision: a refusal that answered "the parent
+		// you did not name is this one" would map a session to a run for a
+		// caller that could not otherwise ask.
+		return "", "", Errorf(ClassInvariantViolation, "",
+			"parent_run_id %q and parent_session_id %q name different runs. Send one of "+
+				"them: this run records exactly one parent and the record cannot be amended",
+			in.ParentRunID, in.ParentSessionID)
+	}
+	return marker.RunID, "", nil
 }
 
 // stop is the shim's SessionEnd and SubagentStop.
