@@ -69,7 +69,7 @@ import (
 //     the I3 violation rather than an entry the sweep never reached.
 // ---------------------------------------------------------------------------
 
-func TestSPI008SecondLapseRecordsASecondWithdrawal(t *testing.T) {
+func TestSPI014SecondLapseRecordsASecondWithdrawal(t *testing.T) {
 	s := requireStack(t)
 	c := s.adminClient(t)
 	store := requireLedger(t)
