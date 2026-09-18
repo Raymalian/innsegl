@@ -521,9 +521,22 @@ func TestCredentialRunReportsAnExpiryWithoutRetiringTheRun(t *testing.T) {
 	}
 }
 
-// Two reapers that both acted leave two events, and every caller must be told
-// the same instant — the EARLIEST, for the reason retirement uses.
-func TestCredentialRunReportsTheEarliestExpiry(t *testing.T) {
+// A run with more than one expiry reports the NEWEST, which is the one and only
+// place expiry does not follow retirement's rule (RM-152, #255).
+//
+// This case asserted the earliest until #255, on retirement's reasoning: two
+// reapers that both acted leave two events and every caller must be told the
+// same instant. That reasoning does not carry, and doc 07 MCP-078 is what shows
+// it. Two reapers over ONE lapse no longer leave two events at all — the
+// reaper's idempotency key names the lapse (spire.ExpiryKeyAfter) — so two
+// `run_expired` events for one run are two SEPARATE withdrawals, of two
+// separate quiet spells, with the run's own work in between. ExpiredAt is what
+// the restore horizon is measured from, and the only lapse a horizon can mean
+// is the one being restored from.
+//
+// The chain here is deliberately out of instant order, so that "newest" is
+// being read off the timestamps and not off the last row.
+func TestCredentialRunReportsTheNewestExpiry(t *testing.T) {
 	d := newDirectory(t, []event.Fields{
 		registered(1, "2026-08-29T09:00:00.000Z"),
 		expired(2, "2026-08-29T11:00:00.000Z"),
@@ -534,9 +547,10 @@ func TestCredentialRunReportsTheEarliestExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CredentialRun: %v", err)
 	}
-	if want := mustParse(t, "2026-08-29T10:00:00.000Z"); !run.ExpiredAt.Equal(want) {
-		t.Errorf("ExpiredAt is %v, want the earliest %v — two reapers must not be "+
-			"reported as two different expiries", run.ExpiredAt, want)
+	if want := mustParse(t, "2026-08-29T11:00:00.000Z"); !run.ExpiredAt.Equal(want) {
+		t.Errorf("ExpiredAt is %v, want the newest %v — a run that survived an earlier "+
+			"quiet spell must not be judged abandoned by the clock that ran during it",
+			run.ExpiredAt, want)
 	}
 }
 

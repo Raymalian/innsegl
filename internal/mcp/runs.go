@@ -53,8 +53,8 @@ type CredentialRun struct {
 	// RetiredAt is the instant `run_retired` was appended, zero for a live
 	// run. I4: retirement removes the identity, never the record.
 	RetiredAt time.Time
-	// ExpiredAt is the EARLIEST `run_expired`, zero if the reaper never took
-	// this run's authorisation.
+	// ExpiredAt is the NEWEST `run_expired`, zero if the reaper never took this
+	// run's authorisation.
 	//
 	// It is not retirement and must never be read as it: expiry withdraws a
 	// credential from a run that went quiet, and a quiet agent is often one
@@ -65,6 +65,18 @@ type CredentialRun struct {
 	// process was killed fires no retirement hook, so nothing ever ends it, and
 	// without a horizon its identity stays mintable forever. This is the
 	// instant that horizon is measured from.
+	//
+	// # Newest, where RetiredAt is earliest (RM-152, #255)
+	//
+	// The difference is not an inconsistency, it is the difference between the
+	// two facts. Two concurrent retirements of one run are two reports of ONE
+	// ending, so every caller is told the original instant for ever (ADR-0020
+	// §5). A run's expiries are not reports of one fact: it has one per quiet
+	// spell, the reaper keys each to the lapse it records, and the only one a
+	// restore horizon can be measured from is the lapse being restored FROM.
+	// Measured from the earliest, a run that lapsed on day one, resumed, and
+	// worked for longer than the horizon is refused restore on its next lapse
+	// however recently it was alive — doc 07 MCP-078.
 	ExpiredAt time.Time
 }
 

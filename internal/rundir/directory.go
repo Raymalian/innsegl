@@ -160,13 +160,30 @@ func (d *Directory) CredentialRun(ctx context.Context, runID string) (mcp.Creden
 			registered = true
 
 		case event.EventTypeRunExpired:
-			// EARLIEST, for retiredAt's reason: two reapers that both acted
-			// leave two events, and every caller must be told the same instant.
+			// NEWEST, and this is the one place expiry must NOT follow
+			// retirement's rule (RM-152, #255).
+			//
+			// Retirement is final, so two concurrent first retirements are two
+			// reports of ONE fact and every caller is told the earliest for
+			// ever. Expiry is a withdrawal the run's next call reverses: a run
+			// has as many of them as it has quiet spells, each one a separate
+			// fact about a separate silence, and the single event the reaper
+			// wrote per lapse is keyed per lapse to say so.
+			//
+			// ExpiredAt exists to measure the restore horizon from, and the
+			// only lapse a horizon can mean is the one being restored from. Read
+			// as the earliest, a run that lapsed on its first day, resumed, and
+			// then worked for longer than the horizon is refused restore on its
+			// next lapse however recently it was alive — doc 07 MCP-078.
 			at, err := instantOf(rec, runID, event.EventTypeRunExpired)
 			if err != nil {
 				return mcp.CredentialRun{}, false, err
 			}
-			if run.ExpiredAt.IsZero() || at.Before(run.ExpiredAt) {
+			// Newest by INSTANT, not last in chain order, for the reason
+			// RetiredAt states below: the two agree on every chain a single
+			// ledger writes, and relying on the agreement would be untested code
+			// the day it stopped holding.
+			if run.ExpiredAt.IsZero() || at.After(run.ExpiredAt) {
 				run.ExpiredAt = at
 			}
 
