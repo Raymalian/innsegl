@@ -1108,6 +1108,125 @@ fi
 creset
 uncap_reset
 
+# --- OPS-089: a tree that cannot be read is not a tree with nothing in it -----
+#
+# #284 (RM-178). The stop asked `git status` how much was uncommitted through a
+# pipe into `wc -l`, and a pipeline reports the LAST command's status — so a
+# `git status` that failed printed nothing, counted 0, and was indistinguishable
+# from a clean tree. The hook then concluded there was nothing to capture, no
+# capture was attempted, no capture failed, and #277's record was never written.
+#
+# EVERY CASE HERE IS RED ON MERIT against the shim as it stood, and red for the
+# one reason that matters: the record file is EMPTY. Not a different reason, not
+# a differently spelled field — nothing at all was written, which is the defect.
+
+# capture_run_in <agent-id> <run-id> <dir> — capture_run, against a chosen tree
+# rather than the fixture repository. The marker records whatever cwd the start
+# event carried, existing or not, which is how a tree that is GONE by the time
+# the run stops is driven at all.
+capture_run_in() {
+  script_tool observe_session ok "{\"session_id\":\"$1\",\"phase\":\"start\",\"known\":true,\"registered\":true,\"run_id\":\"$2\",\"task\":\"rm178\",\"worktree\":\"wt-$2\",\"repo\":\"example.test/org/name\",\"branch\":\"dev/rm178\",\"agent_type\":\"prober\"}"
+  SIGNER="$WORK/capture-signer" drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-1\",\"agent_id\":\"$1\",\"agent_type\":\"prober\",\"cwd\":\"$3\"}"
+  rm -rf "${LOG:?}/$2"; mkdir -p "$LOG/$2"
+}
+
+# A DIRECTORY GIT REFUSES TO ANSWER ABOUT. `.git` as a file naming a gitdir that
+# is not there is `fatal: not a git repository`, exit 128 — a real failure of the
+# real command, rather than a stub standing in for one. An unreadable index and
+# a deleted tree reach the same line by the same route.
+UNREADABLE="$WORK/capture/unreadable"
+mkdir -p "$UNREADABLE"
+printf 'gitdir: %s/capture/nowhere-%s\n' "$WORK" "$$" > "$UNREADABLE/.git"
+
+uncap_reset
+capture_run_in agent-cap20 run-cap20 "$UNREADABLE"
+capture_stop agent-cap20
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_lines)" = "1" ] \
+   && [ "$(uncap_field reason)" = "tree_unreadable" ] \
+   && [ "$(uncap_field run_id)" = "run-cap20" ]; then
+  ok "OPS-089 a stop whose tree cannot be read records that, and still exits 0"
+else
+  bad "OPS-089 status $STATUS, $(uncap_lines) record(s), reason '$(uncap_field reason)', run '$(uncap_field run_id)'"
+fi
+# AND IT CARRIES WHAT GIT SAID. "Could not read the tree" is not actionable;
+# "not a git repository" and "index.lock exists" are different problems with
+# different remedies, and that sentence went to a stderr the harness discards.
+case "$(uncap_field detail)" in
+  *"not a git repository"*)
+    ok "OPS-089 and the reason git gave, which is the sentence that was being lost" ;;
+  *) bad "OPS-089 the record carries no reason from git: '$(uncap_field detail)'" ;;
+esac
+if [ "$(uncap_field dir)" = "$UNREADABLE" ] && [ "$(uncap_field worktree)" = "wt-run-cap20" ]; then
+  ok "OPS-089 and it names the tree on this machine and the one the ledger knows"
+else
+  bad "OPS-089 dir '$(uncap_field dir)' worktree '$(uncap_field worktree)'"
+fi
+
+# A TREE THAT IS GONE IS THE SAME DEFECT ONE LINE EARLIER. It never reached the
+# `git status` at all: the stop tested for a directory, found none, and left.
+uncap_reset
+capture_run_in agent-cap21 run-cap21 "$WORK/capture/vanished-$$"
+capture_stop agent-cap21
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_lines)" = "1" ] \
+   && [ "$(uncap_field reason)" = "tree_absent" ] \
+   && [ "$(uncap_field run_id)" = "run-cap21" ]; then
+  ok "OPS-089 a run whose tree is gone is recorded too, and told apart from an unreadable one"
+else
+  bad "OPS-089 vanished tree: status $STATUS, $(uncap_lines) record(s), reason '$(uncap_field reason)'"
+fi
+
+# AND A GENUINELY CLEAN TREE STILL WRITES NOTHING, which is the half that keeps
+# the record worth reading. Measured against a log that already holds the line
+# an unreadable tree put there, not against an empty file — "it wrote nothing"
+# is true of a shim that writes nothing ever.
+uncap_reset
+capture_run_in agent-cap22 run-cap22 "$UNREADABLE"
+capture_stop agent-cap22
+UNREADABLE_LINES="$(uncap_lines)"
+creset
+capture_run agent-cap23 run-cap23
+wrote_body run-cap23 a Write "{\"file_path\":\"$CREPO/mine23.txt\"}"
+capture_stop agent-cap23
+if [ "$UNREADABLE_LINES" = "1" ] && [ "$(uncap_lines)" = "1" ] \
+   && ! grep -q 'run-cap23' "$UNCAP" 2>/dev/null; then
+  ok "OPS-089 and a clean tree, read successfully, still writes nothing at all"
+else
+  bad "OPS-089 clean tree: $UNREADABLE_LINES record(s) before, $(uncap_lines) after"
+fi
+
+# THE RECORD OUTLIVES THE PROCESS, driven with the hook's stderr sent exactly
+# where the harness sends a SubagentStop's: nowhere. Everything the old code
+# had to say about an unreadable tree went there, which is why it said nothing.
+uncap_reset
+capture_run_in agent-cap24 run-cap24 "$UNREADABLE"
+script_tool observe_session ok '{"session_id":"agent-cap24","phase":"stop","known":true,"retired":true,"run_id":"retired"}'
+SIGNER="$WORK/capture-signer" drive_deaf '{"hook_event_name":"SubagentStop","session_id":"sess-1","agent_id":"agent-cap24","agent_type":"prober"}'
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_field run_id)" = "run-cap24" ] \
+   && [ "$(uncap_field reason)" = "tree_unreadable" ]; then
+  ok "OPS-089 a deaf stop over an unreadable tree still leaves the record on disk"
+else
+  bad "OPS-089 deaf stop: status $STATUS, $(uncap_lines) record(s), run '$(uncap_field run_id)'"
+fi
+
+# AND IT TOUCHED NOTHING. A stop that cannot read a tree must not stage, commit
+# or unstage in the one it CAN read.
+creset
+printf 'untouched\n' > "$CREPO/untouched23.txt"
+git -C "$CREPO" add untouched23.txt
+HEAD_BEFORE="$(git -C "$CREPO" rev-parse HEAD)"
+uncap_reset
+capture_run_in agent-cap25 run-cap25 "$UNREADABLE"
+capture_stop agent-cap25
+if [ "$(git -C "$CREPO" rev-parse HEAD)" = "$HEAD_BEFORE" ] \
+   && [ "$(staged_now)" = "untouched23.txt " ] && [ "$(uncap_lines)" = "1" ]; then
+  ok "OPS-089 and recording an unread tree changes nothing in any other one"
+else
+  bad "OPS-089 HEAD moved or the index is '$(staged_now)'"
+fi
+
+creset
+uncap_reset
+
 # --- OPS-073: single-listener mode, unchanged --------------------------------
 #
 # ASSERTED FIRST, over everything above it, because "nothing changed" is only

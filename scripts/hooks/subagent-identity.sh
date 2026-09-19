@@ -715,6 +715,72 @@ capture_remedy() {
 }
 
 # ---------------------------------------------------------------------------
+# WHETHER THERE IS ANYTHING TO CAPTURE, AND WHETHER THAT WAS ANSWERED — #284
+# (RM-178).
+#
+# This was one line:
+#
+#   dirty="$(git -C "$DIR" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+#
+# and the pipe threw away the only thing that could tell the two cases apart. A
+# `git status` that FAILS prints nothing, `wc -l` counts nothing, and the count
+# reads 0 — so a tree with nothing in it and a tree that could not be read
+# became the same answer, and the branch below concluded there was nothing to
+# capture. No capture was attempted, so none failed, so #277's record was never
+# written. The run stopped, its work stayed in the tree, and nothing anywhere
+# said so.
+#
+# IT IS #277's DEFECT ONE LEVEL OUT, and harder to see: the hook did exactly
+# what its code said. The measurement that catches it is the one that
+# distinguishes "nothing to do" from "could not tell" — which this repository
+# already treats as load-bearing. verify-branch.sh was changed in #281 for
+# reporting "could not check" as "failed", and no-personal-identity.sh refuses
+# rather than passes when its configuration is absent.
+#
+# THE EXIT STATUS IS TAKEN WITHOUT A PIPE, which is the whole fix. `cmd | wc -l`
+# reports `wc`'s status, and `wc` always succeeds. A command substitution's
+# status is the command's own, so the count is made from a value already in
+# hand rather than from a stream whose producer's fate was not recorded.
+#
+# AND WHAT GIT SAID IS KEPT. "Could not read the tree" is not actionable; "fatal:
+# not a git repository" and "index.lock exists" are different problems with
+# different remedies, and the sentence naming which one is on a stderr that the
+# harness discards for a stop. It is replayed AND carried into the record, the
+# same answer #277 gave for the signer's output.
+#
+# ALWAYS RETURNS 0. A stop never blocks, and reading a tree must not decide a
+# stop: the caller branches on TREE_RC.
+# ---------------------------------------------------------------------------
+read_tree() {
+  dirty=0
+  TREE_RC=0
+  TREE_SAID=""
+  _tsaid="$RUNS_DIR/.git-status-said.$$"
+  mkdir -p "$RUNS_DIR" 2>/dev/null || :
+  rm -f "$_tsaid" 2>/dev/null || :
+  # Two commands, so the umask is in force BEFORE the redirection creates the
+  # file — the same reason the signer's transcript is opened this way.
+  ( umask 077; : > "$_tsaid" ) 2>/dev/null || :
+  if [ -w "$_tsaid" ]; then
+    _tout="$(git -C "$1" status --porcelain 2>>"$_tsaid")"
+    TREE_RC=$?
+    TREE_SAID="$(cat "$_tsaid" 2>/dev/null)"
+  else
+    # A runs directory that cannot hold a transcript is not a reason to stop
+    # asking the question; it only costs the sentence git would have said.
+    _tout="$(git -C "$1" status --porcelain 2>/dev/null)"
+    TREE_RC=$?
+  fi
+  rm -f "$_tsaid" 2>/dev/null || :
+  # `$( )` strips trailing newlines and `printf '%s\n'` adds exactly one back,
+  # so this counts lines rather than counting one for an empty answer.
+  if [ -n "$_tout" ]; then
+    dirty="$(printf '%s\n' "$_tout" | wc -l | tr -d ' ')"
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # WHAT A CAPTURE THAT DID NOT HAPPEN LEAVES BEHIND — #277 (RM-172).
 #
 # Every refusal above and every failure below reported itself through `warn`,
@@ -1089,19 +1155,47 @@ case "$EVENT" in
     # This did not move into the MCP and should: it is git plumbing every shim
     # would otherwise copy. #208's closing comment hands it on.
     DIR="$(reply_field "$MARK" dir)"
-    if [ -n "$DIR" ] && [ -d "$DIR" ]; then
+    # READ BEFORE ANY BRANCH DECIDES ANYTHING — #284. These three used to be
+    # read inside the capture branch, which is the one branch that is not taken
+    # when the tree cannot be read; the record written on the new paths would
+    # then have named no worktree and no task, and a record missing the field a
+    # reader correlates on is a record that has to be correlated by hand.
+    TASK="$(reply_field "$MARK" task)"
+    WT="$(reply_field "$MARK" worktree)"
+    TYPE="${AGENT_TYPE:-$(reply_field "$MARK" agent_type)}"
+    if [ -n "$DIR" ] && [ ! -d "$DIR" ]; then
+      # THE TREE THE RUN WORKED IN IS NOT THERE — #284. This branch used to be
+      # the `else` of a test with no `else`: the marker named a directory, the
+      # directory was gone, and the stop walked past in silence. "The tree is
+      # gone" is the first cause the issue names, and it never reached the
+      # `git status` the issue is about, because it was excluded one line
+      # earlier. Whether that run left work behind is now unanswerable, which is
+      # exactly why it is written down rather than assumed to be nothing.
+      warn "$RUN_ID's working tree is gone: $DIR is not a directory."
+      warn "  Whether it left uncommitted work there cannot be answered now, so this"
+      warn "  is not a clean tree; it is an unread one (#284)."
+      uncaptured tree_absent "the run's tree $DIR is not a directory, so its uncommitted work could not be counted"
+    elif [ -n "$DIR" ]; then
       # Did it already commit under its own identity? Ask the ledger, not the
       # worktree: a commit that was signed and then had its branch moved is
       # still this run's commit.
       committed="$(curl -sS --max-time 5 \
         "${INNSEGL_API_URL:-http://127.0.0.1:8082}/api/v1/runs/$RUN_ID" 2>/dev/null \
         | sed -n 's/.*"commits"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)"
-      dirty="$(git -C "$DIR" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+      read_tree "$DIR"
 
-      if [ "${committed:-0}" = "0" ] && [ "${dirty:-0}" != "0" ]; then
-        TASK="$(reply_field "$MARK" task)"
-        WT="$(reply_field "$MARK" worktree)"
-        TYPE="${AGENT_TYPE:-$(reply_field "$MARK" agent_type)}"
+      if [ "$TREE_RC" != "0" ]; then
+        # ASKED BEFORE THE COMMIT COUNT, and that order is the decision. A run
+        # that has committed once may still have left work uncommitted, so the
+        # commit count answers a different question and cannot stand in for
+        # this one. What is recorded here is not "there was work"; it is that
+        # nobody knows, which is the whole of #284.
+        warn "$RUN_ID's tree at $DIR could not be read: git status exited $TREE_RC."
+        [ -n "$TREE_SAID" ] && printf '%s\n' "$TREE_SAID" >&2
+        warn "  That is not a clean tree. Whatever it left there is still there, and"
+        warn "  no capture was attempted, so no capture failed (#284)."
+        uncaptured tree_unreadable "git status in $DIR exited $TREE_RC: $TREE_SAID"
+      elif [ "${committed:-0}" = "0" ] && [ "${dirty:-0}" != "0" ]; then
         # ONLY WHAT THIS RUN WROTE, AND ONLY IF THAT IS ALL THERE IS (#261).
         #
         # `git add -A` staged the whole tree, so a run became the signed author of
