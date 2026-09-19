@@ -31,11 +31,32 @@
 # requires the gate to stay green, and case 4 — a DIFFERENT code-only prefix
 # that must go red — is what stops the hole widening into "ignore everything".
 #
+# WHY CASES 7, 8 AND 9 EXIST. RM-167 (#271). The gate read its TEST list from
+# Go alone — `func Test<PREFIX><NNN>` in `*_test.go` — so a case whose test is a
+# shell selftest was invisible to it. BAK-001..013 lived entirely in
+# scripts/backup-*-selftest.sh, had no catalog row, and the gate exited 0
+# anyway: the same failure as the prefix list, one level along. Case 7 is an id
+# in a shell case name under a prefix the catalog knows; case 8 is a whole
+# family that exists only in shell. Both are the exit 0, planted.
+#
+# WHY CASE 9 IS THE EXPENSIVE ONE. Reading ids out of shell means reading prose,
+# and the loose rule is worse than the gap. A rule that catches every id in a
+# selftest also reads `"task_ref":"JIRA-118"` out of a fixture payload and
+# reports a JIRA family that does not exist — a gate red for something that is
+# not a test at all, which is the failure RM-161 was about. So only the three
+# CASE-NAME shapes count, and case 9 plants one of each near-miss: a payload
+# that merely quotes an id, a citation mid-sentence, a citation in parentheses
+# that is not a label's, and a production script naming the case it satisfies.
+# All four must stay invisible, and the gate must stay green over them.
+#
 # WHY THE FIXTURE IDS ARE ZZA AND ZZB. The gate's reverse check reads every
 # `.sh` in the tree looking for a catalogued id, so a fixture written with real
 # prefixes would let THIS FILE stand in as the missing test for a real row and
 # silence a true report. Two prefixes nothing else uses cost nothing and cannot
-# do that.
+# do that. Reading CASE NAMES out of `*-selftest.sh` gave that the other
+# direction — this file is one — so the gate skips its own selftest by name and
+# says so. The cases below are unaffected: they build `*-selftest.sh` files
+# under the fixture tree, named otherwise, which the gate reads normally.
 #
 # USAGE
 #   scripts/test-ids-selftest.sh
@@ -92,7 +113,7 @@ run_gate() {
   INNSEGL_TEST_TREE="${TREE}" "${GATE}" "${CATALOG}" 2>&1
 }
 
-echo "test-ids-selftest: six cases"
+echo "test-ids-selftest: nine cases"
 echo
 echo "the fixture is level to start with"
 
@@ -205,6 +226,102 @@ else
   ok "a test named after an ISSUE is not read as a test id"
 fi
 rm -rf "${TREE}/test"
+
+echo
+echo "an id that lives in a SHELL selftest is a test too — RM-167's bug"
+
+# 7. THE HALF READ FROM GO ALONE. Three ids named by a shell case and by
+#    nothing else. Against the old gate this is exit 0 with nothing printed,
+#    because the test list came from `func Test…` in `*_test.go`.
+#
+#    ONE ID PER SHAPE, and all three demanded. A single id written in all three
+#    shapes would keep passing while two of the three rules rotted, which is
+#    the shape of bug this whole file exists to refuse.
+mkdir -p "${TREE}/scripts"
+cat > "${TREE}/scripts/zzalpha-selftest.sh" <<'SH'
+#!/usr/bin/env bash
+#   ZZA-078  named at the head of a comment line, as a header block lists them
+echo "ZZA-079 — named at the start of the label it reports under"
+expect red 'a refusal named in parentheses at the end of its label (ZZA-080)'
+SH
+out="$(run_gate)"; status=$?
+missing=""
+for id in ZZA-078 ZZA-079 ZZA-080; do
+  printf '%s' "${out}" | grep -q "${id}" || missing="${missing}${id} "
+done
+if [ "${status}" -eq 0 ]; then
+  bad "an id named by a SHELL case turns the gate red" "it exited 0 — this is the RM-167 bug: ${out}"
+elif [ -n "${missing}" ]; then
+  bad "every shell case-name SHAPE is read" "red, but never named ${missing}: ${out}"
+else
+  ok "an id named by a SHELL case turns the gate red, in each of the three shapes"
+fi
+rm -f "${TREE}/scripts/zzalpha-selftest.sh"
+
+echo
+echo "and a family that exists only in shell is named as a family"
+
+# 8. WHAT BAK ACTUALLY WAS. Thirteen ids, no Go test, no catalog row, and a
+#    gate that could not report a family it had no way to find. The prefix is
+#    unknown to the fixture catalog AND to its Go tests, so this is red only if
+#    the shell side feeds the PREFIX list as well as the id list.
+cat > "${TREE}/scripts/zzcharlie-selftest.sh" <<'SH'
+#!/usr/bin/env bash
+#   ZZC-001  the first case of a family that lives only here
+# --- ZZC-002 ----------------------------------------------------------------
+echo "ZZC-002 — driven below"
+SH
+out="$(run_gate)"; status=$?
+if [ "${status}" -eq 0 ]; then
+  bad "a shell-only FAMILY turns the gate red" "it exited 0 — this is BAK-001..013: ${out}"
+elif ! printf '%s' "${out}" | grep -q 'ZZC-001' || ! printf '%s' "${out}" | grep -q 'ZZC-002'; then
+  bad "a shell-only FAMILY turns the gate red" "red, but did not name both ids: ${out}"
+elif ! printf '%s' "${out}" | grep -q 'HAS NO ZZC ROWS AT ALL'; then
+  bad "a shell-only FAMILY is reported AS a missing family" "red and named, but not as a family: ${out}"
+else
+  ok "a shell-only FAMILY turns the gate red and is named as a whole missing family"
+fi
+rm -f "${TREE}/scripts/zzcharlie-selftest.sh"
+
+echo
+echo "a mention that is not a case name stays invisible, and green"
+
+# 9. THE LINE, HELD. Four near-misses, none of which names a case:
+#      - a fixture payload that merely QUOTES an id-shaped string. This is the
+#        expensive one: `JIRA-118` is a ticket in a golden event, and a gate
+#        that invented a JIRA family off it would be red for something that is
+#        not a test — RM-161's failure, re-earned.
+#      - a citation mid-sentence, which is how a selftest says which case it is
+#        NOT driving (LED-003, OPS-039 and OPS-050 in the real tree).
+#      - a parenthesised citation in prose. The parenthesised shape counts only
+#        when it CLOSES a case label, so this one must not.
+#      - a production script naming the case it satisfies. Only `*-selftest.sh`
+#        is read; OPS-031 in scripts/teardown-guard.sh is the real instance.
+#    Green here is also the merit check: with the planted cases gone the
+#    fixture is level again, so cases 7 and 8 were red on merit.
+cat > "${TREE}/scripts/zznoise-selftest.sh" <<'SH'
+#!/usr/bin/env bash
+# The golden payload below carries a ticket reference, not a test id.
+printf '%s' '{"run_id":"run-42","task_ref":"JIRA-118"}' > /dev/null
+# The other half of this is ZZD-001, which a different harness drives.
+# The deployment's own arm (ZZE-001) is not reachable from here.
+SH
+cat > "${TREE}/scripts/zztool.sh" <<'SH'
+#!/usr/bin/env bash
+# A production gate, not a selftest. It cites the case it satisfies.
+echo "ZZF-001 — refusing a teardown while the stack is up"
+SH
+out="$(run_gate)"; status=$?
+if [ "${status}" -ne 0 ]; then
+  bad "a mention that is not a case name is not read as an id" "exit ${status}: ${out}"
+elif printf '%s' "${out}" | grep -qE 'JIRA|ZZD|ZZE|ZZF'; then
+  bad "a mention that is not a case name is not read as an id" "it invented a family: ${out}"
+elif printf '%s' "${out}" | grep -qE 'NOT in doc 07|ROWS AT ALL'; then
+  bad "the fixture is level again once the planted cases are removed" "it still reports debt: ${out}"
+else
+  ok "a quoted payload, a citation, a parenthesised aside and a production script are all invisible"
+fi
+rm -f "${TREE}/scripts/zznoise-selftest.sh" "${TREE}/scripts/zztool.sh"
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [ "${fail}" -eq 0 ]

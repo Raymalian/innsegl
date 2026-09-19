@@ -25,11 +25,50 @@
 # loudest thing this prints rather than the one thing it cannot see. RM-161
 # (#265). scripts/test-ids-selftest.sh holds that open.
 #
+# WHERE THE TEST LIST COMES FROM, and why that was the same bug one level
+# along. It used to be read from Go alone — `func Test<PREFIX><NNN>` in
+# `*_test.go`. A case whose test is a SHELL SELFTEST carried its id somewhere
+# nothing here looked, so BAK-001..013 lived entirely in
+# scripts/backup-ledger-selftest.sh and scripts/backup-service-selftest.sh, had
+# no catalog row, and this exited 0 anyway: it cannot report a family it has no
+# way to find. Measured 2026-09-19: 43 ids live in shell selftests, against the
+# 127 Go-borne ones #265 taught it to see. RM-167 (#271).
+#
+# WHAT A SHELL CASE NAME LOOKS LIKE. The convention is already consistent, so
+# this is a second discovery rule and not a new format. A case names its id
+#   - at the head of a comment line, which is where the header block lists the
+#     cases and where a section rule sits: `#   BAK-001  a backup of a chain`,
+#     `# --- OPS-037 -------`, `# OPS-055 — the log's pin survives a worktree`
+#   - at the start of the label it reports under: `ok "BAK-009 an unreachable`,
+#     `echo "OPS-047 — no host scheduler"`, `expect 0 "BAK-001 clean dump"`
+#   - in parentheses at the END of that label, which is the other house style:
+#     `expect red 'a rename fails with no tag in the repository (SER-005)'`
+#
+# WHAT IT DELIBERATELY DOES NOT READ, because the looser rule is worse than the
+# gap it leaves. An id named MID-SENTENCE is a CITATION, not a claim — the
+# backup selftest mentions LED-003 to say which case it is not driving, and
+# innsegl-commit's mentions OPS-039 as the half it cannot reach. A rule loose
+# enough to catch those also reads `"task_ref":"JIRA-118"` out of a fixture
+# payload and reports a JIRA family that does not exist: a gate red for
+# something that is not a test at all, which is the failure #265 was about.
+# Only `*-selftest.sh` is read for the same reason — a production script naming
+# the case it satisfies (OPS-031 in scripts/teardown-guard.sh) is citing it.
+# doc 07 records the four ids this costs. Selftest case 9 holds the line.
+#
+# AND NOT ITS OWN SELFTEST. scripts/test-ids-selftest.sh is the one
+# `*-selftest.sh` in this tree whose ids are FIXTURES — ZZA and ZZB are planted
+# so that a gate run against a fixture tree has something to find, and they are
+# claims on nothing. Reading them here would turn this gate red on its own test
+# data. The exclusion is by name and cannot hide a fixture case from the cases
+# that need it: the selftest points INNSEGL_TEST_TREE at a temp tree whose
+# selftests are named otherwise, and those are read exactly like any other.
+#
 # WHAT IT CANNOT SEE. Two DIFFERENT cases sharing one id, where both are
 # catalogued, reads here as one id with several tests — which is also the normal
 # and correct shape (REC-004 has five test functions, all facets of one case).
 # Telling those apart needs a human who knows what the case is about. What this
 # removes is the silent half: an id in code that the catalog has never heard of.
+# The frontend is the remaining blind side: `*.test.tsx` is not read yet.
 #
 # USAGE
 #   scripts/test-ids.sh [path-to-doc-07]
@@ -64,24 +103,56 @@ fi
 # case that does not exist. A row invented to quiet a gate is worse than no row.
 NOT_TEST_IDS=" RM "
 
-# Prefixes are the UNION of both sides. From the catalog, so a new section does
-# not silently fall outside this; from the code, so a family the catalog has
-# never heard of is reported instead of skipped. Either side alone is blind in
-# one direction, and it was the code side that was missing.
+# A quote — either kind. Both open a case label, and which one a selftest uses
+# is a matter of whether the label interpolates anything.
+Q='["'"'"']'
+
+# The three case-name shapes, in one place, so that adding a fourth is one edit
+# rather than three. $1 is an ERE for the id: the whole grammar when the
+# prefixes are being discovered, one family when a family is being counted.
+# Each grep matches the SHAPE — the shape is the evidence that the id names a
+# case — and the last one takes the bare id back out of what matched.
+shell_case_ids() {
+  _sci_id="$1"
+  {
+    # the head of a comment line: a header list entry, or a section rule
+    grep -rhoE "^[[:space:]]*#[-[:space:]]*${_sci_id}"'([^0-9]|$)' \
+      --include='*-selftest.sh' --exclude='test-ids-selftest.sh' "${ROOT}" 2>/dev/null
+    # the start of the label the case reports under
+    grep -rhoE "${Q}${_sci_id}[ :]" \
+      --include='*-selftest.sh' --exclude='test-ids-selftest.sh' "${ROOT}" 2>/dev/null
+    # or its end, parenthesised — the other house style
+    grep -rhoE "[(]${_sci_id}[)]${Q}" \
+      --include='*-selftest.sh' --exclude='test-ids-selftest.sh' "${ROOT}" 2>/dev/null
+  } | grep -oE "${_sci_id}" | sort -u
+}
+
+# Prefixes are the UNION of all three sides. From the catalog, so a new section
+# does not silently fall outside this; from the Go tests and from the shell
+# selftests, so a family the catalog has never heard of is reported instead of
+# skipped. Any side alone is blind in the others' direction, and it was the two
+# code sides that were missing.
 doc_prefixes="$(grep -ohE '^\| [A-Z]{2,5}-[0-9]{3}' "${DOC}" | sed 's/| //; s/-[0-9]*$//' | sort -u)"
 # Exactly three digits: the trailing [^0-9] stops TestSHA2560... being read as
 # prefix SHA, id 256. Nothing in the tree is named that way today; the guard is
 # what keeps a future one from inventing a family.
 code_prefixes="$(grep -rhoE "func Test[A-Z]{2,5}[0-9]{3}[^0-9]" --include='*_test.go' "${ROOT}" 2>/dev/null |
   sed 's/^func Test//; s/[0-9]\{3\}.$//' | sort -u)"
-prefixes="$(printf '%s\n%s\n' "${doc_prefixes}" "${code_prefixes}" | grep . | sort -u)"
+shell_prefixes="$(shell_case_ids '[A-Z]{2,5}-[0-9]{3}' | sed 's/-[0-9]\{3\}$//' | sort -u)"
+prefixes="$(printf '%s\n%s\n%s\n' "${doc_prefixes}" "${code_prefixes}" "${shell_prefixes}" |
+  grep . | sort -u)"
 
 rc=0
 for p in ${prefixes}; do
   case "${NOT_TEST_IDS}" in *" ${p} "*) continue ;; esac
 
-  in_code="$(grep -rhoE "func Test${p}[0-9]{3}[^0-9]" --include='*_test.go' "${ROOT}" 2>/dev/null |
-    sed "s/^func Test${p}/${p}-/; s/.$//" | sort -u)"
+  # "In the code" is both halves: a Go test function name, and a case name in a
+  # shell selftest. A family can live entirely in one of them — BAK has no Go
+  # test at all, and API no shell one — so reading either alone reports a whole
+  # family as untested or, worse, does not report it.
+  in_code="$({ grep -rhoE "func Test${p}[0-9]{3}[^0-9]" --include='*_test.go' "${ROOT}" 2>/dev/null |
+    sed "s/^func Test${p}/${p}-/; s/.$//"
+    shell_case_ids "${p}-[0-9]{3}"; } | sort -u)"
   # RANGED ROWS ARE ROWS. doc 07 writes one row for a family of cases —
   # `| MCP-001..005 | C | Schema conformance per tool ...` covers five. A reader
   # that took only the first id reported the other four as uncatalogued, which
@@ -108,7 +179,19 @@ for p in ${prefixes}; do
   # anywhere in the tree that is not the catalog itself".
   mentioned="$(grep -rlF "${p}-" "${ROOT}" --include='*.go' --include='*.sh' --include='*.ts' --include='*.tsx' --include='*.yml' 2>/dev/null | head -400)"
 
-  orphan="$(comm -23 <(printf '%s\n' "${in_code}") <(printf '%s\n' "${in_doc}") | grep . || true)"
+  # NO PROCESS SUBSTITUTION HERE. This used to be `comm -23 <(…) <(…)`, which
+  # is a bashism: run as `sh scripts/test-ids.sh` — which is how the verify
+  # sequence runs it — every iteration died on a syntax error, `orphan` came
+  # back empty, and the gate reported "every id in the code has a catalog row"
+  # on a tree full of orphans. A gate that is green because it crashed is the
+  # failure this whole script is about. Measured 2026-09-19 (RM-167, #271).
+  orphan=""
+  for id in ${in_code}; do
+    printf '%s\n' "${in_doc}" | grep -qx "${id}" && continue
+    orphan="${orphan}${id}
+"
+  done
+  orphan="$(printf '%s' "${orphan}" | grep . || true)"
   unused=""
   for id in ${in_doc}; do
     printf '%s\n' "${in_code}" | grep -qx "${id}" && continue
