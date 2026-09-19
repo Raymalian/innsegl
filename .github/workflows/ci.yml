@@ -326,6 +326,38 @@ jobs:
       - name: The default keeps its file CA, and the overlay hands the CA no key
         run: ./scripts/ca-custody-selftest.sh
 
+  readiness-report:
+    name: readiness report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-082..084. The readiness report answered for a hand-written list of
+      # services, and twelve of the deployment's containers were absent from it
+      # -- so the report could say READY while twelve services were never asked
+      # after at all. A list maintained by hand beside a list that grows is the
+      # shape of the bug, not the instance.
+      # The names now come from `container_name:` across the compose files,
+      # which is where the deployment itself gets them.
+      # Hermetic: measured against a tree holding only what CI checks out, and
+      # it starts no container.
+      - name: The readiness report asks after every service the compose files declare
+        run: ./scripts/innsegl-start-selftest.sh
+
+  backup-gate:
+    name: backup gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The backup's own cases. Its live half dumps a real ledger and runs
+      # against a deployment; these run on tracked files alone and start no
+      # container, measured in a tree holding only what CI checks out.
+      # Until now nothing ran them anywhere but a local pre-commit hook, and a
+      # hook does not travel to a clone or to another checkout.
+      - name: A backup that fails reports that it failed
+        run: ./scripts/backup-ledger-selftest.sh
+
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest
