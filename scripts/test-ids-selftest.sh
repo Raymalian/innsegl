@@ -66,6 +66,38 @@
 # languages it searched and the file shapes it read each from. A language whose
 # rule has rotted reports zero ids in that list, in front of whoever runs it.
 #
+# WHY CASES 14, 15 AND 16 EXIST. RM-177 (#282). Three ids each labelled two
+# unrelated SHIPPED tests — FE-060, FE-061 and FE-062 — and the gate was green
+# over all three, because it counted DISTINCT ids on both sides and both sides
+# agreed. Case 14 is a second catalog row under an id another row already
+# names, in both shapes: a plain row repeated, and a plain row swallowed by a
+# ranged one. Case 15 is one id DECLARED — the frontend header that writes out
+# the row a case proposes for doc 07 — by two different files. Both are the
+# exit 0, planted; measured 2026-09-19 by running the previous revision of the
+# gate against these fixtures.
+#
+# WHY CASE 16 IS THE EXPENSIVE ONE, and what it refuses to check. "The same id
+# named as a case in two files" is NOT the shape of this bug and a gate red
+# over it would be red for something that is not a defect — the failure RM-161
+# was about. Measured 2026-09-19: 60 ids in the real tree are named as a case
+# in more than one file and all but three are ONE case with several facets
+# (FE-019 is three string catalogues in three files; REC-004 has five test
+# functions). So case 16 plants that legal shape — one id, three files, one
+# declaration — beside two parenthesised near-misses that are citations rather
+# than declarations, and a ranged row beside a plain row that does not overlap
+# it. All four must stay green, which is also what makes cases 14 and 15 red on
+# merit.
+#
+# WHY CASE 17 EXISTS. A linked worktree lives INSIDE this repository, and
+# `docs/` is a repository of its own, so a plain walk of the tree read three
+# and four copies of every test file. Counting distinct ids hid it — the copies
+# collapse under `sort -u` — and it hid the reverse direction too: a test
+# deleted on this branch still has a copy in a stale worktree, so the catalog
+# row it left behind still read as covered. It surfaced the moment case 15's
+# check, which cares WHICH FILE claimed an id, went red over forty families at
+# once. Case 17 plants a nested checkout carrying both an uncatalogued id and a
+# second declaration of a catalogued one, and requires the gate to stay green.
+#
 # WHY THE FIXTURE IDS ARE ZZA AND ZZB. The gate's reverse check reads every
 # `.sh` in the tree looking for a catalogued id, so a fixture written with real
 # prefixes would let THIS FILE stand in as the missing test for a real row and
@@ -130,7 +162,13 @@ run_gate() {
   INNSEGL_TEST_TREE="${TREE}" "${GATE}" "${CATALOG}" 2>&1
 }
 
-echo "test-ids-selftest: thirteen cases"
+# The same, over a catalog written for one case. Case 14 needs a catalog that
+# contradicts itself, and the fixture above must stay level for every other.
+run_gate_on() {
+  INNSEGL_TEST_TREE="${TREE}" "${GATE}" "$1" 2>&1
+}
+
+echo "test-ids-selftest: seventeen cases"
 echo
 echo "the fixture is level to start with"
 
@@ -498,6 +536,163 @@ elif ! printf '%s' "${out}" | grep -q 'three test languages'; then
 else
   ok "the gate names all three test languages and the file shapes it read each from"
 fi
+
+echo
+echo "one id in two catalog rows turns it red — RM-177's bug, the catalog half"
+
+# 14. A ROW NAMES ONE CASE. Two shapes, and both demanded, for the reason case
+#     7 gives: a check that only looked for a repeated plain row would keep
+#     passing while the ranged half rotted, and a range is how doc 07 writes a
+#     family. Against the pre-change gate both exit 0 — `sort -u` on the
+#     catalog side threw the second row away before anything could compare.
+cat > "${TMP}/catalog-twice.md" <<'MD'
+# fixture catalog
+
+| ID | L | Case | Expected | Proves |
+|---|---|---|---|---|
+| ZZA-001 | U | Append one event | It is appended | I3 |
+| ZZA-002..004 | U | A family written as one row | All three covered | I4 |
+| ZZA-001 | U | Something else entirely | And nobody can tell which row a reference means | I4 |
+| ZZA-009 | F | A case with no test yet | Recorded deliberately, not built | I3 |
+MD
+cat > "${TMP}/catalog-inrange.md" <<'MD'
+# fixture catalog
+
+| ID | L | Case | Expected | Proves |
+|---|---|---|---|---|
+| ZZA-001 | U | Append one event | It is appended | I3 |
+| ZZA-002..004 | U | A family written as one row | All three covered | I4 |
+| ZZA-003 | U | A second case inside the range above | Swallowed by it | I4 |
+| ZZA-009 | F | A case with no test yet | Recorded deliberately, not built | I3 |
+MD
+out="$(run_gate_on "${TMP}/catalog-twice.md")"; status=$?
+out2="$(run_gate_on "${TMP}/catalog-inrange.md")"; status2=$?
+if [ "${status}" -eq 0 ] || [ "${status2}" -eq 0 ]; then
+  bad "an id named by TWO catalog rows turns the gate red" \
+      "one of them exited 0 — this is the RM-177 bug: ${out} ${out2}"
+elif ! printf '%s' "${out}" | grep -q 'ZZA-001' || ! printf '%s' "${out2}" | grep -q 'ZZA-003'; then
+  bad "an id named by TWO catalog rows turns the gate red" "red, but did not name it: ${out} ${out2}"
+elif ! printf '%s' "${out}" | grep -q 'TWO CATALOG ROWS' || ! printf '%s' "${out2}" | grep -q 'TWO CATALOG ROWS'; then
+  bad "a repeated id is reported AS two rows" "red and named, but not as that: ${out} ${out2}"
+else
+  ok "an id named by TWO catalog rows turns the gate red — repeated, and inside a range"
+fi
+
+echo
+echo "and one id declared by two test files turns it red — the code half"
+
+# 15. WHAT FE-060, FE-061 AND FE-062 ACTUALLY WERE. Two shipped tests, each
+#     opening with the row it proposes for doc 07, both claiming one id. The id
+#     is one the fixture catalog KNOWS, so nothing else here can be the reason
+#     the gate goes red: no orphan, no missing family, no untested row. Against
+#     the pre-change gate this is exit 0 over a catalog and a tree that agree
+#     on every count.
+mkdir -p "${TREE}/web/src/alpha" "${TREE}/web/src/beta"
+cat > "${TREE}/web/src/alpha/one.test.tsx" <<'TSX'
+// SPDX-License-Identifier: Apache-2.0
+//
+// ZZA-001 (NEW — proposed for doc 07 TC-ZZA; see the report for #1).
+describe("ZZA-001 appending one event", () => {});
+TSX
+cat > "${TREE}/web/src/beta/other.test.tsx" <<'TSX'
+// SPDX-License-Identifier: Apache-2.0
+//
+// ZZA-001 (proposed for doc 07 TC-ZZA) — an unrelated case under the same id.
+describe("ZZA-001 something else entirely", () => {});
+TSX
+out="$(run_gate)"; status=$?
+if [ "${status}" -eq 0 ]; then
+  bad "one id DECLARED by two test files turns the gate red" "it exited 0 — this is the RM-177 bug: ${out}"
+elif ! printf '%s' "${out}" | grep -q 'one.test.tsx' || ! printf '%s' "${out}" | grep -q 'other.test.tsx'; then
+  bad "one id DECLARED by two test files names BOTH of them" "red, but did not name both files: ${out}"
+elif ! printf '%s' "${out}" | grep -q 'ONE ID, TWO CASES'; then
+  bad "one id DECLARED by two test files is reported as two cases" "red and named, but not as that: ${out}"
+else
+  ok "one id DECLARED by two test files turns the gate red, naming both files"
+fi
+rm -f "${TREE}/web/src/alpha/one.test.tsx" "${TREE}/web/src/beta/other.test.tsx"
+
+echo
+echo "while one case spread over several files stays green"
+
+# 16. THE LINE, HELD. Four legal shapes, none of which is one id naming two
+#     cases:
+#       - ONE case in THREE files, declared once. This is the expensive one:
+#         60 ids in the real tree are named in more than one file and all but
+#         three are this, so a gate that read "two files" as "two cases" would
+#         be red for something that is not a defect.
+#       - a parenthesis that CITES rather than declares. `ZZA-002 (the rendered
+#         half …)` is how a facet says which case it belongs to; the real tree
+#         writes `FE-034 (components/common …)` and `FE-019 (the shell's
+#         catalogue …)` the same way. `proposed` inside the parenthesis is the
+#         whole rule, and these must fall outside it.
+#       - a ranged row beside a plain row that does not overlap it, which is
+#         the ordinary shape of the catalog and must not read as a repeat.
+#     Green here is also the merit check: with the planted cases gone the
+#     fixture is level again, so cases 14 and 15 were red on merit.
+cat > "${TREE}/web/src/alpha/facet-one.test.tsx" <<'TSX'
+// SPDX-License-Identifier: Apache-2.0
+//
+// ZZA-002 (NEW — proposed for doc 07 TC-ZZA; see the report for #1).
+describe("ZZA-002 the first facet", () => {});
+TSX
+cat > "${TREE}/web/src/beta/facet-two.test.tsx" <<'TSX'
+// SPDX-License-Identifier: Apache-2.0
+//
+// ZZA-002 (the chaining half of the same case, driven here).
+describe("ZZA-002 the second facet", () => {});
+TSX
+cat > "${TREE}/web/src/beta/facet-three.test.ts" <<'TS'
+// SPDX-License-Identifier: Apache-2.0
+//
+// ZZA-002 (doc 07, TC-ZZA) — the third file of one case.
+describe("ZZA-002 the third facet", () => {});
+TS
+out="$(run_gate)"; status=$?
+if [ "${status}" -ne 0 ]; then
+  bad "one case spread over three files is not two cases" "exit ${status}: ${out}"
+elif printf '%s' "${out}" | grep -qE 'ONE ID, TWO CASES|TWO CATALOG ROWS'; then
+  bad "one case spread over three files is not two cases" "it reported a collision: ${out}"
+elif printf '%s' "${out}" | grep -qE 'NOT in doc 07|ROWS AT ALL'; then
+  bad "the fixture is level again once the planted cases are removed" "it still reports debt: ${out}"
+else
+  ok "one case declared once and named in three files stays green, and a citation is not a declaration"
+fi
+rm -f "${TREE}/web/src/alpha/facet-one.test.tsx" "${TREE}/web/src/beta/facet-two.test.tsx" \
+      "${TREE}/web/src/beta/facet-three.test.ts"
+
+echo
+echo "and a checkout nested inside the tree is not the tree"
+
+# 17. ANOTHER BRANCH'S COPY IS NOT A SECOND CASE. The real repository holds
+#     linked worktrees under `.worktrees` and `.claude/worktrees`, and `docs/`
+#     is a repository of its own, so the walk read three and four copies of
+#     every test file. `sort -u` hid it in both directions until case 15's
+#     check, which cares which FILE claimed an id, went red over forty families
+#     at once. The copy here carries both halves of the damage: an uncatalogued
+#     id, which must not be reported as debt this tree owes, and a second
+#     declaration of a catalogued one, which must not read as a collision.
+mkdir -p "${TREE}/.worktrees/other/web/src"
+printf 'gitdir: /elsewhere/.git/worktrees/other\n' > "${TREE}/.worktrees/other/.git"
+cat > "${TREE}/.worktrees/other/web/src/copy.test.tsx" <<'TSX'
+// SPDX-License-Identifier: Apache-2.0
+//
+// ZZA-001 (NEW — proposed for doc 07 TC-ZZA; see the report for #1).
+describe("ZZA-001 appending one event", () => {});
+describe("ZZA-078 a case that only the other branch has", () => {});
+TSX
+out="$(run_gate)"; status=$?
+if [ "${status}" -ne 0 ]; then
+  bad "a checkout nested inside the tree is not read as this tree's tests" "exit ${status}: ${out}"
+elif printf '%s' "${out}" | grep -q 'ZZA-078'; then
+  bad "a checkout nested inside the tree is not read as this tree's tests" \
+      "it claimed another branch's id as debt: ${out}"
+elif printf '%s' "${out}" | grep -q 'ONE ID, TWO CASES'; then
+  bad "a nested checkout's copy is not a second declaration" "it read a copy as a collision: ${out}"
+else
+  ok "a checkout nested inside the tree is not read as this tree's tests, in either direction"
+fi
+rm -rf "${TREE}/.worktrees"
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [ "${fail}" -eq 0 ]
