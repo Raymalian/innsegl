@@ -22,13 +22,15 @@
 # through the make target. That is why this script is the entry point.
 #
 # USAGE
-#   scripts/innsegl-start.sh            boot, wait, report
-#   scripts/innsegl-start.sh --status   report only, change nothing
-#   scripts/innsegl-start.sh --rebuild  rebuild images first (after a UI change)
+#   scripts/innsegl-start.sh             boot, wait, report
+#   scripts/innsegl-start.sh --status    report only, change nothing
+#   scripts/innsegl-start.sh --services  print the reported list, need no Docker
+#   scripts/innsegl-start.sh --rebuild   rebuild images first (after a UI change)
 #
 # EXIT
 #   0  every service healthy
-#   1  something did not come up; the service and its state are named
+#   1  something did not come up; the service and its state are named — or the
+#      service list could not be read from the compose files at all
 #   4  Docker could not be started
 
 set -uo pipefail
@@ -41,17 +43,114 @@ say()  { printf '  %s\n' "$*"; }
 step() { printf '\n== %s\n' "$*"; }
 
 # --- the services that must be healthy, and what each one is for -------------
-services() {
-  cat <<'EOT'
-innsegl-postgres|the ledger
-innsegl-spire-server|identity
-innsegl-mcp|the tool surface
-innsegl-api|the dashboard's read side
-innsegl-dashboard|the UI
-innsegl-sigstore-fulcio|certificates
-innsegl-sigstore-rekor|the transparency log
-EOT
+#
+# THE LIST IS DERIVED FROM THE COMPOSE FILES AND IS NOT TYPED HERE, and that is
+# the whole of RM-168 (#272). It used to be seven names in a heredoc.
+# `innsegl-backup` was not one of them, so when the backup sat `unhealthy` for
+# eighteen hours with a day of ledger standing above the last usable dump, the
+# one command an operator runs to ask "is this deployment all right" answered
+# yes, twice a day, in green. Eleven other services were unreported for exactly
+# the same reason and nobody had noticed either: the sealer, the reconciler,
+# the three that hold sealed segments, the four behind the transparency log,
+# and the SPIRE agent and OIDC provider.
+#
+# A hand-maintained list that drifted once drifts again, so nothing is
+# maintained by hand any more. A service added to compose tomorrow appears in
+# this report without anyone remembering to add it, and the row appears whether
+# or not somebody also writes it a description.
+#
+# WHICH SERVICES. Everything the stack starts and then keeps running:
+#
+#   * it declares a `container_name:` — so there is a name to inspect;
+#   * it sits behind no `profiles:`   — `init`, `demo`, `canary`, `verify` and
+#                                       `adminrelay` are opt-in and are not
+#                                       part of a boot;
+#   * its `restart:` is not `"no"`    — the one-shots (the database, object and
+#                                       identity initialisers, the credential
+#                                       mint, the two bootstraps) exit 0 by
+#                                       design, and reporting a completed
+#                                       one-shot as not running would teach an
+#                                       operator to ignore this report.
+#
+# WHICH FILES, and in which order: the three that `make innsegl-up-here`
+# composes, in the order it brings them up. `innsegl.workrepo.yml` is left out
+# deliberately — it overrides three services and declares no container of its
+# own, so it can add no row.
+#
+# ONEPROCESS=1 IS NOT THIS PATH. That overlay scales the sealer and the
+# reconciler to zero replicas; this script never passes it, and a deployment
+# that does should expect those two rows to read ABSENT.
+COMPOSE_FILES='deploy/compose/spire.yml
+deploy/compose/sigstore.yml
+deploy/compose/innsegl.yml'
+
+# The parse is deliberately narrow: two-space service keys inside the top-level
+# `services:` block, and the three four-space keys that decide the question.
+# `FNR == 1` ends the previous file's last block, since nothing else does.
+declared_services() {
+  # shellcheck disable=SC2086
+  awk '
+    function flush() {
+      if (name != "" && cname != "" && gated == 0 && restart != "no") print cname
+      name = ""; cname = ""; gated = 0; restart = ""
+    }
+    FNR == 1 { flush(); insvc = 0 }
+    /^[^[:space:]#]/ { flush(); insvc = ($0 ~ /^services:[[:space:]]*$/) ? 1 : 0; next }
+    insvc && /^  [A-Za-z0-9_.-]+:[[:space:]]*(&[A-Za-z0-9_.-]+)?[[:space:]]*(#.*)?$/ {
+      flush(); sub(":.*", "", $1); name = $1; next
+    }
+    insvc && name != "" && /^    container_name:/ { cname = $2; next }
+    insvc && name != "" && /^    profiles:/       { gated = 1; next }
+    insvc && name != "" && /^    restart:/        { r = $2; gsub(/"/, "", r); restart = r; next }
+    END { flush() }
+  ' $COMPOSE_FILES 2>/dev/null
 }
+
+# What each one is for. A name with no entry here still gets a row: undescribed
+# is a prompt to describe it, and silence is the defect this file exists to end.
+purpose() {
+  case "$1" in
+    innsegl-postgres)                      echo "the ledger" ;;
+    innsegl-spire-server)                  echo "identity" ;;
+    innsegl-spire-agent)                   echo "workload attestation" ;;
+    innsegl-spire-oidc)                    echo "the JWKS the CA trusts" ;;
+    innsegl-mcp)                           echo "the tool surface" ;;
+    innsegl-api)                           echo "the dashboard's read side" ;;
+    innsegl-dashboard)                     echo "the UI" ;;
+    innsegl-sealer)                        echo "segment sealing" ;;
+    innsegl-reconciler)                    echo "the reconcile pass" ;;
+    innsegl-backup)                        echo "the ledger's backup" ;;
+    innsegl-object-store)                  echo "the segment bytes" ;;
+    innsegl-object-filer)                  echo "the segment metadata" ;;
+    innsegl-s3)                            echo "object lock" ;;
+    innsegl-sigstore-fulcio)               echo "certificates" ;;
+    innsegl-sigstore-rekor)                echo "the transparency log" ;;
+    innsegl-sigstore-trillian-log-server)  echo "the log's storage" ;;
+    innsegl-sigstore-trillian-log-signer)  echo "the log's sequencer" ;;
+    innsegl-sigstore-trillian-db)          echo "the log's database" ;;
+    innsegl-sigstore-rekor-redis)          echo "the log's search index" ;;
+    *)                                     echo "(undescribed)" ;;
+  esac
+}
+
+services() {
+  declared_services | while read -r name; do
+    [ -n "$name" ] || continue
+    printf '%s|%s\n' "$name" "$(purpose "$name")"
+  done
+}
+
+# AN EMPTY LIST IS A FAULT, NOT AN EMPTY REPORT. A report of no services is
+# indistinguishable from a healthy one at a glance, which is the failure this
+# whole change is about — so it is said out loud and the script stops.
+if [ -z "$(services)" ]; then
+  {
+    echo "innsegl-start: no services could be read from the compose files"
+    echo "               looked for, beneath $(pwd):"
+    printf '%s\n' "$COMPOSE_FILES" | sed 's/^/                 /'
+  } >&2
+  exit 1
+fi
 
 report() {
   local bad=0
@@ -60,11 +159,11 @@ report() {
     [ -n "$name" ] || continue
     state=$(docker inspect "$name" --format '{{.State.Status}}{{if .State.Health}} ({{.State.Health.Status}}){{end}}' 2>/dev/null)
     if [ -z "$state" ]; then
-      printf '  %-26s %-28s %s\n' "$name" "$what" "ABSENT"; bad=1
+      printf '  %-36s %-26s %s\n' "$name" "$what" "ABSENT"; bad=1
     elif [[ "$state" == running* && "$state" != *unhealthy* && "$state" != *starting* ]]; then
-      printf '  %-26s %-28s %s\n' "$name" "$what" "ok"
+      printf '  %-36s %-26s %s\n' "$name" "$what" "ok"
     else
-      printf '  %-26s %-28s %s\n' "$name" "$what" "$state"; bad=1
+      printf '  %-36s %-26s %s\n' "$name" "$what" "$state"; bad=1
     fi
   done < <(services)
 
@@ -92,6 +191,14 @@ report() {
     "$(dirname "$0")/rekor-tlog-health.sh" || bad=1
   return $bad
 }
+
+# --- --services reads the compose files and nothing else ---------------------
+# Needs no Docker and touches no deployment. It exists so the list this report
+# is built from can be read on its own, and so the self-test can assert it
+# against the compose files rather than against a copy of itself.
+if [ "$MODE" = "--services" ]; then
+  services; exit 0
+fi
 
 # --- --status changes nothing ------------------------------------------------
 if [ "$MODE" = "--status" ]; then
