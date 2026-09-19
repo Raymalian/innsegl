@@ -783,6 +783,331 @@ else
   bad "OPS-077: the capture committed $(git -C "$CREPO" show --name-only --format= HEAD | tr '\n' ' ')"
 fi
 
+# --- OPS-085..088: a capture that fails leaves a durable record ---------------
+#
+# #277 (RM-172). Every refusal and every failure in the capture path above
+# reported itself through `warn`, and `warn` writes to the stderr of a
+# SubagentStop, which the harness discards. The hook is also forbidden to exit 2
+# on a stop — nine invocations, measured — so it could not report by refusing
+# either. A refused capture, a failed signature and a clean tree were therefore
+# one thing seen from outside: nothing. Measured, two subagents stopped within
+# the same minute; one was captured and committed, the other was not, and the
+# only evidence of the second was that its files were missing hours later.
+#
+# So these cases assert a FILE and not a message — what the stop wrote down,
+# read back after the process that wrote it has exited. Every one of them is red
+# against the shim as it stood, and red on merit: not because an assertion is
+# spelled differently, but because there was no record of any kind to read.
+
+UNCAP="$RUNS/uncaptured.jsonl"
+
+# The record is APPEND-ONLY by design, so a case that wants to assert what ONE
+# stop wrote clears it first. Cases above this line have already written to it:
+# they drive stops against the real repository, whose tree is dirty on a working
+# machine, and a refusal there is exactly the thing being recorded.
+uncap_reset() { rm -f "$UNCAP"; }
+uncap_lines() { if [ -f "$UNCAP" ]; then grep -c . "$UNCAP"; else echo 0; fi; }
+
+# uncap_field <field> — that field of the LAST line written.
+uncap_field() {
+  python3 -c '
+import json, sys
+last = ""
+try:
+    for last in open(sys.argv[1]):
+        pass
+except Exception:
+    last = ""
+try:
+    v = json.loads(last).get(sys.argv[2], "")
+except Exception:
+    v = ""
+print(v if isinstance(v, str) else json.dumps(v))
+' "$UNCAP" "$1" 2>/dev/null
+}
+
+# capture_run_wt <agent-id> <run-id> <worktree> — capture_run, with the ledger
+# naming a worktree. The issue asks the record to name one, and a fixture whose
+# worktree is empty cannot tell a field that is carried from a field that is
+# dropped.
+capture_run_wt() {
+  script_tool observe_session ok "{\"session_id\":\"$1\",\"phase\":\"start\",\"known\":true,\"registered\":true,\"run_id\":\"$2\",\"task\":\"rm172\",\"worktree\":\"$3\",\"repo\":\"example.test/org/name\",\"branch\":\"dev/rm172\",\"agent_type\":\"prober\"}"
+  SIGNER="$WORK/capture-signer" drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-1\",\"agent_id\":\"$1\",\"agent_type\":\"prober\",\"cwd\":\"$CREPO\"}"
+  rm -rf "${LOG:?}/$2"; mkdir -p "$LOG/$2"
+}
+
+# capture_stop_by <agent-id> <signer> — the stop, with a chosen signer.
+capture_stop_by() {
+  script_tool observe_session ok "{\"session_id\":\"$1\",\"phase\":\"stop\",\"known\":true,\"retired\":true,\"run_id\":\"retired\"}"
+  : > "$WORK/signer.calls"
+  SIGNER="$2" drive "{\"hook_event_name\":\"SubagentStop\",\"session_id\":\"sess-1\",\"agent_id\":\"$1\",\"agent_type\":\"prober\"}"
+}
+
+# drive_deaf — drive, with the hook's stderr sent where the harness sends a
+# SubagentStop's: nowhere. This is the whole claim of #277 made into a fixture.
+drive_deaf() {
+  : > "$CALLS"
+  printf '%s' "$1" | env \
+    INNSEGL_MCP_ADMIN_URL="$ADMIN" \
+    INNSEGL_RUNS_DIR="$RUNS" \
+    INNSEGL_LOG_DIR="$LOG" \
+    INNSEGL_SIGNER="${SIGNER:-$WORK/signer}" \
+    INNSEGL_API_URL="${API:-http://127.0.0.1:1/}" \
+    INNSEGL_ADMIN_CREDENTIAL_MINT="${MINT:-}" \
+    "$SHIM" > /dev/null 2>/dev/null
+  STATUS=$?
+  cat "$CALLS" >> "$WORK/allcalls"
+}
+
+# A signer that cannot sign because the deployment is not there, and one that
+# cannot because the run has already been retired. Both are real refusals of
+# scripts/innsegl-commit.sh and both used to reach the operator as nothing at
+# all: the signer printed to a stderr the harness throws away.
+cat > "$WORK/signer-down" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/signer.calls"
+echo "innsegl-commit: the identity lifecycle did not answer; nothing was signed" >&2
+exit 1
+SH
+cat > "$WORK/signer-retired" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/signer.calls"
+echo "innsegl-commit: refused, that run is already retired and cannot sign" >&2
+exit 1
+SH
+chmod +x "$WORK/signer-down" "$WORK/signer-retired"
+
+creset() {
+  git -C "$CREPO" reset -q
+  git -C "$CREPO" checkout -q -- .
+  git -C "$CREPO" clean -qfd
+}
+
+# --- OPS-085: the index holds files the run cannot account for ----------------
+#
+# The refusal OPS-074 proves is correct is also the refusal that vanished. Same
+# fixture shape, and what is asserted here is what survived it.
+creset
+uncap_reset
+capture_run_wt agent-cap5 run-cap5 wt-cap5
+wrote_body run-cap5 a Edit "{\"file_path\":\"$CREPO/mine5.txt\"}"
+printf 'mine5\n'   > "$CREPO/mine5.txt"
+printf 'theirs5\n' > "$CREPO/theirs5.txt"
+git -C "$CREPO" add theirs5.txt        # staged by someone who is not this run
+HEAD_BEFORE="$(git -C "$CREPO" rev-parse HEAD)"
+capture_stop agent-cap5
+
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_lines)" = "1" ]; then
+  ok "OPS-085 a refused capture writes exactly one durable record, and still exits 0"
+else
+  bad "OPS-085 status $STATUS, $(uncap_lines) record(s) at $UNCAP"
+fi
+if [ "$(uncap_field reason)" = "index_unaccounted" ] && [ "$(uncap_field run_id)" = "run-cap5" ]; then
+  ok "OPS-085 and it names the run and why the capture was refused"
+else
+  bad "OPS-085 reason '$(uncap_field reason)' run '$(uncap_field run_id)', want index_unaccounted / run-cap5"
+fi
+# THE FOUR THE ISSUE ASKS FOR: the run, the reason, the worktree and the file
+# count. The tree is carried twice on purpose — `dir` is where the work is on
+# this machine, which is what a recovery needs, and `worktree` is what the
+# ledger calls it, which is what a reader correlating with a run needs.
+if [ "$(uncap_field dir)" = "$CREPO" ] && [ "$(uncap_field worktree)" = "wt-cap5" ] \
+   && [ "$(uncap_field wrote)" = "1" ] && [ "$(uncap_field unaccounted)" = "1" ] \
+   && [ "$(uncap_field dirty)" != "0" ]; then
+  ok "OPS-085 and the worktree and the file counts, which is what a recovery needs"
+else
+  bad "OPS-085 dir '$(uncap_field dir)' worktree '$(uncap_field worktree)' wrote '$(uncap_field wrote)' unaccounted '$(uncap_field unaccounted)' dirty '$(uncap_field dirty)'"
+fi
+# AND IT NAMES THE PATH THE RUN COULD HAVE COMMITTED. Without it a recovery
+# knows a capture failed and not what to stage.
+if [ "$(uncap_field wrote_paths)" = '["mine5.txt"]' ] \
+   && [ "$(uncap_field unaccounted_paths)" = '["theirs5.txt"]' ]; then
+  ok "OPS-085 and which paths were the run's and which were not"
+else
+  bad "OPS-085 wrote_paths $(uncap_field wrote_paths) unaccounted_paths $(uncap_field unaccounted_paths)"
+fi
+# THE RECORD IS READ HERE TOO, and not only the tree. "Nothing moved" is true
+# of a shim that does nothing at all, so a case asserting only that is green
+# against the very defect it exists to catch.
+if [ "$(uncap_field run_id)" = "run-cap5" ] \
+   && [ "$(git -C "$CREPO" rev-parse HEAD)" = "$HEAD_BEFORE" ] && [ "$(staged_now)" = "theirs5.txt " ]; then
+  ok "OPS-085 and writing it changes nothing: HEAD is where it was, and so is the index"
+else
+  bad "OPS-085 run '$(uncap_field run_id)', HEAD moved or the index is '$(staged_now)'"
+fi
+
+# --- OPS-086: a run that cannot be asked, and a run with nothing of its own ----
+#
+# Two refusals that are not the same refusal, and the record has to tell them
+# apart — a reader who cannot is back to reading a missing file hours later.
+creset
+uncap_reset
+capture_run_wt agent-cap6 run-cap6 wt-cap6
+rm -rf "${LOG:?}/run-cap6"              # its tool-call bodies are gone
+printf 'dirty6\n' >> "$CREPO/base.txt"
+capture_stop agent-cap6
+R_UNREADABLE="$(uncap_field reason)"
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_field reason)" = "bodies_unreadable" ] \
+   && [ "$(uncap_field run_id)" = "run-cap6" ]; then
+  ok "OPS-086 a run that cannot be asked what it wrote is recorded as that, not as silence"
+else
+  bad "OPS-086 status $STATUS, reason '$(uncap_field reason)', run '$(uncap_field run_id)'"
+fi
+
+creset
+uncap_reset
+capture_run_wt agent-cap7 run-cap7 wt-cap7
+wrote_body run-cap7 a Read "{\"file_path\":\"$CREPO/base.txt\"}"
+printf 'dirty7\n' >> "$CREPO/base.txt"
+printf 'theirs7\n' > "$CREPO/theirs7.txt"
+git -C "$CREPO" add theirs7.txt
+capture_stop agent-cap7
+R_READONLY="$(uncap_field reason)"
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_field reason)" = "no_recorded_writes" ] \
+   && [ "$(uncap_field wrote)" = "0" ] && [ "$(uncap_field dirty)" != "0" ]; then
+  ok "OPS-086 and a read-only run is recorded as having written nothing, with the tree still dirty"
+else
+  bad "OPS-086 read-only: status $STATUS, reason '$(uncap_field reason)', wrote '$(uncap_field wrote)', dirty '$(uncap_field dirty)'"
+fi
+# BOTH NAMED, not merely unequal. Two runs that record nothing also record
+# two reasons that differ from any constant, which is how a case like this
+# passes over the very silence it is about.
+if [ "$R_UNREADABLE" = "bodies_unreadable" ] && [ "$R_READONLY" = "no_recorded_writes" ] \
+   && [ "$R_UNREADABLE" != "$R_READONLY" ]; then
+  ok "OPS-086 and the two refusals are told apart, which is the whole use of the record"
+else
+  bad "OPS-086 the two refusals recorded '$R_UNREADABLE' and '$R_READONLY'"
+fi
+
+# --- OPS-087: signing unavailable, and a run already retired ------------------
+#
+# The path that loses the most. The capture got as far as staging the run's own
+# work and then the signature failed, so the work IS recoverable — staged, in a
+# named tree, under a named run — and every word of that used to go to a stderr
+# the harness discards. The signer said WHY, once, and that sentence was the
+# first thing lost.
+creset
+uncap_reset
+capture_run_wt agent-cap8 run-cap8 wt-cap8
+wrote_body run-cap8 a Write "{\"file_path\":\"$CREPO/mine8.txt\"}"
+printf 'mine8\n' > "$CREPO/mine8.txt"
+HEAD_BEFORE="$(git -C "$CREPO" rev-parse HEAD)"
+capture_stop_by agent-cap8 "$WORK/signer-down"
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_field reason)" = "signing_failed" ] \
+   && [ "$(uncap_field run_id)" = "run-cap8" ]; then
+  ok "OPS-087 a signature that could not be made is recorded, and the stop still exits 0"
+else
+  bad "OPS-087 status $STATUS, reason '$(uncap_field reason)', run '$(uncap_field run_id)'"
+fi
+case "$(uncap_field detail)" in
+  *"did not answer"*) ok "OPS-087 and it carries what the signer said, which is the one sentence that was lost" ;;
+  *) bad "OPS-087 the record does not carry the signer's reason: '$(uncap_field detail)'" ;;
+esac
+# ENOUGH TO REDO THE WORK: the tree, the run, and the paths that are staged in
+# it waiting to be signed under that run.
+if [ "$(git -C "$CREPO" rev-parse HEAD)" = "$HEAD_BEFORE" ] && [ "$(staged_now)" = "mine8.txt " ] \
+   && [ "$(uncap_field dir)" = "$CREPO" ] && [ "$(uncap_field staged)" = "1" ]; then
+  ok "OPS-087 and it names the tree and the count still staged there, so the work can be signed later"
+else
+  bad "OPS-087 staged '$(staged_now)' dir '$(uncap_field dir)' staged count '$(uncap_field staged)'"
+fi
+
+creset
+uncap_reset
+capture_run_wt agent-cap9 run-cap9 wt-cap9
+wrote_body run-cap9 a Write "{\"file_path\":\"$CREPO/mine9.txt\"}"
+printf 'mine9\n' > "$CREPO/mine9.txt"
+capture_stop_by agent-cap9 "$WORK/signer-retired"
+case "$(uncap_field reason)/$(uncap_field detail)" in
+  signing_failed/*"already retired"*)
+    ok "OPS-087 a run already retired is recorded with the refusal that names it" ;;
+  *) bad "OPS-087 retired: reason '$(uncap_field reason)' detail '$(uncap_field detail)'" ;;
+esac
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_lines)" = "1" ]; then
+  ok "OPS-087 one attempt, one record, and a stop that never blocks"
+else
+  bad "OPS-087 retired: status $STATUS, $(uncap_lines) record(s)"
+fi
+
+# --- OPS-088: success writes nothing, and the record outlives the process ------
+#
+# The negative half, and it is asserted against a refusal in the SAME log rather
+# than on its own: "nothing was written" is worth nothing unless something else
+# would have been. A capture that commits is already recorded as
+# `commit_recorded` by the ledger, so a second line here would be a second
+# source of truth for one fact.
+creset
+uncap_reset
+capture_run_wt agent-cap10 run-cap10 wt-cap10
+wrote_body run-cap10 a Read "{\"file_path\":\"$CREPO/base.txt\"}"
+printf 'dirty10\n' >> "$CREPO/base.txt"
+capture_stop agent-cap10
+AFTER_REFUSAL="$(uncap_lines)"
+
+creset
+capture_run_wt agent-cap11 run-cap11 wt-cap11
+wrote_body run-cap11 a Write "{\"file_path\":\"$CREPO/mine11.txt\"}"
+printf 'mine11\n' > "$CREPO/mine11.txt"
+HEAD_BEFORE="$(git -C "$CREPO" rev-parse HEAD)"
+capture_stop agent-cap11
+AFTER_SUCCESS="$(uncap_lines)"
+
+if [ "$(git -C "$CREPO" rev-parse HEAD)" != "$HEAD_BEFORE" ] \
+   && [ "$AFTER_REFUSAL" = "1" ] && [ "$AFTER_SUCCESS" = "1" ]; then
+  ok "OPS-088 a capture that commits writes no record, where a refused one wrote exactly one"
+else
+  bad "OPS-088 $AFTER_REFUSAL record(s) after the refusal, $AFTER_SUCCESS after the capture"
+fi
+# THE REFUSED RUN IS NAMED AND THE CAPTURED ONE IS NOT, asserted together. An
+# empty file satisfies the second half on its own, which is the shim this
+# replaces.
+if grep -q 'run-cap10' "$UNCAP" 2>/dev/null && ! grep -q 'run-cap11' "$UNCAP" 2>/dev/null; then
+  ok "OPS-088 and the ledger fact is not duplicated: the refused run is named, the captured one is not"
+else
+  bad "OPS-088 the log names $(grep -o 'run-cap1[01]' "$UNCAP" 2>/dev/null | sort -u | tr '\n' ' ')"
+fi
+
+# A clean tree is not an attempt, so it is not an outcome either. This is what
+# stops the record from becoming a line per stop, which is a line nobody reads.
+creset
+BEFORE_CLEAN="$(uncap_lines)"
+capture_run_wt agent-cap12 run-cap12 wt-cap12
+wrote_body run-cap12 a Write "{\"file_path\":\"$CREPO/mine12.txt\"}"
+capture_stop agent-cap12
+# THE LOG IS NOT CLEARED FIRST, deliberately. "It wrote nothing" is worth
+# nothing measured against an empty file; it is worth something measured
+# against a log that already holds the one line a refusal put there.
+if [ "$BEFORE_CLEAN" = "1" ] && [ "$(uncap_lines)" = "1" ] \
+   && ! grep -q 'run-cap12' "$UNCAP" 2>/dev/null; then
+  ok "OPS-088 a stop over a clean tree attempts no capture and records none"
+else
+  bad "OPS-088 $BEFORE_CLEAN record(s) before the clean stop and $(uncap_lines) after"
+fi
+
+# AND THE RECORD SURVIVES THE PROCESS THAT WROTE IT. The same refusal, driven
+# with the hook's stderr sent exactly where the harness sends a SubagentStop's,
+# and read back afterwards from the filesystem. If this passes while the
+# warnings are thrown away, the record is durable in the only sense the issue
+# asks for.
+creset
+uncap_reset
+capture_run_wt agent-cap13 run-cap13 wt-cap13
+wrote_body run-cap13 a Edit "{\"file_path\":\"$CREPO/mine13.txt\"}"
+printf 'mine13\n'   > "$CREPO/mine13.txt"
+printf 'theirs13\n' > "$CREPO/theirs13.txt"
+git -C "$CREPO" add theirs13.txt
+script_tool observe_session ok '{"session_id":"agent-cap13","phase":"stop","known":true,"retired":true,"run_id":"retired"}'
+SIGNER="$WORK/capture-signer" drive_deaf '{"hook_event_name":"SubagentStop","session_id":"sess-1","agent_id":"agent-cap13","agent_type":"prober"}'
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_field run_id)" = "run-cap13" ] \
+   && [ "$(uncap_field reason)" = "index_unaccounted" ]; then
+  ok "OPS-088 a stop whose stderr goes nowhere still leaves the record on disk"
+else
+  bad "OPS-088 deaf stop: status $STATUS, $(uncap_lines) record(s), run '$(uncap_field run_id)'"
+fi
+
+creset
+uncap_reset
+
 # --- OPS-073: single-listener mode, unchanged --------------------------------
 #
 # ASSERTED FIRST, over everything above it, because "nothing changed" is only
