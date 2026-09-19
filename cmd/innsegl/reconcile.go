@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/ledger"
+	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/reconciler"
 	"innsegl.dev/innsegl/internal/spire"
 )
@@ -109,6 +110,12 @@ const (
 	// were about.
 	envWritesRepos = "INNSEGL_WRITES_REPOS"
 
+	// envWritesProjects is where RM-104's check finds the repositories it was
+	// told to read, as THIS process spells it. It is the `describe_workspace`
+	// mount, because that is the directory the workspace's repository links
+	// point into; the check compares a translated claim path against it.
+	envWritesProjects = "INNSEGL_WRITES_PROJECTS"
+
 	envRebaseBranch = "INNSEGL_REBASE_BRANCH"
 	envRebaseRepos  = "INNSEGL_REBASE_REPOS"
 	envInterval     = "INNSEGL_RECONCILE_INTERVAL"
@@ -144,6 +151,13 @@ type reconcileOptions struct {
 	// reconciler without it is checking what its agents claim to have written.
 	writesLogDir string
 	writesRepos  []string
+	// hostProjects and writesProjects are the two spellings of one directory
+	// that let RM-104's check tell a claimed path inside a served repository
+	// from one outside every repository it can read. Empty leaves the path
+	// rule OFF and `Result.Writes.Scoped` says so, because unscoped the
+	// corroboration rate moves with how much scratch work an agent did.
+	hostProjects   string
+	writesProjects string
 
 	rebaseBranch string
 	rebaseRepos  []string
@@ -250,6 +264,14 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 				"-rebase-repos, which is usually the wrong set: the repository whose merges "+
 				"rewrite commits is not the set of repositories agents work in "+
 				"($"+envWritesRepos+")")
+		hostProjects = fs.String("host-projects", os.Getenv(mcp.EnvHostProjects),
+			"the host directory -writes-projects is a mount of — the same value "+
+				"describe_workspace is told, and told for the same reason: a body records "+
+				"the path a HARNESS saw and nothing in this process says what its mount "+
+				"corresponds to. Empty leaves RM-104's path rule off, so a write to an "+
+				"agent's scratch directory is counted uncorroborated ($"+mcp.EnvHostProjects+")")
+		writesProjects = fs.String("writes-projects", envOr(envWritesProjects, mcp.DefaultProjectsMount),
+			"where that host directory is mounted in this process ($"+envWritesProjects+")")
 		rebaseBranch = fs.String("rebase-branch", os.Getenv(envRebaseBranch),
 			"branch to walk for commits a merge rewrote; empty leaves ADR-0047's pass OFF ($"+envRebaseBranch+")")
 		rebaseRepos = fs.String("rebase-repos", os.Getenv(envRebaseRepos),
@@ -358,12 +380,14 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 	opts := reconcileOptions{
 		dsn: *dsn, rekorURL: *rekorURL, workspace: *workspace,
 		trustDomain: *trustDomain, expireAfter: *expireAfter,
-		driftWindow:  *driftWindow,
-		writesLogDir: strings.TrimSpace(*writesLogDir),
-		writesRepos:  splitRepos(*writesRepos),
-		rebaseBranch: strings.TrimSpace(*rebaseBranch),
-		rebaseRepos:  splitRepos(*rebaseRepos),
-		interval:     *interval, once: *once,
+		driftWindow:    *driftWindow,
+		writesLogDir:   strings.TrimSpace(*writesLogDir),
+		writesRepos:    splitRepos(*writesRepos),
+		hostProjects:   strings.TrimSpace(*hostProjects),
+		writesProjects: strings.TrimSpace(*writesProjects),
+		rebaseBranch:   strings.TrimSpace(*rebaseBranch),
+		rebaseRepos:    splitRepos(*rebaseRepos),
+		interval:       *interval, once: *once,
 		spireAddress: *spireAddress, spireServerID: *spireServerID,
 		workloadAPI: *workloadAPI, spireTimeout: *spireTimeout,
 	}
@@ -515,6 +539,16 @@ func renderReconcileResult(result reconciler.Result) string {
 			"%d uncheckable  %d unreadable\n",
 			result.Writes.Checked, result.Writes.Supported, result.Writes.Unsupported,
 			result.Writes.Uncheckable, result.Writes.Unreadable)
+		// UNSCOPED IS SAID, not left to be inferred from a number that looks
+		// the same either way. Measured on this deployment, 339 of 4,291
+		// reconstructable claims (7.9%) name a path in no repository the
+		// workspace links; unscoped they are all counted "not found", so the
+		// rate moves with how much scratch work an agent did.
+		if !result.Writes.Scoped {
+			fmt.Fprintf(&b, "  UNSCOPED - -host-projects (or $%s) is not set, so a write to a "+
+				"scratch directory is counted \"not found\" rather than uncheckable, and the "+
+				"corroborated share is lower than the evidence warrants\n", mcp.EnvHostProjects)
+		}
 	} else {
 		fmt.Fprintf(&b, "writes: OFF - -writes-log-dir (or $%s) is not set, so no "+
 			"reported write is corroborated against the repository\n", envWritesLogDir)
@@ -738,6 +772,12 @@ func openReconciler(ctx context.Context, opts reconcileOptions) (reconcileEngine
 		cfg.Writes = &reconciler.WritesConfig{
 			LogDir: opts.writesLogDir,
 			Repos:  repos,
+			// The three roots that let the check tell a claimed path inside a
+			// served repository from a scratch path that was never going to be
+			// in any tree. All three or none; the pass reports which.
+			HostProjects: opts.hostProjects,
+			Projects:     opts.writesProjects,
+			Workspace:    opts.workspace,
 		}
 	}
 	if opts.rebaseBranch != "" {

@@ -67,6 +67,14 @@ func runWritesPass(
 	t *testing.T, m *memLedger, repos reconciler.Repos, logDir, repoID string,
 ) reconciler.WritesReport {
 	t.Helper()
+	return runWritesPassWith(t, m, repos,
+		&reconciler.WritesConfig{LogDir: logDir, Repos: []string{repoID}})
+}
+
+func runWritesPassWith(
+	t *testing.T, m *memLedger, repos reconciler.Repos, cfg *reconciler.WritesConfig,
+) reconciler.WritesReport {
+	t.Helper()
 	r, err := reconciler.New(reconciler.Config{
 		Ledger:      m,
 		Appender:    m,
@@ -76,7 +84,7 @@ func runWritesPass(
 		Now:         rebaseClock,
 		Alert:       func(context.Context, reconciler.Finding) {},
 		Observe:     func(reconciler.Result, error) {},
-		Writes:      &reconciler.WritesConfig{LogDir: logDir, Repos: []string{repoID}},
+		Writes:      cfg,
 	})
 	if err != nil {
 		t.Fatalf("reconciler.New: %v", err)
@@ -242,6 +250,152 @@ func TestWritesPassCountsAMissingBodyAsUnreadable(t *testing.T) {
 	}
 	if report.Unreadable != 1 {
 		t.Errorf("unreadable %d, want 1", report.Unreadable)
+	}
+}
+
+// servedLayout builds the three directories a deployment actually has: the
+// projects directory as the HOST spells it, the same directory as this process
+// mounts it, and the workspace root where `host/org/name` is a symlink into
+// that mount. Returns the config those three describe.
+//
+// The symlink is not incidental. It is how a repository comes to be at
+// `<root>/host/org/name` at all, and a rule that compared the unresolved path
+// would find every claim outside every repository.
+func servedLayout(t *testing.T, base, repoID, dirName string) *reconciler.WritesConfig {
+	t.Helper()
+	host := filepath.Join(base, "host")
+	projects := filepath.Join(base, "projects")
+	work := filepath.Join(base, "work")
+
+	repoDir := filepath.Join(projects, dirName)
+	if err := os.MkdirAll(filepath.Join(repoDir, "internal"), 0o755); err != nil {
+		t.Fatalf("mkdir repository: %v", err)
+	}
+	link := filepath.Join(work, filepath.FromSlash(repoID))
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	if err := os.Symlink(repoDir, link); err != nil {
+		t.Fatalf("symlink %s -> %s: %v", link, repoDir, err)
+	}
+	if err := os.MkdirAll(host, 0o755); err != nil {
+		t.Fatalf("mkdir host projects: %v", err)
+	}
+	return &reconciler.WritesConfig{
+		Repos:        []string{repoID},
+		HostProjects: host,
+		Projects:     projects,
+		Workspace:    work,
+	}
+}
+
+// A write to a path no served repository holds is UNCHECKABLE, not a shortfall.
+//
+// Measured against this deployment's retained bodies: 339 of 4,291
+// reconstructable claims name a path outside every repository the workspace
+// links — a scratch directory, a temporary file, a tree nobody serves. Counted
+// "not found", each one says the repository contradicted the claim when the
+// repository was never asked, and the corroboration rate then moves with how
+// much scratch work an agent did. The bucket for "this check is silent about
+// it" already existed; these belong in it.
+func TestWritesPassCountsAWriteOutsideEveryServedRepositoryAsUncheckable(t *testing.T) {
+	const repoID = "github.com/acme/api"
+	const runID = "run-writes-5"
+	const tree = "4444444444444444444444444444444444444444"
+
+	base := t.TempDir()
+	cfg := servedLayout(t, base, repoID, "api")
+	cfg.LogDir = t.TempDir()
+
+	inRepo := "package a\n\nfunc A() {}\n"
+	inScratch := "notes\n"
+
+	inRepoDigest := plantBody(t, cfg.LogDir, runID, map[string]any{
+		"tool_name": "Write",
+		"tool_input": map[string]any{
+			"file_path": filepath.Join(cfg.HostProjects, "api", "internal", "a.go"),
+			"content":   inRepo,
+		},
+	})
+	scratchDigest := plantBody(t, cfg.LogDir, runID, map[string]any{
+		"tool_name": "Write",
+		"tool_input": map[string]any{
+			"file_path": filepath.Join(base, "scratch", "notes.md"),
+			"content":   inScratch,
+		},
+	})
+
+	m := newMemLedger(rebaseClock)
+	seedRegistered(t, m, runID)
+	seedTool(t, m, runID, inRepoDigest)
+	seedTool(t, m, runID, scratchDigest)
+	seedSigned(t, m, runID, repoID, tree)
+
+	// The repository holds neither, so the only thing separating the two
+	// claims is where each one says it wrote.
+	repos := &writesRepo{holds: map[string]map[string]struct{}{
+		repoID: {reconciler.BlobID("something else\n"): {}},
+	}}
+
+	report := runWritesPassWith(t, m, repos, cfg)
+
+	if !report.Scoped {
+		t.Fatal("the pass reported itself unscoped with all three roots given; " +
+			"it cannot then tell a scratch path from a repository path")
+	}
+	if report.Uncheckable != 1 {
+		t.Errorf("uncheckable %d, want 1 — a write to %s is in no repository this "+
+			"deployment serves, so there was never anything to check it against",
+			report.Uncheckable, filepath.Join(base, "scratch", "notes.md"))
+	}
+	if report.Unsupported != 1 {
+		t.Errorf("unsupported %d, want 1 — only the write INSIDE the repository is a "+
+			"claim the repository can speak to", report.Unsupported)
+	}
+	if len(driftSubjects(t, m)) != 0 {
+		t.Error("the pass appended a finding; it must only count")
+	}
+}
+
+// Unscoped is SAID, not inferred from a number.
+//
+// A deployment that has not been told which host directory its mount
+// corresponds to cannot translate a claimed path, so every path is admitted
+// and a scratch write is counted "not found" exactly as it was before. That is
+// a weaker report and the report has to say so: a rate a reader trusts more
+// than it deserves is the failure #167 was filed about.
+func TestWritesPassSaysWhenItCannotScopeAPath(t *testing.T) {
+	const repoID = "github.com/acme/api"
+	const runID = "run-writes-6"
+	const tree = "5555555555555555555555555555555555555555"
+
+	base := t.TempDir()
+	logDir := t.TempDir()
+	digest := plantBody(t, logDir, runID, map[string]any{
+		"tool_name": "Write",
+		"tool_input": map[string]any{
+			"file_path": filepath.Join(base, "scratch", "notes.md"),
+			"content":   "notes\n",
+		},
+	})
+
+	m := newMemLedger(rebaseClock)
+	seedRegistered(t, m, runID)
+	seedTool(t, m, runID, digest)
+	seedSigned(t, m, runID, repoID, tree)
+	repos := &writesRepo{holds: map[string]map[string]struct{}{
+		repoID: {reconciler.BlobID("something else\n"): {}},
+	}}
+
+	report := runWritesPass(t, m, repos, logDir, repoID)
+
+	if report.Scoped {
+		t.Fatal("the pass reported itself scoped with no host projects directory " +
+			"given; nothing there can translate a host path")
+	}
+	if report.Unsupported != 1 {
+		t.Errorf("unsupported %d, want 1 — unscoped, the path rule does not run and "+
+			"the claim is judged on content alone, as it was before", report.Unsupported)
 	}
 }
 
