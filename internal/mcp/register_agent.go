@@ -300,6 +300,19 @@ func registerAgent(ctx context.Context, _ *sdk.CallToolRequest, in registerAgent
 
 // register is the tool, once its dependencies are known.
 func (c *RegisterAgentConfig) register(ctx context.Context, in registerAgentIn) (registerAgentOut, error) {
+	// THE CREDENTIAL'S REPOSITORY AGAINST THE ARGUMENT (#264), before
+	// anything. This is the tool the whole check exists for: it is what MINTS
+	// a run, and a caller that can mint one for any repository is doc 04's
+	// AB-13 and AB-15 whatever the other five do.
+	//
+	// It is checked here rather than at the transport because the transport
+	// does not read arguments, and before the idempotency claim because a
+	// refused call must leave nothing behind — no key claimed, no identity, no
+	// event. With no credential in force this is true and register_agent is
+	// unchanged.
+	if !adminScopeAdmits(ctx, in.Repo) {
+		return registerAgentOut{}, adminScopeRefusal(ToolRegisterAgent)
+	}
 	run, err := registerAgentRun(in, c.Pseudonyms)
 	if err != nil {
 		return registerAgentOut{}, err
@@ -404,6 +417,12 @@ func (c *RegisterAgentConfig) heal(ctx context.Context, run spire.RunRef) error 
 // because a record with no identity is inert, and an identity with no record
 // is I3 broken.
 func (c *RegisterAgentConfig) mint(ctx context.Context, run spire.RunRef, spiffeID string, in registerAgentIn) (any, error) {
+	// THE PARENT IS CHECKED BEFORE ANYTHING IS WRITTEN, and inside mint rather
+	// than before the idempotency claim. See checkParent for both halves of
+	// that placement.
+	if err := c.checkParent(ctx, run.RunID, in.ParentRunID); err != nil {
+		return nil, err
+	}
 	if _, err := c.Ledger.Append(ctx, registerAgentEvent(run, spiffeID, in)); err != nil {
 		return nil, registerAgentLedgerError(run.RunID, err)
 	}
@@ -419,6 +438,100 @@ func (c *RegisterAgentConfig) mint(ctx context.Context, run spire.RunRef, spiffe
 		RunID:     run.RunID,
 		ExpiresAt: event.NewTimestamp(c.Now().Add(entry.TTL)).String(),
 	}, nil
+}
+
+// checkParent holds a named parent to being a run this chain actually has, and
+// has not ended.
+//
+// # Why the check exists at all
+//
+// Until RM-156 (#259) `parent_run_id` was COPIED. The argument was held to
+// doc 02 §5's identifier grammar by the schema validator on the way into the
+// ledger, and to nothing else — so any well-formed string became a permanent
+// edge to a run that need never have existed. An append-only record cannot be
+// amended, so an edge written wrong is wrong for ever, and the reader who
+// follows it finds nothing and cannot tell a typo from a run whose events are
+// missing.
+//
+// # The three refusals, and why each is a refusal rather than a shrug
+//
+//	NOT A RUN ID      the grammar, checked here rather than at the append, so
+//	                  the refusal names the argument instead of the envelope.
+//	ITS OWN PARENT    a run that started itself is a cycle of length one, and a
+//	                  reader walking parents would not terminate. It cannot be
+//	                  a typo for anything either: the run id is DERIVED from
+//	                  the call, so the caller cannot have had it to send.
+//	NO SUCH RUN       the edge would be dangling.
+//	RETIRED           retirement is terminal and effective immediately
+//	                  (IP §6.2, I4). A run that has ended did not start this
+//	                  one; what a caller holds is a stale pointer, and
+//	                  recording it would make the stale pointer permanent.
+//
+// A LAPSED or ABANDONED parent is accepted. Both are silence, and silence is
+// not an ending (RM-155, #258) — a run whose credential the reaper withdrew is
+// exactly the orchestrator that is waiting on a provider limit while its
+// subagent registers.
+//
+// # Why it runs inside mint, and not before the idempotency claim
+//
+// Before the claim it would run on every REPLAY, and a replay is how a resumed
+// run gets its entry healed and how observe_session answers a duplicate start.
+// A child whose parent has been retired since would then be refused an
+// identity it already holds — the run id is derived and does not depend on the
+// parent, so the second call cannot move the edge in any case. Inside mint the
+// check runs exactly when a `run_registered` is about to be written, which is
+// the only moment an edge can be created. A failure here releases the
+// idempotency claim (see IdempotencyStore.run), so nothing is appended and
+// nothing is held.
+//
+// # A deployment with no run directory
+//
+// Runs is optional — nil turns healing off. It also makes this question
+// unanswerable, and a parent that cannot be checked is not a parent that can
+// be recorded: the call is refused rather than writing an edge on trust. A
+// deployment in that state registers root runs exactly as it always did.
+func (c *RegisterAgentConfig) checkParent(ctx context.Context, runID, parent string) error {
+	if parent == "" {
+		return nil
+	}
+	if err := event.ValidateParentRunID(parent); err != nil {
+		return Errorf(ClassInvariantViolation, runID,
+			"parent_run_id %q is not a run id (doc 02 §5): %v. "+
+				"A parent is a reference into this same ledger, and an edge that cannot "+
+				"name a run would be recorded for ever pointing at nothing",
+			parent, err)
+	}
+	if parent == runID {
+		return Errorf(ClassInvariantViolation, runID,
+			"parent_run_id names this run itself. A run cannot have started itself, and "+
+				"the edge would be a cycle a reader walking parents never leaves")
+	}
+	if c.Runs == nil {
+		return Errorf(ClassInvariantViolation, runID,
+			"this deployment has no run directory, so whether run %q exists cannot be "+
+				"asked; nothing was registered. A parent that cannot be checked is not "+
+				"one that may be written into a record nothing can amend",
+			parent)
+	}
+
+	known, found, err := c.Runs.CredentialRun(ctx, parent)
+	if err != nil {
+		return credentialLedgerError(parent, err)
+	}
+	if !found {
+		return Errorf(ClassRunNotFound, runID,
+			"parent_run_id %q names no run this ledger holds; nothing was registered. "+
+				"The edge would be permanent and would point at nothing",
+			parent)
+	}
+	if known.Retired() {
+		return Errorf(ClassRunAlreadyRetired, runID,
+			"parent_run_id %q was retired at %s; nothing was registered. Retirement is "+
+				"terminal (IP §6.2, I4), so that run did not start this one — what named "+
+				"it is a pointer left behind by a session that has ended",
+			parent, event.NewTimestamp(known.RetiredAt))
+	}
+	return nil
 }
 
 // identity creates the run's SPIRE entry, or adopts the one already there.

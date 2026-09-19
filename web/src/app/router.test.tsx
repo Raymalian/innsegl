@@ -57,15 +57,15 @@ describe("FE-017 navigation", () => {
 
   it("restores the previous view when the browser goes back", async () => {
     render(<Probe />);
-    await go({ view: "runs", filters: { ...emptyRunsFilters(), status: "expired" } });
+    await go({ view: "runs", filters: { ...emptyRunsFilters(), status: "lapsed" } });
     await go({ view: "run", runId: "run-7f3a" });
     expect(shownRoute().view).toBe("run");
 
     await goBack();
-    expect(currentPath()).toBe("/runs?status=expired");
+    expect(currentPath()).toBe("/runs?status=lapsed");
     expect(shownRoute()).toEqual({
       view: "runs",
-      filters: { ...emptyRunsFilters(), status: "expired" },
+      filters: { ...emptyRunsFilters(), status: "lapsed" },
     });
   });
 

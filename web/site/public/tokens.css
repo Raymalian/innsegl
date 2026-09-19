@@ -235,10 +235,16 @@
   --innsegl-color-accent-emphasis: light-dark(var(--innsegl-palette-accent-600), var(--innsegl-palette-accent-300));
   --innsegl-color-focus-ring: light-dark(var(--innsegl-palette-accent-600), var(--innsegl-palette-accent-300));
 
-  /* Run status (§3.2, §4.2). Neutral by §5.3 — none of these is a verdict.
-   * Expired is "an agent died unretired", which §3.2 requires to be styled
-   * distinctly from Retired; it is distinguished by weight, by a stronger
-   * border, and by --innsegl-border-style-status-expired, not by hue. */
+  /* Run state (§3.2, §4.2). Neutral by §5.3 — none of these is a verdict.
+   *
+   * The third family is named for the `run_expired` EVENT that produces it,
+   * not for a state: no run reads "Expired" any more (#256). It dresses both
+   * withdrawn states — Lapsed and Abandoned — which §3.2 requires to be styled
+   * distinctly from Retired; they are distinguished by weight, by a stronger
+   * border, and by --innsegl-border-style-status-expired, not by hue, and from
+   * each other by word and icon. Nothing here says an agent stopped: the
+   * system cannot observe that, and the sentence that used to be quoted on
+   * this line was a guess presented as a fact. */
   --innsegl-color-status-active-text: light-dark(var(--innsegl-palette-neutral-800), var(--innsegl-palette-neutral-50));
   --innsegl-color-status-active-surface: light-dark(var(--innsegl-palette-neutral-50), var(--innsegl-palette-neutral-800));
   --innsegl-color-status-active-border: light-dark(var(--innsegl-palette-neutral-400), var(--innsegl-palette-neutral-500));
@@ -352,7 +358,8 @@
 
   --innsegl-border-width-hairline: 1px;
   --innsegl-border-width-emphasis: 2px;
-  /* Expired is distinguished from Retired without reaching for a hue (§3.2). */
+  /* A withdrawn run is distinguished from a retired one without reaching for a
+   * hue (§3.2). Named for the `run_expired` event, not for a state (#256). */
   --innsegl-border-style-status-expired: dashed;
   /* The mismatch highlight marks the text as well as colouring it (§6.4). */
   --innsegl-text-decoration-mismatch: underline wavy;

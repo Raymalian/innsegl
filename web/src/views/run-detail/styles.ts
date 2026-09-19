@@ -38,7 +38,7 @@ export {
   degraded,
   degradedText,
   emphasisBorder,
-  expiredOutline,
+  withdrawnOutline,
   factCell,
   factStrip,
   factValue,

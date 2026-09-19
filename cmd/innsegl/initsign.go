@@ -227,7 +227,9 @@ func (spireSignVerifier) Run(ctx context.Context, req smokeTestRequest) (smokeTe
 		Audience: minted.Audience, ExpiresAt: minted.ExpiresAt,
 	}
 
-	authorPolicy := signing.AuthorPolicy{Operators: []string{req.AuthorEmail}}
+	authorPolicy := signing.AuthorPolicy{
+		Operators: []signing.Operator{{Address: req.AuthorEmail, Name: req.AuthorName}},
+	}
 	signer, err := signing.NewSigner(signing.Config{
 		FulcioURL: req.FulcioURL, RekorURL: req.RekorURL, Issuer: req.OIDCIssuer,
 		GitsignPath: req.GitsignPath, GitPath: req.GitPath, Author: authorPolicy,

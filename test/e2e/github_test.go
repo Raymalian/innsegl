@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -83,8 +84,34 @@ func loadAuthorPolicy(t *testing.T) signing.AuthorPolicy {
 		// turn the gate into an unconditional failure rather than a check.
 		t.Fatalf("%s admits nothing: no operators and allow_unlinked false", authorPolicyPath)
 	}
+	// ADDRESSES, AND DELIBERATELY NO NAMES. signing.Operator is a pair — the
+	// address, and the display name pinned to it (RM-159) — but this file is
+	// TRACKED, and a name in a tracked file is a published name. So the pinned
+	// half is not stated here, and this gate asks the address half alone, which
+	// is also all it could ask: a commit record collected above carries the
+	// author address and no display name for it to check.
+	//
+	// The name half is enforced where it can still act — ahead of the commit
+	// object, by scripts/no-personal-identity.sh, reading a list that is not in
+	// this repository. GH-005 is what holds the two halves together.
+	//
+	// The entries are read with internal/signing's own parser rather than taken
+	// as strings, so a pinned pair smuggled into this file is a parse this test
+	// can see rather than an address that silently never matches.
+	ops := make([]signing.Operator, 0, len(f.Operators))
+	for _, entry := range f.Operators {
+		op, opErr := signing.ParseOperator(entry)
+		if opErr != nil {
+			t.Fatalf("%s lists %q, which is not an identity: %v", authorPolicyPath, entry, opErr)
+		}
+		if op.Address == "" {
+			t.Fatalf("%s lists %q, which names no address; an operator entry is an address",
+				authorPolicyPath, entry)
+		}
+		ops = append(ops, op)
+	}
 	return signing.AuthorPolicy{
-		Operators: f.Operators, AllowUnlinked: f.AllowUnlinked, InstalledBots: f.InstalledBots,
+		Operators: ops, AllowUnlinked: f.AllowUnlinked, InstalledBots: f.InstalledBots,
 	}
 }
 
@@ -1558,4 +1585,343 @@ func TestGH003BothHalvesOfTheContentCheckAreLoadBearing(t *testing.T) {
 	if gh003Confirms(records, theRun, other) {
 		t.Error("GH-003 confirmed a commit whose change no run recorded")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// GH-005 (proposed for doc 07; doc 07 is not modified here).
+// ---------------------------------------------------------------------------
+
+// GH-005 — the display-name half of I6, and the two properties that keep it
+// from becoming the leak it exists to stop.
+//
+// # What happened
+//
+// The author gate admitted a commit by ADDRESS alone. Measured on this
+// repository on 2026-09-18: an operator's real name is the author and the
+// committer of four merge commits on origin/main, and the CI gate was green
+// throughout, because the address was on the list. The record is append-only;
+// removing them would re-hash 58 commits and orphan 33 signatures. A hole like
+// that is prevented or it is permanent.
+//
+// # One rule, one place
+//
+// The rule is owned by internal/signing: AuthorPolicy.Operators is a pair and
+// CheckIdentity decides. scripts/no-personal-identity.sh cannot call Go — it is
+// POSIX sh so that it runs wherever git runs, including an Alpine container
+// with no bash and no toolchain — so it CONSUMES the rule rather than restating
+// it: the same `Name <address>` syntax, the same untracked file, the same
+// fail-closed semantics. TestGH005TheScriptAndThePolicyAgree drives the same
+// identities through both and requires the same verdict, so the two cannot
+// drift.
+//
+// # The two properties
+//
+//  1. The gate publishes no name. Its output lands in the log of a run on a
+//     PUBLIC repository, so printing the offending name there would publish
+//     exactly what the gate stopped.
+//  2. The gate fails closed. The permitted names live outside the repository,
+//     because an allowlist is safe to publish as a MECHANISM and a person's
+//     name is not. A configuration that has gone missing is exactly when a gate
+//     is most trusted and least able to judge, so a missing list refuses every
+//     name rather than admitting every name.
+//
+// Every fixture identity below is invented. That is also the proof the gate
+// works by allowlist: it refuses them without ever having been told about them.
+
+const (
+	// personalIdentityGate is the commit-time half of I6. It is the only check
+	// that can run BEFORE a commit object exists, which is the only moment a
+	// display name can still be kept out of a published record.
+	personalIdentityGate = "scripts/no-personal-identity.sh"
+
+	// allowedNamesEnv is how both halves are pointed at the permitted set. The
+	// default is .innsegl/allowed-names beside the repository, which is
+	// gitignored on purpose.
+	allowedNamesEnv = "INNSEGL_ALLOWED_NAMES_FILE"
+)
+
+// gh005Fixtures are the identities the script and the Go policy must agree
+// about: a pinned pair, the same address under a different name, and a pinned
+// name on somebody else's address.
+var gh005Fixtures = []struct {
+	label   string
+	name    string
+	email   string
+	refused bool
+}{
+	{"the pinned name on its own address", "Fixture Alpha",
+		"12345+alpha@users.noreply.github.com", false},
+	{"a different name on an admitted address", "Someone Else",
+		"12345+alpha@users.noreply.github.com", true},
+	{"a pinned name on another operator's address", "Fixture Alpha",
+		"67890+beta@users.noreply.github.com", true},
+	{"the other operator's own pinned name", "Fixture Beta",
+		"67890+beta@users.noreply.github.com", false},
+}
+
+// gh005NamesFile is the permitted set both halves read, in the syntax git
+// itself writes an identity in.
+const gh005NamesFile = "# invented fixtures; no line here is a person\n" +
+	"Fixture Alpha <12345+alpha@users.noreply.github.com>\n" +
+	"Fixture Beta <67890+beta@users.noreply.github.com>\n"
+
+// gh005Gate runs the commit-time gate over a one-commit repository authored by
+// name/email, with namesFile as its permitted set, and returns its output and
+// whether it refused.
+func gh005Gate(ctx context.Context, t *testing.T, name, email, namesFile string) (string, bool) {
+	t.Helper()
+	home := t.TempDir()
+	env := gitEnv(home)
+	dir := t.TempDir()
+	if _, err := runGit(ctx, dir, env, "init", "-q", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := runGit(ctx, dir, env, "config", "user.name", name); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	if _, err := runGit(ctx, dir, env, "config", "user.email", email); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
+	if _, err := runGit(ctx, dir, env, "commit", "-q", "--allow-empty", "--no-gpg-sign",
+		"-m", "seed"); err != nil {
+		t.Fatalf("seeding the fixture repository: %v", err)
+	}
+
+	gate := filepath.Join(repoRoot(ctx, t, gitEnv(home)), personalIdentityGate)
+	cmd := exec.CommandContext(ctx, gate, dir)
+	cmd.Env = append(append([]string{}, env...), allowedNamesEnv+"="+namesFile)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		t.Fatalf("running %s: %v\n%s", personalIdentityGate, err, out.String())
+	}
+	return out.String(), err != nil
+}
+
+// gh005WriteNames writes the permitted set to a file outside the repository,
+// the way a real one lives.
+func gh005WriteNames(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "allowed-names")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write names file: %v", err)
+	}
+	return path
+}
+
+// TestGH005TheGateFailsClosedWhenItsConfigurationIsAbsent.
+//
+// The permitted names are deliberately not in the repository, so the file can
+// be missing on any machine that has not been set up. That must refuse, loudly,
+// rather than silently become a pass — a gate that turns into a no-op when its
+// list goes missing is worse than no gate, because it is believed.
+func TestGH005TheGateFailsClosedWhenItsConfigurationIsAbsent(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	missing := filepath.Join(t.TempDir(), "no-such-file")
+	out, refused := gh005Gate(ctx, t, "Fixture Alpha", "12345+alpha@users.noreply.github.com", missing)
+	if !refused {
+		t.Errorf("%s PASSED with no permitted-name list at all:\n%s", personalIdentityGate, out)
+	}
+
+	empty := gh005WriteNames(t, "# nothing permitted\n\n")
+	out, refused = gh005Gate(ctx, t, "Fixture Alpha", "12345+alpha@users.noreply.github.com", empty)
+	if !refused {
+		t.Errorf("%s PASSED with an empty permitted-name list:\n%s", personalIdentityGate, out)
+	}
+}
+
+// TestGH005TheRefusalPublishesNoName. The gate's output is a CI log on a public
+// repository. It may say the role and where; it may not say who.
+func TestGH005TheRefusalPublishesNoName(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	names := gh005WriteNames(t, gh005NamesFile)
+
+	for _, f := range gh005Fixtures {
+		if !f.refused {
+			continue
+		}
+		out, refused := gh005Gate(ctx, t, f.name, f.email, names)
+		if !refused {
+			t.Errorf("%s admitted %s", personalIdentityGate, f.label)
+			continue
+		}
+		if strings.Contains(out, f.name) {
+			t.Errorf("the refusal for %q PUBLISHED the name it refused:\n%s", f.label, out)
+		}
+		if strings.Contains(out, f.email) {
+			t.Errorf("the refusal for %q PUBLISHED the address it refused:\n%s", f.label, out)
+		}
+		// And not the permitted name either: printing "expected X" republishes
+		// the list the file exists to keep out of a log.
+		for _, permitted := range []string{"Fixture Alpha", "Fixture Beta"} {
+			if permitted != f.name && strings.Contains(out, permitted) {
+				t.Errorf("the refusal for %q PUBLISHED a permitted name:\n%s", f.label, out)
+			}
+		}
+	}
+}
+
+// TestGH005TheTrackedGateNamesNobody.
+//
+// The first version of this gate held the operator's own name at the top of a
+// script bound for a public repository — closing the hole by publishing a
+// smaller piece of it. Nothing tracked may hold a permitted display name or a
+// pinned identity line: that is what the untracked list is for.
+func TestGH005TheTrackedGateNamesNobody(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	home := t.TempDir()
+	env := gitEnv(home)
+	root := repoRoot(ctx, t, env)
+
+	// A tracked file may hold something identity-SHAPED — every fixture in this
+	// file and in the selftest does, and inventing them is what proves the gate
+	// works by allowlist. What no tracked file may hold is an identity the gate
+	// ADMITS. So the check is behavioural, not textual: every `Name <address>`
+	// written into a tracked half of the gate is put to the policy this machine
+	// really runs, and every one of them must be refused.
+	shaped := regexp.MustCompile(`(?m)^[^\s#/*][^<\n]*<[^@\s>]+@[^\s>]+>`)
+	var written []signing.Operator
+	for _, rel := range []string{
+		personalIdentityGate,
+		"scripts/no-personal-identity-selftest.sh",
+		".github/workflows/author-gate.yml",
+		"test/e2e/testdata/author-policy.json",
+		"test/e2e/github_test.go",
+		"internal/signing/authoridentity.go",
+		"internal/signing/authoridentity_test.go",
+	} {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("reading %s: %v", rel, err)
+		}
+		for _, m := range shaped.FindAllString(string(body), -1) {
+			op, parseErr := signing.ParseOperator(m)
+			if parseErr != nil || op.Address == "" || op.Name == "" {
+				continue
+			}
+			written = append(written, op)
+		}
+	}
+
+	// The real list, where it is readable. This half cannot run on a fresh CI
+	// checkout, which is exactly the machine that has no list; it is not
+	// skipped, because the fail-closed and no-echo cases stand on their own and
+	// this one only ever adds.
+	local := os.Getenv(allowedNamesEnv)
+	if local == "" {
+		local = filepath.Join(root, ".innsegl", "allowed-names")
+	}
+	raw, err := os.ReadFile(local)
+	if err != nil {
+		t.Logf("GH-005: no permitted-name list on this machine (%v); the tracked-file "+
+			"sweep did not run. The pinned-identity assertions above did.", err)
+		return
+	}
+	ops, err := signing.ParseOperators(strings.Split(string(raw), "\n"))
+	if err != nil {
+		t.Fatalf("the permitted-name list does not parse: %v", err)
+	}
+	machinePolicy := signing.AuthorPolicy{Operators: ops, AllowUnlinked: true}
+	for _, op := range written {
+		if machinePolicy.CheckIdentity(op.Name, op.Address) == nil {
+			// The address, not the name: this message is a CI log.
+			t.Errorf("an identity written into a tracked file is one this repository "+
+				"ADMITS (address %q). A fixture must be invented; a permitted identity "+
+				"belongs in the untracked list.", op.Address)
+		}
+	}
+	t.Logf("GH-005: %d identity-shaped strings in tracked files, all refused", len(written))
+
+	tracked, err := runGit(ctx, root, env, "ls-files", "-z")
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
+	files := strings.Split(strings.TrimRight(tracked, "\x00"), "\x00")
+	swept := 0
+	for _, op := range ops {
+		// A BARE NAME IS NOT WHAT IS BEING KEPT OUT. An entry with no address
+		// is an agent or bot identity — this deployment's own, minted per run,
+		// already named in the specs and in deploy/. A PINNED entry is the one
+		// that says "this display name belongs to whoever holds this account",
+		// and that is the sentence a public repository must not contain.
+		if op.Address == "" || op.Name == "" {
+			continue
+		}
+		swept++
+		for _, f := range files {
+			body, readErr := os.ReadFile(filepath.Join(root, f))
+			if readErr != nil {
+				continue
+			}
+			if strings.Contains(string(body), op.Name) {
+				t.Errorf("a permitted display name is written into the tracked file %s. "+
+					"Move it to the untracked list; a name in a tracked file is a "+
+					"published name.", f)
+			}
+		}
+	}
+	t.Logf("GH-005: swept %d tracked files for %d personal display names", len(files), swept)
+}
+
+// TestGH005TheScriptAndThePolicyAgree is the "one rule, one place" assertion.
+//
+// Two implementations of one rule drift, and the weaker one gets trusted. The
+// script cannot call Go and Go cannot shell out to a script inside a server, so
+// what stops the drift is this: the same permitted set, the same fixtures, and
+// a required agreement on every case where both have an opinion.
+//
+// The scope is a LISTED OPERATOR'S ADDRESS, which is where both halves speak.
+// On an unlinked address the script is deliberately stricter (see
+// TestSIG012AnUnpinnableAddressCarriesNoPin), and that difference is a decision
+// rather than a drift.
+func TestGH005TheScriptAndThePolicyAgree(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	names := gh005WriteNames(t, gh005NamesFile)
+
+	ops, err := signing.ParseOperators(strings.Split(gh005NamesFile, "\n"))
+	if err != nil {
+		t.Fatalf("ParseOperators over the fixture list: %v", err)
+	}
+	policy := signing.AuthorPolicy{Operators: ops}
+
+	for _, f := range gh005Fixtures {
+		_, scriptRefused := gh005Gate(ctx, t, f.name, f.email, names)
+		policyRefused := policy.CheckIdentity(f.name, f.email) != nil
+
+		if scriptRefused != f.refused {
+			t.Errorf("%s: %s %s", personalIdentityGate, f.label, verdictWant(scriptRefused, f.refused))
+		}
+		if policyRefused != f.refused {
+			t.Errorf("AuthorPolicy.CheckIdentity: %s %s", f.label, verdictWant(policyRefused, f.refused))
+		}
+		if scriptRefused != policyRefused {
+			t.Errorf("THE TWO HALVES DISAGREE about %s: the script %s, the policy %s. "+
+				"One rule, one place — see the GH-005 note above.",
+				f.label, verdict(scriptRefused), verdict(policyRefused))
+		}
+	}
+
+	// Both fail closed on the same missing configuration.
+	if (signing.AuthorPolicy{}).CheckIdentity("Fixture Alpha",
+		"12345+alpha@users.noreply.github.com") == nil {
+		t.Error("the zero-value policy admitted an identity; it must admit nothing")
+	}
+}
+
+func verdict(refused bool) string {
+	if refused {
+		return "refused"
+	}
+	return "admitted"
+}
+
+func verdictWant(got, want bool) string {
+	return "was " + verdict(got) + ", want " + verdict(want)
 }

@@ -117,24 +117,54 @@ func (s *Store) EventsForRun(ctx context.Context, runID string) ([]event.Fields,
 // bytes, and the reaper asks it only about entries already past their deadline
 // — so a sweep over a healthy deployment makes no calls to it at all.
 func (s *Store) LastActivity(ctx context.Context, runID string) (time.Time, bool, error) {
+	ts, _, known, err := s.LastActivityAt(ctx, runID)
+	return ts, known, err
+}
+
+// LastActivityAt is LastActivity with the chain position of that same event.
+//
+// # Why the position exists as a separate answer
+//
+// The reaper's withdrawal is recorded once per LAPSE (RM-152, #255), and a
+// lapse has to be NAMED by something two reapers can both compute and neither
+// can move. The name it uses is the chain position of the activity the silence
+// began after: `chain_position` is assigned exactly once, inside the
+// serialized append, and is never reassigned (doc 02 §2), so a second reaper
+// looking at the same silence reads the same number. `ts` cannot do that job —
+// a restored backup or a clock stepped inside IP §6.8's bound can repeat an
+// instant, and the key would then collide two different lapses into one.
+//
+// # It is the same row, read once
+//
+// Same index, same filter, same three answers as LastActivity — including
+// `source <> 'reaper'`, for the reason set out above it: counting the reaper's
+// own `run_expired` would let a sweep read its own record as evidence that the
+// run it just declared dead is working.
+//
+// `known` is false for a run the chain holds nothing about, which is a
+// different answer from "silent since the epoch": see LastActivity.
+func (s *Store) LastActivityAt(ctx context.Context, runID string) (time.Time, int64, bool, error) {
 	if runID == "" {
-		return time.Time{}, false, &StoreError{
+		return time.Time{}, 0, false, &StoreError{
 			Class: ClassInvariantViolation, Op: "last_activity", Retryable: false,
 			Err: fmt.Errorf("an empty run id names no run; events with no run carry a NULL run_id"),
 		}
 	}
 
-	var ts time.Time
+	var (
+		ts       time.Time
+		position int64
+	)
 	err := s.pool.QueryRow(ctx,
-		`SELECT ts FROM innsegl.events
+		`SELECT ts, chain_position FROM innsegl.events
 		  WHERE run_id = $1 AND source <> $2
 		  ORDER BY chain_position DESC
-		  LIMIT 1`, runID, event.SourceReaper).Scan(&ts)
+		  LIMIT 1`, runID, event.SourceReaper).Scan(&ts, &position)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		return time.Time{}, false, nil
+		return time.Time{}, 0, false, nil
 	case err != nil:
-		return time.Time{}, false, classify("last_activity", err)
+		return time.Time{}, 0, false, classify("last_activity", err)
 	}
-	return ts.UTC(), true, nil
+	return ts.UTC(), position, true, nil
 }

@@ -247,6 +247,17 @@ type HealthConfig struct {
 	ClockSkewBound time.Duration
 	// Version is reported by both endpoints. Empty means the build version.
 	Version string
+	// AdminCredentialEnforced says whether the identity-lifecycle listener
+	// requires a repository-scoped credential (#264).
+	//
+	// REPORTED ON THE HEALTH LISTENER AND NOWHERE ELSE. doc 05 gives this
+	// process three listeners and the health one is the operator's; a control
+	// whose state nobody can see is one nobody can audit, and "this listener
+	// is open" published on a surface a stranger can reach is an invitation
+	// rather than a report. It is a boolean and not a detail: which keys, from
+	// which file, and how many, are start-up log lines on the operator's own
+	// stream.
+	AdminCredentialEnforced bool
 	// Logger receives the one thing that can go wrong while answering: a
 	// response that could not be written. Nil disables it.
 	Logger *slog.Logger
@@ -260,6 +271,7 @@ type Health struct {
 	clockSkewBound time.Duration
 	version        string
 	logger         *slog.Logger
+	adminCred      bool
 }
 
 // healthProbe is one dependency and the read that reaches it. Built once, in
@@ -300,6 +312,7 @@ func NewHealth(cfg HealthConfig) (*Health, error) {
 		clockSkewBound: cfg.ClockSkewBound,
 		version:        cfg.Version,
 		logger:         cfg.Logger,
+		adminCred:      cfg.AdminCredentialEnforced,
 	}
 	if h.timeout <= 0 {
 		h.timeout = DefaultHealthTimeout
@@ -386,6 +399,11 @@ type Readiness struct {
 	// MissingTools is the part of the IP §4 surface with no binder. Reported,
 	// never a reason to be unready — see Liveness.MissingTools.
 	MissingTools []ToolName
+	// AdminCredentialEnforced says whether the identity-lifecycle listener
+	// requires a repository-scoped credential (#264). It is a REPORT and never
+	// a reason to be unready: a deployment that has not split its listeners
+	// requires no credential and is perfectly ready.
+	AdminCredentialEnforced bool
 	// ObservedAt is when the report was composed.
 	ObservedAt time.Time
 }
@@ -443,11 +461,12 @@ func (h *Health) Ready(ctx context.Context) Readiness {
 	wg.Wait()
 
 	r := Readiness{
-		Ready:          true,
-		Dependencies:   statuses,
-		ClockSkewBound: h.clockSkewBound,
-		Version:        h.version,
-		ObservedAt:     time.Now(),
+		Ready:                   true,
+		Dependencies:            statuses,
+		ClockSkewBound:          h.clockSkewBound,
+		Version:                 h.version,
+		AdminCredentialEnforced: h.adminCred,
+		ObservedAt:              time.Now(),
 	}
 	for _, s := range statuses {
 		if !s.Reachable {
@@ -615,6 +634,10 @@ type readinessWire struct {
 	ClockSkewBound string             `json:"clock_skew_bound,omitempty"`
 	Dependencies   []DependencyStatus `json:"dependencies"`
 	MissingTools   []ToolName         `json:"missing_tools,omitempty"`
+	// AdminCredential is "enforced" or "absent". Always present, never
+	// omitted: an absent field reads as "this build does not report it", and
+	// the one state an operator must not have to infer is the open one.
+	AdminCredential string `json:"admin_credential"`
 }
 
 type dependencyWire struct {
@@ -638,13 +661,23 @@ type livenessWire struct {
 // MarshalJSON renders the readiness report.
 func (r Readiness) MarshalJSON() ([]byte, error) {
 	return json.Marshal(readinessWire{
-		Ready:          r.Ready,
-		Version:        r.Version,
-		ObservedAt:     event.NewTimestamp(r.ObservedAt).String(),
-		ClockSkewBound: healthDurationString(r.ClockSkewBound),
-		Dependencies:   r.Dependencies,
-		MissingTools:   r.MissingTools,
+		Ready:           r.Ready,
+		Version:         r.Version,
+		ObservedAt:      event.NewTimestamp(r.ObservedAt).String(),
+		ClockSkewBound:  healthDurationString(r.ClockSkewBound),
+		Dependencies:    r.Dependencies,
+		MissingTools:    r.MissingTools,
+		AdminCredential: healthAdminCredentialState(r.AdminCredentialEnforced),
 	})
+}
+
+// healthAdminCredentialState renders #264's check as the two words an
+// operator reads it by.
+func healthAdminCredentialState(enforced bool) string {
+	if enforced {
+		return "enforced"
+	}
+	return "absent"
 }
 
 // MarshalJSON renders one dependency's status.

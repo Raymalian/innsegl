@@ -118,10 +118,16 @@ export function healthyTimeline(): readonly TimelineEvent[] {
   ];
 }
 
-/** The whole response, with the timeline the caller chooses. */
+/** The whole response, with the timeline the caller chooses.
+ *
+ * `over` carries the lifecycle evidence (#256), which is optional on the wire
+ * and therefore absent here unless a case is about it. A fixture that always
+ * filled it in would hide the case that matters: a run with no withdrawal,
+ * whose absent instants must never render as instants. */
 export function runDetail(
   timeline: readonly TimelineEvent[] = healthyTimeline(),
   status = "retired",
+  over: Partial<RunDetail> = {},
 ): RunDetail {
   return {
     run_id: RUN_ID,
@@ -136,6 +142,7 @@ export function runDetail(
     last_event_at: "2026-08-31T11:46:00.000Z",
     timeline,
     data_as_of: "2026-08-31T12:00:00.000Z",
+    ...over,
   };
 }
 

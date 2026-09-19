@@ -93,8 +93,18 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOBIN=/out \
 
 # ---------------------------------------------------------------------------
 # Runtime.
+#
+# NAMED, and that is not decoration. An unnamed stage cannot be named by
+# `target:`, so every service that builds this file without one gets whatever
+# stage happens to be LAST. This stage was unnamed and last, so it was also the
+# default — until `ca-bootstrap` was added after it, which silently moved the
+# default to a one-shot CA tool. Measured 2026-09-18: a rebuild of innsegl-mcp
+# produced an image whose entrypoint was ca-bootstrap, and the container
+# crash-looped asking for a secret store. Six services build through the shared
+# anchor and every one of them was affected; nothing failed at build time,
+# because building the wrong stage is a perfectly good build.
 # ---------------------------------------------------------------------------
-FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS runtime
 
 # git      sign_commit execs it (internal/signing).
 # ca-certificates  a deployment pointed at public Fulcio/Rekor needs a trust

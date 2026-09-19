@@ -139,7 +139,16 @@ export interface TimelineEvent {
   readonly canonical?: unknown;
 }
 
-/** `internal/api`'s RunSummary. */
+/** `internal/api`'s RunSummary.
+ *
+ * The five optional members after `last_event_at` are the EVIDENCE for
+ * `status` (#256). Every one of them is OPTIONAL in this type because every
+ * one of them is `omitempty` on the wire: a run that was never withdrawn
+ * carries no withdrawal instant, and `internal/api` omits the member rather
+ * than sending Go's zero time, which would reach a reader as
+ * "0001-01-01T00:00:00Z" — a timestamp they have every right to read as a
+ * timestamp. Absent here means absent there, and the view says so in words
+ * (doc 06 P2). */
 export interface RunSummary {
   readonly run_id: string;
   readonly spiffe_id: string;
@@ -151,11 +160,25 @@ export interface RunSummary {
   readonly chain_position: number;
   readonly registered_at: string;
   readonly last_event_at: string;
+  /** The newest event on this run the reaper did NOT write. */
+  readonly last_activity_at?: string;
+  /** The newest `run_expired`: when the reaper last withdrew the credential. */
+  readonly withdrawn_at?: string;
+  /** `withdrawn_at` plus the restore horizon. Absent when the run was never
+   * withdrawn, or when the deployment set no horizon. */
+  readonly restorable_until?: string;
+  /** The run that started this one, as `run_registered` recorded it. Absent on
+   * a root run and on every run written before schema 2. */
+  readonly parent_run_id?: string;
 }
 
 /** `internal/api`'s RunDetail: the run and its ordered event chain. */
 export interface RunDetail extends RunSummary {
   readonly timeline?: readonly TimelineEvent[];
+  /** The horizon `status` was computed with, in seconds; 0 means the
+   * deployment set none. ABSENT means the query API did not say, which is a
+   * third thing and not a zero (P2). */
+  readonly restore_horizon_seconds?: number;
   readonly data_as_of: string;
 }
 

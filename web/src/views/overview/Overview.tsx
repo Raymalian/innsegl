@@ -53,6 +53,7 @@ import { useStrings } from "../../app/i18n";
 import { routeToPath } from "../../app/routes";
 import { AnchoringEvidence } from "./AnchoringPulse";
 import { formatCount } from "./format";
+import { formatDuration } from "../../components/common";
 import { MetricCard } from "./MetricCard";
 import { PassRateCard } from "./PassRateCard";
 import { RecentRuns } from "./RecentRuns";
@@ -118,7 +119,9 @@ export function Overview({
           label={strings.metrics.activeAgents.label}
           value={formatCount(data.active_runs)}
           meaning={strings.metrics.activeAgents.meaning}
-        />
+        >
+          <WithdrawnBreakdown data={data} />
+        </MetricCard>
         <MetricCard
           id="runs-today"
           label={strings.metrics.runsToday.label}
@@ -156,6 +159,42 @@ export function Overview({
 
       <RecentRuns runs={recentRuns} />
     </div>
+  );
+}
+
+/**
+ * What became of the runs that are not active — #256.
+ *
+ * Two counts and the horizon that separates them, under the active figure and
+ * never added into it. They are on this card rather than on cards of their own
+ * for a reason the design system already states: MetricCard's `children` slot
+ * is for "a breakdown, a link to the material", and a lapsed run is exactly a
+ * breakdown of the question "and the rest?" that the active number raises.
+ *
+ * Neither line says anything about an agent. "Lapsed" and "Abandoned" are
+ * statements about what this system will and will not do with an identity —
+ * restore it, or refuse to — and nothing here can see whether an agent is
+ * still working (IP E7). FE-131 and FE-132 hold that.
+ */
+function WithdrawnBreakdown({ data }: { readonly data: OverviewData }) {
+  if (data.lapsed_runs === 0 && data.abandoned_runs === 0) return null;
+  const seconds = data.restore_horizon_seconds;
+  const horizon =
+    seconds === undefined
+      ? strings.metrics.activeAgents.horizonUnknown
+      : seconds <= 0
+        ? strings.metrics.activeAgents.noHorizon
+        : strings.metrics.activeAgents.horizon(formatDuration(seconds * 1000));
+  return (
+    <>
+      <p>
+        {strings.metrics.activeAgents.breakdown(
+          formatCount(data.lapsed_runs),
+          formatCount(data.abandoned_runs),
+        )}
+      </p>
+      <p>{horizon}</p>
+    </>
   );
 }
 

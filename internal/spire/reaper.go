@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,11 +69,21 @@ import (
 //
 // Doc 05 §2 runs the single-active components under leader election, and this
 // issue does not implement it. Nothing here breaks if two run anyway: the
-// append is deduplicated by an idempotency key derived from the run id
-// (ADR-0004 leaves the key unconstrained on this event type), the ledger
+// append is deduplicated by an idempotency key that names the LAPSE — the run
+// id plus the chain position of the last thing the run did before going quiet
+// (ADR-0004 leaves the key unconstrained on this event type) — the ledger
 // serializes appends under an advisory lock, and a delete of an entry that is
 // already gone is a success with nothing deleted. Two reapers produce one
 // `run_expired` and one deletion between them.
+//
+// # One withdrawal per lapse, and never a deletion without one (RM-152, #255)
+//
+// That key used to be the run id alone, which made "two reapers, one lapse"
+// and "one reaper, two lapses" indistinguishable. A run that lapsed, was
+// restored by get_credential, worked, and lapsed again had its identity
+// deleted a second time with nothing appended — the one thing I3 forbids. The
+// key now carries the lapse; ExpiryKey and ExpiryKeyAfter hold the detail, and
+// reap refuses to delete an entry it has no event id for.
 
 // DefaultReapGrace is how long a run may be SILENT before it is called
 // orphaned.
@@ -116,19 +127,67 @@ const reapPageSize = 500
 
 // expiryKeyPrefix namespaces the reaper's idempotency keys.
 //
-// PROTECTED-ADJACENT: this prefix, plus the run id, is the `idempotency_key` of
-// every `run_expired` event, and `idempotency_key` is part of the canonical
-// preimage (doc 02 §4). Changing it changes the canonical bytes of events that
-// have already been written, which I4 does not allow. See ADR-0014.
+// PROTECTED-ADJACENT: this prefix is the head of the `idempotency_key` of every
+// `run_expired` event, and `idempotency_key` is part of the canonical preimage
+// (doc 02 §4). Changing it changes the canonical bytes of events that have
+// already been written, which I4 does not allow. See ADR-0014.
+//
+// RM-152 (#255) added a per-lapse SUFFIX below and did not touch this prefix or
+// the single-key form, for exactly that reason: an event already on the chain
+// keeps the key it was hashed with, for ever. Only new events are named the new
+// way, and the old spelling stays readable — see ExpiryKey.
 const expiryKeyPrefix = "reaper:run_expired:"
 
-// ExpiryKey is the ledger idempotency key for a run's `run_expired` event.
+// lapseKeySeparator divides the run id from the lapse that is being recorded.
 //
-// It is derived from the run id alone and from nothing else, which is what
-// makes it stable across sweeps, across processes and across restarts: two
-// reapers looking at the same orphan compute the same key, and the ledger
-// resolves the second one to the first one's event instead of writing a second.
+// `@` cannot occur in a run id — doc 02 §2 holds one to
+// `[a-z0-9][a-z0-9-]{0,62}`, which ValidateIdentifier enforces — so a key in
+// the single-key form can never be mistaken for a key in the per-lapse form,
+// whatever the run is called. The whole key stays inside doc 02 §2's 128 bytes:
+// 19 of prefix, at most 63 of run id, one of separator, at most 19 of position.
+const lapseKeySeparator = "@"
+
+// ExpiryKey is the SINGLE-KEY form: the idempotency key a `run_expired` carried
+// before RM-152 (#255), when one run had one expiry for its whole life.
+//
+// It is still written, and it is still the key looked up first, in the one case
+// where nothing better exists: a deployment with no ActivitySource, or a run the
+// ledger has never heard of, has nothing with which to tell one lapse from
+// another, and naming them all the same is what every deployment before #255
+// did. It is also still READ for every run, because live chains carry events
+// under it — see Reaper.record.
+//
+// What it cannot do is name a SECOND lapse. A run that lapses, is restored,
+// works and lapses again has had an entry created, used and deleted twice, and
+// a key derived from the run id alone answers the second deletion with the
+// first one's event. See ExpiryKeyAfter.
 func ExpiryKey(runID string) string { return expiryKeyPrefix + runID }
+
+// ExpiryKeyAfter is the PER-LAPSE form: the idempotency key of the
+// `run_expired` that records the silence which began after chain position
+// `position`.
+//
+// # Why the chain position, and why that is stable
+//
+// A lapse is a stretch of silence, and the only thing that names one uniquely
+// is the last thing the run did before it. `chain_position` is assigned once,
+// inside the ledger's serialized append, and never reassigned (doc 02 §2), so
+// two reapers sweeping the same silence read the same last activity and compute
+// the same key — which is the property the single-key form was chosen for and
+// the one this must not lose. A restart, a stale listing and a second reaper
+// all still produce one event between them.
+//
+// It is deliberately NOT derived from anything the reaper itself can move: not
+// the sweep's clock (two reapers sweep at different instants), not the entry id
+// (the restore path creates a new entry, so a retry after a restore would look
+// like a new lapse), and not a counter of prior expiries (a sweep that failed
+// mid-way would renumber every lapse after it).
+//
+// ADR-0004 leaves the key's shape unconstrained on this event type, which is
+// what makes the suffix legal at all without a major (doc 08).
+func ExpiryKeyAfter(runID string, position int64) string {
+	return ExpiryKey(runID) + lapseKeySeparator + strconv.FormatInt(position, 10)
+}
 
 // EventSink is the ledger surface the reaper needs: append one event, and ask
 // whether a key has already produced one.
@@ -142,6 +201,23 @@ type EventSink interface {
 	Append(ctx context.Context, body event.Fields) (event.Fields, error)
 	// EventByIdempotencyKey returns the event a key produced, if any.
 	EventByIdempotencyKey(ctx context.Context, key string) (event.Fields, bool, error)
+}
+
+// ActivityPositionSource is ActivitySource (silence.go) with the one extra
+// answer the per-lapse key needs: WHERE in the chain the run's last activity
+// sits, not only when it happened.
+//
+// It is declared as a separate, optional interface rather than added to
+// ActivitySource so that an ActivitySource which does not implement it keeps
+// working and keeps its old behaviour, and so that #255 adds no method to a
+// seam other components already satisfy. *ledger.Store implements it.
+//
+// Why a position and not the instant ActivitySource already returns: a lapse
+// has to be named by something two reapers both compute and neither can move,
+// and `chain_position` is assigned once inside the serialized append and never
+// reassigned (doc 02 §2). See ExpiryKeyAfter.
+type ActivityPositionSource interface {
+	LastActivityAt(ctx context.Context, runID string) (time.Time, int64, bool, error)
 }
 
 // Candidate is one registration entry the reaper examined, with the two
@@ -556,7 +632,20 @@ func (r *Reaper) reap(ctx context.Context, cand Candidate) (Expiry, error) {
 
 	eventID, appended, err := r.record(ctx, cand)
 	if err != nil {
+		// I3, structurally: record failed, so nothing on the chain says this
+		// identity went. The entry stays where it is, the sweep reports the
+		// failure, and the next sweep retries under the same key.
 		return out, err
+	}
+	if eventID == "" {
+		// Unreachable by construction — every success path in record returns an
+		// event id — and checked anyway, because the thing on the other side of
+		// this branch is a deletion with no record. A future edit to record that
+		// grows a path returning ("", nil) fails here rather than silently
+		// deleting an identity.
+		return out, newError(ClassInvariantViolation, "reap", cand.Run.RunID,
+			fmt.Sprintf("the withdrawal of %s was not recorded and the entry was "+
+				"therefore not deleted", cand.Entry.SPIFFEID), false, nil)
 	}
 	out.EventID, out.Recorded = eventID, appended
 
@@ -568,36 +657,76 @@ func (r *Reaper) reap(ctx context.Context, cand Candidate) (Expiry, error) {
 	return out, nil
 }
 
-// record appends the run's `run_expired` event, or finds the one a previous
-// pass appended.
+// record appends the `run_expired` event for THIS LAPSE, or finds the one an
+// earlier pass over the same lapse appended.
 //
-// Idempotency does not depend on the entry still being there. The durable
-// marker is the ledger event, keyed by run id, so a pass that still sees an
-// entry SPIRE has already deleted reaches the same conclusion as one that does
-// not: the expiry is already recorded, and there is nothing to append.
+// # One event per lapse, not one per run (RM-152, #255)
+//
+// The key this reaper writes under names the silence it is recording:
+// ExpiryKeyAfter, over the chain position of the last thing the run did before
+// going quiet. Two reapers looking at one lapse read the same last activity and
+// write one event between them, exactly as before. A run that lapses a SECOND
+// time has done something since — the restore path exists precisely so that it
+// can — so its next silence begins after a later position and is named by a
+// different key, and the deletion that ends it has a record of its own.
+//
+// Without an ActivitySource, or for a run the chain holds nothing about, there
+// is nothing to tell one lapse from another and the single-key form is used.
+// That is not a fallback chosen for tidiness: it is byte-for-byte what every
+// deployment did before #255, for a deployment that has configured no more.
+//
+// # The single-key form is honoured on lookup, always
+//
+// Live chains carry `run_expired` events written under ExpiryKey. An event
+// there records a lapse too, and the question is only WHICH one: it was
+// appended at some position, and if nothing the run did is newer than that
+// position, the silence it recorded is the silence being swept now. Then there
+// is nothing to append and nothing to double-record. If the run has worked
+// since, the old event belongs to an earlier lapse and this one is new.
+//
+// Idempotency still does not depend on the entry being there. The durable
+// marker is the ledger event, so a pass that still sees an entry SPIRE has
+// already deleted reaches the same conclusion as one that does not.
 func (r *Reaper) record(ctx context.Context, cand Candidate) (eventID string, appended bool, err error) {
+	position, known, err := r.lastActivityPosition(ctx, cand.Run.RunID)
+	if err != nil {
+		return "", false, r.ledgerError(cand, "reading the last activity of", err)
+	}
+
 	key := ExpiryKey(cand.Run.RunID)
+	if known {
+		key = ExpiryKeyAfter(cand.Run.RunID, position)
+	}
 
 	existing, found, err := r.ledger.EventByIdempotencyKey(ctx, key)
 	if err != nil {
 		return "", false, r.ledgerError(cand, "reading the expiry record", err)
 	}
 	if found {
-		id, verr := expiryEventID(existing, cand)
+		id, verr := expiryEventID(existing, cand, key)
 		if verr != nil {
 			return "", false, verr
 		}
 		return id, false, nil
 	}
+	if known {
+		id, holds, verr := r.recordedUnderTheSingleKey(ctx, cand, position)
+		if verr != nil {
+			return "", false, verr
+		}
+		if holds {
+			return id, false, nil
+		}
+	}
 
-	record, err := r.ledger.Append(ctx, expiryEventBody(cand))
+	record, err := r.ledger.Append(ctx, expiryEventBody(cand, key))
 	if err != nil {
 		// A concurrent reaper may have appended between the read above and
 		// this write, in which case the ledger refuses the key rather than
 		// writing a second event. That is the outcome we wanted; read it back
 		// and report it as already recorded.
 		if existing, found, rerr := r.ledger.EventByIdempotencyKey(ctx, key); rerr == nil && found {
-			if id, verr := expiryEventID(existing, cand); verr == nil {
+			if id, verr := expiryEventID(existing, cand, key); verr == nil {
 				return id, false, nil
 			}
 		}
@@ -609,6 +738,88 @@ func (r *Reaper) record(ctx context.Context, cand Candidate) (eventID string, ap
 			"the ledger stored run_expired without an event_id", false, nil)
 	}
 	return id, true, nil
+}
+
+// lastActivityPosition asks where in the chain this run's last activity sits.
+//
+// It is OPTIONAL twice over, and both refusals are deliberate:
+//
+//   - A reaper with no ActivitySource has nothing to ask. It gets the
+//     single-key form and the behaviour it had before #255.
+//   - An ActivitySource that reports only an INSTANT — the ActivitySource
+//     interface as silence.go declares it — cannot name a lapse: two lapses of
+//     one run are two different instants, but a key built from a clock is not
+//     something two reapers agree on. Such a source also gets the single-key
+//     form rather than a key neither reaper can reproduce.
+//
+// *ledger.Store satisfies the richer interface, so a shipped deployment takes
+// the per-lapse path; a test double or an embedder that does not is never
+// silently given a worse guarantee than it asked for.
+func (r *Reaper) lastActivityPosition(ctx context.Context, runID string) (int64, bool, error) {
+	positions, ok := r.activity.(ActivityPositionSource)
+	if !ok {
+		return 0, false, nil
+	}
+	_, position, known, err := positions.LastActivityAt(ctx, runID)
+	if err != nil {
+		return 0, false, err
+	}
+	return position, known, nil
+}
+
+// recordedUnderTheSingleKey answers whether the lapse being swept is already
+// recorded under the pre-#255 key.
+//
+// The comparison is the whole of it: an event under that key was appended at
+// some chain position, and `position` is the newest thing the run has done. If
+// the event is NEWER than that activity, nothing has happened since it was
+// written and it records the silence being swept right now — so this sweep
+// appends nothing and the run gains no duplicate. If it is OLDER, the run went
+// on to work after that withdrawal, and the silence being swept now is a
+// different one that has never been recorded.
+//
+// Both answers stay correct once the per-lapse key is in use, because a
+// single-key event can only ever be an old one: nothing writes that key for a
+// run whose activity is known.
+func (r *Reaper) recordedUnderTheSingleKey(ctx context.Context, cand Candidate, position int64) (string, bool, error) {
+	key := ExpiryKey(cand.Run.RunID)
+
+	stored, found, err := r.ledger.EventByIdempotencyKey(ctx, key)
+	if err != nil {
+		return "", false, r.ledgerError(cand, "reading the expiry record of", err)
+	}
+	if !found {
+		return "", false, nil
+	}
+	id, err := expiryEventID(stored, cand, key)
+	if err != nil {
+		return "", false, err
+	}
+	at, ok := chainPositionOf(stored)
+	if !ok {
+		// The entry stays. Which lapse that event records cannot be decided,
+		// so whether deleting this entry would be recorded cannot be decided
+		// either, and I3 does not admit a guess.
+		return "", false, newError(ClassInvariantViolation, "reap", cand.Run.RunID,
+			fmt.Sprintf("the run_expired stored under %q carries no readable %s, so "+
+				"whether it records this lapse or an earlier one is unknown",
+				key, event.FieldChainPosition), false, nil)
+	}
+	return id, at > position, nil
+}
+
+// chainPositionOf reads a stored event's chain position. The ledger decodes it
+// as an int64; `int` is accepted as well so that a record built in a test is
+// read the same way as one read back from Postgres.
+func chainPositionOf(stored event.Fields) (int64, bool) {
+	switch n := stored[event.FieldChainPosition].(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	default:
+		return 0, false
+	}
 }
 
 // ledgerError wraps a ledger failure in this package's vocabulary without
@@ -630,14 +841,17 @@ func (r *Reaper) ledgerError(cand Candidate, what string, err error) error {
 //
 // event_id, ts, chain_position, prev_event_hash and event_hash are the
 // ledger's to assign (doc 02 §2) and are deliberately absent.
-func expiryEventBody(cand Candidate) event.Fields {
+// The key is passed in rather than recomputed here: the event written must
+// carry the key that was LOOKED UP, or an append could be deduplicated against
+// one lapse and recorded under another.
+func expiryEventBody(cand Candidate, key string) event.Fields {
 	return event.Fields{
 		event.FieldSchemaVersion:  event.SchemaVersion,
 		event.FieldEventType:      event.EventTypeRunExpired,
 		event.FieldRunID:          cand.Run.RunID,
 		event.FieldSpiffeID:       cand.Entry.SPIFFEID,
 		event.FieldSource:         event.SourceReaper,
-		event.FieldIdempotencyKey: ExpiryKey(cand.Run.RunID),
+		event.FieldIdempotencyKey: key,
 	}
 }
 
@@ -650,10 +864,10 @@ func expiryEventBody(cand Candidate) event.Fields {
 // reaper must not then delete the entry on the strength of a record that is not
 // about it. It is an INVARIANT_VIOLATION, alert-level, and the orphan is left
 // in place for a human — see ADR-0014's residual risk.
-func expiryEventID(stored event.Fields, cand Candidate) (string, error) {
+func expiryEventID(stored event.Fields, cand Candidate, key string) (string, error) {
 	reject := func(format string, args ...any) (string, error) {
 		return "", newError(ClassInvariantViolation, "reap", cand.Run.RunID,
-			fmt.Sprintf("the idempotency key %q is held by ", ExpiryKey(cand.Run.RunID))+
+			fmt.Sprintf("the idempotency key %q is held by ", key)+
 				fmt.Sprintf(format, args...), false, nil)
 	}
 	if got := stored[event.FieldEventType]; got != event.EventTypeRunExpired {

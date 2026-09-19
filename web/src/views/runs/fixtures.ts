@@ -34,8 +34,12 @@ export function runSummary(overrides: Partial<RunSummary> = {}): RunSummary {
   };
 }
 
-/** Three runs, one of each status, in the descending chain order the API
- * serves them in. */
+/** Three runs, in the descending chain order the API serves them in.
+ *
+ * Three of the four states, not four: the fourth (`abandoned`) differs from
+ * `lapsed` by nothing a table row shows, and a fixture with one of each would
+ * imply the table distinguishes them by something other than the word. The
+ * badge's own tests cover all four. */
 export function threeRuns(): readonly RunSummary[] {
   return [
     runSummary(),
@@ -54,10 +58,13 @@ export function threeRuns(): readonly RunSummary[] {
       spiffe_id: `${TRUST_DOMAIN}/agent/fix-ci/task-1477/run-b52a10`,
       agent_type: "fix-ci",
       task_ref: "task-1477",
-      status: "expired",
+      status: "lapsed",
       repos: [],
       commits: 0,
       chain_position: 4102,
+      last_activity_at: "2026-08-29T22:10:11Z",
+      withdrawn_at: "2026-08-30T04:00:00Z",
+      restorable_until: "2026-09-29T04:00:00Z",
     }),
   ];
 }
@@ -67,6 +74,7 @@ export function runPage(overrides: Partial<RunPage> = {}): RunPage {
     runs: threeRuns(),
     total: 3,
     limit: 50,
+    restore_horizon_seconds: 30 * 24 * 60 * 60,
     data_as_of: "2026-08-31T09:14:02Z",
     ...overrides,
   };
