@@ -517,11 +517,21 @@ jobs:
         # Serialised packages were a stopgap here too, and never a fix: they
         # order packages within ONE invocation, while the collision was
         # between this job and any other `go test` process. See RM-065 (#81).
-        run: >-
-          go test ./... -race
-          -covermode=atomic
-          -coverpkg=./...
-          -coverprofile=cover.out
+        #
+        # The package operand is asked for rather than assumed — RM-170 (#275).
+        # `./...` reaches test/failure and test/smoke, both of which destroy a
+        # running deployment; a runner has none, so the answer here is `./...`
+        # and this job runs exactly the tree it always ran. What changed is that
+        # the same line copied onto a developer's machine no longer does.
+        # -coverpkg=./... selects what is INSTRUMENTED, not what runs.
+        run: |
+          INNSEGL_SUITE_STACK="$(./scripts/test-suite.sh state)"
+          export INNSEGL_SUITE_STACK
+          PKGS="$(./scripts/test-suite.sh packages)"
+          go test ${PKGS} -race \
+            -covermode=atomic \
+            -coverpkg=./... \
+            -coverprofile=cover.out
       - name: Enforce coverage floors
         # Hard gate. IP §2: 90% line coverage on the MCP server and ledger
         # packages. The script exits non-zero when a floor is breached; it does
@@ -575,6 +585,33 @@ jobs:
         # Issue #10 acceptance criterion: "A deliberately uncovered branch in a
         # floored package fails CI." This asserts red-then-green on the gate.
         run: ./scripts/coverage-floors-selftest.sh
+
+  test-suite-gate:
+    name: what the whole suite is
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Refuse a wrapper that decides what the suite is on its own
+        # RM-170 (#275) acceptance criterion: "A new wrapper that forgets is
+        # caught by a gate rather than by an incident." Two packages destroy a
+        # running deployment and five call sites each decided independently to
+        # reach them; three of those runs happened within two days, each by
+        # someone who had been told the rule. Writing it down was tried first.
+        run: ./scripts/test-suite.sh gate
+      - name: Prove the refusal fires, and that it is not a ban
+        # The self-test drives both sides: every wrapper shape that reached a
+        # destructive package is required to go red, and an ordinary package
+        # with the deployment up, plus both destructive packages on a quiet
+        # host, are required to stay green.
+        run: ./scripts/test-suite-selftest.sh
 
   branch-coverage:
     name: branch coverage
