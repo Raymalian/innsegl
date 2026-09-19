@@ -380,6 +380,12 @@ func (c *credentialService) issue(ctx context.Context, in getCredentialIn) (getC
 		// Abandoned long enough that nothing is coming back for it. Refused as
 		// the gate already refused it, so an abandoned run is indistinguishable
 		// from one SPIRE simply has no entry for.
+		//
+		// Measured from the LAPSE BEING RESTORED — CredentialRun.ExpiredAt is
+		// the newest `run_expired` (RM-152, #255) — and not from the first one
+		// the run ever had. A run that lapsed once, resumed, and then worked for
+		// longer than the horizon has not been abandoned by anything except an
+		// arithmetic that reads its whole life as one silence.
 		if c.abandon > 0 && !run.ExpiredAt.IsZero() &&
 			c.now().Sub(run.ExpiredAt) > c.abandon {
 			return getCredentialOut{}, active

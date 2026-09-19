@@ -33,7 +33,7 @@ var refClaim = Claim{
 const operator = "operator@example.com"
 
 // refPolicy admits exactly one address, the human operator's.
-var refPolicy = AuthorPolicy{Operators: []string{operator}}
+var refPolicy = AuthorPolicy{Operators: []Operator{{Address: operator}}}
 
 // ---------------------------------------------------------------------------
 // SIG-006
@@ -387,9 +387,9 @@ func TestSIG006TheProtectedTrailerKeysAreSpelledExactly(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSIG007AuthorIdentityGuardBlocksACommitWhoseAuthorI6Forbids(t *testing.T) {
-	humanOnly := AuthorPolicy{Operators: []string{"operator@example.com", "Mike@Corp.Example"}}
+	humanOnly := AuthorPolicy{Operators: []Operator{{Address: "operator@example.com"}, {Address: "Mike@Corp.Example"}}}
 	unlinked := AuthorPolicy{AllowUnlinked: true}
-	both := AuthorPolicy{Operators: []string{"operator@example.com"}, AllowUnlinked: true}
+	both := AuthorPolicy{Operators: []Operator{{Address: "operator@example.com"}}, AllowUnlinked: true}
 
 	cases := []struct {
 		name   string
@@ -434,7 +434,7 @@ func TestSIG007AuthorIdentityGuardBlocksACommitWhoseAuthorI6Forbids(t *testing.T
 		{"github noreply is not unlinked", unlinked, "1234+alice@users.noreply.github.com", false},
 		{"github noreply, bare form, is not unlinked", unlinked, "alice@users.noreply.github.com", false},
 		{"github noreply admitted when listed as the operator",
-			AuthorPolicy{Operators: []string{"1234+alice@users.noreply.github.com"}},
+			AuthorPolicy{Operators: []Operator{{Address: "1234+alice@users.noreply.github.com"}}},
 			"1234+alice@users.noreply.github.com", true},
 
 		// Both rules together, and neither rule admitting.
@@ -654,7 +654,7 @@ func TestTrailerStringIsKeyColonSpaceValue(t *testing.T) {
 // misconfigured allowlist: an entry that is not an address is not skipped
 // (which would silently narrow the allowlist and hide the typo), it refuses.
 func TestCheckAuthorRefusesAPolicyItCannotRead(t *testing.T) {
-	p := AuthorPolicy{Operators: []string{"not-an-address"}, AllowUnlinked: true}
+	p := AuthorPolicy{Operators: []Operator{{Address: "not-an-address"}}, AllowUnlinked: true}
 	// Even an address the unlinked rule would have admitted is refused, because
 	// the policy is unreadable before the question is reached.
 	err := p.CheckAuthor("agent@innsegl.invalid")

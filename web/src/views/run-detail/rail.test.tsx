@@ -240,7 +240,7 @@ describe("FE-126 a run that expired reads as degraded", () => {
     const { container, text } = renderTimeline([runExpired]);
     const body = bodyOf(rows(container)[0] as HTMLElement) as HTMLElement;
     expect(body.className).toMatch(/\bbg-degraded-surface\b/);
-    expect(text).toContain("Credential ran out");
+    expect(text).toContain("Credential withdrawn");
   });
 
   it("keeps the dashed outline that tells expired from retired without a hue", () => {

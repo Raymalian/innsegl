@@ -31,6 +31,11 @@
  *    timestamp.
  */
 
+import { RUN_STATUSES } from "../../app/routes";
+
+/** A run's lifecycle state, from the one list the whole dashboard shares. */
+export type RunStatus = (typeof RUN_STATUSES)[number];
+
 /** The newest sealed segment, and whether Rekor has it yet. */
 export interface AnchorHeartbeat {
   /** False when no segment has ever been sealed. */
@@ -52,14 +57,25 @@ export interface AnchorHeartbeat {
 /** `GET /api/v1/overview`. */
 export interface OverviewData {
   readonly active_runs: number;
+  /** Runs whose newest recorded fact is the reaper withdrawing the credential,
+   * and whose restore horizon has not passed (#256). NOT counted in
+   * `active_runs`. */
+  readonly lapsed_runs: number;
+  /** The same, past the horizon: the identity can no longer be restored. Also
+   * not counted in `active_runs`. It is a statement about what this system
+   * will no longer do, never about what became of the agent. */
+  readonly abandoned_runs: number;
   readonly retired_runs: number;
-  readonly expired_runs: number;
   readonly commits_recorded: number;
   /** How many `unattributed_signature_detected` and `ledger_drift_detected`
    * events carry no row in `innsegl.alert_resolutions` — #167's "open".
    * `GET /api/v1/alerts` (below) is what lists the events themselves. */
   readonly open_alerts: number;
   readonly anchor: AnchorHeartbeat;
+  /** The horizon the two counts above were split with, in seconds; 0 means the
+   * deployment set none. ABSENT means the query API did not say, which is a
+   * third thing and not a zero (P2). */
+  readonly restore_horizon_seconds?: number;
   readonly data_as_of: string;
 }
 
@@ -119,7 +135,7 @@ export interface RunSummary {
   readonly spiffe_id: string;
   readonly agent_type: string;
   readonly task_ref: string;
-  readonly status: "active" | "retired" | "expired";
+  readonly status: RunStatus;
   readonly repos: readonly string[];
   readonly commits: number;
   readonly chain_position: number;

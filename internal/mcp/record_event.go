@@ -267,7 +267,13 @@ func (c *recordEventService) append(ctx context.Context, runID, toolName, digest
 	if err != nil {
 		return nil, credentialLedgerError(runID, err)
 	}
-	if !found {
+	// A run this caller's credential does not authorise is answered EXACTLY as
+	// a run that does not exist (#264). Same class, same message, same bytes,
+	// from the same line — a run id is public in every Agent-Run trailer, so a
+	// distinguishable answer would turn one into an oracle over which
+	// repository holds it. With no credential in force adminScopeAdmits is
+	// true and this reads as it always did.
+	if !found || !adminScopeAdmits(ctx, run.Repo) {
 		return nil, Errorf(ClassRunNotFound, runID, "no run %q", runID)
 	}
 	if run.Retired() {

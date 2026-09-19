@@ -65,6 +65,7 @@ const (
 	envWorkloadAPI   = "INNSEGL_WORKLOAD_API_ADDRESS"
 	envLedgerDSN     = "INNSEGL_LEDGER_DSN"
 	envReapGrace     = "INNSEGL_REAP_GRACE"
+	envReapInterval  = "INNSEGL_REAP_INTERVAL"
 	envSPIRETimeout  = "INNSEGL_SPIRE_TIMEOUT"
 )
 
@@ -124,6 +125,8 @@ func runReapCommand(args []string, stdout, stderr io.Writer, deps reapDeps) int 
 			"how long a run may be silent past its TTL before it is called orphaned ($"+envReapGrace+")")
 		timeout = fs.Duration("timeout", envDuration(envSPIRETimeout, spire.DefaultTimeout),
 			"bound on one SPIRE admin RPC ($"+envSPIRETimeout+")")
+		interval = fs.Duration("interval", envDuration(envReapInterval, 0),
+			"sweep repeatedly, waiting this long between sweeps; 0 sweeps once and exits ($"+envReapInterval+")")
 		asJSON   = fs.Bool("json", false, "write the report as JSON")
 		quietRun = fs.Bool("quiet", false, "print nothing when the sweep reaped nothing; failures are always reported")
 	)
@@ -131,7 +134,8 @@ func runReapCommand(args []string, stdout, stderr io.Writer, deps reapDeps) int 
 	fs.Usage = func() {
 		fprintf(stderr, "innsegl reap - delete identity entries orphaned past their TTL (IP §6.7)\n\n")
 		fprintf(stderr, "Usage:\n  innsegl reap [flags]\n\n")
-		fprintf(stderr, "Sweeps once and exits. Run it on a schedule, single-active; see doc 05 §2.\n")
+		fprintf(stderr, "Sweeps once and exits, unless -interval is set; then it sweeps until stopped.\n")
+		fprintf(stderr, "Run it on a schedule OR with -interval, single-active either way; see doc 05 §2.\n")
 		fprintf(stderr, "A run past its TTL that is still appending to the ledger is NOT reaped (#180).\n\n")
 		fprintf(stderr, "Exit status:\n")
 		fprintf(stderr, "  %d  the sweep completed; every orphan found was reaped\n", exitOK)
@@ -197,41 +201,79 @@ func runReapCommand(args []string, stdout, stderr io.Writer, deps reapDeps) int 
 		defer closeAll()
 	}
 
-	report, err := reaper.Sweep(ctx)
-	if err != nil {
-		fprintf(stderr, "innsegl reap: %v\n", err)
-		fprintf(stderr, "innsegl reap: INCONCLUSIVE - no entry was examined, so no orphan has been ruled out\n")
-		return exitReapInconclusive
-	}
-	// A nil report from a nil error would make the verdict depend on a nil
-	// check somewhere further down. It fails closed here instead.
-	if report == nil {
-		fprintf(stderr, "innsegl reap: the sweep returned no report; nothing was examined\n")
-		return exitReapInconclusive
+	// ONE SWEEP, AS A CLOSURE, because this command has two callers with
+	// opposite needs. An operator at a terminal — and cron — wants a sweep and
+	// an exit status. `serve -also reap` wants a component that keeps sweeping
+	// for as long as the process lives.
+	//
+	// It ran as the second without being the second. Measured 2026-09-18: the
+	// deployment set INNSEGL_MCP_ALSO=reap, the companion called this command
+	// with no arguments, it swept once at 2026-09-16T20:22:37Z, returned 0, and
+	// its goroutine ended. Nothing swept for the next 34 hours and about fifty
+	// runs stood Active with their agents long gone — the exact condition IP
+	// §6.7 exists to prevent, under a setting whose name says it is prevented.
+	// `innsegl seal` had the loop all along (its -interval, its ticker); this
+	// command never did, and nothing reconciled the two.
+	sweepOnce := func() int {
+		report, err := reaper.Sweep(ctx)
+		if err != nil {
+			fprintf(stderr, "innsegl reap: %v\n", err)
+			fprintf(stderr, "innsegl reap: INCONCLUSIVE - no entry was examined, so no orphan has been ruled out\n")
+			return exitReapInconclusive
+		}
+		// A nil report from a nil error would make the verdict depend on a nil
+		// check somewhere further down. It fails closed here instead.
+		if report == nil {
+			fprintf(stderr, "innsegl reap: the sweep returned no report; nothing was examined\n")
+			return exitReapInconclusive
+		}
+
+		complete := report.OK()
+		out := stdout
+		if !complete {
+			out = stderr
+		}
+		switch {
+		case *asJSON:
+			writeReapJSON(out, stderr, report)
+		case complete && *quietRun && len(report.Expired) == 0:
+		default:
+			fprintf(out, "%s", report.String())
+		}
+
+		if !complete {
+			fprintf(stderr,
+				"innsegl reap: INCOMPLETE - %d orphaned entr%s could not be reaped. "+
+					"Their SPIRE entries are still live and their expiries may be unrecorded; "+
+					"the next sweep retries them and cannot double-record (IP §6.7).\n",
+				len(report.Failures), pluralEntries(len(report.Failures)))
+			return exitReapIncomplete
+		}
+		return exitOK
 	}
 
-	complete := report.OK()
-	out := stdout
-	if !complete {
-		out = stderr
-	}
-	switch {
-	case *asJSON:
-		writeReapJSON(out, stderr, report)
-	case complete && *quietRun && len(report.Expired) == 0:
-	default:
-		fprintf(out, "%s", report.String())
+	if *interval <= 0 {
+		return sweepOnce()
 	}
 
-	if !complete {
-		fprintf(stderr,
-			"innsegl reap: INCOMPLETE - %d orphaned entr%s could not be reaped. "+
-				"Their SPIRE entries are still live and their expiries may be unrecorded; "+
-				"the next sweep retries them and cannot double-record (IP §6.7).\n",
-			len(report.Failures), pluralEntries(len(report.Failures)))
-		return exitReapIncomplete
+	// REPEATING. INCOMPLETE does not stop the loop: it means a particular
+	// orphan resisted, and the next sweep retries it and cannot double-record.
+	// INCONCLUSIVE does stop it — the sweep could not run at all, so continuing
+	// would be a process that reports nothing and reaps nothing, which is the
+	// state this whole change exists to end. Returning lets the caller (the
+	// orchestrator, or serve's companion watch) restart it.
+	ticker := time.NewTicker(*interval)
+	defer ticker.Stop()
+	for {
+		if code := sweepOnce(); code == exitReapInconclusive {
+			return code
+		}
+		select {
+		case <-ctx.Done():
+			return exitOK
+		case <-ticker.C:
+		}
 	}
-	return exitOK
 }
 
 func pluralEntries(n int) string {

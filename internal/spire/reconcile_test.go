@@ -572,15 +572,50 @@ func (f *fakeLedger) closed(eventID, runID, eventType string) *fakeLedger {
 }
 
 // closedAt is closed with an explicit `ts`.
+//
+// EACH EVENT CARRIES THE SOURCE ITS REAL WRITER CARRIES, and since #258 that is
+// load-bearing rather than decoration. doc 02 §2 makes `source` "who appended
+// it": `run_retired` is retire_agent's and reads `mcp`, `run_expired` is the
+// reaper's and reads `reaper` (internal/spire/reaper.go). The rule that decides
+// whether a withdrawal still stands asks exactly that question — an event the
+// reaper did not write, later than the withdrawal, means the run spoke again —
+// so a fixture that wrote `run_expired` as if the MCP had appended it described
+// a chain this deployment cannot produce, and described it as a run that had
+// answered the reaper by being withdrawn from.
 func (f *fakeLedger) closedAt(eventID, runID, eventType string, at time.Time) *fakeLedger {
+	source := event.SourceMCP
+	if eventType == event.EventTypeRunExpired {
+		source = event.SourceReaper
+	}
 	return f.add(eventID, event.Fields{
 		event.FieldEventType: eventType,
-		event.FieldSource:    event.SourceMCP,
+		event.FieldSource:    source,
 		event.FieldRunID:     runID,
 		event.FieldSpiffeID:  fakeSPIFFEID(runID),
 		event.FieldTS:        event.NewTimestamp(at).String(),
 	})
 }
+
+// workedAt appends a `credential_issued` — doc 02 §3's "a JWT/X.509-SVID was
+// released to the run", the event get_credential writes when it hands a
+// restored run its credential. It is this file's "the run is working": its
+// `source` is the MCP's, so it is by construction something the run did rather
+// than something done to it.
+func (f *fakeLedger) workedAt(eventID, runID string, at time.Time) *fakeLedger {
+	return f.add(eventID, event.Fields{
+		event.FieldEventType: event.EventTypeCredentialIssued,
+		event.FieldSource:    event.SourceMCP,
+		event.FieldRunID:     runID,
+		event.FieldSpiffeID:  fakeSPIFFEID(runID),
+		event.FieldTS:        event.NewTimestamp(at).String(),
+		event.FieldAudience:  AudienceSigstoreForTest,
+	})
+}
+
+// AudienceSigstoreForTest is IP §4's initial audience, spelled here rather than
+// imported: internal/mcp imports this package, so this package cannot import it
+// back, and the value is a fixture member of a record nothing validates.
+const AudienceSigstoreForTest = "sigstore"
 
 func fakeEntry(id, spiffeID string) Entry {
 	return Entry{
@@ -681,6 +716,111 @@ func TestReconcileClassifiesEveryDriftKind(t *testing.T) {
 	}
 	if len(*loud) != 1 || (*loud)[0].SPIFFEID != fakeSPIFFEID("run-rogue") {
 		t.Errorf("alert sink saw %+v, want only the unattributed entry", *loud)
+	}
+}
+
+// REC-017, in unit form (proposed for doc 07; doc 07 is not modified here).
+//
+//	A run whose newest recorded fact is later than its `run_expired`, and
+//	whose SPIRE entry the restore path re-created
+//	→ no drift at all
+//	→ and a RETIRED run in the same shape still raises spire_entry_not_deleted
+//
+// # Why this exists beside the integration case
+//
+// TestREC017ARestoredRunRaisesNoDriftAlert (lifecycle_test.go) drives a real
+// SPIRE and a real ledger, and it is the case that decides this issue. It
+// cannot run without containers. This one reaches the same comparison through
+// the fakes and therefore runs anywhere — so the rule that separates a restored
+// run from a retired one is checked on every machine, not only on one with a
+// stack up.
+//
+// # The pair is the point
+//
+// Either half alone can be satisfied by a reconciler that has stopped
+// thinking. A reconciler that never reports DriftEntryNotDeleted passes the
+// first; one that reports it for everything passes the second. Withdrawal is
+// reversible and retirement is not, and only a reconciler that tells them apart
+// passes both.
+func TestREC017ARestoredRunRaisesNoDriftAndARetiredOneStillDoes(t *testing.T) {
+	old := wellPastMinAge
+	newer := wellPastMinAge.Add(30 * time.Minute)
+
+	led := &fakeLedger{}
+	// Restored: registered, withdrawn from, and then the credential release
+	// that only a running agent asks for. Its entry is back, by design.
+	led.registeredAt("01a047a5-cc41-7c45-86fd-000000000101", "run-restored", old)
+	led.closedAt("01a047a5-cc41-7c45-86fd-000000000102", "run-restored", event.EventTypeRunExpired, old)
+	led.workedAt("01a047a5-cc41-7c45-86fd-000000000103", "run-restored", newer)
+	// Retired, and then exactly the same shape afterwards. Retirement is final,
+	// so the straggling call must not resurrect it and the entry must not be
+	// forgiven: this is AB-11.
+	led.registeredAt("01a047a5-cc41-7c45-86fd-000000000104", "run-ended", old)
+	led.closedAt("01a047a5-cc41-7c45-86fd-000000000105", "run-ended", event.EventTypeRunRetired, old)
+	led.workedAt("01a047a5-cc41-7c45-86fd-000000000106", "run-ended", newer)
+	// Withdrawn and quiet since: the entry should be gone and is not.
+	led.registeredAt("01a047a5-cc41-7c45-86fd-000000000107", "run-quiet", old)
+	led.closedAt("01a047a5-cc41-7c45-86fd-000000000108", "run-quiet", event.EventTypeRunExpired, old)
+
+	src := &fakeEntries{
+		td: "innsegl.dev",
+		entries: []Entry{
+			fakeEntry("e-restored", fakeSPIFFEID("run-restored")),
+			fakeEntry("e-ended", fakeSPIFFEID("run-ended")),
+			fakeEntry("e-quiet", fakeSPIFFEID("run-quiet")),
+		},
+	}
+
+	r, loud := newUnitReconciler(t, src, led)
+	result, err := r.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	got := map[string]Drift{}
+	for _, d := range result.Drifts {
+		got[d.SPIFFEID] = d
+	}
+
+	if d, reported := got[fakeSPIFFEID("run-restored")]; reported {
+		t.Errorf("a run whose credential_issued at %s is later than the run_expired at %s "+
+			"it is being judged against, and whose entry the restore path re-created, was "+
+			"reported as %+v.\nExpiry is a withdrawal, not an ending: an entry that comes "+
+			"back after one is the repair working, and reporting it teaches an operator to "+
+			"ignore the alert that means tampering", newer, old, d)
+	}
+	if d := got[fakeSPIFFEID("run-ended")]; d.Kind != DriftEntryNotDeleted {
+		t.Errorf("a RETIRED run whose entry is still there raised %q, want %q. Retirement "+
+			"is final — a call arriving after one does not un-retire the run, and an entry "+
+			"that survives it is AB-11", d.Kind, DriftEntryNotDeleted)
+	} else if d.SubjectEventID != "01a047a5-cc41-7c45-86fd-000000000105" {
+		t.Errorf("the alert names subject %q, want the run_retired event", d.SubjectEventID)
+	}
+	if d := got[fakeSPIFFEID("run-quiet")]; d.Kind != DriftEntryNotDeleted {
+		t.Errorf("a run withdrawn from and silent since, whose entry is still there, raised "+
+			"%q, want %q: the withdrawal stands and its claim is that the entry went",
+			d.Kind, DriftEntryNotDeleted)
+	} else if d.SubjectEventID != "01a047a5-cc41-7c45-86fd-000000000108" {
+		t.Errorf("the alert names subject %q, want the run_expired event", d.SubjectEventID)
+	}
+
+	// The restored run is ACTIVE, and the reconciler says so in the same
+	// vocabulary the read API answers in (REC-018).
+	if state := result.RunStates["run-restored"]; state != ledger.RunActive {
+		t.Errorf("the reconciler reads run-restored as %q, want %q", state, ledger.RunActive)
+	}
+	if state := result.RunStates["run-ended"]; state != ledger.RunRetired {
+		t.Errorf("the reconciler reads run-ended as %q, want %q", state, ledger.RunRetired)
+	}
+	if state := result.RunStates["run-quiet"]; state != ledger.RunLapsed &&
+		state != ledger.RunAbandoned {
+		t.Errorf("the reconciler reads run-quiet as %q, want a withdrawn state", state)
+	}
+	if len(result.Drifts) != 2 {
+		t.Errorf("cycle reported %d drifts, want 2: %+v", len(result.Drifts), result.Drifts)
+	}
+	if len(*loud) != 0 {
+		t.Errorf("the alert sink saw %+v; nothing here is unattributed", *loud)
 	}
 }
 

@@ -194,6 +194,26 @@ x-object-store-user: &object-store-user ${INNSEGL_OBJECT_STORE_ACCESS_KEY:-innse
 x-object-store-password: &object-store-password ${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}
 x-object-store-bucket: &object-store-bucket ${INNSEGL_OBJECT_STORE_BUCKET:-innsegl-segments}
 
+# GATES THE FILER'S IAM gRPC SERVICE. The filer registers CreateUser, PutPolicy
+# and CreateAccessKey on its gRPC port and says so itself at start-up:
+# "Registered IAM gRPC service on filer (unauthenticated; set jwt.filer_signing.key
+# ... to require admin Bearer token)". `-disableHttp` does not reach it — that
+# closes the HTTP surface and this is gRPC on 18888.
+#
+# Upstream's own rule is "set the key ... if the gRPC port is reachable beyond a
+# trusted network", and here it is not: innsegl-object-backend is `internal:`
+# with three members, and measured 2026-09-18 the name does not resolve from the
+# MCP while it does from innsegl-s3. So this is a second lock rather than the
+# only one — the same position telemetry ended up in on the same day.
+#
+# A SHIPPED DEFAULT, for the reason AB-17 gives above for the object store's own
+# credentials: the network control assumes an attacker who is not on the host,
+# and a process on the host reads any container's environment anyway. What
+# matters is that what this gates cannot weaken anything — it admits IAM calls
+# to a gateway run with -iam=false against a static identities file, so there is
+# no user or policy for them to create.
+x-object-filer-jwt: &object-filer-jwt ${INNSEGL_OBJECT_FILER_JWT_KEY:-innsegl-compose-filer-admin}
+
 # THE SCOPED IDENTITY every long-running service that talks to the store runs
 # as. innsegl/s3-identities.sh writes it into the gateway's identity file, and
 # innsegl/verify-object-scope.sh then asks the server what that credential can
@@ -333,6 +353,35 @@ x-parent-id: &parent-id ${INNSEGL_SPIRE_PARENT_ID:?run deploy/compose/spire/regi
 x-identity-secret-file: &identity-secret-file /run/innsegl/identity/secret
 
 # ----------------------------------------------------------------------------
+# #264 — THE IDENTITY LIFECYCLE'S CREDENTIAL. Two paths, never the key.
+#
+# WHAT WAS WRONG. The listener split below moves the six tools that CREATE and
+# DESTROY identities onto their own port, and nothing authenticated a caller on
+# it: any process that could reach it could mint a run, which is doc 04's AB-13
+# and AB-15. The note above INNSEGL_MCP_ADMIN_LISTEN said "Do NOT turn this on
+# until something is arranged to do the registering" — and it was on.
+#
+# WHAT CLOSES IT. A repository-scoped credential, verified OFFLINE against the
+# public key set below. `innsegl serve` now REFUSES TO START when the listener
+# is on and the key set is absent, so this stack mints one on its first `up`.
+#
+# TWO VOLUMES, NOT ONE, and that separation is E8. The MCP mounts the PUBLIC
+# key set and never the private half; nothing in this stack but the one-shot
+# that writes it, and an operator running `innsegl admin-credential mint`, can
+# reach the signing key at all.
+#
+# EMPTY UNLESS THE SPLIT IS ON. Both expand to nothing when
+# INNSEGL_MCP_ADMIN_LISTEN is unset, which is this file's default and every
+# deployment before it: `serve` refuses a key set with no listener to protect,
+# because a file that is read and never used reads as a control that is on.
+# The paths are written out inside the expansion rather than anchored a second
+# time because compose cannot interpolate a YAML anchor into one — these two
+# lines are the single spelling of each, and everything else references them.
+# ----------------------------------------------------------------------------
+x-admin-jwks-file: &admin-jwks-file ${INNSEGL_MCP_ADMIN_LISTEN:+/run/innsegl/admin/jwks.json}
+x-admin-key-file: &admin-key-file ${INNSEGL_MCP_ADMIN_LISTEN:+/run/innsegl/admin-key/signing.key}
+
+# ----------------------------------------------------------------------------
 # The one image the three innsegl-* services share. doc 05 §1 says "same
 # binary, subcommand" for the reconciler and the sealer; they differ from the
 # MCP and from each other only by `command:`.
@@ -342,6 +391,10 @@ x-innsegl-build: &innsegl-build
   build:
     context: ../..
     dockerfile: Dockerfile
+    # PINNED, because the default is whatever stage is last in the Dockerfile,
+    # and that is not a property this file should depend on. See the Runtime
+    # stage's own comment for what it cost when a stage was appended after it.
+    target: runtime
     args:
       VERSION: ${INNSEGL_VERSION:-compose}
       COMMIT: ${INNSEGL_COMMIT:-unknown}
@@ -527,6 +580,32 @@ services:
       # measured 256 KiB on disk. Raising the cap costs nothing and moves the
       # failure to a place an operator can read.
       - -volume.max=32
+
+      # TELEMETRY, OFF. The master reports cluster statistics to
+      # https://telemetry.seaweedfs.com/api/collect every 24h once 10 GiB are
+      # stored, and the upstream default is ON. The payload is the cluster's
+      # shape — version, host OS, volume-server/volume/filer counts, total bytes
+      # — and, unavoidably, the source address, which is the operator's. None of
+      # that is this deployment's to send.
+      #
+      # innsegl-object-backend is `internal: true`, so the call cannot leave and
+      # the hostname does not even resolve (measured 2026-09-18: SERVFAIL, so not
+      # even the DNS query escapes). This flag is the second lock. The network is
+      # a property of the topology and a topology gets edited; this is a property
+      # of the process, and the two fail independently.
+      #
+      # THE FLAG IS NOT THE ONE THE LOG SUGGESTS. The startup banner says "use
+      # -telemetry=false to opt out". That is the standalone `weed master`
+      # spelling. This deployment runs `weed server`, which prefixes every master
+      # flag and rejects the banner's advice outright — measured against the
+      # pinned image:
+      #
+      #   weed server -telemetry=false  ->  flag provided but not defined
+      #
+      # which does not warn, it crashloops the object store. Anyone acting on the
+      # log line alone breaks the deployment, so the working spelling is written
+      # down here next to the reason.
+      - -master.telemetry=false
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9333/cluster/healthz || exit 1"]
       interval: 3s
@@ -563,6 +642,12 @@ services:
       - innsegl-object-backend
     volumes:
       - innsegl-object-filer-data:/data
+    environment:
+      # See x-object-filer-jwt. Set here and NOT on innsegl-s3: the gateway runs
+      # -iam=false against a static identities file and makes no IAM call, and
+      # this same key doubles as the S3 STS fallback signer — behaviour this
+      # deployment has no reason to acquire.
+      WEED_JWT_FILER_SIGNING_KEY: *object-filer-jwt
     command:
       - filer
       - -master=innsegl-object-store:9333
@@ -762,6 +847,51 @@ services:
       - innsegl-identity-secret:/run/innsegl/identity
 
   # --------------------------------------------------------------------------
+  # innsegl-admin-credential-init — #264's issuing side, as a one-shot.
+  #
+  # innsegl-identity-init's shape and for its reasons: it produces key material,
+  # it needs to reach nothing to do that, so it reaches nothing
+  # (`network_mode: none`), and it is the only container that mounts either of
+  # these volumes read-write.
+  #
+  # IDEMPOTENT, AND ONE-DIRECTIONALLY SO. An existing signing key is LEFT
+  # ALONE — regenerating one on every boot would refuse every credential an
+  # operator had already minted, and `docker compose down -v` is the only way to
+  # rotate it, exactly as for the pseudonymisation secret. Rotating deliberately
+  # is `innsegl admin-credential keygen`, which ADDS a key to the set so both
+  # verify during the overlap.
+  #
+  # IT RUNS EVEN WHEN THE SPLIT IS OFF, and does nothing: the two paths above
+  # expand to nothing, and the script says so and exits. A conditional service
+  # would be a second place the split's state is decided.
+  # --------------------------------------------------------------------------
+  innsegl-admin-credential-init:
+    <<: *innsegl-build
+    container_name: innsegl-admin-credential-init
+    network_mode: none
+    entrypoint: ["/bin/sh"]
+    command: ["/admin-credential-init.sh"]
+    restart: "no"
+    read_only: true
+    # root, so the key set can be chowned to the uid innsegl-mcp runs as. The
+    # volume is created root-owned by Docker and the MCP must be able to read
+    # it without this stack running the MCP as root.
+    user: "0:0"
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # The paths it writes. innsegl-mcp reads the first from the same anchor.
+      INNSEGL_MCP_ADMIN_JWKS_FILE: *admin-jwks-file
+      INNSEGL_ADMIN_CREDENTIAL_KEY_FILE: *admin-key-file
+    volumes:
+      - ./innsegl/admin-credential-init.sh:/admin-credential-init.sh:ro
+      # THE ONLY rw MOUNTS OF EITHER VOLUME ANYWHERE IN THE STACK.
+      - innsegl-admin-jwks:/run/innsegl/admin
+      - innsegl-admin-key:/run/innsegl/admin-key
+
+  # --------------------------------------------------------------------------
   # innsegl-mcp — doc 05 §1's "The MCP server (register/credential/event/sign/
   # retire). Only service holding SPIRE admin credential."
   #
@@ -798,6 +928,11 @@ services:
       # then crashloops. Gating on the one-shot's completion is what makes a
       # clean `docker compose up` need no manual step.
       innsegl-identity-init:
+        condition: service_completed_successfully
+      # #264: with the identity lifecycle on its own listener this process
+      # REFUSES TO START without the key set that authenticates a caller on it.
+      # Gating on the one-shot is what makes a clean `up` need no manual step.
+      innsegl-admin-credential-init:
         condition: service_completed_successfully
     networks:
       - innsegl-ledger
@@ -839,10 +974,26 @@ services:
       #
       # Set it to 0.0.0.0:8090 and register_agent and retire_agent move to that
       # listener, leaving 8080 the three tools that need a run_id someone else
-      # issued. Do NOT turn this on until something is arranged to do the
-      # registering — a harness hook (#171), or an operator — because with the
-      # split on and nothing registering, no run can be created at all.
+      # issued. Something must be arranged to do the registering — a harness
+      # hook (#171), or an operator — because with the split on and nothing
+      # registering, no run can be created at all.
+      #
+      # #266 ANSWERED THE OTHER HALF OF THAT WARNING. #264 put a credential in
+      # front of the six lifecycle tools, and the two shipped callers presented
+      # none: turning this on would have answered every registration with 401,
+      # so no agent could register and no commit could be signed. Both now mint
+      # one for the repository they are working in, from the private key below,
+      # and only when this listener refuses a call.
       INNSEGL_MCP_ADMIN_LISTEN: ${INNSEGL_MCP_ADMIN_LISTEN:-}
+      # #264. The PUBLIC key set whose repository-scoped credentials the
+      # identity lifecycle admits — the path, and never a key. Read once at
+      # start-up and never fetched, so this deployment gains no dependency on
+      # whatever issues them: an already-minted credential keeps working and
+      # signing is unaffected if the issuing side is gone.
+      #
+      # Empty exactly when the listener above is, and `serve` refuses either one
+      # without the other. See the anchor.
+      INNSEGL_MCP_ADMIN_JWKS_FILE: *admin-jwks-file
 
       # Companion subcommands to run inside this process (serve.go's -also).
       #
@@ -858,7 +1009,29 @@ services:
       # sealer and reconciler in here too has innsegl.oneprocess.yml, which
       # states what folding them in costs.
       INNSEGL_MCP_ALSO: ${INNSEGL_MCP_ALSO:-}
-      INNSEGL_REAP_GRACE: ${INNSEGL_REAP_GRACE:-5m}
+      # HOW LONG SILENCE IS ALLOWED BEFORE IT IS CALLED ORPHANED. This was 5m
+      # and 5m is not silence, it is a long tool call: PostToolUse fires when a
+      # tool RETURNS, so a build, a test run or a slow network makes a perfectly
+      # live agent look dead. Measured 2026-09-18 on this deployment, the first
+      # sweep after the reaper was fixed expired run-f0ac88f8 at 07:17 and that
+      # run was recording tool calls again at 07:20.
+      #
+      # `run_expired` is permanent and append-only (I4), so a grace that is too
+      # short writes a false statement about a live agent into a chain that
+      # cannot take it back. The code's own documented default is 12h and that
+      # is what this now uses. The cost is the other direction — a genuinely
+      # dead run holds its SPIRE entry for up to 12h — and that is the cheaper
+      # mistake: an idle entry is untidy, a false expiry is a lie in the record.
+      INNSEGL_REAP_GRACE: ${INNSEGL_REAP_GRACE:-12h}
+
+      # HOW OFTEN THE COMPANION SWEEPS. `reap` sweeps once and exits unless it is
+      # given an interval, and as a companion that meant one sweep per container
+      # start: measured 2026-09-18, one sweep in 34 hours and about fifty runs
+      # standing Active with their agents long gone. Unset leaves the CLI's
+      # one-shot default for anyone running `innsegl reap` by hand; the companion
+      # needs a number, and it needs to be well under the grace, or an orphan
+      # waits a whole interval past its deadline.
+      INNSEGL_REAP_INTERVAL: ${INNSEGL_REAP_INTERVAL:-1m}
 
       # The PATH to this deployment's secret, not the secret. See the anchor.
       # `-identity-mode` is left at its default, `pseudonymous`: the SPIFFE ID,
@@ -906,6 +1079,10 @@ services:
       # innsegl-identity-init's rw one. One writer, one reader — the control the
       # Fulcio CA key and the Rekor log key have.
       - innsegl-identity-secret:/run/innsegl/identity:ro
+      # READ-ONLY, and PUBLIC halves only (E8). The signing key lives on a
+      # volume this service does not mount at all: a process that could read it
+      # could mint its own admission to the listener it is being protected by.
+      - innsegl-admin-jwks:/run/innsegl/admin:ro
     ports:
       # Loopback only, like every other published port in this deployment.
       #
@@ -1187,6 +1364,15 @@ services:
   # stack is up makes the backup's liveness the stack's liveness, so a stack
   # that was down for three days has a three-day-old backup; backup-health.sh
   # says so rather than leaving it to be assumed.
+  #
+  # FORCING A RUN (RM-163, #267):
+  #
+  #     docker kill -s USR1 innsegl-backup
+  #
+  # wakes the sleep and runs immediately. It replaces the recovery #267 records
+  # -- deleting the marker the healthcheck reads and restarting the container --
+  # and unlike `make innsegl-backup`, which runs a separate one-off container,
+  # the verdict it produces is the verdict the healthcheck goes on to read.
   # --------------------------------------------------------------------------
   innsegl-backup:
     image: ${INNSEGL_BACKUP_IMAGE:-innsegl-backup:local}
@@ -1220,6 +1406,19 @@ services:
       # an operator learns to ignore.
       INNSEGL_BACKUP_INTERVAL: ${INNSEGL_BACKUP_INTERVAL:-86400}
       INNSEGL_BACKUP_WINDOW: ${INNSEGL_BACKUP_WINDOW:-172800}
+      # THE INTERVAL IS FOR A RUN THAT WORKED. A run that could not reach the
+      # ledger is retried on these instead, doubling from the first towards the
+      # second (RM-163, #267): the interval used to be the wait after a failure
+      # too, so a ledger that was unreachable for two minutes cost a whole day
+      # of unprotected work. Sixty seconds is longer than a database restart;
+      # fifteen minutes is where a fault has stopped looking transient.
+      #
+      # ONLY THE TRANSIENT CLASS TAKES THIS PATH. A dump that was produced and
+      # does not restore, or restores and disagrees with a sealed segment, waits
+      # the full interval and says why: those are findings about the backup, and
+      # a new one every few seconds would bury the first.
+      INNSEGL_BACKUP_RETRY: ${INNSEGL_BACKUP_RETRY:-60}
+      INNSEGL_BACKUP_RETRY_MAX: ${INNSEGL_BACKUP_RETRY_MAX:-900}
       # The segment half. The same gateway the sealer writes through, read with
       # an identity that can only read.
       INNSEGL_OBJECT_STORE_REGION: ${INNSEGL_OBJECT_STORE_REGION:-us-east-1}
@@ -1742,6 +1941,43 @@ volumes:
   # identifier, and the tree it names is the DEPLOYMENT's, not the caller's).
   # MOUNTED BY: innsegl-mcp (rw), innsegl-reconciler (rw), demo-agent (rw).
   innsegl-workspace:
+
+  # #264's PUBLIC key set: the keys whose repository-scoped credentials the
+  # identity-lifecycle listener admits.
+  # MOUNTED BY: innsegl-admin-credential-init (rw), innsegl-mcp (ro).
+  innsegl-admin-jwks:
+
+  # #264's PRIVATE signing key. MOUNTED BY: innsegl-admin-credential-init (rw)
+  # and by NO SERVICE, ever — E8 keeps the MCP to public halves, and a service
+  # that could read this could mint its own admission to the listener this key
+  # exists to protect.
+  #
+  # #266 — WHO READS IT, AND HOW. The two callers that reach the identity
+  # lifecycle — scripts/innsegl-commit.sh and scripts/hooks/subagent-identity.sh
+  # — mint their own credential by running the shipped command in a THROWAWAY
+  # container that mounts this volume read-only, has no network, no writable
+  # root filesystem and no privilege escalation, and exits:
+  #
+  #   docker run --rm --network none --read-only --user 0:0 \
+  #     --security-opt no-new-privileges \
+  #     -v <project>_innsegl-admin-key:/k:ro <image> \
+  #     admin-credential mint -key /k/signing.key -repo host/org/name
+  #
+  # `--user 0:0` because the one-shot leaves the key 0400 and root-owned, which
+  # is the point: the image's own 1000:1000 cannot read it. A container rather
+  # than a service is deliberate — a long-lived minter would be a standing mint
+  # oracle for anything that could reach it, while one that exists for a fifth
+  # of a second is reachable only through the Docker API, which already carried
+  # the privilege to mount this volume. Nothing copies the key onto the host,
+  # and the only value that crosses the boundary is the credential, on a pipe.
+  #
+  # The callers mint LAZILY, on a 401 and on nothing else, so a deployment with
+  # INNSEGL_MCP_ADMIN_LISTEN unset never runs any of the above.
+  #
+  # Losing it costs the ability to issue NEW credentials and nothing else: the
+  # public half stays in the key set, already-issued credentials keep verifying
+  # until they expire, and a replacement is one `keygen` away.
+  innsegl-admin-key:
 
   # THIS DEPLOYMENT's pseudonymisation secret, and the reason it is a volume
   # rather than a value in this file: a secret in the file would be the same

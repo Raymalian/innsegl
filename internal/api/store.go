@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -25,6 +26,11 @@ type conn interface {
 type Store struct {
 	pool     *pgxpool.Pool
 	readOnly ReadOnlyReport
+	// restoreHorizon divides Lapsed from Abandoned (#256). It is read from the
+	// deployment's own environment at Open, so this API and the MCP server that
+	// actually refuses a restore are working from one number — see
+	// EnvRestoreHorizon for why it arrives that way rather than as a field.
+	restoreHorizon time.Duration
 }
 
 // Open connects and REFUSES any credential that can write.
@@ -64,11 +70,37 @@ func OpenConfig(ctx context.Context, cfg *pgxpool.Config) (*Store, error) {
 		pool.Close()
 		return nil, serr
 	}
-	return &Store{pool: pool, readOnly: report}, nil
+	return &Store{
+		pool:           pool,
+		readOnly:       report,
+		restoreHorizon: restoreHorizonFromEnv(),
+	}, nil
 }
 
 // ReadOnly returns the evidence gathered when this store was opened.
 func (s *Store) ReadOnly() ReadOnlyReport { return s.readOnly }
+
+// RestoreHorizon is how long after a withdrawal a run may still be restored —
+// the number every Lapsed/Abandoned answer this store gives was computed with.
+// Zero means the deployment set none, and nothing is ever Abandoned.
+//
+// Exported because it is EVIDENCE, not configuration: every response carries it
+// (RunPage.RestoreHorizonSeconds) so a reader can check the conclusion rather
+// than take it.
+func (s *Store) RestoreHorizon() time.Duration { return s.restoreHorizon }
+
+// SetRestoreHorizon replaces the horizon this store answers with.
+//
+// It exists so a test can hold the horizon still — the difference between
+// Lapsed and Abandoned is one comparison against a clock, and a test that had
+// to wait thirty days to see the second one would not be a test. A deployment
+// sets EnvRestoreHorizon instead; nothing in the serving path calls this.
+func (s *Store) SetRestoreHorizon(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	s.restoreHorizon = d
+}
 
 // Close releases the pool.
 func (s *Store) Close() {

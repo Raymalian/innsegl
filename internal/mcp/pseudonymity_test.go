@@ -185,7 +185,7 @@ func TestPRI003NoTicketReferenceReachesAPublicRecord(t *testing.T) {
 	// the ticket back in the claim shows up here in the bytes.
 	claim := w.signer.reqs[0].Claim
 	message, err := signing.CommitMessage(
-		signing.AuthorPolicy{Operators: []string{scAuthorEmail}, AllowUnlinked: true},
+		signing.AuthorPolicy{Operators: []signing.Operator{{Address: scAuthorEmail}}, AllowUnlinked: true},
 		signing.Commit{Message: scMessage, AuthorEmail: scAuthorEmail, Claim: claim})
 	if err != nil {
 		t.Fatalf("CommitMessage: %v", err)

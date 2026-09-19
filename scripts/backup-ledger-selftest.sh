@@ -14,6 +14,17 @@
 #            kept, but is reported unverified rather than passed quietly
 #   BAK-004  a backup that cannot even be taken (no such container) fails
 #            closed rather than reporting success on nothing
+#   BAK-005  an unreachable ledger is reported as its own class -- nothing was
+#            dumped, so nothing has been learned about the dump, and the caller
+#            is told that rather than being told the backup is bad (RM-163)
+#   BAK-006  a failing run states the exposure: the last dump that actually
+#            verified, and how many events have been appended above it.
+#            "FAILED" alone does not say what is at risk
+#   BAK-007  when the ledger cannot be reached the exposure says the count was
+#            not taken, rather than inventing one, and still names the last
+#            usable dump -- which is on disk and needs no database
+#   BAK-008  the measurement is cleared by a run that succeeds, so a stale
+#            number is never reported as a current one
 #
 # WHY A REAL POSTGRES CONTAINER
 # ------------------------------
@@ -197,17 +208,25 @@ docker cp "${REPO_ROOT}/migrations/0002_idempotency.sql" "${PG}:/tmp/0002.sql"
 
 # corrupt_position 0 means "load the fixtures exactly as committed". Applies
 # the schema fresh every call -- see the note on DROP SCHEMA below.
+# A SECOND ARGUMENT, "how many". The fixtures are one chain, positions 1..14,
+# so any PREFIX of them is also a valid chain -- the chain-link trigger only
+# ever looks at the row before. Loading ten and then fourteen is what lets
+# BAK-006 prove the arithmetic in "events above it" against a number that is
+# not zero; with a fixed fourteen every dump covers every event and the count
+# would be right by accident.
 load_fixtures() {
   corrupt_position="$1"
+  upto="${2:-14}"
   sql="${workdir}/inserts.sql"
   : >"${sql}"
   n=0
   for f in "${FIX}"/0[1-9]-*.canonical.json "${FIX}"/1[0-4]-*.canonical.json; do
     [ -f "${f}" ] || continue
+    pos="$(jq -r '.chain_position' "${f}")"
+    [ "${pos}" -le "${upto}" ] || continue
     n=$((n + 1))
     h="${f%.canonical.json}.hash"
     event_hash="$(cat "${h}")"
-    pos="$(jq -r '.chain_position' "${f}")"
     if [ "${pos}" = "${corrupt_position}" ]; then
       # One hex digit changed. Format-valid, chain-link-valid (nothing
       # downstream checks this position's own event_hash), and different from
@@ -231,8 +250,8 @@ load_fixtures() {
       "${pos}" "${event_id}" "${event_hash}" "${prev}" "${event_type}" "${source_val}" \
       "${run_id_sql}" "${idem_sql}" "${ts}" "${hex}" >>"${sql}"
   done
-  if [ "${n}" -ne 14 ]; then
-    printf 'FAIL: found %d fixtures, want 14\n' "${n}" >&2
+  if [ "${n}" -ne "${upto}" ]; then
+    printf 'FAIL: loaded %d fixtures, want %d\n' "${n}" "${upto}" >&2
     exit 1
   fi
   # innsegl.events and innsegl.chain are append-only (LED-003, I4), so this
@@ -316,7 +335,7 @@ printf '\n-- BAK-004: the backup cannot be taken at all -> fails closed --\n'
 # An unreachable ledger, which is what "no such container" became when the
 # script stopped reaching into containers. Port 1 is reserved and nothing
 # listens on it, so this is a connection refused rather than a timeout.
-expect 5 "BAK-004 an unreachable ledger" -- \
+expect 6 "BAK-004 an unreachable ledger" -- \
   run_backup --postgres-host 127.0.0.1 --postgres-port 1 --role innsegl \
   --out "${outdir}" --segments "${good_segments}" --quiet
 # And the password is required, because it is the one input that may not be an
@@ -327,6 +346,99 @@ expect 2 "BAK-004 a missing password is a usage error" -- \
   --out "${outdir}" --segments "${good_segments}" --quiet
 expect 2 "BAK-004 unknown flag is a usage error" -- \
   run_backup --this-flag-does-not-exist
+
+
+# ---------------------------------------------------------------------------
+# BAK-005..008 — what a failure says, and which failure it says it is
+# (RM-163, #267).
+#
+# THE CASES BELOW ASSERT ON ONE RUN EACH, not on a run per assertion, which is
+# what expect_says does. That is not a style preference: every run writes a
+# dump and a verification report into ${outdir}, so a second identical run
+# changes the very thing BAK-006 measures — the newest dump that verified is
+# then the previous assertion's dump, and "events above it" is legitimately
+# zero. The output is captured once and read several times.
+# ---------------------------------------------------------------------------
+
+check() {   # check NAME CONDITION-ALREADY-EVALUATED DETAIL
+  if [ "$2" -eq 0 ]; then
+    printf '  ok    %s\n' "$1"
+    pass=$((pass + 1))
+  else
+    printf '  FAIL  %s\n' "$1"
+    printf '%s\n' "$3" | sed 's/^/        | /'
+    fail=$((fail + 1))
+  fi
+}
+
+printf '\n-- BAK-005: an unreachable ledger is its own class, not a bad dump --\n'
+load_fixtures 0
+out="$(run_backup --postgres-host 127.0.0.1 --postgres-port 1 --role innsegl \
+  --out "${outdir}" --segments "${good_segments}" 2>&1)" && rc=0 || rc=$?
+check "BAK-005 an unreachable ledger exits 6, not 5" \
+  "$( [ "${rc}" -eq 6 ] && echo 0 || echo 1 )" "exit ${rc}: ${out}"
+printf '%s' "${out}" | grep -qF "cannot reach the ledger" && g=0 || g=1
+check "BAK-005 says the ledger could not be reached" "${g}" "${out}"
+printf '%s' "${out}" | grep -qF "TRANSIENT" && g=0 || g=1
+check "BAK-005 names it a transient rather than an unusable dump" "${g}" "${out}"
+printf '%s' "${out}" | grep -qF "does not restore" && g=1 || g=0
+check "BAK-005 does not claim anything about a dump it never took" "${g}" "${out}"
+
+printf '\n-- BAK-006: a failure states the exposure, in events and in time --\n'
+# A DIRECTORY OF ITS OWN. "The last usable dump" is a property of the whole
+# output directory, so running these two cases in ${outdir} makes the answer
+# depend on every dump the eleven cases above happened to leave there -- and on
+# how long they took. It was flaky exactly once before this line existed, which
+# is the only warning a test like that ever gives. Here the directory starts
+# empty and holds precisely the two dumps these cases take.
+exposure_dir="${workdir}/backups-exposure"
+mkdir -p "${exposure_dir}"
+
+# Ten events, kept and unverified: this is the dump the next failure is
+# measured against.
+load_fixtures 0 10
+out="$(run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl \
+  --role innsegl --out "${exposure_dir}" --segments "${empty_segments}" 2>&1)" && rc=0 || rc=$?
+check "BAK-006 a ten-event dump is taken and kept" \
+  "$( [ "${rc}" -eq 4 ] && echo 0 || echo 1 )" "exit ${rc}: ${out}"
+n_kept="$(find "${exposure_dir}" -maxdepth 1 -name '*.dump.verify.txt' | wc -l | tr -d ' ')"
+check "BAK-006 that dump is the only verified one in its directory" \
+  "$( [ "${n_kept}" -eq 1 ] && echo 0 || echo 1 )" "found ${n_kept}"
+
+# Four more events, and the fourteenth corrupted, so the next run fails with a
+# ledger that is four events ahead of the last dump that verified.
+load_fixtures 14
+out="$(run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl \
+  --role innsegl --out "${exposure_dir}" --segments "${good_segments}" 2>&1)" && rc=0 || rc=$?
+check "BAK-006 the corrupted chain still fails as a mismatch" \
+  "$( [ "${rc}" -eq 3 ] && echo 0 || echo 1 )" "exit ${rc}: ${out}"
+printf '%s' "${out}" | grep -qE 'events above it +4( |$)' && g=0 || g=1
+check "BAK-006 counts the four events above the last usable dump" "${g}" "${out}"
+printf '%s' "${out}" | grep -qF "last usable dump" && g=0 || g=1
+check "BAK-006 names the last usable dump" "${g}" "${out}"
+printf '%s' "${out}" | grep -qE 'last usable dump +[0-9]{4}-[0-9]{2}-[0-9]{2}T' && g=0 || g=1
+check "BAK-006 gives that dump a time, not just a name" "${g}" "${out}"
+[ -f "${exposure_dir}/.exposure" ] && g=0 || g=1
+check "BAK-006 leaves the measurement where the loop can read it" "${g}" \
+  "$(ls -a "${exposure_dir}" | tr '\n' ' ')"
+
+printf '\n-- BAK-007: an unreachable ledger cannot be counted, and says so --\n'
+out="$(run_backup --postgres-host 127.0.0.1 --postgres-port 1 --role innsegl \
+  --out "${exposure_dir}" --segments "${good_segments}" 2>&1)" && rc=0 || rc=$?
+printf '%s' "${out}" | grep -qF "not counted" && g=0 || g=1
+check "BAK-007 does not invent a count it could not take" "${g}" "${out}"
+printf '%s' "${out}" | grep -qF "last usable dump" && g=0 || g=1
+check "BAK-007 still names the last usable dump, which is on disk" "${g}" "${out}"
+
+printf '\n-- BAK-008: a run that succeeds clears the measurement --\n'
+load_fixtures 0
+out="$(run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl \
+  --role innsegl --out "${exposure_dir}" --segments "${good_segments}" --quiet 2>&1)" && rc=0 || rc=$?
+check "BAK-008 the clean chain is green again" \
+  "$( [ "${rc}" -eq 0 ] && echo 0 || echo 1 )" "exit ${rc}: ${out}"
+[ -f "${exposure_dir}/.exposure" ] && g=1 || g=0
+check "BAK-008 no stale exposure survives a good run" "${g}" \
+  "$(cat "${exposure_dir}/.exposure" 2>/dev/null || true)"
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 if [ "${fail}" -gt 0 ]; then

@@ -65,3 +65,6 @@ tmp/
 .opencode/
 *.log
 deploy/compose/.rekor-tlog-id
+
+# local gate configuration; never published
+.innsegl/

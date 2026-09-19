@@ -38,6 +38,44 @@
 # unsigned commit that the operator believes is signed is worse than no commit,
 # and IP §6.1 is that attributed work must be impossible without an identity
 # rather than merely inconvenient.
+#
+# # THE LISTENER'S CREDENTIAL — #266
+#
+# #264 put a repository-scoped credential in front of the six identity-lifecycle
+# tools, and this script reaches two of them. Measured before that landed:
+# `grep -c Authorization` in this file returned 0, so deploying the check as it
+# stood answered `register_agent` with 401 and no commit could be signed at all.
+#
+# FOUR DECISIONS, and each of them is the cheap half of a pair:
+#
+#   WHO MINTS. This script, for itself, by running the shipped
+#   `innsegl admin-credential mint` inside a throwaway container that mounts the
+#   deployment's private signing key READ-ONLY and has no network. The key is
+#   never copied onto this machine's filesystem, never read by this script, and
+#   never printed. A long-lived minting service would be a standing mint oracle
+#   for anything that could reach it; a container that exists for 200ms and is
+#   reachable only through the Docker API adds no privilege that API did not
+#   already carry.
+#
+#   HOW OFTEN. Never, until the listener says otherwise. The first attempt
+#   carries no credential; a 401 — and nothing else — mints one and retries the
+#   same call exactly once. So a deployment that does not enforce (the default,
+#   and every deployment before #264) makes no 401, mints nothing, and behaves
+#   byte-for-byte as this script did before. Nothing is probed, nothing is
+#   configured, and there is no mode to get wrong.
+#
+#   WHAT EXPIRY DOES. Nothing special, which is the point. The credential lives
+#   fifteen minutes and a single `sign_commit` may take five; a credential that
+#   ages out between `register_agent` and `retire_agent` produces a 401 on the
+#   next call, which mints a fresh one and retries. No clock is read here, no
+#   `exp` is parsed, and no timer decides anything — the server's own refusal is
+#   the only trigger, so there is no second opinion about when a token died.
+#
+#   WHERE IT IS KEPT. In one shell variable, for the life of one process. Never
+#   exported, never written to a file, never echoed, and never placed in an
+#   argument vector: the header travels to curl through a `-K -` configuration
+#   on a pipe, because `ps` shows every argument of every process on this
+#   machine and a bearer token there is replayable for the rest of its life.
 
 set -eu
 
@@ -119,23 +157,55 @@ ROOT="$(git rev-parse --show-toplevel)"
 # THE POINTER IS KEPT, not just read. RM-134 (#213): a pointer whose run has
 # been retired strands the tree, and the answer is a successor written back
 # here — so the file it was read from and the key that names it stay in scope.
+RUNS_DIR="${INNSEGL_RUNS_DIR:-$HOME/.innsegl/runs}"
+TREE_KEY=""
+if [ -n "$ROOT" ]; then
+  TREE_KEY="$(printf '%s' "$(CDPATH= cd -- "$ROOT" && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
+fi
+
 PTR_FILE=""
 RUN_FROM_POINTER=""
-if [ -z "$RUN_GIVEN" ] && [ -n "$ROOT" ]; then
-  _key="$(printf '%s' "$(CDPATH= cd -- "$ROOT" && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
-  _ptr="${INNSEGL_RUNS_DIR:-$HOME/.innsegl/runs}/by-tree/$_key"
+if [ -z "$RUN_GIVEN" ] && [ -n "$TREE_KEY" ]; then
+  _ptr="$RUNS_DIR/by-tree/$TREE_KEY"
   if [ -f "$_ptr" ]; then
     RUN_GIVEN="$(sed -n 1p "$_ptr")"
     [ -n "$TASK_GIVEN" ] || TASK_GIVEN="$(sed -n 2p "$_ptr")"
     [ -n "$WORKTREE" ] || WORKTREE="$(sed -n 3p "$_ptr")"
     PTR_FILE="$_ptr"
-    TREE_KEY="$_key"
     RUN_FROM_POINTER=1
     # It says what it FOUND and not what it is about to do. Whether this run
     # may still sign is decided below, and the line used to promise "signing
     # under it" several hundred lines before anything had asked.
     echo "innsegl-commit: this tree's pointer names $RUN_GIVEN" >&2
   fi
+fi
+
+# THE SESSION THIS TREE BELONGS TO, and so the parent of any run registered
+# here -- RM-156 (#259).
+#
+# Measured 2026-09-18: 87 `orchestrator` runs in the ledger, every one of them
+# registered by this script, and not one carrying a parent. The reason was not
+# that they had none. It is that a shell command cannot discover which agent it
+# is inside: no environment variable carries an agent or a session id, which is
+# the same gap the by-tree pointer above was written to close for identity.
+#
+# So the harness hook writes a SECOND pointer at SessionStart, keyed on the
+# same working tree and answering a different question: not "which run signs
+# here" but "which session is this tree's". Line 1 is that session's run, and
+# it is what this script names as the parent of whatever it registers.
+#
+# WHY IT CANNOT COLLIDE WITH THE POINTER ABOVE. The subagent pointer's name is
+# exactly the 32 hex characters of the tree key, and SubagentStop removes that
+# exact name; this one carries a `.session` suffix, which no tree key can
+# spell. Two pointers, two lifetimes: the subagent's lasts as long as the
+# subagent, this one as long as the session.
+#
+# Absent is not an error, and it is the ordinary state of a tree whose session
+# started before the hook wrote one, or on a machine with no harness at all.
+# The run is then registered as a root run, exactly as it always was.
+PARENT_RUN=""
+if [ -n "$TREE_KEY" ] && [ -f "$RUNS_DIR/by-tree/$TREE_KEY.session" ]; then
+  PARENT_RUN="$(sed -n 1p "$RUNS_DIR/by-tree/$TREE_KEY.session")"
 fi
 
 # The repository identifier the MCP resolves against its workspace: host/org/name.
@@ -297,26 +367,184 @@ RUN_KEY="run-$CONTENT-$$-$(date -u +%s)"
 # part of the request the key names. See its comment there.
 
 # ---------------------------------------------------------------------------
+# #266 — THE CREDENTIAL, HELD FOR ONE PROCESS AND WRITTEN NOWHERE.
+#
+# One variable. Not exported, so it does not reach a single child but the ones
+# handed it deliberately; not written, so no file on this machine holds it; not
+# logged, so no line of this script's output carries it. It starts empty and
+# stays empty unless the listener refuses a call, which is what makes a
+# deployment with no credential check indistinguishable from this script's
+# behaviour before #266 existed.
+# ---------------------------------------------------------------------------
+ADMIN_CRED=""
+
+# The deployment this machine's key lives in. Both are the shipped defaults
+# from deploy/compose/innsegl.yml, and both are overridable for a deployment
+# that renamed its project or its image.
+ADMIN_KEY_VOLUME="${INNSEGL_ADMIN_KEY_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-admin-key}"
+ADMIN_KEY_PATH="${INNSEGL_ADMIN_KEY_PATH:-/k/signing.key}"
+INNSEGL_IMAGE_REF="${INNSEGL_IMAGE:-innsegl:local}"
+
+# admin_cred_config prints a `curl -K` configuration, and prints nothing at all
+# when there is no credential or the call is not bound for the admin listener.
+#
+# A CONFIGURATION ON A PIPE, never `-H` on a command line, and never a here
+# document. `ps` shows the argument vector of every process on this machine, so
+# a bearer token passed as an argument is a token any local process can replay
+# for the rest of its fifteen minutes. A here document is a temporary FILE in
+# most shells, which is the same disclosure with a shorter life. `printf` is a
+# builtin writing into a pipe: no argument vector, no file, no descriptor that
+# outlives the call.
+#
+# The token is base64url and dots throughout, so nothing in it needs escaping
+# inside curl'"'"'s quoted configuration value.
+admin_cred_config() {
+  [ -n "$ADMIN_CRED" ] || return 0
+  [ "${1:-}" = "$ADMIN_URL" ] || return 0
+  printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_CRED"
+}
+
+# mint_admin_credential fills $ADMIN_CRED with one credential for this
+# repository, or explains what to run and returns non-zero.
+#
+# THE KEY IS READ WHERE IT LIVES AND NOWHERE ELSE: on the volume the
+# deployment'"'"'s one-shot wrote it to, mounted read-only into a container with no
+# network, no writable root filesystem and no privilege escalation, which
+# prints one credential on stdout and exits. Nothing copies the key to this
+# machine, and this script never sees it — the only value that crosses the
+# boundary is the credential itself, on a pipe.
+#
+# `--user 0:0` because the one-shot leaves the key 0400 and root-owned, which
+# is the point: the image'"'"'s own 1000:1000 cannot read it, so a compromised
+# innsegl-mcp — which does not mount this volume at all — could not either.
+mint_admin_credential() {
+  _scope="${INNSEGL_REPO_ID:-$REPO}"
+  ADMIN_CRED=""
+  if [ -n "${INNSEGL_ADMIN_CREDENTIAL_MINT:-}" ]; then
+    # An operator whose signing key is not on this machine'"'"'s container volume:
+    # any command that prints one credential for the repository it is given.
+    # Deliberately word-split, because a command with its own arguments is the
+    # normal case.
+    # shellcheck disable=SC2086
+    if ADMIN_CRED="$($INNSEGL_ADMIN_CREDENTIAL_MINT "$_scope" 2>/dev/null)"; then :; else ADMIN_CRED=""; fi
+  elif command -v docker >/dev/null 2>&1; then
+    if ADMIN_CRED="$(docker run --rm --network none --read-only --user 0:0 \
+        --security-opt no-new-privileges \
+        -v "$ADMIN_KEY_VOLUME:$(dirname "$ADMIN_KEY_PATH"):ro" \
+        "$INNSEGL_IMAGE_REF" \
+        admin-credential mint -key "$ADMIN_KEY_PATH" -repo "$_scope" 2>/dev/null)"; then :; else ADMIN_CRED=""; fi
+  fi
+  ADMIN_CRED="$(printf '%s' "$ADMIN_CRED" | tr -d '\r\n')"
+  [ -n "$ADMIN_CRED" ] || { credential_remedy "$_scope"; return 1; }
+  return 0
+}
+
+# credential_remedy — a refusal that says what to run.
+#
+# A 401 with no remedy strands an agent holding finished work, which is the
+# whole failure #266 exists to prevent: the listener'"'"'s own answer is one
+# byte-identical sentence by design, because a distinguishable reason is an
+# oracle, so the only place an operator can be told what to do is here.
+CRED_REMEDY_SAID=""
+credential_remedy() {
+  # ONCE PER PROCESS. The retirement trap runs on the way out of a failure, so
+  # a repeated remedy would print the same eighteen lines under the message
+  # that already explained them.
+  [ -z "$CRED_REMEDY_SAID" ] || return 0
+  CRED_REMEDY_SAID=1
+  echo "innsegl-commit: the identity-lifecycle listener at $ADMIN_URL requires a" >&2
+  echo "innsegl-commit:   repository-scoped credential, and none could be minted for" >&2
+  echo "innsegl-commit:   $1." >&2
+  echo "innsegl-commit:" >&2
+  echo "innsegl-commit:   Mint one against this deployment's signing key:" >&2
+  echo "innsegl-commit:     docker run --rm --network none --user 0:0 \\" >&2
+  echo "innsegl-commit:       -v $ADMIN_KEY_VOLUME:$(dirname "$ADMIN_KEY_PATH"):ro $INNSEGL_IMAGE_REF \\" >&2
+  echo "innsegl-commit:       admin-credential mint -key $ADMIN_KEY_PATH -repo $1" >&2
+  echo "innsegl-commit:" >&2
+  echo "innsegl-commit:   That key is written by the deployment's own one-shot, so if the" >&2
+  echo "innsegl-commit:   volume is empty the stack has never been up with the identity" >&2
+  echo "innsegl-commit:   lifecycle split out:" >&2
+  echo "innsegl-commit:     make innsegl-up-here" >&2
+  echo "innsegl-commit:" >&2
+  echo "innsegl-commit:   Minting elsewhere: set INNSEGL_ADMIN_CREDENTIAL_MINT to a command" >&2
+  echo "innsegl-commit:   that prints one credential for the repository it is given." >&2
+  echo "innsegl-commit:" >&2
+  echo "innsegl-commit:   The listener will never say why a credential is inadmissible —" >&2
+  echo "innsegl-commit:   one byte-identical refusal is deliberate. Ask on your own" >&2
+  echo "innsegl-commit:   machine instead:  innsegl admin-credential verify -jwks <set>" >&2
+}
+
+# ---------------------------------------------------------------------------
 # One MCP call. Session per call: this is a short-lived process with nowhere to
 # keep one, against a server on loopback.
+#
+# THE REFUSAL IS THE ONLY TRIGGER (#266). mcp_once carries whatever credential
+# is held — none, at first — and reports a 401 as status 3. mcp answers that by
+# minting one and repeating the SAME call once, which covers both the first
+# call of a process and a credential that aged out mid-run: this script'"'"'s
+# `sign_commit` may take minutes and the credential lives fifteen.
+#
+# EXACTLY ONCE, because a loop here is a loop against a server that has already
+# said no. A second 401 is reported to the caller with the remedy above.
 # ---------------------------------------------------------------------------
 mcp() {
+  if _mcp_out="$(mcp_once "$1" "$2" "$3")"; then _mcp_rc=0; else _mcp_rc=$?; fi
+  if [ "$_mcp_rc" -eq 3 ]; then
+    mint_admin_credential || return 3
+    if _mcp_out="$(mcp_once "$1" "$2" "$3")"; then _mcp_rc=0; else _mcp_rc=$?; fi
+    if [ "$_mcp_rc" -eq 3 ]; then
+      echo "innsegl-commit: the credential this process minted was refused as well." >&2
+      credential_remedy "${INNSEGL_REPO_ID:-$REPO}"
+      return 3
+    fi
+  fi
+  printf '%s' "$_mcp_out"
+  return "$_mcp_rc"
+}
+
+# mcp_once URL TOOL ARGS — one attempt, with whatever credential is held.
+#
+#   0  the server answered; the answer may still be an IP §4 error result
+#   1  the transport failed
+#   3  the listener refused the credential
+#
+# THE STATUS IS READ ON EVERY REQUEST, not only the first. #264 wraps the whole
+# admin handler, so `initialize` is refused on the same terms as a tool call —
+# and a credential that expires between the handshake and the call is refused
+# there instead. Reading only the first would turn that into an empty answer
+# and a generic "could not be reached".
+mcp_once() {
   _url="$1"; _tool="$2"; _args="$3"
   _hdr="$(mktemp)"
-  curl -sS --max-time 30 --dump-header "$_hdr" \
+  admin_cred_config "$_url" | curl -sS -K - --max-time 30 --dump-header "$_hdr" \
     -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
     --data-binary '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"innsegl-commit","version":"v0"}}}' \
     "$_url" >/dev/null 2>&1 || { rm -f "$_hdr"; return 1; }
+  if refused_401 "$_hdr"; then rm -f "$_hdr"; return 3; fi
   _sid="$(sed -n 's/^[Mm]cp-[Ss]ession-[Ii]d:[[:space:]]*//p' "$_hdr" | tr -d '\r' | head -n 1)"
   rm -f "$_hdr"
   [ -n "$_sid" ] || return 1
-  curl -sS --max-time 10 -H 'Content-Type: application/json' \
+  admin_cred_config "$_url" | curl -sS -K - --max-time 10 -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' -H "Mcp-Session-Id: $_sid" \
     --data-binary '{"jsonrpc":"2.0","method":"notifications/initialized"}' "$_url" >/dev/null 2>&1
-  curl -sS --max-time 300 -H 'Content-Type: application/json' \
-    -H 'Accept: application/json, text/event-stream' -H "Mcp-Session-Id: $_sid" \
-    --data-binary "$(printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"%s","arguments":%s}}' "$_tool" "$_args")" \
-    "$_url" 2>/dev/null | sed -n 's/^data: //p' | head -n 1
+  _hdr="$(mktemp)"
+  if _body="$(admin_cred_config "$_url" | curl -sS -K - --max-time 300 --dump-header "$_hdr" \
+      -H 'Content-Type: application/json' \
+      -H 'Accept: application/json, text/event-stream' -H "Mcp-Session-Id: $_sid" \
+      --data-binary "$(printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"%s","arguments":%s}}' "$_tool" "$_args")" \
+      "$_url" 2>/dev/null)"; then :; else rm -f "$_hdr"; return 1; fi
+  if refused_401 "$_hdr"; then rm -f "$_hdr"; return 3; fi
+  rm -f "$_hdr"
+  printf '%s' "$_body" | sed -n 's/^data: //p' | head -n 1
+}
+
+# refused_401 reads one dumped status line. A redirect would leave several in
+# the file, so the LAST status line is the one that answered.
+refused_401() {
+  case "$(grep -a '^HTTP/' "$1" 2>/dev/null | tail -n 1 | tr -d '\r')" in
+    *' 401 '*|*' 401') return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # field NAME < payload — pulls one value out of a tool result. The result's
@@ -378,20 +606,84 @@ fail() { echo "innsegl-commit: $*" >&2; exit 1; }
 # for a JSON-RPC error, because the transport worked and the server answered.
 # `field` is what reads the answer, so `field` is what decides.
 REGISTERED_RUN=""
+
+# try_register KEY REPO BRANCH PARENT -- one attempt, 0 iff a run came back.
+#
+# The arguments are assembled by python3 and an EMPTY ONE IS OMITTED, because
+# doc 02 §1 distinguishes absent from empty: a run that recorded an empty
+# parent would be claiming one it does not have, and the closed schema refuses
+# an empty `repo` outright. A transport failure is fatal here and not a fallback
+# case -- a deployment that cannot be reached is not a deployment that might
+# accept fewer members.
+try_register() {
+  if _out="$(mcp "$ADMIN_URL" register_agent "$(python3 -c '
+import json, sys
+key, repo, branch, parent, agent_type, task = sys.argv[1:7]
+args = {"agent_type": agent_type, "task_id": task, "idempotency_key": key}
+if repo: args["repo"] = repo
+if branch: args["branch"] = branch
+if parent: args["parent_run_id"] = parent
+print(json.dumps(args))' "$1" "$2" "$3" "$4" "$AGENT_TYPE" "$TASK")")"; then :; else
+    _st=$?
+    # A CREDENTIAL REFUSAL IS NOT AN UNREACHABLE SERVER, and saying so would
+    # send an operator to `make innsegl-up-here` about a deployment that is up
+    # and answering. `mcp` returns 3 for that case and has already printed the
+    # one remedy there is; anything else is the transport.
+    #
+    # IT ENDS THE LADDER, it does not fall to the next rung. Every rung below
+    # presents the SAME credential to the SAME listener, so a refusal is not
+    # something dropping the parent or dropping repo/branch can satisfy -- it
+    # would only be re-answered, identically, twice more, and the operator
+    # would read the schema-1 advice for a problem that is not the schema.
+    [ "$_st" -eq 3 ] && exit 1
+    fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
+  fi
+  REGISTERED_RUN="$(printf '%s' "$_out" | field run_id 2>/dev/null)" || return 1
+  return 0
+}
+
+# register_run KEY -- one registration, setting REGISTERED_RUN.
+#
+# THREE ATTEMPTS, EACH DROPPING WHAT THE PREVIOUS ONE WAS REFUSED FOR, and none
+# of them optional:
+#
+#   1  repo, branch and the parent    what this script actually knows
+#   2  without the parent             the pointer names a run that may no
+#                                     longer be one (see below)
+#   3  without repo and branch        a server that predates ADR-0045
+#
+# WHY THE PARENT IS DROPPED RATHER THAN FATAL. Since RM-156 register_agent
+# REFUSES a parent that is retired or that the ledger has never held, which is
+# right -- an edge in an append-only record is permanent, and one that names a
+# run that is not there is permanently wrong. But the parent here comes from a
+# pointer on a disk, and a pointer is exactly the thing that goes stale: a
+# session that ended without its hook running leaves one behind. Refusing the
+# COMMIT over that would strand the work for a bookkeeping edge, so the edge is
+# what gives way. The run is registered as a root run and the operator is told
+# which pointer to look at.
+#
+# The retry is driven by the PAYLOAD, not by the exit status: `mcp` returns 0
+# for a JSON-RPC error, because the transport worked and the server answered.
+# `field` is what reads the answer, so `field` is what decides.
 register_run() {
   _rk="$1"
-  _out="$(mcp "$ADMIN_URL" register_agent \
-    "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s","repo":"%s","branch":"%s"}' \
-      "$AGENT_TYPE" "$TASK" "$_rk" "$REPO" "$BRANCH")")" \
-    || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
-  if REGISTERED_RUN="$(printf '%s' "$_out" | field run_id 2>/dev/null)"; then
+  # `if`, never `cmd && return`: under `set -e` an AND-list whose left side
+  # fails takes the whole script down, and the left side failing is the case
+  # every line below exists for.
+  if try_register "$_rk" "$REPO" "$BRANCH" "$PARENT_RUN"; then
     return 0
   fi
-  _out="$(mcp "$ADMIN_URL" register_agent \
-    "$(printf '{"agent_type":"%s","task_id":"%s","idempotency_key":"%s"}' \
-      "$AGENT_TYPE" "$TASK" "$_rk")")" \
-    || fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
-  REGISTERED_RUN="$(printf '%s' "$_out" | field run_id)" || fail "register_agent refused"
+
+  if [ -n "$PARENT_RUN" ] && try_register "$_rk" "$REPO" "$BRANCH" ""; then
+    echo "innsegl-commit: this tree's session pointer names $PARENT_RUN, which is not a" >&2
+    echo "innsegl-commit:   run that may be a parent -- retired, or one this ledger has" >&2
+    echo "innsegl-commit:   never held. The run was registered with no parent rather than" >&2
+    echo "innsegl-commit:   with a wrong edge, which nothing could amend." >&2
+    echo "innsegl-commit:   The stale pointer is $RUNS_DIR/by-tree/$TREE_KEY.session" >&2
+    return 0
+  fi
+
+  try_register "$_rk" "" "" "" || fail "register_agent refused"
   echo "innsegl-commit: this deployment does not accept repo/branch yet, so the run" >&2
   echo "innsegl-commit:   records no repository (schema 1). Restart it to fix that:" >&2
   echo "innsegl-commit:   make innsegl-up-here" >&2
