@@ -358,6 +358,27 @@ jobs:
       - name: A backup that fails reports that it failed
         run: ./scripts/backup-ledger-selftest.sh
 
+  tree-guard:
+    name: tree guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-090..095. A `git reset --hard` in a tree two runs held work in
+      # discarded every tracked modification; untracked files survived, tracked
+      # edits did not, and nothing refused or recorded it.
+      # The guard cannot be a git hook: measured, a reference-transaction hook
+      # that aborts on `prepared` leaves HEAD unmoved and the uncommitted line
+      # already gone, because git rewrites the index and tree before it opens
+      # the ref transaction.
+      # OPS-092 is the control and the reason to believe the rest -- a clean
+      # tree, a retired run, a tree no run names and every read-only git must
+      # all proceed. A guard that refused everything would pass every other
+      # case here and be worked around within the day.
+      # Hermetic: it builds its own scratch repository and starts no container.
+      - name: A destructive git is refused while a run holds work, and nothing else is
+        run: ./scripts/hooks/git-tree-guard-selftest.sh
+
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest
