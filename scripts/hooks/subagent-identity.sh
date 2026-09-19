@@ -72,6 +72,9 @@
 #   INNSEGL_UNCAPTURED_LOG  default $INNSEGL_RUNS_DIR/uncaptured.jsonl — where a
 #                           stop-time capture that did NOT happen is written
 #                           down, because a stop's stderr is discarded (#277)
+#   INNSEGL_GIT_GUARD       1. Set to 0 to stop consulting the destructive-git
+#                           guard on PreToolUse (#278)
+#   INNSEGL_GIT_GUARD_SCRIPT  default this file's sibling git-tree-guard.sh
 #
 # Needs `python3` and `curl`. python3 does the JSON in both directions, which
 # is what removed the `sed`-and-`printf` parsing the old file used: a branch
@@ -1394,6 +1397,60 @@ gate is what decides whether it may merge."
     ;;
 
   PreToolUse)
+    # A DESTRUCTIVE git IS REFUSED WHILE AN AGENT RUN HOLDS UNCOMMITTED WORK IN
+    # THIS TREE — #278 (RM-173).
+    #
+    # Measured: a `git reset --hard HEAD~1` in a shared checkout discarded a
+    # subagent's finished but uncommitted work — eight minutes of it — and
+    # nothing refused, warned or recorded the loss. Agent work lives in the
+    # working tree until the SubagentStop capture commits it, and the operator
+    # shares that tree.
+    #
+    # ASKED FIRST, BEFORE THE COMMIT GATE BELOW. A command that both commits and
+    # discards reaches whichever gate is written first, and an unsigned commit
+    # can be signed again tomorrow while discarded work cannot be rewritten.
+    #
+    # THE DECISION IS NOT HERE. scripts/hooks/git-tree-guard.sh holds it, because
+    # the same decision has to be reachable from a `git` on PATH — which is the
+    # only thing that sees a HUMAN's terminal, and the human is who the measured
+    # incident was. This branch is the half that needs no operator action: it
+    # covers every git command an agent runs through the Bash tool, and it is
+    # the one place that can BLOCK one.
+    #
+    # AND IT REFUSES THE OPERATOR'S OWN SESSION TOO, which is the opposite of
+    # the asymmetry the commit gate below is built on — and for the reason that
+    # asymmetry rests on. Refusing the human there would stop them working on
+    # their own machine over a ledger; refusing them HERE stops them destroying
+    # somebody else's unfinished work, and only ever when a live agent run
+    # actually wrote the files at stake. The guard never counts the session's
+    # own writes, and it names the override in the refusal.
+    #
+    # THE PREFILTER IS A SUPERSET OF THE GUARD'S ANSWER, deliberately: it names
+    # the five SUBCOMMANDS the guard can refuse and none of the flags that
+    # decide it. It can only send more to the guard than the guard will refuse,
+    # never fewer, so it cannot become a second, drifting spelling of the rule —
+    # which is the whole hazard of a fast path in front of a decision.
+    #
+    # AND IT FAILS OPEN, like everything else in front of git here. Anything but
+    # an exit of 2 — a missing guard, a missing python3, an unreadable runs
+    # directory — allows.
+    if [ "$TOOL" = "Bash" ] && [ "${INNSEGL_GIT_GUARD:-1}" != "0" ]; then
+      case "$CMD" in
+        *git*)
+          case "$CMD" in
+            *reset*|*checkout*|*restore*|*clean*|*switch*)
+              TREE_GUARD="${INNSEGL_GIT_GUARD_SCRIPT:-$(dirname -- "$0")/git-tree-guard.sh}"
+              if [ -x "$TREE_GUARD" ]; then
+                printf '%s' "$EVENT_JSON" | "$TREE_GUARD" hook
+                _grc=$?
+                [ "$_grc" = "2" ] && exit 2
+              fi
+              ;;
+          esac
+          ;;
+      esac
+    fi
+
     # PLAIN `git commit` IS REFUSED, AND THE REFUSAL IS THE INSTRUCTION.
     #
     # ADR-0046. Measured: subagents had made 1979 recorded tool calls and signed
