@@ -23,12 +23,31 @@ set -uo pipefail
 
 out="${INNSEGL_TEST_JSON:-$(mktemp -t innsegl-gotest-XXXXXX.json)}"
 
-# shellcheck disable=SC2086 # deliberate word splitting of caller-supplied flags
+SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+
+# WHAT "THE WHOLE SUITE" IS, ASKED RATHER THAN ASSUMED — RM-170 (#275).
+#
+# This was `go test ./...`, and `./...` reaches the two packages that destroy a
+# running deployment: test/failure mints a new transparency-log tree, test/smoke
+# ends its teardown in `docker compose down -v`. A gate against false greens is
+# the last script anyone expects to take the ledger with it.
+#
+# scripts/test-suite.sh is the one place that decides. On a host with no
+# deployment — every CI runner — it answers `./...` and nothing here changes.
+INNSEGL_SUITE_STACK="$("${SCRIPT_DIR}/test-suite.sh" state)"
+export INNSEGL_SUITE_STACK
+if ! SUITE_PACKAGES="$("${SCRIPT_DIR}/test-suite.sh" packages)"; then
+  printf 'FAIL: could not determine which packages make up the suite\n' >&2
+  exit 1
+fi
+
+# shellcheck disable=SC2086 # deliberate word splitting of the package list and
+# of caller-supplied flags
 # -count=1 is not optional here. Without it Go serves cached results, and a
 # cached PASS means this gate certifies a run that did not happen — the exact
 # false-green it exists to prevent. RM-036 hit it: the first run reported six
 # skips that were cached from an earlier invocation.
-go test ./... -race -count=1 -json ${INNSEGL_TEST_FLAGS:-} >"${out}" 2>&1
+go test ${SUITE_PACKAGES} -race -count=1 -json ${INNSEGL_TEST_FLAGS:-} >"${out}" 2>&1
 rc=$?
 
 # Package-level result lines, so the log still reads like a test run.
