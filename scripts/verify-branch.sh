@@ -36,11 +36,32 @@
 #   3  the checks ran and attribution does not hold      -> the gate fails
 #   4  Fulcio or Rekor unreachable                       -> the gate fails, differently
 #   5  the commit makes no attribution claim             -> skipped, not a failure
-#   6  unusable: no such commit, unworkable configuration -> the gate fails
+#   6  unusable: no such commit, unworkable configuration -> the gate fails, differently again
 #
 # Exit 5 is why this script does not grep for `Agent-Identity` itself. The
 # verifier already decides what is attributed, and a second opinion here would
 # be a second implementation of the question doc 05 §3.1 says has one.
+#
+# # Three ways to fail, and they stay three (#281)
+#
+# doc 06 P2: verified, failed and verification-unavailable are three states, and
+# "could not check" is never either of the other two. This script's exit status
+# carries the same three, in the verifier's own numbers:
+#
+#   3  REFUSED       a claim was checked and does not hold.
+#   4  INCONCLUSIVE  Fulcio or Rekor could not be reached. Nothing was proved.
+#   6  UNCHECKABLE   the verifier could not act on the request at all — an
+#                    unworkable configuration, a commit that is not there, or a
+#                    status this script does not recognise. Nothing was proved.
+#
+# Until #281 this script matched 0, 4 and 5 by name and swept everything else
+# into 3. An ordinary commit, run through a verifier with no Fulcio URL, came
+# out as "claim(s) an agent identity that does not hold" — an accusation of
+# forgery levelled at a commit nothing had looked at. That is P2's collapse
+# exactly, and it is the collapse that teaches people REFUSED means `--no-verify`.
+#
+# All three fail the gate. None of them is silent, and none of them borrows
+# another's words.
 #
 # # Exit 4 fails the gate, deliberately
 #
@@ -52,9 +73,18 @@
 # USAGE
 #   scripts/verify-branch.sh [base]       default base: origin/main
 #
-#   INNSEGL_BIN       the verifier. Default: `go run ./cmd/innsegl`.
+#   INNSEGL_BIN       the verifier. Default: built from ./cmd/innsegl.
 #   INNSEGL_REPO      the repository to verify in. Default: this one.
-#   INNSEGL_FULCIO_URL / INNSEGL_REKOR_URL   read by the verifier itself.
+#   INNSEGL_FULCIO_URL / INNSEGL_REKOR_URL   read by the verifier itself. BOTH
+#                     are required; with one of them the verifier refuses to
+#                     start and every commit comes out UNCHECKABLE.
+#
+# THIS SCRIPT'S OWN EXIT STATUS
+#   0  every attributed commit on the branch verifies
+#   2  the base revision does not exist
+#   3  REFUSED — at least one claim was checked and does not hold
+#   4  INCONCLUSIVE — Fulcio or Rekor unreachable; nothing was proved
+#   6  UNCHECKABLE — the verifier could not act on the request; nothing was proved
 
 set -euo pipefail
 
@@ -62,9 +92,14 @@ BASE="${1:-origin/main}"
 REPO="${INNSEGL_REPO:-$(git rev-parse --show-toplevel)}"
 
 # Exit statuses, matching cmd/innsegl/verify.go so a caller reading this
-# script's status reads the same vocabulary the verifier uses.
+# script's status reads the same vocabulary the verifier uses. Spelled out
+# rather than inlined because the `case` below dispatches on them: a status
+# matched by a literal in one place and a name in another is how 6 ended up in
+# the failure bucket (#281).
 readonly EXIT_FAILED=3
 readonly EXIT_UNAVAILABLE=4
+readonly EXIT_UNATTRIBUTED=5
+readonly EXIT_UNUSABLE=6
 
 if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
   echo "verify-branch: no such base revision: $BASE" >&2
@@ -114,6 +149,8 @@ failures=""
 nfail=0
 unavailable=""
 nunavail=0
+uncheckable=""
+nunusable=0
 
 for sha in $COMMITS; do
   [ -n "$sha" ] || continue
@@ -126,14 +163,24 @@ for sha in $COMMITS; do
   status=$?
   set -e
 
+  # Every status this script acts on is matched by name. The catch-all is
+  # UNCHECKABLE and not FAILED, because a status the gate does not recognise is
+  # the absence of a verdict, not a verdict of guilty (#281, doc 06 P2).
   case "$status" in
     0)
       verified=$((verified + 1))
       echo "  verified      $short  $subject"
       ;;
-    5)
+    "$EXIT_UNATTRIBUTED")
       unattributed=$((unattributed + 1))
       echo "  unattributed  $short  $subject"
+      ;;
+    "$EXIT_FAILED")
+      nfail=$((nfail + 1))
+      failures="$failures  $short  $subject  (exit $status)
+$(printf '%s' "$out" | sed 's/^/      /' | tail -6)
+"
+      echo "  FAILED        $short  $subject  (exit $status)"
       ;;
     "$EXIT_UNAVAILABLE")
       nunavail=$((nunavail + 1))
@@ -143,25 +190,38 @@ $(printf '%s' "$out" | sed 's/^/      /' | tail -4)
       echo "  INCONCLUSIVE  $short  $subject"
       ;;
     *)
-      nfail=$((nfail + 1))
-      failures="$failures  $short  $subject  (exit $status)
+      nunusable=$((nunusable + 1))
+      uncheckable="$uncheckable  $short  $subject  (exit $status)
 $(printf '%s' "$out" | sed 's/^/      /' | tail -6)
 "
-      echo "  FAILED        $short  $subject  (exit $status)"
+      echo "  UNCHECKABLE   $short  $subject  (exit $status)"
       ;;
   esac
 done
 
 echo
-echo "verify-branch: $checked commit(s) on $BASE..HEAD — $verified verified, $unattributed unattributed, $nunavail inconclusive, $nfail failed"
+echo "verify-branch: $checked commit(s) on $BASE..HEAD — $verified verified, $unattributed unattributed, $nunavail inconclusive, $nunusable uncheckable, $nfail failed"
 
+# Every non-empty bucket is reported, and each in its own words. Reporting only
+# the one that decides the exit status would hide an outage behind a forgery,
+# which is the same collapse in the other direction.
 if [ "$nfail" -gt 0 ]; then
   echo
   echo "REFUSED: $nfail commit(s) claim an agent identity that does not hold." >&2
   printf '%s' "$failures" >&2
   echo "A commit carrying an Agent-Identity trailer the signature does not support" >&2
   echo "must not reach main: it is an attribution claim with nothing behind it." >&2
-  exit "$EXIT_FAILED"
+fi
+
+if [ "$nunusable" -gt 0 ]; then
+  echo
+  echo "UNCHECKABLE: $nunusable commit(s) were never checked." >&2
+  printf '%s' "$uncheckable" >&2
+  echo "The verifier could not act on the request at all, so nothing was proved" >&2
+  echo "either way. This is NOT a failed attribution claim and must not be read as" >&2
+  echo "one (doc 06 P2, AB-08)." >&2
+  echo "Usually the verifier is unconfigured: set INNSEGL_FULCIO_URL and" >&2
+  echo "INNSEGL_REKOR_URL — it needs both — and run this again." >&2
 fi
 
 if [ "$nunavail" -gt 0 ]; then
@@ -171,6 +231,19 @@ if [ "$nunavail" -gt 0 ]; then
   echo "Fulcio or Rekor could not be reached, so nothing was proved either way." >&2
   echo "This is not a failure and must not be read as one (doc 06 P2, AB-08)." >&2
   echo "Bring the deployment up — \`make innsegl-up\` — and run this again." >&2
+fi
+
+# Precedence, most consequential first. A checked claim that does not hold is
+# the loudest thing this gate can say, so it owns the exit status whenever it
+# happened. A verifier that could not run at all outranks one that ran and could
+# not reach the log, because rerunning fixes the second and not the first.
+if [ "$nfail" -gt 0 ]; then
+  exit "$EXIT_FAILED"
+fi
+if [ "$nunusable" -gt 0 ]; then
+  exit "$EXIT_UNUSABLE"
+fi
+if [ "$nunavail" -gt 0 ]; then
   exit "$EXIT_UNAVAILABLE"
 fi
 
