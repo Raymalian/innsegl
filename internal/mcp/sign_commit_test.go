@@ -315,6 +315,16 @@ type scRepos struct {
 	// to reach Phase C's error return: with patchErr set, Phase A refuses
 	// first and Phase C is never reached.
 	commitPatchErr error
+	// stagedPaths is what `git diff --cached --name-only` would list for this
+	// index, and stagedPathsErr an index that cannot be listed at all. Nil and
+	// nil is the ordinary fixture: a case that never names `paths` never
+	// reaches them (#280).
+	stagedPaths    []string
+	stagedPathsErr error
+}
+
+func (r scRepos) StagedPaths(context.Context, string) ([]string, error) {
+	return r.stagedPaths, r.stagedPathsErr
 }
 
 func (r scRepos) StagedTree(context.Context, string, string) (string, error) {
@@ -2657,4 +2667,297 @@ func TestTheGitReaderRefusesAnIndexItCannotResolve(t *testing.T) {
 	if _, err := (GitRepos{}).StagedTree(t.Context(), repo, staged); err == nil {
 		t.Fatal("an index git cannot resolve to a tree was accepted")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// The paths a commit is of — #280.
+// ---------------------------------------------------------------------------
+//
+// # The defect these are written against
+//
+// Two writers shared one working tree. One staged a single file and asked for a
+// signature; the signer refused, correctly, because the index had moved under it
+// — `staged_ref names tree 9d62bb32… and the index … holds ae358eea…`. Seconds
+// later the other writer committed, and its commit carried three files: its own
+// two, and the one the first writer had staged. Nothing was lost. What landed
+// was worse: a signed, permanent, verifiable record of work its message and its
+// identity did not name.
+//
+// `sign_commit` commits THE INDEX, and the index belongs to the tree rather than
+// to the caller. `staged_ref` catches the index moving UNDER a signer; nothing
+// caught another writer's commit sweeping up what this one had staged.
+//
+// # The rule, and why it is #261's rather than a second one
+//
+// #261 bounds the capture path: a stop's capture is refused when the index holds
+// anything the stopping run cannot account for, and it is refused WHOLE rather
+// than narrowed — narrowing would unstage somebody else's work. The same rule,
+// asked on the commit path: what would be committed must be a subset of what the
+// caller accounts for, and a caller that cannot account for a path is refused
+// naming it.
+//
+// Only the SOURCE of the accounting differs, because only it can. A stopped run
+// cannot be asked anything, so #261 reads its tool-call bodies. A caller that is
+// still running can simply say, so `paths` is what it says — and saying is the
+// better source: the body store is structurally incomplete (a write through a
+// shell redirection names no file), which a stop's capture can afford because it
+// is a fallback and a commit path could not.
+
+// TestACommitSignsOnlyThePathsItsCallerNamed.
+//
+// The whole of the fix from the outside: name the paths, and an index holding
+// exactly them is signed.
+func TestACommitSignsOnlyThePathsItsCallerNamed(t *testing.T) {
+	w := newSCWiring()
+	w.repos.stagedPaths = []string{"b.txt", "c.txt"}
+
+	in := scIn()
+	in.Paths = []string{"b.txt", "c.txt"}
+	if _, err := w.call(t, in); err != nil {
+		t.Fatalf("an index holding exactly the named paths was refused: %v", err)
+	}
+	if err := requireTwoPhaseOrder(w.phases.all()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAnIndexHoldingAPathTheCallerDidNotNameIsRefusedNamingIt.
+//
+// The measured incident, from the sweeping writer's side: it staged b.txt and
+// c.txt, a.txt was already in the index, and `git commit` took all three. The
+// refusal has to NAME a.txt — a refusal that says only "something is wrong with
+// the index" sends the caller looking at its own staging, which is the one place
+// the fault is not.
+func TestAnIndexHoldingAPathTheCallerDidNotNameIsRefusedNamingIt(t *testing.T) {
+	w := newSCWiring()
+	w.repos.stagedPaths = []string{"a.txt", "b.txt", "c.txt"}
+
+	in := scIn()
+	in.Paths = []string{"b.txt", "c.txt"}
+	_, err := w.call(t, in)
+	classed := requireClassed(t, mustErr(t, err), ClassInvariantViolation)
+	if !strings.Contains(classed.Message, "a.txt") {
+		t.Errorf("the refusal does not name the foreign path: %s", classed.Message)
+	}
+
+	// BEFORE PHASE A, like every other cheap failure. An intent left behind for
+	// a commit that was never going to be made is the reconciler's work, and
+	// this one is knowable from the index alone.
+	if steps := w.phases.all(); len(steps) != 0 {
+		t.Errorf("the refusal came after %v; nothing may run before this gate", steps)
+	}
+	if w.signer.calls != 0 {
+		t.Errorf("the signer ran %d time(s) for a commit that was refused", w.signer.calls)
+	}
+}
+
+// TestEveryForeignPathIsCountedAndTheFirstIsNamed: ten unaccounted paths are not
+// ten refusals, and a caller told "one of your staged files is not yours" cannot
+// act on it. The count is the size of the problem and the name is where to start.
+func TestEveryForeignPathIsCountedAndTheFirstIsNamed(t *testing.T) {
+	w := newSCWiring()
+	w.repos.stagedPaths = []string{"a.txt", "b.txt", "z.txt"}
+
+	in := scIn()
+	in.Paths = []string{"b.txt"}
+	_, err := w.call(t, in)
+	classed := requireClassed(t, mustErr(t, err), ClassInvariantViolation)
+	if !strings.Contains(classed.Message, "a.txt") || !strings.Contains(classed.Message, "2") {
+		t.Errorf("want the first foreign path and how many there are, got: %s", classed.Message)
+	}
+}
+
+// TestACallerThatNamesNoPathsIsBoundedExactlyAsBefore.
+//
+// `paths` is optional on the wire for the same reason `worktree` is: the schema
+// is generated from this struct and every member without `omitempty` is marked
+// REQUIRED, so a bound arriving as a required argument would refuse every
+// existing caller — a compatibility break dressed as a fix. The script is what
+// makes naming mandatory for a caller committing its own work; the tool is what
+// makes the naming enforceable once it has been made.
+func TestACallerThatNamesNoPathsIsBoundedExactlyAsBefore(t *testing.T) {
+	w := newSCWiring()
+	w.repos.stagedPaths = []string{"a.txt", "b.txt"}
+	w.repos.stagedPathsErr = errors.New("StagedPaths must not be asked when nothing was named")
+
+	if _, err := w.call(t, scIn()); err != nil {
+		t.Fatalf("a caller that named no paths was refused: %v", err)
+	}
+}
+
+// TestTheStagedRefRefusalStillFiresWhenTheIndexMovesUnderASigner.
+//
+// The refusal the incident already produced, held open. It is the FIRST gate and
+// not the second: an index that moved is a disagreement about which tree is
+// being signed, and answering that with "you did not name a.txt" would point the
+// caller at the wrong half of the problem.
+func TestTheStagedRefRefusalStillFiresWhenTheIndexMovesUnderASigner(t *testing.T) {
+	// Real git, because the message under test is git plumbing's own answer.
+	repo := scGitRepo(t)
+	scGit(t, repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "base")
+	scStage(t, repo, "b.txt", "the writer's own work\n")
+	named := scGit(t, repo, "write-tree")
+
+	// The other writer stages a file. The index has moved under a signer that
+	// already named a tree.
+	scStage(t, repo, "a.txt", "somebody else's work\n")
+
+	err := mustStagedTreeError(t, repo, named)
+	for _, want := range []string{"staged_ref names tree", "`git commit` commits"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal no longer says %q: %v", want, err)
+		}
+	}
+
+	// And through the tool, ahead of the paths gate: both are wrong at once and
+	// the staged_ref one is what the caller is told.
+	w := newSCWiring()
+	w.repos.stagedErr = err
+	w.repos.stagedPaths = []string{"a.txt", "b.txt"}
+	in := scIn()
+	in.Paths = []string{"b.txt"}
+	_, terr := w.call(t, in)
+	classed := requireClassed(t, mustErr(t, terr), ClassInvariantViolation)
+	if !strings.Contains(classed.Message, "staged_ref names tree") {
+		t.Errorf("the paths gate answered ahead of the staged_ref one: %s", classed.Message)
+	}
+}
+
+// mustStagedTreeError requires StagedTree to refuse and hands back the refusal.
+func mustStagedTreeError(t *testing.T, repo, ref string) error {
+	t.Helper()
+	_, err := (GitRepos{}).StagedTree(t.Context(), repo, ref)
+	if err == nil {
+		t.Fatal("the index moved under the signer and was accepted")
+	}
+	return err
+}
+
+// TestAnIndexThatCannotBeListedIsRefusedRatherThanAssumedEmpty.
+//
+// The direction this fails in is the whole point. An unreadable index read as
+// "no staged paths" would make the bound vacuous exactly where the repository is
+// in the state least worth guessing about — #261 takes the same view: no record,
+// no capture.
+func TestAnIndexThatCannotBeListedIsRefusedRatherThanAssumedEmpty(t *testing.T) {
+	w := newSCWiring()
+	w.repos.stagedPathsErr = errors.New("the index cannot be read")
+
+	in := scIn()
+	in.Paths = []string{"b.txt"}
+	_, err := w.call(t, in)
+	requireClass(t, mustErr(t, err), ClassInvariantViolation)
+	if steps := w.phases.all(); len(steps) != 0 {
+		t.Errorf("an unreadable index left %v behind", steps)
+	}
+}
+
+// TestSignCommitRefusesPathsTheGrammarWillNotCarry.
+//
+// A path is compared against `git diff --cached --name-only`, which spells every
+// path from the top of the working tree, relative and forward-slashed. Anything
+// that cannot be that spelling can never match, so it would silently make the
+// whole index foreign — a bound that refuses everything is as useless as one
+// that refuses nothing, and far harder to read.
+func TestSignCommitRefusesPathsTheGrammarWillNotCarry(t *testing.T) {
+	for name, paths := range map[string][]string{
+		"empty":         {""},
+		"absolute":      {"/etc/passwd"},
+		"parent":        {"../outside.txt"},
+		"dot dot":       {"a/../../outside.txt"},
+		"newline":       {"a\nb.txt"},
+		"too long":      {strings.Repeat("p", event.MaxReferenceBytes+1)},
+		"too many":      scManyPaths(MaxSignCommitPaths + 1),
+		"backslash":     {`a\b.txt`},
+		"leading -":     {"-name.txt"},
+		"trailing /":    {"a/"},
+		"empty segment": {"a//b.txt"},
+		"dot segment":   {"a/./b.txt"},
+		// The second path is the bad one: a list is checked whole, so a
+		// refusal must not depend on the offender coming first.
+		"the second of two": {"a.txt", "../b.txt"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := scIn()
+			in.Paths = paths
+			err := signCommitCheckRequest(in)
+			if err == nil {
+				t.Fatalf("paths %q was accepted", name)
+			}
+			requireClass(t, err, ClassInvariantViolation)
+		})
+	}
+
+	// And the spellings that ARE that grammar.
+	in := scIn()
+	in.Paths = []string{"a.txt", "web/src/app.tsx", "scripts/hooks/x-y.sh", "a b.txt"}
+	if err := signCommitCheckRequest(in); err != nil {
+		t.Fatalf("an ordinary path list was refused: %v", err)
+	}
+}
+
+func scManyPaths(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("p%d.txt", i)
+	}
+	return out
+}
+
+// TestTheGitReaderListsExactlyWhatWouldBeCommitted.
+//
+// Against real git, because the one thing a fake cannot prove is that the
+// spelling this compares against is the spelling git produces: a deletion and a
+// path with a space each arrive differently, and `-z` is what stops git quoting
+// the second into something no caller could name.
+func TestTheGitReaderListsExactlyWhatWouldBeCommitted(t *testing.T) {
+	repo := scGitRepo(t)
+	scGit(t, repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "base")
+
+	scStage(t, repo, "a b.txt", "a path with a space\n")
+	if err := os.MkdirAll(filepath.Join(repo, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	scStage(t, repo, filepath.Join("sub", "deep.txt"), "nested\n")
+	if err := os.Remove(filepath.Join(repo, "work.txt")); err != nil {
+		t.Fatal(err)
+	}
+	scGit(t, repo, "add", "-u")
+
+	// An explicitly named binary and, below, the PATH lookup: both halves of
+	// GitRepos.GitPath's default.
+	if _, err := (GitRepos{GitPath: "git"}).StagedPaths(t.Context(), repo); err != nil {
+		t.Fatalf("StagedPaths with an explicit git: %v", err)
+	}
+
+	got, err := (GitRepos{}).StagedPaths(t.Context(), repo)
+	if err != nil {
+		t.Fatalf("StagedPaths: %v", err)
+	}
+	want := []string{"a b.txt", "sub/deep.txt", "work.txt"}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("StagedPaths = %q, want %q — the deletion counts, and the space is "+
+			"not quoted", got, want)
+	}
+
+	// An empty index is an empty list and not an error: whatever reaches here
+	// has already passed StagedTree, which refuses that state itself.
+	scGit(t, repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "second")
+	if got, err := (GitRepos{}).StagedPaths(t.Context(), repo); err != nil || len(got) != 0 {
+		t.Errorf("StagedPaths of an empty index = %q, %v", got, err)
+	}
+
+	if _, err := (GitRepos{}).StagedPaths(t.Context(), t.TempDir()); err == nil {
+		t.Error("StagedPaths accepted a directory that is not a repository")
+	}
+}
+
+// mustErr fails the test when a call it expected to refuse did not.
+func mustErr(t *testing.T, err error) error {
+	t.Helper()
+	if err == nil {
+		t.Fatal("the call succeeded; it had to be refused")
+	}
+	return err
 }

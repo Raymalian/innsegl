@@ -161,6 +161,36 @@ type signCommitIn struct {
 	// `validating root: required: missing properties: ["worktree"]` -- which is
 	// a compatibility break dressed as a new feature.
 	Worktree string `json:"worktree,omitempty"`
+	// Paths optionally names THE PATHS THIS COMMIT IS OF, each spelled from the
+	// top of the working tree exactly as `git diff --cached --name-only` spells
+	// it. Present, the index must hold nothing else: a path staged by anybody
+	// but this caller is refused, by name, before Phase A.
+	//
+	// WHY THE CALLER HAS TO SAY -- #280. `git commit` commits THE INDEX, and the
+	// index belongs to the working tree rather than to the caller. Two writers
+	// shared one tree: the first staged a file and was refused by `staged_ref`
+	// -- correctly, the index had moved under it -- and seconds later the second
+	// committed, sweeping that file into a commit whose message and identity
+	// named two others. `staged_ref` catches the index moving UNDER a signer.
+	// Nothing caught a commit sweeping up what another writer had staged,
+	// because nothing on this wire said which paths the caller believed were
+	// its own. This is that sentence.
+	//
+	// IT IS THE SAME BOUND #261 PUT ON THE CAPTURE PATH, asked here: what would
+	// be committed must be a subset of what the caller can account for, and a
+	// caller that cannot account for a path is refused naming it -- the whole
+	// commit, never narrowed, because narrowing means unstaging work that
+	// belongs to somebody else. Only the source of the accounting differs: a
+	// stopped run cannot be asked, so a capture reads its tool-call bodies; a
+	// caller that is still running says.
+	//
+	// omitempty for the reason `worktree` above is: absent, the tool behaves
+	// exactly as it did, and every existing caller is unaffected. Requiring it
+	// on the wire is the SCRIPT's business -- scripts/innsegl-commit.sh refuses
+	// a caller committing its own work that named nothing -- because a required
+	// argument here would refuse the harness's own capture, which is already
+	// bounded and cannot be changed to say so.
+	Paths []string `json:"paths,omitempty"`
 }
 
 // SignCommitTrailer is one rendered commit trailer.
@@ -235,6 +265,10 @@ type SignCommitRepos interface {
 	// does, so the change is what attribution is anchored to. See patchid.go.
 	StagedPatchID(ctx context.Context, worktree string) (string, error)
 	CommitPatchID(ctx context.Context, worktree, commit string) (string, error)
+	// StagedPaths is every path the index holds against HEAD -- what `git
+	// commit` is about to put in a commit, listed rather than hashed. It is
+	// what `paths` is checked against (#280).
+	StagedPaths(ctx context.Context, worktree string) ([]string, error)
 }
 
 // SignCommitCredentials issues the audience-bound credential one signature is
@@ -565,6 +599,23 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 	if verr := event.ValidateGitObjectID(tree); verr != nil {
 		return nil, Errorf(ClassInvariantViolation, run.RunID,
 			"the staged tree is not a git object id: %v", verr)
+	}
+
+	// AFTER StagedTree AND NOT BEFORE IT — #280. Both gates are about the same
+	// index and they can be wrong at once, so the order decides which sentence
+	// the caller reads. `staged_ref` disagreeing with the index means the two
+	// sides do not agree about WHICH TREE is being signed, and that has to be
+	// settled before any question about what is in it; answering a moved index
+	// with "you did not name a.txt" points the caller at the wrong half.
+	//
+	// It is the last of the cheap checks and still ahead of Phase A, which is
+	// where everything knowable from the request and the repository belongs: an
+	// intent left behind for a commit that was never going to be made is the
+	// reconciler's work, and this one is knowable from the index alone.
+	if len(in.Paths) > 0 {
+		if perr := checkStagedPaths(ctx, c.repos, run.RunID, worktree, in.Paths); perr != nil {
+			return nil, perr
+		}
 	}
 
 	// The change's own identity, computed from the index for the same reason
@@ -996,6 +1047,15 @@ func signCommitPhaseKey(prefix, key string) string {
 // exhausted disk turns into an outage.
 const MaxSignCommitMessageBytes = 64 << 10
 
+// MaxSignCommitPaths bounds how many paths one commit may name (#280).
+//
+// Like the message bound above this is not an E4 bound — no path reaches the
+// ledger — it is a bound on an argument that would otherwise have none. The
+// number is chosen to be far above any commit a person reviews as a unit and far
+// below anything that costs this process memory; a caller that needs more than
+// this is committing a tree rather than a change.
+const MaxSignCommitPaths = 4096
+
 // taskRefOf reads a run's task from the ledger row that registered it.
 //
 // The caller used to pass this, and passing it is how a mismatch happens: an
@@ -1033,6 +1093,9 @@ func signCommitCheckRequest(in signCommitIn) error {
 	if err := signCommitCheckRef(in.StagedRef); err != nil {
 		return reject("staged_ref: %v", err)
 	}
+	if err := signCommitCheckPaths(in.Paths); err != nil {
+		return reject("paths: %v", err)
+	}
 	switch {
 	case strings.TrimSpace(in.Message) == "":
 		return reject("message is required: a commit message is part of the bytes that get signed")
@@ -1067,6 +1130,128 @@ func signCommitCheckRef(ref string) error {
 		}
 	}
 	return nil
+}
+
+// signCommitCheckPaths holds `paths` to the ONE spelling it can ever be
+// compared against: the way `git diff --cached --name-only` writes a path, which
+// is relative to the top of the working tree and forward-slashed.
+//
+// EVERYTHING ELSE IS REFUSED RATHER THAN NORMALISED, and that is the opposite of
+// the usual instinct. Normalising `/abs/repo/a.txt` or `./a.txt` into `a.txt`
+// means guessing which tree the caller had in mind, and a guess that lands wrong
+// does not fail — it makes the path FOREIGN, and the caller is refused for
+// staging its own file. A spelling this cannot match is a caller misunderstanding
+// the argument, and it is told so once instead of being refused forever.
+//
+// No refusal quotes a path back that has not already passed the length bound;
+// a message is a second place a payload could come to rest.
+func signCommitCheckPaths(paths []string) error {
+	if len(paths) > MaxSignCommitPaths {
+		return fmt.Errorf("%d paths, limit %d", len(paths), MaxSignCommitPaths)
+	}
+	for i, p := range paths {
+		switch {
+		case p == "":
+			return fmt.Errorf("path %d is empty", i)
+		case len(p) > event.MaxReferenceBytes:
+			return fmt.Errorf("path %d is %d bytes, limit %d", i, len(p), event.MaxReferenceBytes)
+		}
+		for j := 0; j < len(p); j++ {
+			if b := p[j]; b < ' ' || b == 0x7f {
+				return fmt.Errorf("path %d holds a control byte at offset %d; git spells a "+
+					"staged path on one line and none can carry this", i, j)
+			}
+		}
+		switch {
+		case strings.HasPrefix(p, "-"):
+			return fmt.Errorf("path %q starts with '-'", p)
+		case strings.HasPrefix(p, "/"):
+			return fmt.Errorf("path %q is absolute; git names a staged path relative to the "+
+				"top of the working tree, so an absolute one can never be the same string", p)
+		case strings.Contains(p, `\`):
+			return fmt.Errorf("path %q holds a backslash; git spells every staged path with "+
+				"forward slashes on every platform", p)
+		case strings.HasSuffix(p, "/"):
+			return fmt.Errorf("path %q ends in '/'; git stages files and never directories, "+
+				"so a directory name matches nothing", p)
+		}
+		for _, segment := range strings.Split(p, "/") {
+			if segment == "" || segment == "." || segment == ".." {
+				return fmt.Errorf("path %q is not in normal form; git names a staged path "+
+					"from the top of the working tree with no empty, '.' or '..' segment", p)
+			}
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// The bound on what a commit may carry — #280.
+// ---------------------------------------------------------------------------
+
+// checkStagedPaths is #261's rule asked on the commit path: everything that
+// would be COMMITTED must be something the caller accounted for.
+//
+// # Why it is a subset and not an equality
+//
+// Naming a path the index does not hold is not an error. A caller names the
+// paths its change is of; whether each of them actually differs from HEAD is
+// git's answer, not the caller's, and a file it edited back to its original
+// contents is absent from the index for a perfectly ordinary reason. #261's own
+// accounting is the same shape — `set(staged) - wrote` — and for the same
+// reason: the question is what gets committed, never what was offered.
+//
+// # Why the whole commit is refused and nothing is narrowed
+//
+// Narrowing means unstaging, and the paths that would be unstaged belong to
+// somebody else — the writer this refusal exists to protect. #261 reached this
+// conclusion first and stated it plainly: under-capturing leaves work unsigned,
+// over-capturing signs a lie, and the third option quietly destroys a colleague's
+// staging. So the index is left exactly as it was found and the caller is told
+// which path is not its own.
+func checkStagedPaths(
+	ctx context.Context, repos SignCommitRepos, runID, worktree string, named []string,
+) error {
+	staged, err := repos.StagedPaths(ctx, worktree)
+	if err != nil {
+		// NOT "no paths are staged". An index that cannot be listed read as an
+		// empty one would make this bound vacuous in exactly the state least
+		// worth guessing about — the same call #261 makes when a run's record
+		// cannot be read: no record, no capture.
+		return Errorf(ClassInvariantViolation, runID,
+			"what the index of %s would commit cannot be listed, so this call's `paths` "+
+				"cannot be held to it: %v", worktree, err)
+	}
+
+	accounted := make(map[string]struct{}, len(named))
+	for _, p := range named {
+		accounted[p] = struct{}{}
+	}
+	first, count := "", 0
+	for _, p := range staged {
+		if _, ok := accounted[p]; ok {
+			continue
+		}
+		if count == 0 {
+			first = p
+		}
+		count++
+	}
+	if count == 0 {
+		return nil
+	}
+
+	more := ""
+	if count > 1 {
+		more = fmt.Sprintf(" (and %d more)", count-1)
+	}
+	return Errorf(ClassInvariantViolation, runID,
+		"the index holds %d path(s) this call did not name, the first being %q%s. "+
+			"`git commit` commits the index, so signing now would put work this run "+
+			"did not do under this run's identity, permanently and verifiably. Name "+
+			"the path if it is yours; otherwise it belongs to whoever staged it and "+
+			"is theirs to commit",
+		count, first, more)
 }
 
 // ---------------------------------------------------------------------------
@@ -1396,6 +1581,42 @@ func (g GitRepos) StagedTree(ctx context.Context, worktree, stagedRef string) (s
 				"Rekor (IP §6.5)", worktree, index)
 	}
 	return index, nil
+}
+
+// StagedPaths lists every path the index holds against HEAD.
+//
+// `-z`, and that is not a detail. Without it git QUOTES any path holding a
+// space, a quote or a non-ASCII byte — `"a b.txt"`, with the quotes in the
+// output — so the comparison against what a caller named would miss exactly
+// those paths and report them foreign. A bound that refuses every commit
+// touching a file with a space in its name is a bound nobody keeps.
+//
+// `cmd.Output()` and not CombinedOutput: this answer is PARSED, and a line git
+// wrote to stderr arriving in the middle of it would read as a path no caller
+// could ever have named. patchIDOf makes the same choice for the same reason.
+//
+// An empty index is an empty list rather than a refusal. StagedTree has already
+// refused that state by the time this is asked, and answering it with an error
+// here would give one condition two different refusals.
+func (g GitRepos) StagedPaths(ctx context.Context, worktree string) ([]string, error) {
+	path := g.GitPath
+	if path == "" {
+		path = "git"
+	}
+	cmd := exec.CommandContext(ctx, path, "-C", worktree,
+		"diff", "--cached", "--name-only", "-z")
+	cmd.Env = signCommitGitEnv(worktree)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("the staged paths of %s cannot be listed: %w", worktree, err)
+	}
+	var paths []string
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
 }
 
 // CommitTree returns the tree of one commit.

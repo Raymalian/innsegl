@@ -253,6 +253,9 @@ rc=$?
 if [ "$rc" = 0 ]; then
   step "ready"
   say "open  http://127.0.0.1:$PORT"
-  say "sign  scripts/innsegl-commit.sh -m 'your message'"
+  # -p, because since #280 a commit names the paths it is of: the index belongs
+  # to the working tree rather than to the caller, and a hint that omitted it
+  # would be an instruction to reproduce the defect.
+  say "sign  scripts/innsegl-commit.sh -p <path> -m 'your message'"
 fi
 exit $rc

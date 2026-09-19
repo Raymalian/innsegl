@@ -35,7 +35,18 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SIGNER="$ROOT/scripts/innsegl-commit.sh"
+
+# The signer under test, overridable so this suite can be pointed at a PREVIOUS
+# version of it.
+#
+# That is not a convenience. IP §2 asks for a test observed failing first, for
+# the expected reason, and a shell case has no compiler to make the failure
+# self-evident: the only way to show a case is red on merit rather than red
+# because a flag does not exist yet is to run it against the script as it stood.
+#
+#   git show <before>:scripts/innsegl-commit.sh > /tmp/before.sh && chmod +x it
+#   INNSEGL_SIGNER_UNDER_TEST=/tmp/before.sh scripts/innsegl-commit-selftest.sh
+SIGNER="${INNSEGL_SIGNER_UNDER_TEST:-$ROOT/scripts/innsegl-commit.sh}"
 
 pass=0
 fail=0
@@ -209,11 +220,18 @@ script_tool() {
 script_tool sign_commit ok "{\"commit_sha\":\"$HEAD_SHA\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
 script_tool register_agent ok '{"run_id":"run-successor00000000000000000000","spiffe_id":"spiffe://innsegl.dev/agent/orchestrator/rm134/run-successor00000000000000000000","expires_at":"2026-09-16T00:00:00.000Z"}'
 
-# drive [extra args…] — run the signer against the stubs and leave its exit
-# status in $STATUS and everything it said in $WORK/out.
-drive() {
+# drive_in DIR [args…] — run the signer in one repository against the stubs and
+# leave its exit status in $STATUS and everything it said in $WORK/out.
+#
+# The directory is a parameter because the cases at the foot of this file drive
+# TWO writers against one index, and doing that in the fixture every case above
+# shares would leave a second writer's file staged in it for good — there is no
+# unstaging here, by design: what a refusal must not do is exactly what a
+# clean-up would have to do.
+drive_in() {
+  local dir="$1"; shift
   : > "$CALLS"
-  ( cd "$REPO_DIR" && env \
+  ( cd "$dir" && env \
       INNSEGL_MCP_ADMIN_URL="$MCP_URL" \
       INNSEGL_MCP_URL="$MCP_URL" \
       INNSEGL_API_URL="${API_OVERRIDE:-$API_URL}" \
@@ -221,6 +239,20 @@ drive() {
       INNSEGL_ADMIN_CREDENTIAL_MINT="${MINT:-}" \
       "$SIGNER" "$@" -m "test(rm134): a staged change" ) > "$WORK/out" 2>&1
   STATUS=$?
+}
+
+# PATHS_ARG — what every case below names as the paths its commit is of.
+#
+# The fixture stages exactly a.txt, so this is that one path said out loud. It
+# is a variable rather than a literal because two cases are ABOUT its absence:
+# a caller committing its own work must name what it is committing (#280), and
+# the refusal when it does not is a case of its own.
+PATHS_ARG="-p a.txt"
+
+# drive [extra args…] — the fixture repository, with its one path named.
+drive() {
+  # shellcheck disable=SC2086 # deliberate: PATHS_ARG is a flag and its argument.
+  drive_in "$REPO_DIR" $PATHS_ARG "$@"
 }
 
 # called TOOL [substring…] — the tool was invoked and its arguments carry each
@@ -590,6 +622,217 @@ if [ "$STATUS" -ne 0 ] \
 else
   bad "OPS-069: status $STATUS, said: $(cat "$WORK/out")"
 fi
+
+# --- two writers, one index: a commit carries only what it named (#280) ------
+#
+# THE MEASURED INCIDENT. Two writers shared one working tree. One staged a
+# single file and asked for a signature; the signer refused, correctly, because
+# the index had moved under it. Seconds later the other writer committed, and
+# its commit carried three files: its own two, and the one the first writer had
+# staged. Nothing was lost. What landed was worse than a loss — a signed,
+# permanent, verifiable record of work its message and its identity did not
+# name, and the writer who had done nothing wrong was the one refused.
+#
+# THE INTERLEAVING IS DRIVEN, NOT WAITED FOR. Two processes racing would
+# reproduce this perhaps one run in fifty and would be the first test anybody
+# marked flaky. The interleaving that matters is a STATE — an index holding two
+# writers' work at the moment one of them commits — and a state can be built
+# outright. Every case below stages both writers by hand and then runs one
+# commit against it.
+#
+# WHAT IS ASSERTED is which paths the sign_commit call carried, and that the
+# index is exactly as it was found afterwards. A script that refused and
+# unstaged the other writer's file would pass an exit-status check and have
+# destroyed the very work this exists to protect.
+
+: > "$CREDFILE"           # back to a listener that demands nothing, after 16-19
+MINT=""
+
+# one_writer DIR — a repository with a.txt staged by one writer and a pointer
+# naming a live run. two_writers adds the second writer's b.txt on top.
+#
+# Two builders and no unstaging anywhere in this file, deliberately. `git reset`
+# and `git restore` are how a test tidies an index, and they are also how the
+# thing under test would cheat: a script that refused and then unstaged the
+# other writer's file would satisfy every assertion below while destroying the
+# work they exist to protect. Nothing here can do it, so nothing here can hide
+# it having been done.
+one_writer() {
+  local dir="$1"
+  mkdir -p "$dir"
+  git -C "$dir" init -q -b main
+  git -C "$dir" config user.email tester@example.test
+  git -C "$dir" config user.name Tester
+  git -C "$dir" config commit.gpgsign false
+  git -C "$dir" remote add origin https://example.test/org/name.git
+  echo base > "$dir/a.txt"
+  echo base > "$dir/b.txt"
+  git -C "$dir" add a.txt b.txt
+  git -C "$dir" commit -qm first
+
+  echo "the first writer's work" > "$dir/a.txt"
+  git -C "$dir" add a.txt
+
+  printf '%s\n%s\n%s\n' "$LIVE" "rm134" "" \
+    > "$RUNS/by-tree/$(printf '%s' "$dir" | shasum -a 256 | cut -c1-32)"
+}
+
+two_writers() {
+  one_writer "$1"
+  echo "the second writer's work" > "$1/b.txt"
+  git -C "$1" add b.txt
+}
+
+# staged_in DIR — the index, one path per line, sorted.
+staged_in() { git -C "$1" diff --cached --name-only | LC_ALL=C sort | tr '\n' ' '; }
+
+SHARED="$(cd "$WORK" && pwd -P)/shared"
+two_writers "$SHARED"
+state "$LIVE" active
+
+# 20. The sweeping writer is refused, and the refusal NAMES the path that is not
+#     its own. "Something is wrong with the index" would send it looking at its
+#     own staging, which is the one place the fault is not.
+BEFORE="$(staged_in "$SHARED")"
+drive_in "$SHARED" -p b.txt
+if [ "$STATUS" -ne 0 ] && said "a.txt" && ! grep -q '^sign_commit ' "$CALLS"; then
+  ok "a commit that would carry another writer's path is refused, naming it"
+else
+  bad "the foreign path was swept in: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+
+# 21. AND THE REFUSAL CHANGED NOTHING. The work of BOTH writers is where they
+#     left it: a refusal that unstaged the other writer's file to make itself
+#     true would destroy exactly what it exists to protect, and one that
+#     unstaged this writer's would lose the work it was asked to sign.
+if [ "$(staged_in "$SHARED")" = "$BEFORE" ] && [ "$BEFORE" = "a.txt b.txt " ]; then
+  ok "the refusal stages and unstages nothing; both writers' work is where it was"
+else
+  bad "the index moved: was '$BEFORE', now '$(staged_in "$SHARED")'"
+fi
+
+# 22. AND IT IS SYMMETRIC. The incident admitted the writer that swept and
+#     refused the one that had done nothing wrong, so "the other one may
+#     commit" is not a fix. Neither writer may commit this index.
+drive_in "$SHARED" -p a.txt
+if [ "$STATUS" -ne 0 ] && said "b.txt" && ! grep -q '^sign_commit ' "$CALLS"; then
+  ok "neither writer may commit a shared index; each is refused naming the other"
+else
+  bad "symmetry: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+
+# 23. AND EACH COMMIT CARRIES ONLY ITS OWN. The other half of the same
+#     sentence: with only its own work in the index, the commit is signed and
+#     the call says which paths it is of.
+ALONE="$(cd "$WORK" && pwd -P)/alone"
+one_writer "$ALONE"
+ALONE_HEAD="$(git -C "$ALONE" rev-parse HEAD)"
+script_tool sign_commit ok "{\"commit_sha\":\"$ALONE_HEAD\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
+drive_in "$ALONE" -p a.txt
+if [ "$STATUS" -eq 0 ] && called sign_commit '"paths": ["a.txt"]'; then
+  ok "a commit of one writer's work is signed, and names the path it is of"
+else
+  bad "own work: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+script_tool sign_commit ok "{\"commit_sha\":\"$HEAD_SHA\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
+
+# 24. A CALLER THAT NAMES NOTHING ACCOUNTS FOR NOTHING. This is the bound that
+#     makes the rest of it hold: an index is the working tree's, not the
+#     caller's, so a commit that named no paths is a commit that cannot say
+#     which of them are its own. The refusal has to be actionable — it prints
+#     the `-p` list for what is actually staged, so the retype is a copy.
+NAMED_ARG="$PATHS_ARG"; PATHS_ARG=""
+drive
+if [ "$STATUS" -ne 0 ] && said "-p a.txt" && ! grep -q '^sign_commit ' "$CALLS"; then
+  ok "a commit that names no paths is refused, and is told what to name"
+else
+  bad "unnamed: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+
+# and nothing was registered for a commit that was never going to happen: the
+# refusal is ahead of the identity, so no run is minted and none is left live.
+if ! grep -q '^register_agent ' "$CALLS"; then
+  ok "and no identity is minted for a commit that is refused before it starts"
+else
+  bad "a run was registered for a refused commit: $(grep '^register_agent ' "$CALLS")"
+fi
+
+# 25. EXCEPT ON THE CAPTURE PATH, which is already bounded and cannot be
+#     changed to say so. The harness signs a stopped subagent's leftover work
+#     with -r, and it has ALREADY asked this question of that index — against
+#     the run's own tool-call bodies, which is the only accounting available
+#     once the run that did the work is gone (#261). Requiring -p there would
+#     refuse a capture that is bounded, and scripts/hooks/ is the one caller
+#     that cannot be asked to change.
+point_at "$LIVE"
+drive -r "$LIVE"
+PATHS_ARG="$NAMED_ARG"
+if [ "$STATUS" -eq 0 ] && called sign_commit "\"run_id\": \"$LIVE\""; then
+  ok "the harness capture path signs under -r without naming paths"
+else
+  bad "capture: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+
+# 26. A PATH OUTSIDE THE TREE IS REFUSED RATHER THAN NORMALISED. Guessing which
+#     tree the caller meant is how a path becomes silently foreign: the caller
+#     would be refused for staging its own file, over and over, with nothing to
+#     act on.
+drive -p /etc/passwd
+if [ "$STATUS" -ne 0 ] && said "/etc/passwd" && ! grep -q '^sign_commit ' "$CALLS"; then
+  ok "a path outside the working tree is refused, naming it"
+else
+  bad "outside path: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+
+# 27. AND A PATH IS NAMED AS THE CALLER CAN SEE IT. `git diff --cached` spells
+#     every path from the top of the working tree while a caller types what is
+#     in front of it, so a name given from a subdirectory has to resolve to the
+#     same string or every commit made from one is refused.
+mkdir -p "$ALONE/sub"
+echo nested > "$ALONE/sub/deep.txt"
+git -C "$ALONE" add sub/deep.txt
+script_tool sign_commit ok "{\"commit_sha\":\"$ALONE_HEAD\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
+drive_in "$ALONE/sub" -p deep.txt -p ../a.txt
+if [ "$STATUS" -eq 0 ] && called sign_commit '"sub/deep.txt"' '"a.txt"'; then
+  ok "a path named from a subdirectory resolves to the spelling git uses"
+else
+  bad "subdirectory: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+script_tool sign_commit ok "{\"commit_sha\":\"$HEAD_SHA\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
+
+# 28. A CLIENT AND A SERVER UPGRADE AT DIFFERENT MOMENTS, and this is the rung
+#     below. The MCP SDK validates arguments against the tool's advertised
+#     inputSchema and refuses additional properties outright, so a script that
+#     sends `paths` to a deployment which has not been restarted does not
+#     degrade — it STOPS, and stopping means the human cannot commit at all.
+#
+#     Measured on 2026-09-19 while this change was in the working tree: the
+#     deployed image predated the argument, a writer's commit was refused with
+#     that sentence, and it fell back to a checked-out copy of the previous
+#     script to get signed. The ladder register_run already has, for the same
+#     reason, is what this asserts: two attempts, the second without the member
+#     the first was refused for.
+script_tool sign_commit err '{"message":"validating \"arguments\": validating root: unexpected additional properties [\"paths\"]"}'
+drive
+ATTEMPTS="$(grep -c '^sign_commit ' "$CALLS")"
+if [ "${ATTEMPTS:-0}" -eq 2 ] \
+   && grep '^sign_commit ' "$CALLS" | sed -n 1p | grep -q '"paths"' \
+   && ! grep '^sign_commit ' "$CALLS" | sed -n 2p | grep -q '"paths"'; then
+  ok "a deployment that does not know the argument gets a second call without it"
+else
+  bad "the compatibility ladder made $ATTEMPTS attempt(s): $(grep '^sign_commit ' "$CALLS")"
+fi
+
+# 29. AND IT SAYS WHICH HALF OF THE BOUND IS MISSING. The script had already
+#     accounted for the index before it called anything, so the commit is still
+#     bounded; what is gone is the half no other client of the tool can walk
+#     past. An operator who is not told that believes they have both.
+if said "does not accept" && said "make innsegl-up-here"; then
+  ok "and it names the half that is missing and what to run to get it back"
+else
+  bad "the fallback was silent about what it cost: $(cat "$WORK/out")"
+fi
+script_tool sign_commit ok "{\"commit_sha\":\"$HEAD_SHA\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
 
 echo
 echo "commit-selftest: $pass ok, $fail failed"
