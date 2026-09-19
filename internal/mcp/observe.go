@@ -577,7 +577,10 @@ func (c *observeService) store(ctx context.Context, runID, toolName, digest, key
 	if err != nil {
 		return nil, credentialLedgerError(runID, err)
 	}
-	if !found {
+	// record_event's rule, from the same reasoning: a run the caller's
+	// credential does not authorise is answered exactly as a run that does not
+	// exist (#264).
+	if !found || !adminScopeAdmits(ctx, run.Repo) {
 		return nil, Errorf(ClassRunNotFound, runID, "no run %q", runID)
 	}
 	if run.Retired() {

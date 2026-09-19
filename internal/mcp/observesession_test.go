@@ -321,6 +321,12 @@ func (d *osChainRuns) CredentialRun(ctx context.Context, runID string) (Credenti
 			run.SPIFFEID, _ = rec[event.FieldSpiffeID].(string)   //nolint:errcheck // an absent member reads as empty, which is what the directory reports
 			run.AgentType, _ = rec[event.FieldAgentType].(string) //nolint:errcheck // same
 			run.TaskID, _ = rec[event.FieldTaskRef].(string)      //nolint:errcheck // same
+			// The repository the run was registered in (ADR-0045), read the
+			// way the shipped rundir.Directory reads it (#264). A double that
+			// left it empty would report every run as one no credential
+			// authorises, which is a stand-in disagreeing with what it stands
+			// in for.
+			run.Repo, _ = rec[event.FieldRepo].(string) //nolint:errcheck // same
 			found = true
 		case event.EventTypeRunRetired:
 			at := osInstant(rec)

@@ -81,6 +81,7 @@ const (
 	envRekorURL              = "INNSEGL_REKOR_URL"
 	envMCPListen             = "INNSEGL_MCP_LISTEN"
 	envMCPAdminListen        = "INNSEGL_MCP_ADMIN_LISTEN"
+	envMCPAdminJWKSFile      = "INNSEGL_MCP_ADMIN_JWKS_FILE"
 	envMCPAlso               = "INNSEGL_MCP_ALSO"
 	envMCPHealthListen       = "INNSEGL_MCP_HEALTH_LISTEN"
 	envMCPAddrFile           = "INNSEGL_MCP_ADDR_FILE"
@@ -226,6 +227,7 @@ type serveOptions struct {
 
 	listen       string
 	adminListen  string
+	adminJWKS    string
 	also         []string
 	healthListen string
 	addrFile     string
@@ -642,6 +644,13 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 			"companion subcommands to run in THIS process, comma separated: api, seal, "+
 				"reconcile. Empty runs none, which is one container per service as before. "+
 				"They are subcommand names, not container names ($"+envMCPAlso+")")
+		adminJWKS = fs.String("admin-jwks", os.Getenv(envMCPAdminJWKSFile),
+			"file holding the PUBLIC keys whose repository-scoped credentials the identity "+
+				"lifecycle admits, as a JWK set. Read ONCE at start-up and never fetched, so "+
+				"nothing here depends on whatever issues them being reachable. REQUIRED "+
+				"whenever -admin-listen is set: a listener that believes it is authenticated "+
+				"and is not is worse than one that knows it is open. Mint the keys with "+
+				"`innsegl admin-credential keygen` ($"+envMCPAdminJWKSFile+")")
 		adminListen = fs.String("admin-listen", os.Getenv(envMCPAdminListen),
 			"address the identity lifecycle listens on. Empty serves all five tools on -listen, "+
 				"as before #170. Set it and register_agent and retire_agent move here, leaving "+
@@ -765,7 +774,7 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		signAuthorOperators: operators,
 		signAllowUnlinked:   *signAllowUnlinked,
 		gitsignPath:         *gitsignPath,
-		listen:              *listen, adminListen: *adminListen, also: alsoRun,
+		listen:              *listen, adminListen: *adminListen, adminJWKS: *adminJWKS, also: alsoRun,
 		healthListen: *healthListen, addrFile: *addrFile,
 		spireTimeout: *spireTimeout, runTTL: *runTTL, lease: *lease,
 		rateCalls: *rateCalls, rateWindow: *rateWindow,
@@ -857,6 +866,22 @@ func (o serveOptions) validate() string {
 			" reports Sigstore reachability and there is no default pair to fall back to (ADR-0010)"
 	case o.listen == "":
 		return "-listen (or $" + envMCPListen + ") is required"
+	// #264. The listener that CREATES and DESTROYS identities was published
+	// with no caller authentication at all, which is doc 04's AB-13 and AB-15.
+	// Turning the split on without the material to authenticate anyone is the
+	// state that gap lived in, so it is refused here — before anything binds —
+	// rather than served open with a warning nobody reads.
+	case o.adminListen != "" && o.adminJWKS == "":
+		return "-admin-jwks (or $" + envMCPAdminJWKSFile + ") is required when -admin-listen " +
+			"(or $" + envMCPAdminListen + ") is set: the identity lifecycle creates and " +
+			"destroys identities, and a listener serving it with nothing to authenticate a " +
+			"caller lets any process that can reach it mint a run. Generate the keys with " +
+			"`innsegl admin-credential keygen`"
+	case o.adminJWKS != "" && o.adminListen == "":
+		return "-admin-jwks (or $" + envMCPAdminJWKSFile + ") is set without -admin-listen " +
+			"(or $" + envMCPAdminListen + "). The credential belongs to the identity-lifecycle " +
+			"listener and to nothing else; in single-listener mode the tools serve on -listen " +
+			"and this file would be read and never used, which reads as a control that is on"
 	case o.healthListen == "":
 		return "-health-listen (or $" + envMCPHealthListen + ") is required: IP §6.6 requires " +
 			"the health endpoints, and a replica with none cannot be taken out of rotation"

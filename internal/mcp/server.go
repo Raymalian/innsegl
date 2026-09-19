@@ -77,6 +77,23 @@ type Config struct {
 	// tool left out here is a decision. Conflating them would make a correctly
 	// configured server report itself broken.
 	Tools []ToolName
+
+	// AdminCredential requires a repository-scoped credential on every request
+	// this server answers (#264, admincred.go). Nil requires nothing, which is
+	// the agent listener and every single-listener deployment.
+	//
+	// It is set on the IDENTITY-LIFECYCLE listener only. A repository-scoped
+	// credential in front of get_credential and sign_commit would become
+	// credential-fetch authority over every run in that repository, which is
+	// wider than the gap it closes; those two keep the per-run token, which is
+	// narrower by construction.
+	//
+	// Setting it does two things at once, and they cannot be separated: the
+	// transport refuses an unverified request before the MCP session layer,
+	// and every tool this server binds is handed the verified repository. A
+	// server that had one without the other would either serve unauthenticated
+	// or refuse everything, so New wires both from this one field.
+	AdminCredential *AdminCredentialVerifier
 }
 
 // Server is the innsegl MCP server. Build one with New and serve
@@ -87,6 +104,10 @@ type Server struct {
 	version string
 	bound   []ToolName
 	missing []ToolName
+	// adminCred is Config.AdminCredential. Non-nil makes this server's tools
+	// read the verified repository off every call; nil leaves them exactly as
+	// they were before #264.
+	adminCred *AdminCredentialVerifier
 }
 
 // New builds the server and runs every registered tool binder, in IP §4 order.
@@ -100,7 +121,7 @@ func New(cfg Config) (*Server, error) {
 		advertised = version.Version()
 	}
 
-	s := &Server{version: advertised}
+	s := &Server{version: advertised, adminCred: cfg.AdminCredential}
 	s.sdk = sdk.NewServer(&sdk.Implementation{
 		Name:    ServerName,
 		Title:   "Innsegl",
@@ -143,6 +164,14 @@ func New(cfg Config) (*Server, error) {
 			Logger:         cfg.Logger,
 			SessionTimeout: cfg.SessionTimeout,
 		}))
+
+	// The credential check goes OUTSIDE everything, so a caller with no
+	// credential reaches neither the MCP session layer nor the cross-origin
+	// handler: it cannot open a session, cannot list the tools, and cannot
+	// learn that the surface exists. #264.
+	if s.adminCred != nil {
+		s.handler = s.adminCred.Handler(s.handler)
+	}
 	return s, nil
 }
 
@@ -233,6 +262,10 @@ func Bind[In, Out any](s *Server, tool *sdk.Tool, h Handler[In, Out]) error {
 	// leaves alone.
 	sdk.AddTool(s.sdk, tool,
 		func(ctx context.Context, req *sdk.CallToolRequest, in In) (*sdk.CallToolResult, any, error) {
+			ctx, err := s.scopeCall(ctx, req)
+			if err != nil {
+				return errorResult(Classify(err)), nil, nil
+			}
 			out, err := h(ctx, req, in)
 			if err != nil {
 				return errorResult(Classify(err)), nil, nil
@@ -242,6 +275,46 @@ func Bind[In, Out any](s *Server, tool *sdk.Tool, h Handler[In, Out]) error {
 
 	s.bound = append(s.bound, name)
 	return nil
+}
+
+// scopeCall carries the verified repository from the transport into the tool's
+// own context (#264).
+//
+// # Why it is read off the REQUEST and not off the context
+//
+// The streamable transport creates one session at `initialize` and serves
+// every later call over it, so a context value a middleware added to a POST
+// does not reach the handler — the handler's context is the session's. What IS
+// per-request is `req.Extra.Header`, which the transport sets to the very
+// http.Header of the POST carrying this call. The middleware wrote the
+// verified repository there, so that is where it is read from.
+//
+// # Why this cannot be forged
+//
+// The header is consulted only on a server the verifier is installed on, and
+// on such a server the middleware overwrites it on every admitted request
+// before any handler runs. A caller that sets it on the agent listener is
+// talking to a server that never looks at it.
+//
+// An EMPTY header on a scoped server is refused rather than treated as "no
+// scope": the only way to reach a handler here is through a middleware that
+// always sets it, so an empty one means the two were separated, and the
+// failure mode of guessing is a listener that believes it is authenticated and
+// serves every caller.
+func (s *Server) scopeCall(ctx context.Context, req *sdk.CallToolRequest) (context.Context, error) {
+	if s.adminCred == nil {
+		return ctx, nil
+	}
+	var repo string
+	if req != nil && req.Extra != nil && req.Extra.Header != nil {
+		repo = req.Extra.Header.Get(adminScopeHeader)
+	}
+	if repo == "" {
+		return nil, Errorf(ClassInvariantViolation, "",
+			"this listener requires a repository-scoped credential and this call carries no "+
+				"verified repository; the transport check and the tool layer have been separated")
+	}
+	return withAdminScope(ctx, AdminScope{Repo: repo}), nil
 }
 
 // errorResult renders a classified error as an MCP tool error.
