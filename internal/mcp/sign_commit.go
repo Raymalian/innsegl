@@ -79,6 +79,19 @@ import (
 // (ADR-0031 decision 6). Making it exported is RM-035's to do, and RM-035 is the
 // component IP §6.5 assigns the repair to.
 //
+// THE ONE STATE THAT LOOKS LIKE THAT WINDOW AND IS NOT. A kill can also land
+// AFTER Phase C, between the `commit_recorded` append and the idempotency
+// store's write of the reply. The repository is then in the identical state —
+// one commit object, HEAD at the staged tree, an empty index — so `StagedTree`
+// refuses the takeover the same way, and it is wrong to: the protocol
+// completed, this call's own `commit_recorded` is on the chain, and nothing is
+// left for a reconciler to repair. Only the ANSWER was lost, which is precisely
+// what IP §6.6 requires a replay to return. So the takeover asks the chain for
+// this call's Phase C record before it asks the repository for anything, and
+// converges on it when it is there. No Rekor search: the entry the reply names
+// is the entry the record already carries. RM-169 (#274) — see
+// convergeOnRecorded.
+//
 // # Where the credential comes from, and why not from SPIRE directly
 //
 // IP §6.1: "spire-agent socket lost mid-run at `get_credential` →
@@ -193,6 +206,10 @@ type SignCommitLedger interface {
 	// Append writes one event; an append whose idempotency_key has already
 	// been used returns the original event and writes nothing (LED-008).
 	Append(ctx context.Context, body event.Fields) (event.Fields, error)
+	// EventByIdempotencyKey is the read half of LED-008: it answers "was this
+	// already recorded?" without appending to find out. A takeover asks it
+	// before it re-runs anything — RM-169 (#274), and see convergeOnRecorded.
+	EventByIdempotencyKey(ctx context.Context, key string) (event.Fields, bool, error)
 }
 
 // SignCommitWorkspace resolves doc 02 §5's `host/org/name` to the working tree
@@ -482,6 +499,21 @@ func (c *signCommitService) sign(ctx context.Context, in signCommitIn) (signComm
 //
 //nolint:gocyclo // One gate per step, each with its own refusal. Splitting it
 func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, error) {
+	// ---- before everything: did this call already finish? ------------------
+	//
+	// FIRST, ahead of the run gate and not after it. A run retired since the
+	// original call must not turn a completed call's replay into a refusal —
+	// the same reason `sign` puts the whole of this inside the claim — and the
+	// question this asks is about a record that already exists, so nothing
+	// about the run's present state can change the answer.
+	recorded, converged, err := c.convergeOnRecorded(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if converged {
+		return recorded, nil
+	}
+
 	// ---- before Phase A: everything that can fail cheaply ------------------
 
 	run, spiffeID, err := c.resolveRun(ctx, in.RunID)
@@ -661,6 +693,121 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 		},
 		Trailers: signCommitTrailers(result.Trailers),
 	}, nil
+}
+
+// convergeOnRecorded answers the one question a takeover must ask before it
+// re-runs anything: has THIS call already completed the protocol?
+//
+// # Why the question is asked of the chain and not of the store
+//
+// ADR-0017's store is where a reply lives, and a reply that was recorded is
+// returned by the store itself — this function is never reached for one. What
+// it is reached for is the kill between the Phase C append and that write: the
+// store holds a claim with no reply, the claim's lease runs out, and the next
+// caller is handed the tool to run a second time. The chain is the only place
+// that still knows the first run got all the way through, and it knows it
+// under a key this tool derives rather than one it has to search for.
+//
+// # Why this is not the repair ADR-0031 decision 6 refuses
+//
+// That refusal is about a commit whose Rekor entry nothing recorded: finding it
+// means SEARCHING Rekor for a signature over an existing commit, which is the
+// operation internal/signing keeps unexported and which IP §6.5 assigns to
+// RM-035's reconciler. Nothing is searched here. The entry's uuid and log index
+// are members doc 02 §3 REQUIRES of `commit_recorded`, so the record that is
+// already on the chain names the entry completely, and the reply is read out of
+// it rather than recovered from anywhere.
+//
+// # What the reply can and cannot carry
+//
+// `commit_sha`, the entry's `uuid` and `log_index`, and the trailers — which
+// are a pure function of the identity, run and task the record itself names, so
+// they are re-derived exactly rather than remembered. `log_id` and
+// `integrated_at` are the log's own answer about the entry and doc 02 §3 gives
+// `commit_recorded` no member for either, so a converged reply leaves them
+// empty: they are a convenience for fetching an inclusion proof, and inventing
+// them would be the only dishonest thing this function could do. A caller that
+// needs them asks Rekor for the uuid it was just given.
+func (c *signCommitService) convergeOnRecorded(
+	ctx context.Context, in signCommitIn,
+) (signCommitOut, bool, error) {
+	refuse := func(format string, args ...any) (signCommitOut, bool, error) {
+		return signCommitOut{}, false, Errorf(ClassInvariantViolation, in.RunID, format, args...)
+	}
+
+	key := signCommitPhaseKey(signCommitRecordedKeyPrefix, in.IdempotencyKey)
+	record, found, err := c.ledger.EventByIdempotencyKey(ctx, key)
+	if err != nil {
+		return signCommitOut{}, false, credentialLedgerError(in.RunID, err)
+	}
+	if !found {
+		return signCommitOut{}, false, nil
+	}
+
+	// The same three questions `append` asks of a record the ledger hands back,
+	// and for the same reason: a derived key that named another record would
+	// hand this call somebody else's commit, and the reply is the one thing a
+	// caller will not check.
+	if got, ok := record[event.FieldEventType].(string); !ok || got != event.EventTypeCommitRecorded {
+		return refuse("the derived Phase C key names a %v event rather than a %s; "+
+			"this call's completion cannot be read off it",
+			record[event.FieldEventType], event.EventTypeCommitRecorded)
+	}
+	if got, ok := record[event.FieldRunID].(string); !ok || got != in.RunID {
+		return refuse("the %s already recorded for this call is of run %v, and the call is "+
+			"for run %q", event.EventTypeCommitRecorded, record[event.FieldRunID], in.RunID)
+	}
+	if got, ok := record[event.FieldRepo].(string); !ok || got != in.Repo {
+		return refuse("the %s already recorded for this call is of repository %v, and the "+
+			"call is for %q", event.EventTypeCommitRecorded, record[event.FieldRepo], in.Repo)
+	}
+
+	commitSHA, ok := record[event.FieldCommitSHA].(string)
+	if !ok {
+		return refuse("the recorded %s carries %s as %T, want a string",
+			event.EventTypeCommitRecorded, event.FieldCommitSHA, record[event.FieldCommitSHA])
+	}
+	if verr := event.ValidateGitObjectID(commitSHA); verr != nil {
+		return refuse("the recorded %s names commit %q, which is not a git object id: %v",
+			event.EventTypeCommitRecorded, commitSHA, verr)
+	}
+	entryUUID, ok := record[event.FieldRekorEntryUUID].(string)
+	if !ok || entryUUID == "" {
+		return refuse("the recorded %s carries no %s; a signature with no transparency "+
+			"entry is not one this tool may report as complete",
+			event.EventTypeCommitRecorded, event.FieldRekorEntryUUID)
+	}
+	// int64 and not a wider read: doc 02 §4's parser produces integers as
+	// int64, and a member of another type means the record was not written by
+	// the serializer this tool writes through.
+	logIndex, ok := record[event.FieldRekorLogIndex].(int64)
+	if !ok {
+		return refuse("the recorded %s carries %s as %T, want an integer",
+			event.EventTypeCommitRecorded, event.FieldRekorLogIndex, record[event.FieldRekorLogIndex])
+	}
+	spiffeID, ok := record[event.FieldSpiffeID].(string)
+	if !ok || spiffeID == "" {
+		return refuse("the recorded %s names no identity, so the trailers the commit carries "+
+			"cannot be re-derived", event.EventTypeCommitRecorded)
+	}
+
+	// Re-derived through the same pseudonymiser Phase B claimed through, so a
+	// converged reply and the original reply are the same bytes rather than two
+	// renderings of one claim (RM-079, #116).
+	claimedTask, err := c.pseudonyms.ClaimedTask(in.TaskRef)
+	if err != nil {
+		return refuse("task_ref %q is not a run identity component (doc 02 §5): %v", in.TaskRef, err)
+	}
+	trailers, err := (signing.Claim{Identity: spiffeID, Run: in.RunID, Task: claimedTask}).Trailers()
+	if err != nil {
+		return refuse("the commit recorded for this call cannot be claimed for this run: %v", err)
+	}
+
+	return signCommitOut{
+		CommitSHA:  commitSHA,
+		RekorEntry: SignCommitRekorEntry{UUID: entryUUID, LogIndex: logIndex},
+		Trailers:   signCommitTrailers(trailers),
+	}, true, nil
 }
 
 // resolveRun is the run gate: the run exists, it has not been retired, and the
