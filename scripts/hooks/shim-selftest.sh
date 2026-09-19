@@ -117,6 +117,12 @@ script_tool() {
 # $SIGNER defaults to the inert recorder below. The capture cases override it
 # with one that really commits, because "no commit" has to be asserted as a HEAD
 # that did not move.
+#
+# $INNSEGL_GIT_GUARD_SCRIPT IS PINNED AT THE SHIPPED GUARD and not left to the
+# shim's own sibling lookup — #278. $SHIM is a scratch copy whenever a candidate
+# is being driven before it is installed, which is the whole point of the
+# override, and a scratch copy has no sibling. Pinning it also means the guard
+# under test is the repository's, never whatever happens to sit next to the copy.
 drive() {
   : > "$CALLS"
   printf '%s' "$1" | env \
@@ -126,6 +132,8 @@ drive() {
     INNSEGL_SIGNER="${SIGNER:-$WORK/signer}" \
     INNSEGL_API_URL="${API:-http://127.0.0.1:1/}" \
     INNSEGL_ADMIN_CREDENTIAL_MINT="${MINT:-}" \
+    INNSEGL_GIT_GUARD="${GIT_GUARD:-1}" \
+    INNSEGL_GIT_GUARD_SCRIPT="${TREE_GUARD:-$ROOT/scripts/hooks/git-tree-guard.sh}" \
     "$SHIM" > "$WORK/out" 2> "$WORK/err"
   STATUS=$?
   # EVERY call this run has ever made, because $CALLS is reset per drive and
@@ -1226,6 +1234,127 @@ fi
 
 creset
 uncap_reset
+
+# --- OPS-095: the shim consults the destructive-git guard ---------------------
+#
+# #278 (RM-173). The guard itself is driven by
+# scripts/hooks/git-tree-guard-selftest.sh, against a real tree, with the real
+# command actually attempted. What is asserted HERE is the only thing that file
+# cannot assert: that this shim reaches the guard at all, on the one event that
+# can BLOCK a tool call, and that reaching it costs every other command nothing.
+#
+# A LIVE RUN, A TRACKED EDIT IT WROTE, AND THE STOP THAT WOULD HAVE CAPTURED IT
+# HAS NOT FIRED. That is the window the measured incident happened in.
+rm -f "$RUNS"/agent-* 2>/dev/null
+creset
+capture_run agent-guard1 run-guard1
+wrote_body run-guard1 a Edit "{\"file_path\":\"$CREPO/base.txt\"}"
+printf 'AGENT WORK\n' >> "$CREPO/base.txt"
+
+guard_drive() {
+  drive "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"sess-1\",\"agent_id\":\"agent-guard1\",\"tool_name\":\"${2:-Bash}\",\"cwd\":\"$CREPO\",\"tool_input\":{\"command\":$(printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}}"
+}
+
+# EVERY CASE CARRIES THE BLOCK, and none of them asserts "it was allowed" on its
+# own. A shim that consults nothing allows every command there is, so a case
+# asserting only that a `git status` got through is GREEN against the very
+# defect it exists to catch — the same trap OPS-088 documents for "success
+# writes nothing". Each assertion below therefore reads the one refusal that
+# must happen alongside the thing that must not.
+guard_drive 'git reset --hard HEAD'
+BLOCKED=$STATUS
+cp "$WORK/err" "$WORK/err.blocked"
+DIRTY_AFTER="$(git -C "$CREPO" status --porcelain | wc -l | tr -d ' ')"
+
+guard_drive 'git status --porcelain'
+ALLOWED=$STATUS
+guard_drive 'git reset --hard HEAD' Read
+NOT_BASH=$STATUS
+guard_drive 'echo "git reset --hard is what took the work"'
+QUOTED=$STATUS
+guard_drive 'git commit -m "x"'
+COMMITTING=$STATUS
+cp "$WORK/err" "$WORK/err.commit"
+GIT_GUARD=0
+guard_drive 'git reset --hard HEAD'
+SWITCHED_OFF=$STATUS
+GIT_GUARD=1
+TREE_GUARD="$WORK/no-such-guard"
+guard_drive 'git reset --hard HEAD'
+NO_GUARD=$STATUS
+TREE_GUARD=""
+
+if [ "$BLOCKED" -eq 2 ] && grep -q 'run-guard1' "$WORK/err.blocked"; then
+  ok "OPS-095 a Bash call that would discard a live run's work is blocked, naming the run"
+else
+  bad "OPS-095 status $BLOCKED, stderr: $(head -n 2 "$WORK/err.blocked")"
+fi
+# AND NOTHING RAN. A blocked call and an allowed one the harness happened not to
+# run are the same exit status from here; the tree is what tells them apart.
+if [ "$BLOCKED" -eq 2 ] && [ "$DIRTY_AFTER" != "0" ]; then
+  ok "OPS-095 and nothing ran: the edit is still in the tree"
+else
+  bad "OPS-095 blocked $BLOCKED, $DIRTY_AFTER uncommitted path(s) left"
+fi
+# THE REFUSAL IS ACTIONABLE, not a wall. An agent that is merely refused reaches
+# for the next spelling of the same command.
+if [ "$BLOCKED" -eq 2 ] && grep -q 'INNSEGL_ALLOW_DESTRUCTIVE=1' "$WORK/err.blocked" \
+   && grep -q 'innsegl-commit -r run-guard1' "$WORK/err.blocked"; then
+  ok "OPS-095 and it offers both ways out: sign the work, or discard it deliberately"
+else
+  bad "OPS-095 the refusal offers no way through: $(cat "$WORK/err.blocked")"
+fi
+
+# EVERY OTHER COMMAND IS UNTOUCHED, and this is the half that decides whether
+# the gate survives contact with an agent that runs git all day.
+if [ "$BLOCKED" -eq 2 ] && [ "$ALLOWED" -eq 0 ]; then
+  ok "OPS-095 and in the same tree a git that destroys nothing is allowed"
+else
+  bad "OPS-095 blocked $BLOCKED, git status $ALLOWED"
+fi
+if [ "$BLOCKED" -eq 2 ] && [ "$NOT_BASH" -eq 0 ]; then
+  ok "OPS-095 and the same command under a tool that is not Bash is not a command"
+else
+  bad "OPS-095 blocked $BLOCKED, Read event $NOT_BASH"
+fi
+if [ "$BLOCKED" -eq 2 ] && [ "$QUOTED" -eq 0 ]; then
+  ok "OPS-095 and a quoted mention of it is not the command either"
+else
+  bad "OPS-095 blocked $BLOCKED, quoted mention $QUOTED"
+fi
+
+# THE COMMIT GATE IS UNCHANGED BY THE GATE IN FRONT OF IT. OPS-021 asserts it on
+# a clean fixture; this asserts it in the one state where both could fire, and
+# asserts that the two refusals are DIFFERENT — a new gate that swallowed the
+# old one would pass every assertion either makes on its own.
+if [ "$BLOCKED" -eq 2 ] && [ "$COMMITTING" -eq 2 ] \
+   && grep -q 'Sign it under THIS' "$WORK/err.commit" \
+   && ! grep -q 'Sign it under THIS' "$WORK/err.blocked"; then
+  ok "OPS-095 and a plain commit still meets the gate that was always there, not this one"
+else
+  bad "OPS-095 blocked $BLOCKED, commit $COMMITTING, $(head -n 1 "$WORK/err.commit")"
+fi
+
+# AND IT CAN BE TURNED OFF, in one variable, without touching the file. A gate
+# in front of git on somebody's machine that cannot be switched off is a gate
+# that gets deleted instead.
+if [ "$BLOCKED" -eq 2 ] && [ "$SWITCHED_OFF" -eq 0 ]; then
+  ok "OPS-095 and INNSEGL_GIT_GUARD=0 stops the shim consulting it at all"
+else
+  bad "OPS-095 blocked $BLOCKED, switched off $SWITCHED_OFF"
+fi
+
+# AND A MISSING GUARD ALLOWS. This file is wired into a harness; a shim that
+# blocked every git command because a sibling script was not installed would be
+# worse than the loss it exists to prevent.
+if [ "$BLOCKED" -eq 2 ] && [ "$NO_GUARD" -eq 0 ]; then
+  ok "OPS-095 and a guard that is not installed fails open"
+else
+  bad "OPS-095 blocked $BLOCKED, missing guard $NO_GUARD"
+fi
+
+creset
+rm -f "$RUNS"/agent-* 2>/dev/null
 
 # --- OPS-073: single-listener mode, unchanged --------------------------------
 #
