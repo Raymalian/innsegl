@@ -35,8 +35,8 @@ import (
 // to run something. Like `reap` and `resolve-alert`, it runs from a trusted
 // host holding the ledger DSN.
 var documentedSubcommands = []string{
-	"api", "canary", "init", "migrate-schema", "reap", "reconcile", "resolve-alert",
-	"seal", "serve", "verify",
+	"admin-credential", "api", "canary", "init", "migrate-schema", "reap", "reconcile",
+	"resolve-alert", "seal", "serve", "verify",
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {

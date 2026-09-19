@@ -261,7 +261,11 @@ func (s *retireService) retire(ctx context.Context, in retireAgentIn) (retireAge
 	if err != nil {
 		return retireAgentOut{}, credentialLedgerError(in.RunID, err)
 	}
-	if !found {
+	// record_event's rule, from the same reasoning: a run the caller's
+	// credential does not authorise is answered exactly as a run that does not
+	// exist (#264). Here it also means SPIRE is never asked to delete an entry
+	// for a run in another repository — gate 3 below is not reached.
+	if !found || !adminScopeAdmits(ctx, run.Repo) {
 		return retireAgentOut{}, Errorf(ClassRunNotFound, in.RunID, "no run %q", in.RunID)
 	}
 

@@ -673,13 +673,40 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		return fail("build the MCP server: %w", err)
 	}
 
+	// #264. The identity-lifecycle listener requires a repository-scoped
+	// credential, verified OFFLINE from a file this deployment mounts. The
+	// material is read here, once, before anything listens: a key set that is
+	// absent, unreadable, empty or unusable fails the process, because a
+	// deployment that believes it is authenticated and is not is worse than one
+	// that knows it is open.
+	//
+	// Nothing fetches it. Whatever issues these credentials may be down or not
+	// yet built without this process noticing — an already-minted credential
+	// keeps working and signing is untouched — which is the whole reason the
+	// verification material is a file and not an endpoint.
+	//
+	// The verifier is handed to the ADMIN server only. On the agent listener a
+	// repository-scoped credential would become credential-fetch authority over
+	// every run in that repository, which is wider than the gap it closes; that
+	// listener keeps the per-run token, which is narrower by construction.
+	var adminCred *mcp.AdminCredentialVerifier
+	if o.adminListen != "" {
+		adminCred, err = mcp.NewAdminCredentialVerifier(mcp.AdminCredentialConfig{
+			KeySetFile: o.adminJWKS,
+		})
+		if err != nil {
+			return fail("the identity-lifecycle listener cannot authenticate callers: %w", err)
+		}
+	}
+
 	var adminServer *mcp.Server
 	if o.adminListen != "" {
 		adminServer, err = mcp.New(mcp.Config{
-			Logger:         log.logger,
-			TrustedOrigins: o.trustedOrigins,
-			SessionTimeout: o.sessionTimeout,
-			Tools:          mcp.AdminTools(),
+			Logger:          log.logger,
+			TrustedOrigins:  o.trustedOrigins,
+			SessionTimeout:  o.sessionTimeout,
+			Tools:           mcp.AdminTools(),
+			AdminCredential: adminCred,
 		})
 		if err != nil {
 			return fail("build the identity-lifecycle server: %w", err)
@@ -723,6 +750,11 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		Timeout:        o.healthTimeout,
 		ClockSkewBound: o.clockSkewBound,
 		Logger:         log.logger,
+		// #264, and ON THE HEALTH LISTENER ONLY. Whether the identity
+		// lifecycle is authenticated is an operator's fact: doc 05 gives this
+		// process a third listener for exactly these, and "this listener is
+		// open" published where a stranger can read it is an invitation.
+		AdminCredentialEnforced: adminCred != nil,
 	})
 	if err != nil {
 		return fail("build the health endpoints: %w", err)
@@ -757,6 +789,14 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 			Handler:           adminServer.Handler(),
 			ReadHeaderTimeout: 10 * time.Second,
 		}
+		log.info("the identity lifecycle requires a repository-scoped credential (#264)",
+			"key_set", adminCred.KeySetFile(),
+			"key_ids", strings.Join(adminCred.KeyIDs(), ","),
+			"keys", len(adminCred.KeyIDs()),
+			// The credential VALUE is never logged, anywhere. A key id names a
+			// public verification key and says nothing about who holds the
+			// private half, which is why it is the one part that is reportable.
+			"note", "verified offline from the file above, read once at start-up and never fetched")
 		log.warn("the identity lifecycle is on a separate listener: " +
 			strings.Join(toolStrings(mcp.AdminTools()), ", ") + " are served on " +
 			adminLn.Addr().String() + " and NOT on the MCP transport. A client pointed only at " +
