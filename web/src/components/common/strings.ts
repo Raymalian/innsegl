@@ -37,20 +37,33 @@ export const strings = {
     open: "Open",
   },
 
+  /* The four lifecycle states (#256). The `meaning` is read by assistive
+   * technology and shown on hover: the word alone does not distinguish facts a
+   * reader must not confuse, and three of these four are about a CREDENTIAL
+   * rather than about an agent.
+   *
+   * Not one of them says, or implies, that an agent stopped. Nothing in this
+   * system can observe that (IP E7), and the sentence this catalogue used to
+   * carry — "the agent died unretired" — was a guess presented as a fact.
+   * FE-132 is the gate that keeps it out. */
   status: {
     active: {
       label: "Active",
-      /* Read by assistive technology and shown on hover: the badge word alone
-       * does not distinguish two facts a reader must not confuse. */
-      meaning: "Registered, credential current",
+      meaning: "Registered, and the newest fact recorded for this run is not a withdrawal.",
+    },
+    lapsed: {
+      label: "Lapsed",
+      meaning:
+        "The newest fact recorded for this run is the reaper withdrawing its credential. Resuming the run restores the identity.",
+    },
+    abandoned: {
+      label: "Abandoned",
+      meaning:
+        "Nothing has been recorded for this run since its credential was withdrawn, and the restore horizon has passed. The identity can no longer be restored.",
     },
     retired: {
       label: "Retired",
-      meaning: "Retired deliberately; identity removed",
-    },
-    expired: {
-      label: "Expired",
-      meaning: "Credential expired before retirement; the agent died unretired",
+      meaning: "Ended by its harness or by a person, and the identity was removed.",
     },
   },
 

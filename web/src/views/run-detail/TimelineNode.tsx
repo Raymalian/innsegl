@@ -71,7 +71,7 @@ import {
   commitCard,
   degraded,
   disclosure,
-  expiredOutline,
+  withdrawnOutline,
   factList,
   factRow,
   focusRing,
@@ -151,10 +151,10 @@ const MEMBER_VIEWS: readonly {
  * that the ledger holds an event and not a verdict on it — but the SHAPE still
  * carries the exception, so the two alarms are findable by running an eye down
  * the gutter and survive greyscale (doc 06 §6.4). */
-function markerFor(event: TimelineEvent): "node" | "status-expired" | "integrity-alert" {
+function markerFor(event: TimelineEvent): "node" | "status-lapsed" | "integrity-alert" {
   const severity = severityOf(event);
   if (severity === "alert") return "integrity-alert";
-  if (severity === "degraded") return "status-expired";
+  if (severity === "degraded") return "status-lapsed";
   return "node";
 }
 
@@ -177,7 +177,7 @@ export function TimelineNode({
   /* doc 06 §3.2 requires expired to be told from retired without a hue, and
    * StatusBadge carries that distinction as a dashed outline. The same fact on
    * the timeline gets the same cue rather than a second invented one. */
-  const outline = typeId === "runExpired" ? ` ${expiredOutline}` : "";
+  const outline = typeId === "runExpired" ? ` ${withdrawnOutline}` : "";
   const treatment =
     severity === "alert"
       ? `${nodeBand} ${integrityAlert}${outline}`
@@ -274,7 +274,7 @@ function SeverityMark({ event }: { readonly event: TimelineEvent }) {
   const ranOut = eventTypeIdOf(event.event_type) === "runExpired";
   return (
     <Mark
-      icon="status-expired"
+      icon="status-lapsed"
       tone={degraded}
       label={ranOut ? strings.severity.expired : strings.severity.degraded}
       meaning={ranOut ? strings.severity.expiredMeaning : strings.severity.degradedMeaning}

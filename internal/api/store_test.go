@@ -98,7 +98,7 @@ func seed(t *testing.T, owner *ledger.Store, n int) []seededRun {
 
 	agentTypes := []string{"fix-ci", "release-bot", "doc-writer"}
 	repos := []string{"github.com/innsegl/one", "github.com/innsegl/two"}
-	statuses := []string{StatusActive, StatusRetired, StatusExpired}
+	statuses := []string{StatusActive, StatusRetired, StatusLapsed}
 
 	out := make([]seededRun, 0, n)
 	for i := range n {
@@ -154,10 +154,13 @@ func seed(t *testing.T, owner *ledger.Store, n int) []seededRun {
 		switch r.status {
 		case StatusRetired:
 			appendOrFail(ctx, t, owner, base(event.EventTypeRunRetired))
-		case StatusExpired:
-			expired := base(event.EventTypeRunExpired)
-			expired[event.FieldSource] = event.SourceReaper
-			appendOrFail(ctx, t, owner, expired)
+		case StatusLapsed:
+			// The reaper withdrawing a credential. It reads Lapsed rather than
+			// Abandoned because the fixture writes it now and the horizon is
+			// measured in days — see TestAPI030.
+			withdrawn := base(event.EventTypeRunExpired)
+			withdrawn[event.FieldSource] = event.SourceReaper
+			appendOrFail(ctx, t, owner, withdrawn)
 		}
 		out = append(out, r)
 	}
@@ -294,8 +297,8 @@ func TestAPI003PaginationFilteringAndSearchHappenServerSide(t *testing.T) {
 			// and the filter says so.
 			{"repo", RunFilter{Repo: "github.com/innsegl/two"},
 				func(r seededRun) bool { return r.repo == "github.com/innsegl/two" }},
-			{"status", RunFilter{Status: StatusExpired},
-				func(r seededRun) bool { return r.status == StatusExpired }},
+			{"status", RunFilter{Status: StatusLapsed},
+				func(r seededRun) bool { return r.status == StatusLapsed }},
 			{"free text over the task", RunFilter{Search: "JIRA-11"},
 				func(r seededRun) bool { return strings.Contains(r.taskRef, "JIRA-11") }},
 			{"free text over the run id", RunFilter{Search: "run-01"},
@@ -331,19 +334,19 @@ func TestAPI003PaginationFilteringAndSearchHappenServerSide(t *testing.T) {
 	})
 
 	t.Run("the run detail carries the timeline with its sources", func(t *testing.T) {
-		var expired string
+		var lapsed string
 		for _, r := range seeded {
-			if r.status == StatusExpired {
-				expired = r.runID
+			if r.status == StatusLapsed {
+				lapsed = r.runID
 				break
 			}
 		}
-		d, err := s.Run(ctx, expired)
+		d, err := s.Run(ctx, lapsed)
 		if err != nil {
-			t.Fatalf("Run(%s): %v", expired, err)
+			t.Fatalf("Run(%s): %v", lapsed, err)
 		}
-		if d.Status != StatusExpired {
-			t.Errorf("run %s reads as %s, the fixture expired it", expired, d.Status)
+		if d.Status != StatusLapsed {
+			t.Errorf("run %s reads as %s, the fixture withdrew its credential", lapsed, d.Status)
 		}
 		if len(d.Timeline) == 0 {
 			t.Fatal("the run detail carries no timeline; FD §3.3 makes it the view")
@@ -405,5 +408,103 @@ func TestTheOverviewCountsWithoutInventingAVerdict(t *testing.T) {
 	if o.DataAsOf.IsZero() {
 		t.Error("the overview carries no data-as-of timestamp; FD §4.4 requires one " +
 			"on every view that can be serving degraded data")
+	}
+}
+
+// API-029 — a withdrawn run that speaks again reads as active, not as dead.
+//
+// THE BUG THIS PINS. `bool_or(event_type = 'run_expired')` made withdrawal a
+// terminal state, so once the reaper had withdrawn a credential the run read
+// "expired" for the rest of its life however hard it went on working. Measured
+// on the operator's own deployment, 2026-09-18: two runs expired on 2026-09-16
+// carried 656 and 876 tool calls afterwards, the newest of them landing in the
+// same minute the dashboard was telling the operator that nothing was active.
+//
+// The reaper withdraws a credential from a run that went QUIET. A run that
+// speaks again has answered the only question the reaper was asking, and
+// get_credential restores its entry, so the deployment already treats it as
+// alive — the read side was the last place still calling it dead.
+//
+// This is not a liveness inference (E7): it is two recorded facts and their
+// order. The expiry stays in the timeline; only which fact names the state
+// changes. A retirement is different and stays terminal — someone SAID stop.
+func TestAPI029AWithdrawnRunThatSpeaksAgainIsActive(t *testing.T) {
+	owner, _, readerDSN := migrated(t)
+	ctx := t.Context()
+	s, _ := readStore(t, readerDSN)
+
+	mk := func(runID, eventType, source string) event.Fields {
+		f := event.Fields{
+			event.FieldEventType: eventType,
+			event.FieldRunID:     runID,
+			event.FieldSpiffeID:  "spiffe://innsegl.dev/agent/fix-ci/jira-1/" + runID,
+			event.FieldSource:    source,
+		}
+		switch eventType {
+		case event.EventTypeRunRegistered:
+			// ADR-0004: only the registration carries one. run_retired and
+			// run_expired are refused outright if given a key.
+			f[event.FieldIdempotencyKey] = runID + "-register"
+			f[event.FieldAgentType] = "fix-ci"
+			f[event.FieldTaskRef] = "JIRA-1"
+			f[event.FieldRepo] = "github.com/innsegl/one"
+			f[event.FieldBranch] = "main"
+		case event.EventTypeToolCall:
+			f[event.FieldToolName] = "observe_tool_call"
+			f[event.FieldIdempotencyKey] = runID + "-call"
+		}
+		return f
+	}
+
+	// came-back: registered, expired by the reaper, then works again.
+	for _, step := range []struct{ typ, src string }{
+		{event.EventTypeRunRegistered, event.SourceMCP},
+		{event.EventTypeRunExpired, event.SourceReaper},
+		{event.EventTypeToolCall, event.SourceMCP},
+	} {
+		f := mk("run-cameback", step.typ, step.src)
+		appendOrFail(ctx, t, owner, f)
+	}
+
+	// stayed-quiet: the control. Without it this test would pass on a status
+	// column that had simply stopped saying "expired" at all.
+	for _, step := range []struct{ typ, src string }{
+		{event.EventTypeRunRegistered, event.SourceMCP},
+		{event.EventTypeRunExpired, event.SourceReaper},
+	} {
+		f := mk("run-quiet", step.typ, step.src)
+		appendOrFail(ctx, t, owner, f)
+	}
+
+	// retired-then-noisy: a retirement is a decision, not an observation of
+	// silence, so a straggling call after it must NOT resurrect the run.
+	for _, step := range []struct{ typ, src string }{
+		{event.EventTypeRunRegistered, event.SourceMCP},
+		{event.EventTypeRunRetired, event.SourceMCP},
+		{event.EventTypeToolCall, event.SourceMCP},
+	} {
+		f := mk("run-retired", step.typ, step.src)
+		appendOrFail(ctx, t, owner, f)
+	}
+
+	want := map[string]string{
+		"run-cameback": StatusActive,
+		"run-quiet":    StatusLapsed,
+		"run-retired":  StatusRetired,
+	}
+	page, err := s.ListRuns(ctx, RunFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range page.Runs {
+		if _, ours := want[r.RunID]; ours {
+			got[r.RunID] = r.Status
+		}
+	}
+	for id, expect := range want {
+		if got[id] != expect {
+			t.Errorf("%s: status = %q, want %q", id, got[id], expect)
+		}
 	}
 }

@@ -68,7 +68,20 @@ short version:
 | `2` | the command line was not understood |
 | `3` | the dump restores but **disagrees** with a sealed segment — an integrity incident, not a backup |
 | `4` | the dump restores but **no sealed segments were available** to check it against — kept, unverified |
-| `5` | the dump could not be taken or could not be restored at all |
+| `5` | a dump was produced and is **not usable** — empty, or it will not restore. The ledger answered |
+| `6` | the **ledger could not be reached**, so no dump was attempted or none could be finished. Transient until shown otherwise |
+
+`5` and `6` are split because they mean opposite things to whatever is
+scheduling the backup. Nothing was learned about a dump that was never taken,
+so `6` is worth retrying in seconds; `5` and `3` are findings about a dump that
+exists, and a second attempt moments later just produces a second one. Which of
+the two a mid-run failure was is decided by asking the ledger again, never by
+reading the client's error text.
+
+Every failing run also prints what is at risk — how long since the last dump
+that actually verified, and how many events have been appended above it — and
+leaves those two lines in `$INNSEGL_BACKUP_DIR/.exposure`. A run that succeeds
+removes the file, so a stale number is never read as a current one.
 
 ## Three decisions, and why
 

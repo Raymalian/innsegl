@@ -400,10 +400,14 @@ func TestObserveToolCallAdvertisesTheDocumentedSchemas(t *testing.T) {
 	}
 	// RM-142 (#226) added session_id, and cwd and agent_type with it: a call
 	// that registers a session on first sight needs exactly what a start needs.
+	// RM-156 (#259) added parent_session_id for the same reason — a first-sight
+	// registration that could name no parent made every run it registered a
+	// root run, on the one path a harness reaches when its start was refused.
 	// Arguments are additive and are not a protected surface; tool names and
 	// error classes are, and neither moved.
 	assertSchemaProperties(t, "inputSchema", tool.InputSchema,
-		[]string{"run_id", "session_id", "tool", "body", "cwd", "agent_type", "run_token"})
+		[]string{"run_id", "session_id", "tool", "body", "cwd", "agent_type", "run_token",
+			"parent_session_id"})
 	assertSchemaProperties(t, "outputSchema", tool.OutputSchema,
 		[]string{"digest", "stored"})
 }

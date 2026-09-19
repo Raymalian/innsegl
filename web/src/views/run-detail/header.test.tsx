@@ -70,22 +70,23 @@ describe("FE-082 the run-detail header", () => {
     expect(text).toContain("Retired");
   });
 
-  it("distinguishes a run that expired from one that was retired", () => {
-    // doc 06 §3.2: expired "means an agent died unretired", which is a
-    // different fact and must not read as a tidy ending.
+  it("distinguishes a withdrawn run from one that was retired", () => {
+    // #256: a `run_expired` is the reaper withdrawing a credential from a run
+    // that went quiet. It is not an ending and must not read as one — the run
+    // can be resumed — so it gets its own cell rather than the "ended" one.
     const events = [
       ledgerEvent(EVENT_TYPES.runRegistered, 1),
       ledgerEvent(EVENT_TYPES.runExpired, 2, { source: "reaper" }),
     ];
-    const { text } = renderHeader(events, "expired");
-    expect(text).toContain("Expired");
+    const { text } = renderHeader(events, "lapsed");
+    expect(text).toContain("Credential withdrawn");
     expect(text).not.toContain("Retired");
   });
 
   it("says in a sentence that a running run has not ended, rather than blanking", () => {
     const events = [ledgerEvent(EVENT_TYPES.runRegistered, 1)];
     const { text } = renderHeader(events, "active");
-    expect(text).toContain("This run has no retirement or expiry event in the ledger.");
+    expect(text).toContain("This run has no retirement event in the ledger.");
   });
 
   it("lists the credential expiry history, every issue of it", () => {

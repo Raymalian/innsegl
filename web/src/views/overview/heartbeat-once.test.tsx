@@ -36,7 +36,9 @@ const NOW = new Date("2026-08-30T14:44:05Z");
 const DATA: OverviewData = {
   active_runs: 7,
   retired_runs: 41,
-  expired_runs: 2,
+  lapsed_runs: 2,
+  abandoned_runs: 0,
+  restore_horizon_seconds: 30 * 24 * 60 * 60,
   commits_recorded: 1284573,
   open_alerts: 0,
   anchor: {

@@ -75,12 +75,58 @@
 # name carrying a quote used to build a malformed request, and the transport's
 # two reply shapes needed two regexps that had to be kept in step.
 #
+# # Presenting a credential — #266
+#
+# #264's listener answers an unauthenticated caller with one byte-identical
+# 401, before the MCP session layer, so `initialize` is refused on the same
+# terms as a tool call. Four decisions, and each is the cheap half of a pair:
+#
+#   WHO MINTS. This file, for itself, by running the shipped
+#   `innsegl admin-credential mint` inside a throwaway container that mounts the
+#   deployment's private signing key READ-ONLY and has no network at all. The
+#   key is never copied onto this machine's filesystem and this file never sees
+#   it; the only value that crosses the boundary is the credential, on a pipe.
+#   A long-lived minting service would be a standing mint oracle; a container
+#   that lives for a fifth of a second and is reachable only through the Docker
+#   API adds no privilege that API did not already carry.
+#
+#   HOW OFTEN. Never, unless the listener refuses. The first attempt of a hook
+#   carries no credential; a 401 — and nothing else — mints one and repeats the
+#   same call exactly once. A deployment that does not enforce makes no 401,
+#   mints nothing and costs nothing, so single-listener mode is unchanged by
+#   construction rather than by a flag someone has to set correctly.
+#
+#   WHAT EXPIRY DOES. Nothing special, which is the point. A hook is a
+#   short-lived process, so within one the question rarely arises; when it does
+#   — the SubagentStop path can spend minutes signing an agent's leftover work
+#   before it retires the run — the next call is refused, a fresh credential is
+#   minted, and the call is repeated. No clock is read here and no `exp` is
+#   parsed: the server's own refusal is the only trigger, so there is never a
+#   second opinion about when a credential died.
+#
+#   WHERE IT IS KEPT. In one shell variable, for the life of one process. Not
+#   exported, so it reaches no child but the one handed it; not written, so no
+#   marker and no file on this machine holds it; not logged; and never in an
+#   argument vector — it travels to the client on STDIN, because `ps` shows the
+#   arguments of every process on this machine and a bearer token there is
+#   replayable for the rest of its fifteen minutes.
+#
+# AND A STOP STILL NEVER BLOCKS. A stop that cannot authenticate warns and exits
+# 0 like every other stop failure: the run expires on its TTL, which is what the
+# reaper is for, and a blocked stop was measured producing nine invocations.
+#
 # # Two rules that are not negotiable
 #
 # NEVER `exit 2` ON A STOP PATH. Measured: a blocked stop produced NINE repeated
 # invocations before the harness gave up — a retry storm, not a refusal. Every
 # failure on a stop path warns and exits 0. The run expires on its TTL, which is
 # what the TTL is for.
+#
+# THE CREDENTIAL IS MINTED, NEVER KEPT — #266. #264 put a repository-scoped
+# credential in front of all six identity-lifecycle tools, and every call this
+# file makes is to one of them. Measured before #266: `grep -c Authorization`
+# here returned 0, so the check could not be deployed without silencing every
+# registration on the machine. See "Presenting a credential" below.
 #
 # RECORDING IS BEST-EFFORT AND SAYS SO. A hook-based record is structurally
 # incomplete and that is not a bug to be fixed: a file written through `Bash` —
@@ -156,6 +202,45 @@ else
   IDENT_TYPE="${INNSEGL_SESSION_AGENT_TYPE:-session}"
 fi
 
+# THE SESSION THAT STARTED THIS ONE, in this harness's own vocabulary — and
+# nothing more than that. RM-156 (#259).
+#
+# This used to be a LOOKUP. The shim read a sibling marker file out of its own
+# cache and sent the run id it found there, which worked on the one path it was
+# written for: measured, 21 registrations out of 185 carried a parent and every
+# one came through SubagentStart. The first-sight registration a tool call
+# makes had none, because this file has no run id to give it at that point, and
+# neither has any other harness.
+#
+# So the lookup moved into the MCP, which is the only component holding the
+# durable session → run mapping. What is left here is the identifier this
+# harness already has. A subagent's parent is the session that spawned it; the
+# operator's own session has no parent, and absent is not an error — mcp_call
+# omits an empty value rather than sending one, and doc 02 §1 distinguishes
+# absent from empty.
+if [ -n "$AGENT_ID" ]; then
+  PARENT_IDENT="$SESSION_ID"
+else
+  PARENT_IDENT=""
+fi
+# A harness that reports one id for both is reporting no parent. Sending it
+# would be a session naming itself, which the MCP refuses — and a refused
+# SubagentStart is a subagent that does no work.
+[ "$PARENT_IDENT" != "$IDENT" ] || PARENT_IDENT=""
+
+# tree_key names the pointer a working tree is indexed by, in one place.
+#
+# Three callers now write or remove one — SessionStart, SubagentStart and
+# SubagentStop — and scripts/innsegl-commit.sh reads them. A derivation
+# repeated at each site is a derivation that can disagree at one of them, and a
+# pointer written under a key nobody reads is silent: attribution simply goes
+# back to being a throwaway identity per commit.
+tree_key() {
+  _t="$(CDPATH= cd -- "${1:-.}" 2>/dev/null && pwd -P)"
+  [ -n "$_t" ] || return 1
+  printf '%s' "$_t" | shasum -a 256 2>/dev/null | cut -c1-32
+}
+
 warn() { echo "innsegl: $*" >&2; }
 
 # say_detail passes on a reply's `detail`, which is how observe_session reports
@@ -164,11 +249,173 @@ warn() { echo "innsegl: $*" >&2; }
 # end a branch without deciding it.
 say_detail() { _d="$(reply_field "$1" detail)"; [ -n "$_d" ] && warn "  $_d"; return 0; }
 
+# ---------------------------------------------------------------------------
+# #266 — THE CREDENTIAL. One variable, one mint, written nowhere.
+# ---------------------------------------------------------------------------
+
+# Not exported. `export` here would hand the credential to every child this
+# hook runs — git, curl, shasum, the signer — and to anything they run, which
+# is precisely "an environment variable that outlives the call".
+ADMIN_CRED=""
+CRED_REPO=""
+CRED_REMEDY_SAID=""
+
+# Where this deployment's private signing key lives, as deploy/compose's own
+# volume and image names. Both overridable for a deployment that renamed either.
+ADMIN_KEY_VOLUME="${INNSEGL_ADMIN_KEY_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-admin-key}"
+ADMIN_KEY_PATH="${INNSEGL_ADMIN_KEY_PATH:-/k/signing.key}"
+ADMIN_IMAGE="${INNSEGL_IMAGE:-innsegl:local}"
+
+# repo_id_of prints doc 02 §5's host/org/name for a working tree, or nothing.
+#
+# THIS IS THE ONE DERIVATION E11 COULD NOT TAKE, and it is here for a reason
+# that does not apply to branch, task or worktree: those are things the ledger
+# records and `describe_workspace` answers, while this names the repository a
+# CREDENTIAL AUTHORISES — and the credential has to exist before the call that
+# would ask. There is no order of operations in which the server answers it.
+#
+# `git remote get-url` and not `git config --get remote.origin.url`, because
+# the MCP's own repoIDFromWorktree uses the former: only it applies an
+# operator's `insteadOf` rewrites, and a caller that skipped them would derive
+# a repository the server does not agree with — refused, with a listener that
+# by design will not say why. scripts/innsegl-commit.sh carries the same
+# pipeline and shim-selftest.sh pins the two against each other.
+#
+# doc 02 §5 lowercases the HOST and leaves the org and the name alone, so
+# `github.com/Example-Org/Example-Repo` is correct and lowercasing all three
+# names a repository that does not exist on a case-sensitive forge.
+repo_id_of() {
+  [ -n "${1:-}" ] && [ -d "$1" ] || return 1
+  git -C "$1" remote get-url origin 2>/dev/null \
+    | sed -e 's|^[a-z][a-z0-9+.-]*://||' -e 's|^git@||' -e 's|:|/|' -e 's|\.git$||' -e 's|/*$||' \
+    | awk -F/ 'NF>=3 { h = tolower($1); p = $2; for (i = 3; i <= NF; i++) p = p "/" $i; print h "/" p }'
+}
+
+# cred_repo prints the repository a credential for this event must authorise.
+#
+# FOUR SOURCES, MOST AUTHORITATIVE FIRST, because a stop carries no cwd:
+#
+#   1  INNSEGL_REPO_ID     an operator who has said it outright
+#   2  the marker's `repo` THE MCP'S OWN ANSWER, recorded at registration. This
+#                          is the one that cannot disagree with the server, so
+#                          it is preferred over anything derived here.
+#   3  the harness's cwd   what every start and every PostToolUse carries
+#   4  the marker's `dir`  where the harness said the run was working, which is
+#                          what a SubagentStop has instead of a cwd
+#
+# Answered once and remembered for the process; a hook handles one event about
+# one repository.
+cred_repo() {
+  [ -n "$CRED_REPO" ] && { printf '%s' "$CRED_REPO"; return 0; }
+  if [ -n "${INNSEGL_REPO_ID:-}" ]; then
+    CRED_REPO="$INNSEGL_REPO_ID"
+  else
+    _mark="$(recall)"
+    CRED_REPO="$(reply_field "${_mark:-}" repo)"
+    if [ -z "$CRED_REPO" ]; then
+      for _d in "$CWD" "$(reply_field "${_mark:-}" dir)" "$PWD"; do
+        [ -n "$_d" ] || continue
+        CRED_REPO="$(repo_id_of "$_d")"
+        [ -n "$CRED_REPO" ] && break
+      done
+    fi
+  fi
+  [ -n "$CRED_REPO" ] || return 1
+  printf '%s' "$CRED_REPO"
+}
+
+# mint_admin_credential fills $ADMIN_CRED, or says what to run and fails.
+#
+# THE KEY IS READ WHERE IT LIVES. The deployment's one-shot writes it 0400 and
+# root-owned onto a volume nothing else in the stack mounts; this runs the
+# shipped mint command against that volume READ-ONLY, in a container with no
+# network, no writable root filesystem and no privilege escalation, which
+# prints one credential and exits. `--user 0:0` because 0400 root-owned is the
+# point — the image's own 1000:1000 cannot read it, so neither could a
+# compromised innsegl-mcp, which does not mount this volume at all.
+#
+# A TIMEOUT WHEN THE SYSTEM HAS ONE. A wedged container runtime must not wedge
+# a harness hook; where `timeout` is absent the mint is still bounded by docker
+# failing fast against a daemon that is not there.
+mint_admin_credential() {
+  _scope="$(cred_repo)" || {
+    warn "no repository could be named for this event, so no credential can be minted for it"
+    return 1
+  }
+  _limit=""
+  command -v timeout >/dev/null 2>&1 && _limit="timeout ${INNSEGL_ADMIN_CREDENTIAL_TIMEOUT:-20}"
+  ADMIN_CRED=""
+  if [ -n "${INNSEGL_ADMIN_CREDENTIAL_MINT:-}" ]; then
+    # An operator whose signing key is not on this machine's container volume:
+    # any command that prints one credential for the repository it is given.
+    # Deliberately word-split — a command with its own arguments is the normal
+    # case.
+    ADMIN_CRED="$($INNSEGL_ADMIN_CREDENTIAL_MINT "$_scope" 2>/dev/null)" || ADMIN_CRED=""
+  elif command -v docker >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    ADMIN_CRED="$($_limit docker run --rm --network none --read-only --user 0:0 \
+      --security-opt no-new-privileges \
+      -v "$ADMIN_KEY_VOLUME:$(dirname "$ADMIN_KEY_PATH"):ro" \
+      "$ADMIN_IMAGE" \
+      admin-credential mint -key "$ADMIN_KEY_PATH" -repo "$_scope" 2>/dev/null)" || ADMIN_CRED=""
+  fi
+  ADMIN_CRED="$(printf '%s' "$ADMIN_CRED" | tr -d '\r\n')"
+  [ -n "$ADMIN_CRED" ] || { credential_remedy "$_scope"; return 1; }
+  return 0
+}
+
+# credential_remedy — a refusal that says what to run, once per process.
+#
+# The listener answers every credential failure with one byte-identical
+# sentence, because a distinguishable reason is an oracle over which audiences
+# and repositories exist. That makes THIS the only place an operator can be
+# told what to do, and a 401 with no remedy strands an agent holding finished
+# work.
+credential_remedy() {
+  [ -z "$CRED_REMEDY_SAID" ] || return 0
+  CRED_REMEDY_SAID=1
+  warn "the identity lifecycle at $ADMIN_URL requires a repository-scoped"
+  warn "  credential and none could be minted for ${1:-this repository}."
+  warn ""
+  warn "  Mint one against this deployment's signing key:"
+  warn "    docker run --rm --network none --user 0:0 \\"
+  warn "      -v $ADMIN_KEY_VOLUME:$(dirname "$ADMIN_KEY_PATH"):ro $ADMIN_IMAGE \\"
+  warn "      admin-credential mint -key $ADMIN_KEY_PATH -repo ${1:-<host/org/name>}"
+  warn ""
+  warn "  The key is written by the deployment's own one-shot, so an empty"
+  warn "  volume means the stack has never been up with the lifecycle split:"
+  warn "    make innsegl-up"
+  warn ""
+  warn "  Minting elsewhere: set INNSEGL_ADMIN_CREDENTIAL_MINT to a command"
+  warn "  that prints one credential for the repository it is given."
+  warn ""
+  warn "  The listener will never say why one is inadmissible. Ask on this"
+  warn "  machine instead: innsegl admin-credential verify -jwks <set>"
+}
+
 # One MCP call: mcp_call <tool> <name> <value> ... → the tool's result object.
+#
+# THE REFUSAL IS THE ONLY TRIGGER (#266). The first attempt carries whatever
+# credential is held, which on a fresh hook is none; status 3 means the
+# listener refused one, and the answer is to mint and repeat the SAME call
+# once. That one branch covers every case there is: a listener that enforces,
+# a credential that aged out between two calls of a long stop, and a
+# deployment that enforces nothing — which never returns 3, so never mints.
+#
+# EXACTLY ONCE, because a loop here is a loop against a server that has already
+# said no.
 mcp_call() {
   _tool="$1"
   shift
-  python3 -c "$MCP_CLIENT" "$ADMIN_URL" "$_tool" "$@" 2>/dev/null
+  _out="$(printf '%s\n' "$ADMIN_CRED" | python3 -c "$MCP_CLIENT" "$ADMIN_URL" "$_tool" "$@" 2>/dev/null)"
+  _rc=$?
+  if [ "$_rc" -eq 3 ] && mint_admin_credential; then
+    _out="$(printf '%s\n' "$ADMIN_CRED" | python3 -c "$MCP_CLIENT" "$ADMIN_URL" "$_tool" "$@" 2>/dev/null)"
+    _rc=$?
+    [ "$_rc" -eq 3 ] && credential_remedy "$CRED_REPO"
+  fi
+  printf '%s' "$_out"
+  return "$_rc"
 }
 
 # THE CLIENT ITSELF, in one place, because a shim's transport should be the
@@ -186,11 +433,28 @@ mcp_call() {
 # of an observed tool call travels in argv, so a harness event larger than
 # ARG_MAX fails the call rather than being silently truncated — the tool bounds
 # one body at a mebibyte in any case.
+#
+# EVERY VALUE IS A STRING EXCEPT `bool:true` AND `bool:false`, which are sent as
+# JSON booleans. A tool schema that declares a boolean refuses the string
+# "true", and the refusal would arrive as a stop that did not happen — silent,
+# because a stop never blocks. The prefix is explicit rather than inferred:
+# coercing every value that happens to read `true` would rewrite a harness
+# event body, a task or a branch name that spelled it.
 MCP_CLIENT='
-import json, sys, urllib.request
+import json, sys, urllib.error, urllib.request
 
 url, tool = sys.argv[1], sys.argv[2]
-args = {k: v for k, v in zip(sys.argv[3::2], sys.argv[4::2]) if v != ""}
+args = {}
+for name, value in zip(sys.argv[3::2], sys.argv[4::2]):
+    if value == "":
+        continue
+    args[name] = value == "bool:true" if value in ("bool:true", "bool:false") else value
+
+# THE CREDENTIAL ARRIVES ON STDIN and reaches no other surface (#266). Not in
+# argv, which `ps` publishes to every process on this machine; not in the
+# environment, which /proc publishes to every process of this user; not in a
+# file, which outlives both. One line, read once, held in one local.
+credential = sys.stdin.readline().strip()
 
 def post(payload, session=None, timeout=60):
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
@@ -198,6 +462,8 @@ def post(payload, session=None, timeout=60):
         "Accept": "application/json, text/event-stream"})
     if session:
         req.add_header("Mcp-Session-Id", session)
+    if credential:
+        req.add_header("Authorization", "Bearer " + credential)
     with urllib.request.urlopen(req, timeout=timeout) as reply:
         return reply.headers.get("Mcp-Session-Id"), reply.read().decode("utf-8", "replace")
 
@@ -213,6 +479,13 @@ try:
     post({"jsonrpc": "2.0", "method": "notifications/initialized"}, session, timeout=10)
     _, raw = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                    "params": {"name": tool, "arguments": args}}, session)
+except urllib.error.HTTPError as refused:
+    # 3, AND NOTHING ELSE IS READ FROM IT. #264 wraps the whole admin handler,
+    # so the refusal may land on `initialize` or on the call itself; either way
+    # the body is one byte-identical sentence that says nothing about what was
+    # wrong, and the caller mints a credential and repeats the call. Every
+    # other status is a transport failure like any other.
+    sys.exit(3 if refused.code == 401 else 1)
 except Exception:
     sys.exit(1)
 
@@ -268,35 +541,15 @@ body = json.load(sys.stdin); body["dir"] = sys.argv[1]; print(json.dumps(body))
 
 recall() { cat "$MARKER" 2>/dev/null; }
 
-# parent_run prints the run that STARTED this one, or nothing.
+# THE PARENT LOOKUP THAT USED TO BE HERE IS GONE — RM-156 (#259).
 #
-# ADR-0045's third member (RM-135, #214). A subagent is keyed by its agent id
-# and the session that spawned it is keyed by the session id, so the parent's
-# marker is the sibling file named by SESSION_ID — this shim already writes one
-# per identity and this reads the other one.
-#
-# NOTHING IS PRINTED WHEN THERE IS NO PARENT, and that is three cases, not one:
-# a main session (whose KEY already IS the session id), a subagent whose parent
-# session never registered because the deployment was down, and a harness that
-# reports no session id at all. All three are root runs, absent is not an error,
-# and mcp_call omits an empty value rather than sending one — doc 02 §1
-# distinguishes absent from empty, and a root run naming an empty parent would
-# be claiming one it does not have.
-# THE PARENT'S MARKER IS NAMED `session-<id>`, NOT `<id>`, and getting that
-# wrong is silent: parent_run simply found no file and every subagent stayed a
-# root run, which is indistinguishable from having no parent. Measured — the
-# first version of this read $RUNS_DIR/$SESSION_ID and the selftest case that
-# asserts the edge went red against a shim that looked correct.
-#
-# The prefix exists because a subagent's marker is keyed on its AGENT id and a
-# session's on its session id, and the two id spaces are not guaranteed
-# disjoint. The same reason IDENT exists above.
-parent_run() {
-  [ -n "${SESSION_ID:-}" ] || return 0
-  _parent_key="session-${SESSION_ID}"
-  [ "$_parent_key" != "$KEY" ] || return 0
-  reply_field "$(cat "$RUNS_DIR/$_parent_key" 2>/dev/null)" run_id
-}
+# It read a sibling marker file, pulled `run_id` out of it, and sent that run id
+# to observe_session. Everything about it was right except where it lived: it
+# resolved a run, which is the one thing E11 says no harness should have to
+# know about, and so the two registration paths that hold no run id — the
+# first-sight registration a tool call makes, and the signer — could not have
+# an edge at all. See PARENT_IDENT above: this file now forwards the session
+# identifier it already has, and the MCP resolves it.
 
 # ---------------------------------------------------------------------------
 # The signer, resolved most portable first.
@@ -320,6 +573,142 @@ signer() {
   else
     printf '%s' "$(CDPATH= cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd -P)/innsegl-commit.sh"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# WHAT A STOPPING RUN CAN ACCOUNT FOR — #261 (RM-158).
+#
+# THE BOUND IS ON THE COMMIT, NOT ON THE `git add`. That distinction is the
+# whole of this change and the first fix missed it: a bound was added that read
+# the run's own tool-call bodies and staged only the files they named, it passed
+# 27 assertions, and a nine-file capture went through it days later. `git add`
+# REMOVES NOTHING, and the capture commits the INDEX — so anything another party
+# had already staged was committed under the stopping run regardless of what the
+# bound picked. The test proved the bound chose the right files. It never asked
+# what was committed.
+#
+# So the question this answers is not "which files may I add" but "is everything
+# that would be COMMITTED something this run can show it wrote". If the answer
+# is no, the whole capture is refused (issue #261, option 3) and the work stays
+# exactly where it was, staged, with the run named so it can be signed later.
+#
+# NOTHING IS GUESSED FROM A SHELL COMMAND, and that is deliberate rather than
+# unfinished. The measured run made 62 `Bash` calls, 27 of which write to a file
+# through `>`, `>>` or a heredoc, against 1 `Write` and 1 `Edit` — so the record
+# of what an agent wrote is structurally incomplete, exactly as the header says.
+# The available answer would be to parse redirections out of the commands and
+# stage what they seem to name. That is `git add -A` with more steps: it takes a
+# shell grammar this file cannot evaluate — variables, pipelines, `cd`, a
+# command substitution that prints a path — and turns a guess into a signature
+# that verifies forever under a named identity. A run whose writes went through
+# `Bash` therefore accounts for nothing, its capture is refused, and the refusal
+# says which run to sign the work under. Under-capturing leaves work unsigned;
+# over-capturing signs a lie.
+#
+# It answers with eight variables rather than a status, because every caller
+# below needs the counts to say anything useful to the operator:
+#
+#   ACC_TOP            the repository's own tree, which is what the index is of
+#   ACC_READ           1 if the run has a body store to be asked at all
+#   ACC_INDEX          1 if the index could be read
+#   ACC_WROTE          its writes, one per line, relative to ACC_TOP
+#   ACC_WROTE_N        how many
+#   ACC_STAGED_N       how many paths the index holds
+#   ACC_UNACCOUNTED_N  how many of those the run cannot show it wrote
+#   ACC_UNACCOUNTED    the first of them, for a message a human can act on
+#
+# THE REPOSITORY'S TREE AND NOT THE EVENT'S cwd. `git diff --cached` names paths
+# from the top of the worktree while `git add` reads them from wherever it is
+# run, so a harness working in a subdirectory would compare two different
+# spellings of the same file and find every one of them unaccounted for.
+CAPTURE_ACCOUNT='
+import json, os, pathlib, shlex, subprocess, sys
+
+bodies, cwd = sys.argv[1], sys.argv[2]
+
+def git(where, *args):
+    return subprocess.run(("git", "-C", where) + args, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, timeout=60
+                          ).stdout.decode("utf-8", "replace")
+
+top, read, index, wrote, staged = "", "0", "0", set(), []
+try:
+    top = git(cwd, "rev-parse", "--show-toplevel").strip()
+except Exception:
+    top = ""
+if top:
+    top = os.path.realpath(top)
+    if os.path.isdir(bodies):
+        read = "1"
+        for f in sorted(pathlib.Path(bodies).glob("*.json")):
+            try:
+                d = json.loads(f.read_text())
+            except Exception:
+                continue
+            # THE THREE TOOLS THAT NAME A FILE. A Bash command names none, and
+            # is not read: see the comment above for why guessing is worse than
+            # refusing.
+            if d.get("tool_name") not in ("Edit", "Write", "NotebookEdit"):
+                continue
+            fp = (d.get("tool_input") or {}).get("file_path")
+            if not isinstance(fp, str) or not fp:
+                continue
+            real = os.path.realpath(fp if os.path.isabs(fp) else os.path.join(cwd, fp))
+            if real.startswith(top + os.sep):
+                wrote.add(os.path.relpath(real, top))
+    try:
+        # -z, so a path carrying a quote or a space arrives as one value. Without
+        # it git quotes such a name and the comparison below never matches it,
+        # which would read as unaccounted and refuse every capture in that tree.
+        staged = [p for p in git(top, "diff", "--cached", "--name-only", "-z").split("\0") if p]
+        index = "1"
+    except Exception:
+        index = "0"
+
+unaccounted = sorted(set(staged) - wrote)
+for name, value in (
+    ("ACC_TOP", top),
+    ("ACC_READ", read),
+    ("ACC_INDEX", index),
+    ("ACC_WROTE", "\n".join(sorted(wrote))),
+    ("ACC_WROTE_N", str(len(wrote))),
+    ("ACC_STAGED_N", str(len(staged))),
+    ("ACC_UNACCOUNTED_N", str(len(unaccounted))),
+    ("ACC_UNACCOUNTED", "\n".join(unaccounted[:10])),
+):
+    print(name + "=" + shlex.quote(value))
+'
+
+# capture_account <body dir> <the tree the run worked in> → the variables above.
+#
+# Defaulted BEFORE the eval, so a machine with no python3, a body store that
+# cannot be read or a tree that is not a repository leaves the caller looking at
+# "nothing is accounted for" — which refuses — rather than at `set -u` killing
+# the stop. A stop never blocks, and a stop that died here would leave the run
+# Active for the reaper.
+capture_account() {
+  ACC_TOP=""; ACC_READ=0; ACC_INDEX=0; ACC_WROTE=""; ACC_WROTE_N=0
+  ACC_STAGED_N=0; ACC_UNACCOUNTED_N=0; ACC_UNACCOUNTED=""
+  eval "$(python3 -c "$CAPTURE_ACCOUNT" "$1" "$2" 2>/dev/null)"
+}
+
+# capture_remedy — what a refused capture leaves the operator holding.
+#
+# A REFUSAL THAT STRANDS THE WORK IS WORSE THAN THE MISATTRIBUTION IT PREVENTS.
+# The run is gone by the time this prints; the only party left who can sign its
+# work is whoever reads this line, and they need the run id, because without
+# `-r` the signer mints a throwaway identity and the work is credited to nobody.
+# So this names the run, the tree, and the command — and it changes nothing on
+# disk, so what was staged is still staged.
+capture_remedy() {
+  warn ""
+  warn "  Nothing was staged or unstaged; the work is where you left it."
+  warn "  $RUN_ID wrote ${ACC_WROTE_N:-0} path(s) in that tree. To sign its own work under it:"
+  warn "    cd $DIR"
+  warn "    git add <the paths that run wrote>"
+  warn "    $(signer) -r $RUN_ID${TASK:+ -t $TASK} -m \"<type>(<scope>): <what changed>\""
+  warn "  Whatever else is in the index belongs to whoever staged it, and signing"
+  warn "  it under this run would attribute their work to this agent (#261)."
 }
 
 # Sourcing this file defines its functions, dispatches nothing, and pulls in the
@@ -384,6 +773,39 @@ case "$EVENT" in
     RUN_ID="$(reply_field "$REPLY" run_id)"
     [ -n "$RUN_ID" ] || exit 0
     remember "$REPLY" "$CWD" || warn "could not write this session's marker under $RUNS_DIR"
+
+    # AND A POINTER KEYED BY THE WORKING TREE, so that the SIGNER has a parent
+    # to name — RM-156 (#259).
+    #
+    # Measured 2026-09-18: 87 `orchestrator` runs in the ledger, every one of
+    # them registered by scripts/innsegl-commit.sh, and not one carrying a
+    # parent. That is not because they had none. A shell command cannot
+    # discover which agent it is inside — no environment variable carries an
+    # agent or a session id — and the signer has neither, so it had nothing to
+    # send and nothing the MCP could resolve for it.
+    #
+    # The working tree is the one thing both sides can see, which is the same
+    # observation the subagent pointer below rests on. This is its sibling, and
+    # it answers a different question: not "which run signs here" but "which
+    # session is this tree's".
+    #
+    # IT CANNOT COLLIDE WITH THE SUBAGENT POINTER. That one's name is exactly
+    # the 32 hex characters of the tree key, and SubagentStop removes that exact
+    # name; this one carries a `.session` suffix, which no tree key can spell.
+    # Getting that wrong would be silent in the worst way — a SubagentStop would
+    # delete the session's pointer and every later commit in the tree would go
+    # back to being parentless, which is indistinguishable from this change
+    # never having been made.
+    #
+    # Line 2 is not read by anything. It is there so a human opening the file
+    # can see which session the run at the top of it belongs to.
+    _key="$(tree_key "$CWD" || true)"
+    if [ -n "$_key" ] && mkdir -p "$RUNS_DIR/by-tree" 2>/dev/null; then
+      printf '%s\n%s\n' "$RUN_ID" "$SESSION_ID" \
+        > "$RUNS_DIR/by-tree/$_key.session" 2>/dev/null \
+        || warn "could not write this tree's session pointer; commits here will name no parent"
+    fi
+
     warn "this session is $RUN_ID (task $(reply_field "$REPLY" task))"
     say_detail "$REPLY"
 
@@ -415,12 +837,35 @@ case "$EVENT" in
     # Never exit 2. See the header.
     [ -n "$SESSION_ID" ] || exit 0
     [ -f "$MARKER" ] || exit 0
+    # READ BEFORE THE MARKER IS REMOVED. It is the only record of which tree
+    # this session's pointer was keyed on, and it is deleted a few lines below.
+    END_DIR="$(reply_field "$(recall)" dir)"
     # if/else rather than `&& { ... } || ...`: a block whose LAST command is a
     # conditional warn returns that condition's status, so the `||` arm fires
     # after a successful stop and the hook reports the retirement and its own
     # failure in the same breath. Measured in RM-129's live run, which printed
     # "retired <run>" and "could not retire <run>" one after the other.
-    if REPLY="$(mcp_call observe_session session_id "$SESSION_ID" phase stop)"; then
+    # AND IT ENDS WHAT IT STARTED — RM-157 (#260).
+    #
+    # THIS HOOK IS THE ONLY PARTY THAT KNOWS. A subagent killed with its session
+    # fires no SubagentStop, so nothing ever ends its run: measured, five
+    # subagent runs sat Active for between three and nine hours after the
+    # processes were gone, and an operator closed them by hand. The reaper is
+    # not the answer — its grace is twelve hours by policy, and shortening it
+    # kills working agents, which is the whole of E9.
+    #
+    # WHAT THIS HOOK IS CLAIMING by sending it: the processes behind the runs
+    # this session started are gone, because this session is what started them
+    # and it is ending now. That is true at SessionEnd and it is not true
+    # anywhere else, which is why no other branch of this file sends it — not
+    # PostToolUse, not PreToolUse, and not a start. A harness that sent it while
+    # its subagents were still working would end live agents under its own
+    # identity, permanently.
+    #
+    # It defaults to off in the MCP, so a harness that never learns about it
+    # keeps exactly today's behaviour.
+    if REPLY="$(mcp_call observe_session session_id "$SESSION_ID" phase stop \
+      ends_descendants bool:true)"; then
       warn "retired $(reply_field "$REPLY" run_id)"
       say_detail "$REPLY"
     else
@@ -430,6 +875,17 @@ case "$EVENT" in
     # the mapping a later stop retries from, so removing this loses nothing —
     # which is precisely what moving the bookkeeping bought.
     rm -f "$MARKER"
+    # AND THE TREE'S SESSION POINTER GOES WITH IT. The run it names has just
+    # been retired, and register_agent refuses a retired parent: a pointer left
+    # behind would make every commit in this tree take the fallback path, warn
+    # about a stale pointer, and register with no parent anyway. The reply's own
+    # cwd is not available on this event, so the marker's is what names the tree
+    # — the same value SessionStart keyed it on, read above before the marker
+    # went.
+    if [ -n "$END_DIR" ]; then
+      _key="$(tree_key "$END_DIR" || true)"
+      [ -n "$_key" ] && rm -f "$RUNS_DIR/by-tree/$_key.session" 2>/dev/null
+    fi
     exit 0
     ;;
 
@@ -438,17 +894,22 @@ case "$EVENT" in
     # that refuses, and the refusal is the enforcement.
     [ -n "$AGENT_ID" ] || exit 0
 
-    # THE PARENT RUN (RM-135, #214). The subagent's work was always attributed;
-    # what was missing is the EDGE — a reader could see both runs and not see
-    # that one produced the other, which is what "who did this work" resolves to
-    # the moment an orchestrator delegates.
+    # THE PARENT SESSION (RM-135, #214; RM-156, #259). The subagent's work was
+    # always attributed; what was missing is the EDGE — a reader could see both
+    # runs and not see that one produced the other, which is what "who did this
+    # work" resolves to the moment an orchestrator delegates.
     #
-    # An empty value is omitted by mcp_call, so a subagent whose parent never
-    # registered stays a root run rather than naming a parent that is not there.
+    # THE SESSION ID, NOT A RUN ID. This file used to resolve the run itself and
+    # send that; the resolution is the MCP's now, because it is the part every
+    # other harness would otherwise have to reimplement. An empty value is
+    # omitted by mcp_call, so a subagent whose harness reports no session stays
+    # a root run rather than naming a parent that is not there — and so does one
+    # whose parent session this deployment has never seen, which the MCP answers
+    # with a root run and a `detail` rather than with a refusal.
     REPLY="$(mcp_call observe_session \
       session_id "$AGENT_ID" phase start cwd "$CWD" \
       agent_type "${AGENT_TYPE:-subagent}" \
-      parent_run_id "$(parent_run)")" || {
+      parent_session_id "$PARENT_IDENT")" || {
       warn "refused — no identity could be issued for this subagent."
       [ -n "${REPLY:-}" ] && warn "  $(reply_field "$REPLY" message | cut -c1-300)"
       warn "  No identity, no attributed work (IP §6.1). Bring the deployment up:"
@@ -501,10 +962,9 @@ case "$EVENT" in
     # throwaway identity per commit: 53 signed commits under ephemeral runs
     # while all 16 agent runs that did the work showed "Signed nothing". The
     # tree is the one thing both sides can see.
-    _tree="$(CDPATH= cd -- "${CWD:-.}" 2>/dev/null && pwd -P)"
-    if [ -n "$_tree" ] && mkdir -p "$RUNS_DIR/by-tree" 2>/dev/null; then
-      _key="$(printf '%s' "$_tree" | shasum -a 256 2>/dev/null | cut -c1-32)"
-      [ -n "$_key" ] && printf '%s\n%s\n%s\n' \
+    _key="$(tree_key "$CWD" || true)"
+    if [ -n "$_key" ] && mkdir -p "$RUNS_DIR/by-tree" 2>/dev/null; then
+      printf '%s\n%s\n%s\n' \
         "$RUN_ID" "$(reply_field "$REPLY" task)" "$WT" \
         > "$RUNS_DIR/by-tree/$_key" 2>/dev/null
     fi
@@ -543,29 +1003,103 @@ case "$EVENT" in
         TASK="$(reply_field "$MARK" task)"
         WT="$(reply_field "$MARK" worktree)"
         TYPE="${AGENT_TYPE:-$(reply_field "$MARK" agent_type)}"
-        warn "$RUN_ID left $dirty uncommitted path(s) and signed nothing; capturing"
-        git -C "$DIR" add -A 2>/dev/null || true
-        MSG="chore(agent): work left by $TYPE run $RUN_ID
+        # ONLY WHAT THIS RUN WROTE, AND ONLY IF THAT IS ALL THERE IS (#261).
+        #
+        # `git add -A` staged the whole tree, so a run became the signed author of
+        # whatever else happened to be uncommitted. Measured three times on
+        # 2026-09-18: a read-only review subagent signed 12 files and ~890 lines it
+        # had only read; a second capture took another agent's in-flight work, which
+        # that agent had to soft-reset and re-commit; a third took a one-line edit
+        # the session made. Each verified against Fulcio and Rekor under the wrong
+        # identity — worse than unsigned, because it is confidently wrong and
+        # permanent.
+        #
+        # The first answer bounded what was ADDED and left the commit unbounded,
+        # which fixed nothing an already-staged file could not walk straight past.
+        # This is the bound on the COMMIT: if the index holds anything this run
+        # cannot show it wrote, the WHOLE capture is refused. See capture_account.
+        _bodies="${INNSEGL_LOG_DIR:-$HOME/.innsegl/log}/$RUN_ID"
+        capture_account "$_bodies" "$DIR"
+
+        if [ "$ACC_READ" != "1" ] || [ "$ACC_INDEX" != "1" ]; then
+          # NO RECORD, NO CAPTURE. A run that cannot be asked what it touched must
+          # not have a tree signed on its behalf; that is the bug itself.
+          warn "$RUN_ID left $dirty uncommitted path(s) in $DIR and cannot be asked what it wrote."
+          if [ "$ACC_READ" != "1" ]; then
+            warn "  Its tool-call bodies are unreadable at $_bodies."
+          else
+            warn "  The index of that tree could not be read."
+          fi
+          warn "  Refusing the capture rather than signing work it may not have done (#261)."
+          capture_remedy
+        elif [ "$ACC_WROTE_N" = "0" ]; then
+          # A READ-ONLY RUN CAPTURES NOTHING, IN ANY TREE. This is the first
+          # measured incident, and the one an unbounded capture gets most wrong:
+          # there is no diff anywhere that belongs to this run.
+          warn "$RUN_ID recorded no file write, so it captures nothing of the $dirty uncommitted path(s) in $DIR."
+          if [ "$ACC_STAGED_N" != "0" ]; then
+            warn "  The $ACC_STAGED_N path(s) staged there are not this run's to sign and were left alone."
+          fi
+        elif [ "$ACC_UNACCOUNTED_N" != "0" ]; then
+          warn "$RUN_ID left $dirty uncommitted path(s) in $DIR, and the index already holds"
+          warn "  $ACC_UNACCOUNTED_N path(s) it cannot show it wrote:"
+          printf '%s\n' "$ACC_UNACCOUNTED" | while IFS= read -r _p; do
+            [ -n "$_p" ] && warn "    $_p"
+          done
+          [ "$ACC_UNACCOUNTED_N" -gt 10 ] 2>/dev/null && warn "    ... and $((ACC_UNACCOUNTED_N - 10)) more"
+          warn "  A capture commits the index, so signing now would put all of them"
+          warn "  under this run. Refusing the whole capture (#261)."
+          capture_remedy
+        else
+          printf '%s\n' "$ACC_WROTE" | while IFS= read -r _f; do
+            [ -n "$_f" ] && git -C "$ACC_TOP" add -- "$_f" 2>/dev/null || true
+          done
+          # AND THE SAME QUESTION AGAIN, of the index as it now stands. The check
+          # above is what keeps a refusal from touching the tree; THIS one is the
+          # invariant the commit rests on, asked of the thing actually about to be
+          # committed. They are the same call because two spellings of one rule
+          # drift, and the one that drifts is always the one nothing runs.
+          capture_account "$_bodies" "$DIR"
+          if [ "$ACC_UNACCOUNTED_N" != "0" ]; then
+            warn "$RUN_ID's own writes did not stage cleanly in $DIR: the index now holds"
+            warn "  $ACC_UNACCOUNTED_N path(s) it cannot account for. Refusing the capture (#261)."
+            capture_remedy
+          elif [ "$ACC_STAGED_N" = "0" ]; then
+            warn "$RUN_ID wrote nothing in $DIR that is uncommitted; capturing nothing of the $dirty path(s) there"
+          else
+            warn "$RUN_ID left $dirty uncommitted path(s); capturing the $ACC_STAGED_N it wrote"
+            MSG="chore(agent): work left by $TYPE run $RUN_ID
 
 Captured by the harness at SubagentStop because the run ended with $dirty
 uncommitted path(s) and no commit of its own. Signed under that run's identity
 so the work is attributed to the agent that did it rather than to whoever
 commits next (ADR-0046).
 
+Every path in this commit is one the run's own tool-call bodies record it
+writing; a capture whose index held anything else is refused rather than
+narrowed (#261).
+
 The build was not run. A subagent's work is recorded as it was left; the branch
 gate is what decides whether it may merge."
-        # Signed under THIS RUN, not a new one — and not retired here, the stop
-        # below is the one that belongs to this event.
-        # The work stays STAGED whether or not this succeeds, so a failure loses
-        # nothing but the attribution, and the run it should carry is named here
-        # rather than written to a file nothing has ever read.
-        ( cd "$DIR" && "$(signer)" -r "$RUN_ID" ${TASK:+-t "$TASK"} ${WT:+-w "$WT"} -m "$MSG" ) >&2 \
-          || warn "could not sign $RUN_ID's work; it is staged in $DIR and signing it later needs -r $RUN_ID"
+            # Signed under THIS RUN, not a new one — and not retired here, the stop
+            # below is the one that belongs to this event.
+            # The work stays STAGED whether or not this succeeds, so a failure loses
+            # nothing but the attribution, and the run it should carry is named here
+            # rather than written to a file nothing has ever read.
+            ( cd "$DIR" && "$(signer)" -r "$RUN_ID" ${TASK:+-t "$TASK"} ${WT:+-w "$WT"} -m "$MSG" ) >&2 \
+              || warn "could not sign $RUN_ID's work; it is staged in $DIR and signing it later needs -r $RUN_ID"
+          fi
+        fi
       fi
     fi
 
-    # See SessionEnd for why this is an if and not a `&& { } ||`.
-    if REPLY="$(mcp_call observe_session session_id "$AGENT_ID" phase stop)"; then
+    # See SessionEnd for why this is an if and not a `&& { } ||`, and for the
+    # contract `ends_descendants` carries. A SUBAGENT SENDS IT TOO, because a
+    # subagent can itself start others and they die with it exactly the same
+    # way. A leaf subagent — which is most of them — has nothing below it, so
+    # the MCP resolves no descendants and the flag costs one field.
+    if REPLY="$(mcp_call observe_session session_id "$AGENT_ID" phase stop \
+      ends_descendants bool:true)"; then
       warn "retired $(reply_field "$REPLY" run_id)"
       say_detail "$REPLY"
     else
@@ -579,7 +1113,11 @@ gate is what decides whether it may merge."
     # retry from. observe_session holds that mapping now.
     rm -f "$MARKER"
     if [ -n "${DIR:-}" ]; then
-      _key="$(printf '%s' "$(CDPATH= cd -- "$DIR" 2>/dev/null && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
+      # THE SUBAGENT'S POINTER AND NOT THE SESSION'S. This removes exactly the
+      # 32 hex characters of the tree key; the session pointer SessionStart
+      # writes carries a `.session` suffix and outlives every subagent that
+      # worked in the same tree (RM-156, #259).
+      _key="$(tree_key "$DIR" || true)"
       [ -n "$_key" ] && rm -f "$RUNS_DIR/by-tree/$_key" 2>/dev/null
     fi
     exit 0
@@ -616,11 +1154,18 @@ gate is what decides whether it may merge."
     # a session id is not the public value a run id is.
     #
     # ALWAYS 0. See the header.
+    # AND IT CARRIES THE PARENT TOO — RM-156 (#259). This call REGISTERS when
+    # the session is one the deployment has never seen, which is precisely the
+    # case a refused start leaves behind, and until now every run registered
+    # that way was a root run: the path that recovers a lost identity lost the
+    # edge instead. It costs one more argument, and the MCP ignores it for a
+    # session it already holds.
     [ -n "$TOOL" ] && [ -n "$IDENT" ] || exit 0
     MARK="$(recall)"
     mcp_call observe_tool_call \
       session_id "$IDENT" cwd "$CWD" tool "$TOOL" body "$EVENT_JSON" \
       agent_type "$IDENT_TYPE" \
+      parent_session_id "$PARENT_IDENT" \
       run_token "$(reply_field "${MARK:-}" run_token)" >/dev/null 2>&1 || true
     exit 0
     ;;

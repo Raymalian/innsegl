@@ -15,6 +15,7 @@ import (
 	entryv1 "github.com/spiffe/spire-api-sdk/proto/spire/api/server/entry/v1"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/ledger"
 )
 
 // Entry reconciliation — RM-019 (#27), threat model AB-11, test SPI-008.
@@ -49,10 +50,30 @@ import (
 // # Expected, actual, and what is deliberately not compared
 //
 // Expected comes from the ledger: a run is expected to have exactly one entry
-// from its `run_registered` event until a `run_retired` or `run_expired` event
-// closes it (IP §1, doc 02 §3). Actual comes from SPIRE's own entry list, read
-// from the server, whose datastore is authoritative — never from an agent
-// cache, which converges later.
+// while it is ACTIVE, and none once it is not (IP §1, doc 02 §3). Actual comes
+// from SPIRE's own entry list, read from the server, whose datastore is
+// authoritative — never from an agent cache, which converges later.
+//
+// "Active" is not this file's own answer any more, and that is RM-155 (#258).
+// It used to be: a run was read as closed from its first `run_retired` OR
+// `run_expired` for ever, regardless of anything the run did afterwards. But a
+// withdrawal is not an ending — internal/mcp's get_credential re-creates the
+// SPIRE entry when a quiet run speaks again, by design and through the admin
+// path — so every restored run was reported here as `spire_entry_not_deleted`
+// while the read API, which had already been taught the right rule, showed the
+// same run active. Two components, two answers, and an operator shown both
+// learns to believe neither.
+//
+// The rule now lives in exactly one place, internal/ledger's RunStateOf, and
+// this file reads it (see ledgerRun and compareEntries). REC-018 asserts that
+// what this control concludes about a run and what the read API serves about
+// the same run are the same word, over a fixture holding every combination of
+// withdrawal, activity and retirement.
+//
+// RETIREMENT STAYS FINAL and the distinction is load-bearing: the rule's first
+// clause is that a retirement wins unconditionally, so an entry that comes back
+// for a RETIRED run is still AB-11 and still alerts (SPI-008). Withdrawal is
+// reversible; retirement is not.
 //
 // The comparison is scoped to the agent subtree, spiffe://{td}/agent/. The
 // infrastructure entries the stack needs — spire-oidc's, created by
@@ -152,16 +173,18 @@ type DriftKind string
 // doc 02 §3 makes `reason` free text, and only the event type, the member names
 // and the source enum are protected strings.
 const (
-	// DriftEntryMissing: the ledger says the run is registered and not closed;
-	// SPIRE holds no entry. ADR-0012's unscopeable BatchDeleteEntry, and — the
-	// case with no entry ever created at all — #108/RM-075's register_agent
-	// crash window. Gated by Config.MinAge against the run_registered event's
-	// own age; see the file comment.
+	// DriftEntryMissing: the ledger says the run is ACTIVE; SPIRE holds no
+	// entry. ADR-0012's unscopeable BatchDeleteEntry, and — the case with no
+	// entry ever created at all — #108/RM-075's register_agent crash window.
+	// Gated by Config.MinAge against the age of the fact that made the run
+	// active (RunFacts.DecidedAt), which for a freshly registered run is its
+	// `run_registered` and for a restored one is the activity that overtook its
+	// withdrawal; see the file comment.
 	DriftEntryMissing DriftKind = "spire_entry_missing"
-	// DriftEntryNotDeleted: the ledger says the run is retired or expired;
-	// SPIRE holds an entry anyway. Gated by Config.MinAge against the closing
-	// event's own age, for the same reason DriftEntryMissing is; see the file
-	// comment.
+	// DriftEntryNotDeleted: the ledger says the run is retired, or withdrawn
+	// from with nothing heard since; SPIRE holds an entry anyway. Gated by
+	// Config.MinAge against the age of that closing fact, for the same reason
+	// DriftEntryMissing is; see the file comment.
 	DriftEntryNotDeleted DriftKind = "spire_entry_not_deleted"
 	// DriftEntryDuplicated: one active run, more than one entry. IP §1 allows
 	// one, and the extra one is identity this deployment never granted.
@@ -236,9 +259,19 @@ func (d Drift) dedupeKey() string {
 type Result struct {
 	// LedgerRuns is how many runs the ledger has ever registered.
 	LedgerRuns int
-	// ActiveRuns is how many of those are neither retired nor expired — the
+	// ActiveRuns is how many of those the one rule reads as active — the
 	// number of entries SPIRE is expected to hold.
 	ActiveRuns int
+	// RunStates is the state this cycle derived for every run the chain
+	// registered, keyed by run id and spelled in internal/ledger's vocabulary.
+	//
+	// It is the EVIDENCE for ActiveRuns, and it is what REC-018 holds against
+	// the read API's answer for the same run: two components that decide a run
+	// is closed on different grounds is the defect #258 closes, and the only
+	// way to keep them from drifting apart again is for both answers to be
+	// observable and compared. A run whose `run_registered` this control could
+	// not read is absent rather than guessed at.
+	RunStates map[string]string
 	// SPIREEntries is how many entries SPIRE holds in the agent subtree.
 	SPIREEntries int
 	// Drifts is every disagreement found, in SPIFFE ID order.
@@ -357,7 +390,17 @@ type Reconciler struct {
 	cfg    ReconcilerConfig
 	batch  int64
 	minAge time.Duration
-	now    func() time.Time
+	// horizon is how long after a withdrawal a run may still be restored. It
+	// separates Lapsed from Abandoned and NOTHING ELSE here: both are states in
+	// which SPIRE should hold no entry, so no alert this file raises depends on
+	// it. It is carried so that Result.RunStates speaks the same four words the
+	// read API speaks, which is what REC-018 checks.
+	//
+	// Read from ledger.EnvRestoreHorizon at construction, from the same
+	// function internal/api reads it with. One variable, one number, every
+	// component — see that constant.
+	horizon time.Duration
+	now     func() time.Time
 
 	mu   sync.Mutex
 	seen map[string]struct{}
@@ -398,7 +441,14 @@ func NewReconciler(cfg ReconcilerConfig) (*Reconciler, error) {
 	if minAge <= 0 {
 		minAge = DefaultMinAge
 	}
-	return &Reconciler{cfg: cfg, batch: batch, minAge: minAge, now: cfg.Now, seen: map[string]struct{}{}}, nil
+	return &Reconciler{
+		cfg:     cfg,
+		batch:   batch,
+		minAge:  minAge,
+		horizon: ledger.RestoreHorizonFromEnv(),
+		now:     cfg.Now,
+		seen:    map[string]struct{}{},
+	}, nil
 }
 
 // Reconcile runs one cycle: read both sides, compare, alert on every
@@ -428,13 +478,29 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 
-	result := Result{LedgerRuns: len(view.runs), SPIREEntries: len(entries)}
+	// ONE CLOCK FOR THE WHOLE CYCLE, for the reason internal/api computes its
+	// abandonment cutoff once per request: a run judged against a different
+	// "now" than the run beside it is a cycle that can report two states for
+	// one chain.
+	now := r.now()
+	result := Result{
+		LedgerRuns:   len(view.runs),
+		SPIREEntries: len(entries),
+		RunStates:    make(map[string]string, len(view.runs)),
+	}
 	for _, run := range view.runs {
-		if run.closedEventID == "" {
+		state := run.state(now, r.horizon)
+		if state == ledger.RunActive {
 			result.ActiveRuns++
 		}
+		// Keyed by run id, which is what the read API answers by. A run the
+		// chain never registered has no state to compare — it is a ledger
+		// defect, reported elsewhere — so it is left out rather than guessed.
+		if run.runID != "" && run.registeredEventID != "" {
+			result.RunStates[run.runID] = state
+		}
 	}
-	result.Drifts = compareEntries(view, entries, r.now(), r.minAge)
+	result.Drifts = compareEntries(view, entries, now, r.minAge, r.horizon)
 
 	for _, drift := range result.Drifts {
 		if !drift.Recordable() {
@@ -557,21 +623,49 @@ func defaultObserve(result Result, err error) {
 // The ledger side: what the chain says the entries should be.
 // ---------------------------------------------------------------------------
 
-// ledgerRun is one run's lifecycle as the ledger records it.
+// ledgerRun is one run's lifecycle as the ledger records it: the facts the one
+// rule reads, and the event ids this control names when it alerts.
+//
+// It holds FACTS AND NOT A VERDICT. The verdict is ledger.RunStateOf's, taken
+// fresh at comparison time against that cycle's clock, because two of the four
+// states differ only by how long ago the withdrawal was and a value folded in
+// during the chain walk would be stale by the end of it.
 type ledgerRun struct {
 	runID             string
 	spiffeID          string
 	registeredEventID string
-	// registeredAt is the run_registered event's own `ts`, zero when it could
-	// not be read. It is what DriftEntryMissing's age gate is measured
-	// against — see oldEnough.
-	registeredAt time.Time
-	// closedEventID is the run_retired or run_expired event that ended it,
-	// empty while the run is active.
-	closedEventID string
-	// closedAt is the closing event's own `ts`, zero when it could not be
-	// read or the run is still active. DriftEntryNotDeleted's age gate.
-	closedAt time.Time
+	// facts is what internal/ledger's rule reads. Nothing else in this file
+	// interprets them.
+	facts ledger.RunFacts
+	// retiredEventID is the EARLIEST `run_retired` for this run, empty when it
+	// was never retired. It is the subject of a DriftEntryNotDeleted alert
+	// about a retired run: retirement's claim is that the entry was deleted,
+	// and the entry is there.
+	retiredEventID string
+	// withdrawnEventID is the NEWEST `run_expired`, empty when the reaper never
+	// took this run's authorisation. It is the subject when the withdrawal is
+	// the fact an entry contradicts — the newest one, because that is the
+	// withdrawal that stands and the one whose deletion did not happen.
+	withdrawnEventID string
+}
+
+// state is the run's state by the one rule, at this cycle's clock.
+func (r *ledgerRun) state(now time.Time, horizon time.Duration) string {
+	return ledger.RunStateOf(r.facts, now, horizon)
+}
+
+// closingEventID is the ledger event whose claim a surviving SPIRE entry
+// contradicts, given the state this run is in. Empty for an active run, which
+// claims the opposite.
+func (r *ledgerRun) closingEventID(state string) string {
+	switch state {
+	case ledger.RunRetired:
+		return r.retiredEventID
+	case ledger.RunLapsed, ledger.RunAbandoned:
+		return r.withdrawnEventID
+	default:
+		return ""
+	}
 }
 
 // ledgerView is the whole chain reduced to the two things reconciliation needs.
@@ -639,6 +733,27 @@ func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
 	return view, nil
 }
 
+// run returns the view's entry for one identity, creating it if this is the
+// first LIFECYCLE event seen for it.
+//
+// Creating on a closing event and not only on `run_registered` is what lets a
+// closing event with no registration — itself a ledger defect, and not this
+// control's to report — be matched against a surviving entry and reported
+// against that closing event rather than as unattributed, which would be the
+// less accurate of the two.
+func (v *ledgerView) run(spiffeID, runID string) *ledgerRun {
+	existing, known := v.runs[spiffeID]
+	if known {
+		if existing.runID == "" {
+			existing.runID = runID
+		}
+		return existing
+	}
+	fresh := &ledgerRun{runID: runID, spiffeID: spiffeID}
+	v.runs[spiffeID] = fresh
+	return fresh
+}
+
 // observe folds one event into the view.
 //
 // A record whose members are missing or of the wrong type is skipped rather
@@ -647,48 +762,109 @@ func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
 // event from a newer schema_version, which doc 02 §1 says a verifier tolerates.
 // Refusing to reconcile at all because one event was unreadable would turn a
 // forward-compatibility case into an outage of the detection control.
+//
+// # Facts accumulate; nothing resets
+//
+// Before #258 a `run_registered` REPLACED whatever the view held for that
+// identity, "re-opening" a run whose closing event was now spent. Nothing does
+// that any more, and the reason is the rule's first clause: a retirement wins
+// unconditionally, so a re-registration cannot un-retire a run here any more
+// than a straggling tool call can un-retire one in the read API. A run
+// registers once in any case — the ledger's idempotency_key is UNIQUE and the
+// run directory refuses a chain that registers one twice.
 func (v *ledgerView) observe(record event.Fields) {
-	switch recordString(record, event.FieldEventType) {
-	case event.EventTypeRunRegistered:
-		eventID := recordString(record, event.FieldEventID)
-		spiffeID := recordString(record, event.FieldSpiffeID)
-		runID := recordString(record, event.FieldRunID)
-		if eventID == "" || spiffeID == "" || runID == "" {
-			return
-		}
-		// A registration replaces whatever came before for this identity: it
-		// re-opens a run whose closing event is now spent.
-		v.runs[spiffeID] = &ledgerRun{
-			runID:             runID,
-			spiffeID:          spiffeID,
-			registeredEventID: eventID,
-			registeredAt:      parseTS(record),
-		}
-	case event.EventTypeRunRetired, event.EventTypeRunExpired:
-		eventID := recordString(record, event.FieldEventID)
-		spiffeID := recordString(record, event.FieldSpiffeID)
-		runID := recordString(record, event.FieldRunID)
-		if eventID == "" || spiffeID == "" {
-			return
-		}
-		run, known := v.runs[spiffeID]
-		if !known {
-			// A closing event with no registration is itself a ledger defect,
-			// and not this control's to report. Recorded so that an entry
-			// matching it is reported against the closing event rather than
-			// as unattributed, which would be the less accurate of the two.
-			run = &ledgerRun{runID: runID, spiffeID: spiffeID}
-			v.runs[spiffeID] = run
-		}
-		run.closedEventID = eventID
-		run.closedAt = parseTS(record)
-	case event.EventTypeLedgerDriftDetected:
+	eventType := recordString(record, event.FieldEventType)
+	if eventType == event.EventTypeLedgerDriftDetected {
 		subject := recordString(record, event.FieldSubjectEventID)
 		reason := recordString(record, event.FieldReason)
-		if subject == "" || reason == "" {
+		if subject != "" && reason != "" {
+			v.alerts[alertKey(subject, reason)] = struct{}{}
+		}
+		// An alert still falls through to the activity fold below: doc 02 §2
+		// omits run_id and spiffe_id together and only for an alert that
+		// references no run, so one that DOES name a run is a run-scoped event
+		// like any other and the rule counts it the way the read API counts it.
+	}
+
+	spiffeID := recordString(record, event.FieldSpiffeID)
+	runID := recordString(record, event.FieldRunID)
+	if spiffeID == "" || runID == "" {
+		// Not run-scoped: a sealed segment, or a system-scope alert. doc 02 §2
+		// omits the two together and never one without the other.
+		return
+	}
+	at := parseTS(record)
+
+	var run *ledgerRun
+	switch eventType {
+	case event.EventTypeRunRegistered:
+		eventID := recordString(record, event.FieldEventID)
+		if eventID == "" {
 			return
 		}
-		v.alerts[alertKey(subject, reason)] = struct{}{}
+		run = v.run(spiffeID, runID)
+		run.registeredEventID = eventID
+		run.facts.RegisteredAt = at
+
+	case event.EventTypeRunRetired:
+		eventID := recordString(record, event.FieldEventID)
+		if eventID == "" {
+			return
+		}
+		run = v.run(spiffeID, runID)
+		// EARLIEST, by instant: ADR-0020 §5 makes two concurrent retirements
+		// two reports of ONE ending, and every caller is told the original.
+		// `Retired` is set independently of the instant because it is what
+		// DECIDES — the read API derives it as bool_or over the event type and
+		// never needs a timestamp — so a retirement whose `ts` this control
+		// could not read still retires the run.
+		if !run.facts.Retired || (!at.IsZero() &&
+			(run.facts.RetiredAt.IsZero() || at.Before(run.facts.RetiredAt))) {
+			run.retiredEventID = eventID
+			run.facts.RetiredAt = at
+		}
+		run.facts.Retired = true
+
+	case event.EventTypeRunExpired:
+		eventID := recordString(record, event.FieldEventID)
+		if eventID == "" {
+			return
+		}
+		run = v.run(spiffeID, runID)
+		// NEWEST, by instant: a run has one withdrawal per quiet spell, and the
+		// one an entry's survival contradicts is the one that stands.
+		if at.After(run.facts.WithdrawnAt) {
+			run.withdrawnEventID = eventID
+			run.facts.WithdrawnAt = at
+		}
+
+	default:
+		// Everything else is only ever ACTIVITY, and only for an identity the
+		// chain already explains. An entry for a SPIFFE ID whose whole ledger
+		// record is a tool call and no lifecycle event at all stays
+		// DriftEntryUnattributed — AB-11 in its purest form — rather than
+		// becoming a run this view believes in.
+		var known bool
+		run, known = v.runs[spiffeID]
+		if !known {
+			return
+		}
+	}
+
+	// ACTIVITY IS AN EVENT THE REAPER DID NOT WRITE, which is the read API's
+	// own discriminator (`source IS DISTINCT FROM 'reaper'`) and is taken from
+	// it verbatim rather than re-decided here. doc 02 §2 makes `source` "who
+	// appended it", so an event sourced to the reaper is by construction not
+	// something the run did — and counting it would let the reaper read its own
+	// withdrawal as evidence that the run it withdrew from is working, so no
+	// withdrawal would ever stand.
+	//
+	// A record whose `source` cannot be read counts as activity, because SQL's
+	// `IS DISTINCT FROM` counts a NULL that way and the two renderings must
+	// agree on the same chain (REC-018).
+	if recordString(record, event.FieldSource) != event.SourceReaper &&
+		at.After(run.facts.LastActivityAt) {
+		run.facts.LastActivityAt = at
 	}
 }
 
@@ -704,7 +880,9 @@ func (v *ledgerView) observe(record event.Fields) {
 // the file comment (#108, RM-075). The other two, DriftEntryUnattributed and
 // DriftEntryDuplicated, are reported the instant they are seen: nothing about
 // them is a window a healthy call is still inside.
-func compareEntries(view *ledgerView, entries []Entry, now time.Time, minAge time.Duration) []Drift {
+func compareEntries(view *ledgerView, entries []Entry, now time.Time,
+	minAge, horizon time.Duration,
+) []Drift {
 	byID := make(map[string][]string, len(entries))
 	for _, entry := range entries {
 		byID[entry.SPIFFEID] = append(byID[entry.SPIFFEID], entry.ID)
@@ -716,11 +894,20 @@ func compareEntries(view *ledgerView, entries []Entry, now time.Time, minAge tim
 		entryIDs := byID[spiffeID]
 		slices.Sort(entryIDs)
 		run, known := view.runs[spiffeID]
+		var state string
+		if known {
+			state = run.state(now, horizon)
+		}
 		switch {
 		case !known:
 			drifts = append(drifts, newDrift(DriftEntryUnattributed, spiffeID, "", "", entryIDs))
-		case run.closedEventID != "":
-			if !oldEnough(run.closedAt, now, minAge) {
+		case state != ledger.RunActive:
+			// The run is retired, or withdrawn from with nothing heard since,
+			// and SPIRE still holds an entry. A RESTORED run does not land
+			// here: its activity is newer than its withdrawal, so the rule
+			// reads it active and the entry get_credential re-created is the
+			// entry an active run is supposed to have (REC-017).
+			if !oldEnough(run.facts.DecidedAt(), now, minAge) {
 				// retire_agent or the reaper may still be between recording
 				// the closure and deleting the entry (ADR-0018). Not drift
 				// yet — the next cycle re-derives this from the chain, so
@@ -728,7 +915,7 @@ func compareEntries(view *ledgerView, entries []Entry, now time.Time, minAge tim
 				continue
 			}
 			drifts = append(drifts, newDrift(DriftEntryNotDeleted, spiffeID, run.runID,
-				run.closedEventID, entryIDs))
+				run.closingEventID(state), entryIDs))
 		case len(entryIDs) > 1:
 			drifts = append(drifts, newDrift(DriftEntryDuplicated, spiffeID, run.runID,
 				run.registeredEventID, entryIDs))
@@ -737,17 +924,22 @@ func compareEntries(view *ledgerView, entries []Entry, now time.Time, minAge tim
 	// Direction two: what the ledger says is active and SPIRE does not hold.
 	for _, spiffeID := range slices.Sorted(maps.Keys(view.runs)) {
 		run := view.runs[spiffeID]
-		if run.closedEventID != "" || run.registeredEventID == "" {
+		if run.registeredEventID == "" || run.state(now, horizon) != ledger.RunActive {
 			continue
 		}
 		if _, held := byID[spiffeID]; held {
 			continue
 		}
-		if !oldEnough(run.registeredAt, now, minAge) {
+		// Aged against the fact that made the run ACTIVE, not against its
+		// registration. For a run registering now those are the same event. For
+		// a run whose activity has just overtaken a withdrawal they are not,
+		// and the registration is ancient: measuring against it would accuse a
+		// run that spoke a second ago of having no entry, when what is really
+		// happening is that its next call is the one that restores it.
+		if !oldEnough(run.facts.DecidedAt(), now, minAge) {
 			// register_agent may still be between the append and the create
 			// (ADR-0018) — the legitimate window #108/RM-075 is about. Not
-			// drift yet; a later cycle sees the same run_registered event and
-			// tries again.
+			// drift yet; a later cycle sees the same chain and tries again.
 			continue
 		}
 		drifts = append(drifts, newDrift(DriftEntryMissing, spiffeID, run.runID,

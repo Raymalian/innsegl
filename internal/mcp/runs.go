@@ -50,11 +50,26 @@ type CredentialRun struct {
 	AgentType string
 	TaskID    string
 	SPIFFEID  string
+	// Repo is `run_registered`'s own `repo`: doc 02 §5's host/org/name, as the
+	// registration recorded it (ADR-0045).
+	//
+	// It is held because it is what an admin credential is scoped to (#264):
+	// the three tools that take a run id answer a caller whose credential is
+	// for another repository exactly as they answer a run that does not exist,
+	// and they need the run's repository to make that comparison.
+	//
+	// EMPTY IS POSSIBLE AND IS NOT AN ERROR. `repo` became required at append
+	// under ADR-0045; a run registered before that has none on the chain, and
+	// refusing to read such a run would make history unreadable to close a
+	// gap that is about new calls. It is empty, and adminScopeAdmits refuses
+	// it under any credential — a run that cannot be shown to be in this
+	// credential's repository is not in it.
+	Repo string
 	// RetiredAt is the instant `run_retired` was appended, zero for a live
 	// run. I4: retirement removes the identity, never the record.
 	RetiredAt time.Time
-	// ExpiredAt is the EARLIEST `run_expired`, zero if the reaper never took
-	// this run's authorisation.
+	// ExpiredAt is the NEWEST `run_expired`, zero if the reaper never took this
+	// run's authorisation.
 	//
 	// It is not retirement and must never be read as it: expiry withdraws a
 	// credential from a run that went quiet, and a quiet agent is often one
@@ -65,7 +80,55 @@ type CredentialRun struct {
 	// process was killed fires no retirement hook, so nothing ever ends it, and
 	// without a horizon its identity stays mintable forever. This is the
 	// instant that horizon is measured from.
+	//
+	// # Newest, where RetiredAt is earliest (RM-152, #255)
+	//
+	// The difference is not an inconsistency, it is the difference between the
+	// two facts. Two concurrent retirements of one run are two reports of ONE
+	// ending, so every caller is told the original instant for ever (ADR-0020
+	// §5). A run's expiries are not reports of one fact: it has one per quiet
+	// spell, the reaper keys each to the lapse it records, and the only one a
+	// restore horizon can be measured from is the lapse being restored FROM.
+	// Measured from the earliest, a run that lapsed on day one, resumed, and
+	// worked for longer than the horizon is refused restore on its next lapse
+	// however recently it was alive — doc 07 MCP-078.
 	ExpiredAt time.Time
+	// LastActivityAt is the newest event on this run that the REAPER DID NOT
+	// WRITE, zero for a run whose entire record is the reaper's.
+	//
+	// It is the member that makes ExpiredAt answerable. A withdrawal on its own
+	// says only that the run was quiet at some instant; whether that is still
+	// true is decided by whether anything the run did is newer. Without this
+	// the MCP could tell a lapse from a retirement but not a lapse from a
+	// RESTORED lapse, which is the distinction #258 exists for.
+	LastActivityAt time.Time
+}
+
+// State is the run's lifecycle state — active, lapsed, abandoned or retired —
+// by the one rule, at the given instant and restore horizon.
+//
+// # Why the MCP asks rather than answers
+//
+// Three components used to decide independently whether a run was closed and
+// they disagreed: the reconciler read a withdrawal as final, the read API read
+// it as reversible, and an operator was shown both about the same run (RM-155,
+// #258). The rule is internal/ledger's now, in one place, and this method is
+// the MCP's way of consulting it rather than a fourth opinion.
+//
+// The facts are exactly what CredentialRun already holds, read off this run's
+// own events by the run directory (internal/rundir): a retirement, a newest
+// withdrawal, and the newest thing the run itself did.
+//
+// horizon is `innsegl serve`'s `--abandon-after`. Zero or less means the
+// deployment set none, and a withdrawn run then stays Lapsed until something
+// ends it — the same reading get_credential's fourth gate gives a zero.
+func (r CredentialRun) State(now time.Time, horizon time.Duration) string {
+	return ledger.RunStateOf(ledger.RunFacts{
+		Retired:        r.Retired(),
+		RetiredAt:      r.RetiredAt,
+		WithdrawnAt:    r.ExpiredAt,
+		LastActivityAt: r.LastActivityAt,
+	}, now, horizon)
 }
 
 // credentialRunIdentity returns the SPIFFE ID to mint for AND the run

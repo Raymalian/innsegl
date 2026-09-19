@@ -35,8 +35,20 @@ export const VIEWS = [
 
 export type ViewName = (typeof VIEWS)[number];
 
-/** Run status, as internal/api/query.go spells it (FD §4.2). */
-export const RUN_STATUSES = ["active", "retired", "expired"] as const;
+/**
+ * A run's lifecycle state, as internal/api/query.go spells it, in that file's
+ * own order (#256).
+ *
+ * FOUR, not three, and `expired` is not among them. Three words could not tell
+ * a run that is quiet from one that is over, and the word they collapsed into
+ * read as a claim that an agent had died — which nothing in this system can
+ * observe. `expired` survives as the name of the `run_expired` EVENT, which is
+ * a protected string (doc 02 §3) and is not a state.
+ *
+ * The value travels in the URL and reaches the query API's `status` parameter
+ * verbatim, so this list and internal/api's RunStatuses are one closed set.
+ */
+export const RUN_STATUSES = ["active", "lapsed", "abandoned", "retired"] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
 /**

@@ -149,19 +149,21 @@ describe("FE-122 the strip drops nothing doc 06 §3.3 names", () => {
     expect(renderHeader().text).toContain("Retired");
   });
 
-  it("still distinguishes an expired run from a retired one", () => {
+  it("still distinguishes a withdrawn run from a retired one", () => {
     const events = [
       ledgerEvent(EVENT_TYPES.runRegistered, 1),
       ledgerEvent(EVENT_TYPES.runExpired, 2, { source: "reaper" }),
     ];
-    const { text } = renderHeader(events, "expired");
-    expect(text).toContain("Expired");
+    const { text } = renderHeader(events, "lapsed");
+    // #256: a withdrawal is not an ending, so it is no longer filed beside a
+    // retirement — it has its own cell, under the reaper's own verb.
+    expect(text).toContain("Credential withdrawn");
     expect(text).not.toContain("Retired");
   });
 
   it("still says in a sentence that a running run has not ended", () => {
     const { text } = renderHeader([ledgerEvent(EVENT_TYPES.runRegistered, 1)], "active");
-    expect(text).toContain("This run has no retirement or expiry event in the ledger.");
+    expect(text).toContain("This run has no retirement event in the ledger.");
   });
 
   it("still lists the credential expiry history, every issue of it", () => {

@@ -137,6 +137,35 @@ func (d *Directory) CredentialRun(ctx context.Context, runID string) (mcp.Creden
 				"an event for run %q carries no readable event_type", runID)
 		}
 
+		// The newest thing the run itself did (RM-155, #258).
+		//
+		// An event the REAPER wrote is not the run doing something: doc 02 §2
+		// makes `source` "who appended it", so counting `run_expired` here
+		// would let the reaper's own withdrawal stand as evidence that the run
+		// it withdrew from is working, and no withdrawal would ever stand.
+		// Every other source counts, which is the read API's own discriminator
+		// (`source IS DISTINCT FROM 'reaper'`) taken verbatim rather than
+		// re-decided — the two answers are asserted equal over one chain in
+		// REC-018 and must not be two rules.
+		//
+		// A source or a `ts` this reader cannot read is skipped rather than
+		// refused, which is the one place this package tolerates an unreadable
+		// member. The reason is what the member is FOR: the three refusals
+		// above guard values a credential is minted, appended or deleted
+		// against, and a missing one of those is a guess about identity (I2).
+		// This one only narrows the window in which a withdrawn run still reads
+		// as withdrawn, so the failure is a run that looks quieter than it was
+		// — never a credential minted for the wrong run.
+		if source, known := rec[event.FieldSource].(string); !known || source != event.SourceReaper {
+			if raw, dated := rec[event.FieldTS].(string); dated {
+				if ts, err := event.ParseTimestamp(raw); err == nil {
+					if at := ts.Time(); at.After(run.LastActivityAt) {
+						run.LastActivityAt = at
+					}
+				}
+			}
+		}
+
 		switch kind {
 		case event.EventTypeRunRegistered:
 			if registered {
@@ -157,16 +186,46 @@ func (d *Directory) CredentialRun(ctx context.Context, runID string) (mcp.Creden
 			run.SPIFFEID = identity.spiffeID
 			run.AgentType = identity.agentType
 			run.TaskID = identity.taskRef
+			// The repository this run was registered in (ADR-0045), read
+			// TOLERANTLY where the three members above are read strictly.
+			//
+			// It is required at append today, so every run registered since
+			// ADR-0045 has one. A run registered before it does not, and
+			// refusing that run here would make a tool unable to read history
+			// it has always been able to read. Absent leaves the member empty,
+			// which mcp.adminScopeAdmits refuses under every credential: a run
+			// that cannot be shown to be in a credential's repository is not
+			// in it (#264).
+			//nolint:errcheck // an absent member reads as empty, which is
+			// exactly what a pre-ADR-0045 run has and what the tools refuse.
+			run.Repo, _ = rec[event.FieldRepo].(string)
 			registered = true
 
 		case event.EventTypeRunExpired:
-			// EARLIEST, for retiredAt's reason: two reapers that both acted
-			// leave two events, and every caller must be told the same instant.
+			// NEWEST, and this is the one place expiry must NOT follow
+			// retirement's rule (RM-152, #255).
+			//
+			// Retirement is final, so two concurrent first retirements are two
+			// reports of ONE fact and every caller is told the earliest for
+			// ever. Expiry is a withdrawal the run's next call reverses: a run
+			// has as many of them as it has quiet spells, each one a separate
+			// fact about a separate silence, and the single event the reaper
+			// wrote per lapse is keyed per lapse to say so.
+			//
+			// ExpiredAt exists to measure the restore horizon from, and the
+			// only lapse a horizon can mean is the one being restored from. Read
+			// as the earliest, a run that lapsed on its first day, resumed, and
+			// then worked for longer than the horizon is refused restore on its
+			// next lapse however recently it was alive — doc 07 MCP-078.
 			at, err := instantOf(rec, runID, event.EventTypeRunExpired)
 			if err != nil {
 				return mcp.CredentialRun{}, false, err
 			}
-			if run.ExpiredAt.IsZero() || at.Before(run.ExpiredAt) {
+			// Newest by INSTANT, not last in chain order, for the reason
+			// RetiredAt states below: the two agree on every chain a single
+			// ledger writes, and relying on the agreement would be untested code
+			// the day it stopped holding.
+			if run.ExpiredAt.IsZero() || at.After(run.ExpiredAt) {
 				run.ExpiredAt = at
 			}
 
