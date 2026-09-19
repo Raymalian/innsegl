@@ -7,7 +7,7 @@ import { VerificationBadge } from "./VerificationBadge";
 import { strings } from "./strings";
 
 /**
- * FE-062 (proposed for doc 06's test list; doc 06 is not modified here) —
+ * FE-133 (proposed for doc 06's test list; doc 06 is not modified here) —
  * RM-124, #196.
  *
  * ── THE ANSWER THE PAGE COULD NOT GIVE ─────────────────────────────────────
@@ -27,7 +27,7 @@ import { strings } from "./strings";
  */
 afterEach(cleanup);
 
-describe("FE-062 the fourth verdict", () => {
+describe("FE-133 the fourth verdict", () => {
   it("renders with its own label, distinct from verified and failed", () => {
     render(<VerificationBadge verdict="content-verified" />);
     const label = strings.verdict["content-verified"].label;
