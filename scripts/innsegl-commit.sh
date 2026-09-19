@@ -14,9 +14,40 @@
 #
 # USE IT
 #
-#   git add -A
-#   scripts/innsegl-commit.sh -m "fix(thing): what changed"
-#   scripts/innsegl-commit.sh -F /path/to/message
+#   scripts/innsegl-commit.sh -p src/a.go -p src/b.go -m "fix(thing): what changed"
+#   scripts/innsegl-commit.sh -p src/a.go -F /path/to/message
+#
+# `-p` names a path this commit is of. It stages that path and it BOUNDS the
+# commit: if the index holds anything else, the whole commit is refused, naming
+# the path that is not yours.
+#
+# # WHY YOU HAVE TO NAME THEM — #280
+#
+# `git commit` commits THE INDEX, and the index belongs to the working tree
+# rather than to you. Measured on 2026-09-19: two writers shared one tree, one
+# staged a single file and asked for a signature, and this script refused —
+# correctly, the index had moved under it. Seconds later the other writer
+# committed and its commit carried three files: its own two, and the one the
+# first writer had staged. Nothing was lost. What landed was worse than a loss:
+# a signed, permanent, verifiable record of work its message and its identity
+# did not name, and the writer who had done nothing wrong was the one refused.
+#
+# `git add -A` is how that happens and it is why the line above this one used to
+# say it. Nothing here can tell one writer's `git add` from another's, and no
+# amount of locking inside this script can reach backwards over a `git add` made
+# minutes earlier in a process it never saw. The only party who knows which
+# paths are yours is you, so you say, and this holds the commit to it.
+#
+# It is the bound #261 put on the harness's capture path, asked here: what would
+# be COMMITTED must be a subset of what the caller can account for. Only the
+# source of the accounting differs — a stopped run cannot be asked anything, so
+# a capture reads its own tool-call bodies; a caller that is still running says.
+#
+# THE ONE CALLER THAT NEED NOT. `-r` is the harness signing a stopped
+# subagent's leftover work, and scripts/hooks/ has already asked this question
+# of that index before it gets here (#261). It is also the one caller that
+# cannot be asked to change its mind, because the run whose work it is has
+# already gone.
 #
 # The staged tree is what gets signed, exactly as `git commit` would take it.
 #
@@ -89,20 +120,32 @@ AGENT_TYPE="${INNSEGL_AGENT_TYPE:-orchestrator}"
 API_URL="${INNSEGL_API_URL:-http://127.0.0.1:8082}"
 
 usage() {
-  echo "usage: innsegl-commit.sh -m <message> | -F <file>" >&2
+  echo "usage: innsegl-commit.sh -p <path> [-p <path>…] -m <message> | -F <file>" >&2
+  echo "                        [-p <path>]     a path this commit is of; repeatable" >&2
   echo "                        [-r <run_id>]   sign under an existing run, do not retire it" >&2
   echo "                        [-w <path>]     a linked worktree of this repository" >&2
   echo "                        [-t <task>]     the task the run was registered with" >&2
-  echo "       stage first, exactly as for git commit" >&2
+  echo "       -p stages the path AND bounds the commit: an index holding anything" >&2
+  echo "       you did not name is refused rather than signed under your identity." >&2
   exit 2
 }
 
 [ $# -gt 0 ] || usage
 
+# A newline, spelled once. `-p` accumulates into one newline-separated variable
+# because POSIX sh has no arrays, and a path holding a newline is refused where
+# it is given rather than silently split into two here.
+NL="$(printf '\nx')"; NL="${NL%x}"
+
 MESSAGE=""
 RUN_GIVEN=""
 WORKTREE=""
 TASK_GIVEN=""
+PATHS=""
+# Set only by a `-r` ON THE COMMAND LINE, and read only by the bound below. A
+# run resolved from this tree's pointer sets RUN_GIVEN too, and it is an
+# ordinary agent committing its own work -- the case the bound is for.
+R_EXPLICIT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -m) [ $# -ge 2 ] || usage; MESSAGE="$2"; shift 2 ;;
@@ -114,7 +157,27 @@ while [ $# -gt 0 ]; do
     # must not register: the run is the one SubagentStart created. It must not
     # retire either -- SubagentStop does that immediately afterwards, and a
     # double retirement is #179.
-    -r) [ $# -ge 2 ] || usage; RUN_GIVEN="$2"; shift 2 ;;
+    -r) [ $# -ge 2 ] || usage; RUN_GIVEN="$2"; R_EXPLICIT=1; shift 2 ;;
+    # -p: a path this commit is of, relative to the tree being committed or to
+    # where you are standing. Repeatable. #280.
+    #
+    # A NEWLINE IS REFUSED RATHER THAN CARRIED. Git can hold such a path and
+    # this list cannot: it is newline-separated all the way to the JSON that
+    # names it, and a path that split in two would name a file nobody meant.
+    # Refusing it costs a caller nothing — git quotes such a name in its own
+    # output, so it is already unusable by hand.
+    -p) [ $# -ge 2 ] || usage
+        case "$2" in
+          *"$NL"*)
+            echo "innsegl-commit: -p names a path containing a newline, which this" >&2
+            echo "innsegl-commit:   cannot carry without splitting it into two names." >&2
+            exit 2 ;;
+          "")
+            echo "innsegl-commit: -p needs a path." >&2
+            exit 2 ;;
+        esac
+        PATHS="$PATHS$2$NL"
+        shift 2 ;;
     # -w: a linked worktree of this repository, relative to it. MCP-029.
     -w) [ $# -ge 2 ] || usage; WORKTREE="$2"; shift 2 ;;
     # -t: the task this run was REGISTERED with, which must be used verbatim
@@ -319,6 +382,224 @@ case "$WT" in
     exit 2
     ;;
 esac
+
+# ---------------------------------------------------------------------------
+# WHAT THIS COMMIT IS OF — #280 (RM-175).
+#
+# #261 bound the harness's CAPTURE path: a stop refuses to sign when the index
+# holds anything the stopping run cannot show it wrote, and it refuses the WHOLE
+# capture rather than narrowing it, because narrowing means unstaging work that
+# belongs to somebody else. A caller committing its own work goes down this path
+# instead, and this path had no such bound at all.
+#
+# ONE RULE, BOTH PATHS. Everything that would be COMMITTED must be a subset of
+# what the caller can account for. Only the source of the accounting differs,
+# because only it can: a stopped run cannot be asked anything, so #261 reads its
+# tool-call bodies; a caller that is still running says, with `-p`.
+#
+# AND SAYING IS THE BETTER SOURCE. The body store is structurally incomplete —
+# a write through a shell redirection names no file — which #261 can afford
+# because a capture is a fallback, and this path could not: it would refuse
+# every ordinary commit. What a running caller knows, it can simply state.
+#
+# WHY NOT SERIALISE INSTEAD, which is the other obvious answer. The interleaving
+# that caused the incident happened entirely OUTSIDE this script: the second
+# writer's `git add` had already landed before its commit ever started, so there
+# is no lock this script can take that reaches back over it. A lock would also
+# only bind the parties that take it, and the other party is a bare `git add` in
+# a shell. Separate indexes fail for the same reason twice over — every writer
+# would have to opt in, and the commit is made by a server process that reads
+# `.git/index` whatever this script sets. Naming is the only account of "mine"
+# that survives contact with a second writer.
+#
+# THE ORDER IS: account, then stage, then account again. The first pass is what
+# keeps a refusal from touching the tree — an index that already holds somebody
+# else's path is refused before this script has staged anything, so the work of
+# both writers is exactly where they left it. The third is the invariant the
+# commit rests on, asked of the index as it now stands. They are the same call
+# because two spellings of one rule drift, and the one that drifts is always the
+# one nothing runs. #261 makes the same move for the same reason.
+# ---------------------------------------------------------------------------
+
+# The top of the tree being committed, which is how `git diff --cached` spells
+# every path it reports. A caller types what is in front of it instead, so the
+# two have to be reconciled before anything can be compared -- see COMMIT_PATHS.
+TOP="$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$TOP" ] || TOP="$WT"
+
+if [ -z "$PATHS" ] && [ -z "$R_EXPLICIT" ]; then
+  echo "innsegl-commit: name the paths this commit is of, with -p." >&2
+  echo "innsegl-commit:" >&2
+  echo "innsegl-commit:   \`git commit\` commits the INDEX, and the index belongs to this" >&2
+  echo "innsegl-commit:   working tree rather than to you. A commit that named no paths" >&2
+  echo "innsegl-commit:   carries whatever anyone else happened to stage, under YOUR" >&2
+  echo "innsegl-commit:   identity, permanently and verifiably (#280)." >&2
+  echo "innsegl-commit:" >&2
+  _staged="$(git -C "$TOP" diff --cached --name-only 2>/dev/null || true)"
+  if [ -n "$_staged" ]; then
+    echo "innsegl-commit:   The index holds these. Name the ones that are yours:" >&2
+    echo "innsegl-commit:" >&2
+    printf '%s\n' "$_staged" | while IFS= read -r _p; do
+      [ -n "$_p" ] && echo "innsegl-commit:     -p $_p" >&2
+    done
+  else
+    echo "innsegl-commit:   Nothing is staged in $TOP." >&2
+    echo "innsegl-commit:   -p stages what it names, so name your paths and run again." >&2
+  fi
+  exit 2
+fi
+
+# COMMIT_PATHS -- the names, reconciled, and the index measured against them.
+#
+# It prints shell assignments rather than a status because every refusal below
+# needs the counts to say anything an operator can act on:
+#
+#   CP_NAMED          the -p paths, spelled as git spells a staged path
+#   CP_BAD            the ones that are not in this tree at all
+#   CP_INDEX          1 if the index could be listed
+#   CP_STAGED_N       how many paths it holds
+#   CP_UNACCOUNTED_N  how many of those were not named
+#   CP_UNACCOUNTED    the first of them, for a message a human can act on
+#
+# -z on the diff, and it is not a detail: without it git QUOTES any path with a
+# space or a non-ASCII byte, so the comparison would miss exactly those and
+# report them foreign -- a bound that refuses every commit touching a file with
+# a space in its name is a bound nobody keeps.
+#
+# NOTHING IS NORMALISED INTO THE TREE, only resolved within it. A path that
+# lands outside is reported in CP_BAD and refused: guessing which tree a caller
+# meant is how a path silently becomes foreign, and the caller is then refused
+# for staging its own file with nothing to act on.
+COMMIT_PATHS='
+import os, shlex, subprocess, sys
+
+top, cwd, raw = sys.argv[1], sys.argv[2], sys.argv[3]
+top = os.path.realpath(top)
+named, bad = [], []
+for p in [q for q in raw.split(chr(10)) if q]:
+    # Where the caller is STANDING first, because that is what it typed; the top
+    # of the tree second, for a caller standing somewhere else entirely -- a
+    # linked worktree named by -w, which is the subagent case.
+    here = os.path.realpath(p if os.path.isabs(p) else os.path.join(cwd, p))
+    if not here.startswith(top + os.sep):
+        here = os.path.realpath(os.path.join(top, p))
+    if here == top or not here.startswith(top + os.sep):
+        bad.append(p)
+        continue
+    named.append(os.path.relpath(here, top).replace(os.sep, "/"))
+
+staged, index = [], "0"
+try:
+    done = subprocess.run(("git", "-C", top, "diff", "--cached", "--name-only", "-z"),
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+    if done.returncode == 0:
+        staged = [q for q in done.stdout.decode("utf-8", "replace").split(chr(0)) if q]
+        index = "1"
+except Exception:
+    index = "0"
+
+unaccounted = sorted(set(staged) - set(named))
+for name, value in (
+    ("CP_NAMED", chr(10).join(named)),
+    ("CP_BAD", chr(10).join(bad)),
+    ("CP_INDEX", index),
+    ("CP_STAGED_N", str(len(staged))),
+    ("CP_UNACCOUNTED_N", str(len(unaccounted))),
+    ("CP_UNACCOUNTED", chr(10).join(unaccounted[:10])),
+):
+    print(name + "=" + shlex.quote(value))
+'
+
+# commit_paths -- the variables above, for the -p list as it stands.
+#
+# Defaulted BEFORE the eval, so a machine with no python3 or a tree that cannot
+# be read leaves the caller looking at "the index could not be listed" -- which
+# refuses -- rather than at `set -u` killing the script with no explanation.
+commit_paths() {
+  CP_NAMED=""; CP_BAD=""; CP_INDEX=0; CP_STAGED_N=0; CP_UNACCOUNTED_N=0; CP_UNACCOUNTED=""
+  eval "$(python3 -c "$COMMIT_PATHS" "$TOP" "$PWD" "$PATHS" 2>/dev/null)"
+}
+
+# paths_refusal -- what a refused commit leaves the caller holding.
+#
+# A REFUSAL THAT STRANDS THE WORK IS WORSE THAN THE MISATTRIBUTION IT PREVENTS,
+# so this names every path that is not accounted for and changes nothing on
+# disk. Whoever staged the rest is still the only party who may commit it.
+paths_refusal() {
+  echo "innsegl-commit: the index of $TOP holds $CP_UNACCOUNTED_N path(s) this commit did" >&2
+  echo "innsegl-commit:   not name:" >&2
+  printf '%s\n' "$CP_UNACCOUNTED" | while IFS= read -r _p; do
+    [ -n "$_p" ] && echo "innsegl-commit:     $_p" >&2
+  done
+  [ "$CP_UNACCOUNTED_N" -gt 10 ] 2>/dev/null \
+    && echo "innsegl-commit:     ... and $((CP_UNACCOUNTED_N - 10)) more" >&2
+  echo "innsegl-commit:" >&2
+  echo "innsegl-commit:   \`git commit\` commits the index, so signing now would put all of" >&2
+  echo "innsegl-commit:   them under this run's identity -- permanently, verifiably, and" >&2
+  echo "innsegl-commit:   under a message that does not describe them (#280)." >&2
+  echo "innsegl-commit:" >&2
+  echo "innsegl-commit:   Nothing was staged or unstaged; every writer's work is where it" >&2
+  echo "innsegl-commit:   was. Either name the path with -p because it is yours, or leave" >&2
+  echo "innsegl-commit:   it to whoever staged it -- it is theirs to commit." >&2
+}
+
+if [ -n "$PATHS" ]; then
+  commit_paths
+  if [ -n "$CP_BAD" ]; then
+    echo "innsegl-commit: -p names a path that is not in $TOP:" >&2
+    printf '%s\n' "$CP_BAD" | while IFS= read -r _p; do
+      [ -n "$_p" ] && echo "innsegl-commit:     $_p" >&2
+    done
+    echo "innsegl-commit:" >&2
+    echo "innsegl-commit:   A commit is written inside the tree it is of, so a path outside" >&2
+    echo "innsegl-commit:   it can never be one of its own. Name it relative to that tree," >&2
+    echo "innsegl-commit:   or pass -w for the tree you meant." >&2
+    exit 2
+  fi
+  if [ "$CP_INDEX" != "1" ] || [ -z "$CP_NAMED" ]; then
+    # NO ACCOUNT, NO COMMIT. An index that cannot be listed, read as an empty
+    # one, would make this bound vacuous exactly where the tree is in the state
+    # least worth guessing about. #261 takes the same view of a run whose record
+    # cannot be read.
+    echo "innsegl-commit: what the index of $TOP would commit could not be listed, so the" >&2
+    echo "innsegl-commit:   paths this commit named cannot be held to it." >&2
+    echo "innsegl-commit:   Refusing rather than signing a tree nothing accounted for (#280)." >&2
+    exit 1
+  fi
+
+  # FIRST PASS, before anything is staged. A refusal here has touched nothing.
+  if [ "$CP_UNACCOUNTED_N" != "0" ]; then
+    paths_refusal
+    exit 1
+  fi
+
+  # A file rather than a pipeline: `while … | read` runs its body in a subshell
+  # in most shells, so a failure inside one could not stop this one; and a `for`
+  # over a split variable would glob a path holding a `*`.
+  _names="$(mktemp)"
+  printf '%s\n' "$CP_NAMED" > "$_names"
+  while IFS= read -r _p; do
+    [ -n "$_p" ] || continue
+    if ! git -C "$TOP" add -- "$_p" 2>/dev/null; then
+      rm -f "$_names"
+      echo "innsegl-commit: git could not stage $_p." >&2
+      echo "innsegl-commit:   -p names the paths this commit is of and stages them, so a" >&2
+      echo "innsegl-commit:   path git will not take is one this commit cannot be of." >&2
+      exit 1
+    fi
+  done < "$_names"
+  rm -f "$_names"
+
+  # AND THE SAME QUESTION AGAIN, of the index as it now stands. The pass above
+  # is what keeps a refusal from touching the tree; THIS one is the invariant
+  # the commit rests on, asked of the thing actually about to be committed --
+  # and it is what catches another writer staging between the two.
+  commit_paths
+  if [ "$CP_INDEX" != "1" ] || [ "$CP_UNACCOUNTED_N" != "0" ]; then
+    paths_refusal
+    exit 1
+  fi
+fi
 
 # The task, from the branch. Same derivation the harness hook uses, and for the
 # same reason: doc 02 §5's grammar is [a-z0-9][a-z0-9-]{0,62}, so a branch name
@@ -857,29 +1138,47 @@ fi
 # same tree still dedupes, and the MCP refuses to create a second commit for a
 # tree that is already at HEAD whatever key is used.
 SIGN_KEY="commit-$CONTENT-$RUN"
-ARGS="$(python3 -c '
+
+# sign_args PATHS -- the sign_commit arguments, with or without the bound.
+#
+# A function because it is built TWICE: once with `paths` and, against a
+# deployment that predates the argument, once without. See the ladder below.
+sign_args() {
+  python3 -c '
 import json,sys
-run,repo,tree,task,key,wt=sys.argv[1:7]
+run,repo,tree,task,key,wt,paths=sys.argv[1:8]
 args={"run_id":run,"repo":repo,"staged_ref":tree,
       "message":sys.stdin.read(),"task_ref":task,
       "idempotency_key":key}
 # Absent, not empty: an empty string is a value the tool would have to give a
 # meaning, and MCP-029 gives it one only by omission.
 if wt: args["worktree"]=wt
+# THE BOUND TRAVELS WITH THE REQUEST -- #280. The check above is what an
+# operator reads; this is what cannot be walked past, because sign_commit is the
+# thing that actually commits the index and it asks the same question of the
+# index it is about to commit. A check that lived only here would be a check the
+# caller learns about after a round trip; one that lived only there could be
+# skipped by any other client of the tool.
+if paths: args["paths"]=[p for p in paths.split(chr(10)) if p]
 print(json.dumps(args))' \
-  "$RUN" "$REPO" "$TREE" "$TASK" "$SIGN_KEY" "$WORKTREE" <<EOF
+    "$RUN" "$REPO" "$TREE" "$TASK" "$SIGN_KEY" "$WORKTREE" "$1" <<EOF
 $MESSAGE
 EOF
-)"
+}
 
-SIGNED="$(mcp "$AGENT_URL" sign_commit "$ARGS")" || fail "the MCP at $AGENT_URL could not be reached"
-# The refusal must not claim a rollback that did not happen (RM-145, #229). sign_commit
-# creates the commit and then verifies it, so a Phase C failure leaves the commit
-# AT HEAD, carrying its identity trailers, and absent from the ledger. Telling an
-# operator "nothing was committed" is exactly what makes them commit again or
-# reset, on the strength of a claim this tool never honoured. So ask git what is
-# actually there rather than asserting it.
-if ! SHA="$(printf '%s' "$SIGNED" | field commit_sha)"; then
+# signing_refused -- everything that happens when no commit_sha came back.
+#
+# THE REFUSAL MUST NOT CLAIM A ROLLBACK THAT DID NOT HAPPEN (RM-145, #229).
+# sign_commit creates the commit and then verifies it, so a Phase C failure
+# leaves the commit AT HEAD, carrying its identity trailers, and absent from the
+# ledger. Telling an operator "nothing was committed" is exactly what makes them
+# commit again or reset, on the strength of a claim this tool never honoured. So
+# ask git what is actually there rather than asserting it.
+#
+# It is a function because the ladder below reaches it from two places, and the
+# one thing this block must never do is disagree with itself about whether a
+# commit exists.
+signing_refused() {
   HEAD_NOW="$(git -C "$WT" rev-parse --short HEAD 2>/dev/null || echo '?')"
   HEAD_SUBJ="$(git -C "$WT" log -1 --format='%s' 2>/dev/null || echo '')"
   # AN EMPTY INDEX IS THE TELL. This script refuses at the top unless the index
@@ -907,7 +1206,68 @@ if ! SHA="$(printf '%s' "$SIGNED" | field commit_sha)"; then
     exit 1
   fi
   fail "sign_commit refused and the index is still staged; HEAD is $HEAD_NOW. Nothing was committed."
+}
+
+# ---------------------------------------------------------------------------
+# THE CALL, AND THE ONE RUNG BELOW IT — #280.
+#
+# A CLIENT AND A SERVER UPGRADE AT DIFFERENT MOMENTS, and this script has been
+# here before: register_run's ladder exists because the MCP SDK validates
+# arguments against the tool's advertised inputSchema and refuses additional
+# properties outright.
+#
+#   validating "arguments": validating root: unexpected additional
+#   properties ["paths"]
+#
+# Measured on 2026-09-19 while this change was still in the working tree: the
+# deployed image predated the argument, a writer's commit was refused with that
+# sentence, and it fell back to a checked-out copy of the previous script to get
+# signed at all. A new script against a not-yet-restarted server must not STOP,
+# because stopping means the human cannot commit.
+#
+# SO THE SECOND ATTEMPT DROPS `paths` AND SAYS SO, LOUDLY. What is lost is the
+# half of the bound that cannot be walked past; what remains is the half this
+# script already applied before it called anything — it accounted for the index
+# and refused a foreign path before a run was even registered. A commit that
+# gets here has already passed that. The operator is told which half is missing
+# and what to run to get it back.
+#
+# THE KEY IS NOT BURNED. Schema validation happens in the SDK, ahead of the tool
+# handler, so the refused attempt claimed no idempotency key and appended
+# nothing; the second attempt carries the same key by design.
+#
+# The retry is driven by the PAYLOAD and not by the exit status, for the reason
+# register_run states: `mcp` returns 0 for a JSON-RPC error, because the
+# transport worked and the server answered. `field` is what reads the answer,
+# so `field` is what decides.
+# ---------------------------------------------------------------------------
+SIGN_ERR="$(mktemp)"
+SIGNED="$(mcp "$AGENT_URL" sign_commit "$(sign_args "${CP_NAMED:-}")")" \
+  || fail "the MCP at $AGENT_URL could not be reached"
+if SHA="$(printf '%s' "$SIGNED" | field commit_sha 2>"$SIGN_ERR")"; then
+  :
+elif [ -n "${CP_NAMED:-}" ] && grep -q 'additional propert' "$SIGN_ERR" 2>/dev/null; then
+  echo "innsegl-commit: this deployment's sign_commit does not accept \`paths\` yet, so" >&2
+  echo "innsegl-commit:   the commit is bounded by this script alone: it accounted for" >&2
+  echo "innsegl-commit:   the index and refused nothing foreign before it called anything." >&2
+  echo "innsegl-commit:   What is missing is the server-side half, which no other client" >&2
+  echo "innsegl-commit:   of the tool can walk past. Restart the deployment to get it:" >&2
+  echo "innsegl-commit:     make innsegl-up-here" >&2
+  SIGNED="$(mcp "$AGENT_URL" sign_commit "$(sign_args '')")" \
+    || fail "the MCP at $AGENT_URL could not be reached"
+  if SHA="$(printf '%s' "$SIGNED" | field commit_sha 2>"$SIGN_ERR")"; then
+    :
+  else
+    cat "$SIGN_ERR" >&2
+    rm -f "$SIGN_ERR"
+    signing_refused
+  fi
+else
+  cat "$SIGN_ERR" >&2
+  rm -f "$SIGN_ERR"
+  signing_refused
 fi
+rm -f "$SIGN_ERR"
 IDX="$(printf '%s' "$SIGNED" | field rekor_entry.log_index 2>/dev/null || echo '?')"
 
 echo "innsegl-commit: signed $(git -C "$WT" rev-parse --short "$SHA")  rekor index $IDX"

@@ -946,7 +946,15 @@ func runSigner(t *testing.T, script string, onSign func(dir string)) (string, st
 	}))
 	t.Cleanup(srv.Close)
 
-	cmd := exec.CommandContext(t.Context(), "sh", script, "-m", "fix(thing): the change being signed")
+	// `-p changed.txt` is the one path this fixture stages, named out loud.
+	// Since #280 a caller committing its own work has to say which paths the
+	// commit is of — the index belongs to the working tree rather than to the
+	// caller, and a commit that named none would carry whatever anybody else
+	// staged. The fixture is a private t.TempDir() with exactly one staged
+	// path, so naming it changes nothing this test is about and keeps the
+	// script under test on its ordinary path rather than its -r exemption.
+	cmd := exec.CommandContext(t.Context(), "sh", script,
+		"-p", "changed.txt", "-m", "fix(thing): the change being signed")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"INNSEGL_MCP_ADMIN_URL="+srv.URL+"/",
