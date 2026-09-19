@@ -104,6 +104,14 @@ func (c *crashAtPhaseC) Append(ctx context.Context, body event.Fields) (event.Fi
 	return c.store.Append(ctx, body)
 }
 
+// EventByIdempotencyKey passes straight through. What this fake interrupts is
+// the one APPEND that closes the protocol; a read of the chain is not part of
+// the crash, and answering it from anywhere but the real chain would hide the
+// very state this case exists to leave behind.
+func (c *crashAtPhaseC) EventByIdempotencyKey(ctx context.Context, key string) (event.Fields, bool, error) {
+	return c.store.EventByIdempotencyKey(ctx, key)
+}
+
 // healthyWhileStopped is ADR-0024's probe, frozen in the "reachable" answer.
 // It stands in for the probe having run a moment before Fulcio died — the one
 // case ADR-0033 gate 7 says it cannot cover, and therefore the A → B window.

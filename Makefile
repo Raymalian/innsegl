@@ -39,8 +39,18 @@ build:
 	go build -ldflags '$(LDFLAGS)' -o $(BINARY) $(CMD)
 
 ## test: run the full suite with the race detector
+#
+# WHAT "THE WHOLE SUITE" IS, ASKED RATHER THAN ASSUMED — RM-170 (#275). This was
+# `go test ./...`, and `./...` reaches test/failure, which mints a new
+# transparency-log tree, and test/smoke, which ends its teardown in
+# `docker compose down -v`. Five call sites each decided that independently and
+# three of them ran it against a live deployment inside two days.
+#
+# scripts/test-suite.sh is the single place that decides, and `run` is it doing
+# the whole job: answer the question, refuse what must be refused, then run. On
+# a host with no deployment the answer is `./...` and nothing changes.
 test:
-	go test ./... -race
+	@scripts/test-suite.sh run -race
 
 ## lint: vet and golangci-lint
 lint:
@@ -48,8 +58,9 @@ lint:
 	golangci-lint run
 
 ## cover: write a coverage profile and print the per-function summary
+# Same answer, same one place — see the note on `test` above.
 cover:
-	go test ./... -covermode=atomic -coverprofile=$(COVERPROFILE)
+	@scripts/test-suite.sh run -covermode=atomic -coverprofile=$(COVERPROFILE)
 	go tool cover -func=$(COVERPROFILE)
 
 # ---------------------------------------------------------------------------
@@ -244,7 +255,16 @@ sigstore-down:
 # ---------------------------------------------------------------------------
 
 ## smoke: the fresh-clone contract — boot, run the demo agent, verify detached
-smoke: innsegl-stack-clean
+#
+# THE GUARD RUNS FIRST, AND IT IS INSIDE THE RECIPE RATHER THAN A PREREQUISITE —
+# RM-170 (#275). `innsegl-stack-clean` is itself the `down -v` that #168 is
+# about, so it must not run before the question is asked; make orders
+# prerequisites left to right only while it is not running in parallel, and a
+# gate that holds on a good day is the shape of defect this repository keeps
+# finding. A sub-make is the ordering that does not depend on -j.
+smoke:
+	@scripts/test-suite.sh guard test/smoke
+	@$(MAKE) --no-print-directory innsegl-stack-clean
 	go test ./test/smoke -run TestOPS004 -count=1 -v -timeout 40m
 
 # `make smoke` owns the shipped compose projects for the length of a run, and

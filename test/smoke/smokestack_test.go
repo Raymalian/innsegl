@@ -23,6 +23,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/segment"
+	"innsegl.dev/innsegl/internal/stackguard"
 )
 
 // ---------------------------------------------------------------------------
@@ -293,6 +294,19 @@ func requireStack(t *testing.T) *stack {
 }
 
 func TestMain(m *testing.M) {
+	// BEFORE ANYTHING ELSE — RM-170 (#275). This package's clean-slate
+	// preflight runs the README's teardown block, `docker compose down -v` on
+	// both shipped files, which is right on the fresh clone it is measuring and
+	// is a developer's ledger, Fulcio CA key and transparency log on a host that
+	// is running the deployment (#168). It ran against a live one twice in two
+	// days and did no damage both times, by luck: it printed its clean-slate
+	// line and then died on a container-name conflict with the live stack.
+	//
+	// scripts/test-suite.sh keeps every wrapper away from here. This is what
+	// `go test ./test/smoke` typed by hand runs into, and it is a refusal that
+	// says how to run the package properly rather than a ban on it.
+	stackguard.Refuse("test/smoke")
+
 	code := m.Run()
 	if sharedStack != nil {
 		sharedStack.stop()

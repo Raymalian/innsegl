@@ -28,6 +28,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 
 	"innsegl.dev/innsegl/internal/spire"
+	"innsegl.dev/innsegl/internal/stackguard"
 )
 
 // A SPIRE stack of this suite's own, from the shipped compose file, that these
@@ -1171,6 +1172,20 @@ func (s *stack) stop() {
 }
 
 func TestMain(m *testing.M) {
+	// BEFORE THE FIRST CONTAINER — RM-170 (#275). test/failure/sigstore-isolated.yml
+	// is isolated by PROJECT NAME, not by volume: sigstore.yml resolves the
+	// log's database from INNSEGL_TRUST_TRILLIAN_DB_VOLUME and marks it external
+	// when the durable trust environment is set, and this harness runs compose
+	// with `append(os.Environ(), ...)`. An ambient trust environment therefore
+	// hands the real transparency log to a stack whose tlog id defaults to 0 —
+	// the value that means MINT A NEW TREE. Measured once: 74 entries became 1,
+	// and every commit ever signed answered `unavailable` for its inclusion
+	// proof. It came back only because the pin was restored by hand.
+	//
+	// scripts/test-suite.sh decides; this asks it. With nothing running the
+	// answer is yes and the suite is unchanged.
+	stackguard.Refuse("test/failure")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	wd, err := os.Getwd()
 	if err != nil {
