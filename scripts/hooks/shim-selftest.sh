@@ -108,13 +108,23 @@ script_tool() {
 
 # drive runs the shim on one payload and leaves its exit status in $STATUS, its
 # stderr in $WORK/err and the calls it made in $CALLS (reset per drive).
+#
+# $INNSEGL_API_URL IS PINNED AT A DEAD PORT and not left to its default, which is
+# the deployment this machine may well be running. A selftest that asked the live
+# ledger how many commits a fixture run had made would answer differently
+# depending on what was up, and the capture path branches on that answer.
+#
+# $SIGNER defaults to the inert recorder below. The capture cases override it
+# with one that really commits, because "no commit" has to be asserted as a HEAD
+# that did not move.
 drive() {
   : > "$CALLS"
   printf '%s' "$1" | env \
     INNSEGL_MCP_ADMIN_URL="$ADMIN" \
     INNSEGL_RUNS_DIR="$RUNS" \
     INNSEGL_LOG_DIR="$LOG" \
-    INNSEGL_SIGNER="$WORK/signer" \
+    INNSEGL_SIGNER="${SIGNER:-$WORK/signer}" \
+    INNSEGL_API_URL="${API:-http://127.0.0.1:1/}" \
     INNSEGL_ADMIN_CREDENTIAL_MINT="${MINT:-}" \
     "$SHIM" > "$WORK/out" 2> "$WORK/err"
   STATUS=$?
@@ -592,61 +602,185 @@ else
   bad "the frozen derivation is referenced from more than the library seam"
 fi
 
-# --- #261: capture is bounded to what the run actually wrote -------------------
+# --- OPS-074..077: the capture is bounded, and the bound is on the COMMIT ------
 #
 # `git add -A` staged the whole tree, so a stopping run became the signed author
 # of whatever else was uncommitted. Measured three times on 2026-09-18, once by a
-# review subagent that had written nothing at all. The bound is the run's own
-# tool-call bodies; these drive the extraction the shim performs.
+# review subagent that had written nothing at all.
+#
+# THE FIRST FIX WAS TESTED THE WRONG WAY ROUND, and that is the lesson these
+# cases exist to hold. It added a bound on what the stop ADDS, and proved it by
+# calling the extraction directly against a fixture of bodies: 27 assertions, all
+# green, and a nine-file capture through the same code afterwards. Two holes, and
+# neither was visible from there, because neither is a property of the
+# extraction:
+#
+#   A BASH WRITE IS INVISIBLE. The run that slipped through made 62 `Bash`
+#   calls, 27 of them writing to a file, against 1 `Write` and 1 `Edit`. A
+#   filter that looks for Edit/Write/NotebookEdit describes how a PERSON writes
+#   files, not how these agents do.
+#
+#   `git add` REMOVES NOTHING. The stop commits the INDEX, so whatever another
+#   party had already staged went in regardless of what the bound picked.
+#
+# So these cases drive the SHIM, against a real repository, and assert what ended
+# up in a commit — not what a function returned. A case here fails if the capture
+# is unbounded even while every extraction assertion passes.
 
-bound() {   # $1 = body dir, $2 = worktree
-  python3 - "$1" "$2" <<'PYEOF' 2>/dev/null
-import json, os, pathlib, sys
-bodies, root = sys.argv[1], os.path.realpath(sys.argv[2])
-out = []
-for f in pathlib.Path(bodies).glob("*.json"):
-    try:
-        d = json.loads(f.read_text())
-    except Exception:
-        continue
-    if d.get("tool_name") not in ("Edit", "Write", "NotebookEdit"):
-        continue
-    fp = (d.get("tool_input") or {}).get("file_path")
-    if not isinstance(fp, str) or not fp:
-        continue
-    real = os.path.realpath(fp)
-    if real == root or real.startswith(root + os.sep):
-        out.append(os.path.relpath(real, root))
-print("\n".join(sorted(set(out))))
-PYEOF
+CREPO="$WORK/capture/repo"
+mkdir -p "$CREPO" "$WORK/nohooks"
+git -C "$CREPO" init -q 2>/dev/null
+git -C "$CREPO" config user.email "selftest@example.test"
+git -C "$CREPO" config user.name "shim-selftest"
+git -C "$CREPO" config commit.gpgsign false
+# core.hooksPath, because this repository sets one and a fixture living inside
+# it would otherwise inherit the gates written for the real tree.
+git -C "$CREPO" config core.hooksPath "$WORK/nohooks"
+printf 'base\n' > "$CREPO/base.txt"
+git -C "$CREPO" add base.txt
+git -C "$CREPO" commit -q -m "base"
+CREPO_REAL="$(cd "$CREPO" && pwd -P)"
+
+# A SIGNER THAT ACTUALLY COMMITS, so "no commit" is asserted as a HEAD that did
+# not move rather than as a script that was not called. It refuses anywhere but
+# the fixture: earlier cases drive a stop against the REAL repository, and a
+# signer that committed would commit there.
+cat > "$WORK/capture-signer" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/signer.calls"
+[ "\$(pwd -P)" = "$CREPO_REAL" ] || { echo "capture-signer: refusing outside the fixture" >&2; exit 1; }
+git commit -q -m "captured by the harness" >/dev/null 2>&1
+SH
+chmod +x "$WORK/capture-signer"
+
+# capture_run <agent-id> <run-id> — a registered run whose marker names the
+# fixture, with an empty body store ready for the case to plant into.
+capture_run() {
+  script_tool observe_session ok "{\"session_id\":\"$1\",\"phase\":\"start\",\"known\":true,\"registered\":true,\"run_id\":\"$2\",\"task\":\"rm158\",\"worktree\":\"\",\"repo\":\"example.test/org/name\",\"branch\":\"dev/rm158\",\"agent_type\":\"prober\"}"
+  SIGNER="$WORK/capture-signer" drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-1\",\"agent_id\":\"$1\",\"agent_type\":\"prober\",\"cwd\":\"$CREPO\"}"
+  rm -rf "${LOG:?}/$2"; mkdir -p "$LOG/$2"
 }
 
-CAPT="$WORK/capture"; mkdir -p "$CAPT/tree/sub" "$CAPT/bodies-readonly" "$CAPT/bodies-writer"
-: >"$CAPT/tree/mine.txt"; : >"$CAPT/tree/sub/theirs.txt"; : >"$CAPT/tree/elsewhere.txt"
+# wrote_body <run-id> <name> <tool> <tool_input json>
+wrote_body() { printf '{"tool_name":"%s","tool_input":%s}' "$3" "$4" > "$LOG/$1/$2.json"; }
 
-# A run that only read: no Edit/Write body at all.
-printf '{"tool_name":"Read","tool_input":{"file_path":"%s/tree/mine.txt"}}' "$CAPT" >"$CAPT/bodies-readonly/a.json"
-if [ -z "$(bound "$CAPT/bodies-readonly" "$CAPT/tree")" ]; then
-  ok "#261: a run that wrote nothing captures nothing"
+# capture_stop <agent-id> — the stop, with the committing signer in place.
+capture_stop() {
+  script_tool observe_session ok "{\"session_id\":\"$1\",\"phase\":\"stop\",\"known\":true,\"retired\":true,\"run_id\":\"retired\"}"
+  : > "$WORK/signer.calls"
+  SIGNER="$WORK/capture-signer" drive "{\"hook_event_name\":\"SubagentStop\",\"session_id\":\"sess-1\",\"agent_id\":\"$1\",\"agent_type\":\"prober\"}"
+}
+
+staged_now() { git -C "$CREPO" diff --cached --name-only | sort | tr '\n' ' '; }
+
+# --- OPS-074: the index holds work the run cannot account for ------------------
+#
+# The run wrote one file through `Edit`. Another party has already STAGED a file
+# of its own, and the run also ran a `Bash` command that wrote a third. A stop
+# that commits the index signs all three under this run.
+capture_run agent-cap1 run-cap1
+wrote_body run-cap1 a Edit "{\"file_path\":\"$CREPO/mine.txt\"}"
+# The Bash write, recorded exactly as the harness records it: a command, and no
+# file path anywhere in the event. Guessing a filename out of the redirection is
+# `git add -A` with more steps, so this must not be credited to the run.
+wrote_body run-cap1 b Bash "{\"command\":\"printf x > $CREPO/bashwrote.txt\"}"
+printf 'mine\n'   > "$CREPO/mine.txt"
+printf 'bash\n'   > "$CREPO/bashwrote.txt"
+printf 'theirs\n' > "$CREPO/theirs.txt"
+git -C "$CREPO" add theirs.txt        # staged by someone who is not this run
+HEAD_BEFORE="$(git -C "$CREPO" rev-parse HEAD)"
+capture_stop agent-cap1
+cp "$WORK/err" "$WORK/err.cap1"
+
+if [ "$(git -C "$CREPO" rev-parse HEAD)" = "$HEAD_BEFORE" ] && [ ! -s "$WORK/signer.calls" ]; then
+  ok "OPS-074: an index holding work the run cannot account for produces no commit"
 else
-  bad "#261: a read-only run would still have staged files"
+  bad "OPS-074: the stop committed $(git -C "$CREPO" show --stat --oneline HEAD | head -n 5 | tr '\n' ' ')"
+fi
+if [ "$(staged_now)" = "theirs.txt " ]; then
+  ok "OPS-074: the refusal leaves the index exactly as it found it"
+else
+  bad "OPS-074: the index after the refusal is '$(staged_now)', want 'theirs.txt '"
+fi
+if grep -q 'theirs.txt' "$WORK/err.cap1"; then
+  ok "OPS-074: and it names the path it could not account for"
+else
+  bad "OPS-074: the refusal does not name theirs.txt: $(cat "$WORK/err.cap1")"
+fi
+if [ ! -s "$WORK/signer.calls" ] && ! grep -q 'bashwrote.txt' "$WORK/signer.calls"; then
+  ok "OPS-074: a file written by a Bash redirection is not guessed into the capture"
+else
+  bad "OPS-074: a Bash write reached the capture: $(cat "$WORK/signer.calls")"
 fi
 
-# A run that wrote one file, in a tree where other files are also dirty.
-printf '{"tool_name":"Edit","tool_input":{"file_path":"%s/tree/mine.txt"}}' "$CAPT" >"$CAPT/bodies-writer/a.json"
-printf '{"tool_name":"Write","tool_input":{"file_path":"%s/outside.txt"}}' "$CAPT" >"$CAPT/bodies-writer/b.json"
-got="$(bound "$CAPT/bodies-writer" "$CAPT/tree")"
-if [ "$got" = "mine.txt" ]; then
-  ok "#261: only the run's own writes are staged, and only inside its worktree"
+# --- OPS-075: a run that recorded no write captures nothing, in any tree -------
+#
+# THE FIRST MEASURED INCIDENT, in a fixture. A review subagent read files for
+# eight minutes, wrote none, and its stop signed 12 files and ~890 lines the
+# session had authored. Reading alone must reach no commit however dirty the
+# tree is and whoever else has staged what.
+git -C "$CREPO" reset -q
+git -C "$CREPO" checkout -q -- .
+git -C "$CREPO" clean -qfd
+capture_run agent-cap2 run-cap2
+wrote_body run-cap2 a Read "{\"file_path\":\"$CREPO/base.txt\"}"
+printf 'dirty\n' >> "$CREPO/base.txt"
+printf 'other\n'   > "$CREPO/other.txt"
+printf 'theirs2\n' > "$CREPO/theirs2.txt"
+git -C "$CREPO" add theirs2.txt       # the session's own work, already staged
+HEAD_BEFORE="$(git -C "$CREPO" rev-parse HEAD)"
+capture_stop agent-cap2
+if [ "$(git -C "$CREPO" rev-parse HEAD)" = "$HEAD_BEFORE" ] && [ ! -s "$WORK/signer.calls" ]; then
+  ok "OPS-075: a run that recorded no write produces no commit in a dirty tree"
 else
-  bad "#261: expected just mine.txt, got: $(echo "$got" | tr '\n' ' ')"
+  bad "OPS-075: a read-only run committed $(git -C "$CREPO" show --stat --oneline HEAD | head -n 5 | tr '\n' ' ')"
+fi
+if [ "$(staged_now)" = "theirs2.txt " ]; then
+  ok "OPS-075: and it neither stages nor unstages anything on its way past"
+else
+  bad "OPS-075: a read-only run left the index as '$(staged_now)', want 'theirs2.txt '"
+fi
+if grep -q 'run-cap2' "$WORK/err"; then
+  ok "OPS-075: and it says which run declined, so the work is not stranded silently"
+else
+  bad "OPS-075: nothing named run-cap2: $(cat "$WORK/err")"
 fi
 
-# A body store that is not there: the run cannot say what it touched.
-if [ -z "$(bound "$CAPT/nonexistent" "$CAPT/tree")" ]; then
-  ok "#261: an unreadable body store yields nothing, so the shim refuses"
+# --- OPS-076: a refusal is nameable -------------------------------------------
+#
+# Stranding the work silently is worse than the misattribution this fixes: the
+# run is gone, and the only party left who can sign its work is the operator. So
+# a refusal carries the run id AND the argument that signs under it.
+if grep -q 'run-cap1' "$WORK/err.cap1" && grep -q -- '-r run-cap1' "$WORK/err.cap1"; then
+  ok "OPS-076: a refusal names the run and the argument that signs under it later"
 else
-  bad "#261: a missing body store produced paths"
+  bad "OPS-076: the refusal does not say what to sign the work under: $(cat "$WORK/err.cap1")"
+fi
+
+# --- OPS-077: the capture that IS allowed is bounded to the run's own writes ---
+git -C "$CREPO" reset -q
+git -C "$CREPO" checkout -q -- .
+git -C "$CREPO" clean -qfd
+capture_run agent-cap3 run-cap3
+wrote_body run-cap3 a Write "{\"file_path\":\"$CREPO/mine3.txt\"}"
+printf 'mine3\n'   > "$CREPO/mine3.txt"
+printf 'theirs3\n' > "$CREPO/theirs3.txt"     # dirty, and nobody staged it
+HEAD_BEFORE="$(git -C "$CREPO" rev-parse HEAD)"
+capture_stop agent-cap3
+if [ "$(git -C "$CREPO" rev-parse HEAD)" != "$HEAD_BEFORE" ]; then
+  ok "OPS-077: a run whose index is entirely its own is captured"
+else
+  bad "OPS-077: nothing was captured: $(cat "$WORK/err")"
+fi
+if grep -q -- '-r run-cap3' "$WORK/signer.calls"; then
+  ok "OPS-077: and it is signed under that run, not under a fresh identity"
+else
+  bad "OPS-077: the signer was given '$(cat "$WORK/signer.calls")'"
+fi
+if [ "$(git -C "$CREPO" show --name-only --format= HEAD | sort | tr -d '\n' | sed 's/^ *//')" = "mine3.txt" ]; then
+  ok "OPS-077: the commit holds the run's own write and nothing else in the tree"
+else
+  bad "OPS-077: the capture committed $(git -C "$CREPO" show --name-only --format= HEAD | tr '\n' ' ')"
 fi
 
 # --- OPS-073: single-listener mode, unchanged --------------------------------
