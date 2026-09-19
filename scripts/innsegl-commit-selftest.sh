@@ -72,7 +72,17 @@ RUNSTATES="$WORK/runstates"  # <run_id> <status>, what the read API answers
 STUB="$ROOT/scripts/hooks/stub-mcp.py"
 [ -f "$STUB" ] || { echo "commit-selftest: $STUB is missing" >&2; exit 4; }
 
-STUB_CALLS="$CALLS" STUB_SCRIPTED="$SCRIPTED" python3 "$STUB" > "$WORK/port" 2>"$WORK/stub.err" &
+# EMPTY UNTIL THE CREDENTIAL SECTION FILLS IT, so every case above that one
+# runs against a listener demanding nothing. That is single-listener mode, and
+# OPS-073 is the assertion that it did not change (#266).
+CREDFILE="$WORK/required"
+AUTHLOG="$WORK/authlog"
+: > "$CREDFILE"
+: > "$AUTHLOG"
+
+STUB_CALLS="$CALLS" STUB_SCRIPTED="$SCRIPTED" \
+STUB_CREDENTIAL="$CREDFILE" STUB_AUTH_LOG="$AUTHLOG" \
+python3 "$STUB" > "$WORK/port" 2>"$WORK/stub.err" &
 STUB_PID=$!
 for _ in $(seq 1 100); do
   PORT="$(head -n 1 "$WORK/port" 2>/dev/null)"
@@ -208,6 +218,7 @@ drive() {
       INNSEGL_MCP_URL="$MCP_URL" \
       INNSEGL_API_URL="${API_OVERRIDE:-$API_URL}" \
       INNSEGL_RUNS_DIR="$RUNS" \
+      INNSEGL_ADMIN_CREDENTIAL_MINT="${MINT:-}" \
       "$SIGNER" "$@" -m "test(rm134): a staged change" ) > "$WORK/out" 2>&1
   STATUS=$?
 }
@@ -364,6 +375,128 @@ if called sign_commit "\"run_id\": \"$RETIRED\"" && ! grep -q '^register_agent '
   ok "-r is carried through untouched; nothing is succeeded behind the caller"
 else
   bad "-r retired: status $STATUS, calls: $(cat "$CALLS")"
+fi
+
+# --- OPS-073: single-listener mode, unchanged --------------------------------
+#
+# ASSERTED FIRST, over all eleven cases above it, because "nothing changed" is
+# only worth anything as a statement about the whole suite. Every one of them
+# has just run against a listener demanding nothing; not one request may have
+# carried a credential, and nothing may have been minted.
+if [ -s "$AUTHLOG" ] && ! grep -qv '^-$' "$AUTHLOG"; then
+  ok "OPS-073: with nothing to authenticate, no request carries a credential"
+else
+  bad "OPS-073: a credential was presented to a listener that asked for none: $(grep -v '^-$' "$AUTHLOG" | head -n 2)"
+fi
+if [ ! -f "$WORK/mint.count" ]; then
+  ok "OPS-073: and nothing was minted — the mint is driven by a refusal, not a mode"
+else
+  bad "OPS-073: $(cat "$WORK/mint.count") credential(s) were minted unprompted"
+fi
+
+# --- OPS-069..071: the listener's credential (#266) ---------------------------
+#
+# #264 put a repository-scoped credential in front of register_agent and
+# retire_agent, both of which this script calls. Measured before #266: this file
+# carried no Authorization header, so deploying the check answered the FIRST of
+# those with 401 and no commit could be signed at all.
+#
+# THE HARD CASE IS EXPIRY, and it is what the budget below reproduces. A
+# credential lives fifteen minutes and cannot be withdrawn; one `sign_commit`
+# can take five, so a run that registers, signs and retires may outlive the
+# credential it started with. A signing path that died there would lose work
+# that was already done.
+cat > "$WORK/mint" <<'SH'
+#!/bin/sh
+# Issues cred-1, cred-2, ... and tells the stub to demand the newest one, good
+# for MINT_USES requests. Three requests is exactly one MCP call — initialize,
+# the initialized notification, and the call itself — so a budget of three ages
+# every credential out the moment the call that used it finishes. Fifteen
+# minutes of waiting, in one line.
+n=$(( $(cat "$MINT_STATE/mint.count" 2>/dev/null || echo 0) + 1 ))
+printf '%s' "$n" > "$MINT_STATE/mint.count"
+printf '%s\n' "$1" >> "$MINT_STATE/mint.scopes"
+printf 'cred-%s %s\n' "$n" "${MINT_USES:-100}" > "$MINT_STATE/required"
+printf 'cred-%s\n' "$n"
+SH
+chmod +x "$WORK/mint"
+export MINT_STATE="$WORK" MINT_USES=3
+MINT="$WORK/mint"
+
+# A listener demanding something nobody holds, and a tree with no pointer — so
+# this run registers, signs and retires: three calls, one process.
+rm -f "$PTR"
+printf 'spent 0\n' > "$CREDFILE"
+: > "$AUTHLOG"
+drive
+
+# 12. OPS-069 — the whole cycle completes behind the credential.
+if [ "$STATUS" -eq 0 ] && called register_agent && called sign_commit && grep -q 'signed' "$WORK/out"; then
+  ok "OPS-069: register, sign and retire all complete against a listener that demands one"
+else
+  bad "OPS-069: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+if [ "$(head -n 1 "$AUTHLOG")" = "-" ] && grep -q '^Bearer cred-1$' "$AUTHLOG"; then
+  ok "OPS-069: nothing is minted until the listener asks, and then it is presented"
+else
+  bad "OPS-069: first request carried '$(head -n 1 "$AUTHLOG")'; log: $(sort -u "$AUTHLOG" | tr '\n' ' ')"
+fi
+if [ "$(tail -n 1 "$WORK/mint.scopes")" = "example.test/org/name" ]; then
+  ok "OPS-069: the credential is scoped to the repository being committed to"
+else
+  bad "OPS-069: minted for '$(tail -n 1 "$WORK/mint.scopes")', want example.test/org/name"
+fi
+
+# 13. OPS-070 — a credential spent mid-run is re-minted, not failed.
+#
+# Three calls, each of which exhausts its credential, so the second and third
+# are refused on their own handshake and recover. The count is the assertion: a
+# script that minted once and gave up would have stopped at the second call,
+# holding a registered run and an unsigned tree.
+if [ "$(cat "$WORK/mint.count")" -ge 3 ]; then
+  ok "OPS-070: a credential that runs out mid-run is re-minted per refused call"
+else
+  bad "OPS-070: only $(cat "$WORK/mint.count") credential(s) minted across three calls"
+fi
+if grep -q '^Bearer cred-2$' "$AUTHLOG" && grep -q '^Bearer cred-3$' "$AUTHLOG"; then
+  ok "OPS-070: each later call carries the credential minted for it, not the dead one"
+else
+  bad "OPS-070: the re-minted credentials were never presented: $(sort -u "$AUTHLOG" | tr '\n' ' ')"
+fi
+
+# 14. OPS-071 — the value reaches no file and no line this script printed.
+#
+# It cannot be withdrawn before it expires, because a revocation list would be
+# a dependency on the issuer being reachable. A copy left behind is therefore a
+# copy anyone on this machine can replay for the rest of its life.
+LEAKED="$(grep -rl 'cred-' "$RUNS" "$WORK/out" "$REPO_DIR/.git" 2>/dev/null)"
+if [ -z "$LEAKED" ]; then
+  ok "OPS-071: the credential is in no pointer, no git metadata and nothing printed"
+else
+  bad "OPS-071: the credential was written to: $LEAKED"
+fi
+if grep -Fq 'curl -sS -K -' "$SIGNER" \
+   && ! grep -qE '^[^#]*(-H|--header)[^#]*Authorization' "$SIGNER" \
+   && ! grep -qE '^[^#]*export[[:space:]]+ADMIN_CRED' "$SIGNER"; then
+  ok "OPS-071: it travels in a curl configuration on a pipe — no argv, no file, no export"
+else
+  bad "OPS-071: the credential reaches a command line or the environment"
+fi
+
+# 15. AND A REFUSAL SAYS WHAT TO DO. The listener answers every credential
+#     failure with one byte-identical sentence by design, so this is the only
+#     place an operator learns which command mints and against which key. It
+#     must also not blame the deployment: the server is up and answering.
+MINT="$WORK/no-mint"
+printf 'spent 0\n' > "$CREDFILE"
+drive
+if [ "$STATUS" -ne 0 ] \
+   && grep -q 'admin-credential mint' "$WORK/out" \
+   && grep -q 'signing.key' "$WORK/out" \
+   && ! grep -q 'could not be reached' "$WORK/out"; then
+  ok "OPS-069: a refusal names the mint command and the key, and blames no outage"
+else
+  bad "OPS-069: status $STATUS, said: $(cat "$WORK/out")"
 fi
 
 echo

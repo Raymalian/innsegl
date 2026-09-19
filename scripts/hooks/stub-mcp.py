@@ -14,6 +14,22 @@ Two environment variables, both required:
     STUB_SCRIPTED   read per call, one line per tool:
                     "<tool> <ok|err> <result json>"
 
+Two more, both optional and both off by default, so every caller that predates
+them is answered exactly as before (#266):
+
+    STUB_CREDENTIAL a file holding "<token> <requests it is still good for>".
+                    Absent, empty, or a file that is not there: no credential is
+                    required and this stub behaves as it always did. Present: a
+                    request that does not carry "Authorization: Bearer <token>"
+                    is answered 401 before anything is recorded, and so is one
+                    that carries it after the budget is spent -- which is how a
+                    credential EXPIRING mid-call is reproduced without waiting
+                    fifteen minutes for a real one to.
+    STUB_AUTH_LOG   appended to, one line per request: the Authorization header
+                    as it arrived, or "-" for a request that carried none. It is
+                    what lets a self-test assert that a credential was presented
+                    at all, and that nothing else ever carries one.
+
 The chosen port is printed on stdout so the caller can bind to :0 and not race
 anything.
 
@@ -31,6 +47,34 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 CALLS = os.environ["STUB_CALLS"]
 SCRIPTED = os.environ["STUB_SCRIPTED"]
+CREDENTIAL = os.environ.get("STUB_CREDENTIAL", "")
+AUTH_LOG = os.environ.get("STUB_AUTH_LOG", "")
+
+# The shipped listener's own answer, byte for byte (internal/mcp/admincred.go).
+# A stub that refused with a different sentence would let a caller key on the
+# wrong string and pass here while failing against the deployment.
+REFUSAL = ("unauthorized: the identity-lifecycle listener requires a "
+           "repository-scoped credential")
+
+
+def required():
+    """(token, uses) this stub currently demands, or (None, 0) for no check."""
+    if not CREDENTIAL:
+        return None, 0
+    try:
+        with open(CREDENTIAL, encoding="utf-8") as fh:
+            token, _, uses = fh.readline().strip().partition(" ")
+    except OSError:
+        return None, 0
+    if not token:
+        return None, 0
+    return token, int(uses or "0")
+
+
+def spend(token, uses):
+    """Charge one request against the budget, so a credential can run out."""
+    with open(CREDENTIAL, "w", encoding="utf-8") as fh:
+        fh.write("%s %d\n" % (token, uses - 1))
 
 
 def scripted(tool):
@@ -48,7 +92,40 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def refuse(self):
+        body = REFUSAL.encode()
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", "Bearer")
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def admitted(self):
+        """The credential check, BEFORE the body is read or anything recorded.
+
+        That order is the shipped server's: #264 wraps the whole admin handler,
+        so a refused caller cannot even learn the surface -- and a stub that
+        recorded the call first would let a caller pass a self-test while
+        appending nothing against the real listener.
+        """
+        presented = self.headers.get("Authorization", "")
+        if AUTH_LOG:
+            with open(AUTH_LOG, "a", encoding="utf-8") as fh:
+                fh.write((presented or "-") + "\n")
+        token, uses = required()
+        if token is None:
+            return True
+        if presented != "Bearer " + token or uses <= 0:
+            return False
+        spend(token, uses)
+        return True
+
     def do_POST(self):
+        if not self.admitted():
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.refuse()
+            return
         raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         try:
             req = json.loads(raw)

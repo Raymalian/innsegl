@@ -75,12 +75,58 @@
 # name carrying a quote used to build a malformed request, and the transport's
 # two reply shapes needed two regexps that had to be kept in step.
 #
+# # Presenting a credential — #266
+#
+# #264's listener answers an unauthenticated caller with one byte-identical
+# 401, before the MCP session layer, so `initialize` is refused on the same
+# terms as a tool call. Four decisions, and each is the cheap half of a pair:
+#
+#   WHO MINTS. This file, for itself, by running the shipped
+#   `innsegl admin-credential mint` inside a throwaway container that mounts the
+#   deployment's private signing key READ-ONLY and has no network at all. The
+#   key is never copied onto this machine's filesystem and this file never sees
+#   it; the only value that crosses the boundary is the credential, on a pipe.
+#   A long-lived minting service would be a standing mint oracle; a container
+#   that lives for a fifth of a second and is reachable only through the Docker
+#   API adds no privilege that API did not already carry.
+#
+#   HOW OFTEN. Never, unless the listener refuses. The first attempt of a hook
+#   carries no credential; a 401 — and nothing else — mints one and repeats the
+#   same call exactly once. A deployment that does not enforce makes no 401,
+#   mints nothing and costs nothing, so single-listener mode is unchanged by
+#   construction rather than by a flag someone has to set correctly.
+#
+#   WHAT EXPIRY DOES. Nothing special, which is the point. A hook is a
+#   short-lived process, so within one the question rarely arises; when it does
+#   — the SubagentStop path can spend minutes signing an agent's leftover work
+#   before it retires the run — the next call is refused, a fresh credential is
+#   minted, and the call is repeated. No clock is read here and no `exp` is
+#   parsed: the server's own refusal is the only trigger, so there is never a
+#   second opinion about when a credential died.
+#
+#   WHERE IT IS KEPT. In one shell variable, for the life of one process. Not
+#   exported, so it reaches no child but the one handed it; not written, so no
+#   marker and no file on this machine holds it; not logged; and never in an
+#   argument vector — it travels to the client on STDIN, because `ps` shows the
+#   arguments of every process on this machine and a bearer token there is
+#   replayable for the rest of its fifteen minutes.
+#
+# AND A STOP STILL NEVER BLOCKS. A stop that cannot authenticate warns and exits
+# 0 like every other stop failure: the run expires on its TTL, which is what the
+# reaper is for, and a blocked stop was measured producing nine invocations.
+#
 # # Two rules that are not negotiable
 #
 # NEVER `exit 2` ON A STOP PATH. Measured: a blocked stop produced NINE repeated
 # invocations before the harness gave up — a retry storm, not a refusal. Every
 # failure on a stop path warns and exits 0. The run expires on its TTL, which is
 # what the TTL is for.
+#
+# THE CREDENTIAL IS MINTED, NEVER KEPT — #266. #264 put a repository-scoped
+# credential in front of all six identity-lifecycle tools, and every call this
+# file makes is to one of them. Measured before #266: `grep -c Authorization`
+# here returned 0, so the check could not be deployed without silencing every
+# registration on the machine. See "Presenting a credential" below.
 #
 # RECORDING IS BEST-EFFORT AND SAYS SO. A hook-based record is structurally
 # incomplete and that is not a bug to be fixed: a file written through `Bash` —
@@ -164,11 +210,173 @@ warn() { echo "innsegl: $*" >&2; }
 # end a branch without deciding it.
 say_detail() { _d="$(reply_field "$1" detail)"; [ -n "$_d" ] && warn "  $_d"; return 0; }
 
+# ---------------------------------------------------------------------------
+# #266 — THE CREDENTIAL. One variable, one mint, written nowhere.
+# ---------------------------------------------------------------------------
+
+# Not exported. `export` here would hand the credential to every child this
+# hook runs — git, curl, shasum, the signer — and to anything they run, which
+# is precisely "an environment variable that outlives the call".
+ADMIN_CRED=""
+CRED_REPO=""
+CRED_REMEDY_SAID=""
+
+# Where this deployment's private signing key lives, as deploy/compose's own
+# volume and image names. Both overridable for a deployment that renamed either.
+ADMIN_KEY_VOLUME="${INNSEGL_ADMIN_KEY_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-admin-key}"
+ADMIN_KEY_PATH="${INNSEGL_ADMIN_KEY_PATH:-/k/signing.key}"
+ADMIN_IMAGE="${INNSEGL_IMAGE:-innsegl:local}"
+
+# repo_id_of prints doc 02 §5's host/org/name for a working tree, or nothing.
+#
+# THIS IS THE ONE DERIVATION E11 COULD NOT TAKE, and it is here for a reason
+# that does not apply to branch, task or worktree: those are things the ledger
+# records and `describe_workspace` answers, while this names the repository a
+# CREDENTIAL AUTHORISES — and the credential has to exist before the call that
+# would ask. There is no order of operations in which the server answers it.
+#
+# `git remote get-url` and not `git config --get remote.origin.url`, because
+# the MCP's own repoIDFromWorktree uses the former: only it applies an
+# operator's `insteadOf` rewrites, and a caller that skipped them would derive
+# a repository the server does not agree with — refused, with a listener that
+# by design will not say why. scripts/innsegl-commit.sh carries the same
+# pipeline and shim-selftest.sh pins the two against each other.
+#
+# doc 02 §5 lowercases the HOST and leaves the org and the name alone, so
+# `github.com/Example-Org/Example-Repo` is correct and lowercasing all three
+# names a repository that does not exist on a case-sensitive forge.
+repo_id_of() {
+  [ -n "${1:-}" ] && [ -d "$1" ] || return 1
+  git -C "$1" remote get-url origin 2>/dev/null \
+    | sed -e 's|^[a-z][a-z0-9+.-]*://||' -e 's|^git@||' -e 's|:|/|' -e 's|\.git$||' -e 's|/*$||' \
+    | awk -F/ 'NF>=3 { h = tolower($1); p = $2; for (i = 3; i <= NF; i++) p = p "/" $i; print h "/" p }'
+}
+
+# cred_repo prints the repository a credential for this event must authorise.
+#
+# FOUR SOURCES, MOST AUTHORITATIVE FIRST, because a stop carries no cwd:
+#
+#   1  INNSEGL_REPO_ID     an operator who has said it outright
+#   2  the marker's `repo` THE MCP'S OWN ANSWER, recorded at registration. This
+#                          is the one that cannot disagree with the server, so
+#                          it is preferred over anything derived here.
+#   3  the harness's cwd   what every start and every PostToolUse carries
+#   4  the marker's `dir`  where the harness said the run was working, which is
+#                          what a SubagentStop has instead of a cwd
+#
+# Answered once and remembered for the process; a hook handles one event about
+# one repository.
+cred_repo() {
+  [ -n "$CRED_REPO" ] && { printf '%s' "$CRED_REPO"; return 0; }
+  if [ -n "${INNSEGL_REPO_ID:-}" ]; then
+    CRED_REPO="$INNSEGL_REPO_ID"
+  else
+    _mark="$(recall)"
+    CRED_REPO="$(reply_field "${_mark:-}" repo)"
+    if [ -z "$CRED_REPO" ]; then
+      for _d in "$CWD" "$(reply_field "${_mark:-}" dir)" "$PWD"; do
+        [ -n "$_d" ] || continue
+        CRED_REPO="$(repo_id_of "$_d")"
+        [ -n "$CRED_REPO" ] && break
+      done
+    fi
+  fi
+  [ -n "$CRED_REPO" ] || return 1
+  printf '%s' "$CRED_REPO"
+}
+
+# mint_admin_credential fills $ADMIN_CRED, or says what to run and fails.
+#
+# THE KEY IS READ WHERE IT LIVES. The deployment's one-shot writes it 0400 and
+# root-owned onto a volume nothing else in the stack mounts; this runs the
+# shipped mint command against that volume READ-ONLY, in a container with no
+# network, no writable root filesystem and no privilege escalation, which
+# prints one credential and exits. `--user 0:0` because 0400 root-owned is the
+# point — the image's own 1000:1000 cannot read it, so neither could a
+# compromised innsegl-mcp, which does not mount this volume at all.
+#
+# A TIMEOUT WHEN THE SYSTEM HAS ONE. A wedged container runtime must not wedge
+# a harness hook; where `timeout` is absent the mint is still bounded by docker
+# failing fast against a daemon that is not there.
+mint_admin_credential() {
+  _scope="$(cred_repo)" || {
+    warn "no repository could be named for this event, so no credential can be minted for it"
+    return 1
+  }
+  _limit=""
+  command -v timeout >/dev/null 2>&1 && _limit="timeout ${INNSEGL_ADMIN_CREDENTIAL_TIMEOUT:-20}"
+  ADMIN_CRED=""
+  if [ -n "${INNSEGL_ADMIN_CREDENTIAL_MINT:-}" ]; then
+    # An operator whose signing key is not on this machine's container volume:
+    # any command that prints one credential for the repository it is given.
+    # Deliberately word-split — a command with its own arguments is the normal
+    # case.
+    ADMIN_CRED="$($INNSEGL_ADMIN_CREDENTIAL_MINT "$_scope" 2>/dev/null)" || ADMIN_CRED=""
+  elif command -v docker >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    ADMIN_CRED="$($_limit docker run --rm --network none --read-only --user 0:0 \
+      --security-opt no-new-privileges \
+      -v "$ADMIN_KEY_VOLUME:$(dirname "$ADMIN_KEY_PATH"):ro" \
+      "$ADMIN_IMAGE" \
+      admin-credential mint -key "$ADMIN_KEY_PATH" -repo "$_scope" 2>/dev/null)" || ADMIN_CRED=""
+  fi
+  ADMIN_CRED="$(printf '%s' "$ADMIN_CRED" | tr -d '\r\n')"
+  [ -n "$ADMIN_CRED" ] || { credential_remedy "$_scope"; return 1; }
+  return 0
+}
+
+# credential_remedy — a refusal that says what to run, once per process.
+#
+# The listener answers every credential failure with one byte-identical
+# sentence, because a distinguishable reason is an oracle over which audiences
+# and repositories exist. That makes THIS the only place an operator can be
+# told what to do, and a 401 with no remedy strands an agent holding finished
+# work.
+credential_remedy() {
+  [ -z "$CRED_REMEDY_SAID" ] || return 0
+  CRED_REMEDY_SAID=1
+  warn "the identity lifecycle at $ADMIN_URL requires a repository-scoped"
+  warn "  credential and none could be minted for ${1:-this repository}."
+  warn ""
+  warn "  Mint one against this deployment's signing key:"
+  warn "    docker run --rm --network none --user 0:0 \\"
+  warn "      -v $ADMIN_KEY_VOLUME:$(dirname "$ADMIN_KEY_PATH"):ro $ADMIN_IMAGE \\"
+  warn "      admin-credential mint -key $ADMIN_KEY_PATH -repo ${1:-<host/org/name>}"
+  warn ""
+  warn "  The key is written by the deployment's own one-shot, so an empty"
+  warn "  volume means the stack has never been up with the lifecycle split:"
+  warn "    make innsegl-up"
+  warn ""
+  warn "  Minting elsewhere: set INNSEGL_ADMIN_CREDENTIAL_MINT to a command"
+  warn "  that prints one credential for the repository it is given."
+  warn ""
+  warn "  The listener will never say why one is inadmissible. Ask on this"
+  warn "  machine instead: innsegl admin-credential verify -jwks <set>"
+}
+
 # One MCP call: mcp_call <tool> <name> <value> ... → the tool's result object.
+#
+# THE REFUSAL IS THE ONLY TRIGGER (#266). The first attempt carries whatever
+# credential is held, which on a fresh hook is none; status 3 means the
+# listener refused one, and the answer is to mint and repeat the SAME call
+# once. That one branch covers every case there is: a listener that enforces,
+# a credential that aged out between two calls of a long stop, and a
+# deployment that enforces nothing — which never returns 3, so never mints.
+#
+# EXACTLY ONCE, because a loop here is a loop against a server that has already
+# said no.
 mcp_call() {
   _tool="$1"
   shift
-  python3 -c "$MCP_CLIENT" "$ADMIN_URL" "$_tool" "$@" 2>/dev/null
+  _out="$(printf '%s\n' "$ADMIN_CRED" | python3 -c "$MCP_CLIENT" "$ADMIN_URL" "$_tool" "$@" 2>/dev/null)"
+  _rc=$?
+  if [ "$_rc" -eq 3 ] && mint_admin_credential; then
+    _out="$(printf '%s\n' "$ADMIN_CRED" | python3 -c "$MCP_CLIENT" "$ADMIN_URL" "$_tool" "$@" 2>/dev/null)"
+    _rc=$?
+    [ "$_rc" -eq 3 ] && credential_remedy "$CRED_REPO"
+  fi
+  printf '%s' "$_out"
+  return "$_rc"
 }
 
 # THE CLIENT ITSELF, in one place, because a shim's transport should be the
@@ -187,10 +395,16 @@ mcp_call() {
 # ARG_MAX fails the call rather than being silently truncated — the tool bounds
 # one body at a mebibyte in any case.
 MCP_CLIENT='
-import json, sys, urllib.request
+import json, sys, urllib.error, urllib.request
 
 url, tool = sys.argv[1], sys.argv[2]
 args = {k: v for k, v in zip(sys.argv[3::2], sys.argv[4::2]) if v != ""}
+
+# THE CREDENTIAL ARRIVES ON STDIN and reaches no other surface (#266). Not in
+# argv, which `ps` publishes to every process on this machine; not in the
+# environment, which /proc publishes to every process of this user; not in a
+# file, which outlives both. One line, read once, held in one local.
+credential = sys.stdin.readline().strip()
 
 def post(payload, session=None, timeout=60):
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
@@ -198,6 +412,8 @@ def post(payload, session=None, timeout=60):
         "Accept": "application/json, text/event-stream"})
     if session:
         req.add_header("Mcp-Session-Id", session)
+    if credential:
+        req.add_header("Authorization", "Bearer " + credential)
     with urllib.request.urlopen(req, timeout=timeout) as reply:
         return reply.headers.get("Mcp-Session-Id"), reply.read().decode("utf-8", "replace")
 
@@ -213,6 +429,13 @@ try:
     post({"jsonrpc": "2.0", "method": "notifications/initialized"}, session, timeout=10)
     _, raw = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                    "params": {"name": tool, "arguments": args}}, session)
+except urllib.error.HTTPError as refused:
+    # 3, AND NOTHING ELSE IS READ FROM IT. #264 wraps the whole admin handler,
+    # so the refusal may land on `initialize` or on the call itself; either way
+    # the body is one byte-identical sentence that says nothing about what was
+    # wrong, and the caller mints a credential and repeats the call. Every
+    # other status is a transport failure like any other.
+    sys.exit(3 if refused.code == 401 else 1)
 except Exception:
     sys.exit(1)
 

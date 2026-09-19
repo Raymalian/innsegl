@@ -30,7 +30,14 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SHIM="$ROOT/scripts/hooks/subagent-identity.sh"
+# The shipped shim by default. The override exists because this file IS THE
+# HARNESS'S OWN HOOK on any machine that wired it up: it takes effect the
+# instant it is saved, for every session on that machine, and an unclosed `if`
+# in it has already locked an operator out of their shell. Driving a candidate
+# from a scratch copy BEFORE installing it is the only way to find that out
+# safely, and a test that can only be run after the dangerous step is not a
+# test of it.
+SHIM="${INNSEGL_SELFTEST_SHIM:-$ROOT/scripts/hooks/subagent-identity.sh}"
 
 pass=0
 fail=0
@@ -64,7 +71,18 @@ SCRIPTED="$WORK/scripted"    # <tool> <ok|err> <json>, the stub's answer
 STUB="$ROOT/scripts/hooks/stub-mcp.py"
 [ -f "$STUB" ] || { echo "shim-selftest: $STUB is missing" >&2; exit 4; }
 
-STUB_CALLS="$CALLS" STUB_SCRIPTED="$SCRIPTED" python3 "$STUB" > "$WORK/port" 2>"$WORK/stub.err" &
+# CREDFILE IS EMPTY UNTIL CASE 15 FILLS IT, so every case above it runs against
+# a listener that demands nothing — which is single-listener mode, and is the
+# thing OPS-073 asserts has not changed. AUTHLOG records what each request
+# carried, including the ones that carried nothing.
+CREDFILE="$WORK/required"
+AUTHLOG="$WORK/authlog"
+: > "$CREDFILE"
+: > "$AUTHLOG"
+
+STUB_CALLS="$CALLS" STUB_SCRIPTED="$SCRIPTED" \
+STUB_CREDENTIAL="$CREDFILE" STUB_AUTH_LOG="$AUTHLOG" \
+python3 "$STUB" > "$WORK/port" 2>"$WORK/stub.err" &
 STUB_PID=$!
 for _ in $(seq 1 100); do
   PORT="$(head -n 1 "$WORK/port" 2>/dev/null)"
@@ -97,8 +115,12 @@ drive() {
     INNSEGL_RUNS_DIR="$RUNS" \
     INNSEGL_LOG_DIR="$LOG" \
     INNSEGL_SIGNER="$WORK/signer" \
+    INNSEGL_ADMIN_CREDENTIAL_MINT="${MINT:-}" \
     "$SHIM" > "$WORK/out" 2> "$WORK/err"
   STATUS=$?
+  # EVERY call this run has ever made, because $CALLS is reset per drive and
+  # case 14 is about what the shim never sends, in any event, ever.
+  cat "$CALLS" >> "$WORK/allcalls"
 }
 
 # called reports whether tool was invoked with every one of the given
@@ -339,10 +361,31 @@ else
   bad "the shim still builds a digest: $(grep -nE '^[^#]*sha256:' "$SHIM" | head -n 3)"
 fi
 
-if ! grep -qE '^[^#]*(remote get-url|worktree list|symbolic-ref)' "$SHIM"; then
-  ok "the shim derives no workspace — repo, branch and task moved (#205)"
+# THE WORKTREE AND THE BRANCH, which are describe_workspace's and stay its.
+#
+# `remote get-url` LEFT THIS BAN in #266 and the reason is narrow: a
+# repository-scoped credential has to name a repository BEFORE the call it
+# authorises, and the only tool that could answer is behind the credential. So
+# the shim reads origin for that one purpose, and case 14 holds the boundary —
+# no repo, branch, task or worktree ever reaches a tool argument from here.
+# Nothing else about E11 moved: a second harness still calls one tool and gets
+# one answer, and the two derivations that produced four field incidents are
+# still not in this file.
+if ! grep -qE '^[^#]*(worktree list|symbolic-ref)' "$SHIM"; then
+  ok "the shim derives no worktree and no branch — both moved (#205)"
 else
-  bad "the shim still derives a workspace: $(grep -nE '^[^#]*(remote get-url|worktree list|symbolic-ref)' "$SHIM" | head -n 3)"
+  bad "the shim still derives a workspace: $(grep -nE '^[^#]*(worktree list|symbolic-ref)' "$SHIM" | head -n 3)"
+fi
+
+# 14. AND THE REPOSITORY IT DOES READ GOES NOWHERE NEAR A TOOL CALL. This is
+#     the behavioural half of case 13, and it is the one that would catch the
+#     derivation creeping back: a shim that started sending its own `repo`,
+#     `branch`, `task` or `worktree` would be claiming workspace facts the
+#     ledger records, which is exactly what #205 took away.
+if ! grep -qE '"(repo|branch|task|worktree)":' "$WORK/allcalls"; then
+  ok "no tool call from the shim carries repo, branch, task or worktree (#205)"
+else
+  bad "the shim sent a workspace fact: $(grep -hE '"(repo|branch|task|worktree)":' "$WORK/allcalls")"
 fi
 
 # The frozen oracle is MCP-043's, and a dispatch path that reached it would be
@@ -353,6 +396,147 @@ if [ -f "$ROOT/scripts/hooks/reference-derivation.sh" ] \
   ok "the frozen derivation is reachable only by sourcing, never by an event"
 else
   bad "the frozen derivation is referenced from more than the library seam"
+fi
+
+# --- OPS-073: single-listener mode, unchanged --------------------------------
+#
+# ASSERTED FIRST, over everything above it, because "nothing changed" is only
+# worth anything as a statement about the whole suite. Fourteen cases have just
+# run against a listener demanding nothing: not one request may have carried a
+# credential, and nothing may have been minted, or the claim that a deployment
+# without #264 behaves exactly as before is untested.
+if [ -s "$AUTHLOG" ] && ! grep -qv '^-$' "$AUTHLOG"; then
+  ok "OPS-073: with nothing to authenticate, no request carries a credential"
+else
+  bad "OPS-073: a credential was presented to a listener that asked for none: $(grep -v '^-$' "$AUTHLOG" | head -n 2)"
+fi
+if [ ! -f "$WORK/mint.count" ]; then
+  ok "OPS-073: and nothing was minted — the mint is driven by a refusal, not a mode"
+else
+  bad "OPS-073: the shim minted $(cat "$WORK/mint.count") credential(s) unprompted"
+fi
+
+# --- OPS-069..072: the listener's credential (#266) ---------------------------
+#
+# #264 put a repository-scoped credential in front of all six identity-lifecycle
+# tools, which is every tool this shim calls. Measured before #266: this file
+# contained no Authorization header at all, so deploying #264 answered every
+# registration on the machine with 401 — no identity, and therefore no signed
+# commit either.
+#
+# THE MINT IS A COMMAND, and here it is a script rather than a container: what
+# is under test is when the shim mints, what it does with what it gets and
+# where the value ends up, none of which is a property of Docker. The shipped
+# default reaches the deployment's own signing key; this stands in for it, and
+# the stub demands exactly what it issued.
+cat > "$WORK/mint" <<'SH'
+#!/bin/sh
+# Issues cred-1, cred-2, ... and tells the stub to demand the newest one. $2 is
+# how many requests it stays good for, which is how an expiry is reproduced
+# without waiting fifteen minutes for a real credential to age out.
+n=$(( $(cat "$MINT_STATE/mint.count" 2>/dev/null || echo 0) + 1 ))
+printf '%s' "$n" > "$MINT_STATE/mint.count"
+printf '%s\n' "$1" >> "$MINT_STATE/mint.scopes"
+printf 'cred-%s %s\n' "$n" "${MINT_USES:-100}" > "$MINT_STATE/required"
+printf 'cred-%s\n' "$n"
+SH
+chmod +x "$WORK/mint"
+export MINT_STATE="$WORK"
+MINT="$WORK/mint"
+
+# A listener that now demands something nobody holds. `spent 0` is a token no
+# caller was ever given AND a budget already exhausted, so the first request of
+# the next event is refused however it is answered.
+printf 'spent 0\n' > "$CREDFILE"
+: > "$AUTHLOG"
+
+# 15. OPS-069 — the shim presents one, and the call goes through.
+script_tool observe_session ok '{"session_id":"agent-cred","phase":"start","known":true,"registered":true,"run_id":"run-dddd4444","task":"e10","worktree":"","repo":"example.test/org/name","branch":"dev/e10","agent_type":"prober"}'
+drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-1\",\"agent_id\":\"agent-cred\",\"agent_type\":\"prober\",\"cwd\":\"$CWD\"}"
+if [ "$STATUS" -eq 0 ] && called observe_session '"session_id": "agent-cred"'; then
+  ok "OPS-069: a refused registration is minted for and repeated, not failed"
+else
+  bad "OPS-069: SubagentStart exited $STATUS behind a credential: $(cat "$WORK/err")"
+fi
+if grep -q '^Bearer cred-1$' "$AUTHLOG"; then
+  ok "OPS-069: the credential is presented as a Bearer token on the listener"
+else
+  bad "OPS-069: nothing was presented: $(sort -u "$AUTHLOG" | head -n 3)"
+fi
+if [ "$(head -n 1 "$AUTHLOG")" = "-" ] && [ "$(cat "$WORK/mint.count")" = "1" ]; then
+  ok "OPS-069: minted once, and only after the listener asked — never speculatively"
+else
+  bad "OPS-069: minted $(cat "$WORK/mint.count" 2>/dev/null) times, first request was $(head -n 1 "$AUTHLOG")"
+fi
+# AND IT IS SCOPED TO THE REPOSITORY THIS EVENT IS ABOUT. A credential for
+# another repository is refused by the listener with the same silent 401, so a
+# wrong scope here looks exactly like no credential at all.
+WANT_REPO="$(cd "$ROOT" && git remote get-url origin 2>/dev/null \
+  | sed -e 's|^[a-z][a-z0-9+.-]*://||' -e 's|^git@||' -e 's|:|/|' -e 's|\.git$||' -e 's|/*$||' \
+  | awk -F/ 'NF>=3 { h = tolower($1); p = $2; for (i = 3; i <= NF; i++) p = p "/" $i; print h "/" p }')"
+if [ -n "$WANT_REPO" ] && [ "$(tail -n 1 "$WORK/mint.scopes")" = "$WANT_REPO" ]; then
+  ok "OPS-069: the credential names the repository the event happened in"
+else
+  bad "OPS-069: minted for '$(tail -n 1 "$WORK/mint.scopes")', want '$WANT_REPO'"
+fi
+
+# 16. OPS-071 — the value reaches no marker, no log line and no argument vector.
+#
+# The credential lives fifteen minutes and cannot be withdrawn, because a
+# revocation list would be a dependency on the issuer being reachable. So a copy
+# left in a file is a copy anyone on this machine can replay until it ages out.
+LEAKED="$(grep -rl 'cred-1' "$RUNS" "$LOG" "$WORK/err" "$WORK/out" 2>/dev/null | grep -v '^'"$WORK/required"'$')"
+if [ -z "$LEAKED" ]; then
+  ok "OPS-071: the credential is in no marker, no body log and no line the shim printed"
+else
+  bad "OPS-071: the credential was written to: $LEAKED"
+fi
+if ! grep -qE '^[^#]*export[[:space:]]+ADMIN_CRED' "$SHIM"; then
+  ok "OPS-071: it is never exported, so no child of this hook inherits it"
+else
+  bad "OPS-071: the shim exports the credential to every child it runs"
+fi
+# ON STDIN, NOT IN argv. `ps` publishes the argument vector of every process on
+# this machine; a bearer token there is replayable by anything logged in.
+if grep -Fq '"$ADMIN_CRED" | python3 -c "$MCP_CLIENT"' "$SHIM" \
+   && ! grep -qE '^[^#]*(-H|--header).*Authorization' "$SHIM"; then
+  ok "OPS-071: it reaches the client on stdin, never on a command line"
+else
+  bad "OPS-071: the credential is passed on a command line: $(grep -nE '^[^#]*Authorization' "$SHIM" | head -n 2)"
+fi
+
+# 17. OPS-072 — a stop that cannot authenticate warns and exits 0.
+#
+# Measured before the no-blocking rule existed: a refused stop produced NINE
+# repeated invocations. A credential that cannot be minted must not become the
+# tenth reason for one — the run expires on its TTL, which is what the reaper
+# is for (IP §6.7).
+printf 'spent 0\n' > "$CREDFILE"
+MINT="$WORK/no-mint"        # a mint command that is not there at all
+drive '{"hook_event_name":"SubagentStop","session_id":"sess-1","agent_id":"agent-cred","agent_type":"prober"}'
+if [ "$STATUS" -eq 0 ]; then
+  ok "OPS-072: a stop that cannot authenticate exits 0 (no retry storm)"
+else
+  bad "OPS-072: SubagentStop exited $STATUS with no credential; a stop must never block"
+fi
+STATUS=99
+printf 'spent 0\n' > "$CREDFILE"
+drive '{"hook_event_name":"SessionEnd","session_id":"sess-1"}'
+if [ "$STATUS" -eq 0 ]; then
+  ok "OPS-072: and so does SessionEnd"
+else
+  bad "OPS-072: SessionEnd exited $STATUS with no credential"
+fi
+# AND THE REFUSAL SAYS WHAT TO DO. The listener answers every credential
+# failure with one byte-identical sentence by design, so this is the only place
+# an operator is ever told which command mints and against which key.
+MINT="$WORK/no-mint"
+printf 'spent 0\n' > "$CREDFILE"
+drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-1\",\"agent_id\":\"agent-told\",\"agent_type\":\"prober\",\"cwd\":\"$CWD\"}"
+if grep -q 'admin-credential mint' "$WORK/err" && grep -q 'signing.key' "$WORK/err"; then
+  ok "OPS-072: a refusal names the command that mints and the key it mints against"
+else
+  bad "OPS-072: the refusal offers no remedy: $(cat "$WORK/err")"
 fi
 
 echo

@@ -974,9 +974,16 @@ services:
       #
       # Set it to 0.0.0.0:8090 and register_agent and retire_agent move to that
       # listener, leaving 8080 the three tools that need a run_id someone else
-      # issued. Do NOT turn this on until something is arranged to do the
-      # registering — a harness hook (#171), or an operator — because with the
-      # split on and nothing registering, no run can be created at all.
+      # issued. Something must be arranged to do the registering — a harness
+      # hook (#171), or an operator — because with the split on and nothing
+      # registering, no run can be created at all.
+      #
+      # #266 ANSWERED THE OTHER HALF OF THAT WARNING. #264 put a credential in
+      # front of the six lifecycle tools, and the two shipped callers presented
+      # none: turning this on would have answered every registration with 401,
+      # so no agent could register and no commit could be signed. Both now mint
+      # one for the repository they are working in, from the private key below,
+      # and only when this listener refuses a call.
       INNSEGL_MCP_ADMIN_LISTEN: ${INNSEGL_MCP_ADMIN_LISTEN:-}
       # #264. The PUBLIC key set whose repository-scoped credentials the
       # identity lifecycle admits — the path, and never a key. Read once at
@@ -1919,11 +1926,31 @@ volumes:
   innsegl-admin-jwks:
 
   # #264's PRIVATE signing key. MOUNTED BY: innsegl-admin-credential-init (rw)
-  # and NOTHING ELSE, ever — E8 keeps the MCP to public halves, and a service
+  # and by NO SERVICE, ever — E8 keeps the MCP to public halves, and a service
   # that could read this could mint its own admission to the listener this key
-  # exists to protect. An operator mints a credential with
-  # `docker compose run --rm -v innsegl-admin-key:/k innsegl-mcp
-  # admin-credential mint -key /k/signing.key -repo host/org/name`.
+  # exists to protect.
+  #
+  # #266 — WHO READS IT, AND HOW. The two callers that reach the identity
+  # lifecycle — scripts/innsegl-commit.sh and scripts/hooks/subagent-identity.sh
+  # — mint their own credential by running the shipped command in a THROWAWAY
+  # container that mounts this volume read-only, has no network, no writable
+  # root filesystem and no privilege escalation, and exits:
+  #
+  #   docker run --rm --network none --read-only --user 0:0 \
+  #     --security-opt no-new-privileges \
+  #     -v <project>_innsegl-admin-key:/k:ro <image> \
+  #     admin-credential mint -key /k/signing.key -repo host/org/name
+  #
+  # `--user 0:0` because the one-shot leaves the key 0400 and root-owned, which
+  # is the point: the image's own 1000:1000 cannot read it. A container rather
+  # than a service is deliberate — a long-lived minter would be a standing mint
+  # oracle for anything that could reach it, while one that exists for a fifth
+  # of a second is reachable only through the Docker API, which already carried
+  # the privilege to mount this volume. Nothing copies the key onto the host,
+  # and the only value that crosses the boundary is the credential, on a pipe.
+  #
+  # The callers mint LAZILY, on a 401 and on nothing else, so a deployment with
+  # INNSEGL_MCP_ADMIN_LISTEN unset never runs any of the above.
   #
   # Losing it costs the ability to issue NEW credentials and nothing else: the
   # public half stays in the key set, already-issued credentials keep verifying
