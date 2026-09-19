@@ -44,6 +44,19 @@
 #   - in parentheses at the END of that label, which is the other house style:
 #     `expect red 'a rename fails with no tag in the repository (SER-005)'`
 #
+# NESTED CHECKOUTS ARE NOT THIS TREE, and a plain walk of ROOT read three and
+# four copies of every file. A linked worktree lives under `.worktrees` or
+# `.claude/worktrees` in this repository and `docs/` is a repository of its own,
+# so another branch's `web/src/components/common/AlertBanner.test.tsx` sat in
+# the walk beside this branch's. Counting DISTINCT ids hid it completely — the
+# copies collapse under `sort -u` — and it hid the reverse direction too: a
+# test deleted on this branch still has a copy in a stale worktree, so the
+# catalog row it left behind still reads as covered. It surfaced the moment a
+# check that cares WHICH FILE claimed an id went red over forty families at
+# once, measured 2026-09-19 (RM-177, #282). A nested checkout is a directory
+# below ROOT holding a `.git` entry, which is a question a fixture tree with no
+# git anywhere can still answer. Selftest case 17 holds it open.
+#
 # WHAT IT DELIBERATELY DOES NOT READ, because the looser rule is worse than the
 # gap it leaves. An id named MID-SENTENCE is a CITATION, not a claim — the
 # backup selftest mentions LED-003 to say which case it is not driving, and
@@ -104,12 +117,33 @@
 # that need it: the selftest points INNSEGL_TEST_TREE at a temp tree whose
 # selftests are named otherwise, and those are read exactly like any other.
 #
-# WHAT IT CANNOT SEE. Two DIFFERENT cases sharing one id, where both are
-# catalogued, reads here as one id with several tests — which is also the normal
-# and correct shape (REC-004 has five test functions, all facets of one case).
-# Telling those apart needs a human who knows what the case is about. What this
-# removes is the silent half: an id in code that the catalog has never heard of.
-# The frontend is the remaining blind side: `*.test.tsx` is not read yet.
+# ONE ID, TWO CASES — the half this now refuses, and the half it still cannot
+# see. RM-177 (#282). Three ids each labelled two unrelated SHIPPED tests —
+# FE-060, FE-061 and FE-062 — and this gate was green over all three, because
+# it counts DISTINCT ids on both sides and both sides agreed. Two checks close
+# what can be closed:
+#   - ONE ID, TWO CATALOG ROWS. A row names one case, so a second row under the
+#     same id — or a plain row swallowed by another row's `002..004` range —
+#     leaves every reference to that id describing one of two cases with no way
+#     to tell which. `sort -u` on the catalog side is what used to throw that
+#     evidence away.
+#   - ONE ID, TWO DECLARATIONS. The frontend's house style opens a case's file
+#     with the row it PROPOSES for doc 07: `FE-060 (NEW — proposed for doc 07
+#     TC-FE; see the report for #56)`. That header is a claim to DEFINE the id,
+#     not to cite it, so two files declaring one id are two cases. Measured
+#     2026-09-19 across the 42 declarations under web/: exactly FE-060, FE-061
+#     and FE-062 are declared twice, and nothing else is.
+#
+# WHAT IS STILL NOT DECIDABLE, and why the obvious rule was refused. "The same
+# id named as a case in two files" is NOT the shape of this bug. Measured the
+# same day: 60 ids are named as a case in more than one file and all but three
+# are one case with several facets — FE-019 is the shell's, the verification
+# component's and the runs view's string catalogues, three files and one case,
+# and REC-004 has five test functions. Narrowing it to the comment-head shape
+# leaves seventeen, which is no better. A gate red over those would be red for
+# something that is not a defect, which is the failure RM-161 was about. Two
+# cases sharing an id where neither file declares it still needs a human who
+# knows what the case is about. Selftest cases 14, 15 and 16 hold this open.
 #
 # USAGE
 #   scripts/test-ids.sh [path-to-doc-07]
@@ -161,6 +195,46 @@ TSQ='["'"'"'`]'
 SH_FILES="--include=*-selftest.sh --exclude=test-ids-selftest.sh"
 TS_FILES="--include=*.test.ts --include=*.test.tsx --include=*.pw.ts --include=*.pw.tsx --exclude-dir=node_modules"
 
+# --- this tree, and not the checkouts inside it ------------------------------
+#
+# See the header. Every search below therefore keeps grep's FILENAME — `-o`
+# rather than `-ho` — so that these filters have a path to judge, and the id is
+# taken back out of the matched text afterwards rather than out of the whole
+# line, because a directory named after a case would otherwise claim one.
+#
+# THE LIST TRAVELS IN THE ENVIRONMENT, not in `awk -v`. One root per line is
+# the only separator a filesystem path cannot itself contain, and `-v` reads
+# its value as a string literal — a newline in it is `awk: newline in string`
+# and every filter below silently passes nothing, which showed up as all three
+# languages reporting zero ids. `ENVIRON` takes the value as it is.
+INNSEGL_NESTED_CHECKOUTS="$(find "${ROOT}" -mindepth 2 -name node_modules -prune -o -name .git -print 2>/dev/null | sed 's#/\.git$##')"
+export INNSEGL_NESTED_CHECKOUTS
+
+# `path:text` on stdin, `text` out, nothing from a nested checkout.
+own_matches() {
+  awk '
+    BEGIN { n = split(ENVIRON["INNSEGL_NESTED_CHECKOUTS"], root, "\n") }
+    {
+      i = index($0, ":")
+      if (i == 0) next
+      f = substr($0, 1, i - 1)
+      for (j = 1; j <= n; j++)
+        if (root[j] != "" && index(f, root[j] "/") == 1) next
+      print substr($0, i + 1)
+    }'
+}
+
+# A path per line in, the ones this tree owns out.
+own_paths() {
+  awk '
+    BEGIN { n = split(ENVIRON["INNSEGL_NESTED_CHECKOUTS"], root, "\n") }
+    {
+      for (j = 1; j <= n; j++)
+        if (root[j] != "" && index($0, root[j] "/") == 1) next
+      print
+    }'
+}
+
 # --- the three test languages ------------------------------------------------
 #
 # Each of these reads the WHOLE id grammar in one pass and hands back every id
@@ -170,7 +244,8 @@ TS_FILES="--include=*.test.ts --include=*.test.tsx --include=*.pw.ts --include=*
 
 # Go: the test function's own name.
 go_case_ids() {
-  grep -rhoE "func Test[A-Z]{2,5}[0-9]{3}[^0-9]" --include='*_test.go' "${ROOT}" 2>/dev/null |
+  grep -roE "func Test[A-Z]{2,5}[0-9]{3}[^0-9]" --include='*_test.go' --exclude-dir=node_modules "${ROOT}" 2>/dev/null |
+    own_matches |
     sed -E 's/^func Test([A-Z]{2,5})([0-9]{3}).*/\1-\2/' | sort -u
 }
 
@@ -182,14 +257,14 @@ shell_case_ids() {
   {
     # the head of a comment line: a header list entry, or a section rule
     # shellcheck disable=SC2086
-    grep -rhoE "^[[:space:]]*#[-[:space:]]*${ID}"'([^0-9]|$)' ${SH_FILES} "${ROOT}" 2>/dev/null
+    grep -roE "^[[:space:]]*#[-[:space:]]*${ID}"'([^0-9]|$)' ${SH_FILES} "${ROOT}" 2>/dev/null
     # the start of the label the case reports under
     # shellcheck disable=SC2086
-    grep -rhoE "${Q}${ID}[ :]" ${SH_FILES} "${ROOT}" 2>/dev/null
+    grep -roE "${Q}${ID}[ :]" ${SH_FILES} "${ROOT}" 2>/dev/null
     # or its end, parenthesised — the other house style
     # shellcheck disable=SC2086
-    grep -rhoE "[(]${ID}[)]${Q}" ${SH_FILES} "${ROOT}" 2>/dev/null
-  } | grep -oE "${ID}" | sort -u
+    grep -roE "[(]${ID}[)]${Q}" ${SH_FILES} "${ROOT}" 2>/dev/null
+  } | own_matches | grep -oE "${ID}" | sort -u
 }
 
 # TypeScript: two shapes, not three. The comment marker must sit at the HEAD of
@@ -200,11 +275,38 @@ frontend_case_ids() {
   {
     # the head of a comment line: a file header block, or a proposed-row list
     # shellcheck disable=SC2086
-    grep -rhoE "^(//|/\*|[ ]?\*)[-*[:space:]]*${ID}"'([^0-9]|$)' ${TS_FILES} "${ROOT}" 2>/dev/null
+    grep -roE "^(//|/\*|[ ]?\*)[-*[:space:]]*${ID}"'([^0-9]|$)' ${TS_FILES} "${ROOT}" 2>/dev/null
     # the start of the label the case reports under
     # shellcheck disable=SC2086
-    grep -rhoE "${TSQ}${ID}[ :]" ${TS_FILES} "${ROOT}" 2>/dev/null
-  } | grep -oE "${ID}" | sort -u
+    grep -roE "${TSQ}${ID}[ :]" ${TS_FILES} "${ROOT}" 2>/dev/null
+  } | own_matches | grep -oE "${ID}" | sort -u
+}
+
+# THE FRONTEND'S CASE DECLARATION, which is a narrower thing than a case name.
+# A file that DRIVES a case opens with the row it proposes for doc 07 — `FE-060
+# (NEW — proposed for doc 07 TC-FE; see the report for #56)`, `FE-105
+# (proposed; doc 07 has no id for these — …)`. A file that merely names the same
+# case, or cites a different one, does not: `FE-034 (components/common …)` and
+# `FE-019 (the shell's catalogue …)` are references, and the parenthesis is
+# what tells them apart. `proposed` inside it is therefore the whole rule, and
+# `NEW — ` is admitted ahead of it because half the declarations in the tree
+# are written that way. Emits `id file` per declaration; the caller looks for
+# an id that two files declare.
+frontend_declarations() {
+  # shellcheck disable=SC2086
+  grep -roE "^(//|/\*|[ ]?\*)[-*[:space:]]*${ID} [(](NEW[^)]*)?proposed" ${TS_FILES} "${ROOT}" 2>/dev/null |
+    awk '
+      BEGIN { n = split(ENVIRON["INNSEGL_NESTED_CHECKOUTS"], root, "\n") }
+      {
+        i = index($0, ":")
+        if (i == 0) next
+        f = substr($0, 1, i - 1)
+        for (j = 1; j <= n; j++)
+          if (root[j] != "" && index(f, root[j] "/") == 1) next
+        rest = substr($0, i + 1)
+        if (match(rest, "[A-Z][A-Z][A-Z]?[A-Z]?[A-Z]?-[0-9][0-9][0-9]"))
+          print substr(rest, RSTART, RLENGTH) " " f
+      }' | sort -u
 }
 
 go_ids="$(go_case_ids)"
@@ -235,6 +337,23 @@ code_prefixes="$(printf '%s\n' "${code_ids}" | grep . | sed 's/-[0-9]\{3\}$//' |
 prefixes="$(printf '%s\n%s\n' "${doc_prefixes}" "${code_prefixes}" | grep . | sort -u)"
 
 rc=0
+
+# ONE ID, TWO DECLARATIONS. See the header. A frontend case opens its file with
+# the row it proposes for doc 07, and that header DEFINES the id rather than
+# citing it, so one id declared in two files is two cases wearing one name.
+# This runs ahead of the per-family counts because it is invisible to them:
+# both sides of such a collision are catalogued and counted, and the totals
+# agree. RM-177 (#282).
+declarations="$(frontend_declarations)"
+for id in $(printf '%s\n' "${declarations}" | grep . | awk '{ print $1 }' | sort | uniq -d); do
+  case "${NOT_TEST_IDS}" in *" ${id%-*} "*) continue ;; esac
+  printf '\n%s: ONE ID, TWO CASES — declared as a proposed catalog row by more\n' "${id}" >&2
+  printf '  than one test file. A row names one case, so a row for this id\n' >&2
+  printf '  describes one of these and there is no way to tell which:\n' >&2
+  printf '%s\n' "${declarations}" | awk -v want="${id}" '$1 == want { print "    " $2 }' >&2
+  rc=1
+done
+
 for p in ${prefixes}; do
   case "${NOT_TEST_IDS}" in *" ${p} "*) continue ;; esac
 
@@ -248,7 +367,11 @@ for p in ${prefixes}; do
   # that took only the first id reported the other four as uncatalogued, which
   # is how this script first claimed 75 orphans; the real number is smaller and
   # the difference was entirely its own parsing.
-  in_doc="$(awk -v pre="${p}" '
+  #
+  # ONE ROW PER LINE, AND NOT `sort -u` YET. A second row under an id another
+  # row already names is exactly what uniqueness throws away, so the rows are
+  # kept as they were read and deduplicated only for the comparisons below.
+  in_doc_rows="$(awk -v pre="${p}" '
     match($0, "^\\| " pre "-[0-9][0-9][0-9]\\.\\.[0-9][0-9][0-9]") {
       split(substr($0, RSTART + length(pre) + 3, RLENGTH), _x, "")
       line = substr($0, RSTART, RLENGTH)
@@ -259,7 +382,9 @@ for p in ${prefixes}; do
     }
     match($0, "^\\| " pre "-[0-9][0-9][0-9]") {
       print substr($0, RSTART + 2, RLENGTH - 2)
-    }' "${DOC}" | sort -u)"
+    }' "${DOC}")"
+  in_doc="$(printf '%s\n' "${in_doc_rows}" | grep . | sort -u)"
+  dup_doc="$(printf '%s\n' "${in_doc_rows}" | grep . | sort | uniq -d)"
 
   # THE REVERSE DIRECTION CANNOT LOOK ONLY FOR GO FUNCTIONS. Shell self-tests
   # carry their ids in comments and headings (OPS-040 lives in
@@ -270,7 +395,7 @@ for p in ${prefixes}; do
   # `node_modules` is excluded here as it is in the discovery rules: a vendored
   # package that happens to contain the letters of one of our ids is not a test
   # for it, and walking it is most of this script's runtime.
-  mentioned="$(grep -rlF "${p}-" "${ROOT}" --include='*.go' --include='*.sh' --include='*.ts' --include='*.tsx' --include='*.yml' --exclude-dir=node_modules 2>/dev/null | head -400)"
+  mentioned="$(grep -rlF "${p}-" "${ROOT}" --include='*.go' --include='*.sh' --include='*.ts' --include='*.tsx' --include='*.yml' --exclude-dir=node_modules 2>/dev/null | own_paths | head -400)"
 
   # NO PROCESS SUBSTITUTION HERE. This used to be `comm -23 <(…) <(…)`, which
   # is a bashism: run as `sh scripts/test-ids.sh` — which is how the verify
@@ -293,6 +418,18 @@ for p in ${prefixes}; do
 "
   done
   unused="$(printf '%s' "${unused}" | grep . || true)"
+
+  # ONE ID, TWO CATALOG ROWS. A ranged row counts as a row for every id it
+  # expands to, so `| ZZA-002..004 |` beside a later `| ZZA-003 |` is caught
+  # too: the second row is what makes the first one's sentence ambiguous,
+  # whether it was written as a range or not.
+  if [ -n "${dup_doc}" ]; then
+    printf '\n%s: ONE ID, TWO CATALOG ROWS — a row names one case, so an id\n' "${p}" >&2
+    printf '  with two of them describes one of two cases and there is no way\n' >&2
+    printf '  to tell which:\n' >&2
+    printf '%s\n' "${dup_doc}" | sed 's/^/    /' >&2
+    rc=1
+  fi
 
   n_doc="$(printf '%s\n' "${in_doc}" | grep -c . || true)"
   if [ "${n_doc}" -eq 0 ]; then

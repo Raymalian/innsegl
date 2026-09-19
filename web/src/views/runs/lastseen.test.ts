@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { lastSeen } from "./lastseen";
 
 /**
- * FE-060 (proposed for doc 06's test list; doc 06 is not modified here).
+ * FE-057 (proposed for doc 06's test list; doc 06 is not modified here).
  *
  * ── WHY A STATUS BADGE ALONE IS NOT AN HONEST ANSWER ───────────────────────
  *
