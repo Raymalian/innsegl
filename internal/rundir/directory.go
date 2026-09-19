@@ -186,6 +186,19 @@ func (d *Directory) CredentialRun(ctx context.Context, runID string) (mcp.Creden
 			run.SPIFFEID = identity.spiffeID
 			run.AgentType = identity.agentType
 			run.TaskID = identity.taskRef
+			// The repository this run was registered in (ADR-0045), read
+			// TOLERANTLY where the three members above are read strictly.
+			//
+			// It is required at append today, so every run registered since
+			// ADR-0045 has one. A run registered before it does not, and
+			// refusing that run here would make a tool unable to read history
+			// it has always been able to read. Absent leaves the member empty,
+			// which mcp.adminScopeAdmits refuses under every credential: a run
+			// that cannot be shown to be in a credential's repository is not
+			// in it (#264).
+			//nolint:errcheck // an absent member reads as empty, which is
+			// exactly what a pre-ADR-0045 run has and what the tools refuse.
+			run.Repo, _ = rec[event.FieldRepo].(string)
 			registered = true
 
 		case event.EventTypeRunExpired:

@@ -103,6 +103,14 @@ var commands = map[string]command{
 		summary: "verify a commit's attribution without access to the ledger",
 		exec:    verifyCommand,
 	},
+	// #264's issuing side. The identity-lifecycle listener was published with
+	// six tools behind it and nothing authenticating a caller; this is the key
+	// file and the mint command that close it. Deliberately not a service: the
+	// point is closing the listener, not building an account system.
+	"admin-credential": {
+		summary: "issue the repository-scoped credential the identity lifecycle requires",
+		exec:    adminCredentialCommand,
+	},
 	// `init` is RM-080 (#117): the sequence every adopter otherwise assembles
 	// by hand from documentation — install gitsign, decide a trust root,
 	// decide whether identities are pseudonymous, complete an OIDC flow, sign

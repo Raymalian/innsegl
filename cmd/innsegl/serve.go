@@ -20,6 +20,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/mcp"
+	"innsegl.dev/innsegl/internal/signing"
 	"innsegl.dev/innsegl/internal/spire"
 )
 
@@ -80,6 +81,7 @@ const (
 	envRekorURL              = "INNSEGL_REKOR_URL"
 	envMCPListen             = "INNSEGL_MCP_LISTEN"
 	envMCPAdminListen        = "INNSEGL_MCP_ADMIN_LISTEN"
+	envMCPAdminJWKSFile      = "INNSEGL_MCP_ADMIN_JWKS_FILE"
 	envMCPAlso               = "INNSEGL_MCP_ALSO"
 	envMCPHealthListen       = "INNSEGL_MCP_HEALTH_LISTEN"
 	envMCPAddrFile           = "INNSEGL_MCP_ADDR_FILE"
@@ -219,12 +221,13 @@ type serveOptions struct {
 	oidcIssuer          string
 	signAuthorName      string
 	signAuthorEmail     string
-	signAuthorOperators []string
+	signAuthorOperators []signing.Operator
 	signAllowUnlinked   bool
 	gitsignPath         string
 
 	listen       string
 	adminListen  string
+	adminJWKS    string
 	also         []string
 	healthListen string
 	addrFile     string
@@ -609,8 +612,12 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 			"commit author and committer email; the I6 gate admits it or refuses to start "+
 				"($"+envSignAuthorEmail+")")
 		signAuthorOperators = fs.String("sign-author-operators", os.Getenv(envSignAuthorOperators),
-			"comma-separated addresses this deployment attributes commits to (I6) "+
-				"($"+envSignAuthorOperators+")")
+			"comma-separated identities this deployment attributes commits to (I6), each "+
+				"`Name <address>` in git's own syntax. The display name is PINNED to the "+
+				"address: a commit on that address under any other name is refused. A bare "+
+				"address still parses and still admits the address, but pins no name and so "+
+				"admits no identity - state the pair. Never put a person's name in a tracked "+
+				"file; this is configuration ($"+envSignAuthorOperators+")")
 		signAllowUnlinked = fs.Bool("sign-author-allow-unlinked", envBool(envSignAllowUnlinked, false),
 			"admit an author address in a reserved, undelegatable domain (.invalid, .test, "+
 				"example.com and the rest) ($"+envSignAllowUnlinked+")")
@@ -637,6 +644,13 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 			"companion subcommands to run in THIS process, comma separated: api, seal, "+
 				"reconcile. Empty runs none, which is one container per service as before. "+
 				"They are subcommand names, not container names ($"+envMCPAlso+")")
+		adminJWKS = fs.String("admin-jwks", os.Getenv(envMCPAdminJWKSFile),
+			"file holding the PUBLIC keys whose repository-scoped credentials the identity "+
+				"lifecycle admits, as a JWK set. Read ONCE at start-up and never fetched, so "+
+				"nothing here depends on whatever issues them being reachable. REQUIRED "+
+				"whenever -admin-listen is set: a listener that believes it is authenticated "+
+				"and is not is worse than one that knows it is open. Mint the keys with "+
+				"`innsegl admin-credential keygen` ($"+envMCPAdminJWKSFile+")")
 		adminListen = fs.String("admin-listen", os.Getenv(envMCPAdminListen),
 			"address the identity lifecycle listens on. Empty serves all five tools on -listen, "+
 				"as before #170. Set it and register_agent and retire_agent move here, leaving "+
@@ -738,6 +752,16 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		return serveOptions{}, exitUsage, false
 	}
 
+	// Same reason, and internal/signing's own parser rather than a second one
+	// shaped like it: an entry that will not read is exit 2 with nothing
+	// opened, not a policy that quietly admits less than the operator wrote.
+	operators, opErr := signing.ParseOperators(splitOrigins(*signAuthorOperators))
+	if opErr != nil {
+		fprintf(stderr, "innsegl serve: -sign-author-operators (or $%s): %v\n",
+			envSignAuthorOperators, opErr)
+		return serveOptions{}, exitUsage, false
+	}
+
 	o := serveOptions{
 		dsn: *dsn, spireAddress: *spireAddress, trustDomain: *trustDomain,
 		serverID: *serverID, parentID: *parentID,
@@ -747,10 +771,10 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		observeBodyDir: *observeBodyDir, sessionDir: *sessionDir,
 		workspace: *workspace, oidcIssuer: *oidcIssuer,
 		signAuthorName: *signAuthorName, signAuthorEmail: *signAuthorEmail,
-		signAuthorOperators: splitOrigins(*signAuthorOperators),
+		signAuthorOperators: operators,
 		signAllowUnlinked:   *signAllowUnlinked,
 		gitsignPath:         *gitsignPath,
-		listen:              *listen, adminListen: *adminListen, also: alsoRun,
+		listen:              *listen, adminListen: *adminListen, adminJWKS: *adminJWKS, also: alsoRun,
 		healthListen: *healthListen, addrFile: *addrFile,
 		spireTimeout: *spireTimeout, runTTL: *runTTL, lease: *lease,
 		rateCalls: *rateCalls, rateWindow: *rateWindow,
@@ -842,6 +866,22 @@ func (o serveOptions) validate() string {
 			" reports Sigstore reachability and there is no default pair to fall back to (ADR-0010)"
 	case o.listen == "":
 		return "-listen (or $" + envMCPListen + ") is required"
+	// #264. The listener that CREATES and DESTROYS identities was published
+	// with no caller authentication at all, which is doc 04's AB-13 and AB-15.
+	// Turning the split on without the material to authenticate anyone is the
+	// state that gap lived in, so it is refused here — before anything binds —
+	// rather than served open with a warning nobody reads.
+	case o.adminListen != "" && o.adminJWKS == "":
+		return "-admin-jwks (or $" + envMCPAdminJWKSFile + ") is required when -admin-listen " +
+			"(or $" + envMCPAdminListen + ") is set: the identity lifecycle creates and " +
+			"destroys identities, and a listener serving it with nothing to authenticate a " +
+			"caller lets any process that can reach it mint a run. Generate the keys with " +
+			"`innsegl admin-credential keygen`"
+	case o.adminJWKS != "" && o.adminListen == "":
+		return "-admin-jwks (or $" + envMCPAdminJWKSFile + ") is set without -admin-listen " +
+			"(or $" + envMCPAdminListen + "). The credential belongs to the identity-lifecycle " +
+			"listener and to nothing else; in single-listener mode the tools serve on -listen " +
+			"and this file would be read and never used, which reads as a control that is on"
 	case o.healthListen == "":
 		return "-health-listen (or $" + envMCPHealthListen + ") is required: IP §6.6 requires " +
 			"the health endpoints, and a replica with none cannot be taken out of rotation"

@@ -41,8 +41,8 @@ import (
 // only the address of the identity-lifecycle listener — because the retirement
 // is `retire_agent`'s and this is a client of it.
 var documentedSubcommands = []string{
-	"api", "canary", "init", "migrate-schema", "reap", "reconcile", "resolve-alert",
-	"retire", "seal", "serve", "verify",
+	"admin-credential", "api", "canary", "init", "migrate-schema", "reap", "reconcile",
+	"resolve-alert", "retire", "seal", "serve", "verify",
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {

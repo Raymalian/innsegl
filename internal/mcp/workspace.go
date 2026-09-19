@@ -277,6 +277,20 @@ func (c DescribeWorkspaceConfig) describe(ctx context.Context, cwd string) (desc
 			"describe_workspace has no repository identifier for %s: %w", cwd, err)
 	}
 
+	// THE DERIVED REPOSITORY AGAINST THE CREDENTIAL'S (#264).
+	//
+	// This tool writes nothing, which is exactly why it is scoped: it is what
+	// makes the other two addressable, and an unscoped one would let a caller
+	// holding one repository's credential walk another's worktrees, branches
+	// and task references out of this deployment's mount.
+	//
+	// The refusal does NOT name the repository it derived. Answering "that is
+	// someone else's" would confirm what a probe was guessing; answering
+	// nothing leaves the caller exactly what it started with.
+	if !adminScopeAdmits(ctx, repo) {
+		return describeWorkspaceOut{}, adminScopeRefusal(ToolDescribeWorkspace)
+	}
+
 	branch := describeWorkspaceBranch(ctx, dir, main)
 	return describeWorkspaceOut{
 		Repo:             repo,

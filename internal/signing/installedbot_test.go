@@ -28,7 +28,7 @@ import "testing"
 // to an account, which is why that flag refuses it.
 func TestGH004AnInstalledBotIsAdmittedByNameAndACodingAgentIsNot(t *testing.T) {
 	p := AuthorPolicy{
-		Operators:     []string{"66436734+KodyMike@users.noreply.github.com"},
+		Operators:     []Operator{{Address: "66436734+KodyMike@users.noreply.github.com"}},
 		InstalledBots: []string{"49699333+dependabot[bot]@users.noreply.github.com"},
 		AllowUnlinked: true,
 	}

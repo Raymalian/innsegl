@@ -50,6 +50,21 @@ type CredentialRun struct {
 	AgentType string
 	TaskID    string
 	SPIFFEID  string
+	// Repo is `run_registered`'s own `repo`: doc 02 §5's host/org/name, as the
+	// registration recorded it (ADR-0045).
+	//
+	// It is held because it is what an admin credential is scoped to (#264):
+	// the three tools that take a run id answer a caller whose credential is
+	// for another repository exactly as they answer a run that does not exist,
+	// and they need the run's repository to make that comparison.
+	//
+	// EMPTY IS POSSIBLE AND IS NOT AN ERROR. `repo` became required at append
+	// under ADR-0045; a run registered before that has none on the chain, and
+	// refusing to read such a run would make history unreadable to close a
+	// gap that is about new calls. It is empty, and adminScopeAdmits refuses
+	// it under any credential — a run that cannot be shown to be in this
+	// credential's repository is not in it.
+	Repo string
 	// RetiredAt is the instant `run_retired` was appended, zero for a live
 	// run. I4: retirement removes the identity, never the record.
 	RetiredAt time.Time
