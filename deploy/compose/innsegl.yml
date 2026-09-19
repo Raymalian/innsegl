@@ -1364,6 +1364,15 @@ services:
   # stack is up makes the backup's liveness the stack's liveness, so a stack
   # that was down for three days has a three-day-old backup; backup-health.sh
   # says so rather than leaving it to be assumed.
+  #
+  # FORCING A RUN (RM-163, #267):
+  #
+  #     docker kill -s USR1 innsegl-backup
+  #
+  # wakes the sleep and runs immediately. It replaces the recovery #267 records
+  # -- deleting the marker the healthcheck reads and restarting the container --
+  # and unlike `make innsegl-backup`, which runs a separate one-off container,
+  # the verdict it produces is the verdict the healthcheck goes on to read.
   # --------------------------------------------------------------------------
   innsegl-backup:
     image: ${INNSEGL_BACKUP_IMAGE:-innsegl-backup:local}
@@ -1397,6 +1406,19 @@ services:
       # an operator learns to ignore.
       INNSEGL_BACKUP_INTERVAL: ${INNSEGL_BACKUP_INTERVAL:-86400}
       INNSEGL_BACKUP_WINDOW: ${INNSEGL_BACKUP_WINDOW:-172800}
+      # THE INTERVAL IS FOR A RUN THAT WORKED. A run that could not reach the
+      # ledger is retried on these instead, doubling from the first towards the
+      # second (RM-163, #267): the interval used to be the wait after a failure
+      # too, so a ledger that was unreachable for two minutes cost a whole day
+      # of unprotected work. Sixty seconds is longer than a database restart;
+      # fifteen minutes is where a fault has stopped looking transient.
+      #
+      # ONLY THE TRANSIENT CLASS TAKES THIS PATH. A dump that was produced and
+      # does not restore, or restores and disagrees with a sealed segment, waits
+      # the full interval and says why: those are findings about the backup, and
+      # a new one every few seconds would bury the first.
+      INNSEGL_BACKUP_RETRY: ${INNSEGL_BACKUP_RETRY:-60}
+      INNSEGL_BACKUP_RETRY_MAX: ${INNSEGL_BACKUP_RETRY_MAX:-900}
       # The segment half. The same gateway the sealer writes through, read with
       # an identity that can only read.
       INNSEGL_OBJECT_STORE_REGION: ${INNSEGL_OBJECT_STORE_REGION:-us-east-1}
