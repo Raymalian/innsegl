@@ -220,6 +220,21 @@ type AdminCredentialJWKSet struct {
 // key rather than the same one written tersely.
 const adminCredentialCoordinateBytes = 32
 
+// adminCredentialPointBytes is (*ecdsa.PublicKey).Bytes behind a seam, so that
+// the refusal below it — unreachable for a key that got past the guard in
+// front of it — is reachable from a test rather than left as a branch nobody
+// has taken. IP §2 puts a 100% branch floor on this package, and an error path
+// nothing has driven is an error path nobody knows the shape of. Never
+// reassigned outside tests; internal/segment's validateDigest and
+// internal/verify's marshalIndent are the same idiom for the same reason.
+var adminCredentialPointBytes = (*ecdsa.PublicKey).Bytes
+
+// adminCredentialMarshal is json.Marshal behind a seam, for the same reason:
+// the two values rendered under it are closed structs of strings and int64s,
+// so the encoder cannot fail on them in production, and the join that reports
+// a failure is a branch a test has to be able to reach.
+var adminCredentialMarshal = json.Marshal
+
 // AdminCredentialJWKOf renders a P-256 public key as a JWK, with the key id
 // RFC 7638 derives from the key itself.
 //
@@ -250,9 +265,10 @@ func AdminCredentialJWKOf(pub *ecdsa.PublicKey) (AdminCredentialJWK, error) {
 	// UNREACHABLE for a key that got past the guard above, and kept anyway:
 	// the three lines below index into this slice, and a length assumed rather
 	// than checked is how a key of the wrong shape becomes a silently wrong
-	// key id. It is the only uncovered branch in this file and it is here, not
-	// on a verification path.
-	point, err := pub.Bytes()
+	// key id. It is driven through adminCredentialPointBytes, which is what
+	// makes "refused, with no key id derived" a measured fact rather than a
+	// claim about a branch nothing has taken.
+	point, err := adminCredentialPointBytes(pub)
 	if err != nil || len(point) != 1+2*adminCredentialCoordinateBytes || point[0] != 4 {
 		return AdminCredentialJWK{}, fmt.Errorf(
 			"the verification key is not an uncompressed P-256 point: %w", err)
@@ -299,13 +315,15 @@ func AdminCredentialSigningInput(kid string, claims AdminCredentialClaims) (stri
 	// between them. The errors are joined and returned rather than dropped
 	// anyway — a defect that made one of them possible must not be the thing
 	// that silently signs an empty segment — and that is why there is one
-	// unreachable branch here rather than two.
-	header, headerErr := json.Marshal(adminCredentialJOSEHeader{
+	// unreachable branch here rather than two. It is driven through
+	// adminCredentialMarshal, so what that branch RETURNS on the way out —
+	// nothing to sign, and the encoder's own failure — is measured.
+	header, headerErr := adminCredentialMarshal(adminCredentialJOSEHeader{
 		Algorithm: AdminCredentialAlgorithm,
 		Type:      "JWT",
 		KID:       kid,
 	})
-	payload, payloadErr := json.Marshal(claims)
+	payload, payloadErr := adminCredentialMarshal(claims)
 	if err := errors.Join(headerErr, payloadErr); err != nil {
 		return "", fmt.Errorf("rendering the credential: %w", err)
 	}
@@ -318,17 +336,23 @@ type AdminCredentialConfig struct {
 	// KeySetFile is the JWKS this listener admits credentials from. Required.
 	// It is read once, here, and never again.
 	KeySetFile string
-	// Now is the clock, for tests. Nil means time.Now.
-	Now func() time.Time
 }
 
 // AdminCredentialVerifier admits a credential, or does not say why.
+//
+// THERE IS NO INJECTED CLOCK, and its absence is deliberate. One stood here —
+// an `AdminCredentialConfig.Now` documented "for tests" — and nothing ever set
+// it: not this process, which has one clock, and not a test, because every
+// time-dependent refusal below is driven by minting claims around the real
+// instant rather than by moving a fake one. A seam no caller uses is a
+// production default nothing exercises and a branch nobody has taken, which is
+// what IP §2's floor is for; a test-only caller would have taken it and proved
+// nothing about the deployment. It was removed rather than covered.
 type AdminCredentialVerifier struct {
 	keys map[string]*ecdsa.PublicKey
 	// kids is the key ids in file order, for the operator-facing report.
 	kids []string
 	file string
-	now  func() time.Time
 }
 
 // AdminScope is what an admitted credential authorises: one repository.
@@ -366,10 +390,6 @@ func NewAdminCredentialVerifier(cfg AdminCredentialConfig) (*AdminCredentialVeri
 	v := &AdminCredentialVerifier{
 		keys: make(map[string]*ecdsa.PublicKey, len(set.Keys)),
 		file: cfg.KeySetFile,
-		now:  cfg.Now,
-	}
-	if v.now == nil {
-		v.now = time.Now
 	}
 	for i, jwk := range set.Keys {
 		pub, keyErr := adminCredentialPublicKey(jwk)
@@ -527,8 +547,12 @@ func (v *AdminCredentialVerifier) Explain(token string) (AdminScope, error) {
 }
 
 // checkClaims is the second half of Explain: what an admitted signature said.
+//
+// The clock is read HERE, on every call, and not once at construction: a
+// verifier built at start-up and consulted for the life of the process must
+// answer "expired" about the instant the call arrived.
 func (v *AdminCredentialVerifier) checkClaims(claims AdminCredentialClaims) (AdminScope, error) {
-	now := v.now().UTC()
+	now := time.Now().UTC()
 	switch {
 	case claims.Issuer != AdminCredentialIssuer:
 		return AdminScope{}, fmt.Errorf("iss is %q, want %q", claims.Issuer, AdminCredentialIssuer)
