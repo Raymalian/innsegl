@@ -879,25 +879,30 @@ func (c *campaign) signShot(
 	objectCreated := len(sigCommitObjects(t, repoDir)) > before
 	_, hasRecorded := signEventByTree(c.chain(t), event.EventTypeCommitRecorded, tree)
 	// The chain is not the whole of "recorded". sign_commit runs its phases
-	// INSIDE c.idem.Do, so a replay returns the stored reply without reaching
-	// StagedTree at all — but only if the idempotency row was written. A kill
-	// between the `commit_recorded` append and that row leaves the chain
-	// saying recorded and the store saying nothing, and a replay then re-runs
-	// the phases against an index the first attempt's own commit already
-	// emptied. That is the B -> C shape, not a lost reply: the takeover is
-	// refused, and asking the chain alone would send it down the successful
-	// path and report the refusal as a fault.
-	// COMPLETED and not merely present: a claimed row whose call never
-	// finished is exactly the row Do takes over and re-runs, so it buys the
-	// replay nothing — the phases run again against the emptied index just as
-	// if no row existed at all.
+	// THE CHAIN DECIDES, and the window names say why. winSignObjectNoRecord is
+	// "no commit_recorded"; winSignRecordedNoReply is "commit_recorded on the
+	// chain, the caller never saw it". A shot whose record is on the chain is
+	// the second by definition, whatever the idempotency store holds.
 	//
-	// This check alone does not make #95 hold. What closes it is this shot
-	// never sharing a repository with any other (signNewRepo) — see that
-	// function's own comment for why signAwaitLocksClear alone, waiting only
-	// for THIS shot's own orphan, could not.
-	idemRec, idemFound := c.idemRecord(t, key)
-	replayable := idemFound && idemRec.Status == crashCompleted
+	// It did not always classify that way, and the reason is worth keeping. A
+	// kill between the `commit_recorded` append and the idempotency row left the
+	// chain saying recorded and the store saying nothing; a replay then re-ran
+	// the phases against an index the first attempt's own commit had already
+	// emptied, and the takeover was REFUSED. Sending that to the successful path
+	// would have reported a real refusal as a fault, so this also required a
+	// completed row before it would call a shot recorded.
+	//
+	// #274 removed the refusal rather than the state. The takeover now converges
+	// on its own `commit_recorded` before it reaches StagedTree, so the shot
+	// completes and what was lost is only the reply — which is the window name
+	// exactly. Keeping the idempotency term would now demand a refusal that no
+	// longer happens. signSuccessfulTakeover already names this case in its own
+	// comment: "already finished and only the reply was lost".
+	//
+	// #95 is held by none of this. What closes it is this shot never sharing a
+	// repository with any other (signNewRepo) — see that function's own comment
+	// for why signAwaitLocksClear alone, waiting only for THIS shot's own
+	// orphan, could not.
 
 	var window string
 	switch {
@@ -905,7 +910,7 @@ func (c *campaign) signShot(
 		window = winSignBeforeIntent
 	case !objectCreated:
 		window = winSignIntentNoObject
-	case !hasRecorded || !replayable:
+	case !hasRecorded:
 		window = winSignObjectNoRecord
 	case s.delivered == nil:
 		window = winSignRecordedNoReply
