@@ -69,6 +69,9 @@
 #
 #   INNSEGL_MCP_ADMIN_URL   default http://127.0.0.1:28090/
 #   INNSEGL_RUNS_DIR        default ~/.innsegl/runs
+#   INNSEGL_UNCAPTURED_LOG  default $INNSEGL_RUNS_DIR/uncaptured.jsonl — where a
+#                           stop-time capture that did NOT happen is written
+#                           down, because a stop's stderr is discarded (#277)
 #
 # Needs `python3` and `curl`. python3 does the JSON in both directions, which
 # is what removed the `sed`-and-`printf` parsing the old file used: a branch
@@ -711,6 +714,102 @@ capture_remedy() {
   warn "  it under this run would attribute their work to this agent (#261)."
 }
 
+# ---------------------------------------------------------------------------
+# WHAT A CAPTURE THAT DID NOT HAPPEN LEAVES BEHIND — #277 (RM-172).
+#
+# Every refusal above and every failure below reported itself through `warn`,
+# and `warn` writes to the stderr of a SubagentStop, which the harness
+# discards. The hook is also forbidden to `exit 2` on a stop — nine
+# invocations, measured — so it cannot report by refusing either. A refused
+# capture, a failed signature and a clean tree were therefore the same thing
+# seen from outside: nothing at all. Measured: two subagents stopped within the
+# same minute, one was captured and committed, the other was not, and the only
+# evidence of the second was that its files were missing hours later. That is
+# the I3 breach — an action was attempted and abandoned, and nothing recorded
+# it.
+#
+# So a capture attempt that does not end in a commit writes a line HERE. Not a
+# message: a FILE, because the requirement is that the record outlive the
+# process that wrote it, and stderr does not.
+#
+# ONE LINE PER ATTEMPT, APPENDED. Never rewritten and never rotated from here:
+# a record a second stop can truncate is a record that two subagents stopping
+# in the same minute would lose, which is the incident itself.
+#
+# NOT THROUGH THE DEPLOYMENT, and that is the whole reason it is a local file
+# rather than a ledger event. A ledger event would be the better home on every
+# path except the ones that need it most — a failed signature and a refused
+# credential ARE the deployment being unreachable, and a record that needs the
+# component that just failed is absent exactly when it is read for. This needs
+# python3 and a filesystem, and the hook has already used both by this line.
+#
+# SUCCESS WRITES NOTHING. A capture that commits is recorded by the ledger as
+# `commit_recorded`; a second line about it here would be a second source of
+# truth for one fact.
+#
+# NEITHER IS A FAILED RETIREMENT, and that boundary is deliberate rather than
+# forgotten: a run that is not retired is expired by the reaper as
+# `run_expired` (IP §6.7), so it already has a durable record. What had none
+# was the WORK.
+# ---------------------------------------------------------------------------
+UNCAPTURED_LOG="${INNSEGL_UNCAPTURED_LOG:-$RUNS_DIR/uncaptured.jsonl}"
+
+# The record, in one place. Fields are positional so the shell never builds
+# JSON: a worktree path carrying a quote or a newline used to be how this
+# file made malformed payloads, and json.dumps is the same answer MCP_CLIENT
+# gave for the same problem.
+UNCAPTURED_RECORD='
+import json, os, sys, time
+
+log = sys.argv[1]
+names = ("reason", "detail", "run_id", "agent_type", "task", "worktree", "dir",
+         "dirty", "wrote", "staged", "unaccounted", "unaccounted_paths",
+         "wrote_paths")
+rec = dict(zip(names, sys.argv[2:]))
+for n in names:
+    rec.setdefault(n, "")
+for n in ("dirty", "wrote", "staged", "unaccounted"):
+    try:
+        rec[n] = int(rec[n] or 0)
+    except ValueError:
+        rec[n] = 0
+# BOUNDED ON PURPOSE. A single write() to a descriptor opened O_APPEND is
+# atomic, and two stops in the same minute is the case this exists for, so the
+# line is kept well inside one buffer rather than allowed to grow with the size
+# of a run. The counts are the record; the paths are a convenience.
+rec["unaccounted_paths"] = [p for p in rec["unaccounted_paths"].splitlines() if p][:10]
+rec["wrote_paths"] = [p for p in rec["wrote_paths"].splitlines() if p][:20]
+rec["detail"] = rec["detail"][-400:]
+rec["time"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+rec["record"] = "capture_not_made"
+# 0600, for the same reason the marker is: this names a run and a tree.
+fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+try:
+    os.write(fd, (json.dumps(rec, sort_keys=True) + "\n").encode("utf-8"))
+finally:
+    os.close(fd)
+'
+
+# uncaptured <reason> [what the failure said] — one durable line, always 0.
+#
+# IT READS THE VARIABLES OF ITS CALLER rather than taking eleven arguments. A
+# call site that restates the counts is a call site that can restate one of
+# them wrongly, and the record would then describe a capture that did not
+# happen the way it says. Every one is defaulted, so a branch reached before
+# capture_account ran records zeroes instead of killing the stop under `set -u`.
+#
+# ALWAYS RETURNS 0, like say_detail. Recording an outcome must never decide one,
+# and a stop never blocks.
+uncaptured() {
+  mkdir -p "$RUNS_DIR" 2>/dev/null || :
+  python3 -c "$UNCAPTURED_RECORD" "$UNCAPTURED_LOG" \
+    "$1" "${2:-}" "${RUN_ID:-}" "${TYPE:-}" "${TASK:-}" "${WT:-}" "${DIR:-}" \
+    "${dirty:-0}" "${ACC_WROTE_N:-0}" "${ACC_STAGED_N:-0}" "${ACC_UNACCOUNTED_N:-0}" \
+    "${ACC_UNACCOUNTED:-}" "${ACC_WROTE:-}" 2>/dev/null \
+    || warn "and that refusal could not be written to $UNCAPTURED_LOG either"
+  return 0
+}
+
 # Sourcing this file defines its functions, dispatches nothing, and pulls in the
 # frozen reference derivation, so MCP-043 can compare describe_workspace's port
 # against the shell it was ported from with no harness, no MCP and no network.
@@ -1032,6 +1131,11 @@ case "$EVENT" in
           fi
           warn "  Refusing the capture rather than signing work it may not have done (#261)."
           capture_remedy
+          if [ "$ACC_READ" != "1" ]; then
+            uncaptured bodies_unreadable "the tool-call bodies of this run are unreadable at $_bodies"
+          else
+            uncaptured index_unreadable "the index of $DIR could not be read"
+          fi
         elif [ "$ACC_WROTE_N" = "0" ]; then
           # A READ-ONLY RUN CAPTURES NOTHING, IN ANY TREE. This is the first
           # measured incident, and the one an unbounded capture gets most wrong:
@@ -1040,6 +1144,7 @@ case "$EVENT" in
           if [ "$ACC_STAGED_N" != "0" ]; then
             warn "  The $ACC_STAGED_N path(s) staged there are not this run's to sign and were left alone."
           fi
+          uncaptured no_recorded_writes "the run recorded no file write, so nothing in that tree is its own to capture"
         elif [ "$ACC_UNACCOUNTED_N" != "0" ]; then
           warn "$RUN_ID left $dirty uncommitted path(s) in $DIR, and the index already holds"
           warn "  $ACC_UNACCOUNTED_N path(s) it cannot show it wrote:"
@@ -1050,6 +1155,7 @@ case "$EVENT" in
           warn "  A capture commits the index, so signing now would put all of them"
           warn "  under this run. Refusing the whole capture (#261)."
           capture_remedy
+          uncaptured index_unaccounted "the index already held $ACC_UNACCOUNTED_N path(s) the run cannot show it wrote"
         else
           printf '%s\n' "$ACC_WROTE" | while IFS= read -r _f; do
             [ -n "$_f" ] && git -C "$ACC_TOP" add -- "$_f" 2>/dev/null || true
@@ -1064,8 +1170,10 @@ case "$EVENT" in
             warn "$RUN_ID's own writes did not stage cleanly in $DIR: the index now holds"
             warn "  $ACC_UNACCOUNTED_N path(s) it cannot account for. Refusing the capture (#261)."
             capture_remedy
+            uncaptured staging_unaccounted "staging the run's own writes left $ACC_UNACCOUNTED_N path(s) it cannot account for"
           elif [ "$ACC_STAGED_N" = "0" ]; then
             warn "$RUN_ID wrote nothing in $DIR that is uncommitted; capturing nothing of the $dirty path(s) there"
+            uncaptured nothing_uncommitted "every path the run wrote is already committed; the $dirty uncommitted path(s) there are not its own"
           else
             warn "$RUN_ID left $dirty uncommitted path(s); capturing the $ACC_STAGED_N it wrote"
             MSG="chore(agent): work left by $TYPE run $RUN_ID
@@ -1086,8 +1194,29 @@ gate is what decides whether it may merge."
             # The work stays STAGED whether or not this succeeds, so a failure loses
             # nothing but the attribution, and the run it should carry is named here
             # rather than written to a file nothing has ever read.
-            ( cd "$DIR" && "$(signer)" -r "$RUN_ID" ${TASK:+-t "$TASK"} ${WT:+-w "$WT"} -m "$MSG" ) >&2 \
-              || warn "could not sign $RUN_ID's work; it is staged in $DIR and signing it later needs -r $RUN_ID"
+            #
+            # AND WHAT THE SIGNER SAID IS KEPT, not just shouted — #277. Its
+            # output went straight to a stderr the harness discards, so the one
+            # sentence that says WHY a signature failed — a run already retired,
+            # a deployment that is not up, a credential the listener refused —
+            # was the first thing lost, and a stop that signed nothing looked
+            # exactly like a stop with nothing to sign. It is replayed to stderr
+            # exactly as before AND carried into the record, which outlives this
+            # process.
+            _said="$RUNS_DIR/.signer-said.$$"
+            rm -f "$_said" 2>/dev/null || :
+            # Two commands, so the umask is in force BEFORE the redirection
+            # creates the file: a redirection on the subshell itself is
+            # performed at fork, which is before anything inside it runs.
+            ( umask 077; : > "$_said" ) 2>/dev/null || :
+            if ( cd "$DIR" && "$(signer)" -r "$RUN_ID" ${TASK:+-t "$TASK"} ${WT:+-w "$WT"} -m "$MSG" ) >> "$_said" 2>&1; then
+              cat "$_said" >&2
+            else
+              cat "$_said" >&2
+              warn "could not sign $RUN_ID's work; it is staged in $DIR and signing it later needs -r $RUN_ID"
+              uncaptured signing_failed "$(cat "$_said" 2>/dev/null)"
+            fi
+            rm -f "$_said" 2>/dev/null || :
           fi
         fi
       fi
