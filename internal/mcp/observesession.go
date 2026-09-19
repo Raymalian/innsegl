@@ -505,6 +505,23 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 				"session a second identity, so nothing was written and nothing was registered",
 			sessionID, err)
 	}
+	// THE RECORDED SESSION'S REPOSITORY AGAINST THE CREDENTIAL'S (#264).
+	//
+	// A start for a session this deployment already holds replays that
+	// session's own repository rather than deriving one, so without this the
+	// two paths below would answer a caller holding another repository's
+	// credential: the terminal reply carries the run id, the identity and the
+	// workspace, and the live path would register under a session id that is
+	// not this caller's to use.
+	//
+	// It is a refusal rather than "pretend the session is unknown", which is
+	// what a stop does. A start that pretended would derive the caller's OWN
+	// workspace and register a second run over this session's marker — an
+	// unknown session and a session held by someone else are genuinely
+	// different here, and only one of them may be written to.
+	if found && !adminScopeAdmits(ctx, marker.Repo) {
+		return observeSessionOut{}, adminScopeRefusal(ToolObserveSession)
+	}
 	if found && marker.RetiredAt != "" {
 		// THE TERMINAL STATE, and not a refusal: the reference shim's
 		// SessionStart never blocks, because refusing the operator's own
@@ -741,7 +758,12 @@ func (c *observeSessionService) stop(ctx context.Context, sessionID string, in o
 				"is left in place: a stop that deleted what it could not use would lose the run "+
 				"id for good", err)), nil
 	}
-	if !found {
+	// A session held by another repository is answered EXACTLY as a session
+	// this deployment never saw (#264): same reply, same detail, same bytes,
+	// from the same line. A stop names a session id and nothing else, so a
+	// distinguishable answer would make this tool a lookup from session id to
+	// "is there a run, and has it ended" across every repository at once.
+	if !found || !adminScopeAdmits(ctx, marker.Repo) {
 		// IP §4: a stop for a session that never started is not an error. A
 		// shim cannot guarantee ordering — a stop can arrive for a session
 		// whose start never reached this deployment, or reached a previous

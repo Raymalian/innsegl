@@ -300,6 +300,19 @@ func registerAgent(ctx context.Context, _ *sdk.CallToolRequest, in registerAgent
 
 // register is the tool, once its dependencies are known.
 func (c *RegisterAgentConfig) register(ctx context.Context, in registerAgentIn) (registerAgentOut, error) {
+	// THE CREDENTIAL'S REPOSITORY AGAINST THE ARGUMENT (#264), before
+	// anything. This is the tool the whole check exists for: it is what MINTS
+	// a run, and a caller that can mint one for any repository is doc 04's
+	// AB-13 and AB-15 whatever the other five do.
+	//
+	// It is checked here rather than at the transport because the transport
+	// does not read arguments, and before the idempotency claim because a
+	// refused call must leave nothing behind — no key claimed, no identity, no
+	// event. With no credential in force this is true and register_agent is
+	// unchanged.
+	if !adminScopeAdmits(ctx, in.Repo) {
+		return registerAgentOut{}, adminScopeRefusal(ToolRegisterAgent)
+	}
 	run, err := registerAgentRun(in, c.Pseudonyms)
 	if err != nil {
 		return registerAgentOut{}, err
