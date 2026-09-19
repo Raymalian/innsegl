@@ -55,6 +55,41 @@ import (
 //   - The bodies are local and expire by age (90 days by default), so this can
 //     never be re-run over history the way a chain walk can. The ledger keeps
 //     the digest forever and the content not at all.
+//
+// # What the DENOMINATOR is, and why it had to be narrowed
+//
+// Corroboration is reported as a rate (see "WHY THIS PASS APPENDS NOTHING"),
+// so what is counted decides what the rate means. A claim naming a path in no
+// repository this pass can read was never going to be corroborated by one, and
+// counting it "not found" says the repository contradicted the claim when the
+// repository was never asked. Those are UNCHECKABLE — the bucket that already
+// meant "this check is silent about it".
+//
+// Deciding it needs the host-to-mount translation `describe_workspace`
+// performs, for that tool's reason: a body records the path the HARNESS saw,
+// and nothing in this process says what its own mount corresponds to. See
+// WritesConfig.HostProjects.
+//
+// # How much it is worth, measured rather than projected
+//
+// Measured against this deployment's retained bodies on 2026-09-19: 37,880
+// bodies, of which 7,183 carry a `file_path` and 4,291 are the `Write` and
+// `Edit` calls this pass can reconstruct a claim from. Of those 4,291, 339
+// (7.9%) name a path outside every repository the workspace links, and move
+// from "not found" to "uncheckable".
+//
+// THE EARLIER PROJECTION WAS OF A DIFFERENT POPULATION and is worth writing
+// down because it is the easy mistake here. #169 measured 75.8% of
+// "file-path writes" landing in a scratch directory, and that number is over
+// every body carrying a `file_path` — 2,895 of the 7,183 are `Read`, which
+// ClaimFromBody discards before any of this runs (REC-014). Over the claims
+// the pass actually judges the share is 7.9%, not four in five. The rule is
+// still right; its effect on the rate is single digits.
+//
+// A deployment that has not been told translates nothing, admits every path,
+// and is reported unscoped. And a gitignored path INSIDE a repository is still
+// counted "not found": this rule asks where the write was, not whether git was
+// ever going to track it.
 
 // WriteClaim is one reported file write, reduced to what can be checked.
 type WriteClaim struct {
@@ -241,6 +276,37 @@ type WritesConfig struct {
 	// for RebaseConfig.Repos' reason: a pass that discovered its own
 	// repositories would read trees nobody asked it to.
 	Repos []string
+
+	// HostProjects, Projects and Workspace are what it takes to decide
+	// whether a CLAIMED PATH is inside a repository this pass can read. All
+	// three, or none: with any one missing the pass admits every path and
+	// says so in WritesReport.Scoped.
+	//
+	// WHY A PATH RULE AT ALL. A body records the path as the HARNESS saw it,
+	// and some of those paths are in no repository and never could be — an
+	// agent's own scratch directory, a temporary file, a tree this deployment
+	// does not serve. Counted "not found", they move the corroboration RATE
+	// with how much scratch work an agent did rather than with anything about
+	// integrity, and a rate like that is the kind of number #167 was filed
+	// about. Measured here: 339 of 4,291 claims, 7.9%. See the file header
+	// for the whole population and for the larger figure #169 projected from
+	// a different one.
+	//
+	// HostProjects is the host directory the Projects mount corresponds to —
+	// the same INNSEGL_HOST_PROJECTS `describe_workspace` is told, and told
+	// for the same reason: the container knows where its mount IS and nothing
+	// in it says what that mount CORRESPONDS TO. Nothing is guessed. The
+	// plausible rules — strip to the first existing directory, match on a
+	// repository's name — all answer confidently and some of the time answer
+	// wrongly, and this one decides whether a claim is judged at all.
+	HostProjects string
+	// Projects is where HostProjects is mounted in THIS process.
+	Projects string
+	// Workspace is the root `host/org/name` resolves under, the same root
+	// GitWorkspace is built on. A served repository is a symlink from there
+	// into Projects, so it is resolved through symlinks before anything is
+	// compared against it.
+	Workspace string
 }
 
 // WritesReport is what one pass did.
@@ -254,7 +320,11 @@ type WritesReport struct {
 	Supported int
 	// Unsupported is how many were not. This is the finding.
 	Unsupported int
-	// Uncheckable is how many belonged to a run that signed no readable tree.
+	// Uncheckable is how many there was nothing to check against: a run that
+	// signed no readable tree, or — where Scoped is true — a claim naming a
+	// path in no repository this pass can read, which no repository was ever
+	// going to corroborate.
+	//
 	// Never a finding, and counted so that a deployment can see how much of
 	// its activity this check is silent about.
 	Uncheckable int
@@ -262,6 +332,15 @@ type WritesReport struct {
 	// past the retention window, or never written. Also never a finding: the
 	// body's absence is a fact about this machine, not about the agent.
 	Unreadable int
+	// Scoped is whether this pass could tell a claimed path inside a served
+	// repository from one outside every repository it can read.
+	//
+	// False is a WEAKER report and has to say so rather than be inferred from
+	// a number that looks the same either way: unscoped, a write to an
+	// agent's scratch directory is counted `Unsupported`, and the
+	// corroboration rate then moves with how much scratch work was done.
+	// See WritesConfig.HostProjects.
+	Scoped bool
 }
 
 // WHY THIS PASS APPENDS NOTHING.
@@ -418,6 +497,8 @@ func (r *Reconciler) checkWrites(
 	for _, repo := range cfg.Repos {
 		served[repo] = struct{}{}
 	}
+	scope := newWritesScope(cfg)
+	report.Scoped = scope != nil
 	// Per-run tree blobs, computed at most once each.
 	blobsFor := map[string][]map[string]struct{}{}
 
@@ -434,6 +515,18 @@ func (r *Reconciler) checkWrites(
 			continue
 		}
 
+		report.Checked++
+
+		// WHERE THE CLAIM SAYS IT WROTE, BEFORE WHAT IT SAYS IT WROTE. A path
+		// in no repository this pass can read was never going to be
+		// corroborated by one, and counting it "not found" says the repository
+		// contradicted the claim when the repository was never asked. Ahead of
+		// the blob lookup so a scratch write costs no git walk either.
+		if !scope.admits(write.Path) {
+			report.Uncheckable++
+			continue
+		}
+
 		repo := view.repoOf[claim.runID]
 		holdings, known := blobsFor[repo]
 		if !known {
@@ -441,7 +534,6 @@ func (r *Reconciler) checkWrites(
 			blobsFor[repo] = holdings
 		}
 
-		report.Checked++
 		switch JudgeWrite(write, holdings) {
 		case WriteSupported:
 			report.Supported++
@@ -453,6 +545,159 @@ func (r *Reconciler) checkWrites(
 		}
 	}
 	return report
+}
+
+// writesScope decides whether a claimed path is inside a repository this pass
+// can read. Nil admits everything, which is what an unconfigured deployment
+// gets and what WritesReport.Scoped reports.
+type writesScope struct {
+	// hostProjects and projects are the same directory under two roots: the
+	// harness's spelling and this process's.
+	hostProjects string
+	projects     string
+	// roots are the served repositories as directories on THIS filesystem,
+	// resolved through the symlink that puts each one at <workspace>/<repo>.
+	roots []string
+}
+
+// newWritesScope resolves the served repositories, or returns nil.
+//
+// Nil rather than an error, and rather than a guess. Every way this can fail
+// is a deployment that has not been told something — the mount's host
+// directory, the workspace root, or a repository that is not on this machine —
+// and none of them is a fact about an agent. The pass then judges content
+// alone, exactly as it did before there was a path rule, and says it is
+// unscoped so the weaker report is not read as the stronger one.
+func newWritesScope(cfg *WritesConfig) *writesScope {
+	if cfg.HostProjects == "" || cfg.Projects == "" || cfg.Workspace == "" {
+		return nil
+	}
+	// Absolute on both sides or nothing: a relative root resolves against
+	// whatever directory this process happens to be in, and the answer would
+	// decide whether a claim is judged at all.
+	if !filepath.IsAbs(cfg.HostProjects) || !filepath.IsAbs(cfg.Projects) {
+		return nil
+	}
+	scope := &writesScope{
+		hostProjects: filepath.Clean(cfg.HostProjects),
+		projects:     filepath.Clean(cfg.Projects),
+	}
+	for _, repo := range cfg.Repos {
+		// filepath.FromSlash, because `repo` is doc 02 §5's `host/org/name`
+		// and slash-separated by definition. ValidateRepo holds each segment
+		// to [A-Za-z0-9][A-Za-z0-9._-]*, so none can be `..` and none can
+		// carry a separator — the same reason GitWorkspace needs no second
+		// escape check.
+		resolved, err := filepath.EvalSymlinks(
+			filepath.Join(cfg.Workspace, filepath.FromSlash(repo)))
+		if err != nil {
+			continue
+		}
+		scope.roots = append(scope.roots, resolved)
+	}
+	if len(scope.roots) == 0 {
+		return nil
+	}
+	return scope
+}
+
+// admits reports whether a claimed path could be in a repository this pass can
+// read.
+//
+// It errs toward ADMITTING, and deliberately: a path this cannot place is left
+// to the content check, which is where the judgement was before. Refusing to
+// judge on a rule that is merely probably right would hide a real shortfall
+// behind an "uncheckable", and that is the direction that costs something.
+func (s *writesScope) admits(path string) bool {
+	if s == nil {
+		return true
+	}
+	if !filepath.IsAbs(path) {
+		// A body records an absolute path; a relative one says nothing about
+		// which directory it is relative TO, so there is no honest way to
+		// place it and no reason to hold it against the claim.
+		return true
+	}
+	local, ok := s.local(path)
+	if !ok {
+		return false
+	}
+	for _, root := range s.roots {
+		if under(root, local) {
+			return true
+		}
+	}
+	return false
+}
+
+// local translates one claimed path into this process's namespace.
+//
+// The mount's OWN spelling is accepted first and untranslated, for
+// localWorktreePath's reason: a second translation would prepend the mount to
+// a path that already carries it. Everything else is the host's spelling and
+// gets filepath.Rel over two cleaned absolute paths, which is the whole
+// translation — lexical, because the host root does not exist in here and a
+// rule that consulted the filesystem would answer differently depending on
+// what happened to be mounted.
+func (s *writesScope) local(path string) (string, bool) {
+	cleaned := filepath.Clean(path)
+	if rel, err := filepath.Rel(s.projects, cleaned); err == nil && !escapes(rel) {
+		return cleaned, true
+	}
+	rel, err := filepath.Rel(s.hostProjects, cleaned)
+	if err != nil || escapes(rel) {
+		return "", false
+	}
+	if rel == "." {
+		return s.projects, true
+	}
+	return filepath.Join(s.projects, rel), true
+}
+
+// under reports whether path is root itself or lives beneath it.
+//
+// filepath.Rel over a string compare, because "/a/repo-two" has "/a/repo" as a
+// string prefix and is not inside it. Both sides are resolved through symlinks
+// first: a served repository IS a symlink, and the path being tested usually
+// is not, so comparing the two spellings straight would find every claim
+// outside every repository.
+func under(root, path string) bool {
+	rel, err := filepath.Rel(resolveExisting(root), resolveExisting(path))
+	return err == nil && !escapes(rel)
+}
+
+// escapes reports whether a relative path leaves the root it is relative to.
+func escapes(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// resolveExisting resolves the longest EXISTING prefix of a path through
+// symlinks and puts the rest back on the end.
+//
+// filepath.EvalSymlinks alone is not enough here: it fails outright on a path
+// whose last segments do not exist, and the claimed path of a file that was
+// written to a scratch directory, or has since been deleted or rewritten, is
+// exactly that. Falling back to the cleaned path in that case would compare a
+// RESOLVED root against an UNRESOLVED path, which disagrees wherever any
+// ancestor is a symlink — every temporary directory on macOS, and the
+// workspace's own repository links.
+func resolveExisting(p string) string {
+	cleaned := filepath.Clean(p)
+	rest := ""
+	for cur := cleaned; ; {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			if rest == "" {
+				return resolved
+			}
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return cleaned
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // repoBlobs is every blob one repository holds, or nothing.

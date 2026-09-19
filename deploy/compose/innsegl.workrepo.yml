@@ -166,6 +166,25 @@ services:
       - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:/projects:ro
 
   innsegl-reconciler:
+    environment:
+      # THE SAME VALUE innsegl-mcp is given above, and needed here for the same
+      # reason one level along.
+      #
+      # RM-104's check reads a retained body and gets the path the HARNESS saw
+      # -- a path on the host. To tell "this write was to a file in a
+      # repository we serve" from "this write was to an agent's scratch
+      # directory", it has to put that path under the mount below, and nothing
+      # in the container says what the mount CORRESPONDS TO.
+      #
+      # Unset, the check still runs and still corroborates: it simply admits
+      # every path, and a scratch write is then counted "not found" rather than
+      # uncheckable. Measured against this deployment's retained bodies, 339 of
+      # 4,291 reconstructable claims -- 7.9% -- name a path in no repository
+      # the workspace links, so without this the corroborated share moves with
+      # how much scratch work an agent did rather than with anything about
+      # integrity. The cycle report says UNSCOPED when it is missing, so the
+      # weaker number is never read as the stronger one.
+      INNSEGL_HOST_PROJECTS: ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}
     volumes:
       - ${INNSEGL_PROJECTS:?set it to the directory your git projects live in, e.g. $HOME/Applications}:/projects:ro
       # RM-104 (#169): the harness's retained tool-call bodies. READ-ONLY, and
