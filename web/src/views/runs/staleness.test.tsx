@@ -7,9 +7,9 @@ import { RunsTable } from "./RunsTable";
 import { runSummary } from "./fixtures";
 
 /**
- * FE-061 (proposed for doc 06's test list; doc 06 is not modified here).
+ * FE-058 (proposed for doc 06's test list; doc 06 is not modified here).
  *
- * The rendered half of FE-060: a stale row must SAY it is stale, in the table,
+ * The rendered half of FE-057: a stale row must SAY it is stale, in the table,
  * where the reader is.
  *
  * ── THE ROW THIS EXISTS FOR ────────────────────────────────────────────────
@@ -22,7 +22,7 @@ import { runSummary } from "./fixtures";
  */
 afterEach(cleanup);
 
-describe("FE-061 a stale run says so in the table", () => {
+describe("FE-058 a stale run says so in the table", () => {
   it("annotates a run that has been quiet, and leaves a working one alone", () => {
     const now = new Date();
     const runs = [
