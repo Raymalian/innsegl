@@ -117,6 +117,12 @@ script_tool() {
 # $SIGNER defaults to the inert recorder below. The capture cases override it
 # with one that really commits, because "no commit" has to be asserted as a HEAD
 # that did not move.
+#
+# $INNSEGL_GIT_GUARD_SCRIPT IS PINNED AT THE SHIPPED GUARD and not left to the
+# shim's own sibling lookup — #278. $SHIM is a scratch copy whenever a candidate
+# is being driven before it is installed, which is the whole point of the
+# override, and a scratch copy has no sibling. Pinning it also means the guard
+# under test is the repository's, never whatever happens to sit next to the copy.
 drive() {
   : > "$CALLS"
   printf '%s' "$1" | env \
@@ -126,6 +132,8 @@ drive() {
     INNSEGL_SIGNER="${SIGNER:-$WORK/signer}" \
     INNSEGL_API_URL="${API:-http://127.0.0.1:1/}" \
     INNSEGL_ADMIN_CREDENTIAL_MINT="${MINT:-}" \
+    INNSEGL_GIT_GUARD="${GIT_GUARD:-1}" \
+    INNSEGL_GIT_GUARD_SCRIPT="${TREE_GUARD:-$ROOT/scripts/hooks/git-tree-guard.sh}" \
     "$SHIM" > "$WORK/out" 2> "$WORK/err"
   STATUS=$?
   # EVERY call this run has ever made, because $CALLS is reset per drive and
@@ -1107,6 +1115,246 @@ fi
 
 creset
 uncap_reset
+
+# --- OPS-089: a tree that cannot be read is not a tree with nothing in it -----
+#
+# #284 (RM-178). The stop asked `git status` how much was uncommitted through a
+# pipe into `wc -l`, and a pipeline reports the LAST command's status — so a
+# `git status` that failed printed nothing, counted 0, and was indistinguishable
+# from a clean tree. The hook then concluded there was nothing to capture, no
+# capture was attempted, no capture failed, and #277's record was never written.
+#
+# EVERY CASE HERE IS RED ON MERIT against the shim as it stood, and red for the
+# one reason that matters: the record file is EMPTY. Not a different reason, not
+# a differently spelled field — nothing at all was written, which is the defect.
+
+# capture_run_in <agent-id> <run-id> <dir> — capture_run, against a chosen tree
+# rather than the fixture repository. The marker records whatever cwd the start
+# event carried, existing or not, which is how a tree that is GONE by the time
+# the run stops is driven at all.
+capture_run_in() {
+  script_tool observe_session ok "{\"session_id\":\"$1\",\"phase\":\"start\",\"known\":true,\"registered\":true,\"run_id\":\"$2\",\"task\":\"rm178\",\"worktree\":\"wt-$2\",\"repo\":\"example.test/org/name\",\"branch\":\"dev/rm178\",\"agent_type\":\"prober\"}"
+  SIGNER="$WORK/capture-signer" drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-1\",\"agent_id\":\"$1\",\"agent_type\":\"prober\",\"cwd\":\"$3\"}"
+  rm -rf "${LOG:?}/$2"; mkdir -p "$LOG/$2"
+}
+
+# A DIRECTORY GIT REFUSES TO ANSWER ABOUT. `.git` as a file naming a gitdir that
+# is not there is `fatal: not a git repository`, exit 128 — a real failure of the
+# real command, rather than a stub standing in for one. An unreadable index and
+# a deleted tree reach the same line by the same route.
+UNREADABLE="$WORK/capture/unreadable"
+mkdir -p "$UNREADABLE"
+printf 'gitdir: %s/capture/nowhere-%s\n' "$WORK" "$$" > "$UNREADABLE/.git"
+
+uncap_reset
+capture_run_in agent-cap20 run-cap20 "$UNREADABLE"
+capture_stop agent-cap20
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_lines)" = "1" ] \
+   && [ "$(uncap_field reason)" = "tree_unreadable" ] \
+   && [ "$(uncap_field run_id)" = "run-cap20" ]; then
+  ok "OPS-089 a stop whose tree cannot be read records that, and still exits 0"
+else
+  bad "OPS-089 status $STATUS, $(uncap_lines) record(s), reason '$(uncap_field reason)', run '$(uncap_field run_id)'"
+fi
+# AND IT CARRIES WHAT GIT SAID. "Could not read the tree" is not actionable;
+# "not a git repository" and "index.lock exists" are different problems with
+# different remedies, and that sentence went to a stderr the harness discards.
+case "$(uncap_field detail)" in
+  *"not a git repository"*)
+    ok "OPS-089 and the reason git gave, which is the sentence that was being lost" ;;
+  *) bad "OPS-089 the record carries no reason from git: '$(uncap_field detail)'" ;;
+esac
+if [ "$(uncap_field dir)" = "$UNREADABLE" ] && [ "$(uncap_field worktree)" = "wt-run-cap20" ]; then
+  ok "OPS-089 and it names the tree on this machine and the one the ledger knows"
+else
+  bad "OPS-089 dir '$(uncap_field dir)' worktree '$(uncap_field worktree)'"
+fi
+
+# A TREE THAT IS GONE IS THE SAME DEFECT ONE LINE EARLIER. It never reached the
+# `git status` at all: the stop tested for a directory, found none, and left.
+uncap_reset
+capture_run_in agent-cap21 run-cap21 "$WORK/capture/vanished-$$"
+capture_stop agent-cap21
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_lines)" = "1" ] \
+   && [ "$(uncap_field reason)" = "tree_absent" ] \
+   && [ "$(uncap_field run_id)" = "run-cap21" ]; then
+  ok "OPS-089 a run whose tree is gone is recorded too, and told apart from an unreadable one"
+else
+  bad "OPS-089 vanished tree: status $STATUS, $(uncap_lines) record(s), reason '$(uncap_field reason)'"
+fi
+
+# AND A GENUINELY CLEAN TREE STILL WRITES NOTHING, which is the half that keeps
+# the record worth reading. Measured against a log that already holds the line
+# an unreadable tree put there, not against an empty file — "it wrote nothing"
+# is true of a shim that writes nothing ever.
+uncap_reset
+capture_run_in agent-cap22 run-cap22 "$UNREADABLE"
+capture_stop agent-cap22
+UNREADABLE_LINES="$(uncap_lines)"
+creset
+capture_run agent-cap23 run-cap23
+wrote_body run-cap23 a Write "{\"file_path\":\"$CREPO/mine23.txt\"}"
+capture_stop agent-cap23
+if [ "$UNREADABLE_LINES" = "1" ] && [ "$(uncap_lines)" = "1" ] \
+   && ! grep -q 'run-cap23' "$UNCAP" 2>/dev/null; then
+  ok "OPS-089 and a clean tree, read successfully, still writes nothing at all"
+else
+  bad "OPS-089 clean tree: $UNREADABLE_LINES record(s) before, $(uncap_lines) after"
+fi
+
+# THE RECORD OUTLIVES THE PROCESS, driven with the hook's stderr sent exactly
+# where the harness sends a SubagentStop's: nowhere. Everything the old code
+# had to say about an unreadable tree went there, which is why it said nothing.
+uncap_reset
+capture_run_in agent-cap24 run-cap24 "$UNREADABLE"
+script_tool observe_session ok '{"session_id":"agent-cap24","phase":"stop","known":true,"retired":true,"run_id":"retired"}'
+SIGNER="$WORK/capture-signer" drive_deaf '{"hook_event_name":"SubagentStop","session_id":"sess-1","agent_id":"agent-cap24","agent_type":"prober"}'
+if [ "$STATUS" -eq 0 ] && [ "$(uncap_field run_id)" = "run-cap24" ] \
+   && [ "$(uncap_field reason)" = "tree_unreadable" ]; then
+  ok "OPS-089 a deaf stop over an unreadable tree still leaves the record on disk"
+else
+  bad "OPS-089 deaf stop: status $STATUS, $(uncap_lines) record(s), run '$(uncap_field run_id)'"
+fi
+
+# AND IT TOUCHED NOTHING. A stop that cannot read a tree must not stage, commit
+# or unstage in the one it CAN read.
+creset
+printf 'untouched\n' > "$CREPO/untouched23.txt"
+git -C "$CREPO" add untouched23.txt
+HEAD_BEFORE="$(git -C "$CREPO" rev-parse HEAD)"
+uncap_reset
+capture_run_in agent-cap25 run-cap25 "$UNREADABLE"
+capture_stop agent-cap25
+if [ "$(git -C "$CREPO" rev-parse HEAD)" = "$HEAD_BEFORE" ] \
+   && [ "$(staged_now)" = "untouched23.txt " ] && [ "$(uncap_lines)" = "1" ]; then
+  ok "OPS-089 and recording an unread tree changes nothing in any other one"
+else
+  bad "OPS-089 HEAD moved or the index is '$(staged_now)'"
+fi
+
+creset
+uncap_reset
+
+# --- OPS-095: the shim consults the destructive-git guard ---------------------
+#
+# #278 (RM-173). The guard itself is driven by
+# scripts/hooks/git-tree-guard-selftest.sh, against a real tree, with the real
+# command actually attempted. What is asserted HERE is the only thing that file
+# cannot assert: that this shim reaches the guard at all, on the one event that
+# can BLOCK a tool call, and that reaching it costs every other command nothing.
+#
+# A LIVE RUN, A TRACKED EDIT IT WROTE, AND THE STOP THAT WOULD HAVE CAPTURED IT
+# HAS NOT FIRED. That is the window the measured incident happened in.
+rm -f "$RUNS"/agent-* 2>/dev/null
+creset
+capture_run agent-guard1 run-guard1
+wrote_body run-guard1 a Edit "{\"file_path\":\"$CREPO/base.txt\"}"
+printf 'AGENT WORK\n' >> "$CREPO/base.txt"
+
+guard_drive() {
+  drive "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"sess-1\",\"agent_id\":\"agent-guard1\",\"tool_name\":\"${2:-Bash}\",\"cwd\":\"$CREPO\",\"tool_input\":{\"command\":$(printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}}"
+}
+
+# EVERY CASE CARRIES THE BLOCK, and none of them asserts "it was allowed" on its
+# own. A shim that consults nothing allows every command there is, so a case
+# asserting only that a `git status` got through is GREEN against the very
+# defect it exists to catch — the same trap OPS-088 documents for "success
+# writes nothing". Each assertion below therefore reads the one refusal that
+# must happen alongside the thing that must not.
+guard_drive 'git reset --hard HEAD'
+BLOCKED=$STATUS
+cp "$WORK/err" "$WORK/err.blocked"
+DIRTY_AFTER="$(git -C "$CREPO" status --porcelain | wc -l | tr -d ' ')"
+
+guard_drive 'git status --porcelain'
+ALLOWED=$STATUS
+guard_drive 'git reset --hard HEAD' Read
+NOT_BASH=$STATUS
+guard_drive 'echo "git reset --hard is what took the work"'
+QUOTED=$STATUS
+guard_drive 'git commit -m "x"'
+COMMITTING=$STATUS
+cp "$WORK/err" "$WORK/err.commit"
+GIT_GUARD=0
+guard_drive 'git reset --hard HEAD'
+SWITCHED_OFF=$STATUS
+GIT_GUARD=1
+TREE_GUARD="$WORK/no-such-guard"
+guard_drive 'git reset --hard HEAD'
+NO_GUARD=$STATUS
+TREE_GUARD=""
+
+if [ "$BLOCKED" -eq 2 ] && grep -q 'run-guard1' "$WORK/err.blocked"; then
+  ok "OPS-095 a Bash call that would discard a live run's work is blocked, naming the run"
+else
+  bad "OPS-095 status $BLOCKED, stderr: $(head -n 2 "$WORK/err.blocked")"
+fi
+# AND NOTHING RAN. A blocked call and an allowed one the harness happened not to
+# run are the same exit status from here; the tree is what tells them apart.
+if [ "$BLOCKED" -eq 2 ] && [ "$DIRTY_AFTER" != "0" ]; then
+  ok "OPS-095 and nothing ran: the edit is still in the tree"
+else
+  bad "OPS-095 blocked $BLOCKED, $DIRTY_AFTER uncommitted path(s) left"
+fi
+# THE REFUSAL IS ACTIONABLE, not a wall. An agent that is merely refused reaches
+# for the next spelling of the same command.
+if [ "$BLOCKED" -eq 2 ] && grep -q 'INNSEGL_ALLOW_DESTRUCTIVE=1' "$WORK/err.blocked" \
+   && grep -q 'innsegl-commit -r run-guard1' "$WORK/err.blocked"; then
+  ok "OPS-095 and it offers both ways out: sign the work, or discard it deliberately"
+else
+  bad "OPS-095 the refusal offers no way through: $(cat "$WORK/err.blocked")"
+fi
+
+# EVERY OTHER COMMAND IS UNTOUCHED, and this is the half that decides whether
+# the gate survives contact with an agent that runs git all day.
+if [ "$BLOCKED" -eq 2 ] && [ "$ALLOWED" -eq 0 ]; then
+  ok "OPS-095 and in the same tree a git that destroys nothing is allowed"
+else
+  bad "OPS-095 blocked $BLOCKED, git status $ALLOWED"
+fi
+if [ "$BLOCKED" -eq 2 ] && [ "$NOT_BASH" -eq 0 ]; then
+  ok "OPS-095 and the same command under a tool that is not Bash is not a command"
+else
+  bad "OPS-095 blocked $BLOCKED, Read event $NOT_BASH"
+fi
+if [ "$BLOCKED" -eq 2 ] && [ "$QUOTED" -eq 0 ]; then
+  ok "OPS-095 and a quoted mention of it is not the command either"
+else
+  bad "OPS-095 blocked $BLOCKED, quoted mention $QUOTED"
+fi
+
+# THE COMMIT GATE IS UNCHANGED BY THE GATE IN FRONT OF IT. OPS-021 asserts it on
+# a clean fixture; this asserts it in the one state where both could fire, and
+# asserts that the two refusals are DIFFERENT — a new gate that swallowed the
+# old one would pass every assertion either makes on its own.
+if [ "$BLOCKED" -eq 2 ] && [ "$COMMITTING" -eq 2 ] \
+   && grep -q 'Sign it under THIS' "$WORK/err.commit" \
+   && ! grep -q 'Sign it under THIS' "$WORK/err.blocked"; then
+  ok "OPS-095 and a plain commit still meets the gate that was always there, not this one"
+else
+  bad "OPS-095 blocked $BLOCKED, commit $COMMITTING, $(head -n 1 "$WORK/err.commit")"
+fi
+
+# AND IT CAN BE TURNED OFF, in one variable, without touching the file. A gate
+# in front of git on somebody's machine that cannot be switched off is a gate
+# that gets deleted instead.
+if [ "$BLOCKED" -eq 2 ] && [ "$SWITCHED_OFF" -eq 0 ]; then
+  ok "OPS-095 and INNSEGL_GIT_GUARD=0 stops the shim consulting it at all"
+else
+  bad "OPS-095 blocked $BLOCKED, switched off $SWITCHED_OFF"
+fi
+
+# AND A MISSING GUARD ALLOWS. This file is wired into a harness; a shim that
+# blocked every git command because a sibling script was not installed would be
+# worse than the loss it exists to prevent.
+if [ "$BLOCKED" -eq 2 ] && [ "$NO_GUARD" -eq 0 ]; then
+  ok "OPS-095 and a guard that is not installed fails open"
+else
+  bad "OPS-095 blocked $BLOCKED, missing guard $NO_GUARD"
+fi
+
+creset
+rm -f "$RUNS"/agent-* 2>/dev/null
 
 # --- OPS-073: single-listener mode, unchanged --------------------------------
 #
