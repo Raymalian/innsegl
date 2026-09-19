@@ -575,6 +575,142 @@ signer() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# WHAT A STOPPING RUN CAN ACCOUNT FOR — #261 (RM-158).
+#
+# THE BOUND IS ON THE COMMIT, NOT ON THE `git add`. That distinction is the
+# whole of this change and the first fix missed it: a bound was added that read
+# the run's own tool-call bodies and staged only the files they named, it passed
+# 27 assertions, and a nine-file capture went through it days later. `git add`
+# REMOVES NOTHING, and the capture commits the INDEX — so anything another party
+# had already staged was committed under the stopping run regardless of what the
+# bound picked. The test proved the bound chose the right files. It never asked
+# what was committed.
+#
+# So the question this answers is not "which files may I add" but "is everything
+# that would be COMMITTED something this run can show it wrote". If the answer
+# is no, the whole capture is refused (issue #261, option 3) and the work stays
+# exactly where it was, staged, with the run named so it can be signed later.
+#
+# NOTHING IS GUESSED FROM A SHELL COMMAND, and that is deliberate rather than
+# unfinished. The measured run made 62 `Bash` calls, 27 of which write to a file
+# through `>`, `>>` or a heredoc, against 1 `Write` and 1 `Edit` — so the record
+# of what an agent wrote is structurally incomplete, exactly as the header says.
+# The available answer would be to parse redirections out of the commands and
+# stage what they seem to name. That is `git add -A` with more steps: it takes a
+# shell grammar this file cannot evaluate — variables, pipelines, `cd`, a
+# command substitution that prints a path — and turns a guess into a signature
+# that verifies forever under a named identity. A run whose writes went through
+# `Bash` therefore accounts for nothing, its capture is refused, and the refusal
+# says which run to sign the work under. Under-capturing leaves work unsigned;
+# over-capturing signs a lie.
+#
+# It answers with eight variables rather than a status, because every caller
+# below needs the counts to say anything useful to the operator:
+#
+#   ACC_TOP            the repository's own tree, which is what the index is of
+#   ACC_READ           1 if the run has a body store to be asked at all
+#   ACC_INDEX          1 if the index could be read
+#   ACC_WROTE          its writes, one per line, relative to ACC_TOP
+#   ACC_WROTE_N        how many
+#   ACC_STAGED_N       how many paths the index holds
+#   ACC_UNACCOUNTED_N  how many of those the run cannot show it wrote
+#   ACC_UNACCOUNTED    the first of them, for a message a human can act on
+#
+# THE REPOSITORY'S TREE AND NOT THE EVENT'S cwd. `git diff --cached` names paths
+# from the top of the worktree while `git add` reads them from wherever it is
+# run, so a harness working in a subdirectory would compare two different
+# spellings of the same file and find every one of them unaccounted for.
+CAPTURE_ACCOUNT='
+import json, os, pathlib, shlex, subprocess, sys
+
+bodies, cwd = sys.argv[1], sys.argv[2]
+
+def git(where, *args):
+    return subprocess.run(("git", "-C", where) + args, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, timeout=60
+                          ).stdout.decode("utf-8", "replace")
+
+top, read, index, wrote, staged = "", "0", "0", set(), []
+try:
+    top = git(cwd, "rev-parse", "--show-toplevel").strip()
+except Exception:
+    top = ""
+if top:
+    top = os.path.realpath(top)
+    if os.path.isdir(bodies):
+        read = "1"
+        for f in sorted(pathlib.Path(bodies).glob("*.json")):
+            try:
+                d = json.loads(f.read_text())
+            except Exception:
+                continue
+            # THE THREE TOOLS THAT NAME A FILE. A Bash command names none, and
+            # is not read: see the comment above for why guessing is worse than
+            # refusing.
+            if d.get("tool_name") not in ("Edit", "Write", "NotebookEdit"):
+                continue
+            fp = (d.get("tool_input") or {}).get("file_path")
+            if not isinstance(fp, str) or not fp:
+                continue
+            real = os.path.realpath(fp if os.path.isabs(fp) else os.path.join(cwd, fp))
+            if real.startswith(top + os.sep):
+                wrote.add(os.path.relpath(real, top))
+    try:
+        # -z, so a path carrying a quote or a space arrives as one value. Without
+        # it git quotes such a name and the comparison below never matches it,
+        # which would read as unaccounted and refuse every capture in that tree.
+        staged = [p for p in git(top, "diff", "--cached", "--name-only", "-z").split("\0") if p]
+        index = "1"
+    except Exception:
+        index = "0"
+
+unaccounted = sorted(set(staged) - wrote)
+for name, value in (
+    ("ACC_TOP", top),
+    ("ACC_READ", read),
+    ("ACC_INDEX", index),
+    ("ACC_WROTE", "\n".join(sorted(wrote))),
+    ("ACC_WROTE_N", str(len(wrote))),
+    ("ACC_STAGED_N", str(len(staged))),
+    ("ACC_UNACCOUNTED_N", str(len(unaccounted))),
+    ("ACC_UNACCOUNTED", "\n".join(unaccounted[:10])),
+):
+    print(name + "=" + shlex.quote(value))
+'
+
+# capture_account <body dir> <the tree the run worked in> → the variables above.
+#
+# Defaulted BEFORE the eval, so a machine with no python3, a body store that
+# cannot be read or a tree that is not a repository leaves the caller looking at
+# "nothing is accounted for" — which refuses — rather than at `set -u` killing
+# the stop. A stop never blocks, and a stop that died here would leave the run
+# Active for the reaper.
+capture_account() {
+  ACC_TOP=""; ACC_READ=0; ACC_INDEX=0; ACC_WROTE=""; ACC_WROTE_N=0
+  ACC_STAGED_N=0; ACC_UNACCOUNTED_N=0; ACC_UNACCOUNTED=""
+  eval "$(python3 -c "$CAPTURE_ACCOUNT" "$1" "$2" 2>/dev/null)"
+}
+
+# capture_remedy — what a refused capture leaves the operator holding.
+#
+# A REFUSAL THAT STRANDS THE WORK IS WORSE THAN THE MISATTRIBUTION IT PREVENTS.
+# The run is gone by the time this prints; the only party left who can sign its
+# work is whoever reads this line, and they need the run id, because without
+# `-r` the signer mints a throwaway identity and the work is credited to nobody.
+# So this names the run, the tree, and the command — and it changes nothing on
+# disk, so what was staged is still staged.
+capture_remedy() {
+  warn ""
+  warn "  Nothing was staged or unstaged; the work is where you left it."
+  warn "  $RUN_ID wrote ${ACC_WROTE_N:-0} path(s) in that tree. To sign its own work under it:"
+  warn "    cd $DIR"
+  warn "    git add <the paths that run wrote>"
+  warn "    $(signer) -r $RUN_ID${TASK:+ -t $TASK} -m \"<type>(<scope>): <what changed>\""
+  warn "  Whatever else is in the index belongs to whoever staged it, and signing"
+  warn "  it under this run would attribute their work to this agent (#261)."
+}
+
 # Sourcing this file defines its functions, dispatches nothing, and pulls in the
 # frozen reference derivation, so MCP-043 can compare describe_workspace's port
 # against the shell it was ported from with no harness, no MCP and no network.
@@ -867,75 +1003,92 @@ case "$EVENT" in
         TASK="$(reply_field "$MARK" task)"
         WT="$(reply_field "$MARK" worktree)"
         TYPE="${AGENT_TYPE:-$(reply_field "$MARK" agent_type)}"
-        # ONLY WHAT THIS RUN WROTE (#261). `git add -A` staged the whole tree, so
-        # a run became the signed author of whatever else happened to be
-        # uncommitted. Measured three times on 2026-09-18: a read-only review
-        # subagent signed 12 files and ~890 lines it had only read; a second
-        # capture took another agent's in-flight work, which that agent had to
-        # soft-reset and re-commit; a third took a one-line edit the session made.
-        # Each verified against Fulcio and Rekor under the wrong identity — worse
-        # than unsigned, because it is confidently wrong and permanent.
+        # ONLY WHAT THIS RUN WROTE, AND ONLY IF THAT IS ALL THERE IS (#261).
         #
-        # The bound is the run's OWN record: its tool-call bodies name the files
-        # it wrote. NO RECORD, NO CAPTURE — a run that cannot say what it touched
-        # must not have the tree signed on its behalf, which is the bug itself.
-        # Refusing leaves the work in place and names the run to sign it under,
-        # which is what the old path reached only by luck when signing failed.
+        # `git add -A` staged the whole tree, so a run became the signed author of
+        # whatever else happened to be uncommitted. Measured three times on
+        # 2026-09-18: a read-only review subagent signed 12 files and ~890 lines it
+        # had only read; a second capture took another agent's in-flight work, which
+        # that agent had to soft-reset and re-commit; a third took a one-line edit
+        # the session made. Each verified against Fulcio and Rekor under the wrong
+        # identity — worse than unsigned, because it is confidently wrong and
+        # permanent.
+        #
+        # The first answer bounded what was ADDED and left the commit unbounded,
+        # which fixed nothing an already-staged file could not walk straight past.
+        # This is the bound on the COMMIT: if the index holds anything this run
+        # cannot show it wrote, the WHOLE capture is refused. See capture_account.
         _bodies="${INNSEGL_LOG_DIR:-$HOME/.innsegl/log}/$RUN_ID"
-        _mine=""
-        if [ -d "$_bodies" ]; then
-          _mine="$(python3 - "$_bodies" "$DIR" <<'PYEOF' 2>/dev/null
-import json, os, pathlib, sys
-bodies, root = sys.argv[1], os.path.realpath(sys.argv[2])
-out = []
-for f in pathlib.Path(bodies).glob("*.json"):
-    try:
-        d = json.loads(f.read_text())
-    except Exception:
-        continue
-    if d.get("tool_name") not in ("Edit", "Write", "NotebookEdit"):
-        continue
-    fp = (d.get("tool_input") or {}).get("file_path")
-    if not isinstance(fp, str) or not fp:
-        continue
-    real = os.path.realpath(fp)
-    if real == root or real.startswith(root + os.sep):
-        out.append(os.path.relpath(real, root))
-print("\n".join(sorted(set(out))))
-PYEOF
-)"
-        else
-          warn "$RUN_ID left $dirty path(s) but its tool-call bodies are unreadable at $_bodies"
-          warn "  refusing to capture rather than sign work it may not have done (#261)"
-          warn "  the work is in $DIR; signing it later needs -r $RUN_ID"
-        fi
+        capture_account "$_bodies" "$DIR"
 
-        if [ -n "$_mine" ]; then
-          printf '%s\n' "$_mine" | while IFS= read -r _f; do
-            [ -n "$_f" ] && git -C "$DIR" add -- "$_f" 2>/dev/null || true
+        if [ "$ACC_READ" != "1" ] || [ "$ACC_INDEX" != "1" ]; then
+          # NO RECORD, NO CAPTURE. A run that cannot be asked what it touched must
+          # not have a tree signed on its behalf; that is the bug itself.
+          warn "$RUN_ID left $dirty uncommitted path(s) in $DIR and cannot be asked what it wrote."
+          if [ "$ACC_READ" != "1" ]; then
+            warn "  Its tool-call bodies are unreadable at $_bodies."
+          else
+            warn "  The index of that tree could not be read."
+          fi
+          warn "  Refusing the capture rather than signing work it may not have done (#261)."
+          capture_remedy
+        elif [ "$ACC_WROTE_N" = "0" ]; then
+          # A READ-ONLY RUN CAPTURES NOTHING, IN ANY TREE. This is the first
+          # measured incident, and the one an unbounded capture gets most wrong:
+          # there is no diff anywhere that belongs to this run.
+          warn "$RUN_ID recorded no file write, so it captures nothing of the $dirty uncommitted path(s) in $DIR."
+          if [ "$ACC_STAGED_N" != "0" ]; then
+            warn "  The $ACC_STAGED_N path(s) staged there are not this run's to sign and were left alone."
+          fi
+        elif [ "$ACC_UNACCOUNTED_N" != "0" ]; then
+          warn "$RUN_ID left $dirty uncommitted path(s) in $DIR, and the index already holds"
+          warn "  $ACC_UNACCOUNTED_N path(s) it cannot show it wrote:"
+          printf '%s\n' "$ACC_UNACCOUNTED" | while IFS= read -r _p; do
+            [ -n "$_p" ] && warn "    $_p"
           done
-        fi
-        _staged="$(git -C "$DIR" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')"
-        if [ "${_staged:-0}" = "0" ]; then
-          [ -d "$_bodies" ] && warn "$RUN_ID wrote nothing in $DIR that is uncommitted; capturing nothing of the $dirty path(s) there"
+          [ "$ACC_UNACCOUNTED_N" -gt 10 ] 2>/dev/null && warn "    ... and $((ACC_UNACCOUNTED_N - 10)) more"
+          warn "  A capture commits the index, so signing now would put all of them"
+          warn "  under this run. Refusing the whole capture (#261)."
+          capture_remedy
         else
-          warn "$RUN_ID left $dirty uncommitted path(s); capturing the $_staged it wrote"
-        MSG="chore(agent): work left by $TYPE run $RUN_ID
+          printf '%s\n' "$ACC_WROTE" | while IFS= read -r _f; do
+            [ -n "$_f" ] && git -C "$ACC_TOP" add -- "$_f" 2>/dev/null || true
+          done
+          # AND THE SAME QUESTION AGAIN, of the index as it now stands. The check
+          # above is what keeps a refusal from touching the tree; THIS one is the
+          # invariant the commit rests on, asked of the thing actually about to be
+          # committed. They are the same call because two spellings of one rule
+          # drift, and the one that drifts is always the one nothing runs.
+          capture_account "$_bodies" "$DIR"
+          if [ "$ACC_UNACCOUNTED_N" != "0" ]; then
+            warn "$RUN_ID's own writes did not stage cleanly in $DIR: the index now holds"
+            warn "  $ACC_UNACCOUNTED_N path(s) it cannot account for. Refusing the capture (#261)."
+            capture_remedy
+          elif [ "$ACC_STAGED_N" = "0" ]; then
+            warn "$RUN_ID wrote nothing in $DIR that is uncommitted; capturing nothing of the $dirty path(s) there"
+          else
+            warn "$RUN_ID left $dirty uncommitted path(s); capturing the $ACC_STAGED_N it wrote"
+            MSG="chore(agent): work left by $TYPE run $RUN_ID
 
 Captured by the harness at SubagentStop because the run ended with $dirty
 uncommitted path(s) and no commit of its own. Signed under that run's identity
 so the work is attributed to the agent that did it rather than to whoever
 commits next (ADR-0046).
 
+Every path in this commit is one the run's own tool-call bodies record it
+writing; a capture whose index held anything else is refused rather than
+narrowed (#261).
+
 The build was not run. A subagent's work is recorded as it was left; the branch
 gate is what decides whether it may merge."
-        # Signed under THIS RUN, not a new one — and not retired here, the stop
-        # below is the one that belongs to this event.
-        # The work stays STAGED whether or not this succeeds, so a failure loses
-        # nothing but the attribution, and the run it should carry is named here
-        # rather than written to a file nothing has ever read.
-        ( cd "$DIR" && "$(signer)" -r "$RUN_ID" ${TASK:+-t "$TASK"} ${WT:+-w "$WT"} -m "$MSG" ) >&2 \
-          || warn "could not sign $RUN_ID's work; it is staged in $DIR and signing it later needs -r $RUN_ID"
+            # Signed under THIS RUN, not a new one — and not retired here, the stop
+            # below is the one that belongs to this event.
+            # The work stays STAGED whether or not this succeeds, so a failure loses
+            # nothing but the attribution, and the run it should carry is named here
+            # rather than written to a file nothing has ever read.
+            ( cd "$DIR" && "$(signer)" -r "$RUN_ID" ${TASK:+-t "$TASK"} ${WT:+-w "$WT"} -m "$MSG" ) >&2 \
+              || warn "could not sign $RUN_ID's work; it is staged in $DIR and signing it later needs -r $RUN_ID"
+          fi
         fi
       fi
     fi
