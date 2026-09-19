@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -449,6 +450,78 @@ func TestAScopedServerRefusesACallCarryingNoVerifiedRepository(t *testing.T) {
 	}
 }
 
+// TestASeparatedToolLayerRefusesTheCallInsteadOfRunningTheTool.
+//
+// The check above is scopeCall's own answer. This is what the BOUND TOOL does
+// with it, which is the half a caller meets: every handler is wrapped, and the
+// wrapper turns that refusal into an MCP tool error before the tool body runs.
+//
+// The wiring here is the mistake the refusal exists for. Handler() is what
+// carries the credential middleware; this serves the MCP session layer
+// directly, which is a deployment that configured a credential and then put
+// the tools somewhere the middleware is not. The failure mode of guessing "no
+// scope" there would be a listener that believes it is authenticated and
+// serves every caller.
+func TestASeparatedToolLayerRefusesTheCallInsteadOfRunningTheTool(t *testing.T) {
+	issuer := newTestIssuer(t)
+	v := verifierFor(t, jwksFile(t, issuer))
+
+	// A probe that records whether it ran. What is under test is that the
+	// tool's own body is never entered, which no error class can show.
+	var ran atomic.Bool
+	withEmptyToolRegistry(t)
+	RegisterTool(ToolRegisterAgent, func(s *Server) error {
+		return Bind(s, &sdk.Tool{Name: string(ToolRegisterAgent), Description: "probe"},
+			Handler[probeIn, probeOut](func(context.Context, *sdk.CallToolRequest, probeIn) (probeOut, error) {
+				ran.Store(true)
+				return probeOut{Tool: string(ToolRegisterAgent)}, nil
+			}))
+	})
+	srv, err := New(Config{
+		Version: "v0.0.0-test", Tools: []ToolName{ToolRegisterAgent}, AdminCredential: v,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	separated := httptest.NewServer(sdk.NewStreamableHTTPHandler(
+		func(*http.Request) *sdk.Server { return srv.sdk }, nil))
+	t.Cleanup(separated.Close)
+
+	res, rendered := callWire(t, connect(t, separated.URL), ToolRegisterAgent, map[string]any{})
+	if !res.IsError {
+		t.Fatalf("a call carrying no verified repository was served: %s", rendered)
+	}
+	wire, ok := res.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent is %T, want IP §4's error object", res.StructuredContent)
+	}
+	// INVARIANT_VIOLATION: IP §4 defines it as "either this code has a defect
+	// or something is using a credential it should not have", and a tool layer
+	// reachable without the transport check is the first half.
+	if wire["error_class"] != string(ClassInvariantViolation) {
+		t.Errorf("error_class = %v, want %s", wire["error_class"], ClassInvariantViolation)
+	}
+	if ran.Load() {
+		t.Error("the tool ran for a call carrying no verified repository; the refusal is " +
+			"in front of the handler, not a reading of what it returned")
+	}
+
+	// The positive control, over the SAME server through Handler(): the probe
+	// does run once the middleware in front of it has verified a credential.
+	// Without this the case above passes for a server that refuses everything.
+	wired := httptest.NewServer(srv.Handler())
+	t.Cleanup(wired.Close)
+	session := connectAs(t, wired.URL, issuer.mint(t, goodClaims("github.com/acme/widgets")))
+	if res, rendered := callWire(t, session, ToolRegisterAgent, map[string]any{}); res.IsError {
+		t.Fatalf("the probe was refused behind its own middleware: %s", rendered)
+	}
+	if !ran.Load() {
+		t.Error("the probe never ran even with a verified credential; the refusal above " +
+			"was not about the scope")
+	}
+}
+
 // TestAnUnscopedServerIgnoresTheScopeHeader. A client on the agent listener
 // that sets the internal header is talking to a server that never reads it.
 func TestAnUnscopedServerIgnoresTheScopeHeader(t *testing.T) {
@@ -602,6 +675,84 @@ func TestMCP088ObserveSessionStartIsBoundToTheWorkspaceItDerives(t *testing.T) {
 	}
 	if n := len(env.chain(t)); n != 0 {
 		t.Errorf("%d events were appended by a refused session start", n)
+	}
+}
+
+// A START FOR A SESSION THIS DEPLOYMENT ALREADY HOLDS is checked against the
+// repository the MARKER records, not against one derived now.
+//
+// The case above is a session nothing has seen: the refusal comes from
+// describe_workspace, on the tree. This is the other half, and it is the one
+// that carries the reply — a start for a known session REPLAYS that session's
+// run id, SPIFFE ID, workspace and task, so without this check a caller
+// holding another repository's credential would be handed all four by naming a
+// session id. It is a refusal rather than the "unknown session" a stop
+// answers with: an unknown session and a session held by someone else are
+// different here, and only one of them may be written to.
+func TestASessionHeldByAnotherRepositoryIsRefusedRatherThanReplayed(t *testing.T) {
+	env := osSetup(t, nil)
+	started := env.mustStart(t, osSessionID)
+	if started.RunID == "" || started.SPIFFEID == "" {
+		t.Fatalf("the fixture registered nothing to be replayed: %+v", started)
+	}
+	before := len(env.chain(t))
+
+	out, err := observeSession(scoped(t, "github.com/acme/elsewhere"), nil, observeSessionIn{
+		SessionID: osSessionID, Phase: ObserveSessionPhaseStart, CWD: env.tree.repo,
+	})
+	if err == nil {
+		t.Fatalf("a start under another repository's credential was answered with %+v", out)
+	}
+	// The package's own refusal for a repository a credential does not
+	// authorise, byte for byte — not a workspace refusal that happens to look
+	// like one.
+	if got, want := err.Error(), adminScopeRefusal(ToolObserveSession).Error(); got != want {
+		t.Errorf("the refusal is\n got  %q\n want %q", got, want)
+	}
+	var classified *Error
+	if !errors.As(err, &classified) || classified.Class != ClassInvariantViolation {
+		t.Fatalf("observe_session answered %v, want %s", err, ClassInvariantViolation)
+	}
+
+	// NOTHING OF THE SESSION COMES BACK WITH THE REFUSAL. The reply a start
+	// carries is the whole of what this check exists to withhold.
+	if out != (observeSessionOut{}) {
+		t.Errorf("the refusal carried the session's own reply: %+v", out)
+	}
+	if strings.Contains(classified.Message, osRepo) ||
+		strings.Contains(classified.Message, "github.com/acme/elsewhere") {
+		t.Errorf("the refusal names a repository: %q", classified.Message)
+	}
+
+	// NOTHING WAS REGISTERED OVER IT. A second run for one session is the
+	// state this refusal exists to prevent, and the marker is the only thing
+	// that would have said the session was already held.
+	if n := len(env.chain(t)); n != before {
+		t.Errorf("a refused start appended %d event(s)", n-before)
+	}
+	if n := env.countEvents(t, started.RunID, event.EventTypeRunRegistered); n != 1 {
+		t.Errorf("the session has %d run_registered after a refused start, want 1", n)
+	}
+
+	// AND THE MARKER IS UNTOUCHED, which is what makes the refusal free: the
+	// session's own harness carries on afterwards.
+	marker, found, err := observeSessionReadMarker(env.markerDir, osSessionID)
+	if err != nil || !found {
+		t.Fatalf("the marker is gone after a refused start: found=%v err=%v", found, err)
+	}
+	if marker.Repo != osRepo || marker.RunID != started.RunID || marker.RetiredAt != "" {
+		t.Errorf("the marker was written over by a refused start: %+v", marker)
+	}
+
+	// The positive control: its own credential still replays the same run.
+	replayed, err := observeSession(scoped(t, osRepo), nil, observeSessionIn{
+		SessionID: osSessionID, Phase: ObserveSessionPhaseStart, CWD: env.tree.repo,
+	})
+	if err != nil {
+		t.Fatalf("a start was refused for the session's own repository: %v", err)
+	}
+	if replayed.RunID != started.RunID {
+		t.Errorf("the session replayed run %q, want its own %q", replayed.RunID, started.RunID)
 	}
 }
 

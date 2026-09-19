@@ -3,12 +3,14 @@
 package mcp
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -656,4 +658,98 @@ func signRaw(t *testing.T, i testIssuer, header, payload string) string {
 	r.FillBytes(sig[:32])
 	s.FillBytes(sig[32:])
 	return input + "." + base64.RawURLEncoding.EncodeToString(sig)
+}
+
+// ---------------------------------------------------------------------------
+// The two refusals no key and no claim set can reach.
+//
+// IP §2 puts a 100% BRANCH floor on every error return of this package. Both
+// paths below are unreachable while the guards in front of them hold — a P-256
+// key that got past the nil-and-curve check always encodes as 65 uncompressed
+// bytes, and a closed struct of strings and int64s always marshals — so each
+// sits behind a seam and is driven through it, the way internal/segment's
+// validateDigest and internal/verify's marshalIndent are.
+//
+// What is asserted is what each refusal RETURNS on the way out: nothing that
+// could be mistaken for a key, and nothing that could be signed.
+// ---------------------------------------------------------------------------
+
+// TestAPointThisFormatCannotCarryIsRefusedWithNoKeyIDDerived.
+//
+// The three lines after the check index into the encoding, so a length assumed
+// rather than checked is how a key of the wrong shape gets a silently wrong
+// key id — a 33-byte compressed point would yield a 32-byte x, an empty y, and
+// a thumbprint over both that no other implementation would agree with.
+func TestAPointThisFormatCannotCarryIsRefusedWithNoKeyIDDerived(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating a P-256 key: %v", err)
+	}
+	// The positive control first, so "refused" below cannot be the key.
+	good, err := AdminCredentialJWKOf(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("AdminCredentialJWKOf on a P-256 key: %v", err)
+	}
+	if good.KID == "" {
+		t.Fatal("the control key was rendered with no key id")
+	}
+
+	original := adminCredentialPointBytes
+	t.Cleanup(func() { adminCredentialPointBytes = original })
+
+	broken := errors.New("the key holds no point")
+	for _, tc := range []struct {
+		name  string
+		point []byte
+		err   error
+	}{
+		{"the encoding's own failure", nil, broken},
+		{"a compressed point", append([]byte{2}, bytes.Repeat([]byte{0xab}, 32)...), nil},
+		{"an uncompressed point of the wrong width",
+			append([]byte{4}, bytes.Repeat([]byte{0xab}, 63)...), nil},
+		{"a point with no SEC 1 prefix",
+			append([]byte{0}, bytes.Repeat([]byte{0xab}, 64)...), nil},
+	} {
+		adminCredentialPointBytes = func(*ecdsa.PublicKey) ([]byte, error) { return tc.point, tc.err }
+
+		jwk, jwkErr := AdminCredentialJWKOf(&key.PublicKey)
+		if jwkErr == nil {
+			t.Errorf("%s was rendered as a JWK", tc.name)
+			continue
+		}
+		if !strings.Contains(jwkErr.Error(), "uncompressed P-256 point") {
+			t.Errorf("%s was refused with %q, which does not say what is wrong with it",
+				tc.name, jwkErr)
+		}
+		// NOTHING COMES BACK. A partially filled JWK is a key file a minting
+		// side would write out and a verifier would then admit nothing under.
+		if jwk != (AdminCredentialJWK{}) {
+			t.Errorf("%s produced %+v; a refused key must carry no coordinates and no "+
+				"key id", tc.name, jwk)
+		}
+	}
+}
+
+// TestNothingIsRenderedToSignWhenTheEncoderFails.
+//
+// The error is joined and returned rather than dropped precisely so that a
+// defect which made it possible cannot become a signature over an empty or
+// half-rendered segment. This is that promise, taken: the caller is told, and
+// it is handed nothing it could sign.
+func TestNothingIsRenderedToSignWhenTheEncoderFails(t *testing.T) {
+	original := adminCredentialMarshal
+	t.Cleanup(func() { adminCredentialMarshal = original })
+
+	broken := errors.New("the encoder is unavailable")
+	adminCredentialMarshal = func(any) ([]byte, error) { return nil, broken }
+
+	input, err := AdminCredentialSigningInput("kid-for-the-broken-encoder",
+		goodClaims("github.com/acme/widgets"))
+	if !errors.Is(err, broken) {
+		t.Fatalf("AdminCredentialSigningInput error = %v, want the encoder's own failure", err)
+	}
+	if input != "" {
+		t.Errorf("a credential that could not be rendered came back as %q; whatever holds "+
+			"the private key would have signed it", input)
+	}
 }

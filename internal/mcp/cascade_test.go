@@ -295,6 +295,66 @@ func TestMCP085APartialFailureIsReportedAndDoesNotFailTheStop(t *testing.T) {
 	}
 }
 
+// A SECOND failure does not displace the first, and does not lengthen the
+// reply.
+//
+// The summary names ONE descendant — "the first being …" — and a walk over a
+// killed session can meet any number. IP §2 puts the branch that keeps it at
+// one on the 100% floor, so this is the case where it is taken: two
+// descendants, both unable to be ended, and a reply that is still the same
+// shape as the reply for one.
+//
+// Which one is named is not arbitrary either. It is the first in walk order,
+// which is breadth-first from the stopping run, so two operators reading two
+// copies of this reply are reading about the same run.
+func TestASecondFailureDoesNotDisplaceTheFirstOneNamed(t *testing.T) {
+	env := osSetup(t, nil)
+	fam := osStartFamily(t, env)
+
+	// BOTH descendants, so the walk meets a failure with a failure already
+	// recorded. SPIRE refuses each deletion; retire_agent appends the record
+	// first and deletes after (ADR-0018), so this is the window that leaves a
+	// retirement incomplete rather than a stand-in's bookkeeping.
+	env.spire.failRun(fam.child.RunID, errors.New("the SPIRE server is not answering"))
+	env.spire.failRun(fam.grandchild.RunID, errors.New("the SPIRE server is not answering"))
+
+	stopped := osMustStopEnding(t, osFamilySession)
+	if !stopped.Retired {
+		t.Fatalf("two descendants' failures cost the session its own retirement: %+v", stopped)
+	}
+
+	// THE FIRST IN WALK ORDER, AND ONLY IT. Naming the second as well would
+	// make the reply grow with the outage, which is how a stop's detail
+	// becomes a page nobody reads.
+	if !strings.Contains(stopped.Detail, fam.child.RunID) {
+		t.Errorf("detail does not name the first descendant that could not be ended.\n"+
+			"got: %q\nwant it to name %s", stopped.Detail, fam.child.RunID)
+	}
+	if strings.Contains(stopped.Detail, fam.grandchild.RunID) {
+		t.Errorf("detail names the second failure as well as the first.\n"+
+			"got: %q\nit must not name %s", stopped.Detail, fam.grandchild.RunID)
+	}
+	// AND BOTH ARE COUNTED. One exemplar is not one attempt: an operator who
+	// read "the first being X" and concluded X was the only casualty would be
+	// wrong about the rest of the session.
+	if !strings.Contains(stopped.Detail, "0 of 2") || !strings.Contains(stopped.Detail, "2 could not be ended") {
+		t.Errorf("detail does not count both failures.\ngot: %q\nwant it to say 0 of 2 "+
+			"ended and 2 could not be", stopped.Detail)
+	}
+
+	// THE WALK CONTINUED PAST THE FIRST FAILURE. The second descendant's
+	// retirement was attempted, which is what the record shows: retire_agent
+	// appends before it deletes, so the event is there even though SPIRE
+	// refused.
+	if n := env.retirements(t, fam.grandchild.RunID); n != 1 {
+		t.Errorf("the grandchild has %d run_retired, want 1; the walk stopped at the "+
+			"first failure and left the rest of the session open", n)
+	}
+	if n := env.retirements(t, fam.session.RunID); n != 1 {
+		t.Errorf("the session itself has %d run_retired, want 1", n)
+	}
+}
+
 // A parentage lookup that fails is the same shape of news: reported, and not a
 // refusal.
 func TestADescendantLookupFailureIsReportedAndDoesNotFailTheStop(t *testing.T) {
