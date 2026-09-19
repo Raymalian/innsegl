@@ -154,6 +154,13 @@ type scLedger struct {
 	failOn map[string]error
 	// mangle rewrites the record Append is about to return.
 	mangle func(event.Fields) event.Fields
+	// afterAppend runs the instant one event has become durable, holding this
+	// ledger's own lock. It is how a case interrupts the tool BETWEEN a phase
+	// and whatever the process was going to do next, which is the one window
+	// no argument and no injected error can reach.
+	afterAppend func(eventType string)
+	// readErr is what EventByIdempotencyKey returns instead of an answer.
+	readErr error
 }
 
 func newSCLedger(p *scPhases) *scLedger {
@@ -198,7 +205,43 @@ func (l *scLedger) Append(_ context.Context, body event.Fields) (event.Fields, e
 	if key != "" {
 		l.byKey[key] = record
 	}
+	if l.afterAppend != nil {
+		l.afterAppend(eventType)
+	}
 	return record.Clone(), nil
+}
+
+// EventByIdempotencyKey is LED-008's read half, with the same answer shape the
+// shipped store gives: the original event, or not-found, and never an error
+// dressed as an empty record.
+func (l *scLedger) EventByIdempotencyKey(_ context.Context, key string) (event.Fields, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.readErr != nil {
+		return nil, false, l.readErr
+	}
+	record, found := l.byKey[key]
+	if !found {
+		return nil, false, nil
+	}
+	return record.Clone(), true, nil
+}
+
+// rewriteStored edits the record one idempotency_key holds, in place.
+//
+// It is how a case puts a record on the chain that a call cannot be the
+// completion of — a derived key colliding with another record, or a record
+// missing a member the schema requires. Appending such a record is not a way
+// to reach that state: the ledger would refuse it, which is the point.
+func (l *scLedger) rewriteStored(t *testing.T, key string, edit func(event.Fields)) {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	record, found := l.byKey[key]
+	if !found {
+		t.Fatalf("no record is stored under %q", key)
+	}
+	edit(record)
 }
 
 // ofType returns every appended record of one event type.

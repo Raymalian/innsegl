@@ -115,7 +115,26 @@ if [ -z "${profile}" ]; then
   profile="$(mktemp "${TMPDIR:-/tmp}/innsegl-cover.XXXXXX")"
   cleanup_profile="${profile}"
   trap 'rm -f "${cleanup_profile}"' EXIT
-  log "==> go test ./... ${GO_TEST_FLAGS} -covermode=atomic -coverpkg=./... -coverprofile=${profile}"
+
+  # WHAT "THE WHOLE SUITE" IS, ASKED RATHER THAN ASSUMED — RM-170 (#275).
+  #
+  # This line was `go test ./...` and that is how a coverage tool came to tear
+  # down a deployment. `./...` reaches test/failure, which mints a new
+  # transparency-log tree, and test/smoke, which ends its teardown in
+  # `docker compose down -v`. Nobody reads a coverage tool expecting either.
+  #
+  # scripts/test-suite.sh answers instead. On a host with no deployment it
+  # returns `./...` unchanged, so CI runs exactly the tree it always ran; with
+  # one up it returns the tree without those two. The state is exported so the
+  # packages themselves do not re-ask docker once per package binary.
+  INNSEGL_SUITE_STACK="$("${SCRIPT_DIR}/test-suite.sh" state)"
+  export INNSEGL_SUITE_STACK
+  if ! SUITE_PACKAGES="$("${SCRIPT_DIR}/test-suite.sh" packages "${MODULE_ROOT}")"; then
+    fail "could not determine which packages make up the suite"
+    annotate_error "coverage gate: scripts/test-suite.sh could not name the suite"
+    exit 1
+  fi
+  log "==> go test <suite> ${GO_TEST_FLAGS} -covermode=atomic -coverpkg=./... -coverprofile=${profile}"
   # -coverpkg=./... instruments every package in the module, so a package with
   # no test file at all is reported as 0% rather than omitted from the profile.
   # Without it an entirely untested package is invisible to this gate.
@@ -126,7 +145,10 @@ if [ -z "${profile}" ]; then
   # this script running beside an ordinary test run, or two agents at once.
   # Every package that drives a compose stack now namespaces its compose
   # project per test process, so there is nothing left to serialise.
-  ( cd -- "${MODULE_ROOT}" && go test ./... ${GO_TEST_FLAGS} \
+  # -coverpkg=./... stays `./...` on purpose: it selects what is INSTRUMENTED,
+  # not what RUNS, so it carries none of the risk the package operand does.
+  # shellcheck disable=SC2086 # deliberate word splitting of both lists
+  ( cd -- "${MODULE_ROOT}" && go test ${SUITE_PACKAGES} ${GO_TEST_FLAGS} \
       -covermode=atomic -coverpkg=./... -coverprofile="${profile}" )
 elif [ ! -f "${profile}" ]; then
   fail "coverage profile not found: ${profile}"
