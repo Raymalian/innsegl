@@ -647,6 +647,386 @@ else
   bad "OPS-093 ttl: fresh marker $WAS, expired marker $NOW"
 fi
 
+# --- OPS-102..104: the claim outlives the run that made it -------------------
+#
+# #291 (RM-183). #290 made a killed run leave the active list at the moment of
+# the kill, which is right and was asked for. The guard above decides whose work
+# to protect by asking the ledger who is LIVE, and a retired run is not live —
+# so measured on one tree, one piece of work and one run:
+#
+#   before the retirement:  git clean -fd  ->  exit 2, refused
+#   after  the retirement:  git clean -fd  ->  exit 0, allowed
+#
+# Before #290 that work was protected for twelve hours, but only as a side
+# effect of the run being WRONGLY reported active. The side effect went and the
+# protection went with it — and the work most at risk is exactly this work, the
+# one kind of uncommitted agent work with nobody coming back for it.
+#
+# WHAT CARRIES THE CLAIM INSTEAD is the record #290 already writes when it
+# retires: reason `run_killed`, naming the run, the tree, and each path it left
+# uncommitted there together with the CONTENT it left in it.
+#
+# EVERY CASE BELOW CARRIES ITS OWN POSITIVE CONTROL, in the same case, against
+# the same fixture, with one thing changed. A case that asserted only "it
+# refused" would pass against a guard that refuses everything, which is the
+# failure OPS-092 exists to catch; a case that asserted only "it allowed" would
+# pass against the guard as it stands.
+
+# killed <run-id> <agent-type> <task> <path...> — the record the kill path
+# writes, in the shape it writes it: the run, the tree, and a claim naming each
+# uncommitted path AND the content the kill left in it.
+killed() {
+  _krun="$1"; _ktype="$2"; _ktask="$3"; shift 3
+  python3 -c '
+import hashlib, json, os, sys
+log, run, atype, task, top, reason, ctop = sys.argv[1:8]
+claim = []
+for p in sys.argv[8:]:
+    data = open(os.path.join(top, p), "rb").read()
+    claim.append({"path": p, "size": len(data),
+                  "sha": hashlib.sha256(data).hexdigest()})
+rec = {"record": "capture_not_made", "reason": reason, "run_id": run,
+       "agent_type": atype, "task": task, "dir": top, "worktree": "",
+       "claim_top": ctop or top, "claim": claim, "claim_n": len(claim),
+       "dirty": len(claim), "wrote": len(claim), "staged": 0,
+       "wrote_paths": [c["path"] for c in claim],
+       "unaccounted": 0, "unaccounted_paths": [],
+       "detail": "the run was killed", "time": "2026-09-20T00:00:00Z"}
+with open(log, "a") as fh:
+    fh.write(json.dumps(rec, sort_keys=True) + "\n")
+' "$RUNS/uncaptured.jsonl" "$_krun" "$_ktype" "$_ktask" "$REPO_REAL" \
+    "${KREASON:-run_killed}" "${KTOP:-}" "$@"
+}
+
+# retire <marker> <run-id> — the kill itself, as #290 performs it: the run
+# leaves the active list and its marker goes with it.
+retire() {
+  ledger_says "$2" retired
+  rm -f "$RUNS/$1"
+}
+
+# --- OPS-102: the claim survives the retirement -------------------------------
+#
+# THE UNTRACKED HALF, which is the half `clean -fd` reaches. The control runs
+# FIRST and against the identical tree: retired, with no record, the file goes,
+# which is the defect exactly as it was measured. Then the same tree, the same
+# work and the same run, with the record — and it does not.
+reset_fixture
+register agent-k1 run-k1111111 general-purpose rm183
+wrote run-k1111111 a "$REPO_REAL/new.txt"
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-k1 run-k1111111
+attempt clean -fd
+K_NORECORD=$STATUS
+K_NORECORD_GONE=0; [ -f "$REPO/new.txt" ] || K_NORECORD_GONE=1
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+killed run-k1111111 general-purpose rm183 new.txt
+attempt clean -fd
+if [ "$K_NORECORD" -eq 0 ] && [ "$K_NORECORD_GONE" -eq 1 ] \
+   && [ "$STATUS" -eq 2 ] && [ -f "$REPO/new.txt" ]; then
+  ok "OPS-102 a killed run's untracked work is refused over after it is retired, and without the record it is not"
+else
+  bad "OPS-102 killed untracked: without the record $K_NORECORD (gone=$K_NORECORD_GONE), with it $STATUS"
+fi
+
+# THE TRACKED HALF, which is the half `reset --hard` reaches, and the shape of
+# the measured incident in #278.
+reset_fixture
+register agent-k2 run-k2222222 general-purpose rm183
+wrote run-k2222222 a "$REPO_REAL/tracked.txt"
+printf 'AGENT WORK\n' >> "$REPO/tracked.txt"
+retire agent-k2 run-k2222222
+BEFORE="$(state)"
+killed run-k2222222 general-purpose rm183 tracked.txt
+attempt reset --hard HEAD
+K_TRACKED=$STATUS
+K_TRACKED_KEPT=0; [ "$(state)" = "$BEFORE" ] && K_TRACKED_KEPT=1
+rm -f "$RUNS/uncaptured.jsonl"
+attempt reset --hard HEAD
+if [ "$K_TRACKED" -eq 2 ] && [ "$K_TRACKED_KEPT" -eq 1 ] \
+   && [ "$STATUS" -eq 0 ] && [ "$(dirty_now)" = "0" ]; then
+  ok "OPS-102 and the killed run's tracked edit survives reset --hard, while the same tree without the record does not"
+else
+  bad "OPS-102 killed tracked: with the record $K_TRACKED (kept=$K_TRACKED_KEPT), without it $STATUS dirty $(dirty_now)"
+fi
+
+# AND IT DOES NOT NEED THE RUN'S BODY STORE. The claim is in the record because
+# a killed run's tool-call bodies are not what outlives it: the log directory is
+# the harness's to prune, and a claim that needed it would evaporate silently.
+reset_fixture
+register agent-k3 run-k3333333 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-k3 run-k3333333
+killed run-k3333333 prober rm183 new.txt
+rm -rf "${LOG:?}/run-k3333333"
+attempt clean -fd
+K_NOBODIES=$STATUS
+rm -f "$RUNS/uncaptured.jsonl"
+attempt clean -fd
+if [ "$K_NOBODIES" -eq 2 ] && [ "$STATUS" -eq 0 ] && [ ! -f "$REPO/new.txt" ]; then
+  ok "OPS-102 and the claim holds with the run's body store deleted, which is what makes it durable"
+else
+  bad "OPS-102 no body store: with the record $K_NOBODIES, without it $STATUS"
+fi
+
+# THE REFUSAL SAYS WHOSE WORK IT IS, THAT THE RUN WAS KILLED, AND BOTH WAYS OUT.
+# A refusal that strands the work is worse than the loss it prevents, and a
+# claim with no release is the wedge the issue forbids.
+reset_fixture
+register agent-k4 run-k4444444 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-k4 run-k4444444
+killed run-k4444444 prober rm183 new.txt
+attempt clean -fd
+K_SAYS=0
+grep -q 'run-k4444444' "$WORK/err" || K_SAYS=1
+grep -q 'new.txt' "$WORK/err" || K_SAYS=1
+grep -qi 'killed' "$WORK/err" || K_SAYS=1
+grep -q 'innsegl-commit -r run-k4444444' "$WORK/err" || K_SAYS=1
+grep -q 'INNSEGL_ALLOW_DESTRUCTIVE=1' "$WORK/err" || K_SAYS=1
+if [ "$STATUS" -eq 2 ] && [ "$K_SAYS" -eq 0 ]; then
+  ok "OPS-102 and the refusal names the run, the path, the kill, and both ways to release it"
+else
+  bad "OPS-102 refusal text (status $STATUS): $(cat "$WORK/err")"
+fi
+
+# --- OPS-103: the claim is spent when its own work is -------------------------
+#
+# THE PART THAT DECIDES WHETHER THIS IS SAFE TO SHIP. Liveness was chosen in
+# #278 precisely because a killed subagent's marker is never removed (#260), so
+# a claim keyed on the marker would refuse in that tree forever. A claim that
+# outlives its run needs a release of its own, and every one below is asserted
+# against a fixture that refused a line earlier.
+
+# COMMITTED. The work is safe, so the claim is spent.
+reset_fixture
+register agent-k5 run-k5555555 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-k5 run-k5555555
+killed run-k5555555 prober rm183 new.txt
+attempt clean -fd
+K_BEFORE=$STATUS
+git -C "$REPO" add new.txt
+git -C "$REPO" commit -q -m "the killed run work, kept"
+attempt clean -fd
+K_AFTER=$STATUS
+# and the fixture goes back to the one commit it started with, so every case
+# below begins where every case above it did.
+git -C "$REPO" reset -q --hard HEAD~1
+rm -f "$REPO/new.txt"
+if [ "$K_BEFORE" -eq 2 ] && [ "$K_AFTER" -eq 0 ]; then
+  ok "OPS-103 committing the claimed path spends the claim"
+else
+  bad "OPS-103 commit: before $K_BEFORE, after $K_AFTER: $(cat "$WORK/err")"
+fi
+
+# WRITTEN OVER. This is the case a claim keyed on a FILENAME cannot answer, and
+# the reason the record carries the content: uncaptured.jsonl is append-only and
+# never rotated, so a claim that resurrected every time somebody re-edited a
+# path a long-dead run once wrote would wedge the tree by accumulation.
+reset_fixture
+register agent-k6 run-k6666666 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-k6 run-k6666666
+killed run-k6666666 prober rm183 new.txt
+attempt clean -fd
+K_BEFORE=$STATUS
+printf 'SOMEBODY ELSES WORK, LATER\n' > "$REPO/new.txt"
+attempt clean -fd
+if [ "$K_BEFORE" -eq 2 ] && [ "$STATUS" -eq 0 ]; then
+  ok "OPS-103 and a path written over since the kill is no longer the killed run's work"
+else
+  bad "OPS-103 rewritten: before $K_BEFORE, after $STATUS: $(cat "$WORK/err")"
+fi
+
+# GONE. Nothing left to protect, so nothing is refused over.
+reset_fixture
+register agent-k7 run-k7777777 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-k7 run-k7777777
+killed run-k7777777 prober rm183 new.txt
+attempt clean -fd
+K_BEFORE=$STATUS
+rm -f "$REPO/new.txt"
+attempt clean -fd
+if [ "$K_BEFORE" -eq 2 ] && [ "$STATUS" -eq 0 ]; then
+  ok "OPS-103 and a claim whose path is gone claims nothing"
+else
+  bad "OPS-103 removed: before $K_BEFORE, after $STATUS: $(cat "$WORK/err")"
+fi
+
+# DISCARDED DELIBERATELY, ONCE, THROUGH THE OVERRIDE THAT ALREADY EXISTS — and
+# the tree is clear afterwards, because the release is the work going rather
+# than the operator being remembered as having asked.
+reset_fixture
+register agent-k8 run-k8888888 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-k8 run-k8888888
+killed run-k8888888 prober rm183 new.txt
+attempt clean -fd
+K_BEFORE=$STATUS
+OVERRIDE=1
+attempt clean -fd
+K_OVER=$STATUS
+K_SAID=0; grep -q 'INNSEGL_ALLOW_DESTRUCTIVE is set' "$WORK/err" && K_SAID=1
+OVERRIDE=0
+printf 'operator work\n' >> "$REPO/tracked.txt"
+attempt reset --hard HEAD
+if [ "$K_BEFORE" -eq 2 ] && [ "$K_OVER" -eq 0 ] && [ ! -f "$REPO/new.txt" ] \
+   && [ "$K_SAID" -eq 1 ] && [ "$STATUS" -eq 0 ]; then
+  ok "OPS-103 and the override discards it once, says so, and leaves no claim behind"
+else
+  bad "OPS-103 override: before $K_BEFORE, override $K_OVER (said=$K_SAID), after $STATUS, file $([ -f "$REPO/new.txt" ] && echo present || echo gone)"
+fi
+
+# AND A CLAIM CANNOT BLOCK A TREE WITH NOTHING IN IT TO PROTECT. The record
+# stays on disk forever; what it claims has to be what is actually there.
+reset_fixture
+register agent-k9 run-k9999999 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-k9 run-k9999999
+killed run-k9999999 prober rm183 new.txt
+attempt clean -fd
+K_BEFORE=$STATUS
+rm -f "$REPO/new.txt"
+attempt clean -fd
+K_CLEAN=$STATUS
+printf 'the operator, weeks later\n' >> "$REPO/tracked.txt"
+attempt reset --hard HEAD
+if [ "$K_BEFORE" -eq 2 ] && [ "$K_CLEAN" -eq 0 ] && [ "$STATUS" -eq 0 ] \
+   && [ "$(dirty_now)" = "0" ]; then
+  ok "OPS-103 and a spent claim does not come back for the next person's work in that tree"
+else
+  bad "OPS-103 spent claim: before $K_BEFORE, clean $K_CLEAN, later $STATUS dirty $(dirty_now)"
+fi
+
+# --- OPS-104: what a killed claim must NOT reach ------------------------------
+#
+# THE SCOPES STILL DO NOT LEAK. `clean -f` cannot destroy a tracked edit and
+# `reset --hard` cannot destroy an untracked file. That distinction is what the
+# measured incident turned on, and a claim that outlives its run is not a reason
+# to flatten it.
+reset_fixture
+register agent-ka run-ka000000 prober rm183
+printf 'AGENT WORK\n' >> "$REPO/tracked.txt"
+retire agent-ka run-ka000000
+killed run-ka000000 prober rm183 tracked.txt
+attempt clean -fd
+K_WRONG=$STATUS
+attempt reset --hard HEAD
+if [ "$K_WRONG" -eq 0 ] && [ "$STATUS" -eq 2 ]; then
+  ok "OPS-104 a killed claim on a tracked edit does not refuse clean -f, and does refuse reset --hard"
+else
+  bad "OPS-104 tracked scope: clean $K_WRONG, reset $STATUS"
+fi
+reset_fixture
+register agent-kb run-kb000000 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-kb run-kb000000
+killed run-kb000000 prober rm183 new.txt
+attempt reset --hard HEAD
+K_WRONG=$STATUS
+attempt clean -fd
+if [ "$K_WRONG" -eq 0 ] && [ "$STATUS" -eq 2 ] && [ -f "$REPO/new.txt" ]; then
+  ok "OPS-104 and a killed claim on an untracked file does not refuse reset --hard, and does refuse clean -f"
+else
+  bad "OPS-104 untracked scope: reset $K_WRONG, clean $STATUS"
+fi
+
+# A RECORD ABOUT ANOTHER TREE REACHES NOTHING HERE. One markers directory serves
+# every session on the machine, and the runs in it belonging to another
+# repository have real processes behind them.
+reset_fixture
+register agent-kc run-kc000000 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-kc run-kc000000
+KTOP="$ELSEWHERE"
+killed run-kc000000 prober rm183 new.txt
+KTOP=""
+attempt clean -fd
+K_ELSE=$STATUS
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+rm -f "$RUNS/uncaptured.jsonl"
+killed run-kc000000 prober rm183 new.txt
+attempt clean -fd
+if [ "$K_ELSE" -eq 0 ] && [ "$STATUS" -eq 2 ]; then
+  ok "OPS-104 and a record naming another tree claims nothing here, while the same record naming this one does"
+else
+  bad "OPS-104 other tree: elsewhere $K_ELSE, here $STATUS"
+fi
+
+# AND ONLY A KILL. A capture refused for any other reason is #277's record of a
+# run that DID stop, and #291 is about the one kind of work with nobody coming
+# back for it.
+reset_fixture
+register agent-kd run-kd000000 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-kd run-kd000000
+KREASON=nothing_uncommitted
+killed run-kd000000 prober rm183 new.txt
+KREASON=""
+attempt clean -fd
+K_OTHER=$STATUS
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+rm -f "$RUNS/uncaptured.jsonl"
+killed run-kd000000 prober rm183 new.txt
+attempt clean -fd
+if [ "$K_OTHER" -eq 0 ] && [ "$STATUS" -eq 2 ]; then
+  ok "OPS-104 and only a run_killed record claims anything; another reason is left to #277"
+else
+  bad "OPS-104 reason: other $K_OTHER, run_killed $STATUS"
+fi
+
+# A RECORD IN THE OLD SHAPE CLAIMS NOTHING, said plainly because it is a real
+# gap rather than an oversight: a record written before the claim existed names
+# no content, and a claim with no content has no release. The protection starts
+# at the next kill.
+reset_fixture
+register agent-ke run-ke000000 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-ke run-ke000000
+python3 -c '
+import json, sys
+rec = {"record": "capture_not_made", "reason": "run_killed",
+       "run_id": "run-ke000000", "agent_type": "prober", "task": "rm183",
+       "dir": sys.argv[2], "worktree": "", "dirty": 1, "wrote": 1,
+       "wrote_paths": ["new.txt"], "staged": 0, "unaccounted": 0,
+       "unaccounted_paths": [], "detail": "old shape",
+       "time": "2026-09-20T00:00:00Z"}
+with open(sys.argv[1], "a") as fh:
+    fh.write(json.dumps(rec, sort_keys=True) + "\n")
+' "$RUNS/uncaptured.jsonl" "$REPO_REAL"
+attempt clean -fd
+K_OLD=$STATUS
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+rm -f "$RUNS/uncaptured.jsonl"
+killed run-ke000000 prober rm183 new.txt
+attempt clean -fd
+if [ "$K_OLD" -eq 0 ] && [ "$STATUS" -eq 2 ]; then
+  ok "OPS-104 and a record written before the claim existed claims nothing, while one written after does"
+else
+  bad "OPS-104 old shape: old $K_OLD, new $STATUS"
+fi
+
+# AND IT FAILS OPEN. A record file that is not JSON, not readable, or not there
+# allows — this guard sits in front of git on a machine somebody works on.
+reset_fixture
+register agent-kf run-kf000000 prober rm183
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+retire agent-kf run-kf000000
+printf 'not json at all\n{"reason":\n' > "$RUNS/uncaptured.jsonl"
+attempt clean -fd
+K_JUNK=$STATUS
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+printf 'not json at all\n' > "$RUNS/uncaptured.jsonl"
+killed run-kf000000 prober rm183 new.txt
+attempt clean -fd
+if [ "$K_JUNK" -eq 0 ] && [ "$STATUS" -eq 2 ]; then
+  ok "OPS-104 and an unparseable record allows, while a good line after a bad one is still read"
+else
+  bad "OPS-104 junk record: junk $K_JUNK, junk+good $STATUS"
+fi
+
 # --- OPS-094: the half that sees a human's terminal --------------------------
 #
 # The incident was an OPERATOR's command in their own shell, and no PreToolUse

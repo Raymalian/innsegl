@@ -724,7 +724,134 @@ for name, value in (
 capture_account() {
   ACC_TOP=""; ACC_READ=0; ACC_INDEX=0; ACC_WROTE=""; ACC_WROTE_N=0
   ACC_STAGED_N=0; ACC_UNACCOUNTED_N=0; ACC_UNACCOUNTED=""
+  ACC_CLAIM=""; ACC_CLAIM_N=0
   eval "$(python3 -c "$CAPTURE_ACCOUNT" "$1" "$2" 2>/dev/null)"
+}
+
+# ---------------------------------------------------------------------------
+# WHAT A KILLED RUN LEAVES BEHIND, NAMED WELL ENOUGH TO PROTECT AND WELL ENOUGH
+# TO RELEASE — RM-183 (#291).
+#
+# The destructive-git guard (scripts/hooks/git-tree-guard.sh) decides whose work
+# to protect by asking the ledger who is LIVE, and #290 made a killed run stop
+# being live at the instant of the kill. Measured on one tree, one piece of work
+# and one run: `git clean -fd` refused before the retirement and was allowed
+# after it. That protection was a side effect of the run being WRONGLY reported
+# active, and the work most at risk is exactly this work — a live run's
+# uncommitted work has somebody coming back for it, and a killed run's has
+# nobody.
+#
+# So the record below carries the claim past the run, and to carry it it has to
+# say two things `capture_account` does not:
+#
+#   WHICH PATHS ARE ACTUALLY AT RISK. `ACC_WROTE` is every path the run wrote in
+#   that tree, including the ones it committed itself. A claim over those is a
+#   claim over work that is already safe, and a guard refusing over it is a
+#   guard that cries wolf — which is how a guard gets switched off.
+#
+#   WHAT WAS IN THEM. A CLAIM KEYED ON A FILENAME CANNOT BE RELEASED, and a
+#   claim with no release is the wedge liveness was chosen to avoid (#260) met
+#   from the other direction. This log is append-only and never rotated, so a
+#   claim that came back every time somebody re-edited a path some long-dead run
+#   once wrote would end up claiming every file in the repository. A digest of
+#   the bytes the kill left answers it: the same path holding different bytes is
+#   a different piece of work, and the claim over it is spent.
+#
+# NO CLOCK IS READ HERE EITHER. A claim is spent when its work is committed,
+# removed or written over — three facts about the tree, none about elapsed time.
+#
+# It is the WORKING TREE's bytes and not git's blob id, so that no gitattribute,
+# clean filter or autocrlf setting can make the writer and the reader disagree
+# about whether a file is the same file. `size` is recorded with it because it
+# rejects the common case without reading a byte.
+#
+# BOUNDED, AND THE BOUND COSTS SOMETHING. The record is one atomic append, so
+# the line stays small; a kill that left more than LIMIT uncommitted paths has
+# the first LIMIT of them claimed and `claim_n` says how many there were. The
+# remainder is not protected, which is worse than protecting it and better than
+# a record too large to be written in one piece.
+# ---------------------------------------------------------------------------
+CLAIM_ACCOUNT='
+import hashlib, os, shlex, subprocess, sys
+
+top, wrote = sys.argv[1], sys.argv[2]
+LIMIT = 50
+
+def git(*args):
+    return subprocess.run(("git", "-C", top) + args, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, timeout=60
+                          ).stdout.decode("utf-8", "replace")
+
+def dirty_paths():
+    # Every uncommitted path, by the same reading the guard makes of it.
+    fields = git("status", "--porcelain", "-z").split("\0")
+    found, i = set(), 0
+    while i < len(fields):
+        f = fields[i]
+        i += 1
+        if len(f) < 4:
+            continue
+        code, path = f[:2], f[3:]
+        # A rename carries its source in the NEXT field.
+        if "R" in code or "C" in code:
+            i += 1
+        if code != "!!":
+            found.add(path)
+    return found
+
+def uncommitted(p, dirty):
+    # An untracked DIRECTORY is reported as `dir/` and stands for everything
+    # under it, so a claimed path beneath one is uncommitted too.
+    if p in dirty:
+        return True
+    for d in dirty:
+        if d.endswith("/") and p.startswith(d):
+            return True
+    return False
+
+def digest(full):
+    h, n = hashlib.sha256(), 0
+    with open(full, "rb") as fh:
+        while True:
+            b = fh.read(65536)
+            if not b:
+                break
+            n += len(b)
+            h.update(b)
+    return n, h.hexdigest()
+
+try:
+    dirty = dirty_paths()
+except Exception:
+    dirty = set()
+
+lines, total = [], 0
+for p in sorted(x for x in wrote.splitlines() if x):
+    if not uncommitted(p, dirty):
+        continue
+    total += 1
+    if len(lines) >= LIMIT:
+        continue
+    try:
+        n, sha = digest(os.path.join(top, p))
+    except Exception:
+        continue
+    lines.append(sha + " " + str(n) + " " + p)
+
+for name, value in (("ACC_CLAIM", "\n".join(lines)),
+                    ("ACC_CLAIM_N", str(total))):
+    print(name + "=" + shlex.quote(value))
+'
+
+# claim_account <the repository tree> <the run's writes, one path per line>
+#
+# Defaulted before the eval for the reason capture_account is: a machine with no
+# python3, or a tree that will not answer, records an EMPTY claim rather than
+# killing the hook under `set -u`. An empty claim protects nothing, which is the
+# same direction every other failure in this file takes.
+claim_account() {
+  ACC_CLAIM=""; ACC_CLAIM_N=0
+  eval "$(python3 -c "$CLAIM_ACCOUNT" "$1" "$2" 2>/dev/null)"
 }
 
 # capture_remedy — what a refused capture leaves the operator holding.
@@ -862,11 +989,11 @@ import json, os, sys, time
 log = sys.argv[1]
 names = ("reason", "detail", "run_id", "agent_type", "task", "worktree", "dir",
          "dirty", "wrote", "staged", "unaccounted", "unaccounted_paths",
-         "wrote_paths")
+         "wrote_paths", "claim_top", "claim", "claim_n")
 rec = dict(zip(names, sys.argv[2:]))
 for n in names:
     rec.setdefault(n, "")
-for n in ("dirty", "wrote", "staged", "unaccounted"):
+for n in ("dirty", "wrote", "staged", "unaccounted", "claim_n"):
     try:
         rec[n] = int(rec[n] or 0)
     except ValueError:
@@ -877,6 +1004,17 @@ for n in ("dirty", "wrote", "staged", "unaccounted"):
 # of a run. The counts are the record; the paths are a convenience.
 rec["unaccounted_paths"] = [p for p in rec["unaccounted_paths"].splitlines() if p][:10]
 rec["wrote_paths"] = [p for p in rec["wrote_paths"].splitlines() if p][:20]
+# THE CLAIM IS THE ONE FIELD THAT IS NOT A CONVENIENCE — RM-183 (#291). It is
+# what the destructive-git guard weighs a command against once the run is gone,
+# so it is a list of objects rather than a list of paths: a path alone cannot be
+# released, and a claim that cannot be released wedges the tree. `claim_n` is
+# how many there were, which is how a reader knows the list was truncated.
+claim = []
+for line in rec["claim"].splitlines():
+    parts = line.split(" ", 2)
+    if len(parts) == 3 and parts[1].isdigit():
+        claim.append({"sha": parts[0], "size": int(parts[1]), "path": parts[2]})
+rec["claim"] = claim
 rec["detail"] = rec["detail"][-400:]
 rec["time"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 rec["record"] = "capture_not_made"
@@ -903,7 +1041,8 @@ uncaptured() {
   python3 -c "$UNCAPTURED_RECORD" "$UNCAPTURED_LOG" \
     "$1" "${2:-}" "${RUN_ID:-}" "${TYPE:-}" "${TASK:-}" "${WT:-}" "${DIR:-}" \
     "${dirty:-0}" "${ACC_WROTE_N:-0}" "${ACC_STAGED_N:-0}" "${ACC_UNACCOUNTED_N:-0}" \
-    "${ACC_UNACCOUNTED:-}" "${ACC_WROTE:-}" 2>/dev/null \
+    "${ACC_UNACCOUNTED:-}" "${ACC_WROTE:-}" \
+    "${ACC_TOP:-}" "${ACC_CLAIM:-}" "${ACC_CLAIM_N:-0}" 2>/dev/null \
     || warn "and that refusal could not be written to $UNCAPTURED_LOG either"
   return 0
 }
@@ -1054,7 +1193,15 @@ retire_killed_task() {
     elif [ "${dirty:-0}" != "0" ]; then
       capture_account "${INNSEGL_LOG_DIR:-$HOME/.innsegl/log}/$RUN_ID" "$DIR"
       if [ "${ACC_WROTE_N:-0}" != "0" ]; then
-        uncaptured run_killed "the run was killed with $dirty uncommitted path(s) in $DIR, and it recorded writing ${ACC_WROTE_N} path(s) there"
+        # AND WHICH OF THOSE ARE STILL AT RISK, with what was in them — RM-183
+        # (#291). This is the claim the destructive-git guard weighs once the
+        # run has left the active list, and it is recorded HERE because the
+        # run's tool-call bodies are not what outlives it: the log directory is
+        # the harness's to prune, and a claim that needed it would evaporate
+        # without saying so. Only against a tree git could answer for; ACC_TOP
+        # is empty when it could not, and an empty claim protects nothing.
+        [ -n "${ACC_TOP:-}" ] && claim_account "$ACC_TOP" "${ACC_WROTE:-}"
+        uncaptured run_killed "the run was killed with $dirty uncommitted path(s) in $DIR, and it recorded writing ${ACC_WROTE_N} path(s) there, ${ACC_CLAIM_N:-0} of them still uncommitted"
       fi
     fi
   fi

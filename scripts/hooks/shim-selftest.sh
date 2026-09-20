@@ -1802,6 +1802,87 @@ else
   bad "OPS-100 a clean kill wrote $(uncap_lines) record(s), retired=$K_OK"
 fi
 
+# --- OPS-101: the record carries a CLAIM, and a claim is on work -------------
+#
+# RM-183 (#291). The guard in scripts/hooks/git-tree-guard.sh decides whose work
+# to protect by asking the ledger who is LIVE, and #290 made a killed run stop
+# being live at the moment of the kill. Measured on one tree, one piece of work
+# and one run: `git clean -fd` refused before the retirement and was allowed
+# after it. The protection that vanished was a side effect of the run being
+# WRONGLY reported active, and the work most at risk is exactly this work --
+# a live run's uncommitted work has somebody coming back for it and a killed
+# run's does not.
+#
+# So the record is what carries the claim past the retirement, and to do that it
+# has to name two things it did not name before:
+#
+#   WHICH PATHS the kill actually left uncommitted -- `wrote_paths` is every
+#   path the run ever wrote in that tree, including the ones it committed
+#   itself, and a claim over those is a claim over work that is already safe.
+#
+#   WHAT WAS IN THEM. A claim keyed on a FILENAME cannot be released. This file
+#   is append-only and never rotated, so a claim that came back every time
+#   somebody re-edited a path some long-dead run once wrote would wedge the tree
+#   by accumulation -- which is the failure liveness was chosen to avoid (#260),
+#   arrived at from the other direction.
+#
+# `claim_top` is the repository the paths are relative to, because the guard
+# must not weigh a claim against a tree that merely resembles it.
+creset
+uncap_reset
+kill_run agent-kill13 run-kill13
+wrote_body run-kill13 a Write "{\"file_path\":\"$CREPO/left.txt\"}"
+wrote_body run-kill13 b Write "{\"file_path\":\"$CREPO/kept.txt\"}"
+printf 'left behind\n' > "$CREPO/left.txt"
+printf 'already safe\n' > "$CREPO/kept.txt"
+git -C "$CREPO" add kept.txt
+git -C "$CREPO" commit -q -m "the run signed this one itself"
+K_SHA="$(python3 -c '
+import hashlib, sys
+print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$CREPO/left.txt")"
+kill_event "$KSESS" agent-kill13 "$(honoured agent-kill13)"
+K_CLAIM="$(uncap_field claim)"
+git -C "$CREPO" reset -q --hard HEAD~1
+rm -f "$CREPO/left.txt"
+K_REC=0
+[ "$(uncap_field reason)" = "run_killed" ] || K_REC=1
+[ "$(uncap_field wrote)" = "2" ] || K_REC=1
+[ "$(uncap_field claim_n)" = "1" ] || K_REC=1
+[ "$(uncap_field claim_top)" = "$CREPO_REAL" ] || K_REC=1
+printf '%s' "$K_CLAIM" | grep -q '"path": "left.txt"' || K_REC=1
+printf '%s' "$K_CLAIM" | grep -q "\"sha\": \"$K_SHA\"" || K_REC=1
+printf '%s' "$K_CLAIM" | grep -q '"size": 12' || K_REC=1
+printf '%s' "$K_CLAIM" | grep -q 'kept.txt' && K_REC=1
+if [ "$K_REC" = 0 ]; then
+  ok "OPS-101 a kill records what it left uncommitted, with the content, and not what the run had already committed"
+else
+  bad "OPS-101 the claim is wrong: wrote=$(uncap_field wrote) claim_n=$(uncap_field claim_n) top=$(uncap_field claim_top) claim=$K_CLAIM"
+fi
+
+# AND A KILL THAT LEFT NOTHING UNCOMMITTED CLAIMS NOTHING, which is the same
+# rule one level in: the record is written because the run wrote files in that
+# tree, and the claim is empty because none of them are still at risk. Driven
+# against the same fixture as the case above with one thing changed -- the file
+# is committed rather than left.
+creset
+uncap_reset
+kill_run agent-kill14 run-kill14
+wrote_body run-kill14 a Write "{\"file_path\":\"$CREPO/safe.txt\"}"
+printf 'safe\n' > "$CREPO/safe.txt"
+git -C "$CREPO" add safe.txt
+git -C "$CREPO" commit -q -m "committed before the kill"
+printf 'somebody else\n' > "$CREPO/theirs.txt"
+kill_event "$KSESS" agent-kill14 "$(honoured agent-kill14)"
+K_EMPTY="$(uncap_field claim)"
+K_EMPTY_N="$(uncap_field claim_n)"
+git -C "$CREPO" reset -q --hard HEAD~1
+rm -f "$CREPO/safe.txt" "$CREPO/theirs.txt"
+if [ "$(uncap_lines)" = "1" ] && [ "$K_EMPTY_N" = "0" ] && [ "$K_EMPTY" = "[]" ]; then
+  ok "OPS-101 and a kill whose written paths are all committed records the kill and claims none of them"
+else
+  bad "OPS-101 an empty claim was not empty: lines=$(uncap_lines) claim_n=$K_EMPTY_N claim=$K_EMPTY"
+fi
+
 echo
 echo "shim-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
