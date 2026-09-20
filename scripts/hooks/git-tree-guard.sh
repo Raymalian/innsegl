@@ -107,6 +107,63 @@
 # older than that names a run the reaper has expired or will, so it holds
 # nothing. Neither half can wedge a tree on its own.
 #
+# # AND A CLAIM THAT OUTLIVES ITS RUN — RM-183 (#291)
+#
+# Liveness above answers a live run. It used to answer a KILLED one too, by
+# accident: a killed subagent fires no SubagentStop, so the ledger went on
+# reporting it active for the whole of the reaper's grace and this guard went on
+# protecting its work for twelve hours. #290 fixed the lie — a kill is certain,
+# so the run leaves the active list at the moment of the kill — and the
+# protection went with it. MEASURED on one tree, one piece of work, one run:
+#
+#   before the retirement:  git clean -fd  ->  exit 2, refused
+#   after  the retirement:  git clean -fd  ->  exit 0, allowed
+#
+# AND THE WORK MOST AT RISK IS EXACTLY THIS WORK. A live run's uncommitted work
+# has somebody coming back for it. A killed run's does not: it sits in the tree
+# with nobody to commit it, and it is the one kind of uncommitted agent work a
+# destructive git will silently take.
+#
+# So a killed run's claim is carried by the record the kill writes (#277, #290):
+# reason `run_killed`, naming the run, the tree it worked in, and each path it
+# left uncommitted there TOGETHER WITH A DIGEST OF WHAT WAS IN IT.
+#
+# WHY THE DIGEST IS THE WHOLE DESIGN. Liveness was chosen in #278 because a
+# killed subagent's marker is never removed (#260) and a claim keyed on one
+# would refuse in that tree forever. A claim keyed on a FILENAME has the same
+# defect one step further on: the record is append-only and never rotated, so a
+# claim that came back every time somebody re-edited a path some long-dead run
+# once wrote would end up claiming every file in the repository. THE CLAIM IS ON
+# THE WORK, NOT ON THE NAME. It is released by any of three facts about the
+# tree, and by no clock at all:
+#
+#   the path is COMMITTED    — it is not uncommitted any more, so it is not hit
+#   the path is GONE         — there is nothing left to protect
+#   the path is WRITTEN OVER — the bytes differ, so this is somebody else's work
+#                              in a file that happens to share a name
+#
+# and by the operator discarding it once, deliberately, through the override
+# that was already there — after which the paths are gone and the second rule
+# applies. NOTHING HERE ADDS A THRESHOLD and nothing here reads a clock.
+#
+# IT IS NEVER A BLANKET CLAIM, which is the one place it differs from a live
+# run. A live run whose body store cannot be read is refused over every dirty
+# path in the tree, because a run nobody can ask is not a run that wrote
+# nothing. A retired run cannot be given that: the record outlives every one of
+# its paths, and a blanket claim that outlives its run is a tree nobody can use.
+# A killed claim is a finite list of paths and contents or it is nothing.
+#
+# WHAT IT DOES NOT COVER, again plainly:
+#
+#   - a record written before this existed, which names no content and therefore
+#     claims nothing. The protection starts at the next kill;
+#   - any other reason in that log. `index_unaccounted`, `no_recorded_writes`
+#     and the rest are records of a run that DID stop, which is #277;
+#   - a run whose writes went through `Bash` redirections, which recorded no
+#     path to claim — the same hole as above, for the same reason;
+#   - more than 50 paths from one kill, which is the bound the record is written
+#     under. `claim_n` in the record says how many there were.
+#
 # # WHAT A RUN CLAIMS
 #
 # Only what its own tool-call bodies record it writing — the same source, and
@@ -140,6 +197,7 @@
 #                                 variable, and the refusal prints it.
 #   INNSEGL_GIT_GUARD=0           off entirely.
 #   INNSEGL_RUNS_DIR              default ~/.innsegl/runs
+#   INNSEGL_UNCAPTURED_LOG        default $INNSEGL_RUNS_DIR/uncaptured.jsonl
 #   INNSEGL_LOG_DIR               default ~/.innsegl/log
 #   INNSEGL_API_URL               default http://127.0.0.1:8082
 #   INNSEGL_RUN_TTL_HOURS         default 12, the reaper's grace (IP §6.7)
@@ -152,6 +210,9 @@ set -u
 
 RUNS_DIR="${INNSEGL_RUNS_DIR:-$HOME/.innsegl/runs}"
 LOG_DIR="${INNSEGL_LOG_DIR:-$HOME/.innsegl/log}"
+# The same default and the same variable the shim writes it under, so a machine
+# that moves one moves both.
+UNCAP_LOG="${INNSEGL_UNCAPTURED_LOG:-$RUNS_DIR/uncaptured.jsonl}"
 API_URL="${INNSEGL_API_URL:-http://127.0.0.1:8082}"
 TTL_HOURS="${INNSEGL_RUN_TTL_HOURS:-12}"
 
@@ -161,7 +222,8 @@ TTL_HOURS="${INNSEGL_RUN_TTL_HOURS:-12}"
 # and a shell command line, and every one of those in `sed` is a quoting bug
 # waiting for a path with a space in it.
 #
-# argv: <mode> <cwd> <runs dir> <log dir> <api url> <ttl hours> [args...]
+# argv: <mode> <cwd> <runs dir> <log dir> <api url> <ttl hours> <uncaptured log>
+#       [args...]
 #   mode "argv"    args are a git command line, without the leading `git`
 #   mode "command" args[0] is a whole shell command string to be tokenised
 #
@@ -169,12 +231,12 @@ TTL_HOURS="${INNSEGL_RUN_TTL_HOURS:-12}"
 # Any exception exits 0: see FAIL OPEN above.
 # ---------------------------------------------------------------------------
 GUARD_DECIDE='
-import json, os, pathlib, shlex, subprocess, sys, time
+import hashlib, json, os, pathlib, shlex, subprocess, sys, time
 
 ALLOW, REFUSE = 0, 2
 
-mode, cwd, runs_dir, log_dir, api_url, ttl_hours = sys.argv[1:7]
-rest = sys.argv[7:]
+mode, cwd, runs_dir, log_dir, api_url, ttl_hours, uncap_log = sys.argv[1:8]
+rest = sys.argv[8:]
 
 def out(line=""):
     # Every line carries the prefix, blank ones included — the shim'"'"'s own
@@ -508,6 +570,101 @@ def claimed_by(run, top):
             wrote.add(os.path.relpath(real, top))
     return wrote, True
 
+# --- and what a run killed here still claims --------------------------------
+
+# The record is append-only and never rotated, so only the end of it is read.
+# A file that has grown past this has its oldest records dropped, and the oldest
+# records are the ones whose work is likeliest to be long since committed.
+UNCAP_TAIL = 4 * 1024 * 1024
+KILLED_CACHE = {}
+
+def killed_claims(top):
+    # Every run KILLED in this tree with a claim the record still identifies.
+    # See the header: the record carries the claim because the run no longer
+    # can, and it carries the CONTENT because a claim on a name cannot be
+    # released. Answers a list of (run, {path: (sha, size)}).
+    if top in KILLED_CACHE:
+        return KILLED_CACHE[top]
+    found = []
+    KILLED_CACHE[top] = found
+    try:
+        size = os.path.getsize(uncap_log)
+        with open(uncap_log, "rb") as fh:
+            if size > UNCAP_TAIL:
+                fh.seek(size - UNCAP_TAIL)
+                fh.readline()       # drop the partial line the seek landed in
+            raw = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return found
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue                # one unreadable line is not the whole log
+        if not isinstance(rec, dict) or rec.get("reason") != "run_killed":
+            continue
+        # THE TREE IS THE OWNERSHIP BOUNDARY. One log serves every session on
+        # this machine, and the sessions belonging to another repository have
+        # live runs with real processes behind them. A record is weighed here
+        # only if it names THIS repository as the tree its paths are relative
+        # to; nothing else in it is trusted to say so.
+        ctop = rec.get("claim_top")
+        if not isinstance(ctop, str) or not ctop:
+            continue
+        try:
+            if os.path.realpath(ctop) != top:
+                continue
+        except Exception:
+            continue
+        claim = rec.get("claim")
+        if not isinstance(claim, list) or not claim:
+            continue                # the shape written before #291: no content,
+                                    # so no claim, and the header says so
+        held = {}
+        for e in claim:
+            if not isinstance(e, dict):
+                continue
+            path, sha, count = e.get("path"), e.get("sha"), e.get("size")
+            if (isinstance(path, str) and path and isinstance(sha, str)
+                    and sha and isinstance(count, int) and count >= 0):
+                held[path] = (sha, count)
+        if held:
+            found.append((Run(rec.get("run_id") or "",
+                              rec.get("agent_type") or "",
+                              rec.get("task") or "",
+                              rec.get("dir") or ctop, 0.0), held))
+    return found
+
+def still_held(top, held, candidates):
+    # Of the claimed paths this command can destroy, the ones that still hold
+    # the work the record identified. THIS IS THE RELEASE: a path whose bytes
+    # have changed is somebody else in a file with the same name, and a claim
+    # that survived that would wedge the tree by accumulation.
+    #
+    # Size first, because it rejects the common case without reading a byte.
+    kept = []
+    for path in sorted(candidates):
+        sha, count = held[path]
+        full = os.path.join(top, path)
+        try:
+            if os.path.getsize(full) != count:
+                continue
+            h = hashlib.sha256()
+            with open(full, "rb") as fh:
+                while True:
+                    chunk = fh.read(65536)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+        except OSError:
+            continue                # gone, or unreadable: nothing to protect
+        if h.hexdigest() == sha:
+            kept.append(path)
+    return kept
+
 def hits(wrote, dirty):
     """The claimed paths this command can actually destroy.
 
@@ -563,15 +720,36 @@ def decide(args, spelling, start):
         if theirs:
             refuse(english, run, sorted(theirs), spelling)
             return REFUSE
+
+    # AND THEN THE RUNS THAT WERE KILLED HERE — RM-183 (#291). Second, so that a
+    # tree with no killed-run claim in it behaves exactly as it did before this
+    # existed, and so that a live run is still the first thing a refusal names.
+    for run, held in killed_claims(top):
+        theirs = hits(set(held), dirty)
+        if not theirs:
+            continue                # committed, gone, or not in this scope
+        kept = still_held(top, held, theirs)
+        if kept:
+            refuse(english, run, kept, spelling, killed=True)
+            return REFUSE
     return ALLOW
 
-def refuse(english, run, paths, spelling, unreadable=False):
+def refuse(english, run, paths, spelling, unreadable=False, killed=False):
     who = run.run_id
     if run.agent_type:
         who += " (" + run.agent_type + (", task " + run.task if run.task else "") + ")"
     out("refused: " + english + " would discard work an agent run has not committed.")
     out()
-    if unreadable:
+    if killed:
+        out("  " + who)
+        out("  was KILLED with " + str(len(paths)) +
+            " uncommitted path(s) in " + run.dir + ",")
+        out("  and the tree still holds them exactly as it left them:")
+        for p in paths[:10]:
+            out("    " + p)
+        if len(paths) > 10:
+            out("    ... and " + str(len(paths) - 10) + " more")
+    elif unreadable:
         out("  " + who)
         out("  is live in " + run.dir + " and what it wrote cannot be read:")
         out("  there is no tool-call body store for it under " + log_dir + ".")
@@ -585,9 +763,16 @@ def refuse(english, run, paths, spelling, unreadable=False):
         if len(paths) > 10:
             out("    ... and " + str(len(paths) - 10) + " more")
     out()
-    out("  That run has not stopped, so nothing has captured its work yet. A hard")
-    out("  reset took eight minutes of a subagent'"'"'s finished work once already, and")
-    out("  nothing refused, warned or recorded it (#278).")
+    if killed:
+        out("  Nothing is coming back for that work. A killed agent fires no stop,")
+        out("  so nothing captured it and nothing is going to (#290, #291); the")
+        out("  claim is the record in " + uncap_log + ".")
+        out("  It is spent the moment these paths are committed, removed or written")
+        out("  over, so this is not a lock on the tree.")
+    else:
+        out("  That run has not stopped, so nothing has captured its work yet. A hard")
+        out("  reset took eight minutes of a subagent'"'"'s finished work once already, and")
+        out("  nothing refused, warned or recorded it (#278).")
     out()
     out("  To KEEP the work, sign it under the run that did it:")
     out("    innsegl-commit -r " + run.run_id +
@@ -627,7 +812,7 @@ decide() {
   command -v python3 >/dev/null 2>&1 || return 0
   _mode="$1"; _cwd="$2"; shift 2
   python3 -c "$GUARD_DECIDE" "$_mode" "$_cwd" \
-    "$RUNS_DIR" "$LOG_DIR" "$API_URL" "$TTL_HOURS" "$@"
+    "$RUNS_DIR" "$LOG_DIR" "$API_URL" "$TTL_HOURS" "$UNCAP_LOG" "$@"
   _rc=$?
   [ "$_rc" = "2" ] && return 2
   return 0
