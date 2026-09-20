@@ -1497,6 +1497,392 @@ else
   bad "OPS-072: the refusal offers no remedy: $(cat "$WORK/err")"
 fi
 
+# --- OPS-096..100: a kill is a certain event, and silence is not --------------
+#
+# RM-182 (#290). A killed subagent fires NO `SubagentStop`. Its marker survives,
+# its work survives, and the ledger goes on reporting the run active for the
+# whole of the reaper's grace — measured, five runs active for between three and
+# nine hours after the processes were gone.
+#
+# THE TWO CASES ARE NOT THE SAME EVENT, and the system treated them as one:
+#
+#   A KILL IS CERTAIN. Something asked for the agent to stop and was told it
+#   had. The run must leave the active list at that moment.
+#
+#   SILENCE IS AMBIGUOUS. A quiet agent may still be working. The reaper's grace
+#   answers that one and is not touched here; nothing below reads a clock, and
+#   no case introduces a threshold.
+#
+# THE KILL IS ALREADY OBSERVABLE AND NOTHING LOOKED. `PostToolUse` fires in the
+# parent session for every tool call including the one that does the killing,
+# and it carries the tool's INPUT and its RESULT. The `task_id` a kill is
+# addressed to is the same id the subagent's marker is named with.
+#
+# EVERY NEGATIVE CASE CARRIES ITS OWN POSITIVE CONTROL, in the same case, driven
+# through the same path with exactly one field changed. A case that asserted
+# only "nothing happened" would pass against a shim that does nothing at all,
+# which is the shim these cases were written against — it would prove the
+# discriminator works by proving the feature is absent.
+
+# THE LISTENER DEMANDS NOTHING AGAIN. The credential cases above leave the stub
+# refusing every request with no mint configured, and a fixture built against
+# that registers no run and writes no marker — so every case below would fail
+# for a reason that has nothing to do with a kill.
+: > "$CREDFILE"
+MINT=""
+
+KSESS="sess-kill"
+KOTHER="sess-other"
+KTREE="$(printf '%s' "$CREPO_REAL" | shasum -a 256 | cut -c1-32)"
+
+# honoured <task-id> — the harness's own answer to a kill it carried out, in the
+# shape measured from a real drill: it echoes the task, names what KIND of task
+# it was, and says it stopped it.
+honoured() {
+  printf '{"message":"Successfully stopped task: %s (a prober)","task_id":"%s","task_type":"local_agent","command":"a prober"}' "$1" "$1"
+}
+
+# kill_run <agent-id> <run-id> [owning session] — a registered subagent left
+# exactly as SubagentStart leaves it: a marker, a by-tree pointer, a body store.
+kill_run() {
+  script_tool observe_session ok "{\"session_id\":\"$1\",\"phase\":\"start\",\"known\":true,\"registered\":true,\"run_id\":\"$2\",\"task\":\"rm182\",\"worktree\":\"\",\"repo\":\"example.test/org/name\",\"branch\":\"dev/rm182\",\"agent_type\":\"prober\"}"
+  drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"${3:-$KSESS}\",\"agent_id\":\"$1\",\"agent_type\":\"prober\",\"cwd\":\"$CREPO\"}"
+  rm -rf "${LOG:?}/$2"; mkdir -p "$LOG/$2"
+}
+
+# kill_event <calling session> <task-id> <tool_response json> — the parent
+# session's PostToolUse for a TaskStop, which is the only event that sees a kill.
+kill_event() {
+  script_tool observe_session ok "{\"session_id\":\"$2\",\"phase\":\"stop\",\"known\":true,\"retired\":true,\"run_id\":\"retired-$2\"}"
+  drive "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$1\",\"cwd\":\"$CREPO\",\"tool_name\":\"TaskStop\",\"tool_input\":{\"task_id\":\"$2\"},\"tool_response\":$3}"
+}
+
+# retired_by_kill <task-id> — did that drive retire exactly that run?
+retired_by_kill() { called observe_session '"phase": "stop"' "\"session_id\": \"$1\""; }
+# stopped_anything — did it retire ANYTHING at all?
+stopped_anything() { grep -q '^observe_session ' "$CALLS"; }
+
+# --- OPS-096: the kill retires the run there and then -------------------------
+creset
+uncap_reset
+kill_run agent-kill1 run-kill1
+kill_event "$KSESS" agent-kill1 "$(honoured agent-kill1)"
+# ONE ASSERTION, THREE CLAIMS. The kill is still recorded as the tool call it is
+# — a retirement that swallowed the call would lose the parent's own activity —
+# it retires the killed run under the id the marker is named with, and it ends
+# what that run had below it, which a kill does as surely as a stop does.
+if [ "$STATUS" -eq 0 ] \
+  && called observe_tool_call '"tool": "TaskStop"' \
+  && retired_by_kill agent-kill1 \
+  && called observe_session '"ends_descendants": true'; then
+  ok "OPS-096 a kill is recorded as a tool call AND retires the killed run at that moment"
+else
+  bad "OPS-096 the kill retired nothing (exit $STATUS): $(grep '^observe_session ' "$CALLS" | head -n 1)"
+fi
+
+# AND IT LEAVES NOTHING BEHIND THAT WOULD RETIRE IT A SECOND TIME. The marker is
+# the local half of the double-retire guard (#179): SubagentStop already exits
+# on an absent one, so removing it here reuses that guard rather than adding a
+# second spelling of it. The by-tree pointer goes with it for the reason
+# SessionEnd removes the session's — the run it names is retired, and a signer
+# that resolved it would register against a retired parent.
+if [ ! -f "$RUNS/agent-kill1" ] && [ ! -f "$RUNS/by-tree/$KTREE" ]; then
+  ok "OPS-096 and the killed run's marker and by-tree pointer are gone with it"
+else
+  bad "OPS-096 the kill left its marker or pointer behind: $(ls "$RUNS/agent-kill1" "$RUNS/by-tree/$KTREE" 2>&1 | tr '\n' ' ')"
+fi
+
+# --- OPS-097: the RESULT is read, not just the input ---------------------------
+#
+# A `TaskStop` against a task that was already finished, or that does not exist,
+# must retire nothing. Measured on the live harness: both of those fire no
+# PostToolUse at all today — but that is the harness's behaviour and not this
+# shim's rule, and a shim that retired on the INPUT would be one harness change
+# away from retiring a run that is still working.
+creset
+kill_run agent-kill2 run-kill2
+kill_event "$KSESS" agent-kill2 '{"error":"No task found with ID: agent-kill2"}'
+retired_by_kill agent-kill2 && K_ERR=1 || K_ERR=0
+kill_event "$KSESS" agent-kill2 "$(honoured agent-kill2)"
+retired_by_kill agent-kill2 && K_OK=1 || K_OK=0
+if [ "$STATUS" -eq 0 ] && [ "$K_ERR" = 0 ] && [ "$K_OK" = 1 ]; then
+  ok "OPS-097 a TaskStop the harness refused retires nothing; the same call honoured retires the run"
+else
+  bad "OPS-097 the result decided nothing: refused=$K_ERR honoured=$K_OK"
+fi
+
+# AND A RESULT THAT NAMES A DIFFERENT TASK IS NOT THIS TASK'S KILL. The harness
+# echoes the task it actually stopped; a reply that names another one is either
+# a different kill or not a kill at all, and either way this marker's run is
+# still working.
+creset
+kill_run agent-kill3 run-kill3
+kill_event "$KSESS" agent-kill3 '{"message":"Successfully stopped task: agent-elsewhere (x)","task_id":"agent-elsewhere","task_type":"local_agent","command":"x"}'
+stopped_anything && K_OTHER=1 || K_OTHER=0
+kill_event "$KSESS" agent-kill3 "$(honoured agent-kill3)"
+retired_by_kill agent-kill3 && K_OK=1 || K_OK=0
+if [ "$STATUS" -eq 0 ] && [ "$K_OTHER" = 0 ] && [ "$K_OK" = 1 ]; then
+  ok "OPS-097 and a result naming a different task retires nothing, here or anywhere"
+else
+  bad "OPS-097 a result naming another task retired something: elsewhere=$K_OTHER honoured=$K_OK"
+fi
+
+# --- OPS-098: a task that is not an agent run ---------------------------------
+#
+# Monitors and background shells are stopped through the same tool. The harness
+# says which kind it stopped, and a shell is not a run.
+creset
+kill_run agent-kill4 run-kill4
+kill_event "$KSESS" agent-kill4 '{"message":"Successfully stopped task: agent-kill4 (echo hi)","task_id":"agent-kill4","task_type":"local_bash","command":"echo hi"}'
+retired_by_kill agent-kill4 && K_SHELL=1 || K_SHELL=0
+kill_event "$KSESS" agent-kill4 "$(honoured agent-kill4)"
+retired_by_kill agent-kill4 && K_OK=1 || K_OK=0
+if [ "$STATUS" -eq 0 ] && [ "$K_SHELL" = 0 ] && [ "$K_OK" = 1 ]; then
+  ok "OPS-098 a stopped background shell retires nothing; the same id as an agent retires the run"
+else
+  bad "OPS-098 a shell was treated as a run: shell=$K_SHELL agent=$K_OK"
+fi
+
+# AND A TASK WITH NO MARKER RETIRES NOTHING, SILENTLY. Most stopped tasks are
+# not agents at all, so this is the common path and it must not talk: a warning
+# per background shell would be noise the operator learns to ignore, on the one
+# surface that also carries a refusal worth reading.
+creset
+kill_event "$KSESS" bnosuchtask0 "$(honoured bnosuchtask0)"
+stopped_anything && K_NOMARK=1 || K_NOMARK=0
+[ -s "$WORK/err" ] && K_LOUD=1 || K_LOUD=0
+kill_run agent-kill5 run-kill5
+kill_event "$KSESS" agent-kill5 "$(honoured agent-kill5)"
+retired_by_kill agent-kill5 && K_OK=1 || K_OK=0
+if [ "$STATUS" -eq 0 ] && [ "$K_NOMARK" = 0 ] && [ "$K_LOUD" = 0 ] && [ "$K_OK" = 1 ]; then
+  ok "OPS-098 and a task_id with no marker retires nothing and says nothing"
+else
+  bad "OPS-098 an unmarked task was not silent: retired=$K_NOMARK noisy=$K_LOUD control=$K_OK"
+fi
+
+# --- OPS-099: never a run this session does not own ----------------------------
+#
+# The markers directory is one directory for every session on the machine, and
+# other repositories' sessions have live runs in it with real processes behind
+# them. The marker records the harness session that started the run; anything
+# else is somebody else's agent.
+creset
+kill_run agent-kill6 run-kill6 "$KOTHER"
+kill_event "$KSESS" agent-kill6 "$(honoured agent-kill6)"
+retired_by_kill agent-kill6 && K_THEIRS=1 || K_THEIRS=0
+kill_event "$KOTHER" agent-kill6 "$(honoured agent-kill6)"
+retired_by_kill agent-kill6 && K_OWN=1 || K_OWN=0
+if [ "$STATUS" -eq 0 ] && [ "$K_THEIRS" = 0 ] && [ "$K_OWN" = 1 ]; then
+  ok "OPS-099 another session's run is never retired; its own session retires it"
+else
+  bad "OPS-099 ownership decided nothing: other=$K_THEIRS owner=$K_OWN"
+fi
+
+# AND A MARKER THAT RECORDS NO OWNER IS NOT THIS SESSION'S. Every marker written
+# before this change has none, and "not recorded" is not "mine": the safe
+# direction is the silent one, because the run may still be working.
+creset
+kill_run agent-kill7 run-kill7
+python3 -c '
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.pop("owner_session", None)
+open(p, "w").write(json.dumps(d))
+' "$RUNS/agent-kill7"
+kill_event "$KSESS" agent-kill7 "$(honoured agent-kill7)"
+retired_by_kill agent-kill7 && K_ANON=1 || K_ANON=0
+kill_run agent-kill8 run-kill8
+kill_event "$KSESS" agent-kill8 "$(honoured agent-kill8)"
+retired_by_kill agent-kill8 && K_OK=1 || K_OK=0
+if [ "$STATUS" -eq 0 ] && [ "$K_ANON" = 0 ] && [ "$K_OK" = 1 ]; then
+  ok "OPS-099 and a marker that records no owner is left alone"
+else
+  bad "OPS-099 an unowned marker was retired: anonymous=$K_ANON control=$K_OK"
+fi
+
+# AND A task_id IS A MARKER NAME, NEVER A PATH. It is model-supplied text that
+# this shim would otherwise paste into a filename, so `../` reaches outside the
+# markers directory and a `session-` prefix names the OPERATOR'S OWN session
+# marker — the one run on this machine that must never be retired by anything
+# but its own SessionEnd. The escape target is planted with a well-formed,
+# correctly-owned marker so that only the shape rule can refuse it.
+creset
+mkdir -p "$RUNS"
+# PLANTED AS VALID AS IT CAN BE MADE: the right owner, and a session_id that
+# agrees with the name the kill would reach it by. Every other guard admits it,
+# so only the shape rule can refuse it and this case tests that rule alone.
+python3 -c '
+import json, sys
+json.dump({"run_id": "run-escaped", "owner_session": sys.argv[2], "dir": sys.argv[3],
+           "session_id": "../agent-escaped", "task": "rm182", "worktree": "",
+           "agent_type": "prober"}, open(sys.argv[1], "w"))
+' "$WORK/agent-escaped" "$KSESS" "$CREPO"
+kill_event "$KSESS" "../agent-escaped" "$(honoured ../agent-escaped)"
+stopped_anything && K_ESC=1 || K_ESC=0
+# The session's own marker, planted rather than driven: a SessionStart here
+# would link this throwaway fixture into whatever deployment is up.
+# A REAL SESSION MARKER, in the shape SessionStart writes: its session_id is
+# the session, while the file it lives in carries the `session-` prefix. Both
+# the shape rule and the name rule refuse it, which is the point — the
+# operator's own run is the one thing on this machine a kill must never reach.
+python3 -c '
+import json, sys
+json.dump({"run_id": "run-the-operators-own-session", "owner_session": sys.argv[2],
+           "dir": sys.argv[3], "session_id": sys.argv[2], "task": "rm182",
+           "worktree": "", "agent_type": "session"}, open(sys.argv[1], "w"))
+' "$RUNS/session-$KSESS" "$KSESS" "$CREPO"
+kill_event "$KSESS" "session-$KSESS" "$(honoured "session-$KSESS")"
+stopped_anything && K_SESS=1 || K_SESS=0
+kill_run agent-kill9 run-kill9
+kill_event "$KSESS" agent-kill9 "$(honoured agent-kill9)"
+retired_by_kill agent-kill9 && K_OK=1 || K_OK=0
+if [ "$STATUS" -eq 0 ] && [ "$K_ESC" = 0 ] && [ "$K_SESS" = 0 ] && [ "$K_OK" = 1 ]; then
+  ok "OPS-099 and a task_id that names a path or a session marker reaches neither"
+else
+  bad "OPS-099 a task_id escaped the markers directory: traversal=$K_ESC session=$K_SESS control=$K_OK"
+fi
+
+# --- OPS-100: a second retirement, and the work the killed run left ------------
+#
+# `SubagentStop` may still arrive on some paths, and a double retire is #179.
+# The guard is not new: the marker is gone, so the stop takes the absent-marker
+# exit it has always had, and the lifecycle tool answers a repeated stop from
+# the instant of the first.
+creset
+uncap_reset
+kill_run agent-kill10 run-kill10
+kill_event "$KSESS" agent-kill10 "$(honoured agent-kill10)"
+retired_by_kill agent-kill10 && K_FIRST=1 || K_FIRST=0
+kill_event "$KSESS" agent-kill10 "$(honoured agent-kill10)"
+stopped_anything && K_SECOND=1 || K_SECOND=0
+K_SECOND_RC="$STATUS"
+drive "{\"hook_event_name\":\"SubagentStop\",\"session_id\":\"$KSESS\",\"agent_id\":\"agent-kill10\",\"agent_type\":\"prober\"}"
+stopped_anything && K_STOP=1 || K_STOP=0
+if [ "$K_FIRST" = 1 ] && [ "$K_SECOND" = 0 ] && [ "$K_SECOND_RC" -eq 0 ] \
+  && [ "$K_STOP" = 0 ] && [ "$STATUS" -eq 0 ]; then
+  ok "OPS-100 a retired kill is retired once: a repeat and a late SubagentStop both retire nothing and exit 0"
+else
+  bad "OPS-100 the run was retired twice: first=$K_FIRST repeat=$K_SECOND($K_SECOND_RC) stop=$K_STOP($STATUS)"
+fi
+
+# AND THE WORK IT LEFT IS WRITTEN DOWN WHERE IT OUTLIVES THE PROCESS — #277.
+# The kill path does NOT capture and does not sign: it is the PARENT's tool call,
+# mid-flight, and committing another run's tree from there is the #261 incident
+# with a new trigger. What it does is leave the record, so the orphaned work is
+# findable without anyone tripping over it (#288).
+creset
+uncap_reset
+kill_run agent-kill11 run-kill11
+wrote_body run-kill11 a Write "{\"file_path\":\"$CREPO/killed.txt\"}"
+printf 'killed\n' > "$CREPO/killed.txt"
+kill_event "$KSESS" agent-kill11 "$(honoured agent-kill11)"
+if [ "$(uncap_lines)" = "1" ] \
+  && [ "$(uncap_field reason)" = "run_killed" ] \
+  && [ "$(uncap_field run_id)" = "run-kill11" ] \
+  && [ "$(uncap_field dirty)" = "1" ] \
+  && [ "$(uncap_field wrote)" = "1" ] \
+  && [ "$(uncap_field task)" = "rm182" ]; then
+  ok "OPS-100 and a killed run that left work records it as run_killed, naming the run and what it wrote"
+else
+  bad "OPS-100 the killed run's work was not recorded: $(uncap_lines) line(s), reason=$(uncap_field reason) run=$(uncap_field run_id) dirty=$(uncap_field dirty) wrote=$(uncap_field wrote)"
+fi
+
+# AND A KILLED RUN THAT LEFT NOTHING WRITES NOTHING. `run_retired` is already on
+# the chain for it; a second source of truth for one fact is what the capture
+# record deliberately does not become. What had no record was the WORK.
+creset
+uncap_reset
+kill_run agent-kill12 run-kill12
+kill_event "$KSESS" agent-kill12 "$(honoured agent-kill12)"
+retired_by_kill agent-kill12 && K_OK=1 || K_OK=0
+if [ "$K_OK" = 1 ] && [ "$(uncap_lines)" = "0" ]; then
+  ok "OPS-100 and a killed run with a clean tree is retired and writes no record"
+else
+  bad "OPS-100 a clean kill wrote $(uncap_lines) record(s), retired=$K_OK"
+fi
+
+# --- OPS-101: the record carries a CLAIM, and a claim is on work -------------
+#
+# RM-183 (#291). The guard in scripts/hooks/git-tree-guard.sh decides whose work
+# to protect by asking the ledger who is LIVE, and #290 made a killed run stop
+# being live at the moment of the kill. Measured on one tree, one piece of work
+# and one run: `git clean -fd` refused before the retirement and was allowed
+# after it. The protection that vanished was a side effect of the run being
+# WRONGLY reported active, and the work most at risk is exactly this work --
+# a live run's uncommitted work has somebody coming back for it and a killed
+# run's does not.
+#
+# So the record is what carries the claim past the retirement, and to do that it
+# has to name two things it did not name before:
+#
+#   WHICH PATHS the kill actually left uncommitted -- `wrote_paths` is every
+#   path the run ever wrote in that tree, including the ones it committed
+#   itself, and a claim over those is a claim over work that is already safe.
+#
+#   WHAT WAS IN THEM. A claim keyed on a FILENAME cannot be released. This file
+#   is append-only and never rotated, so a claim that came back every time
+#   somebody re-edited a path some long-dead run once wrote would wedge the tree
+#   by accumulation -- which is the failure liveness was chosen to avoid (#260),
+#   arrived at from the other direction.
+#
+# `claim_top` is the repository the paths are relative to, because the guard
+# must not weigh a claim against a tree that merely resembles it.
+creset
+uncap_reset
+kill_run agent-kill13 run-kill13
+wrote_body run-kill13 a Write "{\"file_path\":\"$CREPO/left.txt\"}"
+wrote_body run-kill13 b Write "{\"file_path\":\"$CREPO/kept.txt\"}"
+printf 'left behind\n' > "$CREPO/left.txt"
+printf 'already safe\n' > "$CREPO/kept.txt"
+git -C "$CREPO" add kept.txt
+git -C "$CREPO" commit -q -m "the run signed this one itself"
+K_SHA="$(python3 -c '
+import hashlib, sys
+print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$CREPO/left.txt")"
+kill_event "$KSESS" agent-kill13 "$(honoured agent-kill13)"
+K_CLAIM="$(uncap_field claim)"
+git -C "$CREPO" reset -q --hard HEAD~1
+rm -f "$CREPO/left.txt"
+K_REC=0
+[ "$(uncap_field reason)" = "run_killed" ] || K_REC=1
+[ "$(uncap_field wrote)" = "2" ] || K_REC=1
+[ "$(uncap_field claim_n)" = "1" ] || K_REC=1
+[ "$(uncap_field claim_top)" = "$CREPO_REAL" ] || K_REC=1
+printf '%s' "$K_CLAIM" | grep -q '"path": "left.txt"' || K_REC=1
+printf '%s' "$K_CLAIM" | grep -q "\"sha\": \"$K_SHA\"" || K_REC=1
+printf '%s' "$K_CLAIM" | grep -q '"size": 12' || K_REC=1
+printf '%s' "$K_CLAIM" | grep -q 'kept.txt' && K_REC=1
+if [ "$K_REC" = 0 ]; then
+  ok "OPS-101 a kill records what it left uncommitted, with the content, and not what the run had already committed"
+else
+  bad "OPS-101 the claim is wrong: wrote=$(uncap_field wrote) claim_n=$(uncap_field claim_n) top=$(uncap_field claim_top) claim=$K_CLAIM"
+fi
+
+# AND A KILL THAT LEFT NOTHING UNCOMMITTED CLAIMS NOTHING, which is the same
+# rule one level in: the record is written because the run wrote files in that
+# tree, and the claim is empty because none of them are still at risk. Driven
+# against the same fixture as the case above with one thing changed -- the file
+# is committed rather than left.
+creset
+uncap_reset
+kill_run agent-kill14 run-kill14
+wrote_body run-kill14 a Write "{\"file_path\":\"$CREPO/safe.txt\"}"
+printf 'safe\n' > "$CREPO/safe.txt"
+git -C "$CREPO" add safe.txt
+git -C "$CREPO" commit -q -m "committed before the kill"
+printf 'somebody else\n' > "$CREPO/theirs.txt"
+kill_event "$KSESS" agent-kill14 "$(honoured agent-kill14)"
+K_EMPTY="$(uncap_field claim)"
+K_EMPTY_N="$(uncap_field claim_n)"
+git -C "$CREPO" reset -q --hard HEAD~1
+rm -f "$CREPO/safe.txt" "$CREPO/theirs.txt"
+if [ "$(uncap_lines)" = "1" ] && [ "$K_EMPTY_N" = "0" ] && [ "$K_EMPTY" = "[]" ]; then
+  ok "OPS-101 and a kill whose written paths are all committed records the kill and claims none of them"
+else
+  bad "OPS-101 an empty claim was not empty: lines=$(uncap_lines) claim_n=$K_EMPTY_N claim=$K_EMPTY"
+fi
+
 echo
 echo "shim-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

@@ -168,6 +168,13 @@ except Exception:
 tool_input = event.get("tool_input")
 if not isinstance(tool_input, dict):
     tool_input = {}
+# WHAT THE TOOL DID, AND NOT ONLY WHAT IT WAS ASKED TO DO -- RM-182 (#290). A
+# kill is the one thing this shim acts on that it did not itself cause, so what
+# it acts on is the report that the kill HAPPENED. A result that is not an
+# object leaves all three of these empty, and empty retires nothing.
+tool_result = event.get("tool_response")
+if not isinstance(tool_result, dict):
+    tool_result = {}
 for name, value in (
     ("EVENT", event.get("hook_event_name")),
     ("SESSION_ID", event.get("session_id")),
@@ -176,12 +183,17 @@ for name, value in (
     ("CWD", event.get("cwd")),
     ("TOOL", event.get("tool_name")),
     ("CMD", tool_input.get("command")),
+    ("TASK_ID", tool_input.get("task_id")),
+    ("STOPPED_ID", tool_result.get("task_id")),
+    ("STOPPED_TYPE", tool_result.get("task_type")),
+    ("STOPPED_ERR", "1" if tool_result.get("error") else ""),
 ):
     print(name + "=" + shlex.quote(value if isinstance(value, str) else ""))
 ' 2>/dev/null)"
 # A missing python3 leaves every one of them unset, and `set -u` would then kill
 # the hook rather than let it get out of the way.
 : "${EVENT:=}" "${SESSION_ID:=}" "${AGENT_ID:=}" "${AGENT_TYPE:=}" "${CWD:=}" "${TOOL:=}" "${CMD:=}"
+: "${TASK_ID:=}" "${STOPPED_ID:=}" "${STOPPED_TYPE:=}" "${STOPPED_ERR:=}"
 
 # THE KEY THIS EVENT IS ABOUT, because there are two kinds of run: a subagent's,
 # and the operator's own session. Until #182 only the first existed and the hook
@@ -536,13 +548,30 @@ print(value if isinstance(value, str) else "")
 # ---------------------------------------------------------------------------
 MARKER="$RUNS_DIR/$KEY"
 
+#
+# AND WHICH HARNESS SESSION OWNS THE RUN -- RM-182 (#290). This is ONE directory
+# for every session on the machine, and other repositories have sessions with
+# live runs in it right now, with real processes behind them. The kill path
+# below reaches a marker by a name a MODEL supplied, so "whose run is this" has
+# to be answerable from the marker itself rather than from where it happens to
+# sit. The answer is the session this hook is running in: a subagent is owned by
+# the session that spawned it, and a session is owned by itself.
+#
+# A MARKER THAT RECORDS NO OWNER IS NOT THIS SESSION'S. Every marker written
+# before this change has none, and the kill path reads absent as "not mine" --
+# which retires nothing, silently, and leaves the reaper answering for it
+# exactly as it did before. Safe is the silent direction: the run may still be
+# working.
 remember() {
   mkdir -p "$RUNS_DIR" 2>/dev/null || return 1
   # 0600: this file names a run a reader could then sign under.
   ( umask 077; printf '%s' "$1" | python3 -c '
 import json, sys
-body = json.load(sys.stdin); body["dir"] = sys.argv[1]; print(json.dumps(body))
-' "$2" > "$MARKER" ) 2>/dev/null
+body = json.load(sys.stdin)
+body["dir"] = sys.argv[1]
+body["owner_session"] = sys.argv[2]
+print(json.dumps(body))
+' "$2" "$SESSION_ID" > "$MARKER" ) 2>/dev/null
 }
 
 recall() { cat "$MARKER" 2>/dev/null; }
@@ -695,7 +724,134 @@ for name, value in (
 capture_account() {
   ACC_TOP=""; ACC_READ=0; ACC_INDEX=0; ACC_WROTE=""; ACC_WROTE_N=0
   ACC_STAGED_N=0; ACC_UNACCOUNTED_N=0; ACC_UNACCOUNTED=""
+  ACC_CLAIM=""; ACC_CLAIM_N=0
   eval "$(python3 -c "$CAPTURE_ACCOUNT" "$1" "$2" 2>/dev/null)"
+}
+
+# ---------------------------------------------------------------------------
+# WHAT A KILLED RUN LEAVES BEHIND, NAMED WELL ENOUGH TO PROTECT AND WELL ENOUGH
+# TO RELEASE — RM-183 (#291).
+#
+# The destructive-git guard (scripts/hooks/git-tree-guard.sh) decides whose work
+# to protect by asking the ledger who is LIVE, and #290 made a killed run stop
+# being live at the instant of the kill. Measured on one tree, one piece of work
+# and one run: `git clean -fd` refused before the retirement and was allowed
+# after it. That protection was a side effect of the run being WRONGLY reported
+# active, and the work most at risk is exactly this work — a live run's
+# uncommitted work has somebody coming back for it, and a killed run's has
+# nobody.
+#
+# So the record below carries the claim past the run, and to carry it it has to
+# say two things `capture_account` does not:
+#
+#   WHICH PATHS ARE ACTUALLY AT RISK. `ACC_WROTE` is every path the run wrote in
+#   that tree, including the ones it committed itself. A claim over those is a
+#   claim over work that is already safe, and a guard refusing over it is a
+#   guard that cries wolf — which is how a guard gets switched off.
+#
+#   WHAT WAS IN THEM. A CLAIM KEYED ON A FILENAME CANNOT BE RELEASED, and a
+#   claim with no release is the wedge liveness was chosen to avoid (#260) met
+#   from the other direction. This log is append-only and never rotated, so a
+#   claim that came back every time somebody re-edited a path some long-dead run
+#   once wrote would end up claiming every file in the repository. A digest of
+#   the bytes the kill left answers it: the same path holding different bytes is
+#   a different piece of work, and the claim over it is spent.
+#
+# NO CLOCK IS READ HERE EITHER. A claim is spent when its work is committed,
+# removed or written over — three facts about the tree, none about elapsed time.
+#
+# It is the WORKING TREE's bytes and not git's blob id, so that no gitattribute,
+# clean filter or autocrlf setting can make the writer and the reader disagree
+# about whether a file is the same file. `size` is recorded with it because it
+# rejects the common case without reading a byte.
+#
+# BOUNDED, AND THE BOUND COSTS SOMETHING. The record is one atomic append, so
+# the line stays small; a kill that left more than LIMIT uncommitted paths has
+# the first LIMIT of them claimed and `claim_n` says how many there were. The
+# remainder is not protected, which is worse than protecting it and better than
+# a record too large to be written in one piece.
+# ---------------------------------------------------------------------------
+CLAIM_ACCOUNT='
+import hashlib, os, shlex, subprocess, sys
+
+top, wrote = sys.argv[1], sys.argv[2]
+LIMIT = 50
+
+def git(*args):
+    return subprocess.run(("git", "-C", top) + args, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, timeout=60
+                          ).stdout.decode("utf-8", "replace")
+
+def dirty_paths():
+    # Every uncommitted path, by the same reading the guard makes of it.
+    fields = git("status", "--porcelain", "-z").split("\0")
+    found, i = set(), 0
+    while i < len(fields):
+        f = fields[i]
+        i += 1
+        if len(f) < 4:
+            continue
+        code, path = f[:2], f[3:]
+        # A rename carries its source in the NEXT field.
+        if "R" in code or "C" in code:
+            i += 1
+        if code != "!!":
+            found.add(path)
+    return found
+
+def uncommitted(p, dirty):
+    # An untracked DIRECTORY is reported as `dir/` and stands for everything
+    # under it, so a claimed path beneath one is uncommitted too.
+    if p in dirty:
+        return True
+    for d in dirty:
+        if d.endswith("/") and p.startswith(d):
+            return True
+    return False
+
+def digest(full):
+    h, n = hashlib.sha256(), 0
+    with open(full, "rb") as fh:
+        while True:
+            b = fh.read(65536)
+            if not b:
+                break
+            n += len(b)
+            h.update(b)
+    return n, h.hexdigest()
+
+try:
+    dirty = dirty_paths()
+except Exception:
+    dirty = set()
+
+lines, total = [], 0
+for p in sorted(x for x in wrote.splitlines() if x):
+    if not uncommitted(p, dirty):
+        continue
+    total += 1
+    if len(lines) >= LIMIT:
+        continue
+    try:
+        n, sha = digest(os.path.join(top, p))
+    except Exception:
+        continue
+    lines.append(sha + " " + str(n) + " " + p)
+
+for name, value in (("ACC_CLAIM", "\n".join(lines)),
+                    ("ACC_CLAIM_N", str(total))):
+    print(name + "=" + shlex.quote(value))
+'
+
+# claim_account <the repository tree> <the run's writes, one path per line>
+#
+# Defaulted before the eval for the reason capture_account is: a machine with no
+# python3, or a tree that will not answer, records an EMPTY claim rather than
+# killing the hook under `set -u`. An empty claim protects nothing, which is the
+# same direction every other failure in this file takes.
+claim_account() {
+  ACC_CLAIM=""; ACC_CLAIM_N=0
+  eval "$(python3 -c "$CLAIM_ACCOUNT" "$1" "$2" 2>/dev/null)"
 }
 
 # capture_remedy — what a refused capture leaves the operator holding.
@@ -833,11 +989,11 @@ import json, os, sys, time
 log = sys.argv[1]
 names = ("reason", "detail", "run_id", "agent_type", "task", "worktree", "dir",
          "dirty", "wrote", "staged", "unaccounted", "unaccounted_paths",
-         "wrote_paths")
+         "wrote_paths", "claim_top", "claim", "claim_n")
 rec = dict(zip(names, sys.argv[2:]))
 for n in names:
     rec.setdefault(n, "")
-for n in ("dirty", "wrote", "staged", "unaccounted"):
+for n in ("dirty", "wrote", "staged", "unaccounted", "claim_n"):
     try:
         rec[n] = int(rec[n] or 0)
     except ValueError:
@@ -848,6 +1004,17 @@ for n in ("dirty", "wrote", "staged", "unaccounted"):
 # of a run. The counts are the record; the paths are a convenience.
 rec["unaccounted_paths"] = [p for p in rec["unaccounted_paths"].splitlines() if p][:10]
 rec["wrote_paths"] = [p for p in rec["wrote_paths"].splitlines() if p][:20]
+# THE CLAIM IS THE ONE FIELD THAT IS NOT A CONVENIENCE — RM-183 (#291). It is
+# what the destructive-git guard weighs a command against once the run is gone,
+# so it is a list of objects rather than a list of paths: a path alone cannot be
+# released, and a claim that cannot be released wedges the tree. `claim_n` is
+# how many there were, which is how a reader knows the list was truncated.
+claim = []
+for line in rec["claim"].splitlines():
+    parts = line.split(" ", 2)
+    if len(parts) == 3 and parts[1].isdigit():
+        claim.append({"sha": parts[0], "size": int(parts[1]), "path": parts[2]})
+rec["claim"] = claim
 rec["detail"] = rec["detail"][-400:]
 rec["time"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 rec["record"] = "capture_not_made"
@@ -874,8 +1041,170 @@ uncaptured() {
   python3 -c "$UNCAPTURED_RECORD" "$UNCAPTURED_LOG" \
     "$1" "${2:-}" "${RUN_ID:-}" "${TYPE:-}" "${TASK:-}" "${WT:-}" "${DIR:-}" \
     "${dirty:-0}" "${ACC_WROTE_N:-0}" "${ACC_STAGED_N:-0}" "${ACC_UNACCOUNTED_N:-0}" \
-    "${ACC_UNACCOUNTED:-}" "${ACC_WROTE:-}" 2>/dev/null \
+    "${ACC_UNACCOUNTED:-}" "${ACC_WROTE:-}" \
+    "${ACC_TOP:-}" "${ACC_CLAIM:-}" "${ACC_CLAIM_N:-0}" 2>/dev/null \
     || warn "and that refusal could not be written to $UNCAPTURED_LOG either"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# A KILL IS NOT A SILENCE — RM-182 (#290).
+#
+# A killed subagent fires NO `SubagentStop`. Its marker survives, its work
+# survives, and the ledger goes on reporting the run active for the whole of the
+# reaper's grace: measured, five runs Active for between three and nine hours
+# after the processes were gone, closed by hand.
+#
+# THE TWO CASES ARE DIFFERENT EVENTS AND THE SYSTEM TREATED THEM AS ONE:
+#
+#   A KILL IS CERTAIN. Something asked for this agent to stop and was told it
+#   had. Waiting twelve hours on a fact already in hand is not caution.
+#
+#   SILENCE IS AMBIGUOUS. A quiet agent may still be working. The reaper's grace
+#   answers that one and NOTHING HERE TOUCHES IT. A shorter silence threshold
+#   was proposed and refused: it ends agents that are working but slow, which is
+#   the whole of E9. This file reads no clock and adds no threshold.
+#
+# THE KILL WAS ALWAYS OBSERVABLE AND NOTHING LOOKED. `PostToolUse` fires in the
+# PARENT session for every tool call including the one that does the killing,
+# and it carries the tool name, its input and its result. The `task_id` a kill
+# is addressed to is the same id the subagent's marker is named with — measured
+# on one drill, marker and task_id identical. A PID check cannot do this job:
+# subagents are not separate processes, and the MCP container cannot see the
+# host's anyway.
+#
+# `run_retired` IS THE HONEST EVENT. The run did stop. `run_expired` is what the
+# reaper says when it gave up waiting, which is not what happened.
+#
+# WHY THE STOP-TIME CAPTURE IS NOT ALSO RUN HERE, deliberately. A SubagentStop
+# is the stopping run's own event and may sign that run's tree. This is the
+# PARENT's tool call, mid-flight, in whatever tree the parent is working in, and
+# staging and then committing an index from there is the #261 incident with a
+# new trigger. What this leaves instead is the RECORD #277 writes, so the
+# orphaned work is findable without anyone tripping over it (#288).
+#
+# ALWAYS RETURNS 0, AND NEVER exit 2. This is a PostToolUse, and a stop path
+# that blocks was measured retrying nine deep.
+# ---------------------------------------------------------------------------
+retire_killed_task() {
+  [ "$TOOL" = "TaskStop" ] || return 0
+  [ -n "$TASK_ID" ] || return 0
+
+  # THE RESULT, NOT THE INPUT. A `TaskStop` against a task that had already
+  # finished, or that never existed, must retire nothing — and asking what was
+  # REQUESTED cannot tell either of those from a kill. Measured on this harness:
+  # both refuse the tool call outright and fire no PostToolUse at all, so today
+  # nothing reaches this line. That is the harness's behaviour and not this
+  # file's rule, and a shim that acted on the input would be one harness change
+  # away from retiring a run that is still working.
+  #
+  # Three things the harness has to have said, and each is one half of a pair:
+  #
+  #   IT ECHOED THIS TASK. A reply naming a different task is either a different
+  #   kill or not a kill; either way this marker's run is still working.
+  #   IT STOPPED AN AGENT. Monitors and background shells are stopped through
+  #   the same tool and are not runs. `local_bash` is the measured value for one.
+  #   IT REPORTED NO ERROR.
+  #
+  # An unrecognised task kind retires nothing, which is the safe direction: a
+  # harness that renames the kind loses this feature rather than misusing it.
+  [ "$STOPPED_ID" = "$TASK_ID" ] || return 0
+  [ "$STOPPED_TYPE" = "local_agent" ] || return 0
+  [ -z "$STOPPED_ERR" ] || return 0
+
+  # A task_id IS A MARKER NAME, NEVER A PATH. It is model-supplied text about to
+  # be pasted into a filename: `../` reaches outside the markers directory, and
+  # a `session-` prefix names the OPERATOR'S OWN session marker — the one run on
+  # this machine that must never be retired by anything but its own SessionEnd.
+  case "$TASK_ID" in
+    *[!A-Za-z0-9_-]*) return 0 ;;
+    session-*) return 0 ;;
+  esac
+
+  _kmark="$(cat "$RUNS_DIR/$TASK_ID" 2>/dev/null)"
+  # A TASK WITH NO MARKER RETIRES NOTHING, SILENTLY, and the silence is the
+  # requirement rather than an omission: most stopped tasks are not agents, so
+  # this is the common path, and a warning per background shell is noise on the
+  # one surface that also carries a refusal worth reading.
+  [ -n "$_kmark" ] || return 0
+
+  # AND THE MARKER HAS TO BE THIS TASK'S. It records the id the run was
+  # registered under, which for a subagent is the agent id — the same value the
+  # file is named with. A marker reached by any other route does not agree with
+  # its own name, and nothing writes one that would.
+  [ "$(reply_field "$_kmark" session_id)" = "$TASK_ID" ] || return 0
+
+  # NEVER A RUN THIS SESSION DOES NOT OWN. See `remember`: the markers directory
+  # is shared by every session on the machine, and the runs in it belonging to
+  # another repository's session have real processes behind them.
+  _kowner="$(reply_field "$_kmark" owner_session)"
+  if [ -z "$SESSION_ID" ] || [ -z "$_kowner" ] || [ "$_kowner" != "$SESSION_ID" ]; then
+    return 0
+  fi
+
+  RUN_ID="$(reply_field "$_kmark" run_id)"
+  [ -n "$RUN_ID" ] || return 0
+  DIR="$(reply_field "$_kmark" dir)"
+  TASK="$(reply_field "$_kmark" task)"
+  WT="$(reply_field "$_kmark" worktree)"
+  TYPE="$(reply_field "$_kmark" agent_type)"
+
+  # THE SAME CALL THE STOP PATH MAKES, which is what makes a second retirement a
+  # non-event: `observe_session` answers a repeated stop from the instant of the
+  # first and emits no second `run_retired` (#179). `ends_descendants` for the
+  # reason SubagentStop sends it — a killed agent takes whatever it started with
+  # it, exactly as a stopping one does.
+  if REPLY="$(mcp_call observe_session session_id "$TASK_ID" phase stop \
+    ends_descendants bool:true)"; then
+    warn "$TASK_ID was killed; retired $(reply_field "$REPLY" run_id)"
+    say_detail "$REPLY"
+  else
+    warn "$TASK_ID was killed and $RUN_ID could not be retired; the reaper"
+    warn "  expires it as run_expired (IP §6.7)"
+  fi
+
+  # AND THE MARKER GOES, which is the LOCAL half of the double-retirement guard
+  # and not a new one: SubagentStop already exits on an absent marker, so a stop
+  # arriving late for this agent takes the exit it has always had. The by-tree
+  # pointer goes with it for the reason SessionEnd removes the session's — the
+  # run it names is retired, and a signer resolving it would register against a
+  # retired parent and warn about a stale pointer every time it signs there.
+  rm -f "$RUNS_DIR/$TASK_ID" 2>/dev/null || :
+  if [ -n "$DIR" ]; then
+    _kkey="$(tree_key "$DIR" || true)"
+    [ -n "$_kkey" ] && rm -f "$RUNS_DIR/by-tree/$_kkey" 2>/dev/null
+  fi
+
+  # WHAT IT LEFT IN THE TREE, written where it outlives this process — #277.
+  # One reason, `run_killed`, so a reader finds the record by the thing that
+  # happened; the detail says which of the three cases it was and the counts say
+  # how much. The detail does NOT claim the uncommitted paths ARE this run's:
+  # `wrote_paths` is in the record for a reader who wants that intersection.
+  #
+  # A CLEAN TREE WRITES NOTHING, and neither does a run that recorded no write
+  # in that tree. `run_retired` is already on the chain for the run itself; what
+  # had no record was the WORK, and a run with none there has none to lose.
+  if [ -n "$DIR" ] && [ ! -d "$DIR" ]; then
+    uncaptured run_killed "the run was killed and its tree $DIR is not a directory, so whether it left work there cannot be answered"
+  elif [ -n "$DIR" ]; then
+    read_tree "$DIR"
+    if [ "$TREE_RC" != "0" ]; then
+      uncaptured run_killed "the run was killed and reading the tree $DIR exited $TREE_RC: $TREE_SAID"
+    elif [ "${dirty:-0}" != "0" ]; then
+      capture_account "${INNSEGL_LOG_DIR:-$HOME/.innsegl/log}/$RUN_ID" "$DIR"
+      if [ "${ACC_WROTE_N:-0}" != "0" ]; then
+        # AND WHICH OF THOSE ARE STILL AT RISK, with what was in them — RM-183
+        # (#291). This is the claim the destructive-git guard weighs once the
+        # run has left the active list, and it is recorded HERE because the
+        # run's tool-call bodies are not what outlives it: the log directory is
+        # the harness's to prune, and a claim that needed it would evaporate
+        # without saying so. Only against a tree git could answer for; ACC_TOP
+        # is empty when it could not, and an empty claim protects nothing.
+        [ -n "${ACC_TOP:-}" ] && claim_account "$ACC_TOP" "${ACC_WROTE:-}"
+        uncaptured run_killed "the run was killed with $dirty uncommitted path(s) in $DIR, and it recorded writing ${ACC_WROTE_N} path(s) there, ${ACC_CLAIM_N:-0} of them still uncommitted"
+      fi
+    fi
+  fi
   return 0
 }
 
@@ -1393,6 +1722,14 @@ gate is what decides whether it may merge."
       agent_type "$IDENT_TYPE" \
       parent_session_id "$PARENT_IDENT" \
       run_token "$(reply_field "${MARK:-}" run_token)" >/dev/null 2>&1 || true
+
+    # AND IF THIS TOOL CALL WAS A KILL, THE KILLED RUN LEAVES THE ACTIVE LIST
+    # NOW — RM-182 (#290). Recorded FIRST and retired second: the kill is the
+    # parent's own activity, and a retirement that swallowed it would lose the
+    # one tool call that explains why the run ended. See retire_killed_task for
+    # everything it refuses to act on, and for why a silence is still the
+    # reaper's question rather than this one.
+    retire_killed_task
     exit 0
     ;;
 
