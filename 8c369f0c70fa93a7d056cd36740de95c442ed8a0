@@ -1,0 +1,65 @@
+tree 59f0467a2ad4518912aa156b1bccf806c1aebeed
+parent b196ce0dd1064c121443356d77fd48abb306b7ce
+author Innsegl <agent@innsegl.invalid> 1789731778 +0000
+committer Innsegl <agent@innsegl.invalid> 1789731778 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJQYJKoZIhvcNAQcCoIIEFjCCBBICAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFHiYewtwPaAYA4y/Nl1q0Kpe7zowMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE4MTE0MjU4WhcNMjYwOTE4
+ MTE1MjU4WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEcp+N9FcprUFKvwGS
+ 9ceyOiAfGbGpnTfjkQ7BeRkhH8xH6CbDyeBkv14EXu0LwwDFLoCKupSScV2D8o9i
+ OZvcKaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUmYABbdTeFQ3V9U2FojLaXHkrc70wHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNjIxZmE4M2EvcnVuLTUyOTNhY2M4N2NjMTdm
+ YWMzMWVkYTJlYTE5NjhmN2QwMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNjIxZmE4M2EvcnVuLTUyOTNhY2M4N2NjMTdmYWMzMWVkYTJlYTE5Njhm
+ N2QwMAoGCCqGSM49BAMCA0kAMEYCIQCJ9qMBXCWmBfDjfDxmYeDQUzRyOZAoheIo
+ SzpNy+rceQIhALs67euxmty/OjiGosK/D0TzQXTh0+zAGohkzDJwM4JDMYIBKzCC
+ AScCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhR4mHsLcD2gGAOMvzZdatCqXu86MDALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTgxMTQyNThaMC8GCSqGSIb3DQEJBDEiBCD+rJ26YupBr1kxWkyc
+ EMM9dAIq9ATDOI2AtmM1+eriEzAKBggqhkjOPQQDAgRIMEYCIQDBXem0JsUQs01x
+ IvYLgZaQtSfUa+xGsRsLEATtj+QW6QIhAPwaQxlDTDTwBQGiVe8QFQPYJuS0hi9g
+ GKxyVugyLL9q
+ -----END SIGNED MESSAGE-----
+
+test(lifecycle): pin the expiry, horizon and drift defects (#254)
+
+Three tests, written to fail, each naming one verified defect in the run
+lifecycle. No production file is touched; RM-152 (#255) and RM-155 (#258)
+are what turn these green.
+
+SPI-008 (internal/spire/lifecycle_test.go) drives a run through lapse,
+restore, a released credential and a second lapse against a real SPIRE and
+a real chain. The reaper's idempotency key is the run id alone, so the
+first lapse's event answers for every lapse afterwards while reap() deletes
+regardless: the second sweep reports Recorded=false Deleted=true and the
+ledger holds one run_expired where two lapses happened — an action with no
+record (I3).
+
+MCP-078 (internal/rundir/horizon_test.go) drives the shipped run directory
+underneath the shipped get_credential. A run whose first lapse is 39 days
+old, which worked five weeks later and lapsed again an hour before the
+call, is refused restore under a 30-day horizon: the horizon is measured
+from the earliest run_expired rather than from the lapse being restored
+from. The restorer runs zero times.
+
+REC-017 (internal/spire/lifecycle_test.go) reconciles a run whose newest
+recorded fact is later than its run_expired and whose entry the restore
+path re-created. The reconciler reports spire_entry_not_deleted and appends
+a ledger_drift_detected: the legitimate repair is recorded as tampering,
+and an alert is permanent (I4).
+
+Doc 07 carries the three rows, and a note that SPI-008 is claimed twice —
+RM-019 (#27) reserved it for SPIRE entry reconciliation in a row that was
+never added to the catalogue. A human settles the numbering; both sets of
+tests exist either way.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/621fa83a/run-5293acc87cc17fac31eda2ea1968f7d0
+Agent-Run: run-5293acc87cc17fac31eda2ea1968f7d0
+Agent-Task: 621fa83a
