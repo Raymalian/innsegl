@@ -1,0 +1,82 @@
+tree a48ed53e0565c22fffceec381b49748ea81048d3
+parent 9bb4d4ca5830e9e24bc1dac85a6bbad2d7051650
+author Innsegl <agent@innsegl.invalid> 1789849569 +0000
+committer Innsegl <agent@innsegl.invalid> 1789849569 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFEXC8WxPWANWudV4YiWA8EPYEWi/MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MjAyNjA5WhcNMjYwOTE5
+ MjAzNjA5WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdhqmDRQvIY/1f1ik
+ g9Kbz42Nm9t+sN0vCRl34uMlWVmgeeosXinD9oTR+2i0v5UVW9Zw+cW1uKq7QGW4
+ eFqTiaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU1ex/zNI4IyVhzoLYh4npgYTzIGgwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvMWViNTU4N2YvcnVuLWY5NTQwZTA1ODJmM2Zi
+ ZTI4ZThjYzlhMmM3NTQ1YjM4MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvMWViNTU4N2YvcnVuLWY5NTQwZTA1ODJmM2ZiZTI4ZThjYzlhMmM3NTQ1
+ YjM4MAoGCCqGSM49BAMCA0gAMEUCIG4VMHfOoBB3zJURl41UND8aYXKE61gwYNv4
+ t47gEJmPAiEAuwa0cTPRsS1LHUyxnPyocWRcUnh4Enob+Msh8SJqHRUxggErMIIB
+ JwIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFEXC8WxPWANWudV4YiWA8EPYEWi/MAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxOTIwMjYwOVowLwYJKoZIhvcNAQkEMSIEIAAPJJOJ17KCW7yVeUuU
+ wMycIvqEQ/jrDWKpUsEu5XrfMAoGCCqGSM49BAMCBEgwRgIhAKCVuAa/wNCmaBOW
+ qsU3TgJ1qtLuIw51VbwgKibEM2+gAiEAxD0/zIaOHJyNhMepm+UPizHAponaEv9Q
+ ATaxPU2IdUE=
+ -----END SIGNED MESSAGE-----
+
+fix(hook): record a capture that failed (#277)
+
+The stop-time capture reported every refusal and every failure through warn(),
+and warn() writes to the stderr of a SubagentStop, which the harness discards.
+The hook is also forbidden to exit 2 on a stop -- nine invocations, measured --
+so it could not report by refusing either. A refused capture, a failed
+signature and a clean tree were therefore one thing seen from outside: nothing.
+Measured, two subagents stopped within the same minute; one was captured and
+committed, the other was not, and the only evidence of the second was that its
+files were missing hours later. That is the I3 breach: an action was attempted
+and abandoned, and nothing recorded it.
+
+A capture attempt that does not end in a commit now appends one line to
+$INNSEGL_RUNS_DIR/uncaptured.jsonl, overridable as INNSEGL_UNCAPTURED_LOG and
+written 0600, naming the run, the reason, the worktree the ledger knows it by,
+the tree on this machine, the dirty, written, staged and unaccounted counts,
+and the paths on each side -- enough to redo or recover the work. One reason
+per branch of the capture: bodies_unreadable, index_unreadable,
+no_recorded_writes, index_unaccounted, staging_unaccounted, nothing_uncommitted
+and signing_failed.
+
+The signer's own output is kept rather than shouted. It went straight to that
+same discarded stderr, so the one sentence saying WHY a signature failed -- a
+run already retired, a deployment that is not up, a credential the listener
+refused -- was the first thing lost, and a stop that signed nothing looked
+exactly like a stop with nothing to sign. It is replayed to stderr as before
+and carried into the record.
+
+A FILE AND NOT A LEDGER EVENT, which is the one decision worth arguing. A
+ledger event is the better home on every path except the ones that need it
+most: a failed signature and a refused credential ARE the deployment being
+unreachable, and a record that needs the component that just failed is absent
+exactly when it is read for.
+
+Success writes nothing -- commit_recorded already covers it, and a second line
+here would be a second source of truth for one fact. A failed retirement writes
+nothing either: the reaper expires that run as run_expired (IP 6.7), so it
+already has a durable record. What had none was the work. Every failure path
+still exits 0, and nothing on any of them touches the index.
+
+Driven by OPS-085..088 in scripts/hooks/shim-selftest.sh, written first and
+observed red against the shim as it stood: 17 new assertions, all 17 red and
+red on merit -- there was no record of any kind to read -- while the 64
+pre-existing cases stayed green in both directions. 81 passed, 0 failed after.
+The shim was driven under sh, bash, zsh and dash, which wrote byte-identical
+records and exited 0 in all four.
+
+doc 07 rows for OPS-085..088 are owed; the catalog was outside this change.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/1eb5587f/run-f9540e0582f3fbe28e8cc9a2c7545b38
+Agent-Run: run-f9540e0582f3fbe28e8cc9a2c7545b38
+Agent-Task: 1eb5587f
