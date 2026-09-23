@@ -1,0 +1,65 @@
+tree 33b98ab968d68b821ac91a64b1304d74ef0f574f
+parent 921218eb2bfd0fdb147de5a1b2e03efb02c20812
+author Innsegl <agent@innsegl.invalid> 1789237666 +0000
+committer Innsegl <agent@innsegl.invalid> 1789237666 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFCC+j7xSWRu76kW+8CKHkLUvp4v1MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEyMTgyNzQ2WhcNMjYwOTEy
+ MTgzNzQ2WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9JRJx5ZIV9iKwT3P
+ NEdL2UShw0FI37jcd/yRfpcwoyJCld/ornSikrUAMRLtcu8oGAY10gieWxdTxT9V
+ u5QdV6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUD0Loz6VXaPrx/LvnBrnyCXixsWswHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvY2I1OTBiMDIvNGJmNzllNjkvcnVuLWVmYmIxM2ZiYmE3NjU0
+ ZWMzOTk1ODAyYmQyZGY4YjViMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvY2I1
+ OTBiMDIvNGJmNzllNjkvcnVuLWVmYmIxM2ZiYmE3NjU0ZWMzOTk1ODAyYmQyZGY4
+ YjViMAoGCCqGSM49BAMCA0gAMEUCIFTB0AgMvLzhSINo/K8S3qhxsl/i3VVuSeTa
+ j/e+igESAiEAn4powFiax83Swy3lbHnuxMgryhUNNuob0Gh9K8wXX2kxggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFCC+j7xSWRu76kW+8CKHkLUvp4v1MAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMjE4Mjc0NlowLwYJKoZIhvcNAQkEMSIEIExNS3i9yFcGEZtZn3Rs
+ H88v50hKAvv4AtYmUdK7832uMAoGCCqGSM49BAMCBEYwRAIgDAiEVJAshL9b5NUD
+ S2UA4b0An7VZKrzjipg2HHbdGVECIBVdu0ZzX0ZVnDU3o5iiaug59bvAV5QgdwUU
+ vD4boWez
+ -----END SIGNED MESSAGE-----
+
+feat(ci): gate against operator paths, and close the MCP-006 battery (#212, #210)
+
+THE GATE. Two tracked files named the operator's home directory and both had
+reached main. Neither was careless: both sat inside measured evidence, which is
+the trap CLAUDE.md names out loud. The rule had no script, so it relied on
+remembering and was forgotten twice.
+
+scripts/no-operator-paths.sh fails on an absolute path under a user home
+directory in any git-tracked file outside docs/, which is local-only. It allows
+/home/innsegl, the container image's own user — a gate that called both
+Dockerfiles violations would be switched off within a week.
+
+The selftest was observed failing first, against a gate that did not exist.
+Then it was mutation-tested, and that is what earned the sixth case: with the
+allowlist deleted the selftest still reported five passes, because case 4 had
+planted  — which the pattern never matches, so the case had
+never once reached the allowlist it existed to test. It now plants a path with a
+trailing segment, and a fifth case proves the allowlist matches the container's
+user rather than merely starting with it. The selftest plants its own violations
+and assembles the literals from fragments rather than claiming an exemption: a
+gate with an exemption is a gate with a place to hide.
+
+THE BATTERY. MCP-006's closure test aborted on the first tool with no entry.
+observe_tool_call now has ten rows, configured through observeOnVolume first —
+6a37998 left the entry out and said so in that helper's doc comment, and this is
+the commit that reads it. observe_session has no binder, so the transport
+answers  and no entry could pass; the loop now skips what does not
+ship, the same rule the count assertion applies to a deferred cell, and #207
+removes the skip by binding the tool.
+
+The matrix is 88 cells and the whole contract package is green.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/4bf79e69/run-efbb13fbba7654ec3995802bd2df8b5b
+Agent-Run: run-efbb13fbba7654ec3995802bd2df8b5b
+Agent-Task: 4bf79e69
