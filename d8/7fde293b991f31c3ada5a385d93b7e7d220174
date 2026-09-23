@@ -1,0 +1,82 @@
+tree efc7b33cf828aa103d12b228f175a114b759e85d
+parent f4ebcd0a3e1bcd87fe5a4d2024328b5ee364e9fd
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788545857 +0200
+committer GitHub <noreply@github.com> 1788545857 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqmwtBCRC1aQ7uu5UhlAAAiewQAGwIBMFY4IOV+M8R/WsGrLLs
+ p1ZxWQrq5rYBu/nxYBkQIgOgLckaJcK2Ubn99q2qmu5zz4+05D9eEUJpXeg52ydN
+ 2VuGIN6HRwokvnt+P6AxP7Rel9a6SD5Dm01AonJzEYSnc+m5dy8kEs8fpOuNcSue
+ gz/O+Q3bDgk6L/IXk67ijQjmo7iJ/hV3skY7REGFtbQtc9NH+WHdK8qeq5Ih5w0B
+ cgCw0/jZ04hqZhAW3GUcxDTcqFxMihnJuPP/8ACURXYgurYdMB1JKAyuVpQ6k3dk
+ VlkrTutVn45QRcmBHnXVYQse1A/EYHIsiEsonCIGCew32mIPh5t1FlIbVqyRknby
+ KZNRQHn4GXn4C8M2JwF7ZjAbNUfu/MRJiMixqYy1+/YRmqcmnxSTYa+RgLx2Mhlh
+ xg99j63vro154JhuQ8qIfu/luR4i3Wj8ZJgkBGlh15kzleR58JrPKeai+TE02MbM
+ paM6RpobOpYnFEjcPk4hhG5asjPPfHvthbhyzOOIXIBxACcrq09PjzipS6CiPRCk
+ wxuweKyosrsItXq9ZXYsnpka4Qmrv4Epmm51tU3yCoKIwZmeM3yDQSTz54m9xsCl
+ lMACbqVyFnwYvKlZeRrq+6PaW9Gf43JvJrohou1hdvRd5Fn4Q6UCzBZYXqqwgaES
+ dpJ/xWJ26GksZJa6n2dJ
+ =cWjn
+ -----END PGP SIGNATURE-----
+ 
+
+Close the orphaned registration window and fuzz sign_commit (#108, #95) (#154)
+
+* fix(reconciler): gate SPIRE entry-missing/not-deleted drift by event age (#108)
+
+ADR-0018 has the ledger write precede the SPIRE mutation in both
+directions (register_agent appends before it creates; retire_agent and
+the reaper record before they delete). internal/spire's entry
+reconciler (RM-019) compared ledger and SPIRE state with no notion of
+age, so a run inside that legitimate window was indistinguishable from
+one truly orphaned - and OPS-003 found three runs that crashed inside
+register_agent's window, with run_registered on the chain, no SPIRE
+entry, and no closing event, that nothing autonomous ever caught.
+
+Add ReconcilerConfig.MinAge (default six minutes, derived from
+register_agent's worst-case RPC latency plus IP §6.8's clock-skew
+tolerance) and gate DriftEntryMissing/DriftEntryNotDeleted on it, via
+the run_registered/closing event's own ts. DriftEntryUnattributed and
+DriftEntryDuplicated are unaffected: their read order already makes
+them race-free under ADR-0018, and gating them would only delay
+detection of a genuinely planted or duplicated identity.
+
+TestSPI009 proves a run inside the window raises nothing; TestSPI010
+proves one past it is recorded as ledger_drift_detected exactly once,
+with the idempotency key never replayed - the caller that has died for
+good, not the one MCP-011/REC-002 already cover. New test IDs SPI-009
+and SPI-010, not yet in doc 07 (human to add, per SPI-008's precedent).
+
+* fix(reconciler): extract parseTS to satisfy errcheck (#108)
+
+golangci-lint's errcheck flagged the two sites that discarded
+event.ParseTimestamp's error with _. Both already tolerated a bad
+timestamp by falling through to the zero value (oldEnough already
+treats zero as "cannot judge"), so the fix is a named helper that
+makes that tolerance explicit and checked, not a nolint.
+
+* test(failure): fuzz sign_commit in the crash-and-replay campaign (#95)
+
+RM-033 bound sign_commit and MCP-011's own doc comment flagged itself as
+out of date: IP §6.6's third clause, "never a second commit", was untested
+because until now no tool made one.
+
+signcommitharness_test.go brings up its own Sigstore-capable daemon against
+RM-034's requireSigStack, and drives the two named windows from IP §6.5
+(commit_intent with no signature, and a signed commit with no
+commit_recorded) by holding the wrapper's own requests to Fulcio's
+certificate endpoint and to its Rekor search — both exact-path matches on
+sigFailProxy that leave gitsign's own traffic (the trust fetch, its own
+Rekor upload) untouched, so the held window is real and not raced for.
+
+A lease takeover landing in the commit-recorded-missing window is asserted
+to be REFUSED rather than repaired (ADR-0031 decision 6 keeps
+internal/signing's Rekor search unexported on purpose), and "never a
+second commit" is checked by counting commit objects via git plumbing the
+way RM-034's SIG-002/003 do, never by comparing replies.
+
+scripts/test-no-skips.sh's ALLOWED entry for this subtest is removed, per
+its own comment; that gate must now pass with sign_commit fuzzed rather
+than skipped.
+
+Driven by TestMCP011CrashAndReplayUnderFuzzedKillTiming/sign_commit.
