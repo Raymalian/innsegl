@@ -1,0 +1,55 @@
+tree 4cd8c755cd1f8e3baf1ea1cc0f20068eb892f8bc
+parent f13637081908be70254c7448acb45312b5587697
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788599066 +0200
+committer GitHub <noreply@github.com> 1788599066 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqm9saCRC1aQ7uu5UhlAAAt6YQACbGVCa9Jb4WamSzTrVr7E5/
+ pvaNJnHSds/b6ybxEh7OLXUvO/Uc4gMy+9PjCUKwGegkOeSbJ1yz6ZvwW22+YaBi
+ LJXWabuP8aipD5O3jOXmgccu4C1DwDVmrxNbg+0Kjmk2qDneMI+WifRZny+b2uTG
+ K5CQrC1aKYMBySaMe4DsJhFWYessSfkIH9UHlatnFjHFAWKbHybyyHf2s49UnuPo
+ O3VhZABOT1idByWBx5oy1LJ7+CVBCwEMz82E4VhSy81zvYR2Ovbn4mxyEVcxbM3e
+ FRmj7E6FaROZBBXpblocWJR5fg3hNmSoVq/e5IB5Cj2nPDtGbYUbsKsZhwf36foW
+ siX8fTTpwf1kPY86puEbJ1dgUwyZOw5qKlNOTlWDlrnGj0NVwDzBY91jJHcHKwCr
+ xHcn4YAzpH7R2LMvvAYJ9L7+uH58OkbBzB73SwQ+N7TyPVdrf/wSho3+WhRMYGUT
+ Y27fNkAFygOkvwapD2KW+z0yZynbyCCJB69ym48DojQFJZB4UltKGVi9WLEwUdvD
+ r3QbWSYM3FMsJJhV0dLvCpMnL4OQB+3ffQVZ5bS5CVPKrnoOmgl5P8B5Y4sZgxzR
+ 5wiApNCS3GaMjPlqxmTJ0lYKaE0NYayxJwNbIcQtPqWXzaKFWYx6uHKsvcU9P27I
+ d6aoKCPEaXMygeqbNOKW
+ =uuCb
+ -----END PGP SIGNATURE-----
+ 
+
+Run the SPIRE reconciler as a second pass inside innsegl reconcile (#153) (#155)
+
+* fix(cmd): wire the SPIRE identity reconciler into reconcile's second pass (#153)
+
+internal/spire.Reconciler had no caller outside its own tests, so the
+identity drift it detects (spire_entry_missing, spire_entry_not_deleted,
+spire_entry_duplicated, spire_entry_unattributed) ran nowhere in a
+deployment. `innsegl reconcile` now runs it as a second pass alongside the
+existing transparency-log reconciler, one command and one schedule as
+decided, gated by -spire-address/-spire-server-id/-workload-api/-timeout
+mirroring `reap`'s own flags exactly. The SPIRE dial itself is factored out
+of reap.go into spiredial.go and shared by both subcommands rather than
+duplicated.
+
+The identity pass is off by default (existing deployments without SPIRE
+configured are unaffected) and every cycle's report says explicitly when it
+is off, in both text and JSON. Once -spire-address is set, a broken dial
+fails reconcile closed rather than degrading silently, since a reconciler
+missing one of its three halves is not a degraded reconciler.
+
+deploy/compose/innsegl.yml documents the new flags but deliberately leaves
+the pass off: server.conf's admin_ids authorizes exactly one identity,
+spiffe://innsegl.dev/innsegl/mcp, and innsegl-reconciler's container cannot
+attest as it. Turning this on needs a topology/threat-model decision (a
+second admin identity, or reusing mcp's) this commit does not make.
+
+TestOPS016TheSPIREReconcilerIsWiredIntoReconcile (cmd/innsegl) fails if the
+caller is ever removed again, observed failing against the pre-fix tree and
+against a reverted call site before this change landed.
+
+* fix(failure): reset the index before each sign_commit shot stages (#95)
+
+* test(failure): mark sign_commit's fuzzing pending again (#95)
