@@ -1,0 +1,172 @@
+tree 8ed535018a30eb8170e05430b0189e91c542510b
+parent f13912ac48a032cfc47d97d113d67accc15175db
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788541840 +0200
+committer GitHub <noreply@github.com> 1788541840 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqmvuQCRC1aQ7uu5UhlAAATMwQACjwQun+MtSON5cah0t0O1Sg
+ LrBarj2Hz3gHlX5AU0CvvfJ01HKU0ZRvEt/8KUfVXMZnZ5d+umgwZEQB1++89ZaD
+ 4wiRZ9BkHiqzoed55oMjQbseg199NhcGut3dJjOZVUzz3T98HIcPisEaAEyCvvVN
+ jH2A8chYDieiRnd2u+5qAYGjNMOSBIt4JIWfvGrIFbap/VZb2wmOVSk4XP6KgnWD
+ eU0nHWfGT8/jYqdeCVuBwlfIQhZjDPOc6pa+0lZk6p4VYkQmnf+N05urUClTSezU
+ h+ViXIRn9VA4lWHbhsvEIORWO3ekrtS65QvHR6XqbyEm7EnslNDp6ajA0mqgEVol
+ 91DUqZUFO3+ygaRPHTkwc3y3Bpz1fMkB1kE84F6VfL3fW884+scow/TWbZ7H45RV
+ l6szazIOu6w39ocokxoy7rfhgKGB9zk7x6LeoXZtQtOvaJCTimfEbYcEJGdZXaUT
+ uzOHN4FBf5g03m+mWdxiOj1CvIhf3nzuGakpqF56IVlZc/DMQ0F0FH63REHGbj/m
+ bdJewKdF2OpcVe25lzzhPmlWeCNDlPNZOyNzt++iUD0Phyv4uNYdIkRq5q1+BAYw
+ RuG5t4P9lQohiWSy4++HidIqW/JK33VSSlDdqUdJxFD2ne5Hdm11CI1Ma+I9hbbg
+ QmrlP4TEaRC8UJ1/vM/2
+ =u2y3
+ -----END PGP SIGNATURE-----
+ 
+
+Make both layers agree on retry, and give the signing path real backoff (#87, #93) (#152)
+
+* fix(mcp): agree with the ledger on connection-lifecycle SQLSTATEs (#87)
+
+classifyStorage treated every non-constraint SQLSTATE as not retryable,
+including 57P01/57P02/57P03 (operator intervention) and 08006/08003
+(connection exception) - the exact codes a stale pooled connection gets
+when Postgres is genuinely killed. internal/ledger.classify already
+recognised those classes as a dependency outage and reported retryable
+true, so the same real outage produced opposite retry advice depending
+on which layer's pool answered first (ADR-0016 SS2, SS5).
+
+Move classifyStorage into errors.go alongside the rest of the
+classification logic, narrow it only on evidence (the same SQLSTATE
+class prefixes internal/ledger.classify already treats as retryable),
+and add *ledger.StoreError as an explicit case in Classify so a ledger
+failure that reaches it unwrapped carries its own classification
+across instead of defaulting to INVARIANT_VIOLATION. *ledger.StoreError
+cannot literally implement mcp.Classified - ErrorClass's signature
+names mcp.Class, and internal/ledger importing internal/mcp would
+cycle - so this mirrors the existing *spire.Error special case instead.
+
+* test(mcp,ledger): pin the connection-lifecycle SQLSTATE agreement (#87)
+
+MCP-020: classifyStorage now reports LEDGER_UNAVAILABLE retryable=true
+for 57P01, 57P02, 57P03, 08006 and 08003 - the codes RM-028 (#36) found
+it disagreeing with internal/ledger.classify on. Confirmed against the
+pre-fix code first: all five failed with "retryable is false, want
+true" for the expected reason before the classifyStorage fix landed.
+
+LED-014: extends internal/ledger's own table with the two
+connection-lifecycle codes (57P02, 57P03, 08003) it wasn't already
+exercising, alongside the two it already covered (57P01, 08006).
+classify already got these right; this just proves it and keeps the
+set exercised on both sides equal.
+
+* fix(signing): back off Rekor lookup retries with growing, jittered intervals (#93)
+
+RM-070: IP §6.3 asks for bounded retries with backoff and jitter; the
+Rekor lookup in findRekorEntry slept a flat rekorLookupDelay (RM-034
+measured four gaps identical to within 1ms). Turn rekorLookupDelay
+into the Base of an exponential backoff via internal/segment's
+RetryPolicy shape (reused, not reinvented — same shape RM-012 built
+for Rekor anchoring), and add equal jitter on top via a new
+substitutable rekorWait. Multiplier is pinned at 2 so gap n is always
+strictly less than gap n+1 by construction, whatever the random draw.
+
+Adds SIG-009..SIG-012 (uncatalogued unit tests, not added to doc 07):
+growth is structural, two injected random sequences produce different
+interval sequences (RM-034's withheld jitter assertion, driven rather
+than waited for), the retry loop itself with the wait faked out
+(attempts and error class unchanged), and cancellation during a
+backoff stops the loop immediately.
+
+* test(mcp): reproduce the ledger/mcp disagreement on a real killed Postgres (#87)
+
+MCP-021: drives a dedicated, disposable Postgres container to a real
+SIGKILL and asks internal/ledger.classify (through a *ledger.Store) and
+this package's classifyStorage (through an *IdempotencyStore) about the
+same outage, over the same database, on the first call each pool makes
+afterwards. A stub cannot reproduce this - it is only findable because
+the outage is real (RM-028, #36).
+
+Verified against the pre-fix classifyStorage first: the test reliably
+reproduces the exact disagreement the issue measures - internal/ledger
+LEDGER_UNAVAILABLE retryable=true, classifyStorage LEDGER_UNAVAILABLE
+retryable=false, both for SQLSTATE 57P01 - within a handful of rounds
+(the graceful-shutdown window that produces a real SQLSTATE, rather
+than a plain dial error, is itself a race, so the test retries with a
+fresh container up to 8 times and fails outright if neither layer ever
+observes one). Against the fix it passes the same way every run.
+
+* test(contract): stop tolerating the transitional classification (#87)
+
+settleOutage used to only log a "transitional" SQLSTATE-carrying answer
+from either layer on the way to a settled outage, because RM-028 (#36)
+found the two disagreeing on it. RM-067 (#87) fixed classifyStorage, so
+every answer - settled or not - is now asserted to agree with
+internal/ledger via mcp.Classify, and the function fails loudly if one
+ever does not. Verified live against a real killed Postgres: both
+layers now report SQLSTATE 57P01 as LEDGER_UNAVAILABLE retryable=true
+on the very first, transitional call.
+
+* fix(signing): silence gosec G404 on the jitter's random source (#93)
+
+math/rand/v2 is flagged as a weak PRNG by gosec, correctly for
+security-sensitive uses; the Rekor lookup's backoff jitter isn't one —
+predictability here only affects retry timing, not anything an
+attacker could exploit.
+
+* test(mcp): give MCP-021 more rounds against heavy Docker contention (#87)
+
+A full -race run of this package alongside a second agent's own
+container-heavy tests (SPIRE/Sigstore stacks, per #100/#101's known
+address-pool pressure) once burned all 8 rounds without a single round
+landing inside the graceful-shutdown window on both layers - the same
+window this repo's own settleOutage narrows for. In isolation, or on a
+quieter run, 1-4 rounds is typical. Raised the bound to 24: cheap on a
+quiet machine (the loop returns on the first successful round), and
+buys back the margin contention costs on a busy one.
+
+* fix(signing): assert growth and jitter in the SIG-004 Rekor wire test (#93)
+
+RM-034 (#42) deliberately withheld two assertions from SIG-004's
+Rekor-slow case: intervals grow, and repeated attempts do not produce
+identical intervals — a jitter assertion would have been red against
+code it had no mandate to change. #93 is that mandate; add both,
+against internal/signing's new backoff+jitter (previous commit).
+
+Per-attempt floors replace the old flat wantDelay (rekorWait's equal
+jitter guarantees backoff/2 as a genuine floor); growth is asserted
+first-vs-last with a 3x margin rather than every adjacent pair, since
+this measures real wire time through a proxy and the requested-wait
+growth already has deterministic, network-noise-free coverage in
+internal/signing (TestRekorWaitJitteredGapsAlwaysGrow); and the
+original defect — all four gaps within 1ms of each other — is refuted
+directly.
+
+Compiled (go vet, go test -run '^$') but not executed: the Docker
+Sigstore stack this case needs was not run, to avoid contending with
+another agent's containers on this machine (#100).
+
+* docs(signing): record why the trust-material probe stays single-attempt (#93)
+
+RM-070 asked whether trustMaterial's single attempt at Fulcio/Rekor
+reachability is a gap or a deliberate design: it's deliberate. IP
+§6.3's backoff-and-jitter clause is about slow Sigstore, which is a
+different failure mode from Fulcio/Rekor down — the probe already
+gets an explicit timeout, is cached per Signer, and retrying it would
+trade a caller's fast, correctly-classed, itself-retryable refusal for
+absorbing blips on every first Sign(). Left unretried; the spec's
+silence on the distinction is a finding, not something this commit
+resolves by editing docs/01.
+
+* fix(failure): compare SIG-004's backoff as a spread, not a ratio (#93)
+
+* test(mcp): exercise Classify's ledger fallback and fix lint (#87)
+
+TestClassifyCarriesTheLedgersOwnClassification drives Classify with a
+raw, unwrapped *ledger.StoreError - the branch-coverage gate found the
+new case in Classify (errors.go) was reached but its condition never
+took the true path, since every existing call site already wraps a
+ledger error before Classify sees it. This closes that gap directly:
+retryable carries across on a dependency outage, a schema refusal
+stays not retryable, and the ledger's own narrowing is honoured, never
+widened.
+
+Also reorders (ctx, t) parameters in idempotency_realoutage_test.go's
+two helpers to match this repo's convention (golangci-lint's revive
+context-as-argument check) and tidies a stale comment reference.
