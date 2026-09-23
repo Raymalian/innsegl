@@ -1,0 +1,75 @@
+tree eda992abae1aa2de0b186337ed259c1f727928af
+parent 6864932c4f777f5c968830a763ae5c928f3ebabc
+author Innsegl <agent@innsegl.invalid> 1789630121 +0000
+committer Innsegl <agent@innsegl.invalid> 1789630121 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFAyBh/i5gJIJqtyridukBWp7iYNhMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE3MDcyODQxWhcNMjYwOTE3
+ MDczODQxWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErsmu5LXvAMrycajh
+ aAJpBDAjxDCfXExrLrRWefwwprAX3DoK+wkLyaXykaGjhd6VXBdfdfF7QYp+g0NH
+ RalUgKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUkRVGvRRSqf2ucJq4l80Zf5vRuEkwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvMmIzNzdmYzAvcnVuLThkZWM0NzgzZTdkMjNl
+ ODY1MDhiZTY3YWU4YTBlYTk5MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvMmIzNzdmYzAvcnVuLThkZWM0NzgzZTdkMjNlODY1MDhiZTY3YWU4YTBl
+ YTk5MAoGCCqGSM49BAMCA0gAMEUCIQDn7hKXh25UlAAYmvb4jPncrsD5RwdmKCTt
+ KLC3HaU8QAIgNQChqxRlKmzHC5002j2knZppmuY+xGTwLgpho3f1dmUxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFAyBh/i5gJIJqtyridukBWp7iYNhMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNzA3Mjg0MVowLwYJKoZIhvcNAQkEMSIEILuCwjTkX+IFpCYk/vlO
+ wgEKpRLmXbo2l9XBzoNnYYVYMAoGCCqGSM49BAMCBEcwRQIhAIpEe9U2LY4IeEv1
+ 2+UtHxij7npi/6KYuKU9Hn8pm7PhAiA5HCrUOtdc7f3kpHS4P5PWTKChCa0HDOSp
+ gaIHx5/kJg==
+ -----END SIGNED MESSAGE-----
+
+fix(deploy): read the log's pin from the repository, and refuse a silent mint (#242)
+
+The transparency log's tree id is pinned in a gitignored file, so a git worktree
+is a checkout that does not carry it. The fallback for "no pin" is 0, and 0 is
+the value that means MINT A NEW TREE — so bringing the stack up from a worktree
+silently re-pointed Rekor at an empty log. Measured on 2026-09-16: 74 entries
+became 1, and every commit ever signed answered `unavailable` for its inclusion
+proof.
+
+Nothing was destroyed. The old tree was still in the log database, which
+bring-up never recreates, and restoring the pin brought all 74 back with the
+same commit verifying at the same index. Recoverable is not the same as safe:
+the failure is silent, it presents as every historical commit going
+unverifiable at once, and the obvious reading of that is that the log is gone.
+
+Two rules, and the second is the one that matters.
+
+The pin now resolves against the REPOSITORY rather than whichever tree the
+command ran from, reusing the rule RM-148 already established for the link step
+— one answer to "which tree is the repository", in one place.
+
+And minting is REFUSED when a log already exists. Rule one fixes the case that
+was hit and leaves the class: any way of losing the pin — a `git clean -x`, a
+clone beside an existing deployment, a restored home directory — puts 0 back in
+front of a live log. A pin is a cache of a fact the deployment already holds, so
+minting over it is only ever right when there is no log yet, and that is
+checkable. The refusal names the repository that has the pin, the command that
+recovers the id from a running log, and the explicit opt-in for the case where
+minting really is what was meant.
+
+The selftest builds a REAL git worktree, because the bug is not in the pin's
+content but in which file is read: a fixture that only wrote and read a file
+would pass against the broken code, which also read a file — the wrong one. It
+also asserts that a worktree genuinely lacks the gitignored pin, so the case
+cannot quietly stop being a case, and that a machine with no log may still mint,
+or the guard would refuse every first boot.
+
+Mutation-tested by restoring the old rule: three cases go red, including the one
+that would have returned 0 and minted.
+
+Driven by OPS-055.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/2b377fc0/run-8dec4783e7d23e86508be67ae8a0ea99
+Agent-Run: run-8dec4783e7d23e86508be67ae8a0ea99
+Agent-Task: 2b377fc0
