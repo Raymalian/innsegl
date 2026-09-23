@@ -1,0 +1,26 @@
+tree ea52517a447f623d023899a4a38dd446c94389d4
+parent 5843b99e5c470ac2e92cf209c58123925d65734a
+parent 611013b617ddd766abebe4a3be85a8492fc9b0db
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789565362 +0200
+committer GitHub <noreply@github.com> 1789565362 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqpmyCRC1aQ7uu5UhlAAA+QQQALEEFyMg6y7Cgas3bIPqrFX7
+ TgY0ktCEY+IZ/nD4f9VWsRX766Yz+w/Z9Nksl47mcQrflh3ehVwQvJhEF3QWPS/4
+ ALdy+q9gz7oRTVaq7WKKZ/22X7n7yeZfTSwgvVdycl0KlWU6z0mjy6teHIt6WydQ
+ LsMmDXhV/13+sAz3K2PJHF1kgSkYejOlinuHMS63BLpixWQJHcX60X0geQ8MHfk0
+ rYrQW3BEVbnHC/OLgOo/BhBdF46//x9DBQf271BnjQLBdzBt9rKHzGh+t8ZW3GAh
+ T5bNHTH6I/zT68exrFHsBuwWfUxcOGFF5eG9CEz94pqbd6wzrb3NcBvP7+rOIecw
+ XaPB19v+oTloDBfPwkBYDX8rgBChmfFkx4KX6/8Xv9M5QopKZM4VrBJE1M8GF/B/
+ LBPvcbVT5OouTkKBXD6O5KBBTutcHRFynHK8x6Mqa3a62L/N4VknZFHsB4d6spnC
+ Kd1zV8dPuFpqnfHYyJqBtCk5xuXM0hy5YVbT6DQYpCbu5RK9PVrqjrtGTd2HXJYe
+ Hi+92FwIeaXlfz/Sd3Os68IEokUa8DR5545cIVoPAVVbA/xUT9q7MsYfsaNOXe9h
+ f7uWWDB9jUkqWh+TCxBj4Rh/GrNDUV0A7UHvfEsrsCE9oNmK1QiievB592tnxbvc
+ m68dOdmf24siDvuVXMDS
+ =oIZz
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #232 from Raymalian/resign/rm144
+
+Run the sealer on a scoped store identity, not the store's root
