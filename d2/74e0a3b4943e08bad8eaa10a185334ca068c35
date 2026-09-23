@@ -1,0 +1,26 @@
+tree 1941ef1aecbc0deca60883fdaabcf8bdfd3244e3
+parent 2e02a620aaaba0dbc45f56c9c00dd54f5955fe0d
+parent e71f63720c3e303c910042575b326ec8ba9f9a2e
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789563999 +0200
+committer GitHub <noreply@github.com> 1789563999 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqpRfCRC1aQ7uu5UhlAAAmtQQAA9qPcA1eUO6PQWtXd+3kmSr
+ nsvR7p9C0ttufjkqtUk9ZwLW5ysDeiEzvnlxmE9YvQnq/iGLmN9T3ntqZsRI352M
+ Yns9H0CNFZEmjgS7bu20Aj+NeYP53g8Z+tcAmBNSeDjnqHZFgtbfKym6+qNvEay8
+ 3Lyx0NZ+ZTtEze5T7iasxk8EkW4RbE3AupjoyHQuzO2V70JPzQ4vf1D+OksXXS00
+ +YelipJ6pe+8ux4OQiHRArtSdEsXRAGfRhJS2hwJpzdjiTTzDgSmmHoeawhmNFhW
+ hnQlNfZgG5IU9BEPzG8fZ5FntqFvxyAAQ7ouprdRynT/gml5LtRkfhr8kozBMz5T
+ 3LxeAwQSxavCBqiQVTbyeWa0GRk5L263OH6C1BiPaQWEr4nf6t50kISKMcnyX/hx
+ d0t/5fz5Y3MSSsVrruMUfUeWZENbkrL2oJWsg3R40P2/ug8QRfJ/RP98Lz0FuV7n
+ ZaexNGjukuXP41HuJbxg+LI7M+UeBPNC9R7AWvIUv5/VxpCdS8y4eEtUDjE0Z7NQ
+ Whxfs5W3KUgwWcZXPtdZQj6apqqeb1z4TOAzopWydBYnNug1vkrgJsaMpfWhqJM5
+ a1E/e7bK1/ypv61iDPAUsx4W7v4n/fZ3bJLmRYeGuHuWckYhgcurhCDfGW9saS5t
+ 1fK3RIC3Z9bUr2/iEd9X
+ =U4Kv
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #231 from Raymalian/resign/rm142
+
+Let a tool call name its session, so a refused start recovers
