@@ -1,0 +1,72 @@
+tree e0ea7d031cc863a50ff4d7eefaf21ada4100dc07
+parent 5895b34187e9add98017588883b90e0c68415661
+author Innsegl <agent@innsegl.invalid> 1789632766 +0000
+committer Innsegl <agent@innsegl.invalid> 1789632766 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFA7cclhhJkt7Zl+SGN4TGFLBtsF7MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE3MDgxMjQ2WhcNMjYwOTE3
+ MDgyMjQ2WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbE58ZTS35CpRRdPe
+ mBcn3+PbsyhfokvKNAGht62Fa909qVqGgPJiFXHEJfARI4Zs9azsDeJi9ZeufP+2
+ kraEjKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUlbeADUw0jRGkcRLSOibWIX9tOGwwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvZTJlOGQ2NWMvcnVuLTZlN2JmZGE0MTUzNDZh
+ ZjlmNjI5MzkyNjE2ODUzN2JhMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvZTJlOGQ2NWMvcnVuLTZlN2JmZGE0MTUzNDZhZjlmNjI5MzkyNjE2ODUz
+ N2JhMAoGCCqGSM49BAMCA0gAMEUCIDdcV8xHjZJy+NDFY42lBUM1UQPa4zyC5rIQ
+ IYAb4e+XAiEAiSdLisKVXeYTI7M1/cmYW2AnOaD0SaoB4wykEYj4CFExggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFA7cclhhJkt7Zl+SGN4TGFLBtsF7MAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNzA4MTI0NlowLwYJKoZIhvcNAQkEMSIEIOGZ9migqUB820O5PBU/
+ +garDFZ/ifMrBxYDw88fOoPxMAoGCCqGSM49BAMCBEYwRAIgXWmT3v7FtVIaRqgu
+ Yrl6M+oHWiwdusb2Yo5poX3p/6YCICVFQOQP7E8Y37ixEBBsUJ6CboVSOzFzpQNv
+ 5a+Si5Po
+ -----END SIGNED MESSAGE-----
+
+test(reconciler): give RM-104's cases their catalog ids, and report the drift (#169)
+
+RM-104's check shipped with eight tests and no doc 07 rows, so its cases had no
+catalog identity. Assigning them found the hazard the issue itself warned about:
+"nothing in this repository enforces test-ID uniqueness, and three collisions
+have already been caught by hand this week."
+
+Three more were caught by hand here. REC-009, REC-010 and REC-011 were about to
+go to these cases while the rebase tests already held them — and the reason that
+was invisible is that those three had no catalog row to collide with. The writes
+cases are REC-006..008 and REC-012..016; the rebase cases keep the ids they
+already use and now have rows describing them.
+
+scripts/test-ids.sh reports both directions, and it found more than it was
+written for: 75 test ids exist in the code with no row in doc 07, across GH,
+LED, MCP, OPS, SEG, SER, SPI and VER. Every one of them is an id the next person
+can reassign with nothing to notice the collision. Cataloguing them is the
+maintainer's call and is not done here — doc 07 is a spec document, and 75 rows
+invented by inference is exactly what "never edit a spec document to match an
+inference" forbids.
+
+It is a `make` target and not a CI gate, because doc 07 is local only: `docs/*`
+is gitignored, so a runner has no catalog to check against. Saying that in the
+script is better than a gate that silently passes because it found no catalog.
+
+Two measurements shaped it. The reverse direction cannot look only for Go
+functions — shell self-tests carry their ids in comments and the frontend's
+cases are TypeScript, so a `func Test` search reported thirty FE rows as
+untested when every one is a .test.tsx. And its default catalog path resolves
+against the REPOSITORY, because docs/* is gitignored and a worktree does not
+carry it: the same shape as RM-148's link and RM-150's log pin, found by running
+it from a worktree and getting "no catalog".
+
+What it cannot see is stated in the script: two different cases sharing one
+catalogued id read here as one id with several tests, which is also the normal
+and correct shape — REC-004 has five test functions, all facets of one case.
+Telling those apart needs someone who knows what the case is about. What this
+removes is the silent half.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/e2e8d65c/run-6e7bfda415346af9f6293926168537ba
+Agent-Run: run-6e7bfda415346af9f6293926168537ba
+Agent-Task: e2e8d65c
