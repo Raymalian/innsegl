@@ -1,0 +1,77 @@
+tree 51c59f1cb1958a7386304930e1f2c10761c87c46
+parent 59e3487ccd2cec261b33a8cb9126a32b0fc4ac59
+author Innsegl <agent@innsegl.invalid> 1789848147 +0000
+committer Innsegl <agent@innsegl.invalid> 1789848147 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFA4yio+UsQ7l7udSFnkNsQtdfsjEMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MjAwMjI3WhcNMjYwOTE5
+ MjAxMjI3WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERnRdeK6Pa8wC0wtM
+ bIvZeZwxOeUna0533Rs2aEuyVijmhCYVpaRsBPIxF2VluayQzoHg13n5dc6asjYn
+ k2Hem6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUiGiC6ThHgBzftP627jv6bWI1S04wHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvYWU0YjVhODIvcnVuLTdkZDBlNWM3MTQyMmU2
+ YTM0OTBiZmNkNDkwZWI3MDE4MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvYWU0YjVhODIvcnVuLTdkZDBlNWM3MTQyMmU2YTM0OTBiZmNkNDkwZWI3
+ MDE4MAoGCCqGSM49BAMCA0gAMEUCIQDHa63zs/u9gvB8+9eG8I1HSEy30iaEnB78
+ j80XOXb4fgIgJbmaNpW5ipa6zGlWPGhcjzzBuYCscmc8VMNLCQA5Bk4xggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFA4yio+UsQ7l7udSFnkNsQtdfsjEMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxOTIwMDIyN1owLwYJKoZIhvcNAQkEMSIEIJwJZXhcWUUE6ZCgTiX/
+ zBeLNyKP1xOEXce8CVGIGhhrMAoGCCqGSM49BAMCBEcwRQIgN+EhMjvC4RDQO3yy
+ RHTz6SE5BHNGSzMbQMEnjXko8skCIQDRaw92WcwduZKgUQHjE2ytgNYivy/IzTXQ
+ FCZ/emAscg==
+ -----END SIGNED MESSAGE-----
+
+fix(scripts): tell an unreachable log apart from a failed check (#281)
+
+verify-branch.sh matched exit 0, 4 and 5 by name and swept everything else
+into its failure bucket. `innsegl verify` exits 6 on a configuration it
+cannot verify with, so an ordinary commit run through an unconfigured
+verifier came out as "claim(s) an agent identity that does not hold" — an
+accusation of forgery levelled at a commit nothing had looked at. doc 06 P2
+forbids that collapse, and it is the collapse that teaches people REFUSED
+means --no-verify.
+
+Exit 6, and any status the gate does not recognise, is now UNCHECKABLE: it
+still fails the gate, with its own exit status and its own words. Every
+non-empty bucket is reported; the exit status follows precedence, failure
+first.
+
+The verifier itself was measured correct and is unchanged — with the log
+unreachable it returns 4 and renders VERDICT: UNAVAILABLE, with the log up
+it returns 0.
+
+Driven by verify-branch-selftest.sh case 4, watched failing against the
+pre-change gate: "an unconfigured verifier returned 3 — a commit nothing
+looked at, called a forgery (doc 06 P2)".
+
+The selftest could not have caught this, and is fixed alongside:
+
+- It needs both URLs and never checked; unconfigured, every case measured
+  case 4 and three of them reported it as a failure of something else. It
+  now refuses up front and says what to export. The documented Rekor port
+  was stale.
+- Its pinned fixture had rotted — the deployment has been re-keyed since,
+  so the certificate no longer chains and the current log holds no entry.
+  Measured: the fixture failed checks 1 and 2 unforged, so case 2 had been
+  going red with no forgery in it. Re-pinned, and the pin is now verified
+  before anything forges it, telling a rotted pin from a deployment that is
+  down.
+- Case 3 gated 164 real commits and asserted the whole range was
+  inconclusive. The rotted fixture sat inside it and genuinely failed, so
+  the gate correctly returned 3 and the case reported a P2 collapse that
+  was not there. It now gates one commit, already known to verify, and
+  moves only the Rekor URL.
+- Case 4 is new, and each case carries a comment saying what it proves.
+
+Measured under sh and bash: 4 passed, 0 failed.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/ae4b5a82/run-7dd0e5c71422e6a3490bfcd490eb7018
+Agent-Run: run-7dd0e5c71422e6a3490bfcd490eb7018
+Agent-Task: ae4b5a82
