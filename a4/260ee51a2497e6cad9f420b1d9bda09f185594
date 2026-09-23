@@ -1,0 +1,54 @@
+tree 7fb9b39227601ce3c4db76e2071b7de4aa3d1edf
+parent d084363188630b6946984b1d0b04cd942eec53fc
+author Innsegl <agent@innsegl.invalid> 1789569429 +0000
+committer Innsegl <agent@innsegl.invalid> 1789569429 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJQYJKoZIhvcNAQcCoIIEFjCCBBICAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFC5ko3w0s57hqXeawoosA9HzbGucMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTQzNzA5WhcNMjYwOTE2
+ MTQ0NzA5WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9JwzSB5EUiRDyyjB
+ YxBmk5SSHVQKTIv8bquuCAPQwejYsArl581zIzH2THaCGIOtkOTom7/S2b/GXM5o
+ au+XoaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUhzZjTmpydA72mEJP3l2ho5g8t/wwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvNzIxMTZmMGYvcnVuLWMwNjYyNDQwNTFkOWU0
+ ODdkNzNlZTZkZjY4YmU0ODE1MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvNzIxMTZmMGYvcnVuLWMwNjYyNDQwNTFkOWU0ODdkNzNlZTZkZjY4YmU0
+ ODE1MAoGCCqGSM49BAMCA0kAMEYCIQC0BZycT19njhYSmO7NBXaQo2EYoNKnElf4
+ re6FhM5FRwIhAJhKYsC3MqxyFmb15wn50vEKnIrfxr5IO0pLqaGET8UmMYIBKzCC
+ AScCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhQuZKN8NLOe4al3msKKLAPR82xrnDALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTYxNDM3MDlaMC8GCSqGSIb3DQEJBDEiBCA0MN1K+nQkSsHbpwWS
+ eW2E5ry1RGX6ij58YFZ086AqbzAKBggqhkjOPQQDAgRIMEYCIQDQdgp/WzJrBM7u
+ RalI28Krd88z/OyVTHuB2hI1N+YDigIhALyAZwY32GZLsCEl/KeKNx2zpzZ/G1LC
+ cMamPt/lHgDa
+ -----END SIGNED MESSAGE-----
+
+fix(scripts): write a schedule unit on a host with no scheduler installed
+
+OPS-035 installs a schedule and reads the unit back. It passed here and failed
+in CI, because `platform` answered two questions at once and only one of them
+matters when writing a file.
+
+A Linux container usually has no `systemctl`. `platform` returned empty, install
+refused as unsupported, and the test failed having proven nothing about the unit
+it exists to check -- the failure printed the unit's own text, which is what a
+fatal install does.
+
+Writing a unit needs the OS layout. Loading one needs the scheduler. Those are
+separate, so they are separate functions now, and `--no-load` may fall back to
+the layout: nothing is handed to a scheduler, so the absence of one is not a
+reason to refuse. Without the flag a host with no scheduler still cannot
+install, which is the honest answer there.
+
+Reproduced the CI condition by running install with systemctl off the PATH:
+refused before, writes the unit after. The refusal path is unchanged and still
+asserted.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/72116f0f/run-c066244051d9e487d73ee6df68be4815
+Agent-Run: run-c066244051d9e487d73ee6df68be4815
+Agent-Task: 72116f0f
