@@ -1,0 +1,57 @@
+tree c96df01c0fef7c128d7db493dde7039245514a05
+parent bd7d0ad19409f3082b0d1b824e0bdf37f5a698f2
+author Innsegl <agent@innsegl.invalid> 1789246342 +0000
+committer Innsegl <agent@innsegl.invalid> 1789246342 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFEEAHE4JFK/OwdkJG4HSy5eJ/vPWMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEyMjA1MjIyWhcNMjYwOTEy
+ MjEwMjIyWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEknCuoEct0BVyc5O/
+ p1LYyUpsr1NpGWhjwgCJ7iUNUVHeYLlu8eS4rUWiZS4D9o4OVnXUpOhuQ9Q1EtI3
+ u0vLHaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUiOf9Hnv28LAGINuxgXOvMkUfe18wHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvY2I1OTBiMDIvYjM4ZjMzNzIvcnVuLTk2NDA0ZjQxNzlhMGMw
+ ZjhiOTYyMWY4YTdhOGE5MmNmMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvY2I1
+ OTBiMDIvYjM4ZjMzNzIvcnVuLTk2NDA0ZjQxNzlhMGMwZjhiOTYyMWY4YTdhOGE5
+ MmNmMAoGCCqGSM49BAMCA0gAMEUCIH64iz4Nyj3WHGWNHzqba0ZzItds00a4B5Hh
+ DcEQ2eglAiEAgyAsYajsHkyn8wZfaSz4q1AQybs/vvZ+n/vxIzciMQMxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFEEAHE4JFK/OwdkJG4HSy5eJ/vPWMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMjIwNTIyMlowLwYJKoZIhvcNAQkEMSIEIDGitUGbLVpDWywTb0VE
+ M2X1SXhrcwYpxGhbHJcdUGJgMAoGCCqGSM49BAMCBEcwRQIhANcTEzYy+f+Vgd+v
+ qpT29X1TMtsnPcOuxX9ueZz9m0wnAiAeVTiHdLSh93pblYQDOGJ8F0m8USMYDHm3
+ CvBt4U2CdA==
+ -----END SIGNED MESSAGE-----
+
+fix(deploy): own /sessions in the image, so observe_session can write (#211)
+
+Docker initialises an empty named volume from the image's content and ownership
+at the mount path. /sessions does not exist in the image, so the daemon created
+the mountpoint root-owned and the MCP, which runs as uid 1000, could not write
+into it. Every observe_session start refused:
+
+  the session's run was registered and the mapping to it could not be written:
+  open /sessions/....part: permission denied
+
+That is the same defect the line above it already carries a paragraph about for
+/work, a second time, and it made the tool that moved the session bookkeeping
+into the MCP unable to keep any of it. It was found by RM-129's (#208) first
+live run of the rewritten harness shim, which is the first caller of the tool
+against a real deployment.
+
+Loud rather than silent: a start that cannot write its mapping refuses, and a
+subagent with no identity does no work (IP §6.1), so this cost one command to
+find rather than a day of runs that stayed Active.
+
+Verified by recreating the volume and restarting the stack: /sessions is now
+owned by the image's user, and a full register / six tool calls / retire cycle
+through the shim completes with the mapping written and the run retired.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/b38f3372/run-96404f4179a0c0f8b9621f8a7a8a92cf
+Agent-Run: run-96404f4179a0c0f8b9621f8a7a8a92cf
+Agent-Task: b38f3372
