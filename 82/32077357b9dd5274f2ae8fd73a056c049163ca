@@ -1,0 +1,64 @@
+tree 4f0b55e500ec172496c99b9d44309e35125c9389
+parent 6a379985c88f3801ad9824a71544ee97fc2460fd
+author Innsegl <agent@innsegl.invalid> 1789236876 +0000
+committer Innsegl <agent@innsegl.invalid> 1789236876 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFANvNdbLurSDCwOs78lmNjFqR4omMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEyMTgxNDM2WhcNMjYwOTEy
+ MTgyNDM2WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuCOF7xByGVYugy49
+ daLJ+6AsKyq55Rzzh7/+qvs6R9AlbsXnXUuBD+d/gwHT6NWBUDsBmpNy0TiFAdhY
+ 18ZcqqOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUkjhEw0cE82OT1/YBtBdU9ws/C7cwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvMzYyMDYxNmYvNGJmNzllNjkvcnVuLTAyMTYwNTk4ZjZlZDNl
+ OTYwMTk0ZjEyYmI4NTExODQ3MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvMzYy
+ MDYxNmYvNGJmNzllNjkvcnVuLTAyMTYwNTk4ZjZlZDNlOTYwMTk0ZjEyYmI4NTEx
+ ODQ3MAoGCCqGSM49BAMCA0gAMEUCIGoSJpjLbqJpoTLtbPcJTnNN32YZBoNlbjc/
+ rQCR3O1aAiEAiyN6wZl82ibcKaKAZjlTN5XQj6qTv25S7ZvaVOzNnEYxggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFANvNdbLurSDCwOs78lmNjFqR4omMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMjE4MTQzNlowLwYJKoZIhvcNAQkEMSIEIAdaO9iieasMFzrIe23Y
+ E6P0k76N/9HQJU40hTbeq7jkMAoGCCqGSM49BAMCBEYwRAIgPsMx3/LFYr0+qW2N
+ zWpI4pBSA/MDWjKKBsf41Av5+wMCIGkYbwtfp9LmLM1HgJhpfvp722hyiowcaxgv
+ l4Cx21sa
+ -----END SIGNED MESSAGE-----
+
+feat(mcp): add describe_workspace (#205)
+
+Driven by MCP-039..MCP-043, written first and observed failing twice: once
+with no tool to call at all, then against a stub that answered nothing, so
+every row failed for the reason doc 07 names rather than for a missing
+symbol. MCP-043 is the strongest of the five -- it runs the reference
+shim's own derive_task beside the Go for every branch shape the shell
+covers and refuses a disagreement, which is how the greedy RM match, the
+throwaway worktree-agent branch, the unborn branch and the detached HEAD
+were settled by measurement instead of by reading.
+
+The derivation is the shim's, moved: the main worktree resolves the
+repository, the branch is the one THIS tree's commits land on, the task is
+the RM number the branch carries or the branch folded into doc 02 5's
+grammar, and repo comes from origin through event.ValidateRepo -- never
+synthesised from a directory name.
+
+The one new deployment value is INNSEGL_HOST_PROJECTS, written from the
+same INNSEGL_PROJECTS the mount is written from so the two cannot drift.
+Unset, outside the mount, or not a working tree, the tool refuses with its
+own message and an existing IP 4 class. A guessed translation describes the
+wrong repository confidently, and the answer is on its way into an
+append-only record.
+
+One refusal the shim does not have: a linked worktree that is not under its
+repository. The shim left that relative path empty, and sign_commit reads
+an empty worktree as the repository itself (MCP-029), so an empty answer
+would send the next call to a different tree.
+
+100% statement coverage on internal/mcp, every error path included.
+
+Agent-Identity: spiffe://innsegl.dev/agent/3620616f/4bf79e69/run-02160598f6ed3e960194f12bb8511847
+Agent-Run: run-02160598f6ed3e960194f12bb8511847
+Agent-Task: 4bf79e69
