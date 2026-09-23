@@ -1,0 +1,60 @@
+tree 37fb17f439cef7d741ebb0c5aca1a7aea0bf7457
+parent 81551fa36fa55d1ce81351548d9ff9bd8572f5d0
+author Innsegl <agent@innsegl.invalid> 1789846762 +0000
+committer Innsegl <agent@innsegl.invalid> 1789846762 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFBXE/vpO0UadCZrajmn2h7h2YD4KMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MTkzOTIyWhcNMjYwOTE5
+ MTk0OTIyWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAELHMfAiu/UB34jkI4
+ AlsUSBjYGuizP21Df60PUJSt9ZPnE/SZ0Ovfm6H9MZhRIWyG4V7hipqBOFygCyK8
+ ZxNm66OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUU2reaxXP9pZ4ndsBu5HcIhmQdCgwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvYWU0YjVhODIvcnVuLTM3NWZmNzFjYzhiODhk
+ YTgzYWZiMmIyZGY2NzczZDJmMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvYWU0YjVhODIvcnVuLTM3NWZmNzFjYzhiODhkYTgzYWZiMmIyZGY2Nzcz
+ ZDJmMAoGCCqGSM49BAMCA0gAMEUCIEfxnpOg5iR0WisjMM+SoFutaBfZdzfpc/PX
+ uX9Hlz2IAiEAu5yUNCiR44/1Mz8UJqLW69qeBz0ABJ6YflUxM6vJp/ExggErMIIB
+ JwIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFBXE/vpO0UadCZrajmn2h7h2YD4KMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxOTE5MzkyMlowLwYJKoZIhvcNAQkEMSIEIM2z4M/dNBP0kiAZ3nL1
+ YgK1AbSJ0TABUoj0rEuEzaCwMAoGCCqGSM49BAMCBEgwRgIhAIJNyALG8Na5+JLX
+ 0Veot0OtQ35KBURV8Au0XMB4bftrAiEAo1fRV1Pivnx0a0u89+WUjQIcgUkkxytK
+ ZdYVoRCgqEc=
+ -----END SIGNED MESSAGE-----
+
+fix(scripts): refuse the destructive test packages while the stack is up (#275)
+
+test/failure re-points the transparency log and test/smoke ends its teardown
+in `docker compose down -v`. Both are correct on a clean host; five wrapper
+call sites reached them without saying so, and the rule written into the
+contributor guide after the first incident was broken twice more in two days.
+
+scripts/test-suite.sh is now the one place that decides what the whole suite
+is, how a running deployment is recognised, and what each destructive package
+does to one. Every wrapper asks it: coverage-floors.sh, test-no-skips.sh, the
+Makefile's `test`, `cover` and `smoke` targets and the CI coverage job. On a
+host with nothing running it answers `./...`, so CI runs the tree it always
+ran and both packages stay reachable.
+
+Reaching either package refuses rather than proceeding and being harmless by
+luck: internal/stackguard asks the same script from each TestMain, so a bare
+`go test ./test/smoke` is stopped before the first container. The refusal
+names what is running, says how to run the package properly, and takes a
+named opt-out — teardown-guard's shape, for teardown-guard's reason.
+
+Driven by scripts/test-suite-selftest.sh, watched failing first: every wrapper
+shape that reached a destructive package goes red, and the two controls that
+keep it from becoming a ban — an ordinary package with the deployment up, and
+both destructive packages on a quiet host — stay green. internal/stackguard's
+tests were written against an undefined symbol and observed failing for that
+reason before the package existed.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/ae4b5a82/run-375ff71cc8b88da83afb2b2df6773d2f
+Agent-Run: run-375ff71cc8b88da83afb2b2df6773d2f
+Agent-Task: ae4b5a82
