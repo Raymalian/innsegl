@@ -1,0 +1,23 @@
+tree 58d1fcab69f6690138088dad7b846df31d19cea5
+parent 60561a9a6031849fcaf59893587b0b3c44be9066
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788533955 +0200
+committer GitHub <noreply@github.com> 1788533955 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqmtzDCRC1aQ7uu5UhlAAA2VgQAHQ5UBWcwNHPnxxqOGv7IXrR
+ McJr2/cQmc1QPbwRQLFnoZczcNGnHAWPWltt1fnUUxDklhHefkgmDjGIpBwYip5+
+ QJ6OgX3l43VOX0rhcCPgdL22CU7m+92VFHC0+iGKdxX8xCcvuavrfjyTpLhQyROK
+ 9pfFHLdDSTybKWIGZjekwVvRPWqOWbUUcdONhRKwJSwtWSpdoqUD0WWBup1M5OgE
+ n2X+ZycefEBRWiPZw2ccep6+WOfiM2KHVcEtBoVaNZG83Ourjes9yucnJ9mAAzlc
+ 6Yj/H3w4ccCTYW/vqSpE7nVv+CJWyzNd2Bv0aoGd3NXSwzpxY1guin+r7wWVmq/W
+ +GBlZG644QyKTQRFTw05+n+y5L3edNFV9vlp4LIR224Etd6zKyiuOV0igzCTGEBU
+ B27dGSXPtLEq6EwllERZdt218g8LKIjPh+eq8j/lVJmncEclT+v5FbUeMzamrrBX
+ 1aphWny2g5/dIYFnFosG8X6GpyQyc5HfZflW1KoVcUpriqz/ldTyvS6hT7bynONG
+ c425uwohjCN+d8T1FCjMbwLwmLkgeuA+paveEg+awli6yX0jqLu5yXqnJ/nXlbNz
+ IOmps4e6t5q8u9eocE7Pi9/GqsIbx4w6qs8cw8GGoZO/LB0irkEOh/tePCObl7/Y
+ myHI2jDSLTpLLqXVWYj4
+ =Vp0J
+ -----END PGP SIGNATURE-----
+ 
+
+fix(ledger): never retry an unkeyed append on an ambiguous failure (#148) (#149)
