@@ -1,0 +1,99 @@
+tree 25b4fd312eb367d1fb5b48865eab50f2f63342ae
+parent f701b1f22c6d3afa0f786ae5d3eb181d4c1f4caf
+author Innsegl <agent@innsegl.invalid> 1789246368 +0000
+committer Innsegl <agent@innsegl.invalid> 1789246368 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFCtObeP8Zaij8vIerQPydJZTrrLOMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEyMjA1MjQ4WhcNMjYwOTEy
+ MjEwMjQ4WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOQY+MPclrq2/CpAo
+ nWhpsTnOdAXCTfWg8hwdUEAT+UpG1K3lCJVK7ozs6hd1zlG0eoJTa5PPHLlO8aDE
+ gaS2C6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUIO8uzPKofdodHQn+yq6+8VCDmAQwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvY2I1OTBiMDIvYjM4ZjMzNzIvcnVuLTkwZTM5MTlhMmE0M2Iz
+ NTMxMjhjOTU3OGJkMWM2MjU2MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvY2I1
+ OTBiMDIvYjM4ZjMzNzIvcnVuLTkwZTM5MTlhMmE0M2IzNTMxMjhjOTU3OGJkMWM2
+ MjU2MAoGCCqGSM49BAMCA0gAMEUCIQDFSsihrBpCU7q0r7QnCEIdgaeHB4lXz7QN
+ X9DPRBxo6gIgCM7zv/1H8WZOb0x6L4F8yMJLwIZ2LKHD/k5251mg1YkxggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFCtObeP8Zaij8vIerQPydJZTrrLOMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMjIwNTI0OFowLwYJKoZIhvcNAQkEMSIEIDNdXaR17CjBK2SAGy1D
+ QT8ZFicqfZAQrhOpZUbvrH3NMAoGCCqGSM49BAMCBEYwRAIgQzNiq9FUtiO8EBvL
+ 1ENswMgyM27Hrq/UMV1NLw5qs+4CICPOYlTqxcpkje98IY//9D7/120vtld9gyHf
+ eS9rkz27
+ -----END SIGNED MESSAGE-----
+
+feat(hooks): rewrite the reference shim onto the three ingestion tools (#208)
+
+RM-129. The shim was 807 lines across six harness events: git plumbing, a
+`shasum` digest, a `$LOG/<run>/<digest>.json` layout, and a directory of marker
+files whose line order two other scripts had to agree about. Every one of those
+was work a second harness would have to reimplement identically, which is why
+one harness got identity AND an activity record while every other harness got
+identity and a blank log.
+
+It now reads its own event, forwards it, and exits 0. `observe_session` (#207)
+takes the whole identity lifecycle and the bookkeeping; `observe_tool_call`
+(#206) takes the digest, the body and the `tool_call`; `describe_workspace`
+(#205) is reached through observe_session, which composes it. The shim derives
+no branch, folds no task, parses no remote, digests nothing, and knows nothing
+about where a body is written.
+
+Driven by OPS-019, OPS-020 and OPS-021, written first in
+scripts/hooks/shim-selftest.sh and observed failing against the old shim: ten
+failures naming register_agent where observe_session belonged, an absent
+observe_tool_call, a local `shasum` and a local `worktree list`. The selftest
+drives a synthetic payload for each of the six events against a stub that
+records every tools/call, and its negative cases are the point — a shim that
+still digested locally would pass every positive assertion.
+
+Three things stay, deliberately, and the file says why at each one. The `git
+commit` refusal must BLOCK the tool call, which only a harness can do; reading
+this harness's event shape is the shim's whole job; and one remembered run id,
+because a harness event carries a session id and never a run id, while the only
+tool that maps one to the other also registers — and register_agent is metered
+per caller (ADR-0025), so asking it per tool call would exhaust the meter.
+
+Four things did NOT move and are named in the file rather than left to be
+discovered: the 90-day retention sweep (whose writer is now the MCP, so the
+sweep belongs there), `make innsegl-link`, the by-tree pointer the signer reads,
+and the stop-time capture of ADR-0046. They are what remains to move.
+
+The transport is one python3 client instead of curl, a dumped header file, four
+`sed` expressions and a `printf`-built request — which also removes a real bug:
+a branch name carrying a quote used to build a malformed call.
+
+The frozen derivation moves to scripts/hooks/reference-derivation.sh, sourced
+only under INNSEGL_HOOK_LIB and reachable from no event. MCP-043 compares the Go
+port against the shell it was ported from, and a port whose only specification
+is a deleted file is one nothing can catch drifting. The file says, at the top,
+not to copy it into a shim.
+
+One bug the live run found and a case now pins: `cmd && { ...; warn-if-detail }
+|| warn-failed` returns the last conditional's status, so the failure arm fired
+after a SUCCESSFUL stop — the hook printed "retired <run>" and "could not retire
+<run>" one after the other. Both stop paths are if/else now.
+
+Measured against the 807-line, 29-computation baseline: 653 lines total, 283 of
+them code, and ten residual local computations, every one inside the four blocks
+above. Shell-outs in the dispatch path, the reproducible proxy: 62 to 26.
+
+Live, against the running stack: SessionStart, SubagentStart, six PostToolUse
+calls, the PreToolUse refusal, SubagentStop and SessionEnd. The ledger shows
+run_registered, six tool_call events at chain positions 17157-17162 and
+run_retired; the activity log shows six entries, each with its body kept and
+integrity "verified"; the dashboard renders "6 checked against the ledger, 0
+altered, 0 past the window". Never asserted from memory.
+
+parent_run_id is not carried by this path: observe_session takes no such
+argument, so a subagent registered through it is a root run. Stated here rather
+than left as a silent loss of ADR-0045's third member.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/b38f3372/run-90e3919a2a43b353128c9578bd1c6256
+Agent-Run: run-90e3919a2a43b353128c9578bd1c6256
+Agent-Task: b38f3372
