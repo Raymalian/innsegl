@@ -1,0 +1,26 @@
+tree 4bac2ee2d308cd74d82a651c11f50badfcccc6a2
+parent 438414e7881d3cbd8d17bd623ab099cb5e5ea5ad
+parent a7725dc80e4d4214d3fb774403bc8a79d03ef40f
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789571139 +0200
+committer GitHub <noreply@github.com> 1789571139 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqrBDCRC1aQ7uu5UhlAAArMEQAJPj23piPgLoSzj7MQoi8o4o
+ Imxb59YiN+C1hC6oOpLN0z3rKtp6qTyt58MXP+QcdNl8hKbHibnekaZiRvtFS1Xr
+ 7BZOS68wsLnvthVU3qzZkvvv12pd0sORRa04jRmM7ovPKiIwJshhjKGt+m4WylZ6
+ AcKJn71n2ut7nPBbvrzK2OxCbOdjzfCkK5dQzTq2RJIW2yEAws990Kz+WE5NTZwN
+ PEG7nS9/q45j5Ed2TyFCoGHDGkaXwuzVq8f1Z8CCrL4eUaqEWgBMib5zvPA0dstf
+ n5zKt6WEDmTo1dvMmA28c5gTwqkgIQ1s/RcCbVhRJCho5EDfAOmv+NAh6DhnjCDw
+ RpEPlcSrk09AQ+JBgCyy6FGJPqVPr5WtVdE3AOlUx3qXD2g1Q99ZgmuHbhEnVAhk
+ RQFq6XHZVDw/s+X6KXyo0PuJXm1iTJ64ksVTGgbYragvkCBPI2urN8RDADOg34JE
+ g2s77W0O0q9IN6opVtDH34WR3SeGEIAJH5Ib+vV8UGXYQKluzzDUMZs/lshsWmar
+ 3v0u3KVr1sc3KyCja28l7HFZ0QwIkKY61GTx9M0Kn/Nlo/8NDGiZRVOlZtc3j6Zs
+ J/IEdgTLkhZPR9L4HPNP12bGraOy3kZqsStGUJLccty/Y3giLb/r3NhdlzGa/hJl
+ 6ZGLd13CJVZwG5MUBUsi
+ =u01o
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #235 from Raymalian/docs/adr-identity-principal
+
+ADR-0049: put the ownership question to the operator
