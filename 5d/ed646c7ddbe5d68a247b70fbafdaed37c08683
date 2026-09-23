@@ -1,0 +1,26 @@
+tree 307c3f48587a0202f62d0ba31cda8dbc475f1e8f
+parent db174bb914ca1cd6b991e9221915d6dffa8b6364
+parent 075719da0cb8c55876d2dfc2ce4633126a081327
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789577298 +0200
+committer GitHub <noreply@github.com> 1789577298 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqshSCRC1aQ7uu5UhlAAAAT4QAHFRgJjwjjpidqOTbqSqmoRk
+ /SJQA3apL32/HbnvZgufik+3j/M2fdr+MWhopmD46jjo6wvHMFu2e9ZCrVqOGoGS
+ Ebibwudjv9xJnRSYXc5tweAoaVt6wGBxFYNJXYVIN9BbB+HUfkwy3FxoFW6TZU6T
+ e9sHzdXzI7Fr9znmrAqcGF6sdY3mzXYlD6HCD3X9DG7nECC3hXnrcIO/gILEeutT
+ saPc8s4ia/yLNwtHQw/Sk3Q2oPdFuF7BpPXaXmelE6P7DBfnJn2zHUf/Frzp+dOw
+ 3W/XzkPGW7GAJkbpLaeQy/kBRJLfyIsODvzT8e9BO1peM4fGxTj86jFj9THv1a1c
+ mSsYX8NFDfdwARCCyuF7yUKEAwROa/FiiiKO1l1Rd/8v11MTACJ7VH2Z7IWlhNxc
+ LKf088Far5YQXSjOURrJuf1cGafSYI0t7clt2fhrn9Y2LToZWlFnqgO/kOAeWiie
+ fvBITcOT8Ug1lwFXrPBvVW7v2dp2VE/tDatEAjJJC6m5fxci/WJZJ7LKlW53+tLy
+ OsbYC52cbUiVCzNOFaCJG+xBokxif4GTxAJ9fq6MoaYpv48S1AVkuS7FJWuKDERO
+ /S9ltyG3u1L7xjxC4PulB1eQ1u/TPRHrgbwfE9SIkLR7VOEYVas9k5/Xkw5uUBmD
+ xyh0n0Fic4aDF0PxuJJY
+ =hVBz
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #236 from Raymalian/feat/durable-trust-root
+
+Keep the trust root out of reach of the teardown
