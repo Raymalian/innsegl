@@ -1,0 +1,74 @@
+tree 62e00af94f8ff9d476bce6877104da68c8d21567
+parent 023c54be1a5c79562d80238431005efdd7227ab4
+author Innsegl <agent@innsegl.invalid> 1789244344 +0000
+committer Innsegl <agent@innsegl.invalid> 1789244344 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFCBrtpV9E5cRQIiOjoPty4BIk0vEMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEyMjAxOTA0WhcNMjYwOTEy
+ MjAyOTA0WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEpUe+5voiMYLU02Fi
+ 43WbWNoJgjlxk4cu35dLlw79SOdE0jFUyfm9MXxMgoaeOJiOIYMllCFDWobIgs17
+ DPYT1aOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUt2mZJ1OleiQYWA27yli4ZS20M0gwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvMzYyMDYxNmYvYjM4ZjMzNzIvcnVuLTQxOTdiOGQxOWRkZGFh
+ OTMyMDIwZTU0MTFiNjg1MGQ2MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvMzYy
+ MDYxNmYvYjM4ZjMzNzIvcnVuLTQxOTdiOGQxOWRkZGFhOTMyMDIwZTU0MTFiNjg1
+ MGQ2MAoGCCqGSM49BAMCA0gAMEUCIE6AEy8E9eDu872vBaPc1IZiF7gfrmoRJz57
+ SfxI63o4AiEAgJ89Q97C/EMGbxBm3p1lnjUhAmdQnsn9dxqwqKuEjV8xggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFCBrtpV9E5cRQIiOjoPty4BIk0vEMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMjIwMTkwNFowLwYJKoZIhvcNAQkEMSIEINqMwok3ZxnFj5fG/u7l
+ MdsHDxElw7dRrT2eHYP+mXmBMAoGCCqGSM49BAMCBEcwRQIgfmmzB33wz4No6LVs
+ grl4ODmoAyCJv8rOUSYanrzAQ2cCIQCxB7iRjp27Suym7JDS+vwUdb+rmNVxNDiz
+ MRCDw6Bezw==
+ -----END SIGNED MESSAGE-----
+
+feat(serve): wire the three ingestion tools, and refuse a tool nobody decided (#211)
+
+RM-126, RM-127 and RM-128 each shipped a bound tool that cmd/innsegl never
+configured. All three were advertised on tools/list, accepted by the transport
+and reported present by MissingTools(), and answered INVARIANT_VIOLATION to
+every input. The defect survived two waves and was found sideways: the contract
+tests could not drive any of the three through the shipped wiring and had to
+install the configuration themselves, which three doc comments said in as many
+words and could do nothing about.
+
+Driven by MCP-058 (the start-up refusal and its message), MCP-059 (the three
+settings as flags and environment, with serve's validation shape) and MCP-060
+(every tool the contract stack binds answers a verdict about its input and
+never its own unwired gate). MCP-060 was observed failing first, naming
+describe_workspace, observe_tool_call and observe_session.
+
+describe_workspace, observe_tool_call and observe_session are now configured
+from -host-projects/$INNSEGL_HOST_PROJECTS, -projects-mount, -observe-body-dir/
+$INNSEGL_MCP_LOG_DIR and -session-dir/$INNSEGL_MCP_SESSION_DIR, each opt-in on
+sign_commit's terms because none has a defensible default. A relative path for
+any of them is refused by name, and a marker volume with no host root is
+refused too: observe_session resolves the workspace through describe_workspace
+on every start.
+
+The guard against the next one is toolWiring. Every Configure call goes through
+install(), which takes that call's own two return values, and every deliberate
+non-configuration through withhold(), written where the deployment's opt-in is
+read. A tool on a served surface that appears in neither stops the process by
+name before a listener opens. The record is a by-product of configuring rather
+than a list beside it, which is the defect one layer up.
+
+The contract stack now wires all eight tools, so the MCP-006 battery installs
+nothing of its own; the two hostile-volume fixtures stay, because a volume that
+cannot be written to is a fixture a cell needs and a missing configuration is
+not. The battery's sign_commit mutation guard is generalised to all eight.
+
+deploy/compose/innsegl.workrepo.yml sets the two volumes beside the host root
+it already sets: the bodies share innsegl-api's and innsegl-reconciler's
+directory read-write, and the session markers get a named volume with no reader
+outside the MCP.
+
+Agent-Identity: spiffe://innsegl.dev/agent/3620616f/b38f3372/run-4197b8d19dddaa932020e5411b6850d6
+Agent-Run: run-4197b8d19dddaa932020e5411b6850d6
+Agent-Task: b38f3372
