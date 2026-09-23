@@ -1,0 +1,118 @@
+tree 577bf6cc2826e9da04ed1ee84abbefdf6e448557
+parent 50deec5c119763b9eba92010a3ff45adf7324014
+author Innsegl <agent@innsegl.invalid> 1789852060 +0000
+committer Innsegl <agent@innsegl.invalid> 1789852060 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFH2XwWqiztB5C/A+Qwsy24pbjN7zMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MjEwNzQwWhcNMjYwOTE5
+ MjExNzQwWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZMfveBeFseehFhxf
+ GnI4dtSBzSo5BhUgwkiVZtrBzdJkxDktjItzhVyr6G3NxbYiOMCGGhC7pggOS487
+ QN4znaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUy31tKpzLPkg0HSb1Cn26LM88wtAwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNjM1MWE4YjQvcnVuLTg2NWYzZWI3MGQ5ZDdl
+ YzY2NTk4NDY3NDgxNTViMDM3MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNjM1MWE4YjQvcnVuLTg2NWYzZWI3MGQ5ZDdlYzY2NTk4NDY3NDgxNTVi
+ MDM3MAoGCCqGSM49BAMCA0cAMEQCIHNE3gWGInUvyNt96JnM+Y7xEEizVXInHBXa
+ jcpljXotAiAhnw5bJzclEPAmqb5GMjz/nNAKnhkUUhVvjIIIghU1tzGCASowggEm
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUfZfBaqLO0HkL8D5DCzLbiluM3vMwCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTE5MjEwNzQwWjAvBgkqhkiG9w0BCQQxIgQgrOSH90YVpRzlM5oVdt7k
+ NSjhXuh5q8Zz7aLcjKzQYT0wCgYIKoZIzj0EAwIERzBFAiANezKgGGVHy+VVZ01R
+ WA+41aLZc6/QupgBscWBJsBZVwIhAItKXH9slOfY5ZD6gjJvaJbDOTNG2AcDyd4G
+ wW1LBkjd
+ -----END SIGNED MESSAGE-----
+
+feat(hook): refuse a destructive git while an agent run holds work here (#278)
+
+Measured: a `git reset --hard HEAD~1` in a shared checkout, dropping a throwaway
+probe commit, discarded every tracked modification in the tree -- including one
+subagent's finished but uncommitted work. Untracked files survived, tracked
+edits did not, which is exactly what a hard reset does. Eight minutes of work
+went, and nothing refused, warned or recorded it.
+
+Agent work lives in the working tree until the SubagentStop capture commits it
+(ADR-0046). Between the last edit and that capture it has no protection at all,
+and the operator shares the tree.
+
+WHERE IT SITS, which is the decision worth arguing. The obvious place is a git
+hook, and git has none that would work: there is no pre-reset, no pre-checkout
+and no pre-clean, and `post-checkout` runs after the tree has been rewritten.
+The one abortable hook a `reset --hard` fires is `reference-transaction`, and it
+is too late -- MEASURED in a scratch repository, a hook exiting non-zero on
+`prepared` left `fatal: ref updates aborted by hook`, exit 128, HEAD where it
+was, AND the uncommitted line already gone. git resets the index and the working
+tree before it opens the ref transaction. A guard there would report a refusal
+over a tree that had already lost the thing it was guarding, which is worse than
+no guard because it reads as protection.
+
+So the decision lives in scripts/hooks/git-tree-guard.sh and two callers can
+reach it. `hook` is the harness's PreToolUse, which sees an agent's Bash calls
+and is the only thing that can block one; the shim consults it, so that half
+needs no operator action. `wrap` is a `git` earlier on PATH, which is the only
+place that sees a HUMAN's terminal -- and the human is who the measured incident
+was. Nothing here installs that; a file that inserts itself in front of git on
+somebody's machine is not a change a script may make on its own.
+
+WHAT IT DOES NOT COVER is in the file, at length, because a guard believed to
+cover more than it does is the failure it exists to prevent: a human's terminal
+until the wrapper is on PATH; an absolute path, a shell alias or an editor's own
+git; a `git` inside a script or an `eval`, which is not in the string the hook
+was handed; and any other harness.
+
+WHAT IT REFUSES: reset --hard/--merge/--keep, checkout with a pathspec or -f,
+restore unless it is --staged only, switch --discard-changes, clean -f. Tracked
+and untracked are weighed separately, because the incident turned on exactly
+that distinction: `clean -f` cannot destroy a tracked edit and `reset --hard`
+cannot destroy an untracked file, so neither is refused over work it cannot
+reach. `reset --soft`, `reset --mixed` and `git stash` are not refused at all.
+
+WHO IS LIVE is asked of the ledger, not of the marker. A subagent killed with
+its session fires no SubagentStop and leaves its marker behind forever (#260
+measured five such runs Active for hours), so a guard trusting the marker would
+wedge that tree permanently. `status: active` is live; when the ledger does not
+answer, the marker's age against the reaper's grace decides (IP 6.7).
+
+WHAT A RUN CLAIMS is what its own tool-call bodies record it writing, the same
+source that bounds the capture in #261 -- a dirty path no live run wrote belongs
+to whoever wrote it. And a live run whose body store cannot be read is refused
+over rather than past: same rule as #284 one level out, because a run nobody can
+ask is not a run that wrote nothing, and the costs are asymmetric. A wrong
+refusal costs one environment variable; a wrong allow costs the work.
+
+Two things were found by driving the installed gate rather than the selftest,
+and both are in it now as cases. The harness reports the SESSION's cwd on every
+event, so `cd <tree> && git reset --hard` was weighed against a tree it was
+never going to touch and allowed -- `cd` is followed now. And a PreToolUse hook
+is a child of the harness, not of the shell, so the exact line the refusal
+printed arrived with the variable unset and was refused again; the override is
+read out of the command as well as the environment.
+
+Every failure allows. No python3, an unreadable runs directory, a git that will
+not answer, a command that will not tokenise, a guard that is not installed:
+the only thing worse than an unguarded reset is a shell that cannot run git.
+
+Driven by OPS-090..094 in the new scripts/hooks/git-tree-guard-selftest.sh --
+39 assertions against a real repository, with the real command attempted
+through `wrap`, so a refusal is asserted as a file that still holds its line
+rather than as an exit status. Against a stand-in that allows everything, which
+is the repository as it stood, 20 of 33 were red and every one of them red on
+merit: the tree came back without the agent's work in it. The `cd` case and the
+override case were each red against the guard as it stood minutes earlier.
+OPS-095 in scripts/hooks/shim-selftest.sh covers the shim reaching it: 9
+assertions, all 9 red against the shim as it stood -- nothing blocked -- and
+each one carries the block, so none of them can pass by allowing everything.
+97 and 39 pass, 0 fail. Both files were driven under sh, bash, zsh and dash,
+which refused byte for byte identically.
+
+doc 07 rows for OPS-089..095 are owed, as OPS-085..088's still are; the catalog
+was outside this change.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/6351a8b4/run-865f3eb70d9d7ec6659846748155b037
+Agent-Run: run-865f3eb70d9d7ec6659846748155b037
+Agent-Task: 6351a8b4
