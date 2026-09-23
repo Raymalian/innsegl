@@ -1,0 +1,90 @@
+tree a28009ce6fd6a634af56a842e78f442354164bd9
+parent 8b42df64a2340836da29710c1936d1092c8610a4
+author Innsegl <agent@innsegl.invalid> 1789893270 +0000
+committer Innsegl <agent@innsegl.invalid> 1789893270 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJQYJKoZIhvcNAQcCoIIEFjCCBBICAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFHA/jYeF596qbVbu/gJxeSdS7nOzMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTIwMDgzNDMwWhcNMjYwOTIw
+ MDg0NDMwWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdKjXDLvwfTwVis9j
+ tP9a/ITImtZmn6rTs+mzPXoxqO5sWfco1ChNSzmuXYY5ZuDp+RBtwSn+nO68uYyw
+ 1ROMDKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQURYXtpq0vgxAjGZXQ/1q85WbFNewwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNWJhMGY1NGIvcnVuLWZjYWRkNzUxMTE5NTA1
+ NjBkNWJjODkxMThiY2ZjMTdkMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNWJhMGY1NGIvcnVuLWZjYWRkNzUxMTE5NTA1NjBkNWJjODkxMThiY2Zj
+ MTdkMAoGCCqGSM49BAMCA0kAMEYCIQCJVnpmTlUyPXiI0YpiX7s5bHoGnsSVqMG/
+ 6RX9PSY7XwIhAIloT3hfBNPvdy2aDKOk8VOOfc/WogcGohXWvhJFNNObMYIBKzCC
+ AScCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhRwP42Hhefeqm1W7v4CcXknUu5zszALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MjAwODM0MzBaMC8GCSqGSIb3DQEJBDEiBCAIqdgi++yxuhhqtnR8
+ wIwfIcElzlX5mnL8dBpBSuHGTDAKBggqhkjOPQQDAgRIMEYCIQC3SEtmskuG7CFi
+ vSi0EjvQOmzEyPI5Bbyn4XRI8AYlnQIhAMSUxtz7KljVn5jxbP1z5tscMzMQL5Gr
+ 23mtExdeLCiW
+ -----END SIGNED MESSAGE-----
+
+feat(hook): retire a killed agent at the moment it is killed (#290)
+
+A killed subagent fires no SubagentStop. Its marker survives, its work
+survives, and the ledger goes on reporting the run active for the whole
+of the reaper's grace -- measured, five runs Active for between three
+and nine hours after the processes were gone.
+
+A kill and a silence are different events and the system treated them as
+one. A kill is certain: something asked for the agent to stop and was
+told it had, so the run leaves the active list now. Silence is
+ambiguous: the reaper's grace answers that one, and nothing here touches
+it. No clock is read and no threshold is added.
+
+PostToolUse now recognises a TaskStop the harness reports as having
+stopped a local agent, maps its task_id to that agent's marker, and
+retires the run through the same observe_session stop call the stop path
+already makes. run_retired is the honest event -- the run did stop.
+
+Five guards, each of which is a case:
+
+  the RESULT, not the input -- a TaskStop that stopped nothing, named
+  another task, or reported an error retires nothing
+  the task kind -- a stopped background shell is not a run
+  the marker -- a task_id with no marker retires nothing, silently
+  the shape -- a task_id is a marker name, never a path, and never the
+  operator's own session marker
+  the owner -- markers record which harness session started the run, and
+  another session's run is never reached
+
+The marker is removed, which is the local half of the double-retirement
+guard rather than a new one: a stop arriving afterwards takes the
+absent-marker exit it has always had, and the lifecycle tool answers a
+repeated stop from the instant of the first (#179).
+
+The stop-time capture is deliberately not run here. This is the parent's
+own tool call, mid-flight, and signing another run's index from there is
+#261 with a new trigger. What is left instead is the durable record
+#277 writes, so the orphaned work is findable (#288).
+
+Driven by OPS-096, OPS-097, OPS-098, OPS-099 and OPS-100 in
+scripts/hooks/shim-selftest.sh, written first and observed failing
+against the unchanged shim -- twelve assertions red, each with its own
+positive control at zero so the absence proves the discriminator rather
+than the feature being missing.
+
+Verified against the live ledger: a run registered through the hook,
+seen active, killed through a synthetic PostToolUse in the measured
+payload shape, and gone from status=active with the ledger reporting
+retired. Exactly one run was retired. A real background-shell kill
+replayed against the real markers directory retired nothing and said
+nothing.
+
+One consequence worth naming: the destructive-git guard asks the ledger
+who is live, so a killed run stops protecting its tree as soon as it is
+retired. That protection was a side effect of the run being wrongly
+active. The record is what replaces it.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/5ba0f54b/run-fcadd75111950560d5bc89118bcfc17d
+Agent-Run: run-fcadd75111950560d5bc89118bcfc17d
+Agent-Task: 5ba0f54b
