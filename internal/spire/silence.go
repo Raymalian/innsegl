@@ -116,3 +116,54 @@ func (r *Reaper) orphanedNow(ctx context.Context, now time.Time, cand *Candidate
 	}
 	return orphaned(now, cand.Deadline, last, known, r.grace), nil
 }
+
+// orphanedUnentried decides one candidate the LEDGER supplied — a run it calls
+// active that SPIRE holds no entry for (RM-181, #289).
+//
+// # It is the same predicate, over the same grace, and that is the point
+//
+// The reaper's verdict was checked and is not at fault; only the set it was
+// given was. So this routes through `orphaned` rather than restating it, with
+// the deadline set to the end of the grace measured from the run's last
+// recorded activity. Both of `orphaned`'s gates then ask the identical
+// question — has the silence outlasted the grace — and there is exactly one
+// duration in the decision, the one the operator configured. Nothing here is a
+// new threshold and nothing here is more eager than the entried path: a run
+// that worked a second ago is live on both.
+//
+// # Why "nothing known" refuses, where the entried path falls back
+//
+// orphanedNow treats an unknown activity as orphaned, and is right to: the
+// entry's own deadline is real evidence that has already elapsed, and it is the
+// evidence every deployment used before #180. THERE IS NO SUCH EVIDENCE HERE.
+// A run with no entry has no TTL, no creation time and no deadline; strip the
+// activity as well and the reaper is left holding nothing at all. Withdrawing
+// on nothing at all is what classify's skip branch already refuses for an entry
+// it cannot date, and the same refusal belongs here.
+//
+// It should also be unreachable in a shipped deployment, and it is checked
+// anyway: a run only reaches this population by having a readable
+// `run_registered`, whose source is the MCP's, so the ledger has at least that
+// one event to date it by. A future RunSource that answered from somewhere else
+// gets a skip rather than a deletion.
+func (r *Reaper) orphanedUnentried(ctx context.Context, now time.Time, cand *Candidate) (bool, *Skipped) {
+	last, known, err := r.activity.LastActivity(ctx, cand.Run.RunID)
+	if err != nil {
+		return false, &Skipped{
+			SPIFFEID: cand.Entry.SPIFFEID,
+			Reason: fmt.Sprintf("the ledger could not say when run %s was last active, "+
+				"so whether the run it calls active is gone is unknown: %v", cand.Run.RunID, err),
+		}
+	}
+	if !known {
+		return false, &Skipped{
+			SPIFFEID: cand.Entry.SPIFFEID,
+			Reason: fmt.Sprintf("the ledger calls run %s active and records nothing it "+
+				"ever did, and it has no SPIRE entry to date it by either, so there is "+
+				"nothing for its silence to be measured against", cand.Run.RunID),
+		}
+	}
+	cand.LastActivity = last
+	cand.Deadline = last.Add(r.grace)
+	return orphaned(now, cand.Deadline, last, true, r.grace), nil
+}

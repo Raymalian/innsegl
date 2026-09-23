@@ -136,7 +136,9 @@ func runReapCommand(args []string, stdout, stderr io.Writer, deps reapDeps) int 
 		fprintf(stderr, "Usage:\n  innsegl reap [flags]\n\n")
 		fprintf(stderr, "Sweeps once and exits, unless -interval is set; then it sweeps until stopped.\n")
 		fprintf(stderr, "Run it on a schedule OR with -interval, single-active either way; see doc 05 §2.\n")
-		fprintf(stderr, "A run past its TTL that is still appending to the ledger is NOT reaped (#180).\n\n")
+		fprintf(stderr, "A run past its TTL that is still appending to the ledger is NOT reaped (#180).\n")
+		fprintf(stderr, "The sweep covers the SPIRE entries AND the runs the ledger calls active with\n")
+		fprintf(stderr, "no entry; the report's second line says what it did not look at (#289).\n\n")
 		fprintf(stderr, "Exit status:\n")
 		fprintf(stderr, "  %d  the sweep completed; every orphan found was reaped\n", exitOK)
 		fprintf(stderr, "  %d  the command line was not understood\n", exitUsage)
@@ -288,13 +290,28 @@ func pluralEntries(n int) string {
 // encoding/json — it marshals to `{}` — and a monitor that saw an empty object
 // where a failure should be would read the sweep as clean.
 type reapReportJSON struct {
-	StartedAt string           `json:"started_at"`
-	Examined  int              `json:"examined"`
-	Complete  bool             `json:"complete"`
-	Expired   []reapExpiryJSON `json:"expired"`
-	Live      []reapRunJSON    `json:"live"`
-	Skipped   []reapNoteJSON   `json:"skipped,omitempty"`
-	Failures  []reapNoteJSON   `json:"failures,omitempty"`
+	StartedAt string `json:"started_at"`
+	// Examined is SPIRE entries in the agent subtree, and Considered is the
+	// whole population — entries plus the runs the ledger calls active that
+	// SPIRE holds no entry for (#289/RM-181). A monitor that alerts on
+	// "expected active runs vs swept" compares against Considered; Examined
+	// keeps the meaning it has always had so an existing one does not
+	// silently change what it is measuring.
+	Examined   int `json:"examined"`
+	Unentried  int `json:"unentried"`
+	Considered int `json:"considered"`
+	// Outside is entries in the listing that are not in the agent subtree. It
+	// is the machine-readable half of the report's "not looked at" line.
+	Outside int `json:"outside"`
+	// LedgerRunsRead is false when no run source was configured or its read
+	// failed. Unentried is then 0 because the question was not asked, not
+	// because the answer was none, and a monitor must not read it as a finding.
+	LedgerRunsRead bool             `json:"ledger_runs_read"`
+	Complete       bool             `json:"complete"`
+	Expired        []reapExpiryJSON `json:"expired"`
+	Live           []reapRunJSON    `json:"live"`
+	Skipped        []reapNoteJSON   `json:"skipped,omitempty"`
+	Failures       []reapNoteJSON   `json:"failures,omitempty"`
 }
 
 type reapExpiryJSON struct {
@@ -305,13 +322,18 @@ type reapExpiryJSON struct {
 	EventID  string `json:"event_id,omitempty"`
 	Recorded bool   `json:"recorded"`
 	Deleted  bool   `json:"deleted"`
+	// Unentried says the run came from the ledger and SPIRE held no entry for
+	// it. `deleted` is then always false and that is not a failure: there was
+	// nothing to delete, and the withdrawal on the chain is the whole action.
+	Unentried bool `json:"unentried,omitempty"`
 }
 
 type reapRunJSON struct {
-	RunID    string `json:"run_id"`
-	SPIFFEID string `json:"spiffe_id"`
-	EntryID  string `json:"entry_id"`
-	Deadline string `json:"deadline"`
+	RunID     string `json:"run_id"`
+	SPIFFEID  string `json:"spiffe_id"`
+	EntryID   string `json:"entry_id"`
+	Deadline  string `json:"deadline"`
+	Unentried bool   `json:"unentried,omitempty"`
 	// LastActive is present when the run was spared by its own work rather
 	// than by its TTL (#180). A monitor seeing a live entry whose deadline has
 	// passed needs this field to tell "still working" from "reaper broken".
@@ -326,29 +348,35 @@ type reapNoteJSON struct {
 
 func reapReportView(report *spire.SweepReport) reapReportJSON {
 	view := reapReportJSON{
-		StartedAt: report.StartedAt.UTC().Format(time.RFC3339),
-		Examined:  report.Examined,
-		Complete:  report.OK(),
-		Expired:   []reapExpiryJSON{},
-		Live:      []reapRunJSON{},
+		StartedAt:      report.StartedAt.UTC().Format(time.RFC3339),
+		Examined:       report.Examined,
+		Unentried:      report.Unentried,
+		Considered:     report.Considered(),
+		Outside:        report.Outside,
+		LedgerRunsRead: report.LedgerRunsRead,
+		Complete:       report.OK(),
+		Expired:        []reapExpiryJSON{},
+		Live:           []reapRunJSON{},
 	}
 	for _, e := range report.Expired {
 		view.Expired = append(view.Expired, reapExpiryJSON{
-			RunID:    e.Run.RunID,
-			SPIFFEID: e.Entry.SPIFFEID,
-			EntryID:  e.Entry.ID,
-			Deadline: e.Deadline.UTC().Format(time.RFC3339),
-			EventID:  e.EventID,
-			Recorded: e.Recorded,
-			Deleted:  e.Deleted,
+			RunID:     e.Run.RunID,
+			SPIFFEID:  e.Entry.SPIFFEID,
+			EntryID:   e.Entry.ID,
+			Deadline:  e.Deadline.UTC().Format(time.RFC3339),
+			EventID:   e.EventID,
+			Recorded:  e.Recorded,
+			Deleted:   e.Deleted,
+			Unentried: e.Unentried,
 		})
 	}
 	for _, c := range report.Live {
 		run := reapRunJSON{
-			RunID:    c.Run.RunID,
-			SPIFFEID: c.Entry.SPIFFEID,
-			EntryID:  c.Entry.ID,
-			Deadline: c.Deadline.UTC().Format(time.RFC3339),
+			RunID:     c.Run.RunID,
+			SPIFFEID:  c.Entry.SPIFFEID,
+			EntryID:   c.Entry.ID,
+			Deadline:  c.Deadline.UTC().Format(time.RFC3339),
+			Unentried: c.Unentried,
 		}
 		if !c.LastActivity.IsZero() {
 			run.LastActive = c.LastActivity.UTC().Format(time.RFC3339)
@@ -416,10 +444,25 @@ func openReaper(ctx context.Context, opts reapOptions) (sweeper, func(), error) 
 		unwind()
 	}
 
+	// The ledger's half of the sweep's POPULATION (#289/RM-181). The reaper's
+	// population used to be the SPIRE entry list alone, so a run the ledger
+	// called active with no entry was invisible to the sweep and could never be
+	// expired whatever its state — measured as four active runs beside three
+	// entries, with the reaper printing "3 live" every minute. The run source
+	// is the ledger's own answer to "which runs are active", by
+	// internal/ledger's one rule; the verdict over each of them is the
+	// unchanged silence rule and the unchanged grace.
+	runs, err := spire.NewLedgerRunSource(store)
+	if err != nil {
+		unwindAll()
+		return nil, nil, err
+	}
+
 	reaper, err := spire.NewReaper(spire.ReaperConfig{
 		Client: client,
 		Ledger: store,
 		Grace:  opts.grace,
+		Runs:   runs,
 		// The same store, asked a second question: not "record this expiry"
 		// but "is this run still working?" (#180). Without it the sweep judges
 		// an entry by its age alone, which is what deleted two working agents'
