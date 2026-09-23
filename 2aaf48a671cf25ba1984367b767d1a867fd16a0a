@@ -1,0 +1,65 @@
+tree b98cf84a165b2b5732a7449c194fd2c29c6baa39
+parent e772068882716c26b8c2e92fadb14dc1a6b5753e
+author Innsegl <agent@innsegl.invalid> 1789754879 +0000
+committer Innsegl <agent@innsegl.invalid> 1789754879 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFAXvTit0CT9FPKIbmZHSdi6f4tX/MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE4MTgwNzU5WhcNMjYwOTE4
+ MTgxNzU5WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECvWWQsz3Nbj8BK4t
+ X5mT7jryQg3kF4Tg4fJAHV1pC2xhtensmLVm4gG+wBxZUdH8oRjhnV8qMJa1ufqC
+ IQCmbaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUgfnJQ83M6uKNm4Dyx0GZ25XwRr4wHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvNjIxZmE4M2EvcnVuLTc4MzI2Y2Q1NjY5MGIy
+ NWUxOWRhZjlhMzk0ZDQ3ZjVkMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvNjIxZmE4M2EvcnVuLTc4MzI2Y2Q1NjY5MGIyNWUxOWRhZjlhMzk0ZDQ3
+ ZjVkMAoGCCqGSM49BAMCA0gAMEUCIElrVZA6A5ZtbR8xnKD3heJESfPcZIynMt9T
+ L5NluAneAiEAgrOZqWpNJNxBnxodLweK0WkbsB4vf6itFZt1NI4IQXoxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFAXvTit0CT9FPKIbmZHSdi6f4tX/MAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxODE4MDc1OVowLwYJKoZIhvcNAQkEMSIEIGSknk0n1FinPRxM+LXS
+ ykCKPqDcLLuCAbvdYd+nv0x3MAoGCCqGSM49BAMCBEcwRQIhAJENIu2x/o293TV6
+ 0oxBOaHQ8oqUdTiYtZJxoAgTsFHpAiBq3RZWspOYTtwjo1ymi/p/3h5Rh5YLBCmQ
+ SYzk7TaRwQ==
+ -----END SIGNED MESSAGE-----
+
+feat(mcp): a harness that ends a session ends what it started (#260)
+
+Measured: five subagent runs sat Active for between three and nine hours after
+the processes behind them were gone, and an operator closed them by hand. A
+killed subagent fires no stop of its own, and the reaper's grace is twelve
+hours by policy; shortening it kills working agents, which is what E9 exists to
+say. The party that knew was the session that started them, and it said nothing
+on its way out.
+
+observe_session's stop gains `ends_descendants`, default OFF. Set, it walks the
+parent edge downwards through the ledger's own ChildRuns and ends every
+still-open run below this one through the shipped retire_agent, in process.
+
+  - An ASSERTION, not an inference. Nothing reads a parent's retirement and
+    concludes anything about a child's; the only thing that ends a descendant
+    is a stop that carried the flag, at the moment it carried it (IP §3 E7).
+  - A cascaded ending is byte-identical to any other `run_retired`. No event
+    type, field, enum or source changes, and no idempotency key (ADR-0004) —
+    migrations/0004's partial unique index is what holds it to one per run.
+  - Lapsed and abandoned descendants are still open and are ended; only an
+    already-retired one is skipped. Silence is not an ending (#258).
+  - A stop still never blocks: a failed lookup, a failed retirement and an
+    unwired deployment are all reported in `detail` and none refuses.
+
+Driven by MCP-083 (descendants ended, to every depth), MCP-084 (a repeat
+appends nothing) and MCP-085 (a partial failure is reported and non-fatal),
+each watched failing first, and by OPS-056 in the shim self-test — a session
+that starts a subagent, is killed, and asserts the ending only at its end.
+
+cmd/innsegl/servewiring.go passes the parentage lookup: one additive field.
+Without it the flag is inert and every stop ends exactly its own run.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/621fa83a/run-78326cd56690b25e19daf9a394d47f5d
+Agent-Run: run-78326cd56690b25e19daf9a394d47f5d
+Agent-Task: 621fa83a
