@@ -1,0 +1,99 @@
+tree ba23e5c8fe87d679422389bc6ff4ab381d1c08e1
+parent ef931477a139c15443d44721b357011666cd3daf
+parent d7ef0c271e70cb2e7faba6670c9211ec0a14b7db
+author Innsegl <agent@innsegl.invalid> 1789818229 +0000
+committer Innsegl <agent@innsegl.invalid> 1789818229 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIQYJKoZIhvcNAQcCoIIEEjCCBA4CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFHbVzYaNQCKOOJB2lbtLBNuIJJ/oMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MTE0MzQ5WhcNMjYwOTE5
+ MTE1MzQ5WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEJF0Dh+D8H5DKuxaT
+ FoPC6bqXSNMRGWm3zhztxzm3JgeHQmtSemt1eWq3DmpPzRnXZSs9RENCv1vduDNT
+ fOdAjKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU/lgmWujzWr5WDi8+BHOsvYJw4WAwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNTg2ZmZlOTUvcnVuLWE5OWQ1YmI3NjAwOGU3
+ Y2QwYzVmM2RmYTEyMTdhNmQyMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNTg2ZmZlOTUvcnVuLWE5OWQ1YmI3NjAwOGU3Y2QwYzVmM2RmYTEyMTdh
+ NmQyMAoGCCqGSM49BAMCA0cAMEQCIDDll+rFRkExUp9AMhQm8CbZmLuLSdaIP6p8
+ 7tFp4kGWAiAEQOklM5rt4sneRHf8ITq+R3dEihhRKekiTtSUX8dEczGCASkwggEl
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUdtXNho1AIo44kHaVu0sE24gkn+gwCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTE5MTE0MzQ5WjAvBgkqhkiG9w0BCQQxIgQg6Wc3S8+yThjz97mfyx8k
+ Ok1BrXmWVfrFbqo0gpcXEJQwCgYIKoZIzj0EAwIERjBEAiBD1tqagfSDHU6Gh94d
+ zu2waTLZn3ISXzoHxgVnAlgq5wIgVHFREDyDH2X/UrAjyFkm/JeV8KDnI5Jk/Am4
+ TDSnRDs=
+ -----END SIGNED MESSAGE-----
+
+merge(e9,e10): the run lifecycle and the account identity, coexisting
+
+Two epics that branched from the same commit and wrote to the same thirteen
+files. Four needed a hand, and in every one of them the answer was to make
+both features present rather than to pick a side.
+
+cmd/innsegl/cli.go registers `retire` (#257) and `admin-credential` (#264), so
+the list TestSubcommandSetIsExactlyTheDocumentedFive compares against is the
+union of both. Either side alone fails that test against the other side's
+cli.go, which is the test doing its job.
+
+scripts/innsegl-commit.sh is the one that mattered. E9 factored the
+three-rung registration ladder into try_register; E10 replaced that helper
+with inline calls so it could tell exit 3 -- the listener refused the
+credential -- from a transport failure that means the deployment is not there.
+The exit-3 handling now lives INSIDE the helper, once, and it ENDS the ladder
+rather than falling to the next rung: every rung presents the same credential
+to the same listener, so a refusal is not something dropping the parent or
+dropping repo and branch can satisfy. Answering it three times would print the
+schema-1 remedy for a problem that is not the schema, and send an operator to
+restart a deployment that is up and answering.
+
+Both self-test suites are append-vs-append in one place. Both blocks are kept
+whole, E9's first, with E10's credential section last so its OPS-073 claim --
+that everything above it ran against a listener demanding nothing -- still
+covers the whole suite rather than part of it. In the signer suite the
+fixtures are put back between the two blocks: E9's last case leaves a session
+pointer on disk and a register_agent scripted to refuse, and a credential case
+that failed for THAT reason would read as a credential fault.
+
+Tests that drove this, both run on the merged tree:
+
+  scripts/hooks/shim-selftest.sh      56 passed, 0 failed
+  scripts/innsegl-commit-selftest.sh  28 ok, 0 failed
+
+E9 left those suites at 43 and 18, E10 at 37 and 23, and the merge base at 24
+and 13. Every case either epic authored is present and passing. Three cases
+inherited from the base are gone, each superseded by the epic that rewrote the
+behaviour it asserted: E9 moved parent resolution into the MCP, so the shim no
+longer resolves a run id of its own, and E10 narrowed "the shim derives no
+workspace" to "no worktree and no branch" because a repository-scoped
+credential has to name a repository before the call it authorises.
+
+The lifecycle pins pass unchanged: TestSPI014SecondLapseRecordsASecondWithdrawal,
+TestREC017ARestoredRunRaisesNoDriftAlert and
+TestMCP078HorizonIsMeasuredFromTheLapseBeingRestored.
+
+`go build`, `go vet` and `golangci-lint run` are clean, and `go test -race
+-count=1 -p 1` passes every package but test/smoke, which was not run against
+the machine it needs: TestOPS004FreshCloneBootstrap demands an empty Docker
+host and refused on a container name a stack already running here holds. It
+never reached any merged code. test/deploy, which exercises the same compose
+files, passes.
+
+NOT FIXED HERE. `innsegl retire` (#257) is a THIRD caller of the
+identity-lifecycle listener and presents no credential. #266 surveyed the
+callers and fixed both it could see; `retire` did not exist on that branch.
+Measured on this tree, occurrences of `Authorization`: the harness shim 2, the
+signer 2, cmd/innsegl/retire.go 0. Wherever the lifecycle listener is served
+separately the credential is not optional -- serve refuses to start that
+listener without a key set -- so `innsegl retire` is refused at the transport
+there, before any tool runs. A deployment serving all tools on one listener is
+unaffected. This wants its own issue, a test first, and neither belongs in a
+merge.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/586ffe95/run-a99d5bb76008e7cd0c5f3dfa1217a6d2
+Agent-Run: run-a99d5bb76008e7cd0c5f3dfa1217a6d2
+Agent-Task: 586ffe95
