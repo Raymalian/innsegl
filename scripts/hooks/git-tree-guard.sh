@@ -57,6 +57,24 @@
 #            wiring lives.
 #
 #   `check`  the decision alone, on an argv, for anything else that wants it.
+#            IT TAKES THE GIT ARGUMENTS WITHOUT THE LEADING `git` WORD, and
+#            given the word it used to read `git` as the subcommand, match
+#            nothing destructive and exit 0 IN SILENCE — #287 (RM-179):
+#
+#              check -- clean -fd     exit 2   refused, naming the run
+#              check git clean -fd    exit 0   silent
+#
+#            A caller that got the form slightly wrong was told nothing and
+#            received the same answer as "this command is safe". So the word
+#            is now accepted and skipped — there is no `git git` subcommand,
+#            so a leading `git` can only be the program word — and an argv
+#            with no subcommand in it at all exits 3 and says so.
+#
+#            THIS IS NOT THE RULE `hook` FOLLOWS, deliberately. `hook`
+#            receives a shell STRING it may legitimately fail to parse, and
+#            guessing there would refuse commands that were never
+#            destructive; `check` receives an ARGV a caller chose. Neither
+#            `hook`, `command` nor `wrap` changed.
 #
 # WHAT IT DOES NOT COVER, said plainly, because a guard believed to cover more
 # than it does is the failure it exists to prevent:
@@ -205,6 +223,11 @@
 #
 # EXIT: 0 allows, 2 refuses, and nothing else ever refuses. Anything other than
 # 2 out of `check`/`hook` is an internal failure and its caller must allow.
+#
+# AND 3 OUT OF `check` IS "I DID NOT UNDERSTAND YOU" — #287. It allows, like
+# every other non-2, and it costs a caller that reads only the status nothing;
+# it exists so that a caller CAN tell it from the 0 that means "I looked and
+# this is safe". No other mode ever answers it.
 
 set -u
 
@@ -233,7 +256,7 @@ TTL_HOURS="${INNSEGL_RUN_TTL_HOURS:-12}"
 GUARD_DECIDE='
 import hashlib, json, os, pathlib, shlex, subprocess, sys, time
 
-ALLOW, REFUSE = 0, 2
+ALLOW, REFUSE, UNKNOWN = 0, 2, 3
 
 mode, cwd, runs_dir, log_dir, api_url, ttl_hours, uncap_log = sys.argv[1:8]
 rest = sys.argv[8:]
@@ -781,9 +804,60 @@ def refuse(english, run, paths, spelling, unreadable=False, killed=False):
     out("  To discard it anyway, deliberately:")
     out("    INNSEGL_ALLOW_DESTRUCTIVE=1 " + spelling)
 
+# --- and whether `check` was handed something it can weigh at all -----------
+#
+# #287 (RM-179). `check` is the entry point with no caller yet, so this is the
+# contract every future one reads. Two shapes are not argvs and were both
+# answered with a silent 0, which is the same answer a safe command gets:
+#
+#   NO SUBCOMMAND AT ALL — an empty argv, a bare `--`, global options alone,
+#   or the program word with nothing behind it. There is nothing to weigh.
+#
+#   ONE TOKEN CARRYING SPACES — a whole shell command line handed to the mode
+#   that takes an argv. That is `command`s job, and read as a subcommand the
+#   string matched nothing and allowed. The rule is a SHAPE and not a list of
+#   git subcommands: a list here would be a second spelling of gits own, and
+#   it would drift. A subcommand is one word.
+#
+# THE PROGRAM WORD IS ACCEPTED AND SKIPPED rather than diagnosed, because it
+# is unambiguous — git has no `git` subcommand — and answering correctly beats
+# answering "I did not understand you". The cost is stated: `check git git
+# clean -fd` is weighed as `git clean -fd` and may refuse a spelling real git
+# would have rejected harmlessly. `wrap` does NOT do this, and must not: it is
+# installed as `git` and its argv is a command line a human typed.
+def understood(args):
+    if args and (args[0] == "git" or args[0].endswith("/git")):
+        args = args[1:]
+    sub, _, _ = subcommand(args)
+    if sub is None:
+        return unreadable(args, "this argv names no git subcommand")
+    if sub.split() != [sub]:
+        return unreadable(args, "the first argument is not one word, so it "
+                                "cannot be a git subcommand")
+    return args
+
+def unreadable(args, why):
+    out("check: " + why + ", so nothing was weighed.")
+    out()
+    out("  given: " + (" ".join(shlex.quote(a) for a in args) or "(nothing)"))
+    out()
+    out("  `check` takes the git arguments WITHOUT the leading `git` word, and")
+    out("  accepts the word when a caller includes it. A whole shell command")
+    out("  line belongs to `command`, which tokenises it.")
+    out()
+    out("  Exit 3 is NOT a refusal and nothing was blocked: only 2 refuses, and")
+    out("  a caller must allow on anything else. It is here so that this answer")
+    out("  can be told apart from the 0 that means the command is safe (#287).")
+    return None
+
 def main():
-    if mode == "argv":
-        return decide(rest, "git " + " ".join(shlex.quote(a) for a in rest), cwd)
+    if mode in ("argv", "check"):
+        args = rest
+        if mode == "check":
+            args = understood(args)
+            if args is None:
+                return UNKNOWN
+        return decide(args, "git " + " ".join(shlex.quote(a) for a in args), cwd)
     command = rest[0] if rest else ""
     for args, where in git_command_lines(command, cwd):
         spelling = "git " + " ".join(shlex.quote(a) for a in args)
@@ -814,7 +888,11 @@ decide() {
   python3 -c "$GUARD_DECIDE" "$_mode" "$_cwd" \
     "$RUNS_DIR" "$LOG_DIR" "$API_URL" "$TTL_HOURS" "$UNCAP_LOG" "$@"
   _rc=$?
+  # 2 REFUSES; 3 IS `check` SAYING IT DID NOT UNDERSTAND THE ARGV (#287), and
+  # allows like everything else that is not 2. Every other status — no
+  # python3, an unreadable runs directory, an exception — allows in silence.
   [ "$_rc" = "2" ] && return 2
+  [ "$_rc" = "3" ] && return 3
   return 0
 }
 
@@ -851,12 +929,20 @@ usage() {
 innsegl: git-tree-guard.sh — refuse a destructive git while an agent run holds
                              uncommitted work in this tree (#278)
 
-  git-tree-guard.sh check [--] <git args...>   decide on one command line
+  git-tree-guard.sh check [--] <git args...>   decide on one argv
   git-tree-guard.sh command '<shell command>'  decide on a shell command string
   git-tree-guard.sh hook                       decide on a PreToolUse event (stdin)
   git-tree-guard.sh wrap <git args...>         decide, then run the real git
 
-  Symlinked as `git` on PATH it is `wrap`. Exit 2 refuses; anything else allows.
+  `check` takes the git arguments WITHOUT the leading `git` word, and accepts
+  the word when a caller includes it.
+
+  Exit 0 allows, 2 refuses, and nothing else refuses. 3 out of `check` means
+  it found no git subcommand in the argv and weighed nothing -- an answer a
+  caller can tell apart from "I looked and this is safe".
+
+  Symlinked as `git` on PATH it is `wrap`, which reads its whole argv as a
+  git command line and never skips a leading word.
 EOF
 }
 
@@ -873,8 +959,14 @@ MODE="${1:-}"
 
 case "$MODE" in
   check)
+    # `check` AND NOT `argv`, which is what `wrap` keeps — #287. The two
+    # differ in exactly one thing and it is the caller: `wrap` is installed as
+    # `git` and receives a command line a HUMAN typed, which must reach the
+    # real git as written; `check` receives an argv a CALLER chose, and a
+    # caller that got the form slightly wrong must not be answered with a
+    # silent allow.
     [ "${1:-}" = "--" ] && shift
-    decide argv "$(pwd -P)" "$@"
+    decide check "$(pwd -P)" "$@"
     exit $?
     ;;
 

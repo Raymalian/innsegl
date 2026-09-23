@@ -712,17 +712,31 @@ func parseTS(record event.Fields) time.Time {
 
 // readLedger walks the chain in bounded batches and reduces it to a view.
 func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
+	return readLedgerView(ctx, r.cfg.Ledger, r.batch)
+}
+
+// readLedgerView is readLedger without a Reconciler, because the reaper needs
+// the same walk for a different question (RM-181, #289).
+//
+// The reconciler asks "does SPIRE hold what the ledger says it should?" and
+// alerts. The reaper asks "which runs does the ledger call active?" and sweeps.
+// Both answers come out of the same fold over the same chain, and duplicating
+// the fold is how two components come to disagree about what `active` means —
+// which is the defect #258 spent a whole issue removing. So there is one walk,
+// one ledgerView and one ledger.RunStateOf, and the two callers differ only in
+// what they do with the result. See population.go.
+func readLedgerView(ctx context.Context, reader LedgerReader, batch int64) (*ledgerView, error) {
 	view := &ledgerView{
 		runs:   make(map[string]*ledgerRun),
 		alerts: make(map[string]struct{}),
 	}
-	n, err := r.cfg.Ledger.Count(ctx)
+	n, err := reader.Count(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for from := int64(1); from <= n; from += r.batch {
-		to := min(from+r.batch-1, n)
-		records, rerr := r.cfg.Ledger.Events(ctx, from, to)
+	for from := int64(1); from <= n; from += batch {
+		to := min(from+batch-1, n)
+		records, rerr := reader.Events(ctx, from, to)
 		if rerr != nil {
 			return nil, rerr
 		}

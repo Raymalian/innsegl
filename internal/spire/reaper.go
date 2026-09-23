@@ -242,6 +242,13 @@ type Candidate struct {
 	// the run. A candidate in a report's Live list carrying one was spared by
 	// its own work rather than by its TTL.
 	LastActivity time.Time
+	// Unentried is true for a candidate the LEDGER supplied because SPIRE held
+	// no entry for it (RM-181, #289). Entry.ID is then empty, CreatedAt and
+	// ExpiresAt are zero, and Deadline is the end of the grace measured from
+	// LastActivity rather than from any TTL — there is no TTL, which is the
+	// finding. Nothing is deleted for such a candidate: there is nothing to
+	// delete, and the withdrawal is the whole of what the sweep can do.
+	Unentried bool
 }
 
 // Expiry is one orphaned run, as reaped.
@@ -285,8 +292,27 @@ type SweepReport struct {
 	StartedAt time.Time
 	// Examined is the number of entries inside the agent subtree the sweep
 	// looked at, including the skipped ones. Entries outside it are not the
-	// reaper's and are not counted.
+	// reaper's and are counted by Outside instead.
+	//
+	// It is ENTRIES, not runs, and it is deliberately not the whole population
+	// any more — see Unentried and Considered (RM-181, #289).
 	Examined int
+	// Unentried is how many runs the LEDGER called active that the entry
+	// listing held nothing for. Zero on a sweep with no RunSource configured,
+	// which is why LedgerRunsRead exists to tell "none found" from "not asked".
+	Unentried int
+	// Outside is how many entries the listing held that are not in this trust
+	// domain's agent subtree: node entries, the MCP's own admin entry, anything
+	// a federated peer put there. The sweep does not judge them and never
+	// deletes them; the count is here so the report can say what it did NOT
+	// look at rather than leaving an operator to assume it looked at
+	// everything.
+	Outside int
+	// LedgerRunsRead is whether the ledger's active-run population was read at
+	// all. False means the sweep saw only what SPIRE holds an entry for, so a
+	// run active in the ledger with no entry is NOT among the counts below —
+	// and the report says so in words.
+	LedgerRunsRead bool
 	// Live are the runs still inside their identity lifetime.
 	Live []Candidate
 	// Expired are the runs reaped.
@@ -299,6 +325,21 @@ type SweepReport struct {
 
 // OK reports whether every orphan the sweep found was reaped.
 func (r *SweepReport) OK() bool { return r != nil && len(r.Failures) == 0 }
+
+// Considered is the whole population one sweep judged: the entries SPIRE holds
+// in the agent subtree, plus the runs the ledger calls active that SPIRE holds
+// no entry for.
+//
+// It exists so the number a report leads with is a number of RUNS. "3 entries,
+// 3 live" beside a ledger reporting four active runs is how an operator comes
+// to read the reaper's line as a count of agents, which is the misreading
+// RM-181 (#289) was filed over.
+func (r *SweepReport) Considered() int {
+	if r == nil {
+		return 0
+	}
+	return r.Examined + r.Unentried
+}
 
 // FindExpired returns the expiry recorded for a run id.
 func (r *SweepReport) FindExpired(runID string) (Expiry, bool) {
@@ -327,31 +368,103 @@ func (r *SweepReport) FindLive(runID string) (Candidate, bool) {
 }
 
 // String renders the report for an operator or a log.
+//
+// # The header counts RUNS, and it says what the sweep did not look at
+//
+// It used to read
+//
+//	reap at …: 3 entries in the agent subtree, 3 live, 0 expired, 0 skipped, 0 failed
+//
+// and that is the line RM-181 (#289) was filed over. Beside a ledger reporting
+// four active runs it invites exactly one reading — "three agents are alive" —
+// and all three of its claims are narrower than they look: three ENTRIES, not
+// three runs; live meaning "recorded activity inside the grace", not an agent
+// observed running; and a population that was the entry list alone, so the
+// fourth run was not among the numbers at all.
+//
+// So the header leads with the whole population and decomposes it, and a second
+// line states the three things the sweep did NOT look at. The second line is
+// unconditional. An operator who has to notice the ABSENCE of a caveat to know
+// a number is partial has not been told anything.
 func (r *SweepReport) String() string {
 	if r == nil {
 		return "reap: no report\n"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "reap at %s: %d entr%s in the agent subtree, %d live, %d expired, %d skipped, %d failed\n",
-		r.StartedAt.UTC().Format(time.RFC3339), r.Examined, plural(r.Examined, "y", "ies"),
+	fmt.Fprintf(&b, "reap at %s: %d run%s considered — %d entr%s in the agent subtree, %s; "+
+		"%d live, %d expired, %d skipped, %d failed\n",
+		r.StartedAt.UTC().Format(time.RFC3339),
+		r.Considered(), plural(r.Considered(), "", "s"),
+		r.Examined, plural(r.Examined, "y", "ies"), r.ledgerHalf(),
 		len(r.Live), len(r.Expired), len(r.Skipped), len(r.Failures))
+	fmt.Fprintf(&b, "  not looked at: %d entr%s outside the agent subtree; %s; whether "+
+		"any process is alive — \"live\" here is recorded activity inside the grace, "+
+		"not an agent observed running\n",
+		r.Outside, plural(r.Outside, "y", "ies"), r.ledgerBlindSpot())
 	for _, e := range r.Expired {
-		fmt.Fprintf(&b, "  expired  %s entry=%s deadline=%s event=%s recorded=%v deleted=%v\n",
-			e.Entry.SPIFFEID, e.Entry.ID, e.Deadline.UTC().Format(time.RFC3339),
-			orNone(e.EventID), e.Recorded, e.Deleted)
+		fmt.Fprintf(&b, "  expired  %s entry=%s deadline=%s event=%s recorded=%v deleted=%v%s\n",
+			e.Entry.SPIFFEID, entryNote(e.Candidate), e.Deadline.UTC().Format(time.RFC3339),
+			orNone(e.EventID), e.Recorded, e.Deleted, unentriedNote(e.Candidate))
 	}
 	for _, c := range r.Live {
-		fmt.Fprintf(&b, "  live     %s entry=%s deadline=%s%s\n",
-			c.Entry.SPIFFEID, c.Entry.ID, c.Deadline.UTC().Format(time.RFC3339),
-			activeNote(c))
+		fmt.Fprintf(&b, "  live     %s entry=%s deadline=%s%s%s\n",
+			c.Entry.SPIFFEID, entryNote(c), c.Deadline.UTC().Format(time.RFC3339),
+			activeNote(c), unentriedNote(c))
 	}
 	for _, s := range r.Skipped {
-		fmt.Fprintf(&b, "  skipped  %s entry=%s: %s\n", orNone(s.SPIFFEID), s.EntryID, s.Reason)
+		fmt.Fprintf(&b, "  skipped  %s entry=%s: %s\n", orNone(s.SPIFFEID), orNone(s.EntryID), s.Reason)
 	}
 	for _, f := range r.Failures {
-		fmt.Fprintf(&b, "  FAILED   %s entry=%s: %v\n", orNone(f.SPIFFEID), f.EntryID, f.Err)
+		fmt.Fprintf(&b, "  FAILED   %s entry=%s: %v\n", orNone(f.SPIFFEID), orNone(f.EntryID), f.Err)
 	}
 	return b.String()
+}
+
+// ledgerHalf renders the ledger's contribution to the population, and — when
+// there was none — says whether that is because none was found or because the
+// ledger was never asked.
+//
+// The distinction is the whole point of LedgerRunsRead. "0 active in the ledger
+// with no entry" is a finding; a deployment with no run source, or a sweep whose
+// ledger read failed, has no finding to report and must not print one.
+func (r *SweepReport) ledgerHalf() string {
+	if !r.LedgerRunsRead {
+		return "the ledger's active runs were not read, so a run with no entry is not among these"
+	}
+	return fmt.Sprintf("%d active in the ledger with no entry", r.Unentried)
+}
+
+// ledgerBlindSpot names what the ledger half did NOT cover, which is a
+// different set depending on whether it ran.
+//
+// A sweep that read the ledger leaves out the runs it does not call active —
+// retired, lapsed, abandoned — and that is correct and uninteresting. A sweep
+// that did not read it leaves out every run with no entry, which is the whole
+// defect #289 was filed over, and the line must not spell that the same way.
+func (r *SweepReport) ledgerBlindSpot() string {
+	if !r.LedgerRunsRead {
+		return "every run the ledger calls active that SPIRE holds no entry for"
+	}
+	return "runs the ledger does not call active (retired, lapsed, abandoned)"
+}
+
+// entryNote renders the entry id, or says plainly that there is none. An empty
+// `entry=` reads as a formatting bug; `entry=none` is the finding.
+func entryNote(c Candidate) string {
+	if c.Unentried || c.Entry.ID == "" {
+		return "none"
+	}
+	return c.Entry.ID
+}
+
+// unentriedNote spells out what an operator would otherwise have to infer from
+// `entry=none`: this run came from the ledger, not from SPIRE, and nothing was
+// deleted because there was nothing to delete.
+func unentriedNote(c Candidate) string {
+	if !c.Unentried {
+		return ""
+	}
+	return " (from the ledger's active list; SPIRE held no entry to sweep)"
 }
 
 // activeNote spells out the case an operator would otherwise misread: an entry
@@ -397,6 +510,16 @@ type ReaperConfig struct {
 	// one is what stops a long-running agent losing its identity mid-task.
 	// See silence.go.
 	Activity ActivitySource
+	// Runs is the LEDGER's half of the sweep's population: the runs it calls
+	// active. OPTIONAL, and its absence is the behaviour every deployment had
+	// before #289 — the SPIRE entry list is the whole population, and a run
+	// active in the ledger with no entry is invisible to the sweep and can
+	// never be expired whatever its state. Supplying one closes that.
+	//
+	// It requires Activity. A population with nothing to judge it by is a
+	// population that could only be judged by a deadline it does not have; see
+	// NewReaper and population.go.
+	Runs RunSource
 }
 
 // Reaper deletes orphaned run entries and records each expiry.
@@ -405,6 +528,7 @@ type Reaper struct {
 	ledger   EventSink
 	grace    time.Duration
 	activity ActivitySource
+	runs     RunSource
 }
 
 // NewReaper builds a reaper. Every rejection here is an INVARIANT_VIOLATION: a
@@ -423,11 +547,24 @@ func NewReaper(cfg ReaperConfig) (*Reaper, error) {
 	if cfg.Grace < 0 {
 		return fail("grace %s is negative; that reaps entries before their TTL has elapsed", cfg.Grace)
 	}
+	if cfg.Runs != nil && cfg.Activity == nil {
+		// A run with no entry has no TTL and no creation time, so the deadline
+		// gate that judges an entried candidate does not exist for it. Silence
+		// is the only evidence there is, and a reaper handed this population
+		// with nothing to measure silence against could only withdraw from
+		// every run in it on sight. That is the 2026-09-08 sweep with a wider
+		// net, so it is refused at construction rather than survived at
+		// runtime.
+		return fail("a run source with no activity source: a run with no SPIRE entry " +
+			"has no deadline, so silence is the only evidence there is and a reaper " +
+			"that cannot read it would withdraw from every active run at once")
+	}
 	return &Reaper{
 		client:   cfg.Client,
 		ledger:   cfg.Ledger,
 		grace:    cfg.Grace,
 		activity: cfg.Activity,
+		runs:     cfg.Runs,
 	}, nil
 }
 
@@ -447,12 +584,19 @@ func (r *Reaper) Sweep(ctx context.Context) (*SweepReport, error) {
 	if err != nil {
 		return nil, err
 	}
+	// held is every identity SPIRE holds an entry for inside the agent subtree,
+	// INCLUDING the ones classify refused to judge. It is what stops the ledger
+	// half reporting a run as having no identity when SPIRE plainly holds one —
+	// and then withdrawing it. See population.go.
+	held := make(map[string]struct{}, len(entries))
 	for _, wire := range entries {
 		cand, skipped, ours := r.classify(wire)
 		if !ours {
+			report.Outside++
 			continue
 		}
 		report.Examined++
+		held[fromWire(wire).SPIFFEID] = struct{}{}
 		if skipped != nil {
 			report.Skipped = append(report.Skipped, *skipped)
 			continue
@@ -477,6 +621,11 @@ func (r *Reaper) Sweep(ctx context.Context) (*SweepReport, error) {
 		}
 		report.Expired = append(report.Expired, expiry)
 	}
+	// The LEDGER's half of the population, second: the runs it calls active
+	// that the listing above held nothing for (RM-181, #289). Second and not
+	// first because `held` has to be complete before anything can be judged
+	// entry-less against it.
+	r.sweepUnentried(ctx, now, report, held)
 	sortReport(report)
 	return report, nil
 }
@@ -490,8 +639,24 @@ func sortReport(r *SweepReport) {
 	sort.Slice(r.Live, func(i, j int) bool {
 		return r.Live[i].Entry.SPIFFEID < r.Live[j].Entry.SPIFFEID
 	})
-	sort.Slice(r.Skipped, func(i, j int) bool { return r.Skipped[i].EntryID < r.Skipped[j].EntryID })
-	sort.Slice(r.Failures, func(i, j int) bool { return r.Failures[i].EntryID < r.Failures[j].EntryID })
+	// The SPIFFE ID breaks the tie, because a skip or a failure raised for an
+	// UNENTRIED run carries no entry id at all (RM-181, #289) and sorting
+	// several of them by "" would leave their order to Go's sort.
+	sort.Slice(r.Skipped, func(i, j int) bool {
+		if r.Skipped[i].EntryID != r.Skipped[j].EntryID {
+			return r.Skipped[i].EntryID < r.Skipped[j].EntryID
+		}
+		if r.Skipped[i].SPIFFEID != r.Skipped[j].SPIFFEID {
+			return r.Skipped[i].SPIFFEID < r.Skipped[j].SPIFFEID
+		}
+		return r.Skipped[i].Reason < r.Skipped[j].Reason
+	})
+	sort.Slice(r.Failures, func(i, j int) bool {
+		if r.Failures[i].EntryID != r.Failures[j].EntryID {
+			return r.Failures[i].EntryID < r.Failures[j].EntryID
+		}
+		return r.Failures[i].SPIFFEID < r.Failures[j].SPIFFEID
+	})
 }
 
 // list pages through every registration entry the server holds.
@@ -648,6 +813,15 @@ func (r *Reaper) reap(ctx context.Context, cand Candidate) (Expiry, error) {
 				"therefore not deleted", cand.Entry.SPIFFEID), false, nil)
 	}
 	out.EventID, out.Recorded = eventID, appended
+
+	if cand.Unentried {
+		// There is no entry, which is the whole finding. SPIRE is not asked to
+		// delete anything — an empty entry id is not an idempotent deletion,
+		// it is a malformed request — and the withdrawal on the chain is the
+		// entirety of what this sweep can do for such a run. Deleted stays
+		// false and the report says why.
+		return out, nil
+	}
 
 	deleted, err := r.deleteEntry(ctx, cand)
 	if err != nil {
