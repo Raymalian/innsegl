@@ -1,0 +1,26 @@
+tree f4392a034cee968f658ffd676921bc3451cc4773
+parent ee6449907e90a5d093621deb14093e72ba52b8b8
+parent 0320d37746e9317f6db4dc0ba5a7fa0d7718211e
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789583307 +0200
+committer GitHub <noreply@github.com> 1789583307 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqt/LCRC1aQ7uu5UhlAAAb1UQAJFozXYRtCbKR+IYkQdp0Tuq
+ xts9GmRiyiAsmKlzVJbLd7d7h7++4yx8+X/TvUpGGiCmIs9cCT8LZHmyauu48JF9
+ Hbuemq6Zfh83kW+mc0c+v5WjW7T7Kg0/q1RDEScA210Q03BF7KtyNdsR9pKoJe3N
+ k/lnJmn7jLopJxt5X8zrefawoBIAPuPQE8RuIs/jk1/+lbF2vf9v3zgPwD95Gd5k
+ W3u5zdtOwJdldcsvlHfFX+3ggPDtsnljEvGMW8QUl6vPVnBGXdiZnjBG7ZvubNHx
+ cNjg+bGz/Dt74SLOvx24u4nXEUYMmDRfXIPpZcz76pA1vAVgw4X96DlC1dUVH0rK
+ xxz54LSvGHPqP0xWf7nidttwWIFaw/Agfmaw/Qhe1LG27oYMcAJAsTf7dCs/mXVc
+ L7bAKq1dRr0RYcemWD7JjrKqjIut4N4iYGwZjXnagyaRPhO1WTK4KS6APXJs/XWl
+ wT1yN01DnCS4oA+WMVDhlWV3+cA1CPYQ0lJO/gQzhDn3XsMC8oI+uWDv9Dmn2h0u
+ 98DV4QfIC9YBreWCqllxU0ishG9zQ2Z8GBxdRt3eQeWAPNrVAdhaquaAmPflhzHg
+ gVv8V7LuG5/mpn2qipnck8DkXxyrtk9k4VQ8pHO4i/Vv1xH5umDLCdDXRgumEhMI
+ ngFcE/mqkGswle8HRF9J
+ =NAei
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #239 from Raymalian/fix/rm134-stranded-pointer
+
+Succeed a retired by-tree pointer instead of stranding the tree
