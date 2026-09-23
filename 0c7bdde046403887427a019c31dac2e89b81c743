@@ -1,0 +1,26 @@
+tree 817aec5ba5abf789739f6517543e146299fba996
+parent f72bb4f5bd3e70ad5a8dd7c2c0e5aec89ae03a53
+parent 724ddfc8481a765b54f16a197c1968e7c7d6c365
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789591611 +0200
+committer GitHub <noreply@github.com> 1789591611 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqwA7CRC1aQ7uu5UhlAAAsBEQAClEaG1GmIbohz7R3WThKSnA
+ DTKGEGlNPMT1rxQ2mWdmf3nipkX//yYpw3JOgye5JIRgFtMaJzSmZYdkTbGBw+ZH
+ Tx5irVlxfJjRItZiQmIAdvAMZXDetmc/4BUqXFUtXb+Yj7XLgzQXKEb93d6v7JOL
+ DU9WBx2HoTruAcHtqLbynRvQoo+JfAWl9LKGG3Wt7Xu5pdMG24eF6hjgfvqGZR0V
+ bfKWtsRTjr7mdBtb10qybqjsBhkCOk9PCvxESsDl0jkxhv9k908CB2lJz+TjmQpK
+ 93k6sKOiHYilcv8z8N8HHqeQN+LFpni8D2g5mjobMVFTOQNI+APTYBDK4MmznDgr
+ QRX4L41Le1gqcLJkY49oxrHmh73/Ym5PUyRRDLB+S0GlC2SstKqSiZcw4DN8Hodk
+ rUXoHDyKOg3QnVUPs26Yn4De38WM7QX7nb3rYC30RkbjJJVGf27zVR8ngoSIc/NQ
+ MYRz2N9fSJMpuQjrVT1Dp2Su/4h3O1zdnWfzVfx2XAz66yK2ZSlW/hMShz3biDoz
+ WfYuDGz9FeBtSgA0jH9pA06Ji1Rvq8ZadIVLMbMBzXkBxv5/BJd00YcBaxWcsvu4
+ W2FoJDUOapMy9Un51NDswLSUX76qVbpbKXe+M280l3eChOJ+ZkOS2U815x+sKMRm
+ S057eep+XPSR9mrdZy51
+ =3KmZ
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #243 from Raymalian/fix/worktree-addressing
+
+Address a linked worktree: resolve it, link its repository, verify inside it
