@@ -1,0 +1,66 @@
+tree 2f10713d578ebe80803e829931347b19c0b74d16
+parent 32932406def1e10beac66e964f259d16a08b1f50
+author Innsegl <agent@innsegl.invalid> 1790152176 +0000
+committer Innsegl <agent@innsegl.invalid> 1790152176 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFG7D8FtMJDtUNkje3w6wQFb6gAMHMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTIzMDgyOTM2WhcNMjYwOTIz
+ MDgzOTM2WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEpo2M1wLibOa5gbxt
+ qzJAB7Uxs2KcCAPw9hVv0gVVGLXQ/ZtuEaz0wwbyHdSk02gDo3hg14XteZ9yUXVY
+ iCd/WKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU3O1uS+yTStJkUwPy75CoRD6+e1kwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvNDBmYzY0M2IvcnVuLWM2Njk2YTM2NWE2ZmIz
+ YjBmMzY0ZjQ2NDFmOWFhNzU1MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvNDBmYzY0M2IvcnVuLWM2Njk2YTM2NWE2ZmIzYjBmMzY0ZjQ2NDFmOWFh
+ NzU1MAoGCCqGSM49BAMCA0kAMEYCIQDHRSGQgv+LuL7DW3QYdHsEJB4rVU7IoxNr
+ t7dK6Z8XeQIhAOQdebq+mPAe5YLMqvmD6T9yUyhd45Av9I2GB7HChdvQMYIBKTCC
+ ASUCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhRuw/BbTCQ7VDZI3t8OsEBW+oADBzALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MjMwODI5MzZaMC8GCSqGSIb3DQEJBDEiBCDrbV90ibK6KY5Aciy2
+ OgruqtQu1NjAbpicQczfBV4GxDAKBggqhkjOPQQDAgRGMEQCIAoRoybz7O+3JTFh
+ 3AGvfWpHxWWQ6cCW/ab80+6EWifwAiAyGdzTUCat09WZS8eG+QIzfh9g0+KdyxTi
+ ARlhwQAYDw==
+ -----END SIGNED MESSAGE-----
+
+feat(hook): record work a run left when nobody saw it die (#288)
+
+#290 retires a killed run when its parent session sees the kill. A crash, an
+OOM, a usage limit, or a session dying with its children fires no hook at all,
+so nothing said the work was there. Measured today: two subagents died on a
+usage limit, left uncommitted work in this tree, and nothing recorded it.
+
+scripts/hooks/orphan-sweep.sh asks the question from the NEXT session's start,
+which by construction is not the session that died. A marker still on disk
+plus a ledger state that is no longer `active` means a run whose stop nobody
+ran; its uncommitted paths, taken from its own tool-call bodies, are written
+as one `run_unobserved` record and reported on stderr. It only records: no run
+is retired, nothing is signed, the tree is not written, and no clock is read.
+`active` is left to the reaper's grace.
+
+The report does not offer a signing command. Every run it records is no longer
+active, and the signer refuses those (IP §6.2). Measured on its first real
+use: the `innsegl-commit -r` line it used to print was refused. Who signs such
+work is #269.
+
+SessionStart calls it before observe_session, which exits early when the
+deployment is down. A missing or failing sweep never fails the session. CI
+runs the self-test as its own job.
+
+Known limit: only Edit, Write and NotebookEdit bodies are read, so a path a run
+wrote through Bash is not claimed.
+
+The sweep and its self-test were written by run-5ec3d4949c76febf14d5e722a3e861e5,
+which died with no stop event and made no commit; the sweep recorded its own
+author. The SessionStart wiring, the CI job and the hint fix are this commit's.
+Driven by OPS-106..108 in orphan-sweep-selftest.sh and OPS-109 in
+shim-selftest.sh.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/40fc643b/run-c6696a365a6fb3b0f364f4641f9aa755
+Agent-Run: run-c6696a365a6fb3b0f364f4641f9aa755
+Agent-Task: 40fc643b
