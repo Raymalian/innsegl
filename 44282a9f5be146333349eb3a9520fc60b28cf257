@@ -1,0 +1,61 @@
+tree 2948f973d8f980df758e82f52148da21e65a4b61
+parent aec5522e7e2516a64f1948a861eda3c4c8352c97
+author Innsegl <agent@innsegl.invalid> 1789849666 +0000
+committer Innsegl <agent@innsegl.invalid> 1789849666 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFAly8AkGzH50YIjgjcp7IgriDvFVMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MjAyNzQ2WhcNMjYwOTE5
+ MjAzNzQ2WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEP3j96aTYh2THjrGL
+ Es51QSU8Pr5STwuiQgNTlKHfqcM7xnmJzhxl69uX/TiBtzUS+fEP6ZIL/ItYQ2dO
+ e6gcJ6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUI48Of8Gby+Cgja1u2opRg5ZjqOUwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvMWViNTU4N2YvcnVuLTNlZDZlY2FkYzMwMTA5
+ YWQzM2JlMjdlYjM1MDk2NjYyMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvMWViNTU4N2YvcnVuLTNlZDZlY2FkYzMwMTA5YWQzM2JlMjdlYjM1MDk2
+ NjYyMAoGCCqGSM49BAMCA0gAMEUCIQDu+4DGXsVr8px7bUdiB3GkZzzLHbxI8oSd
+ UdTBjH+JpQIgF3pC4Gt6x+dQcks0VUedqIBHfoC/15vr2rI3bnXpA8ExggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFAly8AkGzH50YIjgjcp7IgriDvFVMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxOTIwMjc0NlowLwYJKoZIhvcNAQkEMSIEIALFtOj8TPlWnqY6amRZ
+ RaPSpXA8LdZkj4T2U51GO4bTMAoGCCqGSM49BAMCBEcwRQIhANeYdX4PrQqEgwCY
+ MSqI/SnBNzcdKISe9e1Svb0pMMkMAiBFviNvt5ag7Ne1e1bQhx+cbnsDmYAHfCJn
+ UPqG0ahF8g==
+ -----END SIGNED MESSAGE-----
+
+fix(scripts): refuse a test id that names two cases (#282)
+
+FE-060, FE-061 and FE-062 each labelled two unrelated shipped tests, and
+test-ids.sh was green over all three: it counts distinct ids on both sides
+and both sides agreed.
+
+Driven by test-ids-selftest.sh cases 14, 15 and 16, each observed failing
+against the previous revision of the gate with "it exited 0":
+
+  14  one id named by two catalog rows — repeated, and swallowed by a range
+  15  one id declared as a proposed catalog row by two test files
+  16  the merit check: one case declared once and named in three files, and
+      a parenthesised citation that is not a declaration, both stay green
+
+Case 16 is the line this refuses to cross. Sixty ids in this tree are named
+as a case in more than one file and all but three are one case with several
+facets, so "two files" is not the defect and a gate red over it would be
+red for something that is not one.
+
+Case 17 came out of case 15: a linked worktree lives inside this repository
+and the walk was reading three and four copies of every test file. Distinct
+counting hid it in both directions. Nested checkouts are now excluded.
+
+The earlier claim keeps the id in each of the three collisions; the runs
+view's two cases and the fourth verdict's badge take new ones. The mapping,
+the dates it was measured from and the reservations that moved are recorded
+in the catalog.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/1eb5587f/run-3ed6ecadc30109ad33be27eb35096662
+Agent-Run: run-3ed6ecadc30109ad33be27eb35096662
+Agent-Task: 1eb5587f
