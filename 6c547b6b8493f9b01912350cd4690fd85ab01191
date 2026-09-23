@@ -1,0 +1,57 @@
+tree ccbcb2059efe0fe70dbb3536f8e113562db65500
+parent 6d38516d67a4b7e342e27cd28fd5b13b72990ca4
+author Innsegl <agent@innsegl.invalid> 1790152164 +0000
+committer Innsegl <agent@innsegl.invalid> 1790152164 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIQYJKoZIhvcNAQcCoIIEEjCCBA4CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFHykmlhkMdchToPPnfoUs9DuuMmLMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTIzMDgyOTI0WhcNMjYwOTIz
+ MDgzOTI0WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5fwEHWMpj9unTK5d
+ h+Zr9crNsrr5NCuS1lLwrvDvte1PMM0gv2irYoiw0AHsEMjxhMKGUN7Ptx8lMwrZ
+ gRiUvKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU3k+NHvabdxUxf3zjzo4/ws+CwN8wHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvNDBmYzY0M2IvcnVuLWM2Njk2YTM2NWE2ZmIz
+ YjBmMzY0ZjQ2NDFmOWFhNzU1MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvNDBmYzY0M2IvcnVuLWM2Njk2YTM2NWE2ZmIzYjBmMzY0ZjQ2NDFmOWFh
+ NzU1MAoGCCqGSM49BAMCA0cAMEQCIF05xn8XOVMGGwG3SI6+evXxod16KrTdjh6I
+ WEuvl9yWAiAJ+nkpHoO67bkL14qbw/nBdFu/M+FwsrdD84WhEBIn0zGCASkwggEl
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUfKSaWGQx1yFOg8+d+hSz0O64yYswCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTIzMDgyOTI0WjAvBgkqhkiG9w0BCQQxIgQgsiJZtoBCK27ijBe5+ig2
+ wloZE2M+/4PV65Q4JCes1HAwCgYIKoZIzj0EAwIERjBEAh8kh4Q+ErpJd78vFbhN
+ BSWZPaeMQmCYeYp4FHr4Ix8PAiEA8pTd+LGeq6lckjaM8AGG9IttfWmeCrKfPiUh
+ 6ru5qZk=
+ -----END SIGNED MESSAGE-----
+
+fix(reaper): sweep the runs the ledger calls active with no SPIRE entry (#289)
+
+The reaper's population was the SPIRE entry list; the ledger's `active` is
+the absence of `run_retired`/`run_expired`. Measured: the ledger held four
+active runs, SPIRE held entries for three, and the fourth could never be
+expired whatever its state. The report said "3 live" beside a ledger of four.
+
+The SET is widened; the DECISION is not touched. An unentried run is judged by
+the same `orphaned` predicate, over the same last activity, with the same
+grace. No threshold is added. A working run with no entry stays live, and that
+control is SPI-018's whole table.
+
+Reconciled rather than driven from the ledger, because driving it from the
+ledger loses AB-11: an entry the ledger never heard of is a planted identity,
+and only the SPIRE side can see it.
+
+The report's second line now says what the sweep did not look at, so a count
+of entries no longer reads as a count of agents.
+
+Written by run-dfb673ec923e3751c613e3673124c075, which died on a usage limit
+with no stop event and made no commit. The orphan sweep (#288) recorded it. A
+retired run may not sign (IP §6.2), so this is signed under a fresh run.
+Driven by SPI-017..019 and RM-181 in internal/spire and cmd/innsegl.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/40fc643b/run-c6696a365a6fb3b0f364f4641f9aa755
+Agent-Run: run-c6696a365a6fb3b0f364f4641f9aa755
+Agent-Task: 40fc643b
