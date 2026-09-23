@@ -1,0 +1,79 @@
+tree 3d51fe4a196ef64b9c2f616538deee7e014b154c
+parent cb3ab35542e483fb4e9d8c4fc7c68fe0c5b4a329
+author Innsegl <agent@innsegl.invalid> 1789596328 +0000
+committer Innsegl <agent@innsegl.invalid> 1789596328 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJQYJKoZIhvcNAQcCoIIEFjCCBBICAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFBrCHvl4irbYLHJLYCQ7i/0oWhzoMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MjIwNTI4WhcNMjYwOTE2
+ MjIxNTI4WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEobboJ8pCuOfEcw64
+ wuWcl1mys7jMQeErP+3opxNxxTTbDDy+pjNy66tRLJW33B9oVTShvEQSsY72hB58
+ 0Sz6aaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU2iaQwKVgl0/ykl49IVuIAPohwyUwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvYzY1MTkxNDEvcnVuLWMyYWMwMWY3ODZhN2Y2
+ YWIxYTQ3YWJlMjcwOWFiMjRiMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvYzY1MTkxNDEvcnVuLWMyYWMwMWY3ODZhN2Y2YWIxYTQ3YWJlMjcwOWFi
+ MjRiMAoGCCqGSM49BAMCA0kAMEYCIQD8vz8P+VkUc19VCltPo0RTUYxgO9POjC2F
+ gloHNwObrgIhAN26z/dzCX0esX9/JI8CP0CyhUWIVtoU89l7qO2dIkb7MYIBKzCC
+ AScCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhQawh75eIq22CxyS2AkO4v9KFoc6DALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTYyMjA1MjhaMC8GCSqGSIb3DQEJBDEiBCA7snRi/Bjg7Et/SJ7E
+ j3FhTttL3Ge+D8meTY6yyD5UcTAKBggqhkjOPQQDAgRIMEYCIQD34j/tjEecXYiw
+ fV9DU+BMWE+x55ZhemZcSEvjs+WA3QIhANBNFsmD+iRc8WWWIMKM0assbDUFYlwg
+ KtOC+UwiHJdd
+ -----END SIGNED MESSAGE-----
+
+feat(deploy): mint the CA root from a key that never enters the CA (#238)
+
+Rungs 1 and 2 keep the CA key from being destroyed by accident. Neither changes
+what an attacker who reads the CA's container gets, and that is the half this
+issue exists for.
+
+Under the key-custody overlay the key is created inside a secret store and is
+reached over that store's API. Reading Fulcio's container now yields a TOKEN —
+revocable, auditable, with an expiry — instead of a key, which is none of those
+things. It is not "the CA cannot be abused"; it is "abuse has an expiry and a
+log".
+
+ca-bootstrap is its own program and its own image, not an innsegl subcommand,
+for the reason innsegl.yml already gives about the pseudonymisation secret:
+that would put certificate authority inside the binary holding SPIRE admin. It
+speaks the store's HTTP API with the standard library rather than pulling a KMS
+client tree into a repository with eleven direct dependencies, for two JSON
+requests whose exact shape is measured in the tests beside it.
+
+x509.CreateCertificate takes a crypto.Signer and never asks for a private key,
+so the self-signed root is produced without the key ever being in the process.
+
+MEASURED END TO END, not argued. Against a real store: the key was created, the
+root minted, and Fulcio started with --ca=kmsca --kms-resource=hashivault://...
+with no FATAL and served a trust bundle carrying that root.
+
+That run also found a defect before it shipped. The overlay first left Fulcio
+mounting the FILE CA's volume, which holds ca.key — a kmsca deployment with a
+private key sitting beside it, and OPS-049's claim would have been false on any
+existing deployment. The CA now mounts a volume holding a certificate and an
+issuer config and nothing else; the config is COPIED there rather than mounted,
+because the generated one lives next to ca.key. The merged configuration has
+zero fileca flags and one volume.
+
+The store starts SEALED and there is no unseal key in this repository. #238:
+"A dev-mode store that unseals with a known key is theatre and must not be what
+ships." So there is no server -dev, no root token in an environment variable,
+and bring-up of the default stack is untouched — the overlay is a second -f and
+nothing else reads it.
+
+The confined write uses os.Root rather than a suppression: the repository has no
+nosec precedent and this is not the file to start one in.
+
+Driven by OPS-049, OPS-050 and OPS-052 at unit level; their live halves and the
+operator flow are the rest of this issue.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/c6519141/run-c2ac01f786a7f6ab1a47abe2709ab24b
+Agent-Run: run-c2ac01f786a7f6ab1a47abe2709ab24b
+Agent-Task: c6519141
