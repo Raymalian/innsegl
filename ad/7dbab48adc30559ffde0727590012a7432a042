@@ -1,0 +1,36 @@
+tree 05d6c0f1779fe8d2d80dfe0ef789e3765c215a7d
+parent d39543806230959858044c1242ef61b1b72d381c
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788533109 +0200
+committer GitHub <noreply@github.com> 1788533109 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqmtl1CRC1aQ7uu5UhlAAAB3QQAJYJTDedWJ0Yaq4qm6ZRWds2
+ YaT+m6Cym7k5Z3Wv86C/IBxca6UELhImZOsefiRtQB7MrhJDQddCEjitmui1fi/Z
+ rODRrYl3f5w4EJnP4ZYbc/w4Cw+ZQ+qEvUYibbUQpPuMJhQ9yzARrLr7sFbLrzuI
+ u/E+wbkvWSuKPmOxlHcMV/5uFPX5COm/GtyM0MSUod0ZZDD9Nbh9cH2PdLrcsmkl
+ XIt8vE3jYt+axe47jw67Yl0gHic+gCGEx0XEXe02PtrxBpLhMiy39QifsjMhYhxM
+ F7+IpWxQ8rsoKlmKZ2AQ+7Qu/I0xrHQQ8Y3l+pg7llOV9umCgUXe0EiV/xHhlP4W
+ /mEQP+dEmelFFvoJPIzBpKzot+lTcb9dmsn1nIXtLZFuYzLT9CfvalEbGukYlMYm
+ 8xW45Fk5iFaZNLCzG4iWscdT4aWfReZA64wpQk77/KIlcm+qBIzdocWmd2ZqNfgB
+ OYb2TwXEmgiVo43A/O+meCVBNaarZNt7lDU/OU4UvJMnDiBYzOZliz/GQ4R5oS2K
+ hY1zr1B604Gnv7g4Wk15JThgiTjmI/vDq8nOADKOWfayaPKJVKTSOSCurHzfTdw5
+ ioQS1LUV+BiE0/HtuUcdtu2hgagQBMdbJ6RkNUx4FJg4CUWNnlegIK98OlYPj5zL
+ fEO0QsciB7rzrVLEdG1a
+ =Zf3L
+ -----END PGP SIGNATURE-----
+ 
+
+Close the open dependency security advisories (4 Go, 7 JavaScript) (#146)
+
+* fix(deps): bump vite to 7.3.6 and vitest to 3.2.7, closing dev-server security advisories
+
+* fix(deps): upgrade grpc to v1.83.1 and go-jose to v4.1.4
+
+Closes the open Go dependency security advisories: grpc's authorization
+bypass via missing leading slash in :path (critical), the xDS RBAC/HTTP-2
+vulnerabilities, and the heap-exhaustion OOM via HTTP/2 DATA frame
+fragmentation (both high), plus go-jose's JWE decryption panics (high).
+v1.83.1 is the minimum grpc version that closes all three grpc advisories
+at once; go.mod's transitive go-spiffe requirement was bumped to v2.7.0
+by MVS resolution (grpc's own go.mod now requires it). No source changes
+were needed.
