@@ -1,0 +1,59 @@
+tree 4a0b42ab0adacf378a5c9a09337bfb6cb8bd35a5
+parent 3de868a733fb6c1ae59cbabc67b066a023c40eb6
+author Innsegl <agent@innsegl.invalid> 1789289075 +0000
+committer Innsegl <agent@innsegl.invalid> 1789289075 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFFS1mMIJG3vLLqZT6z4ZgH+tElaWMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEzMDg0NDM1WhcNMjYwOTEz
+ MDg1NDM1WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAES3fCouPwo4b7QgK3
+ hwK0r+k2f/V3jpjzUPy8RTxjG8jPhQdMALiabBo4abeNi9Kip6HnbKoXsxtCEuVT
+ H/qHDaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUcjvGCjfi3DqXzs2uOySh3bvdckkwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvY2I1OTBiMDIvYjM4ZjMzNzIvcnVuLTEyYTM5MmI4MWRiOGUy
+ YzBjNGU2N2RkMmRjNjk0YTc1MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvY2I1
+ OTBiMDIvYjM4ZjMzNzIvcnVuLTEyYTM5MmI4MWRiOGUyYzBjNGU2N2RkMmRjNjk0
+ YTc1MAoGCCqGSM49BAMCA0gAMEUCIAWblvBlGvJ8xhMlRrfbuVeF3u8+2zOjru+/
+ Z3EF7VCWAiEAgYATnPtig3JUaJEnrveM6M3RlCyyRXy0N6AYAOSOrjExggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFFS1mMIJG3vLLqZT6z4ZgH+tElaWMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMzA4NDQzNVowLwYJKoZIhvcNAQkEMSIEIDkFD9d+lGWkosHq+4f8
+ iB07xlS+1crQXNCNSbTx1Vu7MAoGCCqGSM49BAMCBEYwRAIgPSCIg2UwF1vraqHu
+ vqPCp6TcsjH312ovjCfHXzVHwxACICtqWAz92Aw3o14DyjwQBqZTgYdH2jefGFGt
+ FrYbtRrT
+ -----END SIGNED MESSAGE-----
+
+fix(mcp): a dead error branch is dead wherever it is written (#207)
+
+CI's branch-coverage gate caught one one-directional condition:
+
+  internal/mcp/observesession.go:741:5: condition "err == nil" was 31 times
+  true but never false
+
+json.Marshal cannot fail for a struct of plain strings. #207 knew that and
+folded the marshal error into the MkdirAll branch so there would be no dead
+error path of its own. The instinct was right and the construction was not: it
+moved the undriveable half onto `err == nil`, which no input can make false.
+
+The error is now dropped explicitly, and what the branch was protecting against
+moves to where that risk actually lives. The concern was this type growing a
+member that does not encode -- a change to the struct, so it is caught by a test
+over the struct. TestObserveSessionMarkerAlwaysEncodes walks every field by
+reflection, fails if one is not a string, and round-trips a fully populated
+marker. Adding a channel or a func now fails a test rather than silently writing
+an empty marker.
+
+That is a better guard than the branch was: the branch would only have fired at
+runtime, on a deployment, after the bad member was already shipped.
+
+Driven by the gate's own output, observed failing before the change and green
+after, with all five surfaces back at 100% branch.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/b38f3372/run-12a392b81db8e2c0c4e67dd2dc694a75
+Agent-Run: run-12a392b81db8e2c0c4e67dd2dc694a75
+Agent-Task: b38f3372
