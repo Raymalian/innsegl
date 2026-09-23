@@ -1,0 +1,26 @@
+tree a33faadc781f41f0370aef4129a5899668a43ec3
+parent 170818072455ed3cfc0981ba55f0fc6d5d237de4
+parent f4fc47c542a167f7914e1b52e799e8108cc831d9
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789647964 +0200
+committer GitHub <noreply@github.com> 1789647964 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqq9xcCRC1aQ7uu5UhlAAAnfAQAEmYDWaYjIDwUtTsa745cVmK
+ R2O/4xYu6Vkk2AOXgytA/o0DKuwiupyfQ/wF0G1pJe+xukDrqHrTZkl9R6Gpfhix
+ Qd0DRx7lfM/C7w0PetRIhUwXrLtgHVKvgvKGw/xxLppymo9ETrr9JDZIQVoMLeOc
+ VtgpC2lJlrAr+s0vNPcRQnbPBM3/jkBnGt1tdDyMiGjYDT6vZWcbadsxxKiVphoH
+ 13sheEr0vIOLLIPd+f9Z/fxwbREA54QdgZ5hvDEgVdl7olsxncS0FZin5tPqenid
+ jfpdywAfJOyqQbhzgD9wyPVehmL5QJwB7l6LBOkRkSGCxq6uahKo+ko1Omz1O2Vh
+ jAhuxJ9GCA9eD3k+Z+wIqi1JFNReLOefSMOHzen5VCNQ0gw/vrd4K4SxzE6CEg5b
+ BLwTmaMyjECoK932S8c6KKtVSA2xTdEhhiTxBb+NsZECdq19d79ymY6n0pfGBx1W
+ RkoVtG+FSQcbPL/dJKR59BgX7u3jliCb7LSdYkS4CW0cTSDH7PWrKdzn4UftcvNg
+ Hbf6I/jRiRLQueEYXmxu/cozYIJn/KyPzTQHxQy6uHDxmUtmIwwUqNLSqLg6WMsi
+ XH7zJX1v8h2KTI6wai3Twjr43ETgjPAkdhPQj/I5bGe53zlxEGW+dCc0Eo1gUJxC
+ bTqss2VQEdTVDwgPs6Q3
+ =vL7V
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #251 from Raymalian/feat/rm135-parent-run
+
+Record the run that started a subagent, and unbreak signing
