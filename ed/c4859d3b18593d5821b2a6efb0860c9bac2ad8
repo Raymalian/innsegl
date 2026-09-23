@@ -1,0 +1,107 @@
+tree 37b324dbd51d1906fcd5fa270b3ec8d527ae8bea
+parent c5dfb50c0be7a0bc0537b823bc68e69dde69b44b
+author Innsegl <agent@innsegl.invalid> 1789384418 +0000
+committer Innsegl <agent@innsegl.invalid> 1789384418 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFGNPnLaMmpZp2xDcTIHk06fV2RCSMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE0MTExMzM4WhcNMjYwOTE0
+ MTEyMzM4WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0/nrj8sXH+I2nRlI
+ HqnM8lO/UT1uCu+dTYDKKf/GxdCarQBrNI+jw3vOEW2uaUJVPVqfOXvCCplXfUUm
+ z7Q9cqOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUgE48yJ6S/W4ZnBvGuUxdEPRaneIwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvY2I1OTBiMDIvY2RmN2Q5YWYvcnVuLWVkNGY0YjBkMzBjMmY5
+ YWI2NGRhMTYwMjY5MTE3ODY2MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvY2I1
+ OTBiMDIvY2RmN2Q5YWYvcnVuLWVkNGY0YjBkMzBjMmY5YWI2NGRhMTYwMjY5MTE3
+ ODY2MAoGCCqGSM49BAMCA0kAMEYCIQDOEMMlZLfEfEesuBll0GP24r5WfBFRKq3D
+ ZtSX66MLqgIhAM8ZsoUemb3nMCpZWJ3khjHilmT03iUFNnfkIOt2rQbqMYIBKjCC
+ ASYCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhRjT5y2jJqWadsQ3EyB5NOn1dkQkjALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTQxMTEzMzhaMC8GCSqGSIb3DQEJBDEiBCCKapcwrN+10s8IquXD
+ zSN7z1asclb//MUX4F+DVbx8wTAKBggqhkjOPQQDAgRHMEUCIQCHFNUvsmXNPJYj
+ +U8R3NfK0jMGXaHxHJuzN3Ehm6nseAIgC4qcQyNrvaQEcyCHpqsu4iJJVrINfyE7
+ eeE/+dJH2yY=
+ -----END SIGNED MESSAGE-----
+
+feat(dashboard): draw the run timeline as a rail, and strip the header (RM-141)
+
+The run detail had the approved design's tabs and serif heading and none of
+its body. This is the body: a facts strip, a rail, and the exceptions given
+somewhere to stand out from.
+
+Driven by six new test-catalog rows, written and watched failing first
+(30 assertions across four files), plus one more that closes the hole the
+last round left open.
+
+FE-122  the facts are one bordered strip of labelled columns -- agent, task,
+        tool calls, commits, then registered, ended, chain position, run --
+        and the full SPIFFE ID sits under the heading in mono with no label.
+        The uppercase field label is now ONE class string, shared with the
+        runs view's filter labels and every table's column headers, so the
+        three cannot be restyled apart. Nothing doc 06 3.3 names was dropped:
+        the credential expiry history became a real table drawn from the
+        shared table module, and FE-082's assertions are re-asserted against
+        the new treatment.
+
+FE-123  the timeline is a rail -- a marker per row, a connector between
+        markers, stopping at the last so no stroke claims a chain beyond this
+        response. An ordinary event now carries no ground and no border at
+        all, which is what gives the amber band, the red fill and the commit
+        card something to step away from (doc 06 P3). The rail itself is
+        neutral in every case; a node is not a verdict, so the exception is
+        carried by the marker's SHAPE.
+
+FE-124  a folded run of tool calls is a disclosure pill carrying the exact
+        count and the exact span of chain positions it hides.
+
+FE-125  `source:` moved rather than vanished. doc 02 3 gives eleven of the
+        twelve event types one legal writer, so the label restated the event
+        type on every row -- 1220 of them on a real run -- and that is what
+        made the repaired one unreadable. It is now on the rail when the type
+        permits more than one writer (`commit_recorded` alone, which is
+        exactly the repair case) or when the writer is one the type does not
+        permit at all, and inside the event's own evidence disclosure
+        otherwise. Repaired history is untouched: label, badge, amber ground
+        and sentence, all still on the rail. FE-012 passes unchanged.
+
+FE-126  `run_expired` reads as degraded. doc 06 3.2's "an agent died
+        unretired" is a degradation, so it takes the amber band and words of
+        its own -- distinct from an expired commit intent, which is a promise
+        nobody kept.
+
+FE-127  the activity log's mismatch count is a red chip on the tab row. It is
+        the one condition that can only be found behind the tab the page does
+        not open with, so the read was lifted into the view and the chip
+        renders outside both panels -- the same argument FE-113 makes about
+        the banner. The altered mark in that panel is now actually red: it
+        named a utility no token backs and compiled to nothing.
+
+FE-128 is the new gate. The suite was fully green while the page was visibly
+broken, for two reasons this closes. The fixtures were short -- `run-7f3a2c`
+fits anywhere -- so no baseline had ever rendered an identifier at the width
+the product issues; they are full length now. And nothing measured layout, so
+this walks the six views at 1280px and 720px and refuses any box whose content
+is wider than it is. It found two real defects outside this view, both fixed:
+the identifier chip could not shrink below its content, and the repo and
+agent-type tables had no scroll shell and took the page sideways with them.
+Watched failing: stripping `break-all` from `identifierText` fails 5 of its 12.
+
+Also here, from a browser measurement the visual fixtures could not reach: the
+`break-all` and `min-w-0` overflow fix on the verify page's check cards.
+
+Regenerated `panel-mismatch` light and dark, darwin and linux -- that fixture's
+identifiers wrap differently now that they are allowed to wrap. No other
+baseline moved.
+
+The timeline panel lost its raised ground and sits on the page ground, which
+puts muted ink on that surface for the first time; the pair is declared in
+contrast-pairs.txt and measured in both modes.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/cdf7d9af/run-ed4f4b0d30c2f9ab64da160269117866
+Agent-Run: run-ed4f4b0d30c2f9ab64da160269117866
+Agent-Task: cdf7d9af
