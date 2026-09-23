@@ -1,0 +1,73 @@
+tree e8b21c7f7c9c1836c312b29760dc0b2b27277b08
+parent 042035b71bd8f81b02dbeb2deec35a78e98e0285
+author Innsegl <agent@innsegl.invalid> 1789592406 +0000
+committer Innsegl <agent@innsegl.invalid> 1789592406 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFDZxBPeaGJi6YqbcDDWWengh78CnMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MjEwMDA2WhcNMjYwOTE2
+ MjExMDA2WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuxJJVDMyA+3lufEW
+ BfD+hf/NRkia2McX/vHe1wRc3cuMW0abr6Y5laddj61Qq/zVouRot0BEs1p1/KHQ
+ TbxwcKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUBvXzhZS/Oj3MC0h2ailfA0YhAQMwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvMWMzYjM3ZjUvcnVuLTBjYzgyZmZlNzYyZWI4
+ MjM2Y2Q2YWYwOWQ1OGExMWNhMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvMWMzYjM3ZjUvcnVuLTBjYzgyZmZlNzYyZWI4MjM2Y2Q2YWYwOWQ1OGEx
+ MWNhMAoGCCqGSM49BAMCA0gAMEUCIFzGN7Qy6JKjQYFezX+0JNZQk+GRatWuHuHj
+ 0K8z6dr/AiEA83ZdPsShU+XVvA/Q5Ut9Ldq4upP0tlzrENzybKKICBsxggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFDZxBPeaGJi6YqbcDDWWengh78CnMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNjIxMDAwNlowLwYJKoZIhvcNAQkEMSIEIC5h7BsLmctFTxNGLfe8
+ MpoohAiBIG+7mtN6eAIRXw1rMAoGCCqGSM49BAMCBEYwRAIgcB0bHGZy9JsTkFtJ
+ dM4rlrya+psCGzvI27Nty5dRDTsCIC24AUZPWPnfP0t2jpInZfgbNUXMkolEWtpH
+ 5Lo9X+zW
+ -----END SIGNED MESSAGE-----
+
+feat(deploy): run the backup where the deployment runs, and drop the host timer (#237)
+
+The schedule was a host scheduler: launchd on one platform, systemd on the
+other, two unit layouts, and a scheduler that has to exist at all. Three CI
+failures in one day came from that split, every one of them in the harness
+rather than in the thing being tested. A container runtime is already required
+by everything else here, so the schedule lives where the deployment lives.
+
+`innsegl-backup` starts and stops with the stack, runs once at start-up — a
+fresh stack otherwise has no backup for a whole interval while reporting a
+healthy backup service — and then on its interval. The sleep is the whole
+scheduler on purpose: it is a thing anyone can read, and the CronJob that
+eventually owns this schedule replaces the loop and keeps the container.
+
+IT HOLDS NO RUNTIME SOCKET, which is the reason for all of this and not a
+detail. What it replaced reached the ledger and the object store through that
+socket, which is root on the host.
+
+Running only while the stack is up makes the backup's liveness the stack's
+liveness. That is a real cost and it is paid in the open: every run records its
+verdict, and the healthcheck reports a missed window, a mismatch or a failure
+in words. `unverified` is healthy, deliberately — the dump exists and restores,
+and what was missing was sealed segments to adjudicate it against, which is the
+ordinary state of a ledger whose tail has not sealed yet.
+
+`make innsegl-backup` now runs through the service's own image, so the one-off
+run is the same command on both platforms and needs nothing installed.
+
+Measured against the deployment: the service took a backup on first start,
+fetched the segments, adjudicated them OK, wrote its marker, and reported
+healthy. Every verdict was then driven through the healthcheck by hand — a
+missed window, a mismatch, a failure, an unreadable marker and an absent one —
+and the socket assertion was mutation-tested by mounting one and watching the
+gate go red.
+
+OPS-035 is superseded in doc 07 rather than deleted: the timer it describes no
+longer exists.
+
+Driven by OPS-044, OPS-046 and OPS-047.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/1c3b37f5/run-0cc82ffe762eb8236cd6af09d58a11ca
+Agent-Run: run-0cc82ffe762eb8236cd6af09d58a11ca
+Agent-Task: 1c3b37f5
