@@ -1,0 +1,60 @@
+tree dfaf4741bc11c432676766f5c9d5047ceea9349d
+parent c73e33b038d377c8fb9e9d090cef611a2a6d0b27
+author Innsegl <agent@innsegl.invalid> 1789595119 +0000
+committer Innsegl <agent@innsegl.invalid> 1789595119 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFDyyI1g6T8DhbkRvxtRvsMn5Hh3/MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MjE0NTE5WhcNMjYwOTE2
+ MjE1NTE5WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE6F1Ld9swhSrZtYFW
+ eB+Wgd0Dj2fEsbXLdzfA+D9Lh8uOEymDclij9J/rKYiC9f0IyH+lSFMz35Mz1ww2
+ N1pWcaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUJHUUq2eSt9veySXSTRJE2RbDE8QwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvYzY1MTkxNDEvcnVuLTc4MWQ3MTUwYzhhYmEz
+ NDc5Zjg0MGJhMWNhZjQ3ZDc3MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvYzY1MTkxNDEvcnVuLTc4MWQ3MTUwYzhhYmEzNDc5Zjg0MGJhMWNhZjQ3
+ ZDc3MAoGCCqGSM49BAMCA0gAMEUCIBZFl0KD0fMSn1KVuV+fbItn8VxR6ahKD5Za
+ UcvHtdbBAiEA7NfnQFZ9Gfso+05I1fMbISYJOBdKhhO25JRLjzpocHsxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFDyyI1g6T8DhbkRvxtRvsMn5Hh3/MAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNjIxNDUxOVowLwYJKoZIhvcNAQkEMSIEIJBMCeorknNCD2alAuSQ
+ HiBKlaLgZ2bucDa3lER5hIOyMAoGCCqGSM49BAMCBEcwRQIhANJJo3wydKfW9nCi
+ D4lehdFudwJesOyEAxmHFSUfCdweAiBplCrYe0nknWeS4IwE9oxpDHD/nAenU9bN
+ Wpj1q8o24Q==
+ -----END SIGNED MESSAGE-----
+
+feat(deploy): let the trust root's bytes live outside the runtime's storage (#238)
+
+Rung 1 declared these volumes external, so `down -v` can only detach them. That
+is the accident that happened and it is closed. It is not the whole of the
+accident surface: `docker volume prune` and `docker volume rm` still reach a
+named volume, and the second is what an operator reaches for after the first
+one refuses.
+
+INNSEGL_TRUST_ROOT_DIR binds each volume to a path under it. The handle is
+still removable — nothing can stop that — but removing it now removes a
+POINTER. The bytes sit where the runtime does not own them, outside the
+checkout, where `git clean` and every volume command are equally powerless.
+
+Measured rather than argued: with it set, a mark was written into the CA
+volume, the volume was REMOVED outright — which is stronger than the prune the
+rung is named for — and the mark was still on the host path afterwards.
+
+Nothing else in the repository learns about the mode. The volume keeps the
+labels the teardown guard reads, so the rung is a deployment choice rather than
+a second code path through the stack, and the default is unchanged.
+
+This defends against the accident and nothing else. Anything that can read the
+path has the CA key exactly as it did before; what changes what a READER gets
+is rung 3, which is the rest of this issue.
+
+Driven by OPS-048.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/c6519141/run-781d7150c8aba3479f840ba1caf47d77
+Agent-Run: run-781d7150c8aba3479f840ba1caf47d77
+Agent-Task: c6519141
