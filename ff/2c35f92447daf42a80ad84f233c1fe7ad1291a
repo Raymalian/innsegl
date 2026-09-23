@@ -1,0 +1,76 @@
+tree 3bf795b31054c0e74fe165fb04f890b472444abe
+parent f860b6fe78a454f0baadb382e909235c1610dda1
+author Innsegl <agent@innsegl.invalid> 1789316446 +0000
+committer Innsegl <agent@innsegl.invalid> 1789316446 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIQYJKoZIhvcNAQcCoIIEEjCCBA4CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFHKy6cwfzmC51UXGzV2yO8auvpKTMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEzMTYyMDQ2WhcNMjYwOTEz
+ MTYzMDQ2WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPFsbAGwcnR3JBwFf
+ B2OxkH7dZm4Ec4fBxKkgkkI3lRkZxn1U+/ct6ahR8V3rxsE7s6GDeW1lApLoeuyu
+ fq/WCaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU9XoSgO2LWHMm8QFzO9sr3UlY+L4wHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvY2I1OTBiMDIvMWRiZGJiOTcvcnVuLTI0NjIzM2Q0Y2NhMjYx
+ NDRiOGFiOTY0ZjgwNmMzM2M5MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvY2I1
+ OTBiMDIvMWRiZGJiOTcvcnVuLTI0NjIzM2Q0Y2NhMjYxNDRiOGFiOTY0ZjgwNmMz
+ M2M5MAoGCCqGSM49BAMCA0cAMEQCIC03FMpQ8i3rce/UX2aeQqFp4NB54U0iHvM0
+ lZSo65zTAiAwBWFpcgpqnfceP1qE6dTR3H+6rWWGmivkhI2eL5RiuDGCASkwggEl
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUcrLpzB/OYLnVRcbNXbI7xq6+kpMwCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTEzMTYyMDQ2WjAvBgkqhkiG9w0BCQQxIgQgICQpAZWhsE7+124auL7J
+ rCgB0XsH/HuCes/O65Xfz8cwCgYIKoZIzj0EAwIERjBEAiBav0+K3wwh0eWgBjV/
+ l3bsv/aFXFgkL1BO/04SbLrFawIgXm8iJ1dTe46BLl4Uyi2WHPeUBNxu0huCMbKf
+ 6Hbt47Q=
+ -----END SIGNED MESSAGE-----
+
+fix(sigstore): persist rekor's search index, and rebuild the one already lost (#219)
+
+MEASURED, then fixed. Every commit signed before the last container recreate
+failed verification at check 2, and the record was never gone:
+
+  log index 300 artifact : c6a01d2d...4832
+  verify computes        : c6a01d2d...4832
+
+Same digest, and that index's integrated time is the commit's certificate
+validity start. Trillian held every entry. Nothing could find one.
+
+The index is Redis, and sigstore.yml ran it with --appendonly no --save "" and
+no volume, so it lived in the container's writable layer. Rekor indexes an
+entry when the entry is WRITTEN and never afterwards, so an emptied index is
+never repopulated -- it silently holds only what has been added since the last
+recreate. That is the sharp date boundary this started from.
+
+The comment above the service said "losing it loses search, never a proof".
+That premise is false and is now corrected in place: a verifier proves
+inclusion by ASKING the log, so an index that cannot answer is a proof that
+cannot be made. I5 says a third party verifies with no access to this system's
+database, and check 2 is the half the transparency log answers.
+
+Two parts, because preventing it does not repair it. The service gets an
+append-only file on a named volume. scripts/rekor-reindex.sh walks the log and
+rebuilds the keys, building under a temporary namespace and renaming over the
+live keys so an interrupted run leaves the old index serving.
+
+Observed failing first, live: after a recreate the index held 2 keys and a
+commit that verified an hour earlier reported FAILED. After the reindex, 1056
+keys from 528 entries and a commit signed three days ago verifies. After a
+second deliberate recreate, 1056 keys survive and it still verifies.
+
+Two defects in the script itself are written into it rather than quietly
+fixed. `docker exec -i` reads the CALLER's stdin, so calling it inside a while
+read loop consumed the loop's input and the first run renamed exactly one key.
+And the entries endpoint honours one logIndex; repeating it returns a single
+entry, which under-collected 528 entries into 106 keys without erroring. The
+second is the one worth the comment -- it did not fail, it indexed a fifth of
+the log and reported success.
+
+Drove VER-013, VER-014 and VER-015, proposed in doc 07 first.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/1dbdbb97/run-246233d4cca26144b8ab964f806c33c9
+Agent-Run: run-246233d4cca26144b8ab964f806c33c9
+Agent-Task: 1dbdbb97
