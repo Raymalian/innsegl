@@ -1,0 +1,55 @@
+tree b31f6f5f6d434216fd0dc27c6724ff246955d2e5
+parent 60faa63d2391c80ea0da6b159c4b03fe5807264c
+author Innsegl <agent@innsegl.invalid> 1789734940 +0000
+committer Innsegl <agent@innsegl.invalid> 1789734940 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFAReRukLAaWhEZDXykhoMZgGvQsEMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE4MTIzNTQwWhcNMjYwOTE4
+ MTI0NTQwWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEKkBYdZITIdQW0MAV
+ J83JWmoJtu24MNBwWPmJwduXIs3UuXGl+H15jZkIiJvfNi6nm2r36zCCW9FD8Ysq
+ PiA1NaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUiH8zR5KFgonaMGpCFRI4nki+zjwwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNjIxZmE4M2EvcnVuLTFjMGM2Mzg3MzAwNWY1
+ NTcyYTcxZmY3MjcyZWRkMmQ1MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNjIxZmE4M2EvcnVuLTFjMGM2Mzg3MzAwNWY1NTcyYTcxZmY3MjcyZWRk
+ MmQ1MAoGCCqGSM49BAMCA0gAMEUCIEJjGPIFYkt0fyKnPOaFgLGFhwQ44G2HXcOI
+ Wrfx58TNAiEA0WFS3Odih6BpfixjY1Rj6UeHu386P1H4LcMjdyFW7j8xggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFAReRukLAaWhEZDXykhoMZgGvQsEMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxODEyMzU0MFowLwYJKoZIhvcNAQkEMSIEIDpyGLtVajqZjz8rgYVL
+ Wk1/tyYfYk+IRcFw+2rlv6hFMAoGCCqGSM49BAMCBEcwRQIhAPvat+WnhmvM64Cd
+ iQDs3AahJyUUNen33zrAADWKo0MIAiB+BepzdFmtqTjxygTZraZhqDJGrAU6JZ8Q
+ hf7pGfatWQ==
+ -----END SIGNED MESSAGE-----
+
+feat(cli): innsegl retire — let an operator end a run (#257)
+
+Nothing in this system can observe that an agent died. The reaper sees
+silence, which is a withdrawal of standing authorisation and not an
+ending; a harness's stop hook speaks for the process it owned. An
+operator who knows the machine is gone had no way to put that into the
+record without an MCP client.
+
+`innsegl retire <run_id>` is a client of `retire_agent` on the
+identity-lifecycle listener and nothing more: no tool, event type,
+field, enum or error class changes. Four exit statuses because an
+operator acts differently on each — ended (0), already ended (18), no
+such run (19), unreachable (20).
+
+"Already ended" is derived rather than refused: IP §4 makes the tool
+idempotent, so it answers a retired run with success and the ORIGINAL
+instant and never refuses one. The command notes the instant it asks
+and compares; the limit of that is written down where it is done.
+
+Driven by MCP-086, which covers the four outcomes over a real MCP
+transport against a stand-in for the admin listener.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/621fa83a/run-1c0c63873005f5572a71ff7272edd2d5
+Agent-Run: run-1c0c63873005f5572a71ff7272edd2d5
+Agent-Task: 621fa83a
