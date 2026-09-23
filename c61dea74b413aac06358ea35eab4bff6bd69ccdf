@@ -1,0 +1,26 @@
+tree 3fb8b1945f65a9e5dbe92927a3c4eea8f5cb7e05
+parent fc0794a2952adb99c36e1675cd15948ea3b75655
+parent c614a240b10adb326440694050e41c24b84988ee
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789630023 +0200
+committer GitHub <noreply@github.com> 1789630023 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqq5ZHCRC1aQ7uu5UhlAAASYkQAG2AfjqgkSYA6Qp/s/xs6izg
+ yW1Lr1iWZ1DHyOG5AnRRSqyWJ77WTa4GB/iWPbx05h94EUPpOilt3dkHHF05hfXR
+ I3zMCpP49FuLaE7Xjerb9IVCjn4xjZTznRBkQKnl8fGMyH2pooZXBrIeZHZE78S2
+ sO493v+DyX21Os6BD1PaHlYgFkVKSoTYJAcvkVJpYTaun+Vs/NtPpW4AqlYT9iMN
+ vp1b08bppTJAgehWB1ZngWgoXf9o8WsFu9p4ld6MGBZ+jBVzm8kB6xjEDu7uD1Oq
+ aPOtltypBxvv80iomQLdlb/ALoYu082nGaL34MK3QD9EKZpdo9g1g+kiEDUucmR7
+ OvyRrBsbzFuiqVmky+kTsRIQO4zMbsW2OUxNvkwIPZpdO4CTPsXaQh4frFMYZXQS
+ IikIl6XpslTIXdpQeZnm3iSSPaXr3lpnCh9I0w0tpJdd1tcGHDaVwo5TXYDVYodF
+ NB1QbkOGrq/tKVjWwnoaktN1O5dx3i9IDMulzXkMuxEYQxnHMY4lPcOo7TtTKQWu
+ bV1yGfnB+U3926Wbb5S8ISJIHXhhsC9UGIGWs/ZmOhQst1V/yrh/bLWZfVU9jmHy
+ 6DnX4DAm4O8vA9SA5ysJNBPhETvZGata8cnGix06uwUvS1JYTONLh8Opz3UViLVA
+ WPOpsIxajXcAjXUoctMN
+ =ty3e
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #246 from Raymalian/feat/rm147-ca-custody
+
+Put the CA's key where the CA cannot read it
