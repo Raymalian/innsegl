@@ -1,0 +1,91 @@
+tree 24056380ab43c63c69855155366bf6fc14085c3f
+parent 2159ce3c187bbf35f070426ccda13a637b5f03cc
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788604057 +0200
+committer GitHub <noreply@github.com> 1788604057 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqm+6ZCRC1aQ7uu5UhlAAA1j4QAEDrlhy8OUDNiM63mhuITAR0
+ ICRL2FjTItlrx4o3JPREbzvmcJcvP3odaoJC+vhgDoVdV4lCz9Dpn8Cz0Sb6ofvB
+ pix3toMZ51TU++9csZ2b+HugGgEb4C+vG8IsPj1eH/FIXOKhsk5cbcNFb+8JctLb
+ UGFmbC4miPPbGk8p5Fcd/pPsHw8eu9/gpk4q3swC9SnW+yusqRLm4cN8U4LgwAED
+ R3zaHZ08wFfIyNPxp9+BOiQJm6FsgQwYraKS+w/JKM9iN0DJK9W3wgCkLARgDdoA
+ EwQN0aiV/3YjCUgEzqjBM2TP9unTipylyNSRY/eMExEHc14DlmqIANdNj6Yc8mrb
+ PbYq8rmanmuX7k9boGTVoyjU66cIp5AxZj74nx71Ah46XCSIt1miurqBPidkiHXv
+ 6qbQCwq/ids+3scQj3lZkrEXNDNwWhcoUBj8yBQR1yZviWJAvgmWPuIrPGBq1hVt
+ 3H75dsLTVA184JhYnwd0/TnaKXoi0Trvwf11HQsNjN9LfF4SQsJJXcl2ywqzNg6v
+ 8juqjwgFuJfbJw9+dziY9hzI41U+DgVlt2QuPzXswvMs9Cs59sUGhwARzkHMOYOy
+ vOTehBGvbAriJ+CYEJTIejBBSNE42wZcvalyYvme9Ao2me9vLOBIhWiGGAkr/P+t
+ tbEcvIH/NyheCzEYRqOE
+ =z/Oa
+ -----END PGP SIGNATURE-----
+ 
+
+Make the branch gate provably fail, and measure init's signing path (#72, #134) (#157)
+
+* fix(ci): add red-then-green self-test for the branch coverage gate and record ADR-0043 (#72)
+
+RM-064's acceptance criteria required the branch floor's self-test to
+demonstrate red-then-green, not only the statement floor's, and required an
+ADR recording the gobco choice. scripts/branch-coverage.sh,
+COVERAGE_REQUIRE_PACKAGES=1 and the removal of the NOT ENFORCED block were
+already done and are verified working, not touched here.
+
+Adds scripts/branch-coverage-selftest.sh, shaped like
+coverage-floors-selftest.sh: builds a throwaway module with an uncovered
+three-condition branch plus a fully-covered control surface, asserts
+branch-coverage.sh reports the ledger surface FAILed and the control surface
+ok (exit 1), covers the branch, and asserts both surfaces ok (exit 0). Wires
+it into .github/workflows/ci.yml as its own job, branch-coverage-gate-selftest.
+
+ADR-0043 records why gobco's condition coverage cannot be replaced by
+statement coverage, why it floors five files across the four IP §2 surfaces,
+and why it runs as a separate CI job: gobco reruns the tests rather than
+reading an existing profile, so folding it into the statement-coverage job
+would rerun internal/verify's and internal/mcp's container-backed suites a
+second time for no benefit.
+
+* fix(ci): stop branch-coverage comments claiming verify/mcp do not exist (#72)
+
+internal/verify (RM-037) and internal/mcp (RM-022..025) have landed and both
+report ok at 100% branch coverage, not PENDING — the header comments in
+branch-coverage.sh and coverage-floors.sh still said otherwise. Points both
+at ADR-0043 for the mechanism rationale instead.
+
+* docs(adr): index ADR-0042, which was added to the notes and not the table
+
+* test(cli): add a real-stack integration test for init's signing path (#134)
+
+spireSignVerifier.Run and createVerificationCommit in cmd/innsegl/initsign.go
+sat at 0% coverage: every other layer of `innsegl init` is tested against
+real temporary git repositories and a real HTTP checksum fetch, but the one
+step #117 exists to guarantee - "setup is finished because the chain held" -
+had no measurement behind it.
+
+Adds INIT-008 (happy path) and INIT-009 (a real misconfiguration is refused)
+against a real containerised SPIRE, Fulcio and Rekor, combining
+internal/signing's harness shape with internal/mcp's admin-proxy-over-socat
+and test/smoke's PEM-file admin credential so spireSignVerifier.Run can
+spire.Dial the admin API from the test process itself.
+
+The stack costs ~8 Docker networks per run (#100's address-pool ceiling), so
+it is gated behind INNSEGL_RUN_INIT_E2E and does not run inside the default
+`go test ./...` or CI matrix - "make the test schedulable" rather than
+"reuse an existing stack", since cmd/innsegl has no existing SPIRE/Sigstore
+stack and ADR-0022 already rejected sharing one across processes.
+
+Driven with TDD: run first against a deliberately wrong OIDC issuer,
+observed a real Fulcio-side certificate rejection, then reverted and
+observed a real pass. Coverage of the two target functions: Run 0% -> 84.0%,
+createVerificationCommit 0% -> 69.0%.
+
+Boundary: this proves everything downstream of credential acquisition -
+SPIRE admin dial, JWT-SVID minting, gitsign, Fulcio issuance, the Rekor
+entry, worktree isolation, trailers, and a second independent `innsegl
+verify` - through the file-based bootstrap branch of
+openInitCredentialSource. It does not and cannot exercise the interactive
+OIDC browser login itself, which #117 says is the actual identity proof;
+that remains provable only by a human running the command.
+
+* ci: run init's end-to-end signing test in its own job (#134)
+
+* ci: match the init end-to-end test's actual name
