@@ -1,0 +1,80 @@
+tree 1df7efa0880ec5eec10059a6ce594e42cc4d38a5
+parent 7a979ac9f34130baa2dfb2938f1c50093de040a7
+author Innsegl <agent@innsegl.invalid> 1789319565 +0000
+committer Innsegl <agent@innsegl.invalid> 1789319565 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFDaeOw5zZdI3DQLtnfsguudeUfUiMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEzMTcxMjQ1WhcNMjYwOTEz
+ MTcyMjQ1WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEumurmAc1p7SNbgoS
+ m3h4ktik5yfeVpxrEFC3gtBSrV+wRbRl+25B45K2gWK9T5DLSyhYvLh50td80C23
+ J6y436OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUOBC+fD3cNZpRdV8vbyyGwl/PU0swHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvMzYyMDYxNmYvMWRiZGJiOTcvcnVuLTRjN2EwYjcwNDQ0NjUw
+ ZjY3ZDc3OWMwOWZlYzQ4MjY2MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvMzYy
+ MDYxNmYvMWRiZGJiOTcvcnVuLTRjN2EwYjcwNDQ0NjUwZjY3ZDc3OWMwOWZlYzQ4
+ MjY2MAoGCCqGSM49BAMCA0gAMEUCIQDPUmIuPbc1DmKhinUQUMAjD3iR+6c1yCBs
+ YkFdsccXlAIgY91oSGTB/yS9SWkyMoOJ6CDIMsck2RGZ7SxN+bKQP5YxggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFDaeOw5zZdI3DQLtnfsguudeUfUiMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMzE3MTI0NVowLwYJKoZIhvcNAQkEMSIEIMVXkSjR5SFHBIuAtgPx
+ JGHR/A24KxNeJV5QsOFJOAAhMAoGCCqGSM49BAMCBEYwRAIgMs4lLXdYwS4EBUBm
+ DRPCycuJw2U+zYETjwGgfsKTzxcCIC6zv6SLLFoiwZxteK99zVzq+iVRQN5e5yZU
+ xtCCdZNR
+ -----END SIGNED MESSAGE-----
+
+feat(hooks): drive the three ingestion tools from a second harness, then pin their names (#209)
+
+E11 added describe_workspace, observe_tool_call and observe_session and rewrote
+the reference shim onto them. None of that demonstrated anything on its own:
+the tools were extracted from that harness, so that harness was always going to
+fit them. This is the measurement that turns "harness-neutral" into a fact.
+
+The second harness is Codex CLI, which has no hook system this shim can use. It
+writes one JSONL rollout per session, so the route is post-hoc transcript
+ingestion -- session_meta opens the run, each custom_tool_call and function_call
+is forwarded, the end of the file retires it. That is the weakest assumption
+available and therefore the strongest proof: it is what a harness that
+cooperates in no way must do, and anything the MCP still left a caller to work
+out for itself would have surfaced at once.
+
+Driven by OPS-022 and OPS-023, both written and watched failing first. OPS-022
+started at six failing assertions with nothing on the wire; OPS-023 was red
+because renaming observe_tool_call passed in silence -- the gate knew five
+names, reported "mcp-tool 5 5 OK", and the pin was not live. After the pin the
+same rename is caught twice, as a partial set and as drift.
+
+Measured end to end against a live deployment, on a throwaway repository: a run
+with identity, three tool calls, a credential, an intent, a signed commit at
+Rekor index 532 and a retirement, in that order -- the same event sequence a
+reference-harness run produces, with the same source and schema_version, and
+bodies on the operator's volume digest-named and 0600. The commit verifies from
+a container with no route to the ledger: Fulcio chain, Rekor inclusion proof,
+trailer matching the certificate identity.
+
+There is no commit refusal on this route and none was invented. A transcript is
+read after the session, so by the time the shim sees a commit it exists. What is
+lost is exact: an unattributed commit becomes possible, attribution survives
+because the call is in the transcript, and enforcement moves from commit time to
+merge time where scripts/verify-branch.sh still refuses it.
+
+The shim is 15 executable lines of read-and-forward against a 30-line target,
+plus 26 of MCP transport that no tool can remove and 11 of git plumbing for the
+stop-time capture. Those 11 lines are reported rather than hidden: the reference
+shim has the same three commands, and a second shim needing them independently
+is what says the capture belongs in the MCP next.
+
+The stub MCP moved out of shim-selftest.sh into scripts/hooks/stub-mcp.py so
+both self-tests drive one copy. Copying seventy lines into a second test would
+have been, in the suite that proves E11, the exact duplication E11 answers.
+
+ADR-0048 records the harness, the route, the limitation and the line count.
+
+Agent-Identity: spiffe://innsegl.dev/agent/3620616f/1dbdbb97/run-4c7a0b70444650f67d779c09fec48266
+Agent-Run: run-4c7a0b70444650f67d779c09fec48266
+Agent-Task: 1dbdbb97
