@@ -1,0 +1,77 @@
+tree c5af9f354af7c3e5d700d05e7c1080450ce5c3c3
+parent c73e33b038d377c8fb9e9d090cef611a2a6d0b27
+author Innsegl <agent@innsegl.invalid> 1789595228 +0000
+committer Innsegl <agent@innsegl.invalid> 1789595228 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFH9Mrvo/5by6VogUDlbhXBTsfOjRMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MjE0NzA4WhcNMjYwOTE2
+ MjE1NzA4WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1VfrIzza0zDyxxgJ
+ B/iVX18K3AOw7otYZOsBQ3RyIXkvyw2MHLnPCmXPv82G4VccAjK/ZheEOIHFFA7e
+ lX+F/aOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUqNCB6dVN+exH3/5CZ3xtPaPVk78wHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvNDFlMDRlYzUvcnVuLWJmZGVhM2FkNjFmNmNj
+ YTdlZDVhZWM0MGQzN2VhYzQ4MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvNDFlMDRlYzUvcnVuLWJmZGVhM2FkNjFmNmNjYTdlZDVhZWM0MGQzN2Vh
+ YzQ4MAoGCCqGSM49BAMCA0gAMEUCIQDzD6v0TSYLoeRLSFiZZkX0jNz5JqFyFhXR
+ Ng1/SI2bMQIgcTJQ5+GkhA8VFc/CA9foZjsZ4STQ//TwO4YHbEIn6JExggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFH9Mrvo/5by6VogUDlbhXBTsfOjRMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNjIxNDcwOFowLwYJKoZIhvcNAQkEMSIEIHN49uP4lfQ8glG9pH/D
+ vy3AN7nQGHGWh8gOXxgiAtWdMAoGCCqGSM49BAMCBEcwRQIgakcB90L5B5zLGgvR
+ z3+OqxaNtJlRwv8NTepnuUQ57gMCIQCgFFAlA8jkJ8vd7c8jXLFJxUUP3eFS5nvN
+ xnAr3ej9Vw==
+ -----END SIGNED MESSAGE-----
+
+feat(ci): gate the exemptions IP §3 says not to build
+
+doc 01 §3 says "Do not build these. If you find yourself building them, stop."
+A rule about what a repository must NOT grow has no failing test to write:
+nothing breaks the day someone adds a policy engine. It stops being true
+quietly, in a pull request that looks like a feature, and the only thing that
+can notice is something reading the repository on every change.
+
+Running what already existed found a gap rather than a failure. Of the eight
+exemptions, two are genuinely asserted — E4 by LED-011, MCP-044..046 and the
+TestE4 cases, E8 by TestE8TheWrapperHoldsNoKeyMaterial — and nine such cases
+pass. The other six were prose.
+
+Four of those six are checkable as absence and are now checked: no policy
+engine (E1), no SPIFFE federation surface (E5), no blockchain or
+ledger-database product (E6), no backfill of pre-adoption history (E7).
+
+TWO ARE NOT CHECKABLE AND THE GATE SAYS SO rather than claiming them. E2 is
+"attestation proves what a workload is, not that it behaves" — an absence of a
+claim, not of code, with no string whose presence would mean the claim had been
+made. E3 is "do not chase the badge", which would look like ordinary work on
+verification. A gate pretending to cover those is worse than one naming them as
+review's job.
+
+Comments are not code, and that half matters as much as the rules. This
+repository discusses its own exemptions constantly and must be able to: doc 01
+itself says the design "must not preclude federation". A gate that fired on the
+word would make the exemption unmentionable, and the first fix anyone reached
+for would be deleting the explanation. So every rule strips comment lines and
+test files are out of scope.
+
+The gate excludes itself and its self-test, by two literal paths, because both
+must contain the strings they hunt for — it reported four breaches on its own
+files on the first run. no-operator-paths.sh carries the measurement of an
+exclusion that was too wide and produced a false pass in the gate whose whole
+job was to prevent one, so this one is paths rather than a directory, and the
+self-test plants a breach in a different script and requires it caught.
+
+That self-test is the reason to believe any of this. The gate passes on this
+repository today and is meant to, which is exactly the condition in which a gate
+can be worthless: every rule could be misspelled and the output identical.
+
+Driven by OPS-053 and OPS-054.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/41e04ec5/run-bfdea3ad61f6cca7ed5aec40d37eac48
+Agent-Run: run-bfdea3ad61f6cca7ed5aec40d37eac48
+Agent-Task: 41e04ec5
