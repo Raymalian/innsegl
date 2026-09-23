@@ -1,0 +1,87 @@
+tree e694a3c670b172c8c6c5f06c75a2ce1b940b550b
+parent 986cd295a08dec23244200be9375a42435066813
+author Innsegl <agent@innsegl.invalid> 1789568184 +0000
+committer Innsegl <agent@innsegl.invalid> 1789568184 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFFXT45n1fQpokfXe/Tuu0nvQfSYoMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTQxNjI0WhcNMjYwOTE2
+ MTQyNjI0WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7uEk71RjSaRVOVzy
+ YrlIxPY8abeccTNFD62fMeb5j0hEUPwQ17w+CTQeIedMNYlGqpXIyTqPMKUeImZi
+ E+3xJqOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU/a1WCnzx5CF83EJJuzKltn6UNVwwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvNGEzZjY2MDQvcnVuLWQ3NjNkNGFhMGI0NDgz
+ NjM3NzY5OWJjMjA0ZmExNWQ3MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvNGEzZjY2MDQvcnVuLWQ3NjNkNGFhMGI0NDgzNjM3NzY5OWJjMjA0ZmEx
+ NWQ3MAoGCCqGSM49BAMCA0gAMEUCIQDdhly7qlzY6fcqrXn2FI5VZVTwcdpKZiZ5
+ 5hkip/YKwAIgP+CTSYIkhNK42mGMiVmsRiDUpnbLQB55Nwailx89fjgxggErMIIB
+ JwIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFFXT45n1fQpokfXe/Tuu0nvQfSYoMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNjE0MTYyNFowLwYJKoZIhvcNAQkEMSIEIIR73/plvcajO+9r5UbX
+ rirp2kfjrJ9z0TVSZwYDFdmRMAoGCCqGSM49BAMCBEgwRgIhANWvZsUL6CAFWy+N
+ Eo41KXndo8NkDJKDaYWWNVuQk2czAiEAgfuVtSzLJGtNQkL1Zg8H3+L3wxR+v0gt
+ nTWZOMFkYZ0=
+ -----END SIGNED MESSAGE-----
+
+fix(deploy): keep the trust root out of reach of the teardown
+
+A teardown with volumes removed took the ledger from 19,595 chain positions
+to 60 and the transparency log from 525 entries to 3, and minted a new Fulcio
+CA key and a new Rekor signing key. Commits signed the day before stopped
+verifying. The signature is intact and the trailer still matches the
+certificate; the CA that issued it and the log that recorded it are gone.
+There is no repair. It happened twice the same day.
+
+A compose project's volumes are exactly what `down -v` removes, and the CA
+key, the log key, the log and the ledger were all in them. So:
+
+scripts/teardown-guard.sh refuses any command that would remove a volume
+holding a key or the chain, names what it would have destroyed, and takes
+INNSEGL_DESTROY_TRUST_ROOT=<volume>[,...] from an operator who means it.
+Naming the volumes is the opt-out, and a volume at risk that is not named
+still refuses. Every teardown target in the Makefile goes through it.
+
+deploy/compose/trust-volumes.sh creates the irreplaceable volumes outside the
+compose project, stamps them with one deployment id, and migrates an existing
+deployment's bytes into them with the stack down. A set that does not agree
+on its id is refused rather than adopted.
+
+deploy/compose/sigstore.yml and innsegl.yml declare those volumes external
+when brought up through make. The defaults reproduce the project's own names
+exactly, so the README's boot block and test/smoke are unchanged.
+
+scripts/rekor-tlog-health.sh asks for the pinned tree by id and reports its
+absence in those words. A recreated Trillian database left Rekor answering
+HTTP 500 to every request with no explanation, and the readiness report now
+says which tree is missing.
+
+scripts/backup-schedule.sh puts scripts/backup-ledger.sh on a timer, writing
+outside the checkout. It was written, tested and self-tested and had never
+run unattended.
+
+Two things were found by measurement while proving this. A `down -v` also
+removes Rekor's search index, and Rekor indexes an entry when it is written
+and never afterwards, so the log kept the same tree and the same 25 entries
+while `innsegl verify` answered "Nothing ever logged a signature over this
+commit object" about a good commit. That is a false accusation rather than an
+unavailable verdict, so bring-up now rebuilds the index from the log itself.
+And the pseudonymisation secret turned out to belong on the protected list,
+because destroying it changed what the same task string hashes to and left an
+already-registered run unable to claim a commit.
+
+Driven by OPS-031 through OPS-036, each watched failing first. OPS-031 is the
+case that decides the rest. It runs a real `docker compose down -v` against a
+real project and reads the real exit status, sends the same teardown through
+when it touches nothing protected, holds an opt-out naming one of two volumes
+to still refusing, and requires an opt-out naming both to succeed. That last
+case found a real bug, since under `set -o pipefail` the opt-out released only
+the last name in a list.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/4a3f6604/run-d763d4aa0b44836377699bc204fa15d7
+Agent-Run: run-d763d4aa0b44836377699bc204fa15d7
+Agent-Task: 4a3f6604
