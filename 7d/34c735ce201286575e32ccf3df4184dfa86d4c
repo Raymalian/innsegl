@@ -1,0 +1,56 @@
+tree dc1c19871f20a0382d20f4f4dea089198ac33257
+parent f78868b6daaf565db8033f12869c98918f3c3829
+author Innsegl <agent@innsegl.invalid> 1789242102 +0000
+committer Innsegl <agent@innsegl.invalid> 1789242102 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFENjwkyIUQyee3jxNEOOU0D/ghifMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEyMTk0MTQyWhcNMjYwOTEy
+ MTk1MTQyWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEp2jwRsD9/cN5+YPT
+ VDDzvtGIPFddp7lQXyp0dR85CkUEou1KqB2MLRp8v3dI+4Q6555kfCycvo5oOcPj
+ x1vhxqOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUw3fqN9Cu7sRv9R1v4Uz858g1AEwwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvY2I1OTBiMDIvYjM4ZjMzNzIvcnVuLTVjYmY3MTM5MzdlNDQ0
+ OTJkZDA3OTVmMjk5YmYwNTM5MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvY2I1
+ OTBiMDIvYjM4ZjMzNzIvcnVuLTVjYmY3MTM5MzdlNDQ0OTJkZDA3OTVmMjk5YmYw
+ NTM5MAoGCCqGSM49BAMCA0gAMEUCIQDl+TBx3EHop6wbLZw/NHq1hJ3+j57C8gBg
+ Fp2JLxn+HgIgTPk1dVos2x0423TdX3YWbWnLw5LUlNoSOmsRnYvE2TExggErMIIB
+ JwIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFENjwkyIUQyee3jxNEOOU0D/ghifMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMjE5NDE0MlowLwYJKoZIhvcNAQkEMSIEIO9h3nqG0Indr3S/zygz
+ gtx5oAk9j/tYk8ozevv9mleaMAoGCCqGSM49BAMCBEgwRgIhAN+GRpoKLUVWRwi6
+ VeCwzQQZ2aibDYfVZ9cxx1NVWZ7RAiEA3+zwWnU1JcY049I+i/QZeCX2Z7CnxeLF
+ o2OoI9sPReE=
+ -----END SIGNED MESSAGE-----
+
+fix(ci): the operator-path gate failed on its own two files (#212)
+
+The gate reads git-tracked files. I verified it BEFORE staging it, so it
+scanned 752 files and never scanned itself, and I reported it green. Committed,
+it became tracked, and CI went red on four occurrences in its own source: two
+illustrative paths in the gate's WHAT IT LOOKS FOR comment and two in the
+selftest's description of its fifth case.
+
+#207's agent found it, confirmed it against 15c8f27 with its own work stashed,
+and correctly left scripts/ alone because that directory is this issue's.
+
+The comment now describes the shape in words and points at PATTERN, which is
+the precise statement regardless. The selftest assembles the prefix-user name
+from fragments, as it already did for its other plants.
+
+Worth recording, because the second mistake is more interesting than the first:
+the replacement comment explained why an example path cannot appear here, and
+contained one while doing so. A rule that is easier to violate than to describe
+is exactly the rule that needs a gate rather than a convention.
+
+No test change. The selftest's six cases already covered this; what was missing
+was running the gate after the files were tracked.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/b38f3372/run-5cbf713937e44492dd0795f299bf0539
+Agent-Run: run-5cbf713937e44492dd0795f299bf0539
+Agent-Task: b38f3372
