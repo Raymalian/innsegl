@@ -1,0 +1,43 @@
+tree 157a2fe6b5ac3d50bf8cd8c0b7fdf5383a92cc01
+parent 03b14005f5cd58c336612b3bd2f07d96a71b2973
+author Innsegl <agent@innsegl.invalid> 1789633621 +0000
+committer Innsegl <agent@innsegl.invalid> 1789633621 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFAio5XOw4PSj4z2Fu0RwM/TKMrhgMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE3MDgyNzAxWhcNMjYwOTE3
+ MDgzNzAxWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEKBJ1uSLEprdd/8se
+ ryAgo+IpK4t8wTWs1atVlenu54Ww+h0euTGRgYMruKkn/6cT8rJtARWi291nTaKB
+ 9elDcqOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUO5g2wW8SmbcspQtkhnI+SYGaNpMwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvZTJlOGQ2NWMvcnVuLTM5MzhhZDZjYWEwMDQ0
+ NTdmZGZjNzE5N2QyNTlhNjU5MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvZTJlOGQ2NWMvcnVuLTM5MzhhZDZjYWEwMDQ0NTdmZGZjNzE5N2QyNTlh
+ NjU5MAoGCCqGSM49BAMCA0gAMEUCIF6ISyNvR2IbWOubuf1X13rJyKf4YiikmM8W
+ HfoIsudMAiEAt7MkSQmoUZNlnPbm72GPPu1N68pZba5Amn47enUQtFQxggErMIIB
+ JwIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFAio5XOw4PSj4z2Fu0RwM/TKMrhgMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNzA4MjcwMVowLwYJKoZIhvcNAQkEMSIEIKxt2vcPcEHPlVmVfBGP
+ NmD/8WOUFb8stwNXKZFC58hLMAoGCCqGSM49BAMCBEgwRgIhAJmF5Uwk4FunAh/r
+ USwqr/nNCcpuNnK+ADgUmr2fUvEXAiEA/zlGGGrIfLrg2YGG0vu4xHocIQQKOqle
+ xA/cbESGc4Y=
+ -----END SIGNED MESSAGE-----
+
+fix(scripts): count a ranged catalog row as the rows it stands for (#169)
+
+The id check read `| MCP-001..005 |` as one id and reported the other four as
+uncatalogued. That is how it first claimed 75 orphans; four of them were its own
+parsing, and the real number is 71.
+
+A check that overstates is not a smaller version of a correct one. This one was
+about to be used to justify writing rows into a spec document, and four of those
+rows would have duplicated a row that was already there.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/e2e8d65c/run-3938ad6caa004457fdfc7197d259a659
+Agent-Run: run-3938ad6caa004457fdfc7197d259a659
+Agent-Task: e2e8d65c
