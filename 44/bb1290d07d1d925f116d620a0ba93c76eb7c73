@@ -1,0 +1,26 @@
+tree 3bf795b31054c0e74fe165fb04f890b472444abe
+parent f860b6fe78a454f0baadb382e909235c1610dda1
+parent e38c417a8605e188045cf0c7f1be54aad77dd8da
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789318219 +0200
+committer GitHub <noreply@github.com> 1789318219 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqptRLCRC1aQ7uu5UhlAAAUEYQAKru+/VRmiHCX9Te8QbpZSEX
+ X1K5Pd8vvFX1Jxb9UfD4T1CdZhcvUZhImcA27GEusSQ2h1CIDmcpMRkgfteenyHC
+ 5XyPwsXiG17hIYR0/6SghWK9Q6+Qb+6EbeKyjrczuyoeF+wFLCuhWpGFEQCkki06
+ fBWI/pf7Uuj+Qi1p8u+xlX9I5uPypT7MsOWjdeM/hGr3yD4QlYbG361TAbrium/b
+ xh8EvWoUgXm72jb0WvtJR8yyjw2xq+SAR4LZLrxRkU2fLKaRGE6ZmU4VSEYZJhRu
+ N3VM8JJvcThHFJFQUesahbPetoTnHgLeajWO9GzM17Nlet52BONeEw7lXvgNY6Rw
+ rx3Mpjet826IisALYqStBg5N1/r/Q1lQ4Q70iBeS2EBCk5cMh8WCD9kTPu0wxDtV
+ Xig0kcF5ehb2Cv2cj4B8676vyB1/11hrusARoEFlnSfhRb4Qkil6toGYSd5lfxQ2
+ A8Okt3rJy836wLfb2V0mND+6ZdgEAAX3Wl3RfSKkW5sRwxynMOA1edbnmo8cV6iw
+ Q2Mt6hYUPdP14bBQwFLowImZMZiqfsexjwzpF82mO9MvKMvE+fsugIazIoAB8GaS
+ rVB4c/wHLl6Xo6EKoE1H7d4wR0SirVUPlkUpSaYOPfnrJQgWPCdht9HdDFTNo45a
+ ZJwYLvrXS5Nl83Qsf9tT
+ =+bA/
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #220 from Raymalian/fix/rm138-rekor-index
+
+Persist Rekor's search index, and rebuild the one already lost
