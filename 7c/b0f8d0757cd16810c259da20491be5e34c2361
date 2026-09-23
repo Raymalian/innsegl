@@ -1,0 +1,37 @@
+tree 1396d0993aebdd20246258639c46e00e2d4b9df9
+parent 50b1e72051262bd182345606dad8b87c6675be0a
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788635160 +0200
+committer GitHub <noreply@github.com> 1788635160 -0700
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqnGgYCRC1aQ7uu5UhlAAAd8UQAGD65X4jRGo/QpZZ9sPZfL5C
+ 9p1uIlcyA8rMOux7isrwDE/vUk4VJwliP7+9Xq9DputBFEbfL1Z+18Dc5cDqPe9r
+ l2cuDdbBbKXj6La9CNXMXdnq6i0/sJM6GiYFa+OlsVn3i2or3UAXBxQQVLvgoxV5
+ Gvb2EQfNv50fnzb3YI9s88N17HfqpwM+Zp+EleNNJUu2c0e1JAnopAE3R06vmEpj
+ MQUkKWMUn+A1a5brySLYDT+WJ99G8gyzQPpVbdQmO9S3zM/zznAv3IclvsL7NmDl
+ JHia9nUFzPo3+XLHnhCnm8z4JuPtjDBWiACpcyvXvZNcyywVFkT7qM5Xm5GB1zNf
+ pdz2S1a2FbZ1O4KX6gZH5KWvEsTecHi9H619tXhACU+dZdincUje6dsap4mMeWBr
+ bnvGYc+8hIS/CRvK2/XI8sCcGMcVd40D13CpciTWxUyw7tsHfzaqf4wuFyIJ5Q0l
+ qR3D0uAuao7YE6Dp3uQGhdEITK+amfXhotAycXUADGv5h5lR5PGBoPynkN6pDu2S
+ qzM5PfTgsSSrVMqcIbBtNgHUiy0Rm5mzIg4/PIw8d3vyNa9THzFXgOFvZD7w4VTh
+ nJEoDVUVNcgsZP/wWwtgw9QU597M9NAaYoP0Vf35VZq6dle1Pt7i4JBOecTa5Myg
+ DC+Gtzmi/auVfTrq0MnQ
+ =SoG1
+ -----END PGP SIGNATURE-----
+ 
+
+Drive the last timing test, split down from purge, and move the MCP off 8080 (#136) (#161)
+
+* test(mcp): drive the mid-statement-commit race off the wait observer, not a clock (#136)
+
+* test(failure): wait out the killed call's orphaned gitsign before classifying (#95)
+
+* fix(make): stop innsegl-down deleting the ledger, add innsegl-purge
+
+* docs(runbook): the four MCP calls an orchestrator makes, from a real run
+
+* fix(deploy): publish the MCP on 28080, not 8080
+
+* test(failure): bound each orphan poll with its own context
+
+* test(failure): return sign_commit's fuzzing to pending, keep the orphan handling (#95)
