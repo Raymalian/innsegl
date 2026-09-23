@@ -1,0 +1,52 @@
+tree 7eefe4af3c6d279d7fa85754a5da13c0df2cddd2
+parent fbc01a16284872b96814057886596179bc39b1a5
+author Innsegl <agent@innsegl.invalid> 1789570271 +0000
+committer Innsegl <agent@innsegl.invalid> 1789570271 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFBawEWqn2xp2aVjonrl7hQHZce4iMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTQ1MTExWhcNMjYwOTE2
+ MTUwMTExWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIqAuDjm4kS5SA3k8
+ 7y7//FqN9DzIdng/LTU+Y8TDwqHrY9WDHw+eyNuGEOhyb/plVzNOMebKyh+1JDeh
+ EHZh7KOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU+iKgXAYEBVGk2d97eoff670N9MswHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvNzIxMTZmMGYvcnVuLWVmNDRlY2U4NWJlZTlj
+ YWEwN2Q0ZTZhZjhkMTRiZGM0MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvNzIxMTZmMGYvcnVuLWVmNDRlY2U4NWJlZTljYWEwN2Q0ZTZhZjhkMTRi
+ ZGM0MAoGCCqGSM49BAMCA0gAMEUCIAOe8ZcRpHYzoOZKKj8unmmiuYZIxBtgWWFJ
+ j3osZIiQAiEAjeWeuYYTsyHigYxnUjmNarYDJXpY8TxVcJQniHnE+YExggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFBawEWqn2xp2aVjonrl7hQHZce4iMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNjE0NTExMVowLwYJKoZIhvcNAQkEMSIEIOMQXwrrAM5Koxyv7t8o
+ 9cy+tDRTf/XJVLmQ0WFKWgKaMAoGCCqGSM49BAMCBEcwRQIgHTNTZz8DisHd10CT
+ vuAdYsujuqUV0n4Wm72t/DdpaQ8CIQDRo6c/nZXJQ3yZ+0EgV1Tq8rbR5G1NLOr7
+ tVZwP7GUmg==
+ -----END SIGNED MESSAGE-----
+
+fix(test): read the unit that carries the command, not the one that carries the clock
+
+OPS-035 asserts the scheduled job gets a PATH that can find docker, because the
+first install of this schedule fired on demand and wrote one line saying it
+could not reach the stack. That assertion was reading the wrong file on Linux.
+
+launchd puts the program, its arguments and its PATH in a single plist. systemd
+splits them: the timer says WHEN and the service says WHAT and with which
+environment. The test read the timer on both platforms, so on Linux it asserted
+a PATH against a file that can never hold one, and printed the timer's text
+while doing it.
+
+It reads the service now, and the helper that picks the file says why the two
+names differ rather than looking like a typo.
+
+Checked the assertion still holds rather than merely moving: job_path always
+seeds /usr/bin:/bin:/usr/sbin:/sbin and prepends wherever docker actually is,
+so the file the test now reads does contain the directory it looks for.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/72116f0f/run-ef44ece85bee9caa07d4e6af8d14bdc4
+Agent-Run: run-ef44ece85bee9caa07d4e6af8d14bdc4
+Agent-Task: 72116f0f
