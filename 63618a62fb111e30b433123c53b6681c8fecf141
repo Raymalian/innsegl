@@ -1,0 +1,26 @@
+tree 15981463cb1ab43e8a1c7e2907c86bb87f74fc05
+parent 60ab2d2c365c8120e2075682798cd263d267073d
+parent 8ef1e7ccd709c3660dddba02917964c20c7b397e
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789594772 +0200
+committer GitHub <noreply@github.com> 1789594772 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqwyUCRC1aQ7uu5UhlAAAtEcQACnmg1uq1aLQPgy/W6HGA+p3
+ OEHEr5OhmQsnzXpkJy3CamikOu1tfrHShta6t6x9hxvqWXlSFCMGZzqnURQvRn4T
+ bmazTlya0a9OdSy5FYKNpuLaO5NsyoPdnysOExpP0Nxz/QGf8veAxmFiZGs5tRQL
+ VJeiOYVI1PtAqkIhwYd8QkSJBrgn/yZRUh60JOeAtUHlPT7zeogN6kXsPOCTk+d7
+ XxULNXq1aUXYt90B2PSqjcbqDFUgTGDyXFvDdZE5SxMNFXNZppmbN3BUsjVRVRKf
+ kTrVLBzfmmSHciWEz1fuiGDiX2OhDXW+ggp1wTEkCRY8/JS+5U1A3gyf116P3E1E
+ wZFRc4bTDkmAaUTVsb4YY3LdFmgZUqzXZ4Gj9l4PXZce/5tWtOsm7WwQVQrKd8xC
+ X/Mzv1fKEUAdfx/vTQxlFfFE7ES3+ALU7O22lR8RQn4ZqX2Dn8Igg8AbKAIOk9xb
+ VLIXSYhRbrrYIRD+dsFmxh5H430b/tENcCZsgsKr7vrd8VcHlool1EjgihmxdHTx
+ cBwp5kbUuzgPEEdxBgs6emIrn6WvSUhrUAWGSBhIeetKeKWenTT963ooRn2oj6C0
+ un8n2Nr9r76LqlXi1OQ//5N7tiny34XhQL9LXwi1hNDbDYpF2MflzhkL3l4Kx0jK
+ 2i4lsOvzxpU43AK7K3ta
+ =4RXq
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #244 from Raymalian/fix/rm146-backup-service
+
+Run the ledger backup in the deployment, on its own scoped role
