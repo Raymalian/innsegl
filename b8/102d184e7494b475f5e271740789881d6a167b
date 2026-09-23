@@ -1,0 +1,67 @@
+tree d1bcef9376ff40bbae979539dc522d947f96fc14
+parent 34bba6dc83f9d585058087d4296ea87be3ee8337
+author Innsegl <agent@innsegl.invalid> 1789568195 +0000
+committer Innsegl <agent@innsegl.invalid> 1789568195 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFA0XabDL57zL2rMqm31t636tM0lbMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTQxNjM1WhcNMjYwOTE2
+ MTQyNjM1WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElJD4N23Cs5DIw4xa
+ 3O/v/WI2fL1LQ4lCz/Fe60hgfpUNZonKY/fXfTvtUOriSslGmoX2ER0ifdOxUTup
+ r//IGKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUaNEA5ZMG1T2ltWFXvtzFyVWpAPMwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvNGEzZjY2MDQvcnVuLWU5YmExMDI4MjQwOGM0
+ YTVmYTEwOWE1NWQzOGI4M2EwMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvNGEzZjY2MDQvcnVuLWU5YmExMDI4MjQwOGM0YTVmYTEwOWE1NWQzOGI4
+ M2EwMAoGCCqGSM49BAMCA0kAMEYCIQCZQf0VntvT+yF3ThdC5VyvfSpmjwQuY6pz
+ W1ACwMt9zwIhAM8LSE2N7psVrhOht0MvjNzQbALeqm17iE06cTTToNc6MYIBKjCC
+ ASYCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhQNF2mwy+e8y9qzKpt9bet+rTNJWzALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTYxNDE2MzVaMC8GCSqGSIb3DQEJBDEiBCAIMEeEMaa2jDy4s8yD
+ vESGOphs5x4Zu+yUT7kVejg3njAKBggqhkjOPQQDAgRHMEUCIAaEDcAahbiSEsM8
+ +mP8TYlij+Pq3G+x5xmPnBAAIzAwAiEAjLL7O14jQBuRdMZM5d9bIqKaGbunVPGp
+ KkVqBje+hu0=
+ -----END SIGNED MESSAGE-----
+
+fix(scripts): scan docs/adr/, the one docs directory that ships
+
+The operator-path gate skipped all of `docs/` with the comment "local-only,
+never pushed". That was true of `docs/` when the line was written and stopped
+being true when ADRs started shipping. `docs/adr/` is tracked and is in every
+clone, so the one docs directory that reaches the public repository was the
+one directory the gate could not see.
+
+Measured before the fix. A file carrying an operator home path inside
+`docs/adr/` produced "none names an operator path" - a false pass, in the gate
+whose whole job is to prevent one.
+
+`docs/adr/` is now scanned like any other shipped file and the rest of `docs/`
+is still skipped, because that part genuinely is local-only.
+
+The selftest gets case 7, which plants an operator path inside `docs/adr/` and
+requires the gate to catch it, and case 6 is strengthened to hold the other
+direction. Case 6 was vacuous, since `docs/*` is gitignored and its plain
+`git add` added nothing at all, so the gate never saw the file and the case
+passed on a green that said nothing about the skip it exists to test. It now
+forces the plant into the index, which leaves the gate's own exclusion as the
+only thing that can keep the file from being read. Both directions, or the
+exclusion gets widened back by whoever finds it inconvenient.
+
+The plant literals are still assembled from fragments, so the selftest does
+not contain what it plants and needs no exemption from the gate.
+
+The lesson is in the comment rather than in the code, and the header now says
+so. A comment stating a fact goes stale silently; one stating the reason fails
+out loud when the reason stops holding.
+
+Driven by case 7 of scripts/no-operator-paths-selftest.sh, watched failing
+first against the unchanged gate.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/4a3f6604/run-e9ba10282408c4a5fa109a55d38b83a0
+Agent-Run: run-e9ba10282408c4a5fa109a55d38b83a0
+Agent-Task: 4a3f6604
