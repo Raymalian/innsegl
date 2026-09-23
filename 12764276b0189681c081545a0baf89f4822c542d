@@ -1,0 +1,65 @@
+tree 3fe487e25c9ffc8bb11a0d8d6eefc972d8c2a1dc
+parent ea77f0576df63bbf092e26429cf19ed778d9946a
+author Innsegl <agent@innsegl.invalid> 1789849895 +0000
+committer Innsegl <agent@innsegl.invalid> 1789849895 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFDTgViKnQ4QGVTHJx2zN0az1MqZqMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MjAzMTM1WhcNMjYwOTE5
+ MjA0MTM1WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmVFHlpOk+wfCSUgJ
+ PARfBvkDYvKQ90FJeEPkjJXOwzm3rY2kZ1THhBMCf9H1vtQck4oIzdG6yeqaeD7W
+ pesbIKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUDV2u+k2ahPzyJez3TQD1kh2NT9QwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvMWViNTU4N2YvcnVuLTc4ZjQ0ZjRmYmEwYjBi
+ YTZkYzAwNWFlNjI4YWUyMTVhMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvMWViNTU4N2YvcnVuLTc4ZjQ0ZjRmYmEwYjBiYTZkYzAwNWFlNjI4YWUy
+ MTVhMAoGCCqGSM49BAMCA0cAMEQCID2dxs1qvh6BpDFF9x3UagyeFdAbsvnw32OK
+ OmfEaaZDAiBmMiBVMqouVezpJI4EceUT7e/ogQVOqQ6giy6KuainHjGCASswggEn
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUNOBWIqdDhAZVMcnHbM3RrPUypmowCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTE5MjAzMTM1WjAvBgkqhkiG9w0BCQQxIgQgrP+BL/d6E4GIUq0MNON3
+ 3DOaPh5UcTMT/J/4FkdQmPowCgYIKoZIzj0EAwIESDBGAiEAuP94aXY9HU1ijtJQ
+ yioAMa24OQpdO82h4mgKo0XSKtsCIQDqyCTlL1om/UzBlWKBFX+uhl1Axw/qvQDX
+ JrIK9zqmNQ==
+ -----END SIGNED MESSAGE-----
+
+fix(reconciler): count a write outside every served repository as uncheckable (#169)
+
+RM-104's pass corroborates a reported write against the repository, because
+`record_event`'s `payload_digest` is validated for shape and compared to
+nothing. It counted a claim naming a path in NO repository it can read as
+"not found" — which says the repository contradicted the claim when the
+repository was never asked, and makes the corroboration rate move with how
+much scratch work an agent did rather than with anything about integrity.
+
+Those claims are now Uncheckable, the bucket that already meant "this check
+is silent about it". Deciding it needs the host-to-mount translation
+`describe_workspace` performs, for that tool's reason: a body records the
+path the HARNESS saw, and nothing in this process says what its own mount
+corresponds to. Nothing is guessed — a deployment that has not been told
+translates nothing, admits every path, and the cycle report says UNSCOPED so
+the weaker number is never read as the stronger one.
+
+Measured with the shipped code over this deployment's retained bodies and its
+own served list: 37,880 bodies, 4,291 reconstructable claims, 339 (7.9%) now
+uncheckable. #169 projected 75.8% from a DIFFERENT population — that figure
+is over every body carrying a `file_path`, and 2,895 of those 7,183 are
+`Read`, which ClaimFromBody already discards (REC-014). The rule is right;
+its effect on the rate is single digits, not four in five.
+
+A gitignored path inside a repository is still counted "not found": this rule
+asks where the write was, not whether git was ever going to track it.
+
+Driven by TestWritesPassCountsAWriteOutsideEveryServedRepositoryAsUncheckable,
+watched failing at "uncheckable 0, want 1" and "unsupported 2, want 1", and by
+TestWritesPassSaysWhenItCannotScopeAPath, which holds the unscoped report
+open.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/1eb5587f/run-78f44f4fba0b0ba6dc005ae628ae215a
+Agent-Run: run-78f44f4fba0b0ba6dc005ae628ae215a
+Agent-Task: 1eb5587f
