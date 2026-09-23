@@ -1,0 +1,68 @@
+tree a5970b9030e196029eb33eeed54aae9b845cfa78
+parent 60ab2d2c365c8120e2075682798cd263d267073d
+author Innsegl <agent@innsegl.invalid> 1789591883 +0000
+committer Innsegl <agent@innsegl.invalid> 1789591883 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFDphT8QyBhV+4xtpqS1YbQJWv3JJMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MjA1MTIzWhcNMjYwOTE2
+ MjEwMTIzWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEq884N1MHi7W7Dves
+ m5beJZ6N3envDi+8sDTwoshjiQ/JxCtfzYbJoccoxxBDur+CEIX3oK6pFvK8pQ+c
+ 9A+h0qOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUiqNwqoGhPtOVfxuqZVx2Ku3xvrAwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvMWMzYjM3ZjUvcnVuLTRhZjEyY2RkNDhmN2Vi
+ MGNlYWRiODU1ZjA0YTZmNmNhMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvMWMzYjM3ZjUvcnVuLTRhZjEyY2RkNDhmN2ViMGNlYWRiODU1ZjA0YTZm
+ NmNhMAoGCCqGSM49BAMCA0gAMEUCIDz0yWpl11rb3QSP5SjSWfK9b+cC0dtDwCLy
+ c6YuOBhSAiEAm6TZCo1AFksRUS8Fr9HU1Y6pyNeXQPEjHBn42egJPPwxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFDphT8QyBhV+4xtpqS1YbQJWv3JJMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNjIwNTEyM1owLwYJKoZIhvcNAQkEMSIEIP6+AkYrSLGOopZr30Lz
+ Gppm256fiZnhw32BisjfjY6xMAoGCCqGSM49BAMCBEcwRQIhAMSLoPNbyUsyZFlk
+ 2dDd0YialY+JpZOfGZ6OTPonzWgLAiAdqdaSi3Ag15UWtWnZILrZGpiQr5e/84C5
+ d6kM4T9JlQ==
+ -----END SIGNED MESSAGE-----
+
+feat(deploy): give the backup its own database role (#237)
+
+The backup is moving off the host scheduler and into the deployment, and the
+credential it holds today is the reason that matters: it reaches the database
+through the container runtime, so the thing taking backups holds a socket that
+is root on the machine. A service that is up as long as the stack is cannot
+hold that.
+
+`innsegl_backup` is the reader's grants plus CREATEDB, and CREATEDB only
+because the backup proves a dump restores by restoring it — into a throwaway
+database of its own, never the live one. internal/api/readonly.sql is applied
+to it unchanged, so the two roles cannot drift about what reading the ledger
+means, and the CREATEDB comes after it, because that file's last line revokes
+it.
+
+Undoing a line of somebody else's grants file is only safe because nothing is
+trusted: verify-backup-role.sh asks the SERVER, and provisioning gates on the
+answer. The positive case is asserted first — a scope too narrow to take a
+backup fails at 3am in a service nobody is watching, which is worse than the
+exposure it closes.
+
+Measured against the deployment. The whole job is allowed; INSERT, UPDATE,
+DELETE, TRUNCATE and CREATE TABLE on the ledger are each refused 42501 — by
+privilege, which is the only refusal that counts. The database owner is refused
+those too, by the triggers, and that is the confusion the SQLSTATE check exists
+to catch.
+
+One measurement cost a wrong diagnosis on the way and is written down in the
+script: the role carries default_transaction_read_only=on, so CREATE DATABASE
+is refused 25006 even with rolcreatedb=t. That says nothing about the
+privilege, and reading it as one sends you looking for a GRANT that is already
+there.
+
+Driven by OPS-043.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/1c3b37f5/run-4af12cdd48f7eb0ceadb855f04a6f6ca
+Agent-Run: run-4af12cdd48f7eb0ceadb855f04a6f6ca
+Agent-Task: 1c3b37f5
