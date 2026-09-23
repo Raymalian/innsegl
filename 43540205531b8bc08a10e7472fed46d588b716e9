@@ -1,0 +1,73 @@
+tree c5a129cf8231575f3e1c289b6bd4a7287a21bae9
+parent 5895b34187e9add98017588883b90e0c68415661
+author Innsegl <agent@innsegl.invalid> 1789643844 +0000
+committer Innsegl <agent@innsegl.invalid> 1789643844 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFFw20goSRYhFKgPB6L2GD/mmtCAHMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE3MTExNzI0WhcNMjYwOTE3
+ MTEyNzI0WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEY6+AWwM5b8wwskCy
+ KBmbToU8/2AHif/p8K5pFOMiHeWJeJZz4YCm2v4CvwPldjRQ/9ZFgRz3lAp64b2R
+ JIc2qqOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUvIUauEnErJ+SXdG5IyPKVlCbw14wHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvN2EwODBjNzkvcnVuLWYzNmE3MGZkYWI3YjY4
+ YzlkMTgyMzg5ZTJkMDZkOGMyMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvN2EwODBjNzkvcnVuLWYzNmE3MGZkYWI3YjY4YzlkMTgyMzg5ZTJkMDZk
+ OGMyMAoGCCqGSM49BAMCA0cAMEQCICIfenbKELHBWEkU7a30IbDPJawpmeovkUp8
+ WwdNjq01AiBvwx0CLVwMSQ4aaa4HYPXwsrtjJFsHlfbArTse4nk6vjGCASowggEm
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUXDbSChJFiEUqA8HovYYP+aa0IAcwCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTE3MTExNzI0WjAvBgkqhkiG9w0BCQQxIgQgfVFrH1fu+5q4+yqW8Lus
+ IJ2eQZ93sxtIzEgsW+7XRJ8wCgYIKoZIzj0EAwIERzBFAiBLWdoEnteTkByhn/q4
+ 2BuRW0CBGpcOMuNp4UeK0dUTxQIhALY7nzu28ME5oFj8iZT8DO87lN3x0FsXlTxo
+ 8Dac5Rsm
+ -----END SIGNED MESSAGE-----
+
+feat(ci): refuse to track a local-only specification
+
+The eight numbered documents are local only, and the whole of that was one
+.gitignore line with nothing behind it. Measured against the real repository:
+
+  git add -f docs/07-...              stages a spec; gitignore does not apply
+  comment out `docs/*`, git add -A    stages all thirty-four
+
+Neither is exotic, and no existing gate caught either. no-operator-paths.sh
+passed with a spec staged, because it asks whether a tracked file NAMES an
+operator path — not whether a document that must never ship has become tracked.
+
+The threat is not malice. It is an agent force-adding a directory to be helpful,
+or "fixing" a gitignore that appeared to be hiding files. A threat model in a
+public repository is a map of where to look, and it cannot be unpublished.
+
+The gate refuses any tracked OR STAGED path under docs/ that is not under
+docs/adr/ — staged as well as tracked, because a gate that only read the
+committed tree would pass in the moment before the commit that publishes, which
+is the moment someone is most likely to run it. docs/adr/ is the one directory
+that ships, by the root .gitignore and by CLAUDE.md, and the self-test requires
+adding an ADR to leave the gate green.
+
+THE HOOK HALF WAS BUILT WRONG FIRST, AND THE ONLY REASON I KNOW IS THAT THE
+PROBE FAILED. `install-hooks` copied into .git/hooks; this repository sets
+core.hooksPath to scripts/hooks, so git never looked there. The hook was
+silently dead, the commit that was supposed to be refused succeeded, and it
+committed the THREAT MODEL onto main — reset, never pushed.
+
+So the hook is now a TRACKED file in scripts/hooks, where git actually looks and
+where it travels with a clone and with every worktree, and `install-hooks` ends
+by asking `git rev-parse --git-path hooks/pre-commit` — where git will look,
+honouring core.hooksPath — and FAILS if there is no executable hook there.
+Reporting "installed" because a file was copied is precisely what let the spec
+through.
+
+The gate is the enforcement and the hook is only the fast answer: hooks are
+local, and a subagent on a checkout that never ran install-hooks has none. CI
+applies to whatever was actually pushed.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/7a080c79/run-f36a70fdab7b68c9d182389e2d06d8c2
+Agent-Run: run-f36a70fdab7b68c9d182389e2d06d8c2
+Agent-Task: 7a080c79
