@@ -1,0 +1,110 @@
+tree 5aabb4a961b62a8803f150a6ba47c2d9393b60c7
+parent b7bcfc39361905537666e14da1cca2eabfd3ba84
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788720585 +0200
+committer GitHub <noreply@github.com> 1788720585 -0700
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqnbXJCRC1aQ7uu5UhlAAAlYsQADbUY7q3SwMg1zfA/eGeNKJn
+ T5rz34IDFr6AEe7vInoe0ancTon7UrpUKjKt2fVsgOEl6vM8eMcZIy8ixz+DZpVr
+ leFzxKywQkqJFN1+A0/iUFbCaZOYebT/M93sNsLmE7zARQW/1eG++4sUt0Y6brgy
+ pW2QiEDSdV5GB+EhdQD3XPzjOr9tiZKtPnqy79o7E5YnubB5bT1W4fzIG3Oysof5
+ nNf6EoT2/q83zWBdciA0tKRE7HPXDz1dOpnzCtl8WzLJikmjxBD7baffssL1Rtcm
+ nR3HtTOJglVFm2L4dA+kgrcBdNPUqomOpmon1QB2lI416Vj7AqhVgnkjhWwFPEmI
+ HazEXOXonE2vhMJvjgvjMBEHXZp0j6CfiCp4G+0A4B9kTsRKZDbV/7AcvmMqlzUY
+ AF7gMuhIEu/zIRDggrVNgBCHYUgHTJ/Gh5JTZvykr1MdxNvRNhd+korHCTzDIGBp
+ CZh2lujmuadgPYw6tcnYSjBly+k+w7El1cFg4+qY5jJ6Ik/maTNqEGmVw2RHfEEL
+ 7ziukJ+Z/LGcpvjuHIYkJDuQNAhPwLc6Z+YoWRFZ030hg71fSg2Vv2MKfcdhKvEA
+ qmaxlNG5e9YJQyQgSUpOcZUorFRlPBF0j/KfKx/ceQBKaFni4iJzxtIZ5EDCpWwi
+ 5nJleGWKTZWqq2xTqqz2
+ =UtId
+ -----END PGP SIGNATURE-----
+ 
+
+Fuzz sign_commit, drive MCP-021, three ways to reach SPIRE, and a serverless verifier (#166)
+
+* feat(verify): a serverless verifier that wraps the shipped one (#69)
+
+internal/verify gains VerifyCommit, which runs the same three checks
+against commit data a caller already holds. Verify is unchanged and still
+reads through git; both share one pipeline that never touches git itself.
+
+A serverless verifier has no working copy, and this package's rule is that
+git is the reader and never a hand-rolled parser of its object format. The
+checks need less than git hands readCommit: the SHA, the message and the
+raw gpgsig. Tree is carried only for VER-003's recovery, which already
+degrades to a note rather than an error without a repository.
+
+deploy/prod/verify is the Vercel deployable. It wraps the verifier; it
+reimplements nothing, because two verifiers would be two meanings of
+verified (threat model 5.4).
+
+VER-009 and VER-010, neither in doc 07. VER-007 and VER-008 were both
+already taken - by ADR-0034 and by RM-091's fail-closed case.
+
+* test(failure): fuzz sign_commit in the crash-and-replay campaign (#95)
+
+Third attempt at RM-072. The first two attempts fixed real causes
+(git reset before staging; idempotency-row classification; waiting for
+gitsign's orphaned process tree, not just .git/index.lock) but the
+subtest still failed on CI: a blind kill landing 3ms in, before Phase A,
+found its own staged tree already at HEAD.
+
+Proved the mechanism with an isolated git experiment before touching the
+harness: a `git commit` fixes the tree it will commit only when it
+actually reads the index, not when it is spawned. Every shot in the
+subtest shared one repository, so an earlier shot's orphaned gitsign —
+left running past its own shot's lifetime by a contended CI runner's
+scheduling, independent of the deliberately-held Fulcio/Rekor proxies —
+could read or write that shared index at a time no later shot's own
+signAwaitLocksClear call was ever watching for.
+
+signNewRepo gives every shot (and the calibration control) its own
+git-init'd repository, used once. Whatever a delayed orphan eventually
+does, it does it somewhere no other shot will ever look, which removes
+the race rather than trying to win it.
+
+Verified: both CI-failing seeds (1788593655011433377,
+1788596105931452296) replay clean, including the exact "before Phase A"
+scenario; 7 additional fresh-seed runs of the subtest alone all pass;
+the full test/failure suite passes under -race; and the whole-module
+scripts/test-no-skips.sh passes with no skips. sign_commit's ALLOWED
+entry is removed from test-no-skips.sh and its two named windows
+(winSignIntentNoObject, winSignObjectNoRecord) are back in the census.
+
+* fix(mcp): drive MCP-021's outage with pg_terminate_backend, not docker kill (#87)
+
+TestMCP021TheSamePostgresOutageClassifiesTheSameOnBothLayers passed on macOS
+and failed all 24 rounds on Linux CI. The old mechanism (`docker kill
+--signal SIGKILL` on the whole container) raced the OS tearing the
+container's networking down against a backend getting a SQLSTATE out over
+its socket before dying — a race Docker Desktop's slower teardown usually
+won and a Linux runner usually lost.
+
+Replace it with a deterministic trigger: warm each pool's one idle
+connection as before, find the two backend PIDs serving them in
+pg_stat_activity (tagged by a unique application_name per pool), and call
+pg_terminate_backend on each over a third admin connection. Postgres's own
+SIGTERM handler reports SQLSTATE 57P01 to the client before the backend
+exits, unlike SIGKILL which can end the process mid-write with nothing
+sent. The test blocks until pg_stat_activity confirms each backend is gone
+before probing again, so the FATAL message is already buffered on the
+client socket by the time it reads it.
+
+This is a different trigger for the identical SQLSTATE class (57P01,
+"operator intervention") that #87's disagreement was about, so it still
+exercises isConnectionLifecycleSQLState/ledger.classify's real rule, not a
+stub. Added a hand-written IP §4/ADR-0016 table so the test also checks
+both layers' agreed answer against the spec, not just against each other.
+
+Round count dropped from 24 to 5, kept only as a defensive margin, not as
+the mechanism. Six local runs of six iterations each observed 57P01 on
+both layers on round 1 every time.
+
+* fix(deploy): give innsegl init three ways to reach SPIRE admin (#156)
+
+Ship the socat admin relay as an off-by-default compose profile, add a
+one-shot innsegl-init service that runs inside the deployment on the
+admin network, and document the fully manual relay. All three were
+verified end to end against a throwaway repo; runbooks/spire-admin-access.md
+records the measured cost of each and recommends running init inside the
+deployment, since it is the only option with no standing exposure to forget.
