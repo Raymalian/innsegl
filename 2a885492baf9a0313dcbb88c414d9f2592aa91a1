@@ -1,0 +1,26 @@
+tree c5af9f354af7c3e5d700d05e7c1080450ce5c3c3
+parent c73e33b038d377c8fb9e9d090cef611a2a6d0b27
+parent e77c21ce47e9b32db436c58045fb5a03bf5c186c
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789595997 +0200
+committer GitHub <noreply@github.com> 1789595997 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqxFdCRC1aQ7uu5UhlAAAxYQQAIYa1uVEb4N3kwXG1lkZnxS3
+ 8NRYQTgy9Il3X+yHF5u7hffluqtX3yNAMwN/KeW1m6/VI3OVL5F+HmGNCOvI/olX
+ 5SAUQHBuwWbBoabfyBKYIv1CmhBj/epjseRoK5TR1NU4BvXGO6WK/Dzs4ly+9ndG
+ 3EHFljtO02dcp+yoPs7AlgLqYfbHexC27/Y7BPGErLvo/jRJDgJiiEsp2nwbTqMA
+ Utu+V+KDuTlrm48WR+AOy13przeo8D5nE3tb2AFydAPIzs3DHjGnD3qaJPfmCbkm
+ xo6cdBuWq2ETpom4cKBVksf2xztRuewW0P4J9yt3csMahMo1gXNNFSxyFlbMlcio
+ 7442vbGcwWZ4H+PedDHgoJqqIxs9lyVUF6OWI6F9v3SOo/4/N/epUG+qNEKidWj/
+ ePtUeWng5YGgkT+YkWUaAcPW9q3GJXzkrF5BtFidCEVjZe6zc77ftbF2mTIrdZmL
+ +8QzFgJhdpJJOTXS+VMvZmVbgkgD+12vsbohYnHB4i9HLDhjO+N40x75frms5/Lb
+ jM4uIb2Hl5nLnZtDbRbg8w60xxpSHzYB0YL1IQW0/X1wzF0oAO4XyJCmSsscPuI9
+ SNTj64iRrbMJRDGY5bhK3MXz1qtDV8tfCnH2iuQ/WSrkYs/Gz6NH6QDIZxspWv7/
+ 0/rGS2Y5ybnPdDXgivae
+ =WaRL
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #245 from Raymalian/feat/exemptions-gate
+
+Gate the exemptions, and say which two cannot be gated
