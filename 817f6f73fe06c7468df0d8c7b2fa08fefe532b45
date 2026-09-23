@@ -1,0 +1,87 @@
+tree 1710deed47766600ebfc46df0a29805faf007867
+parent 63fecea70b87a1dfa4d4247d747269ec3f51817a
+author Innsegl <agent@innsegl.invalid> 1789936711 +0000
+committer Innsegl <agent@innsegl.invalid> 1789936711 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFAg9TYsUsKKgGBNMmBjIITYdUCB/MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTIwMjAzODMxWhcNMjYwOTIw
+ MjA0ODMxWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEr7wolTIhOAOvq0+V
+ dv4XEu7xKNkXtcD4ALsTYPonjUG8yPiBSUEn9qEOSDOx7rZylNNStszQsgG/XOXB
+ PMiEh6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUoJfQvh0i5sKdzU2PYEm66CAE2vkwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNDBmYzY0M2IvcnVuLWRmYjY3M2VjOTIzZTM3
+ NTFjNjEzZTM2NzMxMjRjMDc1MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNDBmYzY0M2IvcnVuLWRmYjY3M2VjOTIzZTM3NTFjNjEzZTM2NzMxMjRj
+ MDc1MAoGCCqGSM49BAMCA0cAMEQCIAkYdajers2Su9V5IFILkdu4cYkUqR6SoHXG
+ X4Q+l0SHAiB+aZBZh9LiVZvTrxmNz2IJdGqsuoq0u+Y21H7UNDiSOzGCASswggEn
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUCD1NixSwoqAYE0yYGMghNh1QIH8wCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTIwMjAzODMxWjAvBgkqhkiG9w0BCQQxIgQgalNZ/n/IMd51mzun2g+x
+ AnF+ySb7ylMU7vRTtY6tY0wwCgYIKoZIzj0EAwIESDBGAiEAtHCcBvqivzzKMN9M
+ eZKD0+UXi2PXbZQ7sTSfF4bG8YoCIQCDuJ3ZOoBKxGVs5Fgw/7hKrl9lfzMAr9Ce
+ zvJt0BLj4A==
+ -----END SIGNED MESSAGE-----
+
+fix(hook): make the guard's check entry point say when it did not understand (#287)
+
+`check` takes the git arguments WITHOUT the `git` word. Handed the word it read
+`git` as the subcommand, matched nothing destructive and exited 0 in silence --
+measured against the guard as it stood, in this checkout:
+
+  check -- clean -fd     exit 2   refused, naming the run and the path
+  check git clean -fd    exit 0   silent, 0 bytes of stderr
+
+Nothing was unprotected: `hook` and `command` both refused that command, and
+they are the two live callers. `check` is the third entry point and the only one
+with no caller yet -- documented as "the decision alone, on an argv, for anything
+else that wants it" -- so it is the contract every future caller reads, and it
+answered a caller that got the form slightly wrong exactly as it answers a safe
+command. That is a control that does not act and does not say so.
+
+TWO SHAPES ARE NOT AN ARGV and both were a silent allow: one naming no git
+subcommand at all (empty, a bare `--`, global options alone), and one token
+carrying spaces, which is a whole shell command line handed to the mode that
+takes an argv. Both now exit 3 and say so on stderr. 3 is NOT a refusal -- the
+file's contract is that only 2 refuses and a caller allows on anything else --
+and it exists so the answer can be told apart from the 0 that means safe.
+
+THE PROGRAM WORD IS ACCEPTED AND SKIPPED rather than diagnosed, because git has
+no `git` subcommand, so a leading `git` can only be the program word; answering
+correctly beats answering "I did not understand you". The cost is in the file:
+`check git git clean -fd` is weighed as `git clean -fd`.
+
+The rule is a SHAPE and not a list of git subcommands. A list here would be a
+second spelling of git's own and would drift; a subcommand is one word.
+
+`hook` IS UNCHANGED, deliberately. Its header says nothing is guessed from a
+command it cannot tokenise, and that is right: it receives a shell STRING it may
+legitimately fail to parse, and guessing there would refuse commands that were
+never destructive. `check` receives an ARGV a caller chose. `wrap` is unchanged
+too and must be -- installed as `git` its argv is a command line a human typed,
+and stripping a word there would refuse `git git clean -fd`, which real git
+rejects harmlessly.
+
+Driven by OPS-105 in scripts/hooks/git-tree-guard-selftest.sh, written first and
+observed failing: 4 red against the unchanged guard, each showing the measured
+defect in its own numbers, and 3 green that pin what must NOT change. Every one
+carries its own positive control in the same case against the same fixture, and
+all 7 go red against a stand-in that always answers 0, against one that always
+answers 2, and against one that always answers 3, so no case can pass by doing
+any of the three. 61 pass, 0 fail, unchanged under sh, bash and zsh; the guard
+itself is driven under sh, bash, zsh and dash by OPS-094's parity case. The shim
+selftest is 111 pass, 0 fail, unchanged.
+
+Not edited in place: copied, patched, `sh -n` + `bash -n` + `zsh -n` + `dash -n`
+on the copy, installed, and all four re-run against the installed file.
+
+doc 07 carries the OPS-105 row.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/40fc643b/run-dfb673ec923e3751c613e3673124c075
+Agent-Run: run-dfb673ec923e3751c613e3673124c075
+Agent-Task: 40fc643b
