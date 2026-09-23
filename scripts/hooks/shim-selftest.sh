@@ -134,6 +134,7 @@ drive() {
     INNSEGL_ADMIN_CREDENTIAL_MINT="${MINT:-}" \
     INNSEGL_GIT_GUARD="${GIT_GUARD:-1}" \
     INNSEGL_GIT_GUARD_SCRIPT="${TREE_GUARD:-$ROOT/scripts/hooks/git-tree-guard.sh}" \
+    INNSEGL_ORPHAN_SWEEP_SCRIPT="${ORPHAN_SWEEP_SCRIPT:-$WORK/sweep-stub}" \
     "$SHIM" > "$WORK/out" 2> "$WORK/err"
   STATUS=$?
   # EVERY call this run has ever made, because $CALLS is reset per drive and
@@ -1881,6 +1882,58 @@ if [ "$(uncap_lines)" = "1" ] && [ "$K_EMPTY_N" = "0" ] && [ "$K_EMPTY" = "[]" ]
   ok "OPS-101 and a kill whose written paths are all committed records the kill and claims none of them"
 else
   bad "OPS-101 an empty claim was not empty: lines=$(uncap_lines) claim_n=$K_EMPTY_N claim=$K_EMPTY"
+fi
+
+# --- OPS-109: SessionStart hands its event to the orphan sweep (#288) ---------
+#
+# scripts/hooks/orphan-sweep.sh is the half of #288 that needs no observer, and
+# its own header names SessionStart as the caller. A sweep nobody calls is the
+# passivity #288 is about, so the call is asserted here, where the event is.
+#
+# $INNSEGL_ORPHAN_SWEEP_SCRIPT is pinned at a recorder for every drive in this
+# file, so no case above ever swept anything. The recorder keeps its argv and
+# its stdin; the sweep's own behaviour is OPS-106..108's job, not this one's.
+#
+# The deployment is DOWN for the positive case. A crash that took the session
+# with it is exactly when the next session may find nothing answering, and a
+# sweep placed after observe_session's early exit would never run then.
+cat > "$WORK/sweep-stub" <<STUB
+#!/bin/sh
+{ printf 'argv=%s\n' "\$*"; cat; printf '\n'; } >> "$WORK/sweeps"
+exit 0
+STUB
+chmod +x "$WORK/sweep-stub"
+rm -f "$WORK/sweeps"
+ADMIN_SAVED="$ADMIN"
+ADMIN="http://127.0.0.1:1/"
+drive "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"sess-sweep\",\"cwd\":\"$CWD\"}"
+ADMIN="$ADMIN_SAVED"
+if [ "$STATUS" = "0" ] && grep -q '^argv=hook$' "$WORK/sweeps" 2>/dev/null \
+   && grep -q "\"cwd\":\"$CWD\"" "$WORK/sweeps" 2>/dev/null; then
+  ok "OPS-109 SessionStart runs the orphan sweep with its own event, even with the deployment down"
+else
+  bad "OPS-109 SessionStart did not hand its event to the sweep: status $STATUS, sweeps: $(cat "$WORK/sweeps" 2>/dev/null)"
+fi
+
+# The control: the sweep belongs to the session coming back to the tree, not to
+# a subagent starting inside it, and a stop is the dying party's own event.
+rm -f "$WORK/sweeps"
+drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-sweep\",\"agent_id\":\"agent-sweep\",\"agent_type\":\"general-purpose\",\"cwd\":\"$CWD\"}"
+drive "{\"hook_event_name\":\"SubagentStop\",\"session_id\":\"sess-sweep\",\"agent_id\":\"agent-sweep\",\"cwd\":\"$CWD\"}"
+if [ ! -s "$WORK/sweeps" ]; then
+  ok "OPS-109 and neither SubagentStart nor SubagentStop runs it"
+else
+  bad "OPS-109 a subagent event ran the sweep: $(cat "$WORK/sweeps")"
+fi
+
+# And a sweep that fails or cannot be found never fails the session.
+ORPHAN_SWEEP_SCRIPT="$WORK/no-such-sweep"
+drive "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"sess-sweep2\",\"cwd\":\"$CWD\"}"
+unset ORPHAN_SWEEP_SCRIPT
+if [ "$STATUS" = "0" ]; then
+  ok "OPS-109 and a missing sweep leaves SessionStart exiting 0"
+else
+  bad "OPS-109 a missing sweep failed SessionStart: status $STATUS"
 fi
 
 echo

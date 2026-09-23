@@ -379,6 +379,22 @@ jobs:
       - name: A destructive git is refused while a run holds work, and nothing else is
         run: ./scripts/hooks/git-tree-guard-selftest.sh
 
+  orphan-sweep:
+    name: orphan sweep
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # OPS-106..108. A run killed with no stop event left its work in the tree
+      # and nothing said it was there: no hook fired, so no record was written.
+      # The sweep runs from the NEXT session's start and only records -- no run
+      # is retired, nothing is signed, the tree is never written to. Every
+      # "it records" case has a control that records nothing, so a sweep that
+      # did nothing and one that recorded every marker both fail here.
+      # Hermetic: scratch repositories and a stub ledger on loopback.
+      - name: A run that died unobserved is recorded, and nothing else is
+        run: ./scripts/hooks/orphan-sweep-selftest.sh
+
   dashboard:
     name: dashboard
     runs-on: ubuntu-latest
