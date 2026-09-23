@@ -1,0 +1,81 @@
+tree 1a64a15f3ca258d581d28807e9c97e4843eebc11
+parent 74469535049d63457153bd7c1a07662aca120ae0
+author Innsegl <agent@innsegl.invalid> 1789804911 +0000
+committer Innsegl <agent@innsegl.invalid> 1789804911 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFH9ZN4T9Au6D2oYhYoAAY4NXhqwBMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MDgwMTUxWhcNMjYwOTE5
+ MDgxMTUxWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7BH3BFxKzbUufg1b
+ fbxl73M++lu5VMVJUZavWVtz5LQ7HkIw1CGtoKmBEFs2cyNF82w22ijAa6jUFNHW
+ pR0x8aOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUdY998AgxBnbTT0gw0FD9PznDdywwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNGQ0MWEyZTAvcnVuLWRmZTEzMjgzMTYxYjky
+ NWRiN2VmMjFhMDY2MzhmOTkyMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNGQ0MWEyZTAvcnVuLWRmZTEzMjgzMTYxYjkyNWRiN2VmMjFhMDY2Mzhm
+ OTkyMAoGCCqGSM49BAMCA0gAMEUCIEaRrVE3UQkkMeZZfDFs9L4o0F63w+VzRn6U
+ OnSNeZ7JAiEA7l/+kmC8pNjFyF1D3i7kB2h2fMnS46FQiP3BBGqRMHAxggErMIIB
+ JwIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFH9ZN4T9Au6D2oYhYoAAY4NXhqwBMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxOTA4MDE1MVowLwYJKoZIhvcNAQkEMSIEIKKZUFzzTCk5mL+NHBAr
+ o1o7uMDDniIt9tyxci/Y6pzdMAoGCCqGSM49BAMCBEgwRgIhAPFOIu6CIrjhtw8y
+ b38+vgZiwR/iym1+hcGZR/RqNEM4AiEAnEQvUMr/YyJJ8oWAr7whuC3JK1TWHkgf
+ gfZehzJ5NM8=
+ -----END SIGNED MESSAGE-----
+
+feat(mcp): require a repository-scoped credential on the lifecycle listener (#264)
+
+Nothing authenticated a caller on the identity-lifecycle listener, so any
+process that could reach it could mint a run — doc 04's AB-13 and AB-15 — and
+the deployment that turned the listener split on published it with six tools
+behind it and no check at all.
+
+One transport-level check now sits in front of the whole admin handler. The
+credential is a short-lived ES256 token carrying `iss`, `aud`, `repo`, `iat`,
+`nbf`, `exp` and `jti`, and nothing that identifies an account: the claim set is
+closed and the decode is strict, so a token carrying `sub`, an account id, an
+email or a display name is refused rather than tolerated. It is verified offline
+against a JWK set read once from a file, never fetched, so this system gains no
+dependency on whatever issues it.
+
+Every credential failure — absent, malformed, expired, not yet valid, wrong
+audience, wrong issuer, unknown key id, bad signature — is one byte-identical
+401 before the MCP session layer: no handler runs, nothing is appended, no
+idempotency key is claimed and SPIRE is never reached. The reasons are kept for
+`innsegl admin-credential verify`, which an operator runs on their own machine.
+
+Per tool the credential's repository must match: register_agent's argument,
+describe_workspace's derived repository, observe_session's derived workspace,
+and for record_event / retire_agent / observe_tool_call the run's own registered
+repository — answered exactly as a run that does not exist, because a run id is
+public in every Agent-Run trailer. observe_session stop answers another
+repository's session exactly as one this deployment never saw.
+
+`serve` refuses to start when the listener is enabled and the key set is absent,
+and refuses a key set with no listener. Readiness reports `admin_credential:
+enforced|absent`, on the health listener only. The agent listener is untouched
+and single-listener mode requires nothing.
+
+The credential is a header, deliberately outside the idempotency fingerprint:
+that digest is the canonical form of the tool and its arguments and nothing
+else, so a replay under a different token returns the original result.
+
+No tool name, error class, event type, field, enum or source changes.
+
+Drove it: MCP-087 (one byte-identical refusal), MCP-088 (a credential for one
+repository against another), MCP-089 (a run-scoped mismatch answered as a
+nonexistent run), MCP-090 (unknown key id, rotation with overlap, and the
+start-up refusal), MCP-091 (the credential in no log), MCP-092 (the agent
+listener and single-listener mode unchanged), MCP-093 (outside the idempotency
+fingerprint). #264 named MCP-078/079/081/082/084; RM-151..RM-157 took those in
+the interval and doc 07 carries them, so the block was reallocated from the
+measured next free id.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/4d41a2e0/run-dfe13283161b925db7ef21a06638f992
+Agent-Run: run-dfe13283161b925db7ef21a06638f992
+Agent-Task: 4d41a2e0
