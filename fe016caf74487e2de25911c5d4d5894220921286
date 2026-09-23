@@ -1,0 +1,26 @@
+tree 482fbbffebf369f6b3d83e69234219f6024d2234
+parent 7af16d28c6bbc6d3ce8d0fbf8131d4fa57a8a436
+parent 00eb54de81b7ba376c5694d3d60816d507e7e6a4
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789654987 +0200
+committer GitHub <noreply@github.com> 1789654987 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqq/fLCRC1aQ7uu5UhlAAAiRMQAES4CJydTGpW8olLHb2U6Sbz
+ 6r5ZfRjILm8X0PHvwgYGm+feQRui0bCcqa4zimP4qiOWht8NbfG0EirEiH1o2qJA
+ oH2gF5jciXU3fPA8Fps45Mjr8GaQcBSiBgWOC9XwIwLPEZRjh9HCyj12is6wRSKH
+ 8zdSFXIKvijKbYFmWZFkW/Pk5QrtsIuFaaAoJw7zovJUlYQoYlEcjrRMVqUHD/ae
+ rxRa0qnwo293s0z9oGrU8/UIfCpNb8Eef8zCcn/kYbIxNQX2YdYNkax3dtxB6Nnq
+ aVKsULxfEDTRhVsvnIKBnFBkfB1pEFg5jTylgXsUHFRQCVXnb3wZgOl9I7SArUjP
+ rBRXS3vuur9vSknegfHKUyg0Yhm1tSnIKSeVXRkPDEm+ccecobtO9V5MCdj+zdaF
+ Vua6sDCSNADMeT7bQYjt13XgmFiGZZD/Jl6lou1b5XU1cR3DCQw0NPiym+oiFMyE
+ 9PaoF4KVRMvb3BCEYKlxxW30K5Go1Wd2ww5MMxckq602MuesBMH1RVBbqsl9DGfD
+ EVN8FpdqrZrlxUxwjZmmRaqsXxcmRqSRIZaIUuHPq/FbDogy/D0+bOKWeIe0RWJa
+ NC5NmoNhKH9Qgoq6lgapSCvKk5yM5KKtTeSunQ0JCNLmmpjkdjAGFah8XQ5KCapH
+ WY8Tzt57SRiBWKFQQvcU
+ =cw3U
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #252 from Raymalian/feat/rm081-prune
+
+Decide how the hot tier is pruned, and why not yet
