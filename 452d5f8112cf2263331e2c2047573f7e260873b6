@@ -1,0 +1,26 @@
+tree 19e6204d256eb4036af6f888b67e201d6123154a
+parent 961bd8ba67985f57ae578f3f2408ba1ba6f147be
+parent 84567b99155a21c04d4b6f232f9540ae76e168a0
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789846021 +0200
+committer GitHub <noreply@github.com> 1789846021 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqruIFCRC1aQ7uu5UhlAAAUKEQADlzoom6wa2/1F09WzLYJJUR
+ jwnF6ql6xtpTYn8VNTCWjxVeEnrvfaDz3eb+Z216JS+mUlhNRF7VUTEvzmD2Etws
+ ZwKVf1+ca0kzRnFAVRin64HM6ZMIz1T7cEu8k2WvAYOxwC/u/9SgZc0wy4Vm15Jx
+ qtvAeyZJQMhYoUWRWnc3RP7J7FmVv4ECq8/bInPRLPio+JMtaP0uLSfUCb+qtPz6
+ RAljEvcjVFeaBGp8GNUWxWOWya4f9F8KTK1sws9SCTp1jw9z+rkv3CYK8tVrrgPx
+ MseGeJw8+Pr4CRoZHgHEJ/GLRGF9pQPGmtnOWYrpIF7ItpGJP1sbGZ0FPBcUwtmx
+ 8er32rBF0Vo2QhNfG3duXcPaMpklV6UDFD5/vmkfMrRkwnF4Afbc4X6j+I03kKv/
+ C2RUhxWif/qqcroXth0fy9zBQyES28KJDEktkC0zlsNZSeUzK9OpTrgPmDcEZdlI
+ aE8oqHtXnDWgRfk15iA/hkOXaSxpObmeduwoW5as3AyNwQmPXrfKrFAcy7ZzWS8w
+ +zuuFl2t5hiRVrLql4JKzQ/efc+uwx+Y95PVM34PwoGRdpBw2tQIp8jaPKI/Q/F1
+ y3GhdpWK2n1CnilmpoLR3VH43OnP6WAX3DaGTxvLmhtOcqp0BNH8y4VGs5pjgzCR
+ 1ZwxF/s8eupdJwln34nI
+ =82qz
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #273 from Raymalian/feat/e9-e10-lifecycle-and-accounts
+
+E9 + E10: the run lifecycle, and human identity kept out of the record
