@@ -1,0 +1,79 @@
+tree a33faadc781f41f0370aef4129a5899668a43ec3
+parent 5406acf74e79da4042c95e1a5429968f8117082a
+author Innsegl <agent@innsegl.invalid> 1789647194 +0000
+committer Innsegl <agent@innsegl.invalid> 1789647194 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFGdiTp8sO3vVUAP6k70yjf+2WqEMMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE3MTIxMzE0WhcNMjYwOTE3
+ MTIyMzE0WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOSgCuMAAweHlrhQ4
+ Lkc5G0Icr2XMroee1VyLZzzK5BoyJ097z8WMNUFQS1vSKmMAertUBNzpGVy+I1W7
+ 91q6xaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUdoE4+SvA2STiYxwe9bDNng94xN0wHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvYWM1MGNkOWMvcnVuLTY2MDkyYzY2MGRhOWI3
+ ODdhMjc2YjM3MGZiOTk0MDQxMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvYWM1MGNkOWMvcnVuLTY2MDkyYzY2MGRhOWI3ODdhMjc2YjM3MGZiOTk0
+ MDQxMAoGCCqGSM49BAMCA0kAMEYCIQDsxTKMc6Alv5C7RYBzrkWyyiZHpEgagsRY
+ QfPY6CrkCAIhAPkPR991bcQELmZRAx0FzU8WKKBS/dwGz5i5+SBsm+2pMYIBKjCC
+ ASYCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhRnYk6fLDt71VAD+pO9Mo3/tlqhDDALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTcxMjEzMTRaMC8GCSqGSIb3DQEJBDEiBCCFkv/LAyiEkufHFZQk
+ 6ncUZ9jOnFjBlup0hSnJWsci3zAKBggqhkjOPQQDAgRHMEUCIHxf1kJ/uCXs6gqz
+ W3VzgRUjhvjkAkgjmG0cfZrArQkcAiEAkOiKAsOac+wETyIXqBGU6QNtnq+hb2AT
+ NB/lS4JPWCc=
+ -----END SIGNED MESSAGE-----
+
+feat(mcp,shim): record the run that started a subagent session (#214)
+
+ADR-0045's third member had nowhere to go on this path. Before #208 the shim
+registered subagents itself and could pass a parent; the rewrite moved
+registration into observe_session and the argument was left behind, so every
+session it registered was a root run.
+
+What that cost was never the attribution — a subagent's work is attributed
+either way. It is the EDGE. A reader of the ledger could see both runs and not
+see that one produced the other, which is what "who did this work" resolves to
+the moment an orchestrator delegates.
+
+observe_session now takes an optional parent and threads it to register_agent
+unchanged. It is not validated here: register_agent owns what a parent may be,
+and a second opinion about it in this file is a second thing that can disagree
+with the first. It is passed on every start including a duplicate, and is inert
+on the second — register_agent replays the recorded reply for a key it has seen,
+and a run id derives from (agent_type, task, idempotency_key) and not from the
+parent, so a second start cannot move a run to a different parent.
+
+ABSENT IS NOT AN ERROR AND IS NOT EMPTY. A session with no parent is a root run,
+which is the ordinary case for an orchestrator's own session. register_agent
+sets the member only when it is non-empty and mcp_call omits an empty value, so
+a root run records no parent rather than claiming one it does not have — doc 02
+§1 distinguishes the two, in a record nothing can amend.
+
+THE SHIM HAD A SILENT BUG AND THE TEST IS THE ONLY REASON I KNOW. parent_run
+first read $RUNS_DIR/$SESSION_ID; a session's marker is named `session-<id>`,
+because subagent and session id spaces are not guaranteed disjoint — the same
+reason IDENT exists beside KEY. Looking for the wrong filename finds nothing,
+and finding nothing is indistinguishable from having no parent, so every
+subagent would have stayed a root run against a shim that reads correctly.
+
+Mutation-tested both halves. Removing the threading turns MCP-075 red and also
+MCP-077, which is what proves MCP-077 refuses BECAUSE the parent reaches
+validation rather than for an unrelated reason. MCP-076 stays green under that
+mutation, correctly: a root run records no parent either way, so it is the
+regression guard and not the detector.
+
+The second harness's shim is left alone. Its transcript carries no parent, and
+recording one there would be a relationship nobody reported.
+
+Driven by MCP-075, MCP-076 and MCP-077, and by two new cases in the shim
+self-test — one asserting the edge, one asserting an orphan subagent sends no
+parent at all.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/ac50cd9c/run-66092c660da9b787a276b370fb994041
+Agent-Run: run-66092c660da9b787a276b370fb994041
+Agent-Task: ac50cd9c
