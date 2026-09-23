@@ -1,0 +1,48 @@
+tree 64c239f3e6c41d5c620cfada6aa2f0f1b333c54a
+parent b13d32e85c017c85f1949d0bff5e0a0a629a9308
+author Innsegl <agent@innsegl.invalid> 1789387608 +0000
+committer Innsegl <agent@innsegl.invalid> 1789387608 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFDMmLlAB+Gzduf7ZTnHfHtSehnZbMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE0MTIwNjQ4WhcNMjYwOTE0
+ MTIxNjQ4WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGVq2/OhO41kZkKBJ
+ JWlePeK0Qru97EUg07h+0SSZxmfxce9SC7FhyPvFWV5rPslminnu5FNMpS1b7mLQ
+ peMY1KOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUmeQ9nzODjeC3sFOxuv8Ce4sW/tkwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvY2I1OTBiMDIvY2RmN2Q5YWYvcnVuLWQ0NWYzY2FmNDBjYmUz
+ YjU2MGYwY2I1MGI5NGI4NWYwMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvY2I1
+ OTBiMDIvY2RmN2Q5YWYvcnVuLWQ0NWYzY2FmNDBjYmUzYjU2MGYwY2I1MGI5NGI4
+ NWYwMAoGCCqGSM49BAMCA0kAMEYCIQCPnjWnn/vFAoWMpeBarnCciIqraOOXyyU1
+ C+Pclm+qjQIhALmObMjSW23m9KKVrp6mnKcc6wCL2+4bvAoZMVu3/w4OMYIBKjCC
+ ASYCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhQzJi5QAfhs3bn+2U5x3x7UnoZ2WzALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTQxMjA2NDhaMC8GCSqGSIb3DQEJBDEiBCCXlkkszmvnRfO5VLmG
+ 67mhIq/86rEqCeHIbDu5vavbATAKBggqhkjOPQQDAgRHMEUCIGEQCabmEvIHzJNc
+ 8Cj1c3Ro95lfAfTERJO2afaSvY80AiEA4dByYmXZVeyPhhGp7VZQiW/dUYDPYJjk
+ ziNHnNZpiVo=
+ -----END SIGNED MESSAGE-----
+
+fix(dashboard): close the facts strip instead of orphaning its last cell
+
+Measured in a browser on a real run. Nine facts in a four-column grid put
+REPOSITORIES alone on the third row beside three empty cells, which reads as
+missing data rather than as the end of the strip.
+
+A Fact may now take the whole row, and the repositories cell does. Eight facts
+fill two rows exactly; the ninth closes the strip instead of hanging off it.
+
+No test drove this and none could have: every assertion about the strip is
+about which facts it carries and what they are called, and all of those still
+hold. What changed is the shape of an area no assertion describes, which is the
+gap a rendered check exists to cover (doc 06 P4). The full suite is green
+either way, and that is the point worth recording rather than hiding.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/cdf7d9af/run-d45f3caf40cbe3b560f0cb50b94b85f0
+Agent-Run: run-d45f3caf40cbe3b560f0cb50b94b85f0
+Agent-Task: cdf7d9af
