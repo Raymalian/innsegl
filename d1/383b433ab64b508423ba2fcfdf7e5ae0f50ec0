@@ -1,0 +1,26 @@
+tree 092acba43b1b0df44cc26924a583c3af07d3dae6
+parent 4f2a7213fb9515009c85a9769082dca6beda30d9
+parent 09cf5f85d7c4bad79b39ad9ef86cb36af2097b92
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789563204 +0200
+committer GitHub <noreply@github.com> 1789563204 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqpFECRC1aQ7uu5UhlAAAcI0QAJZ7nD5RNd2P9aNcDn6kAG8o
+ oBAnYA5cl48Eh3ehHnzdmfJuIiL2b3ffyBGZGRbWfEVzoChxUiODFx5nTEsf4w9b
+ ROnt7enwe+6ij4PZZBG0SGahmYLk96heYsBCYmCfy7CG+jqM95ErFHI0YaPLXeE3
+ 6KI1eec7QvAqdvp5wOakmqy/8jiu7mLZle4JYW2CitcSTk7GkrjoaY8HY27dDpn5
+ 9bb7YcnnXRolquIx3KeQvEgOewctVPk7qga6WyGlgraCiWJvThFoe1KHXr1PUlRk
+ XlPP0xqfLL9wxPBayn1W/uCH5B0Gc4fdneyU4M2O6J26CM/8YEd8tpH2xGTtM9Oa
+ q9UAo51sBbQGcjvRSDDzWD5mppnYR7e6cMF98SQIuNsw8WY3Ys3GQXDz48dfBmwY
+ k7UQQr12qZwNaZ8I7xqhFh4aGHyJ70uMgAJ8B6rHYA0YoJvlYwLpjSv0oxGZHEwK
+ Uu4aAux0xEYtA2KQsqwIUTRiYtB7E8dlgOZ6EWYVUJ3jyTOYDfRAPTzJH51dG1E6
+ dcxG8gkjSZKzvmZITtvnTiZFWgMMtTDciKtevBWt/iqQhEo/I0LprbypqD8DeWoN
+ 2byIQ3fd/KKkSGdeIzflfwT9ZThxd3XDOBoOdd0+tGG0eDO2iv3BLm/EHiztVftW
+ UvJw7/yDOPJjaie3c0o2
+ =2lgw
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #230 from Raymalian/resign/start-script
+
+One command starts the stack from cold
