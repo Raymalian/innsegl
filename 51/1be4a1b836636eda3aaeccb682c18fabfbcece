@@ -1,0 +1,79 @@
+tree 04b2bd5475fa90d7944240f8e13fa52bc3a9c047
+parent 4f2a7213fb9515009c85a9769082dca6beda30d9
+author Innsegl <agent@innsegl.invalid> 1789561772 +0000
+committer Innsegl <agent@innsegl.invalid> 1789561772 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFCrHH+F31b1lJvp5qoftb4+hSkPrMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTIyOTMyWhcNMjYwOTE2
+ MTIzOTMyWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEattg1gmngR/7vs8G
+ USsRb1OeTav0qOeUOpSCNdUYjGsvRWAgSYgt3J5Lw8zwHY4yDj0Azgs8ngwSO3hX
+ EusaTqOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUmjNw+Wdg8pz5MJcSaz7UWVGmbKAwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNWVlZjU2NjQvOTRlM2I1YzgvcnVuLTU4NzQzMmY4ODJlZWE5
+ YjAzNTE5NjA0ZWQzYzYyOTg5MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNWVl
+ ZjU2NjQvOTRlM2I1YzgvcnVuLTU4NzQzMmY4ODJlZWE5YjAzNTE5NjA0ZWQzYzYy
+ OTg5MAoGCCqGSM49BAMCA0kAMEYCIQDnBRrv7H29CXOam2csdMn4aas0xymItUsR
+ V8KJMSJkZgIhANYHU155Xli0/d7CGk/+RM4rXzZfSbrW+JNM44tH1IkaMYIBKTCC
+ ASUCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhQqxx/hd9W9ZSb6eaqH7W+PoUpD6zALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTYxMjI5MzJaMC8GCSqGSIb3DQEJBDEiBCC2MxDJKHda6B79fQ10
+ EwCcpIWC2DPAy2bU0wgG+4uC0jAKBggqhkjOPQQDAgRGMEQCIC2tfgynX/J2kdIm
+ jkYNbRqVcTmgfYrSWnN9XccRUQkUAiAtRyMQcWC8Hl+cMg4v2emvNHh/6Hg4cBmN
+ aqvO+z+Ezg==
+ -----END SIGNED MESSAGE-----
+
+fix(mcp,hooks): let a tool call name its session, so a refused start recovers (#226)
+
+MEASURED. Runs in the ledger by agent type were 101 orchestrator, 69
+general-purpose and 3 session. A subagent got an identity every time and the
+operator's own session almost never did.
+
+SessionStart was not broken -- driven against a running deployment it minted a
+run at once. It runs ONCE, at the moment the stack is least likely to be up, it
+is deliberately non-blocking, and nothing ever tried again. observe_tool_call
+then required a run id, so a shim whose start was refused had no run id and
+could not record tool calls either: the session lost its identity AND every call
+it went on to make, silently, after one warning at the beginning. Orchestrator
+identity hid it, because the signer registers a fresh run per commit.
+
+The fix is not a retry in the shim. E11's rule is that anything a second harness
+would have to copy belongs in the MCP, and a retry written in one shim is a
+retry every future shim reimplements. So session_id is an alternative to run_id,
+and a session this deployment has never seen is registered by the call that
+names it -- through observe_session's own start, in process, so there is one
+definition of starting a session and not two.
+
+Three decisions rather than fallout. Naming both a run and a session that
+disagree is refused, never a precedence order, because the answer is on its way
+into an append-only record. A first-sight registration takes cwd and agent_type
+for the same reason a start does, rather than registering against a guessed
+repository. And a retired session is reported terminal and never resurrected --
+#207 keeps the marker past retirement for exactly that, and a tool call naming
+one is the same call in a different spelling.
+
+THE SHIM CAUGHT A MISATTRIBUTION IN THIS CHANGE. There are two kinds of run: a
+subagent's, keyed on the agent id, and the operator's session, keyed on the
+session id. Passing the session id unconditionally attributed a subagent's tool
+calls to the run of the session that spawned it. The selftest found it, and the
+key is now derived once, next to the marker key it is easy to confuse with, with
+two cases pinning both directions.
+
+Driven by MCP-061..066, proposed in doc 07 first and observed failing. Two
+existing cases changed with the contract and say why in place: the schema now
+carries three more arguments, and an empty run_id with no session is no longer
+RUN_NOT_FOUND but its own refusal, since a verdict about a run reads wrongly for
+a caller who named none. IP §4 amended.
+
+Proved end to end against the running stack, not asserted: a session with no
+marker and nothing in the ledger made one tool call, and the chain then held
+run_registered 1, tool_call 1.
+
+Agent-Identity: spiffe://innsegl.dev/agent/5eef5664/94e3b5c8/run-587432f882eea9b03519604ed3c62989
+Agent-Run: run-587432f882eea9b03519604ed3c62989
+Agent-Task: 94e3b5c8
