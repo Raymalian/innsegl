@@ -1,0 +1,26 @@
+tree c5a129cf8231575f3e1c289b6bd4a7287a21bae9
+parent 5895b34187e9add98017588883b90e0c68415661
+parent dcbab103b2628ba9590aa753b0eb0ee78855c372
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789644606 +0200
+committer GitHub <noreply@github.com> 1789644606 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqq88+CRC1aQ7uu5UhlAAAsJgQAB8NQ8Knm1kqx+znBjYj+UqN
+ mUz4MGEZqFMCl1054+5ZBWsNXq1F+m1fmW7rV+2FIRVsOu1wRIF9iRA6VksiJC1T
+ bcrGFd5a9WcRwr+BZnliyH8MC5REOE9LZZebRFoZ8Pcd+RLj6d6L6ZeURPnhIDvg
+ Tg6lUBeOzQEhM8cCstNUoEXFy7wVM3J2pVismP1lmIdjp9moq3dMy85litjZH2DP
+ 5iuB3i2E+D6+ddXpczQlHhdsQ9hjr8rM9c6wfapNoP86lT0rV82bGm+hIXYDFRnk
+ 5gZmV1rt2Fw7usMLrjkjU2z+wQX+gGgyRxp9JQCyMwr7fjnKuFRI0FVr6JpkDdSS
+ wTzFooqw0Nr2/V6aK1rfQ6Wt/zs0Bt4FdMnzkphMwzcMSxdjta78YITKoQaC7meN
+ OaCr43ef0PHapr5voltH2Iw5yvVG5Xdx1mRTU52s1Jrv/gqz02U2ZJoy6QEmswRP
+ oX9Nol/qVJ3jvEr3YaJAryLGVLIhik6kUUgs206/IxsCxLWOJFJWd1tJzfvIeD1z
+ SQZTIwKFO4z6D2iUY7+56xOdemwSZT65ZRWMlDanMirSMH2noI9MZQZhBByqrpXR
+ 2ZJyVQCN/hMwSNb0M+fus9kd+YTGi4TtxciSESmpTAaQL2MDLaORkvpa1fE37Bvk
+ tDIoNlx6dsCyzq9AKKUt
+ =UHdL
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #248 from Raymalian/fix/no-published-specs
+
+Refuse to track a local-only specification
