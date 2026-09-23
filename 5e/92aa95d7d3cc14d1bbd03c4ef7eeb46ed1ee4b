@@ -1,0 +1,66 @@
+tree 092acba43b1b0df44cc26924a583c3af07d3dae6
+parent 4f2a7213fb9515009c85a9769082dca6beda30d9
+author Innsegl <agent@innsegl.invalid> 1789561761 +0000
+committer Innsegl <agent@innsegl.invalid> 1789561761 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFBA0c/S4GaCkviReXlwHbsSgloWJMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTIyOTIxWhcNMjYwOTE2
+ MTIzOTIxWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7L+JTrRr+An1VACd
+ fEh5B7AFqvgXeRGP84O9WCcPuZrOkzxJBvPhmv0rHdJBtBEbiIcXt9EvVBOEizL1
+ G8fM1aOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUOkz3Kw2d9Mki38a3QRdHQeSs99cwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNWVlZjU2NjQvYzA2OWU1YTIvcnVuLTg4NzY4ZDdhNDI2Njky
+ MTMxZjY0ZTQwOTFiM2VhMGJhMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNWVl
+ ZjU2NjQvYzA2OWU1YTIvcnVuLTg4NzY4ZDdhNDI2NjkyMTMxZjY0ZTQwOTFiM2Vh
+ MGJhMAoGCCqGSM49BAMCA0gAMEUCIEX762egbGhbVVoOIRgNxIx6UyuQHWyP11Eb
+ hvHdSG3sAiEA/4niscvuLb2tybX98ic9IlMBoeyUjPW9L8i+/0/oqAYxggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFBA0c/S4GaCkviReXlwHbsSgloWJMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNjEyMjkyMVowLwYJKoZIhvcNAQkEMSIEIGyntfrYwTDVTd/zEXj8
+ tewRcAICKsf0D3ZHxZQkSAkMMAoGCCqGSM49BAMCBEYwRAIgIyx65qgXx4jdu32v
+ tHUze0A1FBxrzZVkVcBQVZ45qeACICW8AU64t9dc2isaMUHQp4PH59vQ6H5JWU7H
+ 7Iap/Q4k
+ -----END SIGNED MESSAGE-----
+
+feat(scripts): one command brings the stack up from a cold machine
+
+`make innsegl-up-here` already does the work and this does not repeat it -- it
+calls it. What it adds is everything around that call which otherwise has to be
+remembered.
+
+Docker Desktop may not be running, and the make target then fails with a daemon
+error that says nothing about starting it. `up -d` returns when the containers
+are CREATED, not when they answer, so opening the dashboard a second later shows
+a load failure that looks like a bug and is a race. And nothing printed where
+the dashboard was.
+
+So: start Docker and wait for it, boot through the Makefile, wait on container
+HEALTH rather than existence, then report every service with what it is for.
+
+It also prints the transparency log's entry count. A restart that lost the tlog
+pin shows up there as a small number, instead of as verification failing days
+later for a reason nobody connects to a restart (#176, #219).
+
+The header carries the rule the script exists to enforce: never bring a service
+up with `-f deploy/compose/innsegl.yml` alone. The stack is two files and the
+second carries the /projects mount and the repository list. Measured 2026-09-13:
+recreating the dashboard with one -f also recreated innsegl-api without them,
+and "Verify a commit" answered 404 for every commit until the make target put it
+back. A single entry point is what stops that recurring.
+
+Verified from a genuinely cold machine, Docker stopped: started it, brought both
+files up, reported seven services healthy after ~9s and the log at 555 entries.
+
+No test drove this. It is an operator entry point with no behaviour of its own
+-- every gate it runs is one the Makefile already owns, and the useful check was
+running it with Docker off, which is what was done.
+
+Agent-Identity: spiffe://innsegl.dev/agent/5eef5664/c069e5a2/run-88768d7a426692131f64e4091b3ea0ba
+Agent-Run: run-88768d7a426692131f64e4091b3ea0ba
+Agent-Task: c069e5a2
