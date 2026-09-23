@@ -1,0 +1,75 @@
+tree 03eb596177ea75aa854dc806ddf7423359ee49a9
+parent 1d44750df62b08e24b098b98074157e79c0610fd
+author Innsegl <agent@innsegl.invalid> 1789836394 +0000
+committer Innsegl <agent@innsegl.invalid> 1789836394 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFCbFvExMNIhbnCumeCttevNjNltHMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MTY0NjM0WhcNMjYwOTE5
+ MTY1NjM0WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoaoPk36jePlzySc3
+ 59yQR0Cl155hCNFmtuOPqp6rgNJH8iDMmX6XrI/oq63NYZNMH77kBFoE7s+dXx/E
+ qHmEoaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUewtcDmOtQzsS59S8W0S7S5P4h2EwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNGEzZjY2MDQvcnVuLWY0ZjQxYmE0MzY1ZmY5
+ ZDRmNjJmODNmODk1YzliMGFhMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNGEzZjY2MDQvcnVuLWY0ZjQxYmE0MzY1ZmY5ZDRmNjJmODNmODk1Yzli
+ MGFhMAoGCCqGSM49BAMCA0gAMEUCIQCCG+Hci4FyvrA2CFljkcurlBYEgFXUnGpp
+ bNNVNxUQWwIgPZ5EMVohfeTnLehmkq8WykaP4FPpWjyrs9VemINzD4oxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFCbFvExMNIhbnCumeCttevNjNltHMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxOTE2NDYzNFowLwYJKoZIhvcNAQkEMSIEIB429ZCRCyiY/Dz3fi47
+ EtdATt/p5cnwLtzB+rp3fFGuMAoGCCqGSM49BAMCBEcwRQIhALoAXxtkneBHOh35
+ TxMGGphVsps9ieszRsQr4Fpk6v7PAiAb2Qj6J9QxmWPbL/SNuUy90BNg/U+8oWlN
+ MMyDkGHyVw==
+ -----END SIGNED MESSAGE-----
+
+fix(hook): refuse a capture the stopping run cannot account for (#261)
+
+The stop-time capture signed everything uncommitted in the tree under the
+stopping run. Measured three times on 2026-09-18: a read-only review subagent
+signed 12 files and ~890 lines it had only read (457ca48); a second capture took
+another agent's in-flight work; a third took a one-line edit the session made.
+Each verifies against Fulcio and Rekor under the wrong identity, which is worse
+than unsigned.
+
+The first attempt bounded what the stop ADDS and left the commit unbounded. It
+passed 27 assertions and let a nine-file capture through days later, because
+`git add` removes nothing and the capture commits the INDEX: anything another
+party had already staged went in regardless of what the bound picked.
+
+So the bound is now on the commit. capture_account asks one question of the
+index as it actually stands — is every path in it one this run's own tool-call
+bodies record it writing — and if the answer is no the WHOLE capture is refused
+(issue #261, option 3). It is asked twice: before anything is staged, so a
+refusal leaves the tree untouched, and again on the index about to be committed.
+
+Nothing is guessed out of a `Bash` command. The measured run made 62 Bash calls,
+27 of them writing to a file, so the record is structurally incomplete — but
+parsing redirections to recover the filenames takes a shell grammar this file
+cannot evaluate and turns a guess into a signature that verifies forever under a
+named identity. A run whose writes went through Bash accounts for nothing and
+its capture is refused instead.
+
+A refusal changes nothing on disk and names the run, the tree and the command
+that signs the work under it later. Stranding the work silently would be worse
+than the misattribution this removes.
+
+Driven by OPS-074 (an index holding work the run cannot account for produces no
+commit), OPS-075 (a run that recorded no write captures nothing in a dirty
+tree), OPS-076 (a refusal is nameable) and OPS-077 (the capture that is allowed
+is still bounded to the run's own writes). All four drive the shim against a
+real repository and assert what reached a commit, which is the half the previous
+tests never asked: they observed 57 passed / 7 failed against the old code, with
+OPS-075 reproducing the read-only incident exactly. 56 cases before, 64 after.
+
+shim-selftest.sh also pins INNSEGL_API_URL at a dead port, so the capture path
+no longer branches on whether this machine's deployment happens to be up.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/4a3f6604/run-f4f41ba4365ff9d4f62f83f895c9b0aa
+Agent-Run: run-f4f41ba4365ff9d4f62f83f895c9b0aa
+Agent-Task: 4a3f6604
