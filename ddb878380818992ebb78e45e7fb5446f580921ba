@@ -1,0 +1,58 @@
+tree 2b611051b1a0da7847f09d0f0ccab3597d4cc10f
+parent f39bcb2927ef7bfcf3f6920070b16ce68d728bf5
+author Innsegl <agent@innsegl.invalid> 1789847793 +0000
+committer Innsegl <agent@innsegl.invalid> 1789847793 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFBRoR+Ti2fAPeTOitxUEKLsTbkvqMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MTk1NjMzWhcNMjYwOTE5
+ MjAwNjMzWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIRWgPoU/CNZ4vent
+ h5nWssRLUqMCtuW+LHL8sz7NPytHsGut9buDSKko8cRvYVd3v9IqJnlh/7PvJNr9
+ OMBp/qOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU7sTU9pFmoG+h8d/f9ryMSd2UtVMwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvYWU0YjVhODIvcnVuLTAwOGFlMzg2ZDQwZGJk
+ MDhmYTA4NDJjMjA0NzFlNzNhMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvYWU0YjVhODIvcnVuLTAwOGFlMzg2ZDQwZGJkMDhmYTA4NDJjMjA0NzFl
+ NzNhMAoGCCqGSM49BAMCA0cAMEQCIEyBjp1bZO2nphlcbwGnjn9kJViF4jsLSEwn
+ oeRPmJjSAiAXfafmaalKpk7YlSL11MWmFdf6q2GE7y0iSfKW8tKd9TGCASowggEm
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUFGhH5OLZ8A95M6K3FQQouxNuS+owCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTE5MTk1NjMzWjAvBgkqhkiG9w0BCQQxIgQg7/bdfVbl5rwmSa1Ys0aj
+ xxkU8HMwttXl0X9tJyg1TA0wCgYIKoZIzj0EAwIERzBFAiEA73erl6ImgD/nMhyO
+ kIWf1WO+AjHIbCx9BCV32KCv72ICIHoIgreeJau2cbKuO+P/4RvKqZmuonVLx85v
+ dhsQXkRp
+ -----END SIGNED MESSAGE-----
+
+fix(mcp): converge a takeover over a commit that already landed (#274)
+
+A kill between the Phase C append and the idempotency store's write of the
+reply leaves the repository in the state the B -> C window leaves it in --
+one commit object, HEAD at the staged tree, an empty index -- so StagedTree
+refused the takeover and named the reconciler. The protocol had completed:
+this call's own `commit_recorded` was already on the chain, and only the
+answer was lost, which is what IP §6.6 requires a replay to return.
+
+sign_commit now asks the chain for its own Phase C record, under the key it
+derives, before it asks the repository for anything, and converges on it when
+it is there. No Rekor search and no repair: the entry's uuid and log index are
+members doc 02 §3 requires of `commit_recorded`, so the record names the entry
+completely. ADR-0031 decision 6's refusal is untouched -- a commit with no
+`commit_recorded` is still refused, still not retryable, and still RM-035's.
+
+Driven by MCP-011, pinned at the offset the fuzzer found (+568.8ms, blind
+stratum 2): TestMCP011ATakeoverConvergesOnACommitThatAlreadyLanded and
+TestMCP011TheTakeoverOfACallKilledBeforeItsReplyWasRecordedConverges, both
+observed failing on "the staged tree ... cannot be signed" first.
+
+No event type, field, enum or source changed. SignCommitLedger gains LED-008's
+read half, which *ledger.Store already had; internal/reconciler's Phase C crash
+fake passes it through.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/ae4b5a82/run-008ae386d40dbd08fa0842c20471e73a
+Agent-Run: run-008ae386d40dbd08fa0842c20471e73a
+Agent-Task: ae4b5a82
