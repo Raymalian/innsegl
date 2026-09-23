@@ -1,0 +1,96 @@
+tree 60bdeeb2835d37d12acbb4081f2146c205cee11e
+parent 892a2d8aed77c735670aecef9ae5c5c8acd1d5b2
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788532473 +0200
+committer GitHub <noreply@github.com> 1788532473 -0700
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqmtb5CRC1aQ7uu5UhlAAA8rYQABMCvQ7zbkHl9EbEIH7Kqh37
+ 1BKpks+4OhLINUtSmJndrxWfNTmQGDfPUljDGjU2gsvCIHFG7+qsZ4+UVrBTBsuX
+ T9A/smdBkz9FWp5qVBtkWC2duVoMhGqzAzJmNyhLSTZlxKw29+bIAXRafj9PlSp8
+ jlh6AYqQg8hWciz5asHDCzkIZpag11wqMEVBHtCYe0JuHM15gjj2X+QBIS+wEN3S
+ sD2/1QZGZPYuaYl1zBjJFtYObwwcsf8gXan+02/1hp7ncFwbham0PzpIImM3+Ndq
+ J1uWrH7qChvs2JpHjdKEfQjR+4N8+r36VPHyC5Wfbrxrn9beprssfUfLfcN+VfgT
+ 3og+QjEjhXBSqnDjek5HtznVMGAPCgxRUvrbwjvjS9PJYAV6pCve3dMB8Unqn5G4
+ iHsY1i0hBqbTfepkog14kgic3HsfCwapIJPK7Hup3qwaort3Y9XouVOr579N4Uxa
+ Pgt0Mg/yYvn+dXfT1AQoHdtA1tKH95ao37Bc3lREtZOJ/lPVGeUyxwptqyPxpJKX
+ /2JdyUB5+4nt7MtYso/pBJWbF5u349HfYo/tq4qOn+gX2hVwQ6q4Q6JuTyKdLk9w
+ xlc3NQwvsuFShxiD5Kb9iCdecm8r+DyFEgGKGHB3fmtgyOXxCnAOR31ZoFpbeG+Q
+ ntOV9xG82cxjOp/Gh894
+ =V4V+
+ -----END PGP SIGNATURE-----
+ 
+
+Stop two harnesses reporting a port conflict as a fault in the system under test (#143, #131) (#144)
+
+* fix(smoke): OPS-004 picks its own Rekor port and verifies who answers it (#131)
+
+TestOPS004FreshCloneBootstrap hardcoded rekorURL to 127.0.0.1:3000 even
+though deploy/compose/sigstore.yml already parameterises the binding via
+INNSEGL_REKOR_PORT. On this machine, host port 3000 was held by an
+unrelated juice-authz container, and OPS-004 spent 289s reporting the
+resulting HTTP 500 as a fault in our own Rekor.
+
+Reproduced live: curl 127.0.0.1:3000/api/v1/log/publicKey returned
+Juice Shop's "Unexpected path" 500 page, and the unmodified test failed
+with that response wrapped as a rekor error.
+
+Fix: the stack now picks a free host port right before boot and passes
+it through INNSEGL_REKOR_PORT (stack.rekorPort/rekorURL), and
+assertRekorPortIsOurs asks Docker's own port-publish table who is bound
+to that port before any HTTP probe is allowed to run, failing fast and
+naming the occupying container if it isn't innsegl-sigstore-rekor. Picking
+the port late keeps the #143 probe-then-bind race window small without
+touching the shared port helper.
+
+New tests: OPS-014 (rekorPortConflict's branches from docker ps output,
+no container needed) and OPS-015 (a real decoy container squatting on a
+chosen port, proving assertRekorPortIsOurs names it).
+
+* fix(chaos): survive the port-allocation race in OPS-001's bring-up (#143)
+
+The harness picked a free ephemeral port, released it, then let Docker bind
+it seconds to minutes later, leaving a window in which anything else on the
+machine could take it first. Ports were reserved for the whole world up
+front, which is why Sigstore's (used last, after SPIRE) had the widest
+window and is what CI hit: "Bind for 127.0.0.1:33971 failed: port is already
+allocated".
+
+Reproduced deterministically before writing the fix: held a loopback port
+with this process's own listener and asked Docker to publish a real
+container onto it. Docker refused with the same message class the CI log
+carries, confirmed against both an older and a newer Docker Engine's
+wording. That reproduction also answers the issue's first question: a
+listener held by a separate process blocks Docker's own bind, so "hold the
+port until Docker takes it over" is not achievable across process
+boundaries — Docker needs the port free at the instant it binds.
+
+So each bring-up step (SPIRE, the admin bridge, Sigstore, Postgres, MinIO)
+now picks its own port immediately before the docker call that needs it,
+and retries with a fresh port, up to 5 times, ONLY when the daemon reports
+that specific, distinguishable error — never on a genuine fault, which
+still fails on the first attempt per #101. Attempts are logged so a machine
+that needed several is visible. A docker-run step force-removes any
+container a failed attempt left behind before retrying, since Docker leaves
+that container in "Created" state and a bare retry would collide on the
+name instead of losing the actual race. prtFreePort also now prefers a
+20000-29999 band outside the kernel's own ephemeral range, narrowing the
+window independently of the retry.
+
+The "Found orphan containers" warning in the same CI log is unrelated: this
+harness always brings up SPIRE's compose files before Sigstore's under the
+same project name, so compose reports SPIRE's own just-started containers as
+orphans relative to the Sigstore-only file set it was just given. It is
+routine, not evidence of a half-populated project from a prior failure, and
+is not touched here.
+
+Test catalog IDs RM-092-1/2/3 (not doc 07 — this is harness plumbing, not an
+OPS-001 product case): the classifier, the retry driver's bookkeeping, and
+the real-Docker reproduction above, now kept as a permanent regression test.
+
+Verified: 3 full real bring-ups of TestOPS001DependencyPartitionMatrix
+(3/3 passed, ~95s each) plus one full `test/chaos` package run including
+TestOPS003's kill campaign (9/9 subtests passed, 160s, -race). No natural
+port race occurred in any of the four real runs; the mechanism is proven by
+the deterministic reproduction above, not by a naturally occurring flake.
+
+* fix(chaos): match the runner daemon's own wording for a lost port race (#143)
