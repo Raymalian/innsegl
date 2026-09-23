@@ -40,9 +40,20 @@ import (
 // It is also NOT a way to rescue a verdict. The rewritten commit stays FAILED
 // whatever is recovered here; what is recovered is history, for a human.
 
+// OriginalNotesRef is where a rewrite leaves each original commit object,
+// attached to the commit that replaced it (#294). The short form, as
+// `git notes --ref` takes it; git expands it to refs/notes/innsegl/original.
+const OriginalNotesRef = "innsegl/original"
+
 // recover looks for other commits in the repository that carry the same tree
 // and are known to the log.
 func (v *Verifier) recover(ctx context.Context, repo string, c commit, notes []string) ([]Recovered, []string) {
+	if rec, said := v.fromNote(ctx, repo, c); said != "" {
+		notes = append(notes, said)
+		if rec != nil {
+			return []Recovered{*rec}, notes
+		}
+	}
 	shas, err := commitObjects(ctx, v.cfg.GitPath, repo)
 	if err != nil {
 		return nil, append(notes, fmt.Sprintf(
@@ -66,7 +77,9 @@ func (v *Verifier) recover(ctx context.Context, repo string, c commit, notes []s
 		return nil, append(notes, "the original attribution could not be recovered: "+
 			"no other commit in this repository holds tree "+c.Tree+
 			", and Rekor is indexed by the hash of a commit SHA, not by a tree hash, "+
-			"so there is no query left to make")
+			"so there is no query left to make. If this branch was rewritten, the "+
+			"originals may be in refs/notes/"+OriginalNotesRef+", which a clone does not "+
+			"fetch unless asked: git fetch origin 'refs/notes/*:refs/notes/*'")
 	}
 
 	var out []Recovered
@@ -85,6 +98,63 @@ func (v *Verifier) recover(ctx context.Context, repo string, c commit, notes []s
 	return out, append(notes, fmt.Sprintf("the original attribution was recovered from the "+
 		"tree hash: %d commit(s) in this repository carry tree %s and are in the "+
 		"transparency log", len(out), c.Tree))
+}
+
+// fromNote recovers the original from the note a rewrite left beside this
+// commit (#294). It is the tree walk's answer for a repository that never held
+// the original object — a clone of a rewritten branch — and it trusts the note
+// for nothing:
+//
+//   - the note's bytes are HASHED AS A COMMIT OBJECT, by git, and that hash is
+//     the only thing asked of the log. Altering one byte asks about a commit
+//     nobody signed;
+//   - the note's tree must be THIS commit's tree, so a genuine original cannot
+//     be borrowed by a commit with different content;
+//   - the identity is the one in the LOG ENTRY's certificate, never anything
+//     the note says.
+//
+// It returns nothing and says nothing when there is no note, so a commit that
+// was never rewritten this way reads exactly as before.
+func (v *Verifier) fromNote(ctx context.Context, repo string, c commit) (*Recovered, string) {
+	where := "refs/notes/" + OriginalNotesRef
+	listing, err := runGit(ctx, v.cfg.GitPath, repo, "notes", "--ref="+OriginalNotesRef, "list")
+	if err != nil {
+		return nil, fmt.Sprintf("the notes under %s could not be read, so no original was "+
+			"looked for there: %v", where, err)
+	}
+	blob := ""
+	for _, line := range strings.Split(listing, "\n") {
+		note, target, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if ok && target == c.SHA {
+			blob = note
+			break
+		}
+	}
+	if blob == "" {
+		return nil, ""
+	}
+	object, err := runGit(ctx, v.cfg.GitPath, repo, "cat-file", "blob", blob)
+	if err != nil {
+		return nil, fmt.Sprintf("the note under %s could not be read: %v", where, err)
+	}
+	sha, err := runGitInput(ctx, v.cfg.GitPath, repo, object, "hash-object", "-t", "commit", "--stdin")
+	if err != nil {
+		return nil, fmt.Sprintf("the note under %s could not be read as a commit object: %v",
+			where, err)
+	}
+	sha = strings.TrimSpace(sha)
+	original := parseCommitObject(object)
+	if original.Tree != c.Tree {
+		return nil, fmt.Sprintf("the note under %s holds commit %s over tree %s, which is "+
+			"not this commit's tree, so it is not this commit's original", where, sha, original.Tree)
+	}
+	rec, ok := v.attributionOf(ctx, sha)
+	if !ok {
+		return nil, fmt.Sprintf("the note under %s holds commit %s over the same tree, and "+
+			"the transparency log holds no entry for it", where, sha)
+	}
+	return &rec, fmt.Sprintf("the original attribution was recovered from the note under %s: "+
+		"commit %s carries this tree and is in the transparency log", where, sha)
 }
 
 // attributionOf asks the log what identity signed one commit SHA. It reads the
