@@ -1,0 +1,57 @@
+tree 7743a8126dc34f38d9e03b328e1f5e8d0ba4fe8e
+parent ba9a3045a8f2dba38567e36bc6e735bdf07f5b32
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788679230 +0200
+committer GitHub <noreply@github.com> 1788679230 -0700
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqnRQ+CRC1aQ7uu5UhlAAAK7AQAIo5r7XkkbJ1mV/+XPIVZFFi
+ Vwza008PzQ4ameaieENXbHaLnFbHzaf5kJnal70xMKLOMLtGaVSOlvD+CPli+L7w
+ hk9ke0lehXIcbxLBM3URYLjQgrlCPjAOy32zxcc1SiR36Q8WadegPYvd4Rev7iR6
+ pedtrT3zsAG7rFov3laLhpOy2ifb2M8Zbz3oRoe07dmX9olkMzj3IyTNvqwEMY3z
+ 7qRIu2vZJFj8smBfmewm1NajsP5SkAKxI3P5euk2PUVqe5RM4YaLuWU42eSpjyoX
+ tkTK7OTLCAWIrJRZiOR3Gkz0HKij0FT+WZjrxszcOrimgu1u/tbem8iswYZWBCe7
+ MERIWGLcz5hCmdSW5oy0Yn3nsN7e5mLMsJUu5h+2Pt+ILxe2Q6pR2p4rPwO+TWUg
+ TOEqf7XZgvH6SLqsqXbTH1qyGjfWkk6e+HCgJJyvbA2ACVcRAvUBXa/OpSuPtNRU
+ LC1rBvC29p1Ir/e2VgBPVmQeQeQLjYOG1fUhHnDyQDyocIfgexzPPFJWVc18fq2D
+ /1ZyAhCSpIcSlJJeZiHE0Iu9JpbnMjgTdUm7033q4uWviDSH4FiBY7+b4JGvjFS/
+ /vuyHTA35/75jUMCaiJwgbitCvwNtu6xIKvbBfhZLYT+OiiqxCtFv/ICBsQFf/6T
+ dO7jPWH9ZhCXZ7iwvZsl
+ =sfyO
+ -----END PGP SIGNATURE-----
+ 
+
+Verified ledger backup, fixture 01 pinned, sign_commit's matrix decided (#160, #98, #94) (#163)
+
+* fix(rundir): pin golden fixture 01 resolving through the run directory (#98)
+
+* feat(ops): verified ledger backup before it is called good (#160)
+
+pg_dump alone proves nothing: it can exit 0 on a dump that will not
+restore, or one that restores to a chain that no longer matches what
+was sealed. scripts/backup-ledger.sh restores every dump into a
+throwaway database in the same container, extracts the restored
+event_hash column, and adjudicates it against the sealed segments with
+the existing runbooks/verify-rebuilt-index.sh gate before the backup
+is kept and reported OK -- the check runbooks/index-rebuild.md §0
+describes for a restore, run here at backup time instead, per #160's
+request that a bad backup be caught the day it is made.
+
+A backup with no sealed segments to check against is kept but reported
+UNVERIFIED rather than passed quietly; one that restores but disagrees
+with a sealed segment is refused as a MISMATCH naming the position.
+
+scripts/backup-ledger-selftest.sh drives this against a real
+postgres:16 container loaded with the fourteen committed golden
+fixtures through the real append-only and chain-link triggers (BAK-001
+green on a matching chain, BAK-002 red on one event's hash altered
+after sealing, BAK-003 unverified with no segments, BAK-004 fails
+closed with no container). New test IDs, not added to doc 07.
+
+`make innsegl-backup` runs it against the reference stack. Dumps go to
+a local ./backups by default ($INNSEGL_BACKUP_DIR to override); doc 05
+§2 names WORM object storage as the eventual home but this does not
+ship a cloud upload path.
+
+* test(contract): decide sign_commit's eleven contract-matrix cells (#94)
+
+* docs(adr): accept ADR-0042, and record why the public entry is not encrypted
