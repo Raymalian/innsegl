@@ -1,0 +1,80 @@
+tree 0921851596cd95f5a705ed56fde0400bfaf704af
+parent 4b84cfde9fca3fba554361d99ca1b45068bbf3a0
+author Innsegl <agent@innsegl.invalid> 1789561781 +0000
+committer Innsegl <agent@innsegl.invalid> 1789561781 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFDtEypJWOThQEWaDtf2nHgWC1XOlMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTIyOTQxWhcNMjYwOTE2
+ MTIzOTQxWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2NevEFnzrtJ6dhFq
+ jYQ0TX7MwiQS6ZuQJ6jKkLEr7NB1JTJfbDTH8278VzJtC3tl4N2biCdO9ZhKjru9
+ x9lGzKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUb9UM0z+PJ/lK7kRsIwx/2/vz23QwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNWVlZjU2NjQvN2M1MjA0ZGUvcnVuLTQxNTM0ZmU1NDM2M2Jh
+ Nzg1YjU2ODI5NDAyYjgwMzliMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNWVl
+ ZjU2NjQvN2M1MjA0ZGUvcnVuLTQxNTM0ZmU1NDM2M2JhNzg1YjU2ODI5NDAyYjgw
+ MzliMAoGCCqGSM49BAMCA0cAMEQCICV89D4O04JsBgwzidod8dUleYcQ8G0qC1yj
+ PP5xifZvAiBfp5esvfy0zsSDtyrSiKmYLHwANiB5ttyvXHm+URoUmjGCASswggEn
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUO0TKklY5OFARZoO1/aceBYLVc6UwCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTE2MTIyOTQxWjAvBgkqhkiG9w0BCQQxIgQgBjZOAmZ+Q1XM5ICXdTnW
+ xD1NIhXevj/FsE8C/oj3dEowCgYIKoZIzj0EAwIESDBGAiEAkso7XIB5f6lZeR8X
+ Uv/DX5F2y3A7+ZHFGnAWto75wwoCIQCRf0pXpCVI4qZcsPywVGPYHmqNjJkKa+LT
+ 7BXZ8HhBAw==
+ -----END SIGNED MESSAGE-----
+
+feat(deploy): replace the object store and put its Filer behind the gateway (#227)
+
+The store the reference deployment ran was archived upstream and delisted from
+the registry this repository pulled it from, so a clean machine could not fetch
+it at all. The replacement is maintained and Apache-2.0, and was measured
+against SEG-005 under the configuration the stack actually uses -- bucket
+default rule set at creation, the sealer setting no retention of its own, all
+eight checks green, and a sealed segment inheriting COMPLIANCE from the bucket
+and refusing its own writer's versioned delete.
+
+Driven by OPS-029 and OPS-030, proposed in doc 07 first and both observed
+failing: the bucket init that shipped with the old store cannot run against
+this one, and the Filer's unauthenticated DELETE destroyed a COMPLIANCE-retained
+object that the S3 layer had just refused to delete for the store's own root
+identity.
+
+THE FILER IS A SECOND DOOR TO THE SAME BYTES. Object lock is enforced at the S3
+layer; the Filer speaks its own protocol to the same metadata and takes no
+credential. So the store is three containers rather than one -- bytes, metadata,
+gateway -- the Filer runs with its HTTP listener switched off, and it sits on a
+network whose only other member is the gateway. OPS-029 attempts that delete
+from the network the sealer and the canary are on and requires it to find
+nothing, having first shown the same request destroying a retained object in
+the one-process arrangement, so the refusal is the isolation and not an absent
+API.
+
+RM-144's narrowing survives, expressed differently. This store has no separate
+permission for setting a bucket's object-lock configuration, so an identity
+granted a bucket-wide write may downgrade COMPLIANCE to GOVERNANCE. A
+prefix-scoped write grant is refused that call, and refused creating a bucket,
+deleting one, suspending versioning, putting a bucket policy or lifecycle rule,
+shortening an object's retention and deleting a retained version under a
+bypass, while writing every object the sealer and the canary write. OPS-026
+measures both halves; the grant it replaces could write anywhere in the bucket
+and this one cannot.
+
+The bucket init and scripts/backup-ledger.sh now drive the reference S3 client
+rather than the client that shipped with the removed store, and every assertion
+reads the configuration back off the server. A create call that reports success
+is a claim about a command and not about a bucket.
+
+Also measured and worked around: a write that cannot be placed because the
+store has no writable volume left is returned to the client as HTTP 500, which
+in these harnesses reads exactly like object lock refusing a write. Each bucket
+reserves seven volumes and the default cap is eight, so the cap is raised where
+more than one bucket is made.
+
+Agent-Identity: spiffe://innsegl.dev/agent/5eef5664/7c5204de/run-41534fe54363ba785b56829402b8039b
+Agent-Run: run-41534fe54363ba785b56829402b8039b
+Agent-Task: 7c5204de
