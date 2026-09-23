@@ -1,0 +1,62 @@
+tree 2aaa0af6fe3a442a94ac0618ddb7d5ed5e900917
+parent d8e4ef118e65de343f304273977a465932279ded
+author Innsegl <agent@innsegl.invalid> 1789237079 +0000
+committer Innsegl <agent@innsegl.invalid> 1789237079 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFHFIoTN2BvpLXJavno1ojWgXehXTMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEyMTgxNzU5WhcNMjYwOTEy
+ MTgyNzU5WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEDLNd6NtOyxmV/1fg
+ sGUS8TKpNWTxBv18eTR1G8lwKzNaSXByR6T050aV4CBjlE1+ia+QdS5DLxRXn2LZ
+ iLhtIaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUAz6OggiVSACNnBiTB4Hpr7UENZEwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvY2I1OTBiMDIvNGJmNzllNjkvcnVuLThlZmY4NzdjYTBiMTFl
+ YWNmNWI4ZmZmNTc2NjI1ZmMxMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvY2I1
+ OTBiMDIvNGJmNzllNjkvcnVuLThlZmY4NzdjYTBiMTFlYWNmNWI4ZmZmNTc2NjI1
+ ZmMxMAoGCCqGSM49BAMCA0kAMEYCIQDbHKVT19FkzSzKBT0Vcokt5rokXQ3zIP/d
+ FuYuZXhrCAIhAKXPU+Fa+Ef3WBFPVhxhN5n+J0Bb0Jf0TufzQBBKvFLLMYIBKjCC
+ ASYCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhRxSKEzdgb6S1yWr56NaI1oF3oV0zALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTIxODE3NTlaMC8GCSqGSIb3DQEJBDEiBCAsWMU278yJdc5aVSU2
+ b/B2tT3HhLema/Ckc1WGSoFPADAKBggqhkjOPQQDAgRHMEUCIQDNfsmjn7MhibGr
+ gj8AaL2wJkUMOU1kLAXdTaiZMb0ILwIga3sXS/MgOFerpf3sOMPtU+zRwX0t/fhn
+ hCMpMsexXiQ=
+ -----END SIGNED MESSAGE-----
+
+fix(ci): follow the surface ratchet, and stop shipping an operator path (#210, #212)
+
+Two unrelated supervisor fixes that both had to land before the wave closes.
+
+THE RATCHET. #205 and #206 each bound a tool, and each firing of
+TestTheShippedSurface... is the assertion doing its job: a bare count would
+have gone stale in silence, which is what RM-068 wrote it this way to prevent.
+Seven of eight are bound now; observe_session is the last, and #207 removes it.
+
+test/failure asserted the same thing twice with a literal 5 and an empty
+missing_tools. Both are now checked against the shipped split through one
+helper that names the issue owning the difference, so the health endpoints
+cannot quietly start saying something untrue while the surface fills in.
+
+Bound is not configured: neither new tool is wired into the entry point, so
+both answer INVARIANT_VIOLATION to any input until #211. Recorded in the test's
+own comment rather than left for someone to rediscover.
+
+THE OPERATOR PATH. deploy/compose/innsegl.workrepo.yml named the operator's
+checkout once and reviews/evidence/03-green.txt named it four times, both
+inside measured evidence, and both had already reached main. CLAUDE.md names
+this exact trap — a measured example is where a real path gets written down —
+and there is no gate for it, which is why it happened twice. Anonymised here
+with the measurements intact; the gate is #212, and whether to rewrite the
+history of main is the maintainer's call, not an agent's.
+
+No new test: the ratchet assertions ARE the test, and each was observed failing
+on the landing that made it stale.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/4bf79e69/run-8eff877ca0b11eacf5b8fff576625fc1
+Agent-Run: run-8eff877ca0b11eacf5b8fff576625fc1
+Agent-Task: 4bf79e69
