@@ -1027,6 +1027,157 @@ else
   bad "OPS-104 junk record: junk $K_JUNK, junk+good $STATUS"
 fi
 
+# --- OPS-105: `check` answers, or says it did not understand — #287 (RM-179) --
+#
+# `check` is the third entry point and the only one with no caller yet: "the
+# decision alone, on an argv, for anything else that wants it". It takes the git
+# arguments WITHOUT the leading `git` word, and handed the word it read `git` as
+# the subcommand, recognised nothing destructive and exited 0 IN SILENCE —
+# giving a caller that got the form slightly wrong the same answer as "this
+# command is safe". MEASURED against the guard as it stood:
+#
+#   check -- clean -fd     exit 2   refused, naming the run and both paths
+#   check git clean -fd    exit 0   silent
+#
+# `hook` and `command` both refused that command, so nothing was unprotected.
+# This is about a control that does not act and does not say so.
+#
+# EVERY CASE BELOW CARRIES ITS OWN POSITIVE CONTROL against the same fixture
+# with one thing changed, because "it refused" passes against a guard that
+# refuses everything and "it allowed" passes against the guard as it stood.
+#
+# AND `hook` IS ASSERTED UNCHANGED, deliberately. Its header says nothing is
+# guessed from a command it cannot tokenise, and that is right: `hook` receives a
+# shell string it may legitimately fail to parse, and guessing there would refuse
+# commands that were never destructive. `check` receives an argv a caller chose.
+
+# THE WORD ITSELF. A leading `git` is not a git subcommand — there is no
+# `git git` — so it is unambiguously the program word, and answering correctly
+# is strictly better than answering "I did not understand you".
+reset_fixture
+register agent-c1 run-c1000000 general-purpose rm179
+wrote run-c1000000 a "$REPO_REAL/new.txt"
+printf 'AGENT WORK\n' > "$REPO/new.txt"
+run_guard check -- clean -fd
+C_BARE=$STATUS
+run_guard check git clean -fd
+C_WORD=$STATUS
+C_WORD_SAID=0; grep -q 'run-c1000000' "$WORK/err" && C_WORD_SAID=1
+run_guard check git status
+C_HARMLESS=$STATUS
+C_HARMLESS_SILENT=0; [ -s "$WORK/err" ] || C_HARMLESS_SILENT=1
+if [ "$C_BARE" -eq 2 ] && [ "$C_WORD" -eq 2 ] && [ "$C_WORD_SAID" -eq 1 ] \
+   && [ "$C_HARMLESS" -eq 0 ] && [ "$C_HARMLESS_SILENT" -eq 1 ]; then
+  ok "OPS-105 check answers a destructive argv the same with the git word as without, and the word alone refuses nothing"
+else
+  bad "OPS-105 git word: bare $C_BARE, with word $C_WORD (named=$C_WORD_SAID), harmless $C_HARMLESS (silent=$C_HARMLESS_SILENT)"
+fi
+
+# AND THE WORD SPELLED AS A PATH, which is how a caller that resolved git writes
+# it. The control is the same path with a harmless subcommand behind it.
+run_guard check /usr/bin/git clean -fd
+C_PATH=$STATUS
+run_guard check /usr/bin/git status
+C_PATH_OK=$STATUS
+if [ "$C_PATH" -eq 2 ] && [ "$C_PATH_OK" -eq 0 ]; then
+  ok "OPS-105 and a path spelling of the word is read the same way"
+else
+  bad "OPS-105 path word: destructive $C_PATH, harmless $C_PATH_OK"
+fi
+
+# AN ARGV THAT NAMES NO SUBCOMMAND IS NOT AN ALLOW. Exit 3 is the third answer
+# and the whole of the issue: a caller can tell "I looked and this is safe" from
+# "I did not understand you". It is NOT a refusal — the documented contract is
+# that anything other than 2 allows — so nothing is wedged by it.
+C_UNK=0
+C_UNK_SAID=1
+for _form in "" "--" "git"; do
+  # shellcheck disable=SC2086
+  if [ -z "$_form" ]; then run_guard check; else run_guard check "$_form"; fi
+  [ "$STATUS" -eq 3 ] || C_UNK=1
+  [ -s "$WORK/err" ] || C_UNK_SAID=0
+done
+run_guard check -C "$REPO_REAL"
+[ "$STATUS" -eq 3 ] || C_UNK=1
+# THE CONTROL: a well-formed argv naming a subcommand that destroys nothing is
+# still a silent 0. Without this the case would pass against a `check` that
+# answered 3 to everything.
+run_guard check status
+C_KNOWN=$STATUS
+C_KNOWN_SILENT=0; [ -s "$WORK/err" ] || C_KNOWN_SILENT=1
+if [ "$C_UNK" -eq 0 ] && [ "$C_UNK_SAID" -eq 1 ] && [ "$C_KNOWN" -eq 0 ] \
+   && [ "$C_KNOWN_SILENT" -eq 1 ]; then
+  ok "OPS-105 an argv naming no git subcommand exits 3 and says so, while a harmless one is a silent 0"
+else
+  bad "OPS-105 unrecognised argv: unknown $C_UNK (said=$C_UNK_SAID), known $C_KNOWN (silent=$C_KNOWN_SILENT)"
+fi
+
+# A WHOLE SHELL COMMAND IS NOT AN ARGV, and it is the caller error after the
+# word: one token carrying spaces cannot be a git subcommand, and read as one it
+# matched nothing and allowed in silence. `command` is the mode that takes it,
+# and it is the control.
+run_guard check 'git clean -fd'
+C_STRING=$STATUS
+C_STRING_SAID=0; [ -s "$WORK/err" ] && C_STRING_SAID=1
+run_guard command 'git clean -fd'
+C_CMDMODE=$STATUS
+if [ "$C_STRING" -eq 3 ] && [ "$C_STRING_SAID" -eq 1 ] && [ "$C_CMDMODE" -eq 2 ]; then
+  ok "OPS-105 and a shell command string handed to check is not understood, while command mode refuses it"
+else
+  bad "OPS-105 shell string: check $C_STRING (said=$C_STRING_SAID), command $C_CMDMODE"
+fi
+
+# THE THREE FORMS STILL ANSWER IDENTICALLY ON A WELL-FORMED ARGV, which is what
+# the issue asks be preserved and what a change to the parsing would break.
+run_guard check -- clean -fd
+C_A=$STATUS
+run_guard command 'git clean -fd'
+C_B=$STATUS
+drive_hook 'git clean -fd'
+C_C=$STATUS
+run_guard check reset --soft HEAD
+C_SOFT=$STATUS
+C_SOFT_SILENT=0; [ -s "$WORK/err" ] || C_SOFT_SILENT=1
+if [ "$C_A" -eq 2 ] && [ "$C_B" -eq 2 ] && [ "$C_C" -eq 2 ] \
+   && [ "$C_SOFT" -eq 0 ] && [ "$C_SOFT_SILENT" -eq 1 ]; then
+  ok "OPS-105 and check, command and hook still answer a well-formed argv identically"
+else
+  bad "OPS-105 three forms: check $C_A, command $C_B, hook $C_C, soft $C_SOFT (silent=$C_SOFT_SILENT)"
+fi
+
+# `hook` STILL ALLOWS, SILENTLY, A SHELL STRING IT CANNOT TOKENISE. Asserted
+# here rather than left to OPS-093 because #287 changes the file that decides
+# it, and the SILENCE is the half OPS-093 does not read. The positive control is
+# the same hook on a command it CAN tokenise, which refuses and names the run.
+drive_hook 'git clean -fd "unclosed'
+C_HOOK_OPEN=$STATUS
+C_HOOK_SILENT=0; [ -s "$WORK/err" ] || C_HOOK_SILENT=1
+drive_hook 'git clean -fd'
+C_HOOK_REAL=$STATUS
+C_HOOK_SAID=0; grep -q 'run-c1000000' "$WORK/err" && C_HOOK_SAID=1
+if [ "$C_HOOK_OPEN" -eq 0 ] && [ "$C_HOOK_SILENT" -eq 1 ] \
+   && [ "$C_HOOK_REAL" -eq 2 ] && [ "$C_HOOK_SAID" -eq 1 ]; then
+  ok "OPS-105 and hook still allows an untokenisable command in silence, while tokenising the same one refuses"
+else
+  bad "OPS-105 hook unchanged: open quote $C_HOOK_OPEN (silent=$C_HOOK_SILENT), real $C_HOOK_REAL (named=$C_HOOK_SAID)"
+fi
+
+# AND `wrap` DOES NOT ADOPT IT. Installed as `git` on PATH the whole argv is a
+# git command line a HUMAN typed, and `git git clean -fd` is a command real git
+# rejects harmlessly — so stripping there would refuse something that was never
+# destructive, which is the failure `hook`'s own parsing rule exists to avoid.
+attempt git clean -fd
+C_WRAP=$STATUS
+C_WRAP_KEPT=0; [ -f "$REPO/new.txt" ] && C_WRAP_KEPT=1
+attempt clean -fd
+C_WRAP_REAL=$STATUS
+if [ "$C_WRAP" -ne 2 ] && [ "$C_WRAP_KEPT" -eq 1 ] && [ "$C_WRAP_REAL" -eq 2 ] \
+   && [ -f "$REPO/new.txt" ]; then
+  ok "OPS-105 and wrap reads its whole argv as git's own, so the word is passed through rather than stripped"
+else
+  bad "OPS-105 wrap: with word $C_WRAP (kept=$C_WRAP_KEPT), without $C_WRAP_REAL"
+fi
+
 # --- OPS-094: the half that sees a human's terminal --------------------------
 #
 # The incident was an OPERATOR's command in their own shell, and no PreToolUse
