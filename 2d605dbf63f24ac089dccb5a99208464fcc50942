@@ -1,0 +1,43 @@
+tree 577300768a4fc38285738fbb77820cb4465f89bd
+parent 7af16d28c6bbc6d3ce8d0fbf8131d4fa57a8a436
+author Innsegl <agent@innsegl.invalid> 1789720064 +0000
+committer Innsegl <agent@innsegl.invalid> 1789720064 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFFsryxZVS/k8BpNtyQPeVLV9tNRtMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE4MDgyNzQ0WhcNMjYwOTE4
+ MDgzNzQ0WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4qveq5utZfguRUxw
+ u1ZPKOsUg369MzFPzM3VJYOaC4qS95TM10sIMTfl5+08+uS2Ax/a/qKF/VhG9yNx
+ MnjgiaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUKaRaYhaPhMoUMBJL4+4Fyg9pHSYwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNGEzZjY2MDQvcnVuLWU2MGM0NmZkZDAyYWMx
+ ZTEyNTE2YTg3ZTY1ZDMxMGViMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNGEzZjY2MDQvcnVuLWU2MGM0NmZkZDAyYWMxZTEyNTE2YTg3ZTY1ZDMx
+ MGViMAoGCCqGSM49BAMCA0gAMEUCIQCMNvos7yJ/s6ljEblAwvvKGF3C//iSGkfn
+ qYnlu8kQQwIgCIfppJ5C5N47jkGfrZjv3iLOQYsKL9OnseDFMY6v+10xggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFFsryxZVS/k8BpNtyQPeVLV9tNRtMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxODA4Mjc0NFowLwYJKoZIhvcNAQkEMSIEIMQnZePgTkYinBeSIzYv
+ bJ//0Ub7qHx5MPCzIlQueslqMAoGCCqGSM49BAMCBEcwRQIhALvcrOtY2fUAXq5t
+ qIGwJlhdPk6mCRkCHvYa5Mm4ETzgAiAhowmPaFBeh9MLUEgIr9b0jkQiEfvGKBLu
+ u4FbV+E8BA==
+ -----END SIGNED MESSAGE-----
+
+chore(agent): work left by general-purpose run run-e60c46fdd02ac1e12516a87e65d310eb
+
+Captured by the harness at SubagentStop because the run ended with 12
+uncommitted path(s) and no commit of its own. Signed under that run's identity
+so the work is attributed to the agent that did it rather than to whoever
+commits next (ADR-0046).
+
+The build was not run. A subagent's work is recorded as it was left; the branch
+gate is what decides whether it may merge.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/4a3f6604/run-e60c46fdd02ac1e12516a87e65d310eb
+Agent-Run: run-e60c46fdd02ac1e12516a87e65d310eb
+Agent-Task: 4a3f6604
