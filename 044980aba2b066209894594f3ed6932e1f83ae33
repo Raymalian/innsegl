@@ -1,0 +1,62 @@
+tree d6adf540d7ee0c25ed66a5c8eab963aa0a5263ac
+parent b196ce0dd1064c121443356d77fd48abb306b7ce
+author Innsegl <agent@innsegl.invalid> 1789766603 +0000
+committer Innsegl <agent@innsegl.invalid> 1789766603 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJQYJKoZIhvcNAQcCoIIEFjCCBBICAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFGcf5wRxP0xgEfTkOvKsPa4fyj20MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE4MjEyMzIzWhcNMjYwOTE4
+ MjEzMzIzWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAELDUVbpejzmv8AqLj
+ GchNrcKX2aAtYwk/9AuitnbT+muU821OmYepr56YW9h29ZRNj8tb0VC5YrYoMLm+
+ xT00taOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUdD6yKcHuYUBajv5fQ8yNTNqTGFswHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNGQ0MWEyZTAvcnVuLTkzYWM2YzE1M2VmZjI4
+ ZTA3ZWFhMGM4ZWRjOWQ1NWU1MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNGQ0MWEyZTAvcnVuLTkzYWM2YzE1M2VmZjI4ZTA3ZWFhMGM4ZWRjOWQ1
+ NWU1MAoGCCqGSM49BAMCA0kAMEYCIQDtmeneYNTozUo1wSQwJDAD5O8fhSbdUg4t
+ sgFQwBzw2wIhAOSQZYVfqjQz6hUaI1GPZHWx0ZEHEiDVithqDY0GZQ4jMYIBKzCC
+ AScCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhRnH+cEcT9MYBH05DryrD2uH8o9tDALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTgyMTIzMjNaMC8GCSqGSIb3DQEJBDEiBCBawjTP2EzqCNSROLiK
+ 9WeK5m4gQmq6+Oyro01EgmlYzjAKBggqhkjOPQQDAgRIMEYCIQDt0kGcpWpLAJwp
+ 7Qi129iQAVXnSBCrVwgaGTRWAOj9PgIhAIvXPDikSRU77vMyFiAGiaK/kJUcfVrO
+ rULln87xjSdq
+ -----END SIGNED MESSAGE-----
+
+fix(signing): pin the author's display name, not only the address (#263)
+
+The I6 author gate admitted a commit by address alone. AuthorPolicy.Operators
+was a list of addresses and CheckAuthor took an email; the display name beside
+it is free text in the commit object and was compared to nothing. A real name
+reached four merge commits on origin/main under a gate that was green the whole
+time. The record is append-only, so this is preventable and not repairable.
+
+An Operator is a pair now — address and the display name pinned to it — and
+CheckIdentity asks both halves. internal/signing owns the rule;
+scripts/no-personal-identity.sh consumes it, in the same `Name <address>`
+syntax and from the same untracked list, because it is POSIX sh and cannot
+call Go. A listed operator with no pinned name is refused rather than admitted.
+
+Neither refusal echoes the name it stopped, or the one it expected: both land
+in a log as public as the repository. The selftest's own leak check was itself
+a denylist carrying a fragment of a real address, and its "a permitted identity
+passes" fixture carried a real display name; both are invented now.
+
+Driven by SIG-012 (an admitted address under a differing display name is
+refused, and the name is absent from the output) and GH-005 (the gate fails
+closed with no configuration, publishes no name, and agrees with the Go policy
+on every identity both can judge). SIG-009 was already taken in code by
+internal/signing/sigstoreretry_test.go, as were SIG-010 and SIG-011.
+
+Both were observed failing first: SIG-012 on an absent CheckIdentity, GH-005 on
+an absent ParseOperators, and the tracked-file sweep was driven red by planting
+a permitted name in a tracked file before being made green.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/4d41a2e0/run-93ac6c153eff28e07eaa0c8edc9d55e5
+Agent-Run: run-93ac6c153eff28e07eaa0c8edc9d55e5
+Agent-Task: 4d41a2e0
