@@ -1,0 +1,49 @@
+tree 817aec5ba5abf789739f6517543e146299fba996
+parent 2d8fb405427ea2b1edc6c94f7d679b243269ede7
+author Innsegl <agent@innsegl.invalid> 1789590851 +0000
+committer Innsegl <agent@innsegl.invalid> 1789590851 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFEGvR/sxXF8wTm3dxDuz4FmfCVTGMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MjAzNDExWhcNMjYwOTE2
+ MjA0NDExWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGd8IpRLHAighbliJ
+ tT2jWeAAdtFShLipGfWbYARK4hsnmw5R9nKEt/3LSJK7IL8oNAIcnXuuPPP+vakC
+ xWNTwaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUUo9udWCwdjf15zCGHcJKSRkUwYIwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvYTgxY2FiNWEvcnVuLTliMmUxMzNiZmQyMzVl
+ MzNhNjFkMmRmNThlZDVjNjRjMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvYTgxY2FiNWEvcnVuLTliMmUxMzNiZmQyMzVlMzNhNjFkMmRmNThlZDVj
+ NjRjMAoGCCqGSM49BAMCA0gAMEUCIFypcQkcyoJ8RN0bMl4fZycQAS5MLvVPW959
+ YYSFtC7DAiEA5yQd2dnMZAPNpEt/AW0+Czp+EUz0Pe4Ql9KmMpQNzh4xggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFEGvR/sxXF8wTm3dxDuz4FmfCVTGMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNjIwMzQxMVowLwYJKoZIhvcNAQkEMSIEIL55G7EZxqLyzocUTClo
+ YcYBBX+c19snM5IUdxn3lqxmMAoGCCqGSM49BAMCBEcwRQIgTyRs7Mlu3W9fmueZ
+ 7CO8efFEuUtpITujt+4NwyJeShsCIQDa0BMxES0TWZ6j9XYxCHt8NwBSISH9sEVL
+ z0lpi/+/eA==
+ -----END SIGNED MESSAGE-----
+
+fix(mcp): drop a default no call can reach (#215, #241)
+
+The translation defaulted its projects mount when the field was empty, and the
+branch-coverage gate caught that the empty case is never taken: 44 times false,
+never true.
+
+It cannot be taken. Both ways a configuration reaches the tool — the installer
+and the environment fallback — set the mount before anything can call in, which
+is why containerPath beside it reads the field directly rather than defaulting
+too. So the branch was not a missing test, it was a claim about the code that no
+call could make true.
+
+Removed rather than covered. A test written to reach it would have had to build
+a configuration the tool cannot be in, and would then assert on behaviour that
+never happens.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/a81cab5a/run-9b2e133bfd235e33a61d2df58ed5c64c
+Agent-Run: run-9b2e133bfd235e33a61d2df58ed5c64c
+Agent-Task: a81cab5a
