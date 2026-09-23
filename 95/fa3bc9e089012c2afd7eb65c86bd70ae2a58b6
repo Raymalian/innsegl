@@ -1,0 +1,48 @@
+tree a5b8d64ab57631225397967a96955e41b4b34708
+parent 4b84cfde9fca3fba554361d99ca1b45068bbf3a0
+author Innsegl <agent@innsegl.invalid> 1789563882 +0000
+committer Innsegl <agent@innsegl.invalid> 1789563882 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJQYJKoZIhvcNAQcCoIIEFjCCBBICAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFEciJjnYiit8o/nAySSx2aykEobLMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTMwNDQyWhcNMjYwOTE2
+ MTMxNDQyWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEL799vj84Afyoamyv
+ iwAYuZCar5deh2GH35KJZ6grlXrlAEcogsBDAhRYrOGn5auh6VEGg5C2WsS4q1xK
+ T8FWl6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUVsfdECnOH8WV2ZdvP6GijQ63DzowHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNWVlZjU2NjQvOTRlM2I1YzgvcnVuLThmOGViMjI5NmU2ZGE0
+ ZmQzNjU2ZWU1NDI3NzhlZDJiMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNWVl
+ ZjU2NjQvOTRlM2I1YzgvcnVuLThmOGViMjI5NmU2ZGE0ZmQzNjU2ZWU1NDI3Nzhl
+ ZDJiMAoGCCqGSM49BAMCA0kAMEYCIQDKxrKt2ioEsumurZJEF6vcaS5+PAKUAxrl
+ epGtatcPZAIhAIYPSovi2qO26mWP8uPCYjW7hIWVPFiIlOvQN4qdtSiGMYIBKzCC
+ AScCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhRHIiY52IorfKP5wMkksdmspBKGyzALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTYxMzA0NDJaMC8GCSqGSIb3DQEJBDEiBCBozY4ny0OtAIzinfUB
+ nQapdIvXSmsDYU+Q0BJDqxXXcDAKBggqhkjOPQQDAgRIMEYCIQCGRv3tMO2YpTHf
+ 607xk+9lPEtnE/IZEybbwU0mPFtnlAIhAL58/64UNFwWcrowqJZ8NMhxG02IzNCf
+ EPlxgEMjygFh
+ -----END SIGNED MESSAGE-----
+
+fix(test): interpolate the compose file without a stack having been run (#228)
+
+The new object-scope tests read the credential wiring by asking docker compose
+to interpolate the file. Interpolation needs INNSEGL_SPIRE_PARENT_ID, which
+register.sh writes into deploy/compose/.env when a stack is brought up -- so the
+tests passed on a machine that had run the stack and failed on every CI runner,
+which by definition has not.
+
+The harness now supplies a placeholder. These tests never start SPIRE and never
+dial the parent; they read what each service would be handed. Only the
+variable's presence matters, not its value.
+
+Reproduced the CI condition locally by hiding deploy/compose/.env: the tests
+fail without this and pass with it.
+
+Agent-Identity: spiffe://innsegl.dev/agent/5eef5664/94e3b5c8/run-8f8eb2296e6da4fd3656ee542778ed2b
+Agent-Run: run-8f8eb2296e6da4fd3656ee542778ed2b
+Agent-Task: 94e3b5c8
