@@ -1,0 +1,57 @@
+tree 4e83d8ed18f5bd7e92f56eae19be72fa80eb1768
+parent 170818072455ed3cfc0981ba55f0fc6d5d237de4
+author Innsegl <agent@innsegl.invalid> 1789647190 +0000
+committer Innsegl <agent@innsegl.invalid> 1789647190 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFHJF7HpQMSjrcHDtAvgJXwMY0ssIMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE3MTIxMzEwWhcNMjYwOTE3
+ MTIyMzEwWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPCXNDMRm42uR14eN
+ jyeR5S7vtTdO5K3qyVIwdhrGNbLeoh1Wt78sYxf+GRidOTusxzPJKWg1dRY/im1Z
+ anq+1qOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUx+p9oHA/iwL2VFmA29I8FJZMUAIwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvYWM1MGNkOWMvcnVuLTllMTc4NGZkNjM4OTA0
+ ZDkxOTBjNzQ0OTdlM2Y3YjQ3MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvYWM1MGNkOWMvcnVuLTllMTc4NGZkNjM4OTA0ZDkxOTBjNzQ0OTdlM2Y3
+ YjQ3MAoGCCqGSM49BAMCA0gAMEUCICatV4bPIjje07ZmZBIS6eAL9I/QLIwUz5sT
+ cZGdr/YpAiEAiiHAMC4XaGeogkPSO50TOKbpf+eY7oItueT7dS5LrNIxggErMIIB
+ JwIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFHJF7HpQMSjrcHDtAvgJXwMY0ssIMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNzEyMTMxMFowLwYJKoZIhvcNAQkEMSIEIPAk1KXYbvl5suQY3vwv
+ XZS8/cgXaFF2j0oqmwl2S8URMAoGCCqGSM49BAMCBEgwRgIhAM9fpxSfJjLkprHy
+ NmpgAChximX71Vp82jkxHwyRPsoVAiEAqZTQ6mRLMz2/sc+xsF9qfaRPAhvVDBxR
+ eCxelgNulUc=
+ -----END SIGNED MESSAGE-----
+
+fix(scripts): make the specs gate POSIX, because it broke signing
+
+The gate shipped as `#!/usr/bin/env bash`. This repository sets core.hooksPath,
+so the pre-commit hook that calls it runs WHEREVER git runs in this repository —
+including inside the MCP's container, which is Alpine and has no bash.
+
+Every signed commit on this machine began failing:
+
+    INVARIANT_VIOLATION: signing: gitsign refused to sign: exit status 1
+    env: can't execute 'bash': No such file or directory
+
+A gate that breaks signing is worse than the hole it closes. It was found by the
+next commit after the gate merged — which is lucky rather than by design: the
+gate's own self-test runs on a machine that has bash, so nothing about it was
+going to catch this.
+
+`#!/bin/sh` and `set -u` without `pipefail`, which is not POSIX. The pipelines
+are greps whose failure is a normal "found nothing". Verified by running it
+under Alpine's sh with no bash present, and by signing this commit.
+
+The other gates are bash too and are untouched: none of them is wired into a git
+hook, so none has ever run anywhere but a developer machine or CI. The moment
+one is, it needs this same treatment.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/ac50cd9c/run-9e1784fd638904d9190c74497e3f7b47
+Agent-Run: run-9e1784fd638904d9190c74497e3f7b47
+Agent-Task: ac50cd9c
