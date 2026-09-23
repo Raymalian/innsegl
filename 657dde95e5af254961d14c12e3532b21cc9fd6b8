@@ -1,0 +1,26 @@
+tree 51c59f1cb1958a7386304930e1f2c10761c87c46
+parent 142c0d703dd7e9d74c3843c38a2cb0974e038adc
+parent 3b2ccab01c27e3faec8a40f5424c8d7eb9957476
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789849023 +0200
+committer GitHub <noreply@github.com> 1789849023 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqru2/CRC1aQ7uu5UhlAAAaeMQAG266ZxfGL4CoWzB3tRRl6Y4
+ 1dXs0JwnHs+G8iafxMsC43zyjrBOQplqGCk1YEuGDUItefMDhnPW/z/t7peIv4F3
+ j70IxvUyqoJ/obQfBhxeTDVGPLhk/VaKm3fCCwIyN56Z5z5WWGUEX125fE4MYKGP
+ ij98Y6kp/08Dyoru0H9gBrQJIP3r97M1vUimgbBHffkUxxXjSLPYet95BESCHMpI
+ quERXIam4C9SI2ywOkYSwJBEIZpVBzkHBdK17E8n7N1leAMgBTSv5GXzVlFLDU54
+ qgJslwTalaxKMUciEls6p/LDIaKdF30RW/r8e14o1ui+Ay1prY/V3pN9NF5PA0Kn
+ XS5XmAgewqErSlwIkIkzCHiWk0g4DNl/ZyROiMc8kA5beQ3jRAmsNGPyuZbAiACS
+ qWcUcIMSQScaGC8oxUPQEvaUIBXPOC2Z6sEMBd6L8anz78iC3C8jn/5huNOUiMVZ
+ mywOZ76p6c4BwmUmEXNVHQ01numjRslaVKh5sgA73EvxobDxR9Ru5KfNSvS4nr8D
+ twX/V2SBR3j7yINdphrLkZgOs2U/3KQDbNJCWtCGeotcZsrTW0xGbjoCJs9Q7lIV
+ 0PQSswhQBeRSPwFBQ5VKx6IKog0uOcu03/EItSatwUAgkHQuVtShzbnRooVAJfG0
+ ZMbIG1VFDmF0kM89xF3P
+ =hrdW
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #283 from Raymalian/dev/gates-and-visibility
+
+Six gates that were not looking, and one crash window
