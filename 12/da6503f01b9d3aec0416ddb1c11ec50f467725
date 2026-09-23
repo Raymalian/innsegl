@@ -1,0 +1,57 @@
+tree a17abc6d778f53d8c534525505b964a3a42de053
+parent b3f20acd149bdcdf5d56ecca9fdaaadac31ad667
+author Innsegl <agent@innsegl.invalid> 1789590314 +0000
+committer Innsegl <agent@innsegl.invalid> 1789590314 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFDaDJmOU+0auLZT71EO7AyEevykMMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MjAyNTE0WhcNMjYwOTE2
+ MjAzNTE0WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEk5AjkLgQN4SSk3lp
+ oXqOEBak2zN/D1DQMzu/mOUCY5GKe3Qz75bBOcN7E1Ko3j3RpfSV3J8b6AFgnN9W
+ pOCnKqOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUuVox4pEDjV2BLoKo0I5+0uCd0fowHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvYTgxY2FiNWEvcnVuLThmNmIxMTAzYzRlODA4
+ M2MyZjdhZmQ2M2Y5NzA5MmFhMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvYTgxY2FiNWEvcnVuLThmNmIxMTAzYzRlODA4M2MyZjdhZmQ2M2Y5NzA5
+ MmFhMAoGCCqGSM49BAMCA0cAMEQCIC8heFMT5JapqbYyqKxGz51dL1jJEY/LeGD+
+ D8vROzHHAiAi9OjadwW4qI+l2wpGRYX/fnOCUVg0AQCCXAb4RXiLUTGCASswggEn
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUNoMmY5T7Rq4tlPvUQ7sDIR6/KQwwCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTE2MjAyNTE0WjAvBgkqhkiG9w0BCQQxIgQgl7X5bKfcIYjekr15H038
+ LxXMA0vdN9qbVNrai6RiOywwCgYIKoZIzj0EAwIESDBGAiEAmJPThKkppIFMLG89
+ sT7VjgqHZgwpcvQtYCm+nBXnz3ACIQCQEvBM9W+2l4tVBXuNs+cabxKoVMevTonX
+ Hp8jzvwuUg==
+ -----END SIGNED MESSAGE-----
+
+fix(make): link the repository, never the tree the command was run from (#240)
+
+Bring-up chose the directory to make signable with `git rev-parse
+--show-toplevel`, which answers the tree you are STANDING IN. Run from inside
+a linked worktree it therefore linked the worktree.
+
+The damage was never local. The link is one symlink that every caller on the
+machine resolves through, so signing then failed for everybody, including
+from the main checkout, and surfaced later and elsewhere as a doubled path in
+an unrelated caller's signing error. Hit twice in one day.
+
+`git worktree list` reports the main worktree first from inside any linked
+one, which is the rule mainWorktreeOf already uses in Go. That rule now lives
+in one script, which both the Makefile and the link step read, so the two
+cannot disagree about which tree is the repository.
+
+The link step also REFUSES a worktree by name and says which repository to
+link instead, because bring-up is not its only caller: anything passing DIR
+by hand can still name one.
+
+Driven by OPS-040 and OPS-041, written first and observed failing. The last
+case of the selftest is what keeps the rest honest — a plain repository must
+get PAST the guard, or a guard that refused every path would pass too.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/a81cab5a/run-8f6b1103c4e8083c2f7afd63f97092aa
+Agent-Run: run-8f6b1103c4e8083c2f7afd63f97092aa
+Agent-Task: a81cab5a
