@@ -1,0 +1,36 @@
+tree 82325a3014f6842204b6e1e005b5bb7ea7dd30fa
+parent 7bf5d54c38efbbb30ec01153f2518a42ed01876d
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788533263 +0200
+committer GitHub <noreply@github.com> 1788533263 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqmtoPCRC1aQ7uu5UhlAAA94QQAERE+zavDQSumvh9AGfpsP0f
+ vxEU2OHLVsqe1rfhqpeTmxy53xmPtKrPfG12ccVOV7ybZlOU/EajAC/n3+FKsgtm
+ kd8naWXmjKvEzSD0qKdr6gwagoGD6vEKimU8u3BIkTx/XNaYu3rT0fbLhothEIq/
+ GINvG+bi5i5WZiY649/1F4GVXiyDpMguCwtPJ3LveodBgdx7Fe8NmnyMt+jtuj4A
+ mDiIFUgW1wyi5wC21acaj2Hot8FihK6XnIz760xMntJbrYHPWZ900Gd0n7c+5xkM
+ S+rPdY8XR5FcSfSYW+NowSVfecBHhefKK2bEgZ8aZjOGQxx51LUCnaHFwcIAPLfe
+ tmYamyLznlt+C/bBQfYisG5OuWJ6QpX64HW2ljI+/hk25CYbOnGej+NzIOT/yomO
+ vg35dBfoHq8/RS70IKTIOAkUkF4vQTFuUxVxEucG+CuHujIZAwI9+WPM0jNhKupH
+ HLOWwE6txmQoBzCcEbVRNHJzjc6pezNdfBzJflZQjxqP0vdyd0e2EJCsAvWl63GP
+ T+y3yYrej7wofdfyRXWnBa4duXoxpKglpoPs89KMBIvPu23y61w4Za437e26/TdG
+ EoErrBsVE5aQsw8gkY6EERfRvVC9s9f2nO1YxRtiFk4IdbiCDWi+zTwjuEHNKTjQ
+ FFwnNcUGoq8S12OXzDQI
+ =s1Mm
+ -----END PGP SIGNATURE-----
+ 
+
+fix(failure): require a wall-clock floor before countSettled trusts a streak (#145) (#147)
+
+crashSettleStableReads counted consecutive equal reads, not elapsed time: on
+an unloaded machine 20 reads a millisecond apart can finish before a COMMIT
+that is genuinely still in flight (RM-069, #90) has had a realistic chance to
+land, so the crashed call's own delta could settle on a stale, too-low value.
+That shortfall then surfaced as an apparent extra credential_issued once the
+two replay issuances were added on top.
+
+settleReads now also requires the streak to span crashSettleMinStableDuration
+of real time, driven by a scripted clock in
+TestMCP011SettleReadsHoldsAStreakForAMinimumRealDurationTooRM093 (MCP-011-C4),
+which fails against the prior read-count-only loop for the expected reason
+(reports 13, not the true 14) and passes with the fix.
