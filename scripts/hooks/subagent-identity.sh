@@ -75,6 +75,9 @@
 #   INNSEGL_GIT_GUARD       1. Set to 0 to stop consulting the destructive-git
 #                           guard on PreToolUse (#278)
 #   INNSEGL_GIT_GUARD_SCRIPT  default this file's sibling git-tree-guard.sh
+#   INNSEGL_ORPHAN_SWEEP_SCRIPT  default this file's sibling orphan-sweep.sh,
+#                           run on SessionStart (#288). INNSEGL_ORPHAN_SWEEP=0
+#                           turns the sweep itself off
 #
 # Needs `python3` and `curl`. python3 does the JSON in both directions, which
 # is what removed the `sed`-and-`printf` parsing the old file used: a branch
@@ -1256,6 +1259,22 @@ case "$EVENT" in
     _log="${INNSEGL_LOG_DIR:-$HOME/.innsegl/log}"
     [ -d "$_log" ] && find "$_log" -type f -name '*.json' -mtime +"${INNSEGL_LOG_DAYS:-90}" -delete 2>/dev/null
     [ -d "$_log" ] && find "$_log" -type d -empty -delete 2>/dev/null
+
+    # THE DEATH NOBODY OBSERVED — #288. A run killed by a crash, an OOM or its
+    # whole session dying fired no hook, so nothing said its work was there.
+    # This is a DIFFERENT session coming back to the tree, which is the only
+    # party that can ask. scripts/hooks/orphan-sweep.sh says why this hook and
+    # not another, and that it only records.
+    #
+    # BEFORE observe_session, deliberately: that call exits early when the
+    # deployment is down, and a crash that took a session with it is exactly
+    # when the next one may find nothing answering. The sweep then records
+    # nothing — it asks the ledger and skips a run it cannot place — but it runs.
+    #
+    # Its output is not this hook's to swallow: a record the session is never
+    # shown is the passivity #288 is about. It can never fail the session.
+    _sweep="${INNSEGL_ORPHAN_SWEEP_SCRIPT:-$(dirname -- "$0")/orphan-sweep.sh}"
+    [ -x "$_sweep" ] && printf '%s' "$EVENT_JSON" | "$_sweep" hook 2>/dev/null
 
     REPLY="$(mcp_call observe_session \
       session_id "$SESSION_ID" phase start cwd "$CWD" \
