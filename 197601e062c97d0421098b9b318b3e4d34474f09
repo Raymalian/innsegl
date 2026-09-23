@@ -1,0 +1,56 @@
+tree 2b2ebb04e644a58352e08830af7d88a331ab5a1e
+parent 69f44d91c440c779f603f0f7edd29bf4fdbcbda5
+author Innsegl <agent@innsegl.invalid> 1789834017 +0000
+committer Innsegl <agent@innsegl.invalid> 1789834017 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFH0+NS4Us+J3+XXYuXTh7oAiD8p7MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MTYwNjU3WhcNMjYwOTE5
+ MTYxNjU3WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0y0JSZqlrisOMEca
+ gfcdK9xpq5SF5zFx4R6b+m0y/6mM9292m4YkbU1Uprgb7fvX7Xrc6Bq4P0P25j8K
+ Kj9t16OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU7f0PW/T7n55rYfBfjv0KoCee+WkwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNGEzZjY2MDQvcnVuLTllYTEyZDIwOTRjMTVi
+ MjkzNjI2NWE2MmRjY2M3MTc3MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNGEzZjY2MDQvcnVuLTllYTEyZDIwOTRjMTViMjkzNjI2NWE2MmRjY2M3
+ MTc3MAoGCCqGSM49BAMCA0gAMEUCIAMbcbitA2cf87bNvCof08CYqantJ3O2Jp+e
+ ydxaXaaUAiEAt4PN5iGWCeLG8ymLxUZ1DAA4chdDw33eVKk8TdbqBe8xggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFH0+NS4Us+J3+XXYuXTh7oAiD8p7MAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxOTE2MDY1N1owLwYJKoZIhvcNAQkEMSIEIOCMVhOsEFc6Anm6fPXW
+ wWnbeM/gKJMyhU0Aj5/eENRLMAoGCCqGSM49BAMCBEYwRAIgGc5/Nmq8m41zGyt7
+ HsyrNNgVx5nt2/8WlB1veOvegvcCIBRCNRQH6VnW9HOPBH+DKq1bzWXmOSWxFYy1
+ LpfzJ4zL
+ -----END SIGNED MESSAGE-----
+
+fix(cli): innsegl retire presents a credential to the lifecycle listener (#268)
+
+The identity-lifecycle listener has required a repository-scoped credential
+since #264, and `serve` refuses to start a split listener without a key set,
+so wherever that listener exists the credential is mandatory. #266 surveyed
+the callers that existed on its branch and fixed both; `retire` was written
+on the other epic and was invisible to that survey. On the merged tree it
+presented nothing, and reported the 401 as UNREACHABLE - which sends an
+operator to restart a deployment that is up and answering.
+
+The credential authorises a REPOSITORY and this command names a RUN, and only
+the listener knows which repository holds a run. That circle is cut outside
+the protocol: -repo, then $INNSEGL_REPO_ID, then the working tree's origin,
+resolved lazily so a listener that enforces nothing reads no environment and
+runs no git. The working tree is last and not the only way, because the run
+this command exists for is a stranded one.
+
+A refusal is status 21, not 20. The listener answered; the move is to mint a
+credential, not to restart anything, and the message names the mint command.
+Nothing is renumbered.
+
+Driven by MCP-094.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/4a3f6604/run-9ea12d2094c15b2936265a62dccc7177
+Agent-Run: run-9ea12d2094c15b2936265a62dccc7177
+Agent-Task: 4a3f6604
