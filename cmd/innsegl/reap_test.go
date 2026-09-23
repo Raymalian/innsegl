@@ -523,3 +523,90 @@ func TestOPS068ReapIntervalFromEnvironment(t *testing.T) {
 		t.Fatalf("swept %d times, want 2 — $%s was not read", got, envReapInterval)
 	}
 }
+
+// RM-181 (#289) — the JSON report separates the two halves of the sweep's
+// population, so a monitor can tell "no run was active without an entry" from
+// "the ledger was never asked".
+//
+// The text report says this in words; a scheduled job reads the JSON, and a
+// monitor that compared its own expected-active count against `examined` would
+// alert every time a run legitimately had no entry — or, worse, would not
+// alert when the sweep had stopped reading the ledger at all.
+func TestSPI019ReapJSONSeparatesTheTwoHalvesOfThePopulation(t *testing.T) {
+	report := cleanReport()
+	report.Unentried = 1
+	report.Outside = 5
+	report.LedgerRunsRead = true
+	report.Expired = append(report.Expired, spire.Expiry{
+		Candidate: spire.Candidate{
+			Entry:     spire.Entry{SPIFFEID: "spiffe://innsegl.dev/agent/demo/rm-181/run-4"},
+			Run:       spire.RunRef{AgentType: "demo", TaskID: "rm-181", RunID: "run-4"},
+			Deadline:  time.Unix(60, 0).UTC(),
+			Unentried: true,
+		},
+		EventID:  "01a04a16-db86-7f2e-9bb5-23822b92285b",
+		Recorded: true,
+	})
+
+	var stdout, stderr bytes.Buffer
+	if code := runReapCommand(minimalReapArgs("-json"), &stdout, &stderr,
+		reapDeps{open: stubOpen(&stubSweeper{report: report}, nil, nil)}); code != exitOK {
+		t.Fatalf("exit = %d, want %d: %s", code, exitOK, stderr.String())
+	}
+	var got reapReportJSON
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("the JSON report did not parse: %v\n%s", err, stdout.String())
+	}
+
+	if got.Considered != 3 {
+		t.Errorf("considered = %d, want 3 — the number the ledger reports active, "+
+			"which is what a monitor compares against", got.Considered)
+	}
+	if got.Examined != 2 || got.Unentried != 1 {
+		t.Errorf("examined = %d, unentried = %d, want 2 and 1; `examined` keeps its "+
+			"old meaning so an existing monitor does not silently change what it "+
+			"measures", got.Examined, got.Unentried)
+	}
+	if got.Outside != 5 {
+		t.Errorf("outside = %d, want 5 — the machine-readable half of \"not looked "+
+			"at\"", got.Outside)
+	}
+	if !got.LedgerRunsRead {
+		t.Error("ledger_runs_read = false on a sweep that read the ledger")
+	}
+
+	var unentried *reapExpiryJSON
+	for i := range got.Expired {
+		if got.Expired[i].RunID == "run-4" {
+			unentried = &got.Expired[i]
+		}
+	}
+	if unentried == nil {
+		t.Fatalf("the unentried expiry is missing from the JSON: %+v", got.Expired)
+	}
+	if !unentried.Unentried {
+		t.Error("the expiry of a run with no SPIRE entry is not marked unentried; a " +
+			"monitor then reads deleted=false as a failed deletion")
+	}
+	if unentried.Deleted {
+		t.Error("the report claims an entry was deleted for a run SPIRE held none for")
+	}
+
+	// The control: a sweep that did not read the ledger reports zero unentried
+	// runs AND says it did not ask, so the zero cannot be read as a finding.
+	stdout.Reset()
+	stderr.Reset()
+	if code := runReapCommand(minimalReapArgs("-json"), &stdout, &stderr,
+		reapDeps{open: stubOpen(&stubSweeper{report: cleanReport()}, nil, nil)}); code != exitOK {
+		t.Fatalf("exit = %d, want %d", code, exitOK)
+	}
+	var unread reapReportJSON
+	if err := json.Unmarshal(stdout.Bytes(), &unread); err != nil {
+		t.Fatalf("the JSON report did not parse: %v\n%s", err, stdout.String())
+	}
+	if unread.LedgerRunsRead || unread.Unentried != 0 || unread.Considered != 2 {
+		t.Errorf("a sweep with no run source reports ledger_runs_read=%v unentried=%d "+
+			"considered=%d; want false, 0 and the entry count",
+			unread.LedgerRunsRead, unread.Unentried, unread.Considered)
+	}
+}
