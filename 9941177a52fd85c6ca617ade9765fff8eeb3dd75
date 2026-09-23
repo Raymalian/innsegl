@@ -1,0 +1,61 @@
+tree b20a35506158d01ff316c0e73e4faef3a7910f25
+parent a7b245cc3638f3f8ba2f5bc36066e58f73b734a1
+author Innsegl <agent@innsegl.invalid> 1789836861 +0000
+committer Innsegl <agent@innsegl.invalid> 1789836861 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFD7CvJozFmIzhqFtDCGEz+duF0Q7MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MTY1NDIyWhcNMjYwOTE5
+ MTcwNDIyWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEpaywIALtFuDM9rVw
+ NW7zRbCXye9KQQvYfRoH005TxQsUoQHuwwjxSxrZlzEZg8utaNti4rsGWVDpM7Fa
+ asWxcKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUTHN3RN3NQFhP+vNGpgj6bFi4LqEwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvNGEzZjY2MDQvcnVuLTVjN2E4MmY1ZjM0YWMx
+ ZmIxODgxNThmMzlkZmQzOGFmMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvNGEzZjY2MDQvcnVuLTVjN2E4MmY1ZjM0YWMxZmIxODgxNThmMzlkZmQz
+ OGFmMAoGCCqGSM49BAMCA0kAMEYCIQCZg6Hk5UQAD4IMAz9UjNkqcC7ysUpSEFhM
+ x9Yjw77pzQIhAMDEQ97+IAAthF5jCXOLpvrEqyhVOFLYt5XiPgyipiW+MYIBKTCC
+ ASUCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhQ+wryaMxZiM4ahbQwhhM/nbhdEOzALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTkxNjU0MjJaMC8GCSqGSIb3DQEJBDEiBCAd5kRb68Jtl/466Q5F
+ SflIUuBPQvDr3t2vYFaaaNu3qzAKBggqhkjOPQQDAgRGMEQCICN042sVhVKS98Du
+ xpJ0SjNp//cQpSwTi95Wt6d+213SAiAeB1JW1vJsuC2SRsuNnwMf3t6jvGCAH8JH
+ 6DCSOKUIZw==
+ -----END SIGNED MESSAGE-----
+
+fix(backup): retry a transient failure and say what is at risk (#267)
+
+A backup that could not reach the ledger slept a full interval, so a database
+restart of about two minutes cost a day of unprotected work, and nothing
+escalated the unhealthy container.
+
+backup-ledger.sh now separates the two failures. Exit 6 is a ledger that could
+not be reached: no dump was attempted, so nothing has been learned about any
+dump. Exit 5 is a dump that was produced and is not usable, and exit 3 remains
+a dump that disagrees with a sealed segment. A mid-run failure is classified by
+asking the ledger again, never by reading the client's error text. The
+verification step is unchanged: every dump is still restored into a throwaway
+database and adjudicated against the sealed segments before it is called good.
+
+backup-loop.sh retries only the transient class, from 60s doubling to 900s and
+resetting on success; a mismatch or an unusable dump waits the full interval
+and says why. SIGUSR1 forces a run, which replaces deleting the marker the
+healthcheck reads. The marker vocabulary is untouched, so a transient failure
+still reads as unhealthy rather than falling past backup-health.sh's case.
+
+Every failing run measures what is exposed -- how long since the last dump that
+actually verified, and how many events lie above it -- prints it, and leaves it
+in .exposure for the loop to repeat. It is cleared at the start of every run and
+by every run that succeeds.
+
+Driven by BAK-005..008 in backup-ledger-selftest.sh and BAK-009..013 in
+backup-service-selftest.sh, all watched failing first.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/4a3f6604/run-5c7a82f5f34ac1fb188158f39dfd38af
+Agent-Run: run-5c7a82f5f34ac1fb188158f39dfd38af
+Agent-Task: 4a3f6604
