@@ -1,0 +1,63 @@
+tree 341eb41a8308067cd384e295337bc9731d4a7945
+parent 405a148f1efbe8466a9bf0127f430adc2821c6b9
+author Innsegl <agent@innsegl.invalid> 1789735205 +0000
+committer Innsegl <agent@innsegl.invalid> 1789735205 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFGV9Pbl8+ypAU9IjJTTy8MfdD8LlMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE4MTI0MDA1WhcNMjYwOTE4
+ MTI1MDA1WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEwbs8VJOR3iIK57y9
+ iMVRKpyRmd8uZDdBzwmPgSp8VNktHpNEXMi7ol1ymkIiTfUwB7wtGcSnQWJbIGDH
+ wGwXKKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUw3XdOhMMBaBYo5dL5j8iAXWVJAAwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvNjIxZmE4M2EvcnVuLWFiZDBiOGZlZTIyYzVk
+ OWQ4YTY0Y2UxYmEwMWIzNGY4MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvNjIxZmE4M2EvcnVuLWFiZDBiOGZlZTIyYzVkOWQ4YTY0Y2UxYmEwMWIz
+ NGY4MAoGCCqGSM49BAMCA0gAMEUCIQDcCa126q0Gsf9e1o/rYFjsBZtes5DEYERP
+ Cmmsi2O4yAIgQpi3j2RENQ7tpHG8auXtA34CY+/lMld6pnC3fMOwiowxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFGV9Pbl8+ypAU9IjJTTy8MfdD8LlMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxODEyNDAwNVowLwYJKoZIhvcNAQkEMSIEIB4bXTrWYtwbUwDnDF+b
+ +dZpZtJYXIIMWE+Dv+jDZxcjMAoGCCqGSM49BAMCBEcwRQIhAOvGMCVdv4vi1wWs
+ EhxWC1qC7vbb7Pj+O084/EU3AinKAiBerI7lS+4wbjF8eDmZQBlcX4wqoqxEjOC9
+ raLcin8VHA==
+ -----END SIGNED MESSAGE-----
+
+feat(api): name the four lifecycle states and show their evidence (#256)
+
+Three words could not tell a run that is quiet from one that is over, and the
+word they collapsed into read as a claim that an agent had died. Four states,
+each derived by query from recorded facts and their order — no state column, no
+state table, no event, field, enum or source changed:
+
+  active     not ended; never withdrawn, or activity newer than the newest
+             withdrawal
+  lapsed     the newest fact is a withdrawal, inside the restore horizon
+  abandoned  the newest fact is a withdrawal, past the horizon
+  retired    ended by its harness or a human
+
+Every answer carries the evidence behind it: last activity, withdrawal instant,
+restorable-until, parent run, and the horizon the answer was computed with.
+Absent facts are omitted rather than sent as Go's zero time. The overview gains
+lapsed and abandoned counts; neither is counted as active.
+
+"Abandoned" now reads "nothing heard since X; the identity can no longer be
+restored" — a statement about what this system will no longer do, never about
+what became of the agent. "Expired" survives only as the run_expired event's own
+name in the timeline.
+
+Driven by FE-129 (the four states), FE-130 (the evidence line), FE-131 (the
+overview counts) and FE-132 (no rendered string asserts an agent is dead), all
+four observed failing first; API-030 to API-033 cover the derivations, the
+evidence members and the horizon's own arithmetic.
+
+The public verification page is unchanged.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/621fa83a/run-abd0b8fee22c5d9d8a64ce1ba01b34f8
+Agent-Run: run-abd0b8fee22c5d9d8a64ce1ba01b34f8
+Agent-Task: 621fa83a
