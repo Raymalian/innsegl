@@ -1,0 +1,26 @@
+tree 0f500c2c06390f5ac08af97d42761c9182311304
+parent 75b60eb6a73b6a7a51d7c8df2442e4de2db630cc
+parent ec30b98ea9e9e770e93a3a764dc199576a10c014
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789853012 +0200
+committer GitHub <noreply@github.com> 1789853012 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqrv1UCRC1aQ7uu5UhlAAAURgQAGPtUbocb8UlLdRA/JfipSyn
+ BFbZp2dtDaupekOZibe+Tk8J9Y7Y13n07Pd69Q9EVZ7SY6qHskl+25KLEfDqUpQT
+ LsJ87BU7VbgWyEK6AT2nhBwWnQslpLFeVTShSJacZAxVfpcmT+OrjEgMH7nBxWAG
+ Tlhu1fTvY4eSDtNtkLrLbmXWla5O0eiQJwAzmFzg4BEyPnCRWnL/S512svPleM8b
+ td0GnkiML5amIZS5dun4FUKzza7RwRosTUMRRsMJWnjj3/mrdN3eXUFwUR9I5MO3
+ Uq/7uQ+q2JVbYUvg5M3K5wS3W1d0bIuOYx9hxkf5yifDMtdIEADLhRM2VjdI4VHW
+ nv1eSaIEecKEAhPebSCurA/q1IwUe6vMnJ5pFWSLg12SXmy+CulZeit1OwH2lVhp
+ sF2+gK6tsQWmrjgWVW7Z3mTcfWlTt3Or0/TDvuzk4tmTxwuX6N/sSgGaB0cpwVSm
+ mh4lY3pgdMhxoXK/f+KWgV52UuHoBSLmRt7U59v02P37ls/KLil2dCsBflbYn1Ge
+ T98o9aUzBxu4s4yO3YQOWhenXghvh/c9p7pOtD9mD/eEe+3rhNucePw9nCnXxGSj
+ ILBAc7XMynHT0/sF9+zRYtwCEDkrkhVHTppwJdhkKHkhqqvUD9hqBby9//uKJv9q
+ xiXof98TQ/KhwoqfYc0d
+ =4hzU
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #286 from Raymalian/dev/tree-guards
+
+A tree that cannot say it lost something
