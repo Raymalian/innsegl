@@ -1,0 +1,80 @@
+tree eb71cffcc2ad13b5ece7c58558d5ef603d36ab53
+parent b9cd8e95853bb7e6801a8f9cd40e7ec051d4d10e
+author Innsegl <agent@innsegl.invalid> 1789561773 +0000
+committer Innsegl <agent@innsegl.invalid> 1789561773 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFHzbCc6QaF9f3DjfQaZTSvG2d9TgMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTIyOTMzWhcNMjYwOTE2
+ MTIzOTMzWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECaUWfBr64ORBzvLP
+ dFVo/0WzSjtsZs1MqpNspt8ZQD6dUBaf54S7Peo1gLlpJUqzX05n7PvDvElBke2q
+ 6WBibaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU5mcqXbC07srxaY5aor/s9OFvo7wwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNWVlZjU2NjQvOTRlM2I1YzgvcnVuLTY1N2I4NTg2YzdlZDE4
+ OTdhYWY1NmMzZDQyOTk0YjY5MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNWVl
+ ZjU2NjQvOTRlM2I1YzgvcnVuLTY1N2I4NTg2YzdlZDE4OTdhYWY1NmMzZDQyOTk0
+ YjY5MAoGCCqGSM49BAMCA0gAMEUCIQC09U8c2Q88oWs2tiPnbjILPDC0m5SFEylo
+ F5uvQ5GCcAIgcD7bJXhCLnSVnv6d1zFbD+bqaWwTQqUkjGCm1iS6UxQxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFHzbCc6QaF9f3DjfQaZTSvG2d9TgMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNjEyMjkzM1owLwYJKoZIhvcNAQkEMSIEIG6IEO96r95ONMjr/qMm
+ cEhQ+dbN34eZgfcY87/EoIAUMAoGCCqGSM49BAMCBEcwRQIhAObKbCduEdwACfXq
+ O7d5hZ5zTE9wLSKfZW/M4m0LQY24AiAFW7smX16pWos4ewQpBkyqkCaf0Zm4OWaN
+ sDwW9Uz8fw==
+ -----END SIGNED MESSAGE-----
+
+feat(deploy): run the sealer on a scoped store identity, not the store's root (#228)
+
+deploy/compose/innsegl.yml gave innsegl-sealer and innsegl-canary the same
+value it gave the server as MINIO_ROOT_USER, so the sealer ran as the object
+store's root account for the whole life of the deployment. An identity read
+off the running container could therefore set the bucket's object-lock
+configuration and downgrade the default rule from COMPLIANCE to GOVERNANCE,
+after which every segment written afterwards is deletable by a holder of a
+bypass-capable credential.
+
+Sealed history was never at risk and that is why the narrowing is worth
+exactly this much: COMPLIANCE retention refuses deletion by anyone, the
+account that wrote it included. What is protected here is future writes.
+
+object-init.sh still creates the locked bucket as root, because S3 object lock
+can only be enabled at bucket creation and only an account that may set a
+bucket configuration can put the default rule on it. That is a one-time setup
+step. It now also creates a scoped identity and attaches a policy granting
+what the sealer and the canary do - read and write objects and their
+retention, list versions, delete versions - and withholding two permissions by
+name: s3:PutBucketObjectLockConfiguration and s3:BypassGovernanceRetention.
+
+verify-object-scope.sh is db-init.sh's last line in the other medium. A policy
+attached once lives in somebody's deployment, and a later
+`mc admin policy attach readwrite --user` leaves no trace in this repository.
+So the one-shot ends by asking the server what the credential can really do,
+and the sealer gates on the one-shot completing. It writes nothing: the bucket
+holds retained objects it could never remove, and the one attempt that could
+change anything writes the rule the bucket already has.
+
+Unset, the scoped secret is derived from the root secret rather than required.
+An operator upgrading has set a root credential once and never heard of this
+issue; a narrowing that needed a new variable before the stack came up would
+be switched off rather than adopted.
+
+Driven by OPS-025, OPS-026 and OPS-028, all three observed failing first:
+OPS-025 and OPS-028 reported the sealer holding the root credential, and
+OPS-026 watched that credential set the bucket's object-lock configuration
+while the root identity set it too. OPS-027 passed before and after, which is
+the measurement rather than a gap - it now guards the other direction, that
+the scope did not buy its refusals by taking away what SEG-005's canary needs
+to prove a refusal means anything.
+
+Measured against the live stack: object-init provisioned the identity and its
+verifier reported the three refusals; innsegl canary PASS under the scoped
+credential, eight checks, against the deployment's own bucket.
+
+Agent-Identity: spiffe://innsegl.dev/agent/5eef5664/94e3b5c8/run-657b8586c7ed1897aaf56c3d42994b69
+Agent-Run: run-657b8586c7ed1897aaf56c3d42994b69
+Agent-Task: 94e3b5c8
