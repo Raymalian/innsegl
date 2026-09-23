@@ -1,0 +1,40 @@
+tree 6d688a8eee11ab71852fe5f29b804282cc9bf677
+parent dedd61ad7e7ba37875433a0d6738e129004a126a
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788612266 +0200
+committer GitHub <noreply@github.com> 1788612266 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqnA6qCRC1aQ7uu5UhlAAAmh0QAEkJvNQNaRPMjH7TEbP78mrN
+ 7ewsZaLRXqd1Wdq8+KZxg8ApFcV2IdDEhXY84b6ow+kTSsQrzxYUjF28fYR95TOK
+ CQDGaFA8Aqqlqlsjc1DEY6MRxSzYOguaoSbUmeUMn4WtsQqQywoTvj4Lek/+RpXE
+ 22pZcu+vfQNupTUBKGtitCX0W0V0AZ0GUFc6VNLWkTJPQSU7OIujKm8IH37G/ITz
+ 0IYBCxxhw8n893/gm7r63Br2uNzdK6/bmLmHQNgyPgg45SeggWtpjqCW3vDw/jGl
+ U5/vL+g72iKSFzt+faaQKIGHjHcxUXW2rYYVbzAAIzm1RK/uBBaNmeyZ3OWBgPvL
+ /zflC4LoWUl6qJ8eKXbHyWom/wP2T4CbfuUy8rj+hvDMiWE8ejsOOtwDrPy5UsbS
+ mGeJzA6wZDT0OarKoIGbEmqf5uBW1hJrwpbilYijyGDi6qPb1cCprliHY+sO+qsc
+ Wwrq1fLkxNp4FQ9eYo7M6h6waDWQQ+0sIW+K/TwZZ9zZAxQ241gF2HdraXMqX3fw
+ fiCSrvDnBe5f6ke/iNkjxsrKMHPhKZkLo+NTEuAOIqth7nUq6uOKv27OW8fm1d/j
+ 8tPHweGtUgC4nGr/THityPNx2AbEJyQai6q18iuqC29Rf7/tzbwiNX94BmU+xLcR
+ s5rx1wWi9F0pwB8CGk1t
+ =N9RB
+ -----END PGP SIGNATURE-----
+ 
+
+Make innsegl init work, and stop it asking the human to sign (#158) (#159)
+
+* fix(cli): resolve -repo to an absolute path before deriving the gitsign path (#117)
+
+* fix(cli): force-add the verification marker past the repository's own gitignore (#117)
+
+* fix(cli): stop init from configuring a human to sign (#158)
+
+commit.gpgsign=true demanded of the operator exactly the credential the
+settled design never gives them: only the orchestrator signs, through
+sign_commit, with an MCP-issued identity, and the human never signs as
+themselves. init no longer writes commit.gpgsign, and apply() never
+backs it up or restores it — any pre-existing opinion about it is left
+untouched. gpg.format and gpg.x509.program are still recorded: both are
+inert without commit.gpgsign or an explicit -S, and they document which
+pinned, verified gitsign this deployment trusts. The apply/undo and
+VERIFIED reports now say plainly that the deployment can sign, not that
+this repository signs.
