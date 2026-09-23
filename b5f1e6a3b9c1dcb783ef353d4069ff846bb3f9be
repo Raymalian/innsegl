@@ -1,0 +1,87 @@
+tree b322be6b46cb2e22f0e91f5ad9731515231a754d
+parent 75b60eb6a73b6a7a51d7c8df2442e4de2db630cc
+author Innsegl <agent@innsegl.invalid> 1789851620 +0000
+committer Innsegl <agent@innsegl.invalid> 1789851620 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFBy4+eod2mjW+vRzo3Qd9ePExKDkMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MjEwMDIwWhcNMjYwOTE5
+ MjExMDIwWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOL2oJ/vSqm4Dy62D
+ 026oX4bfKQQ+He26CDmLjGTo6/E3FgbuZhOZli8VyC0gxofgLJjxNLtZ9ZswGMoD
+ 1zG+SqOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUu+cK+qaT+PP7J9kZK7TGTETaRBgwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNjM1MWE4YjQvcnVuLTg2NWYzZWI3MGQ5ZDdl
+ YzY2NTk4NDY3NDgxNTViMDM3MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNjM1MWE4YjQvcnVuLTg2NWYzZWI3MGQ5ZDdlYzY2NTk4NDY3NDgxNTVi
+ MDM3MAoGCCqGSM49BAMCA0gAMEUCIQDB8VSqFPCxMWs9VPOoCwlSmH0rDyUVqeOx
+ M7itjTt7HgIgdY1iBXFEsW2/GS2OTdv1SXBnadRO2npwZY7KasJX134xggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFBy4+eod2mjW+vRzo3Qd9ePExKDkMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxOTIxMDAyMFowLwYJKoZIhvcNAQkEMSIEIJQ54HaFqGuiFQAWyWkp
+ +H37S8g/IRYsr+tMqSpnYNUZMAoGCCqGSM49BAMCBEcwRQIhAK0yPhq+CF1vXKTW
+ hTnkfcNIOZDtvcZ9qKHez9DB+KReAiAowa0K2P7fP9VOHSLPcz6Bzmk/+BRDEvc9
+ /FGrbPDhkg==
+ -----END SIGNED MESSAGE-----
+
+fix(hook): tell a tree with nothing in it from one that could not be read (#284)
+
+The stop asked how much a run had left uncommitted through a pipe:
+
+  dirty="$(git -C "$DIR" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+
+and a pipeline reports the LAST command's status. `wc -l` always succeeds, so a
+`git status` that failed printed nothing, counted 0, and was indistinguishable
+from a clean tree. The hook then concluded there was nothing to capture. No
+capture was attempted, so none failed, so #277's record was never written: the
+run stopped, its work stayed in the tree, and nothing anywhere said so.
+
+It is #277's defect one level out and harder to see, because the hook did
+exactly what its code said. The measurement that catches it is the one this
+repository already treats as load-bearing elsewhere -- verify-branch.sh was
+changed in #281 for reporting "could not check" as "failed", and
+no-personal-identity.sh refuses rather than passes when its configuration is
+absent.
+
+read_tree takes the status WITHOUT a pipe, so the exit code is git's own, and
+counts lines from a value already in hand. A failure is now an outcome with its
+own record: `tree_unreadable`, carrying what git said -- "fatal: not a git
+repository" and "index.lock exists" are different problems with different
+remedies, and that sentence went to a stderr the harness discards for a stop.
+
+AND THE TREE THAT IS GONE, which is the first cause the issue names and never
+reached the `git status` at all: `[ -d "$DIR" ]` excluded it one line earlier
+and the stop walked past in silence. That is `tree_absent`.
+
+It is asked BEFORE the commit count, deliberately. A run that has committed once
+may still have left work uncommitted, so the commit count answers a different
+question and cannot stand in for this one. What is recorded is not "there was
+work" but that nobody knows.
+
+The marker's task, worktree and agent type are read before any branch decides
+anything. They used to be read inside the capture branch -- the one branch not
+taken when the tree cannot be read -- so a record written on either new path
+would have named no worktree, and a record missing the field a reader
+correlates on has to be correlated by hand.
+
+A tree read successfully and found clean still writes nothing, which is what
+keeps the record worth reading. Both paths exit 0 and touch no index.
+
+Driven by OPS-089 in scripts/hooks/shim-selftest.sh, written first and observed
+red against the shim as it stood: 7 new assertions, all 7 red and red on merit
+-- 0 records, every field empty, because there was nothing of any kind to read
+-- while the 76 pre-existing cases stayed green in both directions. 88 passed,
+0 failed after. The shim was driven under sh, bash, zsh and dash over an
+unreadable tree: all four exited 0 and wrote records identical field for field
+apart from the second the clock read.
+
+doc 07 rows for OPS-089 are owed, as OPS-085..088's still are; the catalog was
+outside this change.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/6351a8b4/run-865f3eb70d9d7ec6659846748155b037
+Agent-Run: run-865f3eb70d9d7ec6659846748155b037
+Agent-Task: 6351a8b4
