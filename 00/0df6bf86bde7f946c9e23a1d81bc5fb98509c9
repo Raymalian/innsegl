@@ -1,0 +1,50 @@
+tree 7fcb270ae8498c616b516634fb4e32530f43801e
+parent 4b5e234d2eaf1fa19308a5af32d9b1d83b2c8239
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788535835 +0200
+committer GitHub <noreply@github.com> 1788535835 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqmuQbCRC1aQ7uu5UhlAAAgP4QAKZH/phr1p3xboEKqQvuiQvy
+ 1I9SEzZGDRmtW9TyMX+DeeMTsc3qFjYUKhulRvdc0iPOcVZiq4YtqMC/SYqeIK+M
+ HFx4YQuG1jTDhS9J7I2SL4CA54VHMkW/W5vrn4omwHKAQx/UscP5YYy1EzUno09o
+ Jyiv0Xw2XPFGsy6Z/FBDqDd51d1kTgHnk87MVrKUzAIJ7hI823lmM1YBulh9KGuK
+ sGxeMr888wi6ojYwrHrfnpC++pevkgnAfEGOQyAHwu0ZMtGzqcAi8DOrExSzJ+1y
+ 1UVm0c8ZtdSx0SOvVhfERAoy/oiYBi90kPIgG3pqOxd5obEuGC1Zf/8ZQRU8BJ8B
+ qb0EN3vwj42kH7tBg7G2RsVhG6QURbaCkkS3z6kLL9zEIm0+lHuiKLdMEUok5nR3
+ WsDZS2fRe2rBw+IxEdQodc+0dnl4vKuDuGJGOCJar68o1xmFBNuhiR1RlL/1EjgP
+ mh1Ga662HX9+HwLH06kVFHW/xDITX6oLQEwR3obDMqXC3/ddowlFBqETdwzv6bUb
+ tP0wMTSAY9fAfg/eOovQbYnzo/3ZHJa+5OooFzKIbCmqUlgDkLt3AjoUuz/A45Xn
+ mMqZZg4AY/ebhixUw4IL10RvmWWg2QpVOAeEnfP+S2XguFmq+etkgAaQUiDrjAsA
+ wd5gqaneTAugagL7mitn
+ =jf4H
+ -----END PGP SIGNATURE-----
+ 
+
+Tell both concurrent retirements the earliest instant, as ADR-0020 §5 specifies (#150) (#151)
+
+* fix(mcp): re-query the directory for the earliest retirement instant (#150)
+
+ADR-0020 §5 accepts that two genuinely concurrent first retirements of one
+run can both find no record and both append, and states the reconciliation:
+both callers are told the same instant, because the directory answers with
+the earliest. retire()'s winning-path branch returned retiredAt straight
+from its own s.record() append and never performed that re-query, so two
+concurrent callers were told two different instants.
+
+Confirmed with a deterministic rendezvous (armRendezvous) that holds two
+goroutines at CredentialRun until both have read "not retired" before either
+appends — TestMCP019ConcurrentFirstRetirementsReportTheEarliestInstant fails
+against the pre-fix code with two different retired_at values and passes
+after retire() re-reads the directory via the new earliestRetiredAt.
+
+New test IDs (not added to doc 07): MCP-019.
+
+* test(mcp): cover earliestRetiredAt's defensive error paths (#150)
+
+The post-append re-query added for ADR-0020 §5 has three refusal paths that
+the shipped rundir.Directory cannot itself trigger (it reads the same chain
+this tool just wrote to), but IP §2's 100%-branch floor asks for every
+error-return path of every MCP tool regardless. answerAtCall makes each one
+reachable: the re-query failing, the directory forgetting the run, and the
+directory reporting the run not retired, all immediately after this call's
+own successful append.
