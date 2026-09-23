@@ -1,0 +1,75 @@
+tree c4423a78d98464ef85f7aeb7ba605a97c1062b15
+parent e67d85352399926eeb09f7bc632fe5ea2c7fd877
+author Innsegl <agent@innsegl.invalid> 1789596737 +0000
+committer Innsegl <agent@innsegl.invalid> 1789596737 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFGO+7eML1lgM95KAW6bAWq5mjfDJMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MjIxMjE3WhcNMjYwOTE2
+ MjIyMjE3WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEwFAf1bGtIzwfJm6l
+ 2coBj5qJLlw8ly+4+DkxqdXNrd7rJ1STjTLI2n42jqAbz53Q1HtmtEIAZTSzEfKB
+ p7aPW6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUCQ/tmQevyrU0edPgPF2s6hQSqNEwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvYzY1MTkxNDEvcnVuLTVjZDU4ZmY2ZmE3MTRl
+ YzA2MDYxMGEyNGU2ZjQyOWVlMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvYzY1MTkxNDEvcnVuLTVjZDU4ZmY2ZmE3MTRlYzA2MDYxMGEyNGU2ZjQy
+ OWVlMAoGCCqGSM49BAMCA0kAMEYCIQCiO+3GwXSvTMLrri7SofvJx6z0GHZ28CGC
+ lWDr2+36HgIhALMpT9RNwqHk0eTTsUbmJ0L40/TdJ11vHttTClG6V9gFMYIBKjCC
+ ASYCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhRjvu3jC9ZYDPeSgFumwFquZo3wyTALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTYyMjEyMTdaMC8GCSqGSIb3DQEJBDEiBCAwgP66+GC0HOS4gExr
+ Q1mH/DQRxnO/Cp2W3QlmXizeWDAKBggqhkjOPQQDAgRHMEUCIEeep46PdNv5ILux
+ 38y6xpGF8aarNcSO9+TXNbImd6BJAiEA+eb8JQ5PRO7hvgdfG0iieM4Q601uRNRn
+ pNirImRB18E=
+ -----END SIGNED MESSAGE-----
+
+feat(deploy): move the existing CA key into the store, keeping the same root (#238)
+
+Rung 3 first minted a new root, which made adopting custody a MIGRATION:
+every certificate already issued chains to the root the deployment already has,
+and a new one would leave those chaining to something nobody serves. #238's
+"same chain, same checks" is what forbids that, so the existing key moves
+instead.
+
+MEASURED END TO END against this deployment's real CA, not a fixture:
+
+  the key imported into the store, wrapped, reported imported_key=true
+  a transit signature VERIFIED under the existing certificate's public key,
+    which is what proves the import preserved the key rather than any claim
+    the store makes about itself
+  Fulcio started on --ca=kmsca with no FATAL and served a root whose SHA-256
+    fingerprint is byte-identical to the file CA's
+  the CA's directory held a certificate and an issuer config and nothing else
+
+Two one-shots, because the store's image has no openssl and the openssl image
+has no store client. The plaintext key passes between them on a TMPFS volume
+and never reaches a disk; both exit, and the volume goes with the project. It is
+plaintext for the length of one import and in memory only — the same trust
+boundary the encrypted key already had, since its password is in this
+repository and has never been a secret.
+
+WHAT THIS DOES NOT DO is undo prior exposure. The key's protection has been a
+mount table and a published password; anything that already had a copy still
+has one. Custody stops future reads. Rotation is what answers past ones, and
+rung 3 is what makes rotation cheap: a store-generated key never has a password
+to publish.
+
+Two corrections the live run forced, both recorded where they bite. The pinned
+store has DROPPED mlock and refuses to boot if its config mentions it, so the
+disable_mlock line and the IPC_LOCK capability are gone rather than tuned — a
+capability granted for a feature that no longer exists is the worst of both.
+And `bao transit import` reads base64 DER, refusing PEM with "illegal base64
+data at input byte 0".
+
+Driven by OPS-050, whose adoption half is now asserted at unit level as well:
+an existing root is adopted, an absent one mints, and an EMPTY one is refused
+rather than minted over — a zero-byte ca.crt is a bootstrap in progress.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/c6519141/run-5cd58ff6fa714ec060610a24e6f429ee
+Agent-Run: run-5cd58ff6fa714ec060610a24e6f429ee
+Agent-Task: c6519141
