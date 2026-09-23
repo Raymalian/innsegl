@@ -1,0 +1,98 @@
+tree 9f74991490c1f74ccf53304d0cb67c7a05120f3e
+parent 15c8f27704c0d451bdd5c7a224374203b534a6c7
+author Innsegl <agent@innsegl.invalid> 1789241138 +0000
+committer Innsegl <agent@innsegl.invalid> 1789241138 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFCIJuJIA0qlr2k4hHcRWC9s9SWicMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEyMTkyNTM4WhcNMjYwOTEy
+ MTkzNTM4WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENTDqhzqufY2hHKxM
+ kWMHjLC1UhOpBWzb1VP9aEXV/hBo0QHylOAFphTzAtzTjD4SiE6FYY9Lz/jDbAke
+ vrk9c6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUb8AJu5gmgZCxDqzM+md/p2dRxGIwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvMzYyMDYxNmYvYjM4ZjMzNzIvcnVuLTUwNTY0OTQ3YTdiMWM1
+ MjhkYTdiMGIyNmYwODFiNGRkMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvMzYy
+ MDYxNmYvYjM4ZjMzNzIvcnVuLTUwNTY0OTQ3YTdiMWM1MjhkYTdiMGIyNmYwODFi
+ NGRkMAoGCCqGSM49BAMCA0gAMEUCIGzvD6evJPCzS+tEsXKCFKCjbRhD9JKihHB2
+ LShtdwoGAiEA/v/U1+z2mp8h+ya3S3YdqdYW47DgZvmMllIWgQh0Q5AxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFCIJuJIA0qlr2k4hHcRWC9s9SWicMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMjE5MjUzOFowLwYJKoZIhvcNAQkEMSIEIH4C/noW6K070xq9vbHR
+ dOfZmiS3WjcM5ty/pE3OoGjyMAoGCCqGSM49BAMCBEcwRQIgY2IVFjt6l1Ex073Z
+ my1eDWUaUiGeuknHJ0Snr9sK7NECIQDwqi6mxa3N6hDfWwFA9acKxyql7VXjndDm
+ PZQIexYNeQ==
+ -----END SIGNED MESSAGE-----
+
+feat(mcp): add observe_session (#207)
+
+The eighth and last tool of IP §4's surface. It is the reference shim's
+SessionStart and SessionEnd in one call, plus the marker bookkeeping that lived
+under the harness's own runs directory and now lives inside the MCP, keyed on
+the harness's session id.
+
+It composes the other three rather than re-deriving anything: describe_workspace
+resolves the workspace, register_agent mints the run, retire_agent ends it — the
+SHIPPED tools, installed through their own Configure functions and called in
+process, which is SignCommitThroughGetCredential's move for the same reason.
+One derivation of what a workspace is, one definition of what a run is, one gate
+that refuses a retired one. So this file holds no SPIRE client, no ledger and no
+idempotency store; its only dependency is the volume the markers live on.
+
+A STOP NEVER BLOCKS, and that decided the whole shape. A refused stop was
+answered by the harness with nine repeated invocations, and an MCP tool's
+equivalent of exit 2 is an error result — so every failure on the stop path
+comes back as a successful reply carrying the class and the message in `detail`:
+the ledger gone, SPIRE refusing the deletion, the marker unreadable, retire_agent
+unwired. A start may refuse, and must, because IP §6.1 admits no attributed work
+without an identity; the classes it returns are register_agent's and
+describe_workspace's own, since IP §4's vocabulary is closed (doc 08 §3).
+
+THE MARKER OUTLIVES THE RETIREMENT. The shim deleted it on the way into a stop
+and measured the cost: a failed retirement left the run unretired with no record
+to retry from, and three runs were still Active seventeen hours later. Keeping
+it afterwards too, with the instant written in, buys a second thing: a run id is
+a pure function of (agent_type, task, key), so a start for a session id already
+stopped would derive the SAME run id and register_agent would replay a retired
+run's reply — a dead identity handed back as a live one. A retired marker is
+what lets a start report the terminal state instead. The limit is stated in the
+file rather than left to be found: a run retired by a direct retire_agent call
+leaves a marker that still reads live, and that is #213's class of problem, not
+closed here.
+
+The marker's file name is a digest of the session id, not the id. A caller's
+string must never name a path, and two ids differing only in case must not
+collide into one marker — which they would on the case-insensitive filesystem an
+operator's machine usually has, giving two sessions one run. The session id
+itself is deliberately NOT held to doc 02 §5's identifier grammar: it is a
+foreign harness's string, and E11 exists so a second harness can participate.
+
+No new error class and no schema change. An unwritable marker volume reports
+LEDGER_UNAVAILABLE, retryable, which is observe_tool_call's reading for its own
+body volume; the recorded link from a session to its run is the idempotency key
+register_agent already writes, because doc 02 §3 has no member for a session id
+and E11 is additive by construction.
+
+Driven by MCP-050..MCP-054, written first and observed failing twice: once on
+the undefined names, then against a stub that answered nothing, so every row
+failed for what doc 07 says rather than for a missing symbol. 100% of statements
+on internal/mcp, every error return driven — the unwritable volume by a real
+filesystem refusal rather than a stub, and by one that is uid-independent, so
+the case cannot quietly pass under root.
+
+RM-131's three ratchets fire here and are cleared with it: the entry point's
+surface assertion is renamed and its outstanding list is empty, the start-up
+report is asserted silent rather than warning, and test/failure's
+outstandingTools is empty for the first time since #210.
+
+BOUND IS NOT CONFIGURED. Nothing wires this tool in the entry point, so it
+answers INVARIANT_VIOLATION to every input until #211 does — the same state the
+other two E11 tools are in.
+
+Agent-Identity: spiffe://innsegl.dev/agent/3620616f/b38f3372/run-50564947a7b1c528da7b0b26f081b4dd
+Agent-Run: run-50564947a7b1c528da7b0b26f081b4dd
+Agent-Task: b38f3372
