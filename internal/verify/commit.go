@@ -69,6 +69,24 @@ func runGit(ctx context.Context, gitPath, repo string, args ...string) (string, 
 	return string(out), nil
 }
 
+// runGitInput is runGit with stdin. It exists for `hash-object --stdin`, which
+// is how a note's bytes become a commit SHA without this package hashing git's
+// object format itself.
+func runGitInput(ctx context.Context, gitPath, repo, stdin string, args ...string) (string, error) {
+	//nolint:gosec // G204: gitPath is configuration, the arguments are literals
+	cmd := exec.CommandContext(ctx, gitPath, append([]string{"-C", repo}, args...)...)
+	cmd.Env = os.Environ()
+	cmd.Stdin = strings.NewReader(stdin)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s",
+			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return string(out), nil
+}
+
 // readCommit resolves a revision and reads the object behind it.
 func readCommit(ctx context.Context, gitPath, repo, revision string) (commit, error) {
 	sha, err := runGit(ctx, gitPath, repo, "rev-parse", "--verify", "--end-of-options",
