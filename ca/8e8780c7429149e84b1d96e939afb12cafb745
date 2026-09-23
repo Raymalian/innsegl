@@ -1,0 +1,61 @@
+tree f9be2acfd8642d88910f5a069b7b572eeed6cc1f
+parent 1fa8ff8b05741c6d1fbcde8dee3715383cbf2faa
+author Innsegl <agent@innsegl.invalid> 1789234188 +0000
+committer Innsegl <agent@innsegl.invalid> 1789234188 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFD1UUH5SK2R6ROQD9UY0Q2o26eB7MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEyMTcyOTQ4WhcNMjYwOTEy
+ MTczOTQ4WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENSX3jeyP+eSXxzQH
+ 3i8uRzWDcE0goKMpQXAp5SQ0OUEsQXm2lp6rq3TeeRt5/g94vmn+vIbc5WZv6sO8
+ xkEWCKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUw9dV3GN5lsjC0H5F16LNQXAb7yQwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYjBlODg5ZGUvMjQ3OTllOTQvcnVuLTdlZDVmNWY0NTRiYzQ5
+ ZGVmZTkxNDBiMjE2YjkzMzFlMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYjBl
+ ODg5ZGUvMjQ3OTllOTQvcnVuLTdlZDVmNWY0NTRiYzQ5ZGVmZTkxNDBiMjE2Yjkz
+ MzFlMAoGCCqGSM49BAMCA0gAMEUCIQCFN4WQmofg6IyXIj65G0EtLR2zqx1vEVh7
+ +lKMsxwzGQIgV77oTB2xhzymY0YY3oefaRkjuYUO9jMWX/BcZbRIOUYxggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFD1UUH5SK2R6ROQD9UY0Q2o26eB7MAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMjE3Mjk0OFowLwYJKoZIhvcNAQkEMSIEIIXiUUfbLUUw67tcaDdo
+ MCjtuphtsnRRP1DQdD2J9xhdMAoGCCqGSM49BAMCBEYwRAIgK2bUNlg9w/4Syv2U
+ YgiLwlLBfu4OgCwmZhp+t+OK4c0CIAYUyY5kP8McPLgZCLBjJMCIiKEQ/6HL9XKZ
+ MYBZGFdh
+ -----END SIGNED MESSAGE-----
+
+feat(mcp): open the tool surface from five to eight (#210)
+
+The surface was closed in code, not merely by convention: Bind refused any
+name outside the five, ToolNames() was asserted at length five in four test
+files, and ratelimit.go refused to meter a sixth. That is what made a second
+harness impossible to serve — not the idea, the registry.
+
+describe_workspace, observe_tool_call and observe_session are added to
+toolOrder and to the ADMIN side of #170's caller split, for the reason that
+moved record_event there in #171: they are driven by the harness observing the
+agent, never by the model reporting on itself. A model that could call
+observe_tool_call could write its own activity log, which is doc 04 AB-14.
+
+Names only. No implementation binds yet, so MissingTools() now reports the
+three, and the start-up report and both health endpoints say so out loud —
+ADR-0024's duty is what makes an incomplete surface safe rather than silent.
+serve_test asserts exactly which three are outstanding, so each of #205, #206
+and #207 fails here on the day it binds its tool, the same ratchet RM-068 left
+for sign_commit.
+
+Not pinned in protected-surfaces.sh: the gate reports mcp-tool 5 entries and
+passes, proving it permits an addition. The three get pinned in #209, once a
+second shim has driven them.
+
+Driven by MCP-055, MCP-056 and MCP-057, observed failing on the undefined
+names before any were declared. doc 01 §4 and §5 Phase 2 amended; doc 07
+gains MCP-039..057 and OPS-019..023.
+
+Agent-Identity: spiffe://innsegl.dev/agent/b0e889de/24799e94/run-7ed5f5f454bc49defe9140b216b9331e
+Agent-Run: run-7ed5f5f454bc49defe9140b216b9331e
+Agent-Task: 24799e94
