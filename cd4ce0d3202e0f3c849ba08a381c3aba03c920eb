@@ -1,0 +1,81 @@
+tree dae6ab18459473246eaea8732f4d2f4dd55847c7
+parent ca29038b30511544e98dd9e24a1799b97dbe8a9d
+author Innsegl <agent@innsegl.invalid> 1789850048 +0000
+committer Innsegl <agent@innsegl.invalid> 1789850048 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFCdf5jbCG112o9g/2oXrCGacfBQMMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MjAzNDA4WhcNMjYwOTE5
+ MjA0NDA4WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjKlGO+MHN7ipoqgF
+ cJxmgAODKsXphfS7nmT5YVMQqiEzRen9WN7HmA745GJXH866FqDZgg9fDJpoP+nv
+ lKNSRaOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUfF/VZoFSHQ/QgB+4NWTAE7xHlekwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvMWViNTU4N2YvcnVuLThjNmEyYjEzODAzYTNk
+ YTY1M2ZkZTk2NzMxZDIwMGVmMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvMWViNTU4N2YvcnVuLThjNmEyYjEzODAzYTNkYTY1M2ZkZTk2NzMxZDIw
+ MGVmMAoGCCqGSM49BAMCA0gAMEUCIQCEZVVFhXASCQYb2fspNDz+2dBBqHXzqjrk
+ RskZRAR29QIgElhGxbZcEbrSQ87+YCXg1f5J7aqBEY70kqoOCA9MevYxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFCdf5jbCG112o9g/2oXrCGacfBQMMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxOTIwMzQwOFowLwYJKoZIhvcNAQkEMSIEIIFMc3AuAhvqwO09O86T
+ EK81Ld7gMVoZWjFzB/pcJQTfMAoGCCqGSM49BAMCBEcwRQIgCkvsvMmQO08G5s6a
+ +JGsoTvIpER387M6UHAnm6TaF4kCIQDciITggg6otQmUGSgXJZi5LTcQ/v70KmmE
+ 1QhgGQWcbw==
+ -----END SIGNED MESSAGE-----
+
+fix(signing): commit the paths the caller named, not the shared index (#280)
+
+Two writers shared one working tree. One staged a file and was refused by
+staged_ref, correctly -- the index had moved under it. Seconds later the other
+committed, and its commit carried three files: its own two, and the one the
+first writer had staged. Nothing was lost; what landed was worse, a signed and
+permanent record of work its message and its identity did not name.
+
+sign_commit commits THE INDEX, and the index belongs to the working tree rather
+than to the caller. staged_ref catches the index moving UNDER a signer. Nothing
+caught a commit sweeping up what another writer had staged.
+
+One rule, both paths, and it is #261's: everything that would be COMMITTED must
+be a subset of what the caller can account for, and a caller that cannot account
+for a path is refused naming it -- the whole commit, never narrowed, because
+narrowing means unstaging work that belongs to somebody else. Only the source of
+the accounting differs. A stopped run cannot be asked anything, so a capture
+reads its tool-call bodies; a caller that is still running says, with -p.
+
+Serialising was the other candidate and cannot work. The interleaving happened
+entirely outside the commit path: the sweeping writer's `git add` landed before
+its commit ever started, so no lock the script takes reaches back over it, and a
+lock binds only the parties that take it while the other party is a bare
+`git add` in a shell. Separate indexes fail twice over -- every writer would have
+to opt in, and the commit is made by a server process that reads .git/index
+whatever the script sets. Naming is the only account of "mine" that survives
+contact with a second writer.
+
+  sign_commit  gains an optional `paths`, omitempty like `worktree`, and refuses
+               before Phase A -- after staged_ref, which stays the first gate --
+               when the index holds anything it does not name.
+  the script   gains -p, refuses a caller committing its own work that named
+               nothing, and accounts before it stages as well as after, so a
+               refusal leaves every writer's work exactly where it was.
+  -r           is exempt: the harness capture path is already bounded by #261
+               and is the one caller that cannot be asked to say so, because the
+               run whose work it is has already gone.
+
+A deployment that predates the argument answers `unexpected additional
+properties ["paths"]` and would otherwise stop a human from committing at all,
+so the call drops to a second attempt without it and says which half of the
+bound is missing -- the ladder register_run already has, for the same reason.
+
+Driven by TestAnIndexHoldingAPathTheCallerDidNotNameIsRefusedNamingIt and
+TestACommitSignsOnlyThePathsItsCallerNamed, both observed failing with "the call
+succeeded; it had to be refused"; and by the commit selftest's two-writer cases,
+observed against the previous script signing a tree carrying both writers' files.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/1eb5587f/run-8c6a2b13803a3da653fde96731d200ef
+Agent-Run: run-8c6a2b13803a3da653fde96731d200ef
+Agent-Task: 1eb5587f
