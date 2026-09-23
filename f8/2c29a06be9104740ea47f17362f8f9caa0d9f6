@@ -1,0 +1,73 @@
+tree 8dcf74707981c6a45d15b11ce17f910fe775487f
+parent a66374cc82d45a3e86d3731363190ae420d27692
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1788873156 +0200
+committer GitHub <noreply@github.com> 1788873156 -0700
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqoAnECRC1aQ7uu5UhlAAAM9MQAFtJfj000Tuj/4WNRNrTdeh+
+ rMA9QOkPxGrhXAcVnXtIAYCIPzJieJwU3AjEyp64BwuUmJtuZultR5b2Ea6RUKNr
+ NRDowlSPi9EAGNzky37gvb170lMsUB9TMt823QLijippOp4wdHyipc+K7amoK1+p
+ 5Q96cnTHDwwwJEaR/zNoA0QZECDP0Nm06drOFk8CpBmMuhQDpr+9KrjnOax5nAQf
+ qjF1V9jG2w7GGHSIrW6V4e6s3pa1CSicCrHoPvCoLLcEtb6aO/Ln64sDvhsKvVkC
+ 2zUXoMqdmc6tz5+adeKpy8eW9z1Ol/jiy5FPky/65TQtpRww9J+GDiJCsTlHhl3V
+ As/2ZBSmmFKLk9p5PNaEcWtByRGjN/KKJIKEyBQL2eCpR6DYGu3s7Si7GFCljSE5
+ kvCt2/s+cSQxxfwrbMmvxR6UpM+Nu3WC8T3HPSrE/x11XeJjJVcHONxpek6i8C3g
+ Tl+kRBL5Y3dRqpUnObKx43blbhN7qXdm0AXaCsFQ0ge8HrNHyYvzbQQ5i4UNP6pZ
+ 4NPcKBtSXBUXI6aXUuKibCI+totDnSJ5I30c7zZ7Pi97mc9b1H56ptKXGOJWC5Ve
+ d1Bdl3FAvNegB3/MnssPhjaz6WbWVgpt4hQYsd7RZk0EoUuEFkjITB2aD59G7Ypg
+ d2guIQeg9NN3XNAHRB3f
+ =ni62
+ -----END PGP SIGNATURE-----
+ 
+
+feat: take identity out of the model's hands, and make signing one command (#170, #171, #172, #176, #177) (#178)
+
+Collapsed from the branch it replaces, whose history named the operator's other
+projects in a public repository. The measurements are kept in the file
+comments; the names are gone.
+
+IDENTITY IS ISSUED BY THE HARNESS, NOT ASKED FOR BY THE MODEL. #170 splits the
+five tools across two listeners: register_agent, record_event and retire_agent
+answer only on the admin listener the model's client is never pointed at, and
+8080 keeps the two tools that need a run_id somebody else issued. A withheld
+tool is absent, not broken -- it must not appear in MissingTools, or a
+deployment cannot tell a deliberate split from a missing binding (MCP-024..027).
+An unknown name in the list is refused outright (MCP-028), because a compose
+file with a typo would otherwise start with four tools and look exactly like a
+deliberate split.
+
+The harness hook registers a subagent at SubagentStart and blocks if it cannot
+(IP §6.1), retires at SubagentStop without ever blocking -- exit 2 there
+produced a nine-deep retry storm -- and records observed tool calls as digests.
+SessionStart gives the operator's own session an identity too, and that one
+never blocks: refusing a subagent costs nothing, refusing the human stops them
+working on their own machine.
+
+SIGNING IS ONE COMMAND. scripts/innsegl-commit.sh replaces four MCP calls made
+by hand, refuses rather than falling back to an unsigned commit, and carries two
+idempotency keys -- one per attempt so a retry can get a live run, one per
+content so the same tree cannot produce two commits. scripts/verify-branch.sh
+gates the merge on it. `make start`, `make link` and `make sign` are the whole
+interface, and the compose override signs in the working tree instead of a copy.
+
+TWO THINGS THAT WERE LOSING DATA. The proof API served an allowlist holding only
+the demo repository, so every proof request about a real one answered 404 --
+which reads as a verdict about the commit and was a statement about the
+configuration (#177). And rekor mints a new Trillian tree whenever tlog_id is 0,
+so every restart moved the log to an empty tree and stranded the entries under
+the old id: three trees, 7 + 43 + 0 leaves, the empty one being served (#176).
+ADR-0028 pinned the log's key so a restart could not change who the log is;
+nothing pinned which tree it serves. Both are fixed and the entries are back.
+
+Also: the runs table sorts in the ledger rather than in one fetched page, the
+sealer and reconciler can run inside the MCP process, the reaper finally runs at
+all, and the dashboard has a mark.
+
+ADR-0045 is proposed and NOT accepted: repo, branch and parent_run_id belong on
+run_registered, which is a protected surface and a major release.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/c1c85725/run-ed3437216698d3348cd2de72fda8ad36
+Agent-Run: run-ed3437216698d3348cd2de72fda8ad36
+Agent-Task: c1c85725
+
+Co-authored-by: Innsegl <agent@innsegl.invalid>
