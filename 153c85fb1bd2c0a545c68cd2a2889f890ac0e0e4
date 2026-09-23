@@ -1,0 +1,48 @@
+tree 296d1016ebb0cdadf907dee8d3fef9e64c2b111e
+parent fcca17addec25323d8f9581a5d1f0f0278a29d05
+author Innsegl <agent@innsegl.invalid> 1789847558 +0000
+committer Innsegl <agent@innsegl.invalid> 1789847558 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFG1Qo1CJzwkdJv+aBO8mtPBfUxwKMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MTk1MjM4WhcNMjYwOTE5
+ MjAwMjM4WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUEzVzjoHeaKdzd0J
+ mlLEMYxXIuUdHjerFhgiRNmuXIDlfSghEwmXPI7TDbb5foJnWDxqP6kZ+gXOUDIz
+ 3PUXWKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU8Wmj45ceL3Y5xVOdawl8Z45bbOYwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvYWU0YjVhODIvcnVuLTdkZDBlNWM3MTQyMmU2
+ YTM0OTBiZmNkNDkwZWI3MDE4MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvYWU0YjVhODIvcnVuLTdkZDBlNWM3MTQyMmU2YTM0OTBiZmNkNDkwZWI3
+ MDE4MAoGCCqGSM49BAMCA0cAMEQCIFUafKeZqYBkxj73RhMGBeicJYwldy+vxYQk
+ U9LY4248AiA+tvlQ1MJ6nGAy1NI0DjTPD04gweTFPMIoGzLAT87x7jGCASowggEm
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUbVCjUInPCR0m/5oE7ya08F9THAowCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTE5MTk1MjM4WjAvBgkqhkiG9w0BCQQxIgQgjPIiM8sOfdjgQze8vVg4
+ 11r0t+FmIJWqhJQLsM4gHMEwCgYIKoZIzj0EAwIERzBFAiEAm1/X0ZslPJ9f7U5V
+ PwgHR5F32uepop0lnOLq55gPOWwCIDl97g8w3F06fQ6ae3m5qkKMYI3O0NGWHxCL
+ DX6k0xfz
+ -----END SIGNED MESSAGE-----
+
+ci: run the readiness and backup selftests where they can be seen (#279)
+
+Seventeen gate selftests exist; five were named in no workflow, so they ran
+only from a local pre-commit hook. A hook does not travel to a clone or to
+another checkout, which is the arrangement this repository already rejects in
+the header of scripts/no-published-specs.sh.
+
+These two run on tracked files alone and start no container, measured against a
+tree holding exactly what CI checks out.
+
+The other three stay out for reasons recorded on #279: verify-branch is failing
+and filed separately, and test-ids and no-personal-identity both check against
+deliberately untracked data, so neither can run in CI without a decision about
+what CI is allowed to see.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/ae4b5a82/run-7dd0e5c71422e6a3490bfcd490eb7018
+Agent-Run: run-7dd0e5c71422e6a3490bfcd490eb7018
+Agent-Task: ae4b5a82
