@@ -1,0 +1,26 @@
+tree b1109eb42de4e3e7e10139c6dc2ca24462c84872
+parent 8808fbff1083d510e58cbb79847fd58c93d0e74e
+parent b8fe6bd34926e5f389cf77ba530ba534a87fb786
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789645459 +0200
+committer GitHub <noreply@github.com> 1789645459 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqq9KTCRC1aQ7uu5UhlAAAdCwQAB7YgdGjvND30e8+vmmhrd3H
+ VYV54oljSwi/k1hQqxseszZ29LnJOtacfmnhlgold2DegKzyoSWSblv/qzfAGyK0
+ 44vcBjoBw6Zv12ddt1TEM3XtUPYJad9v8I1CAQenIizVE60BpyGVoi5PW+YxNAUK
+ 3NaeWWPKvUjNhgC+KSEgCBWC7i/b0qyRo4VZM7npKPGBVWliIsrHCQsH/BMZpHvN
+ 6qK8WUUmZqhdLLDHs+xOmm1Nz19k2y1sJS/g3m0a5izlYbr84wFr1p/IDbcrILOJ
+ XS1jBtuzPUbl+TmvLywdkKcfn/ZYmR4ecAAJKRMHspF6DD+2SOT7DdnMVRyGEvJb
+ 4QvvmEuY7RSnZb02PCrdenJx9i8lXUfY22sFLREiQ61vxAp2A7HDYB9zPDuv3/Xs
+ LR1ovDIVK/DuqYcII9adU6C8vcXV2zF+mP+nQNuTEdAF9mj6IpiplfA6o6oHUaWO
+ XoHoMoTrGfBNbUge4rZIxWCI8thD6/XqhJ3C6ndBerRcFUZ1erOUJdXRCoi8R8+9
+ x8xVyySkw+DniXqSjm4+hj91DdARGMDezUkmit661q6o8/5KxZjy8Tp/P/FILBth
+ hTg9o9YMPqJtR1LE2j1+I8Lubvk5zZVFqbqN7Nf3uLX0ZRrF4ukXLLBA1exlggjp
+ 7430Wa60bK/WvuuitA/V
+ =4cIE
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #250 from Raymalian/feat/rm104-digest-falsifiable
+
+Give RM-104's cases their catalog ids, and report the drift
