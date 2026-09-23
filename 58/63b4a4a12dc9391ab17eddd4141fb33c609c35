@@ -1,0 +1,83 @@
+tree 0023cbeed48506f32137ae0cf0e7d8f1fb05c459
+parent ce91ad4c00bbe785ef7517d00d56b661a0b9e937
+author Innsegl <agent@innsegl.invalid> 1789377107 +0000
+committer Innsegl <agent@innsegl.invalid> 1789377107 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFA239q/3qgZR7TtUSrYt5latY+F4MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE0MDkxMTQ3WhcNMjYwOTE0
+ MDkyMTQ3WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEK9kz/KswC71QtL/c
+ pzF/4neImkSBn4uXJzKGqMOqSem1KyJfN2mFScO8UNBmnjsUOKi6b4UvMsmMwQBN
+ 0BMRO6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUf78bSrZgyn3B9nh2aJi8MoK8rY8wHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvMzYyMDYxNmYvMWRiZGJiOTcvcnVuLTA0NjM3ZGVkYmJmMzll
+ N2U1MTY4MTRiYjc5ZjlhZTQ4MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvMzYy
+ MDYxNmYvMWRiZGJiOTcvcnVuLTA0NjM3ZGVkYmJmMzllN2U1MTY4MTRiYjc5Zjlh
+ ZTQ4MAoGCCqGSM49BAMCA0kAMEYCIQDJ+DIqjHQL1GUZyLpWLlqOUeeJVog74WBA
+ TziDEd/7UQIhANr8pXp7AyX+lh2GJsAklUgrq0r3hFNAux5UJZbGBEpSMYIBKTCC
+ ASUCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhQNt/av96oGUe07VEq2LeZWrWPheDALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTQwOTExNDdaMC8GCSqGSIb3DQEJBDEiBCDRUUOMcmczmzLlP575
+ bYT0jS71iRe45OxdnK6k8ibCKzAKBggqhkjOPQQDAgRGMEQCIGjJ1sG7LXs+hPTC
+ y1XfvohN4p4cazpA0lDbB4O1LwfSAiA5KKMRa4zBOig/gLOOkXw0OPR9pJgKtxCc
+ uP4KPS1mWg==
+ -----END SIGNED MESSAGE-----
+
+feat(dashboard): draw the mark in the shell, and tab the run detail (RM-140)
+
+Two things the design produced and the build never showed.
+
+THE MARK. web/public/innsegl-mark.svg shipped in every build and nothing under
+web/src referenced it, so the only place the seal ever appeared was a 16px
+browser tab. The shell's header now draws it beside the wordmark. It is drawn
+inline rather than fetched, for the reason Icon.tsx gives the icon set, and it
+is aria-hidden with focusable="false", so the header still says "Innsegl"
+exactly once to a screen reader. The asset stays the source of truth: FE-112
+reads public/innsegl-mark.svg and compares it element for element and attribute
+for attribute against what the header paints, so the two cannot drift, and it
+asserts the header took the reading-size weight rather than the favicon's
+heavier one.
+
+That test found a second defect on the way in. Both public/innsegl-mark.svg and
+public/favicon.svg carried a CSS custom property name inside an XML comment. An
+XML comment may not contain a double hyphen, SVG is XML, and xmllint refuses
+both files outright, which means favicon.svg had almost certainly never
+rendered in a tab at all. The comments are reworded, the drawings are
+untouched, and FE-112 parses both assets and fails if either stops being a
+well-formed document.
+
+THE RUN DETAIL. The activity log sat below the timeline, and the ordering was
+right: doc 06 P3 puts the strongest claim first and the timeline is the
+evidence chain. The reach was wrong. Measured on a real run of 1220 tool calls,
+"below" meant several hundred screens below, and the activity log was
+unreachable in practice. The two are now one tab control with the timeline
+first and selected, so the ordering argument survives intact while second
+costs one key instead of one scroll to the bottom of the page.
+
+Three properties are held by FE-113. The integrity banner renders outside both
+panels and stays on screen whichever tab is open, because a condition hidden
+behind an unselected tab is worse than the scroll this replaced. Each tab
+carries its own count, the timeline's events and the activity log's tool calls,
+so a reader knows what is behind the tab they are not looking at. And the
+control is a real tablist with aria-selected, aria-controls, a roving tabindex
+and Left, Right, Home and End, because the tab role is a promise about which
+keys work.
+
+Timeline.tsx and ActivityLog.tsx are unchanged. This is composition.
+
+Driven by FE-112 and FE-113, both proposed in doc 07 TC-FE and both observed
+failing first, 26 red across the two files before any implementation existed.
+Verified with tsc, vitest (1553 tests), vite build, the token gate and its
+self-test, go build, go vet, golangci-lint, no-operator-paths, spdx-check,
+protected-surfaces, and the full Playwright accessibility and visual-regression
+suite (85 tests, including the axe pass, the keyboard walkthrough and the green
+audit across all six views).
+
+Agent-Identity: spiffe://innsegl.dev/agent/3620616f/1dbdbb97/run-04637dedbbf39e7e516814bb79f9ae48
+Agent-Run: run-04637dedbbf39e7e516814bb79f9ae48
+Agent-Task: 1dbdbb97
