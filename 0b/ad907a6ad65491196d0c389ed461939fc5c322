@@ -1,0 +1,81 @@
+tree bdae9744849b9e989ad030a66703c9a23bac71a1
+parent 8d49d4f1fbd6856c407fef467cecbb4f0bce5352
+author Innsegl <agent@innsegl.invalid> 1789241534 +0000
+committer Innsegl <agent@innsegl.invalid> 1789241534 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFH7V3ZUnvEEXBj+Zc9FLzl+lhl2+MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEyMTkzMjE0WhcNMjYwOTEy
+ MTk0MjE0WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEJbV+YWcNrPHbqTIR
+ ggZzKopgy0kzdvOVcahlYiqhMzrY4Hvz2IlecwgD5FW00NgNrzRYBB6tZ32XHYMW
+ 4QZlmKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUmHAQpAT6EDw1m6Z4bcL+fHW4kiQwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvMzYyMDYxNmYvYjM4ZjMzNzIvcnVuLTUwNTY0OTQ3YTdiMWM1
+ MjhkYTdiMGIyNmYwODFiNGRkMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvMzYy
+ MDYxNmYvYjM4ZjMzNzIvcnVuLTUwNTY0OTQ3YTdiMWM1MjhkYTdiMGIyNmYwODFi
+ NGRkMAoGCCqGSM49BAMCA0cAMEQCIFogrGkOhwHkg/bqrl2Diw+aw///l6xW1wDp
+ YOp5xwHEAiBBlM0lhNE1WmQge/qugYDjbbXMB2u77qWvmVpTQJ1B8TGCASswggEn
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUftXdlSe8QRcGP5lz0UvOX6WGXb4wCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTEyMTkzMjE0WjAvBgkqhkiG9w0BCQQxIgQgJT8AzftU3ry+aKM1R2I/
+ pzv2xodxGZG1qm/4ekPchAgwCgYIKoZIzj0EAwIESDBGAiEAtzrfD7QM5y9bVzuI
+ ybvv5qbTnqECVjZRB6kWUKIE9QUCIQDYg0qRWdNxvB21Kx7K8aoy7A+dq0bdc8ga
+ 76Ot/IbVSg==
+ -----END SIGNED MESSAGE-----
+
+test(contract): decide observe_session's eleven MCP-006 cells, and retire the deferred verdict (#207)
+
+Six reachable, five not, and the split is the finding. observe_session is the
+only tool on the surface that is a COMPOSITION — a start resolves the workspace
+through describe_workspace and mints the run through register_agent, a stop ends
+it through retire_agent — so its error surface is very nearly theirs, inherited
+unchanged because IP §4's vocabulary is closed and a second wording for one
+failure sends a shim author to the wrong file.
+
+That pulls two ways. Four classes that would be absurd for a tool "about
+sessions" are reachable here for exactly register_agent's reasons, and two of
+them are worth reading twice: RUN_NOT_FOUND is NOT a stop for a session that
+never started — that is required to succeed with the terminal state, so the
+obvious reading of the class is a bug here rather than a case — and
+RUN_ALREADY_RETIRED is not a second stop either. Both survive from
+register_agent's SPIRE paths: a missing attested parent, and an entry SPIRE
+reports and then does not hold.
+
+And the stop path produces no class at all, which is what a stop never blocking
+means once it is written down as a matrix row. Every failure there is a
+successful reply carrying the class in `detail`, so nothing a stop meets appears
+on this side of the matrix. LEDGER_UNAVAILABLE is therefore driven through the
+marker volume — this tool's own second store, and the half of the class only it
+and observe_tool_call have — rather than through Postgres, which reaches the
+same class one gate later inside register_agent where the dead-ledger group
+already pins it.
+
+DUPLICATE_REQUEST is reachable in exactly one way and it is not a duplicate
+start: that returns the same run, which is the whole point of the derived key.
+It is a mapping lost while the ledger kept the registration — a container
+recreated without its marker volume — and the session then describing itself
+differently under a key that is necessarily the same.
+
+The battery gains fourteen rows and the loop loses its skip. Three of the rows
+must SUCCEED, and a guard fails the test if none does: nothing configures this
+tool in the entry point (#211), so an unconfigured one answers
+INVARIANT_VIOLATION to every input — a class the matrix calls reachable — and
+all fourteen rows would otherwise pass while proving nothing about the tool.
+That is the vacuous shape this whole file is written against, and it is sharper
+here than anywhere else on the surface.
+
+The `deferred` verdict is removed with its case. RM-071 (#94) removed it once on
+the reasoning that all five tools were bound; RM-131 (#210) made that premise
+false and put it back with a guard; #207 makes it true again. Both paragraphs
+are kept on the type rather than deleted, and what replaces the branch is the
+positive assertion it was really protecting: every name on IP §4's surface must
+HAVE a binder, so a ninth added ahead of its implementation fails there.
+
+Agent-Identity: spiffe://innsegl.dev/agent/3620616f/b38f3372/run-50564947a7b1c528da7b0b26f081b4dd
+Agent-Run: run-50564947a7b1c528da7b0b26f081b4dd
+Agent-Task: b38f3372
