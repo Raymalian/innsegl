@@ -1,0 +1,26 @@
+tree 2f10713d578ebe80803e829931347b19c0b74d16
+parent 63fecea70b87a1dfa4d4247d747269ec3f51817a
+parent 0e440f0c081ed7dae3fc97ce42112e7e2f9b213b
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1790156390 +0200
+committer GitHub <noreply@github.com> 1790156390 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqs55mCRC1aQ7uu5UhlAAAtE8QAAiDwWoKsSGyNV8EyinKwNBW
+ rXsI8xFMlkqD6gIoxl3Idhc1QRhkVj0IwE0NGp7YeWQY3XffA7yaeQeDxHrIAaw+
+ dgb9pvIFqBn4Gp6h1xWaR5gIxJAHVowyTv60Tx0fQfbfNq1CQ80Bvp/tRU5zq+X1
+ UzYz9s13LOU7htmXq2PA+VQzuDLbP3AuW9kH8/wBKtGEsrrMMKMfnfOvKa/LzZUZ
+ cvIZgXcaWTlPgHlaQDmj0HhzCdch0OV30fzIPZ7a6j756RuxqkNX/OngIfNGpA/K
+ d10BD4vbfgw8MII//yepDPe8WWdzyx0HF4XMw1ffaWRKDXSc+EIqkfx+10uF4pmW
+ +Iu6PB5CbIPPv2zkafOBOuVChHBYZE/kywGdKRqjCMGF9/GXkf+MgUQfv8ujMprk
+ ERskDwGamZd/O6dka9WTQAaLZbhJnw3+YVw5l/FhBDlQ6mXBfWajFAWuQ6emJhTN
+ qp7BFDf02jxuvaZVhIBb81o9+2iTPpJ3EXNBDH9zEyd5uNvgPxgVXg4LSU1tyPsT
+ 1DDal7cahlTPtrfFqmNQmObdNRaVKLbZqUWJbE+BPTx+DxzSMfjBtIhP0ltuMeFr
+ DWiAE7D/ebc5vmEB+NV9kKara/2y/jDiQRKNTr+OaduVYfDj8m0DOBCQ9KLDBd6l
+ w3SfM2a1V6+/kUtlfDJ2
+ =zX2o
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #293 from Raymalian/dev/unobserved-deaths
+
+Deaths nobody observed, and the reaper's two populations (#287, #288, #289)
