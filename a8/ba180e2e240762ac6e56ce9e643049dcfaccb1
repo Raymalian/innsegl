@@ -1,0 +1,26 @@
+tree 79a67b002d1edba1e0e16ba13f5c07ece0b125a6
+parent 40a93e86feb512c5fc836fd6d538fe0796cd2909
+parent c87bc62ab0209b9a154c67779c07414bbe56d3ba
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789566146 +0200
+committer GitHub <noreply@github.com> 1789566146 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqpzCCRC1aQ7uu5UhlAAAWW4QAHyFSrWhmSgXTGsLXrrreZML
+ lSklzbW/RQA205R4zMed56K3VrzGw1ZnJAlgjWE1SSGOSe/o1avFdqGgbU3n9dDT
+ 9t0ANcYy/FKTmuvKnMwxtqcObQVvEMWj+AKiyQ4181Lh+aQAmmKwMI1RFnVvSkus
+ FhiqfUW9oLJOx7oH7mNrEdH20T9raXmcO/B/H726uaSZfLOJSqw8UWketbvrpAdR
+ 1HBLDdNYEjfG/VH8X7a6lMv++4//dS185RKcsMIq13JMcZHrXrOQsT/PiQRqqCwa
+ J5JbQYJfFmBMIpBD7EDoZM9HdBM0dYPTE6Db2/70fQZLiKAWBospmTpnvvtavhp/
+ VufxMJilXXQ6R1sNwIrnsrCbvj1xJw7MiKplDIgtrkWNb8png/B0LJnsgTUntfFo
+ YaK85Fw5VYhRwg+FAbeSuWIdH9bBnvjYtUxCHvH41gb1vDoyRl/V+T2SiC3185rH
+ JSkrohmyy3WuAi7NdL2mhMAAZ5wCdhpOvOiQ1PgY8/o8zlJWTDYLgHuzcEHEm5KL
+ EkZL6UCGqoFszkQCs24GStK6Z+vXMTH+/XMC3w48VmUTMjqrwxARQ3U+LFWOnV25
+ AsTdkfBPeMcYtVDKzTtCyafGKO5HNtcUDhH4OJikRKx1auPkGX9KeplKVtjQgXqs
+ NZAJmPpQvoRHsF/FU0AJ
+ =RcSk
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #233 from Raymalian/resign/rm143
+
+Replace the object store and put its Filer behind the gateway
