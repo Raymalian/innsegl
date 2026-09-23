@@ -1,0 +1,94 @@
+tree a7f66406574ca4628385c3e141d0f027d19a6c49
+parent 4efd2672ba90f87dd626561917fdd5dcb947723e
+author Innsegl <agent@innsegl.invalid> 1789381463 +0000
+committer Innsegl <agent@innsegl.invalid> 1789381463 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJAYJKoZIhvcNAQcCoIIEFTCCBBECAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFGVXYDp4xRZvODrfEbhH/yVU9aolMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE0MTAyNDI0WhcNMjYwOTE0
+ MTAzNDI0WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7vUhV61CR3ahZxqU
+ wClIMrT3TPiYoMjugGQ95Pb6ODIwEgHAKDwAGiMu6i5MmjfkBjFuwvnJRSOtna8D
+ icEvIqOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUMyPwy+D4cEU3YEp2XWRh7rVBOg8wHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvMzYyMDYxNmYvMWRiZGJiOTcvcnVuLWZlNWE1YzA3ZWU0Mzcz
+ ZTA3MTIzOTkzMDIxYzkwNDUzMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvMzYy
+ MDYxNmYvMWRiZGJiOTcvcnVuLWZlNWE1YzA3ZWU0MzczZTA3MTIzOTkzMDIxYzkw
+ NDUzMAoGCCqGSM49BAMCA0gAMEUCIBj2eunbL5BsgKMZypLM9n8b5Pk53hVehJsc
+ EKtWZ1vdAiEA9rL0WBpl6zzQjSkwrMxmgXFLOIQfr4L+CtYqf31WkcIxggErMIIB
+ JwIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFGVXYDp4xRZvODrfEbhH/yVU9aolMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNDEwMjQyNFowLwYJKoZIhvcNAQkEMSIEILlQ4oLQYkuNPZP8m9SC
+ ad11n3cBDtFc5sYnHEX4yauvMAoGCCqGSM49BAMCBEgwRgIhAI3UOXaXSXwdHXx7
+ j3KaSgukaJzkyXAk2VrvjDlodjGoAiEAyJh2MVpysvhwocaaZ9s3+fCFDnSrq8EW
+ 9ViJ7Fr7GBs=
+ -----END SIGNED MESSAGE-----
+
+feat(dashboard): draw the approved design across the app (RM-141)
+
+The design was drawn, approved, and then two components of it were built.
+This is the rest: the typography it specifies, the overview, the
+verification page, the runs table -- and one real bug the artboards made
+visible.
+
+THE HEARTBEAT WAS RENDERED TWICE (FE-114). doc 06 section 3.1 puts the
+anchoring pulse in the persistent header on every view, and the shell has
+carried it there since RM-041. The overview body rendered a second
+AnchoringPulse under it, reading the same endpoint through a second hook,
+so a slow or failing second read put "anchored 3 min ago" directly above
+"couldn't read the anchoring heartbeat" on one screen -- P2's collapse of
+current and unknown, arrived at by accident. The body's copy is gone;
+AnchoringEvidence stays, because chain positions, a segment digest and a
+Rekor index are the material behind the claim and a one-line header cannot
+carry them.
+
+THREE FAMILIES, BUNDLED (FE-115, FE-116, FE-117). doc 06 section 5.2 was
+amended by the operator on 2026-09-14 from two families to three: a display
+serif for view headings and the largest metric figures, the sans for UI
+text, the mono for every identifier. The sans and mono resolved to system
+stacks and now resolve to IBM Plex, declared in web/src/app/fonts.css out of
+packages in this build. Nothing is fetched: the faces ship in the image's
+own asset directory, and the built stylesheet names no host.
+
+The serif is restricted, and the restriction is a gate rather than a
+convention. src/app/serif-discipline.test.ts holds a policy table naming
+every style in the product entitled to the display face; spending it
+somewhere new means adding a row where a reviewer reads it. Repo and
+agent-type keep their mono view headings, because those headings are
+identifiers and P4 outranks a handsome heading.
+
+check-tokens.sh learned the amendment as part G: three families, none
+fetched, each ending in a generic keyword -- the last because the
+standalone page in web/site/ loads the sheet and bundles no faces. Three
+new self-test cases prove the gate refuses each defect.
+
+THE VIEWS. The overview's recent runs are a real table with status, run,
+agent, task and commit columns (FE-118) instead of a stack of wrapped rows
+that named none of its facts and that doc 06 section 6.4 does not allow.
+That table and the runs table are now one treatment drawn from one module
+(FE-121), compared by rendered class rather than by an import. The
+verification page heads itself with the question it answers rather than
+with the navigation item's words, and puts the SHA field and its control on
+one row (FE-119). The three-check panel became a verdict band over three
+side-by-side check cards with the attributed identity named under them
+(FE-120) -- the fact a stranger came for, which was previously only
+readable out of the mismatch comparison.
+
+MEASURED, NOT ASSERTED. Moving the commit chip into the tinted verdict band
+put text-ink-muted at 4.43:1 on the verified surface in dark mode, under
+doc 06 section 6.4's floor; FE-100 caught it and the band's aside now
+inherits its own ground's colour, which is the lesson tailwind-theme.css
+already wrote down for the filled alert.
+
+Twelve visual baselines regenerated in both platforms' Chromium: every
+panel and alert-banner snapshot changes because the whole product's type
+changed. web/site/public/tokens.css re-copied from the shipped sheet, which
+had already drifted on main.
+
+Agent-Identity: spiffe://innsegl.dev/agent/3620616f/1dbdbb97/run-fe5a5c07ee4373e07123993021c90453
+Agent-Run: run-fe5a5c07ee4373e07123993021c90453
+Agent-Task: 1dbdbb97
