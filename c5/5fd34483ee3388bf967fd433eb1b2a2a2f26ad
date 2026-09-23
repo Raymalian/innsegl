@@ -1,0 +1,68 @@
+tree f6d9bb9e538698fd5681ded0c9ab10e7fa639463
+parent ee6449907e90a5d093621deb14093e72ba52b8b8
+author Innsegl <agent@innsegl.invalid> 1789580613 +0000
+committer Innsegl <agent@innsegl.invalid> 1789580613 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFCz9en2IIOpR4MsbZAqTurTV+Bl2MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTc0MzMzWhcNMjYwOTE2
+ MTc1MzMzWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4PucotQ9czdK+Fkf
+ B0x5DmmFnd42WHna4RegpWImaN/0GE7YKyXIBQiSL/4Wxkb9fA9xv+JMRaSpz8GH
+ IMqAuKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU5dGqOtXRJB3VRS68+gM/00hpYo0wHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvMTlmY2UzNjMvcnVuLTU3Y2M3MjY5ZTFiOGJl
+ YjZiNTZkOTM3MTA2ZDc2NTljMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvMTlmY2UzNjMvcnVuLTU3Y2M3MjY5ZTFiOGJlYjZiNTZkOTM3MTA2ZDc2
+ NTljMAoGCCqGSM49BAMCA0gAMEUCIQDB8mIKyuPMSK6ET+5Yl0KNe1V1htwtyM5s
+ 6Xoar/pfGgIgc7uEitl6cs7My/DF81dzn10UAITzSrQZWNhRO1VmT+kxggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFCz9en2IIOpR4MsbZAqTurTV+Bl2MAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNjE3NDMzM1owLwYJKoZIhvcNAQkEMSIEICKlst1n/g3WI12VHWS0
+ LkFHpPPQ4J2tI+Iyb4ATIzBWMAoGCCqGSM49BAMCBEYwRAIgPWsWDQ77cMnpTzVJ
+ 1PVgd/fePLz5iuO8tCYajzEy+BECIDZTidBZPtprMRqthJIZbgRBMQ6McA/W9iQY
+ M4V5Q4Si
+ -----END SIGNED MESSAGE-----
+
+fix(signer): succeed a retired by-tree pointer instead of stranding the tree (#213)
+
+A tree whose by-tree pointer named a retired run could not be committed to
+again by anyone. scripts/innsegl-commit.sh handed the run to sign_commit, the
+tool refused — rightly, IP §6.2 makes retirement effective immediately — and
+the script had no answer to the refusal. Three separate callers hit it in one
+day and all three invented the same workaround, which is a missing feature and
+not a coincidence.
+
+Re-registering is not the fix. A run id is a pure function of (agent_type,
+task, idempotency_key), so asking again with the same three values derives the
+same retired id and register_agent replays it; deleting the pointer does not
+help, because the next derivation names the same dead run. The successor
+therefore registers under a key that NAMES the run it succeeds. That makes it
+distinct by construction, deterministic per (retired run, tree) so a crash
+before the pointer is rewritten cannot mint a second identity for one tree
+(IP §6.6), and it makes the succession a record rather than a log line:
+register_agent writes the idempotency key into run_registered, so the chain
+says which run this one continues. Both ids are printed, and the pointer keeps
+a fourth line naming what it superseded.
+
+A pointer naming a run this ledger never held stays a refusal. Inventing an
+identity there would attribute a tree's work to a run whose own history cannot
+be found, which is the opposite of what the pointer is for. An explicit -r is
+never substituted either: it means that run and nothing else, and a retired one
+is still refused by sign_commit, naming the run the caller named.
+
+The liveness question is asked of the read API before sign_commit is called,
+and a probe that could not run is reported as exactly that rather than treated
+as a retirement — the wider version of this same bug.
+
+Driven by OPS-037 and OPS-038 in the new scripts/innsegl-commit-selftest.sh,
+written and watched failing first, and by OPS-039 against the live stack: a
+genuinely retired run, this commit signed under its successor.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/19fce363/run-57cc7269e1b8beb6b56d937106d7659c
+Agent-Run: run-57cc7269e1b8beb6b56d937106d7659c
+Agent-Task: 19fce363
