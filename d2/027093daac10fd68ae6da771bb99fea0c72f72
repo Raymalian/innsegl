@@ -1,0 +1,64 @@
+tree 46f6df13c848fdd147dd1e005907cf6c3ce3bccf
+parent 67a35777fcd896a9e6bd7f95e120949be39e2c6c
+author Innsegl <agent@innsegl.invalid> 1789289940 +0000
+committer Innsegl <agent@innsegl.invalid> 1789289940 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFDiwXDzhlQqJ1s4kwSyZC1DFN+P+MAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTEzMDg1OTAwWhcNMjYwOTEz
+ MDkwOTAwWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEipg+nUZXIdG8ETnN
+ 5JfYpgPwORHfihPorWQiEL2QN3OlekgvIgotLlh9wlu02V+FiKne0rkfTxrBIPPF
+ /9gvI6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUhdVCHO5aiHTsmi3QOPyYxtj43oEwHwYDVR0jBBgwFoAUOgx9
+ aapnTkDNrDGL3m+oLZij4VowXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvY2I1OTBiMDIvYjM4ZjMzNzIvcnVuLTYzNWJmY2EyZDMxYTNm
+ ZTMwNDQxOWYwNDQyMmZlZDQyMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvY2I1
+ OTBiMDIvYjM4ZjMzNzIvcnVuLTYzNWJmY2EyZDMxYTNmZTMwNDQxOWYwNDQyMmZl
+ ZDQyMAoGCCqGSM49BAMCA0gAMEUCIQD3HI92PZTmC8yU/2HgmmoCDVUOPnnGULoV
+ Bxu6pt9WhwIgZUHPxq4BCWFx3jOnla7T5s0TXZlZ0nnHU6LxTHk8jUYxggEqMIIB
+ JgIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFDiwXDzhlQqJ1s4kwSyZC1DFN+P+MAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxMzA4NTkwMFowLwYJKoZIhvcNAQkEMSIEIIfkVSZ/XwjMtjzoZmMx
+ YCC4/XFEZdq40OlGQiBUcCgnMAoGCCqGSM49BAMCBEcwRQIgTjzj1py5YXAJFF+U
+ uW5YM/Ij0nUXYnUgwcU72b6x5aQCIQCeb8QxG1wBjv4MEejnNUmlqcppNKJYYJ9z
+ r4NUdIoLCA==
+ -----END SIGNED MESSAGE-----
+
+fix(deploy): pull the object store from a registry that still has it
+
+Docker Hub no longer serves the WORM store's images. Both are gone, not
+deprecated:
+
+  Error response from daemon: pull access denied for minio/minio,
+  repository does not exist or may require 'docker login'
+
+That is what has been failing `test (race)` and `coverage floors`, on this
+branch and on main since 2026-09-11. OPS-002 refuses to report an
+infrastructure fault as a skip, so it failed loudly and correctly rather than
+printing ok while nothing was measured.
+
+The same tags are served by a second registry and the DIGESTS ARE IDENTICAL:
+
+  sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+  sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+
+Byte-identical, so this is where the bytes come from and not what the bytes
+are. The compose pins keep their digests, which is what makes that checkable by
+anyone rather than a claim in this message.
+
+This is a stopgap and should be read as one. A store whose image can vanish from
+its primary registry is the risk #165 exists for, and moving to a second
+registry run by the same archived project does not reduce it -- it buys time to
+decide properly. The requirement is unchanged and is what decides the successor:
+a live SEG-005 canary refusing deletion including by the account owner.
+
+No test change. The gates that were failing are the test, and they were observed
+failing for this reason before the change.
+
+Agent-Identity: spiffe://innsegl.dev/agent/cb590b02/b38f3372/run-635bfca2d31a3fe304419f04422fed42
+Agent-Run: run-635bfca2d31a3fe304419f04422fed42
+Agent-Task: b38f3372
