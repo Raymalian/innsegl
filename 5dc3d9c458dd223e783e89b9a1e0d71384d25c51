@@ -1,0 +1,111 @@
+tree 33530bb7f3ca64bdbf2b2533a176704021cfb0bf
+parent eb5b27a6544fb3c9ad4ee8b1b583a7038ebecbd2
+author Innsegl <agent@innsegl.invalid> 1789894130 +0000
+committer Innsegl <agent@innsegl.invalid> 1789894130 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJQYJKoZIhvcNAQcCoIIEFjCCBBICAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFHfTmW/EDeP8zrXBKS95iMkDNRPFMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTIwMDg0ODUwWhcNMjYwOTIw
+ MDg1ODUwWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEH9gT3oY0E9y/4nC6
+ cjabaFz5y6ByALvn4n4ZweH7sJ89J+kIxGERDAbMj29N4wqc3HnZs+Y0LICBJEYt
+ PqLUgKOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU/Ln7tVGdTuDY/9Qad52XsKT7IowwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjQ1ZTlmZTAvNWJhMGY1NGIvcnVuLTIxZDliZTU4ODAyZTM3
+ ODdjY2ZkMGNmNzk1N2E0ZDY1MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjQ1
+ ZTlmZTAvNWJhMGY1NGIvcnVuLTIxZDliZTU4ODAyZTM3ODdjY2ZkMGNmNzk1N2E0
+ ZDY1MAoGCCqGSM49BAMCA0kAMEYCIQDjyRfNGY5gi5soECdCKYOeoWTOMEqgVa4E
+ Pz6qDWdUegIhAKKGWL+ZKHfv8K8GfIbz7tLGsrhkO9qQiIJVp3pCmhWLMYIBKzCC
+ AScCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhR305lvxA3j/M61wSkveYjJAzUTxTALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MjAwODQ4NTBaMC8GCSqGSIb3DQEJBDEiBCBl65DLuGGWLPmSosCq
+ y3e3namKUV0HHELIRTz1IzE63zAKBggqhkjOPQQDAgRIMEYCIQCaYpFrhU7QX3Dh
+ lLCFXMISnxBTP1V0ZoJpFs2uFFim1wIhAPfoNUOpzv7tm8KAswMO24Pgjg3+cVpj
+ YvgdehT7iEj9
+ -----END SIGNED MESSAGE-----
+
+feat(hook): keep a killed run's claim after it is retired (#291)
+
+#290 made a killed run leave the active list at the moment of the kill, which
+is right and was asked for. The destructive-git guard decides whose work to
+protect by asking the ledger who is LIVE, so the work lost its protection at
+the same instant. Measured on one tree, one piece of work, one run, against
+the guard as it stood:
+
+  before the retirement:  git clean -fd  ->  exit 2, refused
+  after  the retirement:  git clean -fd  ->  exit 0, allowed, the file gone
+
+Before #290 that work was protected for twelve hours, but only as a side
+effect of the run being wrongly reported active. The side effect went and the
+protection went with it -- and the work most at risk is exactly this work. A
+live run's uncommitted work has somebody coming back for it. A killed run's
+does not.
+
+WHAT CARRIES THE CLAIM NOW is the record the kill already writes: reason
+run_killed, naming the run and its tree. Two fields are added to it, because
+what it named could neither protect nor release:
+
+  claim      the paths the run left UNCOMMITTED, not every path it ever wrote
+             there, with a digest of the bytes the kill left in each
+  claim_top  the repository those paths are relative to
+
+WHY THE CONTENT AND NOT THE NAME, which is the whole design. Liveness was
+chosen in #278 because a killed subagent's marker is never removed (#260) and
+a claim keyed on one would refuse in that tree forever. A claim keyed on a
+FILENAME has the same defect one step further on: this record is append-only
+and never rotated, so a claim that came back every time somebody re-edited a
+path some long-dead run once wrote would end up claiming every file in the
+repository. The claim is on the work.
+
+SO IT RELEASES ITSELF, by three facts about the tree and no clock at all: the
+path is committed, the path is gone, or the path has been written over. The
+operator's existing override discards it once, deliberately, after which the
+second rule applies. No threshold is added and the reaper's silence path and
+grace are untouched.
+
+AND IT IS NEVER A BLANKET CLAIM, which is the one place a killed run differs
+from a live one. A live run whose body store cannot be read is refused over
+every dirty path in the tree; a retired run cannot be given that, because the
+record outlives every one of its paths and a blanket claim that outlives its
+run is a tree nobody can use. Each destructive form is still weighed only
+against what it can destroy: a tracked claim does not refuse clean -f and an
+untracked one does not refuse reset --hard.
+
+WHAT IT DOES NOT COVER is in the file: a record written before this existed,
+which names no content and so claims nothing; any other reason in that log,
+which records a run that did stop; a run whose writes went through Bash
+redirections, which recorded no path to claim; and more than fifty paths from
+one kill, which is the bound the record is written under.
+
+Nothing reaches a tree the record does not name. One log serves every session
+on the machine, and a record is weighed only where claim_top resolves to this
+repository.
+
+Driven by OPS-101 in scripts/hooks/shim-selftest.sh and OPS-102..104 in
+scripts/hooks/git-tree-guard-selftest.sh, written first and observed failing:
+2 and 15 red against eb5b27a. Every one of the 15 is red on merit and carries
+its own positive control -- against a stand-in that ALLOWS everything the
+control halves go wrong too (the file is not destroyed, the override is
+silent), and against one that REFUSES everything the allow halves go wrong, so
+no case can pass by doing either. 111 and 54 pass, 0 fail. Both files were
+driven under sh, bash, zsh and dash.
+
+Verified against the live deployment, not a fixture of it: three runs
+registered through the real hook in an isolated markers directory, seen active,
+left uncommitted work, killed through a real PostToolUse TaskStop in the
+measured payload shape, and reported retired by the ledger. clean -fd refused
+after the retirement naming the run; the same tree and the same moment through
+the guard as it stood at eb5b27a allowed it and the file went. Committing the
+path released it, the override released it once and said so, a tree with no
+claim behaved exactly as before, and a tracked claim left clean -fd alone.
+
+doc 07 rows for OPS-101..104 are owed, as OPS-085..095's still are; the
+catalog was outside this change.
+
+Agent-Identity: spiffe://innsegl.dev/agent/645e9fe0/5ba0f54b/run-21d9be58802e3787ccfd0cf7957a4d65
+Agent-Run: run-21d9be58802e3787ccfd0cf7957a4d65
+Agent-Task: 5ba0f54b
