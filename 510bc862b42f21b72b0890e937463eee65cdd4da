@@ -1,0 +1,108 @@
+tree 3551e5bec5e8a64d6329f6fa88c11f39f604c9ac
+parent 19e5a3564303edd92bde60228579b1d267026629
+author Innsegl <agent@innsegl.invalid> 1789809277 +0000
+committer Innsegl <agent@innsegl.invalid> 1789809277 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFDCIOuQ6/fZADcNGMI4xR98tbxXEMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE5MDkxNDM3WhcNMjYwOTE5
+ MDkyNDM3WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkIByVe6/Wqy0ZdMM
+ 1XWA5WRwkyQR79J65qZoEEphDi80eLZ5dyPEpxU3O/XkYnNU237/+4cMlTAT13fn
+ lm8Zx6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUiDDSJJbGNA5wph9Pxmi3kSuhv5wwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvMTFkYWFlNjUvNGQ0MWEyZTAvcnVuLTAxYmQwZjFkNmFiYmRh
+ ZTFiZDI4ZTIwMmI4ODZlNTI4MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvMTFk
+ YWFlNjUvNGQ0MWEyZTAvcnVuLTAxYmQwZjFkNmFiYmRhZTFiZDI4ZTIwMmI4ODZl
+ NTI4MAoGCCqGSM49BAMCA0kAMEYCIQCEb+7tR+ACU4DJOU9EvTNkcIxDeZeJPHF/
+ Bc0hPQcWFAIhAJAXUTkvHaQWQAUeowX6lNXXITrkpIHo8+41Yb9rMLDjMYIBKTCC
+ ASUCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhQwiDrkOv32QA3DRjCOMUffLW8VxDALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTkwOTE0MzdaMC8GCSqGSIb3DQEJBDEiBCDd1T2z+wmV0wMUA0nT
+ 9D8GeZsjIIQFPFwyiyTmRjstODAKBggqhkjOPQQDAgRGMEQCIGg8006NrfDc4cYC
+ xGjHvUVrf9zwCHCT2wHhgAWhlnQOAiAT/9JDW5xKrWP4jCL4tK9v1AQtGhk1aIa3
+ xMuzjBbYsw==
+ -----END SIGNED MESSAGE-----
+
+feat(shim): present a repository-scoped credential to the lifecycle listener (#266)
+
+#264 put a repository-scoped credential in front of the six identity-lifecycle
+tools. Two callers reach that listener and neither presented one: measured,
+`grep -c Authorization` returned 0 in both, while the deployment already ran
+with the listener split on. Deploying the check as it stood would have answered
+every registration with 401 — no agent could register, and so nothing could be
+signed either. This is the arrangement that makes #264 shippable.
+
+WHO MINTS. Each caller, for itself, by running the shipped
+`innsegl admin-credential mint` inside a throwaway container that mounts the
+deployment's private signing key read-only, has no network, no writable root
+filesystem and no privilege escalation, and exits. `--user 0:0` because the
+one-shot leaves that key 0400 and root-owned, which is the point: the image's
+own 1000:1000 cannot read it, so neither could a compromised innsegl-mcp, which
+does not mount the volume at all. Nothing copies the key onto the host and
+neither script ever sees it; the only value that crosses is the credential, on
+a pipe. A long-lived minter would be a standing mint oracle for anything that
+could reach it — a container that lives 0.23s is reachable only through the
+container runtime's API, which already carried the privilege to mount that
+volume.
+
+HOW OFTEN: never, unless the listener refuses. The first attempt of a process
+carries no credential, and a 401 — nothing else — mints one and repeats the
+same call exactly once. So a deployment that enforces nothing makes no 401,
+mints nothing, and behaves byte-for-byte as before. Single-listener mode is
+unchanged by construction rather than by a mode someone has to set correctly,
+and there is no probe, no health read and no configuration to get wrong.
+
+WHAT EXPIRY DOES: nothing special, which is the point. The credential lives
+fifteen minutes and cannot be withdrawn, because a revocation list would be a
+dependency on the issuer being reachable. A run that registers, signs and
+retires can outlive the one it started with, so each call that is refused mints
+a fresh credential and repeats itself. No clock is read in either script and no
+`exp` is parsed: the server's own refusal is the only trigger, so there is
+never a second opinion about when a credential died.
+
+WHERE IT IS KEPT: one shell variable, for one process. Not exported, so no
+child inherits it; not written, so no marker, pointer or file holds it; not
+logged; and never in an argument vector — `ps` publishes the arguments of every
+process on this machine, and a bearer token there is replayable for the rest of
+its life. It reaches the shim's client on stdin and curl through a `-K`
+configuration on a pipe, which is also why it is not a here-document: most
+shells implement one as a temporary file.
+
+AND A REFUSAL SAYS WHAT TO DO. The listener answers every credential failure
+with one byte-identical sentence by design, because a distinguishable reason is
+an oracle — so the caller is the only place an operator can be told which
+command mints and against which key. A 401 with no remedy strands an agent
+holding finished work, which is the failure this exists to prevent.
+
+A STOP STILL NEVER BLOCKS. A stop that cannot authenticate warns and exits 0
+like every other stop failure; the run expires on its TTL, which is what the
+reaper is for. A blocked stop was measured producing nine repeated invocations.
+
+The shim reads origin's URL for one purpose and one only: a credential has to
+name a repository BEFORE the call it authorises, and the only tool that could
+answer that is behind the credential. Nothing else about E11 moved — no repo,
+branch, task or worktree reaches a tool argument from the shim, which case 14
+now asserts against every call the suite makes.
+
+Drove it: OPS-069 (a credential is presented, scoped to the repository, and
+only after a refusal), OPS-070 (one spent mid-run is re-minted per refused call
+rather than failing the caller), OPS-071 (the value reaches no marker, no file,
+no log line, no export and no argument vector), OPS-072 (a stop that cannot
+authenticate exits 0, and the refusal names the mint command and the key),
+OPS-073 (with nothing to authenticate, no request carries a credential and
+nothing is minted, over every case in both suites). OPS-056..068 were taken
+across other branches, so the block starts at the measured next free id.
+
+Proved against the running deployment with the shipped verifier in front of its
+admin listener: an unauthenticated handshake is refused 401, and a full cycle of
+session start, subagent registration, tool call, signature and retirement
+completes behind it.
+
+Agent-Identity: spiffe://innsegl.dev/agent/11daae65/4d41a2e0/run-01bd0f1d6abbdae1bd28e202b886e528
+Agent-Run: run-01bd0f1d6abbdae1bd28e202b886e528
+Agent-Task: 4d41a2e0
