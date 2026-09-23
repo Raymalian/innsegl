@@ -1,0 +1,57 @@
+tree a32a38dcd98607638af562ab00820dfa076ac120
+parent 986cd295a08dec23244200be9375a42435066813
+author Innsegl <agent@innsegl.invalid> 1789566402 +0000
+committer Innsegl <agent@innsegl.invalid> 1789566402 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEJQYJKoZIhvcNAQcCoIIEFjCCBBICAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICwDCCArwwggJhoAMCAQICFEu2l5NIyQDK1Vb2BIYcE1URZ3WGMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MTM0NjQyWhcNMjYwOTE2
+ MTM1NjQyWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOvnJBn/HbOUL7c5q
+ cYaKhEKxB4xG3qjFm8VHCwAfZ6OGBoq0f7E28zMDVPQHJvIf7KFtxDBrokTyA7zf
+ vPFUw6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUrUZSBR7WMGfW7HHrOTb5cZb04hgwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvNjlkNzIwMmIvNmRkYzYwNzEvcnVuLTZkNmUwZjE4YzExOWY4
+ OTMzNjkyMWJmMmQzYWUyNDRlMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvNjlk
+ NzIwMmIvNmRkYzYwNzEvcnVuLTZkNmUwZjE4YzExOWY4OTMzNjkyMWJmMmQzYWUy
+ NDRlMAoGCCqGSM49BAMCA0kAMEYCIQDX4iu6mmarRj+jpWaqNCZQV6QeoyMyCK6P
+ Z5Pf1Wh4bQIhANefQH5UP8lzYxm0YIs9qB3Rhi6yXW0SJBpVWKn0/RJJMYIBKzCC
+ AScCAQEwVDA8MRAwDgYDVQQKDAdJbm5zZWdsMSgwJgYDVQQDDB9pbm5zZWdsLmRl
+ diBGdWxjaW8gQ0EgKGNvbXBvc2UpAhRLtpeTSMkAytVW9gSGHBNVEWd1hjALBglg
+ hkgBZQMEAgGgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJ
+ BTEPFw0yNjA5MTYxMzQ2NDJaMC8GCSqGSIb3DQEJBDEiBCB25oT9xgVrx9LGip2N
+ 5pBjE+CTy/2fxKf6Q41fPx6gkTAKBggqhkjOPQQDAgRIMEYCIQDg1BQO5q1KLeId
+ bfdPrfCuoC2gbn5U9oNXfNTMjLnungIhANziy44iKs7Lx3UQmlevwmpIdAfOZHvO
+ 2b7YVdWRi60x
+ -----END SIGNED MESSAGE-----
+
+docs(adr): ADR-0049 put the ownership question to the operator
+
+Status proposed. The system can say what kind of agent did what, and cannot
+say whose agent it was; ownership is inferred from the repository, which is
+circumstance rather than authority.
+
+Measured 2026-09-16: doc 02 mentions user, human, owner and operator zero
+times each; the grammar in doc 02 section 5 is
+spiffe://{trust_domain}/agent/{agent_type}/{task_id}/{run_id}; and
+internal/event/canonical.go holds SchemaVersion "2" against no release tag,
+so the major that ADR-0045 opened is still uncut.
+
+Both options are argued: a principal in the path, which makes attribution
+self-contained at the cost of protected surface 3 in doc 08 section 3 and of
+publishing customer identity to a transparency log against ADR-0041's
+reasoning; or the grammar unchanged with a separate append-only binding,
+which costs the self-contained half and leaves the ownership claim outside
+I5. The recommendation is the second, held lightly, with the binding as its
+own event type and an explicit line in doc 08 saying the ownership half is
+not covered by I5.
+
+The question that decides it is in the ADR: does a third party need to verify
+who owned the agent, or only that a specific agent produced a specific change.
+
+Agent-Identity: spiffe://innsegl.dev/agent/69d7202b/6ddc6071/run-6d6e0f18c119f89336921bf2d3ae244e
+Agent-Run: run-6d6e0f18c119f89336921bf2d3ae244e
+Agent-Task: 6ddc6071
