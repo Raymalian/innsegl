@@ -1,0 +1,63 @@
+tree 2377517f967cd96540c69df3620ae4092f924305
+parent f72bb4f5bd3e70ad5a8dd7c2c0e5aec89ae03a53
+author Innsegl <agent@innsegl.invalid> 1789590309 +0000
+committer Innsegl <agent@innsegl.invalid> 1789590309 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIwYJKoZIhvcNAQcCoIIEFDCCBBACAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvjCCArowggJhoAMCAQICFFofXH7Tdl/Oqjbg3JhLS5RLhyqOMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE2MjAyNTA5WhcNMjYwOTE2
+ MjAzNTA5WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE+P9oMeVsx64VJZqv
+ w6uKTtIGTI88k/olzK5xeRdGfkRbAxXAmcthtNATGvj1QeWWg8zZyV7gRqoDXoW5
+ UmLe9qOCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQUtbNWA53Zwb0cPlnQT3zADfOfXFwwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvYTgxY2FiNWEvcnVuLWFkZGFlZDYwZmQwMmU0
+ OTUxMmRiNTRmOGYyMmM3YmY0MCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvYTgxY2FiNWEvcnVuLWFkZGFlZDYwZmQwMmU0OTUxMmRiNTRmOGYyMmM3
+ YmY0MAoGCCqGSM49BAMCA0cAMEQCIEWgzfR1zSnmP8XLmxmYqr73sMJlXGgho3Gs
+ sYBiFCvxAiA0hQ9j+gUyVKEaAbmwy9zw086L8ZW2Wt1kuMaIv/VyHjGCASswggEn
+ AgEBMFQwPDEQMA4GA1UECgwHSW5uc2VnbDEoMCYGA1UEAwwfaW5uc2VnbC5kZXYg
+ RnVsY2lvIENBIChjb21wb3NlKQIUWh9cftN2X86qNuDcmEtLlEuHKo4wCwYJYIZI
+ AWUDBAIBoGkwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUx
+ DxcNMjYwOTE2MjAyNTA5WjAvBgkqhkiG9w0BCQQxIgQg16WL2iVaC5J3MOWdGGIx
+ z5VslNVKn3gq8qwi9L1EZpcwCgYIKoZIzj0EAwIESDBGAiEAgGLVFbVhuN8PRgiJ
+ H3QuQsY72ZspQr4TBNLJ19bIktQCIQD6CkKcfo6PQLHP2cjK/MLISui4vwQ2/3/R
+ ShNd1b0PpQ==
+ -----END SIGNED MESSAGE-----
+
+fix(mcp): address a linked worktree across the mount boundary (#215, #241)
+
+describe_workspace refused a linked worktree. `git worktree list` does not
+answer in one namespace: asked from the main tree it echoes the path it was
+handed, and asked from a linked worktree it answers the path RECORDED when
+that worktree was created, which is the host's. The tool compared the host's
+spelling of the repository against the mount's spelling of the tree, got a
+path made of `..` segments, and refused.
+
+Measured against the deployment before the fix:
+
+  /projects/<name>/.claude/worktrees/<id> is outside the repository at
+  <host-checkout>/<name>
+
+The refusal was correct about the paths and wrong about the world, and what
+it refused was an agent's own worktree, which is the arrangement agents
+actually run in.
+
+Symlink resolution is not the answer, and was already tried: relativeWorktree
+resolves both sides, which is what fixed the macOS /var vs /private/var case
+it was written for. It cannot reach this one. The two roots are separate bind
+mounts of one directory, so neither is a symlink of the other.
+
+So the translation the tool ALREADY owns for `cwd` is applied to git's answer
+too. A repository under neither root is refused by name rather than guessed:
+a guessed repository is the wrong identifier in an append-only record.
+
+Driven by MCP-071, MCP-072, MCP-073 and MCP-074, written first and observed
+failing. MCP-072 reproduced the deployment's refusal verbatim.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/a81cab5a/run-addaed60fd02e49512db54f8f22c7bf4
+Agent-Run: run-addaed60fd02e49512db54f8f22c7bf4
+Agent-Task: a81cab5a
