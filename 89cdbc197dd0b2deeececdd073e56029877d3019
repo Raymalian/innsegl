@@ -1,0 +1,26 @@
+tree eda992abae1aa2de0b186337ed259c1f727928af
+parent 6864932c4f777f5c968830a763ae5c928f3ebabc
+parent 3a34f8efd142ad973a33db3af0ff56d2e9e57008
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789630917 +0200
+committer GitHub <noreply@github.com> 1789630917 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqq5nFCRC1aQ7uu5UhlAAA5hEQAFaBRQKqxmbhoTqbeJRdDOtG
+ t1oJTion90RwmWVwa8mNb6v3TC2Kq8GIbLPqaDPnWjsQgrE9tKgO/XZHyj36A7F3
+ HRF1OjaygPycdbhzYyhdaZDmumiG45nQcPPHyU7J7Urt9C7hTyHFbeTdvmyhaJem
+ DVZ/gREVgtDjDRQo5kM9ik/5LFmQRqS5JhKWyJ0ZpNU8wIsgFAfr/bzuHgmjEyW4
+ AzwSEoAkkC4gooBy2rIJgGqL1+00renJWaLDwpXW/lMwsEq6y8b/na/c3mqLwxwG
+ wxP/RRcbx3pb/6D+dpPntZfV7dcYcYfeoA9nI2QhkSBc9YoeWJ8y5/P//gc7r/Ef
+ +u6SVSukCo5KrWETCx5ADcLDvd/oWDx65VI3/AhV/usSnxG2ZbphH93c6CYrAtRS
+ FsX407o1Nn/Qawbpf6+JfwBKFkcf+65+TZV0EicKiUsk/FOcTCh5d8AwEVPBus7R
+ VmXc6toTKNAvkv3QX33lnFM4mLuNW1u6HrjUgdd3sYagU2AHC2YT3ZFvT7aPVeib
+ IaPse1t9cuQ//gnAQLYz914fUtIAZHMzdvW0MoQbrd7ZKYW0zVXWd2CdQT6/Mwn/
+ DCGVLUsNpRmj2r8PsfbKosXCWM8wgJW5FsPw3iV5nucws0+BHpXAC4rh6eo8i1Bc
+ LLWRcBlFZcO9q/iavQbq
+ =Up65
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #247 from Raymalian/fix/rm150-rekor-tlog-pin
+
+Read the transparency log's pin from the repository, not the worktree
