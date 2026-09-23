@@ -1,0 +1,71 @@
+tree 5a12206ef66bbbb0b306d1916be656e9af1828f7
+parent e4efc3e5e24f90c3c35bf3add42f96d930ca2772
+author Innsegl <agent@innsegl.invalid> 1789628880 +0000
+committer Innsegl <agent@innsegl.invalid> 1789628880 +0000
+gpgsig -----BEGIN SIGNED MESSAGE-----
+ MIIEIgYJKoZIhvcNAQcCoIIEEzCCBA8CAQExDTALBglghkgBZQMEAgEwCwYJKoZI
+ hvcNAQcBoIICvzCCArswggJhoAMCAQICFDkpVRNl/pCU2jRlU+VRprOJ9ymTMAoG
+ CCqGSM49BAMCMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wu
+ ZGV2IEZ1bGNpbyBDQSAoY29tcG9zZSkwHhcNMjYwOTE3MDcwODAwWhcNMjYwOTE3
+ MDcxODAwWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERHkTJhIlXz5SWYoi
+ LkUxzeNJDr6EbuCfFgaSk8QUGNB+HTFSPjQS2MTFIvu+DzQN17S5hnIpu04z91db
+ hEhhA6OCAXswggF3MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+ AzAdBgNVHQ4EFgQU4Zhph8CYNAVnvOQ2U4fwJB/LgpUwHwYDVR0jBBgwFoAUb3/C
+ vqNp5G4Pn97adEhwdbBqJdwwXwYDVR0RAQH/BFUwU4ZRc3BpZmZlOi8vaW5uc2Vn
+ bC5kZXYvYWdlbnQvYThkM2YyZWQvYzY1MTkxNDEvcnVuLTU5MjJlZDQxYzAwZjZj
+ MmZhZTZhMGRlNWJmMmU1MTBmMCQGCisGAQQBg78wAQEEFmh0dHA6Ly9zcGlyZS1v
+ aWRjOjgwODAwJgYKKwYBBAGDvzABCAQYDBZodHRwOi8vc3BpcmUtb2lkYzo4MDgw
+ MGEGCisGAQQBg78wARgEUwxRc3BpZmZlOi8vaW5uc2VnbC5kZXYvYWdlbnQvYThk
+ M2YyZWQvYzY1MTkxNDEvcnVuLTU5MjJlZDQxYzAwZjZjMmZhZTZhMGRlNWJmMmU1
+ MTBmMAoGCCqGSM49BAMCA0gAMEUCIQDEDN5hTy0AUBHX90TOLkWzUaxaxxIP+7Z6
+ GelpRTZzeQIgQDaTN1kSwrbvL9PJ86m9b3o+cHGbNcLgNUoM5bxxfBQxggEpMIIB
+ JQIBATBUMDwxEDAOBgNVBAoMB0lubnNlZ2wxKDAmBgNVBAMMH2lubnNlZ2wuZGV2
+ IEZ1bGNpbyBDQSAoY29tcG9zZSkCFDkpVRNl/pCU2jRlU+VRprOJ9ymTMAsGCWCG
+ SAFlAwQCAaBpMBgGCSqGSIb3DQEJAzELBgkqhkiG9w0BBwEwHAYJKoZIhvcNAQkF
+ MQ8XDTI2MDkxNzA3MDgwMFowLwYJKoZIhvcNAQkEMSIEIEhoPRja/bHjygEUWd3t
+ a43LlRZvI4o6eVjt+edoENaSMAoGCCqGSM49BAMCBEYwRAIgKI6GfkErir1QEqy3
+ WZrCQokZPvOuJrgm5CF0P2M1ulECIFsKccJwqo5JluJjJmxX6BWXLDiKItol9MP7
+ UPJABOBj
+ -----END SIGNED MESSAGE-----
+
+feat(deploy): the operator's side of CA custody, and the gate for it (#238)
+
+The store starts sealed and there is no unseal key in this repository, so there
+is an operator step and it cannot be automated away. #238: "A dev-mode store
+that unseals with a known key is theatre and must not be what ships." A store
+that unseals itself holds a key something on the machine can read, which is the
+property this rung exists to remove.
+
+The cost is stated rather than hidden: losing the unseal key loses the CA
+exactly as losing a key file would. That is not a regression from rungs 1 and 2
+— it is the same loss with a different custodian, and the custodian is now a
+person instead of a directory anything on the box can read.
+
+The CA is never handed the root token. `token` mints a short-lived one scoped
+to signing with the CA key and reading its public half, because a CA holding the
+root token could change its own permissions, which is the opposite of a custody
+boundary. The unseal key is read from the terminal with echo off and is never an
+argument: an argument is visible in a process listing to everything else on the
+machine.
+
+The selftest asserts what a pull request can break without anyone noticing: the
+default still uses the file CA and needs no store, the overlay leaves no fileca
+flag, and the CA does not mount the volume that holds ca.key. Its first case is
+the control — the overlay must actually change the CA — because an overlay that
+silently failed to apply would pass every "no key material" check by having
+changed nothing.
+
+MUTATION TESTING FOUND A FALSE PASS IN THIS FILE, which is the reason to trust
+the rest of it. The dev-mode rule was written for the shell spelling
+`server -dev` and compose writes exec form, ["server", "-dev"] — so a real
+dev-mode service passed the check. Both spellings are matched now. The rule also
+skips comment lines, for the reason the exemptions gate does: the overlay's own
+header explains at length that there is no dev mode, and a check that fired on
+the explanation would make the rule unmentionable.
+
+Driven by OPS-049 and OPS-051 at repository level; their live halves and
+OPS-050's issued certificate run against a deployment.
+
+Agent-Identity: spiffe://innsegl.dev/agent/a8d3f2ed/c6519141/run-5922ed41c00f6c2fae6a0de5bf2e510f
+Agent-Run: run-5922ed41c00f6c2fae6a0de5bf2e510f
+Agent-Task: c6519141
