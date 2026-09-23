@@ -1,0 +1,26 @@
+tree 7966cc562571f6899948f5099d51409d6671758f
+parent 986cd295a08dec23244200be9375a42435066813
+parent b31be4da95226b56a17964b9f369952bfefd6111
+author Kody Mike <66436734+KodyMike@users.noreply.github.com> 1789569330 +0200
+committer GitHub <noreply@github.com> 1789569330 +0200
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJqqqkyCRC1aQ7uu5UhlAAAnqQQADwI3Ro+rFUdvVRwDr0JnrWQ
+ Ld1StGgM48JxOUMaBxSTR/sLSFWHLQpjhWYCR8UOnfXmkNh0YvXp0HCeUu5AryCN
+ ViCfap+MVtu3Gn8MfJKpe3PDB06mH4nz7Wzr8gKHWQbd0+mqP2dl7NFw2nbBPOAp
+ Lu7p8H32qfhnV6Q088rjSO0vSOm+qg+532ArwjwVAgPTn8D0itpUGJWcZqQiV90z
+ aKw8gcO+Gfrm/THI7BHAy52dg4PY7ekAFfbkNqOcDJCW1K/+kOhWLx/MZlYpqJS/
+ ZIHUHo47qvUeWiJsRsFAUZjtjHobN723dKzyNQa53g+oTf3CtUmtd31HMpEHpr40
+ oM8sJH6PrfUawahJH51Tw+FM3cy/ls6mbT1jcZKmp01dJ+AxQ9dbWSyO8g94CjT9
+ b3+Ajsmwq/f2QLb1+Q0QelOYJKw7fQKQWbZLwhVGcA2gAeHjHmwFRvosO1tXhgr3
+ 7bFz7vV8RI65aUGtAtEv6bAQRywQX6Viq5I8QVtJaXJmaNLd/Pt8/lnmhbHxUZ7N
+ j+s7AyueGfjAzVR8+cnDPuG1jRBfKl3JmruADYXVWtdEVpwQOyPEUgLp2c9LTKwH
+ sW0fAcjBkxKJ5zSscfw8jF0DzMo282oilv5qQi62U/y3neCjJwhCV6LtcLExEp6b
+ 5/41jVS0CS/KK4jfNvu7
+ =L3/S
+ -----END PGP SIGNATURE-----
+ 
+
+Merge pull request #234 from Raymalian/fix/rm145-merge-patchid
+
+Give a merge commit its first-parent patch id, and stop claiming nothing was committed
