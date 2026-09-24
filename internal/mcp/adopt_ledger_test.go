@@ -141,12 +141,12 @@ func TestADP009AStagedDeletionCannotBeAdopted(t *testing.T) {
 // exits non-zero.
 func fakeGitFailing(t *testing.T, fail string) string {
 	t.Helper()
-	real, err := exec.LookPath("git")
+	gitBin, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("no git")
 	}
 	p := filepath.Join(t.TempDir(), "git")
-	script := "#!/bin/sh\ncase \"$*\" in *'" + fail + "'*) echo refused >&2; exit 42 ;; esac\nexec " + real + " \"$@\"\n"
+	script := "#!/bin/sh\ncase \"$*\" in *'" + fail + "'*) echo refused >&2; exit 42 ;; esac\nexec " + gitBin + " \"$@\"\n"
 	if err := os.WriteFile(p, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
