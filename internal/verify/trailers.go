@@ -39,6 +39,8 @@ const (
 	trailerAgentIdentity = "Agent-Identity"
 	trailerAgentRun      = "Agent-Run"
 	trailerAgentTask     = "Agent-Task"
+	// ADR-0051: present only on a commit that adopts a dead run's work.
+	trailerAgentAdoptedRun = "Agent-Adopted-Run"
 )
 
 // Claim is what a commit's trailers assert. It is claimed, never established.
@@ -46,13 +48,17 @@ type Claim struct {
 	Identity string `json:"identity,omitempty"`
 	Run      string `json:"run,omitempty"`
 	Task     string `json:"task,omitempty"`
+	// AdoptedRun is the dead run an adopting commit names (ADR-0051). It is
+	// a claim the three checks cannot test by themselves; the content check
+	// holds it to the ledger's run_adopted.
+	AdoptedRun string `json:"adopted_run,omitempty"`
 }
 
 // Present reports whether the commit makes any attribution claim at all. Any
 // one of the three is a claim: a commit carrying only Agent-Run is malformed,
 // but it is not unattributed, and VER-006's distinction turns on that.
 func (c Claim) Present() bool {
-	return c.Identity != "" || c.Run != "" || c.Task != ""
+	return c.Identity != "" || c.Run != "" || c.Task != "" || c.AdoptedRun != ""
 }
 
 // disagreesWith reports how the claim's own three values fail to agree with
@@ -125,7 +131,7 @@ func ReadClaim(message string) (Claim, error) {
 		found[key] = append(found[key], value)
 	}
 	var c Claim
-	for _, key := range []string{trailerAgentIdentity, trailerAgentRun, trailerAgentTask} {
+	for _, key := range []string{trailerAgentIdentity, trailerAgentRun, trailerAgentTask, trailerAgentAdoptedRun} {
 		values := found[key]
 		if len(values) > 1 {
 			return Claim{}, fmt.Errorf("the commit message carries %d %s trailers "+
@@ -139,6 +145,8 @@ func ReadClaim(message string) (Claim, error) {
 				c.Identity = values[0]
 			case trailerAgentRun:
 				c.Run = values[0]
+			case trailerAgentAdoptedRun:
+				c.AdoptedRun = values[0]
 			default:
 				c.Task = values[0]
 			}
@@ -164,7 +172,7 @@ func quoteAll(values []string) []string {
 // acceptance test.
 func trailerOf(line string) (key, value string, ok bool) {
 	trimmed := strings.TrimLeft(line, " \t")
-	for _, k := range []string{trailerAgentIdentity, trailerAgentRun, trailerAgentTask} {
+	for _, k := range []string{trailerAgentIdentity, trailerAgentRun, trailerAgentTask, trailerAgentAdoptedRun} {
 		if len(trimmed) < len(k) || !strings.EqualFold(trimmed[:len(k)], k) {
 			continue
 		}

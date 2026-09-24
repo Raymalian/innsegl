@@ -69,10 +69,11 @@ func (c contentSource) RunsForPatchID(
 	out := make([]verify.ContentRecord, 0, len(records))
 	for _, r := range records {
 		out = append(out, verify.ContentRecord{
-			RunID:     r.RunID,
-			PatchID:   r.PatchID,
-			CommitSHA: r.CommitSHA,
-			EventID:   r.EventID,
+			RunID:      r.RunID,
+			PatchID:    r.PatchID,
+			CommitSHA:  r.CommitSHA,
+			EventID:    r.EventID,
+			AdoptedRun: r.AdoptedRun,
 		})
 	}
 	return out, nil

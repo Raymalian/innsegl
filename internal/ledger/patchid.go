@@ -59,7 +59,10 @@ func RunsForPatchID(ctx context.Context, pool *pgxpool.Pool, patchID string) ([]
 		`SELECT canonical FROM innsegl.events
 		  WHERE event_type = ANY($1)
 		  ORDER BY chain_position`,
-		[]string{event.EventTypeCommitIntent, event.EventTypeCommitRecorded})
+		// run_adopted too (ADR-0051): an intent names its adoption by event
+		// id, and the adoption names the dead run. It always precedes the
+		// intent that names it, so one pass in chain order resolves it.
+		[]string{event.EventTypeCommitIntent, event.EventTypeCommitRecorded, event.EventTypeRunAdopted})
 	if err != nil {
 		return nil, classify("runs_for_patch_id", err)
 	}
@@ -67,6 +70,7 @@ func RunsForPatchID(ctx context.Context, pool *pgxpool.Pool, patchID string) ([]
 
 	var out []ContentRecord
 	seen := map[string]int{}
+	adoptedFrom := map[string]string{}
 	for rows.Next() {
 		var canonical []byte
 		if serr := rows.Scan(&canonical); serr != nil {
@@ -75,6 +79,12 @@ func RunsForPatchID(ctx context.Context, pool *pgxpool.Pool, patchID string) ([]
 		record, derr := decode(canonical)
 		if derr != nil {
 			return nil, derr
+		}
+		if record[event.FieldEventType] == event.EventTypeRunAdopted {
+			id, _ := record[event.FieldEventID].(string)        //nolint:errcheck // closed schema, see below
+			dead, _ := record[event.FieldAdoptedRunID].(string) //nolint:errcheck // closed schema, see below
+			adoptedFrom[id] = dead
+			continue
 		}
 		if got, isString := record[event.FieldPatchID].(string); !isString || got != patchID {
 			continue
@@ -107,19 +117,26 @@ func RunsForPatchID(ctx context.Context, pool *pgxpool.Pool, patchID string) ([]
 		// An intent alone is still an answer: it proves the change was claimed
 		// when the chain crashed before the signature (IP §6.5's A -> B
 		// window). It is the fallback, not the winner.
+		// Only an intent names its adoption; the recorded event that follows
+		// it inherits the answer through the merge below.
+		adoption, _ := record[event.FieldAdoptionEventID].(string) //nolint:errcheck // see above
 		if i, ok := seen[runID]; ok {
 			if out[i].CommitSHA == "" && sha != "" {
 				out[i].CommitSHA = sha
 				out[i].EventID = eventID
 			}
+			if out[i].AdoptedRun == "" && adoption != "" {
+				out[i].AdoptedRun = adoptedFrom[adoption]
+			}
 			continue
 		}
 		seen[runID] = len(out)
 		out = append(out, ContentRecord{
-			RunID:     runID,
-			PatchID:   patchID,
-			CommitSHA: sha,
-			EventID:   eventID,
+			RunID:      runID,
+			PatchID:    patchID,
+			CommitSHA:  sha,
+			EventID:    eventID,
+			AdoptedRun: adoptedFrom[adoption],
 		})
 	}
 	return out, rows.Err()
@@ -136,6 +153,9 @@ type ContentRecord struct {
 	PatchID   string
 	CommitSHA string
 	EventID   string
+	// AdoptedRun is the dead run this change was adopted from (ADR-0051), or
+	// "" for a run's own work.
+	AdoptedRun string
 }
 
 // HoldsAnyPatchID reports whether this chain has ever recorded a change

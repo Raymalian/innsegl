@@ -450,10 +450,11 @@ func (v *Verifier) attributeByContent(ctx context.Context, repo string, c commit
 		return
 	}
 	content := checkContent(ctx, contentInput{
-		gitPath: v.cfg.GitPath,
-		repo:    repo,
-		sha:     c.SHA,
-		runID:   claim.Run,
+		gitPath:    v.cfg.GitPath,
+		repo:       repo,
+		sha:        c.SHA,
+		runID:      claim.Run,
+		adoptedRun: claim.AdoptedRun,
 	}, v.cfg.Content)
 	rep.Content = &content
 }
