@@ -31,7 +31,7 @@ import (
 // Entries are never removed. A version dropped from this slice is a version
 // whose records this build no longer promises to read, and doc 08 has no
 // process for that because there is no such thing.
-var releasedSchemaVersions = []string{"1", "2"}
+var releasedSchemaVersions = []string{"1", "2", "3"}
 
 // TestSER024EveryReleasedVersionHasAFixtureSetThatStillVerifies is the gate.
 //

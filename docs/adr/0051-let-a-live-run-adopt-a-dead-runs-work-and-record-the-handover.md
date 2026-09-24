@@ -1,6 +1,6 @@
 # ADR-0051: Let a live run adopt a dead run's work, and record the handover as an event
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-24
 - Deciders: the operator
 
@@ -66,12 +66,16 @@ over.
      moment (`retired`, `lapsed` or `abandoned`). Nothing the caller says. A
      reason the ledger cannot know, such as a usage limit, belongs in the
      commit message, as prose.
-   - `claim`: one line per path, sorted by path, `<sha256 of the bytes>
-     <event_hash of the tool_call that produced them> <path>`. It is what was
-     handed over and where each part of it was proved.
+   - `payload_digest`: the digest of the **claim**, a document with one line
+     per path, sorted by path, `<sha256 of the bytes> <event_hash of the
+     tool_call that produced them> <path>`. It is what was handed over and
+     where each part of it was proved. The claim is stored on the body volume
+     under that digest, as a tool call's body is, and not in the event: E4
+     keeps payloads out of events, and a claim over many paths would pass the
+     4 KB cap (LED-011).
 
-   `commit_intent` for the same commit carries the `run_adopted` event's hash,
-   so the two cannot be separated.
+   `commit_intent` for the same commit carries the `run_adopted` event's id as
+   `adoption_event_id`, so the two cannot be separated.
 
 4. **A new trailer, `Agent-Adopted-Run: <run_id>`**, written by the server only,
    beside the three existing ones. A caller that supplies it is refused, as a
@@ -108,16 +112,16 @@ over.
 
 ## Consequences
 
-- **Protected surfaces change.** A new event type and its member names, a new
+- **Protected surfaces change.** A new event type and two member names (`adopted_run_id`,
+  `adopted_run_state`) plus `adoption_event_id` on `commit_intent`, a new
   trailer key, and a new `sign_commit` argument (additive; no tool is renamed
   and no error class is added: refusals use `INVARIANT_VIOLATION`). Doc 08
   allows protected changes only with a new `schema_version` (3), golden
   fixtures for it, a `schema_migrated` attestation at the cutover, and this ADR.
-  Doc 08 ties that to a major release. Whether a pre-1.0 release may carry it
-  is the operator's call, not this ADR's.
-- **Doc 02 is not edited here.** Whether it gains an errata line pointing at
-  this ADR, or this ADR alone carries the new event, is the same question #270
-  asks, and it is the operator's.
+  Doc 08 ties that to a major release; the operator accepted it for a
+  pre-1.0 release on 2026-09-24, with every other requirement of doc 08 kept.
+- **Doc 02 gains one errata line** pointing at this ADR. This ADR carries the
+  event's definition; doc 02's own text is not rewritten.
 - **Adoption has a window.** Bodies are kept 90 days and capped at 1 MiB. Past
   either, the bytes cannot be rebuilt and adoption is refused. The work can
   still be committed as the adopting run's own.

@@ -78,8 +78,8 @@ func typeCheckGate(t *testing.T, serializerVersion, schemaVersion string) error 
 // TestSER005UnregisteredVersionIsRejected is SER-005: a version tag with no
 // registered spec cannot serialize anything.
 func TestSER005UnregisteredVersionIsRejected(t *testing.T) {
-	if _, err := LookupFormat("3"); !errors.Is(err, ErrUnregisteredSerializer) {
-		t.Errorf(`LookupFormat("3"): err = %v, want %v`, err, ErrUnregisteredSerializer)
+	if _, err := LookupFormat("4"); !errors.Is(err, ErrUnregisteredSerializer) {
+		t.Errorf(`LookupFormat("4"): err = %v, want %v`, err, ErrUnregisteredSerializer)
 	}
 	if _, err := LookupFormat(""); !errors.Is(err, ErrUnregisteredSerializer) {
 		t.Errorf(`LookupFormat(""): err = %v, want %v`, err, ErrUnregisteredSerializer)

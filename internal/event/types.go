@@ -48,6 +48,9 @@ const (
 	// carrying the new version. Schema "2" and later -- it is the record OF
 	// the bump, so it cannot exist under the version it superseded.
 	EventTypeSchemaMigrated = "schema_migrated"
+	// EventTypeRunAdopted: a live run took over the uncommitted work a dead
+	// run left, with proof of which bytes (ADR-0051). Schema "3" and later.
+	EventTypeRunAdopted = "run_adopted"
 	// EventTypeUnattributedSignatureDetected: alert, a trust-domain signature
 	// with no intent.
 	EventTypeUnattributedSignatureDetected = "unattributed_signature_detected"
@@ -99,6 +102,19 @@ const (
 	FieldFromSchemaVersion = "from_schema_version"
 	FieldToSchemaVersion   = "to_schema_version"
 	FieldCutoverPosition   = "cutover_position"
+
+	// Schema 3's members (ADR-0051). Protected strings from the moment they
+	// ship.
+	//
+	// FieldAdoptedRunID is the dead run whose work was taken over.
+	FieldAdoptedRunID = "adopted_run_id"
+	// FieldAdoptedRunState is the ledger's own word for how that run ended,
+	// read at the moment of adoption: retired, lapsed or abandoned. Never
+	// active, and never anything the caller says.
+	FieldAdoptedRunState = "adopted_run_state"
+	// FieldAdoptionEventID on a commit_intent names the run_adopted event the
+	// commit carries out, so the two cannot be separated.
+	FieldAdoptionEventID = "adoption_event_id"
 )
 
 // runScope says whether an event type must name the run it belongs to.
@@ -165,6 +181,15 @@ func optionalV2(name string, check func(string, any) error) memberSpec {
 	return memberSpec{name: name, required: false, check: check, since: "2"}
 }
 
+// requiredV3 and optionalV3 are the same, for a member schema 3 introduced.
+func requiredV3(name string, check func(string, any) error) memberSpec {
+	return memberSpec{name: name, required: true, check: check, since: "3"}
+}
+
+func optionalV3(name string, check func(string, any) error) memberSpec {
+	return memberSpec{name: name, required: false, check: check, since: "3"}
+}
+
 // presentIn reports whether this member exists at all in the given version.
 func (m memberSpec) presentIn(version string) bool {
 	if m.since == "" {
@@ -193,6 +218,7 @@ var typeSpecOrder = []string{
 	EventTypeCommitIntentExpired,
 	EventTypeRunRetired,
 	EventTypeRunExpired,
+	EventTypeRunAdopted,
 	EventTypeSchemaMigrated,
 	EventTypeUnattributedSignatureDetected,
 	EventTypeLedgerDriftDetected,
@@ -253,6 +279,9 @@ var typeSpecs = map[string]typeSpec{
 			// ADR-0047: the change's own identity, which survives the rebase
 			// that destroys the signature over the commit object.
 			requiredV2(FieldPatchID, checkPatchID),
+			// ADR-0051: present only on the intent that carries out an
+			// adoption.
+			optionalV3(FieldAdoptionEventID, checkEventIDValue),
 		},
 	},
 	EventTypeCommitRecorded: {
@@ -282,6 +311,17 @@ var typeSpecs = map[string]typeSpec{
 	EventTypeRunExpired: {
 		eventType: EventTypeRunExpired,
 		runScope:  runRequired,
+	},
+	EventTypeRunAdopted: {
+		eventType: EventTypeRunAdopted,
+		since:     "3",
+		// The ADOPTING run: the live one that signs. The dead run is a member,
+		// because it is what the event is about and not who did it.
+		runScope: runRequired,
+		members: []memberSpec{
+			requiredV3(FieldAdoptedRunID, checkParentRunID),
+			requiredV3(FieldAdoptedRunState, checkAdoptedRunState),
+		},
 	},
 	EventTypeSchemaMigrated: {
 		eventType: EventTypeSchemaMigrated,

@@ -1,0 +1,17 @@
+{
+  "ts": "2026-08-28T09:14:03.201Z",
+  "task_ref": "JIRA-118",
+  "spiffe_id": "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-43",
+  "source": "mcp",
+  "schema_version": "3",
+  "run_id": "run-43",
+  "repo": "github.com/acme/api",
+  "prev_event_hash": "sha256:6754e3151a2e7b1c0bcc1e373d7ea694121b309a2bd19a7a20cc610316d78120",
+  "parent_run_id": "run-42",
+  "idempotency_key": "reg-8f21c-sub",
+  "event_type": "run_registered",
+  "event_id": "01a047a5-cc41-7c45-86fd-a88c8c2b5399",
+  "chain_position": 15,
+  "branch": "dev/rm115-caller-split",
+  "agent_type": "fix-ci"
+}

@@ -66,7 +66,7 @@ maintainer ask "why is it like this?"
 | [0041](0041-pseudonymise-agent-type-and-task-ref-in-the-spiffe-id-and-resolve-through-the-ledger-row.md) | Pseudonymise `agent_type` and `task_ref` in the SPIFFE ID, and resolve them through the ledger row rather than a key | accepted | 2026-09-02 |
 | [0042](0042-answer-anyone-can-verify-with-a-public-rekor-anchor-over-a-self-hosted-fulcio-root.md) | Answer #117's "anyone can verify" with a public Rekor anchor over a self-hosted Fulcio root | accepted | 2026-09-05 |
 | [0043](0043-enforce-the-branch-floor-with-gobco-as-a-separate-rerunning-ci-job.md) | Enforce IP §2's 100% branch floor with gobco, in a job that reruns the tests | accepted | 2026-09-05 |
-| [0051](0051-let-a-live-run-adopt-a-dead-runs-work-and-record-the-handover.md) | Let a live run adopt a dead run's work, and record the handover as an event | proposed | 2026-09-24 |
+| [0051](0051-let-a-live-run-adopt-a-dead-runs-work-and-record-the-handover.md) | Let a live run adopt a dead run's work, and record the handover as an event | accepted | 2026-09-24 |
 
 ## Open items
 
