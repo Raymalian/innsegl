@@ -73,3 +73,27 @@ func TestADP012TheContentCheckHoldsTheTrailerToTheLedger(t *testing.T) {
 		t.Errorf("a plain change = %s, %q", got.Result, got.AdoptedRun)
 	}
 }
+
+// ADP-016 — the rendered report names an adoption, and says how far it is
+// proved. The three checks prove who signed; the adopted run is a claim until
+// the ledger's run_adopted confirms it, and the report must not read one as
+// the other.
+func TestADP016TheReportNamesTheAdoptionAndHowFarItIsProved(t *testing.T) {
+	base := Report{CommitSHA: "c", Verdict: VerdictVerified, Claim: Claim{Run: "run-live", AdoptedRun: "run-dead"}}
+
+	claimed := Render(base)
+	if !strings.Contains(claimed, "adopted from") || !strings.Contains(claimed, "run-dead") ||
+		!strings.Contains(claimed, "not checked") {
+		t.Errorf("an unconfirmed adoption is not shown as a claim:\n%s", claimed)
+	}
+
+	confirmed := base
+	confirmed.Content = &ContentAttribution{Result: Verified, AdoptedRun: "run-dead"}
+	if out := Render(confirmed); !strings.Contains(out, "confirmed by the ledger") {
+		t.Errorf("a confirmed adoption does not say so:\n%s", out)
+	}
+
+	if out := Render(Report{CommitSHA: "c", Verdict: VerdictVerified}); strings.Contains(out, "adopted from") {
+		t.Errorf("a commit adopting nothing mentions adoption:\n%s", out)
+	}
+}
