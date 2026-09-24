@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/ledger"
 )
 
 // ADOPTION'S PROOF — ADR-0051 decision 2, #298 (RM-187).
@@ -262,11 +263,51 @@ func (c *signCommitService) planAdoption(ctx context.Context, runID, adopted, wo
 		}
 		claim.Paths = append(claim.Paths, adoptionClaimPath{Path: name, SHA256: p.SHA256, ToolCall: p.ToolCall})
 	}
+	if serr := c.refuseSpent(ctx, runID, adopted, claim); serr != nil {
+		return nil, serr
+	}
 	body, err := adoptionMarshal(claim)
 	if err != nil {
 		return nil, Errorf(ClassInvariantViolation, runID, "the adoption claim cannot be encoded: %v", err)
 	}
 	return &adoptionPlan{adoptedRun: adopted, state: state, claim: body, digest: event.Digest(body)}, nil
+}
+
+// refuseSpent is ADR-0051 decision 6: bytes of a path already adopted from
+// this run and committed are spent. Only a COMMITTED adoption spends anything:
+// one whose commit never landed failed, and the work is still there to adopt.
+// A committed claim that cannot be read refuses, because what it spent cannot
+// be known.
+func (c *signCommitService) refuseSpent(ctx context.Context, runID, adopted string, claim adoptionClaim) error {
+	prior, err := c.adoption.Adoptions(ctx, adopted)
+	if err != nil {
+		return Errorf(ClassLedgerUnavailable, runID,
+			"the ledger could not say whether run %q's work was adopted before: %v", adopted, err)
+	}
+	for _, p := range prior {
+		if !p.Committed {
+			continue
+		}
+		raw, rerr := os.ReadFile(filepath.Join(c.adoption.BodyDir(), filepath.Base(p.RunID),
+			strings.TrimPrefix(p.PayloadDigest, event.HashPrefix)+observeBodyExt))
+		var spent adoptionClaim
+		if rerr != nil || event.Digest(raw) != p.PayloadDigest || json.Unmarshal(raw, &spent) != nil {
+			return Errorf(ClassInvariantViolation, runID,
+				"run %q's work was adopted and committed by run %s (%s), and that claim cannot "+
+					"be read, so what it spent cannot be known", adopted, p.RunID, p.EventID)
+		}
+		for _, was := range spent.Paths {
+			for _, now := range claim.Paths {
+				if was.Path == now.Path && was.SHA256 == now.SHA256 {
+					return Errorf(ClassInvariantViolation, runID,
+						"%s with these bytes was already adopted from run %q and committed by run "+
+							"%s (%s); an adoption is spent by its commit (ADR-0051)",
+						now.Path, adopted, p.RunID, p.EventID)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // recordAdoption stores the claim and appends run_adopted, and returns its
@@ -294,10 +335,12 @@ func (c *signCommitService) recordAdoption(
 	return signCommitEventID(runID, record)
 }
 
-// RunEvents is the one ledger read adoption needs: every event carrying a
-// run_id, in chain order. *ledger.Store satisfies it.
+// RunEvents is the ledger reads adoption needs: every event carrying a
+// run_id, in chain order, and every earlier adoption of a run. *ledger.Store
+// satisfies it.
 type RunEvents interface {
 	EventsForRun(ctx context.Context, runID string) ([]event.Fields, error)
+	AdoptionsOf(ctx context.Context, adoptedRun string) ([]ledger.Adoption, error)
 }
 
 // LedgerAdoption is the shipped SignCommitAdoption: the run's state as every
@@ -366,6 +409,11 @@ func (a LedgerAdoption) StagedFiles(ctx context.Context, worktree string) (map[s
 		out[name] = b
 	}
 	return out, nil
+}
+
+// Adoptions is the ledger's AdoptionsOf.
+func (a LedgerAdoption) Adoptions(ctx context.Context, adoptedRun string) ([]ledger.Adoption, error) {
+	return a.Events.AdoptionsOf(ctx, adoptedRun)
 }
 
 // BodyDir is the body volume.

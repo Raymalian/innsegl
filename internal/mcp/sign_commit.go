@@ -20,6 +20,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/identity"
+	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/signing"
 )
 
@@ -326,6 +327,9 @@ type SignCommitAdoption interface {
 	StagedFiles(ctx context.Context, worktree string) (map[string][]byte, error)
 	// BodyDir is the body volume observe_tool_call writes to.
 	BodyDir() string
+	// Adoptions returns every earlier adoption of the run, by any run, and
+	// whether its commit was recorded (ADR-0051 decision 6).
+	Adoptions(ctx context.Context, adoptedRun string) ([]ledger.Adoption, error)
 }
 
 type SignCommitConfig struct {

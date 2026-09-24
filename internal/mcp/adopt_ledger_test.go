@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/ledger"
 )
 
 // ADP-009 — the shipped SignCommitAdoption, ADR-0051, #298.
@@ -38,6 +39,10 @@ type adpEvents struct {
 
 func (e adpEvents) EventsForRun(context.Context, string) ([]event.Fields, error) {
 	return e.events, e.err
+}
+
+func (e adpEvents) AdoptionsOf(context.Context, string) ([]ledger.Adoption, error) {
+	return []ledger.Adoption{{EventID: "e"}}, e.err
 }
 
 func adpGit(t *testing.T, dir string, args ...string) {
@@ -71,6 +76,9 @@ func TestADP009TheLedgerAdoptionReadsTheRunsStateAndItsEvents(t *testing.T) {
 	}
 	if a.BodyDir() != "/bodies" {
 		t.Errorf("BodyDir = %q", a.BodyDir())
+	}
+	if prior, perr := a.Adoptions(t.Context(), "run-41"); perr != nil || len(prior) != 1 {
+		t.Errorf("Adoptions = %v, %v; want the ledger's answer passed through", prior, perr)
 	}
 
 	active := a

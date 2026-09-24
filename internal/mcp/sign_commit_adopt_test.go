@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/signing"
 )
 
@@ -30,6 +31,13 @@ type scAdoption struct {
 	bodyDir string
 	staged  map[string][]byte
 	err     error
+	// prior are earlier adoptions of the same dead run (ADP-014).
+	prior    []ledger.Adoption
+	priorErr error
+}
+
+func (a *scAdoption) Adoptions(context.Context, string) ([]ledger.Adoption, error) {
+	return a.prior, a.priorErr
 }
 
 func (a *scAdoption) AdoptionEvidence(context.Context, string) (string, []event.Fields, error) {
@@ -254,4 +262,74 @@ type stagedErr struct{ *scAdoption }
 
 func (stagedErr) StagedFiles(context.Context, string) (map[string][]byte, error) {
 	return nil, errors.New("index unreadable")
+}
+
+// ADP-014 — an adoption is spent by its commit, ADR-0051 decision 6.
+//
+// The same bytes of the same path, from the same dead run, adopted and
+// committed once already, are refused. An earlier adoption whose commit never
+// landed spent nothing, and neither did one of different bytes.
+func TestADP014AnAdoptionIsSpentByItsCommit(t *testing.T) {
+	// priorClaim stores a claim for pkg/left.go under another run, as a
+	// committed or uncommitted adoption, and returns the adoption record.
+	priorClaim := func(t *testing.T, a *scAdoption, f *adpFixture, sha string, committed bool) ledger.Adoption {
+		t.Helper()
+		body, err := json.Marshal(adoptionClaim{AdoptedRunID: f.runID,
+			Paths: []adoptionClaimPath{{Path: "pkg/left.go", SHA256: sha, ToolCall: "sha256:x"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := event.Digest(body)
+		if err := observeWriteBody(a.bodyDir, "run-earlier", digest, body); err != nil {
+			t.Fatal(err)
+		}
+		return ledger.Adoption{EventID: "01a047b1-0000-7000-8000-000000000001", RunID: "run-earlier",
+			PayloadDigest: digest, Committed: committed}
+	}
+	leftSHA := strings.TrimPrefix(event.Digest([]byte("package pkg\n\n// left behind\n")), event.HashPrefix)
+
+	t.Run("the same bytes, adopted and committed before", func(t *testing.T) {
+		w, a, f := adoptWiring(t)
+		a.prior = []ledger.Adoption{priorClaim(t, a, f, leftSHA, true)}
+		_, err := w.call(t, adoptIn(f))
+		e := requireClassed(t, err, ClassInvariantViolation)
+		if !strings.Contains(e.Error(), "run-earlier") || !strings.Contains(e.Error(), "pkg/left.go") {
+			t.Errorf("err = %v, want it to name the path and the run that spent it", err)
+		}
+		if len(w.ledger.records) != 0 {
+			t.Error("a spent adoption was recorded again")
+		}
+	})
+
+	for _, tc := range []struct {
+		name      string
+		sha       string
+		committed bool
+	}{
+		{"an earlier adoption whose commit never landed", leftSHA, false},
+		{"an earlier adoption of different bytes", strings.Repeat("0", 64), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, a, f := adoptWiring(t)
+			a.prior = []ledger.Adoption{priorClaim(t, a, f, tc.sha, tc.committed)}
+			if _, err := w.call(t, adoptIn(f)); err != nil {
+				t.Errorf("refused: %v", err)
+			}
+		})
+	}
+
+	t.Run("an earlier committed claim that cannot be read", func(t *testing.T) {
+		w, a, f := adoptWiring(t)
+		a.prior = []ledger.Adoption{{EventID: "01a047b1-0000-7000-8000-000000000002", RunID: "run-earlier",
+			PayloadDigest: "sha256:" + strings.Repeat("9", 64), Committed: true}}
+		_, err := w.call(t, adoptIn(f))
+		requireClass(t, err, ClassInvariantViolation)
+	})
+
+	t.Run("the earlier adoptions cannot be read", func(t *testing.T) {
+		w, a, f := adoptWiring(t)
+		a.priorErr = errors.New("ledger down")
+		_, err := w.call(t, adoptIn(f))
+		requireClass(t, err, ClassLedgerUnavailable)
+	})
 }
