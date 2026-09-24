@@ -61,6 +61,10 @@ const (
 	TrailerAgentIdentity = "Agent-Identity"
 	TrailerAgentRun      = "Agent-Run"
 	TrailerAgentTask     = "Agent-Task"
+	// TrailerAgentAdoptedRun names the dead run whose work an adopting commit
+	// carries (ADR-0051). Present only on such a commit, and written by the
+	// server only. A protected string from schema 3.
+	TrailerAgentAdoptedRun = "Agent-Adopted-Run"
 )
 
 // coAuthoredBy is the trailer key this package never emits and never carries
@@ -76,7 +80,7 @@ const coAuthoredBy = "Co-authored-by"
 // protectedKeys is the set a caller's message may not already contain. A
 // second Agent-Identity line would leave a verifier choosing which of two
 // claims the certificate is supposed to match (IP §6.9, trailer spoofing).
-var protectedKeys = [...]string{TrailerAgentIdentity, TrailerAgentRun, TrailerAgentTask}
+var protectedKeys = [...]string{TrailerAgentIdentity, TrailerAgentRun, TrailerAgentTask, TrailerAgentAdoptedRun}
 
 // MaxAuthorEmailBytes is RFC 5321 §4.5.3.1.3's cap on a forward path.
 const MaxAuthorEmailBytes = 254
@@ -136,6 +140,9 @@ type Claim struct {
 	// given it (IP §4). It becomes the Agent-Task trailer and must lowercase
 	// to the task segment of Identity (ADR-0018 §6).
 	Task string
+	// AdoptedRun is the dead run whose work this commit carries, or "" for a
+	// commit of the claim's own work (ADR-0051).
+	AdoptedRun string
 }
 
 // Trailers returns the three trailers of the claim, in the order IP §1 lists
@@ -154,11 +161,22 @@ func (c Claim) Trailers() ([]Trailer, error) {
 		return nil, fmt.Errorf("%w: %s is %q, which does not lowercase to the task %q in %s",
 			ErrClaim, TrailerAgentTask, c.Task, taskID, TrailerAgentIdentity)
 	}
-	return []Trailer{
+	out := []Trailer{
 		{Key: TrailerAgentIdentity, Value: c.Identity},
 		{Key: TrailerAgentRun, Value: c.Run},
 		{Key: TrailerAgentTask, Value: c.Task},
-	}, nil
+	}
+	if c.AdoptedRun == "" {
+		return out, nil
+	}
+	if err := event.ValidateParentRunID(c.AdoptedRun); err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", ErrClaim, TrailerAgentAdoptedRun, err)
+	}
+	if c.AdoptedRun == c.Run {
+		return nil, fmt.Errorf("%w: %s names the signing run %q; a run cannot adopt its own work",
+			ErrClaim, TrailerAgentAdoptedRun, c.Run)
+	}
+	return append(out, Trailer{Key: TrailerAgentAdoptedRun, Value: c.AdoptedRun}), nil
 }
 
 // agentPathOf returns the task and run segments of a SPIFFE ID that has
