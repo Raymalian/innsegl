@@ -511,3 +511,25 @@ func TestVER016WhenPatchIDItselfFails(t *testing.T) {
 		}
 	})
 }
+
+// TestTheContentAnswerDoesNotCallTheOriginalARewrite.
+//
+// MEASURED on the live deployment, 2026-09-24: the content check answered for
+// a commit that was never rewritten, "This commit is a rewrite of that one",
+// naming itself as the original. The ledger's commit and the verified commit
+// are the same object; the answer must say so.
+func TestTheContentAnswerDoesNotCallTheOriginalARewrite(t *testing.T) {
+	dir := t.TempDir()
+	original, rebased := contentRebase(t, dir)
+	patchID := contentPatchID(t, dir, rebased)
+	ledger := &contentStub{records: []ContentRecord{{RunID: "run-42", PatchID: patchID, CommitSHA: rebased}}}
+	got := checkContent(t.Context(), contentInput{gitPath: "git", repo: dir, sha: rebased, runID: "run-42"}, ledger)
+	if got.Result != Verified || strings.Contains(got.Detail, "rewrite") {
+		t.Errorf("the recorded commit itself = %s: %s", got.Result, got.Detail)
+	}
+	// The control: a genuine rewrite is still called one.
+	ledger.records[0].CommitSHA = original
+	if got := checkContent(t.Context(), contentInput{gitPath: "git", repo: dir, sha: rebased, runID: "run-42"}, ledger); !strings.Contains(got.Detail, "rewrite") {
+		t.Errorf("a rewritten commit is no longer called one: %s", got.Detail)
+	}
+}

@@ -204,9 +204,13 @@ func checkContent(ctx context.Context, in contentInput, source ContentSource) Co
 				"attributed; the object it was signed as is not on the chain.", match.RunID)
 			return out
 		}
-		out.Detail = fmt.Sprintf("run %s recorded this exact change, as commit %s. "+
-			"This commit is a rewrite of that one: same content, different object.",
-			match.RunID, match.CommitSHA)
+		if match.CommitSHA == in.sha {
+			out.Detail = fmt.Sprintf("run %s recorded this exact change as this commit.", match.RunID)
+		} else {
+			out.Detail = fmt.Sprintf("run %s recorded this exact change, as commit %s. "+
+				"This commit is a rewrite of that one: same content, different object.",
+				match.RunID, match.CommitSHA)
+		}
 		if match.AdoptedRun != "" {
 			out.Detail += fmt.Sprintf(" The change is work run %s left when it died, "+
 				"adopted by run %s with proof on the chain (ADR-0051).", match.AdoptedRun, match.RunID)
