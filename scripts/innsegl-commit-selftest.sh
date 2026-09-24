@@ -834,6 +834,28 @@ else
 fi
 script_tool sign_commit ok "{\"commit_sha\":\"$HEAD_SHA\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
 
+# --- adopt_run: -a names a dead run whose work this commit carries (ADR-0051) --
+
+# 20. ADP-010. -a travels to sign_commit as adopt_run, and the signing run is still the
+#     pointer's own. Proving the work is the tool's job (ADP-008); what this
+#     script owes is to carry the name there unaltered.
+point_at "$LIVE"
+state "$LIVE" active
+drive -a run-deadbeef
+if [ "$STATUS" -eq 0 ] && called sign_commit "\"adopt_run\": \"run-deadbeef\"" "\"run_id\": \"$LIVE\""; then
+  ok "-a carries the adopted run to sign_commit as adopt_run, under the pointer's own run"
+else
+  bad "-a: status $STATUS, calls: $(cat "$CALLS")"
+fi
+
+# 21. And without -a the request carries no adopt_run at all: absent, not empty.
+drive
+if [ "$STATUS" -eq 0 ] && called sign_commit && ! grep '^sign_commit ' "$CALLS" | grep -q adopt_run; then
+  ok "a commit adopting nothing sends no adopt_run"
+else
+  bad "no -a: calls: $(cat "$CALLS")"
+fi
+
 echo
 echo "commit-selftest: $pass ok, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

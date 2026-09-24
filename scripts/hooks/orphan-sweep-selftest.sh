@@ -333,10 +333,12 @@ grep -q 'run-o1111111' "$WORK/err" || O_SAID=1
 grep -q 'tracked.txt' "$WORK/err" || O_SAID=1
 grep -q 'innsegl-commit -r' "$WORK/err" && O_SAID=1
 grep -q 'may not sign' "$WORK/err" || O_SAID=1
-grep -q '#269' "$WORK/err" || O_SAID=1
+# ADR-0051: the way to keep it is an adoption under a live run, and the report
+# names that command with this run in it.
+grep -q 'innsegl-commit -a run-o1111111' "$WORK/err" || O_SAID=1
 grep -q '#288' "$WORK/err" || O_SAID=1
 if [ "$O_SAID" -eq 0 ]; then
-  ok "OPS-106 and it says so on stderr, naming the run and a path, and that the run may not sign it"
+  ok "OPS-106 and it says so on stderr, naming the run and a path, that the run may not sign it, and how a live run adopts it"
 else
   bad "OPS-106 stderr: $(cat "$WORK/err")"
 fi

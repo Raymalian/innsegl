@@ -125,6 +125,7 @@ usage() {
   echo "                        [-r <run_id>]   sign under an existing run, do not retire it" >&2
   echo "                        [-w <path>]     a linked worktree of this repository" >&2
   echo "                        [-t <task>]     the task the run was registered with" >&2
+  echo "                        [-a <run_id>]   adopt a DEAD run's uncommitted work (ADR-0051)" >&2
   echo "       -p stages the path AND bounds the commit: an index holding anything" >&2
   echo "       you did not name is refused rather than signed under your identity." >&2
   exit 2
@@ -138,6 +139,7 @@ usage() {
 NL="$(printf '\nx')"; NL="${NL%x}"
 
 MESSAGE=""
+ADOPT_RUN=""
 RUN_GIVEN=""
 WORKTREE=""
 TASK_GIVEN=""
@@ -192,6 +194,11 @@ while [ $# -gt 0 ]; do
     #   invalid claim: Agent-Task is "3abfd36b", which does not lowercase to
     #   the task "3213771b" in Agent-Identity
     -t) [ $# -ge 2 ] || usage; TASK_GIVEN="$2"; shift 2 ;;
+    # ADR-0051. The signing run is still this tree's own; -a names the dead
+    # run whose work the commit carries. sign_commit proves every staged
+    # path against that run's own bodies and refuses what it cannot prove,
+    # so nothing here second-guesses it.
+    -a) [ $# -ge 2 ] || usage; ADOPT_RUN="$2"; shift 2 ;;
     *)  usage ;;
   esac
 done
@@ -1146,7 +1153,7 @@ SIGN_KEY="commit-$CONTENT-$RUN"
 sign_args() {
   python3 -c '
 import json,sys
-run,repo,tree,task,key,wt,paths=sys.argv[1:8]
+run,repo,tree,task,key,wt,paths,adopt=sys.argv[1:9]
 args={"run_id":run,"repo":repo,"staged_ref":tree,
       "message":sys.stdin.read(),"task_ref":task,
       "idempotency_key":key}
@@ -1160,8 +1167,10 @@ if wt: args["worktree"]=wt
 # caller learns about after a round trip; one that lived only there could be
 # skipped by any other client of the tool.
 if paths: args["paths"]=[p for p in paths.split(chr(10)) if p]
+# Absent, not empty, for the reason worktree is above.
+if adopt: args["adopt_run"]=adopt
 print(json.dumps(args))' \
-    "$RUN" "$REPO" "$TREE" "$TASK" "$SIGN_KEY" "$WORKTREE" "$1" <<EOF
+    "$RUN" "$REPO" "$TREE" "$TASK" "$SIGN_KEY" "$WORKTREE" "$1" "$ADOPT_RUN" <<EOF
 $MESSAGE
 EOF
 }
