@@ -138,6 +138,8 @@ const (
 	TrailerAgentIdentity = "Agent-Identity"
 	TrailerAgentRun      = "Agent-Run"
 	TrailerAgentTask     = "Agent-Task"
+	// ADR-0051, schema 3.
+	TrailerAgentAdoptedRun = "Agent-Adopted-Run"
 )
 
 // MCP tool names: register_agent, get_credential, record_event, sign_commit,
