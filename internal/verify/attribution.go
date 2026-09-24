@@ -60,10 +60,22 @@ type ContentConfig struct {
 func AttributeContent(
 	ctx context.Context, cfg ContentConfig, repo, sha, runID string,
 ) ContentAttribution {
+	return AttributeClaim(ctx, cfg, repo, sha, Claim{Run: runID})
+}
+
+// AttributeClaim is AttributeContent over the WHOLE claim the commit makes,
+// its Agent-Adopted-Run included (ADR-0051). A caller holding a claim read by
+// ReadClaim asks this: asked with the run alone, a commit that adopted a dead
+// run's work reads as one whose adoption trailer was stripped. Measured on the
+// live deployment on 2026-09-24, through the attribution API.
+func AttributeClaim(
+	ctx context.Context, cfg ContentConfig, repo, sha string, claim Claim,
+) ContentAttribution {
 	return checkContent(ctx, contentInput{
-		gitPath: cfg.GitPath,
-		repo:    repo,
-		sha:     sha,
-		runID:   runID,
+		gitPath:    cfg.GitPath,
+		repo:       repo,
+		sha:        sha,
+		runID:      claim.Run,
+		adoptedRun: claim.AdoptedRun,
 	}, cfg.Source)
 }

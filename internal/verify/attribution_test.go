@@ -262,3 +262,33 @@ func TestAttributeContentKeepsTheRecordWhenAnIntentFollowsIt(t *testing.T) {
 		t.Errorf("EventID is %q, want the record's", got.EventID)
 	}
 }
+
+// ADP-017 — the API's content door carries the adoption trailer too.
+//
+// MEASURED on the live deployment, 2026-09-24: an adopted commit carrying
+// Agent-Adopted-Run was answered "its adoption trailer is gone" by
+// GET /api/v1/attribution, because this door took the claimed run alone and
+// dropped the rest of the claim. The ledger side was right; the question was
+// asked with half the claim.
+func TestADP017AttributeClaimCarriesTheAdoption(t *testing.T) {
+	repo := t.TempDir()
+	sha, runID := seedRebasedCommit(t, repo)
+	src := fakeContentSource{records: []verify.ContentRecord{{
+		RunID: runID, PatchID: patchIDOfCommit(t, repo, sha),
+		CommitSHA: "10c437e3609618f2eb7e06c744b7203d0370b0f8", AdoptedRun: "run-dead",
+	}}}
+	cfg := verify.ContentConfig{Source: src}
+
+	got := verify.AttributeClaim(context.Background(), cfg, repo, sha,
+		verify.Claim{Run: runID, AdoptedRun: "run-dead"})
+	if got.Result != verify.Verified || got.AdoptedRun != "run-dead" {
+		t.Errorf("a commit claiming the adoption the ledger holds = %v, %q (%s)",
+			got.Result, got.AdoptedRun, got.Detail)
+	}
+
+	// The control that reproduces the incident: the run alone is half the
+	// claim, and the ledger's adoption then reads as a missing trailer.
+	if got := verify.AttributeContent(context.Background(), cfg, repo, sha, runID); got.Result != verify.Failed {
+		t.Errorf("the run alone against a recorded adoption = %v, want failed", got.Result)
+	}
+}

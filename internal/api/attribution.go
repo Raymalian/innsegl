@@ -111,8 +111,8 @@ func (s *Server) handleAttribution(w http.ResponseWriter, r *http.Request) {
 		Commit:  full,
 		Repo:    repo,
 		Claimed: claim.Run,
-		Content: verify.AttributeContent(r.Context(),
+		Content: verify.AttributeClaim(r.Context(),
 			verify.ContentConfig{GitPath: s.prover.GitPath(), Source: contentSource{store: s.store}},
-			path, full, claim.Run),
+			path, full, claim),
 	})
 }
