@@ -1459,3 +1459,104 @@ func waitForLockWaiters(ctx context.Context, t *testing.T, dsn string, n int) {
 		"reached the statement this race needs it to be inside, so the test would prove nothing",
 		got, n)
 }
+
+// RM-186 (#297). A call refused BEFORE it had any effect frees its key for a
+// corrected request; one that failed after an effect keeps it bound to the
+// request it was, so one key can never name two different actions.
+//
+// Measured before: sign_commit refused a request (a task that did not match
+// the run) before appending anything, and the corrected retry under the same
+// key was refused as DUPLICATE_REQUEST, because the failed claim kept its
+// request digest. The caller who fixed the mistake was blocked by it.
+func TestRM186ACallRefusedWithNoEffectSaysANewKeyIsSafe(t *testing.T) {
+	t.Parallel()
+	store, _ := newStore(t)
+	ctx := testCtx(t, 2*time.Minute)
+
+	call := probeCall("idem-no-effect")
+	refused := errors.New("refused before anything was written")
+	_, err := store.Do(ctx, call, func(context.Context) (any, error) {
+		return nil, NoEffect(refused)
+	})
+	if !errors.Is(err, refused) {
+		t.Fatalf("Do returned %v, want the tool's own refusal", err)
+	}
+	rec, found, lerr := store.Lookup(ctx, call.Key)
+	if lerr != nil || !found || rec.Status != statusUnused {
+		t.Fatalf("after a no-effect refusal: status %q found %v err %v (Do said %v); want %q",
+			rec.Status, found, lerr, err, statusUnused)
+	}
+
+	// The key still names the earlier request (ADR-0017: tool and digest
+	// never change), and the refusal says a new key is safe.
+	corrected := Call{Tool: probeTool, Key: call.Key, Params: map[string]any{"run_id": probeRunID, "n": 2}}
+	derr := runDo(ctx, store, corrected, mustNotRun(t))
+	if derr == nil || mcpError(t, derr).Class != ClassDuplicateRequest || !errors.Is(derr, ErrKeyUnused) {
+		t.Fatalf("a corrected request under the unused key = %v; want DUPLICATE_REQUEST saying the "+
+			"earlier call had no effect", derr)
+	}
+
+	// The SAME request, retried, takes its own key back at once.
+	var ran atomic.Int64
+	out, err := store.Do(ctx, call, mintToken(t, &ran, nil))
+	if err != nil {
+		t.Fatalf("the same request retried after a no-effect refusal: %v", err)
+	}
+	if out.Replayed || ran.Load() != 1 {
+		t.Fatalf("the retry did not run: replayed=%v ran=%d", out.Replayed, ran.Load())
+	}
+}
+
+func TestRM186ACallThatFailedAfterAnEffectKeepsItsKeyBound(t *testing.T) {
+	t.Parallel()
+	store, _ := newStore(t)
+	ctx := testCtx(t, 2*time.Minute)
+
+	call := probeCall("idem-after-effect")
+	if _, err := store.Do(ctx, call, func(context.Context) (any, error) {
+		return nil, errors.New("failed after writing")
+	}); err == nil {
+		t.Fatal("the failing call returned no error")
+	}
+	different := Call{Tool: probeTool, Key: call.Key, Params: map[string]any{"run_id": probeRunID, "n": 2}}
+	derr := runDo(ctx, store, different, mustNotRun(t))
+	if derr == nil || mcpError(t, derr).Class != ClassDuplicateRequest || errors.Is(derr, ErrKeyUnused) {
+		t.Fatalf("a different request after a failure with an effect = %v, want DUPLICATE_REQUEST "+
+			"that does NOT call the key unused", derr)
+	}
+}
+
+// RM-186's two remaining branches: the ledger going away while a no-effect
+// refusal frees its key, and NoEffect of nothing.
+func TestRM186EveryOtherBranch(t *testing.T) {
+	t.Parallel()
+	ctx := testCtx(t, 2*time.Minute)
+
+	t.Run("the ledger goes away as a no-effect refusal frees its key", func(t *testing.T) {
+		t.Parallel()
+		c := requirePG(t)
+		dsn := freshDSN(t, c)
+		migrate(t, dsn)
+		pool := newPool(t, dsn)
+		store := NewIdempotencyStore(pool)
+		refused := errors.New("refused before anything was written")
+
+		_, err := store.Do(ctx, probeCall("idem-lost-unused"), func(context.Context) (any, error) {
+			pool.Close()
+			return nil, NoEffect(refused)
+		})
+		if !errors.Is(err, refused) {
+			t.Fatalf("Do returned %v, want the tool's own refusal", err)
+		}
+		if ie := mcpError(t, err); ie.Class != ClassLedgerUnavailable {
+			t.Fatalf("the failure to free the key is reported as %s, want %s", ie.Class, ClassLedgerUnavailable)
+		}
+	})
+
+	t.Run("NoEffect of no error is no error", func(t *testing.T) {
+		t.Parallel()
+		if err := NoEffect(nil); err != nil {
+			t.Errorf("NoEffect(nil) = %v, want nil", err)
+		}
+	})
+}
