@@ -78,13 +78,22 @@ def spend(token, uses):
 
 
 def scripted(tool):
-    """The answer this run has scripted for tool, as (kind, payload)."""
+    """The answer this run has scripted for tool, as (kind, payload).
+
+    `err-once` answers as `err` and is then removed, so the tool's NEXT line
+    answers the next call: how a case scripts a refusal followed by a retry.
+    """
     with open(SCRIPTED, encoding="utf-8") as fh:
-        for line in fh:
-            name, _, rest = line.rstrip("\n").partition(" ")
-            kind, _, payload = rest.partition(" ")
-            if name == tool:
-                return kind, json.loads(payload)
+        lines = fh.readlines()
+    for i, line in enumerate(lines):
+        name, _, rest = line.rstrip("\n").partition(" ")
+        kind, _, payload = rest.partition(" ")
+        if name == tool:
+            if kind == "err-once":
+                with open(SCRIPTED, "w", encoding="utf-8") as fh:
+                    fh.writelines(lines[:i] + lines[i + 1:])
+                kind = "err"
+            return kind, json.loads(payload)
     return "ok", {}
 
 

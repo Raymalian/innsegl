@@ -563,7 +563,17 @@ func (c *signCommitService) sign(ctx context.Context, in signCommitIn) (signComm
 // right (IP §6.5).
 //
 //nolint:gocyclo // One gate per step, each with its own refusal. Splitting it
-func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, error) {
+func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (_ any, err error) {
+	// RM-186 (#297): until the first ledger write, a refusal has had no
+	// effect, and saying so frees the idempotency key for a corrected
+	// request. From the first write on, the key stays bound to this call.
+	wrote := false
+	defer func() {
+		if err != nil && !wrote {
+			err = NoEffect(err)
+		}
+	}()
+
 	// ---- before everything: did this call already finish? ------------------
 	//
 	// FIRST, ahead of the run gate and not after it. A run retired since the
@@ -706,6 +716,7 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 		event.FieldTreeHash:       tree,
 		event.FieldPatchID:        patchID,
 	}
+	wrote = true
 	if adoption != nil {
 		adoptedID, aerr := c.recordAdoption(ctx, run.RunID, spiffeID, in.IdempotencyKey, adoption)
 		if aerr != nil {

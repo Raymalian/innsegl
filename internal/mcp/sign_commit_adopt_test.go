@@ -352,3 +352,39 @@ func TestADP014AnAdoptionIsSpentByItsCommit(t *testing.T) {
 		requireClass(t, err, ClassLedgerUnavailable)
 	})
 }
+
+// RM-186 (#297) — sign_commit says when a refusal had no effect.
+//
+// Every refusal before its first ledger write is marked, so the idempotency
+// store frees the key and a corrected request can go under a new one. A
+// failure after the intent is appended is NOT marked: the intent is an effect,
+// and the key must stay bound to it.
+func TestRM186SignCommitMarksOnlyRefusalsBeforeItsFirstWrite(t *testing.T) {
+	t.Run("a refusal before anything is written", func(t *testing.T) {
+		w := newSCWiring()
+		in := scIn()
+		in.TaskRef = "SOME-OTHER-TASK"
+		_, err := w.call(t, in)
+		if err == nil || !errors.Is(err, errNoEffect) {
+			t.Errorf("err = %v; want it marked as having no effect", err)
+		}
+		if len(w.ledger.records) != 0 {
+			t.Fatalf("control: the refusal appended %d events", len(w.ledger.records))
+		}
+	})
+
+	t.Run("a failure after the intent is appended", func(t *testing.T) {
+		w := newSCWiring()
+		w.signer.err = errors.New("the signer failed")
+		_, err := w.call(t, scIn())
+		if err == nil {
+			t.Fatal("control: the signer's failure was not reported")
+		}
+		if len(w.ledger.ofType(event.EventTypeCommitIntent)) != 1 {
+			t.Fatal("control: the intent was not appended before the signer ran")
+		}
+		if errors.Is(err, errNoEffect) {
+			t.Errorf("a failure after the intent was marked as having no effect: %v", err)
+		}
+	})
+}
