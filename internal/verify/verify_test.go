@@ -575,3 +575,46 @@ func TestVerifyRefusesARevisionThatIsNotACommit(t *testing.T) {
 		t.Fatal("Verify accepted a tree object as a commit")
 	}
 }
+
+// VER-023 — #296. A commit that makes NO attribution claim is unattributed
+// whatever else signed it.
+//
+// MEASURED on this repository's main, 2026-09-25: of the 68 signed commits
+// the verifier called failed, 47 were merge commits GitHub made and signed
+// with its own PGP key. They carry no Agent-* trailer and claim nothing; the
+// verifier saw *a* signature, could not read a gitsign certificate out of it,
+// and answered "failed" — the answer it gives a forgery. VER-006's rule is
+// that a commit claiming nothing is unattributed, never failed, and a
+// signature this system did not make does not turn it into a claim.
+const githubPGPSignature = "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJo1ZQCCRC1aQ7uu5UhlAAA\n=abcd\n-----END PGP SIGNATURE-----\n"
+
+func TestVER023ACommitSignedByAnotherKeyThatClaimsNothingIsUnattributed(t *testing.T) {
+	s := newScenario(t, scenarioOptions{})
+	merge := writeCommit(t, s.repo, s.tree, "", "Merge pull request #42 from org/branch\n",
+		[]byte(githubPGPSignature))
+
+	rep, err := s.verifier(t).Verify(t.Context(), s.repo, merge)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if rep.Verdict != VerdictUnattributed {
+		t.Fatalf("verdict = %s, want %s: the commit claims nothing\n%s",
+			rep.Verdict, VerdictUnattributed, Render(rep))
+	}
+	if !strings.Contains(strings.Join(rep.Notes, " "), "not this system's") {
+		t.Errorf("notes = %q, want one saying the signature is not this system's", rep.Notes)
+	}
+
+	// THE CONTROL, and the reason this is not a way out of verification: the
+	// same foreign signature on a commit that DOES claim an agent is a claim
+	// nothing here proves, and fails.
+	claiming := writeCommit(t, s.repo, s.tree, "",
+		"feat: something\n\nAgent-Identity: "+fixtureIdentity+"\n", []byte(githubPGPSignature))
+	rep, err = s.verifier(t).Verify(t.Context(), s.repo, claiming)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if rep.Verdict != VerdictFailed {
+		t.Errorf("a claiming commit under a foreign signature = %s, want %s", rep.Verdict, VerdictFailed)
+	}
+}
