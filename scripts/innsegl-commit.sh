@@ -1255,6 +1255,23 @@ SIGNED="$(mcp "$AGENT_URL" sign_commit "$(sign_args "${CP_NAMED:-}")")" \
   || fail "the MCP at $AGENT_URL could not be reached"
 if SHA="$(printf '%s' "$SIGNED" | field commit_sha 2>"$SIGN_ERR")"; then
   :
+elif grep -q 'had any effect' "$SIGN_ERR" 2>/dev/null; then
+  # RM-186 (#297). The key names an earlier call that sign_commit refused
+  # before it wrote anything, so nothing was done under it. ADR-0017 keeps the
+  # key bound to that request forever; this request goes under a new one, ONCE.
+  # A key whose call DID have an effect never says this, and is never rotated.
+  echo "innsegl-commit: the earlier attempt under this key was refused before it did" >&2
+  echo "innsegl-commit:   anything; retrying once under a new key" >&2
+  SIGN_KEY="$SIGN_KEY-$(date +%s)"
+  SIGNED="$(mcp "$AGENT_URL" sign_commit "$(sign_args "${CP_NAMED:-}")")" \
+    || fail "the MCP at $AGENT_URL could not be reached"
+  if SHA="$(printf '%s' "$SIGNED" | field commit_sha 2>"$SIGN_ERR")"; then
+    :
+  else
+    cat "$SIGN_ERR" >&2
+    rm -f "$SIGN_ERR"
+    signing_refused
+  fi
 elif [ -n "${CP_NAMED:-}" ] && grep -q 'additional propert' "$SIGN_ERR" 2>/dev/null; then
   echo "innsegl-commit: this deployment's sign_commit does not accept \`paths\` yet, so" >&2
   echo "innsegl-commit:   the commit is bounded by this script alone: it accounted for" >&2

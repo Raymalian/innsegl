@@ -856,6 +856,25 @@ else
   bad "no -a: calls: $(cat "$CALLS")"
 fi
 
+# --- RM-186 (#297): a refusal that had no effect frees the key ---------------
+
+# 22. sign_commit refuses, saying the earlier call under this key was refused
+#     before it had any effect. The script retries ONCE under a fresh key, and
+#     the retry signs. Without the rotation the corrected request is blocked by
+#     its own earlier mistake, which is what #297 measured.
+point_at "$LIVE"
+state "$LIVE" active
+script_tool sign_commit ok "{\"commit_sha\":\"$HEAD_SHA\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
+{ printf 'sign_commit err-once %s\n' '{"error_class":"DUPLICATE_REQUEST","message":"idempotency_key names an earlier call that was refused before it had any effect; send this request under a new key"}'; cat "$SCRIPTED"; } > "$SCRIPTED.new" && mv "$SCRIPTED.new" "$SCRIPTED"
+drive
+keys="$(grep '^sign_commit ' "$CALLS" | python3 -c 'import json,sys; print(" ".join(json.loads(l.split(" ",1)[1])["idempotency_key"] for l in sys.stdin))')"
+set -- $keys
+if [ "$STATUS" -eq 0 ] && [ "$#" -eq 2 ] && [ "$1" != "$2" ]; then
+  ok "RM-186 a refusal that had no effect is retried once, under a new key, and signs"
+else
+  bad "RM-186: status $STATUS, keys: $keys, out: $(cat "$WORK/out")"
+fi
+
 echo
 echo "commit-selftest: $pass ok, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

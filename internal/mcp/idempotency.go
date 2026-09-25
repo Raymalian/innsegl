@@ -117,7 +117,10 @@ const (
 	replayPollInterval = 25 * time.Millisecond
 
 	statusInProgress = "in_progress"
-	statusCompleted  = "completed"
+	// statusUnused is a claim whose call was refused before it had any
+	// effect (RM-186, #297). Any later claim may take the key over.
+	statusUnused    = "unused"
+	statusCompleted = "completed"
 
 	// storeSource names this layer in a classified error.
 	storeSource = "the MCP idempotency store"
@@ -265,6 +268,17 @@ func (s *IdempotencyStore) Do(ctx context.Context, call Call, fn func(context.Co
 		if claim.mine {
 			return s.run(ctx, call.Key, fn)
 		}
+		if claim.digest != digest && claim.status == statusUnused {
+			// RM-186 (#297): the key still names the earlier request
+			// (ADR-0017), but that call was refused before it had any effect.
+			// Saying so is what lets a caller that corrected its request
+			// safely send it under a new key.
+			return Outcome{}, classifyAs(ClassDuplicateRequest, "",
+				fmt.Sprintf("idempotency_key %q names an earlier %q call (request digest %s) that was "+
+					"refused before it had any effect; nothing was done under it, so send this "+
+					"request under a new key", call.Key, claim.tool, claim.digest),
+				false, storeSource, errors.Join(ErrKeyNamesADifferentRequest, ErrKeyUnused))
+		}
 		if claim.digest != digest {
 			return Outcome{}, classifyAs(ClassDuplicateRequest, "",
 				fmt.Sprintf("idempotency_key %q already names the %q call with request digest %s, not this one (%s)",
@@ -338,6 +352,14 @@ func (s *IdempotencyStore) run(ctx context.Context, key string, fn func(context.
 		// the failure came after a partial effect, the retry meets the inner
 		// idempotency — the ledger's UNIQUE key, the run's own SPIRE entry —
 		// which is the layer that exists for exactly this.
+		//
+		// A call that says it had NO effect frees the key outright (RM-186,
+		// #297): released, it would stay bound to its own request digest, and
+		// the caller who corrected the request would be refused as
+		// DUPLICATE_REQUEST although nothing had happened.
+		if errors.Is(err, errNoEffect) {
+			return Outcome{}, errors.Join(err, s.markUnused(ctx, key))
+		}
 		return Outcome{}, errors.Join(err, s.release(ctx, key))
 	}
 
@@ -391,12 +413,17 @@ WITH claimed AS (
     VALUES ($1, $2, $3, 'in_progress', clock_timestamp(),
             clock_timestamp() + ($4::bigint * interval '1 millisecond'))
     ON CONFLICT (idempotency_key) DO UPDATE
-       SET claimed_at       = clock_timestamp(),
+       SET status           = 'in_progress',
+           claimed_at       = clock_timestamp(),
            lease_expires_at = clock_timestamp() + ($4::bigint * interval '1 millisecond'),
            claim_count      = innsegl.idempotency.claim_count + 1
-     WHERE innsegl.idempotency.status = 'in_progress'
-       AND innsegl.idempotency.lease_expires_at <= clock_timestamp()
-       AND innsegl.idempotency.request_digest = $3
+     WHERE innsegl.idempotency.request_digest = $3
+       AND ((innsegl.idempotency.status = 'in_progress'
+             AND innsegl.idempotency.lease_expires_at <= clock_timestamp())
+            -- RM-186: the same request, retried after a refusal that had no
+            -- effect, takes its own key back at once. The digest never
+            -- changes, as ADR-0017 requires.
+            OR innsegl.idempotency.status = 'unused')
     RETURNING true AS mine, tool, request_digest, status, response
 )
 SELECT mine, tool, request_digest, status, response FROM claimed
@@ -493,6 +520,43 @@ const releaseSQL = `
 UPDATE innsegl.idempotency
    SET lease_expires_at = clock_timestamp()
  WHERE idempotency_key = $1 AND status = 'in_progress'`
+
+// markUnusedSQL frees a key whose call had no effect (RM-186).
+const markUnusedSQL = `
+UPDATE innsegl.idempotency
+   SET status = 'unused', lease_expires_at = clock_timestamp()
+ WHERE idempotency_key = $1 AND status = 'in_progress'`
+
+func (s *IdempotencyStore) markUnused(ctx context.Context, key string) error {
+	if _, err := s.pool.Exec(ctx, markUnusedSQL, key); err != nil {
+		return classifyStorage("mark_unused", err)
+	}
+	return nil
+}
+
+// ErrKeyUnused is part of a DUPLICATE_REQUEST whose key names an earlier call
+// that was refused before it had any effect (RM-186). A new key is safe.
+var ErrKeyUnused = errors.New("the key names an earlier call that had no effect")
+
+// errNoEffect marks a tool error as a refusal made before the call had any
+// effect. Do frees the key for it (RM-186, #297).
+var errNoEffect = errors.New("the call was refused before it had any effect")
+
+type noEffectError struct{ err error }
+
+func (e noEffectError) Error() string   { return e.err.Error() }
+func (e noEffectError) Unwrap() []error { return []error{e.err, errNoEffect} }
+
+// NoEffect marks err as a refusal made before the call wrote anything. The
+// idempotency key is then free for a corrected request. A tool must only say
+// so when it is true: a call that wrote and then failed keeps its key bound to
+// its request, so one key never names two different actions.
+func NoEffect(err error) error {
+	if err == nil {
+		return nil
+	}
+	return noEffectError{err: err}
+}
 
 func (s *IdempotencyStore) release(ctx context.Context, key string) error {
 	if _, err := s.pool.Exec(ctx, releaseSQL, key); err != nil {
