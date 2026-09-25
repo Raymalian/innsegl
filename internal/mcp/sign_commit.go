@@ -20,6 +20,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/identity"
+	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/signing"
 )
 
@@ -191,6 +192,13 @@ type signCommitIn struct {
 	// argument here would refuse the harness's own capture, which is already
 	// bounded and cannot be changed to say so.
 	Paths []string `json:"paths,omitempty"`
+	// AdoptRun names a DEAD run whose uncommitted work this commit carries
+	// (ADR-0051). The signing run is still RunID; this one is named, never
+	// inferred. The server proves every staged path's bytes against that
+	// run's own Write and Edit bodies before it records anything, appends a
+	// run_adopted event, ties the intent to it, and the commit gains an
+	// Agent-Adopted-Run trailer. omitempty, for `worktree`'s reason.
+	AdoptRun string `json:"adopt_run,omitempty"`
 }
 
 // SignCommitTrailer is one rendered commit trailer.
@@ -306,7 +314,28 @@ var (
 
 // SignCommitConfig is what sign_commit runs on. Install it with
 // ConfigureSignCommit before serving.
+// SignCommitAdoption is what adopt_run needs to prove a dead run's work
+// (ADR-0051): how the ledger reads that run now, its events in chain order,
+// the bytes staged in a working tree, and where bodies are kept. Optional: a
+// deployment without it refuses adopt_run and signs everything else as before.
+type SignCommitAdoption interface {
+	// AdoptionEvidence returns the run's state as the ledger reads it now
+	// (active, lapsed, abandoned or retired; "" for a run it does not know)
+	// and every event carrying its run_id, in chain order.
+	AdoptionEvidence(ctx context.Context, runID string) (string, []event.Fields, error)
+	// StagedFiles returns every staged path's bytes, as the index holds them.
+	StagedFiles(ctx context.Context, worktree string) (map[string][]byte, error)
+	// BodyDir is the body volume observe_tool_call writes to.
+	BodyDir() string
+	// Adoptions returns every earlier adoption of the run, by any run, and
+	// whether its commit was recorded (ADR-0051 decision 6).
+	Adoptions(ctx context.Context, adoptedRun string) ([]ledger.Adoption, error)
+}
+
 type SignCommitConfig struct {
+	// Adoption enables adopt_run (ADR-0051). Nil refuses it.
+	Adoption SignCommitAdoption
+
 	// Runs resolves run_id. Required, and get_credential's interface rather
 	// than a second one: a second definition of "what is a run" is a second
 	// thing that can disagree about retirement.
@@ -343,6 +372,7 @@ type SignCommitConfig struct {
 
 // signCommitService is the configured tool.
 type signCommitService struct {
+	adoption    SignCommitAdoption
 	runs        CredentialRuns
 	ledger      SignCommitLedger
 	idem        *IdempotencyStore
@@ -401,6 +431,7 @@ func newSignCommitService(cfg SignCommitConfig) (*signCommitService, error) {
 		repos = GitRepos{}
 	}
 	return &signCommitService{
+		adoption:    cfg.Adoption,
 		runs:        cfg.Runs,
 		ledger:      cfg.Ledger,
 		idem:        cfg.Idempotency,
@@ -575,7 +606,7 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 		return nil, Errorf(ClassInvariantViolation, run.RunID,
 			"task_ref %q is not a run identity component (doc 02 §5): %w", in.TaskRef, err)
 	}
-	claim := signing.Claim{Identity: spiffeID, Run: run.RunID, Task: claimedTask}
+	claim := signing.Claim{Identity: spiffeID, Run: run.RunID, Task: claimedTask, AdoptedRun: in.AdoptRun}
 	trailers, err := claim.Trailers()
 	if err != nil {
 		return nil, Errorf(ClassInvariantViolation, run.RunID,
@@ -633,6 +664,14 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 	// a failed signature — do not each leave an intent for the reconciler.
 	// It is not a guarantee: Fulcio can die between here and `git commit`, and
 	// that residue is the A → B window named at the top of this file.
+	var adoption *adoptionPlan
+	if in.AdoptRun != "" {
+		adoption, err = c.planAdoption(ctx, run.RunID, in.AdoptRun, worktree)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if perr := probeSigstore(ctx, c.sigstore); perr != nil {
 		return nil, perr
 	}
@@ -656,7 +695,7 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 	// The tree hash is here and the commit SHA is not, because the commit does
 	// not exist yet. That is the whole point: the intent names what is about
 	// to be signed, so a signature found later can be matched back to it.
-	intent, err := c.append(ctx, run.RunID, event.EventTypeCommitIntent, event.Fields{
+	intentFields := event.Fields{
 		event.FieldSchemaVersion:  event.SchemaVersion,
 		event.FieldEventType:      event.EventTypeCommitIntent,
 		event.FieldSource:         event.SourceMCP,
@@ -666,7 +705,15 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (any, e
 		event.FieldRepo:           in.Repo,
 		event.FieldTreeHash:       tree,
 		event.FieldPatchID:        patchID,
-	})
+	}
+	if adoption != nil {
+		adoptedID, aerr := c.recordAdoption(ctx, run.RunID, spiffeID, in.IdempotencyKey, adoption)
+		if aerr != nil {
+			return nil, aerr
+		}
+		intentFields[event.FieldAdoptionEventID] = adoptedID
+	}
+	intent, err := c.append(ctx, run.RunID, event.EventTypeCommitIntent, intentFields)
 	if err != nil {
 		return nil, err
 	}
@@ -1021,6 +1068,7 @@ func signCommitTrailers(in []signing.Trailer) []SignCommitTrailer {
 const (
 	signCommitIntentKeyPrefix   = "sign_commit/intent/"
 	signCommitRecordedKeyPrefix = "sign_commit/recorded/"
+	signCommitAdoptedKeyPrefix  = "sign_commit/adopted/"
 	// 128 bits of the digest, which keeps both keys far inside doc 02 §2's
 	// 128-byte bound whatever the caller's key is — the reason a derivation is
 	// used at all rather than a suffix, which would overflow for a key at the

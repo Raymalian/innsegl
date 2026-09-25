@@ -890,7 +890,17 @@ func configureSignCommit(
 		GitsignPath: o.gitsignPath,
 		Author:      author,
 	})
+	// adopt_run (ADR-0051) proves a dead run's work against its own bodies, so
+	// it is on exactly when there is a body volume to prove against, and
+	// refused by name when there is not.
+	var adoption mcp.SignCommitAdoption
+	if o.observeBodyDir != "" {
+		adoption = mcp.LedgerAdoption{
+			Runs: runs, Events: store, Bodies: o.observeBodyDir, AbandonAfter: o.abandonAfter,
+		}
+	}
 	restore, err := mcp.ConfigureSignCommit(mcp.SignCommitConfig{
+		Adoption:    adoption,
 		Runs:        runs,
 		Ledger:      store,
 		Idempotency: idem,

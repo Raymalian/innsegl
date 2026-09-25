@@ -149,7 +149,7 @@
 # identity that did not do it is #269's open question and must not be answered by
 # accident, least of all by an unattended job. Nor can the run that wrote it: it
 # is no longer active, and the signer refuses it (IP §6.2). The record names the
-# run so that whoever decides #269 knows whose work it is.
+# run so that a person can have a live run adopt the work (ADR-0051).
 #
 # IT CHANGES NOTHING ON DISK BUT ONE APPENDED LINE. No marker is removed, no path
 # is staged, nothing in the tree is written, and `git status` runs with
@@ -547,12 +547,15 @@ def report(run, state, top, claim, claim_n):
     out("  Recorded in " + uncap_log + ". Nothing was retired, signed or")
     out("  committed, and the tree was not touched.")
     out()
-    # NO SIGNING COMMAND. Every run recorded here is one the ledger no longer
-    # calls active, and the signer refuses those (RUN_ALREADY_RETIRED, IP §6.2).
-    # The first real use of this report printed `innsegl-commit -r <run>` and it
-    # was refused. Who signs work a dead run left is #269, and no hint decides it.
-    out("  A " + state + " run may not sign (IP §6.2), so this work cannot be")
-    out("  committed under the run that wrote it. Who signs it instead is #269.")
+    # NOT `-r`. Every run recorded here is one the ledger no longer calls
+    # active, and the signer refuses those (RUN_ALREADY_RETIRED, IP §6.2): the
+    # first real use of this report printed `innsegl-commit -r <run>` and it
+    # was refused. A live run ADOPTS the work instead (ADR-0051): the commit
+    # names both runs, and sign_commit proves each path against the bodies of
+    # this run, refusing any it cannot.
+    out("  A " + state + " run may not sign (IP §6.2). A live run can adopt it,")
+    out("  and the commit names both runs:")
+    out("    innsegl-commit -a " + run.run_id + " -p <path> -m \"<type>(<scope>): <what changed>\"")
 
 # --- the sweep ---------------------------------------------------------------
 

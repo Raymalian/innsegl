@@ -26,6 +26,8 @@ var doc02EventTypes = []string{
 	"commit_intent_expired",
 	"run_retired",
 	"run_expired",
+	// ADR-0051: schema 3's one new type, beside the other lifecycle events.
+	"run_adopted",
 	// §7's migration attestation, in doc 02 §3's own order.
 	"schema_migrated",
 	"unattributed_signature_detected",
@@ -93,6 +95,17 @@ var adrTypeSpecificOptional = map[string][]string{
 	"run_registered": {"parent_run_id"},
 }
 
+// What schema 3 adds, ADR-0051: one type and one optional member. The claim a
+// run_adopted carries is the envelope's payload_digest, not a member of its
+// own, so it does not appear here (see TestADP004).
+var adr3TypeSpecificRequired = map[string][]string{
+	"run_adopted": {"adopted_run_id", "adopted_run_state"},
+}
+
+var adr3TypeSpecificOptional = map[string][]string{
+	"commit_intent": {"adoption_event_id"},
+}
+
 // membershipFor returns the required and optional type-specific members one
 // schema version's table must hold, sorted.
 func membershipFor(version, eventType string) (required, optional []string) {
@@ -101,6 +114,10 @@ func membershipFor(version, eventType string) (required, optional []string) {
 	if version != "1" {
 		required = append(required, adrTypeSpecificRequired[eventType]...)
 		optional = append(optional, adrTypeSpecificOptional[eventType]...)
+	}
+	if version != "1" && version != "2" {
+		required = append(required, adr3TypeSpecificRequired[eventType]...)
+		optional = append(optional, adr3TypeSpecificOptional[eventType]...)
 	}
 	slices.Sort(required)
 	slices.Sort(optional)
@@ -180,7 +197,9 @@ func TestEventTypeEnumMatchesDoc02(t *testing.T) {
 func TestTypeSpecificFieldsMatchDoc02(t *testing.T) {
 	envelope := EnvelopeFieldNames()
 
-	for _, version := range []string{"1", SchemaVersion} {
+	// Every released version, named: with SchemaVersion alone, the version it
+	// replaced would silently stop being asked the day it was bumped.
+	for _, version := range []string{"1", "2", SchemaVersion} {
 		for _, et := range doc02EventTypes {
 			t.Run("v"+version+"/"+et, func(t *testing.T) {
 				spec, err := lookupType(et)
@@ -401,8 +420,9 @@ func TestVerifiersTolerateUnknownMembersOnlyForANewerSchema(t *testing.T) {
 		// ADR-0047 gave it members, so an event LABELLED 2 is now judged by
 		// version 2's table and a v1 body relabelled as v2 is genuinely
 		// invalid — it has no `repo` and no `branch`. The case is about a
-		// version this build knows nothing about, which is now 3.
-		f[FieldSchemaVersion] = "3"
+		// version this build knows nothing about. Schema 3 now exists
+		// (ADR-0051), so the unknown one is 4.
+		f[FieldSchemaVersion] = "4"
 		f["future_member"] = "x"
 		if err := ValidateEventForVerification(f); err != nil {
 			t.Errorf("ValidateEventForVerification = %v, want nil", err)

@@ -11,7 +11,9 @@ and only with a migration attestation.
    field name — `event_id`, `run_id`, `spiffe_id`, `event_type`, `ts`,
    `payload_digest`, `prev_event_hash`, `event_hash`, `supersedes`, and the
    type-specific reference fields.
-2. **The commit trailer keys**: `Agent-Identity`, `Agent-Run`, `Agent-Task`.
+2. **The commit trailer keys**: `Agent-Identity`, `Agent-Run`, `Agent-Task`,
+   and from `schema_version 3` `Agent-Adopted-Run`, present only on a commit
+   that adopts a dead run's work (ADR-0051).
 3. **The SPIFFE ID grammar**:
    `spiffe://{trust-domain}/agent/{agent-type}/{task-id}/{run-id}`.
 4. **The MCP tool names and their error-class vocabulary** — `register_agent`,

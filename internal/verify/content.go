@@ -60,6 +60,9 @@ type ContentRecord struct {
 	CommitSHA string
 	// EventID names the event, so the claim can be checked rather than taken.
 	EventID string
+	// AdoptedRun is the dead run this change was adopted from, as the
+	// ledger's run_adopted records it (ADR-0051); "" for a run's own work.
+	AdoptedRun string
 }
 
 // ContentSource answers "which runs recorded this change?".
@@ -85,6 +88,9 @@ type ContentAttribution struct {
 	RecordedAs string `json:"recorded_as,omitempty"`
 	// EventID names the ledger event behind a verified answer.
 	EventID string `json:"event_id,omitempty"`
+	// AdoptedRun is the dead run the change was adopted from, when the
+	// ledger and the commit agree on one (ADR-0051).
+	AdoptedRun string `json:"adopted_run,omitempty"`
 }
 
 // contentInput is what the check needs: a repository to compute the change
@@ -94,6 +100,8 @@ type contentInput struct {
 	repo    string
 	sha     string
 	runID   string
+	// adoptedRun is the commit's Agent-Adopted-Run, or "".
+	adoptedRun string
 }
 
 // checkContent is the whole of the check.
@@ -164,8 +172,30 @@ func checkContent(ctx context.Context, in contentInput, source ContentSource) Co
 			match = &records[i]
 		}
 	}
+	if match != nil && match.AdoptedRun != in.adoptedRun {
+		// ADR-0051: the adoption trailer is typed text like any other, so it
+		// is held to the ledger's run_adopted, and the two must agree in
+		// both directions.
+		out.Result = Failed
+		switch {
+		case in.adoptedRun == "":
+			out.Detail = fmt.Sprintf("run %s recorded this change as adopted from run %s, "+
+				"and this commit no longer says so: its adoption trailer is gone.",
+				match.RunID, match.AdoptedRun)
+		case match.AdoptedRun == "":
+			out.Detail = fmt.Sprintf("this commit claims run %s adopted the work of run %s, "+
+				"and the ledger records no such adoption for this change.",
+				in.runID, in.adoptedRun)
+		default:
+			out.Detail = fmt.Sprintf("this commit claims the work was adopted from run %s, "+
+				"and the ledger records it as adopted from run %s.",
+				in.adoptedRun, match.AdoptedRun)
+		}
+		return out
+	}
 	if match != nil {
 		out.Result = Verified
+		out.AdoptedRun = match.AdoptedRun
 		out.RecordedAs = match.CommitSHA
 		out.EventID = match.EventID
 		if match.CommitSHA == "" {
@@ -174,9 +204,17 @@ func checkContent(ctx context.Context, in contentInput, source ContentSource) Co
 				"attributed; the object it was signed as is not on the chain.", match.RunID)
 			return out
 		}
-		out.Detail = fmt.Sprintf("run %s recorded this exact change, as commit %s. "+
-			"This commit is a rewrite of that one: same content, different object.",
-			match.RunID, match.CommitSHA)
+		if match.CommitSHA == in.sha {
+			out.Detail = fmt.Sprintf("run %s recorded this exact change as this commit.", match.RunID)
+		} else {
+			out.Detail = fmt.Sprintf("run %s recorded this exact change, as commit %s. "+
+				"This commit is a rewrite of that one: same content, different object.",
+				match.RunID, match.CommitSHA)
+		}
+		if match.AdoptedRun != "" {
+			out.Detail += fmt.Sprintf(" The change is work run %s left when it died, "+
+				"adopted by run %s with proof on the chain (ADR-0051).", match.AdoptedRun, match.RunID)
+		}
 		return out
 	}
 

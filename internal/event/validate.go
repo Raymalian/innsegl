@@ -227,7 +227,7 @@ func resolveSchemaVersion(f Fields, verifying bool) (bool, error) {
 // constant of this package, not an input, and a parse of it would be an error
 // path no test could ever reach. The two are held together by
 // TestSchemaVersionConstantsAgree, in the same spirit as the SER-005 gate.
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 // CanRead reports whether this build can fully verify events of a schema
 // version, and refuses a string that is not a version at all.
@@ -282,7 +282,40 @@ func checkCrossMemberRules(f Fields, spec typeSpec) error {
 	if err := checkIdempotencyKeyScope(f, spec); err != nil {
 		return err
 	}
+	if err := checkAdoptionRules(f, spec); err != nil {
+		return err
+	}
 	return checkSegmentRules(f, spec)
+}
+
+// checkAdoptionRules is ADR-0051 decision 3: a run_adopted's claim is a body,
+// stored under payload_digest as a tool call's is (E4), so the envelope member
+// that is optional everywhere else is required here. An adoption with no claim
+// hands over nothing anyone can check.
+func checkAdoptionRules(f Fields, spec typeSpec) error {
+	if spec.eventType != EventTypeRunAdopted {
+		return nil
+	}
+	if _, ok := f[FieldPayloadDigest]; !ok {
+		return fmt.Errorf("%w: %s requires %s, the digest of its claim (ADR-0051)",
+			ErrMissingMember, EventTypeRunAdopted, FieldPayloadDigest)
+	}
+	return nil
+}
+
+// adoptedRunStates are the ledger's words for a run that has ended. `active`
+// is not one: a run that may still be working is not dead (ADR-0051).
+var adoptedRunStates = []string{"retired", "lapsed", "abandoned"}
+
+func checkAdoptedRunState(name string, v any) error {
+	s, err := checkBoundedString(name, v, MaxReferenceBytes)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(adoptedRunStates, s) {
+		return fmt.Errorf("%w: %s is %q; want one of %q", ErrInvalidField, name, s, adoptedRunStates)
+	}
+	return nil
 }
 
 // checkRunScope is doc 02 §2: run_id and spiffe_id are omitted together, and

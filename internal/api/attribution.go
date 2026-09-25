@@ -69,10 +69,11 @@ func (c contentSource) RunsForPatchID(
 	out := make([]verify.ContentRecord, 0, len(records))
 	for _, r := range records {
 		out = append(out, verify.ContentRecord{
-			RunID:     r.RunID,
-			PatchID:   r.PatchID,
-			CommitSHA: r.CommitSHA,
-			EventID:   r.EventID,
+			RunID:      r.RunID,
+			PatchID:    r.PatchID,
+			CommitSHA:  r.CommitSHA,
+			EventID:    r.EventID,
+			AdoptedRun: r.AdoptedRun,
 		})
 	}
 	return out, nil
@@ -110,8 +111,8 @@ func (s *Server) handleAttribution(w http.ResponseWriter, r *http.Request) {
 		Commit:  full,
 		Repo:    repo,
 		Claimed: claim.Run,
-		Content: verify.AttributeContent(r.Context(),
+		Content: verify.AttributeClaim(r.Context(),
 			verify.ContentConfig{GitPath: s.prover.GitPath(), Source: contentSource{store: s.store}},
-			path, full, claim.Run),
+			path, full, claim),
 	})
 }

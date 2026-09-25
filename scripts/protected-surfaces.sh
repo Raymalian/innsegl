@@ -87,6 +87,7 @@ set -euo pipefail
 PROTECTED_VOCAB='trailer-key|Agent-Identity|VERSIONING.md
 trailer-key|Agent-Run|VERSIONING.md
 trailer-key|Agent-Task|VERSIONING.md
+trailer-key|Agent-Adopted-Run|ADR-0051
 mcp-tool|register_agent|VERSIONING.md
 mcp-tool|get_credential|VERSIONING.md
 mcp-tool|record_event|VERSIONING.md

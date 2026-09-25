@@ -32,6 +32,16 @@ func Render(r Report) string {
 	if r.Certificate.SPIFFEID != "" {
 		field(&b, "identity", r.Certificate.SPIFFEID)
 	}
+	// ADR-0051: the three checks prove who SIGNED. The dead run whose work
+	// was adopted is a claim until the ledger's run_adopted confirms it, and
+	// the line says which of the two it is.
+	if r.Claim.AdoptedRun != "" {
+		how := "a claim the three checks below do not test; not checked against a ledger"
+		if r.Content != nil && r.Content.Result == Verified && r.Content.AdoptedRun == r.Claim.AdoptedRun {
+			how = "confirmed by the ledger's record of the adoption"
+		}
+		field(&b, "adopted from", r.Claim.AdoptedRun+" ("+how+")")
+	}
 	fmt.Fprintf(&b, "\n  VERDICT: %s\n", strings.ToUpper(string(r.Verdict)))
 
 	for i, c := range r.Checks {

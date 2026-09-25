@@ -290,7 +290,7 @@ func TestSER003EnvelopeShape(t *testing.T) {
 		// of doc 08's rule -- a new version is accepted alongside the old one
 		// on the read path and emitted alone on the write path.
 		{"an earlier schema_version", func(e *Envelope) { e.SchemaVersion = "1" }, ErrInvalidField},
-		{"a later schema_version", func(e *Envelope) { e.SchemaVersion = "3" }, ErrInvalidField},
+		{"a later schema_version", func(e *Envelope) { e.SchemaVersion = "4" }, ErrInvalidField},
 		{"missing schema_version", func(e *Envelope) { e.SchemaVersion = "" }, ErrInvalidField},
 		{"upper-case event_id", func(e *Envelope) {
 			e.EventID = strings.ToUpper(e.EventID)
