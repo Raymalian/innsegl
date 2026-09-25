@@ -282,10 +282,17 @@ func ambiguousCommitProxyConn(client net.Conn, upstream string, claimed *atomic.
 				chunk := buf[:n]
 				if strings.Contains(strings.ToLower(string(chunk)), "commit\x00") &&
 					claimed.CompareAndSwap(false, true) {
+					// MARKED BEFORE IT IS FORWARDED. The other goroutine
+					// forwards Postgres's reply unless this is set, and
+					// Postgres can answer the commit before the line after a
+					// Write runs. Set after, the acknowledgment slipped
+					// through and LED-012 reported that its own sabotage
+					// never happened (seen once in CI under -race; widened
+					// with a pause, the old order failed 5 of 5).
+					mine.Store(true)
 					if _, werr := server.Write(chunk); werr != nil {
 						return
 					}
-					mine.Store(true)
 					continue
 				}
 				if _, werr := server.Write(chunk); werr != nil {

@@ -13,7 +13,12 @@
     {
       "commit": "4ab53d0d9833f35364edd75c547316184aa25c51",
       "date": "2026-09-08",
-      "reason": "GitHub's squash merge rewrote an agent-signed commit. Squashing writes a NEW commit object: the Agent-Identity trailers survived because they are message text, the gitsign signature did not because it covers the object that no longer exists, and GitHub signed the replacement with its own web-flow PGP key and inserted 'Co-authored-by: Innsegl <agent@innsegl.invalid>', which ADR-0028 §5 forbids from any source. Both gates are right and the commit cannot be fixed: main is a protected branch and rewriting shared history to make a gate green teaches the wrong lesson. Squash merging was disabled on the repository the same day (ADR-0046) and GH-003 was written so the next one fails the build instead of landing."
+      "reason": "GitHub's squash merge rewrote an agent-signed commit. Squashing writes a NEW commit object: the Agent-Identity trailers survived because they are message text, the gitsign signature did not because it covers the object that no longer exists, and GitHub signed the replacement with its own web-flow PGP key and inserted 'Co-authored-by: Innsegl <agent@innsegl.invalid>', which ADR-0028 \u00a75 forbids from any source. Both gates are right and the commit cannot be fixed: main is a protected branch and rewriting shared history to make a gate green teaches the wrong lesson. Squash merging was disabled on the repository the same day (ADR-0046) and GH-003 was written so the next one fails the build instead of landing."
+    },
+    {
+      "commit": "f82c29a06be9104740ea47f17362f8f9caa0d9f6",
+      "date": "2026-09-24",
+      "reason": "The same commit as 4ab53d0d9833f35364edd75c547316184aa25c51 above, re-hashed when main's history was rewritten on 2026-09-24 to remove personal data from commit metadata and file contents. Its message, tree and the defect are unchanged; only its hash and its parents' hashes differ. The entry above stays as the record of the original."
     }
   ]
 }
