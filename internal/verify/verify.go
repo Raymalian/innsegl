@@ -384,6 +384,20 @@ func (v *Verifier) verifyCommit(ctx context.Context, repo string, c commit) (Rep
 	}
 
 	leaf, intermediates, certErr := commitCertificate(c.Signature)
+	if certErr != nil && !claims {
+		// VER-023 (#296): signed, but not by anything this system issues —
+		// GitHub signs the merges it makes with its own PGP key — and claiming
+		// no identity. VER-006's rule holds: a commit that claims nothing is
+		// unattributed, and a foreign signature does not turn it into a claim.
+		// Measured: 47 of main's merge commits were being reported failed.
+		rep.Verdict = VerdictUnattributed
+		rep.Notes = append(rep.Notes,
+			"This commit is signed, but not with a certificate this system's signer "+
+				"issues (for example GitHub's own signature on a merge it made), and "+
+				"it carries no Agent-* trailer. It makes no attribution claim, so there "+
+				"is nothing to verify: that signature is not this system's to check.")
+		return rep, nil
+	}
 	if certErr != nil {
 		// THE PATH A REBASED COMMIT ALWAYS TAKES, and the one the content
 		// check exists for. It used to return here, before the check ran: the
