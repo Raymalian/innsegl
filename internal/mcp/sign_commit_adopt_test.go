@@ -126,6 +126,25 @@ func TestADP008AnAdoptionIsRecordedTiedToItsIntentAndNamedInTheCommit(t *testing
 	}
 }
 
+// Every state the ledger calls dead adopts, not only retired: a run the reaper
+// withdrew (lapsed) or that stayed withdrawn past the horizon (abandoned) left
+// its work exactly as a retired one did.
+func TestADP008EveryDeadStateAdopts(t *testing.T) {
+	for _, state := range []string{"retired", "lapsed", "abandoned"} {
+		t.Run(state, func(t *testing.T) {
+			w, a, f := adoptWiring(t)
+			a.state = state
+			if _, err := w.call(t, adoptIn(f)); err != nil {
+				t.Fatalf("adopting a %s run: %v", state, err)
+			}
+			got := scMember[string](t, w.ledger.only(t, event.EventTypeRunAdopted), event.FieldAdoptedRunState)
+			if got != state {
+				t.Errorf("adopted_run_state = %q, want %q", got, state)
+			}
+		})
+	}
+}
+
 func TestADP008APlainCommitIsUnchanged(t *testing.T) {
 	w, _, _ := adoptWiring(t)
 	if _, err := w.call(t, scIn()); err != nil {

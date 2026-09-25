@@ -87,6 +87,14 @@ func TestADP009TheLedgerAdoptionReadsTheRunsStateAndItsEvents(t *testing.T) {
 		t.Errorf("a run with no ending reads %q, %v; want active", state, aerr)
 	}
 
+	// No clock configured reads the real one: a run retired an hour before
+	// the fixed clock is retired now too.
+	realClock := a
+	realClock.Now = nil
+	if state, _, rerr := realClock.AdoptionEvidence(t.Context(), "run-41"); rerr != nil || state != "retired" {
+		t.Errorf("with the real clock = %q, %v; want retired", state, rerr)
+	}
+
 	unknown := a
 	unknown.Runs = adpRuns{}
 	if state, got, err := unknown.AdoptionEvidence(t.Context(), "run-41"); state != "" || got != nil || err != nil {
