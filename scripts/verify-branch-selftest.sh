@@ -75,7 +75,10 @@ GATE="$ROOT/scripts/verify-branch.sh"
 # two happened. Measured: the previous pin (e58bd5c, signed 2026-09-07) failed
 # checks 1 and 2 unforged, which meant case 2 had been going red with no
 # forgery in it at all.
-SIGNED_FIXTURE="${SIGNED_FIXTURE:-84567b99155a21c04d4b6f232f9540ae76e168a0}"
+# Re-pinned 2026-09-26: the previous pin was re-hashed when main's history was
+# rewritten, and a rewritten commit carries no signature. This one was signed
+# after the rewrite and passes all four cases against the running deployment.
+SIGNED_FIXTURE="${SIGNED_FIXTURE:-3bd15bc9400754d997ac6c19e0ed01c4e3bb3ff0}"
 
 # Port 1 is nobody's Rekor, on 127.0.0.1 or anywhere else.
 DEAD_REKOR="http://127.0.0.1:1"

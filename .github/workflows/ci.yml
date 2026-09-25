@@ -379,6 +379,35 @@ jobs:
       - name: A destructive git is refused while a run holds work, and nothing else is
         run: ./scripts/hooks/git-tree-guard-selftest.sh
 
+  selftests-wired:
+    name: self-tests wired
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # #279. A self-test only protects anyone if something runs it on what
+      # was pushed; a local hook does not travel. This fails on any
+      # scripts/**/*-selftest.sh that no workflow names and that has no
+      # recorded reason in the gate itself, so the next one added cannot go
+      # quiet the way five did.
+      - name: Every gate self-test runs in CI, or says why it cannot
+        run: ./scripts/selftests-wired.sh
+      - name: And the check itself refuses what it must
+        run: ./scripts/selftests-wired-selftest.sh
+
+  test-ids-selftest:
+    name: test ids self-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # #279. The gate reads doc 07, which is local only, so it runs in the
+      # pre-commit hook. Its self-test drives it against fixtures of its own
+      # and needs nothing untracked: measured passing 17 of 17 in a tree
+      # holding only what CI checks out.
+      - name: The test-id gate refuses what it must
+        run: ./scripts/test-ids-selftest.sh
+
   orphan-sweep:
     name: orphan sweep
     runs-on: ubuntu-latest
