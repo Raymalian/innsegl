@@ -1492,7 +1492,9 @@ func (w *prtWorld) mustRegister(ctx context.Context, t *testing.T, suffix string
 		"agent_type":      prtAgentType,
 		"task_id":         prtTaskID,
 		"idempotency_key": w.key("prep-" + suffix),
-		"repo":            v2Repo, "branch": v2Branch,
+		// The repository the workload signs in: sign_commit refuses a run
+		// registered for any other (#308).
+		"repo": prtRepo, "branch": v2Branch,
 	})
 	if o.transport != nil {
 		t.Fatalf("preparing a run: %v", o.transport)
