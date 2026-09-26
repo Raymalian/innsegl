@@ -336,3 +336,35 @@ func runRebasePass(t *testing.T, m *memLedger, repos reconciler.Repos, repoID st
 	result, err := r.Reconcile(context.Background())
 	return result.Rebase, err
 }
+
+// TestRM195ASupersedingRecordIsWrittenUnderTheCurrentSchema: the superseding
+// record is a new append, so it takes the schema the ledger appends under
+// today, not the one its original was written under. Copying an original's
+// "2" into a ledger at "3" was refused at append on every cycle, and a rewrite
+// of any commit signed before the cutover could never be recorded (#316).
+func TestRM195ASupersedingRecordIsWrittenUnderTheCurrentSchema(t *testing.T) {
+	const (
+		patch   = "5e4c6c1f0a2d9b3e8f7a1c4d6b0e9f2a3c5d7e81"
+		oldSHA  = "1111111111111111111111111111111111111111"
+		newSHA  = "2222222222222222222222222222222222222222"
+		theRun  = "run-42"
+		theRepo = "github.com/acme/api"
+	)
+	m := newMemLedger(rebaseClock)
+	seedRun(t, m, theRun)
+	recorded := seedRecorded(t, m, theRun, theRepo, patch, oldSHA)
+	eventByID(t, m, recorded)[event.FieldSchemaVersion] = "2"
+
+	repos := &rebaseRepo{commits: []reconciler.RepoCommit{{SHA: newSHA, PatchID: patch, RunID: theRun}}}
+	if _, err := runRebasePass(t, m, repos, theRepo); err != nil {
+		t.Fatalf("the rebase pass failed: %v", err)
+	}
+	sup := supersedingFor(t, m, newSHA)
+	if got := sup[event.FieldSchemaVersion]; got != event.SchemaVersion {
+		t.Errorf("schema_version = %v, want %s: the record is appended now, under "+
+			"the schema the ledger appends under now", got, event.SchemaVersion)
+	}
+	if got := eventByID(t, m, recorded)[event.FieldSchemaVersion]; got != "2" {
+		t.Errorf("the original's schema_version became %v; I4 forbids touching it", got)
+	}
+}

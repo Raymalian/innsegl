@@ -126,6 +126,17 @@ export const strings = {
     marked: "differs",
   },
 
+  /* RM-196 (#317): the identity check failed and there is no certificate at
+   * all. That is not a mismatch — there is nothing to mismatch — and saying so
+   * sends a reader after a forgery that never happened. A rewrite (a rebase, a
+   * history rewrite) is the usual cause, and it drops the signature. */
+  unsigned: {
+    title: "This commit is not signed",
+    detail:
+      "It carries an identity trailer but no signature, so nothing proves who made it. A rebase or history rewrite drops the signature; if the original was found, the notes below name it.",
+    evidence: "See the claimed identity",
+  },
+
   mismatch: {
     title: "Trailer does not match the certificate",
     detail:

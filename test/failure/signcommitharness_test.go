@@ -671,15 +671,17 @@ func (c *campaign) launchSign(t *testing.T, f signFlags) *daemon {
 	)
 }
 
-// signRegister registers one run on a fresh, uninterrupted sign daemon.
-func (c *campaign) signRegister(t *testing.T, f signFlags, prefix string) registerReply {
+// signRegister registers one run for repo on a fresh, uninterrupted sign
+// daemon. A run signs only in the repository it was registered for (#308),
+// so every repository a shot creates gets a run of its own.
+func (c *campaign) signRegister(t *testing.T, f signFlags, prefix, repo string) registerReply {
 	t.Helper()
 	d := c.launchSign(t, f)
 	session := c.connect(t, d, d.addr)
 	out := c.callOnce(t, session, mcp.ToolRegisterAgent, map[string]any{
 		"agent_type": crashAgentType, "task_id": crashTaskID,
 		"idempotency_key": c.name(prefix),
-		"repo":            v2Repo, "branch": v2Branch,
+		"repo":            repo, "branch": v2Branch,
 	})
 	d.reap()
 	var reply registerReply
@@ -825,12 +827,16 @@ func (c *campaign) fireSign(t *testing.T, f signFlags, args map[string]any, when
 //
 // It creates its own repository (signNewRepo) rather than taking one from its
 // caller: every shot's repository is used by that shot and by no other, ever
-// (RM-072, #95, third attempt) — see signNewRepo's own comment for why.
+// (RM-072, #95, third attempt) — see signNewRepo's own comment for why. The
+// run is the shot's own too, registered for that repository (#308).
 func (c *campaign) signShot(
-	t *testing.T, f signFlags, runID, why, target string, delay time.Duration,
+	t *testing.T, f signFlags, why, target string, delay time.Duration,
 ) string {
 	t.Helper()
 	repoName, repoDir := signNewRepo(t, c, f.workspace)
+	run := c.signRegister(t, f, "sign-run", repoName)
+	t.Cleanup(func() { c.signRetire(t, f, run.RunID) })
+	runID := run.RunID
 	key := c.name("sign-key")
 	tree := signStage(t, repoDir, strings.NewReplacer("/", "-", "_", "-").Replace(key))
 	args := signArgs(runID, repoName, tree, "commit for "+key, key)
@@ -1105,15 +1111,14 @@ func (c *campaign) signCommit(t *testing.T) {
 		gitsign:   sig.gitsignPath,
 	}
 
-	run := c.signRegister(t, f, "sign-run")
-	t.Cleanup(func() { c.signRetire(t, f, run.RunID) })
-
 	// Calibration. The blind campaign's window is THIS deployment's measured
 	// call duration — a real Fulcio round trip plus a Rekor upload, far
 	// slower than the other four tools' Postgres round trips — not a number
 	// typed in. Its own repository, like every shot below: nothing about
 	// calibration needs to share one either.
 	warmRepoName, warmRepoDir := signNewRepo(t, c, root)
+	run := c.signRegister(t, f, "sign-run", warmRepoName)
+	t.Cleanup(func() { c.signRetire(t, f, run.RunID) })
 	before := len(sigCommitObjects(t, warmRepoDir))
 	tree := signStage(t, warmRepoDir, "warm")
 	args := signArgs(run.RunID, warmRepoName, tree, "warm commit", c.name("sign-warm-key"))
@@ -1167,13 +1172,13 @@ func (c *campaign) signCommit(t *testing.T) {
 	// INNSEGL_CRASH_SEED still replays the identical blind schedule.
 	for _, target := range []string{winSignIntentNoObject, winSignObjectNoRecord} {
 		c.aim(t, target, func(t *testing.T) string {
-			return c.signShot(t, f, run.RunID, "observed trigger for "+target, target, 0)
+			return c.signShot(t, f, "observed trigger for "+target, target, 0)
 		})
 	}
 
 	for i, delay := range c.strata(window, blind) {
 		t.Logf("blind stratum %d/%d: kill %s after dispatch -> %s", i+1, blind, delay,
-			c.signShot(t, f, run.RunID,
+			c.signShot(t, f,
 				fmt.Sprintf("blind stratum %d, +%s", i+1, delay), "", delay))
 	}
 }

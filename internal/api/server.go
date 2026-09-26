@@ -52,9 +52,12 @@ type ServerConfig struct {
 
 // Health is what an operator reads to see that "read-only" is a measured fact
 // rather than a claim. It is the report Open gathered from the server itself.
+//
+// It names no repository. A health probe says whether the service is up; a
+// list of the repositories it serves would tell anyone who can reach the probe
+// which projects exist (#309).
 type Health struct {
 	Database ReadOnlyReport `json:"database"`
-	Repos    []string       `json:"repos"`
 }
 
 type errorBody struct {
@@ -228,7 +231,6 @@ func (s *Server) handleProof(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, Health{
 		Database: s.store.ReadOnly(),
-		Repos:    s.prover.Repos(),
 	})
 }
 

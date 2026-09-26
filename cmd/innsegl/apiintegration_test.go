@@ -369,7 +369,7 @@ func TestAPI010TheFiveRoutesAnswerThroughTheCommand(t *testing.T) {
 				SQLState string `json:"sqlstate"`
 			} `json:"probes"`
 		} `json:"database"`
-		Repos []string `json:"repos"`
+		Repos *[]string `json:"repos"`
 	}
 	if err := json.Unmarshal(body, &health); err != nil {
 		t.Fatalf("decode /api/v1/health: %v\n%s", err, body)
@@ -389,12 +389,13 @@ func TestAPI010TheFiveRoutesAnswerThroughTheCommand(t *testing.T) {
 				p.Name, p.SQLState)
 		}
 	}
-	if len(health.Repos) != 1 || health.Repos[0] != "github.com/innsegl/demo" {
-		t.Errorf("health reports repos %v, want the one this command was given", health.Repos)
+	// RM-189: the public health endpoint names no repository.
+	if health.Repos != nil {
+		t.Errorf("health lists repos %v; an unauthenticated endpoint must not name them", *health.Repos)
 	}
-	t.Logf("API-010 /api/v1/health role=%s superuser=%v writes_refused=%d repos=%v",
+	t.Logf("API-010 /api/v1/health role=%s superuser=%v writes_refused=%d",
 		health.Database.Role, health.Database.Superuser,
-		len(health.Database.Probes), health.Repos)
+		len(health.Database.Probes))
 }
 
 func firstLine(b []byte) string {

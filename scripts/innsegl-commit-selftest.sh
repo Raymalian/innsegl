@@ -192,7 +192,27 @@ echo two > "$REPO_DIR/a.txt"
 git -C "$REPO_DIR" add a.txt
 
 RUNS="$WORK/runs"
-TREE_KEY="$(printf '%s' "$REPO_DIR" | shasum -a 256 | cut -c1-32)"
+
+# tree_key_of DIR — the key RM-193 (#313) derives for the tree at DIR: the
+# repository, the branch, and the linked worktree's name when it is one. Never
+# the path. Every fixture here has the same origin, so the repository is a
+# literal; what varies is the branch and the worktree.
+tree_key_of() {
+  local dir="$1" branch wt="" gd gc
+  branch="$(git -C "$dir" symbolic-ref --short --quiet HEAD 2>/dev/null)" || branch=""
+  [ -n "$branch" ] || branch="detached"
+  gd="$(cd "$dir" && cd "$(git rev-parse --git-dir)" && pwd -P)"
+  gc="$(cd "$dir" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+  [ "$gd" = "$gc" ] || wt="$(basename "$gd")"
+  printf 'innsegl-tree/2\n%s\n%s\n%s' "example.test/org/name" "$branch" "$wt" \
+    | shasum -a 256 | cut -c1-32
+}
+
+# path_key_of DIR — the key before RM-193: a digest of the absolute path. What
+# the harness hook still writes, and what the signer migrates away from.
+path_key_of() { printf '%s' "$(cd "$1" && pwd -P)" | shasum -a 256 | cut -c1-32; }
+
+TREE_KEY="$(tree_key_of "$REPO_DIR")"
 PTR="$RUNS/by-tree/$TREE_KEY"
 mkdir -p "$RUNS/by-tree"
 
@@ -874,6 +894,102 @@ if [ "$STATUS" -eq 0 ] && [ "$#" -eq 2 ] && [ "$1" != "$2" ]; then
 else
   bad "RM-186: status $STATUS, keys: $keys, out: $(cat "$WORK/out")"
 fi
+
+# --- RM-193 (#313): the tree key does not depend on the host path -----------
+#
+# The key names this tree's pointer and enters idempotency keys the chain
+# records (`succeeds-<run>-<key>`). A digest of the absolute path made both a
+# fact about the host: moving a checkout changed its key and lost its run. The
+# key is now the repository, the branch and the linked worktree's name.
+
+LIVE2=run-livetwo000000000000000000000000
+state "$LIVE" active
+state "$LIVE2" active
+script_tool register_agent ok "{\"run_id\":\"$SUCCESSOR\",\"spiffe_id\":\"spiffe://innsegl.dev/agent/orchestrator/rm134/$SUCCESSOR\",\"expires_at\":\"2026-09-16T00:00:00.000Z\"}"
+
+# 30. An old-key pointer, as the harness writes it today, is found once and
+#     rewritten under the new key, so an existing tree keeps its run.
+MIG="$(cd "$WORK" && pwd -P)/mig"
+one_writer "$MIG"
+# Its own branch: another clone of the same repository on the same branch has,
+# by design, the same key, and the fixture above already holds main's.
+git -C "$MIG" checkout -q -b rm193-mig
+MIG_OLD="$(path_key_of "$MIG")"
+MIG_NEW="$(tree_key_of "$MIG")"
+script_tool sign_commit ok "{\"commit_sha\":\"$(git -C "$MIG" rev-parse HEAD)\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
+drive_in "$MIG" -p a.txt
+if [ "$STATUS" -eq 0 ] && called sign_commit "\"run_id\": \"$LIVE\"" \
+   && [ ! -f "$RUNS/by-tree/$MIG_OLD" ] && [ "$(sed -n 1p "$RUNS/by-tree/$MIG_NEW" 2>/dev/null)" = "$LIVE" ]; then
+  ok "RM-193 an old-key pointer is found once and rewritten under the new key"
+else
+  bad "RM-193 migration: status $STATUS, old $(ls "$RUNS/by-tree/$MIG_OLD" 2>&1), new $(cat "$RUNS/by-tree/$MIG_NEW" 2>&1), calls: $(cat "$CALLS")"
+fi
+
+# 31. The key contains no path digest: what the signer wrote is named by the
+#     repository, branch and worktree alone, and differs from the path's.
+if [ "$MIG_NEW" != "$MIG_OLD" ] && [ -f "$RUNS/by-tree/$MIG_NEW" ] \
+   && ! ls "$RUNS/by-tree" | grep -qx "$MIG_OLD"; then
+  ok "RM-193 the tree key contains no path digest"
+else
+  bad "RM-193 path digest: new $MIG_NEW, old $MIG_OLD, dir: $(ls "$RUNS/by-tree")"
+fi
+
+# 32. A moved checkout keeps its key, and so its run.
+MOVED="$(cd "$WORK" && pwd -P)/elsewhere/mig-moved"
+mkdir -p "$(dirname "$MOVED")"
+mv "$MIG" "$MOVED"
+drive_in "$MOVED" -p a.txt
+if [ "$(tree_key_of "$MOVED")" = "$MIG_NEW" ] && [ "$STATUS" -eq 0 ] \
+   && called sign_commit "\"run_id\": \"$LIVE\"" && ! grep -q '^register_agent ' "$CALLS"; then
+  ok "RM-193 a moved checkout keeps its key and signs under its run"
+else
+  bad "RM-193 moved: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+
+# 33. A session pointer under the old key is still read, and left where the
+#     harness wrote it: it belongs to the session, whose end removes it there.
+rm -f "$RUNS/by-tree/$MIG_NEW"
+MOVED_OLD="$(path_key_of "$MOVED")"
+printf '%s\n%s\n' "$SESSION_RUN" "sess-1" > "$RUNS/by-tree/$MOVED_OLD.session"
+state "$SESSION_RUN" active
+script_tool sign_commit ok "{\"commit_sha\":\"$(git -C "$MOVED" rev-parse HEAD)\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
+drive_in "$MOVED" -p a.txt
+if [ "$STATUS" -eq 0 ] && called register_agent "\"parent_run_id\": \"$SESSION_RUN\"" \
+   && [ -f "$RUNS/by-tree/$MOVED_OLD.session" ]; then
+  ok "RM-193 an old-key session pointer is still read, and left as the harness wrote it"
+else
+  bad "RM-193 session: status $STATUS, calls: $(grep '^register_agent ' "$CALLS"), said: $(cat "$WORK/out")"
+fi
+rm -f "$RUNS/by-tree/$MOVED_OLD.session"
+
+# 34. Two worktrees of one repository and one branch stay distinct: the
+#     worktree's name tells them apart, not its path.
+WTR="$(cd "$WORK" && pwd -P)/wtr"
+one_writer "$WTR"
+git -C "$WTR" commit -qm second
+git -C "$WTR" branch feat
+git -C "$WTR" worktree add -q "$WTR/.worktrees/w1" feat
+git -C "$WTR" worktree add -q -f "$WTR/.worktrees/w2" feat
+for w in w1 w2; do
+  echo "work in $w" > "$WTR/.worktrees/$w/a.txt"
+  git -C "$WTR/.worktrees/$w" add a.txt
+done
+printf '%s\n%s\n%s\n' "$LIVE" "rm134" ".worktrees/w1" > "$RUNS/by-tree/$(path_key_of "$WTR/.worktrees/w1")"
+printf '%s\n%s\n%s\n' "$LIVE2" "rm134" ".worktrees/w2" > "$RUNS/by-tree/$(path_key_of "$WTR/.worktrees/w2")"
+script_tool sign_commit ok "{\"commit_sha\":\"$(git -C "$WTR" rev-parse HEAD)\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
+drive_in "$WTR/.worktrees/w1" -p a.txt
+W1_OK=""; called sign_commit "\"run_id\": \"$LIVE\"" && [ "$STATUS" -eq 0 ] && W1_OK=1
+drive_in "$WTR/.worktrees/w2" -p a.txt
+W2_OK=""; called sign_commit "\"run_id\": \"$LIVE2\"" && [ "$STATUS" -eq 0 ] && W2_OK=1
+K1="$(tree_key_of "$WTR/.worktrees/w1")"; K2="$(tree_key_of "$WTR/.worktrees/w2")"
+if [ -n "$W1_OK" ] && [ -n "$W2_OK" ] && [ "$K1" != "$K2" ] \
+   && [ "$(sed -n 1p "$RUNS/by-tree/$K1" 2>/dev/null)" = "$LIVE" ] \
+   && [ "$(sed -n 1p "$RUNS/by-tree/$K2" 2>/dev/null)" = "$LIVE2" ]; then
+  ok "RM-193 two worktrees of one branch keep distinct keys and their own runs"
+else
+  bad "RM-193 worktrees: w1 ${W1_OK:-no} w2 ${W2_OK:-no}, keys $K1 $K2, said: $(cat "$WORK/out")"
+fi
+script_tool sign_commit ok "{\"commit_sha\":\"$HEAD_SHA\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
 
 echo
 echo "commit-selftest: $pass ok, $fail failed"

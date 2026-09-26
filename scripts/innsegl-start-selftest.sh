@@ -65,6 +65,10 @@ fixture() {                       # fixture <dir>
   cp "${START}" "${d}/scripts/innsegl-start.sh"
   printf '#!/bin/sh\nexit 0\n' > "${d}/scripts/rekor-tlog-health.sh"
   chmod +x "${d}/scripts/rekor-tlog-health.sh"
+  # RM-190: the backup's freshness has its own cases in
+  # backup-service-selftest.sh; here it is a sibling gate like the one above.
+  printf '#!/bin/sh\nexit 0\n' > "${d}/scripts/backup-freshness.sh"
+  chmod +x "${d}/scripts/backup-freshness.sh"
 
   # `docker inspect <name> --format ...` answers from states.txt; a name with no
   # line there is absent, exactly as docker reports it.

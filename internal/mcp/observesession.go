@@ -241,6 +241,12 @@ type observeSessionIn struct {
 	// thing that ends a descendant is a stop that carried this, at the moment
 	// it carried it. cascade.go is the contract in full.
 	EndsDescendants bool `json:"ends_descendants,omitempty"`
+
+	// firstSight marks a start made by observe_tool_call's first-sight path
+	// rather than by a harness's own session start. Such a start never
+	// resumes a retired session (RM-191, #311): it reports the terminal state
+	// as before. Unexported, so no caller of the tool can send it.
+	firstSight bool
 }
 
 // observeSessionOut is doc 01 §4's "the run": the identity, the workspace it
@@ -316,9 +322,23 @@ type observeSessionMarker struct {
 	Worktree  string `json:"worktree"`
 	Branch    string `json:"branch"`
 	// RetiredAt is empty while the session is live. Set, it is the instant the
-	// ledger stamped on `run_retired`, and it is what a second stop and a
-	// start-after-stop are answered with.
+	// ledger stamped on `run_retired`, and it is what a second stop is
+	// answered with.
 	RetiredAt string `json:"retired_at,omitempty"`
+	// IdempotencyKey is the key RunID was registered under. Empty on a marker
+	// written before RM-191 (#311), and on any first start, where it is
+	// observeSessionKey(SessionID). A resumed session's run is registered
+	// under observeSessionResumeKey instead, and a later start for it has to
+	// replay THAT key: the session key would derive the retired run again.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+}
+
+// key is the idempotency key this marker's run was registered under.
+func (m observeSessionMarker) key() string {
+	if m.IdempotencyKey != "" {
+		return m.IdempotencyKey
+	}
+	return observeSessionKey(m.SessionID)
 }
 
 // reply renders a marker as the tool's result.
@@ -522,13 +542,30 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 	if found && !adminScopeAdmits(ctx, marker.Repo) {
 		return observeSessionOut{}, adminScopeRefusal(ToolObserveSession)
 	}
-	if found && marker.RetiredAt != "" {
-		// THE TERMINAL STATE, and not a refusal: the reference shim's
-		// SessionStart never blocks, because refusing the operator's own
-		// session stops them working on their own machine. See the note on
-		// the derived run id at the top of this file for why re-registering
-		// here would hand back a dead identity rather than a new one.
+
+	// A RESUMED SESSION IS A NEW RUN (RM-191, #311). A start on a marker whose
+	// run this tool retired used to answer with the terminal state and
+	// register nothing, so everything the resumed session then did reached
+	// the ledger under no run. It now registers a new run, parented on the
+	// retired one through the existing parent_run_id: no new event, no new
+	// member. The key is derived from the retired run and the session, so a
+	// replayed start — including one after a mapping that failed to write —
+	// replays the same registration rather than making a second.
+	if found && marker.RetiredAt != "" && in.firstSight {
+		// THE TERMINAL STATE for a tool call's first sight: a retired marker
+		// proves this session's start reached the deployment, so a stray late
+		// call must not mint a run. observe_tool_call turns this into I4's
+		// refusal. Only a start resumes.
 		return marker.reply(ObserveSessionPhaseStart, false, observeSessionRetiredDetail(marker)), nil
+	}
+	resumedFrom := ""
+	key := observeSessionKey(sessionID)
+	if found {
+		key = marker.key()
+		if marker.RetiredAt != "" {
+			resumedFrom = marker.RunID
+			key = observeSessionResumeKey(marker.RunID, sessionID)
+		}
 	}
 
 	agentType, task := in.AgentType, in.Task
@@ -541,6 +578,12 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 	parentRunID, parentDetail, err := c.parentRun(sessionID, in)
 	if err != nil {
 		return observeSessionOut{}, err
+	}
+	if resumedFrom != "" {
+		// The run this session was is the one that the resumed session
+		// continues, so it is the parent. One member holds one parent.
+		parentDetail = observeSessionResumedDetail(sessionID, resumedFrom, parentRunID)
+		parentRunID = resumedFrom
 	}
 	if found {
 		// A SESSION IS REGISTERED ONCE, AND ITS TASK IS FIXED THEN. Re-deriving
@@ -576,7 +619,7 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 	reg, err := registerAgent(ctx, nil, registerAgentIn{
 		AgentType:      agentType,
 		TaskID:         task,
-		IdempotencyKey: observeSessionKey(sessionID),
+		IdempotencyKey: key,
 		Repo:           repo,
 		Branch:         branch,
 		// RESOLVED HERE, VALIDATED THERE. parentRun turns a harness's session
@@ -585,6 +628,10 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 		// is register_agent's, and a second opinion about it here is a second
 		// thing that can disagree with the first.
 		ParentRunID: parentRunID,
+		// THE ONE PATH that may name a retired run as parent (RM-191, #311):
+		// the resumed session continues it. Every other register_agent caller
+		// is still refused a retired parent (MCP-082).
+		resumesRetiredParent: resumedFrom != "",
 	})
 	if err != nil {
 		return observeSessionOut{}, err
@@ -601,6 +648,9 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 		Worktree:  worktree,
 		Branch:    branch,
 	}
+	if key != observeSessionKey(sessionID) {
+		next.IdempotencyKey = key
+	}
 	if err := observeSessionWriteMarker(c.markerDir, next); err != nil {
 		// THE ASYMMETRY WITH STOP. A stop that cannot write its marker has
 		// already retired the run, so the write is bookkeeping. A start that
@@ -611,7 +661,7 @@ func (c *observeSessionService) start(ctx context.Context, sessionID string, in 
 		return observeSessionOut{}, observeSessionMappingNotWritten(reg.RunID, err)
 	}
 
-	out := next.reply(ObserveSessionPhaseStart, !found, parentDetail)
+	out := next.reply(ObserveSessionPhaseStart, !found || resumedFrom != "", parentDetail)
 	// Off the reply and never out of the marker: a token at rest is a token
 	// that can be read off a disk. register_agent recomputes it from the
 	// deployment secret on every call, replays included.
@@ -854,9 +904,8 @@ func observeSessionPhaseError(phase string) error {
 func observeSessionRetiredDetail(m observeSessionMarker) string {
 	return fmt.Sprintf(
 		"session %q ended at %s and run %s was retired then; retirement is effective "+
-			"immediately and terminal (IP §6.2, I4). A new session needs a new session id: "+
-			"re-registering under this one would derive the same run and hand back an "+
-			"identity that can no longer sign",
+			"immediately and terminal (IP §6.2, I4). A session start under this id "+
+			"registers a new run with this one as its parent; a tool call does not",
 		m.SessionID, m.RetiredAt, m.RunID)
 }
 
@@ -926,6 +975,31 @@ func observeSessionMappingNotWritten(runID string, cause error) error {
 // rows and this tool's new ones are read the same way.
 func observeSessionKey(sessionID string) string {
 	return observeSessionKeyPrefix + sessionID
+}
+
+// observeSessionResumeKey derives the idempotency key for a session resumed
+// after its run was retired (RM-191, #311).
+//
+// A function of the retired run and the session and nothing else, so every
+// start on the same retired marker is one registration. It differs from
+// observeSessionKey, which would derive the retired run again, and it differs
+// per retired run, so a session resumed twice gets a run each time. At most
+// 8 + 64 + 8 + 36 = 116 bytes, inside doc 02 §2's 128.
+func observeSessionResumeKey(retiredRunID, sessionID string) string {
+	return observeSessionKey(sessionID) + "-resumes-" + retiredRunID
+}
+
+// observeSessionResumedDetail says a start registered a new run for a session
+// whose run had been retired, and names a caller-supplied parent it did not
+// record.
+func observeSessionResumedDetail(sessionID, retiredRunID, callerParent string) string {
+	detail := fmt.Sprintf("session %q was resumed after run %s was retired; a new run was "+
+		"registered for it, with %s as its parent", sessionID, retiredRunID, retiredRunID)
+	if callerParent != "" && callerParent != retiredRunID {
+		detail += fmt.Sprintf(". The parent %s named in the call was not recorded: a run "+
+			"has one parent, and this one continues the retired run", callerParent)
+	}
+	return detail
 }
 
 // observeSessionMarkerName is the file one session's marker lives in.

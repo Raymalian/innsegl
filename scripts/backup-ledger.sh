@@ -155,6 +155,12 @@ Options:
                           default -- the innsegl binary's own default is "")
   --object-store-access-key K  (default: innsegl)
   --object-store-secret-key K  (default: innsegl-compose-objects)
+  --copy-to DIR           after a backup VERIFIES, also copy the dump and its
+                          report here (default: $INNSEGL_BACKUP_COPY_DIR). The
+                          deployment points it at a host folder bind-mounted
+                          from outside the container runtime (RM-190). A copy
+                          that fails is logged and recorded in .host-copy
+                          under --out; it does not un-verify the backup
   --quiet                 print less on success; failures are always reported
   -h, --help              this text
 
@@ -180,6 +186,7 @@ object_store_prefix="segments/"
 object_store_access_key="innsegl"
 object_store_secret_key="innsegl-compose-objects"
 object_store_region="${INNSEGL_OBJECT_STORE_REGION:-us-east-1}"
+copy_dir="${INNSEGL_BACKUP_COPY_DIR:-}"
 quiet=0
 
 while [ $# -gt 0 ]; do
@@ -195,6 +202,7 @@ while [ $# -gt 0 ]; do
     --object-store-prefix)     object_store_prefix="${2-}"; shift 2 || true ;;
     --object-store-access-key) object_store_access_key="${2-}"; shift 2 || true ;;
     --object-store-secret-key) object_store_secret_key="${2-}"; shift 2 || true ;;
+    --copy-to)                 copy_dir="${2-}"; shift 2 || true ;;
     --quiet)                   quiet=1; shift ;;
     -h|--help)                 usage; exit "${EXIT_OK}" ;;
     *)
@@ -558,9 +566,93 @@ say ""
 cat "${report_file}"
 say ""
 
+# ---------------------------------------------------------------------------
+# RM-190 (#310): what the readiness report reads, and the copy outside the
+# container runtime.
+#
+# .last-verified names the newest dump that VERIFIED, with the time it did.
+# The loop's .last-run marker cannot answer that: it is refreshed by an
+# `unverified` run too, and says nothing about which file is the good one.
+#
+# THE COPY. The dump lives in a container volume, and a reset of the runtime
+# removes every volume at once -- the only copy with it. So a verified dump is
+# also copied to --copy-to, which the deployment bind-mounts from a host folder
+# (~/innsegl-backups by default). Only a VERIFIED dump is copied: the host
+# folder is where an operator goes after the volume is gone, and an unverified
+# or mismatching file there would be taken for a backup.
+#
+# Written to a temporary name and moved into place, so a copy interrupted
+# halfway never leaves a truncated file under a real name. Compared after
+# writing, because "cp exited 0" is the same kind of claim as "pg_dump exited 0".
+#
+# A FAILED COPY IS REPORTED, NEVER SILENT, AND DOES NOT UN-VERIFY THE BACKUP.
+# The dump in the volume restores and matches; saying otherwise would be false.
+# The failure is logged here and recorded in .host-copy, which the readiness
+# report (scripts/backup-freshness.sh) turns into a fault.
+# ---------------------------------------------------------------------------
+host_copy_file="${out_dir}/.host-copy"
+
+write_whole() {  # write_whole FILE LINE -- atomically, errors swallowed
+  { printf '%s\n' "$2" >"$1.$$" && mv -- "$1.$$" "$1"; } 2>/dev/null
+}
+
+record_last_verified() {
+  write_whole "$1/.last-verified" "$(date -u +%s) ${dumpfile##*/}" || \
+    warn "backup-ledger: could not record the last verified backup in $1"
+}
+
+record_copy() {
+  write_whole "${host_copy_file}" "$(date -u +%s) $*" || \
+    warn "backup-ledger: could not record the host copy's verdict in ${host_copy_file}"
+}
+
+copy_failed() {
+  warn "backup-ledger: HOST COPY FAILED -- $*"
+  warn "  The backup itself verified and is kept in ${out_dir}, but it has NO copy outside the"
+  warn "  container runtime: a reset of the runtime would lose it. The readiness report says so."
+  record_copy "failed $*"
+}
+
+copy_one() {  # copy_one SRC DESTDIR
+  dst="$2/${1##*/}"
+  cp -- "$1" "${dst}.tmp.$$" 2>/dev/null && cmp -s -- "$1" "${dst}.tmp.$$" \
+    && mv -- "${dst}.tmp.$$" "${dst}" 2>/dev/null && return 0
+  rm -f -- "${dst}.tmp.$$" 2>/dev/null || true
+  return 1
+}
+
+copy_to_host() {
+  if [ -z "${copy_dir}" ]; then
+    warn "backup-ledger: HOST COPY NOT CONFIGURED -- no --copy-to or INNSEGL_BACKUP_COPY_DIR, so this"
+    warn "  backup exists only in ${out_dir}."
+    record_copy "off no host folder is configured (INNSEGL_BACKUP_COPY_DIR)"
+    return 0
+  fi
+  if [ ! -d "${copy_dir}" ]; then
+    copy_failed "${copy_dir} is not a directory -- is the host folder mounted?"
+    return 0
+  fi
+  if ! copy_one "${dumpfile}" "${copy_dir}"; then
+    copy_failed "could not write ${dumpfile##*/} to ${copy_dir} -- is it writable by uid $(id -u)?"
+    return 0
+  fi
+  if ! copy_one "${report_file}" "${copy_dir}"; then
+    copy_failed "could not write ${report_file##*/} to ${copy_dir}"
+    return 0
+  fi
+  if ! write_whole "${copy_dir}/.last-verified" "$(date -u +%s) ${dumpfile##*/}"; then
+    copy_failed "could not record the copy in ${copy_dir}/.last-verified"
+    return 0
+  fi
+  say "backup-ledger: copied to ${copy_dir}, outside the container runtime"
+  record_copy "ok ${dumpfile##*/}"
+}
+
 case "${gate_status}" in
   0)
     say "backup-ledger: OK -- ${dumpfile} restores and matches every sealed segment it covers"
+    record_last_verified "${out_dir}"
+    copy_to_host
     exit "${EXIT_OK}"
     ;;
   3)

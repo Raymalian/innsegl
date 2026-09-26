@@ -160,6 +160,9 @@ called() {
 # observed without a deployment.
 cat > "$WORK/signer" <<'SH'
 #!/bin/sh
+# Asked for a tree key, it has none, and it logs nothing: that question is not
+# a signature, and the cases below count signatures.
+[ "${1:-}" = "--print-tree-key" ] && exit 1
 printf '%s\n' "$*" >> "$(dirname "$0")/signer.calls"
 SH
 chmod +x "$WORK/signer"
@@ -656,6 +659,7 @@ CREPO_REAL="$(cd "$CREPO" && pwd -P)"
 # signer that committed would commit there.
 cat > "$WORK/capture-signer" <<SH
 #!/bin/sh
+[ "\${1:-}" = "--print-tree-key" ] && exit 1
 printf '%s\n' "\$*" >> "$WORK/signer.calls"
 [ "\$(pwd -P)" = "$CREPO_REAL" ] || { echo "capture-signer: refusing outside the fixture" >&2; exit 1; }
 git commit -q -m "captured by the harness" >/dev/null 2>&1
@@ -874,12 +878,14 @@ drive_deaf() {
 # all: the signer printed to a stderr the harness throws away.
 cat > "$WORK/signer-down" <<SH
 #!/bin/sh
+[ "\${1:-}" = "--print-tree-key" ] && exit 1
 printf '%s\n' "\$*" >> "$WORK/signer.calls"
 echo "innsegl-commit: the identity lifecycle did not answer; nothing was signed" >&2
 exit 1
 SH
 cat > "$WORK/signer-retired" <<SH
 #!/bin/sh
+[ "\${1:-}" = "--print-tree-key" ] && exit 1
 printf '%s\n' "\$*" >> "$WORK/signer.calls"
 echo "innsegl-commit: refused, that run is already retired and cannot sign" >&2
 exit 1
@@ -1934,6 +1940,128 @@ if [ "$STATUS" = "0" ]; then
   ok "OPS-109 and a missing sweep leaves SessionStart exiting 0"
 else
   bad "OPS-109 a missing sweep failed SessionStart: status $STATUS"
+fi
+
+# --- RM-192 (#312) -----------------------------------------------------------
+#
+# A REFUSAL IS SAID, ONCE. PostToolUse used to end its observe_tool_call in
+# `>/dev/null 2>&1 || true`, so a refusal -- a run the MCP cannot place, a run
+# already retired -- left no trace in the session at all. The work is still not
+# blocked; what changes is that somebody learns it is not being recorded. Once
+# per session and error class, or a refused ledger turns every tool call into
+# noise and the warning is scrolled past like the rest.
+refusal_post() {
+  drive "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$1\",\"cwd\":\"$CWD\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"x\"}}"
+}
+
+script_tool observe_tool_call ok '{"digest":"sha256:'"$(printf 'b%.0s' $(seq 1 64))"'","stored":true}'
+refusal_post sess-rm192
+if [ "$STATUS" = "0" ] && [ ! -s "$WORK/err" ]; then
+  ok "RM-192 a recorded tool call says nothing"
+else
+  bad "RM-192 a recorded tool call printed something: status $STATUS, stderr: $(cat "$WORK/err")"
+fi
+
+script_tool observe_tool_call err '{"error_class":"RUN_ALREADY_RETIRED","message":"run-x was retired","retryable":false}'
+refusal_post sess-rm192
+if [ "$STATUS" = "0" ] && [ "$(grep -c 'RUN_ALREADY_RETIRED' "$WORK/err")" = "1" ]; then
+  ok "RM-192 a refusal warns once, naming its error class, and still exits 0"
+else
+  bad "RM-192 a refusal did not warn once: status $STATUS, stderr: $(cat "$WORK/err")"
+fi
+
+refusal_post sess-rm192
+if [ "$STATUS" = "0" ] && [ ! -s "$WORK/err" ]; then
+  ok "RM-192 a second refusal of the same class in the same session is silent"
+else
+  bad "RM-192 the same class warned twice in one session: status $STATUS, stderr: $(cat "$WORK/err")"
+fi
+
+script_tool observe_tool_call err-once '{"error_class":"LEDGER_UNAVAILABLE","message":"down","retryable":true}'
+refusal_post sess-rm192
+if [ "$STATUS" = "0" ] && grep -q 'LEDGER_UNAVAILABLE' "$WORK/err" && ! grep -q 'RUN_ALREADY_RETIRED' "$WORK/err"; then
+  ok "RM-192 a different class in the same session warns"
+else
+  bad "RM-192 a different class was not said: status $STATUS, stderr: $(cat "$WORK/err")"
+fi
+
+script_tool observe_tool_call err '{"error_class":"RUN_ALREADY_RETIRED","message":"run-x was retired","retryable":false}'
+refusal_post sess-rm192-other
+if [ "$STATUS" = "0" ] && [ "$(grep -c 'RUN_ALREADY_RETIRED' "$WORK/err")" = "1" ]; then
+  ok "RM-192 and another session is told on its own account"
+else
+  bad "RM-192 another session was not told: status $STATUS, stderr: $(cat "$WORK/err")"
+fi
+
+# A class that is not the IP §4 vocabulary's shape names no file. The value is
+# the server's, but it is about to become part of a path.
+script_tool observe_tool_call err '{"error_class":"../../escape","message":"odd","retryable":false}'
+refusal_post sess-rm192
+if [ "$STATUS" = "0" ] && [ ! -e "$RUNS/escape" ] && [ ! -e "$WORK/escape" ] && grep -q 'refused' "$WORK/err"; then
+  ok "RM-192 a class that is not a class names no path and is still said"
+else
+  bad "RM-192 an odd class: status $STATUS, stderr: $(cat "$WORK/err"), runs: $(ls -a "$RUNS")"
+fi
+
+# SessionEnd forgets what the session was told, marker or no marker: the one
+# that was told something is often the one whose start was refused.
+drive "{\"hook_event_name\":\"SessionEnd\",\"session_id\":\"sess-rm192\",\"cwd\":\"$CWD\"}"
+if [ "$STATUS" = "0" ] && ! ls "$RUNS/.refused/sess-rm192."* >/dev/null 2>&1 \
+   && ls "$RUNS/.refused/sess-rm192-other."* >/dev/null 2>&1; then
+  ok "RM-192 SessionEnd removes its own session's record and no other"
+else
+  bad "RM-192 SessionEnd left the record: status $STATUS, $(ls -a "$RUNS/.refused" 2>&1)"
+fi
+script_tool observe_tool_call ok '{}'
+
+# RM-193 (#313). THE HOOK AND THE SIGNER NAME A TREE BY ONE KEY.
+#
+# The signer's tree key stopped being a digest of the host path: it is the
+# repository, the branch and the linked worktree's name. A hook still writing
+# the path digest publishes a pointer the signer only finds by migrating it,
+# and a SubagentStop removing by the path digest then misses the migrated one,
+# so a dead subagent's run outlives it in the tree. So the key is asked of the
+# signer itself, not recomputed here, and both SubagentStart's write and
+# SubagentStop's removal are asserted against it -- plus the removal of a
+# pointer a hook of the old shape left under the path digest.
+KREPO="$WORK/treekey/repo"
+KWT="$WORK/treekey/wt-rm193"
+mkdir -p "$KREPO"
+git -C "$KREPO" init -q -b main 2>/dev/null
+git -C "$KREPO" config user.email "selftest@example.test"
+git -C "$KREPO" config user.name "shim-selftest"
+git -C "$KREPO" config commit.gpgsign false
+git -C "$KREPO" config core.hooksPath "$WORK/nohooks"
+git -C "$KREPO" remote add origin "https://Example.test/Org/Name.git"
+printf 'base\n' > "$KREPO/base.txt"
+git -C "$KREPO" add base.txt
+git -C "$KREPO" commit -q -m "base"
+git -C "$KREPO" worktree add -q -b dev/rm193 "$KWT" 2>/dev/null
+SIGNER_KEY="$(cd "$KWT" && "$ROOT/scripts/innsegl-commit.sh" --print-tree-key 2>/dev/null)"
+PATH_KEY="$(printf '%s' "$(cd "$KWT" && pwd -P)" | shasum -a 256 | cut -c1-32)"
+if [ -n "$SIGNER_KEY" ] && [ "$SIGNER_KEY" != "$PATH_KEY" ]; then
+  ok "RM-193 the signer names a linked worktree by a key that is not its path digest"
+else
+  bad "RM-193 the signer printed '$SIGNER_KEY' (path digest $PATH_KEY)"
+fi
+rm -f "$RUNS/by-tree/$SIGNER_KEY" "$RUNS/by-tree/$PATH_KEY"
+script_tool observe_session ok '{"session_id":"agent-rm193","phase":"start","known":true,"registered":true,"run_id":"run-rm193","task":"rm193","worktree":"","repo":"example.test/Org/Name","branch":"dev/rm193","agent_type":"prober"}'
+SIGNER="$ROOT/scripts/innsegl-commit.sh" drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-rm193\",\"agent_id\":\"agent-rm193\",\"agent_type\":\"prober\",\"cwd\":\"$KWT\"}"
+if [ -n "$SIGNER_KEY" ] && [ "$(sed -n 1p "$RUNS/by-tree/$SIGNER_KEY" 2>/dev/null)" = "run-rm193" ] \
+   && [ ! -f "$RUNS/by-tree/$PATH_KEY" ]; then
+  ok "RM-193 SubagentStart files its pointer under the key the signer reads"
+else
+  bad "RM-193 SubagentStart pointer: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ') (want $SIGNER_KEY)"
+fi
+# A pointer the old hook left under the path digest, and one the signer
+# migrated to the new key: the stop takes both.
+printf 'run-rm193\n' > "$RUNS/by-tree/$PATH_KEY"
+script_tool observe_session ok '{"session_id":"agent-rm193","phase":"stop","known":true,"retired":true,"run_id":"run-rm193","retired_at":"2026-09-26T00:00:00.000Z"}'
+SIGNER="$ROOT/scripts/innsegl-commit.sh" drive '{"hook_event_name":"SubagentStop","session_id":"sess-rm193","agent_id":"agent-rm193","agent_type":"prober"}'
+if [ -n "$SIGNER_KEY" ] && [ ! -f "$RUNS/by-tree/$SIGNER_KEY" ] && [ ! -f "$RUNS/by-tree/$PATH_KEY" ]; then
+  ok "RM-193 SubagentStop removes the pointer under both keys"
+else
+  bad "RM-193 SubagentStop left: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
 fi
 
 echo

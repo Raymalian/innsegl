@@ -207,8 +207,8 @@ func (r *Reconciler) recordRebases(ctx context.Context, view *rebaseView) Rebase
 
 // recordRebase appends one superseding `commit_recorded`.
 //
-// Every member is the original's except `commit_sha`, `source`, `supersedes`
-// and the key. The rewrite changed where the change lives; it did not change
+// Every member is the original's except `schema_version`, `commit_sha`,
+// `source`, `supersedes` and the key. The rewrite changed where the change lives; it did not change
 // who made it, what it was, or which Rekor entry proves it — those are
 // properties of the signature, and the signature was over the original.
 func (r *Reconciler) recordRebase(
@@ -226,6 +226,9 @@ func (r *Reconciler) recordRebase(
 	delete(body, event.FieldPrevEventHash)
 	delete(body, event.EventHashField)
 
+	// The record is appended now, so it carries the schema the ledger appends
+	// under now; an original from before a cutover keeps its own (#316).
+	body[event.FieldSchemaVersion] = event.SchemaVersion
 	body[event.FieldSource] = event.SourceReconciler
 	body[event.FieldCommitSHA] = c.SHA
 	body[event.FieldSupersedes] = originalID

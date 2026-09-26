@@ -151,6 +151,10 @@ R_EXPLICIT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -m) [ $# -ge 2 ] || usage; MESSAGE="$2"; shift 2 ;;
+    # --print-tree-key: print this tree's key and stop. The harness hook files
+    # its pointers under the same key, and its self-test asks this script for
+    # it rather than recomputing it, so the two cannot drift apart (#313).
+    --print-tree-key) PRINT_TREE_KEY=1; shift ;;
     -F) [ $# -ge 2 ] || usage; MESSAGE="$(cat "$2")"; shift 2 ;;
     # -r: sign under a run that ALREADY EXISTS, and do not retire it.
     #
@@ -202,11 +206,23 @@ while [ $# -gt 0 ]; do
     *)  usage ;;
   esac
 done
-[ -n "$MESSAGE" ] || { echo "innsegl-commit: empty message" >&2; exit 2; }
+[ -n "$MESSAGE" ] || [ -n "${PRINT_TREE_KEY:-}" ] || { echo "innsegl-commit: empty message" >&2; exit 2; }
 
 ROOT="$(git rev-parse --show-toplevel)"
 
-
+# The repository identifier the MCP resolves against its workspace: host/org/name.
+# doc 02 §5 lowercases the HOST and leaves the org and the name alone, so
+# `github.com/KodyMike/Repo` is correct and lowercasing all three would name a
+# repository that does not exist on a case-sensitive forge. The hook applies
+# the same rule; a difference between the two would show up as a refusal from
+# the tool with no obvious cause.
+#
+# It is resolved here, ahead of the pointer, because the tree key below is
+# derived from it (RM-193).
+REPO="${INNSEGL_REPO_ID:-$(git remote get-url origin 2>/dev/null \
+  | sed -e 's|^[a-z][a-z0-9+.-]*://||' -e 's|^git@||' -e 's|:|/|' -e 's|\.git$||' -e 's|/*$||' \
+  | awk -F/ 'NF>=3 { h = tolower($1); p = $2; for (i = 3; i <= NF; i++) p = p "/" $i; print h "/" p }')}"
+[ -n "$REPO" ] || { echo "innsegl-commit: no origin remote; set INNSEGL_REPO_ID" >&2; exit 2; }
 
 # THE RUN THIS TREE BELONGS TO, discovered rather than remembered.
 #
@@ -228,15 +244,63 @@ ROOT="$(git rev-parse --show-toplevel)"
 # been retired strands the tree, and the answer is a successor written back
 # here — so the file it was read from and the key that names it stay in scope.
 RUNS_DIR="${INNSEGL_RUNS_DIR:-$HOME/.innsegl/runs}"
+
+# THE TREE KEY IS ABOUT THE WORK, NOT THE HOST — RM-193 (#313).
+#
+# It names this tree's pointer, and it enters idempotency keys the chain
+# records (`succeeds-<run>-<key>` below). It used to be a digest of the tree's
+# absolute path, which made both a fact about the host: a checkout that moved
+# got a new key and lost its run, and nothing on the chain should depend on
+# where a directory happens to live.
+#
+# So it is the repository (host/org/name, as above), the branch, and -- when
+# this tree is a LINKED worktree -- that worktree's name, which is what tells
+# two worktrees of one branch apart. The name is git's own (the directory under
+# .git/worktrees/), not a path, and `git worktree move` keeps it.
+#
+# Two separate CLONES of one repository on one branch share a key. That is the
+# cost of taking the path out, and it is the same tree of work by every name
+# the chain uses.
 TREE_KEY=""
+OLD_TREE_KEY=""
 if [ -n "$ROOT" ]; then
-  TREE_KEY="$(printf '%s' "$(CDPATH= cd -- "$ROOT" && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
+  _kb="$(git -C "$ROOT" symbolic-ref --short --quiet HEAD 2>/dev/null)" || _kb=""
+  [ -n "$_kb" ] || _kb="detached"
+  _kw=""
+  _kgd="$(CDPATH= cd -- "$ROOT" 2>/dev/null && CDPATH= cd -- "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)"
+  _kgc="$(CDPATH= cd -- "$ROOT" 2>/dev/null && CDPATH= cd -- "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)"
+  if [ -n "$_kgd" ] && [ "$_kgd" != "$_kgc" ]; then _kw="$(basename "$_kgd")"; fi
+  TREE_KEY="$(printf 'innsegl-tree/2\n%s\n%s\n%s' "$REPO" "$_kb" "$_kw" | shasum -a 256 2>/dev/null | cut -c1-32)"
+  # The key a pointer written before RM-193 is filed under. The harness hook
+  # still writes that one, so it is looked for on every run, not once ever.
+  OLD_TREE_KEY="$(printf '%s' "$(CDPATH= cd -- "$ROOT" && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
+fi
+if [ -n "${PRINT_TREE_KEY:-}" ]; then
+  [ -n "$TREE_KEY" ] || exit 1
+  printf '%s\n' "$TREE_KEY"
+  exit 0
+fi
+
+# A POINTER UNDER THE OLD KEY IS FOUND ONCE AND MOVED TO THE NEW ONE, so a tree
+# keeps its run across the change. An old-key file is always the newer of the
+# two -- only the harness writes there -- so it replaces a new-key one. If it
+# cannot be moved it is still read where it is: a tree must not lose its run
+# over a read-only directory.
+#
+# Only when the pointer is about to be read: an explicit -r reads none, and
+# moving a file nobody asked for is not this script's to do.
+if [ -z "$RUN_GIVEN" ] && [ -n "$TREE_KEY" ] && [ -n "$OLD_TREE_KEY" ] \
+   && [ "$TREE_KEY" != "$OLD_TREE_KEY" ] && [ -f "$RUNS_DIR/by-tree/$OLD_TREE_KEY" ]; then
+  if mv -f "$RUNS_DIR/by-tree/$OLD_TREE_KEY" "$RUNS_DIR/by-tree/$TREE_KEY" 2>/dev/null; then
+    echo "innsegl-commit: moved this tree's pointer to its path-free key (RM-193)" >&2
+  fi
 fi
 
 PTR_FILE=""
 RUN_FROM_POINTER=""
 if [ -z "$RUN_GIVEN" ] && [ -n "$TREE_KEY" ]; then
   _ptr="$RUNS_DIR/by-tree/$TREE_KEY"
+  [ -f "$_ptr" ] || _ptr="$RUNS_DIR/by-tree/$OLD_TREE_KEY"
   if [ -f "$_ptr" ]; then
     RUN_GIVEN="$(sed -n 1p "$_ptr")"
     [ -n "$TASK_GIVEN" ] || TASK_GIVEN="$(sed -n 2p "$_ptr")"
@@ -273,21 +337,18 @@ fi
 # Absent is not an error, and it is the ordinary state of a tree whose session
 # started before the hook wrote one, or on a machine with no harness at all.
 # The run is then registered as a root run, exactly as it always was.
+#
+# RM-193: read under the path-free key first and the old one second, and never
+# moved. It is the session's, and the session's end removes it by the key it
+# was written under; moving it would leave it behind.
 PARENT_RUN=""
+SESSION_PTR_FILE=""
 if [ -n "$TREE_KEY" ] && [ -f "$RUNS_DIR/by-tree/$TREE_KEY.session" ]; then
-  PARENT_RUN="$(sed -n 1p "$RUNS_DIR/by-tree/$TREE_KEY.session")"
+  SESSION_PTR_FILE="$RUNS_DIR/by-tree/$TREE_KEY.session"
+elif [ -n "$OLD_TREE_KEY" ] && [ -f "$RUNS_DIR/by-tree/$OLD_TREE_KEY.session" ]; then
+  SESSION_PTR_FILE="$RUNS_DIR/by-tree/$OLD_TREE_KEY.session"
 fi
-
-# The repository identifier the MCP resolves against its workspace: host/org/name.
-# doc 02 §5 lowercases the HOST and leaves the org and the name alone, so
-# `github.com/KodyMike/Repo` is correct and lowercasing all three would name a
-# repository that does not exist on a case-sensitive forge. The hook applies
-# the same rule; a difference between the two would show up as a refusal from
-# the tool with no obvious cause.
-REPO="${INNSEGL_REPO_ID:-$(git remote get-url origin 2>/dev/null \
-  | sed -e 's|^[a-z][a-z0-9+.-]*://||' -e 's|^git@||' -e 's|:|/|' -e 's|\.git$||' -e 's|/*$||' \
-  | awk -F/ 'NF>=3 { h = tolower($1); p = $2; for (i = 3; i <= NF; i++) p = p "/" $i; print h "/" p }')}"
-[ -n "$REPO" ] || { echo "innsegl-commit: no origin remote; set INNSEGL_REPO_ID" >&2; exit 2; }
+[ -z "$SESSION_PTR_FILE" ] || PARENT_RUN="$(sed -n 1p "$SESSION_PTR_FILE")"
 
 # THE TREE EVERY GIT READ BELOW IS ABOUT.
 #
@@ -967,7 +1028,7 @@ register_run() {
     echo "innsegl-commit:   run that may be a parent -- retired, or one this ledger has" >&2
     echo "innsegl-commit:   never held. The run was registered with no parent rather than" >&2
     echo "innsegl-commit:   with a wrong edge, which nothing could amend." >&2
-    echo "innsegl-commit:   The stale pointer is $RUNS_DIR/by-tree/$TREE_KEY.session" >&2
+    echo "innsegl-commit:   The stale pointer is $SESSION_PTR_FILE" >&2
     return 0
   fi
 

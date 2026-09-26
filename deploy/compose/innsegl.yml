@@ -1401,6 +1401,11 @@ services:
       INNSEGL_BACKUP_SCRIPT: /innsegl/scripts/backup-ledger.sh
       INNSEGL_BACKUP_DIR: /backups
       INNSEGL_BACKUP_MARKER: /backups/.last-run
+      # A SECOND COPY OUTSIDE THE CONTAINER RUNTIME (RM-190, #310). A reset of
+      # the runtime removes every volume, and with it the only backup. Each
+      # verified dump is also copied here, the bind mount below; a failed copy
+      # is logged and turned into a fault by the readiness report.
+      INNSEGL_BACKUP_COPY_DIR: /host-backups
       # Daily, and a window of twice that: one slow or skipped run is not an
       # alert, two in a row are. An alert that fires on ordinary jitter is one
       # an operator learns to ignore.
@@ -1451,6 +1456,10 @@ services:
       - ../../scripts:/innsegl/scripts:ro
       - ../../runbooks:/innsegl/runbooks:ro
       - innsegl-backups:/backups
+      # A host folder, ~/innsegl-backups unless INNSEGL_BACKUP_HOST_DIR says
+      # otherwise. It must be writable by uid 1000 (the user above); when it is
+      # not, every copy fails and the readiness report says so.
+      - ${INNSEGL_BACKUP_HOST_DIR:-${HOME}/innsegl-backups}:/host-backups
 
   innsegl-sealer:
     <<: *innsegl-build

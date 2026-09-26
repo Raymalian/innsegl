@@ -326,5 +326,133 @@ else
   bad "BAK-013 the loop refuses a retry below its floor" "exit ${rc}: ${out}"
 fi
 
+# ---------------------------------------------------------------------------
+# RM-190 (#310) — the readiness report states how old the last VERIFIED backup
+# is, and whether its copy outside the container runtime landed.
+#
+# A backup that stopped days ago looked exactly like a working one, and the only
+# copy lived in a container volume that a reset of the runtime removes.
+# scripts/backup-freshness.sh is what the readiness report
+# (scripts/innsegl-start.sh) asks. It is a pure function of two marker folders
+# and a clock, so it is driven here with no container and no database: the
+# volume's markers come from --state-dir, the host folder from --host-dir, and
+# the clock from --now.
+#
+#   RM-190-a  a fresh verified backup, copied to the host, reads fresh (exit 0)
+#   RM-190-b  one older than the bound reads STALE and fails
+#   RM-190-c  no verified backup at all says so and fails
+#   RM-190-d  a copy that failed is reported with its reason and fails
+#   RM-190-e  a copy that was never configured is not silence either
+#   RM-190-f  the deployment mounts the host folder and the report asks
+# ---------------------------------------------------------------------------
+echo "RM-190 — backup freshness in the readiness report, and a copy on the host"
+
+FRESH="${ROOT}/scripts/backup-freshness.sh"
+NOW=2000000000
+VOL="${TMP}/rm190-volume"
+HOSTDIR="${TMP}/rm190-host"
+
+freshness() {
+  "${FRESH}" --state-dir "${VOL}" --host-dir "${HOSTDIR}" \
+    --stale-after 86400 --now "${NOW}" 2>&1
+}
+# plant AGE-SECONDS COPY-VERDICT — a verified dump AGE seconds old, and what
+# the copy recorded. `ok` also puts the copy on the host, as the script does.
+plant() {
+  rm -rf "${VOL}" "${HOSTDIR}"; mkdir -p "${VOL}" "${HOSTDIR}"
+  when=$((NOW - $1)); name="innsegl-20330518T000000Z.dump"
+  printf '%s %s\n' "${when}" "${name}" >"${VOL}/.last-verified"
+  case "$2" in
+    ok)     printf '%s ok %s\n' "${when}" "${name}" >"${VOL}/.host-copy"
+            : >"${HOSTDIR}/${name}"
+            printf '%s %s\n' "${when}" "${name}" >"${HOSTDIR}/.last-verified" ;;
+    failed) printf '%s failed %s is not a directory -- is the host folder mounted?\n' \
+              "${when}" "/host-backups" >"${VOL}/.host-copy" ;;
+    off)    printf '%s off no host folder is configured\n' "${when}" >"${VOL}/.host-copy" ;;
+  esac
+}
+
+if [ ! -x "${FRESH}" ]; then
+  bad "RM-190 scripts/backup-freshness.sh exists and is executable" "missing: ${FRESH}"
+else
+  plant 3600 ok
+  out="$(freshness)"; rc=$?
+  if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q "1h 0m ago"; then
+    ok "RM-190-a a fresh verified backup reads fresh and states its age"
+  else
+    bad "RM-190-a a fresh verified backup reads fresh and states its age" "exit ${rc}: ${out}"
+  fi
+
+  plant 172800 ok
+  out="$(freshness)"; rc=$?
+  if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q "STALE" \
+     && printf '%s' "${out}" | grep -q "2d 0h ago"; then
+    ok "RM-190-b a backup past the bound reads STALE, with its age"
+  else
+    bad "RM-190-b a backup past the bound reads STALE, with its age" "exit ${rc}: ${out}"
+  fi
+
+  rm -rf "${VOL}" "${HOSTDIR}"; mkdir -p "${VOL}" "${HOSTDIR}"
+  out="$(freshness)"; rc=$?
+  if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q "NO VERIFIED BACKUP"; then
+    ok "RM-190-c no verified backup at all says so and fails"
+  else
+    bad "RM-190-c no verified backup at all says so and fails" "exit ${rc}: ${out}"
+  fi
+
+  plant 60 failed
+  out="$(freshness)"; rc=$?
+  if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q "COPY FAILED" \
+     && printf '%s' "${out}" | grep -q "is the host folder mounted"; then
+    ok "RM-190-d a failed copy is reported with its reason and fails"
+  else
+    bad "RM-190-d a failed copy is reported with its reason and fails" "exit ${rc}: ${out}"
+  fi
+
+  plant 60 off
+  out="$(freshness)"; rc=$?
+  if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q "NOT CONFIGURED"; then
+    ok "RM-190-e an unconfigured copy is a fault, not silence"
+  else
+    bad "RM-190-e an unconfigured copy is a fault, not silence" "exit ${rc}: ${out}"
+  fi
+
+  # The copy said ok, but the host folder does not hold it — a folder emptied
+  # by hand, or pointed somewhere else since. The report believes the folder.
+  plant 60 ok
+  rm -f "${HOSTDIR}"/innsegl-*.dump
+  out="$(freshness)"; rc=$?
+  if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q "NO COPY ON THE HOST"; then
+    ok "RM-190-d a copy missing from the host folder is reported"
+  else
+    bad "RM-190-d a copy missing from the host folder is reported" "exit ${rc}: ${out}"
+  fi
+
+  # The volume cannot be read (the container is down): the age still comes
+  # from the host folder, which is the point of having one.
+  plant 3600 ok
+  out="$("${FRESH}" --state-dir "${TMP}/rm190-nowhere" --host-dir "${HOSTDIR}" \
+    --stale-after 86400 --now "${NOW}" 2>&1)"; rc=$?
+  if printf '%s' "${out}" | grep -q "1h 0m ago" && printf '%s' "${out}" | grep -q "host folder"; then
+    ok "RM-190-c with the volume unreadable, the age is read from the host copy"
+  else
+    bad "RM-190-c with the volume unreadable, the age is read from the host copy" "exit ${rc}: ${out}"
+  fi
+fi
+
+if printf '%s' "${block}" | grep -qE 'INNSEGL_BACKUP_HOST_DIR' \
+   && printf '%s' "${block}" | grep -qE 'INNSEGL_BACKUP_COPY_DIR: /host-backups'; then
+  ok "RM-190-f the backup service mounts a host folder and copies into it"
+else
+  bad "RM-190-f the backup service mounts a host folder and copies into it" \
+      "no INNSEGL_BACKUP_HOST_DIR bind or INNSEGL_BACKUP_COPY_DIR in the service block"
+fi
+if grep -qE '^[^#]*backup-freshness\.sh' "${ROOT}/scripts/innsegl-start.sh"; then
+  ok "RM-190-f the readiness report asks after the backup's freshness"
+else
+  bad "RM-190-f the readiness report asks after the backup's freshness" \
+      "scripts/innsegl-start.sh does not call backup-freshness.sh"
+fi
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [ "${fail}" -eq 0 ]

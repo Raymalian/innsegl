@@ -440,6 +440,60 @@ check "BAK-008 the clean chain is green again" \
 check "BAK-008 no stale exposure survives a good run" "${g}" \
   "$(cat "${exposure_dir}/.exposure" 2>/dev/null || true)"
 
+# ---------------------------------------------------------------------------
+# RM-190 (#310) — each verified backup is also copied to a folder outside the
+# container runtime, and a copy that fails says so.
+#
+# The deployment bind-mounts a host folder and names it with
+# INNSEGL_BACKUP_COPY_DIR; here --copy-to stands in for that mount. A folder
+# that does not exist is exactly what a missing mount looks like from inside.
+#
+# A FAILED COPY DOES NOT UN-VERIFY THE BACKUP: the dump in the volume restores
+# and matches, so the exit stays 0 and the verdict the loop records stays `ok`.
+# What changes is that it is logged and left in .host-copy, which the readiness
+# report reads — reported, never silent.
+# ---------------------------------------------------------------------------
+printf '\n-- RM-190: a verified backup is copied outside the container runtime --\n'
+copy_out="${workdir}/backups-copy"
+host_copy="${workdir}/host-backups"
+mkdir -p "${copy_out}" "${host_copy}"
+load_fixtures 0
+out="$(run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl \
+  --role innsegl --out "${copy_out}" --segments "${good_segments}" \
+  --copy-to "${host_copy}" 2>&1)" && rc=0 || rc=$?
+check "RM-190 a verified backup still exits 0 with a copy configured" \
+  "$( [ "${rc}" -eq 0 ] && echo 0 || echo 1 )" "exit ${rc}: ${out}"
+n_copied="$(find "${host_copy}" -maxdepth 1 -name 'innsegl-*.dump' | wc -l | tr -d ' ')"
+check "RM-190 the dump lands in the host folder" \
+  "$( [ "${n_copied}" -eq 1 ] && echo 0 || echo 1 )" "found ${n_copied}: $(ls -a "${host_copy}" | tr '\n' ' ')"
+n_reports="$(find "${host_copy}" -maxdepth 1 -name 'innsegl-*.dump.verify.txt' | wc -l | tr -d ' ')"
+check "RM-190 its verification report travels with it" \
+  "$( [ "${n_reports}" -eq 1 ] && echo 0 || echo 1 )" "found ${n_reports}"
+copied="$(find "${host_copy}" -maxdepth 1 -name 'innsegl-*.dump' | head -1)"
+cmp -s "${copied}" "${copy_out}/${copied##*/}" && g=0 || g=1
+check "RM-190 the copy is byte-identical to the verified dump" "${g}" "${copied}"
+grep -qE '^[0-9]+ innsegl-[0-9]{8}T[0-9]{6}Z\.dump$' "${host_copy}/.last-verified" 2>/dev/null && g=0 || g=1
+check "RM-190 the host folder records its last verified backup" "${g}" \
+  "$(cat "${host_copy}/.last-verified" 2>/dev/null || echo absent)"
+grep -qE '^[0-9]+ innsegl-[0-9]{8}T[0-9]{6}Z\.dump$' "${copy_out}/.last-verified" 2>/dev/null && g=0 || g=1
+check "RM-190 the volume records its last verified backup" "${g}" \
+  "$(cat "${copy_out}/.last-verified" 2>/dev/null || echo absent)"
+grep -qE '^[0-9]+ ok ' "${copy_out}/.host-copy" 2>/dev/null && g=0 || g=1
+check "RM-190 the copy's verdict is left for the readiness report" "${g}" \
+  "$(cat "${copy_out}/.host-copy" 2>/dev/null || echo absent)"
+
+printf '\n-- RM-190: a copy that fails is reported, never silent --\n'
+out="$(run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl \
+  --role innsegl --out "${copy_out}" --segments "${good_segments}" \
+  --copy-to "${workdir}/no-such-mount" 2>&1)" && rc=0 || rc=$?
+check "RM-190 a failed copy does not un-verify the backup (exit 0)" \
+  "$( [ "${rc}" -eq 0 ] && echo 0 || echo 1 )" "exit ${rc}: ${out}"
+printf '%s' "${out}" | grep -qF "HOST COPY FAILED" && g=0 || g=1
+check "RM-190 a failed copy is logged" "${g}" "${out}"
+grep -qE '^[0-9]+ failed ' "${copy_out}/.host-copy" 2>/dev/null && g=0 || g=1
+check "RM-190 a failed copy is left for the readiness report" "${g}" \
+  "$(cat "${copy_out}/.host-copy" 2>/dev/null || echo absent)"
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 if [ "${fail}" -gt 0 ]; then
   printf '\nbackup-ledger gate self-test: FAIL\n'

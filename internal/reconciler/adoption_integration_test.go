@@ -118,10 +118,11 @@ func TestADP015AnAdoptionEndToEndOnARealStack(t *testing.T) {
 		t.Fatalf("append the dead run's tool_call: %v", aerr)
 	}
 
-	// THE LIVE RUN signs in the dead run's tree.
-	live := w.run(ctx, t, "run-adp-live")
+	// THE LIVE RUN is registered for the dead run's repository and signs in
+	// its tree: an adopter works where the work was left (#308).
 	adopting := dead
-	adopting.runID, adopting.spiffeID, adopting.key = live.runID, live.spiffeID, "adopt-1"
+	adopting.runID, adopting.key = "run-adp-live", "adopt-1"
+	adopting.spiffeID = w.register(ctx, t, adopting.runID, dead.repo)
 
 	call := func(r testRun, adopt string) *sdk.CallToolResult {
 		t.Helper()
@@ -168,17 +169,17 @@ func TestADP015AnAdoptionEndToEndOnARealStack(t *testing.T) {
 
 	// The commit names both runs.
 	msg := git(t, dead.worktree, "log", "-1", "--format=%B", commit)
-	if !strings.Contains(msg, "Agent-Run: "+live.runID) || !strings.Contains(msg, "Agent-Adopted-Run: "+dead.runID) {
+	if !strings.Contains(msg, "Agent-Run: "+adopting.runID) || !strings.Contains(msg, "Agent-Adopted-Run: "+dead.runID) {
 		t.Errorf("the commit does not name both runs:\n%s", msg)
 	}
 
 	// The chain holds the handover, before the intent that names it.
-	adopted := eventsOfType(ctx, t, store, live.runID, event.EventTypeRunAdopted)
+	adopted := eventsOfType(ctx, t, store, adopting.runID, event.EventTypeRunAdopted)
 	if len(adopted) != 1 || str(adopted[0], event.FieldAdoptedRunID) != dead.runID ||
 		str(adopted[0], event.FieldAdoptedRunState) != "retired" {
 		t.Fatalf("run_adopted = %v", adopted)
 	}
-	intents := eventsOfType(ctx, t, store, live.runID, event.EventTypeCommitIntent)
+	intents := eventsOfType(ctx, t, store, adopting.runID, event.EventTypeCommitIntent)
 	if len(intents) != 1 || str(intents[0], event.FieldAdoptionEventID) != str(adopted[0], event.FieldEventID) {
 		t.Errorf("the intent does not name the adoption: %v", intents)
 	}

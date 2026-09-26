@@ -135,7 +135,11 @@ export function VerificationPanel({ proof, liveness, findings, id }: Verificatio
   // The alarm is raised by the CHECK, not by this component's own reading of
   // two strings: the verdict belongs to internal/verify and nothing here
   // upgrades or downgrades one.
-  const mismatch = identityCheck?.result === "failed" && trailer !== certificate;
+  // With no certificate there is nothing to mismatch: the commit is unsigned
+  // (RM-196, #317), and the banner says that instead.
+  const identityFailed = identityCheck?.result === "failed";
+  const mismatch = identityFailed && certificate !== "" && trailer !== certificate;
+  const unsigned = identityFailed && certificate === "" && trailer !== "";
 
   const hasEntry = (proof.entry.uuid ?? "") !== "" || proof.entry.log_index > 0;
 
@@ -181,6 +185,20 @@ export function VerificationPanel({ proof, liveness, findings, id }: Verificatio
                 detail: strings.mismatch.detail,
                 evidenceHref: `#${anchor}-identity`,
                 evidenceLabel: strings.mismatch.evidence,
+              },
+            ]}
+          />
+        ) : null}
+        {unsigned ? (
+          <AlertBanner
+            alerts={[
+              {
+                id: `${anchor}-unsigned`,
+                kind: "integrity",
+                title: strings.unsigned.title,
+                detail: strings.unsigned.detail,
+                evidenceHref: `#${anchor}-identity`,
+                evidenceLabel: strings.unsigned.evidence,
               },
             ]}
           />

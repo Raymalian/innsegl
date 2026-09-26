@@ -31,6 +31,7 @@ import {
   FORGED_IDENTITY,
   PROVEN_IDENTITY,
   forgedTrailerProof,
+  proofWithResults,
   verifiedProof,
 } from "./fixtures";
 import { strings } from "./strings";
@@ -147,5 +148,35 @@ describe("FE-004 an identity the panel cannot parse is still compared honestly",
     const marks = Array.from(container.querySelectorAll("#panel-identity mark"));
     expect(marks[0]?.textContent).toBe("not-an-identity");
     expect(container.textContent).toContain(strings.identity.uncomparable);
+  });
+});
+
+/*
+ * RM-196 (#317): an UNSIGNED commit is not a mismatch. A rewrite drops the
+ * signature, so all three checks fail and there is no certificate at all.
+ * Saying "the certificate proves another" identity then names a certificate
+ * that does not exist, and sends a reader looking for a forgery that never
+ * happened. The alarm stays banner-level; its words say what is true.
+ */
+describe("RM-196 an unsigned commit is said to be unsigned", () => {
+  const unsigned = () =>
+    proofWithResults(["failed", "failed", "failed"], {
+      certificateIdentity: "",
+      verdict: "failed",
+    });
+
+  it("raises the unsigned alarm, not the mismatch one", () => {
+    render(<VerificationPanel liveness={{ source: "live" }} proof={unsigned()} id="panel" />);
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain(strings.unsigned.title);
+    expect(alert.textContent).not.toContain(strings.mismatch.title);
+    expect(alert.getAttribute("class")).toContain("integrity-alert");
+  });
+
+  it("still fails: a missing signature is not a lesser verdict", () => {
+    const { container } = render(
+      <VerificationPanel liveness={{ source: "live" }} proof={unsigned()} id="panel" />,
+    );
+    expect(container.querySelector("[data-verdict]")?.getAttribute("data-verdict")).toBe("failed");
   });
 });
