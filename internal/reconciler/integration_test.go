@@ -698,14 +698,14 @@ func (w *world) configureSignCommit(t *testing.T, appender mcp.SignCommitLedger,
 	t.Cleanup(restore)
 }
 
-// run seeds one registered run and a scratch repository with one staged file.
-func (w *world) run(ctx context.Context, t *testing.T, runID string) testRun {
+// register seeds one run_registered for runID in repo, and returns the run's
+// SPIFFE ID. The repository is the run's own: sign_commit refuses any other
+// (#308).
+func (w *world) register(ctx context.Context, t *testing.T, runID, repo string) string {
 	t.Helper()
 	const agentType = "demo"
 	const taskID = "rm-035"
 	spiffeID := fmt.Sprintf("spiffe://%s/agent/%s/%s/%s", harnessTrustDomain, agentType, taskID, runID)
-	repo := "github.com/innsegl/" + runID
-
 	if _, err := w.store.Append(ctx, event.Fields{
 		event.FieldSchemaVersion:  event.SchemaVersion,
 		event.FieldEventType:      event.EventTypeRunRegistered,
@@ -716,11 +716,19 @@ func (w *world) run(ctx context.Context, t *testing.T, runID string) testRun {
 		event.FieldAgentType:      agentType,
 		event.FieldTaskRef:        testTaskRef,
 		// ADR-0045, required under schema 2.
-		event.FieldRepo:   "github.com/acme/api",
+		event.FieldRepo:   repo,
 		event.FieldBranch: "main",
 	}); err != nil {
 		t.Fatalf("seed run_registered for %s: %v", runID, err)
 	}
+	return spiffeID
+}
+
+// run seeds one registered run and a scratch repository with one staged file.
+func (w *world) run(ctx context.Context, t *testing.T, runID string) testRun {
+	t.Helper()
+	repo := "github.com/innsegl/" + runID
+	spiffeID := w.register(ctx, t, runID, repo)
 
 	worktree := filepath.Join(w.root, filepath.FromSlash(repo))
 	if err := os.MkdirAll(worktree, 0o700); err != nil {
