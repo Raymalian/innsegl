@@ -149,6 +149,7 @@ export const strings = {
     commitIntentExpired: "Commit intent expired",
     runRetired: "Run retired",
     runExpired: "Run expired",
+    runAdopted: "Work adopted",
     schemaMigrated: "Schema migrated",
     unattributedSignatureDetected: "Unattributed signature detected",
     ledgerDriftDetected: "Ledger drift detected",
@@ -215,6 +216,10 @@ export const strings = {
     reason: "Reason",
     payloadDigest: "Payload digest",
     supersedes: "Supersedes",
+    adoptedRunId: "Adopted from",
+    adoptedRunState: "Its state when adopted",
+    claimDigest: "Claim digest",
+    adoptionEventId: "Adoption event",
   },
 
   toolCall: {
