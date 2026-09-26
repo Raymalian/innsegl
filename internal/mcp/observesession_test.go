@@ -685,36 +685,42 @@ func TestMCP053ASecondStopReturnsTheOriginalRetirementTimestamp(t *testing.T) {
 // get a credential or sign. That is a dead identity returned as though it were
 // a live one.
 //
-// So the marker OUTLIVES the retirement rather than being deleted with it, and
-// a start that meets a retired marker reports the terminal state. It does not
-// refuse: the reference shim's SessionStart never blocks, because refusing the
-// operator's own session stops them working on their own machine.
+// So the marker OUTLIVES the retirement rather than being deleted with it.
+// Since RM-191 (#311), a start that meets a retired marker neither resurrects
+// the retired run nor answers with the terminal state: that left the resumed
+// session under no run. It registers a NEW run, under a key derived from the
+// retired run, with the retired run as its parent. The retired run stays
+// retired, with its one registration.
 func TestMCP053AStartForARetiredSessionReportsTheTerminalStateRatherThanResurrecting(t *testing.T) {
 	env := osSetup(t, nil)
 	started := env.mustStart(t, osSessionID)
-	stopped := env.mustStop(t, osSessionID)
+	env.mustStop(t, osSessionID)
 
 	again, err := env.start(t, osSessionID)
 	if err != nil {
 		t.Fatalf("a start for a retired session was refused: %v", err)
 	}
-	if !again.Retired || again.RetiredAt != stopped.RetiredAt {
-		t.Errorf("a start for a retired session answered %+v; it must report the "+
-			"terminal state with the original instant %q", again, stopped.RetiredAt)
+	if again.RunID == started.RunID {
+		t.Fatalf("a start for a retired session named the retired run %q; that is the "+
+			"dead identity #213 describes", started.RunID)
 	}
-	if again.Registered {
-		t.Error("a start for a retired session reports registered=true; nothing was registered")
-	}
-	if again.RunID != started.RunID {
-		t.Errorf("the terminal state names run %q, the session's run was %q",
-			again.RunID, started.RunID)
+	if again.Retired || again.RetiredAt != "" || !again.Registered {
+		t.Errorf("a start for a retired session answered %+v; want a new, live, "+
+			"registered run", again)
 	}
 	if again.Detail == "" {
-		t.Error("the terminal state carries no detail, so a caller cannot tell a live " +
-			"run from a retired one without comparing fields")
+		t.Error("the reply carries no detail, so a caller cannot tell a resume from a " +
+			"first start")
+	}
+	if got := registeredBody(t, env, again.RunID)[event.FieldParentRunID]; got != started.RunID {
+		t.Errorf("the new run records %s = %v, want the retired run %s",
+			event.FieldParentRunID, got, started.RunID)
 	}
 	if n := env.countEvents(t, started.RunID, event.EventTypeRunRegistered); n != 1 {
-		t.Errorf("the chain holds %d run_registered after a start on a retired session, want 1", n)
+		t.Errorf("the chain holds %d run_registered for the retired run, want 1", n)
+	}
+	if n := env.countEvents(t, started.RunID, event.EventTypeRunRetired); n != 1 {
+		t.Errorf("the retired run has %d run_retired, want 1: a resume does not touch it", n)
 	}
 }
 

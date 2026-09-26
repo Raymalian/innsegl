@@ -87,6 +87,14 @@ type registerAgentIn struct {
 	// ParentRunID is the run that started this one. Absent on a root run,
 	// which is why it is optional where the other two are not.
 	ParentRunID string `json:"parent_run_id,omitempty"`
+
+	// resumesRetiredParent lets ParentRunID name a RETIRED run, and nothing
+	// else does (RM-191, #311). Only observe_session sets it, in process, when
+	// a session resumes on a marker whose run it retired: the new run
+	// continues the retired one, and that is the edge. It is unexported, so
+	// the JSON decoder never fills it and no caller of the tool can send it.
+	// Every other path keeps MCP-082's refusal.
+	resumesRetiredParent bool
 }
 
 // registerAgentOut is IP §4's result shape, verbatim.
@@ -420,7 +428,7 @@ func (c *RegisterAgentConfig) mint(ctx context.Context, run spire.RunRef, spiffe
 	// THE PARENT IS CHECKED BEFORE ANYTHING IS WRITTEN, and inside mint rather
 	// than before the idempotency claim. See checkParent for both halves of
 	// that placement.
-	if err := c.checkParent(ctx, run.RunID, in.ParentRunID); err != nil {
+	if err := c.checkParent(ctx, run.RunID, in.ParentRunID, in.resumesRetiredParent); err != nil {
 		return nil, err
 	}
 	if _, err := c.Ledger.Append(ctx, registerAgentEvent(run, spiffeID, in)); err != nil {
@@ -490,7 +498,11 @@ func (c *RegisterAgentConfig) mint(ctx context.Context, run spire.RunRef, spiffe
 // unanswerable, and a parent that cannot be checked is not a parent that can
 // be recorded: the call is refused rather than writing an edge on trust. A
 // deployment in that state registers root runs exactly as it always did.
-func (c *RegisterAgentConfig) checkParent(ctx context.Context, runID, parent string) error {
+//
+// resumesRetired admits a retired parent. Only observe_session's resume path
+// sets it (registerAgentIn.resumesRetiredParent); every other caller is
+// refused RUN_ALREADY_RETIRED, as MCP-082 requires.
+func (c *RegisterAgentConfig) checkParent(ctx context.Context, runID, parent string, resumesRetired bool) error {
 	if parent == "" {
 		return nil
 	}
@@ -524,7 +536,7 @@ func (c *RegisterAgentConfig) checkParent(ctx context.Context, runID, parent str
 				"The edge would be permanent and would point at nothing",
 			parent)
 	}
-	if known.Retired() {
+	if known.Retired() && !resumesRetired {
 		return Errorf(ClassRunAlreadyRetired, runID,
 			"parent_run_id %q was retired at %s; nothing was registered. Retirement is "+
 				"terminal (IP §6.2, I4), so that run did not start this one — what named "+

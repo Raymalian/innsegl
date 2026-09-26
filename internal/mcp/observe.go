@@ -538,6 +538,10 @@ func observeRunForSession(ctx context.Context, in observeToolCallIn) (string, er
 		// file is a second thing that can disagree with the first. Inert on a
 		// session that is already registered, for the same reason CWD is.
 		ParentSessionID: in.ParentSessionID,
+		// A tool call never resumes a retired session (RM-191, #311): a
+		// retired marker proves the session's start reached this deployment,
+		// so a stray late call must not mint a run. Only a start does.
+		firstSight: true,
 	})
 	if err != nil {
 		// Unchanged, and deliberately: these are describe_workspace's and
