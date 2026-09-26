@@ -81,7 +81,7 @@ export const strings = {
     unattributed: {
       label: "Unattributed",
       meaning:
-        "This commit carries no signature and no Agent-Identity trailer, so it claims nothing for a check to settle.",
+        "This commit carries no Agent-Identity trailer and no signature this system issued, so it claims nothing for a check to settle.",
     },
   },
 

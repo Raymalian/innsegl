@@ -618,3 +618,26 @@ func TestVER023ACommitSignedByAnotherKeyThatClaimsNothingIsUnattributed(t *testi
 		t.Errorf("a claiming commit under a foreign signature = %s, want %s", rep.Verdict, VerdictFailed)
 	}
 }
+
+// VER-024. An unattributed report's checks are an empty LIST on the wire,
+// never null.
+//
+// MEASURED in the dashboard on 2026-09-26: the verify page answered "This
+// deployment's answer is not a proof" for a GitHub merge commit, because the
+// report carried "checks": null and the page (rightly) accepts only a list.
+// Every commit that claims nothing takes this path, a plain human commit
+// included; VER-023 made every GitHub merge one of them.
+func TestVER024AnUnattributedReportCarriesAnEmptyListOfChecks(t *testing.T) {
+	s := newScenario(t, scenarioOptions{unsigned: true, noEntry: true, message: "a human commit\n"})
+	rep := s.report(t)
+	if rep.Verdict != VerdictUnattributed {
+		t.Fatalf("control: verdict %s", rep.Verdict)
+	}
+	raw, err := RenderJSON(rep)
+	if err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+	if !strings.Contains(string(raw), `"checks": []`) && !strings.Contains(string(raw), `"checks":[]`) {
+		t.Errorf("an unattributed report's checks are not an empty list:\n%s", raw)
+	}
+}
