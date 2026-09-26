@@ -126,6 +126,9 @@ const MEMBER_VIEWS: readonly {
   readonly member: string;
   readonly label: string;
   readonly kind?: IdentifierKind;
+  /** Shown only on this event type. `payload_digest` is a tool call's body
+   * digest everywhere else, and only on run_adopted is it the claim. */
+  readonly only?: string;
 }[] = [
   { member: MEMBERS.agentType, label: strings.detail.agentType },
   { member: MEMBERS.taskRef, label: strings.detail.taskRef },
@@ -145,6 +148,17 @@ const MEMBER_VIEWS: readonly {
   { member: MEMBERS.subjectEventID, label: strings.detail.subjectEventId, kind: "generic" },
   { member: MEMBERS.reason, label: strings.detail.reason },
   { member: MEMBERS.supersedes, label: strings.detail.supersedes, kind: "generic" },
+  // Schema 3's adoption (ADR-0051): which dead run, how the ledger read it,
+  // and the claim that proves what was handed over.
+  { member: MEMBERS.adoptedRunID, label: strings.detail.adoptedRunId, kind: "run" },
+  { member: MEMBERS.adoptedRunState, label: strings.detail.adoptedRunState },
+  {
+    member: MEMBERS.payloadDigest,
+    label: strings.detail.claimDigest,
+    kind: "generic",
+    only: EVENT_TYPES.runAdopted,
+  },
+  { member: MEMBERS.adoptionEventID, label: strings.detail.adoptionEventId, kind: "generic" },
 ];
 
 /** The rail marker for an event. Neutral in every case — a node is a statement
@@ -407,7 +421,10 @@ function Members({ event }: { readonly event: TimelineEvent }) {
   const shown = MEMBER_VIEWS.map((view) => ({
     ...view,
     value: memberString(canonical, view.member),
-  })).filter((view) => view.value !== undefined);
+  })).filter(
+    (view) =>
+      view.value !== undefined && (view.only === undefined || view.only === event.event_type),
+  );
   if (shown.length === 0) return null;
 
   return (
