@@ -167,6 +167,15 @@ report() {
     fi
   done < <(services)
 
+  # THE LAST VERIFIED BACKUP, and whether a copy of it is outside the container
+  # runtime (RM-190, #310). The backup service's own health goes green on a run
+  # that verified nothing, and its only copy lived in a volume a runtime reset
+  # removes. scripts/backup-freshness.sh states the age of the last VERIFIED
+  # dump, marks it STALE past INNSEGL_BACKUP_STALE_AFTER, and reports a copy to
+  # INNSEGL_BACKUP_HOST_DIR that failed or never happened.
+  step "backup"
+  "$(dirname "$0")/backup-freshness.sh" || bad=1
+
   step "reachable"
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$PORT/" 2>/dev/null)
   if [ "$code" = "200" ]; then

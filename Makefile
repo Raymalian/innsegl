@@ -826,7 +826,12 @@ INNSEGL_BACKUP_DIR ?= backups
 # network client and wants a Postgres client wherever it runs; the service
 # carries one, and the alternative — "install postgresql-client first" — is the
 # host dependency this issue exists to remove.
+#
+# The host folder the copy lands in (RM-190, #310) is made here first, as the
+# user running make: a bind-mount source that does not exist is created by the
+# runtime, and on Linux that means owned by root and unwritable by the backup.
 innsegl-backup:
+	mkdir -p "$${INNSEGL_BACKUP_HOST_DIR:-$$HOME/innsegl-backups}"
 	$(INNSEGL_COMPOSE) run --rm --entrypoint /innsegl/scripts/backup-ledger.sh \
 	  innsegl-backup --out /backups
 
