@@ -395,6 +395,18 @@ jobs:
       - name: And the check itself refuses what it must
         run: ./scripts/selftests-wired-selftest.sh
 
+  failure-reasons-selftest:
+    name: failure reasons self-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The report test (race) prints when a test fails. It once showed only
+      # the first 40 lines a test printed, a Docker download, and the reason
+      # was cut off. This buries an assertion under that kind of noise.
+      - name: A failed test's reason is shown, however much it printed first
+        run: ./scripts/test-failure-reasons-selftest.sh
+
   test-ids-selftest:
     name: test ids self-test
     runs-on: ubuntu-latest

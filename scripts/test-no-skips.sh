@@ -66,33 +66,12 @@ if [ "${rc}" -ne 0 ]; then
   printf '\n--- failures ---\n'
   grep -F '"Action":"fail"' "${out}" | head -40
 
-  # The reason matters more than the list, exactly as it does for a skip below.
-  # Without this a failing run says WHICH test failed and never why: the JSON
-  # "fail" action carries a package, a name and an elapsed time, and no output
-  # at all. RM-070 (#100) is the report of a CI failure that carried no
-  # evidence, and a gate that cannot say why it failed sends the reader to
-  # guess — which is how a flake gets re-run instead of diagnosed.
-  #
-  # go test -json emits every line a failing test printed as its own "output"
-  # action keyed by test name, so the transcript is already in "${out}"; it was
-  # simply never shown.
-  failed=$(grep -F '"Action":"fail"' "${out}" \
-    | grep -F '"Test":' \
-    | sed -e 's/.*"Test":"//' -e 's/".*//' \
-    | sort -u)
-  if [ -n "${failed}" ]; then
-    printf '\n--- why ---\n'
-    while IFS= read -r t; do
-      [ -n "${t}" ] || continue
-      printf '\n%s\n' "${t}"
-      grep -F '"Action":"output"' "${out}" \
-        | grep -F "\"Test\":\"${t}\"" \
-        | sed -e 's/.*"Output":"//' -e 's/\\n"}$//' -e 's/\\t/  /g' -e 's/^/  /' \
-        | head -40
-    done <<EOF
-${failed}
-EOF
-  fi
+  # The reason matters more than the list, exactly as it does for a skip below
+  # (RM-070, #100). scripts/test-failure-reasons.sh prints it: every line the
+  # testing package wrote and the tail of the rest, so a long download cannot
+  # push the assertion out, which is how OPS-029's reason was lost in CI on
+  # 2026-09-26.
+  "$(dirname "$0")/test-failure-reasons.sh" "${out}"
 
   printf '\ngo test exited %s\n' "${rc}"
   exit "${rc}"
