@@ -256,7 +256,25 @@ fi
 # repeated at each site is a derivation that can disagree at one of them, and a
 # pointer written under a key nobody reads is silent: attribution simply goes
 # back to being a throwaway identity per commit.
+#
+# RM-193 (#313): the key is the SIGNER'S — the repository, the branch and the
+# linked worktree's name, never the host path — and it is asked of the signer
+# rather than derived here: this file derives no branch (#205), and a second
+# copy of the derivation is exactly the disagreement described above. A signer
+# that cannot answer (an older one, a tree with no origin) leaves the path
+# digest, which is what such a signer reads.
 tree_key() {
+  _tk="$(CDPATH= cd -- "${1:-.}" 2>/dev/null && "$(signer)" --print-tree-key 2>/dev/null)" || _tk=""
+  case "$_tk" in
+    *[!0-9a-f]* | "") tree_key_path "$1" ;;
+    *) printf '%s' "$_tk" ;;
+  esac
+}
+
+# tree_key_path is the key before RM-193: a digest of the tree's path. Only a
+# removal still uses it, so a pointer a hook of the old shape left is taken
+# with the run it names.
+tree_key_path() {
   _t="$(CDPATH= cd -- "${1:-.}" 2>/dev/null && pwd -P)"
   [ -n "$_t" ] || return 1
   printf '%s' "$_t" | shasum -a 256 2>/dev/null | cut -c1-32
@@ -1203,8 +1221,9 @@ retire_killed_task() {
   # retired parent and warn about a stale pointer every time it signs there.
   rm -f "$RUNS_DIR/$TASK_ID" 2>/dev/null || :
   if [ -n "$DIR" ]; then
-    _kkey="$(tree_key "$DIR" || true)"
-    [ -n "$_kkey" ] && rm -f "$RUNS_DIR/by-tree/$_kkey" 2>/dev/null
+    for _kkey in "$(tree_key "$DIR" || true)" "$(tree_key_path "$DIR" || true)"; do
+      [ -n "$_kkey" ] && rm -f "$RUNS_DIR/by-tree/$_kkey" 2>/dev/null
+    done
   fi
 
   # WHAT IT LEFT IN THE TREE, written where it outlives this process — #277.
@@ -1432,8 +1451,9 @@ case "$EVENT" in
     # — the same value SessionStart keyed it on, read above before the marker
     # went.
     if [ -n "$END_DIR" ]; then
-      _key="$(tree_key "$END_DIR" || true)"
-      [ -n "$_key" ] && rm -f "$RUNS_DIR/by-tree/$_key.session" 2>/dev/null
+      for _key in "$(tree_key "$END_DIR" || true)" "$(tree_key_path "$END_DIR" || true)"; do
+        [ -n "$_key" ] && rm -f "$RUNS_DIR/by-tree/$_key.session" 2>/dev/null
+      done
     fi
     exit 0
     ;;
@@ -1724,8 +1744,9 @@ gate is what decides whether it may merge."
       # 32 hex characters of the tree key; the session pointer SessionStart
       # writes carries a `.session` suffix and outlives every subagent that
       # worked in the same tree (RM-156, #259).
-      _key="$(tree_key "$DIR" || true)"
-      [ -n "$_key" ] && rm -f "$RUNS_DIR/by-tree/$_key" 2>/dev/null
+      for _key in "$(tree_key "$DIR" || true)" "$(tree_key_path "$DIR" || true)"; do
+        [ -n "$_key" ] && rm -f "$RUNS_DIR/by-tree/$_key" 2>/dev/null
+      done
     fi
     exit 0
     ;;

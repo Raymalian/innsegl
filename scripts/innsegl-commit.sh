@@ -151,6 +151,10 @@ R_EXPLICIT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -m) [ $# -ge 2 ] || usage; MESSAGE="$2"; shift 2 ;;
+    # --print-tree-key: print this tree's key and stop. The harness hook files
+    # its pointers under the same key, and its self-test asks this script for
+    # it rather than recomputing it, so the two cannot drift apart (#313).
+    --print-tree-key) PRINT_TREE_KEY=1; shift ;;
     -F) [ $# -ge 2 ] || usage; MESSAGE="$(cat "$2")"; shift 2 ;;
     # -r: sign under a run that ALREADY EXISTS, and do not retire it.
     #
@@ -202,7 +206,7 @@ while [ $# -gt 0 ]; do
     *)  usage ;;
   esac
 done
-[ -n "$MESSAGE" ] || { echo "innsegl-commit: empty message" >&2; exit 2; }
+[ -n "$MESSAGE" ] || [ -n "${PRINT_TREE_KEY:-}" ] || { echo "innsegl-commit: empty message" >&2; exit 2; }
 
 ROOT="$(git rev-parse --show-toplevel)"
 
@@ -270,6 +274,11 @@ if [ -n "$ROOT" ]; then
   # The key a pointer written before RM-193 is filed under. The harness hook
   # still writes that one, so it is looked for on every run, not once ever.
   OLD_TREE_KEY="$(printf '%s' "$(CDPATH= cd -- "$ROOT" && pwd -P)" | shasum -a 256 2>/dev/null | cut -c1-32)"
+fi
+if [ -n "${PRINT_TREE_KEY:-}" ]; then
+  [ -n "$TREE_KEY" ] || exit 1
+  printf '%s\n' "$TREE_KEY"
+  exit 0
 fi
 
 # A POINTER UNDER THE OLD KEY IS FOUND ONCE AND MOVED TO THE NEW ONE, so a tree
