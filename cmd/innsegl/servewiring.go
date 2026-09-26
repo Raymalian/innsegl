@@ -884,11 +884,12 @@ func configureSignCommit(
 			"policy, so this deployment would refuse its own first signature: %w", identErr)
 	}
 	signers := mcp.NewGitsignSigners(signing.Config{
-		FulcioURL:   o.fulcioURL,
-		RekorURL:    o.rekorURL,
-		Issuer:      o.oidcIssuer,
-		GitsignPath: o.gitsignPath,
-		Author:      author,
+		FulcioURL:    o.fulcioURL,
+		RekorURL:     o.rekorURL,
+		Issuer:       o.oidcIssuer,
+		GitsignPath:  o.gitsignPath,
+		Author:       author,
+		TrustedRoots: mcp.ProjectMountRoots(),
 	})
 	// adopt_run (ADR-0051) proves a dead run's work against its own bodies, so
 	// it is on exactly when there is a body volume to prove against, and

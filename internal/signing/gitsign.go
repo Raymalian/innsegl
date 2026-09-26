@@ -210,6 +210,12 @@ type Config struct {
 	// decision 6).
 	Author AuthorPolicy
 
+	// TrustedRoots are the directories whose subtrees git may treat as
+	// repositories even when it reads their owner as someone else: the
+	// deployment's project mounts, where Docker Desktop can report a linked
+	// worktree's gitdir as uid 0 (#308). Empty trusts nothing extra.
+	TrustedRoots []string
+
 	// Timeout bounds one child process. Skew is IP §6.8's tolerance when
 	// reading a certificate's validity window back. MinValidity is how much
 	// credential life a signature requires before it will be spent.
@@ -577,7 +583,7 @@ func (s *Signer) trustMaterial(ctx context.Context) (*trustFiles, error) {
 // environment rather than inheriting it means an operator who exports it for
 // their own interactive use cannot silently turn it on for the MCP.
 func (s *Signer) baseEnv(t *trustFiles) []string {
-	return []string{
+	return append([]string{
 		// A minimal PATH: both binaries are already absolute, and git needs
 		// one to find its own helpers.
 		"PATH=" + strings.Join([]string{
@@ -614,7 +620,35 @@ func (s *Signer) baseEnv(t *trustFiles) []string {
 
 		// The token comes from the environment and from nowhere else.
 		"GITSIGN_TOKEN_PROVIDER=envvar",
+	}, SafeDirectoryEnv(s.cfg.TrustedRoots)...)
+}
+
+// SafeDirectoryEnv trusts each root's subtree for git's ownership check, as
+// GIT_CONFIG_COUNT entries, so an isolated configuration carries exactly this
+// trust and nothing inherited. A root that is not absolute, or is "/" (which
+// would be every directory by another name), is skipped. It returns nil when
+// nothing is left, and never a bare "*".
+func SafeDirectoryEnv(roots []string) []string {
+	var dirs []string
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		root = filepath.Clean(root)
+		if !filepath.IsAbs(root) || root == "/" {
+			continue
+		}
+		dirs = append(dirs, root+"/*")
 	}
+	if len(dirs) == 0 {
+		return nil
+	}
+	env := []string{"GIT_CONFIG_COUNT=" + strconv.Itoa(len(dirs))}
+	for i, dir := range dirs {
+		n := strconv.Itoa(i)
+		env = append(env, "GIT_CONFIG_KEY_"+n+"=safe.directory", "GIT_CONFIG_VALUE_"+n+"="+dir)
+	}
+	return env
 }
 
 // signEnv adds the credential and the author identity.

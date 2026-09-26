@@ -596,6 +596,25 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (_ any,
 		return nil, err
 	}
 
+	// RM-188 (#308), I2: an identity attributes only the work it was issued
+	// for, and a run is issued for the repository `run_registered` names. Both
+	// sides are doc 02 §5's host/org/name with a lowercase host: the run's was
+	// validated at registration, and in.Repo either passed ValidateRepo in
+	// signCommitCheckRequest or was derived from `worktree` by
+	// repoIDFromWorktree, which produces exactly that spelling.
+	//
+	// A run with NO recorded repository was registered under schema 1, before
+	// `repo` existed on `run_registered`. It keeps the behaviour it always had
+	// — the caller's repository is signed in — because there is nothing on
+	// the chain to compare against, and refusing it would retire every such
+	// run by the back door.
+	if run.Repo != "" && in.Repo != run.Repo {
+		return nil, Errorf(ClassInvariantViolation, run.RunID,
+			"run %s was registered for %s and cannot sign in %s; an identity "+
+				"attributes only the work it was issued for (I2)",
+			run.RunID, run.Repo, in.Repo)
+	}
+
 	// What the trailers will claim, checked here rather than inside the
 	// wrapper so a claim this run cannot make is refused before an intent
 	// exists (IP §6.9's spoofing, seen from our own side).
@@ -1575,8 +1594,19 @@ type GitRepos struct {
 // signCommitGitEnv is ADR-0031 decision 3's argument applied to a read: the
 // child's environment is built rather than inherited, so no `~/.gitconfig`,
 // alias or credential helper can change what a plumbing command answers.
+//
+// # safe.directory: the two project mounts, and nothing wider (#308)
+//
+// The container binds the host projects folder twice: at /projects, and at
+// INNSEGL_HOST_PROJECTS so that a linked worktree's `.git` file — which names
+// its gitdir by the HOST path — resolves. Through that second mount Docker
+// Desktop can report `.git` and the gitdir as uid 0, and git then refuses the
+// repository as "dubious ownership". The config is isolated above, so the
+// only trust it holds is what is written here: each mount root's subtree.
+// Never a bare "*", and never a root that is not an absolute directory other
+// than "/" itself, which would be "*" by another name.
 func signCommitGitEnv(worktree string) []string {
-	return []string{
+	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + worktree,
 		"GIT_CONFIG_NOSYSTEM=1",
@@ -1585,6 +1615,8 @@ func signCommitGitEnv(worktree string) []string {
 		// A read must never be answered by a pager or an editor.
 		"GIT_PAGER=cat",
 	}
+	env = append(env, signing.SafeDirectoryEnv(ProjectMountRoots())...)
+	return env
 }
 
 func (g GitRepos) git(ctx context.Context, worktree string, args ...string) (string, error) {
@@ -1716,4 +1748,11 @@ func (g gitsignSigners) Open(src signing.CredentialSource) (SignCommitSigner, er
 		return nil, err
 	}
 	return signer, nil
+}
+
+// ProjectMountRoots are the two places this container sees the host projects
+// folder: /projects, and INNSEGL_HOST_PROJECTS when it is set. They are the
+// only roots git's ownership check is told to trust (#308).
+func ProjectMountRoots() []string {
+	return []string{DefaultProjectsMount, os.Getenv(EnvHostProjects)}
 }
