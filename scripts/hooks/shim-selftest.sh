@@ -1936,6 +1936,78 @@ else
   bad "OPS-109 a missing sweep failed SessionStart: status $STATUS"
 fi
 
+# --- RM-192 (#312) -----------------------------------------------------------
+#
+# A REFUSAL IS SAID, ONCE. PostToolUse used to end its observe_tool_call in
+# `>/dev/null 2>&1 || true`, so a refusal -- a run the MCP cannot place, a run
+# already retired -- left no trace in the session at all. The work is still not
+# blocked; what changes is that somebody learns it is not being recorded. Once
+# per session and error class, or a refused ledger turns every tool call into
+# noise and the warning is scrolled past like the rest.
+refusal_post() {
+  drive "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"$1\",\"cwd\":\"$CWD\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"x\"}}"
+}
+
+script_tool observe_tool_call ok '{"digest":"sha256:'"$(printf 'b%.0s' $(seq 1 64))"'","stored":true}'
+refusal_post sess-rm192
+if [ "$STATUS" = "0" ] && [ ! -s "$WORK/err" ]; then
+  ok "RM-192 a recorded tool call says nothing"
+else
+  bad "RM-192 a recorded tool call printed something: status $STATUS, stderr: $(cat "$WORK/err")"
+fi
+
+script_tool observe_tool_call err '{"error_class":"RUN_ALREADY_RETIRED","message":"run-x was retired","retryable":false}'
+refusal_post sess-rm192
+if [ "$STATUS" = "0" ] && [ "$(grep -c 'RUN_ALREADY_RETIRED' "$WORK/err")" = "1" ]; then
+  ok "RM-192 a refusal warns once, naming its error class, and still exits 0"
+else
+  bad "RM-192 a refusal did not warn once: status $STATUS, stderr: $(cat "$WORK/err")"
+fi
+
+refusal_post sess-rm192
+if [ "$STATUS" = "0" ] && [ ! -s "$WORK/err" ]; then
+  ok "RM-192 a second refusal of the same class in the same session is silent"
+else
+  bad "RM-192 the same class warned twice in one session: status $STATUS, stderr: $(cat "$WORK/err")"
+fi
+
+script_tool observe_tool_call err-once '{"error_class":"LEDGER_UNAVAILABLE","message":"down","retryable":true}'
+refusal_post sess-rm192
+if [ "$STATUS" = "0" ] && grep -q 'LEDGER_UNAVAILABLE' "$WORK/err" && ! grep -q 'RUN_ALREADY_RETIRED' "$WORK/err"; then
+  ok "RM-192 a different class in the same session warns"
+else
+  bad "RM-192 a different class was not said: status $STATUS, stderr: $(cat "$WORK/err")"
+fi
+
+script_tool observe_tool_call err '{"error_class":"RUN_ALREADY_RETIRED","message":"run-x was retired","retryable":false}'
+refusal_post sess-rm192-other
+if [ "$STATUS" = "0" ] && [ "$(grep -c 'RUN_ALREADY_RETIRED' "$WORK/err")" = "1" ]; then
+  ok "RM-192 and another session is told on its own account"
+else
+  bad "RM-192 another session was not told: status $STATUS, stderr: $(cat "$WORK/err")"
+fi
+
+# A class that is not the IP §4 vocabulary's shape names no file. The value is
+# the server's, but it is about to become part of a path.
+script_tool observe_tool_call err '{"error_class":"../../escape","message":"odd","retryable":false}'
+refusal_post sess-rm192
+if [ "$STATUS" = "0" ] && [ ! -e "$RUNS/escape" ] && [ ! -e "$WORK/escape" ] && grep -q 'refused' "$WORK/err"; then
+  ok "RM-192 a class that is not a class names no path and is still said"
+else
+  bad "RM-192 an odd class: status $STATUS, stderr: $(cat "$WORK/err"), runs: $(ls -a "$RUNS")"
+fi
+
+# SessionEnd forgets what the session was told, marker or no marker: the one
+# that was told something is often the one whose start was refused.
+drive "{\"hook_event_name\":\"SessionEnd\",\"session_id\":\"sess-rm192\",\"cwd\":\"$CWD\"}"
+if [ "$STATUS" = "0" ] && ! ls "$RUNS/.refused/sess-rm192."* >/dev/null 2>&1 \
+   && ls "$RUNS/.refused/sess-rm192-other."* >/dev/null 2>&1; then
+  ok "RM-192 SessionEnd removes its own session's record and no other"
+else
+  bad "RM-192 SessionEnd left the record: status $STATUS, $(ls -a "$RUNS/.refused" 2>&1)"
+fi
+script_tool observe_tool_call ok '{}'
+
 echo
 echo "shim-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

@@ -270,6 +270,35 @@ warn() { echo "innsegl: $*" >&2; }
 # end a branch without deciding it.
 say_detail() { _d="$(reply_field "$1" detail)"; [ -n "$_d" ] && warn "  $_d"; return 0; }
 
+# say_refused passes on a refusal the session would otherwise never see — RM-192
+# (#312). A call that never blocks used to discard its reply whole, so a run the
+# MCP could not place, or one already retired, left no trace at all: the work
+# went on and nobody learned it was not being recorded.
+#
+# ONCE PER SESSION AND ERROR CLASS. A refused ledger refuses every tool call, and
+# a warning on each one is noise that gets scrolled past like the rest. The
+# "already said" record is an empty file under $RUNS_DIR/.refused, named by the
+# harness session and the class; the leading dot keeps the orphan sweep off it,
+# and SessionEnd removes the session's own.
+#
+# BOTH HALVES OF THAT NAME ARE SOMEONE ELSE'S TEXT, about to become a path. A
+# class outside the IP §4 vocabulary's shape is said as UNCLASSIFIED, and the
+# session id keeps only characters a filename cannot misread. A reply with no
+# error_class at all is a transport failure, not a refusal, and is not this
+# function's to report. Always returns 0: it decides nothing.
+refused_key() { printf '%s' "${SESSION_ID:-$KEY}" | tr -c 'A-Za-z0-9_-' '_'; }
+say_refused() {
+  _class="$(reply_field "$1" error_class)"
+  [ -n "$_class" ] || return 0
+  case "$_class" in *[!A-Z0-9_]*) _class=UNCLASSIFIED ;; esac
+  _said="$RUNS_DIR/.refused/$(refused_key).$_class"
+  [ -e "$_said" ] && return 0
+  ( umask 077 && mkdir -p "$RUNS_DIR/.refused" && : > "$_said" ) 2>/dev/null
+  _m="$(reply_field "$1" message | tr '\n' ' ' | cut -c1-200)"
+  warn "refused ($_class)${_m:+: $_m} — work is not blocked, but it is not being recorded. Said once per session for this class."
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # #266 — THE CREDENTIAL. One variable, one mint, written nowhere.
 # ---------------------------------------------------------------------------
@@ -1352,6 +1381,10 @@ case "$EVENT" in
   SessionEnd)
     # Never exit 2. See the header.
     [ -n "$SESSION_ID" ] || exit 0
+    # What this session has already been told (RM-192, #312) goes first, and
+    # whether or not it ever held a marker: a session whose registration was
+    # refused is exactly the one that was told something.
+    rm -f "$RUNS_DIR/.refused/$(refused_key)".* 2>/dev/null
     [ -f "$MARKER" ] || exit 0
     # READ BEFORE THE MARKER IS REMOVED. It is the only record of which tree
     # this session's pointer was keyed on, and it is deleted a few lines below.
@@ -1736,11 +1769,13 @@ gate is what decides whether it may merge."
     # session it already holds.
     [ -n "$TOOL" ] && [ -n "$IDENT" ] || exit 0
     MARK="$(recall)"
-    mcp_call observe_tool_call \
+    # THE REPLY IS KEPT, AND A REFUSAL IS SAID ONCE — RM-192 (#312). The exit
+    # status is still ignored: nothing here may block.
+    REPLY="$(mcp_call observe_tool_call \
       session_id "$IDENT" cwd "$CWD" tool "$TOOL" body "$EVENT_JSON" \
       agent_type "$IDENT_TYPE" \
       parent_session_id "$PARENT_IDENT" \
-      run_token "$(reply_field "${MARK:-}" run_token)" >/dev/null 2>&1 || true
+      run_token "$(reply_field "${MARK:-}" run_token)" 2>/dev/null)" || say_refused "$REPLY"
 
     # AND IF THIS TOOL CALL WAS A KILL, THE KILLED RUN LEAVES THE ACTIVE LIST
     # NOW — RM-182 (#290). Recorded FIRST and retired second: the kill is the
