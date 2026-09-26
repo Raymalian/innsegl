@@ -280,6 +280,36 @@ else
   bad "the permitted-name list exists" "not readable at ${NAMES_FILE}"
 fi
 
+# RM-198 (#319). A LINKED WORKTREE READS THE MAIN CHECKOUT'S LIST.
+#
+# The list is untracked, so `git worktree add` never copies it, and every fresh
+# worktree refused every commit until someone copied the file by hand. Measured
+# live: an agent in a new worktree was refused with "no permitted-identity list".
+# The gate in a linked worktree now falls back to the list beside the main
+# checkout -- and with no list there either, it still refuses.
+WM="${TMP}/wt-main"; WL="${TMP}/wt-linked"
+mkdir -p "${WM}/scripts"
+cp "${GATE}" "${WM}/scripts/no-personal-identity.sh"
+git -C "${WM}" init -q
+git -C "${WM}" config user.name "Innsegl"
+git -C "${WM}" config user.email "agent@innsegl.invalid"
+git -C "${WM}" add scripts
+git -C "${WM}" commit -q -m seed --no-gpg-sign
+git -C "${WM}" worktree add -q "${WL}" 2>/dev/null
+mkdir -p "${WM}/.innsegl"; printf 'Innsegl\n' >"${WM}/.innsegl/allowed-names"
+d="$(fixture wtlist "Innsegl" "agent@innsegl.invalid")"
+if (unset INNSEGL_ALLOWED_NAMES_FILE; "${WL}/scripts/no-personal-identity.sh" "${d}") >/dev/null 2>&1; then
+  ok "RM-198 a gate in a linked worktree reads the main checkout's list"
+else
+  bad "RM-198 a gate in a linked worktree reads the main checkout's list" "it refused"
+fi
+rm -f "${WM}/.innsegl/allowed-names"
+if (unset INNSEGL_ALLOWED_NAMES_FILE; "${WL}/scripts/no-personal-identity.sh" "${d}") >/dev/null 2>&1; then
+  bad "RM-198 with no list in either checkout, the linked worktree still refuses"
+else
+  ok "RM-198 with no list in either checkout, the linked worktree still refuses"
+fi
+
 # A GATE WHOSE CONFIGURATION IS MISSING MUST REFUSE, NOT PASS. Losing the list
 # is exactly when a gate is most likely to be trusted and least able to judge.
 d="$(fixture nolist "Innsegl" "agent@innsegl.invalid")"
