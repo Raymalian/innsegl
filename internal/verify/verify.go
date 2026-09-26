@@ -368,7 +368,10 @@ func (v *Verifier) VerifyCommit(ctx context.Context, repoLabel, sha, tree, messa
 // verifyCommit is the check pipeline shared by Verify and VerifyCommit. It
 // never touches git itself — everything it reads comes from c.
 func (v *Verifier) verifyCommit(ctx context.Context, repo string, c commit) (Report, error) {
-	rep := Report{Repo: repo, CommitSHA: c.SHA, TreeHash: c.Tree}
+	// Checks starts as an empty LIST, not nil: a report that runs no check (an
+	// unattributed commit) must still carry "checks": [] on the wire, which
+	// is the only shape a reader may accept (VER-024).
+	rep := Report{Repo: repo, CommitSHA: c.SHA, TreeHash: c.Tree, Checks: []Check{}}
 	claim, claimErr := ReadClaim(c.Message)
 	rep.Claim = claim
 
