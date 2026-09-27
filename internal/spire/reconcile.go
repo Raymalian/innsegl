@@ -876,7 +876,7 @@ func (v *ledgerView) observe(record event.Fields) {
 	// A record whose `source` cannot be read counts as activity, because SQL's
 	// `IS DISTINCT FROM` counts a NULL that way and the two renderings must
 	// agree on the same chain (REC-018).
-	if recordString(record, event.FieldSource) != event.SourceReaper &&
+	if source, readable := record[event.FieldSource].(string); ledger.CountsAsActivity(source, readable) &&
 		at.After(run.facts.LastActivityAt) {
 		run.facts.LastActivityAt = at
 	}

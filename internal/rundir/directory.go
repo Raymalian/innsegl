@@ -156,7 +156,7 @@ func (d *Directory) CredentialRun(ctx context.Context, runID string) (mcp.Creden
 		// This one only narrows the window in which a withdrawn run still reads
 		// as withdrawn, so the failure is a run that looks quieter than it was
 		// — never a credential minted for the wrong run.
-		if source, known := rec[event.FieldSource].(string); !known || source != event.SourceReaper {
+		if source, known := rec[event.FieldSource].(string); ledger.CountsAsActivity(source, known) {
 			if raw, dated := rec[event.FieldTS].(string); dated {
 				if ts, err := event.ParseTimestamp(raw); err == nil {
 					if at := ts.Time(); at.After(run.LastActivityAt) {

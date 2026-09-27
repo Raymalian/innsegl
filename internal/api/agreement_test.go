@@ -89,6 +89,12 @@ var agreementRuns = []struct {
 		step(event.EventTypeRunExpired, event.SourceReaper),
 		step(event.EventTypeToolCall, event.SourceMCP),
 		step(event.EventTypeRunExpired, event.SourceReaper))},
+	// Withdrawal, then an alert the reconciler raised about the run (#336).
+	// The alert names the run; the run did nothing, so the withdrawal stands.
+	{"agree-quiet-then-alerted", steps(
+		step(event.EventTypeRunRegistered, event.SourceMCP),
+		step(event.EventTypeRunExpired, event.SourceReaper),
+		step(event.EventTypeLedgerDriftDetected, event.SourceReconciler))},
 	// Retirement, in every position relative to the other two facts.
 	{"agree-ended", steps(
 		step(event.EventTypeRunRegistered, event.SourceMCP),
@@ -157,6 +163,10 @@ func agreementFixture(t *testing.T) (*ledger.Store, string) {
 				body[event.FieldTaskRef] = "JIRA-1"
 				body[event.FieldRepo] = "github.com/innsegl/one"
 				body[event.FieldBranch] = "main"
+			case event.EventTypeLedgerDriftDetected:
+				body[event.FieldSubjectEventID] = "01a0e2e5-e74f-77bd-8cd5-3893a4ad5b68"
+				body[event.FieldReason] = "spire_entry_missing: fixture"
+				body[event.FieldIdempotencyKey] = run.id + "-drift"
 			case event.EventTypeToolCall:
 				body[event.FieldToolName] = "observe_tool_call"
 				body[event.FieldIdempotencyKey] = fmt.Sprintf("%s-call-%d", run.id, i)
@@ -434,4 +444,35 @@ func TestREC018TheTwoAgreeAboutWhichEntriesShouldBeGone(t *testing.T) {
 	}) {
 		t.Fatal("agree-resumed is not active; REC-017's shape is missing from this fixture")
 	}
+}
+
+// RM-209 (#336). An alert ABOUT a run is not the run's activity.
+//
+// Activity was "an event the reaper did not write", so a drift alert the
+// reconciler appended about a withdrawn run became the run's newest fact and
+// turned it back to active. Measured live: the SPIRE pass flagged a lapsed run
+// and from that moment the read API called it active. Both components must
+// read the fixture's alerted run as lapsed.
+func TestRM209AReconcilerAlertDoesNotReviveARun(t *testing.T) {
+	t.Setenv(ledger.EnvRestoreHorizon, "720h")
+	owner, readerDSN := agreementFixture(t)
+	result := reconcilerStates(t, owner, noEntries{}, 100*time.Hour)
+	s, _ := readStore(t, readerDSN)
+	page, err := s.ListRuns(t.Context(), RunFilter{Limit: MaxPageSize})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	for _, r := range page.Runs {
+		if r.RunID != "agree-quiet-then-alerted" {
+			continue
+		}
+		if r.Status != StatusLapsed {
+			t.Errorf("the read API calls the alerted run %q, want %q", r.Status, StatusLapsed)
+		}
+		if got := result.RunStates[r.RunID]; got != ledger.RunLapsed {
+			t.Errorf("the reconciler calls the alerted run %q, want %q", got, ledger.RunLapsed)
+		}
+		return
+	}
+	t.Fatal("the fixture's alerted run is missing from the read API")
 }

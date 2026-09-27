@@ -43,7 +43,12 @@ A run's state is read from its newest recorded fact, in this order
 4. **active**: otherwise.
 
 A withdrawal stands only while nothing newer contradicts it: an event the
-reaper did not write, after the withdrawal, puts the run back to active. The
+run caused, after the withdrawal, puts the run back to active. (Amended
+2026-09-27, #336: this read "an event the reaper did not write", which let the
+reconciler's own alert about a withdrawn run count as the run speaking again.
+Records the deployment's loops append (reaper, reconciler, system) are not the
+run's activity. `ledger.CountsAsActivity` and `ledger.ActivitySQL` are the one
+definition.) The
 horizon is `INNSEGL_ABANDON_AFTER`, 30 days by default.
 
 No state is stored. Every answer is computed from recorded facts at read time,
