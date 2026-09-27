@@ -1349,7 +1349,10 @@ func TestRM202AnAnchorResolvesItsSegmentsDriftAlert(t *testing.T) {
 	if len(alerts) != 1 {
 		t.Fatalf("want exactly one drift alert, got %d", len(alerts))
 	}
-	subject, _ := alerts[0][event.FieldSubjectEventID].(string)
+	subject, ok := alerts[0][event.FieldSubjectEventID].(string)
+	if !ok {
+		t.Fatalf("the drift alert carries no readable %s", event.FieldSubjectEventID)
+	}
 	if len(f.chain.resolved) != 0 {
 		t.Fatalf("an alert was resolved while its segment was still unanchored: %v", f.chain.resolved)
 	}

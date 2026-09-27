@@ -438,7 +438,7 @@ func (e *sealEngine) anchor(ctx context.Context, seg surveyedSegment) (sealedSeg
 	// but the resolution, which the next anchor of nothing will not retry, so
 	// it is reported rather than returned.
 	if r, ok := e.chain.(driftResolver); ok {
-		if subject, _ := seg.record[event.FieldEventID].(string); subject != "" {
+		if subject, isText := seg.record[event.FieldEventID].(string); isText && subject != "" {
 			reason := fmt.Sprintf("segment %s (positions %d..%d) anchored at transparency-log index %d",
 				seg.segmentID, seg.first, seg.last, anchor.LogIndex)
 			if _, rerr := r.ResolveDriftAlerts(ctx, subject, sealerResolvedBy, reason); rerr != nil {
