@@ -5,6 +5,8 @@ package ledger
 import (
 	"os"
 	"time"
+
+	"innsegl.dev/innsegl/internal/event"
 )
 
 // A run's state is decided by its newest recorded fact, and this is the only
@@ -117,41 +119,43 @@ type RunFacts struct {
 	// first day, resumed, and worked for longer than the horizon would be
 	// abandoned by arithmetic rather than by silence (MCP-078).
 	WithdrawnAt time.Time
-	// LastActivityAt is the newest event on this run that the REAPER DID NOT
-	// WRITE, zero when the run's entire record is the reaper's.
+	// LastActivityAt is the newest event on this run that the run itself
+	// caused, zero when nothing did: see CountsAsActivity for which those are.
 	//
-	// `source` is the discriminator (doc 02 §2 makes it "who appended it"), and
-	// it is the discriminator for a reason that is not tidiness: counting the
-	// reaper's own `run_expired` would let the reaper read its own record as
-	// evidence that the run it just withdrew from is working, and no withdrawal
-	// would ever stand.
-	//
-	// # ONLY the reaper is excluded, and that has a consequence worth stating
-	//
-	// The discriminator is the read API's own — `source IS DISTINCT FROM
-	// 'reaper'` (#256) — extracted here verbatim rather than narrowed, because
-	// a rule two components read differently is the defect #258 closes and
-	// changing it is a decision for a human rather than a side effect of
-	// moving it.
-	//
-	// So an event the RECONCILER writes counts as activity. One does exist:
-	// `ledger_drift_detected` carries the run's `run_id` and `spiffe_id` when
-	// the finding is attributable, and `source` `reconciler`. A withdrawn run
-	// whose surviving entry is reported therefore reads active from the moment
-	// the alert lands — the standing finding stops being reported on the next
-	// cycle, and the dashboard calls the run active. The alert itself is
-	// permanent and was raised, so nothing is lost silently; what is lost is
-	// the repetition and the label.
-	//
-	// That is not this file's to fix: narrowing the discriminator to "only the
-	// run's own tooling" changes what every component answers, and it wants an
-	// issue, not a quiet edit. It is written down here so the next reader finds
-	// it stated rather than measured.
+	// `source` is the discriminator (doc 02 §2 makes it "who appended it").
+	// Counting the reaper's own `run_expired` would let the reaper read its own
+	// record as evidence that the run it just withdrew from is working, and no
+	// withdrawal would ever stand. The same holds for the reconciler: its
+	// `ledger_drift_detected` names the run it is about, and until #336 that
+	// alert turned a withdrawn run back to active the moment it landed.
 	LastActivityAt time.Time
 	// RegisteredAt is the `run_registered` instant, zero when it could not be
 	// read. It decides nothing; it dates an active run for DecidedAt.
 	RegisteredAt time.Time
 }
+
+// CountsAsActivity reports whether an event with this `source` is something the
+// run did. The deployment's own loops append records that NAME a run without
+// the run doing anything: the reaper's withdrawal, the reconciler's alerts and
+// rebase records, and the system's. None of them is the run speaking again
+// (ADR-0052, amended for #336). A source that cannot be read counts, as SQL's
+// `IS DISTINCT FROM` counts a NULL, so the two renderings agree (REC-018).
+func CountsAsActivity(source string, readable bool) bool {
+	if !readable {
+		return true
+	}
+	switch source {
+	case event.SourceReaper, event.SourceReconciler, event.SourceSystem:
+		return false
+	}
+	return true
+}
+
+// ActivitySQL is CountsAsActivity as a SQL predicate over a `source` column in
+// scope. Every query that dates a run's activity uses it and nothing else.
+const ActivitySQL = `(source IS DISTINCT FROM '` + event.SourceReaper +
+	`' AND source IS DISTINCT FROM '` + event.SourceReconciler +
+	`' AND source IS DISTINCT FROM '` + event.SourceSystem + `')`
 
 // WithdrawalStands reports whether the newest withdrawal is still this run's
 // newest fact — nothing the reaper did not write has happened since.
@@ -223,7 +227,7 @@ func RunStateOf(facts RunFacts, now time.Time, horizon time.Duration) string {
 //
 //	retired           boolean      bool_or(event_type = 'run_retired')
 //	withdrawn_at      timestamptz  max(ts) FILTER (WHERE event_type = 'run_expired')
-//	last_activity_at  timestamptz  max(ts) FILTER (WHERE source IS DISTINCT FROM 'reaper')
+//	last_activity_at  timestamptz  max(ts) FILTER (WHERE ActivitySQL)
 //	abandoned_before  timestamptz  AbandonedBefore's instant, or NULL
 //
 // They are unqualified so that this stays one constant rather than a builder

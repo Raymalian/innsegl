@@ -351,7 +351,7 @@ WITH scoped AS (
            -- work, and lapse again, and the horizon is measured from the
            -- withdrawal that stands.
            max(ts) FILTER (WHERE event_type = 'run_expired') AS withdrawn_at,
-           max(ts) FILTER (WHERE source IS DISTINCT FROM 'reaper') AS last_activity_at,
+           max(ts) FILTER (WHERE ` + ledger.ActivitySQL + `) AS last_activity_at,
            coalesce(array_agg(DISTINCT body->>'repo')
                     FILTER (WHERE body->>'repo' IS NOT NULL), '{}'::text[]) AS repos
       FROM scoped
@@ -608,7 +608,7 @@ WITH scoped AS (
            bool_or(event_type = 'run_registered') AS registered,
            bool_or(event_type = 'run_retired')    AS retired,
            max(ts) FILTER (WHERE event_type = 'run_expired') AS withdrawn_at,
-           max(ts) FILTER (WHERE source IS DISTINCT FROM 'reaper') AS last_activity_at
+           max(ts) FILTER (WHERE ` + ledger.ActivitySQL + `) AS last_activity_at
       FROM scoped GROUP BY run_id
 ), cutoff AS (
     SELECT $1::timestamptz AS abandoned_before

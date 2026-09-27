@@ -408,6 +408,19 @@ func (c *RegisterAgentConfig) heal(ctx context.Context, run spire.RunRef) error 
 	if !found || !known.RetiredAt.IsZero() {
 		return nil
 	}
+	// THE RECORDED IDENTITY, NOT A RE-DERIVED ONE (#335). {agent_type} and
+	// {task_id} are pseudonyms of a deployment secret, so rebuilding them from
+	// this request names a different identity once the secret has changed.
+	// Measured: an entry healed that way named agent/3ee40754/4a3f6604/<run>
+	// for a run registered as agent/3cc2c647/6ddc6071/<run>. The directory
+	// holds what the run was registered with; that is what is re-created.
+	if known.SPIFFEID != "" {
+		recorded, rerr := known.Ref()
+		if rerr != nil {
+			return rerr
+		}
+		run = recorded
+	}
 	// Abandoned long enough that nothing is coming back for it.
 	if c.AbandonAfter > 0 && !known.ExpiredAt.IsZero() &&
 		c.Now().Sub(known.ExpiredAt) > c.AbandonAfter {

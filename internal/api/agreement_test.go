@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +90,12 @@ var agreementRuns = []struct {
 		step(event.EventTypeRunExpired, event.SourceReaper),
 		step(event.EventTypeToolCall, event.SourceMCP),
 		step(event.EventTypeRunExpired, event.SourceReaper))},
+	// Withdrawal, then an alert the reconciler raised about the run (#336).
+	// The alert names the run; the run did nothing, so the withdrawal stands.
+	{"agree-quiet-then-alerted", steps(
+		step(event.EventTypeRunRegistered, event.SourceMCP),
+		step(event.EventTypeRunExpired, event.SourceReaper),
+		step(event.EventTypeLedgerDriftDetected, event.SourceReconciler))},
 	// Retirement, in every position relative to the other two facts.
 	{"agree-ended", steps(
 		step(event.EventTypeRunRegistered, event.SourceMCP),
@@ -157,6 +164,10 @@ func agreementFixture(t *testing.T) (*ledger.Store, string) {
 				body[event.FieldTaskRef] = "JIRA-1"
 				body[event.FieldRepo] = "github.com/innsegl/one"
 				body[event.FieldBranch] = "main"
+			case event.EventTypeLedgerDriftDetected:
+				body[event.FieldSubjectEventID] = "01a0e2e5-e74f-77bd-8cd5-3893a4ad5b68"
+				body[event.FieldReason] = "spire_entry_missing: fixture"
+				body[event.FieldIdempotencyKey] = run.id + "-drift"
 			case event.EventTypeToolCall:
 				body[event.FieldToolName] = "observe_tool_call"
 				body[event.FieldIdempotencyKey] = fmt.Sprintf("%s-call-%d", run.id, i)
@@ -433,5 +444,85 @@ func TestREC018TheTwoAgreeAboutWhichEntriesShouldBeGone(t *testing.T) {
 		return r.RunID == "agree-resumed" && r.Status == StatusActive
 	}) {
 		t.Fatal("agree-resumed is not active; REC-017's shape is missing from this fixture")
+	}
+}
+
+// RM-209 (#336). An alert ABOUT a run is not the run's activity.
+//
+// Activity was "an event the reaper did not write", so a drift alert the
+// reconciler appended about a withdrawn run became the run's newest fact and
+// turned it back to active. Measured live: the SPIRE pass flagged a lapsed run
+// and from that moment the read API called it active. Both components must
+// read the fixture's alerted run as lapsed.
+func TestRM209AReconcilerAlertDoesNotReviveARun(t *testing.T) {
+	t.Setenv(ledger.EnvRestoreHorizon, "720h")
+	owner, readerDSN := agreementFixture(t)
+	result := reconcilerStates(t, owner, noEntries{}, 100*time.Hour)
+	s, _ := readStore(t, readerDSN)
+	page, err := s.ListRuns(t.Context(), RunFilter{Limit: MaxPageSize})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	for _, r := range page.Runs {
+		if r.RunID != "agree-quiet-then-alerted" {
+			continue
+		}
+		if r.Status != StatusLapsed {
+			t.Errorf("the read API calls the alerted run %q, want %q", r.Status, StatusLapsed)
+		}
+		if got := result.RunStates[r.RunID]; got != ledger.RunLapsed {
+			t.Errorf("the reconciler calls the alerted run %q, want %q", got, ledger.RunLapsed)
+		}
+		return
+	}
+	t.Fatal("the fixture's alerted run is missing from the read API")
+}
+
+// RM-210 (#338). A withdrawal recorded under another SPIFFE ID is still the
+// run's withdrawal.
+//
+// #335 let a healed entry carry an identity the run was not registered with,
+// and the reaper records a withdrawal under the identity the entry held. Such
+// records are on the chain for good (I4). The read API folds a run's records
+// by run id and read the run lapsed; the SPIRE pass folded them by SPIFFE ID,
+// never saw the withdrawal, called the run active, and raised
+// spire_entry_missing every cycle. Measured live on 2026-09-27. Both must fold
+// by run id and agree.
+func TestRM210AWithdrawalUnderAnotherIdentityIsStillTheRuns(t *testing.T) {
+	t.Setenv(ledger.EnvRestoreHorizon, "720h")
+	owner, _, readerDSN := migrated(t)
+	ctx := t.Context()
+	const runID = "agree-healed-elsewhere"
+	registered := agreementSPIFFEID(runID)
+	healed := strings.Replace(registered, "/agent/", "/agent/x", 1)
+	appendOrFail(ctx, t, owner, event.Fields{
+		event.FieldEventType: event.EventTypeRunRegistered, event.FieldSource: event.SourceMCP,
+		event.FieldRunID: runID, event.FieldSpiffeID: registered,
+		event.FieldIdempotencyKey: runID + "-register", event.FieldAgentType: "fix-ci",
+		event.FieldTaskRef: "JIRA-1", event.FieldRepo: "github.com/innsegl/one", event.FieldBranch: "main",
+	})
+	appendOrFail(ctx, t, owner, event.Fields{
+		event.FieldEventType: event.EventTypeRunExpired, event.FieldSource: event.SourceReaper,
+		event.FieldRunID: runID, event.FieldSpiffeID: healed,
+	})
+
+	result := reconcilerStates(t, owner, noEntries{}, 0)
+	if got := result.RunStates[runID]; got != ledger.RunLapsed {
+		t.Errorf("the SPIRE pass calls the run %q, want %q", got, ledger.RunLapsed)
+	}
+	for _, d := range result.Drifts {
+		if d.RunID == runID {
+			t.Errorf("the SPIRE pass raised %s for a run whose withdrawal is on the chain", d.Kind)
+		}
+	}
+	s, _ := readStore(t, readerDSN)
+	page, err := s.ListRuns(ctx, RunFilter{Limit: MaxPageSize})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	for _, r := range page.Runs {
+		if r.RunID == runID && r.Status != StatusLapsed {
+			t.Errorf("the read API calls the run %q, want %q", r.Status, StatusLapsed)
+		}
 	}
 }

@@ -157,9 +157,9 @@ func (s *Store) LastActivityAt(ctx context.Context, runID string) (time.Time, in
 	)
 	err := s.pool.QueryRow(ctx,
 		`SELECT ts, chain_position FROM innsegl.events
-		  WHERE run_id = $1 AND source <> $2
+		  WHERE run_id = $1 AND `+ActivitySQL+`
 		  ORDER BY chain_position DESC
-		  LIMIT 1`, runID, event.SourceReaper).Scan(&ts, &position)
+		  LIMIT 1`, runID).Scan(&ts, &position)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return time.Time{}, 0, false, nil
