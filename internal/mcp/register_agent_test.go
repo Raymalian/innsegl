@@ -1463,3 +1463,28 @@ func TestRM208AHealRecreatesTheRecordedIdentity(t *testing.T) {
 		t.Errorf("SPIRE holds %d entries after the heal, want exactly the recorded one", got)
 	}
 }
+
+// RM-208 (#335), the error path. A recorded identity that is not a run
+// identity is not guessed around: the heal refuses and creates nothing.
+func TestRM208AHealRefusesARecordedIdentityItCannotRead(t *testing.T) {
+	env := raSetup(t, DefaultIdempotencyLease, nil)
+	session := raServe(t)
+	const key = "reg-heal-unreadable-identity"
+
+	first := raCallOK(t, session, raArgs(key))
+	env.runs.rememberAs(first.RunID, "spiffe://innsegl.dev/not-a-run-identity")
+	env.identities.reapAll()
+
+	res, err := session.CallTool(t.Context(), &sdk.CallToolParams{
+		Name: string(ToolRegisterAgent), Arguments: raArgs(key),
+	})
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("the replay succeeded over a recorded identity it could not read: %+v", res.StructuredContent)
+	}
+	if got := env.identities.entryCount(); got != 0 {
+		t.Errorf("SPIRE holds %d entries; a heal that cannot read the recorded identity creates none", got)
+	}
+}
