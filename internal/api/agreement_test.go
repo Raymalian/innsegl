@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -475,4 +476,53 @@ func TestRM209AReconcilerAlertDoesNotReviveARun(t *testing.T) {
 		return
 	}
 	t.Fatal("the fixture's alerted run is missing from the read API")
+}
+
+// RM-210 (#338). A withdrawal recorded under another SPIFFE ID is still the
+// run's withdrawal.
+//
+// #335 let a healed entry carry an identity the run was not registered with,
+// and the reaper records a withdrawal under the identity the entry held. Such
+// records are on the chain for good (I4). The read API folds a run's records
+// by run id and read the run lapsed; the SPIRE pass folded them by SPIFFE ID,
+// never saw the withdrawal, called the run active, and raised
+// spire_entry_missing every cycle. Measured live on 2026-09-27. Both must fold
+// by run id and agree.
+func TestRM210AWithdrawalUnderAnotherIdentityIsStillTheRuns(t *testing.T) {
+	t.Setenv(ledger.EnvRestoreHorizon, "720h")
+	owner, _, readerDSN := migrated(t)
+	ctx := t.Context()
+	const runID = "agree-healed-elsewhere"
+	registered := agreementSPIFFEID(runID)
+	healed := strings.Replace(registered, "/agent/", "/agent/x", 1)
+	appendOrFail(ctx, t, owner, event.Fields{
+		event.FieldEventType: event.EventTypeRunRegistered, event.FieldSource: event.SourceMCP,
+		event.FieldRunID: runID, event.FieldSpiffeID: registered,
+		event.FieldIdempotencyKey: runID + "-register", event.FieldAgentType: "fix-ci",
+		event.FieldTaskRef: "JIRA-1", event.FieldRepo: "github.com/innsegl/one", event.FieldBranch: "main",
+	})
+	appendOrFail(ctx, t, owner, event.Fields{
+		event.FieldEventType: event.EventTypeRunExpired, event.FieldSource: event.SourceReaper,
+		event.FieldRunID: runID, event.FieldSpiffeID: healed,
+	})
+
+	result := reconcilerStates(t, owner, noEntries{}, 0)
+	if got := result.RunStates[runID]; got != ledger.RunLapsed {
+		t.Errorf("the SPIRE pass calls the run %q, want %q", got, ledger.RunLapsed)
+	}
+	for _, d := range result.Drifts {
+		if d.RunID == runID {
+			t.Errorf("the SPIRE pass raised %s for a run whose withdrawal is on the chain", d.Kind)
+		}
+	}
+	s, _ := readStore(t, readerDSN)
+	page, err := s.ListRuns(ctx, RunFilter{Limit: MaxPageSize})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	for _, r := range page.Runs {
+		if r.RunID == runID && r.Status != StatusLapsed {
+			t.Errorf("the read API calls the run %q, want %q", r.Status, StatusLapsed)
+		}
+	}
 }

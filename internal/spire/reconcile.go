@@ -672,6 +672,11 @@ func (r *ledgerRun) closingEventID(state string) string {
 type ledgerView struct {
 	// runs is keyed by SPIFFE ID, which is what a SPIRE entry carries.
 	runs map[string]*ledgerRun
+	// byRunID finds a run by its run id, which is how the read API folds a
+	// run's records. A record naming a known run under a SPIFFE ID the run was
+	// not registered with -- one #335's heal left on the chain -- is still that
+	// run's record (#338).
+	byRunID map[string]*ledgerRun
 	// alerts is the set of (subject_event_id, reason) already recorded. It is
 	// what makes a second cycle silent.
 	alerts map[string]struct{}
@@ -756,6 +761,12 @@ func readLedgerView(ctx context.Context, reader LedgerReader, batch int64) (*led
 // against that closing event rather than as unattributed, which would be the
 // less accurate of the two.
 func (v *ledgerView) run(spiffeID, runID string) *ledgerRun {
+	if v.byRunID == nil {
+		v.byRunID = map[string]*ledgerRun{}
+	}
+	if byRun, known := v.byRunID[runID]; known && runID != "" {
+		return byRun
+	}
 	existing, known := v.runs[spiffeID]
 	if known {
 		if existing.runID == "" {
@@ -765,6 +776,9 @@ func (v *ledgerView) run(spiffeID, runID string) *ledgerRun {
 	}
 	fresh := &ledgerRun{runID: runID, spiffeID: spiffeID}
 	v.runs[spiffeID] = fresh
+	if runID != "" {
+		v.byRunID[runID] = fresh
+	}
 	return fresh
 }
 
@@ -861,7 +875,9 @@ func (v *ledgerView) observe(record event.Fields) {
 		var known bool
 		run, known = v.runs[spiffeID]
 		if !known {
-			return
+			if run, known = v.byRunID[runID]; !known {
+				return
+			}
 		}
 	}
 
