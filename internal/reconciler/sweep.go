@@ -157,6 +157,23 @@ func (l *RekorLog) EntryByUUID(ctx context.Context, uuid string) (SweptEntry, er
 			"%w: %q is not a rekor entry uuid (64 or 80 hex characters), so no entry can carry it",
 			ErrNoEntry, uuid)
 	}
+	// AN 80-HEX UUID NAMES ITS SHARD, and a shard this log does not hold is
+	// the log answering: it holds no such entry (#331). rekor-server answers
+	// such a uuid with HTTP 500, which this reader would otherwise have to
+	// call an outage every cycle, forever. Measured: one commit_recorded names
+	// an entry from a log lost on 2026-09-16. A log whose shards cannot be
+	// read is still an outage.
+	if len(uuid) == 80 {
+		held, err := l.heldShards(ctx)
+		if err != nil {
+			return SweptEntry{}, err
+		}
+		if shard := strings.ToLower(uuid[:16]); !held[shard] {
+			return SweptEntry{}, fmt.Errorf(
+				"%w: entry %s names log shard %s, and this log holds only %s",
+				ErrNoEntry, uuid, shard, strings.Join(sortedKeys(held), ", "))
+		}
+	}
 	// Written rather than marshalled: the guard above has already established
 	// that uuid is nothing but hex, so there is nothing in it to escape.
 	raw, err := l.post(ctx, rekorRetrievePath, []byte(`{"entryUUIDs":["`+uuid+`"]}`))
@@ -173,6 +190,47 @@ func (l *RekorLog) EntryByUUID(ctx context.Context, uuid string) (SweptEntry, er
 		}
 	}
 	return SweptEntry{}, fmt.Errorf("%w: the log holds no entry %s", ErrNoEntry, uuid)
+}
+
+// heldShards returns the shards this log holds, as the 16-hex prefixes an
+// 80-hex entry uuid carries: the active tree and every inactive shard the log
+// info names. Rekor reports tree ids in decimal.
+func (l *RekorLog) heldShards(ctx context.Context) (map[string]bool, error) {
+	raw, err := l.get(ctx, rekorLogInfoPath)
+	if err != nil {
+		return nil, err
+	}
+	var info struct {
+		TreeID         string `json:"treeID"`
+		InactiveShards []struct {
+			TreeID string `json:"treeID"`
+		} `json:"inactiveShards"`
+	}
+	if jerr := json.Unmarshal(raw, &info); jerr != nil {
+		return nil, fmt.Errorf("reconciler: the rekor log info answered %s: %w", truncate(raw), jerr)
+	}
+	ids := []string{info.TreeID}
+	for _, shard := range info.InactiveShards {
+		ids = append(ids, shard.TreeID)
+	}
+	held := map[string]bool{}
+	for _, id := range ids {
+		n, perr := strconv.ParseUint(id, 10, 64)
+		if perr != nil {
+			return nil, fmt.Errorf("reconciler: the rekor log names tree %q, which is not a tree id: %w", id, perr)
+		}
+		held[fmt.Sprintf("%016x", n)] = true
+	}
+	return held, nil
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // IsRekorEntryUUID reports whether s can name a Rekor entry: 64 hex characters,

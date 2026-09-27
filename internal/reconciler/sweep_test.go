@@ -444,3 +444,48 @@ func TestSweepEntryByUUIDRefusesAnAnswerAboutAnotherEntry(t *testing.T) {
 		t.Fatalf("EntryByUUID = %v, want ErrNoEntry", err)
 	}
 }
+
+// RM-206 (#331). An 80-hex uuid carries the id of the log shard that issued
+// it in its first 16 hex characters. Measured live: one commit_recorded names
+// an entry from a shard this log never held (its log was lost on
+// 2026-09-16), rekor-server answers such a uuid with HTTP 500, and the
+// reconciler read that as an outage every cycle, forever, alerting nobody.
+// A shard the log does not hold is the log answering: it holds no such entry.
+func TestRM206AnEntryFromAShardThisLogNeverHeldIsNoEntry(t *testing.T) {
+	const current = "2028999985815895099" // 1c2874bcabd43c3b
+	const inactive = "42"                 // 000000000000002a
+	info := `{"treeSize":5,"treeID":"` + current + `","inactiveShards":[{"treeID":"` + inactive + `"}]}`
+	tail := strings.Repeat("ab", 32)
+
+	t.Run("a shard the log never held", func(t *testing.T) {
+		s := &sweepServer{logInfoBody: info}
+		_, err := s.start(t).EntryByUUID(context.Background(), "3236451f928b3023"+tail)
+		if !errors.Is(err, reconciler.ErrNoEntry) {
+			t.Fatalf("EntryByUUID = %v, want ErrNoEntry: the log does not hold that shard", err)
+		}
+		if s.retrieveCalls != 0 {
+			t.Errorf("the log was asked %d times about an entry from a shard it does not hold", s.retrieveCalls)
+		}
+	})
+	for name, prefix := range map[string]string{
+		"the current shard": "1c2874bcabd43c3b",
+		"an inactive shard": "000000000000002a",
+	} {
+		t.Run(name+" is still asked", func(t *testing.T) {
+			s := &sweepServer{logInfoBody: info}
+			s.plant(prefix+tail, 3, hashedRekord(t, "hashedrekord", "sha256",
+				artifactHash(driftCommit), certFor(t, spiffeIDFor("run-a"))))
+			got, err := s.start(t).EntryByUUID(context.Background(), prefix+tail)
+			if err != nil || got.LogIndex != 3 {
+				t.Fatalf("EntryByUUID = %+v, %v; want the planted entry", got, err)
+			}
+		})
+	}
+	t.Run("a log whose shards cannot be read is an outage", func(t *testing.T) {
+		s := &sweepServer{logInfoStatus: http.StatusBadGateway}
+		_, err := s.start(t).EntryByUUID(context.Background(), "3236451f928b3023"+tail)
+		if err == nil || errors.Is(err, reconciler.ErrNoEntry) {
+			t.Fatalf("EntryByUUID = %v; a log that could not be asked never said no (I4)", err)
+		}
+	})
+}
