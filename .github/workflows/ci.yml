@@ -211,6 +211,21 @@ jobs:
       - name: Drive the signer through every state of a by-tree pointer
         run: ./scripts/innsegl-commit-selftest.sh
 
+  installer:
+    name: installer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # RM-214. install.sh is what turns "know to run make start, make link
+      # and make innsegl-install-signer, then hand-edit two Claude Code
+      # files" into one command. Its own bring-up, signer and link steps are
+      # replaced by recorders here, and a fake `docker` answers `info` and
+      # `compose version` without a daemon — this starts nothing and touches
+      # no real ~/.claude/settings.json or ~/.claude.json.
+      - name: install.sh merges, never clobbers, and undoes exactly what it added
+        run: ./scripts/install-selftest.sh
+
   worktree-link:
     name: worktree link
     runs-on: ubuntu-latest
@@ -310,6 +325,11 @@ jobs:
       # wrong one.
       - name: The log's pin survives a worktree, and an unpinned mint is refused
         run: ./scripts/rekor-tlog-pin-selftest.sh
+      # #347: `make start` publishes Rekor on a random port and every other
+      # tool assumed 23000, so the pin, the reindex and the readiness report
+      # asked the wrong port. One helper answers for all of them.
+      - name: Every tool finds the port Rekor listens on
+        run: ./scripts/rekor-port-selftest.sh
 
   ca-custody:
     name: ca custody
