@@ -74,6 +74,12 @@ test.describe("FE-117: the faces the page renders in are the bundled ones", () =
 
     await installApiMocks(page);
     await page.goto("/");
+    // A face loads only once something is laid out in it, and on the overview
+    // the first monospace text is data that arrives after the shell renders.
+    // Settling the font set before that raced the mono face: measured in CI on
+    // 2026-09-27, it failed twice running once the heartbeat's time stopped
+    // being monospace (#326). So the page is waited on first, then the fonts.
+    await page.locator(".font-mono").first().waitFor();
     await page.evaluate(() => document.fonts.ready);
 
     // A page that loaded no face at all would pass the cross-origin test above
