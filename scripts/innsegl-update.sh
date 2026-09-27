@@ -57,12 +57,6 @@
 #                               requires INNSEGL_SPIRE_JWT_ISSUER for; this
 #                               script sets it to http://spire-oidc:8080 when
 #                               it is not already set.
-#   INNSEGL_UPDATE_SKIP_VERIFY  1 skips step 3 with a loud warning. This is not
-#                               a convenience flag: it exists ONLY because this
-#                               host's own trust roots cannot verify commits
-#                               signed by another deployment until the core
-#                               moves. There is no environment variable that
-#                               silences the warning.
 #   INNSEGL_FULCIO_URL,
 #   INNSEGL_REKOR_URL           read by the verifier itself, exactly as
 #                               `innsegl verify` reads them everywhere else.
@@ -102,7 +96,6 @@ REPO="${INNSEGL_UPDATE_REPO:-$(resolve_self)}"
 STATE_DIR="${INNSEGL_UPDATE_STATE_DIR:-$HOME/.innsegl-update}"
 DEPLOY_CMD="${INNSEGL_UPDATE_DEPLOY_CMD:-make innsegl-up-here}"
 VERIFY_CMD="${INNSEGL_UPDATE_VERIFY_CMD:-go run ./cmd/innsegl verify}"
-SKIP_VERIFY="${INNSEGL_UPDATE_SKIP_VERIFY:-0}"
 SPIRE_ISSUER="${INNSEGL_SPIRE_JWT_ISSUER:-http://spire-oidc:8080}"
 
 # --- args --------------------------------------------------------------------
@@ -304,31 +297,25 @@ done
 # verified. A merge commit carries no content of its own to attribute; the
 # commits it merged in are what this checks.
 ALL_NEW="$(git -C "$REPO" rev-list "$LOCAL..$REMOTE")"
-if [ "$SKIP_VERIFY" = "1" ]; then
-  echo "innsegl-update: WARNING — skipping signature verification (INNSEGL_UPDATE_SKIP_VERIFY=1)." >&2
-  echo "innsegl-update:   This exists only because the host's own trust roots cannot verify" >&2
-  echo "innsegl-update:   commits signed by another deployment until the core moves." >&2
-else
-  for sha in $ALL_NEW; do
-    if is_merge "$sha"; then
-      continue
-    fi
-    out="$( (cd "$REPO" && sh -c "$VERIFY_CMD $sha") 2>&1)" || true
-    case "$out" in
-      *"VERDICT: VERIFIED"*) : ;;
-      *)
-        subject="$(git -C "$REPO" log -1 --format='%s' "$sha")"
-        {
-          echo "innsegl-update: verification did not report VERDICT: VERIFIED for"
-          echo "  $(git -C "$REPO" rev-parse --short "$sha") ($subject)"
-          echo "  --- verifier output ---"
-          printf '%s\n' "$out" | sed 's/^/  /'
-        } >&2
-        refuse "signature verification failed for $(git -C "$REPO" rev-parse --short "$sha")"
-        ;;
-    esac
-  done
-fi
+for sha in $ALL_NEW; do
+  if is_merge "$sha"; then
+    continue
+  fi
+  out="$( (cd "$REPO" && sh -c "$VERIFY_CMD $sha") 2>&1)" || true
+  case "$out" in
+    *"VERDICT: VERIFIED"*) : ;;
+    *)
+      subject="$(git -C "$REPO" log -1 --format='%s' "$sha")"
+      {
+        echo "innsegl-update: verification did not report VERDICT: VERIFIED for"
+        echo "  $(git -C "$REPO" rev-parse --short "$sha") ($subject)"
+        echo "  --- verifier output ---"
+        printf '%s\n' "$out" | sed 's/^/  /'
+      } >&2
+      refuse "signature verification failed for $(git -C "$REPO" rev-parse --short "$sha")"
+      ;;
+  esac
+done
 
 echo "innsegl-update: plan"
 print_change "$LOCAL" "$REMOTE"

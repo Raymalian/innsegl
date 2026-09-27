@@ -591,9 +591,7 @@ before it moved. This checks that commit out on its own branch,
 innsegl-update --rollback
 ```
 
-**Skipping verification is a last resort, and it says so every time.** This
-host's own trust roots cannot yet verify a commit signed by another
-deployment — that is a limitation of where verification sits today, not a
-setting to leave on. If that is why an update is refused, set
-`INNSEGL_UPDATE_SKIP_VERIFY=1` for that one run; it prints a warning naming
-exactly that reason, and there is no way to make the warning quieter.
+**Verification cannot be skipped.** No flag or environment variable turns it
+off. A host can only verify commits signed under trust roots it holds, so a
+deployment verifies its own history; a host whose trust roots differ refuses
+every update until it holds the same ones.

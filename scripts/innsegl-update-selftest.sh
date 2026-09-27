@@ -317,6 +317,26 @@ fi
 
 # ===========================================================================
 echo
+echo "case 6b — no environment variable skips verification"
+# ===========================================================================
+setup_pr_case case6b
+C6B_CLONE="$PR_CLONE"; C6B_BASE="$PR_BASE"; C6B_CHILD="$PR_CHILD"
+S6B="$TMP/state6b"
+: > "$DEPLOY_CALLS"; : > "$VERIFY_CALLS"
+VERIFY_FAIL_SHA="$C6B_CHILD"
+INNSEGL_UPDATE_SKIP_VERIFY=1 run_update "$C6B_CLONE" "$S6B" --yes
+VERIFY_FAIL_SHA=""
+HEAD_AFTER="$(git -C "$C6B_CLONE" rev-parse main)"
+if [ "$RUN_STATUS" -eq 1 ] && [ "$HEAD_AFTER" = "$C6B_BASE" ] && [ "$(ncalls "$DEPLOY_CALLS")" -eq 0 ]; then
+  ok "INNSEGL_UPDATE_SKIP_VERIFY=1 still verifies, refuses, and deploys nothing"
+else
+  bad "INNSEGL_UPDATE_SKIP_VERIFY=1 still verifies, refuses, and deploys nothing" \
+      "status=$RUN_STATUS head=$HEAD_AFTER want=$C6B_BASE deploys=$(ncalls "$DEPLOY_CALLS")
+$RUN_OUT"
+fi
+
+# ===========================================================================
+echo
 echo "case 7 — --check changes nothing"
 # ===========================================================================
 setup_pr_case case7
