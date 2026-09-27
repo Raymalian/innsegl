@@ -131,3 +131,23 @@ func (s *Store) ResolveAlert(ctx context.Context, eventID, resolvedBy, reason st
 // custom trigger, so its one constraint (event_id PRIMARY KEY) reports
 // through Postgres's ordinary vocabulary rather than this project's.
 const pgerrcodeUniqueViolation = "23505"
+
+// ResolveDriftAlerts resolves every open ledger_drift_detected alert whose
+// subject is subjectEventID, and returns how many it resolved. It is the
+// sealer's call once the segment the alert is about has been anchored
+// (ADR-0055): the cause is gone, so the alert is closed by what closed it.
+// An alert already resolved keeps its resolution; nothing is overwritten.
+func (s *Store) ResolveDriftAlerts(ctx context.Context, subjectEventID, resolvedBy, reason string) (int, error) {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO innsegl.alert_resolutions (event_id, resolved_by, reason)
+		SELECT e.event_id, $2, $3
+		  FROM innsegl.events e
+		 WHERE e.event_type = 'ledger_drift_detected'
+		   AND convert_from(e.canonical, 'UTF8')::jsonb->>'subject_event_id' = $1
+		ON CONFLICT (event_id) DO NOTHING`,
+		subjectEventID, resolvedBy, reason)
+	if err != nil {
+		return 0, fmt.Errorf("ledger: resolving the drift alerts about %s: %w", subjectEventID, err)
+	}
+	return int(tag.RowsAffected()), nil
+}

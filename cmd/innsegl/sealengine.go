@@ -97,6 +97,16 @@ type sealChain interface {
 	Append(ctx context.Context, body event.Fields) (event.Fields, error)
 }
 
+// driftResolver is the one write the sealer makes outside the chain: it
+// resolves the drift alerts about a segment it has just anchored (ADR-0055).
+// *ledger.Store implements it; a chain that does not is simply not asked.
+type driftResolver interface {
+	ResolveDriftAlerts(ctx context.Context, subjectEventID, resolvedBy, reason string) (int, error)
+}
+
+// sealerResolvedBy names the sealer in innsegl.alert_resolutions.
+const sealerResolvedBy = "innsegl-sealer"
+
 // segmentSealer is *segment.Sealer's one method.
 type segmentSealer interface {
 	Seal(req segment.Request) (*segment.Sealed, error)
@@ -420,6 +430,22 @@ func (e *sealEngine) anchor(ctx context.Context, seg surveyedSegment) (sealedSeg
 	view.Anchored = true
 	view.LogIndex = anchor.LogIndex
 	view.EntryUUID = anchor.EntryUUID
+
+	// THE CAUSE IS FIXED, SO ITS ALERT IS RESOLVED — ADR-0055 (#324). A drift
+	// alert about this segment said its root was not in the log; it is now,
+	// at a public index anyone can check. Left open, the alert went on
+	// claiming a fault that no longer existed. A failure here costs nothing
+	// but the resolution, which the next anchor of nothing will not retry, so
+	// it is reported rather than returned.
+	if r, ok := e.chain.(driftResolver); ok {
+		if subject, _ := seg.record[event.FieldEventID].(string); subject != "" {
+			reason := fmt.Sprintf("segment %s (positions %d..%d) anchored at transparency-log index %d",
+				seg.segmentID, seg.first, seg.last, anchor.LogIndex)
+			if _, rerr := r.ResolveDriftAlerts(ctx, subject, sealerResolvedBy, reason); rerr != nil {
+				view.Failure = "anchored, but its drift alert was not resolved: " + rerr.Error()
+			}
+		}
+	}
 	return view, nil
 }
 

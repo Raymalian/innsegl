@@ -171,3 +171,31 @@ func appendOrFailLedger(ctx context.Context, t *testing.T, s *Store, body event.
 	}
 	return rec
 }
+
+// RM-202 (#324), ADR-0055: the sealer resolves the drift alerts about a
+// segment once it has anchored it. Only alerts about that subject, only drift
+// alerts, and an alert a human already resolved keeps that human's words.
+func TestRM202ResolveDriftAlertsClosesOnlyThatSubjectsAlerts(t *testing.T) {
+	t.Parallel()
+	s, _ := newStore(t)
+	ctx := testCtx(t, 2*time.Minute)
+
+	const subject = "01a072b2-cdda-774e-a0e2-889ec5ac3a01"
+	const other = "01a072b2-cdda-774e-a0e2-889ec5ac3a02"
+	about := memberString(t, appendOrFailLedger(ctx, t, s, driftAlertBody(subject, "rm202-about")), event.FieldEventID)
+	elsewhere := memberString(t, appendOrFailLedger(ctx, t, s, driftAlertBody(other, "rm202-other")), event.FieldEventID)
+
+	n, err := s.ResolveDriftAlerts(ctx, subject, "innsegl-sealer", "anchored at index 7")
+	if err != nil || n != 1 {
+		t.Fatalf("ResolveDriftAlerts = %d, %v; want 1, nil", n, err)
+	}
+	if _, err := s.ResolveAlert(ctx, about, "someone", "again"); !errors.Is(err, ErrAlertAlreadyResolved) {
+		t.Errorf("the alert about the subject is not resolved: %v", err)
+	}
+	if _, err := s.ResolveAlert(ctx, elsewhere, "someone", "its own"); err != nil {
+		t.Errorf("an alert about another segment was resolved too: %v", err)
+	}
+	if n, err := s.ResolveDriftAlerts(ctx, subject, "innsegl-sealer", "again"); err != nil || n != 0 {
+		t.Errorf("a second call = %d, %v; want 0, nil and the first resolution kept", n, err)
+	}
+}
