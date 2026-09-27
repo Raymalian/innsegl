@@ -37,6 +37,7 @@ import (
 // demoRun is one complete agent run, as the demo agent observed it.
 type demoRun struct {
 	runID         string
+	runToken      string
 	spiffeID      string
 	taskRef       string
 	commitSHA     string
@@ -62,6 +63,7 @@ func (s *stack) demoAgent(t *testing.T) demoRun {
 	var registered struct {
 		SPIFFEID  string `json:"spiffe_id"`
 		RunID     string `json:"run_id"`
+		RunToken  string `json:"run_token"`
 		ExpiresAt string `json:"expires_at"`
 	}
 	call(ctx, t, session, mcp.ToolRegisterAgent, map[string]any{
@@ -80,6 +82,7 @@ func (s *stack) demoAgent(t *testing.T) demoRun {
 
 	run := demoRun{
 		runID:    registered.RunID,
+		runToken: registered.RunToken,
 		spiffeID: registered.SPIFFEID,
 		taskRef:  demoTaskRef,
 		trailers: map[string]string{},
@@ -90,9 +93,23 @@ func (s *stack) demoAgent(t *testing.T) demoRun {
 		JWTSVID   string `json:"jwt_svid"`
 		ExpiresAt string `json:"expires_at"`
 	}
+	// A1 (#341): the run id alone is public -- it is in every commit's
+	// Agent-Run trailer -- so it is not authority. Asked with it and nothing
+	// else, the MCP refuses; with the token register_agent handed back, it
+	// mints.
+	if bare, berr := session.CallTool(ctx, &sdk.CallToolParams{
+		Name:      string(mcp.ToolGetCredential),
+		Arguments: map[string]any{"run_id": run.runID, "audience": signing.AudienceSigstore},
+	}); berr != nil {
+		t.Fatalf("tools/call get_credential without a token: transport failure %v", berr)
+	} else if !bare.IsError {
+		t.Errorf("get_credential minted for run %s from its public run id alone; "+
+			"the run token must be required (#341)", run.runID)
+	}
 	call(ctx, t, session, mcp.ToolGetCredential, map[string]any{
-		"run_id":   run.runID,
-		"audience": signing.AudienceSigstore,
+		"run_id":    run.runID,
+		"run_token": run.runToken,
+		"audience":  signing.AudienceSigstore,
 	}, &credential)
 	if strings.Count(credential.JWTSVID, ".") != 2 {
 		t.Fatalf("get_credential returned %q, which is not a JWT", credential.JWTSVID)
@@ -131,6 +148,7 @@ func (s *stack) demoAgent(t *testing.T) demoRun {
 	}
 	call(ctx, t, session, mcp.ToolSignCommit, map[string]any{
 		"run_id":          run.runID,
+		"run_token":       run.runToken,
 		"repo":            demoRepo,
 		"staged_ref":      staged,
 		"message":         "feat(demo): the first commit an adopter's agent signs",
@@ -162,8 +180,10 @@ func (s *stack) demoAgent(t *testing.T) demoRun {
 	// identity and could still spend it would be demonstrating the opposite of
 	// the claim.
 	res, err := session.CallTool(ctx, &sdk.CallToolParams{
-		Name:      string(mcp.ToolGetCredential),
-		Arguments: map[string]any{"run_id": run.runID, "audience": signing.AudienceSigstore},
+		Name: string(mcp.ToolGetCredential),
+		// WITH the token, so the refusal is the retirement's and not a missing
+		// token's (#341).
+		Arguments: map[string]any{"run_id": run.runID, "run_token": run.runToken, "audience": signing.AudienceSigstore},
 	})
 	if err != nil {
 		t.Fatalf("tools/call get_credential after retirement: transport failure %v", err)
