@@ -216,8 +216,15 @@ TREE_KEY="$(tree_key_of "$REPO_DIR")"
 PTR="$RUNS/by-tree/$TREE_KEY"
 mkdir -p "$RUNS/by-tree"
 
-# point_at RUN — write the three-line pointer the harness writes.
-point_at() { printf '%s\n%s\n%s\n' "$1" "rm134" "" > "$PTR"; }
+# point_at RUN — write the three-line pointer the harness writes, WITH the
+# token file every pointer written under the current contract carries beside
+# it (RM-212, #341) — deterministically "tok-<run>", so a case that is not
+# ABOUT a missing token is not incidentally testing one. A case that IS about
+# one removes $PTR.token after calling this.
+point_at() {
+  printf '%s\n%s\n%s\n' "$1" "rm134" "" > "$PTR"
+  printf 'tok-%s\n' "$1" > "$PTR.token"
+}
 
 # state RUN STATUS — what the read API says about a run. No line, and it 404s.
 state() {
@@ -238,7 +245,9 @@ script_tool() {
 # it. Nothing here is a real signature; what is under test is which run_id the
 # call carried.
 script_tool sign_commit ok "{\"commit_sha\":\"$HEAD_SHA\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
-script_tool register_agent ok '{"run_id":"run-successor00000000000000000000","spiffe_id":"spiffe://innsegl.dev/agent/orchestrator/rm134/run-successor00000000000000000000","expires_at":"2026-09-16T00:00:00.000Z"}'
+# run_token, deterministically "tok-<run_id>" like point_at's own token files
+# (RM-212, #341), so a case can assert it without a separate constant.
+script_tool register_agent ok '{"run_id":"run-successor00000000000000000000","spiffe_id":"spiffe://innsegl.dev/agent/orchestrator/rm134/run-successor00000000000000000000","expires_at":"2026-09-16T00:00:00.000Z","run_token":"tok-run-successor00000000000000000000"}'
 
 # drive_in DIR [args…] — run the signer in one repository against the stubs and
 # leave its exit status in $STATUS and everything it said in $WORK/out.
@@ -310,6 +319,15 @@ else
   bad "retired pointer: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
 fi
 
+# 1b. RM-212 (#341): the SUCCESSOR's own token reaches sign_commit, never the
+#     retired run's — point_at gave $RETIRED a token of its own, and it must
+#     not be the one that travels.
+if called sign_commit "\"run_token\": \"tok-$SUCCESSOR\""; then
+  ok "RM-212 the successor signs with its own registration's token"
+else
+  bad "RM-212 successor token: calls: $(cat "$CALLS")"
+fi
+
 # 2. AND THE SUCCESSOR IS DERIVABLY DISTINCT. A run id is a pure function of
 #    (agent_type, task, idempotency_key), so a successor registered under a key
 #    that could have produced the predecessor IS the predecessor. The key names
@@ -343,6 +361,14 @@ if [ "$(sed -n 4p "$PTR")" != "superseded $RETIRED" ]; then
   bad "the pointer does not record what it superseded: $(cat "$PTR")"
 else
   ok "the pointer records the run it superseded"
+fi
+
+# 5b. RM-212 (#341): the token file beside it is rewritten too, to the
+#     successor's own — never left naming the retired run's.
+if [ "$(cat "$PTR.token" 2>/dev/null)" = "tok-$SUCCESSOR" ]; then
+  ok "RM-212 the token file is rewritten to the successor's own"
+else
+  bad "RM-212 pointer token after succession: $(cat "$PTR.token" 2>&1)"
 fi
 
 # 6. THE SUCCESSION IS DETERMINISTIC. If the pointer could not be rewritten —
@@ -398,6 +424,34 @@ else
   bad "a live pointer was rewritten: $(cat "$PTR")"
 fi
 
+# 9b. RM-212 (#341): the pointer's own token file reaches sign_commit as
+#     run_token — the second of the three sources.
+if called sign_commit "\"run_token\": \"tok-$LIVE\""; then
+  ok "RM-212 a live pointer's own token reaches sign_commit as run_token"
+else
+  bad "RM-212 pointer token: calls: $(cat "$CALLS")"
+fi
+
+# 9c. RM-212 (#341): a pointer with NO token on file — one an older hook wrote
+#     before it kept one beside its pointer — is treated as unusable, exactly
+#     like a retired run: a successor is registered and signs in its place,
+#     and the rewritten pointer gets a token of its own.
+point_at "$LIVE"
+rm -f "$PTR.token"
+state "$LIVE" active
+drive
+if [ "$STATUS" -eq 0 ] && called register_agent "succeeds-$LIVE" \
+   && called sign_commit "\"run_id\": \"$SUCCESSOR\"" "\"run_token\": \"tok-$SUCCESSOR\""; then
+  ok "RM-212 a pointer with no token is treated as unusable and a successor signs"
+else
+  bad "RM-212 no-token pointer: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+if [ "$(sed -n 1p "$PTR")" = "$SUCCESSOR" ] && [ "$(cat "$PTR.token" 2>/dev/null)" = "tok-$SUCCESSOR" ]; then
+  ok "RM-212 the rewritten pointer and its token both name the successor"
+else
+  bad "RM-212 rewritten pointer/token: $(cat "$PTR" 2>&1) / $(cat "$PTR.token" 2>&1)"
+fi
+
 # 10. A read API that cannot be reached must not block a commit. The probe is
 #     how the signer learns the run is dead; not being able to run it is not
 #     evidence that it is, and refusing here would strand every tree whenever
@@ -429,6 +483,42 @@ else
   bad "-r retired: status $STATUS, calls: $(cat "$CALLS")"
 fi
 
+# 11b. RM-212 (#341): -r reads its token from INNSEGL_RUN_TOKEN, never from
+#      the tree's own pointer — the third of the three sources. point_at's
+#      token here names $LIVE, not the run -r is signing under, and it must
+#      not be the one that is sent.
+point_at "$LIVE"
+INNSEGL_RUN_TOKEN=tok-from-env drive -r "$RETIRED"
+if called sign_commit "\"run_id\": \"$RETIRED\"" "\"run_token\": \"tok-from-env\""; then
+  ok "RM-212 -r sends the token from INNSEGL_RUN_TOKEN, never the tree's own pointer"
+else
+  bad "RM-212 -r env token: calls: $(cat "$CALLS")"
+fi
+
+# 11c. AND WITH NONE AVAILABLE THE CALL IS STILL MADE, inventing none: the
+#      MCP is what refuses a missing token, clearly, never this script.
+drive -r "$RETIRED"
+if [ "$STATUS" -eq 0 ] && called sign_commit "\"run_id\": \"$RETIRED\"" \
+   && ! grep '^sign_commit ' "$CALLS" | tail -n 1 | grep -q run_token; then
+  ok "RM-212 with no token available -r still calls, and invents none"
+else
+  bad "RM-212 no env token: status $STATUS, calls: $(cat "$CALLS")"
+fi
+
+# 11d. RM-212 (#341): a pointer with no token whose state could not be asked
+#      (the read API is unreachable, as in case 10) is treated the same way —
+#      unusable, and a successor is registered — rather than left to sign
+#      under a run nothing could vouch for.
+point_at "$LIVE"
+rm -f "$PTR.token"
+API_OVERRIDE="http://127.0.0.1:1" drive
+if [ "$STATUS" -eq 0 ] && called register_agent "succeeds-$LIVE" \
+   && called sign_commit "\"run_id\": \"$SUCCESSOR\"" "\"run_token\": \"tok-$SUCCESSOR\""; then
+  ok "RM-212 a tokenless pointer whose state is unknown is treated as unusable too"
+else
+  bad "RM-212 unknown+no-token: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+
 # --- RM-156 (#259): the run this script mints has a parent ------------------
 #
 # Measured 2026-09-18: 87 `orchestrator` runs in the ledger, every one of them
@@ -452,15 +542,24 @@ point_session() { printf '%s\n%s\n' "$1" "sess-1" > "$SESSION_PTR"; }
 
 # 12. A tree with no subagent pointer mints a run, and that run names the
 #     session's.
-rm -f "$PTR"
+rm -f "$PTR" "$PTR.token"
 point_session "$SESSION_RUN"
 state "$SESSION_RUN" active
-script_tool register_agent ok "{\"run_id\":\"$SUCCESSOR\",\"spiffe_id\":\"spiffe://innsegl.dev/agent/orchestrator/rm134/$SUCCESSOR\",\"expires_at\":\"2026-09-16T00:00:00.000Z\"}"
+script_tool register_agent ok "{\"run_id\":\"$SUCCESSOR\",\"spiffe_id\":\"spiffe://innsegl.dev/agent/orchestrator/rm134/$SUCCESSOR\",\"expires_at\":\"2026-09-16T00:00:00.000Z\",\"run_token\":\"tok-$SUCCESSOR\"}"
 drive
 if [ "$STATUS" -eq 0 ] && called register_agent "\"parent_run_id\": \"$SESSION_RUN\""; then
   ok "a run the signer mints names this tree's session as its parent"
 else
   bad "signer parent: status $STATUS, calls: $(cat "$CALLS"), said: $(cat "$WORK/out")"
+fi
+
+# 12b. RM-212 (#341): a run this script mints itself signs with its own
+#      registration reply's token — no pointer and no -r means the only
+#      source that could have one is this process's own register_agent call.
+if called sign_commit "\"run_token\": \"tok-$SUCCESSOR\"" "\"run_id\": \"$SUCCESSOR\""; then
+  ok "RM-212 a freshly minted run signs with its own registration's token"
+else
+  bad "RM-212 fresh mint token: calls: $(cat "$CALLS")"
 fi
 
 # 13. and the pointer is READ, never written. It belongs to the session, and a
@@ -693,8 +792,11 @@ one_writer() {
   echo "the first writer's work" > "$dir/a.txt"
   git -C "$dir" add a.txt
 
-  printf '%s\n%s\n%s\n' "$LIVE" "rm134" "" \
-    > "$RUNS/by-tree/$(printf '%s' "$dir" | shasum -a 256 | cut -c1-32)"
+  local key="$(printf '%s' "$dir" | shasum -a 256 | cut -c1-32)"
+  printf '%s\n%s\n%s\n' "$LIVE" "rm134" "" > "$RUNS/by-tree/$key"
+  # WITH ITS TOKEN, like point_at's (RM-212, #341) — these fixtures are about
+  # the index and the pointer, not about a missing token.
+  printf 'tok-%s\n' "$LIVE" > "$RUNS/by-tree/$key.token"
 }
 
 two_writers() {
@@ -925,6 +1027,14 @@ else
   bad "RM-193 migration: status $STATUS, old $(ls "$RUNS/by-tree/$MIG_OLD" 2>&1), new $(cat "$RUNS/by-tree/$MIG_NEW" 2>&1), calls: $(cat "$CALLS")"
 fi
 
+# 30b. RM-212 (#341): its token file moves with it, so the pointer at the new
+#      key is not read back as one with no token.
+if [ ! -f "$RUNS/by-tree/$MIG_OLD.token" ] && [ "$(cat "$RUNS/by-tree/$MIG_NEW.token" 2>/dev/null)" = "tok-$LIVE" ]; then
+  ok "RM-212 the old-key pointer's token migrates with it"
+else
+  bad "RM-212 token migration: old $(ls "$RUNS/by-tree/$MIG_OLD.token" 2>&1), new $(cat "$RUNS/by-tree/$MIG_NEW.token" 2>&1)"
+fi
+
 # 31. The key contains no path digest: what the signer wrote is named by the
 #     repository, branch and worktree alone, and differs from the path's.
 if [ "$MIG_NEW" != "$MIG_OLD" ] && [ -f "$RUNS/by-tree/$MIG_NEW" ] \
@@ -948,7 +1058,7 @@ fi
 
 # 33. A session pointer under the old key is still read, and left where the
 #     harness wrote it: it belongs to the session, whose end removes it there.
-rm -f "$RUNS/by-tree/$MIG_NEW"
+rm -f "$RUNS/by-tree/$MIG_NEW" "$RUNS/by-tree/$MIG_NEW.token"
 MOVED_OLD="$(path_key_of "$MOVED")"
 printf '%s\n%s\n' "$SESSION_RUN" "sess-1" > "$RUNS/by-tree/$MOVED_OLD.session"
 state "$SESSION_RUN" active
@@ -976,6 +1086,10 @@ for w in w1 w2; do
 done
 printf '%s\n%s\n%s\n' "$LIVE" "rm134" ".worktrees/w1" > "$RUNS/by-tree/$(path_key_of "$WTR/.worktrees/w1")"
 printf '%s\n%s\n%s\n' "$LIVE2" "rm134" ".worktrees/w2" > "$RUNS/by-tree/$(path_key_of "$WTR/.worktrees/w2")"
+# WITH THEIR TOKENS (RM-212, #341) — this case is about two worktrees staying
+# distinct, not about a missing token.
+printf 'tok-%s\n' "$LIVE"  > "$RUNS/by-tree/$(path_key_of "$WTR/.worktrees/w1").token"
+printf 'tok-%s\n' "$LIVE2" > "$RUNS/by-tree/$(path_key_of "$WTR/.worktrees/w2").token"
 script_tool sign_commit ok "{\"commit_sha\":\"$(git -C "$WTR" rev-parse HEAD)\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
 drive_in "$WTR/.worktrees/w1" -p a.txt
 W1_OK=""; called sign_commit "\"run_id\": \"$LIVE\"" && [ "$STATUS" -eq 0 ] && W1_OK=1
