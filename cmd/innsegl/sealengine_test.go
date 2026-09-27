@@ -75,6 +75,8 @@ type fakeChain struct {
 	headErr   error
 	eventsErr error
 	appendErr error
+	// unanchoredErr fails UnanchoredSeals while it is set.
+	unanchoredErr error
 
 	appends int
 	reads   int
@@ -1368,5 +1370,165 @@ func TestRM202AnAnchorResolvesItsSegmentsDriftAlert(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "innsegl-sealer: ") || !strings.Contains(got, "anchored") {
 		t.Errorf("resolution = %q, want it by innsegl-sealer, saying the segment was anchored", got)
+	}
+}
+
+// UnanchoredSeals is ledger.Store's query over the fake chain: every
+// segment_sealed with no later anchored segment_sealed for the same
+// first_position, oldest first.
+func (c *fakeChain) UnanchoredSeals(context.Context) ([]event.Fields, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.unanchoredErr != nil {
+		return nil, c.unanchoredErr
+	}
+	out := []event.Fields{}
+	for i, r := range c.records {
+		if !isSeal(r) || isAnchoredSeal(r) {
+			continue
+		}
+		anchoredLater := false
+		for _, later := range c.records[i+1:] {
+			if isSeal(later) && isAnchoredSeal(later) &&
+				later[event.FieldFirstPosition] == r[event.FieldFirstPosition] {
+				anchoredLater = true
+				break
+			}
+		}
+		if !anchoredLater {
+			out = append(out, r.Clone())
+		}
+	}
+	return out, nil
+}
+
+func isSeal(r event.Fields) bool {
+	return recordString(r, event.FieldEventType) == event.EventTypeSegmentSealed
+}
+
+func isAnchoredSeal(r event.Fields) bool {
+	_, ok := r[event.FieldAnchorRekorEntryUUID]
+	return ok
+}
+
+// RM-204 (#327). A segment sealed while the log was down, with later segments
+// sealed and anchored after it, lies below every later cycle's backward walk.
+// Measured live: two such segments stayed unanchored until a manual full-chain
+// pass. The next cycle with the log up must anchor it.
+func TestRM204ACycleAnchorsASegmentOlderThanItsLatestSeal(t *testing.T) {
+	f := newEngineFixture(t, func(o *sealOptions) {
+		o.anchorAttempts = 1
+		o.anchorBase = time.Millisecond
+		o.scanWindow = 4
+	})
+	f.chain.seed(t, 4)
+	f.log.err = errors.New("connection refused")
+	first, err := f.engine.Cycle(context.Background())
+	if err != nil {
+		t.Fatalf("failing Cycle: %v", err)
+	}
+	if len(first.Unanchored) != 1 || first.Unanchored[0].First != 1 {
+		t.Fatalf("want the segment at 1 unanchored after the first cycle, got %+v", first.Unanchored)
+	}
+	stuck := first.Unanchored[0].MerkleRoot
+
+	// The log comes back for every root but the stuck one, and more segments
+	// are sealed and anchored on top of it.
+	f.log.err = nil
+	f.log.rootErr[stuck] = errors.New("connection refused")
+	for range 3 {
+		f.chain.seed(t, 8)
+		if _, cerr := f.engine.Cycle(context.Background()); cerr != nil {
+			t.Fatalf("Cycle: %v", cerr)
+		}
+	}
+	if f.engine.watermark <= 8 {
+		t.Fatalf("watermark = %d; the test needs the stuck seal well below it", f.engine.watermark)
+	}
+
+	// The log takes the stuck root now, and there is nothing new to seal.
+	delete(f.log.rootErr, stuck)
+	got, err := f.engine.Cycle(context.Background())
+	if err != nil {
+		t.Fatalf("recovery Cycle: %v", err)
+	}
+	if len(got.Anchored) != 1 || got.Anchored[0].First != 1 {
+		t.Fatalf("the recovery cycle anchored %+v, want exactly the segment starting at 1", got.Anchored)
+	}
+
+	// A restarted process finds nothing left to anchor.
+	again, err := f.newEngine(f.chain, f.engine.opts).Cycle(context.Background())
+	if err != nil {
+		t.Fatalf("second recovery Cycle: %v", err)
+	}
+	if len(again.Anchored) != 0 || len(again.Unanchored) != 0 {
+		t.Errorf("after recovery: anchored %+v, unanchored %+v; want neither",
+			again.Anchored, again.Unanchored)
+	}
+}
+
+// RM-204 (#327). A ledger that cannot list its unanchored seals stops the
+// cycle before anything is written.
+func TestRM204ACycleReportsAnUnanchoredQueryThatFails(t *testing.T) {
+	f := newEngineFixture(t, nil)
+	f.chain.seed(t, 4)
+	f.chain.unanchoredErr = errors.New("connection reset")
+	if _, err := f.engine.Cycle(context.Background()); err == nil {
+		t.Fatal("Cycle succeeded over a ledger that could not list its unanchored seals")
+	}
+	if got := f.chain.countOfType(event.EventTypeSegmentSealed); got != 0 {
+		t.Errorf("a cycle that could not survey still sealed %d segments", got)
+	}
+}
+
+// unreadableUnanchored answers the query with a seal whose range it cannot read.
+type unreadableUnanchored struct{ *fakeChain }
+
+func (unreadableUnanchored) UnanchoredSeals(context.Context) ([]event.Fields, error) {
+	return []event.Fields{{
+		event.FieldEventType:     event.EventTypeSegmentSealed,
+		event.FieldFirstPosition: "one",
+		event.FieldLastPosition:  int64(4),
+	}}, nil
+}
+
+// RM-204 (#327). A seal from the query goes through the same reader as one
+// from the walk, and one it cannot read the range of stops the survey.
+func TestRM204SurveyRefusesAnUnanchoredSealItCannotRead(t *testing.T) {
+	f := newEngineFixture(t, nil)
+	f.chain.seed(t, 2)
+	eng := f.newEngine(unreadableUnanchored{f.chain}, f.engine.opts)
+	if _, err := eng.survey(context.Background()); err == nil {
+		t.Fatal("survey accepted an unanchored seal with no readable first_position")
+	}
+}
+
+// walkOnlyChain has no UnanchoredSeals: the three methods sealChain names.
+type walkOnlyChain struct{ c *fakeChain }
+
+func (w walkOnlyChain) Head(ctx context.Context) (ledger.Head, error) { return w.c.Head(ctx) }
+func (w walkOnlyChain) Events(ctx context.Context, from, to int64) ([]event.Fields, error) {
+	return w.c.Events(ctx, from, to)
+}
+func (w walkOnlyChain) Append(ctx context.Context, body event.Fields) (event.Fields, error) {
+	return w.c.Append(ctx, body)
+}
+
+// RM-204 (#327). A chain that cannot answer the query is surveyed by the walk
+// alone, as before: the survey still works and still finds what the walk sees.
+func TestRM204AChainWithoutTheQueryKeepsTheWalk(t *testing.T) {
+	f := newEngineFixture(t, nil)
+	f.chain.seed(t, 4)
+	f.log.err = errors.New("connection refused")
+	eng := f.newEngine(walkOnlyChain{f.chain}, f.engine.opts)
+	if _, err := eng.Cycle(context.Background()); err != nil {
+		t.Fatalf("Cycle: %v", err)
+	}
+	survey, err := f.newEngine(walkOnlyChain{f.chain}, f.engine.opts).survey(context.Background())
+	if err != nil {
+		t.Fatalf("survey: %v", err)
+	}
+	if len(survey.backlog) != 1 || survey.backlog[0].first != 1 {
+		t.Errorf("backlog = %+v, want the one unanchored segment at 1", survey.backlog)
 	}
 }

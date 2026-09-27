@@ -27,7 +27,8 @@ import (
 //
 //  1. Survey. Walk the chain backwards from the head and find the sealed
 //     watermark — the highest last_position any segment_sealed event claims —
-//     along with the anchoring state of the segments in that span.
+//     along with the anchoring state of the segments in that span. Then ask
+//     the ledger for every segment sealed and never anchored, however old.
 //  2. Anchor the backlog. Every surveyed segment that is sealed but carries no
 //     anchor is retried first, before any new segment is sealed. That is what
 //     makes IP §6.4's "retry with backoff and alert" a thing that actually
@@ -46,12 +47,16 @@ import (
 // below the mark. So the walk stops, and in a deployment that is keeping up it
 // stops after one page.
 //
-// The one thing it does not do is find a segment that was sealed but never
-// anchored a very long time ago, because it stops before reaching it. That is
-// the honest limit of a bounded scan and -scan-window is where an operator
-// sets it. Such a segment is not lost: its `segment_sealed` event is in the
-// chain and its `ledger_drift_detected` alert was raised when the anchoring
-// budget was spent.
+// # Why the backlog does not come from the walk alone
+//
+// The walk stops at the latest seal, so a segment sealed before that and never
+// anchored lies below it. Measured live: two segments sealed while the log was
+// not yet up were never retried, because a later segment had been sealed on
+// top of them (RM-204, #327). So the survey also asks the ledger for every
+// `segment_sealed` that has no later anchored `segment_sealed` for the same
+// first_position — one query over the event_type index — and merges those
+// into the backlog, one entry per first_position, oldest first. A chain that
+// cannot answer that query (unanchoredLister) is surveyed by the walk alone.
 //
 // # Why the sealer refuses to seal its own bookkeeping
 //
@@ -103,6 +108,18 @@ type sealChain interface {
 type driftResolver interface {
 	ResolveDriftAlerts(ctx context.Context, subjectEventID, resolvedBy, reason string) (int, error)
 }
+
+// unanchoredLister finds every sealed-but-unanchored segment however old,
+// which the bounded backward walk cannot (RM-204, #327). *ledger.Store
+// implements it with one query; a chain that does not is surveyed by the walk
+// alone.
+type unanchoredLister interface {
+	UnanchoredSeals(ctx context.Context) ([]event.Fields, error)
+}
+
+// The production chain must answer the query; a rename that broke this would
+// otherwise quietly bring the RM-204 limit back.
+var _ unanchoredLister = (*ledger.Store)(nil)
 
 // sealerResolvedBy names the sealer in innsegl.alert_resolutions.
 const sealerResolvedBy = "innsegl-sealer"
@@ -550,6 +567,22 @@ func (e *sealEngine) survey(ctx context.Context) (sealSurvey, error) {
 			break
 		}
 		to = from - 1
+	}
+
+	// The walk stopped at the latest seal. Every older seal still waiting for
+	// its anchor comes from the ledger's own query (RM-204, #327).
+	if u, ok := e.chain.(unanchoredLister); ok {
+		older, err := u.UnanchoredSeals(ctx)
+		if err != nil {
+			return sealSurvey{}, fmt.Errorf("listing the segments still waiting for an anchor: %w", err)
+		}
+		// Merged through the same reader, so a segment the walk already holds
+		// is kept once, and one the walk saw anchored stays out. Every seal in
+		// the chain is below the watermark the walk found, so passing it
+		// cannot move it.
+		if err := collectSeals(older, seals, anchored, &out.watermark); err != nil {
+			return sealSurvey{}, err
+		}
 	}
 
 	for first, seg := range seals {
