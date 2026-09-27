@@ -71,6 +71,7 @@ maintainer ask "why is it like this?"
 | [0053](0053-issue-a-runs-identity-only-through-the-attested-mcp.md) | Issue a run's identity only through the attested MCP, never to a workload that declares a label | accepted | 2026-09-26 |
 | [0054](0054-alerts-live-in-a-header-notification-menu.md) | Alerts live in a header notification menu, not in banners on one page | accepted | 2026-09-27 |
 | [0055](0055-an-anchor-resolves-the-drift-alert-about-its-segment.md) | An anchor resolves the drift alert about its segment | accepted | 2026-09-27 |
+| [0056](0056-a-single-machine-deployment-runs-the-loops-in-the-mcp.md) | A single-machine deployment runs the loops in the MCP | accepted | 2026-09-27 |
 
 ## Open items
 

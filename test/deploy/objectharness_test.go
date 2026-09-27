@@ -295,6 +295,11 @@ type interpolatedService struct {
 	// options are never read, only the membership, which is the access-control
 	// list doc 05 §1 asks for.
 	Networks map[string]any `json:"networks"`
+	// Volumes are read for their targets only: where a service expects a
+	// directory to be, which a service folded into another must keep.
+	Volumes []struct {
+		Target string `json:"target"`
+	} `json:"volumes"`
 }
 
 // networkNames is one service's membership, sorted, as the compose file
