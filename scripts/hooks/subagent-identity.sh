@@ -284,10 +284,35 @@ tree_key_path() {
 # pointer can belong to another run by the time this one stops -- the operator's
 # own, or a sibling's -- and removing it would send that run's next commit to a
 # throwaway identity (#320).
+#
+# ITS TOKEN FILE GOES WITH IT — RM-212 (#341). The two are one unit: a pointer
+# with no token beside it is unusable to the signer, so a removal that took the
+# pointer and left the token would leave a stale credential nothing points at,
+# and the SAME GUARD applies -- a pointer belonging to another run is not this
+# run's token file to remove either.
 drop_pointer() {
   [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
   [ "$(sed -n 1p "$RUNS_DIR/by-tree/$1" 2>/dev/null)" = "$2" ] || return 0
-  rm -f "$RUNS_DIR/by-tree/$1" 2>/dev/null
+  rm -f "$RUNS_DIR/by-tree/$1" "$RUNS_DIR/by-tree/$1.token" 2>/dev/null
+  return 0
+}
+
+# write_token writes the by-tree token file that travels with a RUN's pointer
+# — RM-212 (#341). sign_commit is about to require a per-run run_token on
+# every call, and this is where a pointer written for a run keeps the one
+# register_agent (or observe_session's start reply) handed back for it, so the
+# signer can read it back when it signs under that pointer.
+#
+# 0600, LIKE THE MARKER: this file holds a bearer credential, not just a run
+# id. Never written for a SESSION pointer (the `.session` suffix) -- the
+# signer never signs under a session run, so it never reads one.
+#
+# A missing token is not an error here: an empty second argument writes
+# nothing, and a caller with no token to give simply gives none. What that
+# means to a later reader is answered where the token is READ, not here.
+write_token() {
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+  ( umask 077; printf '%s\n' "$2" > "$RUNS_DIR/by-tree/$1.token" ) 2>/dev/null
   return 0
 }
 
@@ -676,6 +701,10 @@ follow_tree() {
       # signer derives the tree from where it stands when nothing is named.
       printf '%s\n%s\n\n' "$_frun" "$(reply_field "$_fm" task)" \
         > "$RUNS_DIR/by-tree/$_fnew" 2>/dev/null
+      # AND THE TOKEN FOLLOWS TOO — RM-212 (#341). The marker already holds
+      # what this run's own registration reply carried; the tree it is moving
+      # into needs the same token the start tree's pointer had.
+      write_token "$_fnew" "$(reply_field "$_fm" run_token)"
     fi
     drop_pointer "$_fold" "$_frun"
   fi
@@ -1602,6 +1631,10 @@ case "$EVENT" in
       printf '%s\n%s\n%s\n' \
         "$RUN_ID" "$(reply_field "$REPLY" task)" "$WT" \
         > "$RUNS_DIR/by-tree/$_key" 2>/dev/null
+      # THE TOKEN THIS RUN'S OWN REGISTRATION CARRIED — RM-212 (#341). Written
+      # beside the pointer so the signer can read it back when it signs under
+      # this run; see write_token.
+      write_token "$_key" "$(reply_field "$REPLY" run_token)"
     fi
 
     warn "${AGENT_TYPE:-subagent} is $RUN_ID (task $(reply_field "$REPLY" task))"
@@ -1777,7 +1810,14 @@ gate is what decides whether it may merge."
             # creates the file: a redirection on the subshell itself is
             # performed at fork, which is before anything inside it runs.
             ( umask 077; : > "$_said" ) 2>/dev/null || :
-            if ( cd "$DIR" && "$(signer)" -r "$RUN_ID" ${TASK:+-t "$TASK"} ${WT:+-w "$WT"} -m "$MSG" ) >> "$_said" 2>&1; then
+            # THE STOPPING RUN'S OWN TOKEN, from its marker -- RM-212 (#341).
+            # sign_commit is about to require one on every call, and `-r` is
+            # the one path that names a run without reading its pointer, so
+            # this is the one place a token has to travel by argument rather
+            # than by file. Scoped to this one command, never exported: the
+            # same reason ADMIN_CRED never is.
+            if ( cd "$DIR" && INNSEGL_RUN_TOKEN="$(reply_field "$MARK" run_token)" \
+                 "$(signer)" -r "$RUN_ID" ${TASK:+-t "$TASK"} ${WT:+-w "$WT"} -m "$MSG" ) >> "$_said" 2>&1; then
               cat "$_said" >&2
             else
               cat "$_said" >&2

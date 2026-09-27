@@ -293,11 +293,24 @@ if [ -z "$RUN_GIVEN" ] && [ -n "$TREE_KEY" ] && [ -n "$OLD_TREE_KEY" ] \
    && [ "$TREE_KEY" != "$OLD_TREE_KEY" ] && [ -f "$RUNS_DIR/by-tree/$OLD_TREE_KEY" ]; then
   if mv -f "$RUNS_DIR/by-tree/$OLD_TREE_KEY" "$RUNS_DIR/by-tree/$TREE_KEY" 2>/dev/null; then
     echo "innsegl-commit: moved this tree's pointer to its path-free key (RM-193)" >&2
+    # AND ITS TOKEN MOVES WITH IT — RM-212 (#341). The two are one unit: a
+    # pointer left at the new key with its token still at the old one would
+    # read back as a pointer with no token, which is treated as unusable.
+    # Best-effort and silent either way — a hook new enough to have written a
+    # token file already writes pointers under the path-free key directly, so
+    # this only matters for the one release that wrote pointers but not tokens.
+    [ -f "$RUNS_DIR/by-tree/$OLD_TREE_KEY.token" ] \
+      && mv -f "$RUNS_DIR/by-tree/$OLD_TREE_KEY.token" "$RUNS_DIR/by-tree/$TREE_KEY.token" 2>/dev/null
   fi
 fi
 
 PTR_FILE=""
 RUN_FROM_POINTER=""
+# PTR_TOKEN — the run_token this tree's pointer was written with, read from
+# beside it (RM-212, #341). Empty for a pointer written before that token file
+# existed, which is read below as "this pointer's run is unusable" and treated
+# the same way a retired one is.
+PTR_TOKEN=""
 if [ -z "$RUN_GIVEN" ] && [ -n "$TREE_KEY" ]; then
   _ptr="$RUNS_DIR/by-tree/$TREE_KEY"
   [ -f "$_ptr" ] || _ptr="$RUNS_DIR/by-tree/$OLD_TREE_KEY"
@@ -307,6 +320,7 @@ if [ -z "$RUN_GIVEN" ] && [ -n "$TREE_KEY" ]; then
     [ -n "$WORKTREE" ] || WORKTREE="$(sed -n 3p "$_ptr")"
     PTR_FILE="$_ptr"
     RUN_FROM_POINTER=1
+    PTR_TOKEN="$(cat "$_ptr.token" 2>/dev/null | tr -d '\r\n')"
     # It says what it FOUND and not what it is about to do. Whether this run
     # may still sign is decided below, and the line used to promise "signing
     # under it" several hundred lines before anything had asked.
@@ -955,6 +969,12 @@ fail() { echo "innsegl-commit: $*" >&2; exit 1; }
 # for a JSON-RPC error, because the transport worked and the server answered.
 # `field` is what reads the answer, so `field` is what decides.
 REGISTERED_RUN=""
+# THE TOKEN THIS PROCESS'S OWN REGISTRATION CARRIED — RM-212 (#341).
+# register_agent's reply names one for the run it just minted, exactly as
+# observe_session's does for the harness hook, and it has to reach
+# sign_commit the same way every other member of the reply does: read out of
+# the answer, right beside run_id.
+REGISTERED_RUN_TOKEN=""
 
 # try_register KEY REPO BRANCH PARENT -- one attempt, 0 iff a run came back.
 #
@@ -988,6 +1008,10 @@ print(json.dumps(args))' "$1" "$2" "$3" "$4" "$AGENT_TYPE" "$TASK")")"; then :; 
     fail "the identity service at $ADMIN_URL could not be reached. No identity, no attributed work (IP §6.1). Try: make innsegl-up-here"
   fi
   REGISTERED_RUN="$(printf '%s' "$_out" | field run_id 2>/dev/null)" || return 1
+  # Never fatal on its own: a reply with no run_token is read downstream as
+  # "no token available", which sign_commit is the one that refuses over —
+  # never invented here.
+  REGISTERED_RUN_TOKEN="$(printf '%s' "$_out" | field run_token 2>/dev/null)" || REGISTERED_RUN_TOKEN=""
   return 0
 }
 
@@ -1110,31 +1134,49 @@ print(s if s in ("active", "retired", "expired") else "unknown")' 2>/dev/null \
 # turning that into a different agent's commit is precisely the swap this
 # project exists not to make. A retired -r still goes to `sign_commit` and is
 # still refused there, by the tool, naming the run the caller named.
+# supersede_pointer OLD_RUN -- register a successor for this tree, rewrite its
+# pointer AND ITS TOKEN FILE to name it, and leave RUN_GIVEN and PTR_TOKEN
+# naming the successor. The two callers below (a retired pointer, and a
+# pointer with no token at all -- RM-212, #341) end up in the identical state,
+# which is the point: neither may sign, and the tree's work continues under a
+# new run either way.
+supersede_pointer() {
+  _old="$1"
+  register_run "succeeds-$_old-$TREE_KEY"
+  RUN_GIVEN="$REGISTERED_RUN"
+  PTR_TOKEN="$REGISTERED_RUN_TOKEN"
+  echo "innsegl-commit: $_old  ->  $RUN_GIVEN" >&2
+  echo "innsegl-commit:   this tree's work now spans two runs, and the successor's" >&2
+  echo "innsegl-commit:   run_registered carries the key that names the first." >&2
+  # THE POINTER CARRIES THE SUCCESSION TOO. Line 4 is new and inert: the
+  # hook writes three lines and this script reads three, so a reader that
+  # predates it is unaffected, and a human opening the file can see the
+  # tree did not always belong to the run at the top of it.
+  if printf '%s\n%s\n%s\nsuperseded %s\n' \
+       "$RUN_GIVEN" "$TASK" "$WORKTREE" "$_old" > "$PTR_FILE" 2>/dev/null; then
+    # AND THE TOKEN, beside it -- the same file the hook would have written
+    # had it registered this run itself (RM-212, #341).
+    if ( umask 077; printf '%s\n' "$PTR_TOKEN" > "$PTR_FILE.token" ) 2>/dev/null; then
+      :
+    else
+      echo "innsegl-commit: the pointer's token could not be written; the next commit" >&2
+      echo "innsegl-commit:   here will find none and register another successor." >&2
+    fi
+  else
+    echo "innsegl-commit: the pointer could not be rewritten; it still names $_old." >&2
+    echo "innsegl-commit:   Harmless: the successor is derived from that run and this" >&2
+    echo "innsegl-commit:   tree, so the next commit finds $RUN_GIVEN again rather than" >&2
+    echo "innsegl-commit:   registering a second identity for one tree (IP §6.6)." >&2
+  fi
+}
+
 if [ -n "$RUN_GIVEN" ] && [ -n "$RUN_FROM_POINTER" ]; then
   case "$(run_state "$RUN_GIVEN")" in
     retired|expired)
-      SUPERSEDED="$RUN_GIVEN"
-      echo "innsegl-commit: $SUPERSEDED is no longer a run that may sign." >&2
+      echo "innsegl-commit: $RUN_GIVEN is no longer a run that may sign." >&2
       echo "innsegl-commit:   Registering a SUCCESSOR for this tree rather than" >&2
       echo "innsegl-commit:   re-deriving, which would name the same dead run." >&2
-      register_run "succeeds-$SUPERSEDED-$TREE_KEY"
-      RUN_GIVEN="$REGISTERED_RUN"
-      echo "innsegl-commit: $SUPERSEDED  ->  $RUN_GIVEN" >&2
-      echo "innsegl-commit:   this tree's work now spans two runs, and the successor's" >&2
-      echo "innsegl-commit:   run_registered carries the key that names the first." >&2
-      # THE POINTER CARRIES THE SUCCESSION TOO. Line 4 is new and inert: the
-      # hook writes three lines and this script reads three, so a reader that
-      # predates it is unaffected, and a human opening the file can see the
-      # tree did not always belong to the run at the top of it.
-      if printf '%s\n%s\n%s\nsuperseded %s\n' \
-           "$RUN_GIVEN" "$TASK" "$WORKTREE" "$SUPERSEDED" > "$PTR_FILE" 2>/dev/null; then
-        :
-      else
-        echo "innsegl-commit: the pointer could not be rewritten; it still names $SUPERSEDED." >&2
-        echo "innsegl-commit:   Harmless: the successor is derived from that run and this" >&2
-        echo "innsegl-commit:   tree, so the next commit finds $RUN_GIVEN again rather than" >&2
-        echo "innsegl-commit:   registering a second identity for one tree (IP §6.6)." >&2
-      fi
+      supersede_pointer "$RUN_GIVEN"
       ;;
     absent)
       # NOT a retirement, and not something to register over. A pointer naming
@@ -1155,21 +1197,61 @@ if [ -n "$RUN_GIVEN" ] && [ -n "$RUN_FROM_POINTER" ]; then
       exit 1
       ;;
     unknown)
-      echo "innsegl-commit: whether $RUN_GIVEN may still sign could not be asked of" >&2
-      echo "innsegl-commit:   $API_URL, so this goes ahead as it always did. If the run" >&2
-      echo "innsegl-commit:   has been retired, sign_commit is what will say so." >&2
+      if [ -z "$PTR_TOKEN" ]; then
+        echo "innsegl-commit: this tree's pointer names $RUN_GIVEN with no run_token on" >&2
+        echo "innsegl-commit:   file (RM-212, #341). Treating it as unusable and registering" >&2
+        echo "innsegl-commit:   a SUCCESSOR, exactly as for a retired pointer run." >&2
+        supersede_pointer "$RUN_GIVEN"
+      else
+        echo "innsegl-commit: whether $RUN_GIVEN may still sign could not be asked of" >&2
+        echo "innsegl-commit:   $API_URL, so this goes ahead as it always did. If the run" >&2
+        echo "innsegl-commit:   has been retired, sign_commit is what will say so." >&2
+      fi
+      ;;
+    *)
+      # "active", and anything else the ledger might one day report.
+      #
+      # A POINTER WITH NO TOKEN IS TREATED AS UNUSABLE — RM-212 (#341). One
+      # written before the hook kept a token file beside its pointer names a
+      # run that IS still active, but sign_commit is about to refuse it with
+      # no run_token regardless, so the least surprising answer is the one
+      # already built for a run that cannot sign: register a successor,
+      # exactly as the retired case does.
+      if [ -z "$PTR_TOKEN" ]; then
+        echo "innsegl-commit: this tree's pointer names $RUN_GIVEN with no run_token on" >&2
+        echo "innsegl-commit:   file (RM-212, #341). Treating it as unusable and registering" >&2
+        echo "innsegl-commit:   a SUCCESSOR, exactly as for a retired pointer run." >&2
+        supersede_pointer "$RUN_GIVEN"
+      fi
       ;;
   esac
 fi
 
 # ---- 1. an identity ---------------------------------------------------------
+#
+# RUN_TOKEN — the per-run token sign_commit is about to require on every call
+# (RM-212, #341), from whichever of the three sources actually names this
+# run: the caller's own environment for an explicit -r, the pointer's token
+# file for a run resolved from the tree, or this process's own registration
+# reply for a run it minted itself (fresh, or a successor). Never invented
+# when none of the three has one -- sign_commit is what refuses that, clearly.
+RUN_TOKEN=""
 if [ -n "$RUN_GIVEN" ]; then
   # Somebody else's run, and somebody else's to retire. See -r.
   RUN="$RUN_GIVEN"
+  if [ -n "$R_EXPLICIT" ]; then
+    # THE HARNESS'S OWN CAPTURE PASSES THIS. -r names a run this process never
+    # registered and whose pointer it never read, so the token cannot come
+    # from either of those places -- the caller has to hand it over directly.
+    RUN_TOKEN="${INNSEGL_RUN_TOKEN:-}"
+  else
+    RUN_TOKEN="$PTR_TOKEN"
+  fi
   echo "innsegl-commit: signing under the existing run $RUN (task $TASK)"
 else
   register_run "$RUN_KEY"
   RUN="$REGISTERED_RUN"
+  RUN_TOKEN="$REGISTERED_RUN_TOKEN"
   echo "innsegl-commit: run $RUN  (agent $AGENT_TYPE, task $TASK)"
 
   # retire whatever happens next, including a failure. An identity left live
@@ -1214,7 +1296,7 @@ SIGN_KEY="commit-$CONTENT-$RUN"
 sign_args() {
   python3 -c '
 import json,sys
-run,repo,tree,task,key,wt,paths,adopt=sys.argv[1:9]
+run,repo,tree,task,key,wt,paths,adopt,token=sys.argv[1:10]
 args={"run_id":run,"repo":repo,"staged_ref":tree,
       "message":sys.stdin.read(),"task_ref":task,
       "idempotency_key":key}
@@ -1230,8 +1312,12 @@ if wt: args["worktree"]=wt
 if paths: args["paths"]=[p for p in paths.split(chr(10)) if p]
 # Absent, not empty, for the reason worktree is above.
 if adopt: args["adopt_run"]=adopt
+# THE PER-RUN TOKEN -- RM-212 (#341). Absent, not empty, for the same reason:
+# with none available this still calls, and sign_commit is what refuses it,
+# clearly, rather than this script inventing one to get past its own check.
+if token: args["run_token"]=token
 print(json.dumps(args))' \
-    "$RUN" "$REPO" "$TREE" "$TASK" "$SIGN_KEY" "$WORKTREE" "$1" "$ADOPT_RUN" <<EOF
+    "$RUN" "$REPO" "$TREE" "$TASK" "$SIGN_KEY" "$WORKTREE" "$1" "$ADOPT_RUN" "$RUN_TOKEN" <<EOF
 $MESSAGE
 EOF
 }

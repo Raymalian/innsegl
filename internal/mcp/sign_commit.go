@@ -121,6 +121,18 @@ func init() { RegisterTool(ToolSignCommit, bindSignCommit) }
 type signCommitIn struct {
 	// RunID is the run the commit is attributed to.
 	RunID string `json:"run_id"`
+	// RunToken is the secret register_agent handed this run once. Required
+	// when the deployment configures a run-token secret (get_credential's
+	// RunTokenSecret, and never a second one); ignored when it does not. Tool
+	// ARGUMENTS are additive and are not a protected surface (doc 08); the
+	// tool name and its error classes are, and neither moves.
+	//
+	// It authenticates RunID -- the SIGNING run -- and NEVER AdoptRun below.
+	// adopt_run proves a DEAD run's work under the LIVE run's own identity
+	// (ADR-0051), so the live run's token is what has to be presented; the
+	// dead run's own token, if a caller even had it, authenticates nothing
+	// here.
+	RunToken string `json:"run_token,omitempty"`
 	// Repo is doc 02 §5's `host/org/name`, which is what the event carries. It
 	// is NOT a filesystem path: the working tree is resolved from it by the
 	// configured workspace, so a caller cannot name a directory the deployment
@@ -282,7 +294,9 @@ type SignCommitRepos interface {
 // SignCommitCredentials issues the audience-bound credential one signature is
 // spent on. SignCommitThroughGetCredential is the shipped implementation.
 type SignCommitCredentials interface {
-	IssueForSigning(ctx context.Context, run CredentialRun) (signing.Credential, error)
+	// runToken is the token sign_commit has already authenticated for this
+	// run, forwarded so the in-process get_credential accepts it (#341).
+	IssueForSigning(ctx context.Context, run CredentialRun, runToken string) (signing.Credential, error)
 }
 
 // SignCommitSigner is one run's gitsign wrapper. *signing.Signer satisfies it.
@@ -362,6 +376,14 @@ type SignCommitConfig struct {
 	// constrains them and Signers.Admits gates them at start-up.
 	AuthorName  string
 	AuthorEmail string
+	// RunTokenSecret keys the per-run token this tool requires (runtoken.go),
+	// checked against RunToken above -- get_credential's own secret and never
+	// a second one, so one token per run is checked the same way everywhere
+	// it is checked. Empty means no authentication: sign_commit mints under
+	// whatever run_id it is handed, exactly as before RM-212. Set and every
+	// caller must present the token register_agent issued for the SIGNING
+	// run -- never the run named by AdoptRun.
+	RunTokenSecret string
 	// Pseudonyms renders the caller's task reference into the Agent-Task
 	// trailer the way register_agent rendered it into the SPIFFE ID's
 	// {task_id}. Required, and it MUST be the same one register_agent holds:
@@ -384,6 +406,7 @@ type signCommitService struct {
 	authorName  string
 	authorEmail string
 	pseudonyms  *identity.Pseudonymiser
+	runSecret   string
 }
 
 // newSignCommitService checks the configuration and returns the tool.
@@ -443,6 +466,7 @@ func newSignCommitService(cfg SignCommitConfig) (*signCommitService, error) {
 		authorName:  cfg.AuthorName,
 		authorEmail: cfg.AuthorEmail,
 		pseudonyms:  cfg.Pseudonyms,
+		runSecret:   cfg.RunTokenSecret,
 	}, nil
 }
 
@@ -574,13 +598,34 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (_ any,
 		}
 	}()
 
-	// ---- before everything: did this call already finish? ------------------
+	// ---- gate 0: the run's own token (RM-212) ------------------------------
 	//
-	// FIRST, ahead of the run gate and not after it. A run retired since the
-	// original call must not turn a completed call's replay into a refusal —
-	// the same reason `sign` puts the whole of this inside the claim — and the
-	// question this asks is about a record that already exists, so nothing
-	// about the run's present state can change the answer.
+	// Before everything else, for get_credential's reason: convergeOnRecorded
+	// just below can hand back a COMPLETED result -- commit_sha, the Rekor
+	// entry, the trailers -- for an idempotency_key alone, and the run gate
+	// after it tells a caller whether run_id exists and whether it was
+	// retired. Answered for a caller with no token, either is an oracle over a
+	// value nothing but a commit trailer would otherwise reveal. One refusal,
+	// before anything is looked up, tells an unauthenticated caller nothing it
+	// did not already know -- the same class and the same wording
+	// get_credential uses for a bad token.
+	//
+	// in.RunID is the SIGNING run and never in.AdoptRun: adopt_run proves a
+	// DEAD run's work under the LIVE run's own identity (ADR-0051), so the
+	// live run's token is what has to be presented, not the one being
+	// adopted.
+	if c.runSecret != "" && !RunTokenValid(c.runSecret, in.RunID, in.RunToken) {
+		return nil, Errorf(ClassRunNotFound, in.RunID, "no run %q", in.RunID)
+	}
+
+	// ---- before everything else: did this call already finish? ------------
+	//
+	// FIRST among the state-revealing gates, ahead of the run gate and not
+	// after it. A run retired since the original call must not turn a
+	// completed call's replay into a refusal — the same reason `sign` puts the
+	// whole of this inside the claim — and the question this asks is about a
+	// record that already exists, so nothing about the run's present state can
+	// change the answer.
 	recorded, converged, err := c.convergeOnRecorded(ctx, in)
 	if err != nil {
 		return nil, err
@@ -707,7 +752,9 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (_ any,
 
 	// IP §6.1: any in-flight sign_commit aborts BEFORE Phase A when the
 	// credential cannot be had.
-	src := &signCommitSource{run: run, issue: c.credentials.IssueForSigning}
+	src := &signCommitSource{run: run, issue: func(ctx context.Context, r CredentialRun) (signing.Credential, error) {
+		return c.credentials.IssueForSigning(ctx, r, in.RunToken)
+	}}
 	if perr := src.prime(ctx); perr != nil {
 		return nil, perr
 	}
@@ -1444,11 +1491,14 @@ type SignCommitThroughGetCredential struct{}
 
 // IssueForSigning mints one Sigstore-audience credential for the run.
 func (SignCommitThroughGetCredential) IssueForSigning(
-	ctx context.Context, run CredentialRun,
+	ctx context.Context, run CredentialRun, runToken string,
 ) (signing.Credential, error) {
 	out, err := getCredential(ctx, nil, getCredentialIn{
 		RunID:    run.RunID,
 		Audience: AudienceSigstore,
+		// The token sign_commit authenticated, so this call meets the same
+		// gate an agent's own get_credential would (#341).
+		RunToken: runToken,
 	})
 	if err != nil {
 		return signing.Credential{}, err

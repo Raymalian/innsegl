@@ -2092,8 +2092,8 @@ fi
 # The first tool call from another tree moves the pointer there.
 MAIN_KEY="$(cd "$KREPO" && "$ROOT/scripts/innsegl-commit.sh" --print-tree-key 2>/dev/null)"
 WT_KEY="$(cd "$KWT" && "$ROOT/scripts/innsegl-commit.sh" --print-tree-key 2>/dev/null)"
-rm -f "$RUNS/by-tree/$MAIN_KEY" "$RUNS/by-tree/$WT_KEY"
-script_tool observe_session ok '{"session_id":"agent-rm199","phase":"start","known":true,"registered":true,"run_id":"run-rm199","task":"rm199","worktree":".worktrees/the-start-tree","repo":"example.test/Org/Name","branch":"main","agent_type":"prober"}'
+rm -f "$RUNS/by-tree/$MAIN_KEY" "$RUNS/by-tree/$WT_KEY" "$RUNS/by-tree/$MAIN_KEY.token" "$RUNS/by-tree/$WT_KEY.token"
+script_tool observe_session ok '{"session_id":"agent-rm199","phase":"start","known":true,"registered":true,"run_id":"run-rm199","task":"rm199","worktree":".worktrees/the-start-tree","repo":"example.test/Org/Name","branch":"main","agent_type":"prober","run_token":"tok-rm199"}'
 script_tool observe_tool_call ok '{}'
 SIGNER="$ROOT/scripts/innsegl-commit.sh" drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-rm199\",\"agent_id\":\"agent-rm199\",\"agent_type\":\"prober\",\"cwd\":\"$KREPO\"}"
 SIGNER="$ROOT/scripts/innsegl-commit.sh" drive "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"sess-rm199\",\"agent_id\":\"agent-rm199\",\"cwd\":\"$KWT\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"x\"}}"
@@ -2101,6 +2101,13 @@ if [ -n "$WT_KEY" ] && [ "$(sed -n 1p "$RUNS/by-tree/$WT_KEY" 2>/dev/null)" = "r
   ok "RM-199 the first tool call in the worktree files the subagent's pointer there"
 else
   bad "RM-199 no pointer for the worktree: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
+fi
+# RM-212 (#341): follow_tree writes this run's token beside the pointer it
+# moves, not just the pointer.
+if [ -n "$WT_KEY" ] && [ "$(cat "$RUNS/by-tree/$WT_KEY.token" 2>/dev/null)" = "tok-rm199" ]; then
+  ok "RM-212 follow_tree writes this tree's run_token beside the pointer it moves"
+else
+  bad "RM-212 no token at $RUNS/by-tree/$WT_KEY.token: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
 fi
 # Line 3 names the tree to commit from. The start tree's answer is wrong here,
 # and the signer derives the right one from where it stands when it is empty.
@@ -2115,8 +2122,16 @@ if [ "$(sed -n 1p "$RUNS/by-tree/$MAIN_KEY" 2>/dev/null)" != "run-rm199" ]; then
 else
   bad "RM-199 the main checkout still names the subagent as its author"
 fi
+# RM-212 (#341): its token moved with it -- drop_pointer took both, and
+# nothing is left behind under the start tree's key.
+if [ ! -f "$RUNS/by-tree/$MAIN_KEY.token" ]; then
+  ok "RM-212 the start tree's token moved with its pointer; none is left behind"
+else
+  bad "RM-212 a stale token survived at $RUNS/by-tree/$MAIN_KEY.token"
+fi
 # A pointer another run holds in the tree is not taken over.
 printf 'run-someone-else\n' > "$RUNS/by-tree/$MAIN_KEY"
+printf 'tok-someone-else\n' > "$RUNS/by-tree/$MAIN_KEY.token"
 SIGNER="$ROOT/scripts/innsegl-commit.sh" drive "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"sess-rm199\",\"agent_id\":\"agent-rm199\",\"cwd\":\"$KREPO\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"x\"}}"
 if [ "$(sed -n 1p "$RUNS/by-tree/$MAIN_KEY" 2>/dev/null)" = "run-someone-else" ]; then
   ok "RM-199 a tree whose pointer names another run is left to that run"
@@ -2130,7 +2145,91 @@ if [ ! -f "$RUNS/by-tree/$WT_KEY" ] && [ "$(sed -n 1p "$RUNS/by-tree/$MAIN_KEY" 
 else
   bad "RM-199 after stop: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
 fi
-rm -f "$RUNS/by-tree/$MAIN_KEY"
+# RM-212 (#341): the followed tree's token is removed with its pointer, and
+# the other run's token -- left alone exactly like its pointer -- survives.
+if [ ! -f "$RUNS/by-tree/$WT_KEY.token" ] && [ "$(cat "$RUNS/by-tree/$MAIN_KEY.token" 2>/dev/null)" = "tok-someone-else" ]; then
+  ok "RM-212 SubagentStop removes the followed tree's token and leaves another run's"
+else
+  bad "RM-212 tokens after stop: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
+fi
+rm -f "$RUNS/by-tree/$MAIN_KEY" "$RUNS/by-tree/$MAIN_KEY.token"
+
+# RM-212 (#341): SubagentStart writes a fresh tree's token itself, 0600, with
+# exactly the reply's run_token — the case above (RM-199) already proves
+# follow_tree's write and drop_pointer's removal; this proves the plainest
+# write, and the one property neither of those checked: the file's mode.
+TOKDIR="$WORK/token/plain"
+mkdir -p "$TOKDIR"
+TOK_KEY="$(printf '%s' "$(cd "$TOKDIR" && pwd -P)" | shasum -a 256 | cut -c1-32)"
+rm -f "$RUNS/by-tree/$TOK_KEY" "$RUNS/by-tree/$TOK_KEY.token"
+script_tool observe_session ok '{"session_id":"agent-tok1","phase":"start","known":true,"registered":true,"run_id":"run-tok1","task":"rm212","worktree":"","repo":"example.test/org/name","branch":"dev/rm212","agent_type":"prober","run_token":"tok-secret-1"}'
+drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-tok\",\"agent_id\":\"agent-tok1\",\"agent_type\":\"prober\",\"cwd\":\"$TOKDIR\"}"
+if [ "$(cat "$RUNS/by-tree/$TOK_KEY.token" 2>/dev/null)" = "tok-secret-1" ]; then
+  ok "RM-212 SubagentStart writes this tree's run_token beside its pointer"
+else
+  bad "RM-212 no token file, or wrong content: $(cat "$RUNS/by-tree/$TOK_KEY.token" 2>&1)"
+fi
+if [ "$(ls -l "$RUNS/by-tree/$TOK_KEY.token" | cut -c1-10)" = "-rw-------" ]; then
+  ok "RM-212 the token file is 0600"
+else
+  bad "RM-212 the token file's mode is $(ls -l "$RUNS/by-tree/$TOK_KEY.token" | cut -c1-10)"
+fi
+
+# Removed with its pointer (SubagentStop, via drop_pointer).
+script_tool observe_session ok '{"session_id":"agent-tok1","phase":"stop","known":true,"retired":true,"run_id":"run-tok1","retired_at":"2026-09-27T00:00:00.000Z"}'
+drive '{"hook_event_name":"SubagentStop","session_id":"sess-tok","agent_id":"agent-tok1","agent_type":"prober"}'
+if [ ! -f "$RUNS/by-tree/$TOK_KEY" ] && [ ! -f "$RUNS/by-tree/$TOK_KEY.token" ]; then
+  ok "RM-212 SubagentStop removes the token file with its pointer"
+else
+  bad "RM-212 after stop: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
+fi
+
+# NOT removed when the pointer names another run by the time this run stops —
+# drop_pointer's own guard, extended to the file beside it.
+script_tool observe_session ok '{"session_id":"agent-tok3","phase":"start","known":true,"registered":true,"run_id":"run-tok3","task":"rm212","worktree":"","repo":"example.test/org/name","branch":"dev/rm212","agent_type":"prober","run_token":"tok-secret-3"}'
+drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-tok\",\"agent_id\":\"agent-tok3\",\"agent_type\":\"prober\",\"cwd\":\"$TOKDIR\"}"
+# Another run has since taken this tree's pointer over.
+printf 'run-other\n' > "$RUNS/by-tree/$TOK_KEY"
+printf 'tok-other\n' > "$RUNS/by-tree/$TOK_KEY.token"
+script_tool observe_session ok '{"session_id":"agent-tok3","phase":"stop","known":true,"retired":true,"run_id":"run-tok3","retired_at":"2026-09-27T00:00:00.000Z"}'
+drive '{"hook_event_name":"SubagentStop","session_id":"sess-tok","agent_id":"agent-tok3","agent_type":"prober"}'
+if [ "$(cat "$RUNS/by-tree/$TOK_KEY" 2>/dev/null)" = "run-other" ] && [ "$(cat "$RUNS/by-tree/$TOK_KEY.token" 2>/dev/null)" = "tok-other" ]; then
+  ok "RM-212 the token file is left alone when the pointer names another run"
+else
+  bad "RM-212 a foreign pointer's token was touched: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
+fi
+rm -f "$RUNS/by-tree/$TOK_KEY" "$RUNS/by-tree/$TOK_KEY.token"
+
+# RM-212 (#341): SubagentStop's capture signs the run's leftover work with
+# THAT RUN'S OWN TOKEN. `-r` names a run whose pointer this process never
+# read, so the token has to travel by argument instead: INNSEGL_RUN_TOKEN,
+# read from the very marker that already carries it.
+cat > "$WORK/token-signer" <<SH
+#!/bin/sh
+[ "\${1:-}" = "--print-tree-key" ] && exit 1
+printf '%s\n' "\$*" >> "$WORK/signer.calls"
+printf 'INNSEGL_RUN_TOKEN=%s\n' "\${INNSEGL_RUN_TOKEN:-}" >> "$WORK/signer.env"
+[ "\$(pwd -P)" = "$CREPO_REAL" ] || { echo "token-signer: refusing outside the fixture" >&2; exit 1; }
+git commit -q -m "captured by the harness" >/dev/null 2>&1
+SH
+chmod +x "$WORK/token-signer"
+
+script_tool observe_session ok '{"session_id":"agent-captok","phase":"start","known":true,"registered":true,"run_id":"run-captok","task":"rm212","worktree":"","repo":"example.test/org/name","branch":"dev/rm212","agent_type":"prober","run_token":"tok-captok-1"}'
+SIGNER="$WORK/token-signer" drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-tok\",\"agent_id\":\"agent-captok\",\"agent_type\":\"prober\",\"cwd\":\"$CREPO\"}"
+rm -rf "${LOG:?}/run-captok"; mkdir -p "$LOG/run-captok"
+wrote_body run-captok a Edit "{\"file_path\":\"$CREPO/tokfile.txt\"}"
+printf 'tok\n' > "$CREPO/tokfile.txt"
+script_tool observe_session ok '{"session_id":"agent-captok","phase":"stop","known":true,"retired":true,"run_id":"retired"}'
+: > "$WORK/signer.calls"; : > "$WORK/signer.env"
+SIGNER="$WORK/token-signer" drive '{"hook_event_name":"SubagentStop","session_id":"sess-tok","agent_id":"agent-captok","agent_type":"prober"}'
+if grep -q '^INNSEGL_RUN_TOKEN=tok-captok-1$' "$WORK/signer.env"; then
+  ok "RM-212 SubagentStop's capture passes the stopping run's own token to -r"
+else
+  bad "RM-212 the capture's signer env: $(cat "$WORK/signer.env" 2>&1)"
+fi
+git -C "$CREPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  && [ "$(git -C "$CREPO" log -1 --format='%s' 2>/dev/null)" = "captured by the harness" ] \
+  && git -C "$CREPO" reset -q --hard HEAD~1 2>/dev/null
 
 echo
 echo "shim-selftest: $pass passed, $fail failed"

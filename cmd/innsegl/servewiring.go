@@ -440,6 +440,20 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 			" with a secret to stop that (RM-079)")
 	}
 
+	// ---- the run-token secret (RM-212) ------------------------------------
+	//
+	// Decided once, by parseServeFlags's resolveRunTokenSecret, well before
+	// this function ever ran; all this does is say which of the three states
+	// the decision landed in, loudly, exactly as every other decision in this
+	// function is (ADR-0025). get_credential, observe_tool_call and
+	// sign_commit below all read the same o.runTokenSecret, so there is
+	// exactly one place this ever gets decided and one place it is reported.
+	if msg, loud := runTokenSecretAnnouncement(o); loud {
+		log.warn(msg)
+	} else {
+		log.info(msg)
+	}
+
 	// ---- the eight tools, in the one order that matters -------------------
 	//
 	// Every Configure call below goes through `tools`, and every deliberate
@@ -526,21 +540,6 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		AbandonAfter:   o.abandonAfter,
 	}))); cerr != nil {
 		return fail("configure get_credential: %w", cerr)
-	}
-
-	// An unauthenticated credential surface says so, every start.
-	//
-	// get_credential does not go through workload attestation — it mints
-	// through SPIRE's admin API — so the entry's selectors are not the control.
-	// Without a run-token secret the only control is the bind address, and a
-	// run id is public: it is in the Agent-Run trailer of every commit, on the
-	// dashboard, and in the query API. Anything that can reach this listener can
-	// mint any agent's credential.
-	if o.runTokenSecret == "" {
-		log.warn("get_credential is UNAUTHENTICATED: no -run-token-secret is set, so any " +
-			"caller that can reach " + o.listen + " can mint a credential for any run_id, " +
-			"and run ids are public. Set $INNSEGL_RUN_TOKEN_SECRET to require the token " +
-			"register_agent issues.")
 	}
 
 	restoreRecord, err := tools.install(mcp.ToolRecordEvent)(mcp.ConfigureRecordEvent(mcp.RecordEventConfig{
@@ -925,6 +924,11 @@ func configureSignCommit(
 		AuthorEmail: o.signAuthorEmail,
 		// The SAME pseudonymiser register_agent holds. See above.
 		Pseudonyms: pseudonyms,
+		// get_credential's secret, not a second one (RM-212). One token per
+		// run, issued once by register_agent, checked the same way everywhere
+		// it is checked — including here, against the SIGNING run and never
+		// against a name given to adopt_run.
+		RunTokenSecret: o.runTokenSecret,
 	})
 	if err != nil {
 		return nil, err

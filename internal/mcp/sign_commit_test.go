@@ -374,7 +374,7 @@ type scCredentials struct {
 	err   error
 }
 
-func (c *scCredentials) IssueForSigning(_ context.Context, run CredentialRun) (signing.Credential, error) {
+func (c *scCredentials) IssueForSigning(_ context.Context, run CredentialRun, _ string) (signing.Credential, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
@@ -958,7 +958,7 @@ func TestAReFetchFailureInsideTheWrapperIsReportedAsTheCredentialFailureItIs(t *
 	failAfter := 1
 	base := w.creds
 	w.cfg.Credentials = credFunc(func(ctx context.Context, run CredentialRun) (signing.Credential, error) {
-		cred, err := base.IssueForSigning(ctx, run)
+		cred, err := base.IssueForSigning(ctx, run, "")
 		if base.calls > failAfter {
 			return signing.Credential{}, Errorf(ClassIdentityUnavailable, run.RunID, "gone")
 		}
@@ -972,7 +972,7 @@ func TestAReFetchFailureInsideTheWrapperIsReportedAsTheCredentialFailureItIs(t *
 // credFunc adapts a function to SignCommitCredentials.
 type credFunc func(context.Context, CredentialRun) (signing.Credential, error)
 
-func (f credFunc) IssueForSigning(ctx context.Context, run CredentialRun) (signing.Credential, error) {
+func (f credFunc) IssueForSigning(ctx context.Context, run CredentialRun, _ string) (signing.Credential, error) {
 	return f(ctx, run)
 }
 
@@ -1118,6 +1118,83 @@ func TestSignCommitRefusesAClaimThisRunCannotMake(t *testing.T) {
 	}
 	if w.creds.calls != 0 {
 		t.Error("a credential was spent on a claim this run cannot make")
+	}
+}
+
+// TestSignCommitRefusesAMissingRunToken, TestSignCommitRefusesAWrongRunToken,
+// TestSignCommitRefusesTheAdoptedRunsTokenInPlaceOfTheSigningRunsToken and
+// TestSignCommitProceedsWithTheRightRunToken — RM-212.
+//
+// sign_commit's own run-token gate, checked the same way get_credential's is
+// (internal/mcp/get_credential.go): BEFORE anything is looked up, so an
+// unauthenticated caller learns nothing from the refusal beyond "no run %q"
+// (ClassRunNotFound) -- not whether the run exists, not whether it was
+// retired, and not whether the idempotency_key already names a signed commit.
+const scRunTokenSecret = "sc-test-run-token-secret-0123456789"
+
+func TestSignCommitRefusesAMissingRunToken(t *testing.T) {
+	w := newSCWiring()
+	w.cfg.RunTokenSecret = scRunTokenSecret
+	in := scIn() // in.RunToken is the zero value: ""
+
+	_, err := w.call(t, in)
+	requireClass(t, err, ClassRunNotFound)
+	if steps := w.phases.all(); len(steps) != 0 {
+		t.Errorf("a call with no run token ran %v; it must append and sign nothing", steps)
+	}
+	if w.creds.calls != 0 {
+		t.Error("a credential was spent on a call with no run token")
+	}
+}
+
+func TestSignCommitRefusesAWrongRunToken(t *testing.T) {
+	w := newSCWiring()
+	w.cfg.RunTokenSecret = scRunTokenSecret
+	in := scIn()
+	in.RunToken = "not-the-token-register_agent-issued"
+
+	_, err := w.call(t, in)
+	requireClass(t, err, ClassRunNotFound)
+	if steps := w.phases.all(); len(steps) != 0 {
+		t.Errorf("a call with the wrong run token ran %v; it must append and sign nothing", steps)
+	}
+}
+
+// The token that authenticates a signature is the SIGNING run's own -- never
+// the DEAD run's that adopt_run names. Presenting the adopted run's token in
+// place of the signing run's is refused exactly like any other wrong token
+// (ADR-0051): adoption proves a dead run's work under the LIVE run's own
+// identity, and never widens who may authenticate the call.
+func TestSignCommitRefusesTheAdoptedRunsTokenInPlaceOfTheSigningRunsToken(t *testing.T) {
+	w := newSCWiring()
+	w.cfg.RunTokenSecret = scRunTokenSecret
+	in := scIn()
+	in.AdoptRun = "run-dead-adopted"
+	// The ADOPTED run's token, not the signing run's (scRunID).
+	in.RunToken = RunToken(scRunTokenSecret, in.AdoptRun)
+
+	_, err := w.call(t, in)
+	requireClass(t, err, ClassRunNotFound)
+	if steps := w.phases.all(); len(steps) != 0 {
+		t.Errorf("the adopted run's token ran %v; only the signing run's own token authenticates", steps)
+	}
+}
+
+func TestSignCommitProceedsWithTheRightRunToken(t *testing.T) {
+	w := newSCWiring()
+	w.cfg.RunTokenSecret = scRunTokenSecret
+	in := scIn()
+	in.RunToken = RunToken(scRunTokenSecret, in.RunID)
+
+	out, err := w.call(t, in)
+	if err != nil {
+		t.Fatalf("sign_commit with the run's own token: %v", err)
+	}
+	if out.CommitSHA == "" {
+		t.Error("no commit_sha in a call that should have proceeded")
+	}
+	if err := requireTwoPhaseOrder(w.phases.all()); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -2592,7 +2669,7 @@ func TestTheShippedCredentialSourceGoesThroughGetCredential(t *testing.T) {
 	t.Run("the credential is the run's, for sigstore", func(t *testing.T) {
 		expiry := time.Now().Add(5 * time.Minute)
 		install(t, scStubMinter{expiry: expiry})
-		got, err := source.IssueForSigning(t.Context(), run)
+		got, err := source.IssueForSigning(t.Context(), run, "")
 		if err != nil {
 			t.Fatalf("IssueForSigning: %v", err)
 		}
@@ -2610,9 +2687,27 @@ func TestTheShippedCredentialSourceGoesThroughGetCredential(t *testing.T) {
 		}
 	})
 
+	// RM-212 (#341). sign_commit authenticates the run's token and then asks
+	// get_credential in process -- which checks the token again. Measured live:
+	// the in-process call sent none, so a signer holding the right token was
+	// refused RUN_NOT_FOUND. The token sign_commit verified is forwarded.
+	t.Run("the verified run token is forwarded to get_credential", func(t *testing.T) {
+		const secret = "rm212-secret"
+		if err := ConfigureGetCredential(CredentialConfig{
+			Runs: scRuns{run: run, found: true}, Entries: credOpenEntries{},
+			Minter: scStubMinter{expiry: time.Now().Add(5 * time.Minute)}, Ledger: newLedger(),
+			RunTokenSecret: secret,
+		}); err != nil {
+			t.Fatalf("ConfigureGetCredential: %v", err)
+		}
+		if _, err := source.IssueForSigning(t.Context(), run, RunToken(secret, run.RunID)); err != nil {
+			t.Fatalf("IssueForSigning with the run's own token: %v", err)
+		}
+	})
+
 	t.Run("get_credential's refusal is carried through unchanged", func(t *testing.T) {
 		install(t, scStubMinter{err: Errorf(ClassIdentityUnavailable, run.RunID, "spire is gone")})
-		_, err := source.IssueForSigning(t.Context(), run)
+		_, err := source.IssueForSigning(t.Context(), run, "")
 		requireClass(t, err, ClassIdentityUnavailable)
 	})
 
@@ -2622,7 +2717,7 @@ func TestTheShippedCredentialSourceGoesThroughGetCredential(t *testing.T) {
 		// stated expiry cannot be read is one nothing can refuse when it
 		// expires (IP §6.2).
 		install(t, scStubMinter{expiry: time.Date(12000, 1, 1, 0, 0, 0, 0, time.UTC)})
-		_, err := source.IssueForSigning(t.Context(), run)
+		_, err := source.IssueForSigning(t.Context(), run, "")
 		requireClass(t, err, ClassInvariantViolation)
 	})
 }
