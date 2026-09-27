@@ -123,6 +123,17 @@ noreply@github.com'
 
 # The permitted display names, read from outside the repository. See above.
 NAMES_FILE="${INNSEGL_ALLOWED_NAMES_FILE:-$(cd -- "$(dirname -- "$0")/.." && pwd -P)/.innsegl/allowed-names}"
+# A LINKED WORKTREE HAS NO LIST OF ITS OWN: the file is untracked, and
+# `git worktree add` copies only what is tracked (#319). So when the list is not
+# beside this checkout and nobody named one, the main checkout's is read -- the
+# worktree's common git directory sits inside it. With no list there either, the
+# file stays missing and the gate refuses below, as it always has.
+if [ -z "${INNSEGL_ALLOWED_NAMES_FILE:-}" ] && [ ! -r "${NAMES_FILE}" ]; then
+  _common="$(git -C "$(dirname -- "$0")" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || _common=""
+  if [ -n "${_common}" ] && [ -r "$(dirname -- "${_common}")/.innsegl/allowed-names" ]; then
+    NAMES_FILE="$(dirname -- "${_common}")/.innsegl/allowed-names"
+  fi
+fi
 
 # US (0x1f) separates the fields of a parsed entry, for the reason the audit
 # uses it below: a display name is text a person typed and may contain any
