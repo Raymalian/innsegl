@@ -456,17 +456,15 @@ var storeCredentialHolders = []struct {
 	{
 		files:    []string{"deploy/compose/innsegl.yml"},
 		services: []string{"innsegl-sealer", "innsegl-canary"},
-		why:      "the reference stack: the sealer stays up, and the canary is doc 05 §2's scheduled job",
+		why: "the separate profile: the sealer as its own container, and the canary " +
+			"is doc 05 §2's scheduled job",
 	},
 	{
-		files: []string{
-			"deploy/compose/innsegl.yml",
-			"deploy/compose/innsegl.oneprocess.yml",
-		},
+		files:    []string{"deploy/compose/innsegl.yml"},
 		services: []string{"innsegl-mcp"},
-		why: "ONEPROCESS=1 folds the sealer into the MCP process, so the MCP is the " +
-			"service holding the store credential there. A narrowing applied only to " +
-			"innsegl-sealer would leave this arrangement running as root",
+		why: "by default the sealer runs inside the MCP process (ADR-0056), so the MCP " +
+			"is the service holding the store credential there. A narrowing applied only " +
+			"to innsegl-sealer would leave the default arrangement running as root",
 	},
 }
 

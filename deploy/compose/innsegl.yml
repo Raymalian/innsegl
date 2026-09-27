@@ -934,11 +934,19 @@ services:
       # Gating on the one-shot is what makes a clean `up` need no manual step.
       innsegl-admin-credential-init:
         condition: service_completed_successfully
+      # The sealer runs in here by default (ADR-0056), and it writes into the
+      # bucket this one-shot creates with object lock on.
+      innsegl-object-init:
+        condition: service_completed_successfully
     networks:
       - innsegl-ledger
       - innsegl-spire-admin
       - innsegl-sigstore
       - innsegl-mcp-clients
+      # The sealer's. The gateway, which enforces object lock, and NOT
+      # innsegl-object-backend: #227 put the Filer where nothing but the
+      # gateway can reach it.
+      - innsegl-objects
     labels:
       # The selector register.sh registers. Ours, not compose's own label
       # scheme, and part of the attestation surface rather than metadata.
@@ -996,19 +1004,49 @@ services:
       INNSEGL_MCP_ADMIN_JWKS_FILE: *admin-jwks-file
 
       # Companion subcommands to run inside this process (serve.go's -also).
+      # Subcommand names, not container names: `serve` refuses a name it does
+      # not recognise at parse time rather than starting and never running it.
       #
-      # EMPTY BY DEFAULT, which is what every deployment did before this, and
-      # the reason it is a variable at all is that the reaper had no way to run:
-      # this file ships no reaper service, and nothing else started one. IP §6.7
-      # requires orphaned identities to expire, and measured 2026-09-08 nothing
-      # was expiring them — a subagent that dies without a clean stop left its
-      # run Active forever, one of them for 13 hours while it kept collecting
-      # tool calls.
+      # ONE PROCESS BY DEFAULT (ADR-0056, #339). The sealer and the reconciler
+      # run in here unless a deployment asks otherwise. The reconciler's SPIRE
+      # pass needs an admin identity and SPIRE admits one, this service's; as
+      # its own container the pass is off. This was an overlay and a flag, and
+      # a redeploy that forgot the flag turned the pass off without a word.
       #
-      # `make innsegl-up-here` sets this to `reap`. A deployment that wants the
-      # sealer and reconciler in here too has innsegl.oneprocess.yml, which
-      # states what folding them in costs.
-      INNSEGL_MCP_ALSO: ${INNSEGL_MCP_ALSO:-}
+      # The multi-replica topology (doc 05 §2) sets this to `reap` and brings
+      # up `--profile separate`, or N replicas would run N sealers. See the
+      # sealer and reconciler services below.
+      #
+      # The reaper is here for IP §6.7: orphaned identities must expire, and
+      # measured 2026-09-08 nothing was expiring them -- a subagent that died
+      # without a clean stop left its run Active for 13 hours while it kept
+      # collecting tool calls.
+      INNSEGL_MCP_ALSO: ${INNSEGL_MCP_ALSO:-seal,reconcile,reap}
+
+      # A companion reads this process's environment, so everything `seal` and
+      # `reconcile` read is set here with the SAME expression their own
+      # services use. RM-207 (#333) measured what a copy that drifts costs:
+      # both reconciler passes off in silence. TestRM207 compares the values.
+      #
+      # The sealer's. The scoped identity, NOT the store's root account (#228):
+      # this process IS the sealer by default, so a narrowing applied only to
+      # innsegl-sealer would leave it running as root. OPS-028 reads both.
+      INNSEGL_OBJECT_STORE_ENDPOINT: innsegl-s3:8333
+      INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
+      INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-sealer-user
+      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-sealer-password
+      INNSEGL_OBJECT_STORE_TLS: "false"
+      INNSEGL_OBJECT_STORE_PREFIX: *object-store-prefix
+      INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
+      INNSEGL_SEAL_INTERVAL: ${INNSEGL_SEAL_INTERVAL:-1m}
+      # The reconciler's, including the rebase (#194) and writes (#169) passes.
+      # Empty leaves each pass off, as on the reconciler service.
+      INNSEGL_RECONCILE_INTERVAL: ${INNSEGL_RECONCILE_INTERVAL:-1m}
+      INNSEGL_RECONCILE_EXPIRE_AFTER: ${INNSEGL_RECONCILE_EXPIRE_AFTER:-10m}
+      INNSEGL_REBASE_BRANCH: ${INNSEGL_REBASE_BRANCH:-}
+      INNSEGL_REBASE_REPOS: ${INNSEGL_REBASE_REPOS:-}
+      INNSEGL_WRITES_LOG_DIR: ${INNSEGL_WRITES_LOG_DIR:-}
+      INNSEGL_WRITES_REPOS: ${INNSEGL_WRITES_REPOS:-}
       # HOW LONG SILENCE IS ALLOWED BEFORE IT IS CALLED ORPHANED. This was 5m
       # and 5m is not silence, it is a long tool call: PostToolUse fires when a
       # tool RETURNS, so a build, a test run or a slow network makes a perfectly
@@ -1246,8 +1284,17 @@ services:
   # innsegl-spire-admin and mounting spire-agent-socket the way innsegl-mcp
   # does. None of that is done here while the identity question stands.
   # --------------------------------------------------------------------------
+  # THE `separate` PROFILE (ADR-0056, #339). By default the reconcile loop
+  # runs inside innsegl-mcp (see INNSEGL_MCP_ALSO there), and this container is
+  # not started. The multi-replica topology (doc 05 §2) runs it on its own:
+  #
+  #   INNSEGL_MCP_ALSO=reap docker compose -f innsegl.yml --profile separate up -d
+  #
+  # Separate, the reconciler's SPIRE pass is off: SPIRE admits one admin
+  # identity and it is the MCP's.
   innsegl-reconciler:
     <<: *innsegl-build
+    profiles: ["separate"]
     container_name: innsegl-reconciler
     restart: unless-stopped
     depends_on:
@@ -1461,8 +1508,12 @@ services:
       # not, every copy fails and the readiness report says so.
       - ${INNSEGL_BACKUP_HOST_DIR:-${HOME}/innsegl-backups}:/host-backups
 
+  # THE `separate` PROFILE, as for innsegl-reconciler above: by default the
+  # seal loop runs inside innsegl-mcp and this container is not started.
+  # `--profile separate` with INNSEGL_MCP_ALSO=reap runs it on its own.
   innsegl-sealer:
     <<: *innsegl-build
+    profiles: ["separate"]
     container_name: innsegl-sealer
     restart: unless-stopped
     depends_on:

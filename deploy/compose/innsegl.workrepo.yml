@@ -60,8 +60,8 @@
 # already been made and fixed in the innsegl-verify-commit target an hour
 # earlier, and was repeated here.
 #
-# `docker compose config` names the three: innsegl-mcp, innsegl-api and
-# innsegl-reconciler. Check that list again if a service is added.
+# `docker compose config --profile separate` names the three: innsegl-mcp,
+# innsegl-api and innsegl-reconciler. Check that list again if a service is added.
 
 services:
   innsegl-mcp:
@@ -151,6 +151,11 @@ services:
       - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/agentlog
       # The session markers. See INNSEGL_MCP_SESSION_DIR above.
       - innsegl-sessions:/sessions
+      # The reconciler runs in this process by default (ADR-0056), and its
+      # writes pass reads the bodies here, as innsegl-reconciler mounts them
+      # below: READ-ONLY. The read-write mount above is the MCP's own, at
+      # another path, for writing them.
+      - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/harness-log:ro
 
   innsegl-api:
     environment:

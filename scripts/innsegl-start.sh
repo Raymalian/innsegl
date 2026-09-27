@@ -77,9 +77,11 @@ step() { printf '\n== %s\n' "$*"; }
 # deliberately — it overrides three services and declares no container of its
 # own, so it can add no row.
 #
-# ONEPROCESS=1 IS NOT THIS PATH. That overlay scales the sealer and the
-# reconciler to zero replicas; this script never passes it, and a deployment
-# that does should expect those two rows to read ABSENT.
+# THE SEALER AND THE RECONCILER ARE NOT ROWS BY DEFAULT (ADR-0056, #339). They
+# run inside innsegl-mcp, and their own containers sit behind the `separate`
+# profile, so the `profiles:` rule above leaves them out. Before that rule
+# covered them, a one-process bring-up waited more than five minutes here for
+# two containers nothing had started.
 COMPOSE_FILES='deploy/compose/spire.yml
 deploy/compose/sigstore.yml
 deploy/compose/innsegl.yml'
