@@ -552,3 +552,48 @@ Nothing here is published on a routable interface: every port is bound to
 `127.0.0.1`. `spire-oidc` in particular serves plain HTTP and says so in two
 places in its configuration, because all of `.dev` is HSTS-preloaded and a
 production deployment must terminate TLS in front of it.
+
+---
+
+## Updating
+
+Once a deployment is up, `scripts/innsegl-update.sh` is the one command that
+moves it forward. It only ever pulls `origin/main` — it never pushes anything
+— and it checks what it pulled before touching anything: a dirty working
+tree, local commits `origin/main` does not have, a rewritten `origin/main`, a
+commit pushed straight to `main` instead of merged, or a commit its signature
+check cannot confirm are all refused, with nothing changed.
+
+Install it once, so `innsegl-update` works from anywhere on the host:
+
+```sh
+sudo ln -s <checkout>/scripts/innsegl-update.sh /usr/local/bin/innsegl-update
+```
+
+See what is new, without changing anything:
+
+```sh
+innsegl-update --check
+```
+
+Update for real. It prints the plan — the commits, the files they touch, the
+deploy command — and asks for confirmation, unless you pass `--yes`:
+
+```sh
+innsegl-update
+```
+
+If an update turns out to be wrong, roll back to the commit it recorded right
+before it moved. This checks that commit out on its own branch,
+`rollback-<sha>`, and redeploys; it then prints how to return to `main`:
+
+```sh
+innsegl-update --rollback
+```
+
+**Skipping verification is a last resort, and it says so every time.** This
+host's own trust roots cannot yet verify a commit signed by another
+deployment — that is a limitation of where verification sits today, not a
+setting to leave on. If that is why an update is refused, set
+`INNSEGL_UPDATE_SKIP_VERIFY=1` for that one run; it prints a warning naming
+exactly that reason, and there is no way to make the warning quieter.
