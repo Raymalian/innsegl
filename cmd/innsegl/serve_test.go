@@ -767,6 +767,104 @@ func TestPRI005ServeReadsTheDeploymentSecretFromAFile(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// RM-212 — the run-token secret is derived from the identity secret when the
+// deployment sets no -run-token-secret of its own, so a live stack enforces
+// get_credential's, sign_commit's and observe_tool_call's run-token gate with
+// no new configuration.
+// ---------------------------------------------------------------------------
+
+// captureServeOptions runs `serve` far enough to resolve its options and
+// hands them back, without a Postgres or a SPIRE: the fake opener stands in
+// for openServer and never reaches either.
+func captureServeOptions(t *testing.T, args []string) serveOptions {
+	t.Helper()
+	var captured serveOptions
+	deps := serveDeps{open: func(_ context.Context, o serveOptions, _ *serveLog) (servedMCP, error) {
+		captured = o
+		return &fakeServer{}, nil
+	}}
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if code := runServe(ctx, args, &stdout, &stderr, deps); code != exitOK {
+		t.Fatalf("serve = %d, want %d. stderr:\n%s", code, exitOK, stderr.String())
+	}
+	return captured
+}
+
+// TestServeDerivesTheRunTokenSecretFromTheIdentitySecretWhenNoneIsSet.
+//
+// completeServeArgs sets -identity-secret and nothing else about the run
+// token, which is the shape the live deployment was in when the MCP logged
+// "get_credential is UNAUTHENTICATED": pseudonymous identity, and no
+// -run-token-secret. After RM-212 that deployment derives one instead of
+// running open.
+func TestServeDerivesTheRunTokenSecretFromTheIdentitySecretWhenNoneIsSet(t *testing.T) {
+	clearServeEnv(t)
+	o := captureServeOptions(t, completeServeArgs()[1:])
+
+	if o.runTokenSecret == "" {
+		t.Fatal("no run-token secret was derived from the identity secret")
+	}
+	if !o.runTokenSecretDerived {
+		t.Error("runTokenSecretDerived is false for a secret this process derived itself")
+	}
+	if got, want := o.runTokenSecret, mcp.DeriveRunTokenSecret(testIdentitySecret); got != want {
+		t.Errorf("derived run-token secret = %q, want %q (DeriveRunTokenSecret over the "+
+			"configured identity secret)", got, want)
+	}
+	// Domain separation, measured at this layer too: the derived secret must
+	// be its own key, not the identity secret with a second purpose.
+	if o.runTokenSecret == o.identitySecret {
+		t.Error("the derived run-token secret equals the identity secret")
+	}
+}
+
+// TestServeAnExplicitRunTokenSecretWins. An operator who names their own
+// -run-token-secret said so on purpose — rotating it independently of the
+// identity secret, for instance — and a derivation that overrode it would
+// silently disagree with the deployment's own configuration.
+func TestServeAnExplicitRunTokenSecretWins(t *testing.T) {
+	clearServeEnv(t)
+	const explicit = "an-explicit-run-token-secret-set-by-hand"
+	o := captureServeOptions(t, completeServeArgs("-run-token-secret", explicit)[1:])
+
+	if o.runTokenSecret != explicit {
+		t.Errorf("runTokenSecret = %q, want the explicit %q", o.runTokenSecret, explicit)
+	}
+	if o.runTokenSecretDerived {
+		t.Error("runTokenSecretDerived is true for an explicitly configured secret")
+	}
+}
+
+// TestServeRunTokenSecretStaysEmptyWithNeitherConfigured. `-identity-mode
+// literal` needs no secret at all (RM-079), so a deployment that asks for it
+// and sets no -run-token-secret either has nothing to derive from and stays
+// exactly as unauthenticated as before RM-212 — loudly, per the warning
+// openServer logs.
+func TestServeRunTokenSecretStaysEmptyWithNeitherConfigured(t *testing.T) {
+	clearServeEnv(t)
+	args := append([]string{}, completeServeArgs()...)
+	out := args[:1]
+	for i := 1; i < len(args); i += 2 {
+		if args[i] == "-identity-secret" {
+			continue
+		}
+		out = append(out, args[i], args[i+1])
+	}
+	out = append(out, "-identity-mode", string(identity.ModeLiteral))
+
+	o := captureServeOptions(t, out[1:])
+	if o.runTokenSecret != "" {
+		t.Errorf("runTokenSecret = %q, want empty with neither an explicit secret nor an "+
+			"identity secret to derive one from", o.runTokenSecret)
+	}
+	if o.runTokenSecretDerived {
+		t.Error("runTokenSecretDerived is true with nothing to derive from")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // MCP-059 — the three ingestion tools are configured like every other
 // dependency: a flag, an environment variable behind it, and a refusal that
 // names both.

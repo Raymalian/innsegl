@@ -105,15 +105,18 @@ const (
 	envIdentityMode   = "INNSEGL_IDENTITY_MODE"
 	envIdentitySecret = "INNSEGL_IDENTITY_SECRET" //nolint:gosec // the NAME of the variable, not a secret
 
-	// envRunTokenSecret keys the per-run token get_credential requires
-	// (internal/mcp/runtoken.go).
+	// envRunTokenSecret keys the per-run token get_credential, sign_commit and
+	// observe_tool_call require (internal/mcp/runtoken.go).
 	//
-	// UNSET MEANS NO AUTHENTICATION, which is the state this deployment was in
-	// before the variable existed: get_credential mints for whatever run_id it
-	// is handed, without workload attestation, and a run id is public — it is in
-	// the Agent-Run trailer of every commit. Setting this makes the token
-	// mandatory. It is deliberately NOT defaulted to the identity secret: one
-	// key with two purposes is a key whose compromise means two things.
+	// UNSET DOES NOT MEAN NO AUTHENTICATION any more (RM-212): resolveRunTokenSecret
+	// derives this from -identity-secret, domain-separated, when the deployment
+	// set neither and an identity secret exists — which is the state every
+	// deployment with pseudonymous identity (RM-079's default) was already in.
+	// Set this explicitly and it always wins over the derivation, for an
+	// operator who wants to rotate the run-token secret independently of the
+	// identity secret. Only a deployment with NEITHER set — most plausibly
+	// `-identity-mode literal` with no secret at all — stays unauthenticated,
+	// and openServer logs that loudly, every start.
 	envRunTokenSecret = "INNSEGL_RUN_TOKEN_SECRET" //nolint:gosec // the NAME of the variable, not a secret
 
 	// envAbandonAfter bounds how long a run whose authorisation the reaper
@@ -256,7 +259,14 @@ type serveOptions struct {
 	identitySecret     string
 	identitySecretFile string
 	runTokenSecret     string
-	abandonAfter       time.Duration
+	// runTokenSecretDerived is true when resolveRunTokenSecret computed
+	// runTokenSecret from identitySecret rather than reading it from -run-token-secret
+	// (or $INNSEGL_RUN_TOKEN_SECRET). It exists only so openServer's start-up
+	// log can say which of the three states (derived, explicit, neither) this
+	// deployment is in — runTokenSecret alone cannot distinguish "derived" from
+	// "explicit" once it is set.
+	runTokenSecretDerived bool
+	abandonAfter          time.Duration
 }
 
 // pseudonyms builds what decides whether the SPIFFE ID — and so the Fulcio
@@ -325,6 +335,77 @@ func (o *serveOptions) resolveIdentitySecret() string {
 	}
 	o.identitySecret = secret
 	return ""
+}
+
+// resolveRunTokenSecret derives -run-token-secret from the identity secret
+// when the deployment set neither, so a live stack enforces get_credential's,
+// sign_commit's and observe_tool_call's run-token gate with no new
+// configuration (RM-212).
+//
+// # Why derive rather than require a second secret
+//
+// -identity-secret is the one deployment-wide secret this process already
+// loads (RM-079, #116), and requiring a second one before the run-token gate
+// enforces anything is exactly the friction that shipped every deployment
+// with no -run-token-secret set at all — the state that logged "get_credential
+// is UNAUTHENTICATED" on a live stack whose run ids are printed in every
+// commit. internal/mcp.DeriveRunTokenSecret is what does the deriving, under
+// domain separation, so this is not "the identity secret with a second
+// purpose": it is its own key, and one that cannot be run backwards into the
+// identity secret it came from.
+//
+// # Why an explicit secret still wins
+//
+// An operator who names -run-token-secret (or $INNSEGL_RUN_TOKEN_SECRET) said
+// so on purpose — rotating it independently of the identity secret, or
+// running literal identity with a token secret set on its own — and a
+// derivation that overrode that would silently disagree with a deployment's
+// own configuration.
+//
+// # Why this call has to come after resolveIdentitySecret
+//
+// identitySecret may still be empty here and be filled a moment later from
+// -identity-secret-file; deriving before that resolves would leave a
+// perfectly good deployment unauthenticated for want of ordering, and it is
+// runServe's job to get that order right, not this method's to guess at it.
+//
+// # Nothing already minted is affected
+//
+// A token is RunToken(secret, run_id) — a pure function of the two — so a run
+// registered before this change gets a token derived from whichever secret is
+// configured now, and that is correct: nothing about a run's own identity
+// depends on which secret produced its token.
+func (o *serveOptions) resolveRunTokenSecret() {
+	if o.runTokenSecret != "" || o.identitySecret == "" {
+		return
+	}
+	o.runTokenSecret = mcp.DeriveRunTokenSecret(o.identitySecret)
+	o.runTokenSecretDerived = true
+}
+
+// runTokenSecretAnnouncement is the run-token secret decision, rendered as the
+// line openServer logs at every start so an operator can see which of the
+// three states this deployment is in without reading source. It is a pure
+// function of serveOptions — and so testable without a live SPIRE or
+// Postgres — because the decision itself was already made by
+// resolveRunTokenSecret, before validate ever ran.
+func runTokenSecretAnnouncement(o serveOptions) (msg string, loud bool) {
+	switch {
+	case o.runTokenSecretDerived:
+		return "run-token secret DERIVED from the identity secret (RM-212), domain-separated: " +
+			"get_credential, sign_commit and observe_tool_call require the token register_agent " +
+			"issued for a run, with no -run-token-secret set", false
+	case o.runTokenSecret != "":
+		return "run-token secret is EXPLICIT (-run-token-secret or $" + envRunTokenSecret + "): " +
+			"get_credential, sign_commit and observe_tool_call require the token register_agent " +
+			"issued for a run", false
+	default:
+		return "get_credential, sign_commit and observe_tool_call are UNAUTHENTICATED: no " +
+			"-run-token-secret is set and no -identity-secret is set to derive one from, so any " +
+			"caller that can reach " + o.listen + " can mint a credential, sign, or record a " +
+			"tool call for any run_id, and run ids are public. Set $" + envRunTokenSecret + " or $" +
+			envIdentitySecret + " to require the token register_agent issues.", true
+	}
 }
 
 // serveLog is the server's log. It is structured because a deployment ships
@@ -700,11 +781,13 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 				"DAYS: a short timer here is the bug this replaced, which killed working "+
 				"agents. 0 disables the horizon ($"+envAbandonAfter+")")
 		runTokenSecret = fs.String("run-token-secret", os.Getenv(envRunTokenSecret),
-			"the deployment secret the per-run credential token is keyed with. UNSET "+
-				"MEANS NO AUTHENTICATION: get_credential mints for whatever run_id it is "+
-				"handed, and a run id is public — it is in the Agent-Run trailer of every "+
-				"commit. Set it and every caller must present the token register_agent "+
-				"returned for that run ($"+envRunTokenSecret+")")
+			"the deployment secret the per-run token is keyed with. UNSET DERIVES ONE "+
+				"FROM -identity-secret (RM-212), domain-separated, so a deployment "+
+				"running pseudonymous identity enforces the token with no new "+
+				"configuration; set this to use a secret independent of the identity "+
+				"one, or run -identity-mode literal with neither set to stay "+
+				"unauthenticated as before. Set and every caller must present the "+
+				"token register_agent returned for that run ($"+envRunTokenSecret+")")
 		identitySecretFile = fs.String("identity-secret-file", os.Getenv(envIdentitySecretFile),
 			"file holding that secret, for a deployment that generates one into a volume "+
 				"and so has nothing to put in the variable above. Leading and trailing "+
@@ -793,6 +876,9 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		fprintf(stderr, "innsegl serve: %s\n", problem)
 		return serveOptions{}, exitUsage, false
 	}
+	// After resolveIdentitySecret, so a secret supplied via -identity-secret-file
+	// is already in identitySecret by the time this reads it (RM-212).
+	o.resolveRunTokenSecret()
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl serve: %s\n", problem)
 		return serveOptions{}, exitUsage, false

@@ -1121,6 +1121,83 @@ func TestSignCommitRefusesAClaimThisRunCannotMake(t *testing.T) {
 	}
 }
 
+// TestSignCommitRefusesAMissingRunToken, TestSignCommitRefusesAWrongRunToken,
+// TestSignCommitRefusesTheAdoptedRunsTokenInPlaceOfTheSigningRunsToken and
+// TestSignCommitProceedsWithTheRightRunToken — RM-212.
+//
+// sign_commit's own run-token gate, checked the same way get_credential's is
+// (internal/mcp/get_credential.go): BEFORE anything is looked up, so an
+// unauthenticated caller learns nothing from the refusal beyond "no run %q"
+// (ClassRunNotFound) -- not whether the run exists, not whether it was
+// retired, and not whether the idempotency_key already names a signed commit.
+const scRunTokenSecret = "sc-test-run-token-secret-0123456789"
+
+func TestSignCommitRefusesAMissingRunToken(t *testing.T) {
+	w := newSCWiring()
+	w.cfg.RunTokenSecret = scRunTokenSecret
+	in := scIn() // in.RunToken is the zero value: ""
+
+	_, err := w.call(t, in)
+	requireClass(t, err, ClassRunNotFound)
+	if steps := w.phases.all(); len(steps) != 0 {
+		t.Errorf("a call with no run token ran %v; it must append and sign nothing", steps)
+	}
+	if w.creds.calls != 0 {
+		t.Error("a credential was spent on a call with no run token")
+	}
+}
+
+func TestSignCommitRefusesAWrongRunToken(t *testing.T) {
+	w := newSCWiring()
+	w.cfg.RunTokenSecret = scRunTokenSecret
+	in := scIn()
+	in.RunToken = "not-the-token-register_agent-issued"
+
+	_, err := w.call(t, in)
+	requireClass(t, err, ClassRunNotFound)
+	if steps := w.phases.all(); len(steps) != 0 {
+		t.Errorf("a call with the wrong run token ran %v; it must append and sign nothing", steps)
+	}
+}
+
+// The token that authenticates a signature is the SIGNING run's own -- never
+// the DEAD run's that adopt_run names. Presenting the adopted run's token in
+// place of the signing run's is refused exactly like any other wrong token
+// (ADR-0051): adoption proves a dead run's work under the LIVE run's own
+// identity, and never widens who may authenticate the call.
+func TestSignCommitRefusesTheAdoptedRunsTokenInPlaceOfTheSigningRunsToken(t *testing.T) {
+	w := newSCWiring()
+	w.cfg.RunTokenSecret = scRunTokenSecret
+	in := scIn()
+	in.AdoptRun = "run-dead-adopted"
+	// The ADOPTED run's token, not the signing run's (scRunID).
+	in.RunToken = RunToken(scRunTokenSecret, in.AdoptRun)
+
+	_, err := w.call(t, in)
+	requireClass(t, err, ClassRunNotFound)
+	if steps := w.phases.all(); len(steps) != 0 {
+		t.Errorf("the adopted run's token ran %v; only the signing run's own token authenticates", steps)
+	}
+}
+
+func TestSignCommitProceedsWithTheRightRunToken(t *testing.T) {
+	w := newSCWiring()
+	w.cfg.RunTokenSecret = scRunTokenSecret
+	in := scIn()
+	in.RunToken = RunToken(scRunTokenSecret, in.RunID)
+
+	out, err := w.call(t, in)
+	if err != nil {
+		t.Fatalf("sign_commit with the run's own token: %v", err)
+	}
+	if out.CommitSHA == "" {
+		t.Error("no commit_sha in a call that should have proceeded")
+	}
+	if err := requireTwoPhaseOrder(w.phases.all()); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestSignCommitRefusesARunItCannotSignFor(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

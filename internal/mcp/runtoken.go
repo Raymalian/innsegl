@@ -64,3 +64,44 @@ func RunTokenValid(secret, runID, presented string) bool {
 	}
 	return hmac.Equal([]byte(want), []byte(presented))
 }
+
+// runTokenSecretDerivationLabel domain-separates a run-token secret DERIVED
+// from the identity secret (RM-212) from every other use of that secret -- in
+// particular from a pseudonym (internal/identity) and from a run token itself
+// (runTokenLabel above). PUBLIC by design, for the same reason runTokenLabel
+// is: it is the domain-separation label mixed into the MAC, not a secret, and
+// publishing it changes nothing.
+const runTokenSecretDerivationLabel = "innsegl/run-token-secret/v1" //nolint:gosec // G101: a label, not a secret
+
+// DeriveRunTokenSecret derives the run-token secret from the identity secret
+// this process already loads, for a deployment that sets no
+// -run-token-secret (or $INNSEGL_RUN_TOKEN_SECRET) of its own (RM-212, cmd/innsegl).
+//
+// # Why derive rather than require a second secret
+//
+// -identity-secret is the one deployment-wide secret this process already
+// loads (RM-079, #116). Requiring an operator to provision, mount and rotate a
+// SECOND one before get_credential and sign_commit enforce a run's own token
+// is exactly the friction that shipped every deployment with no
+// -run-token-secret set at all, and so unauthenticated by default. Domain
+// separation is what makes reusing the identity secret safe here: this
+// derivation cannot be run backwards into the identity secret, and it can
+// never be mistaken for a run token computed over that same secret, so the
+// result is not "the identity secret with a second purpose" -- it is its own
+// key.
+//
+// # Why an empty identity secret derives nothing
+//
+// There is nothing to derive FROM. cmd/innsegl reads an empty return as "keep
+// the loud warning": a deployment with neither an explicit run-token secret
+// nor an identity secret to derive one from is unauthenticated, and that has
+// to stay visible rather than being papered over by a derived empty string
+// that would validate nothing anyway.
+func DeriveRunTokenSecret(identitySecret string) string {
+	if identitySecret == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(identitySecret))
+	mac.Write([]byte(runTokenSecretDerivationLabel))
+	return hex.EncodeToString(mac.Sum(nil))
+}
