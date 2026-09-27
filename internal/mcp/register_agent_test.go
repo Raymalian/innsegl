@@ -194,6 +194,7 @@ type raRuns struct {
 	retired map[string]time.Time
 	expired map[string]time.Time
 	known   map[string]bool
+	spiffe  map[string]string
 	err     error
 }
 
@@ -202,7 +203,17 @@ func newRARuns() *raRuns {
 		retired: map[string]time.Time{},
 		expired: map[string]time.Time{},
 		known:   map[string]bool{},
+		spiffe:  map[string]string{},
 	}
+}
+
+// rememberAs records a live run under the SPIFFE ID it was registered with,
+// which is what the ledger-backed directory answers from.
+func (r *raRuns) rememberAs(runID, spiffeID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.known[runID] = true
+	r.spiffe[runID] = spiffeID
 }
 
 func (r *raRuns) remember(runID string) {
@@ -234,7 +245,7 @@ func (r *raRuns) CredentialRun(_ context.Context, runID string) (CredentialRun, 
 	if !r.known[runID] {
 		return CredentialRun{}, false, nil
 	}
-	out := CredentialRun{RunID: runID}
+	out := CredentialRun{RunID: runID, SPIFFEID: r.spiffe[runID]}
 	if at, ok := r.retired[runID]; ok {
 		out.RetiredAt = at
 	}
@@ -1406,5 +1417,49 @@ func TestRegisterAgentReplayWithoutADirectoryHealsNothing(t *testing.T) {
 
 	if got := env.identities.entryCount(); got != 0 {
 		t.Fatalf("SPIRE holds %d entries with no run directory wired, want 0", got)
+	}
+}
+
+// RM-208 (#335). A heal re-creates the identity the run was REGISTERED with.
+//
+// The SPIFFE ID's {agent_type} and {task_id} are pseudonyms of a deployment
+// secret. Heal used to rebuild them from the replayed request, so once the
+// secret changed, the entry it created named an identity the run never had.
+// Measured live: a run registered as agent/3cc2c647/6ddc6071/<run> held an
+// entry for agent/3ee40754/4a3f6604/<run> from 2026-09-19, and four
+// run_expired records name that second identity.
+func TestRM208AHealRecreatesTheRecordedIdentity(t *testing.T) {
+	env := raSetup(t, DefaultIdempotencyLease, nil)
+	session := raServe(t)
+	const key = "reg-heal-after-secret-change"
+
+	first := raCallOK(t, session, raArgs(key))
+	env.runs.rememberAs(first.RunID, first.SPIFFEID)
+
+	// The deployment's pseudonym secret changes, as it did when the identity
+	// secret was regenerated.
+	rotated, err := identity.New(identity.ModePseudonymous, "a-secret-the-run-was-not-registered-under")
+	if err != nil {
+		t.Fatalf("identity.New: %v", err)
+	}
+	restore, err := ConfigureRegisterAgent(RegisterAgentConfig{
+		Identities: env.identities, Runs: env.runs, Ledger: env.ledger, Idempotency: env.idem,
+		ParentID: raParentID, TTL: env.ttl, Now: env.clock.Now, Pseudonyms: rotated,
+	})
+	if err != nil {
+		t.Fatalf("ConfigureRegisterAgent: %v", err)
+	}
+	t.Cleanup(restore)
+
+	env.identities.reapAll()
+	second := raCallOK(t, session, raArgs(key))
+	if second.SPIFFEID != first.SPIFFEID {
+		t.Fatalf("the replay answered %q, want the recorded %q", second.SPIFFEID, first.SPIFFEID)
+	}
+	if !env.identities.holds(first.SPIFFEID) {
+		t.Errorf("the heal did not re-create the recorded identity %s", first.SPIFFEID)
+	}
+	if got := env.identities.entryCount(); got != 1 {
+		t.Errorf("SPIRE holds %d entries after the heal, want exactly the recorded one", got)
 	}
 }
