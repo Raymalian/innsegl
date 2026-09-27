@@ -38,25 +38,23 @@ binds localhost by design, so no sibling container can reach it either. Probing
 over HTTP from outside is how Fulcio will probe it, which makes it the only
 probe whose answer means anything.
 
-## Prove it issues an SVID
+## Prove a run's identity is not issued to a workload
 
 ```sh
 make spire-verify      # or: deploy/compose/spire/verify.sh
 ```
 
-Registers a run, starts a workload carrying that run's selectors, fetches the
-SVID, asserts the SPIFFE ID is
-`spiffe://innsegl.dev/agent/{agent-type}/{task-id}/{run-id}`, then deletes the
-entry and waits for the agent to converge on refusing it. Exit status is the
-verdict.
+Registers a run the way `register_agent` does, with one selector,
+`innsegl:run:<run_id>`, of a type no workload attestor emits (ADR-0053). Then
+starts a workload carrying that run's three `dev.innsegl.*` labels and the
+Workload API socket, and asserts it is NOT issued
+`spiffe://innsegl.dev/agent/{agent-type}/{task-id}/{run-id}`. A control
+identity on the same workload's labels, outside the agent subtree, must be
+issued first, so the refusal cannot pass because the stack issues nothing.
+Exit status is the verdict.
 
-Note what that last step measures: SPIRE's refusal after `entry delete` is
-*eventual* — the deleted entry has to fall out of the server's cache and then
-the agent's, and for a few seconds the agent still serves the SVID it already
-minted. IP §6.2's "retirement is effective immediately" is therefore an
-obligation on the MCP ("no cached-credential grace path *through the MCP*"),
-not something SPIRE provides. RM-015 (#23) owns it; this script measures the
-floor it has to sit on.
+A run's credential has one path: the MCP's `get_credential`, which mints
+through the admin API and writes a ledger event.
 
 ## Tear it down
 

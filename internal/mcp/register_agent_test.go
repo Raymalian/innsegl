@@ -1102,24 +1102,34 @@ func TestRegisterAgentTakesItsSelectorsAndClockFromTheConfiguration(t *testing.T
 	}
 }
 
-// TestDefaultRegisterAgentSelectorsBindTheEntryToTheRun. I1: an entry a
-// workload can match on the run id alone would be an identity any container
-// carrying that label could pick up.
-func TestDefaultRegisterAgentSelectorsBindTheEntryToTheRun(t *testing.T) {
+// TestDefaultRegisterAgentSelectorsAreOnlyTheUnmatchableRunSelector.
+// ADR-0053: a run's entry carries one selector, of a type no workload attestor
+// emits, so no workload is ever issued a run's identity by attestation. A
+// docker label here would put back the path the ADR closes: a label is chosen
+// by whoever starts the container, and the run id is public.
+func TestDefaultRegisterAgentSelectorsAreOnlyTheUnmatchableRunSelector(t *testing.T) {
 	run := spire.RunRef{AgentType: "fix-ci", TaskID: "jira-118", RunID: "run-42"}
 	got := DefaultRegisterAgentSelectors(run)
-	want := []string{
-		"docker:label:dev.innsegl.run-id:run-42",
-		"docker:label:dev.innsegl.agent-type:fix-ci",
-		"docker:label:dev.innsegl.task-id:jira-118",
+	if len(got) != 1 || got[0].String() != "innsegl:run:run-42" {
+		t.Fatalf("selectors = %v, want exactly [innsegl:run:run-42]", got)
 	}
-	if len(got) != len(want) {
-		t.Fatalf("selectors = %v, want %d of them", got, len(want))
-	}
-	for i := range want {
-		if got[i].String() != want[i] {
-			t.Errorf("selector %d = %q, want %q", i, got[i], want[i])
-		}
+}
+
+// TestRegisterAgentCreatesTheEntryWithOnlyTheRunSelector: the tool, with no
+// selector function configured, asks SPIRE for exactly that one selector.
+func TestRegisterAgentCreatesTheEntryWithOnlyTheRunSelector(t *testing.T) {
+	env := raSetup(t, DefaultIdempotencyLease, func(cfg *RegisterAgentConfig) {
+		cfg.Selectors = nil
+	})
+	session := raServe(t)
+	out := raCallOK(t, session, raArgs("reg-adr-0053"))
+
+	env.identities.mu.Lock()
+	entry := env.identities.entries[out.SPIFFEID]
+	env.identities.mu.Unlock()
+	want := spire.RunSelector(out.RunID)
+	if len(entry.Selectors) != 1 || entry.Selectors[0] != want {
+		t.Errorf("entry selectors = %v, want exactly [%s]", entry.Selectors, want)
 	}
 }
 

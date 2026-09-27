@@ -1,6 +1,6 @@
 # ADR-0053: Issue a run's identity only through the attested MCP, never to a workload that declares a label
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-26
 - Deciders: the operator
 

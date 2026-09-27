@@ -496,6 +496,16 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 	}
 	closers = append(closers, restoreRegister)
 
+	// ADR-0053: move every live run entry still on the docker label selectors
+	// to the selectors register_agent registers with now. Before serving, so a
+	// run registered from here on and a run registered last week carry the
+	// same shape. See migrateRunSelectors for why a failure does not stop us.
+	runSelectors := registerCfg.Selectors
+	if runSelectors == nil {
+		runSelectors = mcp.DefaultRegisterAgentSelectors
+	}
+	migrateRunSelectors(boot, admin, runSelectors, log)
+
 	if _, cerr := tools.install(mcp.ToolGetCredential)(noRestore(mcp.ConfigureGetCredential(mcp.CredentialConfig{
 		Runs:    runs,
 		Entries: admin,
@@ -1132,6 +1142,37 @@ func dialSVIDAPI(o serveOptions, source spire.Source) (*grpc.ClientConn, error) 
 		return nil, fmt.Errorf("dial %s for MintJWTSVID: %w", o.spireAddress, err)
 	}
 	return conn, nil
+}
+
+// runSelectorMigrator is the one SPIRE call the start-up rewrite makes.
+// *spire.Client satisfies it.
+type runSelectorMigrator interface {
+	MigrateRunSelectors(ctx context.Context, want func(spire.RunRef) []spire.Selector) (spire.RunSelectorMigration, error)
+}
+
+// migrateRunSelectors runs ADR-0053's start-up rewrite and logs the outcome.
+//
+// A failure is logged at ERROR and does NOT stop the server. Doc 01 §6 allows
+// degraded operation only where it cannot weaken I1–I6, and this one cannot:
+// a failed rewrite leaves the entries exactly as they were before ADR-0053,
+// with the label path open for them — the state every deployment was already
+// in. Refusing to start would take register_agent, get_credential and
+// sign_commit down too, and gain nothing. The next start tries again; the
+// rewrite is idempotent.
+func migrateRunSelectors(ctx context.Context, m runSelectorMigrator,
+	want func(spire.RunRef) []spire.Selector, log *serveLog) {
+	moved, err := m.MigrateRunSelectors(ctx, want)
+	if err != nil {
+		log.error("RUN ENTRIES STILL ON DOCKER LABELS: the ADR-0053 rewrite did not finish, so "+
+			"a container carrying a live run's labels and the Workload API socket may still "+
+			"be issued that run's identity without the MCP and without a record (I3). It is "+
+			"retried at the next start",
+			"err", err, "rewritten", len(moved.Rewritten), "runs", strings.Join(moved.Rewritten, ","))
+		return
+	}
+	log.info("run entries are on the run selector (ADR-0053)",
+		"rewritten", len(moved.Rewritten), "unchanged", moved.Unchanged,
+		"runs", strings.Join(moved.Rewritten, ","))
 }
 
 // runRestorer re-creates the SPIRE entry of a live, unretired run.

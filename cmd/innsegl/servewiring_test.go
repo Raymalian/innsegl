@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/mcp"
+	"innsegl.dev/innsegl/internal/spire"
 )
 
 // The parts of the wiring that can be decided without a Postgres and a SPIRE:
@@ -452,4 +454,65 @@ func TestNoRestoreAdaptsAConfigureCallThatReturnsOnlyAnError(t *testing.T) {
 	if _, err := noRestore(boom); !errors.Is(err, boom) {
 		t.Errorf("noRestore(err) = %v, want the error it was given", err)
 	}
+}
+
+// fakeRunSelectorMigrator answers MigrateRunSelectors from what the case set.
+type fakeRunSelectorMigrator struct {
+	migration spire.RunSelectorMigration
+	err       error
+	calls     int
+	asked     []spire.Selector
+}
+
+func (f *fakeRunSelectorMigrator) MigrateRunSelectors(
+	_ context.Context, want func(spire.RunRef) []spire.Selector,
+) (spire.RunSelectorMigration, error) {
+	f.calls++
+	f.asked = want(spire.RunRef{AgentType: "a", TaskID: "t", RunID: "run-1"})
+	return f.migration, f.err
+}
+
+// TestStartupRewritesLegacyRunSelectors — ADR-0053's migration step, as the
+// server runs it: once, with the selector function register_agent registers
+// with, logged either way, and never a reason to stop serving. A failed
+// rewrite leaves the entries as they were before this change, which is no
+// weaker than not running it; refusing to start would take signing down with
+// it. So it is loud, and it does not stop the server.
+func TestStartupRewritesLegacyRunSelectors(t *testing.T) {
+	t.Run("a rewrite is logged with the runs it moved", func(t *testing.T) {
+		var log bytes.Buffer
+		f := &fakeRunSelectorMigrator{migration: spire.RunSelectorMigration{
+			Rewritten: []string{"run-a", "run-b"}, Unchanged: 3,
+		}}
+		migrateRunSelectors(context.Background(), f, mcp.DefaultRegisterAgentSelectors, newServeLog(&log))
+
+		if f.calls != 1 {
+			t.Fatalf("MigrateRunSelectors called %d times, want 1", f.calls)
+		}
+		if len(f.asked) != 1 || f.asked[0] != spire.RunSelector("run-1") {
+			t.Errorf("the rewrite targeted %v, not register_agent's own selectors", f.asked)
+		}
+		out := log.String()
+		for _, want := range []string{"run-a", "run-b", "rewritten=2", "ADR-0053"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log does not carry %q:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("a failure is loud and does not stop the server", func(t *testing.T) {
+		var log bytes.Buffer
+		f := &fakeRunSelectorMigrator{
+			migration: spire.RunSelectorMigration{Rewritten: []string{"run-a"}},
+			err:       errors.New("SPIRE unreachable"),
+		}
+		migrateRunSelectors(context.Background(), f, mcp.DefaultRegisterAgentSelectors, newServeLog(&log))
+
+		out := log.String()
+		for _, want := range []string{"level=ERROR", "SPIRE unreachable", "label", "run-a"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("failure log does not carry %q:\n%s", want, out)
+			}
+		}
+	})
 }

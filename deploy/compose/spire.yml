@@ -351,11 +351,11 @@ services:
   # A workload that fetches an SVID, under the `verify` profile so it never
   # runs as part of the stack proper.
   #
-  # It exists to make requirement 6 of RM-014 checkable rather than asserted:
-  # boot the stack, register a run, and see a real SVID come back bearing
-  # spiffe://innsegl.dev/agent/{agent-type}/{task-id}/{run-id}. Its labels and
-  # its non-root uid are exactly the selector set an agent run is registered
-  # with, so it also demonstrates the selectors rather than describing them.
+  # It exists to make ADR-0053 checkable rather than asserted: it carries a
+  # run's three labels and mounts the Workload API socket, which until ADR-0053
+  # was enough to be issued that run's SVID. verify.sh registers a run the way
+  # register_agent does and shows this workload is NOT issued the run's
+  # identity, while a control identity on the same labels is.
   #
   # This is NOT doc 05 §1's `demo-agent`. That one is built, scripted, and
   # RM-054's; this one only proves the identity path.
