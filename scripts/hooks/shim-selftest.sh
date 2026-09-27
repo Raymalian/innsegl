@@ -2093,7 +2093,7 @@ fi
 MAIN_KEY="$(cd "$KREPO" && "$ROOT/scripts/innsegl-commit.sh" --print-tree-key 2>/dev/null)"
 WT_KEY="$(cd "$KWT" && "$ROOT/scripts/innsegl-commit.sh" --print-tree-key 2>/dev/null)"
 rm -f "$RUNS/by-tree/$MAIN_KEY" "$RUNS/by-tree/$WT_KEY"
-script_tool observe_session ok '{"session_id":"agent-rm199","phase":"start","known":true,"registered":true,"run_id":"run-rm199","task":"rm199","worktree":"","repo":"example.test/Org/Name","branch":"main","agent_type":"prober"}'
+script_tool observe_session ok '{"session_id":"agent-rm199","phase":"start","known":true,"registered":true,"run_id":"run-rm199","task":"rm199","worktree":".worktrees/the-start-tree","repo":"example.test/Org/Name","branch":"main","agent_type":"prober"}'
 script_tool observe_tool_call ok '{}'
 SIGNER="$ROOT/scripts/innsegl-commit.sh" drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-rm199\",\"agent_id\":\"agent-rm199\",\"agent_type\":\"prober\",\"cwd\":\"$KREPO\"}"
 SIGNER="$ROOT/scripts/innsegl-commit.sh" drive "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"sess-rm199\",\"agent_id\":\"agent-rm199\",\"cwd\":\"$KWT\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"x\"}}"
@@ -2101,6 +2101,14 @@ if [ -n "$WT_KEY" ] && [ "$(sed -n 1p "$RUNS/by-tree/$WT_KEY" 2>/dev/null)" = "r
   ok "RM-199 the first tool call in the worktree files the subagent's pointer there"
 else
   bad "RM-199 no pointer for the worktree: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
+fi
+# Line 3 names the tree to commit from. The start tree's answer is wrong here,
+# and the signer derives the right one from where it stands when it is empty.
+# Measured live: a copied line 3 staged the commit in the START tree.
+if [ -n "$WT_KEY" ] && [ -z "$(sed -n 3p "$RUNS/by-tree/$WT_KEY" 2>/dev/null)" ]; then
+  ok "RM-199 the moved pointer leaves the worktree to the signer, not the start tree's"
+else
+  bad "RM-199 the moved pointer names worktree '$(sed -n 3p "$RUNS/by-tree/$WT_KEY" 2>/dev/null)'"
 fi
 if [ "$(sed -n 1p "$RUNS/by-tree/$MAIN_KEY" 2>/dev/null)" != "run-rm199" ]; then
   ok "RM-199 and the main checkout's pointer no longer names the subagent"

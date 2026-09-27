@@ -672,7 +672,9 @@ follow_tree() {
   if [ "$_fnew" != "$_fold" ] && mkdir -p "$RUNS_DIR/by-tree" 2>/dev/null; then
     _fhold="$(sed -n 1p "$RUNS_DIR/by-tree/$_fnew" 2>/dev/null)"
     if [ -z "$_fhold" ] || [ "$_fhold" = "$_frun" ]; then
-      printf '%s\n%s\n%s\n' "$_frun" "$(reply_field "$_fm" task)" "$(reply_field "$_fm" worktree)" \
+      # Line 3 EMPTY: the start tree's worktree is not this one, and the
+      # signer derives the tree from where it stands when nothing is named.
+      printf '%s\n%s\n\n' "$_frun" "$(reply_field "$_fm" task)" \
         > "$RUNS_DIR/by-tree/$_fnew" 2>/dev/null
     fi
     drop_pointer "$_fold" "$_frun"
