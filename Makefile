@@ -885,7 +885,7 @@ innsegl-backup:
 # 3000 broke `innsegl-up-here` exactly that way. The MCP moved off 8080 for the
 # same reason and landed on 280xx; this is the same move. The port INSIDE the
 # container is still 3000 -- only the host binding moved.
-INNSEGL_REKOR_PORT ?= 23000
+INNSEGL_REKOR_PORT ?= $(shell scripts/rekor-port.sh)
 
 ## verify-branch: verify every agent-signed commit on this branch before merging
 verify-branch:
