@@ -50,6 +50,14 @@ repo_of() {
 
 pin_path() { printf '%s/%s' "$(repo_of "${1:-.}")" "${REL}"; }
 
+# db_image prints the log database's pinned image, read from THIS script's
+# own sigstore.yml: the pin is the script's repository's, whichever checkout
+# the guard is asked about.
+db_image() {
+  sed -n '/^x-trillian-db-image:/{n;s/^[[:space:]]*//;p;q;}' \
+    "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)/deploy/compose/sigstore.yml"
+}
+
 case "${1:-}" in
   path) pin_path "${2:-.}" ;;
 
@@ -94,6 +102,10 @@ case "${1:-}" in
     fi
     ;;
 
+  db-image)
+    db_image "${2:-.}"
+    ;;
+
   guard)
     _repo="$(repo_of "${2:-.}")"
     _p="$(pin_path "${2:-.}")"
@@ -108,6 +120,18 @@ case "${1:-}" in
     fi
     if ! docker volume inspect "${_vol}" >/dev/null 2>&1; then
       exit 0                            # no log yet: minting is right
+    fi
+
+    # AN EMPTY VOLUME IS NO LOG (#343). `make start` creates the trust volumes
+    # EMPTY before this runs (trust-volumes.sh ensure), so on a fresh machine
+    # the volume exists and holds nothing, and refusing there stopped every
+    # first install. It is looked into with the log database's own image,
+    # which bring-up pulls next anyway. If the look cannot be taken, the
+    # answer stays "refuse": a guard that cannot tell does not wave through.
+    _img="$(db_image "${2:-.}")"
+    if [ -n "${_img}" ] && _held="$(docker run --rm --entrypoint sh -v "${_vol}:/v" "${_img}" \
+         -c 'ls -A /v | head -n 1' 2>/dev/null)" && [ -z "${_held}" ]; then
+      exit 0                            # created, never written: first boot
     fi
 
     cat >&2 <<MSG

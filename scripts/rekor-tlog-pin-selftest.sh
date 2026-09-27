@@ -29,6 +29,9 @@ trap 'git -C "${TMP}/repo" worktree remove --force "${TMP}/wt" >/dev/null 2>&1; 
 REPO="${TMP}/repo"
 mkdir -p "${REPO}/deploy/compose" "${REPO}/scripts"
 cp "${PIN}" "${ROOT}/scripts/repo-main-worktree.sh" "${REPO}/scripts/"
+# The guard reads the log database's pinned image from its own repository's
+# sigstore.yml (#343), so the staged copy carries it.
+mkdir -p "${REPO}/deploy/compose" && cp "${ROOT}/deploy/compose/sigstore.yml" "${REPO}/deploy/compose/"
 git -C "${REPO}" init -q
 git -C "${REPO}" config user.email "selftest@example.invalid"
 git -C "${REPO}" config user.name "selftest"
@@ -99,9 +102,25 @@ if command -v docker >/dev/null 2>&1; then
   [ "${rc}" -eq 0 ] && ok "a machine with no log may still mint (first boot)" \
     || bad "a machine with no log may still mint (first boot)" "exit ${rc}: ${out}"
 
-  # And the dangerous case: no pin, but a log already exists.
+  # A FRESH MACHINE: `make start` creates the trust volumes EMPTY before
+  # sigstore-up runs (trust-volumes.sh ensure), so on first boot the log's
+  # volume exists and holds nothing. Measured on a new VM on 2026-09-27: the
+  # guard read the empty volume as an existing log and refused, so a fresh
+  # install could not start (#343). An empty volume is no log.
+  empty="innsegl-selftest-empty-log-$$"
+  docker volume create "${empty}" >/dev/null 2>&1
+  out="$(INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${empty}" \
+    "${REPO}/scripts/rekor-tlog-pin.sh" guard "${WT}" 2>&1)"; rc=$?
+  docker volume rm "${empty}" >/dev/null 2>&1
+  [ "${rc}" -eq 0 ] && ok "RM-213 an empty log volume (first boot) may still mint" \
+    || bad "RM-213 an empty log volume (first boot) may still mint" "exit ${rc}: $(printf '%s' "${out}" | head -2)"
+
+  # And the dangerous case: no pin, but a log already exists -- a volume
+  # holding a database, which is what a log that has ever run leaves.
   vol="innsegl-selftest-log-$$"
   docker volume create "${vol}" >/dev/null 2>&1
+  docker run --rm --entrypoint sh -v "${vol}:/v" "$("${REPO}/scripts/rekor-tlog-pin.sh" db-image "${WT}")" \
+    -c 'mkdir -p /v/trillian && echo x > /v/trillian/db.opt' >/dev/null 2>&1
   out="$(INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${vol}" \
     "${REPO}/scripts/rekor-tlog-pin.sh" guard "${WT}" 2>&1)"; rc=$?
   docker volume rm "${vol}" >/dev/null 2>&1
