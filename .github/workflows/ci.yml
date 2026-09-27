@@ -364,6 +364,21 @@ jobs:
       - name: The readiness report asks after every service the compose files declare
         run: ./scripts/innsegl-start-selftest.sh
 
+  update-command:
+    name: update command
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # RM-217. The operator's one update command: fetch, refuse anything that
+      # is not a fast-forward of merge commits with verified children, or
+      # fast-forward and redeploy. Hermetic: a throwaway "remote" and "clone"
+      # built inside a temp directory, with the verifier and the deploy
+      # command both faked. No Docker, no go, no network, and nothing here
+      # ever touches ~/.innsegl-update or a real checkout.
+      - name: innsegl-update fetches, gates and redeploys, or refuses with no change
+        run: ./scripts/innsegl-update-selftest.sh
+
   backup-gate:
     name: backup gate
     runs-on: ubuntu-latest
