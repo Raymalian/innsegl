@@ -280,6 +280,17 @@ tree_key_path() {
   printf '%s' "$_t" | shasum -a 256 2>/dev/null | cut -c1-32
 }
 
+# drop_pointer removes a by-tree pointer only when it names this run. A tree's
+# pointer can belong to another run by the time this one stops -- the operator's
+# own, or a sibling's -- and removing it would send that run's next commit to a
+# throwaway identity (#320).
+drop_pointer() {
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+  [ "$(sed -n 1p "$RUNS_DIR/by-tree/$1" 2>/dev/null)" = "$2" ] || return 0
+  rm -f "$RUNS_DIR/by-tree/$1" 2>/dev/null
+  return 0
+}
+
 warn() { echo "innsegl: $*" >&2; }
 
 # say_detail passes on a reply's `detail`, which is how observe_session reports
@@ -625,6 +636,49 @@ print(json.dumps(body))
 }
 
 recall() { cat "$MARKER" 2>/dev/null; }
+
+# remember_follow records the tree a subagent moved into, and its key, in the
+# marker, so the stop removes that pointer too and captures from that tree.
+remember_follow() {
+  ( umask 077; recall | python3 -c '
+import json, sys
+body = json.load(sys.stdin)
+body["followed_dir"] = sys.argv[1]
+body["followed_key"] = sys.argv[2]
+print(json.dumps(body))
+' "$1" "$2" > "$MARKER.new" && mv -f "$MARKER.new" "$MARKER" ) 2>/dev/null
+  return 0
+}
+
+# follow_tree -- RM-199 (#320). A SUBAGENT'S POINTER FOLLOWS IT INTO ITS TREE.
+#
+# Under worktree isolation SubagentStart fires in the PARENT's tree, before the
+# worktree exists, so the pointer was filed there: it named the subagent as the
+# author of anything committed in the main checkout, and the worktree the
+# subagent really signed in had none, so the signer minted a throwaway run.
+# Measured live on 2026-09-26. The first tool call from another tree files the
+# pointer there, takes the start tree's pointer back if it still names this
+# run, and never takes over a pointer another run holds. A tool call in a tree
+# already known costs two string comparisons and nothing else.
+follow_tree() {
+  [ -n "${AGENT_ID:-}" ] && [ -n "${CWD:-}" ] || return 0
+  _fm="$(recall)"; [ -n "$_fm" ] || return 0
+  _frun="$(reply_field "$_fm" run_id)"; [ -n "$_frun" ] || return 0
+  _fdir="$(reply_field "$_fm" dir)"
+  [ "$CWD" = "$_fdir" ] && return 0
+  [ "$CWD" = "$(reply_field "$_fm" followed_dir)" ] && return 0
+  _fnew="$(tree_key "$CWD" || true)"; [ -n "$_fnew" ] || return 0
+  _fold="$(tree_key "$_fdir" || true)"
+  if [ "$_fnew" != "$_fold" ] && mkdir -p "$RUNS_DIR/by-tree" 2>/dev/null; then
+    _fhold="$(sed -n 1p "$RUNS_DIR/by-tree/$_fnew" 2>/dev/null)"
+    if [ -z "$_fhold" ] || [ "$_fhold" = "$_frun" ]; then
+      printf '%s\n%s\n%s\n' "$_frun" "$(reply_field "$_fm" task)" "$(reply_field "$_fm" worktree)" \
+        > "$RUNS_DIR/by-tree/$_fnew" 2>/dev/null
+    fi
+    drop_pointer "$_fold" "$_frun"
+  fi
+  remember_follow "$CWD" "$_fnew"
+}
 
 # THE PARENT LOOKUP THAT USED TO BE HERE IS GONE — RM-156 (#259).
 #
@@ -1222,9 +1276,10 @@ retire_killed_task() {
   rm -f "$RUNS_DIR/$TASK_ID" 2>/dev/null || :
   if [ -n "$DIR" ]; then
     for _kkey in "$(tree_key "$DIR" || true)" "$(tree_key_path "$DIR" || true)"; do
-      [ -n "$_kkey" ] && rm -f "$RUNS_DIR/by-tree/$_kkey" 2>/dev/null
+      drop_pointer "$_kkey" "$RUN_ID"
     done
   fi
+  drop_pointer "$(reply_field "$_kmark" followed_key)" "$RUN_ID"
 
   # WHAT IT LEFT IN THE TREE, written where it outlives this process — #277.
   # One reason, `run_killed`, so a reader finds the record by the thing that
@@ -1327,10 +1382,19 @@ case "$EVENT" in
     REPLY="$(mcp_call observe_session \
       session_id "$SESSION_ID" phase start cwd "$CWD" \
       agent_type "${INNSEGL_SESSION_AGENT_TYPE:-session}")" || {
-      warn "no identity for this session — the deployment at $ADMIN_URL is not answering."
-      warn "  Work is not blocked, but nothing you do here is in the ledger"
-      warn "  until it is. Bring it up with: make innsegl-up-here"
-      [ -n "${REPLY:-}" ] && warn "  $(reply_field "$REPLY" message | cut -c1-200)"
+      # A REFUSAL IS NOT SILENCE (#321). A reply carrying an error class came
+      # from a deployment that is up and said no; telling the operator to bring
+      # it up sends them after the wrong problem.
+      _sclass="$(reply_field "${REPLY:-}" error_class)"
+      if [ -n "$_sclass" ]; then
+        warn "no identity for this session — the deployment at $ADMIN_URL refused ($_sclass):"
+        warn "  $(reply_field "$REPLY" message | cut -c1-200)"
+        warn "  Work is not blocked, but nothing you do here is in the ledger."
+      else
+        warn "no identity for this session — the deployment at $ADMIN_URL is not answering."
+        warn "  Work is not blocked, but nothing you do here is in the ledger"
+        warn "  until it is. Bring it up with: make innsegl-up-here"
+      fi
       exit 0
     }
 
@@ -1558,7 +1622,11 @@ case "$EVENT" in
     #
     # This did not move into the MCP and should: it is git plumbing every shim
     # would otherwise copy. #208's closing comment hands it on.
-    DIR="$(reply_field "$MARK" dir)"
+    # The tree the run worked in: the one it moved into, when it moved (#320),
+    # else the one it started in. The start tree is kept for its pointer.
+    START_DIR="$(reply_field "$MARK" dir)"
+    DIR="$(reply_field "$MARK" followed_dir)"
+    [ -n "$DIR" ] || DIR="$START_DIR"
     # READ BEFORE ANY BRANCH DECIDES ANYTHING — #284. These three used to be
     # read inside the capture branch, which is the one branch that is not taken
     # when the tree cannot be read; the record written on the new paths would
@@ -1744,10 +1812,11 @@ gate is what decides whether it may merge."
       # 32 hex characters of the tree key; the session pointer SessionStart
       # writes carries a `.session` suffix and outlives every subagent that
       # worked in the same tree (RM-156, #259).
-      for _key in "$(tree_key "$DIR" || true)" "$(tree_key_path "$DIR" || true)"; do
-        [ -n "$_key" ] && rm -f "$RUNS_DIR/by-tree/$_key" 2>/dev/null
+      for _key in "$(tree_key "$START_DIR" || true)" "$(tree_key_path "$START_DIR" || true)"; do
+        drop_pointer "$_key" "$RUN_ID"
       done
     fi
+    drop_pointer "$(reply_field "$MARK" followed_key)" "$RUN_ID"
     exit 0
     ;;
 
@@ -1789,6 +1858,7 @@ gate is what decides whether it may merge."
     # edge instead. It costs one more argument, and the MCP ignores it for a
     # session it already holds.
     [ -n "$TOOL" ] && [ -n "$IDENT" ] || exit 0
+    follow_tree
     MARK="$(recall)"
     # THE REPLY IS KEPT, AND A REFUSAL IS SAID ONCE — RM-192 (#312). The exit
     # status is still ignored: nothing here may block.
@@ -1809,6 +1879,9 @@ gate is what decides whether it may merge."
     ;;
 
   PreToolUse)
+    # Before the gate, so the pointer is in the subagent's own tree by the time
+    # a commit it is about to run looks for one (#320). Never blocks.
+    follow_tree
     # A DESTRUCTIVE git IS REFUSED WHILE AN AGENT RUN HOLDS UNCOMMITTED WORK IN
     # THIS TREE — #278 (RM-173).
     #

@@ -358,8 +358,11 @@ if [ "$(sed -n 1p "$RUNS/by-tree/$TREE_HASH.session" 2>/dev/null)" = "run-aaaa11
 else
   bad "session pointer line 1 = $(sed -n 1p "$RUNS/by-tree/$TREE_HASH.session" 2>/dev/null), want run-aaaa1111"
 fi
-if [ ! -f "$RUNS/by-tree/$TREE_HASH" ]; then
-  ok "SubagentStop removed the subagent's pointer and left the session's"
+# The stop takes only a pointer naming ITS run (#320). The one left in this
+# tree by now names the "same-id" subagent above, which never stopped, and a
+# stop that removed it would send that run's next commit to a throwaway run.
+if [ "$(sed -n 1p "$RUNS/by-tree/$TREE_HASH" 2>/dev/null)" != "run-bbbb2222" ]; then
+  ok "SubagentStop left no pointer naming its run, and left the session's"
 else
   bad "the subagent's tree pointer survived its stop: $(cat "$RUNS/by-tree/$TREE_HASH")"
 fi
@@ -392,6 +395,20 @@ if [ ! -f "$RUNS/by-tree/$TREE_HASH.session" ]; then
   ok "SessionEnd removes this tree's session pointer with the session"
 else
   bad "the session pointer outlived its session: $(cat "$RUNS/by-tree/$TREE_HASH.session")"
+fi
+
+# RM-200 (#321). A REFUSED START SAYS "REFUSED", NOT "NOT ANSWERING".
+#
+# The deployment answered with a refusal -- measured live: "describe_workspace
+# cannot resolve ... is not a git working tree" -- and the first line still read
+# "the deployment ... is not answering", then told the operator to bring up a
+# stack that was up. A reader acts on the first line.
+script_tool observe_session err '{"error_class":"INVALID_ARGUMENT","message":"describe_workspace cannot resolve /x","retryable":false}'
+drive '{"hook_event_name":"SessionStart","session_id":"sess-rm200","cwd":"/tmp"}'
+if [ "$STATUS" -eq 0 ] && grep -q "refused (INVALID_ARGUMENT)" "$WORK/err" && ! grep -q "not answering" "$WORK/err"; then
+  ok "RM-200 a refused start names the refusal and its class"
+else
+  bad "RM-200 a refused start said: $(tr '\n' ' ' < "$WORK/err" | cut -c1-200)"
 fi
 
 # --- OPS-020: a stop never blocks ---------------------------------------------
@@ -2063,6 +2080,49 @@ if [ -n "$SIGNER_KEY" ] && [ ! -f "$RUNS/by-tree/$SIGNER_KEY" ] && [ ! -f "$RUNS
 else
   bad "RM-193 SubagentStop left: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
 fi
+
+# RM-199 (#320). A WORKTREE SUBAGENT'S POINTER FOLLOWS IT INTO ITS TREE.
+#
+# Under worktree isolation SubagentStart fires in the PARENT's tree: the
+# worktree does not exist yet. So the pointer was filed under the main
+# checkout, where it named the subagent as the author of anything committed
+# there, and the worktree the subagent actually signed in had none -- the
+# signer minted a fresh orchestrator run instead. Measured live: the subagent
+# registered with branch "main", and its commit ran as an orchestrator.
+# The first tool call from another tree moves the pointer there.
+MAIN_KEY="$(cd "$KREPO" && "$ROOT/scripts/innsegl-commit.sh" --print-tree-key 2>/dev/null)"
+WT_KEY="$(cd "$KWT" && "$ROOT/scripts/innsegl-commit.sh" --print-tree-key 2>/dev/null)"
+rm -f "$RUNS/by-tree/$MAIN_KEY" "$RUNS/by-tree/$WT_KEY"
+script_tool observe_session ok '{"session_id":"agent-rm199","phase":"start","known":true,"registered":true,"run_id":"run-rm199","task":"rm199","worktree":"","repo":"example.test/Org/Name","branch":"main","agent_type":"prober"}'
+script_tool observe_tool_call ok '{}'
+SIGNER="$ROOT/scripts/innsegl-commit.sh" drive "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"sess-rm199\",\"agent_id\":\"agent-rm199\",\"agent_type\":\"prober\",\"cwd\":\"$KREPO\"}"
+SIGNER="$ROOT/scripts/innsegl-commit.sh" drive "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"sess-rm199\",\"agent_id\":\"agent-rm199\",\"cwd\":\"$KWT\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"x\"}}"
+if [ -n "$WT_KEY" ] && [ "$(sed -n 1p "$RUNS/by-tree/$WT_KEY" 2>/dev/null)" = "run-rm199" ]; then
+  ok "RM-199 the first tool call in the worktree files the subagent's pointer there"
+else
+  bad "RM-199 no pointer for the worktree: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
+fi
+if [ "$(sed -n 1p "$RUNS/by-tree/$MAIN_KEY" 2>/dev/null)" != "run-rm199" ]; then
+  ok "RM-199 and the main checkout's pointer no longer names the subagent"
+else
+  bad "RM-199 the main checkout still names the subagent as its author"
+fi
+# A pointer another run holds in the tree is not taken over.
+printf 'run-someone-else\n' > "$RUNS/by-tree/$MAIN_KEY"
+SIGNER="$ROOT/scripts/innsegl-commit.sh" drive "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"sess-rm199\",\"agent_id\":\"agent-rm199\",\"cwd\":\"$KREPO\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"x\"}}"
+if [ "$(sed -n 1p "$RUNS/by-tree/$MAIN_KEY" 2>/dev/null)" = "run-someone-else" ]; then
+  ok "RM-199 a tree whose pointer names another run is left to that run"
+else
+  bad "RM-199 the subagent took over another run's pointer"
+fi
+script_tool observe_session ok '{"session_id":"agent-rm199","phase":"stop","known":true,"retired":true,"run_id":"run-rm199","retired_at":"2026-09-27T00:00:00.000Z"}'
+SIGNER="$ROOT/scripts/innsegl-commit.sh" drive '{"hook_event_name":"SubagentStop","session_id":"sess-rm199","agent_id":"agent-rm199","agent_type":"prober"}'
+if [ ! -f "$RUNS/by-tree/$WT_KEY" ] && [ "$(sed -n 1p "$RUNS/by-tree/$MAIN_KEY" 2>/dev/null)" = "run-someone-else" ]; then
+  ok "RM-199 SubagentStop removes the followed pointer and leaves another run's"
+else
+  bad "RM-199 after stop: $(ls "$RUNS/by-tree" 2>&1 | tr '\n' ' ')"
+fi
+rm -f "$RUNS/by-tree/$MAIN_KEY"
 
 echo
 echo "shim-selftest: $pass passed, $fail failed"
