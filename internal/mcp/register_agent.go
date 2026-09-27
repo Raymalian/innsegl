@@ -188,8 +188,8 @@ type RegisterAgentConfig struct {
 	// ParentID is the attested node every run entry hangs off. Required: an
 	// entry with no reachable parent is an entry no workload can ever match.
 	ParentID string
-	// Selectors are what the workload must match for SPIRE to attest it (I1).
-	// Nil means DefaultRegisterAgentSelectors.
+	// Selectors are the run entry's selectors. Nil means
+	// DefaultRegisterAgentSelectors, which no workload can match (ADR-0053).
 	Selectors func(spire.RunRef) []spire.Selector
 	// TTL is the identity lifetime asked for. Zero lets internal/spire apply
 	// its own default; internal/spire refuses anything above spire.MaxRunTTL,
@@ -202,21 +202,26 @@ type RegisterAgentConfig struct {
 	Pseudonyms *identity.Pseudonymiser
 }
 
-// DefaultRegisterAgentSelectors binds a run's entry to the workload carrying
-// that run's labels — the convention RM-015's SPIRE harness attests against
-// and deploy/compose/spire/agent.conf documents.
+// DefaultRegisterAgentSelectors gives a run's entry ONE selector,
+// innsegl:run:<run_id>, of a type no workload attestor emits (ADR-0053).
 //
-// Three selectors and not one: SPIRE requires a workload to match all of them,
-// so a container that carries only the run id but belongs to another task
-// cannot pick up this identity. Selector strength is review surface, not
-// something this package can judge (doc 04) — a deployment with a different
-// attestor supplies its own function.
+// No workload can match it, so SPIRE never issues a run's identity by
+// attestation. The only path to a run's credential is get_credential's
+// MintJWTSVID, which only the attested MCP may call, and which writes a ledger
+// event. The entry still matters: it is the record that the run is live, and
+// get_credential fails closed without it (IP §4).
+//
+// Until ADR-0053 this returned three docker labels. A label is chosen by
+// whoever starts the container, and the run id is public, so any container
+// carrying a live run's labels and the Workload API socket was issued that
+// run's SVIDs without the MCP and without a record (I3). No run ever used that
+// path; it was open all the same. Entries registered before the change are
+// moved at start-up (spire.Client.MigrateRunSelectors).
+//
+// A deployment that does run agents as containers may supply its own function
+// in RegisterAgentConfig.Selectors, and then owns the review of it (doc 04).
 func DefaultRegisterAgentSelectors(run spire.RunRef) []spire.Selector {
-	return []spire.Selector{
-		{Type: "docker", Value: "label:dev.innsegl.run-id:" + run.RunID},
-		{Type: "docker", Value: "label:dev.innsegl.agent-type:" + run.AgentType},
-		{Type: "docker", Value: "label:dev.innsegl.task-id:" + run.TaskID},
-	}
+	return []spire.Selector{spire.RunSelector(run.RunID)}
 }
 
 // registerAgentState holds the installed configuration.

@@ -92,6 +92,22 @@ type Selector struct {
 // String renders the selector the way the SPIRE CLI spells it.
 func (s Selector) String() string { return s.Type + ":" + s.Value }
 
+// RunSelectorType is the selector type a run's entry carries (ADR-0053). No
+// workload attestor emits it: SPIRE stores it, and no workload can ever match
+// it, so no workload is issued a run's identity by attestation. The only path
+// to a run's credential is MintJWTSVID, which only the attested MCP may call.
+// Adding an attestor that emits this type is a reviewed config change, which
+// is the property ADR-0053 chose it for.
+const RunSelectorType = "innsegl"
+
+// runSelectorPrefix precedes the run id in a run selector's value.
+const runSelectorPrefix = "run:"
+
+// RunSelector is the one selector a run's entry carries: innsegl:run:<run_id>.
+func RunSelector(runID string) Selector {
+	return Selector{Type: RunSelectorType, Value: runSelectorPrefix + runID}
+}
+
 // Registration is one run's entry, as asked for.
 type Registration struct {
 	// Run is the run being registered.
@@ -339,6 +355,143 @@ func fromWire(e *types.Entry) Entry {
 		Selectors: selectors,
 		TTL:       time.Duration(e.GetX509SvidTtl()) * time.Second,
 	}
+}
+
+// legacyLabelPrefix marks the docker label selectors run entries carried
+// before ADR-0053: dev.innsegl.run-id, dev.innsegl.agent-type and
+// dev.innsegl.task-id. A label is chosen by whoever starts a container, so an
+// entry that still carries one can be matched by any container claiming it.
+const legacyLabelPrefix = "label:dev.innsegl."
+
+// RunSelectorMigration is the outcome of MigrateRunSelectors.
+type RunSelectorMigration struct {
+	// Rewritten names the runs whose entry was moved, by run id.
+	Rewritten []string
+	// Unchanged counts the run entries there was nothing to do for.
+	Unchanged int
+}
+
+// needsRunSelectorMigration reports whether an entry holding `has` is one the
+// start-up rewrite moves to `want`. Two conditions, both required:
+//
+//   - it carries at least one legacy label selector. An entry on selectors an
+//     operator chose for themselves (RegisterAgentConfig.Selectors) is theirs
+//     to review, as doc 04 says, and not this migration's to touch;
+//   - it is not already `want`, compared as a set. SPIRE does not promise to
+//     hand selectors back in the order they were sent, and an entry already
+//     on the target is the idempotent case.
+func needsRunSelectorMigration(has, want []Selector) bool {
+	legacy := false
+	for _, s := range has {
+		if s.Type == "docker" && strings.HasPrefix(s.Value, legacyLabelPrefix) {
+			legacy = true
+			break
+		}
+	}
+	if !legacy {
+		return false
+	}
+	if len(has) != len(want) {
+		return true
+	}
+	for _, w := range want {
+		found := false
+		for _, h := range has {
+			if h == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return true
+		}
+	}
+	return false
+}
+
+// MigrateRunSelectors moves every live run entry still on the legacy label
+// selectors to want(run) — ADR-0053's start-up rewrite.
+//
+// "Live" is SPIRE's own answer: a run entry exists only between registration
+// and retirement (IP §1), so a retired or reaped run has no entry, appears in
+// no listing, and is never recreated here. The rewrite changes selectors ONLY
+// (the input mask says so): the entry id, the SPIFFE ID, the parent and the
+// TTL stay, so no ledger record changes meaning.
+//
+// Each entry is updated on its own. One refused update does not stop the
+// others: every entry left on labels is a path still open, so closing as many
+// as can be closed is the point. The first failure is returned after the
+// pass, with what was rewritten before and after it.
+func (c *Client) MigrateRunSelectors(ctx context.Context, want func(RunRef) []Selector) (RunSelectorMigration, error) {
+	var out RunSelectorMigration
+	entries, err := c.ListAgentEntries(ctx)
+	if err != nil {
+		return out, err
+	}
+	var first error
+	for _, e := range entries {
+		run, rerr := RunRefOf(e.SPIFFEID)
+		if rerr != nil {
+			// In the subtree but not a run: not this migration's shape. The
+			// reconciler reports it (RM-019).
+			out.Unchanged++
+			continue
+		}
+		target := want(run)
+		if !needsRunSelectorMigration(e.Selectors, target) {
+			out.Unchanged++
+			continue
+		}
+		if uerr := c.updateSelectors(ctx, e, run, target); uerr != nil {
+			if first == nil {
+				first = uerr
+			}
+			continue
+		}
+		out.Rewritten = append(out.Rewritten, run.RunID)
+	}
+	return out, first
+}
+
+// updateSelectors replaces one entry's selectors and nothing else.
+//
+// The request names the entry's SPIFFE ID even though the mask leaves it
+// unchanged. deploy/compose/spire/authz-policy.rego scopes BatchUpdateEntry
+// by the SPIFFE ID each entry in the batch names, so an update without one is
+// refused before SPIRE reads it (measured: PermissionDenied).
+func (c *Client) updateSelectors(ctx context.Context, e Entry, run RunRef, sels []Selector) error {
+	if len(sels) == 0 {
+		return newError(ClassInvariantViolation, "migrate_selectors", run.RunID,
+			"no selectors: an entry with no selectors is an identity every workload on the node matches (I1)",
+			false, nil)
+	}
+	target, err := splitID(e.SPIFFEID)
+	if err != nil {
+		return newError(ClassInvariantViolation, "migrate_selectors", run.RunID, err.Error(), false, err)
+	}
+	wire := make([]*types.Selector, 0, len(sels))
+	for _, s := range sels {
+		wire = append(wire, &types.Selector{Type: s.Type, Value: s.Value})
+	}
+
+	rpcCtx, cancel := c.call(ctx)
+	defer cancel()
+	resp, err := c.entries.BatchUpdateEntry(rpcCtx, &entryv1.BatchUpdateEntryRequest{
+		Entries:   []*types.Entry{{Id: e.ID, SpiffeId: target, Selectors: wire}},
+		InputMask: &types.EntryMask{Selectors: true},
+	})
+	if err != nil {
+		return classifyAdmin("migrate_selectors", run.RunID, err)
+	}
+	results := resp.GetResults()
+	if len(results) != 1 {
+		return newError(ClassInvariantViolation, "migrate_selectors", run.RunID,
+			fmt.Sprintf("SPIRE returned %d results for one update", len(results)), false, nil)
+	}
+	if codes.Code(results[0].GetStatus().GetCode()) != codes.OK { //nolint:gosec // a gRPC code from SPIRE's own response
+		return classifyAdmin("migrate_selectors", run.RunID, statusError(results[0].GetStatus()))
+	}
+	return nil
 }
 
 // withRun stamps a run id onto a classified error that was raised before the

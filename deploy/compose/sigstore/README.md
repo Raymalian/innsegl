@@ -111,8 +111,10 @@ Correcting `spire.yml`'s default belongs to RM-014's file, not to this one.
 make sigstore-verify   # or: deploy/compose/sigstore/verify.sh
 ```
 
-Exit status is the verdict. It registers a run in SPIRE with the per-run
-selectors the shipped stack uses, mints a JWT-SVID for audience `sigstore`,
+Exit status is the verdict. It registers a run in SPIRE the way
+`register_agent` does, with the one selector `innsegl:run:<run_id>` that no
+workload can match (ADR-0053), mints a JWT-SVID for audience `sigstore`
+through the server's `MintJWTSVID` the way `get_credential` does,
 exchanges it at Fulcio with a proof of possession, and asserts that the
 certificate's **URI SAN is exactly the run's SPIFFE ID** and that it chains to
 the root Fulcio publishes. That URI SAN is what makes a commit attributable to
