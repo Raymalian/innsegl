@@ -50,8 +50,45 @@ repo_of() {
 
 pin_path() { printf '%s/%s' "$(repo_of "${1:-.}")" "${REL}"; }
 
+# db_image prints the log database's pinned image, read from THIS script's
+# own sigstore.yml: the pin is the script's repository's, whichever checkout
+# the guard is asked about.
+db_image() {
+  sed -n '/^x-trillian-db-image:/{n;s/^[[:space:]]*//;p;q;}' \
+    "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)/deploy/compose/sigstore.yml"
+}
+
 case "${1:-}" in
   path) pin_path "${2:-.}" ;;
+
+  record)
+    # record URL [dir] -- wait for the log at URL to answer, then pin the tree
+    # it serves (#345). Bring-up used to pin once, straight after starting
+    # Rekor, and swallow the failure: on a slow machine Rekor was not up yet
+    # and no pin was ever written, so the next bring-up met the guard below.
+    # Waits INNSEGL_REKOR_PIN_WAIT seconds (default 180); fails loudly and
+    # writes nothing if the log never answers.
+    _url="${2:?record needs the log URL}"
+    _p="$(pin_path "${3:-.}")"
+    _wait="${INNSEGL_REKOR_PIN_WAIT:-180}"
+    _step="${INNSEGL_REKOR_PIN_INTERVAL:-3}"
+    _t=0
+    while :; do
+      _id="$(curl -sS --max-time 5 "${_url%/}/api/v1/log" 2>/dev/null \
+        | sed -n 's/.*"signedTreeHead":"[^ ]* - \([0-9][0-9]*\).*/\1/p')"
+      if [ -n "${_id}" ]; then
+        printf '%s\n' "${_id}" > "${_p}"
+        printf '%s  (pinned in %s)\n' "${_id}" "${_p}"
+        exit 0
+      fi
+      if [ "${_t}" -ge "${_wait}" ]; then
+        printf 'rekor-tlog-pin: the log at %s is not answering after %ss; NO tree was pinned.\n' "${_url}" "${_wait}" >&2
+        printf '  Pin it once it is up:  make rekor-tlog-id\n' >&2
+        exit 1
+      fi
+      sleep "${_step}"; _t=$((_t + (_step > 0 ? _step : 1)))
+    done
+    ;;
 
   read)
     _p="$(pin_path "${2:-.}")"
@@ -63,6 +100,10 @@ case "${1:-}" in
     else
       printf '0\n'
     fi
+    ;;
+
+  db-image)
+    db_image "${2:-.}"
     ;;
 
   guard)
@@ -79,6 +120,18 @@ case "${1:-}" in
     fi
     if ! docker volume inspect "${_vol}" >/dev/null 2>&1; then
       exit 0                            # no log yet: minting is right
+    fi
+
+    # AN EMPTY VOLUME IS NO LOG (#343). `make start` creates the trust volumes
+    # EMPTY before this runs (trust-volumes.sh ensure), so on a fresh machine
+    # the volume exists and holds nothing, and refusing there stopped every
+    # first install. It is looked into with the log database's own image,
+    # which bring-up pulls next anyway. If the look cannot be taken, the
+    # answer stays "refuse": a guard that cannot tell does not wave through.
+    _img="$(db_image "${2:-.}")"
+    if [ -n "${_img}" ] && _held="$(docker run --rm --entrypoint sh -v "${_vol}:/v" "${_img}" \
+         -c 'ls -A /v | head -n 1' 2>/dev/null)" && [ -z "${_held}" ]; then
+      exit 0                            # created, never written: first boot
     fi
 
     cat >&2 <<MSG

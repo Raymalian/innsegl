@@ -325,6 +325,11 @@ jobs:
       # wrong one.
       - name: The log's pin survives a worktree, and an unpinned mint is refused
         run: ./scripts/rekor-tlog-pin-selftest.sh
+      # #347: `make start` publishes Rekor on a random port and every other
+      # tool assumed 23000, so the pin, the reindex and the readiness report
+      # asked the wrong port. One helper answers for all of them.
+      - name: Every tool finds the port Rekor listens on
+        run: ./scripts/rekor-port-selftest.sh
 
   ca-custody:
     name: ca custody

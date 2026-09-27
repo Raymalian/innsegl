@@ -198,7 +198,7 @@ report() {
   # An absent tree is a fault in the readiness report, not a warning beside a
   # green line: nothing signed after it can be anchored where anything else
   # is looking.
-  INNSEGL_REKOR_PORT="${INNSEGL_REKOR_PORT:-23000}" \
+  INNSEGL_REKOR_PORT="${INNSEGL_REKOR_PORT:-$("$(dirname "$0")/rekor-port.sh")}" \
     "$(dirname "$0")/rekor-tlog-health.sh" || bad=1
   return $bad
 }

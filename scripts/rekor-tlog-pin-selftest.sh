@@ -29,6 +29,9 @@ trap 'git -C "${TMP}/repo" worktree remove --force "${TMP}/wt" >/dev/null 2>&1; 
 REPO="${TMP}/repo"
 mkdir -p "${REPO}/deploy/compose" "${REPO}/scripts"
 cp "${PIN}" "${ROOT}/scripts/repo-main-worktree.sh" "${REPO}/scripts/"
+# The guard reads the log database's pinned image from its own repository's
+# sigstore.yml (#343), so the staged copy carries it.
+mkdir -p "${REPO}/deploy/compose" && cp "${ROOT}/deploy/compose/sigstore.yml" "${REPO}/deploy/compose/"
 git -C "${REPO}" init -q
 git -C "${REPO}" config user.email "selftest@example.invalid"
 git -C "${REPO}" config user.name "selftest"
@@ -99,9 +102,25 @@ if command -v docker >/dev/null 2>&1; then
   [ "${rc}" -eq 0 ] && ok "a machine with no log may still mint (first boot)" \
     || bad "a machine with no log may still mint (first boot)" "exit ${rc}: ${out}"
 
-  # And the dangerous case: no pin, but a log already exists.
+  # A FRESH MACHINE: `make start` creates the trust volumes EMPTY before
+  # sigstore-up runs (trust-volumes.sh ensure), so on first boot the log's
+  # volume exists and holds nothing. Measured on a new VM on 2026-09-27: the
+  # guard read the empty volume as an existing log and refused, so a fresh
+  # install could not start (#343). An empty volume is no log.
+  empty="innsegl-selftest-empty-log-$$"
+  docker volume create "${empty}" >/dev/null 2>&1
+  out="$(INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${empty}" \
+    "${REPO}/scripts/rekor-tlog-pin.sh" guard "${WT}" 2>&1)"; rc=$?
+  docker volume rm "${empty}" >/dev/null 2>&1
+  [ "${rc}" -eq 0 ] && ok "RM-213 an empty log volume (first boot) may still mint" \
+    || bad "RM-213 an empty log volume (first boot) may still mint" "exit ${rc}: $(printf '%s' "${out}" | head -2)"
+
+  # And the dangerous case: no pin, but a log already exists -- a volume
+  # holding a database, which is what a log that has ever run leaves.
   vol="innsegl-selftest-log-$$"
   docker volume create "${vol}" >/dev/null 2>&1
+  docker run --rm --entrypoint sh -v "${vol}:/v" "$("${REPO}/scripts/rekor-tlog-pin.sh" db-image "${WT}")" \
+    -c 'mkdir -p /v/trillian && echo x > /v/trillian/db.opt' >/dev/null 2>&1
   out="$(INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${vol}" \
     "${REPO}/scripts/rekor-tlog-pin.sh" guard "${WT}" 2>&1)"; rc=$?
   docker volume rm "${vol}" >/dev/null 2>&1
@@ -112,6 +131,38 @@ if command -v docker >/dev/null 2>&1; then
   fi
 else
   printf '  ....  guard cases need docker; skipped the two that do\n'
+fi
+
+# RM-215 (#345). THE PIN IS RECORDED ONCE THE LOG ANSWERS, AND ONLY THEN.
+#
+# Bring-up recorded the pin right after starting Rekor, without waiting, and
+# swallowed the failure. Measured on a new VM: Rekor was still starting, no pin
+# was written, and the next `make start` there would have been refused by the
+# guard above for a log that had simply never been pinned. `record` waits for
+# the log to answer, and fails loudly -- writing nothing -- if it never does.
+STUB="${TMP}/stubbin"; mkdir -p "${STUB}"
+cat > "${STUB}/curl" <<'STUBSH'
+#!/bin/sh
+n=$(cat "${STUB_COUNT}" 2>/dev/null || echo 0); n=$((n + 1)); echo "${n}" > "${STUB_COUNT}"
+[ "${n}" -gt "${STUB_FAILS}" ] || exit 7
+printf '{"treeSize":1,"signedTreeHead":"rekor.test - 2028999985815895099\\n1\\n"}'
+STUBSH
+chmod +x "${STUB}/curl"
+rm -f "${REPO}/deploy/compose/.rekor-tlog-id"
+out="$(PATH="${STUB}:${PATH}" STUB_COUNT="${TMP}/n1" STUB_FAILS=2 INNSEGL_REKOR_PIN_WAIT=10 INNSEGL_REKOR_PIN_INTERVAL=0 \
+  "${REPO}/scripts/rekor-tlog-pin.sh" record http://127.0.0.1:1 "${WT}" 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ "$(cat "${REPO}/deploy/compose/.rekor-tlog-id" 2>/dev/null)" = "2028999985815895099" ]; then
+  ok "RM-215 a log that answers after a slow start is pinned"
+else
+  bad "RM-215 a log that answers after a slow start is pinned" "exit ${rc}: ${out}"
+fi
+rm -f "${REPO}/deploy/compose/.rekor-tlog-id"
+out="$(PATH="${STUB}:${PATH}" STUB_COUNT="${TMP}/n2" STUB_FAILS=999 INNSEGL_REKOR_PIN_WAIT=2 INNSEGL_REKOR_PIN_INTERVAL=1 \
+  "${REPO}/scripts/rekor-tlog-pin.sh" record http://127.0.0.1:1 "${WT}" 2>&1)"; rc=$?
+if [ "${rc}" -ne 0 ] && [ ! -e "${REPO}/deploy/compose/.rekor-tlog-id" ] && printf '%s' "${out}" | grep -qi "not answering"; then
+  ok "RM-215 a log that never answers fails loudly and pins nothing"
+else
+  bad "RM-215 a log that never answers fails loudly and pins nothing" "exit ${rc}: ${out}"
 fi
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"

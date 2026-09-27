@@ -32,7 +32,7 @@
 
 set -uo pipefail
 
-REKOR="${INNSEGL_REKOR_URL:-http://127.0.0.1:23000}"
+REKOR="${INNSEGL_REKOR_URL:-http://127.0.0.1:$("$(dirname "$0")/rekor-port.sh")}"
 REDIS="${INNSEGL_REDIS_CONTAINER:-innsegl-sigstore-rekor-redis}"
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
