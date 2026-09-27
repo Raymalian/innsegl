@@ -23,7 +23,10 @@
 // request it produces then differ only in their path, and there is no
 // translation table between them to drift.
 
-/** The six views of doc 06 §3, in the order that document lists them. */
+/** The six views of doc 06 §3, in the order that document lists them, and
+ * the one detail ADR-0054 added: a single alert, reached from the header's
+ * notification menu. It has no index of its own — the menu is the list — so
+ * it is not a nav destination either. */
 export const VIEWS = [
   "overview",
   "runs",
@@ -31,6 +34,7 @@ export const VIEWS = [
   "repo",
   "agentType",
   "verify",
+  "alert",
 ] as const;
 
 export type ViewName = (typeof VIEWS)[number];
@@ -99,6 +103,7 @@ export type Route =
   | { view: "repo"; repo: string; from: string; to: string }
   | { view: "agentType"; agentType: string; from: string; to: string }
   | { view: "verify"; commit: string; repo: string }
+  | { view: "alert"; eventId: string }
   | { view: "notFound"; path: string };
 
 /** The path a nav destination points at, with no state attached. */
@@ -109,6 +114,7 @@ export const VIEW_ROOTS: Record<ViewName, string> = {
   repo: "/repos",
   agentType: "/agent-types",
   verify: "/verify",
+  alert: "/alerts",
 };
 
 /**
@@ -195,6 +201,8 @@ export function parseRoute(pathWithQuery: string): Route {
             from: q.get("from") ?? "",
             to: q.get("to") ?? "",
           };
+        case "alerts":
+          return { view: "alert", eventId: detail };
       }
     }
   }
@@ -257,6 +265,8 @@ export function routeToPath(route: Route): string {
         ["commit", route.commit],
         ["repo", route.repo],
       ]);
+    case "alert":
+      return `/alerts/${encodeURIComponent(route.eventId)}`;
     case "notFound":
       return route.path;
   }

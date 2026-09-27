@@ -5,8 +5,8 @@
 //
 // Three things are deliberately NOT here.
 //
-// No view. The six views of doc 06 §3 are wave 4's, and each owns its own
-// directory. The shell renders whatever the `views` registry supplies for the
+// No view. The six views of doc 06 §3, and the alert detail ADR-0054 added,
+// each own their own directory. The shell renders whatever the `views` registry supplies for the
 // current route and an honest placeholder otherwise — a placeholder that says
 // in as many words that nothing on it came from the ledger, because doc 06 P2
 // forbids a screen that could be mistaken for evidence.
@@ -59,9 +59,12 @@ export interface AppProps {
   views?: ViewRegistry;
   /** doc 06 §3.1's anchoring heartbeat, supplied by RM-044. */
   heartbeat?: ReactNode;
+  /** ADR-0054's notification menu: open alerts, on every view. The shell
+   * owns the place in the header; the menu reads its own data. */
+  alerts?: ReactNode;
 }
 
-export function App({ views = {}, heartbeat }: AppProps) {
+export function App({ views = {}, heartbeat, alerts }: AppProps) {
   const route = useRoute();
   const strings = useStrings();
   const heading = headingFor(route, strings);
@@ -104,6 +107,10 @@ export function App({ views = {}, heartbeat }: AppProps) {
         >
           {heartbeat}
         </div>
+        {/* ADR-0054: open alerts are a bell in the header, not banners stacked
+          * on one page. Beside the heartbeat, because both are standing
+          * readouts of the ledger's health that belong on every view. */}
+        {alerts}
         <ThemeToggle />
       </header>
 

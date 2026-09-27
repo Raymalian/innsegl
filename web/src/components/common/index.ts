@@ -11,7 +11,7 @@
  */
 
 export { AlertBanner } from "./AlertBanner";
-export type { Alert, AlertBannerProps, AlertKind } from "./AlertBanner";
+export type { Alert, AlertBannerProps, AlertDensity, AlertKind } from "./AlertBanner";
 
 export { AnchoringHeartbeat } from "./AnchoringHeartbeat";
 export type { AnchoringHeartbeatProps } from "./AnchoringHeartbeat";

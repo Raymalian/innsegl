@@ -20,7 +20,11 @@ import {
   SPIFFE_ID,
 } from "../../src/views/run-detail/fixtures";
 import type { RunDetail } from "../../src/views/run-detail/types";
-import type { AnchorHeartbeat, OverviewData } from "../../src/views/overview/types";
+import type {
+  AlertsPage,
+  AnchorHeartbeat,
+  OverviewData,
+} from "../../src/views/overview/types";
 import type { RunPage, RunSummary } from "../../src/views/runs/api";
 
 /** The repo and agent type every fixture below agrees on, so a link followed
@@ -51,7 +55,7 @@ export function overview(): OverviewData {
     abandoned_runs: 0,
     restore_horizon_seconds: 30 * 24 * 60 * 60,
     commits_recorded: 12,
-    open_alerts: 0,
+    open_alerts: 1,
     anchor: anchor(),
     data_as_of: "2026-08-31T12:00:00.000Z",
   };
@@ -148,6 +152,32 @@ export function detail(): RunDetail {
  * it — which is what FE-013's green audit needs to see at least once. */
 export function proof(): Proof {
   return verifiedProof();
+}
+
+/** The one open alert the header's notification menu carries on every view
+ * (ADR-0054), and the event ID its detail view is addressed by. A drift on
+ * RUN_ID, so following the detail view's run link lands on a fixture too. */
+export const ALERT_ID = "01a077c2-eff1-7762-8a61-91a3a5c390e8";
+
+/** `GET /api/v1/alerts` — internal/api/query.go's AlertPage. */
+export function alertsPage(): AlertsPage {
+  return {
+    alerts: [
+      {
+        chain_position: 45,
+        event_id: ALERT_ID,
+        event_type: "ledger_drift_detected",
+        ts: "2026-08-31T11:50:00.000Z",
+        run_id: RUN_ID,
+        subject_event_id: "01a072b2-cdda-774e-a0e2-889ec5ac33fa",
+        reason: "commit_recorded claims a Rekor entry that the log does not contain",
+        resolved: false,
+      },
+    ],
+    total: 1,
+    limit: 50,
+    data_as_of: "2026-08-31T12:00:00.000Z",
+  };
 }
 
 export { COMMIT_SHA, RUN_ID, SPIFFE_ID };

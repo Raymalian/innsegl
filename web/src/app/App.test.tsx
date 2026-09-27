@@ -88,6 +88,15 @@ describe("FE-021 landmarks and structure", () => {
     expect(within(region).getByText("segment 41")).toBeInTheDocument();
   });
 
+  it("puts the notification menu in the header, beside the heartbeat (ADR-0054)", () => {
+    render(<App alerts={<button type="button">bell</button>} />);
+    const banner = screen.getByRole("banner");
+    expect(within(banner).getByRole("button", { name: "bell" })).toBeInTheDocument();
+    expect(screen.getByRole("main")).not.toContainElement(
+      screen.getByRole("button", { name: "bell" }),
+    );
+  });
+
   it("offers a skip link to the main region as the first focusable thing", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -125,6 +134,7 @@ describe("FE-021 flat navigation", () => {
     ["/repos/acme%2Fwidgets", en.labels.views.repo],
     ["/agent-types/fix-ci", en.labels.views.agentType],
     ["/verify?commit=9d4e1f0c", en.labels.views.verify],
+    ["/alerts/01a077c2-eff1-7762-8a61-91a3a5c390e8", en.labels.views.alert],
   ])("routes %s to the %s view", (path, heading) => {
     window.history.replaceState(null, "", path);
     render(<App />);

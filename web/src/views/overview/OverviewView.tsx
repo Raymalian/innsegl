@@ -76,7 +76,6 @@ export function OverviewView({
       data={resource.overview}
       runsToday={resource.runsToday}
       recentRuns={resource.recentRuns}
-      alerts={resource.alerts}
       apiBase={apiBase}
       now={now}
     />

@@ -20,6 +20,7 @@ import type { Page, Route } from "@playwright/test";
 
 import {
   RUN_ID,
+  alertsPage,
   detail,
   overview,
   proof,
@@ -60,6 +61,13 @@ export async function installApiMocks(page: Page): Promise<void> {
       // A run id this suite did not fixture. Answered as internal/api answers
       // an unknown run: 404, so RunNotFound's own branch is what renders.
       await json(route, { error: { code: "not_found", message: "no such run" } }, 404);
+      return;
+    }
+
+    // The header's notification menu reads this on every view (ADR-0054),
+    // and the alert detail view pages it to find one event ID.
+    if (p === "/api/v1/alerts") {
+      await json(route, alertsPage());
       return;
     }
 

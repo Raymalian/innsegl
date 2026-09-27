@@ -3,10 +3,11 @@
 /*
  * The overview — doc 06 §3.1. The landing view, and the system's public pulse.
  *
- * The order of this page is doc 06 P3 read literally: "Design the alarm first;
- * the calm state is what's left." Alerts are the first thing in the main
- * region, above the heading, above every metric — §3.1 says they "pin to the
- * top of this page in the P3 style" — and everything below them is quiet.
+ * Open alerts are not on this page. They were banners stacked above the
+ * heading, as §3.1 and §4.5 asked; ADR-0054 moved them to a notification menu
+ * in the persistent header, where they are on every view rather than this one
+ * and no longer push the metrics below a fold. P3 is kept by that menu's red
+ * badge — see views/alerts.
  *
  * What this view does NOT do is the part worth stating. It runs no
  * verification and renders no verdict. Every number on it is a count of rows
@@ -43,12 +44,7 @@
  * has is reachable in a test without a network.
  */
 
-import {
-  AlertBanner,
-  StalenessIndicator,
-  formatAbsoluteUtc,
-} from "../../components/common";
-import type { Alert } from "../../components/common";
+import { StalenessIndicator, formatAbsoluteUtc } from "../../components/common";
 import { useStrings } from "../../app/i18n";
 import { routeToPath } from "../../app/routes";
 import { AnchoringEvidence } from "./AnchoringPulse";
@@ -59,14 +55,7 @@ import { PassRateCard } from "./PassRateCard";
 import { RecentRuns } from "./RecentRuns";
 import { strings } from "./strings";
 import { cardGrid, heading, page, prose } from "./styles";
-import type { AlertRecord, OverviewData, PassRate, RunSummary, WindowedCount } from "./types";
-
-/** doc 06 §3.1's "drift/alert feed": how many individual alerts the page
- * renders as their own banner before it stops naming them one by one and
- * summarises the rest (FE-111). P3 makes this the loudest thing on the
- * page — a banner per row past this bound would defeat "the calm state is
- * what's left" for everything below it. */
-const MAX_ALERT_BANNERS = 10;
+import type { OverviewData, PassRate, RunSummary, WindowedCount } from "./types";
 
 export interface OverviewProps {
   readonly data: OverviewData;
@@ -77,10 +66,6 @@ export interface OverviewProps {
   /** Null when the runs index did not answer; an empty array when it did and
    * there are none. */
   readonly recentRuns?: readonly RunSummary[] | null;
-  /** RM-102, #167. Null (or omitted) when the alerts read did not answer —
-   * the banner falls back to `data.open_alerts`'s aggregate count rather than
-   * rendering nothing. */
-  readonly alerts?: readonly AlertRecord[] | null;
   /** A LIVE pass rate, if anything ever measures one. Nothing does. */
   readonly passRate?: PassRate;
   /** Where the query API lives, for the links that point at raw material. */
@@ -93,9 +78,7 @@ export function Overview({
   data,
   runsToday,
   recentRuns = null,
-  alerts = null,
   passRate,
-  apiBase,
   now,
 }: OverviewProps) {
   const at = now ?? new Date();
@@ -103,9 +86,6 @@ export function Overview({
 
   return (
     <div className={page}>
-      {/* P3, and §3.1's "alerts pin to the top of this page". */}
-      <AlertBanner alerts={alertsOf(data, alerts, apiBase)} />
-
       <StalenessIndicator />
 
       <header className="flex flex-col gap-1">
@@ -196,86 +176,4 @@ function WithdrawnBreakdown({ data }: { readonly data: OverviewData }) {
       <p>{horizon}</p>
     </>
   );
-}
-
-/**
- * doc 06 §3.1's "drift/alert feed" and §4.5's banner — RM-102, #167.
- *
- * One AlertBanner entry per OPEN alert event, newest first, each carrying the
- * identifying fields #167 names and a link to its own evidence (P1): a drift
- * alert whose subject is a run's own record links to that run's detail view;
- * an unattributed alert names no run (doc 02 §3) and links to the filtered
- * raw record instead, the closest thing to "this alert's own page" that
- * exists without inventing a seventh view (doc 06 §3's six are fixed, and
- * FE-016 measures the count).
- *
- * `alerts === null` means the richer read did not answer, and the banner
- * falls back to `data.open_alerts`'s aggregate count (FE-111) — P2: a failed
- * list must not make the page say less than the count it already has.
- */
-function alertsOf(
-  data: OverviewData,
-  alerts: readonly AlertRecord[] | null,
-  apiBase: string,
-): readonly Alert[] {
-  if (alerts === null) {
-    if (data.open_alerts <= 0) return [];
-    return [
-      {
-        id: "open-alerts",
-        kind: "integrity",
-        title: strings.alerts.title(data.open_alerts),
-        detail: strings.alerts.detail,
-        evidenceHref: `${apiBase}/overview`,
-        evidenceLabel: strings.alerts.evidenceLabel,
-      },
-    ];
-  }
-
-  const open = alerts.filter((a) => !a.resolved);
-  if (open.length === 0) return [];
-
-  const shown = open.slice(0, MAX_ALERT_BANNERS).map((a) => alertBannerOf(a, apiBase));
-  const remaining = Math.max(data.open_alerts - shown.length, open.length - shown.length);
-  if (remaining <= 0) return shown;
-
-  return [
-    ...shown,
-    {
-      id: "more-open-alerts",
-      kind: "integrity",
-      title: strings.alerts.moreTitle(remaining),
-      detail: strings.alerts.moreDetail,
-      evidenceHref: `${apiBase}/alerts`,
-      evidenceLabel: strings.alerts.evidenceLabel,
-    },
-  ];
-}
-
-/** One alert event as one AlertBanner entry, per #167's identifying fields. */
-function alertBannerOf(alert: AlertRecord, apiBase: string): Alert {
-  if (alert.event_type === "ledger_drift_detected") {
-    return {
-      id: alert.event_id,
-      kind: "integrity",
-      title: strings.alerts.driftTitle,
-      detail: strings.alerts.driftDetail(alert.reason ?? "", alert.subject_event_id ?? ""),
-      evidenceHref: alert.run_id
-        ? routeToPath({ view: "run", runId: alert.run_id })
-        : `${apiBase}/alerts?event_type=ledger_drift_detected`,
-      evidenceLabel: alert.run_id ? strings.alerts.viewRun : strings.alerts.rawRecord,
-    };
-  }
-  return {
-    id: alert.event_id,
-    kind: "integrity",
-    title: strings.alerts.unattributedTitle,
-    detail: strings.alerts.unattributedDetail(
-      alert.certificate_identity ?? "",
-      alert.rekor_entry_uuid ?? "",
-      alert.rekor_log_index ?? 0,
-    ),
-    evidenceHref: `${apiBase}/alerts?event_type=unattributed_signature_detected`,
-    evidenceLabel: strings.alerts.rawRecord,
-  };
 }
