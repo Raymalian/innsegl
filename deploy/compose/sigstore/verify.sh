@@ -24,11 +24,14 @@
 #      certificate, Rekor's /api/v1/log/publicKey as a PKIX public key. A TCP
 #      dial would pass against any listening socket.
 #
-#   2. A REAL registration entry, a REAL JWT-SVID. The token is minted by the
-#      SPIRE stack in deploy/compose/spire.yml against per-run selectors, with
-#      audience `sigstore`. Nothing here is a fixture; doc 01 §2 — "a mocked
-#      Fulcio proves nothing about I5" — cuts the same way against a mocked
-#      SVID.
+#   2. A REAL registration entry, a REAL JWT-SVID. The entry is registered
+#      the way register_agent registers it, with the one run selector
+#      innsegl:run:<run_id> (ADR-0053), and the token is minted the way
+#      get_credential mints it: MintJWTSVID on the SPIRE server, audience
+#      `sigstore`. No workload attestation is involved, because none is
+#      involved for a real run either. Nothing here is a fixture; doc 01 §2 —
+#      "a mocked Fulcio proves nothing about I5" — cuts the same way against a
+#      mocked SVID.
 #
 #   3. A REAL certificate from Fulcio, and the assertion that matters: the URI
 #      SAN is exactly the SPIFFE ID of the run. That URI SAN is what makes a
@@ -63,7 +66,6 @@ readonly SIGSTORE_COMPOSE="${COMPOSE_DIR}/sigstore.yml"
 
 readonly TRUST_DOMAIN="innsegl.dev"
 readonly ADMIN_SOCKET="/run/spire/admin/api.sock"
-readonly WORKLOAD_SOCKET="/run/spire/agent-sockets/api.sock"
 
 # The audience. A PROTECTED-ADJACENT literal: `sigstore` is the client-id in
 # sigstore/fulcio-config.yaml, and a JWT-SVID minted for any other audience is
@@ -187,17 +189,26 @@ check_trust_material() {
 # ---------------------------------------------------------------------------
 # Step 2 — a real registration entry and a real JWT-SVID.
 #
-# The selector set is spire/verify.sh's, deliberately identical: this script
-# must exercise the identity path the SPIRE stack actually ships, not an easier
-# one of its own.
+# This script must exercise the identity path a run actually takes, not an
+# easier one of its own. Since ADR-0053 that path is: register_agent creates
+# the run's entry with one selector no workload attestor emits, and
+# get_credential mints the JWT-SVID through the SPIRE server's MintJWTSVID.
+# No workload is ever issued a run's identity by attestation.
+#
+# So this script does the same two things. `spire-server jwt mint` on the
+# local admin socket is that same MintJWTSVID RPC, signed by the same server
+# key and stamped with the same issuer. The MCP reaches the RPC over the admin
+# API with its own SVID; this script reaches it the way an operator does
+# (ADR-0011). Until ADR-0053 this step had the verify workload attest on a
+# run's docker labels. That tested a path no run used, and the MCP's start-up
+# rewrite would now move such an entry off its labels mid-run.
 # ---------------------------------------------------------------------------
 mint_jwt_svid() {
   log "registering run ${RUN_ID} and minting a JWT-SVID for audience '${SIGSTORE_AUDIENCE}'"
 
-  local parent out image_config_digest attempt
+  local parent out
   parent="$(spire agent list 2>/dev/null | sed -n 's/^SPIFFE ID *: *//p' | head -n 1 || true)"
   [ -n "${parent}" ] || fail 'no attested SPIRE agent — bring the SPIRE stack up first (make sigstore-up)'
-  image_config_digest="$(docker inspect --format '{{.Image}}' innsegl-spire-agent)"
 
   note "spiffe id : ${EXPECTED_ID}"
   note "parent    : ${parent}"
@@ -205,35 +216,25 @@ mint_jwt_svid() {
   out="$(spire entry create \
     -parentID "${parent}" \
     -spiffeID "${EXPECTED_ID}" \
-    -selector "docker:label:dev.innsegl.run-id:${RUN_ID}" \
-    -selector "docker:label:dev.innsegl.agent-type:${AGENT_TYPE}" \
-    -selector "docker:label:dev.innsegl.task-id:${TASK_ID}" \
-    -selector "docker:image_config_digest:${image_config_digest}" \
-    -selector "unix:uid:10001" \
+    -selector "innsegl:run:${RUN_ID}" \
     -x509SVIDTTL 300 \
     -jwtSVIDTTL 300)"
   ENTRY_ID="$(printf '%s\n' "${out}" | sed -n 's/^Entry ID *: *//p' | head -n 1)"
   [ -n "${ENTRY_ID}" ] || { printf '%s\n' "${out}"; fail 'entry create returned no entry ID'; }
   note "entry id  : ${ENTRY_ID}"
 
-  # Entries reach the agent through its cache, not synchronously. Poll rather
-  # than sleep on a guess. `compose run` overrides the workload's command, so
-  # this is the shipped spire-verify-workload — same image, same labels, same
-  # non-root uid — asked for a JWT instead of an X.509 SVID.
-  attempt=0
-  while :; do
-    attempt=$((attempt + 1))
-    if out="$(spire_compose --profile verify run --rm --quiet-pull spire-verify-workload \
-        api fetch jwt -audience "${SIGSTORE_AUDIENCE}" -socketPath "${WORKLOAD_SOCKET}" 2>&1)"; then
-      break
-    fi
-    [ "${attempt}" -lt 20 ] || { printf '%s\n' "${out}"; fail 'no JWT-SVID after 20 attempts'; }
-    sleep 3
-  done
+  # The mint is answered by the server directly, not through an agent cache,
+  # so there is nothing to poll for. TTL 300s, the entry's own. stderr stays on
+  # the terminal rather than in ${out}: only the token belongs there, and a
+  # dotted string in a warning must not be read as one.
+  out="$(spire jwt mint \
+    -spiffeID "${EXPECTED_ID}" \
+    -audience "${SIGSTORE_AUDIENCE}" \
+    -ttl 300s)" || fail 'MintJWTSVID refused (the CLI printed why, above)'
 
-  # `spire-agent api fetch jwt` prints "token(<audience>):" then the token.
+  # Read the token out of whatever the CLI wraps it in.
   TOKEN="$(printf '%s\n' "${out}" | tr -d '\r' | grep -oE '[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' | head -n 1)"
-  [ -n "${TOKEN}" ] || { printf '%s\n' "${out}"; fail 'could not find a JWT in the workload output'; }
+  [ -n "${TOKEN}" ] || { printf '%s\n' "${out}"; fail 'could not find a JWT in the jwt mint output'; }
 
   local tok_sub tok_iss
   tok_sub="$(jwt_claim "${TOKEN}" sub)"
