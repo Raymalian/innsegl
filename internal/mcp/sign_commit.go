@@ -294,7 +294,9 @@ type SignCommitRepos interface {
 // SignCommitCredentials issues the audience-bound credential one signature is
 // spent on. SignCommitThroughGetCredential is the shipped implementation.
 type SignCommitCredentials interface {
-	IssueForSigning(ctx context.Context, run CredentialRun) (signing.Credential, error)
+	// runToken is the token sign_commit has already authenticated for this
+	// run, forwarded so the in-process get_credential accepts it (#341).
+	IssueForSigning(ctx context.Context, run CredentialRun, runToken string) (signing.Credential, error)
 }
 
 // SignCommitSigner is one run's gitsign wrapper. *signing.Signer satisfies it.
@@ -750,7 +752,9 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (_ any,
 
 	// IP §6.1: any in-flight sign_commit aborts BEFORE Phase A when the
 	// credential cannot be had.
-	src := &signCommitSource{run: run, issue: c.credentials.IssueForSigning}
+	src := &signCommitSource{run: run, issue: func(ctx context.Context, r CredentialRun) (signing.Credential, error) {
+		return c.credentials.IssueForSigning(ctx, r, in.RunToken)
+	}}
 	if perr := src.prime(ctx); perr != nil {
 		return nil, perr
 	}
@@ -1487,11 +1491,14 @@ type SignCommitThroughGetCredential struct{}
 
 // IssueForSigning mints one Sigstore-audience credential for the run.
 func (SignCommitThroughGetCredential) IssueForSigning(
-	ctx context.Context, run CredentialRun,
+	ctx context.Context, run CredentialRun, runToken string,
 ) (signing.Credential, error) {
 	out, err := getCredential(ctx, nil, getCredentialIn{
 		RunID:    run.RunID,
 		Audience: AudienceSigstore,
+		// The token sign_commit authenticated, so this call meets the same
+		// gate an agent's own get_credential would (#341).
+		RunToken: runToken,
 	})
 	if err != nil {
 		return signing.Credential{}, err

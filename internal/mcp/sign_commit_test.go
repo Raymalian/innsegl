@@ -374,7 +374,7 @@ type scCredentials struct {
 	err   error
 }
 
-func (c *scCredentials) IssueForSigning(_ context.Context, run CredentialRun) (signing.Credential, error) {
+func (c *scCredentials) IssueForSigning(_ context.Context, run CredentialRun, _ string) (signing.Credential, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
@@ -958,7 +958,7 @@ func TestAReFetchFailureInsideTheWrapperIsReportedAsTheCredentialFailureItIs(t *
 	failAfter := 1
 	base := w.creds
 	w.cfg.Credentials = credFunc(func(ctx context.Context, run CredentialRun) (signing.Credential, error) {
-		cred, err := base.IssueForSigning(ctx, run)
+		cred, err := base.IssueForSigning(ctx, run, "")
 		if base.calls > failAfter {
 			return signing.Credential{}, Errorf(ClassIdentityUnavailable, run.RunID, "gone")
 		}
@@ -972,7 +972,7 @@ func TestAReFetchFailureInsideTheWrapperIsReportedAsTheCredentialFailureItIs(t *
 // credFunc adapts a function to SignCommitCredentials.
 type credFunc func(context.Context, CredentialRun) (signing.Credential, error)
 
-func (f credFunc) IssueForSigning(ctx context.Context, run CredentialRun) (signing.Credential, error) {
+func (f credFunc) IssueForSigning(ctx context.Context, run CredentialRun, _ string) (signing.Credential, error) {
 	return f(ctx, run)
 }
 
@@ -2669,7 +2669,7 @@ func TestTheShippedCredentialSourceGoesThroughGetCredential(t *testing.T) {
 	t.Run("the credential is the run's, for sigstore", func(t *testing.T) {
 		expiry := time.Now().Add(5 * time.Minute)
 		install(t, scStubMinter{expiry: expiry})
-		got, err := source.IssueForSigning(t.Context(), run)
+		got, err := source.IssueForSigning(t.Context(), run, "")
 		if err != nil {
 			t.Fatalf("IssueForSigning: %v", err)
 		}
@@ -2687,9 +2687,27 @@ func TestTheShippedCredentialSourceGoesThroughGetCredential(t *testing.T) {
 		}
 	})
 
+	// RM-212 (#341). sign_commit authenticates the run's token and then asks
+	// get_credential in process -- which checks the token again. Measured live:
+	// the in-process call sent none, so a signer holding the right token was
+	// refused RUN_NOT_FOUND. The token sign_commit verified is forwarded.
+	t.Run("the verified run token is forwarded to get_credential", func(t *testing.T) {
+		const secret = "rm212-secret"
+		if err := ConfigureGetCredential(CredentialConfig{
+			Runs: scRuns{run: run, found: true}, Entries: credOpenEntries{},
+			Minter: scStubMinter{expiry: time.Now().Add(5 * time.Minute)}, Ledger: newLedger(),
+			RunTokenSecret: secret,
+		}); err != nil {
+			t.Fatalf("ConfigureGetCredential: %v", err)
+		}
+		if _, err := source.IssueForSigning(t.Context(), run, RunToken(secret, run.RunID)); err != nil {
+			t.Fatalf("IssueForSigning with the run's own token: %v", err)
+		}
+	})
+
 	t.Run("get_credential's refusal is carried through unchanged", func(t *testing.T) {
 		install(t, scStubMinter{err: Errorf(ClassIdentityUnavailable, run.RunID, "spire is gone")})
-		_, err := source.IssueForSigning(t.Context(), run)
+		_, err := source.IssueForSigning(t.Context(), run, "")
 		requireClass(t, err, ClassIdentityUnavailable)
 	})
 
@@ -2699,7 +2717,7 @@ func TestTheShippedCredentialSourceGoesThroughGetCredential(t *testing.T) {
 		// stated expiry cannot be read is one nothing can refuse when it
 		// expires (IP §6.2).
 		install(t, scStubMinter{expiry: time.Date(12000, 1, 1, 0, 0, 0, 0, time.UTC)})
-		_, err := source.IssueForSigning(t.Context(), run)
+		_, err := source.IssueForSigning(t.Context(), run, "")
 		requireClass(t, err, ClassInvariantViolation)
 	})
 }
