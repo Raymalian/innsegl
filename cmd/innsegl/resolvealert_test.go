@@ -239,3 +239,32 @@ func TestALR007ResolveAlertCommandAgainstARealLedger(t *testing.T) {
 			"(the CLI's resolution should already be there): res=%+v", err, res)
 	}
 }
+
+// RM-201 (#323): only the three refusals the ledger means are REFUSED. Any
+// other failure -- measured live: "permission denied for table
+// alert_resolutions" -- was reported as "REFUSED", the verdict for a wrong
+// event id, and sent the operator checking an id that was right.
+func TestRM201OnlyTheLedgersOwnRefusalsAreRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"unknown event", ledger.ErrAlertNotFound, exitResolveRefused},
+		{"not an alert", ledger.ErrNotAnAlert, exitResolveRefused},
+		{"already resolved", ledger.ErrAlertAlreadyResolved, exitResolveRefused},
+		{"permission denied", errors.New("ledger: resolving alert x: ERROR: permission denied for table alert_resolutions (SQLSTATE 42501)"), exitResolveInconclusive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			stub := &stubResolver{err: tc.err}
+			deps := resolveAlertDeps{open: stubResolveOpen(stub, nil, nil)}
+			if code := runResolveAlertCommand(minimalResolveAlertArgs(), &stdout, &stderr, deps); code != tc.want {
+				t.Errorf("code = %d, want %d; stderr=%s", code, tc.want, stderr.String())
+			}
+			if tc.want == exitResolveInconclusive && strings.Contains(stderr.String(), "REFUSED") {
+				t.Errorf("a failure that is not a refusal was reported as one: %s", stderr.String())
+			}
+		})
+	}
+}

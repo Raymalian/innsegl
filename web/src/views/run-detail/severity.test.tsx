@@ -131,6 +131,13 @@ describe("FE-083 the page-level banner", () => {
     expect(banner).toHaveTextContent("A chain link in this run does not hold");
   });
 
+  it("is a compact inline notice about this run, not a page banner (ADR-0054)", async () => {
+    view([...healthyTimeline(), drift]);
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveAttribute("data-alert-density", "compact");
+    expect(notice.className).not.toMatch(/\bp-4\b/);
+  });
+
   it("raises nothing at all on a healthy run — the calm state is quiet", async () => {
     view(healthyTimeline());
     expect(await screen.findByText("Timeline")).toBeInTheDocument();

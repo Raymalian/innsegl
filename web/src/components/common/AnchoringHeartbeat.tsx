@@ -82,7 +82,7 @@ export function AnchoringHeartbeat({
     <time
       dateTime={toDateTimeAttribute(anchoredAt)}
       title={formatAbsoluteUtc(anchoredAt)}
-      className="font-mono"
+      className="tabular-nums"
     >
       {strings.heartbeat.agoSuffix(ago)}
     </time>

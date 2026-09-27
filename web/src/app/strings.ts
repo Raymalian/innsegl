@@ -48,6 +48,8 @@ export const en = {
       repo: "Repositories",
       agentType: "Agent types",
       verify: "Verify a commit",
+      /** ADR-0054: one alert, opened from the header's notification menu. */
+      alert: "Alert",
     },
     theme: {
       region: "Theme",

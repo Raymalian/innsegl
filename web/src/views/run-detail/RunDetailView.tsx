@@ -224,8 +224,12 @@ function Loaded({
         * control is a new way to fail that, because a condition behind an
         * unselected tab is a condition the reader is not told about at all.
         * The scroll this change removed was bad; a silent alarm would be
-        * worse. FE-113 holds it here with either tab open. */}
-      <AlertBanner alerts={alertsFor(conditionsOf(events))} />
+        * worse. FE-113 holds it here with either tab open.
+        *
+        * COMPACT, per ADR-0054. Open alerts across the ledger are the header's
+        * notification menu now; what is left here is a condition about THIS
+        * run, so it is a one-line notice in the page, not a page banner. */}
+      <AlertBanner alerts={alertsFor(conditionsOf(events))} density="compact" />
       <RunHeader run={detail} events={events} now={now} />
       {/* THE TIMELINE IS STILL FIRST, and still selected.
         *

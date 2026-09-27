@@ -44,7 +44,8 @@ export type IconName =
   | "empty"
   | "unreachable"
   | "node"
-  | "fold";
+  | "fold"
+  | "bell";
 
 /*
  * One 16x16 path per name, stroked. The shapes are chosen to differ in
@@ -165,6 +166,14 @@ const PATHS: Record<IconName, ReactNode> = {
    * a disclosure is everywhere else; it points at the content rather than
    * claiming anything about it. */
   fold: <path d="M6 3.5 10.5 8 6 12.5" />,
+  /* The header's notification menu (ADR-0054). A bell, because that is what
+   * the control is everywhere else; the count beside it carries the alarm. */
+  bell: (
+    <>
+      <path d="M4 11.5V7.5a4 4 0 0 1 8 0v4l1.25 1.25h-10.5z" />
+      <path d="M6.75 14a1.5 1.5 0 0 0 2.5 0" />
+    </>
+  ),
   /* A severed link: the dependency is not there. */
   unreachable: (
     <>

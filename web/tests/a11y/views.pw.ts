@@ -241,6 +241,35 @@ test.describe("FE-107: the date filter's UA-shadow focus stop, measured", () => 
   });
 });
 
+/* FE-135 in a real browser: the header's notification menu (ADR-0054), open,
+ * scanned by axe, and driven by the keyboard alone. */
+test.describe("FE-135: the notification menu, open", () => {
+  test("has no WCAG 2.1 AA violations and is keyboard-operable", async ({ page }) => {
+    await installApiMocks(page);
+    await page.goto("/runs");
+    const bell = page.getByRole("button", { name: /^Alerts, 1 open$/ });
+    await expect(bell).toBeVisible();
+    await bell.focus();
+    await page.keyboard.press("Enter");
+    await expect(bell).toHaveAttribute("aria-expanded", "true");
+    const item = page.getByRole("menuitem").first();
+    await expect(item).toBeFocused();
+
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    expect(results.violations, formatViolations(results.violations)).toEqual([]);
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(bell).toBeFocused();
+
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveTitle(/^Alert · Innsegl$/);
+  });
+});
+
 function formatViolations(violations: readonly import("axe-core").Result[]): string {
   if (violations.length === 0) return "";
   return violations

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // FE-010 — URL state: filters/selection encoded and restorable (doc 07).
-// FE-016 — the route table itself: six views, flat depth, canonical round-trip.
+// FE-016 — the route table itself: six views plus the alert detail
+// (ADR-0054), flat depth, canonical round-trip.
 //
 // FD §7: "every view's state (filters, selected run, verification input) lives
 // in the URL". FD §3: "no nesting deeper than view → detail".
@@ -17,7 +18,7 @@ import {
 } from "./routes";
 
 describe("FE-016 route table", () => {
-  it("names exactly the six views doc 06 §3 specifies", () => {
+  it("names the six views doc 06 §3 specifies, and ADR-0054's alert detail", () => {
     expect([...VIEWS]).toEqual([
       "overview",
       "runs",
@@ -25,7 +26,16 @@ describe("FE-016 route table", () => {
       "repo",
       "agentType",
       "verify",
+      "alert",
     ]);
+  });
+
+  it("addresses one alert by its event ID, one level deep (ADR-0054)", () => {
+    expect(parseRoute("/alerts/01a077c2-eff1-7762-8a61-91a3a5c390e8")).toEqual({
+      view: "alert",
+      eventId: "01a077c2-eff1-7762-8a61-91a3a5c390e8",
+    });
+    expect(parseRoute("/alerts")).toEqual({ view: "notFound", path: "/alerts" });
   });
 
   it("never nests deeper than view → detail", () => {
@@ -36,6 +46,7 @@ describe("FE-016 route table", () => {
       { view: "repo", repo: "acme/widgets", from: "", to: "" },
       { view: "agentType", agentType: "fix-ci", from: "", to: "" },
       { view: "verify", commit: "", repo: "" },
+      { view: "alert", eventId: "01a077c2-eff1-7762-8a61-91a3a5c390e8" },
     ];
     for (const route of routes) {
       const path = routeToPath(route).split("?")[0] ?? "";
@@ -66,6 +77,7 @@ describe("FE-010 URL carries every view's state", () => {
     "/verify",
     "/verify?commit=9d4e1f0c",
     "/verify?commit=9d4e1f0c&repo=acme%2Fwidgets",
+    "/alerts/01a077c2-eff1-7762-8a61-91a3a5c390e8",
   ];
 
   it.each(canonical)("round-trips %s byte for byte", (path) => {

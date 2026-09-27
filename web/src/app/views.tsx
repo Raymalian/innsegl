@@ -2,6 +2,7 @@
 
 import type { ViewRegistry } from "./App";
 import { AgentTypeView } from "../views/agent-type";
+import { AlertDetailView } from "../views/alerts";
 import { OverviewView } from "../views/overview";
 import { PublicVerifyView } from "../views/public-verify";
 import { RepoView } from "../views/repo";
@@ -12,6 +13,8 @@ import { RunsView } from "../views/runs";
 // so this module is the single place that knows which view supplies the
 // header's anchoring pulse (doc 06 §3.1 puts it on every view).
 export { OverviewHeartbeat } from "../views/overview";
+// ADR-0054: open alerts are a menu in the same header, on every view.
+export { HeaderAlerts } from "../views/alerts";
 
 // The registry the shell renders from. RM-041 built App to take it rather than
 // import the views itself, so that wave 4's five agents could each own a
@@ -36,4 +39,5 @@ export const views = {
   repo: RepoView,
   agentType: AgentTypeView,
   verify: PublicVerifyView,
+  alert: AlertDetailView,
 } satisfies ViewRegistry;

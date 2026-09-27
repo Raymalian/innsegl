@@ -148,6 +148,11 @@ export const noticeTitle = "text-prose font-semibold leading-tight";
 /** The stack a notice puts its title, detail and evidence link into. */
 export const noticeBody = "flex flex-col items-start gap-1";
 
+/** A notice about the thing on screen rather than the whole page (ADR-0054):
+ * the same tone, one wrapped line, a smaller type size and a tighter pad. */
+export const noticeCompact =
+  "flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-sm px-3 py-2 text-micro leading-default";
+
 /* ── tables ─────────────────────────────────────────────────────────────────
  *
  * ONE table treatment, used by every table in the product (FE-121).

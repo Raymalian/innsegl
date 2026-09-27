@@ -119,7 +119,7 @@ func runResolveAlertCommand(args []string, stdout, stderr io.Writer, deps resolv
 		fprintf(stderr, "  %d  the alert now carries a resolution\n", exitOK)
 		fprintf(stderr, "  %d  the command line was not understood\n", exitUsage)
 		fprintf(stderr, "  %d  REFUSED - unknown event_id, not an alert event, or already resolved\n", exitResolveRefused)
-		fprintf(stderr, "  %d  INCONCLUSIVE - the ledger could not be reached; nothing was written\n", exitResolveInconclusive)
+		fprintf(stderr, "  %d  INCONCLUSIVE - the ledger could not be reached or did not take the write; nothing was written\n", exitResolveInconclusive)
 		fprintf(stderr, "\nFlags:\n")
 		fs.PrintDefaults()
 	}
@@ -167,8 +167,17 @@ func runResolveAlertCommand(args []string, stdout, stderr io.Writer, deps resolv
 	res, err := store.ResolveAlert(ctx, *eventID, *resolvedBy, *reason)
 	if err != nil {
 		fprintf(stderr, "innsegl resolve-alert: %v\n", err)
-		fprintf(stderr, "innsegl resolve-alert: REFUSED - nothing was written\n")
-		return exitResolveRefused
+		// Only the ledger's own three answers are refusals. Anything else --
+		// a permission, a dropped connection -- says nothing about the id, and
+		// calling it REFUSED sent an operator checking an id that was right
+		// (#323).
+		if errors.Is(err, ledger.ErrAlertNotFound) || errors.Is(err, ledger.ErrNotAnAlert) ||
+			errors.Is(err, ledger.ErrAlertAlreadyResolved) {
+			fprintf(stderr, "innsegl resolve-alert: REFUSED - nothing was written\n")
+			return exitResolveRefused
+		}
+		fprintf(stderr, "innsegl resolve-alert: INCONCLUSIVE - the ledger did not take the write; nothing was written\n")
+		return exitResolveInconclusive
 	}
 
 	if *asJSON {

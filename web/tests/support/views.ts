@@ -6,7 +6,7 @@
 // real signal that the view which rendered is the one the address named and
 // not doc 06 §4.6's placeholder or an unmocked-request error state.
 
-import { AGENT_TYPE, COMMIT_SHA, REPO, RUN_ID } from "./api-fixtures";
+import { AGENT_TYPE, ALERT_ID, COMMIT_SHA, REPO, RUN_ID } from "./api-fixtures";
 
 export interface ViewCase {
   readonly name: string;
@@ -31,4 +31,6 @@ export const VIEWS: readonly ViewCase[] = [
     path: `/verify?commit=${COMMIT_SHA}&repo=${REPO}`,
     title: `Verify a commit${TITLE_SUFFIX}`,
   },
+  // ADR-0054's alert detail, reached from the header's notification menu.
+  { name: "alert", path: `/alerts/${ALERT_ID}`, title: `Alert${TITLE_SUFFIX}` },
 ];

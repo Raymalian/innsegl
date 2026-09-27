@@ -38,6 +38,7 @@ import {
   linkOnFill,
   noticeBase,
   noticeBody,
+  noticeCompact,
   noticeTitle,
 } from "./styles";
 
@@ -63,28 +64,62 @@ const PRESENTATION: Record<
   degraded: { icon: "anchor-lag", tone: degraded },
 };
 
+/**
+ * `banner` is §4.5's page-level alarm. `compact` is ADR-0054's inline notice:
+ * the same condition, the same tone and the same evidence link, set as one
+ * line inside a view about the thing it concerns — a run detail's own drift,
+ * for example — now that open alerts across the ledger live in the header's
+ * notification menu rather than as banners.
+ */
+export type AlertDensity = "banner" | "compact";
+
 export interface AlertBannerProps {
   /** Every condition that currently holds. Empty renders nothing. */
   readonly alerts: readonly Alert[];
+  readonly density?: AlertDensity;
 }
 
-export function AlertBanner({ alerts }: AlertBannerProps) {
+export function AlertBanner({ alerts, density = "banner" }: AlertBannerProps) {
   if (alerts.length === 0) return null;
   return (
     <div className="flex flex-col gap-2" aria-label={strings.alert.regionLabel}>
       {alerts.map((alert) => (
-        <Banner key={alert.id} alert={alert} />
+        <Banner key={alert.id} alert={alert} density={density} />
       ))}
     </div>
   );
 }
 
-function Banner({ alert }: { readonly alert: Alert }) {
+function Banner({
+  alert,
+  density,
+}: {
+  readonly alert: Alert;
+  readonly density: AlertDensity;
+}) {
   const { icon, tone } = PRESENTATION[alert.kind];
+  if (density === "compact") {
+    return (
+      <div
+        role="alert"
+        data-alert-kind={alert.kind}
+        data-alert-density="compact"
+        className={`${noticeCompact} ${hairline} ${tone}`}
+      >
+        <Icon name={icon} className="shrink-0 self-center" />
+        <span className="font-semibold">{alert.title}</span>
+        <span>{alert.detail}</span>
+        <a href={alert.evidenceHref} className={linkOnFill}>
+          {alert.evidenceLabel ?? strings.alert.evidence}
+        </a>
+      </div>
+    );
+  }
   return (
     <div
       role="alert"
       data-alert-kind={alert.kind}
+      data-alert-density="banner"
       className={`${noticeBase} ${hairline} ${tone}`}
     >
       <Icon name={icon} className="mt-[0.3em] shrink-0" />

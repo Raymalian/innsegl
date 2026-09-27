@@ -141,6 +141,23 @@ describe("FE-005 the overview's anchoring heartbeat", () => {
     expect(text).not.toMatch(/no segment anchored yet/i);
   });
 
+  // RM-203 (#326). Measured live: the time read "29  s  ago" -- a monospace
+  // run inside a proportional sentence spreads its spaces. Tabular digits keep
+  // the number from jittering as it ticks, without the gaps.
+  it.each([
+    ["sealed, not yet anchored", () => sealedOnly(RECENT)],
+    ["anchored", () => anchored(RECENT)],
+  ])("RM-203 the elapsed time reads as part of the sentence when %s", (_state, make) => {
+    const { unmount } = pulse(make());
+    const times = screen.getByTestId("overview-heartbeat").querySelectorAll("time");
+    expect(times.length).toBeGreaterThan(0);
+    for (const time of times) {
+      expect(time.className).not.toMatch(/font-mono/);
+      expect(time.className).toMatch(/tabular-nums/);
+    }
+    unmount();
+  });
+
   it("FE-071 turns amber when the pending anchor is past the bound", () => {
     const { container } = pulse(sealedOnly(LATE));
     const shown = screen.getByTestId("overview-heartbeat");

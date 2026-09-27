@@ -79,6 +79,30 @@ type fakeChain struct {
 	appends int
 	reads   int
 	seeded  int
+
+	resolved map[string]string
+}
+
+// resolved records ResolveDriftAlerts calls against the fake chain: the
+// subject it was asked about, keyed to the reason given.
+func (c *fakeChain) ResolveDriftAlerts(_ context.Context, subject, resolvedBy, reason string) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.resolved == nil {
+		c.resolved = map[string]string{}
+	}
+	n := 0
+	for _, r := range c.records {
+		if r[event.FieldEventType] == event.EventTypeLedgerDriftDetected && r[event.FieldSubjectEventID] == subject {
+			if _, done := c.resolved[subject]; !done {
+				n++
+			}
+		}
+	}
+	if n > 0 {
+		c.resolved[subject] = resolvedBy + ": " + reason
+	}
+	return n, nil
 }
 
 func newFakeChain(clock time.Time) *fakeChain {
@@ -1304,5 +1328,45 @@ func TestCollectSealsKeepsTheFirstSealItSeesForASegment(t *testing.T) {
 	}
 	if watermark != 4 {
 		t.Errorf("watermark = %d, want 4", watermark)
+	}
+}
+
+// RM-202 (#324), ADR-0055. The anchor that fixes a drift alert's cause
+// resolves that alert. Measured live: three alerts stayed open for eleven
+// days after their segments were anchored, because nothing but a human with
+// a terminal ever resolved one.
+func TestRM202AnAnchorResolvesItsSegmentsDriftAlert(t *testing.T) {
+	f := newEngineFixture(t, func(o *sealOptions) {
+		o.anchorAttempts = 1
+		o.anchorBase = time.Millisecond
+	})
+	f.chain.seed(t, 4)
+	f.log.err = errors.New("connection refused")
+	if _, err := f.engine.Cycle(context.Background()); err != nil {
+		t.Fatalf("failing Cycle: %v", err)
+	}
+	alerts := f.chain.recordsOfType(event.EventTypeLedgerDriftDetected)
+	if len(alerts) != 1 {
+		t.Fatalf("want exactly one drift alert, got %d", len(alerts))
+	}
+	subject, ok := alerts[0][event.FieldSubjectEventID].(string)
+	if !ok {
+		t.Fatalf("the drift alert carries no readable %s", event.FieldSubjectEventID)
+	}
+	if len(f.chain.resolved) != 0 {
+		t.Fatalf("an alert was resolved while its segment was still unanchored: %v", f.chain.resolved)
+	}
+
+	f.log.err = nil
+	recovered := f.newEngine(f.chain, f.engine.opts)
+	if _, err := recovered.Cycle(context.Background()); err != nil {
+		t.Fatalf("recovery Cycle: %v", err)
+	}
+	got, ok := f.chain.resolved[subject]
+	if !ok {
+		t.Fatalf("the anchor did not resolve the alert about its segment %s", subject)
+	}
+	if !strings.HasPrefix(got, "innsegl-sealer: ") || !strings.Contains(got, "anchored") {
+		t.Errorf("resolution = %q, want it by innsegl-sealer, saying the segment was anchored", got)
 	}
 }

@@ -69,6 +69,8 @@ maintainer ask "why is it like this?"
 | [0051](0051-let-a-live-run-adopt-a-dead-runs-work-and-record-the-handover.md) | Let a live run adopt a dead run's work, and record the handover as an event | accepted | 2026-09-24 |
 | [0052](0052-a-withdrawn-credential-is-a-lapse-not-a-death.md) | A withdrawn credential is a lapse, not a death | accepted | 2026-09-26 |
 | [0053](0053-issue-a-runs-identity-only-through-the-attested-mcp.md) | Issue a run's identity only through the attested MCP, never to a workload that declares a label | proposed | 2026-09-26 |
+| [0054](0054-alerts-live-in-a-header-notification-menu.md) | Alerts live in a header notification menu, not in banners on one page | accepted | 2026-09-27 |
+| [0055](0055-an-anchor-resolves-the-drift-alert-about-its-segment.md) | An anchor resolves the drift alert about its segment | accepted | 2026-09-27 |
 
 ## Open items
 
