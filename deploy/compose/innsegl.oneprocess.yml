@@ -96,6 +96,14 @@ services:
       # And the reconciler's.
       INNSEGL_RECONCILE_INTERVAL: 1m
       INNSEGL_RECONCILE_EXPIRE_AFTER: 10m
+      # The reconciler's rebase and writes passes (#194, #169). This file was
+      # written before either existed and never gained them, so one-process
+      # mode ran both passes OFF without saying so (#333). The same
+      # expressions as innsegl.yml's reconciler: empty leaves each off, as there.
+      INNSEGL_REBASE_BRANCH: ${INNSEGL_REBASE_BRANCH:-}
+      INNSEGL_REBASE_REPOS: ${INNSEGL_REBASE_REPOS:-}
+      INNSEGL_WRITES_LOG_DIR: ${INNSEGL_WRITES_LOG_DIR:-}
+      INNSEGL_WRITES_REPOS: ${INNSEGL_WRITES_REPOS:-}
 
       # The reaper's. It expires runs whose TTL has passed and deletes their
       # SPIRE entries -- IP §6.7's orphaned-entry requirement.
@@ -133,6 +141,10 @@ services:
   # are scaled to zero instead. `docker compose ps` still lists them, with no
   # container behind them, which is the honest picture: the service is defined
   # and nothing is running it here.
+    volumes:
+      # Where the writes pass reads the harness's tool-call bodies, as the
+      # reconciler container mounts it (innsegl.workrepo.yml): read-only.
+      - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/harness-log:ro
   innsegl-sealer:
     deploy:
       replicas: 0
