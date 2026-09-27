@@ -165,11 +165,7 @@ INNSEGL_REKOR_TLOG_ID ?= $(shell scripts/rekor-tlog-pin.sh read 2>/dev/null || e
 
 ## rekor-tlog-id: print the tree rekor is serving and pin it for later boots
 rekor-tlog-id:
-	@id=$$(curl -sS --max-time 5 http://127.0.0.1:$(INNSEGL_REKOR_PORT)/api/v1/log \
-	  | sed -n 's/.*"signedTreeHead":"[^ ]* - \([0-9][0-9]*\).*/\1/p'); \
-	  [ -n "$$id" ] || { echo "rekor is not answering on port $(INNSEGL_REKOR_PORT)" >&2; exit 1; }; \
-	  printf '%s\n' "$$id" > $(REKOR_TLOG_FILE); \
-	  echo "$$id  (pinned in $(REKOR_TLOG_FILE))"
+	@scripts/rekor-tlog-pin.sh record http://127.0.0.1:$(INNSEGL_REKOR_PORT)
 
 ## sigstore-up: boot SPIRE and the local Fulcio/Rekor pair, wired to each other
 #
@@ -190,7 +186,9 @@ sigstore-up: innsegl-trust-volumes
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
 	  $(INNSEGL_TRUST_ENV) docker compose -f deploy/compose/sigstore.yml up -d
-	@$(MAKE) --no-print-directory rekor-tlog-id >/dev/null 2>&1 || true
+	@# Waits for the log, and a bring-up that cannot pin it FAILS (#345): an
+	@# unpinned log is refused by the guard on the next start.
+	@$(MAKE) --no-print-directory rekor-tlog-id
 	@$(MAKE) --no-print-directory rekor-reindex
 
 # REBUILDING THE SEARCH INDEX, and why bring-up does it every time.

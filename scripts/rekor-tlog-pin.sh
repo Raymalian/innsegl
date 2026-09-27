@@ -53,6 +53,35 @@ pin_path() { printf '%s/%s' "$(repo_of "${1:-.}")" "${REL}"; }
 case "${1:-}" in
   path) pin_path "${2:-.}" ;;
 
+  record)
+    # record URL [dir] -- wait for the log at URL to answer, then pin the tree
+    # it serves (#345). Bring-up used to pin once, straight after starting
+    # Rekor, and swallow the failure: on a slow machine Rekor was not up yet
+    # and no pin was ever written, so the next bring-up met the guard below.
+    # Waits INNSEGL_REKOR_PIN_WAIT seconds (default 180); fails loudly and
+    # writes nothing if the log never answers.
+    _url="${2:?record needs the log URL}"
+    _p="$(pin_path "${3:-.}")"
+    _wait="${INNSEGL_REKOR_PIN_WAIT:-180}"
+    _step="${INNSEGL_REKOR_PIN_INTERVAL:-3}"
+    _t=0
+    while :; do
+      _id="$(curl -sS --max-time 5 "${_url%/}/api/v1/log" 2>/dev/null \
+        | sed -n 's/.*"signedTreeHead":"[^ ]* - \([0-9][0-9]*\).*/\1/p')"
+      if [ -n "${_id}" ]; then
+        printf '%s\n' "${_id}" > "${_p}"
+        printf '%s  (pinned in %s)\n' "${_id}" "${_p}"
+        exit 0
+      fi
+      if [ "${_t}" -ge "${_wait}" ]; then
+        printf 'rekor-tlog-pin: the log at %s is not answering after %ss; NO tree was pinned.\n' "${_url}" "${_wait}" >&2
+        printf '  Pin it once it is up:  make rekor-tlog-id\n' >&2
+        exit 1
+      fi
+      sleep "${_step}"; _t=$((_t + (_step > 0 ? _step : 1)))
+    done
+    ;;
+
   read)
     _p="$(pin_path "${2:-.}")"
     if [ -s "${_p}" ]; then

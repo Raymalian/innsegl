@@ -114,5 +114,37 @@ else
   printf '  ....  guard cases need docker; skipped the two that do\n'
 fi
 
+# RM-215 (#345). THE PIN IS RECORDED ONCE THE LOG ANSWERS, AND ONLY THEN.
+#
+# Bring-up recorded the pin right after starting Rekor, without waiting, and
+# swallowed the failure. Measured on a new VM: Rekor was still starting, no pin
+# was written, and the next `make start` there would have been refused by the
+# guard above for a log that had simply never been pinned. `record` waits for
+# the log to answer, and fails loudly -- writing nothing -- if it never does.
+STUB="${TMP}/stubbin"; mkdir -p "${STUB}"
+cat > "${STUB}/curl" <<'STUBSH'
+#!/bin/sh
+n=$(cat "${STUB_COUNT}" 2>/dev/null || echo 0); n=$((n + 1)); echo "${n}" > "${STUB_COUNT}"
+[ "${n}" -gt "${STUB_FAILS}" ] || exit 7
+printf '{"treeSize":1,"signedTreeHead":"rekor.test - 2028999985815895099\\n1\\n"}'
+STUBSH
+chmod +x "${STUB}/curl"
+rm -f "${REPO}/deploy/compose/.rekor-tlog-id"
+out="$(PATH="${STUB}:${PATH}" STUB_COUNT="${TMP}/n1" STUB_FAILS=2 INNSEGL_REKOR_PIN_WAIT=10 INNSEGL_REKOR_PIN_INTERVAL=0 \
+  "${REPO}/scripts/rekor-tlog-pin.sh" record http://127.0.0.1:1 "${WT}" 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ "$(cat "${REPO}/deploy/compose/.rekor-tlog-id" 2>/dev/null)" = "2028999985815895099" ]; then
+  ok "RM-215 a log that answers after a slow start is pinned"
+else
+  bad "RM-215 a log that answers after a slow start is pinned" "exit ${rc}: ${out}"
+fi
+rm -f "${REPO}/deploy/compose/.rekor-tlog-id"
+out="$(PATH="${STUB}:${PATH}" STUB_COUNT="${TMP}/n2" STUB_FAILS=999 INNSEGL_REKOR_PIN_WAIT=2 INNSEGL_REKOR_PIN_INTERVAL=1 \
+  "${REPO}/scripts/rekor-tlog-pin.sh" record http://127.0.0.1:1 "${WT}" 2>&1)"; rc=$?
+if [ "${rc}" -ne 0 ] && [ ! -e "${REPO}/deploy/compose/.rekor-tlog-id" ] && printf '%s' "${out}" | grep -qi "not answering"; then
+  ok "RM-215 a log that never answers fails loudly and pins nothing"
+else
+  bad "RM-215 a log that never answers fails loudly and pins nothing" "exit ${rc}: ${out}"
+fi
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [ "${fail}" -eq 0 ]
