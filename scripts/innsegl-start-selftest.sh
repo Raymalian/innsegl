@@ -106,6 +106,19 @@ else
   bad "the backup is one of the reported services" "innsegl-backup is not in --services"
 fi
 
+# RM-211 (#339). A plain bring-up runs the sealer and the reconciler inside
+# the MCP (ADR-0056), and their own containers are the `separate` profile. A
+# report that still waits for them waits for two containers nothing started:
+# measured, a one-process bring-up sat more than five minutes on exactly that.
+for folded in innsegl-sealer innsegl-reconciler; do
+  if printf '%s\n' "${reported}" | grep -qx "${folded}"; then
+    bad "a default bring-up does not wait for ${folded}" \
+        "${folded} is in --services, but it runs inside the MCP unless --profile separate asks for it"
+  else
+    ok "a default bring-up does not wait for ${folded}"
+  fi
+done
+
 # Every service in the report is declared by a compose file. Catches a name
 # that outlived the service it named.
 stale=""

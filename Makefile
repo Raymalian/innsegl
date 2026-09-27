@@ -372,11 +372,6 @@ INNSEGL_PROJECTS ?= $(HOME)/Applications
 REPO_PATH ?= $(shell $(CURDIR)/scripts/repo-main-worktree.sh)
 REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
 
-# ONEPROCESS=1 folds the sealer and the reconciler into the MCP process, which
-# is two fewer containers for two background loops that were already the same
-# binary. deploy/compose/innsegl.oneprocess.yml says what that costs.
-ONEPROCESS_FILE = $(if $(ONEPROCESS),-f deploy/compose/innsegl.oneprocess.yml,)
-
 # The proof BFF serves an ALLOWLIST of repositories, not whatever is on disk,
 # and a repository missing from it makes every proof request about it a 404.
 # cmd/innsegl/api.go says why that is bad: it "reads as a verdict about the
@@ -438,7 +433,11 @@ INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
 # #171). Measured on this deployment: working runs append every ~14 seconds,
 # while a run that finished or died goes quiet immediately. No hook means no
 # registration, so there is no run for the reaper to get wrong.
-INNSEGL_MCP_ALSO ?= reap
+#
+# It runs inside the MCP, with the sealer and the reconciler: compose's own
+# default for INNSEGL_MCP_ALSO is seal,reconcile,reap (ADR-0056), and empty
+# here leaves that default alone. Set it only for the separate topology.
+INNSEGL_MCP_ALSO ?=
 
 # ADR-0047 decision 4, and the reason it is on here.
 #
@@ -503,7 +502,7 @@ innsegl-up-here: sigstore-up
 	  INNSEGL_WRITES_LOG_DIR='$(INNSEGL_WRITES_LOG_DIR)' \
 	  INNSEGL_WRITES_REPOS='$(INNSEGL_WRITES_REPOS)' \
 	  INNSEGL_LOG_DIR='$(INNSEGL_LOG_DIR)' \
-	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml $(ONEPROCESS_FILE) up -d
+	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml up -d
 	@$(MAKE) --no-print-directory innsegl-link DIR='$(REPO_PATH)'
 
 # ---------------------------------------------------------------------------
@@ -536,8 +535,8 @@ innsegl-up-here: sigstore-up
 #   - the admin listener is ON. Without it nothing can register a run, and
 #     since RM-105 the model cannot register for itself. A deployment with it
 #     off can sign nothing.
-#   - the sealer and the reconciler run inside the MCP. Two fewer containers,
-#     and doc 05 §2's N-replica topology is not what a laptop is.
+#   - the sealer and the reconciler run inside the MCP. That is innsegl.yml's
+#     own default (ADR-0056), not a setting of this target.
 #   - your projects are mounted. Signing in a copy of your repository was four
 #     of the seven steps this used to take.
 #   - Rekor's host port is chosen at run time from what is free. 3000 is the
@@ -551,7 +550,7 @@ start:
 	 echo "innsegl: rekor on 127.0.0.1:$$port, projects from $(INNSEGL_PROJECTS)"; \
 	 INNSEGL_REKOR_PORT=$$port \
 	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 \
-	 $(MAKE) --no-print-directory innsegl-up-here ONEPROCESS=1
+	 $(MAKE) --no-print-directory innsegl-up-here
 	@echo
 	@echo "ready. Next:"
 	@echo "   make link DIR=~/Applications/<project>     make another project signable"
@@ -788,7 +787,7 @@ innsegl-verify-commit:
 innsegl-down:
 	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_SPIRE_PARENT_ID=unset \
-	  $(INNSEGL_COMPOSE) --profile demo --profile canary down
+	  $(INNSEGL_COMPOSE) --profile demo --profile canary --profile separate down
 
 ## innsegl-purge: tear the innsegl stack down AND delete its data volumes
 # Everything innsegl-down's comment says will happen, on purpose.
@@ -796,7 +795,7 @@ innsegl-purge:
 	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_SPIRE_PARENT_ID=unset \
 	  $(INNSEGL_TRUST_ENV) $(GUARD) docker compose -f deploy/compose/innsegl.yml \
-	  --profile demo --profile canary down -v
+	  --profile demo --profile canary --profile separate down -v
 
 # ---------------------------------------------------------------------------
 # The ledger backup (issue #160, RM-099).

@@ -10,9 +10,9 @@ doc 05 §1's other seven rows, none of which existed as a compose service before
 |---|---|---|
 | `postgres` | service | ledger hot tier, volume-backed, **publishes no host port** |
 | object storage | **three services** | `innsegl-object-store` holds the bytes, `innsegl-object-filer` the metadata, and `innsegl-s3` is the S3 gateway — the only one of the three that enforces object lock, and the only one anything else can reach. Buckets get object lock **on at creation**, COMPLIANCE mode |
-| `innsegl-mcp` | service | attested through the Workload API; append-only DB role |
-| `innsegl-reconciler` | service | same binary, `reconcile` |
-| `innsegl-sealer` | service | same binary, `seal` |
+| `innsegl-mcp` | service | attested through the Workload API; append-only DB role. Runs the seal, reconcile and reap loops by default (ADR-0056) |
+| `innsegl-reconciler` | loop in `innsegl-mcp`; service, `--profile separate` | same binary, `reconcile` |
+| `innsegl-sealer` | loop in `innsegl-mcp`; service, `--profile separate` | same binary, `seal` |
 | `innsegl-dashboard` | **two services** | `innsegl-dashboard` is the UI — nginx and the built React bundle, holding no database credential at all — and `innsegl-api` is the BFF, the only holder of the read-only role. The row's "No write credentials mounted" is satisfied by both at once: nothing is mounted on the UI, and what is mounted next door cannot write |
 | `demo-agent` | service, `--profile demo` | a curl MCP client; runs to completion |
 

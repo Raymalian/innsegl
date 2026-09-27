@@ -296,17 +296,23 @@ words.
 
 ## How much of it you actually have to run
 
-Fourteen containers is the full stack. It is not the floor, and the difference
+Twelve containers is the full stack. It is not the floor, and the difference
 matters if you are deciding whether this is worth adopting.
 
-Measured on 2026-09-07, `docker stats` at rest:
+Counted from `docker stats` at rest on 2026-09-07, when the sealer and the
+reconciler were still two containers of their own:
 
 | | containers | why they are there |
 |---|---|---|
-| the full stack | 14 | everything below, plus the dashboard |
-| **without the UI** | **12** | `innsegl-dashboard` and `innsegl-api` serve the web view. Signing and verifying never touch them. |
-| **one process** | **10** | `ONEPROCESS=1` runs the sealer and the reconciler inside the MCP. See `innsegl.oneprocess.yml`. |
+| **separate loops** | **14** | `--profile separate` with `INNSEGL_MCP_ALSO=reap` runs the sealer and the reconciler as their own containers. For doc 05 §2's replicated MCP, where one process per replica would run a sealer per replica. The reconciler's SPIRE pass is off in this shape (ADR-0056). |
+| the full stack | 12 | the default: the sealer and the reconciler run inside the MCP (`INNSEGL_MCP_ALSO` defaults to `seal,reconcile,reap`) |
+| **without the UI** | **10** | `innsegl-dashboard` and `innsegl-api` serve the web view. Signing and verifying never touch them. |
 | **public Rekor** | **~5** | ADR-0042. `rekor`, `rekor-redis` and the three Trillian containers exist only because the log is ours. |
+
+A stack brought up before the default changed keeps its `innsegl-sealer` and
+`innsegl-reconciler` containers running: a plain `up` does not touch a service
+its profiles leave out. Remove them once, with
+`docker compose -f innsegl.yml --profile separate rm -sf innsegl-sealer innsegl-reconciler`.
 
 **The nine that are hardest to remove are SPIRE and Sigstore**, and they are
 there for one reason: this deployment runs its own identity. Public Sigstore
@@ -535,7 +541,7 @@ Four things worth knowing before you choose:
 | compose refuses, naming `INNSEGL_SPIRE_PARENT_ID` | `register.sh` has not run since this stack booted. It writes `deploy/compose/.env`; re-run it |
 | `innsegl-mcp` restarts, logging that the Workload API gave it no SVID | its registration entry is missing or names an older build of `innsegl:local`. Re-run `register.sh` — it detects a stale entry and replaces it |
 | `innsegl-db-init` exits non-zero naming a privilege | the ledger's role can do more than append. The message names which privilege; `make innsegl-verify` re-runs the check on its own |
-| `innsegl-sealer` restarts | it exits when it cannot reach the object store's gateway or Rekor. `docker compose -f deploy/compose/innsegl.yml logs innsegl-sealer` |
+| `innsegl-mcp` restarts, logging that a companion subcommand stopped | the seal loop runs inside it by default and exits when it cannot reach the object store's gateway or Rekor. `docker compose -f deploy/compose/innsegl.yml logs innsegl-mcp` (or `innsegl-sealer` under `--profile separate`) |
 | Fulcio answers `invalid identity token` | the two stacks disagree about the issuer. Bring both down with `-v` and boot again with the export set |
 | `trillian-db` never becomes healthy on Apple Silicon | it is emulated; give it longer on the first pull |
 | `make smoke` removed a stack you were using | expected — see the note above `make smoke` |

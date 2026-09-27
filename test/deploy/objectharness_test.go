@@ -364,11 +364,29 @@ const composeParentIDPlaceholder = "spiffe://innsegl.dev/spire/agent/placeholder
 
 // would, with the object store's root credential as the deployment's, and
 // returns what every service would actually be handed.
+//
+// It turns on two profiles, and both are there so that a service this package
+// reads is in the configuration at all: `canary` for doc 05 §2's scheduled
+// job, and `separate` for the sealer and the reconciler as their own
+// containers (ADR-0056). Those two still ship, for the multi-replica topology,
+// and every credential and mount check on them has to keep reading them. A
+// test about what a PLAIN `up` starts uses interpolateComposeProfiles with no
+// profile instead.
 func interpolateCompose(ctx context.Context, t *testing.T, bucket string, files ...string) composeConfig {
+	t.Helper()
+	return interpolateComposeProfiles(ctx, t, bucket, []string{"canary", "separate"}, files...)
+}
+
+// interpolateComposeProfiles is interpolateCompose with the profiles named.
+// None at all is what `docker compose up` sees with no --profile flag.
+func interpolateComposeProfiles(ctx context.Context, t *testing.T, bucket string, profiles []string, files ...string) composeConfig {
 	t.Helper()
 	root := repoRoot(t)
 
-	args := []string{"compose", "--profile", "canary"}
+	args := []string{"compose"}
+	for _, p := range profiles {
+		args = append(args, "--profile", p)
+	}
 	for _, rel := range files {
 		args = append(args, "-f", root+"/"+rel)
 	}

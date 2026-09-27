@@ -132,7 +132,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 				member.service, got, member.want)
 		}
 	}
-	for _, service := range []string{"innsegl-sealer", "innsegl-canary", "innsegl-object-init"} {
+	for _, service := range []string{"innsegl-sealer", "innsegl-mcp", "innsegl-canary", "innsegl-object-init"} {
 		for _, network := range cfg.service(t, service).networkNames() {
 			if network == "innsegl-object-backend" {
 				t.Errorf("deploy/compose/innsegl.yml puts %s on innsegl-object-backend. "+
