@@ -175,7 +175,7 @@ export function AnchoringPulse({ anchor, lagBoundMs, now }: AnchoringPulseProps)
           <time
             dateTime={toDateTimeAttribute(sealedAt)}
             title={formatAbsoluteUtc(sealedAt)}
-            className="font-mono"
+            className="tabular-nums"
           >
             {strings.heartbeat.agoSuffix(elapsedSince(sealedAt, at))}
           </time>

@@ -53,7 +53,7 @@ export const alarmIcon = "shrink-0";
 
 /* ── the detail view ────────────────────────────────────────────────────── */
 
-export const page = "flex max-w-prose flex-col gap-5";
+export const page = "flex w-full flex-col gap-5";
 export const heading = "inline-flex items-center gap-2 text-heading font-semibold leading-tight text-ink";
 export const summary = `leading-prose ${secondaryText}`;
 export const facts = `${hairline} flex flex-col rounded-md border-line bg-surface`;

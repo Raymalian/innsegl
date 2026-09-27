@@ -59,6 +59,8 @@ export const strings = {
       otherIdentity: "A recorded commit's log entry was signed under a different identity.",
       otherLogIndex: "A recorded commit's log entry sits at a different log index.",
       unknownDetail: "A ledger claim has no external proof.",
+      unanchored: (first: string, last: string) =>
+        `Positions ${first}–${last} are sealed but could not be anchored in the transparency log.`,
     },
     unattributedDetail: (logIndex: number) =>
       `Rekor log index ${logIndex} holds a signature under one of this ledger's identities, with no record of it here.`,

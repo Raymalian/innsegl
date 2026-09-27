@@ -32,6 +32,10 @@ const KNOWN_REASONS: Readonly<Record<string, string>> = {
     strings.alert.reasons.otherLogIndex,
 };
 
+/** The sealer's anchoring failure, as internal/segment AnchorAlert words it. */
+const UNANCHORED =
+  /^segment sha256:[0-9a-f]+ \(positions (\d+)\.\.(\d+)\) is sealed but has no transparency log entry/;
+
 /** How long a summary may run before it is cut at a word. */
 const SUMMARY_MAX = 110;
 const ELLIPSIS = "…";
@@ -56,6 +60,12 @@ export function alertSummary(alert: AlertRecord): string {
   }
   const reason = (alert.reason ?? "").trim();
   if (reason === "") return strings.alert.reasons.unknownDetail;
+  // The sealer's own reason (internal/segment AnchorAlert), which has a fixed
+  // shape: said as the range it is about, never as the hash (RM-203, #326).
+  const unanchored = UNANCHORED.exec(reason);
+  if (unanchored?.[1] !== undefined && unanchored[2] !== undefined) {
+    return strings.alert.reasons.unanchored(unanchored[1], unanchored[2]);
+  }
   return KNOWN_REASONS[reason] ?? readable(reason);
 }
 
