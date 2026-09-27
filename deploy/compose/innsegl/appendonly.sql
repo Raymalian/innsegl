@@ -88,6 +88,11 @@ GRANT SELECT, INSERT, UPDATE ON innsegl.idempotency TO :"role";
 -- compose stack migrates as the owner, before this role is used at all.
 GRANT SELECT ON innsegl.schema_migrations TO :"role";
 
+-- `innsegl resolve-alert` (ADR-0044) appends a resolution under this role.
+-- SELECT for the RETURNING it reads back. No UPDATE or DELETE: a resolution is
+-- one deliberate act, and correcting one is the owner's (#323).
+GRANT SELECT, INSERT ON innsegl.alert_resolutions TO :"role";
+
 -- A table added by a LATER migration must arrive append-only too. Without
 -- this, the role's posture would silently be "append-only as of the migrations
 -- that existed when it was provisioned" — and the next migration would hand it

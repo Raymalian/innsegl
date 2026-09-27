@@ -104,6 +104,13 @@ var appendOnlyExpectations = []struct {
 		"the same row transitions in_progress -> completed; without UPDATE the MCP " +
 			"could take a claim it could never settle"},
 
+	// RM-201 (#323). ADR-0044 gives `innsegl resolve-alert` this role, and
+	// the role never had the table: measured live, every resolution failed
+	// with "permission denied for table alert_resolutions".
+	{"resolve an alert", `INSERT INTO innsegl.alert_resolutions (event_id, resolved_by, reason)
+	 VALUES ('deploy-probe', 'probe', 'probe') RETURNING event_id, resolved_at`, true,
+		"ADR-0044: innsegl resolve-alert runs under this role and appends a resolution"},
+
 	{"update the chain", `UPDATE innsegl.events SET run_id = 'x'`, false,
 		"I4: no mutation. The trigger refuses this for the owner too — the ACL is " +
 			"what makes it refused for a REASON an operator cannot switch off"},
