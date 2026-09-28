@@ -96,7 +96,21 @@ const (
 type Frame struct {
 	Direction Direction
 	Opcode    Opcode
-	Payload   []byte
+	// Payload holds at most maxObservedFramePayload bytes of the frame's
+	// payload -- see that constant's own doc comment. It is never more than
+	// what was actually relayed, and the relay itself is never bounded by
+	// this: every byte of every frame still reaches the peer regardless of
+	// what Payload holds here.
+	Payload []byte
+	// Length is the frame's own declared payload length (RFC 6455 §5.2),
+	// always the TRUE length -- even when Truncated is true and Payload
+	// holds fewer bytes than this.
+	Length uint64
+	// Truncated is true when Payload holds only the first
+	// maxObservedFramePayload bytes of a longer frame. A consumer that
+	// needs the rest has nowhere to get it from this Frame: Length says how
+	// much was cut, Payload does not carry it.
+	Truncated bool
 }
 
 // FrameObserver is notified of each Frame as it is relayed, in either
@@ -428,17 +442,38 @@ func readFrameHeader(r *bufio.Reader) (wsFrameHeader, []byte, error) {
 // holds more of one frame in memory at once than this.
 const wsFrameCopyChunk = 32 * 1024
 
+// maxObservedFramePayload bounds how much of one frame's payload a
+// FrameObserver is ever handed, regardless of what the frame itself
+// declares. RFC 6455 §5.2 lets a single frame declare a payload length up
+// to 2^63-1; the relay forwards every one of those bytes to the peer no
+// matter what (see the copy loop below, which this bound never touches),
+// but an observer that accumulates them in memory has no such obligation --
+// and the flight recorder, this package's own production consumer
+// (ADR-0057), always attaches one. Without a cap, a single frame with an
+// oversized declared length is unbounded gateway memory growth on the
+// production path, not merely a theoretical test concern. 1 MiB is
+// comfortably larger than any tool call or model reply ADR-0057's own spike
+// measured. Frame.Length still carries the frame's TRUE declared length,
+// and Frame.Truncated says when Payload is not all of it, so a consumer
+// that needs to know more never mistakes a short Payload for a complete
+// one.
+const maxObservedFramePayload = 1 << 20 // 1 MiB
+
 // relayOneFrame forwards header's raw bytes and its declared payload from
 // src to dst unchanged, then -- once the whole frame has already reached
-// dst -- hands (direction, opcode, unmasked payload) to observer, if one is
-// set. Nothing observer does can affect what was already written to dst;
-// this is a witness on top of the forwarded bytes, never a gate in front of
-// them, the same contract messagesInterpreter already holds for SSE events.
+// dst -- hands (direction, opcode, unmasked payload, true length,
+// truncated) to observer, if one is set. Nothing observer does can affect
+// what was already written to dst; this is a witness on top of the
+// forwarded bytes, never a gate in front of them, the same contract
+// messagesInterpreter already holds for SSE events. Payload is bounded by
+// maxObservedFramePayload; the copy to dst below is not.
 func relayOneFrame(direction Direction, header wsFrameHeader, raw []byte,
 	src *bufio.Reader, dst io.Writer, observer FrameObserver) error {
 	if _, err := dst.Write(raw); err != nil {
 		return err
 	}
+
+	truncated := observer != nil && header.length > maxObservedFramePayload
 
 	var observed []byte
 	buf := make([]byte, wsFrameCopyChunk)
@@ -456,16 +491,27 @@ func relayOneFrame(direction Direction, header wsFrameHeader, raw []byte,
 		if _, err := dst.Write(chunk); err != nil {
 			return err
 		}
-		if observer != nil {
-			unmasked := append([]byte(nil), chunk...)
+		// Capped independently of the forwarding above: once observed
+		// already holds maxObservedFramePayload bytes, a further chunk is
+		// still written to dst in full, just never appended here -- take is
+		// always a PREFIX of chunk starting at the same offset (maskPos), so
+		// the mask-key phase used to unmask it stays correct even when take
+		// is shorter than chunk.
+		if observer != nil && uint64(len(observed)) < maxObservedFramePayload {
+			room := maxObservedFramePayload - uint64(len(observed))
+			take := chunk
+			if uint64(len(take)) > room {
+				take = take[:room]
+			}
+			unmasked := append([]byte(nil), take...)
 			if header.masked {
 				for i := range unmasked {
 					unmasked[i] ^= header.maskKey[(maskPos+i)%4]
 				}
 			}
 			observed = append(observed, unmasked...)
-			maskPos += len(chunk)
 		}
+		maskPos += len(chunk)
 		remaining -= n
 	}
 
@@ -473,7 +519,13 @@ func relayOneFrame(direction Direction, header wsFrameHeader, raw []byte,
 		if observed == nil {
 			observed = []byte{}
 		}
-		observer.OnFrame(Frame{Direction: direction, Opcode: header.opcode, Payload: observed})
+		observer.OnFrame(Frame{
+			Direction: direction,
+			Opcode:    header.opcode,
+			Payload:   observed,
+			Length:    header.length,
+			Truncated: truncated,
+		})
 	}
 	return nil
 }

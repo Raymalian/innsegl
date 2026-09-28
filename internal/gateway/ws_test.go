@@ -499,6 +499,114 @@ func TestGW009EveryFrameReachesTheObserver(t *testing.T) {
 	}
 }
 
+// --- The observer's own copy of a frame's payload is bounded
+// (maxObservedFramePayload), independent of what the frame itself declares
+// (up to 2^63-1 per RFC 6455 §5.2) and independent of what the relay
+// actually forwards to the peer, which is never bounded by this cap. ---
+
+// findFrame waits (briefly, polling) for observer to have recorded a frame
+// matching opcode and direction, the same synchronization
+// TestGW009EveryFrameReachesTheObserver already uses for the same reason:
+// the observer runs on the relay's own goroutines, not the test's.
+func findFrame(t *testing.T, observer *recordingFrameObserver, opcode Opcode, direction Direction) Frame {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, f := range observer.snapshot() {
+			if f.Opcode == opcode && f.Direction == direction {
+				return f
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("observer never recorded a frame with opcode %#x, direction %v: %+v", opcode, direction, observer.snapshot())
+	return Frame{} // unreachable
+}
+
+func TestGW009FrameObserverPayloadIsBoundedForAnOversizedFrame(t *testing.T) {
+	observer := &recordingFrameObserver{}
+	gwURL, upstream := newWSGateway(t, []Guard{}, observer)
+
+	client, resp := dialWSHarnessClient(t, gwURL, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101", resp.StatusCode)
+	}
+
+	// Well over maxObservedFramePayload -- large enough that an unbounded
+	// observer would hold a multi-megabyte slice for this one frame alone,
+	// exactly the growth this cap exists to bound. Filled with a
+	// non-repeating pattern so a copy bug (wrong offset, wrong length,
+	// re-masking instead of forwarding raw) shows up as a content mismatch
+	// rather than being hidden by coincidental all-zero equality.
+	const extra = 12345
+	payload := make([]byte, maxObservedFramePayload+extra)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+
+	client.send(t, wsOpcodeBinary, payload)
+	echoed, err := client.recvWithTimeout(t, 10*time.Second)
+	if err != nil {
+		t.Fatalf("%v (want the oversized frame relayed byte-for-byte despite the observer's own cap)", err)
+	}
+	if !bytes.Equal(echoed.payload, payload) {
+		t.Fatal("echoed payload does not match what was sent -- the relay must forward every byte regardless of the observer's cap")
+	}
+
+	client.send(t, wsOpcodeClose, []byte{})
+	_ = client.recv(t) // drain the close echo
+
+	recorded := upstream.recorded()
+	if len(recorded) == 0 || !bytes.Equal(recorded[0].payload, payload) {
+		t.Fatal("the upstream did not receive the full, untruncated payload -- the relay's own forwarding must not be bounded by the observer's cap")
+	}
+
+	found := findFrame(t, observer, OpcodeBinary, ClientToUpstream)
+	if len(found.Payload) != maxObservedFramePayload {
+		t.Errorf("observer Payload length = %d, want exactly the cap %d", len(found.Payload), maxObservedFramePayload)
+	}
+	if !bytes.Equal(found.Payload, payload[:maxObservedFramePayload]) {
+		t.Error("observer Payload does not match the first cap bytes of what was sent")
+	}
+	if !found.Truncated {
+		t.Error("Truncated = false, want true for a frame over the cap")
+	}
+	if found.Length != uint64(len(payload)) {
+		t.Errorf("Length = %d, want the frame's TRUE declared length %d", found.Length, len(payload))
+	}
+}
+
+func TestGW009FrameObserverDeliversTheWholePayloadWhenUnderTheCap(t *testing.T) {
+	observer := &recordingFrameObserver{}
+	gwURL, _ := newWSGateway(t, []Guard{}, observer)
+
+	client, resp := dialWSHarnessClient(t, gwURL, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101", resp.StatusCode)
+	}
+
+	payload := []byte("well under the cap")
+	client.send(t, wsOpcodeBinary, payload)
+	if _, err := client.recvWithTimeout(t, 5*time.Second); err != nil {
+		t.Fatalf("%v", err)
+	}
+	client.send(t, wsOpcodeClose, []byte{})
+	_ = client.recv(t) // drain the close echo
+
+	found := findFrame(t, observer, OpcodeBinary, ClientToUpstream)
+	if !bytes.Equal(found.Payload, payload) {
+		t.Errorf("Payload = %q, want %q", found.Payload, payload)
+	}
+	if found.Truncated {
+		t.Error("Truncated = true, want false for a frame under the cap")
+	}
+	if found.Length != uint64(len(payload)) {
+		t.Errorf("Length = %d, want %d", found.Length, len(payload))
+	}
+}
+
 // --- An unrecognised harness shape is refused by the guards before any
 // upgrade is attempted -- default guards, upstream address unreachable so
 // a 502 (a dial that should never have happened) is distinguishable from
