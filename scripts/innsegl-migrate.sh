@@ -35,10 +35,27 @@
 # which export cannot have — see `check` below for how an operator gets it
 # in first. The archive is written mode 0600: it holds CA private keys.
 #
-# IMPORT verifies every checksum in the manifest BEFORE writing a single byte
-# to any volume. It refuses while any container holds a target volume, and
-# refuses a target that already exists and holds data, unless --replace says
-# to overwrite it.
+# IMPORT verifies every checksum in the manifest, that no container — running
+# OR STOPPED — holds any target volume, and that no target already holds
+# data without --replace, ALL BEFORE WRITING A SINGLE BYTE to any volume. A
+# stopped container still references its volume just as a running one does —
+# `docker volume rm` refuses either — so the check that matters here is
+# `docker ps -a`, not `docker ps`, and it runs against every volume in the
+# manifest before the write loop starts, not discovered by hitting
+# `docker volume rm` partway through it. If a docker command still fails
+# mid-way regardless (a race with something outside this script, a daemon
+# hiccup), the error names every volume already replaced or loaded before
+# that point and says plainly that the import must be re-run.
+#
+# EVERY HELPER CONTAINER THIS SCRIPT STARTS (the tar read/write helpers, and
+# vol_empty's peek) carries HELPER_LABEL and runs with --rm, so a leftover
+# one — Ctrl-C at the wrong moment can kill this script's docker CLI before
+# the container it just asked for ever starts, leaving it stuck in "Created"
+# forever — is refused by the preflight, by name, before any write, exactly
+# like a stopped real container is. A trap on INT/TERM also force-removes
+# any helper THIS run started, so an interrupted run does not routinely leave
+# one behind in the first place. IMPORT prints one line per volume to STDERR
+# as it starts that volume's work, so a large import never looks stuck.
 #
 # LABELS TRAVEL WITH THE VOLUME, and this is load-bearing rather than tidy:
 # scripts/teardown-guard.sh reads dev.innsegl.trust-root to refuse deleting
@@ -88,6 +105,13 @@
 #                                   with this shell command's stdout, so
 #                                   `check`'s comparison logic can be proven
 #                                   without a real ledger.
+#   INNSEGL_MIGRATE_HELPER_SLEEP    TEST ONLY. Every helper container sleeps
+#                                   this many seconds before doing its real
+#                                   work, so scripts/innsegl-migrate-
+#                                   selftest.sh can interrupt a run mid-way
+#                                   deterministically instead of racing real
+#                                   disk I/O. NEVER set this against a real
+#                                   deployment; it only slows things down.
 #
 # EXIT
 #   0  done, or (check) the manifest and the running stack agree
@@ -109,13 +133,104 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 # already build on (Dockerfile), so this is not a second image to audit.
 readonly TAR_IMAGE="alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
 
+# HELPER_LABEL marks every throwaway container this script starts to read or
+# write a volume — every `docker run` in this file goes through run_helper()
+# below, and every one of them carries this label — so a leftover one is
+# recognisable on sight: `docker ps -a --filter label=dev.innsegl.migrate-
+# helper=1` finds it regardless of which run started it or what random name
+# Docker gave it. --rm only removes a container once it exits; Ctrl-C at the
+# wrong moment can kill this script's docker CLI before the container it
+# just asked for ever starts, leaving it stuck in "Created" forever — the
+# same "in use" refusal a stopped real container produces, for a container
+# nothing is actually using any more.
+readonly HELPER_LABEL="dev.innsegl.migrate-helper=1"
+
+# Every helper THIS RUN starts also carries a name under this prefix (this
+# process's own pid), so cleanup_helpers can remove exactly the ones it made
+# — never a concurrent script instance's — without guessing.
+HELPER_NAME_PREFIX="innsegl-migrate-helper-$$"
+HELPER_SEQ=0
+next_helper_name() {
+  HELPER_SEQ=$((HELPER_SEQ + 1))
+  printf '%s-%s' "${HELPER_NAME_PREFIX}" "${HELPER_SEQ}"
+}
+
 WORK=""
 cleanup() { [ -n "${WORK}" ] && rm -rf "${WORK}"; }
+
+# cleanup_helpers removes every helper container THIS RUN started, matched
+# by HELPER_NAME_PREFIX, regardless of what state Ctrl-C left it in.
+cleanup_helpers() {
+  local c
+  for c in $(docker ps -aq --filter "name=^${HELPER_NAME_PREFIX}" 2>/dev/null); do
+    docker rm -f "${c}" >/dev/null 2>&1 || true
+  done
+}
+
+# on_interrupt runs on INT or TERM: force-remove any helper this run
+# started, then exit with the signal's conventional code. It does not rely
+# on the interrupted docker command noticing the signal itself — an
+# in-flight helper is removed explicitly, whether or not the docker CLI
+# child also got the same signal.
+on_interrupt() {
+  local code="$1"
+  printf 'innsegl-migrate: interrupted — removing any helper container this run started...\n' >&2
+  cleanup_helpers
+  cleanup
+  trap - INT TERM EXIT
+  exit "${code}"
+}
+
 trap cleanup EXIT
+trap 'on_interrupt 130' INT
+trap 'on_interrupt 143' TERM
 
 die()  { printf 'innsegl-migrate: %s\n' "$*" >&2; exit 1; }
 usage_die() { usage >&2; printf 'innsegl-migrate: %s\n' "$*" >&2; exit 2; }
 note() { printf 'innsegl-migrate: %s\n' "$*"; }
+# progress writes a line to STDERR immediately, so it shows up even while
+# stdout is captured or piped — used for the one-line-per-volume progress
+# import prints as it goes, so a large import never looks stuck.
+progress() { printf 'innsegl-migrate: %s\n' "$*" >&2; }
+
+# run_helper MOUNT_ARGS... -- SH_COMMAND — docker run --rm, labelled and
+# named (see HELPER_LABEL and next_helper_name above) so a leftover from an
+# interrupted run is always identifiable, executing SH_COMMAND inside the
+# pinned tar image via `sh -c`. INNSEGL_MIGRATE_HELPER_SLEEP, TEST ONLY,
+# prefixes a `sleep` before SH_COMMAND so the self-test can interrupt a run
+# deterministically instead of racing real disk I/O.
+run_helper() {
+  local mounts=() cmd
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+    mounts+=("$1"); shift
+  done
+  [ "${1:-}" = "--" ] && shift
+  cmd="${1:-}"
+  if [ -n "${INNSEGL_MIGRATE_HELPER_SLEEP:-}" ]; then
+    cmd="sleep ${INNSEGL_MIGRATE_HELPER_SLEEP}; ${cmd}"
+  fi
+  docker run --rm --label "${HELPER_LABEL}" --name "$(next_helper_name)" \
+    "${mounts[@]}" "${TAR_IMAGE}" sh -c "${cmd}"
+}
+
+# refuse_if_helper_leftover dies if a helper container from an earlier,
+# interrupted run of this script is still here. Every helper this script
+# ever starts carries HELPER_LABEL, so this is one query regardless of which
+# run left it behind or what Docker named it.
+refuse_if_helper_leftover() {
+  local rows name
+  rows="$(docker ps -a --filter "label=${HELPER_LABEL}" --format '{{.Names}}' 2>/dev/null)"
+  [ -n "${rows}" ] || return 0
+  printf 'innsegl-migrate: refusing: a helper container from an earlier, interrupted run is\n' >&2
+  printf '  still here — remove it, then try again:\n' >&2
+  while IFS= read -r name; do
+    [ -n "${name}" ] || continue
+    printf '    docker rm -f %s\n' "${name}" >&2
+  done <<EOF
+${rows}
+EOF
+  exit 1
+}
 
 usage() {
   cat <<'EOF'
@@ -291,12 +406,23 @@ vol_exists() { docker volume inspect "$1" >/dev/null 2>&1; }
 
 vol_empty() {
   local out
-  out="$(docker run --rm -v "$1:/d:ro" "${TAR_IMAGE}" sh -c 'ls -A /d 2>/dev/null | head -1' 2>/dev/null)"
+  out="$(run_helper -v "$1:/d:ro" -- 'ls -A /d 2>/dev/null | head -1' 2>/dev/null)"
   [ -z "${out}" ]
 }
 
 vol_holders() {
   docker ps -q --filter "volume=$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
+}
+
+# vol_holders_all NAME — every container that references volume NAME,
+# running OR STOPPED, as "<name> (<state>)" one per line. `docker volume rm`
+# refuses while ANY container holds a volume, not only a running one — a
+# stopped container still references it — so import's preflight has to see
+# stopped containers too. vol_holders above (running only, plain `docker
+# ps`) is what export's refuse_if_running uses: reading a volume out from
+# under a STOPPED container is fine, only a running writer is unsafe.
+vol_holders_all() {
+  docker ps -a --filter "volume=$1" --format '{{.Names}} ({{.State}})' 2>/dev/null
 }
 
 # refuse_if_running dies if any volume_table() volume that exists is held
@@ -351,6 +477,7 @@ cmd_export() {
   esac
   [ -e "${archive}" ] && die "refusing: ${archive} already exists. Remove it first, or choose a different path."
 
+  refuse_if_helper_leftover
   refuse_if_running
 
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/innsegl-migrate-export.XXXXXX")" || die "could not create a scratch directory"
@@ -382,8 +509,8 @@ cmd_export() {
       continue
     fi
     note "archiving ${name} (${desc})"
-    if ! docker run --rm -v "${name}:/v:ro" -v "${WORK}/volumes:/out" "${TAR_IMAGE}" \
-        tar --numeric-owner -cf "/out/${name}.tar" -C /v . 2>"${WORK}/${name}.err"; then
+    if ! run_helper -v "${name}:/v:ro" -v "${WORK}/volumes:/out" \
+        -- "tar --numeric-owner -cf /out/${name}.tar -C /v ." 2>"${WORK}/${name}.err"; then
       die "could not archive volume ${name}: $(cat "${WORK}/${name}.err" 2>/dev/null)"
     fi
     local sum bytes labels_b64
@@ -449,6 +576,7 @@ cmd_import() {
   [ -n "${archive}" ] || usage_die "import needs an archive path"
   [ -f "${archive}" ] || die "no such archive: ${archive}"
 
+  refuse_if_helper_leftover
   refuse_if_running
 
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/innsegl-migrate-import.XXXXXX")" || die "could not create a scratch directory"
@@ -468,11 +596,17 @@ cmd_import() {
     die "refusing: ${archive}'s manifest failed verification (manifest says ${manifest_want:-<empty>}, archive has ${manifest_got}). Nothing was written to any volume."
   fi
 
-  # PASS 1 — verify EVERY volume checksum before writing anything to any
-  # volume, and that every label decodes to valid JSON.
+  # PASS 1 — verify EVERY volume checksum, that every label decodes to valid
+  # JSON, that no container — running or stopped — holds the target volume,
+  # and that no existing target holds data without --replace: every check
+  # that can fail, for EVERY volume in the manifest, before PASS 2 below
+  # writes a single byte to any of them. A volume late in the manifest that
+  # fails one of these checks must not leave volumes earlier in the manifest
+  # already replaced.
   local bad="" vcount=0 kind name sum bytes labels_b64
   while IFS="$(printf '\t')" read -r kind name sum bytes labels_b64; do
     [ "${kind}" = "volume" ] || continue
+    progress "verifying ${name} ..."
     case "${name}" in
       ''|.|..|*[!A-Za-z0-9_.-]*)
         printf '  refusing: manifest names an unsafe volume %s\n' "${name}" >&2
@@ -501,6 +635,21 @@ cmd_import() {
       printf '  labels for %s do not decode to valid JSON\n' "${name}" >&2
       bad=1; continue
     fi
+    if vol_exists "${name}"; then
+      local holders
+      holders="$(vol_holders_all "${name}")"
+      if [ -n "${holders}" ]; then
+        printf '  refusing: %s is held by the container(s) below. A stopped container\n' "${name}" >&2
+        printf '  still holds its volume — remove it first; the data lives in the volume,\n' >&2
+        printf '  not the container:\n' >&2
+        printf '%s\n' "${holders}" | sed 's/^/    /' >&2
+        bad=1; continue
+      fi
+      if ! vol_empty "${name}" && [ -z "${replace}" ]; then
+        printf '  refusing: target volume %s already exists and is not empty. Pass --replace to overwrite it.\n' "${name}" >&2
+        bad=1; continue
+      fi
+    fi
     vcount=$((vcount + 1))
   done <"${WORK}/manifest.txt"
 
@@ -509,35 +658,50 @@ cmd_import() {
   fi
   [ "${vcount}" -gt 0 ] || die "refusing: ${archive} names no volumes"
 
-  # PASS 2 — every checksum verified; now it is safe to write. Labels are
-  # applied on the SAME `docker volume create` call that makes the volume —
-  # the fresh-create branch below, and the --replace branch's recreate —
-  # because that is the only moment Docker will accept one.
+  # PASS 2 — PASS 1 already confirmed, for every volume in the manifest,
+  # that its checksum matches, that no container holds it, and that it is
+  # either empty or --replace was given; nothing here re-checks any of that,
+  # it only writes. Labels are applied on the SAME `docker volume create`
+  # call that makes the volume — the fresh-create branch below, and the
+  # --replace branch's recreate — because that is the only moment Docker
+  # will accept one. If a docker command still fails here regardless (a race
+  # with something outside this script, a daemon hiccup), done_list names
+  # every volume this loop already finished, so import_die's message says
+  # plainly what is already done and that the import must be re-run — this
+  # never silently leaves some target volumes on the old data and some on
+  # the new without saying so.
+  local done_list=""
+  import_die() {
+    printf 'innsegl-migrate: %s\n' "$1" >&2
+    if [ -n "${done_list}" ]; then
+      printf 'innsegl-migrate: already replaced/loaded before this failure: %s\n' "${done_list}" >&2
+      printf 'innsegl-migrate: the host is now partially imported. Fix the problem above, then\n' >&2
+      printf '  re-run this import (with --replace) to finish the rest — the volumes named\n' >&2
+      printf '  above already hold data from this archive, and loading them again is safe.\n' >&2
+    else
+      printf 'innsegl-migrate: no volume had been written yet.\n' >&2
+    fi
+    exit 1
+  }
   while IFS="$(printf '\t')" read -r kind name sum bytes labels_b64; do
     [ "${kind}" = "volume" ] || continue
+    progress "importing ${name} ..."
     local label_json
     label_json="$(labels_json_of_b64 "${labels_b64}")"
-    if vol_exists "${name}"; then
-      if ! vol_empty "${name}"; then
-        if [ -z "${replace}" ]; then
-          die "refusing: target volume ${name} already exists and is not empty. Pass --replace to overwrite it."
-        fi
-        local holders
-        holders="$(vol_holders "${name}")"
-        [ -z "${holders}" ] || die "refusing: ${name} is in use by ${holders}"
-        note "removing existing ${name} (--replace)"
-        docker volume rm "${name}" >/dev/null || die "could not remove ${name}"
-        create_volume_with_labels "${name}" "${label_json}" || die "could not create ${name}"
-      else
-        note "${name} exists and is empty; loading into it (its labels, if any, are unchanged — Docker cannot relabel an existing volume)"
-      fi
+    if vol_exists "${name}" && ! vol_empty "${name}"; then
+      note "removing existing ${name} (--replace)"
+      docker volume rm "${name}" >/dev/null || import_die "could not remove ${name}"
+      create_volume_with_labels "${name}" "${label_json}" || import_die "could not create ${name}"
+    elif vol_exists "${name}"; then
+      note "${name} exists and is empty; loading into it (its labels, if any, are unchanged — Docker cannot relabel an existing volume)"
     else
-      create_volume_with_labels "${name}" "${label_json}" || die "could not create ${name}"
+      create_volume_with_labels "${name}" "${label_json}" || import_die "could not create ${name}"
     fi
     note "loading ${name}"
-    docker run --rm -v "${name}:/v" -v "${WORK}/volumes:/backup:ro" "${TAR_IMAGE}" \
-      sh -c "tar --numeric-owner -xf /backup/${name}.tar -C /v" \
-      || die "could not load ${name} from ${archive}"
+    run_helper -v "${name}:/v" -v "${WORK}/volumes:/backup:ro" \
+      -- "tar --numeric-owner -xf /backup/${name}.tar -C /v" \
+      || import_die "could not load ${name} from ${archive}"
+    done_list="${done_list:+${done_list}, }${name}"
   done <"${WORK}/manifest.txt"
 
   if [ -f "${WORK}/pin/rekor-tlog-id" ]; then

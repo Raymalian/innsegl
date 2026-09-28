@@ -250,9 +250,12 @@ scripts/innsegl-migrate.sh import innsegl.migration.tar
 # then bring the stack up as usual (see "Boot it", above).
 ```
 
-`import` verifies every volume's checksum against the archive's manifest
-*before* writing anything, and refuses a target volume that already holds
-data unless you pass `--replace`.
+`import` verifies every volume's checksum against the archive's manifest,
+that no container — running or stopped — holds a target volume, and that no
+target already holds data without `--replace`, all *before* writing
+anything. A merely-stopped container still counts, because it still holds
+its volume; remove it first (it is disposable, the data lives in the
+volume, not the container).
 
 **The ledger's event count needs the stack UP to read, which `export`
 cannot have** — it refuses while any container is using one of these
