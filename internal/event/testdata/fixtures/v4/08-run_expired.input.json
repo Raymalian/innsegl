@@ -1,0 +1,11 @@
+{
+  "ts": "2026-08-28T09:35:00.001Z",
+  "spiffe_id": "spiffe://innsegl.dev/agent/docs-bot/jira-204/run-43",
+  "source": "reaper",
+  "schema_version": "4",
+  "run_id": "run-43",
+  "prev_event_hash": "sha256:093ce30cbb8deaba6314d115cae4eab2c4c781a5941e7e0bef9227afe5abca3d",
+  "event_type": "run_expired",
+  "event_id": "01a047b8-f9a1-738e-a4c6-b2480d7e6e63",
+  "chain_position": 8
+}

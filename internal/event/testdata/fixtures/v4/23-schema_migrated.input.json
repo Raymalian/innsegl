@@ -1,0 +1,12 @@
+{
+  "ts": "2026-09-09T12:00:00.000Z",
+  "to_schema_version": "4",
+  "source": "system",
+  "schema_version": "4",
+  "prev_event_hash": "sha256:a305f0a9181c79da1c3c8beaf20c326d11cf3589f0ac52400b148449c4a98934",
+  "from_schema_version": "3",
+  "event_type": "schema_migrated",
+  "event_id": "01a047b2-1e4f-7b32-8d5a-6c9f3e8a7b25",
+  "cutover_position": 1,
+  "chain_position": 22
+}
