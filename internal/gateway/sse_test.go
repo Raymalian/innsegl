@@ -3,10 +3,12 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -254,5 +256,174 @@ func TestMessagesInterpreterDropsAToolUseWhoseInputNeverParses(t *testing.T) {
 	}
 	if seen[0].ID != "toolu_ok" {
 		t.Errorf("observed tool_use id = %q, want toolu_ok", seen[0].ID)
+	}
+}
+
+// TestGW014ToolUseInputBoundedAndReportedTruncated pins the first of
+// GW-014's three bounds (#405): a tool_use block whose input_json_delta
+// fragments keep arriving without ever reaching a content_block_stop must
+// not grow this interpreter's held memory past maxToolUseInputBytes. Past
+// that bound the fragments held so far are dropped, not reassembled, and
+// the eventual content_block_stop reports the block to the observer as
+// truncated rather than guessing at what its input was.
+func TestGW014ToolUseInputBoundedAndReportedTruncated(t *testing.T) {
+	var seen []ToolUse
+	m := newMessagesInterpreter(ToolUseObserverFunc(func(tu ToolUse) { seen = append(seen, tu) }))
+
+	m.handleEvent("content_block_start",
+		`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_big","name":"write_file","input":{}}}`)
+
+	// Fragments well past the bound, a chunk at a time, so the check is
+	// exercised on every delta rather than skipped by one huge write.
+	chunk := strings.Repeat("a", 64*1024)
+	deltaJSON, err := json.Marshal(map[string]any{
+		"type": "content_block_delta", "index": 0,
+		"delta": map[string]any{"type": "input_json_delta", "partial_json": chunk},
+	})
+	if err != nil {
+		t.Fatalf("marshal delta fixture: %v", err)
+	}
+	for fed := 0; fed <= maxToolUseInputBytes+len(chunk); fed += len(chunk) {
+		m.handleEvent("content_block_delta", string(deltaJSON))
+
+		if got := m.pending[0].input.Len(); got > maxToolUseInputBytes {
+			t.Fatalf("pending tool_use input held %d bytes after feeding %d, want <= maxToolUseInputBytes (%d)",
+				got, fed+len(chunk), maxToolUseInputBytes)
+		}
+	}
+
+	m.handleEvent("content_block_stop", `{"type":"content_block_stop","index":0}`)
+
+	if len(seen) != 1 {
+		t.Fatalf("got %d tool_use observations, want 1: %+v", len(seen), seen)
+	}
+	if !seen[0].Truncated {
+		t.Fatalf("tool_use %+v not marked Truncated after exceeding maxToolUseInputBytes", seen[0])
+	}
+	if seen[0].ID != "toolu_big" || seen[0].Name != "write_file" {
+		t.Fatalf("truncated tool_use = %+v, want id=toolu_big name=write_file", seen[0])
+	}
+	if seen[0].Input != nil {
+		t.Fatalf("truncated tool_use Input = %q, want nil (never guessed at)", seen[0].Input)
+	}
+}
+
+// TestGW014ToolUseInputTruncationDoesNotAffectRelayedBytes pins that the
+// bound above is enforced only on what this interpreter itself holds: it
+// rides alongside the forwarded bytes (see messagesInterpreter's own doc
+// comment) and must never make the relay to the caller anything but
+// byte-for-byte, however far over maxToolUseInputBytes the reply runs.
+func TestGW014ToolUseInputTruncationDoesNotAffectRelayedBytes(t *testing.T) {
+	m := newMessagesInterpreter(ToolUseObserverFunc(func(ToolUse) {}))
+	var client bytes.Buffer
+	dst := io.MultiWriter(&client, m) // client write first, as Proxy.stream constructs it
+
+	var raw bytes.Buffer
+	raw.WriteString("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_big\",\"name\":\"write_file\",\"input\":{}}}\n\n")
+
+	chunk := strings.Repeat("a", 64*1024)
+	deltaJSON, err := json.Marshal(map[string]any{
+		"type": "content_block_delta", "index": 0,
+		"delta": map[string]any{"type": "input_json_delta", "partial_json": chunk},
+	})
+	if err != nil {
+		t.Fatalf("marshal delta fixture: %v", err)
+	}
+	for fed := 0; fed <= maxToolUseInputBytes+len(chunk); fed += len(chunk) {
+		raw.WriteString("event: content_block_delta\ndata: " + string(deltaJSON) + "\n\n")
+	}
+	raw.WriteString("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+
+	n, err := dst.Write(raw.Bytes())
+	if err != nil {
+		t.Fatalf("Write returned an error: %v (the interpreter must never error the MultiWriter)", err)
+	}
+	if n != raw.Len() {
+		t.Fatalf("Write reported n = %d, want %d", n, raw.Len())
+	}
+	if !bytes.Equal(client.Bytes(), raw.Bytes()) {
+		t.Fatalf("relayed bytes differ from what was written: got %d bytes, want %d", client.Len(), raw.Len())
+	}
+}
+
+// TestGW014SSEScannerLineBounded pins the second of GW-014's three bounds
+// (#405): a line that never reaches its terminating '\n' must not grow the
+// scanner's buffer past maxSSELineBytes. Past that bound what is held is
+// dropped, and the scanner resynchronises at the next event boundary
+// rather than treating whatever follows as a continuation of the
+// abandoned line.
+func TestGW014SSEScannerLineBounded(t *testing.T) {
+	type got struct{ event, data string }
+	var events []got
+	s := newSSEScanner(func(event, data string) {
+		events = append(events, got{event, data})
+	})
+
+	chunk := bytes.Repeat([]byte("x"), 64*1024) // never a '\n': one line, growing without end
+	for fed := 0; fed <= maxSSELineBytes+len(chunk); fed += len(chunk) {
+		s.write(chunk)
+
+		if held := len(s.buf); held > maxSSELineBytes {
+			t.Fatalf("scanner held %d bytes of one unterminated line after feeding %d, want <= maxSSELineBytes (%d)",
+				held, fed+len(chunk), maxSSELineBytes)
+		}
+	}
+
+	// End the abandoned line, then the blank line that is its event's
+	// boundary, then one well-formed event: the scanner must have
+	// resynchronised, not stayed stuck discarding everything.
+	s.write([]byte("\n\n"))
+	s.write([]byte("event: content_block_stop\ndata: {\"index\":9}\n\n"))
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events after resynchronising, want 1: %+v", len(events), events)
+	}
+	if events[0].event != "content_block_stop" {
+		t.Errorf("event = %q, want content_block_stop", events[0].event)
+	}
+	if events[0].data != `{"index":9}` {
+		t.Errorf("data = %q, want {\"index\":9}", events[0].data)
+	}
+}
+
+// TestGW014SSEScannerEventDataBounded pins the third of GW-014's three
+// bounds (#405): an event's data: lines accumulating without the blank
+// line that ends the event must not grow the scanner's held data past
+// maxSSEEventDataBytes. Past that bound what is held is dropped, and the
+// scanner resynchronises at the next event boundary rather than
+// dispatching a reassembly it knows is incomplete.
+func TestGW014SSEScannerEventDataBounded(t *testing.T) {
+	type got struct{ event, data string }
+	var events []got
+	s := newSSEScanner(func(event, data string) {
+		events = append(events, got{event, data})
+	})
+
+	s.write([]byte("event: content_block_delta\n"))
+
+	// Many complete data: lines, each well under maxSSELineBytes on its
+	// own, but never followed by the blank line that would dispatch the
+	// event -- this exercises the event-data bound, not the line bound.
+	line := []byte("data: " + strings.Repeat("y", 64*1024) + "\n")
+	for fed := 0; fed <= maxSSEEventDataBytes+len(line); fed += len(line) {
+		s.write(line)
+
+		if held := s.curDataLen; held > maxSSEEventDataBytes {
+			t.Fatalf("scanner held %d bytes of one event's data after feeding %d, want <= maxSSEEventDataBytes (%d)",
+				held, fed+len(line), maxSSEEventDataBytes)
+		}
+	}
+
+	s.write([]byte("\n")) // the blank line: nothing to dispatch, the event was abandoned
+	if len(events) != 0 {
+		t.Fatalf("got %d events dispatched from an abandoned event, want 0: %+v", len(events), events)
+	}
+
+	s.write([]byte("event: content_block_stop\ndata: {\"index\":9}\n\n"))
+	if len(events) != 1 {
+		t.Fatalf("got %d events after resynchronising, want 1: %+v", len(events), events)
+	}
+	if events[0].event != "content_block_stop" {
+		t.Errorf("event = %q, want content_block_stop", events[0].event)
 	}
 }
