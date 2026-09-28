@@ -157,6 +157,14 @@ type IdentityGuardConfig struct {
 	// CacheSize bounds the in-memory (session, agent) -> RunMapping cache in
 	// front of Mappings. Zero or less means DefaultIdentityCacheSize.
 	CacheSize int
+	// SessionEndSignals, when set, is Cancel-ed for every request this
+	// guard permits from a session's main agent (lifecycle.go's own doc
+	// comment on the section: this is the half of the session-end redesign
+	// that makes a forged signal against a session that is still genuinely
+	// talking harmless). OPTIONAL: nil means this guard does not know about
+	// session-end signals at all, which is every configuration before #380's
+	// review fix and every test that has no reason to exercise it.
+	SessionEndSignals *SessionEndSignals
 }
 
 // IdentityGuard is ADR-0058 decision 11, wired into guard.go's chain: a
@@ -172,7 +180,8 @@ type IdentityGuard struct {
 	runStates  RunStateReader
 	now        func() time.Time
 
-	cache *identityCache
+	cache             *identityCache
+	sessionEndSignals *SessionEndSignals
 }
 
 // NewIdentityGuard builds an IdentityGuard, or refuses -- the same
@@ -202,14 +211,15 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 		size = DefaultIdentityCacheSize
 	}
 	return &IdentityGuard{
-		mappings:   cfg.Mappings,
-		tree:       cfg.Tree,
-		policy:     cfg.Policy,
-		registrar:  cfg.Registrar,
-		workspaces: cfg.Workspaces,
-		runStates:  cfg.RunStates,
-		now:        now,
-		cache:      newIdentityCache(size),
+		mappings:          cfg.Mappings,
+		tree:              cfg.Tree,
+		policy:            cfg.Policy,
+		registrar:         cfg.Registrar,
+		workspaces:        cfg.Workspaces,
+		runStates:         cfg.RunStates,
+		now:               now,
+		cache:             newIdentityCache(size),
+		sessionEndSignals: cfg.SessionEndSignals,
 	}, nil
 }
 
@@ -224,6 +234,18 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		// Identification never passed one. Refusing rather than guessing is
 		// the same posture every other guard in this chain already takes.
 		return nil, g.refuse("no harness identification was found on this request")
+	}
+
+	// Any request from this session's main agent falsifies its own
+	// session-end signal, if one is standing: the harness that would have
+	// sent that signal is plainly still driving this session (lifecycle.go's
+	// own doc comment on why this is what makes a forged signal against a
+	// live session harmless). Done before deciding anything else, and
+	// regardless of what this request goes on to decide or whether it is
+	// ultimately refused: RECEIVING it is the fact that matters here, not
+	// what it turns out to mean.
+	if g.sessionEndSignals != nil && id.AgentID == mainAgentID {
+		g.sessionEndSignals.Cancel(id.SessionID)
 	}
 
 	facts := ExtractRequestFacts(r)

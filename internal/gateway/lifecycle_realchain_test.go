@@ -72,11 +72,16 @@ func TestGID011RealChainBackstopRetiresASilentRunThroughTheRealMCPPath(t *testin
 	}
 }
 
-// TestGID011RealChainSessionEndRetiresTheMainAgentRunThroughTheRealMCPPath:
-// the session-end signal (ADR-0058 decision 7a) retires the main agent's
-// run, found through a real PostgresMappingStore row, through the SAME
-// Registrar -- run_retired lands on the real chain.
-func TestGID011RealChainSessionEndRetiresTheMainAgentRunThroughTheRealMCPPath(t *testing.T) {
+// TestGID011RealChainSessionEndSweepRetiresTheMainAgentRunAfterGraceThroughTheRealMCPPath:
+// the session-end signal (ADR-0058 decision 7a), REDESIGNED so that receiving
+// one never itself retires anything (#380 code review, 2026-09-28: a signal
+// over an unauthenticated loopback socket must be safe to forge). A signal
+// only marks the session; SessionEnder.Sweep retires the main agent's run,
+// found through a real PostgresMappingStore row, through the SAME
+// Registrar, only once the mark has stood uncancelled past its grace period
+// -- run_retired lands on the real chain only then, not on the signal
+// itself.
+func TestGID011RealChainSessionEndSweepRetiresTheMainAgentRunAfterGraceThroughTheRealMCPPath(t *testing.T) {
 	f := newRealChainFixture(t)
 	registrar := NewMCPRegistrar()
 
@@ -95,9 +100,31 @@ func TestGID011RealChainSessionEndRetiresTheMainAgentRunThroughTheRealMCPPath(t 
 		t.Fatalf("Insert mapping row: %v", err)
 	}
 
-	ender := NewSessionEnder(f.mapping, registrar)
+	signals := NewSessionEndSignals(0)
+	ender := NewSessionEnder(signals, f.mapping, registrar, time.Millisecond, nil)
 	if err := ender.SessionEnded(t.Context(), sessionID); err != nil {
 		t.Fatalf("SessionEnded: %v", err)
+	}
+
+	// The signal alone retires nothing: nothing has swept yet.
+	var sawRetiredBeforeSweep bool
+	for _, rec := range f.eventsFor(t, out.RunID) {
+		if rec[event.FieldEventType] == event.EventTypeRunRetired {
+			sawRetiredBeforeSweep = true
+		}
+	}
+	if sawRetiredBeforeSweep {
+		t.Fatal("run_retired was appended to the chain from SessionEnded alone, before any Sweep; " +
+			"a signal must never retire by itself")
+	}
+
+	time.Sleep(5 * time.Millisecond) // past the 1ms grace configured above
+	retired, sweepErr := ender.Sweep(t.Context())
+	if sweepErr != nil {
+		t.Fatalf("Sweep: %v", sweepErr)
+	}
+	if len(retired) != 1 || retired[0] != out.RunID {
+		t.Fatalf("Sweep retired %v, want exactly [%q]", retired, out.RunID)
 	}
 
 	var sawRetired bool
@@ -110,7 +137,10 @@ func TestGID011RealChainSessionEndRetiresTheMainAgentRunThroughTheRealMCPPath(t 
 		t.Fatalf("no run_retired event was appended to the real chain for %q", out.RunID)
 	}
 	if got := f.ids.entryCount(); got != 0 {
-		t.Errorf("SPIRE holds %d entries after the session-end retirement, want 0", got)
+		t.Errorf("SPIRE holds %d entries after the session-end sweep retired the run, want 0", got)
+	}
+	if got := signals.Len(); got != 0 {
+		t.Errorf("SessionEndSignals still tracks %d session(s) after Sweep retired it, want 0", got)
 	}
 }
 
@@ -137,8 +167,13 @@ func TestGID011RealChainALaterRequestOfThatConversationIsAdoptedNeverRevived(t *
 	if insertErr := f.mapping.Insert(t.Context(), prior); insertErr != nil {
 		t.Fatalf("Insert mapping row: %v", insertErr)
 	}
-	if endErr := NewSessionEnder(f.mapping, registrar).SessionEnded(t.Context(), sessionID); endErr != nil {
+	ender := NewSessionEnder(NewSessionEndSignals(0), f.mapping, registrar, time.Millisecond, nil)
+	if endErr := ender.SessionEnded(t.Context(), sessionID); endErr != nil {
 		t.Fatalf("SessionEnded: %v", endErr)
+	}
+	time.Sleep(5 * time.Millisecond) // past the 1ms grace configured above
+	if _, sweepErr := ender.Sweep(t.Context()); sweepErr != nil {
+		t.Fatalf("Sweep: %v", sweepErr)
 	}
 
 	states := NewCredentialRunStates(f.dir, ledger.DefaultRestoreHorizon, nil)

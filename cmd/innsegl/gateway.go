@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -437,6 +438,18 @@ type runningGateway struct {
 	backstopCandidates *gateway.SilentRunCandidates
 	backstopInterval   time.Duration
 
+	// sessionEnder is set alongside backstop (o.dsn non-empty) and swept on
+	// the SAME ticker: ADR-0058 decision 7a's mark-then-sweep session-end
+	// signal (lifecycle.go's own doc comment on the redesign, #380 review)
+	// and decision 7c's silence backstop are independent clocks answering
+	// the same question -- has this run gone quiet -- so one ticker serving
+	// both is not two mechanisms sharing infrastructure by accident.
+	sessionEnder *gateway.SessionEnder
+	// sessionEndRateLimit bounds sessionEndHandler's own request rate --
+	// see that handler's doc comment for the threat this, and the loopback
+	// and well-formedness checks beside it, answer.
+	sessionEndRateLimit *gateway.SessionRateLimiter
+
 	// closers release every resource openGateway opened beyond the
 	// listener (the mapping store's pool, the ledger connection, the
 	// backstop's own pool) -- called in Close, in the order they were
@@ -510,14 +523,30 @@ func (g *runningGateway) sweepOnce(ctx context.Context) {
 	candidates, err := g.backstopCandidates.Candidates(sweepCtx)
 	if err != nil {
 		g.log.warn("the backstop could not enumerate silent runs", "err", err)
-		return
+	} else {
+		retired, sweepErr := g.backstop.Sweep(sweepCtx, candidates)
+		if sweepErr != nil {
+			g.log.warn("the backstop sweep did not finish cleanly", "err", sweepErr)
+		}
+		if len(retired) > 0 {
+			g.log.info("the silence backstop retired silent runs", "count", len(retired))
+		}
 	}
-	retired, err := g.backstop.Sweep(sweepCtx, candidates)
-	if err != nil {
-		g.log.warn("the backstop sweep did not finish cleanly", "err", err)
-	}
-	if len(retired) > 0 {
-		g.log.info("the silence backstop retired silent runs", "count", len(retired))
+
+	// The session-end signal (ADR-0058 decision 7a, lifecycle.go's own
+	// redesign): retires the main-agent run of every session whose signal
+	// has stood uncancelled past its grace period. Swept alongside the
+	// backstop rather than on its own goroutine -- both answer the same
+	// question, silence, on independent clocks (lifecycle.go's own doc
+	// comment).
+	if g.sessionEnder != nil {
+		retired, endErr := g.sessionEnder.Sweep(sweepCtx)
+		if endErr != nil {
+			g.log.warn("the session-end sweep did not finish cleanly", "err", endErr)
+		}
+		if len(retired) > 0 {
+			g.log.info("a session-end signal retired runs after its grace period", "count", len(retired))
+		}
 	}
 }
 
@@ -582,14 +611,13 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	// traffic", for what stays unchanged when it does not.
 	var identityGuard gateway.Guard
 	var toolUse gateway.ToolUseObserver
-	var sessionEnder *gateway.SessionEnder
 	if o.dsn != "" {
-		ig, ise, ce, stackErr := openIdentityStack(boot, o, running)
+		ig, ise, stackErr := openIdentityStack(boot, o, running)
 		if stackErr != nil {
 			running.Close()
 			return nil, fmt.Errorf("configure the identity stack: %w", stackErr)
 		}
-		identityGuard, toolUse, sessionEnder = ig, ise, ce
+		identityGuard, toolUse = ig, ise
 	}
 
 	proxy := &gateway.Proxy{
@@ -621,11 +649,11 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	// transparent pass-through for every response this guard chain does not
 	// refuse, streaming (GW-002) included.
 	mux.Handle("/", gateway.WithRetryAfterHeader(proxy))
-	if sessionEnder != nil {
+	if running.sessionEnder != nil {
 		// gatewaySessionEndPath: see sessionEndHandler's own doc comment for
 		// why this is minimal and local-only rather than a documented,
 		// versioned part of the gateway's public contract.
-		mux.HandleFunc(gatewaySessionEndPath, sessionEndHandler(sessionEnder))
+		mux.HandleFunc(gatewaySessionEndPath, sessionEndHandler(running.sessionEnder, running.sessionEndRateLimit, log))
 	}
 
 	running.server = &http.Server{
@@ -643,42 +671,98 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 // this codebase might depend on.
 const gatewaySessionEndPath = "/_gateway/session-end"
 
+// gatewaySessionEndRateLimitKey is the one bucket sessionEndHandler's own
+// rate limiter meters -- this endpoint has no per-caller identity to key
+// on (that is exactly the threat this handler's own doc comment names), so
+// every signal, from whatever process sent it, shares one bound.
+const gatewaySessionEndRateLimitKey = "session-end"
+
 // sessionEndHandler is ADR-0058 decision 7a's session-end signal, delivered
-// as a loopback-only HTTP endpoint on this SAME listener -- guarded exactly
-// like the rest of the gateway, which is to say: NOT by anything this
-// handler itself checks, but by the identical network exposure ADR-0060
-// decision 2 already gives every other path on this listener (published to
-// the host on loopback only; unreachable from any compose network
-// innsegl-mcp does not itself join). This is a private control surface
-// between this process and a host-side hook that runs as the same operator,
-// not a caller this gateway has any reason to authenticate independently of
-// that.
+// as a loopback-only HTTP endpoint on this SAME listener.
 //
-// Kept deliberately minimal: one method, one JSON field, one call into
-// gateway.SessionEnder.SessionEnded -- internal/gateway/lifecycle.go's own
-// retirement path, unchanged. A session the mapping store never heard of is
-// not an error (SessionEnded's own doc comment), so this answers 204 for
-// that case exactly as for one it did retire.
-func sessionEndHandler(ender *gateway.SessionEnder) http.HandlerFunc {
+// # The threat, stated plainly, and why it does not need solving here
+//
+// This process cannot tell the harness's own session-end hook apart from
+// any OTHER process a user or an agent can run: ADR-0060 decision 7 puts
+// the hook on the host as an ordinary process under the operator's own
+// user, and an agent's own tool calls run as that same user with the same
+// reach to this same loopback port. So this handler's own checks -- POST
+// only, loopback only, a well-formed session id only, and a bounded rate --
+// are a FLOOD and NOISE control, never an authentication one: they stop an
+// obviously-wrong caller and stop this endpoint from being a cheap way to
+// exhaust memory or spam retirements, but they do not and cannot tell a
+// genuine hook from a forging agent. Nothing here decides that question,
+// because nothing here has to: lifecycle.go's own SessionEnder answers it
+// instead, by never retiring on receipt of a signal at all. A signal only
+// marks a session; SessionEnder.Sweep retires the run it names only once
+// the mark has stood uncancelled for a grace period, and ANY request from
+// that session's main agent in the meantime cancels it (identity.go). A
+// forged signal against a session that is still genuinely talking is
+// cancelled before it ever matters; a forged signal against a session that
+// has genuinely gone quiet only accelerates, by the grace period, a
+// retirement the ordinary silence backstop would have made anyway for the
+// identical reason. See lifecycle.go's own doc comment on this redesign for
+// the full argument -- this handler's job is only to keep the SIGNAL itself
+// cheap to receive and impossible to use as a memory-exhaustion vector, and
+// to make every signal -- forged or not -- visible in the operational log,
+// so a flood of them is something an operator can SEE even though it
+// retires nothing on its own.
+//
+// Kept deliberately minimal and undocumented as a public contract: one
+// method, one JSON field, one call into gateway.SessionEnder.SessionEnded.
+func sessionEndHandler(ender *gateway.SessionEnder, rateLimit *gateway.SessionRateLimiter, log *serveLog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "innsegl gateway: session end: only POST is accepted", http.StatusMethodNotAllowed)
 			return
 		}
+		if !isLoopbackRemoteAddr(r.RemoteAddr) {
+			// Belt and suspenders over the compose publish line (ADR-0060
+			// decision 2): this process itself refuses a caller whose
+			// connection did not come from loopback, rather than resting
+			// entirely on the network topology being right.
+			http.Error(w, "innsegl gateway: session end: refused from a non-loopback address",
+				http.StatusForbidden)
+			return
+		}
+		if retryAfter, refused := rateLimit.Allow(r.Context(), gatewaySessionEndRateLimitKey); refused {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Round(time.Second)/time.Second)))
+			http.Error(w, "innsegl gateway: session end: too many signals", http.StatusTooManyRequests)
+			return
+		}
 		var in struct {
 			SessionID string `json:"session_id"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.SessionID == "" {
-			http.Error(w, "innsegl gateway: session end: a JSON body naming session_id is required",
-				http.StatusBadRequest)
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || !gateway.IsSessionID(in.SessionID) {
+			http.Error(w, "innsegl gateway: session end: a JSON body naming a well-formed session_id "+
+				"is required", http.StatusBadRequest)
 			return
 		}
+		// Recorded regardless of what SessionEnded does with it: a forged
+		// signal retires nothing (see this handler's own doc comment), but
+		// it is still visible here, which is the whole of what makes a
+		// flood of them something an operator can notice.
+		log.info("session-end signal received", "session_id", in.SessionID)
 		if err := ender.SessionEnded(r.Context(), in.SessionID); err != nil {
 			http.Error(w, "innsegl gateway: session end: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// isLoopbackRemoteAddr reports whether remoteAddr -- an *http.Request's own
+// RemoteAddr, host:port form -- names a loopback address. A RemoteAddr this
+// function cannot parse at all is never loopback by assumption: refusing an
+// unparseable caller is the same "refuse rather than guess" posture
+// harness.go's own recognisers already take.
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // openIdentityStack builds RM-235 (#380)'s identity stack: a Postgres-backed
@@ -693,22 +777,22 @@ func sessionEndHandler(ender *gateway.SessionEnder) http.HandlerFunc {
 // session-end endpoint.
 func openIdentityStack(
 	ctx context.Context, o gatewayOptions, running *runningGateway,
-) (gateway.Guard, gateway.ToolUseObserver, *gateway.SessionEnder, error) {
+) (gateway.Guard, gateway.ToolUseObserver, error) {
 	mappings, err := gateway.OpenPostgresMappingStore(ctx, o.dsn)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open the run mapping store: %w", err)
+		return nil, nil, fmt.Errorf("open the run mapping store: %w", err)
 	}
 	running.closers = append(running.closers, mappings.Close)
 
 	store, err := ledger.Open(ctx, o.dsn)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open the ledger: %w", err)
+		return nil, nil, fmt.Errorf("open the ledger: %w", err)
 	}
 	running.closers = append(running.closers, store.Close)
 
 	dir, err := rundir.New(rundir.Config{Events: store})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build the run directory: %w", err)
+		return nil, nil, fmt.Errorf("build the run directory: %w", err)
 	}
 	runStates := gateway.NewCredentialRunStates(dir, ledger.RestoreHorizonFromEnv(), nil)
 
@@ -716,21 +800,29 @@ func openIdentityStack(
 	registrar := gateway.NewMCPRegistrar()
 	resolver := gateway.NewMCPWorkspaceResolver()
 
+	// RM-235 (#380) code review: the session-end signal never retires by
+	// itself -- see lifecycle.go's own doc comment. sessionEndSignals is
+	// shared between the identity guard (Cancel, on every further request)
+	// and the SessionEnder built below (Mark, via the endpoint; Sweep, on
+	// running.sessionEnder's own ticker).
+	sessionEndSignals := gateway.NewSessionEndSignals(0)
+
 	identityGuard, err := gateway.NewIdentityGuard(gateway.IdentityGuardConfig{
-		Mappings:   mappings,
-		Tree:       tree,
-		Policy:     gateway.NewPolicy(),
-		Registrar:  registrar,
-		Workspaces: resolver,
-		RunStates:  runStates,
+		Mappings:          mappings,
+		Tree:              tree,
+		Policy:            gateway.NewPolicy(),
+		Registrar:         registrar,
+		Workspaces:        resolver,
+		RunStates:         runStates,
+		SessionEndSignals: sessionEndSignals,
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)
+		return nil, nil, fmt.Errorf("build the identity guard: %w", err)
 	}
 
 	candidates, err := gateway.OpenSilentRunCandidates(ctx, o.dsn)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open the silent-run enumeration: %w", err)
+		return nil, nil, fmt.Errorf("open the silent-run enumeration: %w", err)
 	}
 	running.closers = append(running.closers, candidates.Close)
 
@@ -739,15 +831,45 @@ func openIdentityStack(
 		Horizon:   backstopHorizonFromEnv(),
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build the silence backstop: %w", err)
+		return nil, nil, fmt.Errorf("build the silence backstop: %w", err)
 	}
 	running.backstop = backstop
 	running.backstopCandidates = candidates
 	running.backstopInterval = o.backstopInterval
 
+	sessionEndRateLimit, err := gateway.NewSessionRateLimiter(gateway.SessionRateLimit{
+		Rate: sessionEndRateLimitRate, Burst: sessionEndRateLimitBurst,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("build the session-end rate limit: %w", err)
+	}
+	running.sessionEnder = gateway.NewSessionEnder(sessionEndSignals, mappings, registrar, sessionEndGraceFromEnv(), nil)
+	running.sessionEndRateLimit = sessionEndRateLimit
+
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
-	sessionEnder := gateway.NewSessionEnder(mappings, registrar)
-	return identityGuard, spawnRecorder, sessionEnder, nil
+	return identityGuard, spawnRecorder, nil
+}
+
+// sessionEndRateLimitRate and sessionEndRateLimitBurst bound
+// sessionEndHandler's own request rate (see that handler's doc comment for
+// why this is a flood control, not an authentication one). This endpoint
+// carries no meaningful legitimate traffic beyond a few signals per
+// session end, so these are deliberately far below the model-traffic rate
+// limit's own defaults (DefaultSessionRateLimitRate/Burst).
+const (
+	sessionEndRateLimitRate  = 5
+	sessionEndRateLimitBurst = 20
+)
+
+// sessionEndGraceFromEnv reads gateway.EnvSessionEndGrace, the same way
+// backstopHorizonFromEnv reads its own variable: unset, unparseable or
+// non-positive all fall back to gateway.DefaultSessionEndGrace.
+func sessionEndGraceFromEnv() time.Duration {
+	d, err := time.ParseDuration(os.Getenv(gateway.EnvSessionEndGrace))
+	if err != nil || d <= 0 {
+		return gateway.DefaultSessionEndGrace
+	}
+	return d
 }
 
 // backstopHorizonFromEnv reads gateway.EnvBackstopHorizon, the same way

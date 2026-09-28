@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"innsegl.dev/innsegl/internal/ledger"
@@ -285,46 +286,258 @@ func (b *Backstop) Sweep(ctx context.Context, candidates []SilentRun) (retired [
 }
 
 // ---------------------------------------------------------------------------
-// The session-end signal (GID-011, ADR-0058 decision 7a).
+// The session-end signal (GID-011, ADR-0058 decision 7a) -- MARK, then
+// SWEEP, never an immediate retirement (#380 code review, 2026-09-28).
+//
+// # The threat this redesign answers
+//
+// The signal arrives over a loopback-only HTTP endpoint (cmd/innsegl's
+// sessionEndHandler) that ADR-0060 decision 2 protects by network
+// segmentation alone -- the same guarantee the whole gateway rests on. But
+// ADR-0060 decision 7 is explicit that the host carries the harness's own
+// hooks as ordinary processes under the OPERATOR'S OWN USER, and nothing
+// stops an AGENT process -- which runs as that same user -- from reaching
+// the identical loopback port with the identical, non-existent credential a
+// genuine hook would have. There is no way for this gateway to tell "the
+// session-end hook" apart from "an agent that read or guessed a session
+// id"; the two are indistinguishable callers of one unauthenticated local
+// socket. So the signal itself has to be SAFE TO FORGE, because it cannot be
+// verified.
+//
+// Retiring on receipt would fail that: an agent could end ANOTHER session's
+// run merely by naming its session id, and retirement is permanent (ADR-0058
+// decision 8, I4) -- a forged signal would be a false, PERMANENT record with
+// no way back, exactly the failure this project exists to make impossible
+// rather than merely unlikely.
+//
+// # Why mark-then-sweep makes forging harmless
+//
+// A signal only records that a session's main agent SAID it was ending; it
+// does nothing else. SessionEnder.Sweep, called periodically, retires
+// through the Registrar only the sessions whose signal has stood
+// UNCANCELLED for a grace period (DefaultSessionEndGrace) -- and any request
+// from that session's main agent in the meantime cancels it
+// (SessionEndSignals.Cancel, called by the identity guard, identity.go). So:
+//
+//   - Forging a signal against a session that is genuinely still talking
+//     costs nothing. The next real request -- and under ordinary traffic
+//     there is one well inside a few minutes -- cancels the mark before the
+//     grace period ever elapses. No retirement happens; nothing is recorded
+//     that did not already have to be true.
+//   - Forging a signal against a session that has genuinely gone quiet only
+//     ACCELERATES, by the grace period, a retirement the ordinary silence
+//     backstop (Backstop.Sweep, above) would have made in any case, for the
+//     identical reason: silence. It never fabricates a retirement of a
+//     session that is still active, which is the only kind of forgery that
+//     would create a false record.
+//
+// Both cases are recorded by the caller as an operational log line
+// (cmd/innsegl's sessionEndHandler, not this package: "nothing here logs"
+// stays true of this file), so a flood of forged signals -- which retires
+// nothing on its own -- is still visible to an operator, even though it is
+// harmless.
 // ---------------------------------------------------------------------------
 
-// SessionEnder retires a session's main-agent run the moment the harness
-// says the session ended -- ADR-0058 decision 7a, the first retirement
-// source in the order that decision states, ahead of hand-back (7b, #377)
-// and this file's own Backstop (7c). The host-side hook that calls
-// SessionEnded is wired in E18 (#389); this type is only the method it
-// calls, with no HTTP endpoint and no cmd/ wiring of its own.
+// DefaultSessionEndGrace is how long a session-end signal stands before
+// SessionEnder.Sweep retires the run it named, if nothing cancelled it
+// first. Minutes, not days: this is not the silence backstop's own horizon
+// (DefaultBackstopHorizon, seven days) and does not replace it -- a session
+// that never signals at all is still caught by Backstop.Sweep on its own
+// schedule. This grace period exists only to give a genuine signal's own
+// retirement a moment to be pre-empted by traffic that arrives a beat
+// later, which is precisely what makes a forged signal against a live
+// session harmless (see this section's own doc comment above).
+const DefaultSessionEndGrace = 3 * time.Minute
+
+// EnvSessionEndGrace is the environment variable a deployment sets to
+// override DefaultSessionEndGrace, named to sit beside EnvBackstopHorizon:
+// the same kind of knob, a different clock.
+const EnvSessionEndGrace = "INNSEGL_GATEWAY_SESSION_END_GRACE"
+
+// DefaultMaxSessionEndSignals bounds SessionEndSignals' own table, the same
+// reasoning DefaultMaxPendingSpawns gives tree.go's own bounded table: a
+// session id here is harness-asserted and never authenticated (see this
+// section's own doc comment), so an unbounded table is a memory-exhaustion
+// vector open to exactly the same forging this redesign otherwise makes
+// harmless.
+const DefaultMaxSessionEndSignals = 4096
+
+// sessionEndMark is one signal not yet acted on: when it arrived.
+type sessionEndMark struct {
+	signaledAt time.Time
+}
+
+// SessionEndSignals is the bounded, in-memory record of session-end signals
+// that have not yet been swept -- session id to when its signal arrived.
+// Safe for concurrent use. Shared between a SessionEnder (Mark, via
+// SessionEnded, and Sweep) and the identity guard (Cancel, on every further
+// request from a signalled session's main agent) -- that sharing is the
+// whole of what makes a forged signal harmless, so the two are always
+// wired onto the same instance in production (cmd/innsegl's
+// openIdentityStack).
+type SessionEndSignals struct {
+	mu    sync.Mutex
+	max   int
+	order []string // session ids, oldest signal first
+	marks map[string]sessionEndMark
+}
+
+// NewSessionEndSignals builds an empty table. maxSignals bounds it; zero or
+// less means DefaultMaxSessionEndSignals.
+func NewSessionEndSignals(maxSignals int) *SessionEndSignals {
+	if maxSignals <= 0 {
+		maxSignals = DefaultMaxSessionEndSignals
+	}
+	return &SessionEndSignals{max: maxSignals, marks: make(map[string]sessionEndMark)}
+}
+
+// Mark records sessionID's signal as having arrived at now, restarting its
+// grace period if one was already recorded -- a second signal for a session
+// already marked is not a second, distinct entry. At capacity, the oldest
+// DISTINCT session's mark is evicted to make room, the same "furthest from
+// ever being useful" reasoning tree.go's own evictOldest already gives,
+// applied to signal age instead of spawn age.
+func (s *SessionEndSignals) Mark(sessionID string, now time.Time) {
+	if sessionID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.marks[sessionID]; !exists {
+		if len(s.order) >= s.max && len(s.order) > 0 {
+			oldest := s.order[0]
+			s.order = s.order[1:]
+			delete(s.marks, oldest)
+		}
+		s.order = append(s.order, sessionID)
+	}
+	s.marks[sessionID] = sessionEndMark{signaledAt: now}
+}
+
+// Cancel removes sessionID's mark, if any -- what a request from that
+// session's main agent does (identity.go's IdentityGuard.Check), and what
+// Sweep itself does once a marked session's run has actually been acted on
+// (retired, or found to have no run at all).
+func (s *SessionEndSignals) Cancel(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.remove(sessionID)
+}
+
+// remove deletes sessionID from both the map and the order slice. Called
+// under s.mu.
+func (s *SessionEndSignals) remove(sessionID string) {
+	if _, ok := s.marks[sessionID]; !ok {
+		return
+	}
+	delete(s.marks, sessionID)
+	for i, id := range s.order {
+		if id == sessionID {
+			s.order = append(s.order[:i], s.order[i+1:]...)
+			break
+		}
+	}
+}
+
+// Due answers every session marked at least grace ago, as of now -- read,
+// not consumed: Sweep removes each one it actually acts on, explicitly,
+// rather than this call clearing them as a side effect a caller might not
+// expect.
+func (s *SessionEndSignals) Due(grace time.Duration, now time.Time) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var due []string
+	for _, id := range s.order {
+		if now.Sub(s.marks[id].signaledAt) >= grace {
+			due = append(due, id)
+		}
+	}
+	return due
+}
+
+// Len reports how many distinct sessions are currently marked -- the
+// bounded table's own live size, for a test (or an operator metric) to read
+// directly rather than infer.
+func (s *SessionEndSignals) Len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.order)
+}
+
+// SessionEnder is ADR-0058 decision 7a's session-end signal, redesigned so
+// that receiving one -- over a socket this gateway cannot authenticate --
+// never itself retires anything. See this section's own doc comment for the
+// threat this answers and why the design makes forging harmless.
 type SessionEnder struct {
+	signals   *SessionEndSignals
 	mappings  MappingStore
 	registrar Registrar
+	grace     time.Duration
+	now       func() time.Time
 }
 
-// NewSessionEnder builds a SessionEnder.
-func NewSessionEnder(mappings MappingStore, registrar Registrar) *SessionEnder {
-	return &SessionEnder{mappings: mappings, registrar: registrar}
+// NewSessionEnder builds a SessionEnder over signals, shared with whatever
+// else needs to Cancel a mark (in production, the identity guard). grace is
+// DefaultSessionEndGrace's own meaning; zero or less means the default. now
+// is nil for time.Now.
+func NewSessionEnder(signals *SessionEndSignals, mappings MappingStore, registrar Registrar, grace time.Duration, now func() time.Time) *SessionEnder {
+	if grace <= 0 {
+		grace = DefaultSessionEndGrace
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return &SessionEnder{signals: signals, mappings: mappings, registrar: registrar, grace: grace, now: now}
 }
 
-// SessionEnded retires sessionID's main-agent run (harness.go's
-// mainAgentID, "main" -- never a subagent's own id: a subagent has no
-// session of its own to end, and ends by hand-back instead, decision 7b).
-//
-// A session the mapping store has never heard of -- one that ended before
-// any request reached this gateway, or one whose main agent never spoke --
-// retires nothing and answers nil: there is no run to retire, and looking
-// one up is what answers that question, rather than assuming one exists
-// ahead of asking.
-func (e *SessionEnder) SessionEnded(ctx context.Context, sessionID string) error {
-	m, found, err := e.mappings.BySessionAgent(ctx, sessionID, mainAgentID)
-	if err != nil {
-		return fmt.Errorf("innsegl gateway: session end: look up the main-agent run for session %q: %w",
-			sessionID, err)
+// SessionEnded records sessionID's own signal. It does not look anything up
+// and it does not retire anything -- see this section's own doc comment for
+// why a signal over an unauthenticated loopback socket must not act by
+// itself. An empty session id is refused rather than marked: it could never
+// name a real run either way, and marking it would only grow the table for
+// nothing.
+func (e *SessionEnder) SessionEnded(_ context.Context, sessionID string) error {
+	if sessionID == "" {
+		return errors.New("innsegl gateway: session end: no session id")
 	}
-	if !found {
-		return nil
-	}
-	if _, err := e.registrar.Retire(ctx, m.RunID); err != nil {
-		return fmt.Errorf("innsegl gateway: session end: retire run %q for session %q: %w",
-			m.RunID, sessionID, err)
-	}
+	e.signals.Mark(sessionID, e.now())
 	return nil
+}
+
+// Sweep retires, through the Registrar, the main-agent run of every session
+// whose signal has stood uncancelled for at least the grace period --
+// called periodically (cmd/innsegl's own ticker), the same shape
+// Backstop.Sweep already takes for the silence horizon. A session the
+// mapping store has never heard of, or one whose signal outlived its own
+// usefulness for any other reason, has its mark cleared without an error:
+// there is nothing left to retire, and clearing it stops Sweep asking about
+// it again on the next tick.
+//
+// Sweep continues past one session's failure rather than stopping the whole
+// sweep: every error is joined into the one returned, and every run this
+// call did retire is named in retired regardless of a later failure in the
+// same sweep -- the identical contract Backstop.Sweep already gives.
+func (e *SessionEnder) Sweep(ctx context.Context) (retired []string, err error) {
+	due := e.signals.Due(e.grace, e.now())
+	var errs []error
+	for _, sessionID := range due {
+		m, found, lookupErr := e.mappings.BySessionAgent(ctx, sessionID, mainAgentID)
+		if lookupErr != nil {
+			errs = append(errs, fmt.Errorf("innsegl gateway: session end: look up the main-agent "+
+				"run for session %q: %w", sessionID, lookupErr))
+			continue
+		}
+		if !found {
+			e.signals.Cancel(sessionID)
+			continue
+		}
+		if _, retireErr := e.registrar.Retire(ctx, m.RunID); retireErr != nil {
+			errs = append(errs, fmt.Errorf("innsegl gateway: session end: retire run %q for "+
+				"session %q: %w", m.RunID, sessionID, retireErr))
+			continue
+		}
+		e.signals.Cancel(sessionID)
+		retired = append(retired, m.RunID)
+	}
+	return retired, errors.Join(errs...)
 }

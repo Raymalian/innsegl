@@ -32,6 +32,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
@@ -707,5 +708,206 @@ func TestForkRegistersWithForkedFromRunIDEndToEnd(t *testing.T) {
 	if originForkedFrom != "" {
 		t.Errorf("the origin's own run_registered carries forked_from_run_id = %q, want empty: nothing forked it",
 			originForkedFrom)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// sessionEndHandler (#380 code review, 2026-09-28): review case (c) --
+// the endpoint accepts only POST from loopback with a well-formed session
+// id, and a flood of signals is rate-bounded. (The OTHER half of "bounded",
+// SessionEndSignals' own table size, is internal/gateway's own
+// TestSessionEndSignalsIsBoundedAndEvictsTheOldestMark.) These call the
+// handler directly, bypassing any real listener, so RemoteAddr can be set
+// to a non-loopback address deliberately -- something no real request to
+// this gateway's own published port could ever carry (ADR-0060 decision 2),
+// which is exactly why this handler's own belt-and-suspenders check is
+// worth testing on its own.
+// ---------------------------------------------------------------------------
+
+// noopMappingStore and noopRegistrar satisfy gateway.MappingStore and
+// gateway.Registrar with no behaviour at all -- these tests are about the
+// HTTP handler's own checks (method, remote address, body shape, rate),
+// never about what SessionEnder does once a signal gets past them.
+type noopMappingStore struct{}
+
+func (noopMappingStore) Insert(context.Context, gateway.RunMapping) error { return nil }
+
+func (noopMappingStore) BySessionAgent(context.Context, string, string) (gateway.RunMapping, bool, error) {
+	return gateway.RunMapping{}, false, nil
+}
+
+func (noopMappingStore) ByFingerprint(context.Context, gateway.Fingerprint) ([]gateway.RunMapping, error) {
+	return nil, nil
+}
+
+type noopRegistrar struct{}
+
+func (noopRegistrar) Register(context.Context, gateway.RegisterInput) (gateway.RegisteredRun, error) {
+	return gateway.RegisteredRun{}, nil
+}
+
+func (noopRegistrar) Restore(context.Context, gateway.RunMapping, gateway.RegisterInput) (gateway.RegisteredRun, error) {
+	return gateway.RegisteredRun{}, nil
+}
+
+func (noopRegistrar) Retire(context.Context, string) (string, error) { return "", nil }
+
+func newTestSessionEndRateLimiter(t *testing.T) *gateway.SessionRateLimiter {
+	t.Helper()
+	l, err := gateway.NewSessionRateLimiter(gateway.SessionRateLimit{
+		Rate: sessionEndRateLimitRate, Burst: sessionEndRateLimitBurst,
+	})
+	if err != nil {
+		t.Fatalf("NewSessionRateLimiter: %v", err)
+	}
+	return l
+}
+
+// sessionEndTestHandler builds a handler over a fresh SessionEndSignals, so
+// a test can read its Len() back directly.
+func sessionEndTestHandler(t *testing.T) (http.HandlerFunc, *gateway.SessionEndSignals) {
+	t.Helper()
+	signals := gateway.NewSessionEndSignals(0)
+	ender := gateway.NewSessionEnder(signals, noopMappingStore{}, noopRegistrar{}, time.Minute, nil)
+	return sessionEndHandler(ender, newTestSessionEndRateLimiter(t), newServeLog(io.Discard)), signals
+}
+
+func sessionEndTestRequest(t *testing.T, method, remoteAddr, body string) *http.Request {
+	t.Helper()
+	var r io.Reader
+	if body != "" {
+		r = strings.NewReader(body)
+	}
+	req := httptest.NewRequestWithContext(context.Background(), method, "/_gateway/session-end", r)
+	req.RemoteAddr = remoteAddr
+	return req
+}
+
+func TestSessionEndHandlerRejectsNonPOST(t *testing.T) {
+	h, _ := sessionEndTestHandler(t)
+	rec := httptest.NewRecorder()
+	h(rec, sessionEndTestRequest(t, http.MethodGet, "127.0.0.1:54321", ""))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestSessionEndHandlerRejectsANonLoopbackRemoteAddr(t *testing.T) {
+	h, signals := sessionEndTestHandler(t)
+	rec := httptest.NewRecorder()
+	body := `{"session_id":"d5a6a1a0-0000-4000-8000-0000000000aa"}`
+	h(rec, sessionEndTestRequest(t, http.MethodPost, "203.0.113.7:54321", body))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if got := signals.Len(); got != 0 {
+		t.Errorf("Len() = %d, want 0: a non-loopback caller must never be marked", got)
+	}
+}
+
+func TestSessionEndHandlerRejectsAMalformedSessionID(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+	}{
+		{"not JSON at all", "not json"},
+		{"no session_id field", `{}`},
+		{"session_id is not a UUID", `{"session_id":"not-a-uuid"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, signals := sessionEndTestHandler(t)
+			rec := httptest.NewRecorder()
+			h(rec, sessionEndTestRequest(t, http.MethodPost, "127.0.0.1:54321", tc.body))
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+			}
+			if got := signals.Len(); got != 0 {
+				t.Errorf("Len() = %d, want 0: a malformed signal must never be marked", got)
+			}
+		})
+	}
+}
+
+func TestSessionEndHandlerAcceptsAWellFormedLoopbackSignal(t *testing.T) {
+	h, signals := sessionEndTestHandler(t)
+	rec := httptest.NewRecorder()
+	const sessionID = "d5a6a1a0-0000-4000-8000-0000000000aa"
+	h(rec, sessionEndTestRequest(t, http.MethodPost, "127.0.0.1:54321", `{"session_id":"`+sessionID+`"}`))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d. body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+	if got := signals.Len(); got != 1 {
+		t.Errorf("Len() = %d, want 1: a well-formed loopback signal must be marked", got)
+	}
+}
+
+// IPv6 loopback (::1) is loopback too -- isLoopbackRemoteAddr must not be a
+// literal "127.0.0.1" string check.
+func TestSessionEndHandlerAcceptsIPv6Loopback(t *testing.T) {
+	h, signals := sessionEndTestHandler(t)
+	rec := httptest.NewRecorder()
+	const sessionID = "d5a6a1a0-0000-4000-8000-0000000000bb"
+	req := sessionEndTestRequest(t, http.MethodPost, "[::1]:54321", `{"session_id":"`+sessionID+`"}`)
+	h(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d. body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+	if got := signals.Len(); got != 1 {
+		t.Errorf("Len() = %d, want 1", got)
+	}
+}
+
+func TestIsLoopbackRemoteAddr(t *testing.T) {
+	for _, tc := range []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1:1234", true},
+		{"127.0.0.1", true},
+		{"[::1]:1234", true},
+		{"::1", true},
+		{"203.0.113.7:1234", false},
+		{"10.0.0.5:1234", false},
+		{"not-an-address", false},
+		{"", false},
+	} {
+		if got := isLoopbackRemoteAddr(tc.addr); got != tc.want {
+			t.Errorf("isLoopbackRemoteAddr(%q) = %v, want %v", tc.addr, got, tc.want)
+		}
+	}
+}
+
+// TestSessionEndHandlerBoundsAFloodByRate is review case (c)'s "rate" half:
+// a flood of signals from the same (unauthenticated, unkeyable) caller is
+// bounded by the endpoint's own rate limit, refused with 429 past its
+// burst, well before it could grow SessionEndSignals' own table without
+// bound.
+func TestSessionEndHandlerBoundsAFloodByRate(t *testing.T) {
+	h, signals := sessionEndTestHandler(t)
+
+	var refused int
+	for i := 0; i < sessionEndRateLimitBurst+10; i++ {
+		rec := httptest.NewRecorder()
+		sessionID := fmt.Sprintf("d5a6a1a0-0000-4000-8000-%012d", i)
+		h(rec, sessionEndTestRequest(t, http.MethodPost, "127.0.0.1:54321", `{"session_id":"`+sessionID+`"}`))
+		switch rec.Code {
+		case http.StatusNoContent:
+		case http.StatusTooManyRequests:
+			refused++
+			if rec.Header().Get("Retry-After") == "" {
+				t.Errorf("request %d: 429 carries no Retry-After header", i)
+			}
+		default:
+			t.Fatalf("request %d: status = %d, want 204 or 429", i, rec.Code)
+		}
+	}
+	if refused == 0 {
+		t.Error("no request was refused by the rate limit; the flood was not bounded at all")
+	}
+	// However many were admitted, the table itself never exceeded what was
+	// admitted -- it is the rate limit, not the table's own cap, doing the
+	// bounding here (the table's own cap is proven separately, at a small
+	// size, by internal/gateway's own test).
+	if got := signals.Len(); got > sessionEndRateLimitBurst+10-refused {
+		t.Errorf("Len() = %d, more marks than requests the rate limit admitted", got)
 	}
 }

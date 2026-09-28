@@ -77,31 +77,34 @@ func (c *countingMappingStore) BySessionAgent(ctx context.Context, sessionID, ag
 // ---------------------------------------------------------------------------
 
 type identityFixture struct {
-	mappings   *countingMappingStore
-	tree       *fakeTreeLinker
-	registrar  *fakeRegistrar
-	workspaces *fakeWorkspaceResolver
-	runStates  *fakeRunStates
-	guard      *IdentityGuard
+	mappings          *countingMappingStore
+	tree              *fakeTreeLinker
+	registrar         *fakeRegistrar
+	workspaces        *fakeWorkspaceResolver
+	runStates         *fakeRunStates
+	sessionEndSignals *SessionEndSignals
+	guard             *IdentityGuard
 }
 
 func newIdentityFixture(t *testing.T) *identityFixture {
 	t.Helper()
 	f := &identityFixture{
-		mappings:   newCountingMappingStore(),
-		tree:       &fakeTreeLinker{},
-		registrar:  &fakeRegistrar{},
-		workspaces: &fakeWorkspaceResolver{ws: Workspace{Repo: "acme/id-test", Branch: "main", Task: "task-1"}},
-		runStates:  newFakeRunStates(),
+		mappings:          newCountingMappingStore(),
+		tree:              &fakeTreeLinker{},
+		registrar:         &fakeRegistrar{},
+		workspaces:        &fakeWorkspaceResolver{ws: Workspace{Repo: "acme/id-test", Branch: "main", Task: "task-1"}},
+		runStates:         newFakeRunStates(),
+		sessionEndSignals: NewSessionEndSignals(0),
 	}
 	g, err := NewIdentityGuard(IdentityGuardConfig{
-		Mappings:   f.mappings,
-		Tree:       f.tree,
-		Policy:     NewPolicy(),
-		Registrar:  f.registrar,
-		Workspaces: f.workspaces,
-		RunStates:  f.runStates,
-		Now:        func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) },
+		Mappings:          f.mappings,
+		Tree:              f.tree,
+		Policy:            NewPolicy(),
+		Registrar:         f.registrar,
+		Workspaces:        f.workspaces,
+		RunStates:         f.runStates,
+		SessionEndSignals: f.sessionEndSignals,
+		Now:               func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatalf("NewIdentityGuard: %v", err)
@@ -188,6 +191,60 @@ func TestIdentityGuardContinuesAnActiveRun(t *testing.T) {
 	}
 	if len(f.registrar.calls) != 0 {
 		t.Errorf("registrar calls = %v, want none for Continue", f.registrar.calls)
+	}
+}
+
+// TestIdentityGuardCancelsASessionEndSignalOnTheNextMainAgentRequest is
+// review case (a) through the actual Guard (lifecycle_test.go's own
+// TestGID011ARequestWithinGraceCancelsTheSignalAndSweepRetiresNothing
+// proves the same contract directly against SessionEnder; this proves the
+// Guard is the one that actually calls Cancel, on every permitted request,
+// before it does anything else -- see identity.go's Check, immediately
+// after Identification is resolved).
+func TestIdentityGuardCancelsASessionEndSignalOnTheNextMainAgentRequest(t *testing.T) {
+	f := newIdentityFixture(t)
+	id := Identification{SessionID: "s1", AgentID: mainAgentID}
+	if err := f.mappings.Insert(t.Context(), RunMapping{
+		RunID: "run-continue", SessionID: id.SessionID, AgentID: id.AgentID, Fingerprint: "fp-1",
+	}); err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+	f.runStates.set("run-continue", ledger.RunActive)
+	f.sessionEndSignals.Mark(id.SessionID, time.Now())
+	if got := f.sessionEndSignals.Len(); got != 1 {
+		t.Fatalf("Len() before the request = %d, want 1", got)
+	}
+
+	if _, refusal := f.guard.Check(identityRequest(t, id, "hello", "hi")); refusal != nil {
+		t.Fatalf("refused: %+v", refusal)
+	}
+
+	if got := f.sessionEndSignals.Len(); got != 0 {
+		t.Errorf("Len() after a main-agent request = %d, want 0: the request must cancel the signal", got)
+	}
+}
+
+// A subagent's own request must NOT cancel its session's main-agent
+// signal: SessionEnder only ever concerns the main agent's run (decision
+// 7a), and a subagent continuing says nothing about whether the main
+// session itself is still driving anything.
+func TestIdentityGuardDoesNotCancelASessionEndSignalOnASubagentRequest(t *testing.T) {
+	f := newIdentityFixture(t)
+	sub := Identification{SessionID: "s1", AgentID: "sub-agent-id"}
+	if err := f.mappings.Insert(t.Context(), RunMapping{
+		RunID: "run-sub", SessionID: sub.SessionID, AgentID: sub.AgentID, Fingerprint: "fp-1",
+	}); err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+	f.runStates.set("run-sub", ledger.RunActive)
+	f.sessionEndSignals.Mark(sub.SessionID, time.Now())
+
+	if _, refusal := f.guard.Check(identityRequest(t, sub, "hello", "hi")); refusal != nil {
+		t.Fatalf("refused: %+v", refusal)
+	}
+
+	if got := f.sessionEndSignals.Len(); got != 1 {
+		t.Errorf("Len() after a subagent request = %d, want 1: only a main-agent request cancels it", got)
 	}
 }
 
