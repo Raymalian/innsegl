@@ -132,6 +132,80 @@ func TestGID001RegisterRunForGatewayRegistersExactlyOneRunAndHoldsTheTokenInMemo
 }
 
 // ---------------------------------------------------------------------------
+// RM-235 (#380) — a fork's registration carries forked_from_run_id on
+// run_registered, reached through this same in-process seam. Never settable
+// from the public MCP tool schema (register_agent_test.go's
+// TestRegisterAgentEventCarriesForkedFromRunIDOnlyWhenSet already proves
+// that at the unexported-field boundary); this proves GatewayRegistration's
+// own exported member reaches it.
+// ---------------------------------------------------------------------------
+
+func TestGID005ForkedFromRunIDReachesRunRegisteredThroughTheGateway(t *testing.T) {
+	idem, _ := newStore(t, WithIdempotencyLease(DefaultIdempotencyLease))
+	lg := newRetireLedger()
+	ids := newRASPIRE(raTrustDomain)
+	literal, err := identity.New(identity.ModeLiteral, "")
+	if err != nil {
+		t.Fatalf("identity.New: %v", err)
+	}
+	restore, err := ConfigureRegisterAgent(RegisterAgentConfig{
+		Identities:  ids,
+		Ledger:      lg,
+		Idempotency: idem,
+		ParentID:    raParentID,
+		Pseudonyms:  literal,
+	})
+	if err != nil {
+		t.Fatalf("ConfigureRegisterAgent: %v", err)
+	}
+	t.Cleanup(restore)
+
+	origin, err := RegisterRunForGateway(t.Context(), GatewayRegistration{
+		AgentType:      gwAgentType,
+		TaskID:         "gid-005-origin",
+		IdempotencyKey: "gid-005-origin-key",
+		Repo:           raRepo,
+		Branch:         raBranch,
+	})
+	if err != nil {
+		t.Fatalf("RegisterRunForGateway (origin): %v", err)
+	}
+
+	fork, err := RegisterRunForGateway(t.Context(), GatewayRegistration{
+		AgentType:       gwAgentType,
+		TaskID:          "gid-005-fork",
+		IdempotencyKey:  "gid-005-fork-key",
+		Repo:            raRepo,
+		Branch:          raBranch,
+		ForkedFromRunID: origin.RunID,
+	})
+	if err != nil {
+		t.Fatalf("RegisterRunForGateway (fork): %v", err)
+	}
+	if fork.RunID == origin.RunID {
+		t.Fatalf("the fork registered as the same run as its origin")
+	}
+
+	regs := lg.of(event.EventTypeRunRegistered, fork.RunID)
+	if len(regs) != 1 {
+		t.Fatalf("the ledger holds %d run_registered events for the fork, want exactly 1", len(regs))
+	}
+	if got := regs[0][event.FieldForkedFromRunID]; got != origin.RunID {
+		t.Errorf("forked_from_run_id = %v, want the origin run %q", got, origin.RunID)
+	}
+
+	// The origin's own event carries no forked_from_run_id: only the fork's
+	// registration set it.
+	originRegs := lg.of(event.EventTypeRunRegistered, origin.RunID)
+	if len(originRegs) != 1 {
+		t.Fatalf("the ledger holds %d run_registered events for the origin, want exactly 1", len(originRegs))
+	}
+	if _, present := originRegs[0][event.FieldForkedFromRunID]; present {
+		t.Error("the origin's own run_registered carries forked_from_run_id; nothing forked it")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // GID-002 — restore of a lapsed run: registration replayed with the prior
 // idempotency key; the same run id comes back.
 // ---------------------------------------------------------------------------

@@ -48,14 +48,26 @@
 --
 -- WHO WRITES IT
 --
--- The same writer role internal/ledger.Store already holds
--- (innsegl_appender): deploy/compose/innsegl/appendonly.sql's
+-- The same writer role internal/ledger.Store already holds (innsegl_appender).
+-- Corrected (RM-235, #380): this migration's own comment used to claim
+-- deploy/compose/innsegl/appendonly.sql's
 -- "ALTER DEFAULT PRIVILEGES IN SCHEMA innsegl GRANT SELECT, INSERT ON TABLES"
--- already covers a table this migration adds, the same way it already covers
--- migration 0003's alert_resolutions -- no change to that file is needed for
--- this table to arrive append-only-by-grant for that role. This migration
--- only has to make sure UPDATE, DELETE and TRUNCATE are refused for
--- everyone, PUBLIC included, which the REVOKE and the trigger below do.
+-- already covered a table this migration adds, needing no change to that
+-- file. MEASURED false: db-init.sh applies every migration BEFORE it applies
+-- appendonly.sql, so this table already exists by the time that ALTER DEFAULT
+-- PRIVILEGES line runs, and default privileges bind only tables created AFTER
+-- it -- a fresh bootstrap never re-orders that. Without an explicit
+-- `GRANT SELECT, INSERT ON innsegl.gateway_run_mapping` in appendonly.sql
+-- (added in the same commit as this correction), the role's INSERT and SELECT
+-- on this table were both refused with 42501. Migration 0003's own
+-- alert_resolutions is not the counter-example this comment once claimed
+-- either: appendonly.sql grants it explicitly, table by table, on purpose --
+-- that file's own comment says why: "never GRANT ... ON ALL TABLES, because
+-- 'everything in the schema' is how a table added by a later migration
+-- silently arrives writable." This migration only has to make sure UPDATE,
+-- DELETE and TRUNCATE are refused for everyone, PUBLIC included, which the
+-- REVOKE and the trigger below do; the SELECT/INSERT grant itself belongs in
+-- appendonly.sql, explicitly, like every other table's.
 
 CREATE TABLE innsegl.gateway_run_mapping (
     id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

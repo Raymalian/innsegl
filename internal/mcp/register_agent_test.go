@@ -1216,6 +1216,34 @@ func TestMCP040ADR0045sMembersAreOmittedWhenAbsent(t *testing.T) {
 	})
 }
 
+// TestRegisterAgentEventCarriesForkedFromRunIDOnlyWhenSet is RM-235 (#380):
+// forked_from_run_id (schema 4, ADR-0058 decision 5) reaches run_registered
+// only when the caller set the unexported forkedFromRunID -- and, like
+// resumesRetiredParent, nothing over the wire can populate it, because the
+// JSON tag does not exist.
+func TestRegisterAgentEventCarriesForkedFromRunIDOnlyWhenSet(t *testing.T) {
+	t.Run("set: present verbatim", func(t *testing.T) {
+		body := registerAgentEvent(
+			spire.RunRef{AgentType: raAgentType, TaskID: "jira-118", RunID: "run-90"},
+			"spiffe://innsegl.dev/agent/fix-ci/jira-118/run-90",
+			registerAgentIn{AgentType: raAgentType, TaskID: raTaskID, Repo: raRepo, Branch: raBranch,
+				forkedFromRunID: "run-42"})
+		if got := body[event.FieldForkedFromRunID]; got != "run-42" {
+			t.Errorf("forked_from_run_id = %v, want run-42", got)
+		}
+	})
+
+	t.Run("unset: absent, never empty", func(t *testing.T) {
+		body := registerAgentEvent(
+			spire.RunRef{AgentType: raAgentType, TaskID: "jira-118", RunID: "run-91"},
+			"spiffe://innsegl.dev/agent/fix-ci/jira-118/run-91",
+			registerAgentIn{AgentType: raAgentType, TaskID: raTaskID, Repo: raRepo, Branch: raBranch})
+		if _, present := body[event.FieldForkedFromRunID]; present {
+			t.Error("forked_from_run_id is present although the caller set none")
+		}
+	})
+}
+
 // reapAll deletes every entry, which is what the TTL reaper does to a run that
 // went quiet: the ledger keeps the run, SPIRE forgets the authorisation.
 func (f *raSPIRE) reapAll() {

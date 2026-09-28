@@ -80,6 +80,7 @@ func registerThrough(ctx context.Context, in RegisterInput) (RegisteredRun, erro
 		Branch:               in.Workspace.Branch,
 		ParentRunID:          in.ParentRunID,
 		ResumesRetiredParent: in.ResumesRetiredParent,
+		ForkedFromRunID:      in.ForkedFromRunID,
 	})
 	if err != nil {
 		return RegisteredRun{}, err
