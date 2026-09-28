@@ -76,6 +76,7 @@ maintainer ask "why is it like this?"
 | [0058](0058-an-agents-identity-lifecycle-is-driven-by-its-traffic.md) | An agent's identity lifecycle is driven by its traffic | accepted | 2026-09-28 |
 | [0059](0059-a-commit-is-attributed-through-the-tool-call-that-made-it.md) | A commit is attributed through the tool call that made it | accepted | 2026-09-28 |
 | [0060](0060-the-gateway-runs-inside-the-one-innsegl-process.md) | The gateway runs inside the one innsegl process | accepted | 2026-09-28 |
+| [0061](0061-schema-version-4-records-forks-agent-messages-and-workspace-trees.md) | Schema version 4 records a fork's origin, an agent's own messages, and a per-step workspace tree hash | proposed | 2026-09-28 |
 
 ## Open items
 
