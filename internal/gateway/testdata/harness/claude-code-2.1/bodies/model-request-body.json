@@ -1,0 +1,36 @@
+{
+  "description": "Synthetic-but-realistic Claude Code 2.1 request BODY shape for the Anthropic Messages API (GID-006, facts.go). Deliberately kept in this bodies/ subdirectory rather than alongside claude-code-2.1/'s own path-and-headers fixtures: TestGW012EveryFixtureUnderTestdataIsRecognised (harness_test.go) walks only the *.json files directly under a version directory and expects each to be that {method,path,headers} shape, and a subdirectory is skipped rather than descended into -- so this file cannot masquerade as one of GW-012's own recorded shapes. There is no recorded body to pin here either way: the spike (docs/decisions/model-gateway-spike.md) never captured one, only that a brief and a subagent prompt were visible in it. Every value below is invented for this fixture, including the working directory, which is never a real path of any machine. It exercises three things facts.go reads from a request body: the harness's own environment statement ahead of the human's own first message (source of RequestFacts.WorkingDirectory), a <system-reminder> block that must be stripped from RequestFacts.Brief, and a first assistant turn carrying a tool_use whose result comes back as a tool_result (RequestFacts.ToolResultIDs).",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\n# Environment\nYou have been invoked in the following environment:\n - Primary working directory: /workspace/example-repo\n - Is a git repository: true\n - Platform: linux\n</system-reminder>\nFix the failing test in pkg/widget."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        { "type": "text", "text": "I'll look at the failing test first." },
+        {
+          "type": "tool_use",
+          "id": "toolu_01ExampleTool",
+          "name": "Read",
+          "input": { "file_path": "/workspace/example-repo/pkg/widget/widget_test.go" }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01ExampleTool",
+          "content": "package widget\n\nfunc TestExample(t *testing.T) { /* ... */ }\n"
+        }
+      ]
+    }
+  ]
+}
