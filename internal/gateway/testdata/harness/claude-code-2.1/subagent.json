@@ -1,0 +1,9 @@
+{
+  "description": "Claude Code 2.1 subagent request to the Anthropic Messages API: the same session id as its main agent, plus its own agent id (docs/decisions/model-gateway-spike.md).",
+  "method": "POST",
+  "path": "/v1/messages",
+  "headers": {
+    "X-Claude-Code-Session-Id": "7734c172-6ff1-4112-8a0e-f09fa6b6a480",
+    "X-Claude-Code-Agent-Id": "0865eab8-65e6-4302-8964-5fef7b442a79"
+  }
+}

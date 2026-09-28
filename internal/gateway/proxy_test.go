@@ -64,6 +64,10 @@ func TestGW001RelaysRequestAndReplyByteForByte(t *testing.T) {
 	req.Header.Set("X-Api-Key", "sk-ant-test-credential-2")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Anthropic-Version", "2023-06-01")
+	// A recognised harness shape (GW-011's default guard, #374): without
+	// this header the request is refused before it ever reaches the
+	// upstream this test is asserting against.
+	req.Header.Set(headerClaudeCodeSessionID, validSessionID)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -163,6 +167,8 @@ func TestGW002FirstSSEEventReachesClientBeforeUpstreamFinishes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
+	// A recognised harness shape (GW-011's default guard, #374).
+	req.Header.Set(headerClaudeCodeSessionID, validSessionID)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("gateway request: %v (want a prompt response with the reply streamed after, "+
@@ -233,6 +239,10 @@ func TestProxyServeHTTPReturnsAJSONErrorWhenTheRequestCannotBeBuilt(t *testing.T
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/messages", nil)
 	req.Method = "BAD METHOD"
+	// A recognised harness shape (GW-011's default guard, #374): this test
+	// is pinning buildRequest's OWN refusal, reached only once the guard
+	// has already let the request through.
+	req.Header.Set(headerClaudeCodeSessionID, validSessionID)
 	rec := httptest.NewRecorder()
 
 	p.ServeHTTP(rec, req)
@@ -272,6 +282,10 @@ func TestGatewayUpstreamFailureReturnsAJSONErrorNotADroppedConnection(t *testing
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
+	// A recognised harness shape (GW-011's default guard, #374): this test
+	// is pinning the upstream-failure error, reached only once the guard
+	// has already let the request through.
+	req.Header.Set(headerClaudeCodeSessionID, validSessionID)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("gateway request: %v (want a response from the gateway, not a transport error)", err)
@@ -329,10 +343,14 @@ func TestProxyStreamForwardsEverythingWithoutAFlusher(t *testing.T) {
 	}
 	p := &Proxy{Upstream: up}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://gateway.invalid/x", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://gateway.invalid/v1/messages", nil)
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
+	// A recognised harness shape (GW-011's default guard, #374): this test
+	// is pinning the non-Flusher fallback in stream, reached only once the
+	// guard has already let the request through.
+	req.Header.Set(headerClaudeCodeSessionID, validSessionID)
 	rec := newNonFlushingResponseWriter()
 	p.ServeHTTP(rec, req)
 
@@ -368,6 +386,8 @@ func TestGatewayStripsHopByHopHeadersButForwardsEverythingElse(t *testing.T) {
 	req.Header.Set("X-Custom", "keep-me")
 	req.Header.Set("Connection", "X-Should-Drop")
 	req.Header.Set("X-Should-Drop", "gone")
+	// A recognised harness shape (GW-011's default guard, #374).
+	req.Header.Set(headerClaudeCodeSessionID, validSessionID)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

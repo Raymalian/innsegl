@@ -1,0 +1,8 @@
+{
+  "description": "Claude Code 2.1 request to the Anthropic Messages token-counting endpoint, main agent.",
+  "method": "POST",
+  "path": "/v1/messages/count_tokens",
+  "headers": {
+    "X-Claude-Code-Session-Id": "7734c172-6ff1-4112-8a0e-f09fa6b6a480"
+  }
+}

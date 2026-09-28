@@ -37,6 +37,15 @@ type Proxy struct {
 	// nobody is watching, and streaming is unaffected either way: the bytes
 	// forwarded to the caller never depend on whether this is set.
 	ToolUse ToolUseObserver
+
+	// Guards run in order, before anything else ServeHTTP does. The first
+	// to refuse ends the request there -- see guard.go for the interface
+	// and for what plugs into it (#375, E15). Nil uses defaultGuards, which
+	// includes the harness-shape guard (GW-011): a Proxy refuses an
+	// unrecognised harness shape by default, wherever one is constructed,
+	// with no wiring needed at the call site. An explicit empty slice
+	// (Guards: []Guard{}) opts out of every default guard.
+	Guards []Guard
 }
 
 // ServeHTTP builds the outbound request, sends it, and streams the reply
@@ -48,6 +57,26 @@ type Proxy struct {
 // is exactly what forwarding those bytes as they arrive requires -- the
 // connection ends when the upstream's does.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Guards run first, before anything else this method does -- see
+	// guard.go. Nil (the zero value) uses defaultGuards, so a Proxy refuses
+	// an unrecognised harness shape (GW-011) wherever one is constructed,
+	// with no wiring needed at the call site; an explicit empty slice opts
+	// out of every default guard.
+	guards := p.Guards
+	if guards == nil {
+		guards = defaultGuards
+	}
+	for _, g := range guards {
+		next, refusal := g.Check(r)
+		if refusal != nil {
+			writeGatewayError(w, refusal.Status, refusal.Reason)
+			return
+		}
+		if next != nil {
+			r = next
+		}
+	}
+
 	outReq, err := p.buildRequest(r)
 	if err != nil {
 		writeGatewayError(w, http.StatusBadGateway,
