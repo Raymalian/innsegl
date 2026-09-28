@@ -59,10 +59,17 @@ func TestGatewayCommandRelaysRealTrafficEndToEnd(t *testing.T) {
 		t.Fatal("the gateway never announced a bound address")
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/anything", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/v1/messages", nil)
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
+	// A recognised harness shape: the production wiring installs the
+	// harness-shape guard by default (GW-011, #374 -- internal/gateway's
+	// Proxy.ServeHTTP falls back to it whenever Guards is left nil, which
+	// openGateway's own construction does), so an unrecognised path or a
+	// request with no session header is refused before ever reaching the
+	// upstream this test is asserting against.
+	req.Header.Set("X-Claude-Code-Session-Id", "3f6a9b1c-2d4e-4f7a-9c8b-1e2f3a4b5c6d")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("request through the gateway: %v", err)

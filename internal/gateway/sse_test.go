@@ -86,6 +86,8 @@ func TestGW003ToolUseBlocksAvailableAtContentBlockStopBeforeStreamEnd(t *testing
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
+	// A recognised harness shape (GW-011's default guard, #374).
+	req.Header.Set(headerClaudeCodeSessionID, validSessionID)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("gateway request: %v", err)

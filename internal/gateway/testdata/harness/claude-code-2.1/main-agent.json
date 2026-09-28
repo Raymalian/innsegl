@@ -1,0 +1,8 @@
+{
+  "description": "Claude Code 2.1 main agent request to the Anthropic Messages API. Recorded shape only -- no real credential, no real session id (docs/decisions/model-gateway-spike.md).",
+  "method": "POST",
+  "path": "/v1/messages",
+  "headers": {
+    "X-Claude-Code-Session-Id": "7734c172-6ff1-4112-8a0e-f09fa6b6a480"
+  }
+}
