@@ -39,6 +39,9 @@ func TestCLI011ServeAlsoAcceptsTheThreeCompanionCommands(t *testing.T) {
 		{"api", "seal", "reconcile"},
 		{"reap"},
 		{"seal", "reconcile", "reap"},
+		// RM-224 (#369): ADR-0060's fifth companion.
+		{"gateway"},
+		{"seal", "reconcile", "reap", "gateway"},
 	} {
 		got, err := parseAlso(joinComma(want))
 		if err != nil {

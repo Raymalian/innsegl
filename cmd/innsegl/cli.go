@@ -126,6 +126,15 @@ var commands = map[string]command{
 		summary: "prove the object store refuses to delete a sealed segment (SEG-005)",
 		exec:    canaryCommand,
 	},
+	// The gateway is ADR-0060's fifth companion: a reverse proxy in front of
+	// the model provider a harness is pointed at (ADR-0057), forwarding
+	// every request unchanged and streaming the reply back as it arrives.
+	// This is the same body `serve -also gateway` runs in-process (RM-224,
+	// #369); this entry is for a deployment that runs it standalone.
+	"gateway": {
+		summary: "relay model traffic to the configured upstream and stream replies back",
+		exec:    gatewayCommand,
+	},
 }
 
 // run dispatches args (os.Args[1:]) and returns the process exit code. It

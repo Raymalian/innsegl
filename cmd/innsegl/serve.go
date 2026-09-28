@@ -486,6 +486,7 @@ var alsoCommands = map[string]func([]string, io.Writer, io.Writer) int{
 	"seal":      sealCommand,
 	"reconcile": reconcileCommand,
 	"reap":      reapCommand,
+	"gateway":   gatewayCommand,
 }
 
 // parseAlso resolves -also into a list of companion subcommands, in the order
