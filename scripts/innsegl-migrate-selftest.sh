@@ -412,5 +412,126 @@ else
 ${out}"
 fi
 
+# --- case: a STOPPED container holding a target volume is refused BEFORE
+#     any write, including a target earlier in the manifest than the held
+#     one — RM-219 --------------------------------------------------------
+mkvol_labeled "${VOL_A}"; mkvol "${VOL_B}"
+write_fixture "${VOL_A}"; write_fixture "${VOL_B}"
+sig_a_stopped_before="$(fixture_signature "${VOL_A}")"
+sig_b_stopped_before="$(fixture_signature "${VOL_B}")"
+labels_a_stopped_before="$(labels_of "${VOL_A}")"
+stopped_archive="${WORK}/stopped.tar"
+"${MIGRATE}" export "${stopped_archive}" >/dev/null 2>&1
+
+# VOL_B (later in volume_table than VOL_A) gets the stopped holder: this is
+# what proves the check runs for every volume before PASS 2 writes any of
+# them, not just the one a naive per-volume check happens to reach first.
+holder_stopped="${PREFIX}holder-stopped"
+docker run --name "${holder_stopped}" -v "${VOL_B}:/data" "${IMG}" true >/dev/null 2>&1
+# "true" exits immediately, so by the time the assertion below runs the
+# container is STOPPED, not running — but `docker ps -a` still lists it, and
+# `docker volume rm` still refuses it exactly as it would a running one.
+
+out="$("${MIGRATE}" import --replace "${stopped_archive}" 2>&1)"; rc=$?
+sig_a_stopped_after="$(fixture_signature "${VOL_A}" 2>/dev/null)"
+sig_b_stopped_after="$(fixture_signature "${VOL_B}" 2>/dev/null)"
+labels_a_stopped_after="$(labels_of "${VOL_A}" 2>/dev/null)"
+if [ "${rc}" -ne 0 ] \
+   && printf '%s' "${out}" | grep -q "${holder_stopped}" \
+   && [ "${sig_a_stopped_before}" = "${sig_a_stopped_after}" ] \
+   && [ "${sig_b_stopped_before}" = "${sig_b_stopped_after}" ] \
+   && [ "${labels_a_stopped_before}" = "${labels_a_stopped_after}" ]; then
+  ok "import --replace refuses a STOPPED container holding a target volume, naming it, before any target volume is touched (RM-219)"
+else
+  bad "import did not refuse a stopped container's volume cleanly, or touched a target volume anyway" "exit=${rc}
+before A: ${sig_a_stopped_before}
+after  A: ${sig_a_stopped_after}
+before B: ${sig_b_stopped_before}
+after  B: ${sig_b_stopped_after}
+${out}"
+fi
+docker rm -f "${holder_stopped}" >/dev/null 2>&1
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
+# --- case: export still succeeds with a stopped (not running) container
+#     holding a volume — RM-219 -------------------------------------------
+mkvol_labeled "${VOL_A}"; mkvol "${VOL_B}"
+write_fixture "${VOL_A}"; write_fixture "${VOL_B}"
+holder_export_stopped="${PREFIX}holder-export-stopped"
+docker run --name "${holder_export_stopped}" -v "${VOL_A}:/data" "${IMG}" true >/dev/null 2>&1
+export_stopped_archive="${WORK}/export-stopped-ok.tar"
+out="$("${MIGRATE}" export "${export_stopped_archive}" 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ -f "${export_stopped_archive}" ]; then
+  ok "export still succeeds with a stopped (not running) container holding a volume (RM-219)"
+else
+  bad "export refused a stopped container's volume, and should not have" "exit=${rc}
+${out}"
+fi
+docker rm -f "${holder_export_stopped}" >/dev/null 2>&1
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
+# --- case: a leftover helper container from an earlier, interrupted run is
+#     refused by the preflight, naming it and the exact removal ------------
+mkvol "${VOL_A}"; mkvol "${VOL_B}"
+fake_helper="${PREFIX}fake-leftover-helper"
+docker run -d --label "dev.innsegl.migrate-helper=1" --name "${fake_helper}" "${IMG}" sleep 300 >/dev/null
+out="$("${MIGRATE}" export "${WORK}/never-helper.tar" 2>&1)"; rc=$?
+if [ "${rc}" -ne 0 ] && [ ! -e "${WORK}/never-helper.tar" ] \
+   && printf '%s' "${out}" | grep -q "${fake_helper}" \
+   && printf '%s' "${out}" | grep -qi 'docker rm'; then
+  ok "a leftover helper container is refused by the preflight, naming it and the exact removal"
+else
+  bad "a leftover helper container was not refused cleanly" "exit=${rc}
+${out}"
+fi
+docker rm -f "${fake_helper}" >/dev/null 2>&1
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
+# --- case: Ctrl-C mid-import removes the helper container it was using ----
+mkvol "${VOL_A}"; mkvol "${VOL_B}"
+write_fixture "${VOL_A}"; write_fixture "${VOL_B}"
+int_archive="${WORK}/interrupt.tar"
+"${MIGRATE}" export "${int_archive}" >/dev/null 2>&1
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
+set -m
+INNSEGL_MIGRATE_HELPER_SLEEP=6 "${MIGRATE}" import "${int_archive}" >"${WORK}/int.out" 2>"${WORK}/int.err" &
+int_pid=$!
+set +m
+sleep 2
+mid_flight="$(docker ps -q --filter 'label=dev.innsegl.migrate-helper=1' 2>/dev/null)"
+kill -INT "-${int_pid}" 2>/dev/null || kill -INT "${int_pid}" 2>/dev/null
+wait "${int_pid}" 2>/dev/null; int_rc=$?
+leftover=""
+for _ in 1 2 3 4 5 6; do
+  leftover="$(docker ps -aq --filter 'label=dev.innsegl.migrate-helper=1' 2>/dev/null)"
+  [ -z "${leftover}" ] && break
+  sleep 1
+done
+if [ -n "${mid_flight}" ] && [ "${int_rc}" -ne 0 ] && [ -z "${leftover}" ]; then
+  ok "Ctrl-C mid-import removes the helper container it was using"
+else
+  bad "Ctrl-C mid-import left a helper container behind, or did not interrupt cleanly" \
+"mid_flight=[${mid_flight}] int_rc=${int_rc} leftover=[${leftover}]
+$(cat "${WORK}/int.out" 2>/dev/null)
+$(cat "${WORK}/int.err" 2>/dev/null)"
+fi
+[ -n "${leftover}" ] && docker rm -f ${leftover} >/dev/null 2>&1
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
+# --- case: import prints a per-volume progress line to stderr as it goes --
+mkvol "${VOL_A}"; mkvol "${VOL_B}"
+write_fixture "${VOL_A}"; write_fixture "${VOL_B}"
+prog_archive="${WORK}/progress.tar"
+"${MIGRATE}" export "${prog_archive}" >/dev/null 2>&1
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+progress_err="$("${MIGRATE}" import "${prog_archive}" 2>&1 1>/dev/null)"
+if printf '%s' "${progress_err}" | grep -q "${VOL_A}" && printf '%s' "${progress_err}" | grep -q "${VOL_B}"; then
+  ok "import prints a per-volume progress line to stderr as it goes"
+else
+  bad "import did not print a per-volume progress line to stderr" "${progress_err}"
+fi
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [ "${fail}" -eq 0 ]
