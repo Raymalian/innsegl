@@ -95,6 +95,16 @@ type RegisterInput struct {
 	// ResumesRetiredParent may be set only by the LifecyclePolicy's adopt
 	// decision, never from anything a request carries (ADR-0058 decision 8).
 	ResumesRetiredParent bool
+	// ForkedFromRunID names the run this one's fingerprint was linked from.
+	// It may be set only by the LifecyclePolicy's DecisionFork (ADR-0058
+	// decision 5), never from anything a request carries — the same
+	// restriction ResumesRetiredParent states above, for the same reason:
+	// mcp.GatewayRegistration.ForkedFromRunID carries it across the one seam
+	// into register_agent's own unexported forkedFromRunID.
+	//
+	// Added by #380 (RM-235), after this contract's own wave started: this is
+	// its own commit, per this file's package comment.
+	ForkedFromRunID string
 }
 
 // RegisteredRun is what registration answers. RunToken is held in memory

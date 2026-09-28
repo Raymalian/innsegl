@@ -88,40 +88,58 @@ func (g *HarnessGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 }
 
 // Guards returns this package's own ordered guard chain: the harness-shape
-// guard (GW-011, HarnessGuard) first, then the per-session rate-limit guard
-// (GW-013, limit.go's SessionRateLimitGuard) built from limiter -- in that
-// order, because the rate-limit guard reads the session id the harness
-// guard attaches to the request's context, and finding none there is
-// itself a refusal (SessionRateLimitGuard.Check) rather than a guess.
+// guard (GW-011, HarnessGuard) first, then -- when identity is non-nil --
+// the identity guard (ADR-0058 decision 11, E15/#380's IdentityGuard), then
+// the per-session rate-limit guard (GW-013, limit.go's
+// SessionRateLimitGuard) built from limiter, in that order: the rate-limit
+// guard reads the session id the harness guard attaches to the request's
+// context, and finding none there is itself a refusal
+// (SessionRateLimitGuard.Check) rather than a guess, and the identity guard
+// sits ahead of it so a request with no issuable identity never consumes a
+// place in the rate limit at all.
+//
+// identity is nilable because an IdentityGuard needs real dependencies
+// (a Postgres-backed MappingStore, the MCP's own register_agent/retire_agent
+// wired, a RunStateReader over a real chain) that cannot exist at package
+// initialisation time (see defaultGuards, below) -- unlike the rate
+// limiter, which has a workable in-memory default. Nil means "no identity
+// guard in this chain", never a refuse-everything stand-in: a caller that
+// wants ADR-0058 decision 11 enforced passes the guard it built
+// (cmd/innsegl/gateway.go's openGateway does exactly this).
 //
 // THIS IS THE ONE LIST. defaultGuards (below) and cmd/innsegl/gateway.go's
 // openGateway both build their guard chain by calling this function --
-// the first with a limiter built from this package's own shipped defaults,
-// the second with one built from the command line
-// ($INNSEGL_GATEWAY_RATE / $INNSEGL_GATEWAY_BURST). Before this function
-// existed, those were two independently-written slices that had to be kept
-// in the same order by hand; a guard added to one and not the other would
-// silently ship a production gateway missing a protection the tests for
-// the other slice still passed. Every future guard -- E15's identity guard
-// (ADR-0058 decision 11) among them -- is added HERE, inside this
-// function, at whatever position its own ordering requires, and nowhere
-// else: no other place in this codebase is allowed to grow its own,
-// second, hand-maintained guard list.
-func Guards(limiter *SessionRateLimiter) []Guard {
-	return []Guard{NewHarnessGuard(), NewSessionRateLimitGuard(limiter)}
+// the first with no identity guard and a limiter built from this package's
+// own shipped defaults, the second with a fully-wired identity guard and a
+// limiter built from the command line ($INNSEGL_GATEWAY_RATE /
+// $INNSEGL_GATEWAY_BURST). Before this function existed, those were two
+// independently-written slices that had to be kept in the same order by
+// hand; a guard added to one and not the other would silently ship a
+// production gateway missing a protection the tests for the other slice
+// still passed. Every future guard is added HERE, inside this function, at
+// whatever position its own ordering requires, and nowhere else: no other
+// place in this codebase is allowed to grow its own, second,
+// hand-maintained guard list.
+func Guards(limiter *SessionRateLimiter, identity Guard) []Guard {
+	guards := []Guard{NewHarnessGuard()}
+	if identity != nil {
+		guards = append(guards, identity)
+	}
+	return append(guards, NewSessionRateLimitGuard(limiter))
 }
 
 // defaultGuards is what Proxy.ServeHTTP uses when Guards is nil -- see
 // proxy.go. Passing an explicit empty slice (Guards: []Guard{}) opts out of
 // every default guard; this is the one place that default is set, so a
 // Proxy refuses an unrecognised harness shape wherever one is constructed,
-// with no wiring needed at each call site. Built from Guards, with a
-// limiter using this package's own shipped defaults
+// with no wiring needed at each call site. Built from Guards, with no
+// identity guard (see Guards' own doc comment for why one cannot exist at
+// this point) and a limiter using this package's own shipped defaults
 // (DefaultSessionRateLimitRate, DefaultSessionRateLimitBurst) -- a caller
 // that needs the configured values from $INNSEGL_GATEWAY_RATE /
-// $INNSEGL_GATEWAY_BURST calls Guards itself with its own limiter instead
-// (cmd/innsegl/gateway.go's openGateway does exactly this).
-var defaultGuards = Guards(defaultSessionRateLimiter())
+// $INNSEGL_GATEWAY_BURST, or ADR-0058 decision 11 enforced, calls Guards
+// itself instead (cmd/innsegl/gateway.go's openGateway does exactly this).
+var defaultGuards = Guards(defaultSessionRateLimiter(), nil)
 
 // defaultSessionRateLimiter builds the limiter defaultGuards' rate-limit
 // guard uses, from this package's own shipped defaults. Those defaults are

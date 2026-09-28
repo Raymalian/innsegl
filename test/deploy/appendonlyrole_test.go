@@ -111,6 +111,27 @@ var appendOnlyExpectations = []struct {
 	 VALUES ('deploy-probe', 'probe', 'probe') RETURNING event_id, resolved_at`, true,
 		"ADR-0044: innsegl resolve-alert runs under this role and appends a resolution"},
 
+	// RM-235 (#380). ADR-0060 decision 3: the gateway's own run mapping is a
+	// table beside innsegl.events, written by this SAME role -- appendonly.sql's
+	// ALTER DEFAULT PRIVILEGES already covers a table migration 0007 adds, the
+	// same way it already covers migration 0003's alert_resolutions, so nothing
+	// there had to change for this table to arrive append-only-by-grant. What had
+	// no test until this issue is the assertion that the grant is exactly SELECT,
+	// INSERT -- migration 0007's own trigger refuses UPDATE, DELETE and TRUNCATE
+	// for every role, PUBLIC included, but a trigger a superuser could disable is
+	// not the same claim as "this role was never granted the privilege at all".
+	{"insert a run mapping", `INSERT INTO innsegl.gateway_run_mapping (run_id, session_id, agent_id)
+	 VALUES ('deploy-probe-run', 'deploy-probe-session', 'main')`, true,
+		"the identity guard inserts one row per registration, restoration, fork and adoption"},
+	{"read the run mapping", `SELECT count(*) FROM innsegl.gateway_run_mapping`, true,
+		"BySessionAgent and ByFingerprint (internal/gateway/mapping_postgres.go) both read it"},
+	{"update the run mapping", `UPDATE innsegl.gateway_run_mapping SET session_id = 'x'`, false,
+		"ADR-0060 decision 3: a row here IS the record, insert-only the same way innsegl.events is"},
+	{"delete from the run mapping", `DELETE FROM innsegl.gateway_run_mapping WHERE false`, false,
+		"a correction is a later row, never a rewrite (ADR-0060 decision 3)"},
+	{"truncate the run mapping", `TRUNCATE innsegl.gateway_run_mapping`, false,
+		"the same append-only guarantee as innsegl.events, by grant and not only by trigger"},
+
 	{"update the chain", `UPDATE innsegl.events SET run_id = 'x'`, false,
 		"I4: no mutation. The trigger refuses this for the owner too — the ACL is " +
 			"what makes it refused for a REASON an operator cannot switch off"},

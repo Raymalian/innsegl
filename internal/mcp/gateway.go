@@ -55,6 +55,18 @@ type GatewayRegistration struct {
 	Branch               string
 	ParentRunID          string
 	ResumesRetiredParent bool
+
+	// ForkedFromRunID names the run this one's fingerprint was linked from
+	// (ADR-0058 decision 5). It maps straight onto registerAgentIn's
+	// unexported forkedFromRunID for the identical reason ResumesRetiredParent
+	// does: that field is unexported in register_agent.go so that no JSON
+	// decoder and no caller outside this package can ever set it, and this
+	// struct's member is necessarily exported because internal/gateway has no
+	// other way to reach it. It may be set only once a LifecyclePolicy has
+	// already decided Fork (ADR-0058 decision 5); the contract's own
+	// RegisterInput.ForkedFromRunID (internal/gateway/lifecycle_contract.go)
+	// carries the identical restriction in its own comment.
+	ForkedFromRunID string
 }
 
 // GatewayRegisteredRun is what RegisterRunForGateway answers.
@@ -126,6 +138,7 @@ func RegisterRunForGateway(ctx context.Context, in GatewayRegistration) (Gateway
 		Branch:               in.Branch,
 		ParentRunID:          in.ParentRunID,
 		resumesRetiredParent: in.ResumesRetiredParent,
+		forkedFromRunID:      in.ForkedFromRunID,
 	})
 	if err != nil {
 		return GatewayRegisteredRun{}, Classify(err)

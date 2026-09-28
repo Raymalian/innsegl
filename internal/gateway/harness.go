@@ -117,6 +117,15 @@ func recogniseClaudeCode21(r *http.Request) (Identification, bool, string) {
 	}, true, ""
 }
 
+// IsSessionID reports whether s has the shape a recognised request's own
+// session id must (isUUID, below) -- exported so a caller outside this
+// package can refuse a malformed session id the same way a request's own
+// session header already is, rather than duplicating the grammar.
+// cmd/innsegl's session-end endpoint (#380) is the first such caller: a
+// signal naming something that could never be a real session id is refused
+// before it is ever marked.
+func IsSessionID(s string) bool { return isUUID(s) }
+
 // isUUID reports whether s is a UUID in its standard 8-4-4-4-12 hyphenated
 // hex form (RFC 4122 §3). Neither version nor variant is checked: this
 // gateway is verifying shape, not minting or validating identity --
