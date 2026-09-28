@@ -285,7 +285,10 @@ func TestSNAP002RevertedWorkingTreeHashesBackToTheOriginal(t *testing.T) {
 
 	// A command-made change: an external process edits the file, not this
 	// test's own Go code -- the spike's own "sed two -> three" step.
-	sed := exec.CommandContext(ctx, "sed", "-i", "", "s/version two/version three/", notes)
+	// Written without sed -i, whose flag differs between BSD and GNU sed: the
+	// macOS form failed on Linux CI.
+	sed := exec.CommandContext(ctx, "sh", "-c",
+		`sed 's/version two/version three/' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`, "sh", notes)
 	if out, err := sed.CombinedOutput(); err != nil {
 		t.Fatalf("sed: %v\n%s", err, out)
 	}
