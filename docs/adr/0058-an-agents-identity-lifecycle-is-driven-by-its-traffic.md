@@ -95,17 +95,25 @@ continued as the same run, across a gateway restart in between. This closes
 the gap the hook-driven design had: previously, a resumed session was
 indistinguishable from a new one and registered again.
 
-**5. Fork is a known fingerprint under a new session: a new, linked run.**
-`register_agent` runs as it would for any new run — a fork is a genuinely
-new identity, a new credential, a new SPIFFE ID — and its `run_registered`
-carries one new member, `forked_from_run_id`, naming the run whose history
-it continues. This sits on `run_registered` itself, not as a second event
-the way ADR-0051's `run_adopted` records a handover after the fact, because
-what a run forked from is true at the moment the run is created — ADR-0045's
-own reasoning for `parent_run_id`, applied to a different lineage. A fork is
-not a subagent: no spawning tool call names it, and the run it forked from
-may still be active, lapsed, or already retired. Reusing `parent_run_id`
-for this would conflate two different relationships; it is not reused.
+**5. Fork is a known fingerprint under a new session: a new, linked run —
+and recording what it forked from in the chain is a protected-schema
+need, not a decision made here.** `register_agent` runs as it would for
+any new run: a fork is a genuinely new identity, a new credential, a new
+SPIFFE ID. What a run forked from is true at the moment the run is
+created — ADR-0045's own argument for `parent_run_id`, applied to a
+different lineage — so making that fact checkable by a third party needs a
+protected addition to `run_registered` (or an equivalent doc 02 does not
+yet name). This ADR does not name that member or claim a schema version
+for it: the operator has bundled every protected-schema addition this
+epic needs into **one** doc 02 change — one `schema_version`, one
+migration attestation — decided together before E15 starts, not ADR by
+ADR. Until that bundled change lands, a fork's origin lives only in the
+gateway's mapping table (decision 9): insert-only, but operational state,
+not tamper-evident, and outside I5's third-party verification. A fork is
+also not a subagent — no spawning tool call names it, and the run it
+forked from may still be active, lapsed, or already retired — so whatever
+member the bundled change eventually adds must not be `parent_run_id`,
+which already means something else.
 
 **6. Lapse and restore follow ADR-0052, with one new gate: restore happens
 before the request is forwarded, and a failed restore refuses the
@@ -120,7 +128,10 @@ the moment in the request path the gateway has to check them.
 
 **7. Retirement has three sources, expected to fire in this order:**
 
-   a. the harness's own end-of-session signal, for the main agent;
+   a. the harness's own end-of-session signal, for the main agent — a
+      `SessionEnd` hook, the second small harness hook this design needs,
+      beside the one this epic already needs on the commit path for exact
+      attribution;
    b. hand-back — the spawning tool call's result reaching the parent — for
       a subagent, which has no session of its own to end;
    c. a silence horizon, default seven days from the run's last recorded
@@ -200,11 +211,14 @@ traffic now passes through.
 
 ## Consequences
 
-- `forked_from_run_id` is a new member on `run_registered` and, like
-  `parent_run_id` before it, a protected-surface change: a new
-  `schema_version` (4, following ADR-0051's 3), updated golden fixtures,
-  every verifier accepting the prior version forever, and a
-  `schema_migrated` attestation at the cutover, per doc 08.
+- Recording a fork's origin in the chain is a protected-schema **need**,
+  not a decision this ADR makes: the operator has bundled it with every
+  other protected-schema addition this epic needs into one doc 02 change —
+  one `schema_version`, one migration attestation, one set of updated
+  golden fixtures, decided together before E15 starts. This ADR names
+  neither the member nor the version. Until the bundled change lands, a
+  fork's origin is operational state only — the gateway's mapping table,
+  decision 9 — and carries none of I5's third-party verification.
 - ADR-0052's four-state machine is unchanged. This ADR adds one more caller
   of `run_retired` — the silence backstop — beside the ones that already
   exist (the harness, a human, an observed kill). Its safety rests on
@@ -227,13 +241,16 @@ traffic now passes through.
 - **Exit cost.** Decisions 1, 2, 4, 6, 8, 10 and 11 change only what
   *triggers* existing behaviour; reverting them returns the trigger to the
   hooks with no change to `run_registered`, `run_expired`, `run_retired` or
-  `run_adopted`. Decision 5 is not free to reverse: once shipped,
-  `forked_from_run_id` is append-only like every other event member, so a
-  later removal needs its own major release, and every fork already
-  recorded keeps meaning what it meant (I4). Decision 7's backstop is cheap
-  to turn off — raise its horizon past any realistic silence, or stop
-  calling it — but not free: runs it already retired stay retired, and
-  their owners, if they return, adopt rather than resume, permanently.
+  `run_adopted`. Decision 5 costs nothing to reverse today: while a fork's
+  origin lives only in the mapping table, dropping it is an operational-state
+  change like any other. Once the bundled protected-schema change lands and
+  starts recording it in the chain, that addition inherits the same
+  append-only irreversibility as every other doc 02 member (I4) — but that
+  cost belongs to the ADR that makes the bundled change, not to this one.
+  Decision 7's backstop is cheap to turn off — raise its horizon past any
+  realistic silence, or stop calling it — but not free: runs it already
+  retired stay retired, and their owners, if they return, adopt rather than
+  resume, permanently.
 - **Tests to write, first.** Exact-equality parent linking against both
   measured mislink cases; resume as the same run for both a repeated
   session id and a repeated fingerprint, and as a new linked run for a
