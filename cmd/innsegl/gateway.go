@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -772,9 +773,38 @@ func isLoopbackRemoteAddr(remoteAddr string) bool {
 // workspace.go -- never configured here; see this file's own doc comment),
 // the tree linker, the shipped LifecyclePolicy, and the silence backstop,
 // wired onto running so Serve can sweep it and Close can release every
-// pool this function opens. It returns the identity guard, the tool-use
-// spawn recorder (Proxy.ToolUse) and the SessionEnder for the loopback
-// session-end endpoint.
+// pool this function opens.
+//
+// RM-236 (#381), E16: this is also where the flight recorder's own
+// witness is composed in. gateway.ToolCallRecorder pairs each tool_use a
+// reply streams with the tool_result the next request carries for it and
+// records one `tool_call` per pair through the MCP's own observe_tool_call
+// service, in process (internal/mcp/gatewayrecord.go) -- the SAME
+// observe_tool_call this same process's `serve -also gateway` already
+// configures from `-observe-body-dir` (servewiring.go), reached here only
+// through mcp.RecordGatewayToolCall's own package-level seam, never
+// re-configured. A gateway run standalone with observe_tool_call
+// unconfigured records nothing either, exactly as failing to configure it
+// already answers every other in-process caller (mcp.RecordGatewayToolCall's
+// own doc comment): a logged, counted failure per attempt, never a reason
+// to refuse a request.
+//
+// Its workspace-snapshot witness (ADR-0061 member 3) reuses
+// envObserveBodyDir (serve.go), the SAME body-store volume observe_tool_call
+// itself is configured onto (ADR-0060 decision 5: "inside the existing
+// body-store volume") -- a dedicated subdirectory of it, never a second
+// volume or a second flag. Unset, this recorder never attaches a
+// workspace_tree_hash; every tool_call it records still carries the rest.
+//
+// Because guard.go's own Guards function has room for exactly one identity
+// slot, and Proxy has exactly one ToolUse slot, this function composes its
+// own new Guard and ToolUseObserver together with the identity guard and
+// the spawn recorder that already occupy those slots (gateway.ChainGuards,
+// gateway.CombineToolUseObservers -- record.go's own doc comment explains
+// why neither widens guard.go's or proxy.go's own contract to do this) and
+// returns the COMPOSED value each slot ultimately gets. openGateway's own
+// wiring is unchanged: it still takes one Guard and one ToolUseObserver
+// back from this function, exactly as before RM-236.
 func openIdentityStack(
 	ctx context.Context, o gatewayOptions, running *runningGateway,
 ) (gateway.Guard, gateway.ToolUseObserver, error) {
@@ -847,7 +877,61 @@ func openIdentityStack(
 	running.sessionEndRateLimit = sessionEndRateLimit
 
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
-	return identityGuard, spawnRecorder, nil
+
+	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running))
+
+	spawn := gateway.CombineToolUseObservers(spawnRecorder, toolCallRecorder)
+	guard := gateway.ChainGuards(identityGuard, gateway.NewToolCallRecordGuard(toolCallRecorder))
+	return guard, spawn, nil
+}
+
+// newToolCallRecorderConfig builds RM-236 (#381)'s own
+// gateway.ToolCallRecorderConfig: OnRecordFailure logs loudly through
+// running's own log (this package's one structured logger), and Snapshots
+// is set only when the workspace-snapshot store could actually be built
+// -- never assigned a typed-nil *gateway.Snapshotter, which
+// gateway.ToolCallRecorderConfig's own doc comment on Snapshots warns
+// against for exactly this reason: an interface holding one is not itself
+// nil.
+func newToolCallRecorderConfig(running *runningGateway) gateway.ToolCallRecorderConfig {
+	cfg := gateway.ToolCallRecorderConfig{
+		Trigger: gateway.NewSnapshotTrigger(),
+		OnRecordFailure: func(err error) {
+			running.log.error("gateway: could not record a tool call", "err", err)
+		},
+	}
+	if snap := newGatewaySnapshotter(running); snap != nil {
+		cfg.Snapshots = snap
+	}
+	return cfg
+}
+
+// newGatewaySnapshotter builds ADR-0060 decision 5's per-repository
+// snapshot store, inside a dedicated subdirectory of the SAME body-store
+// volume observe_tool_call is configured onto (envObserveBodyDir,
+// serve.go) -- no new flag, no new volume. Unset ($INNSEGL_MCP_LOG_DIR
+// empty, or the value is not usable as an absolute store root), this
+// returns nil and every tool_call this replica records simply carries no
+// workspace_tree_hash -- ADR-0061 member 3 is optional for exactly this
+// case, and a missing snapshotter is reported the same way a snapshot
+// failure already is (record.go's own OnRecordFailure), once, at start-up,
+// rather than once per request.
+func newGatewaySnapshotter(running *runningGateway) *gateway.Snapshotter {
+	root := os.Getenv(envObserveBodyDir)
+	if root == "" {
+		running.log.info("workspace snapshotting is not configured: " +
+			"$" + envObserveBodyDir + " is unset, so recorded tool calls will carry no workspace_tree_hash")
+		return nil
+	}
+	snap, err := gateway.NewSnapshotter(gateway.SnapshotConfig{
+		StoreRoot: filepath.Join(root, "gateway-snapshots"),
+	})
+	if err != nil {
+		running.log.warn("workspace snapshotting is not available; recorded tool calls will carry no "+
+			"workspace_tree_hash", "err", err)
+		return nil
+	}
+	return snap
 }
 
 // sessionEndRateLimitRate and sessionEndRateLimitBurst bound

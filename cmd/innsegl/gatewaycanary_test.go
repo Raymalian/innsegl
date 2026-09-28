@@ -28,15 +28,21 @@ import (
 // never a request's own headers, but nothing proves that except running
 // the real thing and reading what it wrote).
 //
-// gatewayOptions carries no state, log or body directory of its own today
-// -- see cmd/innsegl/gateway.go's own doc comment, "What this file wires,
-// and what it does not". credentialCanaryDirs below is empty for the same
-// reason internal/gateway/canary_test.go's is: when E15's body store or
-// E16's snapshots add a flag and an environment variable (following
-// envObserveBodyDir's own shape in serve.go), point it at a t.TempDir()
-// in each scenario below the same way runGatewayForCanary already points
-// -listen and -upstream, and append that directory to the dirs slice each
-// scenario builds.
+// gatewayOptions carries no state, log or body directory of its own for
+// the four scenarios above this comment, so each one's own dirs is a bare
+// t.TempDir() -- there is nothing else to scan yet, the same reason
+// internal/gateway/canary_test.go's own dirs are bare too.
+//
+// RM-236 (#381), E16 adds the one directory that IS now real: the body
+// store observe_tool_call, and this issue's own gateway recorder on top of
+// it, actually write to (envObserveBodyDir, following its own shape in
+// serve.go). TestGW010CommandCanaryRecordedToolCallReachesNoBodyStoreFile,
+// below, is that fifth scenario: it wires the identity stack and
+// observe_tool_call (-dsn set, unlike the four above), drives a real
+// tool_use/tool_result pair carrying the canary header through the real
+// gateway end to end, and extends dirs with the real body-store directory
+// its own recorder wrote to -- the extension this file's own header used
+// to say was still owed.
 
 // newCredentialCanary and randomCanarySuffix mirror
 // internal/gateway/canary_test.go's own copies exactly; see that file for
@@ -370,5 +376,142 @@ func TestGW010CommandCanaryUpstreamErrorStatusReachesNoResponseOrLogBeyondWhatIt
 		assertCredentialCanaryDeliveredUpstream(t, "command/upstream error status", canary, upstreamHeaders)
 		assertCredentialCanaryNowhere(t, "command/upstream error status", canary,
 			[]byte(stderr.String()), map[string][]byte{"response body": body}, dirs)
+	}
+}
+
+// runGatewayForCanaryWithDSN is runGatewayForCanary's own sibling: the ONE
+// difference from every scenario above is -dsn, which is what turns on
+// RM-235's identity stack and RM-236's own gateway recorder on top of it
+// (cmd/innsegl/gateway.go's own doc comment, "Identity from traffic") --
+// nothing else about how this command is driven changes.
+func runGatewayForCanaryWithDSN(t *testing.T, dsn, upstreamURL string, client *http.Client) (addr string, stderr *syncBuffer, stop func()) {
+	t.Helper()
+
+	stderr = &syncBuffer{}
+	addrCh := make(chan string, 1)
+	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
+		o.upstreamClient = client
+		srv, err := openGateway(ctx, o, log)
+		if err == nil {
+			addrCh <- srv.Addr()
+		}
+		return srv, err
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstreamURL, "-dsn", dsn}
+	done := make(chan int, 1)
+	go func() { done <- runGateway(ctx, args, io.Discard, stderr, deps) }()
+
+	select {
+	case addr = <-addrCh:
+	case <-time.After(10 * time.Second):
+		cancel()
+		t.Fatal("the gateway never announced a bound address")
+	}
+
+	stop = func() {
+		cancel()
+		select {
+		case code := <-done:
+			if code != exitOK {
+				t.Errorf("runGateway after its context was cancelled = %d, want %d (exitOK)", code, exitOK)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the gateway did not stop within 10s of its context being cancelled")
+		}
+	}
+	return addr, stderr, stop
+}
+
+// TestGW010CommandCanaryRecordedToolCallReachesNoBodyStoreFile is this
+// file's fifth GW-010 scenario, and the one that finally has a real
+// directory to scan (this file's own header comment, "the extension this
+// file used to say was still owed"): a tool_use and its result, each sent
+// on a request carrying the canary header, recorded end to end through
+// the real gateway (RM-236, #381) -- reaching the body store
+// observe_tool_call and this issue's own recorder write to no more than it
+// reaches a log or a response.
+func TestGW010CommandCanaryRecordedToolCallReachesNoBodyStoreFile(t *testing.T) {
+	bearer, apiKey := newCredentialCanary(t)
+
+	f := newGWIdentityFixture(t)
+	bodyDir := configureGRECObserveToolCall(t, f)
+	_, repo := configureGWIdentityWorkspace(t)
+
+	var capturedHeaders []http.Header
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = append(capturedHeaders, r.Header.Clone())
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if len(capturedHeaders) == 1 {
+			writeGRECToolUseSSE(t, w, grecToolUse(t, "toolu_canary", "Bash", map[string]string{"command": "echo hi"}))
+		} else {
+			writeGRECTextSSE(t, w, "done")
+		}
+	}))
+	defer upstream.Close()
+
+	addr, stderr, stop := runGatewayForCanaryWithDSN(t, f.dsn, upstream.URL, upstream.Client())
+	defer stop()
+
+	const session = "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3ecb"
+	conv := &grecConversation{}
+	conv.addUserBrief(t, repo, "echo hi")
+
+	sendAndDrain := func(body string) []byte {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+			"http://"+addr+"/v1/messages", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("NewRequestWithContext: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		req.Header.Set("X-Api-Key", apiKey)
+		req.Header.Set("X-Claude-Code-Session-Id", session)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request through the gateway: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read reply: %v", err)
+		}
+		return respBody
+	}
+
+	firstBody := sendAndDrain(conv.body(t))
+	m := queryGWIdentityMapping(t, f.dsn, session, "main")
+	if !m.found {
+		t.Fatal("no mapping row was recorded for the canary session's root agent")
+	}
+
+	conv.addAssistantToolUses(grecToolUse(t, "toolu_canary", "Bash", map[string]string{"command": "echo hi"}))
+	conv.addUserToolResults(grecToolResult(t, "toolu_canary", map[string]string{"stdout": "hi\n"}, false))
+	secondBody := sendAndDrain(conv.body(t))
+
+	// Recording is asynchronous (record.go's own doc comment); give it a
+	// bounded window to actually write the body before scanning for it.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		entries, readErr := os.ReadDir(filepath.Join(bodyDir, m.runID))
+		if readErr == nil && len(entries) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the recorder never wrote a body to the store within 10s")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	dirs := []string{bodyDir}
+	for _, canary := range []string{bearer, apiKey} {
+		for _, h := range capturedHeaders {
+			assertCredentialCanaryDeliveredUpstream(t, "command/recorded tool call", canary, h)
+		}
+		assertCredentialCanaryNowhere(t, "command/recorded tool call", canary,
+			[]byte(stderr.String()),
+			map[string][]byte{"first response body": firstBody, "second response body": secondBody},
+			dirs)
 	}
 }
