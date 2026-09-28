@@ -10,8 +10,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,10 +34,17 @@ import (
 //
 // It builds an internal/gateway.Proxy in front of a configured upstream and
 // serves it. It does NOT decide identity, does not read or write the
-// ledger, does not enforce https-only or certificate strictness (RM-226,
-// #371 — internal/gateway/upstream.go is where that lands), does not relay
-// WebSocket traffic (#372), and does not redact anything from a body
-// (#373). Every one of those is a later issue in epic #357.
+// ledger, does not relay WebSocket traffic (#372), and does not redact
+// anything from a body (#373). Every one of those is a later issue in epic
+// #357.
+//
+// # https-only, at start-up (RM-226, #371)
+//
+// gatewayOptions.validate refuses a non-https -upstream before this command
+// does anything else -- no listener, no upstream client, nothing relayed.
+// There is no flag or environment variable that bypasses it. Certificate
+// and hostname strictness against the system roots is internal/gateway's
+// own job (see its NewUpstream), not repeated here.
 //
 // # It is not published on loopback by this process's own bind address
 //
@@ -93,6 +102,16 @@ type gatewayOptions struct {
 	listen          string
 	upstream        string
 	shutdownTimeout time.Duration
+
+	// upstreamClient overrides the client openGateway hands to
+	// gateway.NewUpstream. Always nil on every path a flag or an
+	// environment variable can reach -- parseGatewayFlags never sets it --
+	// so it is not a production escape hatch. It exists only so this file's
+	// own end-to-end test can prove the REAL openGateway wiring against a
+	// TLS upstream the test process trusts, the same seam
+	// internal/gateway's own tests reach through NewUpstream's client
+	// parameter, one level up.
+	upstreamClient *http.Client
 }
 
 // validate reports the first setting that makes this configuration
@@ -105,6 +124,41 @@ func (o gatewayOptions) validate() string {
 		return "-upstream (or $" + envGatewayUpstream + ") is required"
 	case o.shutdownTimeout < 0:
 		return "-shutdown-timeout is negative"
+	}
+	if problem := upstreamMustBeHTTPS(o.upstream); problem != "" {
+		return problem
+	}
+	return ""
+}
+
+// upstreamMustBeHTTPS is GW-007: only an https:// upstream is ever
+// accepted, refused here before the gateway does anything else -- no
+// listener opened, no upstream client built, nothing relayed. The gateway
+// puts a model provider credential on every request it forwards
+// (ADR-0057); an http upstream would put that credential on the wire in
+// clear text with no TLS handshake ever happening to protect it, so this is
+// caught at start-up rather than left for a certificate check that an http
+// URL never triggers in the first place. There is no flag or environment
+// variable that bypasses this -- production configuration gets no escape
+// hatch (see gatewayOptions.upstreamClient's own doc comment for the one
+// seam this package does keep, and why it is not one).
+//
+// A URL that cannot even be parsed, or that parses with no scheme at all,
+// is left to gateway.NewUpstream's own error, raised later when openGateway
+// builds the upstream: that error already names the problem, and duplicating
+// it here would only produce two different messages for the same one cause.
+// This function only ever adds the https-or-refuse rule on top of a URL
+// that parses AND names some other scheme.
+func upstreamMustBeHTTPS(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" {
+		return ""
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return fmt.Sprintf(
+			"-upstream (or $%s) %q must use https -- an http (or any other non-https) "+
+				"upstream is refused before anything is relayed (GW-007)",
+			envGatewayUpstream, raw)
 	}
 	return ""
 }
@@ -236,9 +290,10 @@ func gatewayUsage(stderr io.Writer, fs *flag.FlagSet) {
 		"flushing\nafter every chunk so a server-sent-events reply is never buffered. "+
 		"Credentials\npass through and are never logged or persisted, by this process or "+
 		"any other.\n\n")
-	fprintf(stderr, "It does not yet enforce https-only or certificate strictness (RM-226, "+
-		"#371),\ndoes not relay WebSocket traffic (#372), and redacts nothing from a body "+
-		"(#373).\n\n")
+	fprintf(stderr, "Only an https -upstream is accepted; an http (or any other non-https) "+
+		"one is refused\nbefore anything is relayed, and certificates and hostnames are "+
+		"verified strictly\nagainst the system roots (RM-226, #371). It does not yet relay "+
+		"WebSocket traffic\n(#372), and redacts nothing from a body (#373).\n\n")
 	fprintf(stderr, "Exit status:\n")
 	fprintf(stderr, "  %d  the gateway shut down in an orderly way\n", exitOK)
 	fprintf(stderr, "  %d  the command line was not understood\n", exitUsage)
@@ -308,12 +363,14 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	defer cancel()
 
 	// The upstream's own construction lives in internal/gateway/upstream.go,
-	// on its own, so #371's certificate-strictness rule slots in there
-	// without moving anything here. A nil client: a deployment's default
-	// has no per-request Timeout of its own, because that would bound a
-	// whole streamed reply rather than one round trip — see
-	// internal/gateway.NewUpstream's own doc comment.
-	up, err := gateway.NewUpstream(o.upstream, nil)
+	// on its own: certificate and hostname strictness is NewUpstream's job
+	// (#371), not repeated here. o.upstreamClient is nil on every
+	// production and CLI-driven path (see gatewayOptions's own doc
+	// comment), so a real deployment always gets NewUpstream's own
+	// defaultUpstreamClient, which has no per-request Timeout of its own --
+	// that would bound a whole streamed reply rather than one round trip,
+	// see internal/gateway.NewUpstream's own doc comment.
+	up, err := gateway.NewUpstream(o.upstream, o.upstreamClient)
 	if err != nil {
 		return nil, fmt.Errorf("configure the upstream: %w", err)
 	}

@@ -37,6 +37,15 @@ type Proxy struct {
 	// nobody is watching, and streaming is unaffected either way: the bytes
 	// forwarded to the caller never depend on whether this is set.
 	ToolUse ToolUseObserver
+
+	// Guards run in order, before anything else ServeHTTP does. The first
+	// to refuse ends the request there -- see guard.go for the interface
+	// and for what plugs into it (#375, E15). Nil uses defaultGuards, which
+	// includes the harness-shape guard (GW-011): a Proxy refuses an
+	// unrecognised harness shape by default, wherever one is constructed,
+	// with no wiring needed at the call site. An explicit empty slice
+	// (Guards: []Guard{}) opts out of every default guard.
+	Guards []Guard
 }
 
 // ServeHTTP builds the outbound request, sends it, and streams the reply
@@ -48,6 +57,26 @@ type Proxy struct {
 // is exactly what forwarding those bytes as they arrive requires -- the
 // connection ends when the upstream's does.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Guards run first, before anything else this method does -- see
+	// guard.go. Nil (the zero value) uses defaultGuards, so a Proxy refuses
+	// an unrecognised harness shape (GW-011) wherever one is constructed,
+	// with no wiring needed at the call site; an explicit empty slice opts
+	// out of every default guard.
+	guards := p.Guards
+	if guards == nil {
+		guards = defaultGuards
+	}
+	for _, g := range guards {
+		next, refusal := g.Check(r)
+		if refusal != nil {
+			writeGatewayError(w, refusal.Status, refusal.Reason)
+			return
+		}
+		if next != nil {
+			r = next
+		}
+	}
+
 	outReq, err := p.buildRequest(r)
 	if err != nil {
 		writeGatewayError(w, http.StatusBadGateway,
@@ -57,8 +86,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := p.Upstream.Client.Do(outReq)
 	if err != nil {
-		writeGatewayError(w, http.StatusBadGateway,
-			"innsegl gateway: the upstream request failed: "+err.Error())
+		// classifyUpstreamError (upstream.go, #371/GW-008) turns a TLS,
+		// connect or timeout failure into the status and failure-class
+		// message the caller gets -- never the raw err.Error(), which can
+		// carry transport-internal detail this response has no business
+		// repeating.
+		status, msg := classifyUpstreamError(err)
+		writeGatewayError(w, status, msg)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -198,7 +232,9 @@ func copyHeader(dst, src http.Header) {
 }
 
 // gatewayErrorBody is the JSON body an upstream failure gets instead of a
-// dropped connection. The full error-class vocabulary is #371's; this is
+// dropped connection (GW-008). The failure-class vocabulary itself --
+// "upstream certificate rejected", "upstream connection refused", "upstream
+// request timed out" -- is classifyUpstreamError's, in upstream.go; this is
 // the minimal clean response IP §6.3's "no indefinite hang, no silent
 // drop" reasoning already requires of every other component in this
 // codebase, extended to the one new component that did not exist to need
