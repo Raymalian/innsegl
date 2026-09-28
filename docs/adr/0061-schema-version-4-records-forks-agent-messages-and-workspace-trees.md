@@ -196,6 +196,12 @@ workspace state that happened before the cutover is unattributed by these
 members, exactly as pre-adoption commits are unattributed under E7, and
 neither is inferred or backfilled after the fact.
 
+**Amendment, 2026-09-28 (operator).** `<key-id>` follows doc 02 §5's identifier
+grammar: `[a-z0-9][a-z0-9-]{0,62}` (for example `core-2026-09`). The full
+keyed digest is therefore
+`hmac-sha256:[a-z0-9][a-z0-9-]{0,62}:[0-9a-f]{64}`. It was left unstated in the
+first text; the implementation surfaced the gap and the operator decided it.
+
 ## Alternatives considered
 
 - **Reuse `parent_run_id` for fork lineage.** Rejected: ADR-0058 decision 5
