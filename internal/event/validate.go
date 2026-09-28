@@ -227,7 +227,7 @@ func resolveSchemaVersion(f Fields, verifying bool) (bool, error) {
 // constant of this package, not an input, and a parse of it would be an error
 // path no test could ever reach. The two are held together by
 // TestSchemaVersionConstantsAgree, in the same spirit as the SER-005 gate.
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // CanRead reports whether this build can fully verify events of a schema
 // version, and refuses a string that is not a version at all.
@@ -791,4 +791,80 @@ func ValidatePatchID(s string) error {
 // run is a run, and two grammars for one thing drift.
 func ValidateParentRunID(s string) error {
 	return ValidateIdentifier(s)
+}
+
+// ---------------------------------------------------------------------------
+// Schema 4's new grammars (ADR-0061).
+//
+// forked_from_run_id and workspace_tree_hash reuse existing grammars outright
+// (checkParentRunID, checkGitObjectID in types.go) rather than duplicating
+// them here. What is genuinely new is agent_message's own two members.
+// ---------------------------------------------------------------------------
+
+// ErrInvalidKeyedDigest rejects a value that is not ADR-0061's keyed digest
+// grammar.
+var ErrInvalidKeyedDigest = errors.New("invalid keyed digest")
+
+// agentMessageRoles is doc 02 §3's errata enum for agent_message.role: the
+// brief a gateway captures, or the agent's own message. Never a tool's --
+// that is tool_call.tool_name's job (ADR-0021), and forcing either through
+// tool_call would misrepresent what tool_name says was invoked (ADR-0061).
+var agentMessageRoles = []string{"brief", "assistant"}
+
+func checkAgentMessageRole(name string, v any) error {
+	s, err := checkBoundedString(name, v, MaxReferenceBytes)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(agentMessageRoles, s) {
+		return fmt.Errorf("%w: %s is %q; want one of %q", ErrInvalidField, name, s, agentMessageRoles)
+	}
+	return nil
+}
+
+// keyedDigestPattern is ADR-0061's grammar for agent_message.payload_digest:
+// "hmac-sha256:<key-id>:<64 lowercase hex>".
+//
+// The ADR does not spell out <key-id>'s character class -- it names the
+// placeholder throughout (the decision, the Consequences' key-rotation note)
+// but gives it no grammar of its own, the way doc 02 §5 spells out every other
+// identifier-shaped member. This reuses doc 02 §5's identifier grammar -- the
+// same shape agent_type, task_id and run_id already use -- as the most
+// conservative available convention pending a normative definition, and is an
+// implementation choice, not a reading of the ADR that is claimed to be
+// settled.
+var keyedDigestPattern = regexp.MustCompile(`^hmac-sha256:[a-z0-9][a-z0-9-]{0,62}:[0-9a-f]{64}$`)
+
+// ValidateKeyedDigest checks ADR-0061's KEYED grammar for
+// agent_message.payload_digest.
+//
+// Unlike every other payload_digest in doc 02, this is not the common
+// envelope grammar (sha256:<64 hex>, ValidateDigest): it is HMAC-SHA256 over
+// the stored body under a per-deployment secret, so that a party with ledger
+// or read-only-API access alone -- holding neither the body nor the secret --
+// cannot confirm a guessed brief or message by hashing it. This function
+// checks shape only; computing or verifying the HMAC itself is the
+// recorder's job (E16), not this package's.
+func ValidateKeyedDigest(s string) error {
+	if !keyedDigestPattern.MatchString(s) {
+		return fmt.Errorf(
+			"%w: %q is not hmac-sha256:<key-id>:<64 lowercase hex> (ADR-0061)",
+			ErrInvalidKeyedDigest, s)
+	}
+	return nil
+}
+
+// checkAgentMessagePayloadDigest holds agent_message's payload_digest to the
+// keyed grammar ADR-0061 decided for it, in place of the envelope's plain
+// sha256: default every other type keeps (typeSpecs[EventTypeAgentMessage]
+// overrides the envelope member by name).
+func checkAgentMessagePayloadDigest(name string, v any) error {
+	s, err := checkBoundedString(name, v, MaxReferenceBytes)
+	if err != nil {
+		return err
+	}
+	if err := ValidateKeyedDigest(s); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
 }

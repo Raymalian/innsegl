@@ -122,6 +122,11 @@ fi
 #       INNSEGL_WRITE_V3_FIXTURES=1. SER-024 re-derives the v3 set it wrote on
 #       every run, and ADP-006 holds it to adding only what ADR-0051 specifies.
 #
+#   TestGenerateV4Fixtures
+#       The same, for schema 4 (ADR-0061): a generator that skips unless
+#       INNSEGL_WRITE_V4_FIXTURES=1. SER-024 re-derives the v4 set it wrote on
+#       every run, and ADP-011 holds it to adding only what ADR-0061 specifies.
+#
 #   TestGH001NoContributorAppearsForAnUnlinkedAuthor
 #       doc 07 GH-001 (RM-038, #46). It is the one case in the catalogue that
 #       measures somebody else's system: it pushes commits with an unlinked
@@ -166,7 +171,7 @@ fi
 #       Remove this line when #195 rebuilds the gate on ADR-0047's content
 #       check, where a rebased commit is matched by patch-id and main becomes
 #       checkable again.
-ALLOWED='TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures|TestGenerateV3Fixtures'
+ALLOWED='TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures|TestGenerateV3Fixtures|TestGenerateV4Fixtures'
 
 unexpected=$(grep -F '"Action":"skip"' "${out}" | grep -F '"Test":' | grep -Ev "\"Test\":\"(${ALLOWED})\"" || true)
 skipped=$(printf '%s' "${unexpected}" | grep -c . || true)

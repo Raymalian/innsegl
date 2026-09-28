@@ -51,6 +51,10 @@ const (
 	// EventTypeRunAdopted: a live run took over the uncommitted work a dead
 	// run left, with proof of which bytes (ADR-0051). Schema "3" and later.
 	EventTypeRunAdopted = "run_adopted"
+	// EventTypeAgentMessage: a brief or an agent's own message, captured from
+	// the traffic a gateway observes (ADR-0057, ADR-0061). Neither names a
+	// tool, so neither belongs on tool_call (ADR-0021). Schema "4" and later.
+	EventTypeAgentMessage = "agent_message"
 	// EventTypeUnattributedSignatureDetected: alert, a trust-domain signature
 	// with no intent.
 	EventTypeUnattributedSignatureDetected = "unattributed_signature_detected"
@@ -115,6 +119,24 @@ const (
 	// FieldAdoptionEventID on a commit_intent names the run_adopted event the
 	// commit carries out, so the two cannot be separated.
 	FieldAdoptionEventID = "adoption_event_id"
+
+	// Schema 4's members (ADR-0061). Protected strings from the moment they
+	// ship.
+	//
+	// FieldForkedFromRunID names the run a fork's traffic-observed
+	// conversation fingerprint was linked from -- distinct from
+	// FieldParentRunID, which names a spawning run tied to a tool call and
+	// answers a different question (ADR-0058 decision 5).
+	FieldForkedFromRunID = "forked_from_run_id"
+	// FieldRole is agent_message's own: brief | assistant. Never a tool's --
+	// that is tool_call.tool_name's job, and ADR-0021 refuses any other use
+	// of it.
+	FieldRole = "role"
+	// FieldWorkspaceTreeHash is the workspace snapshot taken when the request
+	// carrying this tool call's result reached the gateway, before it was
+	// forwarded: the tree's state after the tool ran, evidence of tree state
+	// rather than a claim of authorship (ADR-0061 Consequences).
+	FieldWorkspaceTreeHash = "workspace_tree_hash"
 )
 
 // runScope says whether an event type must name the run it belongs to.
@@ -190,6 +212,15 @@ func optionalV3(name string, check func(string, any) error) memberSpec {
 	return memberSpec{name: name, required: false, check: check, since: "3"}
 }
 
+// requiredV4 and optionalV4 are the same, for a member schema 4 introduced.
+func requiredV4(name string, check func(string, any) error) memberSpec {
+	return memberSpec{name: name, required: true, check: check, since: "4"}
+}
+
+func optionalV4(name string, check func(string, any) error) memberSpec {
+	return memberSpec{name: name, required: false, check: check, since: "4"}
+}
+
 // presentIn reports whether this member exists at all in the given version.
 func (m memberSpec) presentIn(version string) bool {
 	if m.since == "" {
@@ -219,6 +250,7 @@ var typeSpecOrder = []string{
 	EventTypeRunRetired,
 	EventTypeRunExpired,
 	EventTypeRunAdopted,
+	EventTypeAgentMessage,
 	EventTypeSchemaMigrated,
 	EventTypeUnattributedSignatureDetected,
 	EventTypeLedgerDriftDetected,
@@ -251,6 +283,12 @@ var typeSpecs = map[string]typeSpec{
 			requiredV2(FieldBranch, checkBranch),
 			// Optional by nature: a root run has no parent.
 			optionalV2(FieldParentRunID, checkParentRunID),
+			// ADR-0061: the run a fork's traffic-observed fingerprint was
+			// linked from. Held to the same run_id grammar as
+			// parent_run_id -- reusing checkParentRunID directly, not a
+			// second checker, because the parent of a run and the run a
+			// fork continues are both, syntactically, a run id.
+			optionalV4(FieldForkedFromRunID, checkParentRunID),
 		},
 	},
 	EventTypeCredentialIssued: {
@@ -268,6 +306,10 @@ var typeSpecs = map[string]typeSpec{
 			// doc 02 §3: "body only as payload_digest". The body has no member
 			// to live in, which is IP E4 made mechanical.
 			required(FieldToolName, checkReference),
+			// ADR-0061 decision 3: the workspace snapshot taken when the
+			// request carrying this tool call's result reached the gateway.
+			// Same git object id grammar as commit_intent.tree_hash.
+			optionalV4(FieldWorkspaceTreeHash, checkGitObjectID),
 		},
 	},
 	EventTypeCommitIntent: {
@@ -321,6 +363,23 @@ var typeSpecs = map[string]typeSpec{
 		members: []memberSpec{
 			requiredV3(FieldAdoptedRunID, checkParentRunID),
 			requiredV3(FieldAdoptedRunState, checkAdoptedRunState),
+		},
+	},
+	EventTypeAgentMessage: {
+		eventType: EventTypeAgentMessage,
+		since:     "4",
+		// The traffic a gateway captures always belongs to a run; there is no
+		// system-scope brief or model message (ADR-0057, ADR-0061).
+		runScope: runRequired,
+		members: []memberSpec{
+			requiredV4(FieldRole, checkAgentMessageRole),
+			// ADR-0061 decision 2: unlike every other type, agent_message's
+			// payload_digest is the KEYED grammar, not the envelope's plain
+			// sha256: default -- this entry overrides that default for this
+			// type only (allowedFor overlays type-specific members onto the
+			// envelope's, by name). tool_call.payload_digest and every other
+			// type keep the plain grammar, unchanged.
+			requiredV4(FieldPayloadDigest, checkAgentMessagePayloadDigest),
 		},
 	},
 	EventTypeSchemaMigrated: {

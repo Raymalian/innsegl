@@ -48,13 +48,13 @@ import (
 
 const (
 	// SchemaVersion is the schema_version this package emits (doc 02 §2).
-	SchemaVersion = "3"
+	SchemaVersion = "4"
 
 	// SerializerVersion is the version tag of the canonical serializer. It is
 	// the same number as SchemaVersion by construction: the serialization is
 	// part of the schema, so there is no such thing as a new serializer under
 	// an unchanged schema version.
-	SerializerVersion = "3"
+	SerializerVersion = "4"
 
 	// HashPrefix is the algorithm prefix on every hash string (doc 02 §1).
 	HashPrefix = "sha256:"
@@ -396,6 +396,13 @@ const formatFingerprintV2 = "sha256:50db195a0c3df3c58e950eba3d8e5fc3bcc3f2565768
 // frozen; do not update it to make a test pass.
 const formatFingerprintV3 = "sha256:4b224ba12427f51b87dcc37e82ad376b0580e177664741c406f613acd27e7c6f"
 
+// formatFingerprintV4 is the same probe under serializer version 4, for V2's
+// reason and no other: the probe embeds the two version tags, now "4". The
+// serialization is untouched -- ADR-0061 is purely additive to the member
+// tables, and doc 02 §4 is untouched by it. Computed once from the live
+// serializer and frozen; do not update it to make a test pass.
+const formatFingerprintV4 = "sha256:eb43fc89e5f9dce9549158a3cc8c8468a4f8e8c10e8bc47d7ee0858bb5a75710"
+
 // serializerRegistry holds one entry per serializer version that has ever
 // existed. Entries are never removed: verification of old records is supported
 // forever, without exception (VERSIONING.md).
@@ -423,6 +430,13 @@ var serializerRegistry = map[string]FormatSpec{
 		// Unchanged, for the reason given at "2".
 		GenesisSeed: "innsegl-genesis-v1",
 		Fingerprint: formatFingerprintV3,
+	},
+	"4": {
+		Version:       "4",
+		SchemaVersion: "4",
+		// Unchanged, for the reason given at "2".
+		GenesisSeed: "innsegl-genesis-v1",
+		Fingerprint: formatFingerprintV4,
 	},
 }
 

@@ -28,6 +28,8 @@ var doc02EventTypes = []string{
 	"run_expired",
 	// ADR-0051: schema 3's one new type, beside the other lifecycle events.
 	"run_adopted",
+	// ADR-0061: schema 4's one new type.
+	"agent_message",
 	// §7's migration attestation, in doc 02 §3's own order.
 	"schema_migrated",
 	"unattributed_signature_detected",
@@ -106,6 +108,30 @@ var adr3TypeSpecificOptional = map[string][]string{
 	"commit_intent": {"adoption_event_id"},
 }
 
+// What schema 4 adds, ADR-0061: one type and two optional members on existing
+// types.
+//
+// agent_message's payload_digest does not appear below, for a reason that
+// looks like run_adopted's but is not: the helper below (like
+// TestTypeSpecificFieldsMatchDoc02's own filter) can only see a required
+// member that is ALSO an envelope field name as an envelope requirement, never
+// a type-specific one -- payload_digest is such a name whether or not the
+// type overrides its grammar. Unlike run_adopted, agent_message's
+// payload_digest genuinely IS a member of the type itself, carrying a
+// different grammar than the envelope's default (types.go,
+// typeSpecs[EventTypeAgentMessage]); its requiredness and grammar are proved
+// directly in TestADP007, and generically by
+// TestValidateEventRequiresEveryRequiredMember, which reads RequiredFields
+// rather than filtering by envelope name.
+var adr4TypeSpecificRequired = map[string][]string{
+	"agent_message": {"role"},
+}
+
+var adr4TypeSpecificOptional = map[string][]string{
+	"run_registered": {"forked_from_run_id"},
+	"tool_call":      {"workspace_tree_hash"},
+}
+
 // membershipFor returns the required and optional type-specific members one
 // schema version's table must hold, sorted.
 func membershipFor(version, eventType string) (required, optional []string) {
@@ -118,6 +144,10 @@ func membershipFor(version, eventType string) (required, optional []string) {
 	if version != "1" && version != "2" {
 		required = append(required, adr3TypeSpecificRequired[eventType]...)
 		optional = append(optional, adr3TypeSpecificOptional[eventType]...)
+	}
+	if version != "1" && version != "2" && version != "3" {
+		required = append(required, adr4TypeSpecificRequired[eventType]...)
+		optional = append(optional, adr4TypeSpecificOptional[eventType]...)
 	}
 	slices.Sort(required)
 	slices.Sort(optional)
@@ -199,7 +229,7 @@ func TestTypeSpecificFieldsMatchDoc02(t *testing.T) {
 
 	// Every released version, named: with SchemaVersion alone, the version it
 	// replaced would silently stop being asked the day it was bumped.
-	for _, version := range []string{"1", "2", SchemaVersion} {
+	for _, version := range []string{"1", "2", "3", SchemaVersion} {
 		for _, et := range doc02EventTypes {
 			t.Run("v"+version+"/"+et, func(t *testing.T) {
 				spec, err := lookupType(et)
@@ -420,9 +450,9 @@ func TestVerifiersTolerateUnknownMembersOnlyForANewerSchema(t *testing.T) {
 		// ADR-0047 gave it members, so an event LABELLED 2 is now judged by
 		// version 2's table and a v1 body relabelled as v2 is genuinely
 		// invalid — it has no `repo` and no `branch`. The case is about a
-		// version this build knows nothing about. Schema 3 now exists
-		// (ADR-0051), so the unknown one is 4.
-		f[FieldSchemaVersion] = "4"
+		// version this build knows nothing about. Schema 4 now exists
+		// (ADR-0061), so the unknown one is 5.
+		f[FieldSchemaVersion] = "5"
 		f["future_member"] = "x"
 		if err := ValidateEventForVerification(f); err != nil {
 			t.Errorf("ValidateEventForVerification = %v, want nil", err)
@@ -876,6 +906,12 @@ func TestMemberChecks(t *testing.T) {
 		{"text", checkText, "a reason", strings.Repeat("t", MaxTextBytes+1), ErrValueTooLong},
 		{"log index", checkLogIndex, int64(0), int64(-1), ErrInvalidField},
 		{"chain position", checkChainPositionValue, int64(1), int64(0), ErrInvalidField},
+		{"agent message role", checkAgentMessageRole, "brief", "operator", ErrInvalidField},
+		{
+			"agent message payload digest", checkAgentMessagePayloadDigest,
+			"hmac-sha256:" + v4KeyID + ":" + strings.Repeat("a", 64),
+			HashPrefix + strings.Repeat("a", 64), ErrInvalidKeyedDigest,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := tc.check("m", tc.good); err != nil {
