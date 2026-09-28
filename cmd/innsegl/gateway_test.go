@@ -10,8 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/internal/gateway"
 )
 
 // TestGatewayCommandRelaysRealTrafficEndToEnd runs the PRODUCTION wiring —
@@ -74,12 +77,11 @@ func TestGatewayCommandRelaysRealTrafficEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
-	// A recognised harness shape: the production wiring installs the
-	// harness-shape guard by default (GW-011, #374 -- internal/gateway's
-	// Proxy.ServeHTTP falls back to it whenever Guards is left nil, which
-	// openGateway's own construction does), so an unrecognised path or a
-	// request with no session header is refused before ever reaching the
-	// upstream this test is asserting against.
+	// A recognised harness shape: openGateway wires the harness-shape guard
+	// explicitly (GW-011, #374), ahead of the per-session rate limit guard
+	// (GW-013, #375) that reads what it attaches, so an unrecognised path
+	// or a request with no session header is refused before ever reaching
+	// the upstream this test is asserting against.
 	req.Header.Set("X-Claude-Code-Session-Id", "3f6a9b1c-2d4e-4f7a-9c8b-1e2f3a4b5c6d")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -95,6 +97,175 @@ func TestGatewayCommandRelaysRealTrafficEndToEnd(t *testing.T) {
 	}
 	if got := resp.Header.Get("X-From-Upstream"); got != "yes" {
 		t.Errorf("X-From-Upstream = %q, want yes", got)
+	}
+
+	cancel()
+	select {
+	case code := <-done:
+		if code != exitOK {
+			t.Fatalf("runGateway after its context was cancelled = %d, want %d (exitOK)", code, exitOK)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateway did not stop within 5s of its context being cancelled")
+	}
+}
+
+// TestGatewayCommandEnforcesGW013RateLimitEndToEnd runs the PRODUCTION
+// wiring -- openGateway, unfaked -- with a tiny configured burst, and
+// proves a session that exceeds it gets refused with 429, a Retry-After
+// header, and a JSON body naming innsegl, while nothing reaches the
+// upstream for that refused request.
+func TestGatewayCommandEnforcesGW013RateLimitEndToEnd(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	addrCh := make(chan string, 1)
+	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
+		o.upstreamClient = upstream.Client()
+		srv, err := openGateway(ctx, o, log)
+		if err == nil {
+			addrCh <- srv.Addr()
+		}
+		return srv, err
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	args := []string{
+		"-listen", "127.0.0.1:0", "-upstream", upstream.URL,
+		"-rate-limit-rate", "1", "-rate-limit-burst", "1",
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- runGateway(ctx, args, io.Discard, io.Discard, deps)
+	}()
+
+	var addr string
+	select {
+	case addr = <-addrCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateway never announced a bound address")
+	}
+
+	newRequest := func() *http.Request {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/v1/messages", nil)
+		if err != nil {
+			t.Fatalf("NewRequestWithContext: %v", err)
+		}
+		req.Header.Set("X-Claude-Code-Session-Id", "3f6a9b1c-2d4e-4f7a-9c8b-1e2f3a4b5c6d")
+		return req
+	}
+
+	resp1, err := http.DefaultClient.Do(newRequest())
+	if err != nil {
+		t.Fatalf("first request: %v", err)
+	}
+	_ = resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200 (burst is 1)", resp1.StatusCode)
+	}
+
+	resp2, err := http.DefaultClient.Do(newRequest())
+	if err != nil {
+		t.Fatalf("second request: %v", err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+
+	if resp2.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second request status = %d, want %d", resp2.StatusCode, http.StatusTooManyRequests)
+	}
+	if got := resp2.Header.Get("Retry-After"); got == "" {
+		t.Error("second request carries no Retry-After header")
+	}
+	body, err := io.ReadAll(resp2.Body)
+	if err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	if !strings.Contains(string(body), "innsegl") {
+		t.Errorf("body %q does not name innsegl", body)
+	}
+
+	cancel()
+	select {
+	case code := <-done:
+		if code != exitOK {
+			t.Fatalf("runGateway after its context was cancelled = %d, want %d (exitOK)", code, exitOK)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateway did not stop within 5s of its context being cancelled")
+	}
+}
+
+// TestGatewayCommandRefusesAnUnrecognisedHarnessShapeEndToEnd is GW-011,
+// run through the PRODUCTION wiring rather than internal/gateway's own
+// package tests: openGateway's guard chain comes from gateway.Guards
+// (guard.go), the one ordered list that command and package both build
+// from, and this proves the harness-shape guard is still first in it here
+// -- not only in internal/gateway's own test suite. A request with no
+// recognised harness shape (no session header at all) must be refused with
+// 400 before the rate-limit guard, or anything else, ever sees it, and the
+// upstream must never be asked.
+func TestGatewayCommandRefusesAnUnrecognisedHarnessShapeEndToEnd(t *testing.T) {
+	var upstreamHits int32
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&upstreamHits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	addrCh := make(chan string, 1)
+	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
+		o.upstreamClient = upstream.Client()
+		srv, err := openGateway(ctx, o, log)
+		if err == nil {
+			addrCh <- srv.Addr()
+		}
+		return srv, err
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstream.URL}
+	done := make(chan int, 1)
+	go func() {
+		done <- runGateway(ctx, args, io.Discard, io.Discard, deps)
+	}()
+
+	var addr string
+	select {
+	case addr = <-addrCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateway never announced a bound address")
+	}
+
+	// Deliberately no X-Claude-Code-Session-Id header: an unrecognised
+	// harness shape.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/v1/messages", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request through the gateway: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d (GW-011)", resp.StatusCode, http.StatusBadRequest)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	if !strings.Contains(string(body), "unrecognised harness shape") {
+		t.Errorf("body %q does not name the refusal reason", body)
+	}
+	if got := atomic.LoadInt32(&upstreamHits); got != 0 {
+		t.Errorf("upstream received %d requests, want 0 -- nothing should be forwarded", got)
 	}
 
 	cancel()
@@ -224,13 +395,67 @@ func TestGatewayCommandRefusesANegativeShutdownTimeout(t *testing.T) {
 	}
 }
 
+// --- GW-013 (#375, RM-230): the per-session rate limit's own flags,
+// validated at start-up the same way -upstream already is. ---
+
+func TestGatewayCommandRefusesANonPositiveRateLimitRate(t *testing.T) {
+	for _, rate := range []string{"0", "-1"} {
+		var stdout, stderr bytes.Buffer
+		code := runGatewayCommand([]string{"-rate-limit-rate", rate}, &stdout, &stderr, gatewayDeps{})
+		if code != exitUsage {
+			t.Errorf("gateway -rate-limit-rate %s = %d, want %d (exitUsage)", rate, code, exitUsage)
+		}
+		if !strings.Contains(stderr.String(), "GW-013") {
+			t.Errorf("-rate-limit-rate %s: stderr %q does not name GW-013", rate, stderr.String())
+		}
+	}
+}
+
+func TestGatewayCommandRefusesANonPositiveRateLimitBurst(t *testing.T) {
+	for _, burst := range []string{"0", "-1"} {
+		var stdout, stderr bytes.Buffer
+		code := runGatewayCommand([]string{"-rate-limit-burst", burst}, &stdout, &stderr, gatewayDeps{})
+		if code != exitUsage {
+			t.Errorf("gateway -rate-limit-burst %s = %d, want %d (exitUsage)", burst, code, exitUsage)
+		}
+		if !strings.Contains(stderr.String(), "GW-013") {
+			t.Errorf("-rate-limit-burst %s: stderr %q does not name GW-013", burst, stderr.String())
+		}
+	}
+}
+
+// TestGatewayCommandDefaultsRateLimitToThePackagesOwnDefaults pins that this
+// command's own defaults track internal/gateway's, rather than drifting
+// from a second, separately-maintained number.
+func TestGatewayCommandDefaultsRateLimitToThePackagesOwnDefaults(t *testing.T) {
+	for _, name := range []string{envGatewayRate, envGatewayBurst} {
+		t.Setenv(name, "")
+	}
+	o, code, ok := parseGatewayFlags(nil, io.Discard)
+	if !ok {
+		t.Fatalf("parseGatewayFlags refused a default configuration: exit %d", code)
+	}
+	if o.rateLimitRate != gateway.DefaultSessionRateLimitRate {
+		t.Errorf("rateLimitRate = %d, want %d (internal/gateway's own default)",
+			o.rateLimitRate, gateway.DefaultSessionRateLimitRate)
+	}
+	if o.rateLimitBurst != gateway.DefaultSessionRateLimitBurst {
+		t.Errorf("rateLimitBurst = %d, want %d (internal/gateway's own default)",
+			o.rateLimitBurst, gateway.DefaultSessionRateLimitBurst)
+	}
+}
+
 func TestGatewayCommandReadsEveryFlagFromTheEnvironment(t *testing.T) {
-	for _, name := range []string{envGatewayListen, envGatewayUpstream, envGatewayShutdownTimeout} {
+	for _, name := range []string{
+		envGatewayListen, envGatewayUpstream, envGatewayShutdownTimeout, envGatewayRate, envGatewayBurst,
+	} {
 		t.Setenv(name, "")
 	}
 	t.Setenv(envGatewayListen, "127.0.0.1:0")
 	t.Setenv(envGatewayUpstream, "https://example.invalid")
 	t.Setenv(envGatewayShutdownTimeout, "30s")
+	t.Setenv(envGatewayRate, "7")
+	t.Setenv(envGatewayBurst, "42")
 
 	o, code, ok := parseGatewayFlags(nil, io.Discard)
 	if !ok {
@@ -244,6 +469,12 @@ func TestGatewayCommandReadsEveryFlagFromTheEnvironment(t *testing.T) {
 	}
 	if o.shutdownTimeout != 30*time.Second {
 		t.Errorf("shutdownTimeout = %v, want 30s", o.shutdownTimeout)
+	}
+	if o.rateLimitRate != 7 {
+		t.Errorf("rateLimitRate = %d, want 7", o.rateLimitRate)
+	}
+	if o.rateLimitBurst != 42 {
+		t.Errorf("rateLimitBurst = %d, want 42", o.rateLimitBurst)
 	}
 }
 
