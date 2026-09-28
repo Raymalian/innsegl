@@ -5,6 +5,7 @@ package gateway
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -150,13 +151,22 @@ func TestGW002FirstSSEEventReachesClientBeforeUpstreamFinishes(t *testing.T) {
 	gw := httptest.NewServer(&Proxy{Upstream: up})
 	defer gw.Close()
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, gw.URL+"/v1/messages", nil)
+	// Bounded end to end, not only on the body read below: an
+	// implementation that buffers so completely it never even flushes a
+	// status line must fail this test on ITS OWN 5s bound rather than hang
+	// until go test's outer -timeout kills the whole binary. Without this,
+	// a total-buffering regression is still caught, but as a goroutine-dump
+	// panic instead of a readable assertion.
+	reqCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, gw.URL+"/v1/messages", nil)
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("gateway request: %v", err)
+		t.Fatalf("gateway request: %v (want a prompt response with the reply streamed after, "+
+			"not one that hangs while the whole reply is buffered)", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
