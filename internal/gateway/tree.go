@@ -199,8 +199,10 @@ func (l *InMemoryTreeLinker) RecordSpawn(_ context.Context, s PendingSpawn) erro
 // so one spawn links exactly one child; among several spawns recorded for
 // the same (sessionID, prompt) pair, the oldest is matched first (FIFO), so
 // parallel children with an identical brief each link to their own spawn in
-// the order those spawns were recorded.
-func (l *InMemoryTreeLinker) ResolveParent(_ context.Context, sessionID, childBrief string) (string, bool, error) {
+// the order those spawns were recorded. The matched spawn's own AgentType
+// comes back alongside its parent run id (RM-263, #416) -- empty when the
+// spawn carried none, never a value this file invents.
+func (l *InMemoryTreeLinker) ResolveParent(_ context.Context, sessionID, childBrief string) (string, string, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -209,7 +211,7 @@ func (l *InMemoryTreeLinker) ResolveParent(_ context.Context, sessionID, childBr
 	key := spawnKey{sessionID: sessionID, prompt: childBrief}
 	queue := l.byKey[key]
 	if len(queue) == 0 {
-		return "", false, nil
+		return "", "", false, nil
 	}
 
 	elem := queue[0]
@@ -222,7 +224,7 @@ func (l *InMemoryTreeLinker) ResolveParent(_ context.Context, sessionID, childBr
 
 	entry := mustSpawnEntry(elem.Value)
 	l.stats.Resolved++
-	return entry.spawn.ParentRunID, true, nil
+	return entry.spawn.ParentRunID, entry.spawn.AgentType, true, nil
 }
 
 // mustSpawnEntry asserts that v -- always an *list.Element's own Value in

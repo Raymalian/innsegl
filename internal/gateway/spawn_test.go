@@ -59,6 +59,46 @@ func TestSpawnRecorderRecordsATaskToolUseToo(t *testing.T) {
 	}
 }
 
+// TestSpawnRecorderCarriesTheSpawnsSubagentType (RM-263, #416): the spawning
+// tool_use's own subagent_type input reaches the recorded PendingSpawn's
+// AgentType, so a later ResolveParent can hand it back to the child that
+// matches this spawn.
+func TestSpawnRecorderCarriesTheSpawnsSubagentType(t *testing.T) {
+	tree := &fakeTreeLinker{}
+	rec := NewSpawnRecorder(tree, nil)
+
+	rec.OnToolUseContext(spawnCtx("s1", "run-parent"), ToolUse{
+		ID: "toolu_1", Name: "Agent", Input: []byte(`{"prompt":"do the subtask","subagent_type":"code-reviewer"}`),
+	})
+
+	if len(tree.spawns) != 1 {
+		t.Fatalf("recorded %d spawns, want 1", len(tree.spawns))
+	}
+	if got := tree.spawns[0].AgentType; got != "code-reviewer" {
+		t.Errorf("AgentType = %q, want %q", got, "code-reviewer")
+	}
+}
+
+// TestSpawnRecorderAgentTypeIsEmptyWhenTheToolUseCarriedNone: a spawning
+// tool_use with no subagent_type field at all records an empty AgentType --
+// this file never invents a default; identity.go's agentTypeFor decides
+// what an empty type falls back to.
+func TestSpawnRecorderAgentTypeIsEmptyWhenTheToolUseCarriedNone(t *testing.T) {
+	tree := &fakeTreeLinker{}
+	rec := NewSpawnRecorder(tree, nil)
+
+	rec.OnToolUseContext(spawnCtx("s1", "run-parent"), ToolUse{
+		ID: "toolu_1", Name: "Agent", Input: []byte(`{"prompt":"do the subtask"}`),
+	})
+
+	if len(tree.spawns) != 1 {
+		t.Fatalf("recorded %d spawns, want 1", len(tree.spawns))
+	}
+	if got := tree.spawns[0].AgentType; got != "" {
+		t.Errorf("AgentType = %q, want empty", got)
+	}
+}
+
 func TestSpawnRecorderIgnoresAnUnrelatedToolName(t *testing.T) {
 	tree := &fakeTreeLinker{}
 	rec := NewSpawnRecorder(tree, nil)
