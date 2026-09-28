@@ -300,6 +300,21 @@ type interpolatedService struct {
 	Volumes []struct {
 		Target string `json:"target"`
 	} `json:"volumes"`
+	// Ports are the resolved `ports:` publish entries. Read for HostIP and
+	// Target: whether a container-side port is reachable from the host at
+	// all, and on which address — GW-005 reads this for the gateway's.
+	Ports []composePort `json:"ports"`
+}
+
+// composePort is one resolved `ports:` entry, in the exact shape
+// `docker compose config --format json` emits it. HostIP is "" for a bare
+// `<published>:<target>` mapping (every interface), never a bind to
+// loopback by omission.
+type composePort struct {
+	HostIP    string `json:"host_ip"`
+	Target    int    `json:"target"`
+	Published string `json:"published"`
+	Protocol  string `json:"protocol"`
 }
 
 // networkNames is one service's membership, sorted, as the compose file

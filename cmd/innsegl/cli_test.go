@@ -40,8 +40,13 @@ import (
 // its neighbours in what it holds — no ledger DSN, no SPIRE admin credential,
 // only the address of the identity-lifecycle listener — because the retirement
 // is `retire_agent`'s and this is a client of it.
+// `gateway` is ADR-0060's fifth companion of the one `innsegl` process
+// (RM-224, #369): a reverse proxy in front of the model provider a harness
+// is pointed at (ADR-0057). It is a subcommand in its own right, the same
+// shape `api`, `seal`, `reconcile` and `reap` already are, and `serve -also
+// gateway` runs the same body as a goroutine instead of a sixth container.
 var documentedSubcommands = []string{
-	"admin-credential", "api", "canary", "init", "migrate-schema", "reap", "reconcile",
+	"admin-credential", "api", "canary", "gateway", "init", "migrate-schema", "reap", "reconcile",
 	"resolve-alert", "retire", "seal", "serve", "verify",
 }
 

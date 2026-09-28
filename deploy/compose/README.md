@@ -605,7 +605,7 @@ Four things worth knowing before you choose:
 | compose refuses, naming `INNSEGL_SPIRE_JWT_ISSUER` | the export was skipped. This refusal is deliberate; see above |
 | `innsegl serve` refuses, naming `-identity-mode / -identity-secret / -identity-secret-file` | the deployment secret is unset, under 16 bytes, or supplied twice. In the shipped stack `innsegl-identity-init` writes it, so check that one-shot's logs first. See "What an agent's identity says about it" |
 | `register: FAIL: no attested agent yet` | the SPIRE agent has not finished attesting. Re-run `register.sh`; it is idempotent |
-| ports 8443, 5555, 3000, 28080, 28081 or 8082 already bound | the stack publishes those six on loopback. Free them, or override: `INNSEGL_SPIRE_OIDC_PORT`, `INNSEGL_MCP_PORT`, `INNSEGL_MCP_HEALTH_PORT`, `INNSEGL_DASHBOARD_PORT` |
+| ports 8443, 5555, 3000, 28080, 28081, 28095 or 8082 already bound | the stack publishes those seven on loopback. Free them, or override: `INNSEGL_SPIRE_OIDC_PORT`, `INNSEGL_MCP_PORT`, `INNSEGL_MCP_HEALTH_PORT`, `INNSEGL_GATEWAY_PORT`, `INNSEGL_DASHBOARD_PORT` |
 | `all predefined address pools have been fully subnetted` | Docker is out of network address space, at roughly the twenty-ninth network. The three stacks hold twelve between them. `docker network prune` |
 | compose refuses, naming `INNSEGL_SPIRE_PARENT_ID` | `register.sh` has not run since this stack booted. It writes `deploy/compose/.env`; re-run it |
 | `innsegl-mcp` restarts, logging that the Workload API gave it no SVID | its registration entry is missing or names an older build of `innsegl:local`. Re-run `register.sh` — it detects a stale entry and replaces it |
