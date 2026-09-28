@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/gateway"
+	"innsegl.dev/innsegl/internal/ledger"
+	"innsegl.dev/innsegl/internal/rundir"
 )
 
 // `innsegl gateway` — the model-traffic reverse proxy, wired.
@@ -53,6 +56,31 @@ import (
 // from a published host port. What makes this gateway loopback-only as
 // experienced from OUTSIDE the container is the compose publish line
 // (#370), not -listen's default here.
+//
+// # Identity from traffic (RM-235, #380)
+//
+// -dsn (or $INNSEGL_LEDGER_DSN, the SAME variable `serve`, `seal`,
+// `reconcile` and `reap` already read) is the one new, OPTIONAL setting
+// this issue adds. Set, openGateway builds the real identity stack ADR-0058
+// describes: a Postgres-backed MappingStore and a RunStateReader on the
+// same database (ADR-0060 decision 3, "one database, no new store"), the
+// MCP's own register_agent/retire_agent/describe_workspace reached in
+// process (internal/gateway's registrar.go and workspace.go -- this file
+// does not configure those tools itself; when this command runs as `serve
+// -also gateway`, servewiring.go already has, and this is simply another
+// caller of what is already wired; run standalone with no MCP configured in
+// this same process, every registration attempt is refused exactly as
+// register_agent refuses an unconfigured call, which is the correct,
+// fail-closed reading of ADR-0058 decision 11 for a misconfigured
+// deployment), and the identity guard (ADR-0058 decision 11) is placed into
+// gateway.Guards -- the one ordered list -- ahead of the rate limiter.
+// Unset, this command behaves exactly as it did before this issue: no
+// identity guard, nothing else changed.
+//
+// The silence backstop (ADR-0058 decision 7c) and the session-end delivery
+// method (decision 7a; see sessionEndHandler below) are both built only
+// when -dsn is set, for the same reason: neither means anything without a
+// mapping store and a Registrar to retire through.
 
 // Exit statuses, continuing cli.go's contract.
 const (
@@ -78,6 +106,15 @@ const (
 	// sharing one session id) is meant to never hit them.
 	envGatewayRate  = "INNSEGL_GATEWAY_RATE"
 	envGatewayBurst = "INNSEGL_GATEWAY_BURST"
+
+	// envGatewayBackstopInterval configures how often the silence backstop
+	// (gateway.Backstop, ADR-0058 decision 7c) sweeps. gateway.EnvBackstopHorizon
+	// (INNSEGL_GATEWAY_SILENCE_AFTER, internal/gateway/lifecycle.go) is the
+	// horizon itself and is read directly, without a second flag of its own
+	// here, so that this command and any other future caller of
+	// gateway.NewBackstop read the identical setting from the identical
+	// variable.
+	envGatewayBackstopInterval = "INNSEGL_GATEWAY_BACKSTOP_INTERVAL"
 )
 
 const (
@@ -102,6 +139,21 @@ const (
 	// start-up is worse than one that exits: an orchestrator can restart
 	// the second.
 	gatewayBootTimeout = 60 * time.Second
+
+	// defaultGatewayBackstopInterval is how often the silence backstop
+	// sweeps once -dsn is set. A fraction of gateway.DefaultBackstopHorizon
+	// (seven days) rather than a fraction of a day: this is a background
+	// housekeeping loop against the same database the mapping store and the
+	// ledger already use, not a latency-sensitive path, and a run silent
+	// past its horizon by up to this interval costs nothing worse than the
+	// same adoption-instead-of-resume ADR-0058 decision 7 already accepts.
+	defaultGatewayBackstopInterval = 15 * time.Minute
+
+	// gatewaySweepTimeout bounds one backstop sweep (the enumeration query
+	// and every Retire it triggers), the same reasoning gatewayBootTimeout
+	// gives construction: a sweep that hangs is worse than one that fails
+	// and tries again next tick.
+	gatewaySweepTimeout = 5 * time.Minute
 )
 
 // gatewayOptions is the resolved command line.
@@ -114,6 +166,16 @@ type gatewayOptions struct {
 	// one non-positive before the gateway starts -- see that method.
 	rateLimitRate  int
 	rateLimitBurst int
+
+	// dsn is RM-235 (#380)'s one new, OPTIONAL setting: the ledger database
+	// the identity stack reads and writes (ADR-0060 decision 3). Empty means
+	// no identity guard, no backstop, no session-end endpoint -- exactly
+	// this command's behaviour before this issue. See this file's own doc
+	// comment, "Identity from traffic".
+	dsn string
+	// backstopInterval is how often the silence backstop sweeps, once dsn is
+	// set. validate refuses a non-positive value.
+	backstopInterval time.Duration
 
 	// upstreamClient overrides the client openGateway hands to
 	// gateway.NewUpstream. Always nil on every path a flag or an
@@ -142,6 +204,9 @@ func (o gatewayOptions) validate() string {
 	case o.rateLimitBurst <= 0:
 		return fmt.Sprintf("-rate-limit-burst (or $%s) must be a positive number of requests, "+
 			"got %d (GW-013)", envGatewayBurst, o.rateLimitBurst)
+	case o.backstopInterval <= 0:
+		return fmt.Sprintf("-backstop-interval (or $%s) must be positive, got %s",
+			envGatewayBackstopInterval, o.backstopInterval)
 	}
 	if problem := upstreamMustBeHTTPS(o.upstream); problem != "" {
 		return problem
@@ -283,6 +348,14 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 			envIntOr(envGatewayBurst, gateway.DefaultSessionRateLimitBurst),
 			"requests one session may burst instantaneously before the sustained rate applies "+
 				"($"+envGatewayBurst+")")
+		dsn = fs.String("dsn", os.Getenv(envLedgerDSN),
+			"ledger connection string for the identity stack (ADR-0058, ADR-0060 decision 3) -- "+
+				"prefer the environment variable ($"+envLedgerDSN+"). OPTIONAL: unset means no "+
+				"identity guard, no backstop, no session-end endpoint, exactly as before RM-235")
+		backstopInterval = fs.Duration("backstop-interval",
+			envDuration(envGatewayBackstopInterval, defaultGatewayBackstopInterval),
+			"how often the silence backstop sweeps once -dsn is set (ADR-0058 decision 7c) "+
+				"($"+envGatewayBackstopInterval+")")
 	)
 
 	fs.Usage = func() { gatewayUsage(stderr, fs) }
@@ -300,11 +373,13 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 	}
 
 	o := gatewayOptions{
-		listen:          *listen,
-		upstream:        *upstream,
-		shutdownTimeout: *shutdownTimeout,
-		rateLimitRate:   *rateLimitRate,
-		rateLimitBurst:  *rateLimitBurst,
+		listen:           *listen,
+		upstream:         *upstream,
+		shutdownTimeout:  *shutdownTimeout,
+		rateLimitRate:    *rateLimitRate,
+		rateLimitBurst:   *rateLimitBurst,
+		dsn:              *dsn,
+		backstopInterval: *backstopInterval,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl gateway: %s\n", problem)
@@ -352,14 +427,37 @@ type runningGateway struct {
 	ln              net.Listener
 	shutdownTimeout time.Duration
 	log             *serveLog
+
+	// backstop, backstopCandidates and backstopInterval are set only when
+	// o.dsn was non-empty (RM-235, #380): the silence backstop (ADR-0058
+	// decision 7c), swept on this interval for as long as Serve runs.
+	// backstop is nil when -dsn was not set, and Serve does not start the
+	// sweep loop at all in that case.
+	backstop           *gateway.Backstop
+	backstopCandidates *gateway.SilentRunCandidates
+	backstopInterval   time.Duration
+
+	// closers release every resource openGateway opened beyond the
+	// listener (the mapping store's pool, the ledger connection, the
+	// backstop's own pool) -- called in Close, in the order they were
+	// appended, mirroring how `api` and `serve` release their own
+	// Postgres-backed dependencies.
+	closers []func()
 }
 
 func (g *runningGateway) Addr() string { return g.ln.Addr().String() }
 
 // Serve runs the listener until ctx is done or it fails, then stops it in
 // an orderly way — the same shape `runningServer.Serve` and
-// `runningAPI.Serve` already use.
+// `runningAPI.Serve` already use. When the silence backstop is wired
+// (o.dsn was set), a second goroutine sweeps it on backstopInterval for as
+// long as ctx is not done; it holds no state between Serve and Close, so a
+// Serve/Close cycle leaves nothing running.
 func (g *runningGateway) Serve(ctx context.Context) error {
+	if g.backstop != nil {
+		go g.runBackstop(ctx)
+	}
+
 	failed := make(chan error, 1)
 	go func() {
 		err := g.server.Serve(g.ln)
@@ -387,10 +485,57 @@ func (g *runningGateway) Serve(ctx context.Context) error {
 	return first
 }
 
-// Close releases the listener. Safe to call after Serve and safe to call
-// twice.
+// runBackstop sweeps the silence backstop every backstopInterval, until ctx
+// is done. A failed enumeration or a failed sweep is logged and tried again
+// next tick — the same "log and continue" posture the reaper and reconciler
+// already take toward their own periodic work, because a single failed
+// sweep is not a reason to stop relaying traffic.
+func (g *runningGateway) runBackstop(ctx context.Context) {
+	ticker := time.NewTicker(g.backstopInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			g.sweepOnce(ctx)
+		}
+	}
+}
+
+func (g *runningGateway) sweepOnce(ctx context.Context) {
+	sweepCtx, cancel := context.WithTimeout(ctx, gatewaySweepTimeout)
+	defer cancel()
+
+	candidates, err := g.backstopCandidates.Candidates(sweepCtx)
+	if err != nil {
+		g.log.warn("the backstop could not enumerate silent runs", "err", err)
+		return
+	}
+	retired, err := g.backstop.Sweep(sweepCtx, candidates)
+	if err != nil {
+		g.log.warn("the backstop sweep did not finish cleanly", "err", err)
+	}
+	if len(retired) > 0 {
+		g.log.info("the silence backstop retired silent runs", "count", len(retired))
+	}
+}
+
+// Close releases the listener and every other resource openGateway opened.
+// Safe to call after Serve and safe to call twice.
 func (g *runningGateway) Close() {
-	_ = g.ln.Close()
+	// g.ln can be nil here: openGateway calls Close on an error path that
+	// may run before the listener is ever created (RM-235, #380's identity
+	// stack is opened first, precisely so a failure there costs nothing
+	// already holding a socket).
+	if g.ln != nil {
+		_ = g.ln.Close()
+	}
+	closers := g.closers
+	g.closers = nil
+	for _, closer := range closers {
+		closer()
+	}
 }
 
 // openGateway builds the gateway: an internal/gateway.Upstream, its Proxy,
@@ -430,38 +575,191 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		return nil, fmt.Errorf("configure the per-session rate limit: %w", err)
 	}
 
+	running := &runningGateway{shutdownTimeout: o.shutdownTimeout, log: log}
+
+	// RM-235 (#380): the identity stack, only when -dsn (or $INNSEGL_LEDGER_DSN)
+	// names a database. See this file's own doc comment, "Identity from
+	// traffic", for what stays unchanged when it does not.
+	var identityGuard gateway.Guard
+	var toolUse gateway.ToolUseObserver
+	var sessionEnder *gateway.SessionEnder
+	if o.dsn != "" {
+		ig, ise, ce, stackErr := openIdentityStack(boot, o, running)
+		if stackErr != nil {
+			running.Close()
+			return nil, fmt.Errorf("configure the identity stack: %w", stackErr)
+		}
+		identityGuard, toolUse, sessionEnder = ig, ise, ce
+	}
+
 	proxy := &gateway.Proxy{
 		Upstream: up,
+		ToolUse:  toolUse,
 		// gateway.Guards is internal/gateway's OWN ordered guard chain
-		// (guard.go) -- the harness-shape guard, then the rate-limit guard
-		// built from rateLimit, in that order. This command does not
-		// maintain a second, hand-written copy of that ordering: a guard
-		// added inside Guards (E15's identity guard among them) reaches
-		// this command line for free, with nothing here to remember to
-		// update.
-		Guards: gateway.Guards(rateLimit),
+		// (guard.go) -- the harness-shape guard, then (when identityGuard is
+		// non-nil) the identity guard, then the rate-limit guard built from
+		// rateLimit, in that order. This command does not maintain a
+		// second, hand-written copy of that ordering: a guard added inside
+		// Guards reaches this command line for free, with nothing here to
+		// remember to update.
+		Guards: gateway.Guards(rateLimit, identityGuard),
 	}
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(boot, "tcp", o.listen)
 	if err != nil {
+		running.Close()
 		return nil, fmt.Errorf("listen on %s: %w", o.listen, err)
 	}
+	running.ln = ln
 
-	return &runningGateway{
-		server: &http.Server{
-			// WithRetryAfterHeader sets the Retry-After header a GW-013
-			// refusal carries -- internal/gateway's Guard interface has no
-			// access to the ResponseWriter to do that itself (limit.go's
-			// own doc comment explains why), so this wraps the whole
-			// handler instead. It is a transparent pass-through for every
-			// response this guard chain does not refuse, streaming
-			// (GW-002) included.
-			Handler:           gateway.WithRetryAfterHeader(proxy),
-			ReadHeaderTimeout: gatewayReadHeaderTimeout,
-		},
-		ln:              ln,
-		shutdownTimeout: o.shutdownTimeout,
-		log:             log,
-	}, nil
+	mux := http.NewServeMux()
+	// WithRetryAfterHeader sets the Retry-After header a GW-013 refusal
+	// carries -- internal/gateway's Guard interface has no access to the
+	// ResponseWriter to do that itself (limit.go's own doc comment explains
+	// why), so this wraps the proxy handler specifically. It is a
+	// transparent pass-through for every response this guard chain does not
+	// refuse, streaming (GW-002) included.
+	mux.Handle("/", gateway.WithRetryAfterHeader(proxy))
+	if sessionEnder != nil {
+		// gatewaySessionEndPath: see sessionEndHandler's own doc comment for
+		// why this is minimal and local-only rather than a documented,
+		// versioned part of the gateway's public contract.
+		mux.HandleFunc(gatewaySessionEndPath, sessionEndHandler(sessionEnder))
+	}
+
+	running.server = &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: gatewayReadHeaderTimeout,
+	}
+	return running, nil
+}
+
+// gatewaySessionEndPath is the local-only delivery method ADR-0060 decision
+// 6's session-end hook calls (E18, #389 later wires the hook itself). It is
+// deliberately not a versioned, documented part of this gateway's public
+// contract -- see sessionEndHandler's own doc comment -- so its path names
+// itself as internal rather than looking like a stable API a caller outside
+// this codebase might depend on.
+const gatewaySessionEndPath = "/_gateway/session-end"
+
+// sessionEndHandler is ADR-0058 decision 7a's session-end signal, delivered
+// as a loopback-only HTTP endpoint on this SAME listener -- guarded exactly
+// like the rest of the gateway, which is to say: NOT by anything this
+// handler itself checks, but by the identical network exposure ADR-0060
+// decision 2 already gives every other path on this listener (published to
+// the host on loopback only; unreachable from any compose network
+// innsegl-mcp does not itself join). This is a private control surface
+// between this process and a host-side hook that runs as the same operator,
+// not a caller this gateway has any reason to authenticate independently of
+// that.
+//
+// Kept deliberately minimal: one method, one JSON field, one call into
+// gateway.SessionEnder.SessionEnded -- internal/gateway/lifecycle.go's own
+// retirement path, unchanged. A session the mapping store never heard of is
+// not an error (SessionEnded's own doc comment), so this answers 204 for
+// that case exactly as for one it did retire.
+func sessionEndHandler(ender *gateway.SessionEnder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "innsegl gateway: session end: only POST is accepted", http.StatusMethodNotAllowed)
+			return
+		}
+		var in struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.SessionID == "" {
+			http.Error(w, "innsegl gateway: session end: a JSON body naming session_id is required",
+				http.StatusBadRequest)
+			return
+		}
+		if err := ender.SessionEnded(r.Context(), in.SessionID); err != nil {
+			http.Error(w, "innsegl gateway: session end: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// openIdentityStack builds RM-235 (#380)'s identity stack: a Postgres-backed
+// MappingStore and RunStateReader on o.dsn (ADR-0060 decision 3, the SAME
+// database the ledger already uses), the MCP's own register_agent,
+// retire_agent and describe_workspace reached in process (registrar.go,
+// workspace.go -- never configured here; see this file's own doc comment),
+// the tree linker, the shipped LifecyclePolicy, and the silence backstop,
+// wired onto running so Serve can sweep it and Close can release every
+// pool this function opens. It returns the identity guard, the tool-use
+// spawn recorder (Proxy.ToolUse) and the SessionEnder for the loopback
+// session-end endpoint.
+func openIdentityStack(
+	ctx context.Context, o gatewayOptions, running *runningGateway,
+) (gateway.Guard, gateway.ToolUseObserver, *gateway.SessionEnder, error) {
+	mappings, err := gateway.OpenPostgresMappingStore(ctx, o.dsn)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("open the run mapping store: %w", err)
+	}
+	running.closers = append(running.closers, mappings.Close)
+
+	store, err := ledger.Open(ctx, o.dsn)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("open the ledger: %w", err)
+	}
+	running.closers = append(running.closers, store.Close)
+
+	dir, err := rundir.New(rundir.Config{Events: store})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build the run directory: %w", err)
+	}
+	runStates := gateway.NewCredentialRunStates(dir, ledger.RestoreHorizonFromEnv(), nil)
+
+	tree := gateway.NewInMemoryTreeLinker(gateway.TreeLinkerConfig{})
+	registrar := gateway.NewMCPRegistrar()
+	resolver := gateway.NewMCPWorkspaceResolver()
+
+	identityGuard, err := gateway.NewIdentityGuard(gateway.IdentityGuardConfig{
+		Mappings:   mappings,
+		Tree:       tree,
+		Policy:     gateway.NewPolicy(),
+		Registrar:  registrar,
+		Workspaces: resolver,
+		RunStates:  runStates,
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)
+	}
+
+	candidates, err := gateway.OpenSilentRunCandidates(ctx, o.dsn)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("open the silent-run enumeration: %w", err)
+	}
+	running.closers = append(running.closers, candidates.Close)
+
+	backstop, err := gateway.NewBackstop(gateway.BackstopConfig{
+		Registrar: registrar,
+		Horizon:   backstopHorizonFromEnv(),
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build the silence backstop: %w", err)
+	}
+	running.backstop = backstop
+	running.backstopCandidates = candidates
+	running.backstopInterval = o.backstopInterval
+
+	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
+	sessionEnder := gateway.NewSessionEnder(mappings, registrar)
+	return identityGuard, spawnRecorder, sessionEnder, nil
+}
+
+// backstopHorizonFromEnv reads gateway.EnvBackstopHorizon, the same way
+// ledger.RestoreHorizonFromEnv reads its own variable: unset, unparseable
+// or negative all fall back to gateway.DefaultBackstopHorizon rather than
+// to zero, which means something else (gateway.NewBackstop's own doc
+// comment: "there is no reading of a negative silence horizon that means
+// anything a deployment would choose on purpose").
+func backstopHorizonFromEnv() time.Duration {
+	d, err := time.ParseDuration(os.Getenv(gateway.EnvBackstopHorizon))
+	if err != nil || d < 0 {
+		return gateway.DefaultBackstopHorizon
+	}
+	return d
 }

@@ -95,6 +95,18 @@ type registerAgentIn struct {
 	// the JSON decoder never fills it and no caller of the tool can send it.
 	// Every other path keeps MCP-082's refusal.
 	resumesRetiredParent bool
+
+	// forkedFromRunID names the run this one's traffic-observed conversation
+	// fingerprint was linked from (ADR-0058 decision 5; doc 02 §3's
+	// `forked_from_run_id`, schema 4). Only the gateway's identity Guard sets
+	// it, in process, and only once its own LifecyclePolicy has already
+	// decided Fork -- the same posture resumesRetiredParent takes for
+	// adoption. It is unexported, so the JSON decoder never fills it and no
+	// caller of the tool over the wire can claim a fork lineage for itself. A
+	// fork is not a subagent -- no spawning tool call names it -- so this is
+	// deliberately a separate member from ParentRunID rather than an overload
+	// of it.
+	forkedFromRunID string
 }
 
 // registerAgentOut is IP §4's result shape, verbatim.
@@ -641,6 +653,9 @@ func registerAgentEvent(run spire.RunRef, spiffeID string, in registerAgentIn) e
 	}
 	if in.ParentRunID != "" {
 		body[event.FieldParentRunID] = in.ParentRunID
+	}
+	if in.forkedFromRunID != "" {
+		body[event.FieldForkedFromRunID] = in.forkedFromRunID
 	}
 	return body
 }

@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"mime"
@@ -118,7 +119,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 
-	p.stream(w, resp)
+	p.stream(w, r, resp)
 }
 
 // buildRequest constructs the exact request to send upstream: same method,
@@ -156,7 +157,14 @@ func (p *Proxy) buildRequest(r *http.Request) (*http.Request, error) {
 // io.Copy already wrote to the client: see messagesInterpreter, whose Write
 // never errors and so never slows or interrupts the forwarding it rides
 // alongside.
-func (p *Proxy) stream(w http.ResponseWriter, resp *http.Response) {
+//
+// r is the ORIGINAL request this reply answers -- carried through only so
+// that a ToolUse observer implementing ContextToolUseObserver (below) can
+// read what an earlier Guard already attached to r's context (E15, #380:
+// the identity guard's own run id, for the tool-use spawn recorder that
+// feeds TreeLinker.RecordSpawn with the PARENT's run id). Nothing about the
+// bytes forwarded to the caller depends on r; it is never read from again.
+func (p *Proxy) stream(w http.ResponseWriter, r *http.Request, resp *http.Response) {
 	var dst io.Writer
 	if flusher, ok := w.(http.Flusher); ok {
 		dst = flushWriter{w: w, flusher: flusher}
@@ -170,7 +178,7 @@ func (p *Proxy) stream(w http.ResponseWriter, resp *http.Response) {
 	}
 
 	if p.ToolUse != nil && isEventStream(resp.Header.Get("Content-Type")) {
-		dst = io.MultiWriter(dst, newMessagesInterpreter(p.ToolUse))
+		dst = io.MultiWriter(dst, newMessagesInterpreter(boundToolUseObserver(r.Context(), p.ToolUse)))
 	}
 
 	// A failed copy is discarded deliberately, not silently: by the time
@@ -179,6 +187,34 @@ func (p *Proxy) stream(w http.ResponseWriter, resp *http.Response) {
 	// nothing here either way (see the package doc comment on what never
 	// reaches a log). See discardCopyError.
 	discardCopyError(io.Copy(dst, resp.Body))
+}
+
+// ContextToolUseObserver is a ToolUseObserver that also wants the request's
+// own context -- the seam #380's tool-use spawn recorder needs, without
+// widening ToolUseObserver's own interface (sse.go) for every observer that
+// does not. p.ToolUse stays typed as plain ToolUseObserver, so every
+// existing caller that hands it a bare ToolUseObserverFunc is unaffected;
+// only an observer that additionally implements this interface is handed
+// the context boundToolUseObserver wraps it in.
+type ContextToolUseObserver interface {
+	ToolUseObserver
+	// OnToolUseContext is called instead of OnToolUse when the observer
+	// implements this interface. ctx is the request's own context, exactly
+	// as HarnessGuard, the identity guard and any other Guard in the chain
+	// left it after Proxy.ServeHTTP's guards ran.
+	OnToolUseContext(ctx context.Context, t ToolUse)
+}
+
+// boundToolUseObserver adapts observer so a messagesInterpreter -- which
+// only ever calls the plain ToolUseObserver.OnToolUse -- reaches
+// OnToolUseContext instead, carrying ctx, whenever observer implements
+// ContextToolUseObserver. An observer that does not is called exactly as
+// before.
+func boundToolUseObserver(ctx context.Context, observer ToolUseObserver) ToolUseObserver {
+	if ctxObserver, ok := observer.(ContextToolUseObserver); ok {
+		return ToolUseObserverFunc(func(t ToolUse) { ctxObserver.OnToolUseContext(ctx, t) })
+	}
+	return observer
 }
 
 // discardCopyError is the named discard stream's io.Copy result gets, so

@@ -432,6 +432,56 @@ func TestMCPRegistrarRetireReachesRetireAgent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// ForkedFromRunID: forwarded exactly as given, never decided here (#380).
+// ---------------------------------------------------------------------------
+
+// TestMCPRegistrarForwardsForkedFromRunIDToRegisterAgent proves
+// RegisterInput.ForkedFromRunID (lifecycle_contract.go) reaches
+// run_registered on the real chain this fixture builds, through
+// MCPRegistrar.Register -> registerThrough -> mcp.GatewayRegistration ->
+// register_agent's own unexported forkedFromRunID.
+func TestMCPRegistrarForwardsForkedFromRunIDToRegisterAgent(t *testing.T) {
+	f := newGWFixture(t)
+	r := NewMCPRegistrar()
+
+	origin, err := r.Register(t.Context(), RegisterInput{
+		AgentType:      "gw-registrar-origin",
+		IdempotencyKey: "registrar-fork-origin-key",
+		Workspace:      gwWorkspace(),
+	})
+	if err != nil {
+		t.Fatalf("Register (origin): %v", err)
+	}
+
+	fork, err := r.Register(t.Context(), RegisterInput{
+		AgentType:       "gw-registrar-fork",
+		IdempotencyKey:  "registrar-fork-key",
+		Workspace:       gwWorkspace(),
+		ForkedFromRunID: origin.RunID,
+	})
+	if err != nil {
+		t.Fatalf("Register (fork): %v", err)
+	}
+	if fork.RunID == origin.RunID {
+		t.Fatalf("the fork registered as the same run as its origin")
+	}
+
+	var found bool
+	for _, rec := range f.ledg.stored {
+		if rec[event.FieldRunID] != fork.RunID || rec[event.FieldEventType] != event.EventTypeRunRegistered {
+			continue
+		}
+		found = true
+		if got := rec[event.FieldForkedFromRunID]; got != origin.RunID {
+			t.Errorf("forked_from_run_id = %v, want the origin run %q", got, origin.RunID)
+		}
+	}
+	if !found {
+		t.Fatalf("no run_registered event was recorded for the fork %q", fork.RunID)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // ResumesRetiredParent: forwarded exactly as given, never decided here.
 // ---------------------------------------------------------------------------
 
