@@ -222,6 +222,67 @@ entry from the old stack is gone with it — which is correct, and is why `down`
 
 ---
 
+## Moving to another host
+
+A deployment's state and its trust roots — the ledger, the transparency log
+and its signing key, the Fulcio CA, the SPIRE server, sealed segments, and
+the credential keys — live in the Docker volumes named in
+[`../../scripts/innsegl-migrate.sh`](../../scripts/innsegl-migrate.sh).
+`make innsegl-backup` covers only the ledger; a host that starts fresh mints
+new trust roots, and a fresh Fulcio CA and a fresh Rekor tree cannot verify a
+single commit signed before the move. `innsegl-migrate.sh export` and
+`import` carry all eighteen volumes, together, in one archive.
+
+```sh
+# On the OLD host, stack down (export refuses otherwise):
+scripts/innsegl-migrate.sh export innsegl.migration.tar
+
+# Copy innsegl.migration.tar to the new host by whatever means you trust —
+# it is written mode 0600 because it holds CA private keys.
+
+# On the NEW host, before the stack has ever been brought up:
+scripts/innsegl-migrate.sh import innsegl.migration.tar
+# then bring the stack up as usual (see "Boot it", above).
+```
+
+`import` verifies every volume's checksum against the archive's manifest
+*before* writing anything, and refuses a target volume that already holds
+data unless you pass `--replace`.
+
+**The ledger's event count needs the stack UP to read, which `export`
+cannot have** — it refuses while any container is using one of these
+volumes. So capture the count first, while the old host is still running:
+
+```sh
+scripts/innsegl-migrate.sh check
+#   ledger event count: 19602
+#   transparency-log tree id: 41
+```
+
+then bring the stack down and pass the count to `export`:
+
+```sh
+scripts/innsegl-migrate.sh export --event-count 19602 innsegl.migration.tar
+```
+
+Skipping this is not fatal — the archive still carries every volume and the
+transparency-log tree id, read from
+[`.rekor-tlog-id`](.rekor-tlog-id) (`scripts/rekor-tlog-pin.sh`) rather than
+asked of a stack that cannot answer while it is down — but the manifest then
+records the event count as `unknown`, and `check` on the new host cannot
+compare it after the fact.
+
+Once the new host is up, confirm it agrees with what was carried over:
+
+```sh
+scripts/innsegl-migrate.sh check innsegl.migration.tar
+```
+
+which compares the running stack's ledger event count and transparency-log
+tree id against the manifest and prints `MATCH` or `MISMATCH`.
+
+---
+
 ## What is in it
 
 [doc 05 §1](../../docs/05-innsegl-deployment-topology.md) names twelve services.

@@ -346,6 +346,27 @@ jobs:
       - name: The default keeps its file CA, and the overlay hands the CA no key
         run: ./scripts/ca-custody-selftest.sh
 
+  migrate:
+    name: migrate to another host
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # RM-218 (#352). A deployment's state and its trust roots live in
+      # Docker volumes; nothing moved that state to another host before this
+      # -- `make innsegl-backup` covers only the ledger, and a host that
+      # starts fresh mints new trust roots that cannot verify a single commit
+      # signed before the move.
+      # EVERY volume this touches carries a prefix unique to the run
+      # (INNSEGL_MIGRATE_VOLUME_PREFIX), and the script under test refuses to
+      # run with that prefix unset -- see the self-test's own header. It
+      # never reads or writes the real deployment's transparency-log pin
+      # file either: every case sets INNSEGL_MIGRATE_PIN_FILE to one of its
+      # own. Nothing here is a container this repository ships; it is two
+      # throwaway volumes this job creates and removes.
+      - name: Export and import round-trip a volume byte-for-byte, and both refuse what they must
+        run: ./scripts/innsegl-migrate-selftest.sh
+
   readiness-report:
     name: readiness report
     runs-on: ubuntu-latest
