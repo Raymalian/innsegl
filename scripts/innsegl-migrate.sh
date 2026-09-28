@@ -40,6 +40,19 @@
 # refuses a target that already exists and holds data, unless --replace says
 # to overwrite it.
 #
+# LABELS TRAVEL WITH THE VOLUME, and this is load-bearing rather than tidy:
+# scripts/teardown-guard.sh reads dev.innsegl.trust-root to refuse deleting
+# a trust volume, and Docker CANNOT add a label to a volume that already
+# exists — only `docker volume create` can set one. So export records each
+# volume's labels (base64 of `docker volume inspect -f '{{json .Labels}}'`,
+# since a label's value can hold anything, including a tab or a newline the
+# manifest's own format cannot carry raw) and import supplies them back on
+# the SAME `docker volume create` call that makes the volume, on both the
+# fresh-create path and the --replace path. A volume import merely loads
+# into (already exists, already empty) is left exactly as it is: Docker
+# offers no way to relabel it short of destroying it, and nothing asked for
+# that here.
+#
 # CHECK has two modes. Run against a running stack with no archive, it
 # prints the ledger's current event count and the transparency log's tree id
 # — the number an operator notes down before taking the stack down, to pass
@@ -81,9 +94,10 @@
 #   1  refused, or failed, or (check) they disagree
 #   2  the command line was not understood
 #
-# WHAT IT NEEDS: bash, docker, tar, and sha256sum or shasum on PATH. Nothing
-# here starts, stops, or otherwise touches `docker compose` — an operator
-# brings the stack up and down themselves, per deploy/compose/README.md.
+# WHAT IT NEEDS: bash, docker, tar, jq, and sha256sum or shasum on PATH.
+# Nothing here starts, stops, or otherwise touches `docker compose` — an
+# operator brings the stack up and down themselves, per
+# deploy/compose/README.md.
 
 set -uo pipefail
 
@@ -123,6 +137,49 @@ sha256_of() {
     shasum -a 256 "$1" | awk '{print $1}'
   else
     die "need sha256sum or shasum on PATH"
+  fi
+}
+
+# base64_enc/base64_dec — a single unbroken line either way, regardless of
+# which base64 this host has: GNU wraps output at 76 columns by default and
+# BSD/macOS does not, and a wrapped value would break manifest.txt's one-
+# line-per-record format.
+base64_enc() { base64 | tr -d '\n'; }
+base64_dec() { base64 -d 2>/dev/null; }
+
+# vol_labels_b64 NAME — base64 of `{"k":"v",...}` (or of the literal text
+# "null" when the volume carries no labels), read straight from Docker.
+vol_labels_b64() {
+  docker volume inspect -f '{{json .Labels}}' "$1" 2>/dev/null | base64_enc
+}
+
+# labels_json_of_b64 B64 — the decoded JSON, or "null" if it will not decode
+# at all. Whether it is valid JSON is for the caller to ask jq.
+labels_json_of_b64() {
+  local j
+  j="$(printf '%s' "$1" | base64_dec)"
+  [ -n "${j}" ] && printf '%s' "${j}" || printf 'null'
+}
+
+# create_volume_with_labels NAME LABELS_JSON — docker volume create NAME,
+# with every key/value LABELS_JSON holds applied AT CREATION, which is the
+# only time Docker will accept one. NUL-delimited throughout, so a label
+# value holding a tab, a newline, or anything else survives intact.
+create_volume_with_labels() {
+  local name="$1" json="$2" args=()
+  if [ -n "${json}" ] && [ "${json}" != "null" ]; then
+    while IFS= read -r -d '' key && IFS= read -r -d '' val; do
+      args+=(--label "${key}=${val}")
+    done < <(printf '%s' "${json}" | jq -j 'to_entries[]? | (.key + "\u0000" + .value + "\u0000")' 2>/dev/null)
+  fi
+  # NOT `docker volume create "${args[@]}" "${name}"` unconditionally: an
+  # empty array expanded under `set -u` is "unbound variable" on bash before
+  # 4.4, which is what macOS ships as /bin/bash. `${#args[@]}` is always
+  # safe to ask, even empty or unset.
+  if [ "${#args[@]}" -eq 0 ]; then
+    docker volume create "${name}" >/dev/null
+  else
+    docker volume create "${args[@]}" "${name}" >/dev/null
   fi
 }
 
@@ -274,6 +331,7 @@ EOF
 cmd_export() {
   require_cmd docker
   require_cmd tar
+  require_cmd jq
 
   local event_count="" archive=""
   while [ $# -gt 0 ]; do
@@ -328,10 +386,11 @@ cmd_export() {
         tar --numeric-owner -cf "/out/${name}.tar" -C /v . 2>"${WORK}/${name}.err"; then
       die "could not archive volume ${name}: $(cat "${WORK}/${name}.err" 2>/dev/null)"
     fi
-    local sum bytes
+    local sum bytes labels_b64
     sum="$(sha256_of "${WORK}/volumes/${name}.tar")"
     bytes="$(wc -c <"${WORK}/volumes/${name}.tar" | tr -d ' ')"
-    printf 'volume\t%s\t%s\t%s\n' "${name}" "${sum}" "${bytes}" >>"${manifest}"
+    labels_b64="$(vol_labels_b64 "${name}")"
+    printf 'volume\t%s\t%s\t%s\t%s\n' "${name}" "${sum}" "${bytes}" "${labels_b64}" >>"${manifest}"
     n=$((n + 1))
   done <<EOF
 ${table}
@@ -350,8 +409,16 @@ EOF
     note "no transparency-log pin file found at ${pin_src}; the archive carries none."
   fi
 
+  # manifest.txt now carries every volume's labels as plain text, and a
+  # label is exactly as sensitive as the trust it stands for
+  # (dev.innsegl.trust-root names what the volume holds). Its own checksum,
+  # a sibling file rather than a line inside it, is what import verifies
+  # BEFORE trusting a single byte read from manifest.txt — including a
+  # label.
+  sha256_of "${manifest}" >"${WORK}/manifest.sha256"
+
   mkdir -p "$(dirname -- "${archive}")" 2>/dev/null || true
-  local files="manifest.txt volumes"
+  local files="manifest.txt manifest.sha256 volumes"
   [ -d "${WORK}/pin" ] && files="${files} pin"
   ( cd "${WORK}" && tar -cf "${archive}.tmp" ${files} ) || die "could not assemble ${archive}"
   chmod 0600 "${archive}.tmp"
@@ -367,6 +434,7 @@ EOF
 cmd_import() {
   require_cmd docker
   require_cmd tar
+  require_cmd jq
 
   local replace="" archive=""
   while [ $# -gt 0 ]; do
@@ -387,9 +455,23 @@ cmd_import() {
   tar -xf "${archive}" -C "${WORK}" 2>/dev/null || die "refusing: ${archive} could not be extracted — it is not a valid archive, or is corrupted"
   [ -f "${WORK}/manifest.txt" ] || die "refusing: ${archive} has no manifest.txt — not a valid archive, or corrupted"
 
-  # PASS 1 — verify EVERY checksum before writing anything to any volume.
-  local bad="" vcount=0 kind name sum bytes
-  while IFS="$(printf '\t')" read -r kind name sum bytes; do
+  # PASS 0 — the manifest's OWN checksum, before a single field of it is
+  # trusted. A volume's data has its per-file checksum below; a label lives
+  # as plain text inside manifest.txt itself, so this is what catches
+  # damage to a label the same way the per-volume checksum catches damage
+  # to a volume's bytes.
+  [ -f "${WORK}/manifest.sha256" ] || die "refusing: ${archive} has no manifest.sha256 — not a valid archive, or corrupted"
+  local manifest_want manifest_got
+  manifest_want="$(tr -d ' \t\r\n' <"${WORK}/manifest.sha256")"
+  manifest_got="$(sha256_of "${WORK}/manifest.txt")"
+  if [ -z "${manifest_want}" ] || [ "${manifest_want}" != "${manifest_got}" ]; then
+    die "refusing: ${archive}'s manifest failed verification (manifest says ${manifest_want:-<empty>}, archive has ${manifest_got}). Nothing was written to any volume."
+  fi
+
+  # PASS 1 — verify EVERY volume checksum before writing anything to any
+  # volume, and that every label decodes to valid JSON.
+  local bad="" vcount=0 kind name sum bytes labels_b64
+  while IFS="$(printf '\t')" read -r kind name sum bytes labels_b64; do
     [ "${kind}" = "volume" ] || continue
     case "${name}" in
       ''|.|..|*[!A-Za-z0-9_.-]*)
@@ -413,6 +495,12 @@ cmd_import() {
         "${name}" "${sum}" "${bytes}" "${got_sum}" "${got_bytes}" >&2
       bad=1; continue
     fi
+    local label_json
+    label_json="$(labels_json_of_b64 "${labels_b64}")"
+    if [ "${label_json}" != "null" ] && ! printf '%s' "${label_json}" | jq -e . >/dev/null 2>&1; then
+      printf '  labels for %s do not decode to valid JSON\n' "${name}" >&2
+      bad=1; continue
+    fi
     vcount=$((vcount + 1))
   done <"${WORK}/manifest.txt"
 
@@ -421,9 +509,14 @@ cmd_import() {
   fi
   [ "${vcount}" -gt 0 ] || die "refusing: ${archive} names no volumes"
 
-  # PASS 2 — every checksum verified; now it is safe to write.
-  while IFS="$(printf '\t')" read -r kind name sum bytes; do
+  # PASS 2 — every checksum verified; now it is safe to write. Labels are
+  # applied on the SAME `docker volume create` call that makes the volume —
+  # the fresh-create branch below, and the --replace branch's recreate —
+  # because that is the only moment Docker will accept one.
+  while IFS="$(printf '\t')" read -r kind name sum bytes labels_b64; do
     [ "${kind}" = "volume" ] || continue
+    local label_json
+    label_json="$(labels_json_of_b64 "${labels_b64}")"
     if vol_exists "${name}"; then
       if ! vol_empty "${name}"; then
         if [ -z "${replace}" ]; then
@@ -434,12 +527,12 @@ cmd_import() {
         [ -z "${holders}" ] || die "refusing: ${name} is in use by ${holders}"
         note "removing existing ${name} (--replace)"
         docker volume rm "${name}" >/dev/null || die "could not remove ${name}"
-        docker volume create "${name}" >/dev/null || die "could not create ${name}"
+        create_volume_with_labels "${name}" "${label_json}" || die "could not create ${name}"
       else
-        note "${name} exists and is empty; loading into it"
+        note "${name} exists and is empty; loading into it (its labels, if any, are unchanged — Docker cannot relabel an existing volume)"
       fi
     else
-      docker volume create "${name}" >/dev/null || die "could not create ${name}"
+      create_volume_with_labels "${name}" "${label_json}" || die "could not create ${name}"
     fi
     note "loading ${name}"
     docker run --rm -v "${name}:/v" -v "${WORK}/volumes:/backup:ro" "${TAR_IMAGE}" \
@@ -496,6 +589,13 @@ cmd_check() {
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/innsegl-migrate-check.XXXXXX")" || die "could not create a scratch directory"
   tar -xf "${archive}" -C "${WORK}" 2>/dev/null || die "refusing: ${archive} could not be extracted — it is not a valid archive, or is corrupted"
   [ -f "${WORK}/manifest.txt" ] || die "refusing: ${archive} has no manifest.txt — not a valid archive, or corrupted"
+  if [ -f "${WORK}/manifest.sha256" ]; then
+    local manifest_want manifest_got
+    manifest_want="$(tr -d ' \t\r\n' <"${WORK}/manifest.sha256")"
+    manifest_got="$(sha256_of "${WORK}/manifest.txt")"
+    [ "${manifest_want}" = "${manifest_got}" ] \
+      || die "refusing: ${archive}'s manifest failed verification (manifest says ${manifest_want:-<empty>}, archive has ${manifest_got})."
+  fi
 
   local want_count want_tid
   want_count="$(awk -F'\t' '$1=="ledger_event_count"{print $2}' "${WORK}/manifest.txt")"

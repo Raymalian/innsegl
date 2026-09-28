@@ -24,7 +24,7 @@
 #
 # Needs: bash, docker (a daemon that can pull or already holds
 # alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce),
-# tar, dd, and sha256sum or shasum.
+# tar, dd, jq, python3, and sha256sum or shasum.
 #
 # Usage: scripts/innsegl-migrate-selftest.sh
 
@@ -38,7 +38,7 @@ if [ ! -x "${MIGRATE}" ]; then
   printf 'FAIL: %s is missing or not executable\n' "${MIGRATE}" >&2
   exit 1
 fi
-for t in docker tar dd; do
+for t in docker tar dd jq python3; do
   command -v "${t}" >/dev/null 2>&1 || { printf 'FAIL: %s is required\n' "${t}" >&2; exit 1; }
 done
 
@@ -100,6 +100,19 @@ archive_mode() {
 
 mkvol() { docker volume create "$1" >/dev/null; }
 
+# mkvol_labeled VOLUME — a throwaway volume carrying the exact shape of
+# labels a real trust volume does: dev.innsegl.trust-root is a full
+# sentence with spaces AND a colon in it, which is what
+# scripts/teardown-guard.sh reads to refuse deleting the volume.
+mkvol_labeled() {
+  docker volume create \
+    --label "dev.innsegl.trust-root=the ledger: the hash chain and every event body" \
+    --label "dev.innsegl.deployment=abc" \
+    "$1" >/dev/null
+}
+
+labels_of() { docker volume inspect -f '{{json .Labels}}' "$1" 2>/dev/null; }
+
 # write_fixture VOLUME — content with a non-default uid/gid and mode, and a
 # symlink, so a round trip has something worth losing.
 write_fixture() {
@@ -129,6 +142,7 @@ repack() {
   # repack SRC_DIR DEST_ARCHIVE — rebuild an outer archive from an extracted
   # (and possibly tampered) tree, the same way innsegl-migrate.sh assembled it.
   local src="$1" dest="$2" files="manifest.txt volumes"
+  [ -f "${src}/manifest.sha256" ] && files="${files} manifest.sha256"
   [ -d "${src}/pin" ] && files="${files} pin"
   ( cd "${src}" && tar -cf "${dest}" ${files} )
   chmod 0600 "${dest}"
@@ -154,10 +168,16 @@ ${out}"
 fi
 
 # --- case: round trip is byte-for-byte, including uid/gid and mode --------
-mkvol "${VOL_A}"; mkvol "${VOL_B}"
+# VOL_A is labelled the way a real trust volume is: teardown-guard.sh reads
+# dev.innsegl.trust-root to refuse deleting it, and a label can only be set
+# AT CREATION — Docker will not add one to a volume that already exists. So
+# a moved volume that came back unlabelled would come back unprotected.
+mkvol_labeled "${VOL_A}"; mkvol "${VOL_B}"
 write_fixture "${VOL_A}"; write_fixture "${VOL_B}"
 sig_a_before="$(fixture_signature "${VOL_A}")"
 sig_b_before="$(fixture_signature "${VOL_B}")"
+labels_a_before="$(labels_of "${VOL_A}")"
+labels_b_before="$(labels_of "${VOL_B}")"
 
 rt_archive="${WORK}/roundtrip.tar"
 out="$("${MIGRATE}" export "${rt_archive}" 2>&1)"; rc=$?
@@ -188,6 +208,17 @@ else
 after  A: ${sig_a_after}
 before B: ${sig_b_before}
 after  B: ${sig_b_after}"
+fi
+
+labels_a_after="$(labels_of "${VOL_A}" 2>/dev/null)"
+labels_b_after="$(labels_of "${VOL_B}" 2>/dev/null)"
+if [ "${labels_a_before}" = "${labels_a_after}" ] && [ "${labels_b_before}" = "${labels_b_after}" ]; then
+  ok "labels round-trip through export and import (fresh-create path), teardown-guard.sh's label included"
+else
+  bad "labels did not round-trip on the fresh-create path" "before A: ${labels_a_before}
+after  A: ${labels_a_after}
+before B: ${labels_b_before}
+after  B: ${labels_b_after}"
 fi
 
 # --- case: the archive is written mode 0600 --------------------------------
@@ -226,7 +257,9 @@ docker rm -f "${holder2}" >/dev/null 2>&1
 docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
 
 # --- case: a corrupted archive is refused before any volume is written ----
-mkvol "${VOL_A}"; mkvol "${VOL_B}"
+# VOL_A is labelled here too: good_archive is reused below by the
+# corrupted-LABELS-field case, which needs a real label to corrupt.
+mkvol_labeled "${VOL_A}"; mkvol "${VOL_B}"
 write_fixture "${VOL_A}"; write_fixture "${VOL_B}"
 good_archive="${WORK}/good.tar"
 "${MIGRATE}" export "${good_archive}" >/dev/null 2>&1
@@ -252,9 +285,58 @@ else
 ${out}"
 fi
 
+# --- case: a corrupted LABELS field (manifest.txt itself, tar untouched) --
+# The label lives as text inside manifest.txt, not inside a volume's tar, so
+# the per-volume tar checksum above cannot see this kind of damage. This
+# does not merely garble the base64 -- a truncated/invalid base64 tail, or
+# bytes that fail to parse as JSON, would be caught by simpler structural
+# checks and would prove nothing about a MANIFEST checksum specifically. It
+# decodes volume A's label field, changes dev.innsegl.deployment from "abc"
+# to "xyz" -- still perfectly valid base64 of still perfectly valid JSON --
+# and re-encodes it. Only a checksum over the whole manifest can catch this.
+label_corrupt_dir="${WORK}/corrupt-labels"
+mkdir -p "${label_corrupt_dir}"
+tar -xf "${good_archive}" -C "${label_corrupt_dir}"
+python3 - "${label_corrupt_dir}/manifest.txt" "${VOL_A}" <<'PY'
+import base64, json, sys
+path, name = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as f:
+    lines = f.read().split("\n")
+prefix = "volume\t" + name + "\t"
+changed = False
+for i, ln in enumerate(lines):
+    if not ln.startswith(prefix):
+        continue
+    fields = ln.split("\t")
+    labels = json.loads(base64.b64decode(fields[4]))
+    assert labels["dev.innsegl.deployment"] == "abc", labels
+    labels["dev.innsegl.deployment"] = "xyz"
+    fields[4] = base64.b64encode(json.dumps(labels).encode()).decode()
+    lines[i] = "\t".join(fields)
+    changed = True
+    break
+assert changed, "volume A's manifest line was not found"
+with open(path, "w", encoding="utf-8") as f:
+    f.write("\n".join(lines))
+PY
+label_bad_archive="${WORK}/bad-labels.tar"
+repack "${label_corrupt_dir}" "${label_bad_archive}"
+
+out="$("${MIGRATE}" import "${label_bad_archive}" 2>&1)"; rc=$?
+la_created=0; docker volume inspect "${VOL_A}" >/dev/null 2>&1 && la_created=1
+lb_created=0; docker volume inspect "${VOL_B}" >/dev/null 2>&1 && lb_created=1
+if [ "${rc}" -ne 0 ] && [ "${la_created}" -eq 0 ] && [ "${lb_created}" -eq 0 ] \
+   && printf '%s' "${out}" | grep -qi 'checksum\|verif\|corrupt\|manifest'; then
+  ok "a corrupted labels field is refused before any volume is written"
+else
+  bad "a corrupted labels field was not refused cleanly" "exit=${rc} vol_a_created=${la_created} vol_b_created=${lb_created}
+${out}"
+fi
+
 # --- case: a non-empty target is refused without --replace, accepted with it
-mkvol "${VOL_A}"; mkvol "${VOL_B}"
+mkvol_labeled "${VOL_A}"; mkvol "${VOL_B}"
 write_fixture "${VOL_A}"; write_fixture "${VOL_B}"
+labels_a_replace_before="$(labels_of "${VOL_A}")"
 ne_archive="${WORK}/nonempty.tar"
 "${MIGRATE}" export "${ne_archive}" >/dev/null 2>&1
 
@@ -279,6 +361,18 @@ if [ "${rc}" -eq 0 ] && [ "${survived}" -eq 1 ]; then
 else
   bad "import --replace did not cleanly replace the target" "exit=${rc} old_file_survived=$((1 - survived))
 ${out}"
+fi
+
+# A --replace removes the volume and creates it again, which is the path
+# Docker's "cannot relabel an existing volume" rule bites hardest: the label
+# has to be supplied on THIS recreate, from the manifest, not carried over
+# from the volume this just deleted.
+labels_a_replace_after="$(labels_of "${VOL_A}" 2>/dev/null)"
+if [ "${labels_a_replace_before}" = "${labels_a_replace_after}" ]; then
+  ok "labels round-trip through import --replace (remove-and-recreate path)"
+else
+  bad "labels did not round-trip on the --replace path" "before: ${labels_a_replace_before}
+after:  ${labels_a_replace_after}"
 fi
 docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
 

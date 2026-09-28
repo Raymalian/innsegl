@@ -231,7 +231,12 @@ the credential keys — live in the Docker volumes named in
 `make innsegl-backup` covers only the ledger; a host that starts fresh mints
 new trust roots, and a fresh Fulcio CA and a fresh Rekor tree cannot verify a
 single commit signed before the move. `innsegl-migrate.sh export` and
-`import` carry all eighteen volumes, together, in one archive.
+`import` carry all eighteen volumes, together, in one archive — each
+volume's Docker labels travel with it too, and are applied on import at the
+moment each volume is created, which is the only moment Docker accepts a
+label. That matters beyond bookkeeping: `scripts/teardown-guard.sh` reads
+`dev.innsegl.trust-root` to refuse deleting a trust volume, so a moved
+volume that came back unlabelled would come back unprotected.
 
 ```sh
 # On the OLD host, stack down (export refuses otherwise):
