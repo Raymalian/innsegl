@@ -14,10 +14,10 @@ import "net/http"
 //
 // # For E15
 //
-// Add a Guard implementation here (or in a file of its own) and either
-// append it to a Proxy's own Guards, or add it to defaultGuards below if it
-// should apply wherever a Proxy exists by default, the way HarnessGuard and
-// SessionRateLimitGuard do. A Guard that lets a request through can hand
+// Add a Guard implementation here (or in a file of its own) and add it
+// inside the Guards function below, at whatever position its own ordering
+// requires -- that is the ONE place a guard chain is built; see Guards'
+// own doc comment for why. A Guard that lets a request through can hand
 // whatever a later Guard or an observer needs by returning
 // r.WithContext(...) -- see WithIdentification in harness.go for the
 // pattern HarnessGuard uses to carry its Identification forward, and
@@ -87,31 +87,50 @@ func (g *HarnessGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 	}
 }
 
+// Guards returns this package's own ordered guard chain: the harness-shape
+// guard (GW-011, HarnessGuard) first, then the per-session rate-limit guard
+// (GW-013, limit.go's SessionRateLimitGuard) built from limiter -- in that
+// order, because the rate-limit guard reads the session id the harness
+// guard attaches to the request's context, and finding none there is
+// itself a refusal (SessionRateLimitGuard.Check) rather than a guess.
+//
+// THIS IS THE ONE LIST. defaultGuards (below) and cmd/innsegl/gateway.go's
+// openGateway both build their guard chain by calling this function --
+// the first with a limiter built from this package's own shipped defaults,
+// the second with one built from the command line
+// ($INNSEGL_GATEWAY_RATE / $INNSEGL_GATEWAY_BURST). Before this function
+// existed, those were two independently-written slices that had to be kept
+// in the same order by hand; a guard added to one and not the other would
+// silently ship a production gateway missing a protection the tests for
+// the other slice still passed. Every future guard -- E15's identity guard
+// (ADR-0058 decision 11) among them -- is added HERE, inside this
+// function, at whatever position its own ordering requires, and nowhere
+// else: no other place in this codebase is allowed to grow its own,
+// second, hand-maintained guard list.
+func Guards(limiter *SessionRateLimiter) []Guard {
+	return []Guard{NewHarnessGuard(), NewSessionRateLimitGuard(limiter)}
+}
+
 // defaultGuards is what Proxy.ServeHTTP uses when Guards is nil -- see
 // proxy.go. Passing an explicit empty slice (Guards: []Guard{}) opts out of
 // every default guard; this is the one place that default is set, so a
 // Proxy refuses an unrecognised harness shape wherever one is constructed,
-// with no wiring needed at each call site.
-//
-// The rate-limit guard (limit.go, #375, GW-013) is appended AFTER
-// NewHarnessGuard() deliberately: it reads the session id the harness guard
-// attaches to the request's context, and finding none there is itself a
-// refusal (SessionRateLimitGuard.Check) rather than a guess. It is built
-// here with the package's own shipped defaults
-// (DefaultSessionRateLimitRate, DefaultSessionRateLimitBurst); a caller that
-// needs the configured values from $INNSEGL_GATEWAY_RATE /
-// $INNSEGL_GATEWAY_BURST builds its own limiter and Guards slice instead
+// with no wiring needed at each call site. Built from Guards, with a
+// limiter using this package's own shipped defaults
+// (DefaultSessionRateLimitRate, DefaultSessionRateLimitBurst) -- a caller
+// that needs the configured values from $INNSEGL_GATEWAY_RATE /
+// $INNSEGL_GATEWAY_BURST calls Guards itself with its own limiter instead
 // (cmd/innsegl/gateway.go's openGateway does exactly this).
-var defaultGuards = []Guard{NewHarnessGuard(), newDefaultSessionRateLimitGuard()}
+var defaultGuards = Guards(defaultSessionRateLimiter())
 
-// newDefaultSessionRateLimitGuard builds the rate-limit guard defaultGuards
-// installs, from this package's own shipped defaults. Those defaults are
+// defaultSessionRateLimiter builds the limiter defaultGuards' rate-limit
+// guard uses, from this package's own shipped defaults. Those defaults are
 // constants this package's own tests hold fixed
 // (TestDefaultSessionRateLimitSettingsAreValid, limit_test.go), so
 // NewSessionRateLimiter refusing here can only mean that guarantee broke --
 // and failing loudly at package initialisation is preferable to shipping a
 // gateway whose default rate limit silently is not there.
-func newDefaultSessionRateLimitGuard() *SessionRateLimitGuard {
+func defaultSessionRateLimiter() *SessionRateLimiter {
 	lim, err := NewSessionRateLimiter(SessionRateLimit{
 		Rate:  DefaultSessionRateLimitRate,
 		Burst: DefaultSessionRateLimitBurst,
@@ -119,5 +138,5 @@ func newDefaultSessionRateLimitGuard() *SessionRateLimitGuard {
 	if err != nil {
 		panic("innsegl gateway: default session rate limit settings are invalid: " + err.Error())
 	}
-	return NewSessionRateLimitGuard(lim)
+	return lim
 }

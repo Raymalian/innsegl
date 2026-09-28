@@ -432,14 +432,14 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 
 	proxy := &gateway.Proxy{
 		Upstream: up,
-		// The rate-limit guard runs AFTER the harness-shape guard: it
-		// reads the session id the harness guard attaches to the
-		// request's context (internal/gateway/limit.go's own doc
-		// comment).
-		Guards: []gateway.Guard{
-			gateway.NewHarnessGuard(),
-			gateway.NewSessionRateLimitGuard(rateLimit),
-		},
+		// gateway.Guards is internal/gateway's OWN ordered guard chain
+		// (guard.go) -- the harness-shape guard, then the rate-limit guard
+		// built from rateLimit, in that order. This command does not
+		// maintain a second, hand-written copy of that ordering: a guard
+		// added inside Guards (E15's identity guard among them) reaches
+		// this command line for free, with nothing here to remember to
+		// update.
+		Guards: gateway.Guards(rateLimit),
 	}
 
 	var lc net.ListenConfig

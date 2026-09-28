@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -185,6 +186,86 @@ func TestGatewayCommandEnforcesGW013RateLimitEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "innsegl") {
 		t.Errorf("body %q does not name innsegl", body)
+	}
+
+	cancel()
+	select {
+	case code := <-done:
+		if code != exitOK {
+			t.Fatalf("runGateway after its context was cancelled = %d, want %d (exitOK)", code, exitOK)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateway did not stop within 5s of its context being cancelled")
+	}
+}
+
+// TestGatewayCommandRefusesAnUnrecognisedHarnessShapeEndToEnd is GW-011,
+// run through the PRODUCTION wiring rather than internal/gateway's own
+// package tests: openGateway's guard chain comes from gateway.Guards
+// (guard.go), the one ordered list that command and package both build
+// from, and this proves the harness-shape guard is still first in it here
+// -- not only in internal/gateway's own test suite. A request with no
+// recognised harness shape (no session header at all) must be refused with
+// 400 before the rate-limit guard, or anything else, ever sees it, and the
+// upstream must never be asked.
+func TestGatewayCommandRefusesAnUnrecognisedHarnessShapeEndToEnd(t *testing.T) {
+	var upstreamHits int32
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&upstreamHits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	addrCh := make(chan string, 1)
+	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
+		o.upstreamClient = upstream.Client()
+		srv, err := openGateway(ctx, o, log)
+		if err == nil {
+			addrCh <- srv.Addr()
+		}
+		return srv, err
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstream.URL}
+	done := make(chan int, 1)
+	go func() {
+		done <- runGateway(ctx, args, io.Discard, io.Discard, deps)
+	}()
+
+	var addr string
+	select {
+	case addr = <-addrCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateway never announced a bound address")
+	}
+
+	// Deliberately no X-Claude-Code-Session-Id header: an unrecognised
+	// harness shape.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/v1/messages", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request through the gateway: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d (GW-011)", resp.StatusCode, http.StatusBadRequest)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	if !strings.Contains(string(body), "unrecognised harness shape") {
+		t.Errorf("body %q does not name the refusal reason", body)
+	}
+	if got := atomic.LoadInt32(&upstreamHits); got != 0 {
+		t.Errorf("upstream received %d requests, want 0 -- nothing should be forwarded", got)
 	}
 
 	cancel()
