@@ -93,6 +93,21 @@ GRANT SELECT ON innsegl.schema_migrations TO :"role";
 -- one deliberate act, and correcting one is the owner's (#323).
 GRANT SELECT, INSERT ON innsegl.alert_resolutions TO :"role";
 
+-- innsegl.gateway_run_mapping (RM-235, #380; ADR-0060 decision 3) — the
+-- gateway's own insert-only run mapping. Append and read, the same two verbs
+-- innsegl.events gets and for the identical reason: migration 0007's own
+-- trigger already refuses UPDATE, DELETE and TRUNCATE for every role, but a
+-- trigger a superuser could disable is not this role's boundary — the ACL is.
+--
+-- This is an EXPLICIT grant, not the ALTER DEFAULT PRIVILEGES line below: this
+-- table already existed by the time this script runs (db-init.sh applies every
+-- migration first), so a default-privileges rule that only binds tables
+-- CREATED AFTER it runs does not reach a table a migration already created —
+-- measured live: without this line, INSERT and SELECT on this table were both
+-- refused with 42501, contradicting migration 0007's own comment that assumed
+-- otherwise. That comment is corrected in the same commit that adds this line.
+GRANT SELECT, INSERT ON innsegl.gateway_run_mapping TO :"role";
+
 -- A table added by a LATER migration must arrive append-only too. Without
 -- this, the role's posture would silently be "append-only as of the migrations
 -- that existed when it was provisioned" — and the next migration would hand it
