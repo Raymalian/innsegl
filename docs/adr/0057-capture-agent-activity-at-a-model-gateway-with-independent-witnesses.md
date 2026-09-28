@@ -14,9 +14,9 @@ refuses, and the brief the agent was given in the first place. A hook also
 sees only its own harness's shape, so every new harness is a new hook
 contract to keep matching.
 
-A local spike (`docs/decisions/model-gateway-spike.md`) measured what a
-reverse proxy in front of the model API sees instead, by running one harness
-with its model endpoint pointed at a local recorder and comparing the two.
+A local spike on 2026-09-28 measured what a reverse proxy in front of the
+model API sees instead, by running one harness with its model endpoint
+pointed at a local recorder and comparing the two.
 
 - All model traffic passed through, subagents included: 7 of 7 requests in
   one session, distinguishable from the main agent by a per-request header.
@@ -62,7 +62,9 @@ place:
 - **Workspace snapshots.** Before each request is forwarded, the working
   tree is snapshotted against a private index, so what changed on disk is
   recorded independently of what the conversation claims happened —
-  including a change that is later reverted or never committed.
+  including a change that is later reverted or never committed. Snapshots
+  are stored where an agent cannot reach them; exactly where is the
+  placement ADR (0060)'s to decide.
 - **The harness's own telemetry** (OpenTelemetry, where a harness emits it)
   sees tool decisions and results from inside the harness process, not from
   the wire.
@@ -100,11 +102,14 @@ placement ADR (0060).
   left failures, refusals and the brief unrecorded, and the gateway closes
   that gap for the paths it sees. What it cannot see (below) stays outside
   I3's reach, honestly, rather than papered over.
-- **I5 (verification trusts nobody, including this system).** A second and
-  third witness recorded independently of the gateway are what make a
-  gateway compromise or bug detectable rather than merely embarrassing — a
-  fabricated record has to fool the traffic, the disk, and the harness's own
-  telemetry at once, and any one holdout is an alert.
+- **I5 (verification trusts nobody, including this system).** Unchanged. A
+  third party still verifies commit attribution against Fulcio/Rekor with no
+  access to our database, exactly as before; nothing about capture touches
+  that path. Separately, and not as part of I5 itself: recording a second
+  and third witness independently of the gateway is what makes a gateway
+  fault or compromise *detectable* — a fabricated or missing record has to
+  fool the traffic, the disk, and the harness's own telemetry at once, and
+  any one holdout is an alert.
 
 ### What stays unrecorded
 
@@ -158,7 +163,7 @@ placement ADR (0060).
   resolved) is real, ongoing work, not a detail left to implementation.
 - **Exit cost.** Reversing this means going back to harness hooks as the
   primary source, which is a straightforward regression in capability (loss
-  of failures, refusals, and the brief) but not a data-shape change: nothing
-  the gateway records asks the event schema (doc 02) for anything the ledger
-  does not already have a place for. No protected string changes with this
-  decision.
+  of failures, refusals, and the brief). Whether capture needs event types
+  the ledger does not already have (for an agent message, or a snapshot) is
+  not decided here: any new event type goes through doc 02's protected-schema
+  process on its own merits. No protected string changes with this decision.
