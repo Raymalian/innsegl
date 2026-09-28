@@ -1,6 +1,6 @@
 # ADR-0062: Reading the ledger requires a signed-in user
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -204,6 +204,56 @@ a channel the operator's own coding-agent tool access does not reach — the
 same principle `admin-access-and-identity.md` §4 already applies to the
 admin SSH key itself.
 
+### Enrolment stays locked until the presence gate is actually load-bearing
+
+Accepting (b) does not make it safe to turn on today, and this ADR does not
+paper over that. The presence gate's whole argument is that minting the
+one-time code requires the human-presence admin credential, which the
+operating system will not use without a touch. **On a single-machine
+deployment as it exists today, that credential is reachable through the
+container runtime, and the container runtime is reachable by an agent.**
+`admin-access-and-identity.md` §1 measured this directly, on this exact
+credential: "Today an agent's shell can run `docker` on the Mac and mint an
+admin credential, which lets it create identities." ADR-0060 decision 7
+already named the general form of this dependency and called it a
+precondition of the placement it chose, not an optional hardening step:
+"agents must not be able to reach the container runtime's socket... is a
+requirement of choosing this placement, not an optional hardening step
+layered on afterward." Enrolment inherits that precondition exactly,
+because minting the enrolment code and minting an admin credential are the
+same presence-gated action. Until agents are denied the container
+runtime's socket, an agent can reach the credential this decision leans on,
+and the presence gate is a gate in name only.
+
+**So: the first real enrolment is locked.** The enrolment endpoint refuses
+to complete a first-user registration — the acceptance criterion is a
+refusal, not a warning — until it can establish that agents are denied the
+container runtime socket. That denial is E18's build (#389), recorded there
+as self-protection of this project's own admin surface (E1's carve-out,
+"protecting the MCP admin surface itself"), explicitly **not** agent
+sandboxing under E2 — the same reading `agent-flight-recorder.md` §10.6
+already gave it for the identical socket denial ADR-0060 needs. Building
+sign-in and the deny-by-default route guard (#409, #410) may proceed before
+E18 lands; nothing here blocks that work. What stays refused is the one
+action whose whole security property depends on the denial being real: the
+first passkey's enrolment, and by the same argument, the recovery path that
+re-runs it.
+
+**How the lock is checked.** The enrolment endpoint must read a recorded
+fact — that the socket denial is in effect — before it will mint or accept
+a first-enrolment code, and refuse otherwise; a mechanism nobody checks is
+not a lock. The need is named here: a state the enrolment path can read at
+the moment it is asked to act, in the same family as the posture flags this
+project already serves for an analogous precondition
+(`account-identity-complete-plan.md` §6 decision 6's `admin_bearer:
+enforced|absent`, `repo_mode: pseudonymous|literal`, read from the process's
+own health surface rather than assumed from configuration). Whether that
+takes the same shape here — a flag on a listener's health body, a file the
+installer writes once the denial is applied, or a live check the gateway
+performs itself — is E18's mechanism to decide. This ADR commits only to
+the property the mechanism must have: the enrolment endpoint asks, every
+time, rather than trusting that a denial applied once is still applied now.
+
 **Attestation is not discarded, only not enforced.** The format an
 authenticator reports at registration is recorded on the passkey's row,
 unenforced, so that `self`/`none` at enrolment is a fact available to
@@ -261,37 +311,41 @@ this ADR closes, reopened under a different name.
   this ADR commits only to the invariant both choices must satisfy, verified
   by a startup probe the same way `AssertReadOnly` already is.
 
-### Open question for the operator: is a "user" here a future accounts-service "principal"?
+### Decided: a "user" here is the account plan's principal — one entity, not two
 
 `account-identity-complete-plan.md` §6 designs its own human sign-in for a
 different, not-yet-built surface — B's `/v1` API, authenticated by class
 **H**, "human OIDC session + CSRF," for a multi-tenant deployment where an
 account owns repositories and a principal (an OIDC `iss`+`sub`) belongs to
-an account. That plan's Phase 3 (B service, ADR-0053) has not been built.
-This ADR introduces a *different* mechanism — passkey enrolment with no
-external identity provider — for the read boundary that exists today,
-independent of whether B is ever built at all. Both plans converge on the
-word "user" doing similar work, and this ADR does **not** resolve whether
-they are the same entity:
+an account. An earlier draft of this ADR left open whether the `users` row
+built here is the same entity as that future `principal`, or a permanently
+separate mechanism for the self-hosted default. **Decided: the same
+entity.** There is one identity model, not two, and this ADR's `users`
+table is where it starts, not a parallel one B will later have to
+reconcile against.
 
-- If B is later built, is the `users` row this ADR creates the same row as
-  a B `principal`, reconciled at that point (a principal *is* a user, with
-  an OIDC identity added to a passkey one, or vice versa)? Or does this
-  ADR's `users` table stay the self-hosted default's own mechanism,
-  permanently separate from B, for deployments that never stand up an
-  accounts service at all?
-- B's own design deliberately keeps human sign-in dependent on an external
-  OIDC issuer, matching a hosted, multi-tenant posture; this ADR
-  deliberately keeps it dependent on nothing external, matching the
-  self-hosted, single-machine default doc 05 describes. Whether the project
-  wants exactly one human-login mechanism long-term, or two for two
-  different deployment shapes, is not decided by this ADR and is named here
-  rather than assumed either way.
-
-This is flagged rather than settled because settling it would mean
-designing B's Phase 3 by inference from a read-login ADR, which is the
-exact move `.claude/CLAUDE.md` forbids: "Never edit a spec document to
-match an inference. A conflict is a question for the human."
+- **Passkey is the first sign-in method for a user.** It is what exists
+  because it is what a self-hosted, single-machine deployment can do with
+  no external dependency, matching doc 05's default the same way ADR-0010
+  chose self-hosted Sigstore for the identical reason.
+- **OIDC, if B is ever built, is an *additional* sign-in method for the
+  same user — not a second identity, not a second table needing a merge.**
+  A user gains a second row in a sign-in-method table (an `oidc_identities`
+  table, `iss`+`sub`, alongside `passkeys`) the day B exists and the
+  operator links one; nothing about the user's own `user_id` or its
+  existing links changes when that happens. This is the same additive-only
+  shape Decision 3 already commits `users`/`passkeys`/`sessions` to for
+  every other future link, extended to cover a future sign-in method rather
+  than only a future reference *to* the user.
+- **Named, and explicitly not built now:** the `oidc_identities` table
+  itself, and whatever B does with a principal once it exists. Which
+  process's database holds the canonical `users` row once B is built —
+  this project's own database, as decided here for the deployment that has
+  no B yet, or B's separate database per `account-identity-complete-plan.md`
+  §5's own rule that B "cannot share the `innsegl` database" — is B's
+  Phase 3 (ADR-0053) to settle, the same way every other B-side mechanism
+  in that plan is. This ADR fixes the identity question so that Phase 3
+  inherits one entity to place, not two to unify.
 
 ## Alternatives considered
 
@@ -348,6 +402,16 @@ it is still a discipline every future route pays for. A fresh deployment
 now needs one deliberate, in-person step — the first user's out-of-band
 enrolment — before the dashboard shows anything at all, a small cost
 against the alternative this ADR closes.
+
+**Harder, again — a deliberate gap between "buildable" and "usable
+safely."** #409 and #410 can be built, tested and merged before E18 (#389)
+lands, and this ADR does not want that blocked: the session mechanism, the
+route guard and the enrolment *code path* are independent of the socket
+denial's own schedule. What must not happen is the first real enrolment
+running on a deployment where that denial is not yet in place — that would
+be shipping a lock with no bolt. The interim state is intentional: the
+mechanism exists, is tested, and refuses its own most security-critical
+action until the precondition it depends on is confirmed, not assumed.
 
 **Now settled, not yet built.** This ADR fixes the *why* — loopback and
 read-only-database-role are not sufficient once same-user adversaries and
