@@ -1138,6 +1138,13 @@ services:
       # measured and fixed on the test side.
       - "127.0.0.1:${INNSEGL_MCP_PORT:-28080}:8080"
       - "127.0.0.1:${INNSEGL_MCP_HEALTH_PORT:-28081}:8081"
+      # The gateway (ADR-0060): a fifth companion of this same process, not a
+      # service of its own. Loopback only, like every other line here — the
+      # gateway is what sees a model provider's login credential and the full
+      # content of every agent's conversation, in transit, on every request,
+      # and this publish line is the entire host-reachability guarantee for
+      # it (guarded by GW-005).
+      - "127.0.0.1:${INNSEGL_GATEWAY_PORT:-28095}:8095"
       # #170's identity lifecycle. Published only when INNSEGL_MCP_ADMIN_LISTEN
       # is set on the service below; the mapping is harmless when it is not,
       # because nothing is listening on 8090 in that case.
