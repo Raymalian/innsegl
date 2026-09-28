@@ -1,0 +1,15 @@
+{
+  "workspace_tree_hash": "4e7bdba4a624a59b0b481e723b32f1998115a7c8",
+  "ts": "2026-08-28T09:14:11.052Z",
+  "tool_name": "run_tests",
+  "spiffe_id": "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42",
+  "source": "mcp",
+  "schema_version": "4",
+  "run_id": "run-42",
+  "prev_event_hash": "sha256:e3c1a4acaf91898b861e246df85a5f916a5105300878f3b12e01295d6220103d",
+  "payload_digest": "sha256:deb54f80e9b9f47b1b25007ce65187055b3e037b12e48f87941353863d6fd44c",
+  "idempotency_key": "call-9c3f2-tree",
+  "event_type": "tool_call",
+  "event_id": "01a047b2-1e4f-7b32-8d5a-6c9f3e8a7b22",
+  "chain_position": 19
+}

@@ -1,0 +1,13 @@
+{
+  "ts": "2026-08-28T09:41:03.006Z",
+  "subject_event_id": "01a047a7-77c0-7ed1-a1f2-b72f793a5edf",
+  "spiffe_id": "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42",
+  "source": "reconciler",
+  "schema_version": "4",
+  "run_id": "run-42",
+  "reason": "commit_recorded claims a Rekor entry that the log does not contain",
+  "prev_event_hash": "sha256:475918e72bd68ca5d68f445aa007bcc92fda0b39679901fe0c8960f9bc9c8339",
+  "event_type": "ledger_drift_detected",
+  "event_id": "01a047be-839e-7c82-877b-9bcc500856be",
+  "chain_position": 10
+}

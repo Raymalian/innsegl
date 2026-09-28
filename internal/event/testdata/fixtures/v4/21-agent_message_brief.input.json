@@ -1,0 +1,13 @@
+{
+  "ts": "2026-09-28T12:00:00.000Z",
+  "spiffe_id": "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-42",
+  "source": "mcp",
+  "schema_version": "4",
+  "run_id": "run-42",
+  "role": "brief",
+  "prev_event_hash": "sha256:e7974b6b9eb07b4bf49f025b8737621240ce0ca4521b57b60d5c56f9220dfb1b",
+  "payload_digest": "hmac-sha256:core-2026-09:62e8aa0715ae5aa61bc2595c6afa0d6664ef799d9b3f50a8e2cb87b8e5639a67",
+  "event_type": "agent_message",
+  "event_id": "01a047b2-1e4f-7b32-8d5a-6c9f3e8a7b23",
+  "chain_position": 20
+}
