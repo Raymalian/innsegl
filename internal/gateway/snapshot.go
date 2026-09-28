@@ -38,15 +38,25 @@ package gateway
 //     `--all` always reconciles the index against whatever the working
 //     tree currently holds, including a deletion.
 //
-// Object sharing is allowed but never required: on a store's first use for
-// a repository, `objects/info/alternates` is pointed, read-only, at that
-// repository's OWN object database (found through `git rev-parse
-// --git-common-dir`, which is a plain filesystem walk up from the given
-// working tree and never a claim about where a git-reported path belongs in
-// some OTHER namespace). Writing that file is best-effort: ADR-0060 decision
-// 5 calls it something that "helps performance", not something a snapshot
-// depends on, so a failure to write it, or the absence of anything to point
-// at, changes nothing about correctness.
+// # No alternates -- the store holds its own copy of every object
+//
+// ADR-0060 decision 5 allows a read-only `objects/info/alternates` hint at
+// the project's own object database "if it helps performance". An earlier
+// version of this file did that. It was wrong: `git add` and `write-tree`
+// both skip writing a blob that already resolves through an alternate, so
+// a store built that way holds trees whose blobs live ONLY in the
+// project's own ".git" -- reachable BY WAY OF it, not independently of it.
+// ADR-0060 decision 5 calls the store "unreachable by agents"; one whose
+// content depends on a directory an agent's ordinary git access can freely
+// reset, gc, or delete is not actually independent of it, even though
+// nothing here ever writes through that dependency. Measured: after taking
+// a snapshot with alternates pointed at the project, deleting the
+// project's own "objects" left a blob the snapshot's tree names unreadable
+// from the store alone, and `git fsck --full` on the store reported it as
+// a broken link and a missing blob. That is exactly the case this witness
+// exists for -- an agent reverting or pruning its own history -- so this
+// file never uses alternates: every object `write-tree` names is written
+// into the store's own object database, full stop.
 //
 // # A container-side working directory, and no second translation
 //
@@ -237,13 +247,10 @@ func (s *Snapshotter) Snapshot(ctx context.Context, workingDirectory string) Sna
 	if reason != "" {
 		return SnapshotOutcome{Reason: reason}
 	}
-	key, reason := s.repoKey(ctx, dir)
-	if reason != "" {
-		return SnapshotOutcome{Reason: reason}
-	}
+	key := s.repoKey(ctx, dir, commonDir)
 
 	storeDir := filepath.Join(s.storeRoot, key)
-	if err := s.ensureStore(ctx, storeDir, commonDir); err != nil {
+	if err := s.ensureStore(ctx, storeDir); err != nil {
 		return SnapshotOutcome{Reason: fmt.Sprintf(
 			"workspace snapshot: the store for %s could not be prepared: %v", dir, err)}
 	}
@@ -326,22 +333,61 @@ func (s *Snapshotter) discover(ctx context.Context, dir string) (top, commonDir,
 }
 
 // repoKey derives the per-repository store key this file's own doc comment
-// promises: stable across every worktree of one repository, because it
-// comes from the repository's shared "origin" remote config rather than
-// from any filesystem path a linked worktree's ".git" file might record in
-// another namespace's spelling. A repository with no configured origin is
-// refused (SNAP-004) rather than keyed by guesswork -- the same posture
-// describe_workspace already takes for the identifier it derives from the
-// same remote (internal/mcp/workspace.go).
-func (s *Snapshotter) repoKey(ctx context.Context, dir string) (key, reason string) {
-	out, err := s.readGit(ctx, dir, "remote", "get-url", "origin")
-	if err != nil {
-		return "", fmt.Sprintf(
-			"workspace snapshot: %s has no configured 'origin' remote, so its per-repository "+
-				"snapshot store cannot be addressed", dir)
+// promises: stable across every worktree of one repository, and never a
+// shared bucket between two different repositories. Three sources, tried in
+// order, each disjoint from the others by its own hashed prefix so a value
+// from one can never collide with a value from another:
+//
+//  1. The "origin" remote, when configured -- stable across every worktree
+//     AND every host of one repository, because remote config is shared
+//     verbatim project data, unlike any filesystem path a linked worktree's
+//     ".git" file might record in another namespace's spelling. The same
+//     source describe_workspace already prefers for the identifier it
+//     derives (internal/mcp/workspace.go).
+//  2. Failing that, the repository's OWN first commit -- equally stable
+//     across every worktree and every clone of one repository, and immune
+//     to the same namespace-spelling risk, for a repository that simply has
+//     not been given a remote yet.
+//  3. Failing that too (no origin AND no commit yet), commonDir -- this
+//     process's own container-side path to the repository's common git
+//     directory, already resolved by discover. Unique to this one checkout,
+//     which is the most this file can promise for a repository with neither
+//     a remote nor any history to key on yet.
+//
+// This function cannot itself refuse: discover already guarantees commonDir
+// is non-empty by the time this is ever called, so the third source always
+// answers something.
+func (s *Snapshotter) repoKey(ctx context.Context, dir, commonDir string) string {
+	if out, err := s.readGit(ctx, dir, "remote", "get-url", "origin"); err == nil {
+		return hashRepoKey("origin", out)
 	}
-	sum := sha256.Sum256([]byte(strings.TrimSpace(out)))
-	return hex.EncodeToString(sum[:]), ""
+	if out, err := s.readGit(ctx, dir, "rev-list", "--max-parents=0", "HEAD"); err == nil {
+		if first := firstLine(out); first != "" {
+			return hashRepoKey("root-commit", first)
+		}
+	}
+	return hashRepoKey("common-dir", commonDir)
+}
+
+// hashRepoKey hashes source (a disjointness tag, never empty) and material
+// together, so a value read under one source can never collide with a
+// value read under a different one even if the raw bytes happened to
+// coincide.
+func hashRepoKey(source, material string) string {
+	sum := sha256.Sum256([]byte(source + "\x00" + strings.TrimSpace(material)))
+	return hex.EncodeToString(sum[:])
+}
+
+// firstLine answers s up to its first newline, or the whole of s if it has
+// none. `git rev-list` can name more than one root commit for a repository
+// with unrelated histories merged into it; the first is enough to key a
+// store subdirectory and is deterministic for a given repository's own
+// commit graph.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // readGit runs one read-only git query against dir with git's own ordinary
@@ -393,12 +439,11 @@ func (s *Snapshotter) snapshotEnv(storeDir, workTree, indexFile string) []string
 }
 
 // ensureStore makes sure storeDir is an initialised GIT_DIR -- objects and
-// refs, nothing else (ADR-0060 decision 5) -- creating it with `git init
-// --bare` on first use for this repository, and reusing it on every later
-// call. commonDir seeds a best-effort, read-only alternates hint; see this
-// file's own package comment on why its absence or its failure never fails
-// this call.
-func (s *Snapshotter) ensureStore(ctx context.Context, storeDir, commonDir string) error {
+// refs, nothing else (ADR-0060 decision 5), self-contained and never an
+// alternates hint at anything outside it (see this file's own package
+// comment) -- creating it with `git init --bare` on first use for this
+// repository, and reusing it on every later call.
+func (s *Snapshotter) ensureStore(ctx context.Context, storeDir string) error {
 	if info, err := os.Stat(filepath.Join(storeDir, "objects")); err == nil && info.IsDir() {
 		return nil
 	}
@@ -412,30 +457,7 @@ func (s *Snapshotter) ensureStore(ctx context.Context, storeDir, commonDir strin
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git init --bare %s: %w: %s", storeDir, err, strings.TrimSpace(string(out)))
 	}
-
-	s.writeAlternates(storeDir, commonDir)
 	return nil
-}
-
-// writeAlternates points storeDir's own object database at commonDir's, as
-// a read-only performance hint git consults IN ADDITION to storeDir's own
-// objects -- never a substitute for them, and never a path this file ever
-// writes through. Best-effort: a nonexistent or unreadable source objects
-// directory is skipped, and a failure to write the hint costs nothing but
-// the optimisation ADR-0060 decision 5 calls optional.
-func (s *Snapshotter) writeAlternates(storeDir, commonDir string) {
-	if commonDir == "" {
-		return
-	}
-	objects := filepath.Join(commonDir, "objects")
-	if info, err := os.Stat(objects); err != nil || !info.IsDir() {
-		return
-	}
-	infoDir := filepath.Join(storeDir, "objects", "info")
-	if err := os.MkdirAll(infoDir, 0o700); err != nil {
-		return
-	}
-	discardWriteFileError(os.WriteFile(filepath.Join(infoDir, "alternates"), []byte(objects+"\n"), 0o600))
 }
 
 // writeTree is the technique itself: `add --all` (never `-u`, which would
@@ -571,16 +593,13 @@ func (s *Snapshotter) storeSize(storeDir string) int64 {
 	return total
 }
 
-// discardWriteFileError and discardWalkError are this file's own named
-// discards, the same idiom facts.go's discardWriteError and proxy.go's
-// discardCopyError already use: the error is passed to a function that
-// deliberately does nothing with it, so errcheck sees it consumed rather
-// than silently dropped, at a call site where losing it costs nothing --
-// both here are best-effort accounting and a best-effort performance hint,
-// never a correctness requirement (see writeAlternates's and storeSize's
-// own comments).
-func discardWriteFileError(error) {}
-func discardWalkError(error)      {}
+// discardWalkError is this file's own named discard, the same idiom
+// facts.go's discardWriteError and proxy.go's discardCopyError already use:
+// the error is passed to a function that deliberately does nothing with
+// it, so errcheck sees it consumed rather than silently dropped, at a call
+// site where losing it costs nothing -- storeSize is best-effort
+// accounting, never a correctness requirement (see its own comment).
+func discardWalkError(error) {}
 
 // ---------------------------------------------------------------------------
 // The trigger.

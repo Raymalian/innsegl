@@ -126,6 +126,38 @@ func snapMustSnapshotter(t *testing.T, cfg SnapshotConfig) *Snapshotter {
 	return s
 }
 
+// snapListBlobs answers every blob hash `git ls-tree -r` reports reachable
+// from treeHash, read from the store alone.
+func snapListBlobs(t *testing.T, storeDir, treeHash string) []string {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "--git-dir", storeDir, "ls-tree", "-r", treeHash)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git --git-dir %s ls-tree -r %s: %v", storeDir, treeHash, err)
+	}
+	var hashes []string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		// "<mode> <type> <hash>\t<path>" -- Fields splits on the tab too.
+		fields := strings.Fields(line)
+		if len(fields) >= 3 {
+			hashes = append(hashes, fields[2])
+		}
+	}
+	return hashes
+}
+
+// snapFsck runs `git fsck --full` against the store alone and answers its
+// combined output and error.
+func snapFsck(t *testing.T, storeDir string) (string, error) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "--git-dir", storeDir, "fsck", "--full")
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
 // ---------------------------------------------------------------------------
 // Validation, beside the catalog's own named cases.
 // ---------------------------------------------------------------------------
@@ -421,5 +453,171 @@ func TestSNAP005TheStoreIsBoundedAndPrunesTheOldestUnreferencedObjects(t *testin
 		// top of that. The point of this assertion is that pruning ran at
 		// all, not that it hit the cap exactly.
 		t.Fatalf("store size %d is not bounded anywhere near the configured cap %d", got, cap5)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Store independence (review finding on #383's first commit): a snapshot's
+// evidence must survive an agent later deleting or pruning the PROJECT's own
+// objects -- exactly the reverted-change case this witness exists for.
+// ADR-0060 decision 5 calls the store "unreachable by agents"; a store whose
+// objects are only reachable BY WAY OF the project's own object database,
+// through a read-only alternates hint, is not actually independent of it,
+// even though nothing ever writes through that hint.
+// ---------------------------------------------------------------------------
+
+// TestSnapshotStoreIsSelfContainedAfterTheProjectsObjectsAreRemoved takes a
+// real snapshot, then deletes the PROJECT's own ".git/objects" -- simulating
+// an agent's reset or gc after the snapshot was taken -- and checks that
+// every object `git ls-tree -r` reports reachable from the snapshot's tree
+// is still readable from the store alone, and that `git fsck --full` on the
+// store reports nothing broken.
+func TestSnapshotStoreIsSelfContainedAfterTheProjectsObjectsAreRemoved(t *testing.T) {
+	projects := t.TempDir()
+	repo := filepath.Join(projects, "repo")
+	snapNewProject(t, repo, "git@example.com:innsegl-test/selfcontained.git")
+	if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("content that must survive\n"), 0o644); err != nil {
+		t.Fatalf("writing notes.txt: %v", err)
+	}
+
+	store := t.TempDir()
+	snap := snapMustSnapshotter(t, SnapshotConfig{StoreRoot: store, ProjectRoots: []string{projects}})
+
+	outcome := snap.Snapshot(context.Background(), repo)
+	if !outcome.Snapshotted() {
+		t.Fatalf("Snapshot refused: %s", outcome.Reason)
+	}
+
+	storeDir := snapStoreDir(t, store)
+	blobs := snapListBlobs(t, storeDir, outcome.TreeHash)
+	if len(blobs) == 0 {
+		t.Fatal("the tree listed no blobs to check -- the fixture is not exercising anything")
+	}
+
+	if err := os.RemoveAll(filepath.Join(repo, ".git", "objects")); err != nil {
+		t.Fatalf("removing the project's own objects: %v", err)
+	}
+	// A git object database with no loose or pack objects at all, the same
+	// shape a fresh `git init` leaves -- not a missing directory, which
+	// would be a different (and less realistic) failure mode than "the
+	// content is gone".
+	if err := os.MkdirAll(filepath.Join(repo, ".git", "objects", "pack"), 0o755); err != nil {
+		t.Fatalf("recreating an empty objects/pack: %v", err)
+	}
+
+	for _, hash := range blobs {
+		if !snapObjectExists(t, storeDir, hash) {
+			t.Errorf(
+				"blob %s is not readable from the store alone after the project's own objects "+
+					"were removed -- the store depends on the project's object database", hash)
+		}
+	}
+	if !snapObjectExists(t, storeDir, outcome.TreeHash) {
+		t.Errorf("tree %s is not readable from the store alone", outcome.TreeHash)
+	}
+
+	if out, err := snapFsck(t, storeDir); err != nil {
+		t.Errorf("git fsck --full on the store failed after the project's objects were removed: %v\n%s", err, out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Repository keying without an "origin" remote.
+// ---------------------------------------------------------------------------
+
+// snapInitNoOriginRepo creates a real repository at dir with no remote at
+// all -- the case repoKey's origin-preferring path has nothing to read.
+func snapInitNoOriginRepo(t *testing.T, dir, seedContent string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	snapGit(t, dir, "init", "-q", "-b", "main")
+	snapGit(t, dir, "config", "user.email", "snapshot-test@example.com")
+	snapGit(t, dir, "config", "user.name", "Snapshot Test")
+	if err := os.WriteFile(filepath.Join(dir, "seed"), []byte(seedContent), 0o644); err != nil {
+		t.Fatalf("seeding %s: %v", dir, err)
+	}
+	snapGit(t, dir, "add", "seed")
+	snapGit(t, dir, "commit", "-q", "-m", "seed", "--no-gpg-sign")
+}
+
+// TestSnapshotKeysARepositoryWithNoOriginStablyAndWithoutCollision proves
+// repoKey's fallback: a repository with no "origin" remote is still
+// snapshotted (never refused for that reason alone), two DIFFERENT such
+// repositories land in two DIFFERENT store subdirectories -- never a shared
+// bucket -- and snapshotting the SAME one twice lands in the SAME
+// subdirectory both times.
+func TestSnapshotKeysARepositoryWithNoOriginStablyAndWithoutCollision(t *testing.T) {
+	projects := t.TempDir()
+	repoA := filepath.Join(projects, "repo-a")
+	repoB := filepath.Join(projects, "repo-b")
+	snapInitNoOriginRepo(t, repoA, "a\n")
+	snapInitNoOriginRepo(t, repoB, "b\n")
+
+	store := t.TempDir()
+	snap := snapMustSnapshotter(t, SnapshotConfig{StoreRoot: store, ProjectRoots: []string{projects}})
+	ctx := context.Background()
+
+	outcomeA := snap.Snapshot(ctx, repoA)
+	if !outcomeA.Snapshotted() {
+		t.Fatalf("repo-a (no origin) was refused: %s", outcomeA.Reason)
+	}
+	outcomeB := snap.Snapshot(ctx, repoB)
+	if !outcomeB.Snapshotted() {
+		t.Fatalf("repo-b (no origin) was refused: %s", outcomeB.Reason)
+	}
+
+	entries, err := os.ReadDir(store)
+	if err != nil {
+		t.Fatalf("reading store root: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf(
+			"store root holds %d repository directories after two DIFFERENT origin-less "+
+				"repositories were snapshotted, want 2 -- never a shared bucket", len(entries))
+	}
+
+	// Stability: snapshotting repo-a again lands in the SAME subdirectory.
+	if outcome := snap.Snapshot(ctx, repoA); !outcome.Snapshotted() {
+		t.Fatalf("repo-a's second snapshot was refused: %s", outcome.Reason)
+	}
+	entriesAfter, err := os.ReadDir(store)
+	if err != nil {
+		t.Fatalf("reading store root again: %v", err)
+	}
+	if len(entriesAfter) != 2 {
+		t.Fatalf(
+			"a second snapshot of the SAME origin-less repository created a new store "+
+				"directory: now %d, want 2", len(entriesAfter))
+	}
+}
+
+// TestSnapshotKeysARepositoryWithNoOriginAndNoCommitYet proves the second,
+// last-resort fallback: a repository with no origin AND no commit yet
+// (repoKey's first-commit fallback has nothing to read either) is still
+// keyed stably, from its own common git directory, rather than refused.
+func TestSnapshotKeysARepositoryWithNoOriginAndNoCommitYet(t *testing.T) {
+	projects := t.TempDir()
+	repo := filepath.Join(projects, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	snapGit(t, repo, "init", "-q", "-b", "main")
+	snapGit(t, repo, "config", "user.email", "snapshot-test@example.com")
+	snapGit(t, repo, "config", "user.name", "Snapshot Test")
+	if err := os.WriteFile(filepath.Join(repo, "untracked-but-real.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("writing a file: %v", err)
+	}
+
+	store := t.TempDir()
+	snap := snapMustSnapshotter(t, SnapshotConfig{StoreRoot: store, ProjectRoots: []string{projects}})
+
+	outcome := snap.Snapshot(context.Background(), repo)
+	if !outcome.Snapshotted() {
+		t.Fatalf("a repository with no origin and no commit yet was refused: %s", outcome.Reason)
+	}
+	if outcome.TreeHash == "" {
+		t.Fatal("Snapshot answered no tree hash on success")
 	}
 }
