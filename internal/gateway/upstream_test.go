@@ -267,6 +267,7 @@ func runGW006Case(t *testing.T, leaf tls.Certificate, client *http.Client) {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer sk-ant-test-should-never-be-echoed-back")
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("gateway request: %v (want a response from the gateway, not a transport error)", err)
@@ -480,6 +481,7 @@ func TestGW008ConnectionRefusedNamesTheFailureClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("gateway request: %v (want a response from the gateway, not a transport error)", err)
@@ -549,6 +551,7 @@ func TestGW008UpstreamTimeoutNamesTheFailureClassAndUses504(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("gateway request: %v (want a response from the gateway, not a transport error)", err)
@@ -594,6 +597,7 @@ func TestGW008UnclassifiedUpstreamErrorFallsBackToAGenericMessage(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("gateway request: %v (want a response from the gateway, not a transport error)", err)

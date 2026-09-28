@@ -173,6 +173,7 @@ func TestGW010CanarySuccessReachesNoFileOrResponse(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
@@ -248,6 +249,7 @@ func TestGW010CanaryStreamedReachesNoFileOrResponse(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -317,6 +319,7 @@ func TestGW010CanaryUnreachableUpstreamReachesNoErrorBody(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -372,6 +375,7 @@ func TestGW010CanaryUpstreamErrorStatusReachesNoResponseBeyondWhatItSent(t *test
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -130,12 +130,15 @@ func assertCredentialCanaryDeliveredUpstream(t *testing.T, label, canary string,
 // TestGatewayCommandRelaysRealTrafficEndToEnd (gateway_test.go) does, and
 // returns that address, the syncBuffer (api_test.go) its *serveLog is
 // writing to, and a stop func that cancels it and waits for it to exit.
-func runGatewayForCanary(t *testing.T, upstreamURL string) (addr string, stderr *syncBuffer, stop func()) {
+func runGatewayForCanary(t *testing.T, upstreamURL string, client *http.Client) (addr string, stderr *syncBuffer, stop func()) {
 	t.Helper()
 
 	stderr = &syncBuffer{}
 	addrCh := make(chan string, 1)
 	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
+		// An https upstream is required (#371); a test server's own client
+		// is the one seam that lets it be trusted, as in gateway_test.go.
+		o.upstreamClient = client
 		srv, err := openGateway(ctx, o, log)
 		if err == nil {
 			addrCh <- srv.Addr()
@@ -175,7 +178,7 @@ func TestGW010CommandCanarySuccessReachesNoFileLogOrResponse(t *testing.T) {
 	bearer, apiKey := newCredentialCanary(t)
 
 	var upstreamHeaders http.Header
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -185,7 +188,7 @@ func TestGW010CommandCanarySuccessReachesNoFileLogOrResponse(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	addr, stderr, stop := runGatewayForCanary(t, upstream.URL)
+	addr, stderr, stop := runGatewayForCanary(t, upstream.URL, upstream.Client())
 	defer stop()
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
@@ -195,6 +198,7 @@ func TestGW010CommandCanarySuccessReachesNoFileLogOrResponse(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -220,7 +224,7 @@ func TestGW010CommandCanaryStreamedReachesNoFileLogOrResponse(t *testing.T) {
 	bearer, apiKey := newCredentialCanary(t)
 
 	var upstreamHeaders http.Header
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders = r.Header.Clone()
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -240,7 +244,7 @@ func TestGW010CommandCanaryStreamedReachesNoFileLogOrResponse(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	addr, stderr, stop := runGatewayForCanary(t, upstream.URL)
+	addr, stderr, stop := runGatewayForCanary(t, upstream.URL, upstream.Client())
 	defer stop()
 
 	reqCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -251,6 +255,7 @@ func TestGW010CommandCanaryStreamedReachesNoFileLogOrResponse(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -282,7 +287,7 @@ func TestGW010CommandCanaryStreamedReachesNoFileLogOrResponse(t *testing.T) {
 func TestGW010CommandCanaryUnreachableUpstreamReachesNoErrorBodyOrLog(t *testing.T) {
 	bearer, apiKey := newCredentialCanary(t)
 
-	addr, stderr, stop := runGatewayForCanary(t, "http://127.0.0.1:1")
+	addr, stderr, stop := runGatewayForCanary(t, "https://127.0.0.1:1", nil)
 	defer stop()
 
 	reqCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -293,6 +298,7 @@ func TestGW010CommandCanaryUnreachableUpstreamReachesNoErrorBodyOrLog(t *testing
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -323,7 +329,7 @@ func TestGW010CommandCanaryUpstreamErrorStatusReachesNoResponseOrLogBeyondWhatIt
 
 	const upstreamErrBody = `{"error":{"type":"internal_server_error","message":"upstream had a problem"}}`
 	var upstreamHeaders http.Header
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -333,7 +339,7 @@ func TestGW010CommandCanaryUpstreamErrorStatusReachesNoResponseOrLogBeyondWhatIt
 	}))
 	defer upstream.Close()
 
-	addr, stderr, stop := runGatewayForCanary(t, upstream.URL)
+	addr, stderr, stop := runGatewayForCanary(t, upstream.URL, upstream.Client())
 	defer stop()
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
@@ -343,6 +349,7 @@ func TestGW010CommandCanaryUpstreamErrorStatusReachesNoResponseOrLogBeyondWhatIt
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
