@@ -265,10 +265,11 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		}
 	}
 
-	var parentRunID string
+	var parentRunID, spawnAgentType string
 	if !found {
-		if p, _, linked, rerr := g.tree.ResolveParent(ctx, id.SessionID, facts.Brief); rerr == nil && linked {
+		if p, at, linked, rerr := g.tree.ResolveParent(ctx, id.SessionID, facts.Brief); rerr == nil && linked {
 			parentRunID = p
+			spawnAgentType = at
 		}
 	}
 
@@ -280,7 +281,7 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		return nil, g.refuse("the lifecycle policy could not decide: " + err.Error())
 	}
 
-	runID, actErr := g.act(ctx, decision, id, facts, fp, parentRunID, prior)
+	runID, actErr := g.act(ctx, decision, id, facts, fp, parentRunID, spawnAgentType, prior)
 	if actErr != nil {
 		return nil, g.refuse(actErr.Error())
 	}
@@ -330,10 +331,13 @@ func (g *IdentityGuard) priorMapping(ctx context.Context, id Identification, fp 
 
 // act performs the one thing the decided Decision requires and answers the
 // run id to attach to the request's context. Nothing here re-decides;
-// Decide already did that.
+// Decide already did that. spawnAgentType is the agent type the TreeLinker
+// resolved alongside parentRunID (empty when nothing was resolved) --
+// RM-263 (#416): agentTypeFor turns it, plus id, into what actually reaches
+// RegisterInput.AgentType.
 func (g *IdentityGuard) act(
 	ctx context.Context, decision Decision, id Identification, facts RequestFacts,
-	fp Fingerprint, parentRunID string, prior RunMapping,
+	fp Fingerprint, parentRunID, spawnAgentType string, prior RunMapping,
 ) (string, error) {
 	switch decision {
 	case DecisionContinue:
@@ -346,7 +350,7 @@ func (g *IdentityGuard) act(
 			return "", fmt.Errorf("resolve the workspace to restore run %q: %w", prior.RunID, err)
 		}
 		out, err := g.registrar.Restore(ctx, prior, RegisterInput{
-			AgentType:      agentTypeFor(id),
+			AgentType:      agentTypeFor(id, spawnAgentType),
 			IdempotencyKey: idempotencyKeyFor(id),
 			Workspace:      ws,
 		})
@@ -362,7 +366,7 @@ func (g *IdentityGuard) act(
 			return "", fmt.Errorf("resolve the workspace to register a new run: %w", err)
 		}
 		out, err := g.registrar.Register(ctx, RegisterInput{
-			AgentType:      agentTypeFor(id),
+			AgentType:      agentTypeFor(id, spawnAgentType),
 			IdempotencyKey: idempotencyKeyFor(id),
 			Workspace:      ws,
 			ParentRunID:    parentRunID,
@@ -382,7 +386,7 @@ func (g *IdentityGuard) act(
 			return "", fmt.Errorf("resolve the workspace to register a fork of run %q: %w", prior.RunID, err)
 		}
 		out, err := g.registrar.Register(ctx, RegisterInput{
-			AgentType:       agentTypeFor(id),
+			AgentType:       agentTypeFor(id, spawnAgentType),
 			IdempotencyKey:  idempotencyKeyFor(id),
 			Workspace:       ws,
 			ForkedFromRunID: prior.RunID,
@@ -402,7 +406,7 @@ func (g *IdentityGuard) act(
 			return "", fmt.Errorf("resolve the workspace to register a run adopting %q: %w", prior.RunID, err)
 		}
 		out, err := g.registrar.Register(ctx, RegisterInput{
-			AgentType:      agentTypeFor(id),
+			AgentType:      agentTypeFor(id, spawnAgentType),
 			IdempotencyKey: idempotencyKeyFor(id),
 			Workspace:      ws,
 		})
@@ -455,14 +459,37 @@ func (g *IdentityGuard) recordFingerprintIfNewlyKnown(ctx context.Context, id Id
 	g.cache.put(id.SessionID, id.AgentID, updated)
 }
 
+// defaultSubagentType is agentTypeFor's own fallback when a spawn resolved
+// no AgentType at all -- no pending spawn matched, or one matched but its
+// own tool_use carried no subagent type (an older harness, or a spawn shape
+// this build does not yet recognise). A stated placeholder, RM-263 (#416):
+// it must never be id.AgentID, which is an opaque per-run identifier (a
+// UUID, harness.go's own isUUID), not a type, and recording it as one would
+// repeat the exact bug this issue exists to close.
+const defaultSubagentType = "subagent"
+
 // agentTypeFor is what this build records as registerAgentIn.AgentType for
-// a run the gateway registers from traffic alone. The harness's own traffic
-// carries no richer "type" claim than the presence or absence of its
-// per-request agent header (harness.go's Identification): mainAgentID for
-// the root, the harness-asserted agent id otherwise. Both are stable across
-// every request of the same (session, agent) pair, which is what
-// idempotencyKeyFor's own replay contract requires.
-func agentTypeFor(id Identification) string { return id.AgentID }
+// a run the gateway registers from traffic alone (RM-263, #416). The root
+// agent's type is the harness shape itself: Identification.AgentID is
+// mainAgentID ("main") only for the root (harness.go's own recogniser never
+// sets it to anything else), so that fixed value is what is recorded, never
+// something read off a spawn. A subagent's real type is spawnAgentType --
+// resolved by the TreeLinker's ResolveParent alongside the parent run id,
+// itself read from the spawning Agent/Task tool call's own subagent_type
+// input (identity.go's SpawnRecorder) -- never the harness-asserted agent
+// id id.AgentID otherwise carries, which names a run, not a kind of agent.
+// A subagent whose spawn resolved no type at all falls back to
+// defaultSubagentType, a stated placeholder, rather than ever substituting
+// the id.
+func agentTypeFor(id Identification, spawnAgentType string) string {
+	if id.AgentID == mainAgentID {
+		return mainAgentID
+	}
+	if spawnAgentType != "" {
+		return spawnAgentType
+	}
+	return defaultSubagentType
+}
 
 // idempotencyKeyFor is the SAME key on every request of one (session,
 // agent) pair -- required so that a later Restore replays register_agent's
@@ -533,11 +560,16 @@ func (c *identityCache) put(sessionID, agentID string, m RunMapping) {
 // here, never a reason to guess.
 var spawnToolNames = map[string]bool{"Agent": true, "Task": true}
 
-// spawnToolInput is the one field this recorder reads out of a spawning
-// tool_use's input: the subagent's own prompt, byte for byte what its
-// first request's Brief will be (ADR-0058 decision 3).
+// spawnToolInput is what this recorder reads out of a spawning tool_use's
+// input: the subagent's own prompt, byte for byte what its first request's
+// Brief will be (ADR-0058 decision 3), and the type it was asked to spawn
+// as -- the Agent/Task tool's own subagent_type field (RM-263, #416; issue
+// #416's own body names this field). Empty when the tool_use carried none;
+// agentTypeFor (identity.go) decides what an empty value falls back to,
+// never this struct.
 type spawnToolInput struct {
-	Prompt string `json:"prompt"`
+	Prompt       string `json:"prompt"`
+	SubagentType string `json:"subagent_type"`
 }
 
 // SpawnRecorder implements proxy.go's ContextToolUseObserver: every Agent or
@@ -593,6 +625,7 @@ func (s *SpawnRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 		ParentRunID: parentRunID,
 		SessionID:   id.SessionID,
 		Prompt:      in.Prompt,
+		AgentType:   in.SubagentType,
 		ObservedAt:  s.now(),
 	}))
 }

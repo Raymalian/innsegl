@@ -296,6 +296,11 @@ func TestIdentityGuardRegistersANewRootRun(t *testing.T) {
 	if f.registrar.lastSeen.ParentRunID != "" {
 		t.Errorf("ParentRunID = %q, want empty for a root run", f.registrar.lastSeen.ParentRunID)
 	}
+	// RM-263 (#416): the root registers with the harness's own fixed root
+	// type, not merely a value that happens to equal id.AgentID.
+	if f.registrar.lastSeen.AgentType != mainAgentID {
+		t.Errorf("AgentType = %q, want %q (the root's fixed type)", f.registrar.lastSeen.AgentType, mainAgentID)
+	}
 	m, found, err := f.mappings.BySessionAgent(t.Context(), id.SessionID, id.AgentID)
 	if err != nil || !found {
 		t.Fatalf("BySessionAgent after registration: found=%v err=%v", found, err)
@@ -306,6 +311,37 @@ func TestIdentityGuardRegistersANewRootRun(t *testing.T) {
 }
 
 func TestIdentityGuardRegistersANewChildWithTheResolvedParent(t *testing.T) {
+	f := newIdentityFixture(t)
+	if err := f.tree.RecordSpawn(t.Context(), PendingSpawn{
+		ParentRunID: "run-parent", SessionID: "s1", Prompt: "do the subtask", AgentType: "code-reviewer",
+	}); err != nil {
+		t.Fatalf("RecordSpawn: %v", err)
+	}
+	child := Identification{SessionID: "s1", AgentID: "child-agent-id"}
+
+	r2, refusal := f.guard.Check(identityRequest(t, child, "do the subtask", ""))
+	if refusal != nil {
+		t.Fatalf("refused: %+v", refusal)
+	}
+	_ = mustRunID(t, r2)
+	if f.registrar.lastSeen.ParentRunID != "run-parent" {
+		t.Errorf("ParentRunID = %q, want run-parent", f.registrar.lastSeen.ParentRunID)
+	}
+	// RM-263 (#416): the child registers with the spawn's own real type,
+	// never the harness-asserted agent id (an opaque per-run id, never a
+	// type).
+	if f.registrar.lastSeen.AgentType != "code-reviewer" {
+		t.Errorf("AgentType = %q, want %q (the spawn's own type, not the agent id %q)",
+			f.registrar.lastSeen.AgentType, "code-reviewer", child.AgentID)
+	}
+}
+
+// TestIdentityGuardChildWithNoSpawnAgentTypeFallsBackToTheDefaultNeverTheAgentID
+// (RM-263, #416): the spawn matched -- there is a real parent link -- but
+// its own tool_use carried no subagent type at all. The child must still
+// register with a stated default, never with id.AgentID standing in for a
+// type it never claimed to be.
+func TestIdentityGuardChildWithNoSpawnAgentTypeFallsBackToTheDefaultNeverTheAgentID(t *testing.T) {
 	f := newIdentityFixture(t)
 	if err := f.tree.RecordSpawn(t.Context(), PendingSpawn{
 		ParentRunID: "run-parent", SessionID: "s1", Prompt: "do the subtask",
@@ -319,8 +355,35 @@ func TestIdentityGuardRegistersANewChildWithTheResolvedParent(t *testing.T) {
 		t.Fatalf("refused: %+v", refusal)
 	}
 	_ = mustRunID(t, r2)
-	if f.registrar.lastSeen.ParentRunID != "run-parent" {
-		t.Errorf("ParentRunID = %q, want run-parent", f.registrar.lastSeen.ParentRunID)
+	if f.registrar.lastSeen.AgentType != defaultSubagentType {
+		t.Errorf("AgentType = %q, want the stated default %q", f.registrar.lastSeen.AgentType, defaultSubagentType)
+	}
+	if f.registrar.lastSeen.AgentType == child.AgentID {
+		t.Error("AgentType fell back to the agent id; it must never stand in for a type")
+	}
+}
+
+// TestIdentityGuardChildWithNoResolvedParentFallsBackToTheDefaultNeverTheAgentID
+// (RM-263, #416): no spawn matched at all -- this "child" is unlinked --
+// which must fall back the same way a matched-but-typeless spawn does,
+// never to id.AgentID.
+func TestIdentityGuardChildWithNoResolvedParentFallsBackToTheDefaultNeverTheAgentID(t *testing.T) {
+	f := newIdentityFixture(t)
+	child := Identification{SessionID: "s1", AgentID: "child-agent-id"}
+
+	r2, refusal := f.guard.Check(identityRequest(t, child, "an unlinked child's own brief", ""))
+	if refusal != nil {
+		t.Fatalf("refused: %+v", refusal)
+	}
+	_ = mustRunID(t, r2)
+	if f.registrar.lastSeen.ParentRunID != "" {
+		t.Errorf("ParentRunID = %q, want empty: nothing was ever recorded to link to", f.registrar.lastSeen.ParentRunID)
+	}
+	if f.registrar.lastSeen.AgentType != defaultSubagentType {
+		t.Errorf("AgentType = %q, want the stated default %q", f.registrar.lastSeen.AgentType, defaultSubagentType)
+	}
+	if f.registrar.lastSeen.AgentType == child.AgentID {
+		t.Error("AgentType fell back to the agent id; it must never stand in for a type")
 	}
 }
 
