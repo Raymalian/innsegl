@@ -1,6 +1,6 @@
 # ADR-0057: Capture agent activity at a model gateway, with independent witnesses
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-28
 - Deciders: the operator
 

@@ -72,10 +72,10 @@ maintainer ask "why is it like this?"
 | [0054](0054-alerts-live-in-a-header-notification-menu.md) | Alerts live in a header notification menu, not in banners on one page | accepted | 2026-09-27 |
 | [0055](0055-an-anchor-resolves-the-drift-alert-about-its-segment.md) | An anchor resolves the drift alert about its segment | accepted | 2026-09-27 |
 | [0056](0056-a-single-machine-deployment-runs-the-loops-in-the-mcp.md) | A single-machine deployment runs the loops in the MCP | accepted | 2026-09-27 |
-| [0057](0057-capture-agent-activity-at-a-model-gateway-with-independent-witnesses.md) | Capture agent activity at a model gateway, with independent witnesses | proposed | 2026-09-28 |
-| [0058](0058-an-agents-identity-lifecycle-is-driven-by-its-traffic.md) | An agent's identity lifecycle is driven by its traffic | proposed | 2026-09-28 |
-| [0059](0059-a-commit-is-attributed-through-the-tool-call-that-made-it.md) | A commit is attributed through the tool call that made it | proposed | 2026-09-28 |
-| [0060](0060-the-gateway-runs-inside-the-one-innsegl-process.md) | The gateway runs inside the one innsegl process | proposed | 2026-09-28 |
+| [0057](0057-capture-agent-activity-at-a-model-gateway-with-independent-witnesses.md) | Capture agent activity at a model gateway, with independent witnesses | accepted | 2026-09-28 |
+| [0058](0058-an-agents-identity-lifecycle-is-driven-by-its-traffic.md) | An agent's identity lifecycle is driven by its traffic | accepted | 2026-09-28 |
+| [0059](0059-a-commit-is-attributed-through-the-tool-call-that-made-it.md) | A commit is attributed through the tool call that made it | accepted | 2026-09-28 |
+| [0060](0060-the-gateway-runs-inside-the-one-innsegl-process.md) | The gateway runs inside the one innsegl process | accepted | 2026-09-28 |
 
 ## Open items
 

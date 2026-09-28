@@ -1,6 +1,6 @@
 # ADR-0059: A commit is attributed through the tool call that made it
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-28
 - Deciders: the operator
 

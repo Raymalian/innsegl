@@ -1,6 +1,6 @@
 # ADR-0060: The gateway runs inside the one innsegl process
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-28
 - Deciders: the operator
 
