@@ -6,21 +6,24 @@ import "net/http"
 
 // guard.go is the one hook every request-time refusal in this package
 // plugs into, from GW-011 (harness shape, this file's own HarnessGuard)
-// through whatever #375 (rate limiting, GW-013) and E15 (identity,
-// ADR-0058 decision 11) add next. Proxy.ServeHTTP (proxy.go) runs every
-// configured Guard, in order, before building or sending the upstream
-// request; the first refusal ends the request there.
+// through GW-013 (rate limiting, limit.go's SessionRateLimitGuard, #375)
+// and whatever E15 (identity, ADR-0058 decision 11) adds next.
+// Proxy.ServeHTTP (proxy.go) runs every configured Guard, in order, before
+// building or sending the upstream request; the first refusal ends the
+// request there.
 //
-// # For #375 and E15
+// # For E15
 //
 // Add a Guard implementation here (or in a file of its own) and either
 // append it to a Proxy's own Guards, or add it to defaultGuards below if it
-// should apply wherever a Proxy exists by default, the way HarnessGuard
-// does. A Guard that lets a request through can hand whatever a later
-// Guard or an observer needs by returning r.WithContext(...) -- see
-// WithIdentification in harness.go for the pattern HarnessGuard uses to
-// carry its Identification forward. Nothing about the forwarding path in
-// proxy.go needs to change again for a new Guard to plug in here.
+// should apply wherever a Proxy exists by default, the way HarnessGuard and
+// SessionRateLimitGuard do. A Guard that lets a request through can hand
+// whatever a later Guard or an observer needs by returning
+// r.WithContext(...) -- see WithIdentification in harness.go for the
+// pattern HarnessGuard uses to carry its Identification forward, and
+// SessionRateLimitGuard (limit.go) for a guard that consumes it. Nothing
+// about the forwarding path in proxy.go needs to change again for a new
+// Guard to plug in here.
 
 // Refusal ends a request before Proxy.ServeHTTP forwards anything. Status
 // is the HTTP status the caller receives: 400 for an unrecognised harness
@@ -89,4 +92,32 @@ func (g *HarnessGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 // every default guard; this is the one place that default is set, so a
 // Proxy refuses an unrecognised harness shape wherever one is constructed,
 // with no wiring needed at each call site.
-var defaultGuards = []Guard{NewHarnessGuard()}
+//
+// The rate-limit guard (limit.go, #375, GW-013) is appended AFTER
+// NewHarnessGuard() deliberately: it reads the session id the harness guard
+// attaches to the request's context, and finding none there is itself a
+// refusal (SessionRateLimitGuard.Check) rather than a guess. It is built
+// here with the package's own shipped defaults
+// (DefaultSessionRateLimitRate, DefaultSessionRateLimitBurst); a caller that
+// needs the configured values from $INNSEGL_GATEWAY_RATE /
+// $INNSEGL_GATEWAY_BURST builds its own limiter and Guards slice instead
+// (cmd/innsegl/gateway.go's openGateway does exactly this).
+var defaultGuards = []Guard{NewHarnessGuard(), newDefaultSessionRateLimitGuard()}
+
+// newDefaultSessionRateLimitGuard builds the rate-limit guard defaultGuards
+// installs, from this package's own shipped defaults. Those defaults are
+// constants this package's own tests hold fixed
+// (TestDefaultSessionRateLimitSettingsAreValid, limit_test.go), so
+// NewSessionRateLimiter refusing here can only mean that guarantee broke --
+// and failing loudly at package initialisation is preferable to shipping a
+// gateway whose default rate limit silently is not there.
+func newDefaultSessionRateLimitGuard() *SessionRateLimitGuard {
+	lim, err := NewSessionRateLimiter(SessionRateLimit{
+		Rate:  DefaultSessionRateLimitRate,
+		Burst: DefaultSessionRateLimitBurst,
+	})
+	if err != nil {
+		panic("innsegl gateway: default session rate limit settings are invalid: " + err.Error())
+	}
+	return NewSessionRateLimitGuard(lim)
+}

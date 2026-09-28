@@ -71,6 +71,13 @@ const (
 	envGatewayListen          = "INNSEGL_GATEWAY_LISTEN"
 	envGatewayUpstream        = "INNSEGL_GATEWAY_UPSTREAM"
 	envGatewayShutdownTimeout = "INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT"
+	// envGatewayRate and envGatewayBurst configure GW-013's per-session
+	// rate limit (internal/gateway/limit.go, #375). See that file's own
+	// doc comment for why the shipped defaults are generous -- a heavy
+	// legitimate session (a main agent and several parallel subagents
+	// sharing one session id) is meant to never hit them.
+	envGatewayRate  = "INNSEGL_GATEWAY_RATE"
+	envGatewayBurst = "INNSEGL_GATEWAY_BURST"
 )
 
 const (
@@ -102,6 +109,11 @@ type gatewayOptions struct {
 	listen          string
 	upstream        string
 	shutdownTimeout time.Duration
+	// rateLimitRate and rateLimitBurst configure GW-013's per-session rate
+	// limit (internal/gateway.SessionRateLimit). validate refuses either
+	// one non-positive before the gateway starts -- see that method.
+	rateLimitRate  int
+	rateLimitBurst int
 
 	// upstreamClient overrides the client openGateway hands to
 	// gateway.NewUpstream. Always nil on every path a flag or an
@@ -124,6 +136,12 @@ func (o gatewayOptions) validate() string {
 		return "-upstream (or $" + envGatewayUpstream + ") is required"
 	case o.shutdownTimeout < 0:
 		return "-shutdown-timeout is negative"
+	case o.rateLimitRate <= 0:
+		return fmt.Sprintf("-rate-limit-rate (or $%s) must be a positive number of requests per "+
+			"second, got %d (GW-013)", envGatewayRate, o.rateLimitRate)
+	case o.rateLimitBurst <= 0:
+		return fmt.Sprintf("-rate-limit-burst (or $%s) must be a positive number of requests, "+
+			"got %d (GW-013)", envGatewayBurst, o.rateLimitBurst)
 	}
 	if problem := upstreamMustBeHTTPS(o.upstream); problem != "" {
 		return problem
@@ -257,6 +275,14 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 		shutdownTimeout = fs.Duration("shutdown-timeout",
 			envDuration(envGatewayShutdownTimeout, defaultGatewayShutdownTimeout),
 			"bound on the orderly shutdown after SIGINT or SIGTERM ($"+envGatewayShutdownTimeout+")")
+		rateLimitRate = fs.Int("rate-limit-rate",
+			envIntOr(envGatewayRate, gateway.DefaultSessionRateLimitRate),
+			"sustained requests per second admitted from one session before GW-013 refuses the "+
+				"rest, alerts once, and forwards nothing ($"+envGatewayRate+")")
+		rateLimitBurst = fs.Int("rate-limit-burst",
+			envIntOr(envGatewayBurst, gateway.DefaultSessionRateLimitBurst),
+			"requests one session may burst instantaneously before the sustained rate applies "+
+				"($"+envGatewayBurst+")")
 	)
 
 	fs.Usage = func() { gatewayUsage(stderr, fs) }
@@ -273,7 +299,13 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 		return gatewayOptions{}, exitUsage, false
 	}
 
-	o := gatewayOptions{listen: *listen, upstream: *upstream, shutdownTimeout: *shutdownTimeout}
+	o := gatewayOptions{
+		listen:          *listen,
+		upstream:        *upstream,
+		shutdownTimeout: *shutdownTimeout,
+		rateLimitRate:   *rateLimitRate,
+		rateLimitBurst:  *rateLimitBurst,
+	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl gateway: %s\n", problem)
 		return gatewayOptions{}, exitUsage, false
@@ -294,6 +326,11 @@ func gatewayUsage(stderr io.Writer, fs *flag.FlagSet) {
 		"one is refused\nbefore anything is relayed, and certificates and hostnames are "+
 		"verified strictly\nagainst the system roots (RM-226, #371). It does not yet relay "+
 		"WebSocket traffic\n(#372), and redacts nothing from a body (#373).\n\n")
+	fprintf(stderr, "Each session (the harness's own session id, not the caller's identity, which "+
+		"this gateway\ndoes not yet check) is rate-limited: over its rate a request is refused "+
+		"with 429, a\nRetry-After header, and nothing forwarded, and an alert is raised once per "+
+		"trip episode\n(RM-230, #375). This is a runaway-loop guard, not an anti-DoS control, "+
+		"until callers are\nauthenticated -- see internal/gateway/limit.go.\n\n")
 	fprintf(stderr, "Exit status:\n")
 	fprintf(stderr, "  %d  the gateway shut down in an orderly way\n", exitOK)
 	fprintf(stderr, "  %d  the command line was not understood\n", exitUsage)
@@ -375,7 +412,35 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		return nil, fmt.Errorf("configure the upstream: %w", err)
 	}
 
-	proxy := &gateway.Proxy{Upstream: up}
+	// GW-013 (#375, RM-230): a per-session rate limit, built from
+	// -rate-limit-rate/-rate-limit-burst rather than
+	// internal/gateway's own package-level defaultGuards, so the
+	// configured values actually take effect here -- defaultGuards uses
+	// the package's shipped defaults unconditionally (internal/gateway's
+	// own guard.go), which is right for a caller that builds a bare Proxy
+	// but not for this command line. o.validate already refused a
+	// non-positive rate or burst before this function was ever called, so
+	// the only way NewSessionRateLimiter fails here is a defect in that
+	// check.
+	rateLimit, err := gateway.NewSessionRateLimiter(gateway.SessionRateLimit{
+		Rate:  o.rateLimitRate,
+		Burst: o.rateLimitBurst,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure the per-session rate limit: %w", err)
+	}
+
+	proxy := &gateway.Proxy{
+		Upstream: up,
+		// The rate-limit guard runs AFTER the harness-shape guard: it
+		// reads the session id the harness guard attaches to the
+		// request's context (internal/gateway/limit.go's own doc
+		// comment).
+		Guards: []gateway.Guard{
+			gateway.NewHarnessGuard(),
+			gateway.NewSessionRateLimitGuard(rateLimit),
+		},
+	}
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(boot, "tcp", o.listen)
@@ -385,7 +450,14 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 
 	return &runningGateway{
 		server: &http.Server{
-			Handler:           proxy,
+			// WithRetryAfterHeader sets the Retry-After header a GW-013
+			// refusal carries -- internal/gateway's Guard interface has no
+			// access to the ResponseWriter to do that itself (limit.go's
+			// own doc comment explains why), so this wraps the whole
+			// handler instead. It is a transparent pass-through for every
+			// response this guard chain does not refuse, streaming
+			// (GW-002) included.
+			Handler:           gateway.WithRetryAfterHeader(proxy),
 			ReadHeaderTimeout: gatewayReadHeaderTimeout,
 		},
 		ln:              ln,
