@@ -18,199 +18,34 @@ package gateway
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"net"
-	"os"
-	"os/exec"
-	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"innsegl.dev/innsegl/internal/ledger"
 )
 
-const (
-	gwPostgresImage    = "postgres:16"
-	gwPostgresUser     = "innsegl"
-	gwPostgresPassword = "innsegl-gateway-test"
-	gwPostgresDB       = "innsegl"
-)
+// The registrar's Postgres helpers, over the package's one shared test
+// Postgres (pgharness_test.go). Two harnesses in one package meant two
+// TestMain functions; #376 and #378 each built one in parallel, and the
+// merge keeps #378's (it carries the skip-versus-failure check, #101) with
+// these names kept as thin adapters so registrar_test.go reads unchanged.
 
-var (
-	gwSharedPG      *gwPGContainer
-	gwDockerSkip    string
-	gwDockerFailure string
-	gwTestDBSeq     atomic.Int64
-)
-
-func TestMain(m *testing.M) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	switch {
-	case os.Getenv("INNSEGL_TEST_NO_DOCKER") != "":
-		gwDockerSkip = "INNSEGL_TEST_NO_DOCKER is set"
-	default:
-		if _, err := exec.LookPath("docker"); err != nil {
-			gwDockerSkip = fmt.Sprintf("no docker binary: %v", err)
-		} else if _, verr := gwDocker(ctx, "version", "--format", "{{.Server.Version}}"); verr != nil {
-			gwDockerSkip = fmt.Sprintf("no reachable docker daemon: %v", verr)
-		} else if pg, serr := gwStartPG(ctx); serr != nil {
-			// Docker answered and the container still did not come up: a
-			// FAILURE, not a skip (#101) — an infrastructure fault reported
-			// as a skip exits zero while GID-002's restore-path composition
-			// through MCPRegistrar never ran.
-			gwDockerFailure = serr.Error()
-		} else {
-			gwSharedPG = pg
-		}
-	}
-	cancel()
-
-	code := m.Run()
-
-	if gwSharedPG != nil {
-		if err := gwSharedPG.remove(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: removing gateway test postgres: %v\n", err)
-		}
-	}
-	os.Exit(code)
-}
-
-// requireGWPG skips the calling test when no real Postgres came up, and
-// fails it outright when Docker is present and working but the container
-// still did not start (#101).
-func requireGWPG(t *testing.T) *gwPGContainer {
+// requireGWPG hands the test the shared Postgres, skipping or failing
+// exactly as requirePG does.
+func requireGWPG(t *testing.T) *pgContainer {
 	t.Helper()
-	switch {
-	case gwDockerFailure != "":
-		t.Fatalf("the gateway test Postgres did not come up, and Docker is present and "+
-			"working: %s\n\nThis is a FAILURE and not a skip: MCPRegistrar's Register and "+
-			"Restore did not run.", gwDockerFailure)
-	case gwSharedPG == nil:
-		t.Skipf("skipping: no real Postgres (%s). MCPRegistrar's composition through "+
-			"internal/mcp proves nothing without one; start Docker and re-run.", gwDockerSkip)
-	}
-	return gwSharedPG
+	return requirePG(t)
 }
 
-func gwDocker(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(args, " "), err, strings.Join(strings.Fields(stderr.String()), " "))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-type gwPGContainer struct {
-	id   string
-	port string
-}
-
-func (c *gwPGContainer) dsn(database string) string {
-	return fmt.Sprintf("postgres://%s:%s@127.0.0.1:%s/%s?sslmode=disable",
-		gwPostgresUser, gwPostgresPassword, c.port, database)
-}
-
-func (c *gwPGContainer) remove() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	_, err := gwDocker(ctx, "rm", "--force", "--volumes", c.id)
-	return err
-}
-
-func gwFreeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
-}
-
-func gwStartPG(ctx context.Context) (*gwPGContainer, error) {
-	port, err := gwFreeHostPort(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("reserve a host port: %w", err)
-	}
-	id, err := gwDocker(ctx, "run", "--detach",
-		// Labelled the same way internal/mcp's own throwaway containers are,
-		// so a leaked one is findable by the same `make test-clean`.
-		"--label", "dev.innsegl.test=1",
-		"--publish", "127.0.0.1:"+port+":5432",
-		"--env", "POSTGRES_USER="+gwPostgresUser,
-		"--env", "POSTGRES_PASSWORD="+gwPostgresPassword,
-		"--env", "POSTGRES_DB="+gwPostgresDB,
-		gwPostgresImage,
-	)
-	if err != nil {
-		return nil, err
-	}
-	c := &gwPGContainer{id: id, port: port}
-	if err := c.waitReady(ctx, 90*time.Second); err != nil {
-		if rerr := c.remove(); rerr != nil {
-			return nil, errors.Join(err, rerr)
-		}
-		return nil, err
-	}
-	return c, nil
-}
-
-func (c *gwPGContainer) waitReady(ctx context.Context, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var last error
-	for time.Now().Before(deadline) {
-		attempt, cancel := context.WithTimeout(ctx, 3*time.Second)
-		conn, err := pgx.Connect(attempt, c.dsn(gwPostgresDB))
-		if err == nil {
-			err = conn.Ping(attempt)
-			_ = conn.Close(attempt)
-		}
-		cancel()
-		if err == nil {
-			return nil
-		}
-		last = err
-		time.Sleep(250 * time.Millisecond)
-	}
-	return fmt.Errorf("postgres in %s never became ready: %w", c.id, last)
-}
-
-// gwFreshDSN creates an empty database inside c and returns its DSN: one
-// database per test, exactly as internal/mcp's own freshDSN does, and for
-// the identical reason — the idempotency store is scoped to a database, so
-// a database per test is a key space per test.
-func gwFreshDSN(t *testing.T, c *gwPGContainer) string {
+// gwFreshDSN creates an empty database of the test's own and returns its DSN.
+func gwFreshDSN(t *testing.T, c *pgContainer) string {
 	t.Helper()
-	name := fmt.Sprintf("gw_%d_%d", os.Getpid()%100000, gwTestDBSeq.Add(1))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	admin, err := pgx.Connect(ctx, c.dsn(gwPostgresDB))
-	if err != nil {
-		t.Fatalf("connect to %s: %v", gwPostgresDB, err)
-	}
-	defer func() { _ = admin.Close(ctx) }()
-
-	if _, err := admin.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
-		t.Fatalf("create database %s: %v", name, err)
-	}
-	return c.dsn(name)
+	return freshDatabase(t, c)
 }
 
-// gwMigrate applies the shipped migrations through the ledger's own runner —
+// gwMigrate applies the shipped migrations through the ledger's own runner --
 // the idempotency table ships in migration 0002, so a database that has run
 // this has the idempotency store's schema too.
 func gwMigrate(t *testing.T, dsn string) {
