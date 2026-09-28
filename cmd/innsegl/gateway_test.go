@@ -20,8 +20,18 @@ import (
 // upstream's own reply. This is `innsegl gateway`'s own contract, run
 // standalone rather than through `serve -also gateway`; GW-004
 // (servealso_test.go) covers the companion's lifecycle inside `serve`.
+//
+// The upstream is TLS, not plain HTTP (GW-007: an http upstream is refused
+// before this command does anything else, see
+// TestGatewayCommandRefusesAnHTTPUpstreamBeforeOpeningAnything below) and
+// the httptest server's own certificate is trusted only by ITS OWN client
+// (upstream.Client()), handed through gatewayOptions.upstreamClient -- the
+// one seam that field exists for. openGateway itself is still the real,
+// unfaked production function; only the client it hands to
+// gateway.NewUpstream comes from the test, exactly the way
+// internal/gateway's own tests already inject a client one level down.
 func TestGatewayCommandRelaysRealTrafficEndToEnd(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-From-Upstream", "yes")
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("ok-from-upstream")); err != nil {
@@ -36,6 +46,7 @@ func TestGatewayCommandRelaysRealTrafficEndToEnd(t *testing.T) {
 	// is what -race exists to catch.
 	addrCh := make(chan string, 1)
 	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
+		o.upstreamClient = upstream.Client()
 		srv, err := openGateway(ctx, o, log)
 		if err == nil {
 			addrCh <- srv.Addr()
@@ -94,6 +105,82 @@ func TestGatewayCommandRelaysRealTrafficEndToEnd(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the gateway did not stop within 5s of its context being cancelled")
+	}
+}
+
+// TestGatewayCommandRefusesAnHTTPUpstreamBeforeOpeningAnything is GW-007:
+// an http -upstream is refused at start-up, naming the flag, and nothing is
+// opened to prove it -- deps.open must never even be called.
+func TestGatewayCommandRefusesAnHTTPUpstreamBeforeOpeningAnything(t *testing.T) {
+	deps := gatewayDeps{open: func(context.Context, gatewayOptions, *serveLog) (servedGateway, error) {
+		t.Fatal("openGateway was called; an http upstream must be refused before anything opens")
+		return nil, nil
+	}}
+
+	var stdout, stderr bytes.Buffer
+	code := runGatewayCommand(
+		[]string{"-listen", "127.0.0.1:0", "-upstream", "http://example.invalid"},
+		&stdout, &stderr, deps)
+
+	if code != exitUsage {
+		t.Errorf("gateway -upstream http://example.invalid = %d, want %d (exitUsage). stderr:\n%s",
+			code, exitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "-upstream") || !strings.Contains(stderr.String(), "https") {
+		t.Errorf("stderr = %q, want it to name -upstream and https", stderr.String())
+	}
+}
+
+// TestGatewayCommandRefusesAnyNonHTTPSScheme covers the rest of GW-007's
+// "or any non-https scheme" clause, not only the http case above.
+func TestGatewayCommandRefusesAnyNonHTTPSScheme(t *testing.T) {
+	for _, upstream := range []string{"ws://example.invalid", "ftp://example.invalid"} {
+		t.Run(upstream, func(t *testing.T) {
+			deps := gatewayDeps{open: func(context.Context, gatewayOptions, *serveLog) (servedGateway, error) {
+				t.Fatal("openGateway was called; a non-https upstream must be refused first")
+				return nil, nil
+			}}
+			var stdout, stderr bytes.Buffer
+			code := runGatewayCommand([]string{"-listen", "127.0.0.1:0", "-upstream", upstream},
+				&stdout, &stderr, deps)
+			if code != exitUsage {
+				t.Errorf("gateway -upstream %s = %d, want %d (exitUsage). stderr:\n%s",
+					upstream, code, exitUsage, stderr.String())
+			}
+		})
+	}
+}
+
+// TestGatewayCommandAcceptsAnyCaseOfHTTPSScheme: the scheme comparison is
+// case-insensitive, per RFC 3986 -- "HTTPS://..." is not a different,
+// unrecognised scheme.
+func TestGatewayCommandAcceptsAnyCaseOfHTTPSScheme(t *testing.T) {
+	if problem := upstreamMustBeHTTPS("HTTPS://example.invalid"); problem != "" {
+		t.Errorf("upstreamMustBeHTTPS(%q) = %q, want no problem", "HTTPS://example.invalid", problem)
+	}
+}
+
+// TestUpstreamMustBeHTTPS is GW-007's own unit: table-driven over the
+// scheme decision alone, independent of the rest of validate().
+func TestUpstreamMustBeHTTPS(t *testing.T) {
+	for _, tc := range []struct {
+		name, upstream string
+		wantProblem    bool
+	}{
+		{"https", "https://api.anthropic.com", false},
+		{"http", "http://api.anthropic.com", true},
+		{"ftp", "ftp://api.anthropic.com", true},
+		{"uppercase scheme", "HTTPS://api.anthropic.com", false},
+		{"no scheme, left to NewUpstream", "not a url", false},
+		{"unparseable, left to NewUpstream", "https://[::1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := upstreamMustBeHTTPS(tc.upstream)
+			if (got != "") != tc.wantProblem {
+				t.Errorf("upstreamMustBeHTTPS(%q) = %q, want a problem: %v",
+					tc.upstream, got, tc.wantProblem)
+			}
+		})
 	}
 }
 

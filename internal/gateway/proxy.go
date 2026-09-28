@@ -86,8 +86,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := p.Upstream.Client.Do(outReq)
 	if err != nil {
-		writeGatewayError(w, http.StatusBadGateway,
-			"innsegl gateway: the upstream request failed: "+err.Error())
+		// classifyUpstreamError (upstream.go, #371/GW-008) turns a TLS,
+		// connect or timeout failure into the status and failure-class
+		// message the caller gets -- never the raw err.Error(), which can
+		// carry transport-internal detail this response has no business
+		// repeating.
+		status, msg := classifyUpstreamError(err)
+		writeGatewayError(w, status, msg)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -227,7 +232,9 @@ func copyHeader(dst, src http.Header) {
 }
 
 // gatewayErrorBody is the JSON body an upstream failure gets instead of a
-// dropped connection. The full error-class vocabulary is #371's; this is
+// dropped connection (GW-008). The failure-class vocabulary itself --
+// "upstream certificate rejected", "upstream connection refused", "upstream
+// request timed out" -- is classifyUpstreamError's, in upstream.go; this is
 // the minimal clean response IP §6.3's "no indefinite hang, no silent
 // drop" reasoning already requires of every other component in this
 // codebase, extended to the one new component that did not exist to need
