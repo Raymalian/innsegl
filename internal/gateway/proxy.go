@@ -46,6 +46,14 @@ type Proxy struct {
 	// with no wiring needed at the call site. An explicit empty slice
 	// (Guards: []Guard{}) opts out of every default guard.
 	Guards []Guard
+
+	// Frames, set or nil. When an incoming request upgrades to a WebSocket
+	// connection (GW-009, #372, see ws.go), every frame relayed in either
+	// direction is handed to it after that frame has already been
+	// forwarded. Nil means nobody is watching, and relaying is unaffected
+	// either way -- the same shape ToolUse already has for an Anthropic
+	// Messages reply.
+	Frames FrameObserver
 }
 
 // ServeHTTP builds the outbound request, sends it, and streams the reply
@@ -75,6 +83,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if next != nil {
 			r = next
 		}
+	}
+
+	// A WebSocket upgrade is relayed by ws.go instead of the ordinary HTTP
+	// path below (GW-009, #372) -- dispatched here, after every guard has
+	// already run, so an unrecognised harness shape is refused (GW-011)
+	// before any upgrade is attempted, exactly as it already is before an
+	// ordinary request is forwarded.
+	if isWebSocketUpgrade(r) {
+		p.relayWebSocket(w, r)
+		return
 	}
 
 	outReq, err := p.buildRequest(r)
