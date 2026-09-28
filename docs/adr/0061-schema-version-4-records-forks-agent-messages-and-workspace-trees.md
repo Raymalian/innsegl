@@ -1,6 +1,6 @@
 # ADR-0061: Schema version 4 records a fork's origin, an agent's own messages, and a per-step workspace tree hash
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -139,7 +139,9 @@ existing member touched.
 3. **`workspace_tree_hash` on `tool_call`.** Optional. String, a git object
    id — the same convention `commit_intent.tree_hash` already uses, not
    `sha256:`-prefixed. Records the hash of the workspace snapshot taken
-   before the request that produced this tool call was forwarded. Needed by
+   when the request carrying this tool call's result reached the gateway,
+   before that request was forwarded: the tree's state after the tool ran,
+   so two consecutive snapshots bound what one step changed. Needed by
    ADR-0060 decision 5. Not a duplicate of `commit_intent.tree_hash`: that
    member is the staged tree of a specific commit (phase A of two-phase
    signing), while this is a per-step snapshot of the whole working tree,
