@@ -102,72 +102,113 @@ invoke is a thin client that reads that payload, attaches the same tool call
 identifier the environment now carries, and asks the core to sign it. The
 client never sees a credential and never runs gitsign itself.
 
-### 4. The core is the checkpoint, and signs in the same place it always did
+### 4. The core is the checkpoint: gates, then Phase A, Phase B, Phase C — one call, IP §6.5's order
 
-Before anything is signed, the core:
+When the signing client (decision 3) hands the payload to the core, that
+single call is where everything happens: gated exactly as `sign_commit`
+already gates it (ADR-0033), then phased exactly as IP §6.5 requires.
 
-- resolves the tool call identifier against the traffic it already relayed
-  for this session — bound to the session, to the agent, and to a bounded
-  time window, so a stale or replayed identifier from a different call or a
-  different run is refused rather than honored;
-- reads the trailers back out of the payload's own message and requires them
-  to be the ones it rendered in step 2 for this same tool call — ADR-0028
+**Gates, before anything is appended:**
+
+- the tool call identifier is resolved against the traffic the core already
+  relayed for this session — bound to the session, to the agent, and to a
+  bounded time window, so a stale or replayed identifier from a different
+  call or a different run is refused. This is the authorisation precondition
+  decision 1's injection exists to satisfy: the `git commit` tool call the
+  core observed earlier is checked here. It is not a phase of its own, and
+  nothing is appended on the strength of having merely observed it;
+- the trailers are read back out of the payload's own message and required
+  to be the ones step 2 rendered for this same tool call — ADR-0028
   decision 4's agreement rule, checked against a payload instead of built by
   hand;
-- reads the author and committer lines out of the payload itself and runs
-  ADR-0028's `CheckAuthor` gate against them, unchanged in what it checks and
+- the author and committer lines are read out of the payload itself and run
+  through ADR-0028's `CheckAuthor` gate, unchanged in what it checks and
   changed only in where the checked bytes come from: a payload the core
   received, not an environment the core built. I6 is enforced exactly as
   before; the harness's own `user.name`/`user.email` never reaches a signed
   commit unadmitted;
-- fetches the run's credential the one way it always has — `get_credential`
-  (ADR-0019, ADR-0033 decision 4) — keyed by the identity the tool call
-  identifier resolved to, and
-- only then invokes gitsign itself, **inside the core process**, with the
-  same discipline ADR-0031 built: trust anchors fetched fresh for this call
-  (decision 2), a child environment built from nothing with no credential
-  cache reachable (decision 3, E8), the generated-and-discarded CT-log key
-  (decision 5), the Rekor entry found by searching for the artifact hash
-  rather than parsed from output (decision 6), skew widening a certificate's
-  window and never a credential's (decision 7).
+- the run's credential is fetched the one way it always has —
+  `get_credential` (ADR-0019, ADR-0033 decision 4) — keyed by the identity
+  the tool call identifier resolved to.
+
+**Phase A.** `commit_intent` is appended, with its tree hash read directly
+out of the payload's own `tree` line. The payload is the unsigned commit
+object the harness's own git already built; its tree is not a claim to be
+checked against a second source, it is the exact bytes about to be signed, so
+there is nothing to derive independently and nothing for it to disagree with.
+
+**Phase B.** gitsign runs **inside the core process**, with the same
+discipline ADR-0031 built: trust anchors fetched fresh for this call
+(decision 2), a child environment built from nothing with no credential
+cache reachable (decision 3, E8), the generated-and-discarded CT-log key
+(decision 5), the Rekor entry found by searching for the artifact hash
+rather than parsed from output (decision 6), skew widening a certificate's
+window and never a credential's (decision 7).
+
+**Phase C.** The core now holds the payload and the CMS signature it just
+produced. Git's construction of a signed commit object from those two pieces
+is fixed and public, so the core computes the resulting commit SHA itself and
+appends `commit_recorded` — referencing the intent, carrying the Rekor
+entry — in the same call, without a callback from the harness's local git.
+It is signed, not landed; section 6 states what that leaves open.
 
 A caller of the client is never handed a credential, a cache, or a private
 key at any point in this chain — signing custody stays exactly where E8 puts
 it, inside the core's own gitsign invocation, one process removed further
 from the harness than before, not one process closer to it.
 
-### 5. Phase A moves to the tool call; Phase B is the step above; Phase C is computed, not awaited
+### 5. The observed tool call is a precondition, never a phase, and never a tree source
 
-`commit_intent` (IP §6.5 Phase A) is appended when the core's traffic relay
-**observes** the `git commit` tool call — before the harness has run it, at
-the same moment the request is already inspected before being forwarded for
-execution. Its tree hash comes from a snapshot the core takes at that same
-moment: a private-index `write-tree` of the working tree the observed call is
-about to act on, the same technique used to snapshot every step for the wider
-flight-recorder record, applied here to the one step that matters for I2.
+Section 1's hook fires when the model asks for a `git commit` — commonly as
+one half of a single Bash call that also stages the change
+(`git add … && git commit …`), so at the moment the core's traffic relay sees
+that request, nothing may be staged yet, and any snapshot taken then would be
+of the working tree, not of the index `git commit` is about to write.
+Treating that moment as Phase A, or a snapshot taken then as
+`commit_intent`'s tree hash, is wrong on the ordinary path, not only the
+adversarial one.
 
-Phase B is decision 4. Phase C no longer waits to be told what SHA the
-harness's local git process assigned to the commit. The payload the core just
-signed already contains the tree, the parent and the final message, and the
-core now holds the CMS signature it produced; git's own construction of the
-signed object from those two pieces is fixed and public, so the core computes
-the resulting commit SHA itself and appends `commit_recorded` from that
-computation, in the same call, without a callback from the harness's git and
-without waiting for a ref to move.
+So the tool call the hook injects an identifier for is exactly what decision
+4's first gate checks and nothing more: proof that a specific, observed
+request authorises whatever payload later arrives claiming it. Phase A does
+not happen until decision 4's call does, and its tree hash is never anything
+but the payload's own. The flight recorder's wider per-step working-tree
+snapshots — taken for the run's timeline, independent of this decision —
+remain a witness an operator or a later audit can read; they are not
+consulted by, and do not gate, anything in this section.
 
-### 6. "Signed, never landed" is a recorded outcome, not drift
+### 6. Signed is recorded; landed is observed; the two are never conflated
 
 Git writes an object before it moves a ref, and its own single-writer
 serialization can refuse the ref update after signing has already happened
-(measured above). When that happens, `commit_recorded` already exists —
-Phase C did not need the ref to land to compute the SHA — for an object that
-is real, signed, and simply unreachable from any branch. Nothing in ADR-0035
-or ADR-0036 needs to search Rekor to find this case, because the ledger
-already has the record the reconciler would otherwise have had to reconstruct;
-REC-003's log-side sweep continues to find only entries no intent ever
-claimed, and this is not one of those. A run that lost the ref race is free
-to retry; its retry is a new tool call, a new intent, and a new signature, and
-none of that requires anyone to notice or repair anything.
+(measured above): of several parallel `git commit`s sharing a repository,
+only one updates the branch, and the others fail to lock the ref **after**
+every one of them was signed. `commit_recorded` (Phase C, decision 4) is
+appended for what decision 4's call actually signed — it states that this
+content was signed, under this run's identity, with this Rekor entry. It
+states nothing about whether the resulting SHA is reachable from any branch,
+and this ADR does not make it start to: doc 02's schema is not extended here
+to carry a landing flag, and inventing one is not this ADR's to do — any
+future need to persist landing as its own ledger fact goes through doc 08's
+protected-surface process (a major release, a migration attestation), the
+same as any other schema change.
+
+Until and unless that happens, whether a signed commit landed is **derived,
+never assumed**: from the tool result of the `git commit` invocation
+itself — which the core's traffic relay already has, including a ref-lock
+failure's own text — and from asking the repository whether the SHA
+`commit_recorded` names is reachable. Both are read-only checks against
+evidence that already exists; neither writes a new ledger event, and a
+caller that wants to know "did this land" asks the question rather than
+reading it off `commit_recorded`'s presence.
+
+REC-003's log-side sweep is unaffected by any of this: its subject is a
+Rekor entry with **no** corresponding intent, and a lost ref race still
+leaves `commit_recorded` on the chain regardless of whether the object is
+reachable, so it is still not that case. A run that lost the ref race is
+free to retry; its retry is a new tool call, a new intent, and a new
+signature, and none of that requires the reconciler to notice or repair
+anything.
 
 ### 7. Any refusal means git creates no commit
 
@@ -236,34 +277,33 @@ shape a minor release is allowed to carry: nothing existing is altered.
   missing one before any signing attempt; N parallel, byte-identical
   `git commit` invocations in one repository each attribute to their own run
   even though at most one becomes reachable from a branch, and the ledger
-  holds a `commit_recorded` for each one that was actually signed; a payload
-  whose tree does not match the Phase A snapshot is refused; a payload whose
-  author does not satisfy the configured policy is refused (I6, unchanged in
-  substance); killing the core, the signing client, or Sigstore at each point
-  above leaves no signed object bearing this run's trailers, asserted the
-  same way ADR-0031/0033 already assert it — by enumerating repository
-  objects, not by reading HEAD; and a `commit_intent` whose tool call never
-  reaches the signing step at all still expires through the existing
-  reconciler window (ADR-0035) exactly as it does today, so the two paths do
-  not need to agree about anything new.
+  holds a `commit_recorded` for each one that was actually signed, with
+  reachability derived per section 6 rather than assumed; a payload whose
+  trailers do not match what step 2 rendered for the same tool call is
+  refused before Phase A; a payload whose author does not satisfy the
+  configured policy is refused (I6, unchanged in substance); killing the
+  core, the signing client, or Sigstore at each point in decision 4's call
+  leaves no signed object bearing this run's trailers, asserted the same way
+  ADR-0031/0033 already assert it — by enumerating repository objects, not by
+  reading HEAD; and a `commit_intent` whose tool call never reaches
+  decision 4's call at all still expires through the existing reconciler
+  window (ADR-0035) exactly as it does today, so the two paths do not need
+  to agree about anything new.
 
-- **What the core can no longer see, synchronously, inside the commit
-  itself: the working tree, and the act of resolving what is staged.**
-  ADR-0033 decision 2's inline `write-tree`-and-compare happened because the
-  core was the process creating the commit. Here the payload's tree, parent
-  and message are whatever the harness's own git process built, and the core
-  learns them only by parsing the payload it is asked to sign. Two things
-  bound that instead of eliminating it: the Phase A snapshot gives the core
-  an independently-derived tree hash taken at the moment the tool call was
-  observed, checked against the payload's own tree at Phase B; and `repo` is
-  derived by the core from the working tree's own git metadata — the same
-  read access the snapshot needs — rather than accepted as a caller-supplied
-  string, closing exactly the gap ADR-0033 decision 3 refused to open by
-  treating `repo` as an identifier rather than a path. What remains is a
-  narrow race between the snapshot and the actual commit, if something
-  changes the index in between without an observed tool call in front of it.
-  **Flagged, not eliminated** — the same posture ADR-0028 took for
-  `core.commentChar`.
+- **What the core no longer independently derives, and does not need to.**
+  ADR-0033 decision 2's inline `write-tree`-and-compare existed to check a
+  caller's CLAIM about which tree it intended to commit against the index's
+  reality — a check that made sense because the core built the commit from a
+  `repo`/`staged_ref` argument pair. Here there is no such claim to check:
+  the payload IS the commit the harness's own git already built, so Phase A's
+  tree hash is read, not verified against a second source. What the core
+  still does not do is watch the harness stage anything, or form any opinion
+  on whether the staged content is what the agent meant to commit — the same
+  scope `sign_commit` always had; signing has never vouched for intent, only
+  for identity and integrity. `repo` is not re-derived at commit time either:
+  it is the one fact ADR-0046 mechanism 1 already establishes once per
+  session, from the main worktree's own git remote, not from a
+  caller-supplied string — reused here rather than asked again.
 
 - **`sign_commit` and the workspace-linking it depends on (ADR-0046
   mechanism 1) are unaffected and keep working.** Doc 02's schema is
@@ -293,8 +333,11 @@ shape a minor release is allowed to carry: nothing existing is altered.
   since that failure was measured, not hypothesized. What is cheap to reverse
   is the call site: the event schema is untouched, `sign_commit` never
   stopped working, and nothing already signed depends on which process
-  invoked gitsign. What would be expensive to reverse is decision 6: once a
-  "signed, never landed" outcome is recorded immediately rather than left for
-  the reconciler to discover, a later design that went back to waiting for a
-  ref to land before recording anything would need to treat every commit
-  already recorded this way as a historical exception.
+  invoked gitsign. What would be more expensive to reverse is decision 4's
+  ordering itself: once Phase A's tree hash is read from the payload rather
+  than derived by the core's own `write-tree`, a later design that went back
+  to requiring a `repo`/`staged_ref` argument pair would need every
+  `commit_intent` written this way treated as a historical exception. Section
+  6's rule stays true either way: landing was never read off
+  `commit_recorded`, so there is nothing about reversing this decision that
+  would let a later reader start doing so retroactively.
