@@ -110,16 +110,16 @@ func (f *fakeTreeLinker) RecordSpawn(_ context.Context, s PendingSpawn) error {
 	return nil
 }
 
-func (f *fakeTreeLinker) ResolveParent(_ context.Context, sessionID, childBrief string) (string, bool, error) {
+func (f *fakeTreeLinker) ResolveParent(_ context.Context, sessionID, childBrief string) (string, string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i, s := range f.spawns {
 		if s.SessionID == sessionID && s.Prompt == childBrief {
 			f.spawns = append(f.spawns[:i], f.spawns[i+1:]...)
-			return s.ParentRunID, true, nil
+			return s.ParentRunID, s.AgentType, true, nil
 		}
 	}
-	return "", false, nil
+	return "", "", false, nil
 }
 
 type fakePolicy struct {

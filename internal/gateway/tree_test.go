@@ -35,7 +35,7 @@ func TestTreeLinkerThreeLevelTree(t *testing.T) {
 	// main spawns LEAD.
 	recordSpawn("run-main", "lead the wave")
 
-	leadParent, ok, err := linker.ResolveParent(ctx, session, "lead the wave")
+	leadParent, _, ok, err := linker.ResolveParent(ctx, session, "lead the wave")
 	if err != nil {
 		t.Fatalf("ResolveParent(LEAD): %v", err)
 	}
@@ -46,7 +46,7 @@ func TestTreeLinkerThreeLevelTree(t *testing.T) {
 	// LEAD spawns WORKER.
 	recordSpawn("run-lead", "build the widget")
 
-	workerParent, ok, err := linker.ResolveParent(ctx, session, "build the widget")
+	workerParent, _, ok, err := linker.ResolveParent(ctx, session, "build the widget")
 	if err != nil {
 		t.Fatalf("ResolveParent(WORKER): %v", err)
 	}
@@ -56,7 +56,7 @@ func TestTreeLinkerThreeLevelTree(t *testing.T) {
 
 	// main itself has no parent: nothing was ever recorded for its own
 	// brief, so it resolves as the root.
-	mainParent, ok, err := linker.ResolveParent(ctx, session, "main's own root brief")
+	mainParent, _, ok, err := linker.ResolveParent(ctx, session, "main's own root brief")
 	if err != nil {
 		t.Fatalf("ResolveParent(main): %v", err)
 	}
@@ -92,7 +92,7 @@ func TestTreeLinkerContainmentNeverLinks(t *testing.T) {
 
 	// mainsBrief CONTAINS childJob as a substring but does not EQUAL it.
 	// A containment rule would match here; exact equality must not.
-	if _, ok, err := linker.ResolveParent(ctx, session, mainsBrief); err != nil {
+	if _, _, ok, err := linker.ResolveParent(ctx, session, mainsBrief); err != nil {
 		t.Fatalf("ResolveParent(main's own brief): %v", err)
 	} else if ok {
 		t.Fatalf("main's own brief (which only CONTAINS the child's job text) matched a pending " +
@@ -101,7 +101,7 @@ func TestTreeLinkerContainmentNeverLinks(t *testing.T) {
 
 	// The real child's brief, byte for byte the spawn's prompt, still links
 	// correctly -- the spawn was not consumed by the containment attempt.
-	parent, ok, err := linker.ResolveParent(ctx, session, childJob)
+	parent, _, ok, err := linker.ResolveParent(ctx, session, childJob)
 	if err != nil {
 		t.Fatalf("ResolveParent(child): %v", err)
 	}
@@ -135,7 +135,7 @@ func TestTreeLinkerNeverLinksAgentToItsOwnSpawn(t *testing.T) {
 	}
 
 	// The parent asking about its OWN brief must never resolve to itself.
-	if parent, ok, err := linker.ResolveParent(ctx, session, parentBrief); err != nil {
+	if parent, _, ok, err := linker.ResolveParent(ctx, session, parentBrief); err != nil {
 		t.Fatalf("ResolveParent(parent's own brief): %v", err)
 	} else if ok {
 		t.Fatalf("the parent (%q) resolved a parent for its OWN brief (got %q); "+
@@ -161,11 +161,11 @@ func TestTreeLinkerOneSpawnLinksOneChild(t *testing.T) {
 		t.Fatalf("RecordSpawn: %v", err)
 	}
 
-	if parent, ok, err := linker.ResolveParent(ctx, session, prompt); err != nil || !ok || parent != "run-parent" {
+	if parent, _, ok, err := linker.ResolveParent(ctx, session, prompt); err != nil || !ok || parent != "run-parent" {
 		t.Fatalf("first ResolveParent = (%q, %v, %v), want (%q, true, nil)", parent, ok, err, "run-parent")
 	}
 
-	if parent, ok, err := linker.ResolveParent(ctx, session, prompt); err != nil {
+	if parent, _, ok, err := linker.ResolveParent(ctx, session, prompt); err != nil {
 		t.Fatalf("second ResolveParent: %v", err)
 	} else if ok {
 		t.Fatalf("second ResolveParent matched an already-consumed spawn, parent %q", parent)
@@ -190,7 +190,7 @@ func TestTreeLinkerParallelIdenticalPromptsLinkOnePerChild(t *testing.T) {
 		t.Fatalf("RecordSpawn(B): %v", err)
 	}
 
-	firstParent, ok, err := linker.ResolveParent(ctx, session, prompt)
+	firstParent, _, ok, err := linker.ResolveParent(ctx, session, prompt)
 	if err != nil || !ok {
 		t.Fatalf("first ResolveParent = (%q, %v, %v)", firstParent, ok, err)
 	}
@@ -198,7 +198,7 @@ func TestTreeLinkerParallelIdenticalPromptsLinkOnePerChild(t *testing.T) {
 		t.Fatalf("first child linked to %q, want the OLDEST spawn (run-A, FIFO)", firstParent)
 	}
 
-	secondParent, ok, err := linker.ResolveParent(ctx, session, prompt)
+	secondParent, _, ok, err := linker.ResolveParent(ctx, session, prompt)
 	if err != nil || !ok {
 		t.Fatalf("second ResolveParent = (%q, %v, %v)", secondParent, ok, err)
 	}
@@ -208,7 +208,7 @@ func TestTreeLinkerParallelIdenticalPromptsLinkOnePerChild(t *testing.T) {
 
 	// A third child with the same prompt now finds nothing: both spawns
 	// were consumed, one each.
-	if _, ok, err := linker.ResolveParent(ctx, session, prompt); err != nil {
+	if _, _, ok, err := linker.ResolveParent(ctx, session, prompt); err != nil {
 		t.Fatalf("third ResolveParent: %v", err)
 	} else if ok {
 		t.Fatal("third ResolveParent matched a spawn, but only two were ever recorded")
@@ -238,7 +238,7 @@ func TestTreeLinkerEvictsSpawnsOlderThanWindow(t *testing.T) {
 	}
 
 	clock.Advance(9 * time.Minute)
-	if _, ok, err := linker.ResolveParent(ctx, "session-window", "a job that is never picked up"); err != nil {
+	if _, _, ok, err := linker.ResolveParent(ctx, "session-window", "a job that is never picked up"); err != nil {
 		t.Fatalf("ResolveParent before the window elapsed: %v", err)
 	} else if !ok {
 		t.Fatal("the spawn was evicted before its window elapsed")
@@ -254,7 +254,7 @@ func TestTreeLinkerEvictsSpawnsOlderThanWindow(t *testing.T) {
 	}
 	clock.Advance(11 * time.Minute)
 
-	parent, ok, err := linker.ResolveParent(ctx, "session-window", "a second job that is never picked up")
+	parent, _, ok, err := linker.ResolveParent(ctx, "session-window", "a second job that is never picked up")
 	if err != nil {
 		t.Fatalf("ResolveParent after the window elapsed: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestTreeLinkerCapsPendingSpawnCount(t *testing.T) {
 	}
 
 	// "job one" was the oldest and must have been evicted to make room.
-	if _, ok, err := linker.ResolveParent(ctx, "session-cap", "job one"); err != nil {
+	if _, _, ok, err := linker.ResolveParent(ctx, "session-cap", "job one"); err != nil {
 		t.Fatalf("ResolveParent(job one): %v", err)
 	} else if ok {
 		t.Fatal("the oldest spawn (job one) should have been evicted at the cap, but it matched")
@@ -300,11 +300,71 @@ func TestTreeLinkerCapsPendingSpawnCount(t *testing.T) {
 
 	// The three most recent are still there.
 	for _, p := range []string{"job two", "job three", "job four"} {
-		if _, ok, err := linker.ResolveParent(ctx, "session-cap", p); err != nil {
+		if _, _, ok, err := linker.ResolveParent(ctx, "session-cap", p); err != nil {
 			t.Fatalf("ResolveParent(%q): %v", p, err)
 		} else if !ok {
 			t.Fatalf("%q should still be pending", p)
 		}
+	}
+}
+
+// TestTreeLinkerResolveParentReturnsTheSpawnsAgentType (RM-263, #416): the
+// matched spawn's own AgentType comes back alongside its parent run id, so
+// a caller can register the child with the type it was actually spawned
+// as, never the harness-asserted agent id ResolveParent's caller separately
+// already has.
+func TestTreeLinkerResolveParentReturnsTheSpawnsAgentType(t *testing.T) {
+	ctx := context.Background()
+	linker := NewInMemoryTreeLinker(TreeLinkerConfig{})
+
+	const session = "session-agent-type"
+
+	if err := linker.RecordSpawn(ctx, PendingSpawn{
+		ParentRunID: "run-parent",
+		SessionID:   session,
+		Prompt:      "do the subtask",
+		AgentType:   "code-reviewer",
+	}); err != nil {
+		t.Fatalf("RecordSpawn: %v", err)
+	}
+
+	parent, agentType, ok, err := linker.ResolveParent(ctx, session, "do the subtask")
+	if err != nil {
+		t.Fatalf("ResolveParent: %v", err)
+	}
+	if !ok || parent != "run-parent" {
+		t.Fatalf("ResolveParent = (%q, %q, %v), want parent %q", parent, agentType, ok, "run-parent")
+	}
+	if agentType != "code-reviewer" {
+		t.Errorf("agentType = %q, want %q", agentType, "code-reviewer")
+	}
+}
+
+// TestTreeLinkerResolveParentAgentTypeIsEmptyWhenTheSpawnCarriedNone: a spawn
+// recorded with no AgentType at all answers an empty string, never a
+// placeholder value of this linker's own invention -- deciding what an
+// empty type falls back to belongs to the caller (identity.go's
+// agentTypeFor), not this file.
+func TestTreeLinkerResolveParentAgentTypeIsEmptyWhenTheSpawnCarriedNone(t *testing.T) {
+	ctx := context.Background()
+	linker := NewInMemoryTreeLinker(TreeLinkerConfig{})
+
+	const session = "session-agent-type-absent"
+
+	if err := linker.RecordSpawn(ctx, PendingSpawn{
+		ParentRunID: "run-parent",
+		SessionID:   session,
+		Prompt:      "do the subtask",
+	}); err != nil {
+		t.Fatalf("RecordSpawn: %v", err)
+	}
+
+	_, agentType, ok, err := linker.ResolveParent(ctx, session, "do the subtask")
+	if err != nil || !ok {
+		t.Fatalf("ResolveParent = (_, %q, %v, %v), want ok", agentType, ok, err)
+	}
+	if agentType != "" {
+		t.Errorf("agentType = %q, want empty", agentType)
 	}
 }
 

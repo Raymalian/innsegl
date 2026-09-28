@@ -267,7 +267,7 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 
 	var parentRunID string
 	if !found {
-		if p, linked, rerr := g.tree.ResolveParent(ctx, id.SessionID, facts.Brief); rerr == nil && linked {
+		if p, _, linked, rerr := g.tree.ResolveParent(ctx, id.SessionID, facts.Brief); rerr == nil && linked {
 			parentRunID = p
 		}
 	}
