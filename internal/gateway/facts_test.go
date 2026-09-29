@@ -332,11 +332,11 @@ func TestRequestFactsReadTheRealClaudeCode2_1Shape(t *testing.T) {
 	    {"type":"text","text":"Run this shell command: echo PROBE-SUB\n\nReport back the exact output."}
 	  ]},
 	  {"role":"system","content":[
-	    {"type":"text","text":"<system-reminder>\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /Users/example/Applications/example-repo\n - Is a git repository: true\n</system-reminder>"}
+	    {"type":"text","text":"<system-reminder>\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /workspace/example-repo\n - Is a git repository: true\n</system-reminder>"}
 	  ]}
 	]}`
 	facts := parseRequestFacts([]byte(body))
-	if facts.WorkingDirectory != "/Users/example/Applications/example-repo" {
+	if facts.WorkingDirectory != "/workspace/example-repo" {
 		t.Errorf("WorkingDirectory = %q, want the one the system-role environment message states", facts.WorkingDirectory)
 	}
 	if want := "Run this shell command: echo PROBE-SUB\n\nReport back the exact output."; facts.Brief != want {
@@ -351,7 +351,7 @@ func TestRequestFactsIgnoreAWorkingDirectoryStatedAfterTheFirstAssistantTurn(t *
 	body := `{"messages":[
 	  {"role":"user","content":[{"type":"text","text":"do the thing"}]},
 	  {"role":"assistant","content":[{"type":"text","text":"ok"}]},
-	  {"role":"user","content":[{"type":"text","text":" - Primary working directory: /Users/example/elsewhere"}]}
+	  {"role":"user","content":[{"type":"text","text":" - Primary working directory: /workspace/elsewhere"}]}
 	]}`
 	if got := parseRequestFacts([]byte(body)).WorkingDirectory; got != "" {
 		t.Fatalf("WorkingDirectory = %q, want empty: a later message must not name the workspace", got)
