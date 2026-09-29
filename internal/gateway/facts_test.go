@@ -315,3 +315,45 @@ func TestComputeFingerprintDeterministicAndSplitSensitive(t *testing.T) {
 		t.Fatal("Fingerprint collided across a different split of the same concatenated bytes")
 	}
 }
+
+// TestRequestFactsReadTheRealClaudeCode2_1Shape holds the shape measured from
+// Claude Code 2.1.283's own first request on 2026-09-29 (a live run through
+// the gateway was refused because this was read wrongly): the first user
+// message carries several system-reminder blocks and then the prompt as its
+// last block, and the environment statement naming the working directory
+// arrives in a SEPARATE message whose role is "system", after it. Paths are
+// synthetic; the structure is the measured one.
+func TestRequestFactsReadTheRealClaudeCode2_1Shape(t *testing.T) {
+	body := `{"model":"m","messages":[
+	  {"role":"user","content":[
+	    {"type":"text","text":"<system-reminder>\nCodebase and user instructions are shown below.\n</system-reminder>"},
+	    {"type":"text","text":"<system-reminder>\nAs you answer the user's questions, you can use the following context.\n</system-reminder>"},
+	    {"type":"text","text":"<system-reminder>\nThe following skills are available.\n</system-reminder>"},
+	    {"type":"text","text":"Run this shell command: echo PROBE-SUB\n\nReport back the exact output."}
+	  ]},
+	  {"role":"system","content":[
+	    {"type":"text","text":"<system-reminder>\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /Users/example/Applications/example-repo\n - Is a git repository: true\n</system-reminder>"}
+	  ]}
+	]}`
+	facts := parseRequestFacts([]byte(body))
+	if facts.WorkingDirectory != "/Users/example/Applications/example-repo" {
+		t.Errorf("WorkingDirectory = %q, want the one the system-role environment message states", facts.WorkingDirectory)
+	}
+	if want := "Run this shell command: echo PROBE-SUB\n\nReport back the exact output."; facts.Brief != want {
+		t.Errorf("Brief = %q, want %q (the prompt block, reminders stripped)", facts.Brief, want)
+	}
+}
+
+// TestRequestFactsIgnoreAWorkingDirectoryStatedAfterTheFirstAssistantTurn
+// keeps the scan to the conversation's opening: a directory named later (for
+// example inside a tool result) never becomes the agent's workspace.
+func TestRequestFactsIgnoreAWorkingDirectoryStatedAfterTheFirstAssistantTurn(t *testing.T) {
+	body := `{"messages":[
+	  {"role":"user","content":[{"type":"text","text":"do the thing"}]},
+	  {"role":"assistant","content":[{"type":"text","text":"ok"}]},
+	  {"role":"user","content":[{"type":"text","text":" - Primary working directory: /Users/example/elsewhere"}]}
+	]}`
+	if got := parseRequestFacts([]byte(body)).WorkingDirectory; got != "" {
+		t.Fatalf("WorkingDirectory = %q, want empty: a later message must not name the workspace", got)
+	}
+}

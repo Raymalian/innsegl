@@ -22,7 +22,7 @@ package gateway
 //     prompt in reminders too, and stripping them is what recovers the
 //     byte-for-byte original text ADR-0058 decision 3's exact-equality
 //     link needs (tree.go).
-//   - WorkingDirectory is read from that SAME first user message, before
+//   - WorkingDirectory is read from any message before the first assistant turn (see parseRequestFacts), before
 //     stripping: Claude Code states it inside its own environment
 //     statement, itself inside a <system-reminder> block. The exact label
 //     this build recognises is pinned by
@@ -194,13 +194,30 @@ func parseRequestFacts(buf []byte) RequestFacts {
 		if m.Role != "user" {
 			continue
 		}
-		blocks, ok := contentBlocks(m.Content)
-		if ok {
-			raw := joinText(blocks)
-			facts.WorkingDirectory = extractWorkingDirectory(raw)
-			facts.Brief = stripSystemReminders(raw)
+		if blocks, ok := contentBlocks(m.Content); ok {
+			facts.Brief = stripSystemReminders(joinText(blocks))
 		}
 		break // only the FIRST user message names the brief.
+	}
+
+	// The working directory is stated in the conversation's opening, but not
+	// necessarily in the first user message: Claude Code 2.1 sends its
+	// environment statement as a separate message with role "system", after
+	// the prompt (measured 2026-09-29, when a live run was refused because
+	// only the first user message was read). Every message before the first
+	// assistant turn is read, whatever its role; nothing after it, so a path
+	// that only appears later (in a tool result, say) never becomes the
+	// agent's workspace.
+	for _, m := range body.Messages {
+		if m.Role == "assistant" {
+			break
+		}
+		if blocks, ok := contentBlocks(m.Content); ok {
+			if dir := extractWorkingDirectory(joinText(blocks)); dir != "" {
+				facts.WorkingDirectory = dir
+				break
+			}
+		}
 	}
 
 	for _, m := range body.Messages {
