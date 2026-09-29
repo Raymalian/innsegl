@@ -739,3 +739,17 @@ func TestAgentMessageRefusesAStoredReplyItCannotRead(t *testing.T) {
 		t.Errorf("class is %s, want %s (err: %v)", got, ClassInvariantViolation, err)
 	}
 }
+
+// TestAgentMessageIdempotencyKeyKeepsADigestShorterThanTheBound holds the
+// truncation's other direction: a digest already within the bound is used
+// whole. A real SHA-256 always exceeds it, so without this case the
+// condition's false branch is never taken (IP §2's 100% branch floor on MCP
+// error-return paths, measured by scripts/branch-coverage.sh).
+func TestAgentMessageIdempotencyKeyKeepsADigestShorterThanTheBound(t *testing.T) {
+	short := "sha256:" + strings.Repeat("a", agentMessageKeyDigestChars-1)
+	got := agentMessageIdempotencyKey(amRunID, AgentMessageRoleBrief, short)
+	want := agentMessageKeyPrefix + amRunID + "-" + AgentMessageRoleBrief + "-" + strings.Repeat("a", agentMessageKeyDigestChars-1)
+	if got != want {
+		t.Fatalf("key = %q, want %q (a short digest must be used whole)", got, want)
+	}
+}
