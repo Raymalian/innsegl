@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,6 +22,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/ledger"
+	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/rundir"
 )
 
@@ -116,6 +118,15 @@ const (
 	// gateway.NewBackstop read the identical setting from the identical
 	// variable.
 	envGatewayBackstopInterval = "INNSEGL_GATEWAY_BACKSTOP_INTERVAL"
+
+	// envAgentMessageKeyID configures which derived key RM-237 (#382)'s
+	// agent_message recorder keys payload_digest under (ADR-0061 decision 2
+	// and its 2026-09-28 amendment). mcp.ValidateAgentMessageKeyID holds
+	// whatever this names to doc 02 §5's identifier grammar; a value that
+	// fails it is refused at start-up (gatewayOptions.validate), before
+	// anything is relayed, exactly as every other malformed setting in this
+	// file is.
+	envAgentMessageKeyID = "INNSEGL_AGENT_MESSAGE_KEY_ID"
 )
 
 const (
@@ -155,6 +166,16 @@ const (
 	// gives construction: a sweep that hangs is worse than one that fails
 	// and tries again next tick.
 	gatewaySweepTimeout = 5 * time.Minute
+
+	// defaultAgentMessageKeyID is what a deployment that never rotated the
+	// agent-message key uses. It is one deployment-wide label, not a
+	// per-deployment secret -- ADR-0061's own key is derived from
+	// -identity-secret, which IS per-deployment (agentmessagekey.go's own
+	// doc comment) -- so a shared literal default costs nothing: rotating
+	// away from it is deploying a new -agent-message-key-id, at which point
+	// this default is simply the id an event minted before that rotation
+	// stays verifiable under, forever.
+	defaultAgentMessageKeyID = "gateway-v1"
 )
 
 // gatewayOptions is the resolved command line.
@@ -177,6 +198,25 @@ type gatewayOptions struct {
 	// backstopInterval is how often the silence backstop sweeps, once dsn is
 	// set. validate refuses a non-positive value.
 	backstopInterval time.Duration
+
+	// identitySecret is RM-237 (#382)'s own OPTIONAL setting: the SAME
+	// per-deployment secret serve's own -identity-secret (or
+	// -identity-secret-file) derives run tokens and pseudonyms from
+	// (RM-079, RM-084, RM-212), resolved the identical way here
+	// (resolveGatewayIdentitySecret) so the two commands can never disagree
+	// about what it is. Empty means no agent_message is ever recorded from
+	// this gateway -- logged once at start-up (configureGatewayAgentMessages)
+	// -- exactly the same "unset means off" posture dsn itself has for the
+	// rest of RM-235's identity stack.
+	identitySecret string
+	// agentMessageKeyID is RM-237's own key id (ADR-0061's 2026-09-28
+	// amendment): validated against doc 02 §5's grammar at start-up
+	// (validate, below), defaulted to defaultAgentMessageKeyID. Meaningless
+	// on its own when identitySecret is empty -- there is no key to derive
+	// an id for -- but validated regardless, so a malformed value is caught
+	// before a deployment relies on it, whether or not it also set a
+	// secret yet.
+	agentMessageKeyID string
 
 	// upstreamClient overrides the client openGateway hands to
 	// gateway.NewUpstream. Always nil on every path a flag or an
@@ -211,6 +251,10 @@ func (o gatewayOptions) validate() string {
 	}
 	if problem := upstreamMustBeHTTPS(o.upstream); problem != "" {
 		return problem
+	}
+	if err := mcp.ValidateAgentMessageKeyID(o.agentMessageKeyID); err != nil {
+		return fmt.Sprintf("-agent-message-key-id (or $%s) %q: %v",
+			envAgentMessageKeyID, o.agentMessageKeyID, err)
 	}
 	return ""
 }
@@ -357,6 +401,20 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 			envDuration(envGatewayBackstopInterval, defaultGatewayBackstopInterval),
 			"how often the silence backstop sweeps once -dsn is set (ADR-0058 decision 7c) "+
 				"($"+envGatewayBackstopInterval+")")
+		identitySecret = fs.String("identity-secret", os.Getenv(envIdentitySecret),
+			"the SAME per-deployment secret serve's own -identity-secret derives run tokens "+
+				"and pseudonyms from -- RM-237 (#382) keys agent_message.payload_digest from it "+
+				"too (ADR-0061 decision 2). OPTIONAL: unset means no agent_message is ever "+
+				"recorded from this gateway ($"+envIdentitySecret+")")
+		identitySecretFile = fs.String("identity-secret-file", os.Getenv(envIdentitySecretFile),
+			"file holding the secret, instead of -identity-secret -- the SAME file serve's own "+
+				"-identity-secret-file names ($"+envIdentitySecretFile+")")
+		agentMessageKeyID = fs.String("agent-message-key-id",
+			envOr(envAgentMessageKeyID, defaultAgentMessageKeyID),
+			"doc 02 §5 identifier naming which derived key RM-237's agent_message.payload_digest "+
+				"is under (ADR-0061's 2026-09-28 amendment); rotate by deploying a new value here "+
+				"-- an event minted under an earlier id stays verifiable under that id forever "+
+				"($"+envAgentMessageKeyID+")")
 	)
 
 	fs.Usage = func() { gatewayUsage(stderr, fs) }
@@ -373,20 +431,61 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 		return gatewayOptions{}, exitUsage, false
 	}
 
+	resolvedSecret, secretProblem := resolveGatewayIdentitySecret(*identitySecret, *identitySecretFile)
+	if secretProblem != "" {
+		fprintf(stderr, "innsegl gateway: %s\n", secretProblem)
+		return gatewayOptions{}, exitUsage, false
+	}
+
 	o := gatewayOptions{
-		listen:           *listen,
-		upstream:         *upstream,
-		shutdownTimeout:  *shutdownTimeout,
-		rateLimitRate:    *rateLimitRate,
-		rateLimitBurst:   *rateLimitBurst,
-		dsn:              *dsn,
-		backstopInterval: *backstopInterval,
+		listen:            *listen,
+		upstream:          *upstream,
+		shutdownTimeout:   *shutdownTimeout,
+		rateLimitRate:     *rateLimitRate,
+		rateLimitBurst:    *rateLimitBurst,
+		dsn:               *dsn,
+		backstopInterval:  *backstopInterval,
+		identitySecret:    resolvedSecret,
+		agentMessageKeyID: *agentMessageKeyID,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl gateway: %s\n", problem)
 		return gatewayOptions{}, exitUsage, false
 	}
 	return o, exitOK, true
+}
+
+// resolveGatewayIdentitySecret reads -identity-secret-file into the
+// resolved secret, or reports the configuration problem that stops this
+// command starting -- the SAME two-sources-one-secret rule
+// serveOptions.resolveIdentitySecret (serve.go) already enforces for
+// `serve`'s own -identity-secret/-identity-secret-file, restated here
+// rather than shared as a method: the two option types agree on what the
+// rule says, not on how their own fields are named, and gatewayOptions has
+// no serveOptions to call it on. secretFile empty means secret (however it
+// was set, including "") is used as given -- the OPTIONAL, unset-means-off
+// case this file's own doc comments describe throughout.
+func resolveGatewayIdentitySecret(secret, secretFile string) (resolved, problem string) {
+	if secretFile == "" {
+		return secret, ""
+	}
+	if secret != "" {
+		return "", "-identity-secret and -identity-secret-file (or $" + envIdentitySecret +
+			" and $" + envIdentitySecretFile + ") are both set: two sources for one secret " +
+			"is a configuration that can disagree with itself. Supply exactly one"
+	}
+	body, err := os.ReadFile(filepath.Clean(secretFile))
+	if err != nil {
+		return "", "-identity-secret-file (or $" + envIdentitySecretFile + "): " + err.Error() +
+			". A deployment that generates the secret into a volume must run that one-shot to " +
+			"completion before this process starts"
+	}
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return "", "-identity-secret-file (or $" + envIdentitySecretFile + ") " + secretFile +
+			" holds no secret: an empty or half-written file must not become a zero-length key"
+	}
+	return trimmed, ""
 }
 
 func gatewayUsage(stderr io.Writer, fs *flag.FlagSet) {
@@ -610,14 +709,15 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	// names a database. See this file's own doc comment, "Identity from
 	// traffic", for what stays unchanged when it does not.
 	var identityGuard gateway.Guard
+	var witnesses []gateway.Guard
 	var toolUse gateway.ToolUseObserver
 	if o.dsn != "" {
-		ig, ise, stackErr := openIdentityStack(boot, o, running)
+		ig, wit, ise, stackErr := openIdentityStack(boot, o, running)
 		if stackErr != nil {
 			running.Close()
 			return nil, fmt.Errorf("configure the identity stack: %w", stackErr)
 		}
-		identityGuard, toolUse = ig, ise
+		identityGuard, witnesses, toolUse = ig, wit, ise
 	}
 
 	proxy := &gateway.Proxy{
@@ -626,11 +726,11 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		// gateway.Guards is internal/gateway's OWN ordered guard chain
 		// (guard.go) -- the harness-shape guard, then (when identityGuard is
 		// non-nil) the identity guard, then the rate-limit guard built from
-		// rateLimit, in that order. This command does not maintain a
-		// second, hand-written copy of that ordering: a guard added inside
-		// Guards reaches this command line for free, with nothing here to
-		// remember to update.
-		Guards: gateway.Guards(rateLimit, identityGuard),
+		// rateLimit, then every witness in witnesses, in that order. This
+		// command does not maintain a second, hand-written copy of that
+		// ordering: a guard added inside Guards reaches this command line
+		// for free, with nothing here to remember to update.
+		Guards: gateway.Guards(rateLimit, identityGuard, witnesses...),
 	}
 
 	var lc net.ListenConfig
@@ -772,27 +872,67 @@ func isLoopbackRemoteAddr(remoteAddr string) bool {
 // workspace.go -- never configured here; see this file's own doc comment),
 // the tree linker, the shipped LifecyclePolicy, and the silence backstop,
 // wired onto running so Serve can sweep it and Close can release every
-// pool this function opens. It returns the identity guard, the tool-use
-// spawn recorder (Proxy.ToolUse) and the SessionEnder for the loopback
-// session-end endpoint.
+// pool this function opens.
+//
+// RM-236 (#381), E16: this is also where the flight recorder's own
+// witness is composed in. gateway.ToolCallRecorder pairs each tool_use a
+// reply streams with the tool_result the next request carries for it and
+// records one `tool_call` per pair through the MCP's own observe_tool_call
+// service, in process (internal/mcp/gatewayrecord.go) -- the SAME
+// observe_tool_call this same process's `serve -also gateway` already
+// configures from `-observe-body-dir` (servewiring.go), reached here only
+// through mcp.RecordGatewayToolCall's own package-level seam, never
+// re-configured. A gateway run standalone with observe_tool_call
+// unconfigured records nothing either, exactly as failing to configure it
+// already answers every other in-process caller (mcp.RecordGatewayToolCall's
+// own doc comment): a logged, counted failure per attempt, never a reason
+// to refuse a request.
+//
+// Its workspace-snapshot witness (ADR-0061 member 3) reuses
+// envObserveBodyDir (serve.go), the SAME body-store volume observe_tool_call
+// itself is configured onto (ADR-0060 decision 5: "inside the existing
+// body-store volume") -- a dedicated subdirectory of it, never a second
+// volume or a second flag. Unset, this recorder never attaches a
+// workspace_tree_hash; every tool_call it records still carries the rest.
+//
+// RM-237 (#382), E16: the SECOND witness composed in here is the brief and
+// assistant-text recorder, gateway.MessageRecorder, wired onto RM-237's own
+// mcp.ConfigureAgentMessageRecorder by configureGatewayAgentMessages
+// (below). Unlike observe_tool_call, this recorder's dependencies are built
+// HERE, independently of servewiring.go: agent_message is not one of doc 01
+// §4's eight tools (internal/mcp/agentmessage.go's own doc comment), so it
+// has no reason to wait on that file's own tool-by-tool bookkeeping, and
+// building it here is what makes it work identically whether this process
+// is `serve -also gateway` or a genuinely standalone `innsegl gateway -dsn`
+// -- both run through this same function.
+//
+// guard.go's own Guards function now takes every witness as its own
+// variadic parameter (that function's own doc comment), so this function
+// returns the identity guard and its witnesses SEPARATELY rather than
+// composing them into one Guard first (gateway.ChainGuards, RM-236's own
+// stand-in for the room Guards used to have for exactly one identity slot,
+// is gone: see Guards' own doc comment for why growing a second such list
+// was worth closing rather than working around again here). Proxy still
+// has exactly one ToolUse slot, so CombineToolUseObservers stays needed for
+// that one -- record.go's own doc comment says why.
 func openIdentityStack(
 	ctx context.Context, o gatewayOptions, running *runningGateway,
-) (gateway.Guard, gateway.ToolUseObserver, error) {
+) (identityGuard gateway.Guard, witnesses []gateway.Guard, toolUse gateway.ToolUseObserver, err error) {
 	mappings, err := gateway.OpenPostgresMappingStore(ctx, o.dsn)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open the run mapping store: %w", err)
+		return nil, nil, nil, fmt.Errorf("open the run mapping store: %w", err)
 	}
 	running.closers = append(running.closers, mappings.Close)
 
 	store, err := ledger.Open(ctx, o.dsn)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open the ledger: %w", err)
+		return nil, nil, nil, fmt.Errorf("open the ledger: %w", err)
 	}
 	running.closers = append(running.closers, store.Close)
 
 	dir, err := rundir.New(rundir.Config{Events: store})
 	if err != nil {
-		return nil, nil, fmt.Errorf("build the run directory: %w", err)
+		return nil, nil, nil, fmt.Errorf("build the run directory: %w", err)
 	}
 	runStates := gateway.NewCredentialRunStates(dir, ledger.RestoreHorizonFromEnv(), nil)
 
@@ -807,7 +947,7 @@ func openIdentityStack(
 	// running.sessionEnder's own ticker).
 	sessionEndSignals := gateway.NewSessionEndSignals(0)
 
-	identityGuard, err := gateway.NewIdentityGuard(gateway.IdentityGuardConfig{
+	identityGuard, err = gateway.NewIdentityGuard(gateway.IdentityGuardConfig{
 		Mappings:          mappings,
 		Tree:              tree,
 		Policy:            gateway.NewPolicy(),
@@ -817,12 +957,12 @@ func openIdentityStack(
 		SessionEndSignals: sessionEndSignals,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("build the identity guard: %w", err)
+		return nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)
 	}
 
 	candidates, err := gateway.OpenSilentRunCandidates(ctx, o.dsn)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open the silent-run enumeration: %w", err)
+		return nil, nil, nil, fmt.Errorf("open the silent-run enumeration: %w", err)
 	}
 	running.closers = append(running.closers, candidates.Close)
 
@@ -831,7 +971,7 @@ func openIdentityStack(
 		Horizon:   backstopHorizonFromEnv(),
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("build the silence backstop: %w", err)
+		return nil, nil, nil, fmt.Errorf("build the silence backstop: %w", err)
 	}
 	running.backstop = backstop
 	running.backstopCandidates = candidates
@@ -841,13 +981,138 @@ func openIdentityStack(
 		Rate: sessionEndRateLimitRate, Burst: sessionEndRateLimitBurst,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("build the session-end rate limit: %w", err)
+		return nil, nil, nil, fmt.Errorf("build the session-end rate limit: %w", err)
 	}
 	running.sessionEnder = gateway.NewSessionEnder(sessionEndSignals, mappings, registrar, sessionEndGraceFromEnv(), nil)
 	running.sessionEndRateLimit = sessionEndRateLimit
 
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
-	return identityGuard, spawnRecorder, nil
+
+	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running))
+	toolUse = gateway.CombineToolUseObservers(spawnRecorder, toolCallRecorder)
+
+	amRestore, err := configureGatewayAgentMessages(o, dir, store, running)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("configure agent-message recording: %w", err)
+	}
+	if amRestore != nil {
+		running.closers = append(running.closers, amRestore)
+	}
+	messageGuard, err := gateway.NewMessageRecorder(gateway.MessageRecorderConfig{
+		Recorder: gateway.NewMCPAgentMessageRecorder(),
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build the message recorder: %w", err)
+	}
+
+	witnesses = []gateway.Guard{gateway.NewToolCallRecordGuard(toolCallRecorder), messageGuard}
+	return identityGuard, witnesses, toolUse, nil
+}
+
+// configureGatewayAgentMessages wires RM-237 (#382)'s agent_message
+// recorder for THIS process -- standalone `innsegl gateway -dsn` and
+// `serve -also gateway` alike, since both run through openGateway ->
+// openIdentityStack. Unlike observe_tool_call (servewiring.go's own,
+// required before internal/gateway/record.go's ToolCallRecorder can record
+// anything at all -- see openIdentityStack's own doc comment), this
+// recorder's dependencies are built HERE: agent_message is not one of doc
+// 01 §4's eight tools and has no reason to wait on servewiring.go's own
+// tool-by-tool bookkeeping.
+//
+// dir and store are the SAME run directory and ledger openIdentityStack
+// already built for the identity stack -- no second connection, no second
+// CredentialRuns. idempotency is a NEW store built here, over the SAME dsn
+// (store.Pool()): a stateless wrapper over one Postgres table, so a second
+// instance of it disagrees with nobody. BodyDir reuses envObserveBodyDir --
+// the SAME env var newGatewaySnapshotter already reads, for the identical
+// reason: one volume, no new flag.
+//
+// Both identitySecret and the body directory are OPTIONAL; either being
+// empty means no agent_message is ever recorded from this process, logged
+// once here rather than failing start-up -- the same "unset means off"
+// posture every other optional setting in this file takes. A restore
+// function is returned only when Configure actually ran, so a caller need
+// not guard against appending a nil closer.
+func configureGatewayAgentMessages(
+	o gatewayOptions, dir *rundir.Directory, store *ledger.Store, running *runningGateway,
+) (func(), error) {
+	bodyDir := os.Getenv(envObserveBodyDir)
+	switch {
+	case o.identitySecret == "":
+		running.log.info("agent-message recording is not configured: -identity-secret " +
+			"(or $" + envIdentitySecret + "/$" + envIdentitySecretFile + ") is unset, so no brief " +
+			"or assistant turn will ever be recorded from this gateway")
+		return nil, nil
+	case bodyDir == "":
+		running.log.info("agent-message recording is not configured: $" + envObserveBodyDir +
+			" is unset, so there is nowhere to keep a recorded brief or message")
+		return nil, nil
+	}
+
+	idem := mcp.NewIdempotencyStore(store.Pool())
+	restore, err := mcp.ConfigureAgentMessageRecorder(mcp.AgentMessageRecorderConfig{
+		Runs:           dir,
+		Ledger:         store,
+		Idempotency:    idem,
+		BodyDir:        bodyDir,
+		IdentitySecret: o.identitySecret,
+		KeyID:          o.agentMessageKeyID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	running.log.info("agent-message recording is configured",
+		"body_dir", bodyDir, "key_id", o.agentMessageKeyID)
+	return restore, nil
+}
+
+// newToolCallRecorderConfig builds RM-236 (#381)'s own
+// gateway.ToolCallRecorderConfig: OnRecordFailure logs loudly through
+// running's own log (this package's one structured logger), and Snapshots
+// is set only when the workspace-snapshot store could actually be built
+// -- never assigned a typed-nil *gateway.Snapshotter, which
+// gateway.ToolCallRecorderConfig's own doc comment on Snapshots warns
+// against for exactly this reason: an interface holding one is not itself
+// nil.
+func newToolCallRecorderConfig(running *runningGateway) gateway.ToolCallRecorderConfig {
+	cfg := gateway.ToolCallRecorderConfig{
+		Trigger: gateway.NewSnapshotTrigger(),
+		OnRecordFailure: func(err error) {
+			running.log.error("gateway: could not record a tool call", "err", err)
+		},
+	}
+	if snap := newGatewaySnapshotter(running); snap != nil {
+		cfg.Snapshots = snap
+	}
+	return cfg
+}
+
+// newGatewaySnapshotter builds ADR-0060 decision 5's per-repository
+// snapshot store, inside a dedicated subdirectory of the SAME body-store
+// volume observe_tool_call is configured onto (envObserveBodyDir,
+// serve.go) -- no new flag, no new volume. Unset ($INNSEGL_MCP_LOG_DIR
+// empty, or the value is not usable as an absolute store root), this
+// returns nil and every tool_call this replica records simply carries no
+// workspace_tree_hash -- ADR-0061 member 3 is optional for exactly this
+// case, and a missing snapshotter is reported the same way a snapshot
+// failure already is (record.go's own OnRecordFailure), once, at start-up,
+// rather than once per request.
+func newGatewaySnapshotter(running *runningGateway) *gateway.Snapshotter {
+	root := os.Getenv(envObserveBodyDir)
+	if root == "" {
+		running.log.info("workspace snapshotting is not configured: " +
+			"$" + envObserveBodyDir + " is unset, so recorded tool calls will carry no workspace_tree_hash")
+		return nil
+	}
+	snap, err := gateway.NewSnapshotter(gateway.SnapshotConfig{
+		StoreRoot: filepath.Join(root, "gateway-snapshots"),
+	})
+	if err != nil {
+		running.log.warn("workspace snapshotting is not available; recorded tool calls will carry no "+
+			"workspace_tree_hash", "err", err)
+		return nil
+	}
+	return snap
 }
 
 // sessionEndRateLimitRate and sessionEndRateLimitBurst bound

@@ -375,9 +375,12 @@ func sendAndDrainGWIdentityMessage(t *testing.T, addr, sessionID, agentID, workd
 }
 
 // writeGWIdentitySSEToolUse writes one complete Agent tool_use block whose
-// input is exactly {"prompt": prompt}, flushing after every event -- the
-// minimal recorded shape sse.go's own messagesInterpreter reads.
-func writeGWIdentitySSEToolUse(t *testing.T, w http.ResponseWriter, prompt string) {
+// input is exactly {"prompt": prompt, "subagent_type": subagentType},
+// flushing after every event -- the minimal recorded shape sse.go's own
+// messagesInterpreter reads. subagentType may be empty, which marshals as
+// an empty "subagent_type" field -- RM-263 (#416) reads that the same as a
+// field that was never sent at all.
+func writeGWIdentitySSEToolUse(t *testing.T, w http.ResponseWriter, prompt, subagentType string) {
 	t.Helper()
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -391,7 +394,7 @@ func writeGWIdentitySSEToolUse(t *testing.T, w http.ResponseWriter, prompt strin
 	}
 	write("content_block_start",
 		`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Agent","input":{}}}`)
-	inputJSON, err := json.Marshal(map[string]string{"prompt": prompt})
+	inputJSON, err := json.Marshal(map[string]string{"prompt": prompt, "subagent_type": subagentType})
 	if err != nil {
 		t.Fatalf("marshal tool_use input: %v", err)
 	}
@@ -486,6 +489,31 @@ func runRegisteredForkedFrom(t *testing.T, store *ledger.Store, runID string) (s
 	return "", false
 }
 
+// runRegisteredAgentType reads runID's own run_registered event straight off
+// the real chain and answers its agent_type (RM-263, #416) -- the real,
+// unpseudonymised value (this file's own fixture configures
+// identity.ModeLiteral), and whether the event was found at all.
+func runRegisteredAgentType(t *testing.T, store *ledger.Store, runID string) (string, bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	recs, err := store.EventsForRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("EventsForRun(%q): %v", runID, err)
+	}
+	for _, rec := range recs {
+		if rec["event_type"] != "run_registered" {
+			continue
+		}
+		agentType, ok := rec["agent_type"].(string)
+		if !ok {
+			t.Fatalf("run_registered for %q carries no agent_type", runID)
+		}
+		return agentType, true
+	}
+	return "", false
+}
+
 // ---------------------------------------------------------------------------
 // GID-012: identity cannot be issued, end to end through the real
 // openGateway. describe_workspace is deliberately left unconfigured (no
@@ -543,6 +571,12 @@ const (
 	gwTreeSession     = "d5a6a1a0-0000-4000-8000-000000000002"
 	gwTreeLeadAgent   = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	gwTreeWorkerAgent = "11111111-2222-3333-4444-555555555555"
+	// gwTreeLeadType and gwTreeWorkerType are the subagent_type each spawn
+	// asks for (RM-263, #416) -- deliberately distinct from each other and
+	// from gwTreeLeadAgent/gwTreeWorkerAgent's own UUIDs, so a run recorded
+	// with the wrong one (its agent id, or its sibling's type) is caught.
+	gwTreeLeadType   = "wave-lead"
+	gwTreeWorkerType = "widget-worker"
 )
 
 func TestThreeLevelTreeRegistersEndToEndWithCorrectParentRunID(t *testing.T) {
@@ -554,9 +588,9 @@ func TestThreeLevelTreeRegistersEndToEndWithCorrectParentRunID(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		switch r.Header.Get("X-Claude-Code-Agent-Id") {
 		case "":
-			writeGWIdentitySSEToolUse(t, w, "lead brief")
+			writeGWIdentitySSEToolUse(t, w, "lead brief", gwTreeLeadType)
 		case gwTreeLeadAgent:
-			writeGWIdentitySSEToolUse(t, w, "worker brief")
+			writeGWIdentitySSEToolUse(t, w, "worker brief", gwTreeWorkerType)
 		default:
 			// The worker spawns nothing further.
 		}
@@ -594,6 +628,34 @@ func TestThreeLevelTreeRegistersEndToEndWithCorrectParentRunID(t *testing.T) {
 	}
 	if got := f.ids.entryCount(); got != 3 {
 		t.Errorf("SPIRE holds %d entries after the tree registered, want 3 (one per run)", got)
+	}
+
+	// RM-263 (#416): each run's recorded agent_type is the type its OWN
+	// spawn asked for -- never its harness-asserted agent id, and never
+	// conflated with a sibling's type -- and the root's is the harness's
+	// own fixed value.
+	mainType, ok := runRegisteredAgentType(t, f.store, main.runID)
+	if !ok {
+		t.Fatalf("no run_registered event was appended to the real chain for main %q", main.runID)
+	}
+	if mainType != "main" {
+		t.Errorf("main's agent_type = %q, want %q (the root's fixed type)", mainType, "main")
+	}
+	leadType, ok := runRegisteredAgentType(t, f.store, lead.runID)
+	if !ok {
+		t.Fatalf("no run_registered event was appended to the real chain for lead %q", lead.runID)
+	}
+	if leadType != gwTreeLeadType {
+		t.Errorf("lead's agent_type = %q, want %q (the spawn's own type, not its agent id %q)",
+			leadType, gwTreeLeadType, gwTreeLeadAgent)
+	}
+	workerType, ok := runRegisteredAgentType(t, f.store, worker.runID)
+	if !ok {
+		t.Fatalf("no run_registered event was appended to the real chain for worker %q", worker.runID)
+	}
+	if workerType != gwTreeWorkerType {
+		t.Errorf("worker's agent_type = %q, want %q (the spawn's own type, not its agent id %q or lead's type %q)",
+			workerType, gwTreeWorkerType, gwTreeWorkerAgent, gwTreeLeadType)
 	}
 }
 

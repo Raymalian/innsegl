@@ -130,15 +130,28 @@ type PendingSpawn struct {
 	ParentRunID string
 	SessionID   string
 	Prompt      string // byte for byte the spawn's prompt input
-	ObservedAt  time.Time
+	// AgentType is the spawn's own asked-for agent type -- the Agent/Task
+	// tool call's own subagent_type input (RM-263, #416), never the
+	// harness-asserted agent id. Empty when the spawning tool_use carried
+	// no such field; a caller resolving this spawn decides what an empty
+	// value falls back to (identity.go's agentTypeFor), not this contract.
+	// ADR-0041's pseudonymisation is untouched: this is the same raw value
+	// register_agent's own AgentType input already carries and already
+	// pseudonymises into the SPIFFE ID while recording the real value on
+	// run_registered unchanged.
+	AgentType  string
+	ObservedAt time.Time
 }
 
 // TreeLinker links a child to its parent by exact equality of the child's
 // brief and a pending spawn's prompt, never containment (ADR-0058 decision 3).
-// One spawn links exactly one child.
+// One spawn links exactly one child. ResolveParent answers the matched
+// spawn's AgentType alongside its parent run id (RM-263, #416) -- empty when
+// the matched spawn carried none -- so a caller can register the child with
+// the type it was actually spawned as.
 type TreeLinker interface {
 	RecordSpawn(ctx context.Context, s PendingSpawn) error
-	ResolveParent(ctx context.Context, sessionID, childBrief string) (parentRunID string, ok bool, err error)
+	ResolveParent(ctx context.Context, sessionID, childBrief string) (parentRunID, agentType string, ok bool, err error)
 }
 
 // Decision is the lifecycle policy's answer for one request.
