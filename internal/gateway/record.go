@@ -476,10 +476,11 @@ func buildToolCallBody(call pendingCall, result *observedToolResult) []byte {
 // unchanged either way.
 // ---------------------------------------------------------------------------
 
-// ToolCallRecordGuard is #381's own Guard, placed after the identity guard
-// in the chain it is composed into (ChainGuards, below) so it can read the
-// run id and RequestFacts an earlier IdentityGuard.Check already attached
-// to the request's context (identity.go, facts.go).
+// ToolCallRecordGuard is #381's own Guard, passed to guard.go's Guards as
+// one of its witnesses so it can read the run id and RequestFacts an
+// earlier IdentityGuard.Check already attached to the request's context
+// (identity.go, facts.go) -- Guards places every witness after the
+// identity guard for exactly that reason.
 type ToolCallRecordGuard struct {
 	recorder *ToolCallRecorder
 }
@@ -516,61 +517,32 @@ func (g *ToolCallRecordGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 }
 
 // ---------------------------------------------------------------------------
-// Composing this Guard with an earlier one, and this ToolUseObserver with
-// an earlier one — without touching guard.go's own Guards function (the
-// one ordered list every OTHER guard in this package is added inside,
-// per that file's own doc comment) or SpawnRecorder's own Proxy.ToolUse
-// slot: a caller that has exactly one of each to hand gateway.Proxy composes
-// this issue's own pieces into the ONE Guard and the ONE ToolUseObserver
-// those slots take, then wires that composed value in wherever it already
-// wires one.
+// Composing this ToolUseObserver with an earlier one.
+//
+// A second Guard (this file's ToolCallRecordGuard, messages.go's
+// MessageRecorder) needs no composing helper of its own any more: guard.go's
+// own Guards function takes every witness directly, as its own variadic
+// witnesses parameter, so a caller with several just passes all of them —
+// see that function's own doc comment for why a second, hand-maintained
+// guard list built OUTSIDE of it (this package used to ship ChainGuards for
+// exactly that, composing the identity guard and RM-236's own witness
+// together before handing the result to Guards' single identity slot) is
+// the one thing never allowed to exist here again.
+//
+// Proxy.ToolUse (proxy.go) is a DIFFERENT shape: one field, not a slice, so
+// there is nowhere to hand it more than one ToolUseObserver directly.
+// CombineToolUseObservers below is what stays needed for exactly that
+// reason — SpawnRecorder and ToolCallRecorder both want that single slot —
+// and it composes observers, never guards, so it is not the pattern
+// Guards' witnesses parameter just closed.
 // ---------------------------------------------------------------------------
-
-// ChainGuards composes guards into one Guard that runs each in order,
-// threading the *http.Request each one returns into the next — the same
-// loop Proxy.ServeHTTP itself runs over its own Guards slice (proxy.go).
-// The first refusal stops the chain; nothing after it runs. A caller that
-// needs to place a second check where guard.go's own Guards function has
-// room for exactly one Guard (its identity slot) builds this instead of
-// hand-maintaining a second, parallel guard list.
-func ChainGuards(guards ...Guard) Guard {
-	kept := make([]Guard, 0, len(guards))
-	for _, g := range guards {
-		if g != nil {
-			kept = append(kept, g)
-		}
-	}
-	if len(kept) == 0 {
-		return nil
-	}
-	return chainedGuard(kept)
-}
-
-type chainedGuard []Guard
-
-var _ Guard = chainedGuard(nil)
-
-func (c chainedGuard) Check(r *http.Request) (*http.Request, *Refusal) {
-	for _, g := range c {
-		next, refusal := g.Check(r)
-		if refusal != nil {
-			return nil, refusal
-		}
-		if next != nil {
-			r = next
-		}
-	}
-	return r, nil
-}
 
 // CombineToolUseObservers composes several ToolUseObservers into one that
 // notifies each in order — the seam that lets a caller share Proxy's own
-// single ToolUse field (proxy.go) between more than one observer, exactly
-// the way ChainGuards shares Proxy's own single Guards slot between more
-// than one Guard. A nil observer among observers is skipped, so a caller
-// building this from optional pieces need not filter first; nil altogether
-// returns nil, so a caller with nothing to observe need not special-case
-// that either.
+// single ToolUse field (proxy.go) between more than one observer. A nil
+// observer among observers is skipped, so a caller building this from
+// optional pieces need not filter first; nil altogether returns nil, so a
+// caller with nothing to observe need not special-case that either.
 func CombineToolUseObservers(observers ...ToolUseObserver) ToolUseObserver {
 	kept := make([]ToolUseObserver, 0, len(observers))
 	for _, o := range observers {

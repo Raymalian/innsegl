@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -302,5 +303,79 @@ func TestGuardChainAttachesIdentificationForALaterGuard(t *testing.T) {
 	}
 	if got := counter.requests(); got != 1 {
 		t.Errorf("upstream received %d requests, want 1", got)
+	}
+}
+
+// --- ONE guard list (guard.go's own history is what this pins): harness
+// shape, identity, rate limit, then every witness, in that order, and a
+// witness the way this codebase actually ships one never refuses. ---
+
+// TestGuardsOrdersHarnessIdentityRateLimitThenWitnesses pins guard.go's own
+// Guards function: harness shape first, then the identity guard handed in
+// (when non-nil), then the per-session rate-limit guard built from the
+// limiter handed in, then every witness in the order given -- the ONE
+// ordered list every future guard is added inside (that function's own doc
+// comment). RM-236's ToolCallRecordGuard and RM-237's MessageRecorder are
+// exercised here as the witnesses, rather than a generic stub, so this
+// test also pins the property their own doc comments claim: neither
+// refuses a request that reaches it, identity-less or not.
+func TestGuardsOrdersHarnessIdentityRateLimitThenWitnesses(t *testing.T) {
+	limiter := defaultSessionRateLimiter()
+	identity := &spyGuard{}
+
+	toolCalls := &fakeRecordCalls{}
+	toolCallWitness := NewToolCallRecordGuard(NewToolCallRecorder(ToolCallRecorderConfig{record: toolCalls.fn}))
+	messageWitness, err := NewMessageRecorder(MessageRecorderConfig{Recorder: newFakeAgentMessageRecorder()})
+	if err != nil {
+		t.Fatalf("NewMessageRecorder: %v", err)
+	}
+
+	guards := Guards(limiter, identity, toolCallWitness, messageWitness)
+
+	if len(guards) != 5 {
+		t.Fatalf("len(Guards(...)) = %d, want 5 (harness, identity, rate limit, and two witnesses)", len(guards))
+	}
+	if _, ok := guards[0].(*HarnessGuard); !ok {
+		t.Errorf("guards[0] = %T, want *HarnessGuard", guards[0])
+	}
+	if guards[1] != Guard(identity) {
+		t.Errorf("guards[1] is not the identity guard that was handed in")
+	}
+	if _, ok := guards[2].(*SessionRateLimitGuard); !ok {
+		t.Errorf("guards[2] = %T, want *SessionRateLimitGuard", guards[2])
+	}
+	if guards[3] != Guard(toolCallWitness) {
+		t.Errorf("guards[3] is not the tool-call-record witness, in the order it was handed in")
+	}
+	if guards[4] != Guard(messageWitness) {
+		t.Errorf("guards[4] is not the message-recorder witness, in the order it was handed in")
+	}
+
+	// Every witness in this chain, exercised on a request with no identity
+	// resolved at all (the harshest case: neither RunIDFromContext nor
+	// RequestFactsFromContext finds anything), must never refuse.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/messages", nil)
+	for i, w := range guards[3:] {
+		if _, refusal := w.Check(req); refusal != nil {
+			t.Errorf("witness %d (%T) refused: %+v -- a witness must never refuse", i, w, refusal)
+		}
+	}
+}
+
+// TestGuardsSkipsNilWitnesses: a nil witness among several (the shape a
+// caller with an optional one, built only when its own dependencies are
+// configured, hands in unfiltered) is skipped rather than appended.
+func TestGuardsSkipsNilWitnesses(t *testing.T) {
+	limiter := defaultSessionRateLimiter()
+	only := &spyGuard{}
+
+	guards := Guards(limiter, nil, nil, only, nil)
+
+	if len(guards) != 3 {
+		t.Fatalf("len(Guards(...)) = %d, want 3 (harness, rate limit, the one surviving witness): %v",
+			len(guards), guards)
+	}
+	if guards[2] != Guard(only) {
+		t.Errorf("guards[2] is not the one witness that was not nil")
 	}
 }

@@ -80,6 +80,44 @@ func waitForCalls(t *testing.T, calls *fakeRecordCalls, want int) {
 	}
 }
 
+// waitForRecorded blocks until n signals have arrived on recorded (fed by
+// ToolCallRecorderConfig's own onRecorded hook, which fires once for every
+// recordAsync attempt this recorder completes, success or failure), or
+// fails t after timeout — the same channel-plus-deadline idiom
+// messages_test.go's own fakeAgentMessageRecorder.waitForCalls already
+// uses, reused here rather than reinvented.
+func waitForRecorded(t *testing.T, recorded <-chan struct{}, n int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for i := 0; i < n; i++ {
+		select {
+		case <-recorded:
+		case <-deadline:
+			t.Fatalf("timed out waiting for onRecorded signal %d/%d", i+1, n)
+		}
+	}
+}
+
+// waitForNoFurtherRecording fails t immediately if a signal arrives on
+// recorded within window — the deterministic replacement for a fixed
+// time.Sleep(...) followed by one look at a recorded-calls slice: a
+// wrongly-dispatched recording is caught the instant its own completion
+// hook fires, whenever that is inside window, rather than however long
+// after a blind sleep happened to run before the single check that
+// followed it. The correct case still has to run out the whole window —
+// there is no way to prove an absence sooner than that — but a buggy one
+// fails as soon as it is observed, never later than window would have
+// anyway, and the failure names what actually happened rather than a
+// count that merely grew.
+func waitForNoFurtherRecording(t *testing.T, recorded <-chan struct{}, window time.Duration) {
+	t.Helper()
+	select {
+	case <-recorded:
+		t.Fatal("a recording completed when none should have been dispatched")
+	case <-time.After(window):
+	}
+}
+
 // waitForPendingCount polls rec until its pending table holds exactly
 // want entries, or fails t after five seconds — used where a test needs
 // to observe a pending-side effect (an eviction) that carries no separate
@@ -214,25 +252,31 @@ func TestGREC002RecorderRecordsAFailedResultWithIsErrorTrue(t *testing.T) {
 // nothing a second time.
 func TestGREC004RecorderRecordsOnlyNewTurns(t *testing.T) {
 	calls := &fakeRecordCalls{}
-	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: calls.fn})
+	recorded := make(chan struct{}, 8)
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{
+		record:     calls.fn,
+		onRecorded: func() { recorded <- struct{}{} },
+	})
 
 	ctx := WithRunID(context.Background(), recTestRunID)
 	rec.OnToolUseContext(ctx, recToolUse("toolu_3", "Read", `{"file_path":"/w/a.go"}`))
 
 	results := []observedToolResult{recResult("toolu_3", `{"content":"package a"}`, false)}
 	rec.HandleResults(context.Background(), recTestRunID, RequestFacts{}, results)
-	waitForCalls(t, calls, 1)
+	waitForRecorded(t, recorded, 1, 5*time.Second)
 
 	// The SAME request, resent (or a later request still carrying the
 	// same tool_result in its history): the pending entry is already gone,
-	// so this must record nothing more. A settling wait follows each
-	// resend rather than an immediate check -- recording is asynchronous
-	// (this file's own doc comment), so a wrongly-fired second recording
-	// needs a real window to land before its absence means anything.
+	// so this must dispatch nothing more. Each resend is followed by
+	// waitForNoFurtherRecording rather than a fixed sleep: recording is
+	// asynchronous (this file's own doc comment), so a wrongly-fired
+	// second recording is caught the instant its own completion hook
+	// fires, deterministically, rather than however long a blind sleep
+	// happened to run before a single check that followed it.
 	rec.HandleResults(context.Background(), recTestRunID, RequestFacts{}, results)
-	time.Sleep(100 * time.Millisecond)
+	waitForNoFurtherRecording(t, recorded, 200*time.Millisecond)
 	rec.HandleResults(context.Background(), recTestRunID, RequestFacts{}, results)
-	time.Sleep(100 * time.Millisecond)
+	waitForNoFurtherRecording(t, recorded, 200*time.Millisecond)
 
 	if got := len(calls.snapshot()); got != 1 {
 		t.Errorf("%d recorded calls after three requests carrying the same result, want 1", got)
@@ -246,14 +290,20 @@ func TestGREC004RecorderRecordsOnlyNewTurns(t *testing.T) {
 // recorded rather than guessed.
 func TestGREC004RecorderRecordsNothingForAResultWithNoPendingToolUse(t *testing.T) {
 	calls := &fakeRecordCalls{}
-	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: calls.fn})
+	recorded := make(chan struct{}, 8)
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{
+		record:     calls.fn,
+		onRecorded: func() { recorded <- struct{}{} },
+	})
 
 	rec.HandleResults(context.Background(), recTestRunID, RequestFacts{},
 		[]observedToolResult{recResult("toolu-unknown", `{}`, false)})
 
-	// No pairing means no goroutine is ever spawned; a short, bounded wait
-	// is enough to be confident nothing arrives late.
-	time.Sleep(50 * time.Millisecond)
+	// No pairing means no goroutine is ever spawned; waitForNoFurtherRecording
+	// is what a wrongly-dispatched recording would have to fire to be
+	// caught, deterministically, rather than a fixed sleep guessed to be
+	// long enough.
+	waitForNoFurtherRecording(t, recorded, 200*time.Millisecond)
 	if got := len(calls.snapshot()); got != 0 {
 		t.Errorf("%d recorded calls for a result with no pending tool_use, want 0", got)
 	}
@@ -895,79 +945,10 @@ func TestToolCallRecordGuardPairsAResultUsingContextFacts(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ChainGuards and CombineToolUseObservers.
+// CombineToolUseObservers. ChainGuards (this file used to test it here) is
+// gone: guard.go's own Guards function now takes every witness directly,
+// as its own variadic parameter -- see that function's own doc comment.
 // ---------------------------------------------------------------------------
-
-type fakeGuard struct {
-	refusal *Refusal
-	setHdr  string
-	called  int
-}
-
-func (g *fakeGuard) Check(r *http.Request) (*http.Request, *Refusal) {
-	g.called++
-	if g.refusal != nil {
-		return nil, g.refusal
-	}
-	if g.setHdr != "" {
-		r.Header.Set(g.setHdr, "1")
-	}
-	return r, nil
-}
-
-func TestChainGuardsRunsEachInOrderAndStopsAtTheFirstRefusal(t *testing.T) {
-	first := &fakeGuard{setHdr: "X-First"}
-	second := &fakeGuard{refusal: &Refusal{Status: 403, Reason: "no"}}
-	third := &fakeGuard{setHdr: "X-Third"}
-	chain := ChainGuards(first, second, third)
-
-	r := recRequest(t, `{}`)
-	next, refusal := chain.Check(r)
-	if refusal == nil || refusal.Status != 403 {
-		t.Fatalf("refusal = %+v, want the second guard's own refusal", refusal)
-	}
-	if next != nil {
-		t.Errorf("next = %v, want nil on a refusal", next)
-	}
-	if third.called != 0 {
-		t.Errorf("the third guard ran %d times after an earlier refusal, want 0", third.called)
-	}
-}
-
-func TestChainGuardsThreadsTheRequestThroughEachGuard(t *testing.T) {
-	first := &fakeGuard{setHdr: "X-First"}
-	second := &fakeGuard{setHdr: "X-Second"}
-	chain := ChainGuards(first, second)
-
-	r := recRequest(t, `{}`)
-	next, refusal := chain.Check(r)
-	if refusal != nil {
-		t.Fatalf("refusal = %+v, want nil", refusal)
-	}
-	if next.Header.Get("X-First") != "1" || next.Header.Get("X-Second") != "1" {
-		t.Errorf("headers = %v, want both guards' own headers set", next.Header)
-	}
-}
-
-func TestChainGuardsSkipsNilGuardsAndReturnsNilForAnEmptyChain(t *testing.T) {
-	if got := ChainGuards(); got != nil {
-		t.Errorf("ChainGuards() = %v, want nil", got)
-	}
-	if got := ChainGuards(nil, nil); got != nil {
-		t.Errorf("ChainGuards(nil, nil) = %v, want nil", got)
-	}
-
-	only := &fakeGuard{setHdr: "X-Only"}
-	chain := ChainGuards(nil, only, nil)
-	r := recRequest(t, `{}`)
-	next, refusal := chain.Check(r)
-	if refusal != nil {
-		t.Fatalf("refusal = %+v, want nil", refusal)
-	}
-	if next.Header.Get("X-Only") != "1" {
-		t.Errorf("the surviving guard in a chain with nils around it did not run")
-	}
-}
 
 type fakeToolUseObserver struct {
 	mu   sync.Mutex

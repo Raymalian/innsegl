@@ -287,6 +287,44 @@ func waitForToolCallEvents(t *testing.T, f *gwIdentityFixture, runID string, wan
 	}
 }
 
+// assertToolCallEventCountStaysAt polls f's own chain, once every 20ms, for
+// the whole of window, failing t IMMEDIATELY the moment more than want
+// tool_call events are found on runID — the deterministic replacement for
+// a fixed time.Sleep(...) followed by one look at the end: a
+// wrongly-fired recording (GREC-004's own resend case) is caught the
+// instant this poll observes it landing in Postgres, whenever that is
+// inside window, rather than however long after a blind sleep happened to
+// run before the single check that followed it. The correct case still
+// has to run out the whole window — there is no way to prove an absence
+// over a real, asynchronous round trip any sooner than that — but a buggy
+// one fails as soon as it is observed, never later than window would have
+// let it anyway.
+func assertToolCallEventCountStaysAt(t *testing.T, f *gwIdentityFixture, runID string, want int, window time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(window)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		recs, err := f.store.EventsForRun(ctx, runID)
+		cancel()
+		if err != nil {
+			t.Fatalf("EventsForRun(%q): %v", runID, err)
+		}
+		count := 0
+		for _, r := range recs {
+			if r[event.FieldEventType] == event.EventTypeToolCall {
+				count++
+			}
+		}
+		if count > want {
+			t.Fatalf("%d tool_call events after a pure resend, want still exactly %d", count, want)
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func grecRunID(t *testing.T, dsn, sessionID string) string {
 	t.Helper()
 	m := queryGWIdentityMapping(t, dsn, sessionID, "main")
@@ -438,10 +476,7 @@ func TestGREC001GREC002GREC004EndToEndThroughRealOpenGateway(t *testing.T) {
 	// GREC-004, part one: request 3 resends request 2's own history,
 	// unchanged — no result in it is new, so nothing more is recorded.
 	sendAndDrainGREC(t, addr, session, conv.body(t))
-	time.Sleep(200 * time.Millisecond) // give any wrongly-fired recording a chance to land
-	if got := len(waitForToolCallEvents(t, f, runID, 3)); got != 3 {
-		t.Errorf("%d tool_call events after a pure resend, want still exactly 3", got)
-	}
+	assertToolCallEventCountStaysAt(t, f, runID, 3, 200*time.Millisecond)
 
 	// GREC-004, part two: request 4 carries a genuinely new result — the
 	// ledger grows by exactly one more.

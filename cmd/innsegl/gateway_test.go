@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -532,5 +533,91 @@ func TestGatewayCommandRejectsTrailingArguments(t *testing.T) {
 	code := runGatewayCommand([]string{"extra"}, &stdout, &stderr, gatewayDeps{})
 	if code != exitUsage {
 		t.Errorf("gateway with a trailing argument = %d, want %d (exitUsage)", code, exitUsage)
+	}
+}
+
+// --- RM-237 (#382): -identity-secret/-identity-secret-file and
+// -agent-message-key-id, the two settings that turn on the agent-message
+// recorder (configureGatewayAgentMessages, gateway.go). ---
+
+func TestGatewayCommandDefaultsAgentMessageKeyID(t *testing.T) {
+	t.Setenv(envAgentMessageKeyID, "")
+	o, code, ok := parseGatewayFlags(nil, io.Discard)
+	if !ok {
+		t.Fatalf("parseGatewayFlags refused a default configuration: exit %d", code)
+	}
+	if o.agentMessageKeyID != defaultAgentMessageKeyID {
+		t.Errorf("agentMessageKeyID = %q, want the default %q", o.agentMessageKeyID, defaultAgentMessageKeyID)
+	}
+}
+
+func TestGatewayCommandRefusesAMalformedAgentMessageKeyID(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runGatewayCommand([]string{"-agent-message-key-id", "Not Valid!"}, &stdout, &stderr, gatewayDeps{})
+	if code != exitUsage {
+		t.Errorf("gateway -agent-message-key-id %q = %d, want %d (exitUsage)", "Not Valid!", code, exitUsage)
+	}
+	if !strings.Contains(stderr.String(), "agent-message-key-id") {
+		t.Errorf("stderr %q does not name the flag", stderr.String())
+	}
+}
+
+func TestGatewayCommandReadsIdentitySecretFromTheFlag(t *testing.T) {
+	t.Setenv(envIdentitySecret, "")
+	t.Setenv(envIdentitySecretFile, "")
+	o, code, ok := parseGatewayFlags([]string{"-identity-secret", "s3cr3t"}, io.Discard)
+	if !ok {
+		t.Fatalf("parseGatewayFlags refused a valid -identity-secret: exit %d", code)
+	}
+	if o.identitySecret != "s3cr3t" {
+		t.Errorf("identitySecret = %q, want %q", o.identitySecret, "s3cr3t")
+	}
+}
+
+func TestGatewayCommandReadsIdentitySecretFromAFile(t *testing.T) {
+	t.Setenv(envIdentitySecret, "")
+	t.Setenv(envIdentitySecretFile, "")
+	dir := t.TempDir()
+	path := dir + "/identity-secret"
+	if err := os.WriteFile(path, []byte("from-a-file\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	o, code, ok := parseGatewayFlags([]string{"-identity-secret-file", path}, io.Discard)
+	if !ok {
+		t.Fatalf("parseGatewayFlags refused a valid -identity-secret-file: exit %d", code)
+	}
+	if o.identitySecret != "from-a-file" {
+		t.Errorf("identitySecret = %q, want the trimmed file contents %q", o.identitySecret, "from-a-file")
+	}
+}
+
+func TestGatewayCommandRefusesBothIdentitySecretAndIdentitySecretFile(t *testing.T) {
+	t.Setenv(envIdentitySecret, "")
+	t.Setenv(envIdentitySecretFile, "")
+	dir := t.TempDir()
+	path := dir + "/identity-secret"
+	if err := os.WriteFile(path, []byte("from-a-file"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := runGatewayCommand(
+		[]string{"-identity-secret", "s3cr3t", "-identity-secret-file", path}, &stdout, &stderr, gatewayDeps{})
+	if code != exitUsage {
+		t.Errorf("gateway with both -identity-secret and -identity-secret-file = %d, want %d (exitUsage)",
+			code, exitUsage)
+	}
+	if !strings.Contains(stderr.String(), "two sources for one secret") {
+		t.Errorf("stderr %q does not name the two-sources problem", stderr.String())
+	}
+}
+
+func TestGatewayCommandRefusesAnIdentitySecretFileThatDoesNotExist(t *testing.T) {
+	t.Setenv(envIdentitySecret, "")
+	t.Setenv(envIdentitySecretFile, "")
+	var stdout, stderr bytes.Buffer
+	code := runGatewayCommand(
+		[]string{"-identity-secret-file", "/does/not/exist"}, &stdout, &stderr, gatewayDeps{})
+	if code != exitUsage {
+		t.Errorf("gateway with a missing -identity-secret-file = %d, want %d (exitUsage)", code, exitUsage)
 	}
 }
