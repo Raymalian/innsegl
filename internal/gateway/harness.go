@@ -81,7 +81,7 @@ const (
 	reasonUnknownPath        = "the request path does not match a recognised model-traffic path"
 	reasonMissingSessionID   = "the request carries no " + headerClaudeCodeSessionID + " header"
 	reasonMalformedSessionID = "the " + headerClaudeCodeSessionID + " header is not a UUID"
-	reasonMalformedAgentID   = "the " + headerClaudeCodeAgentID + " header is not a UUID"
+	reasonMalformedAgentID   = "the " + headerClaudeCodeAgentID + " header is not an agent id"
 )
 
 // recogniseClaudeCode21 is testdata/harness/claude-code-2.1/'s recogniser:
@@ -103,7 +103,7 @@ func recogniseClaudeCode21(r *http.Request) (Identification, bool, string) {
 
 	agentID := mainAgentID
 	if raw := r.Header.Get(headerClaudeCodeAgentID); raw != "" {
-		if !isUUID(raw) {
+		if !isAgentID(raw) {
 			return Identification{}, false, reasonMalformedAgentID
 		}
 		agentID = raw
@@ -125,6 +125,25 @@ func recogniseClaudeCode21(r *http.Request) (Identification, bool, string) {
 // signal naming something that could never be a real session id is refused
 // before it is ever marked.
 func IsSessionID(s string) bool { return isUUID(s) }
+
+// isAgentID reports whether s has the shape of a subagent's own id: one to
+// 64 lowercase letters, digits and hyphens, starting with a letter or digit.
+// Claude Code 2.1.283 sends "a" plus 16 hex digits (measured 2026-09-29), and
+// the bound is loose on purpose, like isUUID's: the header is a claim. One
+// claim is refused outright: mainAgentID, the root agent's own mapping key,
+// which no header may name.
+func isAgentID(s string) bool {
+	if s == "" || len(s) > 64 || s == mainAgentID || s[0] == '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
+}
 
 // isUUID reports whether s is a UUID in its standard 8-4-4-4-12 hyphenated
 // hex form (RFC 4122 §3). Neither version nor variant is checked: this
