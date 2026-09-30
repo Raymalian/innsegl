@@ -83,8 +83,14 @@ func witnessPlantTelemetry(t *testing.T, dir, toolUseID string, success bool, re
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(telDir, toolUseID+".json"), raw, 0o644); err != nil {
+	path := filepath.Join(telDir, toolUseID+".json")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		t.Fatalf("writing telemetry record: %v", err)
+	}
+	// The pass reads a record's receive time from the file, as the gateway
+	// leaves it; stamp it with the test's own clock.
+	if err := os.Chtimes(path, receivedAt, receivedAt); err != nil {
+		t.Fatalf("stamping telemetry record: %v", err)
 	}
 }
 
@@ -270,4 +276,31 @@ func TestWitnessDisabledWithNoConfig(t *testing.T) {
 	if result.Witness.Enabled {
 		t.Error("Witness.Enabled = true with no Config.Witness given")
 	}
+}
+
+// A tool call relayed long before telemetry began arriving can be neither
+// matched nor missed, so it is not counted as checked and its body is not
+// read: measured on a live chain, 38,551 calls were "checked" each cycle
+// against 6 that telemetry could cover.
+func TestWitnessSkipsToolCallsFromBeforeTelemetryWasActive(t *testing.T) {
+	const runID = "run-witness-before"
+	c := &clock{at: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	m := newMemLedger(c.now)
+	seedRun(t, m, runID)
+	logDir := t.TempDir()
+
+	old := witnessPlantToolCall(t, m, logDir, runID, "toolu_witness_old")
+	// Its body is gone: a pass that still read it would count it unchecked.
+	if err := os.RemoveAll(filepath.Join(logDir, runID)); err != nil {
+		t.Fatal(err)
+	}
+	c.at = c.at.Add(10 * witnessTestWindow)
+	witnessPlantToolCall(t, m, logDir, runID, "toolu_witness_new")
+	witnessPlantTelemetry(t, logDir, "toolu_witness_new", true, c.at)
+
+	report := runWitnessPass(t, m, logDir, c, witnessTestWindow)
+	if report.Checked != 1 || report.Unchecked != 0 || report.Matched != 1 {
+		t.Fatalf("Witness = %+v, want only the call telemetry could cover counted", report)
+	}
+	_ = old
 }

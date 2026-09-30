@@ -432,6 +432,13 @@ func (r *Reconciler) checkWitness(ctx context.Context, view *ledgerView) Witness
 	window := cfg.window()
 
 	for _, call := range view.witness.calls {
+		// A call relayed more than a window before telemetry began arriving
+		// can be neither matched nor missed: it is not counted, and its body
+		// is not read. The window's slack keeps a call whose telemetry was
+		// the first to arrive.
+		if active && call.at.Before(since.Add(-window)) {
+			continue
+		}
 		raw, ok := readRunBody(cfg.LogDir, call.runID, call.digest)
 		if !ok {
 			report.Unchecked++
