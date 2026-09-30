@@ -382,6 +382,30 @@ x-admin-jwks-file: &admin-jwks-file ${INNSEGL_MCP_ADMIN_LISTEN:+/run/innsegl/adm
 x-admin-key-file: &admin-key-file ${INNSEGL_MCP_ADMIN_LISTEN:+/run/innsegl/admin-key/signing.key}
 
 # ----------------------------------------------------------------------------
+# RM-246 (#391) — the gateway's own TLS certificate authority.
+#
+# THE PRIVATE KEY NEVER TOUCHES THE HOST. It lives only in the named volume
+# below (innsegl-gateway-ca-key), mounted read-write into innsegl-mcp and NO
+# OTHER SERVICE, the same one-writer shape the admin signing key already
+# uses. Created on first start, kept across restarts by the volume — a
+# `down -v` costs the CA the same way it costs every other minted-not-backed
+# up secret here, and the next `up` simply mints a new one.
+#
+# THE CERTIFICATE IS PUBLIC BY DESIGN and goes to a HOST bind mount instead:
+# `innsegl git-hook` and `innsegl sign`, running on the host, have to be able
+# to read it to trust the gateway at all (internal/commitpath.CAFile's own
+# default). A host folder, ~/.innsegl/ca unless INNSEGL_GATEWAY_CA_HOST_DIR
+# says otherwise — the same $HOME-relative-with-an-override shape
+# INNSEGL_BACKUP_HOST_DIR already uses below. It must be writable by uid 1000
+# (innsegl-mcp's own user); when it is not, the gateway fails to start and
+# says so, the same posture the CA key directory already takes.
+#
+# No anchor here (unlike this file's other single-purpose paths): the
+# expression is used in exactly one place, innsegl-mcp's own volumes: below,
+# spelled out there directly.
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # The one image the three innsegl-* services share. doc 05 §1 says "same
 # binary, subcommand" for the reconciler and the sealer; they differ from the
 # MCP and from each other only by `command:`.
@@ -1003,6 +1027,17 @@ services:
       # without the other. See the anchor.
       INNSEGL_MCP_ADMIN_JWKS_FILE: *admin-jwks-file
 
+      # RM-246 (#391) — the gateway's own TLS certificate authority. The
+      # PRIVATE key's directory (the named volume below, mounted into no
+      # other service) and the PUBLIC certificate's directory (the host bind
+      # mount, *gateway-ca-host-dir, above). `innsegl gateway`'s own
+      # command-line defaults are $HOME-relative for a bare run outside
+      # compose; this deployment always overrides both to these container
+      # mount points, the same "compose always overrides the bare default"
+      # shape the CA-cert-dir's own anchor comment describes.
+      INNSEGL_GATEWAY_CA_KEY_DIR: /run/innsegl/gateway-ca-key
+      INNSEGL_GATEWAY_CA_CERT_DIR: /run/innsegl/gateway-ca
+
       # Companion subcommands to run inside this process (serve.go's -also).
       # Subcommand names, not container names: `serve` refuses a name it does
       # not recognise at parse time rather than starting and never running it.
@@ -1121,6 +1156,22 @@ services:
       # volume this service does not mount at all: a process that could read it
       # could mint its own admission to the listener it is being protected by.
       - innsegl-admin-jwks:/run/innsegl/admin:ro
+      # RM-246 (#391) — the gateway's own TLS certificate authority.
+      # READ-WRITE, and MOUNTED BY NO OTHER SERVICE: this is the CA's
+      # private key, created here on first start and kept across restarts by
+      # the volume alone. See the innsegl-gateway-ca-key volume's own
+      # comment below.
+      - innsegl-gateway-ca-key:/run/innsegl/gateway-ca-key
+      # READ-WRITE (this process writes the certificate here on every
+      # start) and a HOST BIND MOUNT, not a named volume: the host commands
+      # (`innsegl git-hook`, `innsegl sign`) read the certificate straight
+      # off the host filesystem, the same way ~/innsegl-backups is a host
+      # folder rather than a volume for the reader on the OTHER side of that
+      # boundary. See *gateway-ca-host-dir's own comment, above -- spelled
+      # out again here rather than referenced, the same reason
+      # x-admin-jwks-file's own comment gives: compose cannot interpolate a
+      # YAML alias into a mapping key the way ${...} nests here.
+      - ${INNSEGL_GATEWAY_CA_HOST_DIR:-${HOME}/.innsegl/ca}:/run/innsegl/gateway-ca
     ports:
       # Loopback only, like every other published port in this deployment.
       #
@@ -2045,6 +2096,21 @@ volumes:
   # public half stays in the key set, already-issued credentials keep verifying
   # until they expire, and a replacement is one `keygen` away.
   innsegl-admin-key:
+
+  # RM-246 (#391) — the gateway's own TLS certificate authority's PRIVATE
+  # key. MOUNTED BY: innsegl-mcp, read-write, and NO OTHER SERVICE, ever — a
+  # service that could read this could mint a certificate for the gateway's
+  # own loopback address. The CERTIFICATE (public) is not here: it goes to a
+  # HOST bind mount instead (*gateway-ca-host-dir, above), because the host
+  # commands (`innsegl git-hook`, `innsegl sign`) are the ones that have to
+  # read it.
+  #
+  # Losing it costs nothing worse than the admin key's own case: this
+  # process mints a new CA on its next start, republishes its certificate to
+  # the host bind mount, and every host command trusts the new one from its
+  # next call. Nothing already relayed depended on this key surviving a
+  # restart; the leaf certificates it signs are short-lived by design (RM-246).
+  innsegl-gateway-ca-key:
 
   # THIS DEPLOYMENT's pseudonymisation secret, and the reason it is a volume
   # rather than a value in this file: a secret in the file would be the same
