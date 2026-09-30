@@ -70,11 +70,17 @@ type coseEC2Key struct {
 
 func (a *softAuthenticator) coseKeyBytes(t *testing.T) []byte {
 	t.Helper()
-	pub := a.key.PublicKey
+	// SEC1 uncompressed point: 0x04 || X(32) || Y(32) for P-256. Read via
+	// PublicKey.Bytes rather than the deprecated X/Y *big.Int fields
+	// (crypto/ecdsa, Go 1.26+).
+	uncompressed, err := a.key.PublicKey.Bytes()
+	if err != nil {
+		t.Fatalf("encoding the public key point: %v", err)
+	}
 	body, err := cbor.Marshal(coseEC2Key{
 		Kty: 2, Alg: -7, Crv: 1,
-		X: pub.X.FillBytes(make([]byte, 32)),
-		Y: pub.Y.FillBytes(make([]byte, 32)),
+		X: uncompressed[1:33],
+		Y: uncompressed[33:65],
 	})
 	if err != nil {
 		t.Fatalf("encoding the COSE public key: %v", err)

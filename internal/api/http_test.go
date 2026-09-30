@@ -114,6 +114,15 @@ func testServerWithSession(t *testing.T) (*httptest.Server, *proofScenario, *htt
 // rather than through the CLI, which cmd/innsegl's own tests cover.
 func signInTestUser(t *testing.T, baseURL string, authStore *AuthStore) *http.Cookie {
 	t.Helper()
+	_, cookie := enrolTestUser(t, baseURL, authStore)
+	return cookie
+}
+
+// enrolTestUser is signInTestUser, also returning the software authenticator
+// it enrolled — for a case (AUTH-004's replay) that needs to drive the SAME
+// enrolled authenticator through a second ceremony afterwards.
+func enrolTestUser(t *testing.T, baseURL string, authStore *AuthStore) (*softAuthenticator, *http.Cookie) {
+	t.Helper()
 	code, _, err := authStore.CreateEnrolmentCode(context.Background(), time.Minute)
 	if err != nil {
 		t.Fatalf("CreateEnrolmentCode: %v", err)
@@ -128,8 +137,8 @@ func signInTestUser(t *testing.T, baseURL string, authStore *AuthStore) *http.Co
 		t.Fatalf("POST /api/v1/auth/enrol/begin: %d: %s", beginResp.status, beginResp.body)
 	}
 	var creation ceremonyResponse
-	if err := json.Unmarshal(beginResp.body, &creation); err != nil {
-		t.Fatalf("decoding enrol/begin response: %v: %s", err, beginResp.body)
+	if jerr := json.Unmarshal(beginResp.body, &creation); jerr != nil {
+		t.Fatalf("decoding enrol/begin response: %v: %s", jerr, beginResp.body)
 	}
 
 	auth := newSoftAuthenticator(t)
@@ -150,12 +159,12 @@ func signInTestUser(t *testing.T, baseURL string, authStore *AuthStore) *http.Co
 		parsed := (&http.Response{Header: http.Header{"Set-Cookie": {c}}}).Cookies()
 		for _, pc := range parsed {
 			if pc.Name == sessionCookieName {
-				return pc
+				return auth, pc
 			}
 		}
 	}
 	t.Fatal("enrol/finish set no session cookie")
-	return nil
+	return nil, nil
 }
 
 // answer is one HTTP response, already read and closed. The body is read here

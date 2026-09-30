@@ -421,6 +421,10 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, userID, di
 // cookie is HttpOnly, SameSite=Strict, Secure where the origin is https, and
 // bounded — every one of those is set here and nowhere else in this package.
 func (s *Server) setSessionCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
+	//nolint:gosec // G124: Secure is conditional on the origin's own scheme
+	// (ADR-0062: "Secure where the origin is https"), not omitted — an
+	// http://localhost deployment whose cookie forced Secure would never
+	// have that cookie sent back at all.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
@@ -438,6 +442,7 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, token string, expiresAt
 // actually matters (ADR-0062: "not merely instructs the browser to forget
 // the cookie").
 func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+	//nolint:gosec // G124: Secure is conditional on the origin's own scheme, same reason as setSessionCookie.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
@@ -474,9 +479,11 @@ func (s *Server) sessionFromRequest(r *http.Request) (userID string, ok bool) {
 
 // recordAuth writes an auth event and swallows a failure to do so — see
 // AuthStore.RecordAuthEvent's own comment for why a recording failure never
-// blocks the ceremony it describes.
+// blocks the ceremony it describes. discardError (readonly.go) rather than a
+// blank assignment: errcheck runs with check-blank, so a discard has to be
+// visible and named.
 func (s *Server) recordAuth(ctx context.Context, eventType, userID, detail string) {
-	_ = s.authStore.RecordAuthEvent(ctx, eventType, userID, detail)
+	discardError(s.authStore.RecordAuthEvent(ctx, eventType, userID, detail))
 }
 
 // codeForbidden and codeUnauthorized extend server.go's error-code

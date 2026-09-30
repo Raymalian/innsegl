@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -66,7 +67,7 @@ func TestAUTH001ARouteRegisteredWithNoDecisionIsRefused(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/__undecided_test_route", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/__undecided_test_route", nil)
 	s.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -98,7 +99,7 @@ func TestAUTH001ARouteOnTheMuxAndOnTheAllowListAnswersWithNoSession(t *testing.T
 	t.Cleanup(func() { delete(authAllowedRoutes, "GET /api/v1/__decided_test_route") })
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/__decided_test_route", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/__decided_test_route", nil)
 	s.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("an explicitly allow-listed route answered %d with no session, want 200", rec.Code)

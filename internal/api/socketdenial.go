@@ -105,6 +105,9 @@ func CheckSocketDenial(path string) (SocketDenial, error) {
 			"cannot be shown in effect, so the first enrolment (or its recovery) is refused", path)
 		return out, nil
 	default:
+		// Deliberate: see this function's own package doc comment. Every
+		// read/parse problem is a refusal reason, never a Go error — the
+		// caller has exactly one thing to decide either way.
 		out.Reason = fmt.Sprintf("%s could not be read: %v; the socket denial cannot be "+
 			"shown in effect, so enrolment is refused", path, err)
 		return out, nil
@@ -112,9 +115,11 @@ func CheckSocketDenial(path string) (SocketDenial, error) {
 
 	var settings managedSettingsSandbox
 	if jerr := json.Unmarshal(body, &settings); jerr != nil {
+		// Deliberate, same reason as the os.ReadFile default case above:
+		// malformed JSON is a refusal reason, never a Go error.
 		out.Reason = fmt.Sprintf("%s is not valid JSON; the harness would have discarded "+
 			"this file rather than loaded it, so the socket denial cannot be shown in effect", path)
-		return out, nil
+		return out, nil //nolint:nilerr // see the comment above
 	}
 
 	switch {
