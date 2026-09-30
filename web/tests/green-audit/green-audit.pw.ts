@@ -63,7 +63,9 @@ test.describe("FE-013: green audit, all six real views", () => {
     page,
   }) => {
     await installApiMocks(page);
-    await page.goto(`/runs/${RUN_ID}`);
+    // E19: the hash-chain timeline (and its "Verify this commit" disclosure)
+    // moved to /chain when /runs/:runId became the run page.
+    await page.goto(`/runs/${RUN_ID}/chain`);
     await page.getByRole("button", { name: "Verify this commit" }).click();
     await expect(page.getByRole("heading", { name: "Verification" })).toBeVisible();
 
