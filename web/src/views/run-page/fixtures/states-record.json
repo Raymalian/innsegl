@@ -65,11 +65,11 @@
       "truncated": false,
       "outcome": { "kind": "ok", "exit_code": 0 },
       "tree_before": "1111111111111111111111111111111111111a",
-      "tree_after": "2222222222222222222222222222222222222b",
+      "tree_after": "1111111111111111111111111111111111111a",
       "files": [],
       "spawned_run_id": "",
       "commit_sha": "5d31e0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7",
-      "witnesses": { "gateway": "present", "snapshot": "changed", "telemetry": "matched" },
+      "witnesses": { "gateway": "present", "snapshot": "unchanged", "telemetry": "matched" },
       "spawned_commits": []
     },
     {
@@ -84,7 +84,7 @@
       "output": "File created successfully at: scratch/probe.sh",
       "truncated": false,
       "outcome": { "kind": "ok", "exit_code": null },
-      "tree_before": "2222222222222222222222222222222222222b",
+      "tree_before": "1111111111111111111111111111111111111a",
       "tree_after": "3333333333333333333333333333333333333c",
       "files": [
         {
@@ -135,7 +135,7 @@
       "truncated": false,
       "outcome": { "kind": "ok", "exit_code": 0 },
       "tree_before": "3333333333333333333333333333333333333c",
-      "tree_after": "2222222222222222222222222222222222222b",
+      "tree_after": "1111111111111111111111111111111111111a",
       "files": [
         {
           "path": "scratch/probe.sh",
@@ -164,8 +164,8 @@
       "output": "func TestSessionLimiter_Allow(t *testing.T) { ... }",
       "truncated": false,
       "outcome": { "kind": "ok", "exit_code": null },
-      "tree_before": "2222222222222222222222222222222222222b",
-      "tree_after": "2222222222222222222222222222222222222b",
+      "tree_before": "1111111111111111111111111111111111111a",
+      "tree_after": "1111111111111111111111111111111111111a",
       "files": [],
       "spawned_run_id": "",
       "commit_sha": "",
@@ -184,7 +184,7 @@
       "output": "The file internal/gateway/limit.go has been updated.",
       "truncated": false,
       "outcome": { "kind": "ok", "exit_code": null },
-      "tree_before": "2222222222222222222222222222222222222b",
+      "tree_before": "1111111111111111111111111111111111111a",
       "tree_after": "4444444444444444444444444444444444444d",
       "files": [
         {

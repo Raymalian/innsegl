@@ -10,6 +10,7 @@ import { Icon } from "../../components/common/Icon";
 import type { IconName } from "../../components/common/Icon";
 import { IdentifierChip } from "../../components/common/IdentifierChip";
 import type { RunStatus } from "../../components/common/StatusBadge";
+import { formatAbsoluteUtc } from "../../components/common/time";
 import { Link } from "../../app/router";
 import { Instant } from "../run-detail";
 import {
@@ -63,7 +64,21 @@ export function Header({ record, now }: HeaderProps) {
             <Icon name={STATUS_ICON[status]} className="shrink-0" />
             <span className="font-medium">{statusLabel(status)}</span>
             {run.status_at === undefined || run.status_at === null || run.status_at === "" ? null : (
-              <Instant value={run.status_at} now={now} label={statusLabel(status)} />
+              <>
+                {/* The mockup shows the absolute instant visibly, beside the
+                  * relative one ("Retired 14:31:58 UTC · 3 min ago") — unlike
+                  * the rest of the product's RelativeTime convention, which
+                  * keeps the absolute behind hover/focus. `Instant` still
+                  * carries that pattern for the relative half; this span is
+                  * the one place on this page the absolute is stated outright
+                  * rather than only reachable. Full date, not the mockup's
+                  * bare time-of-day — doc 06 §6.2's own absolute format,
+                  * which is what the rest of this product uses everywhere
+                  * else an absolute instant is shown in full. */}
+                <span aria-hidden="true">{formatAbsoluteUtc(new Date(run.status_at))}</span>
+                <span aria-hidden="true">{strings.punctuation.middot}</span>
+                <Instant value={run.status_at} now={now} label={statusLabel(status)} />
+              </>
             )}
           </span>
         )}

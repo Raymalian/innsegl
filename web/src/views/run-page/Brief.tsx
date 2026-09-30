@@ -6,6 +6,7 @@
  * evidence sits beside the claim it backs).
  */
 
+import { truncateDigest } from "./derive";
 import { strings } from "./strings";
 import { briefBody, briefCaption, briefHeadRow, panel, panelHeading } from "./styles";
 import type { RecordMessage } from "./types";
@@ -17,7 +18,9 @@ export function Brief({ brief }: { readonly brief: RecordMessage }) {
         <h2 id="brief-heading" className={panelHeading}>
           {strings.brief.heading}
         </h2>
-        <span className={briefCaption}>{strings.brief.caption(brief.digest)}</span>
+        <span className={briefCaption} title={brief.digest}>
+          {strings.brief.caption(truncateDigest(brief.digest))}
+        </span>
       </div>
       <p className={briefBody}>{brief.text}</p>
     </section>

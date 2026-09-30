@@ -60,7 +60,13 @@ export const bodyNote = `text-micro ${mutedText}`;
 
 export const factGrid = "grid grid-cols-2 gap-3 md:grid-cols-4";
 export const factCard = `${hairline} flex flex-col gap-1 rounded-md bg-surface border-line p-3`;
-export const factLabel = labelText;
+/* Sentence case, not the shared `labelText`'s uppercase/tracked treatment —
+ * the mockup's own fact-card labels ("Identity", "Repository · branch") are
+ * plain sentence case, which this page follows over the rest of the
+ * product's table/column-header convention (doc06 §5.4 says sentence case
+ * "everywhere", and the approved mockup is the one place that reading and
+ * `labelText`'s established uppercase disagree). */
+export const factLabel = `text-micro ${mutedText}`;
 export const factValue = "mt-1 text-body text-ink";
 export const factRowIcon = "flex items-center gap-2";
 
@@ -85,8 +91,14 @@ export const treeRow = `flex items-center gap-2 rounded-sm px-2 py-1.5 text-body
 export const treeRowSelected = "bg-accent-surface";
 export const treeRowChild = "pl-[26px]";
 export const treeRowIcon = "shrink-0";
-export const treeRowName = "truncate";
-export const treeRowId = `ml-auto shrink-0 text-micro ${mutedText}`;
+/* `min-w-0` is load-bearing, not decoration — see identifierText's own
+ * comment in components/common/styles.ts for the measured failure this
+ * exact omission causes: a flex item's min-width is `auto` by default, so
+ * without it "truncate" never actually shrinks the name and the id chip
+ * beside it gets squeezed instead. MEASURED here: "general-purpose" rendered
+ * as "general-purp…" in the 300px aside before this was added. */
+export const treeRowName = "min-w-0 flex-grow truncate";
+export const treeRowId = `shrink-0 text-micro ${mutedText}`;
 
 /* ── files changed ─────────────────────────────────────────────────────── */
 

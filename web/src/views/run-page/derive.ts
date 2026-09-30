@@ -132,3 +132,22 @@ export function writtenAndRevertedAt(file: RecordFile): { written: number; rever
   const reverted = file.steps[file.steps.length - 1] as number;
   return { written, reverted };
 }
+
+/** A keyed digest for display — "hmac-sha256:gateway-v1:413c…0bec" (the
+ * mockup's own form for the brief's and reply's captions). The algorithm and
+ * key-version prefix is what a reader compares the SCHEME by; the hash
+ * itself is what they would compare byte for byte against a re-derivation,
+ * which nobody does by eye — so only the hash is middle-truncated, the
+ * prefix survives whole, and the full value is still what
+ * `IdentifierChip`-style components would copy if this page grows a copy
+ * affordance for it later. Not `truncateIdentifier` itself: that function's
+ * "segmented" path treats every `:`-delimited run as a droppable middle
+ * segment, which would drop "gateway-v1" as readily as it drops the hash. */
+export function truncateDigest(digest: string, keep = 4): string {
+  const lastColon = digest.lastIndexOf(":");
+  if (lastColon === -1) return digest;
+  const prefix = digest.slice(0, lastColon + 1);
+  const hash = digest.slice(lastColon + 1);
+  if (hash.length <= keep * 2 + 1) return digest;
+  return `${prefix}${hash.slice(0, keep)}…${hash.slice(hash.length - keep)}`;
+}
