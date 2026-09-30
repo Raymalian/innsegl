@@ -271,7 +271,8 @@ expected_sandbox2=$(cat <<JSON
   "enabled": true,
   "allowUnsandboxedCommands": false,
   "failIfUnavailable": true,
-  "filesystem": {"denyRead": ["$home2/.innsegl/log"]}
+  "filesystem": {"denyRead": ["$home2/.innsegl"], "allowRead": ["$home2/.innsegl/ca"]},
+  "network": {"allowLocalBinding": true}
 }
 JSON
 )
@@ -281,7 +282,6 @@ if [ "$rc2" -eq 0 ] \
    && [ "$(check json-equal "$ms2" allowManagedHooksOnly true)" = ok ] \
    && [ "$(check json-equal "$ms2" permissions.disableBypassPermissionsMode '"disable"')" = ok ] \
    && [ "$(check json-equal "$ms2" sandbox "$expected_sandbox2")" = ok ] \
-   && [ "$(check json-absent "$ms2" sandbox.network)" = ok ] \
    && [ "$(backup_count "$home2" managed-settings.json)" -eq 0 ]; then
   ok "ENF-001 a fresh target gets exactly the env, hook, permission and sandbox keys, with no backup to make"
 else
@@ -322,7 +322,7 @@ if [ "$rc4" -eq 0 ] \
    && [ "$(check json-equal "$ms4" hooks.PreToolUse.1.hooks.0.command "\"$STUB_BIN hook pre-tool-use\"")" = ok ] \
    && [ "$(check json-equal "$ms4" permissions.allow '["Read(//tmp/**)"]')" = ok ] \
    && [ "$(check json-equal "$ms4" permissions.disableBypassPermissionsMode '"disable"')" = ok ] \
-   && [ "$(check json-equal "$ms4" sandbox.filesystem.denyRead "[\"/opt/example/secret\", \"$home4/.innsegl/log\"]")" = ok ] \
+   && [ "$(check json-equal "$ms4" sandbox.filesystem.denyRead "[\"/opt/example/secret\", \"$home4/.innsegl\"]")" = ok ] \
    && [ "$(check json-equal "$ms4" otherOperatorSetting true)" = ok ] \
    && [ "$(backup_count "$home4" managed-settings.json)" -eq 1 ]; then
   ok "ENF-001 an operator's own env, hooks, permissions and sandbox settings survive, and are backed up first"
@@ -401,7 +401,8 @@ rc8=$?
 if [ "$rc8" -eq 0 ] \
    && [ "$(check json-equal "$ms8" sandbox.network.strictAllowlist true)" = ok ] \
    && [ "$(check json-equal "$ms8" sandbox.network.allowManagedDomainsOnly true)" = ok ] \
-   && [ "$(check json-equal "$ms8" sandbox.network.allowedDomains '["github.com", "registry.npmjs.org"]')" = ok ]; then
+   && [ "$(check json-equal "$ms8" sandbox.network.allowedDomains '["github.com", "registry.npmjs.org"]')" = ok ] \
+   && [ "$(check json-equal "$ms8" sandbox.network.allowLocalBinding true)" = ok ]; then
   ok "EGR-001 --egress-control writes the strict allowlist with the model hosts removed"
 else
   bad "EGR-001 --egress-control did not write the expected allowlist" "exit=$rc8"$'\n'"$out8"

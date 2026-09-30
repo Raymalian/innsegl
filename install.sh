@@ -92,7 +92,11 @@ GATEWAY_URL="${INNSEGL_INSTALL_GATEWAY_URL:-https://127.0.0.1:28095}"
 
 # innsegl's own CA, and the store the sandbox denies a shell read access to.
 CA_PEM="${INNSEGL_INSTALL_CA_PEM:-$HOME/.innsegl/ca/gateway-ca.pem}"
-LOG_DENY="${INNSEGL_INSTALL_LOG_DENY:-$HOME/.innsegl/log}"
+# The agent's shell reads none of innsegl's host state (bodies, run tokens,
+# backups) except the gateway's CA certificate, which the host commands git
+# runs inside that shell need in order to trust the core.
+LOG_DENY="${INNSEGL_INSTALL_LOG_DENY:-$HOME/.innsegl}"
+CA_ALLOW="${INNSEGL_INSTALL_CA_ALLOW:-$HOME/.innsegl/ca}"
 
 # The gateway's own upstream (cmd/innsegl/gateway.go's INNSEGL_GATEWAY_UPSTREAM,
 # default https://api.anthropic.com) — read here only to know which host's
@@ -267,7 +271,7 @@ connect_managed_settings() {
   INSTALL_HOOK_PATH="$INNSEGL_BIN_PATH" \
   INSTALL_GATEWAY_URL="$GATEWAY_URL" \
   INSTALL_CA_PEM="$CA_PEM" \
-  INSTALL_LOG_DENY="$LOG_DENY" \
+  INSTALL_LOG_DENY="$LOG_DENY" INSTALL_CA_ALLOW="$CA_ALLOW" \
   INSTALL_EGRESS="$([ -n "$EGRESS_FILE" ] && echo 1 || echo 0)" \
   INSTALL_ALLOWLIST_FILE="$EGRESS_FILE" \
   INSTALL_MODEL_HOSTS="api.anthropic.com
@@ -286,6 +290,7 @@ hook_command = os.environ["INSTALL_HOOK_PATH"] + " hook pre-tool-use"
 gateway_url = os.environ["INSTALL_GATEWAY_URL"]
 ca_pem = os.environ["INSTALL_CA_PEM"]
 log_deny = os.environ["INSTALL_LOG_DENY"]
+ca_allow = os.environ["INSTALL_CA_ALLOW"]
 egress = os.environ.get("INSTALL_EGRESS") == "1"
 allowlist_file = os.environ.get("INSTALL_ALLOWLIST_FILE", "")
 model_hosts = {
@@ -463,11 +468,27 @@ def install_sandbox(obj):
         sys.exit(1)
     if log_deny not in deny:
         deny.append(log_deny)
+    allow = fs.setdefault("allowRead", [])
+    if not isinstance(allow, list):
+        sys.stderr.write(
+            "install.sh: sandbox.filesystem.allowRead in %s is not a list; "
+            "refusing to touch it\n" % path
+        )
+        sys.exit(1)
+    if ca_allow not in allow:
+        allow.append(ca_allow)
+    # Loopback, measured 2026-09-30: without allowLocalBinding the sandboxed
+    # shell cannot reach the core at all, and listing 127.0.0.1 in
+    # allowedDomains does not help. git runs the signing program inside that
+    # shell, so every agent commit would fail. This opens loopback to the
+    # agent's shell (as it was before any sandbox); innsegl's loopback
+    # surfaces authenticate their callers.
+    net = sandbox.setdefault("network", {})
+    net["allowLocalBinding"] = True
     # sandbox.network.allowUnixSockets is deliberately never set: unset blocks
     # every unix socket on macOS, including the container socket, and listing
     # it would be listing the one thing this contract exists to deny.
     if egress:
-        net = sandbox.setdefault("network", {})
         net["strictAllowlist"] = True
         net["allowManagedDomainsOnly"] = True
         net["allowedDomains"] = compute_egress_domains()
@@ -492,6 +513,13 @@ def uninstall_sandbox(obj):
                 fs["denyRead"] = deny
             else:
                 fs.pop("denyRead", None)
+        allow = fs.get("allowRead")
+        if isinstance(allow, list) and ca_allow in allow:
+            allow.remove(ca_allow)
+            if allow:
+                fs["allowRead"] = allow
+            else:
+                fs.pop("allowRead", None)
         if fs:
             sandbox["filesystem"] = fs
         else:
@@ -502,6 +530,8 @@ def uninstall_sandbox(obj):
             net.pop("strictAllowlist", None)
         if net.get("allowManagedDomainsOnly") is True:
             net.pop("allowManagedDomainsOnly", None)
+        if net.get("allowLocalBinding") is True:
+            net.pop("allowLocalBinding", None)
         net.pop("allowedDomains", None)
         if net:
             sandbox["network"] = net
