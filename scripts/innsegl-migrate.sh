@@ -330,6 +330,7 @@ innsegl-spire_spire-agent-data|the SPIRE agent's own data
 innsegl-core_innsegl-object-data|sealed segments' bytes, under object lock
 innsegl-core_innsegl-object-filer-data|the object store's metadata
 innsegl-core_innsegl-s3-identities|the object gateway's S3 credentials
+innsegl-core_innsegl-message-key|RM-237's own derived agent-message key (check-only; the run page's query API verifies with it)
 innsegl-core_innsegl-admin-key|the admin-credential private signing key
 innsegl-core_innsegl-admin-jwks|the admin-credential public key set
 innsegl-core_innsegl-gateway-ca-key|the gateway's own CA private key (its certificate is republished on start)

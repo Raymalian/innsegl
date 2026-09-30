@@ -1114,6 +1114,12 @@ services:
       # caller's ticket reference (ADR-0041). An operator who wants the literal
       # values sets INNSEGL_IDENTITY_MODE=literal deliberately and removes this.
       INNSEGL_IDENTITY_SECRET_FILE: *identity-secret-file
+      # RM-237's own derived agent-message key (ADR-0061 decision 2),
+      # restated here so the run page's read-only query API can VERIFY a
+      # brief or a reply's own keyed digest without ever holding the
+      # identity secret above (E19, #395-#397). Written idempotently on
+      # every start by configureGatewayAgentMessages; never logged.
+      INNSEGL_MCP_MESSAGE_KEY_DIR: /message-key
 
       INNSEGL_WORKSPACE: /work
       # THE AUTHOR NAMES THE DEPLOYMENT, NOT THE AGENT.
@@ -1163,6 +1169,13 @@ services:
       # the volume alone. See the innsegl-gateway-ca-key volume's own
       # comment below.
       - innsegl-gateway-ca-key:/run/innsegl/gateway-ca-key
+      # READ-WRITE, and the only other mount of this volume is innsegl-api's
+      # read-only one (E19, #395-#397) — the s3-identities volume's own
+      # shape, one writer and one reader: this process derives RM-237's own
+      # agent-message key from the identity secret above and writes it here;
+      # the run page's query API reads it to VERIFY a brief or a reply's own
+      # keyed digest, and holds nothing that could mint one.
+      - innsegl-message-key:/message-key
       # READ-WRITE (this process writes the certificate here on every
       # start) and a HOST BIND MOUNT, not a named volume: the host commands
       # (`innsegl git-hook`, `innsegl sign`) read the certificate straight
@@ -2056,6 +2069,17 @@ volumes:
   # Nothing else, ever — a service that could read it holds the root credential,
   # and one that could write it holds the scope.
   innsegl-s3-identities:
+
+  # RM-237's own derived agent-message key (ADR-0061 decision 2), restated
+  # to a file so the run page's read-only query API can VERIFY a brief or a
+  # reply's own keyed digest (E19, #395-#397) without ever holding
+  # -identity-secret: this volume carries only the CHECK-ONLY derivation —
+  # it computes a message digest and nothing else, and cannot mint a run
+  # token or a pseudonym, both derived from the identity secret under a
+  # different, domain-separated label (agentmessagekey.go's own argument).
+  # MOUNTED BY: innsegl-mcp (rw, one file per key id, written idempotently
+  # and never logged) and innsegl-api (ro). Nothing else, ever.
+  innsegl-message-key:
   # The working trees `repo` resolves under (doc 02 §5: `repo` is an
   # identifier, and the tree it names is the DEPLOYMENT's, not the caller's).
   # MOUNTED BY: innsegl-mcp (rw), innsegl-reconciler (rw), demo-agent (rw).

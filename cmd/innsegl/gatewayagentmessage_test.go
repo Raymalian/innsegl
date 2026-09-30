@@ -20,6 +20,9 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +38,17 @@ import (
 // this recorder derives its key from never reaches the log.
 func startGWAgentMessageGateway(
 	t *testing.T, dsn, upstreamURL string, upstreamClient *http.Client, identitySecret, keyID string,
+) (addr string, client *http.Client, stderr *syncBuffer, stop func()) {
+	t.Helper()
+	return startGWAgentMessageGatewayWithKeyDir(t, dsn, upstreamURL, upstreamClient, identitySecret, keyID, "")
+}
+
+// startGWAgentMessageGatewayWithKeyDir is startGWAgentMessageGateway's own
+// sibling, with E19 (#395-#397)'s -message-key-dir added: messageKeyDir ==
+// "" behaves exactly as startGWAgentMessageGateway always did (the flag is
+// simply omitted, OPTIONAL like everything else in this file).
+func startGWAgentMessageGatewayWithKeyDir(
+	t *testing.T, dsn, upstreamURL string, upstreamClient *http.Client, identitySecret, keyID, messageKeyDir string,
 ) (addr string, client *http.Client, stderr *syncBuffer, stop func()) {
 	t.Helper()
 	stderr = &syncBuffer{}
@@ -56,6 +70,9 @@ func startGWAgentMessageGateway(
 		"-listen", "127.0.0.1:0", "-upstream", upstreamURL, "-dsn", dsn,
 		"-identity-secret", identitySecret, "-agent-message-key-id", keyID,
 		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
+	}
+	if messageKeyDir != "" {
+		args = append(args, "-message-key-dir", messageKeyDir)
 	}
 	done := make(chan int, 1)
 	go func() { done <- runGateway(ctx, args, io.Discard, stderr, deps) }()
@@ -242,4 +259,67 @@ func sendAndReadGREC(t *testing.T, addr string, client *http.Client, sessionID, 
 		t.Fatalf("read reply: %v", err)
 	}
 	return respBody
+}
+
+// TestGatewayWritesTheMessageKeyFileThroughTheRealCommand is E19's own
+// (#395-#397) proof that the PROCESS wires -message-key-dir, the same
+// standard TestGREC005AgentMessagesEndToEndThroughRealOpenGateway holds
+// itself to for -identity-secret and -agent-message-key-id: driven through
+// the real command line and a real gateway start-up, not by calling
+// configureGatewayAgentMessages directly.
+func TestGatewayWritesTheMessageKeyFileThroughTheRealCommand(t *testing.T) {
+	f := newGWIdentityFixture(t)
+	bodyDir := configureGRECObserveToolCall(t, f)
+	t.Setenv(envObserveBodyDir, bodyDir)
+
+	identitySecret := newIdentitySecretCanary(t)
+	const keyID = "grecmk-key"
+	messageKeyDir := t.TempDir()
+
+	upstream := newGRECUpstream(t,
+		func(t *testing.T, w http.ResponseWriter) { writeGRECTextSSE(t, w, "hello") },
+	)
+
+	_, _, stderr, stop := startGWAgentMessageGatewayWithKeyDir(
+		t, f.dsn, upstream.URL, upstream.Client(), identitySecret, keyID, messageKeyDir)
+	defer stop()
+
+	keyPath := filepath.Join(messageKeyDir, keyID)
+	deadline := time.Now().Add(10 * time.Second)
+	var got []byte
+	for {
+		var err error
+		got, err = os.ReadFile(keyPath)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the message key file was never written at %s: %v", keyPath, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	want, err := mcp.DeriveAgentMessageKey(identitySecret, keyID)
+	if err != nil {
+		t.Fatalf("DeriveAgentMessageKey: %v", err)
+	}
+	if string(got) != want {
+		t.Errorf("the written key does not match DeriveAgentMessageKey's own answer")
+	}
+
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if mode := info.Mode().Perm(); mode&0o077 != 0 {
+			t.Errorf("key file mode = %o, want no group or world bits set", mode)
+		}
+	}
+
+	// The identity secret itself must never reach the log, the tool-call
+	// body directory, or the message-key directory — which holds only the
+	// DERIVED, check-only key, never the secret it was derived from.
+	assertCredentialCanaryNowhere(t, "identity secret via -message-key-dir", identitySecret,
+		[]byte(stderr.String()), nil, []string{bodyDir, messageKeyDir})
 }

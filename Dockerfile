@@ -142,6 +142,18 @@ COPY --from=build /out/gitsign /usr/local/bin/gitsign
 # a run is loud, which is the only reason it was one command to find.
 RUN mkdir -p /work /sessions && chown 1000:1000 /work /sessions
 
+# /message-key is RM-237's own derived agent-message key (E19, #395-#397): a
+# named volume mounted read-write into innsegl-mcp and read-only into
+# innsegl-api, so the run page's query API can VERIFY a brief or a reply's
+# own keyed digest without ever holding -identity-secret. 0700, not the
+# 1000:1000-owned default other volumes above get: this one holds
+# cryptographic key material, however narrow its own capability (check-only,
+# never a run token or a pseudonym — see gateway.go's own
+# writeMessageKeyFile), and the directory bit is the second half of that
+# narrowing, enforced again at runtime by writeMessageKeyFile itself in case
+# this image is ever run with the mountpoint pre-created some other way.
+RUN mkdir -p /message-key && chown 1000:1000 /message-key && chmod 0700 /message-key
+
 # git and gitsign both want a writable HOME, and gitsign writes its cache
 # there, so HOME is a real directory this user owns rather than `/`.
 #
