@@ -257,3 +257,40 @@ func validReconcileArgs(t *testing.T) []string {
 		"-trust-domain", "innsegl.dev",
 	}
 }
+
+// The commit path's two reconciler passes (ADR-0059, E17) say what they saw,
+// and say OFF when they cannot run: a silent line reads like agreement.
+func TestReconcileReportNamesTheCommitPathPasses(t *testing.T) {
+	on := renderReconcileResult(reconciler.Result{
+		CommitWatch: reconciler.CommitWatchReport{Enabled: true, Checked: 4, Signed: 3, Unsigned: 1},
+		Landing:     reconciler.LandingReport{Enabled: true, Checked: 3, Landed: 1, NotLanded: 2},
+	})
+	for _, want := range []string{
+		"commits: 4 checked  3 signed  1 UNSIGNED  0 unchecked",
+		"landing: 3 checked  1 landed  2 signed, not landed  0 not checked",
+	} {
+		if !strings.Contains(on, want) {
+			t.Errorf("report lacks %q:\n%s", want, on)
+		}
+	}
+	off := renderReconcileResult(reconciler.Result{})
+	for _, want := range []string{"commits: OFF", "landing: OFF"} {
+		if !strings.Contains(off, want) {
+			t.Errorf("report lacks %q:\n%s", want, off)
+		}
+	}
+}
+
+// With the gateway's tool-call bodies named, both passes are on; without,
+// the commit watch is off (it cannot read a result) and landing still reads
+// the repository.
+func TestReconcileConfigTurnsOnTheCommitPathPasses(t *testing.T) {
+	with := commitPathPasses(reconcileOptions{toolBodyDir: "/agentlog"})
+	if with.commitWatch == nil || with.commitWatch.LogDir != "/agentlog" || with.landing == nil || with.landing.LogDir != "/agentlog" {
+		t.Errorf("with a body dir: %+v", with)
+	}
+	without := commitPathPasses(reconcileOptions{})
+	if without.commitWatch != nil || without.landing == nil {
+		t.Errorf("without a body dir: %+v", without)
+	}
+}
