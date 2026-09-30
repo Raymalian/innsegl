@@ -159,7 +159,11 @@ func (g GitRepos) patchIDOf(ctx context.Context, worktree string, diffArgs []str
 		path = "git"
 	}
 
-	diff := exec.CommandContext(ctx, path, append([]string{"-C", worktree}, diffArgs...)...)
+	// G702, here and for patch-id below: argument lists, never shell text;
+	// worktree is a checkout already proven to be the run's repository
+	// (Workspace.Worktree, or commitPathWorktree on the commit path), and
+	// diffArgs are this package's own constants and object ids.
+	diff := exec.CommandContext(ctx, path, append([]string{"-C", worktree}, diffArgs...)...) //nolint:gosec // G702, see above
 	diff.Env = signCommitGitEnv(worktree)
 	patch, err := diff.Output()
 	if err != nil {
@@ -171,7 +175,7 @@ func (g GitRepos) patchIDOf(ctx context.Context, worktree string, diffArgs []str
 			ErrNoChange, strings.Join(diffArgs, " "), worktree)
 	}
 
-	id := exec.CommandContext(ctx, path, "-C", worktree, "patch-id", "--verbatim")
+	id := exec.CommandContext(ctx, path, "-C", worktree, "patch-id", "--verbatim") //nolint:gosec // G702, see diff above
 	id.Env = signCommitGitEnv(worktree)
 	id.Stdin = strings.NewReader(string(patch))
 	out, err := id.Output()
