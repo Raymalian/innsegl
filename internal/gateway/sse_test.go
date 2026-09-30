@@ -5,6 +5,7 @@ package gateway
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -485,5 +486,137 @@ func TestGatewayObservesToolUseWhenTheClientAsksForACompressedReply(t *testing.T
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("no tool_use observed; upstream was asked for Accept-Encoding %q", sawEncoding)
+	}
+}
+
+// The reply's own text, every text block joined the way a resent turn's is
+// (facts.go's joinText), is handed over once the message ends, carrying the
+// request's context. A reply with no text hands nothing.
+func TestGatewayHandsTheReplyTextOverWhenTheMessageEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		events []string
+		want   []string
+	}{
+		{"text around a tool call", []string{
+			`content_block_start|{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`content_block_delta|{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"All four "}}`,
+			`content_block_delta|{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"steps ran."}}`,
+			`content_block_stop|{"type":"content_block_stop","index":0}`,
+			`content_block_start|{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01A","name":"Bash","input":{}}}`,
+			`content_block_stop|{"type":"content_block_stop","index":1}`,
+			`content_block_start|{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}`,
+			`content_block_delta|{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"Done."}}`,
+			`content_block_stop|{"type":"content_block_stop","index":2}`,
+			`message_stop|{"type":"message_stop"}`,
+		}, []string{"All four steps ran.\n\nDone."}},
+		{"a pure tool call", []string{
+			`content_block_start|{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01A","name":"Bash","input":{}}}`,
+			`content_block_stop|{"type":"content_block_stop","index":0}`,
+			`message_stop|{"type":"message_stop"}`,
+		}, nil},
+		{"a stream cut before message_stop", []string{
+			`content_block_start|{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`content_block_delta|{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"half a reply"}}`,
+		}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				for _, e := range tc.events {
+					event, data, _ := strings.Cut(e, "|")
+					if _, err := io.WriteString(w, "event: "+event+"\ndata: "+data+"\n\n"); err != nil {
+						t.Errorf("upstream write: %v", err)
+					}
+				}
+			}))
+			defer upstream.Close()
+			up, err := NewUpstream(upstream.URL, upstream.Client())
+			if err != nil {
+				t.Fatalf("NewUpstream: %v", err)
+			}
+
+			type handed struct{ run, text string }
+			ch := make(chan handed, 4)
+			obs := replyTextObserverFunc(func(ctx context.Context, text string) {
+				run, _ := RunIDFromContext(ctx)
+				ch <- handed{run, text}
+			})
+			markRun := guardFunc(func(r *http.Request) (*http.Request, *Refusal) {
+				return r.WithContext(WithRunID(r.Context(), "run-reply")), nil
+			})
+			gw := httptest.NewServer(&Proxy{Upstream: up, ReplyText: obs, Guards: []Guard{markRun}})
+			defer gw.Close()
+
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, gw.URL+"/v1/messages", strings.NewReader("{}"))
+			if err != nil {
+				t.Fatalf("NewRequestWithContext: %v", err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("gateway request: %v", err)
+			}
+			discardCopyError(io.Copy(io.Discard, resp.Body))
+			_ = resp.Body.Close()
+
+			// The handler has returned once the body reached EOF, but the
+			// observer runs on its goroutine: wait for it, or for silence.
+			var got []handed
+			for waiting := true; waiting; {
+				select {
+				case h := <-ch:
+					got = append(got, h)
+				case <-time.After(200 * time.Millisecond):
+					waiting = false
+				}
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("handed %+v, want %q", got, tc.want)
+			}
+			for i, h := range got {
+				if h.text != tc.want[i] || h.run != "run-reply" {
+					t.Errorf("handed %+v, want %q on run-reply", h, tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+type replyTextObserverFunc func(ctx context.Context, text string)
+
+func (f replyTextObserverFunc) OnReplyText(ctx context.Context, text string) { f(ctx, text) }
+
+// GREC-007: a reply whose text runs past maxReplyTextBytes hands nothing,
+// never a part presented as the whole. A delta for a block that never
+// started, and a repeated start, change nothing.
+func TestMessagesInterpreterReplyTextEdges(t *testing.T) {
+	run := func(events ...string) []string {
+		var got []string
+		m := newMessagesInterpreter(nil)
+		m.onText = func(s string) { got = append(got, s) }
+		for _, e := range events {
+			event, data, _ := strings.Cut(e, "|")
+			m.handleEvent(event, data)
+		}
+		return got
+	}
+	start := `content_block_start|{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
+	delta := func(text string) string {
+		b, err := json.Marshal(text)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return `content_block_delta|{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":` + string(b) + `}}`
+	}
+	stop := `message_stop|{"type":"message_stop"}`
+
+	half := strings.Repeat("x", maxReplyTextBytes/2+1)
+	if got := run(start, delta(half), delta(half), delta("more"), stop); got != nil {
+		t.Errorf("an over-long reply handed %d texts, want none", len(got))
+	}
+	stray := `content_block_delta|{"type":"content_block_delta","index":7,"delta":{"type":"text_delta","text":"stray"}}`
+	if got := run(start, delta("a"), stray, start, delta("b"), stop); len(got) != 1 || got[0] != "ab" {
+		t.Errorf("handed %q, want [\"ab\"]", got)
 	}
 }

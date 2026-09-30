@@ -259,6 +259,19 @@ func (m *MessageRecorder) Check(r *http.Request) (*http.Request, *Refusal) {
 // claimBrief reports whether this call is the first, for runID, to see a
 // non-empty Brief -- true at most once per run, ever (until table eviction;
 // see this file's own doc comment on why that is not a correctness gap).
+// OnReplyText implements ReplyTextObserver: GREC-005's turn read from the
+// reply itself, because an agent's last reply is never resent in a later
+// request's history. It claims no position in the resent-history count, so
+// the same turn arriving again that way is dispatched again, and lands once:
+// an agent_message's idempotency key is derived from its body.
+func (m *MessageRecorder) OnReplyText(ctx context.Context, text string) {
+	runID, ok := RunIDFromContext(ctx)
+	if !ok || runID == "" || text == "" {
+		return
+	}
+	m.dispatch(ctx, runID, mcp.AgentMessageRoleAssistant, []byte(text))
+}
+
 func (m *MessageRecorder) claimBrief(runID string) bool {
 	var first bool
 	m.table.mutate(runID, func(st *messageRecorderState) {

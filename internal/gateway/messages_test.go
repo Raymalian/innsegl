@@ -574,3 +574,39 @@ func TestMCPAgentMessageRecorderDelegatesToTheInProcessWrapper(t *testing.T) {
 		t.Fatal("RecordAgentMessage succeeded with internal/mcp's agent-message recorder never configured in this process")
 	}
 }
+
+// GREC-005: an agent's last reply is never resent in a later request's
+// history, so it is read from the reply itself. A live run on 2026-09-30
+// recorded no assistant turn at all: its only text was the final summary.
+func TestMessageRecorderRecordsTheReplyTextItIsHanded(t *testing.T) {
+	fake := newFakeAgentMessageRecorder()
+	rec, err := NewMessageRecorder(MessageRecorderConfig{Recorder: fake})
+	if err != nil {
+		t.Fatalf("NewMessageRecorder: %v", err)
+	}
+
+	rec.OnReplyText(WithRunID(t.Context(), "run-final"), "All four steps ran.")
+	fake.waitForCalls(t, 1, 5*time.Second)
+
+	calls := fake.snapshot()
+	if calls[0].runID != "run-final" || calls[0].role != mcp.AgentMessageRoleAssistant || string(calls[0].body) != "All four steps ran." {
+		t.Errorf("recorded %+v, want run-final's assistant turn", calls[0])
+	}
+}
+
+func TestMessageRecorderIgnoresReplyTextWithoutARunOrText(t *testing.T) {
+	fake := newFakeAgentMessageRecorder()
+	rec, err := NewMessageRecorder(MessageRecorderConfig{Recorder: fake})
+	if err != nil {
+		t.Fatalf("NewMessageRecorder: %v", err)
+	}
+
+	rec.OnReplyText(t.Context(), "no run resolved")
+	rec.OnReplyText(WithRunID(t.Context(), ""), "an empty run id")
+	rec.OnReplyText(WithRunID(t.Context(), "run-x"), "")
+	select {
+	case <-fake.done:
+		t.Fatalf("dispatched %+v", fake.snapshot())
+	case <-time.After(200 * time.Millisecond):
+	}
+}
