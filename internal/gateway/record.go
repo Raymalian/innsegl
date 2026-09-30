@@ -66,6 +66,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"innsegl.dev/innsegl/internal/commitpath"
 	"innsegl.dev/innsegl/internal/mcp"
 )
 
@@ -99,6 +100,9 @@ type pendingCall struct {
 	input      json.RawMessage
 	truncated  bool
 	observedAt time.Time
+	// workingDirectory is the one the request carrying this call stated;
+	// the commit path reads the commit's objects there (LookupPending).
+	workingDirectory string
 }
 
 // claimedPair is one tool_use matched against the tool_result the next
@@ -259,21 +263,27 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	if !ok || runID == "" {
 		return
 	}
+	var workingDirectory string
+	if facts, ok := RequestFactsFromContext(ctx); ok {
+		workingDirectory = facts.WorkingDirectory
+	}
 	//nolint:contextcheck // deliberate: addPending's own eventual recording (on eviction) uses
 	// a detached, bounded context of its own rather than ctx -- see recordAsync's own doc
 	// comment for why a request/reply's context must never be allowed to cut a recording short.
-	r.addPending(runID, t)
+	r.addPending(runID, workingDirectory, t)
 }
 
 // addPending records t as pending, evicting and recording the oldest
 // pending entry (input-only) first if the table is already at its cap.
-func (r *ToolCallRecorder) addPending(runID string, t ToolUse) {
+func (r *ToolCallRecorder) addPending(runID, workingDirectory string, t ToolUse) {
 	key := pendingKey{runID: runID, toolUseID: t.ID}
 	call := pendingCall{
 		tool:       t.Name,
 		input:      append(json.RawMessage(nil), t.Input...),
 		truncated:  t.Truncated,
 		observedAt: time.Now(),
+
+		workingDirectory: workingDirectory,
 	}
 
 	var evictedKey pendingKey
@@ -718,4 +728,27 @@ func parseToolResults(buf []byte) []observedToolResult {
 		}
 	}
 	return out
+}
+
+var _ commitpath.Resolver = (*ToolCallRecorder)(nil)
+
+// LookupPending implements commitpath.Resolver: the relayed tool call with
+// this id whose result has not arrived yet, and the run it was relayed on.
+// Tool call ids are unique across runs, so the first match is the only one.
+func (r *ToolCallRecorder) LookupPending(toolUseID string) (commitpath.RelayedCall, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, call := range r.pending {
+		if key.toolUseID == toolUseID {
+			return commitpath.RelayedCall{
+				RunID:            key.runID,
+				WorkingDirectory: call.workingDirectory,
+				Tool:             call.tool,
+				Input:            append(json.RawMessage(nil), call.input...),
+				Truncated:        call.truncated,
+				ObservedAt:       call.observedAt,
+			}, true
+		}
+	}
+	return commitpath.RelayedCall{}, false
 }

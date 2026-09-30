@@ -45,9 +45,11 @@ import (
 // is pointed at (ADR-0057). It is a subcommand in its own right, the same
 // shape `api`, `seal`, `reconcile` and `reap` already are, and `serve -also
 // gateway` runs the same body as a goroutine instead of a sixth container.
+// `hook`, `git-hook` and `sign` are the host half of ADR-0059's commit path
+// (E17): what the harness and git run, each a client of the core.
 var documentedSubcommands = []string{
-	"admin-credential", "api", "canary", "gateway", "init", "migrate-schema", "reap", "reconcile",
-	"resolve-alert", "retire", "seal", "serve", "verify",
+	"admin-credential", "api", "canary", "gateway", "git-hook", "hook", "init", "migrate-schema",
+	"reap", "reconcile", "resolve-alert", "retire", "seal", "serve", "sign", "verify",
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {
@@ -180,5 +182,20 @@ func TestRunVersionSucceedsAndPrintsTheVersionString(t *testing.T) {
 				t.Errorf("run(%q) stdout = %q, want the binary name", arg, stdout.String())
 			}
 		})
+	}
+}
+
+// The commit path's host commands name their own sub-step; anything else is
+// a usage error, never a silent success git or the harness would read as
+// consent.
+func TestCommitPathHostCommandsRefuseAnUnknownStep(t *testing.T) {
+	for _, args := range [][]string{{"hook"}, {"hook", "post-tool-use"}, {"git-hook"}, {"git-hook", "commit-msg"}} {
+		var stdout, stderr strings.Builder
+		if code := run(args, &stdout, &stderr); code != exitUsage {
+			t.Errorf("run(%q) = %d, want %d", args, code, exitUsage)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("run(%q) wrote to stdout: %q", args, stdout.String())
+		}
 	}
 }

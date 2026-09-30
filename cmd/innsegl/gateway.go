@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"innsegl.dev/innsegl/internal/commitpath"
 	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
@@ -523,7 +524,12 @@ func gatewayUsage(stderr io.Writer, fs *flag.FlagSet) {
 
 // runningGateway is the shipped servedGateway.
 type runningGateway struct {
-	server          *http.Server
+	server *http.Server
+
+	// commitResolver is set with the identity stack: the relayed tool calls
+	// the commit path authorises against (mountCommitPath).
+	commitResolver commitpath.Resolver
+
 	ln              net.Listener
 	shutdownTimeout time.Duration
 	log             *serveLog
@@ -757,6 +763,7 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		// versioned part of the gateway's public contract.
 		mux.HandleFunc(gatewaySessionEndPath, sessionEndHandler(running.sessionEnder, running.sessionEndRateLimit, log))
 	}
+	mountCommitPath(mux, running.commitResolver)
 
 	running.server = &http.Server{
 		Handler:           mux,
@@ -992,6 +999,18 @@ func openIdentityStack(
 
 	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running))
 	toolUse = gateway.CombineToolUseObservers(spawnRecorder, toolCallRecorder)
+
+	// The commit path (ADR-0059, E17) authorises a commit by a git commit
+	// tool call this recorder saw relayed and is still waiting on.
+	restoreSignPayload, err := mcp.ConfigureSignPayload(mcp.SignPayloadConfig{
+		Resolver: toolCallRecorder,
+		ClaimFor: mcp.CommitClaimForRun,
+	})
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("configure the commit-sign path: %w", err)
+	}
+	running.closers = append(running.closers, restoreSignPayload)
+	running.commitResolver = toolCallRecorder
 
 	amRestore, err := configureGatewayAgentMessages(o, dir, store, running)
 	if err != nil {

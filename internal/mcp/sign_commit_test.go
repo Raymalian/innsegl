@@ -372,12 +372,15 @@ type scCredentials struct {
 	mu    sync.Mutex
 	calls int
 	err   error
+	// token is the run token the last issue presented.
+	token string
 }
 
-func (c *scCredentials) IssueForSigning(_ context.Context, run CredentialRun, _ string) (signing.Credential, error) {
+func (c *scCredentials) IssueForSigning(_ context.Context, run CredentialRun, runToken string) (signing.Credential, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
+	c.token = runToken
 	if c.err != nil {
 		return signing.Credential{}, c.err
 	}
