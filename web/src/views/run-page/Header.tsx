@@ -27,11 +27,14 @@ import {
   factGrid,
   factLabel,
   factRowIcon,
+  factValueFailed,
+  factIdentity,
   factValue,
   headerRow,
   pageHeading,
   statusPill,
 } from "./styles";
+import { AlertMarkIcon } from "./icons";
 import type { RunRecord } from "./types";
 
 const KNOWN_STATUSES: readonly RunStatus[] = ["active", "lapsed", "abandoned", "retired"];
@@ -98,11 +101,11 @@ export function Header({ record, now }: HeaderProps) {
       <dl className={factGrid}>
         <div className={factCard}>
           <dt className={factLabel}>{strings.facts.identity}</dt>
-          <dd className={factValue}>
+          <dd className={`${factValue} ${factIdentity}`}>
             <IdentifierChip
               value={run.spiffe_id}
               kind="spiffe"
-              maxLength={40}
+              display={compactSpiffeId(run.spiffe_id)}
             />
           </dd>
         </div>
@@ -127,8 +130,11 @@ export function Header({ record, now }: HeaderProps) {
         </div>
         <div className={factCard}>
           <dt className={factLabel}>{strings.facts.witnesses}</dt>
-          <dd className={`${factValue} ${factRowIcon}`}>
-            <WitnessGlyph agree={allWitnessesAgree(witness)} />
+          <dd
+            className={`${factValue} ${factRowIcon} ${allWitnessesAgree(witness) ? "" : factValueFailed}`}
+            data-tone={allWitnessesAgree(witness) ? "neutral" : "failed"}
+          >
+            {allWitnessesAgree(witness) ? <WitnessGlyph /> : <AlertMarkIcon />}
             <span>
               {allWitnessesAgree(witness)
                 ? strings.facts.witnessesAgreeAll(witness.steps)
@@ -177,7 +183,7 @@ function statusLabel(status: RunStatus): string {
   return labels[status];
 }
 
-function WitnessGlyph({ agree }: { readonly agree: boolean }) {
+function WitnessGlyph() {
   return (
     <svg
       aria-hidden="true"
@@ -189,11 +195,22 @@ function WitnessGlyph({ agree }: { readonly agree: boolean }) {
       stroke="currentColor"
       strokeWidth={2}
     >
-      {agree ? (
-        <path d="M4 12l5 5L20 6" strokeLinecap="round" strokeLinejoin="round" />
-      ) : (
-        <path d="M12 7v6M12 16.5v.5" strokeLinecap="round" />
-      )}
+      <path d="M4 12l5 5L20 6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
+}
+
+/**
+ * The identity as the approved mockup shows it, on one line in a fact card:
+ * the trust domain, an ellipsis for the middle, and the run segment shortened
+ * the way the page shortens every run id. The chip copies and reveals the
+ * whole ID, so nothing is lost (doc 06 §4.3's full value on hover and focus).
+ */
+export function compactSpiffeId(spiffeId: string): string {
+  const match = /^(spiffe:\/\/[^/]+)\/.*\/([^/]+)$/.exec(spiffeId);
+  const domain = match?.[1];
+  const last = match?.[2];
+  if (domain === undefined || last === undefined) return spiffeId;
+  const run = last.length > 13 ? `${last.slice(0, 8)}…${last.slice(-4)}` : last;
+  return `${domain}/…/${run}`;
 }

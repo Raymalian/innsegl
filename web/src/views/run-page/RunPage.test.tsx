@@ -53,6 +53,10 @@ describe("RPG-010 renders the mockup's run page from fixtures/record.json", () =
     expect(screen.getByText("Runs")).toBeInTheDocument();
     expect(screen.getByText("github.com/innsegl-test/gateway-livetest")).toBeInTheDocument();
     expect(screen.getByText("Retired")).toBeInTheDocument();
+    // The identity on one line, as the mockup shows it; the chip still
+    // copies and reveals the whole SPIFFE ID.
+    const identityCard = screen.getByText("Identity").closest("div") as HTMLElement;
+    expect(within(identityCard).getByText("spiffe://innsegl.dev/…/run-df21…b5f9")).toBeInTheDocument();
     // As the mockup shows it: the time of day when it was today, UTC named.
     expect(screen.getByText("14:31:58 UTC")).toBeInTheDocument();
     expect(screen.getByText("Every step has a stored body; digests verify")).toBeInTheDocument();
@@ -260,6 +264,13 @@ describe("RPG-012 witness disagreement", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Witnesses disagree on step 7");
     expect(alert).toHaveTextContent("toolu_01XyABCDEFGHIJKLMNOPQk");
+
+    // The Witnesses fact card is loud too (doc 06 P3): the failure tone and
+    // the same exclamation mark the step's badge carries.
+    const witnessCard = screen.getByText("Witnesses").closest("div") as HTMLElement;
+    const witnessValue = within(witnessCard).getByText(/disagree on 1 of 7 steps/).closest("dd") as HTMLElement;
+    expect(witnessValue).toHaveAttribute("data-tone", "failed");
+    expect(witnessValue.querySelector('[data-icon="alert"]')).not.toBeNull();
 
     const step7 = document.querySelector('[data-step="7"]') as HTMLElement;
     expect(step7).not.toBeNull();

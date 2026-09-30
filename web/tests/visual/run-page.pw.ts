@@ -47,6 +47,17 @@ async function installRunPageMocks(
     const url = new URL(route.request().url());
     const p = url.pathname;
 
+    // ADR-0062's gate reads these on every mount; this page is shown to a
+    // signed-in operator, as tests/support/mock-routes.ts answers them.
+    if (p === "/api/v1/auth/session") {
+      await json(route, { authenticated: true, display_name: "Test Operator" });
+      return;
+    }
+    if (p === "/api/v1/health") {
+      await json(route, { database: {}, auth: { enrolled: true, cannot_write_ledger: {} } });
+      return;
+    }
+
     if (p === `/api/v1/runs/${runId}/record`) {
       await json(route, getRecord());
       return;

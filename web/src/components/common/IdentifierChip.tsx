@@ -50,6 +50,10 @@ export interface IdentifierChipProps {
   readonly maxLength?: number;
   /** P4: "link to their canonical view". Omitted where there is no such view. */
   readonly href?: string;
+  /** Shown instead of the computed abbreviation where a view needs a
+   * shorter form than §4.3's whole-segment rule gives (a narrow fact card);
+   * `value` is still what is copied and revealed on hover and focus. */
+  readonly display?: string;
 }
 
 export function IdentifierChip({
@@ -57,6 +61,7 @@ export function IdentifierChip({
   kind = "generic",
   maxLength = DEFAULT_MAX_LENGTH,
   href,
+  display: shown,
 }: IdentifierChipProps) {
   const tooltipId = useId();
   const [revealed, setRevealed] = useState(false);
@@ -89,7 +94,7 @@ export function IdentifierChip({
   }, [announce, value]);
 
   const kindLabel = strings.identifier.kind[kind];
-  const display = truncateIdentifier(value, { kind, maxLength });
+  const display = shown ?? truncateIdentifier(value, { kind, maxLength });
   const truncated = display !== value;
 
   return (

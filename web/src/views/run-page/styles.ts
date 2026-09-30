@@ -68,6 +68,13 @@ export const factCard = `${hairline} flex flex-col gap-1 rounded-md bg-surface b
  * `labelText`'s established uppercase disagree). */
 export const factLabel = `text-micro ${mutedText}`;
 export const factValue = "mt-1 text-body text-ink";
+/* The identity card's chip at the mockup's 12px, so the SPIFFE ID sits on
+ * one line in a fact card; the chip itself sets the body size everywhere
+ * else. */
+export const factIdentity =
+  "[&_[data-identifier-display]]:text-micro [&_[data-identifier-display]]:min-w-0 [&_[data-identifier-display]]:truncate [&_[data-identifier-display]]:break-normal";
+/* A witness disagreement is an alarm (doc 06 P3): the failure tone. */
+export const factValueFailed = "text-proof-failed font-medium";
 export const factRowIcon = "flex items-center gap-2";
 
 /* ── two-column layout ─────────────────────────────────────────────────── */

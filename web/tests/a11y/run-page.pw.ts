@@ -30,6 +30,10 @@ function json(route: Route, body: unknown): Promise<void> {
 async function installMocks(page: Page): Promise<void> {
   await page.route("**/api/v1/**", async (route) => {
     const p = new URL(route.request().url()).pathname;
+    // ADR-0062's gate reads these on every mount; this page is shown to a
+    // signed-in operator, as tests/support/mock-routes.ts answers them.
+    if (p === "/api/v1/auth/session") return json(route, { authenticated: true, display_name: "Test Operator" });
+    if (p === "/api/v1/health") return json(route, { database: {}, auth: { enrolled: true, cannot_write_ledger: {} } });
     if (p === `/api/v1/runs/${RUN_ID}/record`) return json(route, record());
     if (p === `/api/v1/runs/${RUN_ID}/steps/1/diff`) return json(route, stepOneDiff());
     if (p.startsWith("/api/v1/proof/")) return json(route, verifiedProof());
