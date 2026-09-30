@@ -150,7 +150,11 @@ type reconcileOptions struct {
 	// report says so on every cycle rather than letting a deployment believe a
 	// reconciler without it is checking what its agents claim to have written.
 	writesLogDir string
-	writesRepos  []string
+	// toolBodyDir is where the gateway retains tool-call bodies, the store
+	// serve's own -mcp-log-dir names. It turns on the commit watch (#389)
+	// and lets landing (#388) read a git commit's own result.
+	toolBodyDir string
+	writesRepos []string
 	// hostProjects and writesProjects are the two spellings of one directory
 	// that let RM-104's check tell a claimed path inside a served repository
 	// from one outside every repository it can read. Empty leaves the path
@@ -259,6 +263,11 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 				"(#169): the content a run REPORTS writing is checked against the trees it "+
 				"SIGNED, so a reported write becomes falsifiable. Empty leaves it OFF "+
 				"($"+envWritesLogDir+")")
+		toolBodyDir = fs.String("tool-body-dir", os.Getenv(envObserveBodyDir),
+			"the gateway's retained tool-call bodies, read-only. Turns on the check that "+
+				"every git commit an agent made was signed (#389), and lets the landing "+
+				"report read a commit's own result (#388). Empty leaves the first OFF "+
+				"($"+envObserveBodyDir+")")
 		writesRepos = fs.String("writes-repos", os.Getenv(envWritesRepos),
 			"comma-separated repositories RM-104's check may read. Empty falls back to "+
 				"-rebase-repos, which is usually the wrong set: the repository whose merges "+
@@ -382,6 +391,7 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 		trustDomain: *trustDomain, expireAfter: *expireAfter,
 		driftWindow:    *driftWindow,
 		writesLogDir:   strings.TrimSpace(*writesLogDir),
+		toolBodyDir:    strings.TrimSpace(*toolBodyDir),
 		writesRepos:    splitRepos(*writesRepos),
 		hostProjects:   strings.TrimSpace(*hostProjects),
 		writesProjects: strings.TrimSpace(*writesProjects),
@@ -552,6 +562,26 @@ func renderReconcileResult(result reconciler.Result) string {
 	} else {
 		fmt.Fprintf(&b, "writes: OFF - -writes-log-dir (or $%s) is not set, so no "+
 			"reported write is corroborated against the repository\n", envWritesLogDir)
+	}
+
+	// The commit path (ADR-0059). A commit git made with no signature is an
+	// alert; a signed commit that lost git's ref lock is not, and is derived
+	// here, never recorded (decision 6).
+	if result.CommitWatch.Enabled {
+		fmt.Fprintf(&b, "commits: %d checked  %d signed  %d UNSIGNED  %d unchecked\n",
+			result.CommitWatch.Checked, result.CommitWatch.Signed,
+			result.CommitWatch.Unsigned, result.CommitWatch.Unchecked)
+	} else {
+		fmt.Fprintf(&b, "commits: OFF - -tool-body-dir (or $%s) is not set, so a git commit "+
+			"made without a signature is not being looked for\n", envObserveBodyDir)
+	}
+	if result.Landing.Enabled {
+		fmt.Fprintf(&b, "landing: %d checked  %d landed  %d rewritten by a merge  "+
+			"%d signed, not landed  %d not checked\n",
+			result.Landing.Checked, result.Landing.Landed, result.Landing.Rewritten,
+			result.Landing.NotLanded, result.Landing.NotChecked)
+	} else {
+		fmt.Fprintf(&b, "landing: OFF\n")
 	}
 
 	if result.Rebase.Enabled {
@@ -780,6 +810,8 @@ func openReconciler(ctx context.Context, opts reconcileOptions) (reconcileEngine
 			Workspace:    opts.workspace,
 		}
 	}
+	passes := commitPathPasses(opts)
+	cfg.CommitWatch, cfg.Landing = passes.commitWatch, passes.landing
 	if opts.rebaseBranch != "" {
 		cfg.Rebase = &reconciler.RebaseConfig{
 			Branch: opts.rebaseBranch,
@@ -859,4 +891,23 @@ func openSpireReconciler(
 		return nil, nil, err
 	}
 	return engine, unwind, nil
+}
+
+// commitPathConfigs is the reconciler configuration of ADR-0059's two
+// derived passes.
+type commitPathConfigs struct {
+	commitWatch *reconciler.CommitWatchConfig
+	landing     *reconciler.LandingConfig
+}
+
+// commitPathPasses turns them on. Landing reads repository reachability, so
+// it is always on, and reads a git commit's own result when the bodies are
+// named. The commit watch cannot judge a commit whose result it cannot read,
+// so it is on only when they are.
+func commitPathPasses(opts reconcileOptions) commitPathConfigs {
+	c := commitPathConfigs{landing: &reconciler.LandingConfig{LogDir: opts.toolBodyDir}}
+	if opts.toolBodyDir != "" {
+		c.commitWatch = &reconciler.CommitWatchConfig{LogDir: opts.toolBodyDir}
+	}
+	return c
 }

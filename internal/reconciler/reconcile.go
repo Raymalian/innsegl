@@ -338,6 +338,14 @@ type Result struct {
 	// signed (#169). Zero — and `Enabled` false — when no `Config.Writes` was
 	// given, so a reader never mistakes "not run" for "nothing to find".
 	Writes WritesReport
+	// CommitWatch is RM-244's check that a git commit tool call whose result
+	// shows a new commit has a matching commit_recorded on the run (#389).
+	// Zero — and `Enabled` false — when no `Config.CommitWatch` was given.
+	CommitWatch CommitWatchReport
+	// Landing is RM-243's derived "signed, not landed" report (#388). Zero —
+	// and `Enabled` false — when no `Config.Landing` was given. Nothing in
+	// it is ever written to the chain.
+	Landing LandingReport
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +392,18 @@ type Config struct {
 	// bodies and check the content they claim to have written against the
 	// trees that run signed. Nil leaves it OFF. See writes.go.
 	Writes *WritesConfig
+	// CommitWatch turns on RM-244 (#389): read each run's retained Bash
+	// tool-call bodies and alert on a git commit whose own tool result shows
+	// git made one, with no commit_recorded on the run to match it — a
+	// commit made without going through ADR-0059's signing path. Nil leaves
+	// it OFF. See commitwatch.go.
+	CommitWatch *CommitWatchConfig
+	// Landing turns on RM-243 (#388): derive, for every commit_recorded, a
+	// "signed, not landed" verdict from repository reachability and (with
+	// LandingConfig.LogDir) a run's own git commit tool-call result. Nil
+	// leaves it OFF. Appends nothing to the chain — ADR-0059 decision 6,
+	// landing is derived, never recorded. See landing.go.
+	Landing *LandingConfig
 	// Observe receives every cycle Run performs, including a failed one.
 	Observe func(Result, error)
 }
@@ -427,6 +447,10 @@ func New(cfg Config) (*Reconciler, error) {
 	}
 	// RM-036: drift detection is optional, but a half-configured one is not.
 	if err := cfg.Drift.validate(); err != nil {
+		return nil, err
+	}
+	// RM-244: commit watch is optional, but a half-configured one is not.
+	if err := cfg.CommitWatch.validate(); err != nil {
 		return nil, err
 	}
 	if cfg.Alert == nil {
@@ -510,6 +534,16 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	result.Drift = r.detectDrift(ctx, view)
 	result.Appended = append(result.Appended, result.Drift.Appended...)
 
+	// RM-244 (#389). Placed beside the drift cross-check because both write
+	// doc 02 §3's `ledger_drift_detected`, but the two never contend over one
+	// subject: drift's are commit_recorded event ids and this pass's are
+	// tool_call event ids, so which runs first cannot change either one's
+	// verdict.
+	if r.cfg.CommitWatch != nil {
+		result.CommitWatch = r.checkCommits(ctx, view)
+		result.Appended = append(result.Appended, result.CommitWatch.Appended...)
+	}
+
 	// ADR-0047 decision 4, and AFTER the repairs for the same reason drift is:
 	// a `commit_recorded` this cycle wrote is on the chain by now, so a commit
 	// whose phase C was repaired minutes ago and then rebased is matched in
@@ -519,6 +553,13 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	}
 	if r.cfg.Rebase != nil {
 		result.Rebase = r.recordRebases(ctx, view.rebase)
+	}
+	// RM-243 (#388): purely derived and appends nothing (ADR-0059 decision
+	// 6), so unlike drift and rebase above, its place in this ordering is
+	// not load-bearing — it is run last simply because nothing else here
+	// depends on it.
+	if r.cfg.Landing != nil {
+		result.Landing = r.checkLanding(ctx, view.landing, r.cfg.Landing)
 	}
 	return result, nil
 }
@@ -769,17 +810,31 @@ type ledgerView struct {
 	// and which tool calls claimed to write something (writes.go). Never nil
 	// -- the fold is cheap and a nil check at every observe is not.
 	writes *writesView
+	// commitWatch is RM-244's fold of the same walk: which commit shas each
+	// run's own commit_recorded events name, and which Bash tool calls might
+	// be an unsigned commit (commitwatch.go). Never nil, for writes' own
+	// reason.
+	commitWatch *commitWatchView
 	// rebase is ADR-0047's fold of the same walk: which run recorded which
 	// change, as which commit (rebase.go). Nil when the pass is off, so a
 	// deployment that does not want it does not pay to build the index.
 	rebase *rebaseView
+	// landing is RM-243's fold of the same walk: every commit_recorded and
+	// tool_call this pass may need (landing.go). Nil when the pass is off.
+	landing *landingView
 }
 
 // readLedger walks the chain in bounded batches and reduces it to a view.
 func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
-	view := &ledgerView{byID: map[string]openIntent{}, drift: newDriftView(), writes: newWritesView()}
+	view := &ledgerView{
+		byID: map[string]openIntent{}, drift: newDriftView(),
+		writes: newWritesView(), commitWatch: newCommitWatchView(),
+	}
 	if r.cfg.Rebase != nil {
 		view.rebase = newRebaseView()
+	}
+	if r.cfg.Landing != nil {
+		view.landing = newLandingView()
 	}
 	n, err := r.cfg.Ledger.Count(ctx)
 	if err != nil {
@@ -808,10 +863,14 @@ func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
 // Refusing to reconcile because one event was unreadable would turn a
 // forward-compatibility case into an outage of the repair.
 func (v *ledgerView) observe(record event.Fields) {
-	v.drift.observe(record)  // RM-036 (#44) folds the same record; see drift.go.
-	v.writes.observe(record) // RM-104 (#169) folds it too; see writes.go.
+	v.drift.observe(record)       // RM-036 (#44) folds the same record; see drift.go.
+	v.writes.observe(record)      // RM-104 (#169) folds it too; see writes.go.
+	v.commitWatch.observe(record) // RM-244 (#389) folds it too; see commitwatch.go.
 	if v.rebase != nil {
 		v.rebase.observe(record) // ADR-0047 folds it too; see rebase.go.
+	}
+	if v.landing != nil {
+		v.landing.observe(record) // RM-243 (#388) folds it too; see landing.go.
 	}
 	switch recordString(record, event.FieldEventType) {
 	case event.EventTypeCommitIntent:
@@ -892,13 +951,17 @@ func defaultObserve(result Result, err error) {
 	case err != nil:
 		slog.Error("signing intent reconciliation cycle failed", "error", err)
 	case result.Repaired > 0 || result.Expired > 0 || result.Unresolved > 0 ||
-		result.Ambiguous > 0 || result.Drift.Unattributed > 0 || result.Drift.Fabricated > 0:
+		result.Ambiguous > 0 || result.Drift.Unattributed > 0 || result.Drift.Fabricated > 0 ||
+		result.CommitWatch.Unsigned > 0:
 		slog.Warn("signing intent reconciliation acted",
 			"intents", result.Intents, "open", result.Open,
 			"repaired", result.Repaired, "expired", result.Expired,
 			"unresolved", result.Unresolved, "ambiguous", result.Ambiguous,
 			"unattributed_signatures", result.Drift.Unattributed,
-			"fabricated_records", result.Drift.Fabricated)
+			"fabricated_records", result.Drift.Fabricated,
+			"unsigned_commits", result.CommitWatch.Unsigned,
+			"signed_not_landed", result.Landing.NotLanded,
+			"landing_not_checked", result.Landing.NotChecked)
 	default:
 		slog.Debug("every signing intent is accounted for",
 			"intents", result.Intents, "open", result.Open,

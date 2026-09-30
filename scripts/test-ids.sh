@@ -242,11 +242,18 @@ own_paths() {
 # re-walking the tree twenty-odd times, which is both faster and the only way
 # the language report below can state an honest per-language total.
 
-# Go: the test function's own name.
+# Go: the test function's own name, or the head of a subtest's name. A test
+# that boots something expensive once runs each case as a subtest named for
+# it, `t.Run("CMT-012 …")`; an id later in that name is a reference.
 go_case_ids() {
-  grep -roE "func Test[A-Z]{2,5}[0-9]{3}[^0-9]" --include='*_test.go' --exclude-dir=node_modules "${ROOT}" 2>/dev/null |
-    own_matches |
-    sed -E 's/^func Test([A-Z]{2,5})([0-9]{3}).*/\1-\2/' | sort -u
+  {
+    grep -roE "func Test[A-Z]{2,5}[0-9]{3}[^0-9]" --include='*_test.go' --exclude-dir=node_modules "${ROOT}" 2>/dev/null |
+      own_matches |
+      sed -E 's/^func Test([A-Z]{2,5})([0-9]{3}).*/\1-\2/'
+    grep -roE "t\.Run\(\"${ID}[ :]" --include='*_test.go' --exclude-dir=node_modules "${ROOT}" 2>/dev/null |
+      own_matches |
+      sed -E 's/.*t\.Run\("([A-Z]{2,5}-[0-9]{3}).*/\1/'
+  } | sort -u
 }
 
 # Shell: the three case-name shapes, in one place, so that adding a fourth is
@@ -322,7 +329,7 @@ code_ids="$(printf '%s\n%s\n%s\n' "${go_ids}" "${shell_ids}" "${fe_ids}" | grep 
 # that is missing from a list somebody is looking at. RM-171 (#276).
 printf 'test-ids: three test languages searched, and the catalog\n'
 printf '  %-11s %-46s %3d ids\n' \
-  'Go'         '*_test.go — func Test<PREFIX><NNN>'             "$(printf '%s\n' "${go_ids}" | grep -c . || true)" \
+  'Go'         '*_test.go — func Test<PREFIX><NNN>, t.Run("<ID> …")'             "$(printf '%s\n' "${go_ids}" | grep -c . || true)" \
   'shell'      '*-selftest.sh — case names'                     "$(printf '%s\n' "${shell_ids}" | grep -c . || true)" \
   'TypeScript' '*.test.ts, *.test.tsx, *.pw.ts — case names'    "$(printf '%s\n' "${fe_ids}" | grep -c . || true)"
 printf '  %-11s %s\n' 'catalog' "$(basename "${DOC}") — the rows themselves"

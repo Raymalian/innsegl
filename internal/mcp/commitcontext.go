@@ -59,7 +59,11 @@ var ErrNoOrigin = errors.New("the working tree has no origin remote")
 // Every URL form GitHub hands out reduces to the same identifier: the scheme
 // goes, the `git@host:` separator becomes a slash, and `.git` is dropped.
 func repoIDFromWorktree(ctx context.Context, worktree string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", worktree, "remote", "get-url", "origin")
+	// G702: an argument list, never shell text, so nothing in worktree is
+	// interpreted; worktree is the workspace's join of a validated repository
+	// id, or a harness-stated directory this very call exists to check, and
+	// the command only reads the origin URL.
+	cmd := exec.CommandContext(ctx, "git", "-C", worktree, "remote", "get-url", "origin") //nolint:gosec // G702, see above
 	raw, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", ErrNoOrigin, worktree)

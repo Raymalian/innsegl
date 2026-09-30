@@ -1619,7 +1619,9 @@ func (w *Workspace) Worktree(_ context.Context, repo string) (string, error) {
 	// A working tree, not merely a directory: `.git` is a directory in an
 	// ordinary clone and a file in a linked worktree or a submodule, so its
 	// existence is the check and its kind is not.
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+	// G703: dir joins the workspace root and a repository id that
+	// event.ValidateRepo admitted, whose grammar has no ".." segment.
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil { //nolint:gosec // G703, see above
 		return "", fmt.Errorf("%s is not a git working tree: %w", dir, err)
 	}
 	return dir, nil
