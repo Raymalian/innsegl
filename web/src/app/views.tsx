@@ -6,7 +6,7 @@ import { AlertDetailView } from "../views/alerts";
 import { OverviewView } from "../views/overview";
 import { PublicVerifyView } from "../views/public-verify";
 import { RepoView } from "../views/repo";
-import { RunDetailView } from "../views/run-detail";
+import { RunRoute } from "../views/run-page";
 import { RunsView } from "../views/runs";
 
 // Re-exported so main.tsx has one import for everything the shell needs, and
@@ -35,7 +35,11 @@ export const views = {
   // function of the route — is what keeps the shell's navigation honest.
   overview: () => <OverviewView />,
   runs: RunsView,
-  run: RunDetailView,
+  // E19 (#395-397): `/runs/:runId` is now the run page; the hash-chain
+  // timeline it replaced stays reachable at `/runs/:runId/chain` through the
+  // same `run` route name, since routes.ts's `Route["run"]` carries the
+  // `chain` bit rather than adding a second ViewName for one destination.
+  run: RunRoute,
   repo: RepoView,
   agentType: AgentTypeView,
   verify: PublicVerifyView,
