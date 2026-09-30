@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /*
  * The run page's contract (E19, #395–#397): one agent's full record, as
  * `internal/api/record.go` returns it. Every member carries the Go type's

@@ -32,6 +32,13 @@ export function formatAbsoluteUtc(at: Date): string {
   return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
 }
 
+/** `14:32:05 UTC` when `at` falls on `now`'s UTC day, else the full
+ * `formatAbsoluteUtc` form: a short absolute where the date adds nothing. */
+export function formatAbsoluteUtcShort(at: Date, now: Date): string {
+  const full = formatAbsoluteUtc(at);
+  return full.slice(0, 10) === formatAbsoluteUtc(now).slice(0, 10) ? full.slice(11) : full;
+}
+
 /** The machine-readable twin of the above, for `<time datetime>`. */
 export function toDateTimeAttribute(at: Date): string {
   return at.toISOString();

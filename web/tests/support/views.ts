@@ -19,7 +19,14 @@ const TITLE_SUFFIX = " · Innsegl";
 export const VIEWS: readonly ViewCase[] = [
   { name: "overview", path: "/", title: `Overview${TITLE_SUFFIX}` },
   { name: "runs", path: "/runs", title: `Runs${TITLE_SUFFIX}` },
-  { name: "run", path: `/runs/${RUN_ID}`, title: `Run detail${TITLE_SUFFIX}` },
+  // E19 (#395-397): `/runs/:runId` is now the run PAGE (doc 06 §3.3's
+  // replacement), not this hash-chain timeline — the timeline moved to
+  // `/runs/:runId/chain` and stayed reachable there, so this suite's own
+  // run-detail-specific assertions (the "Verify this commit" disclosure,
+  // the credential-history table) still exercise the view they were written
+  // against. The run PAGE itself is E19's own suite: web/src/views/run-page's
+  // vitest tests and tests/visual/run-page.pw.ts.
+  { name: "run", path: `/runs/${RUN_ID}/chain`, title: `Run detail${TITLE_SUFFIX}` },
   { name: "repo", path: `/repos/${REPO}`, title: `Repositories${TITLE_SUFFIX}` },
   {
     name: "agentType",

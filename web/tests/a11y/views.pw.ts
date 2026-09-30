@@ -137,7 +137,9 @@ test.describe("FE-009: keyboard-only walkthrough, all six views", () => {
     page,
   }) => {
     await installApiMocks(page);
-    await page.goto(`/runs/${RUN_ID}`);
+    // E19: the hash-chain timeline (and its "Verify this commit" disclosure)
+    // moved to /chain when /runs/:runId became the run page.
+    await page.goto(`/runs/${RUN_ID}/chain`);
     const disclosure = page.getByRole("button", { name: "Verify this commit" });
     await disclosure.focus();
     await expect(disclosure).toHaveAttribute("aria-expanded", "false");
