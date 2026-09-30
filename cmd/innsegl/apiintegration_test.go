@@ -18,8 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"innsegl.dev/innsegl/internal/api"
+	"innsegl.dev/innsegl/internal/webauthntest"
 )
 
 // API-009, API-010 and API-011 (PROPOSED for doc 07's TC-API) — `innsegl api`
@@ -70,9 +74,14 @@ func startAPICommand(t *testing.T, args ...string) (addr string, stderr *syncBuf
 }
 
 // apiArgsFor is a command line pointed at one database and one repository.
-func apiArgsFor(dsn, repoName, repoPath, fulcio, rekor string) []string {
+// authDSN is RM-260/RM-261's auth-writer credential — always a validly
+// provisioned one in these cases, even when dsn deliberately is not, because
+// api.Open(dsn) is what every one of them is actually testing and it runs
+// before the auth store is ever opened (apiwiring.go's openAPI).
+func apiArgsFor(dsn, authDSN, repoName, repoPath, fulcio, rekor string) []string {
 	return []string{
 		"-dsn", dsn,
+		"-auth-dsn", authDSN,
 		"-repos", repoName + "=" + repoPath,
 		"-fulcio-url", fulcio,
 		"-rekor-url", rekor,
@@ -82,7 +91,10 @@ func apiArgsFor(dsn, repoName, repoPath, fulcio, rekor string) []string {
 	}
 }
 
-func getJSON(t *testing.T, url string) (status int, body []byte) {
+// getJSON issues a GET. A trailing *http.Cookie — RM-260/RM-261's session —
+// attaches to it; variadic for the same reason internal/api's own do/get
+// are: every case that predates #410 passes none.
+func getJSON(t *testing.T, url string, cookies ...*http.Cookie) (status int, body []byte) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -90,6 +102,11 @@ func getJSON(t *testing.T, url string) (status int, body []byte) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatalf("build a request for %s: %v", url, err)
+	}
+	for _, c := range cookies {
+		if c != nil {
+			req.AddCookie(c)
+		}
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -101,6 +118,139 @@ func getJSON(t *testing.T, url string) (status int, body []byte) {
 		t.Fatalf("read the body of %s: %v", url, err)
 	}
 	return resp.StatusCode, body
+}
+
+// postJSON issues a POST with a JSON body (or none, if payload is ""),
+// returning the response headers too — enrolAndSignIn needs the Set-Cookie
+// the enrolment-finish call sets.
+func postJSON(t *testing.T, url, payload string, cookies ...*http.Cookie) (status int, header http.Header, body []byte) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var reader io.Reader
+	if payload != "" {
+		reader = strings.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, reader)
+	if err != nil {
+		t.Fatalf("build a request for %s: %v", url, err)
+	}
+	for _, c := range cookies {
+		if c != nil {
+			req.AddCookie(c)
+		}
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer func() { discardAPIError(resp.Body.Close()) }()
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read the body of %s: %v", url, err)
+	}
+	return resp.StatusCode, resp.Header, body
+}
+
+// apiIntegrationOrigin is the Origin every enrolment/login ceremony in this
+// file asserts — it must match whatever -rp-origin the command under test
+// was started with (apiArgsFor's own default, defaultAPIRPOrigin, since
+// none of these cases override -rp-origin).
+const apiIntegrationOrigin = defaultAPIRPOrigin
+
+// enrolAndSignIn runs a full enrolment ceremony against a running `innsegl
+// api` (RM-260/RM-261) using internal/webauthntest's software authenticator,
+// over real HTTP, and returns the resulting session cookie. authDSN must be
+// the SAME auth-writer DSN the running command was started with.
+//
+// The caller must arrange for the socket-denial check to pass BEFORE
+// starting the command — see requireSocketDenialFixture below, which every
+// caller of this function uses. This machine's REAL managed-settings file is
+// never read or written by this suite.
+func enrolAndSignIn(t *testing.T, base, authDSN string) *http.Cookie {
+	t.Helper()
+	ctx := context.Background()
+	authStore, err := api.OpenAuthStore(ctx, authDSN)
+	if err != nil {
+		t.Fatalf("OpenAuthStore: %v", err)
+	}
+	defer authStore.Close()
+
+	code, _, err := authStore.CreateEnrolmentCode(ctx, time.Minute)
+	if err != nil {
+		t.Fatalf("CreateEnrolmentCode: %v", err)
+	}
+
+	beginBody, err := json.Marshal(map[string]string{"display_name": "Integration Operator", "code": code})
+	if err != nil {
+		t.Fatalf("encoding enrol/begin: %v", err)
+	}
+	status, _, body := postJSON(t, base+"/api/v1/auth/enrol/begin", string(beginBody))
+	if status != http.StatusOK {
+		t.Fatalf("POST enrol/begin: %d: %s", status, body)
+	}
+	// Two separate decodes of the SAME body: ceremony_id sits beside
+	// protocol.CredentialCreation's own fields at the top level
+	// (internal/api's ceremonyResponse embeds *protocol.CredentialCreation
+	// anonymously, which flattens "publicKey"/"mediation" up a level), and
+	// CredentialCreation itself decodes correctly straight off that body.
+	var wrapper struct {
+		CeremonyID string `json:"ceremony_id"`
+	}
+	if jerr := json.Unmarshal(body, &wrapper); jerr != nil {
+		t.Fatalf("decoding enrol/begin's ceremony_id: %v: %s", jerr, body)
+	}
+	var creation protocol.CredentialCreation
+	if jerr := json.Unmarshal(body, &creation); jerr != nil {
+		t.Fatalf("decoding enrol/begin's creation options: %v: %s", jerr, body)
+	}
+
+	auth, err := webauthntest.New()
+	if err != nil {
+		t.Fatalf("webauthntest.New: %v", err)
+	}
+	credentialBody, err := auth.Register(&creation, apiIntegrationOrigin)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	finishBody, err := json.Marshal(map[string]any{
+		"ceremony_id": wrapper.CeremonyID,
+		"credential":  json.RawMessage(credentialBody),
+	})
+	if err != nil {
+		t.Fatalf("encoding enrol/finish: %v", err)
+	}
+	status, header, body := postJSON(t, base+"/api/v1/auth/enrol/finish", string(finishBody))
+	if status != http.StatusOK {
+		t.Fatalf("POST enrol/finish: %d: %s", status, body)
+	}
+
+	resp := &http.Response{Header: header}
+	for _, c := range resp.Cookies() {
+		if c.Name == "innsegl_session" {
+			return c
+		}
+	}
+	t.Fatal("enrol/finish set no session cookie")
+	return nil
+}
+
+// requireSocketDenialFixture points $INNSEGL_API_MANAGED_SETTINGS_FILE at a
+// TEMPORARY file CheckSocketDenial reads as denying the container-runtime
+// socket, for the life of the calling test — so enrolAndSignIn's ceremony
+// can complete. t.Setenv both sets and restores it, and `innsegl api` in
+// these cases runs IN-PROCESS (startAPICommand calls runAPI directly), so
+// the environment variable this test process holds is what the command
+// under test reads too.
+func requireSocketDenialFixture(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "managed-settings.json")
+	body := `{"sandbox": {"enabled": true, "allowUnsandboxedCommands": false}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("writing the socket-denial fixture: %v", err)
+	}
+	t.Setenv(api.EnvManagedSettingsFile, path)
 }
 
 // ---------------------------------------------------------------------------
@@ -237,7 +387,7 @@ func probeAs(t *testing.T, dsn, sql string) (sqlstate string, aclAllowed bool, d
 // whether the statement failed would admit the database OWNER — which is the
 // credential the gate exists to catch.
 func TestAPI009AnOverPrivilegedCredentialIsRefused(t *testing.T) {
-	ownerDSN, readerDSN := freshLedgerDB(t)
+	ownerDSN, readerDSN, authDSN := freshLedgerDB(t)
 	repoDir, _ := newProofRepo(t)
 	fulcio, rekor := closedAddress(t), closedAddress(t)
 
@@ -271,7 +421,7 @@ func TestAPI009AnOverPrivilegedCredentialIsRefused(t *testing.T) {
 	// ---- the command, handed the owner ------------------------------------
 	var stdout, stderr syncBuffer
 	code := runAPI(context.Background(),
-		apiArgsFor(ownerDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor),
+		apiArgsFor(ownerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor),
 		&stdout, &stderr, apiDeps{})
 
 	t.Logf("API-009 `innsegl api` on the OWNER credential exited %d\nstderr:\n%s",
@@ -294,7 +444,7 @@ func TestAPI009AnOverPrivilegedCredentialIsRefused(t *testing.T) {
 
 	// ---- the command, handed the reader -----------------------------------
 	addr, readerStderr := startAPICommand(t,
-		apiArgsFor(readerDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
+		apiArgsFor(readerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
 	t.Logf("API-009 `innsegl api` on the READ-ONLY credential bound %s", addr)
 	if !strings.Contains(readerStderr.String(), apiReaderRole) {
 		t.Errorf("the start-up report does not name the role it probed:\n%s",
@@ -321,31 +471,47 @@ func orNone(s string) string {
 // claim being made, and it is made about the command rather than about a
 // handler wired up in a test.
 func TestAPI010TheFiveRoutesAnswerThroughTheCommand(t *testing.T) {
-	_, readerDSN := freshLedgerDB(t)
+	requireSocketDenialFixture(t)
+	_, readerDSN, authDSN := freshLedgerDB(t)
 	repoDir, sha := newProofRepo(t)
 	fulcio, rekor := closedAddress(t), closedAddress(t)
 
 	addr, _ := startAPICommand(t,
-		apiArgsFor(readerDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
+		apiArgsFor(readerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
 	base := "http://" + addr
 
+	// RM-260/RM-261 (ADR-0062): every route below except health and proof
+	// now requires a session. One real enrolment ceremony, over real HTTP,
+	// against the real auth-writer credential this command was started
+	// with — the same evidence-over-assertion standard API-009 already
+	// holds this suite to.
+	cookie := enrolAndSignIn(t, base, authDSN)
+
 	for _, tc := range []struct {
-		route string
-		url   string
-		want  int
+		route   string
+		url     string
+		want    int
+		session bool
 	}{
-		{"GET /api/v1/runs", base + "/api/v1/runs", http.StatusOK},
-		{"GET /api/v1/overview", base + "/api/v1/overview", http.StatusOK},
-		{"GET /api/v1/health", base + "/api/v1/health", http.StatusOK},
+		{"GET /api/v1/runs", base + "/api/v1/runs", http.StatusOK, true},
+		{"GET /api/v1/overview", base + "/api/v1/overview", http.StatusOK, true},
+		{"GET /api/v1/health", base + "/api/v1/health", http.StatusOK, false},
 		// An empty ledger holds no run, and "no such run" is an answer.
 		{"GET /api/v1/runs/{run_id}", base + "/api/v1/runs/01234567-89ab-7def-8000-000000000000",
-			http.StatusNotFound},
+			http.StatusNotFound, true},
 		// The upstreams are gone, and doc 06 P2 requires "we could not check"
-		// to be a verdict rather than an HTTP error.
-		{"GET /api/v1/proof/{commit_sha}", base + "/api/v1/proof/" + sha, http.StatusOK},
+		// to be a verdict rather than an HTTP error. No session: this is the
+		// public paste-a-SHA page's own route (ADR-0062's allow-list).
+		{"GET /api/v1/proof/{commit_sha}", base + "/api/v1/proof/" + sha, http.StatusOK, false},
 	} {
 		t.Run(tc.route, func(t *testing.T) {
-			status, body := getJSON(t, tc.url)
+			var status int
+			var body []byte
+			if tc.session {
+				status, body = getJSON(t, tc.url, cookie)
+			} else {
+				status, body = getJSON(t, tc.url)
+			}
 			t.Logf("API-010 %s -> %d %s", tc.route, status, firstLine(body))
 			if status != tc.want {
 				t.Fatalf("status = %d, want %d. body: %s", status, tc.want, body)
@@ -489,7 +655,8 @@ func discardAPIPipe(int64, error) {}
 // statement about the ledger's contents made when the ledger was not read at
 // all.
 func TestAPI011ARouteThatNeedsTheLedgerDegradesHonestly(t *testing.T) {
-	_, readerDSN := freshLedgerDB(t)
+	requireSocketDenialFixture(t)
+	_, readerDSN, authDSN := freshLedgerDB(t)
 	repoDir, sha := newProofRepo(t)
 	fulcio, rekor := closedAddress(t), closedAddress(t)
 
@@ -506,17 +673,22 @@ func TestAPI011ARouteThatNeedsTheLedgerDegradesHonestly(t *testing.T) {
 	}
 
 	addr, _ := startAPICommand(t,
-		apiArgsFor(proxied, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
+		apiArgsFor(proxied, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
 	base := "http://" + addr
 
-	if status, body := getJSON(t, base+"/api/v1/runs"); status != http.StatusOK {
+	// The auth-writer connection is NOT proxied — only the reader's is — so
+	// a session survives the ledger going away below, the same way a real
+	// operator's cookie would.
+	cookie := enrolAndSignIn(t, base, authDSN)
+
+	if status, body := getJSON(t, base+"/api/v1/runs", cookie); status != http.StatusOK {
 		t.Fatalf("with the ledger reachable, /api/v1/runs = %d: %s", status, body)
 	}
 
 	proxy.stop()
 
 	for _, route := range []string{"/api/v1/runs", "/api/v1/overview"} {
-		status, body := getJSON(t, base+route)
+		status, body := getJSON(t, base+route, cookie)
 		t.Logf("API-011 ledger gone: GET %s -> %d %s", route, status, firstLine(body))
 
 		if status == http.StatusOK {

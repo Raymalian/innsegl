@@ -15,7 +15,21 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/verify"
+	"innsegl.dev/innsegl/internal/webauthntest"
 )
+
+// newSoftAuthenticator wraps webauthntest.New for a *testing.T caller — the
+// software authenticator itself lives in internal/webauthntest so
+// cmd/innsegl's own integration tests (a different package, driving the
+// compiled binary over real HTTP) can share it rather than duplicate it.
+func newSoftAuthenticator(t *testing.T) *webauthntest.Authenticator {
+	t.Helper()
+	a, err := webauthntest.New()
+	if err != nil {
+		t.Fatalf("webauthntest.New: %v", err)
+	}
+	return a
+}
 
 // TC-API — the HTTP surface.
 //
@@ -121,7 +135,7 @@ func signInTestUser(t *testing.T, baseURL string, authStore *AuthStore) *http.Co
 // enrolTestUser is signInTestUser, also returning the software authenticator
 // it enrolled — for a case (AUTH-004's replay) that needs to drive the SAME
 // enrolled authenticator through a second ceremony afterwards.
-func enrolTestUser(t *testing.T, baseURL string, authStore *AuthStore) (*softAuthenticator, *http.Cookie) {
+func enrolTestUser(t *testing.T, baseURL string, authStore *AuthStore) (*webauthntest.Authenticator, *http.Cookie) {
 	t.Helper()
 	code, _, err := authStore.CreateEnrolmentCode(context.Background(), time.Minute)
 	if err != nil {
@@ -142,7 +156,10 @@ func enrolTestUser(t *testing.T, baseURL string, authStore *AuthStore) (*softAut
 	}
 
 	auth := newSoftAuthenticator(t)
-	credentialBody := auth.register(t, creation.CredentialCreation, testWebAuthnConfig.RPOrigin)
+	credentialBody, rerr := auth.Register(creation.CredentialCreation, testWebAuthnConfig.RPOrigin)
+	if rerr != nil {
+		t.Fatalf("Register: %v", rerr)
+	}
 	finishBody, err := json.Marshal(map[string]any{
 		"ceremony_id": creation.CeremonyID,
 		"credential":  json.RawMessage(credentialBody),

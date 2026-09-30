@@ -40,8 +40,11 @@ func TestAUTH004AForgedAssertionIsRefused(t *testing.T) {
 	// challenge. Its assertion's signature cannot verify against any
 	// enrolled public key, forged or not.
 	forger := newSoftAuthenticator(t)
-	credentialBody := forger.assert(t, assertion.CredentialAssertion, testWebAuthnConfig.RPOrigin,
-		string([]byte("not-a-real-user-handle")))
+	credentialBody, aerr := forger.Assert(assertion.CredentialAssertion, testWebAuthnConfig.RPOrigin,
+		"not-a-real-user-handle")
+	if aerr != nil {
+		t.Fatalf("Assert: %v", aerr)
+	}
 
 	finishBody, err := json.Marshal(map[string]any{
 		"ceremony_id": assertion.CeremonyID,
@@ -79,7 +82,10 @@ func TestAUTH004AReplayedCeremonyIsRefused(t *testing.T) {
 		t.Fatalf("decoding login/begin: %v", err)
 	}
 
-	credentialBody := auth.assert(t, assertion.CredentialAssertion, testWebAuthnConfig.RPOrigin, userID)
+	credentialBody, aerr := auth.Assert(assertion.CredentialAssertion, testWebAuthnConfig.RPOrigin, userID)
+	if aerr != nil {
+		t.Fatalf("Assert: %v", aerr)
+	}
 	finishBody, err := json.Marshal(map[string]any{
 		"ceremony_id": assertion.CeremonyID,
 		"credential":  json.RawMessage(credentialBody),

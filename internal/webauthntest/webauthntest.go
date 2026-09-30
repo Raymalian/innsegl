@@ -1,6 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package api
+// Package webauthntest is a from-scratch software WebAuthn authenticator,
+// for this project's own tests only (RM-260/RM-261, AUTH-003/AUTH-004) —
+// never for production code, and never a real device.
+//
+// go-webauthn v0.18.2 ships no browser or virtual-authenticator harness of
+// its own (that is a client/browser concern, not a relying-party library's);
+// what it DOES give a caller is the exact protocol types a real client's
+// response decodes into, and its own tests build those directly rather than
+// driving a browser (see the upstream package's own
+// TestFinishRegistration_Success, which wraps a raw JSON body in an
+// *http.Request the same way internal/api's handleEnrolFinish/
+// handleLoginFinish do). This package is that same technique, producing a
+// FRESH ceremony against a server's own randomly-generated challenge each
+// time, rather than a fixed spec test vector — a fixed vector's challenge
+// cannot match a live BeginRegistration/BeginLogin call.
+//
+// It reports userVerification unconditionally (attestation flags and
+// assertion flags both set FlagUserVerified) — the property AUTH-003 exists
+// to prove is enforced SERVER-SIDE (userVerification: required in the
+// options a server sends), not that this fake authenticator could be
+// coerced into skipping it; a real authenticator that omits UV is refused by
+// the library regardless of what this package does.
+//
+// It is a package under internal/, not a _test.go file, so BOTH
+// internal/api's own tests and cmd/innsegl's integration tests (which run
+// the compiled `innsegl api` binary over real HTTP, in a different package)
+// can share one implementation rather than two hand-maintained copies.
+// Nothing outside a _test.go file imports it.
+package webauthntest
 
 import (
 	"crypto/ecdsa"
@@ -9,50 +37,30 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
-	"testing"
+	"fmt"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/go-webauthn/webauthn/protocol"
 )
 
-// A software WebAuthn authenticator, for AUTH-003/AUTH-004 only.
-//
-// go-webauthn v0.18.2 ships no browser or virtual-authenticator harness of
-// its own (that is a client/browser concern, not a relying-party library's);
-// what it DOES give a caller is the exact protocol types a real client's
-// response decodes into, and its own tests build those directly rather than
-// driving a browser (see the upstream package's own
-// TestFinishRegistration_Success, which wraps a raw JSON body in an
-// *http.Request the same way handleEnrolFinish/handleLoginFinish do). This
-// file is that same technique, producing a FRESH ceremony against THIS
-// server's own randomly-generated challenge each time, rather than a fixed
-// spec test vector — a fixed vector's challenge cannot match a live
-// BeginRegistration/BeginLogin call.
-//
-// It reports userVerification unconditionally (attestation flags and
-// assertion flags both set FlagUserVerified) — the property AUTH-003 exists
-// to prove is enforced SERVER-SIDE (userVerification: required in the
-// options this server sends), not that this fake authenticator could be
-// coerced into skipping it; a real authenticator that omits UV is refused by
-// the library regardless of what this file does.
-
-type softAuthenticator struct {
+// Authenticator is one software passkey.
+type Authenticator struct {
 	key          *ecdsa.PrivateKey
 	credentialID []byte
 	signCount    uint32
 }
 
-func newSoftAuthenticator(t *testing.T) *softAuthenticator {
-	t.Helper()
+// New mints a fresh P-256 key and a random credential id.
+func New() (*Authenticator, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("generating a P-256 key for the software authenticator: %v", err)
+		return nil, fmt.Errorf("webauthntest: generating a P-256 key: %w", err)
 	}
 	id := make([]byte, 16)
 	if _, err := rand.Read(id); err != nil {
-		t.Fatalf("no randomness for a credential id: %v", err)
+		return nil, fmt.Errorf("webauthntest: no randomness for a credential id: %w", err)
 	}
-	return &softAuthenticator{key: key, credentialID: id}
+	return &Authenticator{key: key, credentialID: id}, nil
 }
 
 // coseEC2Key is RFC 9053's COSE_Key for an EC2 (elliptic curve) key,
@@ -68,14 +76,13 @@ type coseEC2Key struct {
 	Y   []byte `cbor:"-3,keyasint"`
 }
 
-func (a *softAuthenticator) coseKeyBytes(t *testing.T) []byte {
-	t.Helper()
+func (a *Authenticator) coseKeyBytes() ([]byte, error) {
 	// SEC1 uncompressed point: 0x04 || X(32) || Y(32) for P-256. Read via
 	// PublicKey.Bytes rather than the deprecated X/Y *big.Int fields
 	// (crypto/ecdsa, Go 1.26+).
 	uncompressed, err := a.key.PublicKey.Bytes()
 	if err != nil {
-		t.Fatalf("encoding the public key point: %v", err)
+		return nil, fmt.Errorf("webauthntest: encoding the public key point: %w", err)
 	}
 	body, err := cbor.Marshal(coseEC2Key{
 		Kty: 2, Alg: -7, Crv: 1,
@@ -83,9 +90,9 @@ func (a *softAuthenticator) coseKeyBytes(t *testing.T) []byte {
 		Y: uncompressed[33:65],
 	})
 	if err != nil {
-		t.Fatalf("encoding the COSE public key: %v", err)
+		return nil, fmt.Errorf("webauthntest: encoding the COSE public key: %w", err)
 	}
-	return body
+	return body, nil
 }
 
 // authenticatorFlags, spelled once (protocol.FlagUserPresent |
@@ -101,8 +108,7 @@ const (
 // attestedCredentialData (aaguid, a 16-bit credential-id length, the
 // credential id, then the COSE public key — no explicit public-key length,
 // it is self-describing CBOR).
-func (a *softAuthenticator) authData(t *testing.T, rpID string, withAttestedCredential bool) []byte {
-	t.Helper()
+func (a *Authenticator) authData(rpID string, withAttestedCredential bool) ([]byte, error) {
 	rpIDHash := sha256.Sum256([]byte(rpID))
 
 	flags := flagUP | flagUV
@@ -111,11 +117,20 @@ func (a *softAuthenticator) authData(t *testing.T, rpID string, withAttestedCred
 		flags |= flagAT
 		aaguid := make([]byte, 16) // zero AAGUID: this authenticator names no real model.
 		idLen := make([]byte, 2)
-		binary.BigEndian.PutUint16(idLen, uint16(len(a.credentialID)))
+		// This authenticator's own credential id (New, above) is always 16
+		// bytes, nowhere near uint16's range; the conversion cannot overflow
+		// in practice, and the field it fills is itself only 16 bits wide
+		// per WebAuthn's own authenticatorData encoding.
+		binary.BigEndian.PutUint16(idLen, uint16(len(a.credentialID))) //nolint:gosec // G115: bounded by New's own fixed 16-byte id
+
 		attested = append(attested, aaguid...)
 		attested = append(attested, idLen...)
 		attested = append(attested, a.credentialID...)
-		attested = append(attested, a.coseKeyBytes(t)...)
+		key, err := a.coseKeyBytes()
+		if err != nil {
+			return nil, err
+		}
+		attested = append(attested, key...)
 	}
 
 	counter := make([]byte, 4)
@@ -126,7 +141,7 @@ func (a *softAuthenticator) authData(t *testing.T, rpID string, withAttestedCred
 	out = append(out, flags)
 	out = append(out, counter...)
 	out = append(out, attested...)
-	return out
+	return out, nil
 }
 
 type collectedClientData struct {
@@ -135,41 +150,47 @@ type collectedClientData struct {
 	Origin    string `json:"origin"`
 }
 
-func clientDataJSON(t *testing.T, typ, challenge, origin string) []byte {
-	t.Helper()
+func clientDataJSON(typ, challenge, origin string) ([]byte, error) {
 	body, err := json.Marshal(collectedClientData{Type: typ, Challenge: challenge, Origin: origin})
 	if err != nil {
-		t.Fatalf("encoding clientDataJSON: %v", err)
+		return nil, fmt.Errorf("webauthntest: encoding clientDataJSON: %w", err)
 	}
-	return body
+	return body, nil
 }
 
 // attestationObjectCBOR is {"fmt":"none","attStmt":{},"authData":<bytes>} —
 // the "none" attestation statement format (WebAuthn §8.7), which carries no
-// signature of its own: registrationSelection requests no attestation
-// (protocol.PreferNoAttestation), and "none" is what every real authenticator
-// returns to a Relying Party that asked for nothing.
-func attestationObjectCBOR(t *testing.T, authData []byte) []byte {
-	t.Helper()
+// signature of its own: a Relying Party requesting no attestation
+// (protocol.PreferNoAttestation) gets "none" back from every real
+// authenticator too.
+func attestationObjectCBOR(authData []byte) ([]byte, error) {
 	body, err := cbor.Marshal(struct {
 		Fmt      string         `cbor:"fmt"`
 		AttStmt  map[string]any `cbor:"attStmt"`
 		AuthData []byte         `cbor:"authData"`
 	}{Fmt: "none", AttStmt: map[string]any{}, AuthData: authData})
 	if err != nil {
-		t.Fatalf("encoding the attestation object: %v", err)
+		return nil, fmt.Errorf("webauthntest: encoding the attestation object: %w", err)
 	}
-	return body
+	return body, nil
 }
 
-// register answers one BeginRegistration's *protocol.CredentialCreation as a
+// Register answers one BeginRegistration's *protocol.CredentialCreation as a
 // client's navigator.credentials.create() would, and returns it already
-// JSON-encoded the way handleEnrolFinish reads a request body.
-func (a *softAuthenticator) register(t *testing.T, creation *protocol.CredentialCreation, origin string) []byte {
-	t.Helper()
-	cdj := clientDataJSON(t, "webauthn.create", creation.Response.Challenge.String(), origin)
-	ad := a.authData(t, creation.Response.RelyingParty.ID, true)
-	ao := attestationObjectCBOR(t, ad)
+// JSON-encoded the way a registration-finish handler reads a request body.
+func (a *Authenticator) Register(creation *protocol.CredentialCreation, origin string) ([]byte, error) {
+	cdj, err := clientDataJSON("webauthn.create", creation.Response.Challenge.String(), origin)
+	if err != nil {
+		return nil, err
+	}
+	ad, err := a.authData(creation.Response.RelyingParty.ID, true)
+	if err != nil {
+		return nil, err
+	}
+	ao, err := attestationObjectCBOR(ad)
+	if err != nil {
+		return nil, err
+	}
 
 	resp := protocol.CredentialCreationResponse{
 		PublicKeyCredential: protocol.PublicKeyCredential{
@@ -188,27 +209,34 @@ func (a *softAuthenticator) register(t *testing.T, creation *protocol.Credential
 	}
 	body, err := json.Marshal(resp)
 	if err != nil {
-		t.Fatalf("encoding the registration response: %v", err)
+		return nil, fmt.Errorf("webauthntest: encoding the registration response: %w", err)
 	}
-	return body
+	return body, nil
 }
 
-// assert answers one BeginLogin/BeginDiscoverableLogin's
+// Assert answers one BeginLogin/BeginDiscoverableLogin's
 // *protocol.CredentialAssertion, signing over authenticatorData ||
 // sha256(clientDataJSON) with this authenticator's own key — exactly what a
-// real authenticator signs (WebAuthn §6.3.3).
-func (a *softAuthenticator) assert(t *testing.T, assertion *protocol.CredentialAssertion, origin, userHandle string) []byte {
-	t.Helper()
+// real authenticator signs (WebAuthn §6.3.3). userHandle is the user id the
+// response reports itself as belonging to; pass a wrong one to simulate a
+// forged assertion.
+func (a *Authenticator) Assert(assertion *protocol.CredentialAssertion, origin, userHandle string) ([]byte, error) {
 	a.signCount++
-	cdj := clientDataJSON(t, "webauthn.get", assertion.Response.Challenge.String(), origin)
-	ad := a.authData(t, assertion.Response.RelyingPartyID, false)
+	cdj, err := clientDataJSON("webauthn.get", assertion.Response.Challenge.String(), origin)
+	if err != nil {
+		return nil, err
+	}
+	ad, err := a.authData(assertion.Response.RelyingPartyID, false)
+	if err != nil {
+		return nil, err
+	}
 
 	clientDataHash := sha256.Sum256(cdj)
 	signed := append(append([]byte{}, ad...), clientDataHash[:]...)
 	digest := sha256.Sum256(signed)
 	sig, err := ecdsa.SignASN1(rand.Reader, a.key, digest[:])
 	if err != nil {
-		t.Fatalf("signing the assertion: %v", err)
+		return nil, fmt.Errorf("webauthntest: signing the assertion: %w", err)
 	}
 
 	resp := protocol.CredentialAssertionResponse{
@@ -230,7 +258,7 @@ func (a *softAuthenticator) assert(t *testing.T, assertion *protocol.CredentialA
 	}
 	body, err := json.Marshal(resp)
 	if err != nil {
-		t.Fatalf("encoding the assertion response: %v", err)
+		return nil, fmt.Errorf("webauthntest: encoding the assertion response: %w", err)
 	}
-	return body
+	return body, nil
 }

@@ -868,7 +868,12 @@ EOF
 # ---------------------------------------------------------------------------
 
 print_finish() {
-  local dashboard="http://127.0.0.1:8082/"
+  # localhost, not 127.0.0.1: RM-260/RM-261 (ADR-0062) put the dashboard
+  # behind a WebAuthn passkey sign-in, and a passkey's RP ID must be a
+  # DOMAIN -- "127.0.0.1 is not a valid RP ID, localhost is". A browser
+  # opened at the IP literal cannot complete a passkey ceremony against an
+  # RP ID of "localhost" at all; this is the address that actually works.
+  local dashboard="http://localhost:8082/"
   cat <<EOF
 
 Ready. Managed settings:
