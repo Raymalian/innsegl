@@ -25,13 +25,13 @@ func TestRunRecordFixtureMatchesTheContract(t *testing.T) {
 			}
 			dec := json.NewDecoder(bytes.NewReader(raw))
 			dec.DisallowUnknownFields()
-			if err := dec.Decode(into); err != nil {
-				t.Fatalf("the fixture does not decode strictly into the contract: %v", err)
+			if derr := dec.Decode(into); derr != nil {
+				t.Fatalf("the fixture does not decode strictly into the contract: %v", derr)
 			}
 			// And back: every member the contract has, the fixture has.
 			var fixture, encoded map[string]any
-			if err := json.Unmarshal(raw, &fixture); err != nil {
-				t.Fatal(err)
+			if uerr := json.Unmarshal(raw, &fixture); uerr != nil {
+				t.Fatal(uerr)
 			}
 			out, err := json.Marshal(into)
 			if err != nil {
@@ -65,7 +65,11 @@ func assertSameKeys(t *testing.T, path string, a, b any) {
 			assertSameKeys(t, path+"."+k, v, bv[k])
 		}
 	case []any:
-		bv, _ := b.([]any)
+		bv, ok := b.([]any)
+		if !ok {
+			t.Errorf("%s: array in the fixture, %T in the contract", path, b)
+			return
+		}
 		for i := range av {
 			if i < len(bv) {
 				assertSameKeys(t, path, av[i], bv[i])
