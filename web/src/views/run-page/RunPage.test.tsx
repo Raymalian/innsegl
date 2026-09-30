@@ -148,7 +148,9 @@ describe("RPG-010 renders the mockup's run page from fixtures/record.json", () =
     expect(s1.getAllByText("e18.txt")).toHaveLength(2);
     expect(s1.getByText("done")).toBeInTheDocument();
     expect(s1.getByText("3 of 3 witnesses agree")).toBeInTheDocument();
-    expect(s1.getByText("File created successfully at: e18.txt")).toBeInTheDocument();
+    // As the approved mockup shows it: a file write whose diff is shown
+    // carries the diff alone, not the tool's "File created" reply above it.
+    expect(s1.queryByText("File created successfully at: e18.txt")).not.toBeInTheDocument();
 
     const step2 = document.querySelector('[data-step="2"]');
     const s2 = within(step2 as HTMLElement);
@@ -174,6 +176,11 @@ describe("RPG-010 renders the mockup's run page from fixtures/record.json", () =
     expect(s4.getByText("returned")).toBeInTheDocument();
     expect(s4.getByText(/general-purpose/)).toBeInTheDocument();
     expect(s4.getByText(/The subagent made commit 64967eb/)).toBeInTheDocument();
+    // The spawn line IS the row's summary, as the mockup shows it: the
+    // prompt appears once, in the step's own header row.
+    expect(s4.getAllByText(/Create e18-sub\.txt containing sub/)).toHaveLength(1);
+    const header4 = (step4 as HTMLElement).querySelector("[data-step-header]") as HTMLElement;
+    expect(within(header4).getByText(/Spawned/)).toBeInTheDocument();
   });
 
   it("renders the inline diff for step 1, from GET .../steps/1/diff", async () => {
@@ -258,6 +265,8 @@ describe("RPG-012 witness disagreement", () => {
     expect(step7).not.toBeNull();
     const s7 = within(step7);
     expect(s7.getByText("2 of 3 witnesses")).toBeInTheDocument();
+    // The approved mockup's badge carries an exclamation mark, not a cross.
+    expect((step7.querySelector("[data-witness-badge]") as HTMLElement).querySelector('[data-icon="alert"]')).not.toBeNull();
     expect(s7.getByText("Gateway")).toBeInTheDocument();
     expect(s7.getByText("Workspace snapshot")).toBeInTheDocument();
     expect(s7.getByText("Harness telemetry")).toBeInTheDocument();

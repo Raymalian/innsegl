@@ -68,6 +68,16 @@ export interface AppProps {
   account?: ReactNode;
 }
 
+/**
+ * The width a view's content may take. The product keeps one readable
+ * content width (doc 06 §5.4); the run page is the exception, laid out
+ * across the whole window in its approved mockup so a step's row, its diffs
+ * and the side-by-side view are not squeezed beside the navigation.
+ */
+export function contentWidthClass(route: Route): "max-w-none" | "max-w-content" {
+  return route.view === "run" && route.chain !== true ? "max-w-none" : "max-w-content";
+}
+
 export function App({ views = {}, heartbeat, alerts, account }: AppProps) {
   const route = useRoute();
   const strings = useStrings();
@@ -119,7 +129,7 @@ export function App({ views = {}, heartbeat, alerts, account }: AppProps) {
         {account}
       </header>
 
-      <div className="mx-auto flex w-full max-w-content flex-wrap gap-4 p-4">
+      <div className={`mx-auto flex w-full ${contentWidthClass(route)} flex-wrap gap-4 p-4`}>
         <nav
           aria-label={strings.labels.nav.region}
           className="w-full shrink-0 sm:w-[12rem]"

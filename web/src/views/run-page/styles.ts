@@ -97,8 +97,10 @@ export const treeRowIcon = "shrink-0";
  * without it "truncate" never actually shrinks the name and the id chip
  * beside it gets squeezed instead. MEASURED here: "general-purpose" rendered
  * as "general-purp…" in the 300px aside before this was added. */
-export const treeRowName = "min-w-0 flex-grow truncate";
-export const treeRowId = `shrink-0 text-micro ${mutedText}`;
+/* An agent's name is never cut; its run id, which the chip already
+ * shortens and can copy whole, gives way first. */
+export const treeRowName = "shrink-0";
+export const treeRowId = `ml-auto min-w-0 truncate text-micro ${mutedText}`;
 
 /* ── files changed ─────────────────────────────────────────────────────── */
 
@@ -140,7 +142,9 @@ export const toggleButtonSelected = "bg-accent-surface font-semibold text-accent
 
 /* ── step card ─────────────────────────────────────────────────────────── */
 
-export const stepHeaderRow = "flex flex-wrap items-center gap-3 px-4 py-3";
+/* One row, as the approved mockup shows it: the summary truncates, the
+ * outcome, time and witnesses never wrap under it. */
+export const stepHeaderRow = "flex items-center gap-3 px-4 py-3 [&>*:not([data-summary])]:shrink-0";
 export const stepNumber = `w-5 shrink-0 text-micro ${mutedText} ${identifierText}`;
 export const stepTool = "w-16 shrink-0 font-medium text-ink";
 export const stepSummary = `min-w-0 flex-grow truncate ${identifierText} text-micro text-ink-secondary`;
@@ -152,14 +156,18 @@ export const stepWitnessBadge = `${badgeBase} ${hairline} ml-auto shrink-0 gap-1
 
 export const stepOutputBlock = `${hairline} mx-4 mb-3 whitespace-pre-wrap break-words rounded-md border-line bg-sunken p-2.5 ${identifierText} text-ink`;
 export const stepRefusedNote = `mx-4 -mt-1.5 mb-3 text-micro ${mutedText}`;
-export const stepAgentLine = "px-4 pb-1 text-body text-ink";
+export const stepAgentSummary = "min-w-0 flex-grow truncate text-body text-ink-secondary";
 export const stepAgentNote = `px-4 pb-3 text-micro ${secondaryText}`;
 
 export const witnessGrid = "mx-4 mb-3 grid grid-cols-1 gap-2 text-micro sm:grid-cols-3";
 export const witnessCell = `${hairline} flex flex-col gap-1 rounded-md border-line p-2`;
-export const witnessCellFailed = `border-integrity-alert-line bg-integrity-alert-surface`;
+/* The missing witness, as the approved mockup draws it: a soft red cell
+ * with red text, beside the solid "2 of 3 witnesses" badge that carries the
+ * alarm. */
+export const witnessCellFailed = `border-proof-failed-line bg-proof-failed-surface`;
 export const witnessCellLabel = mutedText;
-export const witnessCellLabelFailed = "text-integrity-alert";
+export const witnessCellLabelFailed = "text-proof-failed";
+export const witnessCellResultFailed = "text-proof-failed font-medium";
 export const witnessCellResult = "flex items-center gap-1.5";
 
 /* ── diff renderer ─────────────────────────────────────────────────────── */

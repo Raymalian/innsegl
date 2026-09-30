@@ -58,6 +58,18 @@ export function OutcomeFailedIcon({ className }: { readonly className?: string }
   );
 }
 
+/** A step whose witnesses disagree: an exclamation mark, as the approved
+ * mockup's "2 of 3 witnesses" badge carries it. */
+export function AlertMarkIcon({ className }: { readonly className?: string }) {
+  return (
+    <span className="inline-flex" data-icon="alert">
+      <Svg className={className}>
+        <path d="M12 6v8M12 17.5v.5" strokeWidth={2.4} strokeLinecap="round" />
+      </Svg>
+    </span>
+  );
+}
+
 /** The root of the agent tree: a filled-corner square, distinct from the
  * branch glyph below by silhouette, not only by the accent colour it takes
  * only on the selected row. */

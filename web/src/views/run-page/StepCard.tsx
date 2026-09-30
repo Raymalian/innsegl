@@ -23,11 +23,11 @@ import type { FetchProof, FetchStepDiff } from "./api";
 import { Diff } from "./Diff";
 import type { DiffMode } from "./Diff";
 import { stepWitnessesAgree, witnessAgreeCount, WITNESS_TOTAL } from "./derive";
-import { OutcomeFailedIcon, OutcomeOkIcon } from "./icons";
+import { AlertMarkIcon, OutcomeFailedIcon, OutcomeOkIcon } from "./icons";
 import { strings } from "./strings";
 import {
   panel,
-  stepAgentLine,
+  stepAgentSummary,
   stepAgentNote,
   stepHeaderRow,
   stepNumber,
@@ -44,6 +44,7 @@ import {
   witnessCellFailed,
   witnessCellLabel,
   witnessCellLabelFailed,
+  witnessCellResultFailed,
   witnessCellResult,
   witnessGrid,
 } from "./styles";
@@ -78,17 +79,21 @@ export function StepCard({
 
   return (
     <section id={`step-${step.n}`} className={panel} data-step={step.n} data-witnesses-agree={agrees}>
-      <div className={stepHeaderRow}>
+      <div className={stepHeaderRow} data-step-header>
         <span className={stepNumber}>{step.n}</span>
         <span className={stepTool}>{step.tool}</span>
-        <span className={stepSummary}>{step.summary}</span>
+        {step.tool === "Agent" ? (
+          <AgentSpawnSummary step={step} agentType={spawnedNode?.agent_type} />
+        ) : (
+          <span className={stepSummary} data-summary>{step.summary}</span>
+        )}
         <Outcome step={step} />
         <span className={stepTime}>{utcTime(step.at)}</span>
         {agrees ? (
           <span className={stepWitnessText}>{strings.timeline.witnessesAgreeAll(WITNESS_TOTAL)}</span>
         ) : (
           <span className={stepWitnessBadge} data-witness-badge>
-            <OutcomeFailedIcon className="rotate-45" />
+            <AlertMarkIcon />
             {strings.timeline.witnessesPartial(witnessAgreeCount(step.witnesses), WITNESS_TOTAL)}
           </span>
         )}
@@ -97,10 +102,12 @@ export function StepCard({
       {!agrees ? <WitnessGrid step={step} /> : null}
 
       {step.tool === "Agent" ? (
-        <AgentSpawnLine step={step} agentType={spawnedNode?.agent_type} />
+        <SubagentCommitNote step={step} />
       ) : (
         <>
-          {step.output !== "" ? <pre className={stepOutputBlock}>{step.output}</pre> : null}
+          {step.output !== "" && !(showDiff && FILE_EDIT_TOOLS.has(step.tool) && !failed) ? (
+            <pre className={stepOutputBlock}>{step.output}</pre>
+          ) : null}
           {failed ? (
             <p className={stepRefusedNote}>
               {step.outcome.kind === "refused" ? `${strings.timeline.refusedBySandbox} ` : ""}
@@ -204,7 +211,7 @@ function WitnessCell({ label, ok, text }: { readonly label: string; readonly ok:
   return (
     <div className={`${witnessCell} ${ok ? "" : witnessCellFailed}`} data-witness-ok={ok}>
       <dt className={ok ? witnessCellLabel : witnessCellLabelFailed}>{label}</dt>
-      <dd className={`${witnessCellResult} ${ok ? "" : "text-integrity-alert font-medium"}`}>
+      <dd className={`${witnessCellResult} ${ok ? "" : witnessCellResultFailed}`}>
         {ok ? <OutcomeOkIcon /> : <OutcomeFailedIcon />}
         {text}
       </dd>
@@ -212,24 +219,32 @@ function WitnessCell({ label, ok, text }: { readonly label: string; readonly ok:
   );
 }
 
-function AgentSpawnLine({ step, agentType }: { readonly step: RecordStep; readonly agentType: string | undefined }) {
+/** A file-editing tool whose change the diff shows: its own reply ("File
+ * created successfully at …") adds nothing the diff does not, and the
+ * approved mockup shows the diff alone. A failed edit keeps its reply. */
+const FILE_EDIT_TOOLS: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+/** An Agent step's row summary, as the approved mockup shows it: the agent it
+ * started, linked, and the prompt it was given. */
+function AgentSpawnSummary({ step, agentType }: { readonly step: RecordStep; readonly agentType: string | undefined }) {
   const label = strings.timeline.spawnedLink(
     agentType ?? strings.timeline.subagentFallback,
     truncateIdentifier(step.spawned_run_id, { kind: "run", maxLength: 14 }),
   );
   return (
-    <>
-      <p className={stepAgentLine}>
-        {`${strings.timeline.spawned} `}
-        {step.spawned_run_id === "" ? null : (
-          <Link to={{ view: "run", runId: step.spawned_run_id }}>{label}</Link>
-        )}
-        {strings.timeline.spawnedBrief(step.summary)}
-      </p>
-      {step.spawned_commits.length === 0 ? null : (
-        <p className={stepAgentNote}>{strings.timeline.subagentCommitNote(step.spawned_commits[0]?.slice(0, 7) ?? "")}</p>
+    <span className={stepAgentSummary} data-summary>
+      {`${strings.timeline.spawned} `}
+      {step.spawned_run_id === "" ? null : (
+        <Link to={{ view: "run", runId: step.spawned_run_id }}>{label}</Link>
       )}
-    </>
+      {strings.timeline.spawnedBrief(step.summary)}
+    </span>
+  );
+}
+
+function SubagentCommitNote({ step }: { readonly step: RecordStep }) {
+  return step.spawned_commits.length === 0 ? null : (
+    <p className={stepAgentNote}>{strings.timeline.subagentCommitNote(step.spawned_commits[0]?.slice(0, 7) ?? "")}</p>
   );
 }
 
