@@ -101,6 +101,9 @@ export interface RecordCommit {
   /** The step that made it; 0 when none can be named. */
   step: number;
   landed: Landed;
+  /** Why a not_landed commit did not land, when the run's own result says:
+   * "ref_lock" (git's ref lock went to a parallel commit), else "". */
+  landed_reason: "" | "ref_lock";
   rekor_log_index: number;
 }
 

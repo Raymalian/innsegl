@@ -82,6 +82,8 @@ export const strings = {
     madeByStep: (step: number) => `made by step ${step}`,
     landedOn: (branch: string) => `landed on ${branch}`,
     notLanded: "on no branch",
+    notLandedRefLock: "on no branch: lost git's ref lock to a parallel commit",
+    landingUnknown: "landing not checked",
     notLandedHeading: "Signed, not landed",
     notLandedCaption:
       "The signature holds, so it stays verified; landing is read from the repository and shown beside it, never mixed into the verdict.",

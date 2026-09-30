@@ -475,6 +475,9 @@ func (rs *recordServer) buildCommits(ctx context.Context, repo string, rows []co
 			rc.Subject = subject
 		}
 		rc.Landed = rs.landingOf(ctx, repo, c, superseded)
+		if rc.Landed == "not_landed" {
+			rc.LandedReason = notLandedReason(rs.logDir, c.RunID, rs.runCommitClaims(ctx, c.RunID))
+		}
 		out = append(out, rc)
 	}
 	return out

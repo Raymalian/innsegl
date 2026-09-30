@@ -283,6 +283,20 @@ describe("RPG-013 a failed step is grey, not red, with its exit code", () => {
 });
 
 describe("RPG-014 a reverted file and a not_landed commit", () => {
+  it("never calls a commit landed when its landing could not be read", async () => {
+    const unknown = record();
+    const readRecord: FetchRunRecord = async () => ({
+      ...unknown,
+      commits: unknown.commits.map((c) => ({ ...c, landed: "unknown" as const })),
+    });
+    const { readDiff, readProof } = stubs();
+    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+
+    const commitsPanel = (await screen.findByText("Commits")).closest("section") as HTMLElement;
+    expect(within(commitsPanel).getByText("landing not checked", { exact: false })).toBeInTheDocument();
+    expect(within(commitsPanel).queryByText("landed on main", { exact: false })).toBeNull();
+  });
+
   it("shows the R file with when it was written and reverted, never committed", async () => {
     const { readRecord, readDiff, readProof } = statesStubs();
     render(<RunPage route={STATES_ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={STATES_NOW} />);
@@ -303,6 +317,8 @@ describe("RPG-014 a reverted file and a not_landed commit", () => {
     const commitsPanel = (await screen.findByText("Commits")).closest("section") as HTMLElement;
     expect(within(commitsPanel).getByText("5d31e0a")).toBeInTheDocument();
     expect(within(commitsPanel).getByText("on no branch", { exact: false })).toBeInTheDocument();
+    // The reason, as the approved mockup states it, when the run's own result shows it.
+    expect(screen.getAllByText("on no branch: lost git's ref lock to a parallel commit", { exact: false }).length).toBeGreaterThan(0);
 
     // The commit card's own badge is unaffected by landing — it is a
     // statement about the signature, not about the repository (doc 06 §4.2).

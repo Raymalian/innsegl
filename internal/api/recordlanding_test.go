@@ -79,3 +79,27 @@ func TestSplitRenameArrowOrdinaryPathIsNotARename(t *testing.T) {
 		t.Error("an ordinary path must not be read as a rename")
 	}
 }
+
+// A signed commit that did not land says why when this run's own git commit
+// result shows git's ref-lock failure (the approved mockup's "lost git's ref
+// lock to a parallel commit"), and says nothing it cannot read.
+func TestNotLandedReason(t *testing.T) {
+	dir := t.TempDir()
+	lost := marshalBody(t, gatewayBody{
+		Tool: "Bash", Input: json.RawMessage(`{"command":"git commit -m x"}`),
+		ResultObserved: true, IsError: true,
+		Result: json.RawMessage(`"error: cannot lock ref 'refs/heads/main': is at a but expected b"`),
+	})
+	claims := []recordEventRow{mkRow(event.EventTypeToolCall, time.Now(), map[string]any{
+		toolCallToolNameField: "Bash", toolCallDigestField: writeRunBody(t, dir, "run-x", lost),
+	})}
+	if got := notLandedReason(dir, "run-x", claims); got != "ref_lock" {
+		t.Errorf("notLandedReason with a ref-lock failure = %q, want ref_lock", got)
+	}
+	if got := notLandedReason(dir, "run-x", nil); got != "" {
+		t.Errorf("notLandedReason with nothing to read = %q, want empty", got)
+	}
+	if got := notLandedReason("", "run-x", claims); got != "" {
+		t.Errorf("notLandedReason with no body store = %q, want empty", got)
+	}
+}

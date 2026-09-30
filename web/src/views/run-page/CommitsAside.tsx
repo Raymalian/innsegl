@@ -41,17 +41,26 @@ export function CommitsAside({ commits, branch }: CommitsAsideProps) {
             <span className="text-micro text-ink-secondary">
               {strings.commits.madeByStep(commit.step)}
               {strings.punctuation.middot}
-              {commit.landed === "landed"
-                ? strings.commits.landedOn(branch)
-                : commit.landed === "not_landed"
-                  ? strings.commits.notLanded
-                  : commit.landed === "rewritten"
-                    ? strings.commits.rewritten
-                    : strings.commits.landedOn(branch)}
+              {landingText(commit, branch)}
             </span>
           </div>
         ))}
       </div>
     </section>
   );
+}
+
+/** Where a commit landed, derived and never recorded (ADR-0059 decision 6).
+ * A landing that could not be read says so; it is never shown as landed. */
+function landingText(commit: RecordCommit, branch: string): string {
+  switch (commit.landed) {
+    case "landed":
+      return strings.commits.landedOn(branch);
+    case "not_landed":
+      return commit.landed_reason === "ref_lock" ? strings.commits.notLandedRefLock : strings.commits.notLanded;
+    case "rewritten":
+      return strings.commits.rewritten;
+    default:
+      return strings.commits.landingUnknown;
+  }
 }

@@ -146,7 +146,11 @@ type RecordCommit struct {
 	Step int `json:"step"`
 	// Landed is landed, not_landed, rewritten or unknown (ADR-0059 §6:
 	// derived, never recorded).
-	Landed        string `json:"landed"`
+	Landed string `json:"landed"`
+	// LandedReason says why a not_landed commit did not land when the run's
+	// own git commit result shows it: "ref_lock" (git's ref lock went to a
+	// parallel commit), else "".
+	LandedReason  string `json:"landed_reason"`
 	RekorLogIndex int64  `json:"rekor_log_index"`
 }
 

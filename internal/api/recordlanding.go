@@ -139,3 +139,13 @@ func looksLikeRefLockFailure(text string) bool {
 		return false
 	}
 }
+
+// notLandedReason is why a signed commit did not land, when this run's own
+// retained git commit result says so: "ref_lock" for git's ref-lock
+// failure (ADR-0059 decision 6's parallel-commit case), else "".
+func notLandedReason(logDir, runID string, claims []recordEventRow) string {
+	if logDir != "" && refLockFailureFound(logDir, runID, claims) {
+		return "ref_lock"
+	}
+	return ""
+}

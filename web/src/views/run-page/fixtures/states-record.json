@@ -43,13 +43,20 @@
       "input": "{\"file_path\":\"internal/gateway/limit.go\"}",
       "output": "func (l *SessionLimiter) Allow(id string) bool {\n\tb := l.bucket(id)\n\treturn b.Allow()\n}",
       "truncated": false,
-      "outcome": { "kind": "ok", "exit_code": null },
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
       "tree_before": "1111111111111111111111111111111111111a",
       "tree_after": "1111111111111111111111111111111111111a",
       "files": [],
       "spawned_run_id": "",
       "commit_sha": "",
-      "witnesses": { "gateway": "present", "snapshot": "unchanged", "telemetry": "matched" },
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "unchanged",
+        "telemetry": "matched"
+      },
       "spawned_commits": []
     },
     {
@@ -63,13 +70,20 @@
       "input": "{\"command\":\"git add -A && git commit -m 'wip: probe the race'\"}",
       "output": "[main 5d31e0a] wip: probe the race\n 1 file changed, 3 insertions(+)",
       "truncated": false,
-      "outcome": { "kind": "ok", "exit_code": 0 },
+      "outcome": {
+        "kind": "ok",
+        "exit_code": 0
+      },
       "tree_before": "1111111111111111111111111111111111111a",
       "tree_after": "1111111111111111111111111111111111111a",
       "files": [],
       "spawned_run_id": "",
       "commit_sha": "5d31e0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7",
-      "witnesses": { "gateway": "present", "snapshot": "unchanged", "telemetry": "matched" },
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "unchanged",
+        "telemetry": "matched"
+      },
       "spawned_commits": []
     },
     {
@@ -83,7 +97,10 @@
       "input": "{\"file_path\":\"scratch/probe.sh\",\"content\":\"#!/bin/sh\\nfor i in 1 2 3; do curl -s localhost/health; done\\n\"}",
       "output": "File created successfully at: scratch/probe.sh",
       "truncated": false,
-      "outcome": { "kind": "ok", "exit_code": null },
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
       "tree_before": "1111111111111111111111111111111111111a",
       "tree_after": "3333333333333333333333333333333333333c",
       "files": [
@@ -92,14 +109,21 @@
           "status": "A",
           "additions": 2,
           "deletions": 0,
-          "steps": [3, 5],
+          "steps": [
+            3,
+            5
+          ],
           "committed": false,
           "by_run_id": ""
         }
       ],
       "spawned_run_id": "",
       "commit_sha": "",
-      "witnesses": { "gateway": "present", "snapshot": "changed", "telemetry": "matched" },
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "changed",
+        "telemetry": "matched"
+      },
       "spawned_commits": []
     },
     {
@@ -113,13 +137,20 @@
       "input": "{\"command\":\"sh scratch/probe.sh\"}",
       "output": "curl: (7) Failed to connect to localhost port 80\ncurl: (7) Failed to connect to localhost port 80\ncurl: (7) Failed to connect to localhost port 80",
       "truncated": false,
-      "outcome": { "kind": "error", "exit_code": 1 },
+      "outcome": {
+        "kind": "error",
+        "exit_code": 1
+      },
       "tree_before": "3333333333333333333333333333333333333c",
       "tree_after": "3333333333333333333333333333333333333c",
       "files": [],
       "spawned_run_id": "",
       "commit_sha": "",
-      "witnesses": { "gateway": "present", "snapshot": "unchanged", "telemetry": "matched" },
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "unchanged",
+        "telemetry": "matched"
+      },
       "spawned_commits": []
     },
     {
@@ -133,7 +164,10 @@
       "input": "{\"command\":\"rm scratch/probe.sh\"}",
       "output": "",
       "truncated": false,
-      "outcome": { "kind": "ok", "exit_code": 0 },
+      "outcome": {
+        "kind": "ok",
+        "exit_code": 0
+      },
       "tree_before": "3333333333333333333333333333333333333c",
       "tree_after": "1111111111111111111111111111111111111a",
       "files": [
@@ -142,14 +176,21 @@
           "status": "R",
           "additions": 2,
           "deletions": 2,
-          "steps": [3, 5],
+          "steps": [
+            3,
+            5
+          ],
           "committed": false,
           "by_run_id": ""
         }
       ],
       "spawned_run_id": "",
       "commit_sha": "",
-      "witnesses": { "gateway": "present", "snapshot": "changed", "telemetry": "matched" },
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "changed",
+        "telemetry": "matched"
+      },
       "spawned_commits": []
     },
     {
@@ -163,13 +204,20 @@
       "input": "{\"file_path\":\"internal/gateway/limit_test.go\"}",
       "output": "func TestSessionLimiter_Allow(t *testing.T) { ... }",
       "truncated": false,
-      "outcome": { "kind": "ok", "exit_code": null },
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
       "tree_before": "1111111111111111111111111111111111111a",
       "tree_after": "1111111111111111111111111111111111111a",
       "files": [],
       "spawned_run_id": "",
       "commit_sha": "",
-      "witnesses": { "gateway": "present", "snapshot": "unchanged", "telemetry": "matched" },
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "unchanged",
+        "telemetry": "matched"
+      },
       "spawned_commits": []
     },
     {
@@ -183,7 +231,10 @@
       "input": "{\"file_path\":\"internal/gateway/limit.go\",\"old_string\":\"\\tb := l.bucket(id)\\n\\treturn b.Allow()\",\"new_string\":\"\\tl.mu.Lock()\\n\\tdefer l.mu.Unlock()\\n\\treturn l.bucket(id).Allow()\"}",
       "output": "The file internal/gateway/limit.go has been updated.",
       "truncated": false,
-      "outcome": { "kind": "ok", "exit_code": null },
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
       "tree_before": "1111111111111111111111111111111111111a",
       "tree_after": "4444444444444444444444444444444444444d",
       "files": [
@@ -192,14 +243,20 @@
           "status": "M",
           "additions": 3,
           "deletions": 2,
-          "steps": [7],
+          "steps": [
+            7
+          ],
           "committed": false,
           "by_run_id": ""
         }
       ],
       "spawned_run_id": "",
       "commit_sha": "",
-      "witnesses": { "gateway": "present", "snapshot": "changed", "telemetry": "missing" },
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "changed",
+        "telemetry": "missing"
+      },
       "spawned_commits": []
     }
   ],
@@ -209,7 +266,10 @@
       "status": "R",
       "additions": 2,
       "deletions": 2,
-      "steps": [3, 5],
+      "steps": [
+        3,
+        5
+      ],
       "committed": false,
       "by_run_id": ""
     },
@@ -218,7 +278,9 @@
       "status": "M",
       "additions": 3,
       "deletions": 2,
-      "steps": [7],
+      "steps": [
+        7
+      ],
       "committed": false,
       "by_run_id": ""
     }
@@ -229,6 +291,7 @@
       "subject": "wip: probe the race",
       "step": 2,
       "landed": "not_landed",
+      "landed_reason": "ref_lock",
       "rekor_log_index": 2087
     }
   ],
