@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -20,8 +19,10 @@ import (
 
 // Test catalog IDs this file drives:
 //
-//	CMT-004 | I | prepare-commit-msg with no tool call id -> the hook exits
-//	          non-zero and git creates no commit.
+//	CMT-004 | I | prepare-commit-msg with no tool call id (a human commit) ->
+//	          the message is untouched and git commits exactly as it would
+//	          without innsegl; an agent commit without an id is caught by
+//	          CMT-016 (operator decision, 2026-09-30, RM-245 #390).
 //	CMT-005 | I | with a relayed git commit tool call id -> the message gains
 //	          the three trailers of the run that tool call was relayed on,
 //	          placed by ADR-0028's render; the rest is unchanged.
@@ -74,24 +75,27 @@ func TestRunGitHookPrepareCommitMsgRefusesWithNoMessageFileArgument(t *testing.T
 	}
 }
 
-// TestRunGitHookPrepareCommitMsgRefusesAnEmptyToolUseID is CMT-004's
-// unit-level half: EnvToolUseID unset (or empty) refuses before the core is
-// ever asked, and leaves the message file exactly as it found it.
-func TestRunGitHookPrepareCommitMsgRefusesAnEmptyToolUseID(t *testing.T) {
+// TestRunGitHookPrepareCommitMsgWithNoToolUseIDLeavesTheMessageUntouched is
+// CMT-004's unit-level half (RM-245, operator decision 2026-09-30): with no
+// tool call id, this is a human's own commit in a linked repository, not an
+// agent's — the hook does nothing at all, on stdout, on stderr, or to the
+// message file, and exits 0 so git commits exactly as it would with no
+// innsegl hook installed.
+func TestRunGitHookPrepareCommitMsgWithNoToolUseIDLeavesTheMessageUntouched(t *testing.T) {
 	const original = "subject\n\nbody.\n"
 	path := ghMsgFile(t, original, 0o644)
 	client := &ghFakeClient{}
 	var stderr bytes.Buffer
 
 	code := runGitHookPrepareCommitMsg(t.Context(), []string{path}, ghGetenv(nil), &stderr, client)
-	if code == 0 {
-		t.Fatal("exit code 0 with no tool call id")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (a human commit, nothing to attribute)", code)
 	}
 	if client.calls != 0 {
 		t.Errorf("the core was called %d times with no tool call id", client.calls)
 	}
-	if !strings.Contains(stderr.String(), commitpath.EnvToolUseID) {
-		t.Errorf("refusal %q does not name %s", stderr.String(), commitpath.EnvToolUseID)
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty: a human commit is not a refusal", stderr.String())
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
@@ -290,74 +294,35 @@ func ghRepo(t *testing.T, git string) (repo string, env []string) {
 	return repo, env
 }
 
-// ghObjects lists every object git knows about in repo, sorted, so a test
-// can prove NOTHING new was created rather than merely that HEAD did not
-// move — a signed object that never became reachable would still show up
-// here.
-func ghObjects(t *testing.T, git, repo string, env []string) []string {
-	t.Helper()
-	cmd := exec.CommandContext(t.Context(), git, "cat-file", "--batch-all-objects", "--batch-check")
-	cmd.Dir = repo
-	cmd.Env = env
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git cat-file --batch-all-objects --batch-check: %v", err)
-	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	sort.Strings(lines)
-	return lines
-}
-
-// ghCommitObjects returns the set of object hashes `git cat-file
-// --batch-all-objects --batch-check` reported as type "commit" — the one
-// object kind that only exists once a commit was actually created. git's own
-// preparation for `commit -m` writes a tree (and, for a first commit, blob)
-// object from the index before prepare-commit-msg ever runs, regardless of
-// whether the hook goes on to refuse; those are expected and are not what
-// CMT-004 is about.
-func ghCommitObjects(lines []string) map[string]bool {
-	out := map[string]bool{}
-	for _, l := range lines {
-		fields := strings.Fields(l)
-		if len(fields) >= 2 && fields[1] == "commit" {
-			out[fields[0]] = true
-		}
-	}
-	return out
-}
-
-// TestCMT004NoToolCallIDExitsNonZeroAndCreatesNoCommit is CMT-004(I).
-func TestCMT004NoToolCallIDExitsNonZeroAndCreatesNoCommit(t *testing.T) {
+// TestCMT004NoToolCallIDLeavesMessageUntouchedAndGitCreatesTheCommit is
+// CMT-004(I), the new rule (RM-245, operator decision 2026-09-30): a human's
+// own `git commit` in a linked repository is left completely alone — no
+// trailers, no innsegl signing, git's own configuration decides. With no
+// INNSEGL_TOOL_USE_ID, the installed prepare-commit-msg hook still runs (it
+// is what proves the repository is linked) but does nothing, and git commits
+// the message exactly as given.
+func TestCMT004NoToolCallIDLeavesMessageUntouchedAndGitCreatesTheCommit(t *testing.T) {
 	git := ghGitOrSkip(t)
 	repo, env := ghRepo(t, git)
-
-	before := ghCommitObjects(ghObjects(t, git, repo, env))
 
 	commitEnv := append(append([]string{}, env...), "GO_WANT_HELPER_PROCESS=1")
 	// INNSEGL_TOOL_USE_ID deliberately absent.
 	cmd := exec.CommandContext(t.Context(), git, "commit", "-m", "fix: thing")
 	cmd.Dir = repo
 	cmd.Env = commitEnv
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err == nil {
-		t.Fatal("git commit succeeded with no tool call id")
-	}
-	if stderr.Len() == 0 {
-		t.Error("no refusal reached stderr")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
 	}
 
-	after := ghCommitObjects(ghObjects(t, git, repo, env))
-	for sha := range after {
-		if !before[sha] {
-			t.Errorf("git created commit object %s despite the hook's refusal", sha)
-		}
+	msg := ghRun(t, git, repo, env, "log", "-1", "--format=%B")
+	if strings.TrimRight(msg, "\n") != "fix: thing" {
+		t.Errorf("commit message = %q, want the original message untouched", msg)
 	}
-	headCmd := exec.CommandContext(t.Context(), git, "rev-parse", "--verify", "-q", "HEAD")
-	headCmd.Dir = repo
-	headCmd.Env = env
-	if headErr := headCmd.Run(); headErr == nil {
-		t.Error("HEAD resolves to something; git created a commit despite the hook's refusal")
+	for _, trailer := range []string{"Agent-Identity:", "Agent-Run:", "Agent-Task:"} {
+		if strings.Contains(msg, trailer) {
+			t.Errorf("commit message carries %q; a human commit must gain no trailer:\n%s", trailer, msg)
+		}
 	}
 }
 

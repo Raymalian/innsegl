@@ -13,11 +13,9 @@ import (
 
 // githook.go — RM-240 (#385), ADR-0059 decisions 1 and 2's host half:
 // `prepare-commit-msg`, the hook git calls on every `git commit` after the
-// message is drafted and before the editor (if any) opens.
-//
-// Not wired to a CLI subcommand yet — the supervisor adds that after this
-// wave, the same deliberate split committrailers.go's own doc comment
-// describes for its handler.
+// message is drafted and before the editor (if any) opens. Wired to
+// `innsegl git-hook prepare-commit-msg` by commitpathcli.go; installed into a
+// repository's hooks directory by `innsegl link` (link.go, RM-245).
 
 // trailersClient is the one method runGitHookPrepareCommitMsg needs from
 // commitpath.Client — an interface so a test can drive the real hook against
@@ -35,12 +33,20 @@ type trailersClient interface {
 // decide nothing here, because the same trailers apply to a message from any
 // of those origins.
 //
-// CMT-004: an empty tool call id means this `git commit` did not go through
-// the PreToolUse hook ADR-0059 decision 1 describes — there is nothing to
-// attribute the commit to. Refusing here, on stderr, non-zero, is what makes
-// git abort the commit before it ever writes one: prepare-commit-msg is one
-// of the hooks whose non-zero exit stops `git commit` outright, and the
-// message file is never touched on any refusal path in this function.
+// CMT-004 (RM-245, operator decision 2026-09-30): an empty tool call id means
+// this `git commit` did not go through the PreToolUse hook ADR-0059 decision
+// 1 describes — it is a human's own commit in a linked repository, not an
+// agent's. That is not refused: a human's own `git commit` is left
+// completely alone, no trailers, no innsegl signing, git's own configuration
+// decides everything else. This function does nothing at all in that case —
+// it does not stat, read or write the message file, prints nothing, and
+// returns 0 so git commits exactly as it would with no innsegl hook
+// installed. An agent's `git commit` that somehow reaches here with no id
+// (one that stripped INNSEGL_TOOL_USE_ID, or ran outside the hook's reach) is
+// not caught here either: it is caught downstream, by the reconciler's own
+// unsigned-commit alert (CMT-016), which is the documented trade this
+// decision makes rather than trying to tell the two cases apart from inside
+// this hook.
 //
 // CMT-005: with a resolvable tool call id, the answered message — the
 // caller's own message plus the run's three trailers, placed by ADR-0028's
@@ -58,8 +64,9 @@ func runGitHookPrepareCommitMsg(ctx context.Context, args []string, getenv func(
 
 	id := getenv(commitpath.EnvToolUseID)
 	if id == "" {
-		return refuse("no tool call id (%s is unset); this commit was not run by an agent "+
-			"through the gateway and cannot be attributed", commitpath.EnvToolUseID)
+		// A human's own commit (CMT-004, RM-245): nothing to attribute,
+		// nothing to touch, nothing to say. See the doc comment above.
+		return 0
 	}
 
 	// #nosec G703 -- msgfile is argv[0] git itself invoked this hook with (its
