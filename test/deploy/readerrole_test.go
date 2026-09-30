@@ -393,7 +393,7 @@ func TestOPS013TheShippedAPIBindsOnTheReaderAndRefusesTheAppender(t *testing.T) 
 	bin := buildInnsegl(ctx, t)
 
 	// ---- the reader: it binds, and /health says so -------------------------
-	addr, stop := startAPI(ctx, t, bin, pg.readerDSN())
+	addr, stop := startAPI(ctx, t, bin, pg.readerDSN(), pg.authwriterDSN())
 	defer stop()
 
 	health := fetchHealth(ctx, t, addr)
@@ -430,7 +430,7 @@ func TestOPS013TheShippedAPIBindsOnTheReaderAndRefusesTheAppender(t *testing.T) 
 		{"the appending credential", pg.appenderDSN()},
 		{"the schema owner", pg.ownerDSN()},
 	} {
-		code, out := runAPIOnce(ctx, t, bin, tc.dsn)
+		code, out := runAPIOnce(ctx, t, bin, tc.dsn, pg.authwriterDSN())
 		if code != 13 {
 			t.Errorf("`innsegl api` handed %s exited %d, wanted 13 (WRITABLE).\n"+
 				"cmd/innsegl/api.go: \"Retrying will NEVER help; a human must fix the "+
@@ -518,9 +518,10 @@ func buildInnsegl(ctx context.Context, t *testing.T) string {
 // "a proof BFF that serves no repository can answer nothing, and guessing is
 // not one of the states doc 06 §4.6 allows". Nothing here asks it a proof
 // question, so the path need only be named.
-func apiEnv(dsn string) []string {
+func apiEnv(dsn, authDSN string) []string {
 	return append(os.Environ(),
 		"INNSEGL_API_DSN="+dsn,
+		"INNSEGL_API_AUTH_DSN="+authDSN,
 		"INNSEGL_API_LISTEN=127.0.0.1:0",
 		"INNSEGL_API_REPOS=github.com/innsegl-demo/scratch=/work/github.com/innsegl-demo/scratch",
 		"INNSEGL_FULCIO_URL=http://127.0.0.1:1/fulcio",
@@ -530,11 +531,11 @@ func apiEnv(dsn string) []string {
 }
 
 // startAPI runs `innsegl api` and returns the address it printed on stdout.
-func startAPI(ctx context.Context, t *testing.T, bin, dsn string) (string, func()) {
+func startAPI(ctx context.Context, t *testing.T, bin, dsn, authDSN string) (string, func()) {
 	t.Helper()
 	runCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(runCtx, bin, "api")
-	cmd.Env = apiEnv(dsn)
+	cmd.Env = apiEnv(dsn, authDSN)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -596,12 +597,12 @@ func startAPI(ctx context.Context, t *testing.T, bin, dsn string) (string, func(
 }
 
 // runAPIOnce runs the command to completion and returns its exit status.
-func runAPIOnce(ctx context.Context, t *testing.T, bin, dsn string) (int, string) {
+func runAPIOnce(ctx context.Context, t *testing.T, bin, dsn, authDSN string) (int, string) {
 	t.Helper()
 	runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, bin, "api")
-	cmd.Env = apiEnv(dsn)
+	cmd.Env = apiEnv(dsn, authDSN)
 	out, err := cmd.CombinedOutput()
 	if cmd.ProcessState == nil {
 		t.Fatalf("`innsegl api` did not run: %v\n%s", err, out)
