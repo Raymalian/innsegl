@@ -126,7 +126,15 @@ const (
 	// (cmd/innsegl/gateway.go's own newGatewaySnapshotter) — no second mount
 	// is needed for the ordinary case, this variable exists for a
 	// deployment that has a reason to point it somewhere else.
-	envAPISnapshotDir     = "INNSEGL_API_SNAPSHOT_DIR"
+	envAPISnapshotDir = "INNSEGL_API_SNAPSHOT_DIR"
+	// envAPIMessageKeyDir names the operator's own decision on top of E19
+	// (#395-#397): where this process reads RM-237's own derived,
+	// CHECK-ONLY agent-message key from, by key id
+	// (cmd/innsegl/gateway.go's own writeMessageKeyFile writes it on the
+	// SAME named volume, mounted read-write there and read-only here).
+	// Unset answers every Brief and Reply unavailable — this process never
+	// holds the identity secret itself, only this narrower, derived key.
+	envAPIMessageKeyDir   = "INNSEGL_API_MESSAGE_KEY_DIR"
 	envAPIShutdownTimeout = "INNSEGL_API_SHUTDOWN_TIMEOUT"
 	envAPIUpstreamTimeout = "INNSEGL_API_UPSTREAM_TIMEOUT"
 	envAPIGit             = "INNSEGL_GIT"
@@ -177,6 +185,10 @@ type apiOptions struct {
 	// Empty means the run page's steps and diffs carry no tree data — see
 	// envAPISnapshotDir.
 	snapshotDir string
+	// messageKeyDir is RM-237's own derived agent-message key directory,
+	// read-only. Empty means the run page's Brief and Replies stay
+	// unavailable — see envAPIMessageKeyDir.
+	messageKeyDir string
 
 	shutdownTimeout time.Duration
 	upstreamTimeout time.Duration
@@ -328,6 +340,11 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 			"the gateway's own workspace-snapshot store, read-only; empty defaults to "+
 				"\"gateway-snapshots\" under -log-dir (where the gateway writes it) when -log-dir "+
 				"is set, and serves no snapshot data otherwise ($"+envAPISnapshotDir+")")
+		messageKeyDir = fs.String("message-key-dir", os.Getenv(envAPIMessageKeyDir),
+			"RM-237's own derived, CHECK-ONLY agent-message key, by key id, read-only; empty "+
+				"answers every run page Brief and Reply unavailable — this process never holds "+
+				"the identity secret itself, only this narrower, derived key "+
+				"($"+envAPIMessageKeyDir+")")
 		repos = fs.String("repos", os.Getenv(envAPIRepos),
 			"comma-separated name=path pairs naming the repositories the proof BFF answers "+
 				"about, e.g. github.com/acme/app=/srv/repos/github.com/acme/app. A commit in "+
@@ -374,7 +391,8 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		fulcioURL: *fulcioURL, rekorURL: *rekorURL, issuer: *issuer, gitPath: *gitPath,
 		shutdownTimeout: *shutdownTimeout, upstreamTimeout: *upstreamTimeout,
 		logDir: *logDir, logDays: *logDays,
-		snapshotDir: resolveSnapshotDir(*snapshotDir, *logDir),
+		snapshotDir:   resolveSnapshotDir(*snapshotDir, *logDir),
+		messageKeyDir: *messageKeyDir,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl api: %s\n", problem)

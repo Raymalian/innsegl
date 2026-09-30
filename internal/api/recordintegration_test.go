@@ -127,7 +127,11 @@ func newRecordFixture(t *testing.T) *recordFixture {
 		t.Fatalf("NewProver: %v", err)
 	}
 
-	rs := &recordServer{store: store, prover: prover, logDir: logDir, cfg: cfg}
+	// ---- the message key (the operator's own decision on top of E19) -------
+	messageKeyDir := t.TempDir()
+	writeTestMessageKey(t, messageKeyDir, recordFixtureMessageKeyID, recordFixtureMessageKey)
+
+	rs := &recordServer{store: store, prover: prover, logDir: logDir, messageKeyDir: messageKeyDir, cfg: cfg}
 
 	f := &recordFixture{
 		t: t, store: store, repoDir: repoDir, rs: rs, logDir: logDir,
@@ -214,6 +218,15 @@ func commitTreeIn(t *testing.T, dir, gitPath, tree string, parents []string, mes
 
 const (
 	recordFixtureSpawnPrompt = "create b.txt for the parent run, exactly, report back"
+
+	// The operator's own decision on top of E19 (#395-#397): a check-only
+	// key this fixture writes exactly the way
+	// cmd/innsegl/gateway.go's own writeMessageKeyFile would, and the
+	// parent run's own brief, recorded and retained the same way
+	// internal/mcp/agentmessage.go records one.
+	recordFixtureMessageKeyID = "gateway-v1"
+	recordFixtureMessageKey   = "e19-fixture-derived-key-0123456789"
+	recordFixtureBriefText    = "do these three things in order and report back"
 )
 
 func digestBytes(body []byte) string {
@@ -295,6 +308,16 @@ func (f *recordFixture) seedLedgerAndBodies(ctx context.Context, owner *ledger.S
 	reg[event.FieldBranch] = "main"
 	reg[event.FieldIdempotencyKey] = f.parentID + "-register"
 	appendOrFail(ctx, t, owner, reg)
+
+	// ---- the brief (the operator's own decision on top of E19) -------------
+	briefEvt := envelope(f.parentID, parentSpiffe, event.EventTypeAgentMessage)
+	briefEvt[event.FieldRole] = "brief"
+	briefEvt[event.FieldPayloadDigest] = realKeyedDigest(recordFixtureMessageKey, recordFixtureMessageKeyID, []byte(recordFixtureBriefText))
+	briefEvt[event.FieldIdempotencyKey] = f.parentID + "-brief"
+	appendOrFail(ctx, t, owner, briefEvt)
+	// The SAME body volume tool_call bodies live under, keyed by its own
+	// PLAIN digest — internal/mcp/agentmessage.go's own layout, restated.
+	writeRunBody(t, f.logDir, f.parentID, []byte(recordFixtureBriefText))
 
 	// ---- step 1: Write a.txt -------------------------------------------------
 	body1 := marshalBody(t, gatewayBody{
@@ -588,13 +611,16 @@ func TestRPG001RunRecordAgainstRealPostgresAndGit(t *testing.T) {
 		t.Error("whole-run b.txt should read Committed: its content is in the child's own commit_recorded tree")
 	}
 
-	// Brief/Replies: never shown, by design — see recordbuild.go's own
-	// package comment.
-	if rec.Brief.Available {
-		t.Error("Brief.Available = true; this process holds no identity secret to verify it with")
+	// Brief: verified with the operator's own check-only key (E19's own
+	// widening) — see recordbuild.go's own package comment.
+	if !rec.Brief.Available {
+		t.Error("Brief.Available = false; the fixture's own message key should have verified it")
 	}
-	if rec.Brief.Text != "" {
-		t.Errorf("Brief.Text = %q, want empty", rec.Brief.Text)
+	if rec.Brief.Text != recordFixtureBriefText {
+		t.Errorf("Brief.Text = %q, want %q", rec.Brief.Text, recordFixtureBriefText)
+	}
+	if rec.Brief.Digest == "" {
+		t.Error("Brief.Digest should always be the ledger's own keyed digest")
 	}
 
 	if rec.ChainHead <= 0 {
@@ -612,6 +638,37 @@ func TestRPG001UnknownRunIsNotFound(t *testing.T) {
 	a := get(t, srv.URL, "/api/v1/runs/run-does-not-exist/record")
 	if a.status != 404 {
 		t.Errorf("status = %d, want 404: %s", a.status, a.body)
+	}
+}
+
+// TestRPG001MissingKeyIDIsNeverVerified: the ledger's own digest names a
+// key id this process holds no file for — a rotation the deployment has
+// not finished catching up on, or simply a deployment with no
+// -message-key-dir configured at all. Either way: unavailable, never a
+// guess.
+func TestRPG001MissingKeyIDIsNeverVerified(t *testing.T) {
+	f := newRecordFixture(t)
+
+	// A recordServer pointed at an EMPTY message-key directory — the
+	// fixture's own key id ("gateway-v1") has no file under it.
+	unconfigured := *f.rs
+	unconfigured.messageKeyDir = t.TempDir()
+	srv := newRecordTestServer(t, &unconfigured)
+
+	a := get(t, srv.URL, "/api/v1/runs/"+f.parentID+"/record")
+	if a.status != 200 {
+		t.Fatalf("GET record: status %d: %s", a.status, a.body)
+	}
+	var rec RunRecord
+	decodeBody(t, a, &rec)
+	if rec.Brief.Available {
+		t.Error("Brief.Available = true, but no key file exists for this digest's own key id")
+	}
+	if rec.Brief.Text != "" {
+		t.Errorf("Brief.Text = %q, want empty", rec.Brief.Text)
+	}
+	if rec.Brief.Digest == "" {
+		t.Error("Brief.Digest should still be reported even when it cannot be verified")
 	}
 }
 

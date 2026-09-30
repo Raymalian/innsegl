@@ -23,33 +23,32 @@ import (
 // (recordfiles.go/snapshotstore.go), never a second opinion about anything
 // internal/reconciler or internal/ledger already decided.
 //
-// # Brief and replies are never shown, and this is a stated decision, not
-// a bug
+// # Brief and replies: verified with a CHECK-ONLY key, never the identity
+// secret
 //
-// RecordMessage.Digest is always the ledger's own KEYED digest
-// (ADR-0061 decision 2, agent_message.payload_digest). Verifying it — and
-// so ever setting Available true — needs the SAME per-deployment identity
-// secret internal/mcp.DeriveAgentMessageKey derives a caller's own key
-// from, because the body on disk is addressed by a DIFFERENT, PLAIN digest
-// that is nowhere on the chain: nothing here can walk from the keyed value
-// the ledger recorded back to the file that might hold it.
-//
-// This process does not hold that secret, and it must not be given it
-// without a human decision to make it so: doc 05 §3 puts this exact
-// process behind no authentication of its own ("this process authenticates
-// nobody and authorises nothing... do not expose this port to a network
-// you have not put an authenticating proxy in front of"), and the
+// RecordMessage.Digest is always the ledger's own KEYED digest (ADR-0061
+// decision 2, agent_message.payload_digest). The first version of this
+// file never set Available true at all: verifying that digest needs the
+// SAME per-deployment identity secret internal/mcp.DeriveAgentMessageKey
+// derives a caller's own key from, and this process must not hold that
+// secret — doc 05 §3 puts it behind no authentication of its own, and the
 // identity secret is the ONE secret every run token, every pseudonym and
 // every agent-message key in this deployment derives from
-// (agentmessagekey.go's own domain-separation argument). Handing it to the
-// one process in this deployment that holds no other secret and no
-// authentication of its own is a blast-radius decision for doc 04/05, not
-// an inference this issue makes on its own. So Brief and Replies always
-// answer Available: false, Text: "" here — identical to record.go's own
-// "body not held" case, because from this process's side of the boundary
-// the two are indistinguishable anyway.
+// (agentmessagekey.go's own domain-separation argument).
 //
-// RecordStep.SpawnedRunID needs no such secret: it is resolved by
+// The operator's own decision settles it: this process is instead given
+// the DERIVED key alone (cmd/innsegl/gateway.go's own writeMessageKeyFile,
+// read here via recordmessagekey.go), which computes a message digest and
+// nothing else — it cannot mint a run token, a pseudonym, or an event this
+// process could append anyway, since the read-only ledger role already
+// forbids that. Verification is then recordmessagekey.go's
+// verifyAgentMessage: brute force over the run's own small set of
+// retained bodies, exact HMAC-SHA256 match against the chain's own
+// digest, never a guess. messageKeyDir == "" (no -message-key-dir
+// configured) still answers every message unavailable, the same "unset
+// means off" posture this package holds every optional setting to.
+//
+// RecordStep.SpawnedRunID needs no key at all: it is resolved by
 // EXACT-EQUALITY content addressing against the PLAIN digest the body is
 // actually stored under (recordbody.go's spawnBodyMatches), the same
 // mechanism ADR-0058 decision 3 itself uses. That is unaffected by any of
@@ -80,7 +79,7 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 		RegisteredAt: reg.RegisteredAt, ParentRunID: reg.ParentRunID, ForkedFromRunID: reg.ForkedFromRunID,
 	}
 
-	brief, replies := briefAndReplies(rows)
+	brief, replies := briefAndReplies(rows, rs.messageKeyDir, runBodyCandidates(logDir, runID))
 
 	family, err := rs.store.family(ctx, runID)
 	if err != nil {
@@ -167,20 +166,28 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 }
 
 // briefAndReplies folds every agent_message of a run into record.go's
-// Brief (role brief) and Replies (role assistant, chain order). See this
-// file's own package comment for why Text is always empty and Available is
-// always false.
-func briefAndReplies(rows []recordEventRow) (RecordMessage, []RecordMessage) {
+// Brief (role brief) and Replies (role assistant, chain order), verifying
+// each one's own keyed digest against the run's own retained bodies
+// (recordmessagekey.go's verifyAgentMessage) when this process has been
+// given a directory to read the check-only key from. messageKeyDir == ""
+// (no -message-key-dir configured) answers every message unavailable,
+// exactly as it did before the operator's own decision to widen this: the
+// "unset means off" posture this whole package already holds every
+// optional setting to.
+func briefAndReplies(rows []recordEventRow, messageKeyDir string, candidates [][]byte) (RecordMessage, []RecordMessage) {
 	var brief RecordMessage
 	var replies []RecordMessage
 	for _, r := range rows {
 		if r.EventType != event.EventTypeAgentMessage {
 			continue
 		}
-		msg := RecordMessage{
-			Digest:    stringOf(r.Body[event.FieldPayloadDigest]),
-			Available: false,
-			At:        r.TS,
+		digest := stringOf(r.Body[event.FieldPayloadDigest])
+		msg := RecordMessage{Digest: digest, At: r.TS}
+		if messageKeyDir != "" {
+			if text, ok := verifyAgentMessage(messageKeyDir, digest, candidates); ok {
+				msg.Text = text
+				msg.Available = true
+			}
 		}
 		switch stringOf(r.Body[event.FieldRole]) {
 		case "brief":

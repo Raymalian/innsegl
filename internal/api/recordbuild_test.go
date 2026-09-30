@@ -122,37 +122,84 @@ func TestRetiredAtOf(t *testing.T) {
 	}
 }
 
-func TestBriefAndRepliesFoldsRoles(t *testing.T) {
+func TestBriefAndRepliesFoldsRolesUnconfigured(t *testing.T) {
 	t0 := time.Date(2026, 9, 30, 14, 30, 0, 0, time.UTC)
 	rows := []recordEventRow{
 		mkRow(event.EventTypeAgentMessage, t0, map[string]any{
-			event.FieldRole: "brief", event.FieldPayloadDigest: "hmac-sha256:k:aa",
+			event.FieldRole: "brief", event.FieldPayloadDigest: "hmac-sha256:k:" + hex64(t, "brief"),
 		}),
 		mkRow(event.EventTypeAgentMessage, t0.Add(time.Minute), map[string]any{
-			event.FieldRole: "assistant", event.FieldPayloadDigest: "hmac-sha256:k:bb",
+			event.FieldRole: "assistant", event.FieldPayloadDigest: "hmac-sha256:k:" + hex64(t, "reply1"),
 		}),
 		mkRow(event.EventTypeAgentMessage, t0.Add(2*time.Minute), map[string]any{
-			event.FieldRole: "assistant", event.FieldPayloadDigest: "hmac-sha256:k:cc",
+			event.FieldRole: "assistant", event.FieldPayloadDigest: "hmac-sha256:k:" + hex64(t, "reply2"),
 		}),
 		mkRow(event.EventTypeToolCall, t0.Add(3*time.Minute), map[string]any{}),
 	}
-	brief, replies := briefAndReplies(rows)
-	if brief.Digest != "hmac-sha256:k:aa" {
+	// messageKeyDir == "" — the "unset means off" case: never verified,
+	// whatever the candidates.
+	brief, replies := briefAndReplies(rows, "", nil)
+	if brief.Digest != "hmac-sha256:k:"+hex64(t, "brief") {
 		t.Errorf("Brief.Digest = %q", brief.Digest)
 	}
 	if brief.Available || brief.Text != "" {
-		t.Errorf("Brief = %+v, want Available false and Text empty — no identity secret to verify it with", brief)
+		t.Errorf("Brief = %+v, want Available false and Text empty — no -message-key-dir configured", brief)
 	}
 	if len(replies) != 2 {
 		t.Fatalf("got %d replies, want 2", len(replies))
 	}
-	if replies[0].Digest != "hmac-sha256:k:bb" || replies[1].Digest != "hmac-sha256:k:cc" {
+	if replies[0].Digest != "hmac-sha256:k:"+hex64(t, "reply1") || replies[1].Digest != "hmac-sha256:k:"+hex64(t, "reply2") {
 		t.Errorf("replies out of order: %+v", replies)
 	}
 }
 
+func TestBriefAndRepliesVerifiesWithAConfiguredKey(t *testing.T) {
+	dir := t.TempDir()
+	const keyID = "gateway-v1"
+	const key = "the-derived-key"
+	writeTestMessageKey(t, dir, keyID, key)
+
+	briefText := "add a health endpoint"
+	replyText := "done"
+	t0 := time.Date(2026, 9, 30, 14, 30, 0, 0, time.UTC)
+	rows := []recordEventRow{
+		mkRow(event.EventTypeAgentMessage, t0, map[string]any{
+			event.FieldRole: "brief", event.FieldPayloadDigest: realKeyedDigest(key, keyID, []byte(briefText)),
+		}),
+		mkRow(event.EventTypeAgentMessage, t0.Add(time.Minute), map[string]any{
+			event.FieldRole: "assistant", event.FieldPayloadDigest: realKeyedDigest(key, keyID, []byte(replyText)),
+		}),
+	}
+	candidates := [][]byte{[]byte(briefText), []byte(replyText), []byte(`{"tool":"Bash"}`)}
+
+	brief, replies := briefAndReplies(rows, dir, candidates)
+	if !brief.Available || brief.Text != briefText {
+		t.Errorf("Brief = %+v, want Available=true Text=%q", brief, briefText)
+	}
+	if len(replies) != 1 || !replies[0].Available || replies[0].Text != replyText {
+		t.Errorf("Replies = %+v, want one Available=true Text=%q", replies, replyText)
+	}
+}
+
+func TestBriefAndRepliesUnmatchedStaysUnavailableEvenWhenConfigured(t *testing.T) {
+	dir := t.TempDir()
+	const keyID = "gateway-v1"
+	writeTestMessageKey(t, dir, keyID, "the-derived-key")
+
+	rows := []recordEventRow{
+		mkRow(event.EventTypeAgentMessage, time.Now(), map[string]any{
+			event.FieldRole: "brief", event.FieldPayloadDigest: realKeyedDigest("the-derived-key", keyID, []byte("the real brief")),
+		}),
+	}
+	// No candidate body produces this digest.
+	brief, _ := briefAndReplies(rows, dir, [][]byte{[]byte("something else entirely")})
+	if brief.Available || brief.Text != "" {
+		t.Errorf("Brief = %+v, want unavailable — never guessed", brief)
+	}
+}
+
 func TestBriefAndRepliesNoAgentMessagesAtAll(t *testing.T) {
-	brief, replies := briefAndReplies([]recordEventRow{mkRow(event.EventTypeToolCall, time.Now(), nil)})
+	brief, replies := briefAndReplies([]recordEventRow{mkRow(event.EventTypeToolCall, time.Now(), nil)}, "", nil)
 	if brief.Digest != "" || brief.Available {
 		t.Errorf("Brief = %+v, want the zero value", brief)
 	}

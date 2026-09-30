@@ -49,6 +49,13 @@ type RecordConfig struct {
 	// served repositories with. Empty means the same PATH lookup
 	// NewProver's own GitPath falls back to.
 	GitPath string
+	// MessageKeyDir is where cmd/innsegl/gateway.go's own writeMessageKeyFile
+	// writes RM-237's own derived, CHECK-ONLY agent-message key, by key id —
+	// mounted read-only into this process on the SAME volume the writer
+	// mounts read-write (deploy/compose/innsegl.yml's innsegl-message-key).
+	// Empty answers every Brief and Reply unavailable, the same "unset means
+	// off" posture SnapshotDir already holds.
+	MessageKeyDir string
 }
 
 var (
@@ -86,10 +93,11 @@ func currentRecordConfig() RecordConfig {
 // field — and it costs nothing: every method needs exactly these three
 // things and no request-scoped state ever lives on it.
 type recordServer struct {
-	store  *Store
-	prover *Prover
-	logDir string
-	cfg    snapshotStoreConfig
+	store         *Store
+	prover        *Prover
+	logDir        string
+	messageKeyDir string
+	cfg           snapshotStoreConfig
 }
 
 // registerRecordRoutes adds this issue's two routes to s's own mux. Called
@@ -98,10 +106,11 @@ type recordServer struct {
 func (s *Server) registerRecordRoutes() {
 	cfg := currentRecordConfig()
 	rs := &recordServer{
-		store:  s.store,
-		prover: s.prover,
-		logDir: s.logDir,
-		cfg:    snapshotStoreConfig{root: cfg.SnapshotDir, gitPath: cfg.GitPath},
+		store:         s.store,
+		prover:        s.prover,
+		logDir:        s.logDir,
+		messageKeyDir: cfg.MessageKeyDir,
+		cfg:           snapshotStoreConfig{root: cfg.SnapshotDir, gitPath: cfg.GitPath},
 	}
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}/record", rs.handleRunRecord)
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}/steps/{n}/diff", rs.handleStepDiff)
