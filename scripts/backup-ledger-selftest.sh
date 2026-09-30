@@ -481,6 +481,60 @@ check "BAK-014 the run still writes a dump of its own, under a fixed-width name"
 # What changes is that it is logged and left in .host-copy, which the readiness
 # report reads — reported, never silent.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# BAK-015 — the backup role, provisioned the way db-init provisions it, takes
+# a verified backup of a database carrying every shipped migration.
+#
+# Measured on 2026-09-30: every scheduled dump was failing. First with
+# "permission denied for sequence gateway_run_mapping_id_seq" (migration
+# 0007: readonly.sql granted tables, never sequences), then with "permission
+# denied for schema innsegl_auth" (migration 0008, ADR-0062: sign-in state the
+# backup role is never granted). The cases above run as the owner on two
+# migrations, so they could see neither. This one applies ALL of migrations/,
+# gives the role internal/api/readonly.sql through db-init's own translation,
+# then CREATEDB, in db-init's order.
+# ---------------------------------------------------------------------------
+printf '\n-- BAK-015: the real backup role, every shipped migration --\n'
+load_fixtures 0
+for m in "${REPO_ROOT}"/migrations/0*.sql; do
+  case "${m##*/}" in 0001_*|0002_*) continue ;; esac
+  docker exec -i "${PG}" psql -q -v ON_ERROR_STOP=1 -U innsegl -d innsegl <"${m}" >/dev/null
+done
+docker exec -i "${PG}" psql -q -v ON_ERROR_STOP=1 -U innsegl -d innsegl >/dev/null <<'SQL'
+INSERT INTO innsegl_auth.auth_events (event_type) VALUES ('bak015');
+SQL
+docker exec -i "${PG}" psql -q -v ON_ERROR_STOP=1 -U innsegl -d innsegl \
+  -v pass="${INNSEGL_BACKUP_PASSWORD}" -v role=bak015_backup >/dev/null <<'SQL'
+CREATE ROLE :"role" LOGIN PASSWORD :'pass';
+SQL
+# db-init.sh's apply_readonly_sql, the same sed, so the grants cannot drift.
+sed -e 's/%\[1\]s/:"role"/g' -e 's/%\[2\]s/:"db"/g' "${REPO_ROOT}/internal/api/readonly.sql" |
+  docker exec -i "${PG}" psql -q -v ON_ERROR_STOP=1 -U innsegl -d innsegl \
+    -v role=bak015_backup -v db=innsegl -f - >/dev/null
+docker exec -i "${PG}" psql -q -v ON_ERROR_STOP=1 -U innsegl -d innsegl >/dev/null <<'SQL'
+ALTER ROLE bak015_backup CREATEDB;
+SQL
+bak015_out="${workdir}/backups-bak015"
+mkdir -p "${bak015_out}"
+expect 0 "BAK-015 the real backup role takes a verified backup" -- \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role bak015_backup \
+  --out "${bak015_out}" --segments "${good_segments}" --quiet
+bak015_dump="$(find "${bak015_out}" -maxdepth 1 -name 'innsegl-*.dump' | head -1)"
+if [ -n "${bak015_dump}" ]; then
+  docker cp "${bak015_dump}" "${PG}:/tmp/bak015.dump"
+  listing="$(docker exec "${PG}" pg_restore -l /tmp/bak015.dump 2>&1)"
+else
+  listing="no dump written"
+fi
+printf '%s' "${listing}" | grep -q 'innsegl_auth\|no dump written' && g=1 || g=0
+check "BAK-015 the dump holds no sign-in state" "${g}" "$(printf '%s' "${listing}" | grep 'innsegl_auth\|no dump' | head -3)"
+docker exec -i "${PG}" psql -q -v ON_ERROR_STOP=1 -U innsegl -d innsegl >/dev/null <<'SQL'
+SET client_min_messages = warning;
+DROP SCHEMA innsegl_auth CASCADE;
+DROP OWNED BY bak015_backup;
+DROP ROLE bak015_backup;
+SQL
+
 printf '\n-- RM-190: a verified backup is copied outside the container runtime --\n'
 copy_out="${workdir}/backups-copy"
 host_copy="${workdir}/host-backups"

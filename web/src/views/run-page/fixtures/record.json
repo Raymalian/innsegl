@@ -1,0 +1,228 @@
+{
+  "run": {
+    "run_id": "run-df219cf8c90bf55f74ca6870c034b5f9",
+    "spiffe_id": "spiffe://innsegl.dev/agent/7e6a3274/4a3f6604/run-df219cf8c90bf55f74ca6870c034b5f9",
+    "agent_type": "main",
+    "task_ref": "main",
+    "repo": "github.com/innsegl-test/gateway-livetest",
+    "branch": "main",
+    "status": "retired",
+    "status_at": "2026-09-30T14:31:58Z",
+    "registered_at": "2026-09-30T14:30:38Z",
+    "parent_run_id": "",
+    "forked_from_run_id": ""
+  },
+  "tree": {
+    "root_run_id": "run-df219cf8c90bf55f74ca6870c034b5f9",
+    "nodes": [
+      {
+        "run_id": "run-df219cf8c90bf55f74ca6870c034b5f9",
+        "agent_type": "main",
+        "parent_run_id": "",
+        "status": "retired",
+        "spawned_by": 0
+      },
+      {
+        "run_id": "run-7f139b23cdabebfaa99ff8b5d3059c9b",
+        "agent_type": "general-purpose",
+        "parent_run_id": "run-df219cf8c90bf55f74ca6870c034b5f9",
+        "status": "retired",
+        "spawned_by": 4
+      }
+    ]
+  },
+  "brief": {
+    "text": "Do these in order and report each result in one line: 1) create e18.txt containing 'e18 end to end'; 2) run exactly: git add e18.txt && git commit -m 'e18 end to end'; 3) run exactly: ls ~/.innsegl/log | head -1; 4) spawn one general-purpose subagent with the prompt: 'Create e18-sub.txt containing sub, then run exactly: git add e18-sub.txt && git commit -m \"e18 subagent\". Report the output.'",
+    "digest": "hmac-sha256:gateway-v1:413cdaa38951cfa015b1938afcf090bc0742fdd72f7a9b85ad9a75b342280bec",
+    "available": true,
+    "at": "2026-09-30T14:30:38Z"
+  },
+  "replies": [
+    {
+      "text": "1. Created e18.txt. 2. The exact commit succeeded as c906a8c. 3. ls ~/.innsegl/log failed with \"Operation not permitted\". 4. The subagent committed as 64967eb.",
+      "digest": "hmac-sha256:gateway-v1:f2385bf1d9aec0392df396883d864ec30000000000000000000000000000c3c3",
+      "available": true,
+      "at": "2026-09-30T14:30:58Z"
+    }
+  ],
+  "steps": [
+    {
+      "n": 1,
+      "tool_use_id": "toolu_01E18WriteStep0000000001",
+      "event_id": "01a0f2c1-0001-7000-8000-000000000001",
+      "chain_position": 40190,
+      "at": "2026-09-30T14:30:41Z",
+      "tool": "Write",
+      "summary": "e18.txt",
+      "input": "{\"file_path\":\"e18.txt\",\"content\":\"e18 end to end\\n\"}",
+      "output": "File created successfully at: e18.txt",
+      "truncated": false,
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
+      "tree_before": "dd57973fb1b85c6678c1a9583caedb7a41cab15c",
+      "tree_after": "a41f0e2c2b8d1f07e9aa0c3b4e0f6d2a91c5e7b1",
+      "files": [
+        {
+          "path": "e18.txt",
+          "status": "A",
+          "additions": 1,
+          "deletions": 0,
+          "steps": [
+            1
+          ],
+          "committed": true,
+          "by_run_id": ""
+        }
+      ],
+      "spawned_run_id": "",
+      "commit_sha": "",
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "changed",
+        "telemetry": "matched"
+      },
+      "spawned_commits": []
+    },
+    {
+      "n": 2,
+      "tool_use_id": "toolu_01E18CommitStep000000002",
+      "event_id": "01a0f2c1-0002-7000-8000-000000000002",
+      "chain_position": 40194,
+      "at": "2026-09-30T14:30:44Z",
+      "tool": "Bash",
+      "summary": "git add e18.txt && git commit -m 'e18 end to end'",
+      "input": "{\"command\":\"git add e18.txt && git commit -m 'e18 end to end'\"}",
+      "output": "[main c906a8c] e18 end to end\n 1 file changed, 1 insertion(+)\n create mode 100644 e18.txt",
+      "truncated": false,
+      "outcome": {
+        "kind": "ok",
+        "exit_code": 0
+      },
+      "tree_before": "a41f0e2c2b8d1f07e9aa0c3b4e0f6d2a91c5e7b1",
+      "tree_after": "a41f0e2c2b8d1f07e9aa0c3b4e0f6d2a91c5e7b1",
+      "files": [],
+      "spawned_run_id": "",
+      "commit_sha": "c906a8c4b1f2e3d4a5b6c7d8e9f0a1b2c3d4e5f6",
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "unchanged",
+        "telemetry": "matched"
+      },
+      "spawned_commits": []
+    },
+    {
+      "n": 3,
+      "tool_use_id": "toolu_01E18DeniedStep000000003",
+      "event_id": "01a0f2c1-0003-7000-8000-000000000003",
+      "chain_position": 40197,
+      "at": "2026-09-30T14:30:47Z",
+      "tool": "Bash",
+      "summary": "ls ~/.innsegl/log | head -1",
+      "input": "{\"command\":\"ls ~/.innsegl/log | head -1\"}",
+      "output": "ls: ~/.innsegl/log: Operation not permitted",
+      "truncated": false,
+      "outcome": {
+        "kind": "error",
+        "exit_code": 1
+      },
+      "tree_before": "a41f0e2c2b8d1f07e9aa0c3b4e0f6d2a91c5e7b1",
+      "tree_after": "a41f0e2c2b8d1f07e9aa0c3b4e0f6d2a91c5e7b1",
+      "files": [],
+      "spawned_run_id": "",
+      "commit_sha": "",
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "unchanged",
+        "telemetry": "matched"
+      },
+      "spawned_commits": []
+    },
+    {
+      "n": 4,
+      "tool_use_id": "toolu_01E18AgentStep0000000004",
+      "event_id": "01a0f2c1-0004-7000-8000-000000000004",
+      "chain_position": 40205,
+      "at": "2026-09-30T14:30:52Z",
+      "tool": "Agent",
+      "summary": "Create e18-sub.txt containing sub, then run exactly: git add \u2026",
+      "input": "{\"subagent_type\":\"general-purpose\",\"prompt\":\"Create e18-sub.txt containing sub, then run exactly: git add e18-sub.txt && git commit -m \\\"e18 subagent\\\". Report the output.\"}",
+      "output": "The subagent created e18-sub.txt and committed it as 64967eb.",
+      "truncated": false,
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
+      "tree_before": "a41f0e2c2b8d1f07e9aa0c3b4e0f6d2a91c5e7b1",
+      "tree_after": "b52e1f3d3c9e2a18fabb1d4c5f1a7e3ba2d6f8c2",
+      "files": [
+        {
+          "path": "e18-sub.txt",
+          "status": "A",
+          "additions": 1,
+          "deletions": 0,
+          "steps": [
+            4
+          ],
+          "committed": true,
+          "by_run_id": "run-7f139b23cdabebfaa99ff8b5d3059c9b"
+        }
+      ],
+      "spawned_run_id": "run-7f139b23cdabebfaa99ff8b5d3059c9b",
+      "commit_sha": "",
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "changed",
+        "telemetry": "matched"
+      },
+      "spawned_commits": [
+        "64967eb5c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "e18.txt",
+      "status": "A",
+      "additions": 1,
+      "deletions": 0,
+      "steps": [
+        1
+      ],
+      "committed": true,
+      "by_run_id": ""
+    },
+    {
+      "path": "e18-sub.txt",
+      "status": "A",
+      "additions": 1,
+      "deletions": 0,
+      "steps": [
+        4
+      ],
+      "committed": true,
+      "by_run_id": "run-7f139b23cdabebfaa99ff8b5d3059c9b"
+    }
+  ],
+  "commits": [
+    {
+      "sha": "c906a8c4b1f2e3d4a5b6c7d8e9f0a1b2c3d4e5f6",
+      "subject": "e18 end to end",
+      "step": 2,
+      "landed": "landed",
+      "landed_reason": "",
+      "rekor_log_index": 1041
+    }
+  ],
+  "witness": {
+    "steps": 4,
+    "agree": 4,
+    "disagree": 0,
+    "unchecked": 0,
+    "bodies_stored": 4,
+    "bodies_verified": 4
+  },
+  "data_as_of": "2026-09-30T14:31:07Z",
+  "chain_head": 40218
+}

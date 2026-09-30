@@ -225,6 +225,11 @@ jobs:
       # no real ~/.claude/settings.json or ~/.claude.json.
       - name: install.sh merges, never clobbers, and undoes exactly what it added
         run: ./scripts/install-selftest.sh
+      # The API's managed-settings mount is named once and checked before
+      # `make start` recreates anything. A fake `docker` and `uname` stand
+      # in; nothing is mounted.
+      - name: the managed-settings mount is checked before the stack is touched
+        run: ./scripts/managed-settings-mount-selftest.sh
 
   worktree-link:
     name: worktree link

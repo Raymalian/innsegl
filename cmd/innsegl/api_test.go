@@ -31,6 +31,7 @@ import (
 func minimalAPIArgs(extra ...string) []string {
 	return append([]string{
 		"-dsn", "postgres://innsegl_reader@ledger/innsegl",
+		"-auth-dsn", "postgres://innsegl_authwriter@ledger/innsegl",
 		"-repos", "github.com/innsegl/demo=/srv/repos/github.com/innsegl/demo",
 		"-fulcio-url", "http://fulcio:5555",
 		"-rekor-url", "http://rekor:3000",
@@ -291,6 +292,7 @@ func TestAPI008RequiredFlagsAreRefusedByName(t *testing.T) {
 		want string
 	}{
 		{"-dsn", envAPIDSN},
+		{"-auth-dsn", envAuthWriterDSN},
 		{"-repos", envAPIRepos},
 		{"-fulcio-url", envFulcioURL},
 		{"-rekor-url", envRekorURL},
@@ -349,6 +351,7 @@ func withoutAPIFlag(args []string, flag string) []string {
 // does not belong on a command line the process table can read.
 func TestAPI008EveryRequiredFlagHasAnEnvironmentFallback(t *testing.T) {
 	t.Setenv(envAPIDSN, "postgres://innsegl_reader:secret@ledger/innsegl")
+	t.Setenv(envAuthWriterDSN, "postgres://innsegl_authwriter:secret@ledger/innsegl")
 	t.Setenv(envAPIRepos, "github.com/innsegl/demo=/srv/demo")
 	t.Setenv(envFulcioURL, "http://fulcio:5555")
 	t.Setenv(envRekorURL, "http://rekor:3000")
@@ -476,21 +479,25 @@ func TestAPI008HelpExitsZeroAndDocumentsEveryExitStatus(t *testing.T) {
 	}
 }
 
-// The command holds no authentication and says so. #70 puts the dashboard
-// behind Cloudflare Access (doc 05 §3); inventing an auth scheme here would be
-// a second thing to get wrong and a second place to review.
-func TestAPI008HelpSaysTheCommandHoldsNoAuthentication(t *testing.T) {
+// RM-260/RM-261 (ADR-0062): the command requires a signed-in session on
+// every route but health and proof, and says so. Cloudflare Access (doc 05
+// §3, #70) remains a second, independent door — the help says that too,
+// rather than implying the passkey gate replaced it.
+func TestAPI008HelpSaysTheCommandRequiresASession(t *testing.T) {
 	var out bytes.Buffer
 
 	if code := runAPICommand([]string{"-h"}, &out, &out, apiDeps{}); code != exitOK {
 		t.Fatalf("exit = %d, want %d", code, exitOK)
 	}
 	help := strings.ToLower(out.String())
-	if !strings.Contains(help, "no authentication") {
-		t.Errorf("the help does not say the command holds no authentication:\n%s", help)
+	if !strings.Contains(help, "signed-in session") {
+		t.Errorf("the help does not say the command requires a signed-in session:\n%s", help)
 	}
 	if !strings.Contains(help, "cloudflare access") {
-		t.Errorf("the help does not name what is expected to hold it:\n%s", help)
+		t.Errorf("the help does not name the second, independent door:\n%s", help)
+	}
+	if !strings.Contains(help, "rp id") || !strings.Contains(help, "domain") {
+		t.Errorf("the help does not say the RP ID must be a domain:\n%s", help)
 	}
 }
 

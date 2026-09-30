@@ -66,10 +66,16 @@ const ENTITLED: Readonly<Record<string, readonly string[]>> = {
   "views/overview/styles.ts": ["heading", "listHeading", "cardValue", "cardValueWord"],
   "views/runs/styles.ts": ["heading"],
   "views/run-detail/styles.ts": ["pageHeading"],
+  // The run page's own view heading — "<agent_type> agent" (doc 06 §3.3, E19).
+  "views/run-page/styles.ts": ["pageHeading"],
   // The question the page asks (doc 06 §3.6).
   "views/public-verify/styles.ts": ["pageHeading"],
   // The one word that states the verdict (doc 06 §4.1).
   "components/verification/styles.ts": ["verdictHeadline"],
+  // The sign-in and first-enrolment pages' own headings (RM-260/RM-261,
+  // ADR-0062) — the same "one view heading" shape public-verify's own entry
+  // above already holds.
+  "views/auth/styles.ts": ["pageHeading"],
 };
 
 /** The const, or the JSX-local binding, a `font-serif` occurrence sits in. */

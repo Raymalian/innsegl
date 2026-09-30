@@ -16,7 +16,7 @@
 # time, per the issue: "A backup nobody has verified is the same shape as a
 # gate nobody has watched fail." It does four things, in order:
 #
-#   1. pg_dump the whole `innsegl` database OVER THE NETWORK, as a role that
+#   1. pg_dump the whole `innsegl` schema OVER THE NETWORK, as a role that
 #      can read it and cannot write it.
 #   2. Restore that dump into a throwaway database on the SAME server -- never
 #      the live one (runbooks/index-rebuild.md §2.2) -- which proves the dump
@@ -30,7 +30,7 @@
 #
 # WHAT IS IN THE DUMP
 # --------------------
-# The whole `innsegl` database, not a two-table extract of innsegl.events and
+# The whole `innsegl` schema, not a two-table extract of innsegl.events and
 # innsegl.chain. A restore per runbooks/index-rebuild.md §4 loads the dump into
 # a FRESH database and expects the schema -- the append-only triggers, the
 # chain-link trigger, the CHECK constraints -- to come back with it, not to be
@@ -451,9 +451,15 @@ report_file="${dumpfile}.verify.txt"
 #    publishes no host port for postgres: a published port is a segmentation
 #    hole, not a convenience. Reaching it from inside the deployment needs no
 #    such hole, and needs no runtime socket either.
+#
+#    --schema=innsegl: THE LEDGER, NOT THE DATABASE (BAK-015). The same database
+#    holds innsegl_auth (ADR-0062, migration 0008): passkeys and sign-in
+#    sessions. The backup role is never granted it, and a whole-database dump
+#    then fails on its first LOCK TABLE; granting it would put sign-in state into
+#    every dump file. After a restore, the operator enrols again.
 # ---------------------------------------------------------------------------
-say "==> pg_dump ${database} from ${pg_host}:${pg_port} as ${role}"
-if ! pg_ro pg_dump -d "${database}" -Fc -f "${dumpfile}" 2>"${work}/dump.err"; then
+say "==> pg_dump ${database} (schema innsegl) from ${pg_host}:${pg_port} as ${role}"
+if ! pg_ro pg_dump -d "${database}" -Fc --schema=innsegl -f "${dumpfile}" 2>"${work}/dump.err"; then
   warn "FAIL: pg_dump did not complete:"
   sed 's/^/    /' "${work}/dump.err" >&2 || true
   end_dump_failure

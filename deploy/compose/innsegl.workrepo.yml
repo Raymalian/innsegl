@@ -180,11 +180,28 @@ services:
       # digest. Identity is unaffected and never expires -- it is in the chain.
       INNSEGL_API_LOG_DIR: /agentlog
       INNSEGL_API_LOG_DAYS: ${INNSEGL_LOG_DAYS:-90}
+      # The run page's own read (E19, #395-#397): the gateway's workspace
+      # snapshot store, internal/gateway/snapshot.go's own StoreRoot, which
+      # cmd/innsegl/gateway.go writes under a "gateway-snapshots"
+      # subdirectory of this SAME /agentlog mount — no second volume. Named
+      # explicitly, rather than left to derive, so this file states the same
+      # thing api.go's own default would compute.
+      INNSEGL_API_SNAPSHOT_DIR: /agentlog/gateway-snapshots
+      # RM-237's own derived agent-message key (ADR-0061 decision 2),
+      # restated by innsegl-mcp to the innsegl-message-key volume (base
+      # innsegl.yml) so this process can VERIFY a brief or a reply's own
+      # keyed digest without ever holding the identity secret it was
+      # derived from. A key id in the ledger's own digest with no file here
+      # is never treated as verified.
+      INNSEGL_API_MESSAGE_KEY_DIR: /message-key
     volumes:
       # READ-ONLY, and it matters more here than for the workspace: retention
       # belongs to the hook that writes these. A read path that could delete
       # would be one misconfiguration away from pruning on another schedule.
       - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/agentlog:ro
+      # READ-ONLY. The only other mount of this volume is innsegl-mcp's
+      # read-write one (base innsegl.yml) — one writer, one reader.
+      - innsegl-message-key:/message-key:ro
       # READ-ONLY, matching how this service already mounts the workspace. doc
       # 05's proof BFF reads commit objects with git plumbing and must not be
       # able to write into the tree it verifies.

@@ -192,7 +192,7 @@ type gwIdentityFixture struct {
 
 func newGWIdentityFixture(t *testing.T) *gwIdentityFixture {
 	t.Helper()
-	ownerDSN, _ := freshLedgerDB(t)
+	ownerDSN, _, _ := freshLedgerDB(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

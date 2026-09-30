@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "e18.txt", "old_path": "", "status": "A", "binary": false, "truncated": false,
+      "hunks": [
+        {"old_start": 0, "old_lines": 0, "new_start": 1, "new_lines": 1,
+         "lines": [{"kind": "add", "old_no": 0, "new_no": 1, "text": "e18 end to end"}]}
+      ]
+    }
+  ]
+}

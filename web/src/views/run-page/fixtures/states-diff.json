@@ -1,0 +1,28 @@
+{
+  "files": [
+    {
+      "path": "internal/gateway/limit.go",
+      "old_path": "",
+      "status": "M",
+      "binary": false,
+      "truncated": false,
+      "hunks": [
+        {
+          "old_start": 41,
+          "old_lines": 4,
+          "new_start": 41,
+          "new_lines": 5,
+          "lines": [
+            { "kind": "context", "old_no": 41, "new_no": 41, "text": "func (l *SessionLimiter) Allow(id string) bool {" },
+            { "kind": "del", "old_no": 42, "new_no": 0, "text": "\tb := l.bucket(id)" },
+            { "kind": "del", "old_no": 43, "new_no": 0, "text": "\treturn b.Allow()" },
+            { "kind": "add", "old_no": 0, "new_no": 42, "text": "\tl.mu.Lock()" },
+            { "kind": "add", "old_no": 0, "new_no": 43, "text": "\tdefer l.mu.Unlock()" },
+            { "kind": "add", "old_no": 0, "new_no": 44, "text": "\treturn l.bucket(id).Allow()" },
+            { "kind": "context", "old_no": 44, "new_no": 45, "text": "}" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -33,6 +33,17 @@ function visibleValue(container: HTMLElement): HTMLElement {
 }
 
 describe("FE-008 IdentifierChip", () => {
+  it("shows a caller's shorter display text, and still copies and reveals the full value", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <IdentifierChip kind="spiffe" value={SPIFFE} display="spiffe://innsegl.dev/…/run/01HQ…PDC" />,
+    );
+    expect(visibleValue(container)).toHaveTextContent("spiffe://innsegl.dev/…/run/01HQ…PDC");
+    expect(screen.getByRole("button", { name: new RegExp(escapeRegExp(SPIFFE)) })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: new RegExp(escapeRegExp(SPIFFE)) }));
+    await expect(navigator.clipboard.readText()).resolves.toBe(SPIFFE);
+  });
+
   it("renders the identifier in monospace (P4, §5.2)", () => {
     const { container } = render(
       <IdentifierChip kind="spiffe" value={SPIFFE} />,

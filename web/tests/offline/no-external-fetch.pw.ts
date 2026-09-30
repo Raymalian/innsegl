@@ -109,6 +109,10 @@ test.describe("FE-117: the faces the page renders in are the bundled ones", () =
     // of what the browser actually drew.
     await installApiMocks(page);
     await page.goto("/");
+    // ADR-0062's gate asks for the session before any view renders, so the
+    // heading and an identifier exist only once it has answered.
+    await expect(page.locator("h1")).toBeVisible();
+    await expect(page.locator("[data-identifier-display]").first()).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
 
     const families = await page.evaluate(() => {

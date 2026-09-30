@@ -57,6 +57,10 @@ const (
 	// own. Spelled here for the same reason the other two are.
 	backupRole     = "innsegl_backup"
 	backupPassword = "innsegl-deploy-test-backup"
+	// The sign-in store's writer (RM-260/RM-261): its own schema, no grant
+	// on the ledger; db-init.sh provisions it beside the other three.
+	authwriterRole     = "innsegl_authwriter"
+	authwriterPassword = "innsegl-deploy-test-authwriter"
 )
 
 var errDependencyAbsent = errors.New("a required dependency is absent")
@@ -168,6 +172,13 @@ func (c *ledgerContainer) readerDSN() string {
 		readerRole, readerPassword, c.port, ownerDatabase)
 }
 
+// authwriterDSN is the sign-in store's credential (RM-260/RM-261), the one
+// `innsegl api` checks sessions with; it holds no grant on the ledger.
+func (c *ledgerContainer) authwriterDSN() string {
+	return fmt.Sprintf("postgres://%s:%s@127.0.0.1:%s/%s?sslmode=disable",
+		authwriterRole, authwriterPassword, c.port, ownerDatabase)
+}
+
 func startLedger(ctx context.Context, t *testing.T) (*ledgerContainer, error) {
 	t.Helper()
 	if err := dockerUsable(ctx); err != nil {
@@ -245,6 +256,7 @@ func (c *ledgerContainer) copyDeployScripts(ctx context.Context, root string) er
 		// GRANTs in deploy/ would be a read-only posture that could drift from
 		// the one the API's own start-up assertion measures against.
 		{root + "/internal/api/readonly.sql", "/innsegl/api/readonly.sql"},
+		{root + "/internal/api/authwriter.sql", "/innsegl/api/authwriter.sql"},
 	} {
 		dir := cp[1]
 		if strings.HasSuffix(dir, ".sql") {
@@ -276,6 +288,9 @@ func (c *ledgerContainer) runInit(ctx context.Context, script string, extra ...s
 		"--env", "INNSEGL_BACKUP_ROLE=" + backupRole,
 		"--env", "INNSEGL_BACKUP_PASSWORD=" + backupPassword,
 		"--env", "INNSEGL_READONLY_SQL=/innsegl/api/readonly.sql",
+		"--env", "INNSEGL_AUTHWRITER_ROLE=" + authwriterRole,
+		"--env", "INNSEGL_AUTHWRITER_PASSWORD=" + authwriterPassword,
+		"--env", "INNSEGL_AUTHWRITER_SQL=/innsegl/api/authwriter.sql",
 	}
 	args = append(args, extra...)
 	args = append(args, c.name, "sh", "/innsegl/init/"+script)

@@ -40,6 +40,12 @@ GRANT USAGE ON SCHEMA public TO %[1]s;
 REVOKE ALL ON SCHEMA innsegl FROM %[1]s;
 GRANT USAGE ON SCHEMA innsegl TO %[1]s;
 GRANT SELECT ON ALL TABLES IN SCHEMA innsegl TO %[1]s;
+-- SELECT on a sequence reads its current value and nothing else: nextval needs
+-- USAGE or UPDATE, setval needs UPDATE. pg_dump reads every sequence in the
+-- schema it dumps, so without this the backup role, which is given this
+-- file, cannot take a backup once a migration adds one (0007's
+-- gateway_run_mapping_id_seq; BAK-015).
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA innsegl TO %[1]s;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
     ON ALL TABLES IN SCHEMA innsegl FROM %[1]s;
 
@@ -47,6 +53,7 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
 -- the role's posture would silently be "read-only as of the migrations that
 -- existed when it was provisioned".
 ALTER DEFAULT PRIVILEGES IN SCHEMA innsegl GRANT SELECT ON TABLES TO %[1]s;
+ALTER DEFAULT PRIVILEGES IN SCHEMA innsegl GRANT SELECT ON SEQUENCES TO %[1]s;
 
 -- Belt as well as braces. The GRANTs above are the enforcement — a session can
 -- turn this setting off for itself, so it is a default and never a boundary —

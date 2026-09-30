@@ -142,6 +142,22 @@ const (
 	// anything is relayed, exactly as every other malformed setting in this
 	// file is.
 	envAgentMessageKeyID = "INNSEGL_AGENT_MESSAGE_KEY_ID"
+
+	// envMessageKeyDir names where this process writes RM-237's own derived
+	// agent-message key — the SAME value mcp.DeriveAgentMessageKey computes
+	// from -identity-secret and -agent-message-key-id, restated to a file
+	// named by the key id (E19, #395-#397: the run page's own read of a
+	// brief or an assistant turn). A named Docker volume mounted read-write
+	// here and read-only into innsegl-api in a compose deployment — the
+	// CHECK-ONLY half of the key's own capability: it computes a message
+	// digest and nothing else, because it IS the digest key, not the
+	// identity secret it was derived from. OPTIONAL: unset means the key is
+	// still derived and still used to key agent_message.payload_digest
+	// exactly as before RM-237 — it is simply never written anywhere a
+	// reader could find it, and the run page's Brief/Replies stay
+	// unavailable — the same "unset means off" posture every other
+	// optional setting in this file takes.
+	envMessageKeyDir = "INNSEGL_MCP_MESSAGE_KEY_DIR"
 )
 
 const (
@@ -252,6 +268,11 @@ type gatewayOptions struct {
 	// before a deployment relies on it, whether or not it also set a
 	// secret yet.
 	agentMessageKeyID string
+	// messageKeyDir is where the derived agent-message key is written, by
+	// key id — see envMessageKeyDir's own doc comment. OPTIONAL like
+	// identitySecret itself; empty means the key is derived and used exactly
+	// as before RM-237 but never written to disk.
+	messageKeyDir string
 
 	// upstreamClient overrides the client openGateway hands to
 	// gateway.NewUpstream. Always nil on every path a flag or an
@@ -464,6 +485,13 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 				"start -- a host bind mount in a compose deployment, so the host commands "+
 				"(internal/commitpath) can find and trust exactly it. REQUIRED: no default "+
 				"($"+envGatewayCACertDir+")")
+		messageKeyDir = fs.String("message-key-dir", os.Getenv(envMessageKeyDir),
+			"directory the derived agent-message key (RM-237, ADR-0061 decision 2) is written "+
+				"to, by key id -- a named Docker volume mounted read-write here and read-only "+
+				"into innsegl-api in a compose deployment (E19, #395-#397), so the run page's "+
+				"query API can VERIFY a brief or a reply's own digest without ever holding "+
+				"-identity-secret itself. OPTIONAL: unset means the key is still derived and "+
+				"used, just never written anywhere ($"+envMessageKeyDir+")")
 	)
 
 	fs.Usage = func() { gatewayUsage(stderr, fs) }
@@ -496,6 +524,7 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 		backstopInterval:  *backstopInterval,
 		identitySecret:    resolvedSecret,
 		agentMessageKeyID: *agentMessageKeyID,
+		messageKeyDir:     *messageKeyDir,
 		caKeyDir:          *caKeyDir,
 		caCertDir:         *caCertDir,
 	}
@@ -1155,9 +1184,101 @@ func configureGatewayAgentMessages(
 	if err != nil {
 		return nil, err
 	}
+
+	// E19 (#395-#397): the run page's own read needs a way to VERIFY an
+	// agent_message's own keyed digest without ever holding -identity-secret
+	// -- see envMessageKeyDir's own doc comment for why the derived key,
+	// restated to a file, is the whole answer. Derived a SECOND time here
+	// (the call above already derived it, internally, to key every message
+	// this recorder appends) rather than widening
+	// mcp.ConfigureAgentMessageRecorder's own return to hand it back: the
+	// derivation is a pure function of two values this process already
+	// checked, and asking for it again costs one HMAC, never a discrepancy.
+	if o.messageKeyDir != "" {
+		key, derr := mcp.DeriveAgentMessageKey(o.identitySecret, o.agentMessageKeyID)
+		if derr != nil {
+			// Unreachable in practice: ConfigureAgentMessageRecorder above
+			// already derived the identical key from the identical inputs
+			// and would have refused first. Reported rather than ignored,
+			// because a caller that reaches this branch has a real
+			// question to answer.
+			return restore, fmt.Errorf("re-deriving the agent-message key to write it: %w", derr)
+		}
+		if werr := writeMessageKeyFile(o.messageKeyDir, o.agentMessageKeyID, key); werr != nil {
+			return restore, fmt.Errorf("writing the agent-message key for the run page's own "+
+				"query API to verify with: %w", werr)
+		}
+		// The key itself is NEVER logged, here or anywhere else — only its
+		// id and where it landed, both already public in this process's
+		// own configuration.
+		running.log.info("the run page's query API can verify agent-message digests",
+			"message_key_dir", o.messageKeyDir, "key_id", o.agentMessageKeyID)
+	}
+
 	running.log.info("agent-message recording is configured",
 		"body_dir", bodyDir, "key_id", o.agentMessageKeyID)
 	return restore, nil
+}
+
+// writeMessageKeyFile idempotently writes keyBytes — RM-237's own derived
+// agent-message key (mcp.DeriveAgentMessageKey), exactly as that function
+// returns it: a hex-encoded string, used as-is (never re-decoded) as the
+// HMAC-SHA256 key both DeriveAgentMessageKey's own caller and the run
+// page's API key their digest computation with — to dir/<keyID>.
+//
+// ATOMIC: written to a temp file and renamed into place, so a reader (the
+// API, mounted read-only on the same volume) can never observe a partial
+// key. IDEMPOTENT: identical bytes already on disk are left alone rather
+// than rewritten, which is what lets two gateway replicas starting at once
+// -- or one restarting -- call this without racing each other into a
+// corrupt file; DIFFERENT bytes under the same key id is refused outright,
+// because that is a configuration problem (two different identity secrets,
+// or two different derivations, claiming the same id) and never a rotation
+// -- a rotation deploys a NEW key id (ADR-0061's 2026-09-28 amendment).
+//
+// 0400: read-only, owner only. innsegl-mcp and innsegl-api run as the
+// IDENTICAL uid:gid in every deployment this project ships (both "1000:1000"
+// in deploy/compose/innsegl.yml), so owner-read is sufficient for the
+// reader on the other side of the read-only volume mount without widening
+// the file to the group or to everyone.
+func writeMessageKeyFile(dir, keyID, keyBytes string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	// MkdirAll's own mode only applies to a directory it CREATES; a compose
+	// deployment's mountpoint already exists (the image pre-creates it,
+	// Dockerfile's own comment on /work and /sessions explains why), so its
+	// permission bits are whatever the image gave it and this is the one
+	// place they are enforced regardless — explicit, not assumed.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("chmod %s: %w", dir, err)
+	}
+	path := filepath.Join(dir, keyID)
+
+	existing, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if string(existing) == keyBytes {
+			return nil
+		}
+		return fmt.Errorf("%s already holds a different key under id %q; refusing to overwrite it — "+
+			"two different derivations claiming one key id is a configuration problem, "+
+			"never a rotation (deploy a new key id instead)", path, keyID)
+	case !errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+
+	tmp := path + ".part"
+	if err := os.WriteFile(tmp, []byte(keyBytes), 0o400); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		if rerr := os.Remove(tmp); rerr != nil {
+			return fmt.Errorf("rename %s to %s: %w (and cleaning up %s: %w)", tmp, path, err, tmp, rerr)
+		}
+		return fmt.Errorf("rename %s to %s: %w", tmp, path, err)
+	}
+	return nil
 }
 
 // newToolCallRecorderConfig builds RM-236 (#381)'s own

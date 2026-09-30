@@ -50,7 +50,7 @@ stack's network segmentation.
 Read `scripts/backup-ledger.sh`'s header comment for the full contract; the
 short version:
 
-1. `pg_dump` the whole `innsegl` database from the running container.
+1. `pg_dump` the whole `innsegl` schema from the running container.
 2. Restore that dump into a throwaway database in the **same** container,
    never the live one (`index-rebuild.md` §2.2) — this is what proves the
    dump restores, not merely that `pg_dump` exited `0`.
@@ -94,7 +94,7 @@ to a destination the maintainer has not chosen, is a bigger decision than a
 backup script should make silently. Moving the file to WORM storage
 afterwards is one `aws s3 cp`, regardless of which bucket is decided on.
 
-**What is in the dump.** The whole `innsegl` database, not a
+**What is in the dump.** The whole `innsegl` schema, not a
 `innsegl.events`/`innsegl.chain` extract. `index-rebuild.md` §4's restore path
 loads a dump into a fresh database and expects the schema — the append-only
 triggers, the chain-link trigger, the CHECK constraints — to come back with
@@ -102,6 +102,8 @@ it rather than be reapplied from migrations by hand, and it expects
 `innsegl.idempotency` (migration 0002) too: without it a resumed MCP cannot
 tell a retried request from a new one. The evidence lives in two tables; a
 *usable* restore needs the whole schema that gives that evidence its meaning.
+Sign-in state (`innsegl_auth`) is left out on purpose; `index-rebuild.md`
+§4.0 says what to do about it after a restore.
 
 **Whether the segments must be present.** Neither a silent pass nor a refusal
 to take the backup. The dump is always written and kept — refusing to write

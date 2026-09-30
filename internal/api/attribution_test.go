@@ -69,11 +69,11 @@ func TestRepoPathRefusesARepositoryThisDeploymentDoesNotServe(t *testing.T) {
 // A repository this deployment does not serve is not found, and the answer says
 // so rather than guessing at a path.
 func TestAttributionRefusesARepositoryThisDeploymentDoesNotServe(t *testing.T) {
-	listening, _ := testServer(t)
+	listening, _, cookie := testServerWithSession(t)
 
 	got := do(t, http.MethodGet,
 		listening.URL+"/api/v1/attribution/"+strings.Repeat("a", 40)+
-			"?repo=github.com/nobody/nothing", "")
+			"?repo=github.com/nobody/nothing", "", cookie)
 	if got.status != http.StatusNotFound {
 		t.Fatalf("status %d for an unserved repository, want 404: %s", got.status, got.body)
 	}
@@ -82,11 +82,11 @@ func TestAttributionRefusesARepositoryThisDeploymentDoesNotServe(t *testing.T) {
 // A commit that is not in the served repository is not found either, and the
 // message names the repository it was looked for in.
 func TestAttributionRefusesACommitThatIsNotInTheRepository(t *testing.T) {
-	listening, _ := testServer(t)
+	listening, _, cookie := testServerWithSession(t)
 
 	got := do(t, http.MethodGet,
 		listening.URL+"/api/v1/attribution/"+strings.Repeat("b", 40)+
-			"?repo="+fixtureRepo, "")
+			"?repo="+fixtureRepo, "", cookie)
 	if got.status != http.StatusNotFound {
 		t.Fatalf("status %d for a commit not in the repository, want 404: %s",
 			got.status, got.body)
@@ -98,10 +98,10 @@ func TestAttributionRefusesACommitThatIsNotInTheRepository(t *testing.T) {
 // right answer and, importantly, a 200: "we looked and the content does not
 // match" is an answer this API is obliged to give in full, not an HTTP error.
 func TestAttributionAnswersAboutACommitItServes(t *testing.T) {
-	listening, s := testServer(t)
+	listening, s, cookie := testServerWithSession(t)
 
 	got := do(t, http.MethodGet,
-		listening.URL+"/api/v1/attribution/"+s.commit+"?repo="+fixtureRepo, "")
+		listening.URL+"/api/v1/attribution/"+s.commit+"?repo="+fixtureRepo, "", cookie)
 	if got.status != http.StatusOK {
 		t.Fatalf("status %d, want 200: %s", got.status, got.body)
 	}

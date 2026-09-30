@@ -226,6 +226,22 @@ $ psql -d innsegl_restore -Atc 'SELECT chain_id FROM innsegl.chain'
 11fe7294-1af0-44f1-b1c0-3cc1bcf7ed09
 ```
 
+### 4.0 The dump holds the ledger schema only
+
+`scripts/backup-ledger.sh` dumps `--schema=innsegl`. Sign-in state
+(`innsegl_auth`: passkeys, sessions, enrolment codes) is never in a backup.
+The restored `innsegl.schema_migrations` still lists `0008_auth`, so
+`innsegl serve -migrate` will not create it. Apply it by hand, then enrol a
+passkey again with a fresh enrolment code:
+
+```bash
+psql -v ON_ERROR_STOP=1 -d innsegl_rebuild -f migrations/0008_auth.sql
+```
+
+**Measured:** all shipped migrations applied, a `--schema=innsegl` dump
+restored into a new database, then `0008_auth.sql` applied on top: the restore
+and the migration both succeed, and `innsegl_auth` holds its six tables.
+
 ### 4.1 If you are replaying events rather than restoring a dump
 
 Only possible if you hold the event bodies from somewhere other than a dump.

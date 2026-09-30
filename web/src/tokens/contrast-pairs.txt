@@ -39,6 +39,14 @@
 --innsegl-color-proof-unavailable-text    --innsegl-color-proof-unavailable-surface 4.5  "Verification unavailable" inside its badge
 --innsegl-color-proof-unavailable-text    --innsegl-color-surface-default           4.5  "Verification unavailable" as bare text
 
+# The diff exception (§5.3, run page E19): the +/− marker on the line's own
+# background, and the line number on the gutter's — never colour alone, so
+# both have to hold contrast on their own.
+--innsegl-color-diff-added-marker         --innsegl-color-diff-added-surface        4.5  diff "+" marker on an added line
+--innsegl-color-diff-removed-marker       --innsegl-color-diff-removed-surface      4.5  diff "−" marker on a removed line
+--innsegl-color-text-secondary            --innsegl-color-diff-added-gutter         4.5  line number in an added diff row's gutter
+--innsegl-color-text-secondary            --innsegl-color-diff-removed-gutter       4.5  line number in a removed diff row's gutter
+
 # Degradation that is not a verification verdict: the 4.4 staleness marker and
 # the anchoring-lag heartbeat in the persistent header (§3.1).
 --innsegl-color-degraded-text             --innsegl-color-degraded-surface          4.5  "data as of …" marker

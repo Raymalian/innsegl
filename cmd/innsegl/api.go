@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -69,15 +70,19 @@ import (
 // rather than about its deployment (FD §7, doc 06 P6). So this command exposes
 // no such flag, and says so in its usage.
 //
-// # It holds no authentication, on purpose
+// # It requires a signed-in session on every route but two (RM-260/RM-261, ADR-0062)
 //
-// doc 05 §3 puts `dashboard.innsegl.dev` behind Cloudflare Access, and RM-062
-// (#70) is the issue that does it. This process authenticates nobody. That is
-// stated in the usage rather than half-solved here: an auth scheme invented in
-// this file would be a second thing to review, a second thing to get wrong,
-// and a second thing for a deployment to believe it had when it did not. What
-// this command does enforce is the half that survives a misconfigured proxy —
-// the credential cannot write, whoever reaches it.
+// This used to authenticate nobody at all — doc 05 §3's Cloudflare Access
+// (RM-062, #70) was the only door, and loopback the only other. ADR-0062
+// found that insufficient: loopback answers which MACHINE may open the
+// socket, never which PROCESS on it may, and the flight-recorder threat
+// model names exactly that gap (A2/A3: an agent, or any other program,
+// running as the operator's own user). So every route here now refuses
+// without a valid session UNLESS it is on server.go's own
+// authAllowedRoutes — health, and the proof route's live three-check path,
+// which never touches stored content by construction (proof.go). The
+// passkey ceremonies themselves are the one place this binary answers a
+// POST; see internal/api/authhandlers.go.
 
 // Exit statuses, continuing cli.go's contract. The canary owns 3 and 4, the
 // reaper 5 and 6, the reconciler 7 and 8, the sealer 9 and 10; these are the
@@ -112,14 +117,40 @@ const (
 // read-only role for exactly that reason. One name for two different roles is
 // a deployment that can hand the dashboard the writer by copying a line.
 const (
-	envAPIDSN             = "INNSEGL_API_DSN"
-	envAPIListen          = "INNSEGL_API_LISTEN"
-	envAPIRepos           = "INNSEGL_API_REPOS"
-	envAPILogDir          = "INNSEGL_API_LOG_DIR"
-	envAPILogDays         = "INNSEGL_API_LOG_DAYS"
+	envAPIDSN     = "INNSEGL_API_DSN"
+	envAPIListen  = "INNSEGL_API_LISTEN"
+	envAPIRepos   = "INNSEGL_API_REPOS"
+	envAPILogDir  = "INNSEGL_API_LOG_DIR"
+	envAPILogDays = "INNSEGL_API_LOG_DAYS"
+	// envAPISnapshotDir names the run page's own read: the gateway's own
+	// snapshot store (internal/gateway/snapshot.go's own StoreRoot), which
+	// this issue's own routes (api.registerRecordRoutes) read commits and
+	// diffs out of. Unset defaults to the "gateway-snapshots" subdirectory
+	// of $INNSEGL_API_LOG_DIR, which is where the gateway writes it
+	// (cmd/innsegl/gateway.go's own newGatewaySnapshotter) — no second mount
+	// is needed for the ordinary case, this variable exists for a
+	// deployment that has a reason to point it somewhere else.
+	envAPISnapshotDir = "INNSEGL_API_SNAPSHOT_DIR"
+	// envAPIMessageKeyDir names the operator's own decision on top of E19
+	// (#395-#397): where this process reads RM-237's own derived,
+	// CHECK-ONLY agent-message key from, by key id
+	// (cmd/innsegl/gateway.go's own writeMessageKeyFile writes it on the
+	// SAME named volume, mounted read-write there and read-only here).
+	// Unset answers every Brief and Reply unavailable — this process never
+	// holds the identity secret itself, only this narrower, derived key.
+	envAPIMessageKeyDir   = "INNSEGL_API_MESSAGE_KEY_DIR"
 	envAPIShutdownTimeout = "INNSEGL_API_SHUTDOWN_TIMEOUT"
 	envAPIUpstreamTimeout = "INNSEGL_API_UPSTREAM_TIMEOUT"
 	envAPIGit             = "INNSEGL_GIT"
+
+	// RM-260/RM-261 (ADR-0062) — the sign-in surface's own configuration.
+	// $INNSEGL_API_AUTH_DSN is envAuthWriterDSN (adminenrolcode.go): the SAME
+	// name, because it names the SAME credential — internal/api.AuthWriterRole
+	// — whether this process or `admin-credential enrol-code` is the one
+	// holding it.
+	envAPIRPID            = "INNSEGL_API_RP_ID"
+	envAPIRPOrigin        = "INNSEGL_API_RP_ORIGIN"
+	envAPISessionLifetime = "INNSEGL_API_SESSION_LIFETIME"
 )
 
 const (
@@ -134,6 +165,15 @@ const (
 	// client; it is a flag here because a deployment on a slow link tunes it
 	// and a public page must not hang.
 	defaultAPIUpstreamTimeout = 15 * time.Second
+
+	// defaultAPIRPID and defaultAPIRPOrigin are ADR-0062's reference
+	// address. "localhost", never an IP literal: a WebAuthn RP ID must be a
+	// domain, and 127.0.0.1 is not one. This is why defaultAPIListen above
+	// stays a loopback IP (it is a BIND address, never typed into a
+	// browser) while this pair is what install.sh now prints and what
+	// runbooks/orchestrated-run.md now documents as the address to browse.
+	defaultAPIRPID     = "localhost"
+	defaultAPIRPOrigin = "http://localhost:8082"
 )
 
 // apiRoutes is what this process serves, in the order the usage lists them.
@@ -143,9 +183,19 @@ const (
 var apiRoutes = []string{
 	"GET /api/v1/runs",
 	"GET /api/v1/runs/{run_id}",
+	"GET /api/v1/runs/{run_id}/record",
+	"GET /api/v1/runs/{run_id}/steps/{n}/diff",
 	"GET /api/v1/overview",
 	"GET /api/v1/proof/{commit_sha}",
 	"GET /api/v1/health",
+	// RM-260/RM-261 (ADR-0062): every route above except health and proof
+	// now refuses without a session. These five are how one is obtained.
+	"POST /api/v1/auth/enrol/begin",
+	"POST /api/v1/auth/enrol/finish",
+	"POST /api/v1/auth/login/begin",
+	"POST /api/v1/auth/login/finish",
+	"POST /api/v1/auth/logout",
+	"GET /api/v1/auth/session",
 }
 
 // apiOptions is the resolved command line.
@@ -161,9 +211,25 @@ type apiOptions struct {
 	// this deployment keeps none, which is a valid answer and not a fault.
 	logDir  string
 	logDays int
+	// snapshotDir is the gateway's own workspace-snapshot store, read-only.
+	// Empty means the run page's steps and diffs carry no tree data — see
+	// envAPISnapshotDir.
+	snapshotDir string
+	// messageKeyDir is RM-237's own derived agent-message key directory,
+	// read-only. Empty means the run page's Brief and Replies stay
+	// unavailable — see envAPIMessageKeyDir.
+	messageKeyDir string
 
 	shutdownTimeout time.Duration
 	upstreamTimeout time.Duration
+
+	// authDSN is the AUTH-WRITER credential (internal/api.AuthWriterRole) —
+	// never $INNSEGL_API_DSN (the reader) and never $INNSEGL_LEDGER_DSN (the
+	// appender). RM-260/RM-261, ADR-0062.
+	authDSN         string
+	rpID            string
+	rpOrigin        string
+	sessionLifetime time.Duration
 }
 
 // servedAPI is the running query API, as this command needs it. It is an
@@ -240,7 +306,10 @@ func runAPI(ctx context.Context, args []string, stdout, stderr io.Writer, deps a
 		"addr", srv.Addr(),
 		"routes", strings.Join(apiRoutes, " "),
 		"repos", strings.Join(srv.Repos(), ","),
-		"authentication", "none - this process authenticates nobody (doc 05 §3, #70)",
+		"authentication", "passkey session required on every route except "+
+			"health and proof (ADR-0062, RM-260/RM-261)",
+		"webauthn_rp_id", o.rpID,
+		"webauthn_rp_origin", o.rpOrigin,
 	)
 
 	if serr := srv.Serve(ctx); serr != nil {
@@ -308,6 +377,15 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		logDays = fs.Int("log-retention-days", envIntOr(envAPILogDays, 90),
 			"how long the harness keeps those bodies, reported so a reader can tell an "+
 				"expired body from one that never existed ($"+envAPILogDays+")")
+		snapshotDir = fs.String("snapshot-dir", os.Getenv(envAPISnapshotDir),
+			"the gateway's own workspace-snapshot store, read-only; empty defaults to "+
+				"\"gateway-snapshots\" under -log-dir (where the gateway writes it) when -log-dir "+
+				"is set, and serves no snapshot data otherwise ($"+envAPISnapshotDir+")")
+		messageKeyDir = fs.String("message-key-dir", os.Getenv(envAPIMessageKeyDir),
+			"RM-237's own derived, CHECK-ONLY agent-message key, by key id, read-only; empty "+
+				"answers every run page Brief and Reply unavailable — this process never holds "+
+				"the identity secret itself, only this narrower, derived key "+
+				"($"+envAPIMessageKeyDir+")")
 		repos = fs.String("repos", os.Getenv(envAPIRepos),
 			"comma-separated name=path pairs naming the repositories the proof BFF answers "+
 				"about, e.g. github.com/acme/app=/srv/repos/github.com/acme/app. A commit in "+
@@ -327,6 +405,18 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		upstreamTimeout = fs.Duration("upstream-timeout",
 			envDuration(envAPIUpstreamTimeout, defaultAPIUpstreamTimeout),
 			"bound on one Fulcio or Rekor request made for a proof ($"+envAPIUpstreamTimeout+")")
+		authDSN = fs.String("auth-dsn", os.Getenv(envAuthWriterDSN),
+			"the AUTH-WRITER connection string ($"+envAuthWriterDSN+") — internal/api.AuthWriterRole. "+
+				"Required: without it this process cannot check a session for a single route, and "+
+				"NewServer refuses to construct at all (ADR-0062)")
+		rpID = fs.String("rp-id", envOr(envAPIRPID, defaultAPIRPID),
+			"the WebAuthn relying-party ID — a DOMAIN, never an IP literal ($"+envAPIRPID+")")
+		rpOrigin = fs.String("rp-origin", envOr(envAPIRPOrigin, defaultAPIRPOrigin),
+			"the exact origin the dashboard is served from; a request whose Origin header "+
+				"names anything else is refused ($"+envAPIRPOrigin+")")
+		sessionLifetime = fs.Duration("session-lifetime", envDuration(envAPISessionLifetime, 0),
+			"how long a session lasts before it must be renewed by signing in again; zero "+
+				"applies internal/api's own default ($"+envAPISessionLifetime+")")
 	)
 
 	fs.Usage = func() { apiUsage(stderr, fs) }
@@ -354,6 +444,9 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		fulcioURL: *fulcioURL, rekorURL: *rekorURL, issuer: *issuer, gitPath: *gitPath,
 		shutdownTimeout: *shutdownTimeout, upstreamTimeout: *upstreamTimeout,
 		logDir: *logDir, logDays: *logDays,
+		snapshotDir:   resolveSnapshotDir(*snapshotDir, *logDir),
+		messageKeyDir: *messageKeyDir,
+		authDSN:       *authDSN, rpID: *rpID, rpOrigin: *rpOrigin, sessionLifetime: *sessionLifetime,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl api: %s\n", problem)
@@ -384,6 +477,16 @@ func (o apiOptions) validate() string {
 			"to (ADR-0010)"
 	case o.listen == "":
 		return "-listen (or $" + envAPIListen + ") is required"
+	case o.authDSN == "":
+		return "-auth-dsn (or $" + envAuthWriterDSN + ") is required: it is the AUTH-WRITER " +
+			"credential RM-260/RM-261 gate every other route on, and without it this process " +
+			"cannot check a session for a single one (ADR-0062)"
+	case o.rpID == "":
+		return "-rp-id (or $" + envAPIRPID + ") is required"
+	case o.rpOrigin == "":
+		return "-rp-origin (or $" + envAPIRPOrigin + ") is required"
+	case o.sessionLifetime < 0:
+		return "-session-lifetime is negative"
 	case o.shutdownTimeout < 0:
 		return "-shutdown-timeout is negative"
 	case o.upstreamTimeout < 0:
@@ -398,6 +501,23 @@ func (o apiOptions) validate() string {
 // dropped from this map turns every proof request about it into "no repository
 // this deployment serves holds that commit", which reads as a verdict about
 // the commit and is a statement about the configuration.
+// resolveSnapshotDir answers -snapshot-dir (or $INNSEGL_API_SNAPSHOT_DIR)
+// when one was given, and otherwise the "gateway-snapshots" subdirectory of
+// logDir — the SAME path cmd/innsegl/gateway.go's own newGatewaySnapshotter
+// writes the store under, so a deployment that has not been told to point
+// this anywhere else still finds it without a second mount or a second
+// variable. Empty when logDir is also empty: a deployment keeping no
+// bodies keeps no snapshots either, and that is a valid answer.
+func resolveSnapshotDir(explicit, logDir string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if logDir == "" {
+		return ""
+	}
+	return filepath.Join(logDir, "gateway-snapshots")
+}
+
 func parseRepos(raw string) (map[string]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, errors.New("no repository was named")
@@ -429,9 +549,9 @@ func parseRepos(raw string) (map[string]string, error) {
 	return out, nil
 }
 
-// apiUsage is the help block. It states the two things a reader of a compose
-// file cannot infer from the flags: that this process authenticates nobody,
-// and that its read-only gate cannot be switched off.
+// apiUsage is the help block. It states the things a reader of a compose
+// file cannot infer from the flags: which routes need no session, that the
+// RP ID must be a domain, and that the read-only gate cannot be switched off.
 func apiUsage(stderr io.Writer, fs *flag.FlagSet) {
 	fprintf(stderr, "innsegl api - serve the dashboard's read-only query API and proof BFF "+
 		"(doc 05 §1, doc 06 §7)\n\n")
@@ -440,11 +560,17 @@ func apiUsage(stderr io.Writer, fs *flag.FlagSet) {
 	for _, route := range apiRoutes {
 		fprintf(stderr, "  %s\n", route)
 	}
-	fprintf(stderr, "\nThis process holds NO AUTHENTICATION. It authenticates nobody and "+
-		"authorises\nnothing: doc 05 §3 puts dashboard.innsegl.dev behind Cloudflare Access, "+
-		"and\nRM-062 (#70) is the issue that does it. Do not expose this port to a network\n"+
-		"you have not put an authenticating proxy in front of. The default -listen is\n"+
-		"loopback for that reason.\n\n")
+	fprintf(stderr, "\nEVERY ROUTE ABOVE EXCEPT health AND proof REQUIRES A SIGNED-IN SESSION\n"+
+		"(RM-260/RM-261, ADR-0062). Passkey (WebAuthn) only, no passwords. -rp-id must be\n"+
+		"a DOMAIN — 127.0.0.1 is not a valid RP ID, localhost is — and -rp-origin must be\n"+
+		"the exact origin the dashboard is served from; doc 05 §3's Cloudflare Access\n"+
+		"(RM-062, #70) remains a second, independent door in front of this one, not a\n"+
+		"replacement for it. Do not expose this port to a network you have not also put\n"+
+		"an authenticating proxy in front of. The default -listen is loopback for that\n"+
+		"reason.\n\n"+
+		"The FIRST passkey's enrolment is separately locked until the socket denial E18\n"+
+		"builds can be shown in effect on this deployment — see\n"+
+		"internal/api/socketdenial.go and `innsegl admin-credential enrol-code`.\n\n")
 	fprintf(stderr, "It refuses to start on a database credential that can write. The check "+
 		"asks\nthe SERVER what the credential may do — not the DSN, and not this source\n"+
 		"file — and there is no flag that disables it: a query API that would start on\n"+

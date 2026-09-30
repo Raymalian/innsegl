@@ -99,7 +99,18 @@ export function emptyRunsFilters(): RunsFilters {
 export type Route =
   | { view: "overview" }
   | { view: "runs"; filters: RunsFilters }
-  | { view: "run"; runId: string }
+  /* E19 (#395-397): `/runs/:runId` is now the run PAGE (doc 06 §3.3's
+   * replacement, plan §10.4) rather than the hash-chain timeline that used to
+   * live there. `chain` is the one bit that keeps the old view reachable —
+   * `/runs/:runId/chain` — without inventing a second ViewName for it: the
+   * two are still one destination, "a run", and the route table's own test
+   * asserts the six-plus-one list is exactly that long. A third path segment
+   * is real nesting (FD §3's "no nesting deeper than view → detail" is about
+   * navigation depth a reader has to think about, not about every path this
+   * table can parse), and it is deliberately not added to the "never nests
+   * deeper" fixture below: it is an escape hatch to the view this run's page
+   * superseded, not a second view a reader navigates INTO. */
+  | { view: "run"; runId: string; chain?: boolean }
   | { view: "repo"; repo: string; from: string; to: string }
   | { view: "agentType"; agentType: string; from: string; to: string }
   | { view: "verify"; commit: string; repo: string }
@@ -181,6 +192,20 @@ export function parseRoute(pathWithQuery: string): Route {
     }
   }
 
+  // `/runs/:runId/chain` — the one escape hatch a run's route can take past
+  // two segments, and it is checked before the ordinary two-segment branch so
+  // a run ID that happens to be literally "chain" cannot shadow it: there is
+  // no such run ID in practice (RM-041's IDs are ULIDs), and even so the
+  // three-segment form is unambiguous because "chain" never appears as the
+  // THIRD segment any other way.
+  if (decoded.length === 3) {
+    const [root, runId, tail] = decoded as [string, string, string];
+    if (root === "runs" && runId !== "" && tail === "chain") {
+      return { view: "run", runId, chain: true };
+    }
+    return { view: "notFound", path: url.pathname };
+  }
+
   if (decoded.length === 2) {
     const [root, detail = ""] = decoded as [string, string];
     if (detail !== "") {
@@ -249,7 +274,9 @@ export function routeToPath(route: Route): string {
         ["order", route.filters.order],
       ]);
     case "run":
-      return `/runs/${encodeURIComponent(route.runId)}`;
+      return route.chain
+        ? `/runs/${encodeURIComponent(route.runId)}/chain`
+        : `/runs/${encodeURIComponent(route.runId)}`;
     case "repo":
       return withQuery(`/repos/${encodeURIComponent(route.repo)}`, [
         ["from", route.from],

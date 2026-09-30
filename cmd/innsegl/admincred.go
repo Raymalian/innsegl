@@ -98,6 +98,8 @@ func adminCredentialCommand(args []string, stdout, stderr io.Writer) int {
 		return adminCredentialMint(args[1:], stdout, stderr)
 	case "verify":
 		return adminCredentialVerify(args[1:], stdout, stderr)
+	case "enrol-code":
+		return adminCredentialEnrolCode(args[1:], stdout, stderr)
 	default:
 		fprintf(stderr, "innsegl admin-credential: unknown verb %q\n\n", args[0])
 		adminCredentialUsage(stderr)
@@ -109,9 +111,11 @@ func adminCredentialUsage(w io.Writer) {
 	fprintf(w, "innsegl admin-credential - issue the repository-scoped credential the "+
 		"identity-lifecycle listener requires\n\n")
 	fprintf(w, "Usage:\n  innsegl admin-credential <verb> [flags]\n\nVerbs:\n")
-	fprintf(w, "  keygen  mint a signing key and add its public half to the key set\n")
-	fprintf(w, "  mint    issue one credential for one repository, on stdout\n")
-	fprintf(w, "  verify  report whether a credential is admissible, and why not\n\n")
+	fprintf(w, "  keygen      mint a signing key and add its public half to the key set\n")
+	fprintf(w, "  mint        issue one credential for one repository, on stdout\n")
+	fprintf(w, "  verify      report whether a credential is admissible, and why not\n")
+	fprintf(w, "  enrol-code  mint the one-time code ADR-0062's first passkey enrolment "+
+		"consumes\n\n")
 	fprintf(w, "The key set holds PUBLIC keys and is what `innsegl serve -admin-jwks` reads.\n")
 	fprintf(w, "The key file holds the private half and is read by nothing else, ever.\n\n")
 	fprintf(w, "Exit status:\n")

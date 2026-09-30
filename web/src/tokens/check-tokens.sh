@@ -113,6 +113,12 @@ function init_policy() {
   # staleness (§5.3).
   allowed["proof-unavailable"]   = "degraded"
   allowed["degraded"]            = "degraded"
+  # The diff exception (§5.3, "One named exception: diffs", operator decision
+  # 2026-09-30): a soft background on a code line, never a badge or a fill. Its
+  # own families — NOT `verification` or `failure` — so the diff cannot
+  # satisfy the reservation below and be read as a verification result.
+  allowed["diff-added"]          = "diffadded"
+  allowed["diff-removed"]        = "diffremoved"
   # The one semantically meaningless accent (§5.3), and the focus ring, which
   # is interactive chrome and carries no verdict.
   allowed["accent"]              = "accent"
@@ -131,6 +137,8 @@ function init_policy() {
   known_family["failure"]      = 1
   known_family["degraded"]     = 1
   known_family["accent"]       = 1
+  known_family["diffadded"]    = 1
+  known_family["diffremoved"]  = 1
 
   # §5.3 says colour is a claim, so a token may not be named for its hue, and
   # may not be named for a claim the palette does not make.

@@ -9,7 +9,8 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { App } from "./App";
+import { App, contentWidthClass } from "./App";
+import type { Route } from "./routes";
 import { StringsProvider } from "./i18n";
 import { en, type Strings } from "./strings";
 import { THEME_STORAGE_KEY } from "./theme";
@@ -257,5 +258,16 @@ describe("FE-021 the copy really is external", () => {
     expect(
       screen.getByRole("link", { name: "Kjøringer" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("the content width", () => {
+  it("gives the run page the full window, as its approved mockup is laid out", () => {
+    expect(contentWidthClass({ view: "run", runId: "run-x" })).toBe("max-w-none");
+  });
+
+  it("keeps every other view, the run's chain view included, at the product's content width", () => {
+    expect(contentWidthClass({ view: "run", runId: "run-x", chain: true })).toBe("max-w-content");
+    expect(contentWidthClass({ view: "overview" } as Route)).toBe("max-w-content");
   });
 });
