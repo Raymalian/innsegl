@@ -86,7 +86,7 @@
 #   INNSEGL_MIGRATE_VOLUME_PREFIX   TEST ONLY. Set, volume_table() answers a
 #                                   small synthetic table of throwaway
 #                                   volumes under this prefix instead of the
-#                                   real eighteen. scripts/innsegl-migrate-
+#                                   real nineteen. scripts/innsegl-migrate-
 #                                   selftest.sh is the only caller that sets
 #                                   it, and refuses to run at all if it is
 #                                   unset. NEVER set this against a real
@@ -311,7 +311,7 @@ volume_table() {
   local prefix="${INNSEGL_MIGRATE_VOLUME_PREFIX:-}"
   if [ -n "${prefix}" ]; then
     # TEST ONLY. Two throwaway volumes under the caller's own prefix — never
-    # the real eighteen. scripts/innsegl-migrate-selftest.sh is the only
+    # the real nineteen. scripts/innsegl-migrate-selftest.sh is the only
     # caller that sets INNSEGL_MIGRATE_VOLUME_PREFIX.
     printf '%sledger-data|throwaway ledger volume (self-test)\n' "${prefix}"
     printf '%strillian-db|throwaway trillian volume (self-test)\n' "${prefix}"
@@ -332,6 +332,7 @@ innsegl-core_innsegl-object-filer-data|the object store's metadata
 innsegl-core_innsegl-s3-identities|the object gateway's S3 credentials
 innsegl-core_innsegl-admin-key|the admin-credential private signing key
 innsegl-core_innsegl-admin-jwks|the admin-credential public key set
+innsegl-core_innsegl-gateway-ca-key|the gateway's own CA private key (its certificate is republished on start)
 innsegl-core_innsegl-sessions|the harness's session-to-run mapping
 innsegl-core_innsegl-workspace|the working trees `repo` resolves under
 innsegl-core_innsegl-backups|verified ledger backups and their reports
