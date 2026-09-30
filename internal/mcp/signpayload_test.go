@@ -1553,3 +1553,42 @@ func TestCommitPathWorktreeIsTheAgentsOwnRepositoryOnly(t *testing.T) {
 		t.Error("an empty working directory was accepted")
 	}
 }
+
+// get_credential requires the run's own token where the deployment keys one
+// (RM-212). The commit path has no caller holding it: the relayed tool call
+// is what authorised this commit, so the core presents the token it derives
+// for that run. A live agent commit was refused as "no run" without it.
+func TestGate4PresentsTheRunsOwnTokenForTheCredential(t *testing.T) {
+	resolver := spResolver{calls: map[string]commitpath.RelayedCall{
+		spToolUseID: spPendingGitCommit(spRunID),
+	}}
+	sc := newSCWiring()
+	sc.runs.run = CredentialRun{
+		RunID: spRunID, AgentType: "demo", TaskID: spTaskID,
+		SPIFFEID: spSPIFFEID(spRunID), Repo: spRepo,
+	}
+	sc.creds.err = errors.New("stop after the credential")
+	sc.cfg.RunTokenSecret = "a-run-token-secret"
+	restoreSC, err := ConfigureSignCommit(sc.cfg)
+	if err != nil {
+		t.Fatalf("ConfigureSignCommit: %v", err)
+	}
+	defer restoreSC()
+	restoreSP, err := ConfigureSignPayload(SignPayloadConfig{Resolver: resolver, ClaimFor: spClaimForOK(t)})
+	if err != nil {
+		t.Fatalf("ConfigureSignPayload: %v", err)
+	}
+	defer restoreSP()
+
+	if _, err := SignPayloadForGateway(context.Background(), commitpath.SignRequest{
+		ToolUseID: spToolUseID,
+		Payload:   spPayload(t, spClaim(spRunID), spAuthor, spAuthor),
+	}); err == nil {
+		t.Fatal("want the stubbed credential refusal")
+	}
+	sc.creds.mu.Lock()
+	defer sc.creds.mu.Unlock()
+	if want := RunToken("a-run-token-secret", spRunID); sc.creds.token != want || want == "" {
+		t.Errorf("the credential was asked with token %q, want the run's own %q", sc.creds.token, want)
+	}
+}

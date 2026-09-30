@@ -226,8 +226,11 @@ func SignPayloadForGateway(
 	// (get_credential, ADR-0019/0033), primed before Phase A exactly as
 	// sign_commit primes it — IP §6.1: any in-flight signing aborts before
 	// Phase A when the credential cannot be had.
+	// The run's own token (RM-212), derived here: no caller holds it on this
+	// path, and the relayed tool call already authorised the commit (gate 1).
+	runToken := RunToken(svc.runSecret, runID)
 	src := &signCommitSource{run: run, issue: func(ctx context.Context, r CredentialRun) (signing.Credential, error) {
-		return svc.credentials.IssueForSigning(ctx, r, "")
+		return svc.credentials.IssueForSigning(ctx, r, runToken)
 	}}
 	if perr := src.prime(ctx); perr != nil {
 		return commitpath.SignResponse{}, perr
