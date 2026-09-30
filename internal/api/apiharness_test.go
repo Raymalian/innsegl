@@ -56,6 +56,10 @@ const (
 	// readerPassword is the password the read-only role gets in tests. It is a
 	// test fixture and names itself as one.
 	readerPassword = "reader-test-password"
+
+	// authWriterPassword is the auth-writer role's password in tests, the
+	// same "names itself as a fixture" reasoning as readerPassword.
+	authWriterPassword = "authwriter-test-password"
 )
 
 // errDependencyAbsent marks the only conditions under which skipping TC-API's
@@ -310,6 +314,15 @@ func freshDB(t *testing.T) (c *pgContainer, database, adminDSN string) {
 // cases, so the harness models it rather than papering over it.
 func migrated(t *testing.T) (owner *ledger.Store, ownerDSN, readerDSN string) {
 	t.Helper()
+	s, ownerDSN, readerDSN, _ := migratedWithAuth(t)
+	return s, ownerDSN, readerDSN
+}
+
+// migratedWithAuth is migrated, plus the auth-writer role RM-260/RM-261
+// provisions (ADR-0062) — a fourth DSN, held by nothing but the auth half of
+// the API in production and by AuthStore's own tests here.
+func migratedWithAuth(t *testing.T) (owner *ledger.Store, ownerDSN, readerDSN, authDSN string) {
+	t.Helper()
 	c, database, ownerDSN := freshDB(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -326,5 +339,10 @@ func migrated(t *testing.T) (owner *ledger.Store, ownerDSN, readerDSN string) {
 	if err := EnsureReadOnlyRole(ctx, ownerDSN, ReadOnlyRole, readerPassword); err != nil {
 		t.Fatalf("EnsureReadOnlyRole: %v", err)
 	}
-	return s, ownerDSN, c.dsn(database, ReadOnlyRole, readerPassword)
+	if err := EnsureAuthWriterRole(ctx, ownerDSN, AuthWriterRole, authWriterPassword); err != nil {
+		t.Fatalf("EnsureAuthWriterRole: %v", err)
+	}
+	return s, ownerDSN,
+		c.dsn(database, ReadOnlyRole, readerPassword),
+		c.dsn(database, AuthWriterRole, authWriterPassword)
 }
