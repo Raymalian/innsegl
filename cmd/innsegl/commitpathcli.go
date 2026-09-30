@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/commitpath"
+	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/mcp"
 )
 
@@ -78,4 +79,15 @@ func mountCommitPath(mux *http.ServeMux, resolver commitpath.Resolver) {
 	}
 	mux.Handle(commitpath.TrailersPath, commitTrailersHandler(resolver, mcp.CommitClaimForRun, time.Now))
 	mux.Handle(commitpath.SignPath, commitSignHandler(mcp.SignPayloadForGateway))
+}
+
+// mountTelemetry serves the harness's OTLP telemetry receiver (the second
+// witness, #392) on the gateway's listener, keeping each tool result in the
+// body store the gateway already records into. No body store, no receiver:
+// there would be nowhere to keep what it hears.
+func mountTelemetry(mux *http.ServeMux, bodyDir string) {
+	if bodyDir == "" {
+		return
+	}
+	mux.Handle(gateway.TelemetryLogsPath, gateway.TelemetryHandler(gateway.TelemetryConfig{Dir: bodyDir}))
 }

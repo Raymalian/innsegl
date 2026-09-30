@@ -584,6 +584,22 @@ func renderReconcileResult(result reconciler.Result) string {
 		fmt.Fprintf(&b, "landing: OFF\n")
 	}
 
+	// The second witness (#392): the harness's own telemetry against the
+	// gateway's record. Silence is not agreement, so "no telemetry yet" is
+	// said rather than a row of zeroes.
+	switch {
+	case !result.Witness.Enabled:
+		fmt.Fprintf(&b, "witness: OFF - -tool-body-dir (or $%s) is not set, so the harness's "+
+			"telemetry is not compared with the gateway's record\n", envObserveBodyDir)
+	case !result.Witness.TelemetryActive:
+		fmt.Fprintf(&b, "witness: no telemetry received yet, so nothing is compared\n")
+	default:
+		fmt.Fprintf(&b, "witness: %d checked  %d matched  %d pending  %d MISSING telemetry  "+
+			"%d telemetry never relayed\n",
+			result.Witness.Checked, result.Witness.Matched, result.Witness.Pending,
+			result.Witness.Missing, result.Witness.Orphaned)
+	}
+
 	if result.Rebase.Enabled {
 		fmt.Fprintf(&b, "rebase: %d recorded  %d already recorded  %d unmatched\n",
 			result.Rebase.Recorded, result.Rebase.AlreadyRecorded, result.Rebase.Unmatched)
@@ -811,7 +827,7 @@ func openReconciler(ctx context.Context, opts reconcileOptions) (reconcileEngine
 		}
 	}
 	passes := commitPathPasses(opts)
-	cfg.CommitWatch, cfg.Landing = passes.commitWatch, passes.landing
+	cfg.CommitWatch, cfg.Landing, cfg.Witness = passes.commitWatch, passes.landing, passes.witness
 	if opts.rebaseBranch != "" {
 		cfg.Rebase = &reconciler.RebaseConfig{
 			Branch: opts.rebaseBranch,
@@ -898,6 +914,7 @@ func openSpireReconciler(
 type commitPathConfigs struct {
 	commitWatch *reconciler.CommitWatchConfig
 	landing     *reconciler.LandingConfig
+	witness     *reconciler.WitnessConfig
 }
 
 // commitPathPasses turns them on. Landing reads repository reachability, so
@@ -908,6 +925,8 @@ func commitPathPasses(opts reconcileOptions) commitPathConfigs {
 	c := commitPathConfigs{landing: &reconciler.LandingConfig{LogDir: opts.toolBodyDir}}
 	if opts.toolBodyDir != "" {
 		c.commitWatch = &reconciler.CommitWatchConfig{LogDir: opts.toolBodyDir}
+		// The harness's telemetry lands in the same body store (#392).
+		c.witness = &reconciler.WitnessConfig{LogDir: opts.toolBodyDir}
 	}
 	return c
 }

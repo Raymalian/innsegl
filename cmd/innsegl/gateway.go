@@ -833,6 +833,7 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		mux.HandleFunc(gatewaySessionEndPath, sessionEndHandler(running.sessionEnder, running.sessionEndRateLimit, log))
 	}
 	mountCommitPath(mux, running.commitResolver)
+	mountTelemetry(mux, os.Getenv(envObserveBodyDir))
 
 	running.server = &http.Server{
 		Handler:           mux,
