@@ -151,6 +151,14 @@ var commands = map[string]command{
 		summary: "git's signing program: ask the core to sign a commit",
 		exec:    signCommand,
 	},
+	// `link` installs the prepare-commit-msg hook the two entries above
+	// depend on into a repository's hooks directory (RM-245, #390) — the one
+	// piece of ADR-0059's host half `innsegl init` does not already cover,
+	// since init's own hook is the opt-in pre-push refusal, not this one.
+	"link": {
+		summary: "install the prepare-commit-msg hook the commit path needs in a repository",
+		exec:    linkCommand,
+	},
 }
 
 // run dispatches args (os.Args[1:]) and returns the process exit code. It

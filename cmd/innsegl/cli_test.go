@@ -46,9 +46,12 @@ import (
 // shape `api`, `seal`, `reconcile` and `reap` already are, and `serve -also
 // gateway` runs the same body as a goroutine instead of a sixth container.
 // `hook`, `git-hook` and `sign` are the host half of ADR-0059's commit path
-// (E17): what the harness and git run, each a client of the core.
+// (E17): what the harness and git run, each a client of the core. `link`
+// (RM-245, #390) installs the prepare-commit-msg hook `git-hook` and `sign`
+// depend on into a repository, the piece `init`'s own opt-in pre-push hook
+// does not cover.
 var documentedSubcommands = []string{
-	"admin-credential", "api", "canary", "gateway", "git-hook", "hook", "init", "migrate-schema",
+	"admin-credential", "api", "canary", "gateway", "git-hook", "hook", "init", "link", "migrate-schema",
 	"reap", "reconcile", "resolve-alert", "retire", "seal", "serve", "sign", "verify",
 }
 
