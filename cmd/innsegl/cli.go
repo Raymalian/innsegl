@@ -135,6 +135,22 @@ var commands = map[string]command{
 		summary: "relay model traffic to the configured upstream and stream replies back",
 		exec:    gatewayCommand,
 	},
+	// The host half of ADR-0059's commit path (E17): the harness hook that
+	// hands a git commit its tool call id, git's prepare-commit-msg hook
+	// that asks the core for the run's trailers, and git's signing program
+	// that asks the core to sign. See commitpathcli.go.
+	"hook": {
+		summary: "the harness hook that passes a git commit its tool call id",
+		exec:    hookCommand,
+	},
+	"git-hook": {
+		summary: "git's prepare-commit-msg hook: add the run's trailers",
+		exec:    gitHookCommand,
+	},
+	"sign": {
+		summary: "git's signing program: ask the core to sign a commit",
+		exec:    signCommand,
+	},
 }
 
 // run dispatches args (os.Args[1:]) and returns the process exit code. It

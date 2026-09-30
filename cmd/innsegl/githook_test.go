@@ -254,12 +254,6 @@ func ghRun(t *testing.T, git, dir string, env []string, args ...string) string {
 	return string(out)
 }
 
-// shQuote wraps s in POSIX sh single quotes, safe for the one use this file
-// has for it: embedding an absolute path in a generated hook script.
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 // ghRepo builds an isolated repository with the trailers hook already
 // installed via core.hooksPath, and returns the repo path and the env every
 // git invocation against it should run under.
