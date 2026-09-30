@@ -5,11 +5,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +20,153 @@ import (
 
 	"innsegl.dev/innsegl/internal/gateway"
 )
+
+// gatewayTestCADirs returns two fresh temporary directories for a test's
+// own gateway.LoadOrCreateCA call -- the key directory and the public
+// certificate directory (RM-246, #391) -- so every test in this package
+// that drives the real, unfaked openGateway has somewhere to keep its CA
+// that is never the developer's own $HOME. gatewayOptions.caKeyDir/caCertDir
+// have no filesystem-touching default for exactly this reason: a test that
+// forgets to set them fails loudly (an empty flag is refused by validate)
+// rather than silently writing into the operator's real state.
+func gatewayTestCADirs(t *testing.T) (keyDir, certDir string) {
+	t.Helper()
+	return t.TempDir(), t.TempDir()
+}
+
+// gatewayTrustingClient reads the CA certificate a real openGateway already
+// wrote to certDir (gateway.LoadOrCreateCA's own PublicDir,
+// gateway.CACertFileName) and returns an *http.Client that trusts exactly
+// it -- the same shape commitpath.TrustedHTTPClient builds for the real
+// host commands, reimplemented here so this package's own tests do not take
+// on commitpath's reading of $NODE_EXTRA_CA_CERTS or $HOME. Never
+// InsecureSkipVerify: a test that cannot read or parse the certificate
+// fails loudly instead.
+func gatewayTrustingClient(t *testing.T, certDir string) *http.Client {
+	t.Helper()
+	pemBytes, err := os.ReadFile(filepath.Join(certDir, gateway.CACertFileName))
+	if err != nil {
+		t.Fatalf("read the test gateway's own CA certificate: %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		t.Fatalf("the test gateway's own CA certificate in %s is not a valid PEM certificate", certDir)
+	}
+	return &http.Client{Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+	}}
+}
+
+// TestGatewayServesHTTPSFromItsOwnCA is TLS-001's own listener half: the
+// gateway's own listener speaks TLS, presenting a leaf signed by the CA it
+// created under -ca-key-dir/-ca-cert-dir, and a client trusting ONLY that
+// CA can complete a real handshake and get a real reply through the full,
+// unfaked openGateway/proxy path.
+func TestGatewayServesHTTPSFromItsOwnCA(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte("ok-from-upstream")); err != nil {
+			t.Errorf("upstream: write reply: %v", err)
+		}
+	}))
+	defer upstream.Close()
+
+	keyDir, certDir := gatewayTestCADirs(t)
+	addrCh := make(chan string, 1)
+	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
+		o.upstreamClient = upstream.Client()
+		o.caKeyDir = keyDir
+		o.caCertDir = certDir
+		srv, err := openGateway(ctx, o, log)
+		if err == nil {
+			addrCh <- srv.Addr()
+		}
+		return srv, err
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstream.URL}
+	done := make(chan int, 1)
+	go func() {
+		done <- runGateway(ctx, args, io.Discard, io.Discard, deps)
+	}()
+
+	var addr string
+	select {
+	case addr = <-addrCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateway never announced a bound address")
+	}
+
+	// The CA certificate must already be published: openGateway writes it
+	// before returning successfully.
+	if _, err := os.Stat(filepath.Join(certDir, gateway.CACertFileName)); err != nil {
+		t.Fatalf("the gateway's own CA certificate was not published to -ca-cert-dir: %v", err)
+	}
+
+	client := gatewayTrustingClient(t, certDir)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+addr+"/v1/messages", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	req.Header.Set("X-Claude-Code-Session-Id", "3f6a9b1c-2d4e-4f7a-9c8b-1e2f3a4b5c6d")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("https request through the gateway, trusting only its own CA: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	if string(body) != "ok-from-upstream" {
+		t.Fatalf("body = %q, want ok-from-upstream", body)
+	}
+	if resp.TLS == nil {
+		t.Fatal("the response carries no TLS connection state")
+	}
+	if resp.TLS.Version < tls.VersionTLS12 {
+		t.Errorf("negotiated TLS version = %#x, want at least TLS 1.2", resp.TLS.Version)
+	}
+
+	// A plain, unencrypted request to the same address must never reach the
+	// proxy: the listener speaks TLS only. crypto/tls's own server side
+	// recognises a plaintext HTTP request arriving on a TLS listener and
+	// answers it directly, in plaintext, with its own 400 ("client sent an
+	// HTTP request to an HTTPS server") -- so the client call below can
+	// return a nil error; what it must never do is carry the UPSTREAM's own
+	// reply, which would mean the proxy itself accepted plaintext.
+	plainClient := &http.Client{Timeout: 2 * time.Second}
+	plainReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/v1/messages", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	if plainResp, err := plainClient.Do(plainReq); err == nil {
+		defer func() { _ = plainResp.Body.Close() }()
+		plainBody, rerr := io.ReadAll(plainResp.Body)
+		if rerr != nil {
+			t.Fatalf("read the plain http response: %v", rerr)
+		}
+		if strings.Contains(string(plainBody), "ok-from-upstream") {
+			t.Errorf("a plain http request reached the proxy and got the upstream's own reply: %q", plainBody)
+		}
+		if plainResp.StatusCode == http.StatusOK {
+			t.Errorf("a plain http request got a 200 from the gateway's own listener, want TLS's own refusal")
+		}
+	}
+
+	cancel()
+	select {
+	case code := <-done:
+		if code != exitOK {
+			t.Fatalf("runGateway after its context was cancelled = %d, want %d (exitOK)", code, exitOK)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateway did not stop within 5s of its context being cancelled")
+	}
+}
 
 // TestGatewayCommandRelaysRealTrafficEndToEnd runs the PRODUCTION wiring —
 // openGateway, unfaked — against a real listener and a real upstream, and
@@ -48,9 +198,12 @@ func TestGatewayCommandRelaysRealTrafficEndToEnd(t *testing.T) {
 	// racing on stdout: runGateway prints it there exactly once, and
 	// reading a bytes.Buffer while another goroutine is still writing to it
 	// is what -race exists to catch.
+	keyDir, certDir := gatewayTestCADirs(t)
 	addrCh := make(chan string, 1)
 	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
 		o.upstreamClient = upstream.Client()
+		o.caKeyDir = keyDir
+		o.caCertDir = certDir
 		srv, err := openGateway(ctx, o, log)
 		if err == nil {
 			addrCh <- srv.Addr()
@@ -74,7 +227,7 @@ func TestGatewayCommandRelaysRealTrafficEndToEnd(t *testing.T) {
 		t.Fatal("the gateway never announced a bound address")
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/v1/messages", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+addr+"/v1/messages", nil)
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
@@ -84,7 +237,7 @@ func TestGatewayCommandRelaysRealTrafficEndToEnd(t *testing.T) {
 	// or a request with no session header is refused before ever reaching
 	// the upstream this test is asserting against.
 	req.Header.Set("X-Claude-Code-Session-Id", "3f6a9b1c-2d4e-4f7a-9c8b-1e2f3a4b5c6d")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gatewayTrustingClient(t, certDir).Do(req)
 	if err != nil {
 		t.Fatalf("request through the gateway: %v", err)
 	}
@@ -122,9 +275,12 @@ func TestGatewayCommandEnforcesGW013RateLimitEndToEnd(t *testing.T) {
 	}))
 	defer upstream.Close()
 
+	keyDir, certDir := gatewayTestCADirs(t)
 	addrCh := make(chan string, 1)
 	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
 		o.upstreamClient = upstream.Client()
+		o.caKeyDir = keyDir
+		o.caCertDir = certDir
 		srv, err := openGateway(ctx, o, log)
 		if err == nil {
 			addrCh <- srv.Addr()
@@ -151,8 +307,9 @@ func TestGatewayCommandEnforcesGW013RateLimitEndToEnd(t *testing.T) {
 		t.Fatal("the gateway never announced a bound address")
 	}
 
+	client := gatewayTrustingClient(t, certDir)
 	newRequest := func() *http.Request {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/v1/messages", nil)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+addr+"/v1/messages", nil)
 		if err != nil {
 			t.Fatalf("NewRequestWithContext: %v", err)
 		}
@@ -160,7 +317,7 @@ func TestGatewayCommandEnforcesGW013RateLimitEndToEnd(t *testing.T) {
 		return req
 	}
 
-	resp1, err := http.DefaultClient.Do(newRequest())
+	resp1, err := client.Do(newRequest())
 	if err != nil {
 		t.Fatalf("first request: %v", err)
 	}
@@ -169,7 +326,7 @@ func TestGatewayCommandEnforcesGW013RateLimitEndToEnd(t *testing.T) {
 		t.Fatalf("first request status = %d, want 200 (burst is 1)", resp1.StatusCode)
 	}
 
-	resp2, err := http.DefaultClient.Do(newRequest())
+	resp2, err := client.Do(newRequest())
 	if err != nil {
 		t.Fatalf("second request: %v", err)
 	}
@@ -217,9 +374,12 @@ func TestGatewayCommandRefusesAnUnrecognisedHarnessShapeEndToEnd(t *testing.T) {
 	}))
 	defer upstream.Close()
 
+	keyDir, certDir := gatewayTestCADirs(t)
 	addrCh := make(chan string, 1)
 	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
 		o.upstreamClient = upstream.Client()
+		o.caKeyDir = keyDir
+		o.caCertDir = certDir
 		srv, err := openGateway(ctx, o, log)
 		if err == nil {
 			addrCh <- srv.Addr()
@@ -245,11 +405,11 @@ func TestGatewayCommandRefusesAnUnrecognisedHarnessShapeEndToEnd(t *testing.T) {
 
 	// Deliberately no X-Claude-Code-Session-Id header: an unrecognised
 	// harness shape.
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/v1/messages", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+addr+"/v1/messages", nil)
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gatewayTrustingClient(t, certDir).Do(req)
 	if err != nil {
 		t.Fatalf("request through the gateway: %v", err)
 	}
