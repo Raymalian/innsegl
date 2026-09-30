@@ -10,7 +10,7 @@ import { Icon } from "../../components/common/Icon";
 import type { IconName } from "../../components/common/Icon";
 import { IdentifierChip } from "../../components/common/IdentifierChip";
 import type { RunStatus } from "../../components/common/StatusBadge";
-import { formatAbsoluteUtc } from "../../components/common/time";
+import { formatAbsoluteUtcShort } from "../../components/common/time";
 import { Link } from "../../app/router";
 import { Instant } from "../run-detail";
 import {
@@ -71,11 +71,10 @@ export function Header({ record, now }: HeaderProps) {
                   * keeps the absolute behind hover/focus. `Instant` still
                   * carries that pattern for the relative half; this span is
                   * the one place on this page the absolute is stated outright
-                  * rather than only reachable. Full date, not the mockup's
-                  * bare time-of-day — doc 06 §6.2's own absolute format,
-                  * which is what the rest of this product uses everywhere
-                  * else an absolute instant is shown in full. */}
-                <span aria-hidden="true">{formatAbsoluteUtc(new Date(run.status_at))}</span>
+                  * rather than only reachable. The time of day when it was
+                  * today (UTC), as the approved mockup shows it; the full
+                  * date otherwise (formatAbsoluteUtcShort). */}
+                <span aria-hidden="true">{formatAbsoluteUtcShort(new Date(run.status_at), now)}</span>
                 <span aria-hidden="true">{strings.punctuation.middot}</span>
                 <Instant value={run.status_at} now={now} label={statusLabel(status)} />
               </>

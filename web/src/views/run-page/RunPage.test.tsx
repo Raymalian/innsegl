@@ -53,6 +53,8 @@ describe("RPG-010 renders the mockup's run page from fixtures/record.json", () =
     expect(screen.getByText("Runs")).toBeInTheDocument();
     expect(screen.getByText("github.com/innsegl-test/gateway-livetest")).toBeInTheDocument();
     expect(screen.getByText("Retired")).toBeInTheDocument();
+    // As the mockup shows it: the time of day when it was today, UTC named.
+    expect(screen.getByText("14:31:58 UTC")).toBeInTheDocument();
     expect(screen.getByText("Every step has a stored body; digests verify")).toBeInTheDocument();
 
     expect(screen.getByText("Identity")).toBeInTheDocument();
@@ -94,6 +96,16 @@ describe("RPG-010 renders the mockup's run page from fixtures/record.json", () =
     expect(files.getByText("M modified")).toBeInTheDocument();
     expect(files.getByText("D deleted")).toBeInTheDocument();
     expect(files.getByText("R reverted")).toBeInTheDocument();
+  });
+
+  it("marks an added file's A and its +N in the diff's added hue, as the approved mockup does", async () => {
+    const { readRecord, readDiff, readProof } = stubs();
+    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+
+    const filesPanel = (await screen.findByText("Files changed")).closest("section") as HTMLElement;
+    const row = within(filesPanel).getByText("e18.txt").parentElement as HTMLElement;
+    expect(within(row).getByText("A")).toHaveAttribute("data-tone", "added");
+    expect(within(row).getByText("+1")).toHaveAttribute("data-tone", "added");
   });
 
   it("renders the commits aside", async () => {
@@ -277,6 +289,8 @@ describe("RPG-014 a reverted file and a not_landed commit", () => {
 
     const filesPanel = (await screen.findByText("Files changed")).closest("section") as HTMLElement;
     expect(within(filesPanel).getByText("scratch/probe.sh")).toBeInTheDocument();
+    const revertedRow = within(filesPanel).getByText("scratch/probe.sh").parentElement as HTMLElement;
+    expect(within(revertedRow).getByText("R")).toHaveAttribute("data-tone", "neutral");
     expect(
       screen.getByText("written in step 3, deleted in step 5 · never committed"),
     ).toBeInTheDocument();

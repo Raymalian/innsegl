@@ -23,6 +23,8 @@ import { isBySubagent, isNeverCommitted, repoFolderName, writtenAndRevertedAt } 
 import { FolderIcon } from "./icons";
 import { strings } from "./strings";
 import {
+  diffAdditions,
+  diffDeletions,
   fileCount,
   fileName,
   fileRow,
@@ -75,19 +77,35 @@ export function FilesChanged({ files, repo }: FilesChangedProps) {
   );
 }
 
+/** An added file's letter takes the diff's added hue and a deleted one's the
+ * removed hue; modified and reverted files stay neutral (doc 06 §5.3). */
+function statusTone(status: string): keyof typeof fileStatusLetter {
+  if (status === "A") return "added";
+  if (status === "D") return "removed";
+  return "neutral";
+}
+
 function FileRow({ file }: { readonly file: RecordFile }) {
   const revert = writtenAndRevertedAt(file);
   return (
     <div className="flex flex-col">
       <div className={fileRow}>
-        <span className={fileStatusLetter} aria-label={strings.files.statusLabel[file.status as FileStatus]}>
+        <span
+          className={fileStatusLetter[statusTone(file.status)]}
+          data-tone={statusTone(file.status)}
+          aria-label={strings.files.statusLabel[file.status as FileStatus]}
+        >
           {file.status}
         </span>
         <span className={fileName}>{file.path}</span>
         <span className={fileCount}>
-          {file.additions > 0 ? `+${file.additions}` : null}
+          {file.additions > 0 ? (
+            <span className={diffAdditions} data-tone="added">{`+${file.additions}`}</span>
+          ) : null}
           {file.additions > 0 && file.deletions > 0 ? " " : null}
-          {file.deletions > 0 ? `−${file.deletions}` : null}
+          {file.deletions > 0 ? (
+            <span className={diffDeletions} data-tone="removed">{`−${file.deletions}`}</span>
+          ) : null}
         </span>
       </div>
       {isBySubagent(file) ? (

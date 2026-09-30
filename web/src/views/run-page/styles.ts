@@ -104,7 +104,14 @@ export const treeRowId = `shrink-0 text-micro ${mutedText}`;
 
 export const filesFolderRow = `flex items-center gap-1.5 px-2 py-1 text-micro ${secondaryText}`;
 export const fileRow = `flex items-center gap-2 rounded-sm px-2 py-1 pl-6 text-body text-ink ${focusRing} ${stateTransition}`;
-export const fileStatusLetter = `${hairline} flex w-4 shrink-0 items-center justify-center rounded-sm text-[10px] font-medium leading-none ${secondaryText}`;
+const fileStatusLetterBase = "flex w-4 shrink-0 items-center justify-center rounded-sm border text-[10px] font-medium leading-none";
+/* The changed-files list shares the diff's two hues (doc 06 §5.3's named
+ * exception): an added file's A and a deleted file's D; M and R stay neutral. */
+export const fileStatusLetter = {
+  added: `${fileStatusLetterBase} border-diff-added-gutter text-diff-added-marker`,
+  removed: `${fileStatusLetterBase} border-diff-removed-gutter text-diff-removed-marker`,
+  neutral: `${hairline} ${fileStatusLetterBase} ${secondaryText}`,
+} as const;
 export const fileName = "truncate";
 export const fileCount = `ml-auto shrink-0 text-micro ${mutedText}`;
 export const fileSubNote = `pl-8 text-micro ${mutedText}`;
