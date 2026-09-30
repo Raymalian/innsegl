@@ -415,7 +415,7 @@ func (r *ToolCallRecorder) recordAsync(runID, toolUseID string, call pendingCall
 	ctx, cancel := context.WithTimeout(context.Background(), recordTimeout)
 	defer cancel()
 
-	body := buildToolCallBody(call, result)
+	body := buildToolCallBody(toolUseID, call, result)
 	_, err := r.record(ctx, mcp.GatewayToolCallInput{
 		RunID: runID, Tool: call.tool, Body: body, WorkspaceTreeHash: treeHash,
 	})
@@ -434,7 +434,17 @@ func (r *ToolCallRecorder) recordAsync(runID, toolUseID string, call pendingCall
 // own body is, stored under observe_tool_call's own body store and digest
 // unchanged (internal/mcp/gatewayrecord.go).
 type gatewayToolCallBody struct {
-	Tool            string          `json:"tool"`
+	Tool string `json:"tool"`
+	// ToolUseID is the SAME id the model API, the harness's own hooks, and
+	// this call's OTLP telemetry (if the harness exports any, witness.go)
+	// all carry for it — #392 (RM-247), E18: the join key the reconciler's
+	// telemetry cross-check (internal/reconciler/witness.go) uses to match
+	// this gateway-observed tool_call against the harness's own
+	// claude_code.tool_result log record for the SAME call. This is a body
+	// field, not an event field: doc 02's schema is unchanged (the body
+	// store is free JSON, per record.go's own package doc comment) and no
+	// protected string moves.
+	ToolUseID       string          `json:"tool_use_id"`
 	Input           json.RawMessage `json:"input,omitempty"`
 	InputTruncated  bool            `json:"input_truncated,omitempty"`
 	ResultObserved  bool            `json:"result_observed"`
@@ -448,10 +458,14 @@ type gatewayToolCallBody struct {
 // exactly when call was evicted before its result was observed — never
 // when a result was observed and happened to be empty, which
 // observedToolResult.Content already represents as an empty
-// json.RawMessage rather than a nil result.
-func buildToolCallBody(call pendingCall, result *observedToolResult) []byte {
+// json.RawMessage rather than a nil result. toolUseID is carried into the
+// body unchanged (gatewayToolCallBody.ToolUseID's own doc comment) — it is
+// always non-empty here, because both callers (recordAsync, for a paired
+// or an evicted call alike) key their own table on it.
+func buildToolCallBody(toolUseID string, call pendingCall, result *observedToolResult) []byte {
 	b := gatewayToolCallBody{
 		Tool:           call.tool,
+		ToolUseID:      toolUseID,
 		Input:          call.input,
 		InputTruncated: call.truncated,
 	}
