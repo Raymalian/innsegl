@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # One command from a fresh clone to an enforced, signable checkout — RM-245
-# (#390), epic #361 E18.
+# (#390), RM-248 (#393), epic #361 E18.
 #
 # WHY THIS EXISTS. Getting to a first signed commit used to mean knowing, in
 # order, that you had to run `make start`, then `make innsegl-install-signer`,
@@ -39,6 +39,14 @@
 # `--dry-run` runs step 1 (so a missing prerequisite is still caught) and then
 # only computes and prints what steps 2-5 would do; nothing on disk changes.
 #
+# `--egress-control <allowlist file>` (RM-248, #393) additionally locks the
+# sandbox to a domain allowlist: the operator's own list (one host per line;
+# blank lines and lines starting with `#` are ignored), with any host the
+# gateway itself would reach removed — api.anthropic.com and the configured
+# upstream ($INNSEGL_GATEWAY_UPSTREAM). The harness's own model traffic goes
+# through the gateway on loopback, which the sandbox does not govern, so
+# those two hosts never need to be in a sandboxed shell's own allowlist.
+#
 # `--uninstall` removes exactly the keys THIS installer added to the managed
 # settings — the env vars, the one hook entry, the permission and sandbox
 # flags — and the signer symlink, and nothing the operator added themselves.
@@ -53,7 +61,7 @@
 #
 # USAGE
 #   install.sh [--dry-run] [--uninstall] [--uninstall-legacy]
-#              [--managed-settings <path>] [DIR...]
+#              [--managed-settings <path>] [--egress-control <file>] [DIR...]
 #
 # Every DIR becomes signable, the same as `$INNSEGL_BIN_PATH link DIR` run by
 # hand.
@@ -86,6 +94,15 @@ GATEWAY_URL="${INNSEGL_INSTALL_GATEWAY_URL:-https://127.0.0.1:28095}"
 CA_PEM="${INNSEGL_INSTALL_CA_PEM:-$HOME/.innsegl/ca/gateway-ca.pem}"
 LOG_DENY="${INNSEGL_INSTALL_LOG_DENY:-$HOME/.innsegl/log}"
 
+# The gateway's own upstream (cmd/innsegl/gateway.go's INNSEGL_GATEWAY_UPSTREAM,
+# default https://api.anthropic.com) — read here only to know which host's
+# name to leave OUT of a --egress-control allowlist: model traffic reaches it
+# through the gateway on loopback, never directly from a sandboxed shell.
+GATEWAY_UPSTREAM="${INNSEGL_GATEWAY_UPSTREAM:-https://api.anthropic.com}"
+UPSTREAM_HOST="${GATEWAY_UPSTREAM#*://}"
+UPSTREAM_HOST="${UPSTREAM_HOST%%/*}"
+UPSTREAM_HOST="${UPSTREAM_HOST%%:*}"
+
 # Matches `make innsegl-install-signer`'s own default, so uninstall looks for
 # the symlink in the same place install put it.
 BIN_DIR="${INNSEGL_BIN:-$HOME/.local/bin}"
@@ -107,12 +124,14 @@ LEGACY_MCP_URL="${INNSEGL_INSTALL_LEGACY_MCP_URL:-http://127.0.0.1:28080/}"
 DRY_RUN=0
 UNINSTALL=0
 UNINSTALL_LEGACY=0
+EGRESS_FILE=""
 DIRS=()
 
 usage() {
   cat <<'EOF'
 usage: install.sh [--dry-run] [--uninstall] [--uninstall-legacy]
-                   [--managed-settings <path>] [DIR...]
+                   [--managed-settings <path>] [--egress-control <file>]
+                   [DIR...]
 
 Brings the innsegl stack up, puts innsegl-commit on PATH, writes the
 harness's managed settings (gateway env, the one PreToolUse hook, the
@@ -123,6 +142,8 @@ sandbox), and makes each DIR signable.
   --uninstall-legacy      also remove the OLD hook-and-MCP wiring (opt-in)
   --managed-settings <p>  write the managed settings to <p> instead of the
                           system path
+  --egress-control <f>    lock the sandbox to the domains in <f>, one host
+                          per line, minus the gateway's own upstream
 EOF
 }
 
@@ -135,6 +156,9 @@ parse_args() {
       --managed-settings)
         [ $# -ge 2 ] || { echo "install.sh: --managed-settings needs a path" >&2; exit 2; }
         MANAGED_SETTINGS="$2"; shift 2 ;;
+      --egress-control)
+        [ $# -ge 2 ] || { echo "install.sh: --egress-control needs a file" >&2; exit 2; }
+        EGRESS_FILE="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       -*)
         echo "install.sh: unrecognised option: $1" >&2
@@ -160,6 +184,7 @@ hint_macos() {
     python3)       echo "brew install python3" ;;
     curl)          echo "brew install curl" ;;
     innsegl-bin)   echo "make build" ;;
+    egress-file)   echo "create the allowlist file --egress-control names, one host per line" ;;
   esac
 }
 
@@ -172,6 +197,7 @@ hint_debian() {
     python3)       echo "sudo apt-get install -y python3" ;;
     curl)          echo "sudo apt-get install -y curl" ;;
     innsegl-bin)   echo "make build" ;;
+    egress-file)   echo "create the allowlist file --egress-control names, one host per line" ;;
   esac
 }
 
@@ -197,6 +223,9 @@ check_prereqs() {
   check python3       "python3"                        command -v python3
   check curl           "curl"                            command -v curl
   check innsegl-bin    "the innsegl binary ($INNSEGL_BIN_PATH)" test -x "$INNSEGL_BIN_PATH"
+  if [ -n "$EGRESS_FILE" ]; then
+    check egress-file "the --egress-control allowlist file ($EGRESS_FILE)" test -f "$EGRESS_FILE"
+  fi
 
   if [ "$MISSING" -ne 0 ]; then
     echo >&2
@@ -239,6 +268,10 @@ connect_managed_settings() {
   INSTALL_GATEWAY_URL="$GATEWAY_URL" \
   INSTALL_CA_PEM="$CA_PEM" \
   INSTALL_LOG_DENY="$LOG_DENY" \
+  INSTALL_EGRESS="$([ -n "$EGRESS_FILE" ] && echo 1 || echo 0)" \
+  INSTALL_ALLOWLIST_FILE="$EGRESS_FILE" \
+  INSTALL_MODEL_HOSTS="api.anthropic.com
+$UPSTREAM_HOST" \
   python3 - <<'PYEOF'
 import copy, datetime, difflib, json, os, shlex, sys, tempfile
 
@@ -249,6 +282,13 @@ hook_path = os.environ["INSTALL_HOOK_PATH"]
 gateway_url = os.environ["INSTALL_GATEWAY_URL"]
 ca_pem = os.environ["INSTALL_CA_PEM"]
 log_deny = os.environ["INSTALL_LOG_DENY"]
+egress = os.environ.get("INSTALL_EGRESS") == "1"
+allowlist_file = os.environ.get("INSTALL_ALLOWLIST_FILE", "")
+model_hosts = {
+    h.strip().lower()
+    for h in os.environ.get("INSTALL_MODEL_HOSTS", "").splitlines()
+    if h.strip()
+}
 
 # The four telemetry vars (Claude Code docs) plus the three that route this
 # harness's own traffic through the gateway. Managed env wins over every
@@ -386,6 +426,24 @@ def uninstall_flags(obj):
             obj.pop("permissions", None)
 
 
+def compute_egress_domains():
+    domains = []
+    seen = set()
+    if not allowlist_file:
+        return domains
+    with open(allowlist_file, "r", encoding="utf-8") as f:
+        for line in f:
+            d = line.strip()
+            if not d or d.startswith("#"):
+                continue
+            dl = d.lower()
+            if dl in model_hosts or dl in seen:
+                continue
+            seen.add(dl)
+            domains.append(d)
+    return domains
+
+
 def install_sandbox(obj):
     sandbox = obj.setdefault("sandbox", {})
     sandbox["enabled"] = True
@@ -404,6 +462,11 @@ def install_sandbox(obj):
     # sandbox.network.allowUnixSockets is deliberately never set: unset blocks
     # every unix socket on macOS, including the container socket, and listing
     # it would be listing the one thing this contract exists to deny.
+    if egress:
+        net = sandbox.setdefault("network", {})
+        net["strictAllowlist"] = True
+        net["allowManagedDomainsOnly"] = True
+        net["allowedDomains"] = compute_egress_domains()
 
 
 def uninstall_sandbox(obj):

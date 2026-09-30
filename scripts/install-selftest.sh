@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# Self-test for install.sh — RM-245 (#390), epic #361 E18.
+# Self-test for install.sh — RM-245 (#390), RM-248 (#393), epic #361 E18.
 #
 # install.sh used to wire an OLD hook-and-MCP design into the harness's own
 # $HOME/.claude/settings.json and $HOME/.claude.json. This tests the GATEWAY
@@ -33,6 +33,10 @@
 #       operator's own settings standing
 #     - a non-writable target prints the one-line admin command and changes
 #       nothing
+#   EGR-001 — optional egress control (#393):
+#     - --egress-control writes the strict, managed-only allowlist with the
+#       model hosts (api.anthropic.com and the configured upstream) removed
+#     - a second run is idempotent
 #
 #   --uninstall-legacy is also covered: it is the only mode that touches the
 #   OLD wiring (the six subagent-identity.sh hook entries and the `innsegl`
@@ -227,7 +231,7 @@ backup_count() {
   printf '%s' "$n"
 }
 
-echo "install.sh — ENF-001"
+echo "install.sh — ENF-001 / EGR-001"
 
 # --- a missing prerequisite refuses and changes nothing --------------------
 NOCURL="$(toolbin_without curl)"
@@ -372,6 +376,49 @@ if [ "$rc7" -ne 0 ] \
   ok "ENF-001 a non-writable target prints the admin command and changes nothing"
 else
   bad "ENF-001 a non-writable target did not refuse cleanly" "exit=$rc7"$'\n'"$out7"
+fi
+
+# --- EGR-001: --egress-control locks the sandbox to a managed allowlist ----
+home8="$WORK/home-egress"; mkdir -p "$home8"
+ms8="$home8/managed-settings.json"
+allowlist8="$WORK/allowlist.txt"
+cat > "$allowlist8" <<'TXT'
+# operator's own list — comments and blank lines are ignored
+
+api.anthropic.com
+github.com
+registry.npmjs.org
+upstream.example.invalid
+TXT
+out8="$(HOME="$home8" PATH="$TOOLBIN" \
+  INNSEGL_INSTALL_START_CMD="$STUB_START" \
+  INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
+  INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+  INNSEGL_BIN_PATH="$STUB_BIN" \
+  INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
+  "$BASH_BIN" "$INSTALL" --managed-settings "$ms8" --egress-control "$allowlist8")"
+rc8=$?
+if [ "$rc8" -eq 0 ] \
+   && [ "$(check json-equal "$ms8" sandbox.network.strictAllowlist true)" = ok ] \
+   && [ "$(check json-equal "$ms8" sandbox.network.allowManagedDomainsOnly true)" = ok ] \
+   && [ "$(check json-equal "$ms8" sandbox.network.allowedDomains '["github.com", "registry.npmjs.org"]')" = ok ]; then
+  ok "EGR-001 --egress-control writes the strict allowlist with the model hosts removed"
+else
+  bad "EGR-001 --egress-control did not write the expected allowlist" "exit=$rc8"$'\n'"$out8"
+fi
+
+out8b="$(HOME="$home8" PATH="$TOOLBIN" \
+  INNSEGL_INSTALL_START_CMD="$STUB_START" \
+  INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
+  INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+  INNSEGL_BIN_PATH="$STUB_BIN" \
+  INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
+  "$BASH_BIN" "$INSTALL" --managed-settings "$ms8" --egress-control "$allowlist8" 2>&1)"
+rc8b=$?
+if [ "$rc8b" -eq 0 ] && printf '%s' "$out8b" | grep -qi 'already up to date'; then
+  ok "EGR-001 a second run with the same allowlist is idempotent"
+else
+  bad "EGR-001 a second run was not idempotent" "exit=$rc8b"$'\n'"$out8b"
 fi
 
 # --- --uninstall-legacy touches only the OLD wiring -------------------------
