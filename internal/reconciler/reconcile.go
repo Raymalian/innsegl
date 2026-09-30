@@ -338,6 +338,10 @@ type Result struct {
 	// signed (#169). Zero — and `Enabled` false — when no `Config.Writes` was
 	// given, so a reader never mistakes "not run" for "nothing to find".
 	Writes WritesReport
+	// Landing is RM-243's derived "signed, not landed" report (#388). Zero —
+	// and `Enabled` false — when no `Config.Landing` was given. Nothing in
+	// it is ever written to the chain.
+	Landing LandingReport
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +388,12 @@ type Config struct {
 	// bodies and check the content they claim to have written against the
 	// trees that run signed. Nil leaves it OFF. See writes.go.
 	Writes *WritesConfig
+	// Landing turns on RM-243 (#388): derive, for every commit_recorded, a
+	// "signed, not landed" verdict from repository reachability and (with
+	// LandingConfig.LogDir) a run's own git commit tool-call result. Nil
+	// leaves it OFF. Appends nothing to the chain — ADR-0059 decision 6,
+	// landing is derived, never recorded. See landing.go.
+	Landing *LandingConfig
 	// Observe receives every cycle Run performs, including a failed one.
 	Observe func(Result, error)
 }
@@ -519,6 +529,13 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	}
 	if r.cfg.Rebase != nil {
 		result.Rebase = r.recordRebases(ctx, view.rebase)
+	}
+	// RM-243 (#388): purely derived and appends nothing (ADR-0059 decision
+	// 6), so unlike drift and rebase above, its place in this ordering is
+	// not load-bearing — it is run last simply because nothing else here
+	// depends on it.
+	if r.cfg.Landing != nil {
+		result.Landing = r.checkLanding(ctx, view.landing, r.cfg.Landing)
 	}
 	return result, nil
 }
@@ -773,6 +790,9 @@ type ledgerView struct {
 	// change, as which commit (rebase.go). Nil when the pass is off, so a
 	// deployment that does not want it does not pay to build the index.
 	rebase *rebaseView
+	// landing is RM-243's fold of the same walk: every commit_recorded and
+	// tool_call this pass may need (landing.go). Nil when the pass is off.
+	landing *landingView
 }
 
 // readLedger walks the chain in bounded batches and reduces it to a view.
@@ -780,6 +800,9 @@ func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
 	view := &ledgerView{byID: map[string]openIntent{}, drift: newDriftView(), writes: newWritesView()}
 	if r.cfg.Rebase != nil {
 		view.rebase = newRebaseView()
+	}
+	if r.cfg.Landing != nil {
+		view.landing = newLandingView()
 	}
 	n, err := r.cfg.Ledger.Count(ctx)
 	if err != nil {
@@ -812,6 +835,9 @@ func (v *ledgerView) observe(record event.Fields) {
 	v.writes.observe(record) // RM-104 (#169) folds it too; see writes.go.
 	if v.rebase != nil {
 		v.rebase.observe(record) // ADR-0047 folds it too; see rebase.go.
+	}
+	if v.landing != nil {
+		v.landing.observe(record) // RM-243 (#388) folds it too; see landing.go.
 	}
 	switch recordString(record, event.FieldEventType) {
 	case event.EventTypeCommitIntent:
@@ -892,13 +918,16 @@ func defaultObserve(result Result, err error) {
 	case err != nil:
 		slog.Error("signing intent reconciliation cycle failed", "error", err)
 	case result.Repaired > 0 || result.Expired > 0 || result.Unresolved > 0 ||
-		result.Ambiguous > 0 || result.Drift.Unattributed > 0 || result.Drift.Fabricated > 0:
+		result.Ambiguous > 0 || result.Drift.Unattributed > 0 || result.Drift.Fabricated > 0 ||
+		result.Landing.NotLanded > 0:
 		slog.Warn("signing intent reconciliation acted",
 			"intents", result.Intents, "open", result.Open,
 			"repaired", result.Repaired, "expired", result.Expired,
 			"unresolved", result.Unresolved, "ambiguous", result.Ambiguous,
 			"unattributed_signatures", result.Drift.Unattributed,
-			"fabricated_records", result.Drift.Fabricated)
+			"fabricated_records", result.Drift.Fabricated,
+			"signed_not_landed", result.Landing.NotLanded,
+			"landing_not_checked", result.Landing.NotChecked)
 	default:
 		slog.Debug("every signing intent is accounted for",
 			"intents", result.Intents, "open", result.Open,
