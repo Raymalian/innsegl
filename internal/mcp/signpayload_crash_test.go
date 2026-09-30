@@ -139,12 +139,12 @@ func cmt011CommitObjects(t *testing.T, worktree string) map[string]bool {
 }
 
 // TestCMT011CoreDiesBetweenPhaseBAndPhaseCConvergesThroughTheReconciler is
-// CMT-011.
+// CMT-011. It is long for the same reason
+// TestREC003AndREC004AgainstARealRekorAndARealSignature is: one measured fact
+// per block, and splitting it would separate the evidence from what it
+// proves.
 //
-// TestREC003AndREC004AgainstARealRekorAndARealSignature gives for its own
-// length: splitting this would separate the evidence from what it proves.
-//
-//nolint:gocyclo // one measured fact per block, the same reasoning
+//nolint:gocyclo // see above
 func TestCMT011CoreDiesBetweenPhaseBAndPhaseCConvergesThroughTheReconciler(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
