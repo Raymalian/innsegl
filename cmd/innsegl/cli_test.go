@@ -199,3 +199,56 @@ func TestCommitPathHostCommandsRefuseAnUnknownStep(t *testing.T) {
 		}
 	}
 }
+
+// TestRunDispatchesGitsSigningProgramInvocationDirectlyToSign is RM-245's
+// decision 2: git invokes `gpg.x509.program` directly as
+// `<program> --status-fd=<N> -bsau <key>` (ADR-0059 decision 3) — no "sign"
+// subcommand name anywhere in argv, because a deployment points git's
+// gpg.x509.program at this binary itself, with no wrapper script. `run`
+// recognises that shape (args[0] starting with "--status-fd") and dispatches
+// it exactly as it would `sign <the same args>`: no subcommand name ever
+// starts with "-", so this is unambiguous with the dispatch table.
+func TestRunDispatchesGitsSigningProgramInvocationDirectlyToSign(t *testing.T) {
+	cases := [][]string{
+		{"--status-fd=2", "-bsau", "key"},
+		{"--status-fd", "2", "-bsau", "key"},
+	}
+	for _, args := range cases {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var wantStdout, wantStderr bytes.Buffer
+			wantCode := run(append([]string{"sign"}, args...), &wantStdout, &wantStderr)
+
+			var gotStdout, gotStderr bytes.Buffer
+			gotCode := run(args, &gotStdout, &gotStderr)
+
+			if gotCode != wantCode {
+				t.Errorf("run(%v) = %d, want %d (same as `sign %v`)", args, gotCode, wantCode, args)
+			}
+			if gotStdout.String() != wantStdout.String() {
+				t.Errorf("run(%v) stdout = %q, want %q", args, gotStdout.String(), wantStdout.String())
+			}
+			if gotStderr.String() != wantStderr.String() {
+				t.Errorf("run(%v) stderr = %q, want %q", args, gotStderr.String(), wantStderr.String())
+			}
+		})
+	}
+}
+
+// TestRunDispatchesVerifyModeDirectlyToSign is the --verify half of decision
+// 2: `git verify-commit` invokes the same gpg.x509.program with --verify, and
+// this binary points that at gitsign rather than trying to handle it, exactly
+// as `innsegl sign --verify` already does (sign_test.go's
+// TestRunSignRefusesVerifyMode).
+func TestRunDispatchesVerifyModeDirectlyToSign(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--status-fd=1", "--verify"}, &stdout, &stderr)
+	if code == exitOK {
+		t.Fatalf("run with --verify = %d, want non-zero (this program never verifies)", code)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "gitsign") {
+		t.Errorf("stderr = %q, want it to name gitsign as the verifier", stderr.String())
+	}
+}

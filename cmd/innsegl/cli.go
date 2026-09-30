@@ -170,6 +170,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 
+	// git invokes `gpg.x509.program` directly as
+	// `<program> --status-fd=<N> -bsau <key>` (and `--verify ...` to verify
+	// instead of sign) — ADR-0031 decision 1's own contract, RM-245's
+	// decision 2. No subcommand name in the table below ever starts with "-",
+	// so this is unambiguous with the lookup that follows, and it is what
+	// lets a deployment point git's gpg.x509.program at THIS binary directly,
+	// with no wrapper script standing in for it: `innsegl sign ...` keeps
+	// working exactly as before, dispatched through the table as usual.
+	if strings.HasPrefix(args[0], "--status-fd") || args[0] == "--verify" {
+		return signCommand(args, stdout, stderr)
+	}
+
 	cmd, ok := commands[args[0]]
 	if !ok {
 		fprintf(stderr, "innsegl: unknown subcommand %q\n\n", args[0])
