@@ -429,8 +429,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-dumpfile="${out_dir}/innsegl-${timestamp}.dump"
+# ONE SECOND, ONE DUMP (RM-265, #424). The name is the UTC second the run
+# started, and two runs in one second used to write one path, the second
+# erasing the first even when it had verified. The name is now claimed with a
+# no-clobber create before anything is written to it, and a second already
+# taken (by a dump or its report) waits for the next one. The fixed-width form
+# is kept: last_usable_dump reads the newest by lexical order.
+while :; do
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  dumpfile="${out_dir}/innsegl-${timestamp}.dump"
+  if [ ! -e "${dumpfile}.verify.txt" ] && ( set -C; : > "${dumpfile}" ) 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
 report_file="${dumpfile}.verify.txt"
 
 # ---------------------------------------------------------------------------

@@ -440,6 +440,34 @@ check "BAK-008 the clean chain is green again" \
 check "BAK-008 no stale exposure survives a good run" "${g}" \
   "$(cat "${exposure_dir}/.exposure" 2>/dev/null || true)"
 
+printf '\n-- BAK-014: a second already taken is never overwritten --\n'
+# Two backups in one UTC second wrote one path, and the second erased the
+# first: BAK-006 failed that way once in CI. Planting a dump and a report for
+# every second around now makes the collision certain rather than lucky; the
+# window is wide because the backup runs in a container whose clock may sit a
+# second off this one.
+collide_dir="${workdir}/backups-collide"
+mkdir -p "${collide_dir}"
+now_s="$(date -u +%s)"
+for off in -3 -2 -1 0 1 2 3 4 5 6; do
+  t=$((now_s + off))
+  stamp="$(date -u -d "@${t}" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -r "${t}" +%Y%m%dT%H%M%SZ)"
+  printf 'planted %s\n' "${stamp}" > "${collide_dir}/innsegl-${stamp}.dump"
+  printf 'events 1\nplanted %s\n' "${stamp}" > "${collide_dir}/innsegl-${stamp}.dump.verify.txt"
+done
+before="$(cd "${collide_dir}" && cat innsegl-*.dump innsegl-*.verify.txt | cksum)"
+load_fixtures 0
+out="$(run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl \
+  --role innsegl --out "${collide_dir}" --segments "${good_segments}" --quiet 2>&1)" && rc=0 || rc=$?
+after="$(cd "${collide_dir}" && grep -l '^planted ' innsegl-*.dump innsegl-*.verify.txt 2>/dev/null | xargs cat 2>/dev/null | cksum)"
+n_planted="$(grep -l '^planted ' "${collide_dir}"/innsegl-*.dump 2>/dev/null | wc -l | tr -d ' ')"
+check "BAK-014 every dump and report already there is left exactly as it was" \
+  "$( [ "${before}" = "${after}" ] && [ "${n_planted}" -eq 10 ] && echo 0 || echo 1 )" \
+  "exit ${rc}; planted dumps left intact: ${n_planted} of 10: ${out}"
+n_new="$(find "${collide_dir}" -maxdepth 1 -name 'innsegl-*.dump' | wc -l | tr -d ' ')"
+check "BAK-014 the run still writes a dump of its own, under a fixed-width name" \
+  "$( [ "${rc}" -eq 0 ] && [ "${n_new}" -eq 11 ] && echo 0 || echo 1 )" "exit ${rc}; dumps ${n_new}: ${out}"
+
 # ---------------------------------------------------------------------------
 # RM-190 (#310) — each verified backup is also copied to a folder outside the
 # container runtime, and a copy that fails says so.
