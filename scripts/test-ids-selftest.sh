@@ -168,7 +168,7 @@ run_gate_on() {
   INNSEGL_TEST_TREE="${TREE}" "${GATE}" "$1" 2>&1
 }
 
-echo "test-ids-selftest: seventeen cases"
+echo "test-ids-selftest: eighteen cases"
 echo
 echo "the fixture is level to start with"
 
@@ -693,6 +693,45 @@ else
   ok "a checkout nested inside the tree is not read as this tree's tests, in either direction"
 fi
 rm -rf "${TREE}/.worktrees"
+
+echo
+echo "a Go subtest named for its case is that case's test"
+
+# 18. ONE STACK, SEVERAL CASES. A Go integration test that boots something
+#     expensive once runs each case as a subtest named for it,
+#     `t.Run("ZZA-009 …")`, so the case's id is at the head of the subtest's
+#     name, not in the function's. The gate read function names only and
+#     reported such a case as having no test. Near misses stay unread: an id
+#     later in a subtest name is a reference, and a t.Run outside a _test.go
+#     file is not a test.
+cat > "${TREE}/internal/alpha/stack_test.go" <<'GO'
+package alpha
+
+import "testing"
+
+func TestTheSharedStack(t *testing.T) {
+	t.Run("ZZA-009 a case run on the shared stack", func(t *testing.T) { _ = t })
+	t.Run("after ZZA-081 is fixed", func(t *testing.T) { _ = t })
+}
+GO
+cat > "${TREE}/internal/alpha/runner.go" <<'GO'
+package alpha
+
+func example(run func(string)) { run("ZZA-082 not a test") }
+
+var _ = `t.Run("ZZA-083 not a test file")`
+GO
+out="$(run_gate)"; status=$?
+if ! printf '%s' "${out}" | grep -qE 'ZZA +5 in code'; then
+  bad "an id at the head of a Go subtest's name is that case's test" "ZZA-009 was not counted as tested: ${out}"
+elif printf '%s' "${out}" | grep -qE 'ZZA-08[123]'; then
+  bad "a subtest name's later id, or a t.Run outside a test file, is not a case" "it read one: ${out}"
+elif [ "${status}" -ne 0 ]; then
+  bad "an id at the head of a Go subtest's name is that case's test" "exit ${status}: ${out}"
+else
+  ok "an id at the head of a Go subtest's name is that case's test, and nothing else is"
+fi
+rm -f "${TREE}/internal/alpha/stack_test.go" "${TREE}/internal/alpha/runner.go"
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [ "${fail}" -eq 0 ]
