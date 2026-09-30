@@ -263,7 +263,7 @@ expected_env2=$(cat <<JSON
 JSON
 )
 expected_hooks2=$(cat <<JSON
-{"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "$STUB_BIN"}]}]}
+{"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "$STUB_BIN hook pre-tool-use"}]}]}
 JSON
 )
 expected_sandbox2=$(cat <<JSON
@@ -319,7 +319,7 @@ if [ "$rc4" -eq 0 ] \
    && [ "$(check json-equal "$ms4" env.HTTPS_PROXY '"http://example.invalid:3128"')" = ok ] \
    && [ "$(check json-equal "$ms4" env.ANTHROPIC_BASE_URL '"https://127.0.0.1:28095"')" = ok ] \
    && [ "$(check json-equal "$ms4" hooks.PreToolUse.0.hooks.0.command '"/opt/example/my-hook.sh"')" = ok ] \
-   && [ "$(check json-equal "$ms4" hooks.PreToolUse.1.hooks.0.command "\"$STUB_BIN\"")" = ok ] \
+   && [ "$(check json-equal "$ms4" hooks.PreToolUse.1.hooks.0.command "\"$STUB_BIN hook pre-tool-use\"")" = ok ] \
    && [ "$(check json-equal "$ms4" permissions.allow '["Read(//tmp/**)"]')" = ok ] \
    && [ "$(check json-equal "$ms4" permissions.disableBypassPermissionsMode '"disable"')" = ok ] \
    && [ "$(check json-equal "$ms4" sandbox.filesystem.denyRead "[\"/opt/example/secret\", \"$home4/.innsegl/log\"]")" = ok ] \

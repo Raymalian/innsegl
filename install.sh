@@ -278,7 +278,11 @@ import copy, datetime, difflib, json, os, shlex, sys, tempfile
 path = os.environ["INSTALL_FILE"]
 action = os.environ["INSTALL_ACTION"]
 dry_run = os.environ.get("INSTALL_DRY_RUN") == "1"
-hook_path = os.environ["INSTALL_HOOK_PATH"]
+# The full command line the harness runs: the binary, then the subcommand
+# that names which of the commit path's three adapters this is (see
+# cmd/innsegl/commitpathcli.go) — the binary path alone would run with no
+# arguments and print top-level usage instead of acting as a hook.
+hook_command = os.environ["INSTALL_HOOK_PATH"] + " hook pre-tool-use"
 gateway_url = os.environ["INSTALL_GATEWAY_URL"]
 ca_pem = os.environ["INSTALL_CA_PEM"]
 log_deny = os.environ["INSTALL_LOG_DENY"]
@@ -331,7 +335,7 @@ def is_ours_hook(h):
     return (
         isinstance(h, dict)
         and h.get("type") == "command"
-        and h.get("command") == hook_path
+        and h.get("command") == hook_command
     )
 
 
@@ -375,7 +379,7 @@ def install_hooks(obj):
         for h in g["hooks"]
     )
     if not already:
-        groups.append({"matcher": "Bash", "hooks": [{"type": "command", "command": hook_path}]})
+        groups.append({"matcher": "Bash", "hooks": [{"type": "command", "command": hook_command}]})
     if not hooks:
         obj.pop("hooks", None)
 
