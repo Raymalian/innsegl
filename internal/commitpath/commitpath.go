@@ -203,11 +203,15 @@ const Window = 30 * time.Minute
 
 // RelayedCall is a tool call the core relayed whose result has not arrived.
 type RelayedCall struct {
-	RunID      string
-	Tool       string
-	Input      json.RawMessage
-	Truncated  bool
-	ObservedAt time.Time
+	RunID string
+	// WorkingDirectory is where the harness said the agent works, on the
+	// request whose reply carried this tool call. The core checks it is the
+	// run's own repository before reading anything from it.
+	WorkingDirectory string
+	Tool             string
+	Input            json.RawMessage
+	Truncated        bool
+	ObservedAt       time.Time
 }
 
 // Resolver finds a relayed, still-running tool call by its id.

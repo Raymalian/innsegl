@@ -4,6 +4,8 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -205,7 +207,16 @@ func SignPayloadForGateway(
 				"the run's own registration and has no argument of its own to fall back to",
 			runID)
 	}
-	worktree, err := svc.workspace.Worktree(ctx, run.Repo)
+	// The agent's own checkout when its request stated one: a commit made
+	// by the harness's git has its objects there, not in the core's
+	// workspace (ADR-0059: the harness runs git commit). A caller with no
+	// stated directory falls back to the workspace sign_commit uses.
+	var worktree string
+	if relayed.WorkingDirectory != "" {
+		worktree, err = commitPathWorktree(ctx, relayed.WorkingDirectory, run.Repo)
+	} else {
+		worktree, err = svc.workspace.Worktree(ctx, run.Repo)
+	}
 	if err != nil {
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, runID,
 			"no working tree for %s: %v", run.Repo, err)
@@ -389,4 +400,22 @@ func commitPathPhaseKey(prefix, toolUseID string, payload []byte) string {
 	payloadDigest := event.Digest(payload)
 	digest := strings.TrimPrefix(event.Digest([]byte(strconv.Quote(toolUseID)+"\n"+payloadDigest)), event.HashPrefix)
 	return prefix + digest[:signCommitKeyHexDigits]
+}
+
+// commitPathWorktree returns workingDirectory once it is proven to be the
+// run's own repository: the harness states the directory, so it is a claim,
+// and the objects a patch-id is computed from are read only from a checkout
+// whose origin names the repository the run was registered in.
+func commitPathWorktree(ctx context.Context, workingDirectory, repo string) (string, error) {
+	if workingDirectory == "" {
+		return "", errors.New("the relayed tool call stated no working directory")
+	}
+	id, err := repoIDFromWorktree(ctx, workingDirectory)
+	if err != nil {
+		return "", fmt.Errorf("%s is not a repository the core can read: %w", workingDirectory, err)
+	}
+	if id != repo {
+		return "", fmt.Errorf("%s is %s, not the run's repository %s", workingDirectory, id, repo)
+	}
+	return workingDirectory, nil
 }

@@ -1056,3 +1056,18 @@ func TestRecorderLooksUpARunningToolCallUntilItsResultArrives(t *testing.T) {
 		t.Error("a tool call was still found after its result arrived")
 	}
 }
+
+// The commit path reads the commit's objects from the repository the agent
+// works in, so a relayed tool call keeps the working directory its request
+// stated.
+func TestRecorderKeepsTheWorkingDirectoryOfARunningToolCall(t *testing.T) {
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: (&fakeRecordCalls{}).fn})
+	ctx := WithRequestFacts(WithRunID(context.Background(), recTestRunID),
+		RequestFacts{WorkingDirectory: "/workspace/example-repo"})
+	rec.OnToolUseContext(ctx, recToolUse("toolu_1", "Bash", `{"command":"git commit -m x"}`))
+
+	got, ok := rec.LookupPending("toolu_1")
+	if !ok || got.WorkingDirectory != "/workspace/example-repo" {
+		t.Errorf("LookupPending = %+v, %v; want the request's working directory", got, ok)
+	}
+}

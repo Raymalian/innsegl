@@ -1525,3 +1525,31 @@ func TestCommitPathPhaseKeyIsOnePerPayloadOfOneToolCall(t *testing.T) {
 		t.Errorf("key is %d bytes, over the ledger's 128", len(first))
 	}
 }
+
+// The commit's objects are read from the repository the agent works in, as
+// its relayed request stated it, and only once that directory is proven to
+// be the run's own repository: a stated directory is a claim.
+func TestCommitPathWorktreeIsTheAgentsOwnRepositoryOnly(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", dir}, {"-C", dir, "remote", "add", "origin", "https://github.com/example-org/example-repo.git"}} {
+		if out, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	notARepo := t.TempDir()
+
+	got, err := commitPathWorktree(t.Context(), dir, "github.com/example-org/example-repo")
+	if err != nil || got != dir {
+		t.Errorf("the run's own repository: got %q, %v; want %q", got, err, dir)
+	}
+	if _, err := commitPathWorktree(t.Context(), dir, "github.com/example-org/other-repo"); err == nil ||
+		!strings.Contains(err.Error(), "not the run's repository") {
+		t.Errorf("another repository was accepted: %v", err)
+	}
+	if _, err := commitPathWorktree(t.Context(), notARepo, "github.com/example-org/example-repo"); err == nil {
+		t.Error("a directory with no repository was accepted")
+	}
+	if _, err := commitPathWorktree(t.Context(), "", "github.com/example-org/example-repo"); err == nil {
+		t.Error("an empty working directory was accepted")
+	}
+}
