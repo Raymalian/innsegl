@@ -1592,3 +1592,112 @@ func TestGate4PresentsTheRunsOwnTokenForTheCredential(t *testing.T) {
 		t.Errorf("the credential was asked with token %q, want the run's own %q", sc.creds.token, want)
 	}
 }
+
+// spWiringSigningWith is spWiringWithRepo with a real gitsign signer factory
+// (a fake gitsign binary, so NewSigner constructs) and Phase B's signing step
+// replaced by sign, so Phases B and C run without Sigstore.
+func spWiringSigningWith(t *testing.T, resolver spResolver,
+	sign func(context.Context, *signing.Signer, signing.PayloadRequest) (signing.PayloadResult, error),
+) (w *scWiring, repo, tree string) {
+	t.Helper()
+	sc, repo, tree := spWiringWithRepo(t, resolver)
+	fakeGitsign := filepath.Join(t.TempDir(), "fake-gitsign")
+	if err := os.WriteFile(fakeGitsign, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("writing a fake gitsign: %v", err)
+	}
+	sc.cfg.Signers = NewGitsignSigners(signing.Config{
+		FulcioURL: "http://127.0.0.1:1", RekorURL: "http://127.0.0.1:1",
+		Issuer: "http://spire-oidc:8080", GitsignPath: fakeGitsign,
+		Author: signing.AuthorPolicy{AllowUnlinked: true},
+	})
+	restoreSC, err := ConfigureSignCommit(sc.cfg)
+	if err != nil {
+		t.Fatalf("re-ConfigureSignCommit: %v", err)
+	}
+	t.Cleanup(restoreSC)
+	signPayloadMu.Lock()
+	st := *signPayloadCfg
+	st.sign = sign
+	previous := signPayloadCfg
+	signPayloadCfg = &st
+	signPayloadMu.Unlock()
+	t.Cleanup(func() { signPayloadMu.Lock(); signPayloadCfg = previous; signPayloadMu.Unlock() })
+	return sc, repo, tree
+}
+
+func spSignedOK(_ context.Context, _ *signing.Signer, _ signing.PayloadRequest) (signing.PayloadResult, error) {
+	return signing.PayloadResult{
+		Signature: []byte("SIG"), Status: []byte("[GNUPG:] SIG_CREATED \n"),
+		CommitSHA: strings.Repeat("c", 40),
+		Rekor:     signing.RekorEntry{LogIndex: 7, UUID: strings.Repeat("e", 80)},
+	}, nil
+}
+
+// Phase B's signature reaches Phase C: commit_recorded carries the SHA and
+// the Rekor entry, references the intent, and the caller gets the signature
+// and status lines git needs.
+func TestPhaseCRecordsTheSignedCommitAndAnswersTheSignature(t *testing.T) {
+	resolver := spResolver{calls: map[string]commitpath.RelayedCall{spToolUseID: spPendingGitCommit(spRunID)}}
+	sc, _, tree := spWiringSigningWith(t, resolver, spSignedOK)
+
+	got, err := SignPayloadForGateway(context.Background(), commitpath.SignRequest{
+		ToolUseID: spToolUseID, Args: []string{"--status-fd=2", "-bsau", "k"},
+		Payload: spPayloadWithTree(t, spClaim(spRunID), tree, spAuthor, spAuthor),
+	})
+	if err != nil {
+		t.Fatalf("SignPayloadForGateway: %v", err)
+	}
+	if string(got.Signature) != "SIG" || !strings.Contains(string(got.Status), "SIG_CREATED") {
+		t.Errorf("answer %+v", got)
+	}
+	recorded := sc.ledger.ofType(event.EventTypeCommitRecorded)
+	if len(recorded) != 1 {
+		t.Fatalf("%d commit_recorded, want 1", len(recorded))
+	}
+	if recorded[0][event.FieldCommitSHA] != strings.Repeat("c", 40) || recorded[0][event.FieldTreeHash] != tree {
+		t.Errorf("commit_recorded %+v", recorded[0])
+	}
+}
+
+// A ledger that takes the intent and refuses commit_recorded fails the call,
+// so git writes no commit the chain has not recorded.
+func TestPhaseCRefusesWhenCommitRecordedCannotBeAppended(t *testing.T) {
+	resolver := spResolver{calls: map[string]commitpath.RelayedCall{spToolUseID: spPendingGitCommit(spRunID)}}
+	sc, _, tree := spWiringSigningWith(t, resolver, spSignedOK)
+	sc.ledger.failOn = map[string]error{event.EventTypeCommitRecorded: errors.New("ledger refused")}
+
+	if _, err := SignPayloadForGateway(context.Background(), commitpath.SignRequest{
+		ToolUseID: spToolUseID, Payload: spPayloadWithTree(t, spClaim(spRunID), tree, spAuthor, spAuthor),
+	}); err == nil {
+		t.Fatal("a commit_recorded the ledger refused still answered a signature")
+	}
+}
+
+// The relayed call's stated working directory is used once it is proven to
+// be the run's repository, and refused when it is not.
+func TestSignPayloadUsesTheStatedWorkingDirectoryOnlyForTheRunsRepository(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin string
+		wantErr      bool
+	}{
+		{"the run's repository", "https://" + spRepo + ".git", false},
+		{"another repository", "https://github.com/example-org/elsewhere.git", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			call := spPendingGitCommit(spRunID)
+			resolver := spResolver{calls: map[string]commitpath.RelayedCall{spToolUseID: call}}
+			sc, repo, tree := spWiringSigningWith(t, resolver, spSignedOK)
+			sc.space.dir = t.TempDir() // the core's own workspace must not be what is read
+			scGit(t, repo, "remote", "add", "origin", tc.origin)
+			call.WorkingDirectory = repo
+			resolver.calls[spToolUseID] = call
+
+			_, err := SignPayloadForGateway(context.Background(), commitpath.SignRequest{
+				ToolUseID: spToolUseID, Payload: spPayloadWithTree(t, spClaim(spRunID), tree, spAuthor, spAuthor),
+			})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, want error %v", err, tc.wantErr)
+			}
+		})
+	}
+}

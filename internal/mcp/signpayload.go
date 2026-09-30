@@ -56,6 +56,13 @@ type signPayloadState struct {
 	resolver commitpath.Resolver
 	claimFor func(ctx context.Context, runID string) (signing.Claim, error)
 	now      func() time.Time
+	// sign is Phase B's signing step: the signer's own SignPayload. Only a
+	// test replaces it, so Phases B and C are reachable without Sigstore.
+	sign func(ctx context.Context, s *signing.Signer, req signing.PayloadRequest) (signing.PayloadResult, error)
+}
+
+func signWithSigner(ctx context.Context, s *signing.Signer, req signing.PayloadRequest) (signing.PayloadResult, error) {
+	return s.SignPayload(ctx, req)
 }
 
 // SignPayloadConfig carries the two dependencies ADR-0059 decision 4 needs
@@ -100,7 +107,7 @@ func ConfigureSignPayload(cfg SignPayloadConfig) (func(), error) {
 	if now == nil {
 		now = time.Now
 	}
-	st := &signPayloadState{resolver: cfg.Resolver, claimFor: cfg.ClaimFor, now: now}
+	st := &signPayloadState{resolver: cfg.Resolver, claimFor: cfg.ClaimFor, now: now, sign: signWithSigner}
 
 	signPayloadMu.Lock()
 	defer signPayloadMu.Unlock()
@@ -290,7 +297,7 @@ func SignPayloadForGateway(
 	}
 	defer func() { _ = signer.Close() }()
 
-	result, err := signer.SignPayload(ctx, signing.PayloadRequest{
+	result, err := cfg.sign(ctx, signer, signing.PayloadRequest{
 		Args: req.Args, Payload: req.Payload, Claim: claim,
 	})
 	if err != nil {
