@@ -274,7 +274,7 @@ func TestReconcileReportNamesTheCommitPathPasses(t *testing.T) {
 		}
 	}
 	off := renderReconcileResult(reconciler.Result{})
-	for _, want := range []string{"commits: OFF", "landing: OFF"} {
+	for _, want := range []string{"commits: OFF", "landing: OFF", "witness: OFF"} {
 		if !strings.Contains(off, want) {
 			t.Errorf("report lacks %q:\n%s", want, off)
 		}
@@ -286,11 +286,27 @@ func TestReconcileReportNamesTheCommitPathPasses(t *testing.T) {
 // the repository.
 func TestReconcileConfigTurnsOnTheCommitPathPasses(t *testing.T) {
 	with := commitPathPasses(reconcileOptions{toolBodyDir: "/agentlog"})
-	if with.commitWatch == nil || with.commitWatch.LogDir != "/agentlog" || with.landing == nil || with.landing.LogDir != "/agentlog" {
+	if with.commitWatch == nil || with.commitWatch.LogDir != "/agentlog" || with.landing == nil || with.landing.LogDir != "/agentlog" ||
+		with.witness == nil || with.witness.LogDir != "/agentlog" {
 		t.Errorf("with a body dir: %+v", with)
 	}
 	without := commitPathPasses(reconcileOptions{})
-	if without.commitWatch != nil || without.landing == nil {
+	if without.commitWatch != nil || without.landing == nil || without.witness != nil {
 		t.Errorf("without a body dir: %+v", without)
+	}
+}
+
+// The second witness says whether telemetry is arriving at all: a
+// deployment that never enabled it is not "every tool call corroborated".
+func TestReconcileReportNamesTheTelemetryWitness(t *testing.T) {
+	active := renderReconcileResult(reconciler.Result{Witness: reconciler.WitnessReport{
+		Enabled: true, TelemetryActive: true, Checked: 5, Matched: 3, Pending: 1, Missing: 1, Orphaned: 2,
+	}})
+	if want := "witness: 5 checked  3 matched  1 pending  1 MISSING telemetry  2 telemetry never relayed"; !strings.Contains(active, want) {
+		t.Errorf("report lacks %q:\n%s", want, active)
+	}
+	quiet := renderReconcileResult(reconciler.Result{Witness: reconciler.WitnessReport{Enabled: true}})
+	if want := "witness: no telemetry received yet"; !strings.Contains(quiet, want) {
+		t.Errorf("report lacks %q:\n%s", want, quiet)
 	}
 }

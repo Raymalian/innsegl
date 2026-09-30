@@ -151,6 +151,14 @@ var commands = map[string]command{
 		summary: "git's signing program: ask the core to sign a commit",
 		exec:    signCommand,
 	},
+	// `link` installs the prepare-commit-msg hook the two entries above
+	// depend on into a repository's hooks directory (RM-245, #390) — the one
+	// piece of ADR-0059's host half `innsegl init` does not already cover,
+	// since init's own hook is the opt-in pre-push refusal, not this one.
+	"link": {
+		summary: "install the prepare-commit-msg hook the commit path needs in a repository",
+		exec:    linkCommand,
+	},
 }
 
 // run dispatches args (os.Args[1:]) and returns the process exit code. It
@@ -168,6 +176,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version", "--version", "-v":
 		fprintf(stdout, "%s\n", version.String())
 		return exitOK
+	}
+
+	// git invokes `gpg.x509.program` directly as
+	// `<program> --status-fd=<N> -bsau <key>` (and `--verify ...` to verify
+	// instead of sign) — ADR-0031 decision 1's own contract, RM-245's
+	// decision 2. No subcommand name in the table below ever starts with "-",
+	// so this is unambiguous with the lookup that follows, and it is what
+	// lets a deployment point git's gpg.x509.program at THIS binary directly,
+	// with no wrapper script standing in for it: `innsegl sign ...` keeps
+	// working exactly as before, dispatched through the table as usual.
+	if strings.HasPrefix(args[0], "--status-fd") || args[0] == "--verify" {
+		return signCommand(args, stdout, stderr)
 	}
 
 	cmd, ok := commands[args[0]]

@@ -261,11 +261,14 @@ func gwIdentityPool(t *testing.T, dsn string) *pgxpool.Pool {
 // is GID-009's own scenario: a fresh process, an empty in-memory cache and
 // an empty tree-linker table, the mapping store's own row the only thing
 // that survives.
-func startGWIdentityGateway(t *testing.T, dsn, upstreamURL string, upstreamClient *http.Client) (addr string, stop func()) {
+func startGWIdentityGateway(t *testing.T, dsn, upstreamURL string, upstreamClient *http.Client) (addr string, client *http.Client, stop func()) {
 	t.Helper()
+	keyDir, certDir := gatewayTestCADirs(t)
 	addrCh := make(chan string, 1)
 	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
 		o.upstreamClient = upstreamClient
+		o.caKeyDir = keyDir
+		o.caCertDir = certDir
 		srv, err := openGateway(ctx, o, log)
 		if err == nil {
 			addrCh <- srv.Addr()
@@ -274,7 +277,10 @@ func startGWIdentityGateway(t *testing.T, dsn, upstreamURL string, upstreamClien
 	}}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstreamURL, "-dsn", dsn}
+	args := []string{
+		"-listen", "127.0.0.1:0", "-upstream", upstreamURL, "-dsn", dsn,
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
+	}
 	done := make(chan int, 1)
 	go func() { done <- runGateway(ctx, args, io.Discard, io.Discard, deps) }()
 
@@ -283,6 +289,7 @@ func startGWIdentityGateway(t *testing.T, dsn, upstreamURL string, upstreamClien
 	case <-time.After(10 * time.Second):
 		t.Fatal("the gateway never announced a bound address")
 	}
+	client = gatewayTrustingClient(t, certDir)
 
 	var stopped bool
 	stop = func() {
@@ -300,7 +307,7 @@ func startGWIdentityGateway(t *testing.T, dsn, upstreamURL string, upstreamClien
 			t.Fatal("the gateway did not stop within 10s of its context being cancelled")
 		}
 	}
-	return addr, stop
+	return addr, client, stop
 }
 
 // gwIdentityMessage mirrors one Anthropic Messages API message, the shape
@@ -337,13 +344,15 @@ func gwIdentityMessageBody(t *testing.T, workdir, brief, assistant string) strin
 }
 
 // sendGWIdentityMessage sends one /v1/messages request through the gateway
-// at addr. agentID empty means the root agent (no header, harness.go's own
-// rule).
-func sendGWIdentityMessage(t *testing.T, addr, sessionID, agentID, workdir, brief, assistant string) *http.Response {
+// at addr, over https, using client -- gatewayTrustingClient's own return
+// from startGWIdentityGateway, the one client in each test that trusts THAT
+// gateway's own CA (RM-246, #391). agentID empty means the root agent (no
+// header, harness.go's own rule).
+func sendGWIdentityMessage(t *testing.T, addr string, client *http.Client, sessionID, agentID, workdir, brief, assistant string) *http.Response {
 	t.Helper()
 	body := gwIdentityMessageBody(t, workdir, brief, assistant)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		"http://"+addr+"/v1/messages", strings.NewReader(body))
+		"https://"+addr+"/v1/messages", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
@@ -351,7 +360,7 @@ func sendGWIdentityMessage(t *testing.T, addr, sessionID, agentID, workdir, brie
 	if agentID != "" {
 		req.Header.Set("X-Claude-Code-Agent-Id", agentID)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("request through the gateway: %v", err)
 	}
@@ -365,9 +374,9 @@ func sendGWIdentityMessage(t *testing.T, addr, sessionID, agentID, workdir, brie
 // rather than handing it back -- every test here that does not need the
 // response's own status or bytes (GID-012's own test is the one that does)
 // calls this instead of sendGWIdentityMessage directly.
-func sendAndDrainGWIdentityMessage(t *testing.T, addr, sessionID, agentID, workdir, brief, assistant string) {
+func sendAndDrainGWIdentityMessage(t *testing.T, addr string, client *http.Client, sessionID, agentID, workdir, brief, assistant string) {
 	t.Helper()
-	resp := sendGWIdentityMessage(t, addr, sessionID, agentID, workdir, brief, assistant)
+	resp := sendGWIdentityMessage(t, addr, client, sessionID, agentID, workdir, brief, assistant)
 	defer func() { _ = resp.Body.Close() }()
 	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
 		t.Fatalf("drain response: %v", err)
@@ -535,11 +544,11 @@ func TestGID012IdentityCannotBeIssuedRefusesEndToEndThroughRealOpenGateway(t *te
 	}))
 	defer upstream.Close()
 
-	addr, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
+	addr, client, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
 	defer stop()
 
 	const session = "d5a6a1a0-0000-4000-8000-000000000001"
-	resp := sendGWIdentityMessage(t, addr, session, "", "/no-such-projects-mount/example-repo", "hello, world", "")
+	resp := sendGWIdentityMessage(t, addr, client, session, "", "/no-such-projects-mount/example-repo", "hello, world", "")
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -597,12 +606,12 @@ func TestThreeLevelTreeRegistersEndToEndWithCorrectParentRunID(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	addr, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
+	addr, client, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
 	defer stop()
 
-	sendAndDrainGWIdentityMessage(t, addr, gwTreeSession, "", repo, "root brief", "")
-	sendAndDrainGWIdentityMessage(t, addr, gwTreeSession, gwTreeLeadAgent, repo, "lead brief", "")
-	sendAndDrainGWIdentityMessage(t, addr, gwTreeSession, gwTreeWorkerAgent, repo, "worker brief", "")
+	sendAndDrainGWIdentityMessage(t, addr, client, gwTreeSession, "", repo, "root brief", "")
+	sendAndDrainGWIdentityMessage(t, addr, client, gwTreeSession, gwTreeLeadAgent, repo, "lead brief", "")
+	sendAndDrainGWIdentityMessage(t, addr, client, gwTreeSession, gwTreeWorkerAgent, repo, "worker brief", "")
 
 	// mainAgentID's own value is harness.go's "main" (internal/gateway),
 	// restated here as a literal because it is what is actually persisted.
@@ -674,8 +683,8 @@ func TestGID009ResumeAfterGatewayRestartContinuesTheRunEndToEnd(t *testing.T) {
 
 	const session = "d5a6a1a0-0000-4000-8000-000000000003"
 
-	addr1, stop1 := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
-	sendAndDrainGWIdentityMessage(t, addr1, session, "", repo, "hello", "")
+	addr1, client1, stop1 := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
+	sendAndDrainGWIdentityMessage(t, addr1, client1, session, "", repo, "hello", "")
 	stop1()
 
 	before := queryGWIdentityMapping(t, f.dsn, session, "main")
@@ -687,9 +696,9 @@ func TestGID009ResumeAfterGatewayRestartContinuesTheRunEndToEnd(t *testing.T) {
 	// an empty tree-linker table -- everything but the mapping row itself
 	// is gone (ADR-0058 decision 9: "a gateway restart must find the same
 	// mapping it left and continue the same runs").
-	addr2, stop2 := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
+	addr2, client2, stop2 := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
 	defer stop2()
-	sendAndDrainGWIdentityMessage(t, addr2, session, "", repo, "hello", "")
+	sendAndDrainGWIdentityMessage(t, addr2, client2, session, "", repo, "hello", "")
 
 	after := queryGWIdentityMapping(t, f.dsn, session, "main")
 	if !after.found {
@@ -717,7 +726,7 @@ func TestForkRegistersWithForkedFromRunIDEndToEnd(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	addr, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
+	addr, client, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
 	defer stop()
 
 	const (
@@ -731,7 +740,7 @@ func TestForkRegistersWithForkedFromRunIDEndToEnd(t *testing.T) {
 	// Claude Code resends the whole history on every request, so a
 	// fingerprint is knowable from a conversation's very first message the
 	// gateway ever sees exactly as readily as from its second.
-	sendAndDrainGWIdentityMessage(t, addr, originSession, "", repo, sharedBrief, sharedReply)
+	sendAndDrainGWIdentityMessage(t, addr, client, originSession, "", repo, sharedBrief, sharedReply)
 	origin := queryGWIdentityMapping(t, f.dsn, originSession, "main")
 	if !origin.found {
 		t.Fatal("no mapping row was recorded for the origin")
@@ -740,7 +749,7 @@ func TestForkRegistersWithForkedFromRunIDEndToEnd(t *testing.T) {
 	// The fork: a DIFFERENT session, the IDENTICAL brief and first
 	// assistant turn -- ADR-0058 decision 5, "a known fingerprint under a
 	// new session".
-	sendAndDrainGWIdentityMessage(t, addr, forkedSession, "", repo, sharedBrief, sharedReply)
+	sendAndDrainGWIdentityMessage(t, addr, client, forkedSession, "", repo, sharedBrief, sharedReply)
 	fork := queryGWIdentityMapping(t, f.dsn, forkedSession, "main")
 	if !fork.found {
 		t.Fatal("no mapping row was recorded for the fork")

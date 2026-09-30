@@ -35,12 +35,15 @@ import (
 // this recorder derives its key from never reaches the log.
 func startGWAgentMessageGateway(
 	t *testing.T, dsn, upstreamURL string, upstreamClient *http.Client, identitySecret, keyID string,
-) (addr string, stderr *syncBuffer, stop func()) {
+) (addr string, client *http.Client, stderr *syncBuffer, stop func()) {
 	t.Helper()
 	stderr = &syncBuffer{}
+	keyDir, certDir := gatewayTestCADirs(t)
 	addrCh := make(chan string, 1)
 	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
 		o.upstreamClient = upstreamClient
+		o.caKeyDir = keyDir
+		o.caCertDir = certDir
 		srv, err := openGateway(ctx, o, log)
 		if err == nil {
 			addrCh <- srv.Addr()
@@ -52,6 +55,7 @@ func startGWAgentMessageGateway(
 	args := []string{
 		"-listen", "127.0.0.1:0", "-upstream", upstreamURL, "-dsn", dsn,
 		"-identity-secret", identitySecret, "-agent-message-key-id", keyID,
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
 	}
 	done := make(chan int, 1)
 	go func() { done <- runGateway(ctx, args, io.Discard, stderr, deps) }()
@@ -62,6 +66,7 @@ func startGWAgentMessageGateway(
 		cancel()
 		t.Fatal("the gateway never announced a bound address")
 	}
+	client = gatewayTrustingClient(t, certDir)
 
 	stop = func() {
 		cancel()
@@ -74,7 +79,7 @@ func startGWAgentMessageGateway(
 			t.Fatal("the gateway did not stop within 10s of its context being cancelled")
 		}
 	}
-	return addr, stderr, stop
+	return addr, client, stderr, stop
 }
 
 // waitForAgentMessageEvents polls f's own chain until runID carries at
@@ -137,7 +142,7 @@ func TestGREC005AgentMessagesEndToEndThroughRealOpenGateway(t *testing.T) {
 		func(t *testing.T, w http.ResponseWriter) { writeGRECTextSSE(t, w, "done") },
 	)
 
-	addr, stderr, stop := startGWAgentMessageGateway(t, f.dsn, upstream.URL, upstream.Client(), identitySecret, keyID)
+	addr, client, stderr, stop := startGWAgentMessageGateway(t, f.dsn, upstream.URL, upstream.Client(), identitySecret, keyID)
 	defer stop()
 
 	const session = "b3a1c2d4-5e6f-4708-9a0b-1c2d3e4f5a6b"
@@ -147,7 +152,7 @@ func TestGREC005AgentMessagesEndToEndThroughRealOpenGateway(t *testing.T) {
 	conv := &grecConversation{}
 	conv.addUserBrief(t, repo, brief)
 
-	firstResp := sendAndReadGREC(t, addr, session, conv.body(t))
+	firstResp := sendAndReadGREC(t, addr, client, session, conv.body(t))
 	runID := grecRunID(t, f.dsn, session)
 
 	// The upstream's own reply becomes history on the NEXT request --
@@ -159,7 +164,7 @@ func TestGREC005AgentMessagesEndToEndThroughRealOpenGateway(t *testing.T) {
 		Role:    "assistant",
 		Content: []grecBlock{{Type: "text", Text: assistantText}},
 	})
-	secondResp := sendAndReadGREC(t, addr, session, conv.body(t))
+	secondResp := sendAndReadGREC(t, addr, client, session, conv.body(t))
 
 	events := waitForAgentMessageEvents(t, f, runID, 2)
 
@@ -219,15 +224,15 @@ func newIdentitySecretCanary(t *testing.T) string {
 // sendAndReadGREC is sendAndDrainGREC's own sibling (gatewayrecord_test.go):
 // the one difference is that the response body is read and returned rather
 // than discarded, so a canary scan can check it.
-func sendAndReadGREC(t *testing.T, addr, sessionID, body string) []byte {
+func sendAndReadGREC(t *testing.T, addr string, client *http.Client, sessionID, body string) []byte {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		"http://"+addr+"/v1/messages", strings.NewReader(body))
+		"https://"+addr+"/v1/messages", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
 	req.Header.Set("X-Claude-Code-Session-Id", sessionID)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("request through the gateway: %v", err)
 	}

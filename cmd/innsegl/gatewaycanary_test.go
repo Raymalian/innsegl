@@ -136,15 +136,20 @@ func assertCredentialCanaryDeliveredUpstream(t *testing.T, label, canary string,
 // TestGatewayCommandRelaysRealTrafficEndToEnd (gateway_test.go) does, and
 // returns that address, the syncBuffer (api_test.go) its *serveLog is
 // writing to, and a stop func that cancels it and waits for it to exit.
-func runGatewayForCanary(t *testing.T, upstreamURL string, client *http.Client) (addr string, stderr *syncBuffer, stop func()) {
+func runGatewayForCanary(
+	t *testing.T, upstreamURL string, client *http.Client,
+) (addr string, gwClient *http.Client, stderr *syncBuffer, stop func()) {
 	t.Helper()
 
 	stderr = &syncBuffer{}
+	keyDir, certDir := gatewayTestCADirs(t)
 	addrCh := make(chan string, 1)
 	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
 		// An https upstream is required (#371); a test server's own client
 		// is the one seam that lets it be trusted, as in gateway_test.go.
 		o.upstreamClient = client
+		o.caKeyDir = keyDir
+		o.caCertDir = certDir
 		srv, err := openGateway(ctx, o, log)
 		if err == nil {
 			addrCh <- srv.Addr()
@@ -153,7 +158,10 @@ func runGatewayForCanary(t *testing.T, upstreamURL string, client *http.Client) 
 	}}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstreamURL}
+	args := []string{
+		"-listen", "127.0.0.1:0", "-upstream", upstreamURL,
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
+	}
 	done := make(chan int, 1)
 	go func() { done <- runGateway(ctx, args, io.Discard, stderr, deps) }()
 
@@ -163,6 +171,7 @@ func runGatewayForCanary(t *testing.T, upstreamURL string, client *http.Client) 
 		cancel()
 		t.Fatal("the gateway never announced a bound address")
 	}
+	gwClient = gatewayTrustingClient(t, certDir)
 
 	stop = func() {
 		cancel()
@@ -175,7 +184,7 @@ func runGatewayForCanary(t *testing.T, upstreamURL string, client *http.Client) 
 			t.Fatal("the gateway did not stop within 5s of its context being cancelled")
 		}
 	}
-	return addr, stderr, stop
+	return addr, gwClient, stderr, stop
 }
 
 // TestGW010CommandCanarySuccessReachesNoFileLogOrResponse runs the ordinary
@@ -194,11 +203,11 @@ func TestGW010CommandCanarySuccessReachesNoFileLogOrResponse(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	addr, stderr, stop := runGatewayForCanary(t, upstream.URL, upstream.Client())
+	addr, gwClient, stderr, stop := runGatewayForCanary(t, upstream.URL, upstream.Client())
 	defer stop()
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		"http://"+addr+"/v1/messages", strings.NewReader(`{"model":"claude-3"}`))
+		"https://"+addr+"/v1/messages", strings.NewReader(`{"model":"claude-3"}`))
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
@@ -206,7 +215,7 @@ func TestGW010CommandCanarySuccessReachesNoFileLogOrResponse(t *testing.T) {
 	req.Header.Set("X-Api-Key", apiKey)
 	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gwClient.Do(req)
 	if err != nil {
 		t.Fatalf("request through the gateway: %v", err)
 	}
@@ -250,12 +259,12 @@ func TestGW010CommandCanaryStreamedReachesNoFileLogOrResponse(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	addr, stderr, stop := runGatewayForCanary(t, upstream.URL, upstream.Client())
+	addr, gwClient, stderr, stop := runGatewayForCanary(t, upstream.URL, upstream.Client())
 	defer stop()
 
 	reqCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "http://"+addr+"/v1/messages", nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "https://"+addr+"/v1/messages", nil)
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
@@ -263,7 +272,7 @@ func TestGW010CommandCanaryStreamedReachesNoFileLogOrResponse(t *testing.T) {
 	req.Header.Set("X-Api-Key", apiKey)
 	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gwClient.Do(req)
 	if err != nil {
 		t.Fatalf("request through the gateway: %v", err)
 	}
@@ -293,12 +302,12 @@ func TestGW010CommandCanaryStreamedReachesNoFileLogOrResponse(t *testing.T) {
 func TestGW010CommandCanaryUnreachableUpstreamReachesNoErrorBodyOrLog(t *testing.T) {
 	bearer, apiKey := newCredentialCanary(t)
 
-	addr, stderr, stop := runGatewayForCanary(t, "https://127.0.0.1:1", nil)
+	addr, gwClient, stderr, stop := runGatewayForCanary(t, "https://127.0.0.1:1", nil)
 	defer stop()
 
 	reqCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "http://"+addr+"/v1/messages", nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "https://"+addr+"/v1/messages", nil)
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
@@ -306,7 +315,7 @@ func TestGW010CommandCanaryUnreachableUpstreamReachesNoErrorBodyOrLog(t *testing
 	req.Header.Set("X-Api-Key", apiKey)
 	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gwClient.Do(req)
 	if err != nil {
 		t.Fatalf("request through the gateway: %v (want a response from the gateway, not a transport error)", err)
 	}
@@ -345,11 +354,11 @@ func TestGW010CommandCanaryUpstreamErrorStatusReachesNoResponseOrLogBeyondWhatIt
 	}))
 	defer upstream.Close()
 
-	addr, stderr, stop := runGatewayForCanary(t, upstream.URL, upstream.Client())
+	addr, gwClient, stderr, stop := runGatewayForCanary(t, upstream.URL, upstream.Client())
 	defer stop()
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		"http://"+addr+"/v1/messages", strings.NewReader(`{}`))
+		"https://"+addr+"/v1/messages", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
@@ -357,7 +366,7 @@ func TestGW010CommandCanaryUpstreamErrorStatusReachesNoResponseOrLogBeyondWhatIt
 	req.Header.Set("X-Api-Key", apiKey)
 	req.Header.Set("X-Claude-Code-Session-Id", "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f") // a recognised harness shape (#374)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gwClient.Do(req)
 	if err != nil {
 		t.Fatalf("request through the gateway: %v", err)
 	}
@@ -384,13 +393,18 @@ func TestGW010CommandCanaryUpstreamErrorStatusReachesNoResponseOrLogBeyondWhatIt
 // RM-235's identity stack and RM-236's own gateway recorder on top of it
 // (cmd/innsegl/gateway.go's own doc comment, "Identity from traffic") --
 // nothing else about how this command is driven changes.
-func runGatewayForCanaryWithDSN(t *testing.T, dsn, upstreamURL string, client *http.Client) (addr string, stderr *syncBuffer, stop func()) {
+func runGatewayForCanaryWithDSN(
+	t *testing.T, dsn, upstreamURL string, client *http.Client,
+) (addr string, gwClient *http.Client, stderr *syncBuffer, stop func()) {
 	t.Helper()
 
 	stderr = &syncBuffer{}
+	keyDir, certDir := gatewayTestCADirs(t)
 	addrCh := make(chan string, 1)
 	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
 		o.upstreamClient = client
+		o.caKeyDir = keyDir
+		o.caCertDir = certDir
 		srv, err := openGateway(ctx, o, log)
 		if err == nil {
 			addrCh <- srv.Addr()
@@ -399,7 +413,10 @@ func runGatewayForCanaryWithDSN(t *testing.T, dsn, upstreamURL string, client *h
 	}}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstreamURL, "-dsn", dsn}
+	args := []string{
+		"-listen", "127.0.0.1:0", "-upstream", upstreamURL, "-dsn", dsn,
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
+	}
 	done := make(chan int, 1)
 	go func() { done <- runGateway(ctx, args, io.Discard, stderr, deps) }()
 
@@ -409,6 +426,7 @@ func runGatewayForCanaryWithDSN(t *testing.T, dsn, upstreamURL string, client *h
 		cancel()
 		t.Fatal("the gateway never announced a bound address")
 	}
+	gwClient = gatewayTrustingClient(t, certDir)
 
 	stop = func() {
 		cancel()
@@ -421,7 +439,7 @@ func runGatewayForCanaryWithDSN(t *testing.T, dsn, upstreamURL string, client *h
 			t.Fatal("the gateway did not stop within 10s of its context being cancelled")
 		}
 	}
-	return addr, stderr, stop
+	return addr, gwClient, stderr, stop
 }
 
 // TestGW010CommandCanaryRecordedToolCallReachesNoBodyStoreFile is this
@@ -452,7 +470,7 @@ func TestGW010CommandCanaryRecordedToolCallReachesNoBodyStoreFile(t *testing.T) 
 	}))
 	defer upstream.Close()
 
-	addr, stderr, stop := runGatewayForCanaryWithDSN(t, f.dsn, upstream.URL, upstream.Client())
+	addr, gwClient, stderr, stop := runGatewayForCanaryWithDSN(t, f.dsn, upstream.URL, upstream.Client())
 	defer stop()
 
 	const session = "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3ecb"
@@ -461,14 +479,14 @@ func TestGW010CommandCanaryRecordedToolCallReachesNoBodyStoreFile(t *testing.T) 
 
 	sendAndDrain := func(body string) []byte {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-			"http://"+addr+"/v1/messages", strings.NewReader(body))
+			"https://"+addr+"/v1/messages", strings.NewReader(body))
 		if err != nil {
 			t.Fatalf("NewRequestWithContext: %v", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+bearer)
 		req.Header.Set("X-Api-Key", apiKey)
 		req.Header.Set("X-Claude-Code-Session-Id", session)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := gwClient.Do(req)
 		if err != nil {
 			t.Fatalf("request through the gateway: %v", err)
 		}

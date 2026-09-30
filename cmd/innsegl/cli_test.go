@@ -46,9 +46,12 @@ import (
 // shape `api`, `seal`, `reconcile` and `reap` already are, and `serve -also
 // gateway` runs the same body as a goroutine instead of a sixth container.
 // `hook`, `git-hook` and `sign` are the host half of ADR-0059's commit path
-// (E17): what the harness and git run, each a client of the core.
+// (E17): what the harness and git run, each a client of the core. `link`
+// (RM-245, #390) installs the prepare-commit-msg hook `git-hook` and `sign`
+// depend on into a repository, the piece `init`'s own opt-in pre-push hook
+// does not cover.
 var documentedSubcommands = []string{
-	"admin-credential", "api", "canary", "gateway", "git-hook", "hook", "init", "migrate-schema",
+	"admin-credential", "api", "canary", "gateway", "git-hook", "hook", "init", "link", "migrate-schema",
 	"reap", "reconcile", "resolve-alert", "retire", "seal", "serve", "sign", "verify",
 }
 
@@ -197,5 +200,58 @@ func TestCommitPathHostCommandsRefuseAnUnknownStep(t *testing.T) {
 		if stdout.Len() != 0 {
 			t.Errorf("run(%q) wrote to stdout: %q", args, stdout.String())
 		}
+	}
+}
+
+// TestRunDispatchesGitsSigningProgramInvocationDirectlyToSign is RM-245's
+// decision 2: git invokes `gpg.x509.program` directly as
+// `<program> --status-fd=<N> -bsau <key>` (ADR-0059 decision 3) — no "sign"
+// subcommand name anywhere in argv, because a deployment points git's
+// gpg.x509.program at this binary itself, with no wrapper script. `run`
+// recognises that shape (args[0] starting with "--status-fd") and dispatches
+// it exactly as it would `sign <the same args>`: no subcommand name ever
+// starts with "-", so this is unambiguous with the dispatch table.
+func TestRunDispatchesGitsSigningProgramInvocationDirectlyToSign(t *testing.T) {
+	cases := [][]string{
+		{"--status-fd=2", "-bsau", "key"},
+		{"--status-fd", "2", "-bsau", "key"},
+	}
+	for _, args := range cases {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var wantStdout, wantStderr bytes.Buffer
+			wantCode := run(append([]string{"sign"}, args...), &wantStdout, &wantStderr)
+
+			var gotStdout, gotStderr bytes.Buffer
+			gotCode := run(args, &gotStdout, &gotStderr)
+
+			if gotCode != wantCode {
+				t.Errorf("run(%v) = %d, want %d (same as `sign %v`)", args, gotCode, wantCode, args)
+			}
+			if gotStdout.String() != wantStdout.String() {
+				t.Errorf("run(%v) stdout = %q, want %q", args, gotStdout.String(), wantStdout.String())
+			}
+			if gotStderr.String() != wantStderr.String() {
+				t.Errorf("run(%v) stderr = %q, want %q", args, gotStderr.String(), wantStderr.String())
+			}
+		})
+	}
+}
+
+// TestRunDispatchesVerifyModeDirectlyToSign is the --verify half of decision
+// 2: `git verify-commit` invokes the same gpg.x509.program with --verify, and
+// this binary points that at gitsign rather than trying to handle it, exactly
+// as `innsegl sign --verify` already does (sign_test.go's
+// TestRunSignRefusesVerifyMode).
+func TestRunDispatchesVerifyModeDirectlyToSign(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--status-fd=1", "--verify"}, &stdout, &stderr)
+	if code == exitOK {
+		t.Fatalf("run with --verify = %d, want non-zero (this program never verifies)", code)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "gitsign") {
+		t.Errorf("stderr = %q, want it to name gitsign as the verifier", stderr.String())
 	}
 }

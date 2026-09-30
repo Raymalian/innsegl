@@ -7,7 +7,7 @@
 # (INNSEGL_MIGRATE_VOLUME_PREFIX=innsegl-migtest-$$-), and this file is the
 # only caller anywhere that sets that variable. With it set,
 # innsegl-migrate.sh's own volume_table() answers a table of two throwaway
-# volume names under the prefix instead of the real eighteen — so every
+# volume names under the prefix instead of the real nineteen — so every
 # export, import and check below runs against volumes this run created
 # itself, never against the real deployment's.
 #
@@ -532,6 +532,33 @@ else
   bad "import did not print a per-volume progress line to stderr" "${progress_err}"
 fi
 docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
+# Every volume the compose file names without an override of its own is on
+# the migration list, so a volume added to the stack cannot be left behind on
+# the old host. The gateway's CA key was the first to slip past it.
+COMPOSE_FILE="${SCRIPT_DIR}/../deploy/compose/innsegl.yml"
+missing_volumes=""
+# A volume with a `name:` of its own is migrated under that name (the trust
+# volumes) or is not data at all (the SPIRE socket), so only the unnamed ones
+# are held here.
+unnamed_volumes="$(awk '
+  /^volumes:/ { f = 1; next }
+  f && /^[^ #]/ { f = 0 }
+  !f { next }
+  /^  [a-z0-9-]+:[[:space:]]*$/ { if (k != "") print k; k = $1; sub(/:$/, "", k); next }
+  /^    name:/ { k = "" }
+  END { if (k != "") print k }
+' "${COMPOSE_FILE}")"
+for v in ${unnamed_volumes}; do
+  if ! grep -q "^innsegl-core_${v}|" "${MIGRATE}"; then
+    missing_volumes="${missing_volumes} innsegl-core_${v}"
+  fi
+done
+if [ -z "${missing_volumes}" ]; then
+  ok "every volume the compose file names is on the migration list"
+else
+  bad "the migration list is missing a volume the compose file names" "${missing_volumes}"
+fi
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [ "${fail}" -eq 0 ]

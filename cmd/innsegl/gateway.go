@@ -111,6 +111,20 @@ const (
 	envGatewayRate  = "INNSEGL_GATEWAY_RATE"
 	envGatewayBurst = "INNSEGL_GATEWAY_BURST"
 
+	// envGatewayCAKeyDir / envGatewayCACertDir: RM-246 (#391). The
+	// gateway's own TLS listener (see this file's own doc comment,
+	// "https-only listener") is a certificate from a CA this deployment
+	// owns (internal/gateway.CA). envGatewayCAKeyDir names the directory
+	// holding the CA's PRIVATE key -- in a compose deployment, a named
+	// Docker volume mounted into no other service (deploy/compose/innsegl.yml's
+	// innsegl-gateway-ca-key). envGatewayCACertDir names the directory the
+	// CA's PUBLIC certificate is (re)published to on every start -- in a
+	// compose deployment, a host bind mount ($HOME/.innsegl/ca), so
+	// internal/commitpath's host commands (`innsegl git-hook`, `innsegl
+	// sign`) can find and trust exactly it.
+	envGatewayCAKeyDir  = "INNSEGL_GATEWAY_CA_KEY_DIR"
+	envGatewayCACertDir = "INNSEGL_GATEWAY_CA_CERT_DIR"
+
 	// envGatewayBackstopInterval configures how often the silence backstop
 	// (gateway.Backstop, ADR-0058 decision 7c) sweeps. gateway.EnvBackstopHorizon
 	// (INNSEGL_GATEWAY_SILENCE_AFTER, internal/gateway/lifecycle.go) is the
@@ -190,6 +204,26 @@ type gatewayOptions struct {
 	rateLimitRate  int
 	rateLimitBurst int
 
+	// caKeyDir and caCertDir are RM-246 (#391)'s own settings: where the
+	// gateway's own TLS certificate authority keeps its private key, and
+	// where its public certificate is published. BOTH ARE REQUIRED, WITH NO
+	// FALLBACK DEFAULT -- deliberately. An earlier version of this file
+	// defaulted them to $HOME-relative paths for a bare `innsegl gateway`
+	// run outside compose, and that default is exactly what let an
+	// incompletely-updated test write a real CA private key to a
+	// developer's own $HOME (caught in review, never shipped): a caller
+	// that forgets these two flags is a caller that has not decided where a
+	// private key lives, and a filesystem-touching guess is the wrong
+	// answer to that, every time. validate refuses either one empty before
+	// LoadOrCreateCA is ever called. A compose deployment sets both to the
+	// container's own mount points (envGatewayCAKeyDir/envGatewayCACertDir's
+	// own doc comment); every one of this package's own tests that drives a
+	// real listener sets both to a temporary directory (gatewayTestCADirs,
+	// gateway_test.go) -- see TestGatewayCommandRefusesWithNoCADirsConfigured
+	// for the regression this holds.
+	caKeyDir  string
+	caCertDir string
+
 	// dsn is RM-235 (#380)'s one new, OPTIONAL setting: the ledger database
 	// the identity stack reads and writes (ADR-0060 decision 3). Empty means
 	// no identity guard, no backstop, no session-end endpoint -- exactly
@@ -249,6 +283,10 @@ func (o gatewayOptions) validate() string {
 	case o.backstopInterval <= 0:
 		return fmt.Sprintf("-backstop-interval (or $%s) must be positive, got %s",
 			envGatewayBackstopInterval, o.backstopInterval)
+	case o.caKeyDir == "":
+		return "-ca-key-dir (or $" + envGatewayCAKeyDir + ") is required (RM-246)"
+	case o.caCertDir == "":
+		return "-ca-cert-dir (or $" + envGatewayCACertDir + ") is required (RM-246)"
 	}
 	if problem := upstreamMustBeHTTPS(o.upstream); problem != "" {
 		return problem
@@ -416,6 +454,16 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 				"is under (ADR-0061's 2026-09-28 amendment); rotate by deploying a new value here "+
 				"-- an event minted under an earlier id stays verifiable under that id forever "+
 				"($"+envAgentMessageKeyID+")")
+		caKeyDir = fs.String("ca-key-dir", os.Getenv(envGatewayCAKeyDir),
+			"directory holding the gateway's own TLS certificate authority's PRIVATE key, "+
+				"created 0700 -- a named Docker volume mounted into the core and NOTHING else "+
+				"in a compose deployment (RM-246, #391). REQUIRED: no default, on purpose -- "+
+				"see gatewayOptions.caKeyDir's own doc comment ($"+envGatewayCAKeyDir+")")
+		caCertDir = fs.String("ca-cert-dir", os.Getenv(envGatewayCACertDir),
+			"directory the gateway's own CA certificate (public) is published to on every "+
+				"start -- a host bind mount in a compose deployment, so the host commands "+
+				"(internal/commitpath) can find and trust exactly it. REQUIRED: no default "+
+				"($"+envGatewayCACertDir+")")
 	)
 
 	fs.Usage = func() { gatewayUsage(stderr, fs) }
@@ -448,6 +496,8 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 		backstopInterval:  *backstopInterval,
 		identitySecret:    resolvedSecret,
 		agentMessageKeyID: *agentMessageKeyID,
+		caKeyDir:          *caKeyDir,
+		caCertDir:         *caCertDir,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl gateway: %s\n", problem)
@@ -578,7 +628,12 @@ func (g *runningGateway) Serve(ctx context.Context) error {
 
 	failed := make(chan error, 1)
 	go func() {
-		err := g.server.Serve(g.ln)
+		// ServeTLS, not Serve: g.server.TLSConfig carries the gateway's own
+		// CA's GetCertificate (RM-246, #391), and the empty certFile/keyFile
+		// arguments are exactly what ServeTLS documents for a TLSConfig that
+		// already populates GetCertificate -- there is no cert/key FILE
+		// pair for this listener at all, only the CA's own in-memory issuer.
+		err := g.server.ServeTLS(g.ln, "", "")
 		if errors.Is(err, http.ErrServerClosed) {
 			err = nil
 		}
@@ -749,6 +804,20 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	}
 	running.ln = ln
 
+	// RM-246 (#391): the gateway's own listener serves TLS, from a CA this
+	// deployment owns (internal/gateway.CA) rather than the system's public
+	// root store. LoadOrCreateCA is deliberately AFTER the listen call
+	// above, not before: an unbindable -listen address is refused without
+	// ever touching -ca-key-dir/-ca-cert-dir, which matters for a
+	// configuration that has not set them to anything writable either (the
+	// two failures should not be conflated, and a test forcing the listen
+	// failure alone should not have to configure a CA it will never reach).
+	ca, err := gateway.LoadOrCreateCA(gateway.CAConfig{KeyDir: o.caKeyDir, PublicDir: o.caCertDir})
+	if err != nil {
+		running.Close()
+		return nil, fmt.Errorf("configure the gateway's own TLS certificate authority: %w", err)
+	}
+
 	mux := http.NewServeMux()
 	// WithRetryAfterHeader sets the Retry-After header a GW-013 refusal
 	// carries -- internal/gateway's Guard interface has no access to the
@@ -764,10 +833,12 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		mux.HandleFunc(gatewaySessionEndPath, sessionEndHandler(running.sessionEnder, running.sessionEndRateLimit, log))
 	}
 	mountCommitPath(mux, running.commitResolver)
+	mountTelemetry(mux, os.Getenv(envObserveBodyDir))
 
 	running.server = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: gatewayReadHeaderTimeout,
+		TLSConfig:         ca.ServerTLSConfig(),
 	}
 	return running, nil
 }

@@ -346,6 +346,11 @@ type Result struct {
 	// and `Enabled` false — when no `Config.Landing` was given. Nothing in
 	// it is ever written to the chain.
 	Landing LandingReport
+	// Witness is RM-247's cross-check of the gateway's own tool_call
+	// bodies against the harness's own OTLP telemetry (#392, ADR-0057's
+	// third witness). Zero — and `Enabled` false — when no
+	// `Config.Witness` was given. See witness.go.
+	Witness WitnessReport
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +409,12 @@ type Config struct {
 	// leaves it OFF. Appends nothing to the chain — ADR-0059 decision 6,
 	// landing is derived, never recorded. See landing.go.
 	Landing *LandingConfig
+	// Witness turns on RM-247 (#392): cross-check the gateway's own
+	// tool_call bodies (record.go's own tool_use_id body field) against the
+	// harness's own OTLP telemetry (internal/gateway's own TelemetryHandler,
+	// ADR-0057's third witness). Nil leaves it OFF, and `Result.Witness.
+	// Enabled` says so on every cycle. See witness.go.
+	Witness *WitnessConfig
 	// Observe receives every cycle Run performs, including a failed one.
 	Observe func(Result, error)
 }
@@ -451,6 +462,11 @@ func New(cfg Config) (*Reconciler, error) {
 	}
 	// RM-244: commit watch is optional, but a half-configured one is not.
 	if err := cfg.CommitWatch.validate(); err != nil {
+		return nil, err
+	}
+	// RM-247: the telemetry witness is optional, but a half-configured one
+	// is not.
+	if err := cfg.Witness.validate(); err != nil {
 		return nil, err
 	}
 	if cfg.Alert == nil {
@@ -542,6 +558,17 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	if r.cfg.CommitWatch != nil {
 		result.CommitWatch = r.checkCommits(ctx, view)
 		result.Appended = append(result.Appended, result.CommitWatch.Appended...)
+	}
+
+	// RM-247 (#392). Placed beside drift and commit watch for the same
+	// reason: all three write doc 02 §3's `ledger_drift_detected`, folded
+	// from the SAME pre-repair chain walk (view.drift.subjects). Witness's
+	// own subjects are tool_call event ids — the SAME subject space commit
+	// watch uses — see witness.go's own doc comment for how a tool_call
+	// that earns an alert from BOTH checks in the same cycle is handled.
+	if r.cfg.Witness != nil {
+		result.Witness = r.checkWitness(ctx, view)
+		result.Appended = append(result.Appended, result.Witness.Appended...)
 	}
 
 	// ADR-0047 decision 4, and AFTER the repairs for the same reason drift is:
@@ -822,6 +849,10 @@ type ledgerView struct {
 	// landing is RM-243's fold of the same walk: every commit_recorded and
 	// tool_call this pass may need (landing.go). Nil when the pass is off.
 	landing *landingView
+	// witness is RM-247's fold of the same walk: every tool_call event this
+	// pass may need to cross-check against telemetry (witness.go). Never
+	// nil, for commitWatch's own reason (the fold is cheap).
+	witness *witnessView
 }
 
 // readLedger walks the chain in bounded batches and reduces it to a view.
@@ -829,6 +860,7 @@ func (r *Reconciler) readLedger(ctx context.Context) (*ledgerView, error) {
 	view := &ledgerView{
 		byID: map[string]openIntent{}, drift: newDriftView(),
 		writes: newWritesView(), commitWatch: newCommitWatchView(),
+		witness: newWitnessView(),
 	}
 	if r.cfg.Rebase != nil {
 		view.rebase = newRebaseView()
@@ -866,6 +898,7 @@ func (v *ledgerView) observe(record event.Fields) {
 	v.drift.observe(record)       // RM-036 (#44) folds the same record; see drift.go.
 	v.writes.observe(record)      // RM-104 (#169) folds it too; see writes.go.
 	v.commitWatch.observe(record) // RM-244 (#389) folds it too; see commitwatch.go.
+	v.witness.observe(record)     // RM-247 (#392) folds it too; see witness.go.
 	if v.rebase != nil {
 		v.rebase.observe(record) // ADR-0047 folds it too; see rebase.go.
 	}

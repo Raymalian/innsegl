@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"innsegl.dev/innsegl/internal/commitpath"
+	"innsegl.dev/innsegl/internal/gateway"
 )
 
 type noRelayedCalls struct{}
@@ -42,6 +43,35 @@ func TestGatewayMountsTheCommitPathOnlyWithAResolver(t *testing.T) {
 				if rec.Code != tc.want {
 					t.Errorf("POST %s = %d, want %d: %s", path, rec.Code, tc.want, rec.Body)
 				}
+			}
+		})
+	}
+}
+
+// The harness's telemetry (the second witness, #392) is received on the
+// gateway's own listener when there is a body store to keep it in, and not
+// at all when there is none.
+func TestGatewayMountsTheTelemetryReceiverOnlyWithABodyStore(t *testing.T) {
+	proxied := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	for _, tc := range []struct {
+		name string
+		dir  string
+		want int
+	}{
+		{"with a body store", t.TempDir(), http.StatusOK},
+		{"without one", "", http.StatusTeapot},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.Handle("/", proxied)
+			mountTelemetry(mux, tc.dir)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gateway.TelemetryLogsPath,
+				strings.NewReader(`{"resourceLogs":[]}`))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Errorf("POST %s = %d, want %d: %s", gateway.TelemetryLogsPath, rec.Code, tc.want, rec.Body)
 			}
 		})
 	}
