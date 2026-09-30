@@ -418,6 +418,11 @@ def uninstall_hooks(obj):
 
 def install_flags(obj):
     obj["allowManagedHooksOnly"] = True
+    # The harness's own co-author trailer is an identity claim I6 admits from
+    # no source, so a commit carrying it is refused; not writing it spares
+    # every agent a refused first commit.
+    attribution = obj.setdefault("attribution", {})
+    attribution["commit"] = False
     perms = obj.setdefault("permissions", {})
     perms["disableBypassPermissionsMode"] = "disable"
 
@@ -425,6 +430,14 @@ def install_flags(obj):
 def uninstall_flags(obj):
     if obj.get("allowManagedHooksOnly") is True:
         obj.pop("allowManagedHooksOnly", None)
+    attribution = obj.get("attribution")
+    if isinstance(attribution, dict):
+        if attribution.get("commit") is False:
+            attribution.pop("commit", None)
+        if attribution:
+            obj["attribution"] = attribution
+        else:
+            obj.pop("attribution", None)
     perms = obj.get("permissions")
     if isinstance(perms, dict):
         if perms.get("disableBypassPermissionsMode") == "disable":
@@ -861,8 +874,8 @@ Ready. Managed settings:
 Dashboard:
   $dashboard
 
-Every Bash tool call now runs through the gateway at $GATEWAY_URL, and a
-git commit it makes is signed automatically — nothing further to run.
+Claude Code's model traffic now runs through the gateway at $GATEWAY_URL,
+and an agent's git commit in a linked repository is signed automatically.
 EOF
 }
 

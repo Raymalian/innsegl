@@ -280,6 +280,7 @@ if [ "$rc2" -eq 0 ] \
    && [ "$(check json-equal "$ms2" env "$expected_env2")" = ok ] \
    && [ "$(check json-equal "$ms2" hooks "$expected_hooks2")" = ok ] \
    && [ "$(check json-equal "$ms2" allowManagedHooksOnly true)" = ok ] \
+   && [ "$(check json-equal "$ms2" attribution.commit false)" = ok ] \
    && [ "$(check json-equal "$ms2" permissions.disableBypassPermissionsMode '"disable"')" = ok ] \
    && [ "$(check json-equal "$ms2" sandbox "$expected_sandbox2")" = ok ] \
    && [ "$(backup_count "$home2" managed-settings.json)" -eq 0 ]; then
@@ -355,6 +356,7 @@ if [ "$rc6" -eq 0 ] \
    && [ "$(check json-equal "$ms4" permissions.allow '["Read(//tmp/**)"]')" = ok ] \
    && [ "$(check json-absent "$ms4" permissions.disableBypassPermissionsMode)" = ok ] \
    && [ "$(check json-absent "$ms4" allowManagedHooksOnly)" = ok ] \
+   && [ "$(check json-absent "$ms4" attribution)" = ok ] \
    && [ "$(check json-equal "$ms4" sandbox.filesystem.denyRead '["/opt/example/secret"]')" = ok ] \
    && [ "$(check json-equal "$ms4" otherOperatorSetting true)" = ok ] \
    && [ ! -e "$home4/.local/bin/innsegl-commit" ]; then
