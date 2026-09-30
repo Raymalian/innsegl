@@ -148,21 +148,24 @@ func grecToolResult(t *testing.T, toolUseID string, content any, isError bool) g
 // streams whatever SSE content a test hands it, one canned reply per hit.
 // ---------------------------------------------------------------------------
 
-// sendAndDrainGREC sends body through the real gateway at addr and reads
-// its reply to completion, closing the response itself rather than handing
-// it back — the same single-function send-then-close shape
-// gatewayidentity_test.go's own sendAndDrainGWIdentityMessage already uses,
-// so a streamed reply's own content_block_stop events have already been
-// processed by the server side, synchronously, before this call returns.
-func sendAndDrainGREC(t *testing.T, addr, sessionID, body string) {
+// sendAndDrainGREC sends body through the real gateway at addr, over https
+// using client (gatewayTrustingClient's own return from
+// startGWIdentityGateway, the one client in each test that trusts THAT
+// gateway's own CA, RM-246 #391), and reads its reply to completion,
+// closing the response itself rather than handing it back — the same
+// single-function send-then-close shape gatewayidentity_test.go's own
+// sendAndDrainGWIdentityMessage already uses, so a streamed reply's own
+// content_block_stop events have already been processed by the server
+// side, synchronously, before this call returns.
+func sendAndDrainGREC(t *testing.T, addr string, client *http.Client, sessionID, body string) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		"http://"+addr+"/v1/messages", strings.NewReader(body))
+		"https://"+addr+"/v1/messages", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("NewRequestWithContext: %v", err)
 	}
 	req.Header.Set("X-Claude-Code-Session-Id", sessionID)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("request through the gateway: %v", err)
 	}
@@ -366,7 +369,7 @@ func TestGREC001GREC002GREC004EndToEndThroughRealOpenGateway(t *testing.T) {
 		func(t *testing.T, w http.ResponseWriter) { writeGRECTextSSE(t, w, "done") },
 	)
 
-	addr, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
+	addr, client, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
 	defer stop()
 
 	const session = "d5a6a1a0-0000-4000-8000-0000000003ec"
@@ -375,7 +378,7 @@ func TestGREC001GREC002GREC004EndToEndThroughRealOpenGateway(t *testing.T) {
 
 	// Request 1: registers the run; the reply carries three tool_use
 	// blocks this recorder now holds pending.
-	sendAndDrainGREC(t, addr, session, conv.body(t))
+	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 	runID := grecRunID(t, f.dsn, session)
 
 	// Request 2: carries the three results — success, failure, refusal.
@@ -389,7 +392,7 @@ func TestGREC001GREC002GREC004EndToEndThroughRealOpenGateway(t *testing.T) {
 		grecToolResult(t, "toolu_fail", map[string]string{"stderr": "FAIL"}, true),
 		grecToolResult(t, "toolu_refused", map[string]string{"stderr": "permission denied by policy"}, true),
 	)
-	sendAndDrainGREC(t, addr, session, conv.body(t))
+	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 
 	calls := waitForToolCallEvents(t, f, runID, 3)
 	if got := len(calls); got != 3 {
@@ -475,14 +478,14 @@ func TestGREC001GREC002GREC004EndToEndThroughRealOpenGateway(t *testing.T) {
 
 	// GREC-004, part one: request 3 resends request 2's own history,
 	// unchanged — no result in it is new, so nothing more is recorded.
-	sendAndDrainGREC(t, addr, session, conv.body(t))
+	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 	assertToolCallEventCountStaysAt(t, f, runID, 3, 200*time.Millisecond)
 
 	// GREC-004, part two: request 4 carries a genuinely new result — the
 	// ledger grows by exactly one more.
 	conv.addAssistantToolUses(grecToolUse(t, "toolu_extra", "Write", map[string]string{"file_path": "/w/b.go"}))
 	conv.addUserToolResults(grecToolResult(t, "toolu_extra", map[string]bool{"success": true}, false))
-	sendAndDrainGREC(t, addr, session, conv.body(t))
+	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 
 	final := waitForToolCallEvents(t, f, runID, 4)
 	if got := len(final); got != 4 {
@@ -529,13 +532,13 @@ func TestGREC003EndToEndTheToolCallCarriesTheWorkspaceTreeHashThroughRealOpenGat
 		func(t *testing.T, w http.ResponseWriter) { writeGRECTextSSE(t, w, "done") },
 	)
 
-	addr, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
+	addr, client, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
 	defer stop()
 
 	const session = "d5a6a1a0-0000-4000-8000-0000000003ee"
 	conv := &grecConversation{}
 	conv.addUserBrief(t, repo, "write two files")
-	sendAndDrainGREC(t, addr, session, conv.body(t))
+	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 	runID := grecRunID(t, f.dsn, session)
 
 	// Between the tool_use being observed and its result reaching the
@@ -548,7 +551,7 @@ func TestGREC003EndToEndTheToolCallCarriesTheWorkspaceTreeHashThroughRealOpenGat
 
 	conv.addAssistantToolUses(grecToolUse(t, "toolu_snap1", "Write", map[string]string{"file_path": "b.go"}))
 	conv.addUserToolResults(grecToolResult(t, "toolu_snap1", map[string]bool{"success": true}, false))
-	sendAndDrainGREC(t, addr, session, conv.body(t))
+	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 	first := waitForToolCallEvents(t, f, runID, 1)
 
 	firstHash, ok := first[0][event.FieldWorkspaceTreeHash].(string)
@@ -565,7 +568,7 @@ func TestGREC003EndToEndTheToolCallCarriesTheWorkspaceTreeHashThroughRealOpenGat
 	}
 	conv.addAssistantToolUses(grecToolUse(t, "toolu_snap2", "Write", map[string]string{"file_path": "c.go"}))
 	conv.addUserToolResults(grecToolResult(t, "toolu_snap2", map[string]bool{"success": true}, false))
-	sendAndDrainGREC(t, addr, session, conv.body(t))
+	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 	second := waitForToolCallEvents(t, f, runID, 2)
 
 	var secondHash string
@@ -597,13 +600,13 @@ func TestGREC007EndToEndATruncatedResultIsRecordedWithTheTruncationStatedThrough
 	upstream := newGRECUpstream(t, func(t *testing.T, w http.ResponseWriter) {
 		writeGRECToolUseSSE(t, w, grecToolUse(t, "toolu_huge", "Bash", map[string]string{"command": "cat huge.log"}))
 	})
-	addr, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
+	addr, client, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
 	defer stop()
 
 	const session = "d5a6a1a0-0000-4000-8000-0000000003ef"
 	conv := &grecConversation{}
 	conv.addUserBrief(t, repo, "cat the huge log")
-	sendAndDrainGREC(t, addr, session, conv.body(t))
+	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 	runID := grecRunID(t, f.dsn, session)
 
 	// One byte over this package's own maxToolResultContentBytes bound
@@ -612,7 +615,7 @@ func TestGREC007EndToEndATruncatedResultIsRecordedWithTheTruncationStatedThrough
 
 	conv.addAssistantToolUses(grecToolUse(t, "toolu_huge", "Bash", map[string]string{"command": "cat huge.log"}))
 	conv.addUserToolResults(grecToolResult(t, "toolu_huge", map[string]string{"stdout": huge}, false))
-	sendAndDrainGREC(t, addr, session, conv.body(t))
+	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 
 	calls := waitForToolCallEvents(t, f, runID, 1)
 	digest, ok := calls[0][event.FieldPayloadDigest].(string)
