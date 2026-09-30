@@ -3,17 +3,15 @@
 package api
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
-// TestRegisterRecordRoutesWiresThroughTheRealServer proves the seam this
-// package exposes to cmd/innsegl/apiwiring.go: ConfigureRecordRoutes,
-// called before NewServer, is what registerRecordRoutes reads when
-// whatever calls it (server.go, another issue's own edit) does. This is
-// the ONLY test in this package that builds a *Server and calls
-// registerRecordRoutes directly; every other record test talks to a bare
-// *recordServer, which needs no Server at all.
+// TestRegisterRecordRoutesWiresThroughTheRealServer proves the record and
+// diff routes are wired by NewServer itself, with ConfigureRecordRoutes'
+// settings, and sit behind ADR-0062's gate like every other read route: no
+// session, no record; a signed-in session, the record.
 func TestRegisterRecordRoutesWiresThroughTheRealServer(t *testing.T) {
 	f := newRecordFixture(t)
 
@@ -23,20 +21,29 @@ func TestRegisterRecordRoutesWiresThroughTheRealServer(t *testing.T) {
 	})
 	t.Cleanup(restore)
 
+	authStore := testAuthStore(t)
 	srv, err := NewServer(ServerConfig{
 		Store: f.store, Prover: f.rs.prover, LogDir: f.logDir,
+		AuthStore: authStore, WebAuthn: testWebAuthnConfig,
+		ManagedSettingsPath: writeManagedSettings(t, denyingManagedSettingsJSON),
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
-	srv.registerRecordRoutes()
-
 	listening := httptest.NewServer(srv)
 	t.Cleanup(listening.Close)
 
-	a := get(t, listening.URL, "/api/v1/runs/"+f.parentID+"/record")
-	if a.status != 200 {
-		t.Fatalf("GET record through the wired route: status %d: %s", a.status, a.body)
+	if a := get(t, listening.URL, "/api/v1/runs/"+f.parentID+"/record"); a.status != http.StatusUnauthorized {
+		t.Fatalf("GET record with no session: status %d, want 401: %s", a.status, a.body)
+	}
+	if a := get(t, listening.URL, "/api/v1/runs/"+f.parentID+"/steps/1/diff"); a.status != http.StatusUnauthorized {
+		t.Fatalf("GET diff with no session: status %d, want 401: %s", a.status, a.body)
+	}
+
+	cookie := signInTestUser(t, listening.URL, authStore)
+	a := get(t, listening.URL, "/api/v1/runs/"+f.parentID+"/record", cookie)
+	if a.status != http.StatusOK {
+		t.Fatalf("GET record signed in: status %d: %s", a.status, a.body)
 	}
 	var rec RunRecord
 	decodeBody(t, a, &rec)
