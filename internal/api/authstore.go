@@ -106,18 +106,6 @@ func hashToken(token string) string {
 // derived from the display name (ADR-0062).
 func NewUserID() (string, error) { return newRandomID(16) }
 
-// CountUsers reports how many users exist. First-enrolment logic reads this:
-// ADR-0062's first user is enrolled in the owner's physical presence and
-// every later one by an existing signed-in user, and #409 builds only the
-// first case.
-func (a *AuthStore) CountUsers(ctx context.Context) (int, error) {
-	var n int
-	if err := a.pool.QueryRow(ctx, `SELECT count(*) FROM innsegl_auth.users`).Scan(&n); err != nil {
-		return 0, fmt.Errorf("api: counting users: %w", err)
-	}
-	return n, nil
-}
-
 // CreateUser inserts a user row. userID is minted by the caller (NewUserID)
 // so the enrolment handler can hand the same id to BeginRegistration before
 // the row exists — go-webauthn's own ceremony needs a WebAuthnID before
