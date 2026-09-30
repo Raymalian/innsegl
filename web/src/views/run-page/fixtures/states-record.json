@@ -1,0 +1,245 @@
+{
+  "run": {
+    "run_id": "run-9c1f2e3a4b5c6d7e8f9a0b1c2d3e4f5a",
+    "spiffe_id": "spiffe://innsegl.dev/agent/7e6a3274/4a3f6604/run-9c1f2e3a4b5c6d7e8f9a0b1c2d3e4f5a",
+    "agent_type": "main",
+    "task_ref": "main",
+    "repo": "github.com/innsegl-test/gateway-livetest",
+    "branch": "main",
+    "status": "active",
+    "status_at": null,
+    "registered_at": "2026-09-30T15:10:00Z",
+    "parent_run_id": "",
+    "forked_from_run_id": ""
+  },
+  "tree": {
+    "root_run_id": "run-9c1f2e3a4b5c6d7e8f9a0b1c2d3e4f5a",
+    "nodes": [
+      {
+        "run_id": "run-9c1f2e3a4b5c6d7e8f9a0b1c2d3e4f5a",
+        "agent_type": "main",
+        "parent_run_id": "",
+        "status": "active",
+        "spawned_by": 0
+      }
+    ]
+  },
+  "brief": {
+    "text": "Fix the session limiter's race and land it on main.",
+    "digest": "hmac-sha256:gateway-v1:aa11bb22cc33dd44ee55ff660011223344556677889900aabbccddeeff0011",
+    "available": true,
+    "at": "2026-09-30T15:10:00Z"
+  },
+  "replies": [],
+  "steps": [
+    {
+      "n": 1,
+      "tool_use_id": "toolu_01StatesStep0000000000001",
+      "event_id": "01a0f2c2-0001-7000-8000-000000000001",
+      "chain_position": 41200,
+      "at": "2026-09-30T15:10:05Z",
+      "tool": "Read",
+      "summary": "internal/gateway/limit.go",
+      "input": "{\"file_path\":\"internal/gateway/limit.go\"}",
+      "output": "func (l *SessionLimiter) Allow(id string) bool {\n\tb := l.bucket(id)\n\treturn b.Allow()\n}",
+      "truncated": false,
+      "outcome": { "kind": "ok", "exit_code": null },
+      "tree_before": "1111111111111111111111111111111111111a",
+      "tree_after": "1111111111111111111111111111111111111a",
+      "files": [],
+      "spawned_run_id": "",
+      "commit_sha": "",
+      "witnesses": { "gateway": "present", "snapshot": "unchanged", "telemetry": "matched" },
+      "spawned_commits": []
+    },
+    {
+      "n": 2,
+      "tool_use_id": "toolu_01StatesStep0000000000002",
+      "event_id": "01a0f2c2-0002-7000-8000-000000000002",
+      "chain_position": 41203,
+      "at": "2026-09-30T15:10:09Z",
+      "tool": "Bash",
+      "summary": "git add -A && git commit -m 'wip: probe the race'",
+      "input": "{\"command\":\"git add -A && git commit -m 'wip: probe the race'\"}",
+      "output": "[main 5d31e0a] wip: probe the race\n 1 file changed, 3 insertions(+)",
+      "truncated": false,
+      "outcome": { "kind": "ok", "exit_code": 0 },
+      "tree_before": "1111111111111111111111111111111111111a",
+      "tree_after": "2222222222222222222222222222222222222b",
+      "files": [],
+      "spawned_run_id": "",
+      "commit_sha": "5d31e0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7",
+      "witnesses": { "gateway": "present", "snapshot": "changed", "telemetry": "matched" },
+      "spawned_commits": []
+    },
+    {
+      "n": 3,
+      "tool_use_id": "toolu_01StatesStep0000000000003",
+      "event_id": "01a0f2c2-0003-7000-8000-000000000003",
+      "chain_position": 41207,
+      "at": "2026-09-30T15:10:14Z",
+      "tool": "Write",
+      "summary": "scratch/probe.sh",
+      "input": "{\"file_path\":\"scratch/probe.sh\",\"content\":\"#!/bin/sh\\nfor i in 1 2 3; do curl -s localhost/health; done\\n\"}",
+      "output": "File created successfully at: scratch/probe.sh",
+      "truncated": false,
+      "outcome": { "kind": "ok", "exit_code": null },
+      "tree_before": "2222222222222222222222222222222222222b",
+      "tree_after": "3333333333333333333333333333333333333c",
+      "files": [
+        {
+          "path": "scratch/probe.sh",
+          "status": "A",
+          "additions": 2,
+          "deletions": 0,
+          "steps": [3, 5],
+          "committed": false,
+          "by_run_id": ""
+        }
+      ],
+      "spawned_run_id": "",
+      "commit_sha": "",
+      "witnesses": { "gateway": "present", "snapshot": "changed", "telemetry": "matched" },
+      "spawned_commits": []
+    },
+    {
+      "n": 4,
+      "tool_use_id": "toolu_01StatesStep0000000000004",
+      "event_id": "01a0f2c2-0004-7000-8000-000000000004",
+      "chain_position": 41210,
+      "at": "2026-09-30T15:10:19Z",
+      "tool": "Bash",
+      "summary": "sh scratch/probe.sh",
+      "input": "{\"command\":\"sh scratch/probe.sh\"}",
+      "output": "curl: (7) Failed to connect to localhost port 80\ncurl: (7) Failed to connect to localhost port 80\ncurl: (7) Failed to connect to localhost port 80",
+      "truncated": false,
+      "outcome": { "kind": "error", "exit_code": 1 },
+      "tree_before": "3333333333333333333333333333333333333c",
+      "tree_after": "3333333333333333333333333333333333333c",
+      "files": [],
+      "spawned_run_id": "",
+      "commit_sha": "",
+      "witnesses": { "gateway": "present", "snapshot": "unchanged", "telemetry": "matched" },
+      "spawned_commits": []
+    },
+    {
+      "n": 5,
+      "tool_use_id": "toolu_01StatesStep0000000000005",
+      "event_id": "01a0f2c2-0005-7000-8000-000000000005",
+      "chain_position": 41214,
+      "at": "2026-09-30T15:10:24Z",
+      "tool": "Bash",
+      "summary": "rm scratch/probe.sh",
+      "input": "{\"command\":\"rm scratch/probe.sh\"}",
+      "output": "",
+      "truncated": false,
+      "outcome": { "kind": "ok", "exit_code": 0 },
+      "tree_before": "3333333333333333333333333333333333333c",
+      "tree_after": "2222222222222222222222222222222222222b",
+      "files": [
+        {
+          "path": "scratch/probe.sh",
+          "status": "R",
+          "additions": 2,
+          "deletions": 2,
+          "steps": [3, 5],
+          "committed": false,
+          "by_run_id": ""
+        }
+      ],
+      "spawned_run_id": "",
+      "commit_sha": "",
+      "witnesses": { "gateway": "present", "snapshot": "changed", "telemetry": "matched" },
+      "spawned_commits": []
+    },
+    {
+      "n": 6,
+      "tool_use_id": "toolu_01StatesStep0000000000006",
+      "event_id": "01a0f2c2-0006-7000-8000-000000000006",
+      "chain_position": 41217,
+      "at": "2026-09-30T15:10:29Z",
+      "tool": "Read",
+      "summary": "internal/gateway/limit_test.go",
+      "input": "{\"file_path\":\"internal/gateway/limit_test.go\"}",
+      "output": "func TestSessionLimiter_Allow(t *testing.T) { ... }",
+      "truncated": false,
+      "outcome": { "kind": "ok", "exit_code": null },
+      "tree_before": "2222222222222222222222222222222222222b",
+      "tree_after": "2222222222222222222222222222222222222b",
+      "files": [],
+      "spawned_run_id": "",
+      "commit_sha": "",
+      "witnesses": { "gateway": "present", "snapshot": "unchanged", "telemetry": "matched" },
+      "spawned_commits": []
+    },
+    {
+      "n": 7,
+      "tool_use_id": "toolu_01XyABCDEFGHIJKLMNOPQk",
+      "event_id": "01a0f2c2-0007-7000-8000-000000000007",
+      "chain_position": 41221,
+      "at": "2026-09-30T15:10:34Z",
+      "tool": "Edit",
+      "summary": "internal/gateway/limit.go",
+      "input": "{\"file_path\":\"internal/gateway/limit.go\",\"old_string\":\"\\tb := l.bucket(id)\\n\\treturn b.Allow()\",\"new_string\":\"\\tl.mu.Lock()\\n\\tdefer l.mu.Unlock()\\n\\treturn l.bucket(id).Allow()\"}",
+      "output": "The file internal/gateway/limit.go has been updated.",
+      "truncated": false,
+      "outcome": { "kind": "ok", "exit_code": null },
+      "tree_before": "2222222222222222222222222222222222222b",
+      "tree_after": "4444444444444444444444444444444444444d",
+      "files": [
+        {
+          "path": "internal/gateway/limit.go",
+          "status": "M",
+          "additions": 3,
+          "deletions": 2,
+          "steps": [7],
+          "committed": false,
+          "by_run_id": ""
+        }
+      ],
+      "spawned_run_id": "",
+      "commit_sha": "",
+      "witnesses": { "gateway": "present", "snapshot": "changed", "telemetry": "missing" },
+      "spawned_commits": []
+    }
+  ],
+  "files": [
+    {
+      "path": "scratch/probe.sh",
+      "status": "R",
+      "additions": 2,
+      "deletions": 2,
+      "steps": [3, 5],
+      "committed": false,
+      "by_run_id": ""
+    },
+    {
+      "path": "internal/gateway/limit.go",
+      "status": "M",
+      "additions": 3,
+      "deletions": 2,
+      "steps": [7],
+      "committed": false,
+      "by_run_id": ""
+    }
+  ],
+  "commits": [
+    {
+      "sha": "5d31e0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7",
+      "subject": "wip: probe the race",
+      "step": 2,
+      "landed": "not_landed",
+      "rekor_log_index": 2087
+    }
+  ],
+  "witness": {
+    "steps": 7,
+    "agree": 6,
+    "disagree": 1,
+    "unchecked": 0,
+    "bodies_stored": 7,
+    "bodies_verified": 7
+  },
+  "data_as_of": "2026-09-30T15:15:41Z",
+  "chain_head": 41230
+}
