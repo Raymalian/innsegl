@@ -94,7 +94,7 @@ prefer_real() {
     chmod +x "$TOOLBIN/$t"
   fi
 }
-for t in python3 dirname cat rm mkdir ln; do require_real "$t"; done
+for t in python3 dirname cat rm mkdir ln mktemp grep; do require_real "$t"; done
 for t in git make curl uname; do prefer_real "$t"; done
 
 cat > "$TOOLBIN/docker" <<'EOF'
@@ -460,6 +460,62 @@ if [ "$rc8e" -eq 0 ] \
   ok "EGR-001 --uninstall with the allowlist file removes only the domains it added"
 else
   bad "EGR-001 --uninstall with the allowlist file removed the wrong domains" "exit=$rc8e"$'\n'"$out8e"
+fi
+
+# --- ENF-006: the installer proves the harness loaded what it wrote ---------
+# Claude Code drops a WHOLE settings file, silently, when one value has the
+# wrong type (measured 2026-09-30: attribution.commit false). This stub does
+# the same and writes the debug line the real harness writes, so the case
+# tests install.sh's reading of it; the real harness is measured live.
+CLAUDEBIN="$WORK/claudebin"; mkdir -p "$CLAUDEBIN"
+cat > "$CLAUDEBIN/claude" <<'EOF'
+#!/bin/sh
+settings="" debug=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --settings) settings="$2"; shift 2 ;;
+    --debug-file) debug="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$debug" ] || exit 0
+python3 - "$settings" "$debug" <<'PY'
+import json, sys
+settings, debug = sys.argv[1], sys.argv[2]
+ca = None
+try:
+    d = json.load(open(settings))
+    if all(not isinstance(v, bool) for v in d.get("attribution", {}).values()):
+        ca = d.get("env", {}).get("NODE_EXTRA_CA_CERTS")
+except Exception:
+    pass
+open(debug, "w").write("[DEBUG] CA certs: extraCertsPath=%s\n" % (ca or "undefined"))
+PY
+EOF
+chmod +x "$CLAUDEBIN/claude"
+home10="$WORK/home-verify"; mkdir -p "$home10"
+out10="$(run_install "$home10" "$TOOLBIN:$CLAUDEBIN" --managed-settings "$home10/managed-settings.json" 2>&1)"; rc10=$?
+if [ "$rc10" -eq 0 ] && printf '%s' "$out10" | grep -q "Claude Code loaded"; then
+  ok "ENF-006 a file the harness loads is reported as loaded"
+else
+  bad "ENF-006 a loaded file was not reported as loaded" "exit=$rc10"$'\n'"$out10"
+fi
+cat > "$home10/managed-settings.json" <<'JSON'
+{"attribution": {"pr": false}}
+JSON
+out11="$(run_install "$home10" "$TOOLBIN:$CLAUDEBIN" --managed-settings "$home10/managed-settings.json" 2>&1)"; rc11=$?
+if [ "$rc11" -ne 0 ] && printf '%s' "$out11" | grep -q "did NOT load" \
+   && printf '%s' "$out11" | grep -qF "$home10/managed-settings.json"; then
+  ok "ENF-006 a file the harness discards fails the install, by name"
+else
+  bad "ENF-006 a discarded file did not fail the install by name" "exit=$rc11"$'\n'"$out11"
+fi
+home12="$WORK/home-noclaude"; mkdir -p "$home12"
+out12="$(run_install "$home12" "$TOOLBIN" --managed-settings "$home12/managed-settings.json" 2>&1)"; rc12=$?
+if [ "$rc12" -eq 0 ] && printf '%s' "$out12" | grep -q "could not be checked"; then
+  ok "ENF-006 with no harness installed, the check says it could not run"
+else
+  bad "ENF-006 with no harness installed, the check said nothing or failed" "exit=$rc12"$'\n'"$out12"
 fi
 
 # --- --uninstall-legacy touches only the OLD wiring -------------------------

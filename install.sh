@@ -881,6 +881,48 @@ and an agent's git commit in a linked repository is signed automatically.
 EOF
 }
 
+# verify_harness_loaded proves Claude Code read the managed settings (#423).
+# Claude Code drops a WHOLE settings file when one value has the wrong type,
+# and says nothing: measured 2026-09-30, `attribution.commit: false` left the
+# gateway address, the hook and the sandbox all unloaded, and a session under
+# it committed unsigned with nothing recorded. Every key of the file loads or
+# none does, so one of them is enough to tell: the harness's own debug log
+# names the extra CA it loaded from the file's env. `mcp list` reads the
+# settings and makes no model call.
+verify_harness_loaded() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+  local claude_bin log
+  if ! claude_bin="$(command -v claude 2>/dev/null)"; then
+    echo "install.sh: Claude Code (claude) is not on PATH, so whether it loads"
+    echo "  $MANAGED_SETTINGS could not be checked. Run this again once it is installed."
+    return 0
+  fi
+  log="$(mktemp "${TMPDIR:-/tmp}/innsegl-install-verify.XXXXXX")"
+  local flags=()
+  # The system path is read by the harness on its own; any other path is
+  # read only when named.
+  if [ "$MANAGED_SETTINGS" != "$(default_managed_settings_path)" ]; then
+    flags=(--settings "$MANAGED_SETTINGS")
+  fi
+  "$claude_bin" ${flags[@]+"${flags[@]}"} --setting-sources "" --debug-file "$log" mcp list \
+    </dev/null >/dev/null 2>&1 || true
+  if grep -qF "extraCertsPath=$CA_PEM" "$log" 2>/dev/null; then
+    rm -f "$log"
+    echo "install.sh: Claude Code loaded $MANAGED_SETTINGS"
+    return 0
+  fi
+  rm -f "$log"
+  {
+    echo "install.sh: Claude Code did NOT load $MANAGED_SETTINGS."
+    echo "  It drops the whole file, silently, when any one value has the wrong type,"
+    echo "  so the gateway, the hook and the sandbox are all absent. Check every key"
+    echo "  in the file against the Claude Code settings reference, then run this again."
+  } >&2
+  exit 1
+}
+
 main() {
   parse_args "$@"
 
@@ -904,6 +946,7 @@ main() {
 
   echo "==> writing the managed settings"
   connect_managed_settings install
+  verify_harness_loaded
 
   if [ "${#DIRS[@]}" -gt 0 ]; then
     echo "==> linking projects"
