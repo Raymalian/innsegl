@@ -933,13 +933,25 @@ func configureSignCommit(
 	if err != nil {
 		return nil, err
 	}
+	// The commit path's claim builder (ADR-0059 decision 2, E17): the run
+	// store and the pseudonymiser sign_commit holds, never second ones, so a
+	// trailer rendered for prepare-commit-msg is the one a signature checks.
+	restoreClaim, err := mcp.ConfigureCommitClaim(mcp.CommitClaimConfig{
+		Runs:         runs,
+		Pseudonyms:   pseudonyms,
+		AbandonAfter: o.abandonAfter,
+	})
+	if err != nil {
+		restore()
+		return nil, err
+	}
 	log.info("sign_commit is configured",
 		"workspace", o.workspace,
 		"issuer", o.oidcIssuer,
 		"author", o.signAuthorEmail,
 		"author_operators", len(o.signAuthorOperators),
 		"author_allow_unlinked", o.signAllowUnlinked)
-	return restore, nil
+	return func() { restoreClaim(); restore() }, nil
 }
 
 // ---------------------------------------------------------------------------
