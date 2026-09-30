@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -425,5 +426,64 @@ func TestGW014SSEScannerEventDataBounded(t *testing.T) {
 	}
 	if events[0].event != "content_block_stop" {
 		t.Errorf("event = %q, want content_block_stop", events[0].event)
+	}
+}
+
+// Claude Code 2.1.283 asks for a compressed reply, and an upstream that gets
+// that ask compresses its event stream. Relayed as asked, the observer parses
+// gzip bytes and sees no tool_use at all: the live test of 2026-09-30 recorded
+// every run's brief and not one tool call. The gateway asks upstream for an
+// uncompressed reply instead, which every client accepts.
+func TestGatewayObservesToolUseWhenTheClientAsksForACompressedReply(t *testing.T) {
+	var sawEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawEncoding = r.Header.Get("Accept-Encoding")
+		w.Header().Set("Content-Type", "text/event-stream")
+		var out io.Writer = w
+		if strings.Contains(sawEncoding, "gzip") {
+			w.Header().Set("Content-Encoding", "gzip")
+			zw := gzip.NewWriter(w)
+			defer func() { _ = zw.Close() }()
+			out = zw
+		}
+		w.WriteHeader(http.StatusOK)
+		if _, err := io.WriteString(out, "event: content_block_start\ndata: "+
+			`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01A","name":"Bash","input":{}}}`+"\n\n"+
+			"event: content_block_delta\ndata: "+
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"false\"}"}}`+"\n\n"+
+			"event: content_block_stop\ndata: "+`{"type":"content_block_stop","index":0}`+"\n\n"); err != nil {
+			t.Errorf("upstream write: %v", err)
+		}
+	}))
+	defer upstream.Close()
+
+	up, err := NewUpstream(upstream.URL, upstream.Client())
+	if err != nil {
+		t.Fatalf("NewUpstream: %v", err)
+	}
+	seen := make(chan ToolUse, 1)
+	gw := httptest.NewServer(&Proxy{Upstream: up, ToolUse: ToolUseObserverFunc(func(tu ToolUse) { seen <- tu })})
+	defer gw.Close()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, gw.URL+"/v1/messages", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	req.Header.Set(headerClaudeCodeSessionID, validSessionID)
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("gateway request: %v", err)
+	}
+	discardCopyError(io.Copy(io.Discard, resp.Body))
+	_ = resp.Body.Close()
+
+	select {
+	case tu := <-seen:
+		if tu.ID != "toolu_01A" {
+			t.Errorf("observed tool_use %q, want toolu_01A", tu.ID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no tool_use observed; upstream was asked for Accept-Encoding %q", sawEncoding)
 	}
 }

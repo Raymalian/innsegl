@@ -140,6 +140,11 @@ func (p *Proxy) buildRequest(r *http.Request) (*http.Request, error) {
 	}
 	outReq.Header = cloneHeader(r.Header)
 	stripHopByHop(outReq.Header)
+	// The reply is read here as well as relayed (stream, below), and a
+	// compressed one reads as nothing: Claude Code asks for gzip, br and
+	// zstd. Identity is the one encoding every client accepts, so the
+	// upstream is asked for that and the client gets plain bytes.
+	outReq.Header.Set("Accept-Encoding", "identity")
 	// ContentLength is not a header net/http reads back out of outReq.Header
 	// -- it is this field, and copying it is what keeps a request with a
 	// known length from being resent as chunked, which the byte-identical
