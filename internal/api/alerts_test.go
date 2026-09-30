@@ -274,10 +274,10 @@ func TestALR004OpenAlertsExcludesResolvedAlerts(t *testing.T) {
 // refused the same way an unknown run status is (400, not 500 or a silent
 // empty page).
 func TestALR003AlertsRoute(t *testing.T) {
-	listening, _ := testServerWithAlerts(t)
+	listening, _, cookie := testServerWithAlerts(t)
 
 	t.Run("serves a page of alerts", func(t *testing.T) {
-		a := get(t, listening.URL, "/api/v1/alerts")
+		a := get(t, listening.URL, "/api/v1/alerts", cookie)
 		if a.status != http.StatusOK {
 			t.Fatalf("GET /api/v1/alerts = %d, want 200: %s", a.status, a.body)
 		}
@@ -289,7 +289,7 @@ func TestALR003AlertsRoute(t *testing.T) {
 	})
 
 	t.Run("filters by event_type", func(t *testing.T) {
-		a := get(t, listening.URL, "/api/v1/alerts?event_type=ledger_drift_detected")
+		a := get(t, listening.URL, "/api/v1/alerts?event_type=ledger_drift_detected", cookie)
 		if a.status != http.StatusOK {
 			t.Fatalf("GET .../alerts?event_type=ledger_drift_detected = %d: %s", a.status, a.body)
 		}
@@ -303,21 +303,21 @@ func TestALR003AlertsRoute(t *testing.T) {
 	})
 
 	t.Run("an unrecognised event_type is a 400", func(t *testing.T) {
-		a := get(t, listening.URL, "/api/v1/alerts?event_type=run_registered")
+		a := get(t, listening.URL, "/api/v1/alerts?event_type=run_registered", cookie)
 		if a.status != http.StatusBadRequest {
 			t.Fatalf("GET .../alerts?event_type=run_registered = %d, want 400: %s", a.status, a.body)
 		}
 	})
 
 	t.Run("a non-GET method is refused before it reaches the handler", func(t *testing.T) {
-		a := do(t, http.MethodPost, listening.URL+"/api/v1/alerts", "")
+		a := do(t, http.MethodPost, listening.URL+"/api/v1/alerts", "", cookie)
 		if a.status != http.StatusMethodNotAllowed {
 			t.Fatalf("POST /api/v1/alerts = %d, want 405: %s", a.status, a.body)
 		}
 	})
 
 	t.Run("limit is capped like every other page", func(t *testing.T) {
-		a := get(t, listening.URL, "/api/v1/alerts?limit=100000")
+		a := get(t, listening.URL, "/api/v1/alerts?limit=100000", cookie)
 		if a.status != http.StatusOK {
 			t.Fatalf("GET .../alerts?limit=100000 = %d: %s", a.status, a.body)
 		}
@@ -332,20 +332,26 @@ func TestALR003AlertsRoute(t *testing.T) {
 // testServerWithAlerts is testServer plus six seeded alert events, for the
 // HTTP-layer cases that only need alerts to exist and do not need to name
 // individual event_ids.
-func testServerWithAlerts(t *testing.T) (*httptest.Server, *proofScenario) {
+func testServerWithAlerts(t *testing.T) (*httptest.Server, *proofScenario, *http.Cookie) {
 	t.Helper()
 	owner, _, readerDSN := migrated(t)
 	seedAlerts(t, owner, 3)
 	store, _ := readStore(t, readerDSN)
+	authStore := testAuthStore(t)
 
 	s := newProofScenario(t, proofOptions{})
-	srv, err := NewServer(ServerConfig{Store: store, Prover: s.prover(t)})
+	path := writeManagedSettings(t, denyingManagedSettingsJSON)
+	srv, err := NewServer(ServerConfig{
+		Store: store, Prover: s.prover(t),
+		AuthStore: authStore, WebAuthn: testWebAuthnConfig, ManagedSettingsPath: path,
+	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
 	listening := httptest.NewServer(srv)
 	t.Cleanup(listening.Close)
-	return listening, s
+	cookie := signInTestUser(t, listening.URL, authStore)
+	return listening, s, cookie
 }
 
 // memberString reads a string member of an event.Fields result, failing

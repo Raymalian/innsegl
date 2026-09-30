@@ -156,16 +156,20 @@ func (a *AuthStore) UserByID(ctx context.Context, userID string) (AuthUser, erro
 	return u, nil
 }
 
-// DeleteUser removes a user with no passkey — CompleteEnrolment's own
-// cleanup when a registration ceremony never finishes. Never called for a
-// user with a passkey: there is no "remove a signed-in user" flow, per
-// ADR-0062's scope.
-func (a *AuthStore) DeleteUser(ctx context.Context, userID string) error {
-	_, err := a.pool.Exec(ctx, `DELETE FROM innsegl_auth.users WHERE user_id = $1`, userID)
-	if err != nil {
-		return fmt.Errorf("api: deleting user %s: %w", userID, err)
+// EnrolmentOpen reports whether the first-enrolment (or recovery) door is
+// open: true whenever no passkey exists anywhere in this deployment.
+// ADR-0062: "Recovery ... re-runs first-user enrolment" — this is the SAME
+// door, not a second one, because it is the same question either way, "does
+// a passkey exist yet". A stale, passkey-less user row from an abandoned
+// ceremony does not close it; CreateUser mints a fresh user_id each time
+// this reopens rather than reusing one.
+func (a *AuthStore) EnrolmentOpen(ctx context.Context) (bool, error) {
+	var anyPasskey bool
+	if err := a.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM innsegl_auth.passkeys)`).Scan(&anyPasskey); err != nil {
+		return false, fmt.Errorf("api: checking whether enrolment is open: %w", err)
 	}
-	return nil
+	return !anyPasskey, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -231,25 +235,6 @@ func (a *AuthStore) PasskeysByUser(ctx context.Context, userID string) ([]webaut
 		return nil, fmt.Errorf("api: listing passkeys for user %s: %w", userID, err)
 	}
 	return out, nil
-}
-
-// PasskeyOwner resolves a credential id (the WebAuthn assertion's own
-// rawID/userHandle) to the user it belongs to, for discoverable login — the
-// handler go-webauthn's FinishDiscoverableLogin calls to find out who is
-// signing in before it has a username to ask for.
-func (a *AuthStore) PasskeyOwner(ctx context.Context, credentialID []byte) (userID string, cred webauthn.Credential, err error) {
-	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(credentialID)
-	row := a.pool.QueryRow(ctx,
-		`SELECT user_id, credential, attestation_format FROM innsegl_auth.passkeys WHERE credential_id = $1`,
-		encoded)
-	userID, cred, serr := scanPasskeyUser(row)
-	if errors.Is(serr, pgx.ErrNoRows) {
-		return "", webauthn.Credential{}, ErrPasskeyNotFound
-	}
-	if serr != nil {
-		return "", webauthn.Credential{}, fmt.Errorf("api: looking up a passkey: %w", serr)
-	}
-	return userID, cred, nil
 }
 
 // UpdatePasskey persists the credential go-webauthn returned from a
