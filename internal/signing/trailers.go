@@ -446,27 +446,7 @@ func CommitMessage(p AuthorPolicy, c Commit) (string, error) {
 	if err := p.CheckAuthor(c.AuthorEmail); err != nil {
 		return "", err
 	}
-	trailers, err := c.Claim.Trailers()
-	if err != nil {
-		return "", err
-	}
-	body, join, err := prepareMessage(c.Message)
-	if err != nil {
-		return "", err
-	}
-
-	var b strings.Builder
-	b.WriteString(body)
-	if !join {
-		// The trailer block opens its own paragraph. Git only reads a group
-		// of lines as trailers when a blank line precedes it.
-		b.WriteString("\n")
-	}
-	for _, t := range trailers {
-		b.WriteString(t.String())
-		b.WriteString("\n")
-	}
-	return b.String(), nil
+	return PlaceTrailers(c.Claim, c.Message)
 }
 
 // normalizeMessage strips leading blank lines and trailing whitespace and
