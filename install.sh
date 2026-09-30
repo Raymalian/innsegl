@@ -420,9 +420,11 @@ def install_flags(obj):
     obj["allowManagedHooksOnly"] = True
     # The harness's own co-author trailer is an identity claim I6 admits from
     # no source, so a commit carrying it is refused; not writing it spares
-    # every agent a refused first commit.
+    # every agent a refused first commit. An empty string, measured
+    # 2026-09-30: `false` makes Claude Code discard the WHOLE settings file,
+    # silently — gateway, hook and sandbox with it.
     attribution = obj.setdefault("attribution", {})
-    attribution["commit"] = False
+    attribution["commit"] = ""
     perms = obj.setdefault("permissions", {})
     perms["disableBypassPermissionsMode"] = "disable"
 
@@ -432,7 +434,7 @@ def uninstall_flags(obj):
         obj.pop("allowManagedHooksOnly", None)
     attribution = obj.get("attribution")
     if isinstance(attribution, dict):
-        if attribution.get("commit") is False:
+        if attribution.get("commit") == "":
             attribution.pop("commit", None)
         if attribution:
             obj["attribution"] = attribution

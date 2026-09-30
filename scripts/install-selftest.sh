@@ -280,7 +280,7 @@ if [ "$rc2" -eq 0 ] \
    && [ "$(check json-equal "$ms2" env "$expected_env2")" = ok ] \
    && [ "$(check json-equal "$ms2" hooks "$expected_hooks2")" = ok ] \
    && [ "$(check json-equal "$ms2" allowManagedHooksOnly true)" = ok ] \
-   && [ "$(check json-equal "$ms2" attribution.commit false)" = ok ] \
+   && [ "$(check json-equal "$ms2" attribution.commit '""')" = ok ] \
    && [ "$(check json-equal "$ms2" permissions.disableBypassPermissionsMode '"disable"')" = ok ] \
    && [ "$(check json-equal "$ms2" sandbox "$expected_sandbox2")" = ok ] \
    && [ "$(backup_count "$home2" managed-settings.json)" -eq 0 ]; then
