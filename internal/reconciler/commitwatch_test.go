@@ -430,6 +430,16 @@ func TestCommitWatchNeverAlertsOnWhatItCannotRead(t *testing.T) {
 			},
 			plant: true,
 		},
+		{
+			// Neither a plain string nor a content-block array: resultText's
+			// own "neither shape" refusal.
+			name: "result is neither a string nor content blocks",
+			body: map[string]any{
+				"tool": "Bash", "input": map[string]any{"command": bypassCommand},
+				"result_observed": true, "result": 42,
+			},
+			plant: true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -512,5 +522,186 @@ func TestCommitWatchIsOffAndSaysSoWhenNotConfigured(t *testing.T) {
 	}
 	if result.CommitWatch.Enabled {
 		t.Fatal("CommitWatch reported itself enabled with no CommitWatchConfig given")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The append itself: refused, answered oddly, or taken by the default sink.
+// Drift's own drifterrorpaths_test.go proves the identical shapes for its
+// pass; these hold the same discipline for this one.
+// ---------------------------------------------------------------------------
+
+// plantUnsignedCommit seeds a run and a git-commit Bash tool call whose
+// result shows a commit, with NO commit_recorded for it — the one shape this
+// pass exists to alert on — and returns the ledger, the body directory and
+// the tool call's own event id.
+func plantUnsignedCommit(t *testing.T) (m *memLedger, logDir, toolCallID string) {
+	t.Helper()
+	const runID = "run-cmt-append"
+	m = newMemLedger(rebaseClock)
+	seedRun(t, m, runID)
+	logDir = t.TempDir()
+	toolCallID = commitWatchPlant(t, m, logDir, runID, bypassCommand,
+		"[main abc1234] innsegl commitwatch test", false)
+	return m, logDir, toolCallID
+}
+
+// TestCommitWatchAlertIsStillRaisedWhenTheLedgerRefusesTheAppend is I3 held
+// against this pass: an alert nobody can record is still an alert somebody
+// must see.
+func TestCommitWatchAlertIsStillRaisedWhenTheLedgerRefusesTheAppend(t *testing.T) {
+	m, logDir, toolCallID := plantUnsignedCommit(t)
+	m.failOn = event.EventTypeLedgerDriftDetected
+
+	var alerts []reconciler.CommitWatchFinding
+	r, err := reconciler.New(reconciler.Config{
+		Ledger: m, Appender: m, Repos: &fakeRepos{},
+		Log: &fakeLog{entries: map[string]reconciler.LogEntry{}}, TrustDomain: testTrustDomain,
+		Now: rebaseClock, Alert: func(context.Context, reconciler.Finding) {},
+		Observe: func(reconciler.Result, error) {},
+		CommitWatch: &reconciler.CommitWatchConfig{
+			LogDir: logDir,
+			Alert:  func(_ context.Context, f reconciler.CommitWatchFinding) { alerts = append(alerts, f) },
+		},
+	})
+	if err != nil {
+		t.Fatalf("reconciler.New: %v", err)
+	}
+	result, err := r.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.CommitWatch.Unsigned != 1 {
+		t.Fatalf("unsigned %d, want 1: %+v", result.CommitWatch.Unsigned, result.CommitWatch.Findings)
+	}
+	if len(result.CommitWatch.Appended) != 0 {
+		t.Fatalf("Appended = %v, want none — the ledger refused the append",
+			result.CommitWatch.Appended)
+	}
+	if len(alerts) != 1 {
+		t.Fatalf("the operator sink saw %d alerts, want 1", len(alerts))
+	}
+	if alerts[0].ToolCallEventID != toolCallID {
+		t.Fatalf("the finding names tool call %s, want %s", alerts[0].ToolCallEventID, toolCallID)
+	}
+	if !strings.Contains(alerts[0].Detail, "could not be appended") {
+		t.Fatalf("the finding does not say the append was refused: %q", alerts[0].Detail)
+	}
+}
+
+// TestCommitWatchAlertThatComesBackAsAnotherEventIsReportedNotCounted reuses
+// drifterrorpaths_test.go's own wrongReply fake: a ledger that answers an
+// append with something else, the way a chain another writer got to first
+// would.
+func TestCommitWatchAlertThatComesBackAsAnotherEventIsReportedNotCounted(t *testing.T) {
+	m, logDir, toolCallID := plantUnsignedCommit(t)
+
+	var alerts []reconciler.CommitWatchFinding
+	r, err := reconciler.New(reconciler.Config{
+		Ledger: m,
+		Appender: &wrongReply{reply: event.Fields{
+			event.FieldEventType:      event.EventTypeRunRetired,
+			event.FieldEventID:        "01a05343-a4b4-748c-8b65-659c43a7a3d3",
+			event.FieldIdempotencyKey: reconciler.LedgerDriftKey(toolCallID),
+		}},
+		Repos: &fakeRepos{}, Log: &fakeLog{entries: map[string]reconciler.LogEntry{}},
+		TrustDomain: testTrustDomain, Now: rebaseClock,
+		Alert: func(context.Context, reconciler.Finding) {}, Observe: func(reconciler.Result, error) {},
+		CommitWatch: &reconciler.CommitWatchConfig{
+			LogDir: logDir,
+			Alert:  func(_ context.Context, f reconciler.CommitWatchFinding) { alerts = append(alerts, f) },
+		},
+	})
+	if err != nil {
+		t.Fatalf("reconciler.New: %v", err)
+	}
+	result, err := r.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(result.CommitWatch.Appended) != 0 {
+		t.Fatalf("an append that came back as a run_retired was counted as written: %v",
+			result.CommitWatch.Appended)
+	}
+	if len(alerts) != 1 || !strings.Contains(alerts[0].Detail, "names a run_retired") {
+		t.Fatalf("the finding does not say what came back: %+v", alerts)
+	}
+}
+
+// TestCommitWatchDefaultAlertSinkIsExercised is the same discipline
+// TestTheDefaultDriftSinkIsExercisedByEveryFindingShape holds for drift.go's
+// own default sink.
+func TestCommitWatchDefaultAlertSinkIsExercised(t *testing.T) {
+	m, logDir, _ := plantUnsignedCommit(t)
+	r, err := reconciler.New(reconciler.Config{
+		Ledger: m, Appender: m, Repos: &fakeRepos{},
+		Log: &fakeLog{entries: map[string]reconciler.LogEntry{}}, TrustDomain: testTrustDomain,
+		Now: rebaseClock, Alert: func(context.Context, reconciler.Finding) {},
+		Observe: func(reconciler.Result, error) {},
+		// No Alert: the default sink.
+		CommitWatch: &reconciler.CommitWatchConfig{LogDir: logDir},
+	})
+	if err != nil {
+		t.Fatalf("reconciler.New: %v", err)
+	}
+	result, err := r.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.CommitWatch.Unsigned != 1 {
+		t.Fatalf("the default-sink cycle found %d, want 1", result.CommitWatch.Unsigned)
+	}
+}
+
+// TestCommitWatchReadsAContentBlockArrayResult proves resultText's other
+// shape: a tool_result content array (rather than the ordinary bare
+// string), of which only `{"type":"text",...}` blocks contribute, and the
+// commit-summary line may span more than one of them.
+func TestCommitWatchReadsAContentBlockArrayResult(t *testing.T) {
+	const runID = "run-cmt-blocks"
+	m := newMemLedger(rebaseClock)
+	seedRun(t, m, runID)
+	logDir := t.TempDir()
+
+	inputRaw, err := json.Marshal(map[string]any{"command": bypassCommand})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultRaw, err := json.Marshal([]map[string]any{
+		{"type": "text", "text": "[main abc1234] innsegl "},
+		{"type": "text", "text": "commitwatch test"},
+		{"type": "image", "source": map[string]any{"data": "irrelevant"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"tool": "Bash", "input": json.RawMessage(inputRaw),
+		"result_observed": true, "result": json.RawMessage(resultRaw),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := plantCommitWatchBody(t, logDir, runID, raw)
+	if _, aerr := m.Append(context.Background(), event.Fields{
+		event.FieldSchemaVersion:  event.SchemaVersion,
+		event.FieldEventType:      event.EventTypeToolCall,
+		event.FieldSource:         event.SourceMCP,
+		event.FieldRunID:          runID,
+		event.FieldSpiffeID:       spiffeIDFor(runID),
+		event.FieldIdempotencyKey: "tool/" + runID + "/" + digest[7:19],
+		event.FieldToolName:       "Bash",
+		event.FieldPayloadDigest:  digest,
+	}); aerr != nil {
+		t.Fatalf("seed tool_call: %v", aerr)
+	}
+
+	report := runCommitWatchPass(t, m, logDir)
+	if report.Checked != 1 {
+		t.Errorf("checked %d, want 1", report.Checked)
+	}
+	if report.Unsigned != 1 {
+		t.Errorf("unsigned %d, want 1 — the commit-summary line must be read out of a "+
+			"content-block array too: %+v", report.Unsigned, report.Findings)
 	}
 }
