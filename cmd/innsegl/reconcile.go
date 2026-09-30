@@ -576,8 +576,9 @@ func renderReconcileResult(result reconciler.Result) string {
 			"made without a signature is not being looked for\n", envObserveBodyDir)
 	}
 	if result.Landing.Enabled {
-		fmt.Fprintf(&b, "landing: %d checked  %d landed  %d signed, not landed  %d not checked\n",
-			result.Landing.Checked, result.Landing.Landed,
+		fmt.Fprintf(&b, "landing: %d checked  %d landed  %d rewritten by a merge  "+
+			"%d signed, not landed  %d not checked\n",
+			result.Landing.Checked, result.Landing.Landed, result.Landing.Rewritten,
 			result.Landing.NotLanded, result.Landing.NotChecked)
 	} else {
 		fmt.Fprintf(&b, "landing: OFF\n")

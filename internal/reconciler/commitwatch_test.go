@@ -705,3 +705,40 @@ func TestCommitWatchReadsAContentBlockArrayResult(t *testing.T) {
 			"content-block array too: %+v", report.Unsigned, report.Findings)
 	}
 }
+
+// A tool call that is not Bash is not a git commit: it is not a commit the
+// pass failed to check. Measured live, every Write, Read and Agent call was
+// counted unchecked, burying the one number that means something.
+func TestCommitWatchDoesNotCountAToolThatCannotCommitAsUnchecked(t *testing.T) {
+	const runID = "run-commit-watch-write"
+	m := newMemLedger(rebaseClock)
+	seedRun(t, m, runID)
+	logDir := t.TempDir()
+	raw, err := json.Marshal(map[string]any{
+		"tool":            "Write",
+		"input":           map[string]string{"file_path": "/workspace/example-repo/a.txt", "content": "x"},
+		"result_observed": true,
+		"result":          "ok",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := plantCommitWatchBody(t, logDir, runID, raw)
+	if _, err := m.Append(context.Background(), event.Fields{
+		event.FieldSchemaVersion:  event.SchemaVersion,
+		event.FieldEventType:      event.EventTypeToolCall,
+		event.FieldSource:         event.SourceMCP,
+		event.FieldRunID:          runID,
+		event.FieldSpiffeID:       spiffeIDFor(runID),
+		event.FieldIdempotencyKey: "tool/" + runID + "/" + digest[7:19],
+		event.FieldToolName:       "Write",
+		event.FieldPayloadDigest:  digest,
+	}); err != nil {
+		t.Fatalf("seed tool_call: %v", err)
+	}
+
+	report := runCommitWatchPass(t, m, logDir)
+	if report.Unchecked != 0 || report.Checked != 0 {
+		t.Fatalf("CommitWatch = %+v, want a Write call neither checked nor unchecked", report)
+	}
+}

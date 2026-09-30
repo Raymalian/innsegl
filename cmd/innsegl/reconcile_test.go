@@ -263,11 +263,11 @@ func validReconcileArgs(t *testing.T) []string {
 func TestReconcileReportNamesTheCommitPathPasses(t *testing.T) {
 	on := renderReconcileResult(reconciler.Result{
 		CommitWatch: reconciler.CommitWatchReport{Enabled: true, Checked: 4, Signed: 3, Unsigned: 1},
-		Landing:     reconciler.LandingReport{Enabled: true, Checked: 3, Landed: 1, NotLanded: 2},
+		Landing:     reconciler.LandingReport{Enabled: true, Checked: 4, Landed: 1, NotLanded: 2, Rewritten: 1},
 	})
 	for _, want := range []string{
 		"commits: 4 checked  3 signed  1 UNSIGNED  0 unchecked",
-		"landing: 3 checked  1 landed  2 signed, not landed  0 not checked",
+		"landing: 4 checked  1 landed  1 rewritten by a merge  2 signed, not landed  0 not checked",
 	} {
 		if !strings.Contains(on, want) {
 			t.Errorf("report lacks %q:\n%s", want, on)

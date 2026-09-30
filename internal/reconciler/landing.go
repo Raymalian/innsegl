@@ -98,8 +98,12 @@ type LandingReport struct {
 	// Checked is how many commit_recorded events this cycle considered.
 	Checked int
 	// Landed, NotLanded and NotChecked partition Checked.
-	Landed     int
-	NotLanded  int
+	Landed    int
+	NotLanded int
+	// Rewritten counts commits a merge or rebase rewrote: superseded by a
+	// later commit_recorded for the same patch_id, so they landed as a new
+	// SHA (ADR-0047).
+	Rewritten  int
 	NotChecked int
 	// Findings is one entry per NotLanded or NotChecked commit — a landed
 	// commit gets no entry, the quiet-cycle convention every other pass in
@@ -146,9 +150,12 @@ type landingClaim struct {
 type landingView struct {
 	records []landingRecord
 	claims  []landingClaim
+	// superseded holds every commit_recorded event id a later record's
+	// `supersedes` names.
+	superseded map[string]bool
 }
 
-func newLandingView() *landingView { return &landingView{} }
+func newLandingView() *landingView { return &landingView{superseded: map[string]bool{}} }
 
 // observe folds one event in. Called for every event, like the other three
 // readers of the same walk.
@@ -156,6 +163,9 @@ func (v *landingView) observe(record event.Fields) {
 	runID := recordString(record, event.FieldRunID)
 	switch recordString(record, event.FieldEventType) {
 	case event.EventTypeCommitRecorded:
+		if from := recordString(record, event.FieldSupersedes); from != "" {
+			v.superseded[from] = true
+		}
 		eventID := recordString(record, event.FieldEventID)
 		sha := recordString(record, event.FieldCommitSHA)
 		repo := recordString(record, event.FieldRepo)
@@ -326,6 +336,10 @@ func (r *Reconciler) checkLanding(ctx context.Context, view *landingView, cfg *L
 	}
 	checker, canCheckRepo := r.cfg.Repos.(landingReachabilityChecker)
 
+	// A record a rebase pass superseded (doc 02 §2 `supersedes`, ADR-0047)
+	// was rewritten by a merge and landed as the superseding record's SHA:
+	// not lost. Only the superseding record's own naming counts; identical
+	// commits sharing a patch_id are not rewrites of each other.
 	for _, rec := range view.records {
 		report.Checked++
 		finding := LandingFinding{
@@ -356,6 +370,10 @@ func (r *Reconciler) checkLanding(ctx context.Context, view *landingView, cfg *L
 			finding.Outcome = LandingLanded
 			report.Landed++
 			continue // the quiet case: no Finding entry, matching every other pass here.
+
+		case repoChecked && !reachable && view.superseded[rec.eventID]:
+			report.Rewritten++
+			continue // landed as the SHA that superseded it: nothing to report.
 
 		case repoChecked && !reachable:
 			finding.Outcome = LandingNotLanded

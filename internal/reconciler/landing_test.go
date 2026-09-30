@@ -648,3 +648,42 @@ func TestCommitReachableAgainstARealRepository(t *testing.T) {
 		t.Fatal("CommitReachable accepted a malformed commit sha")
 	}
 }
+
+// A commit a merge rewrote did land, as a new SHA: the rebase pass records
+// that as a later commit_recorded whose `supersedes` names the original. Measured on a live
+// chain, 100 of 104 "signed, not landed" were exactly this. Only a signed
+// commit that nothing supersedes and nothing can reach is not landed.
+func TestLandingCountsARewrittenCommitAsRewrittenNotLost(t *testing.T) {
+	f := newLandingFixture(t)
+	first := seedCommitRecorded(t, f.ledger, landingRunID, landingRepo, landingTree, landingCommit, landingRekorUUID1)
+	const rewritten = "2222222222222222222222222222222222222222"
+	if _, err := f.ledger.Append(context.Background(), event.Fields{
+		event.FieldSchemaVersion:  event.SchemaVersion,
+		event.FieldEventType:      event.EventTypeCommitRecorded,
+		event.FieldSource:         event.SourceReconciler,
+		event.FieldRunID:          landingRunID,
+		event.FieldSpiffeID:       spiffeIDFor(landingRunID),
+		event.FieldIdempotencyKey: "rebase/recorded/" + rewritten,
+		event.FieldRepo:           landingRepo,
+		event.FieldTreeHash:       landingTree,
+		event.FieldPatchID:        landingPatchID,
+		event.FieldCommitSHA:      rewritten,
+		event.FieldRekorEntryUUID: landingRekorUUID1,
+		event.FieldRekorLogIndex:  int64(1),
+		event.FieldIntentEventID:  str(first, event.FieldIntentEventID),
+		event.FieldSupersedes:     str(first, event.FieldEventID),
+	}); err != nil {
+		t.Fatalf("seed the rewrite's commit_recorded: %v", err)
+	}
+	f.repos.setReachable(landingRepo, landingCommit, false)
+	f.repos.setReachable(landingRepo, rewritten, true)
+
+	r := f.build(t, func(cfg *reconciler.Config) { cfg.Landing = &reconciler.LandingConfig{} })
+	result, err := r.Reconcile(t.Context())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := result.Landing; got.NotLanded != 0 || got.Rewritten != 1 || got.Landed != 1 {
+		t.Fatalf("Landing = %+v, want 1 rewritten, 1 landed, 0 not landed", got)
+	}
+}
