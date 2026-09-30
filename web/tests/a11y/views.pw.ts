@@ -99,8 +99,14 @@ test.describe("FE-009: keyboard-only walkthrough, all six views", () => {
   test("skip link moves focus into the main landmark", async ({ page }) => {
     await installApiMocks(page);
     await page.goto("/");
+    // RM-260/RM-261 (ADR-0062): AuthGate's own session check is an async
+    // gate ahead of the shell now, so "the skip link exists" is waited for
+    // rather than assumed the instant navigation resolves — exactly the
+    // margin a real reader's own reaction time already gives the page.
+    const skipLink = page.getByText("Skip to main content");
+    await expect(skipLink).toBeVisible();
     await page.keyboard.press("Tab");
-    await expect(page.getByText("Skip to main content")).toBeFocused();
+    await expect(skipLink).toBeFocused();
     await page.keyboard.press("Enter");
     const main = page.locator("#main");
     await expect(main).toBeFocused();

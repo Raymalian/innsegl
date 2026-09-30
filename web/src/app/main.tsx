@@ -13,6 +13,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
+import { AuthGate } from "./AuthGate";
 import { StringsProvider } from "./i18n";
 import "./index.css";
 import { applyPreference, readPreference } from "./theme";
@@ -28,7 +29,16 @@ if (container === null) {
 createRoot(container).render(
   <StrictMode>
     <StringsProvider>
-      <App views={views} heartbeat={<OverviewHeartbeat />} alerts={<HeaderAlerts />} />
+      <AuthGate>
+        {(account) => (
+          <App
+            views={views}
+            heartbeat={<OverviewHeartbeat />}
+            alerts={<HeaderAlerts />}
+            account={account}
+          />
+        )}
+      </AuthGate>
     </StringsProvider>
   </StrictMode>,
 );
