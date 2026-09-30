@@ -7,7 +7,8 @@
 # the same Postgres image as the ledger itself — so the only tool it needs is
 # the psql that already ships there.
 #
-# It provisions BOTH of doc 05 §1's non-owner roles, and probes each one:
+# It provisions doc 05 §1's non-owner roles, plus RM-260/RM-261's auth-writer
+# (ADR-0062), and probes each one:
 #
 #   1. applies the SHIPPED migrations from migrations/*.sql, recording each one
 #      in innsegl.schema_migrations exactly as internal/ledger's own runner
@@ -25,8 +26,13 @@
 #      credential can do the backup's whole job and still not write the ledger.
 #   5. runs verify-reader-role.sh, which connects AS the reader and does the
 #      same thing step 3 does.
+#   8. creates the AUTH-WRITER role (RM-260/RM-261) and applies
+#      internal/api/authwriter.sql to it — full CRUD on innsegl_auth, nothing
+#      on innsegl, the same mount-not-copy discipline as step 4's.
+#   9. runs verify-authwriter-role.sh, which asks the server the same
+#      question step 5 does, with the expectations reversed.
 #
-# Steps 3 and 5 are the point. internal/api/readonly.go is the model:
+# Steps 3, 5 and 9 are the point. internal/api/readonly.go is the model:
 #
 #     "The assertion matters more than the provisioning. A role is provisioned
 #      once and then lives in somebody's deployment; a later GRANT by an
@@ -79,6 +85,12 @@ READER_ROLE="${INNSEGL_READER_ROLE:-innsegl_reader}"
 BACKUP_ROLE="${INNSEGL_BACKUP_ROLE:-innsegl_backup}"
 : "${INNSEGL_BACKUP_PASSWORD:?db-init: INNSEGL_BACKUP_PASSWORD must be set}"
 
+# RM-260/RM-261 (ADR-0062) — api.AuthWriterRole. Full CRUD on innsegl_auth,
+# nothing on innsegl; the opposite grant from the reader's. Like the other
+# three, a default and not a protected string.
+AUTHWRITER_ROLE="${INNSEGL_AUTHWRITER_ROLE:-innsegl_authwriter}"
+: "${INNSEGL_AUTHWRITER_PASSWORD:?db-init: INNSEGL_AUTHWRITER_PASSWORD must be set}"
+
 # internal/api/readonly.sql, reached BY MOUNT and not by copy.
 #
 # THIS IS THE WHOLE OF HOW THE READER'S GRANTS GET HERE, and it is the same
@@ -98,6 +110,9 @@ BACKUP_ROLE="${INNSEGL_BACKUP_ROLE:-innsegl_backup}"
 # mistranslation. See apply_readonly_sql below.
 READONLY_SQL="${INNSEGL_READONLY_SQL:-/innsegl/api/readonly.sql}"
 
+# internal/api/authwriter.sql, reached BY MOUNT for the identical reason.
+AUTHWRITER_SQL="${INNSEGL_AUTHWRITER_SQL:-/innsegl/api/authwriter.sql}"
+
 # The same grammar internal/api/readonly.go accepts. A role name reaches SQL as
 # an identifier and psql quotes it, but a name this pattern rejects is a
 # configuration mistake worth catching where it is made.
@@ -111,11 +126,15 @@ check_role_name() {
 }
 check_role_name "${ROLE}"
 check_role_name "${READER_ROLE}"
+check_role_name "${AUTHWRITER_ROLE}"
 if [ "${ROLE}" = "${READER_ROLE}" ]; then
   fail "the append-only role and the read-only role are both \"${ROLE}\"; one role cannot be both"
 fi
 if [ "${READER_ROLE}" = "${PGUSER}" ]; then
   fail "the read-only role is the schema OWNER (\"${PGUSER}\"). readonly.sql cannot make an owner read-only: it is refused by the append-only TRIGGER (IN001) and never by the ACL, which is the exact confusion verify-reader-role.sh exists to catch"
+fi
+if [ "${AUTHWRITER_ROLE}" = "${ROLE}" ] || [ "${AUTHWRITER_ROLE}" = "${READER_ROLE}" ]; then
+  fail "the auth-writer role \"${AUTHWRITER_ROLE}\" collides with another role this script provisions; RM-260/RM-261 requires it hold neither the appender's nor the reader's grants"
 fi
 
 # psql, with errors fatal and nothing read from a user profile.
@@ -305,4 +324,51 @@ sh "${HERE}/verify-reader-role.sh"
 #    a service nobody is watching. OPS-043.
 # ---------------------------------------------------------------------------
 log "verifying the backup credential against the server"
-exec sh "${HERE}/verify-backup-role.sh"
+sh "${HERE}/verify-backup-role.sh"
+
+# ---------------------------------------------------------------------------
+# 8. RM-260/RM-261 (ADR-0062) — the auth-writer role. Full CRUD on
+#    innsegl_auth, nothing on innsegl: the opposite grant from the reader's,
+#    applied the SAME way (mount, not copy — see AUTHWRITER_SQL above).
+# ---------------------------------------------------------------------------
+[ -f "${AUTHWRITER_SQL}" ] || fail "no auth-writer grants at ${AUTHWRITER_SQL} (\$INNSEGL_AUTHWRITER_SQL). deploy/compose/innsegl.yml mounts internal/api/authwriter.sql there; a second copy of those GRANTs under deploy/ is the wrong fix"
+
+authwriter_exists="$(psql_owner -A -t -c "SELECT 1 FROM pg_roles WHERE rolname = '${AUTHWRITER_ROLE}'")"
+if [ -z "${authwriter_exists}" ]; then
+  authwriter_verb=CREATE
+  log "creating role ${AUTHWRITER_ROLE}"
+else
+  authwriter_verb=ALTER
+  log "role ${AUTHWRITER_ROLE} already exists; resetting its password and its grants"
+fi
+
+psql_owner -v pass="${INNSEGL_AUTHWRITER_PASSWORD}" -v role="${AUTHWRITER_ROLE}" <<SQL
+${authwriter_verb} ROLE :"role" LOGIN PASSWORD :'pass';
+SQL
+
+# apply_authwriter_sql is apply_readonly_sql's own translation, applied to
+# the other file — kept separate rather than parameterised, because the two
+# grant files are independent artefacts owned by the same Go package and a
+# shared helper would be one more thing for a future %[3]s in either to have
+# to reason about correctly.
+apply_authwriter_sql() {
+  apply_role="$1"
+  grants="$(sed -e 's/%\[1\]s/:"role"/g' -e 's/%\[2\]s/:"db"/g' "${AUTHWRITER_SQL}")"
+  if printf '%s\n' "${grants}" | grep -Eq '%(\[|[A-Za-z])'; then
+    printf 'db-init: untranslated:\n%s\n' \
+      "$(printf '%s\n' "${grants}" | grep -En '%(\[|[A-Za-z])')" >&2
+    fail "${AUTHWRITER_SQL} still contains an fmt verb after translation. It is internal/api's file and it has changed shape; teach the sed in apply_authwriter_sql about the new verb rather than copying the GRANTs into deploy/, which is how the two would drift"
+  fi
+  printf '%s\n' "${grants}" |
+    psql_owner -v role="${apply_role}" -v db="${PGDATABASE}" -f -
+}
+
+log "applying ${AUTHWRITER_SQL} to ${AUTHWRITER_ROLE}"
+apply_authwriter_sql "${AUTHWRITER_ROLE}"
+
+# ---------------------------------------------------------------------------
+# 9. Ask the server about the auth-writer, for the same reason as steps 4
+#    and 6 — and the last check this script runs.
+# ---------------------------------------------------------------------------
+log "verifying the auth-writer credential against the server"
+exec sh "${HERE}/verify-authwriter-role.sh"

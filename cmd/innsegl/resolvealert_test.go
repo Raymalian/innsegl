@@ -194,7 +194,7 @@ func TestALR006ResolveAlertCommand(t *testing.T) {
 // same "real Postgres, never a mock" rule cmd/innsegl's other integration
 // cases already run under (see apiharness_test.go).
 func TestALR007ResolveAlertCommandAgainstARealLedger(t *testing.T) {
-	ownerDSN, _ := freshLedgerDB(t)
+	ownerDSN, _, _ := freshLedgerDB(t)
 	ctx := t.Context()
 
 	owner, err := ledger.Open(ctx, ownerDSN)

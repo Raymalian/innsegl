@@ -188,16 +188,63 @@ credentials mounted" is a fact you read back rather than a claim in a README.
 
 ---
 
-## What is not here
+## A third database role: `innsegl_authwriter`
 
-**Authentication.** Neither `innsegl-dashboard` nor `innsegl-api` authenticates
-anybody. `innsegl api` says so in its own `--help`, and doc 05 §3 puts
-`dashboard.innsegl.dev` behind Cloudflare Access — RM-062 (#70) is the issue
-that does it. Nothing here invents a scheme in the meantime, and both services
-publish on loopback only.
+RM-260/RM-261 (ADR-0062) put the dashboard and the read API behind a passkey
+session. Reading the ledger still goes through `innsegl_reader`, unchanged;
+signing in is a *separate* credential, on a *separate* pool inside the same
+`innsegl-api` process, so that a session lookup can never widen what the
+reader is allowed to do.
 
-What *is* enforced, and it is the half that survives a misconfigured proxy: the
-credential the query API holds **cannot write**, whoever reaches it. See
+Its grants are **`internal/api/authwriter.sql`** — mounted the same way
+`readonly.sql` is, for the same reason: `api.EnsureAuthWriterRole` `go:embed`s
+it, and `innsegl api` probes this credential too, at every start-up, before it
+will serve a request. The grant is the *opposite* shape from the reader's:
+full read/write on `innsegl_auth` (users, passkeys, sessions, auth events,
+one-time enrolment codes, pending WebAuthn ceremonies), and nothing at all on
+`innsegl` — no `SELECT`, even. `verify-authwriter-role.sh` asks the server
+both halves, the same way `verify-reader-role.sh` does for the other role.
+
+## Enrolling the first operator
+
+Nobody can open the dashboard until one passkey exists. ADR-0062's enrolment
+crux: the first enrolment (and its recovery, if the only passkey is ever
+lost) is **locked** until the container runtime's socket can be shown denied
+to a sandboxed shell — E18's build (`install.sh`). `innsegl api` checks that
+fact itself, on every enrolment request, by reading the managed-settings file
+the volume above mounts read-only; it does not trust a check run once at
+start-up.
+
+With that denial in place:
+
+1. Mint a one-time code, from a trusted host, holding the auth-writer DSN:
+
+   ```bash
+   docker compose -f deploy/compose/innsegl.yml exec innsegl-api \
+     innsegl admin-credential enrol-code -dsn "$INNSEGL_API_AUTH_DSN"
+   ```
+
+   The code is printed to stdout and nowhere else — it is single-use and
+   short-lived (fifteen minutes by default).
+
+2. Browse to **`http://localhost:8082`** — not `127.0.0.1:8082`: a WebAuthn
+   relying-party ID must be a domain, and `localhost` is the one this
+   reference deployment is configured for (`$INNSEGL_API_RP_ID`,
+   `$INNSEGL_API_RP_ORIGIN`).
+3. Enter a display name and the code, and create the passkey the platform
+   offers. The dashboard signs in immediately and every session after this
+   one is the ordinary "one passkey button" sign-in page.
+
+## What used to be here
+
+**Authentication.** Before ADR-0062, neither `innsegl-dashboard` nor
+`innsegl-api` authenticated anybody, and `innsegl api --help` said so; doc 05
+§3's Cloudflare Access (RM-062, #70) remains a *second*, independent door in
+front of this one, not a replacement for it — both services still publish on
+loopback only.
+
+What was, and still is, enforced independently of the session: the credential
+`innsegl-api` reads the ledger with **cannot write**, whoever reaches it. See
 "The other database role" above.
 
 ---

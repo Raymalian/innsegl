@@ -34,7 +34,7 @@ import (
 // else writes v2, so the position it names is its own. Any other arrangement
 // needs the operator to know a position before it exists.
 func TestLED035TheAttestationNamesThePositionItOccupies(t *testing.T) {
-	dsn, _ := freshLedgerDB(t)
+	dsn, _, _ := freshLedgerDB(t)
 	ctx := t.Context()
 	store := openLedgerForTest(t, dsn)
 
@@ -97,7 +97,7 @@ func TestLED035TheAttestationNamesThePositionItOccupies(t *testing.T) {
 // gives for making retirement idempotent in the database rather than in the
 // caller: a check and an append are two steps, and a crash fits between them.
 func TestLED036TheAttestationCanOnlyBeWrittenOnce(t *testing.T) {
-	dsn, _ := freshLedgerDB(t)
+	dsn, _, _ := freshLedgerDB(t)
 	ctx := t.Context()
 	store := openLedgerForTest(t, dsn)
 
@@ -158,7 +158,7 @@ func openLedgerForTest(t *testing.T, dsn string) *ledger.Store {
 // where events begin carrying the new version"; that is a fact about the chain
 // rather than about when this command was run, so the chain is asked.
 func TestLED040TheCutoverIsFoundWhenTheWritersWentFirst(t *testing.T) {
-	dsn, _ := freshLedgerDB(t)
+	dsn, _, _ := freshLedgerDB(t)
 	ctx := t.Context()
 	store := openLedgerForTest(t, dsn)
 

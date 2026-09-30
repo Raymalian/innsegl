@@ -40,6 +40,10 @@ export const en = {
       /** The header slot doc 06 §3.1 reserves for the anchoring heartbeat.
        * The heartbeat itself belongs to RM-044; the shell owns the landmark. */
       anchoring: "Anchoring",
+      /** RM-260/RM-261 (ADR-0062): the sign-out control beside ThemeToggle,
+       * in the header. */
+      signOut: "Sign out",
+      signOutWorking: "Signing out",
     },
     views: {
       overview: "Overview",

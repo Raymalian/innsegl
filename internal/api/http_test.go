@@ -9,12 +9,27 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"innsegl.dev/innsegl/internal/verify"
+	"innsegl.dev/innsegl/internal/webauthntest"
 )
+
+// newSoftAuthenticator wraps webauthntest.New for a *testing.T caller — the
+// software authenticator itself lives in internal/webauthntest so
+// cmd/innsegl's own integration tests (a different package, driving the
+// compiled binary over real HTTP) can share it rather than duplicate it.
+func newSoftAuthenticator(t *testing.T) *webauthntest.Authenticator {
+	t.Helper()
+	a, err := webauthntest.New()
+	if err != nil {
+		t.Fatalf("webauthntest.New: %v", err)
+	}
+	return a
+}
 
 // TC-API — the HTTP surface.
 //
@@ -23,20 +38,150 @@ import (
 // accepts a POST is one handler away from having one, so the refusal is at the
 // front door and applies to every path, including paths that do not exist.
 
+// testWebAuthnConfig is fixed rather than derived from the httptest server's
+// own (randomly ported, 127.0.0.1) address: nothing in this package drives a
+// real browser, so nothing ever collects a clientDataJSON naming the
+// httptest listener's own origin. What matters is that every test speaks the
+// SAME origin this config names — the software authenticator in
+// webauthntest_test.go asserts it, and a case that wants AUTH-004's refusal
+// deliberately asserts a different one.
+var testWebAuthnConfig = WebAuthnConfig{
+	RPID:          "localhost",
+	RPOrigin:      "http://localhost:8082",
+	RPDisplayName: "Innsegl (test)",
+}
+
+// testAuthStore opens an AuthStore on migratedWithAuth's auth-writer DSN —
+// TC-API's own "ask the server, never the Go source" discipline, applied to
+// the sign-in surface's credential the same way it already is to the
+// read-only one.
+func testAuthStore(t *testing.T) *AuthStore {
+	t.Helper()
+	_, _, _, authDSN := migratedWithAuth(t)
+	store, err := OpenAuthStore(context.Background(), authDSN)
+	if err != nil {
+		t.Fatalf("OpenAuthStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+	return store
+}
+
 func testServer(t *testing.T) (*httptest.Server, *proofScenario) {
+	t.Helper()
+	listening, scenario, _ := testServerConfigured(t,
+		filepath.Join(t.TempDir(), "absent-managed-settings.json"))
+	return listening, scenario
+}
+
+// testServerConfigured is testServer with the managed-settings path under
+// the caller's control — testServerWithSession uses a DENYING fixture so its
+// enrolment ceremony can complete; every other case uses an absent one (via
+// testServer), matching the default posture AUTH-002 measures separately.
+func testServerConfigured(t *testing.T, managedSettingsPath string) (*httptest.Server, *proofScenario, *AuthStore) {
 	t.Helper()
 	owner, _, readerDSN := migrated(t)
 	seed(t, owner, 3)
 	store, _ := readStore(t, readerDSN)
+	authStore := testAuthStore(t)
 
 	s := newProofScenario(t, proofOptions{})
-	srv, err := NewServer(ServerConfig{Store: store, Prover: s.prover(t)})
+	srv, err := NewServer(ServerConfig{
+		Store: store, Prover: s.prover(t),
+		AuthStore: authStore, WebAuthn: testWebAuthnConfig,
+		ManagedSettingsPath: managedSettingsPath,
+	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
 	listening := httptest.NewServer(srv)
 	t.Cleanup(listening.Close)
-	return listening, s
+	return listening, s, authStore
+}
+
+// denyingManagedSettingsJSON is a managed-settings.json CheckSocketDenial
+// reads as Denied — the fixture every test that needs a real, completed
+// enrolment ceremony uses, so the socket-denial gate (AUTH-002, tested on
+// its own in socketdenial_test.go) does not also gate every OTHER case that
+// merely needs a signed-in session to exercise ADR-0062's route gate.
+const denyingManagedSettingsJSON = `{
+	"sandbox": {
+		"enabled": true,
+		"allowUnsandboxedCommands": false,
+		"network": {"allowLocalBinding": true}
+	}
+}`
+
+// testServerWithSession is testServer plus a signed-in session, returned as
+// the *http.Cookie every gated request in a case needs to attach.
+func testServerWithSession(t *testing.T) (*httptest.Server, *proofScenario, *http.Cookie) {
+	t.Helper()
+	path := writeManagedSettings(t, denyingManagedSettingsJSON)
+	listening, scenario, authStore := testServerConfigured(t, path)
+	cookie := signInTestUser(t, listening.URL, authStore)
+	return listening, scenario, cookie
+}
+
+// signInTestUser runs a full enrolment ceremony over real HTTP against a
+// running server, using the software authenticator (webauthntest_test.go),
+// and returns the session cookie the server set. It mints its own one-time
+// code directly on authStore — the same AuthStore the running server holds —
+// rather than through the CLI, which cmd/innsegl's own tests cover.
+func signInTestUser(t *testing.T, baseURL string, authStore *AuthStore) *http.Cookie {
+	t.Helper()
+	_, cookie := enrolTestUser(t, baseURL, authStore)
+	return cookie
+}
+
+// enrolTestUser is signInTestUser, also returning the software authenticator
+// it enrolled — for a case (AUTH-004's replay) that needs to drive the SAME
+// enrolled authenticator through a second ceremony afterwards.
+func enrolTestUser(t *testing.T, baseURL string, authStore *AuthStore) (*webauthntest.Authenticator, *http.Cookie) {
+	t.Helper()
+	code, _, err := authStore.CreateEnrolmentCode(context.Background(), time.Minute)
+	if err != nil {
+		t.Fatalf("CreateEnrolmentCode: %v", err)
+	}
+
+	beginBody, err := json.Marshal(map[string]string{"display_name": "Test Operator", "code": code})
+	if err != nil {
+		t.Fatalf("encoding enrol/begin request: %v", err)
+	}
+	beginResp := do(t, http.MethodPost, baseURL+"/api/v1/auth/enrol/begin", string(beginBody))
+	if beginResp.status != http.StatusOK {
+		t.Fatalf("POST /api/v1/auth/enrol/begin: %d: %s", beginResp.status, beginResp.body)
+	}
+	var creation ceremonyResponse
+	if jerr := json.Unmarshal(beginResp.body, &creation); jerr != nil {
+		t.Fatalf("decoding enrol/begin response: %v: %s", jerr, beginResp.body)
+	}
+
+	auth := newSoftAuthenticator(t)
+	credentialBody, rerr := auth.Register(creation.CredentialCreation, testWebAuthnConfig.RPOrigin)
+	if rerr != nil {
+		t.Fatalf("Register: %v", rerr)
+	}
+	finishBody, err := json.Marshal(map[string]any{
+		"ceremony_id": creation.CeremonyID,
+		"credential":  json.RawMessage(credentialBody),
+	})
+	if err != nil {
+		t.Fatalf("encoding enrol/finish request: %v", err)
+	}
+	finishResp := do(t, http.MethodPost, baseURL+"/api/v1/auth/enrol/finish", string(finishBody))
+	if finishResp.status != http.StatusOK {
+		t.Fatalf("POST /api/v1/auth/enrol/finish: %d: %s", finishResp.status, finishResp.body)
+	}
+
+	for _, c := range finishResp.header["Set-Cookie"] {
+		parsed := (&http.Response{Header: http.Header{"Set-Cookie": {c}}}).Cookies()
+		for _, pc := range parsed {
+			if pc.Name == sessionCookieName {
+				return auth, pc
+			}
+		}
+	}
+	t.Fatal("enrol/finish set no session cookie")
+	return nil, nil
 }
 
 // answer is one HTTP response, already read and closed. The body is read here
@@ -47,7 +192,11 @@ type answer struct {
 	body   []byte
 }
 
-func do(t *testing.T, method, target, payload string) answer {
+// do issues one request. A trailing *http.Cookie — ADR-0062's session —
+// attaches to it; every case that predates #410 passes none, which is why
+// this is variadic rather than a new required parameter touching every
+// existing call site in this package.
+func do(t *testing.T, method, target, payload string, cookies ...*http.Cookie) answer {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
@@ -58,6 +207,11 @@ func do(t *testing.T, method, target, payload string) answer {
 	req, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
 		t.Fatalf("building %s %s: %v", method, target, err)
+	}
+	for _, c := range cookies {
+		if c != nil {
+			req.AddCookie(c)
+		}
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -75,9 +229,9 @@ func do(t *testing.T, method, target, payload string) answer {
 	return answer{status: resp.StatusCode, header: resp.Header, body: body}
 }
 
-func get(t *testing.T, base, path string) answer {
+func get(t *testing.T, base, path string, cookies ...*http.Cookie) answer {
 	t.Helper()
-	return do(t, http.MethodGet, base+path, "")
+	return do(t, http.MethodGet, base+path, "", cookies...)
 }
 
 func decodeBody(t *testing.T, a answer, into any) {
@@ -114,10 +268,10 @@ func TestAPI007EveryMutatingMethodIsRefusedOnEveryPath(t *testing.T) {
 
 // The read surface: every view answers, in JSON, uncacheable.
 func TestTheReadRoutesAnswerInJSONAndAreNeverCached(t *testing.T) {
-	srv, scenario := testServer(t)
+	srv, scenario, cookie := testServerWithSession(t)
 
 	t.Run("runs", func(t *testing.T) {
-		a := get(t, srv.URL, "/api/v1/runs?limit=2")
+		a := get(t, srv.URL, "/api/v1/runs?limit=2", cookie)
 		if a.status != http.StatusOK {
 			t.Fatalf("GET /api/v1/runs: %d", a.status)
 		}
@@ -146,7 +300,7 @@ func TestTheReadRoutesAnswerInJSONAndAreNeverCached(t *testing.T) {
 	t.Run("filters ride in the URL", func(t *testing.T) {
 		// FD §7: "every view's state (filters, selected run, verification
 		// input) lives in the URL".
-		a := get(t, srv.URL, "/api/v1/runs?agent_type=release-bot&limit=50")
+		a := get(t, srv.URL, "/api/v1/runs?agent_type=release-bot&limit=50", cookie)
 		var page RunPage
 		decodeBody(t, a, &page)
 		for _, r := range page.Runs {
@@ -161,7 +315,7 @@ func TestTheReadRoutesAnswerInJSONAndAreNeverCached(t *testing.T) {
 
 	t.Run("a malformed query is a bad request, not an empty page", func(t *testing.T) {
 		for _, q := range []string{"?status=retiredish", "?cursor=not-a-cursor", "?limit=zero"} {
-			a := get(t, srv.URL, "/api/v1/runs"+q)
+			a := get(t, srv.URL, "/api/v1/runs"+q, cookie)
 			if a.status != http.StatusBadRequest {
 				t.Errorf("GET /api/v1/runs%s returned %d, want 400", q, a.status)
 			}
@@ -169,7 +323,7 @@ func TestTheReadRoutesAnswerInJSONAndAreNeverCached(t *testing.T) {
 	})
 
 	t.Run("run detail", func(t *testing.T) {
-		a := get(t, srv.URL, "/api/v1/runs/run-000")
+		a := get(t, srv.URL, "/api/v1/runs/run-000", cookie)
 		if a.status != http.StatusOK {
 			t.Fatalf("GET /api/v1/runs/run-000: %d", a.status)
 		}
@@ -181,7 +335,7 @@ func TestTheReadRoutesAnswerInJSONAndAreNeverCached(t *testing.T) {
 	})
 
 	t.Run("an unknown run is 404", func(t *testing.T) {
-		a := get(t, srv.URL, "/api/v1/runs/run-nope")
+		a := get(t, srv.URL, "/api/v1/runs/run-nope", cookie)
 		if a.status != http.StatusNotFound {
 			t.Fatalf("GET an unknown run returned %d, want 404", a.status)
 		}
@@ -193,7 +347,7 @@ func TestTheReadRoutesAnswerInJSONAndAreNeverCached(t *testing.T) {
 	})
 
 	t.Run("overview", func(t *testing.T) {
-		a := get(t, srv.URL, "/api/v1/overview")
+		a := get(t, srv.URL, "/api/v1/overview", cookie)
 		if a.status != http.StatusOK {
 			t.Fatalf("GET /api/v1/overview: %d", a.status)
 		}

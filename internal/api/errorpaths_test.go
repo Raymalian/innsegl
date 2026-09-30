@@ -524,22 +524,31 @@ func TestNewServerRefusesAHalfWiredAPI(t *testing.T) {
 		t.Errorf("NewServer accepted an API with no prover; it would have to answer "+
 			"verification questions out of the database: %v", err)
 	}
+	s := newProofScenario(t, proofOptions{})
+	if _, err := NewServer(ServerConfig{Store: store, Prover: s.prover(t)}); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("NewServer accepted an API with no AuthStore; ADR-0062's deny-by-default "+
+			"gate could not be enforced with nothing to check a session against: %v", err)
+	}
 }
 
 func TestTheHTTPSurfaceReportsWhatItCannotDo(t *testing.T) {
-	srv, _ := testServer(t)
+	srv, _, cookie := testServerWithSession(t)
 
 	// A malformed date window.
 	for _, q := range []string{"?from=yesterday", "?to=soon"} {
-		if a := get(t, srv.URL, "/api/v1/runs"+q); a.status != 400 {
+		if a := get(t, srv.URL, "/api/v1/runs"+q, cookie); a.status != 400 {
 			t.Errorf("GET /api/v1/runs%s returned %d, want 400", q, a.status)
 		}
 	}
-	// An unrouted path.
-	if a := get(t, srv.URL, "/api/v1/nothing"); a.status != 404 {
+	// An unrouted path, for a signed-in caller: not found, same as any read
+	// route. TestAUTH001... below covers the unauthenticated case, where
+	// every non-allow-listed path (routed or not) answers 401 rather than
+	// leaking which bogus paths happen to be routed.
+	if a := get(t, srv.URL, "/api/v1/nothing", cookie); a.status != 404 {
 		t.Errorf("GET an unrouted path returned %d, want 404", a.status)
 	}
-	// OPTIONS is allowed and says so.
+	// OPTIONS is allowed and says so, with no session at all — it reveals
+	// nothing path-specific, so it is answered before the gate.
 	a := do(t, "OPTIONS", srv.URL+"/api/v1/runs", "")
 	if a.status != 204 || !strings.Contains(a.header.Get("Allow"), "GET") {
 		t.Errorf("OPTIONS returned %d with Allow: %q", a.status, a.header.Get("Allow"))

@@ -191,8 +191,11 @@ Attribution says *who*. The ledger says *what they did*.
 
 **The query API is not published to the host.** `innsegl-api` listens on 8082
 inside the compose network and nothing maps it out; only the dashboard is
-reachable, on `127.0.0.1:8082`. So from the host either browse the dashboard,
-or reach the API from inside the network:
+reachable, on `localhost:8082` (not `127.0.0.1:8082` — RM-260/RM-261,
+ADR-0062, put the dashboard behind a WebAuthn passkey sign-in, and a
+passkey's RP ID must be a domain; `localhost` is one and an IP literal is
+not). So from the host either browse the dashboard, or reach the API from
+inside the network:
 
 ```sh
 docker exec innsegl-dashboard \

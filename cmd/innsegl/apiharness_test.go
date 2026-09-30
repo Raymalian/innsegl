@@ -67,6 +67,11 @@ const (
 	// command is meant to run on. The password names itself a test fixture.
 	apiReaderRole     = api.ReadOnlyRole
 	apiReaderPassword = "api-cli-reader-password"
+
+	// apiAuthWriterRole and apiAuthWriterPassword are RM-260/RM-261's
+	// auth-writer credential — the same shape, for the same reason.
+	apiAuthWriterRole     = api.AuthWriterRole
+	apiAuthWriterPassword = "api-cli-authwriter-password"
 )
 
 // errAPIDependencyAbsent marks the only conditions under which skipping these
@@ -111,6 +116,10 @@ func (c *apiPGContainer) ownerDSN(database string) string {
 
 func (c *apiPGContainer) readerDSN(database string) string {
 	return c.dsn(database, apiReaderRole, apiReaderPassword)
+}
+
+func (c *apiPGContainer) authWriterDSN(database string) string {
+	return c.dsn(database, apiAuthWriterRole, apiAuthWriterPassword)
 }
 
 func dockerCLI(ctx context.Context, args ...string) (string, error) {
@@ -290,9 +299,9 @@ func apiQuoteIdent(s string) string {
 }
 
 // freshLedgerDB creates an empty database, migrates it as the OWNER, and
-// provisions the read-only role beside it. It returns both DSNs, because the
-// difference between them is what API-009 is about.
-func freshLedgerDB(t *testing.T) (ownerDSN, readerDSN string) {
+// provisions the read-only and auth-writer roles beside it. It returns all
+// three DSNs, because the difference between them is what API-009 is about.
+func freshLedgerDB(t *testing.T) (ownerDSN, readerDSN, authDSN string) {
 	t.Helper()
 	c := requireAPIPG(t)
 	name := fmt.Sprintf("apicli_%d_%d", os.Getpid()%100000, apiDBSeq.Add(1))
@@ -325,7 +334,10 @@ func freshLedgerDB(t *testing.T) (ownerDSN, readerDSN string) {
 	if err := api.EnsureReadOnlyRole(ctx, ownerDSN, apiReaderRole, apiReaderPassword); err != nil {
 		t.Fatalf("api.EnsureReadOnlyRole: %v", err)
 	}
-	return ownerDSN, c.readerDSN(name)
+	if err := api.EnsureAuthWriterRole(ctx, ownerDSN, apiAuthWriterRole, apiAuthWriterPassword); err != nil {
+		t.Fatalf("api.EnsureAuthWriterRole: %v", err)
+	}
+	return ownerDSN, c.readerDSN(name), c.authWriterDSN(name)
 }
 
 // discardAPIError swallows an error a caller genuinely cannot act on. errcheck

@@ -126,6 +126,21 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 	}
 	closers = append(closers, store.Close)
 
+	// ---- the auth-writer credential, and the SAME refusal ------------------
+	//
+	// RM-260/RM-261 (ADR-0062): a SEPARATE credential and a separate pool,
+	// which AssertCannotWriteLedger (reusing AssertReadOnly's own probes)
+	// proves cannot write anything in the ledger schema at every open, the
+	// same discipline api.Open above holds the reader to. An error here
+	// wraps api.ErrWritable exactly the same way, so reportAPIStartFailure
+	// needs no second branch.
+	authStore, err := api.OpenAuthStore(boot, o.authDSN)
+	if err != nil {
+		unwind()
+		return nil, err
+	}
+	closers = append(closers, authStore.Close)
+
 	// ---- the proof BFF ----------------------------------------------------
 	prover, err := api.NewProver(api.ProofConfig{
 		FulcioURL: o.fulcioURL,
@@ -163,6 +178,11 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 	handler, err := api.NewServer(api.ServerConfig{
 		Store: store, Prover: prover,
 		LogDir: o.logDir, LogRetentionDays: o.logDays,
+		AuthStore: authStore,
+		WebAuthn: api.WebAuthnConfig{
+			RPID: o.rpID, RPOrigin: o.rpOrigin, RPDisplayName: "Innsegl",
+		},
+		SessionLifetime: o.sessionLifetime,
 	})
 	if err != nil {
 		unwind()

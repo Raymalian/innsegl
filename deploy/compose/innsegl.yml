@@ -155,6 +155,19 @@ x-appender-password: &appender-password ${INNSEGL_LEDGER_APPENDER_PASSWORD:-inns
 x-reader-role: &reader-role innsegl_reader
 x-reader-password: &reader-password ${INNSEGL_LEDGER_READER_PASSWORD:-innsegl-compose-reader}
 
+# RM-260/RM-261 (ADR-0062) — the sign-in surface's own role. Full CRUD on
+# innsegl_auth (users, passkeys, sessions, auth events, enrolment codes), and
+# REVOKE ALL on innsegl — the opposite grant from the reader's, drawn the
+# same way internal/api/authwriter.sql's own header explains. `innsegl api`
+# connects as this on a SECOND pool, beside the reader's; nothing else
+# connects as it.
+#
+# ITS OWN VARIABLE, for the reason the reader's is its own: "One name for two
+# different roles is a deployment that can hand the dashboard the writer by
+# copying a line."
+x-auth-writer-role: &auth-writer-role innsegl_authwriter
+x-auth-writer-password: &auth-writer-password ${INNSEGL_LEDGER_AUTHWRITER_PASSWORD:-innsegl-compose-authwriter}
+
 # doc 05 §1's BACKUP role (RM-146, #237). The reader's grants over the ledger,
 # plus CREATEDB — and CREATEDB only because the backup proves a dump restores by
 # restoring it into a throwaway database of its own. `innsegl-backup` connects as
@@ -509,6 +522,8 @@ services:
       INNSEGL_READER_PASSWORD: *reader-password
       INNSEGL_BACKUP_ROLE: *backup-role
       INNSEGL_BACKUP_PASSWORD: *backup-password
+      INNSEGL_AUTHWRITER_ROLE: *auth-writer-role
+      INNSEGL_AUTHWRITER_PASSWORD: *auth-writer-password
     volumes:
       - ./innsegl:/innsegl/init:ro
       # The SHIPPED migrations, read straight from the repository. Not a copy:
@@ -528,6 +543,11 @@ services:
       # two fmt verbs into psql's :"role" and :"db" on the way in, and refuses
       # loudly if the file ever grows a third.
       - ../../internal/api/readonly.sql:/innsegl/api/readonly.sql:ro
+      # internal/api/authwriter.sql — RM-260/RM-261's auth-writer grants,
+      # mounted for the identical reason: api.EnsureAuthWriterRole embeds
+      # this exact file, and a copy under deploy/ is a posture that could
+      # drift from the one AssertCannotWriteLedger measures.
+      - ../../internal/api/authwriter.sql:/innsegl/api/authwriter.sql:ro
     entrypoint: ["sh", "/innsegl/init/db-init.sh"]
     security_opt:
       - no-new-privileges:true
@@ -1729,6 +1749,21 @@ services:
       # $INNSEGL_LEDGER_DSN and name innsegl_appender; this one must not, and
       # `innsegl api` would refuse to serve if it did.
       INNSEGL_API_DSN: postgres://innsegl_reader:${INNSEGL_LEDGER_READER_PASSWORD:-innsegl-compose-reader}@postgres:5432/innsegl?sslmode=disable
+      # RM-260/RM-261 (ADR-0062) — THE AUTH-WRITER. A SECOND credential, on a
+      # SECOND pool: full CRUD on innsegl_auth, nothing on innsegl. Never the
+      # reader's name and never the appender's — see api.go's own comment on
+      # -auth-dsn for why a shared name here is the exact mistake this
+      # deployment's whole role split exists to make impossible.
+      INNSEGL_API_AUTH_DSN: postgres://innsegl_authwriter:${INNSEGL_LEDGER_AUTHWRITER_PASSWORD:-innsegl-compose-authwriter}@postgres:5432/innsegl?sslmode=disable
+      # localhost, never an IP literal: a WebAuthn RP ID must be a domain, and
+      # the origin has to be the address a browser actually opens. install.sh
+      # and runbooks/orchestrated-run.md both document localhost:8082 as that
+      # address now, for the identical reason.
+      INNSEGL_API_RP_ID: ${INNSEGL_API_RP_ID:-localhost}
+      INNSEGL_API_RP_ORIGIN: ${INNSEGL_API_RP_ORIGIN:-http://localhost:8082}
+      # Where CheckSocketDenial reads the harness's managed settings from
+      # INSIDE this container — the file inside the read-only mount below.
+      INNSEGL_API_MANAGED_SETTINGS_FILE: /run/innsegl/managed-settings/managed-settings.json
       # 0.0.0.0 rather than the loopback default: the caller is the dashboard's
       # nginx, in another container. The service publishes no host port, and
       # BOTH its networks are internal — a container attached only to internal
@@ -1751,6 +1786,20 @@ services:
       INNSEGL_OIDC_ISSUER: *jwt-issuer
     volumes:
       - innsegl-workspace:/work:ro
+      # RM-260/RM-261 (ADR-0062) — the harness's MANAGED SETTINGS, read-only,
+      # so CheckSocketDenial can ask whether E18's container-socket denial is
+      # in effect before the first passkey's enrolment (or its recovery)
+      # will complete — checked at the moment of every such request, not
+      # once. THE DEFAULT IS THE MAC PATH (install.sh's own
+      # default_managed_settings_path() for darwin, this reference
+      # deployment's documented host); a Linux host sets
+      # $INNSEGL_MANAGED_SETTINGS_HOST_DIR to /etc/claude-code
+      # (install.sh's other default) instead of this file guessing an OS it
+      # cannot detect. MOUNTED AS THE DIRECTORY, not the file: the harness
+      # may not have written managed-settings.json yet on a machine E18's
+      # denial was never installed on, and a directory mount tolerates that
+      # absence the way a single-file mount cannot.
+      - ${INNSEGL_MANAGED_SETTINGS_HOST_DIR:-/Library/Application Support/ClaudeCode}:/run/innsegl/managed-settings:ro
     healthcheck:
       # /api/v1/health and not a TCP dial: ADR-0024's rule, that a readiness
       # probe must fetch something it can parse. The body it returns is the
