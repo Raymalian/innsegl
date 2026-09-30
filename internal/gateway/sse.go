@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 )
@@ -42,6 +43,15 @@ type ToolUseObserver interface {
 }
 
 // ToolUseObserverFunc adapts an ordinary func to a ToolUseObserver.
+// ReplyTextObserver is handed a reply's own text: every text block, joined
+// the way a resent turn's text is (facts.go's joinText), once the message
+// ends with message_stop. A reply with no text, or a stream cut before it
+// ended, hands nothing. ctx is the request's own, so the observer can read
+// the run it was resolved to.
+type ReplyTextObserver interface {
+	OnReplyText(ctx context.Context, text string)
+}
+
 type ToolUseObserverFunc func(ToolUse)
 
 // OnToolUse calls f.
@@ -80,6 +90,11 @@ const (
 	// blank line that ends it. Same order again: an event's data as a
 	// whole is where a tool_use delta's JSON actually lives.
 	maxSSEEventDataBytes = 8 << 20 // 8 MiB
+
+	// maxReplyTextBytes bounds the text one reply collects for its
+	// ReplyTextObserver. A reply over it hands nothing rather than a part
+	// presented as the whole (GREC-007).
+	maxReplyTextBytes = 8 << 20 // 8 MiB
 )
 
 // messagesInterpreter reads a COPY of an Anthropic Messages SSE reply --
@@ -94,6 +109,13 @@ type messagesInterpreter struct {
 	observer ToolUseObserver
 	scanner  *sseScanner
 	pending  map[int]*pendingToolUse
+
+	// onText, when set, is handed the reply's text at message_stop.
+	onText       func(string)
+	texts        map[int]*strings.Builder
+	textOrder    []int
+	textLen      int
+	textOverflow bool
 }
 
 // pendingToolUse accumulates one tool_use content block's input_json_delta
@@ -110,7 +132,7 @@ type pendingToolUse struct {
 }
 
 func newMessagesInterpreter(observer ToolUseObserver) *messagesInterpreter {
-	m := &messagesInterpreter{observer: observer, pending: make(map[int]*pendingToolUse)}
+	m := &messagesInterpreter{observer: observer, pending: make(map[int]*pendingToolUse), texts: make(map[int]*strings.Builder)}
 	m.scanner = newSSEScanner(m.handleEvent)
 	return m
 }
@@ -139,6 +161,7 @@ type contentBlockDeltaEvent struct {
 	Delta struct {
 		Type        string `json:"type"`
 		PartialJSON string `json:"partial_json"`
+		Text        string `json:"text"`
 	} `json:"delta"`
 }
 
@@ -154,12 +177,21 @@ func (m *messagesInterpreter) handleEvent(event, data string) {
 		m.handleDelta(data)
 	case "content_block_stop":
 		m.handleStop(data)
+	case "message_stop":
+		m.handleMessageStop()
 	}
 }
 
 func (m *messagesInterpreter) handleStart(data string) {
 	var evt contentBlockStartEvent
 	if err := json.Unmarshal([]byte(data), &evt); err != nil {
+		return
+	}
+	if evt.ContentBlock.Type == "text" {
+		if _, seen := m.texts[evt.Index]; !seen {
+			m.texts[evt.Index] = &strings.Builder{}
+			m.textOrder = append(m.textOrder, evt.Index)
+		}
 		return
 	}
 	if evt.ContentBlock.Type != "tool_use" {
@@ -171,6 +203,10 @@ func (m *messagesInterpreter) handleStart(data string) {
 func (m *messagesInterpreter) handleDelta(data string) {
 	var evt contentBlockDeltaEvent
 	if err := json.Unmarshal([]byte(data), &evt); err != nil {
+		return
+	}
+	if evt.Delta.Type == "text_delta" {
+		m.addText(evt.Index, evt.Delta.Text)
 		return
 	}
 	if evt.Delta.Type != "input_json_delta" {
@@ -252,6 +288,39 @@ func (m *messagesInterpreter) handleStop(data string) {
 // bound the event in progress is abandoned -- see abandonEvent -- and the
 // scanner discards lines until the next blank line realigns it, rather
 // than dispatching a reassembly it knows is incomplete.
+// addText appends one text_delta to its block, bounded by maxReplyTextBytes
+// across the whole reply.
+func (m *messagesInterpreter) addText(index int, text string) {
+	b, ok := m.texts[index]
+	if !ok || m.textOverflow {
+		return
+	}
+	if m.textLen+len(text) > maxReplyTextBytes {
+		m.textOverflow = true
+		return
+	}
+	m.textLen += len(text)
+	b.WriteString(text)
+}
+
+// handleMessageStop hands the reply's text over, joined as joinText joins a
+// resent turn's blocks: in block order, empty blocks skipped, "\n\n" between.
+func (m *messagesInterpreter) handleMessageStop() {
+	if m.onText == nil || m.textOverflow {
+		return
+	}
+	var parts []string
+	for _, i := range m.textOrder {
+		if t := m.texts[i].String(); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	if len(parts) == 0 {
+		return
+	}
+	m.onText(strings.Join(parts, "\n\n"))
+}
+
 type sseScanner struct {
 	onEvent func(event, data string)
 

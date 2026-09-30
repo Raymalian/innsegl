@@ -4,6 +4,6 @@
   "path": "/v1/messages",
   "headers": {
     "X-Claude-Code-Session-Id": "7734c172-6ff1-4112-8a0e-f09fa6b6a480",
-    "X-Claude-Code-Agent-Id": "0865eab8-65e6-4302-8964-5fef7b442a79"
+    "X-Claude-Code-Agent-Id": "a0865eab865e64302"
   }
 }

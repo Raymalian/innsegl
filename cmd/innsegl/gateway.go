@@ -711,18 +711,20 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	var identityGuard gateway.Guard
 	var witnesses []gateway.Guard
 	var toolUse gateway.ToolUseObserver
+	var replyText gateway.ReplyTextObserver
 	if o.dsn != "" {
-		ig, wit, ise, stackErr := openIdentityStack(boot, o, running)
+		ig, wit, ise, rt, stackErr := openIdentityStack(boot, o, running)
 		if stackErr != nil {
 			running.Close()
 			return nil, fmt.Errorf("configure the identity stack: %w", stackErr)
 		}
-		identityGuard, witnesses, toolUse = ig, wit, ise
+		identityGuard, witnesses, toolUse, replyText = ig, wit, ise, rt
 	}
 
 	proxy := &gateway.Proxy{
-		Upstream: up,
-		ToolUse:  toolUse,
+		Upstream:  up,
+		ToolUse:   toolUse,
+		ReplyText: replyText,
 		// gateway.Guards is internal/gateway's OWN ordered guard chain
 		// (guard.go) -- the harness-shape guard, then (when identityGuard is
 		// non-nil) the identity guard, then the rate-limit guard built from
@@ -917,22 +919,22 @@ func isLoopbackRemoteAddr(remoteAddr string) bool {
 // that one -- record.go's own doc comment says why.
 func openIdentityStack(
 	ctx context.Context, o gatewayOptions, running *runningGateway,
-) (identityGuard gateway.Guard, witnesses []gateway.Guard, toolUse gateway.ToolUseObserver, err error) {
+) (identityGuard gateway.Guard, witnesses []gateway.Guard, toolUse gateway.ToolUseObserver, replyText gateway.ReplyTextObserver, err error) {
 	mappings, err := gateway.OpenPostgresMappingStore(ctx, o.dsn)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open the run mapping store: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("open the run mapping store: %w", err)
 	}
 	running.closers = append(running.closers, mappings.Close)
 
 	store, err := ledger.Open(ctx, o.dsn)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open the ledger: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("open the ledger: %w", err)
 	}
 	running.closers = append(running.closers, store.Close)
 
 	dir, err := rundir.New(rundir.Config{Events: store})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build the run directory: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("build the run directory: %w", err)
 	}
 	runStates := gateway.NewCredentialRunStates(dir, ledger.RestoreHorizonFromEnv(), nil)
 
@@ -957,12 +959,12 @@ func openIdentityStack(
 		SessionEndSignals: sessionEndSignals,
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)
 	}
 
 	candidates, err := gateway.OpenSilentRunCandidates(ctx, o.dsn)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open the silent-run enumeration: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("open the silent-run enumeration: %w", err)
 	}
 	running.closers = append(running.closers, candidates.Close)
 
@@ -971,7 +973,7 @@ func openIdentityStack(
 		Horizon:   backstopHorizonFromEnv(),
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build the silence backstop: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("build the silence backstop: %w", err)
 	}
 	running.backstop = backstop
 	running.backstopCandidates = candidates
@@ -981,7 +983,7 @@ func openIdentityStack(
 		Rate: sessionEndRateLimitRate, Burst: sessionEndRateLimitBurst,
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build the session-end rate limit: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("build the session-end rate limit: %w", err)
 	}
 	running.sessionEnder = gateway.NewSessionEnder(sessionEndSignals, mappings, registrar, sessionEndGraceFromEnv(), nil)
 	running.sessionEndRateLimit = sessionEndRateLimit
@@ -993,7 +995,7 @@ func openIdentityStack(
 
 	amRestore, err := configureGatewayAgentMessages(o, dir, store, running)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("configure agent-message recording: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("configure agent-message recording: %w", err)
 	}
 	if amRestore != nil {
 		running.closers = append(running.closers, amRestore)
@@ -1002,11 +1004,13 @@ func openIdentityStack(
 		Recorder: gateway.NewMCPAgentMessageRecorder(),
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build the message recorder: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("build the message recorder: %w", err)
 	}
 
 	witnesses = []gateway.Guard{gateway.NewToolCallRecordGuard(toolCallRecorder), messageGuard}
-	return identityGuard, witnesses, toolUse, nil
+	// The message recorder also reads each reply's own text: an agent's
+	// last reply is never resent in a later request (GREC-005).
+	return identityGuard, witnesses, toolUse, messageGuard, nil
 }
 
 // configureGatewayAgentMessages wires RM-237 (#382)'s agent_message

@@ -39,6 +39,10 @@ type Proxy struct {
 	// forwarded to the caller never depend on whether this is set.
 	ToolUse ToolUseObserver
 
+	// ReplyText, when set, is handed each streamed reply's own text once
+	// the message ends (sse.go's ReplyTextObserver). Nil hands nothing.
+	ReplyText ReplyTextObserver
+
 	// Guards run in order, before anything else ServeHTTP does. The first
 	// to refuse ends the request there -- see guard.go for the interface
 	// and for what plugs into it (#375, E15). Nil uses defaultGuards, which
@@ -140,6 +144,11 @@ func (p *Proxy) buildRequest(r *http.Request) (*http.Request, error) {
 	}
 	outReq.Header = cloneHeader(r.Header)
 	stripHopByHop(outReq.Header)
+	// The reply is read here as well as relayed (stream, below), and a
+	// compressed one reads as nothing: Claude Code asks for gzip, br and
+	// zstd. Identity is the one encoding every client accepts, so the
+	// upstream is asked for that and the client gets plain bytes.
+	outReq.Header.Set("Accept-Encoding", "identity")
 	// ContentLength is not a header net/http reads back out of outReq.Header
 	// -- it is this field, and copying it is what keeps a request with a
 	// known length from being resent as chunked, which the byte-identical
@@ -177,8 +186,17 @@ func (p *Proxy) stream(w http.ResponseWriter, r *http.Request, resp *http.Respon
 		dst = w
 	}
 
-	if p.ToolUse != nil && isEventStream(resp.Header.Get("Content-Type")) {
-		dst = io.MultiWriter(dst, newMessagesInterpreter(boundToolUseObserver(r.Context(), p.ToolUse)))
+	if (p.ToolUse != nil || p.ReplyText != nil) && isEventStream(resp.Header.Get("Content-Type")) {
+		var observer ToolUseObserver
+		if p.ToolUse != nil {
+			observer = boundToolUseObserver(r.Context(), p.ToolUse)
+		}
+		interp := newMessagesInterpreter(observer)
+		if p.ReplyText != nil {
+			ctx := r.Context()
+			interp.onText = func(text string) { p.ReplyText.OnReplyText(ctx, text) }
+		}
+		dst = io.MultiWriter(dst, interp)
 	}
 
 	// A failed copy is discarded deliberately, not silently: by the time

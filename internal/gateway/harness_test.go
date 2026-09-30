@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -205,7 +206,7 @@ func TestRecogniseClaudeCode21RefusesAMalformedSessionID(t *testing.T) {
 func TestRecogniseClaudeCode21RefusesAMalformedAgentID(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", nil)
 	req.Header.Set(headerClaudeCodeSessionID, validSessionID)
-	req.Header.Set(headerClaudeCodeAgentID, "not-a-uuid-either")
+	req.Header.Set(headerClaudeCodeAgentID, "not an agent id")
 
 	_, ok, reason := recogniseClaudeCode21(req)
 	if ok {
@@ -213,6 +214,41 @@ func TestRecogniseClaudeCode21RefusesAMalformedAgentID(t *testing.T) {
 	}
 	if reason != reasonMalformedAgentID {
 		t.Errorf("reason = %q, want %q", reason, reasonMalformedAgentID)
+	}
+}
+
+// Claude Code 2.1.283 names a subagent "a" plus 16 hex digits, not a UUID:
+// measured from a live subagent's own transcript on 2026-09-29.
+func TestRecogniseClaudeCode21AcceptsTheMeasuredSubagentID(t *testing.T) {
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", nil)
+	req.Header.Set(headerClaudeCodeSessionID, validSessionID)
+	req.Header.Set(headerClaudeCodeAgentID, "aa2d8ea3231aa7c80")
+
+	id, ok, reason := recogniseClaudeCode21(req)
+	if !ok {
+		t.Fatalf("the measured subagent id was refused: %s", reason)
+	}
+	if id.AgentID != "aa2d8ea3231aa7c80" {
+		t.Errorf("AgentID = %q, want the header's own value", id.AgentID)
+	}
+}
+
+// A subagent that names itself "main" would share the root agent's mapping
+// key; the header is a claim, so that claim is refused.
+func TestRecogniseClaudeCode21RefusesAnAgentIDThatClaimsTheRoot(t *testing.T) {
+	for _, raw := range []string{mainAgentID, "A2D8", "a2 d8", "a/../b", "-a", strings.Repeat("a", 65)} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", nil)
+		req.Header.Set(headerClaudeCodeSessionID, validSessionID)
+		req.Header.Set(headerClaudeCodeAgentID, raw)
+
+		_, ok, reason := recogniseClaudeCode21(req)
+		if ok {
+			t.Errorf("recognised agent id %q", raw)
+			continue
+		}
+		if reason != reasonMalformedAgentID {
+			t.Errorf("agent id %q: reason = %q, want %q", raw, reason, reasonMalformedAgentID)
+		}
 	}
 }
 
