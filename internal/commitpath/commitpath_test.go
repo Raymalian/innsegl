@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +57,41 @@ func TestIsToolUseIDAcceptsTheHarnessShapeOnly(t *testing.T) {
 		if IsToolUseID(id) {
 			t.Errorf("IsToolUseID(%q) = true", id)
 		}
+	}
+}
+
+// TestDefaultCoreURLIsHTTPS pins RM-246's contract literally: the gateway
+// listener is https, on the same loopback address and port as before.
+func TestDefaultCoreURLIsHTTPS(t *testing.T) {
+	if DefaultCoreURL != "https://127.0.0.1:28095" {
+		t.Errorf("DefaultCoreURL = %q, want %q", DefaultCoreURL, "https://127.0.0.1:28095")
+	}
+}
+
+// TestCAFilePrefersNodeExtraCACerts is CAFile's own contract: read
+// $NODE_EXTRA_CA_CERTS first (the SAME variable an installer points a
+// Node-style client at, RM-246), falling back to
+// $HOME/.innsegl/ca/gateway-ca.pem.
+func TestCAFilePrefersNodeExtraCACerts(t *testing.T) {
+	got := CAFile(func(k string) string {
+		if k == EnvExtraCACerts {
+			return "/custom/ca.pem"
+		}
+		return ""
+	})
+	if got != "/custom/ca.pem" {
+		t.Errorf("CAFile with NODE_EXTRA_CA_CERTS set = %q, want %q", got, "/custom/ca.pem")
+	}
+
+	got = CAFile(func(k string) string {
+		if k == "HOME" {
+			return "/home/op"
+		}
+		return ""
+	})
+	want := filepath.Join("/home/op", ".innsegl", "ca", "gateway-ca.pem")
+	if got != want {
+		t.Errorf("CAFile with no NODE_EXTRA_CA_CERTS = %q, want %q", got, want)
 	}
 }
 

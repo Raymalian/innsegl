@@ -8,11 +8,15 @@ package commitpath
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -26,8 +30,12 @@ const (
 	// children (ADR-0059 decision 1).
 	EnvToolUseID = "INNSEGL_TOOL_USE_ID"
 	// EnvCoreURL overrides DefaultCoreURL.
-	EnvCoreURL     = "INNSEGL_CORE_URL"
-	DefaultCoreURL = "http://127.0.0.1:28095"
+	EnvCoreURL = "INNSEGL_CORE_URL"
+	// DefaultCoreURL is https, not http (RM-246, #391): the gateway's
+	// listener serves TLS from the core's own CA, and this Client trusts
+	// ONLY that CA (TrustedHTTPClient) -- never the system roots, never
+	// InsecureSkipVerify.
+	DefaultCoreURL = "https://127.0.0.1:28095"
 )
 
 // TrailersRequest asks for the run's trailers (ADR-0059 decision 2).
@@ -135,13 +143,77 @@ const defaultTimeout = 2 * time.Minute
 // maxResponseBytes bounds what the client reads back.
 const maxResponseBytes = 4 << 20
 
-// ClientFromEnv builds a Client from EnvCoreURL, or DefaultCoreURL.
+// ClientFromEnv builds a Client from EnvCoreURL, or DefaultCoreURL. Its HTTP
+// field trusts ONLY the core's own gateway CA (TrustedHTTPClient) -- never
+// the system roots, never InsecureSkipVerify.
 func ClientFromEnv(getenv func(string) string) Client {
 	base := getenv(EnvCoreURL)
 	if base == "" {
 		base = DefaultCoreURL
 	}
-	return Client{BaseURL: base}
+	return Client{BaseURL: base, HTTP: TrustedHTTPClient(getenv)}
+}
+
+// EnvExtraCACerts is $NODE_EXTRA_CA_CERTS -- read first, so an installer
+// that already arranges for a Node-style client to add one extra trusted
+// root (RM-246's own harness-trust story) points this package at the SAME
+// file, rather than the deployment having to teach two different
+// mechanisms about one certificate.
+const EnvExtraCACerts = "NODE_EXTRA_CA_CERTS"
+
+// gatewayCACertFileName is gateway.CACertFileName's value, repeated rather
+// than imported: internal/gateway's own production code imports this
+// package (record.go, for commitpath.Resolver), so this package cannot
+// import internal/gateway back without a cycle. The two packages agree on
+// this file name by convention; internal/gateway/tls_test.go and this
+// package's own tls_test.go (an external test, which has no such cycle)
+// both assert against gateway.CACertFileName directly, so a change to one
+// without the other fails a test rather than silently drifting.
+const gatewayCACertFileName = "gateway-ca.pem"
+
+// CAFile resolves which file names the core's own gateway CA certificate:
+// $NODE_EXTRA_CA_CERTS if set, else $HOME/.innsegl/ca/gateway-ca.pem -- the
+// host half of RM-246's contract. deploy/compose/innsegl.yml bind-mounts
+// that path's parent directory into the core, which writes its CA
+// certificate there on every start (gateway.LoadOrCreateCA's own
+// PublicDir).
+func CAFile(getenv func(string) string) string {
+	if f := getenv(EnvExtraCACerts); f != "" {
+		return f
+	}
+	home := getenv("HOME")
+	if home == "" {
+		home = "."
+	}
+	return filepath.Join(home, ".innsegl", "ca", gatewayCACertFileName)
+}
+
+// TrustedHTTPClient builds an *http.Client that trusts ONLY the core's own
+// gateway CA (CAFile) -- never the system roots, never
+// InsecureSkipVerify, ever. If the CA file cannot be read or is not a
+// valid PEM certificate, the client's trust pool is simply left empty:
+// every TLS handshake then fails the same way a wrong or a stale CA already
+// would (TLS-002), rather than silently widening trust to make the client
+// "work".
+func TrustedHTTPClient(getenv func(string) string) *http.Client {
+	pool := x509.NewCertPool()
+	// #nosec G703 -- CAFile resolves to $NODE_EXTRA_CA_CERTS or
+	// $HOME/.innsegl/ca/gateway-ca.pem, both operator/deployment
+	// configuration, never attacker-controlled input; a read failure here
+	// is handled by leaving the pool empty (see this function's own doc
+	// comment), not propagated as an error.
+	if pemBytes, err := os.ReadFile(CAFile(getenv)); err == nil {
+		pool.AppendCertsFromPEM(pemBytes)
+	}
+	return &http.Client{
+		Timeout: defaultTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    pool,
+				MinVersion: tls.VersionTLS12,
+			},
+		},
+	}
 }
 
 // Trailers asks the core for the run's trailers.
