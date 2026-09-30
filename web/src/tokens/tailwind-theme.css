@@ -68,6 +68,14 @@
   --color-proof-unavailable-surface: var(--innsegl-color-proof-unavailable-surface);
   --color-proof-unavailable-line: var(--innsegl-color-proof-unavailable-border);
 
+  /* The diff exception (§5.3): soft backgrounds on code lines, never a badge. */
+  --color-diff-added-surface: var(--innsegl-color-diff-added-surface);
+  --color-diff-added-gutter: var(--innsegl-color-diff-added-gutter);
+  --color-diff-added-marker: var(--innsegl-color-diff-added-marker);
+  --color-diff-removed-surface: var(--innsegl-color-diff-removed-surface);
+  --color-diff-removed-gutter: var(--innsegl-color-diff-removed-gutter);
+  --color-diff-removed-marker: var(--innsegl-color-diff-removed-marker);
+
   /* Degradation that is not a verdict, and the P3 alarm. */
   --color-degraded: var(--innsegl-color-degraded-text);
   --color-degraded-surface: var(--innsegl-color-degraded-surface);
