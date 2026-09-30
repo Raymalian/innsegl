@@ -66,6 +66,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"innsegl.dev/innsegl/internal/commitpath"
 	"innsegl.dev/innsegl/internal/mcp"
 )
 
@@ -718,4 +719,26 @@ func parseToolResults(buf []byte) []observedToolResult {
 		}
 	}
 	return out
+}
+
+var _ commitpath.Resolver = (*ToolCallRecorder)(nil)
+
+// LookupPending implements commitpath.Resolver: the relayed tool call with
+// this id whose result has not arrived yet, and the run it was relayed on.
+// Tool call ids are unique across runs, so the first match is the only one.
+func (r *ToolCallRecorder) LookupPending(toolUseID string) (commitpath.RelayedCall, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, call := range r.pending {
+		if key.toolUseID == toolUseID {
+			return commitpath.RelayedCall{
+				RunID:      key.runID,
+				Tool:       call.tool,
+				Input:      append(json.RawMessage(nil), call.input...),
+				Truncated:  call.truncated,
+				ObservedAt: call.observedAt,
+			}, true
+		}
+	}
+	return commitpath.RelayedCall{}, false
 }

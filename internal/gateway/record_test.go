@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"innsegl.dev/innsegl/internal/commitpath"
 	"innsegl.dev/innsegl/internal/mcp"
 )
 
@@ -1022,5 +1023,36 @@ func TestCombineToolUseObserversOnToolUseWithoutContextCallsPlainOnToolUse(t *te
 	combined.OnToolUse(ToolUse{ID: "toolu_plain_path"})
 	if got := a.snapshot(); len(got) != 1 {
 		t.Errorf("%d calls, want 1", len(got))
+	}
+}
+
+// The commit path's resolver (ADR-0059 decision 4): a tool call is found by
+// its id while it runs, with the run it was relayed on, and is gone once its
+// result arrives.
+func TestRecorderLooksUpARunningToolCallUntilItsResultArrives(t *testing.T) {
+	calls := &fakeRecordCalls{}
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: calls.fn})
+	var _ commitpath.Resolver = rec
+
+	before := time.Now()
+	rec.OnToolUseContext(WithRunID(context.Background(), recTestRunID),
+		recToolUse("toolu_1", "Bash", `{"command":"git commit -m x"}`))
+
+	got, ok := rec.LookupPending("toolu_1")
+	if !ok {
+		t.Fatal("a running tool call was not found")
+	}
+	if got.RunID != recTestRunID || got.Tool != "Bash" || string(got.Input) != `{"command":"git commit -m x"}` || got.ObservedAt.Before(before) {
+		t.Errorf("LookupPending = %+v", got)
+	}
+	if _, ok := rec.LookupPending("toolu_other"); ok {
+		t.Error("an id never relayed was found")
+	}
+
+	rec.HandleResults(context.Background(), recTestRunID, RequestFacts{},
+		[]observedToolResult{recResult("toolu_1", `"done"`, false)})
+	waitForCalls(t, calls, 1)
+	if _, ok := rec.LookupPending("toolu_1"); ok {
+		t.Error("a tool call was still found after its result arrived")
 	}
 }
