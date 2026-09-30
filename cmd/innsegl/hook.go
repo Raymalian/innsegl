@@ -120,7 +120,7 @@ func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int { //nolint
 	// event.ToolUseID contains no shell metacharacter for the child shell to
 	// misread.
 	assignments := []string{commitpath.EnvToolUseID + "=" + event.ToolUseID}
-	if bin, err := innseglBinaryPath(); err == nil && isShellSafeForInterpolation(bin) &&
+	if bin, binErr := innseglBinaryPath(); binErr == nil && isShellSafeForInterpolation(bin) &&
 		!commandAlreadySetsGitConfigCount(command) {
 		assignments = append(assignments, gitConfigSigningAssignments(bin)...)
 	}

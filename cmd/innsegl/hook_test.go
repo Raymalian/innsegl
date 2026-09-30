@@ -408,11 +408,18 @@ const hookFakeSignEnv = "INNSEGL_HOOK_TEST_FAKE_SIGN"
 // header.
 const hookFakeSignature = "ENF005FAKESIGNATURE"
 
+// discardCopyResult lets a copy's return values be discarded through a call
+// rather than a blank assignment — errcheck's check-blank setting (this
+// project's own policy, .golangci.yml) still flags `_, _ = io.Copy(...)`, and
+// this fake signing program's own stdin has nothing worth checking an error
+// against.
+func discardCopyResult(int64, error) {}
+
 func init() {
 	if os.Getenv(hookFakeSignEnv) != "1" {
 		return
 	}
-	_, _ = io.Copy(io.Discard, os.Stdin)
+	discardCopyResult(io.Copy(io.Discard, os.Stdin))
 	_, _ = os.Stdout.WriteString(hookFakeSignature)
 	_, _ = os.Stderr.WriteString("[GNUPG:] SIG_CREATED S 0 9 00 0 1 0 enf005\n")
 	os.Exit(0)
@@ -460,8 +467,8 @@ func TestENF005HookCarriesToolCallIDAndSigningConfigForOneGitProcessOnly(t *test
 	sh := exec.CommandContext(t.Context(), "sh", "-c", rewritten)
 	sh.Dir = repo
 	sh.Env = cmdEnv
-	if out, err := sh.CombinedOutput(); err != nil {
-		t.Fatalf("sh -c %q: %v\n%s", rewritten, err, out)
+	if shOut, shErr := sh.CombinedOutput(); shErr != nil {
+		t.Fatalf("sh -c %q: %v\n%s", rewritten, shErr, shOut)
 	}
 
 	got := ghRun(t, git, repo, env, "cat-file", "commit", "HEAD")
