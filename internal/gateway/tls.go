@@ -169,18 +169,38 @@ func LoadOrCreateCA(cfg CAConfig) (*CA, error) {
 	keyPath := filepath.Join(cfg.KeyDir, caKeyFileName)
 	certPath := filepath.Join(cfg.KeyDir, CACertFileName)
 
-	ca, err := loadCA(keyPath, certPath)
+	// Whether to CREATE a CA turns on ONE question, asked directly: does the
+	// key file itself exist. That is deliberately not "did loadCA return an
+	// error satisfying errors.Is(_, os.ErrNotExist)" -- a key that exists
+	// with a missing or corrupt CERTIFICATE, or a key that fails to parse,
+	// must never be read as "no CA yet, safe to create a fresh one": that
+	// would silently replace a private key that might still be exactly
+	// right (only its certificate copy went missing) or might be evidence
+	// of tampering, either way not something to paper over by regenerating.
+	// Only "the key file itself is not there" is the ordinary first-start
+	// case.
+	_, statErr := os.Stat(keyPath)
 	switch {
-	case err == nil:
-		// Loaded an existing CA: the restart path.
-	case errors.Is(err, os.ErrNotExist):
-		ca, err = createCA(cfg, keyPath, certPath)
+	case statErr == nil:
+		ca, err := loadCA(keyPath, certPath)
 		if err != nil {
 			return nil, err
 		}
+		return finishLoadOrCreateCA(cfg, ca)
+	case errors.Is(statErr, os.ErrNotExist):
+		ca, err := createCA(cfg, keyPath, certPath)
+		if err != nil {
+			return nil, err
+		}
+		return finishLoadOrCreateCA(cfg, ca)
 	default:
-		return nil, err
+		return nil, fmt.Errorf("gateway: stat the CA private key: %w", statErr)
 	}
+}
+
+// finishLoadOrCreateCA is LoadOrCreateCA's shared tail: stamp cfg onto ca
+// and publish its certificate, if cfg.PublicDir asks for that.
+func finishLoadOrCreateCA(cfg CAConfig, ca *CA) (*CA, error) {
 	ca.cfg = cfg
 
 	if cfg.PublicDir != "" {
@@ -191,12 +211,13 @@ func LoadOrCreateCA(cfg CAConfig) (*CA, error) {
 	return ca, nil
 }
 
-// loadCA reads an existing CA key and certificate. A missing key returns an
-// error satisfying errors.Is(err, os.ErrNotExist), which LoadOrCreateCA
-// reads as "create one"; every other failure -- a key with no matching
-// certificate, or either file unparseable -- is reported as itself, never
+// loadCA reads an existing CA key and certificate. Called only once
+// LoadOrCreateCA has confirmed the key file itself exists, so every failure
+// here -- a key with no matching certificate, or either file unparseable --
+// is a hard failure, reported as itself and returned verbatim: never
 // silently papered over by minting a replacement that would orphan
-// whatever already trusts the certificate on disk.
+// whatever already trusts the certificate on disk, or discard evidence of
+// tampering.
 func loadCA(keyPath, certPath string) (*CA, error) {
 	keyPEM, err := os.ReadFile(keyPath)
 	if err != nil {

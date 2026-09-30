@@ -265,6 +265,61 @@ func TestTLS001PublicDirEmptySkipsThePublish(t *testing.T) {
 	}
 }
 
+// TestTLS001LoadOrCreateCARefusesAKeyDirThatIsAFile: MkdirAll fails when a
+// PATH COMPONENT is already a regular file -- the clearest way to force
+// that failure portably, without relying on permission bits a test runner
+// (root, or a CI sandbox) might ignore.
+func TestTLS001LoadOrCreateCARefusesAKeyDirThatIsAFile(t *testing.T) {
+	parent := t.TempDir()
+	blocker := filepath.Join(parent, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	keyDir := filepath.Join(blocker, "ca-key") // blocker is a file, not a dir
+	if _, err := LoadOrCreateCA(CAConfig{KeyDir: keyDir}); err == nil {
+		t.Fatal("LoadOrCreateCA with a KeyDir path blocked by a file succeeded, want a refusal")
+	}
+}
+
+// TestTLS001LoadOrCreateCARefusesACorruptPrivateKey: an existing KeyDir
+// whose key file is not a parseable EC private key is reported, not
+// silently replaced -- see loadCA's own doc comment on why a mismatched or
+// broken CA on disk is never quietly regenerated.
+func TestTLS001LoadOrCreateCARefusesACorruptPrivateKey(t *testing.T) {
+	keyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(keyDir, "gateway-ca-key.pem"), []byte("not a key"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := LoadOrCreateCA(CAConfig{KeyDir: keyDir}); err == nil {
+		t.Fatal("LoadOrCreateCA with a corrupt private key succeeded, want a refusal")
+	}
+}
+
+// TestTLS001LoadOrCreateCARefusesAKeyWithNoMatchingCertificate: the private
+// key exists but CACertFileName does not -- a half-written or tampered
+// KeyDir, reported by name rather than treated as "create a fresh CA".
+func TestTLS001LoadOrCreateCARefusesAKeyWithNoMatchingCertificate(t *testing.T) {
+	keyDir := t.TempDir()
+	// A real key, so the failure is specifically about the missing
+	// certificate, not an incidentally-also-corrupt key.
+	if _, err := LoadOrCreateCA(CAConfig{KeyDir: t.TempDir(), PublicDir: keyDir}); err != nil {
+		t.Fatalf("seed LoadOrCreateCA: %v", err)
+	}
+	// Now point a FRESH KeyDir at just the key (copied from the seed
+	// KeyDir's own private key -- reuse the seed's KeyDir directly instead,
+	// then delete its certificate).
+	seedKeyDir := t.TempDir()
+	if _, err := LoadOrCreateCA(CAConfig{KeyDir: seedKeyDir}); err != nil {
+		t.Fatalf("seed LoadOrCreateCA: %v", err)
+	}
+	if err := os.Remove(filepath.Join(seedKeyDir, CACertFileName)); err != nil {
+		t.Fatalf("remove the seeded certificate: %v", err)
+	}
+	if _, err := LoadOrCreateCA(CAConfig{KeyDir: seedKeyDir}); err == nil {
+		t.Fatal("LoadOrCreateCA with a key but no certificate succeeded, want a refusal")
+	}
+}
+
 // parsePEMCertForTest decodes a single PEM certificate, failing the test on
 // any error -- shared shape with upstream_test.go's own certificate
 // helpers, kept separate here because CA-minted certificates carry

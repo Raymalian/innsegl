@@ -52,6 +52,13 @@ func TestGW004ServeAlsoGatewayRunsInProcessAndAReturnStopsTheReplica(t *testing.
 
 	t.Setenv(envGatewayListen, occupiedAddr)
 	t.Setenv(envGatewayUpstream, "https://api.anthropic.com")
+	// RM-246 (#391): -ca-key-dir/-ca-cert-dir have no fallback default (a
+	// deliberate choice -- see gatewayOptions.caKeyDir's own doc comment),
+	// so this test -- about the LISTEN failure, not about TLS configuration
+	// -- has to supply both explicitly, to temporary directories, so as
+	// never to touch the developer's own $HOME.
+	t.Setenv(envGatewayCAKeyDir, t.TempDir())
+	t.Setenv(envGatewayCACertDir, t.TempDir())
 
 	args := completeServeArgs("-also", "gateway")[1:]
 

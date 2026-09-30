@@ -34,6 +34,21 @@ func gatewayTestCADirs(t *testing.T) (keyDir, certDir string) {
 	return t.TempDir(), t.TempDir()
 }
 
+// gatewayTestValidCADirs sets $INNSEGL_GATEWAY_CA_KEY_DIR/CERT_DIR to fresh
+// temporary directories for the life of t, via t.Setenv (auto-restored when
+// t ends). RM-246 makes both flags required with no fallback default --
+// TestGatewayCommandRefusesWithNoCADirsConfigured is the test that holds
+// that -- so every OTHER test in this file that reaches
+// gatewayOptions.validate() (directly or through runGatewayCommand /
+// parseGatewayFlags) needs this first, or the CA-directory check earlier in
+// that same switch masks whatever ONE thing the test actually means to
+// prove.
+func gatewayTestValidCADirs(t *testing.T) {
+	t.Helper()
+	t.Setenv(envGatewayCAKeyDir, t.TempDir())
+	t.Setenv(envGatewayCACertDir, t.TempDir())
+}
+
 // gatewayTrustingClient reads the CA certificate a real openGateway already
 // wrote to certDir (gateway.LoadOrCreateCA's own PublicDir,
 // gateway.CACertFileName) and returns an *http.Client that trusts exactly
@@ -87,7 +102,10 @@ func TestGatewayServesHTTPSFromItsOwnCA(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstream.URL}
+	args := []string{
+		"-listen", "127.0.0.1:0", "-upstream", upstream.URL,
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
+	}
 	done := make(chan int, 1)
 	go func() {
 		done <- runGateway(ctx, args, io.Discard, io.Discard, deps)
@@ -214,7 +232,10 @@ func TestGatewayCommandRelaysRealTrafficEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstream.URL}
+	args := []string{
+		"-listen", "127.0.0.1:0", "-upstream", upstream.URL,
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
+	}
 	done := make(chan int, 1)
 	go func() {
 		done <- runGateway(ctx, args, io.Discard, io.Discard, deps)
@@ -294,6 +315,7 @@ func TestGatewayCommandEnforcesGW013RateLimitEndToEnd(t *testing.T) {
 	args := []string{
 		"-listen", "127.0.0.1:0", "-upstream", upstream.URL,
 		"-rate-limit-rate", "1", "-rate-limit-burst", "1",
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
 	}
 	done := make(chan int, 1)
 	go func() {
@@ -390,7 +412,10 @@ func TestGatewayCommandRefusesAnUnrecognisedHarnessShapeEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstream.URL}
+	args := []string{
+		"-listen", "127.0.0.1:0", "-upstream", upstream.URL,
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
+	}
 	done := make(chan int, 1)
 	go func() {
 		done <- runGateway(ctx, args, io.Discard, io.Discard, deps)
@@ -444,6 +469,7 @@ func TestGatewayCommandRefusesAnUnrecognisedHarnessShapeEndToEnd(t *testing.T) {
 // an http -upstream is refused at start-up, naming the flag, and nothing is
 // opened to prove it -- deps.open must never even be called.
 func TestGatewayCommandRefusesAnHTTPUpstreamBeforeOpeningAnything(t *testing.T) {
+	gatewayTestValidCADirs(t)
 	deps := gatewayDeps{open: func(context.Context, gatewayOptions, *serveLog) (servedGateway, error) {
 		t.Fatal("openGateway was called; an http upstream must be refused before anything opens")
 		return nil, nil
@@ -466,6 +492,7 @@ func TestGatewayCommandRefusesAnHTTPUpstreamBeforeOpeningAnything(t *testing.T) 
 // TestGatewayCommandRefusesAnyNonHTTPSScheme covers the rest of GW-007's
 // "or any non-https scheme" clause, not only the http case above.
 func TestGatewayCommandRefusesAnyNonHTTPSScheme(t *testing.T) {
+	gatewayTestValidCADirs(t)
 	for _, upstream := range []string{"ws://example.invalid", "ftp://example.invalid"} {
 		t.Run(upstream, func(t *testing.T) {
 			deps := gatewayDeps{open: func(context.Context, gatewayOptions, *serveLog) (servedGateway, error) {
@@ -538,7 +565,41 @@ func TestGatewayCommandRefusesAnEmptyUpstream(t *testing.T) {
 	}
 }
 
+// TestGatewayCommandRefusesWithNoCADirsConfigured is a regression test for a
+// review finding: an earlier version of this file defaulted -ca-key-dir and
+// -ca-cert-dir to $HOME-relative paths when unset, "for a bare run outside
+// compose" -- and that default was exactly what let an incompletely-updated
+// test write a real CA private key to a developer's own $HOME (caught in
+// review before it shipped). There is no default now, for either flag or
+// its environment variable: `innsegl gateway`, run with every OTHER setting
+// valid and -ca-key-dir/-ca-cert-dir simply never mentioned, must refuse to
+// start -- deps.open (the real openGateway, unfaked) must never even be
+// called, so nothing is opened and nothing is written anywhere.
+func TestGatewayCommandRefusesWithNoCADirsConfigured(t *testing.T) {
+	t.Setenv(envGatewayCAKeyDir, "")
+	t.Setenv(envGatewayCACertDir, "")
+	deps := gatewayDeps{open: func(context.Context, gatewayOptions, *serveLog) (servedGateway, error) {
+		t.Fatal("openGateway was called; the gateway must refuse to start TLS with no CA " +
+			"directories configured, before anything is opened or written")
+		return nil, nil
+	}}
+
+	var stdout, stderr bytes.Buffer
+	code := runGatewayCommand(
+		[]string{"-listen", "127.0.0.1:0", "-upstream", "https://example.invalid"},
+		&stdout, &stderr, deps)
+
+	if code != exitUsage {
+		t.Errorf("gateway with no -ca-key-dir/-ca-cert-dir = %d, want %d (exitUsage). stderr:\n%s",
+			code, exitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "-ca-key-dir") && !strings.Contains(stderr.String(), "-ca-cert-dir") {
+		t.Errorf("stderr = %q, want it to name -ca-key-dir or -ca-cert-dir", stderr.String())
+	}
+}
+
 func TestGatewayCommandRefusesAnUnparseableUpstreamURL(t *testing.T) {
+	gatewayTestValidCADirs(t)
 	var stdout, stderr bytes.Buffer
 	code := runGatewayCommand([]string{"-listen", "127.0.0.1:0", "-upstream", "not a url"},
 		&stdout, &stderr, gatewayDeps{})
@@ -589,6 +650,7 @@ func TestGatewayCommandRefusesANonPositiveRateLimitBurst(t *testing.T) {
 // command's own defaults track internal/gateway's, rather than drifting
 // from a second, separately-maintained number.
 func TestGatewayCommandDefaultsRateLimitToThePackagesOwnDefaults(t *testing.T) {
+	gatewayTestValidCADirs(t)
 	for _, name := range []string{envGatewayRate, envGatewayBurst} {
 		t.Setenv(name, "")
 	}
@@ -607,6 +669,7 @@ func TestGatewayCommandDefaultsRateLimitToThePackagesOwnDefaults(t *testing.T) {
 }
 
 func TestGatewayCommandReadsEveryFlagFromTheEnvironment(t *testing.T) {
+	gatewayTestValidCADirs(t)
 	for _, name := range []string{
 		envGatewayListen, envGatewayUpstream, envGatewayShutdownTimeout, envGatewayRate, envGatewayBurst,
 	} {
@@ -666,6 +729,7 @@ func (f *fakeGateway) Close() { f.closed++ }
 // gatewayalso_test.go's GW-004); this is what a gateway that started fine
 // and then stopped serving produces, and Close must still run.
 func TestGatewayCommandReportsFailedWhenServeReturnsAnError(t *testing.T) {
+	gatewayTestValidCADirs(t)
 	fake := &fakeGateway{addr: "127.0.0.1:1", serveErr: errors.New("listener died")}
 	deps := gatewayDeps{open: func(context.Context, gatewayOptions, *serveLog) (servedGateway, error) {
 		return fake, nil
@@ -701,6 +765,7 @@ func TestGatewayCommandRejectsTrailingArguments(t *testing.T) {
 // recorder (configureGatewayAgentMessages, gateway.go). ---
 
 func TestGatewayCommandDefaultsAgentMessageKeyID(t *testing.T) {
+	gatewayTestValidCADirs(t)
 	t.Setenv(envAgentMessageKeyID, "")
 	o, code, ok := parseGatewayFlags(nil, io.Discard)
 	if !ok {
@@ -712,6 +777,7 @@ func TestGatewayCommandDefaultsAgentMessageKeyID(t *testing.T) {
 }
 
 func TestGatewayCommandRefusesAMalformedAgentMessageKeyID(t *testing.T) {
+	gatewayTestValidCADirs(t)
 	var stdout, stderr bytes.Buffer
 	code := runGatewayCommand([]string{"-agent-message-key-id", "Not Valid!"}, &stdout, &stderr, gatewayDeps{})
 	if code != exitUsage {
@@ -723,6 +789,7 @@ func TestGatewayCommandRefusesAMalformedAgentMessageKeyID(t *testing.T) {
 }
 
 func TestGatewayCommandReadsIdentitySecretFromTheFlag(t *testing.T) {
+	gatewayTestValidCADirs(t)
 	t.Setenv(envIdentitySecret, "")
 	t.Setenv(envIdentitySecretFile, "")
 	o, code, ok := parseGatewayFlags([]string{"-identity-secret", "s3cr3t"}, io.Discard)
@@ -735,6 +802,7 @@ func TestGatewayCommandReadsIdentitySecretFromTheFlag(t *testing.T) {
 }
 
 func TestGatewayCommandReadsIdentitySecretFromAFile(t *testing.T) {
+	gatewayTestValidCADirs(t)
 	t.Setenv(envIdentitySecret, "")
 	t.Setenv(envIdentitySecretFile, "")
 	dir := t.TempDir()

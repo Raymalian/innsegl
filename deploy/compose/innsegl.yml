@@ -1030,11 +1030,12 @@ services:
       # RM-246 (#391) — the gateway's own TLS certificate authority. The
       # PRIVATE key's directory (the named volume below, mounted into no
       # other service) and the PUBLIC certificate's directory (the host bind
-      # mount, *gateway-ca-host-dir, above). `innsegl gateway`'s own
-      # command-line defaults are $HOME-relative for a bare run outside
-      # compose; this deployment always overrides both to these container
-      # mount points, the same "compose always overrides the bare default"
-      # shape the CA-cert-dir's own anchor comment describes.
+      # mount, *gateway-ca-host-dir, above). NEITHER HAS A COMMAND-LINE
+      # DEFAULT -- `innsegl gateway` refuses to start without both set,
+      # deliberately (cmd/innsegl/gateway.go's own gatewayOptions.caKeyDir
+      # doc comment), so this deployment is the thing that decides where the
+      # key lives, always, rather than a guessed fallback ever being asked
+      # to.
       INNSEGL_GATEWAY_CA_KEY_DIR: /run/innsegl/gateway-ca-key
       INNSEGL_GATEWAY_CA_CERT_DIR: /run/innsegl/gateway-ca
 

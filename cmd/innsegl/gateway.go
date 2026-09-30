@@ -206,15 +206,21 @@ type gatewayOptions struct {
 
 	// caKeyDir and caCertDir are RM-246 (#391)'s own settings: where the
 	// gateway's own TLS certificate authority keeps its private key, and
-	// where its public certificate is published. Their command-line
-	// defaults are $HOME-relative (this file's own
-	// defaultGatewayCADir), for a bare `innsegl gateway` run directly on a
-	// host with no compose deployment around it; a compose deployment
-	// always overrides both to the container's own mount points (see
-	// envGatewayCAKeyDir/envGatewayCACertDir's own doc comment), and every
-	// one of this package's own tests that drives a real listener does the
-	// same, to temporary directories, so as never to touch the developer's
-	// own $HOME.
+	// where its public certificate is published. BOTH ARE REQUIRED, WITH NO
+	// FALLBACK DEFAULT -- deliberately. An earlier version of this file
+	// defaulted them to $HOME-relative paths for a bare `innsegl gateway`
+	// run outside compose, and that default is exactly what let an
+	// incompletely-updated test write a real CA private key to a
+	// developer's own $HOME (caught in review, never shipped): a caller
+	// that forgets these two flags is a caller that has not decided where a
+	// private key lives, and a filesystem-touching guess is the wrong
+	// answer to that, every time. validate refuses either one empty before
+	// LoadOrCreateCA is ever called. A compose deployment sets both to the
+	// container's own mount points (envGatewayCAKeyDir/envGatewayCACertDir's
+	// own doc comment); every one of this package's own tests that drives a
+	// real listener sets both to a temporary directory (gatewayTestCADirs,
+	// gateway_test.go) -- see TestGatewayCommandRefusesWithNoCADirsConfigured
+	// for the regression this holds.
 	caKeyDir  string
 	caCertDir string
 
@@ -448,14 +454,16 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 				"is under (ADR-0061's 2026-09-28 amendment); rotate by deploying a new value here "+
 				"-- an event minted under an earlier id stays verifiable under that id forever "+
 				"($"+envAgentMessageKeyID+")")
-		caKeyDir = fs.String("ca-key-dir", envOr(envGatewayCAKeyDir, defaultGatewayCADir("gateway-ca-key")),
+		caKeyDir = fs.String("ca-key-dir", os.Getenv(envGatewayCAKeyDir),
 			"directory holding the gateway's own TLS certificate authority's PRIVATE key, "+
 				"created 0700 -- a named Docker volume mounted into the core and NOTHING else "+
-				"in a compose deployment (RM-246, #391) ($"+envGatewayCAKeyDir+")")
-		caCertDir = fs.String("ca-cert-dir", envOr(envGatewayCACertDir, defaultGatewayCADir("ca")),
+				"in a compose deployment (RM-246, #391). REQUIRED: no default, on purpose -- "+
+				"see gatewayOptions.caKeyDir's own doc comment ($"+envGatewayCAKeyDir+")")
+		caCertDir = fs.String("ca-cert-dir", os.Getenv(envGatewayCACertDir),
 			"directory the gateway's own CA certificate (public) is published to on every "+
 				"start -- a host bind mount in a compose deployment, so the host commands "+
-				"(internal/commitpath) can find and trust exactly it ($"+envGatewayCACertDir+")")
+				"(internal/commitpath) can find and trust exactly it. REQUIRED: no default "+
+				"($"+envGatewayCACertDir+")")
 	)
 
 	fs.Usage = func() { gatewayUsage(stderr, fs) }
@@ -496,23 +504,6 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 		return gatewayOptions{}, exitUsage, false
 	}
 	return o, exitOK, true
-}
-
-// defaultGatewayCADir is -ca-key-dir/-ca-cert-dir's own command-line
-// default: $HOME/.innsegl/<sub>, for a bare `innsegl gateway` run directly
-// on a host with no compose deployment around it to override
-// envGatewayCAKeyDir/envGatewayCACertDir. $HOME unset falls back to ".",
-// the same posture every other $HOME-relative default in this codebase
-// takes (deploy/compose/innsegl.yml's own INNSEGL_BACKUP_HOST_DIR default,
-// internal/commitpath.CAFile) -- a process with no HOME still has a
-// well-defined, if unhelpful, place to look, rather than a panic or an
-// empty path reaching MkdirAll.
-func defaultGatewayCADir(sub string) string {
-	home := os.Getenv("HOME")
-	if home == "" {
-		home = "."
-	}
-	return filepath.Join(home, ".innsegl", sub)
 }
 
 // resolveGatewayIdentitySecret reads -identity-secret-file into the

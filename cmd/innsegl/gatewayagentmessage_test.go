@@ -55,6 +55,7 @@ func startGWAgentMessageGateway(
 	args := []string{
 		"-listen", "127.0.0.1:0", "-upstream", upstreamURL, "-dsn", dsn,
 		"-identity-secret", identitySecret, "-agent-message-key-id", keyID,
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
 	}
 	done := make(chan int, 1)
 	go func() { done <- runGateway(ctx, args, io.Discard, stderr, deps) }()

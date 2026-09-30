@@ -158,7 +158,10 @@ func runGatewayForCanary(
 	}}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstreamURL}
+	args := []string{
+		"-listen", "127.0.0.1:0", "-upstream", upstreamURL,
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
+	}
 	done := make(chan int, 1)
 	go func() { done <- runGateway(ctx, args, io.Discard, stderr, deps) }()
 
@@ -410,7 +413,10 @@ func runGatewayForCanaryWithDSN(
 	}}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	args := []string{"-listen", "127.0.0.1:0", "-upstream", upstreamURL, "-dsn", dsn}
+	args := []string{
+		"-listen", "127.0.0.1:0", "-upstream", upstreamURL, "-dsn", dsn,
+		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
+	}
 	done := make(chan int, 1)
 	go func() { done <- runGateway(ctx, args, io.Discard, stderr, deps) }()
 
