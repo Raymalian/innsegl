@@ -215,6 +215,9 @@ func TestGREC001RecorderPairsAPendingToolUseWithItsResultAndRecordsItOnce(t *tes
 	if body["is_error"] == true {
 		t.Errorf("is_error = true, want false/absent")
 	}
+	if body["tool_use_id"] != "toolu_1" {
+		t.Errorf("tool_use_id = %v, want %q (#392, OTW's own join key)", body["tool_use_id"], "toolu_1")
+	}
 	if !strings.Contains(string(got[0].Body), "echo hi") {
 		t.Errorf("recorded body does not carry the input: %s", got[0].Body)
 	}
@@ -696,11 +699,31 @@ func TestToolCallRecorderOnToolUseContextWithoutARunIDIsANoOp(t *testing.T) {
 	}
 }
 
+// TestOTW001BuildToolCallBodyCarriesToolUseID drives #392 (RM-247), E18: the
+// gateway's own tool_call body must carry the SAME tool_use_id the model
+// API, the harness's hooks and the harness's own OTLP telemetry all carry
+// for the identical call, so the reconciler's witness cross-check
+// (internal/reconciler/witness.go) can join the two witnesses exactly. This
+// is a body field, never an event field — doc 02's schema is unchanged.
+func TestOTW001BuildToolCallBodyCarriesToolUseID(t *testing.T) {
+	call := pendingCall{tool: "Bash", input: json.RawMessage(`{"command":"echo hi"}`)}
+	result := observedToolResult{ToolUseID: "toolu_join_key", Content: json.RawMessage(`{"stdout":"hi\n"}`)}
+	body := buildToolCallBody("toolu_join_key", call, &result)
+
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if got := decoded["tool_use_id"]; got != "toolu_join_key" {
+		t.Errorf("tool_use_id = %v, want %q", got, "toolu_join_key")
+	}
+}
+
 // TestBuildToolCallBodyMarksInputTruncation. GREC-007 (doc 07): a truncated
 // tool_use's input is stated, never reassembled and presented as complete.
 func TestBuildToolCallBodyMarksInputTruncation(t *testing.T) {
 	call := pendingCall{tool: "Write", input: nil, truncated: true}
-	body := buildToolCallBody(call, nil)
+	body := buildToolCallBody("toolu_input_trunc", call, nil)
 	var decoded map[string]any
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatalf("body is not JSON: %v", err)
@@ -717,7 +740,7 @@ func TestBuildToolCallBodyMarksInputTruncation(t *testing.T) {
 func TestBuildToolCallBodyMarksResultTruncation(t *testing.T) {
 	call := pendingCall{tool: "Read", input: json.RawMessage(`{"file_path":"/w/a.go"}`)}
 	result := observedToolResult{ToolUseID: "toolu_big", Content: nil, Truncated: true}
-	body := buildToolCallBody(call, &result)
+	body := buildToolCallBody("toolu_big", call, &result)
 	var decoded map[string]any
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatalf("body is not JSON: %v", err)
