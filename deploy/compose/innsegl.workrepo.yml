@@ -180,6 +180,13 @@ services:
       # digest. Identity is unaffected and never expires -- it is in the chain.
       INNSEGL_API_LOG_DIR: /agentlog
       INNSEGL_API_LOG_DAYS: ${INNSEGL_LOG_DAYS:-90}
+      # The run page's own read (E19, #395-#397): the gateway's workspace
+      # snapshot store, internal/gateway/snapshot.go's own StoreRoot, which
+      # cmd/innsegl/gateway.go writes under a "gateway-snapshots"
+      # subdirectory of this SAME /agentlog mount — no second volume. Named
+      # explicitly, rather than left to derive, so this file states the same
+      # thing api.go's own default would compute.
+      INNSEGL_API_SNAPSHOT_DIR: /agentlog/gateway-snapshots
     volumes:
       # READ-ONLY, and it matters more here than for the workspace: retention
       # belongs to the hook that writes these. A read path that could delete

@@ -142,6 +142,22 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 		return nil, fmt.Errorf("configure the proof BFF: %w", err)
 	}
 
+	// ---- the run page's own routes (E19, #395-#397) ------------------------
+	//
+	// Installed BEFORE NewServer, which is what makes the ordering safe
+	// regardless of what NewServer itself does with it: api.Server holds no
+	// field for either setting (server.go is not this issue's file to add
+	// one to), so they travel through this package-level Configure/restore
+	// pair instead — the same seam internal/mcp already uses for
+	// observe_tool_call and the agent-message recorder. Whatever calls
+	// Server.registerRecordRoutes (server.go, another issue's own edit)
+	// reads this state at that point, not before.
+	restoreRecordConfig := api.ConfigureRecordRoutes(api.RecordConfig{
+		SnapshotDir: o.snapshotDir,
+		GitPath:     o.gitPath,
+	})
+	closers = append(closers, restoreRecordConfig)
+
 	// ---- the routes -------------------------------------------------------
 	handler, err := api.NewServer(api.ServerConfig{
 		Store: store, Prover: prover,

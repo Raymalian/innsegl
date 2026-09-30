@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -112,11 +113,20 @@ const (
 // read-only role for exactly that reason. One name for two different roles is
 // a deployment that can hand the dashboard the writer by copying a line.
 const (
-	envAPIDSN             = "INNSEGL_API_DSN"
-	envAPIListen          = "INNSEGL_API_LISTEN"
-	envAPIRepos           = "INNSEGL_API_REPOS"
-	envAPILogDir          = "INNSEGL_API_LOG_DIR"
-	envAPILogDays         = "INNSEGL_API_LOG_DAYS"
+	envAPIDSN     = "INNSEGL_API_DSN"
+	envAPIListen  = "INNSEGL_API_LISTEN"
+	envAPIRepos   = "INNSEGL_API_REPOS"
+	envAPILogDir  = "INNSEGL_API_LOG_DIR"
+	envAPILogDays = "INNSEGL_API_LOG_DAYS"
+	// envAPISnapshotDir names the run page's own read: the gateway's own
+	// snapshot store (internal/gateway/snapshot.go's own StoreRoot), which
+	// this issue's own routes (api.registerRecordRoutes) read commits and
+	// diffs out of. Unset defaults to the "gateway-snapshots" subdirectory
+	// of $INNSEGL_API_LOG_DIR, which is where the gateway writes it
+	// (cmd/innsegl/gateway.go's own newGatewaySnapshotter) — no second mount
+	// is needed for the ordinary case, this variable exists for a
+	// deployment that has a reason to point it somewhere else.
+	envAPISnapshotDir     = "INNSEGL_API_SNAPSHOT_DIR"
 	envAPIShutdownTimeout = "INNSEGL_API_SHUTDOWN_TIMEOUT"
 	envAPIUpstreamTimeout = "INNSEGL_API_UPSTREAM_TIMEOUT"
 	envAPIGit             = "INNSEGL_GIT"
@@ -143,6 +153,8 @@ const (
 var apiRoutes = []string{
 	"GET /api/v1/runs",
 	"GET /api/v1/runs/{run_id}",
+	"GET /api/v1/runs/{run_id}/record",
+	"GET /api/v1/runs/{run_id}/steps/{n}/diff",
 	"GET /api/v1/overview",
 	"GET /api/v1/proof/{commit_sha}",
 	"GET /api/v1/health",
@@ -161,6 +173,10 @@ type apiOptions struct {
 	// this deployment keeps none, which is a valid answer and not a fault.
 	logDir  string
 	logDays int
+	// snapshotDir is the gateway's own workspace-snapshot store, read-only.
+	// Empty means the run page's steps and diffs carry no tree data — see
+	// envAPISnapshotDir.
+	snapshotDir string
 
 	shutdownTimeout time.Duration
 	upstreamTimeout time.Duration
@@ -308,6 +324,10 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		logDays = fs.Int("log-retention-days", envIntOr(envAPILogDays, 90),
 			"how long the harness keeps those bodies, reported so a reader can tell an "+
 				"expired body from one that never existed ($"+envAPILogDays+")")
+		snapshotDir = fs.String("snapshot-dir", os.Getenv(envAPISnapshotDir),
+			"the gateway's own workspace-snapshot store, read-only; empty defaults to "+
+				"\"gateway-snapshots\" under -log-dir (where the gateway writes it) when -log-dir "+
+				"is set, and serves no snapshot data otherwise ($"+envAPISnapshotDir+")")
 		repos = fs.String("repos", os.Getenv(envAPIRepos),
 			"comma-separated name=path pairs naming the repositories the proof BFF answers "+
 				"about, e.g. github.com/acme/app=/srv/repos/github.com/acme/app. A commit in "+
@@ -354,6 +374,7 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		fulcioURL: *fulcioURL, rekorURL: *rekorURL, issuer: *issuer, gitPath: *gitPath,
 		shutdownTimeout: *shutdownTimeout, upstreamTimeout: *upstreamTimeout,
 		logDir: *logDir, logDays: *logDays,
+		snapshotDir: resolveSnapshotDir(*snapshotDir, *logDir),
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl api: %s\n", problem)
@@ -398,6 +419,23 @@ func (o apiOptions) validate() string {
 // dropped from this map turns every proof request about it into "no repository
 // this deployment serves holds that commit", which reads as a verdict about
 // the commit and is a statement about the configuration.
+// resolveSnapshotDir answers -snapshot-dir (or $INNSEGL_API_SNAPSHOT_DIR)
+// when one was given, and otherwise the "gateway-snapshots" subdirectory of
+// logDir — the SAME path cmd/innsegl/gateway.go's own newGatewaySnapshotter
+// writes the store under, so a deployment that has not been told to point
+// this anywhere else still finds it without a second mount or a second
+// variable. Empty when logDir is also empty: a deployment keeping no
+// bodies keeps no snapshots either, and that is a valid answer.
+func resolveSnapshotDir(explicit, logDir string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if logDir == "" {
+		return ""
+	}
+	return filepath.Join(logDir, "gateway-snapshots")
+}
+
 func parseRepos(raw string) (map[string]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, errors.New("no repository was named")
