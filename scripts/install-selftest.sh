@@ -422,6 +422,44 @@ else
   bad "EGR-001 a second run was not idempotent" "exit=$rc8b"$'\n'"$out8b"
 fi
 
+# --- EGR-001: the operator's own allowlist entries survive install and uninstall
+home8c="$WORK/home-egress-operator"; mkdir -p "$home8c"
+ms8c="$home8c/managed-settings.json"
+cat > "$ms8c" <<'JSON'
+{"sandbox": {"network": {"allowedDomains": ["internal.example.invalid"]}}}
+JSON
+egress_run() {
+  HOME="$home8c" PATH="$TOOLBIN" \
+    INNSEGL_INSTALL_START_CMD="$STUB_START" \
+    INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
+    INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+    INNSEGL_BIN_PATH="$STUB_BIN" \
+    INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
+    "$BASH_BIN" "$INSTALL" --managed-settings "$ms8c" "$@" 2>&1
+}
+out8c="$(egress_run --egress-control "$allowlist8")"; rc8c=$?
+if [ "$rc8c" -eq 0 ] \
+   && [ "$(check json-equal "$ms8c" sandbox.network.allowedDomains '["internal.example.invalid", "github.com", "registry.npmjs.org"]')" = ok ]; then
+  ok "EGR-001 an allowlist the operator already had is kept, and the new domains are added to it"
+else
+  bad "EGR-001 the operator's own allowlist was not kept" "exit=$rc8c"$'\n'"$out8c"
+fi
+out8d="$(egress_run --uninstall)"; rc8d=$?
+if [ "$rc8d" -eq 0 ] \
+   && [ "$(check json-equal "$ms8c" sandbox.network.allowedDomains '["internal.example.invalid", "github.com", "registry.npmjs.org"]')" = ok ] \
+   && printf '%s' "$out8d" | grep -q -- '--egress-control'; then
+  ok "EGR-001 --uninstall without the allowlist file leaves the domains alone and says how to remove them"
+else
+  bad "EGR-001 --uninstall without the allowlist file touched the domains, or said nothing" "exit=$rc8d"$'\n'"$out8d"
+fi
+out8e="$(egress_run --uninstall --egress-control "$allowlist8")"; rc8e=$?
+if [ "$rc8e" -eq 0 ] \
+   && [ "$(check json-equal "$ms8c" sandbox.network.allowedDomains '["internal.example.invalid"]')" = ok ]; then
+  ok "EGR-001 --uninstall with the allowlist file removes only the domains it added"
+else
+  bad "EGR-001 --uninstall with the allowlist file removed the wrong domains" "exit=$rc8e"$'\n'"$out8e"
+fi
+
 # --- --uninstall-legacy touches only the OLD wiring -------------------------
 home9="$WORK/home-legacy"; mkdir -p "$home9/.claude"
 hook_path9="$ROOT/scripts/hooks/subagent-identity.sh"

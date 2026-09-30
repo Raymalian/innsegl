@@ -491,7 +491,17 @@ def install_sandbox(obj):
     if egress:
         net["strictAllowlist"] = True
         net["allowManagedDomainsOnly"] = True
-        net["allowedDomains"] = compute_egress_domains()
+        # Merged, never replaced: domains the operator already allowed stay.
+        existing = net.get("allowedDomains", [])
+        if not isinstance(existing, list):
+            sys.stderr.write(
+                "install.sh: sandbox.network.allowedDomains in %s is not a list; "
+                "refusing to touch it\n" % path
+            )
+            sys.exit(1)
+        net["allowedDomains"] = existing + [
+            d for d in compute_egress_domains() if d not in existing
+        ]
 
 
 def uninstall_sandbox(obj):
@@ -532,7 +542,24 @@ def uninstall_sandbox(obj):
             net.pop("allowManagedDomainsOnly", None)
         if net.get("allowLocalBinding") is True:
             net.pop("allowLocalBinding", None)
-        net.pop("allowedDomains", None)
+        domains = net.get("allowedDomains")
+        if isinstance(domains, list) and domains:
+            if egress:
+                # Only the domains the same allowlist file added go; any the
+                # operator allowed themselves stay.
+                ours = set(compute_egress_domains())
+                kept = [d for d in domains if d not in ours]
+                if kept:
+                    net["allowedDomains"] = kept
+                else:
+                    net.pop("allowedDomains", None)
+            else:
+                sys.stderr.write(
+                    "install.sh: sandbox.network.allowedDomains is left as it is: "
+                    "which of them this installer added is known only from the "
+                    "allowlist file. Run --uninstall --egress-control <that file> "
+                    "to remove exactly those.\n"
+                )
         if net:
             sandbox["network"] = net
         else:
