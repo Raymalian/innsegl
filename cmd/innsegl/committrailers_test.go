@@ -74,7 +74,7 @@ func ctNow(at time.Time) func() time.Time { return func() time.Time { return at 
 // handler and returns the recorded response.
 func ctDo(t *testing.T, h http.Handler, method string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, "/_gateway/commit-trailers", bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, "/_gateway/commit-trailers", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec

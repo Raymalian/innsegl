@@ -58,7 +58,7 @@ func commitTrailersHandler(res commitpath.Resolver, claimFor func(ctx context.Co
 			return
 		}
 		var req commitpath.TrailersRequest
-		if err := json.Unmarshal(raw, &req); err != nil {
+		if uerr := json.Unmarshal(raw, &req); uerr != nil {
 			http.Error(w, "innsegl: commit trailers: the request body is not the expected JSON shape",
 				http.StatusBadRequest)
 			return
@@ -106,9 +106,15 @@ func commitTrailersHandler(res commitpath.Resolver, claimFor func(ctx context.Co
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(commitpath.TrailersResponse{Message: message})
+		discardEncodeError(json.NewEncoder(w).Encode(commitpath.TrailersResponse{Message: message}))
 	})
 }
+
+// discardEncodeError is writeCommitTrailersError's write discard, named for
+// the identical reason internal/gateway's discardWriteError is (proxy.go):
+// visible and explained, never a bare `_ =`. A caller that has already gone
+// leaves nothing here to report the failure to.
+func discardEncodeError(error) {}
 
 // commitTrailersAlreadyClaimed reports whether every trailer claim would add
 // is already present in message, as a whole line, verbatim. It does not
@@ -168,5 +174,10 @@ func writeCommitTrailersError(w http.ResponseWriter, status int, msg string) {
 		// naming innsegl rather than leaving the body empty.
 		body = []byte(`{"error":"innsegl: commit trailers: the request was refused and the reason could not be encoded"}`)
 	}
-	_, _ = w.Write(body)
+	discardWriteError(w.Write(body))
 }
+
+// discardWriteError mirrors internal/gateway's own discard of the identical
+// shape (proxy.go's discardWriteError) — a write failure here means the
+// caller has already gone, and there is nothing left to tell it.
+func discardWriteError(int, error) {}
