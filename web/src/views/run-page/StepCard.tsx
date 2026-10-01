@@ -62,6 +62,9 @@ export interface StepCardProps {
   readonly fetchStepDiff: FetchStepDiff;
   readonly fetchProof: FetchProof;
   readonly fetchStep: FetchStep;
+  /** Let the browser skip this card while off screen; only for long runs
+   * (#442), so a short run draws in full, as screenshots and print need. */
+  readonly deferOffscreen?: boolean;
 }
 
 export function StepCard({
@@ -74,6 +77,7 @@ export function StepCard({
   fetchStepDiff,
   fetchProof,
   fetchStep,
+  deferOffscreen = false,
 }: StepCardProps) {
   // A clipped step's full text, once asked for (#440).
   const [full, setFull] = useState<{ readonly output: string; readonly loading: boolean } | null>(null);
@@ -92,7 +96,7 @@ export function StepCard({
   const spawnedNode = tree.nodes.find((n) => n.run_id === step.spawned_run_id);
 
   return (
-    <section id={`step-${step.n}`} className={`${panel} ${stepCardDeferred}`} data-step={step.n} data-witnesses-agree={agrees}>
+    <section id={`step-${step.n}`} className={deferOffscreen ? `${panel} ${stepCardDeferred}` : panel} data-step={step.n} data-witnesses-agree={agrees}>
       <div className={stepHeaderRow} data-step-header>
         <span className={stepNumber}>{step.n}</span>
         <span className={stepTool}>{step.tool}</span>

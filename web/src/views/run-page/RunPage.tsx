@@ -62,6 +62,9 @@ type Read =
 /** How many steps the timeline draws at a time (#440). */
 const STEP_PAGE = 100;
 
+/** A run longer than this lets the browser skip off-screen step cards (#442). */
+const DEFER_OFFSCREEN_AFTER = 30;
+
 function diffModeFromPath(path: string): DiffMode {
   const query = path.split("?")[1] ?? "";
   return new URLSearchParams(query).get("diff") === "side" ? "side" : "unified";
@@ -209,6 +212,7 @@ function Loaded({
               fetchStepDiff={readDiff}
               fetchProof={readProof}
               fetchStep={readStep}
+              deferOffscreen={record.steps.length > DEFER_OFFSCREEN_AFTER}
             />
           ))}
 
