@@ -97,7 +97,7 @@ func TestRunRecordOfABareRunEncodesEmptyListsNotNull(t *testing.T) {
 		t.Fatalf("GET bare run record: status %d: %s", a.status, a.body)
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(a.body), &raw); err != nil {
+	if err := json.Unmarshal(a.body, &raw); err != nil {
 		t.Fatalf("decoding: %v", err)
 	}
 	for _, list := range []string{"replies", "steps", "files", "commits"} {
