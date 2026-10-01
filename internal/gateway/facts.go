@@ -182,7 +182,8 @@ func joinText(blocks []rawContentBlock) string {
 // scanner takes.
 func parseRequestFacts(buf []byte) RequestFacts {
 	var body struct {
-		Messages []rawMessage `json:"messages"`
+		System   json.RawMessage `json:"system"`
+		Messages []rawMessage    `json:"messages"`
 	}
 	if err := json.Unmarshal(buf, &body); err != nil {
 		return RequestFacts{}
@@ -217,6 +218,15 @@ func parseRequestFacts(buf []byte) RequestFacts {
 				facts.WorkingDirectory = dir
 				break
 			}
+		}
+	}
+	// A session resumed after its context was summarised opens with the
+	// summary, and the harness then states its environment only in the
+	// top-level system prompt. The opening stays authoritative; the system
+	// prompt is read only when the opening names no directory.
+	if facts.WorkingDirectory == "" && len(body.System) > 0 {
+		if blocks, ok := contentBlocks(body.System); ok {
+			facts.WorkingDirectory = extractWorkingDirectory(joinText(blocks))
 		}
 	}
 

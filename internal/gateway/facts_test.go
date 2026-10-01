@@ -357,3 +357,33 @@ func TestRequestFactsIgnoreAWorkingDirectoryStatedAfterTheFirstAssistantTurn(t *
 		t.Fatalf("WorkingDirectory = %q, want empty: a later message must not name the workspace", got)
 	}
 }
+
+// TestRequestFactsReadTheWorkingDirectoryFromTheSystemPrompt. A session
+// resumed after its context was summarised opens with the summary, and the
+// environment statement then lives only in the top-level system prompt.
+// Measured 2026-10-01: such a session was refused on every request with
+// "cwd was empty", and the agent could not run at all.
+func TestRequestFactsReadTheWorkingDirectoryFromTheSystemPrompt(t *testing.T) {
+	for name, system := range map[string]string{
+		"blocks": `[{"type":"text","text":"You are an agent."},{"type":"text","text":"# Environment\n - Primary working directory: /workspace/example-repo\n"}]`,
+		"string": `"# Environment\n - Primary working directory: /workspace/example-repo\n"`,
+	} {
+		body := `{"system":` + system + `,"messages":[
+		  {"role":"user","content":[{"type":"text","text":"This session is being continued from a previous conversation."}]}
+		]}`
+		if got := parseRequestFacts([]byte(body)).WorkingDirectory; got != "/workspace/example-repo" {
+			t.Errorf("%s: WorkingDirectory = %q, want the one the system prompt states", name, got)
+		}
+	}
+}
+
+// TestRequestFactsPreferTheOpeningOverTheSystemPrompt keeps the opening
+// messages authoritative when both state a directory.
+func TestRequestFactsPreferTheOpeningOverTheSystemPrompt(t *testing.T) {
+	body := `{"system":"- Primary working directory: /workspace/from-system","messages":[
+	  {"role":"user","content":[{"type":"text","text":" - Primary working directory: /workspace/from-opening"}]}
+	]}`
+	if got := parseRequestFacts([]byte(body)).WorkingDirectory; got != "/workspace/from-opening" {
+		t.Fatalf("WorkingDirectory = %q, want the opening's", got)
+	}
+}
