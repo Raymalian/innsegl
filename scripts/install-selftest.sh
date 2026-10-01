@@ -151,6 +151,7 @@ export INNSEGL_INSTALL_GATEWAY_PROBE_CMD=true
 export INNSEGL_INSTALL_BUILD_CMD=true
 STUB_SIGNER="$(make_stub signer)"
 STUB_LINK="$(make_stub link)"
+STUB_SETUP_LINK="$(make_stub setup-link)"
 
 # The innsegl binary the hook command points at. It never has to run
 # anything real for these cases: only its path is asserted.
@@ -162,7 +163,7 @@ chmod +x "$STUB_BIN"
 # friends), which is exactly what this self-test must never trigger — so
 # refuse to go any further rather than run install.sh against a stub this
 # test cannot prove is a stub.
-[ -n "$STUB_START" ] && [ -n "$STUB_SIGNER" ] && [ -n "$STUB_LINK" ] && [ -n "$STUB_BIN" ] \
+[ -n "$STUB_START" ] && [ -n "$STUB_SIGNER" ] && [ -n "$STUB_LINK" ] && [ -n "$STUB_BIN" ] && [ -n "$STUB_SETUP_LINK" ] \
   || { echo "install-selftest: a stub command came out empty — refusing to run install.sh at all" >&2; exit 1; }
 
 run_install() {
@@ -172,6 +173,7 @@ run_install() {
     INNSEGL_INSTALL_START_CMD="$STUB_START" \
     INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
     INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+    INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
     INNSEGL_BIN_PATH="$STUB_BIN" \
     "$BASH_BIN" "$INSTALL" "$@"
 }
@@ -411,6 +413,7 @@ out7g="$(HOME="$home7g" PATH="$TOOLBIN" \
   INNSEGL_INSTALL_START_CMD="$STUB_START" \
   INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
   INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+  INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
   INNSEGL_BIN_PATH="$STUB_BIN" \
   INNSEGL_INSTALL_GATEWAY_PROBE_CMD=false INNSEGL_INSTALL_GATEWAY_TRIES=1 \
   "$BASH_BIN" "$INSTALL" --managed-settings "$ms7g" 2>&1)"
@@ -435,6 +438,7 @@ out8s="$(HOME="$home8s" PATH="$TOOLBIN" \
   INNSEGL_INSTALL_START_CMD="$STUB_START" \
   INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
   INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+  INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
   INNSEGL_BIN_PATH="$stale_bin" \
   "$BASH_BIN" "$INSTALL" --managed-settings "$ms8s" 2>&1)"
 rc8s=$?
@@ -460,6 +464,7 @@ out8="$(HOME="$home8" PATH="$TOOLBIN" \
   INNSEGL_INSTALL_START_CMD="$STUB_START" \
   INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
   INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+  INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
   INNSEGL_BIN_PATH="$STUB_BIN" \
   INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
   "$BASH_BIN" "$INSTALL" --managed-settings "$ms8" --egress-control "$allowlist8")"
@@ -478,6 +483,7 @@ out8b="$(HOME="$home8" PATH="$TOOLBIN" \
   INNSEGL_INSTALL_START_CMD="$STUB_START" \
   INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
   INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+  INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
   INNSEGL_BIN_PATH="$STUB_BIN" \
   INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
   "$BASH_BIN" "$INSTALL" --managed-settings "$ms8" --egress-control "$allowlist8" 2>&1)"
@@ -499,6 +505,7 @@ egress_run() {
     INNSEGL_INSTALL_START_CMD="$STUB_START" \
     INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
     INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+    INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
     INNSEGL_BIN_PATH="$STUB_BIN" \
     INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
     "$BASH_BIN" "$INSTALL" --managed-settings "$ms8c" "$@" 2>&1

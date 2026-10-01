@@ -66,7 +66,7 @@ func TestAUTH004AForgedAssertionIsRefused(t *testing.T) {
 func TestAUTH004AReplayedCeremonyIsRefused(t *testing.T) {
 	srv, _, authStore := testServerConfigured(t)
 	auth, cookie := enrolTestUser(t, srv.URL, authStore)
-	userID, ok := verifySessionToken(t, authStore, cookie.Value)
+	userID, _, ok := verifySessionToken(t, authStore, cookie.Value)
 	if !ok {
 		t.Fatal("the session enrolTestUser just created does not verify")
 	}

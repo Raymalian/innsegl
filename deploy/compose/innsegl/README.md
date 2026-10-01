@@ -207,31 +207,60 @@ both halves, the same way `verify-reader-role.sh` does for the other role.
 
 ## Enrolling the first operator
 
-Nobody can open the dashboard until one passkey exists. ADR-0062's enrolment
-crux: the first enrolment (and its recovery, if the only passkey is ever
-lost) is gated by a one-time code only an operator holding the auth-writer
-DSN can mint.
+Nobody can open the dashboard until one account exists. ADR-0062's amendment
+(2026-10-01, #445): the first account comes from a one-time **setup link**,
+`scripts/setup-link.sh`, which `make start` and `install.sh` each print
+automatically once the stack answers — nothing to run by hand on the
+ordinary path.
 
-1. Mint a one-time code, from a trusted host, holding the auth-writer DSN:
+1. Bring the stack up (`make start`, or `install.sh`). Once `innsegl-api`
+   answers, the setup link is printed:
 
-   ```bash
-   docker exec innsegl-api \
-     sh -c 'innsegl admin-credential enrol-code -dsn "$INNSEGL_API_AUTH_DSN"'
-
-   The single quotes matter: `$INNSEGL_API_AUTH_DSN` is set inside the
-   container, not on the host, so it must be expanded there.
+   ```
+   No account exists yet. Open this link once to create it:
+     http://localhost:8082/setup?code=<code>
    ```
 
-   The code is printed to stdout and nowhere else — it is single-use and
-   short-lived (fifteen minutes by default).
+   `localhost`, not `127.0.0.1`: a WebAuthn relying-party ID must be a
+   domain, and `localhost` is the one this reference deployment is
+   configured for (`$INNSEGL_API_RP_ID`, `$INNSEGL_API_RP_ORIGIN`). The code
+   is single-use and short-lived (fifteen minutes by default) — the same
+   one-time code `innsegl admin-credential enrol-code` has always minted,
+   carried in the link rather than typed separately.
+2. Open the link. It asks for a name and a passkey, creates the account, and
+   shows **ten recovery codes once** — copy or download them before leaving
+   the page; there is no second look. The dashboard signs in immediately.
+3. Every session after this one is the ordinary "one passkey button"
+   sign-in page, with "Use a recovery code" beside it for when the
+   passkey is not reachable.
 
-2. Browse to **`http://localhost:8082`** — not `127.0.0.1:8082`: a WebAuthn
-   relying-party ID must be a domain, and `localhost` is the one this
-   reference deployment is configured for (`$INNSEGL_API_RP_ID`,
-   `$INNSEGL_API_RP_ORIGIN`).
-3. Enter a display name and the code, and create the passkey the platform
-   offers. The dashboard signs in immediately and every session after this
-   one is the ordinary "one passkey button" sign-in page.
+**If nothing was printed** — a redeploy that raced the stack's own
+start-up, or the link scrolled past — run it again once the stack is up:
+
+```bash
+scripts/setup-link.sh
+```
+
+It asks the API first (`GET /api/v1/auth/setup`) and prints nothing at all
+once an account exists; it is safe to run at any time, on any boot.
+
+**Minting the code directly**, the way `scripts/setup-link.sh` does it
+internally, from a trusted host holding the auth-writer DSN:
+
+```bash
+docker exec innsegl-api \
+  sh -c 'innsegl admin-credential enrol-code -dsn "$INNSEGL_API_AUTH_DSN"'
+```
+
+The single quotes matter: `$INNSEGL_API_AUTH_DSN` is set inside the
+container, not on the host, so it must be expanded there. The code is
+printed to stdout and nowhere else.
+
+**Losing every passkey afterward** does not reopen this door — ADR-0062's
+amendment replaced that with the account's own recovery codes instead: "Use
+a recovery code" on the sign-in page, which signs in once and leads straight
+to the account page to add a new passkey. Regenerating recovery codes (from
+the account page) voids every earlier one.
 
 ## What used to be here
 

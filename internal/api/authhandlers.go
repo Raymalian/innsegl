@@ -55,11 +55,13 @@ const maxAuthRequestBodyBytes = 64 << 10 // 64 KiB
 func (s *Server) newAuthMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/auth/session", s.handleAuthSession)
+	mux.HandleFunc("GET /api/v1/auth/setup", s.handleAuthSetup)
 	mux.HandleFunc("POST /api/v1/auth/enrol/begin", s.handleEnrolBegin)
 	mux.HandleFunc("POST /api/v1/auth/enrol/finish", s.handleEnrolFinish)
 	mux.HandleFunc("POST /api/v1/auth/login/begin", s.handleLoginBegin)
 	mux.HandleFunc("POST /api/v1/auth/login/finish", s.handleLoginFinish)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
+	mux.HandleFunc("POST /api/v1/auth/recover", s.handleRecover)
 	return mux
 }
 
@@ -107,7 +109,7 @@ type sessionStatus struct {
 }
 
 func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
-	userID, ok := s.sessionFromRequest(r)
+	userID, _, ok := s.sessionFromRequest(r)
 	if !ok {
 		writeJSON(w, http.StatusOK, sessionStatus{Authenticated: false})
 		return
@@ -118,6 +120,25 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionStatus{Authenticated: true, DisplayName: u.DisplayName})
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/auth/setup — "does an account still need creating" (#445)
+// ---------------------------------------------------------------------------
+
+// handleAuthSetup answers the setup link's own status check: `make start`
+// and install.sh print a setup link only while this says Needed, and the
+// setup page itself asks this before showing "create your account" so a
+// stale or reused link says so rather than silently re-running first-user
+// enrolment. No session: it is the one question a person with no account yet
+// must be able to ask.
+func (s *Server) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
+	open, err := s.authStore.EnrolmentOpen(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "could not check enrolment state")
+		return
+	}
+	writeJSON(w, http.StatusOK, SetupStatus{Needed: open})
 }
 
 // ---------------------------------------------------------------------------
@@ -241,15 +262,36 @@ func (s *Server) handleEnrolFinish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not create the user")
 		return
 	}
-	if aerr := s.authStore.AddPasskey(ctx, ceremony.PendingUserID, *cred); aerr != nil {
+	if _, aerr := s.authStore.AddPasskey(ctx, ceremony.PendingUserID, defaultFirstPasskeyName, *cred); aerr != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not save the passkey")
+		return
+	}
+	// ADR-0062 amendment (#445): "Ten single-use codes are shown once when
+	// the account is created." First enrolment is the one moment this
+	// account has no recovery codes yet, so minting here is MintRecoveryCodes'
+	// ordinary "replace whatever exists" behaviour, not a special case of it.
+	codes, merr := s.authStore.MintRecoveryCodes(ctx, ceremony.PendingUserID)
+	if merr != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "could not mint recovery codes")
 		return
 	}
 	s.recordAuth(ctx, AuthEventEnrolmentCompleted, ceremony.PendingUserID,
 		"attestation format: "+cred.AttestationFormat)
 
-	s.issueSession(w, r, ceremony.PendingUserID, ceremony.PendingDisplayName)
+	if serr := s.startSession(w, r, ceremony.PendingUserID, credentialIDString(cred.ID)); serr != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "could not create a session")
+		return
+	}
+	writeJSON(w, http.StatusOK, EnrolFinished{
+		Authenticated: true, DisplayName: ceremony.PendingDisplayName, RecoveryCodes: codes,
+	})
 }
+
+// defaultFirstPasskeyName is what first-user enrolment names the one
+// passkey it adds: the setup page (ADR-0062 amendment) asks for an account
+// name, never a passkey name, so this is a placeholder a person can rename
+// from the account page like any other.
+const defaultFirstPasskeyName = "Primary passkey"
 
 // ---------------------------------------------------------------------------
 // POST /api/v1/auth/login/begin — discoverable (usernameless) login
@@ -323,7 +365,7 @@ func (s *Server) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 
 	userID := string(user.WebAuthnID())
 	s.recordAuth(ctx, AuthEventSignInSucceeded, userID, "")
-	s.issueSession(w, r, userID, user.WebAuthnDisplayName())
+	s.issueSession(w, r, userID, credentialIDString(cred.ID), user.WebAuthnDisplayName())
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +374,7 @@ func (s *Server) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	token := s.cookieToken(r)
-	userID, _ := s.sessionFromRequest(r)
+	userID, _, _ := s.sessionFromRequest(r)
 	if err := s.authStore.RevokeSession(r.Context(), token); err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not sign out")
 		return
@@ -340,6 +382,46 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.recordAuth(r.Context(), AuthEventSignOut, userID, "")
 	s.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/auth/recover (#445) — a one-time way back in with no passkey
+// ---------------------------------------------------------------------------
+
+// handleRecover is ADR-0062 amendment's recovery door: a signed-in session
+// with no passkey behind it at all, good for reaching the account page and
+// adding one. No session required to call it — that is the whole point, the
+// same "AUTH-002's ceremony has no session yet" reasoning enrol/begin
+// already holds to.
+func (s *Server) handleRecover(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req RecoverRequest
+	if !decodeAuthRequest(w, r, &req) {
+		return
+	}
+
+	userID, remaining, err := s.authStore.ConsumeRecoveryCode(ctx, req.Code)
+	if err != nil {
+		s.recordAuth(ctx, AuthEventSignInRefused, "", "a recovery code was not admissible")
+		writeError(w, http.StatusUnauthorized, codeUnauthorized, "that recovery code is not "+
+			"usable: it may be wrong or already used")
+		return
+	}
+	u, uerr := s.authStore.UserByID(ctx, userID)
+	if uerr != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "could not load the account")
+		return
+	}
+	// No passkey_id: a recovery-code session names no passkey (ADR-0062
+	// amendment, Account.passkeys[].current's own doc comment).
+	if serr := s.startSession(w, r, userID, ""); serr != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "could not create a session")
+		return
+	}
+	s.recordAuth(ctx, AuthEventSignInSucceeded, userID, "recovery code")
+	writeJSON(w, http.StatusOK, RecoverResult{
+		Authenticated: true, DisplayName: u.DisplayName, Remaining: remaining,
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -377,15 +459,28 @@ func credentialHTTPRequest(body []byte) *http.Request {
 	return &http.Request{Body: io.NopCloser(bytes.NewReader(body))}
 }
 
-// issueSession mints a session, sets the cookie, and answers 200 with the
-// signed-in user's public shape.
-func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, userID, displayName string) {
-	token, expiresAt, err := s.authStore.CreateSession(r.Context(), userID, s.sessionLifetime)
+// startSession mints a session for userID — carrying passkeyID when one
+// signed in this session into being, empty for a recovery-code session — and
+// sets the cookie, writing NO body: handleEnrolFinish and handleRecover each
+// have their own response shape to write afterwards, which is the one thing
+// that differs between every caller of CreateSession (#445). issueSession
+// below is the one shared shape, login/finish's own.
+func (s *Server) startSession(w http.ResponseWriter, r *http.Request, userID, passkeyID string) error {
+	token, expiresAt, err := s.authStore.CreateSession(r.Context(), userID, passkeyID, s.sessionLifetime)
 	if err != nil {
+		return err
+	}
+	s.setSessionCookie(w, token, expiresAt)
+	return nil
+}
+
+// issueSession is startSession plus the ordinary sessionStatus body
+// login/finish answers with.
+func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, userID, passkeyID, displayName string) {
+	if err := s.startSession(w, r, userID, passkeyID); err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not create a session")
 		return
 	}
-	s.setSessionCookie(w, token, expiresAt)
 	writeJSON(w, http.StatusOK, sessionStatus{Authenticated: true, DisplayName: displayName})
 }
 
@@ -437,16 +532,19 @@ func (s *Server) cookieToken(r *http.Request) string {
 
 // sessionFromRequest is the one question the deny-by-default gate asks of
 // every non-allow-listed request: does this request carry a live session?
-func (s *Server) sessionFromRequest(r *http.Request) (userID string, ok bool) {
+// passkeyID is the passkey (if any) that session was issued for — #445's
+// account surface uses it to answer Account.passkeys[].current; nothing
+// before #445 needed it and every such caller discards it.
+func (s *Server) sessionFromRequest(r *http.Request) (userID, passkeyID string, ok bool) {
 	token := s.cookieToken(r)
 	if token == "" {
-		return "", false
+		return "", "", false
 	}
-	userID, ok, err := s.authStore.VerifySession(r.Context(), token)
+	userID, passkeyID, ok, err := s.authStore.VerifySession(r.Context(), token)
 	if err != nil || !ok {
-		return "", false
+		return "", "", false
 	}
-	return userID, true
+	return userID, passkeyID, true
 }
 
 // recordAuth writes an auth event and swallows a failure to do so — see
@@ -458,9 +556,11 @@ func (s *Server) recordAuth(ctx context.Context, eventType, userID, detail strin
 	discardError(s.authStore.RecordAuthEvent(ctx, eventType, userID, detail))
 }
 
-// codeForbidden and codeUnauthorized extend server.go's error-code
-// vocabulary for the sign-in surface.
+// codeForbidden, codeUnauthorized and codeConflict extend server.go's
+// error-code vocabulary for the sign-in surface and (#445) the account
+// surface accounthandlers.go mounts beside it.
 const (
 	codeForbidden    = "forbidden"
 	codeUnauthorized = "unauthorized"
+	codeConflict     = "conflict"
 )

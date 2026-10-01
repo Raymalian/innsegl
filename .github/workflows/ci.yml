@@ -226,6 +226,22 @@ jobs:
       - name: install.sh merges, never clobbers, and undoes exactly what it added
         run: ./scripts/install-selftest.sh
 
+  setup-link:
+    name: setup link
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # #445, ADR-0062's 2026-10-01 amendment. `make start` and install.sh
+      # print a one-time setup link only while no account exists yet --
+      # scripts/setup-link.sh is the one place that asks the API
+      # (GET /api/v1/auth/setup) and mints the code
+      # (`innsegl admin-credential enrol-code`, via `docker exec`) rather
+      # than assuming. Entirely against fake curl and docker commands this
+      # self-test writes: no real deployment, API or container anywhere.
+      - name: The setup link is printed only while an account is still needed, and never fabricated
+        run: ./scripts/setup-link-selftest.sh
+
   worktree-link:
     name: worktree link
     runs-on: ubuntu-latest

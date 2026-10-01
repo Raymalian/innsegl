@@ -143,6 +143,7 @@ type Server struct {
 
 	authStore       *AuthStore
 	authMux         *http.ServeMux
+	accountMux      *http.ServeMux
 	webAuthn        *webauthn.WebAuthn
 	webAuthnConfig  WebAuthnConfig
 	sessionLifetime time.Duration
@@ -186,6 +187,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		sessionLifetime: sessionLifetime,
 	}
 	s.authMux = s.newAuthMux()
+	s.accountMux = s.newAccountMux()
 
 	s.mux.HandleFunc("GET /api/v1/runs", s.handleRuns)
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}", s.handleRun)
@@ -220,6 +222,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveAuth(w, r)
 		return
 	}
+	// #445: the account surface, mounted the same way the sign-in surface
+	// is — its own prefix, its own method set, served before the read-only
+	// mux's GET-only switch below ever runs. Unlike authRoutePrefix, every
+	// route here requires a session (serveAccount enforces it itself); there
+	// is no public account route.
+	if strings.HasPrefix(r.URL.Path, accountRoutePrefix) {
+		s.serveAccount(w, r)
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
@@ -244,7 +255,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// and never added to the list is therefore refused, not silently
 	// admitted, however it got onto the mux.
 	if _, pattern := s.mux.Handler(r); !authAllowedRoutes[pattern] {
-		if _, ok := s.sessionFromRequest(r); !ok {
+		if _, _, ok := s.sessionFromRequest(r); !ok {
 			writeError(w, http.StatusUnauthorized, codeUnauthorized,
 				"sign in required (ADR-0062): this dashboard and its read API answer "+
 					"nothing without an operator session")

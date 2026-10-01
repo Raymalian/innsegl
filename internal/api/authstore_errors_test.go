@@ -39,7 +39,7 @@ func TestAuthStoreMethodsAfterThePoolIsClosed(t *testing.T) {
 	if _, err := store.EnrolmentOpen(ctx); err == nil {
 		t.Error("EnrolmentOpen on a closed pool returned nil")
 	}
-	if err := store.AddPasskey(ctx, "u", webauthn.Credential{ID: []byte("cred-closed-1"), AttestationFormat: "none"}); err == nil {
+	if _, err := store.AddPasskey(ctx, "u", "", webauthn.Credential{ID: []byte("cred-closed-1"), AttestationFormat: "none"}); err == nil {
 		t.Error("AddPasskey on a closed pool returned nil")
 	}
 	if _, err := store.PasskeysByUser(ctx, "u"); err == nil {
@@ -50,10 +50,10 @@ func TestAuthStoreMethodsAfterThePoolIsClosed(t *testing.T) {
 	} else if errors.Is(err, ErrPasskeyNotFound) {
 		t.Error("UpdatePasskey on a closed pool returned ErrPasskeyNotFound, want a pool error")
 	}
-	if _, _, err := store.CreateSession(ctx, "u", time.Hour); err == nil {
+	if _, _, err := store.CreateSession(ctx, "u", "", time.Hour); err == nil {
 		t.Error("CreateSession on a closed pool returned nil")
 	}
-	if _, _, err := store.VerifySession(ctx, "some-token"); err == nil {
+	if _, _, _, err := store.VerifySession(ctx, "some-token"); err == nil {
 		t.Error("VerifySession on a closed pool returned nil")
 	}
 	if err := store.RevokeSession(ctx, "some-token"); err == nil {
@@ -79,6 +79,37 @@ func TestAuthStoreMethodsAfterThePoolIsClosed(t *testing.T) {
 		t.Error("LoadAndConsumeCeremony on a closed pool returned ErrCeremonyNotFound, want a pool error")
 	}
 
+	// #445's own methods, the same closed-pool technique.
+	if err := store.UpdateDisplayName(ctx, "u", "Name"); err == nil {
+		t.Error("UpdateDisplayName on a closed pool returned nil")
+	} else if errors.Is(err, ErrUserNotFound) {
+		t.Error("UpdateDisplayName on a closed pool returned ErrUserNotFound, want a pool error")
+	}
+	if _, err := store.AccountPasskeys(ctx, "u"); err == nil {
+		t.Error("AccountPasskeys on a closed pool returned nil")
+	}
+	if _, err := store.RenamePasskey(ctx, "u", "cred", "new name"); err == nil {
+		t.Error("RenamePasskey on a closed pool returned nil")
+	} else if errors.Is(err, ErrPasskeyNotFound) {
+		t.Error("RenamePasskey on a closed pool returned ErrPasskeyNotFound, want a pool error")
+	}
+	if err := store.DeletePasskey(ctx, "u", "cred"); err == nil {
+		t.Error("DeletePasskey on a closed pool returned nil")
+	} else if errors.Is(err, ErrPasskeyNotFound) || errors.Is(err, ErrLastPasskey) {
+		t.Error("DeletePasskey on a closed pool returned a not-found/last-passkey sentinel, want a pool error")
+	}
+	if _, err := store.MintRecoveryCodes(ctx, "u"); err == nil {
+		t.Error("MintRecoveryCodes on a closed pool returned nil")
+	}
+	if _, _, err := store.ConsumeRecoveryCode(ctx, "whatever-code"); err == nil {
+		t.Error("ConsumeRecoveryCode on a closed pool returned nil")
+	} else if errors.Is(err, ErrRecoveryCodeInvalid) {
+		t.Error("ConsumeRecoveryCode on a closed pool returned ErrRecoveryCodeInvalid, want a pool error")
+	}
+	if _, err := store.RecoveryCodesRemaining(ctx, "u"); err == nil {
+		t.Error("RecoveryCodesRemaining on a closed pool returned nil")
+	}
+
 	// RevokeSession("") and VerifySession("") both short-circuit before
 	// touching the pool at all (an empty token names no session), so a
 	// closed pool must not change their answer — proving the branch is the
@@ -86,7 +117,7 @@ func TestAuthStoreMethodsAfterThePoolIsClosed(t *testing.T) {
 	if err := store.RevokeSession(ctx, ""); err != nil {
 		t.Errorf("RevokeSession empty token on a closed pool returned %v, want nil", err)
 	}
-	if _, ok, err := store.VerifySession(ctx, ""); err != nil || ok {
+	if _, _, ok, err := store.VerifySession(ctx, ""); err != nil || ok {
 		t.Errorf("VerifySession empty token on a closed pool returned ok=%v err=%v, want false and nil", ok, err)
 	}
 }

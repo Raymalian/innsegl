@@ -553,6 +553,18 @@ start:
 	@echo "ready. Next:"
 	@echo "   make link DIR=~/Applications/<project>     make another project signable"
 	@echo "   make sign -- -m 'your message'             commit, signed"
+	@# #445, ADR-0062's 2026-10-01 amendment: while no account exists yet,
+	@# print the one-time setup link rather than making the operator run the
+	@# enrol-code command and build the URL by hand. innsegl-api can still be
+	@# finishing its own start-up the instant innsegl-up-here returns, so this
+	@# retries only on "could not reach the API" (exit 4) — a failed mint
+	@# (exit 6) is a real problem and is shown once, not retried into silence.
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+	   scripts/setup-link.sh && break; \
+	   rc=$$?; \
+	   if [ $$rc -ne 4 ]; then break; fi; \
+	   sleep 2; \
+	 done
 
 ## link: make a project signable — make link DIR=~/Applications/foo
 link:
