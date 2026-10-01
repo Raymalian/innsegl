@@ -359,7 +359,9 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory string, t ToolUse)
 // NewToolCallRecorder unchanged) means no baseline is ever attempted,
 // exactly as it already means no per-step snapshot is.
 func (r *ToolCallRecorder) baselineIfNeeded(runID, workingDirectory string) {
-	if r.snapshots == nil {
+	if r.snapshots == nil || workingDirectory == "" {
+		// No directory to snapshot yet: claim nothing, so a later request
+		// or tool_use for the same run that does carry one still can.
 		return
 	}
 	if !r.claimBaseline(runID) {
@@ -625,12 +627,20 @@ func (g *ToolCallRecordGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		return nil, nil
 	}
 
+	facts, _ := RequestFactsFromContext(r.Context())
+	// The run's baseline starts here, on its first request, before the
+	// model has answered: started on the first tool_use instead, it raced
+	// the harness, which runs a tool while the reply is still streaming
+	// (#437).
+	//nolint:contextcheck // deliberate: the baseline uses its own detached, bounded context
+	// (takeBaselineAsync), so a finished request never cuts a snapshot short.
+	g.recorder.baselineIfNeeded(runID, facts.WorkingDirectory)
+
 	results := extractToolResults(r)
 	if len(results) == 0 {
 		return r, nil
 	}
 
-	facts, _ := RequestFactsFromContext(r.Context())
 	g.recorder.HandleResults(r.Context(), runID, facts, results)
 	return r, nil
 }

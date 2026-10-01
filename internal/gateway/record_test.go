@@ -680,8 +680,9 @@ func TestBaselineSnapshotIsPerRunNotGlobal(t *testing.T) {
 		onBaselined: func() { baselined <- struct{}{} },
 	})
 
-	rec.OnToolUseContext(WithRunID(context.Background(), "run-baseline-a"), recToolUse("toolu_a1", "Write", `{}`))
-	rec.OnToolUseContext(WithRunID(context.Background(), "run-baseline-b"), recToolUse("toolu_b1", "Write", `{}`))
+	withDir := WithRequestFacts(context.Background(), RequestFacts{WorkingDirectory: "/w/repo"})
+	rec.OnToolUseContext(WithRunID(withDir, "run-baseline-a"), recToolUse("toolu_a1", "Write", `{}`))
+	rec.OnToolUseContext(WithRunID(withDir, "run-baseline-b"), recToolUse("toolu_b1", "Write", `{}`))
 	waitForBaselined(t, baselined, 2, 5*time.Second)
 
 	if got := witness.baselineCallCount(); got != 2 {
@@ -729,7 +730,7 @@ func TestBaselineSnapshotFailureIsReportedButNeverBlocks(t *testing.T) {
 		onBaselined: func() { baselined <- struct{}{} },
 	})
 
-	ctx := WithRunID(context.Background(), recTestRunID)
+	ctx := WithRunID(WithRequestFacts(context.Background(), RequestFacts{WorkingDirectory: "/w/repo"}), recTestRunID)
 	rec.OnToolUseContext(ctx, recToolUse("toolu_basefail", "Write", `{}`))
 	waitForBaselined(t, baselined, 1, 5*time.Second)
 
@@ -1273,5 +1274,43 @@ func TestRecorderKeepsTheWorkingDirectoryOfARunningToolCall(t *testing.T) {
 	got, ok := rec.LookupPending("toolu_1")
 	if !ok || got.WorkingDirectory != "/workspace/example-repo" {
 		t.Errorf("LookupPending = %+v, %v; want the request's working directory", got, ok)
+	}
+}
+
+// TestBaselineSnapshotFiresOnTheRunsFirstRequest — #437. Measured on
+// 2026-10-01: taken on the first tool_use, the baseline raced the harness,
+// which starts a tool while the reply is still streaming, and captured the
+// workspace after step 1 had written its file. The run's first request
+// reaches the gateway before the model has answered at all, so the baseline
+// is started there; a request with no working directory claims nothing, so a
+// later one that has it still can.
+func TestBaselineSnapshotFiresOnTheRunsFirstRequest(t *testing.T) {
+	calls := &fakeRecordCalls{}
+	witness := &fakeSnapshotWitness{baselineOutcome: SnapshotOutcome{TreeHash: strings.Repeat("a", 40)}}
+	baselined := make(chan struct{}, 8)
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{
+		record: calls.fn, Snapshots: witness, Trigger: NewSnapshotTrigger(),
+		onBaselined: func() { baselined <- struct{}{} },
+	})
+	guard := NewToolCallRecordGuard(rec)
+	body := `{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
+
+	r := recRequest(t, body)
+	r = r.WithContext(WithRunID(r.Context(), recTestRunID))
+	if _, refusal := guard.Check(r); refusal != nil {
+		t.Fatalf("refusal = %+v", refusal)
+	}
+	if got := witness.baselineCallCount(); got != 0 {
+		t.Fatalf("baseline calls with no working directory = %d, want 0", got)
+	}
+
+	r = recRequest(t, body)
+	r = r.WithContext(WithRunID(WithRequestFacts(r.Context(), RequestFacts{WorkingDirectory: "/w/repo"}), recTestRunID))
+	if _, refusal := guard.Check(r); refusal != nil {
+		t.Fatalf("refusal = %+v", refusal)
+	}
+	waitForBaselined(t, baselined, 1, 5*time.Second)
+	if witness.lastBaselineDir != "/w/repo" || witness.lastBaselineRun != recTestRunID {
+		t.Errorf("baseline = (%q, %q), want (/w/repo, %s)", witness.lastBaselineDir, witness.lastBaselineRun, recTestRunID)
 	}
 }
