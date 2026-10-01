@@ -308,10 +308,10 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	// to cut a witness already under way short, the same reasoning recordAsync's own doc comment
 	// gives for addPending's identical shape just below.
 	r.baselineIfNeeded(runID, workingDirectory)
+	installation, _ := InstallationFromContext(ctx)
 	//nolint:contextcheck // deliberate: addPending's own eventual recording (on eviction) uses
 	// a detached, bounded context of its own rather than ctx -- see recordAsync's own doc
 	// comment for why a request/reply's context must never be allowed to cut a recording short.
-	installation, _ := InstallationFromContext(ctx)
 	r.addPending(runID, workingDirectory, installation, t)
 }
 
