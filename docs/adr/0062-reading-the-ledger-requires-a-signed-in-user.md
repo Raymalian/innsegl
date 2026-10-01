@@ -1,6 +1,6 @@
 # ADR-0062: Reading the ledger requires a signed-in user
 
-- Status: accepted; amended 2026-10-01 (see Amendment)
+- Status: accepted; amended 2026-10-01 (see the two Amendments)
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -464,3 +464,27 @@ path to that host's container runtime in the first place. What is lost is
 the endpoint re-checking the denial at enrolment time. The operator mints a
 code by hand, in person, and it is single-use and short-lived. That is the
 gate.
+
+## Amendment (2026-10-01): accounts a person can manage
+
+**What changed.** Signing in worked only as a one-time enrolment through a
+terminal command, allowed exactly one passkey, and gave no way back in when
+that passkey could not be reached (#445). The operator chose the shape that
+replaces it:
+
+- **The first account comes from a setup link.** While no passkey exists,
+  `make start` and `install.sh` print a one-time link. Opening it creates the
+  account: a name and a passkey. It is the same single-use, short-lived code
+  the enrolment path already consumed, carried in the link rather than typed.
+- **A user manages their own passkeys.** An account page lists every passkey
+  (name, when added, when last used), adds another while signed in, renames
+  one, and removes one; the last passkey cannot be removed.
+- **Recovery codes replace the recovery enrolment.** Ten single-use codes are
+  shown once when the account is created. A recovery code signs in once; the
+  account page regenerates them, which voids the rest.
+
+**What still holds.** Reading the ledger requires a signed-in user. Passkeys
+are still the only sign-in credential; a recovery code is a one-time way to
+reach the account page and add one, stored only as a hash. The first account
+still cannot be created by anyone who did not receive the setup link, which
+the deployment prints only to its operator.
