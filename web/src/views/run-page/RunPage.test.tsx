@@ -452,3 +452,54 @@ describe("#435 a run with nothing recorded", () => {
     expect(screen.queryByText(/of 0 steps/)).toBeNull();
   });
 });
+
+describe("#440 a long run stays light", () => {
+  it("loads a clipped step's full output on request", async () => {
+    const base = record();
+    const step2 = base.steps[1]!;
+    const clipped = {
+      ...base,
+      steps: base.steps.map((s) => (s.n === 2 ? { ...s, output: "first part only", clipped: true } : s)),
+    };
+    const readStep = vi.fn(async () => ({ ...step2, output: "first part only, and the rest", clipped: false }));
+    render(
+      <RunPage
+        route={ROUTE}
+        fetchRunRecord={async () => clipped}
+        fetchStepDiff={async () => stepOneDiff()}
+        fetchProof={async () => verifiedProof()}
+        fetchStep={readStep}
+        now={NOW}
+      />,
+    );
+    await screen.findByText("Timeline");
+    const s2 = within(document.querySelector('[data-step="2"]') as HTMLElement);
+    expect(s2.getByText("first part only")).toBeInTheDocument();
+    await userEvent.click(s2.getByRole("button", { name: "Show full output" }));
+    expect(await s2.findByText("first part only, and the rest")).toBeInTheDocument();
+    expect(readStep).toHaveBeenCalledWith(RUN_ID, 2, expect.anything());
+    expect(s2.queryByRole("button", { name: "Show full output" })).toBeNull();
+  });
+
+  it("draws the timeline 100 steps at a time", async () => {
+    const base = record();
+    const one = base.steps[2]!;
+    const many = {
+      ...base,
+      steps: Array.from({ length: 250 }, (_, i) => ({ ...one, n: i + 1, event_id: `e${i + 1}`, commit_sha: "" })),
+    };
+    render(
+      <RunPage
+        route={ROUTE}
+        fetchRunRecord={async () => many}
+        fetchStepDiff={async () => stepOneDiff()}
+        fetchProof={async () => verifiedProof()}
+        now={NOW}
+      />,
+    );
+    await screen.findByText("Timeline");
+    expect(document.querySelectorAll("[data-step]")).toHaveLength(100);
+    await userEvent.click(screen.getByRole("button", { name: "Show 100 more steps (150 left)" }));
+    expect(document.querySelectorAll("[data-step]")).toHaveLength(200);
+  });
+});

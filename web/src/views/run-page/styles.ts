@@ -147,6 +147,10 @@ export const toggleButton = `px-3 py-1.5 font-inherit ${stateTransition} ${focus
 export const toggleButtonIdle = `bg-surface ${secondaryText} hover:bg-hover`;
 export const toggleButtonSelected = "bg-accent-surface font-semibold text-accent";
 
+/** A quiet secondary button: "Show more steps", "Show full output" (#440). */
+export const showMoreButton = `${hairline} self-start rounded-md border-line px-3 py-1.5 text-micro ${toggleButtonIdle} ${stateTransition} ${focusRing}`;
+export const stepShowFull = `${hairline} mx-4 mb-3 self-start rounded-md border-line px-2.5 py-1 text-micro ${toggleButtonIdle} ${stateTransition} ${focusRing}`;
+
 /* ── step card ─────────────────────────────────────────────────────────── */
 
 /* One row, as the approved mockup shows it: the summary truncates, the

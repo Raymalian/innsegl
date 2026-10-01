@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestRegisterRecordRoutesWiresThroughTheRealServer proves the record and
@@ -110,5 +112,44 @@ func TestRunRecordOfABareRunEncodesEmptyListsNotNull(t *testing.T) {
 	}
 	if err := json.Unmarshal(raw["tree"], &tree); err != nil || string(tree.Nodes) == "null" {
 		t.Errorf("tree.nodes = %s, want a list", tree.Nodes)
+	}
+}
+
+// TestClipStepTextCapsLongTextOnARuneBoundary — #440. The run record carried
+// every step's full input and output: 1.4 MB for a 145-step run, and tens of
+// megabytes for a long session, which froze the browser rendering it.
+func TestClipStepTextCapsLongTextOnARuneBoundary(t *testing.T) {
+	short := "hello"
+	if got, clipped := clipStepText(short); got != short || clipped {
+		t.Errorf("clipStepText(short) = %q, %v; want unchanged, false", got, clipped)
+	}
+	long := strings.Repeat("é", stepTextCap) // two bytes each: twice the cap
+	got, clipped := clipStepText(long)
+	if !clipped || len(got) > stepTextCap || !utf8.ValidString(got) {
+		t.Errorf("clipStepText(long) = %d bytes, clipped %v, valid %v; want ≤ %d valid bytes, clipped",
+			len(got), clipped, utf8.ValidString(got), stepTextCap)
+	}
+}
+
+// TestStepRouteServesOneStepInFull — #440: a clipped step's full text is one
+// request away.
+func TestStepRouteServesOneStepInFull(t *testing.T) {
+	f := newRecordFixture(t)
+	srv := newRecordTestServer(t, f.rs)
+
+	a := get(t, srv.URL, "/api/v1/runs/"+f.parentID+"/steps/1")
+	if a.status != http.StatusOK {
+		t.Fatalf("GET step 1: status %d: %s", a.status, a.body)
+	}
+	var step RecordStep
+	decodeBody(t, a, &step)
+	if step.N != 1 || step.Clipped {
+		t.Errorf("step = n %d clipped %v; want step 1, not clipped", step.N, step.Clipped)
+	}
+	if a := get(t, srv.URL, "/api/v1/runs/"+f.parentID+"/steps/99"); a.status != http.StatusNotFound {
+		t.Errorf("GET step 99: status %d, want 404", a.status)
+	}
+	if a := get(t, srv.URL, "/api/v1/runs/"+f.parentID+"/steps/0"); a.status != http.StatusBadRequest {
+		t.Errorf("GET step 0: status %d, want 400", a.status)
 	}
 }

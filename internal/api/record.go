@@ -85,10 +85,13 @@ type RecordStep struct {
 	// Summary is the one line the timeline shows: a command, a file path.
 	Summary string `json:"summary"`
 	// Input and Output are the stored body's own text, possibly truncated.
-	Input     string        `json:"input"`
-	Output    string        `json:"output"`
-	Truncated bool          `json:"truncated"`
-	Outcome   RecordOutcome `json:"outcome"`
+	Input     string `json:"input"`
+	Output    string `json:"output"`
+	Truncated bool   `json:"truncated"`
+	// Clipped is true when the record capped Input or Output to keep the
+	// page light; GET .../steps/{n} serves the step in full (#440).
+	Clipped bool          `json:"clipped"`
+	Outcome RecordOutcome `json:"outcome"`
 	// TreeBefore and TreeAfter are the workspace snapshots around the step;
 	// empty when no snapshot was taken.
 	TreeBefore string       `json:"tree_before"`

@@ -484,6 +484,7 @@ func newRecordTestServer(t *testing.T, rs *recordServer) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/runs/{run_id}/record", rs.handleRunRecord)
 	mux.HandleFunc("GET /api/v1/runs/{run_id}/steps/{n}/diff", rs.handleStepDiff)
+	mux.HandleFunc("GET /api/v1/runs/{run_id}/steps/{n}", rs.handleStep)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv

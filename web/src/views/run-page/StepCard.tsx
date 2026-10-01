@@ -19,7 +19,7 @@ import { useEffect, useState } from "react";
 import { truncateIdentifier } from "../../components/common/identifier";
 import { Link } from "../../app/router";
 import { CommitCard } from "./CommitCard";
-import type { FetchProof, FetchStepDiff } from "./api";
+import type { FetchProof, FetchStep, FetchStepDiff } from "./api";
 import { Diff } from "./Diff";
 import type { DiffMode } from "./Diff";
 import { stepWitnessesAgree, witnessActiveCount, witnessAgreeCount } from "./derive";
@@ -35,6 +35,7 @@ import {
   stepOutcomeOk,
   stepOutputBlock,
   stepRefusedNote,
+  stepShowFull,
   stepSummary,
   stepTime,
   stepTool,
@@ -59,6 +60,7 @@ export interface StepCardProps {
   readonly diffMode: DiffMode;
   readonly fetchStepDiff: FetchStepDiff;
   readonly fetchProof: FetchProof;
+  readonly fetchStep: FetchStep;
 }
 
 export function StepCard({
@@ -70,7 +72,18 @@ export function StepCard({
   diffMode,
   fetchStepDiff,
   fetchProof,
+  fetchStep,
 }: StepCardProps) {
+  // A clipped step's full text, once asked for (#440).
+  const [full, setFull] = useState<{ readonly output: string; readonly loading: boolean } | null>(null);
+  const output = full !== null && !full.loading ? full.output : step.output;
+  const showFull = () => {
+    setFull({ output: step.output, loading: true });
+    fetchStep(runId, step.n, new AbortController().signal).then(
+      (s) => setFull({ output: s.output, loading: false }),
+      () => setFull(null),
+    );
+  };
   const agrees = stepWitnessesAgree(step.witnesses);
   const failed = step.outcome.kind !== "ok";
   const commit = commits.find((c) => c.step === step.n);
@@ -105,8 +118,13 @@ export function StepCard({
         <SubagentCommitNote step={step} />
       ) : (
         <>
-          {step.output !== "" && !(showDiff && FILE_EDIT_TOOLS.has(step.tool) && !failed) ? (
-            <pre className={stepOutputBlock}>{step.output}</pre>
+          {output !== "" && !(showDiff && FILE_EDIT_TOOLS.has(step.tool) && !failed) ? (
+            <pre className={stepOutputBlock}>{output}</pre>
+          ) : null}
+          {step.clipped && (full === null || full.loading) ? (
+            <button type="button" className={stepShowFull} onClick={showFull} disabled={full?.loading === true}>
+              {full?.loading === true ? strings.timeline.loadingFullOutput : strings.timeline.showFullOutput}
+            </button>
           ) : null}
           {failed ? (
             <p className={stepRefusedNote}>
