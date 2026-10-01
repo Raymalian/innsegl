@@ -1,6 +1,6 @@
 # ADR-0062: Reading the ledger requires a signed-in user
 
-- Status: accepted; amended 2026-10-01 (see the two Amendments)
+- Status: accepted; amended 2026-10-01 (see the three Amendments)
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -488,3 +488,19 @@ are still the only sign-in credential; a recovery code is a one-time way to
 reach the account page and add one, stored only as a hash. The first account
 still cannot be created by anyone who did not receive the setup link, which
 the deployment prints only to its operator.
+
+## Amendment (2026-10-01): API keys, and the relying-party ID
+
+**What changed.**
+
+- **API keys are issued on the account page.** Issuing one needs a fresh
+  passkey ceremony (ADR-0063). An admin CLI on the core covers bootstrap.
+- **The relying-party ID is the core's DNS name** (ADR-0066). Passkeys made
+  at another origin do not work there and must be enrolled again. Recovery
+  codes are the path.
+
+**Why.** The core is reached by name from other machines, and a key is the
+credential a client holds in place of a person.
+
+**What still holds.** Reading the ledger requires a signed-in user. An API
+key has capability `harness` only: it reads nothing and administers nothing.

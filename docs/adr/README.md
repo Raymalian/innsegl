@@ -78,6 +78,11 @@ maintainer ask "why is it like this?"
 | [0060](0060-the-gateway-runs-inside-the-one-innsegl-process.md) | The gateway runs inside the one innsegl process | accepted | 2026-09-28 |
 | [0061](0061-schema-version-4-records-forks-agent-messages-and-workspace-trees.md) | Schema version 4 records a fork's origin, an agent's own messages, and a per-step workspace tree hash | accepted | 2026-09-28 |
 | [0062](0062-reading-the-ledger-requires-a-signed-in-user.md) | Reading the ledger requires a signed-in user | accepted | 2026-09-28 |
+| [0063](0063-the-core-runs-on-its-own-host-and-every-client-authenticates-with-an-installation-api-key.md) | The core runs on its own host, and every client authenticates with an installation API key | accepted | 2026-10-01 |
+| [0064](0064-the-client-derives-the-workspace-and-the-core-binds-it-to-the-keys-scope.md) | The client derives the workspace; the core binds it to the key's scope | accepted | 2026-10-01 |
+| [0065](0065-a-per-repository-mirror-on-the-core-is-the-evidence-store.md) | A per-repository mirror on the core is the evidence store | accepted | 2026-10-01 |
+| [0066](0066-one-name-one-certificate.md) | One name, one certificate | accepted | 2026-10-01 |
+| [0067](0067-the-developer-machine-runs-a-development-stack-never-the-live-one.md) | The developer machine runs a development stack, never the live one | accepted | 2026-10-01 |
 
 ## Open items
 

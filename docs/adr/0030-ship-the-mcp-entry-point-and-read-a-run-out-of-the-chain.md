@@ -1,6 +1,6 @@
 # ADR-0030: Ship the MCP entry point, read a run out of the chain in its own package, and make the earliest `run_retired` the answer
 
-- Status: accepted
+- Status: accepted; amended 2026-10-01 (see the Amendment)
 - Date: 2026-08-30
 - Deciders: Mike
 
@@ -291,3 +291,15 @@ the ordinary stop — an orchestrator rolling a replica — and for nothing else
   environment variable names are what a manifest is written to. Highest for
   decision 7, which is a behaviour every caller of `register_agent` will be
   written against; see the flag there.
+
+## Amendment (2026-10-01): the bind address is configurable
+
+**What changed.** The MCP's bind address is configurable. Loopback stays the
+default. Binding to anything else requires API-key authentication
+(ADR-0063); without it the process refuses to start.
+
+**Why.** The hosted shape runs the core on its own host, which clients reach
+over a network.
+
+**What still holds.** The default bind, the entry point and how a run is read
+out of the chain.

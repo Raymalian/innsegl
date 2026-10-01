@@ -1,6 +1,6 @@
 # ADR-0053: Issue a run's identity only through the attested MCP, never to a workload that declares a label
 
-- Status: accepted
+- Status: accepted; amended 2026-10-01 (see the Amendment)
 - Date: 2026-09-26
 - Deciders: the operator
 
@@ -127,3 +127,16 @@ review of them, as doc 04 already requires.
   in the same change. So must verify.sh, which tests a path runs no longer use.
 - **Exit cost.** Low. Going back is a selector function and one more rewrite
   of live entries. Nothing on the chain records selectors.
+
+## Amendment (2026-10-01): caller authentication for client traffic
+
+**What changed.** The caller-authentication gap this ADR names is closed for
+client traffic by ADR-0063: every client-facing route checks an installation
+API key scoped to repositories.
+
+**Why.** The core now serves callers on other machines, so a caller must
+prove which installation it is.
+
+**What still holds.** A run's identity is issued only through the attested
+MCP, never to a workload that declares a label (I1). A key lets a client ask;
+it does not let a client name its own identity.
