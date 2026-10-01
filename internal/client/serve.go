@@ -125,6 +125,9 @@ func (s *Server) setCert(chain []*x509.Certificate) error {
 	if !ok || !pub.Equal(&s.key.PublicKey) {
 		return errors.New("the client certificate is not for the client key")
 	}
+	if len(chain[0].URIs) != 1 {
+		return errors.New("the client certificate does not name exactly one installation")
+	}
 	ders := make([][]byte, len(chain))
 	for i, c := range chain {
 		ders[i] = c.Raw
@@ -210,12 +213,14 @@ func (s *Server) MaybeRenew(ctx context.Context) (bool, error) {
 	if s.Now().Before(s.RenewAt()) {
 		return false, nil
 	}
-	csr, err := newCSR(s.key)
+	// The renewal names the same installation: the same single SAN.
+	uri := s.Leaf().URIs[0]
+	csr, err := newCSR(s.key, uri)
 	if err != nil {
 		return false, err
 	}
 	c := &http.Client{Transport: s.transport, Timeout: 30 * time.Second}
-	got, err := requestCertificate(ctx, c, strings.TrimSuffix(s.core.CoreURL, "/")+RenewPath, map[string]string{"csr": csr}, s.key)
+	got, err := requestCertificate(ctx, c, strings.TrimSuffix(s.core.CoreURL, "/")+RenewPath, map[string]string{"csr": csr}, s.key, uri)
 	if errors.Is(err, errStatus401) {
 		s.revoked.Store(true)
 		// #nosec G306 -- a marker; its presence is the whole content.

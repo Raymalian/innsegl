@@ -83,7 +83,7 @@ func TestEnrolRefusesACoreItDoesNotTrust(t *testing.T) {
 }
 
 func TestWriteEnrolmentModes(t *testing.T) {
-	_, paths := enrolled(t)
+	core, paths := enrolled(t)
 	for path, mode := range map[string]os.FileMode{
 		paths.Dir: 0o700, paths.Key: 0o600, paths.Cert: 0o644, paths.Bundle: 0o644, paths.CA: 0o644, paths.Core: 0o644,
 	} {
@@ -99,7 +99,7 @@ func TestWriteEnrolmentModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.InstallationID != clienttest.InstallationID || !strings.HasPrefix(cfg.CoreURL, "https://") || cfg.Listen != "127.0.0.1:28195" {
+	if cfg.InstallationID != core.EnrolledID() || !strings.HasPrefix(cfg.CoreURL, "https://") || cfg.Listen != "127.0.0.1:28195" {
 		t.Fatalf("core.json = %+v", cfg)
 	}
 }

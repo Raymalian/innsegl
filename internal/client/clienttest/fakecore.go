@@ -4,11 +4,22 @@
 // tests of internal/client and of `innsegl connect` and `innsegl client
 // serve`. It is a test helper only: nothing in a shipped binary imports it.
 //
-// The contract it implements: POST /_core/enrol without a client certificate
-// takes {"token","csr","name"} and answers {"installation_id","certificate",
-// "bundle","expires_at"}, or 401 for any token problem. POST /_core/renew
-// with the current client certificate takes {"csr"} and answers the same
-// shape. Every other route requires a client certificate the core issued.
+// The contract it enforces (#460):
+//
+//   - GET /_core/enrol, no client certificate, answers {"trust_domain"}.
+//   - POST /_core/enrol, no client certificate, takes {"token","csr","name"}.
+//     The CSR must carry exactly one SAN, the URI
+//     spiffe://<td>/client/<32 lowercase hex>, chosen by the client. A bad
+//     CSR is 400 before the token is touched; an id already in use is 400
+//     without spending the token; a mint failure is 503 with nothing spent;
+//     any token problem is 401. It answers {"installation_id","certificate",
+//     "bundle","expires_at"}, the installation id being the CSR's.
+//   - POST /_core/renew with the current client certificate takes {"csr"},
+//     whose SAN must be the certificate's own, and answers the same shape; a
+//     revoked installation is 401.
+//   - Every other route needs a client certificate the core issued: 401
+//     {"error":"innsegl core: request refused"} without one.
+//
 // Its server certificate is issued by its own CA and served with that CA in
 // the chain, as the gateway's is.
 package clienttest
@@ -31,6 +42,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -38,8 +51,10 @@ import (
 // Token is the one enrolment token the fake core accepts.
 const Token = "ie_0123456789abcdef_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-// InstallationID is the id the fake core gives the enrolled installation.
-const InstallationID = "0123456789abcdef0123456789abcdef"
+// TrustDomain is the fake core's trust domain.
+const TrustDomain = "innsegl.test"
+
+var clientPath = regexp.MustCompile(`^/client/[0-9a-f]{32}$`)
 
 // Core is a running fake core.
 type Core struct {
@@ -50,33 +65,34 @@ type Core struct {
 	// ClientCA issues client certificates; BundlePEM is its trust bundle.
 	ClientCA  *x509.Certificate
 	BundlePEM []byte
+	// Mux holds extra routes, served behind the client-certificate
+	// requirement.
+	Mux *http.ServeMux
 
 	caKey       *ecdsa.PrivateKey
 	clientCAKey *ecdsa.PrivateKey
 
-	mu sync.Mutex
-	// Lifetime of issued client certificates (default 24h).
-	Lifetime time.Duration
-	// Now is the core's clock for NotBefore (default time.Now).
-	Now func() time.Time
-	// Revoked makes renew answer 401.
-	Revoked bool
-	// EnrolCalls and RenewCalls count the contract calls.
-	EnrolCalls, RenewCalls int
-	// Names records the name of each enrolment.
-	Names []string
-	// Seen records, for each request to any other route, the serial of
-	// the client certificate it came with.
-	Seen []*big.Int
-	// Extra routes, served behind the client-certificate requirement.
-	Mux       *http.ServeMux
-	tokenUsed bool
-	serial    int64
+	mu           sync.Mutex
+	lifetime     time.Duration
+	revoked      bool
+	unavailable  bool
+	idTaken      int
+	echoWrongID  bool
+	tokenUsed    bool
+	serial       int64
+	enrolCalls   int
+	renewCalls   int
+	calls        []string
+	names        []string
+	requestedIDs []string
+	enrolledID   string
+	lastCSR      *x509.CertificateRequest
+	seen         []*big.Int
 }
 
 // New starts a fake core on 127.0.0.1.
 func New() (*Core, error) {
-	c := &Core{Lifetime: 24 * time.Hour, Now: time.Now, Mux: http.NewServeMux(), serial: 100}
+	c := &Core{lifetime: 24 * time.Hour, Mux: http.NewServeMux(), serial: 100}
 	var err error
 	if c.caKey, c.CA, err = selfSigned("fake core CA"); err != nil {
 		return nil, err
@@ -140,83 +156,173 @@ func (c *Core) Fingerprint() string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// SetRevoked marks the installation revoked.
-func (c *Core) SetRevoked(v bool) {
+// SetRevoked marks the installation revoked: renew answers 401.
+func (c *Core) SetRevoked(v bool) { c.locked(func() { c.revoked = v }) }
+
+// SetUnavailable makes enrolment answer 503, spending nothing.
+func (c *Core) SetUnavailable(v bool) { c.locked(func() { c.unavailable = v }) }
+
+// SetIDTaken makes the next n enrolments answer 400 "id in use".
+func (c *Core) SetIDTaken(n int) { c.locked(func() { c.idTaken = n }) }
+
+// SetEchoWrongID makes enrolment answer with an installation id other than
+// the CSR's.
+func (c *Core) SetEchoWrongID(v bool) { c.locked(func() { c.echoWrongID = v }) }
+
+func (c *Core) locked(f func()) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.Revoked = v
+	f()
 }
 
-// Counts returns the enrol and renew call counts.
+// Counts returns the enrol (POST) and renew call counts.
 func (c *Core) Counts() (enrol, renew int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.EnrolCalls, c.RenewCalls
+	return c.enrolCalls, c.renewCalls
+}
+
+// Calls lists "METHOD path" of every request to the contract's routes.
+func (c *Core) Calls() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.calls...)
+}
+
+// Names lists the name of each successful enrolment.
+func (c *Core) Names() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.names...)
+}
+
+// RequestedIDs lists the installation id of each enrolment request.
+func (c *Core) RequestedIDs() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.requestedIDs...)
+}
+
+// EnrolledID is the installation id the core recorded.
+func (c *Core) EnrolledID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.enrolledID
+}
+
+// LastCSR is the most recent certificate request, enrolment or renewal.
+func (c *Core) LastCSR() *x509.CertificateRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastCSR
 }
 
 // SeenSerials returns the client certificate serials of forwarded requests.
 func (c *Core) SeenSerials() []*big.Int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([]*big.Int(nil), c.Seen...)
+	return append([]*big.Int(nil), c.seen...)
 }
 
 func (c *Core) serve(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
-	case "/_core/enrol":
-		c.enrol(w, r)
-		return
-	case "/_core/renew":
-		c.renew(w, r)
+	case "/_core/enrol", "/_core/renew":
+		c.locked(func() { c.calls = append(c.calls, r.Method+" "+r.URL.Path) })
+		if r.URL.Path == "/_core/enrol" {
+			c.enrol(w, r)
+		} else {
+			c.renew(w, r)
+		}
 		return
 	}
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		http.Error(w, "a client certificate is required", http.StatusUnauthorized)
+		refuse(w)
 		return
 	}
-	c.mu.Lock()
-	c.Seen = append(c.Seen, r.TLS.PeerCertificates[0].SerialNumber)
-	c.mu.Unlock()
+	c.locked(func() { c.seen = append(c.seen, r.TLS.PeerCertificates[0].SerialNumber) })
 	c.Mux.ServeHTTP(w, r)
 }
 
-type enrolRequest struct {
-	Token string `json:"token"`
-	CSR   string `json:"csr"`
-	Name  string `json:"name"`
+func refuse(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	fmt.Fprint(w, `{"error":"innsegl core: request refused"}`)
 }
 
-type issueResponse struct {
-	InstallationID string `json:"installation_id"`
-	Certificate    string `json:"certificate"`
-	Bundle         string `json:"bundle"`
-	ExpiresAt      string `json:"expires_at"`
+// clientID checks the CSR names exactly one SAN, the client URI in this
+// trust domain, and returns its id.
+func clientID(csr *x509.CertificateRequest) (string, bool) {
+	if len(csr.URIs) != 1 || len(csr.DNSNames)+len(csr.IPAddresses)+len(csr.EmailAddresses) != 0 {
+		return "", false
+	}
+	u := csr.URIs[0]
+	if u.Scheme != "spiffe" || u.Host != TrustDomain || !clientPath.MatchString(u.Path) {
+		return "", false
+	}
+	return strings.TrimPrefix(u.Path, "/client/"), true
 }
 
 func (c *Core) enrol(w http.ResponseWriter, r *http.Request) {
-	var req enrolRequest
+	if r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"trust_domain":%q}`, TrustDomain)
+		return
+	}
+	var req struct {
+		Token string `json:"token"`
+		CSR   string `json:"csr"`
+		Name  string `json:"name"`
+	}
 	if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&req) != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	c.mu.Lock()
-	c.EnrolCalls++
-	ok := req.Token == Token && !c.tokenUsed
-	if ok {
-		c.tokenUsed = true
-		c.Names = append(c.Names, req.Name)
-	}
+	c.enrolCalls++
 	c.mu.Unlock()
+	csr, ok := parseCSR(req.CSR)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		http.Error(w, "bad csr", http.StatusBadRequest)
 		return
 	}
-	c.issue(w, req.CSR)
+	id, ok := clientID(csr)
+	c.mu.Lock()
+	c.lastCSR = csr
+	c.requestedIDs = append(c.requestedIDs, id)
+	switch {
+	case !ok:
+		c.mu.Unlock()
+		http.Error(w, "the csr must name exactly spiffe://"+TrustDomain+"/client/<32 hex>", http.StatusBadRequest)
+		return
+	case c.unavailable:
+		c.mu.Unlock()
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "identity authority unavailable", http.StatusServiceUnavailable)
+		return
+	case req.Token != Token || c.tokenUsed:
+		c.mu.Unlock()
+		refuse(w)
+		return
+	case c.idTaken > 0:
+		c.idTaken--
+		c.mu.Unlock()
+		http.Error(w, "installation id in use", http.StatusBadRequest)
+		return
+	}
+	c.tokenUsed = true
+	c.names = append(c.names, req.Name)
+	c.enrolledID = id
+	echo := id
+	if c.echoWrongID {
+		echo = strings.Repeat("f", 32)
+	}
+	c.mu.Unlock()
+	c.issue(w, csr, echo)
 }
 
 func (c *Core) renew(w http.ResponseWriter, r *http.Request) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		refuse(w)
 		return
 	}
 	var req struct {
@@ -227,55 +333,68 @@ func (c *Core) renew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.mu.Lock()
-	c.RenewCalls++
-	revoked := c.Revoked
+	c.renewCalls++
+	revoked := c.revoked
 	c.mu.Unlock()
 	if revoked {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		refuse(w)
 		return
 	}
-	c.issue(w, req.CSR)
-}
-
-func (c *Core) issue(w http.ResponseWriter, csrB64 string) {
-	der, err := base64.StdEncoding.DecodeString(csrB64)
-	if err != nil {
+	csr, ok := parseCSR(req.CSR)
+	if !ok {
 		http.Error(w, "bad csr", http.StatusBadRequest)
 		return
+	}
+	c.locked(func() { c.lastCSR = csr })
+	id, ok := clientID(csr)
+	peer := r.TLS.PeerCertificates[0]
+	if !ok || len(peer.URIs) != 1 || peer.URIs[0].String() != csr.URIs[0].String() {
+		http.Error(w, "the csr must name this installation", http.StatusBadRequest)
+		return
+	}
+	c.issue(w, csr, id)
+}
+
+func parseCSR(b64 string) (*x509.CertificateRequest, bool) {
+	der, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, false
 	}
 	csr, err := x509.ParseCertificateRequest(der)
 	if err != nil || csr.CheckSignature() != nil {
-		http.Error(w, "bad csr", http.StatusBadRequest)
-		return
+		return nil, false
 	}
+	return csr, true
+}
+
+func (c *Core) issue(w http.ResponseWriter, csr *x509.CertificateRequest, installationID string) {
 	c.mu.Lock()
 	c.serial++
 	serial := c.serial
-	notBefore := c.Now()
-	lifetime := c.Lifetime
+	lifetime := c.lifetime
 	c.mu.Unlock()
-	id := &url.URL{Scheme: "spiffe", Host: "innsegl.test", Path: "/client/" + InstallationID}
+	notBefore := time.Now().Add(-time.Minute)
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(serial),
 		NotBefore:    notBefore,
 		NotAfter:     notBefore.Add(lifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-		URIs:         []*url.URL{id},
+		URIs:         csr.URIs,
 	}
 	leaf, err := x509.CreateCertificate(rand.Reader, tmpl, c.ClientCA, csr.PublicKey, c.clientCAKey)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("issue: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("issue: %v", err), http.StatusServiceUnavailable)
 		return
 	}
 	chain := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf})
 	chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.ClientCA.Raw})...)
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(issueResponse{
-		InstallationID: InstallationID,
-		Certificate:    string(chain),
-		Bundle:         string(c.BundlePEM),
-		ExpiresAt:      tmpl.NotAfter.UTC().Format(time.RFC3339),
+	if err := json.NewEncoder(w).Encode(map[string]string{
+		"installation_id": installationID,
+		"certificate":     string(chain),
+		"bundle":          string(c.BundlePEM),
+		"expires_at":      tmpl.NotAfter.UTC().Format(time.RFC3339),
 	}); err != nil {
 		return
 	}

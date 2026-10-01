@@ -261,7 +261,7 @@ func TestCLI016StatusReportsInstallationExpiryAndReachability(t *testing.T) {
 	if err = json.NewDecoder(resp.Body).Decode(&st); err != nil {
 		t.Fatal(err)
 	}
-	if st.InstallationID != clienttest.InstallationID || !st.CoreReachable || st.Revoked {
+	if st.InstallationID != core.EnrolledID() || !st.CoreReachable || st.Revoked {
 		t.Fatalf("status = %+v", st)
 	}
 	if !st.CertificateExpiresAt.Equal(srv.Leaf().NotAfter) {

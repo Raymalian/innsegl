@@ -204,11 +204,11 @@ func TestCLI015ConnectEnrolsWritesFilesSettingsAndService(t *testing.T) {
 		t.Error("gateway-ca.pem is not the core's CA")
 	}
 	cfg, err := client.ReadCoreConfig(client.ClientPaths(f.home))
-	if err != nil || cfg.CoreURL != f.core.URL() || cfg.InstallationID != clienttest.InstallationID {
+	if err != nil || cfg.CoreURL != f.core.URL() || cfg.InstallationID != f.core.EnrolledID() {
 		t.Errorf("core.json = %+v, %v", cfg, err)
 	}
-	if !reflect.DeepEqual(f.core.Names, []string{"dev-laptop"}) {
-		t.Errorf("enrolled names = %v, want the hostname", f.core.Names)
+	if !reflect.DeepEqual(f.core.Names(), []string{"dev-laptop"}) {
+		t.Errorf("enrolled names = %v, want the hostname", f.core.Names())
 	}
 
 	got := readFile(t, f.settings)
@@ -253,8 +253,8 @@ func TestCLI015ConnectByFingerprint(t *testing.T) {
 	if !bytes.Equal(ca, f.core.CAPEM) {
 		t.Error("the fetched CA is not the core's")
 	}
-	if !reflect.DeepEqual(f.core.Names, []string{"ci-runner"}) {
-		t.Errorf("names = %v", f.core.Names)
+	if !reflect.DeepEqual(f.core.Names(), []string{"ci-runner"}) {
+		t.Errorf("names = %v", f.core.Names())
 	}
 	if len(f.calls) != 0 {
 		t.Errorf("--no-service ran service commands: %v", f.calls)
@@ -291,6 +291,16 @@ func TestCLI015ConnectEnrol401WritesNothing(t *testing.T) {
 	bad := "ie_ffffffffffffffff_" + strings.Repeat("f", 64)
 	code, _, stderr := f.connect(f.core.URL(), "--token", bad, "--ca", f.caFile, "--managed-settings", f.settings)
 	if code == exitOK || !strings.Contains(stderr, "refused the enrolment token") {
+		t.Fatalf("connect = %d: %s", code, stderr)
+	}
+	f.assertNothingWritten(t)
+}
+
+func TestCLI015ConnectReportsAnOutageAsRetryableAndWritesNothing(t *testing.T) {
+	f := newConnectFixture(t)
+	f.core.SetUnavailable(true)
+	code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings)
+	if code == exitOK || !strings.Contains(stderr, "tried again") || !strings.Contains(stderr, "Nothing was written") {
 		t.Fatalf("connect = %d: %s", code, stderr)
 	}
 	f.assertNothingWritten(t)
