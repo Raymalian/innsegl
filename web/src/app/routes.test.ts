@@ -12,8 +12,11 @@ import { describe, expect, it } from "vitest";
 import {
   VIEWS,
   emptyRunsFilters,
+  isAccountPath,
+  isSetupPath,
   parseRoute,
   routeToPath,
+  setupCodeFrom,
   type Route,
 } from "./routes";
 
@@ -178,5 +181,34 @@ describe("FE-010 URL carries every view's state", () => {
       view: "run",
       runId: "run-7f3a",
     });
+  });
+});
+
+describe("#445: /setup and /account, deliberately outside VIEWS/Route", () => {
+  it("parseRoute sends /setup and /account to notFound — AuthGate and App.tsx decide them off the path directly", () => {
+    expect(parseRoute("/setup").view).toBe("notFound");
+    expect(parseRoute("/setup?code=abc").view).toBe("notFound");
+    expect(parseRoute("/account").view).toBe("notFound");
+  });
+
+  it("isSetupPath matches only /setup, query string or not", () => {
+    expect(isSetupPath("/setup")).toBe(true);
+    expect(isSetupPath("/setup?code=the-one-time-code")).toBe(true);
+    expect(isSetupPath("/")).toBe(false);
+    expect(isSetupPath("/account")).toBe(false);
+    expect(isSetupPath("/setup/extra")).toBe(false);
+  });
+
+  it("setupCodeFrom reads the ?code= off a /setup address, or \"\" if absent", () => {
+    expect(setupCodeFrom("/setup?code=the-one-time-code")).toBe("the-one-time-code");
+    expect(setupCodeFrom("/setup")).toBe("");
+    expect(setupCodeFrom("/setup?code=")).toBe("");
+  });
+
+  it("isAccountPath matches only /account", () => {
+    expect(isAccountPath("/account")).toBe(true);
+    expect(isAccountPath("/account?notice=recovery-signin")).toBe(true);
+    expect(isAccountPath("/")).toBe(false);
+    expect(isAccountPath("/setup")).toBe(false);
   });
 });

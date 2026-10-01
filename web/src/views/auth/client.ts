@@ -30,6 +30,8 @@
  * base64url itself.
  */
 
+import type { Account, AccountPasskey, RecoverResult, RecoveryCodes, SetupStatus } from "./types";
+
 const DEFAULT_API_BASE = "/api/v1";
 
 export class AuthRequestError extends Error {
@@ -70,6 +72,54 @@ function errorMessage(body: unknown): string | undefined {
   return typeof message === "string" ? message : undefined;
 }
 
+/** `postJSON`'s GET/PATCH/DELETE siblings, for #445's account surface. Kept
+ * separate from `postJSON` rather than folded into one method-taking
+ * function so the sign-in/enrol ceremony's own tests, written against
+ * `postJSON`'s exact request shape, are untouched by this issue. */
+async function getJSON(base: string, path: string): Promise<unknown> {
+  const response = await fetch(`${base}${path}`, {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  });
+  const text = await response.text();
+  const parsed: unknown = text === "" ? {} : JSON.parse(text);
+  if (!response.ok) {
+    const message = errorMessage(parsed) ?? `${path} answered ${response.status}`;
+    throw new AuthRequestError(message, response.status);
+  }
+  return parsed;
+}
+
+async function patchJSON(base: string, path: string, body: unknown): Promise<unknown> {
+  const response = await fetch(`${base}${path}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(body ?? {}),
+  });
+  const text = await response.text();
+  const parsed: unknown = text === "" ? {} : JSON.parse(text);
+  if (!response.ok) {
+    const message = errorMessage(parsed) ?? `${path} answered ${response.status}`;
+    throw new AuthRequestError(message, response.status);
+  }
+  return parsed;
+}
+
+async function deleteJSON(base: string, path: string): Promise<void> {
+  const response = await fetch(`${base}${path}`, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    const parsed: unknown = text === "" ? {} : JSON.parse(text);
+    const message = errorMessage(parsed) ?? `${path} answered ${response.status}`;
+    throw new AuthRequestError(message, response.status);
+  }
+}
+
 export interface SessionStatus {
   readonly authenticated: boolean;
   readonly displayName: string;
@@ -96,19 +146,22 @@ export async function fetchSessionStatus(
   };
 }
 
-/** `GET /api/v1/health`'s `auth.enrolled` — the allow-listed, unauthenticated
- * fact this page needs to choose between the enrolment page and sign-in. */
-export async function fetchEnrolled(base: string = DEFAULT_API_BASE): Promise<boolean> {
-  const response = await fetch(`${base}/health`, {
+/** `GET /api/v1/auth/setup` — the allow-listed, unauthenticated fact this
+ * page needs to choose between the setup page and sign-in (#445). Never
+ * throws: an unreachable or failing check reads as "nothing to set up",
+ * which is `fetchSessionStatus`'s own fail-safe default for the same
+ * reason — the gate cannot block on a read that is itself allowed to fail. */
+export async function fetchSetupStatus(
+  base: string = DEFAULT_API_BASE,
+): Promise<SetupStatus> {
+  const response = await fetch(`${base}/auth/setup`, {
     credentials: "same-origin",
     headers: { Accept: "application/json" },
   });
-  if (!response.ok) return false;
+  if (!response.ok) return { needed: false };
   const body = (await response.json()) as unknown;
-  if (typeof body !== "object" || body === null) return false;
-  const auth = (body as Record<string, unknown>)["auth"];
-  if (typeof auth !== "object" || auth === null) return false;
-  return (auth as Record<string, unknown>)["enrolled"] === true;
+  if (typeof body !== "object" || body === null) return { needed: false };
+  return { needed: (body as Record<string, unknown>)["needed"] === true };
 }
 
 /** `POST /api/v1/auth/logout`. */
@@ -186,19 +239,42 @@ function asCeremonyOptions(body: unknown): CeremonyOptions {
   return { ceremonyId: o["ceremony_id"], publicKey: o["publicKey"] };
 }
 
+/** What a completed first-enrolment ceremony hands back: the session it
+ * opened, and the account's first ten recovery codes (#445's
+ * `EnrolFinished`), shown exactly once — SetupPage's own "save your
+ * recovery codes" step is this result, nothing re-fetched. */
+export interface EnrolResult {
+  readonly displayName: string;
+  readonly recoveryCodes: readonly string[];
+}
+
+function enrolResultOf(body: unknown): EnrolResult {
+  if (typeof body !== "object" || body === null) {
+    return { displayName: "", recoveryCodes: [] };
+  }
+  const o = body as Record<string, unknown>;
+  const codes = Array.isArray(o["recovery_codes"])
+    ? o["recovery_codes"].filter((c): c is string => typeof c === "string")
+    : [];
+  return {
+    displayName: typeof o["display_name"] === "string" ? o["display_name"] : "",
+    recoveryCodes: codes,
+  };
+}
+
 /**
  * The whole first-enrolment ceremony: mint the options, create the passkey,
  * finish it. Throws AuthRequestError for anything the SERVER refused (a bad
  * code), and a plain Error for anything the BROWSER refused (no passkey
  * support, the operator cancelled the platform prompt) — the two need
- * different copy, see EnrolPage.
+ * different copy, see SetupPage.
  */
 export async function enrol(
   displayName: string,
   code: string,
   browser: WebAuthnBrowser,
   base: string = DEFAULT_API_BASE,
-): Promise<void> {
+): Promise<EnrolResult> {
   const begin = asCeremonyOptions(
     await postJSON(base, "/auth/enrol/begin", { display_name: displayName, code }),
   );
@@ -210,10 +286,11 @@ export async function enrol(
   if (credential === null) {
     throw new Error("no passkey was created");
   }
-  await postJSON(base, "/auth/enrol/finish", {
+  const finished = await postJSON(base, "/auth/enrol/finish", {
     ceremony_id: begin.ceremonyId,
     credential: credentialJSON(credential),
   });
+  return enrolResultOf(finished);
 }
 
 /** The whole sign-in ceremony: mint the options, ask for the passkey the
@@ -244,4 +321,134 @@ function displayNameOf(body: unknown): string {
   if (typeof body !== "object" || body === null) return "";
   const name = (body as Record<string, unknown>)["display_name"];
   return typeof name === "string" ? name : "";
+}
+
+// ---------------------------------------------------------------------------
+// #445: recovery sign-in, and the account page's own reads/writes.
+// ---------------------------------------------------------------------------
+
+/** `POST /api/v1/auth/recover` {code} -> RecoverResult. No session required;
+ * a wrong, used or expired code is an ordinary AuthRequestError (401),
+ * shown verbatim — the same discipline `enrol` and `signIn` hold. */
+export async function recover(
+  code: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<RecoverResult> {
+  return recoverResultOf(await postJSON(base, "/auth/recover", { code }));
+}
+
+function recoverResultOf(body: unknown): RecoverResult {
+  if (typeof body !== "object" || body === null) {
+    return { authenticated: false, display_name: "", remaining: 0 };
+  }
+  const o = body as Record<string, unknown>;
+  return {
+    authenticated: o["authenticated"] === true,
+    display_name: typeof o["display_name"] === "string" ? o["display_name"] : "",
+    remaining: typeof o["remaining"] === "number" ? o["remaining"] : 0,
+  };
+}
+
+function passkeyOf(body: unknown): AccountPasskey {
+  const o = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
+  return {
+    id: typeof o["id"] === "string" ? o["id"] : "",
+    name: typeof o["name"] === "string" ? o["name"] : "",
+    created_at: typeof o["created_at"] === "string" ? o["created_at"] : "",
+    last_used_at: typeof o["last_used_at"] === "string" ? o["last_used_at"] : null,
+    current: o["current"] === true,
+  };
+}
+
+function accountOf(body: unknown): Account {
+  if (typeof body !== "object" || body === null) {
+    throw new Error("the server's response was not an account");
+  }
+  const o = body as Record<string, unknown>;
+  return {
+    user_id: typeof o["user_id"] === "string" ? o["user_id"] : "",
+    display_name: typeof o["display_name"] === "string" ? o["display_name"] : "",
+    created_at: typeof o["created_at"] === "string" ? o["created_at"] : "",
+    passkeys: Array.isArray(o["passkeys"]) ? o["passkeys"].map(passkeyOf) : [],
+    recovery_codes_remaining:
+      typeof o["recovery_codes_remaining"] === "number" ? o["recovery_codes_remaining"] : 0,
+  };
+}
+
+/** `GET /api/v1/account`. */
+export async function fetchAccount(base: string = DEFAULT_API_BASE): Promise<Account> {
+  return accountOf(await getJSON(base, "/account"));
+}
+
+/** `PATCH /api/v1/account` {display_name}. */
+export async function updateAccount(
+  displayName: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<Account> {
+  return accountOf(await patchJSON(base, "/account", { display_name: displayName }));
+}
+
+/**
+ * The whole "add a passkey while signed in" ceremony — the same shape as
+ * `enrol`'s ceremony, against the account's own begin/finish pair rather
+ * than the first-enrolment one. Throws AuthRequestError for anything the
+ * server refused and a plain Error for anything the browser refused, same
+ * split as `enrol`/`signIn`.
+ */
+export async function addPasskey(
+  name: string,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<AccountPasskey> {
+  const begin = asCeremonyOptions(
+    await postJSON(base, "/account/passkeys/begin", { name }),
+  );
+  if (!browser.supported) {
+    throw new Error("this browser has no passkey support");
+  }
+  const options = browser.publicKeyCredential.parseCreationOptionsFromJSON(begin.publicKey);
+  const credential = await browser.credentials.create({ publicKey: options });
+  if (credential === null) {
+    throw new Error("no passkey was created");
+  }
+  const finished = await postJSON(base, "/account/passkeys/finish", {
+    ceremony_id: begin.ceremonyId,
+    credential: credentialJSON(credential),
+  });
+  return passkeyOf(finished);
+}
+
+/** `PATCH /api/v1/account/passkeys/{id}` {name}. */
+export async function renamePasskey(
+  id: string,
+  name: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<AccountPasskey> {
+  return passkeyOf(
+    await patchJSON(base, `/account/passkeys/${encodeURIComponent(id)}`, { name }),
+  );
+}
+
+/** `DELETE /api/v1/account/passkeys/{id}`. 409s as an ordinary
+ * AuthRequestError when `id` is the account's last passkey — the account
+ * page disables the control for that row already, so this is the server's
+ * own backstop, not the primary guard. */
+export async function removePasskey(
+  id: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<void> {
+  await deleteJSON(base, `/account/passkeys/${encodeURIComponent(id)}`);
+}
+
+/** `POST /api/v1/account/recovery-codes`: ten new codes, shown once; every
+ * earlier code becomes void. */
+export async function generateRecoveryCodes(
+  base: string = DEFAULT_API_BASE,
+): Promise<RecoveryCodes> {
+  const body = await postJSON(base, "/account/recovery-codes", {});
+  if (typeof body !== "object" || body === null) return { codes: [] };
+  const codes = (body as Record<string, unknown>)["codes"];
+  return {
+    codes: Array.isArray(codes) ? codes.filter((c): c is string => typeof c === "string") : [],
+  };
 }

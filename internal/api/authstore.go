@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,6 +39,14 @@ var (
 	ErrSessionNotFound   = errors.New("api: no such session")
 	ErrCeremonyNotFound  = errors.New("api: no such ceremony, or it already expired")
 	ErrEnrolmentCodeUsed = errors.New("api: that enrolment code has already been used, has expired, or was never issued")
+	// ErrLastPasskey is DeletePasskey's refusal (#445): removing a user's
+	// only passkey would lock the account out, with no sign-in method left
+	// to reach the account page that could add another.
+	ErrLastPasskey = errors.New("api: this is the only passkey on the account; removing it would lock the account out")
+	// ErrRecoveryCodeInvalid is ConsumeRecoveryCode's refusal: the code is
+	// wrong, already used, or was never minted — one answer for all three,
+	// the same posture ErrEnrolmentCodeUsed already takes for its own code.
+	ErrRecoveryCodeInvalid = errors.New("api: that recovery code is not usable: it may be wrong or already used")
 )
 
 // OpenAuthStore connects and REFUSES a credential that can write the ledger
@@ -144,13 +153,33 @@ func (a *AuthStore) UserByID(ctx context.Context, userID string) (AuthUser, erro
 	return u, nil
 }
 
-// EnrolmentOpen reports whether the first-enrolment (or recovery) door is
-// open: true whenever no passkey exists anywhere in this deployment.
-// ADR-0062: "Recovery ... re-runs first-user enrolment" — this is the SAME
-// door, not a second one, because it is the same question either way, "does
-// a passkey exist yet". A stale, passkey-less user row from an abandoned
-// ceremony does not close it; CreateUser mints a fresh user_id each time
-// this reopens rather than reusing one.
+// UpdateDisplayName is PATCH /api/v1/account's own write (#445): the one
+// field an account holds that a person can change about themselves.
+func (a *AuthStore) UpdateDisplayName(ctx context.Context, userID, displayName string) error {
+	tag, err := a.pool.Exec(ctx,
+		`UPDATE innsegl_auth.users SET display_name = $2 WHERE user_id = $1`,
+		userID, displayName)
+	if err != nil {
+		return fmt.Errorf("api: updating the display name for user %s: %w", userID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// EnrolmentOpen reports whether first-user enrolment is open: true whenever
+// no passkey exists anywhere in this deployment. A stale, passkey-less user
+// row from an abandoned ceremony does not close it; CreateUser mints a
+// fresh user_id each time this reopens rather than reusing one.
+//
+// ADR-0062's ORIGINAL text had recovery reuse this same door ("Recovery ...
+// re-runs first-user enrolment"); the 2026-10-01 amendment (#445) replaced
+// that with recovery codes instead — ConsumeRecoveryCode, reached through
+// POST /api/v1/auth/recover, never through here. In practice this door only
+// ever opens once: DeletePasskey refuses to remove a user's last passkey
+// (ErrLastPasskey), so once the first one is added the passkey count can
+// never fall back to zero through anything this package does.
 func (a *AuthStore) EnrolmentOpen(ctx context.Context) (bool, error) {
 	var anyPasskey bool
 	if err := a.pool.QueryRow(ctx,
@@ -164,22 +193,170 @@ func (a *AuthStore) EnrolmentOpen(ctx context.Context) (bool, error) {
 // Passkeys
 // ---------------------------------------------------------------------------
 
+// credentialIDString is the one encoding a WebAuthn credential id is ever
+// stored or looked up under: base64url-less base32, matching
+// migration 0008's own column comment ("the same string the client sent,
+// nothing to decode to compare") — shared so AddPasskey, UpdatePasskey and
+// every #445 caller that builds or compares a credential_id cannot drift
+// apart on the encoding.
+func credentialIDString(id []byte) string {
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(id)
+}
+
 // AddPasskey inserts one credential, storing the library's own
 // webauthn.Credential whole as JSON (see migration 0008's column comment for
 // why) plus the attestation format ADR-0062 asks to have recorded on its own
-// row.
-func (a *AuthStore) AddPasskey(ctx context.Context, userID string, cred webauthn.Credential) error {
+// row, and — migration 0009 (#445) — the name the person gave it: "" for the
+// one minted by first-user enrolment (ADR-0062 amendment: the setup page
+// asks for an account name, not a passkey name), whatever the person typed
+// for every passkey added afterwards through POST
+// /api/v1/account/passkeys/finish. It returns the row's own created_at
+// rather than approximating it client-side, the same "ask the server"
+// discipline the rest of this file holds to.
+func (a *AuthStore) AddPasskey(ctx context.Context, userID, name string, cred webauthn.Credential) (createdAt time.Time, err error) {
 	body, err := json.Marshal(cred)
 	if err != nil {
-		return fmt.Errorf("api: encoding the passkey credential: %w", err)
+		return time.Time{}, fmt.Errorf("api: encoding the passkey credential: %w", err)
 	}
-	credentialID := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(cred.ID)
-	_, err = a.pool.Exec(ctx,
-		`INSERT INTO innsegl_auth.passkeys (credential_id, user_id, credential, attestation_format)
-		 VALUES ($1, $2, $3, $4)`,
-		credentialID, userID, body, cred.AttestationFormat)
+	credentialID := credentialIDString(cred.ID)
+	err = a.pool.QueryRow(ctx,
+		`INSERT INTO innsegl_auth.passkeys (credential_id, user_id, credential, attestation_format, name)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING created_at`,
+		credentialID, userID, body, cred.AttestationFormat, name).Scan(&createdAt)
 	if err != nil {
-		return fmt.Errorf("api: adding a passkey for user %s: %w", userID, err)
+		return time.Time{}, fmt.Errorf("api: adding a passkey for user %s: %w", userID, err)
+	}
+	return createdAt, nil
+}
+
+// AccountPasskeyRow is one row of GET /api/v1/account's own passkey listing
+// — everything internal/api/account.go's AccountPasskey needs except
+// Current, which is a per-SESSION fact (which passkey issued it) and not a
+// property of the passkey row itself, so the handler fills it in rather
+// than this method.
+type AccountPasskeyRow struct {
+	ID         string
+	Name       string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+}
+
+// AccountPasskeys lists every passkey a user holds, oldest first — ADR-0062
+// amendment: "An account page lists every passkey (name, when added, when
+// last used)".
+func (a *AuthStore) AccountPasskeys(ctx context.Context, userID string) ([]AccountPasskeyRow, error) {
+	rows, err := a.pool.Query(ctx,
+		`SELECT credential_id, name, created_at, last_used_at FROM innsegl_auth.passkeys
+		 WHERE user_id = $1 ORDER BY created_at`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("api: listing account passkeys for user %s: %w", userID, err)
+	}
+	defer rows.Close()
+
+	var out []AccountPasskeyRow
+	for rows.Next() {
+		var row AccountPasskeyRow
+		if serr := rows.Scan(&row.ID, &row.Name, &row.CreatedAt, &row.LastUsedAt); serr != nil {
+			return nil, fmt.Errorf("api: reading an account passkey for user %s: %w", userID, serr)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("api: listing account passkeys for user %s: %w", userID, err)
+	}
+	return out, nil
+}
+
+// RenamePasskey sets a passkey's own label, scoped to the owning user so a
+// credential id that belongs to someone else answers ErrPasskeyNotFound —
+// the same "not yours reads exactly like doesn't exist" posture
+// DeletePasskey holds to, and for the same reason (#445: "a passkey of
+// another user → 404").
+func (a *AuthStore) RenamePasskey(ctx context.Context, userID, credentialID, name string) (AccountPasskeyRow, error) {
+	var row AccountPasskeyRow
+	err := a.pool.QueryRow(ctx,
+		`UPDATE innsegl_auth.passkeys SET name = $3
+		 WHERE credential_id = $1 AND user_id = $2
+		 RETURNING credential_id, name, created_at, last_used_at`,
+		credentialID, userID, name).Scan(&row.ID, &row.Name, &row.CreatedAt, &row.LastUsedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AccountPasskeyRow{}, ErrPasskeyNotFound
+	}
+	if err != nil {
+		return AccountPasskeyRow{}, fmt.Errorf("api: renaming a passkey: %w", err)
+	}
+	return row, nil
+}
+
+// DeletePasskey removes one passkey, refusing to leave the account with
+// none (ErrLastPasskey) and refusing a credential id that belongs to
+// someone else exactly as RenamePasskey does (ErrPasskeyNotFound).
+//
+// Both checks run inside one transaction that locks the user's own passkey
+// rows (SELECT ... FOR UPDATE) first, so two concurrent deletes of a user's
+// last two passkeys cannot both read "not the last one" and both proceed —
+// the same server-enforced-atomically posture ConsumeEnrolmentCode already
+// holds for its own single-use guarantee.
+//
+// Every session that signed in with this passkey is revoked as part of the
+// same transaction (ADR-0062 amendment: "Deleting a passkey ends sessions
+// that signed in with it") — BEFORE the row is deleted, because
+// sessions.passkey_id's own ON DELETE SET NULL would otherwise just
+// detach a still-live session from the passkey it used rather than end it.
+func (a *AuthStore) DeletePasskey(ctx context.Context, userID, credentialID string) error {
+	tx, err := a.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("api: beginning a transaction to remove a passkey: %w", err)
+	}
+	defer func() { discardError(tx.Rollback(ctx)) }()
+
+	rows, err := tx.Query(ctx,
+		`SELECT credential_id FROM innsegl_auth.passkeys WHERE user_id = $1 FOR UPDATE`, userID)
+	if err != nil {
+		return fmt.Errorf("api: locking passkeys for user %s: %w", userID, err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if serr := rows.Scan(&id); serr != nil {
+			rows.Close()
+			return fmt.Errorf("api: reading a locked passkey for user %s: %w", userID, serr)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("api: locking passkeys for user %s: %w", userID, err)
+	}
+
+	found := false
+	for _, id := range ids {
+		if id == credentialID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ErrPasskeyNotFound
+	}
+	if len(ids) <= 1 {
+		return ErrLastPasskey
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE innsegl_auth.sessions SET revoked_at = clock_timestamp()
+		 WHERE passkey_id = $1 AND revoked_at IS NULL`,
+		credentialID); err != nil {
+		return fmt.Errorf("api: revoking sessions for a removed passkey: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM innsegl_auth.passkeys WHERE credential_id = $1 AND user_id = $2`,
+		credentialID, userID); err != nil {
+		return fmt.Errorf("api: removing a passkey: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("api: committing a passkey removal: %w", err)
 	}
 	return nil
 }
@@ -234,7 +411,7 @@ func (a *AuthStore) UpdatePasskey(ctx context.Context, cred webauthn.Credential)
 	if err != nil {
 		return fmt.Errorf("api: encoding the passkey credential: %w", err)
 	}
-	credentialID := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(cred.ID)
+	credentialID := credentialIDString(cred.ID)
 	tag, err := a.pool.Exec(ctx,
 		`UPDATE innsegl_auth.passkeys SET credential = $2, last_used_at = clock_timestamp()
 		 WHERE credential_id = $1`,
@@ -254,16 +431,23 @@ func (a *AuthStore) UpdatePasskey(ctx context.Context, cred webauthn.Credential)
 
 // CreateSession mints a new bearer token, stores its hash, and returns the
 // raw token — the only time the raw value ever exists outside the browser's
-// cookie jar.
-func (a *AuthStore) CreateSession(ctx context.Context, userID string, lifetime time.Duration) (token string, expiresAt time.Time, err error) {
+// cookie jar. passkeyID names which passkey this session was ISSUED for
+// (migration 0009, #445) — empty for a session a recovery code opened,
+// which names no passkey at all (ADR-0062 amendment).
+func (a *AuthStore) CreateSession(ctx context.Context, userID, passkeyID string, lifetime time.Duration) (token string, expiresAt time.Time, err error) {
 	raw, err := newRandomID(32)
 	if err != nil {
 		return "", time.Time{}, err
 	}
+	var passkeyArg any
+	if passkeyID != "" {
+		passkeyArg = passkeyID
+	}
 	expiresAt = time.Now().UTC().Add(lifetime)
 	_, err = a.pool.Exec(ctx,
-		`INSERT INTO innsegl_auth.sessions (session_id_hash, user_id, expires_at) VALUES ($1, $2, $3)`,
-		hashToken(raw), userID, expiresAt)
+		`INSERT INTO innsegl_auth.sessions (session_id_hash, user_id, passkey_id, expires_at)
+		 VALUES ($1, $2, $3, $4)`,
+		hashToken(raw), userID, passkeyArg, expiresAt)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("api: creating a session for user %s: %w", userID, err)
 	}
@@ -271,23 +455,28 @@ func (a *AuthStore) CreateSession(ctx context.Context, userID string, lifetime t
 }
 
 // VerifySession reports the user a live, unrevoked, unexpired session token
-// belongs to. This is the one query server.go's deny-by-default gate runs on
-// every gated request.
-func (a *AuthStore) VerifySession(ctx context.Context, token string) (userID string, ok bool, err error) {
+// belongs to, and which passkey (if any) issued it — this is the one query
+// server.go's deny-by-default gate runs on every gated request, and also
+// what answers Account.passkeys[].current (#445).
+func (a *AuthStore) VerifySession(ctx context.Context, token string) (userID, passkeyID string, ok bool, err error) {
 	if token == "" {
-		return "", false, nil
+		return "", "", false, nil
 	}
+	var pk *string
 	err = a.pool.QueryRow(ctx,
-		`SELECT user_id FROM innsegl_auth.sessions
+		`SELECT user_id, passkey_id FROM innsegl_auth.sessions
 		 WHERE session_id_hash = $1 AND revoked_at IS NULL AND expires_at > clock_timestamp()`,
-		hashToken(token)).Scan(&userID)
+		hashToken(token)).Scan(&userID, &pk)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("api: verifying a session: %w", err)
+		return "", "", false, fmt.Errorf("api: verifying a session: %w", err)
 	}
-	return userID, true, nil
+	if pk != nil {
+		passkeyID = *pk
+	}
+	return userID, passkeyID, true, nil
 }
 
 // RevokeSession is sign-out: the server-side row is marked revoked, not
@@ -322,6 +511,12 @@ const (
 	AuthEventSignInSucceeded    = "signin_succeeded"
 	AuthEventSignInRefused      = "signin_refused"
 	AuthEventSignOut            = "signout"
+	// AuthEventPasskeyAdded and AuthEventPasskeyRemoved are #445's own
+	// additions: the account page's two ways the set of credentials that can
+	// sign in changes, outside enrolment itself.
+	AuthEventPasskeyAdded             = "passkey_added"
+	AuthEventPasskeyRemoved           = "passkey_removed"
+	AuthEventRecoveryCodesRegenerated = "recovery_codes_regenerated"
 )
 
 // RecordAuthEvent appends one row. userID may be empty: a refusal often names
@@ -446,4 +641,162 @@ func (a *AuthStore) LoadAndConsumeCeremony(ctx context.Context, ceremonyID, kind
 		c.PendingDisplayName = *displayName
 	}
 	return c, nil
+}
+
+// ---------------------------------------------------------------------------
+// Recovery codes (migration 0009, #445; ADR-0062's 2026-10-01 amendment).
+// ---------------------------------------------------------------------------
+
+// recoveryCodeAlphabet is Crockford's own 32-symbol base32 alphabet: digits
+// and uppercase letters with 0/O, 1/I/L and U removed, because those are
+// exactly the characters a person mis-types or mis-reads for one another
+// when copying a code off a screen or a piece of paper. It is a published,
+// reviewed answer to "pick a human-safe alphabet" rather than one invented
+// here.
+const recoveryCodeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// recoveryCodeCount is how many codes first enrolment mints, and how many a
+// regeneration replaces them with (ADR-0062 amendment: "Ten single-use
+// codes").
+const recoveryCodeCount = 10
+
+// recoveryCodeRawBytes of crypto/rand encode, 5 bits at a time, to exactly
+// 16 recoveryCodeAlphabet symbols (80 bits is a multiple of 5, so no
+// padding symbol is ever needed) — comfortably over the "≥ 64 bits each"
+// floor. generateRecoveryCode splits the 16 symbols into two groups of
+// eight around a dash, the same shape "xxxx-xxxx" names, just two chars
+// wider a side to carry the extra entropy.
+const recoveryCodeRawBytes = 10
+
+// generateRecoveryCode mints one fresh code, formatted for a person to read
+// and type back: UPPERCASE-WITH-A-DASH, from recoveryCodeAlphabet only.
+func generateRecoveryCode() (string, error) {
+	raw := make([]byte, recoveryCodeRawBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("api: no randomness available: %w", err)
+	}
+	symbols := make([]byte, 0, 16)
+	var buf uint32
+	var bits uint
+	for _, b := range raw {
+		buf = buf<<8 | uint32(b)
+		bits += 8
+		for bits >= 5 {
+			bits -= 5
+			idx := (buf >> bits) & 0x1F
+			symbols = append(symbols, recoveryCodeAlphabet[idx])
+		}
+	}
+	return string(symbols[:8]) + "-" + string(symbols[8:]), nil
+}
+
+// canonicalRecoveryCode normalises a person's input to the same form
+// generateRecoveryCode's own hash is stored under: uppercase, no dash, no
+// surrounding whitespace — "Accept the code case-insensitively and with or
+// without the dash" (#445), satisfied by hashing (and comparing against) the
+// SAME canonical string at both mint time and consume time rather than
+// trying to normalise a stored hash after the fact.
+func canonicalRecoveryCode(code string) string {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	var sb strings.Builder
+	sb.Grow(len(code))
+	for _, r := range code {
+		if r == '-' || r == ' ' || r == '\t' {
+			continue
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
+}
+
+// MintRecoveryCodes deletes every existing code for userID and inserts
+// recoveryCodeCount fresh ones in one transaction — ADR-0062 amendment:
+// "the account page regenerates them, which voids the rest", and first
+// enrolment is this SAME operation on a user who had none yet (the DELETE
+// removes nothing). Returns the raw, display-form codes: shown once, never
+// stored.
+func (a *AuthStore) MintRecoveryCodes(ctx context.Context, userID string) ([]string, error) {
+	codes := make([]string, recoveryCodeCount)
+	for i := range codes {
+		c, err := generateRecoveryCode()
+		if err != nil {
+			return nil, err
+		}
+		codes[i] = c
+	}
+
+	tx, err := a.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("api: beginning a transaction to mint recovery codes: %w", err)
+	}
+	defer func() { discardError(tx.Rollback(ctx)) }()
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM innsegl_auth.recovery_codes WHERE user_id = $1`, userID); err != nil {
+		return nil, fmt.Errorf("api: voiding earlier recovery codes for user %s: %w", userID, err)
+	}
+	for _, c := range codes {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO innsegl_auth.recovery_codes (code_hash, user_id) VALUES ($1, $2)`,
+			hashToken(canonicalRecoveryCode(c)), userID); err != nil {
+			return nil, fmt.Errorf("api: minting a recovery code for user %s: %w", userID, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("api: committing minted recovery codes for user %s: %w", userID, err)
+	}
+	return codes, nil
+}
+
+// ConsumeRecoveryCode atomically marks one matching, unused code used and
+// reports the user it belonged to and how many of that user's codes remain
+// unused — the single-use guarantee is the UPDATE's own
+// WHERE used_at IS NULL, the same shape ConsumeEnrolmentCode already uses,
+// enforced by the server rather than a check-then-set race in Go.
+func (a *AuthStore) ConsumeRecoveryCode(ctx context.Context, code string) (userID string, remaining int, err error) {
+	canon := canonicalRecoveryCode(code)
+	if canon == "" {
+		return "", 0, ErrRecoveryCodeInvalid
+	}
+
+	tx, err := a.pool.Begin(ctx)
+	if err != nil {
+		return "", 0, fmt.Errorf("api: beginning a transaction to consume a recovery code: %w", err)
+	}
+	defer func() { discardError(tx.Rollback(ctx)) }()
+
+	err = tx.QueryRow(ctx,
+		`UPDATE innsegl_auth.recovery_codes SET used_at = clock_timestamp()
+		 WHERE code_hash = $1 AND used_at IS NULL
+		 RETURNING user_id`,
+		hashToken(canon)).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, ErrRecoveryCodeInvalid
+	}
+	if err != nil {
+		return "", 0, fmt.Errorf("api: consuming a recovery code: %w", err)
+	}
+
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM innsegl_auth.recovery_codes WHERE user_id = $1 AND used_at IS NULL`,
+		userID).Scan(&remaining); err != nil {
+		return "", 0, fmt.Errorf("api: counting remaining recovery codes for user %s: %w", userID, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", 0, fmt.Errorf("api: committing a consumed recovery code: %w", err)
+	}
+	return userID, remaining, nil
+}
+
+// RecoveryCodesRemaining answers Account.recovery_codes_remaining: how many
+// of a user's codes are still unused.
+func (a *AuthStore) RecoveryCodesRemaining(ctx context.Context, userID string) (int, error) {
+	var n int
+	err := a.pool.QueryRow(ctx,
+		`SELECT count(*) FROM innsegl_auth.recovery_codes WHERE user_id = $1 AND used_at IS NULL`,
+		userID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("api: counting remaining recovery codes for user %s: %w", userID, err)
+	}
+	return n, nil
 }

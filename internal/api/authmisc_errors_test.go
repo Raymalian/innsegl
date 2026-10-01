@@ -72,7 +72,7 @@ func TestPasskeysByUserReportsAStoredCredentialItCannotDecode(t *testing.T) {
 	if cerr := store.CreateUser(ctx, "u-corrupt", "Corrupt"); cerr != nil {
 		t.Fatalf("CreateUser: %v", cerr)
 	}
-	if aerr := store.AddPasskey(ctx, "u-corrupt", webauthnTestCredential("corrupt-me")); aerr != nil {
+	if _, aerr := store.AddPasskey(ctx, "u-corrupt", "", webauthnTestCredential("corrupt-me")); aerr != nil {
 		t.Fatalf("AddPasskey: %v", aerr)
 	}
 
@@ -135,7 +135,7 @@ func TestIssueSessionReportsACreateSessionDatabaseError(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", nil)
-	s.issueSession(rec, req, "user-1", "Operator")
+	s.issueSession(rec, req, "user-1", "", "Operator")
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("issueSession against a closed store answered %d, want %d", rec.Code, http.StatusInternalServerError)

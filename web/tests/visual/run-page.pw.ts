@@ -61,6 +61,10 @@ async function installRunPageMocks(
       await json(route, { authenticated: true, display_name: "Test Operator" });
       return;
     }
+    if (p === "/api/v1/auth/setup") {
+      await json(route, { needed: false });
+      return;
+    }
     if (p === "/api/v1/health") {
       await json(route, { database: {}, auth: { enrolled: true, cannot_write_ledger: {} } });
       return;

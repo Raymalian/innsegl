@@ -18,15 +18,24 @@
 //
 // No copy. Every string comes from the catalogue through useStrings(), and
 // FE-020 parses this file to prove it.
+//
+// One deliberate exception to "no view": #445's account page at /account.
+// It is imported directly rather than through the `views` registry because
+// it is not one of doc 06 §3's six views at all — the same reading that
+// already keeps AuthGate's sign-in/setup pages, which this page sits beside
+// conceptually, out of routes.ts's `VIEWS`. `isAccountPath` reads the
+// address directly, the one piece of view state this page needs.
 
 import { useEffect, type ComponentType, type ReactNode } from "react";
 
 import { AppMark } from "./AppMark";
 import { ThemeToggle } from "./ThemeToggle";
 import { useStrings } from "./i18n";
-import { Link, useRoute } from "./router";
-import { NAV_VIEWS, navRoute, type Route, type ViewName } from "./routes";
+import { Link, usePath, useRoute } from "./router";
+import { NAV_VIEWS, isAccountPath, navRoute, type Route, type ViewName } from "./routes";
 import { documentTitle, type Strings } from "./strings";
+import { AccountPage } from "../views/auth";
+import { strings as authStrings } from "../views/auth/strings";
 
 /** Where the main region begins, and where the skip link lands. */
 const MAIN_ID = "main";
@@ -79,9 +88,11 @@ export function contentWidthClass(route: Route): "max-w-none" | "max-w-content" 
 }
 
 export function App({ views = {}, heartbeat, alerts, account }: AppProps) {
+  const path = usePath();
   const route = useRoute();
   const strings = useStrings();
-  const heading = headingFor(route, strings);
+  const onAccountPage = isAccountPath(path);
+  const heading = onAccountPage ? authStrings.account.heading : headingFor(route, strings);
 
   useEffect(() => {
     document.title = documentTitle(heading, strings);
@@ -149,7 +160,13 @@ export function App({ views = {}, heartbeat, alerts, account }: AppProps) {
         </nav>
 
         <main id={MAIN_ID} tabIndex={-1} className="min-w-0 flex-1">
-          {View ? <View route={route} /> : <Placeholder heading={heading} route={route} />}
+          {onAccountPage ? (
+            <AccountPage />
+          ) : View ? (
+            <View route={route} />
+          ) : (
+            <Placeholder heading={heading} route={route} />
+          )}
         </main>
       </div>
     </div>

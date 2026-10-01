@@ -166,6 +166,107 @@ func enrolTestUser(t *testing.T, baseURL string, authStore *AuthStore) (*webauth
 	return nil, nil
 }
 
+// mustJSON encodes v as a JSON string body, failing the test rather than
+// returning an error every call site would have to check — every case that
+// uses it is posting a fixed, known-good value.
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	body, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("encoding %#v as JSON: %v", v, err)
+	}
+	return string(body)
+}
+
+// sessionCookieFrom pulls ADR-0062's session cookie out of a response's own
+// headers — the same extraction enrolTestUser does inline, shared here for
+// every other helper that completes a ceremony over real HTTP and needs the
+// cookie it set.
+func sessionCookieFrom(t *testing.T, a answer) *http.Cookie {
+	t.Helper()
+	for _, c := range a.header["Set-Cookie"] {
+		parsed := (&http.Response{Header: http.Header{"Set-Cookie": {c}}}).Cookies()
+		for _, pc := range parsed {
+			if pc.Name == sessionCookieName {
+				return pc
+			}
+		}
+	}
+	t.Fatal("no session cookie in the response")
+	return nil
+}
+
+// loginWithAuthenticator runs login/begin + login/finish against an already
+// -enrolled authenticator and returns the full login/finish answer — status,
+// cookie and body alike, for a case (#445) that needs more than
+// signInTestUser/enrolTestUser hand back, such as signing in with a SPECIFIC
+// one of several passkeys.
+func loginWithAuthenticator(t *testing.T, baseURL string, auth *webauthntest.Authenticator, userID string) answer {
+	t.Helper()
+	beginResp := do(t, http.MethodPost, baseURL+"/api/v1/auth/login/begin", "{}")
+	if beginResp.status != http.StatusOK {
+		t.Fatalf("login/begin: %d: %s", beginResp.status, beginResp.body)
+	}
+	var assertion loginCeremonyResponse
+	if err := json.Unmarshal(beginResp.body, &assertion); err != nil {
+		t.Fatalf("decoding login/begin: %v", err)
+	}
+	credentialBody, aerr := auth.Assert(assertion.CredentialAssertion, testWebAuthnConfig.RPOrigin, userID)
+	if aerr != nil {
+		t.Fatalf("Assert: %v", aerr)
+	}
+	finishBody, err := json.Marshal(map[string]any{
+		"ceremony_id": assertion.CeremonyID,
+		"credential":  json.RawMessage(credentialBody),
+	})
+	if err != nil {
+		t.Fatalf("encoding login/finish: %v", err)
+	}
+	return do(t, http.MethodPost, baseURL+"/api/v1/auth/login/finish", string(finishBody))
+}
+
+// addPasskeyViaAPI drives #445's add-a-passkey ceremony (POST
+// /api/v1/account/passkeys/begin, then .../finish) over real HTTP for a
+// signed-in session, the same two-call shape enrolTestUser drives for the
+// first one. It returns the software authenticator it just registered (so a
+// case can sign in with it afterwards) and the AccountPasskey the finish
+// call answered.
+func addPasskeyViaAPI(t *testing.T, baseURL, name string, cookie *http.Cookie) (*webauthntest.Authenticator, AccountPasskey) {
+	t.Helper()
+	beginBody, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		t.Fatalf("encoding account/passkeys/begin body: %v", err)
+	}
+	begin := do(t, http.MethodPost, baseURL+"/api/v1/account/passkeys/begin", string(beginBody), cookie)
+	if begin.status != http.StatusOK {
+		t.Fatalf("POST /api/v1/account/passkeys/begin: %d: %s", begin.status, begin.body)
+	}
+	var creation ceremonyResponse
+	if jerr := json.Unmarshal(begin.body, &creation); jerr != nil {
+		t.Fatalf("decoding account/passkeys/begin response: %v: %s", jerr, begin.body)
+	}
+
+	auth := newSoftAuthenticator(t)
+	credentialBody, rerr := auth.Register(creation.CredentialCreation, testWebAuthnConfig.RPOrigin)
+	if rerr != nil {
+		t.Fatalf("Register: %v", rerr)
+	}
+	finishBody, err := json.Marshal(map[string]any{
+		"ceremony_id": creation.CeremonyID,
+		"credential":  json.RawMessage(credentialBody),
+	})
+	if err != nil {
+		t.Fatalf("encoding account/passkeys/finish body: %v", err)
+	}
+	finish := do(t, http.MethodPost, baseURL+"/api/v1/account/passkeys/finish", string(finishBody), cookie)
+	if finish.status != http.StatusOK {
+		t.Fatalf("POST /api/v1/account/passkeys/finish: %d: %s", finish.status, finish.body)
+	}
+	var pk AccountPasskey
+	decodeBody(t, finish, &pk)
+	return auth, pk
+}
+
 // answer is one HTTP response, already read and closed. The body is read here
 // rather than handed back open so that no case can leak a connection.
 type answer struct {

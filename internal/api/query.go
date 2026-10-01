@@ -327,7 +327,11 @@ WITH scoped AS (
            body->>'parent_run_id' AS parent_run_id
       FROM scoped
      WHERE event_type = 'run_registered'
-), rollup AS (
+), rollup AS MATERIALIZED (
+    -- MATERIALIZED, so it is aggregated once and hash-joined. Inlined, the
+    -- planner guesses one registered row, picks a nested loop and re-runs
+    -- this aggregate per run: 4.7 s for one page, measured on a 47k-event
+    -- ledger. TestRunIndexRollupIsComputedOnce holds it.
     SELECT run_id,
            max(ts) AS last_event_at,
            count(*) FILTER (WHERE event_type = 'commit_recorded')::int AS commits,

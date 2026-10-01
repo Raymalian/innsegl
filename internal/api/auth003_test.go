@@ -139,7 +139,7 @@ func TestAUTH003AttestationFormatIsRecorded(t *testing.T) {
 	srv, _, authStore := testServerConfigured(t)
 	cookie := signInTestUser(t, srv.URL, authStore)
 
-	userID, ok := verifySessionToken(t, authStore, cookie.Value)
+	userID, _, ok := verifySessionToken(t, authStore, cookie.Value)
 	if !ok {
 		t.Fatal("the session this test just created does not verify")
 	}
@@ -163,11 +163,11 @@ func TestAUTH003AttestationFormatIsRecorded(t *testing.T) {
 
 // verifySessionToken is VerifySession, called directly for a test that
 // already holds the raw cookie value rather than another HTTP round trip.
-func verifySessionToken(t *testing.T, store *AuthStore, token string) (string, bool) {
+func verifySessionToken(t *testing.T, store *AuthStore, token string) (userID, passkeyID string, ok bool) {
 	t.Helper()
-	userID, ok, err := store.VerifySession(context.Background(), token)
+	userID, passkeyID, ok, err := store.VerifySession(context.Background(), token)
 	if err != nil {
 		t.Fatalf("VerifySession: %v", err)
 	}
-	return userID, ok
+	return userID, passkeyID, ok
 }

@@ -47,14 +47,19 @@ export async function installApiMocks(page: Page): Promise<void> {
     const p = url.pathname;
     const q = url.searchParams;
 
-    // RM-260/RM-261 (ADR-0062): AuthGate reads these two on every mount,
-    // before any of the six views' own routes below are ever requested.
-    // Answered as an already-signed-in operator by default, so this
-    // suite's existing axe/keyboard coverage keeps exercising the real
-    // views rather than the sign-in page — a deliberately UNauthenticated
-    // scan of the gate itself lives in tests/a11y/auth.pw.ts instead.
+    // RM-260/RM-261 (ADR-0062) and #445: AuthGate reads session + setup
+    // status on every mount, before any of the six views' own routes below
+    // are ever requested. Answered as an already-signed-in operator by
+    // default, so this suite's existing axe/keyboard coverage keeps
+    // exercising the real views rather than the sign-in page — a
+    // deliberately UNauthenticated scan of the gate itself lives in
+    // tests/a11y/auth.pw.ts instead.
     if (p === "/api/v1/auth/session") {
       await json(route, { authenticated: true, display_name: "Test Operator" });
+      return;
+    }
+    if (p === "/api/v1/auth/setup") {
+      await json(route, { needed: false });
       return;
     }
     if (p === "/api/v1/health") {

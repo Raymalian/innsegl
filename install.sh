@@ -80,6 +80,10 @@ SIGNER_CMD="${INNSEGL_INSTALL_SIGNER_CMD:-make innsegl-install-signer}"
 # Builds the binary the PreToolUse hook names, so the settings never point at
 # an old one (ENF-008).
 BUILD_CMD="${INNSEGL_INSTALL_BUILD_CMD:-make build}"
+# #445, ADR-0062's 2026-10-01 amendment: while no account exists yet, print
+# the one-time setup link rather than leaving the operator to run
+# `innsegl admin-credential enrol-code` and build the URL by hand.
+SETUP_LINK_CMD="${INNSEGL_INSTALL_SETUP_LINK_CMD:-scripts/setup-link.sh}"
 
 # The compiled innsegl binary this checkout's `make build` produces. The
 # PreToolUse hook command in managed settings names this path exactly — an
@@ -897,6 +901,13 @@ Dashboard:
 Claude Code's model traffic now runs through the gateway at $GATEWAY_URL,
 and an agent's git commit in a linked repository is signed automatically.
 EOF
+  # Only while no account exists yet (scripts/setup-link.sh asks the API
+  # itself, GET /api/v1/auth/setup) — a redeploy onto a database that
+  # already has one prints nothing more here. A failure to ask is reported
+  # by the script itself and never fails install.sh's own exit status: the
+  # stack is up either way, and `scripts/setup-link.sh` can be run again by
+  # hand once it is reachable.
+  run_step "$SETUP_LINK_CMD" || true
 }
 
 # verify_harness_loaded proves Claude Code read the managed settings (#423).
