@@ -6,7 +6,7 @@
 # install.sh used to wire an OLD hook-and-MCP design into the harness's own
 # $HOME/.claude/settings.json and $HOME/.claude.json. This tests the GATEWAY
 # design that replaced it: a managed-settings.json that routes every request
-# through the gateway, registers the one PreToolUse hook, and denies a
+# through the gateway, registers the PreToolUse and session hooks, and denies a
 # sandboxed shell innsegl's own stores and the container socket.
 #
 # Every case runs install.sh against a scratch $HOME and a scratch managed
@@ -264,12 +264,17 @@ expected_env2=$(cat <<JSON
   "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
   "OTEL_LOGS_EXPORTER": "otlp",
   "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-  "OTEL_EXPORTER_OTLP_ENDPOINT": "https://127.0.0.1:28095"
+  "OTEL_EXPORTER_OTLP_ENDPOINT": "https://127.0.0.1:28095",
+  "ENABLE_TOOL_SEARCH": "true"
 }
 JSON
 )
 expected_hooks2=$(cat <<JSON
-{"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "$STUB_BIN hook pre-tool-use"}]}]}
+{"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "$STUB_BIN hook pre-tool-use"}]}],
+ "SessionStart": [{"hooks": [{"type": "command", "command": "$STUB_BIN hook session"}]}],
+ "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "$STUB_BIN hook session"}]}],
+ "SubagentStart": [{"hooks": [{"type": "command", "command": "$STUB_BIN hook session"}]}],
+ "CwdChanged": [{"hooks": [{"type": "command", "command": "$STUB_BIN hook session"}]}]}
 JSON
 )
 expected_sandbox2=$(cat <<JSON
@@ -359,6 +364,10 @@ if [ "$rc6" -eq 0 ] \
    && [ "$(check json-absent "$ms4" env.ANTHROPIC_BASE_URL)" = ok ] \
    && [ "$(check json-absent "$ms4" env.INNSEGL_CORE_URL)" = ok ] \
    && [ "$(check json-equal "$ms4" hooks.PreToolUse.0.hooks.0.command '"/opt/example/my-hook.sh"')" = ok ] \
+   && [ "$(check json-absent "$ms4" hooks.SessionStart)" = ok ] \
+   && [ "$(check json-absent "$ms4" hooks.UserPromptSubmit)" = ok ] \
+   && [ "$(check json-absent "$ms4" hooks.SubagentStart)" = ok ] \
+   && [ "$(check json-absent "$ms4" hooks.CwdChanged)" = ok ] \
    && [ "$(check json-equal "$ms4" permissions.allow '["Read(//tmp/**)"]')" = ok ] \
    && [ "$(check json-absent "$ms4" permissions.disableBypassPermissionsMode)" = ok ] \
    && [ "$(check json-absent "$ms4" allowManagedHooksOnly)" = ok ] \
@@ -633,6 +642,32 @@ fi
 # The matcher: "*" PreToolUse group and one SessionStart entry held only our
 # old hook, so both were pruned to nothing and dropped; my-hook.sh and
 # session.sh were never ours and survive exactly as given.
+
+# --- --pause and --resume: the operator takes the harness off the gateway
+# and puts it back, with the settings kept byte for byte ---------------------
+home10="$WORK/home-pause"; mkdir -p "$home10"
+ms10="$home10/managed-settings.json"
+run_install "$home10" "$TOOLBIN" --managed-settings "$ms10" >/dev/null 2>&1
+cp "$ms10" "$WORK/ms10-installed.json"
+out10="$(run_install "$home10" "$TOOLBIN" --managed-settings "$ms10" --pause)"; rc10=$?
+if [ "$rc10" -eq 0 ] && [ ! -e "$ms10" ] && diff -q "$WORK/ms10-installed.json" "$ms10.paused" >/dev/null \
+   && printf '%s' "$out10" | grep -q 'paused'; then
+  ok "--pause moves the managed settings aside, unchanged, so the harness runs without the gateway"
+else
+  bad "--pause did not set the managed settings aside" "exit=$rc10"$'\n'"$out10"
+fi
+out11="$(run_install "$home10" "$TOOLBIN" --managed-settings "$ms10" --resume)"; rc11=$?
+if [ "$rc11" -eq 0 ] && [ ! -e "$ms10.paused" ] && diff -q "$WORK/ms10-installed.json" "$ms10" >/dev/null; then
+  ok "--resume puts the same managed settings back"
+else
+  bad "--resume did not restore the managed settings" "exit=$rc11"$'\n'"$out11"
+fi
+out12="$(run_install "$home10" "$TOOLBIN" --managed-settings "$ms10" --resume 2>&1)"; rc12=$?
+if [ "$rc12" -ne 0 ] && printf '%s' "$out12" | grep -q 'nothing is paused'; then
+  ok "--resume with nothing paused refuses and says so"
+else
+  bad "--resume with nothing paused did not refuse" "exit=$rc12"$'\n'"$out12"
+fi
 
 echo
 echo "install-selftest: $pass passed, $fail failed"

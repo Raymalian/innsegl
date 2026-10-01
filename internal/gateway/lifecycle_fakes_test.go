@@ -134,11 +134,15 @@ func (f *fakePolicy) Decide(_ context.Context, in LifecycleInput) (Decision, err
 }
 
 type fakeWorkspaceResolver struct {
-	ws  Workspace
-	err error
+	ws    Workspace
+	err   error
+	calls int
+	dir   string // the directory the latest call was asked to resolve
 }
 
-func (f fakeWorkspaceResolver) Resolve(context.Context, string) (Workspace, error) {
+func (f *fakeWorkspaceResolver) Resolve(_ context.Context, dir string) (Workspace, error) {
+	f.calls++
+	f.dir = dir
 	return f.ws, f.err
 }
 
@@ -148,5 +152,5 @@ var (
 	_ Registrar         = (*fakeRegistrar)(nil)
 	_ TreeLinker        = (*fakeTreeLinker)(nil)
 	_ LifecyclePolicy   = (*fakePolicy)(nil)
-	_ WorkspaceResolver = fakeWorkspaceResolver{}
+	_ WorkspaceResolver = (*fakeWorkspaceResolver)(nil)
 )

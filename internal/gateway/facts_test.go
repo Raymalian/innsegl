@@ -60,8 +60,8 @@ func newFactsRequest(t *testing.T, body []byte) *http.Request {
 
 // TestExtractRequestFactsFromFixture drives ExtractRequestFacts against
 // this file's own recorded-shape fixture and checks every field the
-// contract names: Brief (reminders stripped), WorkingDirectory (read from
-// inside the reminder), FirstAssistant (canonically encoded) and
+// contract names: Brief (reminders stripped), WorkingDirectory (never read
+// from the body, even though the fixture states one), FirstAssistant (canonically encoded) and
 // ToolResultIDs.
 func TestExtractRequestFactsFromFixture(t *testing.T) {
 	raw, assistantContent := loadModelRequestBodyFixture(t)
@@ -74,9 +74,8 @@ func TestExtractRequestFactsFromFixture(t *testing.T) {
 		t.Errorf("Brief = %q, want %q", facts.Brief, wantBrief)
 	}
 
-	const wantDir = "/workspace/example-repo"
-	if facts.WorkingDirectory != wantDir {
-		t.Errorf("WorkingDirectory = %q, want %q", facts.WorkingDirectory, wantDir)
+	if facts.WorkingDirectory != "" {
+		t.Errorf("WorkingDirectory = %q, want empty: the body's prose never names the workspace", facts.WorkingDirectory)
 	}
 
 	wantAssistant, err := event.Canonicalize(assistantContent)
@@ -336,54 +335,7 @@ func TestRequestFactsReadTheRealClaudeCode2_1Shape(t *testing.T) {
 	  ]}
 	]}`
 	facts := parseRequestFacts([]byte(body))
-	if facts.WorkingDirectory != "/workspace/example-repo" {
-		t.Errorf("WorkingDirectory = %q, want the one the system-role environment message states", facts.WorkingDirectory)
-	}
 	if want := "Run this shell command: echo PROBE-SUB\n\nReport back the exact output."; facts.Brief != want {
 		t.Errorf("Brief = %q, want %q (the prompt block, reminders stripped)", facts.Brief, want)
-	}
-}
-
-// TestRequestFactsIgnoreAWorkingDirectoryStatedAfterTheFirstAssistantTurn
-// keeps the scan to the conversation's opening: a directory named later (for
-// example inside a tool result) never becomes the agent's workspace.
-func TestRequestFactsIgnoreAWorkingDirectoryStatedAfterTheFirstAssistantTurn(t *testing.T) {
-	body := `{"messages":[
-	  {"role":"user","content":[{"type":"text","text":"do the thing"}]},
-	  {"role":"assistant","content":[{"type":"text","text":"ok"}]},
-	  {"role":"user","content":[{"type":"text","text":" - Primary working directory: /workspace/elsewhere"}]}
-	]}`
-	if got := parseRequestFacts([]byte(body)).WorkingDirectory; got != "" {
-		t.Fatalf("WorkingDirectory = %q, want empty: a later message must not name the workspace", got)
-	}
-}
-
-// TestRequestFactsReadTheWorkingDirectoryFromTheSystemPrompt. A session
-// resumed after its context was summarised opens with the summary, and the
-// environment statement then lives only in the top-level system prompt.
-// Measured 2026-10-01: such a session was refused on every request with
-// "cwd was empty", and the agent could not run at all.
-func TestRequestFactsReadTheWorkingDirectoryFromTheSystemPrompt(t *testing.T) {
-	for name, system := range map[string]string{
-		"blocks": `[{"type":"text","text":"You are an agent."},{"type":"text","text":"# Environment\n - Primary working directory: /workspace/example-repo\n"}]`,
-		"string": `"# Environment\n - Primary working directory: /workspace/example-repo\n"`,
-	} {
-		body := `{"system":` + system + `,"messages":[
-		  {"role":"user","content":[{"type":"text","text":"This session is being continued from a previous conversation."}]}
-		]}`
-		if got := parseRequestFacts([]byte(body)).WorkingDirectory; got != "/workspace/example-repo" {
-			t.Errorf("%s: WorkingDirectory = %q, want the one the system prompt states", name, got)
-		}
-	}
-}
-
-// TestRequestFactsPreferTheOpeningOverTheSystemPrompt keeps the opening
-// messages authoritative when both state a directory.
-func TestRequestFactsPreferTheOpeningOverTheSystemPrompt(t *testing.T) {
-	body := `{"system":"- Primary working directory: /workspace/from-system","messages":[
-	  {"role":"user","content":[{"type":"text","text":" - Primary working directory: /workspace/from-opening"}]}
-	]}`
-	if got := parseRequestFacts([]byte(body)).WorkingDirectory; got != "/workspace/from-opening" {
-		t.Fatalf("WorkingDirectory = %q, want the opening's", got)
 	}
 }

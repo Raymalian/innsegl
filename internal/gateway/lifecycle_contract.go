@@ -35,8 +35,9 @@ type RequestFacts struct {
 	// encoded; empty on an agent's very first request, which has none yet.
 	FirstAssistant []byte
 
-	// WorkingDirectory is the harness's own statement of where the agent
-	// works, as the harness reports it (a host path). Empty when absent.
+	// WorkingDirectory is where the agent works, as the session hook
+	// reported it (a host path; workspaceregistry.go). Never read from the
+	// request body: the identity guard sets it. Empty when unknown.
 	WorkingDirectory string
 
 	// ToolResultIDs are the tool_use ids whose results this request carries.

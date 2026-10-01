@@ -26,7 +26,7 @@
 #      Linux `/etc/claude-code/managed-settings.json`), or wherever
 #      --managed-settings / $INNSEGL_INSTALL_MANAGED_SETTINGS names. It
 #      points ANTHROPIC_BASE_URL, INNSEGL_CORE_URL and telemetry at the
-#      gateway, registers the one PreToolUse hook, requires the sandbox, and
+#      gateway, registers the PreToolUse and session hooks, requires the sandbox, and
 #      denies a sandboxed shell innsegl's own stores. Idempotent, additive
 #      (the operator's own keys survive), and every file is backed up,
 #      timestamped, the moment before it is first changed. This installer
@@ -141,23 +141,28 @@ LEGACY_MCP_URL="${INNSEGL_INSTALL_LEGACY_MCP_URL:-http://127.0.0.1:28080/}"
 
 DRY_RUN=0
 UNINSTALL=0
+PAUSE=0
+RESUME=0
 UNINSTALL_LEGACY=0
 EGRESS_FILE=""
 DIRS=()
 
 usage() {
   cat <<'EOF'
-usage: install.sh [--dry-run] [--uninstall] [--uninstall-legacy]
+usage: install.sh [--dry-run] [--uninstall] [--uninstall-legacy] [--pause | --resume]
                    [--managed-settings <path>] [--egress-control <file>]
                    [DIR...]
 
 Brings the innsegl stack up, puts innsegl-commit on PATH, writes the
-harness's managed settings (gateway env, the one PreToolUse hook, the
-sandbox), and makes each DIR signable.
+harness's managed settings (gateway env, the PreToolUse and session hooks,
+the sandbox), and makes each DIR signable.
 
   --dry-run              print what would change; touch nothing
   --uninstall             remove exactly what this installer added
   --uninstall-legacy      also remove the OLD hook-and-MCP wiring (opt-in)
+  --pause                 set the managed settings aside, unchanged, so the
+                          harness runs without the gateway (the stack is down)
+  --resume                put the paused managed settings back
   --managed-settings <p>  write the managed settings to <p> instead of the
                           system path
   --egress-control <f>    lock the sandbox to the domains in <f>, one host
@@ -171,6 +176,8 @@ parse_args() {
       --dry-run) DRY_RUN=1; shift ;;
       --uninstall) UNINSTALL=1; shift ;;
       --uninstall-legacy) UNINSTALL_LEGACY=1; shift ;;
+      --pause) PAUSE=1; shift ;;
+      --resume) RESUME=1; shift ;;
       --managed-settings)
         [ $# -ge 2 ] || { echo "install.sh: --managed-settings needs a path" >&2; exit 2; }
         MANAGED_SETTINGS="$2"; shift 2 ;;
@@ -301,6 +308,12 @@ dry_run = os.environ.get("INSTALL_DRY_RUN") == "1"
 # cmd/innsegl/commitpathcli.go) — the binary path alone would run with no
 # arguments and print top-level usage instead of acting as a hook.
 hook_command = os.environ["INSTALL_HOOK_PATH"] + " hook pre-tool-use"
+# The session hook states each session's working directory to the gateway
+# from the harness's own hook input (session_id, cwd, agent_id), so the
+# gateway never reads it out of the conversation. One command, four events:
+# a new or resumed session, every user turn, every subagent, every move.
+session_hook_command = os.environ["INSTALL_HOOK_PATH"] + " hook session"
+SESSION_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "SubagentStart", "CwdChanged")
 gateway_url = os.environ["INSTALL_GATEWAY_URL"]
 ca_pem = os.environ["INSTALL_CA_PEM"]
 log_deny = os.environ["INSTALL_LOG_DENY"]
@@ -325,6 +338,13 @@ DESIRED_ENV = {
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
     "OTEL_EXPORTER_OTLP_ENDPOINT": gateway_url,
+    # Claude Code loads MCP tool definitions on demand only when it talks to
+    # the provider directly; behind any other base URL it sends every
+    # definition with every request. Measured 2026-10-01: 279 tools, 650 KB,
+    # ~224k tokens, refused as "Prompt is too long" before the conversation
+    # began. The gateway forwards to the provider unchanged, so on-demand
+    # loading works through it, and this turns it back on.
+    "ENABLE_TOOL_SEARCH": "true",
 }
 
 
@@ -354,7 +374,7 @@ def is_ours_hook(h):
     return (
         isinstance(h, dict)
         and h.get("type") == "command"
-        and h.get("command") == hook_command
+        and h.get("command") in (hook_command, session_hook_command)
     )
 
 
@@ -382,13 +402,12 @@ def uninstall_env(obj):
         obj.pop("env", None)
 
 
-def install_hooks(obj):
-    hooks = obj.setdefault("hooks", {})
-    groups = hooks.setdefault("PreToolUse", [])
+def install_hook(hooks, event, group):
+    groups = hooks.setdefault(event, [])
     if not isinstance(groups, list):
         sys.stderr.write(
-            "install.sh: hooks.PreToolUse in %s is not a list; refusing to touch it\n"
-            % path
+            "install.sh: hooks.%s in %s is not a list; refusing to touch it\n"
+            % (event, path)
         )
         sys.exit(1)
     already = any(
@@ -398,7 +417,15 @@ def install_hooks(obj):
         for h in g["hooks"]
     )
     if not already:
-        groups.append({"matcher": "Bash", "hooks": [{"type": "command", "command": hook_command}]})
+        groups.append(group)
+
+
+def install_hooks(obj):
+    hooks = obj.setdefault("hooks", {})
+    install_hook(hooks, "PreToolUse",
+                 {"matcher": "Bash", "hooks": [{"type": "command", "command": hook_command}]})
+    for event in SESSION_HOOK_EVENTS:
+        install_hook(hooks, event, {"hooks": [{"type": "command", "command": session_hook_command}]})
     if not hooks:
         obj.pop("hooks", None)
 
@@ -407,8 +434,10 @@ def uninstall_hooks(obj):
     hooks = obj.get("hooks")
     if not isinstance(hooks, dict):
         return
-    groups = hooks.get("PreToolUse")
-    if isinstance(groups, list):
+    for event in ("PreToolUse",) + SESSION_HOOK_EVENTS:
+        groups = hooks.get(event)
+        if not isinstance(groups, list):
+            continue
         kept = []
         for g in groups:
             if not isinstance(g, dict) or not isinstance(g.get("hooks"), list):
@@ -421,9 +450,9 @@ def uninstall_hooks(obj):
                 kept.append(g2)
             # else: this group held only our hook — drop the whole group.
         if kept:
-            hooks["PreToolUse"] = kept
+            hooks[event] = kept
         else:
-            hooks.pop("PreToolUse", None)
+            hooks.pop(event, None)
     if hooks:
         obj["hooks"] = hooks
     else:
@@ -620,7 +649,11 @@ if obj == before:
     print("install.sh: %s already up to date" % path)
     sys.exit(0)
 
-new_text = json.dumps(obj, indent=2) + "\n"
+# ensure_ascii=False and the file's own final newline: a file this edits
+# must differ only in what it changes, never in how unrelated text is spelled.
+new_text = json.dumps(obj, indent=2, ensure_ascii=False)
+if not old_text or old_text.endswith("\n"):
+    new_text += "\n"
 diff = list(
     difflib.unified_diff(
         old_text.splitlines(keepends=True),
@@ -809,7 +842,11 @@ if obj == before:
     print("install.sh: %s already up to date" % path)
     sys.exit(0)
 
-new_text = json.dumps(obj, indent=2) + "\n"
+# ensure_ascii=False and the file's own final newline: a file this edits
+# must differ only in what it changes, never in how unrelated text is spelled.
+new_text = json.dumps(obj, indent=2, ensure_ascii=False)
+if not old_text or old_text.endswith("\n"):
+    new_text += "\n"
 diff = list(
     difflib.unified_diff(
         old_text.splitlines(keepends=True),
@@ -996,8 +1033,52 @@ check_hook_runs() {
   fi
 }
 
+# do_pause_or_resume moves the managed settings to <path>.paused and back.
+#
+# The gateway refuses every model request while the stack is down (ADR-0058
+# decision 11), and the managed settings are what route the harness through
+# it, so an operator who needs the harness while the stack is down sets them
+# aside. This does it as one reversible step instead of a hand edit: the file
+# is kept byte for byte, and --resume puts back exactly what was there.
+# Writing the system path needs an administrator, so when it is not writable
+# this prints the one command to run rather than asking for a password.
+do_pause_or_resume() {
+  local from to verb
+  if [ "$PAUSE" -eq 1 ]; then
+    from="$MANAGED_SETTINGS"; to="$MANAGED_SETTINGS.paused"; verb="paused"
+    [ -e "$from" ] || { echo "install.sh: $from does not exist; there is nothing to pause" >&2; exit 1; }
+  else
+    from="$MANAGED_SETTINGS.paused"; to="$MANAGED_SETTINGS"; verb="resumed"
+    [ -e "$from" ] || { echo "install.sh: nothing is paused: $from does not exist" >&2; exit 1; }
+  fi
+  [ -e "$to" ] && { echo "install.sh: $to already exists; refusing to overwrite it" >&2; exit 1; }
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "install.sh: dry run: would move $from -> $to"
+    return
+  fi
+  if python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$from" "$to" 2>/dev/null; then
+    echo "install.sh: $verb: $from -> $to"
+  else
+    echo "install.sh: $(dirname "$to") is not writable. Run this once, as an administrator:" >&2
+    echo >&2
+    echo "  sudo mv $(printf '%q' "$from") $(printf '%q' "$to")" >&2
+    echo >&2
+    exit 1
+  fi
+  echo "install.sh: restart Claude Code for it to take effect"
+}
+
 main() {
   parse_args "$@"
+
+  if [ "$PAUSE" -eq 1 ] && [ "$RESUME" -eq 1 ]; then
+    echo "install.sh: --pause and --resume cannot both be given" >&2
+    exit 2
+  fi
+  if [ "$PAUSE" -eq 1 ] || [ "$RESUME" -eq 1 ]; then
+    do_pause_or_resume
+    exit 0
+  fi
 
   if [ "$UNINSTALL_LEGACY" -eq 1 ]; then
     do_uninstall_legacy

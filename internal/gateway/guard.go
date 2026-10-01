@@ -2,7 +2,10 @@
 
 package gateway
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // guard.go is the one hook every request-time refusal in this package
 // plugs into, from GW-011 (harness shape, this file's own HarnessGuard)
@@ -35,6 +38,10 @@ import "net/http"
 type Refusal struct {
 	Status int
 	Reason string
+	// RetryAfter, when positive, is sent as the Retry-After header: the
+	// refusal is for a missing input the harness will supply, and the same
+	// request is expected to succeed once it has.
+	RetryAfter time.Duration
 }
 
 // Guard inspects an incoming request before Proxy.ServeHTTP forwards it.

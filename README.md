@@ -37,15 +37,40 @@ make sign -- -m "your message"
 |---|---|
 | the stack | Docker containers, via `make start` — SPIRE, self-hosted Sigstore, and innsegl itself |
 | `innsegl-commit` | symlinked onto PATH at `~/.local/bin/innsegl-commit` |
-| Claude Code hooks | added to `~/.claude/settings.json` — `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse` |
-| the `innsegl` MCP server | added to `~/.claude.json`, type `http`, at `http://127.0.0.1:28080/` |
+| Claude Code managed settings | the system managed-settings file: every model request routed through the innsegl gateway, the sandbox, and two hooks — `innsegl hook pre-tool-use` on `PreToolUse` (Bash), and `innsegl hook session` on `SessionStart`, `UserPromptSubmit`, `SubagentStart` and `CwdChanged`, which tells the gateway each session's working directory |
 | each `DIR` argument | linked into the stack so it becomes signable, the same as `make link DIR=<dir>` |
 
-Every one of these is additive. Existing hooks, other MCP servers, and
-anything else already in those two files are left exactly as they were, and
-each file gets a timestamped backup the moment before install.sh changes it
-for the first time. Running `install.sh` again changes nothing that is
-already in place.
+Every one of these is additive. Settings you already have are left exactly
+as they were, and each file gets a timestamped backup the moment before
+install.sh changes it for the first time. Running `install.sh` again
+changes nothing that is already in place. Writing the system path needs an
+administrator; when it is not writable, install.sh prints the one command
+to run.
+
+## When the stack is down
+
+Every model request goes through the gateway, and the gateway refuses
+rather than forward a request it cannot attribute. So when Docker or the
+stack is not running, Claude Code cannot reach the model. Before each
+prompt, the session hook checks, and stops the prompt with a message naming
+the cause instead of a bare "connection refused".
+
+| What you see | What it means | What to do |
+|---|---|---|
+| "the gateway … is not answering" | Docker or the stack is not running | `make start` |
+| "answered with a certificate this machine does not trust" | the gateway's CA changed since install | re-run `install.sh` |
+| 503, "a dependency is down; retrying" | SPIRE or the ledger is unreachable | Claude Code retries; if it persists, `make start` |
+| 503, "has not stated this session's working directory yet" | the session hook is not installed | re-run `install.sh` |
+| 403 | the request itself was refused, for the reason given | read the reason |
+
+To use Claude Code without innsegl while the stack is down:
+
+```sh
+./install.sh --pause     # sets the managed settings aside, unchanged
+./install.sh --resume    # puts them back
+```
+
+Restart Claude Code after either.
 
 ## Uninstall
 
@@ -53,14 +78,18 @@ already in place.
 ./install.sh --uninstall
 ```
 
-Removes exactly the hook entries and the MCP entry `install.sh` added, and
-the `innsegl-commit` symlink — nothing you added yourself. It leaves the
+Removes exactly what `install.sh` added to the managed settings, and the
+`innsegl-commit` symlink — nothing you added yourself. It leaves the
 backups in place and does not stop or delete anything running. To do that:
 
 ```sh
 make innsegl-down     # stop innsegl, keep the ledger and the signed history
 make innsegl-purge    # stop innsegl AND delete its data volumes
 ```
+
+An install from before the gateway wired six hooks into
+`~/.claude/settings.json` and an `innsegl` MCP entry into `~/.claude.json`.
+`./install.sh --uninstall-legacy` removes exactly those.
 
 ## More
 

@@ -633,6 +633,14 @@ type runningGateway struct {
 	// see that handler's doc comment for the threat this, and the loopback
 	// and well-formedness checks beside it, answer.
 	sessionEndRateLimit *gateway.SessionRateLimiter
+	// sessionWorkspaces is where the session hook states each session's
+	// working directory; the identity guard reads it. Set alongside
+	// sessionEnder.
+	sessionWorkspaces *gateway.SessionWorkspaces
+	// sessionWorkspaceRateLimit bounds sessionWorkspaceHandler's rate.
+	sessionWorkspaceRateLimit *gateway.SessionRateLimiter
+	// local decides which callers the local-only endpoints admit.
+	local localCallers
 
 	// closers release every resource openGateway opened beyond the
 	// listener (the mapping store's pool, the ledger connection, the
@@ -859,7 +867,11 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		// gatewaySessionEndPath: see sessionEndHandler's own doc comment for
 		// why this is minimal and local-only rather than a documented,
 		// versioned part of the gateway's public contract.
-		mux.HandleFunc(gatewaySessionEndPath, sessionEndHandler(running.sessionEnder, running.sessionEndRateLimit, log))
+		mux.HandleFunc(gatewaySessionEndPath, sessionEndHandler(running.sessionEnder, running.sessionEndRateLimit, running.local, log))
+	}
+	if running.sessionWorkspaces != nil {
+		mux.HandleFunc(gatewaySessionWorkspacePath, sessionWorkspaceHandler(
+			running.sessionWorkspaces, running.sessionWorkspaceRateLimit, running.local, log))
 	}
 	mountCommitPath(mux, running.commitResolver)
 	mountTelemetry(mux, os.Getenv(envObserveBodyDir))
@@ -879,6 +891,65 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 // itself as internal rather than looking like a stable API a caller outside
 // this codebase might depend on.
 const gatewaySessionEndPath = "/_gateway/session-end"
+
+// gatewaySessionWorkspacePath is where `innsegl hook session` states a
+// session's working directory. Local-only and internal, like
+// gatewaySessionEndPath.
+const gatewaySessionWorkspacePath = "/_gateway/session-workspace"
+
+// gatewaySessionWorkspaceRateLimitKey is sessionWorkspaceHandler's one
+// rate-limit bucket, for the reason gatewaySessionEndRateLimitKey gives.
+const gatewaySessionWorkspaceRateLimitKey = "session-workspace"
+
+// maxWorkingDirectoryBytes bounds a stated directory: a path, not a payload.
+const maxWorkingDirectoryBytes = 4096
+
+// sessionWorkspaceHandler records the harness's own statement of where a
+// session (and, with agent_id, one of its subagents) works. The hook sends
+// it from the host on SessionStart, UserPromptSubmit, SubagentStart and
+// CwdChanged; the identity guard registers a new run from it.
+//
+// Like sessionEndHandler, its checks are flood and noise controls, never
+// authentication: an agent's own shell could post here too. What a forged
+// statement buys is bounded by describe_workspace, which admits only a git
+// worktree under the projects mount and inside the admin scope -- a
+// repository the agent can already work in (workspaceregistry.go).
+func sessionWorkspaceHandler(ws *gateway.SessionWorkspaces, rateLimit *gateway.SessionRateLimiter,
+	local localCallers, log *serveLog,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "innsegl gateway: session workspace: only POST is accepted", http.StatusMethodNotAllowed)
+			return
+		}
+		if !local.admits(r.RemoteAddr) {
+			http.Error(w, "innsegl gateway: session workspace: refused from an address that is not this machine",
+				http.StatusForbidden)
+			return
+		}
+		if retryAfter, refused := rateLimit.Allow(r.Context(), gatewaySessionWorkspaceRateLimitKey); refused {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Round(time.Second)/time.Second)))
+			http.Error(w, "innsegl gateway: session workspace: too many statements", http.StatusTooManyRequests)
+			return
+		}
+		var in struct {
+			SessionID string `json:"session_id"`
+			AgentID   string `json:"agent_id"`
+			Cwd       string `json:"cwd"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 2*maxWorkingDirectoryBytes)).Decode(&in); err != nil ||
+			!gateway.IsSessionID(in.SessionID) ||
+			(in.AgentID != "" && !gateway.IsAgentID(in.AgentID)) ||
+			len(in.Cwd) > maxWorkingDirectoryBytes || !filepath.IsAbs(in.Cwd) || filepath.Clean(in.Cwd) != in.Cwd {
+			http.Error(w, "innsegl gateway: session workspace: a JSON body naming a well-formed session_id, "+
+				"an optional agent_id and an absolute, clean cwd is required", http.StatusBadRequest)
+			return
+		}
+		ws.Record(in.SessionID, in.AgentID, in.Cwd)
+		log.info("session workspace stated", "session_id", in.SessionID, "agent_id", in.AgentID)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
 
 // gatewaySessionEndRateLimitKey is the one bucket sessionEndHandler's own
 // rate limiter meters -- this endpoint has no per-caller identity to key
@@ -919,18 +990,18 @@ const gatewaySessionEndRateLimitKey = "session-end"
 //
 // Kept deliberately minimal and undocumented as a public contract: one
 // method, one JSON field, one call into gateway.SessionEnder.SessionEnded.
-func sessionEndHandler(ender *gateway.SessionEnder, rateLimit *gateway.SessionRateLimiter, log *serveLog) http.HandlerFunc {
+func sessionEndHandler(ender *gateway.SessionEnder, rateLimit *gateway.SessionRateLimiter, local localCallers, log *serveLog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "innsegl gateway: session end: only POST is accepted", http.StatusMethodNotAllowed)
 			return
 		}
-		if !isLoopbackRemoteAddr(r.RemoteAddr) {
+		if !local.admits(r.RemoteAddr) {
 			// Belt and suspenders over the compose publish line (ADR-0060
 			// decision 2): this process itself refuses a caller whose
 			// connection did not come from loopback, rather than resting
 			// entirely on the network topology being right.
-			http.Error(w, "innsegl gateway: session end: refused from a non-loopback address",
+			http.Error(w, "innsegl gateway: session end: refused from an address that is not this machine",
 				http.StatusForbidden)
 			return
 		}
@@ -958,20 +1029,6 @@ func sessionEndHandler(ender *gateway.SessionEnder, rateLimit *gateway.SessionRa
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
-}
-
-// isLoopbackRemoteAddr reports whether remoteAddr -- an *http.Request's own
-// RemoteAddr, host:port form -- names a loopback address. A RemoteAddr this
-// function cannot parse at all is never loopback by assumption: refusing an
-// unparseable caller is the same "refuse rather than guess" posture
-// harness.go's own recognisers already take.
-func isLoopbackRemoteAddr(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // openIdentityStack builds RM-235 (#380)'s identity stack: a Postgres-backed
@@ -1055,6 +1112,7 @@ func openIdentityStack(
 	// and the SessionEnder built below (Mark, via the endpoint; Sweep, on
 	// running.sessionEnder's own ticker).
 	sessionEndSignals := gateway.NewSessionEndSignals(0)
+	sessionWorkspaces := gateway.NewSessionWorkspaces(0)
 
 	identityGuard, err = gateway.NewIdentityGuard(gateway.IdentityGuardConfig{
 		Mappings:          mappings,
@@ -1064,6 +1122,7 @@ func openIdentityStack(
 		Workspaces:        resolver,
 		RunStates:         runStates,
 		SessionEndSignals: sessionEndSignals,
+		SessionWorkspaces: sessionWorkspaces,
 	})
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)
@@ -1094,6 +1153,15 @@ func openIdentityStack(
 	}
 	running.sessionEnder = gateway.NewSessionEnder(sessionEndSignals, mappings, registrar, sessionEndGraceFromEnv(), nil)
 	running.sessionEndRateLimit = sessionEndRateLimit
+	sessionWorkspaceRateLimit, err := gateway.NewSessionRateLimiter(gateway.SessionRateLimit{
+		Rate: sessionWorkspaceRateLimitRate, Burst: sessionWorkspaceRateLimitBurst,
+	})
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("build the session-workspace rate limit: %w", err)
+	}
+	running.sessionWorkspaces = sessionWorkspaces
+	running.sessionWorkspaceRateLimit = sessionWorkspaceRateLimit
+	running.local = localCallersFromHost()
 
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
 
@@ -1339,6 +1407,15 @@ func newGatewaySnapshotter(running *runningGateway) *gateway.Snapshotter {
 const (
 	sessionEndRateLimitRate  = 5
 	sessionEndRateLimitBurst = 20
+)
+
+// sessionWorkspaceRateLimitRate and sessionWorkspaceRateLimitBurst bound
+// sessionWorkspaceHandler. The hook runs before every user turn, every
+// subagent and every directory change, so a session with many parallel
+// subagents sends bursts; the bound is a flood control, not a budget.
+const (
+	sessionWorkspaceRateLimitRate  = 20
+	sessionWorkspaceRateLimitBurst = 100
 )
 
 // sessionEndGraceFromEnv reads gateway.EnvSessionEndGrace, the same way

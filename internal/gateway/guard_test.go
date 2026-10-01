@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // countingUpstream counts every request it receives, so a test can assert
@@ -377,5 +378,37 @@ func TestGuardsSkipsNilWitnesses(t *testing.T) {
 	}
 	if guards[2] != Guard(only) {
 		t.Errorf("guards[2] is not the one witness that was not nil")
+	}
+}
+
+// retryGuard refuses every request with a Retry-After.
+type retryGuard struct{}
+
+func (retryGuard) Check(*http.Request) (*http.Request, *Refusal) {
+	return nil, &Refusal{Status: http.StatusServiceUnavailable, Reason: "not yet", RetryAfter: 1500 * time.Millisecond}
+}
+
+// A refusal with RetryAfter carries the header, rounded up to whole seconds,
+// so the harness retries instead of failing the turn.
+func TestARefusalWithRetryAfterSendsTheHeader(t *testing.T) {
+	gw, counter := newCountingProxy(t, []Guard{retryGuard{}})
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, gw.URL+"/v1/messages", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Retry-After"); got != "2" {
+		t.Errorf("Retry-After = %q, want \"2\"", got)
+	}
+	if counter.requests() != 0 {
+		t.Error("the refused request reached the upstream")
 	}
 }

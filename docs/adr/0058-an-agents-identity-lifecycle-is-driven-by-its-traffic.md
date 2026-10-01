@@ -1,6 +1,6 @@
 # ADR-0058: An agent's identity lifecycle is driven by its traffic
 
-- Status: accepted
+- Status: accepted; amended 2026-10-01 (see the Amendment)
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -260,3 +260,44 @@ traffic now passes through.
   in decision 7; adoption of a backstop-retired run; the mapping surviving
   a gateway restart; a request refused end to end with no model call made
   when no identity resolves.
+
+## Amendment (2026-10-01): where the working directory comes from, and how a refusal reads
+
+**What changed.**
+
+- **The working directory comes from a hook, not the conversation.** A new
+  run is registered from the directory the harness states in its own hook
+  input: `session_id`, `cwd` and, for a subagent, `agent_id`, structured
+  fields on every hook event. `innsegl hook session` runs on
+  `SessionStart`, `UserPromptSubmit`, `SubagentStart` and `CwdChanged` and
+  posts them to a local gateway endpoint; the gateway keeps them in memory,
+  per session and agent. The request body is no longer read for a
+  directory at all.
+- **Restoring a run reads the chain.** A restore replays the run's own
+  registration from what `run_registered` recorded (agent type, task,
+  repository). It needs no directory.
+- **A refusal says whether to try again.** Decision 11 is unchanged:
+  nothing is forwarded. What changed is the status. A refusal for a missing
+  input the harness will supply (no directory stated yet) or for a
+  dependency outage (a retryable IP §4 class, or a connection that could
+  not be made) is 503 with `Retry-After` and a reason naming the cause. A
+  refusal of the request itself stays 403.
+- **A stopped stack is named, not just refused.** When the gateway cannot
+  be reached at all, the session hook stops the user's prompt before it is
+  sent and says what is down and the two ways out: start the stack, or
+  `install.sh --pause`, which sets the managed settings aside unchanged
+  until `--resume`.
+
+**Why.** Reading the directory out of the conversation's prose broke when
+the harness moved the statement: a session resumed after a summary states
+its directory only in later messages, and every request was refused as not
+retryable. That refusal could not clear on its own, and the only way out was
+editing the managed settings by hand. The hook input is the harness's
+structured channel for the same fact.
+
+**What still holds.** Fail-closed is unchanged: no request is forwarded
+without an identity, and the pause is an operator action behind the
+administrator boundary that already guards the managed settings. A stated
+directory is a harness claim of the same class as the agent-id header
+(decision 2): it still goes through `describe_workspace`, which admits only
+a git worktree under the projects mount and inside the admin scope.

@@ -476,6 +476,7 @@ func TestGW010CommandCanaryRecordedToolCallReachesNoBodyStoreFile(t *testing.T) 
 	const session = "7c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3ecb"
 	conv := &grecConversation{}
 	conv.addUserBrief(t, repo, "echo hi")
+	stateGatewayDirectory(t, addr, gwClient, session, "", repo)
 
 	sendAndDrain := func(body string) []byte {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,

@@ -1,0 +1,120 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package gateway
+
+import "sync"
+
+// SessionWorkspaces is where each session's working directory is known from:
+// the harness's own hook input, which carries session_id, agent_id and cwd as
+// structured fields on every event (captured from Claude Code 2.1.287,
+// 2026-10-01). `innsegl hook session` posts them to the gateway's local
+// session-workspace endpoint, and the identity guard reads them here.
+//
+// # Why not the conversation
+//
+// The directory used to be read out of the prompt's prose. That broke the
+// moment the harness moved the statement: a session resumed after a summary
+// states it only in later "Environment update" messages, and every request
+// was refused. Hook input is the harness's structured channel for the same
+// fact, so nothing here parses text.
+//
+// # What a forged record buys
+//
+// Nothing an agent could not already do. A record is harness-asserted and
+// unauthenticated, the same class as the agent-id header (ADR-0058 decision
+// 2). The directory still goes through describe_workspace, which admits only
+// a git worktree under the projects mount and inside the admin scope, so a
+// forged directory names only a repository the agent can already work in.
+//
+// # Memory only
+//
+// The hooks re-state the directory before every user turn and every subagent,
+// and a run that already has a mapping (Continue, Restore) needs no directory
+// at all, so a gateway restart costs at most one retried request. Keeping it
+// in memory also keeps host paths out of the database.
+type SessionWorkspaces struct {
+	mu       sync.Mutex
+	max      int
+	order    []string // session ids, oldest first
+	sessions map[string]*sessionWorkspace
+}
+
+// sessionWorkspace is one session's newest directory, and each agent's own.
+type sessionWorkspace struct {
+	latest string
+	agents map[string]string
+}
+
+// DefaultMaxSessionWorkspaces bounds the table, the same reasoning
+// DefaultMaxSessionEndSignals gives: an unauthenticated key must not be a way
+// to exhaust memory.
+const DefaultMaxSessionWorkspaces = 4096
+
+// maxAgentsPerSession bounds one session's agent table for the same reason.
+const maxAgentsPerSession = 256
+
+// NewSessionWorkspaces builds an empty table. maxSessions bounds it; zero or
+// less means DefaultMaxSessionWorkspaces.
+func NewSessionWorkspaces(maxSessions int) *SessionWorkspaces {
+	if maxSessions <= 0 {
+		maxSessions = DefaultMaxSessionWorkspaces
+	}
+	return &SessionWorkspaces{max: maxSessions, sessions: make(map[string]*sessionWorkspace)}
+}
+
+// Record notes that agentID of sessionID is in dir. An empty agentID, or
+// mainAgentID, is the session's main agent. Either way dir becomes the
+// session's newest directory. An empty session id or directory is ignored.
+func (s *SessionWorkspaces) Record(sessionID, agentID, dir string) {
+	if sessionID == "" || dir == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, ok := s.sessions[sessionID]
+	if !ok {
+		if len(s.order) >= s.max && len(s.order) > 0 {
+			delete(s.sessions, s.order[0])
+			s.order = s.order[1:]
+		}
+		w = &sessionWorkspace{agents: make(map[string]string)}
+		s.sessions[sessionID] = w
+		s.order = append(s.order, sessionID)
+	}
+	w.latest = dir
+	if agentID == "" || agentID == mainAgentID {
+		return
+	}
+	if _, known := w.agents[agentID]; !known && len(w.agents) >= maxAgentsPerSession {
+		// Full: the subagent falls back to the session's newest directory,
+		// which is where it started anyway.
+		return
+	}
+	w.agents[agentID] = dir
+}
+
+// Lookup answers agentID's directory in sessionID: the agent's own when the
+// hook named it, otherwise the session's newest. A subagent starts in its
+// parent's directory, so that fallback is the directory it is in.
+func (s *SessionWorkspaces) Lookup(sessionID, agentID string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, ok := s.sessions[sessionID]
+	if !ok {
+		return "", false
+	}
+	if dir, ok := w.agents[agentID]; ok {
+		return dir, true
+	}
+	return w.latest, true
+}
+
+// agentCount is for tests: how many agents sessionID holds.
+func (s *SessionWorkspaces) agentCount(sessionID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if w, ok := s.sessions[sessionID]; ok {
+		return len(w.agents)
+	}
+	return 0
+}

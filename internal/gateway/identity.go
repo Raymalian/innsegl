@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -50,6 +51,16 @@ import (
 // chain -- one of ledger.RunStates -- never a stored status.
 type RunStateReader interface {
 	RunState(ctx context.Context, runID string) (string, error)
+	// RunRegistration answers what the chain recorded when runID was
+	// registered. Restoring a run replays that registration, so it needs
+	// no working directory.
+	RunRegistration(ctx context.Context, runID string) (RunRegistration, error)
+}
+
+// RunRegistration is what run_registered recorded: the agent type and task
+// register_agent's idempotency claim is keyed on, and the repository.
+type RunRegistration struct {
+	AgentType, TaskID, Repo string
 }
 
 // credentialRunStates implements RunStateReader on top of mcp.CredentialRuns
@@ -87,6 +98,18 @@ func (r *credentialRunStates) RunState(ctx context.Context, runID string) (strin
 			"know it; refusing rather than guessing a state for a run that cannot be read", runID)
 	}
 	return run.State(r.now(), r.horizon), nil
+}
+
+func (r *credentialRunStates) RunRegistration(ctx context.Context, runID string) (RunRegistration, error) {
+	run, found, err := r.runs.CredentialRun(ctx, runID)
+	if err != nil {
+		return RunRegistration{}, fmt.Errorf("read run %q's registration from the chain: %w", runID, err)
+	}
+	if !found {
+		return RunRegistration{}, fmt.Errorf("run %q is in the gateway's own mapping but the chain does "+
+			"not know it; refusing rather than restoring a run that cannot be read", runID)
+	}
+	return RunRegistration{AgentType: run.AgentType, TaskID: run.TaskID, Repo: run.Repo}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +188,10 @@ type IdentityGuardConfig struct {
 	// session-end signals at all, which is every configuration before #380's
 	// review fix and every test that has no reason to exercise it.
 	SessionEndSignals *SessionEndSignals
+	// SessionWorkspaces is where the session hook states each session's
+	// working directory (workspaceregistry.go). Required: a new run is
+	// registered from it and from nothing else.
+	SessionWorkspaces *SessionWorkspaces
 }
 
 // IdentityGuard is ADR-0058 decision 11, wired into guard.go's chain: a
@@ -182,6 +209,7 @@ type IdentityGuard struct {
 
 	cache             *identityCache
 	sessionEndSignals *SessionEndSignals
+	sessionWorkspaces *SessionWorkspaces
 }
 
 // NewIdentityGuard builds an IdentityGuard, or refuses -- the same
@@ -201,6 +229,8 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 		return nil, errors.New("innsegl gateway: identity guard configuration: no WorkspaceResolver")
 	case cfg.RunStates == nil:
 		return nil, errors.New("innsegl gateway: identity guard configuration: no RunStateReader")
+	case cfg.SessionWorkspaces == nil:
+		return nil, errors.New("innsegl gateway: identity guard configuration: no SessionWorkspaces")
 	}
 	now := cfg.Now
 	if now == nil {
@@ -220,6 +250,7 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 		now:               now,
 		cache:             newIdentityCache(size),
 		sessionEndSignals: cfg.SessionEndSignals,
+		sessionWorkspaces: cfg.SessionWorkspaces,
 	}, nil
 }
 
@@ -249,19 +280,23 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 	}
 
 	facts := ExtractRequestFacts(r)
+	// The working directory is what the session hook stated, never what the
+	// conversation says (workspaceregistry.go). Attached to the facts so the
+	// recorder snapshots the same directory the run was registered from.
+	facts.WorkingDirectory, _ = g.sessionWorkspaces.Lookup(id.SessionID, id.AgentID)
 	ctx := WithRequestFacts(r.Context(), facts)
 	fp := ComputeFingerprint(facts)
 
 	prior, found, err := g.priorMapping(ctx, id, fp)
 	if err != nil {
-		return nil, g.refuse("looking up this agent's prior identity: " + err.Error())
+		return nil, g.refuseErr("looking up this agent's prior identity", err)
 	}
 
 	var priorState string
 	if found {
 		priorState, err = g.runStates.RunState(ctx, prior.RunID)
 		if err != nil {
-			return nil, g.refuse("reading run state from the chain: " + err.Error())
+			return nil, g.refuseErr("reading run state from the chain", err)
 		}
 	}
 
@@ -282,11 +317,74 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 	}
 
 	runID, actErr := g.act(ctx, decision, id, facts, fp, parentRunID, spawnAgentType, prior)
+	if errors.Is(actErr, errDirectoryNotStated) {
+		return nil, &Refusal{
+			Status:     http.StatusServiceUnavailable,
+			Reason:     identityGuardSource + ": " + actErr.Error(),
+			RetryAfter: directoryRetryAfter,
+		}
+	}
 	if actErr != nil {
-		return nil, g.refuse(actErr.Error())
+		return nil, g.refuseErr("", actErr)
 	}
 
 	return r.WithContext(WithRunID(ctx, runID)), nil
+}
+
+// errDirectoryNotStated is a run that must be registered for a session the
+// session hook has not stated a directory for yet. It is answered 503 with
+// Retry-After, not 403: the hook runs before every user turn and every
+// subagent, so the same request succeeds once it has.
+var errDirectoryNotStated = errors.New("the session hook has not stated this session's working " +
+	"directory yet; `innsegl hook session` must run on SessionStart, UserPromptSubmit, SubagentStart " +
+	"and CwdChanged (install.sh installs it)")
+
+// directoryRetryAfter is how long a harness is asked to wait before retrying
+// a request refused with errDirectoryNotStated.
+const directoryRetryAfter = 2 * time.Second
+
+// resolveWorkspace resolves the hook-stated directory, refusing with
+// errDirectoryNotStated rather than asking the resolver about nothing.
+func (g *IdentityGuard) resolveWorkspace(ctx context.Context, dir string) (Workspace, error) {
+	if dir == "" {
+		return Workspace{}, errDirectoryNotStated
+	}
+	return g.workspaces.Resolve(ctx, dir)
+}
+
+// outageRetryAfter is how long a harness is asked to wait before retrying a
+// request refused because a dependency is down.
+const outageRetryAfter = 5 * time.Second
+
+// refuseErr refuses for err, prefixed with the step that failed. A
+// dependency outage -- an MCP error whose class is retryable (IP §4:
+// IDENTITY_UNAVAILABLE, LEDGER_UNAVAILABLE, ...) or a connection that could
+// not be made at all -- is answered 503 with Retry-After, naming the class,
+// so the harness retries and the person reading it knows what is down. Any
+// other failure refuses the request itself and stays 403. Nothing is ever
+// forwarded either way (decision 11).
+func (g *IdentityGuard) refuseErr(step string, err error) *Refusal {
+	detail := err.Error()
+	if step != "" {
+		detail = step + ": " + detail
+	}
+	var mcpErr *mcp.Error
+	var netErr net.Error
+	switch {
+	case errors.As(err, &mcpErr) && mcpErr.Retryable:
+		return &Refusal{
+			Status:     http.StatusServiceUnavailable,
+			Reason:     identityGuardSource + ": " + string(mcpErr.Class) + " (a dependency is down; retrying): " + detail,
+			RetryAfter: outageRetryAfter,
+		}
+	case errors.As(err, &netErr):
+		return &Refusal{
+			Status:     http.StatusServiceUnavailable,
+			Reason:     identityGuardSource + ": a dependency could not be reached (retrying): " + detail,
+			RetryAfter: outageRetryAfter,
+		}
+	}
+	return g.refuse(detail)
 }
 
 func (g *IdentityGuard) refuse(detail string) *Refusal {
@@ -345,14 +443,18 @@ func (g *IdentityGuard) act(
 		return prior.RunID, nil
 
 	case DecisionRestore:
-		ws, err := g.workspaces.Resolve(ctx, facts.WorkingDirectory)
+		// A replay of the run's own registration, from what the chain
+		// recorded: register_agent's idempotency claim is keyed on agent
+		// type and task, so those must be the recorded values, and no
+		// working directory is needed at all.
+		reg, err := g.runStates.RunRegistration(ctx, prior.RunID)
 		if err != nil {
-			return "", fmt.Errorf("resolve the workspace to restore run %q: %w", prior.RunID, err)
+			return "", fmt.Errorf("read run %q's registration to restore it: %w", prior.RunID, err)
 		}
 		out, err := g.registrar.Restore(ctx, prior, RegisterInput{
-			AgentType:      agentTypeFor(id, spawnAgentType),
+			AgentType:      reg.AgentType,
 			IdempotencyKey: idempotencyKeyFor(id),
-			Workspace:      ws,
+			Workspace:      Workspace{Repo: reg.Repo, Task: reg.TaskID},
 		})
 		if err != nil {
 			return "", fmt.Errorf("restore run %q: %w", prior.RunID, err)
@@ -361,7 +463,7 @@ func (g *IdentityGuard) act(
 		return out.RunID, nil
 
 	case DecisionNew:
-		ws, err := g.workspaces.Resolve(ctx, facts.WorkingDirectory)
+		ws, err := g.resolveWorkspace(ctx, facts.WorkingDirectory)
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a new run: %w", err)
 		}
@@ -381,7 +483,7 @@ func (g *IdentityGuard) act(
 		return out.RunID, nil
 
 	case DecisionFork:
-		ws, err := g.workspaces.Resolve(ctx, facts.WorkingDirectory)
+		ws, err := g.resolveWorkspace(ctx, facts.WorkingDirectory)
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a fork of run %q: %w", prior.RunID, err)
 		}
@@ -401,7 +503,7 @@ func (g *IdentityGuard) act(
 		return out.RunID, nil
 
 	case DecisionAdopt:
-		ws, err := g.workspaces.Resolve(ctx, facts.WorkingDirectory)
+		ws, err := g.resolveWorkspace(ctx, facts.WorkingDirectory)
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a run adopting %q: %w", prior.RunID, err)
 		}
