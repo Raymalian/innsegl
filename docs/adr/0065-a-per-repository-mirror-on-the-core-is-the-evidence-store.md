@@ -13,8 +13,9 @@ the core on its own host, those objects are not on its disk.
 
 1. The core keeps one bare mirror per repository. Landing, proof, step diffs
    and the reconciler read it.
-2. It is fed by an authenticated git push from the client (ADR-0063), after a
-   signed commit and at session end.
+2. It is fed by an authenticated git push from the client, after a signed
+   commit and at session end. The push endpoint is checked by client
+   certificate and repository scope (ADR-0063).
 3. Workspace snapshots arrive as snapshot refs. The core records a snapshot
    only for a tree it holds: a witness, never a gate.
 4. Client-side stores are caches.

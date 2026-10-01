@@ -330,9 +330,9 @@ itself evidence, not index-like metadata.
 
 **What changed.** Decisions 2 and 8 (loopback only; the gateway stays on the
 harness's machine) are superseded by ADR-0063 for the hosted shape: the
-gateway runs on the core host and clients authenticate with an installation
-API key. The single-host shape still binds loopback by default. A gateway
-bound to anything but loopback refuses to start without API-key
+gateway runs on the core host and clients authenticate with an enrolled
+certificate. The single-host shape still binds loopback by default. A gateway
+bound to anything but loopback refuses to start without client-certificate
 authentication.
 
 **Why.** A gateway tied to the harness's machine cannot serve a second

@@ -131,12 +131,13 @@ review of them, as doc 04 already requires.
 ## Amendment (2026-10-01): caller authentication for client traffic
 
 **What changed.** The caller-authentication gap this ADR names is closed for
-client traffic by ADR-0063: every client-facing route checks an installation
-API key scoped to repositories.
+client traffic by ADR-0063: every client-facing route requires a valid
+installation certificate.
 
 **Why.** The core now serves callers on other machines, so a caller must
 prove which installation it is.
 
 **What still holds.** A run's identity is issued only through the attested
-MCP, never to a workload that declares a label (I1). A key lets a client ask;
-it does not let a client name its own identity.
+MCP, never to a workload that declares a label (I1). A certificate lets a
+client ask; it does not let a client name its own identity, and it never
+yields a signing credential.

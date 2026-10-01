@@ -14,7 +14,9 @@ browser sees. Both need a name that does not change.
 1. The core answers at one DNS name, `<core-name>`.
 2. Its gateway certificate names `<core-name>` and optionally an address. The
    core's own CA issues it.
-3. `innsegl connect` installs that CA on the client.
+3. `innsegl connect` installs that CA on the client. The gateway also
+   verifies client certificates (ADR-0063) against the deployment's trust
+   bundle.
 4. Automatic publicly-trusted certificates are a later option.
 5. Passkeys bind to `<core-name>`, so it must be stable.
 

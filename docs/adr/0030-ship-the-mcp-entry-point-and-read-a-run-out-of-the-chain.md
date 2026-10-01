@@ -295,7 +295,7 @@ the ordinary stop — an orchestrator rolling a replica — and for nothing else
 ## Amendment (2026-10-01): the bind address is configurable
 
 **What changed.** The MCP's bind address is configurable. Loopback stays the
-default. Binding to anything else requires API-key authentication
+default. Binding to anything else requires client-certificate authentication
 (ADR-0063); without it the process refuses to start.
 
 **Why.** The hosted shape runs the core on its own host, which clients reach

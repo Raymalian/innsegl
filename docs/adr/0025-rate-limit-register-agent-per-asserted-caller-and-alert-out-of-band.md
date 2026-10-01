@@ -286,15 +286,16 @@ does when a ledger outage stops a registration that likewise created no run.
   for every caller sitting under the old one; changing the *class* is a
   protected-surface change under doc 08 §3.
 
-## Amendment (2026-10-01): the bucket is per API key
+## Amendment (2026-10-01): the bucket is per installation
 
 **What changed.** For client traffic, the rate-limit bucket is keyed by the
-installation API key (ADR-0063), not by the asserted caller. The limit, the
-metering on the ledger appender and the out-of-band trip are unchanged.
+installation (ADR-0063), not by the asserted caller. The limit, the metering
+on the ledger appender and the out-of-band trip are unchanged.
 
-**Why.** The asserted caller was a claim the caller made. A key is
-authenticated, so one client cannot spend another's budget by naming it.
+**Why.** The asserted caller was a claim the caller made. An installation is
+authenticated by its certificate, so one client cannot spend another's budget
+by naming it.
 
 **What still holds.** The default of 60 per minute, the metering and the
-out-of-band alert. Where no key is in play (the single-host shape on
+out-of-band alert. Where no installation is in play (the single-host shape on
 loopback), the asserted caller is still the bucket.
