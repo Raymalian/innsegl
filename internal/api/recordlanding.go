@@ -107,7 +107,7 @@ func refLockFailureFound(logDir, runID string, claims []recordEventRow) bool {
 	for _, r := range claims {
 		digest := stringOf(r.Body[toolCallDigestField])
 		body, ok := stepBody(logDir, runID, digest)
-		if !ok || !body.IsError {
+		if !ok || !body.isError() {
 			continue
 		}
 		text, ok := resultText(body.Result)

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -184,4 +185,292 @@ func TestRPG006ExitCodeFrom(t *testing.T) {
 	if _, ok := exitCodeFrom("permission denied"); ok {
 		t.Error("text with no exit-code marker must not answer one")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// RM-273 (#436): a run recorded through the PreToolUse/PostToolUse hook
+// retains the harness's own PostToolUse payload instead of a gatewayBody.
+// stepBody must read both shapes, mapping the hook payload onto the same
+// fields outcomeOf and summaryOf already read — never showing a hook-
+// recorded step as an empty, unknown, failed-looking one just because its
+// body does not parse as a gateway body.
+//
+// Each body below is the harness's own real shape (RM-273's own issue:
+// session_id, transcript_path, cwd, scratchpad_dir, prompt_id,
+// permission_mode, agent_id, agent_type, effort, hook_event_name,
+// tool_name, tool_input, tool_response, tool_use_id, duration_ms — measured
+// across 145 bodies of one real run), including every member this mapping
+// does NOT use, so these tests also prove the extra harness bookkeeping is
+// read past without tripping the mapping up.
+// ---------------------------------------------------------------------------
+
+const hookBodyEnvelope = `{
+	"session_id": "sess-1",
+	"transcript_path": "/tmp/transcript.jsonl",
+	"cwd": "/repo",
+	"scratchpad_dir": "/tmp/scratch",
+	"prompt_id": "prompt-1",
+	"permission_mode": "default",
+	"agent_id": "agent-1",
+	"agent_type": "general-purpose",
+	"effort": "medium",
+	"hook_event_name": "PostToolUse",
+	"tool_use_id": %q,
+	"tool_name": %q,
+	"tool_input": %s,
+	"tool_response": %s,
+	"duration_ms": 1234
+}`
+
+func TestRM273HookBodyBashSuccess(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(fmtHookBody(t, "toolu_bash1", "Bash",
+		`{"command":"echo hi"}`,
+		`{"stdout":"hi\n","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false}`))
+	digest := writeBodyFile(t, dir, "run-x", raw)
+
+	body, ok := stepBody(dir, "run-x", digest)
+	if !ok {
+		t.Fatal("a well-formed hook body must be available")
+	}
+	if body.Tool != "Bash" {
+		t.Errorf("Tool = %q, want Bash", body.Tool)
+	}
+	if body.ToolUseID != "toolu_bash1" {
+		t.Errorf("ToolUseID = %q, want toolu_bash1", body.ToolUseID)
+	}
+	if got := summaryOf("Bash", body); got != "echo hi" {
+		t.Errorf("summaryOf = %q, want \"echo hi\"", got)
+	}
+	text, ok := resultText(body.Result)
+	if !ok || text != "hi\n" {
+		t.Errorf("resultText(Result) = %q, %v; want \"hi\\n\", true", text, ok)
+	}
+	out := outcomeOf("Bash", body)
+	if out.Kind != "ok" || out.ExitCode != nil {
+		t.Errorf("outcomeOf = %+v, want Kind=ok and no exit code (the hook payload carries none)", out)
+	}
+}
+
+func TestRM273HookBodyBashInterruptedIsFailedNotUnknown(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(fmtHookBody(t, "toolu_bash2", "Bash",
+		`{"command":"sleep 100"}`,
+		`{"stdout":"partial output","stderr":"","interrupted":true,"isImage":false,"noOutputExpected":false}`))
+	digest := writeBodyFile(t, dir, "run-x", raw)
+
+	body, ok := stepBody(dir, "run-x", digest)
+	if !ok {
+		t.Fatal("a well-formed hook body must be available")
+	}
+	text, _ := resultText(body.Result)
+	if text != "partial output" {
+		t.Errorf("resultText(Result) = %q, want the captured stdout even though interrupted", text)
+	}
+	out := outcomeOf("Bash", body)
+	if out.Kind != "error" || out.ExitCode != nil {
+		t.Errorf("outcomeOf(interrupted) = %+v, want Kind=error and no invented exit code", out)
+	}
+	if !body.isError() {
+		t.Error("isError() should be true for an interrupted Bash call")
+	}
+}
+
+func TestRM273HookBodyEdit(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(fmtHookBody(t, "toolu_edit1", "Edit",
+		`{"file_path":"a.go","old_string":"old","new_string":"new"}`,
+		`{"filePath":"a.go","oldString":"old","newString":"new","originalFile":"package a\nold\n",`+
+			`"structuredPatch":[{"oldStart":1,"oldLines":1,"newStart":1,"newLines":1}],"userModified":false,"replaceAll":false}`))
+	digest := writeBodyFile(t, dir, "run-x", raw)
+
+	body, ok := stepBody(dir, "run-x", digest)
+	if !ok {
+		t.Fatal("a well-formed hook body must be available")
+	}
+	if body.Tool != "Edit" {
+		t.Errorf("Tool = %q, want Edit", body.Tool)
+	}
+	if got := summaryOf("Edit", body); got != "a.go" {
+		t.Errorf("summaryOf = %q, want \"a.go\"", got)
+	}
+	text, ok := resultText(body.Result)
+	if !ok || text == "" {
+		t.Fatalf("resultText(Result) = %q, %v; want a non-empty rendering", text, ok)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+		t.Fatalf("Output is not valid JSON: %v (%q)", err, text)
+	}
+	if decoded["filePath"] != "a.go" {
+		t.Errorf("rendered Output = %v, want filePath a.go", decoded)
+	}
+	out := outcomeOf("Edit", body)
+	if out.Kind != "ok" {
+		t.Errorf("outcomeOf(Edit) = %+v, want Kind=ok — structuredPatch shows the write happened", out)
+	}
+	if out.ExitCode != nil {
+		t.Errorf("outcomeOf(Edit).ExitCode = %v, want nil — exit codes are Bash-only", out.ExitCode)
+	}
+}
+
+func TestRM273HookBodyWrite(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(fmtHookBody(t, "toolu_write1", "Write",
+		`{"file_path":"b.go","content":"package main\n"}`,
+		`{"type":"create","filePath":"b.go","content":"package main\n"}`))
+	digest := writeBodyFile(t, dir, "run-x", raw)
+
+	body, ok := stepBody(dir, "run-x", digest)
+	if !ok {
+		t.Fatal("a well-formed hook body must be available")
+	}
+	if body.Tool != "Write" {
+		t.Errorf("Tool = %q, want Write", body.Tool)
+	}
+	if got := summaryOf("Write", body); got != "b.go" {
+		t.Errorf("summaryOf = %q, want \"b.go\"", got)
+	}
+	out := outcomeOf("Write", body)
+	if out.Kind != "ok" {
+		t.Errorf("outcomeOf(Write) = %+v, want Kind=ok — the type:create shape shows the write happened", out)
+	}
+}
+
+func TestRM273HookBodyStringResponseNeverGuessesAnOutcome(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(fmtHookBody(t, "toolu_glob1", "Glob",
+		`{"pattern":"*.go"}`,
+		`"a.go\nb.go\nc.go"`))
+	digest := writeBodyFile(t, dir, "run-x", raw)
+
+	body, ok := stepBody(dir, "run-x", digest)
+	if !ok {
+		t.Fatal("a well-formed hook body must be available")
+	}
+	if body.Tool != "Glob" {
+		t.Errorf("Tool = %q, want Glob", body.Tool)
+	}
+	text, ok := resultText(body.Result)
+	if !ok || text != "a.go\nb.go\nc.go" {
+		t.Errorf("resultText(Result) = %q, %v; want the plain string verbatim", text, ok)
+	}
+	out := outcomeOf("Glob", body)
+	if out.Kind != "unknown" {
+		t.Errorf("outcomeOf(plain string, no success marker) = %+v, want Kind=unknown — never a guessed ok or failed", out)
+	}
+}
+
+func TestRM273HookBodyExplicitSuccessField(t *testing.T) {
+	dir := t.TempDir()
+
+	okRaw := []byte(fmtHookBody(t, "toolu_ok1", "SomeTool", `{}`, `{"success":true,"message":"done"}`))
+	okDigest := writeBodyFile(t, dir, "run-x", okRaw)
+	okBody, ok := stepBody(dir, "run-x", okDigest)
+	if !ok {
+		t.Fatal("a well-formed hook body must be available")
+	}
+	if out := outcomeOf("SomeTool", okBody); out.Kind != "ok" {
+		t.Errorf("outcomeOf(success:true) = %+v, want Kind=ok", out)
+	}
+
+	failRaw := []byte(fmtHookBody(t, "toolu_fail1", "SomeTool", `{}`, `{"success":false,"message":"nope"}`))
+	failDigest := writeBodyFile(t, dir, "run-x", failRaw)
+	failBody, ok := stepBody(dir, "run-x", failDigest)
+	if !ok {
+		t.Fatal("a well-formed hook body must be available")
+	}
+	if out := outcomeOf("SomeTool", failBody); out.Kind != "error" {
+		t.Errorf("outcomeOf(success:false) = %+v, want Kind=error", out)
+	}
+	if !failBody.isError() {
+		t.Error("isError() should be true when the shape states success:false")
+	}
+}
+
+func TestRM273GatewayBodyIsNeverMisdetectedAsHookShape(t *testing.T) {
+	dir := t.TempDir()
+	raw := marshalBody(t, gatewayBody{
+		Tool: "Bash", ToolUseID: "toolu_gw1", Input: json.RawMessage(`{"command":"echo hi"}`),
+		ResultObserved: true, Result: json.RawMessage(`"hi\n"`), IsError: false,
+	})
+	digest := writeBodyFile(t, dir, "run-x", raw)
+
+	body, ok := stepBody(dir, "run-x", digest)
+	if !ok {
+		t.Fatal("a well-formed gateway body must be available")
+	}
+	if body.hookShape {
+		t.Error("a genuine gateway body must never classify as hook-shape")
+	}
+	out := outcomeOf("Bash", body)
+	if out.Kind != "ok" || out.ExitCode == nil || *out.ExitCode != 0 {
+		t.Errorf("outcomeOf(gateway body) = %+v, want unchanged ok/0 behaviour", out)
+	}
+}
+
+func TestRM273HookResultTextEdgeCases(t *testing.T) {
+	if got := hookResultText("Bash", nil); got != "" {
+		t.Errorf("hookResultText(nil) = %q, want empty", got)
+	}
+	if got := hookResultText("Bash", json.RawMessage(`null`)); got != "" {
+		t.Errorf("hookResultText(null) = %q, want empty", got)
+	}
+	if got := hookResultText("Bash", json.RawMessage(`{"stdout":"","stderr":"boom"}`)); got != "boom" {
+		t.Errorf("hookResultText(stderr only) = %q, want \"boom\"", got)
+	}
+	if got := hookResultText("Bash", json.RawMessage(`{"stdout":"out","stderr":"err"}`)); got != "out\nerr" {
+		t.Errorf("hookResultText(stdout+stderr) = %q, want \"out\\nerr\"", got)
+	}
+	// Not valid JSON at all: hookResultText is never handed bytes like this
+	// through the real stepBody pipeline (isHookBody's own probe already
+	// requires valid JSON), but it must still answer the raw bytes rather
+	// than panic or silently drop them.
+	if got := hookResultText("Other", json.RawMessage(`not json`)); got != "not json" {
+		t.Errorf("hookResultText(invalid json) = %q, want the raw bytes verbatim", got)
+	}
+}
+
+func TestRM273HookOutcomeOfEdgeCases(t *testing.T) {
+	if out := hookOutcomeOf("Bash", nil); out.Kind != "unknown" {
+		t.Errorf("hookOutcomeOf(nil) = %+v, want unknown", out)
+	}
+	if out := hookOutcomeOf("Bash", json.RawMessage(`null`)); out.Kind != "unknown" {
+		t.Errorf("hookOutcomeOf(null) = %+v, want unknown", out)
+	}
+	// Structured, but none of the recognised success markers: a tool this
+	// mapping does not specifically understand must answer unknown, never a
+	// guessed ok or failed.
+	out := hookOutcomeOf("SomeOtherTool", json.RawMessage(`{"message":"did a thing"}`))
+	if out.Kind != "unknown" {
+		t.Errorf("hookOutcomeOf(unrecognised shape) = %+v, want unknown", out)
+	}
+}
+
+func TestRM273IsHookBodyDetection(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"PostToolUse event name", `{"hook_event_name":"PostToolUse","tool_name":"Bash"}`, true},
+		{"tool_name alone", `{"tool_name":"Edit"}`, true},
+		{"tool_response alone", `{"tool_response":{"stdout":"x"}}`, true},
+		{"gateway shape", `{"tool":"Bash","tool_use_id":"x","result_observed":true}`, false},
+		{"malformed json", `not json`, false},
+		{"empty object", `{}`, false},
+	}
+	for _, c := range cases {
+		if got := isHookBody([]byte(c.raw)); got != c.want {
+			t.Errorf("%s: isHookBody = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// fmtHookBody fills hookBodyEnvelope with a scenario's own tool name, input
+// and response, so each test above states only what it is actually
+// asserting on rather than the harness's own unrelated bookkeeping.
+func fmtHookBody(t *testing.T, toolUseID, toolName, input, response string) string {
+	t.Helper()
+	return fmt.Sprintf(hookBodyEnvelope, toolUseID, toolName, input, response)
 }
