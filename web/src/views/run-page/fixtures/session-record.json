@@ -1,0 +1,386 @@
+{
+  "run": {
+    "run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+    "spiffe_id": "spiffe://innsegl.dev/agent/3ee40754/d0069cea/run-bf9a1e9bc86c64de3347eb83887c4ce2",
+    "agent_type": "session",
+    "task_ref": "main",
+    "repo": "github.com/Raymalian/innsegl",
+    "branch": "main",
+    "status": "active",
+    "status_at": null,
+    "registered_at": "2026-09-23T08:16:57.000Z",
+    "parent_run_id": "",
+    "forked_from_run_id": ""
+  },
+  "agent": {
+    "title": "",
+    "role": "session",
+    "model": "",
+    "spawned_at_step": 0,
+    "linked_by": "",
+    "lineage": [],
+    "asked": {
+      "text": "",
+      "available": false,
+      "step": 0
+    },
+    "reported": {
+      "text": "",
+      "available": false,
+      "step": 0
+    }
+  },
+  "children": [
+    {
+      "run_id": "run-6f3e38cf7e807075bb34c62c01899b7b",
+      "title": "Baseline snapshot before first step",
+      "agent_type": "general-purpose",
+      "model": "sonnet",
+      "spawned_at_step": 2802,
+      "steps": 167,
+      "commits": 1,
+      "status": "retired",
+      "ended_at": "2026-10-01T07:45:18Z"
+    },
+    {
+      "run_id": "run-7783ea1d6b255258b58d16d8881b58be",
+      "title": "Read hook-format step bodies",
+      "agent_type": "general-purpose",
+      "model": "sonnet",
+      "spawned_at_step": 2801,
+      "steps": 63,
+      "commits": 1,
+      "status": "retired",
+      "ended_at": "2026-10-01T07:25:20Z"
+    },
+    {
+      "run_id": "run-c65fc709325bd5e836deb25a64075226",
+      "title": "Remove socket-denial enrolment check",
+      "agent_type": "general-purpose",
+      "model": "sonnet",
+      "spawned_at_step": 2679,
+      "steps": 145,
+      "commits": 0,
+      "status": "retired",
+      "ended_at": "2026-10-01T04:26:43Z"
+    },
+    {
+      "run_id": "run-a12390163eeb42bead1d24e0c17136c2",
+      "title": "E19 passkey login and gate",
+      "agent_type": "general-purpose",
+      "model": "sonnet",
+      "spawned_at_step": 2374,
+      "steps": 484,
+      "commits": 0,
+      "status": "retired",
+      "ended_at": "2026-09-30T18:23:36Z"
+    },
+    {
+      "run_id": "run-c48ae08557c4f6fedabef2bbc9bd5def",
+      "title": "E19 run record API",
+      "agent_type": "general-purpose",
+      "model": "sonnet",
+      "spawned_at_step": 2375,
+      "steps": 357,
+      "commits": 0,
+      "status": "retired",
+      "ended_at": "2026-09-30T18:05:36Z"
+    },
+    {
+      "run_id": "run-d0f82f2014fa6dd8a60a0d3a5e16776a",
+      "title": "E19 run page frontend",
+      "agent_type": "general-purpose",
+      "model": "sonnet",
+      "spawned_at_step": 2376,
+      "steps": 384,
+      "commits": 0,
+      "status": "retired",
+      "ended_at": "2026-09-30T18:03:36Z"
+    },
+    {
+      "run_id": "run-47559a56a5d91a56635a16af5d30b263",
+      "title": "E18 #391 gateway TLS",
+      "agent_type": "general-purpose",
+      "model": "sonnet",
+      "spawned_at_step": 2213,
+      "steps": 401,
+      "commits": 0,
+      "status": "retired",
+      "ended_at": "2026-09-30T14:06:32Z"
+    },
+    {
+      "run_id": "run-26c7818ccb650dfe7e90e8f2c02841ef",
+      "title": "RM-189 health stops naming repos",
+      "agent_type": "general-purpose",
+      "model": "",
+      "spawned_at_step": 662,
+      "steps": 15,
+      "commits": 0,
+      "status": "lapsed",
+      "ended_at": "2026-09-26T18:02:31Z"
+    }
+  ],
+  "written": [],
+  "tree": {
+    "root_run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+    "nodes": [
+      {
+        "run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+        "agent_type": "session",
+        "parent_run_id": "",
+        "status": "active",
+        "spawned_by": 0
+      },
+      {
+        "run_id": "run-6f3e38cf7e807075bb34c62c01899b7b",
+        "agent_type": "general-purpose",
+        "parent_run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+        "status": "retired",
+        "spawned_by": 2802
+      },
+      {
+        "run_id": "run-7783ea1d6b255258b58d16d8881b58be",
+        "agent_type": "general-purpose",
+        "parent_run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+        "status": "retired",
+        "spawned_by": 2801
+      },
+      {
+        "run_id": "run-c65fc709325bd5e836deb25a64075226",
+        "agent_type": "general-purpose",
+        "parent_run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+        "status": "retired",
+        "spawned_by": 2679
+      },
+      {
+        "run_id": "run-a12390163eeb42bead1d24e0c17136c2",
+        "agent_type": "general-purpose",
+        "parent_run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+        "status": "retired",
+        "spawned_by": 2374
+      },
+      {
+        "run_id": "run-c48ae08557c4f6fedabef2bbc9bd5def",
+        "agent_type": "general-purpose",
+        "parent_run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+        "status": "retired",
+        "spawned_by": 2375
+      },
+      {
+        "run_id": "run-d0f82f2014fa6dd8a60a0d3a5e16776a",
+        "agent_type": "general-purpose",
+        "parent_run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+        "status": "retired",
+        "spawned_by": 2376
+      },
+      {
+        "run_id": "run-47559a56a5d91a56635a16af5d30b263",
+        "agent_type": "general-purpose",
+        "parent_run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+        "status": "retired",
+        "spawned_by": 2213
+      },
+      {
+        "run_id": "run-26c7818ccb650dfe7e90e8f2c02841ef",
+        "agent_type": "general-purpose",
+        "parent_run_id": "run-bf9a1e9bc86c64de3347eb83887c4ce2",
+        "status": "lapsed",
+        "spawned_by": 662
+      }
+    ]
+  },
+  "brief": {
+    "text": "",
+    "digest": "",
+    "available": false,
+    "at": "0001-01-01T00:00:00Z"
+  },
+  "replies": [],
+  "steps": [
+    {
+      "n": 2798,
+      "tool_use_id": "toolu_01session02798",
+      "event_id": "01a0f702798-sess-7000-8000-000000000",
+      "chain_position": 48798,
+      "at": "2026-10-01T06:58:40.000Z",
+      "tool": "Bash",
+      "summary": "golangci-lint run ./internal/reconciler/ ./internal/api/",
+      "input": "{\"command\":\"golangci-lint run ./internal/reconciler/ ./internal/api/\"}",
+      "output": "0 issues.",
+      "truncated": false,
+      "clipped": false,
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
+      "tree_before": "",
+      "tree_after": "",
+      "files": [],
+      "spawned_run_id": "",
+      "spawned_commits": [],
+      "kind": "tool",
+      "commit_sha": "",
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "inactive",
+        "telemetry": "inactive"
+      }
+    },
+    {
+      "n": 2799,
+      "tool_use_id": "toolu_01session02799",
+      "event_id": "01a0f702799-sess-7000-8000-000000000",
+      "chain_position": 48799,
+      "at": "2026-10-01T06:59:10.000Z",
+      "tool": "Bash",
+      "summary": "sed -i … recordhandler_test.go && innsegl-commit.sh …",
+      "input": "{\"command\":\"sed -i … && scripts/innsegl-commit.sh -p internal/api/recordhandler_test.go -F m8.txt\"}",
+      "output": "innsegl-commit: signed 8619ee7",
+      "truncated": false,
+      "clipped": false,
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
+      "tree_before": "",
+      "tree_after": "",
+      "files": [],
+      "spawned_run_id": "",
+      "spawned_commits": [],
+      "kind": "tool",
+      "commit_sha": "8619ee72c4a1d0b6e93f1b2a7d5c8e4f01b3a6d9",
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "inactive",
+        "telemetry": "inactive"
+      }
+    },
+    {
+      "n": 2800,
+      "tool_use_id": "toolu_01session02800",
+      "event_id": "01a0f702800-sess-7000-8000-000000000",
+      "chain_position": 48800,
+      "at": "2026-10-01T07:00:02.000Z",
+      "tool": "Bash",
+      "summary": "gh issue create --title \"RM-273 Run page shows hook-recorded steps as blank failures\"",
+      "input": "{\"command\":\"gh issue create --title \\\"RM-273 …\\\"\"}",
+      "output": "https://github.com/Raymalian/innsegl/issues/436",
+      "truncated": false,
+      "clipped": false,
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
+      "tree_before": "",
+      "tree_after": "",
+      "files": [],
+      "spawned_run_id": "",
+      "spawned_commits": [],
+      "kind": "tool",
+      "commit_sha": "",
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "inactive",
+        "telemetry": "inactive"
+      }
+    },
+    {
+      "n": 2801,
+      "tool_use_id": "toolu_01session02801",
+      "event_id": "01a0f702801-sess-7000-8000-000000000",
+      "chain_position": 48801,
+      "at": "2026-10-01T07:00:30.000Z",
+      "tool": "Agent",
+      "summary": "Read hook-format step bodies",
+      "input": "{\"description\":\"Read hook-format step bodies\",\"prompt\":\"You are fixing GitHub issue #436 (RM-273) …\"}",
+      "output": "",
+      "truncated": false,
+      "clipped": false,
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
+      "tree_before": "",
+      "tree_after": "",
+      "files": [],
+      "spawned_run_id": "run-7783ea1d6b255258b58d16d8881b58be",
+      "spawned_commits": [],
+      "kind": "spawn",
+      "commit_sha": "",
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "inactive",
+        "telemetry": "inactive"
+      }
+    },
+    {
+      "n": 2802,
+      "tool_use_id": "toolu_01session02802",
+      "event_id": "01a0f702802-sess-7000-8000-000000000",
+      "chain_position": 48802,
+      "at": "2026-10-01T07:00:31.000Z",
+      "tool": "Agent",
+      "summary": "Baseline snapshot before first step",
+      "input": "{\"description\":\"Baseline snapshot before first step\",\"prompt\":\"You are fixing GitHub issue #437 (RM-274) …\"}",
+      "output": "",
+      "truncated": false,
+      "clipped": false,
+      "outcome": {
+        "kind": "ok",
+        "exit_code": null
+      },
+      "tree_before": "",
+      "tree_after": "",
+      "files": [],
+      "spawned_run_id": "run-6f3e38cf7e807075bb34c62c01899b7b",
+      "spawned_commits": [],
+      "kind": "spawn",
+      "commit_sha": "",
+      "witnesses": {
+        "gateway": "present",
+        "snapshot": "inactive",
+        "telemetry": "inactive"
+      }
+    }
+  ],
+  "files": [],
+  "commits": [
+    {
+      "sha": "8619ee72c4a1d0b6e93f1b2a7d5c8e4f01b3a6d9",
+      "subject": "test(api): drop an unnecessary conversion in the bare-run record test (#435)",
+      "step": 2799,
+      "landed": "landed",
+      "landed_reason": "",
+      "rekor_log_index": 1130,
+      "signed_by": "run-3c1d5e7f9a0b2c4d6e8f0a1b3c5d7e9f"
+    },
+    {
+      "sha": "bd845eb0a2c4e6f8091b3d5f7a9c1e3f5b7d9f1a",
+      "subject": "fix(api): a run record's lists are empty, never null (#435)",
+      "step": 0,
+      "landed": "landed",
+      "landed_reason": "",
+      "rekor_log_index": 1129,
+      "signed_by": "run-5e7f9a1b3c5d7e9f1a3b5c7d9e1f3a5b"
+    },
+    {
+      "sha": "0cc46803e5f7a9b1c3d5e7f9a1b3c5d7e9f1a3b5",
+      "subject": "fix(reconciler): judge telemetry per run, not machine-wide (#434)",
+      "step": 0,
+      "landed": "landed",
+      "landed_reason": "",
+      "rekor_log_index": 1128,
+      "signed_by": "run-7a9b1c3d5e7f9a1b3c5d7e9f1a3b5c7d"
+    }
+  ],
+  "witness": {
+    "steps": 5,
+    "agree": 5,
+    "disagree": 0,
+    "unchecked": 0,
+    "bodies_stored": 5,
+    "bodies_verified": 5
+  },
+  "data_as_of": "2026-10-01T12:47:29.000Z",
+  "chain_head": 47703
+}

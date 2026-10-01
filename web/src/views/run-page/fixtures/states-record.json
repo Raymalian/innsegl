@@ -12,6 +12,26 @@
     "parent_run_id": "",
     "forked_from_run_id": ""
   },
+  "agent": {
+    "title": "",
+    "role": "session",
+    "model": "",
+    "spawned_at_step": 0,
+    "linked_by": "",
+    "lineage": [],
+    "asked": {
+      "text": "",
+      "available": false,
+      "step": 0
+    },
+    "reported": {
+      "text": "",
+      "available": false,
+      "step": 0
+    }
+  },
+  "children": [],
+  "written": [],
   "tree": {
     "root_run_id": "run-9c1f2e3a4b5c6d7e8f9a0b1c2d3e4f5a",
     "nodes": [
@@ -52,6 +72,7 @@
       "tree_after": "1111111111111111111111111111111111111a",
       "files": [],
       "spawned_run_id": "",
+      "kind": "tool",
       "commit_sha": "",
       "witnesses": {
         "gateway": "present",
@@ -80,6 +101,7 @@
       "tree_after": "1111111111111111111111111111111111111a",
       "files": [],
       "spawned_run_id": "",
+      "kind": "tool",
       "commit_sha": "5d31e0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7",
       "witnesses": {
         "gateway": "present",
@@ -121,6 +143,7 @@
         }
       ],
       "spawned_run_id": "",
+      "kind": "tool",
       "commit_sha": "",
       "witnesses": {
         "gateway": "present",
@@ -149,6 +172,7 @@
       "tree_after": "3333333333333333333333333333333333333c",
       "files": [],
       "spawned_run_id": "",
+      "kind": "tool",
       "commit_sha": "",
       "witnesses": {
         "gateway": "present",
@@ -190,6 +214,7 @@
         }
       ],
       "spawned_run_id": "",
+      "kind": "tool",
       "commit_sha": "",
       "witnesses": {
         "gateway": "present",
@@ -218,6 +243,7 @@
       "tree_after": "1111111111111111111111111111111111111a",
       "files": [],
       "spawned_run_id": "",
+      "kind": "tool",
       "commit_sha": "",
       "witnesses": {
         "gateway": "present",
@@ -258,6 +284,7 @@
         }
       ],
       "spawned_run_id": "",
+      "kind": "tool",
       "commit_sha": "",
       "witnesses": {
         "gateway": "present",
@@ -299,7 +326,8 @@
       "step": 2,
       "landed": "not_landed",
       "landed_reason": "ref_lock",
-      "rekor_log_index": 2087
+      "rekor_log_index": 2087,
+      "signed_by": "run-9c1f2e3a4b5c6d7e8f9a0b1c2d3e4f5a"
     }
   ],
   "witness": {
