@@ -85,13 +85,39 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 	if err != nil {
 		return RunRecord{}, err
 	}
-	var children []familyNode
-	for _, n := range family {
-		if n.ParentRunID == runID {
-			children = append(children, n)
+	// Direct children, oldest-first — recordspawn.go's own FIFO rule for
+	// matching a spawn step against its candidates. RunRecord.Children
+	// itself is reordered newest-first separately (recordagent.go's own
+	// buildChildren).
+	children := childrenOfInFamily(family, runID)
+	sort.Slice(children, func(i, j int) bool { return children[i].RegisteredAt.Before(children[j].RegisteredAt) })
+
+	// #443 (RM-278): RecordAgent.Lineage needs every ancestor from the root
+	// down to this run's own parent (ancestorChainOf, capped at 16).
+	ancestors := ancestorChainOf(family, reg.ParentRunID)
+
+	// Every parent whose own children this record needs linked and counted:
+	// this run itself (Children), plus every ancestor (Lineage's own
+	// title/spawned_at_step/agents) — ONE childCounts query for the union,
+	// never a query per child (rule 4, rule 8).
+	parents := append(append([]string{}, idsOf(ancestors)...), runID)
+	childrenOfParent := make(map[string][]familyNode, len(parents))
+	unionSeen := map[string]bool{}
+	var unionIDs []string
+	for _, p := range parents {
+		kids := childrenOfInFamily(family, p)
+		childrenOfParent[p] = kids
+		for _, k := range kids {
+			if !unionSeen[k.RunID] {
+				unionSeen[k.RunID] = true
+				unionIDs = append(unionIDs, k.RunID)
+			}
 		}
 	}
-	sort.Slice(children, func(i, j int) bool { return children[i].RegisteredAt.Before(children[j].RegisteredAt) })
+	counts, err := rs.store.childCounts(ctx, unionIDs)
+	if err != nil {
+		return RunRecord{}, err
+	}
 
 	stepRefs := toolCallStepsFromRows(rows)
 	agentRefs := make([]toolCallStepRef, 0)
@@ -100,10 +126,27 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 			agentRefs = append(agentRefs, ref)
 		}
 	}
-	spawns := rs.resolveSpawns(logDir, runID, agentRefs, children)
+
+	// #443 rule 2: link every parent-of-interest's own non-signing children
+	// to the step that spawned them — gateway/brief, then agent id.
+	links := make(map[string]map[string]spawnMatch, len(parents))
+	for _, p := range parents {
+		nonSigning := nonSigningChildrenOf(childrenOfParent[p], counts)
+		var refs []toolCallStepRef
+		if p == runID {
+			refs = agentRefs
+		} else {
+			refs, err = rs.agentStepRefsFor(ctx, p)
+			if err != nil {
+				return RunRecord{}, err
+			}
+		}
+		links[p] = rs.resolveChildLinks(logDir, p, refs, nonSigning)
+	}
+
 	spawnByEvent := map[string]string{}
-	for _, m := range spawns {
-		spawnByEvent[m.StepEventID] = m.ChildRunID
+	for childID, m := range links[runID] {
+		spawnByEvent[m.StepEventID] = childID
 	}
 
 	commitRows, err := rs.store.commitsOf(ctx, runID)
@@ -111,26 +154,42 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 		return RunRecord{}, err
 	}
 
+	// #443 rule 1: a signing identity's own commit is folded into this
+	// run's own Commits — read in ONE grouped query, never one per signing
+	// identity.
+	var signingIDs []string
+	for _, c := range children {
+		if isSigningIdentity(counts[c.RunID]) {
+			signingIDs = append(signingIDs, c.RunID)
+		}
+	}
+	signingCommitRows, err := rs.store.commitsOfMany(ctx, signingIDs)
+	if err != nil {
+		return RunRecord{}, err
+	}
+
 	// Committed is checked against every commit a file's OWN contributor
-	// made — this run's, and any spawned child's whose write a step
-	// attributes by_run_id — never against this run's commits alone. A
-	// subagent commits its own work under ITS OWN run_id (step4's own
-	// SpawnedCommits), and a file this run never touched directly has
-	// nothing to be found in this run's own commit trees regardless of
-	// whether the subagent committed it.
+	// made — this run's, any spawned child's whose write a step attributes
+	// by_run_id, and any signing identity's — never against this run's
+	// commits alone. A subagent commits its own work under ITS OWN run_id
+	// (step4's own SpawnedCommits), and a file this run never touched
+	// directly has nothing to be found in this run's own commit trees
+	// regardless of whether the subagent committed it.
 	committedCommits := append([]commitRow{}, commitRows...)
-	for _, m := range spawns {
+	for _, m := range links[runID] {
 		childCommits, cerr := rs.store.commitsOf(ctx, m.ChildRunID)
 		if cerr == nil {
 			committedCommits = append(committedCommits, childCommits...)
 		}
 	}
+	committedCommits = append(committedCommits, signingCommitRows...)
 
-	steps, bodiesStored, bodiesVerified := rs.buildSteps(ctx, runID, reg, rows, commitRows, committedCommits, spawnByEvent, logDir, now)
+	steps, written, bodiesStored, bodiesVerified := rs.buildSteps(ctx, runID, reg, rows, commitRows, committedCommits, spawnByEvent, logDir, now)
 
 	settleRunWitnesses(steps)
 
-	commits := rs.buildCommits(ctx, reg.Repo, commitRows, steps)
+	allCommitRows := append(append([]commitRow{}, commitRows...), signingCommitRows...)
+	commits := rs.buildCommits(ctx, reg.Repo, runID, allCommitRows, steps)
 
 	var treeBeforeRun, treeAfterRun string
 	for _, st := range steps {
@@ -160,6 +219,15 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 		return RunRecord{}, err
 	}
 
+	// #443 (RM-278): this run seen as one agent, and the (non-signing)
+	// agents it started.
+	agent := buildAgentRecord(reg, runID, ancestors, links, childrenOfParent, counts, brief, replies, steps)
+	nonSigningOwnChildren := nonSigningChildrenOf(children, counts)
+	childrenOut, err := rs.buildChildren(ctx, nonSigningOwnChildren, links[runID], counts, now, horizon)
+	if err != nil {
+		return RunRecord{}, err
+	}
+
 	// Every list is [] when empty, never null: the contract types each one
 	// as an array, and a run with nothing recorded (every run from before
 	// the gateway) crashed the run page on null (#435).
@@ -173,7 +241,8 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 		commits = []RecordCommit{}
 	}
 	return RunRecord{
-		Run: run, Tree: tree, Brief: brief, Replies: replies, Steps: steps,
+		Run: run, Agent: agent, Children: nonNilChildren(childrenOut), Written: nonNilWritten(written),
+		Tree: tree, Brief: brief, Replies: replies, Steps: steps,
 		Files: nonNilFiles(files), Commits: commits, Witness: summarizeWitness(steps, bodiesStored, bodiesVerified),
 		DataAsOf: now, ChainHead: head,
 	}, nil
@@ -229,7 +298,11 @@ func briefAndReplies(rows []recordEventRow, messageKeyDir string, candidates [][
 func (rs *recordServer) buildSteps(
 	ctx context.Context, runID string, reg registeredFields, rows []recordEventRow,
 	commits, committedCommits []commitRow, spawnByEvent map[string]string, logDir string, now time.Time,
-) (steps []RecordStep, bodiesStored, bodiesVerified int) {
+) (steps []RecordStep, written []RecordWrite, bodiesStored, bodiesVerified int) {
+	// #443 (RM-278) rule 6: one Written entry per path, the FIRST step that
+	// wrote it — steps are walked in chain order below, so the first append
+	// to a given path is already the earliest one.
+	writtenSeen := map[string]bool{}
 	var telemetryActive bool
 	var telemetrySince time.Time
 	if logDir != "" {
@@ -320,8 +393,35 @@ func (rs *recordServer) buildSteps(
 					}
 				}
 			}
+
+			// #443 (RM-278) rule 6: this step wrote a file.
+			if isWriteTool(toolName) {
+				if path := writeFilePathOf(body.Input); path != "" {
+					cwd := ""
+					if body.hookShape {
+						cwd = body.hookCwd
+					}
+					rel := relativeWritePath(path, cwd)
+					if !writtenSeen[rel] {
+						writtenSeen[rel] = true
+						written = append(written, RecordWrite{
+							Path: rel, Status: writeStatusOf(toolName, body, step.Output), Step: n,
+						})
+					}
+				}
+			}
 		} else {
 			step.Outcome = RecordOutcome{Kind: "unknown"}
+		}
+
+		// #443 (RM-278) rule 5: a step's own Kind.
+		switch toolName {
+		case "Agent":
+			step.Kind = "spawn"
+		case "SubagentHandback":
+			step.Kind = "report"
+		default:
+			step.Kind = "tool"
 		}
 
 		if toolName == "Agent" {
@@ -359,7 +459,7 @@ func (rs *recordServer) buildSteps(
 
 		steps = append(steps, step)
 	}
-	return steps, bodiesStored, bodiesVerified
+	return steps, written, bodiesStored, bodiesVerified
 }
 
 // bodyFilePresent reports whether a body FILE exists for digest under
@@ -469,6 +569,11 @@ func summaryOf(toolName string, body gatewayBody) string {
 			return truncateSummary(in.Command)
 		}
 	case "Agent":
+		// #443 (RM-278) rule 5: the spawn's own description when it named
+		// one; the prompt otherwise, exactly as before #443.
+		if in, ok := agentSpawnInputOf(body.Input); ok && in.Description != "" {
+			return truncateSummary(in.Description)
+		}
 		if prompt, ok := agentPromptOf(body.Input); ok {
 			return truncateSummary(prompt)
 		}
@@ -498,7 +603,16 @@ func truncateSummary(s string) string {
 // Commits.
 // ---------------------------------------------------------------------------
 
-func (rs *recordServer) buildCommits(ctx context.Context, repo string, rows []commitRow, steps []RecordStep) []RecordCommit {
+// buildCommits turns rows into RecordCommit. rows is this run's own
+// commit_recorded PLUS, since #443 (RM-278) rule 1, any signing identity's
+// own — commitRow.RunID tells the two apart: SignedBy is always that run
+// id, and Step is resolved differently for each. This run's own commit was
+// made by a Bash step THIS run's chain already names (RecordStep.CommitSHA,
+// matched by commitShortSHA in buildSteps); a signing identity's own commit
+// was never a step of ITS run, let alone this one, so its Step is instead
+// the step of THIS run whose own Output names it signed
+// (signedStepFor, recordagent.go).
+func (rs *recordServer) buildCommits(ctx context.Context, repo, runID string, rows []commitRow, steps []RecordStep) []RecordCommit {
 	superseded := map[string]bool{}
 	for _, c := range rows {
 		if c.Supersedes != "" {
@@ -506,19 +620,37 @@ func (rs *recordServer) buildCommits(ctx context.Context, repo string, rows []co
 		}
 	}
 
+	// Landing and subjects are read once per repository, not per commit
+	// (#443): a session holding its signing identities' commits ran two git
+	// commands per commit for landing alone.
+	land := rs.newLanding()
+	var landedSHAs []string
+	for _, c := range rows {
+		if land.of(ctx, repo, c, superseded) == "landed" {
+			landedSHAs = append(landedSHAs, c.CommitSHA)
+		}
+	}
+	subjects := land.subjects(ctx, repo, landedSHAs)
+
 	out := make([]RecordCommit, 0, len(rows))
 	for _, c := range rows {
-		rc := RecordCommit{SHA: c.CommitSHA, RekorLogIndex: c.RekorLogIndex}
-		for _, st := range steps {
-			if st.CommitSHA == c.CommitSHA {
-				rc.Step = st.N
-				break
+		rc := RecordCommit{SHA: c.CommitSHA, RekorLogIndex: c.RekorLogIndex, SignedBy: c.RunID}
+		if c.RunID == runID {
+			for _, st := range steps {
+				if st.CommitSHA == c.CommitSHA {
+					rc.Step = st.N
+					break
+				}
 			}
+		} else {
+			rc.Step = signedStepFor(steps, c.CommitSHA)
 		}
-		if subject, ok := rs.commitSubject(ctx, repo, c.CommitSHA); ok {
+		if subject, ok := subjects[c.CommitSHA]; ok {
+			rc.Subject = subject
+		} else if subject, ok := rs.commitSubject(ctx, repo, c.CommitSHA); ok {
 			rc.Subject = subject
 		}
-		rc.Landed = rs.landingOf(ctx, repo, c, superseded)
+		rc.Landed = land.of(ctx, repo, c, superseded)
 		if rc.Landed == "not_landed" {
 			rc.LandedReason = notLandedReason(rs.logDir, c.RunID, rs.runCommitClaims(ctx, c.RunID))
 		}
@@ -583,6 +715,10 @@ func (rs *recordServer) buildWholeRunFiles(
 	changes, err := rs.filesInRange(ctx, repo, before, after)
 	if err != nil {
 		return nil, err
+	}
+	if len(changes) == 0 && len(touchedSteps) == 0 {
+		// No file to judge: the commits' file set is not read (#443).
+		return []RecordFile{}, nil
 	}
 	committed := rs.committedSet(ctx, repo, commits)
 	afterBlobs := discardBlobsError(rs.blobsAtTree(ctx, repo, after))

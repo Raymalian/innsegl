@@ -277,6 +277,10 @@ func TestRM273HookBodyBashInterruptedIsFailedNotUnknown(t *testing.T) {
 	}
 }
 
+// TestRM273HookBodyEdit — #443 (RM-278) rule 7 supersedes RM-273's own raw
+// tool_response rendering: a hook Edit step's own Output is now the SAME
+// plain sentence the gateway path already renders for the same tool,
+// "Edited <relative path>", rather than the structured tool_response JSON.
 func TestRM273HookBodyEdit(t *testing.T) {
 	dir := t.TempDir()
 	raw := []byte(fmtHookBody(t, "toolu_edit1", "Edit",
@@ -296,15 +300,8 @@ func TestRM273HookBodyEdit(t *testing.T) {
 		t.Errorf("summaryOf = %q, want \"a.go\"", got)
 	}
 	text, ok := resultText(body.Result)
-	if !ok || text == "" {
-		t.Fatalf("resultText(Result) = %q, %v; want a non-empty rendering", text, ok)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
-		t.Fatalf("Output is not valid JSON: %v (%q)", err, text)
-	}
-	if decoded["filePath"] != "a.go" {
-		t.Errorf("rendered Output = %v, want filePath a.go", decoded)
+	if !ok || text != "Edited a.go" {
+		t.Errorf("resultText(Result) = %q, %v; want \"Edited a.go\", true (#443 rule 7)", text, ok)
 	}
 	out := outcomeOf("Edit", body)
 	if out.Kind != "ok" {
@@ -474,6 +471,150 @@ func TestRM273IsHookBodyDetection(t *testing.T) {
 func fmtHookBody(t *testing.T, toolUseID, toolName, input, response string) string {
 	t.Helper()
 	return fmt.Sprintf(hookBodyEnvelope, toolUseID, toolName, input, response)
+}
+
+// ---------------------------------------------------------------------------
+// #443 (RM-278): spawn linking by agent id, and a Write/Edit step's own file.
+// ---------------------------------------------------------------------------
+
+func TestRM278HookBodyWriteCreateRendersTheGatewaySentence(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(fmtHookBodyWithCwd(t, "toolu_w1", "Write", "/repo",
+		`{"file_path":"/repo/a.go","content":"package a\n"}`,
+		`{"type":"create","filePath":"/repo/a.go","content":"package a\n"}`))
+	digest := writeBodyFile(t, dir, "run-x", raw)
+
+	body, ok := stepBody(dir, "run-x", digest)
+	if !ok {
+		t.Fatal("a well-formed hook body must be available")
+	}
+	text, ok := resultText(body.Result)
+	if !ok || text != "File created successfully at: a.go" {
+		t.Errorf("resultText(Result) = %q, %v; want \"File created successfully at: a.go\", true", text, ok)
+	}
+	if body.hookWriteType != "create" {
+		t.Errorf("hookWriteType = %q, want create", body.hookWriteType)
+	}
+}
+
+func TestRM278HookBodyWriteUpdateRendersTheGatewaySentence(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(fmtHookBodyWithCwd(t, "toolu_w2", "Write", "/repo",
+		`{"file_path":"/repo/a.go","content":"package a\n"}`,
+		`{"type":"update","filePath":"/repo/a.go","content":"package a\n"}`))
+	digest := writeBodyFile(t, dir, "run-x", raw)
+
+	body, ok := stepBody(dir, "run-x", digest)
+	if !ok {
+		t.Fatal("a well-formed hook body must be available")
+	}
+	text, ok := resultText(body.Result)
+	if !ok || text != "File updated at: a.go" {
+		t.Errorf("resultText(Result) = %q, %v; want \"File updated at: a.go\", true", text, ok)
+	}
+	if body.hookWriteType != "update" {
+		t.Errorf("hookWriteType = %q, want update", body.hookWriteType)
+	}
+}
+
+func TestRM278HookBodyAgentCarriesTheSpawnedAgentID(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(fmtHookBody(t, "toolu_a1", "Agent",
+		`{"description":"do the subtask","prompt":"the spawn prompt","model":"sonnet"}`,
+		`{"agentId":"agent-xyz","content":"spawned"}`))
+	digest := writeBodyFile(t, dir, "run-x", raw)
+
+	body, ok := stepBody(dir, "run-x", digest)
+	if !ok {
+		t.Fatal("a well-formed hook body must be available")
+	}
+	if body.hookSpawnedAgentID != "agent-xyz" {
+		t.Errorf("hookSpawnedAgentID = %q, want agent-xyz", body.hookSpawnedAgentID)
+	}
+	if body.hookAgentID != "agent-1" {
+		t.Errorf("hookAgentID (the envelope's own agent_id) = %q, want agent-1", body.hookAgentID)
+	}
+	in, ok := agentSpawnInputOf(body.Input)
+	if !ok {
+		t.Fatal("agentSpawnInputOf should parse a well-formed Agent input")
+	}
+	if in.Description != "do the subtask" || in.Prompt != "the spawn prompt" || in.Model != "sonnet" {
+		t.Errorf("agentSpawnInputOf = %+v, want description/prompt/model all read", in)
+	}
+}
+
+func TestAgentIDFromToolResponseOnlyReadsTheAgentTool(t *testing.T) {
+	if got := agentIDFromToolResponse("Bash", json.RawMessage(`{"agentId":"x"}`)); got != "" {
+		t.Errorf("agentIDFromToolResponse(Bash) = %q, want empty — only the Agent tool carries this", got)
+	}
+	if got := agentIDFromToolResponse("Agent", json.RawMessage(`{"content":"no id here"}`)); got != "" {
+		t.Errorf("agentIDFromToolResponse(no agentId) = %q, want empty, never a guess", got)
+	}
+	if got := agentIDFromToolResponse("Agent", nil); got != "" {
+		t.Errorf("agentIDFromToolResponse(nil) = %q, want empty", got)
+	}
+}
+
+func TestWriteFilePathOfFileAndNotebookPath(t *testing.T) {
+	if got := writeFilePathOf(json.RawMessage(`{"file_path":"a.go"}`)); got != "a.go" {
+		t.Errorf("writeFilePathOf(file_path) = %q, want a.go", got)
+	}
+	if got := writeFilePathOf(json.RawMessage(`{"notebook_path":"n.ipynb"}`)); got != "n.ipynb" {
+		t.Errorf("writeFilePathOf(notebook_path) = %q, want n.ipynb", got)
+	}
+	if got := writeFilePathOf(json.RawMessage(`not json`)); got != "" {
+		t.Errorf("writeFilePathOf(malformed) = %q, want empty", got)
+	}
+}
+
+func TestRelativeWritePathStripsCwdFirst(t *testing.T) {
+	if got := relativeWritePath("/repo/internal/api/record.go", "/repo"); got != "internal/api/record.go" {
+		t.Errorf("relativeWritePath(cwd prefix) = %q, want internal/api/record.go", got)
+	}
+}
+
+func TestRelativeWritePathFallsBackToTheWorktreeMarker(t *testing.T) {
+	// No matching cwd (empty, or simply not a prefix): the fallback strips
+	// everything up to and including "/.claude/worktrees/<name>/" — a
+	// generic checkout shape, never an operator's own path
+	// (scripts/no-operator-paths.sh).
+	path := "/srv/checkouts/innsegl/.claude/worktrees/run-x/sub/file.go"
+	if got := relativeWritePath(path, ""); got != "sub/file.go" {
+		t.Errorf("relativeWritePath(worktree fallback) = %q, want sub/file.go", got)
+	}
+	if got := relativeWritePath(path, "/does/not/match"); got != "sub/file.go" {
+		t.Errorf("relativeWritePath(cwd does not match) = %q, want the worktree fallback sub/file.go", got)
+	}
+}
+
+func TestRelativeWritePathLeavesAnUnrecognisedPathAlone(t *testing.T) {
+	if got := relativeWritePath("a.go", ""); got != "a.go" {
+		t.Errorf("relativeWritePath(already relative) = %q, want a.go unchanged", got)
+	}
+}
+
+// fmtHookBodyWithCwd is fmtHookBody with an explicit cwd, for the
+// Write/Edit rendering tests above, which need file_path and cwd to agree.
+func fmtHookBodyWithCwd(t *testing.T, toolUseID, toolName, cwd, input, response string) string {
+	t.Helper()
+	const envelope = `{
+		"session_id": "sess-1",
+		"transcript_path": "/tmp/transcript.jsonl",
+		"cwd": %q,
+		"scratchpad_dir": "/tmp/scratch",
+		"prompt_id": "prompt-1",
+		"permission_mode": "default",
+		"agent_id": "agent-1",
+		"agent_type": "general-purpose",
+		"effort": "medium",
+		"hook_event_name": "PostToolUse",
+		"tool_use_id": %q,
+		"tool_name": %q,
+		"tool_input": %s,
+		"tool_response": %s,
+		"duration_ms": 1234
+	}`
+	return fmt.Sprintf(envelope, cwd, toolUseID, toolName, input, response)
 }
 
 // TestStepBodyIsCachedAndStillCatchesAChangedFile — #442. Stored bodies are

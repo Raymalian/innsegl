@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 
 	"innsegl.dev/innsegl/internal/event"
 )
@@ -148,4 +149,101 @@ func notLandedReason(logDir, runID string, claims []recordEventRow) string {
 		return "ref_lock"
 	}
 	return ""
+}
+
+// reachabilityReads counts reads of a repository's reachable commits, so a
+// test can hold a record to one per repository (#443).
+var reachabilityReads atomic.Int64
+
+// landing judges commits' landing for one record (#443). Whether a commit is
+// reachable from any ref is the same question commitReachable asks two git
+// commands per commit for; here every reachable commit is read once per
+// repository with `git rev-list --all`, and each judgement is a lookup. A
+// session holding its signing identities' 61 commits spent about two
+// seconds on the per-commit form.
+type landing struct {
+	rs   *recordServer
+	sets map[string]reachableSet
+}
+
+type reachableSet struct {
+	shas    map[string]bool
+	checked bool
+}
+
+func (rs *recordServer) newLanding() *landing {
+	return &landing{rs: rs, sets: map[string]reachableSet{}}
+}
+
+func (l *landing) of(ctx context.Context, repo string, c commitRow, superseded map[string]bool) string {
+	set, ok := l.sets[repo]
+	if !ok {
+		set = l.read(ctx, repo)
+		l.sets[repo] = set
+	}
+	if !set.checked || event.ValidateGitObjectID(c.CommitSHA) != nil {
+		// Not readable here: the per-commit path, with its own ref-lock
+		// corroboration, decides between not_landed and unknown.
+		return l.rs.landingOf(ctx, repo, c, superseded)
+	}
+	switch {
+	case set.shas[c.CommitSHA]:
+		return "landed"
+	case superseded[c.EventID]:
+		return "rewritten"
+	default:
+		return "not_landed"
+	}
+}
+
+// read lists every commit reachable from any ref of repo's served checkout.
+func (l *landing) read(ctx context.Context, repo string) reachableSet {
+	reachabilityReads.Add(1)
+	repoDir, ok := l.rs.prover.RepoPath(repo)
+	if !ok {
+		return reachableSet{}
+	}
+	out, err := runGit(ctx, repoDir, isolatedGitEnv(repoDir), l.rs.prover.GitPath(), "rev-list", "--all")
+	if err != nil {
+		return reachableSet{}
+	}
+	shas := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			shas[line] = true
+		}
+	}
+	return reachableSet{shas: shas, checked: true}
+}
+
+// subjects reads the subject line of every sha in one git run. Every sha
+// passed is reachable, so it exists; a sha missing from the answer falls
+// back to the caller's per-commit read.
+func (l *landing) subjects(ctx context.Context, repo string, shas []string) map[string]string {
+	out := map[string]string{}
+	if len(shas) == 0 {
+		return out
+	}
+	repoDir, ok := l.rs.prover.RepoPath(repo)
+	if !ok {
+		return out
+	}
+	seen := map[string]bool{}
+	args := []string{"log", "--no-walk=unsorted", "--format=%H %s"}
+	for _, sha := range shas {
+		if !seen[sha] && event.ValidateGitObjectID(sha) == nil {
+			seen[sha] = true
+			args = append(args, sha)
+		}
+	}
+	text, err := runGit(ctx, repoDir, isolatedGitEnv(repoDir), l.rs.prover.GitPath(), args...)
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if sha, subject, ok := strings.Cut(line, " "); ok {
+			out[sha] = subject
+		}
+	}
+	return out
 }

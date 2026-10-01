@@ -67,6 +67,23 @@ type recordFixture struct {
 	logDir   string
 	parentID string
 	childID  string
+
+	// #443 (RM-278): a second, hook-recorded family — a session, one hook
+	// subagent linked to its spawning step by agent id (rule 2b), and one
+	// signing identity (rule 1). Kept SEPARATE from parentID/childID's own
+	// gateway-recorded family so the RPG-001/002/440 assertions above never
+	// have to change shape when this family gains a step.
+	hookSessionID  string
+	hookSubagentID string
+	signingID      string
+	// signingCommitSHA is the signing identity's own one commit — its short
+	// (7-char) form is what hookSessionID's own step 1 output names, the
+	// evidence recordRunCommits' Step rule reads (record.go rule 1).
+	signingCommitSHA string
+	// landedSHA is a commit on refs/heads/main of the fixture's repository,
+	// and landedTree its tree.
+	landedSHA  string
+	landedTree string
 }
 
 func newRecordFixture(t *testing.T) *recordFixture {
@@ -149,8 +166,14 @@ func newRecordFixture(t *testing.T) *recordFixture {
 	f := &recordFixture{
 		t: t, store: store, repoDir: repoDir, rs: rs, logDir: logDir,
 		parentID: "run-e19-parent", childID: "run-e19-child",
+		hookSessionID: "run-e19-hooksession", hookSubagentID: "run-e19-hooksubagent",
+		signingID:        "run-e19-signing",
+		signingCommitSHA: "9abc123" + strings.Repeat("0", 33),
+		landedSHA:        commitParent,
+		landedTree:       treeT1,
 	}
 	f.seedLedgerAndBodies(ctx, owner, commitParent, treeT1, treeT2)
+	f.seedHookFamily(ctx, owner)
 	return f
 }
 
@@ -500,6 +523,184 @@ func (f *recordFixture) seedLedgerAndBodies(ctx context.Context, owner *ledger.S
 	// needs is this exact text, byte for byte, discoverable without a
 	// secret (recordbody.go's spawnBodyMatches).
 	writeRunBody(t, f.logDir, f.childID, []byte(recordFixtureSpawnPrompt))
+}
+
+// ---------------------------------------------------------------------------
+// #443 (RM-278): a hook-recorded family — a session, a hook subagent linked
+// to its spawning step by agent id (rule 2b), with a SubagentHandback step
+// (rule 3's own Reported) and a Write step (rules 6-7); and a signing
+// identity (rule 1): a child with zero tool_call events and one
+// commit_recorded, excluded from Children and folded into the session's own
+// Commits instead.
+// ---------------------------------------------------------------------------
+
+const (
+	hookFamilySpawnedAgentID = "agent-hook-1"
+	hookFamilyTitle          = "do the subtask"
+	hookFamilyPrompt         = "the spawn prompt text"
+	hookFamilyModel          = "sonnet"
+	hookFamilyReport         = "the subagent's final report"
+	hookFamilyRekorIndex     = int64(9001)
+	hookFamilyWriteCwd       = "/repo"
+)
+
+// hookBodyJSON builds one harness PostToolUse payload (RM-273's own
+// envelope), with agent_id and cwd set explicitly rather than
+// recordbody_test.go's own fmtHookBody, whose envelope hardcodes both.
+func hookBodyJSON(toolUseID, toolName, agentID, cwd, input, response string) []byte {
+	return []byte(fmt.Sprintf(`{
+		"session_id": "sess-hook",
+		"transcript_path": "/tmp/transcript.jsonl",
+		"cwd": %s,
+		"scratchpad_dir": "/tmp/scratch",
+		"prompt_id": "prompt-1",
+		"permission_mode": "default",
+		"agent_id": %s,
+		"agent_type": "general-purpose",
+		"effort": "medium",
+		"hook_event_name": "PostToolUse",
+		"tool_use_id": %q,
+		"tool_name": %q,
+		"tool_input": %s,
+		"tool_response": %s,
+		"duration_ms": 500
+	}`, jsonTestString(cwd), jsonTestString(agentID), toolUseID, toolName, input, response))
+}
+
+// jsonTestString quotes s as a JSON string literal.
+func jsonTestString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+func (f *recordFixture) seedHookFamily(ctx context.Context, owner *ledger.Store) {
+	t := f.t
+	sessionSpiffe := "spiffe://innsegl.dev/agent/session/e19/" + f.hookSessionID
+	subagentSpiffe := "spiffe://innsegl.dev/agent/general-purpose/e19/" + f.hookSubagentID
+	signingSpiffe := "spiffe://innsegl.dev/agent/general-purpose/e19/" + f.signingID
+
+	envelope := func(runID, spiffe, eventType string) event.Fields {
+		return event.Fields{
+			event.FieldEventType: eventType,
+			event.FieldRunID:     runID,
+			event.FieldSpiffeID:  spiffe,
+			event.FieldSource:    event.SourceMCP,
+		}
+	}
+
+	// ---- the session ---------------------------------------------------------
+	sessReg := envelope(f.hookSessionID, sessionSpiffe, event.EventTypeRunRegistered)
+	sessReg[event.FieldAgentType] = "session"
+	sessReg[event.FieldTaskRef] = "e19"
+	sessReg[event.FieldRepo] = recordIntegrationRepo
+	sessReg[event.FieldBranch] = "main"
+	sessReg[event.FieldIdempotencyKey] = f.hookSessionID + "-register"
+	appendOrFail(ctx, t, owner, sessReg)
+
+	// Step 1: a Bash step whose output names the signing identity's own
+	// commit — record.go rule 1's own evidence for the Step a signing
+	// identity's folded-in commit is attributed to.
+	shortSHA := f.signingCommitSHA[:7]
+	signedLine := fmt.Sprintf("innsegl-commit: signed %s  rekor index %d", shortSHA, hookFamilyRekorIndex)
+	sessBody1 := marshalBody(t, gatewayBody{
+		Tool: "Bash", ToolUseID: "toolu_sess1",
+		Input:          json.RawMessage(`{"command":"scripts/innsegl-commit.sh"}`),
+		ResultObserved: true, Result: json.RawMessage(jsonTestString(signedLine)),
+	})
+	sessD1 := writeRunBody(t, f.logDir, f.hookSessionID, sessBody1)
+	sessTc1 := envelope(f.hookSessionID, sessionSpiffe, event.EventTypeToolCall)
+	sessTc1[event.FieldToolName] = "Bash"
+	sessTc1[event.FieldPayloadDigest] = sessD1
+	sessTc1[event.FieldIdempotencyKey] = f.hookSessionID + "-tc-1"
+	appendOrFail(ctx, t, owner, sessTc1)
+
+	// Step 2: the Agent step that spawns the hook subagent, hook-shaped,
+	// with tool_response.agentId — rule 2b's own evidence.
+	sessBody2 := hookBodyJSON("toolu_sess2", "Agent", "", "",
+		fmt.Sprintf(`{"description":%s,"prompt":%s,"model":%s}`,
+			jsonTestString(hookFamilyTitle), jsonTestString(hookFamilyPrompt), jsonTestString(hookFamilyModel)),
+		fmt.Sprintf(`{"agentId":%s,"content":"spawned"}`, jsonTestString(hookFamilySpawnedAgentID)))
+	sessD2 := writeRunBody(t, f.logDir, f.hookSessionID, sessBody2)
+	sessTc2 := envelope(f.hookSessionID, sessionSpiffe, event.EventTypeToolCall)
+	sessTc2[event.FieldToolName] = "Agent"
+	sessTc2[event.FieldPayloadDigest] = sessD2
+	sessTc2[event.FieldIdempotencyKey] = f.hookSessionID + "-tc-2"
+	appendOrFail(ctx, t, owner, sessTc2)
+
+	// ---- the hook subagent -----------------------------------------------------
+	subReg := envelope(f.hookSubagentID, subagentSpiffe, event.EventTypeRunRegistered)
+	subReg[event.FieldAgentType] = "general-purpose"
+	subReg[event.FieldTaskRef] = "e19"
+	subReg[event.FieldRepo] = recordIntegrationRepo
+	subReg[event.FieldBranch] = "main"
+	subReg[event.FieldParentRunID] = f.hookSessionID
+	subReg[event.FieldIdempotencyKey] = f.hookSubagentID + "-register"
+	appendOrFail(ctx, t, owner, subReg)
+
+	// Step 1: an ordinary hook Bash step, carrying the subagent's own agent_id.
+	subBody1 := hookBodyJSON("toolu_sub1", "Bash", hookFamilySpawnedAgentID, "",
+		`{"command":"true"}`, `{"stdout":"","stderr":"","interrupted":false}`)
+	subD1 := writeRunBody(t, f.logDir, f.hookSubagentID, subBody1)
+	subTc1 := envelope(f.hookSubagentID, subagentSpiffe, event.EventTypeToolCall)
+	subTc1[event.FieldToolName] = "Bash"
+	subTc1[event.FieldPayloadDigest] = subD1
+	subTc1[event.FieldIdempotencyKey] = f.hookSubagentID + "-tc-1"
+	appendOrFail(ctx, t, owner, subTc1)
+
+	// Step 2: a hook Write step — rules 6-7's own evidence. cwd and
+	// file_path agree so relativeWritePath strips the cwd prefix.
+	writeFilePath := hookFamilyWriteCwd + "/output.txt"
+	subBody2 := hookBodyJSON("toolu_sub2", "Write", hookFamilySpawnedAgentID, hookFamilyWriteCwd,
+		fmt.Sprintf(`{"file_path":%s,"content":"hi\n"}`, jsonTestString(writeFilePath)),
+		fmt.Sprintf(`{"type":"create","filePath":%s,"content":"hi\n"}`, jsonTestString(writeFilePath)))
+	subD2 := writeRunBody(t, f.logDir, f.hookSubagentID, subBody2)
+	subTc2 := envelope(f.hookSubagentID, subagentSpiffe, event.EventTypeToolCall)
+	subTc2[event.FieldToolName] = "Write"
+	subTc2[event.FieldPayloadDigest] = subD2
+	subTc2[event.FieldIdempotencyKey] = f.hookSubagentID + "-tc-2"
+	appendOrFail(ctx, t, owner, subTc2)
+
+	// Step 3: SubagentHandback — rule 3's own Reported.
+	subBody3 := hookBodyJSON("toolu_sub3", "SubagentHandback", hookFamilySpawnedAgentID, "",
+		fmt.Sprintf(`{"message":%s}`, jsonTestString(hookFamilyReport)),
+		`{"success":true}`)
+	subD3 := writeRunBody(t, f.logDir, f.hookSubagentID, subBody3)
+	subTc3 := envelope(f.hookSubagentID, subagentSpiffe, event.EventTypeToolCall)
+	subTc3[event.FieldToolName] = "SubagentHandback"
+	subTc3[event.FieldPayloadDigest] = subD3
+	subTc3[event.FieldIdempotencyKey] = f.hookSubagentID + "-tc-3"
+	appendOrFail(ctx, t, owner, subTc3)
+
+	// ---- the signing identity: zero tool_call events, one commit_recorded ----
+	signReg := envelope(f.signingID, signingSpiffe, event.EventTypeRunRegistered)
+	signReg[event.FieldAgentType] = "general-purpose"
+	signReg[event.FieldTaskRef] = "e19"
+	signReg[event.FieldRepo] = recordIntegrationRepo
+	signReg[event.FieldBranch] = "main"
+	signReg[event.FieldParentRunID] = f.hookSessionID
+	signReg[event.FieldIdempotencyKey] = f.signingID + "-register"
+	appendOrFail(ctx, t, owner, signReg)
+
+	signIntent := envelope(f.signingID, signingSpiffe, event.EventTypeCommitIntent)
+	signIntent[event.FieldRepo] = recordIntegrationRepo
+	signIntent[event.FieldTreeHash] = strings.Repeat("f", 40)
+	signIntent[event.FieldPatchID] = strings.Repeat("9", 40)
+	signIntent[event.FieldIdempotencyKey] = f.signingID + "-intent"
+	signIntentRec := appendOrFail(ctx, t, owner, signIntent)
+
+	signRecorded := envelope(f.signingID, signingSpiffe, event.EventTypeCommitRecorded)
+	signRecorded[event.FieldRepo] = recordIntegrationRepo
+	signRecorded[event.FieldTreeHash] = strings.Repeat("f", 40)
+	signRecorded[event.FieldPatchID] = strings.Repeat("9", 40)
+	signRecorded[event.FieldCommitSHA] = f.signingCommitSHA
+	signRecorded[event.FieldIntentEventID] = signIntentRec[event.FieldEventID]
+	signRecorded[event.FieldRekorEntryUUID] = strings.Repeat("9", 64)
+	signRecorded[event.FieldRekorLogIndex] = hookFamilyRekorIndex
+	signRecorded[event.FieldIdempotencyKey] = f.signingID + "-recorded"
+	appendOrFail(ctx, t, owner, signRecorded)
 }
 
 // ---------------------------------------------------------------------------
@@ -930,5 +1131,70 @@ func TestLandingOfNotLandedAndUnknown(t *testing.T) {
 	}, nil)
 	if got != "unknown" {
 		t.Errorf("landingOf(unserved repo) = %q, want unknown", got)
+	}
+}
+
+// TestLandingIsReadOncePerRecord — #443. Measured on 2026-10-01: a session
+// carrying the 61 commits its signing identities made ran two git commands
+// per commit to judge landing, adding about two seconds to its record. The
+// question, reachable from any ref, has one answer per repository per read,
+// so it is asked once however many commits the record holds.
+func TestLandingIsReadOncePerRecord(t *testing.T) {
+	f := newRecordFixture(t)
+	ctx := t.Context()
+	l := f.rs.newLanding()
+	before := reachabilityReads.Load()
+	landed := f.landedSHA
+	for i := 0; i < 5; i++ {
+		if got := l.of(ctx, recordIntegrationRepo, commitRow{RunID: f.parentID, CommitSHA: landed}, nil); got != "landed" {
+			t.Fatalf("landing of a commit on a ref = %q, want landed", got)
+		}
+		if got := l.of(ctx, recordIntegrationRepo, commitRow{RunID: f.parentID, CommitSHA: strings.Repeat("f", 40)}, nil); got != "not_landed" {
+			t.Fatalf("landing of a commit on no ref = %q, want not_landed", got)
+		}
+	}
+	if got := reachabilityReads.Load() - before; got != 1 {
+		t.Errorf("ten landing judgements read the repository %d times, want 1", got)
+	}
+}
+
+// TestBuildCommitsRunsGitAFixedNumberOfTimes — #443: landing and subject
+// are read per repository, not per commit, so a record's git cost does not
+// grow with its commits.
+func TestBuildCommitsRunsGitAFixedNumberOfTimes(t *testing.T) {
+	f := newRecordFixture(t)
+	rows := make([]commitRow, 0, 6)
+	for i := 0; i < 6; i++ {
+		rows = append(rows, commitRow{RunID: f.parentID, EventID: fmt.Sprintf("evt-%d", i), CommitSHA: f.landedSHA})
+	}
+	before := gitInvocations.Load()
+	got := f.rs.buildCommits(t.Context(), recordIntegrationRepo, f.parentID, rows, nil)
+	if n := gitInvocations.Load() - before; n > 2 {
+		t.Errorf("six commits ran git %d times, want at most 2", n)
+	}
+	for _, c := range got {
+		if c.Landed != "landed" || c.Subject == "" {
+			t.Errorf("commit = landed %q subject %q, want landed with its subject", c.Landed, c.Subject)
+		}
+	}
+}
+
+// TestWholeRunFilesOfARunWithNoSnapshotsRunsNoGit — #443. Measured on
+// 2026-10-01: a session with no workspace snapshots still built the set of
+// files its 61 commits carry, 0.7 s of git, before finding it had no file to
+// check against it.
+func TestWholeRunFilesOfARunWithNoSnapshotsRunsNoGit(t *testing.T) {
+	f := newRecordFixture(t)
+	rows := make([]commitRow, 0, 6)
+	for i := 0; i < 6; i++ {
+		rows = append(rows, commitRow{RunID: f.parentID, EventID: fmt.Sprintf("evt-%d", i), CommitSHA: f.landedSHA, TreeHash: f.landedTree})
+	}
+	before := gitInvocations.Load()
+	files, err := f.rs.buildWholeRunFiles(t.Context(), recordIntegrationRepo, "", "", []RecordStep{{N: 1}}, rows)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("files = %v, err %v; want none", files, err)
+	}
+	if n := gitInvocations.Load() - before; n != 0 {
+		t.Errorf("a run with no snapshots ran git %d times for its files, want 0", n)
 	}
 }

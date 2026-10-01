@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -131,6 +132,135 @@ func TestRPG004ResolveSpawnsFIFOAmongIdenticalPrompts(t *testing.T) {
 	matches := rs.resolveSpawns(dir, "run-parent", steps, sorted)
 	if len(matches) != 1 || matches[0].ChildRunID != "run-child-1" {
 		t.Fatalf("matches = %+v, want the OLDEST child (run-child-1) matched first", matches)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #443 (RM-278) rule 2b: hook spawn linking by agent id.
+// ---------------------------------------------------------------------------
+
+// writeHookAgentStepBody writes a hook-shaped Agent-tool step body (the
+// parent's own), with a description/prompt/model input and a
+// tool_response.agentId.
+func writeHookAgentStepBody(t *testing.T, dir, runID, toolUseID, description, prompt, model, spawnedAgentID string) string {
+	t.Helper()
+	input := fmt.Sprintf(`{"description":%s,"prompt":%s,"model":%s}`, jsonString(description), jsonString(prompt), jsonString(model))
+	response := fmt.Sprintf(`{"agentId":%s,"content":"spawned"}`, jsonString(spawnedAgentID))
+	raw := []byte(fmtHookBody(t, toolUseID, "Agent", input, response))
+	digest := digestOf(raw)
+	writeAgentStepBodyRaw(t, dir, runID, digest, raw)
+	return digest
+}
+
+// writeHookChildBody writes one hook-shaped body for a child run, carrying
+// the envelope's own top-level agent_id — childAgentID's own evidence.
+func writeHookChildBody(t *testing.T, dir, runID, toolUseID, agentID string) {
+	t.Helper()
+	raw := []byte(fmtHookBody(t, toolUseID, "Bash", `{"command":"true"}`, `{"stdout":"","stderr":"","interrupted":false}`))
+	// fmtHookBody's own envelope hardcodes agent_id "agent-1"; a scenario
+	// that needs a DIFFERENT agent id builds its own envelope instead of
+	// reusing that helper.
+	if agentID != "agent-1" {
+		raw = []byte(fmt.Sprintf(`{"hook_event_name":"PostToolUse","tool_use_id":%s,"tool_name":"Bash",`+
+			`"tool_input":{"command":"true"},"tool_response":{"stdout":"","stderr":"","interrupted":false},"agent_id":%s}`,
+			jsonString(toolUseID), jsonString(agentID)))
+	}
+	digest := digestOf(raw)
+	writeAgentStepBodyRaw(t, dir, runID, digest, raw)
+}
+
+func TestRM278ResolveHookSpawnsMatchesByAgentID(t *testing.T) {
+	dir := t.TempDir()
+	digest := writeHookAgentStepBody(t, dir, "run-parent", "toolu_agent1",
+		"do the subtask", "the spawn prompt", "sonnet", "agent-child-1")
+	writeHookChildBody(t, dir, "run-child", "toolu_child1", "agent-child-1")
+
+	rs := &recordServer{}
+	steps := []toolCallStepRef{{N: 2, EventID: "evt-2", Tool: "Agent", Digest: digest}}
+	children := []familyNode{{RunID: "run-child", RegisteredAt: time.Now()}}
+
+	matches := rs.resolveHookSpawns(dir, "run-parent", steps, children)
+	if len(matches) != 1 {
+		t.Fatalf("got %d matches, want 1: %+v", len(matches), matches)
+	}
+	m := matches[0]
+	if m.ChildRunID != "run-child" || m.StepN != 2 || m.LinkedBy != "agent_id" {
+		t.Errorf("match = %+v, want ChildRunID=run-child StepN=2 LinkedBy=agent_id", m)
+	}
+	if m.Title != "do the subtask" || m.Prompt != "the spawn prompt" || m.Model != "sonnet" {
+		t.Errorf("match = %+v, want the Agent step's own description/prompt/model", m)
+	}
+}
+
+func TestRM278ResolveHookSpawnsNoMatchWithoutAnAgentIDAgreement(t *testing.T) {
+	dir := t.TempDir()
+	digest := writeHookAgentStepBody(t, dir, "run-parent", "toolu_agent1",
+		"do the subtask", "the spawn prompt", "sonnet", "agent-child-1")
+	writeHookChildBody(t, dir, "run-child", "toolu_child1", "agent-SOMETHING-ELSE")
+
+	rs := &recordServer{}
+	steps := []toolCallStepRef{{N: 1, EventID: "evt-1", Tool: "Agent", Digest: digest}}
+	children := []familyNode{{RunID: "run-child", RegisteredAt: time.Now()}}
+
+	matches := rs.resolveHookSpawns(dir, "run-parent", steps, children)
+	if len(matches) != 0 {
+		t.Fatalf("got %d matches, want 0 — the agent ids disagree: %+v", len(matches), matches)
+	}
+}
+
+func TestChildAgentIDReadsOnlyOneBody(t *testing.T) {
+	dir := t.TempDir()
+	writeHookChildBody(t, dir, "run-child", "toolu_1", "agent-42")
+
+	id, ok := childAgentID(dir, "run-child")
+	if !ok || id != "agent-42" {
+		t.Errorf("childAgentID = %q, %v; want agent-42, true", id, ok)
+	}
+
+	if _, ok := childAgentID(dir, "run-does-not-exist"); ok {
+		t.Error("childAgentID should answer false for a run with no retained bodies")
+	}
+}
+
+func TestResolveChildLinksCombinesBriefAndAgentID(t *testing.T) {
+	dir := t.TempDir()
+
+	// One child linked by the exact brief match (rule 2a).
+	briefDigest := digestOf(marshalBody(t, gatewayBody{
+		Tool: "Agent", Input: json.RawMessage(`{"description":"brief child","prompt":"the brief prompt","model":"opus"}`),
+	}))
+	writeAgentStepBodyRaw(t, dir, "run-parent", briefDigest,
+		marshalBody(t, gatewayBody{Tool: "Agent", Input: json.RawMessage(`{"description":"brief child","prompt":"the brief prompt","model":"opus"}`)}))
+	writeBriefBody(t, dir, "run-child-brief", "the brief prompt")
+
+	// One child linked by agent id (rule 2b).
+	hookDigest := writeHookAgentStepBody(t, dir, "run-parent", "toolu_agent2",
+		"hook child", "the hook prompt", "sonnet", "agent-hook-1")
+	writeHookChildBody(t, dir, "run-child-hook", "toolu_hc1", "agent-hook-1")
+
+	rs := &recordServer{}
+	steps := []toolCallStepRef{
+		{N: 1, EventID: "evt-1", Tool: "Agent", Digest: briefDigest},
+		{N: 2, EventID: "evt-2", Tool: "Agent", Digest: hookDigest},
+	}
+	children := []familyNode{
+		{RunID: "run-child-brief", RegisteredAt: time.Now()},
+		{RunID: "run-child-hook", RegisteredAt: time.Now()},
+		{RunID: "run-child-unmatched", RegisteredAt: time.Now()},
+	}
+
+	links := rs.resolveChildLinks(dir, "run-parent", steps, children)
+	if len(links) != 2 {
+		t.Fatalf("got %d links, want 2: %+v", len(links), links)
+	}
+	if m := links["run-child-brief"]; m.LinkedBy != "brief" || m.StepN != 1 || m.Title != "brief child" {
+		t.Errorf("run-child-brief link = %+v", m)
+	}
+	if m := links["run-child-hook"]; m.LinkedBy != "agent_id" || m.StepN != 2 || m.Title != "hook child" {
+		t.Errorf("run-child-hook link = %+v", m)
+	}
+	if _, ok := links["run-child-unmatched"]; ok {
+		t.Error("run-child-unmatched should not be linked by either rule")
 	}
 }
 
