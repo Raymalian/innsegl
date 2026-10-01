@@ -309,6 +309,16 @@ type gatewayOptions struct {
 
 // validate reports the first setting that makes this configuration
 // unusable, naming the flag and its environment variable.
+// exposureEnv answers checkGatewayExposure from the environment for the bind
+// address and from the parsed option for client authentication, so the flag
+// counts the same as $INNSEGL_GATEWAY_CLIENT_AUTH.
+func (o gatewayOptions) exposureEnv(key string) string {
+	if key == envGatewayClientAuth {
+		return o.clientAuth
+	}
+	return os.Getenv(key)
+}
+
 func (o gatewayOptions) validate() string {
 	switch {
 	case o.listen == "":
@@ -330,6 +340,11 @@ func (o gatewayOptions) validate() string {
 		return "-ca-key-dir (or $" + envGatewayCAKeyDir + ") is required (RM-246)"
 	case o.caCertDir == "":
 		return "-ca-cert-dir (or $" + envGatewayCACertDir + ") is required (RM-246)"
+	case checkGatewayExposure(o.exposureEnv) != nil:
+		// The deployment publishes this gateway beyond loopback ($INNSEGL_BIND)
+		// and it would not authenticate its clients (ADR-0063, ADR-0030 as
+		// amended): refuse to start rather than serve the network unchecked.
+		return checkGatewayExposure(o.exposureEnv).Error()
 	case o.clientAuth != "" && o.clientAuth != clientAuthSPIFFE:
 		return fmt.Sprintf("-client-auth (or $%s) %q: the only value is %q (hosted mode); unset is single-host mode",
 			envGatewayClientAuth, o.clientAuth, clientAuthSPIFFE)

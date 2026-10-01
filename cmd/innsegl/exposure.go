@@ -8,11 +8,10 @@ import (
 	"strings"
 )
 
-const (
-	envBind             = "INNSEGL_BIND"
-	envGatewayClientAut = "INNSEGL_GATEWAY_CLIENT_AUTH"
-	clientAuthSPIFFE    = "spiffe"
-)
+// envBind is the address the deployment publishes the gateway on
+// (deploy/compose: ${INNSEGL_BIND:-127.0.0.1}). envGatewayClientAuth and
+// clientAuthSPIFFE are gateway.go's.
+const envBind = "INNSEGL_BIND"
 
 // checkGatewayExposure refuses a gateway that the deployment publishes beyond
 // loopback while the gateway does not authenticate its clients. $INNSEGL_BIND
@@ -23,13 +22,13 @@ func checkGatewayExposure(getenv func(string) string) error {
 	if bind == "" || bindIsLoopback(bind) {
 		return nil
 	}
-	if strings.TrimSpace(getenv(envGatewayClientAut)) == clientAuthSPIFFE {
+	if strings.TrimSpace(getenv(envGatewayClientAuth)) == clientAuthSPIFFE {
 		return nil
 	}
 	return fmt.Errorf("the gateway would be reachable from the network without client authentication: "+
 		"%s=%q is not a loopback address and %s is not %q; set %s=%s or unset %s",
-		envBind, bind, envGatewayClientAut, clientAuthSPIFFE,
-		envGatewayClientAut, clientAuthSPIFFE, envBind)
+		envBind, bind, envGatewayClientAuth, clientAuthSPIFFE,
+		envGatewayClientAuth, clientAuthSPIFFE, envBind)
 }
 
 // bindIsLoopback reports whether a bind address is 127.0.0.0/8, ::1 or
