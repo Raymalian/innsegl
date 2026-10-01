@@ -4,13 +4,13 @@ package mcp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/workspace"
 )
 
 // Resolving what a caller would otherwise have to guess.
@@ -43,7 +43,7 @@ import (
 //
 // A refusal and not an empty answer: a caller handed a blank repository will
 // pass the blank on, and the first place it stops being blank is a ledger row.
-var ErrNoOrigin = errors.New("the working tree has no origin remote")
+var ErrNoOrigin = workspace.ErrNoOrigin
 
 // repoIDFromWorktree reads doc 02 §5's `host/org/name` out of a working tree.
 //
@@ -59,46 +59,7 @@ var ErrNoOrigin = errors.New("the working tree has no origin remote")
 // Every URL form GitHub hands out reduces to the same identifier: the scheme
 // goes, the `git@host:` separator becomes a slash, and `.git` is dropped.
 func repoIDFromWorktree(ctx context.Context, worktree string) (string, error) {
-	// G702: an argument list, never shell text, so nothing in worktree is
-	// interpreted; worktree is the workspace's join of a validated repository
-	// id, or a harness-stated directory this very call exists to check, and
-	// the command only reads the origin URL.
-	cmd := exec.CommandContext(ctx, "git", "-C", worktree, "remote", "get-url", "origin") //nolint:gosec // G702, see above
-	raw, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", ErrNoOrigin, worktree)
-	}
-	remote := strings.TrimSpace(string(raw))
-	if remote == "" {
-		return "", fmt.Errorf("%w: %s", ErrNoOrigin, worktree)
-	}
-
-	id := remote
-	for _, prefix := range []string{"https://", "http://", "ssh://", "git://"} {
-		id = strings.TrimPrefix(id, prefix)
-	}
-	id = strings.TrimPrefix(id, "git@")
-	// `git@github.com:org/name` -- the colon is the host separator, and only
-	// the first one is: a path may not contain another.
-	if host, path, found := strings.Cut(id, ":"); found && !strings.Contains(host, "/") {
-		id = host + "/" + path
-	}
-	id = strings.TrimSuffix(id, ".git")
-	id = strings.TrimSuffix(id, "/")
-
-	host, rest, found := strings.Cut(id, "/")
-	if !found {
-		return "", fmt.Errorf("%w: %q is not host/org/name", event.ErrInvalidRepo, remote)
-	}
-	id = strings.ToLower(host) + "/" + rest
-
-	// Validated here rather than by the caller. A value this function returns
-	// is one the ledger will accept, or it is an error -- there is no third
-	// answer for the caller to interpret.
-	if err := event.ValidateRepo(id); err != nil {
-		return "", err
-	}
-	return id, nil
+	return workspace.RepoID(ctx, worktree)
 }
 
 // stagedTreeOf returns the tree the INDEX holds.
@@ -196,28 +157,7 @@ func fillFromWorktree(
 // writing, and the refusal says so rather than handing on a path that would
 // fail later and further away.
 func relativeWorktree(root, worktree string) (string, error) {
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		resolvedRoot = filepath.Clean(root)
-	}
-	resolvedTree, err := filepath.EvalSymlinks(worktree)
-	if err != nil {
-		resolvedTree = filepath.Clean(worktree)
-	}
-
-	rel, err := filepath.Rel(resolvedRoot, resolvedTree)
-	if err != nil {
-		return "", fmt.Errorf("%s is not under the repository at %s: %w",
-			worktree, root, err)
-	}
-	if rel == "." {
-		return "", nil
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("%s is outside the repository at %s; a worktree "+
-			"argument names one of the repository's own trees", worktree, root)
-	}
-	return rel, nil
+	return workspace.Relative(root, worktree)
 }
 
 // mainWorktreeOf returns the repository a working tree belongs to.
@@ -226,15 +166,5 @@ func relativeWorktree(root, worktree string) (string, error) {
 // one, which is what makes a linked worktree resolvable to the repository whose
 // identifier the ledger records.
 func mainWorktreeOf(ctx context.Context, worktree string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", worktree, "worktree", "list", "--porcelain")
-	raw, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("%s is not a git working tree: %w", worktree, err)
-	}
-	for line := range strings.SplitSeq(string(raw), "\n") {
-		if rest, ok := strings.CutPrefix(line, "worktree "); ok {
-			return strings.TrimSpace(rest), nil
-		}
-	}
-	return "", fmt.Errorf("%s reports no worktree", worktree)
+	return workspace.MainWorktree(ctx, worktree)
 }

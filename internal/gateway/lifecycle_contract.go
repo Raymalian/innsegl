@@ -40,6 +40,11 @@ type RequestFacts struct {
 	// request body: the identity guard sets it. Empty when unknown.
 	WorkingDirectory string
 
+	// Stated is the whole statement the session hook made for this agent: the
+	// directory above and, when the client derived it, the workspace. Never
+	// read from the request body: the identity guard sets it.
+	Stated StatedWorkspace
+
 	// ToolResultIDs are the tool_use ids whose results this request carries.
 	ToolResultIDs []string
 }

@@ -37,3 +37,24 @@ func (MCPWorkspaceResolver) Resolve(ctx context.Context, workingDirectory string
 	}
 	return Workspace{Repo: ws.Repo, Branch: ws.Branch, Task: ws.Task}, nil
 }
+
+// StatedWorkspaceResolver turns a session's statement into a Workspace. A
+// statement that carries the client's own derivation is used as stated, with
+// no filesystem access (the shape once the core cannot read a client's tree);
+// one that carries only a directory goes to Fallback, the single-host shape.
+type StatedWorkspaceResolver struct {
+	// Fallback resolves a directory-only statement.
+	Fallback WorkspaceResolver
+}
+
+// ResolveStated refuses with errDirectoryNotStated when the statement names
+// neither a repository nor a directory.
+func (r StatedWorkspaceResolver) ResolveStated(ctx context.Context, st StatedWorkspace) (Workspace, error) {
+	if st.HasRepo() {
+		return st.Workspace(), nil
+	}
+	if st.Cwd == "" {
+		return Workspace{}, errDirectoryNotStated
+	}
+	return r.Fallback.Resolve(ctx, st.Cwd)
+}

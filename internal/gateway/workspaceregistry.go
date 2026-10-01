@@ -39,10 +39,28 @@ type SessionWorkspaces struct {
 	sessions map[string]*sessionWorkspace
 }
 
-// sessionWorkspace is one session's newest directory, and each agent's own.
+// StatedWorkspace is what a client states about where a session works: its
+// working directory and, when the client could derive it, the repository,
+// worktree, branch, task and head (internal/workspace). The repository fields
+// are all empty for a client that stated only a directory.
+type StatedWorkspace struct {
+	Cwd                                string
+	Repo, Worktree, Branch, Task, Head string
+}
+
+// HasRepo reports whether the client derived the workspace itself, so the
+// gateway needs no filesystem to know it.
+func (s StatedWorkspace) HasRepo() bool { return s.Repo != "" }
+
+// Workspace is the part the run is registered from.
+func (s StatedWorkspace) Workspace() Workspace {
+	return Workspace{Repo: s.Repo, Branch: s.Branch, Task: s.Task}
+}
+
+// sessionWorkspace is one session's newest statement, and each agent's own.
 type sessionWorkspace struct {
-	latest string
-	agents map[string]string
+	latest StatedWorkspace
+	agents map[string]StatedWorkspace
 }
 
 // DefaultMaxSessionWorkspaces bounds the table, the same reasoning
@@ -66,7 +84,14 @@ func NewSessionWorkspaces(maxSessions int) *SessionWorkspaces {
 // mainAgentID, is the session's main agent. Either way dir becomes the
 // session's newest directory. An empty session id or directory is ignored.
 func (s *SessionWorkspaces) Record(sessionID, agentID, dir string) {
-	if sessionID == "" || dir == "" {
+	s.RecordStated(sessionID, agentID, StatedWorkspace{Cwd: dir})
+}
+
+// RecordStated is Record for a statement that may carry the derived
+// workspace. A statement replaces the agent's previous one whole: a newer
+// directory-only statement does not keep an older repository.
+func (s *SessionWorkspaces) RecordStated(sessionID, agentID string, st StatedWorkspace) {
+	if sessionID == "" || st.Cwd == "" {
 		return
 	}
 	s.mu.Lock()
@@ -77,11 +102,11 @@ func (s *SessionWorkspaces) Record(sessionID, agentID, dir string) {
 			delete(s.sessions, s.order[0])
 			s.order = s.order[1:]
 		}
-		w = &sessionWorkspace{agents: make(map[string]string)}
+		w = &sessionWorkspace{agents: make(map[string]StatedWorkspace)}
 		s.sessions[sessionID] = w
 		s.order = append(s.order, sessionID)
 	}
-	w.latest = dir
+	w.latest = st
 	if agentID == "" || agentID == mainAgentID {
 		return
 	}
@@ -90,21 +115,27 @@ func (s *SessionWorkspaces) Record(sessionID, agentID, dir string) {
 		// which is where it started anyway.
 		return
 	}
-	w.agents[agentID] = dir
+	w.agents[agentID] = st
 }
 
 // Lookup answers agentID's directory in sessionID: the agent's own when the
 // hook named it, otherwise the session's newest. A subagent starts in its
 // parent's directory, so that fallback is the directory it is in.
 func (s *SessionWorkspaces) Lookup(sessionID, agentID string) (string, bool) {
+	st, ok := s.LookupStated(sessionID, agentID)
+	return st.Cwd, ok
+}
+
+// LookupStated is Lookup for the whole statement.
+func (s *SessionWorkspaces) LookupStated(sessionID, agentID string) (StatedWorkspace, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w, ok := s.sessions[sessionID]
 	if !ok {
-		return "", false
+		return StatedWorkspace{}, false
 	}
-	if dir, ok := w.agents[agentID]; ok {
-		return dir, true
+	if st, ok := w.agents[agentID]; ok {
+		return st, true
 	}
 	return w.latest, true
 }

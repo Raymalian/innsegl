@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/commitpath"
+	"innsegl.dev/innsegl/internal/workspace"
 )
 
 // sessionHookTimeout bounds one statement. The hook runs before every user
@@ -84,6 +85,8 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 	post func(url string, body []byte) error,
 ) int {
 	_ = stdout // never written: a hook's stdout can be read as instructions
+	ctx, cancel := context.WithTimeout(context.Background(), sessionHookTimeout)
+	defer cancel()
 	var in struct {
 		SessionID     string `json:"session_id"`
 		AgentID       string `json:"agent_id"`
@@ -98,7 +101,20 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 		fmt.Fprintln(stderr, "innsegl hook session: the hook input names no session_id or cwd")
 		return exitOK
 	}
-	body, err := json.Marshal(map[string]string{"session_id": in.SessionID, "agent_id": in.AgentID, "cwd": in.Cwd})
+	statement := map[string]string{"session_id": in.SessionID, "agent_id": in.AgentID, "cwd": in.Cwd}
+	// The client derives the workspace itself (internal/workspace) and states
+	// it; the core binds it to the caller's scope. A directory that is not a
+	// working tree with a usable origin states the directory alone: the hook
+	// never fails on one, and the gateway resolves a bare directory the
+	// single-host way.
+	if derived, derr := workspace.Derive(ctx, in.Cwd); derr == nil {
+		statement["repo"] = derived.Repo
+		statement["worktree"] = derived.Worktree
+		statement["branch"] = derived.Branch
+		statement["task"] = derived.Task
+		statement["head"] = derived.Head
+	}
+	body, err := json.Marshal(statement)
 	if err != nil {
 		return exitOK
 	}
