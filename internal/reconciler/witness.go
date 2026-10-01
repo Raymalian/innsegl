@@ -161,6 +161,11 @@ type WitnessReport struct {
 	// (including every tool_call recorded before #392 shipped). Never a
 	// finding.
 	Unchecked int
+	// RunsWithoutTelemetry is how many runs had Checked calls and not one
+	// of them matched by a telemetry record: a harness that exports no
+	// telemetry. Their calls are not judged, because an absence proves
+	// nothing where nothing was ever sent (#434). Reported, never appended.
+	RunsWithoutTelemetry int
 	// Matched is how many Checked calls have a corroborating telemetry
 	// record on disk, regardless of window or TelemetryActive — a match is
 	// a match.
@@ -431,11 +436,25 @@ func (r *Reconciler) checkWitness(ctx context.Context, view *ledgerView) Witness
 	relayed := make(map[string]struct{}, len(view.witness.calls))
 	window := cfg.window()
 
+	// First pass: read each call's tool_use_id and whether telemetry
+	// corroborates it, and find, per run, when its own harness's telemetry
+	// first arrived. Telemetry is a property of the harness that ran a
+	// session, not of this machine (#434): a run none of whose calls was
+	// ever matched exported nothing, and its absences prove nothing.
+	type readCall struct {
+		call      witnessCall
+		toolUseID string
+		tool      string
+		matched   bool
+	}
+	var read []readCall
+	runSince := map[string]time.Time{}
+	runSeen := map[string]bool{}
 	for _, call := range view.witness.calls {
 		// A call relayed more than a window before telemetry began arriving
-		// can be neither matched nor missed: it is not counted, and its body
-		// is not read. The window's slack keeps a call whose telemetry was
-		// the first to arrive.
+		// anywhere can be neither matched nor missed: it is not counted, and
+		// its body is not read. The window's slack keeps a call whose
+		// telemetry was the first to arrive.
 		if active && call.at.Before(since.Add(-window)) {
 			continue
 		}
@@ -452,9 +471,28 @@ func (r *Reconciler) checkWitness(ctx context.Context, view *ledgerView) Witness
 		}
 		report.Checked++
 		relayed[body.ToolUseID] = struct{}{}
-
+		runSeen[call.runID] = true
+		rc := readCall{call: call, toolUseID: body.ToolUseID, tool: body.Tool}
 		if telemetryExists(cfg.LogDir, body.ToolUseID) {
+			rc.matched = true
 			report.Matched++
+			if first, ok := runSince[call.runID]; !ok || call.at.Before(first) {
+				runSince[call.runID] = call.at
+			}
+		}
+		read = append(read, rc)
+	}
+	for runID := range runSeen {
+		if _, ok := runSince[runID]; !ok {
+			report.RunsWithoutTelemetry++
+		}
+	}
+
+	// Second pass: judge only calls of runs whose harness is proven to
+	// export telemetry, made at or after the first call it corroborated.
+	for _, rc := range read {
+		call := rc.call
+		if rc.matched {
 			continue
 		}
 		if _, already := view.drift.subjects[call.eventID]; already {
@@ -462,10 +500,11 @@ func (r *Reconciler) checkWitness(ctx context.Context, view *ledgerView) Witness
 			// contributes to relayed above; not re-judged.
 			continue
 		}
-		if !active || call.at.Before(since) {
-			// Telemetry was not yet proven active when this call was
-			// relayed (or has never been active at all): an absence here
-			// proves nothing, and this call is neither Pending nor Missing.
+		first, proven := runSince[call.runID]
+		if !proven || call.at.Before(first) {
+			// This run's telemetry was not yet proven when this call was
+			// relayed (or never was): an absence here proves nothing, and
+			// this call is neither Pending nor Missing.
 			continue
 		}
 		if now.Sub(call.at) < window {
@@ -477,16 +516,16 @@ func (r *Reconciler) checkWitness(ctx context.Context, view *ledgerView) Witness
 		finding := WitnessFinding{
 			Kind:            WitnessMissingTelemetry,
 			ToolCallEventID: call.eventID,
-			ToolUseID:       body.ToolUseID,
+			ToolUseID:       rc.toolUseID,
 			RunID:           call.runID,
 			SPIFFEID:        call.spiffeID,
-			ToolName:        body.Tool,
+			ToolName:        rc.tool,
 			Reason:          reasonNoTelemetryWitness,
 			Detail: fmt.Sprintf(
 				"tool_call %s (tool_use_id %s) was relayed by the gateway %s ago, past this "+
 					"pass's %s window, and no telemetry record for it exists; the harness's own "+
 					"OTLP export never corroborated this call",
-				call.eventID, body.ToolUseID, now.Sub(call.at).Truncate(time.Second), window),
+				call.eventID, rc.toolUseID, now.Sub(call.at).Truncate(time.Second), window),
 		}
 		r.appendWitnessAlert(ctx, &report, finding)
 	}

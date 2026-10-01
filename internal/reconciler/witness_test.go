@@ -304,3 +304,40 @@ func TestWitnessSkipsToolCallsFromBeforeTelemetryWasActive(t *testing.T) {
 	}
 	_ = old
 }
+
+// TestWitnessJudgesARunOnlyOnceItsOwnTelemetryArrived — #434. Telemetry is a
+// property of the harness that ran a session, not of the machine. Measured on
+// 2026-10-01: one session exported telemetry, and from then on every tool
+// call of every other session, none of which exported any, was appended as
+// ledger_drift_detected (2076 of them in a day). A run whose own calls have
+// never been matched by a telemetry record proves nothing by an absence.
+func TestWitnessJudgesARunOnlyOnceItsOwnTelemetryArrived(t *testing.T) {
+	const withTel, without = "run-witness-tel", "run-witness-notel"
+	c := &clock{at: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	m := newMemLedger(c.now)
+	seedRun(t, m, withTel)
+	seedRun(t, m, without)
+	logDir := t.TempDir()
+
+	witnessPlantToolCall(t, m, logDir, withTel, "toolu_witness_tel_a")
+	witnessPlantTelemetry(t, logDir, "toolu_witness_tel_a", true, c.at)
+	witnessPlantToolCall(t, m, logDir, without, "toolu_witness_notel_a")
+	c.at = c.at.Add(time.Minute)
+	// The telemetry run then has a call its harness never reported: that one
+	// is drift, and must still be found.
+	witnessPlantToolCall(t, m, logDir, withTel, "toolu_witness_tel_b")
+	c.at = c.at.Add(3 * witnessTestWindow)
+
+	report := runWitnessPass(t, m, logDir, c, witnessTestWindow)
+	if report.Missing != 1 {
+		t.Fatalf("Witness = %+v, want exactly one missing call: the telemetry run's own", report)
+	}
+	for _, f := range report.Findings {
+		if f.RunID == without {
+			t.Errorf("a run that never exported telemetry was judged: %+v", f)
+		}
+	}
+	if report.RunsWithoutTelemetry != 1 {
+		t.Errorf("RunsWithoutTelemetry = %d, want 1 (reported, never appended)", report.RunsWithoutTelemetry)
+	}
+}
