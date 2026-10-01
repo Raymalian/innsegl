@@ -706,3 +706,41 @@ func (s *Store) InScope(ctx context.Context, installationID, repo string) (bool,
 	}
 	return ok, nil
 }
+
+// AccountSummary is one organisation as `innsegl accounts list` shows it:
+// its live owners' user ids and its live repository grants.
+type AccountSummary struct {
+	ID       string
+	Name     string
+	Operator bool
+	Owners   []string
+	Repos    []string
+}
+
+// ListAccounts answers every organisation, oldest first, with its live
+// owners and live repository grants.
+func (s *Store) ListAccounts(ctx context.Context) ([]AccountSummary, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT a.account_id, a.name, a.operator,
+		       coalesce((SELECT array_agg(m.user_id ORDER BY m.since)
+		                   FROM innsegl_auth.memberships m
+		                  WHERE m.account_id = a.account_id AND m.role = 'owner' AND m.until IS NULL), '{}'),
+		       coalesce((SELECT array_agg(g.repo ORDER BY g.repo)
+		                   FROM innsegl_auth.repo_grants g
+		                  WHERE g.account_id = a.account_id AND g.until IS NULL), '{}')
+		  FROM innsegl_auth.accounts a
+		 ORDER BY a.created_at, a.account_id`)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: list organisations: %w", err)
+	}
+	defer rows.Close()
+	var out []AccountSummary
+	for rows.Next() {
+		var a AccountSummary
+		if err := rows.Scan(&a.ID, &a.Name, &a.Operator, &a.Owners, &a.Repos); err != nil {
+			return nil, fmt.Errorf("accounts: list organisations: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}

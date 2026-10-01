@@ -435,3 +435,32 @@ func TestAccountsStoreErrorPaths(t *testing.T) {
 		t.Error("closed store answered")
 	}
 }
+
+// ListAccounts answers every organisation with its owners and live repository
+// grants, so an operator on the core can find the ids `enrol-token` needs.
+func TestListAccountsNamesOwnersAndGrants(t *testing.T) {
+	_, s, a := setup(t)
+	ctx := tctx(t)
+	if err := s.GrantRepo(ctx, a.ID, "github.com/acme/one", "u-1"); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListAccounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *AccountSummary
+	for i := range list {
+		if list[i].ID == a.ID {
+			got = &list[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("ListAccounts = %+v, missing %s", list, a.ID)
+	}
+	if got.Name != a.Name || len(got.Repos) != 1 || got.Repos[0] != "github.com/acme/one" {
+		t.Errorf("summary = %+v", got)
+	}
+	if len(got.Owners) == 0 {
+		t.Errorf("summary names no owner: %+v", got)
+	}
+}
