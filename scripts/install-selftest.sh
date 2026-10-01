@@ -145,6 +145,8 @@ EOF2
   printf '%s' "$path"
 }
 STUB_START="$(make_stub start)"
+# Every case below has a gateway that answers, except ENF-007, which has none.
+export INNSEGL_INSTALL_GATEWAY_PROBE_CMD=true
 STUB_SIGNER="$(make_stub signer)"
 STUB_LINK="$(make_stub link)"
 
@@ -378,6 +380,27 @@ if [ "$rc7" -ne 0 ] \
   ok "ENF-001 a non-writable target prints the admin command and changes nothing"
 else
   bad "ENF-001 a non-writable target did not refuse cleanly" "exit=$rc7"$'\n'"$out7"
+fi
+
+# --- ENF-007: no managed settings while the gateway does not answer --------
+# The settings send every Claude Code request on this machine to the gateway.
+# Measured on 2026-10-01: a plain install brought the stack up without it
+# (the compose default named no gateway), so writing them would have broken
+# every session. The install must stop first.
+home7g="$WORK/home-no-gateway"; mkdir -p "$home7g"
+ms7g="$home7g/managed-settings.json"
+out7g="$(HOME="$home7g" PATH="$TOOLBIN" \
+  INNSEGL_INSTALL_START_CMD="$STUB_START" \
+  INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
+  INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+  INNSEGL_BIN_PATH="$STUB_BIN" \
+  INNSEGL_INSTALL_GATEWAY_PROBE_CMD=false INNSEGL_INSTALL_GATEWAY_TRIES=1 \
+  "$BASH_BIN" "$INSTALL" --managed-settings "$ms7g" 2>&1)"
+rc7g=$?
+if [ "$rc7g" -ne 0 ] && [ ! -e "$ms7g" ] && printf '%s' "$out7g" | grep -q 'gateway'; then
+  ok "ENF-007 a gateway that does not answer stops the install before the settings are written"
+else
+  bad "ENF-007 the install wrote settings, or passed, with no gateway" "exit=$rc7g file=$( [ -e "$ms7g" ] && echo present || echo absent )"$'\n'"$out7g"
 fi
 
 # --- EGR-001: --egress-control locks the sandbox to a managed allowlist ----

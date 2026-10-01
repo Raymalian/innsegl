@@ -433,7 +433,7 @@ INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
 # registration, so there is no run for the reaper to get wrong.
 #
 # It runs inside the MCP, with the sealer and the reconciler: compose's own
-# default for INNSEGL_MCP_ALSO is seal,reconcile,reap (ADR-0056), and empty
+# default for INNSEGL_MCP_ALSO is seal,reconcile,reap,gateway (ADR-0056, ADR-0060), and empty
 # here leaves that default alone. Set it only for the separate topology.
 INNSEGL_MCP_ALSO ?=
 

@@ -374,7 +374,7 @@ reconciler were still two containers of their own:
 | | containers | why they are there |
 |---|---|---|
 | **separate loops** | **14** | `--profile separate` with `INNSEGL_MCP_ALSO=reap` runs the sealer and the reconciler as their own containers. For doc 05 §2's replicated MCP, where one process per replica would run a sealer per replica. The reconciler's SPIRE pass is off in this shape (ADR-0056). |
-| the full stack | 12 | the default: the sealer and the reconciler run inside the MCP (`INNSEGL_MCP_ALSO` defaults to `seal,reconcile,reap`) |
+| the full stack | 12 | the default: the sealer and the reconciler run inside the MCP (`INNSEGL_MCP_ALSO` defaults to `seal,reconcile,reap,gateway`) |
 | **without the UI** | **10** | `innsegl-dashboard` and `innsegl-api` serve the web view. Signing and verifying never touch them. |
 | **public Rekor** | **~5** | ADR-0042. `rekor`, `rekor-redis` and the three Trillian containers exist only because the log is ours. |
 

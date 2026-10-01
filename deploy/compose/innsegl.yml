@@ -1077,7 +1077,12 @@ services:
       # measured 2026-09-08 nothing was expiring them -- a subagent that died
       # without a clean stop left its run Active for 13 hours while it kept
       # collecting tool calls.
-      INNSEGL_MCP_ALSO: ${INNSEGL_MCP_ALSO:-seal,reconcile,reap}
+      #
+      # The gateway too (ADR-0060). install.sh points every Claude Code
+      # request on the machine at it, and measured 2026-10-01 a plain
+      # install started the stack without it, because this default named
+      # only the other three.
+      INNSEGL_MCP_ALSO: ${INNSEGL_MCP_ALSO:-seal,reconcile,reap,gateway}
 
       # A companion reads this process's environment, so everything `seal` and
       # `reconcile` read is set here with the SAME expression their own
