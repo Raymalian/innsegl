@@ -80,7 +80,11 @@ type RunMapping struct {
 	ParentRunID      string // the exact-brief spawn link; empty for a root
 	ForkedFromRunID  string // set only by a fork (ADR-0058 decision 5)
 	AdoptedFromRunID string // set only when a retired run is resumed (decision 8)
-	RecordedAt       time.Time
+	// ClientID is the installation the run was made under (hosted shape,
+	// ADR-0063); empty in the single-host shape. It is what keeps a session
+	// pinned to its installation across a core restart (#488).
+	ClientID   string
+	RecordedAt time.Time
 }
 
 // MappingStore is the insert-only mapping. Lookups answer the most recent row

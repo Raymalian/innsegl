@@ -287,7 +287,22 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 	// nothing.
 	if g.pins != nil {
 		inst, ok := InstallationFromContext(r.Context())
-		if !ok || !g.pins.Pin(id.SessionID, inst) {
+		if !ok {
+			return nil, clientRefusal()
+		}
+		// The run mapping is the durable half of the pin (#488): the
+		// in-memory pins start empty after a restart, but the mapping
+		// still says which installation made this session's runs. Checked
+		// for this agent and for the session's main agent, before the
+		// in-memory pin is taken, so a refused installation pins nothing.
+		owner, err := g.sessionOwner(r.Context(), id)
+		if err != nil {
+			return nil, g.refuseErr("reading which installation owns this session", err)
+		}
+		if owner != "" && owner != inst {
+			return nil, clientRefusal()
+		}
+		if !g.pins.Pin(id.SessionID, inst) {
 			return nil, clientRefusal()
 		}
 	}
@@ -436,6 +451,25 @@ func (g *IdentityGuard) refuseErr(step string, err error) *Refusal {
 	return g.refuse(detail)
 }
 
+// sessionOwner answers the installation recorded for this session's runs:
+// this agent's latest mapping row, else the session's main agent's. Empty
+// when neither row names one (a new session, or single-host rows).
+func (g *IdentityGuard) sessionOwner(ctx context.Context, id Identification) (string, error) {
+	for _, agent := range []string{id.AgentID, mainAgentID} {
+		if m, ok := g.cache.get(id.SessionID, agent); ok && m.ClientID != "" {
+			return m.ClientID, nil
+		}
+		m, found, err := g.mappings.BySessionAgent(ctx, id.SessionID, agent)
+		if err != nil {
+			return "", err
+		}
+		if found && m.ClientID != "" {
+			return m.ClientID, nil
+		}
+	}
+	return "", nil
+}
+
 func (g *IdentityGuard) refuse(detail string) *Refusal {
 	return &Refusal{Status: http.StatusForbidden, Reason: identityGuardSource + ": " + detail}
 }
@@ -579,6 +613,9 @@ func (g *IdentityGuard) act(
 // succeeded, caches it -- a cached row the store never has is worse than a
 // cache miss, since a miss merely repeats the lookup.
 func (g *IdentityGuard) insertAndCache(ctx context.Context, id Identification, m RunMapping) {
+	if m.ClientID == "" {
+		m.ClientID, _ = InstallationFromContext(ctx)
+	}
 	if err := g.mappings.Insert(ctx, m); err != nil {
 		// Registration already succeeded and the run is real; a failure to
 		// record the mapping row is logged nowhere in this package

@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/internal/ledger"
 )
 
 const (
@@ -379,5 +381,52 @@ func TestGW018IdentityGuardEnforcesPinAndScope(t *testing.T) {
 	main7 := Identification{SessionID: "s7", AgentID: mainAgentID}
 	if _, ref := g.Check(withInst(identityRequest(t, main7, "hi", ""), cgInstA)); ref == nil || ref.Status != http.StatusUnauthorized {
 		t.Fatalf("directory-only statement in hosted mode: refusal %+v, want 401", ref)
+	}
+}
+
+// RM-308 (#488): the pin outlives a core restart. The run mapping records the
+// installation each run was made under; a fresh core (empty in-memory pins)
+// refuses another installation for that session -- for the main agent and
+// for a new subagent alike -- and the installation that owns it is not
+// locked out by the attempt.
+func TestGW018APinSurvivesARestartThroughTheRunMapping(t *testing.T) {
+	f := newIdentityFixture(t)
+	inst := &cgInstallations{
+		active: map[string]bool{cgInstA: true, cgInstB: true},
+		scope:  map[string]bool{cgInstA + " github.com/acme/app": true, cgInstB + " github.com/acme/app": true},
+	}
+	// What a previous core process left: session s9's main run, made under A.
+	if err := f.mappings.Insert(t.Context(), RunMapping{
+		RunID: "run-a", SessionID: "s9", AgentID: mainAgentID, Fingerprint: "fp-1", ClientID: cgInstA,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.runStates.set("run-a", ledger.RunActive)
+	f.sessionWorkspaces.RecordStated("s9", "", StatedWorkspace{Cwd: "/w", Repo: "github.com/acme/app", Branch: "main", Task: "t1"})
+
+	g, err := NewIdentityGuard(IdentityGuardConfig{
+		Mappings: f.mappings, Tree: f.tree, Policy: NewPolicy(), Registrar: f.registrar,
+		Workspaces: f.workspaces, RunStates: f.runStates, SessionWorkspaces: f.sessionWorkspaces,
+		Pins: NewSessionPins(0), Scope: inst, // a fresh process: no pins in memory
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	as := func(id Identification, installation string) *Refusal {
+		r := identityRequest(t, id, "hello", "hi")
+		_, ref := g.Check(r.WithContext(WithInstallation(r.Context(), installation)))
+		return ref
+	}
+	main9 := Identification{SessionID: "s9", AgentID: mainAgentID}
+	sub9 := Identification{SessionID: "s9", AgentID: "a0123456789abcdef"}
+
+	if ref := as(main9, cgInstB); ref == nil || ref.Status != http.StatusUnauthorized {
+		t.Fatalf("B on A's session after a restart: refusal %+v, want 401", ref)
+	}
+	if ref := as(sub9, cgInstB); ref == nil || ref.Status != http.StatusUnauthorized {
+		t.Fatalf("B's subagent on A's session after a restart: refusal %+v, want 401", ref)
+	}
+	if ref := as(main9, cgInstA); ref != nil {
+		t.Fatalf("A on its own session after B's attempts: refused %+v", ref)
 	}
 }
