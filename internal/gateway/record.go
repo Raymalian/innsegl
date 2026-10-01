@@ -113,13 +113,18 @@ type claimedPair struct {
 	result    observedToolResult
 }
 
-// snapshotWitness is the seam *Snapshotter.Snapshot satisfies (snapshot.go),
-// declared here rather than depending on that concrete type directly, so
-// this package's own tests can exercise how ToolCallRecorder uses a
-// snapshot's outcome without standing up a real git repository for every
-// case. *Snapshotter implements this with no change of its own.
+// snapshotWitness is the seam *Snapshotter.Snapshot and
+// *Snapshotter.SnapshotBaseline satisfy (snapshot.go), declared here rather
+// than depending on that concrete type directly, so this package's own
+// tests can exercise how ToolCallRecorder uses a snapshot's outcome without
+// standing up a real git repository for every case. *Snapshotter implements
+// this with no change of its own.
 type snapshotWitness interface {
 	Snapshot(ctx context.Context, workingDirectory string) SnapshotOutcome
+	// SnapshotBaseline protects workingDirectory's own state at the moment
+	// of the call under a ref keyed by runID -- #437 (RM-274), snapshot.go's
+	// own doc comment on why this recorder needs it beside Snapshot.
+	SnapshotBaseline(ctx context.Context, workingDirectory, runID string) SnapshotOutcome
 }
 
 var _ snapshotWitness = (*Snapshotter)(nil)
@@ -168,6 +173,12 @@ type ToolCallRecorderConfig struct {
 	// idempotency.go's own onEnteringWait already uses for the identical
 	// reason. Nil on every production path.
 	onRecorded func()
+	// onBaselined, when set, is called once after each asynchronous
+	// baseline-snapshot attempt this recorder fires finishes (#437,
+	// RM-274) — success or failure. The same test-seam shape onRecorded
+	// already gives the recording goroutine, for the SEPARATE goroutine
+	// baselineIfNeeded fires. Nil on every production path.
+	onBaselined func()
 }
 
 // ToolCallRecorder is #381's own witness: it holds tool_use blocks pending
@@ -180,13 +191,24 @@ type ToolCallRecorder struct {
 	pending map[pendingKey]pendingCall
 	order   []pendingKey // oldest first; kept in sync with pending's keys.
 	max     int
+	// baselined holds every run id this recorder has already taken (or
+	// started taking) a baseline snapshot for (#437, RM-274) -- checked and
+	// set together, under mu, by claimBaseline, so the first tool_use this
+	// recorder ever sees for a run is the only one that ever fires
+	// SnapshotBaseline for it. Unbounded: a run is removed from pending once
+	// its last tool_use is claimed, but baselined keeps every run id for
+	// this recorder's whole process lifetime, the same way SnapshotTrigger's
+	// own seen map already does for every tool_use id a run has fired
+	// (snapshot.go's own doc comment on that map does not bound it either).
+	baselined map[string]struct{}
 
 	snapshots snapshotWitness
 	trigger   *SnapshotTrigger
 
-	record     func(ctx context.Context, in mcp.GatewayToolCallInput) (mcp.GatewayToolCallOutput, error)
-	onFailure  func(error)
-	onRecorded func()
+	record      func(ctx context.Context, in mcp.GatewayToolCallInput) (mcp.GatewayToolCallOutput, error)
+	onFailure   func(error)
+	onRecorded  func()
+	onBaselined func()
 
 	failed atomic.Int64
 }
@@ -206,13 +228,15 @@ func NewToolCallRecorder(cfg ToolCallRecorderConfig) *ToolCallRecorder {
 		onFailure = func(error) {}
 	}
 	return &ToolCallRecorder{
-		pending:    make(map[pendingKey]pendingCall),
-		max:        maxPending,
-		snapshots:  cfg.Snapshots,
-		trigger:    cfg.Trigger,
-		record:     record,
-		onFailure:  onFailure,
-		onRecorded: cfg.onRecorded,
+		pending:     make(map[pendingKey]pendingCall),
+		max:         maxPending,
+		baselined:   make(map[string]struct{}),
+		snapshots:   cfg.Snapshots,
+		trigger:     cfg.Trigger,
+		record:      record,
+		onFailure:   onFailure,
+		onRecorded:  cfg.onRecorded,
+		onBaselined: cfg.onBaselined,
 	}
 }
 
@@ -252,6 +276,14 @@ func (r *ToolCallRecorder) OnToolUse(ToolUse) {}
 // tool call, and SpawnRecorder recording its own thing off the same block
 // is not a reason for this recorder to skip it — is held pending its
 // result, keyed by (run id, tool_use id).
+//
+// It is also the one place #437 (RM-274)'s own baseline fires from: the
+// FIRST tool_use this recorder ever sees for a run is observed here,
+// before the harness that will actually run it has even received the
+// model's reply in full (sse.go's own streaming path) — the one point in
+// this whole pipeline where a tool has been decided but has not yet run.
+// baselineIfNeeded fires at most once per run; every later tool_use for the
+// same run is a no-op there.
 func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	if t.ID == "" {
 		// Nothing to key a later result on. Observed, per sse.go's own
@@ -267,6 +299,12 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	if facts, ok := RequestFactsFromContext(ctx); ok {
 		workingDirectory = facts.WorkingDirectory
 	}
+	//nolint:contextcheck // deliberate: baselineIfNeeded's own eventual SnapshotBaseline call (on
+	// a new run) uses a detached, bounded context of its own rather than ctx -- see
+	// takeBaselineAsync's own doc comment for why a request/reply's context must never be allowed
+	// to cut a witness already under way short, the same reasoning recordAsync's own doc comment
+	// gives for addPending's identical shape just below.
+	r.baselineIfNeeded(runID, workingDirectory)
 	//nolint:contextcheck // deliberate: addPending's own eventual recording (on eviction) uses
 	// a detached, bounded context of its own rather than ctx -- see recordAsync's own doc
 	// comment for why a request/reply's context must never be allowed to cut a recording short.
@@ -307,6 +345,65 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory string, t ToolUse)
 
 	if evicted {
 		go r.recordAsync(evictedKey.runID, evictedKey.toolUseID, evictedCall, nil, "")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The baseline: #437 (RM-274).
+// ---------------------------------------------------------------------------
+
+// baselineIfNeeded fires SnapshotBaseline, asynchronously, the FIRST time
+// this recorder ever sees a tool_use for runID — see OnToolUseContext's own
+// doc comment for why that call site is the one point this needs to be.
+// A nil Snapshots (snapshot.go's own "LEAVE THIS FIELD UNSET" rule, read by
+// NewToolCallRecorder unchanged) means no baseline is ever attempted,
+// exactly as it already means no per-step snapshot is.
+func (r *ToolCallRecorder) baselineIfNeeded(runID, workingDirectory string) {
+	if r.snapshots == nil || workingDirectory == "" {
+		// No directory to snapshot yet: claim nothing, so a later request
+		// or tool_use for the same run that does carry one still can.
+		return
+	}
+	if !r.claimBaseline(runID) {
+		return
+	}
+	go r.takeBaselineAsync(runID, workingDirectory)
+}
+
+// claimBaseline reports whether runID has never been claimed before, and
+// marks it claimed either way — the same "check and set together, under
+// one lock" shape addPending's own pending-table insert already uses, so
+// two tool_use blocks for the same brand-new run arriving close together
+// can never both fire SnapshotBaseline.
+func (r *ToolCallRecorder) claimBaseline(runID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, already := r.baselined[runID]; already {
+		return false
+	}
+	r.baselined[runID] = struct{}{}
+	return true
+}
+
+// takeBaselineAsync runs SnapshotBaseline under a detached, bounded context
+// — never ctx, the in-flight reply's own context that OnToolUseContext was
+// called with and that is cancelled once streaming ends (recordAsync's own
+// doc comment gives the identical reasoning for the identical reason: a
+// cancelled request must never cut short a witness already under way). A
+// failure is reported through onFailure, the same "logged loudly" channel
+// snapshotIfTriggered's own per-step snapshot failure already uses — never
+// counted in FailedRecordings, which is specifically about a RECORDING
+// attempt (a call into r.record), and a baseline snapshot is never that.
+func (r *ToolCallRecorder) takeBaselineAsync(runID, workingDirectory string) {
+	ctx, cancel := context.WithTimeout(context.Background(), recordTimeout)
+	defer cancel()
+	outcome := r.snapshots.SnapshotBaseline(ctx, workingDirectory, runID)
+	if !outcome.Snapshotted() {
+		r.onFailure(fmt.Errorf(
+			"gateway: baseline workspace snapshot for run %q: %s", runID, outcome.Reason))
+	}
+	if r.onBaselined != nil {
+		r.onBaselined()
 	}
 }
 
@@ -530,12 +627,20 @@ func (g *ToolCallRecordGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		return nil, nil
 	}
 
+	facts, _ := RequestFactsFromContext(r.Context())
+	// The run's baseline starts here, on its first request, before the
+	// model has answered: started on the first tool_use instead, it raced
+	// the harness, which runs a tool while the reply is still streaming
+	// (#437).
+	//nolint:contextcheck // deliberate: the baseline uses its own detached, bounded context
+	// (takeBaselineAsync), so a finished request never cuts a snapshot short.
+	g.recorder.baselineIfNeeded(runID, facts.WorkingDirectory)
+
 	results := extractToolResults(r)
 	if len(results) == 0 {
 		return r, nil
 	}
 
-	facts, _ := RequestFactsFromContext(r.Context())
 	g.recorder.HandleResults(r.Context(), runID, facts, results)
 	return r, nil
 }

@@ -87,6 +87,20 @@ func (s *bareStore) tree(t *testing.T, entries map[string]string) string {
 	return trimNL(string(out))
 }
 
+// updateRef sets ref to point at target in s -- used by the baseline tests
+// below to protect a tree under runBaselineTree's own ref naming (#437,
+// RM-274), the exact shape internal/gateway/snapshot.go's own
+// protectBaseline writes with the real Snapshotter.
+func (s *bareStore) updateRef(t *testing.T, ref, target string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), s.gitPath, "update-ref", ref, target)
+	cmd.Dir = s.dir
+	cmd.Env = append(os.Environ(), "GIT_DIR="+s.dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git update-ref %s %s: %v: %s", ref, target, err, out)
+	}
+}
+
 func trimNL(s string) string {
 	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
 		s = s[:len(s)-1]
@@ -181,6 +195,45 @@ func TestRPG003NumstatEmptyBeforeAnswersNothing(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// runBaselineTree -- #437 (RM-274): reading back the gateway's own
+// SnapshotBaseline (internal/gateway/snapshot.go) from its store.
+// ---------------------------------------------------------------------------
+
+// TestRunBaselineTreeFindsAProtectedBaseline proves the read side resolves
+// the IDENTICAL ref name the gateway's own protectBaseline writes to --
+// baselineRefPrefix and baselineKeySource restated byte for byte, never
+// imported (this file's own package comment says why).
+func TestRunBaselineTreeFindsAProtectedBaseline(t *testing.T) {
+	store := newBareStore(t)
+	blob := store.blob(t, "content\n")
+	baseline := store.tree(t, map[string]string{"a.txt": blob})
+	ref := baselineRefPrefix + hashRepoKey(baselineKeySource, "run-baseline-read-001")
+	store.updateRef(t, ref, baseline)
+
+	got := runBaselineTree(context.Background(), store.cfg, store.dir, "run-baseline-read-001")
+	if got != baseline {
+		t.Errorf("runBaselineTree = %q, want %q", got, baseline)
+	}
+}
+
+// TestRunBaselineTreeAnswersEmptyWhenNoneExists proves the "understate,
+// never guess" rule: a run this store holds no baseline ref for — never
+// baselined at all (a deployment from before #437), or simply a different
+// run — answers "", never an error and never another run's own baseline.
+func TestRunBaselineTreeAnswersEmptyWhenNoneExists(t *testing.T) {
+	store := newBareStore(t)
+	blob := store.blob(t, "content\n")
+	baseline := store.tree(t, map[string]string{"a.txt": blob})
+	store.updateRef(t, baselineRefPrefix+hashRepoKey(baselineKeySource, "run-baseline-read-002"), baseline)
+
+	// A DIFFERENT run id, never baselined in this same store.
+	got := runBaselineTree(context.Background(), store.cfg, store.dir, "run-baseline-read-003")
+	if got != "" {
+		t.Errorf("runBaselineTree for an unbaselined run = %q, want empty", got)
+	}
+}
+
 func TestRepoKeyPrefersOriginOverRootCommit(t *testing.T) {
 	gitPath := requireGit(t)
 	repoDir := t.TempDir()
@@ -231,6 +284,17 @@ func TestStoreDirForWithNoConfiguration(t *testing.T) {
 	rs := &recordServer{}
 	if _, ok := rs.storeDirFor(context.Background(), "some/repo"); ok {
 		t.Error("an unconfigured recordServer should answer no store")
+	}
+}
+
+// TestRunBaselineWithNoConfigurationAnswersEmpty: #437 (RM-274)'s own
+// recordServer-level wrapper answers "" the same way runBaselineTree's own
+// callers already do for every other "no store" case — never an error, and
+// never a guess.
+func TestRunBaselineWithNoConfigurationAnswersEmpty(t *testing.T) {
+	rs := &recordServer{}
+	if got := rs.runBaseline(context.Background(), "some/repo", "run-x"); got != "" {
+		t.Errorf("runBaseline for an unconfigured recordServer = %q, want empty", got)
 	}
 }
 

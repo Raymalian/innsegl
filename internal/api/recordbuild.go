@@ -128,6 +128,8 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 
 	steps, bodiesStored, bodiesVerified := rs.buildSteps(ctx, runID, reg, rows, commitRows, committedCommits, spawnByEvent, logDir, now)
 
+	settleRunWitnesses(steps)
+
 	commits := rs.buildCommits(ctx, reg.Repo, commitRows, steps)
 
 	var treeBeforeRun, treeAfterRun string
@@ -158,9 +160,21 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 		return RunRecord{}, err
 	}
 
+	// Every list is [] when empty, never null: the contract types each one
+	// as an array, and a run with nothing recorded (every run from before
+	// the gateway) crashed the run page on null (#435).
+	if replies == nil {
+		replies = []RecordMessage{}
+	}
+	if steps == nil {
+		steps = []RecordStep{}
+	}
+	if commits == nil {
+		commits = []RecordCommit{}
+	}
 	return RunRecord{
 		Run: run, Tree: tree, Brief: brief, Replies: replies, Steps: steps,
-		Files: files, Commits: commits, Witness: summarizeWitness(steps, bodiesStored, bodiesVerified),
+		Files: nonNilFiles(files), Commits: commits, Witness: summarizeWitness(steps, bodiesStored, bodiesVerified),
 		DataAsOf: now, ChainHead: head,
 	}, nil
 }
@@ -246,6 +260,20 @@ func (rs *recordServer) buildSteps(
 				treeBefore = parentTree
 			}
 		}
+		if treeBefore == "" && n == 1 {
+			// #437 (RM-274): a root run's own first step has no earlier
+			// tool_call to chain a "before" from, and no parent run to
+			// borrow one from either — the ONE remaining source is the
+			// gateway's own baseline, taken before this run's first tool
+			// ever ran (internal/gateway/snapshot.go's own SnapshotBaseline)
+			// and read back from its snapshot store directly, never from a
+			// chain member invented to hold it. "" here (a deployment from
+			// before this landed, or a baseline this process cannot resolve
+			// for any of the ordinary reasons a snapshot read can fail)
+			// leaves step 1 exactly as it already was: an unknown before,
+			// never guessed at.
+			treeBefore = rs.runBaseline(ctx, reg.Repo, runID)
+		}
 		if treeAfter != "" {
 			lastTree = treeAfter
 		}
@@ -274,7 +302,7 @@ func (rs *recordServer) buildSteps(
 			step.Outcome = outcomeOf(toolName, body)
 			step.Summary = summaryOf(toolName, body)
 
-			if toolName == "Bash" && !body.IsError {
+			if toolName == "Bash" && !body.isError() {
 				if short, ok := commitShortSHA(step.Output); ok {
 					for _, c := range commits {
 						if hasPrefixSHA(c.CommitSHA, short) {
@@ -377,7 +405,15 @@ func hasPrefixSHA(full, short string) bool {
 // explicit "Exit code: N" read from the result text when one is present;
 // otherwise 1, the conventional shell failure code, stated as a default
 // rather than as a number this process observed.
+//
+// A hook-shape body (RM-273) carries none of ResultObserved/IsError at
+// all — hookBodyAsGateway sets hookShape instead, and the outcome its own
+// shape shows (hookOutcomeOf, computed once while mapping it) is read back
+// here rather than re-derived from fields that mapping never set.
 func outcomeOf(toolName string, body gatewayBody) RecordOutcome {
+	if body.hookShape {
+		return body.hookOutcome
+	}
 	if !body.ResultObserved {
 		return RecordOutcome{Kind: "unknown"}
 	}

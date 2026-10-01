@@ -246,6 +246,25 @@ func TestOutcomeOfUnknownWhenNoResultWasObserved(t *testing.T) {
 	}
 }
 
+// RM-273 (#436): a hook-shape body carries its outcome pre-computed
+// (hookOutcomeOf, at mapping time — recordbody.go's hookBodyAsGateway); for
+// such a body outcomeOf must read that back rather than fold
+// ResultObserved/IsError, which a hook-shape body never sets at all. This
+// is the one branch distinguishing the two paths; everything above and
+// below it in this file exercises the gateway path exactly as before.
+func TestOutcomeOfReadsThePrecomputedHookOutcomeWhenHookShape(t *testing.T) {
+	// hookShape/hookOutcome are unexported, so this test reaches them the
+	// same way stepBody does: through hookBodyAsGateway. ResultObserved and
+	// IsError are left at their zero value, exactly as a real hook-shape
+	// body leaves them — if outcomeOf read those instead of hookOutcome, it
+	// would answer "unknown" here, not "error".
+	body := hookBodyAsGateway(hookBody{ToolName: "Bash", ToolResponse: json.RawMessage(`{"interrupted":true}`)})
+	out := outcomeOf("Bash", body)
+	if out.Kind != "error" || out.ExitCode != nil {
+		t.Errorf("outcomeOf(hook-shape, interrupted) = %+v, want Kind=error and no exit code", out)
+	}
+}
+
 func TestSummaryOfEachToolShape(t *testing.T) {
 	if s := summaryOf("Bash", gatewayBody{Input: json.RawMessage(`{"command":"echo hi"}`)}); s != "echo hi" {
 		t.Errorf("summaryOf(Bash) = %q", s)

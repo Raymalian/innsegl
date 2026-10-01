@@ -3,6 +3,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -79,5 +80,35 @@ func TestHandleStepDiffRejectsAMalformedStepNumber(t *testing.T) {
 		if a.status != 400 {
 			t.Errorf("step %q: status %d, want 400: %s", bad, a.status, a.body)
 		}
+	}
+}
+
+// TestRunRecordOfABareRunEncodesEmptyListsNotNull — #435. A run with no
+// recorded steps (every run from before the gateway) was served with
+// "steps": null and "replies": null, and the run page crashed on .find of
+// null, leaving a blank screen. The contract (web/src/views/run-page/
+// types.ts) types every list as an array, so every list is [] when empty.
+func TestRunRecordOfABareRunEncodesEmptyListsNotNull(t *testing.T) {
+	f := newRecordFixture(t)
+	srv := newRecordTestServer(t, f.rs)
+
+	a := get(t, srv.URL, "/api/v1/runs/run-e19-bare/record")
+	if a.status != http.StatusOK {
+		t.Fatalf("GET bare run record: status %d: %s", a.status, a.body)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(a.body, &raw); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	for _, list := range []string{"replies", "steps", "files", "commits"} {
+		if got := string(raw[list]); got != "[]" {
+			t.Errorf("%q = %s, want []", list, got)
+		}
+	}
+	var tree struct {
+		Nodes json.RawMessage `json:"nodes"`
+	}
+	if err := json.Unmarshal(raw["tree"], &tree); err != nil || string(tree.Nodes) == "null" {
+		t.Errorf("tree.nodes = %s, want a list", tree.Nodes)
 	}
 }

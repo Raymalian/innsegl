@@ -34,6 +34,19 @@ type fileChange struct {
 	Deletions int
 }
 
+// runBaseline answers runID's own baseline tree hash (snapshotstore.go's own
+// runBaselineTree, internal/gateway/snapshot.go's SnapshotBaseline), or ""
+// when repoName resolves to no snapshot store this process can read — the
+// same "no store" case filesInRange already answers empty for, restated
+// here for a single hash lookup rather than a file list.
+func (rs *recordServer) runBaseline(ctx context.Context, repoName, runID string) string {
+	storeDir, ok := rs.storeDirFor(ctx, repoName)
+	if !ok {
+		return ""
+	}
+	return runBaselineTree(ctx, rs.cfg, storeDir, runID)
+}
+
 // filesInRange reads what changed between before and after in repoName's
 // snapshot store. Every error here — no served repository by that name, no
 // snapshot store for it, before or after empty or equal — answers an empty,

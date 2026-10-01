@@ -379,3 +379,76 @@ describe("RPG-015 keyboard path and +/- markers", () => {
     expect(found.length).toBeGreaterThan(0);
   });
 });
+
+describe("#438 a witness never active for a run is not a disagreement", () => {
+  it("counts only active witnesses, with no red badge, grid or banner", async () => {
+    const base = record();
+    const bare = {
+      ...base,
+      steps: base.steps.map((s) => ({
+        ...s,
+        witnesses: { gateway: "present", snapshot: "inactive", telemetry: "inactive" } as const,
+      })),
+    };
+    render(
+      <RunPage
+        route={ROUTE}
+        fetchRunRecord={async () => bare}
+        fetchStepDiff={async () => stepOneDiff()}
+        fetchProof={async () => verifiedProof()}
+        now={NOW}
+      />,
+    );
+    await screen.findByText("Timeline");
+    const step2 = within(document.querySelector('[data-step="2"]') as HTMLElement);
+    expect(step2.getByText("1 of 1 witnesses agree")).toBeInTheDocument();
+    expect(document.querySelector("[data-witness-badge]")).toBeNull();
+    expect(document.querySelector("[data-witness-grid]")).toBeNull();
+  });
+});
+
+describe("#438 the header never reports a disagreement it did not find", () => {
+  it("states unchecked steps neutrally when none disagrees", async () => {
+    const base = record();
+    const partial = { ...base, witness: { ...base.witness, steps: 145, agree: 140, disagree: 0, unchecked: 5 } };
+    render(
+      <RunPage
+        route={ROUTE}
+        fetchRunRecord={async () => partial}
+        fetchStepDiff={async () => stepOneDiff()}
+        fetchProof={async () => verifiedProof()}
+        now={NOW}
+      />,
+    );
+    await screen.findByText("Timeline");
+    const value = screen.getByText(/agree on 140 of 145 steps; 5 could not be checked/).closest("dd") as HTMLElement;
+    expect(value).toHaveAttribute("data-tone", "neutral");
+    expect(screen.queryByText(/disagree on 0/)).toBeNull();
+  });
+});
+
+describe("#435 a run with nothing recorded", () => {
+  it("says no steps were recorded, in the witness card and the timeline", async () => {
+    const base = record();
+    const bare = {
+      ...base,
+      steps: [],
+      replies: [],
+      files: [],
+      commits: [],
+      witness: { steps: 0, agree: 0, disagree: 0, unchecked: 0, bodies_stored: 0, bodies_verified: 0 },
+    };
+    render(
+      <RunPage
+        route={ROUTE}
+        fetchRunRecord={async () => bare}
+        fetchStepDiff={async () => stepOneDiff()}
+        fetchProof={async () => verifiedProof()}
+        now={NOW}
+      />,
+    );
+    await screen.findByText("Timeline");
+    expect(screen.getAllByText(/No steps were recorded for this run/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/of 0 steps/)).toBeNull();
+  });
+});

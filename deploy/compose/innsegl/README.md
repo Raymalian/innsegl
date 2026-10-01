@@ -215,8 +215,11 @@ DSN can mint.
 1. Mint a one-time code, from a trusted host, holding the auth-writer DSN:
 
    ```bash
-   docker compose -f deploy/compose/innsegl.yml exec innsegl-api \
-     innsegl admin-credential enrol-code -dsn "$INNSEGL_API_AUTH_DSN"
+   docker exec innsegl-api \
+     sh -c 'innsegl admin-credential enrol-code -dsn "$INNSEGL_API_AUTH_DSN"'
+
+   The single quotes matter: `$INNSEGL_API_AUTH_DSN` is set inside the
+   container, not on the host, so it must be expanded there.
    ```
 
    The code is printed to stdout and nowhere else — it is single-use and
