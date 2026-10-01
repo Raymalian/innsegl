@@ -46,6 +46,9 @@ export const strings = {
       `Gateway, snapshots and telemetry agree on all ${steps} steps`,
     witnessesDisagreeSummary: (disagree: number, steps: number) =>
       `Gateway, snapshots and telemetry disagree on ${disagree} of ${steps} steps`,
+    witnessesNoSteps: "No steps were recorded for this run",
+    witnessesPartlyChecked: (agree: number, steps: number, unchecked: number) =>
+      `Witnesses agree on ${agree} of ${steps} steps; ${unchecked} could not be checked`,
   },
 
   tree: {
@@ -101,6 +104,7 @@ export const strings = {
 
   timeline: {
     heading: "Timeline",
+    noSteps: "No steps were recorded for this run: it ran before the gateway recorded its tool calls.",
     toggleLabel: "Diff layout",
     unified: "Unified",
     sideBySide: "Side by side",

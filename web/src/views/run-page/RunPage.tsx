@@ -181,6 +181,10 @@ function Loaded({
             <DiffToggle mode={diffMode} onChange={onDiffModeChange} />
           </div>
 
+          {record.steps.length === 0 ? (
+            <p className="text-micro text-ink-secondary">{strings.timeline.noSteps}</p>
+          ) : null}
+
           {record.steps.map((step) => (
             <StepCard
               key={step.n}

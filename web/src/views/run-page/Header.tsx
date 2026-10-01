@@ -37,7 +37,12 @@ import {
 import { AlertMarkIcon } from "./icons";
 import type { RunRecord } from "./types";
 
-const KNOWN_STATUSES: readonly RunStatus[] = ["active", "lapsed", "abandoned", "retired"];
+const KNOWN_STATUSES: readonly RunStatus[] = [
+  "active",
+  "lapsed",
+  "abandoned",
+  "retired",
+];
 
 export interface HeaderProps {
   readonly record: RunRecord;
@@ -47,39 +52,56 @@ export interface HeaderProps {
 export function Header({ record, now }: HeaderProps) {
   const { run, witness } = record;
   const activity = activitySummary(record);
+  // Red only for a disagreement actually found (#438): steps that could
+  // not be checked are stated, not counted against the run.
+  const witnessTone = witness.disagree > 0 ? "failed" : "neutral";
   const status = KNOWN_STATUSES.find((s) => s === run.status);
 
   return (
     <div className="flex flex-col gap-3">
       <nav aria-label={strings.header.runsCrumb} className={breadcrumb}>
-        <Link to={{ view: "runs", filters: emptyFilters() }}>{strings.header.runsCrumb}</Link>
+        <Link to={{ view: "runs", filters: emptyFilters() }}>
+          {strings.header.runsCrumb}
+        </Link>
         <span aria-hidden="true">{strings.punctuation.slash}</span>
-        <Link to={{ view: "repo", repo: run.repo, from: "", to: "" }}>{run.repo}</Link>
+        <Link to={{ view: "repo", repo: run.repo, from: "", to: "" }}>
+          {run.repo}
+        </Link>
         <span aria-hidden="true">{strings.punctuation.slash}</span>
         <IdentifierChip value={run.run_id} kind="run" maxLength={28} />
       </nav>
 
       <div className={headerRow}>
-        <h1 className={pageHeading}>{strings.header.heading(run.agent_type)}</h1>
+        <h1 className={pageHeading}>
+          {strings.header.heading(run.agent_type)}
+        </h1>
 
         {status === undefined ? null : (
           <span className={statusPill} data-run-status={status}>
             <Icon name={STATUS_ICON[status]} className="shrink-0" />
             <span className="font-medium">{statusLabel(status)}</span>
-            {run.status_at === undefined || run.status_at === null || run.status_at === "" ? null : (
+            {run.status_at === undefined ||
+            run.status_at === null ||
+            run.status_at === "" ? null : (
               <>
                 {/* The mockup shows the absolute instant visibly, beside the
-                  * relative one ("Retired 14:31:58 UTC · 3 min ago") — unlike
-                  * the rest of the product's RelativeTime convention, which
-                  * keeps the absolute behind hover/focus. `Instant` still
-                  * carries that pattern for the relative half; this span is
-                  * the one place on this page the absolute is stated outright
-                  * rather than only reachable. The time of day when it was
-                  * today (UTC), as the approved mockup shows it; the full
-                  * date otherwise (formatAbsoluteUtcShort). */}
-                <span aria-hidden="true">{formatAbsoluteUtcShort(new Date(run.status_at), now)}</span>
+                 * relative one ("Retired 14:31:58 UTC · 3 min ago") — unlike
+                 * the rest of the product's RelativeTime convention, which
+                 * keeps the absolute behind hover/focus. `Instant` still
+                 * carries that pattern for the relative half; this span is
+                 * the one place on this page the absolute is stated outright
+                 * rather than only reachable. The time of day when it was
+                 * today (UTC), as the approved mockup shows it; the full
+                 * date otherwise (formatAbsoluteUtcShort). */}
+                <span aria-hidden="true">
+                  {formatAbsoluteUtcShort(new Date(run.status_at), now)}
+                </span>
                 <span aria-hidden="true">{strings.punctuation.middot}</span>
-                <Instant value={run.status_at} now={now} label={statusLabel(status)} />
+                <Instant
+                  value={run.status_at}
+                  now={now}
+                  label={statusLabel(status)}
+                />
               </>
             )}
           </span>
@@ -87,15 +109,17 @@ export function Header({ record, now }: HeaderProps) {
 
         <div className="flex-grow" />
 
-        <span className={bodyNote}>
-          {everyBodyStoredAndVerified(witness)
-            ? strings.header.witnessesComplete
-            : strings.header.witnessesIncomplete(
-                witness.bodies_stored,
-                witness.bodies_verified,
-                witness.steps,
-              )}
-        </span>
+        {witness.steps === 0 ? null : (
+          <span className={bodyNote}>
+            {everyBodyStoredAndVerified(witness)
+              ? strings.header.witnessesComplete
+              : strings.header.witnessesIncomplete(
+                  witness.bodies_stored,
+                  witness.bodies_verified,
+                  witness.steps,
+                )}
+          </span>
+        )}
       </div>
 
       <dl className={factGrid}>
@@ -131,14 +155,25 @@ export function Header({ record, now }: HeaderProps) {
         <div className={factCard}>
           <dt className={factLabel}>{strings.facts.witnesses}</dt>
           <dd
-            className={`${factValue} ${factRowIcon} ${allWitnessesAgree(witness) ? "" : factValueFailed}`}
-            data-tone={allWitnessesAgree(witness) ? "neutral" : "failed"}
+            className={`${factValue} ${factRowIcon} ${witnessTone === "failed" ? factValueFailed : ""}`}
+            data-tone={witnessTone}
           >
-            {allWitnessesAgree(witness) ? <WitnessGlyph /> : <AlertMarkIcon />}
+            {witnessTone === "failed" ? <AlertMarkIcon /> : <WitnessGlyph />}
             <span>
-              {allWitnessesAgree(witness)
-                ? strings.facts.witnessesAgreeAll(witness.steps)
-                : strings.facts.witnessesDisagreeSummary(witness.disagree, witness.steps)}
+              {witnessTone === "failed"
+                ? strings.facts.witnessesDisagreeSummary(
+                    witness.disagree,
+                    witness.steps,
+                  )
+                : witness.steps === 0
+                  ? strings.facts.witnessesNoSteps
+                  : allWitnessesAgree(witness)
+                    ? strings.facts.witnessesAgreeAll(witness.steps)
+                    : strings.facts.witnessesPartlyChecked(
+                        witness.agree,
+                        witness.steps,
+                        witness.unchecked,
+                      )}
             </span>
           </dd>
         </div>
