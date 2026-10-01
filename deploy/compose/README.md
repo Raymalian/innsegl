@@ -363,6 +363,26 @@ words.
 
 ---
 
+## Publishing the gateway and dashboard beyond loopback
+
+By default every published port is on `127.0.0.1`. Four variables change that
+for a hosted shape, set in `deploy/compose/.env` or the shell:
+
+| variable | effect |
+|---|---|
+| `INNSEGL_BIND` | host address the gateway (8095) and dashboard are published on. Unset means `127.0.0.1`. Example: `192.0.2.10` |
+| `INNSEGL_GATEWAY_CLIENT_AUTH` | `spiffe` requires a client SVID on the gateway. Required whenever `INNSEGL_BIND` is not loopback |
+| `INNSEGL_GATEWAY_CERT_NAMES` | extra DNS names for the gateway certificate, e.g. `<core-name>` |
+| `INNSEGL_GATEWAY_ACCOUNTS_DSN` | set by the compose file to the auth-writer DSN; not an operator setting |
+
+`innsegl gateway` refuses to start when `INNSEGL_BIND` is not loopback and
+`INNSEGL_GATEWAY_CLIENT_AUTH` is not `spiffe`. Nothing else moves: the tool
+surface, admin port, Rekor, Fulcio and SPIRE stay on loopback. The dashboard
+and query API still have no authentication (see below), so put your own
+authenticating proxy in front before binding the dashboard off loopback.
+
+---
+
 ## How much of it you actually have to run
 
 Twelve containers is the full stack. It is not the floor, and the difference
