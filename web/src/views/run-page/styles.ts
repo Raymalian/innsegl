@@ -86,6 +86,9 @@ export const mainColumn = "flex min-w-0 flex-grow flex-col gap-4";
 /* ── panels, shared by aside and main ──────────────────────────────────── */
 
 export const panel = `${hairline} flex flex-col rounded-md bg-surface border-line`;
+/** A step card the browser may skip laying out and painting while it is off
+ * screen (#442); the reserved height keeps the scrollbar steady. */
+export const stepCardDeferred = "[content-visibility:auto] [contain-intrinsic-size:auto_160px]";
 export const panelHeadingRow = `${hairline} flex items-center gap-2 border-0 border-b border-line px-3 py-2`;
 export const panelHeading = "flex-grow text-prose font-semibold text-ink";
 export const panelBody = "flex flex-col gap-0.5 p-2";
@@ -146,6 +149,10 @@ export const toggleGroup = `${hairline} inline-flex overflow-hidden rounded-md t
 export const toggleButton = `px-3 py-1.5 font-inherit ${stateTransition} ${focusRing}`;
 export const toggleButtonIdle = `bg-surface ${secondaryText} hover:bg-hover`;
 export const toggleButtonSelected = "bg-accent-surface font-semibold text-accent";
+
+/** A quiet secondary button: "Show more steps", "Show full output" (#440). */
+export const showMoreButton = `${hairline} self-start rounded-md border-line px-3 py-1.5 text-micro ${toggleButtonIdle} ${stateTransition} ${focusRing}`;
+export const stepShowFull = `${hairline} mx-4 mb-3 self-start rounded-md border-line px-2.5 py-1 text-micro ${toggleButtonIdle} ${stateTransition} ${focusRing}`;
 
 /* ── step card ─────────────────────────────────────────────────────────── */
 

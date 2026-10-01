@@ -202,6 +202,7 @@ SELECT body->>'workspace_tree_hash'
 // Empty, not an error, when the parent took no snapshot before that
 // instant at all.
 func (s *Store) parentSnapshotBefore(ctx context.Context, parentRunID string, before time.Time) (string, error) {
+	s.parentSnapshotLookups.Add(1)
 	var tree *string
 	err := s.pool.QueryRow(ctx, parentSnapshotBeforeSQL, parentRunID, before).Scan(&tree)
 	if errors.Is(err, pgx.ErrNoRows) {

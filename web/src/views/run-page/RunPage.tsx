@@ -34,12 +34,12 @@ import { DiffToggle } from "./DiffToggle";
 import { FilesChanged } from "./FilesChanged";
 import { Header } from "./Header";
 import { Reply } from "./Reply";
-import { RunRecordNotFound, fetchProof, fetchRunRecord, fetchStepDiff } from "./api";
-import type { FetchProof, FetchRunRecord, FetchStepDiff } from "./api";
+import { RunRecordNotFound, fetchProof, fetchRunRecord, fetchStep, fetchStepDiff } from "./api";
+import type { FetchProof, FetchRunRecord, FetchStep, FetchStepDiff } from "./api";
 import { disagreementReason, firstDisagreeingStep } from "./derive";
 import { StepCard } from "./StepCard";
 import { strings } from "./strings";
-import { aside, columns, mainColumn, timelineHeadRow, timelineHeading, viewShell } from "./styles";
+import { aside, columns, mainColumn, showMoreButton, timelineHeadRow, timelineHeading, viewShell } from "./styles";
 import type { RecordStep, RunRecord } from "./types";
 
 export interface RunPageProps {
@@ -47,6 +47,7 @@ export interface RunPageProps {
   readonly fetchRunRecord?: FetchRunRecord;
   readonly fetchStepDiff?: FetchStepDiff;
   readonly fetchProof?: FetchProof;
+  readonly fetchStep?: FetchStep;
   /** Injected so a render is deterministic, exactly as the run-detail view's
    * own `now` prop is. */
   readonly now?: Date;
@@ -58,6 +59,12 @@ type Read =
   | { readonly state: "missing" }
   | { readonly state: "failed"; readonly error: string };
 
+/** How many steps the timeline draws at a time (#440). */
+const STEP_PAGE = 100;
+
+/** A run longer than this lets the browser skip off-screen step cards (#442). */
+const DEFER_OFFSCREEN_AFTER = 30;
+
 function diffModeFromPath(path: string): DiffMode {
   const query = path.split("?")[1] ?? "";
   return new URLSearchParams(query).get("diff") === "side" ? "side" : "unified";
@@ -68,6 +75,7 @@ export function RunPage({
   fetchRunRecord: read = fetchRunRecord,
   fetchStepDiff: readDiff = fetchStepDiff,
   fetchProof: readProof = fetchProof,
+  fetchStep: readStep = fetchStep,
   now,
 }: RunPageProps) {
   const runId = route.view === "run" ? route.runId : "";
@@ -137,6 +145,7 @@ export function RunPage({
           onDiffModeChange={setDiffMode}
           fetchStepDiff={readDiff}
           fetchProof={readProof}
+          fetchStep={readStep}
         />
       ) : null}
     </div>
@@ -150,6 +159,7 @@ function Loaded({
   onDiffModeChange,
   fetchStepDiff: readDiff,
   fetchProof: readProof,
+  fetchStep: readStep,
 }: {
   readonly record: RunRecord;
   readonly now: Date;
@@ -157,8 +167,13 @@ function Loaded({
   readonly onDiffModeChange: (mode: DiffMode) => void;
   readonly fetchStepDiff: FetchStepDiff;
   readonly fetchProof: FetchProof;
+  readonly fetchStep: FetchStep;
 }) {
   const disagreeing = firstDisagreeingStep(record);
+  // The timeline draws a page of steps at a time (#440): a long session has
+  // thousands, and drawing them all at once froze the browser.
+  const [shown, setShown] = useState(STEP_PAGE);
+  const left = record.steps.length - shown;
 
   return (
     <>
@@ -185,7 +200,7 @@ function Loaded({
             <p className="text-micro text-ink-secondary">{strings.timeline.noSteps}</p>
           ) : null}
 
-          {record.steps.map((step) => (
+          {record.steps.slice(0, shown).map((step) => (
             <StepCard
               key={step.n}
               step={step}
@@ -196,8 +211,16 @@ function Loaded({
               diffMode={diffMode}
               fetchStepDiff={readDiff}
               fetchProof={readProof}
+              fetchStep={readStep}
+              deferOffscreen={record.steps.length > DEFER_OFFSCREEN_AFTER}
             />
           ))}
+
+          {left > 0 ? (
+            <button type="button" className={showMoreButton} onClick={() => setShown(shown + STEP_PAGE)}>
+              {strings.timeline.showMore(Math.min(STEP_PAGE, left), left)}
+            </button>
+          ) : null}
 
           {record.replies.map((reply, index) => (
             <Reply key={index} reply={reply} />

@@ -104,6 +104,9 @@ export const strings = {
 
   timeline: {
     heading: "Timeline",
+    showMore: (next: number, left: number) => `Show ${next} more steps (${left} left)`,
+    showFullOutput: "Show full output",
+    loadingFullOutput: "Loading the full output…",
     noSteps: "No steps were recorded for this run: it ran before the gateway recorded its tool calls.",
     toggleLabel: "Diff layout",
     unified: "Unified",

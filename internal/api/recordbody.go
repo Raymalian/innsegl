@@ -6,11 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 // recordbody.go reads the two kinds of retained body this record needs — a
@@ -72,10 +75,77 @@ func (b gatewayBody) isError() bool {
 // not verified, never shown" rule, extended to "does not parse" for the same
 // reason: bytes this handler cannot read as the shape it expects are bytes
 // it must not guess the meaning of.
+// bodyFileReads counts stored bodies opened by stepBody, so a test can see
+// the cache at work (#442).
+var bodyFileReads atomic.Int64
+
 func stepBody(dir, runID, digest string) (gatewayBody, bool) {
 	if dir == "" || digest == "" {
 		return gatewayBody{}, false
 	}
+	// A verified body is reused while its file is unchanged (#442). The key
+	// carries the file's size and modification time, so a body changed or
+	// removed after it was cached misses here and is read and checked again.
+	key, keyed := bodyCacheKey(dir, runID, digest)
+	if keyed {
+		if b, ok := bodyCache.get(key); ok {
+			return b, true
+		}
+	}
+	b, ok := readStepBody(dir, runID, digest)
+	if ok && keyed {
+		bodyCache.put(key, b)
+	}
+	return b, ok
+}
+
+// bodyCacheKey names one stored body as it is on disk now: false when the
+// file cannot be found, which leaves nothing to reuse.
+func bodyCacheKey(dir, runID, digest string) (string, bool) {
+	hexPart, ok := strings.CutPrefix(digest, "sha256:")
+	if !ok || len(hexPart) != 64 {
+		return "", false
+	}
+	path := filepath.Join(dir, filepath.Base(runID), hexPart+".json")
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false
+	}
+	return fmt.Sprintf("%s|%d|%d", path, info.Size(), info.ModTime().UnixNano()), true
+}
+
+// bodyCacheLimit bounds the cache: a few thousand parsed bodies, each at
+// most a stored body's size.
+const bodyCacheLimit = 20000
+
+// stepBodyCache is a small bounded map; when full it is emptied rather than
+// tracking use, since a run page re-reads all of a run's bodies together.
+type stepBodyCache struct {
+	mu sync.Mutex
+	m  map[string]gatewayBody
+}
+
+var bodyCache = &stepBodyCache{m: map[string]gatewayBody{}}
+
+func (c *stepBodyCache) get(key string) (gatewayBody, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	b, ok := c.m[key]
+	return b, ok
+}
+
+func (c *stepBodyCache) put(key string, b gatewayBody) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.m) >= bodyCacheLimit {
+		c.m = map[string]gatewayBody{}
+	}
+	c.m[key] = b
+}
+
+// readStepBody opens, verifies and parses one stored body.
+func readStepBody(dir, runID, digest string) (gatewayBody, bool) {
+	bodyFileReads.Add(1)
 	raw, ok := readBody(dir, runID, digest)
 	if !ok {
 		return gatewayBody{}, false

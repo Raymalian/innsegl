@@ -57,6 +57,7 @@
       "input": "{\"file_path\":\"e18.txt\",\"content\":\"e18 end to end\\n\"}",
       "output": "File created successfully at: e18.txt",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "ok",
         "exit_code": null
@@ -96,6 +97,7 @@
       "input": "{\"command\":\"git add e18.txt && git commit -m 'e18 end to end'\"}",
       "output": "[main c906a8c] e18 end to end\n 1 file changed, 1 insertion(+)\n create mode 100644 e18.txt",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "ok",
         "exit_code": 0
@@ -123,6 +125,7 @@
       "input": "{\"command\":\"ls ~/.innsegl/log | head -1\"}",
       "output": "ls: ~/.innsegl/log: Operation not permitted",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "error",
         "exit_code": 1
@@ -150,6 +153,7 @@
       "input": "{\"subagent_type\":\"general-purpose\",\"prompt\":\"Create e18-sub.txt containing sub, then run exactly: git add e18-sub.txt && git commit -m \\\"e18 subagent\\\". Report the output.\"}",
       "output": "The subagent created e18-sub.txt and committed it as 64967eb.",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "ok",
         "exit_code": null

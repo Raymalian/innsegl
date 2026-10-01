@@ -83,6 +83,8 @@ export interface RecordStep {
   input: string;
   output: string;
   truncated: boolean;
+  /** The record capped input or output; GET .../steps/{n} serves it in full (#440). */
+  clipped: boolean;
   outcome: RecordOutcome;
   tree_before: string;
   tree_after: string;

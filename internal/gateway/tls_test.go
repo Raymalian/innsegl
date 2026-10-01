@@ -354,9 +354,14 @@ func assertLeafValidForCA(t *testing.T, tlsCert *tls.Certificate, caCertPEM []by
 	caCert := parsePEMCertForTest(t, caCertPEM)
 	pool := x509.NewCertPool()
 	pool.AddCert(caCert)
+	// Verified at the middle of the leaf's own validity, never at the wall
+	// clock: a test that mints on a fixed clock otherwise starts failing
+	// once real time passes the short-lived leaf's expiry (it did, at
+	// 2026-10-01 12:00 UTC).
 	if _, err := leaf.Verify(x509.VerifyOptions{
-		Roots:     pool,
-		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		Roots:       pool,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		CurrentTime: leaf.NotBefore.Add(leaf.NotAfter.Sub(leaf.NotBefore) / 2),
 	}); err != nil {
 		t.Errorf("the leaf does not verify against its own CA: %v", err)
 	}

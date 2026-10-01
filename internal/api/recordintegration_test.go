@@ -426,6 +426,33 @@ func (f *recordFixture) seedLedgerAndBodies(ctx context.Context, owner *ledger.S
 	bareReg[event.FieldIdempotencyKey] = bareID + "-register"
 	appendOrFail(ctx, t, owner, bareReg)
 
+	// ---- a hook-era child of the bare run (#440) -------------------------------
+	// Three steps and no workspace snapshots of its own, as every run recorded
+	// before the gateway: its "before" tree can only come from its parent.
+	hookID := "run-e19-hookchild"
+	hookSpiffe := "spiffe://innsegl.dev/agent/general-purpose/e19/" + hookID
+	hookReg := envelope(hookID, hookSpiffe, event.EventTypeRunRegistered)
+	hookReg[event.FieldAgentType] = "general-purpose"
+	hookReg[event.FieldTaskRef] = "e19"
+	hookReg[event.FieldRepo] = recordIntegrationRepo
+	hookReg[event.FieldBranch] = "main"
+	hookReg[event.FieldParentRunID] = bareID
+	hookReg[event.FieldIdempotencyKey] = hookID + "-register"
+	appendOrFail(ctx, t, owner, hookReg)
+	for i := 1; i <= 3; i++ {
+		hb := marshalBody(t, gatewayBody{
+			Tool: "Bash", ToolUseID: fmt.Sprintf("toolu_hook%d", i),
+			Input:          json.RawMessage(`{"command":"true"}`),
+			ResultObserved: true, Result: json.RawMessage(`""`),
+		})
+		hd := writeRunBody(t, f.logDir, hookID, hb)
+		htc := envelope(hookID, hookSpiffe, event.EventTypeToolCall)
+		htc[event.FieldToolName] = "Bash"
+		htc[event.FieldPayloadDigest] = hd
+		htc[event.FieldIdempotencyKey] = fmt.Sprintf("%s-tc-%d", hookID, i)
+		appendOrFail(ctx, t, owner, htc)
+	}
+
 	// ---- the child run ----------------------------------------------------------
 	childReg := envelope(f.childID, childSpiffe, event.EventTypeRunRegistered)
 	childReg[event.FieldAgentType] = "general-purpose"
@@ -484,6 +511,7 @@ func newRecordTestServer(t *testing.T, rs *recordServer) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/runs/{run_id}/record", rs.handleRunRecord)
 	mux.HandleFunc("GET /api/v1/runs/{run_id}/steps/{n}/diff", rs.handleStepDiff)
+	mux.HandleFunc("GET /api/v1/runs/{run_id}/steps/{n}", rs.handleStep)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv

@@ -6,6 +6,7 @@
  *
  *   GET /api/v1/runs/{run_id}/record          RunRecord  (the contract)
  *   GET /api/v1/runs/{run_id}/steps/{n}/diff  StepDiff   (one step's diff)
+ *   GET /api/v1/runs/{run_id}/steps/{n}       RecordStep (one step, unclipped)
  *   GET /api/v1/proof/{sha}                   Proof      (components/verification)
  *
  * The proof endpoint is the same one run-detail's CommitVerification already
@@ -17,7 +18,7 @@
  */
 
 import type { Proof } from "../../components/verification";
-import type { RunRecord, StepDiff } from "./types";
+import type { RecordStep, RunRecord, StepDiff } from "./types";
 
 /** A run this ledger does not hold. Distinct from a read that failed — the
  * two are different facts (doc 06 P2). */
@@ -35,6 +36,9 @@ export type FetchStepDiff = (
 ) => Promise<StepDiff>;
 
 export type FetchProof = (commitSHA: string, signal: AbortSignal) => Promise<Proof>;
+
+/** One step in full, for a step the record clipped (#440). */
+export type FetchStep = (runId: string, step: number, signal: AbortSignal) => Promise<RecordStep>;
 
 export const fetchRunRecord: FetchRunRecord = async (runId, signal) => {
   const response = await fetch(`/api/v1/runs/${encodeURIComponent(runId)}/record`, {
@@ -60,4 +64,12 @@ export const fetchProof: FetchProof = async (commitSHA, signal) => {
   });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return (await response.json()) as Proof;
+};
+
+export const fetchStep: FetchStep = async (runId, step, signal) => {
+  const response = await fetch(`/api/v1/runs/${encodeURIComponent(runId)}/steps/${step}`, {
+    signal,
+  });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return (await response.json()) as RecordStep;
 };

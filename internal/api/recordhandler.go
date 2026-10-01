@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"unicode/utf8"
 
 	"innsegl.dev/innsegl/internal/event"
 )
@@ -114,6 +115,7 @@ func (s *Server) registerRecordRoutes() {
 	}
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}/record", rs.handleRunRecord)
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}/steps/{n}/diff", rs.handleStepDiff)
+	s.mux.HandleFunc("GET /api/v1/runs/{run_id}/steps/{n}", rs.handleStep)
 }
 
 // runIDFromPath validates a {run_id} path value against doc 02 §5's
@@ -140,6 +142,7 @@ func (rs *recordServer) handleRunRecord(w http.ResponseWriter, r *http.Request) 
 		writeProblem(w, err)
 		return
 	}
+	clipRecord(&rec)
 	writeJSON(w, http.StatusOK, rec)
 }
 
@@ -162,4 +165,59 @@ func (rs *recordServer) handleStepDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, diff)
+}
+
+// stepTextCap is the most a run record carries of one step's input or
+// output (#440).
+const stepTextCap = 2 << 10
+
+// clipStepText caps s for the run record, cutting on a rune boundary so the
+// text stays valid UTF-8.
+func clipStepText(s string) (string, bool) {
+	if len(s) <= stepTextCap {
+		return s, false
+	}
+	cut := stepTextCap
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut], true
+}
+
+// clipRecord caps every step's input and output in rec (#440).
+func clipRecord(rec *RunRecord) {
+	for i := range rec.Steps {
+		st := &rec.Steps[i]
+		var in, out bool
+		st.Input, in = clipStepText(st.Input)
+		st.Output, out = clipStepText(st.Output)
+		st.Clipped = in || out
+	}
+}
+
+// handleStep answers GET /api/v1/runs/{run_id}/steps/{n}: one step, in full.
+func (rs *recordServer) handleStep(w http.ResponseWriter, r *http.Request) {
+	runID, err := runIDFromPath(r)
+	if err != nil {
+		writeProblem(w, err)
+		return
+	}
+	n, err := strconv.Atoi(r.PathValue("n"))
+	if err != nil || n < 1 {
+		writeProblem(w, fmt.Errorf("%w: step %q is not a positive step number",
+			ErrBadRequest, r.PathValue("n")))
+		return
+	}
+	rec, err := rs.buildRunRecord(r.Context(), runID)
+	if err != nil {
+		writeProblem(w, err)
+		return
+	}
+	for _, st := range rec.Steps {
+		if st.N == n {
+			writeJSON(w, http.StatusOK, st)
+			return
+		}
+	}
+	writeProblem(w, fmt.Errorf("%w: run %q has no step %d", ErrNotFound, runID, n))
 }

@@ -43,6 +43,7 @@
       "input": "{\"file_path\":\"internal/gateway/limit.go\"}",
       "output": "func (l *SessionLimiter) Allow(id string) bool {\n\tb := l.bucket(id)\n\treturn b.Allow()\n}",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "ok",
         "exit_code": null
@@ -70,6 +71,7 @@
       "input": "{\"command\":\"git add -A && git commit -m 'wip: probe the race'\"}",
       "output": "[main 5d31e0a] wip: probe the race\n 1 file changed, 3 insertions(+)",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "ok",
         "exit_code": 0
@@ -97,6 +99,7 @@
       "input": "{\"file_path\":\"scratch/probe.sh\",\"content\":\"#!/bin/sh\\nfor i in 1 2 3; do curl -s localhost/health; done\\n\"}",
       "output": "File created successfully at: scratch/probe.sh",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "ok",
         "exit_code": null
@@ -137,6 +140,7 @@
       "input": "{\"command\":\"sh scratch/probe.sh\"}",
       "output": "curl: (7) Failed to connect to localhost port 80\ncurl: (7) Failed to connect to localhost port 80\ncurl: (7) Failed to connect to localhost port 80",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "error",
         "exit_code": 1
@@ -164,6 +168,7 @@
       "input": "{\"command\":\"rm scratch/probe.sh\"}",
       "output": "",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "ok",
         "exit_code": 0
@@ -204,6 +209,7 @@
       "input": "{\"file_path\":\"internal/gateway/limit_test.go\"}",
       "output": "func TestSessionLimiter_Allow(t *testing.T) { ... }",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "ok",
         "exit_code": null
@@ -231,6 +237,7 @@
       "input": "{\"file_path\":\"internal/gateway/limit.go\",\"old_string\":\"\\tb := l.bucket(id)\\n\\treturn b.Allow()\",\"new_string\":\"\\tl.mu.Lock()\\n\\tdefer l.mu.Unlock()\\n\\treturn l.bucket(id).Allow()\"}",
       "output": "The file internal/gateway/limit.go has been updated.",
       "truncated": false,
+      "clipped": false,
       "outcome": {
         "kind": "ok",
         "exit_code": null
