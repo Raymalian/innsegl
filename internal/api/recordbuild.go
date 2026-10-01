@@ -260,6 +260,20 @@ func (rs *recordServer) buildSteps(
 				treeBefore = parentTree
 			}
 		}
+		if treeBefore == "" && n == 1 {
+			// #437 (RM-274): a root run's own first step has no earlier
+			// tool_call to chain a "before" from, and no parent run to
+			// borrow one from either — the ONE remaining source is the
+			// gateway's own baseline, taken before this run's first tool
+			// ever ran (internal/gateway/snapshot.go's own SnapshotBaseline)
+			// and read back from its snapshot store directly, never from a
+			// chain member invented to hold it. "" here (a deployment from
+			// before this landed, or a baseline this process cannot resolve
+			// for any of the ordinary reasons a snapshot read can fail)
+			// leaves step 1 exactly as it already was: an unknown before,
+			// never guessed at.
+			treeBefore = rs.runBaseline(ctx, reg.Repo, runID)
+		}
 		if treeAfter != "" {
 			lastTree = treeAfter
 		}

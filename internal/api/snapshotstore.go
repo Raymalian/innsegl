@@ -100,6 +100,34 @@ func firstLine(s string) string {
 	return s
 }
 
+// baselineRefPrefix and baselineKeySource match
+// internal/gateway/snapshot.go's own constants of the identical name, byte
+// for byte — restated here rather than imported, this file's own package
+// comment's "re-derive, never be told" posture applied to a second value
+// (#437, RM-274): a different construction here would look up a DIFFERENT
+// ref name for the IDENTICAL run, and every baseline lookup would miss.
+const (
+	baselineRefPrefix = "refs/innsegl/baselines/"
+	baselineKeySource = "run-baseline"
+)
+
+// runBaselineTree answers the workspace tree internal/gateway/snapshot.go's
+// own SnapshotBaseline captured for runID before its first tool call ever
+// ran, or "" when none was ever taken: a deployment running before #437
+// shipped, a run whose first tool_use the gateway missed for any of the
+// ordinary reasons a snapshot can fail (snapshot.go's own "witness, never
+// gate"), or simply a run this store never heard of. Never an error — the
+// same "understate, never guess" posture every other read in this file
+// already holds for a tree it cannot resolve.
+func runBaselineTree(ctx context.Context, cfg snapshotStoreConfig, storeDir, runID string) string {
+	ref := baselineRefPrefix + hashRepoKey(baselineKeySource, runID)
+	out, err := runStoreGit(ctx, cfg, storeDir, "rev-parse", "--verify", "--quiet", "--end-of-options", ref)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
 // storeDirFor resolves repoName to its snapshot store directory, or false
 // when this process cannot: the repository is not one the proof BFF serves,
 // the store root is not configured, the checkout's key could not be

@@ -624,3 +624,191 @@ func TestSnapshotKeysARepositoryWithNoOriginAndNoCommitYet(t *testing.T) {
 		t.Fatal("Snapshot answered no tree hash on success")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SnapshotBaseline -- #437 (RM-274): a run's first step has no snapshot to
+// call its own "before" unless one is taken before that step's tool ever
+// runs. snapBaselineRef restates record.go's own storeGatewayToolCall-side
+// naming (a run-keyed ref, hashed the same way repoKey's own sources are,
+// under a prefix prune() never walks) so these tests can read the ref back
+// by the exact name a real caller would look it up by -- never by assuming
+// SnapshotBaseline's own internals beyond what Snapshot already proves.
+// ---------------------------------------------------------------------------
+
+func snapBaselineRef(runID string) string {
+	return baselineRefPrefix + hashRepoKey(baselineKeySource, runID)
+}
+
+// snapRefTarget answers the object a ref in storeDir currently points at, or
+// "" if the ref does not exist.
+func snapRefTarget(t *testing.T, storeDir, ref string) string {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "--git-dir", storeDir, "rev-parse", "--verify", "--quiet", ref)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestSnapshotBaselineProtectsATreeFindableByRunID proves the basic shape:
+// a baseline is captured into the store (same as Snapshot), AND protected
+// under a ref this run's own id resolves deterministically -- a reader
+// holding only runID, never a sequence number or a point in time, can find
+// it.
+func TestSnapshotBaselineProtectsATreeFindableByRunID(t *testing.T) {
+	projects := t.TempDir()
+	repo := filepath.Join(projects, "repo")
+	snapNewProject(t, repo, "git@example.com:innsegl-test/snapbaseline001.git")
+
+	store := t.TempDir()
+	snap := snapMustSnapshotter(t, SnapshotConfig{StoreRoot: store, ProjectRoots: []string{projects}})
+	ctx := context.Background()
+
+	outcome := snap.SnapshotBaseline(ctx, repo, "run-baseline-001")
+	if !outcome.Snapshotted() {
+		t.Fatalf("SnapshotBaseline refused: %s", outcome.Reason)
+	}
+	if outcome.TreeHash == "" {
+		t.Fatal("SnapshotBaseline answered no tree hash on success")
+	}
+
+	storeDir := snapStoreDir(t, store)
+	ref := snapBaselineRef("run-baseline-001")
+	target := snapRefTarget(t, storeDir, ref)
+	if target != outcome.TreeHash {
+		t.Fatalf("ref %s = %q, want the baseline's own tree hash %q", ref, target, outcome.TreeHash)
+	}
+	if !snapObjectExists(t, storeDir, outcome.TreeHash) {
+		t.Fatalf("baseline tree %s is not a readable object in the store", outcome.TreeHash)
+	}
+}
+
+// TestSnapshotBaselineIsIdempotentPerRun proves a baseline already recorded
+// for a run is never moved by a second call -- a gateway restart resetting
+// whatever in-memory "already baselined" tracking a caller keeps must never
+// be able to overwrite the FIRST tree a run's workspace ever held with
+// whatever the workspace holds by the time a second call happens to run.
+func TestSnapshotBaselineIsIdempotentPerRun(t *testing.T) {
+	projects := t.TempDir()
+	repo := filepath.Join(projects, "repo")
+	snapNewProject(t, repo, "git@example.com:innsegl-test/snapbaseline002.git")
+
+	store := t.TempDir()
+	snap := snapMustSnapshotter(t, SnapshotConfig{StoreRoot: store, ProjectRoots: []string{projects}})
+	ctx := context.Background()
+
+	first := snap.SnapshotBaseline(ctx, repo, "run-baseline-002")
+	if !first.Snapshotted() {
+		t.Fatalf("first SnapshotBaseline refused: %s", first.Reason)
+	}
+
+	// The workspace changes AFTER the first baseline -- the second call must
+	// not re-capture it.
+	if err := os.WriteFile(filepath.Join(repo, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatalf("writing later.txt: %v", err)
+	}
+
+	second := snap.SnapshotBaseline(ctx, repo, "run-baseline-002")
+	if !second.Snapshotted() {
+		t.Fatalf("second SnapshotBaseline refused: %s", second.Reason)
+	}
+	if second.TreeHash != first.TreeHash {
+		t.Fatalf("second SnapshotBaseline moved the ref: first %s, second %s", first.TreeHash, second.TreeHash)
+	}
+
+	storeDir := snapStoreDir(t, store)
+	if target := snapRefTarget(t, storeDir, snapBaselineRef("run-baseline-002")); target != first.TreeHash {
+		t.Fatalf("baseline ref = %q after a second call, want it unchanged at %q", target, first.TreeHash)
+	}
+}
+
+// TestSnapshotBaselineDistinctRunsGetDistinctBaselines proves two different
+// runs sharing the SAME working tree at the SAME moment still land under two
+// DIFFERENT refs -- never a shared bucket, the same guarantee repoKey
+// already gives two different repositories.
+func TestSnapshotBaselineDistinctRunsGetDistinctBaselines(t *testing.T) {
+	projects := t.TempDir()
+	repo := filepath.Join(projects, "repo")
+	snapNewProject(t, repo, "git@example.com:innsegl-test/snapbaseline003.git")
+
+	store := t.TempDir()
+	snap := snapMustSnapshotter(t, SnapshotConfig{StoreRoot: store, ProjectRoots: []string{projects}})
+	ctx := context.Background()
+
+	a := snap.SnapshotBaseline(ctx, repo, "run-baseline-003a")
+	b := snap.SnapshotBaseline(ctx, repo, "run-baseline-003b")
+	if !a.Snapshotted() || !b.Snapshotted() {
+		t.Fatalf("a baseline was refused: a=%+v b=%+v", a, b)
+	}
+
+	storeDir := snapStoreDir(t, store)
+	refA := snapRefTarget(t, storeDir, snapBaselineRef("run-baseline-003a"))
+	refB := snapRefTarget(t, storeDir, snapBaselineRef("run-baseline-003b"))
+	if refA == "" || refB == "" {
+		t.Fatalf("one baseline ref was not written: a=%q b=%q", refA, refB)
+	}
+	if refA != a.TreeHash || refB != b.TreeHash {
+		t.Fatalf("a baseline ref did not point at its own call's tree hash: refA=%q a=%q refB=%q b=%q",
+			refA, a.TreeHash, refB, b.TreeHash)
+	}
+}
+
+// TestSnapshotBaselineSurvivesTheOrdinarySnapshotPruneSweep proves
+// baselineRefPrefix is a namespace prune() never walks: enough ordinary
+// Snapshot calls to force several rounds of "oldest numbered ref first"
+// eviction (MaxRepoStoreBytes set to the smallest value that still leaves
+// room for one snapshot, per prune's own "never below one" rule) leave an
+// earlier-taken baseline exactly where it was.
+func TestSnapshotBaselineSurvivesTheOrdinarySnapshotPruneSweep(t *testing.T) {
+	projects := t.TempDir()
+	repo := filepath.Join(projects, "repo")
+	snapNewProject(t, repo, "git@example.com:innsegl-test/snapbaseline004.git")
+
+	store := t.TempDir()
+	snap := snapMustSnapshotter(t, SnapshotConfig{
+		StoreRoot: store, ProjectRoots: []string{projects}, MaxRepoStoreBytes: 1,
+	})
+	ctx := context.Background()
+
+	baseline := snap.SnapshotBaseline(ctx, repo, "run-baseline-004")
+	if !baseline.Snapshotted() {
+		t.Fatalf("SnapshotBaseline refused: %s", baseline.Reason)
+	}
+
+	notes := filepath.Join(repo, "notes.txt")
+	for i := 0; i < 10; i++ {
+		if err := os.WriteFile(notes, []byte(strings.Repeat("x", i+1)), 0o644); err != nil {
+			t.Fatalf("writing notes.txt: %v", err)
+		}
+		if outcome := snap.Snapshot(ctx, repo); !outcome.Snapshotted() {
+			t.Fatalf("ordinary Snapshot %d refused: %s", i, outcome.Reason)
+		}
+	}
+
+	storeDir := snapStoreDir(t, store)
+	if target := snapRefTarget(t, storeDir, snapBaselineRef("run-baseline-004")); target != baseline.TreeHash {
+		t.Fatalf("baseline ref = %q after the ordinary prune sweep, want it unchanged at %q",
+			target, baseline.TreeHash)
+	}
+	if !snapObjectExists(t, storeDir, baseline.TreeHash) {
+		t.Fatal("the baseline's own tree was collected despite its ref still existing")
+	}
+}
+
+// TestSnapshotBaselineRejectsTheSameInvalidWorkingDirectoriesAsSnapshot:
+// SnapshotBaseline shares Snapshot's own validation (underProjectRoot) --
+// restated here rather than re-asserted case by case, since that function is
+// already proven above.
+func TestSnapshotBaselineRejectsTheSameInvalidWorkingDirectoriesAsSnapshot(t *testing.T) {
+	store := t.TempDir()
+	snap := snapMustSnapshotter(t, SnapshotConfig{StoreRoot: store, ProjectRoots: []string{t.TempDir()}})
+
+	outcome := snap.SnapshotBaseline(context.Background(), "relative/dir", "run-baseline-005")
+	if outcome.Snapshotted() {
+		t.Fatalf("a relative working directory was accepted: %+v", outcome)
+	}
+	if outcome.Reason == "" {
+		t.Fatal("refused with no reason")
+	}
+}

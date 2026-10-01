@@ -138,12 +138,23 @@ func waitForPendingCount(t *testing.T, rec *ToolCallRecorder, want int) {
 }
 
 // fakeSnapshotWitness is snapshotWitness, faked: it never touches git or a
-// filesystem, and records what it was called with.
+// filesystem, and records what it was called with. Snapshot and
+// SnapshotBaseline (#437, RM-274) keep entirely separate call counts and
+// outcomes, since record.go calls them from two different places for two
+// different reasons — a test that only configures outcome (Snapshot's own)
+// sees baselineOutcome default to its zero value, SnapshotOutcome{}, which
+// Snapshotted() reads as success with an empty tree hash: harmless, since
+// nothing asserts on it unless a test sets baselineOutcome itself.
 type fakeSnapshotWitness struct {
 	mu      sync.Mutex
 	outcome SnapshotOutcome
 	calls   int
 	lastDir string
+
+	baselineOutcome SnapshotOutcome
+	baselineCalls   int
+	lastBaselineDir string
+	lastBaselineRun string
 }
 
 func (f *fakeSnapshotWitness) Snapshot(_ context.Context, workingDirectory string) SnapshotOutcome {
@@ -158,6 +169,21 @@ func (f *fakeSnapshotWitness) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+func (f *fakeSnapshotWitness) SnapshotBaseline(_ context.Context, workingDirectory, runID string) SnapshotOutcome {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.baselineCalls++
+	f.lastBaselineDir = workingDirectory
+	f.lastBaselineRun = runID
+	return f.baselineOutcome
+}
+
+func (f *fakeSnapshotWitness) baselineCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.baselineCalls
 }
 
 // ---------------------------------------------------------------------------
@@ -572,6 +598,161 @@ func TestGREC003RecorderDoesNotSnapshotWhenTheTriggerDoesNotFire(t *testing.T) {
 	if witness.callCount() != 0 {
 		t.Errorf("the witness was called %d times for a result the trigger had already seen, want 0", witness.callCount())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// The baseline snapshot: #437 (RM-274). A run's first step has no earlier
+// snapshot of its own to call its own "before" unless one is taken before
+// that step's tool ever runs — snapshotIfTriggered's own witness only ever
+// fires AFTER a tool_result arrives, which is necessarily after the tool it
+// answers for already ran. baselineIfNeeded (record.go) is the fix: it
+// fires SnapshotBaseline the first time this recorder ever sees a tool_use
+// for a run, from OnToolUseContext — before the harness that will run it
+// has even received the model's reply in full.
+// ---------------------------------------------------------------------------
+
+// waitForBaselined blocks until n signals have arrived on baselined (fed by
+// ToolCallRecorderConfig's own onBaselined hook), or fails t after timeout —
+// waitForRecorded's own idiom, restated for the separate goroutine
+// baselineIfNeeded fires.
+func waitForBaselined(t *testing.T, baselined <-chan struct{}, n int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for i := 0; i < n; i++ {
+		select {
+		case <-baselined:
+		case <-deadline:
+			t.Fatalf("timed out waiting for onBaselined signal %d/%d", i+1, n)
+		}
+	}
+}
+
+// TestBaselineSnapshotFiresOnceOnTheFirstToolUseOfARun proves the core
+// claim: the FIRST tool_use this recorder ever sees for a run fires
+// SnapshotBaseline exactly once, carrying that request's own working
+// directory and the run id — and every LATER tool_use for the SAME run,
+// whatever request it arrives on, fires it no further.
+func TestBaselineSnapshotFiresOnceOnTheFirstToolUseOfARun(t *testing.T) {
+	calls := &fakeRecordCalls{}
+	witness := &fakeSnapshotWitness{baselineOutcome: SnapshotOutcome{TreeHash: strings.Repeat("a", 40)}}
+	baselined := make(chan struct{}, 8)
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{
+		record: calls.fn, Snapshots: witness, Trigger: NewSnapshotTrigger(),
+		onBaselined: func() { baselined <- struct{}{} },
+	})
+
+	ctx := WithRunID(WithRequestFacts(context.Background(), RequestFacts{WorkingDirectory: "/w/repo"}), recTestRunID)
+	rec.OnToolUseContext(ctx, recToolUse("toolu_base1", "Write", `{"file_path":"e18.txt"}`))
+	waitForBaselined(t, baselined, 1, 5*time.Second)
+
+	if got := witness.baselineCallCount(); got != 1 {
+		t.Fatalf("baseline calls after the first tool_use = %d, want 1", got)
+	}
+	if witness.lastBaselineDir != "/w/repo" {
+		t.Errorf("baseline working directory = %q, want %q", witness.lastBaselineDir, "/w/repo")
+	}
+	if witness.lastBaselineRun != recTestRunID {
+		t.Errorf("baseline run id = %q, want %q", witness.lastBaselineRun, recTestRunID)
+	}
+
+	// A second, and a third, tool_use for the SAME run: no further baseline.
+	rec.OnToolUseContext(ctx, recToolUse("toolu_base2", "Bash", `{"command":"true"}`))
+	rec.OnToolUseContext(ctx, recToolUse("toolu_base3", "Bash", `{"command":"true"}`))
+	// baselineIfNeeded's own claim-then-spawn is synchronous up to the
+	// claim (claimBaseline runs on THIS goroutine, before the "go" that
+	// would fire a second SnapshotBaseline), so there is nothing further to
+	// wait for here: a second signal arriving on baselined before this
+	// assertion runs would itself be the bug this test exists to catch.
+	if got := witness.baselineCallCount(); got != 1 {
+		t.Errorf("baseline calls after three tool_use blocks on one run = %d, want 1", got)
+	}
+}
+
+// TestBaselineSnapshotIsPerRunNotGlobal proves two different runs each get
+// their OWN baseline — the claim is keyed by run id, never a package-wide
+// "has this recorder ever baselined anything" flag.
+func TestBaselineSnapshotIsPerRunNotGlobal(t *testing.T) {
+	calls := &fakeRecordCalls{}
+	witness := &fakeSnapshotWitness{baselineOutcome: SnapshotOutcome{TreeHash: strings.Repeat("b", 40)}}
+	baselined := make(chan struct{}, 8)
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{
+		record: calls.fn, Snapshots: witness, Trigger: NewSnapshotTrigger(),
+		onBaselined: func() { baselined <- struct{}{} },
+	})
+
+	rec.OnToolUseContext(WithRunID(context.Background(), "run-baseline-a"), recToolUse("toolu_a1", "Write", `{}`))
+	rec.OnToolUseContext(WithRunID(context.Background(), "run-baseline-b"), recToolUse("toolu_b1", "Write", `{}`))
+	waitForBaselined(t, baselined, 2, 5*time.Second)
+
+	if got := witness.baselineCallCount(); got != 2 {
+		t.Fatalf("baseline calls across two different runs = %d, want 2", got)
+	}
+}
+
+// TestBaselineSnapshotNeverFiresWithoutASnapshotter: the zero-value and
+// "Snapshots left unset" configs (ToolCallRecorderConfig's own doc comment
+// on why a typed-nil *Snapshotter must never be assigned there instead)
+// both mean no baseline is ever attempted, the same as they already mean no
+// per-step snapshot is.
+func TestBaselineSnapshotNeverFiresWithoutASnapshotter(t *testing.T) {
+	calls := &fakeRecordCalls{}
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: calls.fn})
+
+	ctx := WithRunID(context.Background(), recTestRunID)
+	rec.OnToolUseContext(ctx, recToolUse("toolu_nobase", "Write", `{}`))
+	rec.HandleResults(context.Background(), recTestRunID, RequestFacts{},
+		[]observedToolResult{recResult("toolu_nobase", `{}`, false)})
+	waitForCalls(t, calls, 1) // did not panic, recorded normally
+}
+
+// TestBaselineSnapshotFailureIsReportedButNeverBlocks: a baseline snapshot
+// that cannot be taken is reported through OnRecordFailure — the same
+// "logged loudly" channel the per-step witness already uses
+// (TestGREC003RecorderRecordsWithoutATreeHashWhenTheSnapshotFails) — and
+// never turns into a panic, a refused tool_use, or a failed recording of
+// the pair itself.
+func TestBaselineSnapshotFailureIsReportedButNeverBlocks(t *testing.T) {
+	calls := &fakeRecordCalls{}
+	var failures []string
+	var mu sync.Mutex
+	witness := &fakeSnapshotWitness{
+		baselineOutcome: SnapshotOutcome{Reason: "workspace snapshot: not a git working tree"},
+	}
+	baselined := make(chan struct{}, 1)
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{
+		record: calls.fn, Snapshots: witness, Trigger: NewSnapshotTrigger(),
+		OnRecordFailure: func(err error) {
+			mu.Lock()
+			defer mu.Unlock()
+			failures = append(failures, err.Error())
+		},
+		onBaselined: func() { baselined <- struct{}{} },
+	})
+
+	ctx := WithRunID(context.Background(), recTestRunID)
+	rec.OnToolUseContext(ctx, recToolUse("toolu_basefail", "Write", `{}`))
+	waitForBaselined(t, baselined, 1, 5*time.Second)
+
+	mu.Lock()
+	got := append([]string(nil), failures...)
+	mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("%d failures reported, want 1: %v", len(got), got)
+	}
+	if !strings.Contains(got[0], "not a git working tree") {
+		t.Errorf("failure = %q, want it to name the baseline's own reason", got[0])
+	}
+	if !strings.Contains(got[0], "baseline") {
+		t.Errorf("failure = %q, want it to name itself as a baseline failure, distinct from an ordinary snapshot failure", got[0])
+	}
+
+	// The pair itself still records normally -- a baseline failure never
+	// blocks the recording this file's own doc comment promises it never
+	// would.
+	rec.HandleResults(context.Background(), recTestRunID,
+		RequestFacts{WorkingDirectory: "/w", ToolResultIDs: []string{"toolu_basefail"}},
+		[]observedToolResult{recResult("toolu_basefail", `{}`, false)})
+	waitForCalls(t, calls, 1)
 }
 
 // ---------------------------------------------------------------------------

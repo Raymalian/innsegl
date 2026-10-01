@@ -28,8 +28,11 @@ import (
 // # The scenario
 //
 //	run-parent (root, repo recordIntegrationRepo)
-//	  1. Write   creates a.txt              tree_before "" (root run, no
-//	             earlier snapshot to compare against — record.go's own rule)
+//	  (baseline, #437/RM-274: the gateway's own SnapshotBaseline, taken
+//	             before step 1's tool ever ran — here the genuinely empty
+//	             tree, since the workspace holds nothing until step 1 writes
+//	             a.txt)
+//	  1. Write   creates a.txt              tree_before T0 (the baseline)
 //	             tree_after  T1
 //	  2. Bash    `git add a.txt && git commit...`, and DOES commit it
 //	             tree_before T1  tree_after T1 (nothing in the tree moved)
@@ -116,6 +119,16 @@ func newRecordFixture(t *testing.T) *recordFixture {
 	if storeT1 != treeT1 || storeT2 != treeT2 {
 		t.Fatalf("tree ids diverged between the two repositories")
 	}
+
+	// ---- the parent run's own baseline (#437, RM-274) -----------------------
+	// internal/gateway/snapshot.go's own SnapshotBaseline, restated here with
+	// plain git rather than a real Snapshotter: the genuinely empty tree
+	// (git mktree on empty stdin produces the well-known empty tree id),
+	// protected under the SAME ref name runBaselineTree
+	// (internal/api/snapshotstore.go) computes from a run id alone.
+	emptyTree := mktreeIn(t, storeDir, gitPath, map[string]string{})
+	baselineRef := baselineRefPrefix + hashRepoKey(baselineKeySource, "run-e19-parent")
+	runGitDirT(t, storeDir, gitPath, "update-ref", baselineRef, emptyTree)
 
 	// ---- the Prover (RepoPath/GitPath, and commit subjects) ----------------
 	prover, err := NewProver(ProofConfig{
@@ -509,12 +522,31 @@ func TestRPG001RunRecordAgainstRealPostgresAndGit(t *testing.T) {
 
 	step1, step2, step3, step4 := rec.Steps[0], rec.Steps[1], rec.Steps[2], rec.Steps[3]
 
-	// Step 1: root run's first step, no known baseline.
-	if step1.TreeBefore != "" {
-		t.Errorf("step1.TreeBefore = %q, want \"\" (root run, no earlier snapshot)", step1.TreeBefore)
+	// Step 1: root run's first step. #437 (RM-274): the gateway's own
+	// baseline, taken before this run's first tool ever ran, gives this
+	// step a real "before" — here, the genuinely empty tree — so its own
+	// diff and its own file both show, rather than the earlier "no known
+	// baseline" gap this run's own fixture comment used to document.
+	if step1.TreeBefore == "" {
+		t.Error("step1.TreeBefore is empty, want the baseline's own tree (#437)")
 	}
-	if len(step1.Files) != 0 {
-		t.Errorf("step1.Files = %+v, want none — an unknown before is never shown as a diff of everything", step1.Files)
+	if step1.TreeBefore == step1.TreeAfter {
+		t.Errorf("step1.TreeBefore = step1.TreeAfter = %q, want the baseline distinct from T1", step1.TreeAfter)
+	}
+	var step1A *RecordFile
+	for i := range step1.Files {
+		if step1.Files[i].Path == "a.txt" {
+			step1A = &step1.Files[i]
+		}
+	}
+	if step1A == nil {
+		t.Fatalf("step1.Files = %+v, want a.txt", step1.Files)
+	}
+	if step1A.Status != "A" {
+		t.Errorf("step1 a.txt status = %q, want A", step1A.Status)
+	}
+	if step1A.ByRunID != "" {
+		t.Errorf("step1 a.txt by_run_id = %q, want empty (the parent run's own write)", step1A.ByRunID)
 	}
 	if step1.Witnesses.Snapshot != "changed" {
 		t.Errorf("step1.Witnesses.Snapshot = %q, want changed", step1.Witnesses.Snapshot)
@@ -598,13 +630,27 @@ func TestRPG001RunRecordAgainstRealPostgresAndGit(t *testing.T) {
 		t.Errorf("commit.Subject = %q, want %q", c.Subject, "add a.txt")
 	}
 
-	// The whole-run Files: from the first KNOWN baseline (T1, after step 1)
-	// to the last tree (T2) — a.txt's own creation is outside that known
-	// range and must not appear; b.txt must, attributed to the child.
-	for _, file := range rec.Files {
-		if file.Path == "a.txt" {
-			t.Errorf("a.txt must not appear in the whole-run files: its creation is before the first known baseline")
+	// The whole-run Files: from the run's own baseline (the empty tree,
+	// #437/RM-274) to the last tree (T2) — a.txt's own creation is now
+	// INSIDE that known range and must appear, attributed to the parent run
+	// itself; b.txt must too, attributed to the child.
+	var wholeRunA *RecordFile
+	for i := range rec.Files {
+		if rec.Files[i].Path == "a.txt" {
+			wholeRunA = &rec.Files[i]
 		}
+	}
+	if wholeRunA == nil {
+		t.Fatalf("whole-run Files = %+v, want a.txt (#437)", rec.Files)
+	}
+	if wholeRunA.Status != "A" {
+		t.Errorf("whole-run a.txt status = %q, want A", wholeRunA.Status)
+	}
+	if wholeRunA.ByRunID != "" {
+		t.Errorf("whole-run a.txt by_run_id = %q, want empty (the parent run's own write)", wholeRunA.ByRunID)
+	}
+	if !wholeRunA.Committed {
+		t.Error("whole-run a.txt should read Committed: its content is in the parent's own commit_recorded tree")
 	}
 	var wholeRunB *RecordFile
 	for i := range rec.Files {
@@ -687,6 +733,36 @@ func TestRPG001MissingKeyIDIsNeverVerified(t *testing.T) {
 func TestRPG002StepDiffAgainstARealSnapshotStore(t *testing.T) {
 	f := newRecordFixture(t)
 	srv := newRecordTestServer(t, f.rs)
+
+	// Step 1 (creates a.txt, against the run's own baseline, #437/RM-274):
+	// one file, one hunk, added -- the diff route reuses buildRunRecord's
+	// own tree_before/tree_after (diff.go's own doc comment), so fixing
+	// step 1's TreeBefore fixes this route too, with no change of its own.
+	first := get(t, srv.URL, "/api/v1/runs/"+f.parentID+"/steps/1/diff")
+	if first.status != 200 {
+		t.Fatalf("GET diff step 1: status %d: %s", first.status, first.body)
+	}
+	var diff1 StepDiff
+	decodeBody(t, first, &diff1)
+	if len(diff1.Files) != 1 {
+		t.Fatalf("got %d files, want 1: %+v", len(diff1.Files), diff1.Files)
+	}
+	df1 := diff1.Files[0]
+	if df1.Path != "a.txt" || df1.Status != "A" || df1.Binary {
+		t.Errorf("diff file = %+v, want Path=a.txt Status=A Binary=false", df1)
+	}
+	if len(df1.Hunks) != 1 || len(df1.Hunks[0].Lines) == 0 {
+		t.Fatalf("hunks = %+v, want one hunk with content", df1.Hunks)
+	}
+	var sawAddA bool
+	for _, line := range df1.Hunks[0].Lines {
+		if line.Kind == "add" && line.Text == "a.txt content" {
+			sawAddA = true
+		}
+	}
+	if !sawAddA {
+		t.Errorf("hunk lines = %+v, want an add line of \"a.txt content\"", df1.Hunks[0].Lines)
+	}
 
 	// Step 2 (commit, no tree change): no hunks.
 	a := get(t, srv.URL, "/api/v1/runs/"+f.parentID+"/steps/2/diff")

@@ -8,6 +8,26 @@ package gateway
 // workspace_tree_hash (ADR-0061 member 3) is #381's job -- this file only
 // produces the hash, or a reason there is none.
 //
+// # A baseline, before the run's first step ever runs (#437, RM-274)
+//
+// Snapshot's own trigger (SnapshotTrigger, below) fires on a NEW tool
+// result -- #381's own record.go calls it once a request carries one, which
+// is necessarily AFTER the tool it answers for already ran. A run's own
+// first tool call therefore has no earlier snapshot of its own workspace to
+// call its own "before": the first snapshot this Snapshotter ever takes for
+// a run is already that run's first step's "after". SnapshotBaseline exists
+// for exactly that gap -- captured once, by record.go, the first time it
+// ever sees a tool_use for a run with no snapshot yet (before the harness
+// that will actually run it has even received the model's full reply), and
+// protected under its OWN ref namespace (baselineRefPrefix) so a reader
+// holding only a run id, never a point in this store's own snapshot
+// sequence, can find it. A baseline is never carried onto any event's own
+// workspace_tree_hash -- doc 02's schema is unchanged by this addition --
+// and is instead read back from THIS store directly
+// (internal/api/snapshotstore.go's own runBaselineTree), the same way every
+// other before/after value the API derives already comes from this store,
+// never from a chain member invented to hold it.
+//
 // # Witness, never gate
 //
 // Every exported entry point below answers with a reason instead of an
@@ -139,6 +159,23 @@ const (
 	snapshotIndexFile = "innsegl-snapshot-index"
 
 	snapshotNoGlobalGitconfig = ".innsegl-no-global-gitconfig"
+
+	// baselineRefPrefix namespaces every ref SnapshotBaseline creates --
+	// #437 (RM-274). Deliberately NOT a sub-namespace of snapshotRefPrefix:
+	// prune's own listSnapshotRefs globs snapshotRefPrefix alone, so a ref
+	// in here is never counted toward, or removed by, "oldest snapshot
+	// first" eviction. A baseline is found by WHICH RUN it belongs to, never
+	// by a position in this Snapshotter's own sequence, so it is keyed by a
+	// hash of the run id (hashRepoKey, the same construction repoKey's own
+	// disjoint sources already use) rather than by nextSeq.
+	baselineRefPrefix = "refs/innsegl/baselines/"
+
+	// baselineKeySource is hashRepoKey's own disjointness tag for a baseline
+	// ref's name, so a run id hashed for THIS purpose can never collide with
+	// the SAME bytes hashed as a repoKey source. internal/api/snapshotstore.go
+	// restates this literal (never imports it -- that file's own package
+	// comment says why) to compute the identical ref name from the read side.
+	baselineKeySource = "run-baseline"
 )
 
 // SnapshotConfig configures a Snapshotter.
@@ -235,6 +272,47 @@ func NewSnapshotter(cfg SnapshotConfig) (*Snapshotter, error) {
 // none. Nothing here is ever an error that would block forwarding the
 // request that triggered it.
 func (s *Snapshotter) Snapshot(ctx context.Context, workingDirectory string) SnapshotOutcome {
+	return s.snapshotAndProtect(ctx, workingDirectory, s.neverAlreadyProtected, s.protect)
+}
+
+// SnapshotBaseline protects a ref keyed by runID (baselineRefPrefix's own
+// comment) at workingDirectory's current state -- #437 (RM-274): a run's
+// first step has no earlier snapshot of its own to call its own "before"
+// unless one is taken before that first step's tool ever runs. A baseline
+// already recorded for runID is left exactly where it is: this method
+// answers that EXISTING tree hash, without writing a new one, rather than
+// moving the ref to whatever the workspace holds by the time a second call
+// happens to run (record.go's own caller tracks "already baselined" only in
+// memory, which a gateway restart mid-run resets). Nothing here is ever an
+// error that would block forwarding the request that triggered the caller
+// that led here.
+func (s *Snapshotter) SnapshotBaseline(ctx context.Context, workingDirectory, runID string) SnapshotOutcome {
+	return s.snapshotAndProtect(ctx, workingDirectory, func(ctx context.Context, storeDir string) (string, bool) {
+		return s.existingBaseline(ctx, storeDir, runID)
+	}, func(ctx context.Context, storeDir, treeHash string) error {
+		return s.protectBaseline(ctx, storeDir, runID, treeHash)
+	})
+}
+
+// snapshotAndProtect is Snapshot and SnapshotBaseline's shared core: resolve
+// and validate workingDirectory, prepare its repository's own store, give
+// alreadyProtected a chance to answer an EXISTING tree rather than
+// capturing a new one (Snapshot's own alreadyProtected always answers
+// false; SnapshotBaseline's own checks for a ref already recorded for its
+// run), then -- only when nothing existing was found -- write the current
+// tree, hand it to protect (Snapshot's own sequence-numbered ref, or
+// SnapshotBaseline's own run-keyed one), and prune the store's ordinary
+// (never baseline) snapshot sequence back under its cap. The whole sequence
+// is serialised by s.mu, the same guarantee Snapshot always gave: two
+// snapshots of the same repository's private index never race, a Snapshot
+// and a SnapshotBaseline for the same repository included -- and the SAME
+// lock is what makes alreadyProtected's own check race-free against a
+// concurrent call for the identical run.
+func (s *Snapshotter) snapshotAndProtect(
+	ctx context.Context, workingDirectory string,
+	alreadyProtected func(ctx context.Context, storeDir string) (treeHash string, found bool),
+	protect func(ctx context.Context, storeDir, treeHash string) error,
+) SnapshotOutcome {
 	dir, reason := s.underProjectRoot(workingDirectory)
 	if reason != "" {
 		return SnapshotOutcome{Reason: reason}
@@ -255,6 +333,10 @@ func (s *Snapshotter) Snapshot(ctx context.Context, workingDirectory string) Sna
 			"workspace snapshot: the store for %s could not be prepared: %v", dir, err)}
 	}
 
+	if existing, found := alreadyProtected(ctx, storeDir); found {
+		return SnapshotOutcome{TreeHash: existing}
+	}
+
 	indexFile := filepath.Join(storeDir, snapshotIndexFile)
 	treeHash, err := s.writeTree(ctx, storeDir, top, indexFile)
 	if err != nil {
@@ -262,7 +344,7 @@ func (s *Snapshotter) Snapshot(ctx context.Context, workingDirectory string) Sna
 			"workspace snapshot: %s could not be captured: %v", dir, err)}
 	}
 
-	if err := s.protect(ctx, storeDir, treeHash); err != nil {
+	if err := protect(ctx, storeDir, treeHash); err != nil {
 		// Captured but not protected: a later prune of this same store could
 		// remove it before anything else ever names it. Honest to report no
 		// snapshot at all rather than a hash that might already be gone by
@@ -275,6 +357,14 @@ func (s *Snapshotter) Snapshot(ctx context.Context, workingDirectory string) Sna
 	s.prune(ctx, storeDir)
 
 	return SnapshotOutcome{TreeHash: treeHash}
+}
+
+// neverAlreadyProtected is Snapshot's own alreadyProtected: every ordinary
+// snapshot is new work, never a repeat of one already on record under some
+// other name -- SnapshotTrigger (below), not this file, decides whether an
+// ordinary snapshot is worth taking at all.
+func (*Snapshotter) neverAlreadyProtected(context.Context, string) (string, bool) {
+	return "", false
 }
 
 // underProjectRoot validates workingDirectory and answers its cleaned form,
@@ -497,6 +587,55 @@ func (s *Snapshotter) protect(ctx context.Context, storeDir, treeHash string) er
 	s.nextSeq++
 	ref := fmt.Sprintf("%s%020d", snapshotRefPrefix, s.nextSeq)
 	//nolint:gosec // G204: gitPath is configuration (default "git"); ref is this file's own generated name, treeHash is this call's own write-tree result
+	cmd := exec.CommandContext(ctx, s.gitPath, "update-ref", ref, treeHash)
+	cmd.Env = s.storeEnv(storeDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git update-ref %s %s: %w: %s", ref, treeHash, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// baselineRef answers runID's own baseline ref name in this store --
+// internal/api/snapshotstore.go's own runBaselineTree computes the
+// identical name (restated, not imported; that file's own package comment
+// says why) to read back what this writes.
+func baselineRef(runID string) string {
+	return baselineRefPrefix + hashRepoKey(baselineKeySource, runID)
+}
+
+// existingBaseline answers runID's own baseline tree, already protected in
+// storeDir from an earlier call, or found=false when none exists yet --
+// which also covers every failure short of that (the store missing or
+// unreadable already surfaced earlier, in snapshotAndProtect's own
+// ensureStore call, so a git failure reaching this method is never anything
+// this layer has not already decided how to report). Called only from
+// inside snapshotAndProtect's own s.mu critical section, so "found=false
+// here" and "protectBaseline then creates the ref" can never race against a
+// second, concurrent SnapshotBaseline for the identical run -- see
+// snapshotAndProtect's own comment.
+func (s *Snapshotter) existingBaseline(ctx context.Context, storeDir, runID string) (treeHash string, found bool) {
+	ref := baselineRef(runID)
+	//nolint:gosec // G204: gitPath is configuration (default "git"); storeDir is this file's own path, ref is derived from a fixed prefix and a hash
+	cmd := exec.CommandContext(ctx, s.gitPath, "rev-parse", "--verify", "--quiet", "--end-of-options", ref)
+	cmd.Env = s.storeEnv(storeDir)
+	out, err := cmd.Output()
+	if err != nil {
+		// Not found is the overwhelmingly common case (an exit status with
+		// no stderr, --quiet's whole point).
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
+// protectBaseline creates runID's own baseline ref, pointing at treeHash --
+// #437 (RM-274). Called only once existingBaseline has already answered
+// found=false for the SAME run under the SAME s.mu critical section
+// (snapshotAndProtect's own sequencing), so this never needs to check again
+// or decide between two trees: there is exactly one tree to protect, the
+// one this call just captured.
+func (s *Snapshotter) protectBaseline(ctx context.Context, storeDir, runID, treeHash string) error {
+	ref := baselineRef(runID)
+	//nolint:gosec // G204: gitPath is configuration (default "git"); ref is this file's own derived name, treeHash is this call's own write-tree result
 	cmd := exec.CommandContext(ctx, s.gitPath, "update-ref", ref, treeHash)
 	cmd.Env = s.storeEnv(storeDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
