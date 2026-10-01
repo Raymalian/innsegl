@@ -54,7 +54,7 @@ export interface RecordOutcome {
 
 export interface RecordWitnesses {
   gateway: "present" | "missing";
-  snapshot: "changed" | "unchanged" | "none";
+  snapshot: "changed" | "unchanged" | "none" | "inactive";
   telemetry: "matched" | "missing" | "pending" | "inactive";
 }
 

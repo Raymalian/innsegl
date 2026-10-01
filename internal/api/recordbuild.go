@@ -128,6 +128,8 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 
 	steps, bodiesStored, bodiesVerified := rs.buildSteps(ctx, runID, reg, rows, commitRows, committedCommits, spawnByEvent, logDir, now)
 
+	settleRunWitnesses(steps)
+
 	commits := rs.buildCommits(ctx, reg.Repo, commitRows, steps)
 
 	var treeBeforeRun, treeAfterRun string
@@ -286,7 +288,7 @@ func (rs *recordServer) buildSteps(
 			step.Outcome = outcomeOf(toolName, body)
 			step.Summary = summaryOf(toolName, body)
 
-			if toolName == "Bash" && !body.IsError {
+			if toolName == "Bash" && !body.isError() {
 				if short, ok := commitShortSHA(step.Output); ok {
 					for _, c := range commits {
 						if hasPrefixSHA(c.CommitSHA, short) {
@@ -389,7 +391,15 @@ func hasPrefixSHA(full, short string) bool {
 // explicit "Exit code: N" read from the result text when one is present;
 // otherwise 1, the conventional shell failure code, stated as a default
 // rather than as a number this process observed.
+//
+// A hook-shape body (RM-273) carries none of ResultObserved/IsError at
+// all — hookBodyAsGateway sets hookShape instead, and the outcome its own
+// shape shows (hookOutcomeOf, computed once while mapping it) is read back
+// here rather than re-derived from fields that mapping never set.
 func outcomeOf(toolName string, body gatewayBody) RecordOutcome {
+	if body.hookShape {
+		return body.hookOutcome
+	}
 	if !body.ResultObserved {
 		return RecordOutcome{Kind: "unknown"}
 	}

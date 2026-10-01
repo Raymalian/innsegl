@@ -126,6 +126,7 @@ export const strings = {
     witnessSnapshotChanged: "tree changed as the diff shows",
     witnessSnapshotUnchanged: "tree unchanged",
     witnessSnapshotNone: "no snapshot taken",
+    witnessSnapshotInactive: "no snapshots for this run",
     witnessTelemetryMatched: "matches the gateway's record",
     witnessTelemetryMissing: "no event for this tool call",
     witnessTelemetryPending: "not yet reported",

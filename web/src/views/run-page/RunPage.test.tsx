@@ -379,3 +379,30 @@ describe("RPG-015 keyboard path and +/- markers", () => {
     expect(found.length).toBeGreaterThan(0);
   });
 });
+
+describe("#438 a witness never active for a run is not a disagreement", () => {
+  it("counts only active witnesses, with no red badge, grid or banner", async () => {
+    const base = record();
+    const bare = {
+      ...base,
+      steps: base.steps.map((s) => ({
+        ...s,
+        witnesses: { gateway: "present", snapshot: "inactive", telemetry: "inactive" } as const,
+      })),
+    };
+    render(
+      <RunPage
+        route={ROUTE}
+        fetchRunRecord={async () => bare}
+        fetchStepDiff={async () => stepOneDiff()}
+        fetchProof={async () => verifiedProof()}
+        now={NOW}
+      />,
+    );
+    await screen.findByText("Timeline");
+    const step2 = within(document.querySelector('[data-step="2"]') as HTMLElement);
+    expect(step2.getByText("1 of 1 witnesses agree")).toBeInTheDocument();
+    expect(document.querySelector("[data-witness-badge]")).toBeNull();
+    expect(document.querySelector("[data-witness-grid]")).toBeNull();
+  });
+});

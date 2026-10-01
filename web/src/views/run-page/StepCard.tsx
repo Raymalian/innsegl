@@ -22,7 +22,7 @@ import { CommitCard } from "./CommitCard";
 import type { FetchProof, FetchStepDiff } from "./api";
 import { Diff } from "./Diff";
 import type { DiffMode } from "./Diff";
-import { stepWitnessesAgree, witnessAgreeCount, WITNESS_TOTAL } from "./derive";
+import { stepWitnessesAgree, witnessActiveCount, witnessAgreeCount } from "./derive";
 import { AlertMarkIcon, OutcomeFailedIcon, OutcomeOkIcon } from "./icons";
 import { strings } from "./strings";
 import {
@@ -90,11 +90,11 @@ export function StepCard({
         <Outcome step={step} />
         <span className={stepTime}>{utcTime(step.at)}</span>
         {agrees ? (
-          <span className={stepWitnessText}>{strings.timeline.witnessesAgreeAll(WITNESS_TOTAL)}</span>
+          <span className={stepWitnessText}>{strings.timeline.witnessesAgreeAll(witnessActiveCount(step.witnesses))}</span>
         ) : (
           <span className={stepWitnessBadge} data-witness-badge>
             <AlertMarkIcon />
-            {strings.timeline.witnessesPartial(witnessAgreeCount(step.witnesses), WITNESS_TOTAL)}
+            {strings.timeline.witnessesPartial(witnessAgreeCount(step.witnesses), witnessActiveCount(step.witnesses))}
           </span>
         )}
       </div>
@@ -170,8 +170,10 @@ function Outcome({ step }: { readonly step: RecordStep }) {
 function WitnessGrid({ step }: { readonly step: RecordStep }) {
   const { gateway, snapshot, telemetry } = step.witnesses;
   const gatewayOk = gateway === "present";
-  const snapshotOk = snapshot === "changed" || snapshot === "unchanged";
-  const telemetryOk = telemetry === "matched";
+  // An inactive witness is not a failure (#438): it shows as not failed,
+  // with its own wording.
+  const snapshotOk = snapshot === "changed" || snapshot === "unchanged" || snapshot === "inactive";
+  const telemetryOk = telemetry === "matched" || telemetry === "inactive";
   return (
     <dl className={witnessGrid} data-witness-grid>
       <WitnessCell
@@ -187,7 +189,9 @@ function WitnessGrid({ step }: { readonly step: RecordStep }) {
             ? strings.timeline.witnessSnapshotChanged
             : snapshot === "unchanged"
               ? strings.timeline.witnessSnapshotUnchanged
-              : strings.timeline.witnessSnapshotNone
+              : snapshot === "inactive"
+                ? strings.timeline.witnessSnapshotInactive
+                : strings.timeline.witnessSnapshotNone
         }
       />
       <WitnessCell

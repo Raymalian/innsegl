@@ -51,8 +51,18 @@ export function witnessAgreeCount(w: RecordWitnesses): number {
 
 export const WITNESS_TOTAL = 3;
 
+/** How many witnesses were active for this step's run (#438): the gateway
+ * always, a snapshot or telemetry witness unless the run never had it. An
+ * inactive witness proves nothing by its absence, so it is not counted. */
+export function witnessActiveCount(w: RecordWitnesses): number {
+  let n = 1;
+  if (w.snapshot !== "inactive") n++;
+  if (w.telemetry !== "inactive") n++;
+  return n;
+}
+
 export function stepWitnessesAgree(w: RecordWitnesses): boolean {
-  return witnessAgreeCount(w) === WITNESS_TOTAL;
+  return witnessAgreeCount(w) === witnessActiveCount(w);
 }
 
 /** doc 06 §3.3's fact card, read off the run-level witness rollup rather than

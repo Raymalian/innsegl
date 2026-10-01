@@ -154,3 +154,36 @@ func stepWitnesses(
 
 	return w
 }
+
+// settleRunWitnesses re-judges each step's snapshot and telemetry witness
+// against the run they belong to (#438). A witness that was never active
+// for a run proves nothing by its absence, so it is "inactive" there, never
+// a disagreement:
+//
+//   - snapshots: a run none of whose steps has a snapshot never had them;
+//   - telemetry: a run's harness is proven to export it from the first of
+//     its own steps that a telemetry record matched, the same per-run rule
+//     the reconciler's witness pass holds itself to (#434). Earlier steps,
+//     and every step of a run with no match at all, are inactive.
+func settleRunWitnesses(steps []RecordStep) {
+	hasSnapshots := false
+	var telSince time.Time
+	telProven := false
+	for _, st := range steps {
+		if st.Witnesses.Snapshot != "none" {
+			hasSnapshots = true
+		}
+		if st.Witnesses.Telemetry == "matched" && (!telProven || st.At.Before(telSince)) {
+			telSince, telProven = st.At, true
+		}
+	}
+	for i := range steps {
+		w := &steps[i].Witnesses
+		if !hasSnapshots {
+			w.Snapshot = "inactive"
+		}
+		if w.Telemetry != "matched" && (!telProven || steps[i].At.Before(telSince)) {
+			w.Telemetry = "inactive"
+		}
+	}
+}

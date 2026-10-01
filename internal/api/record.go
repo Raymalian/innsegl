@@ -115,10 +115,11 @@ type RecordOutcome struct {
 type RecordWitnesses struct {
 	// Gateway is present (the gateway relayed and stored it) or missing.
 	Gateway string `json:"gateway"`
-	// Snapshot is changed, unchanged or none (no snapshot around the step).
+	// Snapshot is changed, unchanged, none (no snapshot around the step, in a
+	// run that has them) or inactive (this run never had snapshots).
 	Snapshot string `json:"snapshot"`
 	// Telemetry is matched, missing, pending (inside the window) or
-	// inactive (telemetry was not being received).
+	// inactive (this run's harness was not yet, or never, exporting it).
 	Telemetry string `json:"telemetry"`
 }
 

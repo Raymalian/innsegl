@@ -138,3 +138,41 @@ func TestRPG005SummarizeWitness(t *testing.T) {
 		t.Errorf("BodiesStored=%d BodiesVerified=%d, want 3, 2", w.BodiesStored, w.BodiesVerified)
 	}
 }
+
+// TestSettleRunWitnessesJudgesEachWitnessPerRun — #438. A witness is judged
+// only for a run where it was ever active. Measured on 2026-10-01: a run
+// recorded through the hook, which never exported telemetry and never had a
+// workspace snapshot, showed "1 of 3 witnesses" in red on every step.
+func TestSettleRunWitnessesJudgesEachWitnessPerRun(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 4, 0, 0, 0, time.UTC)
+	step := func(n int, at time.Time, snap, tel string) RecordStep {
+		return RecordStep{N: n, At: at, Witnesses: RecordWitnesses{Gateway: "present", Snapshot: snap, Telemetry: tel}}
+	}
+
+	// A run with neither witness ever active: both are inactive, not failed.
+	bare := []RecordStep{step(1, t0, "none", "missing"), step(2, t0.Add(time.Minute), "none", "pending")}
+	settleRunWitnesses(bare)
+	for _, st := range bare {
+		if st.Witnesses.Snapshot != "inactive" || st.Witnesses.Telemetry != "inactive" {
+			t.Errorf("step %d of a run with no snapshots and no telemetry = %+v, want both inactive", st.N, st.Witnesses)
+		}
+	}
+
+	// A run whose telemetry started at step 2: step 1 is inactive, step 3's
+	// absence is real. A step with no snapshot in a run that has them stays none.
+	live := []RecordStep{
+		step(1, t0, "changed", "missing"),
+		step(2, t0.Add(time.Minute), "none", "matched"),
+		step(3, t0.Add(2*time.Minute), "unchanged", "missing"),
+	}
+	settleRunWitnesses(live)
+	if got := live[0].Witnesses.Telemetry; got != "inactive" {
+		t.Errorf("step 1, before the run's telemetry began: telemetry = %q, want inactive", got)
+	}
+	if got := live[2].Witnesses.Telemetry; got != "missing" {
+		t.Errorf("step 3, after the run's telemetry began: telemetry = %q, want missing", got)
+	}
+	if got := live[1].Witnesses.Snapshot; got != "none" {
+		t.Errorf("step 2, no snapshot in a run that has them: snapshot = %q, want none", got)
+	}
+}
