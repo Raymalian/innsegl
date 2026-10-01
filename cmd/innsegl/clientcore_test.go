@@ -48,8 +48,8 @@ func TestOPS130TheClientEnrolsAndWorksThroughTheHostedCore(t *testing.T) {
 		t.Fatalf("Enrol against the real core: %v", err)
 	}
 	paths := client.ClientPaths(t.TempDir())
-	if err := client.WriteEnrolment(paths, enrolment, "127.0.0.1:0"); err != nil {
-		t.Fatal(err)
+	if werr := client.WriteEnrolment(paths, enrolment, "127.0.0.1:0"); werr != nil {
+		t.Fatal(werr)
 	}
 	srv, err := client.NewServer(paths, io.Discard)
 	if err != nil {
@@ -72,7 +72,10 @@ func TestOPS130TheClientEnrolsAndWorksThroughTheHostedCore(t *testing.T) {
 			t.Fatalf("POST %s through the client service: %v", path, derr)
 		}
 		defer func() { _ = resp.Body.Close() }()
-		b, _ := io.ReadAll(resp.Body)
+		b, berr := io.ReadAll(resp.Body)
+		if berr != nil {
+			t.Fatalf("read %s: %v", path, berr)
+		}
 		return resp.StatusCode, strings.TrimSpace(string(b))
 	}
 
@@ -106,8 +109,8 @@ func TestOPS130TheClientEnrolsAndWorksThroughTheHostedCore(t *testing.T) {
 	}
 
 	// Revoked on the core: the next request is refused and reaches nothing.
-	if err := f.writer.SetInstallationStatus(ctx, enrolment.InstallationID, accounts.StatusRevoked, "u-1"); err != nil {
-		t.Fatal(err)
+	if serr := f.writer.SetInstallationStatus(ctx, enrolment.InstallationID, accounts.StatusRevoked, "u-1"); serr != nil {
+		t.Fatal(serr)
 	}
 	if status, _ := post("/v1/messages", enMessage, messageHeaders(session)); status != http.StatusUnauthorized {
 		t.Fatalf("revoked installation through the client service: %d, want 401", status)
