@@ -130,6 +130,8 @@ export interface RecordAncestor {
   role: "session" | "subagent";
   /** The step of this ancestor's own parent that started it; 0 for the session. */
   spawned_at_step: number;
+  /** How many agents this ancestor started, signing identities not counted. */
+  agents: number;
 }
 
 /** Text the record holds, or not (#443). */

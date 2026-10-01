@@ -92,6 +92,9 @@ type RecordAncestor struct {
 	// SpawnedAtStep is the step of THIS ancestor's own parent that started
 	// it, 0 for the session.
 	SpawnedAtStep int `json:"spawned_at_step"`
+	// Agents is how many agents this ancestor started, signing identities
+	// not counted.
+	Agents int `json:"agents"`
 }
 
 // RecordText is a piece of text this run's record holds, or not.

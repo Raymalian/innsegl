@@ -24,7 +24,8 @@
         "title": "",
         "agent_type": "session",
         "role": "session",
-        "spawned_at_step": 0
+        "spawned_at_step": 0,
+        "agents": 73
       }
     ],
     "asked": {
