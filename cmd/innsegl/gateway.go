@@ -849,7 +849,12 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	// configuration that has not set them to anything writable either (the
 	// two failures should not be conflated, and a test forcing the listen
 	// failure alone should not have to configure a CA it will never reach).
-	ca, err := gateway.LoadOrCreateCA(gateway.CAConfig{KeyDir: o.caKeyDir, PublicDir: o.caCertDir})
+	caConfig, err := gatewayCAConfig(o.caKeyDir, o.caCertDir, os.Getenv)
+	if err != nil {
+		running.Close()
+		return nil, fmt.Errorf("configure the gateway's certificate names: %w", err)
+	}
+	ca, err := gateway.LoadOrCreateCA(caConfig)
 	if err != nil {
 		running.Close()
 		return nil, fmt.Errorf("configure the gateway's own TLS certificate authority: %w", err)

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"net"
 	"strings"
 	"testing"
 )
@@ -44,5 +45,41 @@ func TestGatewayCertNamesFromEnvRefusesInvalidEntries(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), gatewayCertNamesEnv) {
 			t.Errorf("%q: err = %v", v, err)
 		}
+	}
+}
+
+// The gateway's CA configuration carries the names from the environment, so
+// a core reached by name or address presents a certificate that covers it.
+func TestGatewayCAConfigCarriesTheConfiguredNames(t *testing.T) {
+	getenv := func(k string) string {
+		if k == gatewayCertNamesEnv {
+			return "core.example.test, 192.0.2.10"
+		}
+		return ""
+	}
+	cfg, err := gatewayCAConfig("/keys", "/public", getenv)
+	if err != nil {
+		t.Fatalf("gatewayCAConfig: %v", err)
+	}
+	if cfg.KeyDir != "/keys" || cfg.PublicDir != "/public" {
+		t.Errorf("dirs = %q, %q", cfg.KeyDir, cfg.PublicDir)
+	}
+	if len(cfg.DNSNames) != 1 || cfg.DNSNames[0] != "core.example.test" {
+		t.Errorf("DNSNames = %v", cfg.DNSNames)
+	}
+	if len(cfg.IPs) != 1 || !cfg.IPs[0].Equal(net.ParseIP("192.0.2.10")) {
+		t.Errorf("IPs = %v", cfg.IPs)
+	}
+}
+
+func TestGatewayCAConfigRefusesABadName(t *testing.T) {
+	getenv := func(k string) string {
+		if k == gatewayCertNamesEnv {
+			return "http://nope"
+		}
+		return ""
+	}
+	if _, err := gatewayCAConfig("/k", "/p", getenv); err == nil {
+		t.Fatal("want an error naming the bad entry")
 	}
 }

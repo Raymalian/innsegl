@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	"innsegl.dev/innsegl/internal/gateway"
 )
 
 // gatewayCertNamesEnv lists extra names the gateway's server certificate
@@ -56,4 +58,17 @@ func validDNSName(s string) bool {
 		}
 	}
 	return !allNumeric
+}
+
+// gatewayCAConfig is the gateway's CA configuration: its key and public
+// directories, and the names its server certificate must cover beyond
+// loopback, from INNSEGL_GATEWAY_CERT_NAMES. A core reached by name or
+// address (ADR-0066) sets that variable; a single-host install leaves it
+// empty.
+func gatewayCAConfig(keyDir, publicDir string, getenv func(string) string) (gateway.CAConfig, error) {
+	dnsNames, ips, err := gatewayCertNamesFromEnv(getenv)
+	if err != nil {
+		return gateway.CAConfig{}, err
+	}
+	return gateway.CAConfig{KeyDir: keyDir, PublicDir: publicDir, DNSNames: dnsNames, IPs: ips}, nil
 }
