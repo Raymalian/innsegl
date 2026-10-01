@@ -2,22 +2,21 @@
 
 /*
  * What the gated shell needs to know before it can render anything at all
- * (ADR-0062): am I signed in, and if not, has anyone ever been?
+ * (ADR-0062): am I signed in, and if not, does an account even exist yet?
  *
  * Two reads, run together, because neither alone is enough to choose a
  * screen: "not signed in" could mean "show the sign-in button" or "show the
- * first-enrolment form", and only GET /api/v1/health's `auth.enrolled`
- * (allow-listed, public — see internal/api's Health/AuthHealth doc comment)
- * tells the two apart.
+ * setup page", and only GET /api/v1/auth/setup (#445, allow-listed, no
+ * session needed) tells the two apart.
  */
 
 import { useCallback, useEffect, useState } from "react";
 
-import { fetchEnrolled, fetchSessionStatus } from "./client";
+import { fetchSessionStatus, fetchSetupStatus } from "./client";
 
 export type SessionState =
   | { readonly status: "checking" }
-  | { readonly status: "unauthenticated"; readonly enrolled: boolean }
+  | { readonly status: "unauthenticated"; readonly setupNeeded: boolean }
   | { readonly status: "authenticated"; readonly displayName: string };
 
 export interface SessionResource {
@@ -38,15 +37,15 @@ export function useSessionState(base?: string): SessionResource {
     setState({ status: "checking" });
 
     void (async () => {
-      const [session, enrolled] = await Promise.all([
+      const [session, setup] = await Promise.all([
         fetchSessionStatus(base),
-        fetchEnrolled(base),
+        fetchSetupStatus(base),
       ]);
       if (!live) return;
       setState(
         session.authenticated
           ? { status: "authenticated", displayName: session.displayName }
-          : { status: "unauthenticated", enrolled },
+          : { status: "unauthenticated", setupNeeded: setup.needed },
       );
     })();
 
@@ -60,7 +59,7 @@ export function useSessionState(base?: string): SessionResource {
   }, []);
 
   const markSignedOut = useCallback(() => {
-    setState({ status: "unauthenticated", enrolled: true });
+    setState({ status: "unauthenticated", setupNeeded: false });
   }, []);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);

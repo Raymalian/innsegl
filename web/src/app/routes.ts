@@ -161,6 +161,33 @@ export function navRoute(view: (typeof NAV_VIEWS)[number]): Route {
 const isRunStatus = (v: string): v is RunStatus =>
   (RUN_STATUSES as readonly string[]).includes(v);
 
+/*
+ * #445 (ADR-0062's accounts amendment): `/setup` and `/account` deliberately
+ * do NOT join `VIEWS`/`Route` above. FE-016's own test pins that list to
+ * "the six views doc 06 §3 specifies, and ADR-0054's alert detail" — account
+ * management is not a ledger view at all, the same reading that already kept
+ * the sign-in and (now retired) enrolment pages out of this table. AuthGate
+ * and App.tsx read these two directly off the address bar instead, the one
+ * piece of view state either page needs, following this file's own "one
+ * place parses the URL" rule for everything else.
+ */
+
+/** The address the setup link `make start`/`install.sh` print opens. */
+export function isSetupPath(pathWithQuery: string): boolean {
+  return new URL(pathWithQuery, "http://dashboard.invalid").pathname === "/setup";
+}
+
+/** The one-time code a setup link carries as `?code=…`; "" if the link, or
+ * whatever address this came from, carried none. */
+export function setupCodeFrom(pathWithQuery: string): string {
+  return new URL(pathWithQuery, "http://dashboard.invalid").searchParams.get("code") ?? "";
+}
+
+/** The account page the top bar's own name link points at. */
+export function isAccountPath(pathWithQuery: string): boolean {
+  return new URL(pathWithQuery, "http://dashboard.invalid").pathname === "/account";
+}
+
 // A limit the API would reject is not carried in a link. internal/api's
 // runFilterFrom refuses anything that is not a positive number, so forwarding
 // one would turn a shared URL into a 400 for whoever opened it.
