@@ -112,6 +112,13 @@ type CAConfig struct {
 	// for a caller that only needs the CA's own persistence (a unit test).
 	PublicDir string
 
+	// DNSNames and IPs are extra names the leaf certificate covers, beside
+	// the loopback names (localhost, 127.0.0.1, ::1), which are always
+	// included. The leaf is minted per process from the same CA, so changing
+	// these never changes the CA a client pins.
+	DNSNames []string
+	IPs      []net.IP
+
 	// Now stands in for time.Now, so a test can drive certificate issuance
 	// and renewal without a real wait. Nil means time.Now.
 	Now func() time.Time
@@ -319,8 +326,35 @@ func writeFileExact(path string, data []byte, perm os.FileMode) error {
 	return os.Chmod(path, perm)
 }
 
-// issueLeaf mints a fresh short-lived leaf certificate for 127.0.0.1 and
-// localhost, signed by ca, valid from now (less clock-skew slack) for
+// leafNames is the loopback defaults followed by the configured names,
+// de-duplicated.
+func (c CAConfig) leafNames() ([]string, []net.IP) {
+	dnsNames := []string{"localhost"}
+	ips := []net.IP{net.ParseIP("127.0.0.1"), net.IPv6loopback}
+	seenDNS := map[string]bool{"localhost": true}
+	for _, n := range c.DNSNames {
+		if !seenDNS[n] {
+			seenDNS[n] = true
+			dnsNames = append(dnsNames, n)
+		}
+	}
+	for _, ip := range c.IPs {
+		dup := false
+		for _, have := range ips {
+			if have.Equal(ip) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			ips = append(ips, ip)
+		}
+	}
+	return dnsNames, ips
+}
+
+// issueLeaf mints a fresh short-lived leaf certificate for the loopback and
+// configured names, signed by ca, valid from now (less clock-skew slack) for
 // leafValidity.
 func (ca *CA) issueLeaf(now time.Time) (*tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -331,6 +365,7 @@ func (ca *CA) issueLeaf(now time.Time) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
+	dnsNames, ips := ca.cfg.leafNames()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: "127.0.0.1"},
@@ -338,8 +373,8 @@ func (ca *CA) issueLeaf(now time.Time) (*tls.Certificate, error) {
 		NotAfter:     now.Add(leafValidity),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     dnsNames,
+		IPAddresses:  ips,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
 	if err != nil {
