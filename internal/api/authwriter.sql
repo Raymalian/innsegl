@@ -47,16 +47,12 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA innsegl_auth GRANT SELECT, INSERT, UPDATE, DE
 ALTER DEFAULT PRIVILEGES IN SCHEMA innsegl_auth GRANT USAGE, SELECT ON SEQUENCES TO %[1]s;
 
 -- The audit trail is append-only for this role too. The blanket grant above
--- covers it with UPDATE and DELETE; take those back where the table exists.
--- (Migration 0010 also puts a trigger on it, for a role provisioned before
--- the table did.)
-DO $$
-BEGIN
-    IF to_regclass('innsegl_auth.audit') IS NOT NULL THEN
-        REVOKE UPDATE, DELETE, TRUNCATE ON innsegl_auth.audit FROM %[1]s;
-    END IF;
-END;
-$$;
+-- covers it with UPDATE and DELETE; take those back. A plain statement, not a
+-- DO block: db-init.sh substitutes the role as a psql variable, and psql does
+-- not substitute inside a dollar-quoted body (measured: OPS-009 failed with a
+-- syntax error at ":"). db-init.sh applies every migration first, so the
+-- table exists here. Migration 0010 also puts a trigger on it.
+REVOKE UPDATE, DELETE, TRUNCATE ON innsegl_auth.audit FROM %[1]s;
 
 -- No path to privilege of its own -- the same posture readonly.sql and
 -- appendonly.sql both hold their roles to.

@@ -108,6 +108,15 @@ GRANT SELECT, INSERT ON innsegl.alert_resolutions TO :"role";
 -- otherwise. That comment is corrected in the same commit that adds this line.
 GRANT SELECT, INSERT ON innsegl.gateway_run_mapping TO :"role";
 
+-- innsegl_auth.installations and innsegl_auth.repo_grants (RM-280, #456;
+-- ADR-0063): the client-certificate guard checks an installation's status
+-- and its repositories within its organisation's live grants on every
+-- request. Read those two tables and nothing else of the account schema --
+-- no people, passkeys, sessions or token hashes -- and write none of it.
+-- Explicit grants on named tables, never the schema's default privileges.
+GRANT USAGE ON SCHEMA innsegl_auth TO :"role";
+GRANT SELECT ON innsegl_auth.installations, innsegl_auth.repo_grants TO :"role";
+
 -- A table added by a LATER migration must arrive append-only too. Without
 -- this, the role's posture would silently be "append-only as of the migrations
 -- that existed when it was provisioned" — and the next migration would hand it
