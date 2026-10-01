@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * doc 07's run page (E19, #395-397): a visual regression of the page at
- * 1440px, built from the approved mockup's own fixtures, in light and dark.
+ * The run page (#443, RM-278, and E19 #395-397 before it): a visual
+ * regression of the page at 1440px, built from the approved boards' own
+ * fixtures, in light and dark.
  *
  * This file owns its own API mock rather than extending
  * tests/support/mock-routes.ts (RM-049's own path, not this issue's), so it
- * intercepts the run page's three reads directly: the record, the one step's
- * diff the fixtures cover, and the commit's proof (components/verification's
- * own `verifiedProof` fixture — the real rollup, not an invented shape).
+ * intercepts the run page's three reads directly: the record, whichever step
+ * diffs the fixture actually shows, and the commit's proof
+ * (components/verification's own `verifiedProof` fixture — the real rollup,
+ * not an invented shape).
  */
 
 import { expect, test } from "@playwright/test";
@@ -20,10 +22,16 @@ import {
   stepOneDiff,
   statesRecord,
   statesDiff,
+  agentRecord,
+  sessionRecord,
   NOW,
   RUN_ID,
   STATES_NOW,
   STATES_RUN_ID,
+  AGENT_NOW,
+  AGENT_RUN_ID,
+  SESSION_NOW,
+  SESSION_RUN_ID,
 } from "../../src/views/run-page/fixtures";
 import type { RunRecord, StepDiff } from "../../src/views/run-page/types";
 
@@ -36,7 +44,7 @@ function json(route: Route, body: unknown): Promise<void> {
 }
 
 /** One run's worth of mocks: its own record, and whichever step diffs it
- * actually shows (StepCard's `showDiff` rule — never every step). */
+ * actually shows (an opened row's own `showDiff` rule — never every step). */
 async function installRunPageMocks(
   page: Page,
   runId: string,
@@ -89,19 +97,42 @@ for (const mode of ["light", "dark"] as const) {
   test.describe(`run page at 1440px (${mode})`, () => {
     test.use({ colorScheme: mode, viewport: { width: 1440, height: 1800 } });
 
-    test(`renders the Main board from record.json/diff-step1.json (${mode})`, async ({ page }) => {
-      // Fixed, or the status pill's and every step's relative time ("3 h 9
-      // min ago") drifts by the second between the baseline and any later
-      // run, and `toHaveScreenshot`'s pixel-exact comparison (this suite's
-      // own default) fails on text that changed for no reason a diff should
-      // ever report.
+    test(`renders the subagent page from agent-record.json, matching Agent.dc.html (${mode})`, async ({ page }) => {
+      await page.clock.install({ time: AGENT_NOW });
+      await installRunPageMocks(page, AGENT_RUN_ID, agentRecord, {});
+      await page.goto(`/runs/${AGENT_RUN_ID}`);
+
+      await expect(page.getByRole("heading", { level: 1, name: "RM-189 health stops naming repos" })).toBeVisible();
+      await expect(page.getByText("Witnesses")).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+
+      await expect(page).toHaveScreenshot(`run-page-agent-${mode}.png`, {
+        fullPage: true,
+        animations: "disabled",
+      });
+    });
+
+    test(`renders the session page from session-record.json, matching Session.dc.html (${mode})`, async ({ page }) => {
+      await page.clock.install({ time: SESSION_NOW });
+      await installRunPageMocks(page, SESSION_RUN_ID, sessionRecord, {});
+      await page.goto(`/runs/${SESSION_RUN_ID}`);
+
+      await expect(page.getByRole("heading", { level: 1, name: "Session on Raymalian/innsegl" })).toBeVisible();
+      await expect(page.getByText("Agents it started")).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+
+      await expect(page).toHaveScreenshot(`run-page-session-${mode}.png`, {
+        fullPage: true,
+        animations: "disabled",
+      });
+    });
+
+    test(`renders a plain root run (record.json) through the session layout (${mode})`, async ({ page }) => {
       await page.clock.install({ time: NOW });
       await installRunPageMocks(page, RUN_ID, record, { 1: stepOneDiff });
       await page.goto(`/runs/${RUN_ID}`);
 
-      await expect(page.getByText("main agent")).toBeVisible();
-      // Every fetch this page makes — record, the one diff, the proof — has
-      // settled once the commit card's own verdict badge is on screen.
+      await expect(page.getByRole("heading", { level: 1, name: "Session on innsegl-test/gateway-livetest" })).toBeVisible();
       await expect(page.getByText("Valid")).toBeVisible();
       await page.evaluate(() => document.fonts.ready);
 
@@ -116,10 +147,7 @@ for (const mode of ["light", "dark"] as const) {
       await installRunPageMocks(page, RUN_ID, record, { 1: stepOneDiff });
       await page.goto(`/runs/${RUN_ID}?diff=side`);
 
-      await expect(page.getByRole("button", { name: "Side by side" })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
+      await expect(page.getByRole("button", { name: "Side by side" }).first()).toHaveAttribute("aria-pressed", "true");
       await expect(page.getByText("Valid")).toBeVisible();
       await page.evaluate(() => document.fonts.ready);
 
@@ -129,7 +157,7 @@ for (const mode of ["light", "dark"] as const) {
       });
     });
 
-    test(`renders the States board: disagreement, a reverted file, a not_landed commit (${mode})`, async ({
+    test(`renders the disagreement and not-landed states (states-record.json) through the session layout (${mode})`, async ({
       page,
     }) => {
       // Steps 3 and 5 also changed the snapshot (writing, then reverting,
@@ -191,7 +219,6 @@ for (const mode of ["light", "dark"] as const) {
       await page.goto(`/runs/${STATES_RUN_ID}`);
 
       await expect(page.getByRole("alert")).toContainText("Witnesses disagree on step 7");
-      await expect(page.getByText("on no branch", { exact: false })).toBeVisible();
       await page.evaluate(() => document.fonts.ready);
 
       await expect(page).toHaveScreenshot(`run-page-states-${mode}.png`, {

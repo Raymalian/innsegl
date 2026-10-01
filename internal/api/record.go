@@ -19,7 +19,16 @@ import "time"
 
 // RunRecord answers GET /api/v1/runs/{run_id}/record.
 type RunRecord struct {
-	Run      RecordRun       `json:"run"`
+	Run RecordRun `json:"run"`
+	// Agent is this run as one agent: what it was for, where it came from,
+	// what it was asked and what it reported (#443).
+	Agent RecordAgent `json:"agent"`
+	// Children are the agents this run started, direct children only and
+	// never an identity that only signed a commit (#443).
+	Children []RecordChild `json:"children"`
+	// Written lists the files this run's own steps wrote, read from each
+	// file-writing step's own input (#443).
+	Written  []RecordWrite   `json:"written"`
 	Tree     RecordTree      `json:"tree"`
 	Brief    RecordMessage   `json:"brief"`
 	Replies  []RecordMessage `json:"replies"`
@@ -47,6 +56,76 @@ type RecordRun struct {
 	ParentRunID  string     `json:"parent_run_id"`
 	// ForkedFromRunID is set only on a fork (ADR-0058 decision 5).
 	ForkedFromRunID string `json:"forked_from_run_id"`
+}
+
+// RecordAgent is a run seen as one agent (#443).
+type RecordAgent struct {
+	// Title is the task its parent gave it when spawning it (the spawn's
+	// own description), "" when none is on record.
+	Title string `json:"title"`
+	// Role is "session" for a run nothing started, else "subagent".
+	Role string `json:"role"`
+	// Model is the model the spawn named, "" when it named none.
+	Model string `json:"model"`
+	// SpawnedAtStep is the parent's step that started it, 0 when unknown or
+	// a session.
+	SpawnedAtStep int `json:"spawned_at_step"`
+	// LinkedBy says how the parent's step was matched: "agent_id" (the id
+	// the spawn returned, carried by this run's own steps), "brief" (the
+	// exact prompt), or "" (not matched).
+	LinkedBy string `json:"linked_by"`
+	// Lineage is every ancestor, the session first and the parent last.
+	Lineage []RecordAncestor `json:"lineage"`
+	// Asked is the instructions it was given: the spawn's prompt, or for a
+	// session its first message.
+	Asked RecordText `json:"asked"`
+	// Reported is its final report to its parent, or a session's last reply.
+	Reported RecordText `json:"reported"`
+}
+
+// RecordAncestor is one agent above this one.
+type RecordAncestor struct {
+	RunID     string `json:"run_id"`
+	Title     string `json:"title"`
+	AgentType string `json:"agent_type"`
+	Role      string `json:"role"`
+	// SpawnedAtStep is the step of THIS ancestor's own parent that started
+	// it, 0 for the session.
+	SpawnedAtStep int `json:"spawned_at_step"`
+	// Agents is how many agents this ancestor started, signing identities
+	// not counted.
+	Agents int `json:"agents"`
+}
+
+// RecordText is a piece of text this run's record holds, or not.
+type RecordText struct {
+	Text      string `json:"text"`
+	Available bool   `json:"available"`
+	// Step is the step of this run it came from, 0 when it came from the
+	// parent's spawn or no step.
+	Step int `json:"step"`
+}
+
+// RecordChild is one agent this run started.
+type RecordChild struct {
+	RunID         string     `json:"run_id"`
+	Title         string     `json:"title"`
+	AgentType     string     `json:"agent_type"`
+	Model         string     `json:"model"`
+	SpawnedAtStep int        `json:"spawned_at_step"`
+	Steps         int        `json:"steps"`
+	Commits       int        `json:"commits"`
+	Status        string     `json:"status"`
+	EndedAt       *time.Time `json:"ended_at"`
+}
+
+// RecordWrite is one file a step of this run wrote. Status is A (the tool
+// created it), M (it changed an existing file) or W (written, and the tool
+// did not say which).
+type RecordWrite struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
+	Step   int    `json:"step"`
 }
 
 // RecordTree is the whole family this run belongs to, root first.
@@ -101,6 +180,9 @@ type RecordStep struct {
 	// SpawnedCommits the commits that agent made on its own run.
 	SpawnedRunID   string   `json:"spawned_run_id"`
 	SpawnedCommits []string `json:"spawned_commits"`
+	// Kind is "tool", "spawn" (it started a subagent) or "report" (its
+	// final report to its parent) (#443).
+	Kind string `json:"kind"`
 	// CommitSHA is the commit this step made, when it made one.
 	CommitSHA string          `json:"commit_sha"`
 	Witnesses RecordWitnesses `json:"witnesses"`
@@ -156,6 +238,9 @@ type RecordCommit struct {
 	// parallel commit), else "".
 	LandedReason  string `json:"landed_reason"`
 	RekorLogIndex int64  `json:"rekor_log_index"`
+	// SignedBy is the run whose identity signed it: this run, or a
+	// one-commit signing identity this run started (#443).
+	SignedBy string `json:"signed_by"`
 }
 
 // RecordWitness sums the per-step witness agreement.

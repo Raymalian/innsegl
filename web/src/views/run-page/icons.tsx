@@ -119,3 +119,24 @@ export function PersonIcon({ className }: { readonly className?: string }) {
     </Svg>
   );
 }
+
+/** A right-pointing chevron, for the lineage nav's own separators between
+ * pills (#443) — the same silhouette as a disclosure chevron, pointed at
+ * what comes next rather than claiming anything about it. */
+export function ChevronIcon({ className }: { readonly className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M9 6l6 6-6 6" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+/** The agents-table search box's own glyph (#443). */
+export function SearchIcon({ className }: { readonly className?: string }) {
+  return (
+    <Svg className={className}>
+      <circle cx="11" cy="11" r="7" strokeWidth={2} />
+      <path d="M20 20l-3.5-3.5" strokeWidth={2} strokeLinecap="round" />
+    </Svg>
+  );
+}

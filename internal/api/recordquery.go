@@ -478,6 +478,102 @@ func (s *Store) stepNumbering(ctx context.Context, runID string) (map[string]int
 	return out, nil
 }
 
+// ---------------------------------------------------------------------------
+// #443 (RM-278): per-child counts and commits, each in ONE grouped query —
+// never a query per child (record.go's own RecordChild and the signing-
+// identity rule both need these, and a family can hold a few hundred runs).
+// ---------------------------------------------------------------------------
+
+// childCounts is one run's own tool_call and commit_recorded counts —
+// RecordChild.Steps/.Commits, and the signing-identity rule's own test
+// (zero tool_calls, at least one commit_recorded).
+type childCounts struct {
+	Steps   int
+	Commits int
+}
+
+const childCountsSQL = `
+SELECT run_id,
+       count(*) FILTER (WHERE event_type = 'tool_call')      AS steps,
+       count(*) FILTER (WHERE event_type = 'commit_recorded') AS commits
+  FROM innsegl.events
+ WHERE run_id = ANY($1)
+ GROUP BY run_id`
+
+// childCounts reads childCounts for every id in ids, in one query. A run id
+// with no tool_call and no commit_recorded at all — never ran, or ran and
+// made neither — is simply absent from the map; callers read a missing
+// entry as the zero value.
+func (s *Store) childCounts(ctx context.Context, ids []string) (map[string]childCounts, error) {
+	out := map[string]childCounts{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, childCountsSQL, ids)
+	if err != nil {
+		return nil, fmt.Errorf("api: reading child counts: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var runID string
+		var c childCounts
+		if err := rows.Scan(&runID, &c.Steps, &c.Commits); err != nil {
+			return nil, fmt.Errorf("api: reading a child's own counts: %w", err)
+		}
+		out[runID] = c
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("api: reading child counts: %w", err)
+	}
+	return out, nil
+}
+
+const commitsByRunsSQL = `
+SELECT event_id, run_id, ts, convert_from(canonical, 'UTF8')::jsonb
+  FROM innsegl.events
+ WHERE run_id = ANY($1) AND event_type = 'commit_recorded'
+ ORDER BY run_id, chain_position`
+
+// commitsOfMany reads every commit_recorded made by any run in ids, in one
+// query — the signing-identity rule's own source for the actual commit
+// rows it folds into the PARENT's own Commits (recordagent.go), never a
+// commitsOf call per signing identity.
+func (s *Store) commitsOfMany(ctx context.Context, ids []string) ([]commitRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, commitsByRunsSQL, ids)
+	if err != nil {
+		return nil, fmt.Errorf("api: reading commits of %d runs: %w", len(ids), err)
+	}
+	defer rows.Close()
+
+	var out []commitRow
+	for rows.Next() {
+		var eventID, rowRunID string
+		var ts time.Time
+		var body map[string]any
+		if err := rows.Scan(&eventID, &rowRunID, &ts, &body); err != nil {
+			return nil, fmt.Errorf("api: reading a commit: %w", err)
+		}
+		out = append(out, commitRow{
+			EventID:       eventID,
+			RunID:         rowRunID,
+			TS:            ts.UTC(),
+			CommitSHA:     stringOf(body[event.FieldCommitSHA]),
+			TreeHash:      stringOf(body[event.FieldTreeHash]),
+			RekorLogIndex: int64Of(body[event.FieldRekorLogIndex]),
+			Supersedes:    stringOf(body[event.FieldSupersedes]),
+			Repo:          stringOf(body[event.FieldRepo]),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("api: reading commits of %d runs: %w", len(ids), err)
+	}
+	return out, nil
+}
+
 // agentSteps reads every Agent-tool tool_call made by any run in parentIDs,
 // in chain order within each run — the candidates recordspawn.go checks a
 // child's own retained bodies against.

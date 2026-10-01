@@ -52,6 +52,29 @@ type gatewayBody struct {
 	// way the gateway's is_error is — see hookOutcomeOf.
 	hookShape   bool
 	hookOutcome RecordOutcome
+
+	// hookAgentID, hookCwd, hookSpawnedAgentID and hookWriteType are #443's
+	// own extraction out of a hook body's envelope — never a member a body
+	// on disk carries under these Go names (json:"-"), set only by
+	// hookBodyAsGateway.
+	//
+	// hookAgentID is the envelope's own top-level agent_id: the harness's
+	// id for WHICH subagent made this call, the same value every one of
+	// that subagent's own retained bodies carries (recordagent.go's
+	// childAgentID reads exactly one of them for it, RM-278's own "read
+	// only one body per child" rule).
+	hookAgentID string
+	// hookCwd is the envelope's own top-level cwd, record.go's RecordWrite
+	// rule for making a hook body's own absolute file_path relative.
+	hookCwd string
+	// hookSpawnedAgentID is tool_response.agentId, read only when this body
+	// is an Agent-tool step — the id ADR-0058-for-hooks links a child's own
+	// hookAgentID against (recordagent.go's own resolveHookSpawns).
+	hookSpawnedAgentID string
+	// hookWriteType is tool_response.type, read only when this body is a
+	// Write-tool step — record.go's RecordWrite.Status rule for a hook
+	// body ("create" -> A, "update" -> M).
+	hookWriteType string
 }
 
 // isError reports whether this body's own outcome counts as a failure —
@@ -193,6 +216,13 @@ type hookBody struct {
 	ToolUseID     string          `json:"tool_use_id"`
 	ToolInput     json.RawMessage `json:"tool_input"`
 	ToolResponse  json.RawMessage `json:"tool_response"`
+	// AgentID and Cwd are two more members of the harness's own envelope
+	// (RM-273's own measured list), read for #443: AgentID is which
+	// subagent made this call; Cwd is the working tree this call ran
+	// in, needed to make an absolute file_path relative (record.go's
+	// RecordWrite).
+	AgentID string `json:"agent_id"`
+	Cwd     string `json:"cwd"`
 }
 
 // isHookBody reports whether raw looks like the harness's own PostToolUse
@@ -226,6 +256,13 @@ func isHookBody(raw []byte) bool {
 // hookShape is true.
 func hookBodyAsGateway(h hookBody) gatewayBody {
 	text := hookResultText(h.ToolName, h.ToolResponse)
+	// #443 (RM-278): a Write or Edit/MultiEdit step's own tool_response is
+	// rendered as the plain sentence the gateway path already shows for
+	// the same tool, rather than the raw tool_response JSON — see
+	// hookWriteOutputText's own doc comment.
+	if rendered, ok := hookWriteOutputText(h.ToolName, h.Cwd, h.ToolInput, h.ToolResponse); ok {
+		text = rendered
+	}
 	// A Go string always marshals without error; Marshal on this type can
 	// only fail for a cyclic value or an unsupported type, neither possible
 	// here, so the error is deliberately discarded rather than silently
@@ -235,14 +272,172 @@ func hookBodyAsGateway(h hookBody) gatewayBody {
 		resultJSON = []byte(`""`)
 	}
 	return gatewayBody{
-		Tool:           h.ToolName,
-		ToolUseID:      h.ToolUseID,
-		Input:          h.ToolInput,
-		ResultObserved: true,
-		Result:         resultJSON,
-		hookShape:      true,
-		hookOutcome:    hookOutcomeOf(h.ToolName, h.ToolResponse),
+		Tool:               h.ToolName,
+		ToolUseID:          h.ToolUseID,
+		Input:              h.ToolInput,
+		ResultObserved:     true,
+		Result:             resultJSON,
+		hookShape:          true,
+		hookOutcome:        hookOutcomeOf(h.ToolName, h.ToolResponse),
+		hookAgentID:        h.AgentID,
+		hookCwd:            h.Cwd,
+		hookSpawnedAgentID: agentIDFromToolResponse(h.ToolName, h.ToolResponse),
+		hookWriteType:      writeTypeFromToolResponse(h.ToolName, h.ToolResponse),
 	}
+}
+
+// ---------------------------------------------------------------------------
+// #443 (RM-278): spawn linking by agent id (rule 2b), and the file this run's
+// own Write/Edit steps wrote (rules 6-7).
+// ---------------------------------------------------------------------------
+
+// agentToolResponseShape is the one member rule 2b reads out of an
+// Agent-tool step's own hook tool_response: the harness's own id for the
+// subagent that spawn started — camelCase, unlike the envelope's own
+// snake_case agent_id (hookBody.AgentID), because it is the harness's own
+// tool-response shape, not its envelope.
+type agentToolResponseShape struct {
+	AgentID string `json:"agentId"`
+}
+
+// agentIDFromToolResponse reads tool_response.agentId out of an
+// Agent-tool step's own tool_response. Every other tool's tool_response is
+// read past rather than guessed at: "" for any tool other than "Agent", or
+// for one whose tool_response does not carry the member at all.
+func agentIDFromToolResponse(toolName string, raw json.RawMessage) string {
+	if toolName != "Agent" || len(raw) == 0 {
+		return ""
+	}
+	var shape agentToolResponseShape
+	if json.Unmarshal(raw, &shape) != nil {
+		return ""
+	}
+	return shape.AgentID
+}
+
+// writeToolResponseShape is the one member record.go's RecordWrite.Status
+// rule reads out of a hook Write step's own tool_response.
+type writeToolResponseShape struct {
+	Type string `json:"type"`
+}
+
+// writeTypeFromToolResponse reads tool_response.type out of a hook Write
+// step. "" for any other tool, or a Write whose tool_response does not
+// carry the member — record.go's own "W" fallback, never a guess.
+func writeTypeFromToolResponse(toolName string, raw json.RawMessage) string {
+	if toolName != "Write" || len(raw) == 0 {
+		return ""
+	}
+	var shape writeToolResponseShape
+	if json.Unmarshal(raw, &shape) != nil {
+		return ""
+	}
+	return shape.Type
+}
+
+// writeFileInput is the one member record.go's RecordWrite.Path rule reads
+// out of a Write/Edit/MultiEdit/NotebookEdit step's own input — file_path
+// for every one of those tools except NotebookEdit, which names its own
+// path notebook_path instead.
+type writeFileInput struct {
+	FilePath     string `json:"file_path"`
+	NotebookPath string `json:"notebook_path"`
+}
+
+// writeFilePathOf reads the path a Write/Edit/MultiEdit/NotebookEdit step's
+// own input names, "" when the input does not parse or names neither key.
+func writeFilePathOf(input json.RawMessage) string {
+	var in writeFileInput
+	if json.Unmarshal(input, &in) != nil {
+		return ""
+	}
+	if in.FilePath != "" {
+		return in.FilePath
+	}
+	return in.NotebookPath
+}
+
+// worktreeMarker is the fallback relativeWritePath strips everything up to
+// and including, when the body's own cwd does not account for the path —
+// the shape of a checkout under a worktree directory, never an operator's
+// own path (scripts/no-operator-paths.sh).
+const worktreeMarker = "/.claude/worktrees/"
+
+// relativeWritePath makes an absolute file_path relative, record.go's own
+// rule for RecordWrite.Path: strip the body's own cwd prefix first (the
+// hook path's own working directory, hookBody.Cwd); failing that (cwd
+// unset, or it is simply not a prefix of this path), strip everything up to
+// and including "/.claude/worktrees/<name>/" instead. A path neither
+// recognises is left exactly as it is — never a guess, and already
+// relative for the gateway path, whose own file_path is relative to begin
+// with (cwd == "" there, so this falls straight through to that same "leave
+// it alone" case).
+func relativeWritePath(filePath, cwd string) string {
+	if cwd != "" {
+		if rel, ok := strings.CutPrefix(filePath, cwd); ok {
+			return strings.TrimPrefix(rel, "/")
+		}
+	}
+	if idx := strings.Index(filePath, worktreeMarker); idx >= 0 {
+		rest := filePath[idx+len(worktreeMarker):]
+		if slash := strings.IndexByte(rest, '/'); slash >= 0 {
+			return rest[slash+1:]
+		}
+	}
+	return filePath
+}
+
+// hookWriteOutputText renders a hook Write/Edit/MultiEdit step's own
+// tool_response as the plain sentence the gateway path already shows for
+// the same tool (record.go's own rule for RM-273's raw-JSON rendering):
+// Write "create" -> "File created successfully at: <relative path>",
+// "update" -> "File updated at: <relative path>"; Edit/MultiEdit ->
+// "Edited <relative path>". ok is false for any other tool, or one whose
+// tool_response this function cannot read a path and a shape from at all —
+// hookResultText's own raw-JSON rendering is the fallback for those, never
+// a guessed sentence.
+func hookWriteOutputText(toolName, cwd string, input, response json.RawMessage) (string, bool) {
+	if len(response) == 0 {
+		return "", false
+	}
+	switch toolName {
+	case "Write":
+		var shape struct {
+			Type     string `json:"type"`
+			FilePath string `json:"filePath"`
+		}
+		if json.Unmarshal(response, &shape) != nil {
+			return "", false
+		}
+		path := shape.FilePath
+		if path == "" {
+			path = writeFilePathOf(input)
+		}
+		rel := relativeWritePath(path, cwd)
+		switch shape.Type {
+		case "create":
+			return "File created successfully at: " + rel, true
+		case "update":
+			return "File updated at: " + rel, true
+		}
+		return "", false
+	case "Edit", "MultiEdit":
+		var shape struct {
+			FilePath string `json:"filePath"`
+		}
+		if json.Unmarshal(response, &shape) != nil {
+			return "", false
+		}
+		path := shape.FilePath
+		if path == "" {
+			path = writeFilePathOf(input)
+		}
+		if path == "" {
+			return "", false
+		}
+		return "Edited " + relativeWritePath(path, cwd), true
+	}
+	return "", false
 }
 
 // hookResultText renders a harness tool_response as the plain text
@@ -448,21 +643,37 @@ func spawnBodyMatches(dir, runID, prompt string) bool {
 	return string(raw) == prompt
 }
 
-// agentToolInput is the one member record.go's SpawnedRunID rule needs out
-// of an Agent-tool step's own input: the exact prompt the spawn named
-// (ADR-0058 decision 3). A narrow struct, on writes.go's own hookBody
-// reasoning: everything else in this input is the operator's own text.
+// agentToolInput is what record.go's spawn-linking rules need out of an
+// Agent-tool step's own input: Prompt for the exact-equality brief match
+// (ADR-0058 decision 3), and — #443 (RM-278) — Description (-> a child's
+// RecordAgent/RecordChild.Title) and Model (-> .Model, "" when absent). The
+// SAME three keys whether the step is gateway- or hook-recorded (record.go:
+// "For a gateway Agent step use the same input keys").
 type agentToolInput struct {
-	Prompt string `json:"prompt"`
+	Description string `json:"description"`
+	Prompt      string `json:"prompt"`
+	Model       string `json:"model"`
 }
 
 // agentPromptOf reads the spawn prompt out of an Agent-tool step's own
 // input. ok is false when input does not parse or names no prompt at all —
 // never a reason to guess one.
 func agentPromptOf(input json.RawMessage) (string, bool) {
-	var in agentToolInput
-	if err := json.Unmarshal(input, &in); err != nil || in.Prompt == "" {
+	in, ok := agentSpawnInputOf(input)
+	if !ok || in.Prompt == "" {
 		return "", false
 	}
 	return in.Prompt, true
+}
+
+// agentSpawnInputOf parses an Agent-tool step's own input into
+// agentToolInput. ok is false only when input does not parse as JSON at
+// all; a well-formed input simply missing a key answers that key's own
+// zero value, never a guess.
+func agentSpawnInputOf(input json.RawMessage) (agentToolInput, bool) {
+	var in agentToolInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return agentToolInput{}, false
+	}
+	return in, true
 }

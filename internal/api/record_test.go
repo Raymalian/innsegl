@@ -15,8 +15,11 @@ import (
 // the other does not know fails here rather than rendering as a blank.
 func TestRunRecordFixtureMatchesTheContract(t *testing.T) {
 	for name, into := range map[string]any{
-		"record.json":     &RunRecord{},
-		"diff-step1.json": &StepDiff{},
+		"record.json":         &RunRecord{},
+		"states-record.json":  &RunRecord{},
+		"agent-record.json":   &RunRecord{},
+		"session-record.json": &RunRecord{},
+		"diff-step1.json":     &StepDiff{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "views", "run-page", "fixtures", name))

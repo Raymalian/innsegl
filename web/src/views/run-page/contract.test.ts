@@ -36,6 +36,16 @@ describe("RPG-CONTRACT the provided fixtures satisfy types.ts", () => {
     expect(isStepDiff(diff)).toBe(true);
   });
 
+  it("agent-record.json (#443's own fixture, a hook-recorded subagent) is a RunRecord", () => {
+    const record = loadFixture("agent-record.json");
+    expect(isRunRecord(record)).toBe(true);
+  });
+
+  it("session-record.json (#443's own fixture) is a RunRecord", () => {
+    const record = loadFixture("session-record.json");
+    expect(isRunRecord(record)).toBe(true);
+  });
+
   it("refuses a value that is not a RunRecord at all", () => {
     expect(isRunRecord({ nope: true })).toBe(false);
     expect(isRunRecord(null)).toBe(false);

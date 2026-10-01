@@ -22,88 +22,44 @@ export const strings = {
   },
 
   header: {
-    runsCrumb: "Runs",
     heading: (agentType: string) => `${agentType} agent`,
-    witnessesComplete: "Every step has a stored body; digests verify",
-    witnessesIncomplete: (stored: number, verified: number, steps: number) =>
-      `${stored} of ${steps} steps have a stored body; ${verified} digests verify`,
   },
 
   facts: {
-    identity: "Identity",
     copySpiffeId: (value: string) => `Copy SPIFFE ID ${value}`,
-    repoBranch: "Repository · branch",
-    activity: "Activity",
-    activitySummary: (steps: number, commits: number, subagents: number, files: number) =>
-      [
-        steps === 1 ? "1 step" : `${steps} steps`,
-        commits === 1 ? "1 commit" : `${commits} commits`,
-        subagents === 1 ? "1 subagent" : `${subagents} subagents`,
-        files === 1 ? "1 file" : `${files} files`,
-      ].join(" · "),
-    witnesses: "Witnesses",
-    witnessesAgreeAll: (steps: number) =>
-      `Gateway, snapshots and telemetry agree on all ${steps} steps`,
-    witnessesDisagreeSummary: (disagree: number, steps: number) =>
-      `Gateway, snapshots and telemetry disagree on ${disagree} of ${steps} steps`,
-    witnessesNoSteps: "No steps were recorded for this run",
-    witnessesPartlyChecked: (agree: number, steps: number, unchecked: number) =>
-      `Witnesses agree on ${agree} of ${steps} steps; ${unchecked} could not be checked`,
-  },
-
-  tree: {
-    heading: "Agent tree",
-    linkedBy: (step: number) =>
-      `Linked by the exact brief its parent's spawn carried (step ${step})`,
+    identity: "Identity",
+    startedBy: "Started by",
+    workedIn: "Worked in",
+    did: "Did",
+    started: "Started",
+    committed: "Committed",
+    repository: "Repository",
+    workedInValue: (repo: string) => `${repo} · own worktree`,
+    startedByAt: (step: number, when: string) => `at step ${step} · ${when} UTC`,
   },
 
   files: {
-    heading: "Files changed",
-    scopeWholeRun: "whole run",
-    writtenBySubagent: (path: string) => `${path} was written by the subagent`,
-    legend: {
-      added: "A added",
-      modified: "M modified",
-      deleted: "D deleted",
-      reverted: "R reverted",
-    },
     statusLabel: {
       A: "Added",
       M: "Modified",
       D: "Deleted",
       R: "Reverted",
+      W: "Written",
     },
-    neverCommitted: (writtenStep: number, deletedStep: number) =>
-      `written in step ${writtenStep}, deleted in step ${deletedStep} · never committed`,
-    neverCommittedNote:
-      "Every change the snapshots saw is shown, including ones the agent undid; the file tree marks them so a reviewer sees what was tried, not only what landed.",
-    neverCommittedHeading: "A change that never reached a commit",
   },
 
   commits: {
     heading: "Commits",
-    madeByStep: (step: number) => `made by step ${step}`,
-    landedOn: (branch: string) => `landed on ${branch}`,
-    notLanded: "on no branch",
-    notLandedRefLock: "on no branch: lost git's ref lock to a parallel commit",
-    landingUnknown: "landing not checked",
-    notLandedHeading: "Signed, not landed",
-    notLandedCaption:
-      "The signature holds, so it stays verified; landing is read from the repository and shown beside it, never mixed into the verdict.",
-    rewritten: "rewritten onto another commit",
-  },
-
-  brief: {
-    heading: "Brief",
-    caption: (digest: string) => `the first message this agent received · keyed digest ${digest}`,
-  },
-
-  reply: {
-    heading: (digest: string) => `Reply · keyed digest ${digest}`,
+    none: "None.",
+    /** The session aside's own sentence when at least one commit is signed
+     * by a one-commit identity the session started rather than by the
+     * session itself (#443). */
+    oneCommitIdentities: (n: number) =>
+      `${n === 1 ? "1 commit" : `${n} commits`}, each signed under its own one-commit identity. They are commits, not agents, and are listed here rather than in the agents table.`,
+    allCommits: (n: number) => `All ${n} commits`,
   },
 
   timeline: {
-    heading: "Timeline",
     showMore: (next: number, left: number) => `Show ${next} more steps (${left} left)`,
     showFullOutput: "Show full output",
     loadingFullOutput: "Loading the full output…",
@@ -123,8 +79,6 @@ export const strings = {
      * true of any failure. */
     refusedBySandbox: "Refused by the harness sandbox.",
     failedIsRecord: "A step that failed is part of the record, shown as it happened.",
-    witnessesAgreeAll: (total: number) => `${total} of ${total} witnesses agree`,
-    witnessesPartial: (agree: number, total: number) => `${agree} of ${total} witnesses`,
     witnessGateway: "Gateway",
     witnessSnapshot: "Workspace snapshot",
     witnessTelemetry: "Harness telemetry",
@@ -138,14 +92,7 @@ export const strings = {
     witnessTelemetryMissing: "no event for this tool call",
     witnessTelemetryPending: "not yet reported",
     witnessTelemetryInactive: "telemetry inactive for this run",
-    spawned: "Spawned",
-    /* The fallback word when the tree response names no agent type for the
-     * spawned run — still said plainly rather than left blank (P2). */
-    subagentFallback: "subagent",
-    spawnedLink: (agentType: string, runId: string) => `${agentType} · ${runId}`,
-    spawnedBrief: (summary: string) => ` — "${summary}"`,
     returned: "returned",
-    subagentCommitNote: (sha: string) => `The subagent made commit ${sha} on its own run; open it for its steps and diffs.`,
     newFile: "new file",
     modifiedFile: "modified",
     deletedFile: "deleted",
@@ -203,6 +150,92 @@ export const strings = {
     title: "Can't reach the ledger",
     detail: "Showing nothing rather than guessing.",
     retry: "Retry",
+  },
+
+  /* #443 (RM-278): the agent page — one agent at a time, by task, with its
+   * lineage. Copy drawn word for word from Agent.dc.html and Session.dc.html
+   * wherever the mockup states one. */
+  agentPage: {
+    newFile: "new file",
+    writtenFile: "written",
+    moreLines: (n: number) => `· ${n} more ${n === 1 ? "line" : "lines"}`,
+    addedLine: "added line",
+    addedMarker: "+",
+    kickerSubagent: (agentType: string) => `SUBAGENT · ${agentType}`,
+    kickerSession: "SESSION · the agent you talk to",
+    sessionHeading: (repo: string) => `Session on ${repo}`,
+
+    lineageAria: "Where this agent came from",
+    thisAgent: "this agent",
+    thisSession: "this session",
+    /** "Where it sits"'s own highlighted row names the session capitalised,
+     * as its own row of a short list rather than as a nav pill's label
+     * (Session.dc.html's own distinction between the two). */
+    thisSessionAside: "This session",
+    startedByYou: "started by you · nothing above it",
+    spawnedAtStep: (step: number) => (step > 0 ? `spawned at step ${step}` : "not matched to a step"),
+    sessionLabel: "Session",
+
+    askedTo: "Asked to",
+    askedCaption: "the instructions its parent's spawn carried",
+    showAllLines: (n: number) => `Show all ${n} lines`,
+    reportedBack: "Reported back",
+    reportedCaption: (step: number) => `its final message to the session · step ${step}`,
+
+    whatItRanSubagent: (n: number) => `What it ran · ${n === 1 ? "1 step" : `${n.toLocaleString("en-US")} steps`}`,
+    whatItRanSession: (n: number) =>
+      `What it ran · ${n === 1 ? "1 step" : `${n.toLocaleString("en-US")} steps`}, newest first`,
+    commandsToggle: "Commands",
+    withOutputToggle: "With output",
+    filterAll: "All",
+    filterSpawned: "Agents started",
+    filterCommits: "Commits",
+    filterFailed: "Failed",
+
+    colN: "#",
+    colTool: "Tool",
+    colCommand: "Command or file",
+    colResult: "Result",
+    colTime: "Time",
+
+    groupRange: (a: number, b: number, n: number, atA: string, atB: string) =>
+      `Steps ${a}–${b} · ${n === 1 ? "1 more command" : `${n} more commands`}, ${atA}–${atB}`,
+    show: "show",
+
+    reportTool: "Report",
+    reportHandedBack: "Handed its report back to the session · shown above",
+    started: "Started",
+
+    agentsStartedHeading: "Agents it started",
+    agentsStartedSub: "newest first · each opens its own page",
+    findAnAgent: "Find an agent by task",
+    colTask: "Task",
+    colKind: "Kind",
+    colSteps: "Steps",
+    colCommits: "Commits",
+    colEnded: "Ended",
+    showingOf: (shown: number, total: number) => `Showing ${shown} of ${total}`,
+    showMoreAgents: "Show more agents",
+
+    whereItSits: "Where it sits",
+    otherAgents: (n: number) => (n === 1 ? "1 other agent" : `${n} other agents`),
+    startedNoSubagents: "Started no subagents of its own.",
+    linkedByAgentId: (step: number) => `Matched to step ${step} by the agent id its spawn returned and its own steps carry.`,
+    linkedByBrief: (step: number) => `Matched to step ${step} by the exact instructions its spawn carried.`,
+    linkedByNone: "Not matched to a step of its parent.",
+
+    filesItWrote: "Files it wrote",
+    stepN: (n: number) => `step ${n}`,
+
+    witnessesHeading: "Witnesses",
+    hookRecordedWitnesses:
+      "Recorded by the hook before the gateway existed: no snapshots or telemetry for this agent. Every step's body is stored and its digest verifies.",
+    witnessesAgreeAll: (steps: number) => `Gateway, snapshots and telemetry agree on all ${steps} steps`,
+    witnessesDisagreeSummary: (disagree: number, steps: number) =>
+      `Gateway, snapshots and telemetry disagree on ${disagree} of ${steps} steps`,
+    witnessesNoSteps: "No steps were recorded for this run",
+    witnessesPartlyChecked: (agree: number, steps: number, unchecked: number) =>
+      `Witnesses agree on ${agree} of ${steps} steps; ${unchecked} could not be checked`,
   },
 } as const;
 

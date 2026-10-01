@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"innsegl.dev/innsegl/internal/signing"
 )
@@ -173,7 +174,12 @@ func isolatedGitEnv(dir string) []string {
 // bounded by proof.go's own gitTimeout, the same bound Prover's own git
 // invocations already use.
 // never a caller-assembled string, and never the inherited environment.
+// gitInvocations counts git runs, so a test can bound a record's git cost
+// (#443).
+var gitInvocations atomic.Int64
+
 func runGit(ctx context.Context, dir string, env []string, gitPath string, args ...string) (string, error) {
+	gitInvocations.Add(1)
 	if gitPath == "" {
 		gitPath = "git"
 	}
