@@ -441,16 +441,31 @@ describe("#435 a run with nothing recorded", () => {
 });
 
 describe("#442 off-screen steps are not drawn until scrolled near", () => {
-  it("marks every open step row for the browser to skip while off screen", async () => {
-    const { readDiff, readProof } = stubs();
-    const readRecord: FetchRunRecord = async () => statesRecord();
-    window.history.pushState(null, "", "/runs/" + STATES_RUN_ID);
-    render(<RunPage route={STATES_ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={STATES_NOW} />);
+  it("marks a long run's step rows for the browser to skip while off screen", async () => {
+    const base = record();
+    const one = base.steps[2]!;
+    // Failed steps each stay their own open row, so all 40 are drawn.
+    const long = {
+      ...base,
+      steps: Array.from({ length: 40 }, (_, i) => ({ ...one, n: i + 1, event_id: `e${i + 1}`, commit_sha: "", outcome: { kind: "error" as const, exit_code: 1 } })),
+    };
+    render(
+      <RunPage route={ROUTE} fetchRunRecord={async () => long} fetchStepDiff={async () => stepOneDiff()} fetchProof={async () => verifiedProof()} now={NOW} />,
+    );
     await screen.findByText(/What it ran/);
     const cards = Array.from(document.querySelectorAll("[data-step]"));
-    expect(cards.length).toBeGreaterThan(0);
+    expect(cards).toHaveLength(40);
     for (const card of cards) {
       expect(card.className).toContain("[content-visibility:auto]");
+    }
+  });
+
+  it("draws a short run's step rows in full, as screenshots and print need", async () => {
+    const { readDiff, readProof } = stubs();
+    render(<RunPage route={ROUTE} fetchRunRecord={async () => record()} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+    await screen.findByText(/What it ran/);
+    for (const card of Array.from(document.querySelectorAll("[data-step]"))) {
+      expect(card.className).not.toContain("content-visibility");
     }
   });
 });

@@ -269,6 +269,9 @@ function resultText(step: RecordStep): string {
   return exitCode === null ? strings.timeline.failedNoExitCode : strings.timeline.failedExitCode(exitCode);
 }
 
+/** A run longer than this lets the browser skip off-screen step rows (#442). */
+const DEFER_OFFSCREEN_AFTER = 30;
+
 function StepRow({
   record,
   step,
@@ -293,11 +296,14 @@ function StepRow({
   readonly fetchStep: FetchStep;
 }) {
   const toolLabel = step.kind === "report" ? strings.agentPage.reportTool : toolDisplayName(step.tool);
+  // Only a long run lets the browser skip off-screen rows (#442): a short
+  // one draws in full, as screenshots and print need.
+  const defer = record.steps.length > DEFER_OFFSCREEN_AFTER;
 
   if (step.kind === "spawn") {
     const child = childFor(record, step.spawned_run_id);
     return (
-      <div id={`step-${step.n}`} className={`${stepRowStatic} ${stepCardDeferred}`} data-step={step.n}>
+      <div id={`step-${step.n}`} className={`${stepRowStatic} ${defer ? stepCardDeferred : ""}`} data-step={step.n}>
         <span className={rowCellN}>{step.n}</span>
         <span className={rowCellTool}>{toolLabel}</span>
         <span className={rowCellProse}>
@@ -318,7 +324,7 @@ function StepRow({
 
   if (step.kind === "report") {
     return (
-      <div id={`step-${step.n}`} className={`${stepRowStatic} ${stepCardDeferred}`} data-step={step.n}>
+      <div id={`step-${step.n}`} className={`${stepRowStatic} ${defer ? stepCardDeferred : ""}`} data-step={step.n}>
         <span className={rowCellN}>{step.n}</span>
         <span className={rowCellTool}>{toolLabel}</span>
         <span className={rowCellProse}>{strings.agentPage.reportHandedBack}</span>
@@ -329,7 +335,7 @@ function StepRow({
   }
 
   return (
-    <div id={`step-${step.n}`} className={`flex flex-col ${stepCardDeferred}`} data-step={step.n} data-witnesses-agree={stepWitnessesAgree(step.witnesses)}>
+    <div id={`step-${step.n}`} className={`flex flex-col ${defer ? stepCardDeferred : ""}`} data-step={step.n} data-witnesses-agree={stepWitnessesAgree(step.witnesses)}>
       <button type="button" onClick={onToggle} aria-expanded={open} className={stepRowButton}>
         <span className={rowCellN}>{step.n}</span>
         <span className={rowCellTool}>{toolLabel}</span>
