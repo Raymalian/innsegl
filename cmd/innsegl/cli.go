@@ -160,6 +160,10 @@ var commands = map[string]command{
 		summary: "install the prepare-commit-msg hook the commit path needs in a repository",
 		exec:    linkCommand,
 	},
+	// RM-285 (#461), ADR-0063: enrol this machine with a hosted core, and
+	// the user-level service that holds its key and forwards to the core.
+	"connect": {summary: "enrol this machine with an innsegl core and point Claude Code at it", exec: connectCommand},
+	"client":  {summary: "the enrolled machine's local endpoint: forward to the core over its certificate", exec: clientCommand},
 }
 
 // run dispatches args (os.Args[1:]) and returns the process exit code. It
