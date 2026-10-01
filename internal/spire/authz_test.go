@@ -187,7 +187,9 @@ func TestSPI005AdminIsDeniedTheMintAndJoinTokenAPIs(t *testing.T) {
 	defer cancel()
 
 	t.Run("MintX509SVID", func(t *testing.T) {
-		// A CSR SPIRE would never get as far as parsing.
+		// Since RM-300 (#476) this method is scoped to client identities, not
+		// denied outright; the matrix is in clientcert_test.go (SPI-020..022).
+		// A CSR that does not parse names no client, so it is still refused.
 		_, err := svidv1.NewSVIDClient(c.conn).MintX509SVID(ctx,
 			&svidv1.MintX509SVIDRequest{Csr: []byte{0x30, 0x00}, Ttl: 300})
 		requirePermissionDenied(t, classifyAdmin("MintX509SVID", "", err))
