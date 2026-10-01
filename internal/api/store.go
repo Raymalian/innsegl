@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,6 +32,9 @@ type Store struct {
 	// actually refuses a restore are working from one number — see
 	// EnvRestoreHorizon for why it arrives that way rather than as a field.
 	restoreHorizon time.Duration
+	// parentSnapshotLookups counts parentSnapshotBefore queries, so a test
+	// can hold a run record to one per build (#440).
+	parentSnapshotLookups atomic.Int64
 }
 
 // Open connects and REFUSES any credential that can write.

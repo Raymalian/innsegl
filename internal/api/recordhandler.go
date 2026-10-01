@@ -169,7 +169,7 @@ func (rs *recordServer) handleStepDiff(w http.ResponseWriter, r *http.Request) {
 
 // stepTextCap is the most a run record carries of one step's input or
 // output (#440).
-const stepTextCap = 8 << 10
+const stepTextCap = 2 << 10
 
 // clipStepText caps s for the run record, cutting on a rune boundary so the
 // text stays valid UTF-8.

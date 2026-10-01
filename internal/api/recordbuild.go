@@ -245,6 +245,7 @@ func (rs *recordServer) buildSteps(
 
 	n := 0
 	lastTree := ""
+	parentTreeBefore, parentTreeRead := "", false
 	for _, r := range rows {
 		if r.EventType != "tool_call" {
 			continue
@@ -256,9 +257,16 @@ func (rs *recordServer) buildSteps(
 
 		treeBefore := lastTree
 		if treeBefore == "" && reg.ParentRunID != "" {
-			if parentTree, perr := rs.store.parentSnapshotBefore(ctx, reg.ParentRunID, reg.RegisteredAt); perr == nil {
-				treeBefore = parentTree
+			// Looked up once per record (#440): the answer depends only on
+			// the parent and this run's registration, and a run with no
+			// snapshots of its own asked it again for every step.
+			if !parentTreeRead {
+				parentTreeRead = true
+				if parentTree, perr := rs.store.parentSnapshotBefore(ctx, reg.ParentRunID, reg.RegisteredAt); perr == nil {
+					parentTreeBefore = parentTree
+				}
 			}
+			treeBefore = parentTreeBefore
 		}
 		if treeBefore == "" && n == 1 {
 			// #437 (RM-274): a root run's own first step has no earlier

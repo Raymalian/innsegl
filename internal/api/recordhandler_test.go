@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -151,5 +152,25 @@ func TestStepRouteServesOneStepInFull(t *testing.T) {
 	}
 	if a := get(t, srv.URL, "/api/v1/runs/"+f.parentID+"/steps/0"); a.status != http.StatusBadRequest {
 		t.Errorf("GET step 0: status %d, want 400", a.status)
+	}
+}
+
+// TestRunRecordLooksUpTheParentSnapshotOnce — #440. Measured on 2026-10-01:
+// for a run with no snapshots of its own, every step re-ran the same parent
+// lookup over the parent's whole tool_call history: 145 queries, 1.2 s of a
+// 1.35 s request. The answer depends only on the parent and the run's own
+// registration, so it is looked up at most once per record.
+func TestRunRecordLooksUpTheParentSnapshotOnce(t *testing.T) {
+	f := newRecordFixture(t)
+	f.store.parentSnapshotLookups.Store(0)
+	rec, err := f.rs.buildRunRecord(context.Background(), "run-e19-hookchild")
+	if err != nil {
+		t.Fatalf("buildRunRecord: %v", err)
+	}
+	if len(rec.Steps) != 3 {
+		t.Fatalf("got %d steps, want 3", len(rec.Steps))
+	}
+	if got := f.store.parentSnapshotLookups.Load(); got > 1 {
+		t.Errorf("parent snapshot looked up %d times for one record, want at most 1", got)
 	}
 }

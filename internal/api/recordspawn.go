@@ -2,7 +2,13 @@
 
 package api
 
-import "context"
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+)
 
 // recordspawn.go links a parent run's own Agent-tool steps to the children
 // they spawned — record.go's RecordStep.SpawnedRunID/SpawnedCommits and
@@ -82,6 +88,21 @@ func (rs *recordServer) resolveSpawns(
 	remaining := make([]familyNode, len(children))
 	copy(remaining, children)
 
+	// Each child's stored body names, listed once (#440). Checking a prompt
+	// by opening its file under every child cost one filesystem lookup per
+	// spawn per child: measured, ~1.7 s for a 132-child family on a bind
+	// mount. A name only narrows the candidates; the bytes are still compared.
+	names := make(map[string]map[string]bool, len(children))
+	for _, child := range children {
+		set := map[string]bool{}
+		if entries, err := os.ReadDir(filepath.Join(logDir, filepath.Base(child.RunID))); err == nil {
+			for _, e := range entries {
+				set[e.Name()] = true
+			}
+		}
+		names[child.RunID] = set
+	}
+
 	var matches []spawnMatch
 	for _, step := range parentSteps {
 		if step.Tool != "Agent" || step.Digest == "" {
@@ -95,8 +116,10 @@ func (rs *recordServer) resolveSpawns(
 		if !ok {
 			continue
 		}
+		sum := sha256.Sum256([]byte(prompt))
+		name := hex.EncodeToString(sum[:]) + ".json"
 		for i, child := range remaining {
-			if child.RunID == "" {
+			if child.RunID == "" || !names[child.RunID][name] {
 				continue
 			}
 			if spawnBodyMatches(logDir, child.RunID, prompt) {

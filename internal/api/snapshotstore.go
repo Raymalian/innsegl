@@ -182,8 +182,9 @@ func runGit(ctx context.Context, dir string, env []string, gitPath string, args 
 	// G702: every arg is built here or by a caller in this package, never a
 	// shell string: a run id reaching one is validated against doc 02 §5's
 	// grammar (runIDFromPath) and hashed into a ref name before it gets here,
-	// and every ref is passed after --end-of-options.
-	cmd := exec.CommandContext(ctx, gitPath, args...) //nolint:gosec // see above
+	// and every ref is passed after --end-of-options. gosec's taint analysis
+	// raises this only on a whole-repo run, so nolintlint is told too.
+	cmd := exec.CommandContext(ctx, gitPath, args...) //nolint:gosec,nolintlint // see above
 	cmd.Dir = dir
 	cmd.Env = env
 	var stderr strings.Builder
