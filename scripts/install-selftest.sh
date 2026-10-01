@@ -147,6 +147,8 @@ EOF2
 STUB_START="$(make_stub start)"
 # Every case below has a gateway that answers, except ENF-007, which has none.
 export INNSEGL_INSTALL_GATEWAY_PROBE_CMD=true
+# The build is stubbed too; ENF-008 hands install.sh a binary that is stale.
+export INNSEGL_INSTALL_BUILD_CMD=true
 STUB_SIGNER="$(make_stub signer)"
 STUB_LINK="$(make_stub link)"
 
@@ -382,6 +384,22 @@ else
   bad "ENF-001 a non-writable target did not refuse cleanly" "exit=$rc7"$'\n'"$out7"
 fi
 
+# --- ENF-001: the admin command leaves a file the harness can read ---------
+# Measured on 2026-10-01: the printed `sudo cp` kept the temp file's 0600, so
+# the installed settings were root-only and Claude Code, running as the user,
+# could not read them. Run the printed command without sudo against a
+# writable stand-in for the same path, and read the mode it leaves.
+admin_line="$(printf '%s\n' "$out7" | grep '^  sudo ' | head -1)"
+dest7="$WORK/admin-dest"
+cmd7="${admin_line//sudo /}"
+cmd7="${cmd7//$blocked/$dest7}"
+if [ -n "$admin_line" ] && (eval "$cmd7") 2>/dev/null \
+   && [ "$(python3 -c 'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$dest7/managed-settings.json")" = 0o644 ]; then
+  ok "ENF-001 the printed admin command installs the settings world-readable (0644)"
+else
+  bad "ENF-001 the printed admin command does not leave a readable file" "line: $admin_line"$'\n'"ran: $cmd7"$'\n'"$(ls -l "$dest7" 2>&1)"
+fi
+
 # --- ENF-007: no managed settings while the gateway does not answer --------
 # The settings send every Claude Code request on this machine to the gateway.
 # Measured on 2026-10-01: a plain install brought the stack up without it
@@ -401,6 +419,29 @@ if [ "$rc7g" -ne 0 ] && [ ! -e "$ms7g" ] && printf '%s' "$out7g" | grep -q 'gate
   ok "ENF-007 a gateway that does not answer stops the install before the settings are written"
 else
   bad "ENF-007 the install wrote settings, or passed, with no gateway" "exit=$rc7g file=$( [ -e "$ms7g" ] && echo present || echo absent )"$'\n'"$out7g"
+fi
+
+# --- ENF-008: no managed settings naming a hook that does not run ----------
+# Measured on 2026-10-01: the settings named a binary built weeks earlier,
+# which answered `hook pre-tool-use` with "unknown subcommand" and exit 2.
+# For a PreToolUse hook, exit 2 blocks the tool: every Bash call in every new
+# session would have been refused.
+home8s="$WORK/home-stale-bin"; mkdir -p "$home8s"
+ms8s="$home8s/managed-settings.json"
+stale_bin="$WORK/stale-innsegl"
+printf '#!/bin/sh\necho "innsegl: unknown subcommand \"$1\"" >&2\nexit 2\n' > "$stale_bin"
+chmod +x "$stale_bin"
+out8s="$(HOME="$home8s" PATH="$TOOLBIN" \
+  INNSEGL_INSTALL_START_CMD="$STUB_START" \
+  INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
+  INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
+  INNSEGL_BIN_PATH="$stale_bin" \
+  "$BASH_BIN" "$INSTALL" --managed-settings "$ms8s" 2>&1)"
+rc8s=$?
+if [ "$rc8s" -ne 0 ] && [ ! -e "$ms8s" ] && printf '%s' "$out8s" | grep -q 'hook'; then
+  ok "ENF-008 a hook binary that does not run stops the install before the settings are written"
+else
+  bad "ENF-008 the install wrote settings naming a hook that does not run" "exit=$rc8s file=$( [ -e "$ms8s" ] && echo present || echo absent )"$'\n'"$out8s"
 fi
 
 # --- EGR-001: --egress-control locks the sandbox to a managed allowlist ----
