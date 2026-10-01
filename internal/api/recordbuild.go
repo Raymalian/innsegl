@@ -158,9 +158,21 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 		return RunRecord{}, err
 	}
 
+	// Every list is [] when empty, never null: the contract types each one
+	// as an array, and a run with nothing recorded (every run from before
+	// the gateway) crashed the run page on null (#435).
+	if replies == nil {
+		replies = []RecordMessage{}
+	}
+	if steps == nil {
+		steps = []RecordStep{}
+	}
+	if commits == nil {
+		commits = []RecordCommit{}
+	}
 	return RunRecord{
 		Run: run, Tree: tree, Brief: brief, Replies: replies, Steps: steps,
-		Files: files, Commits: commits, Witness: summarizeWitness(steps, bodiesStored, bodiesVerified),
+		Files: nonNilFiles(files), Commits: commits, Witness: summarizeWitness(steps, bodiesStored, bodiesVerified),
 		DataAsOf: now, ChainHead: head,
 	}, nil
 }

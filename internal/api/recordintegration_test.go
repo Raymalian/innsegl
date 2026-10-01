@@ -402,6 +402,17 @@ func (f *recordFixture) seedLedgerAndBodies(ctx context.Context, owner *ledger.S
 	tc4[event.FieldIdempotencyKey] = f.parentID + "-tc-4"
 	appendOrFail(ctx, t, owner, tc4)
 
+	// ---- a bare run: registered, nothing recorded (#435) -------------------------
+	// Every run from before the gateway looks like this.
+	bareID := "run-e19-bare"
+	bareReg := envelope(bareID, "spiffe://innsegl.dev/agent/general-purpose/e19/"+bareID, event.EventTypeRunRegistered)
+	bareReg[event.FieldAgentType] = "general-purpose"
+	bareReg[event.FieldTaskRef] = "e19"
+	bareReg[event.FieldRepo] = recordIntegrationRepo
+	bareReg[event.FieldBranch] = "main"
+	bareReg[event.FieldIdempotencyKey] = bareID + "-register"
+	appendOrFail(ctx, t, owner, bareReg)
+
 	// ---- the child run ----------------------------------------------------------
 	childReg := envelope(f.childID, childSpiffe, event.EventTypeRunRegistered)
 	childReg[event.FieldAgentType] = "general-purpose"
