@@ -389,6 +389,38 @@ func TestSPI021ClientCSRIsMintedAndVerifies(t *testing.T) {
 	}
 }
 
+// GW-018's verifier input (#460): the bundle the gateway checks presented
+// client certificates against is the deployment's own, read on its own, and
+// it verifies a certificate SPIRE minted.
+func TestX509BundleVerifiesAMintedClientCertificate(t *testing.T) {
+	s := requireStack(t)
+	c := s.adminClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	csr, _ := newTestCSR(t, []string{testClientID()}, nil)
+	chain, _, err := c.MintClientX509SVID(ctx, csr, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("MintClientX509SVID: %v", err)
+	}
+	bundle, err := c.X509Bundle(ctx)
+	if err != nil {
+		t.Fatalf("X509Bundle: %v", err)
+	}
+	if id, err := VerifyClientCertificate(chain, bundle, testTrustDomain, time.Now()); err != nil || id != testClientHex {
+		t.Fatalf("VerifyClientCertificate against X509Bundle = %q, %v", id, err)
+	}
+}
+
+func TestX509BundleOnAnUnreachableServerIsAnError(t *testing.T) {
+	c := unreachableClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := c.X509Bundle(ctx); err == nil {
+		t.Fatal("X509Bundle against an unreachable server answered no error")
+	}
+}
+
 // SPI-022, the policy half: every refused shape is refused by SPIRE even when
 // the local check is bypassed, as a stolen admin credential would bypass it.
 func TestSPI022SPIREPolicyRefusesEveryOtherCSR(t *testing.T) {

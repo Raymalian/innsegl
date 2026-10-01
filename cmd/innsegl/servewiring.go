@@ -378,6 +378,10 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		return fail("dial the SPIRE admin API at %s: %w", o.spireAddress, err)
 	}
 	closers = append(closers, func() { _ = admin.Close() })
+	// RM-284 (#460): the gateway companion mints client certificates and
+	// reads the bundle through THIS admin client, never one of its own
+	// (enrol.go, MCP-096).
+	closers = append(closers, publishClientAuthority(admin))
 
 	mintConn, err := dialSVIDAPI(o, source)
 	if err != nil {

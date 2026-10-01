@@ -192,6 +192,14 @@ type IdentityGuardConfig struct {
 	// working directory (workspaceregistry.go). Required: a new run is
 	// registered from it and from nothing else.
 	SessionWorkspaces *SessionWorkspaces
+	// Pins, set in hosted mode only (RM-284, #460), pins each session to the
+	// installation that first used it. With Pins set, a request that carries
+	// no verified installation (InstallationFromContext) is refused: hosted
+	// mode has no anonymous caller. Nil is single-host mode, unchanged.
+	Pins *SessionPins
+	// Scope, set with Pins, refuses to register a run for a repository
+	// outside the installation's scope (ADR-0064 decision 3).
+	Scope ScopeChecker
 }
 
 // IdentityGuard is ADR-0058 decision 11, wired into guard.go's chain: a
@@ -210,6 +218,8 @@ type IdentityGuard struct {
 	cache             *identityCache
 	sessionEndSignals *SessionEndSignals
 	sessionWorkspaces *SessionWorkspaces
+	pins              *SessionPins
+	scope             ScopeChecker
 }
 
 // NewIdentityGuard builds an IdentityGuard, or refuses -- the same
@@ -231,6 +241,8 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 		return nil, errors.New("innsegl gateway: identity guard configuration: no RunStateReader")
 	case cfg.SessionWorkspaces == nil:
 		return nil, errors.New("innsegl gateway: identity guard configuration: no SessionWorkspaces")
+	case (cfg.Pins == nil) != (cfg.Scope == nil):
+		return nil, errors.New("innsegl gateway: identity guard configuration: hosted mode needs both Pins and Scope")
 	}
 	now := cfg.Now
 	if now == nil {
@@ -251,6 +263,8 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 		cache:             newIdentityCache(size),
 		sessionEndSignals: cfg.SessionEndSignals,
 		sessionWorkspaces: cfg.SessionWorkspaces,
+		pins:              cfg.Pins,
+		scope:             cfg.Scope,
 	}, nil
 }
 
@@ -265,6 +279,17 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		// Identification never passed one. Refusing rather than guessing is
 		// the same posture every other guard in this chain already takes.
 		return nil, g.refuse("no harness identification was found on this request")
+	}
+
+	// Hosted mode (RM-284, #460): the client guard verified an installation,
+	// and the session belongs to the first one that used it. Checked before
+	// anything else, so a refused request cancels no signal and claims
+	// nothing.
+	if g.pins != nil {
+		inst, ok := InstallationFromContext(r.Context())
+		if !ok || !g.pins.Pin(id.SessionID, inst) {
+			return nil, clientRefusal()
+		}
 	}
 
 	// Any request from this session's main agent falsifies its own
@@ -325,6 +350,9 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 			RetryAfter: directoryRetryAfter,
 		}
 	}
+	if errors.Is(actErr, errOutOfScope) {
+		return nil, clientRefusal()
+	}
 	if actErr != nil {
 		return nil, g.refuseErr("", actErr)
 	}
@@ -346,9 +374,32 @@ const directoryRetryAfter = 2 * time.Second
 
 // resolveWorkspace resolves the hook-stated directory, refusing with
 // errDirectoryNotStated rather than asking the resolver about nothing.
+//
+// In hosted mode the workspace must be the client's own derivation (the core
+// never reads a client's files, ADR-0064 decision 2) and its repository must
+// be in the installation's scope; anything else is errOutOfScope.
 func (g *IdentityGuard) resolveWorkspace(ctx context.Context, facts RequestFacts) (Workspace, error) {
-	return g.workspaces.ResolveStated(ctx, facts.Stated)
+	if g.scope == nil {
+		return g.workspaces.ResolveStated(ctx, facts.Stated)
+	}
+	inst, ok := InstallationFromContext(ctx)
+	if !ok || !facts.Stated.HasRepo() {
+		return Workspace{}, errOutOfScope
+	}
+	ws := facts.Stated.Workspace()
+	in, err := g.scope.InScope(ctx, inst, ws.Repo)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("check the installation's scope: %w", err)
+	}
+	if !in {
+		return Workspace{}, errOutOfScope
+	}
+	return ws, nil
 }
+
+// errOutOfScope is a run the installation may not register: no client-stated
+// repository, or one outside its scope. Answered with the client refusal.
+var errOutOfScope = errors.New("the stated repository is outside the installation's scope")
 
 // outageRetryAfter is how long a harness is asked to wait before retrying a
 // request refused because a dependency is down.

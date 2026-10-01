@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -20,6 +21,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"innsegl.dev/innsegl/internal/accounts"
 	"innsegl.dev/innsegl/internal/commitpath"
 	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/ledger"
@@ -158,7 +162,19 @@ const (
 	// unavailable — the same "unset means off" posture every other
 	// optional setting in this file takes.
 	envMessageKeyDir = "INNSEGL_MCP_MESSAGE_KEY_DIR"
+
+	// envGatewayClientAuth switches hosted mode on (RM-284, #460; ADR-0063):
+	// "spiffe" makes every client-facing route require an enrolled client's
+	// certificate. Unset is single-host mode, exactly as before.
+	envGatewayClientAuth = "INNSEGL_GATEWAY_CLIENT_AUTH"
+	// envGatewayAccountsDSN is the accounts writer (the auth-writer role)
+	// enrolment and renewal write through. The gateway's own ledger role
+	// only reads installations and grants. Required in hosted mode.
+	envGatewayAccountsDSN = "INNSEGL_GATEWAY_ACCOUNTS_DSN"
 )
+
+// clientAuthSPIFFE is the one hosted-mode value of -client-auth.
+const clientAuthSPIFFE = "spiffe"
 
 const (
 	// defaultGatewayListen. Unlike `serve`'s and `api`'s own defaults, this
@@ -274,6 +290,12 @@ type gatewayOptions struct {
 	// as before RM-237 but never written to disk.
 	messageKeyDir string
 
+	// clientAuth is "" (single-host) or clientAuthSPIFFE (hosted, RM-284).
+	clientAuth string
+	// accountsDSN is the accounts writer enrolment and renewal use. Required
+	// in hosted mode, unused otherwise.
+	accountsDSN string
+
 	// upstreamClient overrides the client openGateway hands to
 	// gateway.NewUpstream. Always nil on every path a flag or an
 	// environment variable can reach -- parseGatewayFlags never sets it --
@@ -308,6 +330,15 @@ func (o gatewayOptions) validate() string {
 		return "-ca-key-dir (or $" + envGatewayCAKeyDir + ") is required (RM-246)"
 	case o.caCertDir == "":
 		return "-ca-cert-dir (or $" + envGatewayCACertDir + ") is required (RM-246)"
+	case o.clientAuth != "" && o.clientAuth != clientAuthSPIFFE:
+		return fmt.Sprintf("-client-auth (or $%s) %q: the only value is %q (hosted mode); unset is single-host mode",
+			envGatewayClientAuth, o.clientAuth, clientAuthSPIFFE)
+	case o.clientAuth == clientAuthSPIFFE && o.dsn == "":
+		return "-client-auth " + clientAuthSPIFFE + " needs -dsn (or $" + envLedgerDSN + "): hosted mode reads " +
+			"installations and records runs in the ledger database"
+	case o.clientAuth == clientAuthSPIFFE && o.accountsDSN == "":
+		return "-client-auth " + clientAuthSPIFFE + " needs -accounts-dsn (or $" + envGatewayAccountsDSN + "): " +
+			"enrolment and renewal write installations through the accounts writer"
 	}
 	if problem := upstreamMustBeHTTPS(o.upstream); problem != "" {
 		return problem
@@ -492,6 +523,13 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 				"query API can VERIFY a brief or a reply's own digest without ever holding "+
 				"-identity-secret itself. OPTIONAL: unset means the key is still derived and "+
 				"used, just never written anywhere ($"+envMessageKeyDir+")")
+		clientAuth = fs.String("client-auth", os.Getenv(envGatewayClientAuth),
+			"\""+clientAuthSPIFFE+"\" for hosted mode: every client-facing route requires an enrolled "+
+				"client's certificate, and /_core/enrol and /_core/renew are served (ADR-0063). Unset is "+
+				"single-host mode ($"+envGatewayClientAuth+")")
+		accountsDSN = fs.String("accounts-dsn", os.Getenv(envGatewayAccountsDSN),
+			"accounts writer connection string enrolment and renewal write through; required in hosted "+
+				"mode -- prefer the environment variable ($"+envGatewayAccountsDSN+")")
 	)
 
 	fs.Usage = func() { gatewayUsage(stderr, fs) }
@@ -527,6 +565,8 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 		messageKeyDir:     *messageKeyDir,
 		caKeyDir:          *caKeyDir,
 		caCertDir:         *caCertDir,
+		clientAuth:        *clientAuth,
+		accountsDSN:       *accountsDSN,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl gateway: %s\n", problem)
@@ -639,8 +679,9 @@ type runningGateway struct {
 	sessionWorkspaces *gateway.SessionWorkspaces
 	// sessionWorkspaceRateLimit bounds sessionWorkspaceHandler's rate.
 	sessionWorkspaceRateLimit *gateway.SessionRateLimiter
-	// local decides which callers the local-only endpoints admit.
-	local localCallers
+	// callers decides who the session endpoints admit: this machine in
+	// single-host mode, the verified installation in hosted mode.
+	callers sessionCallers
 
 	// closers release every resource openGateway opened beyond the
 	// listener (the mapping store's pool, the ledger connection, the
@@ -803,6 +844,18 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 
 	running := &runningGateway{shutdownTimeout: o.shutdownTimeout, log: log}
 
+	// RM-284 (#460): hosted mode, before the identity stack, which pins
+	// sessions and checks scope through what this builds.
+	var hosted *hostedCore
+	if o.clientAuth == clientAuthSPIFFE {
+		h, hostErr := openHostedCore(boot, o, running)
+		if hostErr != nil {
+			running.Close()
+			return nil, fmt.Errorf("configure hosted mode: %w", hostErr)
+		}
+		hosted = h
+	}
+
 	// RM-235 (#380): the identity stack, only when -dsn (or $INNSEGL_LEDGER_DSN)
 	// names a database. See this file's own doc comment, "Identity from
 	// traffic", for what stays unchanged when it does not.
@@ -811,7 +864,7 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	var toolUse gateway.ToolUseObserver
 	var replyText gateway.ReplyTextObserver
 	if o.dsn != "" {
-		ig, wit, ise, rt, stackErr := openIdentityStack(boot, o, running)
+		ig, wit, ise, rt, stackErr := openIdentityStack(boot, o, running, hosted)
 		if stackErr != nil {
 			running.Close()
 			return nil, fmt.Errorf("configure the identity stack: %w", stackErr)
@@ -872,21 +925,109 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		// gatewaySessionEndPath: see sessionEndHandler's own doc comment for
 		// why this is minimal and local-only rather than a documented,
 		// versioned part of the gateway's public contract.
-		mux.HandleFunc(gatewaySessionEndPath, sessionEndHandler(running.sessionEnder, running.sessionEndRateLimit, running.local, log))
+		mux.HandleFunc(gatewaySessionEndPath, sessionEndHandler(running.sessionEnder, running.sessionEndRateLimit, running.callers, log))
 	}
 	if running.sessionWorkspaces != nil {
 		mux.HandleFunc(gatewaySessionWorkspacePath, sessionWorkspaceHandler(
-			running.sessionWorkspaces, running.sessionWorkspaceRateLimit, running.local, log))
+			running.sessionWorkspaces, running.sessionWorkspaceRateLimit, running.callers, log))
 	}
 	mountCommitPath(mux, running.commitResolver)
 	mountTelemetry(mux, os.Getenv(envObserveBodyDir))
 
+	var handler http.Handler = mux
+	tlsConfig := ca.ServerTLSConfig()
+	if hosted != nil {
+		handler, tlsConfig = hosted.wrap(mux, tlsConfig, log) //nolint:contextcheck // each handshake's own context bounds its bundle read, not boot's
+	}
+
 	running.server = &http.Server{
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: gatewayReadHeaderTimeout,
-		TLSConfig:         ca.ServerTLSConfig(),
+		TLSConfig:         tlsConfig,
 	}
 	return running, nil
+}
+
+// hostedCore is what hosted mode adds to the gateway (RM-284, #460;
+// ADR-0063): the client-certificate guard, the session pins, the accounts
+// writer enrolment and renewal use, and the authority they mint through.
+type hostedCore struct {
+	guard     *gateway.ClientGuard
+	pins      *gateway.SessionPins
+	scope     gateway.ScopeChecker
+	writer    *accounts.Store
+	authority clientAuthority
+}
+
+// openHostedCore builds hosted mode. The authority is the MCP's own admin
+// client, published by serve (enrol.go, MCP-096): there is none to open
+// here, and hosted mode refuses to start without it.
+func openHostedCore(ctx context.Context, o gatewayOptions, running *runningGateway) (*hostedCore, error) {
+	authority := publishedClientAuthority()
+	if authority == nil {
+		return nil, errors.New("hosted mode mints client certificates through the MCP's own SPIRE admin " +
+			"client, and none was published in this process: run the gateway as `serve -also gateway`. " +
+			"The gateway opens no admin identity of its own")
+	}
+
+	// Status and scope are read with the gateway's own ledger role, which
+	// may SELECT installations and repo_grants and nothing else of the
+	// account schema.
+	pool, err := pgxpool.New(ctx, o.dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open the installation reader: %w", err)
+	}
+	running.closers = append(running.closers, pool.Close)
+	if perr := pool.Ping(ctx); perr != nil {
+		return nil, fmt.Errorf("open the installation reader: %w", perr)
+	}
+	installations := accountsInstallations{store: accounts.New(pool)}
+
+	writer, err := accounts.Open(ctx, o.accountsDSN)
+	if err != nil {
+		return nil, fmt.Errorf("open the accounts writer: %w", err)
+	}
+	running.closers = append(running.closers, writer.Close)
+
+	limiter, err := gateway.NewSessionRateLimiter(gateway.SessionRateLimit{
+		Rate: gateway.DefaultInstallationRateLimitRate, Burst: gateway.DefaultInstallationRateLimitBurst,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build the per-installation rate limit: %w", err)
+	}
+	guard, err := gateway.NewClientGuard(gateway.ClientGuardConfig{
+		TrustDomain:   authority.TrustDomain(),
+		Bundle:        authority,
+		Installations: installations,
+		RateLimit:     limiter,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &hostedCore{
+		guard: guard, pins: gateway.NewSessionPins(0), scope: installations,
+		writer: writer, authority: authority,
+	}, nil
+}
+
+// wrap puts the guard in front of every route but enrolment, serves renewal
+// behind it, and has the TLS layer request (not require) a client
+// certificate, naming the deployment's authorities as acceptable.
+func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (http.Handler, *tls.Config) {
+	mux.Handle(coreRenewPath, renewHandler(h.writer, h.authority, log))
+
+	outer := http.NewServeMux()
+	outer.Handle(coreEnrolPath, enrolHandler(h.writer, h.authority, log))
+	outer.Handle("/", h.guard.Wrap(mux))
+
+	base.ClientAuth = tls.RequestClientCert
+	cfg := base.Clone()
+	cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		c := base.Clone()
+		c.ClientCAs = h.guard.ClientCAs(hello.Context())
+		return c, nil
+	}
+	return outer, cfg
 }
 
 // gatewaySessionEndPath is the local-only delivery method ADR-0060 decision
@@ -917,25 +1058,27 @@ const maxWorkingDirectoryBytes = 4096
 // it from the host on SessionStart, UserPromptSubmit, SubagentStart and
 // CwdChanged; the identity guard registers a new run from it.
 //
-// Like sessionEndHandler, its checks are flood and noise controls, never
-// authentication: an agent's own shell could post here too. What a forged
-// statement buys is bounded by describe_workspace, which admits only a git
-// worktree under the projects mount and inside the admin scope -- a
-// repository the agent can already work in (workspaceregistry.go).
+// In single-host mode, like sessionEndHandler, its checks are flood and noise
+// controls, never authentication: an agent's own shell could post here too.
+// What a forged statement buys is bounded by describe_workspace, which admits
+// only a git worktree under the projects mount and inside the admin scope --
+// a repository the agent can already work in (workspaceregistry.go). In
+// hosted mode (RM-284, #460) the client-certificate guard has verified the
+// installation, the stated repository must be in its scope, and the session
+// must be this installation's (hostedCallers, enrol.go).
 func sessionWorkspaceHandler(ws *gateway.SessionWorkspaces, rateLimit *gateway.SessionRateLimiter,
-	local localCallers, log *serveLog,
+	callers sessionCallers, log *serveLog,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "innsegl gateway: session workspace: only POST is accepted", http.StatusMethodNotAllowed)
 			return
 		}
-		if !local.admits(r.RemoteAddr) {
-			http.Error(w, "innsegl gateway: session workspace: refused from an address that is not this machine",
-				http.StatusForbidden)
+		if !callers.admitRequest(r) {
+			callers.refuseCaller(w, "session workspace")
 			return
 		}
-		if retryAfter, refused := rateLimit.Allow(r.Context(), gatewaySessionWorkspaceRateLimitKey); refused {
+		if retryAfter, refused := rateLimit.Allow(r.Context(), callers.rateKey(r, gatewaySessionWorkspaceRateLimitKey)); refused {
 			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Round(time.Second)/time.Second)))
 			http.Error(w, "innsegl gateway: session workspace: too many statements", http.StatusTooManyRequests)
 			return
@@ -945,6 +1088,20 @@ func sessionWorkspaceHandler(ws *gateway.SessionWorkspaces, rateLimit *gateway.S
 			http.Error(w, "innsegl gateway: session workspace: a JSON body naming a well-formed session_id, "+
 				"an optional agent_id, an absolute, clean cwd and, optionally, the derived repo (host/org/name), "+
 				"branch, task, worktree and head is required", http.StatusBadRequest)
+			return
+		}
+		// Hosted mode (RM-284, #460): the stated repository must be in the
+		// installation's scope, and the session must be this installation's.
+		// A refused statement records nothing, so no run is registered from it.
+		admitted, err := callers.admitStatement(r.Context(), in.SessionID, in.stated())
+		if err != nil {
+			log.warn("a session workspace statement could not be checked", "err", err)
+			http.Error(w, "innsegl gateway: session workspace: the scope check is unavailable; retry",
+				http.StatusServiceUnavailable)
+			return
+		}
+		if !admitted {
+			callers.refuseCaller(w, "session workspace")
 			return
 		}
 		ws.RecordStated(in.SessionID, in.AgentID, in.stated())
@@ -992,22 +1149,22 @@ const gatewaySessionEndRateLimitKey = "session-end"
 //
 // Kept deliberately minimal and undocumented as a public contract: one
 // method, one JSON field, one call into gateway.SessionEnder.SessionEnded.
-func sessionEndHandler(ender *gateway.SessionEnder, rateLimit *gateway.SessionRateLimiter, local localCallers, log *serveLog) http.HandlerFunc {
+func sessionEndHandler(ender *gateway.SessionEnder, rateLimit *gateway.SessionRateLimiter, callers sessionCallers, log *serveLog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "innsegl gateway: session end: only POST is accepted", http.StatusMethodNotAllowed)
 			return
 		}
-		if !local.admits(r.RemoteAddr) {
+		if !callers.admitRequest(r) {
 			// Belt and suspenders over the compose publish line (ADR-0060
-			// decision 2): this process itself refuses a caller whose
-			// connection did not come from loopback, rather than resting
-			// entirely on the network topology being right.
-			http.Error(w, "innsegl gateway: session end: refused from an address that is not this machine",
-				http.StatusForbidden)
+			// decision 2): in single-host mode this process itself refuses a
+			// caller whose connection did not come from loopback, rather
+			// than resting entirely on the network topology being right. In
+			// hosted mode the client-certificate guard decides instead.
+			callers.refuseCaller(w, "session end")
 			return
 		}
-		if retryAfter, refused := rateLimit.Allow(r.Context(), gatewaySessionEndRateLimitKey); refused {
+		if retryAfter, refused := rateLimit.Allow(r.Context(), callers.rateKey(r, gatewaySessionEndRateLimitKey)); refused {
 			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Round(time.Second)/time.Second)))
 			http.Error(w, "innsegl gateway: session end: too many signals", http.StatusTooManyRequests)
 			return
@@ -1018,6 +1175,10 @@ func sessionEndHandler(ender *gateway.SessionEnder, rateLimit *gateway.SessionRa
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || !gateway.IsSessionID(in.SessionID) {
 			http.Error(w, "innsegl gateway: session end: a JSON body naming a well-formed session_id "+
 				"is required", http.StatusBadRequest)
+			return
+		}
+		if !callers.admitSession(r.Context(), in.SessionID) {
+			callers.refuseCaller(w, "session end")
 			return
 		}
 		// Recorded regardless of what SessionEnded does with it: a forged
@@ -1084,7 +1245,7 @@ func sessionEndHandler(ender *gateway.SessionEnder, rateLimit *gateway.SessionRa
 // has exactly one ToolUse slot, so CombineToolUseObservers stays needed for
 // that one -- record.go's own doc comment says why.
 func openIdentityStack(
-	ctx context.Context, o gatewayOptions, running *runningGateway,
+	ctx context.Context, o gatewayOptions, running *runningGateway, hosted *hostedCore,
 ) (identityGuard gateway.Guard, witnesses []gateway.Guard, toolUse gateway.ToolUseObserver, replyText gateway.ReplyTextObserver, err error) {
 	mappings, err := gateway.OpenPostgresMappingStore(ctx, o.dsn)
 	if err != nil {
@@ -1116,7 +1277,7 @@ func openIdentityStack(
 	sessionEndSignals := gateway.NewSessionEndSignals(0)
 	sessionWorkspaces := gateway.NewSessionWorkspaces(0)
 
-	identityGuard, err = gateway.NewIdentityGuard(gateway.IdentityGuardConfig{
+	cfg := gateway.IdentityGuardConfig{
 		Mappings:          mappings,
 		Tree:              tree,
 		Policy:            gateway.NewPolicy(),
@@ -1125,7 +1286,16 @@ func openIdentityStack(
 		RunStates:         runStates,
 		SessionEndSignals: sessionEndSignals,
 		SessionWorkspaces: sessionWorkspaces,
-	})
+	}
+	// Hosted mode (RM-284, #460): sessions are pinned to an installation and
+	// a run is registered only for a repository in its scope. The session
+	// endpoints admit the verified installation instead of this machine.
+	running.callers = localCallersFromHost()
+	if hosted != nil {
+		cfg.Pins, cfg.Scope = hosted.pins, hosted.scope
+		running.callers = hostedCallers{scope: hosted.scope, pins: hosted.pins}
+	}
+	identityGuard, err = gateway.NewIdentityGuard(cfg)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)
 	}
@@ -1163,7 +1333,6 @@ func openIdentityStack(
 	}
 	running.sessionWorkspaces = sessionWorkspaces
 	running.sessionWorkspaceRateLimit = sessionWorkspaceRateLimit
-	running.local = localCallersFromHost()
 
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
 

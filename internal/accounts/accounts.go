@@ -441,44 +441,64 @@ type Enrolment struct {
 // UPDATE ... WHERE used_at IS NULL AND expires_at > now() RETURNING, so two
 // concurrent consumers cannot both win.
 func (s *Store) ConsumeEnrolmentToken(ctx context.Context, token string) (Enrolment, error) {
+	tokenID, stored, err := s.lookupToken(ctx, token)
+	if err != nil {
+		return Enrolment{}, err
+	}
+	var en Enrolment
+	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		var cerr error
+		en, cerr = consumeTokenTx(ctx, tx, tokenID, stored)
+		return cerr
+	})
+	if err != nil {
+		return Enrolment{}, err
+	}
+	return en, nil
+}
+
+// lookupToken parses a token and checks its secret against the stored hash in
+// constant time. It answers the token id and the stored hash for the spend,
+// or ErrTokenInvalid.
+func (s *Store) lookupToken(ctx context.Context, token string) (tokenID, stored string, err error) {
 	parts := strings.Split(token, "_")
 	if len(parts) != 3 || parts[0] != tokenPrefix || parts[1] == "" || parts[2] == "" {
-		return Enrolment{}, ErrTokenInvalid
+		return "", "", ErrTokenInvalid
 	}
 	tokenID, presented := parts[1], hashSecret(parts[2])
 
-	var stored string
-	err := s.pool.QueryRow(ctx,
+	err = s.pool.QueryRow(ctx,
 		`SELECT secret_hash FROM innsegl_auth.enrolment_tokens WHERE token_id = $1`, tokenID).Scan(&stored)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		// Compare against a fixed value so unknown ids cost the same.
 		_ = subtle.ConstantTimeCompare([]byte(presented), []byte(strings.Repeat("0", 64)))
-		return Enrolment{}, ErrTokenInvalid
+		return "", "", ErrTokenInvalid
 	case err != nil:
-		return Enrolment{}, fmt.Errorf("accounts: reading the enrolment token: %w", err)
+		return "", "", fmt.Errorf("accounts: reading the enrolment token: %w", err)
 	}
 	if subtle.ConstantTimeCompare([]byte(presented), []byte(stored)) != 1 {
+		return "", "", ErrTokenInvalid
+	}
+	return tokenID, stored, nil
+}
+
+// consumeTokenTx is the spend itself, inside the caller's transaction.
+func consumeTokenTx(ctx context.Context, tx pgx.Tx, tokenID, stored string) (Enrolment, error) {
+	en := Enrolment{TokenID: tokenID}
+	qerr := tx.QueryRow(ctx,
+		`UPDATE innsegl_auth.enrolment_tokens SET used_at = clock_timestamp()
+		  WHERE token_id = $1 AND secret_hash = $2 AND used_at IS NULL AND expires_at > clock_timestamp()
+		  RETURNING account_id, created_by, repos, kind`, tokenID, stored).
+		Scan(&en.AccountID, &en.CreatedBy, &en.Repos, &en.Kind)
+	if errors.Is(qerr, pgx.ErrNoRows) {
 		return Enrolment{}, ErrTokenInvalid
 	}
-
-	en := Enrolment{TokenID: tokenID}
-	err = s.inTx(ctx, func(tx pgx.Tx) error {
-		qerr := tx.QueryRow(ctx,
-			`UPDATE innsegl_auth.enrolment_tokens SET used_at = clock_timestamp()
-			  WHERE token_id = $1 AND secret_hash = $2 AND used_at IS NULL AND expires_at > clock_timestamp()
-			  RETURNING account_id, created_by, repos, kind`, tokenID, stored).
-			Scan(&en.AccountID, &en.CreatedBy, &en.Repos, &en.Kind)
-		if errors.Is(qerr, pgx.ErrNoRows) {
-			return ErrTokenInvalid
-		}
-		if qerr != nil {
-			return fmt.Errorf("accounts: consuming the enrolment token: %w", qerr)
-		}
-		return appendAudit(ctx, tx, AuditEntry{Actor: en.CreatedBy, AccountID: en.AccountID,
-			Action: "enrolment_token.consumed", Subject: tokenID})
-	})
-	if err != nil {
+	if qerr != nil {
+		return Enrolment{}, fmt.Errorf("accounts: consuming the enrolment token: %w", qerr)
+	}
+	if err := appendAudit(ctx, tx, AuditEntry{Actor: en.CreatedBy, AccountID: en.AccountID,
+		Action: "enrolment_token.consumed", Subject: tokenID}); err != nil {
 		return Enrolment{}, err
 	}
 	return en, nil
@@ -543,32 +563,49 @@ func (s *Store) CreateInstallation(ctx context.Context, p InstallationParams) (I
 	}
 	var out Installation
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
-		var qerr error
-		out, qerr = scanInstallation(tx.QueryRow(ctx,
-			`INSERT INTO innsegl_auth.installations (installation_id, account_id, created_by, name, kind, repos)
-			 VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+installationColumns,
-			id, p.AccountID, p.CreatedBy, name, kind, repos))
-		if qerr != nil {
-			return fmt.Errorf("accounts: creating the installation: %w", qerr)
-		}
-		if p.TokenID != "" {
-			tag, lerr := tx.Exec(ctx,
-				`UPDATE innsegl_auth.enrolment_tokens SET installation_id = $2
-				  WHERE token_id = $1 AND used_at IS NOT NULL AND installation_id IS NULL AND account_id = $3`,
-				p.TokenID, id, p.AccountID)
-			if lerr != nil {
-				return fmt.Errorf("accounts: linking the token: %w", lerr)
-			}
-			if tag.RowsAffected() == 0 {
-				return fmt.Errorf("%w: token %q was not consumed for this account, or already names an installation",
-					ErrInvalid, p.TokenID)
-			}
-		}
-		return appendAudit(ctx, tx, AuditEntry{Actor: p.CreatedBy, AccountID: p.AccountID,
-			Action: "installation.created", Subject: id,
-			Detail: map[string]any{"name": name, "kind": kind, "repos": repos}})
+		var ierr error
+		out, ierr = insertInstallationTx(ctx, tx, id, p.AccountID, p.CreatedBy, name, kind, repos, p.TokenID)
+		return ierr
 	})
 	if err != nil {
+		return Installation{}, err
+	}
+	return out, nil
+}
+
+// insertInstallationTx inserts an installation whose arguments are already
+// normalised, links the token that enrolled it (when tokenID is set) and
+// appends the audit row, inside the caller's transaction. An id already in
+// use is ErrInvalid.
+func insertInstallationTx(ctx context.Context, tx pgx.Tx, id, accountID, createdBy, name, kind string,
+	repos []string, tokenID string,
+) (Installation, error) {
+	out, qerr := scanInstallation(tx.QueryRow(ctx,
+		`INSERT INTO innsegl_auth.installations (installation_id, account_id, created_by, name, kind, repos)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+installationColumns,
+		id, accountID, createdBy, name, kind, repos))
+	if qerr != nil {
+		if pgCode(qerr) == "23505" {
+			return Installation{}, fmt.Errorf("%w: installation id %q is already in use", ErrInvalid, id)
+		}
+		return Installation{}, fmt.Errorf("accounts: creating the installation: %w", qerr)
+	}
+	if tokenID != "" {
+		tag, lerr := tx.Exec(ctx,
+			`UPDATE innsegl_auth.enrolment_tokens SET installation_id = $2
+			  WHERE token_id = $1 AND used_at IS NOT NULL AND installation_id IS NULL AND account_id = $3`,
+			tokenID, id, accountID)
+		if lerr != nil {
+			return Installation{}, fmt.Errorf("accounts: linking the token: %w", lerr)
+		}
+		if tag.RowsAffected() == 0 {
+			return Installation{}, fmt.Errorf("%w: token %q was not consumed for this account, or already names an installation",
+				ErrInvalid, tokenID)
+		}
+	}
+	if err := appendAudit(ctx, tx, AuditEntry{Actor: createdBy, AccountID: accountID,
+		Action: "installation.created", Subject: id,
+		Detail: map[string]any{"name": name, "kind": kind, "repos": repos}}); err != nil {
 		return Installation{}, err
 	}
 	return out, nil

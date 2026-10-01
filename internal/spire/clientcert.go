@@ -143,17 +143,9 @@ func (c *Client) MintClientX509SVID(ctx context.Context, csrDER []byte, ttl time
 		chain = append(chain, cert)
 	}
 
-	b, err := bundlev1.NewBundleClient(c.conn).GetBundle(cctx, &bundlev1.GetBundleRequest{})
+	bundle, err = c.x509Bundle(cctx, op)
 	if err != nil {
-		return nil, nil, classifyAdmin(op, "", err)
-	}
-	for _, a := range b.GetX509Authorities() {
-		cert, perr := x509.ParseCertificate(a.GetAsn1())
-		if perr != nil {
-			return nil, nil, newError(ClassInvariantViolation, op, "",
-				fmt.Sprintf("SPIRE returned an unparseable bundle authority: %v", perr), false, perr)
-		}
-		bundle = append(bundle, cert)
+		return nil, nil, err
 	}
 
 	got, err := VerifyClientCertificate(chain, bundle, c.trustDomain, time.Now())
@@ -166,6 +158,33 @@ func (c *Client) MintClientX509SVID(ctx context.Context, csrDER []byte, ttl time
 			fmt.Sprintf("SPIRE minted installation %s, asked for %s", got, want), false, nil)
 	}
 	return chain, bundle, nil
+}
+
+// X509Bundle reads the deployment's X.509 authorities: the roots a client
+// certificate is verified against (VerifyClientCertificate). The gateway's
+// client-certificate guard reads it through the MCP's own admin client
+// (#460), so the gateway holds no admin identity of its own.
+func (c *Client) X509Bundle(ctx context.Context) ([]*x509.Certificate, error) {
+	cctx, cancel := c.call(ctx)
+	defer cancel()
+	return c.x509Bundle(cctx, "x509_bundle")
+}
+
+func (c *Client) x509Bundle(ctx context.Context, op string) ([]*x509.Certificate, error) {
+	b, err := bundlev1.NewBundleClient(c.conn).GetBundle(ctx, &bundlev1.GetBundleRequest{})
+	if err != nil {
+		return nil, classifyAdmin(op, "", err)
+	}
+	var bundle []*x509.Certificate
+	for _, a := range b.GetX509Authorities() {
+		cert, perr := x509.ParseCertificate(a.GetAsn1())
+		if perr != nil {
+			return nil, newError(ClassInvariantViolation, op, "",
+				fmt.Sprintf("SPIRE returned an unparseable bundle authority: %v", perr), false, perr)
+		}
+		bundle = append(bundle, cert)
+	}
+	return bundle, nil
 }
 
 // VerifyClientCertificate checks a presented chain (leaf first) against the

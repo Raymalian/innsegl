@@ -65,13 +65,19 @@ func (s *PostgresMappingStore) Insert(ctx context.Context, m RunMapping) error {
 	if m.RunID == "" || m.SessionID == "" || m.AgentID == "" {
 		return fmt.Errorf("gateway: insert a run mapping: run_id, session_id and agent_id are required, got %+v", m)
 	}
+	// client_id (GW-019, #460): the installation the client guard verified
+	// for the request this row was inserted for, read from ctx; NULL in
+	// single-host mode, where no installation exists. It sits outside the
+	// event chain (ADR-0063 decision 7), so ownership is a read-time join.
+	clientID, _ := InstallationFromContext(ctx)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO innsegl.gateway_run_mapping
 			(run_id, session_id, agent_id, fingerprint,
-			 parent_run_id, forked_from_run_id, adopted_from_run_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			 parent_run_id, forked_from_run_id, adopted_from_run_id, client_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		m.RunID, m.SessionID, m.AgentID, string(m.Fingerprint),
-		nullableText(m.ParentRunID), nullableText(m.ForkedFromRunID), nullableText(m.AdoptedFromRunID))
+		nullableText(m.ParentRunID), nullableText(m.ForkedFromRunID), nullableText(m.AdoptedFromRunID),
+		nullableText(clientID))
 	if err != nil {
 		return fmt.Errorf("gateway: insert a run mapping for session %s agent %s: %w", m.SessionID, m.AgentID, err)
 	}
