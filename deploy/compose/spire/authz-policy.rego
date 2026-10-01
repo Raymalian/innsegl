@@ -48,9 +48,13 @@
 #    domain. That is denial of service and orphaning, not forged attribution —
 #    AB-10 is about minting. Detection is entry reconciliation (RM-019, AB-11).
 #    See ADR-0012.
-#  * MintX509SVID and MintWITSVID are denied to admin outright rather than
-#    scoped, and could not be scoped even if we wanted them: the SPIFFE ID
-#    lives inside a DER-encoded CSR, which rego cannot parse.
+#  * MintWITSVID is denied to admin outright.
+#    MintX509SVID IS allowed, and IS scoped, to client identities only:
+#    RM-300 (#476). Its SPIFFE ID lives inside a DER-encoded CSR, and the
+#    earlier belief that rego cannot read one was wrong. MEASURED by SPI-020
+#    (internal/spire/clientcert_test.go) on SPIRE 1.15.3: `input.req.csr` is
+#    the CSR as base64 DER, and `crypto.x509.parse_certificate_request` reads
+#    its SANs. See client_csr_ok below.
 #    MintJWTSVID IS allowed, and IS scoped — RM-023 (#31), ADR-0019. Its
 #    request carries the SPIFFE ID in `input.req.id`, so the same subtree rule
 #    that scopes an entry batch scopes it. Scoping it is not optional: minting
@@ -136,7 +140,7 @@ allow_if_admin = true if {
 
 # The admin surface, in full. Everything else upstream marks `allow_admin` —
 # CreateJoinToken, BanAgent, the bundle and federation APIs, the local-authority
-# APIs, MintX509SVID, MintWITSVID — is denied to an admin SPIFFE ID by omission.
+# APIs, MintWITSVID — is denied to an admin SPIFFE ID by omission.
 # IP §6.10 is the standard being met: "least-privilege (entry create/delete
 # only, scoped to the agent subtree of the trust domain)".
 #
@@ -144,6 +148,7 @@ allow_if_admin = true if {
 #
 #   register_agent            BatchCreateEntry; ListAgents for the parent node ID
 #   get_credential            MintJWTSVID                     (RM-023, ADR-0019)
+#   client enrolment          MintX509SVID, client paths only  (RM-300, #476)
 #   retire_agent              BatchDeleteEntry
 #   reaper (RM-017),          ListEntries, GetEntry, CountEntries,
 #   reconciler (RM-019)       BatchUpdateEntry
@@ -162,6 +167,7 @@ mcp_admin_methods := {
 	"/spire.api.server.entry.v1.Entry/CountEntries",
 	"/spire.api.server.agent.v1.Agent/ListAgents",
 	"/spire.api.server.svid.v1.SVID/MintJWTSVID",
+	"/spire.api.server.svid.v1.SVID/MintX509SVID",
 }
 
 # Methods whose request body carries the SPIFFE IDs being created or moved.
@@ -173,10 +179,15 @@ entry_batch_methods := {
 }
 
 # Methods whose request names ONE SPIFFE ID directly, in `input.req.id`.
-# MintJWTSVID is the only one: MintX509SVID and MintWITSVID carry theirs inside
-# a DER-encoded CSR and are denied by omission from mcp_admin_methods above.
+# MintJWTSVID is the only one. MintX509SVID carries its ID inside a CSR and is
+# scoped through csr_mint_methods below; MintWITSVID is denied by omission.
 mint_id_methods := {
 	"/spire.api.server.svid.v1.SVID/MintJWTSVID",
+}
+
+# Methods whose request names its SPIFFE ID inside a DER CSR, `input.req.csr`.
+csr_mint_methods := {
+	"/spire.api.server.svid.v1.SVID/MintX509SVID",
 }
 
 default admin_scope_ok = false
@@ -187,6 +198,7 @@ default admin_scope_ok = false
 admin_scope_ok = true if {
 	not entry_batch_methods[input.full_method]
 	not mint_id_methods[input.full_method]
+	not csr_mint_methods[input.full_method]
 }
 
 # Every entry in the batch, with no exception and no empty batch.
@@ -206,6 +218,53 @@ admin_scope_ok = true if {
 admin_scope_ok = true if {
 	mint_id_methods[input.full_method]
 	agent_subtree(input.req.id)
+}
+
+# An X509-SVID for an enrolled client installation (RM-300, #476), and for
+# nothing else. MintX509SVID needs no registration entry either, so without
+# this rule the admin credential could mint an X509-SVID for any ID, the MCP's
+# own included. The CSR must name exactly one identity, a client one, and no
+# DNS, email or IP name. The TTL must be stated and at most 24 h.
+#
+# A client identity can never sign: MintJWTSVID stays on agent_subtree above,
+# which a /client/ path never satisfies, and no client runs a SPIRE agent.
+#
+# MEASURED (SPI-020, SPIRE 1.15.3): `input.req.csr` is the CSR's DER as a
+# base64 string and `input.req.ttl` a number of seconds. A CSR that does not
+# parse makes the builtin fail, the rule is then undefined, and that denies.
+admin_scope_ok = true if {
+	csr_mint_methods[input.full_method]
+	client_csr_ok(input.req.csr)
+	input.req.ttl > 0
+	input.req.ttl <= 86400
+}
+
+client_csr_ok(csr) if {
+	req := crypto.x509.parse_certificate_request(csr)
+	no_names(object.get(req, "DNSNames", null))
+	no_names(object.get(req, "EmailAddresses", null))
+	no_names(object.get(req, "IPAddresses", null))
+	count(req.URIs) == 1
+	client_uri(req.URIs[0])
+}
+
+no_names(x) if x == null
+
+no_names(x) if count(x) == 0
+
+# client_uri holds for exactly spiffe://innsegl.dev/client/{32 lowercase hex}:
+# no user, no query, no fragment, no escaped path form. The URI is Go's
+# url.URL as OPA marshals it.
+client_uri(u) if {
+	u.Scheme == "spiffe"
+	u.Host == "innsegl.dev"
+	object.get(u, "Opaque", "") == ""
+	object.get(u, "User", null) == null
+	object.get(u, "RawQuery", "") == ""
+	object.get(u, "Fragment", "") == ""
+	object.get(u, "RawPath", "") == ""
+	object.get(u, "ForceQuery", false) == false
+	regex.match(`^/client/[0-9a-f]{32}$`, u.Path)
 }
 
 # agent_subtree holds for exactly the SPIFFE ID scheme of doc 01 §1:
