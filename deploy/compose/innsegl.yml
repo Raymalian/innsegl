@@ -1077,7 +1077,12 @@ services:
       # measured 2026-09-08 nothing was expiring them -- a subagent that died
       # without a clean stop left its run Active for 13 hours while it kept
       # collecting tool calls.
-      INNSEGL_MCP_ALSO: ${INNSEGL_MCP_ALSO:-seal,reconcile,reap}
+      #
+      # The gateway too (ADR-0060). install.sh points every Claude Code
+      # request on the machine at it, and measured 2026-10-01 a plain
+      # install started the stack without it, because this default named
+      # only the other three.
+      INNSEGL_MCP_ALSO: ${INNSEGL_MCP_ALSO:-seal,reconcile,reap,gateway}
 
       # A companion reads this process's environment, so everything `seal` and
       # `reconcile` read is set here with the SAME expression their own
@@ -1761,9 +1766,6 @@ services:
       # address now, for the identical reason.
       INNSEGL_API_RP_ID: ${INNSEGL_API_RP_ID:-localhost}
       INNSEGL_API_RP_ORIGIN: ${INNSEGL_API_RP_ORIGIN:-http://localhost:8082}
-      # Where CheckSocketDenial reads the harness's managed settings from
-      # INSIDE this container — the file inside the read-only mount below.
-      INNSEGL_API_MANAGED_SETTINGS_FILE: /run/innsegl/managed-settings/managed-settings.json
       # 0.0.0.0 rather than the loopback default: the caller is the dashboard's
       # nginx, in another container. The service publishes no host port, and
       # BOTH its networks are internal — a container attached only to internal
@@ -1786,20 +1788,6 @@ services:
       INNSEGL_OIDC_ISSUER: *jwt-issuer
     volumes:
       - innsegl-workspace:/work:ro
-      # RM-260/RM-261 (ADR-0062) — the harness's MANAGED SETTINGS, read-only,
-      # so CheckSocketDenial can ask whether E18's container-socket denial is
-      # in effect before the first passkey's enrolment (or its recovery)
-      # will complete — checked at the moment of every such request, not
-      # once. THE DEFAULT IS THE MAC PATH (install.sh's own
-      # default_managed_settings_path() for darwin, this reference
-      # deployment's documented host); a Linux host sets
-      # $INNSEGL_MANAGED_SETTINGS_HOST_DIR to /etc/claude-code
-      # (install.sh's other default) instead of this file guessing an OS it
-      # cannot detect. MOUNTED AS THE DIRECTORY, not the file: the harness
-      # may not have written managed-settings.json yet on a machine E18's
-      # denial was never installed on, and a directory mount tolerates that
-      # absence the way a single-file mount cannot.
-      - ${INNSEGL_MANAGED_SETTINGS_HOST_DIR:-/Library/Application Support/ClaudeCode}:/run/innsegl/managed-settings:ro
     healthcheck:
       # /api/v1/health and not a TCP dial: ADR-0024's rule, that a readiness
       # probe must fetch something it can parse. The body it returns is the

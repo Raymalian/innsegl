@@ -38,7 +38,7 @@ func TestRM211OneProcessIsBuiltIn(t *testing.T) {
 		for _, name := range strings.Split(also, ",") {
 			have[strings.TrimSpace(name)] = true
 		}
-		for _, want := range []string{"seal", "reconcile", "reap"} {
+		for _, want := range []string{"seal", "reconcile", "reap", "gateway"} {
 			if !have[want] {
 				t.Errorf("%v with no profile: innsegl-mcp's INNSEGL_MCP_ALSO = %q, which does not run %s",
 					files, also, want)

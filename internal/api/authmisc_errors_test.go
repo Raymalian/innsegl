@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"testing"
 	"time"
 
@@ -41,24 +40,6 @@ func TestNewWebAuthnDefaultsTheDisplayName(t *testing.T) {
 	}
 	if w.Config.RPDisplayName != "Innsegl" {
 		t.Errorf("RPDisplayName = %q, want the default %q", w.Config.RPDisplayName, "Innsegl")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// ManagedSettingsPathFromEnv — both branches.
-// ---------------------------------------------------------------------------
-
-func TestManagedSettingsPathFromEnvUsesTheVariableWhenSet(t *testing.T) {
-	t.Setenv(EnvManagedSettingsFile, "/custom/managed-settings.json")
-	if got := ManagedSettingsPathFromEnv(); got != "/custom/managed-settings.json" {
-		t.Errorf("ManagedSettingsPathFromEnv() = %q, want the env value", got)
-	}
-}
-
-func TestManagedSettingsPathFromEnvFallsBackToTheDefault(t *testing.T) {
-	t.Setenv(EnvManagedSettingsFile, "")
-	if got, want := ManagedSettingsPathFromEnv(), DefaultManagedSettingsPath(runtime.GOOS); got != want {
-		t.Errorf("ManagedSettingsPathFromEnv() = %q, want the per-OS default %q", got, want)
 	}
 }
 

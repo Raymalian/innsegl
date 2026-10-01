@@ -147,20 +147,6 @@ func (s *Server) handleEnrolBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
 
-	// ADR-0062's enrolment crux, checked at the moment of THIS request, not
-	// cached from any earlier one.
-	denial, err := CheckSocketDenial(s.managedSettingsPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, codeInternal, "could not read the "+
-			"socket-denial fact")
-		return
-	}
-	if !denial.Denied {
-		s.recordAuth(ctx, AuthEventEnrolmentRefused, "", "socket denial not in effect: "+denial.Reason)
-		writeError(w, http.StatusForbidden, codeForbidden, denial.Reason)
-		return
-	}
-
 	open, err := s.authStore.EnrolmentOpen(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not check enrolment state")
@@ -226,20 +212,6 @@ func (s *Server) handleEnrolFinish(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req finishRequest
 	if !decodeAuthRequest(w, r, &req) {
-		return
-	}
-
-	// Re-checked, not reused from begin: "the enrolment endpoint asks, every
-	// time" (ADR-0062).
-	denial, err := CheckSocketDenial(s.managedSettingsPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, codeInternal, "could not read the "+
-			"socket-denial fact")
-		return
-	}
-	if !denial.Denied {
-		s.recordAuth(ctx, AuthEventEnrolmentRefused, "", "socket denial not in effect at finish: "+denial.Reason)
-		writeError(w, http.StatusForbidden, codeForbidden, denial.Reason)
 		return
 	}
 

@@ -92,6 +92,13 @@ GATEWAY_URL="${INNSEGL_INSTALL_GATEWAY_URL:-https://127.0.0.1:28095}"
 
 # innsegl's own CA, and the store the sandbox denies a shell read access to.
 CA_PEM="${INNSEGL_INSTALL_CA_PEM:-$HOME/.innsegl/ca/gateway-ca.pem}"
+# How the install asks whether the gateway answers, over TLS against the CA it
+# will hand the harness. Any HTTP reply counts; no reply, or a certificate the
+# CA does not sign, does not. Overridable for the self-test only.
+GATEWAY_PROBE_CMD="${INNSEGL_INSTALL_GATEWAY_PROBE_CMD:-}"
+# How many 2-second tries the gateway gets: it starts with the MCP and can
+# take a few seconds after `make start` returns.
+GATEWAY_TRIES="${INNSEGL_INSTALL_GATEWAY_TRIES:-30}"
 # The agent's shell reads none of innsegl's host state (bodies, run tokens,
 # backups) except the gateway's CA certificate, which the host commands git
 # runs inside that shell need in order to trust the core.
@@ -928,6 +935,31 @@ verify_harness_loaded() {
   exit 1
 }
 
+# The managed settings send every Claude Code request on this machine to the
+# gateway. Written while it is down, they break every session until it comes
+# back. So they are written only once it has answered (ENF-007).
+check_gateway_answers() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf 'install.sh: (dry run) would check that %s answers\n' "$GATEWAY_URL"
+    return 0
+  fi
+  local tries=0
+  while :; do
+    if [ -n "$GATEWAY_PROBE_CMD" ]; then
+      eval "$GATEWAY_PROBE_CMD" && return 0
+    elif curl -s -o /dev/null --max-time 5 --cacert "$CA_PEM" "$GATEWAY_URL/"; then
+      return 0
+    fi
+    tries=$((tries + 1))
+    [ "$tries" -lt "$GATEWAY_TRIES" ] || break
+    sleep 2
+  done
+  echo "install.sh: the gateway at $GATEWAY_URL did not answer (CA $CA_PEM)." >&2
+  echo "  The managed settings were NOT written: they would send every Claude Code" >&2
+  echo "  request here. Check that innsegl-mcp runs the gateway, then run this again." >&2
+  exit 1
+}
+
 main() {
   parse_args "$@"
 
@@ -948,6 +980,9 @@ main() {
 
   echo "==> putting innsegl-commit on PATH"
   run_step "$SIGNER_CMD"
+
+  echo "==> checking the gateway answers"
+  check_gateway_answers
 
   echo "==> writing the managed settings"
   connect_managed_settings install

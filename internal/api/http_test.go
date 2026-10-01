@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -68,16 +67,14 @@ func testAuthStore(t *testing.T) *AuthStore {
 
 func testServer(t *testing.T) (*httptest.Server, *proofScenario) {
 	t.Helper()
-	listening, scenario, _ := testServerConfigured(t,
-		filepath.Join(t.TempDir(), "absent-managed-settings.json"))
+	listening, scenario, _ := testServerConfigured(t)
 	return listening, scenario
 }
 
-// testServerConfigured is testServer with the managed-settings path under
-// the caller's control — testServerWithSession uses a DENYING fixture so its
-// enrolment ceremony can complete; every other case uses an absent one (via
-// testServer), matching the default posture AUTH-002 measures separately.
-func testServerConfigured(t *testing.T, managedSettingsPath string) (*httptest.Server, *proofScenario, *AuthStore) {
+// testServerConfigured builds a server against a fresh, migrated database —
+// every case shares it, whether it needs no session, an unauthenticated
+// request, or a full enrolment ceremony (testServerWithSession).
+func testServerConfigured(t *testing.T) (*httptest.Server, *proofScenario, *AuthStore) {
 	t.Helper()
 	owner, _, readerDSN := migrated(t)
 	seed(t, owner, 3)
@@ -88,7 +85,6 @@ func testServerConfigured(t *testing.T, managedSettingsPath string) (*httptest.S
 	srv, err := NewServer(ServerConfig{
 		Store: store, Prover: s.prover(t),
 		AuthStore: authStore, WebAuthn: testWebAuthnConfig,
-		ManagedSettingsPath: managedSettingsPath,
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -98,25 +94,11 @@ func testServerConfigured(t *testing.T, managedSettingsPath string) (*httptest.S
 	return listening, s, authStore
 }
 
-// denyingManagedSettingsJSON is a managed-settings.json CheckSocketDenial
-// reads as Denied — the fixture every test that needs a real, completed
-// enrolment ceremony uses, so the socket-denial gate (AUTH-002, tested on
-// its own in socketdenial_test.go) does not also gate every OTHER case that
-// merely needs a signed-in session to exercise ADR-0062's route gate.
-const denyingManagedSettingsJSON = `{
-	"sandbox": {
-		"enabled": true,
-		"allowUnsandboxedCommands": false,
-		"network": {"allowLocalBinding": true}
-	}
-}`
-
 // testServerWithSession is testServer plus a signed-in session, returned as
 // the *http.Cookie every gated request in a case needs to attach.
 func testServerWithSession(t *testing.T) (*httptest.Server, *proofScenario, *http.Cookie) {
 	t.Helper()
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	listening, scenario, authStore := testServerConfigured(t, path)
+	listening, scenario, authStore := testServerConfigured(t)
 	cookie := signInTestUser(t, listening.URL, authStore)
 	return listening, scenario, cookie
 }

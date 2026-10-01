@@ -3,10 +3,9 @@
 /*
  * ADR-0062's first-enrolment page: display name + the one-time code minted
  * by `innsegl admin-credential enrol-code` on this machine, then a passkey
- * ceremony. The server independently re-checks the socket-denial fact on
- * every request this page makes (internal/api/socketdenial.go) — a refusal
- * from that check arrives as an ordinary AuthRequestError and is shown
- * verbatim, per doc 06 §6.1: say what failed.
+ * ceremony. A refusal of that code — missing, wrong, used or expired —
+ * arrives as an ordinary AuthRequestError and is shown verbatim, per doc 06
+ * §6.1: say what failed.
  */
 
 import { useId, useState, type FormEvent } from "react";

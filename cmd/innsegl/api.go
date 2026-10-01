@@ -568,9 +568,8 @@ func apiUsage(stderr io.Writer, fs *flag.FlagSet) {
 		"replacement for it. Do not expose this port to a network you have not also put\n"+
 		"an authenticating proxy in front of. The default -listen is loopback for that\n"+
 		"reason.\n\n"+
-		"The FIRST passkey's enrolment is separately locked until the socket denial E18\n"+
-		"builds can be shown in effect on this deployment — see\n"+
-		"internal/api/socketdenial.go and `innsegl admin-credential enrol-code`.\n\n")
+		"The FIRST passkey's enrolment is separately gated by a one-time code only the\n"+
+		"operator can mint — see `innsegl admin-credential enrol-code`.\n\n")
 	fprintf(stderr, "It refuses to start on a database credential that can write. The check "+
 		"asks\nthe SERVER what the credential may do — not the DSN, and not this source\n"+
 		"file — and there is no flag that disables it: a query API that would start on\n"+

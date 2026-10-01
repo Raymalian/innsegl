@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -20,8 +19,7 @@ import (
 // covered in authhandlers_errors_test.go and authmisc_errors_test.go.
 
 func TestHandleEnrolBeginRefusesAMalformedBody(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, _ := testServerConfigured(t, path)
+	srv, _, _ := testServerConfigured(t)
 	a := do(t, http.MethodPost, srv.URL+"/api/v1/auth/enrol/begin", "{not json")
 	if a.status != http.StatusBadRequest {
 		t.Fatalf("enrol/begin with a malformed body returned %d, want %d: %s",
@@ -30,8 +28,7 @@ func TestHandleEnrolBeginRefusesAMalformedBody(t *testing.T) {
 }
 
 func TestHandleEnrolFinishRefusesAMalformedBody(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, _ := testServerConfigured(t, path)
+	srv, _, _ := testServerConfigured(t)
 	a := do(t, http.MethodPost, srv.URL+"/api/v1/auth/enrol/finish", "{not json")
 	if a.status != http.StatusBadRequest {
 		t.Fatalf("enrol/finish with a malformed body returned %d, want %d: %s",
@@ -48,7 +45,7 @@ type ceremonyCorruptionHarness struct {
 	ownerDSN string
 }
 
-func newCeremonyCorruptionHarness(t *testing.T, managedSettingsPath string) ceremonyCorruptionHarness {
+func newCeremonyCorruptionHarness(t *testing.T) ceremonyCorruptionHarness {
 	t.Helper()
 	_, ownerDSN, readerDSN, authDSN := migratedWithAuth(t)
 	store, _ := readStore(t, readerDSN)
@@ -62,7 +59,6 @@ func newCeremonyCorruptionHarness(t *testing.T, managedSettingsPath string) cere
 	handler, err := NewServer(ServerConfig{
 		Store: store, Prover: scenario.prover(t),
 		AuthStore: authStore, WebAuthn: testWebAuthnConfig,
-		ManagedSettingsPath: managedSettingsPath,
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -94,8 +90,7 @@ func (h ceremonyCorruptionHarness) corruptSessionData(t *testing.T, ceremonyID s
 }
 
 func TestHandleEnrolFinishReportsAnUnreadableCeremony(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	h := newCeremonyCorruptionHarness(t, path)
+	h := newCeremonyCorruptionHarness(t)
 
 	code, err := mintCodeFor(h)
 	if err != nil {
@@ -127,7 +122,7 @@ func TestHandleEnrolFinishReportsAnUnreadableCeremony(t *testing.T) {
 }
 
 func TestHandleLoginFinishReportsAnUnreadableCeremony(t *testing.T) {
-	h := newCeremonyCorruptionHarness(t, filepath.Join(t.TempDir(), "absent.json"))
+	h := newCeremonyCorruptionHarness(t)
 
 	begin := do(t, http.MethodPost, h.srv.URL+"/api/v1/auth/login/begin", "{}")
 	if begin.status != http.StatusOK {

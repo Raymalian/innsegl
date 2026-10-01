@@ -2,10 +2,10 @@
 
 /*
  * RM-260/RM-261 (ADR-0062) — the first-enrolment page: display name + the
- * one-time code, then a passkey ceremony. The socket-denial refusal
- * (internal/api/socketdenial.go) is just another AuthRequestError from the
- * server's point of view, and this page is required to show it verbatim
- * (doc 06 §6.1) rather than translate it into something vaguer.
+ * one-time code, then a passkey ceremony. A refused code is just another
+ * AuthRequestError from the server's point of view, and this page is
+ * required to show it verbatim (doc 06 §6.1) rather than translate it into
+ * something vaguer.
  */
 
 import { render, screen, waitFor } from "@testing-library/react";
@@ -76,14 +76,15 @@ describe("EnrolPage", () => {
     });
   });
 
-  it("shows the socket-denial refusal verbatim, not a generic failure", async () => {
+  it("shows a refused code verbatim, not a generic failure", async () => {
     vi.stubGlobal(
       "fetch",
       respond(
         {
           error: {
             code: "forbidden",
-            message: "no managed settings file at /etc/claude-code/managed-settings.json",
+            message:
+              "that one-time code is not usable: it may be wrong, already used, or expired",
           },
         },
         403,
@@ -96,7 +97,7 @@ describe("EnrolPage", () => {
     await userEvent.click(screen.getByRole("button", { name: strings.enrol.button }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "no managed settings file at /etc/claude-code/managed-settings.json",
+      "that one-time code is not usable: it may be wrong, already used, or expired",
     );
   });
 

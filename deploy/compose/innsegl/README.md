@@ -209,13 +209,8 @@ both halves, the same way `verify-reader-role.sh` does for the other role.
 
 Nobody can open the dashboard until one passkey exists. ADR-0062's enrolment
 crux: the first enrolment (and its recovery, if the only passkey is ever
-lost) is **locked** until the container runtime's socket can be shown denied
-to a sandboxed shell — E18's build (`install.sh`). `innsegl api` checks that
-fact itself, on every enrolment request, by reading the managed-settings file
-the volume above mounts read-only; it does not trust a check run once at
-start-up.
-
-With that denial in place:
+lost) is gated by a one-time code only an operator holding the auth-writer
+DSN can mint.
 
 1. Mint a one-time code, from a trusted host, holding the auth-writer DSN:
 

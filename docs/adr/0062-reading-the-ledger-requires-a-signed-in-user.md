@@ -1,6 +1,6 @@
 # ADR-0062: Reading the ledger requires a signed-in user
 
-- Status: accepted
+- Status: accepted; amended 2026-10-01 (see Amendment)
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -434,3 +434,33 @@ the operator alone, and any user or passkey data collected in that window
 needs its own erasure decision — following
 `account-identity-complete-plan.md` §10's precedent for its own
 account data — before the tables holding it are dropped.
+
+## Amendment (2026-10-01): the enrolment endpoint no longer reads the managed settings
+
+**What changed.** "How the lock is checked" asked the enrolment endpoint to
+read, every time, that the container-socket denial is in effect. It was
+built as a read of the harness's managed-settings file, mounted into the
+API's container (#409). That check is removed (#429). Enrolment is gated by
+the one-time code alone, and the code is still minted only through the
+presence-gated admin path.
+
+**Why.** The check could only ever see the machine the API runs on. Two
+places it fails:
+
+- **A deployment on another host.** Agents run on the operator's
+  workstation and the API does not. It has no managed settings to read,
+  and a mounted copy would be a claim, not a measurement.
+- **A first install on one machine.** The installer starts the stack before
+  it writes the managed settings, so the directory the API mounts does not
+  exist yet, and on some container runtimes it cannot be mounted at all
+  without a manual file-sharing change (#428).
+
+**What still holds.** The property this ADR depends on is unchanged: an
+agent must not reach the credential that mints the code. On one machine,
+that is the socket denial the installer writes (E18), and the installer now
+refuses to write managed settings that would not take effect (ENF-007).
+Where the API runs on another host, an agent on the workstation never had a
+path to that host's container runtime in the first place. What is lost is
+the endpoint re-checking the denial at enrolment time. The operator mints a
+code by hand, in person, and it is single-use and short-lived. That is the
+gate.

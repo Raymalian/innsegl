@@ -34,16 +34,6 @@ import (
 // holding the auth-writer credential (internal/api.AuthWriterRole) the
 // running `innsegl api` process also holds a second pool of — never the
 // ledger's appending role, and never the read-only one either.
-//
-// # It does not bypass the socket-denial check
-//
-// Minting a code here says nothing about whether E18's container-socket
-// denial is in effect RIGHT NOW, on THIS machine, at the moment somebody
-// tries to spend it. The enrolment endpoint (internal/api's
-// handleEnrolBegin/handleEnrolFinish) reads that fact itself, every time,
-// independently of this command — ADR-0062: "the enrolment endpoint asks,
-// every time, rather than trusting that a denial applied once is still
-// applied now."
 
 // enrolCodeDefaultTTL and enrolCodeMaxTTL bound the code's life. Fifteen
 // minutes by default — the same number admincred.go's own
@@ -115,11 +105,7 @@ func runAdminCredentialEnrolCode(args []string, stdout, stderr io.Writer, deps e
 		fprintf(stderr, "Usage:\n  innsegl admin-credential enrol-code -dsn <auth-writer DSN>\n\n")
 		fprintf(stderr, "The code is written to STDOUT and to nowhere else. It is single-use: "+
 			"the enrolment\nendpoint consumes it atomically on the first request that presents "+
-			"it, and a second\nattempt with the same code is refused.\n\n")
-		fprintf(stderr, "THIS DOES NOT BYPASS THE SOCKET-DENIAL CHECK. The enrolment endpoint "+
-			"asks, every\ntime, whether E18's container-socket denial is in effect on this "+
-			"deployment right\nnow, independently of this command minting a code "+
-			"(ADR-0062).\n\nFlags:\n")
+			"it, and a second\nattempt with the same code is refused.\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	if code, ok := adminCredentialParse(fs, args); !ok {

@@ -6,14 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
-// AUTH-002 (I): enrolment is refused when the managed-settings file is
-// absent or allows the socket; with a denying file, only a valid, unused,
-// unexpired code completes; a used or expired code refuses.
+// AUTH-002: enrolment is gated by a one-time code alone — only a valid,
+// unused, unexpired code completes; a missing, unknown, used or expired code
+// refuses.
 
 func enrolBeginBody(t *testing.T, displayName, code string) string {
 	t.Helper()
@@ -24,39 +23,10 @@ func enrolBeginBody(t *testing.T, displayName, code string) string {
 	return string(body)
 }
 
-func TestAUTH002EnrolmentRefusedWhenManagedSettingsFileIsAbsent(t *testing.T) {
-	srv, _, authStore := testServerConfigured(t, filepath.Join(t.TempDir(), "absent.json"))
-	code, _, err := authStore.CreateEnrolmentCode(context.Background(), time.Minute)
-	if err != nil {
-		t.Fatalf("CreateEnrolmentCode: %v", err)
-	}
-
-	a := do(t, http.MethodPost, srv.URL+"/api/v1/auth/enrol/begin",
-		enrolBeginBody(t, "Operator", code))
-	if a.status != http.StatusForbidden {
-		t.Fatalf("enrol/begin with no managed-settings file returned %d, want 403: %s", a.status, a.body)
-	}
-}
-
-func TestAUTH002EnrolmentRefusedWhenSandboxAllowsTheSocket(t *testing.T) {
-	path := writeManagedSettings(t, `{"sandbox": {"enabled": true, "allowUnsandboxedCommands": true}}`)
-	srv, _, authStore := testServerConfigured(t, path)
-	code, _, err := authStore.CreateEnrolmentCode(context.Background(), time.Minute)
-	if err != nil {
-		t.Fatalf("CreateEnrolmentCode: %v", err)
-	}
-
-	a := do(t, http.MethodPost, srv.URL+"/api/v1/auth/enrol/begin",
-		enrolBeginBody(t, "Operator", code))
-	if a.status != http.StatusForbidden {
-		t.Fatalf("enrol/begin with an allowing sandbox returned %d, want 403: %s", a.status, a.body)
-	}
-}
-
-func TestAUTH002EnrolmentWithADenyingFileAndAValidCodeCompletes(t *testing.T) {
-	// signInTestUser runs the whole begin/finish ceremony against a denying
-	// managed-settings fixture, exactly what this case measures; a separate
-	// implementation here would just be a second copy of it.
+func TestAUTH002EnrolmentWithAValidCodeCompletes(t *testing.T) {
+	// signInTestUser runs the whole begin/finish ceremony, exactly what this
+	// case measures; a separate implementation here would just be a second
+	// copy of it.
 	srv, _, cookie := testServerWithSession(t)
 
 	a := get(t, srv.URL, "/api/v1/auth/session", cookie)
@@ -71,8 +41,7 @@ func TestAUTH002EnrolmentWithADenyingFileAndAValidCodeCompletes(t *testing.T) {
 }
 
 func TestAUTH002AUsedCodeIsRefused(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, authStore := testServerConfigured(t, path)
+	srv, _, authStore := testServerConfigured(t)
 	code, _, err := authStore.CreateEnrolmentCode(context.Background(), time.Minute)
 	if err != nil {
 		t.Fatalf("CreateEnrolmentCode: %v", err)
@@ -91,8 +60,7 @@ func TestAUTH002AUsedCodeIsRefused(t *testing.T) {
 }
 
 func TestAUTH002AnExpiredCodeIsRefused(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, authStore := testServerConfigured(t, path)
+	srv, _, authStore := testServerConfigured(t)
 	// A negative TTL is already expired the instant it is minted.
 	code, _, err := authStore.CreateEnrolmentCode(context.Background(), -time.Minute)
 	if err != nil {
@@ -106,8 +74,7 @@ func TestAUTH002AnExpiredCodeIsRefused(t *testing.T) {
 }
 
 func TestAUTH002AnUnknownCodeIsRefused(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, _ := testServerConfigured(t, path)
+	srv, _, _ := testServerConfigured(t)
 
 	a := do(t, http.MethodPost, srv.URL+"/api/v1/auth/enrol/begin",
 		enrolBeginBody(t, "Operator", "not-a-code-anyone-minted"))
@@ -117,10 +84,9 @@ func TestAUTH002AnUnknownCodeIsRefused(t *testing.T) {
 }
 
 // Once a user with a passkey exists, enrol/begin refuses even with a fresh
-// code and a denying settings file: ADR-0062 builds only the first user.
+// code: ADR-0062 builds only the first user.
 func TestAUTH002EnrolmentClosedOnceAUserExists(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, authStore := testServerConfigured(t, path)
+	srv, _, authStore := testServerConfigured(t)
 	_ = signInTestUser(t, srv.URL, authStore)
 
 	code, _, err := authStore.CreateEnrolmentCode(context.Background(), time.Minute)

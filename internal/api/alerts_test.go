@@ -340,10 +340,9 @@ func testServerWithAlerts(t *testing.T) (*httptest.Server, *proofScenario, *http
 	authStore := testAuthStore(t)
 
 	s := newProofScenario(t, proofOptions{})
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
 	srv, err := NewServer(ServerConfig{
 		Store: store, Prover: s.prover(t),
-		AuthStore: authStore, WebAuthn: testWebAuthnConfig, ManagedSettingsPath: path,
+		AuthStore: authStore, WebAuthn: testWebAuthnConfig,
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)

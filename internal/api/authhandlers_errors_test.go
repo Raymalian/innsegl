@@ -8,8 +8,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -163,8 +161,7 @@ func TestHandleAuthSessionWithAGarbageCookie(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleEnrolBeginRefusesAnEmptyDisplayName(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, authStore := testServerConfigured(t, path)
+	srv, _, authStore := testServerConfigured(t)
 	code, _, err := authStore.CreateEnrolmentCode(context.Background(), authCeremonyTTL)
 	if err != nil {
 		t.Fatalf("CreateEnrolmentCode: %v", err)
@@ -177,8 +174,7 @@ func TestHandleEnrolBeginRefusesAnEmptyDisplayName(t *testing.T) {
 }
 
 func TestHandleEnrolBeginReportsAnEnrolmentOpenDatabaseError(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, authStore := testServerConfigured(t, path)
+	srv, _, authStore := testServerConfigured(t)
 	authStore.Close()
 
 	a := do(t, http.MethodPost, srv.URL+"/api/v1/auth/enrol/begin", enrolBeginBody(t, "Operator", "any-code"))
@@ -193,8 +189,7 @@ func TestHandleEnrolBeginReportsAnEnrolmentOpenDatabaseError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleEnrolFinishRefusesAnUnknownCeremony(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, _ := testServerConfigured(t, path)
+	srv, _, _ := testServerConfigured(t)
 	finishBody, err := json.Marshal(map[string]any{
 		"ceremony_id": "no-such-ceremony",
 		"credential":  json.RawMessage(`{}`),
@@ -210,8 +205,7 @@ func TestHandleEnrolFinishRefusesAnUnknownCeremony(t *testing.T) {
 }
 
 func TestHandleEnrolFinishRefusesAMalformedCredential(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, authStore := testServerConfigured(t, path)
+	srv, _, authStore := testServerConfigured(t)
 	code, _, err := authStore.CreateEnrolmentCode(context.Background(), authCeremonyTTL)
 	if err != nil {
 		t.Fatalf("CreateEnrolmentCode: %v", err)
@@ -239,55 +233,12 @@ func TestHandleEnrolFinishRefusesAMalformedCredential(t *testing.T) {
 	}
 }
 
-// The socket-denial fact is re-read at finish, not carried over from begin:
-// this starts denied, completes begin, then flips the SAME file on disk to
-// allowing before finish — proving the re-check is live rather than cached
-// anywhere in the ceremony (ADR-0062: "the enrolment endpoint asks, every
-// time").
-func TestHandleEnrolFinishRechecksTheSocketDenialLive(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "managed-settings.json")
-	if err := os.WriteFile(path, []byte(denyingManagedSettingsJSON), 0o644); err != nil {
-		t.Fatalf("writing the fixture: %v", err)
-	}
-	srv, _, authStore := testServerConfigured(t, path)
-	code, _, err := authStore.CreateEnrolmentCode(context.Background(), authCeremonyTTL)
-	if err != nil {
-		t.Fatalf("CreateEnrolmentCode: %v", err)
-	}
-	begin := do(t, http.MethodPost, srv.URL+"/api/v1/auth/enrol/begin", enrolBeginBody(t, "Operator", code))
-	if begin.status != http.StatusOK {
-		t.Fatalf("enrol/begin: %d: %s", begin.status, begin.body)
-	}
-	var creation ceremonyResponse
-	if jerr := json.Unmarshal(begin.body, &creation); jerr != nil {
-		t.Fatalf("decoding enrol/begin: %v", jerr)
-	}
-
-	allowing := `{"sandbox": {"enabled": true, "allowUnsandboxedCommands": true}}`
-	if werr := os.WriteFile(path, []byte(allowing), 0o644); werr != nil {
-		t.Fatalf("flipping the fixture to allowing: %v", werr)
-	}
-
-	finishBody, err := json.Marshal(map[string]any{
-		"ceremony_id": creation.CeremonyID,
-		"credential":  json.RawMessage(`{}`),
-	})
-	if err != nil {
-		t.Fatalf("encoding: %v", err)
-	}
-	finish := do(t, http.MethodPost, srv.URL+"/api/v1/auth/enrol/finish", string(finishBody))
-	if finish.status != http.StatusForbidden {
-		t.Fatalf("enrol/finish after the socket denial was lifted returned %d, want %d: %s",
-			finish.status, http.StatusForbidden, finish.body)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // handleLoginBegin
 // ---------------------------------------------------------------------------
 
 func TestHandleLoginBeginReportsASaveCeremonyDatabaseError(t *testing.T) {
-	srv, _, authStore := testServerConfigured(t, filepath.Join(t.TempDir(), "absent.json"))
+	srv, _, authStore := testServerConfigured(t)
 	authStore.Close()
 
 	a := do(t, http.MethodPost, srv.URL+"/api/v1/auth/login/begin", "{}")
@@ -319,7 +270,7 @@ func TestHandleLogoutWithAGarbageCookieIsStillOK(t *testing.T) {
 }
 
 func TestHandleLogoutReportsARevokeSessionDatabaseError(t *testing.T) {
-	srv, _, authStore := testServerConfigured(t, filepath.Join(t.TempDir(), "absent.json"))
+	srv, _, authStore := testServerConfigured(t)
 	authStore.Close()
 
 	nonEmpty := &http.Cookie{Name: sessionCookieName, Value: "whatever-nonempty-token"}
