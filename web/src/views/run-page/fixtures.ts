@@ -20,11 +20,17 @@ function typed<T>(value: unknown, check: (v: unknown) => v is T, name: string): 
 
 export const RUN_ID = "run-df219cf8c90bf55f74ca6870c034b5f9";
 export const STATES_RUN_ID = "run-9c1f2e3a4b5c6d7e8f9a0b1c2d3e4f5a";
+export const AGENT_RUN_ID = "run-26c7818ccb650dfe7e90e8f2c02841ef";
+export const SESSION_RUN_ID = "run-bf9a1e9bc86c64de3347eb83887c4ce2";
 
 /** The instant `data_as_of` in record.json names, so a rendered "3 min ago"
  * in a test is deterministic. */
 export const NOW = new Date("2026-09-30T14:34:07Z");
 export const STATES_NOW = new Date("2026-09-30T15:15:41Z");
+/** agent-record.json's own `data_as_of`. */
+export const AGENT_NOW = new Date("2026-10-01T12:02:11.000Z");
+/** session-record.json's own `data_as_of`. */
+export const SESSION_NOW = new Date("2026-10-01T12:47:29.000Z");
 
 export function record(): RunRecord {
   return typed(loadFixture("record.json"), isRunRecord, "record.json");
@@ -40,4 +46,15 @@ export function statesRecord(): RunRecord {
 
 export function statesDiff(): StepDiff {
   return typed(loadFixture("states-diff.json"), isStepDiff, "states-diff.json");
+}
+
+/** A hook-recorded subagent, 15 steps, no commits, no children (#443). */
+export function agentRecord(): RunRecord {
+  return typed(loadFixture("agent-record.json"), isRunRecord, "agent-record.json");
+}
+
+/** A session with 8 children and 3 commits signed by one-commit identities
+ * (#443). */
+export function sessionRecord(): RunRecord {
+  return typed(loadFixture("session-record.json"), isRunRecord, "session-record.json");
 }

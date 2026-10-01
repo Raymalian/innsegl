@@ -3,6 +3,7 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -192,5 +193,22 @@ func TestIsSigningIdentity(t *testing.T) {
 	}
 	if isSigningIdentity(childCounts{Steps: 0, Commits: 0}) {
 		t.Error("a run with neither is simply idle, not a signing identity")
+	}
+}
+
+// TestSummaryOfAHookFileStepIsRelativeToItsFolder — #443: the step table
+// names the file a hook-recorded agent wrote as its design board does,
+// relative to the agent's own folder, not as the machine's absolute path.
+func TestSummaryOfAHookFileStepIsRelativeToItsFolder(t *testing.T) {
+	body := gatewayBody{
+		Input:   json.RawMessage(`{"file_path":"/work/repo/.claude/worktrees/agent-x/internal/api/health_test.go"}`),
+		hookCwd: "/work/repo/.claude/worktrees/agent-x",
+	}
+	if got := summaryOf("Write", body); got != "internal/api/health_test.go" {
+		t.Errorf("summaryOf(Write) = %q, want internal/api/health_test.go", got)
+	}
+	body.hookCwd = ""
+	if got := summaryOf("Edit", body); got != "internal/api/health_test.go" {
+		t.Errorf("summaryOf(Edit) with no cwd = %q, want the path after the worktree folder", got)
 	}
 }

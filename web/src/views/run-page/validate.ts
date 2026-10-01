@@ -16,15 +16,20 @@ import type {
   DiffFile,
   DiffHunk,
   DiffLine,
+  RecordAgent,
+  RecordAncestor,
+  RecordChild,
   RecordCommit,
   RecordFile,
   RecordMessage,
   RecordRun,
   RecordStep,
+  RecordText,
   RecordTree,
   RecordTreeNode,
   RecordWitness,
   RecordWitnesses,
+  RecordWrite,
   RunRecord,
   StepDiff,
 } from "./types";
@@ -47,12 +52,20 @@ function isArray(v: unknown): v is unknown[] {
 
 const RUN_STATUSES = ["active", "retired", "expired", "lapsed", "abandoned"];
 const FILE_STATUSES = ["A", "M", "D", "R"];
+const WRITE_STATUSES = ["A", "M", "W"];
 const OUTCOME_KINDS = ["ok", "error", "refused", "unknown"];
 const LANDED = ["landed", "not_landed", "rewritten", "unknown"];
 const GATEWAY = ["present", "missing"];
-const SNAPSHOT = ["changed", "unchanged", "none"];
+// "inactive" belongs here same as it does on TELEMETRY (#438): a run
+// recorded before the snapshot witness existed has nothing to say either,
+// which is not the same fact as "none" (a snapshot witness that ran and saw
+// nothing worth reporting).
+const SNAPSHOT = ["changed", "unchanged", "none", "inactive"];
 const TELEMETRY = ["matched", "missing", "pending", "inactive"];
 const DIFF_LINE_KINDS = ["context", "add", "del"];
+const AGENT_ROLES = ["session", "subagent"];
+const LINKED_BY = ["", "agent_id", "brief"];
+const STEP_KINDS = ["tool", "spawn", "report"];
 
 function isRecordRun(v: unknown): v is RecordRun {
   if (!isObject(v)) return false;
@@ -149,6 +162,7 @@ function isRecordStep(v: unknown): v is RecordStep {
     isString(v["input"]) &&
     isString(v["output"]) &&
     isBoolean(v["truncated"]) &&
+    isBoolean(v["clipped"]) &&
     okOutcome &&
     isString(v["tree_before"]) &&
     isString(v["tree_after"]) &&
@@ -157,6 +171,8 @@ function isRecordStep(v: unknown): v is RecordStep {
     isString(v["spawned_run_id"]) &&
     isArray(v["spawned_commits"]) &&
     v["spawned_commits"].every(isString) &&
+    isString(v["kind"]) &&
+    STEP_KINDS.includes(v["kind"] as string) &&
     isString(v["commit_sha"]) &&
     isRecordWitnesses(v["witnesses"])
   );
@@ -170,7 +186,68 @@ function isRecordCommit(v: unknown): v is RecordCommit {
     isNumber(v["step"]) &&
     isString(v["landed"]) &&
     LANDED.includes(v["landed"] as string) &&
-    isNumber(v["rekor_log_index"])
+    isNumber(v["rekor_log_index"]) &&
+    isString(v["signed_by"])
+  );
+}
+
+function isRecordAncestor(v: unknown): v is RecordAncestor {
+  if (!isObject(v)) return false;
+  return (
+    isString(v["run_id"]) &&
+    isString(v["title"]) &&
+    isString(v["agent_type"]) &&
+    isString(v["role"]) &&
+    AGENT_ROLES.includes(v["role"] as string) &&
+    isNumber(v["spawned_at_step"]) &&
+    isNumber(v["agents"])
+  );
+}
+
+function isRecordText(v: unknown): v is RecordText {
+  if (!isObject(v)) return false;
+  return isString(v["text"]) && isBoolean(v["available"]) && isNumber(v["step"]);
+}
+
+function isRecordAgent(v: unknown): v is RecordAgent {
+  if (!isObject(v)) return false;
+  return (
+    isString(v["title"]) &&
+    isString(v["role"]) &&
+    AGENT_ROLES.includes(v["role"] as string) &&
+    isString(v["model"]) &&
+    isNumber(v["spawned_at_step"]) &&
+    isString(v["linked_by"]) &&
+    LINKED_BY.includes(v["linked_by"] as string) &&
+    isArray(v["lineage"]) &&
+    v["lineage"].every(isRecordAncestor) &&
+    isRecordText(v["asked"]) &&
+    isRecordText(v["reported"])
+  );
+}
+
+function isRecordChild(v: unknown): v is RecordChild {
+  if (!isObject(v)) return false;
+  return (
+    isString(v["run_id"]) &&
+    isString(v["title"]) &&
+    isString(v["agent_type"]) &&
+    isString(v["model"]) &&
+    isNumber(v["spawned_at_step"]) &&
+    isNumber(v["steps"]) &&
+    isNumber(v["commits"]) &&
+    isString(v["status"]) &&
+    (v["ended_at"] === null || isString(v["ended_at"]))
+  );
+}
+
+function isRecordWrite(v: unknown): v is RecordWrite {
+  if (!isObject(v)) return false;
+  return (
+    isString(v["path"]) &&
+    isString(v["status"]) &&
+    WRITE_STATUSES.includes(v["status"] as string) &&
+    isNumber(v["step"])
   );
 }
 
@@ -191,6 +268,11 @@ export function isRunRecord(v: unknown): v is RunRecord {
   if (!isObject(v)) return false;
   return (
     isRecordRun(v["run"]) &&
+    isRecordAgent(v["agent"]) &&
+    isArray(v["children"]) &&
+    v["children"].every(isRecordChild) &&
+    isArray(v["written"]) &&
+    v["written"].every(isRecordWrite) &&
     isRecordTree(v["tree"]) &&
     isRecordMessage(v["brief"]) &&
     isArray(v["replies"]) &&

@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * doc 06 §3.3's run page (E19, #395-397) — the approved mockup, built as is.
+ * doc 06 §3.3's run page (E19, #395-397) — rebuilt around one agent at a time
+ * for #443 (RM-278): a session or a subagent, by its own task, with its
+ * lineage, rather than the whole family as a flat tree. `record.agent.role`
+ * chooses between the subagent board (Agent.dc.html: Asked to / Reported
+ * back, files it wrote, witnesses) and the session board (Session.dc.html:
+ * the agents it started, its commits' one-commit identities).
  *
  * The four read states doc 06 §4.6/P2 require: loading with a bound, missing
  * (a run this ledger does not hold), failed (the ledger did not answer), and
@@ -26,21 +31,21 @@ import { LoadingState } from "../../components/common/LoadingState";
 import { StalenessIndicator } from "../../components/common/StalenessIndicator";
 import { navigate, usePath } from "../../app/router";
 import type { Route } from "../../app/routes";
-import { AgentTree } from "./AgentTree";
-import { Brief } from "./Brief";
+import { AgentsStarted } from "./AgentsStarted";
+import { AskedTo, ReportedBack } from "./AskedReported";
 import { CommitsAside } from "./CommitsAside";
 import type { DiffMode } from "./Diff";
-import { DiffToggle } from "./DiffToggle";
-import { FilesChanged } from "./FilesChanged";
+import { FilesWritten } from "./FilesWritten";
 import { Header } from "./Header";
-import { Reply } from "./Reply";
 import { RunRecordNotFound, fetchProof, fetchRunRecord, fetchStep, fetchStepDiff } from "./api";
 import type { FetchProof, FetchRunRecord, FetchStep, FetchStepDiff } from "./api";
 import { disagreementReason, firstDisagreeingStep } from "./derive";
-import { StepCard } from "./StepCard";
+import { StepsSection } from "./StepsSection";
 import { strings } from "./strings";
-import { aside, columns, mainColumn, showMoreButton, timelineHeadRow, timelineHeading, viewShell } from "./styles";
+import { aside, columns, mainColumn, viewShell } from "./styles";
 import type { RecordStep, RunRecord } from "./types";
+import { WhereItSits } from "./WhereItSits";
+import { WitnessesAside } from "./WitnessesAside";
 
 export interface RunPageProps {
   readonly route: Route;
@@ -58,9 +63,6 @@ type Read =
   | { readonly state: "loaded"; readonly record: RunRecord }
   | { readonly state: "missing" }
   | { readonly state: "failed"; readonly error: string };
-
-/** How many steps the timeline draws at a time (#440). */
-const STEP_PAGE = 100;
 
 function diffModeFromPath(path: string): DiffMode {
   const query = path.split("?")[1] ?? "";
@@ -167,10 +169,7 @@ function Loaded({
   readonly fetchStep: FetchStep;
 }) {
   const disagreeing = firstDisagreeingStep(record);
-  // The timeline draws a page of steps at a time (#440): a long session has
-  // thousands, and drawing them all at once froze the browser.
-  const [shown, setShown] = useState(STEP_PAGE);
-  const left = record.steps.length - shown;
+  const role = record.agent.role;
 
   return (
     <>
@@ -179,49 +178,35 @@ function Loaded({
       <Header record={record} now={now} />
 
       <div className={columns}>
-        <aside className={aside}>
-          <AgentTree tree={record.tree} selectedRunId={record.run.run_id} />
-          <FilesChanged files={record.files} repo={record.run.repo} />
-          <CommitsAside commits={record.commits} branch={record.run.branch} />
-        </aside>
-
         <main className={mainColumn}>
-          <Brief brief={record.brief} />
+          {role === "subagent" ? (
+            <>
+              <AskedTo asked={record.agent.asked} />
+              <ReportedBack reported={record.agent.reported} />
+            </>
+          ) : (
+            <AgentsStarted children={record.children} />
+          )}
 
-          <div className={timelineHeadRow}>
-            <h2 className={timelineHeading}>{strings.timeline.heading}</h2>
-            <DiffToggle mode={diffMode} onChange={onDiffModeChange} />
-          </div>
-
-          {record.steps.length === 0 ? (
-            <p className="text-micro text-ink-secondary">{strings.timeline.noSteps}</p>
-          ) : null}
-
-          {record.steps.slice(0, shown).map((step) => (
-            <StepCard
-              key={step.n}
-              step={step}
-              runId={record.run.run_id}
-              branch={record.run.branch}
-              tree={record.tree}
-              commits={record.commits}
-              diffMode={diffMode}
-              fetchStepDiff={readDiff}
-              fetchProof={readProof}
-              fetchStep={readStep}
-            />
-          ))}
-
-          {left > 0 ? (
-            <button type="button" className={showMoreButton} onClick={() => setShown(shown + STEP_PAGE)}>
-              {strings.timeline.showMore(Math.min(STEP_PAGE, left), left)}
-            </button>
-          ) : null}
-
-          {record.replies.map((reply, index) => (
-            <Reply key={index} reply={reply} />
-          ))}
+          <StepsSection
+            record={record}
+            role={role}
+            runId={record.run.run_id}
+            branch={record.run.branch}
+            diffMode={diffMode}
+            onDiffModeChange={onDiffModeChange}
+            fetchStepDiff={readDiff}
+            fetchProof={readProof}
+            fetchStep={readStep}
+          />
         </main>
+
+        <aside className={aside}>
+          <WhereItSits record={record} />
+          {role === "subagent" ? <FilesWritten written={record.written} /> : null}
+          <CommitsAside commits={record.commits} runId={record.run.run_id} role={role} />
+          {role === "subagent" ? <WitnessesAside record={record} /> : null}
+        </aside>
       </div>
     </>
   );

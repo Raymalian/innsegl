@@ -580,7 +580,9 @@ func summaryOf(toolName string, body gatewayBody) string {
 	default:
 		var in filePathInput
 		if json.Unmarshal(body.Input, &in) == nil && in.FilePath != "" {
-			return in.FilePath
+			// Relative to the agent's own folder, as the Written list names
+			// it (#443).
+			return relativeWritePath(in.FilePath, body.hookCwd)
 		}
 	}
 	return ""

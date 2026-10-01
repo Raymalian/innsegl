@@ -1,206 +1,210 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * The run page's header — Main.dc.html's breadcrumb, heading, status pill and
- * four fact cards. doc 06 §3.3's "full SPIFFE ID (mono, copyable), agent
- * type, task ref" plus the mockup's own activity/witness rollup.
+ * The agent page's own header (#443, RM-278) — Agent.dc.html / Session.dc.html:
+ * the lineage nav, the kicker + heading + status pill, and the four fact
+ * cards, role-conditional throughout (`record.agent.role`).
  */
+
+import { Fragment } from "react";
 
 import { Icon } from "../../components/common/Icon";
 import type { IconName } from "../../components/common/Icon";
 import { IdentifierChip } from "../../components/common/IdentifierChip";
 import type { RunStatus } from "../../components/common/StatusBadge";
-import { formatAbsoluteUtcShort } from "../../components/common/time";
 import { Link } from "../../app/router";
-import { Instant } from "../run-detail";
 import {
-  activitySummary,
-  allWitnessesAgree,
-  everyBodyStoredAndVerified,
+  dayMonthTimeUtc,
+  headingTextFor,
+  sessionCommittedText,
+  sessionDidText,
+  sessionStartedText,
   shortRepo,
+  shortRunId,
+  statusRangeText,
+  subagentDidText,
 } from "./derive";
+import { AgentBranchIcon, AgentRootIcon, ChevronIcon } from "./icons";
 import { strings } from "./strings";
 import {
-  bodyNote,
-  breadcrumb,
   factCard,
   factGrid,
-  factLabel,
-  factRowIcon,
-  factValueFailed,
   factIdentity,
+  factLabel,
   factValue,
   headerRow,
+  kicker,
+  lineageLink,
+  lineageNav,
+  lineagePill,
+  lineagePillCurrent,
+  lineageSeparator,
   pageHeading,
   statusPill,
+  statusPillActive,
 } from "./styles";
-import { AlertMarkIcon } from "./icons";
-import type { RunRecord } from "./types";
-
-const KNOWN_STATUSES: readonly RunStatus[] = [
-  "active",
-  "lapsed",
-  "abandoned",
-  "retired",
-];
+import type { RecordAncestor, RecordRun, RunRecord } from "./types";
 
 export interface HeaderProps {
   readonly record: RunRecord;
   readonly now: Date;
 }
 
+const KNOWN_STATUSES: readonly RunStatus[] = ["active", "lapsed", "abandoned", "retired"];
+
 export function Header({ record, now }: HeaderProps) {
-  const { run, witness } = record;
-  const activity = activitySummary(record);
-  // Red only for a disagreement actually found (#438): steps that could
-  // not be checked are stated, not counted against the run.
-  const witnessTone = witness.disagree > 0 ? "failed" : "neutral";
-  const status = KNOWN_STATUSES.find((s) => s === run.status);
+  const { run, agent } = record;
+  const isSession = agent.role === "session";
 
   return (
-    <div className="flex flex-col gap-3">
-      <nav aria-label={strings.header.runsCrumb} className={breadcrumb}>
-        <Link to={{ view: "runs", filters: emptyFilters() }}>
-          {strings.header.runsCrumb}
-        </Link>
-        <span aria-hidden="true">{strings.punctuation.slash}</span>
-        <Link to={{ view: "repo", repo: run.repo, from: "", to: "" }}>
-          {run.repo}
-        </Link>
-        <span aria-hidden="true">{strings.punctuation.slash}</span>
-        <IdentifierChip value={run.run_id} kind="run" maxLength={28} />
-      </nav>
+    <div className="flex flex-col gap-3.5">
+      <LineageNav record={record} />
 
       <div className={headerRow}>
-        <h1 className={pageHeading}>
-          {strings.header.heading(run.agent_type)}
-        </h1>
-
-        {status === undefined ? null : (
-          <span className={statusPill} data-run-status={status}>
-            <Icon name={STATUS_ICON[status]} className="shrink-0" />
-            <span className="font-medium">{statusLabel(status)}</span>
-            {run.status_at === undefined ||
-            run.status_at === null ||
-            run.status_at === "" ? null : (
-              <>
-                {/* The mockup shows the absolute instant visibly, beside the
-                 * relative one ("Retired 14:31:58 UTC · 3 min ago") — unlike
-                 * the rest of the product's RelativeTime convention, which
-                 * keeps the absolute behind hover/focus. `Instant` still
-                 * carries that pattern for the relative half; this span is
-                 * the one place on this page the absolute is stated outright
-                 * rather than only reachable. The time of day when it was
-                 * today (UTC), as the approved mockup shows it; the full
-                 * date otherwise (formatAbsoluteUtcShort). */}
-                <span aria-hidden="true">
-                  {formatAbsoluteUtcShort(new Date(run.status_at), now)}
-                </span>
-                <span aria-hidden="true">{strings.punctuation.middot}</span>
-                <Instant
-                  value={run.status_at}
-                  now={now}
-                  label={statusLabel(status)}
-                />
-              </>
-            )}
-          </span>
-        )}
-
-        <div className="flex-grow" />
-
-        {witness.steps === 0 ? null : (
-          <span className={bodyNote}>
-            {everyBodyStoredAndVerified(witness)
-              ? strings.header.witnessesComplete
-              : strings.header.witnessesIncomplete(
-                  witness.bodies_stored,
-                  witness.bodies_verified,
-                  witness.steps,
-                )}
-          </span>
-        )}
+        <div className="flex flex-col gap-1">
+          <div className={kicker}>
+            {isSession ? strings.agentPage.kickerSession : strings.agentPage.kickerSubagent(run.agent_type)}
+          </div>
+          <h1 className={pageHeading}>{headingText(record)}</h1>
+        </div>
+        <StatusPill run={run} lastStepAt={record.steps[record.steps.length - 1]?.at} />
       </div>
 
       <dl className={factGrid}>
-        <div className={factCard}>
-          <dt className={factLabel}>{strings.facts.identity}</dt>
-          <dd className={`${factValue} ${factIdentity}`}>
-            <IdentifierChip
-              value={run.spiffe_id}
-              kind="spiffe"
-              display={compactSpiffeId(run.spiffe_id)}
-            />
-          </dd>
-        </div>
-        <div className={factCard}>
-          <dt className={factLabel}>{strings.facts.repoBranch}</dt>
-          <dd className={`${factValue} font-mono text-micro`}>
-            {shortRepo(run.repo)}
-            {strings.punctuation.middot}
-            {run.branch}
-          </dd>
-        </div>
-        <div className={factCard}>
-          <dt className={factLabel}>{strings.facts.activity}</dt>
-          <dd className={factValue}>
-            {strings.facts.activitySummary(
-              activity.steps,
-              activity.commits,
-              activity.subagents,
-              activity.files,
-            )}
-          </dd>
-        </div>
-        <div className={factCard}>
-          <dt className={factLabel}>{strings.facts.witnesses}</dt>
-          <dd
-            className={`${factValue} ${factRowIcon} ${witnessTone === "failed" ? factValueFailed : ""}`}
-            data-tone={witnessTone}
-          >
-            {witnessTone === "failed" ? <AlertMarkIcon /> : <WitnessGlyph />}
-            <span>
-              {witnessTone === "failed"
-                ? strings.facts.witnessesDisagreeSummary(
-                    witness.disagree,
-                    witness.steps,
-                  )
-                : witness.steps === 0
-                  ? strings.facts.witnessesNoSteps
-                  : allWitnessesAgree(witness)
-                    ? strings.facts.witnessesAgreeAll(witness.steps)
-                    : strings.facts.witnessesPartlyChecked(
-                        witness.agree,
-                        witness.steps,
-                        witness.unchecked,
-                      )}
-            </span>
-          </dd>
-        </div>
+        {isSession ? <SessionFacts record={record} now={now} /> : <SubagentFacts record={record} />}
       </dl>
     </div>
   );
 }
 
-function emptyFilters() {
-  return {
-    repo: "",
-    agentType: "",
-    status: "" as const,
-    search: "",
-    from: "",
-    to: "",
-    cursor: "",
-    limit: "",
-    order: "" as const,
-  };
+function headingText(record: RunRecord): string {
+  const { run, agent } = record;
+  if (agent.title !== "") return agent.title;
+  return agent.role === "session"
+    ? strings.agentPage.sessionHeading(shortRepo(run.repo))
+    : strings.header.heading(run.agent_type);
 }
 
-/** The four run-status icons, named the same way StatusBadge's own
- * presentation table names them (components/common/StatusBadge.tsx) — the
- * pill here carries its own word and timestamp beside it, in the mockup's
- * single-line shape, so only the glyph is reused rather than the whole
- * badge. */
+function ancestorLabel(ancestor: RecordAncestor): string {
+  if (ancestor.role === "session") return strings.agentPage.sessionLabel;
+  return headingTextFor(ancestor.title, ancestor.agent_type);
+}
+
+function LineageNav({ record }: { readonly record: RunRecord }) {
+  const { agent } = record;
+
+  if (agent.role === "session") {
+    return (
+      <nav aria-label={strings.agentPage.lineageAria} className={lineageNav}>
+        <span className={lineagePillCurrent}>
+          <AgentRootIcon className="shrink-0" />
+          {strings.agentPage.thisSession}
+        </span>
+        <span>{strings.agentPage.startedByYou}</span>
+      </nav>
+    );
+  }
+
+  const parent = agent.lineage[agent.lineage.length - 1];
+
+  return (
+    <nav aria-label={strings.agentPage.lineageAria} className={lineageNav}>
+      {agent.lineage.map((ancestor) => (
+        <Fragment key={ancestor.run_id}>
+          <Link to={{ view: "run", runId: ancestor.run_id }} className={lineagePill}>
+            {ancestor.role === "session" ? (
+              <AgentRootIcon className="shrink-0 text-accent" />
+            ) : (
+              <AgentBranchIcon className="shrink-0" />
+            )}
+            {ancestorLabel(ancestor)}
+          </Link>
+          <ChevronIcon className={lineageSeparator} />
+        </Fragment>
+      ))}
+      {agent.spawned_at_step > 0 && parent !== undefined ? (
+        <>
+          <Link to={`/runs/${parent.run_id}#step-${agent.spawned_at_step}`} className={lineageLink}>
+            {strings.agentPage.spawnedAtStep(agent.spawned_at_step)}
+          </Link>
+          <ChevronIcon className={lineageSeparator} />
+        </>
+      ) : null}
+      <span className={lineagePillCurrent}>{strings.agentPage.thisAgent}</span>
+    </nav>
+  );
+}
+
+function StatusPill({ run, lastStepAt }: { readonly run: RecordRun; readonly lastStepAt?: string }) {
+  const status = KNOWN_STATUSES.find((s) => s === run.status);
+  if (status === undefined) return null;
+  const range = statusRangeText(status, run.registered_at, run.status_at, lastStepAt);
+  return (
+    <span className={status === "active" ? statusPillActive : statusPill} data-run-status={status}>
+      <Icon name={STATUS_ICON[status]} className="shrink-0" />
+      <span className="font-medium">{statusLabel(status)}</span>
+      <span aria-hidden="true">{strings.punctuation.middot}</span>
+      <span>{range}</span>
+    </span>
+  );
+}
+
+function SubagentFacts({ record }: { readonly record: RunRecord }) {
+  const { run, agent } = record;
+  const parent = agent.lineage[agent.lineage.length - 1];
+  return (
+    <>
+      <div className={factCard}>
+        <dt className={factLabel}>{strings.facts.startedBy}</dt>
+        <dd className={factValue}>
+          {parent === undefined ? null : (
+            <Link to={{ view: "run", runId: parent.run_id }}>{ancestorLabel(parent)}</Link>
+          )}{" "}
+          {strings.facts.startedByAt(agent.spawned_at_step, dayMonthTimeUtc(run.registered_at))}
+        </dd>
+      </div>
+      <div className={factCard}>
+        <dt className={factLabel}>{strings.facts.workedIn}</dt>
+        <dd className={`${factValue} font-mono text-micro`}>{strings.facts.workedInValue(shortRepo(run.repo))}</dd>
+      </div>
+      <div className={factCard}>
+        <dt className={factLabel}>{strings.facts.did}</dt>
+        <dd className={factValue}>{subagentDidText(record)}</dd>
+      </div>
+      <div className={factCard}>
+        <dt className={factLabel}>{strings.facts.identity}</dt>
+        <dd className={`${factValue} ${factIdentity}`}>
+          <IdentifierChip value={run.run_id} kind="run" display={shortRunId(run.run_id)} />
+        </dd>
+      </div>
+    </>
+  );
+}
+
+function SessionFacts({ record, now }: { readonly record: RunRecord; readonly now: Date }) {
+  const { run } = record;
+  return (
+    <>
+      <div className={factCard}>
+        <dt className={factLabel}>{strings.facts.did}</dt>
+        <dd className={factValue}>{sessionDidText(record, now)}</dd>
+      </div>
+      <div className={factCard}>
+        <dt className={factLabel}>{strings.facts.started}</dt>
+        <dd className={factValue}>{sessionStartedText(record)}</dd>
+      </div>
+      <div className={factCard}>
+        <dt className={factLabel}>{strings.facts.committed}</dt>
+        <dd className={factValue}>{sessionCommittedText(record)}</dd>
+      </div>
+      <div className={factCard}>
+        <dt className={factLabel}>{strings.facts.repository}</dt>
+        <dd className={`${factValue} font-mono text-micro`}>{shortRepo(run.repo)}</dd>
+      </div>
+    </>
+  );
+}
+
 const STATUS_ICON: Record<RunStatus, IconName> = {
   active: "status-active",
   lapsed: "status-lapsed",
@@ -216,36 +220,4 @@ function statusLabel(status: RunStatus): string {
     retired: "Retired",
   };
   return labels[status];
-}
-
-function WitnessGlyph() {
-  return (
-    <svg
-      aria-hidden="true"
-      focusable="false"
-      viewBox="0 0 24 24"
-      width="14"
-      height="14"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
-      <path d="M4 12l5 5L20 6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-/**
- * The identity as the approved mockup shows it, on one line in a fact card:
- * the trust domain, an ellipsis for the middle, and the run segment shortened
- * the way the page shortens every run id. The chip copies and reveals the
- * whole ID, so nothing is lost (doc 06 §4.3's full value on hover and focus).
- */
-export function compactSpiffeId(spiffeId: string): string {
-  const match = /^(spiffe:\/\/[^/]+)\/.*\/([^/]+)$/.exec(spiffeId);
-  const domain = match?.[1];
-  const last = match?.[2];
-  if (domain === undefined || last === undefined) return spiffeId;
-  const run = last.length > 13 ? `${last.slice(0, 8)}…${last.slice(-4)}` : last;
-  return `${domain}/…/${run}`;
 }

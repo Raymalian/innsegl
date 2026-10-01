@@ -25,6 +25,7 @@ import {
   secondaryText,
   srOnly,
   stateTransition,
+  statusActive,
 } from "../../components/common/styles";
 
 export {
@@ -41,7 +42,13 @@ export {
   secondaryText,
   srOnly,
   stateTransition,
+  statusActive,
 };
+
+/** A 1px rule one shade stronger than `hairline` — the mockup's own `c8d0d5`
+ * on a search box, a toggle group, and the "Reported back" card's own
+ * border. */
+export const hairlineStrong = "border-[length:var(--innsegl-border-width-hairline)] border-solid border-line-strong";
 
 /* ── page shell ─────────────────────────────────────────────────────────── */
 
@@ -80,7 +87,9 @@ export const factRowIcon = "flex items-center gap-2";
 /* ── two-column layout ─────────────────────────────────────────────────── */
 
 export const columns = "flex min-h-0 flex-grow gap-6";
-export const aside = "flex w-[300px] shrink-0 flex-col gap-4";
+/* #443: the agent page puts the aside on the right at 320px (Agent.dc.html /
+ * Session.dc.html), not the left at 300px the old Main.dc.html used. */
+export const aside = "flex w-[320px] shrink-0 flex-col gap-4";
 export const mainColumn = "flex min-w-0 flex-grow flex-col gap-4";
 
 /* ── panels, shared by aside and main ──────────────────────────────────── */
@@ -168,7 +177,7 @@ export const stepTime = `w-[70px] shrink-0 text-right text-micro ${mutedText}`;
 export const stepWitnessText = `w-[160px] shrink-0 text-right text-micro ${mutedText}`;
 export const stepWitnessBadge = `${badgeBase} ${hairline} ml-auto shrink-0 gap-1 px-2 py-0.5 font-semibold ${integrityAlert}`;
 
-export const stepOutputBlock = `${hairline} mx-4 mb-3 whitespace-pre-wrap break-words rounded-md border-line bg-sunken p-2.5 ${identifierText} text-ink`;
+export const stepOutputBlock = `${hairline} mx-4 mb-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border-line bg-sunken p-2.5 ${identifierText} text-ink`;
 export const stepRefusedNote = `mx-4 -mt-1.5 mb-3 text-micro ${mutedText}`;
 export const stepAgentSummary = "min-w-0 flex-grow truncate text-body text-ink-secondary";
 export const stepAgentNote = `px-4 pb-3 text-micro ${secondaryText}`;
@@ -237,3 +246,88 @@ export const calloutCard = `${panel} p-3`;
 export const calloutHeading = "mb-2 text-prose font-semibold text-ink";
 export const calloutRow = "flex flex-wrap items-center gap-2";
 export const calloutCaption = `mt-2 text-micro ${secondaryText}`;
+
+/* ── #443: the agent page — lineage nav, fact cards, asked/reported,
+ * agents-started table, and the compact step table ──────────────────────── */
+
+/* lineage nav */
+export const lineageNav = `flex flex-wrap items-center gap-2 text-micro ${secondaryText}`;
+export const lineagePill = `${hairline} inline-flex items-center gap-1.5 rounded-pill border-line bg-surface px-2.5 py-1 text-ink ${focusRing} ${stateTransition}`;
+export const lineagePillCurrent = "inline-flex items-center gap-1.5 whitespace-nowrap rounded-pill bg-accent-surface px-2.5 py-1 font-semibold text-accent-emphasis";
+export const lineageSeparator = `shrink-0 ${mutedText}`;
+export const lineageLink = `${secondaryText} ${focusRing} rounded-sm`;
+
+/* kicker + heading + status pill */
+export const kicker = `text-micro tracking-label ${mutedText}`;
+export const statusPillActive = `${badgeBase} ${hairline} gap-1.5 px-3 py-1 text-micro ${statusActive}`;
+
+/* fact cards reuse factGrid/factCard/factLabel/factValue, declared above */
+
+/* asked / reported */
+export const askedCard = `${panel} p-4`;
+export const reportedCard = `${hairlineStrong} flex flex-col rounded-md bg-surface p-4`;
+export const cardHeadRow = "flex flex-wrap items-baseline gap-3";
+export const cardKicker = `text-micro ${mutedText}`;
+export const cardShowAll = `ml-auto shrink-0 text-micro ${link}`;
+export const askedBody = "mt-2 whitespace-pre-wrap text-body leading-prose text-ink";
+export const reportedBody = "mt-2 whitespace-pre-wrap text-body leading-prose text-ink";
+
+/* "What it ran" section head, shared by both roles */
+export const sectionHeadRow = "flex flex-wrap items-center gap-3";
+export const sectionHeading = "flex-grow text-prose font-semibold text-ink";
+export const sectionSub = `text-micro ${mutedText}`;
+
+/* the step table */
+export const stepTable = panel;
+export const stepTableHeadRow = `${hairline} flex items-center gap-3 border-0 border-b border-line px-4 py-2 text-micro ${mutedText}`;
+export const rowCellN = "w-6 shrink-0 text-micro text-ink-muted";
+export const rowCellTool = "w-[72px] shrink-0 font-semibold text-ink";
+export const rowCellMain = `min-w-0 flex-grow truncate text-left ${identifierText} text-micro text-ink-secondary`;
+export const rowCellProse = "min-w-0 flex-grow truncate text-left text-body text-ink-secondary";
+export const rowCellResult = "w-[60px] shrink-0 text-micro text-ink-secondary";
+export const rowCellTime = `w-[70px] shrink-0 text-right text-micro ${mutedText}`;
+export const stepRowButton = `${hairline} flex w-full items-center gap-3 border-0 border-b border-line bg-surface px-4 py-2.5 text-left font-inherit text-body text-ink ${focusRing} ${stateTransition} hover:bg-hover`;
+export const stepRowStatic = `${hairline} flex items-center gap-3 border-0 border-b border-line px-4 py-2.5 text-body text-ink`;
+export const stepRowOpen = "flex-col items-stretch bg-sunken";
+export const stepGroupRow = `${hairline} border-0 border-b border-line px-4 py-1.5 text-micro ${mutedText}`;
+export const stepGroupShow = `ml-1 ${link}`;
+export const stepRowBody = "px-0 pt-1";
+export const stepRowCommitNote = `px-4 pb-2.5 text-micro ${secondaryText}`;
+/** The small chip a row with a commit carries beside its summary (#443) —
+ * Session.dc.html's own step 2799: an icon and the short sha, inline. */
+export const rowCommitChip = `${hairlineStrong} inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 ${identifierText} text-micro text-ink-secondary`;
+
+/* agents-it-started table */
+export const agentsSearchBox = `${hairlineStrong} flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1.5 text-micro ${mutedText}`;
+export const agentsSearchInput = `w-[180px] border-0 bg-transparent font-inherit text-micro text-ink placeholder:text-ink-muted ${focusRing}`;
+export const agentsTable = panel;
+export const agentsTableHeadRow = `${hairline} flex items-center gap-3 border-0 border-b border-line px-4 py-2 text-micro ${mutedText}`;
+export const agentRow = `${hairline} flex items-center gap-3 border-0 border-b border-line px-4 py-2.5 text-ink ${focusRing} ${stateTransition} hover:bg-hover`;
+export const agentCellTask = "min-w-0 flex-grow";
+export const agentCellTitle = "block truncate font-medium text-ink";
+export const agentCellSpawned = `block text-micro ${mutedText}`;
+export const agentCellKind = `w-[150px] shrink-0 text-micro ${secondaryText}`;
+export const agentCellNum = `w-[70px] shrink-0 text-right ${identifierText} text-micro`;
+export const agentCellEnded = `w-[120px] shrink-0 text-right text-micro ${mutedText}`;
+export const agentsFooter = `flex items-center gap-3 px-4 py-2.5 text-micro ${mutedText}`;
+
+/* "Where it sits" aside */
+export const sitsRow = `flex items-center gap-2 rounded-sm px-2 py-1.5 text-body ${focusRing} ${stateTransition}`;
+export const sitsRowLink = `${sitsRow} text-ink`;
+export const sitsRowCurrent = `${sitsRow} bg-accent-surface font-semibold text-accent-emphasis`;
+export const sitsRowChild = "pl-[26px] text-micro text-ink-secondary";
+export const sitsNone = `pl-[26px] text-micro ${mutedText}`;
+export const sitsCaption = `px-3.5 pb-3 text-micro ${mutedText}`;
+
+/* "Files it wrote" aside */
+export const writtenRow = `flex items-center gap-2 rounded-sm px-1.5 py-1 ${identifierText} text-micro text-ink ${focusRing} ${stateTransition} hover:bg-hover`;
+export const writtenPath = "min-w-0 flex-grow truncate";
+export const writtenStep = `shrink-0 ${mutedText}`;
+
+/* "Commits" aside (role-aware) */
+export const commitsNote = `text-micro ${secondaryText}`;
+export const commitsList = "flex flex-col gap-1.5";
+export const commitsShowAll = `text-micro ${link}`;
+
+/* "Witnesses" aside */
+export const witnessesNote = `text-micro ${secondaryText}`;

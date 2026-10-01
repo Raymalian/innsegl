@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * doc 07's run-page test catalogue, RPG-010..015 — issues #395-397.
- *
- * Named by catalogue id, driven against the approved mockup's own fixtures:
- * record.json/diff-step1.json for the Main board, states-record.json/
- * states-diff.json (this issue's own) for the States board.
+ * The run page's own tests (#443, RM-278): one agent at a time, by task,
+ * with its lineage. Driven against the two approved boards' own fixtures
+ * (agent-record.json ↔ Agent.dc.html, session-record.json ↔ Session.dc.html)
+ * plus the two pre-existing gateway-run fixtures (record.json,
+ * states-record.json), which now render through the session board's own
+ * layout — a plain root run is a session by the contract (`parent_run_id ===
+ * ""`), even one that predates the session/subagent split.
  */
 
 import { render, screen, within } from "@testing-library/react";
@@ -16,503 +18,464 @@ import { verifiedProof } from "../../components/verification/fixtures";
 import type { Proof } from "../../components/verification";
 import { RunPage } from "./RunPage";
 import type { FetchProof, FetchRunRecord, FetchStepDiff } from "./api";
-import { NOW, RUN_ID, record, statesRecord, statesDiff, stepOneDiff, STATES_NOW, STATES_RUN_ID } from "./fixtures";
+import {
+  AGENT_NOW,
+  AGENT_RUN_ID,
+  NOW,
+  RUN_ID,
+  SESSION_NOW,
+  SESSION_RUN_ID,
+  agentRecord,
+  record,
+  statesDiff,
+  statesRecord,
+  stepOneDiff,
+  sessionRecord,
+  STATES_NOW,
+  STATES_RUN_ID,
+} from "./fixtures";
 import type { StepDiff } from "./types";
 
+const AGENT_ROUTE = { view: "run", runId: AGENT_RUN_ID } as const;
+const SESSION_ROUTE = { view: "run", runId: SESSION_RUN_ID } as const;
 const ROUTE = { view: "run", runId: RUN_ID } as const;
 const STATES_ROUTE = { view: "run", runId: STATES_RUN_ID } as const;
 
 function stubs(overrides: { readonly diff?: () => Promise<StepDiff>; readonly proof?: () => Promise<Proof> } = {}) {
-  const readRecord: FetchRunRecord = async () => record();
   const readDiff: FetchStepDiff = overrides.diff ?? (async () => stepOneDiff());
   const readProof: FetchProof = overrides.proof ?? (async () => verifiedProof());
-  return { readRecord, readDiff, readProof };
-}
-
-function statesStubs() {
-  const readRecord: FetchRunRecord = async () => statesRecord();
-  const readDiff: FetchStepDiff = async () => statesDiff();
-  const readProof: FetchProof = async () => verifiedProof();
-  return { readRecord, readDiff, readProof };
+  return { readDiff, readProof };
 }
 
 beforeEach(() => {
-  window.history.pushState(null, "", "/runs/" + RUN_ID);
+  window.history.pushState(null, "", "/runs/" + AGENT_RUN_ID);
 });
 
 afterEach(() => {
   window.history.pushState(null, "", "/");
 });
 
-describe("RPG-010 renders the mockup's run page from fixtures/record.json", () => {
-  it("renders the header: breadcrumb, heading, status pill, fact cards", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+describe("the subagent page (agent-record.json ↔ Agent.dc.html)", () => {
+  function renderAgent() {
+    const { readDiff, readProof } = stubs();
+    const readRecord: FetchRunRecord = async () => agentRecord();
+    render(<RunPage route={AGENT_ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={AGENT_NOW} />);
+  }
 
-    await screen.findByText("main agent");
-    expect(screen.getByText("Runs")).toBeInTheDocument();
-    expect(screen.getByText("github.com/innsegl-test/gateway-livetest")).toBeInTheDocument();
-    expect(screen.getByText("Retired")).toBeInTheDocument();
-    // The identity on one line, as the mockup shows it; the chip still
-    // copies and reveals the whole SPIFFE ID.
-    const identityCard = screen.getByText("Identity").closest("div") as HTMLElement;
-    expect(within(identityCard).getByText("spiffe://innsegl.dev/…/run-df21…b5f9")).toBeInTheDocument();
-    // As the mockup shows it: the time of day when it was today, UTC named.
-    expect(screen.getByText("14:31:58 UTC")).toBeInTheDocument();
-    expect(screen.getByText("Every step has a stored body; digests verify")).toBeInTheDocument();
-
-    expect(screen.getByText("Identity")).toBeInTheDocument();
-    const repoBranch = screen.getByText("Repository · branch").closest("div");
-    expect(repoBranch).toHaveTextContent("innsegl-test/gateway-livetest");
-    expect(repoBranch).toHaveTextContent("main");
-    expect(screen.getByText("Activity")).toBeInTheDocument();
-    expect(screen.getByText("4 steps · 1 commit · 1 subagent · 2 files")).toBeInTheDocument();
-    expect(screen.getByText("Witnesses")).toBeInTheDocument();
-    expect(screen.getByText("Gateway, snapshots and telemetry agree on all 4 steps")).toBeInTheDocument();
+  it("renders the lineage nav: the session pill, spawned-at-step link, this-agent pill", async () => {
+    renderAgent();
+    const nav = await screen.findByRole("navigation", { name: "Where this agent came from" });
+    const inNav = within(nav);
+    expect(inNav.getByRole("link", { name: /Session/ })).toHaveAttribute("href", "/runs/run-bf9a1e9bc86c64de3347eb83887c4ce2");
+    const spawnedLink = inNav.getByRole("link", { name: "spawned at step 662" });
+    expect(spawnedLink).toHaveAttribute("href", "/runs/run-bf9a1e9bc86c64de3347eb83887c4ce2#step-662");
+    expect(inNav.getByText("this agent")).toBeInTheDocument();
   });
 
-  it("renders the agent tree, highlighting the selected run", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+  it("renders the kicker, heading and status pill", async () => {
+    renderAgent();
+    expect(await screen.findByText("SUBAGENT · general-purpose")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "RM-189 health stops naming repos" })).toBeInTheDocument();
+    expect(screen.getByText("Lapsed")).toBeInTheDocument();
+    expect(screen.getByText(/ran 26 Sep 18:00–18:02 UTC/)).toBeInTheDocument();
+  });
 
-    await screen.findByText("Agent tree");
-    expect(screen.getByText("main")).toBeInTheDocument();
-    expect(screen.getByText("general-purpose")).toBeInTheDocument();
+  it("renders the four fact cards exactly as the board: Started by, Worked in, Did, Identity", async () => {
+    renderAgent();
+    const startedBy = (await screen.findByText("Started by")).closest("div") as HTMLElement;
+    expect(within(startedBy).getByRole("link", { name: "Session" })).toHaveAttribute(
+      "href",
+      "/runs/run-bf9a1e9bc86c64de3347eb83887c4ce2",
+    );
+    expect(startedBy).toHaveTextContent("at step 662 · 26 Sep 18:00 UTC");
+
+    const workedIn = screen.getByText("Worked in").closest("div") as HTMLElement;
+    expect(workedIn).toHaveTextContent("Raymalian/innsegl · own worktree");
+
+    const did = screen.getByText("Did").closest("div") as HTMLElement;
+    expect(did).toHaveTextContent("15 steps · 2 files written · 0 commits · no subagents");
+
+    const identity = screen.getByText("Identity").closest("div") as HTMLElement;
+    expect(within(identity).getByText("run-26c7818c…41ef")).toBeInTheDocument();
+  });
+
+  it('shows "Asked to" first, as text: a heading without its markers', async () => {
+    renderAgent();
+    const asked = (await screen.findByText("Asked to")).closest("section") as HTMLElement;
+    expect(within(asked).getByText("the instructions its parent's spawn carried")).toBeInTheDocument();
+    expect(within(asked).getByText("The problem")).toBeInTheDocument();
+    expect(within(asked).queryByText(/##/)).not.toBeInTheDocument();
+    // Three lines of text: all shown, so no toggle (AskedReported.test.tsx covers the toggle).
+    expect(within(asked).queryByRole("button", { name: /Show all/ })).not.toBeInTheDocument();
+  });
+
+  it('renders "Reported back" in full, bolding **x** and marking `code` monospace, nothing else', async () => {
+    renderAgent();
+    const reported = (await screen.findByText("Reported back")).closest("section") as HTMLElement;
+    expect(within(reported).getByText("its final message to the session · step 15")).toBeInTheDocument();
+    const bold = within(reported).getByText("#309 is fixed and tested but not committed.");
+    expect(bold.tagName).toBe("STRONG");
+    const code = within(reported).getByText("web/src");
+    expect(code.tagName).toBe("CODE");
+    expect(within(reported).queryByRole("button", { name: /Show all/ })).not.toBeInTheDocument();
+  });
+
+  it('"What it ran" states the step count and defaults to the Commands toggle', async () => {
+    renderAgent();
+    expect(await screen.findByText("What it ran · 15 steps")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Commands" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "With output" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("#")).toBeInTheDocument();
+    expect(screen.getByText("Tool")).toBeInTheDocument();
+    expect(screen.getByText("Command or file")).toBeInTheDocument();
+    expect(screen.getByText("Result")).toBeInTheDocument();
+    expect(screen.getByText("Time")).toBeInTheDocument();
+  });
+
+  it("collapses a run of ordinary rows and expands it on \"show\"", async () => {
+    renderAgent();
+    await screen.findByText("What it ran · 15 steps");
+    // As the board: steps 1-3 show, 4-9 collapse.
+    expect(document.querySelector('[data-step="3"]')).not.toBeNull();
+    const group = screen.getByText(/Steps 4–9/);
+    expect(group).toHaveTextContent("6 more commands");
+    expect(document.querySelector('[data-step="4"]')).toBeNull();
+
+    await userEvent.click(within(group.closest("div") as HTMLElement).getByRole("button", { name: "show" }));
+    expect(document.querySelector('[data-step="4"]')).not.toBeNull();
+  });
+
+  it("opens a file-write step by default, showing its output", async () => {
+    renderAgent();
+    await screen.findByText("What it ran · 15 steps");
+    const step10 = document.querySelector('[data-step="10"]') as HTMLElement;
+    expect(step10).not.toBeNull();
+    // As the board: the content it wrote, as a new file, not the tool's own sentence.
+    const preview = within(step10).getByTestId("written-preview");
+    expect(within(preview).getByText("internal/api/health_test.go")).toBeInTheDocument();
+    expect(within(preview).getByText("new file")).toBeInTheDocument();
+    expect(within(preview).getByText("package api")).toBeInTheDocument();
+    expect(within(step10).queryByText("File created successfully at: internal/api/health_test.go")).toBeNull();
+  });
+
+  it('a report row shows tool "Report" and hands back to the session', async () => {
+    renderAgent();
+    const step15 = (await screen.findByText("What it ran · 15 steps")) && (document.querySelector('[data-step="15"]') as HTMLElement);
+    expect(within(step15).getByText("Report")).toBeInTheDocument();
+    expect(within(step15).getByText("Handed its report back to the session · shown above")).toBeInTheDocument();
+  });
+
+  it('"With output" opens every row and removes the collapsed group', async () => {
+    renderAgent();
+    await screen.findByText("What it ran · 15 steps");
+    await userEvent.click(screen.getByRole("button", { name: "With output" }));
+    expect(screen.queryByText(/more commands/)).toBeNull();
+    for (let n = 1; n <= 9; n++) {
+      expect(document.querySelector(`[data-step="${n}"]`)).not.toBeNull();
+    }
+  });
+
+  it('"Where it sits" names the parent and its other agents, highlights this agent, and states no subagents', async () => {
+    renderAgent();
+    const sits = (await screen.findByText("Where it sits")).closest("section") as HTMLElement;
+    const inSits = within(sits);
+    expect(inSits.getByRole("link", { name: /Session/ })).toHaveTextContent("72 other agents");
+    expect(inSits.getByText("RM-189 health stops naming repos")).toBeInTheDocument();
+    expect(inSits.getByText("Started no subagents of its own.")).toBeInTheDocument();
     expect(
-      screen.getByText("Linked by the exact brief its parent's spawn carried (step 4)"),
+      screen.getByText("Matched to step 662 by the agent id its spawn returned and its own steps carry."),
     ).toBeInTheDocument();
-
-    const selected = screen.getByRole("link", { name: /^main/ });
-    expect(selected).toHaveAttribute("aria-current", "page");
   });
 
-  it("renders files changed: the tree, the subagent note, and the legend", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
-
-    const filesPanel = (await screen.findByText("Files changed")).closest("section") as HTMLElement;
-    const files = within(filesPanel);
-    expect(files.getByText("gateway-livetest/")).toBeInTheDocument();
-    expect(files.getByText("e18.txt")).toBeInTheDocument();
-    expect(files.getByText("e18-sub.txt")).toBeInTheDocument();
-    expect(files.getByText("e18-sub.txt was written by the subagent")).toBeInTheDocument();
-    expect(files.getByText("A added")).toBeInTheDocument();
-    expect(files.getByText("M modified")).toBeInTheDocument();
-    expect(files.getByText("D deleted")).toBeInTheDocument();
-    expect(files.getByText("R reverted")).toBeInTheDocument();
+  it('"Files it wrote" lists both written files with their badges and steps', async () => {
+    renderAgent();
+    const files = (await screen.findByText("Files it wrote")).closest("section") as HTMLElement;
+    const inFiles = within(files);
+    expect(inFiles.getByText("internal/api/health_test.go")).toBeInTheDocument();
+    expect(inFiles.getByText("internal/api/server.go")).toBeInTheDocument();
+    expect(inFiles.getByText("step 10")).toBeInTheDocument();
+    expect(inFiles.getByText("step 12")).toBeInTheDocument();
   });
 
-  it("marks an added file's A and its +N in the diff's added hue, as the approved mockup does", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+  it('"Commits" says None, and "Witnesses" states the hook-recorded sentence', async () => {
+    renderAgent();
+    const commits = (await screen.findByText("Commits")).closest("section") as HTMLElement;
+    expect(within(commits).getByText("None.")).toBeInTheDocument();
 
-    const filesPanel = (await screen.findByText("Files changed")).closest("section") as HTMLElement;
-    const row = within(filesPanel).getByText("e18.txt").parentElement as HTMLElement;
-    expect(within(row).getByText("A")).toHaveAttribute("data-tone", "added");
-    expect(within(row).getByText("+1")).toHaveAttribute("data-tone", "added");
-  });
-
-  it("renders the commits aside", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
-
-    const commitsPanel = (await screen.findByText("Commits")).closest("section") as HTMLElement;
-    const commits = within(commitsPanel);
-    expect(commits.getByText("c906a8c")).toBeInTheDocument();
-    expect(commits.getByText("made by step 2", { exact: false })).toBeInTheDocument();
-    expect(commits.getByText("landed on main", { exact: false })).toBeInTheDocument();
-  });
-
-  it("renders the brief, with its keyed-digest caption", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
-
-    const briefSection = (await screen.findByText("Brief")).closest("section") as HTMLElement;
-    const brief = within(briefSection);
-    expect(brief.getByText(/the first message this agent received/)).toBeInTheDocument();
-    expect(brief.getByText(/keyed digest/)).toBeInTheDocument();
+    const witnesses = screen.getByText("Witnesses").closest("section") as HTMLElement;
     expect(
-      brief.getByText(/Do these in order and report each result in one line/),
+      within(witnesses).getByText(
+        "Recorded by the hook before the gateway existed: no snapshots or telemetry for this agent. Every step's body is stored and its digest verifies.",
+      ),
     ).toBeInTheDocument();
-  });
-
-  it("renders every step: number, tool, summary, outcome, time, witnesses", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
-
-    await screen.findByText("Timeline");
-
-    const step1 = document.querySelector('[data-step="1"]');
-    expect(step1).not.toBeNull();
-    const s1 = within(step1 as HTMLElement);
-    expect(s1.getByText("Write")).toBeInTheDocument();
-    // Twice: the step's own summary, and the diff file header under it —
-    // waited for the diff's own content, so the count is not read mid-fetch.
-    await s1.findByText("e18 end to end");
-    expect(s1.getAllByText("e18.txt")).toHaveLength(2);
-    expect(s1.getByText("done")).toBeInTheDocument();
-    expect(s1.getByText("3 of 3 witnesses agree")).toBeInTheDocument();
-    // As the approved mockup shows it: a file write whose diff is shown
-    // carries the diff alone, not the tool's "File created" reply above it.
-    expect(s1.queryByText("File created successfully at: e18.txt")).not.toBeInTheDocument();
-
-    const step2 = document.querySelector('[data-step="2"]');
-    const s2 = within(step2 as HTMLElement);
-    expect(s2.getByText("Bash")).toBeInTheDocument();
-    expect(s2.getByText("exit 0")).toBeInTheDocument();
-    expect(s2.getByText(/1 file changed, 1 insertion/)).toBeInTheDocument();
-
-    const step3 = document.querySelector('[data-step="3"]');
-    const s3 = within(step3 as HTMLElement);
-    expect(s3.getByText("failed · exit 1")).toBeInTheDocument();
-    expect(s3.getByText(/Operation not permitted/)).toBeInTheDocument();
-    // record.json's step 3 is outcome.kind "error", not "refused" — this view
-    // cannot truthfully claim a sandbox refusal the contract did not record,
-    // so only the general sentence renders (see strings.ts's own comment).
-    expect(
-      s3.getByText("A step that failed is part of the record, shown as it happened."),
-    ).toBeInTheDocument();
-    expect(s3.queryByText(/Refused by the harness sandbox/)).not.toBeInTheDocument();
-
-    const step4 = document.querySelector('[data-step="4"]');
-    const s4 = within(step4 as HTMLElement);
-    expect(s4.getByText("Agent")).toBeInTheDocument();
-    expect(s4.getByText("returned")).toBeInTheDocument();
-    expect(s4.getByText(/general-purpose/)).toBeInTheDocument();
-    expect(s4.getByText(/The subagent made commit 64967eb/)).toBeInTheDocument();
-    // The spawn line IS the row's summary, as the mockup shows it: the
-    // prompt appears once, in the step's own header row.
-    expect(s4.getAllByText(/Create e18-sub\.txt containing sub/)).toHaveLength(1);
-    const header4 = (step4 as HTMLElement).querySelector("[data-step-header]") as HTMLElement;
-    expect(within(header4).getByText(/Spawned/)).toBeInTheDocument();
-  });
-
-  it("renders the inline diff for step 1, from GET .../steps/1/diff", async () => {
-    const readDiffSpy = vi.fn<FetchStepDiff>(async () => stepOneDiff());
-    const { readRecord, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiffSpy} fetchProof={readProof} now={NOW} />);
-
-    await screen.findByText("e18 end to end");
-    expect(readDiffSpy).toHaveBeenCalledWith(RUN_ID, 1, expect.any(AbortSignal));
-    expect(await screen.findByText("+")).toBeInTheDocument();
-  });
-
-  it("renders the commit card with the three checks and a Verified badge", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
-
-    await screen.findByText("Commit");
-    // The check grid renders only once the proof fetch resolves; anchor on
-    // one of its own labels rather than the static "Commit" heading above it.
-    await screen.findByText("1 · Fulcio certificate chain");
-    expect(screen.getByText("2 · Rekor inclusion")).toBeInTheDocument();
-    expect(screen.getByText("3 · Trailer matches certificate identity")).toBeInTheDocument();
-    expect(screen.getByText("Valid")).toBeInTheDocument();
-    expect(screen.getByText("Same identity")).toBeInTheDocument();
-    expect(screen.getAllByText("Verified").length).toBeGreaterThan(0);
-    expect(screen.getByText("Signed by this run in the core; recorded as intent → signature → record")).toBeInTheDocument();
-    expect(screen.getByText("Verify it yourself")).toBeInTheDocument();
-  });
-
-  it("renders the reply, with its keyed-digest heading", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
-
-    await screen.findByText(/Reply · keyed digest/);
-    expect(screen.getByText(/The subagent committed as 64967eb/)).toBeInTheDocument();
   });
 });
 
-describe("RPG-011 the Unified / Side by side toggle", () => {
-  it("renders two columns in side-by-side mode, and keeps the choice in the URL", async () => {
-    const user = userEvent.setup();
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+describe("the session page (session-record.json ↔ Session.dc.html)", () => {
+  function renderSession() {
+    const { readDiff, readProof } = stubs();
+    const readRecord: FetchRunRecord = async () => sessionRecord();
+    window.history.pushState(null, "", "/runs/" + SESSION_RUN_ID);
+    render(<RunPage route={SESSION_ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={SESSION_NOW} />);
+  }
 
-    await screen.findByText("Timeline");
-    const unified = screen.getByRole("button", { name: "Unified" });
-    const side = screen.getByRole("button", { name: "Side by side" });
-    expect(unified).toHaveAttribute("aria-pressed", "true");
-    expect(side).toHaveAttribute("aria-pressed", "false");
-
-    await user.click(side);
-
-    expect(window.location.search).toContain("diff=side");
-    expect(side).toHaveAttribute("aria-pressed", "true");
-    const diffFile = document.querySelector("[data-diff-mode]");
-    expect(diffFile).toHaveAttribute("data-diff-mode", "side");
-
-    await user.click(unified);
-    expect(window.location.search).not.toContain("diff=side");
+  it('renders "this session" in the nav, the session kicker and heading, and an Active pill', async () => {
+    renderSession();
+    const nav = await screen.findByRole("navigation", { name: "Where this agent came from" });
+    expect(within(nav).getByText("this session")).toBeInTheDocument();
+    expect(within(nav).getByText("started by you · nothing above it")).toBeInTheDocument();
+    expect(screen.getByText("SESSION · the agent you talk to")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Session on Raymalian/innsegl" })).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.getByText(/since 23 Sep 08:16 UTC/)).toBeInTheDocument();
   });
 
-  it("starts in side-by-side mode when the URL already names it", async () => {
-    window.history.pushState(null, "", `/runs/${RUN_ID}?diff=side`);
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+  it("renders the four session fact cards: Did, Started, Committed, Repository", async () => {
+    renderSession();
+    const record = sessionRecord();
+    const did = (await screen.findByText("Did")).closest("div") as HTMLElement;
+    expect(did).toHaveTextContent(`${record.steps.length} steps over 8 days`);
+    const started = screen.getByText("Started", { selector: "dt" }).closest("div") as HTMLElement;
+    expect(started).toHaveTextContent("8 subagents · 0 running now");
+    const committed = screen.getByText("Committed").closest("div") as HTMLElement;
+    expect(committed).toHaveTextContent("3 signed commits");
+    const repository = screen.getByText("Repository").closest("div") as HTMLElement;
+    expect(repository).toHaveTextContent("Raymalian/innsegl");
+  });
 
-    await screen.findByText("Timeline");
-    expect(screen.getByRole("button", { name: "Side by side" })).toHaveAttribute("aria-pressed", "true");
+  it('"Agents it started" lists all 8 children, newest first, with Kind/Steps/Commits/Ended', async () => {
+    renderSession();
+    await screen.findByText("Agents it started");
+    const table = screen.getByRole("region", { name: "Agents it started" });
+    const rows = within(table);
+    expect(rows.getByText("Baseline snapshot before first step")).toBeInTheDocument();
+    expect(rows.getByText("spawned at step 2802")).toBeInTheDocument();
+    expect(rows.getAllByText("general-purpose · sonnet").length).toBeGreaterThan(0);
+    expect(rows.getByText("1 Oct 07:45")).toBeInTheDocument();
+    // The lapsed child (no model on record) names its status in the Ended
+    // cell instead, lowercase, with no time (#443's own rule for a child
+    // that is not retired).
+    expect(rows.getByText("RM-189 health stops naming repos")).toBeInTheDocument();
+    expect(rows.getByText("general-purpose", { selector: "span" })).toBeInTheDocument();
+    expect(rows.getByText("lapsed 26 Sep")).toBeInTheDocument();
+    expect(rows.getByText("Showing 8 of 8")).toBeInTheDocument();
+    expect(rows.queryByRole("button", { name: "Show more agents" })).toBeNull();
+
+    const firstLink = rows.getAllByRole("link")[0] as HTMLElement;
+    expect(firstLink).toHaveAttribute("href", "/runs/run-6f3e38cf7e807075bb34c62c01899b7b");
+  });
+
+  it("the search box filters agents by title", async () => {
+    renderSession();
+    await screen.findByText("Agents it started");
+    const table = screen.getByRole("region", { name: "Agents it started" });
+    const search = screen.getByRole("searchbox", { name: "Find an agent by task" });
+    await userEvent.type(search, "E19");
+    expect(within(table).getByText("Showing 3 of 3")).toBeInTheDocument();
+    expect(within(table).getByText("E19 passkey login and gate")).toBeInTheDocument();
+    expect(within(table).queryByText("Baseline snapshot before first step")).not.toBeInTheDocument();
+  });
+
+  it('"What it ran" reads newest first and offers the All / Agents started / Commits / Failed filter', async () => {
+    renderSession();
+    const record = sessionRecord();
+    expect(await screen.findByText(`What it ran · ${record.steps.length} steps, newest first`)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+
+    const rows = document.querySelectorAll("[data-step]");
+    const numbers = [...rows].map((r) => Number(r.getAttribute("data-step")));
+    expect(numbers).toEqual([...numbers].sort((a, b) => b - a));
+
+    await userEvent.click(screen.getByRole("button", { name: "Agents started" }));
+    expect(document.querySelectorAll("[data-step]")).toHaveLength(2);
+    expect(document.querySelector('[data-step="2802"]')).toHaveTextContent("Baseline snapshot before first step");
+  });
+
+  it('a spawn row shows "Started <link to the child>"', async () => {
+    renderSession();
+    await screen.findByText(/What it ran/);
+    const step2802 = document.querySelector('[data-step="2802"]') as HTMLElement;
+    const link = within(step2802).getByRole("link", { name: "Baseline snapshot before first step" });
+    expect(link).toHaveAttribute("href", "/runs/run-6f3e38cf7e807075bb34c62c01899b7b");
+  });
+
+  it("a step with a commit shows a commit chip and opens by default", async () => {
+    renderSession();
+    await screen.findByText(/What it ran/);
+    const step2799 = document.querySelector('[data-step="2799"]') as HTMLElement;
+    expect(within(step2799).getByText("innsegl-commit: signed 8619ee7")).toBeInTheDocument();
+    expect(await within(step2799).findByText("Commit")).toBeInTheDocument();
+  });
+
+  it('"Where it sits" highlights this session and breaks down what it started by agent type', async () => {
+    renderSession();
+    const sits = (await screen.findByText("Where it sits")).closest("section") as HTMLElement;
+    expect(within(sits).getByText("This session")).toBeInTheDocument();
+    expect(within(sits).getByText("8 general-purpose")).toBeInTheDocument();
+  });
+
+  it('"Commits" states the one-commit-identity sentence, the first 3 shas, and "All N commits"', async () => {
+    renderSession();
+    await screen.findByText("Agents it started");
+    const commits = screen.getByRole("heading", { name: "Commits" }).closest("section") as HTMLElement;
+    const inCommits = within(commits);
+    expect(
+      inCommits.getByText(
+        "3 commits, each signed under its own one-commit identity. They are commits, not agents, and are listed here rather than in the agents table.",
+      ),
+    ).toBeInTheDocument();
+    expect(inCommits.getByText("8619ee7")).toBeInTheDocument();
+    expect(inCommits.getByText("bd845eb")).toBeInTheDocument();
+    expect(inCommits.getByText("0cc4680")).toBeInTheDocument();
+    expect(inCommits.getByText("All 3 commits")).toBeInTheDocument();
+    // No separate "Witnesses" or "Files it wrote" panel for a session.
+    expect(screen.queryByText("Witnesses")).toBeNull();
+    expect(screen.queryByText("Files it wrote")).toBeNull();
   });
 });
 
-describe("RPG-012 witness disagreement", () => {
-  it("raises the page-level banner naming the step, and shows the 2 of 3 badge with the missing cell", async () => {
-    const { readRecord, readDiff, readProof } = statesStubs();
+describe("a plain root run (record.json) renders through the session layout", () => {
+  it("shows a plain commit list (self-signed) rather than the one-commit-identity sentence", async () => {
+    const { readDiff, readProof } = stubs();
+    const readRecord: FetchRunRecord = async () => record();
+    window.history.pushState(null, "", "/runs/" + RUN_ID);
+    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+
+    expect(await screen.findByText("SESSION · the agent you talk to")).toBeInTheDocument();
+    const commits = screen.getByRole("heading", { name: "Commits" }).closest("section") as HTMLElement;
+    expect(within(commits).getByText("c906a8c")).toBeInTheDocument();
+    expect(within(commits).getByText("e18 end to end")).toBeInTheDocument();
+    expect(within(commits).queryByText(/one-commit identity/)).not.toBeInTheDocument();
+  });
+});
+
+describe("witness disagreement and dark mode survive the redesign (states-record.json)", () => {
+  it("raises the page-level banner and opens step 7 with the witness grid inside it", async () => {
+    const readRecord: FetchRunRecord = async () => statesRecord();
+    const readDiff: FetchStepDiff = async () => statesDiff();
+    const readProof: FetchProof = async () => verifiedProof();
+    window.history.pushState(null, "", "/runs/" + STATES_RUN_ID);
     render(<RunPage route={STATES_ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={STATES_NOW} />);
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Witnesses disagree on step 7");
-    expect(alert).toHaveTextContent("toolu_01XyABCDEFGHIJKLMNOPQk");
-
-    // The Witnesses fact card is loud too (doc 06 P3): the failure tone and
-    // the same exclamation mark the step's badge carries.
-    const witnessCard = screen.getByText("Witnesses").closest("div") as HTMLElement;
-    const witnessValue = within(witnessCard).getByText(/disagree on 1 of 7 steps/).closest("dd") as HTMLElement;
-    expect(witnessValue).toHaveAttribute("data-tone", "failed");
-    expect(witnessValue.querySelector('[data-icon="alert"]')).not.toBeNull();
 
     const step7 = document.querySelector('[data-step="7"]') as HTMLElement;
     expect(step7).not.toBeNull();
-    const s7 = within(step7);
-    expect(s7.getByText("2 of 3 witnesses")).toBeInTheDocument();
-    // The approved mockup's badge carries an exclamation mark, not a cross.
-    expect((step7.querySelector("[data-witness-badge]") as HTMLElement).querySelector('[data-icon="alert"]')).not.toBeNull();
-    expect(s7.getByText("Gateway")).toBeInTheDocument();
-    expect(s7.getByText("Workspace snapshot")).toBeInTheDocument();
-    expect(s7.getByText("Harness telemetry")).toBeInTheDocument();
-    expect(s7.getByText("no event for this tool call")).toBeInTheDocument();
     const grid = step7.querySelector("[data-witness-grid]");
+    expect(grid).not.toBeNull();
     expect(within(grid as HTMLElement).getByText(/Harness telemetry/)).toBeInTheDocument();
   });
-});
 
-describe("RPG-013 a failed step is grey, not red, with its exit code", () => {
-  it("step 4 (a failed Bash call) shows exit 1 with no red anywhere", async () => {
-    const { readRecord, readDiff, readProof } = statesStubs();
+  it("a failed step opens by default with no red anywhere in its outcome", async () => {
+    const readRecord: FetchRunRecord = async () => statesRecord();
+    const readDiff: FetchStepDiff = async () => statesDiff();
+    const readProof: FetchProof = async () => verifiedProof();
+    window.history.pushState(null, "", "/runs/" + STATES_RUN_ID);
     render(<RunPage route={STATES_ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={STATES_NOW} />);
 
-    await screen.findByText("Timeline");
+    await screen.findByText(/What it ran/);
     const step4 = document.querySelector('[data-step="4"]') as HTMLElement;
-    const s4 = within(step4);
-    expect(s4.getByText("failed · exit 1")).toBeInTheDocument();
-    const outcome = s4.getByText("failed · exit 1");
+    const outcome = within(step4).getByText("failed · exit 1");
     expect(outcome.className).not.toMatch(/integrity-alert/);
     expect(outcome.className).not.toMatch(/proof-failed/);
   });
 });
 
-describe("RPG-014 a reverted file and a not_landed commit", () => {
-  it("never calls a commit landed when its landing could not be read", async () => {
-    const unknown = record();
-    const readRecord: FetchRunRecord = async () => ({
-      ...unknown,
-      commits: unknown.commits.map((c) => ({ ...c, landed: "unknown" as const })),
-    });
-    const { readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
-
-    const commitsPanel = (await screen.findByText("Commits")).closest("section") as HTMLElement;
-    expect(within(commitsPanel).getByText("landing not checked", { exact: false })).toBeInTheDocument();
-    expect(within(commitsPanel).queryByText("landed on main", { exact: false })).toBeNull();
-  });
-
-  it("shows the R file with when it was written and reverted, never committed", async () => {
-    const { readRecord, readDiff, readProof } = statesStubs();
-    render(<RunPage route={STATES_ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={STATES_NOW} />);
-
-    const filesPanel = (await screen.findByText("Files changed")).closest("section") as HTMLElement;
-    expect(within(filesPanel).getByText("scratch/probe.sh")).toBeInTheDocument();
-    const revertedRow = within(filesPanel).getByText("scratch/probe.sh").parentElement as HTMLElement;
-    expect(within(revertedRow).getByText("R")).toHaveAttribute("data-tone", "neutral");
-    expect(
-      screen.getByText("written in step 3, deleted in step 5 · never committed"),
-    ).toBeInTheDocument();
-  });
-
-  it("keeps the not_landed commit's badge Verified, with landing shown beside it", async () => {
-    const { readRecord, readDiff, readProof } = statesStubs();
-    render(<RunPage route={STATES_ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={STATES_NOW} />);
-
-    const commitsPanel = (await screen.findByText("Commits")).closest("section") as HTMLElement;
-    expect(within(commitsPanel).getByText("5d31e0a")).toBeInTheDocument();
-    expect(within(commitsPanel).getByText("on no branch", { exact: false })).toBeInTheDocument();
-    // The reason, as the approved mockup states it, when the run's own result shows it.
-    expect(screen.getAllByText("on no branch: lost git's ref lock to a parallel commit", { exact: false }).length).toBeGreaterThan(0);
-
-    // The commit card's own badge is unaffected by landing — it is a
-    // statement about the signature, not about the repository (doc 06 §4.2).
-    expect((await screen.findAllByText("Verified")).length).toBeGreaterThan(0);
-  });
-});
-
-describe("RPG-015 keyboard path and +/- markers", () => {
-  it("every interactive element in the tree, files, steps and toggle is a real, focusable control", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
-
-    await screen.findByText("Timeline");
-
-    // Agent tree rows are links.
-    const treePanel = screen.getByText("Agent tree").closest("section") as HTMLElement;
-    expect(within(treePanel).getByRole("link", { name: /^main/ })).toBeInTheDocument();
-    expect(within(treePanel).getByRole("link", { name: /^general-purpose/ })).toBeInTheDocument();
-    // The toggle is two real buttons.
-    expect(screen.getByRole("button", { name: "Unified" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Side by side" })).toBeInTheDocument();
-    // The commit SHA is a real, focusable, copy button.
-    expect(screen.getByRole("button", { name: /Copy commit SHA/ })).toBeInTheDocument();
-
-    const user = userEvent.setup();
-    await user.tab();
-    expect(document.activeElement).not.toBe(document.body);
-  });
-
-  it("every diff line carries a +/- marker, never colour alone", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
-
-    await screen.findByText("e18 end to end");
-    await screen.findByText("+");
-    const markers = document.querySelectorAll("[data-diff-file] [aria-hidden='true']");
-    const found = [...markers].map((m) => m.textContent).filter((t) => t === "+" || t === "−");
-    expect(found.length).toBeGreaterThan(0);
-  });
-});
-
-describe("#438 a witness never active for a run is not a disagreement", () => {
-  it("counts only active witnesses, with no red badge, grid or banner", async () => {
-    const base = record();
-    const bare = {
+describe("#440 kept: a clipped step's full output on request, and paging 100 at a time", () => {
+  it("loads a clipped step's full output on request", async () => {
+    const base = sessionRecord();
+    const target = base.steps[1]!;
+    const clipped = {
       ...base,
-      steps: base.steps.map((s) => ({
-        ...s,
-        witnesses: { gateway: "present", snapshot: "inactive", telemetry: "inactive" } as const,
-      })),
+      steps: base.steps.map((s) => (s.n === target.n ? { ...s, output: "first part only", clipped: true } : s)),
     };
+    const readStep = vi.fn(async () => ({ ...target, output: "first part only, and the rest", clipped: false }));
+    const { readDiff, readProof } = stubs();
+    window.history.pushState(null, "", "/runs/" + SESSION_RUN_ID);
     render(
       <RunPage
-        route={ROUTE}
-        fetchRunRecord={async () => bare}
-        fetchStepDiff={async () => stepOneDiff()}
-        fetchProof={async () => verifiedProof()}
-        now={NOW}
+        route={SESSION_ROUTE}
+        fetchRunRecord={async () => clipped}
+        fetchStepDiff={readDiff}
+        fetchProof={readProof}
+        fetchStep={readStep}
+        now={SESSION_NOW}
       />,
     );
-    await screen.findByText("Timeline");
-    const step2 = within(document.querySelector('[data-step="2"]') as HTMLElement);
-    expect(step2.getByText("1 of 1 witnesses agree")).toBeInTheDocument();
-    expect(document.querySelector("[data-witness-badge]")).toBeNull();
-    expect(document.querySelector("[data-witness-grid]")).toBeNull();
+    await screen.findByText(/What it ran/);
+    const row = document.querySelector(`[data-step="${target.n}"]`) as HTMLElement;
+    expect(within(row).getByText("first part only")).toBeInTheDocument();
+    await userEvent.click(within(row).getByRole("button", { name: "Show full output" }));
+    expect(await within(row).findByText("first part only, and the rest")).toBeInTheDocument();
+    expect(readStep).toHaveBeenCalledWith(SESSION_RUN_ID, target.n, expect.anything());
   });
-});
 
-describe("#438 the header never reports a disagreement it did not find", () => {
-  it("states unchecked steps neutrally when none disagrees", async () => {
-    const base = record();
-    const partial = { ...base, witness: { ...base.witness, steps: 145, agree: 140, disagree: 0, unchecked: 5 } };
-    render(
-      <RunPage
-        route={ROUTE}
-        fetchRunRecord={async () => partial}
-        fetchStepDiff={async () => stepOneDiff()}
-        fetchProof={async () => verifiedProof()}
-        now={NOW}
-      />,
-    );
-    await screen.findByText("Timeline");
-    const value = screen.getByText(/agree on 140 of 145 steps; 5 could not be checked/).closest("dd") as HTMLElement;
-    expect(value).toHaveAttribute("data-tone", "neutral");
-    expect(screen.queryByText(/disagree on 0/)).toBeNull();
+  it("draws the step table 100 at a time", async () => {
+    const base = agentRecord();
+    const one = base.steps[0]!;
+    const many = {
+      ...base,
+      written: [],
+      commits: [],
+      steps: Array.from({ length: 250 }, (_, i) => ({ ...one, n: i + 1, event_id: `e${i + 1}`, commit_sha: "", kind: "tool" as const })),
+    };
+    const { readDiff, readProof } = stubs();
+    render(<RunPage route={AGENT_ROUTE} fetchRunRecord={async () => many} fetchStepDiff={readDiff} fetchProof={readProof} now={AGENT_NOW} />);
+    await screen.findByText(/What it ran/);
+    expect(document.querySelectorAll("[data-step]")).toHaveLength(3); // the first 3 show, the next 97 collapse
+    expect(screen.getByText(/Steps 4–100/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Show 100 more steps (150 left)" }));
+    expect(screen.getByText(/Steps 4–200/)).toBeInTheDocument();
   });
 });
 
 describe("#435 a run with nothing recorded", () => {
-  it("says no steps were recorded, in the witness card and the timeline", async () => {
-    const base = record();
-    const bare = {
-      ...base,
-      steps: [],
-      replies: [],
-      files: [],
-      commits: [],
-      witness: { steps: 0, agree: 0, disagree: 0, unchecked: 0, bodies_stored: 0, bodies_verified: 0 },
-    };
-    render(
-      <RunPage
-        route={ROUTE}
-        fetchRunRecord={async () => bare}
-        fetchStepDiff={async () => stepOneDiff()}
-        fetchProof={async () => verifiedProof()}
-        now={NOW}
-      />,
-    );
-    await screen.findByText("Timeline");
-    expect(screen.getAllByText(/No steps were recorded for this run/).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/of 0 steps/)).toBeNull();
-  });
-});
-
-describe("#440 a long run stays light", () => {
-  it("loads a clipped step's full output on request", async () => {
-    const base = record();
-    const step2 = base.steps[1]!;
-    const clipped = {
-      ...base,
-      steps: base.steps.map((s) => (s.n === 2 ? { ...s, output: "first part only", clipped: true } : s)),
-    };
-    const readStep = vi.fn(async () => ({ ...step2, output: "first part only, and the rest", clipped: false }));
-    render(
-      <RunPage
-        route={ROUTE}
-        fetchRunRecord={async () => clipped}
-        fetchStepDiff={async () => stepOneDiff()}
-        fetchProof={async () => verifiedProof()}
-        fetchStep={readStep}
-        now={NOW}
-      />,
-    );
-    await screen.findByText("Timeline");
-    const s2 = within(document.querySelector('[data-step="2"]') as HTMLElement);
-    expect(s2.getByText("first part only")).toBeInTheDocument();
-    await userEvent.click(s2.getByRole("button", { name: "Show full output" }));
-    expect(await s2.findByText("first part only, and the rest")).toBeInTheDocument();
-    expect(readStep).toHaveBeenCalledWith(RUN_ID, 2, expect.anything());
-    expect(s2.queryByRole("button", { name: "Show full output" })).toBeNull();
-  });
-
-  it("draws the timeline 100 steps at a time", async () => {
-    const base = record();
-    const one = base.steps[2]!;
-    const many = {
-      ...base,
-      steps: Array.from({ length: 250 }, (_, i) => ({ ...one, n: i + 1, event_id: `e${i + 1}`, commit_sha: "" })),
-    };
-    render(
-      <RunPage
-        route={ROUTE}
-        fetchRunRecord={async () => many}
-        fetchStepDiff={async () => stepOneDiff()}
-        fetchProof={async () => verifiedProof()}
-        now={NOW}
-      />,
-    );
-    await screen.findByText("Timeline");
-    expect(document.querySelectorAll("[data-step]")).toHaveLength(100);
-    await userEvent.click(screen.getByRole("button", { name: "Show 100 more steps (150 left)" }));
-    expect(document.querySelectorAll("[data-step]")).toHaveLength(200);
+  it("says no steps were recorded", async () => {
+    const base = agentRecord();
+    const bare = { ...base, steps: [], written: [], commits: [], witness: { steps: 0, agree: 0, disagree: 0, unchecked: 0, bodies_stored: 0, bodies_verified: 0 } };
+    const { readDiff, readProof } = stubs();
+    render(<RunPage route={AGENT_ROUTE} fetchRunRecord={async () => bare} fetchStepDiff={readDiff} fetchProof={readProof} now={AGENT_NOW} />);
+    expect((await screen.findAllByText(/No steps were recorded for this run/)).length).toBeGreaterThan(0);
   });
 });
 
 describe("#442 off-screen steps are not drawn until scrolled near", () => {
-  it("marks every step card for the browser to skip while off screen", async () => {
-    const { readRecord, readDiff, readProof } = stubs();
-    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
-    await screen.findByText("Timeline");
+  it("marks every open step row for the browser to skip while off screen", async () => {
+    const { readDiff, readProof } = stubs();
+    const readRecord: FetchRunRecord = async () => statesRecord();
+    window.history.pushState(null, "", "/runs/" + STATES_RUN_ID);
+    render(<RunPage route={STATES_ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={STATES_NOW} />);
+    await screen.findByText(/What it ran/);
     const cards = Array.from(document.querySelectorAll("[data-step]"));
     expect(cards.length).toBeGreaterThan(0);
     for (const card of cards) {
       expect(card.className).toContain("[content-visibility:auto]");
     }
+  });
+});
+
+describe("#443 the diff layout toggle shows only where there is a diff", () => {
+  it("is absent for a run whose steps have no snapshot diff", async () => {
+    const { readDiff, readProof } = stubs();
+    render(<RunPage route={AGENT_ROUTE} fetchRunRecord={async () => agentRecord()} fetchStepDiff={readDiff} fetchProof={readProof} now={AGENT_NOW} />);
+    await screen.findByText("What it ran · 15 steps");
+    expect(screen.queryByRole("button", { name: "Side by side" })).toBeNull();
+  });
+});
+
+describe("#443 a child not linked to a spawn", () => {
+  it("is named by its kind and says it was not matched, never 'step 0'", async () => {
+    const base = sessionRecord();
+    const unmatched = {
+      ...base,
+      children: [{ ...base.children[0]!, title: "", agent_type: "fork", model: "", spawned_at_step: 0 }],
+    };
+    const { readDiff, readProof } = stubs();
+    render(<RunPage route={SESSION_ROUTE} fetchRunRecord={async () => unmatched} fetchStepDiff={readDiff} fetchProof={readProof} now={SESSION_NOW} />);
+    await screen.findByText("Agents it started");
+    expect(screen.getAllByText("fork agent").length).toBeGreaterThan(0);
+    expect(screen.getByText("not matched to a step")).toBeInTheDocument();
+    expect(screen.queryByText("spawned at step 0")).toBeNull();
   });
 });
