@@ -46,6 +46,18 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA innsegl_auth TO %[1]s;
 ALTER DEFAULT PRIVILEGES IN SCHEMA innsegl_auth GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %[1]s;
 ALTER DEFAULT PRIVILEGES IN SCHEMA innsegl_auth GRANT USAGE, SELECT ON SEQUENCES TO %[1]s;
 
+-- The audit trail is append-only for this role too. The blanket grant above
+-- covers it with UPDATE and DELETE; take those back where the table exists.
+-- (Migration 0010 also puts a trigger on it, for a role provisioned before
+-- the table did.)
+DO $$
+BEGIN
+    IF to_regclass('innsegl_auth.audit') IS NOT NULL THEN
+        REVOKE UPDATE, DELETE, TRUNCATE ON innsegl_auth.audit FROM %[1]s;
+    END IF;
+END;
+$$;
+
 -- No path to privilege of its own -- the same posture readonly.sql and
 -- appendonly.sql both hold their roles to.
 ALTER ROLE %[1]s NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;

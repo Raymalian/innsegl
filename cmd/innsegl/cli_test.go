@@ -51,7 +51,7 @@ import (
 // depend on into a repository, the piece `init`'s own opt-in pre-push hook
 // does not cover.
 var documentedSubcommands = []string{
-	"admin-credential", "api", "canary", "gateway", "git-hook", "hook", "init", "link", "migrate-schema",
+	"accounts", "admin-credential", "api", "canary", "gateway", "git-hook", "hook", "init", "link", "migrate-schema",
 	"reap", "reconcile", "resolve-alert", "retire", "seal", "serve", "sign", "verify",
 }
 
