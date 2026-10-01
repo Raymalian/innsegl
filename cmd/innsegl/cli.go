@@ -111,6 +111,7 @@ var commands = map[string]command{
 		summary: "issue the repository-scoped credential the identity lifecycle requires",
 		exec:    adminCredentialCommand,
 	},
+	"accounts": {summary: "manage organisations, enrolment tokens, installations and repository grants", exec: accountsCommand},
 	// `init` is RM-080 (#117): the sequence every adopter otherwise assembles
 	// by hand from documentation — install gitsign, decide a trust root,
 	// decide whether identities are pseudonymous, complete an OIDC flow, sign
