@@ -24,8 +24,7 @@ import (
 // re-running it from scratch.
 
 func TestAUTH003RegistrationOptionsRequireUserVerification(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, authStore := testServerConfigured(t, path)
+	srv, _, authStore := testServerConfigured(t)
 	code, _, err := authStore.CreateEnrolmentCode(context.Background(), time.Minute)
 	if err != nil {
 		t.Fatalf("CreateEnrolmentCode: %v", err)
@@ -137,8 +136,7 @@ func TestAUTH003SignOutRevokesTheSession(t *testing.T) {
 }
 
 func TestAUTH003AttestationFormatIsRecorded(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, authStore := testServerConfigured(t, path)
+	srv, _, authStore := testServerConfigured(t)
 	cookie := signInTestUser(t, srv.URL, authStore)
 
 	userID, ok := verifySessionToken(t, authStore, cookie.Value)

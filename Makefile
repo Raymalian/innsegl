@@ -487,7 +487,6 @@ test-clean:
 innsegl-up-here: sigstore-up
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
 	@echo "signing in $(REPO_PATH)  as  $(REPO)"
-	@scripts/managed-settings-mount.sh --check
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) build
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
@@ -501,7 +500,6 @@ innsegl-up-here: sigstore-up
 	  INNSEGL_WRITES_LOG_DIR='$(INNSEGL_WRITES_LOG_DIR)' \
 	  INNSEGL_WRITES_REPOS='$(INNSEGL_WRITES_REPOS)' \
 	  INNSEGL_LOG_DIR='$(INNSEGL_LOG_DIR)' \
-	  INNSEGL_MANAGED_SETTINGS_HOST_DIR="$$(scripts/managed-settings-mount.sh)" \
 	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml up -d
 	@$(MAKE) --no-print-directory innsegl-link DIR='$(REPO_PATH)'
 

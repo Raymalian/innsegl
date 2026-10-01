@@ -163,11 +163,6 @@ const apiIntegrationOrigin = defaultAPIRPOrigin
 // api` (RM-260/RM-261) using internal/webauthntest's software authenticator,
 // over real HTTP, and returns the resulting session cookie. authDSN must be
 // the SAME auth-writer DSN the running command was started with.
-//
-// The caller must arrange for the socket-denial check to pass BEFORE
-// starting the command — see requireSocketDenialFixture below, which every
-// caller of this function uses. This machine's REAL managed-settings file is
-// never read or written by this suite.
 func enrolAndSignIn(t *testing.T, base, authDSN string) *http.Cookie {
 	t.Helper()
 	ctx := context.Background()
@@ -234,23 +229,6 @@ func enrolAndSignIn(t *testing.T, base, authDSN string) *http.Cookie {
 	}
 	t.Fatal("enrol/finish set no session cookie")
 	return nil
-}
-
-// requireSocketDenialFixture points $INNSEGL_API_MANAGED_SETTINGS_FILE at a
-// TEMPORARY file CheckSocketDenial reads as denying the container-runtime
-// socket, for the life of the calling test — so enrolAndSignIn's ceremony
-// can complete. t.Setenv both sets and restores it, and `innsegl api` in
-// these cases runs IN-PROCESS (startAPICommand calls runAPI directly), so
-// the environment variable this test process holds is what the command
-// under test reads too.
-func requireSocketDenialFixture(t *testing.T) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "managed-settings.json")
-	body := `{"sandbox": {"enabled": true, "allowUnsandboxedCommands": false}}`
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("writing the socket-denial fixture: %v", err)
-	}
-	t.Setenv(api.EnvManagedSettingsFile, path)
 }
 
 // ---------------------------------------------------------------------------
@@ -471,7 +449,6 @@ func orNone(s string) string {
 // claim being made, and it is made about the command rather than about a
 // handler wired up in a test.
 func TestAPI010TheFiveRoutesAnswerThroughTheCommand(t *testing.T) {
-	requireSocketDenialFixture(t)
 	_, readerDSN, authDSN := freshLedgerDB(t)
 	repoDir, sha := newProofRepo(t)
 	fulcio, rekor := closedAddress(t), closedAddress(t)
@@ -655,7 +632,6 @@ func discardAPIPipe(int64, error) {}
 // statement about the ledger's contents made when the ledger was not read at
 // all.
 func TestAPI011ARouteThatNeedsTheLedgerDegradesHonestly(t *testing.T) {
-	requireSocketDenialFixture(t)
 	_, readerDSN, authDSN := freshLedgerDB(t)
 	repoDir, sha := newProofRepo(t)
 	fulcio, rekor := closedAddress(t), closedAddress(t)

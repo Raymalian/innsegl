@@ -25,7 +25,6 @@ func TestRegisterRecordRoutesWiresThroughTheRealServer(t *testing.T) {
 	srv, err := NewServer(ServerConfig{
 		Store: f.store, Prover: f.rs.prover, LogDir: f.logDir,
 		AuthStore: authStore, WebAuthn: testWebAuthnConfig,
-		ManagedSettingsPath: writeManagedSettings(t, denyingManagedSettingsJSON),
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)

@@ -189,9 +189,9 @@ function asCeremonyOptions(body: unknown): CeremonyOptions {
 /**
  * The whole first-enrolment ceremony: mint the options, create the passkey,
  * finish it. Throws AuthRequestError for anything the SERVER refused (a bad
- * code, the socket denial not in effect), and a plain Error for anything the
- * BROWSER refused (no passkey support, the operator cancelled the platform
- * prompt) — the two need different copy, see EnrolPage.
+ * code), and a plain Error for anything the BROWSER refused (no passkey
+ * support, the operator cancelled the platform prompt) — the two need
+ * different copy, see EnrolPage.
  */
 export async function enrol(
   displayName: string,

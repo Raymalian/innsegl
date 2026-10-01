@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"path/filepath"
 	"testing"
 )
 
@@ -65,8 +64,7 @@ func TestAUTH004AForgedAssertionIsRefused(t *testing.T) {
 // second's refusal is provably about replay, not about an assertion that
 // was never going to verify in the first place.
 func TestAUTH004AReplayedCeremonyIsRefused(t *testing.T) {
-	path := writeManagedSettings(t, denyingManagedSettingsJSON)
-	srv, _, authStore := testServerConfigured(t, path)
+	srv, _, authStore := testServerConfigured(t)
 	auth, cookie := enrolTestUser(t, srv.URL, authStore)
 	userID, ok := verifySessionToken(t, authStore, cookie.Value)
 	if !ok {
@@ -109,7 +107,7 @@ func TestAUTH004AReplayedCeremonyIsRefused(t *testing.T) {
 // origin than this deployment's own is refused before any ceremony logic
 // runs.
 func TestAUTH004ACrossOriginRequestIsRefused(t *testing.T) {
-	srv, _, _ := testServerConfigured(t, filepath.Join(t.TempDir(), "absent.json"))
+	srv, _, _ := testServerConfigured(t)
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
 		srv.URL+"/api/v1/auth/login/begin", nil)
@@ -128,10 +126,9 @@ func TestAUTH004ACrossOriginRequestIsRefused(t *testing.T) {
 }
 
 // The matching origin is, correctly, not refused by the origin check (it may
-// still be refused for other reasons, e.g. no managed-settings file for an
-// enrol route, which is not what this case is about).
+// still be refused for other reasons, which is not what this case is about).
 func TestAUTH004ASameOriginRequestIsNotRefusedByTheOriginCheck(t *testing.T) {
-	srv, _, _ := testServerConfigured(t, filepath.Join(t.TempDir(), "absent.json"))
+	srv, _, _ := testServerConfigured(t)
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
 		srv.URL+"/api/v1/auth/login/begin", nil)

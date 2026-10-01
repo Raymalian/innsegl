@@ -61,9 +61,6 @@ type ServerConfig struct {
 	// WebAuthn configures the relying party (RP ID, RP origin, display
 	// name). Required.
 	WebAuthn WebAuthnConfig
-	// ManagedSettingsPath is where CheckSocketDenial reads from. Empty
-	// resolves ManagedSettingsPathFromEnv() at construction time.
-	ManagedSettingsPath string
 	// SessionLifetime bounds a session's server-side life. Zero applies
 	// defaultSessionLifetime.
 	SessionLifetime time.Duration
@@ -80,9 +77,8 @@ type Health struct {
 	// Auth is RM-260/RM-261's own measured fact, served the same way: the
 	// auth-writer credential's own proof that it cannot write the ledger
 	// (ADR-0062: "verified by a startup probe the same way AssertReadOnly
-	// already is"), and whether any user has enrolled yet — a plain boolean,
-	// not the socket-denial state itself, which stays off this public,
-	// unauthenticated surface (AB-27's own "no oracle" discipline).
+	// already is"), and whether any user has enrolled yet — a plain boolean
+	// (AB-27's own "no oracle" discipline).
 	Auth AuthHealth `json:"auth"`
 }
 
@@ -145,12 +141,11 @@ type Server struct {
 	logDir    string
 	logRetain int
 
-	authStore           *AuthStore
-	authMux             *http.ServeMux
-	webAuthn            *webauthn.WebAuthn
-	webAuthnConfig      WebAuthnConfig
-	managedSettingsPath string
-	sessionLifetime     time.Duration
+	authStore       *AuthStore
+	authMux         *http.ServeMux
+	webAuthn        *webauthn.WebAuthn
+	webAuthnConfig  WebAuthnConfig
+	sessionLifetime time.Duration
 }
 
 // NewServer wires the routes. It refuses to construct at all without a way
@@ -178,10 +173,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if retain <= 0 {
 		retain = 90
 	}
-	managedSettingsPath := cfg.ManagedSettingsPath
-	if managedSettingsPath == "" {
-		managedSettingsPath = ManagedSettingsPathFromEnv()
-	}
 	sessionLifetime := cfg.SessionLifetime
 	if sessionLifetime <= 0 {
 		sessionLifetime = defaultSessionLifetime
@@ -191,7 +182,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		store: cfg.Store, prover: cfg.Prover, mux: http.NewServeMux(),
 		logDir: cfg.LogDir, logRetain: retain,
 		authStore: cfg.AuthStore, webAuthn: webAuthn,
-		webAuthnConfig: cfg.WebAuthn, managedSettingsPath: managedSettingsPath,
+		webAuthnConfig:  cfg.WebAuthn,
 		sessionLifetime: sessionLifetime,
 	}
 	s.authMux = s.newAuthMux()
