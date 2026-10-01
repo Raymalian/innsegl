@@ -3,6 +3,7 @@
 package commitpath
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -248,5 +249,44 @@ func TestCMT006ResolveAuthorisesOnlyARelayedRunningGitCommit(t *testing.T) {
 		if _, err := Resolve(res, id, now); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("Resolve(%q) err = %v, want it to say %q", id, err, want)
 		}
+	}
+}
+
+// RM-309 (#489): scoped to an installation, the resolver does not see a tool
+// call another installation relayed, so both commit-path routes refuse it
+// exactly as they refuse a call that was never relayed.
+func TestScopedResolverHidesAnotherInstallationsCall(t *testing.T) {
+	base := fakeResolver{
+		"toolu_a": {RunID: "run-a", Installation: "aaaa", Tool: "Bash"},
+		"toolu_s": {RunID: "run-s", Tool: "Bash"}, // single-host: no installation
+	}
+	if _, ok := ScopedResolver(base, "aaaa").LookupPending("toolu_a"); !ok {
+		t.Error("the relaying installation cannot see its own call")
+	}
+	if _, ok := ScopedResolver(base, "bbbb").LookupPending("toolu_a"); ok {
+		t.Error("another installation sees the call")
+	}
+	if _, ok := ScopedResolver(base, "bbbb").LookupPending("toolu_s"); ok {
+		t.Error("an installation sees a call no installation relayed")
+	}
+
+	_, unknown := Resolve(ScopedResolver(base, "bbbb"), "toolu_nope", time.Now())
+	_, foreign := Resolve(ScopedResolver(base, "bbbb"), "toolu_a", time.Now())
+	if unknown == nil || foreign == nil {
+		t.Fatal("want both refused")
+	}
+	if strings.Replace(foreign.Error(), "toolu_a", "X", 1) != strings.Replace(unknown.Error(), "toolu_nope", "X", 1) {
+		t.Errorf("refusals differ: %q vs %q", foreign, unknown)
+	}
+}
+
+// The resolver a request carries overrides the configured one.
+func TestResolverFromContext(t *testing.T) {
+	base, scoped := fakeResolver{}, fakeResolver{"toolu_x": {RunID: "r"}}
+	if ResolverFrom(context.Background(), base) == nil {
+		t.Fatal("no fallback")
+	}
+	if _, ok := ResolverFrom(WithResolver(context.Background(), scoped), base).LookupPending("toolu_x"); !ok {
+		t.Error("the request's resolver was not used")
 	}
 }

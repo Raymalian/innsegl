@@ -67,7 +67,7 @@ func commitTrailersHandler(res commitpath.Resolver, claimFor func(ctx context.Co
 		// Gate 1 (ADR-0059 decision 4's first, asked here too): the tool call
 		// this message is being drafted for really was relayed, is a `git
 		// commit`, and is still inside its window.
-		call, err := commitpath.Resolve(res, req.ToolUseID, now())
+		call, err := commitpath.Resolve(commitpath.ResolverFrom(r.Context(), res), req.ToolUseID, now())
 		if err != nil {
 			writeCommitPathError(w, err)
 			return
