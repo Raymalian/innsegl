@@ -394,7 +394,7 @@ function PasskeysSection({
                       </form>
                     ) : (
                       <div className="flex items-center gap-2">
-                        <span>{passkey.name}</span>
+                        <span>{passkey.name === "" ? strings.account.unnamedPasskey : passkey.name}</span>
                         {passkey.current && <span className={currentBadge}>{strings.account.currentDevice}</span>}
                       </div>
                     )}

@@ -148,6 +148,15 @@ describe("AccountPage", () => {
     expect(screen.getByText(`8 ${strings.account.recoveryOf}`)).toBeInTheDocument();
   });
 
+  it("names a passkey enrolled before passkeys had names", async () => {
+    const [first, ...rest] = account().passkeys;
+    if (first === undefined) throw new Error("fixture has no passkey");
+    installAccountFetch(account({ passkeys: [{ ...first, name: "" }, ...rest] }));
+    render(<AccountPage browser={workingBrowser()} />);
+
+    expect(await screen.findByText(strings.account.unnamedPasskey)).toBeInTheDocument();
+  });
+
   it("edits and saves the display name inline", async () => {
     const fetches = installAccountFetch(account());
     const user = userEvent.setup();

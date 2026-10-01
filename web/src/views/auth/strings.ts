@@ -84,6 +84,7 @@ export const strings = {
     passkeyLastUsedHeader: "Last used",
     passkeyActionsHeader: "Actions",
     passkeyNeverUsed: "Never",
+    unnamedPasskey: "Unnamed passkey",
     currentDevice: "This device",
     renameButton: "Rename",
     removeButton: "Remove",
