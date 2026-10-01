@@ -203,7 +203,7 @@ type IdentityGuard struct {
 	tree       TreeLinker
 	policy     LifecyclePolicy
 	registrar  Registrar
-	workspaces WorkspaceResolver
+	workspaces StatedWorkspaceResolver
 	runStates  RunStateReader
 	now        func() time.Time
 
@@ -245,7 +245,7 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 		tree:              cfg.Tree,
 		policy:            cfg.Policy,
 		registrar:         cfg.Registrar,
-		workspaces:        cfg.Workspaces,
+		workspaces:        StatedWorkspaceResolver{Fallback: cfg.Workspaces},
 		runStates:         cfg.RunStates,
 		now:               now,
 		cache:             newIdentityCache(size),
@@ -283,7 +283,8 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 	// The working directory is what the session hook stated, never what the
 	// conversation says (workspaceregistry.go). Attached to the facts so the
 	// recorder snapshots the same directory the run was registered from.
-	facts.WorkingDirectory, _ = g.sessionWorkspaces.Lookup(id.SessionID, id.AgentID)
+	facts.Stated, _ = g.sessionWorkspaces.LookupStated(id.SessionID, id.AgentID)
+	facts.WorkingDirectory = facts.Stated.Cwd
 	ctx := WithRequestFacts(r.Context(), facts)
 	fp := ComputeFingerprint(facts)
 
@@ -345,11 +346,8 @@ const directoryRetryAfter = 2 * time.Second
 
 // resolveWorkspace resolves the hook-stated directory, refusing with
 // errDirectoryNotStated rather than asking the resolver about nothing.
-func (g *IdentityGuard) resolveWorkspace(ctx context.Context, dir string) (Workspace, error) {
-	if dir == "" {
-		return Workspace{}, errDirectoryNotStated
-	}
-	return g.workspaces.Resolve(ctx, dir)
+func (g *IdentityGuard) resolveWorkspace(ctx context.Context, facts RequestFacts) (Workspace, error) {
+	return g.workspaces.ResolveStated(ctx, facts.Stated)
 }
 
 // outageRetryAfter is how long a harness is asked to wait before retrying a
@@ -463,7 +461,7 @@ func (g *IdentityGuard) act(
 		return out.RunID, nil
 
 	case DecisionNew:
-		ws, err := g.resolveWorkspace(ctx, facts.WorkingDirectory)
+		ws, err := g.resolveWorkspace(ctx, facts)
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a new run: %w", err)
 		}
@@ -483,7 +481,7 @@ func (g *IdentityGuard) act(
 		return out.RunID, nil
 
 	case DecisionFork:
-		ws, err := g.resolveWorkspace(ctx, facts.WorkingDirectory)
+		ws, err := g.resolveWorkspace(ctx, facts)
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a fork of run %q: %w", prior.RunID, err)
 		}
@@ -503,7 +501,7 @@ func (g *IdentityGuard) act(
 		return out.RunID, nil
 
 	case DecisionAdopt:
-		ws, err := g.resolveWorkspace(ctx, facts.WorkingDirectory)
+		ws, err := g.resolveWorkspace(ctx, facts)
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a run adopting %q: %w", prior.RunID, err)
 		}
