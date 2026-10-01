@@ -30,6 +30,7 @@ type accountsStore interface {
 	ListInstallations(ctx context.Context, accountID string) ([]accounts.Installation, error)
 	SetInstallationStatus(ctx context.Context, id, status, actor string) error
 	GrantRepo(ctx context.Context, accountID, repo, actor string) error
+	ListAccounts(ctx context.Context) ([]accounts.AccountSummary, error)
 }
 
 // accountsCLIDeps are the seams this command's tests replace.
@@ -57,6 +58,7 @@ func accountsCommand(args []string, stdout, stderr io.Writer) int {
 func accountsUsage(w io.Writer) {
 	fprintf(w, "innsegl accounts - organisations, enrolment tokens, installations and repository grants\n\n")
 	fprintf(w, "Usage:\n  innsegl accounts <verb> [flags]\n\nVerbs:\n")
+	fprintf(w, "  list                                                      every account: id, name, owners, repositories\n")
 	fprintf(w, "  new                  --name NAME                          create an account; prints its id\n")
 	fprintf(w, "  enrol-token          --account ID --by USER --repos a,b|* [--kind workstation|service]\n")
 	fprintf(w, "                                                            mint a 15-minute single-use token, on stdout\n")
@@ -76,7 +78,7 @@ func runAccountsCommand(args []string, stdout, stderr io.Writer, deps accountsCL
 	case "help", "-h", "--help":
 		accountsUsage(stdout)
 		return exitOK
-	case "new", "enrol-token", "installations", "revoke-installation", "grant-repo":
+	case "new", "enrol-token", "installations", "revoke-installation", "grant-repo", "list":
 		return accountsVerb(verb, rest, stdout, stderr, deps)
 	default:
 		fprintf(stderr, "innsegl accounts: unknown verb %q\n\n", verb)
@@ -173,6 +175,19 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 	}
 
 	switch verb {
+	case "list":
+		list, err := store.ListAccounts(ctx)
+		if err != nil {
+			return fail(err)
+		}
+		for _, a := range list {
+			flagText := ""
+			if a.Operator {
+				flagText = "\toperator"
+			}
+			fprintf(stdout, "%s\t%s%s\towners=%s\trepos=%s\n", a.ID, a.Name, flagText,
+				strings.Join(a.Owners, ","), strings.Join(a.Repos, ","))
+		}
 	case "new":
 		a, err := store.CreateAccount(ctx, accounts.CreateAccountParams{Name: *acctName})
 		if err != nil {

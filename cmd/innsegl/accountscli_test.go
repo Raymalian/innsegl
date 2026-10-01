@@ -24,6 +24,7 @@ type stubAccountsStore struct {
 	statuses       [][3]string
 	grants         [][2]string
 	installations  []accounts.Installation
+	accounts       []accounts.AccountSummary
 	err            error
 	token          string
 	tokenExpiresAt time.Time
@@ -47,6 +48,10 @@ func (s *stubAccountsStore) ListInstallations(_ context.Context, account string)
 func (s *stubAccountsStore) SetInstallationStatus(_ context.Context, id, status, actor string) error {
 	s.statuses = append(s.statuses, [3]string{id, status, actor})
 	return s.err
+}
+
+func (s *stubAccountsStore) ListAccounts(context.Context) ([]accounts.AccountSummary, error) {
+	return s.accounts, s.err
 }
 
 func (s *stubAccountsStore) GrantRepo(_ context.Context, account, repo, actor string) error {
@@ -232,5 +237,22 @@ func TestAccountsCLIReportsStoreFailures(t *testing.T) {
 		stubAccountsDeps(nil, errors.New("refused"), nil))
 	if code != exitCredentialUnusable {
 		t.Errorf("open failure: exit %d", code)
+	}
+}
+
+// `innsegl accounts list` prints each organisation's id, name, owners and
+// granted repositories: what an operator on the core needs for enrol-token.
+func TestAccountsCLIListPrintsIDsOwnersAndRepos(t *testing.T) {
+	s := &stubAccountsStore{accounts: []accounts.AccountSummary{{
+		ID: "acct-1", Name: "Acme", Operator: true, Owners: []string{"u-1"}, Repos: []string{"github.com/acme/app"},
+	}}}
+	code, out, errOut := runAccounts(s, "list", "-dsn", "postgres://x")
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	for _, want := range []string{"acct-1", "Acme", "operator", "u-1", "github.com/acme/app"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output %q lacks %q", out, want)
+		}
 	}
 }
