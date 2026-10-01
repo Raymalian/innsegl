@@ -849,7 +849,12 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	// configuration that has not set them to anything writable either (the
 	// two failures should not be conflated, and a test forcing the listen
 	// failure alone should not have to configure a CA it will never reach).
-	ca, err := gateway.LoadOrCreateCA(gateway.CAConfig{KeyDir: o.caKeyDir, PublicDir: o.caCertDir})
+	caConfig, err := gatewayCAConfig(o.caKeyDir, o.caCertDir, os.Getenv)
+	if err != nil {
+		running.Close()
+		return nil, fmt.Errorf("configure the gateway's certificate names: %w", err)
+	}
+	ca, err := gateway.LoadOrCreateCA(caConfig)
 	if err != nil {
 		running.Close()
 		return nil, fmt.Errorf("configure the gateway's own TLS certificate authority: %w", err)
@@ -905,7 +910,10 @@ const gatewaySessionWorkspaceRateLimitKey = "session-workspace"
 const maxWorkingDirectoryBytes = 4096
 
 // sessionWorkspaceHandler records the harness's own statement of where a
-// session (and, with agent_id, one of its subagents) works. The hook sends
+// session (and, with agent_id, one of its subagents) works. The statement may
+// carry the workspace the client derived from its own tree (repo, worktree,
+// branch, task, head: gatewaystatement.go), which the identity guard then uses
+// without reading any filesystem. The hook sends
 // it from the host on SessionStart, UserPromptSubmit, SubagentStart and
 // CwdChanged; the identity guard registers a new run from it.
 //
@@ -932,20 +940,14 @@ func sessionWorkspaceHandler(ws *gateway.SessionWorkspaces, rateLimit *gateway.S
 			http.Error(w, "innsegl gateway: session workspace: too many statements", http.StatusTooManyRequests)
 			return
 		}
-		var in struct {
-			SessionID string `json:"session_id"`
-			AgentID   string `json:"agent_id"`
-			Cwd       string `json:"cwd"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 2*maxWorkingDirectoryBytes)).Decode(&in); err != nil ||
-			!gateway.IsSessionID(in.SessionID) ||
-			(in.AgentID != "" && !gateway.IsAgentID(in.AgentID)) ||
-			len(in.Cwd) > maxWorkingDirectoryBytes || !filepath.IsAbs(in.Cwd) || filepath.Clean(in.Cwd) != in.Cwd {
+		var in sessionWorkspaceStatement
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4*maxWorkingDirectoryBytes)).Decode(&in); err != nil || !in.valid() {
 			http.Error(w, "innsegl gateway: session workspace: a JSON body naming a well-formed session_id, "+
-				"an optional agent_id and an absolute, clean cwd is required", http.StatusBadRequest)
+				"an optional agent_id, an absolute, clean cwd and, optionally, the derived repo (host/org/name), "+
+				"branch, task, worktree and head is required", http.StatusBadRequest)
 			return
 		}
-		ws.Record(in.SessionID, in.AgentID, in.Cwd)
+		ws.RecordStated(in.SessionID, in.AgentID, in.stated())
 		log.info("session workspace stated", "session_id", in.SessionID, "agent_id", in.AgentID)
 		w.WriteHeader(http.StatusNoContent)
 	}

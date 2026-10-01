@@ -132,6 +132,23 @@ var appendOnlyExpectations = []struct {
 	{"truncate the run mapping", `TRUNCATE innsegl.gateway_run_mapping`, false,
 		"the same append-only guarantee as innsegl.events, by grant and not only by trigger"},
 
+	// RM-280 (#456), ADR-0063: the gateway checks a client's installation and
+	// its repository grants on every request, so it reads those two tables and
+	// nothing else of the account schema -- not who the people are, not their
+	// passkeys or sessions, not an enrolment token's hash -- and writes none.
+	{"read installations", `SELECT count(*) FROM innsegl_auth.installations`, true,
+		"the client-certificate guard reads an installation's status and scope"},
+	{"read repository grants", `SELECT count(*) FROM innsegl_auth.repo_grants`, true,
+		"scope is the installation's repositories within its organisation's live grants"},
+	{"write an installation", `UPDATE innsegl_auth.installations SET status = 'active' WHERE false`, false,
+		"installations are written by the account side only"},
+	{"read people", `SELECT count(*) FROM innsegl_auth.users`, false,
+		"the gateway has no business knowing who the people are"},
+	{"read passkeys", `SELECT count(*) FROM innsegl_auth.passkeys`, false, "credentials of people"},
+	{"read sessions", `SELECT count(*) FROM innsegl_auth.sessions`, false, "a session hash is a credential"},
+	{"read enrolment tokens", `SELECT count(*) FROM innsegl_auth.enrolment_tokens`, false,
+		"a token hash is a credential"},
+
 	{"update the chain", `UPDATE innsegl.events SET run_id = 'x'`, false,
 		"I4: no mutation. The trigger refuses this for the owner too — the ACL is " +
 			"what makes it refused for a REASON an operator cannot switch off"},

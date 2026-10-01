@@ -1,6 +1,6 @@
 # ADR-0012: Scope the MCP admin credential with an OPA authorization policy, and name the two things it still cannot scope
 
-- Status: accepted
+- Status: accepted; amended 2026-10-01 (see the Amendment)
 - Date: 2026-08-28
 - Deciders: Mike
 
@@ -166,3 +166,28 @@ unauthenticated socket.
   block from `server.conf` restores SPIRE's default policy in one restart — and
   silently reopens AB-10. SPI-005 is what makes that loud, which is why it runs
   against the shipped compose stack rather than against a fixture.
+
+## Amendment (2026-10-01): `MintX509SVID` can be scoped, and is, for client certificates
+
+**What changed.** The admin allowlist admits `MintX509SVID`, scoped: the
+request's certificate signing request must carry exactly one URI SAN, the
+client path `spiffe://<td>/client/<32 lowercase hex>`, with no DNS, email or
+IP SAN and no user, query, fragment or escaped path, and a lifetime of at most
+24 hours. Anything else is denied by the policy, and refused by the caller
+before it is sent. `MintJWTSVID` stays limited to the agent run path, so a
+client identity can never obtain a signing credential. `MintWITSVID` stays
+denied.
+
+**Why.** The claim above that the SPIFFE ID "lives inside a DER-encoded CSR,
+which rego cannot parse" is wrong for the pinned SPIRE: measured (SPI-020),
+the policy receives the request with the CSR as base64 DER, and the embedded
+OPA's `crypto.x509.parse_certificate_request` returns its URIs and DNS names.
+ADR-0063 needs client machines to hold their own short-lived certificates,
+issued through the attested MCP, and this is the narrowest way to issue them.
+
+**What still holds.** The admin credential still cannot mint an agent
+identity or any path outside the client subtree, and a client certificate
+cannot sign. The denial for every other path is tested against a real SPIRE
+server (SPI-022, SPI-023). The client path is a new, internal namespace; the
+protected agent grammar (doc 08) is unchanged, and no client identity is ever
+signed into a public artifact.

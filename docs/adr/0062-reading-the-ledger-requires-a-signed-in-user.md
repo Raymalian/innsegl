@@ -1,6 +1,6 @@
 # ADR-0062: Reading the ledger requires a signed-in user
 
-- Status: accepted; amended 2026-10-01 (see the two Amendments)
+- Status: accepted; amended 2026-10-01 (see the three Amendments)
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -488,3 +488,20 @@ are still the only sign-in credential; a recovery code is a one-time way to
 reach the account page and add one, stored only as a hash. The first account
 still cannot be created by anyone who did not receive the setup link, which
 the deployment prints only to its operator.
+
+## Amendment (2026-10-01): enrolment tokens, and the relying-party ID
+
+**What changed.**
+
+- **Members mint enrolment tokens on the account page.** Minting one needs a
+  fresh passkey ceremony. The token enrols a client installation (ADR-0063).
+  A core CLI covers bootstrap.
+- **The relying-party ID is the core's DNS name** (ADR-0066). Passkeys made
+  at another origin do not work there and must be enrolled again. Recovery
+  codes are the path.
+
+**Why.** The core is reached by name from other machines, and an enrolment
+token is the one bearer secret that admits a machine.
+
+**What still holds.** Reading the ledger requires a signed-in user. A client
+certificate reads nothing and administers nothing.

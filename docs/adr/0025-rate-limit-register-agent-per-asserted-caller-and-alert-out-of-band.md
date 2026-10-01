@@ -1,6 +1,6 @@
 # ADR-0025: Rate-limit `register_agent` per asserted caller, meter it on the ledger appender, and raise the trip out of band
 
-- Status: accepted
+- Status: accepted; amended 2026-10-01 (see the Amendment)
 - Date: 2026-08-29
 - Deciders: Mike
 
@@ -285,3 +285,17 @@ does when a ledger outage stops a registration that likewise created no run.
   per minute. Changing the default downward after that is a behavioural break
   for every caller sitting under the old one; changing the *class* is a
   protected-surface change under doc 08 §3.
+
+## Amendment (2026-10-01): the bucket is per installation
+
+**What changed.** For client traffic, the rate-limit bucket is keyed by the
+installation (ADR-0063), not by the asserted caller. The limit, the metering
+on the ledger appender and the out-of-band trip are unchanged.
+
+**Why.** The asserted caller was a claim the caller made. An installation is
+authenticated by its certificate, so one client cannot spend another's budget
+by naming it.
+
+**What still holds.** The default of 60 per minute, the metering and the
+out-of-band alert. Where no installation is in play (the single-host shape on
+loopback), the asserted caller is still the bucket.

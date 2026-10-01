@@ -100,6 +100,10 @@ under a shared name.
   admin (ADR-0011's tmpfs is what contains it), and `BatchDeleteEntry` cannot be
   scoped at all — both stated in
   [ADR-0012](../../../docs/adr/0012-scope-the-mcp-admin-credential-with-an-opa-authorization-policy.md).
+  Since #476 the admin may also call `MintX509SVID`, but only for a client
+  certificate: one URI SAN `spiffe://innsegl.dev/client/<32 hex>`, nothing
+  else in the request, at most 24 hours (ADR-0012's amendment, ADR-0063).
+  `MintJWTSVID` stays limited to agent runs, so a client can never sign.
   **On a SPIRE version bump, re-copy `authz-policy-data.json` from the matching
   upstream tag and re-run TC-SPI:** an RPC missing from that table is denied to
   every caller.

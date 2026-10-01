@@ -1,6 +1,6 @@
 # ADR-0060: The gateway runs inside the one innsegl process
 
-- Status: accepted
+- Status: accepted; amended 2026-10-01 (see the Amendment)
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -325,3 +325,19 @@ symmetric: because the mapping table is insert-only by revoked grant,
 correcting a wrong row is not a delete or an update but a new event type
 through doc 02's process — deliberately, since what that table records is
 itself evidence, not index-like metadata.
+
+## Amendment (2026-10-01): the hosted shape
+
+**What changed.** Decisions 2 and 8 (loopback only; the gateway stays on the
+harness's machine) are superseded by ADR-0063 for the hosted shape: the
+gateway runs on the core host and clients authenticate with an enrolled
+certificate. The single-host shape still binds loopback by default. A gateway
+bound to anything but loopback refuses to start without client-certificate
+authentication.
+
+**Why.** A gateway tied to the harness's machine cannot serve a second
+machine.
+
+**What still holds.** Decision 7 holds more strongly: agents cannot reach the
+container socket, because it is on another host. The other decisions and
+fail-closed behaviour are unchanged.
