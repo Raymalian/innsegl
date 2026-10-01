@@ -503,3 +503,16 @@ describe("#440 a long run stays light", () => {
     expect(document.querySelectorAll("[data-step]")).toHaveLength(200);
   });
 });
+
+describe("#442 off-screen steps are not drawn until scrolled near", () => {
+  it("marks every step card for the browser to skip while off screen", async () => {
+    const { readRecord, readDiff, readProof } = stubs();
+    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+    await screen.findByText("Timeline");
+    const cards = Array.from(document.querySelectorAll("[data-step]"));
+    expect(cards.length).toBeGreaterThan(0);
+    for (const card of cards) {
+      expect(card.className).toContain("[content-visibility:auto]");
+    }
+  });
+});

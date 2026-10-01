@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -473,4 +474,38 @@ func TestRM273IsHookBodyDetection(t *testing.T) {
 func fmtHookBody(t *testing.T, toolUseID, toolName, input, response string) string {
 	t.Helper()
 	return fmt.Sprintf(hookBodyEnvelope, toolUseID, toolName, input, response)
+}
+
+// TestStepBodyIsCachedAndStillCatchesAChangedFile — #442. Stored bodies are
+// content-addressed, so a parsed, verified body can be reused; the cache is
+// keyed on the file's size and modification time as well, so a body changed
+// or removed after it was cached is read and checked again, never served.
+func TestStepBodyIsCachedAndStillCatchesAChangedFile(t *testing.T) {
+	dir := t.TempDir()
+	raw := marshalBody(t, gatewayBody{Tool: "Bash", ToolUseID: "toolu_cache1", Input: json.RawMessage(`{"command":"true"}`)})
+	digest := writeRunBody(t, dir, "run-cache", raw)
+
+	before := bodyFileReads.Load()
+	for i := 0; i < 3; i++ {
+		if _, ok := stepBody(dir, "run-cache", digest); !ok {
+			t.Fatal("a stored, matching body must be available")
+		}
+	}
+	if got := bodyFileReads.Load() - before; got != 1 {
+		t.Errorf("three reads of one unchanged body opened the file %d times, want 1", got)
+	}
+
+	path := filepath.Join(dir, "run-cache", strings.TrimPrefix(digest, "sha256:")+".json")
+	if err := os.WriteFile(path, append(raw, ' '), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stepBody(dir, "run-cache", digest); ok {
+		t.Error("a body changed after it was cached was still served")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stepBody(dir, "run-cache", digest); ok {
+		t.Error("a body removed after it was cached was still served")
+	}
 }

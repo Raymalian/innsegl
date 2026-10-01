@@ -27,6 +27,7 @@ import { AlertMarkIcon, OutcomeFailedIcon, OutcomeOkIcon } from "./icons";
 import { strings } from "./strings";
 import {
   panel,
+  stepCardDeferred,
   stepAgentSummary,
   stepAgentNote,
   stepHeaderRow,
@@ -91,7 +92,7 @@ export function StepCard({
   const spawnedNode = tree.nodes.find((n) => n.run_id === step.spawned_run_id);
 
   return (
-    <section id={`step-${step.n}`} className={panel} data-step={step.n} data-witnesses-agree={agrees}>
+    <section id={`step-${step.n}`} className={`${panel} ${stepCardDeferred}`} data-step={step.n} data-witnesses-agree={agrees}>
       <div className={stepHeaderRow} data-step-header>
         <span className={stepNumber}>{step.n}</span>
         <span className={stepTool}>{step.tool}</span>
