@@ -77,6 +77,9 @@ ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 # linking without touching Docker, a real PATH entry, or a real deployment.
 START_CMD="${INNSEGL_INSTALL_START_CMD:-make start}"
 SIGNER_CMD="${INNSEGL_INSTALL_SIGNER_CMD:-make innsegl-install-signer}"
+# Builds the binary the PreToolUse hook names, so the settings never point at
+# an old one (ENF-008).
+BUILD_CMD="${INNSEGL_INSTALL_BUILD_CMD:-make build}"
 
 # The compiled innsegl binary this checkout's `make build` produces. The
 # PreToolUse hook command in managed settings names this path exactly — an
@@ -655,7 +658,10 @@ if not writable(path):
         "install.sh: run this once, as an administrator, then re-run install.sh:\n\n"
     )
     sys.stderr.write(
-        "  sudo mkdir -p %s && sudo cp %s %s\n\n"
+        # install -m 0644, not cp: the temp file is 0600 (mkstemp), and cp
+        # keeps that, leaving settings the harness, running as the user,
+        # cannot read.
+        "  sudo mkdir -p %s && sudo install -m 0644 %s %s\n\n"
         % (
             shlex.quote(os.path.dirname(path)),
             shlex.quote(tmp_path),
@@ -960,6 +966,25 @@ check_gateway_answers() {
   exit 1
 }
 
+# The settings make the harness run this binary before every Bash call, and
+# a PreToolUse hook that exits 2 blocks the call. A binary built before the
+# hook command existed does exactly that (ENF-008), so it is run once here,
+# on an empty event, before anything names it.
+check_hook_runs() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf 'install.sh: (dry run) would check that %s runs as the hook\n' "$INNSEGL_BIN_PATH"
+    return 0
+  fi
+  local err
+  if ! err="$(printf '{}' | "$INNSEGL_BIN_PATH" hook pre-tool-use 2>&1 >/dev/null)"; then
+    echo "install.sh: $INNSEGL_BIN_PATH does not run as the PreToolUse hook:" >&2
+    printf '  %s\n' "$err" >&2
+    echo "  The managed settings were NOT written: that hook would block every Bash call." >&2
+    echo "  Run \`make build\`, then run this again." >&2
+    exit 1
+  fi
+}
+
 main() {
   parse_args "$@"
 
@@ -980,6 +1005,10 @@ main() {
 
   echo "==> putting innsegl-commit on PATH"
   run_step "$SIGNER_CMD"
+
+  echo "==> building the hook binary"
+  run_step "$BUILD_CMD"
+  check_hook_runs
 
   echo "==> checking the gateway answers"
   check_gateway_answers
