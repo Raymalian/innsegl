@@ -323,3 +323,35 @@ func TestMigration0007AppliesOnADatabaseAlreadyAtThePreviousVersion(t *testing.T
 		t.Fatalf("BySessionAgent after the upgrade = %+v, found %v, err %v", got, found, lookupErr)
 	}
 }
+
+// GW-019 (#460): a row inserted for a request the client guard verified
+// carries the installation in client_id; a single-host row carries NULL.
+func TestGW019TheMappingRowCarriesTheClientID(t *testing.T) {
+	t.Parallel()
+	store, dsn := newMigratedMappingStore(t)
+	ctx := testCtx(t, 2*time.Minute)
+
+	const inst = "0123456789abcdef0123456789abcdef"
+	if err := store.Insert(WithInstallation(ctx, inst), RunMapping{
+		RunID: "run-h", SessionID: "session-h", AgentID: mainAgentID,
+	}); err != nil {
+		t.Fatalf("Insert (hosted): %v", err)
+	}
+	if err := store.Insert(ctx, RunMapping{RunID: "run-l", SessionID: "session-l", AgentID: mainAgentID}); err != nil {
+		t.Fatalf("Insert (single-host): %v", err)
+	}
+	conn := rawMappingConn(t, dsn)
+	for run, want := range map[string]string{"run-h": inst, "run-l": ""} {
+		var got *string
+		if err := conn.QueryRow(ctx,
+			`SELECT client_id FROM innsegl.gateway_run_mapping WHERE run_id = $1`, run).Scan(&got); err != nil {
+			t.Fatalf("read client_id of %s: %v", run, err)
+		}
+		switch {
+		case want == "" && got != nil:
+			t.Errorf("%s client_id = %q, want NULL", run, *got)
+		case want != "" && (got == nil || *got != want):
+			t.Errorf("%s client_id = %v, want %q", run, got, want)
+		}
+	}
+}

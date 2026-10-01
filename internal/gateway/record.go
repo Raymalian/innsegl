@@ -103,6 +103,9 @@ type pendingCall struct {
 	// workingDirectory is the one the request carrying this call stated;
 	// the commit path reads the commit's objects there (LookupPending).
 	workingDirectory string
+	// installation is the client installation whose request carried this
+	// call (hosted shape); the commit path scopes lookups to it (#489).
+	installation string
 }
 
 // claimedPair is one tool_use matched against the tool_result the next
@@ -305,15 +308,16 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	// to cut a witness already under way short, the same reasoning recordAsync's own doc comment
 	// gives for addPending's identical shape just below.
 	r.baselineIfNeeded(runID, workingDirectory)
+	installation, _ := InstallationFromContext(ctx)
 	//nolint:contextcheck // deliberate: addPending's own eventual recording (on eviction) uses
 	// a detached, bounded context of its own rather than ctx -- see recordAsync's own doc
 	// comment for why a request/reply's context must never be allowed to cut a recording short.
-	r.addPending(runID, workingDirectory, t)
+	r.addPending(runID, workingDirectory, installation, t)
 }
 
 // addPending records t as pending, evicting and recording the oldest
 // pending entry (input-only) first if the table is already at its cap.
-func (r *ToolCallRecorder) addPending(runID, workingDirectory string, t ToolUse) {
+func (r *ToolCallRecorder) addPending(runID, workingDirectory, installation string, t ToolUse) {
 	key := pendingKey{runID: runID, toolUseID: t.ID}
 	call := pendingCall{
 		tool:       t.Name,
@@ -322,6 +326,7 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory string, t ToolUse)
 		observedAt: time.Now(),
 
 		workingDirectory: workingDirectory,
+		installation:     installation,
 	}
 
 	var evictedKey pendingKey
@@ -866,6 +871,7 @@ func (r *ToolCallRecorder) LookupPending(toolUseID string) (commitpath.RelayedCa
 				Input:            append(json.RawMessage(nil), call.input...),
 				Truncated:        call.truncated,
 				ObservedAt:       call.observedAt,
+				Installation:     call.installation,
 			}, true
 		}
 	}

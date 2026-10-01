@@ -284,11 +284,52 @@ type RelayedCall struct {
 	Input            json.RawMessage
 	Truncated        bool
 	ObservedAt       time.Time
+	// Installation is the client installation whose request carried the
+	// call (ADR-0063); empty in the single-host shape.
+	Installation string
 }
 
 // Resolver finds a relayed, still-running tool call by its id.
 type Resolver interface {
 	LookupPending(toolUseID string) (RelayedCall, bool)
+}
+
+// ScopedResolver answers only the calls the given installation relayed. On
+// a hosted core every commit-path request carries its caller's verified
+// installation, and a call relayed for another installation (or for none) is
+// not found: both routes then refuse it exactly as they refuse an id that was
+// never relayed, so the refusal says nothing about whose call it was.
+func ScopedResolver(base Resolver, installation string) Resolver {
+	return scopedResolver{base: base, installation: installation}
+}
+
+type scopedResolver struct {
+	base         Resolver
+	installation string
+}
+
+func (s scopedResolver) LookupPending(toolUseID string) (RelayedCall, bool) {
+	call, ok := s.base.LookupPending(toolUseID)
+	if !ok || call.Installation == "" || call.Installation != s.installation {
+		return RelayedCall{}, false
+	}
+	return call, true
+}
+
+type resolverContextKey struct{}
+
+// WithResolver attaches the resolver a request's commit-path calls use.
+func WithResolver(ctx context.Context, r Resolver) context.Context {
+	return context.WithValue(ctx, resolverContextKey{}, r)
+}
+
+// ResolverFrom answers the request's resolver, or fallback when it carries
+// none (the single-host shape).
+func ResolverFrom(ctx context.Context, fallback Resolver) Resolver {
+	if r, ok := ctx.Value(resolverContextKey{}).(Resolver); ok && r != nil {
+		return r
+	}
+	return fallback
 }
 
 // Resolve is ADR-0059 decision 4's first gate: the id names a Bash tool call

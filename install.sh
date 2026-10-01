@@ -20,8 +20,8 @@
 #   2. Brings the stack up (`make start`, or $INNSEGL_INSTALL_START_CMD).
 #   3. Puts `innsegl-commit` on PATH (`make innsegl-install-signer`, or
 #      $INNSEGL_INSTALL_SIGNER_CMD).
-#   4. Writes the harness's MANAGED settings — a file users and agents cannot
-#      override — to the system path (macOS
+#   4. Only with --local-client: writes the harness's MANAGED settings — a
+#      file users and agents cannot override — to the system path (macOS
 #      `/Library/Application Support/ClaudeCode/managed-settings.json`,
 #      Linux `/etc/claude-code/managed-settings.json`), or wherever
 #      --managed-settings / $INNSEGL_INSTALL_MANAGED_SETTINGS names. It
@@ -35,6 +35,14 @@
 #   5. Links each DIR argument (`$INNSEGL_BIN_PATH link DIR`, or
 #      $INNSEGL_INSTALL_LINK_CMD).
 #   6. Prints the dashboard URL and the managed settings path.
+#
+# THIS IS THE SERVER INSTALLER (RM-285, #461, ADR-0063). The core runs on its
+# own host, and a client machine enrols with `innsegl connect`, which writes
+# that machine's managed settings pointing at its own local client service.
+# So by default this script does not write managed settings at all: the core
+# host is not where the harness runs. `--local-client` keeps the single-host
+# shape working — the harness on the same machine as the stack, talking to the
+# gateway directly — exactly as this script has always written it.
 #
 # `--dry-run` runs step 1 (so a missing prerequisite is still caught) and then
 # only computes and prints what steps 2-5 would do; nothing on disk changes.
@@ -60,7 +68,7 @@
 # removes it.
 #
 # USAGE
-#   install.sh [--dry-run] [--uninstall] [--uninstall-legacy]
+#   install.sh [--local-client] [--dry-run] [--uninstall] [--uninstall-legacy]
 #              [--managed-settings <path>] [--egress-control <file>] [DIR...]
 #
 # Every DIR becomes signable, the same as `$INNSEGL_BIN_PATH link DIR` run by
@@ -140,6 +148,7 @@ LEGACY_HOOK_SCRIPT="$ROOT/scripts/hooks/subagent-identity.sh"
 LEGACY_MCP_URL="${INNSEGL_INSTALL_LEGACY_MCP_URL:-http://127.0.0.1:28080/}"
 
 DRY_RUN=0
+LOCAL_CLIENT=0
 UNINSTALL=0
 PAUSE=0
 RESUME=0
@@ -149,14 +158,18 @@ DIRS=()
 
 usage() {
   cat <<'EOF'
-usage: install.sh [--dry-run] [--uninstall] [--uninstall-legacy] [--pause | --resume]
-                   [--managed-settings <path>] [--egress-control <file>]
-                   [DIR...]
+usage: install.sh [--local-client] [--dry-run] [--uninstall] [--uninstall-legacy]
+                   [--pause | --resume] [--managed-settings <path>]
+                   [--egress-control <file>] [DIR...]
 
-Brings the innsegl stack up, puts innsegl-commit on PATH, writes the
-harness's managed settings (gateway env, the PreToolUse and session hooks,
-the sandbox), and makes each DIR signable.
+Installs the innsegl server: brings the stack up, puts innsegl-commit on
+PATH, and makes each DIR signable. Client machines connect to it with
+`innsegl connect`, which writes their own managed settings.
 
+  --local-client         also make THIS machine a client, the single-host
+                         shape: write the harness's managed settings (gateway
+                         env, the PreToolUse and session hooks, the sandbox)
+                         pointing straight at the gateway here
   --dry-run              print what would change; touch nothing
   --uninstall             remove exactly what this installer added
   --uninstall-legacy      also remove the OLD hook-and-MCP wiring (opt-in)
@@ -174,6 +187,7 @@ parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --dry-run) DRY_RUN=1; shift ;;
+      --local-client) LOCAL_CLIENT=1; shift ;;
       --uninstall) UNINSTALL=1; shift ;;
       --uninstall-legacy) UNINSTALL_LEGACY=1; shift ;;
       --pause) PAUSE=1; shift ;;
@@ -928,7 +942,8 @@ print_finish() {
   # opened at the IP literal cannot complete a passkey ceremony against an
   # RP ID of "localhost" at all; this is the address that actually works.
   local dashboard="http://localhost:8082/"
-  cat <<EOF
+  if [ "$LOCAL_CLIENT" -eq 1 ]; then
+    cat <<EOF
 
 Ready. Managed settings:
   $MANAGED_SETTINGS
@@ -938,6 +953,20 @@ Dashboard:
 Claude Code's model traffic now runs through the gateway at $GATEWAY_URL,
 and an agent's git commit in a linked repository is signed automatically.
 EOF
+  else
+    cat <<EOF
+
+Ready. The server is up; no managed settings were written on this machine.
+Dashboard:
+  $dashboard
+
+To connect a client machine, mint a token here:
+  innsegl accounts enrol-token --account <id> --by <user> --repos <a,b|*>
+then, on that machine:
+  innsegl connect https://<core-name>:28095 --token <ie_...> --ca <copy of $CA_PEM>
+To use the harness on this machine too, run install.sh --local-client.
+EOF
+  fi
   # Only while no account exists yet (scripts/setup-link.sh asks the API
   # itself, GET /api/v1/auth/setup) — a redeploy onto a database that
   # already has one prints nothing more here. A failure to ask is reported
@@ -1090,6 +1119,11 @@ main() {
     exit 0
   fi
 
+  if [ -n "$EGRESS_FILE" ] && [ "$LOCAL_CLIENT" -ne 1 ]; then
+    echo "install.sh: --egress-control shapes the managed settings, which only --local-client writes" >&2
+    exit 2
+  fi
+
   check_prereqs
 
   echo "==> bringing the stack up"
@@ -1098,16 +1132,22 @@ main() {
   echo "==> putting innsegl-commit on PATH"
   run_step "$SIGNER_CMD"
 
-  echo "==> building the hook binary"
+  echo "==> building the innsegl binary"
   run_step "$BUILD_CMD"
-  check_hook_runs
 
-  echo "==> checking the gateway answers"
-  check_gateway_answers
+  if [ "$LOCAL_CLIENT" -eq 1 ]; then
+    check_hook_runs
 
-  echo "==> writing the managed settings"
-  connect_managed_settings install
-  verify_harness_loaded
+    echo "==> checking the gateway answers"
+    check_gateway_answers
+
+    echo "==> writing the managed settings (--local-client)"
+    connect_managed_settings install
+    verify_harness_loaded
+  else
+    echo "==> not writing managed settings: this is the server install"
+    echo "    (client machines run \`innsegl connect\`; --local-client makes this machine one too)"
+  fi
 
   if [ "${#DIRS[@]}" -gt 0 ]; then
     echo "==> linking projects"

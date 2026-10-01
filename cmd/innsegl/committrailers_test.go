@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/commitpath"
+	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/signing"
 )
@@ -277,5 +278,37 @@ func TestCommitTrailersHandlerDoesNotDuplicateTrailersAlreadyPresent(t *testing.
 	}
 	if n := strings.Count(resp.Message, "Agent-Run: "); n != 1 {
 		t.Errorf("Agent-Run appears %d times, want 1:\n%s", n, resp.Message)
+	}
+}
+
+// RM-309 (#489): on a hosted core, a commit-path request scoped to one
+// installation gets another installation's tool call refused exactly as an
+// unknown call, and its own call answered.
+func TestCommitPathIsScopedToTheCallingInstallation(t *testing.T) {
+	res := newCTResolver()
+	res.relay(ctRunID, time.Now())
+	call := res.calls[ctToolUseID]
+	call.Installation = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	res.calls[ctToolUseID] = call
+
+	h := scopeCommitPath(res, commitTrailersHandler(res, ctClaimFor(ctClaim, nil), ctNow(time.Now())))
+	do := func(installation, toolUseID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(gateway.WithInstallation(t.Context(), installation),
+			http.MethodPost, "/_gateway/commit-trailers", bytes.NewReader(ctReqJSON(t, toolUseID, "fix: thing\n")))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if own := do("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ctToolUseID); own.Code != http.StatusOK {
+		t.Fatalf("the relaying installation: %d %s", own.Code, own.Body.String())
+	}
+	foreign := do("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ctToolUseID)
+	unknown := do("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "toolu_ffffffffffffffff")
+	if foreign.Code != unknown.Code {
+		t.Fatalf("status: another installation's call %d, an unknown call %d", foreign.Code, unknown.Code)
+	}
+	if strings.Replace(ctErrorBody(t, foreign), ctToolUseID, "X", 1) != strings.Replace(ctErrorBody(t, unknown), "toolu_ffffffffffffffff", "X", 1) {
+		t.Errorf("refusals differ:\n%s\n%s", foreign.Body.String(), unknown.Body.String())
 	}
 }

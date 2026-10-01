@@ -155,7 +155,9 @@ func SignPayloadForGateway(
 	// commitpath.Resolve is the shared contract both the trailers endpoint
 	// and this one call — a stale, forged or missing id is refused here,
 	// before anything else about the payload is even read.
-	relayed, err := commitpath.Resolve(cfg.resolver, req.ToolUseID, cfg.now())
+	// A hosted core scopes the lookup to the caller's installation (#489):
+	// another installation's call is not found, and refused as unknown.
+	relayed, err := commitpath.Resolve(commitpath.ResolverFrom(ctx, cfg.resolver), req.ToolUseID, cfg.now())
 	if err != nil {
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, "", "%w", err)
 	}

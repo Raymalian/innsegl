@@ -49,9 +49,10 @@ import (
 // (E17): what the harness and git run, each a client of the core. `link`
 // (RM-245, #390) installs the prepare-commit-msg hook `git-hook` and `sign`
 // depend on into a repository, the piece `init`'s own opt-in pre-push hook
-// does not cover.
+// does not cover. `connect` and `client` (RM-285, #461, ADR-0063) belong to an
+// enrolled client machine: enrolment, and the service that holds its key.
 var documentedSubcommands = []string{
-	"accounts", "admin-credential", "api", "canary", "gateway", "git-hook", "hook", "init", "link", "migrate-schema",
+	"accounts", "admin-credential", "api", "canary", "client", "connect", "gateway", "git-hook", "hook", "init", "link", "migrate-schema",
 	"reap", "reconcile", "resolve-alert", "retire", "seal", "serve", "sign", "verify",
 }
 

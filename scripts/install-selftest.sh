@@ -38,6 +38,11 @@
 #       model hosts (api.anthropic.com and the configured upstream) removed
 #     - a second run is idempotent
 #
+#   The server installer (#461): install.sh writes managed settings only with
+#   --local-client, the single-host shape every case above runs under. A run
+#   without it brings the server up, links, and writes no managed settings;
+#   --egress-control without it is refused, since it shapes only those.
+#
 #   --uninstall-legacy is also covered: it is the only mode that touches the
 #   OLD wiring (the six subagent-identity.sh hook entries and the `innsegl`
 #   MCP entry), and only ever removes it — never installs it, never runs
@@ -166,7 +171,7 @@ chmod +x "$STUB_BIN"
 [ -n "$STUB_START" ] && [ -n "$STUB_SIGNER" ] && [ -n "$STUB_LINK" ] && [ -n "$STUB_BIN" ] && [ -n "$STUB_SETUP_LINK" ] \
   || { echo "install-selftest: a stub command came out empty — refusing to run install.sh at all" >&2; exit 1; }
 
-run_install() {
+run_install_server() {
   local home="$1" pathdir="$2"
   shift 2
   HOME="$home" PATH="$pathdir" \
@@ -176,6 +181,14 @@ run_install() {
     INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
     INNSEGL_BIN_PATH="$STUB_BIN" \
     "$BASH_BIN" "$INSTALL" "$@"
+}
+
+# The managed-settings cases below are the single-host shape, which install.sh
+# keeps behind --local-client since it became the server installer (#461).
+run_install() {
+  local home="$1" pathdir="$2"
+  shift 2
+  run_install_server "$home" "$pathdir" --local-client "$@"
 }
 
 # check.py holds every JSON assertion below: two generic, path-based modes
@@ -425,7 +438,7 @@ out7g="$(HOME="$home7g" PATH="$TOOLBIN" \
   INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
   INNSEGL_BIN_PATH="$STUB_BIN" \
   INNSEGL_INSTALL_GATEWAY_PROBE_CMD=false INNSEGL_INSTALL_GATEWAY_TRIES=1 \
-  "$BASH_BIN" "$INSTALL" --managed-settings "$ms7g" 2>&1)"
+  "$BASH_BIN" "$INSTALL" --local-client --managed-settings "$ms7g" 2>&1)"
 rc7g=$?
 if [ "$rc7g" -ne 0 ] && [ ! -e "$ms7g" ] && printf '%s' "$out7g" | grep -q 'gateway'; then
   ok "ENF-007 a gateway that does not answer stops the install before the settings are written"
@@ -449,7 +462,7 @@ out8s="$(HOME="$home8s" PATH="$TOOLBIN" \
   INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
   INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
   INNSEGL_BIN_PATH="$stale_bin" \
-  "$BASH_BIN" "$INSTALL" --managed-settings "$ms8s" 2>&1)"
+  "$BASH_BIN" "$INSTALL" --local-client --managed-settings "$ms8s" 2>&1)"
 rc8s=$?
 if [ "$rc8s" -ne 0 ] && [ ! -e "$ms8s" ] && printf '%s' "$out8s" | grep -q 'hook'; then
   ok "ENF-008 a hook binary that does not run stops the install before the settings are written"
@@ -476,7 +489,7 @@ out8="$(HOME="$home8" PATH="$TOOLBIN" \
   INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
   INNSEGL_BIN_PATH="$STUB_BIN" \
   INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
-  "$BASH_BIN" "$INSTALL" --managed-settings "$ms8" --egress-control "$allowlist8")"
+  "$BASH_BIN" "$INSTALL" --local-client --managed-settings "$ms8" --egress-control "$allowlist8")"
 rc8=$?
 if [ "$rc8" -eq 0 ] \
    && [ "$(check json-equal "$ms8" sandbox.network.strictAllowlist true)" = ok ] \
@@ -495,7 +508,7 @@ out8b="$(HOME="$home8" PATH="$TOOLBIN" \
   INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
   INNSEGL_BIN_PATH="$STUB_BIN" \
   INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
-  "$BASH_BIN" "$INSTALL" --managed-settings "$ms8" --egress-control "$allowlist8" 2>&1)"
+  "$BASH_BIN" "$INSTALL" --local-client --managed-settings "$ms8" --egress-control "$allowlist8" 2>&1)"
 rc8b=$?
 if [ "$rc8b" -eq 0 ] && printf '%s' "$out8b" | grep -qi 'already up to date'; then
   ok "EGR-001 a second run with the same allowlist is idempotent"
@@ -517,7 +530,7 @@ egress_run() {
     INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
     INNSEGL_BIN_PATH="$STUB_BIN" \
     INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
-    "$BASH_BIN" "$INSTALL" --managed-settings "$ms8c" "$@" 2>&1
+    "$BASH_BIN" "$INSTALL" --local-client --managed-settings "$ms8c" "$@" 2>&1
 }
 out8c="$(egress_run --egress-control "$allowlist8")"; rc8c=$?
 if [ "$rc8c" -eq 0 ] \
@@ -667,6 +680,25 @@ if [ "$rc12" -ne 0 ] && printf '%s' "$out12" | grep -q 'nothing is paused'; then
   ok "--resume with nothing paused refuses and says so"
 else
   bad "--resume with nothing paused did not refuse" "exit=$rc12"$'\n'"$out12"
+fi
+
+# --- the server installer writes no managed settings (#461) ---------------
+home13="$WORK/home-server"; mkdir -p "$home13"
+ms13="$home13/managed-settings.json"
+: > "$RECORD/link"
+out13="$(run_install_server "$home13" "$TOOLBIN" --managed-settings "$ms13" "$home13/project" 2>&1)"; rc13=$?
+if [ "$rc13" -eq 0 ] && [ ! -e "$ms13" ] \
+   && grep -q "project" "$RECORD/link" \
+   && printf '%s' "$out13" | grep -q 'innsegl connect'; then
+  ok "a server-only install brings the stack up and links, and writes no managed settings"
+else
+  bad "a server-only install wrote managed settings, or did not finish" "exit=$rc13 file=$( [ -e "$ms13" ] && echo present || echo absent )"$'\n'"$out13"
+fi
+out14="$(run_install_server "$home13" "$TOOLBIN" --managed-settings "$ms13" --egress-control "$WORK/allowlist.txt" 2>&1)"; rc14=$?
+if [ "$rc14" -ne 0 ] && [ ! -e "$ms13" ] && printf '%s' "$out14" | grep -q -- '--local-client'; then
+  ok "--egress-control without --local-client is refused: there are no managed settings to shape"
+else
+  bad "--egress-control without --local-client was not refused" "exit=$rc14"$'\n'"$out14"
 fi
 
 echo

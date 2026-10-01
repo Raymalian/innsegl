@@ -1059,6 +1059,20 @@ services:
       INNSEGL_GATEWAY_CA_KEY_DIR: /run/innsegl/gateway-ca-key
       INNSEGL_GATEWAY_CA_CERT_DIR: /run/innsegl/gateway-ca
 
+      # The hosted shape (#462). The host address the gateway and dashboard are
+      # published on, passed in so the process can refuse to start exposed
+      # without client authentication (cmd/innsegl/exposure.go). Unset means
+      # loopback, which is also the publish lines' default.
+      INNSEGL_BIND: ${INNSEGL_BIND:-}
+      # Extra DNS names the gateway's certificate is issued for.
+      INNSEGL_GATEWAY_CERT_NAMES: ${INNSEGL_GATEWAY_CERT_NAMES:-}
+      # `spiffe` requires a client SVID on the gateway. Required whenever
+      # INNSEGL_BIND is not loopback.
+      INNSEGL_GATEWAY_CLIENT_AUTH: ${INNSEGL_GATEWAY_CLIENT_AUTH:-}
+      # The auth-writer DSN, for enrolment: the same credential and role the
+      # API holds as INNSEGL_API_AUTH_DSN, never the appender's or the reader's.
+      INNSEGL_GATEWAY_ACCOUNTS_DSN: postgres://innsegl_authwriter:${INNSEGL_LEDGER_AUTHWRITER_PASSWORD:-innsegl-compose-authwriter}@postgres:5432/innsegl?sslmode=disable
+
       # Companion subcommands to run inside this process (serve.go's -also).
       # Subcommand names, not container names: `serve` refuses a name it does
       # not recognise at parse time rather than starting and never running it.
@@ -1212,7 +1226,9 @@ services:
       # YAML alias into a mapping key the way ${...} nests here.
       - ${INNSEGL_GATEWAY_CA_HOST_DIR:-${HOME}/.innsegl/ca}:/run/innsegl/gateway-ca
     ports:
-      # Loopback only, like every other published port in this deployment.
+      # Loopback unless INNSEGL_BIND says otherwise, and INNSEGL_BIND moves
+      # only the gateway and the dashboard. Every other line here stays on
+      # loopback.
       #
       # 28080 and not 8080 on the HOST side. The container keeps 8080 — inside
       # its own network nothing else is there — but a published 8080 is a
@@ -1229,12 +1245,13 @@ services:
       - "127.0.0.1:${INNSEGL_MCP_PORT:-28080}:8080"
       - "127.0.0.1:${INNSEGL_MCP_HEALTH_PORT:-28081}:8081"
       # The gateway (ADR-0060): a fifth companion of this same process, not a
-      # service of its own. Loopback only, like every other line here — the
+      # service of its own. Loopback by default (INNSEGL_BIND moves it; the
+      # process refuses a non-loopback bind without client auth) — the
       # gateway is what sees a model provider's login credential and the full
       # content of every agent's conversation, in transit, on every request,
       # and this publish line is the entire host-reachability guarantee for
       # it (guarded by GW-005).
-      - "127.0.0.1:${INNSEGL_GATEWAY_PORT:-28095}:8095"
+      - "${INNSEGL_BIND:-127.0.0.1}:${INNSEGL_GATEWAY_PORT:-28095}:8095"
       # #170's identity lifecycle. Published only when INNSEGL_MCP_ADMIN_LISTEN
       # is set on the service below; the mapping is harmless when it is not,
       # because nothing is listening on 8090 in that case.
@@ -1856,7 +1873,7 @@ services:
     labels:
       dev.innsegl.component: dashboard
     ports:
-      - "127.0.0.1:${INNSEGL_DASHBOARD_PORT:-8082}:8080"
+      - "${INNSEGL_BIND:-127.0.0.1}:${INNSEGL_DASHBOARD_PORT:-8082}:8080"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/ >/dev/null || exit 1"]
       interval: 10s

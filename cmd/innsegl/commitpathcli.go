@@ -80,8 +80,22 @@ func mountCommitPath(mux *http.ServeMux, resolver commitpath.Resolver) {
 	if resolver == nil {
 		return
 	}
-	mux.Handle(commitpath.TrailersPath, commitTrailersHandler(resolver, mcp.CommitClaimForRun, time.Now))
-	mux.Handle(commitpath.SignPath, commitSignHandler(mcp.SignPayloadForGateway))
+	mux.Handle(commitpath.TrailersPath, scopeCommitPath(resolver,
+		commitTrailersHandler(resolver, mcp.CommitClaimForRun, time.Now)))
+	mux.Handle(commitpath.SignPath, scopeCommitPath(resolver, commitSignHandler(mcp.SignPayloadForGateway)))
+}
+
+// scopeCommitPath scopes a commit-path request to the installation the
+// client guard verified (hosted shape, ADR-0063): the request then resolves
+// only tool calls that installation relayed (#489). With no installation on
+// the request (single-host), it passes through unchanged.
+func scopeCommitPath(resolver commitpath.Resolver, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if installation, ok := gateway.InstallationFromContext(r.Context()); ok && installation != "" {
+			r = r.WithContext(commitpath.WithResolver(r.Context(), commitpath.ScopedResolver(resolver, installation)))
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // mountTelemetry serves the harness's OTLP telemetry receiver (the second

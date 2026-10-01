@@ -1314,3 +1314,16 @@ func TestBaselineSnapshotFiresOnTheRunsFirstRequest(t *testing.T) {
 		t.Errorf("baseline = (%q, %q), want (/w/repo, %s)", witness.lastBaselineDir, witness.lastBaselineRun, recTestRunID)
 	}
 }
+
+// RM-309 (#489): a relayed tool call remembers which installation's request
+// carried it, so the commit path can refuse another installation's call.
+func TestRecorderKeepsTheInstallationThatRelayedATool(t *testing.T) {
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: (&fakeRecordCalls{}).fn})
+	ctx := WithInstallation(WithRunID(context.Background(), recTestRunID), "0123456789abcdef0123456789abcdef")
+	rec.OnToolUseContext(ctx, recToolUse("toolu_inst", "Bash", `{"command":"git commit -m x"}`))
+
+	got, ok := rec.LookupPending("toolu_inst")
+	if !ok || got.Installation != "0123456789abcdef0123456789abcdef" {
+		t.Errorf("LookupPending = %+v, %v; want the relaying installation", got, ok)
+	}
+}
