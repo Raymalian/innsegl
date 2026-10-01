@@ -168,6 +168,7 @@ func TestGREC005AgentMessagesEndToEndThroughRealOpenGateway(t *testing.T) {
 
 	conv := &grecConversation{}
 	conv.addUserBrief(t, repo, brief)
+	stateGatewayDirectory(t, addr, client, session, "", repo)
 
 	firstResp := sendAndReadGREC(t, addr, client, session, conv.body(t))
 	runID := grecRunID(t, f.dsn, session)

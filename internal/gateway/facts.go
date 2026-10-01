@@ -22,14 +22,11 @@ package gateway
 //     prompt in reminders too, and stripping them is what recovers the
 //     byte-for-byte original text ADR-0058 decision 3's exact-equality
 //     link needs (tree.go).
-//   - WorkingDirectory is read from any message before the first assistant turn (see parseRequestFacts), before
-//     stripping: Claude Code states it inside its own environment
-//     statement, itself inside a <system-reminder> block. The exact label
-//     this build recognises is pinned by
-//     testdata/harness/claude-code-2.1/bodies/model-request-body.json
-//     (GID-006) -- a synthetic-but-realistic fixture, never a real path of
-//     any machine, kept in its own bodies/ subdirectory so GW-012's fixture
-//     walk (harness_test.go) never mistakes it for a path-and-headers shape.
+//   - WorkingDirectory is NOT read from the body: the conversation's prose
+//     is not a structured channel, and reading it broke whenever the
+//     harness moved the statement (a session resumed after a summary
+//     states it only mid-conversation). The identity guard sets it from
+//     the session hook's own report (workspaceregistry.go).
 //   - FirstAssistant is the first assistant message's content, canonically
 //     encoded (internal/event.Canonicalize, RFC 8785) so two requests
 //     carrying the same first turn -- the same conversation, replayed --
@@ -77,16 +74,6 @@ const (
 	systemReminderOpen  = "<system-reminder>"
 	systemReminderClose = "</system-reminder>"
 )
-
-// workingDirectoryLabels are the environment-statement lines this build
-// recognises, tried in this order. Pinned against
-// testdata/harness/claude-code-2.1/model-request-body.json (GID-006); a
-// harness version stating this differently is a fixture and a label to add
-// here, never a reason to parse more loosely.
-var workingDirectoryLabels = []string{
-	"Primary working directory:",
-	"Working directory:",
-}
 
 // ExtractRequestFacts reads r's body ONCE, bounded by
 // maxRequestFactsBodyBytes, and returns the RequestFacts it found -- empty,
@@ -139,7 +126,7 @@ type rawMessage struct {
 // rawContentBlock is one content block. Only the fields this extractor
 // uses are read; an unrecognised block type is kept (for FirstAssistant's
 // canonical encoding, which re-serializes the whole content value) but
-// contributes nothing to Brief, WorkingDirectory or ToolResultIDs.
+// contributes nothing to Brief or ToolResultIDs.
 type rawContentBlock struct {
 	Type      string `json:"type"`
 	Text      string `json:"text"`
@@ -182,8 +169,7 @@ func joinText(blocks []rawContentBlock) string {
 // scanner takes.
 func parseRequestFacts(buf []byte) RequestFacts {
 	var body struct {
-		System   json.RawMessage `json:"system"`
-		Messages []rawMessage    `json:"messages"`
+		Messages []rawMessage `json:"messages"`
 	}
 	if err := json.Unmarshal(buf, &body); err != nil {
 		return RequestFacts{}
@@ -199,35 +185,6 @@ func parseRequestFacts(buf []byte) RequestFacts {
 			facts.Brief = stripSystemReminders(joinText(blocks))
 		}
 		break // only the FIRST user message names the brief.
-	}
-
-	// The working directory is stated in the conversation's opening, but not
-	// necessarily in the first user message: Claude Code 2.1 sends its
-	// environment statement as a separate message with role "system", after
-	// the prompt (measured 2026-09-29, when a live run was refused because
-	// only the first user message was read). Every message before the first
-	// assistant turn is read, whatever its role; nothing after it, so a path
-	// that only appears later (in a tool result, say) never becomes the
-	// agent's workspace.
-	for _, m := range body.Messages {
-		if m.Role == "assistant" {
-			break
-		}
-		if blocks, ok := contentBlocks(m.Content); ok {
-			if dir := extractWorkingDirectory(joinText(blocks)); dir != "" {
-				facts.WorkingDirectory = dir
-				break
-			}
-		}
-	}
-	// A session resumed after its context was summarised opens with the
-	// summary, and the harness then states its environment only in the
-	// top-level system prompt. The opening stays authoritative; the system
-	// prompt is read only when the opening names no directory.
-	if facts.WorkingDirectory == "" && len(body.System) > 0 {
-		if blocks, ok := contentBlocks(body.System); ok {
-			facts.WorkingDirectory = extractWorkingDirectory(joinText(blocks))
-		}
 	}
 
 	for _, m := range body.Messages {
@@ -269,23 +226,6 @@ func canonicalizeContent(content json.RawMessage) ([]byte, bool) {
 		return nil, false
 	}
 	return canon, true
-}
-
-// extractWorkingDirectory scans text line by line for one of
-// workingDirectoryLabels and returns what follows it, trimmed. text is the
-// UNSTRIPPED first user message, since the label lives inside a
-// <system-reminder> block. Returns "" if no recognised label is found --
-// RequestFacts.WorkingDirectory's own doc comment: "Empty when absent."
-func extractWorkingDirectory(text string) string {
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
-		for _, label := range workingDirectoryLabels {
-			if rest, ok := strings.CutPrefix(line, label); ok {
-				return strings.TrimSpace(rest)
-			}
-		}
-	}
-	return ""
 }
 
 // stripSystemReminders removes every <system-reminder>...</system-reminder>

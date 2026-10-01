@@ -30,7 +30,7 @@ func isHelp(args []string) bool {
 }
 
 const (
-	hookUsage    = "usage: innsegl hook pre-tool-use\n"
+	hookUsage    = "usage: innsegl hook pre-tool-use | session\n"
 	gitHookUsage = "usage: innsegl git-hook prepare-commit-msg <message file> [<source> [<sha>]]\n"
 	signUsage    = "usage: innsegl sign --status-fd=<fd> -bsau <key>   (run by git as gpg.x509.program)\n"
 )
@@ -39,6 +39,9 @@ func hookCommand(args []string, stdout, stderr io.Writer) int {
 	if isHelp(args) {
 		fprintf(stdout, hookUsage)
 		return exitOK
+	}
+	if len(args) == 1 && args[0] == "session" {
+		return runHookSession(os.Stdin, stdout, stderr, os.Getenv, postToGateway(os.Getenv))
 	}
 	if len(args) != 1 || args[0] != "pre-tool-use" {
 		fprintf(stderr, hookUsage)

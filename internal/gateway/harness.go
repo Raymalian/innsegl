@@ -126,6 +126,11 @@ func recogniseClaudeCode21(r *http.Request) (Identification, bool, string) {
 // before it is ever marked.
 func IsSessionID(s string) bool { return isUUID(s) }
 
+// IsAgentID reports whether s has the shape of a subagent's own id (see
+// isAgentID). The session-workspace endpoint checks a hook's agent_id with
+// it, the same check the agent-id header gets.
+func IsAgentID(s string) bool { return isAgentID(s) }
+
 // isAgentID reports whether s has the shape of a subagent's own id: one to
 // 64 lowercase letters, digits and hyphens, starting with a letter or digit.
 // Claude Code 2.1.283 sends "a" plus 16 hex digits (measured 2026-09-29), and

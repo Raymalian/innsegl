@@ -101,6 +101,8 @@ type grecConversation struct {
 
 func (c *grecConversation) addUserBrief(t *testing.T, workdir, brief string) {
 	t.Helper()
+	// The directory is stated in the prose too, as the harness does; the
+	// gateway ignores it and reads stateGatewayDirectory's statement.
 	text := "<system-reminder>\n# Environment\nPrimary working directory: " + workdir +
 		"\n</system-reminder>\n\n" + brief
 	c.messages = append(c.messages, grecMessage{Role: "user", Content: []grecBlock{{Type: "text", Text: text}}})
@@ -375,6 +377,7 @@ func TestGREC001GREC002GREC004EndToEndThroughRealOpenGateway(t *testing.T) {
 	const session = "d5a6a1a0-0000-4000-8000-0000000003ec"
 	conv := &grecConversation{}
 	conv.addUserBrief(t, repo, "please clean up the repository")
+	stateGatewayDirectory(t, addr, client, session, "", repo)
 
 	// Request 1: registers the run; the reply carries three tool_use
 	// blocks this recorder now holds pending.
@@ -538,6 +541,7 @@ func TestGREC003EndToEndTheToolCallCarriesTheWorkspaceTreeHashThroughRealOpenGat
 	const session = "d5a6a1a0-0000-4000-8000-0000000003ee"
 	conv := &grecConversation{}
 	conv.addUserBrief(t, repo, "write two files")
+	stateGatewayDirectory(t, addr, client, session, "", repo)
 	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 	runID := grecRunID(t, f.dsn, session)
 
@@ -606,6 +610,7 @@ func TestGREC007EndToEndATruncatedResultIsRecordedWithTheTruncationStatedThrough
 	const session = "d5a6a1a0-0000-4000-8000-0000000003ef"
 	conv := &grecConversation{}
 	conv.addUserBrief(t, repo, "cat the huge log")
+	stateGatewayDirectory(t, addr, client, session, "", repo)
 	sendAndDrainGREC(t, addr, client, session, conv.body(t))
 	runID := grecRunID(t, f.dsn, session)
 

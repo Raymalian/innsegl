@@ -8,7 +8,9 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // hopByHopHeaders are stripped before forwarding, per RFC 7230 §6.1 --
@@ -82,6 +84,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, g := range guards {
 		next, refusal := g.Check(r)
 		if refusal != nil {
+			if refusal.RetryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(int((refusal.RetryAfter+time.Second-1)/time.Second)))
+			}
 			writeGatewayError(w, refusal.Status, refusal.Reason)
 			return
 		}

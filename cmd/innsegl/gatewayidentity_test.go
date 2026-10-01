@@ -350,6 +350,7 @@ func gwIdentityMessageBody(t *testing.T, workdir, brief, assistant string) strin
 // header, harness.go's own rule).
 func sendGWIdentityMessage(t *testing.T, addr string, client *http.Client, sessionID, agentID, workdir, brief, assistant string) *http.Response {
 	t.Helper()
+	stateGatewayDirectory(t, addr, client, sessionID, agentID, workdir)
 	body := gwIdentityMessageBody(t, workdir, brief, assistant)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
 		"https://"+addr+"/v1/messages", strings.NewReader(body))
@@ -365,6 +366,31 @@ func sendGWIdentityMessage(t *testing.T, addr string, client *http.Client, sessi
 		t.Fatalf("request through the gateway: %v", err)
 	}
 	return resp
+}
+
+// stateGatewayDirectory states workdir for sessionID (and agentID, when a
+// subagent) to the gateway's session-workspace endpoint, exactly as `innsegl
+// hook session` does before every user turn and subagent. The gateway
+// registers a new run from this statement and from nothing else.
+func stateGatewayDirectory(t *testing.T, addr string, client *http.Client, sessionID, agentID, workdir string) {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"session_id": sessionID, "agent_id": agentID, "cwd": workdir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		"https://"+addr+gatewaySessionWorkspacePath, strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("stating the directory: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("stating the directory: status %d, want 204", resp.StatusCode)
+	}
 }
 
 // sendAndDrainGWIdentityMessage sends one message and reads its reply to
@@ -840,7 +866,7 @@ func sessionEndTestHandler(t *testing.T) (http.HandlerFunc, *gateway.SessionEndS
 	t.Helper()
 	signals := gateway.NewSessionEndSignals(0)
 	ender := gateway.NewSessionEnder(signals, noopMappingStore{}, noopRegistrar{}, time.Minute, nil)
-	return sessionEndHandler(ender, newTestSessionEndRateLimiter(t), newServeLog(io.Discard)), signals
+	return sessionEndHandler(ender, newTestSessionEndRateLimiter(t), localCallers{}, newServeLog(io.Discard)), signals
 }
 
 func sessionEndTestRequest(t *testing.T, method, remoteAddr, body string) *http.Request {
@@ -911,7 +937,7 @@ func TestSessionEndHandlerAcceptsAWellFormedLoopbackSignal(t *testing.T) {
 	}
 }
 
-// IPv6 loopback (::1) is loopback too -- isLoopbackRemoteAddr must not be a
+// IPv6 loopback (::1) is loopback too -- localCallers must not be a
 // literal "127.0.0.1" string check.
 func TestSessionEndHandlerAcceptsIPv6Loopback(t *testing.T) {
 	h, signals := sessionEndTestHandler(t)
@@ -924,26 +950,6 @@ func TestSessionEndHandlerAcceptsIPv6Loopback(t *testing.T) {
 	}
 	if got := signals.Len(); got != 1 {
 		t.Errorf("Len() = %d, want 1", got)
-	}
-}
-
-func TestIsLoopbackRemoteAddr(t *testing.T) {
-	for _, tc := range []struct {
-		addr string
-		want bool
-	}{
-		{"127.0.0.1:1234", true},
-		{"127.0.0.1", true},
-		{"[::1]:1234", true},
-		{"::1", true},
-		{"203.0.113.7:1234", false},
-		{"10.0.0.5:1234", false},
-		{"not-an-address", false},
-		{"", false},
-	} {
-		if got := isLoopbackRemoteAddr(tc.addr); got != tc.want {
-			t.Errorf("isLoopbackRemoteAddr(%q) = %v, want %v", tc.addr, got, tc.want)
-		}
 	}
 }
 

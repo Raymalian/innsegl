@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/ledger"
+	"innsegl.dev/innsegl/internal/mcp"
 )
 
 // ---------------------------------------------------------------------------
@@ -31,12 +33,34 @@ import (
 // ---------------------------------------------------------------------------
 
 type fakeRunStates struct {
-	mu     sync.Mutex
-	states map[string]string
-	err    error
+	mu            sync.Mutex
+	states        map[string]string
+	registrations map[string]RunRegistration
+	err           error
 }
 
-func newFakeRunStates() *fakeRunStates { return &fakeRunStates{states: map[string]string{}} }
+func newFakeRunStates() *fakeRunStates {
+	return &fakeRunStates{states: map[string]string{}, registrations: map[string]RunRegistration{}}
+}
+
+func (f *fakeRunStates) register(runID string, reg RunRegistration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.registrations[runID] = reg
+}
+
+func (f *fakeRunStates) RunRegistration(_ context.Context, runID string) (RunRegistration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return RunRegistration{}, f.err
+	}
+	reg, ok := f.registrations[runID]
+	if !ok {
+		return RunRegistration{}, errors.New("no registration for " + runID)
+	}
+	return reg, nil
+}
 
 func (f *fakeRunStates) set(runID, state string) {
 	f.mu.Lock()
@@ -83,8 +107,13 @@ type identityFixture struct {
 	workspaces        *fakeWorkspaceResolver
 	runStates         *fakeRunStates
 	sessionEndSignals *SessionEndSignals
+	sessionWorkspaces *SessionWorkspaces
 	guard             *IdentityGuard
 }
+
+// fixtureDirectory is what the session hook stated for session "s1" in
+// every fixture: the directory a new run is registered from.
+const fixtureDirectory = "/workspace/id-test"
 
 func newIdentityFixture(t *testing.T) *identityFixture {
 	t.Helper()
@@ -95,7 +124,9 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 		workspaces:        &fakeWorkspaceResolver{ws: Workspace{Repo: "acme/id-test", Branch: "main", Task: "task-1"}},
 		runStates:         newFakeRunStates(),
 		sessionEndSignals: NewSessionEndSignals(0),
+		sessionWorkspaces: NewSessionWorkspaces(0),
 	}
+	f.sessionWorkspaces.Record("s1", "", fixtureDirectory)
 	g, err := NewIdentityGuard(IdentityGuardConfig{
 		Mappings:          f.mappings,
 		Tree:              f.tree,
@@ -104,6 +135,7 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 		Workspaces:        f.workspaces,
 		RunStates:         f.runStates,
 		SessionEndSignals: f.sessionEndSignals,
+		SessionWorkspaces: f.sessionWorkspaces,
 		Now:               func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
@@ -261,6 +293,7 @@ func TestIdentityGuardRestoresALapsedRun(t *testing.T) {
 		t.Fatalf("seed Insert: %v", err)
 	}
 	f.runStates.set("run-restore", ledger.RunLapsed)
+	f.runStates.register("run-restore", RunRegistration{AgentType: mainAgentID, TaskID: "task-1", Repo: "acme/id-test"})
 
 	r2, refusal := f.guard.Check(identityRequest(t, id, "hello", "hi"))
 	if refusal != nil {
@@ -403,6 +436,8 @@ func TestIdentityGuardRegistersAForkWithForkedFromRunID(t *testing.T) {
 	f.runStates.set("run-origin", ledger.RunActive)
 
 	forked := Identification{SessionID: "s-forked", AgentID: mainAgentID}
+	// A forked session's own SessionStart (source "fork") states its directory.
+	f.sessionWorkspaces.Record(forked.SessionID, "", fixtureDirectory)
 	r2, refusal := f.guard.Check(identityRequest(t, forked, "hello", "hi"))
 	if refusal != nil {
 		t.Fatalf("refused: %+v", refusal)
@@ -607,6 +642,7 @@ func TestNewIdentityGuardRefusesAnIncompleteConfiguration(t *testing.T) {
 		return IdentityGuardConfig{
 			Mappings: &fakeMappingStore{}, Tree: &fakeTreeLinker{}, Policy: NewPolicy(),
 			Registrar: &fakeRegistrar{}, Workspaces: &fakeWorkspaceResolver{}, RunStates: newFakeRunStates(),
+			SessionWorkspaces: NewSessionWorkspaces(0),
 		}
 	}
 	for _, tc := range []struct {
@@ -619,6 +655,7 @@ func TestNewIdentityGuardRefusesAnIncompleteConfiguration(t *testing.T) {
 		{"no Registrar", func(c *IdentityGuardConfig) { c.Registrar = nil }},
 		{"no WorkspaceResolver", func(c *IdentityGuardConfig) { c.Workspaces = nil }},
 		{"no RunStateReader", func(c *IdentityGuardConfig) { c.RunStates = nil }},
+		{"no SessionWorkspaces", func(c *IdentityGuardConfig) { c.SessionWorkspaces = nil }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := complete()
@@ -634,6 +671,7 @@ func TestNewIdentityGuardAcceptsAMinimalConfiguration(t *testing.T) {
 	g, err := NewIdentityGuard(IdentityGuardConfig{
 		Mappings: &fakeMappingStore{}, Tree: &fakeTreeLinker{}, Policy: NewPolicy(),
 		Registrar: &fakeRegistrar{}, Workspaces: &fakeWorkspaceResolver{}, RunStates: newFakeRunStates(),
+		SessionWorkspaces: NewSessionWorkspaces(0),
 	})
 	if err != nil {
 		t.Fatalf("NewIdentityGuard: %v", err)
@@ -660,7 +698,7 @@ func TestIdentityGuardDoesNotCacheARowTheStoreFailedToInsert(t *testing.T) {
 	failing := failingInsertMappingStore{fakeMappingStore: f.mappings.fakeMappingStore}
 	g, err := NewIdentityGuard(IdentityGuardConfig{
 		Mappings: failing, Tree: f.tree, Policy: NewPolicy(), Registrar: f.registrar,
-		Workspaces: f.workspaces, RunStates: f.runStates,
+		Workspaces: f.workspaces, RunStates: f.runStates, SessionWorkspaces: f.sessionWorkspaces,
 	})
 	if err != nil {
 		t.Fatalf("NewIdentityGuard: %v", err)
@@ -716,5 +754,156 @@ func TestIdentityGuardCachesThePriorMappingAcrossRequests(t *testing.T) {
 	if got := f.mappings.bySessionAgentCalls; got != firstCalls {
 		t.Errorf("BySessionAgent was called %d times after a second request, want %d "+
 			"(the cache should have answered it)", got, firstCalls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The working directory comes from the session hook (SessionWorkspaces),
+// never from the conversation's prose.
+// ---------------------------------------------------------------------------
+
+func TestIdentityGuardRegistersFromTheDirectoryTheHookStated(t *testing.T) {
+	f := newIdentityFixture(t)
+	id := Identification{SessionID: "s1", AgentID: mainAgentID}
+
+	r2, refusal := f.guard.Check(identityRequest(t, id, "hello", ""))
+	if refusal != nil {
+		t.Fatalf("refused: %+v", refusal)
+	}
+	if f.workspaces.dir != fixtureDirectory {
+		t.Errorf("resolved directory = %q, want the hook's %q", f.workspaces.dir, fixtureDirectory)
+	}
+	facts, _ := RequestFactsFromContext(r2.Context())
+	if facts.WorkingDirectory != fixtureDirectory {
+		t.Errorf("RequestFacts.WorkingDirectory = %q, want the hook's %q: the recorder snapshots it",
+			facts.WorkingDirectory, fixtureDirectory)
+	}
+}
+
+// The prose of the conversation never names the workspace, even when it
+// states a directory the hook did not.
+func TestIdentityGuardIgnoresADirectoryStatedInTheConversation(t *testing.T) {
+	f := newIdentityFixture(t)
+	id := Identification{SessionID: "s1", AgentID: mainAgentID}
+
+	if _, refusal := f.guard.Check(identityRequest(t, id, " - Primary working directory: /workspace/prose", "")); refusal != nil {
+		t.Fatalf("refused: %+v", refusal)
+	}
+	if f.workspaces.dir != fixtureDirectory {
+		t.Errorf("resolved directory = %q, want the hook's %q", f.workspaces.dir, fixtureDirectory)
+	}
+}
+
+// A session the hook has not stated yet is a missing input the next hook
+// event supplies, not a broken request: 503 with Retry-After, so the harness
+// retries, and nothing is registered or forwarded meanwhile.
+func TestIdentityGuardAsksForARetryWhenNoDirectoryIsKnownYet(t *testing.T) {
+	f := newIdentityFixture(t)
+	id := Identification{SessionID: "s-unstated", AgentID: mainAgentID}
+
+	_, refusal := f.guard.Check(identityRequest(t, id, "hello", ""))
+	if refusal == nil {
+		t.Fatal("want a refusal")
+	}
+	if refusal.Status != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", refusal.Status, http.StatusServiceUnavailable)
+	}
+	if refusal.RetryAfter <= 0 {
+		t.Errorf("RetryAfter = %v, want a positive delay", refusal.RetryAfter)
+	}
+	if !strings.Contains(refusal.Reason, "innsegl hook session") {
+		t.Errorf("reason %q does not name the hook that supplies the directory", refusal.Reason)
+	}
+	if f.workspaces.calls != 0 || len(f.registrar.calls) != 0 {
+		t.Errorf("resolver calls = %d, registrar calls = %v; want none", f.workspaces.calls, f.registrar.calls)
+	}
+}
+
+// Restoring a lapsed run replays its registration from what the chain
+// recorded. It needs no directory, so a gateway restart that emptied the
+// registry cannot strand a run that already exists.
+func TestIdentityGuardRestoresFromTheChainWithoutADirectory(t *testing.T) {
+	f := newIdentityFixture(t)
+	id := Identification{SessionID: "s-unstated", AgentID: mainAgentID}
+	if err := f.mappings.Insert(t.Context(), RunMapping{
+		RunID: "run-restore", SessionID: id.SessionID, AgentID: id.AgentID, Fingerprint: "fp-1",
+	}); err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+	f.runStates.set("run-restore", ledger.RunLapsed)
+	f.runStates.register("run-restore", RunRegistration{AgentType: "reviewer", TaskID: "task-9", Repo: "acme/chain"})
+
+	if _, refusal := f.guard.Check(identityRequest(t, id, "hello", "hi")); refusal != nil {
+		t.Fatalf("refused: %+v", refusal)
+	}
+	if f.workspaces.calls != 0 {
+		t.Errorf("resolver calls = %d, want none: a restore reads the chain", f.workspaces.calls)
+	}
+	got := f.registrar.lastSeen
+	if got.AgentType != "reviewer" || got.Workspace.Task != "task-9" || got.Workspace.Repo != "acme/chain" {
+		t.Errorf("restore input = %+v, want the chain's agent type, task and repo", got)
+	}
+}
+
+func TestIdentityGuardRefusesARestoreWhoseRegistrationCannotBeRead(t *testing.T) {
+	f := newIdentityFixture(t)
+	id := Identification{SessionID: "s1", AgentID: mainAgentID}
+	if err := f.mappings.Insert(t.Context(), RunMapping{
+		RunID: "run-unread", SessionID: id.SessionID, AgentID: id.AgentID, Fingerprint: "fp-1",
+	}); err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+	f.runStates.set("run-unread", ledger.RunLapsed)
+
+	_, refusal := f.guard.Check(identityRequest(t, id, "hello", "hi"))
+	if refusal == nil || refusal.Status != http.StatusForbidden {
+		t.Fatalf("refusal = %+v, want 403", refusal)
+	}
+	if len(f.registrar.calls) != 0 {
+		t.Errorf("registrar calls = %v, want none", f.registrar.calls)
+	}
+}
+
+// A dependency outage (a retryable class: IDENTITY_UNAVAILABLE,
+// LEDGER_UNAVAILABLE, ...) is answered 503 with Retry-After and a reason
+// naming what is down, so the harness retries and a person reading the error
+// knows what to start. A refusal of the request itself stays 403.
+func TestIdentityGuardAnswersADependencyOutageWithARetry(t *testing.T) {
+	f := newIdentityFixture(t)
+	f.registrar.err = mcp.Errorf(mcp.ClassIdentityUnavailable, "", "spire-server is unreachable")
+	id := Identification{SessionID: "s1", AgentID: mainAgentID}
+
+	_, refusal := f.guard.Check(identityRequest(t, id, "hello", ""))
+	if refusal == nil || refusal.Status != http.StatusServiceUnavailable || refusal.RetryAfter <= 0 {
+		t.Fatalf("refusal = %+v, want 503 with Retry-After", refusal)
+	}
+	if !strings.Contains(refusal.Reason, "IDENTITY_UNAVAILABLE") || !strings.Contains(refusal.Reason, "spire-server is unreachable") {
+		t.Errorf("reason %q does not name the outage", refusal.Reason)
+	}
+}
+
+func TestIdentityGuardKeeps403ForARefusalOfTheRequestItself(t *testing.T) {
+	f := newIdentityFixture(t)
+	f.registrar.err = mcp.Errorf(mcp.ClassInvariantViolation, "", "the repository is outside the admin scope")
+	id := Identification{SessionID: "s1", AgentID: mainAgentID}
+
+	_, refusal := f.guard.Check(identityRequest(t, id, "hello", ""))
+	if refusal == nil || refusal.Status != http.StatusForbidden || refusal.RetryAfter != 0 {
+		t.Fatalf("refusal = %+v, want 403 with no Retry-After", refusal)
+	}
+}
+
+// The mapping store unreachable (Postgres down) is an outage too.
+func TestIdentityGuardAnswersAnUnreachableStoreWithARetry(t *testing.T) {
+	f := newIdentityFixture(t)
+	f.runStates.err = &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	id := Identification{SessionID: "s1", AgentID: mainAgentID}
+	if err := f.mappings.Insert(t.Context(), RunMapping{RunID: "run-x", SessionID: "s1", AgentID: mainAgentID}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, refusal := f.guard.Check(identityRequest(t, id, "hello", "hi"))
+	if refusal == nil || refusal.Status != http.StatusServiceUnavailable {
+		t.Fatalf("refusal = %+v, want 503", refusal)
 	}
 }

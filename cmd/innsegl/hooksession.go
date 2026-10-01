@@ -1,0 +1,149 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"innsegl.dev/innsegl/internal/commitpath"
+)
+
+// sessionHookTimeout bounds one statement. The hook runs before every user
+// turn, so it must never be what makes the harness slow: a stack that is up
+// answers in milliseconds, and one that is down refuses the connection at
+// once.
+const sessionHookTimeout = 3 * time.Second
+
+// exitBlock is a harness hook's "stop": on UserPromptSubmit, exit 2 stops
+// the prompt and shows stderr to the person.
+const exitBlock = 2
+
+// gatewayUnreachableError is a statement that never reached the gateway: no
+// connection, no TLS handshake, no answer in time. Distinct from the gateway
+// answering with an error, which means it is up and has said why.
+type gatewayUnreachableError struct{ err error }
+
+func (e *gatewayUnreachableError) Error() string { return e.err.Error() }
+func (e *gatewayUnreachableError) Unwrap() error { return e.err }
+
+// unreachableMessage is what a person sees when their prompt is stopped
+// because the gateway is down. It names the cause and both ways out.
+func unreachableMessage(base string, err error) string {
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return fmt.Sprintf(`innsegl: the gateway at %s answered with a certificate this machine
+does not trust (%v). The gateway's CA has changed since install.sh copied
+it, so this prompt would fail.
+
+  Fix it:  re-run install.sh from the innsegl checkout, then restart Claude Code
+`, base, err)
+	}
+	// The hook runs as the checkout's own binary (install.sh), so its
+	// directory is where make start and install.sh are.
+	checkout := "<innsegl checkout>"
+	if exe, exeErr := innseglBinaryPath(); exeErr == nil {
+		checkout = filepath.Dir(exe)
+	}
+	return fmt.Sprintf(`innsegl: the gateway at %s is not answering (%v).
+Every model request goes through it, so this prompt would fail.
+The usual cause is Docker, or the innsegl stack, not running.
+
+  Start it:              cd %s && make start
+  Work without innsegl:  cd %s && ./install.sh --pause
+                         then restart Claude Code; --resume puts it back
+`, base, err, checkout, checkout)
+}
+
+// runHookSession is `innsegl hook session`: the harness's SessionStart,
+// UserPromptSubmit, SubagentStart and CwdChanged hook. It reads the hook's
+// own input -- session_id, cwd and, for a subagent, agent_id, structured
+// fields on every event (captured from Claude Code 2.1.287, 2026-10-01) --
+// and states them to the gateway's local session-workspace endpoint, which
+// is where the gateway learns each session's working directory
+// (internal/gateway/workspaceregistry.go).
+//
+// It prints nothing to stdout and exits 0, like `hook pre-tool-use`: the
+// gateway is the gate, not this hook. One exception: before a user turn,
+// when the gateway cannot be reached at all, it stops the prompt (exit 2)
+// with a message saying what is down and how to get out -- the request would
+// fail anyway, with nothing but "connection refused". A statement that does not arrive
+// leaves the gateway answering 503 with Retry-After for a run it cannot yet
+// register, and the next hook event states it again. Failures go to stderr,
+// which the harness shows only in its debug output.
+func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string,
+	post func(url string, body []byte) error,
+) int {
+	_ = stdout // never written: a hook's stdout can be read as instructions
+	var in struct {
+		SessionID     string `json:"session_id"`
+		AgentID       string `json:"agent_id"`
+		Cwd           string `json:"cwd"`
+		HookEventName string `json:"hook_event_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(stdin, 1<<20)).Decode(&in); err != nil {
+		fmt.Fprintf(stderr, "innsegl hook session: the hook input is not JSON: %v\n", err)
+		return exitOK
+	}
+	if in.SessionID == "" || in.Cwd == "" {
+		fmt.Fprintln(stderr, "innsegl hook session: the hook input names no session_id or cwd")
+		return exitOK
+	}
+	body, err := json.Marshal(map[string]string{"session_id": in.SessionID, "agent_id": in.AgentID, "cwd": in.Cwd})
+	if err != nil {
+		return exitOK
+	}
+	base := getenv(commitpath.EnvCoreURL)
+	if base == "" {
+		base = commitpath.DefaultCoreURL
+	}
+	err = post(strings.TrimSuffix(base, "/")+gatewaySessionWorkspacePath, body)
+	var unreachable *gatewayUnreachableError
+	switch {
+	case err == nil:
+	case errors.As(err, &unreachable) && in.HookEventName == "UserPromptSubmit":
+		fmt.Fprint(stderr, unreachableMessage(base, unreachable.err))
+		return exitBlock
+	default:
+		fmt.Fprintf(stderr, "innsegl hook session: stating the working directory: %v\n", err)
+	}
+	return exitOK
+}
+
+// postToGateway sends body with the client that trusts only the gateway's
+// own CA (commitpath.TrustedHTTPClient), never the system roots.
+func postToGateway(getenv func(string) string) func(string, []byte) error {
+	client := commitpath.TrustedHTTPClient(getenv)
+	client.Timeout = sessionHookTimeout
+	return func(url string, body []byte) error {
+		ctx, cancel := context.WithTimeout(context.Background(), sessionHookTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return &gatewayUnreachableError{err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode/100 != 2 {
+			msg, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
+			if readErr != nil {
+				return fmt.Errorf("the gateway answered %d", resp.StatusCode)
+			}
+			return fmt.Errorf("the gateway answered %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		}
+		return nil
+	}
+}
