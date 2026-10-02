@@ -208,13 +208,14 @@ sigstore-up: innsegl-trust-volumes
 # tri-state has no room for one, and AB-08 is about the opposite confusion.
 # Rekor indexes an entry when it is written and never afterwards, so nothing
 # was going to fix this on its own. The rebuild is idempotent and took under a
-# second for 25 entries; it is best-effort because a log that is not answering
+# second for 25 entries. It skips itself when the index already covers the log
+# and otherwise indexes only what is new, with progress output (RM-324); it is best-effort because a log that is not answering
 # yet is a race and not a fault, and the readiness report asks again.
 
 ## rekor-reindex: rebuild Rekor's digest->entry index from the log itself
 rekor-reindex:
 	-@INNSEGL_REKOR_URL='$(or $(INNSEGL_REKOR_URL),http://127.0.0.1:$(INNSEGL_REKOR_PORT))' \
-	  scripts/rekor-reindex.sh 2>&1 | tail -1
+	  scripts/rekor-reindex.sh 2>&1
 
 ## sigstore-verify: obtain a real Fulcio certificate for a real JWT-SVID
 sigstore-verify:
@@ -562,16 +563,11 @@ start:
 	@echo "   make sign -- -m 'your message'             commit, signed"
 	@# #445, ADR-0062's 2026-10-01 amendment: while no account exists yet,
 	@# print the one-time setup link rather than making the operator run the
-	@# enrol-code command and build the URL by hand. innsegl-api can still be
-	@# finishing its own start-up the instant innsegl-up-here returns, so this
-	@# retries only on "could not reach the API" (exit 4) — a failed mint
-	@# (exit 6) is a real problem and is shown once, not retried into silence.
-	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-	   scripts/setup-link.sh && break; \
-	   rc=$$?; \
-	   if [ $$rc -ne 4 ]; then break; fi; \
-	   sleep 2; \
-	 done
+	@# enrol-code command and build the URL by hand. The script reads the
+	@# published address (INNSEGL_BIND, INNSEGL_DASHBOARD_PORT) itself, waits
+	@# up to two minutes for innsegl-api, and then stops with one message that
+	@# says how to get the link later (RM-325); a failure here never fails start.
+	@scripts/setup-link.sh || true
 
 ## link: make a project signable — make link DIR=~/Applications/foo
 link:
