@@ -14,8 +14,10 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,18 +62,45 @@ type connectDeps struct {
 	run      func(name string, args ...string) error
 	now      func() time.Time
 	hostname func() (string, error)
+	// underSudo: run as root through sudo; home and uid are the invoking
+	// user's (connectHome).
+	underSudo bool
+}
+
+// connectHome answers the home folder and uid connect acts for. Under sudo,
+// macOS resets HOME to root's, so the enrolment in the invoking user's
+// ~/.innsegl was not found and --update/--pause silently did nothing
+// (measured 2026-10-02): run as root with SUDO_USER set, the invoking
+// user's home and uid are the ones that count.
+func connectHome(getenv func(string) string, euid int, lookup func(string) (*user.User, error),
+	ownHome func() (string, error),
+) (home string, uid int, underSudo bool, err error) {
+	if name := getenv("SUDO_USER"); euid == 0 && name != "" && name != "root" {
+		u, lerr := lookup(name)
+		if lerr != nil {
+			return "", 0, false, fmt.Errorf("find the home folder of %s (SUDO_USER): %w", name, lerr)
+		}
+		id, cerr := strconv.Atoi(u.Uid)
+		if cerr != nil {
+			return "", 0, false, fmt.Errorf("the uid of %s is not a number: %q", name, u.Uid)
+		}
+		return u.HomeDir, id, true, nil
+	}
+	h, herr := ownHome()
+	return h, euid, false, herr
 }
 
 func defaultConnectDeps() (connectDeps, error) {
-	home, err := os.UserHomeDir()
+	home, uid, underSudo, err := connectHome(os.Getenv, os.Geteuid(), user.Lookup, os.UserHomeDir)
 	if err != nil {
 		return connectDeps{}, err
 	}
 	return connectDeps{
-		home:    home,
-		binPath: innseglBinaryPath,
-		goos:    runtime.GOOS,
-		uid:     os.Getuid(),
+		home:      home,
+		underSudo: underSudo,
+		binPath:   innseglBinaryPath,
+		goos:      runtime.GOOS,
+		uid:       uid,
 		run: func(name string, args ...string) error {
 			out, err := exec.CommandContext(context.Background(), name, args...).CombinedOutput()
 			if err != nil {
@@ -166,6 +195,14 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 		return connectDisconnect(f, stdout, stderr, deps)
 	case f.update:
 		return connectUpdate(f, stdout, stderr, deps)
+	}
+	if deps.underSudo {
+		// Enrolment under sudo would leave root-owned files in the user's
+		// home and a service running as root. connect asks for sudo itself,
+		// for the one file that needs it.
+		fprintf(stderr, "innsegl connect: run it without sudo; it prints the one sudo command it needs "+
+			"(the managed settings) and nothing else runs as root\n")
+		return exitUsage
 	}
 	return connectEnrol(ctx, f, positional, stdout, stderr, deps)
 }
