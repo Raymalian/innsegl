@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -153,4 +154,28 @@ func gitOut(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
 	out, err := (GitRepos{}).git(t.Context(), dir, args...)
 	return strings.TrimSpace(out), err
+}
+
+// spFailingMirror holds the repository but cannot be read.
+type spFailingMirror struct{}
+
+func (spFailingMirror) Dir(string) (string, error) { return "/mirror/unreadable.git", nil }
+func (spFailingMirror) Missing(context.Context, string, []string) ([]string, error) {
+	return nil, errors.New("git cat-file failed: permission denied")
+}
+func (spFailingMirror) DropStaging(context.Context, string, string, string) error { return nil }
+
+// A mirror that exists but cannot be read is refused naming the read, not
+// reported as missing objects: the client cannot fix it by pushing again.
+func TestHostedSignRefusesWhenTheMirrorCannotBeRead(t *testing.T) {
+	resolver := spResolver{calls: map[string]commitpath.RelayedCall{spToolUseID: spHostedCall()}}
+	_, _, tree := spWiringSigningWith(t, resolver, spSignedOK)
+	spWithMirror(t, spFailingMirror{})
+
+	_, err := SignPayloadForGateway(context.Background(), commitpath.SignRequest{
+		ToolUseID: spToolUseID, Payload: spPayloadWithTree(t, spClaim(spRunID), tree, spAuthor, spAuthor),
+	})
+	if err == nil || !strings.Contains(err.Error(), "reading the core's mirror of "+spRepo) {
+		t.Fatalf("err = %v, want the refusal naming the unreadable mirror", err)
+	}
 }
