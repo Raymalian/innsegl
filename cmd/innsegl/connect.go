@@ -25,9 +25,16 @@ import (
 // `innsegl connect` — RM-285 (#461), ADR-0063 decisions 2 and 4. One
 // command enrols this machine with a core: it makes a key pair here, sends a
 // certificate request with a single-use token, keeps the key and the
-// certificate under ~/.innsegl/client (a directory the harness sandbox
-// denies to an agent's shell), points Claude Code's managed settings at the
-// local endpoint `innsegl client serve` runs, and installs that service.
+// certificate under ~/.innsegl/client, points Claude Code's managed
+// settings at the local endpoint `innsegl client serve` runs, and installs
+// that service.
+//
+// The managed settings carry the route and innsegl's own hooks, nothing
+// more (RM-312): no sandbox, no allowManagedHooksOnly, no permissions, so
+// the user's own status line, gh, git push and go build keep working.
+// `--hardened` adds that lockdown, with the sandbox denying an agent's shell
+// ~/.innsegl. `--update` moves an enrolled machine between the two without
+// a token, and removes lockdown keys an earlier version wrote.
 //
 // Trust in the core is never taken on first use. The core's certificate is
 // issued by its own CA (ADR-0066), and connect needs that CA either as a
@@ -96,8 +103,8 @@ func defaultManagedSettingsPath(goos string) string {
 }
 
 type connectFlags struct {
-	token, ca, fingerprint, name, listen, settings string
-	noService, pause, resume, disconnect           bool
+	token, ca, fingerprint, name, listen, settings     string
+	noService, pause, resume, disconnect, update, hard bool
 }
 
 func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, deps connectDeps) int {
@@ -114,11 +121,14 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	fs.BoolVar(&f.pause, "pause", false, "set the managed settings aside, unchanged")
 	fs.BoolVar(&f.resume, "resume", false, "put paused managed settings back")
 	fs.BoolVar(&f.disconnect, "disconnect", false, "remove what connect wrote: the managed settings keys, the service, ~/.innsegl/client")
+	fs.BoolVar(&f.update, "update", false, "rewrite this enrolled machine's managed settings to the chosen mode; no token")
+	fs.BoolVar(&f.hard, "hardened", false, "also lock the harness down: managed hooks only, bypass mode disabled, the sandbox; the user's statusLine is copied in")
 	fs.Usage = func() {
 		fprintf(stderr, "innsegl connect - enrol this machine with an innsegl core (#461)\n\n")
 		fprintf(stderr, "Usage:\n"+
 			"  innsegl connect <core-url> --token <ie_…> (--ca <file> | --ca-fingerprint sha256:<hex>)\n"+
-			"                  [--name <n>] [--listen 127.0.0.1:28195] [--managed-settings <path>] [--no-service] [DIR…]\n"+
+			"                  [--hardened] [--name <n>] [--listen 127.0.0.1:28195] [--managed-settings <path>] [--no-service] [DIR…]\n"+
+			"  innsegl connect --update [--hardened] [--managed-settings <path>]\n"+
 			"  innsegl connect --pause | --resume | --disconnect [--managed-settings <path>]\n\n")
 		fprintf(stderr, "Flags:\n")
 		fs.PrintDefaults()
@@ -135,22 +145,27 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	}
 
 	modes := 0
-	for _, m := range []bool{f.pause, f.resume, f.disconnect} {
+	for _, m := range []bool{f.pause, f.resume, f.disconnect, f.update} {
 		if m {
 			modes++
 		}
 	}
 	switch {
 	case modes > 1:
-		fprintf(stderr, "innsegl connect: --pause, --resume and --disconnect are separate steps; give one\n")
+		fprintf(stderr, "innsegl connect: --pause, --resume, --disconnect and --update are separate steps; give one\n")
 		return exitUsage
 	case modes == 1 && len(positional) > 0:
-		fprintf(stderr, "innsegl connect: --pause, --resume and --disconnect take no other arguments\n")
+		fprintf(stderr, "innsegl connect: --pause, --resume, --disconnect and --update take no other arguments\n")
+		return exitUsage
+	case f.hard && (f.pause || f.resume || f.disconnect):
+		fprintf(stderr, "innsegl connect: --hardened chooses what connect or --update writes; --pause, --resume and --disconnect take no mode\n")
 		return exitUsage
 	case f.pause || f.resume:
 		return connectPauseResume(f, stdout, stderr)
 	case f.disconnect:
 		return connectDisconnect(f, stdout, stderr, deps)
+	case f.update:
+		return connectUpdate(f, stdout, stderr, deps)
 	}
 	return connectEnrol(ctx, f, positional, stdout, stderr, deps)
 }
@@ -186,7 +201,13 @@ func reportNotWritable(err error, stderr io.Writer, then string) (int, bool) {
 	return exitConnectFailed, true
 }
 
-func (d connectDeps) settingsConfig(listen string) (client.SettingsConfig, error) {
+// userSettingsPath is the user's own Claude Code settings file, the one a
+// statusLine normally lives in.
+func (d connectDeps) userSettingsPath() string {
+	return filepath.Join(d.home, ".claude", "settings.json")
+}
+
+func (d connectDeps) settingsConfig(listen string, hardened bool) (client.SettingsConfig, error) {
 	bin, err := d.binPath()
 	if err != nil {
 		return client.SettingsConfig{}, fmt.Errorf("resolving this binary's own path: %w", err)
@@ -196,11 +217,24 @@ func (d connectDeps) settingsConfig(listen string) (client.SettingsConfig, error
 	if !isShellSafeForInterpolation(bin) {
 		return client.SettingsConfig{}, fmt.Errorf("this binary's path %q holds characters a hook command cannot carry unquoted; install innsegl at a plain path", bin)
 	}
+	// The user's own statusLine: --hardened copies it into the managed
+	// settings, and every other mode removes that copy. A file it cannot
+	// read stops only --hardened; elsewhere no copy is assumed, so none is
+	// removed.
+	line, err := client.ReadStatusLine(d.userSettingsPath())
+	if err != nil {
+		if hardened {
+			return client.SettingsConfig{}, fmt.Errorf("reading the user's statusLine to copy it: %w", err)
+		}
+		line = nil
+	}
 	return client.SettingsConfig{
-		HookBin:  bin,
-		LocalURL: "http://" + listen,
-		LogDeny:  filepath.Join(d.home, ".innsegl"),
-		CAAllow:  filepath.Join(d.home, ".innsegl", "ca"),
+		HookBin:    bin,
+		LocalURL:   "http://" + listen,
+		LogDeny:    filepath.Join(d.home, ".innsegl"),
+		CAAllow:    filepath.Join(d.home, ".innsegl", "ca"),
+		Hardened:   hardened,
+		StatusLine: line,
 	}, nil
 }
 
@@ -208,13 +242,53 @@ func (d connectDeps) service() client.Service {
 	return client.Service{GOOS: d.goos, Home: d.home, UID: d.uid, Run: d.run}
 }
 
+// enrolledListen is the loopback address the enrolment in ~/.innsegl/client
+// names, or the default.
+func enrolledListen(paths client.Paths) string {
+	if cfg, err := client.ReadCoreConfig(paths); err == nil && cfg.Listen != "" {
+		return cfg.Listen
+	}
+	return client.DefaultListen
+}
+
+// connectUpdate rewrites an enrolled machine's managed settings to the mode
+// chosen now, from the enrolment already in ~/.innsegl/client: no token, no
+// core, no service change.
+func connectUpdate(f connectFlags, stdout, stderr io.Writer, deps connectDeps) int {
+	paths := client.ClientPaths(deps.home)
+	if _, err := os.Stat(paths.Core); err != nil {
+		fprintf(stderr, "innsegl connect: this machine is not connected (%s is missing); "+
+			"--update rewrites an enrolled machine's settings. Run `innsegl connect <core-url> --token ...` first.\n", paths.Core)
+		return exitConnectFailed
+	}
+	settings, err := deps.settingsConfig(enrolledListen(paths), f.hard)
+	if err != nil {
+		fprintf(stderr, "innsegl connect: %v\n", err)
+		return exitConnectFailed
+	}
+	again := "`innsegl connect --update`"
+	if f.hard {
+		again = "`innsegl connect --update --hardened`"
+	}
+	err = client.InstallSettings(f.settings, settings, deps.now, stdout)
+	if code, done := reportNotWritable(err, stderr, ", then run "+again+" again"); done {
+		return code
+	}
+	if err != nil {
+		fprintf(stderr, "innsegl connect: %v\n", err)
+		return exitConnectFailed
+	}
+	mode := "the route and innsegl's hooks only"
+	if f.hard {
+		mode = "hardened"
+	}
+	fprintf(stdout, "innsegl connect: managed settings %s are %s\ninnsegl connect: restart Claude Code for it to take effect\n", f.settings, mode)
+	return exitOK
+}
+
 func connectDisconnect(f connectFlags, stdout, stderr io.Writer, deps connectDeps) int {
 	paths := client.ClientPaths(deps.home)
-	listen := client.DefaultListen
-	if cfg, err := client.ReadCoreConfig(paths); err == nil && cfg.Listen != "" {
-		listen = cfg.Listen
-	}
-	settings, err := deps.settingsConfig(listen)
+	settings, err := deps.settingsConfig(enrolledListen(paths), false)
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
@@ -272,7 +346,7 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 			"Run `innsegl connect --disconnect` first to enrol again.\n", paths.Core)
 		return exitConnectFailed
 	}
-	settings, err := deps.settingsConfig(f.listen)
+	settings, err := deps.settingsConfig(f.listen, f.hard)
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed

@@ -21,8 +21,9 @@
 # CASES
 #   ENF-001 — the managed settings contract (#390):
 #     - a missing prerequisite (curl) is refused and changes nothing
-#     - a fresh target gets exactly the env, hook, permission and sandbox
-#       keys the contract requires, with no backup to make
+#     - a fresh target gets exactly the env, hook and attribution keys —
+#       the route and innsegl's own hooks, no lockdown (RM-312) — with no
+#       backup to make
 #     - a second run changes neither file, and makes no second backup — the
 #       merge is idempotent because it compares parsed JSON, not text
 #     - an existing target holding the operator's own env vars, hooks and
@@ -33,7 +34,16 @@
 #       operator's own settings standing
 #     - a non-writable target prints the one-line admin command and changes
 #       nothing
-#   EGR-001 — optional egress control (#393):
+#   RM-312 — --hardened is the opt-in lockdown:
+#     - it adds allowManagedHooksOnly, bypass mode disabled and the sandbox
+#       (with gh excluded and the weaker network isolation gh needs), and
+#       copies the user's own statusLine into the managed settings
+#     - a plain run over a file the old default locked down removes exactly
+#       the lockdown keys, and keeps the operator's own sandbox path,
+#       permission rule and statusLine
+#     - --uninstall after --hardened leaves no innsegl key, the statusLine
+#       copy included
+#   EGR-001 — optional egress control (#393), under --hardened:
 #     - --egress-control writes the strict, managed-only allowlist with the
 #       model hosts (api.anthropic.com and the configured upstream) removed
 #     - a second run is idempotent
@@ -41,7 +51,8 @@
 #   The server installer (#461): install.sh writes managed settings only with
 #   --local-client, the single-host shape every case above runs under. A run
 #   without it brings the server up, links, and writes no managed settings;
-#   --egress-control without it is refused, since it shapes only those.
+#   --egress-control without it is refused, since it shapes only those, and
+#   so is --egress-control without --hardened, since it shapes the sandbox.
 #
 #   --uninstall-legacy is also covered: it is the only mode that touches the
 #   OLD wiring (the six subagent-identity.sh hook entries and the `innsegl`
@@ -68,7 +79,7 @@ fail=0
 ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && printf '        %s\n' "$2"; }
 
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/install-selftest.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 # ---------------------------------------------------------------------------
@@ -229,6 +240,13 @@ if mode == "json-equal":
     print("ok" if same else "got:" + json.dumps(cur))
     sys.exit(0 if same else 1)
 
+elif mode == "json-keys":
+    path, expected_json = sys.argv[2], sys.argv[3]
+    keys = sorted(load(path).keys())
+    same = keys == json.loads(expected_json)
+    print("ok" if same else "keys:" + json.dumps(keys))
+    sys.exit(0 if same else 1)
+
 elif mode == "json-absent":
     path, dotted = sys.argv[2], sys.argv[3]
     obj = load(path)
@@ -290,25 +308,13 @@ expected_hooks2=$(cat <<JSON
  "CwdChanged": [{"hooks": [{"type": "command", "command": "$STUB_BIN hook session"}]}]}
 JSON
 )
-expected_sandbox2=$(cat <<JSON
-{
-  "enabled": true,
-  "allowUnsandboxedCommands": false,
-  "failIfUnavailable": true,
-  "filesystem": {"denyRead": ["$home2/.innsegl"], "allowRead": ["$home2/.innsegl/ca"]},
-  "network": {"allowLocalBinding": true}
-}
-JSON
-)
 if [ "$rc2" -eq 0 ] \
    && [ "$(check json-equal "$ms2" env "$expected_env2")" = ok ] \
    && [ "$(check json-equal "$ms2" hooks "$expected_hooks2")" = ok ] \
-   && [ "$(check json-equal "$ms2" allowManagedHooksOnly true)" = ok ] \
-   && [ "$(check json-equal "$ms2" attribution.commit '""')" = ok ] \
-   && [ "$(check json-equal "$ms2" permissions.disableBypassPermissionsMode '"disable"')" = ok ] \
-   && [ "$(check json-equal "$ms2" sandbox "$expected_sandbox2")" = ok ] \
+   && [ "$(check json-equal "$ms2" attribution '{"commit": ""}')" = ok ] \
+   && [ "$(check json-keys "$ms2" '["attribution", "env", "hooks"]')" = ok ] \
    && [ "$(backup_count "$home2" managed-settings.json)" -eq 0 ]; then
-  ok "ENF-001 a fresh target gets exactly the env, hook, permission and sandbox keys, with no backup to make"
+  ok "ENF-001 a fresh target gets exactly the env, hook and attribution keys, no lockdown, with no backup to make"
 else
   bad "ENF-001 a fresh target did not come out right" "exit=$rc2"$'\n'"$out2"
 fi
@@ -345,9 +351,8 @@ if [ "$rc4" -eq 0 ] \
    && [ "$(check json-equal "$ms4" env.ANTHROPIC_BASE_URL '"https://127.0.0.1:28095"')" = ok ] \
    && [ "$(check json-equal "$ms4" hooks.PreToolUse.0.hooks.0.command '"/opt/example/my-hook.sh"')" = ok ] \
    && [ "$(check json-equal "$ms4" hooks.PreToolUse.1.hooks.0.command "\"$STUB_BIN hook pre-tool-use\"")" = ok ] \
-   && [ "$(check json-equal "$ms4" permissions.allow '["Read(//tmp/**)"]')" = ok ] \
-   && [ "$(check json-equal "$ms4" permissions.disableBypassPermissionsMode '"disable"')" = ok ] \
-   && [ "$(check json-equal "$ms4" sandbox.filesystem.denyRead "[\"/opt/example/secret\", \"$home4/.innsegl\"]")" = ok ] \
+   && [ "$(check json-equal "$ms4" permissions '{"allow": ["Read(//tmp/**)"]}')" = ok ] \
+   && [ "$(check json-equal "$ms4" sandbox '{"filesystem": {"denyRead": ["/opt/example/secret"]}}')" = ok ] \
    && [ "$(check json-equal "$ms4" otherOperatorSetting true)" = ok ] \
    && [ "$(backup_count "$home4" managed-settings.json)" -eq 1 ]; then
   ok "ENF-001 an operator's own env, hooks, permissions and sandbox settings survive, and are backed up first"
@@ -391,6 +396,86 @@ if [ "$rc6" -eq 0 ] \
   ok "ENF-001 --uninstall removes exactly what was added, and the signer symlink"
 else
   bad "ENF-001 --uninstall left something behind, or removed too much" "exit=$rc6"$'\n'"$out6"
+fi
+
+# --- RM-312: --hardened adds the lockdown and copies the user's statusLine --
+home2h="$WORK/home-hardened"; mkdir -p "$home2h/.claude"
+ms2h="$home2h/managed-settings.json"
+cat > "$home2h/.claude/settings.json" <<'JSON'
+{"theme": "dark", "statusLine": {"type": "command", "command": "/opt/example/statusline.sh"}}
+JSON
+out2h="$(run_install "$home2h" "$TOOLBIN" --managed-settings "$ms2h" --hardened)"; rc2h=$?
+expected_sandbox2h=$(cat <<JSON
+{
+  "enabled": true,
+  "allowUnsandboxedCommands": false,
+  "failIfUnavailable": true,
+  "excludedCommands": ["gh *"],
+  "enableWeakerNetworkIsolation": true,
+  "filesystem": {"denyRead": ["$home2h/.innsegl"], "allowRead": ["$home2h/.innsegl/ca"]},
+  "network": {"allowLocalBinding": true}
+}
+JSON
+)
+if [ "$rc2h" -eq 0 ] \
+   && [ "$(check json-equal "$ms2h" allowManagedHooksOnly true)" = ok ] \
+   && [ "$(check json-equal "$ms2h" attribution.commit '""')" = ok ] \
+   && [ "$(check json-equal "$ms2h" permissions '{"disableBypassPermissionsMode": "disable"}')" = ok ] \
+   && [ "$(check json-equal "$ms2h" sandbox "$expected_sandbox2h")" = ok ] \
+   && [ "$(check json-equal "$ms2h" statusLine '{"type": "command", "command": "/opt/example/statusline.sh"}')" = ok ] \
+   && [ "$(check json-keys "$ms2h" '["allowManagedHooksOnly", "attribution", "env", "hooks", "permissions", "sandbox", "statusLine"]')" = ok ]; then
+  ok "RM-312 --hardened adds the lockdown, excludes gh, and copies the user's statusLine"
+else
+  bad "RM-312 --hardened did not write the lockdown" "exit=$rc2h"$'\n'"$out2h"$'\n'"$(cat "$ms2h" 2>&1)"
+fi
+out2h2="$(run_install "$home2h" "$TOOLBIN" --managed-settings "$ms2h" --hardened 2>&1)"; rc2h2=$?
+if [ "$rc2h2" -eq 0 ] && printf '%s' "$out2h2" | grep -q 'already up to date'; then
+  ok "RM-312 a second --hardened run changes nothing"
+else
+  bad "RM-312 a second --hardened run was not idempotent" "exit=$rc2h2"$'\n'"$out2h2"
+fi
+out2h3="$(run_install "$home2h" "$TOOLBIN" --managed-settings "$ms2h" --uninstall)"; rc2h3=$?
+if [ "$rc2h3" -eq 0 ] && [ "$(check json-keys "$ms2h" '[]')" = ok ]; then
+  ok "RM-312 --uninstall after --hardened leaves no innsegl key, the statusLine copy included"
+else
+  bad "RM-312 --uninstall after --hardened left something" "exit=$rc2h3"$'\n'"$out2h3"$'\n'"$(cat "$ms2h" 2>&1)"
+fi
+
+# --- RM-312: a plain run over the old default lockdown removes only it -----
+home2u="$WORK/home-update"; mkdir -p "$home2u/.claude"
+ms2u="$home2u/managed-settings.json"
+cat > "$home2u/.claude/settings.json" <<'JSON'
+{"statusLine": {"type": "command", "command": "/opt/example/statusline.sh"}}
+JSON
+cat > "$ms2u" <<JSON
+{
+  "model": "opus",
+  "env": {"ANTHROPIC_BASE_URL": "https://127.0.0.1:28095"},
+  "allowManagedHooksOnly": true,
+  "attribution": {"commit": ""},
+  "permissions": {"deny": ["Read(./secrets/**)"], "disableBypassPermissionsMode": "disable"},
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": true,
+    "filesystem": {"denyRead": ["/opt/example/secret", "$home2u/.innsegl"], "allowRead": ["$home2u/.innsegl/ca"]},
+    "network": {"allowLocalBinding": true}
+  },
+  "statusLine": {"type": "command", "command": "/opt/operator/managed-status.sh"}
+}
+JSON
+out2u="$(run_install "$home2u" "$TOOLBIN" --managed-settings "$ms2u")"; rc2u=$?
+if [ "$rc2u" -eq 0 ] \
+   && [ "$(check json-absent "$ms2u" allowManagedHooksOnly)" = ok ] \
+   && [ "$(check json-equal "$ms2u" permissions '{"deny": ["Read(./secrets/**)"]}')" = ok ] \
+   && [ "$(check json-equal "$ms2u" sandbox '{"filesystem": {"denyRead": ["/opt/example/secret"]}}')" = ok ] \
+   && [ "$(check json-equal "$ms2u" statusLine '{"type": "command", "command": "/opt/operator/managed-status.sh"}')" = ok ] \
+   && [ "$(check json-equal "$ms2u" model '"opus"')" = ok ] \
+   && [ "$(check json-keys "$ms2u" '["attribution", "env", "hooks", "model", "permissions", "sandbox", "statusLine"]')" = ok ] \
+   && [ "$(backup_count "$home2u" managed-settings.json)" -eq 1 ]; then
+  ok "RM-312 a plain run over the old lockdown removes exactly the lockdown keys and keeps the operator's own"
+else
+  bad "RM-312 a plain run over the old lockdown removed too much, or too little" "exit=$rc2u"$'\n'"$out2u"$'\n'"$(cat "$ms2u" 2>&1)"
 fi
 
 # --- ENF-001: a non-writable target prints the admin command ---------------
@@ -489,7 +574,7 @@ out8="$(HOME="$home8" PATH="$TOOLBIN" \
   INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
   INNSEGL_BIN_PATH="$STUB_BIN" \
   INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
-  "$BASH_BIN" "$INSTALL" --local-client --managed-settings "$ms8" --egress-control "$allowlist8")"
+  "$BASH_BIN" "$INSTALL" --local-client --hardened --managed-settings "$ms8" --egress-control "$allowlist8")"
 rc8=$?
 if [ "$rc8" -eq 0 ] \
    && [ "$(check json-equal "$ms8" sandbox.network.strictAllowlist true)" = ok ] \
@@ -508,7 +593,7 @@ out8b="$(HOME="$home8" PATH="$TOOLBIN" \
   INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
   INNSEGL_BIN_PATH="$STUB_BIN" \
   INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
-  "$BASH_BIN" "$INSTALL" --local-client --managed-settings "$ms8" --egress-control "$allowlist8" 2>&1)"
+  "$BASH_BIN" "$INSTALL" --local-client --hardened --managed-settings "$ms8" --egress-control "$allowlist8" 2>&1)"
 rc8b=$?
 if [ "$rc8b" -eq 0 ] && printf '%s' "$out8b" | grep -qi 'already up to date'; then
   ok "EGR-001 a second run with the same allowlist is idempotent"
@@ -532,7 +617,7 @@ egress_run() {
     INNSEGL_GATEWAY_UPSTREAM="https://upstream.example.invalid" \
     "$BASH_BIN" "$INSTALL" --local-client --managed-settings "$ms8c" "$@" 2>&1
 }
-out8c="$(egress_run --egress-control "$allowlist8")"; rc8c=$?
+out8c="$(egress_run --hardened --egress-control "$allowlist8")"; rc8c=$?
 if [ "$rc8c" -eq 0 ] \
    && [ "$(check json-equal "$ms8c" sandbox.network.allowedDomains '["internal.example.invalid", "github.com", "registry.npmjs.org"]')" = ok ]; then
   ok "EGR-001 an allowlist the operator already had is kept, and the new domains are added to it"
@@ -699,6 +784,15 @@ if [ "$rc14" -ne 0 ] && [ ! -e "$ms13" ] && printf '%s' "$out14" | grep -q -- '-
   ok "--egress-control without --local-client is refused: there are no managed settings to shape"
 else
   bad "--egress-control without --local-client was not refused" "exit=$rc14"$'\n'"$out14"
+fi
+
+home15="$WORK/home-egress-plain"; mkdir -p "$home15"
+ms15="$home15/managed-settings.json"
+out15="$(run_install "$home15" "$TOOLBIN" --managed-settings "$ms15" --egress-control "$WORK/allowlist.txt" 2>&1)"; rc15=$?
+if [ "$rc15" -ne 0 ] && [ ! -e "$ms15" ] && printf '%s' "$out15" | grep -q -- '--hardened'; then
+  ok "RM-312 --egress-control without --hardened is refused: there is no sandbox to shape"
+else
+  bad "RM-312 --egress-control without --hardened was not refused" "exit=$rc15"$'\n'"$out15"
 fi
 
 echo

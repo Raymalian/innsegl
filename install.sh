@@ -26,8 +26,13 @@
 #      Linux `/etc/claude-code/managed-settings.json`), or wherever
 #      --managed-settings / $INNSEGL_INSTALL_MANAGED_SETTINGS names. It
 #      points ANTHROPIC_BASE_URL, INNSEGL_CORE_URL and telemetry at the
-#      gateway, registers the PreToolUse and session hooks, requires the sandbox, and
-#      denies a sandboxed shell innsegl's own stores. Idempotent, additive
+#      gateway and registers the PreToolUse and session hooks — the route and
+#      innsegl's own hooks, nothing more (RM-312). With --hardened it also
+#      writes the lockdown: allowManagedHooksOnly, bypass mode disabled, the
+#      sandbox (denying a sandboxed shell innsegl's own stores, with `gh`
+#      excluded), and a copy of the user's own statusLine, which
+#      allowManagedHooksOnly would otherwise hide. Without --hardened, any of
+#      those keys an earlier run wrote are removed. Idempotent, additive
 #      (the operator's own keys survive), and every file is backed up,
 #      timestamped, the moment before it is first changed. This installer
 #      never sudos itself: when the target is not writable it prints the
@@ -47,8 +52,8 @@
 # `--dry-run` runs step 1 (so a missing prerequisite is still caught) and then
 # only computes and prints what steps 2-5 would do; nothing on disk changes.
 #
-# `--egress-control <allowlist file>` (RM-248, #393) additionally locks the
-# sandbox to a domain allowlist: the operator's own list (one host per line;
+# `--egress-control <allowlist file>` (RM-248, #393), with --hardened,
+# additionally locks the sandbox to a domain allowlist: the operator's own list (one host per line;
 # blank lines and lines starting with `#` are ignored), with any host the
 # gateway itself would reach removed — api.anthropic.com and the configured
 # upstream ($INNSEGL_GATEWAY_UPSTREAM). The harness's own model traffic goes
@@ -56,8 +61,9 @@
 # those two hosts never need to be in a sandboxed shell's own allowlist.
 #
 # `--uninstall` removes exactly the keys THIS installer added to the managed
-# settings — the env vars, the one hook entry, the permission and sandbox
-# flags — and the signer symlink, and nothing the operator added themselves.
+# settings — the env vars, the hook entries, the permission and sandbox
+# flags, the statusLine copy — and the signer symlink, and nothing the
+# operator added themselves.
 # It does not touch the running stack; it prints the command that does.
 #
 # `--uninstall-legacy` is separate and opt-in: it removes the OLD wiring an
@@ -68,7 +74,7 @@
 # removes it.
 #
 # USAGE
-#   install.sh [--local-client] [--dry-run] [--uninstall] [--uninstall-legacy]
+#   install.sh [--local-client [--hardened]] [--dry-run] [--uninstall] [--uninstall-legacy]
 #              [--managed-settings <path>] [--egress-control <file>] [DIR...]
 #
 # Every DIR becomes signable, the same as `$INNSEGL_BIN_PATH link DIR` run by
@@ -149,6 +155,7 @@ LEGACY_MCP_URL="${INNSEGL_INSTALL_LEGACY_MCP_URL:-http://127.0.0.1:28080/}"
 
 DRY_RUN=0
 LOCAL_CLIENT=0
+HARDENED=0
 UNINSTALL=0
 PAUSE=0
 RESUME=0
@@ -158,7 +165,7 @@ DIRS=()
 
 usage() {
   cat <<'EOF'
-usage: install.sh [--local-client] [--dry-run] [--uninstall] [--uninstall-legacy]
+usage: install.sh [--local-client [--hardened]] [--dry-run] [--uninstall] [--uninstall-legacy]
                    [--pause | --resume] [--managed-settings <path>]
                    [--egress-control <file>] [DIR...]
 
@@ -168,8 +175,11 @@ PATH, and makes each DIR signable. Client machines connect to it with
 
   --local-client         also make THIS machine a client, the single-host
                          shape: write the harness's managed settings (gateway
-                         env, the PreToolUse and session hooks, the sandbox)
-                         pointing straight at the gateway here
+                         env, the PreToolUse and session hooks) pointing
+                         straight at the gateway here
+  --hardened             with --local-client, also lock the harness down:
+                         managed hooks only, bypass mode disabled, the
+                         sandbox; the user's statusLine is copied in
   --dry-run              print what would change; touch nothing
   --uninstall             remove exactly what this installer added
   --uninstall-legacy      also remove the OLD hook-and-MCP wiring (opt-in)
@@ -178,8 +188,9 @@ PATH, and makes each DIR signable. Client machines connect to it with
   --resume                put the paused managed settings back
   --managed-settings <p>  write the managed settings to <p> instead of the
                           system path
-  --egress-control <f>    lock the sandbox to the domains in <f>, one host
-                          per line, minus the gateway's own upstream
+  --egress-control <f>    with --hardened, lock the sandbox to the domains in
+                          <f>, one host per line, minus the gateway's own
+                          upstream
 EOF
 }
 
@@ -188,6 +199,7 @@ parse_args() {
     case "$1" in
       --dry-run) DRY_RUN=1; shift ;;
       --local-client) LOCAL_CLIENT=1; shift ;;
+      --hardened) HARDENED=1; shift ;;
       --uninstall) UNINSTALL=1; shift ;;
       --uninstall-legacy) UNINSTALL_LEGACY=1; shift ;;
       --pause) PAUSE=1; shift ;;
@@ -302,6 +314,8 @@ connect_managed_settings() {
   local action="$1"
   INSTALL_FILE="$MANAGED_SETTINGS" \
   INSTALL_ACTION="$action" \
+  INSTALL_HARDENED="$HARDENED" \
+  INSTALL_USER_SETTINGS="$HOME/.claude/settings.json" \
   INSTALL_DRY_RUN="$DRY_RUN" \
   INSTALL_HOOK_PATH="$INNSEGL_BIN_PATH" \
   INSTALL_GATEWAY_URL="$GATEWAY_URL" \
@@ -317,6 +331,8 @@ import copy, datetime, difflib, json, os, shlex, sys, tempfile
 path = os.environ["INSTALL_FILE"]
 action = os.environ["INSTALL_ACTION"]
 dry_run = os.environ.get("INSTALL_DRY_RUN") == "1"
+hardened = os.environ.get("INSTALL_HARDENED") == "1"
+user_settings = os.environ.get("INSTALL_USER_SETTINGS", "")
 # The full command line the harness runs: the binary, then the subcommand
 # that names which of the commit path's three adapters this is (see
 # cmd/innsegl/commitpathcli.go) — the binary path alone would run with no
@@ -474,7 +490,6 @@ def uninstall_hooks(obj):
 
 
 def install_flags(obj):
-    obj["allowManagedHooksOnly"] = True
     # The harness's own co-author trailer is an identity claim I6 admits from
     # no source, so a commit carrying it is refused; not writing it spares
     # every agent a refused first commit. An empty string, measured
@@ -482,13 +497,9 @@ def install_flags(obj):
     # silently — gateway, hook and sandbox with it.
     attribution = obj.setdefault("attribution", {})
     attribution["commit"] = ""
-    perms = obj.setdefault("permissions", {})
-    perms["disableBypassPermissionsMode"] = "disable"
 
 
 def uninstall_flags(obj):
-    if obj.get("allowManagedHooksOnly") is True:
-        obj.pop("allowManagedHooksOnly", None)
     attribution = obj.get("attribution")
     if isinstance(attribution, dict):
         if attribution.get("commit") == "":
@@ -497,6 +508,17 @@ def uninstall_flags(obj):
             obj["attribution"] = attribution
         else:
             obj.pop("attribution", None)
+
+
+def install_lockdown_flags(obj):
+    obj["allowManagedHooksOnly"] = True
+    perms = obj.setdefault("permissions", {})
+    perms["disableBypassPermissionsMode"] = "disable"
+
+
+def uninstall_lockdown_flags(obj):
+    if obj.get("allowManagedHooksOnly") is True:
+        obj.pop("allowManagedHooksOnly", None)
     perms = obj.get("permissions")
     if isinstance(perms, dict):
         if perms.get("disableBypassPermissionsMode") == "disable":
@@ -505,6 +527,50 @@ def uninstall_flags(obj):
             obj["permissions"] = perms
         else:
             obj.pop("permissions", None)
+
+
+def user_status_line():
+    # The user's own statusLine (~/.claude/settings.json), or None. Under
+    # allowManagedHooksOnly the harness runs only a managed statusLine, so
+    # --hardened copies it; every other mode removes a managed statusLine
+    # equal to it, which is that copy. Unreadable: no copy is assumed, and
+    # --hardened refuses rather than hide the user's status line.
+    if not user_settings or not os.path.isfile(user_settings):
+        return None
+    try:
+        with open(user_settings, "r", encoding="utf-8") as f:
+            text = f.read()
+        if not text.strip():
+            return None
+        data = json.loads(text)
+    except (OSError, ValueError) as e:
+        if hardened and action == "install":
+            sys.stderr.write(
+                "install.sh: reading the statusLine in %s to copy it: %s\n" % (user_settings, e)
+            )
+            sys.exit(1)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data.get("statusLine")
+
+
+def install_status_line(obj):
+    line = user_status_line()
+    if line is None:
+        return
+    if "statusLine" not in obj:
+        obj["statusLine"] = line
+    elif obj["statusLine"] != line:
+        sys.stderr.write(
+            "install.sh: statusLine in %s is not the user's own; leaving it alone\n" % path
+        )
+
+
+def uninstall_status_line(obj):
+    line = user_status_line()
+    if line is not None and obj.get("statusLine") == line:
+        obj.pop("statusLine", None)
 
 
 def compute_egress_domains():
@@ -523,6 +589,9 @@ def compute_egress_domains():
             seen.add(dl)
             domains.append(d)
     return domains
+
+
+GH_EXCLUDED = "gh *"
 
 
 def install_sandbox(obj):
@@ -549,6 +618,19 @@ def install_sandbox(obj):
         sys.exit(1)
     if ca_allow not in allow:
         allow.append(ca_allow)
+    # Go CLIs such as gh cannot verify TLS certificates under the macOS
+    # sandbox; Claude Code's documented remedies are to run them outside it
+    # and to allow the trust service.
+    excluded = sandbox.setdefault("excludedCommands", [])
+    if not isinstance(excluded, list):
+        sys.stderr.write(
+            "install.sh: sandbox.excludedCommands in %s is not a list; "
+            "refusing to touch it\n" % path
+        )
+        sys.exit(1)
+    if GH_EXCLUDED not in excluded:
+        excluded.append(GH_EXCLUDED)
+    sandbox["enableWeakerNetworkIsolation"] = True
     # Loopback, measured 2026-09-30: without allowLocalBinding the sandboxed
     # shell cannot reach the core at all, and listing 127.0.0.1 in
     # allowedDomains does not help. git runs the signing program inside that
@@ -586,6 +668,13 @@ def uninstall_sandbox(obj):
         sandbox.pop("allowUnsandboxedCommands", None)
     if sandbox.get("failIfUnavailable") is True:
         sandbox.pop("failIfUnavailable", None)
+    if sandbox.get("enableWeakerNetworkIsolation") is True:
+        sandbox.pop("enableWeakerNetworkIsolation", None)
+    excluded = sandbox.get("excludedCommands")
+    if isinstance(excluded, list) and GH_EXCLUDED in excluded:
+        excluded.remove(GH_EXCLUDED)
+        if not excluded:
+            sandbox.pop("excludedCommands", None)
     fs = sandbox.get("filesystem")
     if isinstance(fs, dict):
         deny = fs.get("denyRead")
@@ -649,12 +738,24 @@ if action == "install":
     install_env(obj)
     install_hooks(obj)
     install_flags(obj)
-    install_sandbox(obj)
+    if hardened:
+        install_lockdown_flags(obj)
+        install_sandbox(obj)
+        install_status_line(obj)
+    else:
+        # The route and the hooks only (RM-312): a file an earlier run
+        # locked down is brought back to that, only where a key still holds
+        # what this installer wrote.
+        uninstall_lockdown_flags(obj)
+        uninstall_sandbox(obj)
+        uninstall_status_line(obj)
 elif action == "uninstall":
     uninstall_env(obj)
     uninstall_hooks(obj)
     uninstall_flags(obj)
+    uninstall_lockdown_flags(obj)
     uninstall_sandbox(obj)
+    uninstall_status_line(obj)
 else:
     sys.stderr.write("install.sh: internal error: unknown action %r\n" % action)
     sys.exit(1)
@@ -1123,6 +1224,14 @@ main() {
     echo "install.sh: --egress-control shapes the managed settings, which only --local-client writes" >&2
     exit 2
   fi
+  if [ "$HARDENED" -eq 1 ] && [ "$LOCAL_CLIENT" -ne 1 ]; then
+    echo "install.sh: --hardened shapes the managed settings, which only --local-client writes" >&2
+    exit 2
+  fi
+  if [ -n "$EGRESS_FILE" ] && [ "$HARDENED" -ne 1 ]; then
+    echo "install.sh: --egress-control shapes the sandbox, which only --hardened writes" >&2
+    exit 2
+  fi
 
   check_prereqs
 
@@ -1141,7 +1250,11 @@ main() {
     echo "==> checking the gateway answers"
     check_gateway_answers
 
-    echo "==> writing the managed settings (--local-client)"
+    if [ "$HARDENED" -eq 1 ]; then
+      echo "==> writing the managed settings (--local-client --hardened)"
+    else
+      echo "==> writing the managed settings (--local-client)"
+    fi
     connect_managed_settings install
     verify_harness_loaded
   else

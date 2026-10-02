@@ -20,7 +20,8 @@ import (
 const connectTestBin = "/opt/innsegl/bin/innsegl"
 
 // connectGolden is the whole managed settings file connect writes into an
-// empty target, with HOME standing for the scratch home.
+// empty target: the route and the hooks, nothing that locks the machine
+// down (RM-312).
 const connectGolden = `{
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:28195",
@@ -84,28 +85,8 @@ const connectGolden = `{
       }
     ]
   },
-  "allowManagedHooksOnly": true,
   "attribution": {
     "commit": ""
-  },
-  "permissions": {
-    "disableBypassPermissionsMode": "disable"
-  },
-  "sandbox": {
-    "enabled": true,
-    "allowUnsandboxedCommands": false,
-    "failIfUnavailable": true,
-    "filesystem": {
-      "denyRead": [
-        "HOME/.innsegl"
-      ],
-      "allowRead": [
-        "HOME/.innsegl/ca"
-      ]
-    },
-    "network": {
-      "allowLocalBinding": true
-    }
   }
 }
 `
@@ -212,7 +193,7 @@ func TestCLI015ConnectEnrolsWritesFilesSettingsAndService(t *testing.T) {
 	}
 
 	got := readFile(t, f.settings)
-	want := strings.ReplaceAll(connectGolden, "HOME", f.home)
+	want := connectGolden
 	if string(got) != want {
 		t.Fatalf("managed settings differ\n--- got\n%s\n--- want\n%s", got, want)
 	}
