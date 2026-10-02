@@ -702,6 +702,10 @@ type runningGateway struct {
 	// single-host mode, the verified installation in hosted mode.
 	callers sessionCallers
 
+	// dashboardCert keeps the dashboard's certificate current (RM-311);
+	// nil when $INNSEGL_DASHBOARD_TLS_DIR is unset.
+	dashboardCert *dashboardCert
+
 	// closers release every resource openGateway opened beyond the
 	// listener (the mapping store's pool, the ledger connection, the
 	// backstop's own pool) -- called in Close, in the order they were
@@ -721,6 +725,9 @@ func (g *runningGateway) Addr() string { return g.ln.Addr().String() }
 func (g *runningGateway) Serve(ctx context.Context) error {
 	if g.backstop != nil {
 		go g.runBackstop(ctx)
+	}
+	if g.dashboardCert != nil {
+		go g.dashboardCert.run(ctx)
 	}
 
 	failed := make(chan error, 1)
@@ -930,6 +937,15 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	if err != nil {
 		running.Close()
 		return nil, fmt.Errorf("configure the gateway's own TLS certificate authority: %w", err)
+	}
+
+	if dir := os.Getenv(envDashboardTLSDir); dir != "" {
+		d, dErr := openDashboardCert(ca, dir, log)
+		if dErr != nil {
+			running.Close()
+			return nil, fmt.Errorf("write the dashboard's certificate ($%s): %w", envDashboardTLSDir, dErr)
+		}
+		running.dashboardCert = d
 	}
 
 	mux := http.NewServeMux()

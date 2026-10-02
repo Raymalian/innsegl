@@ -22,7 +22,10 @@ import (
 
 const (
 	dashboardContainerPort = 8080
-	bindDocAddr            = "192.0.2.10"
+	// dashboardTLSContainerPort is the dashboard over HTTPS at the core's
+	// name (RM-311, #493), exposed with the plain port.
+	dashboardTLSContainerPort = 8443
+	bindDocAddr               = "192.0.2.10"
 )
 
 // publishedHosts maps "service:target" to host_ip for every published port.
@@ -50,8 +53,9 @@ func TestOPS127BindAddressIsConfigurableAndLoopbackByDefault(t *testing.T) {
 	bound := publishedHosts(interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml"))
 
 	exposed := map[string]bool{
-		"innsegl-mcp:" + strconv.Itoa(gatewayContainerPort):         true,
-		"innsegl-dashboard:" + strconv.Itoa(dashboardContainerPort): true,
+		"innsegl-mcp:" + strconv.Itoa(gatewayContainerPort):            true,
+		"innsegl-dashboard:" + strconv.Itoa(dashboardContainerPort):    true,
+		"innsegl-dashboard:" + strconv.Itoa(dashboardTLSContainerPort): true,
 	}
 	for k := range exposed {
 		if _, ok := def[k]; !ok {

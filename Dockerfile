@@ -146,6 +146,10 @@ RUN mkdir -p /work /sessions && chown 1000:1000 /work /sessions
 # owned by the image's user for the same reason as the two above.
 RUN mkdir -p /mirror && chown 1000:1000 /mirror && chmod 0700 /mirror
 
+# /dashboard-tls is where this process writes the dashboard's certificate
+# and key (RM-311, #493); the dashboard mounts it read-only, as this user.
+RUN mkdir -p /dashboard-tls && chown 1000:1000 /dashboard-tls && chmod 0700 /dashboard-tls
+
 # /message-key is RM-237's own derived agent-message key (E19, #395-#397): a
 # named volume mounted read-write into innsegl-mcp and read-only into
 # innsegl-api, so the run page's query API can VERIFY a brief or a reply's

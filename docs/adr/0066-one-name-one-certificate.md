@@ -1,6 +1,6 @@
 # ADR-0066: One name, one certificate
 
-- Status: accepted
+- Status: accepted; amended 2026-10-02
 - Date: 2026-10-01
 - Deciders: the operator
 
@@ -33,3 +33,18 @@ browser sees. Both need a name that does not change.
 
 - Renaming the core invalidates every passkey; recovery codes are the path.
 - Each client trusts the core's CA, and only for this purpose.
+
+## Amendment (2026-10-02): the dashboard is served over HTTPS at the same name
+
+**What changed.** The dashboard is served over HTTPS at `<core-name>`
+(RM-311, #493). The core's CA issues its certificate for the same names as
+the gateway's, so a client that trusts the core trusts both. The dashboard's
+certificate has its own key, written by the core to a volume the dashboard
+mounts read-only and renewed before it expires. The relying-party ID is
+`<core-name>` and the origin is the dashboard's HTTPS address.
+
+**Why.** A browser offers passkeys only on a secure origin, and a plain-HTTP
+address is secure only on `localhost`. A separate key means a dashboard that
+leaks its key cannot present the gateway's certificate.
+
+**What still holds.** One name, one CA. Plain HTTP stays for `localhost`.

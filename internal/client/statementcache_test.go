@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // RM-313: the client service remembers the newest statement per (session,
@@ -182,5 +183,31 @@ func TestSER021TheCachedStatementCarriesAgentType(t *testing.T) {
 		"X-Claude-Code-Session-Id": scSession, "X-Claude-Code-Agent-Id": scSubagent})
 	if m := decodeStatementHeader(t, <-seen); m["agent_type"] != agentType {
 		t.Fatalf("the subagent's request carried %v, want its agent_type verbatim", m)
+	}
+}
+
+// RM-313 never-block: a statement never waits on a core that does not
+// answer. The client keeps it, answers 202 within its own short deadline,
+// and attaches it to the session's next forwarded request. Measured
+// 2026-10-02: a core that stopped answering held each statement past the
+// hook's deadline, and every prompt on the machine was stopped.
+func TestRM313AStatementNeverWaitsOnASilentCore(t *testing.T) {
+	core, paths := enrolled(t)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	core.Mux.HandleFunc(SessionStatementPath, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	_, front, _ := startClient(t, paths)
+	start := time.Now()
+	got := scPost(t, front.URL+SessionStatementPath, `{"session_id":"`+scSession+`","cwd":"/w"}`, nil)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("the statement took %s; the hook gives up after 3s", took)
+	}
+	if got != http.StatusAccepted {
+		t.Fatalf("status %d, want 202: kept, the core not reached", got)
 	}
 }
