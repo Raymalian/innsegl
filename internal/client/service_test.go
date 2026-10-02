@@ -87,6 +87,12 @@ func TestServiceInstallAndUninstallOnDarwin(t *testing.T) {
 	if err != nil || string(text) != RenderPlist("/opt/innsegl/bin/innsegl", filepath.Join(home, "Library", "Logs", "innsegl-client.log")) {
 		t.Fatalf("plist not written as rendered (err=%v)", err)
 	}
+	// The log exists before launchd starts anything, so a service that
+	// never ran still leaves the file the person is told to read.
+	logPath := filepath.Join(home, "Library", "Logs", "innsegl-client.log")
+	if fi, err := os.Stat(logPath); err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("the service log %s was not created: %v", logPath, err)
+	}
 	want := [][]string{
 		{"launchctl", "bootout", "gui/501/dev.innsegl.client"},
 		{"launchctl", "bootstrap", "gui/501", plist},

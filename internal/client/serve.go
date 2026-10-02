@@ -3,6 +3,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
@@ -112,12 +113,51 @@ func NewServer(paths Paths, logw io.Writer) (*Server, error) {
 		FlushInterval: -1,
 		Transport:     s.transport,
 		ErrorLog:      s.log,
+		// The core's refusal reaches the harness unchanged; the local log
+		// says what this service knows about it.
+		ModifyResponse: s.explainRefusal,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			s.log.Printf("forwarding to %s: %v", core.CoreURL, err)
 			http.Error(w, fmt.Sprintf("innsegl client: the core at %s did not answer: %v", core.CoreURL, err), http.StatusBadGateway)
 		},
 	}
 	return s, nil
+}
+
+// maxRefusalLogBytes bounds how much of a refusal's body is logged.
+const maxRefusalLogBytes = 512
+
+// explainRefusal logs a refusal of a request by the core. A 401 names no
+// cause, on purpose: the log lists what it can mean. Any other refusal
+// carries its own reason (the core's, or the provider's relayed), which is logged. The response itself is
+// left as it came.
+func (s *Server) explainRefusal(resp *http.Response) error {
+	if resp.StatusCode < 400 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+		return nil
+	}
+	req := resp.Request
+	session := req.Header.Get("X-Claude-Code-Session-Id")
+	if session == "" {
+		session = "(none)"
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		s.log.Printf("the core refused %s %s for session %s (401). The core names no cause: this machine's "+
+			"certificate or installation (revoked, suspended, expired), the stated repository's scope, or a session "+
+			"pinned to another installation. GET %s shows the certificate and the installation.",
+			req.Method, req.URL.Path, session, StatusPath)
+		return nil
+	}
+	head, err := io.ReadAll(io.LimitReader(resp.Body, maxRefusalLogBytes))
+	if err != nil {
+		return err
+	}
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(head), resp.Body), resp.Body}
+	s.log.Printf("the core answered %s %s for session %s with %d: %s",
+		req.Method, req.URL.Path, session, resp.StatusCode, strings.TrimSpace(string(head)))
+	return nil
 }
 
 func (s *Server) setCert(chain []*x509.Certificate) error {

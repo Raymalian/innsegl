@@ -17,6 +17,10 @@ import (
 // LaunchdLabel names the macOS LaunchAgent.
 const LaunchdLabel = "dev.innsegl.client"
 
+// LogFileName is the macOS service log, under ~/Library/Logs. On Linux
+// the service logs to the user journal.
+const LogFileName = "innsegl-client.log"
+
 // SystemdUnit names the Linux systemd --user unit.
 const SystemdUnit = "innsegl-client.service"
 
@@ -116,7 +120,19 @@ func (s Service) Install(bin string) error {
 		if err := os.MkdirAll(logs, 0o755); err != nil {
 			return err
 		}
-		content = RenderPlist(bin, filepath.Join(logs, "innsegl-client.log"))
+		logPath := filepath.Join(logs, LogFileName)
+		// launchd opens the log only when it starts the process, so a
+		// service that never started leaves no file at all. Create it here:
+		// the file then always exists where the person is told to look.
+		// #nosec G302 G304 -- the user's own log, under their home.
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return fmt.Errorf("creating the service log: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return err
+		}
+		content = RenderPlist(bin, logPath)
 	default:
 		content = RenderUnit(bin)
 	}
