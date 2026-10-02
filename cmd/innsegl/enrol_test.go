@@ -245,13 +245,22 @@ type enGateway struct {
 
 func startHostedGateway(t *testing.T, f *enFixture) *enGateway {
 	t.Helper()
-	var hits atomic.Int32
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
+	return startHostedGatewayWith(t, f, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
 			t.Errorf("upstream write: %v", err)
 		}
+	}))
+}
+
+// startHostedGatewayWith is startHostedGateway with the provider's answer
+// given by reply.
+func startHostedGatewayWith(t *testing.T, f *enFixture, reply http.Handler) *enGateway {
+	t.Helper()
+	var hits atomic.Int32
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		reply.ServeHTTP(w, r)
 	}))
 	t.Cleanup(upstream.Close)
 

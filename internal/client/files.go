@@ -28,6 +28,8 @@ type Paths struct {
 	Core   string // core.json
 	// Revoked exists once the core has refused a renewal.
 	Revoked string
+	// Journal holds what the core could not record (ADR-0068), 0700.
+	Journal string
 }
 
 // ClientPaths are the paths under home.
@@ -41,6 +43,7 @@ func ClientPaths(home string) Paths {
 		CA:      filepath.Join(dir, "gateway-ca.pem"),
 		Core:    filepath.Join(dir, "core.json"),
 		Revoked: filepath.Join(dir, "revoked"),
+		Journal: filepath.Join(dir, "journal"),
 	}
 }
 
@@ -51,6 +54,9 @@ type CoreConfig struct {
 	// Listen is the loopback address the managed settings point at, so the
 	// service listens where the harness looks.
 	Listen string `json:"listen,omitempty"`
+	// ProviderURL is where model requests go when the core does not answer
+	// (ADR-0068); empty means DefaultProviderURL.
+	ProviderURL string `json:"provider_url,omitempty"`
 }
 
 // ErrNotEnrolled means there is no core.json: this machine never connected.

@@ -46,7 +46,14 @@ func enrolled(t *testing.T) (*clienttest.Core, Paths) {
 func startClient(t *testing.T, paths Paths) (*Server, *httptest.Server, *syncWriter) {
 	t.Helper()
 	logs := &syncWriter{}
-	srv, err := NewServer(paths, logs)
+	// No test reaches the real provider: a request the core does not answer
+	// goes to this stand-in, which fails the test (ADR-0068).
+	stray := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("a request reached the provider stand-in: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected", http.StatusTeapot)
+	}))
+	t.Cleanup(stray.Close)
+	srv, err := NewServerWith(paths, logs, ServerOptions{ProviderURL: stray.URL, ProviderClient: stray.Client()})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
