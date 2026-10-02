@@ -26,7 +26,8 @@ func testSettingsConfig() SettingsConfig {
 func fixedNow() time.Time { return time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC) }
 
 // goldenSettings is exactly what connect writes into an empty managed
-// settings file for testSettingsConfig.
+// settings file for testSettingsConfig: the route and the hooks, and nothing
+// that locks the machine down (RM-312).
 const goldenSettings = `{
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:28195",
@@ -90,28 +91,8 @@ const goldenSettings = `{
       }
     ]
   },
-  "allowManagedHooksOnly": true,
   "attribution": {
     "commit": ""
-  },
-  "permissions": {
-    "disableBypassPermissionsMode": "disable"
-  },
-  "sandbox": {
-    "enabled": true,
-    "allowUnsandboxedCommands": false,
-    "failIfUnavailable": true,
-    "filesystem": {
-      "denyRead": [
-        "/opt/home-dev/.innsegl"
-      ],
-      "allowRead": [
-        "/opt/home-dev/.innsegl/ca"
-      ]
-    },
-    "network": {
-      "allowLocalBinding": true
-    }
   }
 }
 `
@@ -189,12 +170,12 @@ func TestENF009MergeKeepsOperatorKeysAndBacksUpOnce(t *testing.T) {
 		t.Errorf("the operator's own PreToolUse hook did not survive first: %s", mustJSON(t, pre))
 	}
 	perms := objAt(t, got, "permissions")
-	if perms["disableBypassPermissionsMode"] != "disable" || len(listAt(t, perms, "deny")) != 1 {
-		t.Errorf("permissions = %v", perms)
+	if !reflect.DeepEqual(perms, map[string]any{"deny": []any{"Read(./secrets/**)"}}) {
+		t.Errorf("permissions = %v, want the operator's own only", perms)
 	}
 	deny := listAt(t, objAt(t, objAt(t, got, "sandbox"), "filesystem"), "denyRead")
-	if !reflect.DeepEqual(deny, []any{"/srv/private", "/opt/home-dev/.innsegl"}) {
-		t.Errorf("denyRead = %v", deny)
+	if !reflect.DeepEqual(deny, []any{"/srv/private"}) {
+		t.Errorf("denyRead = %v, want the operator's own only", deny)
 	}
 	// The operator's key order stands: the first key is still theirs.
 	text := readFile(t, path)

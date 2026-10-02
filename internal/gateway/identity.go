@@ -27,7 +27,11 @@ package gateway
 //
 // Any error, and DecisionRefuse itself, ends the request with 403 and a
 // reason -- nothing is queued, nothing is forwarded provisionally (ADR-0058
-// decision 11, IP §6.1).
+// decision 11, IP §6.1). Two inputs the core cannot record are not errors
+// (RM-313): a session with no statement at all, and a repository outside
+// the installation's scope. Those are forwarded unrecorded and reported
+// (statementheader.go), because a refusal there was a loop the harness
+// retried into until it failed.
 
 import (
 	"context"
@@ -197,12 +201,20 @@ type IdentityGuardConfig struct {
 	// no verified installation (InstallationFromContext) is refused: hosted
 	// mode has no anonymous caller. Nil is single-host mode, unchanged.
 	Pins *SessionPins
-	// Scope, set with Pins, refuses to register a run for a repository
-	// outside the installation's scope (ADR-0064 decision 3). With it set, a
+	// Scope, set with Pins, keeps a run from being registered for a
+	// repository outside the installation's scope (ADR-0064 decision 3); such
+	// a request is forwarded unrecorded and reported (RM-313). With it set, a
 	// session that states no repository and was never recorded passes
 	// through unrecorded, and a recorded session stays recorded (ADR-0063,
 	// amended 2026-10-02).
 	Scope ScopeChecker
+	// HeaderStatements, when set, reads the statement the client service
+	// attaches to a model request (StatementHeader). It is used only when
+	// the registry has no statement for the agent (RM-313). Optional.
+	HeaderStatements HeaderStatements
+	// OnUnrecorded, when set, is told once per (session, agent, reason)
+	// about a request forwarded without being recorded. Optional.
+	OnUnrecorded func(UnrecordedFinding)
 }
 
 // IdentityGuard is ADR-0058 decision 11, wired into guard.go's chain: a
@@ -223,6 +235,9 @@ type IdentityGuard struct {
 	sessionWorkspaces *SessionWorkspaces
 	pins              *SessionPins
 	scope             ScopeChecker
+	headerStatements  HeaderStatements
+	onUnrecorded      func(UnrecordedFinding)
+	reported          *reportedFindings
 }
 
 // NewIdentityGuard builds an IdentityGuard, or refuses -- the same
@@ -268,6 +283,9 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 		sessionWorkspaces: cfg.SessionWorkspaces,
 		pins:              cfg.Pins,
 		scope:             cfg.Scope,
+		headerStatements:  cfg.HeaderStatements,
+		onUnrecorded:      cfg.OnUnrecorded,
+		reported:          newReportedFindings(size),
 	}, nil
 }
 
@@ -322,6 +340,10 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		g.sessionEndSignals.Cancel(id.SessionID)
 	}
 
+	// RM-313: a core that restarted has an empty registry; the client
+	// service's statement on the request refills it.
+	g.adoptHeaderStatement(r, id)
+
 	facts := ExtractRequestFacts(r)
 	// The working directory is what the session hook stated, never what the
 	// conversation says (workspaceregistry.go). Attached to the facts so the
@@ -347,9 +369,9 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		}
 		if !recorded {
 			if facts.Stated.Cwd == "" {
-				// Nothing stated yet is not "outside a repository": the hook
-				// has not run, and nothing passes unrecorded on a guess.
-				return nil, directoryNotStatedRefusal(errDirectoryNotStated)
+				// No statement at all, from the hook or the header (RM-313):
+				// forwarded unrecorded and reported, never a retry loop.
+				g.unrecorded(ctx, id, UnrecordedNoStatement, "")
 			}
 			return r.WithContext(ctx), nil
 		}
@@ -380,11 +402,16 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 	}
 
 	runID, actErr := g.act(ctx, decision, id, facts, fp, parentRunID, spawnAgentType, prior)
+	// What the core cannot record is forwarded unrecorded and reported
+	// (RM-313): no statement at all, or a repository the installation may
+	// not record. Never a 503 the harness retries into the same answer.
 	if errors.Is(actErr, errDirectoryNotStated) {
-		return nil, directoryNotStatedRefusal(actErr)
+		g.unrecorded(ctx, id, UnrecordedNoStatement, "")
+		return r.WithContext(ctx), nil
 	}
 	if errors.Is(actErr, errOutOfScope) {
-		return nil, clientRefusal()
+		g.unrecorded(ctx, id, UnrecordedOutOfScope, facts.Stated.Repo)
+		return r.WithContext(ctx), nil
 	}
 	if actErr != nil {
 		return nil, g.refuseErr("", actErr)
@@ -393,14 +420,43 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 	return r.WithContext(WithRunID(ctx, runID)), nil
 }
 
-// directoryNotStatedRefusal is the 503 for a session the hook has not stated
-// yet; err is errDirectoryNotStated or wraps it.
-func directoryNotStatedRefusal(err error) *Refusal {
-	return &Refusal{
-		Status:     http.StatusServiceUnavailable,
-		Reason:     identityGuardSource + ": " + err.Error(),
-		RetryAfter: directoryRetryAfter,
+// adoptHeaderStatement records the statement r carries (StatementHeader)
+// when the registry has none for this agent. A statement the installation
+// may not record is kept as its directory alone, so the session is one
+// outside any repository and the scope is not asked again on every request.
+func (g *IdentityGuard) adoptHeaderStatement(r *http.Request, id Identification) {
+	if g.headerStatements == nil || g.sessionWorkspaces.Knows(id.SessionID, id.AgentID) {
+		return
 	}
+	agentID, st, ok := g.headerStatements.Decode(r, id)
+	if !ok || g.sessionWorkspaces.Knows(id.SessionID, agentID) {
+		return
+	}
+	verdict, err := g.headerStatements.Admit(r.Context(), id.SessionID, st)
+	if err != nil {
+		// The scope cannot be read now; the next request asks again.
+		return
+	}
+	switch verdict {
+	case StatementAdmitted:
+		g.sessionWorkspaces.RecordStated(id.SessionID, agentID, st)
+	case StatementOutOfScope:
+		g.sessionWorkspaces.RecordStated(id.SessionID, agentID, StatedWorkspace{Cwd: st.Cwd})
+		g.unrecorded(r.Context(), id, UnrecordedOutOfScope, st.Repo)
+	case StatementRefused:
+	}
+}
+
+// unrecorded reports, once per (session, agent, reason), a request
+// forwarded without being recorded.
+func (g *IdentityGuard) unrecorded(ctx context.Context, id Identification, reason UnrecordedReason, repo string) {
+	if g.onUnrecorded == nil || !g.reported.first(findingKey{id.SessionID, id.AgentID, reason}) {
+		return
+	}
+	inst, _ := InstallationFromContext(ctx)
+	g.onUnrecorded(UnrecordedFinding{
+		SessionID: id.SessionID, AgentID: id.AgentID, Installation: inst, Repo: repo, Reason: reason,
+	})
 }
 
 // sessionRecorded reports, in hosted mode, whether a request with no prior
@@ -433,16 +489,12 @@ func (g *IdentityGuard) sessionMainRun(ctx context.Context, sessionID string) (s
 }
 
 // errDirectoryNotStated is a run that must be registered for a session the
-// session hook has not stated a directory for yet. It is answered 503 with
-// Retry-After, not 403: the hook runs before every user turn and every
-// subagent, so the same request succeeds once it has.
+// session hook has not stated a directory for, and no header statement
+// supplied. The request is forwarded unrecorded and reported (RM-313): a 503
+// here was a loop the harness retried into until it gave up.
 var errDirectoryNotStated = errors.New("the session hook has not stated this session's working " +
-	"directory yet; `innsegl hook session` must run on SessionStart, UserPromptSubmit, SubagentStart " +
-	"and CwdChanged (install.sh installs it)")
-
-// directoryRetryAfter is how long a harness is asked to wait before retrying
-// a request refused with errDirectoryNotStated.
-const directoryRetryAfter = 2 * time.Second
+	"directory; `innsegl hook session` must run on SessionStart, UserPromptSubmit, SubagentStart " +
+	"and CwdChanged")
 
 // resolveWorkspace resolves the hook-stated directory, refusing with
 // errDirectoryNotStated rather than asking the resolver about nothing.
@@ -508,7 +560,8 @@ func (g *IdentityGuard) recordedWorkspace(ctx context.Context, id Identification
 }
 
 // errOutOfScope is a run the installation may not register: no repository to
-// register it under, or one outside its scope. Answered with the client refusal.
+// register it under, or one outside its scope. The request is forwarded
+// unrecorded and reported (RM-313), never refused.
 var errOutOfScope = errors.New("the stated repository is outside the installation's scope")
 
 // outageRetryAfter is how long a harness is asked to wait before retrying a

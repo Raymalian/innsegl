@@ -705,6 +705,42 @@ func TestGW018HostedGuardOnEveryRoute(t *testing.T) {
 	}
 	g.upstream.Store(0)
 
+	// RM-313: nothing the core cannot record is a 503 loop. A session whose
+	// statement was refused for scope, and one never stated at all, are
+	// forwarded unrecorded.
+	const outSession, unstatedSession = "55555555-5555-4555-8555-555555555555", "66666666-6666-4666-8666-666666666666"
+	if status, body := g.post(t, clA, gatewaySessionWorkspacePath, statement(t, outSession, enOtherRepo), nil); status != http.StatusUnauthorized || body != enGuardRefusal {
+		t.Fatalf("out-of-scope statement: %d %s, want the refusal the hook surfaces", status, body)
+	}
+	for _, s := range []string{outSession, unstatedSession} {
+		if status, body := g.post(t, clA, "/v1/messages", enMessage, messageHeaders(s)); status != http.StatusOK {
+			t.Fatalf("session %s: %d %s, want it forwarded unrecorded", s, status, body)
+		}
+	}
+	// The statement on the request, as the client service attaches it: a
+	// core whose registry is empty (a restart) records the run from it, and
+	// a header naming a repository out of scope is forwarded unrecorded.
+	const headerSession, headerOutSession = "88888888-8888-4888-8888-888888888888", "99999999-9999-4999-8999-999999999999"
+	for s, repo := range map[string]string{headerSession: enRepo, headerOutSession: enOtherRepo} {
+		h := messageHeaders(s)
+		h[gateway.StatementHeader] = base64.RawURLEncoding.EncodeToString([]byte(statement(t, s, repo)))
+		if status, body := g.post(t, clA, "/v1/messages", enMessage, h); status != http.StatusOK {
+			t.Fatalf("session %s with a header statement for %s: %d %s, want it forwarded", s, repo, status, body)
+		}
+	}
+	if g.upstream.Load() != 4 {
+		t.Fatalf("upstream saw %d requests, want 4", g.upstream.Load())
+	}
+	if n := f.count(t, `SELECT count(*) FROM innsegl.gateway_run_mapping WHERE session_id = $1 AND client_id = $2`, headerSession, a.id); n != 1 {
+		t.Fatalf("mapping rows for the header-stated session = %d, want 1", n)
+	}
+	for _, s := range []string{outSession, unstatedSession, headerOutSession} {
+		if n := f.count(t, `SELECT count(*) FROM innsegl.gateway_run_mapping WHERE session_id = $1`, s); n != 0 {
+			t.Fatalf("session %s has %d mapping rows, want none", s, n)
+		}
+	}
+	g.upstream.Store(0)
+
 	// In scope: stated, then forwarded, and the mapping row names A (GW-019).
 	if status, body := g.post(t, clA, gatewaySessionWorkspacePath, statement(t, session, enRepo), nil); status != http.StatusNoContent {
 		t.Fatalf("in-scope statement: %d %s", status, body)

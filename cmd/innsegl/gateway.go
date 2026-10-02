@@ -1124,14 +1124,25 @@ func sessionWorkspaceHandler(ws *gateway.SessionWorkspaces, rateLimit *gateway.S
 		// Hosted mode (RM-284, #460): the stated repository must be in the
 		// installation's scope, and the session must be this installation's.
 		// A refused statement records nothing, so no run is registered from it.
-		admitted, err := callers.admitStatement(r.Context(), in.SessionID, in.stated())
+		verdict, err := callers.admitStatement(r.Context(), in.SessionID, in.stated())
 		if err != nil {
 			log.warn("a session workspace statement could not be checked", "err", err)
 			http.Error(w, "innsegl gateway: session workspace: the scope check is unavailable; retry",
 				http.StatusServiceUnavailable)
 			return
 		}
-		if !admitted {
+		switch verdict {
+		case gateway.StatementAdmitted:
+		case gateway.StatementOutOfScope:
+			// Refused, so the hook can say so; the session's model requests
+			// are forwarded unrecorded, never refused (RM-313).
+			inst, _ := gateway.InstallationFromContext(r.Context())
+			log.warn("finding: a session statement names a repository outside the installation's scope; "+
+				"the session runs unrecorded", "reason", string(gateway.UnrecordedOutOfScope),
+				"session_id", in.SessionID, "agent_id", in.AgentID, "installation_id", inst, "repo", in.Repo)
+			callers.refuseCaller(w, "session workspace")
+			return
+		default:
 			callers.refuseCaller(w, "session workspace")
 			return
 		}
@@ -1326,6 +1337,11 @@ func openIdentityStack(
 		cfg.Pins, cfg.Scope = hosted.pins, hosted.scope
 		running.callers = hostedCallers{scope: hosted.scope, pins: hosted.pins}
 	}
+	// RM-313: the client service's statement on a model request refills a
+	// registry a restart emptied; what cannot be recorded is forwarded and
+	// logged as a finding.
+	cfg.HeaderStatements = headerStatements{callers: running.callers}
+	cfg.OnUnrecorded = logUnrecorded(running.log)
 	identityGuard, err = gateway.NewIdentityGuard(cfg)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)

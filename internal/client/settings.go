@@ -32,6 +32,39 @@ type SettingsConfig struct {
 	// CAAllow is the one directory under it the shell may read
 	// (~/.innsegl/ca).
 	CAAllow string
+	// Hardened adds the machine lockdown on top of the route and the hooks
+	// (RM-312): allowManagedHooksOnly, bypass mode disabled, and the
+	// sandbox. Without it the client writes the route and its own hooks
+	// only, and removes any lockdown keys an earlier version wrote.
+	Hardened bool
+	// StatusLine is the user's own statusLine from ~/.claude/settings.json
+	// (nil when there is none). Under allowManagedHooksOnly the harness runs
+	// no statusLine command but a managed one, so --hardened copies it into
+	// the managed settings; otherwise a managed statusLine equal to it is
+	// that copy, and is removed.
+	StatusLine any
+}
+
+// ReadStatusLine returns the statusLine value in the user settings file at
+// path, or nil when the file or the key is absent.
+func ReadStatusLine(path string) (any, error) {
+	// #nosec G304 -- path is the user's own Claude Code settings file.
+	text, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if strings.TrimSpace(string(text)) == "" {
+		return nil, nil
+	}
+	obj, err := parseObject(text)
+	if err != nil {
+		return nil, fmt.Errorf("%s is not a JSON object: %w", path, err)
+	}
+	line, _ := obj.get("statusLine")
+	return line, nil
 }
 
 type envVar struct{ key, val string }
@@ -108,7 +141,7 @@ func planSettings(path string, cfg SettingsConfig, out io.Writer, install bool) 
 	}
 	before := marshal(obj)
 	if install {
-		err = installKeys(obj, cfg)
+		err = installKeys(obj, cfg, path, out)
 	} else {
 		uninstallKeys(obj, cfg, path, out)
 	}
@@ -184,7 +217,7 @@ func loadSettings(path string) (*object, []byte, error) {
 	return obj, text, nil
 }
 
-func installKeys(obj *object, cfg SettingsConfig) error {
+func installKeys(obj *object, cfg SettingsConfig, path string, out io.Writer) error {
 	env, err := obj.child("env")
 	if err != nil {
 		return err
@@ -206,7 +239,6 @@ func installKeys(obj *object, cfg SettingsConfig) error {
 		}
 	}
 
-	obj.set("allowManagedHooksOnly", true)
 	// The harness's own co-author trailer is an identity claim I6 admits
 	// from no source. An empty string, never false: false makes Claude Code
 	// discard the whole settings file, silently.
@@ -215,6 +247,21 @@ func installKeys(obj *object, cfg SettingsConfig) error {
 		return err
 	}
 	attribution.set("commit", "")
+
+	if !cfg.Hardened {
+		// The route and the hooks only (RM-312). A file an earlier version
+		// locked down is brought back to that, key by key, and only where a
+		// key still holds what innsegl wrote.
+		removeLockdown(obj, cfg)
+		return nil
+	}
+	return installLockdown(obj, cfg, path, out)
+}
+
+// installLockdown writes the --hardened keys: the managed hooks only, bypass
+// mode disabled, and a sandbox that denies the agent's shell ~/.innsegl.
+func installLockdown(obj *object, cfg SettingsConfig, path string, out io.Writer) error {
+	obj.set("allowManagedHooksOnly", true)
 	perms, err := obj.child("permissions")
 	if err != nil {
 		return err
@@ -228,6 +275,13 @@ func installKeys(obj *object, cfg SettingsConfig) error {
 	sandbox.set("enabled", true)
 	sandbox.set("allowUnsandboxedCommands", false)
 	sandbox.set("failIfUnavailable", true)
+	// Go CLIs such as gh cannot verify TLS certificates under the macOS
+	// sandbox; Claude Code's documented remedies are to run them outside it
+	// and to allow the trust service.
+	if err = appendUnique(sandbox, "excludedCommands", ghExcluded); err != nil {
+		return err
+	}
+	sandbox.set("enableWeakerNetworkIsolation", true)
 	fsys, err := sandbox.child("filesystem")
 	if err != nil {
 		return err
@@ -248,7 +302,67 @@ func installKeys(obj *object, cfg SettingsConfig) error {
 		return err
 	}
 	net.set("allowLocalBinding", true)
+
+	// allowManagedHooksOnly hides the user's own statusLine; a managed one
+	// still runs, so the user's is copied here. A managed statusLine the
+	// operator set is theirs and stays.
+	if cfg.StatusLine != nil {
+		if current, present := obj.get("statusLine"); !present {
+			obj.set("statusLine", cfg.StatusLine)
+		} else if !sameJSON(current, cfg.StatusLine) {
+			fmt.Fprintf(out, "innsegl: statusLine in %s is not the user's own; leaving it alone\n", path)
+		}
+	}
 	return nil
+}
+
+// ghExcluded is the sandbox.excludedCommands entry --hardened writes.
+const ghExcluded = "gh *"
+
+func sameJSON(a, b any) bool { return bytes.Equal(marshal(a), marshal(b)) }
+
+// removeLockdown removes every --hardened key, and the lockdown earlier
+// versions wrote by default, only where it still holds what innsegl wrote.
+func removeLockdown(obj *object, cfg SettingsConfig) {
+	if v, _ := obj.get("allowManagedHooksOnly"); v == true {
+		obj.del("allowManagedHooksOnly")
+	}
+	if perms, ok := childIfObject(obj, "permissions"); ok {
+		if v, _ := perms.get("disableBypassPermissionsMode"); v == "disable" {
+			perms.del("disableBypassPermissionsMode")
+		}
+		dropIfEmpty(obj, "permissions", perms)
+	}
+
+	if sandbox, ok := childIfObject(obj, "sandbox"); ok {
+		for _, kv := range []struct {
+			key string
+			val any
+		}{{"enabled", true}, {"allowUnsandboxedCommands", false}, {"failIfUnavailable", true}, {"enableWeakerNetworkIsolation", true}} {
+			if v, present := sandbox.get(kv.key); present && v == kv.val {
+				sandbox.del(kv.key)
+			}
+		}
+		removeFromList(sandbox, "excludedCommands", ghExcluded)
+		if fsys, ok := childIfObject(sandbox, "filesystem"); ok {
+			removeFromList(fsys, "denyRead", cfg.LogDeny)
+			removeFromList(fsys, "allowRead", cfg.CAAllow)
+			dropIfEmpty(sandbox, "filesystem", fsys)
+		}
+		if net, ok := childIfObject(sandbox, "network"); ok {
+			if v, _ := net.get("allowLocalBinding"); v == true {
+				net.del("allowLocalBinding")
+			}
+			dropIfEmpty(sandbox, "network", net)
+		}
+		dropIfEmpty(obj, "sandbox", sandbox)
+	}
+
+	if cfg.StatusLine != nil {
+		if current, present := obj.get("statusLine"); present && sameJSON(current, cfg.StatusLine) {
+			obj.del("statusLine")
+		}
+	}
 }
 
 func hookGroup(matcher, command string) *object {
@@ -378,41 +492,13 @@ func uninstallKeys(obj *object, cfg SettingsConfig, path string, out io.Writer) 
 		dropIfEmpty(obj, "hooks", hooks)
 	}
 
-	if v, _ := obj.get("allowManagedHooksOnly"); v == true {
-		obj.del("allowManagedHooksOnly")
-	}
 	if attribution, ok := childIfObject(obj, "attribution"); ok {
 		if v, present := attribution.get("commit"); present && v == "" {
 			attribution.del("commit")
 		}
 		dropIfEmpty(obj, "attribution", attribution)
 	}
-	if perms, ok := childIfObject(obj, "permissions"); ok {
-		if v, _ := perms.get("disableBypassPermissionsMode"); v == "disable" {
-			perms.del("disableBypassPermissionsMode")
-		}
-		dropIfEmpty(obj, "permissions", perms)
-	}
-
-	if sandbox, ok := childIfObject(obj, "sandbox"); ok {
-		for key, val := range map[string]any{"enabled": true, "allowUnsandboxedCommands": false, "failIfUnavailable": true} {
-			if v, present := sandbox.get(key); present && v == val {
-				sandbox.del(key)
-			}
-		}
-		if fsys, ok := childIfObject(sandbox, "filesystem"); ok {
-			removeFromList(fsys, "denyRead", cfg.LogDeny)
-			removeFromList(fsys, "allowRead", cfg.CAAllow)
-			dropIfEmpty(sandbox, "filesystem", fsys)
-		}
-		if net, ok := childIfObject(sandbox, "network"); ok {
-			if v, _ := net.get("allowLocalBinding"); v == true {
-				net.del("allowLocalBinding")
-			}
-			dropIfEmpty(sandbox, "network", net)
-		}
-		dropIfEmpty(obj, "sandbox", sandbox)
-	}
+	removeLockdown(obj, cfg)
 }
 
 func childIfObject(o *object, key string) (*object, bool) {

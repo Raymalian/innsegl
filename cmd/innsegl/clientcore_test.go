@@ -110,6 +110,20 @@ func TestOPS130TheClientEnrolsAndWorksThroughTheHostedCore(t *testing.T) {
 	if n := f.count(t, `SELECT count(*) FROM innsegl.gateway_run_mapping WHERE session_id = $1`, homeSession); n != 0 {
 		t.Fatalf("a session outside any repository has %d mapping rows", n)
 	}
+
+	// RM-313: a statement the core refuses for scope is surfaced (401 to the
+	// hook), and the session's model requests, carrying the client service's
+	// cached statement, are forwarded unrecorded: never a 503 loop.
+	const outSession = "55555555-5555-4555-8555-555555555555"
+	if status, body := post(gatewaySessionWorkspacePath, statement(t, outSession, enOtherRepo), nil); status != http.StatusUnauthorized {
+		t.Fatalf("out-of-scope statement through the client service: %d %s, want 401", status, body)
+	}
+	if status, body := post("/v1/messages", enMessage, messageHeaders(outSession)); status != http.StatusOK {
+		t.Fatalf("model request after an out-of-scope statement: %d %s, want it forwarded", status, body)
+	}
+	if n := f.count(t, `SELECT count(*) FROM innsegl.gateway_run_mapping WHERE session_id = $1`, outSession); n != 0 {
+		t.Fatalf("an out-of-scope session has %d mapping rows", n)
+	}
 	g.upstream.Store(1)
 
 	// Renewal against the real core, past half-life: same installation, a

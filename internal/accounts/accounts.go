@@ -684,7 +684,7 @@ func (s *Store) SetInstallationStatus(ctx context.Context, id, status, actor str
 
 // InScope reports whether an installation may act on a repository: the
 // installation is active, and the repository is in its repos (or its repos is
-// "*") AND the installation's account holds a live grant on it. An unknown
+// "*" or empty) AND the installation's account holds a live grant on it. An unknown
 // installation is out of scope, not an error.
 func (s *Store) InScope(ctx context.Context, installationID, repo string) (bool, error) {
 	if repo == "" || repo == AllRepos {
@@ -700,7 +700,7 @@ func (s *Store) InScope(ctx context.Context, installationID, repo string) (bool,
 		    WHERE i.installation_id = $1
 		      AND i.status = 'active'
 		      AND g.repo = $2
-		      AND ($2 = ANY (i.repos) OR i.repos = ARRAY['*']::text[]))`,
+		      AND ($2 = ANY (i.repos) OR i.repos = ARRAY['*']::text[] OR cardinality(i.repos) = 0))`,
 		installationID, repo).Scan(&ok)
 	if err != nil {
 		return false, fmt.Errorf("accounts: checking scope: %w", err)
@@ -769,9 +769,13 @@ func (s *Store) ClaimRepo(ctx context.Context, installationID, repo string) (boo
 	return in, nil
 }
 
-// reposAdmit reports whether an installation's repos list names repo: "*",
-// or repo itself.
+// reposAdmit reports whether an installation's repos list admits repo: "*",
+// repo itself, or an empty list. Only a list set on purpose narrows; an empty
+// one is the default, every repository (RM-313).
 func reposAdmit(repos []string, repo string) bool {
+	if len(repos) == 0 {
+		return true
+	}
 	for _, r := range repos {
 		if r == AllRepos || r == repo {
 			return true

@@ -68,14 +68,17 @@ func TestHostedSessionOutsideAnyRepositoryPassesThroughUnrecorded(t *testing.T) 
 	}
 }
 
-// No statement at all is not "outside a repository": the hook has not run
-// yet, so the request waits for it rather than passing unrecorded.
-func TestHostedSessionWithNoStatementIsAskedToRetry(t *testing.T) {
+// No statement at all (no hook, no header) is forwarded unrecorded (RM-313):
+// waiting for a hook that never comes was a 503 loop.
+func TestHostedSessionWithNoStatementIsForwardedUnrecorded(t *testing.T) {
 	f := newIdentityFixture(t)
 	g := newHostedIdentityGuard(t, f, ptScope())
-	_, ref := hostedCheck(t, g, Identification{SessionID: "unstated", AgentID: mainAgentID}, cgInstA)
-	if ref == nil || ref.Status != http.StatusServiceUnavailable {
-		t.Fatalf("no statement: %+v, want 503", ref)
+	out, ref := hostedCheck(t, g, Identification{SessionID: "unstated", AgentID: mainAgentID}, cgInstA)
+	if ref != nil || out == nil {
+		t.Fatalf("no statement: %+v, want it forwarded", ref)
+	}
+	if _, ok := RunIDFromContext(out.Context()); ok || len(f.registrar.calls) != 0 {
+		t.Fatal("an unstated session was recorded")
 	}
 }
 
@@ -134,39 +137,20 @@ func TestHostedRecordingIsStickyAcrossARestart(t *testing.T) {
 }
 
 // A repository the installation may not act on (another organisation holds
-// it, or an explicit list leaves it out) is the client refusal, and nothing
-// is registered.
-func TestHostedRepositoryOutOfScopeIsRefused(t *testing.T) {
+// it, or an explicit list leaves it out) is forwarded unrecorded (RM-313),
+// and nothing is registered.
+func TestHostedRepositoryOutOfScopeIsForwardedUnrecorded(t *testing.T) {
 	f := newIdentityFixture(t)
 	g := newHostedIdentityGuard(t, f, ptScope())
 	f.sessionWorkspaces.RecordStated("held", "", StatedWorkspace{Cwd: "/w", Repo: "github.com/rival/held", Branch: "main", Task: "t1"})
-	_, ref := hostedCheck(t, g, Identification{SessionID: "held", AgentID: mainAgentID}, cgInstA)
-	if ref == nil || ref.Status != http.StatusUnauthorized || ref.Reason != ClientRefusalMessage {
-		t.Fatalf("held by another organisation: %+v, want the 401 client refusal", ref)
+	out, ref := hostedCheck(t, g, Identification{SessionID: "held", AgentID: mainAgentID}, cgInstA)
+	if ref != nil || out == nil {
+		t.Fatalf("held by another organisation: %+v, want it forwarded unrecorded", ref)
+	}
+	if _, ok := RunIDFromContext(out.Context()); ok {
+		t.Fatal("an out-of-scope request carries a run")
 	}
 	if len(f.registrar.calls) != 0 {
-		t.Fatalf("registrar calls %v after a refusal", f.registrar.calls)
-	}
-}
-
-// The session table remembers the newest statement that named a repository,
-// even after a directory-only statement replaces the current one.
-func TestSessionWorkspacesRememberTheLastRepository(t *testing.T) {
-	s := NewSessionWorkspaces(0)
-	if _, ok := s.LastRepo("s"); ok {
-		t.Fatal("an unknown session has a repository")
-	}
-	s.Record("s", "", "/home")
-	if _, ok := s.LastRepo("s"); ok {
-		t.Fatal("a directory-only session has a repository")
-	}
-	s.RecordStated("s", "", StatedWorkspace{Cwd: "/w", Repo: ptRepo, Branch: "main", Task: "t1"})
-	s.Record("s", "", "/tmp")
-	if st, _ := s.LookupStated("s", ""); st.HasRepo() || st.Cwd != "/tmp" {
-		t.Fatalf("current statement %+v, want /tmp with no repository", st)
-	}
-	st, ok := s.LastRepo("s")
-	if !ok || st.Repo != ptRepo || st.Task != "t1" {
-		t.Fatalf("LastRepo = %+v, %v; want %s", st, ok, ptRepo)
+		t.Fatalf("registrar calls %v for an out-of-scope repository", f.registrar.calls)
 	}
 }

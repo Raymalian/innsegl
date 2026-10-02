@@ -149,6 +149,9 @@ func (p *Proxy) buildRequest(r *http.Request) (*http.Request, error) {
 	}
 	outReq.Header = cloneHeader(r.Header)
 	stripHopByHop(outReq.Header)
+	// The client service's statement is for the core alone (RM-313): it
+	// names a host path, which is not the provider's to see.
+	outReq.Header.Del(StatementHeader)
 	// The reply is read here as well as relayed (stream, below), and a
 	// compressed one reads as nothing: Claude Code asks for gzip, br and
 	// zstd. Identity is the one encoding every client accepts, so the

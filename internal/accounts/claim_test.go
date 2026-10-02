@@ -114,3 +114,23 @@ func TestEnrolmentTokenReposDefaultToEverything(t *testing.T) {
 		t.Fatalf("repos = %v, want [*]", enr.Repos)
 	}
 }
+
+// RM-313: an installation's list narrows its repositories only when it was
+// set on purpose. An empty list, like "*", is every repository its
+// organisation holds or will hold on first use.
+func TestReposAdmitTreatsAnEmptyListAsEverything(t *testing.T) {
+	for _, tc := range []struct {
+		repos []string
+		want  bool
+	}{
+		{nil, true},
+		{[]string{}, true},
+		{[]string{AllRepos}, true},
+		{[]string{"github.com/acme/app"}, true},
+		{[]string{"github.com/acme/other"}, false},
+	} {
+		if got := reposAdmit(tc.repos, "github.com/acme/app"); got != tc.want {
+			t.Errorf("reposAdmit(%q) = %v, want %v", tc.repos, got, tc.want)
+		}
+	}
+}
