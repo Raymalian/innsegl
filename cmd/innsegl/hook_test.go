@@ -108,7 +108,9 @@ func hookWantExport(t *testing.T, toolUseID string) string {
 	bin := hookExpectSelfBinary(t)
 	return fmt.Sprintf(
 		"export %s=%s GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=true "+
-			"GIT_CONFIG_KEY_1=gpg.format GIT_CONFIG_VALUE_1=x509 GIT_CONFIG_KEY_2=gpg.x509.program GIT_CONFIG_VALUE_2=%s; ",
+			"GIT_CONFIG_KEY_1=gpg.format GIT_CONFIG_VALUE_1=x509 GIT_CONFIG_KEY_2=gpg.x509.program GIT_CONFIG_VALUE_2=%s "+
+			"GIT_AUTHOR_NAME=Innsegl GIT_AUTHOR_EMAIL=agent@innsegl.invalid "+
+			"GIT_COMMITTER_NAME=Innsegl GIT_COMMITTER_EMAIL=agent@innsegl.invalid; ",
 		commitpath.EnvToolUseID, toolUseID, bin)
 }
 
@@ -384,7 +386,7 @@ func TestHookDoesNotAppendGitConfigWhenTheCommandAlreadyAssignsGitConfigCount(t 
 	_, stdout, _ := runHook(t, body)
 	out := decodeHookOutput(t, stdout)
 	got := updatedCommand(t, out)
-	want := fmt.Sprintf("export %s=%s; %s", commitpath.EnvToolUseID, toolUseID, command)
+	want := fmt.Sprintf("export %s=%s %s; %s", commitpath.EnvToolUseID, toolUseID, strings.Join(agentIdentityAssignments(), " "), command)
 	if got != want {
 		t.Errorf("updatedInput.command = %q, want %q", got, want)
 	}
@@ -482,5 +484,92 @@ func TestENF005HookCarriesToolCallIDAndSigningConfigForOneGitProcessOnly(t *test
 	}
 	if !bytes.Equal(before, after) {
 		t.Errorf(".git/config changed:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// TestHookInjectsAgentIdentityIntoAGitCommit (RM-315): the export carries the
+// four author/committer variables with the agent values the core's I6 policy
+// admits.
+func TestHookInjectsAgentIdentityIntoAGitCommit(t *testing.T) {
+	_, stdout, _ := runHook(t, hookJSON(t, "Bash", `git commit -m x`, "toolu_ident0000001", nil))
+	got := updatedCommand(t, decodeHookOutput(t, stdout))
+	for _, v := range []string{
+		"GIT_AUTHOR_NAME=Innsegl", "GIT_AUTHOR_EMAIL=agent@innsegl.invalid",
+		"GIT_COMMITTER_NAME=Innsegl", "GIT_COMMITTER_EMAIL=agent@innsegl.invalid",
+	} {
+		if !strings.Contains(got, " "+v) {
+			t.Errorf("rewritten command lacks %q: %q", v, got)
+		}
+	}
+}
+
+// TestHookDoesNotOverrideAnExplicitAuthorIdentity (RM-315): a command that
+// already sets any of the four variables keeps its own choice; the hook adds
+// none of the four.
+func TestHookDoesNotOverrideAnExplicitAuthorIdentity(t *testing.T) {
+	for _, name := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		command := name + `=Bob git commit -m x`
+		_, stdout, _ := runHook(t, hookJSON(t, "Bash", command, "toolu_ident0000002", nil))
+		got := updatedCommand(t, decodeHookOutput(t, stdout))
+		prefix := strings.TrimSuffix(got, command)
+		if strings.Contains(prefix, "GIT_AUTHOR_") || strings.Contains(prefix, "GIT_COMMITTER_") {
+			t.Errorf("%s: hook overrode an explicit identity: %q", name, got)
+		}
+		if !strings.Contains(prefix, "GIT_CONFIG_COUNT=3") {
+			t.Errorf("%s: signing config should still be injected: %q", name, got)
+		}
+	}
+}
+
+func TestCommandAlreadySetsAuthorIdentity(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want bool
+	}{
+		{`git commit -m x`, false},
+		{`GIT_AUTHOR_EMAIL=a@b git commit`, true},
+		{`export GIT_COMMITTER_NAME=x && git commit`, true},
+		{`MY_GIT_AUTHOR_NAME=x git commit`, false},
+	}
+	for _, c := range cases {
+		if got := commandAlreadySetsAuthorIdentity(c.cmd); got != c.want {
+			t.Errorf("commandAlreadySetsAuthorIdentity(%q) = %v, want %v", c.cmd, got, c.want)
+		}
+	}
+}
+
+// TestHookCommitIsAuthoredByTheAgent (RM-315, end to end): a real git run
+// through the hook's rewritten command, with a user identity configured that
+// the core would refuse, produces a commit authored and committed by
+// agent@innsegl.invalid.
+func TestHookCommitIsAuthoredByTheAgent(t *testing.T) {
+	git := ghGitOrSkip(t)
+	home := t.TempDir()
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := ghIsolatedEnv(home)
+	ghRun(t, git, repo, env, "init", "-q", "-b", "main")
+	ghRun(t, git, repo, env, "config", "user.name", "Human")
+	ghRun(t, git, repo, env, "config", "user.email", "human@users.noreply.github.com")
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ghRun(t, git, repo, env, "add", "a.txt")
+
+	_, stdout, _ := runHook(t, hookJSON(t, "Bash", `git commit -m "rm-315"`, "toolu_rm315fixture001", nil))
+	rewritten := updatedCommand(t, decodeHookOutput(t, stdout))
+	sh := exec.CommandContext(t.Context(), "sh", "-c", rewritten)
+	sh.Dir = repo
+	sh.Env = append(append([]string{}, env...), hookFakeSignEnv+"=1")
+	if out, err := sh.CombinedOutput(); err != nil {
+		t.Fatalf("sh -c %q: %v\n%s", rewritten, err, out)
+	}
+	got := ghRun(t, git, repo, env, "cat-file", "commit", "HEAD")
+	for _, role := range []string{"author Innsegl <agent@innsegl.invalid>", "committer Innsegl <agent@innsegl.invalid>"} {
+		if !strings.Contains(got, role) {
+			t.Errorf("commit lacks %q; object:\n%s", role, got)
+		}
 	}
 }
