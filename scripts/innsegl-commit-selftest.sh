@@ -1105,6 +1105,23 @@ else
 fi
 script_tool sign_commit ok "{\"commit_sha\":\"$HEAD_SHA\",\"rekor_entry\":{\"log_index\":7},\"trailers\":{}}"
 
+# RM-311 follow-up: on a machine connected to a remote core (`innsegl
+# connect`, ~/.innsegl/client/core.json) this script has no local MCP to
+# reach. It says so and names the path that works, instead of reporting the
+# identity service unreachable -- measured 2026-10-02, an agent read that as
+# an outage and went looking for stopped containers.
+HOSTED_HOME="$WORK/hosted-home"
+mkdir -p "$HOSTED_HOME/.innsegl/client"
+printf '{"core_url":"https://core.example.test:28095"}\n' > "$HOSTED_HOME/.innsegl/client/core.json"
+HOSTED_OUT="$(cd "$WORK" && env -u INNSEGL_MCP_ADMIN_URL -u INNSEGL_MCP_URL HOME="$HOSTED_HOME" \
+  "$SIGNER" -p a.txt -m "hosted" 2>&1)"; HOSTED_STATUS=$?
+if [ "$HOSTED_STATUS" -eq 2 ] && printf '%s' "$HOSTED_OUT" | grep -q "git commit" \
+   && ! printf '%s' "$HOSTED_OUT" | grep -q "could not be reached"; then
+  ok "a connected client is told to use git commit, not that the service is down"
+else
+  bad "connected client: exit $HOSTED_STATUS, said: $HOSTED_OUT"
+fi
+
 echo
 echo "commit-selftest: $pass ok, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

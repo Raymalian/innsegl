@@ -133,6 +133,17 @@ usage() {
 
 [ $# -gt 0 ] || usage
 
+# A machine connected to a remote core (`innsegl connect`) has no local MCP for
+# this script to reach: there, a commit made in Claude Code is signed by the
+# harness hooks through the client service. Say that, rather than reporting the
+# identity service unreachable.
+if [ -z "${INNSEGL_MCP_ADMIN_URL:-}" ] && [ -f "${HOME}/.innsegl/client/core.json" ]; then
+  echo "innsegl-commit.sh: this machine is connected to a remote core (~/.innsegl/client/core.json)," >&2
+  echo "and this script needs the single-host stack. Use plain \`git commit\` from Claude Code:" >&2
+  echo "its hooks sign the commit through the client service. Nothing is down." >&2
+  exit 2
+fi
+
 # A newline, spelled once. `-p` accumulates into one newline-separated variable
 # because POSIX sh has no arrays, and a path holding a newline is refused where
 # it is given rather than silently split into two here.
