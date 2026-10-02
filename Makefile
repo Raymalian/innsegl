@@ -487,6 +487,13 @@ test-clean:
 innsegl-up-here: sigstore-up
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
 	@echo "signing in $(REPO_PATH)  as  $(REPO)"
+	@# The stack's host folders are made here, as the user running make, for
+	@# the reason innsegl-backup gives: a bind-mount source that does not exist
+	@# is created by the runtime, and on Linux that means owned by root and
+	@# unwritable by the uid-1000 services. Measured on a Linux core host
+	@# 2026-10-02: the gateway could not write its CA certificate.
+	mkdir -p "$${INNSEGL_GATEWAY_CA_HOST_DIR:-$$HOME/.innsegl/ca}" "$${INNSEGL_LOG_DIR:-$$HOME/.innsegl/log}" \
+	  "$${INNSEGL_BACKUP_HOST_DIR:-$$HOME/innsegl-backups}"
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) build
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
