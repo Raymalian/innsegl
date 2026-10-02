@@ -952,6 +952,10 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	}
 	mountCommitPath(mux, running.commitResolver)
 	mountTelemetry(mux, os.Getenv(envObserveBodyDir))
+	if err := mountCoreJournal(mux, hosted, proxy, log); err != nil {
+		running.Close()
+		return nil, fmt.Errorf("mount the client-journal import: %w", err)
+	}
 	if err := mountCoreGit(mux, hosted); err != nil {
 		running.Close()
 		return nil, fmt.Errorf("mount the repository mirror's receive endpoint: %w", err)

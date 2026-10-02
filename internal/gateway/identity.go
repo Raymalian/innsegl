@@ -297,8 +297,14 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 
 var _ Guard = (*IdentityGuard)(nil)
 
-// Check implements Guard.
+// Check implements Guard. A request forwarded unrecorded inside a
+// repository is marked, so the reply tells the client to journal it
+// (ADR-0068).
 func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
+	return g.check(r.WithContext(withUnrecordedMark(r.Context())))
+}
+
+func (g *IdentityGuard) check(r *http.Request) (*http.Request, *Refusal) {
 	id, ok := IdentificationFromContext(r.Context())
 	if !ok {
 		// Guards() places the identity guard after the harness-shape guard
@@ -346,15 +352,26 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		g.sessionEndSignals.Cancel(id.SessionID)
 	}
 
-	// RM-313: a core that restarted has an empty registry; the client
-	// service's statement on the request refills it.
-	g.adoptHeaderStatement(r, id)
-
 	facts := ExtractRequestFacts(r)
-	// The working directory is what the session hook stated, never what the
-	// conversation says (workspaceregistry.go). Attached to the facts so the
-	// recorder snapshots the same directory the run was registered from.
-	facts.Stated, _ = g.sessionWorkspaces.LookupStated(id.SessionID, id.AgentID)
+	// A journal import's replay (ADR-0068) is registered from the statement
+	// that was in force when the exchange happened, which the entry carries,
+	// never from the registry's newer one; it leaves the registry alone.
+	replayed, stated, refusal := g.replayStatement(r, id)
+	if refusal != nil {
+		return nil, refusal
+	}
+	if replayed {
+		facts.Stated = stated
+	} else {
+		// RM-313: a core that restarted has an empty registry; the client
+		// service's statement on the request refills it.
+		g.adoptHeaderStatement(r, id)
+		// The working directory is what the session hook stated, never what
+		// the conversation says (workspaceregistry.go). Attached to the facts
+		// so the recorder snapshots the same directory the run was
+		// registered from.
+		facts.Stated, _ = g.sessionWorkspaces.LookupStated(id.SessionID, id.AgentID)
+	}
 	facts.WorkingDirectory = facts.Stated.Cwd
 	ctx := WithRequestFacts(r.Context(), facts)
 	fp := ComputeFingerprint(facts)
@@ -453,9 +470,43 @@ func (g *IdentityGuard) adoptHeaderStatement(r *http.Request, id Identification)
 	}
 }
 
+// replayStatement answers, for a journal import's replay, the statement the
+// replayed request carries, admitted as the session-workspace endpoint
+// admits one: a repository the installation may not record leaves the
+// directory alone and marks the request unrecorded. ok is false for a live
+// request, or a replay that carries no statement this core can read. A
+// scope that cannot be read now is a 503: the import tries again later.
+func (g *IdentityGuard) replayStatement(r *http.Request, id Identification) (ok bool, st StatedWorkspace, refusal *Refusal) {
+	if g.headerStatements == nil || !IsReplay(r.Context()) {
+		return false, StatedWorkspace{}, nil
+	}
+	_, st, ok = g.headerStatements.Decode(r, id)
+	if !ok {
+		return false, StatedWorkspace{}, nil
+	}
+	verdict, err := g.headerStatements.Admit(r.Context(), id.SessionID, st)
+	if err != nil {
+		return false, StatedWorkspace{}, &Refusal{
+			Status:     http.StatusServiceUnavailable,
+			Reason:     identityGuardSource + ": the installation's scope could not be read (retrying): " + err.Error(),
+			RetryAfter: outageRetryAfter,
+		}
+	}
+	switch verdict {
+	case StatementAdmitted:
+		return true, st, nil
+	case StatementOutOfScope:
+		g.unrecorded(r.Context(), id, UnrecordedOutOfScope, st.Repo)
+		return true, StatedWorkspace{Cwd: st.Cwd}, nil
+	default:
+		return true, StatedWorkspace{}, nil
+	}
+}
+
 // unrecorded reports, once per (session, agent, reason), a request
 // forwarded without being recorded.
 func (g *IdentityGuard) unrecorded(ctx context.Context, id Identification, reason UnrecordedReason, repo string) {
+	markUnrecordedRepo(ctx, repo)
 	if g.onUnrecorded == nil || !g.reported.first(findingKey{id.SessionID, id.AgentID, reason}) {
 		return
 	}

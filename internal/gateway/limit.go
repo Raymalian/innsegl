@@ -487,6 +487,11 @@ func (g *SessionRateLimitGuard) Check(r *http.Request) (*http.Request, *Refusal)
 		}
 	}
 
+	// A journal import's replay (ADR-0068) is an exchange that already
+	// happened: a backlog arriving at once is not a runaway loop.
+	if IsReplay(r.Context()) {
+		return r, nil
+	}
 	wait, refused := g.limiter.Allow(r.Context(), id.SessionID)
 	if !refused {
 		return r, nil

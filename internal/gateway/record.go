@@ -106,6 +106,9 @@ type pendingCall struct {
 	// installation is the client installation whose request carried this
 	// call (hosted shape); the commit path scopes lookups to it (#489).
 	installation string
+	// journalEntry is the signed client-journal entry whose reply carried
+	// this call, when it was imported (ADR-0068).
+	journalEntry string
 }
 
 // claimedPair is one tool_use matched against the tool_result the next
@@ -309,15 +312,16 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	// gives for addPending's identical shape just below.
 	r.baselineIfNeeded(runID, workingDirectory)
 	installation, _ := InstallationFromContext(ctx)
+	journalEntry, _ := JournalEntryFromContext(ctx)
 	//nolint:contextcheck // deliberate: addPending's own eventual recording (on eviction) uses
 	// a detached, bounded context of its own rather than ctx -- see recordAsync's own doc
 	// comment for why a request/reply's context must never be allowed to cut a recording short.
-	r.addPending(runID, workingDirectory, installation, t)
+	r.addPending(runID, workingDirectory, installation, journalEntry, t)
 }
 
 // addPending records t as pending, evicting and recording the oldest
 // pending entry (input-only) first if the table is already at its cap.
-func (r *ToolCallRecorder) addPending(runID, workingDirectory, installation string, t ToolUse) {
+func (r *ToolCallRecorder) addPending(runID, workingDirectory, installation, journalEntry string, t ToolUse) {
 	key := pendingKey{runID: runID, toolUseID: t.ID}
 	call := pendingCall{
 		tool:       t.Name,
@@ -327,6 +331,7 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory, installation stri
 
 		workingDirectory: workingDirectory,
 		installation:     installation,
+		journalEntry:     journalEntry,
 	}
 
 	var evictedKey pendingKey
@@ -554,6 +559,12 @@ type gatewayToolCallBody struct {
 	IsError         bool            `json:"is_error,omitempty"`
 	ResultTruncated bool            `json:"result_truncated,omitempty"`
 	Note            string          `json:"note,omitempty"`
+	// JournalEntry is the hash of the signed client-journal entry whose
+	// reply carried this tool_use, when the exchange was imported from a
+	// client's journal (ADR-0068): the chain commits to the signed entry
+	// through this body's digest. A body field, not an event field: doc 02
+	// is unchanged.
+	JournalEntry string `json:"journal_entry,omitempty"`
 }
 
 // buildToolCallBody assembles one tool_call's recorded body. result is nil
@@ -570,6 +581,7 @@ func buildToolCallBody(toolUseID string, call pendingCall, result *observedToolR
 		ToolUseID:      toolUseID,
 		Input:          call.input,
 		InputTruncated: call.truncated,
+		JournalEntry:   call.journalEntry,
 	}
 	if result != nil {
 		b.ResultObserved = true

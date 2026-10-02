@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"innsegl.dev/innsegl/internal/clientjournal"
 )
 
 // hopByHopHeaders are stripped before forwarding, per RFC 7230 §6.1 --
@@ -126,6 +128,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = resp.Body.Close() }()
 
 	copyHeader(w.Header(), resp.Header)
+	// ADR-0068: the core says whether it recorded this exchange, and only
+	// the core says it -- an upstream's own value never reaches the client.
+	w.Header().Set(clientjournal.RecordedHeader, recordedValue(r.Context()))
 	w.WriteHeader(resp.StatusCode)
 
 	p.stream(w, r, resp)
@@ -194,17 +199,8 @@ func (p *Proxy) stream(w http.ResponseWriter, r *http.Request, resp *http.Respon
 		dst = w
 	}
 
-	if (p.ToolUse != nil || p.ReplyText != nil) && isEventStream(resp.Header.Get("Content-Type")) {
-		var observer ToolUseObserver
-		if p.ToolUse != nil {
-			observer = boundToolUseObserver(r.Context(), p.ToolUse)
-		}
-		interp := newMessagesInterpreter(observer)
-		if p.ReplyText != nil {
-			ctx := r.Context()
-			interp.onText = func(text string) { p.ReplyText.OnReplyText(ctx, text) }
-		}
-		dst = io.MultiWriter(dst, interp)
+	if obs := p.replyObserver(r, resp.Header.Get("Content-Type")); obs != nil {
+		dst = io.MultiWriter(dst, obs)
 	}
 
 	// A failed copy is discarded deliberately, not silently: by the time

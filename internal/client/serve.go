@@ -18,6 +18,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,11 +60,49 @@ type Server struct {
 	// statements is the newest statement per (session, agent) the hook sent
 	// through this service (RM-313).
 	statements *statementCache
+
+	// The availability layer (ADR-0068, fallback.go, journal.go).
+	provider       *url.URL
+	providerClient *http.Client
+	coreDownFor    time.Duration
+	downUntil      atomic.Int64
+	journal        *journal
+	uploadInterval time.Duration
+	uploadKick     chan struct{}
+	uploadMu       sync.Mutex
+	lastUploadMu   sync.Mutex
+	lastUpload     *UploadStatus
+	bypassed       *seenSet
+}
+
+// ServerOptions are the client service's settings beyond its enrolment.
+// The zero value is the shipped default.
+type ServerOptions struct {
+	// ProviderURL is where a model request goes when the core does not
+	// answer; empty means core.json's provider_url, else
+	// DefaultProviderURL. https only.
+	ProviderURL string
+	// ProviderClient sends to the provider; nil means one over the system
+	// roots.
+	ProviderClient *http.Client
+	// JournalMaxBytes bounds the journal; zero means DefaultJournalMaxBytes.
+	JournalMaxBytes int64
+	// UploadInterval is the upload loop's period; zero means
+	// DefaultUploadInterval.
+	UploadInterval time.Duration
+	// CoreDownFor is how long model requests skip the core after it failed
+	// to answer; zero means DefaultCoreDownFor.
+	CoreDownFor time.Duration
 }
 
 // NewServer loads the enrolment from paths. It refuses a key that is not
 // the certificate's, and stays refusing once the core refused a renewal.
 func NewServer(paths Paths, logw io.Writer) (*Server, error) {
+	return NewServerWith(paths, logw, ServerOptions{})
+}
+
+// NewServerWith is NewServer with opts.
+func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, error) {
 	core, err := ReadCoreConfig(paths)
 	if err != nil {
 		return nil, err
@@ -84,13 +123,42 @@ func NewServer(paths Paths, logw io.Writer) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the core's CA: %w", err)
 	}
+	providerRaw := opts.ProviderURL
+	if providerRaw == "" {
+		providerRaw = core.ProviderURL
+	}
+	provider, err := parseProvider(providerRaw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", paths.Core, err)
+	}
 	s := &Server{
 		Now: time.Now, paths: paths, core: core, target: target, key: key,
 		log:        log.New(logw, "innsegl client: ", log.LstdFlags),
 		statements: newStatementCache(DefaultMaxStatements),
+		provider:   provider, providerClient: opts.ProviderClient,
+		coreDownFor: opts.CoreDownFor, uploadInterval: opts.UploadInterval,
+		uploadKick: make(chan struct{}, 1), bypassed: newSeenSet(DefaultMaxStatements),
+	}
+	if s.providerClient == nil {
+		s.providerClient = &http.Client{Transport: providerTransport()}
+	}
+	if s.coreDownFor <= 0 {
+		s.coreDownFor = DefaultCoreDownFor
+	}
+	if s.uploadInterval <= 0 {
+		s.uploadInterval = DefaultUploadInterval
 	}
 	if err := s.setCert(chain); err != nil {
 		return nil, err
+	}
+	journalDir := paths.Journal
+	if journalDir == "" {
+		journalDir = filepath.Join(paths.Dir, "journal")
+	}
+	s.journal = openJournal(journalDir, core.InstallationID, key, opts.JournalMaxBytes)
+	if s.journal.openErr != nil {
+		s.log.Printf("the client journal at %s cannot be opened (%v): a request the core cannot record will be "+
+			"refused until it can", journalDir, s.journal.openErr)
 	}
 	if _, err := os.Stat(paths.Revoked); err == nil {
 		s.revoked.Store(true)
@@ -110,6 +178,9 @@ func NewServer(paths Paths, logw io.Writer) (*Server, error) {
 				return s.cert.Load(), nil
 			},
 		},
+		// A core that does not answer is found out in seconds, so the
+		// request goes to the provider instead (ADR-0068).
+		DialContext:         (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:   true,
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
@@ -130,12 +201,10 @@ func NewServer(paths Paths, logw io.Writer) (*Server, error) {
 		Transport:     s.transport,
 		ErrorLog:      s.log,
 		// The core's refusal reaches the harness unchanged; the local log
-		// says what this service knows about it.
-		ModifyResponse: s.explainRefusal,
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			s.log.Printf("forwarding to %s: %v", core.CoreURL, err)
-			http.Error(w, fmt.Sprintf("innsegl client: the core at %s did not answer: %v", core.CoreURL, err), http.StatusBadGateway)
-		},
+		// says what this service knows about it. A model exchange the core
+		// cannot record is journaled (fallback.go).
+		ModifyResponse: s.modifyResponse,
+		ErrorHandler:   s.proxyError,
 	}
 	return s, nil
 }
@@ -289,26 +358,39 @@ func (s *Server) Handler() http.Handler {
 			}
 			r = kept
 		}
+		if r.Method == http.MethodPost && isModelPath(r.URL.Path) {
+			s.serveModel(w, r)
+			return
+		}
 		s.proxy.ServeHTTP(w, r)
 	})
 }
 
 // Status is the body of GET /_client/status.
 type Status struct {
-	InstallationID       string    `json:"installation_id"`
-	CoreURL              string    `json:"core_url"`
-	CertificateExpiresAt time.Time `json:"certificate_expires_at"`
-	RenewAt              time.Time `json:"renew_at"`
-	CoreReachable        bool      `json:"core_reachable"`
-	Revoked              bool      `json:"revoked"`
+	InstallationID       string        `json:"installation_id"`
+	CoreURL              string        `json:"core_url"`
+	CertificateExpiresAt time.Time     `json:"certificate_expires_at"`
+	RenewAt              time.Time     `json:"renew_at"`
+	CoreReachable        bool          `json:"core_reachable"`
+	Revoked              bool          `json:"revoked"`
+	Journal              JournalStatus `json:"journal"`
 }
 
-func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
+// Status answers what GET /_client/status shows.
+func (s *Server) Status(ctx context.Context) Status {
 	st := Status{
 		InstallationID: s.core.InstallationID, CoreURL: s.core.CoreURL,
 		CertificateExpiresAt: s.Leaf().NotAfter, RenewAt: s.RenewAt(), Revoked: s.revoked.Load(),
+		Journal: s.journal.status(),
 	}
-	st.CoreReachable = s.reachable(r.Context())
+	st.Journal.LastUpload = s.uploadStatus()
+	st.CoreReachable = s.reachable(ctx)
+	return st
+}
+
+func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
+	st := s.Status(r.Context())
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(st); err != nil {
 		s.log.Printf("writing the status: %v", err)
