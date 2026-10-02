@@ -142,11 +142,23 @@ func TestAccountsCLIEnrolTokenPrintsTheTokenOnlyOnStdout(t *testing.T) {
 	}
 }
 
+// --repos defaults to "*": every repository the organisation holds or will
+// hold (ADR-0063, amended 2026-10-02). An explicit list still narrows.
+func TestAccountsCLIEnrolTokenReposDefaultToEverything(t *testing.T) {
+	s := &stubAccountsStore{token: "ie_tid_secretsecret"}
+	if code, _, stderr := runAccounts(s, "enrol-token", "-dsn", "postgres://x", "--account", "a", "--by", "u"); code != exitOK {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if p := s.tokens[0]; len(p.Repos) != 1 || p.Repos[0] != accounts.AllRepos {
+		t.Fatalf("repos = %v, want [*]", p.Repos)
+	}
+}
+
 func TestAccountsCLIEnrolTokenRejectsMissingFlags(t *testing.T) {
 	for _, args := range [][]string{
 		{"--by", "u", "--repos", "*"},
 		{"--account", "a", "--repos", "*"},
-		{"--account", "a", "--by", "u"},
+		{"--account", "a", "--by", "u", "--repos", " "},
 		{"--account", "a", "--by", "u", "--repos", "*", "--kind", "toaster"},
 	} {
 		code, _, _ := runAccounts(&stubAccountsStore{}, append([]string{"enrol-token", "-dsn", "x"}, args...)...)

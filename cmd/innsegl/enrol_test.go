@@ -35,6 +35,7 @@ import (
 	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
+	"innsegl.dev/innsegl/internal/mirror"
 	"innsegl.dev/innsegl/internal/rundir"
 	"innsegl.dev/innsegl/internal/spire"
 )
@@ -255,6 +256,9 @@ func startHostedGateway(t *testing.T, f *enFixture) *enGateway {
 	t.Cleanup(upstream.Close)
 
 	keyDir, certDir := gatewayTestCADirs(t)
+	if os.Getenv(mirror.EnvDir) == "" {
+		t.Setenv(mirror.EnvDir, filepath.Join(t.TempDir(), "mirror"))
+	}
 	addrCh := make(chan string, 1)
 	deps := gatewayDeps{open: func(ctx context.Context, o gatewayOptions, log *serveLog) (servedGateway, error) {
 		o.upstreamClient = upstream.Client()
@@ -675,15 +679,31 @@ func TestGW018HostedGuardOnEveryRoute(t *testing.T) {
 		t.Fatalf("the upstream saw %d requests from unauthenticated callers", g.upstream.Load())
 	}
 
-	// Out of scope: the statement is refused and no run is registered.
+	// Out of scope (A's explicit repos list leaves it out): the statement is
+	// refused and no run is registered.
 	if status, body := g.post(t, clA, gatewaySessionWorkspacePath, statement(t, session, enOtherRepo), nil); status != http.StatusUnauthorized || body != enGuardRefusal {
 		t.Fatalf("out-of-scope statement: %d %s", status, body)
 	}
-	// A repository-less statement is out of scope in hosted mode.
-	if status, _ := g.post(t, clA, gatewaySessionWorkspacePath,
-		`{"session_id":"`+session+`","cwd":"/client/repo"}`, nil); status != http.StatusUnauthorized {
-		t.Fatalf("directory-only statement: %d, want 401", status)
+	// A repository-less statement is a session outside any repository: it
+	// is accepted, and its model requests pass through unrecorded
+	// (ADR-0063, amended 2026-10-02).
+	const homeSession = "44444444-4444-4444-8444-444444444444"
+	before := f.ids.entryCount()
+	if status, body := g.post(t, clA, gatewaySessionWorkspacePath,
+		`{"session_id":"`+homeSession+`","cwd":"/client/home"}`, nil); status != http.StatusNoContent {
+		t.Fatalf("directory-only statement: %d %s, want 204", status, body)
 	}
+	if status, body := g.post(t, clA, "/v1/messages", enMessage, messageHeaders(homeSession)); status != http.StatusOK {
+		t.Fatalf("message outside any repository: %d %s, want it forwarded", status, body)
+	}
+	if g.upstream.Load() != 1 {
+		t.Fatalf("upstream saw %d requests, want the pass-through one", g.upstream.Load())
+	}
+	if n := f.count(t, `SELECT count(*) FROM innsegl.gateway_run_mapping WHERE session_id = $1`, homeSession); n != 0 ||
+		f.ids.entryCount() != before {
+		t.Fatalf("a session outside any repository was recorded: %d mapping rows", n)
+	}
+	g.upstream.Store(0)
 
 	// In scope: stated, then forwarded, and the mapping row names A (GW-019).
 	if status, body := g.post(t, clA, gatewaySessionWorkspacePath, statement(t, session, enRepo), nil); status != http.StatusNoContent {
@@ -721,6 +741,14 @@ func TestGW018HostedGuardOnEveryRoute(t *testing.T) {
 	if status, body := g.post(t, clA, "/v1/messages", enMessage, messageHeaders(session)); status != http.StatusUnauthorized || body != enGuardRefusal {
 		t.Fatalf("revoked installation: %d %s", status, body)
 	}
+	// ...outside a repository too: pass-through is not a way around it.
+	if status, body := g.post(t, clA, gatewaySessionWorkspacePath,
+		`{"session_id":"`+homeSession+`","cwd":"/client/home"}`, nil); status != http.StatusUnauthorized || body != enGuardRefusal {
+		t.Fatalf("revoked installation, directory-only statement: %d %s", status, body)
+	}
+	if status, body := g.post(t, clA, "/v1/messages", enMessage, messageHeaders(homeSession)); status != http.StatusUnauthorized || body != enGuardRefusal {
+		t.Fatalf("revoked installation outside any repository: %d %s", status, body)
+	}
 	if g.upstream.Load() != 1 || f.ids.entryCount() != entries {
 		t.Fatal("a revoked installation's request reached the upstream or registered a run")
 	}
@@ -737,6 +765,7 @@ func TestHostedModeConfiguration(t *testing.T) {
 		"no accounts writer": {"-client-auth", clientAuthSPIFFE, "-dsn", "postgres://x"},
 		"no ledger database": {"-client-auth", clientAuthSPIFFE, "-accounts-dsn", "postgres://y"},
 	} {
+		t.Setenv(mirror.EnvDir, "/mirror")
 		t.Setenv(envLedgerDSN, "")
 		t.Setenv(envGatewayAccountsDSN, "")
 		t.Setenv(envGatewayClientAuth, "")
@@ -748,9 +777,16 @@ func TestHostedModeConfiguration(t *testing.T) {
 	t.Setenv(envGatewayClientAuth, clientAuthSPIFFE)
 	t.Setenv(envLedgerDSN, "postgres://x")
 	t.Setenv(envGatewayAccountsDSN, "postgres://y")
+	t.Setenv(mirror.EnvDir, "/mirror")
 	o, _, ok := parseGatewayFlags(base, io.Discard)
 	if !ok || o.clientAuth != clientAuthSPIFFE || o.accountsDSN != "postgres://y" {
 		t.Fatalf("hosted mode from the environment: %+v ok=%v", o, ok)
+	}
+	// The mirror is where a hosted client's commits are read from before they
+	// are signed, and it is evidence (ADR-0065): hosted mode needs it.
+	t.Setenv(mirror.EnvDir, "")
+	if _, code, ok := parseGatewayFlags(base, io.Discard); ok || code != exitUsage {
+		t.Errorf("hosted mode with no mirror: ok=%v code=%d, want a usage error", ok, code)
 	}
 }
 

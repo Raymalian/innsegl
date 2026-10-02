@@ -310,10 +310,39 @@ func (a accountsInstallations) InScope(ctx context.Context, id, repo string) (bo
 	return a.store.InScope(ctx, id, repo)
 }
 
+// repoClaimer is the accounts writer's first-use grant. *accounts.Store is
+// one.
+type repoClaimer interface {
+	ClaimRepo(ctx context.Context, installationID, repo string) (bool, error)
+}
+
+// firstUseScope is hosted mode's one repository rule (ADR-0063, amended
+// 2026-10-02), for the identity guard, the session statement, the commit
+// path and the mirror push alike: an installation may act on a repository
+// its organisation holds, and a repository no organisation holds becomes its
+// organisation's on first use. The read is the gateway's own role, which may
+// only SELECT; the grant goes through the accounts writer, audited with the
+// installation as the actor. Another organisation's live grant, an explicit
+// repos list that leaves the repository out, or an installation that is not
+// active are out of scope.
+type firstUseScope struct {
+	reader gateway.ScopeChecker
+	writer repoClaimer
+}
+
+func (s firstUseScope) InScope(ctx context.Context, installationID, repo string) (bool, error) {
+	in, err := s.reader.InScope(ctx, installationID, repo)
+	if err != nil || in {
+		return in, err
+	}
+	return s.writer.ClaimRepo(ctx, installationID, repo)
+}
+
 // hostedCallers is the session endpoints' admission in hosted mode: the
-// client guard has already verified the installation; a statement must name
-// a repository in its scope, and a session belongs to the first installation
-// that named it.
+// client guard has already verified the installation; a statement that names
+// a repository must name one in its scope (claimed on first use), a statement
+// that names none is a session outside any repository and is admitted, and a
+// session belongs to the first installation that named it.
 type hostedCallers struct {
 	scope gateway.ScopeChecker
 	pins  *gateway.SessionPins
@@ -333,12 +362,14 @@ func (h hostedCallers) rateKey(r *http.Request, base string) string {
 
 func (h hostedCallers) admitStatement(ctx context.Context, sessionID string, st gateway.StatedWorkspace) (bool, error) {
 	inst, ok := gateway.InstallationFromContext(ctx)
-	if !ok || !st.HasRepo() {
+	if !ok {
 		return false, nil
 	}
-	in, err := h.scope.InScope(ctx, inst, st.Repo)
-	if err != nil || !in {
-		return false, err
+	if st.HasRepo() {
+		in, err := h.scope.InScope(ctx, inst, st.Repo)
+		if err != nil || !in {
+			return false, err
+		}
 	}
 	return h.pins.Pin(sessionID, inst), nil
 }

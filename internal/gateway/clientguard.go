@@ -69,7 +69,9 @@ type InstallationChecker interface {
 }
 
 // ScopeChecker answers whether an installation may act on a repository
-// (accounts.Store.InScope).
+// (accounts.Store.InScope). The hosted core's own implementation also makes
+// the installation's organisation the holder of a repository nobody holds,
+// on first use (ADR-0063, amended 2026-10-02).
 type ScopeChecker interface {
 	InScope(ctx context.Context, installationID, repo string) (bool, error)
 }

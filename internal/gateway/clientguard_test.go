@@ -375,12 +375,17 @@ func TestGW018IdentityGuardEnforcesPinAndScope(t *testing.T) {
 	if len(f.registrar.calls) != registered {
 		t.Fatalf("registrar calls %v after refusals, want %d", f.registrar.calls, registered)
 	}
-	// A directory-only statement is not enough in hosted mode: the core never
-	// reads a client's files.
+	// A directory-only statement is a session outside any repository (the
+	// core never reads a client's files): it passes through, unrecorded
+	// (ADR-0063, amended 2026-10-02).
 	f.sessionWorkspaces.Record("s7", "", "/w")
 	main7 := Identification{SessionID: "s7", AgentID: mainAgentID}
-	if _, ref := g.Check(withInst(identityRequest(t, main7, "hi", ""), cgInstA)); ref == nil || ref.Status != http.StatusUnauthorized {
-		t.Fatalf("directory-only statement in hosted mode: refusal %+v, want 401", ref)
+	out, ref := g.Check(withInst(identityRequest(t, main7, "hi", ""), cgInstA))
+	if ref != nil || out == nil {
+		t.Fatalf("directory-only statement in hosted mode: refusal %+v, want it passed through", ref)
+	}
+	if _, ok := RunIDFromContext(out.Context()); ok || len(f.registrar.calls) != registered {
+		t.Fatal("a directory-only session was recorded")
 	}
 }
 

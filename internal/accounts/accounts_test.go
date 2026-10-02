@@ -189,7 +189,7 @@ func TestACC002OnlyAHashIsAtRest(t *testing.T) {
 
 func TestAccountsTokenRepoValidation(t *testing.T) {
 	_, s, a := setup(t)
-	for _, repos := range [][]string{nil, {}, {"*", "github.com/a/b"}, {"notarepo"}, {"github.com/a/b", ""}} {
+	for _, repos := range [][]string{{"*", "github.com/a/b"}, {"notarepo"}, {"github.com/a/b", ""}} {
 		_, _, err := s.CreateEnrolmentToken(tctx(t), TokenParams{AccountID: a.ID, CreatedBy: "u-1", Repos: repos})
 		if !errors.Is(err, ErrInvalid) {
 			t.Errorf("repos %v: %v, want ErrInvalid", repos, err)

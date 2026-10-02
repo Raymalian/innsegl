@@ -28,6 +28,7 @@ import (
 	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
+	"innsegl.dev/innsegl/internal/mirror"
 	"innsegl.dev/innsegl/internal/rundir"
 )
 
@@ -354,6 +355,9 @@ func (o gatewayOptions) validate() string {
 	case o.clientAuth == clientAuthSPIFFE && o.accountsDSN == "":
 		return "-client-auth " + clientAuthSPIFFE + " needs -accounts-dsn (or $" + envGatewayAccountsDSN + "): " +
 			"enrolment and renewal write installations through the accounts writer"
+	case o.clientAuth == clientAuthSPIFFE && os.Getenv(mirror.EnvDir) == "":
+		return "-client-auth " + clientAuthSPIFFE + " needs $" + mirror.EnvDir + ": a hosted client's commits " +
+			"are read from the core's mirror before they are signed, and the mirror is evidence (ADR-0065)"
 	}
 	if problem := upstreamMustBeHTTPS(o.upstream); problem != "" {
 		return problem
@@ -948,6 +952,10 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	}
 	mountCommitPath(mux, running.commitResolver)
 	mountTelemetry(mux, os.Getenv(envObserveBodyDir))
+	if err := mountCoreGit(mux, hosted); err != nil {
+		running.Close()
+		return nil, fmt.Errorf("mount the repository mirror's receive endpoint: %w", err)
+	}
 
 	var handler http.Handler = mux
 	tlsConfig := ca.ServerTLSConfig()
@@ -972,6 +980,9 @@ type hostedCore struct {
 	scope     gateway.ScopeChecker
 	writer    *accounts.Store
 	authority clientAuthority
+	// mirror is the per-repository evidence store (ADR-0065), nil when
+	// INNSEGL_MIRROR_DIR is unset (coregit.go).
+	mirror *mirror.Store
 }
 
 // openHostedCore builds hosted mode. The authority is the MCP's own admin
@@ -1019,9 +1030,13 @@ func openHostedCore(ctx context.Context, o gatewayOptions, running *runningGatew
 	if err != nil {
 		return nil, err
 	}
+	store, err := openCoreMirror(os.Getenv(mirror.EnvDir))
+	if err != nil {
+		return nil, err
+	}
 	return &hostedCore{
-		guard: guard, pins: gateway.NewSessionPins(0), scope: installations,
-		writer: writer, authority: authority,
+		guard: guard, pins: gateway.NewSessionPins(0), scope: firstUseScope{reader: installations, writer: writer},
+		writer: writer, authority: authority, mirror: store,
 	}, nil
 }
 
@@ -1079,7 +1094,8 @@ const maxWorkingDirectoryBytes = 4096
 // only a git worktree under the projects mount and inside the admin scope --
 // a repository the agent can already work in (workspaceregistry.go). In
 // hosted mode (RM-284, #460) the client-certificate guard has verified the
-// installation, the stated repository must be in its scope, and the session
+// installation, a stated repository must be in its scope (claimed on first
+// use; a statement naming none is a session outside any repository), and the session
 // must be this installation's (hostedCallers, enrol.go).
 func sessionWorkspaceHandler(ws *gateway.SessionWorkspaces, rateLimit *gateway.SessionRateLimiter,
 	callers sessionCallers, log *serveLog,
@@ -1359,6 +1375,7 @@ func openIdentityStack(
 	restoreSignPayload, err := mcp.ConfigureSignPayload(mcp.SignPayloadConfig{
 		Resolver: toolCallRecorder,
 		ClaimFor: mcp.CommitClaimForRun,
+		Mirror:   commitMirror(hosted),
 	})
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("configure the commit-sign path: %w", err)

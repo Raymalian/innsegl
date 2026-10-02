@@ -94,6 +94,24 @@ func TestOPS130TheClientEnrolsAndWorksThroughTheHostedCore(t *testing.T) {
 		t.Fatalf("mapping rows naming the enrolled installation = %d, want 1", n)
 	}
 
+	// A session outside any repository, through the same client service:
+	// accepted and forwarded, and recorded nowhere (ADR-0063, amended
+	// 2026-10-02).
+	const homeSession = "77777777-7777-4777-8777-777777777777"
+	if status, body := post(gatewaySessionWorkspacePath, `{"session_id":"`+homeSession+`","cwd":"/client/notes"}`, nil); status != http.StatusNoContent {
+		t.Fatalf("directory-only statement through the client service: %d %s", status, body)
+	}
+	if status, body := post("/v1/messages", enMessage, messageHeaders(homeSession)); status != http.StatusOK {
+		t.Fatalf("model request outside any repository: %d %s", status, body)
+	}
+	if g.upstream.Load() != 2 {
+		t.Fatalf("upstream saw %d requests, want 2", g.upstream.Load())
+	}
+	if n := f.count(t, `SELECT count(*) FROM innsegl.gateway_run_mapping WHERE session_id = $1`, homeSession); n != 0 {
+		t.Fatalf("a session outside any repository has %d mapping rows", n)
+	}
+	g.upstream.Store(1)
+
 	// Renewal against the real core, past half-life: same installation, a
 	// later expiry, and requests keep working.
 	before := srv.Leaf().NotAfter
