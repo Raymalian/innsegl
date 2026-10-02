@@ -108,6 +108,7 @@ type identityFixture struct {
 	runStates         *fakeRunStates
 	sessionEndSignals *SessionEndSignals
 	sessionWorkspaces *SessionWorkspaces
+	witnessed         []AgentTypeFinding
 	guard             *IdentityGuard
 }
 
@@ -128,15 +129,16 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 	}
 	f.sessionWorkspaces.Record("s1", "", fixtureDirectory)
 	g, err := NewIdentityGuard(IdentityGuardConfig{
-		Mappings:          f.mappings,
-		Tree:              f.tree,
-		Policy:            NewPolicy(),
-		Registrar:         f.registrar,
-		Workspaces:        f.workspaces,
-		RunStates:         f.runStates,
-		SessionEndSignals: f.sessionEndSignals,
-		SessionWorkspaces: f.sessionWorkspaces,
-		Now:               func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) },
+		Mappings:           f.mappings,
+		Tree:               f.tree,
+		Policy:             NewPolicy(),
+		Registrar:          f.registrar,
+		Workspaces:         f.workspaces,
+		RunStates:          f.runStates,
+		SessionEndSignals:  f.sessionEndSignals,
+		SessionWorkspaces:  f.sessionWorkspaces,
+		Now:                func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) },
+		OnAgentTypeWitness: func(af AgentTypeFinding) { f.witnessed = append(f.witnessed, af) },
 	})
 	if err != nil {
 		t.Fatalf("NewIdentityGuard: %v", err)

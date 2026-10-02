@@ -215,6 +215,10 @@ type IdentityGuardConfig struct {
 	// OnUnrecorded, when set, is told once per (session, agent, reason)
 	// about a request forwarded without being recorded. Optional.
 	OnUnrecorded func(UnrecordedFinding)
+	// OnAgentTypeWitness, when set, is told when the hook's agent_type and
+	// the model's subagent_type name different types after folding (RM-314).
+	// The hook's wins; this is the finding. Optional.
+	OnAgentTypeWitness func(AgentTypeFinding)
 }
 
 // IdentityGuard is ADR-0058 decision 11, wired into guard.go's chain: a
@@ -237,6 +241,7 @@ type IdentityGuard struct {
 	scope             ScopeChecker
 	headerStatements  HeaderStatements
 	onUnrecorded      func(UnrecordedFinding)
+	onWitness         func(AgentTypeFinding)
 	reported          *reportedFindings
 }
 
@@ -285,6 +290,7 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 		scope:             cfg.Scope,
 		headerStatements:  cfg.HeaderStatements,
 		onUnrecorded:      cfg.OnUnrecorded,
+		onWitness:         cfg.OnAgentTypeWitness,
 		reported:          newReportedFindings(size),
 	}, nil
 }
@@ -662,8 +668,9 @@ func (g *IdentityGuard) priorMapping(ctx context.Context, id Identification, fp 
 // run id to attach to the request's context. Nothing here re-decides;
 // Decide already did that. spawnAgentType is the agent type the TreeLinker
 // resolved alongside parentRunID (empty when nothing was resolved) --
-// RM-263 (#416): agentTypeFor turns it, plus id, into what actually reaches
-// RegisterInput.AgentType.
+// RM-263 (#416), RM-314: agentTypeFor turns it, the hook's own agent_type
+// (facts.Stated.AgentType) and id into what actually reaches
+// RegisterInput.AgentType, and the harness string the mapping row keeps.
 func (g *IdentityGuard) act(
 	ctx context.Context, decision Decision, id Identification, facts RequestFacts,
 	fp Fingerprint, parentRunID, spawnAgentType string, prior RunMapping,
@@ -698,8 +705,9 @@ func (g *IdentityGuard) act(
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a new run: %w", err)
 		}
+		agentType, verbatim := g.agentTypeFor(id, facts.Stated.AgentType, spawnAgentType)
 		out, err := g.registrar.Register(ctx, RegisterInput{
-			AgentType:      agentTypeFor(id, spawnAgentType),
+			AgentType:      agentType,
 			IdempotencyKey: idempotencyKeyFor(id),
 			Workspace:      ws,
 			ParentRunID:    parentRunID,
@@ -709,7 +717,7 @@ func (g *IdentityGuard) act(
 		}
 		g.insertAndCache(ctx, id, RunMapping{
 			RunID: out.RunID, SessionID: id.SessionID, AgentID: id.AgentID,
-			Fingerprint: fp, ParentRunID: parentRunID,
+			Fingerprint: fp, ParentRunID: parentRunID, AgentTypeVerbatim: verbatim,
 		})
 		return out.RunID, nil
 
@@ -718,8 +726,9 @@ func (g *IdentityGuard) act(
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a fork of run %q: %w", prior.RunID, err)
 		}
+		agentType, verbatim := g.agentTypeFor(id, facts.Stated.AgentType, spawnAgentType)
 		out, err := g.registrar.Register(ctx, RegisterInput{
-			AgentType:       agentTypeFor(id, spawnAgentType),
+			AgentType:       agentType,
 			IdempotencyKey:  idempotencyKeyFor(id),
 			Workspace:       ws,
 			ForkedFromRunID: prior.RunID,
@@ -729,7 +738,7 @@ func (g *IdentityGuard) act(
 		}
 		g.insertAndCache(ctx, id, RunMapping{
 			RunID: out.RunID, SessionID: id.SessionID, AgentID: id.AgentID,
-			Fingerprint: fp, ForkedFromRunID: prior.RunID,
+			Fingerprint: fp, ForkedFromRunID: prior.RunID, AgentTypeVerbatim: verbatim,
 		})
 		return out.RunID, nil
 
@@ -738,8 +747,9 @@ func (g *IdentityGuard) act(
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a run adopting %q: %w", prior.RunID, err)
 		}
+		agentType, verbatim := g.agentTypeFor(id, facts.Stated.AgentType, spawnAgentType)
 		out, err := g.registrar.Register(ctx, RegisterInput{
-			AgentType:      agentTypeFor(id, spawnAgentType),
+			AgentType:      agentType,
 			IdempotencyKey: idempotencyKeyFor(id),
 			Workspace:      ws,
 		})
@@ -748,7 +758,7 @@ func (g *IdentityGuard) act(
 		}
 		g.insertAndCache(ctx, id, RunMapping{
 			RunID: out.RunID, SessionID: id.SessionID, AgentID: id.AgentID,
-			Fingerprint: fp, AdoptedFromRunID: prior.RunID,
+			Fingerprint: fp, AdoptedFromRunID: prior.RunID, AgentTypeVerbatim: verbatim,
 		})
 		return out.RunID, nil
 
@@ -803,29 +813,6 @@ func (g *IdentityGuard) recordFingerprintIfNewlyKnown(ctx context.Context, id Id
 // UUID, harness.go's own isUUID), not a type, and recording it as one would
 // repeat the exact bug this issue exists to close.
 const defaultSubagentType = "subagent"
-
-// agentTypeFor is what this build records as registerAgentIn.AgentType for
-// a run the gateway registers from traffic alone (RM-263, #416). The root
-// agent's type is the harness shape itself: Identification.AgentID is
-// mainAgentID ("main") only for the root (harness.go's own recogniser never
-// sets it to anything else), so that fixed value is what is recorded, never
-// something read off a spawn. A subagent's real type is spawnAgentType --
-// resolved by the TreeLinker's ResolveParent alongside the parent run id,
-// itself read from the spawning Agent/Task tool call's own subagent_type
-// input (identity.go's SpawnRecorder) -- never the harness-asserted agent
-// id id.AgentID otherwise carries, which names a run, not a kind of agent.
-// A subagent whose spawn resolved no type at all falls back to
-// defaultSubagentType, a stated placeholder, rather than ever substituting
-// the id.
-func agentTypeFor(id Identification, spawnAgentType string) string {
-	if id.AgentID == mainAgentID {
-		return mainAgentID
-	}
-	if spawnAgentType != "" {
-		return spawnAgentType
-	}
-	return defaultSubagentType
-}
 
 // idempotencyKeyFor is the SAME key on every request of one (session,
 // agent) pair -- required so that a later Restore replays register_agent's

@@ -81,8 +81,9 @@ The usual cause is Docker, or the innsegl stack, not running.
 
 // runHookSession is `innsegl hook session`: the harness's SessionStart,
 // UserPromptSubmit, SubagentStart and CwdChanged hook. It reads the hook's
-// own input -- session_id, cwd and, for a subagent, agent_id, structured
-// fields on every event (captured from Claude Code 2.1.287, 2026-10-01) --
+// own input -- session_id, cwd and, for a subagent, agent_id and agent_type,
+// structured fields on every event (captured from Claude Code 2.1.287,
+// 2026-10-01) --
 // and states them to the gateway's local session-workspace endpoint, which
 // is where the gateway learns each session's working directory
 // (internal/gateway/workspaceregistry.go).
@@ -105,6 +106,7 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 	var in struct {
 		SessionID     string `json:"session_id"`
 		AgentID       string `json:"agent_id"`
+		AgentType     string `json:"agent_type"`
 		Cwd           string `json:"cwd"`
 		HookEventName string `json:"hook_event_name"`
 	}
@@ -117,6 +119,11 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 		return exitOK
 	}
 	statement := map[string]string{"session_id": in.SessionID, "agent_id": in.AgentID, "cwd": in.Cwd}
+	// RM-314: the harness's own name for the subagent's type, as it sent it.
+	// The gateway folds it; the model's subagent_type is only a witness.
+	if in.AgentType != "" {
+		statement["agent_type"] = in.AgentType
+	}
 	// The client derives the workspace itself (internal/workspace) and states
 	// it; the core binds it to the caller's scope. A directory that is not a
 	// working tree with a usable origin states the directory alone: the hook

@@ -156,3 +156,31 @@ func TestRM313TheStatementTableIsBounded(t *testing.T) {
 		t.Fatalf("len = %d after unusable statements, want 2", c.len())
 	}
 }
+
+// SER-021 (RM-314): the subagent's agent_type, stated by the SubagentStart
+// hook, rides on its model requests unchanged, so a core that restarted
+// still records the harness's own name for the type.
+func TestSER021TheCachedStatementCarriesAgentType(t *testing.T) {
+	core, paths := enrolled(t)
+	core.Mux.HandleFunc(SessionStatementPath, func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	seen := make(chan string, 2)
+	core.Mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Get(StatementHeader)
+		w.WriteHeader(http.StatusOK)
+	})
+	_, front, _ := startClient(t, paths)
+
+	const agentType = "flutter-all:flutter-architect"
+	scPost(t, front.URL+SessionStatementPath,
+		`{"session_id":"`+scSession+`","agent_id":"`+scSubagent+`","cwd":"/w/sub","agent_type":"`+agentType+`"}`, nil)
+	scPost(t, front.URL+"/v1/messages", `{}`, map[string]string{
+		"X-Claude-Code-Session-Id": scSession, "X-Claude-Code-Agent-Id": scSubagent})
+	if m := decodeStatementHeader(t, <-seen); m["agent_type"] != agentType {
+		t.Fatalf("the subagent's request carried %v, want its agent_type verbatim", m)
+	}
+}
