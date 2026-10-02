@@ -23,8 +23,8 @@ func TestCoreRefusalPassesUnchangedAndIsExplainedInTheLog(t *testing.T) {
 	}{
 		{http.StatusUnauthorized, `{"error":"innsegl core: request refused"}`,
 			[]string{session, "401", "certificate", "scope"}},
-		{http.StatusServiceUnavailable, `{"error":"innsegl gateway identity guard: the session hook has not stated this session's working directory"}`,
-			[]string{session, "503", "has not stated this session's working directory"}},
+		{http.StatusServiceUnavailable, `{"error":"innsegl gateway: a dependency could not be reached (retrying)"}`,
+			[]string{session, "503", "a dependency could not be reached"}},
 	}
 	var next int
 	core.Mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, _ *http.Request) {

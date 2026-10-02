@@ -329,9 +329,9 @@ func TestGW018SessionPinsToTheFirstInstallation(t *testing.T) {
 }
 
 // The identity guard, in hosted mode, refuses a session pinned to another
-// installation, refuses to register a run outside the installation's scope,
-// and registers one inside it -- with 401, the client refusal, for both
-// refusals, and nothing registered.
+// installation with 401, the client refusal; registers a run inside the
+// installation's scope; and forwards a request outside it unrecorded, with
+// nothing registered (RM-313: never refused, never a retry loop).
 func TestGW018IdentityGuardEnforcesPinAndScope(t *testing.T) {
 	f := newIdentityFixture(t)
 	inst := &cgInstallations{active: map[string]bool{cgInstA: true}, scope: map[string]bool{cgInstA + " github.com/acme/app": true}}
@@ -366,11 +366,12 @@ func TestGW018IdentityGuardEnforcesPinAndScope(t *testing.T) {
 		ref.Status != http.StatusUnauthorized || ref.Reason != ClientRefusalMessage {
 		t.Fatalf("second installation: refusal %+v, want the 401 client refusal", ref)
 	}
-	// Out of scope: refused and nothing registered.
+	// Out of scope: forwarded unrecorded, and nothing registered.
 	main8 := Identification{SessionID: "s8", AgentID: mainAgentID}
-	if _, ref := g.Check(withInst(identityRequest(t, main8, "hi", ""), cgInstA)); ref == nil ||
-		ref.Status != http.StatusUnauthorized || ref.Reason != ClientRefusalMessage {
-		t.Fatalf("out of scope: refusal %+v, want the 401 client refusal", ref)
+	if out, ref := g.Check(withInst(identityRequest(t, main8, "hi", ""), cgInstA)); ref != nil || out == nil {
+		t.Fatalf("out of scope: refusal %+v, want it forwarded unrecorded", ref)
+	} else if _, ok := RunIDFromContext(out.Context()); ok {
+		t.Fatal("an out-of-scope request carries a run")
 	}
 	if len(f.registrar.calls) != registered {
 		t.Fatalf("registrar calls %v after refusals, want %d", f.registrar.calls, registered)

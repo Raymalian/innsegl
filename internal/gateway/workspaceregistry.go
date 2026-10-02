@@ -30,7 +30,9 @@ import "sync"
 //
 // The hooks re-state the directory before every user turn and every subagent,
 // and a run that already has a mapping (Continue, Restore) needs no directory
-// at all, so a gateway restart costs at most one retried request. Keeping it
+// at all. In hosted mode the client service also attaches its cached
+// statement to every request (StatementHeader, RM-313), which refills an
+// empty table, so a restart costs nothing. Keeping it
 // in memory also keeps host paths out of the database.
 type SessionWorkspaces struct {
 	mu       sync.Mutex
@@ -143,6 +145,23 @@ func (s *SessionWorkspaces) LookupStated(sessionID, agentID string) (StatedWorks
 		return st, true
 	}
 	return w.latest, true
+}
+
+// Knows reports whether agentID of sessionID has a statement of its own: the
+// session's for the main agent ("" or mainAgentID), the agent's own for a
+// subagent.
+func (s *SessionWorkspaces) Knows(sessionID, agentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, ok := s.sessions[sessionID]
+	if !ok {
+		return false
+	}
+	if agentID == "" || agentID == mainAgentID {
+		return true
+	}
+	_, ok = w.agents[agentID]
+	return ok
 }
 
 // LastRepo answers the newest statement in sessionID, by any of its agents,

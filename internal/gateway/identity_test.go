@@ -794,25 +794,19 @@ func TestIdentityGuardIgnoresADirectoryStatedInTheConversation(t *testing.T) {
 	}
 }
 
-// A session the hook has not stated yet is a missing input the next hook
-// event supplies, not a broken request: 503 with Retry-After, so the harness
-// retries, and nothing is registered or forwarded meanwhile.
-func TestIdentityGuardAsksForARetryWhenNoDirectoryIsKnownYet(t *testing.T) {
+// A session the hook has not stated is forwarded unrecorded (RM-313): a 503
+// with Retry-After was a loop the harness retried into ten times and then
+// failed. Nothing is resolved or registered.
+func TestIdentityGuardForwardsUnrecordedWhenNoDirectoryIsKnown(t *testing.T) {
 	f := newIdentityFixture(t)
 	id := Identification{SessionID: "s-unstated", AgentID: mainAgentID}
 
-	_, refusal := f.guard.Check(identityRequest(t, id, "hello", ""))
-	if refusal == nil {
-		t.Fatal("want a refusal")
+	out, refusal := f.guard.Check(identityRequest(t, id, "hello", ""))
+	if refusal != nil || out == nil {
+		t.Fatalf("refused %+v, want it forwarded", refusal)
 	}
-	if refusal.Status != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want %d", refusal.Status, http.StatusServiceUnavailable)
-	}
-	if refusal.RetryAfter <= 0 {
-		t.Errorf("RetryAfter = %v, want a positive delay", refusal.RetryAfter)
-	}
-	if !strings.Contains(refusal.Reason, "innsegl hook session") {
-		t.Errorf("reason %q does not name the hook that supplies the directory", refusal.Reason)
+	if _, ok := RunIDFromContext(out.Context()); ok {
+		t.Error("an unstated session carries a run")
 	}
 	if f.workspaces.calls != 0 || len(f.registrar.calls) != 0 {
 		t.Errorf("resolver calls = %d, registrar calls = %v; want none", f.workspaces.calls, f.registrar.calls)

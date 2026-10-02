@@ -107,8 +107,10 @@ type sessionCallers interface {
 	refuseCaller(w http.ResponseWriter, endpoint string)
 	// rateKey is the rate-limit bucket for r, given the endpoint's own.
 	rateKey(r *http.Request, base string) string
-	// admitStatement decides a well-formed workspace statement.
-	admitStatement(ctx context.Context, sessionID string, st gateway.StatedWorkspace) (bool, error)
+	// admitStatement decides a well-formed workspace statement: admitted,
+	// refused (not the caller's session), or out of scope (the caller's
+	// session, in a repository it may not record).
+	admitStatement(ctx context.Context, sessionID string, st gateway.StatedWorkspace) (gateway.StatementVerdict, error)
 	// admitSession decides a well-formed session-end signal.
 	admitSession(ctx context.Context, sessionID string) bool
 }
@@ -127,8 +129,8 @@ func (l localCallers) refuseCaller(w http.ResponseWriter, endpoint string) {
 
 func (l localCallers) rateKey(_ *http.Request, base string) string { return base }
 
-func (l localCallers) admitStatement(context.Context, string, gateway.StatedWorkspace) (bool, error) {
-	return true, nil
+func (l localCallers) admitStatement(context.Context, string, gateway.StatedWorkspace) (gateway.StatementVerdict, error) {
+	return gateway.StatementAdmitted, nil
 }
 
 func (l localCallers) admitSession(context.Context, string) bool { return true }

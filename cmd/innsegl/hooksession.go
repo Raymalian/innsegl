@@ -37,6 +37,20 @@ type gatewayUnreachableError struct{ err error }
 func (e *gatewayUnreachableError) Error() string { return e.err.Error() }
 func (e *gatewayUnreachableError) Unwrap() error { return e.err }
 
+// gatewayRefusedError is a statement the gateway answered with an error
+// status: it is up, and said no.
+type gatewayRefusedError struct {
+	status int
+	msg    string
+}
+
+func (e *gatewayRefusedError) Error() string {
+	if e.msg == "" {
+		return fmt.Sprintf("the gateway answered %d", e.status)
+	}
+	return fmt.Sprintf("the gateway answered %d: %s", e.status, e.msg)
+}
+
 // unreachableMessage is what a person sees when their prompt is stopped
 // because the gateway is down. It names the cause and both ways out.
 func unreachableMessage(base string, err error) string {
@@ -77,10 +91,11 @@ The usual cause is Docker, or the innsegl stack, not running.
 // gateway is the gate, not this hook. One exception: before a user turn,
 // when the gateway cannot be reached at all, it stops the prompt (exit 2)
 // with a message saying what is down and how to get out -- the request would
-// fail anyway, with nothing but "connection refused". A statement that does not arrive
-// leaves the gateway answering 503 with Retry-After for a run it cannot yet
-// register, and the next hook event states it again. Failures go to stderr,
-// which the harness shows only in its debug output.
+// fail anyway, with nothing but "connection refused". A statement that does
+// not arrive, or that the core refuses, never stops a session: the core
+// forwards its requests unrecorded (RM-313), and the next hook event states
+// it again. Failures go to stderr, which the harness shows only in its debug
+// output; a refusal before a user turn is said on one line of its own.
 func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string,
 	post func(url string, body []byte) error,
 ) int {
@@ -124,11 +139,19 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 	}
 	err = post(strings.TrimSuffix(base, "/")+gatewaySessionWorkspacePath, body)
 	var unreachable *gatewayUnreachableError
+	var refused *gatewayRefusedError
 	switch {
 	case err == nil:
 	case errors.As(err, &unreachable) && in.HookEventName == "UserPromptSubmit":
 		fmt.Fprint(stderr, unreachableMessage(base, unreachable.err))
 		return exitBlock
+	case errors.As(err, &refused) && in.HookEventName == "UserPromptSubmit" &&
+		(refused.status == http.StatusUnauthorized || refused.status == http.StatusForbidden):
+		// RM-313: said, never hidden, and never a stop. The core forwards
+		// this session's requests unrecorded.
+		fmt.Fprintf(stderr, "innsegl: the core refused this session's statement (%d): the repository is outside "+
+			"this installation's scope, or the session belongs to another installation; this session runs unrecorded\n",
+			refused.status)
 	default:
 		fmt.Fprintf(stderr, "innsegl hook session: stating the working directory: %v\n", err)
 	}
@@ -156,9 +179,9 @@ func postToGateway(getenv func(string) string) func(string, []byte) error {
 		if resp.StatusCode/100 != 2 {
 			msg, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
 			if readErr != nil {
-				return fmt.Errorf("the gateway answered %d", resp.StatusCode)
+				return &gatewayRefusedError{status: resp.StatusCode}
 			}
-			return fmt.Errorf("the gateway answered %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+			return &gatewayRefusedError{status: resp.StatusCode, msg: strings.TrimSpace(string(msg))}
 		}
 		return nil
 	}

@@ -28,6 +28,14 @@ import (
 // forwarded to the core.
 const StatusPath = "/_client/status"
 
+// SessionStatementPath is the core's session-workspace endpoint, where the
+// session hook states each session's workspace through this service.
+const SessionStatementPath = "/_gateway/session-workspace"
+
+// StatementHeader carries the cached statement on a forwarded request: the
+// statement's JSON body, base64url without padding (RM-313).
+const StatementHeader = "X-Innsegl-Statement"
+
 // renewRetry is how long a failed renewal (other than a refusal) waits
 // before it is tried again.
 const renewRetry = time.Minute
@@ -48,6 +56,9 @@ type Server struct {
 	proxy     *httputil.ReverseProxy
 	log       *log.Logger
 	renewMu   sync.Mutex
+	// statements is the newest statement per (session, agent) the hook sent
+	// through this service (RM-313).
+	statements *statementCache
 }
 
 // NewServer loads the enrolment from paths. It refuses a key that is not
@@ -75,7 +86,8 @@ func NewServer(paths Paths, logw io.Writer) (*Server, error) {
 	}
 	s := &Server{
 		Now: time.Now, paths: paths, core: core, target: target, key: key,
-		log: log.New(logw, "innsegl client: ", log.LstdFlags),
+		log:        log.New(logw, "innsegl client: ", log.LstdFlags),
+		statements: newStatementCache(DefaultMaxStatements),
 	}
 	if err := s.setCert(chain); err != nil {
 		return nil, err
@@ -104,10 +116,14 @@ func NewServer(paths Paths, logw io.Writer) (*Server, error) {
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
 	s.proxy = &httputil.ReverseProxy{
-		// The request goes on unchanged apart from its destination: the
-		// harness's own Authorization header passes through, and no
-		// forwarding headers are added.
-		Rewrite: func(pr *httputil.ProxyRequest) { pr.SetURL(target) },
+		// The request goes on unchanged apart from its destination and the
+		// session's statement (attachStatement): the harness's own
+		// Authorization header passes through, and no forwarding headers
+		// are added.
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			s.attachStatement(pr.Out)
+		},
 		// Flush every write at once: a model reply is a server-sent event
 		// stream, and each event must reach the harness as it arrives.
 		FlushInterval: -1,
@@ -132,10 +148,14 @@ const maxRefusalLogBytes = 512
 // carries its own reason (the core's, or the provider's relayed), which is logged. The response itself is
 // left as it came.
 func (s *Server) explainRefusal(resp *http.Response) error {
+	req := resp.Request
+	if req.URL.Path == SessionStatementPath && resp.StatusCode >= 400 {
+		s.logStatementRefusal(req, resp.StatusCode)
+		return nil
+	}
 	if resp.StatusCode < 400 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
 		return nil
 	}
-	req := resp.Request
 	session := req.Header.Get("X-Claude-Code-Session-Id")
 	if session == "" {
 		session = "(none)"
@@ -158,6 +178,70 @@ func (s *Server) explainRefusal(resp *http.Response) error {
 	s.log.Printf("the core answered %s %s for session %s with %d: %s",
 		req.Method, req.URL.Path, session, resp.StatusCode, strings.TrimSpace(string(head)))
 	return nil
+}
+
+// statementSessionKey carries a statement's session id from Handler to the
+// response's log line.
+type statementSessionKey struct{}
+
+// rememberStatement keeps the statement r carries (statementCache) and
+// leaves r's body as it was, for the core.
+func (s *Server) rememberStatement(r *http.Request) (*http.Request, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxStatementBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	// An oversized body goes on whole, for the core to refuse; it is not
+	// remembered.
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(body), r.Body), r.Body}
+	session := s.statements.remember(body)
+	return r.WithContext(context.WithValue(r.Context(), statementSessionKey{}, session)), nil
+}
+
+// attachStatement sets the session's cached statement on a forwarded request,
+// and removes any the harness sent itself: the statement is this service's
+// to state.
+func (s *Server) attachStatement(out *http.Request) {
+	out.Header.Del(StatementHeader)
+	if out.URL.Path == SessionStatementPath {
+		return
+	}
+	session := out.Header.Get("X-Claude-Code-Session-Id")
+	if session == "" {
+		return
+	}
+	if v, ok := s.statements.lookup(session, out.Header.Get("X-Claude-Code-Agent-Id")); ok {
+		out.Header.Set(StatementHeader, v)
+	}
+}
+
+// logStatementRefusal says, with the session and a reason class, that the
+// core did not accept a statement. The session is not stuck: its model
+// requests are forwarded, unrecorded where the core cannot record them.
+func (s *Server) logStatementRefusal(req *http.Request, status int) {
+	session, ok := req.Context().Value(statementSessionKey{}).(string)
+	if !ok || session == "" {
+		session = "(none)"
+	}
+	var class string
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		class = "refused: the repository is outside this installation's scope, or the session belongs to " +
+			"another installation"
+	case status == http.StatusBadRequest:
+		class = "malformed"
+	case status == http.StatusTooManyRequests:
+		class = "rate-limited"
+	case status >= 500:
+		class = "core-unavailable"
+	default:
+		class = "other"
+	}
+	s.log.Printf("the core did not accept the statement for session %s (%d, %s); "+
+		"its model requests are forwarded, unrecorded where the core cannot record them", session, status, class)
 }
 
 func (s *Server) setCert(chain []*x509.Certificate) error {
@@ -196,6 +280,14 @@ func (s *Server) Handler() http.Handler {
 			http.Error(w, "innsegl client: this installation was revoked; the core refused its renewal. "+
 				"Run `innsegl connect --disconnect`, then enrol again with a new token.", http.StatusForbidden)
 			return
+		}
+		if r.URL.Path == SessionStatementPath && r.Method == http.MethodPost {
+			kept, err := s.rememberStatement(r)
+			if err != nil {
+				http.Error(w, "innsegl client: reading the statement: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			r = kept
 		}
 		s.proxy.ServeHTTP(w, r)
 	})

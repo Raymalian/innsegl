@@ -360,18 +360,25 @@ func (h hostedCallers) rateKey(r *http.Request, base string) string {
 	return base + ":" + inst
 }
 
-func (h hostedCallers) admitStatement(ctx context.Context, sessionID string, st gateway.StatedWorkspace) (bool, error) {
+// admitStatement pins the session first: a session that is another
+// installation's is refused whatever it states. A repository outside the
+// installation's scope is out of scope: the session is the caller's, and
+// runs unrecorded (RM-313).
+func (h hostedCallers) admitStatement(ctx context.Context, sessionID string, st gateway.StatedWorkspace) (gateway.StatementVerdict, error) {
 	inst, ok := gateway.InstallationFromContext(ctx)
-	if !ok {
-		return false, nil
+	if !ok || !h.pins.Pin(sessionID, inst) {
+		return gateway.StatementRefused, nil
 	}
 	if st.HasRepo() {
 		in, err := h.scope.InScope(ctx, inst, st.Repo)
-		if err != nil || !in {
-			return false, err
+		if err != nil {
+			return gateway.StatementRefused, err
+		}
+		if !in {
+			return gateway.StatementOutOfScope, nil
 		}
 	}
-	return h.pins.Pin(sessionID, inst), nil
+	return gateway.StatementAdmitted, nil
 }
 
 func (h hostedCallers) admitSession(ctx context.Context, sessionID string) bool {

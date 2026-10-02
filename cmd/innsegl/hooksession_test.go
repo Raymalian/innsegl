@@ -68,8 +68,8 @@ func TestHookSessionStatesASubagentsDirectory(t *testing.T) {
 }
 
 // The hook never blocks the harness: a stack that is down, or input it
-// cannot read, still exits 0 and prints nothing to stdout. The gateway is the
-// gate; it answers 503 until a statement arrives.
+// cannot read, still exits 0 and prints nothing to stdout. A session with no
+// statement is forwarded unrecorded by the core (RM-313).
 func TestHookSessionNeverBlocksTheHarness(t *testing.T) {
 	for name, tc := range map[string]struct {
 		in      string
@@ -162,5 +162,31 @@ func TestHookSessionNamesAnUntrustedGatewayCertificate(t *testing.T) {
 	}
 	if strings.Contains(errOut.String(), "make start") {
 		t.Errorf("message %q tells the person to start a stack that is already up", errOut.String())
+	}
+}
+
+// RM-313: a statement the core refuses (an installation whose scope leaves
+// the repository out) no longer disappears. Before a user turn the hook says
+// so on one stderr line, which the harness shows in its debug output, and
+// still exits 0: the session goes on, unrecorded.
+func TestRM313HookSurfacesARefusedStatementOnOneLine(t *testing.T) {
+	refused := &gatewayRefusedError{status: 401, msg: `{"error":"innsegl core: request refused"}`}
+	_, post := capturePosts(refused)
+	in := `{"session_id":"7dc5d783-9896-4aef-84d9-a82114505fff","cwd":"/w","hook_event_name":"UserPromptSubmit"}`
+	var out, errOut bytes.Buffer
+	if code := runHookSession(strings.NewReader(in), &out, &errOut, env(nil), post); code != exitOK {
+		t.Fatalf("exit = %d, want 0: a refusal never stops the prompt", code)
+	}
+	msg := errOut.String()
+	if strings.Count(msg, "\n") != 1 {
+		t.Fatalf("stderr %q, want exactly one line", msg)
+	}
+	for _, want := range []string{"refused", "401", "scope", "unrecorded"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("stderr %q does not say %q", msg, want)
+		}
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing", out.String())
 	}
 }
