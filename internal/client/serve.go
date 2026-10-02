@@ -37,6 +37,12 @@ const SessionStatementPath = "/_gateway/session-workspace"
 // statement's JSON body, base64url without padding (RM-313).
 const StatementHeader = "X-Innsegl-Statement"
 
+// statementDeadline bounds how long a statement waits on the core. The
+// session hook gives up after 3s and runs before every user turn; a statement
+// the core has not taken by then is kept here and rides on the session's next
+// forwarded request (attachStatement), so nothing is lost by not waiting.
+const statementDeadline = 1500 * time.Millisecond
+
 // renewRetry is how long a failed renewal (other than a refusal) waits
 // before it is tried again.
 const renewRetry = time.Minute
@@ -357,6 +363,13 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 			r = kept
+			if s.coreDown() {
+				s.keepStatement(w, r, errors.New("the core did not answer a moment ago"))
+				return
+			}
+			var cancel context.CancelFunc
+			r, cancel = withStatementDeadline(r)
+			defer cancel()
 		}
 		if r.Method == http.MethodPost && isModelPath(r.URL.Path) {
 			s.serveModel(w, r)
@@ -364,6 +377,24 @@ func (s *Server) Handler() http.Handler {
 		}
 		s.proxy.ServeHTTP(w, r)
 	})
+}
+
+// withStatementDeadline bounds r by statementDeadline.
+func withStatementDeadline(r *http.Request) (*http.Request, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(r.Context(), statementDeadline)
+	return r.WithContext(ctx), cancel
+}
+
+// keepStatement answers a statement the core did not take in time: 202, kept
+// here, stated to the core on the session's next forwarded request.
+func (s *Server) keepStatement(w http.ResponseWriter, r *http.Request, err error) {
+	session, ok := r.Context().Value(statementSessionKey{}).(string)
+	if !ok || session == "" {
+		session = "(none)"
+	}
+	s.log.Printf("the core did not take the statement for session %s (%v); kept here, it goes with the "+
+		"session's next request", session, err)
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // Status is the body of GET /_client/status.

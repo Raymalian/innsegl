@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -188,5 +189,22 @@ func TestRM313HookSurfacesARefusedStatementOnOneLine(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Errorf("stdout = %q, want nothing", out.String())
+	}
+}
+
+// RM-313 never-block: a gateway that accepted the connection but did not
+// answer in time is up and slow, or waiting on a core that is down. The
+// model request may well go through (the client falls back to the
+// provider), so the prompt is never stopped for it -- measured 2026-10-02,
+// a core that did not answer stopped every prompt on the machine.
+func TestHookSessionNeverStopsAPromptForASlowGateway(t *testing.T) {
+	_, post := capturePosts(&gatewayUnreachableError{err: context.DeadlineExceeded})
+	in := `{"session_id":"7dc5d783-9896-4aef-84d9-a82114505fff","cwd":"/w","hook_event_name":"UserPromptSubmit"}`
+	var errOut bytes.Buffer
+	if code := runHookSession(strings.NewReader(in), &bytes.Buffer{}, &errOut, env(nil), post); code != exitOK {
+		t.Fatalf("exit = %d, want 0: a slow gateway stopped the prompt (%s)", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "deadline") {
+		t.Errorf("stderr %q does not say what happened", errOut.String())
 	}
 }

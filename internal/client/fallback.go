@@ -172,6 +172,10 @@ func (s *Server) proxyError(w http.ResponseWriter, r *http.Request, err error) {
 		s.refuseUnjournaled(w, r, refusal.err)
 		return
 	}
+	if r.URL.Path == SessionStatementPath {
+		s.keepStatement(w, r, err)
+		return
+	}
 	ex := exchangeFrom(r.Context())
 	if ex != nil && r.Context().Err() == nil {
 		s.markCoreDown()

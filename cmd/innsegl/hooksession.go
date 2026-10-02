@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -92,7 +93,9 @@ The usual cause is Docker, or the innsegl stack, not running.
 // gateway is the gate, not this hook. One exception: before a user turn,
 // when the gateway cannot be reached at all, it stops the prompt (exit 2)
 // with a message saying what is down and how to get out -- the request would
-// fail anyway, with nothing but "connection refused". A statement that does
+// fail anyway, with nothing but "connection refused". A gateway that took the
+// connection but did not answer in time is never a stop: it is up, and the
+// model request may still go through. A statement that does
 // not arrive, or that the core refuses, never stops a session: the core
 // forwards its requests unrecorded (RM-313), and the next hook event states
 // it again. Failures go to stderr, which the harness shows only in its debug
@@ -149,7 +152,7 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 	var refused *gatewayRefusedError
 	switch {
 	case err == nil:
-	case errors.As(err, &unreachable) && in.HookEventName == "UserPromptSubmit":
+	case errors.As(err, &unreachable) && in.HookEventName == "UserPromptSubmit" && !isTimeout(err):
 		fmt.Fprint(stderr, unreachableMessage(base, unreachable.err))
 		return exitBlock
 	case errors.As(err, &refused) && in.HookEventName == "UserPromptSubmit" &&
@@ -163,6 +166,13 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 		fmt.Fprintf(stderr, "innsegl hook session: stating the working directory: %v\n", err)
 	}
 	return exitOK
+}
+
+// isTimeout reports whether err is the gateway taking too long rather than
+// not being there: a context deadline or any network timeout.
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout())
 }
 
 // postToGateway sends body with the client that trusts only the gateway's
