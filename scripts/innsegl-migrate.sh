@@ -338,6 +338,7 @@ innsegl-core_innsegl-sessions|the harness's session-to-run mapping
 innsegl-core_innsegl-workspace|the working trees `repo` resolves under
 innsegl-core_innsegl-backups|verified ledger backups and their reports
 innsegl-core_innsegl-mirror|the per-repository mirrors clients push commits to (ADR-0065)
+innsegl-core_innsegl-dashboard-tls|the dashboard's certificate and key (RM-311; rewritten on start)
 innsegl-sigstore_sigstore-rekor-search|Rekor's search index
 EOF
 }
