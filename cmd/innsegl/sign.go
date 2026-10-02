@@ -67,6 +67,12 @@ type signClient interface {
 	Sign(ctx context.Context, req commitpath.SignRequest) (commitpath.SignResponse, error)
 }
 
+// commitStager is the push half of a hosted client (commitpath.Client.Stage).
+// A client without it (a test double) asks the core directly.
+type commitStager interface {
+	Stage(ctx context.Context, dir, toolUseID string, payload []byte) error
+}
+
 // runSign is `innsegl sign`. It is never dispatched through cli.go's
 // `commands` table — a deployment wires it as git's `gpg.x509.program`
 // directly, which is why its signature takes stdin, stdout and stderr
@@ -115,6 +121,17 @@ func runSign(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	}
 	if len(payload) > signMaxPayloadBytes {
 		return refuse("the commit object on stdin is larger than %d bytes", signMaxPayloadBytes)
+	}
+
+	// A hosted client's objects exist only here: push them to the core's
+	// mirror first (#465, ADR-0065), because the core computes the change's
+	// identity from them. A failed push does not end the commit here: the
+	// core may already hold the objects, and when it does not, its own
+	// refusal names what is missing. Both reasons reach stderr.
+	if st, ok := client.(commitStager); ok {
+		if serr := st.Stage(ctx, ".", toolUseID, payload); serr != nil {
+			fprintf(stderr, "innsegl sign: pushing the commit's objects to the core: %v\n", serr)
+		}
 	}
 
 	resp, err := client.Sign(ctx, commitpath.SignRequest{

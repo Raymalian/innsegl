@@ -15,10 +15,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"innsegl.dev/innsegl/internal/workspace"
 )
 
 // Where the core answers, and how a host command finds it.
@@ -266,6 +269,178 @@ func (c Client) call(ctx context.Context, endpoint string, req, out any) error {
 		return fmt.Errorf("innsegl: the core's answer is not the expected shape: %w", err)
 	}
 	return nil
+}
+
+// GitPathPrefix is where a hosted core receives a repository's objects
+// (ADR-0065): <GitPathPrefix><host>/<org>/<name>.git, git's smart HTTP.
+const GitPathPrefix = "/_core/git/"
+
+// StagingRefPrefix names the refs a client pushes the objects of a commit
+// about to be signed to.
+const StagingRefPrefix = "refs/innsegl/staging/"
+
+// StagingRef is the one ref an installation pushes a tool call's objects to.
+func StagingRef(installation, toolUseID string) string {
+	return StagingRefPrefix + installation + "/" + toolUseID
+}
+
+// clientStatusPath is the client service's own status route
+// (internal/client.StatusPath, repeated: that package's tests import this
+// one's, and the value is pinned by a test that imports both).
+const clientStatusPath = "/_client/status"
+
+// Stage pushes the objects a commit payload names -- its tree and parents --
+// to the hosted core's mirror of dir's repository, on this installation's
+// staging ref for toolUseID (#465, ADR-0065). The core computes the change's
+// identity from them, and on a hosted core they exist only here.
+//
+// Only a client service is pushed to: it alone is plain http on loopback
+// and answers its status route with an installation. Against the
+// single-host core (https, the agent's checkout on the same disk) Stage does
+// nothing.
+//
+// git cannot push a bare tree, so the push carries a throwaway commit of the
+// tree and parents. It is written to a temporary object directory, never to
+// the repository's own: a refused commit leaves no commit object behind
+// (CMT-014).
+func (c Client) Stage(ctx context.Context, dir, toolUseID string, payload []byte) error {
+	if !strings.HasPrefix(c.BaseURL, "http://") {
+		return nil
+	}
+	installation, ok := c.installation(ctx)
+	if !ok {
+		return nil
+	}
+	if !IsToolUseID(toolUseID) {
+		return fmt.Errorf("%q is not a tool call id", toolUseID)
+	}
+	tree, parents, err := payloadObjects(payload)
+	if err != nil {
+		return err
+	}
+	repo, err := workspace.RepoID(ctx, dir)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	defer cancel()
+
+	objects, err := stageGit(ctx, dir, nil, "rev-parse", "--path-format=absolute", "--git-path", "objects")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp("", "innsegl-stage-")
+	if err != nil {
+		return fmt.Errorf("a temporary object directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	env := []string{
+		"GIT_OBJECT_DIRECTORY=" + tmp,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + objects,
+		// A fixed identity and date: the staging commit is the same object
+		// for the same tree and parents, whoever runs it.
+		"GIT_AUTHOR_NAME=innsegl", "GIT_AUTHOR_EMAIL=staging@innsegl.invalid", "GIT_AUTHOR_DATE=@0 +0000",
+		"GIT_COMMITTER_NAME=innsegl", "GIT_COMMITTER_EMAIL=staging@innsegl.invalid", "GIT_COMMITTER_DATE=@0 +0000",
+	}
+	args := []string{"commit-tree", "--no-gpg-sign", "-m", "innsegl staging"}
+	for _, p := range parents {
+		args = append(args, "-p", p)
+	}
+	commit, err := stageGit(ctx, dir, env, append(args, tree)...)
+	if err != nil {
+		return err
+	}
+	remote := strings.TrimSuffix(c.BaseURL, "/") + GitPathPrefix + repo + ".git"
+	_, err = stageGit(ctx, dir, env, "-c", "push.gpgSign=false", "-c", "http.followRedirects=false",
+		"push", "--no-verify", "--quiet", remote, "+"+commit+":"+StagingRef(installation, toolUseID))
+	return err
+}
+
+// installation asks the client service which installation it is. Any
+// answer but a 200 naming one means this is not a client service.
+func (c Client) installation(ctx context.Context) (string, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(c.BaseURL, "/")+clientStatusPath, nil)
+	if err != nil {
+		return "", false
+	}
+	client := c.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: defaultTimeout}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var st struct {
+		InstallationID string `json:"installation_id"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&st) != nil {
+		return "", false
+	}
+	return st.InstallationID, st.InstallationID != ""
+}
+
+// payloadObjects reads the tree and parent lines of an unsigned commit
+// object's header.
+func payloadObjects(payload []byte) (tree string, parents []string, err error) {
+	header, _, _ := strings.Cut(string(payload), "\n\n")
+	for _, line := range strings.Split(header, "\n") {
+		key, val, _ := strings.Cut(line, " ")
+		switch key {
+		case "tree":
+			tree = val
+		case "parent":
+			parents = append(parents, val)
+		}
+	}
+	for _, oid := range append([]string{tree}, parents...) {
+		if !isObjectID(oid) {
+			return "", nil, fmt.Errorf("the commit object names %q, which is not an object id", oid)
+		}
+	}
+	return tree, parents, nil
+}
+
+func isObjectID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// stageGit runs git in dir with the process's environment plus extra, never
+// prompting, and never through a proxy to the loopback client service.
+func stageGit(ctx context.Context, dir string, extra []string, args ...string) (string, error) {
+	// G204: an argument list, never shell text; args are this package's own
+	// and validated object ids.
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // see above
+	cmd.Env = append(append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"NO_PROXY="+noProxy(os.Getenv("NO_PROXY")), "no_proxy="+noProxy(os.Getenv("no_proxy")),
+	), extra...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func noProxy(existing string) string {
+	const loopback = "127.0.0.1,localhost,::1"
+	if existing == "" {
+		return loopback
+	}
+	return existing + "," + loopback
 }
 
 // Window is how long after the core relayed a `git commit` tool call that
