@@ -83,8 +83,13 @@ type RunMapping struct {
 	// ClientID is the installation the run was made under (hosted shape,
 	// ADR-0063); empty in the single-host shape. It is what keeps a session
 	// pinned to its installation across a core restart (#488).
-	ClientID   string
-	RecordedAt time.Time
+	ClientID string
+	// AgentTypeVerbatim is the harness's own name for a subagent's type
+	// (RM-314), before event.FoldIdentifier made it the run's agent_type:
+	// "Plan" for a run registered as plan. Outside the chain, like every
+	// column of this table; empty when the harness named no type.
+	AgentTypeVerbatim string
+	RecordedAt        time.Time
 }
 
 // MappingStore is the insert-only mapping. Lookups answer the most recent row

@@ -242,6 +242,12 @@ jobs:
       - name: The setup link is printed only while an account is still needed, and never fabricated
         run: ./scripts/setup-link-selftest.sh
 
+      # RM-324. `make start` re-indexes Rekor on every run; the script skips
+      # when the index already covers the log and otherwise fetches in batches.
+      # Against a fake Rekor and a fake redis-cli, so no container is needed.
+      - name: The Rekor index is rebuilt once, extended incrementally, and bounded in time
+        run: ./scripts/rekor-reindex-selftest.sh
+
   worktree-link:
     name: worktree link
     runs-on: ubuntu-latest

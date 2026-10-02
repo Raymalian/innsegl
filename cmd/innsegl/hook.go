@@ -124,6 +124,9 @@ func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int { //nolint
 		!commandAlreadySetsGitConfigCount(command) {
 		assignments = append(assignments, gitConfigSigningAssignments(bin)...)
 	}
+	if !commandAlreadySetsAuthorIdentity(command) {
+		assignments = append(assignments, agentIdentityAssignments()...)
+	}
 	// Nothing above is fatal to this branch: an unresolved binary path, an
 	// unsafe one, or a command that already claims GIT_CONFIG_COUNT each just
 	// leave assignments holding only the tool call id, exactly the export
@@ -260,4 +263,37 @@ func gitConfigSigningAssignments(programPath string) []string {
 		out = append(out, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
 	}
 	return out
+}
+
+// agentAuthorName and agentAuthorEmail are the identity a commit made through
+// this hook carries (RM-315). The email must equal the core's I6 author
+// policy (INNSEGL_SIGN_AUTHOR_EMAIL in deploy/compose/innsegl.yml, checked by
+// signing.CheckAuthor); the client cannot read the core's configuration, so it
+// is a constant here. Both are shell-safe, so they need no quoting.
+const (
+	agentAuthorName  = "Innsegl"
+	agentAuthorEmail = "agent@innsegl.invalid"
+)
+
+// agentIdentityAssignments builds the four environment assignments that make
+// a git commit author and committer the agent identity.
+func agentIdentityAssignments() []string {
+	return []string{
+		"GIT_AUTHOR_NAME=" + agentAuthorName,
+		"GIT_AUTHOR_EMAIL=" + agentAuthorEmail,
+		"GIT_COMMITTER_NAME=" + agentAuthorName,
+		"GIT_COMMITTER_EMAIL=" + agentAuthorEmail,
+	}
+}
+
+// gitIdentityAssignment matches an assignment of any of the four identity
+// variables in a command's own text, with the same identifier-boundary rule as
+// gitConfigCountAssignment.
+var gitIdentityAssignment = regexp.MustCompile(`(^|[^A-Za-z0-9_])GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL)=`)
+
+// commandAlreadySetsAuthorIdentity reports whether cmd assigns any of
+// GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME or GIT_COMMITTER_EMAIL.
+// An explicit choice is respected: the hook then adds none of the four.
+func commandAlreadySetsAuthorIdentity(cmd string) bool {
+	return gitIdentityAssignment.MatchString(cmd)
 }

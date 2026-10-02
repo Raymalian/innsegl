@@ -48,6 +48,12 @@ type SessionWorkspaces struct {
 type StatedWorkspace struct {
 	Cwd                                string
 	Repo, Worktree, Branch, Task, Head string
+	// AgentType is the harness's own name for the agent's type, from the
+	// SubagentStart hook's agent_type (RM-314), verbatim: "Plan",
+	// "flutter-all:flutter-architect". Empty for a harness that sends none.
+	// It belongs to the agent that stated it, so a lookup that falls back to
+	// the session's newest statement drops it.
+	AgentType string
 }
 
 // HasRepo reports whether the client derived the workspace itself, so the
@@ -144,7 +150,11 @@ func (s *SessionWorkspaces) LookupStated(sessionID, agentID string) (StatedWorks
 	if st, ok := w.agents[agentID]; ok {
 		return st, true
 	}
-	return w.latest, true
+	// The session's newest directory is where the agent is; the type in that
+	// statement belongs to whichever agent stated it, never this one (RM-314).
+	st := w.latest
+	st.AgentType = ""
+	return st, true
 }
 
 // Knows reports whether agentID of sessionID has a statement of its own: the

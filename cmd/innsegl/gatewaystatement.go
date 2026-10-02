@@ -38,6 +38,10 @@ type sessionWorkspaceStatement struct {
 	Branch    string `json:"branch"`
 	Task      string `json:"task"`
 	Head      string `json:"head"`
+	// AgentType is the SubagentStart hook's agent_type, as the harness sent
+	// it (RM-314). Never a reason to refuse: the gateway folds it into the
+	// identifier grammar and bounds what it keeps.
+	AgentType string `json:"agent_type"`
 }
 
 // valid reports whether the statement is well formed. A statement that names
@@ -72,5 +76,6 @@ func (in sessionWorkspaceStatement) valid() bool {
 func (in sessionWorkspaceStatement) stated() gateway.StatedWorkspace {
 	return gateway.StatedWorkspace{
 		Cwd: in.Cwd, Repo: in.Repo, Worktree: in.Worktree, Branch: in.Branch, Task: in.Task, Head: in.Head,
+		AgentType: in.AgentType,
 	}
 }

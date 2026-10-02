@@ -51,6 +51,17 @@ func (h headerStatements) Admit(ctx context.Context, sessionID string, st gatewa
 	return h.callers.admitStatement(ctx, sessionID, st)
 }
 
+// logAgentTypeWitness is the identity guard's sink for a subagent whose
+// hook-stated type and model-asked type fold differently (RM-314). The
+// hook's is recorded; this says the model's disagreed.
+func logAgentTypeWitness(log *serveLog) func(gateway.AgentTypeFinding) {
+	return func(f gateway.AgentTypeFinding) {
+		log.warn("finding: the model asked for a different subagent type than the harness started",
+			"session_id", f.SessionID, "agent_id", f.AgentID,
+			"hook_agent_type", f.Hook, "model_subagent_type", f.Model)
+	}
+}
+
 // logUnrecorded is the identity guard's finding sink: one warning per
 // (session, agent, reason) for a request forwarded without being recorded.
 func logUnrecorded(log *serveLog) func(gateway.UnrecordedFinding) {

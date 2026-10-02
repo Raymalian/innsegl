@@ -76,11 +76,11 @@ func (s *PostgresMappingStore) Insert(ctx context.Context, m RunMapping) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO innsegl.gateway_run_mapping
 			(run_id, session_id, agent_id, fingerprint,
-			 parent_run_id, forked_from_run_id, adopted_from_run_id, client_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			 parent_run_id, forked_from_run_id, adopted_from_run_id, client_id, agent_type_verbatim)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		m.RunID, m.SessionID, m.AgentID, string(m.Fingerprint),
 		nullableText(m.ParentRunID), nullableText(m.ForkedFromRunID), nullableText(m.AdoptedFromRunID),
-		nullableText(clientID))
+		nullableText(clientID), nullableText(m.AgentTypeVerbatim))
 	if err != nil {
 		return fmt.Errorf("gateway: insert a run mapping for session %s agent %s: %w", m.SessionID, m.AgentID, err)
 	}
@@ -96,7 +96,7 @@ func (s *PostgresMappingStore) Insert(ctx context.Context, m RunMapping) error {
 func (s *PostgresMappingStore) BySessionAgent(ctx context.Context, sessionID, agentID string) (RunMapping, bool, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT run_id, session_id, agent_id, fingerprint,
-		       parent_run_id, forked_from_run_id, adopted_from_run_id, client_id, recorded_at
+		       parent_run_id, forked_from_run_id, adopted_from_run_id, client_id, agent_type_verbatim, recorded_at
 		  FROM innsegl.gateway_run_mapping
 		 WHERE session_id = $1 AND agent_id = $2
 		 ORDER BY recorded_at DESC, id DESC
@@ -126,7 +126,7 @@ func (s *PostgresMappingStore) ByFingerprint(ctx context.Context, fp Fingerprint
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT run_id, session_id, agent_id, fingerprint,
-		       parent_run_id, forked_from_run_id, adopted_from_run_id, client_id, recorded_at
+		       parent_run_id, forked_from_run_id, adopted_from_run_id, client_id, agent_type_verbatim, recorded_at
 		  FROM innsegl.gateway_run_mapping
 		 WHERE fingerprint = $1
 		 ORDER BY id ASC`, string(fp))
@@ -162,11 +162,11 @@ func scanMapping(row rowScanner) (RunMapping, error) {
 		m                                              RunMapping
 		fingerprint                                    string
 		parentRunID, forkedFromRunID, adoptedFromRunID *string
-		clientID                                       *string
+		clientID, agentTypeVerbatim                    *string
 	)
 	if err := row.Scan(
 		&m.RunID, &m.SessionID, &m.AgentID, &fingerprint,
-		&parentRunID, &forkedFromRunID, &adoptedFromRunID, &clientID, &m.RecordedAt,
+		&parentRunID, &forkedFromRunID, &adoptedFromRunID, &clientID, &agentTypeVerbatim, &m.RecordedAt,
 	); err != nil {
 		return RunMapping{}, err
 	}
@@ -175,6 +175,7 @@ func scanMapping(row rowScanner) (RunMapping, error) {
 	m.ForkedFromRunID = derefOrEmpty(forkedFromRunID)
 	m.AdoptedFromRunID = derefOrEmpty(adoptedFromRunID)
 	m.ClientID = derefOrEmpty(clientID)
+	m.AgentTypeVerbatim = derefOrEmpty(agentTypeVerbatim)
 	return m, nil
 }
 

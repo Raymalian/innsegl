@@ -1342,6 +1342,7 @@ func openIdentityStack(
 	// logged as a finding.
 	cfg.HeaderStatements = headerStatements{callers: running.callers}
 	cfg.OnUnrecorded = logUnrecorded(running.log)
+	cfg.OnAgentTypeWitness = logAgentTypeWitness(running.log)
 	identityGuard, err = gateway.NewIdentityGuard(cfg)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)

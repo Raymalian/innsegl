@@ -694,6 +694,53 @@ func TestThreeLevelTreeRegistersEndToEndWithCorrectParentRunID(t *testing.T) {
 	}
 }
 
+// SER-021 (RM-314), measured on a live core 2026-10-02 as a 403
+// INVARIANT_VIOLATION: a subagent the harness names `Plan` registers through
+// the real register_agent as agent_type plan, and the mapping row keeps
+// "Plan".
+func TestSER021APlanSubagentRegistersEndToEnd(t *testing.T) {
+	f := newGWIdentityFixture(t)
+	_, repo := configureGWIdentityWorkspace(t)
+	const (
+		session  = "d5a6a1a0-0000-4000-8000-000000000021"
+		subagent = "aaaaaaaa-bbbb-cccc-dddd-000000000021"
+	)
+
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if r.Header.Get("X-Claude-Code-Agent-Id") == "" {
+			writeGWIdentitySSEToolUse(t, w, "plan brief", "Plan")
+		}
+	}))
+	defer upstream.Close()
+
+	addr, client, stop := startGWIdentityGateway(t, f.dsn, upstream.URL, upstream.Client())
+	defer stop()
+
+	sendAndDrainGWIdentityMessage(t, addr, client, session, "", repo, "root brief", "")
+	sendAndDrainGWIdentityMessage(t, addr, client, session, subagent, repo, "plan brief", "")
+
+	plan := queryGWIdentityMapping(t, f.dsn, session, subagent)
+	if !plan.found {
+		t.Fatal("the Plan subagent has no mapping row: it was not registered")
+	}
+	if got, ok := runRegisteredAgentType(t, f.store, plan.runID); !ok || got != "plan" {
+		t.Errorf("run_registered agent_type = %q (found %v), want plan", got, ok)
+	}
+	var verbatim *string
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := gwIdentityPool(t, f.dsn).QueryRow(ctx,
+		`SELECT agent_type_verbatim FROM innsegl.gateway_run_mapping WHERE run_id = $1`, plan.runID,
+	).Scan(&verbatim); err != nil {
+		t.Fatalf("read agent_type_verbatim: %v", err)
+	}
+	if verbatim == nil || *verbatim != "Plan" {
+		t.Errorf("agent_type_verbatim = %v, want Plan", verbatim)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // GID-009: resume after a gateway restart continues the run, end to end.
 // ---------------------------------------------------------------------------

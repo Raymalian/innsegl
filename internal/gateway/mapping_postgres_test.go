@@ -355,3 +355,55 @@ func TestGW019TheMappingRowCarriesTheClientID(t *testing.T) {
 		}
 	}
 }
+
+// SER-021 (RM-314): the mapping row keeps the harness's own agent-type name
+// beside the folded one the chain records; a row with none carries NULL, and
+// a later row (a fingerprint added) keeps it. The table stays insert-only
+// with the new column (migration 0011).
+func TestSER021TheMappingRowKeepsTheVerbatimAgentType(t *testing.T) {
+	t.Parallel()
+	store, dsn := newMigratedMappingStore(t)
+	ctx := testCtx(t, 2*time.Minute)
+
+	if err := store.Insert(ctx, RunMapping{
+		RunID: "run-plan", SessionID: "session-v", AgentID: "agent-plan", AgentTypeVerbatim: "Plan",
+	}); err != nil {
+		t.Fatalf("Insert (Plan): %v", err)
+	}
+	if err := store.Insert(ctx, RunMapping{RunID: "run-main", SessionID: "session-v", AgentID: mainAgentID}); err != nil {
+		t.Fatalf("Insert (main): %v", err)
+	}
+	got, found, err := store.BySessionAgent(ctx, "session-v", "agent-plan")
+	if err != nil || !found || got.AgentTypeVerbatim != "Plan" {
+		t.Fatalf("BySessionAgent = %+v, found %v, err %v; want AgentTypeVerbatim Plan", got, found, err)
+	}
+	later := got
+	later.Fingerprint = "fp-v"
+	if insertErr := store.Insert(ctx, later); insertErr != nil {
+		t.Fatalf("Insert (later row): %v", insertErr)
+	}
+	rows, err := store.ByFingerprint(ctx, "fp-v")
+	if err != nil || len(rows) != 1 || rows[0].AgentTypeVerbatim != "Plan" {
+		t.Fatalf("ByFingerprint = %+v, err %v; want one row keeping Plan", rows, err)
+	}
+
+	conn := rawMappingConn(t, dsn)
+	var none *string
+	if scanErr := conn.QueryRow(ctx,
+		`SELECT agent_type_verbatim FROM innsegl.gateway_run_mapping WHERE run_id = 'run-main'`).Scan(&none); scanErr != nil {
+		t.Fatalf("read agent_type_verbatim: %v", scanErr)
+	}
+	if none != nil {
+		t.Errorf("a row with no harness type carries %q, want NULL", *none)
+	}
+	_, err = conn.Exec(ctx, `UPDATE innsegl.gateway_run_mapping SET agent_type_verbatim = 'tampered'`)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "IN004" {
+		t.Fatalf("UPDATE of agent_type_verbatim = %v, want refused with IN004", err)
+	}
+	_, err = conn.Exec(ctx, `INSERT INTO innsegl.gateway_run_mapping (run_id, session_id, agent_id, agent_type_verbatim)
+		VALUES ('run-x', 'session-x', 'agent-x', repeat('a', 257))`)
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Fatalf("a 257-byte agent_type_verbatim = %v, want refused by its CHECK (23514)", err)
+	}
+}
