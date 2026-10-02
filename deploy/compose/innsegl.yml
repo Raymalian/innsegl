@@ -1069,6 +1069,9 @@ services:
       # `spiffe` requires a client SVID on the gateway. Required whenever
       # INNSEGL_BIND is not loopback.
       INNSEGL_GATEWAY_CLIENT_AUTH: ${INNSEGL_GATEWAY_CLIENT_AUTH:-}
+      # The per-repository mirror (ADR-0065): hosted clients push the objects
+      # of a commit about to be signed here. Read only in hosted mode.
+      INNSEGL_MIRROR_DIR: /mirror
       # The auth-writer DSN, for enrolment: the same credential and role the
       # API holds as INNSEGL_API_AUTH_DSN, never the appender's or the reader's.
       INNSEGL_GATEWAY_ACCOUNTS_DSN: postgres://innsegl_authwriter:${INNSEGL_LEDGER_AUTHWRITER_PASSWORD:-innsegl-compose-authwriter}@postgres:5432/innsegl?sslmode=disable
@@ -1215,6 +1218,10 @@ services:
       # the run page's query API reads it to VERIFY a brief or a reply's own
       # keyed digest, and holds nothing that could mint one.
       - innsegl-message-key:/message-key
+      # READ-WRITE, and MOUNTED BY NO OTHER SERVICE: the per-repository
+      # mirror hosted clients push to (ADR-0065). It holds evidence; size
+      # and back it up as such.
+      - innsegl-mirror:/mirror
       # READ-WRITE (this process writes the certificate here on every
       # start) and a HOST BIND MOUNT, not a named volume: the host commands
       # (`innsegl git-hook`, `innsegl sign`) read the certificate straight
@@ -2134,6 +2141,10 @@ volumes:
   # MOUNTED BY: innsegl-mcp (rw, one file per key id, written idempotently
   # and never logged) and innsegl-api (ro). Nothing else, ever.
   innsegl-message-key:
+  # The per-repository mirror (ADR-0065): one bare repository per repository
+  # id, fed by hosted clients' authenticated pushes.
+  # MOUNTED BY: innsegl-mcp (rw).
+  innsegl-mirror:
   # The working trees `repo` resolves under (doc 02 §5: `repo` is an
   # identifier, and the tree it names is the DEPLOYMENT's, not the caller's).
   # MOUNTED BY: innsegl-mcp (rw), innsegl-reconciler (rw), demo-agent (rw).

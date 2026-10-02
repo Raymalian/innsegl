@@ -59,6 +59,21 @@ type signPayloadState struct {
 	// sign is Phase B's signing step: the signer's own SignPayload. Only a
 	// test replaces it, so Phases B and C are reachable without Sigstore.
 	sign func(ctx context.Context, s *signing.Signer, req signing.PayloadRequest) (signing.PayloadResult, error)
+	// mirror is the hosted core's evidence store (ADR-0065); nil on a
+	// single-host core.
+	mirror CommitMirror
+}
+
+// CommitMirror is the hosted core's per-repository mirror (ADR-0065,
+// internal/mirror): where a hosted client's commit objects arrive before it
+// asks for a signature.
+type CommitMirror interface {
+	// Dir answers the mirror of repo, or an error when there is none yet.
+	Dir(repo string) (string, error)
+	// Missing answers which of oids the mirror of repo does not hold.
+	Missing(ctx context.Context, repo string, oids []string) ([]string, error)
+	// DropStaging deletes a tool call's staging ref.
+	DropStaging(ctx context.Context, repo, installation, toolUseID string) error
 }
 
 func signWithSigner(ctx context.Context, s *signing.Signer, req signing.PayloadRequest) (signing.PayloadResult, error) {
@@ -81,6 +96,10 @@ type SignPayloadConfig struct {
 	// Now defaults to time.Now. Substitutable so a test can put a relayed
 	// call outside commitpath.Window without a real wait.
 	Now func() time.Time
+	// Mirror is where a hosted client's commit objects arrive (ADR-0065).
+	// Nil on a single-host core; a hosted request then has no objects to
+	// read and is refused.
+	Mirror CommitMirror
 }
 
 var (
@@ -107,7 +126,7 @@ func ConfigureSignPayload(cfg SignPayloadConfig) (func(), error) {
 	if now == nil {
 		now = time.Now
 	}
-	st := &signPayloadState{resolver: cfg.Resolver, claimFor: cfg.ClaimFor, now: now, sign: signWithSigner}
+	st := &signPayloadState{resolver: cfg.Resolver, claimFor: cfg.ClaimFor, now: now, sign: signWithSigner, mirror: cfg.Mirror}
 
 	signPayloadMu.Lock()
 	defer signPayloadMu.Unlock()
@@ -220,10 +239,26 @@ func SignPayloadForGateway(
 	// by the harness's git has its objects there, not in the core's
 	// workspace (ADR-0059: the harness runs git commit). A caller with no
 	// stated directory falls back to the workspace sign_commit uses.
+	//
+	// A hosted client (the call carries its installation, ADR-0063) runs git
+	// on another machine: its stated directory is a path there, and the
+	// objects exist only there until it pushes them. So the hosted path reads
+	// the core's mirror of run.Repo (ADR-0065), which the client fed before
+	// asking, and never the stated directory.
 	var worktree string
-	if relayed.WorkingDirectory != "" {
+	switch {
+	case relayed.Installation != "":
+		worktree, err = commitPathMirror(ctx, cfg.mirror, run.Repo, parsed.Tree, parsed.Parents)
+		if err == nil {
+			// The staging ref has done its job once this call ends, however
+			// it ends; the client pushes again for another attempt.
+			defer func() {
+				discardDropStagingError(cfg.mirror.DropStaging(context.WithoutCancel(ctx), run.Repo, relayed.Installation, req.ToolUseID))
+			}()
+		}
+	case relayed.WorkingDirectory != "":
 		worktree, err = commitPathWorktree(ctx, relayed.WorkingDirectory, run.Repo)
-	} else {
+	default:
 		worktree, err = svc.workspace.Worktree(ctx, run.Repo)
 	}
 	if err != nil {
@@ -430,4 +465,34 @@ func commitPathWorktree(ctx context.Context, workingDirectory, repo string) (str
 		return "", fmt.Errorf("%s is %s, not the run's repository %s", workingDirectory, id, repo)
 	}
 	return workingDirectory, nil
+}
+
+// discardDropStagingError is the named discard for a staging ref that could
+// not be deleted: the signature is already decided, the ref only keeps
+// objects reachable, and the next push of the same tool call moves it.
+func discardDropStagingError(error) {}
+
+// commitPathMirror answers the core's mirror of repo once it holds every
+// object the patch id is computed from: the payload's tree and its parents.
+// A refusal names what is missing, so the client's half of the failure is
+// one push away from clear.
+func commitPathMirror(ctx context.Context, m CommitMirror, repo, tree string, parents []string) (string, error) {
+	if m == nil {
+		return "", errors.New("this core keeps no repository mirror (INNSEGL_MIRROR_DIR is unset), " +
+			"so a hosted client's commit objects have nowhere to arrive")
+	}
+	dir, err := m.Dir(repo)
+	if err != nil {
+		return "", fmt.Errorf("the core's mirror holds nothing of %s yet: the client pushes the tree %s "+
+			"and its parents before asking for a signature (%w)", repo, tree, err)
+	}
+	missing, err := m.Missing(ctx, repo, append([]string{tree}, parents...))
+	if err != nil {
+		return "", fmt.Errorf("reading the core's mirror of %s: %w", repo, err)
+	}
+	if len(missing) > 0 {
+		return "", fmt.Errorf("the core's mirror of %s does not hold %s: the client pushes them "+
+			"before asking for a signature", repo, strings.Join(missing, ", "))
+	}
+	return dir, nil
 }

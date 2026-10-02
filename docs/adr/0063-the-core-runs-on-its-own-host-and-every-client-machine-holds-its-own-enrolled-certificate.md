@@ -75,3 +75,45 @@ core is.
 - A client must renew before expiry; a machine offline longer than a day
   re-enrols.
 - ADR-0060, ADR-0030, ADR-0053, ADR-0025 and ADR-0062 are amended to match.
+
+## Amendment (2026-10-02): what is recorded, and who holds a repository
+
+**What changed.**
+
+- **A session outside any git repository passes through, unrecorded.** A
+  session whose statement names no repository (a home folder, system
+  troubleshooting, a discussion) is still a client of the core: it needs a
+  valid client certificate for a live installation, and a revoked or
+  suspended installation is refused as before. Its model requests are
+  forwarded to the provider with no run registered, no mapping row and
+  nothing in the chain. A session that has stated nothing yet is not such a
+  session: it waits for the hook, as before. The event schema is unchanged.
+- **A session in a repository is recorded under the repository's real
+  name, on first use.** No one grants a repository by hand. The first time
+  an installation acts on a repository no organisation holds, its
+  organisation becomes the holder: a live grant, written by the core's
+  accounts writer and audited with the installation as the actor. A
+  repository another organisation holds live is refused with decision 5's
+  one refusal; one live holder per repository stays enforced by the
+  database.
+- **An installation's repository list defaults to `*`.** `*` means every
+  repository its organisation holds or will hold. An explicit list set at
+  enrolment still narrows: a repository it leaves out is out of scope, and
+  is never claimed.
+- **Recording is sticky.** A session that has been recorded stays recorded
+  when it later states a directory outside any repository: its runs
+  continue, and a new subagent is registered under the session's last
+  repository. After a core restart, the session's run mapping and the run's
+  own registration carry the same fact.
+- **One rule everywhere.** The session statement, run registration, the
+  commit path and the mirror push (ADR-0065) all use it: a repository is in
+  scope once the organisation holds it.
+
+**Why.** Requiring a grant before any session could start refused every
+session outside a repository and every repository not yet granted, though
+neither is a reason to withhold model access. The record exists for work on
+repositories; work elsewhere has nothing to record against.
+
+**What still holds.** Every request needs an enrolled, live installation.
+Nothing in a stated repository goes unrecorded, and leaving it does not
+stop the recording. Signing stays in the core and fails closed.

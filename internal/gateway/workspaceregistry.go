@@ -61,6 +61,8 @@ func (s StatedWorkspace) Workspace() Workspace {
 type sessionWorkspace struct {
 	latest StatedWorkspace
 	agents map[string]StatedWorkspace
+	// lastRepo is the newest statement that named a repository (LastRepo).
+	lastRepo StatedWorkspace
 }
 
 // DefaultMaxSessionWorkspaces bounds the table, the same reasoning
@@ -107,6 +109,9 @@ func (s *SessionWorkspaces) RecordStated(sessionID, agentID string, st StatedWor
 		s.order = append(s.order, sessionID)
 	}
 	w.latest = st
+	if st.HasRepo() {
+		w.lastRepo = st
+	}
 	if agentID == "" || agentID == mainAgentID {
 		return
 	}
@@ -138,6 +143,21 @@ func (s *SessionWorkspaces) LookupStated(sessionID, agentID string) (StatedWorks
 		return st, true
 	}
 	return w.latest, true
+}
+
+// LastRepo answers the newest statement in sessionID, by any of its agents,
+// that named a repository. A later directory-only statement replaces the
+// current one but not this: in hosted mode a session recorded in a
+// repository stays recorded when it leaves it (ADR-0063, amended
+// 2026-10-02).
+func (s *SessionWorkspaces) LastRepo(sessionID string) (StatedWorkspace, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, ok := s.sessions[sessionID]
+	if !ok || !w.lastRepo.HasRepo() {
+		return StatedWorkspace{}, false
+	}
+	return w.lastRepo, true
 }
 
 // agentCount is for tests: how many agents sessionID holds.

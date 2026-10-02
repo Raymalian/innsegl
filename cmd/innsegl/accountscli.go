@@ -101,7 +101,7 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 	case "enrol-token":
 		account = fs.String("account", "", "the account the installation will belong to")
 		by = fs.String("by", "", "the user id minting the token")
-		repos = fs.String("repos", "", "comma-separated host/org/name entries, or * for every granted repository")
+		repos = fs.String("repos", accounts.AllRepos, "comma-separated host/org/name entries, or * (the default) for every repository the account holds or will hold")
 		kind = fs.String("kind", accounts.KindWorkstation, "workstation or service")
 	case "installations", "grant-repo":
 		account = fs.String("account", "", "the account id")
@@ -149,7 +149,7 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 		}
 	case "enrol-token":
 		if *account == "" || *by == "" || strings.TrimSpace(*repos) == "" {
-			return usage("--account, --by and --repos are all required")
+			return usage("--account and --by are required, and --repos may not be blank")
 		}
 		if *kind != accounts.KindWorkstation && *kind != accounts.KindService {
 			return usage("--kind must be workstation or service")

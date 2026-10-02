@@ -105,12 +105,21 @@ sha256_of() {
 # agent_spiffe_id returns the attested agent's SPIFFE ID. Every entry is
 # parented to it: an entry with no reachable parent is an entry no workload can
 # ever match.
+#
+# Every reader below takes the command's whole output first and searches it
+# after. Under pipefail, piping into `grep -q` or `head` is wrong: they stop
+# reading early, the writer dies of SIGPIPE, and pipefail turns a match into a
+# failure (an existing entry read as absent, measured 2026-10-02).
 agent_spiffe_id() {
-  spire agent list 2>/dev/null | sed -n 's/^SPIFFE ID *: *//p' | head -n 1
+  local out
+  out="$(spire agent list 2>/dev/null || true)"
+  awk '/^SPIFFE ID *:/ { sub(/^SPIFFE ID *: */, ""); print; exit }' <<<"${out}"
 }
 
 entry_exists() {
-  spire entry show -spiffeID "$1" 2>/dev/null | grep -q '^Entry ID'
+  local out
+  out="$(spire entry show -spiffeID "$1" 2>/dev/null || true)"
+  grep -q '^Entry ID' <<<"${out}"
 }
 
 main() {
@@ -255,12 +264,11 @@ register_mcp() {
   # spire-oidc has no equivalent case: its image is pinned by digest upstream
   # and does not move. So the freshness check lives here and only here.
   # ------------------------------------------------------------------
-  local existing_id
-  existing_id="$(spire entry show -spiffeID "${MCP_SPIFFE_ID}" 2>/dev/null \
-    | sed -n 's/^Entry ID *: *//p' | head -n 1 | tr -d '[:space:]')"
+  local existing existing_id
+  existing="$(spire entry show -spiffeID "${MCP_SPIFFE_ID}" 2>/dev/null || true)"
+  existing_id="$(awk '/^Entry ID *:/ { sub(/^Entry ID *: */, ""); gsub(/[[:space:]]/, ""); print; exit }' <<<"${existing}")"
   if [ -n "${existing_id}" ]; then
-    if spire entry show -spiffeID "${MCP_SPIFFE_ID}" 2>/dev/null \
-        | grep -q "docker:image_config_digest:${image_config_digest}"; then
+    if grep -q "docker:image_config_digest:${image_config_digest}" <<<"${existing}"; then
       log "entry already present and current: ${MCP_SPIFFE_ID}"
       spire entry show -spiffeID "${MCP_SPIFFE_ID}"
       return 0

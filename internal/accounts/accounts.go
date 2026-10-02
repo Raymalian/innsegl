@@ -52,7 +52,7 @@ const (
 )
 
 // AllRepos is the single repos entry that means every repository the
-// account holds a live grant on.
+// account holds a live grant on, or will hold once it is first used.
 const AllRepos = "*"
 
 // TokenTTL is how long an enrolment token lives.
@@ -285,10 +285,11 @@ var repoPattern = regexp.MustCompile(`^[^\s/]+/[^\s/]+/[^\s/]+$`)
 func validRepo(r string) bool { return len(r) <= 512 && repoPattern.MatchString(r) }
 
 // normaliseRepos checks a repos list: the single entry "*", or host/org/name
-// entries. Duplicates are dropped, order is kept.
+// entries. Duplicates are dropped, order is kept. An empty list is "*": every
+// repository the account holds or will hold (ADR-0063, amended 2026-10-02).
 func normaliseRepos(repos []string) ([]string, error) {
 	if len(repos) == 0 {
-		return nil, fmt.Errorf("%w: repos is empty; use * for every granted repository", ErrInvalid)
+		return []string{AllRepos}, nil
 	}
 	seen := map[string]bool{}
 	out := make([]string, 0, len(repos))
@@ -705,6 +706,78 @@ func (s *Store) InScope(ctx context.Context, installationID, repo string) (bool,
 		return false, fmt.Errorf("accounts: checking scope: %w", err)
 	}
 	return ok, nil
+}
+
+// ClaimActor is the audit actor for a change an installation made by acting
+// on a repository, rather than a user.
+func ClaimActor(installationID string) string { return "installation:" + installationID }
+
+// ClaimRepo is InScope for first use (ADR-0063, amended 2026-10-02): a
+// repository the installation's organisation does not hold yet becomes its
+// own when no organisation holds it live. It answers whether the
+// installation may act on the repository afterwards.
+//
+// Out of scope, and nothing written: an unknown, suspended or revoked
+// installation, a repository its explicit repos list does not name, a name
+// that is not host/org/name, or a repository another organisation holds
+// live (one live holder per repository stays enforced by the database). A
+// grant it makes is audited with the installation as the actor.
+func (s *Store) ClaimRepo(ctx context.Context, installationID, repo string) (bool, error) {
+	if !validRepo(repo) {
+		return false, nil
+	}
+	var in bool
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		var account, status string
+		var repos []string
+		err := tx.QueryRow(ctx,
+			`SELECT account_id, status, repos FROM innsegl_auth.installations
+			  WHERE installation_id = $1`, installationID).Scan(&account, &status, &repos)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("accounts: reading the installation: %w", err)
+		}
+		if status != StatusActive || !reposAdmit(repos, repo) {
+			return nil
+		}
+		tag, err := tx.Exec(ctx,
+			`INSERT INTO innsegl_auth.repo_grants (account_id, repo) VALUES ($1, $2)
+			 ON CONFLICT (repo) WHERE until IS NULL DO NOTHING`, account, repo)
+		if err != nil {
+			return fmt.Errorf("accounts: claiming the repository: %w", err)
+		}
+		if tag.RowsAffected() == 1 {
+			in = true
+			return appendAudit(ctx, tx, AuditEntry{Actor: ClaimActor(installationID), AccountID: account,
+				Action: "repo_grant.created", Subject: repo,
+				Detail: map[string]any{"installation_id": installationID, "source": "first use"}})
+		}
+		var holder string
+		if err := tx.QueryRow(ctx,
+			`SELECT account_id FROM innsegl_auth.repo_grants WHERE repo = $1 AND until IS NULL`,
+			repo).Scan(&holder); err != nil {
+			return fmt.Errorf("accounts: reading the grant: %w", err)
+		}
+		in = holder == account
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return in, nil
+}
+
+// reposAdmit reports whether an installation's repos list names repo: "*",
+// or repo itself.
+func reposAdmit(repos []string, repo string) bool {
+	for _, r := range repos {
+		if r == AllRepos || r == repo {
+			return true
+		}
+	}
+	return false
 }
 
 // AccountSummary is one organisation as `innsegl accounts list` shows it:

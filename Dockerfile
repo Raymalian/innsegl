@@ -142,6 +142,10 @@ COPY --from=build /out/gitsign /usr/local/bin/gitsign
 # a run is loud, which is the only reason it was one command to find.
 RUN mkdir -p /work /sessions && chown 1000:1000 /work /sessions
 
+# /mirror is the per-repository mirror hosted clients push to (ADR-0065),
+# owned by the image's user for the same reason as the two above.
+RUN mkdir -p /mirror && chown 1000:1000 /mirror && chmod 0700 /mirror
+
 # /message-key is RM-237's own derived agent-message key (E19, #395-#397): a
 # named volume mounted read-write into innsegl-mcp and read-only into
 # innsegl-api, so the run page's query API can VERIFY a brief or a reply's

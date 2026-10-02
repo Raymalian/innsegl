@@ -198,7 +198,10 @@ type IdentityGuardConfig struct {
 	// mode has no anonymous caller. Nil is single-host mode, unchanged.
 	Pins *SessionPins
 	// Scope, set with Pins, refuses to register a run for a repository
-	// outside the installation's scope (ADR-0064 decision 3).
+	// outside the installation's scope (ADR-0064 decision 3). With it set, a
+	// session that states no repository and was never recorded passes
+	// through unrecorded, and a recorded session stays recorded (ADR-0063,
+	// amended 2026-10-02).
 	Scope ScopeChecker
 }
 
@@ -333,6 +336,25 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		return nil, g.refuseErr("looking up this agent's prior identity", err)
 	}
 
+	// Hosted mode (ADR-0063, amended 2026-10-02): a session that is not in a
+	// git repository, and never was, passes through to the provider
+	// unrecorded -- no run, no mapping row. A session that has been recorded
+	// stays recorded wherever it goes next (sessionRecorded).
+	if g.scope != nil && !found {
+		recorded, rerr := g.sessionRecorded(ctx, id, facts.Stated)
+		if rerr != nil {
+			return nil, g.refuseErr("reading whether this session is recorded", rerr)
+		}
+		if !recorded {
+			if facts.Stated.Cwd == "" {
+				// Nothing stated yet is not "outside a repository": the hook
+				// has not run, and nothing passes unrecorded on a guess.
+				return nil, directoryNotStatedRefusal(errDirectoryNotStated)
+			}
+			return r.WithContext(ctx), nil
+		}
+	}
+
 	var priorState string
 	if found {
 		priorState, err = g.runStates.RunState(ctx, prior.RunID)
@@ -359,11 +381,7 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 
 	runID, actErr := g.act(ctx, decision, id, facts, fp, parentRunID, spawnAgentType, prior)
 	if errors.Is(actErr, errDirectoryNotStated) {
-		return nil, &Refusal{
-			Status:     http.StatusServiceUnavailable,
-			Reason:     identityGuardSource + ": " + actErr.Error(),
-			RetryAfter: directoryRetryAfter,
-		}
+		return nil, directoryNotStatedRefusal(actErr)
 	}
 	if errors.Is(actErr, errOutOfScope) {
 		return nil, clientRefusal()
@@ -373,6 +391,45 @@ func (g *IdentityGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 	}
 
 	return r.WithContext(WithRunID(ctx, runID)), nil
+}
+
+// directoryNotStatedRefusal is the 503 for a session the hook has not stated
+// yet; err is errDirectoryNotStated or wraps it.
+func directoryNotStatedRefusal(err error) *Refusal {
+	return &Refusal{
+		Status:     http.StatusServiceUnavailable,
+		Reason:     identityGuardSource + ": " + err.Error(),
+		RetryAfter: directoryRetryAfter,
+	}
+}
+
+// sessionRecorded reports, in hosted mode, whether a request with no prior
+// mapping of its own belongs to a recorded session: one that states a
+// repository now, stated one earlier (SessionWorkspaces.LastRepo), or whose
+// main agent already has a run (the durable half, which outlives a restart).
+// Recording is sticky: an agent does not escape it by leaving the repository.
+func (g *IdentityGuard) sessionRecorded(ctx context.Context, id Identification, stated StatedWorkspace) (bool, error) {
+	if stated.HasRepo() {
+		return true, nil
+	}
+	if _, ok := g.sessionWorkspaces.LastRepo(id.SessionID); ok {
+		return true, nil
+	}
+	runID, err := g.sessionMainRun(ctx, id.SessionID)
+	return runID != "", err
+}
+
+// sessionMainRun answers the run of sessionID's main agent, the cache first;
+// empty when it has none.
+func (g *IdentityGuard) sessionMainRun(ctx context.Context, sessionID string) (string, error) {
+	if m, ok := g.cache.get(sessionID, mainAgentID); ok {
+		return m.RunID, nil
+	}
+	m, found, err := g.mappings.BySessionAgent(ctx, sessionID, mainAgentID)
+	if err != nil || !found {
+		return "", err
+	}
+	return m.RunID, nil
 }
 
 // errDirectoryNotStated is a run that must be registered for a session the
@@ -392,16 +449,24 @@ const directoryRetryAfter = 2 * time.Second
 //
 // In hosted mode the workspace must be the client's own derivation (the core
 // never reads a client's files, ADR-0064 decision 2) and its repository must
-// be in the installation's scope; anything else is errOutOfScope.
-func (g *IdentityGuard) resolveWorkspace(ctx context.Context, facts RequestFacts) (Workspace, error) {
+// be in the installation's scope; anything else is errOutOfScope. The
+// installation's scope check is also where its organisation becomes the
+// repository's holder on first use (ADR-0063, amended 2026-10-02).
+func (g *IdentityGuard) resolveWorkspace(ctx context.Context, id Identification, facts RequestFacts, prior RunMapping) (Workspace, error) {
 	if g.scope == nil {
 		return g.workspaces.ResolveStated(ctx, facts.Stated)
 	}
 	inst, ok := InstallationFromContext(ctx)
-	if !ok || !facts.Stated.HasRepo() {
+	if !ok {
 		return Workspace{}, errOutOfScope
 	}
-	ws := facts.Stated.Workspace()
+	ws, err := g.recordedWorkspace(ctx, id, facts.Stated, prior)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if ws.Repo == "" {
+		return Workspace{}, errOutOfScope
+	}
 	in, err := g.scope.InScope(ctx, inst, ws.Repo)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("check the installation's scope: %w", err)
@@ -412,8 +477,38 @@ func (g *IdentityGuard) resolveWorkspace(ctx context.Context, facts RequestFacts
 	return ws, nil
 }
 
-// errOutOfScope is a run the installation may not register: no client-stated
-// repository, or one outside its scope. Answered with the client refusal.
+// recordedWorkspace is where a hosted run is registered: the repository
+// stated now; else the newest one this session stated; else -- a session
+// that left its repository, seen by a core that restarted since -- the
+// registration of the run this request continues from (prior) or of the
+// session's main agent. Empty when none applies.
+func (g *IdentityGuard) recordedWorkspace(ctx context.Context, id Identification, stated StatedWorkspace, prior RunMapping) (Workspace, error) {
+	if stated.HasRepo() {
+		return stated.Workspace(), nil
+	}
+	if last, ok := g.sessionWorkspaces.LastRepo(id.SessionID); ok {
+		return last.Workspace(), nil
+	}
+	anchor := prior.RunID
+	if anchor == "" {
+		runID, err := g.sessionMainRun(ctx, id.SessionID)
+		if err != nil {
+			return Workspace{}, err
+		}
+		anchor = runID
+	}
+	if anchor == "" {
+		return Workspace{}, nil
+	}
+	reg, err := g.runStates.RunRegistration(ctx, anchor)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("read run %q's registration for the session's repository: %w", anchor, err)
+	}
+	return Workspace{Repo: reg.Repo, Task: reg.TaskID}, nil
+}
+
+// errOutOfScope is a run the installation may not register: no repository to
+// register it under, or one outside its scope. Answered with the client refusal.
 var errOutOfScope = errors.New("the stated repository is outside the installation's scope")
 
 // outageRetryAfter is how long a harness is asked to wait before retrying a
@@ -546,7 +641,7 @@ func (g *IdentityGuard) act(
 		return out.RunID, nil
 
 	case DecisionNew:
-		ws, err := g.resolveWorkspace(ctx, facts)
+		ws, err := g.resolveWorkspace(ctx, id, facts, prior)
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a new run: %w", err)
 		}
@@ -566,7 +661,7 @@ func (g *IdentityGuard) act(
 		return out.RunID, nil
 
 	case DecisionFork:
-		ws, err := g.resolveWorkspace(ctx, facts)
+		ws, err := g.resolveWorkspace(ctx, id, facts, prior)
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a fork of run %q: %w", prior.RunID, err)
 		}
@@ -586,7 +681,7 @@ func (g *IdentityGuard) act(
 		return out.RunID, nil
 
 	case DecisionAdopt:
-		ws, err := g.resolveWorkspace(ctx, facts)
+		ws, err := g.resolveWorkspace(ctx, id, facts, prior)
 		if err != nil {
 			return "", fmt.Errorf("resolve the workspace to register a run adopting %q: %w", prior.RunID, err)
 		}
