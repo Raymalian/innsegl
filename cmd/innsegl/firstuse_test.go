@@ -80,17 +80,21 @@ func TestHostedRepositoryIsRecordedOnFirstUse(t *testing.T) {
 		t.Fatalf("runs registered under %s for the session = %d, want 1", fuFresh, n)
 	}
 
-	// Held by another organisation: refused, nothing registered or forwarded.
+	// Held by another organisation: the statement is refused and nothing is
+	// registered, but the session's model requests still go through.
 	const heldSession = "66666666-6666-4666-8666-666666666666"
 	entries := f.ids.entryCount()
 	if status, body := g.post(t, cl, gatewaySessionWorkspacePath, statement(t, heldSession, fuHeld), nil); status != http.StatusUnauthorized || body != enGuardRefusal {
 		t.Fatalf("statement for another organisation's repository: %d %s", status, body)
 	}
-	if status, _ := g.post(t, cl, "/v1/messages", enMessage, messageHeaders(heldSession)); status == http.StatusOK {
-		t.Fatal("a message for a refused session was forwarded")
+	// Never blocked (RM-313): the session's model request is forwarded,
+	// unrecorded — no run is registered for a repository this organisation
+	// may not record.
+	if status, body := g.post(t, cl, "/v1/messages", enMessage, messageHeaders(heldSession)); status != http.StatusOK {
+		t.Fatalf("a message for a session in another organisation's repository: %d %s, want it forwarded", status, body)
 	}
-	if g.upstream.Load() != 1 || f.ids.entryCount() != entries {
-		t.Fatal("a refused repository reached the upstream or registered a run")
+	if g.upstream.Load() != 2 || f.ids.entryCount() != entries {
+		t.Fatalf("upstream saw %d (want 2) and runs went %d -> %d (want unchanged)", g.upstream.Load(), entries, f.ids.entryCount())
 	}
 	if n := f.count(t, `SELECT count(*) FROM innsegl_auth.repo_grants WHERE account_id = $1 AND repo = $2`, f.account, fuHeld); n != 0 {
 		t.Fatal("another organisation's repository changed hands")
