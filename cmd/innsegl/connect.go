@@ -65,6 +65,9 @@ type connectDeps struct {
 	// underSudo: run as root through sudo; home and uid are the invoking
 	// user's (connectHome).
 	underSudo bool
+	// loadHarness has Claude Code read the settings (connectverify.go); nil
+	// means the real one.
+	loadHarness func(settings string, named bool, debugFile, ca string) error
 }
 
 // connectHome answers the home folder and uid connect acts for. Under sudo,
@@ -331,6 +334,9 @@ func connectUpdate(f connectFlags, stdout, stderr io.Writer, deps connectDeps) i
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
 	}
+	if code := verifyHarnessLoaded(deps, f.settings, f.settings != defaultManagedSettingsPath(deps.goos), settings.ProxyCA, stdout, stderr); code != exitOK {
+		return code
+	}
 	mode := "the route and innsegl's hooks only"
 	if f.hard {
 		mode = "hardened"
@@ -470,6 +476,9 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
+	}
+	if code := verifyHarnessLoaded(deps, f.settings, f.settings != defaultManagedSettingsPath(deps.goos), settings.ProxyCA, stdout, stderr); code != exitOK {
+		return code
 	}
 
 	failed := false

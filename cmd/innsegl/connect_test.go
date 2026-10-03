@@ -150,6 +150,10 @@ func newConnectFixture(t *testing.T) *connectFixture {
 		},
 		now:      func() time.Time { return time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC) },
 		hostname: func() (string, error) { return "dev-laptop", nil },
+		// A harness that loads whatever it is given, unless a test says not.
+		loadHarness: func(_ string, _ bool, debugFile string, ca string) error {
+			return os.WriteFile(debugFile, []byte("[DEBUG] extraCertsPath="+ca+"\n"), 0o600)
+		},
 	}
 	return f
 }
@@ -478,4 +482,37 @@ func TestEGR001ConnectEgressControlLocksTheSandboxNetwork(t *testing.T) {
 			t.Errorf("managed settings lack %s:\n%s", want, got)
 		}
 	}
+}
+
+// ENF-006, moved from install.sh: after writing the managed settings,
+// connect asks Claude Code to load them. It drops a whole file, silently,
+// when one value has the wrong type, so a file it did not load is a failed
+// connect that names the file. No Claude Code installed: it says the check
+// could not run.
+func TestENF006ConnectChecksTheHarnessLoadedTheSettings(t *testing.T) {
+	t.Run("loaded", func(t *testing.T) {
+		f := newConnectFixture(t)
+		code, stdout, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings)
+		if code != exitOK || !strings.Contains(stdout, "Claude Code loaded "+f.settings) {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		}
+	})
+	t.Run("discarded", func(t *testing.T) {
+		f := newConnectFixture(t)
+		f.deps.loadHarness = func(_ string, _ bool, debugFile string, _ string) error {
+			return os.WriteFile(debugFile, []byte("[DEBUG] settings: invalid value\n"), 0o600)
+		}
+		code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings)
+		if code == exitOK || !strings.Contains(stderr, "did NOT load "+f.settings) {
+			t.Fatalf("exit %d, stderr:\n%s", code, stderr)
+		}
+	})
+	t.Run("no harness", func(t *testing.T) {
+		f := newConnectFixture(t)
+		f.deps.loadHarness = func(string, bool, string, string) error { return errNoHarness }
+		code, stdout, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings)
+		if code != exitOK || !strings.Contains(stdout, "could not be checked") {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		}
+	})
 }
