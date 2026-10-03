@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -88,6 +89,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	clearConnectedMachineEnv()
 	code := m.Run()
 	if apiPGShared != nil {
 		if err := apiPGShared.remove(); err != nil {
@@ -95,6 +97,40 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(code)
+}
+
+// connectedMachineEnv are the variables a machine connected to innsegl
+// carries into every shell: the client service's address, the proxy, the
+// proxy's CA, and -- inside an agent's git command -- the agent's signing.
+// A test that copies os.Environ() into a child process would otherwise send
+// that child's commits and requests to the developer's live core (measured
+// 2026-10-03: four signing requests from one `go test` run).
+var connectedMachineEnv = []string{
+	"INNSEGL_CORE_URL", "INNSEGL_TOOL_USE_ID", envSignRepo,
+	"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NODE_EXTRA_CA_CERTS",
+	"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+}
+
+// clearConnectedMachineEnv makes this package's tests hermetic on a machine
+// connected to innsegl: CI never has these, a developer's machine does.
+func clearConnectedMachineEnv() {
+	// A helper process this package re-executes is given exactly the
+	// variables its test set for it; only the test process itself is cleared.
+	for _, marker := range []string{"GO_WANT_HELPER_PROCESS", "INNSEGL_LINK_TEST_HELPER_PROCESS", "INNSEGL_SIGN_TEST_HELPER_PROCESS"} {
+		if os.Getenv(marker) != "" {
+			return
+		}
+	}
+	for _, k := range connectedMachineEnv {
+		_ = os.Unsetenv(k)
+	}
+	if n, err := strconv.Atoi(os.Getenv("GIT_CONFIG_COUNT")); err == nil {
+		for i := range n {
+			_ = os.Unsetenv(fmt.Sprintf("GIT_CONFIG_KEY_%d", i))
+			_ = os.Unsetenv(fmt.Sprintf("GIT_CONFIG_VALUE_%d", i))
+		}
+	}
+	_ = os.Unsetenv("GIT_CONFIG_COUNT")
 }
 
 type apiPGContainer struct {

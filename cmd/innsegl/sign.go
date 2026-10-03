@@ -112,6 +112,18 @@ func runSign(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 			"gateway (%s is unset)", commitpath.EnvToolUseID)
 	}
 
+	// The agent's signing is for the agent's repository (envSignRepo): a
+	// commit anywhere else inherited the configuration from the same
+	// command, and is not the agent's to sign.
+	if want := getenv(envSignRepo); want != "" {
+		got, gerr := gitCommonDir(ctx, ".")
+		if gerr != nil || got != want {
+			return refuse("this commit is in %s, not the repository the agent's tool call works in (%s); "+
+				"it is not signed under the agent's identity. A test or tool that makes its own commits "+
+				"inherited the agent's signing from the same command: run it in a command of its own", orUnknown(got), want)
+		}
+	}
+
 	// Bounded: read one byte past the limit so an oversized payload is
 	// detected rather than silently truncated and forwarded as something
 	// shorter than what git actually wrote.
@@ -186,4 +198,11 @@ func signStatusFD(args []string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("git's arguments named no --status-fd; not the invocation this program expects: %v", args)
+}
+
+func orUnknown(s string) string {
+	if s == "" {
+		return "a directory git does not name as a repository"
+	}
+	return s
 }
