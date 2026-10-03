@@ -369,6 +369,12 @@ INNSEGL_PROJECTS ?= $(HOME)/Applications
 # The rule itself lives in scripts/repo-main-worktree.sh, so this and the
 # refusal in innsegl-link below cannot drift apart.
 REPO_PATH ?= $(shell $(CURDIR)/scripts/repo-main-worktree.sh)
+
+# DEPLOY_COMMIT names what a build is made from: HEAD, with "-dirty" when the
+# tracked files differ from it. Stamped on the image (dev.innsegl.commit), it
+# is what `make update` compares to decide there is nothing to do; a dirty
+# tree never matches a running build, so it is always built.
+DEPLOY_COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null)$(shell git diff --quiet HEAD -- 2>/dev/null || echo -dirty)
 REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
 
 # The proof BFF serves an ALLOWLIST of repositories, not whatever is on disk,
@@ -500,10 +506,11 @@ innsegl-here-services:
 	@# 2026-10-02: the gateway could not write its CA certificate.
 	mkdir -p "$${INNSEGL_GATEWAY_CA_HOST_DIR:-$$HOME/.innsegl/ca}" "$${INNSEGL_LOG_DIR:-$$HOME/.innsegl/log}" \
 	  "$${INNSEGL_BACKUP_HOST_DIR:-$$HOME/innsegl-backups}"
-	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) build
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(DEPLOY_COMMIT)' $(INNSEGL_COMPOSE) build
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  INNSEGL_COMMIT='$(DEPLOY_COMMIT)' \
 	  INNSEGL_PROJECTS='$(INNSEGL_PROJECTS)' \
 	  INNSEGL_API_REPOS='$(API_REPOS)' \
 	  INNSEGL_MCP_ADMIN_LISTEN='$(INNSEGL_MCP_ADMIN_LISTEN)' \
@@ -582,7 +589,11 @@ start:
 update:
 	@docker ps --format '{{.Names}}' | grep -qx innsegl-spire-server && docker ps --format '{{.Names}}' | grep -qx innsegl-sigstore-rekor || \
 	  { echo "make update: SPIRE or Rekor is not running; run make start"; exit 2; }
-	@INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services
+	@running=$$(docker inspect innsegl-mcp --format '{{ index .Config.Labels "dev.innsegl.commit" }}' 2>/dev/null); \
+	 if [ "$$running" = "$(DEPLOY_COMMIT)" ]; then \
+	   echo "make update: already up to date ($(DEPLOY_COMMIT)); nothing to do"; exit 0; fi; \
+	 echo "make update: running $${running:-an unlabelled build}, checkout is $(DEPLOY_COMMIT)"; \
+	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services
 	@echo
 	@echo "updated: innsegl's services rebuilt; the trust services were not touched"
 

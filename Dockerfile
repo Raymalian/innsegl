@@ -58,7 +58,13 @@ WORKDIR /src
 
 # Modules first, so a source-only change does not re-download the module graph.
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+# gitsign depends only on its pinned version, so it is built before the
+# sources are copied: a code change no longer downloads and compiles it again.
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOBIN=/out \
+      go install github.com/sigstore/gitsign@${GITSIGN_VERSION} \
+ && ls /out/gitsign
 
 COPY . .
 
@@ -73,7 +79,7 @@ ARG DATE=unknown
 # one. `-trimpath` so the build path is not baked into it, which is half of
 # what makes two builds of the same commit comparable.
 ENV CGO_ENABLED=0
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
       -ldflags "-X innsegl.dev/innsegl/internal/version.version=${VERSION} \
                 -X innsegl.dev/innsegl/internal/version.commit=${COMMIT} \
                 -X innsegl.dev/innsegl/internal/version.date=${DATE}" \
@@ -84,12 +90,9 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
 # CA's certificate says, and it has no business in the binary that holds SPIRE
 # admin. Same argument innsegl.yml makes for generating the pseudonymisation
 # secret in a container of its own.
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
       -ldflags "-s -w" -o /out/ca-bootstrap ./cmd/ca-bootstrap
 
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOBIN=/out \
-      go install github.com/sigstore/gitsign@${GITSIGN_VERSION} \
- && ls /out/gitsign
 
 # ---------------------------------------------------------------------------
 # Runtime.
@@ -112,6 +115,11 @@ FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc
 #                  internal network and does not, but the image is the same one
 #                  a production deployment runs.
 RUN apk add --no-cache git ca-certificates
+
+# The commit this image was built from, so `make update` can tell a running
+# stack that is already current from one that needs a build.
+ARG COMMIT=unknown
+LABEL dev.innsegl.commit=${COMMIT}
 
 # uid 1000, non-root, and NOT an accident. `deploy/compose/spire/register.sh`
 # selects spire-oidc on `unix:uid:1000` and calls uid 0 "the textbook weak
