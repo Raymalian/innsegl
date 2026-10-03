@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -399,4 +400,57 @@ func readFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// #490: --disconnect revokes the installation on the core, over the
+// machine's own certificate, before it deletes the key.
+func TestConnectDisconnectRevokesTheInstallationOnTheCore(t *testing.T) {
+	f := newConnectFixture(t)
+	revoked := make(chan string, 1)
+	f.core.Mux.HandleFunc(coreDisconnectPath, func(w http.ResponseWriter, r *http.Request) {
+		name := ""
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			name = r.TLS.PeerCertificates[0].URIs[0].String()
+		}
+		revoked <- name
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings); code != exitOK {
+		t.Fatalf("connect: %s", stderr)
+	}
+	code, stdout, stderr := f.connect("--disconnect", "--managed-settings", f.settings)
+	if code != exitOK {
+		t.Fatalf("disconnect: %s", stderr)
+	}
+	select {
+	case name := <-revoked:
+		if name == "" {
+			t.Fatal("the core was asked to revoke without the machine's certificate")
+		}
+	default:
+		t.Fatal("disconnect did not revoke the installation on the core")
+	}
+	if !strings.Contains(stdout, "revoked on the core") {
+		t.Errorf("stdout does not say the installation was revoked:\n%s", stdout)
+	}
+}
+
+// When the core cannot be reached, --disconnect still removes this machine's
+// files, and says the installation is still active and where to revoke it.
+func TestConnectDisconnectSaysSoWhenTheCoreCannotRevoke(t *testing.T) {
+	f := newConnectFixture(t)
+	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings); code != exitOK {
+		t.Fatalf("connect: %s", stderr)
+	}
+	f.core.Stop()
+	code, _, stderr := f.connect("--disconnect", "--managed-settings", f.settings)
+	if code != exitOK {
+		t.Fatalf("disconnect: %s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(f.home, ".innsegl", "client")); !os.IsNotExist(err) {
+		t.Error("~/.innsegl/client survived disconnect")
+	}
+	if !strings.Contains(stderr, "still active on the core") || !strings.Contains(stderr, "Account page") {
+		t.Errorf("stderr does not say the installation is still active and where to revoke it:\n%s", stderr)
+	}
 }
