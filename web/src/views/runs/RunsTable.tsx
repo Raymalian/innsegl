@@ -91,7 +91,7 @@ export function RunsTable({ runs, total, proofs, filters }: RunsTableProps) {
        agreement by hand is what drifts. */
     <div className={tablePanel}>
       <div className={tableScroll}>
-        <table className={table}>
+        <table className={`${table} min-w-[44rem]`}>
           {/* The table's accessible name, with both exact counts (doc 06 §6.2). */}
           <caption className={tableCaption}>
             {strings.formats.caption(runs.length, total)}

@@ -82,7 +82,7 @@ export function RecentRuns({ runs }: RecentRunsProps) {
         />
       ) : (
         <div className={tableScroll}>
-          <table className={table}>
+          <table className={`${table} min-w-[44rem]`}>
             {/* The accessible name, with the exact count (doc 06 §6.2). */}
             <caption className={tableCaption}>
               {strings.recentRuns.caption(runs.length)}

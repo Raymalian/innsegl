@@ -77,7 +77,7 @@ export const cardRow = "flex items-center gap-2";
 /** The same geometry the shared component uses, so the states this view has to
  * render itself do not look like a different component. */
 export const pulseShell =
-  "inline-flex items-center gap-1.5 rounded-full py-0.5 text-micro leading-tight";
+  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full py-0.5 text-micro leading-tight";
 export const pulseBreach = `${hairline} px-2`;
 
 /* ── the recent runs table ─────────────────────────────────────────────── */
