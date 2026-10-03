@@ -64,6 +64,9 @@ import (
 const (
 	coreEnrolPath = "/_core/enrol"
 	coreRenewPath = "/_core/renew"
+	// coreDisconnectPath is where a machine revokes its own installation,
+	// over its own certificate (#490).
+	coreDisconnectPath = "/_core/disconnect"
 
 	// enrolRefusal is the one answer for every token problem.
 	enrolRefusal = "innsegl core: enrolment refused"
@@ -289,6 +292,44 @@ func renewHandler(store enrolStore, authority clientAuthority, log *serveLog) ht
 		}
 		log.info("installation renewed", "installation_id", inst)
 		writeCoreJSON(w, http.StatusOK, out)
+	}
+}
+
+// installationRevoker revokes an installation, audited with actor.
+type installationRevoker interface {
+	SetInstallationStatus(ctx context.Context, id, status, actor string) error
+}
+
+// disconnectHandler revokes the caller's own installation: the one its
+// certificate names, which the guard in front has already checked is
+// active. `innsegl connect --disconnect` calls it before deleting the key,
+// so a disconnected machine is not left able to record (#490). The
+// revocation is the same one a member makes from the account page, audited
+// as the installation's own.
+func disconnectHandler(store installationRevoker, log *serveLog) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeCoreError(w, http.StatusMethodNotAllowed, "innsegl core: disconnect: only POST is accepted")
+			return
+		}
+		inst, ok := gateway.InstallationFromContext(r.Context())
+		if !ok {
+			gateway.WriteClientRefusal(w)
+			return
+		}
+		err := store.SetInstallationStatus(r.Context(), inst, accounts.StatusRevoked, accounts.ClaimActor(inst))
+		switch {
+		case err == nil:
+		case errors.Is(err, accounts.ErrNotFound):
+			gateway.WriteClientRefusal(w)
+			return
+		default:
+			log.warn("disconnect failed", "installation_id", inst, "err", err)
+			writeCoreError(w, http.StatusServiceUnavailable, "innsegl core: disconnect is unavailable; retry")
+			return
+		}
+		log.info("installation disconnected by its own machine", "installation_id", inst)
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

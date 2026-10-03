@@ -377,11 +377,27 @@ REPO_PATH ?= $(shell $(CURDIR)/scripts/repo-main-worktree.sh)
 # test/deploy/buildonce_test.go holds this list to the compose file.
 INNSEGL_BUILD_SERVICES := innsegl-mcp innsegl-backup innsegl-dashboard
 
-# DEPLOY_COMMIT names what a build is made from: HEAD, with "-dirty" when the
-# tracked files differ from it. Stamped on the image (dev.innsegl.commit), it
-# is what `make update` compares to decide there is nothing to do; a dirty
-# tree never matches a running build, so it is always built.
+# DEPLOY_COMMIT names what a checkout is: HEAD, with "-dirty" when the
+# tracked files differ from it. `make update` records the one it deployed in
+# $(DEPLOYED_FILE) and does nothing when the checkout still matches it; a
+# dirty tree never matches, so it is always built.
 DEPLOY_COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null)$(shell git diff --quiet HEAD -- 2>/dev/null || echo -dirty)
+DEPLOYED_FILE := .innsegl/deployed-commit
+
+# GO_IMAGE_COMMIT stamps the Go image (dev.innsegl.commit): the last commit
+# that touched what that image is built from. Stamped with HEAD instead, every
+# commit -- a dashboard or README change too -- made a new image, and compose
+# restarted every service running it. The Dockerfile copies these paths and
+# nothing else; test/deploy/buildonce_test.go holds the two lists together.
+GO_IMAGE_INPUTS := cmd internal migrations go.mod go.sum Dockerfile
+
+# No default build attestations. They record the build's own time, so every
+# build -- even of unchanged sources, every layer cached -- had a new image
+# ID, and compose restarted every service on it. Measured 2026-10-03: two
+# compose builds of one commit, two IDs; with this set, one. The images are
+# local and never pushed, so the attestation was read by nothing.
+export BUILDX_NO_DEFAULT_ATTESTATIONS := 1
+GO_IMAGE_COMMIT := $(shell git log -1 --format=%h --abbrev=12 -- $(GO_IMAGE_INPUTS) 2>/dev/null)$(shell git diff --quiet HEAD -- $(GO_IMAGE_INPUTS) 2>/dev/null || echo -dirty)
 REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
 
 # The proof BFF serves an ALLOWLIST of repositories, not whatever is on disk,
@@ -513,11 +529,11 @@ innsegl-here-services:
 	@# 2026-10-02: the gateway could not write its CA certificate.
 	mkdir -p "$${INNSEGL_GATEWAY_CA_HOST_DIR:-$$HOME/.innsegl/ca}" "$${INNSEGL_LOG_DIR:-$$HOME/.innsegl/log}" \
 	  "$${INNSEGL_BACKUP_HOST_DIR:-$$HOME/innsegl-backups}"
-	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(DEPLOY_COMMIT)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES)
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES)
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  INNSEGL_COMMIT='$(DEPLOY_COMMIT)' \
+	  INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' \
 	  INNSEGL_PROJECTS='$(INNSEGL_PROJECTS)' \
 	  INNSEGL_API_REPOS='$(API_REPOS)' \
 	  INNSEGL_MCP_ADMIN_LISTEN='$(INNSEGL_MCP_ADMIN_LISTEN)' \
@@ -596,13 +612,14 @@ start:
 update:
 	@docker ps --format '{{.Names}}' | grep -qx innsegl-spire-server && docker ps --format '{{.Names}}' | grep -qx innsegl-sigstore-rekor || \
 	  { echo "make update: SPIRE or Rekor is not running; run make start"; exit 2; }
-	@running=$$(docker inspect innsegl-mcp --format '{{ index .Config.Labels "dev.innsegl.commit" }}' 2>/dev/null); \
-	 if [ "$$running" = "$(DEPLOY_COMMIT)" ]; then \
+	@deployed=$$(cat '$(DEPLOYED_FILE)' 2>/dev/null); \
+	 if [ "$$deployed" = "$(DEPLOY_COMMIT)" ]; then \
 	   echo "make update: already up to date ($(DEPLOY_COMMIT)); nothing to do"; exit 0; fi; \
-	 echo "make update: running $${running:-an unlabelled build}, checkout is $(DEPLOY_COMMIT)"; \
-	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services
+	 echo "make update: deployed $${deployed:-an unrecorded checkout}, checkout is $(DEPLOY_COMMIT)"; \
+	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services && \
+	 mkdir -p "$$(dirname '$(DEPLOYED_FILE)')" && echo '$(DEPLOY_COMMIT)' > '$(DEPLOYED_FILE)'
 	@echo
-	@echo "updated: innsegl's services rebuilt; the trust services were not touched"
+	@echo "updated: only the services whose image changed were restarted; the trust services were not touched"
 
 ## link: make a project signable — make link DIR=~/Applications/foo
 link:
