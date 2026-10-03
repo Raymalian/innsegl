@@ -51,8 +51,15 @@ func TestHookSessionStatesTheSessionsDirectory(t *testing.T) {
 		t.Fatalf("posts = %d, want 1", len(*posts))
 	}
 	p := (*posts)[0]
-	if p.url != "https://127.0.0.1:28095/_gateway/session-workspace" {
+	path, query, _ := strings.Cut(p.url, "?")
+	if path != "https://127.0.0.1:28095/_gateway/session-workspace" {
 		t.Errorf("url = %q", p.url)
+	}
+	// The hook names the harness process that runs the session, so the
+	// client can end the session when that process is gone. This test's
+	// own harness is `go test`, not a shell.
+	if !strings.HasPrefix(query, "harness_pid=") || !strings.Contains(query, "&harness_start=") {
+		t.Errorf("the statement names no harness process: %q", p.url)
 	}
 	if p.body["session_id"] != "7dc5d783-9896-4aef-84d9-a82114505fff" || p.body["cwd"] != "/workspace/repo" || p.body["agent_id"] != "" {
 		t.Errorf("body = %v", p.body)

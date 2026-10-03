@@ -20,7 +20,10 @@ func TestTelemetryHeldWhileTheCoreIsDownIsDeliveredAfter(t *testing.T) {
 	core, paths := enrolled(t)
 	got := make(chan string, 4)
 	core.Mux.HandleFunc("/v1/logs", func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading the export: %v", err)
+		}
 		got <- string(b)
 		w.WriteHeader(http.StatusOK)
 	})

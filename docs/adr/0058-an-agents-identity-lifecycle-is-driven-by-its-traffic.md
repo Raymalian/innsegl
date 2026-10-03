@@ -1,6 +1,6 @@
 # ADR-0058: An agent's identity lifecycle is driven by its traffic
 
-- Status: accepted; amended 2026-10-01 and 2026-10-03 (see the Amendments)
+- Status: accepted; amended 2026-10-01 and 2026-10-03, twice (see the Amendments)
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -323,3 +323,23 @@ would ever end its run.
 **What still holds.** No signal retires anything on receipt: a mark is
 retired only after the grace period with no traffic from the agent it names,
 so a forged signal against a live agent is still harmless.
+
+## Amendment (2026-10-03): a session whose harness process is gone is ended
+
+**What changed.** The SessionEnd hook does not run when a session is
+killed: a closed terminal, a crash, a machine shut down while a session was
+open. Measured 2026-10-03: such sessions stood active until the silence
+backstop's seven days. The session hook now names the harness process that
+runs the session (its process id and start time). The client service keeps
+that, and when the process is gone it sends the same session-end signal the
+hook would have. It checks every thirty seconds and when it starts, so a
+session killed while the client was down is ended on the next start.
+
+**Why.** The process exiting is an observed end, not one inferred from
+silence, and the client is the one part of the deployment that sees it.
+
+**What still holds.** The signal is decision 7a's, through the same
+endpoint: a mark, retired only after the grace period with no traffic from
+the session. A resumed session cancels it, or is adopted if it comes back
+later. The process id never leaves the machine. The silence backstop stays,
+for a machine whose client is gone for good.
