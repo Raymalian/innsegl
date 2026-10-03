@@ -58,18 +58,6 @@ export function OutcomeFailedIcon({ className }: { readonly className?: string }
   );
 }
 
-/** A step whose witnesses disagree: an exclamation mark, as the approved
- * mockup's "2 of 3 witnesses" badge carries it. */
-export function AlertMarkIcon({ className }: { readonly className?: string }) {
-  return (
-    <span className="inline-flex" data-icon="alert">
-      <Svg className={className}>
-        <path d="M12 6v8M12 17.5v.5" strokeWidth={2.4} strokeLinecap="round" />
-      </Svg>
-    </span>
-  );
-}
-
 /** The root of the agent tree: a filled-corner square, distinct from the
  * branch glyph below by silhouette, not only by the accent colour it takes
  * only on the selected row. */
@@ -90,32 +78,12 @@ export function AgentBranchIcon({ className }: { readonly className?: string }) 
   );
 }
 
-/** A folder, for the files-changed tree's repository root row. */
-export function FolderIcon({ className }: { readonly className?: string }) {
-  return (
-    <Svg className={className}>
-      <path d="M3 7h6l2 2h10v10H3z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-    </Svg>
-  );
-}
-
 /** The commit card's own mark: a node on a line, not a verdict. */
 export function CommitIcon({ className }: { readonly className?: string }) {
   return (
     <Svg className={className}>
       <circle cx="12" cy="12" r="3.5" strokeWidth={1.8} />
       <path d="M3 12h5.5M15.5 12H21" strokeWidth={1.8} strokeLinecap="round" />
-    </Svg>
-  );
-}
-
-/** The person glyph the app shell uses for "operator" — reused locally for
- * the agent-spawned-agent line, where the mockup draws the same open shape. */
-export function PersonIcon({ className }: { readonly className?: string }) {
-  return (
-    <Svg className={className}>
-      <circle cx="12" cy="8" r="4" strokeWidth={1.8} />
-      <path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" strokeWidth={1.8} strokeLinecap="round" />
     </Svg>
   );
 }

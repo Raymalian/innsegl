@@ -80,7 +80,3 @@ export function runPage(overrides: Partial<RunPage> = {}): RunPage {
   };
 }
 
-/** An empty page, for the "no runs match these filters" state. */
-export function emptyPage(): RunPage {
-  return runPage({ runs: [], total: 0 });
-}
