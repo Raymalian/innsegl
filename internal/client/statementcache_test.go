@@ -211,3 +211,44 @@ func TestRM313AStatementNeverWaitsOnASilentCore(t *testing.T) {
 		t.Fatalf("status %d, want 202: kept, the core not reached", got)
 	}
 }
+
+// Claude Code sends a background request as a session starts, at the same
+// moment the SessionStart hook states the session. Measured 2026-10-03: that
+// request reached the core first, with no statement, and was not recorded --
+// one per interactive start. A model request for a session the client has
+// not heard from yet waits briefly for its statement.
+func TestRM313TheFirstRequestWaitsForTheSessionsStatement(t *testing.T) {
+	core, paths := enrolled(t)
+	seen := make(chan string, 1)
+	core.Mux.HandleFunc(SessionStatementPath, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	core.Mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Get(StatementHeader)
+		fmt.Fprint(w, `{}`)
+	})
+	_, front, _ := startClient(t, paths)
+	done := make(chan int, 1)
+	go func() {
+		done <- scPost(t, front.URL+"/v1/messages", `{}`, map[string]string{"X-Claude-Code-Session-Id": scSession})
+	}()
+	time.Sleep(300 * time.Millisecond)
+	scPost(t, front.URL+SessionStatementPath, `{"session_id":"`+scSession+`","cwd":"/w/repo","repo":"github.com/acme/widgets"}`, nil)
+	if got := <-seen; got == "" {
+		t.Fatal("the session's first request reached the core without the statement that arrived 300ms later")
+	}
+	<-done
+}
+
+// A session that never states itself (no hook) is not held each time: the
+// wait happens once.
+func TestRM313AnUnstatedSessionWaitsOnlyOnce(t *testing.T) {
+	core, paths := enrolled(t)
+	core.Mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, `{}`) })
+	_, front, _ := startClient(t, paths)
+	h := map[string]string{"X-Claude-Code-Session-Id": "33333333-3333-4333-8333-333333333333"}
+	scPost(t, front.URL+"/v1/messages", `{}`, h)
+	start := time.Now()
+	scPost(t, front.URL+"/v1/messages", `{}`, h)
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Fatalf("the second request waited %s", took)
+	}
+}

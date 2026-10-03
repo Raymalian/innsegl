@@ -37,6 +37,11 @@ import (
 // answer, unless core.json names another.
 const DefaultProviderURL = "https://api.anthropic.com"
 
+// statementWait bounds how long a session's first model request waits for
+// the session's statement. The hook states it within milliseconds of the
+// session starting; a session with no hook waits this once.
+const statementWait = 2 * time.Second
+
 // DefaultCoreDownFor is how long, after the core failed to answer, model
 // requests go to the provider without trying the core first.
 const DefaultCoreDownFor = 15 * time.Second
@@ -114,6 +119,12 @@ func (s *Server) serveModel(w http.ResponseWriter, r *http.Request) {
 		session: session, agent: agent, started: s.Now().UTC(),
 	}
 	if session != "" {
+		if _, known := s.statements.lookup(session, ""); !known && s.awaited.first(session) {
+			// The session's SessionStart hook states it at the same moment
+			// Claude Code sends its first request; wait for the statement
+			// once, so that request is recorded too.
+			s.statements.awaitSession(r.Context(), session, statementWait)
+		}
 		ex.statement, ex.hasRepo = s.statements.statement(session, agent)
 	}
 	s.serveHeld(w, r.WithContext(context.WithValue(r.Context(), exchangeKey{}, ex)), ex)
@@ -156,6 +167,12 @@ func (s *Server) modifyResponse(resp *http.Response) error {
 		}
 		s.downUntil.Store(0)
 		s.countRecorded(recorded)
+		if recorded == clientjournal.RecordedNone && ex.session != "" && s.unrecorded.first(ex.session) {
+			// Once per session: what the core did not record, and whether a
+			// statement went with it, so a gap is visible on the machine.
+			s.log.Printf("the core recorded nothing for %s %s in session %s (class %q, statement attached: %v)",
+				ex.method, ex.path, ex.session, resp.Request.Header.Get("X-Claude-Code-Request-Class"), len(ex.statement) > 0)
+		}
 		if recorded == clientjournal.RecordedFalse && ex.hasRepo {
 			if err := s.journal.reserve(int64(len(ex.body))); err != nil {
 				return journalRefusal{err}
