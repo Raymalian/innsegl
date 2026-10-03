@@ -163,6 +163,7 @@ var commands = map[string]command{
 	// RM-285 (#461), ADR-0063: enrol this machine with a hosted core, and
 	// the user-level service that holds its key and forwards to the core.
 	"connect": {summary: "enrol this machine with an innsegl core and point Claude Code at it", exec: connectCommand},
+	"status":  {summary: "say what is up and down between this machine and its core, and this machine's scope", exec: statusCommand},
 	"client":  {summary: "the enrolled machine's local endpoint: forward to the core over its certificate", exec: clientCommand},
 }
 

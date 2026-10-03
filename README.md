@@ -100,6 +100,10 @@ To use Claude Code without innsegl while the stack is down:
 On a client machine, `innsegl connect --pause` and `innsegl connect --resume`
 do the same. Restart Claude Code after either.
 
+On a client machine, `innsegl status` says what is up and what is down
+between the machine and its core, the versions, and what the machine may
+record. It exits non-zero and names whatever is down.
+
 ## Uninstall
 
 ```sh
@@ -117,8 +121,9 @@ make innsegl-purge    # stop innsegl AND delete its data volumes
 
 On a client machine, `innsegl connect --disconnect` removes exactly the
 managed settings keys `connect` wrote, stops and removes the client service,
-and deletes `~/.innsegl/client`. The installation stays recorded on the core
-until a member of its organisation revokes it.
+and deletes `~/.innsegl/client`. Before deleting the key it revokes the
+machine's installation on the core. If the core cannot be reached, it says
+so, and the machine is revoked from the dashboard's Account page instead.
 
 An install from before the gateway wired six hooks into
 `~/.claude/settings.json` and an `innsegl` MCP entry into `~/.claude.json`.

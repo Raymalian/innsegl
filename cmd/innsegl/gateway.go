@@ -1071,6 +1071,7 @@ func openHostedCore(ctx context.Context, o gatewayOptions, running *runningGatew
 func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (http.Handler, *tls.Config) {
 	mux.Handle(coreRenewPath, renewHandler(h.writer, h.authority, log))
 	mux.Handle(coreDisconnectPath, disconnectHandler(h.writer, log))
+	mux.Handle(coreStatusPath, statusHandler(h.writer, log))
 
 	outer := http.NewServeMux()
 	outer.Handle(coreEnrolPath, enrolHandler(h.writer, h.authority, log))

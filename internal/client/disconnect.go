@@ -44,3 +44,37 @@ func RevokeInstallation(ctx context.Context, paths Paths) error {
 	}
 	return nil
 }
+
+// CoreStatusPath is where the core answers an enrolled machine its status
+// (#472).
+const CoreStatusPath = "/_core/status"
+
+// FetchCoreStatus asks the core, over this machine's own certificate, for
+// its status: the body as the core sent it. It does not need the client
+// service to be running.
+func FetchCoreStatus(ctx context.Context, paths Paths) ([]byte, error) {
+	s, err := NewServer(paths, io.Discard)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimSuffix(s.core.CoreURL, "/")+CoreStatusPath, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.transport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("the core answered %d", resp.StatusCode)
+	}
+	return body, nil
+}
