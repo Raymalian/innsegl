@@ -192,7 +192,7 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	case f.pause || f.resume:
 		return connectPauseResume(f, stdout, stderr)
 	case f.disconnect:
-		return connectDisconnect(f, stdout, stderr, deps)
+		return connectDisconnect(ctx, f, stdout, stderr, deps)
 	case f.update:
 		return connectUpdate(f, stdout, stderr, deps)
 	}
@@ -329,7 +329,7 @@ func connectUpdate(f connectFlags, stdout, stderr io.Writer, deps connectDeps) i
 	return exitOK
 }
 
-func connectDisconnect(f connectFlags, stdout, stderr io.Writer, deps connectDeps) int {
+func connectDisconnect(ctx context.Context, f connectFlags, stdout, stderr io.Writer, deps connectDeps) int {
 	paths := client.ClientPaths(deps.home)
 	settings, err := deps.settingsConfig(enrolledListen(paths), false)
 	if err != nil {
@@ -344,6 +344,18 @@ func connectDisconnect(f connectFlags, stdout, stderr io.Writer, deps connectDep
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
 	}
+	// Revoke the installation on the core while this machine still holds the
+	// key that proves it is this installation (#490). A core that cannot be
+	// reached does not stop the disconnect; it is said, with where to finish.
+	revokedOnCore := false
+	if _, statErr := os.Stat(paths.Core); statErr == nil {
+		if rerr := client.RevokeInstallation(ctx, paths); rerr != nil {
+			fprintf(stderr, "innsegl connect: the core could not revoke this machine (%v); its installation is "+
+				"still active on the core. Revoke it from the Account page, under Machines.\n", rerr)
+		} else {
+			revokedOnCore = true
+		}
+	}
 	if !f.noService {
 		if err := deps.service().Uninstall(); err != nil {
 			fprintf(stderr, "innsegl connect: removing the client service: %v\n", err)
@@ -354,8 +366,10 @@ func connectDisconnect(f connectFlags, stdout, stderr io.Writer, deps connectDep
 		return exitConnectFailed
 	}
 	fprintf(stdout, "innsegl connect: removed %s\n", paths.Dir)
-	fprintf(stdout, "innsegl connect: disconnected. The installation stays recorded on the core until a member "+
-		"of its organisation revokes it; restart Claude Code for the settings change to take effect.\n")
+	if revokedOnCore {
+		fprintf(stdout, "innsegl connect: this machine's installation is revoked on the core\n")
+	}
+	fprintf(stdout, "innsegl connect: disconnected; restart Claude Code for the settings change to take effect.\n")
 	return exitOK
 }
 
