@@ -341,3 +341,12 @@ func TestWitnessJudgesARunOnlyOnceItsOwnTelemetryArrived(t *testing.T) {
 		t.Errorf("RunsWithoutTelemetry = %d, want 1 (reported, never appended)", report.RunsWithoutTelemetry)
 	}
 }
+
+// A core restart holds telemetry in the client's spool until the core is
+// back (internal/client/telemetryspool.go); the window must outlast a
+// restart's drain, or every tool call in it is reported as drift.
+func TestDefaultWitnessWindowOutlastsACoreRestart(t *testing.T) {
+	if reconciler.DefaultWitnessWindow < 30*time.Minute {
+		t.Fatalf("DefaultWitnessWindow = %s, want at least 30m", reconciler.DefaultWitnessWindow)
+	}
+}

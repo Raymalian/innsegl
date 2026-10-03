@@ -82,13 +82,12 @@ import (
 // DefaultWitnessWindow is how long this pass waits, after a tool_call is
 // relayed, before treating a still-missing telemetry record as drift — and,
 // symmetrically, how long it waits after a telemetry record is received
-// before treating a still-unmatched tool_use_id as orphaned. A few minutes:
-// generous against the harness's own OTEL_LOGS_EXPORT_INTERVAL (Claude
-// Code's own default batches on the order of seconds, not minutes) and the
-// gateway's own asynchronous recording (record.go's recordTimeout, 30s)
-// stacked together, short enough that an operator learns of a stuck
-// telemetry path inside one reconcile cycle or two.
-const DefaultWitnessWindow = 5 * time.Minute
+// before treating a still-unmatched tool_use_id as orphaned. Thirty
+// minutes: longer than a core restart. While the core is down the client
+// holds the harness's telemetry and delivers it once the core answers
+// (internal/client/telemetryspool.go); a shorter window reported every tool
+// call of a restart as drift before its telemetry arrived.
+const DefaultWitnessWindow = 30 * time.Minute
 
 // reasonNoTelemetryWitness is this pass's one `reason` constant for
 // direction 1. PROTECTED-ADJACENT, exactly as commitwatch.go and drift.go

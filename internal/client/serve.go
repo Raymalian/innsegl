@@ -83,6 +83,8 @@ type Server struct {
 	unrecorded *seenSet
 	// awaited holds the sessions whose first request waited for a statement.
 	awaited *seenSet
+	// telemetryKick wakes the telemetry replay (telemetryspool.go).
+	telemetryKick chan struct{}
 
 	// recorded counts the core's answers to model requests by what its
 	// RecordedHeader said (RM-329); shown in the status.
@@ -159,6 +161,7 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 		coreDownFor: opts.CoreDownFor, uploadInterval: opts.UploadInterval,
 		uploadKick: make(chan struct{}, 1), bypassed: newSeenSet(DefaultMaxStatements),
 		unrecorded: newSeenSet(DefaultMaxStatements), awaited: newSeenSet(DefaultMaxStatements),
+		telemetryKick: make(chan struct{}, 1),
 	}
 	if s.providerClient == nil {
 		s.providerClient = &http.Client{Transport: providerTransport()}
@@ -398,6 +401,10 @@ func (s *Server) Handler() http.Handler {
 			var cancel context.CancelFunc
 			r, cancel = withStatementDeadline(r)
 			defer cancel()
+		}
+		if r.Method == http.MethodPost && r.URL.Path == TelemetryLogsPath {
+			s.serveTelemetry(w, r)
+			return
 		}
 		if r.Method == http.MethodPost && isModelPath(r.URL.Path) {
 			s.serveModel(w, r)

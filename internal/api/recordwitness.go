@@ -45,11 +45,10 @@ import (
 // does not claim more than that.
 
 // defaultRecordWitnessWindow mirrors internal/reconciler's own
-// DefaultWitnessWindow: the same few minutes, generous against the
-// harness's own export interval and the gateway's own asynchronous
-// recording, so a step this page shows seconds after it happened reads
+// DefaultWitnessWindow: long enough to outlast a core restart, whose
+// telemetry the client delivers late, so a step this page shows seconds after it happened reads
 // "pending" rather than "missing".
-const defaultRecordWitnessWindow = 5 * time.Minute
+const defaultRecordWitnessWindow = 30 * time.Minute
 
 func telemetryDirPath(logDir string) string { return filepath.Join(logDir, "telemetry") }
 

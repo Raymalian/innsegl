@@ -117,6 +117,7 @@ func runClientServe(ctx context.Context, args []string, _, stderr io.Writer, hom
 	go srv.RunRenewal(renewCtx)
 	// ADR-0068: what the core could not record is uploaded when it answers.
 	go srv.RunJournalUpload(renewCtx)
+	go srv.RunTelemetryReplay(renewCtx)
 	go func() {
 		<-ctx.Done()
 		shutdown, done := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
