@@ -1,6 +1,6 @@
 # ADR-0062: Reading the ledger requires a signed-in user
 
-- Status: accepted; amended 2026-10-01 (see the three Amendments)
+- Status: accepted; amended 2026-10-01 and 2026-10-03 (see the four Amendments)
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -505,3 +505,28 @@ token is the one bearer secret that admits a machine.
 
 **What still holds.** Reading the ledger requires a signed-in user. A client
 certificate reads nothing and administers nothing.
+
+## Amendment (2026-10-03): machines, sign-ins, and connecting from the account page
+
+**What changed.**
+
+- **The account page shows the organisation.** It names each organisation
+  the user belongs to, the role held there, and what that role may do on the
+  dashboard. It lists the organisation's machines (installations), its
+  repositories, and the agents that ran on its machines.
+- **Owners and admins connect and revoke machines.** Minting an enrolment
+  token and revoking a machine each take a fresh passkey ceremony of its own
+  kind, with user verification. The role is checked when the ceremony begins
+  and again when it finishes. A member is refused. This narrows the earlier
+  amendment's "members mint enrolment tokens" to the owner and admin roles.
+- **The token is shown once.** The answer carries it with `Cache-Control:
+  no-store`. The server keeps only its hash, and the auth event records the
+  organisation and scope, never the token.
+- **A user sees their own sign-ins.** The page lists every live session,
+  marks the one in use and the passkey each signed in with, and signs out
+  every other session in one step.
+
+**What still holds.** Reading the ledger requires a signed-in user. The
+account routes read the ledger with the read-only credential and write only
+`innsegl_auth`, through the auth-writer credential. Granting repositories and
+managing members are not on the dashboard.
