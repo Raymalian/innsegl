@@ -53,11 +53,9 @@
  * cryptographic verification.
  */
 
-import type { ReactNode } from "react";
-
 import {
-  AnchoringHeartbeat,
   Icon,
+  type IconName,
   IdentifierChip,
   elapsedSince,
   formatAbsoluteUtc,
@@ -69,6 +67,7 @@ import { strings } from "./strings";
 import {
   cardRow,
   degraded,
+  degradedText,
   listHeading,
   mutedText,
   pulseBreach,
@@ -103,111 +102,157 @@ export function AnchoringPulse({ anchor, lagBoundMs, now }: AnchoringPulseProps)
 
   if (anchor === undefined) {
     return (
-      <Pulse state="reading">
-        <p
-          aria-label={commonStrings.heartbeat.regionLabel}
-          className={`${pulseShell} ${secondaryText}`}
-        >
-          <Icon name="busy" className="shrink-0" />
-          <span>{strings.heartbeat.reading}</span>
-        </p>
-      </Pulse>
+      <Pulse
+        state="reading"
+        icon="busy"
+        tone={secondaryText}
+        text={strings.heartbeat.chip.reading}
+        full={strings.heartbeat.reading}
+      />
     );
   }
 
   if (anchor === null) {
     return (
-      <Pulse state="unreadable">
-        <p
-          aria-label={commonStrings.heartbeat.regionLabel}
-          className={`${pulseShell} ${degraded} ${pulseBreach}`}
-        >
-          <Icon name="unreachable" className="shrink-0" />
-          <span>{strings.heartbeat.unreadable}</span>
-        </p>
-      </Pulse>
+      <Pulse
+        state="unreadable"
+        icon="unreachable"
+        tone={`${degraded} ${pulseBreach}`}
+        text={strings.heartbeat.chip.unreadable}
+        full={strings.heartbeat.unreadable}
+      />
     );
   }
 
+  const summary = anchoringSummary(anchor, lagBoundMs, at);
+  return (
+    <Pulse
+      state={summary.state}
+      icon={summary.icon}
+      tone={summary.beyond ? `${degraded} ${pulseBreach}` : secondaryText}
+      text={summary.chip}
+      full={summary.sentence}
+    />
+  );
+}
+
+type PulseState =
+  | "nothing-sealed"
+  | "anchored"
+  | "behind"
+  | "pending-within-bound"
+  | "pending-beyond-bound";
+
+interface AnchoringSummary {
+  readonly state: PulseState;
+  readonly icon: IconName;
+  readonly beyond: boolean;
+  /** The few words the header shows. */
+  readonly chip: string;
+  /** The whole sentence: the chip's tooltip and the Anchoring section's line. */
+  readonly sentence: string;
+}
+
+/**
+ * The anchoring heartbeat in words, once, for the chip and for the section
+ * that backs it. The states are the three `internal/api` can answer with
+ * (nothing sealed, sealed and anchored, sealed and waiting) and the answer
+ * never claims more than the response says: a sealed, waiting segment is
+ * never called anchored.
+ */
+export function anchoringSummary(
+  anchor: AnchorHeartbeat,
+  lagBoundMs: number,
+  at: Date,
+): AnchoringSummary {
   const segment = segmentNumberOf(anchor);
   const sealedAt = sealedAtOf(anchor);
 
-  /* Nothing sealed, or a response too incomplete to name a segment. Either
-   * way the shared component's own "nothing anchored yet" is the honest
-   * rendering, and it is neither calm nor an alarm. */
   if (segment === null || sealedAt === null) {
-    return (
-      <Pulse state="nothing-sealed">
-        <AnchoringHeartbeat
-          segment={null}
-          anchoredAt={null}
-          lagBoundMs={lagBoundMs}
-          now={at}
-        />
-      </Pulse>
-    );
-  }
-
-  if (anchor.anchored) {
-    return (
-      <Pulse state="anchored">
-        <AnchoringHeartbeat
-          segment={segment}
-          anchoredAt={sealedAt}
-          lagBoundMs={lagBoundMs}
-          now={at}
-        />
-      </Pulse>
-    );
+    return {
+      state: "nothing-sealed",
+      icon: "unknown",
+      beyond: false,
+      chip: strings.heartbeat.chip.nothingSealed,
+      sentence: commonStrings.heartbeat.unknown,
+    };
   }
 
   const lagMs = at.getTime() - sealedAt.getTime();
   const beyond = lagMs > lagBoundMs;
-  return (
-    <Pulse state={beyond ? "pending-beyond-bound" : "pending-within-bound"}>
-      <p
-        aria-label={commonStrings.heartbeat.regionLabel}
-        className={`${pulseShell} ${beyond ? `${degraded} ${pulseBreach}` : secondaryText}`}
-      >
-        <Icon name={beyond ? "anchor-lag" : "anchor-pulse"} className="shrink-0" />
-        <span>
-          {strings.heartbeat.sealedPrefix(segment)}
-          <time
-            dateTime={toDateTimeAttribute(sealedAt)}
-            title={formatAbsoluteUtc(sealedAt)}
-            className="tabular-nums"
-          >
-            {strings.heartbeat.agoSuffix(elapsedSince(sealedAt, at))}
-          </time>
-          {strings.heartbeat.sealedSuffix}
-          {beyond
-            ? strings.heartbeat.beyondBound(
-                formatDuration(lagMs - lagBoundMs),
-                formatDuration(lagBoundMs),
-              )
-            : ""}
-        </span>
-      </p>
-    </Pulse>
-  );
+  const ago = elapsedSince(sealedAt, at);
+  const overrun = beyond
+    ? strings.heartbeat.sentenceBeyond(
+        formatDuration(lagMs - lagBoundMs),
+        formatDuration(lagBoundMs),
+      )
+    : "";
+
+  if (anchor.anchored) {
+    return {
+      state: beyond ? "behind" : "anchored",
+      icon: beyond ? "anchor-lag" : "anchor-pulse",
+      beyond,
+      chip: beyond
+        ? strings.heartbeat.chip.behind(leadingUnit(lagMs))
+        : strings.heartbeat.chip.anchored(ago),
+      sentence: strings.heartbeat.sentenceAnchored(segment, ago) + overrun,
+    };
+  }
+
+  return {
+    state: beyond ? "pending-beyond-bound" : "pending-within-bound",
+    icon: beyond ? "anchor-lag" : "anchor-pulse",
+    beyond,
+    chip: beyond
+      ? strings.heartbeat.chip.behind(leadingUnit(lagMs))
+      : strings.heartbeat.chip.pending(ago),
+    sentence: strings.heartbeat.sentenceSealed(segment, ago) + overrun,
+  };
+}
+
+/** The biggest unit alone ("33 d"), so the chip stays a few words. */
+function leadingUnit(ms: number): string {
+  return formatDuration(ms).split(" ").slice(0, 2).join(" ");
 }
 
 /**
- * The material behind the pulse (doc 06 P1): which segment, over which chain
- * positions, and the Rekor entry that proves it — or the absence of one, said
- * out loud.
+ * The material behind the pulse (doc 06 P1): the whole sentence, then which
+ * segment, over which chain positions, and the Rekor entry that proves it — or
+ * the absence of one, said out loud.
  */
 export function AnchoringEvidence({
   anchor,
+  lagBoundMs = DEFAULT_LAG_BOUND_MS,
+  now,
 }: {
   readonly anchor: AnchorHeartbeat | null | undefined;
+  readonly lagBoundMs?: number;
+  readonly now?: Date;
 }) {
   if (anchor === null || anchor === undefined || !anchor.present) return null;
+  const at = now ?? new Date();
+  const summary = anchoringSummary(anchor, lagBoundMs, at);
+  const sealedAt = sealedAtOf(anchor);
   const first = anchor.first_position;
   const last = anchor.last_position;
   return (
     <div className="flex flex-col gap-1">
       <h2 className={listHeading}>{strings.heartbeat.detailHeading}</h2>
+      <p
+        data-testid="anchoring-sentence"
+        className={summary.beyond ? degradedText : secondaryText}
+      >
+        {summary.sentence}
+        {sealedAt === null ? null : (
+          <time
+            dateTime={toDateTimeAttribute(sealedAt)}
+            className="tabular-nums"
+          >
+            {strings.heartbeat.sealedAt(formatAbsoluteUtc(sealedAt))}
+          </time>
+        )}
+      </p>
       {first === undefined || last === undefined ? null : (
         <p className={mutedText}>{strings.heartbeat.segmentRange(first, last)}</p>
       )}
@@ -251,17 +296,34 @@ function sealedAtOf(anchor: AnchorHeartbeat): Date | null {
   return Number.isNaN(at.getTime()) ? null : at;
 }
 
-/** The one wrapper every state renders through, so no branch can forget to. */
+/**
+ * The one wrapper every state renders through, so no branch can forget to.
+ * The short text is what the eye reads; the whole sentence is the tooltip and
+ * the accessible name (a visually hidden copy, because a title alone is not
+ * announced reliably).
+ */
 function Pulse({
   state,
-  children,
+  icon,
+  tone,
+  text,
+  full,
 }: {
   readonly state: string;
-  readonly children: ReactNode;
+  readonly icon: IconName;
+  readonly tone: string;
+  readonly text: string;
+  readonly full: string;
 }) {
   return (
     <div data-testid="overview-heartbeat" data-state={state} className="min-w-0">
-      {children}
+      <p title={full} className={`${pulseShell} ${tone}`}>
+        <Icon name={icon} className="shrink-0" />
+        <span data-chip-text aria-hidden="true">
+          {text}
+        </span>
+        <span className="sr-only">{full}</span>
+      </p>
     </div>
   );
 }

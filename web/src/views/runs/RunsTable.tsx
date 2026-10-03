@@ -40,13 +40,15 @@
  * handing a proof to that component (see proofs.ts).
  */
 
-import { Icon } from "../../components/common";
-import { IdentifierChip } from "../../components/common";
-import { StatusBadge } from "../../components/common";
+import {
+  StatusBadge,
+  formatAbsoluteUtc,
+  toDateTimeAttribute,
+} from "../../components/common";
+import { formatAbsoluteUtcShort } from "../../components/common/time";
 import { VerificationSummary } from "../../components/verification";
 import { Link } from "../../app/router";
-import { routeToPath } from "../../app/routes";
-import { lastSeen } from "./lastseen";
+import { lastSeenAgo } from "./lastseen";
 import type { RunsFilters } from "../../app/routes";
 
 import type { RunSummary } from "./api";
@@ -60,12 +62,9 @@ import {
   cellStack,
   columnHeader,
   commitCount,
-  lastSeenLine,
   mutedCell,
-  notChecked,
   repoLink,
   rowHeader,
-  srOnly,
   table,
   tableCaption,
   tablePanel,
@@ -92,22 +91,34 @@ export function RunsTable({ runs, total, proofs, filters }: RunsTableProps) {
        agreement by hand is what drifts. */
     <div className={tablePanel}>
       <div className={tableScroll}>
-        <table className={table}>
+        <table className={`${table} min-w-[44rem]`}>
           {/* The table's accessible name, with both exact counts (doc 06 §6.2). */}
           <caption className={tableCaption}>
             {strings.formats.caption(runs.length, total)}
           </caption>
           <thead>
             <tr>
+              <th scope="col" className={columnHeader}>
+                {strings.labels.columns.status}
+              </th>
+              <th scope="col" className={columnHeader}>
+                {strings.labels.columns.repo}
+              </th>
+              <th scope="col" className={columnHeader}>
+                {strings.labels.columns.agentType}
+              </th>
+              <th scope="col" className={columnHeader}>
+                {strings.labels.columns.task}
+              </th>
               <th
                 scope="col"
                 className={columnHeader}
-                /* The direction the LEDGER sorted in, announced rather than
-                   inferred from the rows on screen — a reader must not have to
-                   work it out from a page that could be one of many. */
+                /* The ledger sorts by chain position, which is registration
+                 * order: this is the column that order belongs to. Stated
+                 * explicitly so a reader need not infer it from the rows. */
                 aria-sort={ascending ? "ascending" : "descending"}
               >
-                {strings.labels.columns.runId}
+                {strings.labels.columns.started}
                 {filters ? (
                   <>
                     {" "}
@@ -116,7 +127,6 @@ export function RunsTable({ runs, total, proofs, filters }: RunsTableProps) {
                       href={runsLinkPath({
                         ...filters,
                         order: ascending ? "desc" : "asc",
-                        // A cursor is a position in the ordering being left.
                         cursor: "",
                       })}
                     >
@@ -128,16 +138,10 @@ export function RunsTable({ runs, total, proofs, filters }: RunsTableProps) {
                 ) : null}
               </th>
               <th scope="col" className={columnHeader}>
-                {strings.labels.columns.task}
-              </th>
-              <th scope="col" className={columnHeader}>
-                {strings.labels.columns.repo}
+                {strings.labels.columns.lastSeen}
               </th>
               <th scope="col" className={columnHeader}>
                 {strings.labels.columns.commits}
-              </th>
-              <th scope="col" className={columnHeader}>
-                {strings.labels.columns.status}
               </th>
             </tr>
           </thead>
@@ -159,54 +163,64 @@ function RunRow({
   readonly run: RunSummary;
   readonly proofs: readonly CommitProof[];
 }) {
+  const now = new Date();
   return (
     <tr>
-      <th scope="row" className={rowHeader}>
-        {/* doc 06 P4: mono, middle-truncated, copyable, linked to its view. */}
-        <IdentifierChip
-          value={run.run_id}
-          kind="run"
-          href={routeToPath({ view: "run", runId: run.run_id })}
-        />
-      </th>
       <td className={cell}>
-        <span className={taskText}>{run.task_ref}</span>
+        <StatusBadge status={run.status} />
       </td>
       <td className={cell}>
         <Repos repos={run.repos} />
       </td>
+      <td className={`${cell} ${taskText}`}>{run.agent_type}</td>
+      {/* The row's name: the task, linked to the run (doc 06 P4). The run ID
+        * is the link's tooltip, and is on the run's own page. */}
+      <th scope="row" className={rowHeader}>
+        <Link
+          to={{ view: "run", runId: run.run_id }}
+          className={repoLink}
+          title={run.run_id}
+        >
+          {run.task_ref}
+        </Link>
+      </th>
       <td className={cell}>
-        <Commits run={run} proofs={proofs} />
+        <Moment at={run.registered_at} now={now} />
       </td>
       <td className={cell}>
-        <StatusBadge status={run.status} />
-        <LastSeen at={run.last_event_at} />
+        <Moment at={run.last_event_at} now={now} relative />
+      </td>
+      <td className={cell}>
+        <Commits run={run} proofs={proofs} />
       </td>
     </tr>
   );
 }
 
-/**
- * How old the ledger's claim about this run is (doc 06 P2).
- *
- * Beside the badge rather than in a column of its own, because doc 06 §3.2
- * names five columns and this is not a sixth thing to know — it is the
- * qualification on the fifth. The verification cell already stacks a second
- * line the same way.
- *
- * Renders nothing for a run that is doing something now: an annotation on
- * every healthy row is one a reader learns to skip, and then skips on the row
- * that mattered.
- *
- * The words come from lastseen.ts rather than strings.ts because the sentence
- * is COMPUTED from a duration — "last seen 17 hours ago" is not a label with a
- * hole in it, it is a rendering of a number, which is what overview/format.ts
- * already does for every other quantity on this dashboard.
- */
-function LastSeen({ at }: { readonly at: string }) {
-  const age = lastSeen(at, new Date());
-  if (age === null) return null;
-  return <span className={lastSeenLine}>{age}</span>;
+/** A time a reader can read at a glance, with the exact UTC moment on hover
+ * and in the markup (doc 06 §6.2). */
+function Moment({
+  at,
+  now,
+  relative = false,
+}: {
+  readonly at: string;
+  readonly now: Date;
+  readonly relative?: boolean;
+}) {
+  const when = new Date(at);
+  if (at === "" || Number.isNaN(when.getTime())) {
+    return <span className={mutedCell}>{strings.labels.table.noTime}</span>;
+  }
+  return (
+    <time
+      dateTime={toDateTimeAttribute(when)}
+      title={formatAbsoluteUtc(when)}
+      className="tabular-nums"
+    >
+      {relative ? lastSeenAgo(at, now) : formatAbsoluteUtcShort(when, now)}
+    </time>
+  );
 }
 
 function Repos({ repos }: { readonly repos: readonly string[] }) {
@@ -236,44 +250,20 @@ function Commits({
   readonly run: RunSummary;
   readonly proofs: readonly CommitProof[];
 }) {
+  /* No note here: the one note that says this list runs no live check is
+   * above the table. A row shows a verdict only when it was handed a proof. */
   return (
     <div className={cellStack}>
       <span className={commitCount}>{strings.formats.commits(run.commits)}</span>
-      {proofs.length === 0 ? (
-        <NotChecked />
-      ) : (
-        proofs.map((commit) => (
-          <VerificationSummary
-            key={commit.proof.commit_sha}
-            proof={commit.proof}
-            liveness={commit.liveness}
-            findings={commit.findings}
-            id={`${run.run_id}-${commit.proof.commit_sha}`}
-          />
-        ))
-      )}
+      {proofs.map((commit) => (
+        <VerificationSummary
+          key={commit.proof.commit_sha}
+          proof={commit.proof}
+          liveness={commit.liveness}
+          findings={commit.findings}
+          id={`${run.run_id}-${commit.proof.commit_sha}`}
+        />
+      ))}
     </div>
-  );
-}
-
-/**
- * What a row says when nobody verified anything for it.
- *
- * Not a badge, not a verdict, and not amber. doc 06 P2's three states describe
- * the outcome of a check; this is the absence of one, and dressing it as
- * "verification unavailable" would claim a check was attempted. The row says
- * what happened — nothing — and the run id beside it links to where the three
- * checks can actually run.
- */
-function NotChecked() {
-  return (
-    <p
-      className={notChecked}
-      title={strings.sentences.verification.notChecked}
-    >
-      <Icon name="unknown" className="mt-[0.15em] shrink-0" />
-      <span>{strings.labels.verification.notChecked}</span>
-      <span className={srOnly}>{strings.sentences.verification.notChecked}</span>
-    </p>
   );
 }

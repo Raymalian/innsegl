@@ -67,3 +67,12 @@ function age(ms: number): string {
 function plural(n: number, unit: string): string {
   return `${n} ${unit}${n === 1 ? "" : "s"}`;
 }
+
+/** The Last seen column's cell: how long ago, or "just now" inside the first
+ * minute. Always a value, because the column is. */
+export function lastSeenAgo(lastEventAt: string, now: Date): string {
+  const at = new Date(lastEventAt).getTime();
+  const elapsed = now.getTime() - at;
+  if (elapsed < QUIET_ENOUGH_TO_MENTION_MS) return "Just now";
+  return `${age(elapsed)} ago`;
+}

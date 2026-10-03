@@ -32,11 +32,13 @@ import { strings } from "./strings";
 afterEach(cleanup);
 
 const COLUMNS = [
-  strings.labels.columns.runId,
-  strings.labels.columns.task,
-  strings.labels.columns.repo,
-  strings.labels.columns.commits,
   strings.labels.columns.status,
+  strings.labels.columns.repo,
+  strings.labels.columns.agentType,
+  strings.labels.columns.task,
+  strings.labels.columns.started,
+  strings.labels.columns.lastSeen,
+  strings.labels.columns.commits,
 ];
 
 function mount() {
@@ -75,10 +77,12 @@ describe("FE-050 the runs table is a table", () => {
     ).toBe(container.querySelector("table"));
   });
 
-  it("carries doc 06 §3.2's five columns, in its order, as <th scope=col>", () => {
+  it("carries the seven columns RM-331 sets, in its order, as <th scope=col>", () => {
     const { container } = mount();
     const headers = [...container.querySelectorAll("thead th")];
-    expect(headers.map((th) => th.textContent)).toEqual(COLUMNS);
+    expect(headers.map((th) => th.textContent)).toEqual(
+      COLUMNS.map((name) => name),
+    );
     for (const th of headers) {
       expect(th.tagName).toBe("TH");
       expect(th.getAttribute("scope")).toBe("col");
@@ -94,9 +98,9 @@ describe("FE-050 the runs table is a table", () => {
     for (const [index, row] of rows.entries()) {
       const header = row.querySelector("th");
       expect(header?.getAttribute("scope")).toBe("row");
-      expect(header?.textContent).toContain(threeRuns()[index]?.run_id ?? "");
-      // Four data cells beside the header: five columns in total.
-      expect(row.querySelectorAll("td")).toHaveLength(4);
+      expect(header?.textContent).toContain(threeRuns()[index]?.task_ref ?? "");
+      // Six data cells beside the header: seven columns in total.
+      expect(row.querySelectorAll("td")).toHaveLength(6);
     }
     expect(screen.getAllByRole("rowheader")).toHaveLength(rows.length);
     // One header row plus the data rows.
@@ -109,7 +113,7 @@ describe("FE-050 the runs table is a table", () => {
       (th) => th.textContent ?? "",
     );
     for (const [index, run] of threeRuns().entries()) {
-      expect(ids[index]).toContain(run.run_id);
+      expect(ids[index]).toContain(run.task_ref);
     }
   });
 

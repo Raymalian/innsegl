@@ -77,21 +77,13 @@ describe("FE-053 liveness is stated, not assumed", () => {
 });
 
 describe("FE-053 a row with no proof renders no verdict", () => {
-  it("says no live check ran, and shows no badge of any kind", () => {
+  it("shows no badge of any kind, and repeats no note on the row", () => {
     const { container } = tableWith();
     expect(verdicts(container)).toEqual([]);
-    expect(
-      screen.getByText(strings.labels.verification.notChecked),
-    ).toBeInTheDocument();
+    // RM-331: the one note lives above the table (compact.test.tsx), not here.
+    expect(screen.queryByText(/no live check ran/i)).toBeNull();
     // The exact count is still there: doc 06 §3.2 asks for it either way.
     expect(screen.getByText(strings.formats.commits(1))).toBeInTheDocument();
-  });
-
-  it("explains what a verification would be, to whoever is listening", () => {
-    tableWith();
-    expect(
-      screen.getAllByText(strings.sentences.verification.notChecked).length,
-    ).toBeGreaterThan(0);
   });
 });
 

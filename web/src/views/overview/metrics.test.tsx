@@ -73,7 +73,8 @@ describe("FE-072 counts are exact", () => {
         id="commits"
         label="Commits attributed"
         value={formatCount(1284573)}
-        meaning="Commits the ledger holds a record for."
+        description="Commits the ledger holds."
+        definition="Commits the ledger holds a record for."
       />,
     );
     expect(screen.getByTestId("metric-commits")).toHaveTextContent("1,284,573");
@@ -85,7 +86,8 @@ describe("FE-072 counts are exact", () => {
         id="runs-today"
         label="Runs today"
         value="12"
-        meaning="Runs registered since 2026-08-30 00:00:00 UTC."
+        description="Started today."
+        definition="Runs registered since 2026-08-30 00:00:00 UTC."
       />,
     );
     expect(screen.getByTestId("metric-runs-today")).toHaveTextContent(
@@ -95,7 +97,7 @@ describe("FE-072 counts are exact", () => {
 
   it("spends no green on a count (§5.3)", () => {
     const { container } = render(
-      <MetricCard id="active" label="Active agents" value="7" meaning="Runs registered." />,
+      <MetricCard id="active" label="Active agents" value="7" description="Still going." definition="Runs registered." />,
     );
     expect(container.innerHTML).not.toMatch(/proof-verified/);
   });

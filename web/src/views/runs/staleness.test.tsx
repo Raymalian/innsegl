@@ -34,18 +34,16 @@ describe("FE-058 a stale run says so in the table", () => {
     ];
     render(<RunsTable runs={runs} total={runs.length} />);
 
-    // The dead one carries its age.
-    expect(screen.getByText("last seen 17 hours ago")).toBeTruthy();
-
-    // The live one carries nothing: an annotation on every healthy row is one
-    // a reader learns to skip, and then skips on the row that mattered.
-    expect(screen.queryByText(/last seen 0 minutes ago/)).toBeNull();
-    expect(screen.queryAllByText(/last seen/)).toHaveLength(1);
+    // RM-331: the age is the Last seen column's value, on every row.
+    // The dead one carries its age; the working one says it was just seen.
+    expect(screen.getByText("17 hours ago")).toBeTruthy();
+    expect(screen.getByText("Just now")).toBeTruthy();
   });
 
-  it("says nothing when the ledger recorded no time, rather than inventing one", () => {
+  it("says it is unknown when the ledger recorded no time, rather than inventing one", () => {
     const runs = [runSummary({ run_id: "run-unknown", last_event_at: "" })];
     render(<RunsTable runs={runs} total={runs.length} />);
-    expect(screen.queryAllByText(/last seen/)).toHaveLength(0);
+    expect(screen.queryAllByText(/ago|just now/i)).toHaveLength(0);
+    expect(screen.getAllByText("Unknown").length).toBeGreaterThan(0);
   });
 });

@@ -54,8 +54,11 @@ import { MetricCard } from "./MetricCard";
 import { PassRateCard } from "./PassRateCard";
 import { RecentRuns } from "./RecentRuns";
 import { strings } from "./strings";
-import { cardGrid, heading, page, prose } from "./styles";
+import { cardGrid, heading, link, mutedText, page, prose } from "./styles";
 import type { OverviewData, PassRate, RunSummary, WindowedCount } from "./types";
+
+/** The alerts view lives at this path. */
+const ALERTS_PATH = "/alerts";
 
 export interface OverviewProps {
   readonly data: OverviewData;
@@ -98,7 +101,13 @@ export function Overview({
           id="active-agents"
           label={strings.metrics.activeAgents.label}
           value={formatCount(data.active_runs)}
-          meaning={strings.metrics.activeAgents.meaning}
+          description={strings.metrics.activeAgents.description}
+          definition={
+            <>
+              <p>{strings.metrics.activeAgents.meaning}</p>
+              <WithdrawnHorizon data={data} />
+            </>
+          }
         >
           <WithdrawnBreakdown data={data} />
         </MetricCard>
@@ -110,10 +119,17 @@ export function Overview({
               ? strings.metrics.runsToday.unknown
               : formatCount(runsToday.count)
           }
-          meaning={
+          description={
             runsToday === undefined
-              ? strings.metrics.runsToday.unknownMeaning
-              : strings.metrics.runsToday.meaning(formatAbsoluteUtc(runsToday.since))
+              ? strings.metrics.runsToday.unknownDescription
+              : strings.metrics.runsToday.description
+          }
+          definition={
+            <p>
+              {runsToday === undefined
+                ? strings.metrics.runsToday.unknownMeaning
+                : strings.metrics.runsToday.meaning(formatAbsoluteUtc(runsToday.since))}
+            </p>
           }
           tone={runsToday === undefined ? "degraded" : "neutral"}
         />
@@ -121,21 +137,34 @@ export function Overview({
           id="commits"
           label={strings.metrics.commits.label}
           value={formatCount(data.commits_recorded)}
-          meaning={strings.metrics.commits.meaning}
+          description={strings.metrics.commits.description}
+          definition={<p>{strings.metrics.commits.meaning}</p>}
         />
-        <PassRateCard
-          commitsRecorded={data.commits_recorded}
-          rate={passRate}
-          now={at}
-          verifyHref={routeToPath({ view: "verify", commit: "", repo: "" })}
-        />
+        <MetricCard
+          id="open-alerts"
+          label={strings.metrics.openAlerts.label}
+          value={formatCount(data.open_alerts)}
+          description={strings.metrics.openAlerts.description}
+          definition={<p>{strings.metrics.openAlerts.meaning}</p>}
+        >
+          <a href={ALERTS_PATH} className={link}>
+            {strings.metrics.openAlerts.link}
+          </a>
+        </MetricCard>
       </section>
+
+      <PassRateCard
+        commitsRecorded={data.commits_recorded}
+        rate={passRate}
+        now={at}
+        verifyHref={routeToPath({ view: "verify", commit: "", repo: "" })}
+      />
 
       {/* The PULSE is not here — see the note on the duplicate below. The
         * material behind it is: doc 06 P1 wants the claim and its evidence
         * together, and a one-line header cannot carry a chain range, a segment
         * digest and a Rekor index. */}
-      <AnchoringEvidence anchor={data.anchor} />
+      <AnchoringEvidence anchor={data.anchor} now={at} />
 
       <RecentRuns runs={recentRuns} />
     </div>
@@ -156,7 +185,21 @@ export function Overview({
  * restore it, or refuse to — and nothing here can see whether an agent is
  * still working (IP E7). FE-131 and FE-132 hold that.
  */
+/** The two counts kept apart from "active", one line, only when there is one. */
 function WithdrawnBreakdown({ data }: { readonly data: OverviewData }) {
+  if (data.lapsed_runs === 0 && data.abandoned_runs === 0) return null;
+  return (
+    <p className={mutedText}>
+      {strings.metrics.activeAgents.breakdown(
+        formatCount(data.lapsed_runs),
+        formatCount(data.abandoned_runs),
+      )}
+    </p>
+  );
+}
+
+/** The horizon the two were split with: part of the definition. */
+function WithdrawnHorizon({ data }: { readonly data: OverviewData }) {
   if (data.lapsed_runs === 0 && data.abandoned_runs === 0) return null;
   const seconds = data.restore_horizon_seconds;
   const horizon =
@@ -165,15 +208,5 @@ function WithdrawnBreakdown({ data }: { readonly data: OverviewData }) {
       : seconds <= 0
         ? strings.metrics.activeAgents.noHorizon
         : strings.metrics.activeAgents.horizon(formatDuration(seconds * 1000));
-  return (
-    <>
-      <p>
-        {strings.metrics.activeAgents.breakdown(
-          formatCount(data.lapsed_runs),
-          formatCount(data.abandoned_runs),
-        )}
-      </p>
-      <p>{horizon}</p>
-    </>
-  );
+  return <p>{horizon}</p>;
 }

@@ -45,7 +45,7 @@
  * dependency-error state without any cooperation from this file.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   EmptyState,
@@ -69,7 +69,7 @@ import { RunsFilterForm } from "./RunsFilterForm";
 import { RunsPager } from "./RunsPager";
 import { RunsTable } from "./RunsTable";
 import { strings } from "./strings";
-import { heading, view } from "./styles";
+import { heading, note, view } from "./styles";
 
 /** What has been read, and for which request. The pairing is the point. */
 type Result =
@@ -119,6 +119,10 @@ export function RunsView({
 
   const [result, setResult] = useState<Result>({ request: "", phase: "loading" });
   const [attempt, setAttempt] = useState(0);
+  /* The repositories this view has seen in the runs the API returned. There is
+   * no endpoint that lists repositories, so the choices offered are exactly
+   * these, and the field still accepts any name. */
+  const seenRepos = useRef<Set<string>>(new Set());
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
   useEffect(() => {
@@ -126,6 +130,9 @@ export function RunsView({
     let listening = true;
     source(request, controller.signal).then(
       (page) => {
+        for (const run of page.runs) {
+          for (const repo of run.repos) seenRepos.current.add(repo);
+        }
         if (listening) setResult({ request, phase: "ready", page });
       },
       (error: unknown) => {
@@ -151,7 +158,10 @@ export function RunsView({
       <section className={view}>
         <h1 className={heading}>{strings.labels.view.heading}</h1>
         <StalenessIndicator />
-        <RunsFilterForm key={link} filters={filters} />
+        <RunsFilterForm key={link} filters={filters} repos={[...seenRepos.current].sort()} />
+        <p data-testid="runs-note" className={note}>
+          {strings.sentences.list.noLiveVerification}
+        </p>
         <Answer
           attempt={attempt}
           filters={filters}
