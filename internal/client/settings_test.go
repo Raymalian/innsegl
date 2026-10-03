@@ -18,6 +18,7 @@ func testSettingsConfig() SettingsConfig {
 	return SettingsConfig{
 		HookBin:  "/opt/innsegl/bin/innsegl",
 		LocalURL: "http://127.0.0.1:28195",
+		ProxyCA:  "/opt/home-dev/.innsegl/client/proxy-ca.pem",
 		LogDeny:  "/opt/home-dev/.innsegl",
 		CAAllow:  "/opt/home-dev/.innsegl/ca",
 	}
@@ -30,13 +31,18 @@ func fixedNow() time.Time { return time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 // that locks the machine down (RM-312).
 const goldenSettings = `{
   "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:28195",
     "INNSEGL_CORE_URL": "http://127.0.0.1:28195",
+    "HTTPS_PROXY": "http://127.0.0.1:28195",
+    "https_proxy": "http://127.0.0.1:28195",
+    "HTTP_PROXY": "http://127.0.0.1:28195",
+    "http_proxy": "http://127.0.0.1:28195",
+    "NO_PROXY": "127.0.0.1,localhost,::1",
+    "no_proxy": "127.0.0.1,localhost,::1",
+    "NODE_EXTRA_CA_CERTS": "/opt/home-dev/.innsegl/client/proxy-ca.pem",
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195",
-    "ENABLE_TOOL_SEARCH": "true"
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195"
   },
   "hooks": {
     "PreToolUse": [
@@ -162,7 +168,9 @@ func TestENF009MergeKeepsOperatorKeysAndBacksUpOnce(t *testing.T) {
 		}
 	}
 	env := objAt(t, got, "env")
-	if env["MY_VAR"] != "kept" || env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:28195" {
+	// RM-329: a base URL routes model requests past the client; the
+	// operator's own goes too, and is said.
+	if _, has := env["ANTHROPIC_BASE_URL"]; env["MY_VAR"] != "kept" || has || env["HTTPS_PROXY"] != "http://127.0.0.1:28195" {
 		t.Errorf("env = %v", env)
 	}
 	pre := listAt(t, objAt(t, got, "hooks"), "PreToolUse")
@@ -418,4 +426,40 @@ func listAt(t *testing.T, m map[string]any, key string) []any {
 		t.Fatalf("%s is not a list: %#v", key, m[key])
 	}
 	return l
+}
+
+// RM-329 (#500): a machine connected by an earlier version holds the
+// base-URL route. --update moves it to the proxy: the base URL and the
+// tool-search switch go, the proxy variables come.
+func TestRM329UpdateMovesTheBaseURLRouteToTheProxy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed-settings.json")
+	old := `{"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:28195", "ENABLE_TOOL_SEARCH": "true", "MY_VAR": "kept"}}` + "\n"
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallSettings(path, testSettingsConfig(), fixedNow, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	env := objAt(t, readJSON(t, path), "env")
+	for _, gone := range []string{"ANTHROPIC_BASE_URL", "ENABLE_TOOL_SEARCH"} {
+		if _, has := env[gone]; has {
+			t.Errorf("%s survived the update", gone)
+		}
+	}
+	for k, want := range map[string]string{
+		"HTTPS_PROXY": "http://127.0.0.1:28195", "https_proxy": "http://127.0.0.1:28195",
+		"NO_PROXY": "127.0.0.1,localhost,::1", "NODE_EXTRA_CA_CERTS": "/opt/home-dev/.innsegl/client/proxy-ca.pem",
+		"MY_VAR": "kept",
+	} {
+		if env[k] != want {
+			t.Errorf("%s = %v, want %q", k, env[k], want)
+		}
+	}
+	// Removed again, the file holds the operator's own key only.
+	if err := UninstallSettings(path, testSettingsConfig(), fixedNow, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if env := objAt(t, readJSON(t, path), "env"); len(env) != 1 || env["MY_VAR"] != "kept" {
+		t.Errorf("after removal env = %v", env)
+	}
 }

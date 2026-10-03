@@ -268,6 +268,7 @@ func (d connectDeps) settingsConfig(listen string, hardened bool) (client.Settin
 	return client.SettingsConfig{
 		HookBin:    bin,
 		LocalURL:   "http://" + listen,
+		ProxyCA:    client.ClientPaths(d.home).ProxyCA,
 		LogDeny:    filepath.Join(d.home, ".innsegl"),
 		CAAllow:    filepath.Join(d.home, ".innsegl", "ca"),
 		Hardened:   hardened,
@@ -306,6 +307,11 @@ func connectUpdate(f connectFlags, stdout, stderr io.Writer, deps connectDeps) i
 	again := "`innsegl connect --update`"
 	if f.hard {
 		again = "`innsegl connect --update --hardened`"
+	}
+	// RM-329: the settings name the proxy CA; it exists before they do.
+	if err = client.EnsureProxyCA(paths, deps.uid, deps.underSudo); err != nil {
+		fprintf(stderr, "innsegl connect: the client's proxy CA: %v\n", err)
+		return exitConnectFailed
 	}
 	err = client.InstallSettings(f.settings, settings, deps.now, stdout)
 	if code, done := reportNotWritable(err, stderr, ", then run "+again+" again"); done {
@@ -424,6 +430,11 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 	fprintf(stdout, "innsegl connect: enrolled as installation %s; the certificate expires %s\n",
 		enrolment.InstallationID, enrolment.ExpiresAt.UTC().Format(time.RFC3339))
 
+	// RM-329: the settings name the proxy CA; it exists before they do.
+	if err = client.EnsureProxyCA(paths, deps.uid, false); err != nil {
+		fprintf(stderr, "innsegl connect: the client's proxy CA: %v\n", err)
+		return exitConnectFailed
+	}
 	err = client.InstallSettings(f.settings, settings, deps.now, stdout)
 	if code, done := reportNotWritable(err, stderr, ""); done {
 		return code

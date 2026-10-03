@@ -24,13 +24,18 @@ const connectTestBin = "/opt/innsegl/bin/innsegl"
 // down (RM-312).
 const connectGolden = `{
   "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:28195",
     "INNSEGL_CORE_URL": "http://127.0.0.1:28195",
+    "HTTPS_PROXY": "http://127.0.0.1:28195",
+    "https_proxy": "http://127.0.0.1:28195",
+    "HTTP_PROXY": "http://127.0.0.1:28195",
+    "http_proxy": "http://127.0.0.1:28195",
+    "NO_PROXY": "127.0.0.1,localhost,::1",
+    "no_proxy": "127.0.0.1,localhost,::1",
+    "NODE_EXTRA_CA_CERTS": "<home>/.innsegl/client/proxy-ca.pem",
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195",
-    "ENABLE_TOOL_SEARCH": "true"
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195"
   },
   "hooks": {
     "PreToolUse": [
@@ -193,7 +198,7 @@ func TestCLI015ConnectEnrolsWritesFilesSettingsAndService(t *testing.T) {
 	}
 
 	got := readFile(t, f.settings)
-	want := connectGolden
+	want := strings.ReplaceAll(connectGolden, "<home>", f.home)
 	if string(got) != want {
 		t.Fatalf("managed settings differ\n--- got\n%s\n--- want\n%s", got, want)
 	}

@@ -20,13 +20,18 @@ import (
 // copied in from userSettingsWithStatusLine.
 const goldenHardened = `{
   "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:28195",
     "INNSEGL_CORE_URL": "http://127.0.0.1:28195",
+    "HTTPS_PROXY": "http://127.0.0.1:28195",
+    "https_proxy": "http://127.0.0.1:28195",
+    "HTTP_PROXY": "http://127.0.0.1:28195",
+    "http_proxy": "http://127.0.0.1:28195",
+    "NO_PROXY": "127.0.0.1,localhost,::1",
+    "no_proxy": "127.0.0.1,localhost,::1",
+    "NODE_EXTRA_CA_CERTS": "/opt/home-dev/.innsegl/client/proxy-ca.pem",
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195",
-    "ENABLE_TOOL_SEARCH": "true"
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195"
   },
   "hooks": {
     "PreToolUse": [
@@ -122,13 +127,18 @@ const goldenHardened = `{
 const oldLockdown = `{
   "model": "opus",
   "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:28195",
     "INNSEGL_CORE_URL": "http://127.0.0.1:28195",
+    "HTTPS_PROXY": "http://127.0.0.1:28195",
+    "https_proxy": "http://127.0.0.1:28195",
+    "HTTP_PROXY": "http://127.0.0.1:28195",
+    "http_proxy": "http://127.0.0.1:28195",
+    "NO_PROXY": "127.0.0.1,localhost,::1",
+    "no_proxy": "127.0.0.1,localhost,::1",
+    "NODE_EXTRA_CA_CERTS": "/opt/home-dev/.innsegl/client/proxy-ca.pem",
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195",
-    "ENABLE_TOOL_SEARCH": "true"
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195"
   },
   "hooks": {
     "PreToolUse": [
