@@ -84,6 +84,16 @@ const goldenHardened = `{
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/innsegl/bin/innsegl hook session"
+          }
+        ]
+      }
     ]
   },
   "attribution": {
