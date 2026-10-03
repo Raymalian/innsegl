@@ -33,7 +33,7 @@
 
 import { render, screen } from "@testing-library/react";
 
-import { AnchoringPulse } from "./AnchoringPulse";
+import { AnchoringEvidence, AnchoringPulse } from "./AnchoringPulse";
 import { perceptible } from "./perceptible";
 import type { AnchorHeartbeat } from "./types";
 
@@ -141,23 +141,6 @@ describe("FE-005 the overview's anchoring heartbeat", () => {
     expect(text).not.toMatch(/no segment anchored yet/i);
   });
 
-  // RM-203 (#326). Measured live: the time read "29  s  ago" -- a monospace
-  // run inside a proportional sentence spreads its spaces. Tabular digits keep
-  // the number from jittering as it ticks, without the gaps.
-  it.each([
-    ["sealed, not yet anchored", () => sealedOnly(RECENT)],
-    ["anchored", () => anchored(RECENT)],
-  ])("RM-203 the elapsed time reads as part of the sentence when %s", (_state, make) => {
-    const { unmount } = pulse(make());
-    const times = screen.getByTestId("overview-heartbeat").querySelectorAll("time");
-    expect(times.length).toBeGreaterThan(0);
-    for (const time of times) {
-      expect(time.className).not.toMatch(/font-mono/);
-      expect(time.className).toMatch(/tabular-nums/);
-    }
-    unmount();
-  });
-
   it("FE-071 turns amber when the pending anchor is past the bound", () => {
     const { container } = pulse(sealedOnly(LATE));
     const shown = screen.getByTestId("overview-heartbeat");
@@ -189,11 +172,15 @@ describe("FE-005 the overview's anchoring heartbeat", () => {
     }
   });
 
-  it("exposes the anchor time absolutely, with its timezone (§6.2)", () => {
-    pulse(anchored(LATE));
-    const when = screen.getByText(/47 min ago/);
+  /* RM-331 (#507): the chip is a few words; the absolute time lives on the
+   * Anchoring section's sentence (anchorchip.test.tsx). */
+  it("exposes the anchor time absolutely, with its timezone, in the Anchoring section (§6.2)", () => {
+    const { container } = render(
+      <AnchoringEvidence anchor={anchored(LATE)} lagBoundMs={BOUND_MS} now={NOW} />,
+    );
+    const when = container.querySelector("time") as HTMLElement;
     expect(when).toHaveAttribute("datetime", "2026-08-30T13:57:05.000Z");
-    expect(when).toHaveAttribute("title", "2026-08-30 13:57:05 UTC");
+    expect(when).toHaveTextContent("2026-08-30 13:57:05 UTC");
   });
 
   /*

@@ -49,6 +49,7 @@ import {
   cellText,
   columnHeader,
   listHeading,
+  link,
   listNote,
   numericCell,
   rowHeader,
@@ -95,6 +96,9 @@ export function RecentRuns({ runs }: RecentRunsProps) {
                   {strings.recentRuns.columns.run}
                 </th>
                 <th scope="col" className={columnHeader}>
+                  {strings.recentRuns.columns.repo}
+                </th>
+                <th scope="col" className={columnHeader}>
                   {strings.recentRuns.columns.agent}
                 </th>
                 <th scope="col" className={columnHeader}>
@@ -131,9 +135,32 @@ function RunRow({ run }: { readonly run: RunSummary }) {
           href={routeToPath({ view: "run", runId: run.run_id })}
         />
       </th>
+      <td className={cell}>
+        <Repos repos={run.repos} />
+      </td>
       <td className={`${cell} ${cellText}`}>{run.agent_type}</td>
       <td className={`${cell} ${cellText}`}>{run.task_ref}</td>
       <td className={numericCell}>{formatCount(run.commits)}</td>
     </tr>
+  );
+}
+
+function Repos({ repos }: { readonly repos: readonly string[] }) {
+  if (repos.length === 0) {
+    return <span className={listNote}>{strings.recentRuns.noRepos}</span>;
+  }
+  return (
+    <ul className="flex list-none flex-col items-start gap-1 p-0">
+      {repos.map((repo) => (
+        <li key={repo}>
+          <a
+            href={routeToPath({ view: "repo", repo, from: "", to: "" })}
+            className={link}
+          >
+            {repo}
+          </a>
+        </li>
+      ))}
+    </ul>
   );
 }

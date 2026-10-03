@@ -37,21 +37,14 @@ export const strings = {
 
   metrics: {
     regionLabel: "System metrics",
+    howCounted: "How this is counted",
     activeAgents: {
       label: "Active agents",
+      description: "Runs still going.",
       meaning:
         "Runs whose newest recorded fact is not a retirement and not a credential withdrawal.",
-      /* #256's two counts, on the card whose number a reader reads first,
-       * because the question that number has to survive is "and the rest?".
-       *
-       * Rendered only when there are any. doc 06 P3: the calm state is what is
-       * left over, and "0 lapsed, 0 abandoned" on every healthy deployment is
-       * a line readers learn to skip — and then skip on the day it is not
-       * zero. Neither number is added into the figure above it. */
       breakdown: (lapsed: string, abandoned: string) =>
         `${lapsed} lapsed and ${abandoned} abandoned, counted apart from this number.`,
-      /* The horizon that split the two. A reader told "abandoned" without it
-       * has been handed a verdict they cannot check (doc 06 P1). */
       horizon: (horizon: string) =>
         `A withdrawn run is counted abandoned once a ${horizon} restore horizon has passed.`,
       noHorizon:
@@ -61,36 +54,40 @@ export const strings = {
     },
     runsToday: {
       label: "Runs today",
+      description: "Started since midnight UTC.",
       meaning: (since: string) => `Runs registered since ${since}.`,
       unknown: "Not counted",
+      unknownDescription: "The runs list did not answer.",
       unknownMeaning:
         "The runs index did not answer, so this shows no number rather than a guess.",
     },
     commits: {
       label: "Commits attributed",
+      description: "Commits the ledger holds.",
       meaning:
         "Commits the ledger holds a commit_recorded event for. A record, not a verification.",
+    },
+    openAlerts: {
+      label: "Open alerts",
+      description: "Not yet resolved.",
+      meaning:
+        "Alerts raised by the ledger that nobody has resolved. Each one is a finding to look at, not a verdict on every commit.",
+      link: "See the alerts",
     },
   },
 
   passRate: {
     label: "Verification pass rate",
 
-    /* The state this build is always in. The wording is deliberate: it says
-     * what is missing, why the obvious substitute is refused, and what the
-     * reader can do instead (doc 06 §6.1). */
     notMeasured: "Not measured",
     notMeasuredMeaning:
-      "No live check has run over these commits. A rate counted from the ledger would assert a verification result that nothing checked, so none is shown.",
+      "No live check has run over these commits, so no rate is shown.",
     cachedMeaning:
       "The rate in hand was retained from an earlier check rather than measured now, so it is not shown as a current rate.",
     checkedRatio: (checked: string, total: string) =>
       `${checked} of ${total} commits checked live`,
     verifiedRatio: (verified: string, checked: string) =>
       `${verified} of ${checked} commits verified live`,
-    /* doc 06 §8 anti-pattern 2: failed and unavailable never collapse, and a
-     * single rate is exactly the collapse — so the two are always spelled
-     * out beside it. */
     breakdown: (failed: string, unavailable: string) =>
       `${failed} failed, ${unavailable} could not be checked.`,
     measuredAt: (ago: string) => `Measured ${ago} ago.`,
@@ -98,6 +95,22 @@ export const strings = {
   },
 
   heartbeat: {
+    /* The header chip: a few words, and the whole sentence behind it. */
+    chip: {
+      reading: "Checking anchoring",
+      unreadable: "Anchoring unknown",
+      nothingSealed: "Nothing anchored yet",
+      anchored: (ago: string) => `Anchored ${ago} ago`,
+      behind: (lag: string) => `Anchoring ${lag} behind`,
+      pending: (ago: string) => `Sealed ${ago} ago, not anchored`,
+    },
+    sentenceAnchored: (segment: number, ago: string) =>
+      `Ledger segment ${segment} anchored ${ago} ago`,
+    sentenceSealed: (segment: number, ago: string) =>
+      `Ledger segment ${segment} sealed ${ago} ago, not yet anchored in Rekor`,
+    sentenceBeyond: (over: string, bound: string) =>
+      ` — ${over} beyond the ${bound} anchoring-lag bound`,
+    sealedAt: (when: string) => `Sealed ${when}.`,
     /** The state doc 02 §3 creates and the shared component has no words for:
      * sealed, with the anchoring members still to arrive on a superseding
      * event. */
@@ -146,6 +159,7 @@ export const strings = {
     columns: {
       status: "Status",
       run: "Run",
+      repo: "Repository",
       agent: "Agent",
       task: "Task",
       commits: "Commits",
@@ -155,6 +169,7 @@ export const strings = {
     commits: (count: number) =>
       count === 1 ? "1 commit" : `${count} commits`,
     registered: "Registered",
+    noRepos: "Signed nothing",
     all: "All runs",
   },
 } as const;

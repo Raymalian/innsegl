@@ -64,12 +64,12 @@ describe("FE-118 the overview's recent runs are a real table", () => {
     expect(table.querySelector("caption")?.textContent ?? "").not.toEqual("");
   });
 
-  it("names its five columns in the order the design sets them", () => {
+  it("names its six columns in the order the design sets them", () => {
     render(<RecentRuns runs={RUNS} />);
     const headers = screen
       .getAllByRole("columnheader")
       .map((cell) => (cell.textContent ?? "").trim());
-    expect(headers).toEqual(["Status", "Run", "Agent", "Task", "Commits"]);
+    expect(headers).toEqual(["Status", "Run", "Repository", "Agent", "Task", "Commits"]);
     for (const cell of screen.getAllByRole("columnheader")) {
       expect(cell.getAttribute("scope")).toEqual("col");
     }

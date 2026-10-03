@@ -61,7 +61,10 @@ describe("FE-114 the anchoring heartbeat is rendered once", () => {
     expect(container.querySelectorAll("[data-testid='overview-heartbeat']")).toHaveLength(
       0,
     );
-    expect(screen.queryByText(/anchored 3 min ago/i)).toBeNull();
+    // RM-331: the Anchoring section states the full sentence; the chip is not it.
+    expect(screen.getByTestId("anchoring-sentence")).toHaveTextContent(
+      /ledger segment 8421 anchored 3 min ago/i,
+    );
   });
 
   it("keeps the material behind the pulse, which is not the pulse (P1, P4)", () => {
@@ -81,6 +84,6 @@ describe("FE-114 the anchoring heartbeat is rendered once", () => {
     expect(container.querySelectorAll("[data-testid='overview-heartbeat']")).toHaveLength(
       1,
     );
-    expect(screen.getAllByText(/ledger segment 8421 anchored/i)).toHaveLength(1);
+    expect(screen.getByTestId("overview-heartbeat")).toHaveTextContent(/anchored 3 min ago/i);
   });
 });

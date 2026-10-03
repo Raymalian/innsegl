@@ -61,9 +61,10 @@
 
 import { elapsedSince } from "../../components/common";
 import { formatCount, formatRate } from "./format";
-import { MetricCard, type MetricTone } from "./MetricCard";
+import { Icon } from "../../components/common";
+import type { MetricTone } from "./MetricCard";
 import { strings } from "./strings";
-import { link } from "./styles";
+import { degraded, hairline, integrityAlert, link, neutralSurface, srOnly } from "./styles";
 import type { PassRate } from "./types";
 
 export interface PassRateCardProps {
@@ -88,69 +89,84 @@ export function PassRateCard({
 
   if (measured === undefined) {
     return (
-      <MetricCard
-        id="pass-rate"
-        label={strings.passRate.label}
+      <Line
+        tone="degraded"
         value={strings.passRate.notMeasured}
-        meaning={
-          rate === undefined
-            ? strings.passRate.notMeasuredMeaning
-            : strings.passRate.cachedMeaning
-        }
         hover={strings.passRate.checkedRatio(
           formatCount(0),
           formatCount(commitsRecorded),
         )}
-        tone="degraded"
-        /* A state, not a figure — see MetricCard's `headline`. */
-        headline="word"
-      >
-        <VerifyLink href={verifyHref} />
-      </MetricCard>
+        note={
+          rate === undefined
+            ? strings.passRate.notMeasuredMeaning
+            : strings.passRate.cachedMeaning
+        }
+        href={verifyHref}
+      />
     );
   }
 
+  const breakdown =
+    measured.failed === 0 && measured.unavailable === 0
+      ? ""
+      : ` ${strings.passRate.breakdown(
+          formatCount(measured.failed),
+          formatCount(measured.unavailable),
+        )}`;
   return (
-    <MetricCard
-      id="pass-rate"
-      label={strings.passRate.label}
+    <Line
+      tone={toneOf(measured)}
       value={formatRate(measured.verified, measured.checked)}
-      meaning={strings.passRate.measuredAt(elapsedSince(measured.measuredAt, now))}
       hover={strings.passRate.verifiedRatio(
         formatCount(measured.verified),
         formatCount(measured.checked),
       )}
-      tone={toneOf(measured)}
-    >
-      {measured.failed === 0 && measured.unavailable === 0 ? null : (
-        <p>
-          {strings.passRate.breakdown(
-            formatCount(measured.failed),
-            formatCount(measured.unavailable),
-          )}
-        </p>
-      )}
-      <VerifyLink href={verifyHref} />
-    </MetricCard>
-  );
-}
-
-function VerifyLink({ href }: { readonly href: string }) {
-  return (
-    <a href={href} className={link}>
-      {strings.passRate.verifyLink}
-    </a>
+      note={`${strings.passRate.measuredAt(elapsedSince(measured.measuredAt, now))}${breakdown}`}
+      href={verifyHref}
+    />
   );
 }
 
 /**
- * Whether this rate is the result of a check that just ran.
- *
- * The same five-condition posture as `verdictOf`, reduced to the two a rate
- * can carry: it came from a cache, or the live attempt errored. Either one
- * withholds the number, and neither can be signalled by silence, because
- * `liveness.source` is required.
+ * Verification as one line, not a card (RM-331): the label, the state, a
+ * short note, and the link to the live check. The amber and red treatments are
+ * the same ones the card carried; only the room they take has changed.
  */
+function Line({
+  tone,
+  value,
+  hover,
+  note,
+  href,
+}: {
+  readonly tone: MetricTone;
+  readonly value: string;
+  readonly hover: string;
+  readonly note: string;
+  readonly href: string;
+}) {
+  const skin = tone === "alert" ? integrityAlert : tone === "degraded" ? degraded : neutralSurface;
+  const icon = tone === "alert" ? "integrity-alert" : tone === "degraded" ? "unknown" : null;
+  return (
+    <p
+      data-testid="metric-pass-rate"
+      data-tone={tone}
+      className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md px-3 py-2 ${hairline} ${skin}`}
+    >
+      {icon === null ? null : <Icon name={icon} className="shrink-0" />}
+      <span className="font-semibold">{strings.passRate.label}</span>
+      <span title={hover}>
+        {value}
+        <span className={srOnly}>{hover}</span>
+      </span>
+      <span className="text-micro">{note}</span>
+      <a href={href} className={link}>
+        {strings.passRate.verifyLink}
+      </a>
+    </p>
+  );
+}
+
 function isLive(rate: PassRate | undefined): boolean {
   if (rate === undefined) return false;
   if (rate.liveness.source !== "live") return false;

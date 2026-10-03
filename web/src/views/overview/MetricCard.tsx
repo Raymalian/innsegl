@@ -11,7 +11,7 @@
  * counts and §8's tenth anti-pattern is about metrics that flatter; both are
  * properties of the number, so both are governed where the number is made.
  *
- * THE MEANING TRAVELS WITH THE CLAIM. `meaning` is not optional. doc 06 §8
+ * THE MEANING TRAVELS WITH THE CLAIM. `definition` is not optional. doc 06 §8
  * anti-pattern 10 names "cumulative counts with no window" as a defect, and a
  * card that cannot say what it counted over is that defect by construction. P1
  * says the same thing more generally: a number with no statement of what it
@@ -30,10 +30,12 @@ import type { ReactNode } from "react";
 
 import { Icon } from "../../components/common";
 import type { IconName } from "../../components/common";
+import { strings } from "./strings";
 import {
   cardBase,
   cardLabel,
   cardMeaning,
+  disclosure,
   cardValue,
   cardValueWord,
   degraded,
@@ -81,8 +83,12 @@ export interface MetricCardProps {
   readonly label: string;
   /** Already formatted (see `format.ts`). */
   readonly value: string;
-  /** What the number counts, and over what window. Required. */
-  readonly meaning: string;
+  /** One short line, always visible. */
+  readonly description: string;
+  /** What the number counts, and over what window: the full definition,
+   * behind a disclosure. Required, because the meaning travels with the
+   * claim (doc 06 §8/10) even when it is folded away. */
+  readonly definition: ReactNode;
   /** doc 06 §6.2's hover. Announced as well as shown, because a fact only a
    * mouse can reach is a fact some readers do not have. */
   readonly hover?: string;
@@ -105,7 +111,8 @@ export function MetricCard({
   id,
   label,
   value,
-  meaning,
+  description,
+  definition,
   hover,
   tone = "neutral",
   headline = "figure",
@@ -129,8 +136,14 @@ export function MetricCard({
         {value}
         {hover === undefined ? null : <span className={srOnly}>{hover}</span>}
       </p>
-      <p className={`${cardMeaning} ${skin.meaning}`}>{meaning}</p>
+      <p data-description className={`${cardMeaning} ${skin.meaning}`}>
+        {description}
+      </p>
       {children}
+      <details className={`${cardMeaning} ${skin.meaning}`}>
+        <summary className={disclosure}>{strings.metrics.howCounted}</summary>
+        <div className="mt-1 flex flex-col gap-1">{definition}</div>
+      </details>
     </article>
   );
 }
