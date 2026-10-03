@@ -351,8 +351,9 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAlerts serves #167's list endpoint: a paged, type-filterable read of
-// the two alert event types. Read-only like every other route here — it never
-// writes a resolution, see ADR-0044 for why that lives outside this server.
+// the two alert event types. Read-only like every other route on this mux;
+// resolutions are written by alertresolutions.go's own surface, through the
+// resolver credential (ADR-0044's 2026-10-03 amendment).
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	filter, err := alertFilterFrom(r)
 	if err != nil {
