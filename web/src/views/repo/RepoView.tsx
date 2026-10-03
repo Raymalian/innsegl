@@ -269,14 +269,14 @@ function Instant({ at }: { readonly at: Date }) {
  */
 function Coverage() {
   return (
-    <details className={`${sectionShell} ${explanation}`}>
+    <details className={sectionShell}>
       <summary className={`${sectionHeading} cursor-pointer`}>
         <Icon name="empty" className="shrink-0" />
         {strings.labels.coverage}
       </summary>
-      <p>{strings.sentences.coverageDenominator}</p>
-      <p>{strings.sentences.coverageNumerator}</p>
-      <p>{strings.sentences.coverageRefusal}</p>
+      <p className={explanation}>{strings.sentences.coverageDenominator}</p>
+      <p className={explanation}>{strings.sentences.coverageNumerator}</p>
+      <p className={explanation}>{strings.sentences.coverageRefusal}</p>
     </details>
   );
 }

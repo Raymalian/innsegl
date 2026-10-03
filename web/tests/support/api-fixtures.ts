@@ -26,6 +26,7 @@ import type {
   OverviewData,
 } from "../../src/views/overview/types";
 import type { RunPage, RunSummary } from "../../src/views/runs/api";
+import type { RepoList } from "../../src/views/repos/query";
 
 /** The repo and agent type every fixture below agrees on, so a link followed
  * from one real view lands on a fixture the next view also recognises. */
@@ -176,6 +177,27 @@ export function alertsPage(): AlertsPage {
     ],
     total: 1,
     limit: 50,
+    data_as_of: "2026-08-31T12:00:00.000Z",
+  };
+}
+
+/** internal/api/repos.go's RepoList: two repositories, newest activity first. */
+export function repoList(): RepoList {
+  return {
+    repos: [
+      {
+        repo: "github.com/example-org/api",
+        runs: 12,
+        commits: 31,
+        last_event_at: "2026-08-31T09:15:00.000Z",
+      },
+      {
+        repo: "github.com/example-org/web",
+        runs: 3,
+        commits: 0,
+        last_event_at: "2026-08-12T17:40:00.000Z",
+      },
+    ],
     data_as_of: "2026-08-31T12:00:00.000Z",
   };
 }
