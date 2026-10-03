@@ -6,12 +6,14 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"time"
 
 	"innsegl.dev/innsegl/internal/accounts"
+	"innsegl.dev/innsegl/internal/api"
 )
 
 // `innsegl accounts` — the operator's core CLI over the accounts spine (#456):
@@ -31,6 +33,25 @@ type accountsStore interface {
 	SetInstallationStatus(ctx context.Context, id, status, actor string) error
 	GrantRepo(ctx context.Context, accountID, repo, actor string) error
 	ListAccounts(ctx context.Context) ([]accounts.AccountSummary, error)
+	// RecoveryCodes replaces an existing user's recovery codes and returns
+	// the new ones, shown once.
+	RecoveryCodes(ctx context.Context, userID string) ([]string, error)
+}
+
+// cliAccountsStore is accounts.Store plus the one auth operation the
+// accounts spine does not hold: recovery codes live with the passkeys
+// (internal/api), and minting them there keeps one implementation of the
+// code format and its hash.
+type cliAccountsStore struct {
+	*accounts.Store
+	auth *api.AuthStore
+}
+
+func (c cliAccountsStore) RecoveryCodes(ctx context.Context, userID string) ([]string, error) {
+	if _, err := c.auth.UserByID(ctx, userID); err != nil {
+		return nil, fmt.Errorf("user %s: %w", userID, err)
+	}
+	return c.auth.MintRecoveryCodes(ctx, userID)
 }
 
 // accountsCLIDeps are the seams this command's tests replace.
@@ -47,7 +68,12 @@ func (d accountsCLIDeps) opener() func(context.Context, string) (accountsStore, 
 		if err != nil {
 			return nil, nil, err
 		}
-		return s, s.Close, nil
+		a, err := api.OpenAuthStore(ctx, dsn)
+		if err != nil {
+			s.Close()
+			return nil, nil, err
+		}
+		return cliAccountsStore{Store: s, auth: a}, func() { a.Close(); s.Close() }, nil
 	}
 }
 
@@ -64,7 +90,8 @@ func accountsUsage(w io.Writer) {
 	fprintf(w, "                                                            mint a 15-minute single-use token, on stdout\n")
 	fprintf(w, "  installations        --account ID                         list an account's installations\n")
 	fprintf(w, "  revoke-installation  ID                                   revoke one installation, for good\n")
-	fprintf(w, "  grant-repo           --account ID REPO                    give an account a repository\n\n")
+	fprintf(w, "  grant-repo           --account ID REPO                    give an account a repository\n")
+	fprintf(w, "  recovery-codes       --user ID                            replace a user's recovery codes; the new ones on stdout\n\n")
 	fprintf(w, "Every verb takes -dsn (default $%s), the auth-writer connection string.\n", envAuthWriterDSN)
 }
 
@@ -78,7 +105,7 @@ func runAccountsCommand(args []string, stdout, stderr io.Writer, deps accountsCL
 	case "help", "-h", "--help":
 		accountsUsage(stdout)
 		return exitOK
-	case "new", "enrol-token", "installations", "revoke-installation", "grant-repo", "list":
+	case "new", "enrol-token", "installations", "revoke-installation", "grant-repo", "list", "recovery-codes":
 		return accountsVerb(verb, rest, stdout, stderr, deps)
 	default:
 		fprintf(stderr, "innsegl accounts: unknown verb %q\n\n", verb)
@@ -94,7 +121,7 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 	fs.SetOutput(stderr)
 	dsn := fs.String("dsn", os.Getenv(envAuthWriterDSN),
 		"the auth-writer connection string ($"+envAuthWriterDSN+")")
-	var acctName, account, by, repos, kind *string
+	var acctName, account, by, repos, kind, user *string
 	switch verb {
 	case "new":
 		acctName = fs.String("name", "", "the organisation's name")
@@ -105,6 +132,8 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 		kind = fs.String("kind", accounts.KindWorkstation, "workstation or service")
 	case "installations", "grant-repo":
 		account = fs.String("account", "", "the account id")
+	case "recovery-codes":
+		user = fs.String("user", "", "the user id (owners= in `accounts list`)")
 	}
 	fs.Usage = func() {
 		fprintf(stderr, "%s\n\nFlags:\n", name)
@@ -157,6 +186,10 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 	case "installations", "grant-repo":
 		if *account == "" {
 			return usage("--account is required")
+		}
+	case "recovery-codes":
+		if *user == "" {
+			return usage("--user is required")
 		}
 	}
 
@@ -228,6 +261,19 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 			return fail(err)
 		}
 		fprintf(stderr, "%s: %s granted to %s\n", name, positional[0], *account)
+	case "recovery-codes":
+		codes, err := store.RecoveryCodes(ctx, *user)
+		if err != nil {
+			return fail(err)
+		}
+		// STDOUT and nothing else, once: the codes are stored only as
+		// hashes, so this is the one time they can be read.
+		for _, c := range codes {
+			fprintf(stdout, "%s\n", c)
+		}
+		fprintf(stderr, "%s: %d new codes for %s; every earlier code is voided. Each signs in once, "+
+			"to the account page, where a passkey is added. Save them now: they cannot be shown again.\n",
+			name, len(codes), *user)
 	}
 	return exitOK
 }
