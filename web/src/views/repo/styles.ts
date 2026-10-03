@@ -54,9 +54,6 @@ export const factList = "grid gap-2 sm:grid-cols-2";
 export const factRow = "flex flex-col gap-0";
 export const factTerm = "text-ink-muted text-micro";
 
-/** One identity's block, a background step below the section it sits in. */
-export const identityGroup = "flex flex-col gap-2 rounded-md bg-sunken p-3";
-
 /** Compact rows: density belongs to data (doc 06 §5.4). */
 /* doc 06 §5.4: "tables full-width within it." A table whose widest cell is a
    full SPIFFE ID outgrows a narrow window, and without a shell of its own it

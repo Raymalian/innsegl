@@ -119,7 +119,6 @@ export const codesGrid =
 export const codeCell = "font-mono text-body text-ink";
 
 export const checkboxRow = "flex items-center gap-2";
-export const confirmRow = "flex flex-wrap items-center gap-2";
 
 /* ── RM-333 (#511): the organisation, its machines and the sign-ins. ───── */
 

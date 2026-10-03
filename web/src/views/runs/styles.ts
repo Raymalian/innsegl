@@ -89,7 +89,6 @@ export const mutedCell = "text-micro text-ink-muted";
    two facts and is exactly the kind of ambiguity this line exists to remove.
    `block` with a little space above puts it on its own line, the way the
    verification cell already stacks its second line. */
-export const lastSeenLine = "mt-1 block text-micro text-ink-muted";
 
 /* ── the row's verification cell ──────────────────────────────────────────── */
 
@@ -98,13 +97,11 @@ export const lastSeenLine = "mt-1 block text-micro text-ink-muted";
  * result to be unavailable. Painting every row amber would make the calm state
  * loud, which is doc 06 P3 read backwards, and would make an actually
  * unavailable verification harder to see rather than easier. */
-export const notChecked = "flex items-start gap-1 text-micro text-ink-muted";
 
 /* ── pagination ───────────────────────────────────────────────────────────── */
 
 export const pager = "flex flex-wrap items-center gap-3 text-body text-ink-secondary";
 export const pagerLink = `text-accent underline underline-offset-2 ${focusRing}`;
-export const pagerNote = "text-micro text-ink-muted";
 
 /** Visually hidden, still announced (doc 06 §6.4). */
 export const srOnly = "sr-only";
