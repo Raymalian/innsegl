@@ -111,6 +111,11 @@ func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int { //nolint
 		return exitOK
 	}
 
+	if turnsSigningOff(command) {
+		writeDeny(stdout, unsignedCommitReason)
+		return exitOK
+	}
+
 	if !commitpath.IsGitCommitCommand(command) || !commitpath.IsToolUseID(event.ToolUseID) {
 		return exitOK
 	}

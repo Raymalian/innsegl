@@ -151,6 +151,12 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 	// never fails on one, and the gateway resolves a bare directory the
 	// single-host way.
 	if derived, derr := workspace.Derive(ctx, in.Cwd); derr == nil {
+		// A repository is signable from its first use: link it when
+		// innsegl's prepare-commit-msg hook is not there yet, so its agent
+		// commits carry the run's trailers the core signs against.
+		if _, lerr := linkEnsure(ctx, derived.Main); lerr != nil {
+			fmt.Fprintf(stderr, "innsegl hook session: linking %s for signing: %v\n", derived.Main, lerr)
+		}
 		statement["repo"] = derived.Repo
 		statement["worktree"] = derived.Worktree
 		statement["branch"] = derived.Branch

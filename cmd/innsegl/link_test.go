@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -453,3 +454,80 @@ func TestENF004HumanCommitInALinkedRepositoryIsLeftAlone(t *testing.T) {
 		t.Errorf("the pre-existing prepare-commit-msg hook did not run: %v", err)
 	}
 }
+
+// The session hook links a repository the first time an agent works in it,
+// so its commits carry the run's trailers and the core will sign them.
+// Measured 2026-10-02: a repository never linked by hand had every agent
+// commit refused by the core. linkEnsure installs only where innsegl's hook
+// is missing, and writes nothing where it is already there.
+func TestLinkEnsureInstallsOnceAndThenLeavesTheHookAlone(t *testing.T) {
+	repo, _ := linkRepo(t)
+	installed, err := linkEnsure(t.Context(), repo)
+	if err != nil || !installed {
+		t.Fatalf("first linkEnsure: installed=%v err=%v", installed, err)
+	}
+	hookPath, _, err := linkHookPaths(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(hookPath)
+	if err != nil {
+		t.Fatalf("no hook after linkEnsure: %v", err)
+	}
+	installed, err = linkEnsure(t.Context(), repo)
+	if err != nil || installed {
+		t.Fatalf("second linkEnsure: installed=%v err=%v, want a no-op", installed, err)
+	}
+	after, err := os.Stat(hookPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Error("a second linkEnsure rewrote the hook")
+	}
+}
+
+// A hook the repository already had is kept: moved aside and chained, as
+// `innsegl link` does.
+func TestLinkEnsureKeepsAnExistingHook(t *testing.T) {
+	repo, _ := linkRepo(t)
+	hookPath, previous, err := linkHookPaths(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(hookPath, []byte("#!/bin/sh\necho mine\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = linkEnsure(t.Context(), repo); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := os.ReadFile(previous)
+	if err != nil || !strings.Contains(string(kept), "echo mine") {
+		t.Fatalf("the repository's own hook was not kept aside: %v", err)
+	}
+}
+
+// Wired into the session hook: a session in a repository links it.
+func TestHookSessionLinksTheRepositoryItWorksIn(t *testing.T) {
+	repo, env := linkRepo(t)
+	ghRun(t, ghGitOrSkip(t), repo, env, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+	_, post := capturePosts(nil)
+	in := `{"session_id":"7dc5d783-9896-4aef-84d9-a82114505fff","cwd":` + strconv.Quote(repo) + `,"hook_event_name":"SessionStart"}`
+	var errOut bytes.Buffer
+	if code := runHookSession(strings.NewReader(in), &bytes.Buffer{}, &errOut, env2(nil), post); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	hookPath, _, err := linkHookPaths(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := os.ReadFile(hookPath)
+	if err != nil || !strings.Contains(string(text), linkHookMarker) {
+		t.Fatalf("the session did not link %s: %v %s", repo, err, errOut.String())
+	}
+}
+
+func env2(m map[string]string) func(string) string { return func(k string) string { return m[k] } }

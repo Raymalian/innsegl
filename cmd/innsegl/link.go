@@ -250,3 +250,24 @@ func runLinkRemove(ctx context.Context, repo string, stdout, stderr io.Writer) i
 	fprintf(stdout, "innsegl link -remove: removed %s; there was nothing there before\n", hookPath)
 	return exitOK
 }
+
+// linkEnsure links repo when innsegl's hook is not there yet and reports
+// whether it installed one. The session hook calls it for every repository
+// an agent works in, so a repository is signable from its first use with no
+// `innsegl link` by hand; a repository already linked is only read. A hook
+// the repository had is kept, exactly as `innsegl link` keeps it.
+func linkEnsure(ctx context.Context, repo string) (bool, error) {
+	hookPath, _, err := linkHookPaths(ctx, repo)
+	if err != nil {
+		return false, err
+	}
+	// #nosec G304 -- the hook path git itself resolved for this repository.
+	if existing, readErr := os.ReadFile(hookPath); readErr == nil && strings.Contains(string(existing), linkHookMarker) {
+		return false, nil
+	}
+	var out, errOut strings.Builder
+	if code := runLinkInstall(ctx, repo, &out, &errOut); code != exitOK {
+		return false, errors.New(strings.TrimSpace(errOut.String()))
+	}
+	return true, nil
+}
