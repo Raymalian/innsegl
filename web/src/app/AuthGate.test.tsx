@@ -10,7 +10,7 @@
  * sign-out control.
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -102,6 +102,25 @@ describe("AuthGate", () => {
     const accountLink = screen.getByRole("link", { name: "Dev Operator" });
     expect(accountLink).toHaveAttribute("href", "/account");
     expect(screen.getByRole("button", { name: /sign out/i })).toBeInTheDocument();
+  });
+
+  // The account name and sign-out are one control cluster, named for a
+  // screen reader, rather than two loose words in the header.
+  it("groups the account name and sign-out under one named group", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/auth/session")) {
+          return respond({ authenticated: true, display_name: "Dev Operator" })();
+        }
+        if (url.includes("/auth/setup")) return respond({ needed: false })();
+        throw new Error(`unexpected fetch ${url}`);
+      }),
+    );
+    render(<AuthGate>{(account) => <div>{account}dashboard</div>}</AuthGate>);
+    const group = await screen.findByRole("group", { name: /account/i });
+    expect(within(group).getByRole("link", { name: "Dev Operator" })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: /sign out/i })).toBeInTheDocument();
   });
 
   it("returns to the sign-in state once the sign-out control is used", async () => {

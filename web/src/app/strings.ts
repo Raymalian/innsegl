@@ -42,6 +42,8 @@ export const en = {
       anchoring: "Anchoring",
       /** RM-260/RM-261 (ADR-0062): the sign-out control beside ThemeToggle,
        * in the header. */
+      /** The group holding the account name and sign-out. */
+      account: "Account",
       signOut: "Sign out",
       signOutWorking: "Signing out",
     },

@@ -166,6 +166,26 @@ describe("SignInPage", () => {
       expect(screen.queryByLabelText(strings.signIn.recoveryLabel)).not.toBeInTheDocument();
     });
 
+    // One action per view: with the code form open, the passkey button gives
+    // way to the code's own primary button, and the heading says which way
+    // the person is signing in.
+    it("replaces the passkey button with the code's own primary action", async () => {
+      render(
+        <SignInPage onSignedIn={() => {}} onRecovered={() => {}} browser={workingBrowser()} />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: strings.signIn.recoveryLink }));
+
+      expect(screen.queryByRole("button", { name: strings.signIn.button })).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { level: 1, name: strings.signIn.recoveryHeading }),
+      ).toBeInTheDocument();
+      const submit = screen.getByRole("button", { name: strings.signIn.recoveryButton });
+      expect(submit.className).toContain("bg-accent-emphasis");
+      // The link back comes after the action, not before it.
+      const back = screen.getByRole("button", { name: strings.signIn.recoveryHideLink });
+      expect(submit.compareDocumentPosition(back) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
     it("signs in with a code and reports the display name and codes remaining", async () => {
       let sentBody: unknown;
       vi.stubGlobal(

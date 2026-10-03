@@ -195,6 +195,20 @@ describe("FE-021 flat navigation", () => {
 });
 
 describe("FE-021 theme control", () => {
+  // Compact in the header: each choice is an icon with its name kept for a
+  // screen reader and as a tooltip, not three words of running text.
+  it("shows each preference as an icon, its name for assistive tech and as a tooltip", () => {
+    render(<App />);
+    const group = screen.getByRole("group", { name: en.labels.theme.region });
+    for (const option of ["system", "light", "dark"] as const) {
+      const radio = within(group).getByRole("radio", { name: en.labels.theme[option] });
+      const label = radio.closest("label");
+      expect(label?.getAttribute("title")).toBe(en.labels.theme[option]);
+      expect(label?.querySelector("svg")).not.toBeNull();
+      expect(within(label as HTMLElement).getByText(en.labels.theme[option]).className).toContain("sr-only");
+    }
+  });
+
   it("presents the three preferences as one named group of radios", () => {
     render(<App />);
     const group = screen.getByRole("group", { name: en.labels.theme.region });

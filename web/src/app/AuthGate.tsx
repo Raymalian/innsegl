@@ -22,10 +22,12 @@
 import { useId, type ReactNode } from "react";
 
 import { SignOutControl } from "./SignOutControl";
+import { useStrings } from "./i18n";
 import { Link, navigate, usePath } from "./router";
 import { isSetupPath, setupCodeFrom } from "./routes";
 import { strings as authStrings } from "../views/auth/strings";
 import { SetupPage, SignInPage, useSessionState } from "../views/auth";
+import { hairline } from "../components/common/styles";
 import { chromeButton, focusRing, mutedText, noticeBase } from "../views/auth/styles";
 
 export interface AuthGateProps {
@@ -36,6 +38,7 @@ export interface AuthGateProps {
 
 export function AuthGate({ children, apiBase }: AuthGateProps) {
   const headingId = useId();
+  const strings = useStrings();
   const path = usePath();
   const { state, markAuthenticated, markSignedOut } = useSessionState(apiBase);
 
@@ -92,14 +95,21 @@ export function AuthGate({ children, apiBase }: AuthGateProps) {
            * `truncate` is the backstop for an unusually long name at `md`
            * and above, where it stays reachable but never dominates the
            * row. */}
-          <Link
-            to="/account"
-            title={state.displayName}
-            className={`${chromeButton} ${focusRing} hidden max-w-[10rem] truncate md:inline`}
+          <div
+            role="group"
+            aria-label={strings.labels.header.account}
+            className={`${hairline} flex items-center gap-0.5 rounded-sm border-line bg-surface p-0.5`}
           >
-            {state.displayName}
-          </Link>
-          <SignOutControl onSignedOut={markSignedOut} />
+            <Link
+              to="/account"
+              title={state.displayName}
+              className={`${chromeButton} ${focusRing} hidden max-w-[10rem] truncate font-medium text-ink md:inline`}
+            >
+              {state.displayName}
+            </Link>
+            <span aria-hidden="true" className="hidden h-4 w-px bg-line md:inline-block" />
+            <SignOutControl onSignedOut={markSignedOut} />
+          </div>
         </>,
       )}
     </>
