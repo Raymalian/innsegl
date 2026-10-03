@@ -1,6 +1,6 @@
 # ADR-0058: An agent's identity lifecycle is driven by its traffic
 
-- Status: accepted; amended 2026-10-01 (see the Amendment)
+- Status: accepted; amended 2026-10-01 and 2026-10-03 (see the Amendments)
 - Date: 2026-09-28
 - Deciders: the operator
 

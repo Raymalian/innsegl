@@ -321,7 +321,7 @@ DEMO_REPO ?= github.com/innsegl-demo/scratch
 
 ## innsegl-up: build the images, register the MCP, and boot the seven rows
 innsegl-up: sigstore-up
-	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) build
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES)
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) up -d
@@ -369,6 +369,13 @@ INNSEGL_PROJECTS ?= $(HOME)/Applications
 # The rule itself lives in scripts/repo-main-worktree.sh, so this and the
 # refusal in innsegl-link below cannot drift apart.
 REPO_PATH ?= $(shell $(CURDIR)/scripts/repo-main-worktree.sh)
+
+# INNSEGL_BUILD_SERVICES builds each image the stack runs exactly once. Several
+# services share one image, and `compose build` with no names builds and
+# unpacks that image once per service (measured: the same image exported
+# seven times, about 30s each, on every update). One service per image:
+# test/deploy/buildonce_test.go holds this list to the compose file.
+INNSEGL_BUILD_SERVICES := innsegl-mcp innsegl-backup innsegl-dashboard
 
 # DEPLOY_COMMIT names what a build is made from: HEAD, with "-dirty" when the
 # tracked files differ from it. Stamped on the image (dev.innsegl.commit), it
@@ -506,7 +513,7 @@ innsegl-here-services:
 	@# 2026-10-02: the gateway could not write its CA certificate.
 	mkdir -p "$${INNSEGL_GATEWAY_CA_HOST_DIR:-$$HOME/.innsegl/ca}" "$${INNSEGL_LOG_DIR:-$$HOME/.innsegl/log}" \
 	  "$${INNSEGL_BACKUP_HOST_DIR:-$$HOME/innsegl-backups}"
-	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(DEPLOY_COMMIT)' $(INNSEGL_COMPOSE) build
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(DEPLOY_COMMIT)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES)
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \

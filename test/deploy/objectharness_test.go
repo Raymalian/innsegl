@@ -307,6 +307,10 @@ type interpolatedService struct {
 	// StopGracePeriod is how long the runtime waits after SIGTERM before it
 	// kills the container; empty is the runtime's default (10s).
 	StopGracePeriod string `json:"stop_grace_period"`
+	// Build is the service's build section; nil when it only runs an image.
+	Build *struct {
+		Target string `json:"target"`
+	} `json:"build"`
 }
 
 // composePort is one resolved `ports:` entry, in the exact shape
