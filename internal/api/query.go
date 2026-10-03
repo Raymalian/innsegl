@@ -283,6 +283,10 @@ type AnchorHeartbeat struct {
 // by inventing a number here.
 type Overview struct {
 	ActiveRuns int `json:"active_runs"`
+	// IdleRuns is how many of ActiveRuns recorded no activity within
+	// IdleAfterSeconds. Counted inside ActiveRuns, never added to it.
+	IdleRuns         int   `json:"idle_runs"`
+	IdleAfterSeconds int64 `json:"idle_after_seconds"`
 	// LapsedRuns and AbandonedRuns are #256's two new counts, and NEITHER is
 	// counted in ActiveRuns. `expired_runs` is gone with the word: it named
 	// one bucket for two states that mean different things to an operator —
@@ -621,11 +625,13 @@ WITH scoped AS (
     -- overview saying "0 active" over a table listing active runs was one of
     -- the ways three copies of this rule made themselves felt. There is one
     -- copy now and it is internal/ledger's.
-    SELECT registered, ` + ledger.RunStateSQL + ` AS status
+    SELECT registered, last_activity_at, ` + ledger.RunStateSQL + ` AS status
       FROM rollup CROSS JOIN cutoff
 )
 SELECT
     count(*) FILTER (WHERE registered AND status = '` + ledger.RunActive + `')::int,
+    count(*) FILTER (WHERE registered AND status = '` + ledger.RunActive + `'
+                       AND (last_activity_at IS NULL OR last_activity_at < $2::timestamptz))::int,
     count(*) FILTER (WHERE status = '` + ledger.RunLapsed + `')::int,
     count(*) FILTER (WHERE status = '` + ledger.RunAbandoned + `')::int,
     count(*) FILTER (WHERE status = '` + ledger.RunRetired + `')::int,
@@ -655,12 +661,13 @@ func (s *Store) Overview(ctx context.Context) (Overview, error) {
 	horizon := s.RestoreHorizon()
 
 	var o Overview
-	if err := s.pool.QueryRow(ctx, overviewSQL, abandonedBefore(horizon, now)).Scan(
-		&o.ActiveRuns, &o.LapsedRuns, &o.AbandonedRuns, &o.RetiredRuns,
+	if err := s.pool.QueryRow(ctx, overviewSQL, abandonedBefore(horizon, now), now.Add(-s.idleAfter)).Scan(
+		&o.ActiveRuns, &o.IdleRuns, &o.LapsedRuns, &o.AbandonedRuns, &o.RetiredRuns,
 		&o.CommitsRecorded, &o.OpenAlerts); err != nil {
 		return Overview{}, fmt.Errorf("api: reading the overview: %w", err)
 	}
 	o.RestoreHorizonSeconds = int64(horizon.Seconds())
+	o.IdleAfterSeconds = int64(s.idleAfter.Seconds())
 	o.DataAsOf = now
 
 	var sealedAt time.Time
