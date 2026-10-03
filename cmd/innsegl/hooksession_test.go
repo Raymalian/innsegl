@@ -9,6 +9,8 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -206,5 +208,51 @@ func TestHookSessionNeverStopsAPromptForASlowGateway(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "deadline") {
 		t.Errorf("stderr %q does not say what happened", errOut.String())
+	}
+}
+
+// RM-329 (#500): the proxy is for Claude Code's own requests. The hook
+// removes the proxy variables that point at the client from the agent's
+// shell (CLAUDE_ENV_FILE), so git, npm, go and gh never depend on the client
+// being up, and never trust its CA. Variables that name another proxy are
+// the person's own and stay.
+func TestRM329TheHookTakesTheClientProxyOutOfTheAgentsShell(t *testing.T) {
+	_, post := capturePosts(nil)
+	envFile := filepath.Join(t.TempDir(), "sessionstart-hook-0.sh")
+	vars := map[string]string{
+		"INNSEGL_CORE_URL":    "http://127.0.0.1:28195",
+		"HTTPS_PROXY":         "http://127.0.0.1:28195",
+		"https_proxy":         "http://127.0.0.1:28195",
+		"HTTP_PROXY":          "http://proxy.corp.example:3128",
+		"NODE_EXTRA_CA_CERTS": filepath.Join(t.TempDir(), ".innsegl", "client", "proxy-ca.pem"),
+		"CLAUDE_ENV_FILE":     envFile,
+	}
+	in := `{"session_id":"7dc5d783-9896-4aef-84d9-a82114505fff","cwd":"/w","hook_event_name":"SessionStart"}`
+	for range 2 {
+		if code := runHookSession(strings.NewReader(in), &bytes.Buffer{}, &bytes.Buffer{}, env(vars), post); code != exitOK {
+			t.Fatalf("exit %d", code)
+		}
+	}
+	got, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("no env file written: %v", err)
+	}
+	want := "unset HTTPS_PROXY https_proxy NODE_EXTRA_CA_CERTS\n"
+	if string(got) != want {
+		t.Fatalf("env file %q, want %q once", got, want)
+	}
+}
+
+// Without the client as proxy there is nothing to remove, and nothing is
+// written.
+func TestRM329TheHookWritesNothingWhenTheClientIsNotTheProxy(t *testing.T) {
+	_, post := capturePosts(nil)
+	envFile := filepath.Join(t.TempDir(), "env.sh")
+	vars := map[string]string{"INNSEGL_CORE_URL": "http://127.0.0.1:28195", "CLAUDE_ENV_FILE": envFile,
+		"HTTPS_PROXY": "http://proxy.corp.example:3128"}
+	in := `{"session_id":"7dc5d783-9896-4aef-84d9-a82114505fff","cwd":"/w","hook_event_name":"SessionStart"}`
+	runHookSession(strings.NewReader(in), &bytes.Buffer{}, &bytes.Buffer{}, env(vars), post)
+	if _, err := os.Stat(envFile); err == nil {
+		t.Fatal("an env file was written with nothing to remove")
 	}
 }

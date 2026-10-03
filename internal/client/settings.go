@@ -27,6 +27,9 @@ type SettingsConfig struct {
 	HookBin string
 	// LocalURL is the client service's loopback endpoint, http://<listen>.
 	LocalURL string
+	// ProxyCA is the client's proxy CA certificate (Paths.ProxyCA), which
+	// NODE_EXTRA_CA_CERTS names (RM-329).
+	ProxyCA string
 	// LogDeny is the directory a sandboxed shell may not read (~/.innsegl).
 	LogDeny string
 	// CAAllow is the one directory under it the shell may read
@@ -69,20 +72,38 @@ func ReadStatusLine(path string) (any, error) {
 
 type envVar struct{ key, val string }
 
-// desiredEnv is install.sh's env block pointed at the local endpoint, without
-// NODE_EXTRA_CA_CERTS: the endpoint is plain http on loopback, and the
-// certificate that matters is the client's, held by the service.
+// noProxy keeps loopback off the proxy: the hooks, the commit path and the
+// telemetry exporter talk to the client directly.
+const noProxy = "127.0.0.1,localhost,::1"
+
+// desiredEnv routes Claude Code's requests through the client as its HTTPS
+// proxy (RM-329, #500). ANTHROPIC_BASE_URL is never set: Claude Code turns
+// off the features it reserves for a direct connection (Remote Control,
+// ultrareview) whenever it points anywhere but the provider. Both spellings
+// of each proxy variable are set, since Claude Code reads the lowercase one
+// first and a repository's settings could otherwise name another.
 func (c SettingsConfig) desiredEnv() []envVar {
 	return []envVar{
-		{"ANTHROPIC_BASE_URL", c.LocalURL},
 		{"INNSEGL_CORE_URL", c.LocalURL},
+		{"HTTPS_PROXY", c.LocalURL},
+		{"https_proxy", c.LocalURL},
+		{"HTTP_PROXY", c.LocalURL},
+		{"http_proxy", c.LocalURL},
+		{"NO_PROXY", noProxy},
+		{"no_proxy", noProxy},
+		{"NODE_EXTRA_CA_CERTS", c.ProxyCA},
 		{"CLAUDE_CODE_ENABLE_TELEMETRY", "1"},
 		{"OTEL_LOGS_EXPORTER", "otlp"},
 		{"OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"},
 		{"OTEL_EXPORTER_OTLP_ENDPOINT", c.LocalURL},
-		// Claude Code loads MCP tool definitions on demand only when it
-		// talks to the provider directly; behind any other base URL it sends
-		// every definition with every request. This turns it back on.
+	}
+}
+
+// legacyEnv is what earlier versions wrote and this one removes: the base
+// URL route, and the tool-search switch it needed.
+func (c SettingsConfig) legacyEnv() []envVar {
+	return []envVar{
+		{"ANTHROPIC_BASE_URL", c.LocalURL},
 		{"ENABLE_TOOL_SEARCH", "true"},
 	}
 }
@@ -225,6 +246,7 @@ func installKeys(obj *object, cfg SettingsConfig, path string, out io.Writer) er
 	for _, kv := range cfg.desiredEnv() {
 		env.set(kv.key, kv.val)
 	}
+	removeLegacyEnv(env, cfg, path, out)
 
 	hooks, err := obj.child("hooks")
 	if err != nil {
@@ -441,8 +463,35 @@ func appendUnique(o *object, key, val string) error {
 	return nil
 }
 
+// removeLegacyEnv takes out the base-URL route. A base URL connect did not
+// write goes too, and is said: while it points anywhere but the provider,
+// Claude Code sends its model requests there and not through the client, so
+// nothing would be recorded. The backup keeps it.
+func removeLegacyEnv(env *object, cfg SettingsConfig, path string, out io.Writer) {
+	for _, kv := range cfg.legacyEnv() {
+		v, present := env.get(kv.key)
+		if !present {
+			continue
+		}
+		if kv.key == "ANTHROPIC_BASE_URL" && v != kv.val {
+			fmt.Fprintf(out, "innsegl: removed env.ANTHROPIC_BASE_URL (%v) from %s: model requests must reach "+
+				"the provider through the client to be recorded; the backup keeps it\n", v, path)
+			env.del(kv.key)
+			continue
+		}
+		if v == kv.val {
+			env.del(kv.key)
+		}
+	}
+}
+
 func uninstallKeys(obj *object, cfg SettingsConfig, path string, out io.Writer) {
 	if env, ok := childIfObject(obj, "env"); ok {
+		for _, kv := range cfg.legacyEnv() {
+			if v, present := env.get(kv.key); present && v == kv.val {
+				env.del(kv.key)
+			}
+		}
 		for _, kv := range cfg.desiredEnv() {
 			v, present := env.get(kv.key)
 			if !present {

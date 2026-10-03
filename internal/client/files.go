@@ -30,20 +30,27 @@ type Paths struct {
 	Revoked string
 	// Journal holds what the core could not record (ADR-0068), 0700.
 	Journal string
+	// ProxyCA and ProxyCAKey are the client's own CA for opening the
+	// provider's traffic (RM-329): the certificate is what
+	// NODE_EXTRA_CA_CERTS names; the key never leaves this folder.
+	ProxyCA    string
+	ProxyCAKey string
 }
 
 // ClientPaths are the paths under home.
 func ClientPaths(home string) Paths {
 	dir := filepath.Join(home, ".innsegl", "client")
 	return Paths{
-		Dir:     dir,
-		Key:     filepath.Join(dir, "key.pem"),
-		Cert:    filepath.Join(dir, "cert.pem"),
-		Bundle:  filepath.Join(dir, "bundle.pem"),
-		CA:      filepath.Join(dir, "gateway-ca.pem"),
-		Core:    filepath.Join(dir, "core.json"),
-		Revoked: filepath.Join(dir, "revoked"),
-		Journal: filepath.Join(dir, "journal"),
+		Dir:        dir,
+		Key:        filepath.Join(dir, "key.pem"),
+		Cert:       filepath.Join(dir, "cert.pem"),
+		Bundle:     filepath.Join(dir, "bundle.pem"),
+		CA:         filepath.Join(dir, "gateway-ca.pem"),
+		Core:       filepath.Join(dir, "core.json"),
+		Revoked:    filepath.Join(dir, "revoked"),
+		Journal:    filepath.Join(dir, "journal"),
+		ProxyCA:    filepath.Join(dir, "proxy-ca.pem"),
+		ProxyCAKey: filepath.Join(dir, "proxy-ca-key.pem"),
 	}
 }
 
