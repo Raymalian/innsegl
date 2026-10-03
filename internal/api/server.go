@@ -76,6 +76,10 @@ type ServerConfig struct {
 	// mint and revoke. Optional. Nil answers the account page's organisation
 	// routes 503 and lists no organisations.
 	Organisations Organisations
+	// CoreCACertFile is the gateway's CA certificate (PEM), whose
+	// fingerprint the account page's connect command pins. Empty: the page
+	// shows a placeholder instead.
+	CoreCACertFile string
 }
 
 // Health is what an operator reads to see that "read-only" is a measured fact
@@ -165,6 +169,7 @@ type Server struct {
 	resolutionMux   *http.ServeMux
 	resolver        *Resolver
 	orgs            Organisations
+	coreCACertFile  string
 	webAuthn        *webauthn.WebAuthn
 	webAuthnConfig  WebAuthnConfig
 	sessionLifetime time.Duration
@@ -208,6 +213,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		sessionLifetime: sessionLifetime,
 		resolver:        cfg.Resolver,
 		orgs:            cfg.Organisations,
+		coreCACertFile:  cfg.CoreCACertFile,
 	}
 	s.authMux = s.newAuthMux()
 	s.accountMux = s.newAccountMux()

@@ -43,6 +43,7 @@ import type {
   Account,
   AccountAgents,
   AccountMachine,
+  AccountMachines,
   AccountOrganisation,
   AccountPasskey,
   AccountRepository,
@@ -536,10 +537,16 @@ function listOf<T>(body: unknown, key: string): T[] {
   return Array.isArray(list) ? (list as T[]) : [];
 }
 
-/** `GET /api/v1/account/machines`. A 503 (no accounts store) arrives as an
- * AuthRequestError with status 503. */
-export async function fetchMachines(base: string = DEFAULT_API_BASE): Promise<AccountMachine[]> {
-  return listOf<AccountMachine>(await getJSON(base, "/account/machines"), "machines");
+/** `GET /api/v1/account/machines`: the machines, and the core's CA
+ * fingerprint for the connect command ("" when the API cannot read it). A
+ * 503 (no accounts store) arrives as an AuthRequestError with status 503. */
+export async function fetchMachines(base: string = DEFAULT_API_BASE): Promise<AccountMachines> {
+  const body = await getJSON(base, "/account/machines");
+  const fingerprint = (body as Record<string, unknown>)["ca_fingerprint"];
+  return {
+    machines: listOf<AccountMachine>(body, "machines"),
+    ca_fingerprint: typeof fingerprint === "string" ? fingerprint : "",
+  };
 }
 
 /** `GET /api/v1/account/repositories`. */

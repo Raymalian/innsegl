@@ -4,9 +4,13 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -158,7 +162,7 @@ func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not read the machines' activity")
 		return
 	}
-	out := AccountMachines{Machines: make([]AccountMachine, len(machines))}
+	out := AccountMachines{Machines: make([]AccountMachine, len(machines)), CAFingerprint: s.coreCAFingerprint()}
 	for i, m := range machines {
 		out.Machines[i] = accountMachine(m, orgs[m.AccountID], lastRun)
 	}
@@ -518,4 +522,25 @@ func (s *Server) handleSignOutOthers(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAuth(ctx, AuthEventOtherSessionsSignedOut, userID, strconv.Itoa(n))
 	writeJSON(w, http.StatusOK, SignedOut{SignedOut: n})
+}
+
+// coreCAFingerprint reads the gateway's CA certificate and answers its
+// fingerprint as `innsegl connect --ca-fingerprint` takes it. Read on each
+// request: the gateway writes the file when it starts, which may be after
+// this API did. Empty when there is no readable certificate.
+func (s *Server) coreCAFingerprint() string {
+	if s.coreCACertFile == "" {
+		return ""
+	}
+	// #nosec G304 -- the deployment's own configured path.
+	text, err := os.ReadFile(s.coreCACertFile)
+	if err != nil {
+		return ""
+	}
+	block, _ := pem.Decode(text)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return ""
+	}
+	sum := sha256.Sum256(block.Bytes)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }

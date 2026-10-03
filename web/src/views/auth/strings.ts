@@ -188,12 +188,16 @@ export const strings = {
     connectHeading: "Connect a machine",
     connectIntro:
       "Mints a single-use enrolment token after your passkey confirms it. The token is shown once and works for 15 minutes.",
-    connectButton: "Connect a machine",
+    connectButton: "Continue with passkey",
     connectWorking: "Waiting for your passkey",
     connectFailed: "No token was minted",
     connectNeedsRole: "An owner or admin of the organisation can connect a machine.",
     connectOrganisationLabel: "Organisation",
-    connectKindLabel: "Kind",
+    connectKindLabel: "What kind of machine?",
+    connectKindHelp: {
+      workstation: "A person's computer. Records the Claude Code sessions run on it.",
+      service: "A CI runner or server. Records agents that run unattended.",
+    },
     tokenLabel: "Enrolment token",
     tokenOnce: "Shown once. Copy it now; it cannot be shown again.",
     commandLabel: "Run this on the new machine",

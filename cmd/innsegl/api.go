@@ -156,6 +156,9 @@ const (
 	// 2026-10-03 amendment): internal/api.ResolverRole, which may insert an
 	// alert resolution and nothing else. Optional.
 	envAPIResolverDSN = "INNSEGL_API_RESOLVER_DSN"
+	// envAPIGatewayCACert is the gateway's CA certificate, read so the
+	// account page's connect command carries its fingerprint. Optional.
+	envAPIGatewayCACert = "INNSEGL_API_GATEWAY_CA_CERT"
 )
 
 const (
@@ -244,6 +247,10 @@ type apiOptions struct {
 	// resolverDSN is the RESOLVER credential (internal/api.ResolverRole).
 	// Empty: the dashboard cannot resolve alerts, and says so.
 	resolverDSN string
+
+	// gatewayCACert is the gateway's CA certificate file. Empty: the
+	// account page's connect command shows a placeholder for it.
+	gatewayCACert string
 }
 
 // servedAPI is the running query API, as this command needs it. It is an
@@ -428,6 +435,9 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		rpOrigin = fs.String("rp-origin", envOr(envAPIRPOrigin, defaultAPIRPOrigin),
 			"the exact origin the dashboard is served from; a request whose Origin header "+
 				"names anything else is refused ($"+envAPIRPOrigin+")")
+		gatewayCACert = fs.String("gateway-ca-cert", os.Getenv(envAPIGatewayCACert),
+			"the gateway's CA certificate ($"+envAPIGatewayCACert+"), whose fingerprint the account "+
+				"page's connect command pins. Optional")
 		resolverDSN = fs.String("resolver-dsn", os.Getenv(envAPIResolverDSN),
 			"the RESOLVER connection string ($"+envAPIResolverDSN+") — internal/api.ResolverRole, "+
 				"which may insert an alert resolution and nothing else. Optional: without it the "+
@@ -465,7 +475,8 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		snapshotDir:   resolveSnapshotDir(*snapshotDir, *logDir),
 		messageKeyDir: *messageKeyDir,
 		authDSN:       *authDSN, rpID: *rpID, rpOrigin: *rpOrigin, sessionLifetime: *sessionLifetime,
-		resolverDSN: *resolverDSN,
+		resolverDSN:   *resolverDSN,
+		gatewayCACert: *gatewayCACert,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl api: %s\n", problem)

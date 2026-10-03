@@ -4,10 +4,21 @@ package api
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -40,6 +51,14 @@ type fakeOrgs struct {
 	err         error // answered by every call when set
 	mintErr     error
 	revokeErr   error
+	founded     int // FoundOperator calls
+}
+
+func (f *fakeOrgs) FoundOperator(context.Context) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.founded++
+	return f.founded == 1, f.err
 }
 
 func (f *fakeOrgs) Memberships(_ context.Context, userID string) ([]OrgMembership, error) {
@@ -134,7 +153,7 @@ type orgHarness struct {
 
 // newOrgHarness signs a user in and makes them role in organisation A and a
 // member of organisation B. Organisation C is someone else's.
-func newOrgHarness(t *testing.T, role string, withOrgs bool) orgHarness {
+func newOrgHarness(t *testing.T, role string, withOrgs bool, opts ...func(*ServerConfig)) orgHarness {
 	t.Helper()
 	m := migratedWithRoles(t)
 	seed(t, m.owner, 4)
@@ -152,6 +171,9 @@ func newOrgHarness(t *testing.T, role string, withOrgs bool) orgHarness {
 	}
 	if withOrgs {
 		cfg.Organisations = orgs
+	}
+	for _, o := range opts {
+		o(&cfg)
 	}
 	srv, err := NewServer(cfg)
 	if err != nil {
@@ -721,3 +743,74 @@ func ownerConnAPI(t *testing.T, ownerDSN string) (*pgx.Conn, context.Context) {
 }
 
 var errMachinesGone = errors.New("the machines went away")
+
+// The first user's enrolment founds the deployment's own organisation, so a
+// fresh install's account page has one to connect machines from.
+func TestFirstEnrolmentFoundsTheOperatorOrganisation(t *testing.T) {
+	h := newOrgHarness(t, roleOwner, true)
+	h.orgs.mu.Lock()
+	defer h.orgs.mu.Unlock()
+	if h.orgs.founded != 1 {
+		t.Fatalf("FoundOperator calls after the first enrolment = %d, want 1", h.orgs.founded)
+	}
+}
+
+// The account page's connect command pins the core by its CA's fingerprint,
+// read from the CA certificate the gateway writes, so a person copies a
+// command that works rather than one with a placeholder in it.
+func TestMachinesAnswerTheCoreCAFingerprint(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test CA"},
+		NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caFile := filepath.Join(t.TempDir(), "gateway-ca.pem")
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(der)
+	want := "sha256:" + hex.EncodeToString(sum[:])
+
+	h := newOrgHarness(t, roleOwner, true, func(c *ServerConfig) { c.CoreCACertFile = caFile })
+	a := get(t, h.srv.URL, "/api/v1/account/machines", h.cookie)
+	var got AccountMachines
+	decodeBody(t, a, &got)
+	if got.CAFingerprint != want {
+		t.Fatalf("ca_fingerprint = %q, want %q", got.CAFingerprint, want)
+	}
+
+	none := newOrgHarness(t, roleOwner, true)
+	var empty AccountMachines
+	decodeBody(t, get(t, none.srv.URL, "/api/v1/account/machines", none.cookie), &empty)
+	if empty.CAFingerprint != "" {
+		t.Fatalf("ca_fingerprint with no CA file = %q, want empty", empty.CAFingerprint)
+	}
+}
+
+// A machine's last activity is the newest ledger event of any run on it,
+// not when its newest run was first mapped: one long session kept a
+// machine looking idle for hours.
+func TestMachinesLastActivityIsTheNewestEventOfItsRuns(t *testing.T) {
+	h := newOrgHarness(t, roleOwner, true)
+	c, ctx := ownerConnAPI(t, h.ownerDSN)
+	if _, err := c.Exec(ctx, `INSERT INTO innsegl.gateway_run_mapping (run_id, session_id, agent_id, client_id, recorded_at)
+		VALUES ('run-000', 'session-run-000', 'main', $1, '2026-01-01T00:00:00Z')`, machineLaptop); err != nil {
+		t.Fatalf("insert mapping: %v", err)
+	}
+	var newest time.Time
+	if err := c.QueryRow(ctx, `SELECT max(ts) FROM innsegl.events WHERE run_id = 'run-000'`).Scan(&newest); err != nil {
+		t.Fatalf("reading run-000's events: %v", err)
+	}
+
+	var got AccountMachines
+	decodeBody(t, get(t, h.srv.URL, "/api/v1/account/machines", h.cookie), &got)
+	laptop := got.Machines[0]
+	if laptop.LastRunAt == nil || !laptop.LastRunAt.Equal(newest.UTC()) {
+		t.Fatalf("laptop last activity = %v, want the newest event %v", laptop.LastRunAt, newest.UTC())
+	}
+}
