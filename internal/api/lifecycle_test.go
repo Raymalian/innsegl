@@ -455,3 +455,32 @@ func TestAPI033TheHorizonIsReadOnceAndReportedAsItWasRead(t *testing.T) {
 		}
 	})
 }
+
+// TestAPI034TheOverviewCountsSilentActiveRunsAsIdle: a run the ledger reads
+// as active but that has done nothing for the idle bound is counted idle,
+// inside ActiveRuns, so the dashboard can say how many are working now.
+func TestAPI034TheOverviewCountsSilentActiveRunsAsIdle(t *testing.T) {
+	s := lifecycleFixture(t)
+	ctx := t.Context()
+
+	fresh, err := s.Overview(ctx)
+	if err != nil {
+		t.Fatalf("Overview: %v", err)
+	}
+	if fresh.IdleRuns != 0 {
+		t.Errorf("IdleRuns = %d just after the fixture's activity, want 0", fresh.IdleRuns)
+	}
+	if fresh.IdleAfterSeconds != int64(DefaultIdleAfter.Seconds()) {
+		t.Errorf("IdleAfterSeconds = %d, want %d", fresh.IdleAfterSeconds, int64(DefaultIdleAfter.Seconds()))
+	}
+
+	s.SetIdleAfter(time.Nanosecond)
+	silent, err := s.Overview(ctx)
+	if err != nil {
+		t.Fatalf("Overview: %v", err)
+	}
+	if silent.ActiveRuns != 2 || silent.IdleRuns != 2 {
+		t.Errorf("ActiveRuns, IdleRuns = %d, %d past the idle bound, want 2, 2",
+			silent.ActiveRuns, silent.IdleRuns)
+	}
+}

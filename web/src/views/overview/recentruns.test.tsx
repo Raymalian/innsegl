@@ -64,12 +64,12 @@ describe("FE-118 the overview's recent runs are a real table", () => {
     expect(table.querySelector("caption")?.textContent ?? "").not.toEqual("");
   });
 
-  it("names its six columns in the order the design sets them", () => {
+  it("names its seven columns in the order the design sets them", () => {
     render(<RecentRuns runs={RUNS} />);
     const headers = screen
       .getAllByRole("columnheader")
       .map((cell) => (cell.textContent ?? "").trim());
-    expect(headers).toEqual(["Status", "Run", "Repository", "Agent", "Task", "Commits"]);
+    expect(headers).toEqual(["Status", "Run", "Repository", "Agent", "Task", "Active for", "Commits"]);
     for (const cell of screen.getAllByRole("columnheader")) {
       expect(cell.getAttribute("scope")).toEqual("col");
     }
@@ -105,5 +105,19 @@ describe("FE-118 the overview's recent runs are a real table", () => {
     render(<RecentRuns runs={[]} />);
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.getByText(/no runs yet/i)).toBeInTheDocument();
+  });
+});
+
+describe("recent runs show how long each run was active", () => {
+  it("has an Active for column with the time from start to last activity", () => {
+    render(<RecentRuns runs={RUNS} now={new Date("2026-08-30T14:44:05Z")} />);
+    expect(screen.getByRole("columnheader", { name: /active for/i })).toBeInTheDocument();
+    expect(screen.getByText("30 min")).toBeInTheDocument();
+    expect(screen.getByText("1 h 31 min")).toBeInTheDocument();
+  });
+
+  it("marks an active run silent past the bound as idle", () => {
+    render(<RecentRuns runs={RUNS} now={new Date("2026-08-30T16:00:00Z")} />);
+    expect(screen.getByText("Idle")).toBeInTheDocument();
   });
 });

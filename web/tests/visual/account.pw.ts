@@ -10,6 +10,8 @@
 import { expect, test } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 
+import { installAccountMocks } from "../support/account-mocks";
+
 function json(route: Route, body: unknown): Promise<void> {
   return route.fulfill({
     status: 200,
@@ -17,29 +19,6 @@ function json(route: Route, body: unknown): Promise<void> {
     body: JSON.stringify(body),
   });
 }
-
-const ACCOUNT = {
-  user_id: "user-1",
-  display_name: "Dev Operator",
-  created_at: "2026-09-01T00:00:00Z",
-  passkeys: [
-    {
-      id: "pk-1",
-      name: "MacBook",
-      created_at: "2026-09-01T00:00:00Z",
-      last_used_at: "2026-09-30T00:00:00Z",
-      current: true,
-    },
-    {
-      id: "pk-2",
-      name: "Phone",
-      created_at: "2026-09-10T00:00:00Z",
-      last_used_at: null,
-      current: false,
-    },
-  ],
-  recovery_codes_remaining: 8,
-};
 
 const CODES = Array.from({ length: 10 }, (_, i) => `abcd-${String(i).padStart(4, "0")}`);
 
@@ -87,22 +66,6 @@ async function installUnauthenticatedMocks(page: Page, setupNeeded: boolean): Pr
     if (p === "/api/v1/auth/enrol/finish") {
       return json(route, { authenticated: true, display_name: "Dev Operator", recovery_codes: CODES });
     }
-    await route.fulfill({
-      status: 500,
-      contentType: "application/json",
-      body: JSON.stringify({ error: { code: "unmocked", message: `no fixture for ${p}` } }),
-    });
-  });
-}
-
-async function installAccountMocks(page: Page): Promise<void> {
-  await page.route("**/api/v1/**", async (route) => {
-    const p = new URL(route.request().url()).pathname;
-    if (p === "/api/v1/auth/session") {
-      return json(route, { authenticated: true, display_name: "Dev Operator" });
-    }
-    if (p === "/api/v1/auth/setup") return json(route, { needed: false });
-    if (p === "/api/v1/account") return json(route, ACCOUNT);
     await route.fulfill({
       status: 500,
       contentType: "application/json",
@@ -161,7 +124,10 @@ for (const mode of ["light", "dark"] as const) {
     test(`the account page (${mode})`, async ({ page }) => {
       await installAccountMocks(page);
       await page.goto("/account");
-      await expect(page.getByText("MacBook")).toBeVisible();
+      await expect(page.getByText("MacBook", { exact: true })).toBeVisible();
+  // RM-333: every section loads its own read; wait for the last ones.
+  await expect(page.getByText("This browser")).toBeVisible();
+  await expect(page.getByRole("link", { name: "claude-code" })).toBeVisible();
       await page.evaluate(() => document.fonts.ready);
 
       await expect(page).toHaveScreenshot(`account-page-${mode}.png`, {

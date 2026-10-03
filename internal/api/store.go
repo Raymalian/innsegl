@@ -32,6 +32,9 @@ type Store struct {
 	// actually refuses a restore are working from one number — see
 	// EnvRestoreHorizon for why it arrives that way rather than as a field.
 	restoreHorizon time.Duration
+	// idleAfter is how long an active run may do nothing before the
+	// overview counts it idle (DefaultIdleAfter).
+	idleAfter time.Duration
 	// parentSnapshotLookups counts parentSnapshotBefore queries, so a test
 	// can hold a run record to one per build (#440).
 	parentSnapshotLookups atomic.Int64
@@ -78,6 +81,7 @@ func OpenConfig(ctx context.Context, cfg *pgxpool.Config) (*Store, error) {
 		pool:           pool,
 		readOnly:       report,
 		restoreHorizon: restoreHorizonFromEnv(),
+		idleAfter:      DefaultIdleAfter,
 	}, nil
 }
 
@@ -104,6 +108,23 @@ func (s *Store) SetRestoreHorizon(d time.Duration) {
 		d = 0
 	}
 	s.restoreHorizon = d
+}
+
+// DefaultIdleAfter is how long an active run may record no activity before
+// the overview counts it idle. Active is the ledger's word: no retirement
+// and no standing withdrawal. A session killed without its end hook stays
+// active until the silence backstop retires it (ADR-0058 decision 7c), days
+// later; idle is how the dashboard tells it apart from an agent working now.
+// Fifteen minutes: longer than a model turn, shorter than a session left
+// overnight.
+const DefaultIdleAfter = 15 * time.Minute
+
+// SetIdleAfter replaces the idle bound, so a test need not wait for it.
+func (s *Store) SetIdleAfter(d time.Duration) {
+	if d <= 0 {
+		d = DefaultIdleAfter
+	}
+	s.idleAfter = d
 }
 
 // Close releases the pool.

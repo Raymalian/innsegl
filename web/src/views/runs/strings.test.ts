@@ -68,7 +68,7 @@ describe("FE-056 the catalogue is complete and reachable", () => {
     expect(entries.some(([k]) => k.startsWith("sentences."))).toBe(true);
   });
 
-  it("names RM-331's seven columns and no eighth", () => {
+  it("names its eight columns and no ninth", () => {
     expect(Object.keys(strings.labels.columns)).toEqual([
       "status",
       "repo",
@@ -76,6 +76,7 @@ describe("FE-056 the catalogue is complete and reachable", () => {
       "task",
       "started",
       "lastSeen",
+      "activeFor",
       "commits",
     ]);
   });

@@ -215,6 +215,7 @@ export function NotificationMenu({
             id={menuId}
             role="menu"
             aria-label={strings.menu.menuLabel}
+            className="max-h-[min(28rem,70vh)] overflow-y-auto"
             onKeyDown={onMenuKey}
           >
             <MenuBody
@@ -282,15 +283,31 @@ function MenuBody({
   }
   if (listed.length === 0) return <Note text={strings.menu.emptyDetail} />;
 
+  // Alerts of one kind share a line with a count (newest first): a burst of
+  // identical alerts is one item, not a page-long list.
+  const groups: { key: string; newest: AlertRecord; count: number }[] = [];
+  const byKey = new Map<string, { key: string; newest: AlertRecord; count: number }>();
+  for (const alert of listed) {
+    const key = `${alertTitle(alert)}\u0000${alertSummary(alert)}`;
+    const g = byKey.get(key);
+    if (g) {
+      g.count += 1;
+      continue;
+    }
+    const created = { key, newest: alert, count: 1 };
+    byKey.set(key, created);
+    groups.push(created);
+  }
+
   return (
     <>
-      {listed.map((alert) => {
+      {groups.slice(0, MENU_GROUPS).map(({ key, newest: alert, count }) => {
         const ts = new Date(alert.ts);
         return (
           <Link
-            key={alert.event_id}
+            key={key}
             role="menuitem"
-            to={{ view: "alert", eventId: alert.event_id }}
+            to={count > 1 ? ALERTS_PAGE : { view: "alert", eventId: alert.event_id }}
             className={menuItem}
             onClick={onFollow}
           >
@@ -307,13 +324,19 @@ function MenuBody({
                 {strings.menu.ago(elapsedSince(ts, now))}
               </time>
             </span>
-            <span className={menuItemSummary}>{alertSummary(alert)}</span>
+            <span className={menuItemSummary}>
+              {alertSummary(alert)}
+              {count > 1 ? ` · ${strings.menu.groupCount(count)}` : ""}
+            </span>
           </Link>
         );
       })}
     </>
   );
 }
+
+/** How many kinds of alert the menu lists before "see all". */
+const MENU_GROUPS = 8;
 
 /** A line inside the menu that is not a destination. A disabled item rather
  * than bare text, because a menu holds items and nothing else. */

@@ -25,6 +25,7 @@
 package clienttest
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -65,6 +66,9 @@ type Core struct {
 	// ClientCA issues client certificates; BundlePEM is its trust bundle.
 	ClientCA  *x509.Certificate
 	BundlePEM []byte
+	addr      string
+	tlsConfig *tls.Config
+
 	// Mux holds extra routes, served behind the client-certificate
 	// requirement.
 	Mux *http.ServeMux
@@ -420,4 +424,31 @@ func selfSigned(cn string) (*ecdsa.PrivateKey, *x509.Certificate, error) {
 	}
 	cert, err := x509.ParseCertificate(der)
 	return key, cert, err
+}
+
+// Stop closes the core's listener, as a core that went down; Restart serves
+// again on the same address with the same certificate, as one that came
+// back.
+func (c *Core) Stop() {
+	c.addr = c.Server.Listener.Addr().String()
+	c.tlsConfig = c.Server.TLS
+	c.Server.Close()
+}
+
+// Restart serves the core again on the address Stop left. It fails the test
+// when the address cannot be bound again.
+func (c *Core) Restart(t interface {
+	Helper()
+	Fatalf(string, ...any)
+}) {
+	t.Helper()
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", c.addr)
+	if err != nil {
+		t.Fatalf("restart the fake core on %s: %v", c.addr, err)
+	}
+	c.Server = httptest.NewUnstartedServer(http.HandlerFunc(c.serve))
+	c.Server.Listener = ln
+	c.Server.TLS = c.tlsConfig
+	c.Server.StartTLS()
 }

@@ -67,6 +67,13 @@ export const strings = {
     },
   },
 
+  /* An active run with nothing recorded for 15 minutes or more. */
+  idle: {
+    label: "Idle",
+    meaning:
+      "Active, but nothing has been recorded for this run for 15 minutes or more.",
+  },
+
   staleness: {
     prefix: "Data as of",
     ago: (duration: string) => `(${duration} ago)`,

@@ -107,3 +107,17 @@ describe("FE-131 the overview counts lapsed and abandoned", () => {
     );
   });
 });
+
+describe("the overview counts idle runs apart from the ones working now", () => {
+  it("leads with the runs working now and names the idle ones", () => {
+    view({ active_runs: 40, idle_runs: 37, idle_after_seconds: 15 * 60 });
+    const card = within(activeCard());
+    expect(card.getByText("3")).toBeInTheDocument();
+    expect(card.getByText(/\b37 idle\b/)).toBeInTheDocument();
+  });
+
+  it("reads an answer without idle_runs as none idle", () => {
+    view();
+    expect(within(activeCard()).getByText("7")).toBeInTheDocument();
+  });
+});

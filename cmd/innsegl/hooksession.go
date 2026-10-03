@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/commitpath"
 	"innsegl.dev/innsegl/internal/workspace"
 )
@@ -172,7 +173,14 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 	if err != nil {
 		return exitOK
 	}
-	err = post(strings.TrimSuffix(base, "/")+gatewaySessionWorkspacePath, body)
+	// Name the harness process that runs this session, so the client can
+	// end the session when that process is gone without its SessionEnd
+	// hook (internal/client/sessionwatch.go). The client keeps it.
+	statementURL := strings.TrimSuffix(base, "/") + gatewaySessionWorkspacePath
+	if harness, ok := client.HarnessProcess(); ok {
+		statementURL += "?" + client.HarnessProcessQuery(harness)
+	}
+	err = post(statementURL, body)
 	var unreachable *gatewayUnreachableError
 	var refused *gatewayRefusedError
 	switch {

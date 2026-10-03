@@ -100,7 +100,7 @@ export function Overview({
         <MetricCard
           id="active-agents"
           label={strings.metrics.activeAgents.label}
-          value={formatCount(data.active_runs)}
+          value={formatCount(data.active_runs - (data.idle_runs ?? 0))}
           description={strings.metrics.activeAgents.description}
           definition={
             <>
@@ -109,6 +109,7 @@ export function Overview({
             </>
           }
         >
+          <IdleBreakdown data={data} />
           <WithdrawnBreakdown data={data} />
         </MetricCard>
         <MetricCard
@@ -166,7 +167,7 @@ export function Overview({
         * digest and a Rekor index. */}
       <AnchoringEvidence anchor={data.anchor} now={at} />
 
-      <RecentRuns runs={recentRuns} />
+      <RecentRuns runs={recentRuns} now={at} />
     </div>
   );
 }
@@ -185,6 +186,20 @@ export function Overview({
  * restore it, or refuse to — and nothing here can see whether an agent is
  * still working (IP E7). FE-131 and FE-132 hold that.
  */
+/** Active runs that have recorded nothing lately: registered, not ended, and
+ * not working now. Kept out of the headline so it answers "how many are
+ * working", and named here so no run disappears from the card. */
+function IdleBreakdown({ data }: { readonly data: OverviewData }) {
+  const idle = data.idle_runs ?? 0;
+  if (idle === 0) return null;
+  const after = formatDuration((data.idle_after_seconds ?? 15 * 60) * 1000);
+  return (
+    <p className={mutedText}>
+      {strings.metrics.activeAgents.idle(formatCount(idle), after)}
+    </p>
+  );
+}
+
 /** The two counts kept apart from "active", one line, only when there is one. */
 function WithdrawnBreakdown({ data }: { readonly data: OverviewData }) {
   if (data.lapsed_runs === 0 && data.abandoned_runs === 0) return null;

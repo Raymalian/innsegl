@@ -48,6 +48,7 @@ import {
 import { formatAbsoluteUtcShort } from "../../components/common/time";
 import { VerificationSummary } from "../../components/verification";
 import { Link } from "../../app/router";
+import { activeFor, isIdle } from "./activity";
 import { lastSeenAgo } from "./lastseen";
 import type { RunsFilters } from "../../app/routes";
 
@@ -81,10 +82,13 @@ export interface RunsTableProps {
   /** The number of runs the FILTER matched, which is not the number on screen. */
   readonly total: number;
   readonly proofs?: RunProofSource;
+  /** The instant idle is judged at. Defaults to the render's own clock. */
+  readonly now?: Date;
 }
 
-export function RunsTable({ runs, total, proofs, filters }: RunsTableProps) {
+export function RunsTable({ runs, total, proofs, filters, now }: RunsTableProps) {
   const ascending = filters?.order === "asc";
+  const at = now ?? new Date();
   return (
     /* The same card the overview's recent runs sit in, from the same module
        (FE-121). doc 06 §3.1 and §3.2 are one treatment; two copies kept in
@@ -141,13 +145,16 @@ export function RunsTable({ runs, total, proofs, filters }: RunsTableProps) {
                 {strings.labels.columns.lastSeen}
               </th>
               <th scope="col" className={columnHeader}>
+                {strings.labels.columns.activeFor}
+              </th>
+              <th scope="col" className={columnHeader}>
                 {strings.labels.columns.commits}
               </th>
             </tr>
           </thead>
           <tbody>
             {runs.map((run) => (
-              <RunRow key={run.run_id} run={run} proofs={proofs?.(run) ?? []} />
+              <RunRow key={run.run_id} run={run} proofs={proofs?.(run) ?? []} now={at} />
             ))}
           </tbody>
         </table>
@@ -159,15 +166,16 @@ export function RunsTable({ runs, total, proofs, filters }: RunsTableProps) {
 function RunRow({
   run,
   proofs,
+  now,
 }: {
   readonly run: RunSummary;
   readonly proofs: readonly CommitProof[];
+  readonly now: Date;
 }) {
-  const now = new Date();
   return (
     <tr>
       <td className={cell}>
-        <StatusBadge status={run.status} />
+        <StatusBadge status={run.status} idle={isIdle(run.status, run.last_event_at, now)} />
       </td>
       <td className={cell}>
         <Repos repos={run.repos} />
@@ -189,6 +197,9 @@ function RunRow({
       </td>
       <td className={cell}>
         <Moment at={run.last_event_at} now={now} relative />
+      </td>
+      <td className={`${cell} whitespace-nowrap`}>
+        {activeFor(run.registered_at, run.last_event_at) ?? "—"}
       </td>
       <td className={cell}>
         <Commits run={run} proofs={proofs} />

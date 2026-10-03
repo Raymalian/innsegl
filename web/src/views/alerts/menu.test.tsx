@@ -136,6 +136,32 @@ describe("FE-134 the dropdown", () => {
     expect(more).toHaveAttribute("href", "/alerts");
   });
 
+  // Many alerts of one kind are one line with a count, not a page-long
+  // list (measured 2026-10-03: fifty identical items pushed the page down).
+  it("groups identical alerts into one item with a count, linking to the alerts page", async () => {
+    const user = userEvent.setup();
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      ...DRIFT,
+      event_id: `${DRIFT.event_id.slice(0, -2)}${String(i).padStart(2, "0")}`,
+      chain_position: DRIFT.chain_position + i,
+    }));
+    menu({ alerts: many, openCount: 20 });
+    await user.click(bell());
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    const grouped = items.find((i) => i.textContent?.includes(strings.alert.driftTitle));
+    expect(grouped).toHaveTextContent(strings.menu.groupCount(20));
+    expect(grouped).toHaveAttribute("href", "/alerts");
+    expect(items.filter((i) => i.textContent?.includes(strings.alert.driftTitle))).toHaveLength(1);
+  });
+
+  it("scrolls inside itself rather than growing the page", async () => {
+    const user = userEvent.setup();
+    menu();
+    await user.click(bell());
+    expect(screen.getByRole("menu").className).toMatch(/overflow-y-auto/);
+    expect(screen.getByRole("menu").className).toMatch(/max-h-/);
+  });
+
   it("says so when nothing is open, rather than showing an empty box", async () => {
     const user = userEvent.setup();
     menu({ alerts: [], openCount: 0 });
