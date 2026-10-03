@@ -21,14 +21,13 @@
 
 import { useId, type ReactNode } from "react";
 
-import { SignOutControl } from "./SignOutControl";
+import { AccountMenu } from "./SignOutControl";
 import { useStrings } from "./i18n";
-import { Link, navigate, usePath } from "./router";
+import { navigate, usePath } from "./router";
 import { isSetupPath, setupCodeFrom } from "./routes";
 import { strings as authStrings } from "../views/auth/strings";
 import { SetupPage, SignInPage, useSessionState } from "../views/auth";
-import { hairline } from "../components/common/styles";
-import { chromeButton, focusRing, mutedText, noticeBase } from "../views/auth/styles";
+import { mutedText, noticeBase } from "../views/auth/styles";
 
 export interface AuthGateProps {
   readonly children: (account: ReactNode) => ReactNode;
@@ -84,31 +83,13 @@ export function AuthGate({ children, apiBase }: AuthGateProps) {
     <>
       {children(
         <>
-          {/* `hidden md:inline`: FE-128 measures every view at 720px with
-           * the anchoring heartbeat's own long fixture text sharing this
-           * row (App.tsx's `min-w-0 flex-1` heartbeat slot, doc 06 §3.1's
-           * "never hidden" — so IT is not the element that yields).
-           * MEASURED: adding this link at its natural width (a short name
-           * like "Test Operator" alone) left the heartbeat only 23px for
-           * content that needs 108px. This link is chrome, not the
-           * heartbeat, so it is what gives way below `md`; `max-w` +
-           * `truncate` is the backstop for an unusually long name at `md`
-           * and above, where it stays reachable but never dominates the
-           * row. */}
-          <div
-            role="group"
-            aria-label={strings.labels.header.account}
-            className={`${hairline} flex items-center gap-0.5 rounded-sm border-line bg-surface p-0.5`}
-          >
-            <Link
-              to="/account"
-              title={state.displayName}
-              className={`${chromeButton} ${focusRing} hidden max-w-[10rem] truncate font-medium text-ink md:inline`}
-            >
-              {state.displayName}
-            </Link>
-            <span aria-hidden="true" className="hidden h-4 w-px bg-line md:inline-block" />
-            <SignOutControl onSignedOut={markSignedOut} />
+          {/* RM-333 (#511): the account name is a menu button holding Account
+           * and Sign out. It stays visible at every width, because sign-out
+           * now lives inside it; `max-w` + `truncate` keep a long name from
+           * crowding the anchoring heartbeat (FE-128 measures that row at
+           * 720px). */}
+          <div role="group" aria-label={strings.labels.header.account} className="flex items-center">
+            <AccountMenu displayName={state.displayName} onSignedOut={markSignedOut} />
           </div>
         </>,
       )}

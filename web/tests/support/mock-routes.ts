@@ -18,6 +18,8 @@
 
 import type { Page, Route } from "@playwright/test";
 
+import { answerAccountRoute } from "./account-mocks";
+
 import {
   ALERT_ID,
   RUN_ID,
@@ -64,6 +66,8 @@ export async function installApiMocks(page: Page): Promise<void> {
       await json(route, { needed: false });
       return;
     }
+    // #445 / RM-333 (#511): the account page's own reads.
+    if (await answerAccountRoute(route, "Test Operator")) return;
     if (p === "/api/v1/health") {
       await json(route, { database: {}, auth: { enrolled: true, cannot_write_ledger: {} } });
       return;

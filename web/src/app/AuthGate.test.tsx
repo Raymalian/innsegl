@@ -99,9 +99,73 @@ describe("AuthGate", () => {
     render(<AuthGate>{(account) => <div data-testid="protected">{account}dashboard</div>}</AuthGate>);
 
     expect(await screen.findByTestId("protected")).toBeInTheDocument();
-    const accountLink = screen.getByRole("link", { name: "Dev Operator" });
-    expect(accountLink).toHaveAttribute("href", "/account");
-    expect(screen.getByRole("button", { name: /sign out/i })).toBeInTheDocument();
+    const menuButton = screen.getByRole("button", { name: "Dev Operator" });
+    expect(menuButton).toHaveAttribute("aria-haspopup", "menu");
+    expect(menuButton).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  // RM-333 (#511): the account name opens a menu with Account and Sign out.
+  it("opens the account menu on click, with Account linking to /account and Sign out", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ authenticated: true, display_name: "Dev Operator" }, false),
+    );
+    const user = userEvent.setup();
+    render(<AuthGate>{(account) => <div data-testid="protected">{account}dashboard</div>}</AuthGate>);
+
+    const menuButton = await screen.findByRole("button", { name: "Dev Operator" });
+    await user.click(menuButton);
+    expect(menuButton).toHaveAttribute("aria-expanded", "true");
+    const menu = screen.getByRole("menu");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["Account", "Sign out"]);
+    expect(items[0]).toHaveAttribute("href", "/account");
+
+    await user.click(items[0]!);
+    expect(window.location.pathname).toBe("/account");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("works the account menu from the keyboard: ArrowDown opens on the first item, arrows move, Escape returns focus", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ authenticated: true, display_name: "Dev Operator" }, false),
+    );
+    const user = userEvent.setup();
+    render(<AuthGate>{(account) => <div data-testid="protected">{account}dashboard</div>}</AuthGate>);
+
+    const menuButton = await screen.findByRole("button", { name: "Dev Operator" });
+    menuButton.focus();
+    await user.keyboard("{ArrowDown}");
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    expect(items[0]).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(items[1]).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(items[0]).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(items[1]).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(menuButton).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    expect(within(screen.getByRole("menu")).getAllByRole("menuitem")[0]).toHaveFocus();
+  });
+
+  it("closes the account menu on a click outside it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ authenticated: true, display_name: "Dev Operator" }, false),
+    );
+    const user = userEvent.setup();
+    render(<AuthGate>{(account) => <div data-testid="protected">{account}dashboard</div>}</AuthGate>);
+
+    await user.click(await screen.findByRole("button", { name: "Dev Operator" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.click(screen.getByTestId("protected"));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   // The account name and sign-out are one control cluster, named for a
@@ -119,8 +183,7 @@ describe("AuthGate", () => {
     );
     render(<AuthGate>{(account) => <div>{account}dashboard</div>}</AuthGate>);
     const group = await screen.findByRole("group", { name: /account/i });
-    expect(within(group).getByRole("link", { name: "Dev Operator" })).toBeInTheDocument();
-    expect(within(group).getByRole("button", { name: /sign out/i })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "Dev Operator" })).toBeInTheDocument();
   });
 
   it("returns to the sign-in state once the sign-out control is used", async () => {
@@ -137,8 +200,8 @@ describe("AuthGate", () => {
     );
     render(<AuthGate>{(account) => <div data-testid="protected">{account}dashboard</div>}</AuthGate>);
 
-    const signOut = await screen.findByRole("button", { name: /sign out/i });
-    await userEvent.click(signOut);
+    await userEvent.click(await screen.findByRole("button", { name: "Dev Operator" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /sign out/i }));
 
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /sign in with a passkey/i })).toBeInTheDocument(),

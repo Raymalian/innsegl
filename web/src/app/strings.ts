@@ -44,6 +44,9 @@ export const en = {
        * in the header. */
       /** The group holding the account name and sign-out. */
       account: "Account",
+      /** RM-333 (#511): the account name opens a menu; these are its items. */
+      accountMenu: "Account menu",
+      accountPage: "Account",
       signOut: "Sign out",
       signOutWorking: "Signing out",
     },

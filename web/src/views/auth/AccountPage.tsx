@@ -14,24 +14,39 @@
  * rather than reconciling an optimistic local copy — the account is small
  * and the actions are rare, so a round trip after each one is simpler than
  * a second source of truth to keep in step.
+ *
+ * RM-333 (#511) adds the organisation half (AccountOrganisation.tsx): what
+ * the role allows, the machines, connecting a new one, the repositories and
+ * the agents — and the person's own sign-ins. Each of those sections loads
+ * its own read, so one that fails, or a deployment that keeps no
+ * organisation records, leaves the rest of the page standing.
  */
 
 import { useEffect, useId, useState, type FormEvent } from "react";
 
 import { navigate } from "../../app/router";
+import {
+  AgentsSection,
+  MachinesSection,
+  PrivilegesSection,
+  RepositoriesSection,
+} from "./AccountOrganisation";
 import { RecoveryCodesStep } from "./RecoveryCodesStep";
+import { AccountSection, CopyButton, SectionStatus, useSectionLoad, wordFor } from "./accountShared";
 import {
   AuthRequestError,
   addPasskey,
   fetchAccount,
+  fetchSessions,
   generateRecoveryCodes,
   realBrowser,
   removePasskey,
   renamePasskey,
+  signOutOtherSessions,
   updateAccount,
   type WebAuthnBrowser,
 } from "./client";
-import { formatDate } from "./format";
+import { formatDate, formatDateTime } from "./format";
 import { strings } from "./strings";
 import type { Account, AccountPasskey } from "./types";
 import {
@@ -41,15 +56,26 @@ import {
   columnHeader,
   currentBadge,
   degraded,
+  factList,
+  factTerm,
+  factValue,
   fieldInput,
   fieldLabel,
   fieldStack,
   focusRing,
+  idValue,
+  identityGrid,
+  identityName,
   inlineLinkButton,
+  introText,
   mutedText,
   noticeBase,
   noticeBody,
+  neutralPill,
+  orgList,
+  orgRow,
   pageHeading,
+  pageIntro,
   primaryButton,
   proseText,
   rowHeader,
@@ -57,10 +83,10 @@ import {
   secondaryText,
   section,
   sectionHeading,
+  smallButton,
   srOnly,
   table,
-  tablePanel,
-  tableScroll,
+  scrollingTablePanel,
 } from "./styles";
 
 export interface AccountPageProps {
@@ -109,9 +135,12 @@ export function AccountPage({ browser = realBrowser() }: AccountPageProps) {
 
   return (
     <section aria-labelledby={headingId} className={accountShell}>
-      <h1 id={headingId} className={pageHeading}>
-        {strings.account.heading}
-      </h1>
+      <header className={pageIntro}>
+        <h1 id={headingId} className={pageHeading}>
+          {strings.account.heading}
+        </h1>
+        <p className={introText}>{strings.account.summary}</p>
+      </header>
 
       {load.status === "loading" && <p className={proseText}>{strings.session.checking}</p>}
 
@@ -156,8 +185,13 @@ function AccountLoaded({
       )}
 
       <ProfileSection account={account} reload={reload} />
+      <PrivilegesSection organisations={account.organisations} />
+      <MachinesSection organisations={account.organisations} browser={browser} />
+      <RepositoriesSection multiOrg={account.organisations.length > 1} />
+      <AgentsSection />
       <PasskeysSection account={account} reload={reload} browser={browser} />
       <RecoverySection account={account} reload={reload} />
+      <SessionsSection />
     </>
   );
 }
@@ -182,6 +216,7 @@ function ProfileSection({
   const headingId = useId();
   const nameId = useId();
   const [phase, setPhase] = useState<ProfilePhase>({ status: "viewing" });
+  const a = strings.account;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -196,68 +231,103 @@ function ProfileSection({
       setPhase({
         status: "failed",
         name,
-        message: err instanceof AuthRequestError ? err.message : strings.account.loadFailed,
+        message: err instanceof AuthRequestError ? err.message : a.loadFailed,
       });
     }
   };
 
+  const editing = phase.status === "editing" || phase.status === "saving" || phase.status === "failed";
+
   return (
-    <section aria-labelledby={headingId} className={section}>
-      <h2 id={headingId} className={sectionHeading}>
-        {strings.account.profileHeading}
-      </h2>
-      <div className={card}>
-        {phase.status === "editing" || phase.status === "saving" || phase.status === "failed" ? (
-          <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
-            <div className={fieldStack}>
-              <label htmlFor={nameId} className={fieldLabel}>
-                {strings.account.nameLabel}
-              </label>
-              <input
-                id={nameId}
-                type="text"
-                required
-                autoComplete="off"
-                value={phase.name}
-                onChange={(event) => setPhase({ status: "editing", name: event.target.value })}
-                className={`${fieldInput} ${focusRing}`}
-              />
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="submit"
-                disabled={phase.status === "saving"}
-                className={`${primaryButton} ${focusRing}`}
-              >
-                {phase.status === "saving" ? strings.account.saving : strings.account.saveButton}
-              </button>
-              <button
-                type="button"
-                onClick={() => setPhase({ status: "viewing" })}
-                className={`${secondaryButton} ${focusRing}`}
-              >
-                {strings.account.cancelButton}
-              </button>
-            </div>
-            {phase.status === "failed" && (
-              <p role="alert" className={`${noticeBase} ${degraded}`}>
-                <span className={noticeBody}>{phase.message}</span>
-              </p>
-            )}
-          </form>
+    <section aria-labelledby={headingId} className={`${card} ${identityGrid}`}>
+      <div className="flex min-w-0 flex-col gap-3">
+        {editing ? (
+          <>
+            <h2 id={headingId} className={srOnly}>
+              {account.display_name}
+            </h2>
+            <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
+              <div className={fieldStack}>
+                <label htmlFor={nameId} className={fieldLabel}>
+                  {a.nameLabel}
+                </label>
+                <input
+                  id={nameId}
+                  type="text"
+                  required
+                  autoComplete="off"
+                  value={phase.name}
+                  onChange={(event) => setPhase({ status: "editing", name: event.target.value })}
+                  className={`${fieldInput} ${focusRing}`}
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={phase.status === "saving"}
+                  className={`${primaryButton} ${focusRing}`}
+                >
+                  {phase.status === "saving" ? a.saving : a.saveButton}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPhase({ status: "viewing" })}
+                  className={`${secondaryButton} ${focusRing}`}
+                >
+                  {a.cancelButton}
+                </button>
+              </div>
+              {phase.status === "failed" && (
+                <p role="alert" className={`${noticeBase} ${degraded}`}>
+                  <span className={noticeBody}>{phase.message}</span>
+                </p>
+              )}
+            </form>
+          </>
         ) : (
-          <div className="flex items-center gap-3">
-            <span className={fieldLabel}>{account.display_name}</span>
+          <div className="flex flex-wrap items-baseline gap-3">
+            <h2 id={headingId} className={identityName}>
+              {account.display_name}
+            </h2>
             <button
               type="button"
               onClick={() => setPhase({ status: "editing", name: account.display_name })}
-              className={`${inlineLinkButton}`}
+              className={inlineLinkButton}
             >
-              {strings.account.editButton}
+              {a.editButton}
             </button>
           </div>
         )}
+        <dl className={factList}>
+          <dt className={factTerm}>{a.userIdLabel}</dt>
+          <dd className={`${factValue} flex flex-wrap items-center gap-2`}>
+            <code className={idValue}>{account.user_id}</code>
+            <CopyButton value={account.user_id} label={a.copyUserId} />
+          </dd>
+          <dt className={factTerm}>{a.memberSince}</dt>
+          <dd className={`${factValue} ${secondaryText}`}>{formatDate(account.created_at)}</dd>
+        </dl>
       </div>
+      <dl className="flex min-w-0 flex-col gap-2">
+        <dt className={factTerm}>{a.organisationLabel}</dt>
+        <dd className={orgList}>
+          {account.organisations.length === 0 ? (
+            <span className={secondaryText}>{a.noOrganisation}</span>
+          ) : (
+            account.organisations.map((org) => (
+              <div key={org.id} className="flex flex-col gap-0.5">
+                <span className={orgRow}>
+                  <span className="font-medium text-ink">{org.name}</span>
+                  <span className={neutralPill}>{wordFor(a.roles, org.role)}</span>
+                </span>
+                {org.operator && (
+                  <span className={`text-micro ${mutedText}`}>{a.operatorOrganisation}</span>
+                )}
+              </div>
+            ))
+          )}
+        </dd>
+      </dl>
     </section>
   );
 }
@@ -324,11 +394,13 @@ function PasskeysSection({
 
   return (
     <section aria-labelledby={headingId} className={section}>
-      <h2 id={headingId} className={sectionHeading}>
-        {strings.account.passkeysHeading}
-      </h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 id={headingId} className={sectionHeading}>
+          {strings.account.passkeysHeading}
+        </h2>
+      </div>
 
-      <div className={`${tablePanel} ${tableScroll}`}>
+      <div className={scrollingTablePanel}>
         <table className={table}>
           <caption className={srOnly} id={tableHeadingId}>
             {strings.account.passkeysHeading}
@@ -394,13 +466,13 @@ function PasskeysSection({
                       </form>
                     ) : (
                       <div className="flex items-center gap-2">
-                        <span>{passkey.name === "" ? strings.account.unnamedPasskey : passkey.name}</span>
+                        <span className="whitespace-nowrap">{passkey.name === "" ? strings.account.unnamedPasskey : passkey.name}</span>
                         {passkey.current && <span className={currentBadge}>{strings.account.currentDevice}</span>}
                       </div>
                     )}
                   </th>
-                  <td className={cell}>{formatDate(passkey.created_at)}</td>
-                  <td className={cell}>
+                  <td className={`${cell} whitespace-nowrap`}>{formatDate(passkey.created_at)}</td>
+                  <td className={`${cell} whitespace-nowrap`}>
                     {passkey.last_used_at === null
                       ? strings.account.passkeyNeverUsed
                       : formatDate(passkey.last_used_at)}
@@ -486,9 +558,9 @@ function AddPasskeySection({
   readonly reload: () => void;
   readonly browser: WebAuthnBrowser;
 }) {
-  const headingId = useId();
   const nameId = useId();
   const nameHintId = useId();
+  const [open, setOpen] = useState(false);
   const [name, setName] = useState(() => defaultPasskeyName(account.passkeys.length));
   const [phase, setPhase] = useState<AddPhase>({ status: "idle" });
 
@@ -498,6 +570,7 @@ function AddPasskeySection({
     try {
       await addPasskey(name.trim(), browser);
       setPhase({ status: "idle" });
+      setOpen(false);
       setName(defaultPasskeyName(account.passkeys.length + 1));
       reload();
     } catch (err) {
@@ -505,14 +578,19 @@ function AddPasskeySection({
     }
   };
 
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className={smallButton}>
+        {strings.account.addOpenButton}
+      </button>
+    );
+  }
+
   return (
-    <div aria-labelledby={headingId} className={`${card} mt-3`}>
-      <h3 id={headingId} className={fieldLabel}>
-        {strings.account.addHeading}
-      </h3>
-      <form onSubmit={(e) => void submit(e)} className="flex flex-wrap items-end gap-3">
-        <div className={fieldStack}>
-          <label htmlFor={nameId} className={fieldLabel}>
+    <div className="flex flex-col gap-2">
+      <form onSubmit={(e) => void submit(e)} className="flex flex-wrap items-end gap-2">
+        <div className={`${fieldStack} min-w-[12rem] flex-1 sm:max-w-xs`}>
+          <label htmlFor={nameId} className={`text-micro ${fieldLabel}`}>
             {strings.account.addNameLabel}
           </label>
           <input
@@ -533,8 +611,18 @@ function AddPasskeySection({
         >
           {phase.status === "working" ? strings.account.addWorking : strings.account.addButton}
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            setPhase({ status: "idle" });
+          }}
+          className={`${secondaryButton.replace("self-start", "self-end")} ${focusRing}`}
+        >
+          {strings.account.cancelButton}
+        </button>
       </form>
-      <span id={nameHintId} className={secondaryText}>
+      <span id={nameHintId} className={`text-micro ${secondaryText}`}>
         {strings.account.addNameHint}
       </span>
       {phase.status === "failed" && (
@@ -647,5 +735,104 @@ function RecoverySection({
         )}
       </div>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sign-ins (RM-333, #511)
+// ---------------------------------------------------------------------------
+
+type SignOutPhase =
+  | { readonly status: "idle" }
+  | { readonly status: "working" }
+  | { readonly status: "done"; readonly count: number }
+  | { readonly status: "failed"; readonly message: string };
+
+function SessionsSection() {
+  const [load, reload] = useSectionLoad(fetchSessions);
+  const [phase, setPhase] = useState<SignOutPhase>({ status: "idle" });
+  const a = strings.account;
+  const others = load.status === "loaded" ? load.data.filter((x) => !x.current).length : 0;
+
+  const signOutOthers = async () => {
+    setPhase({ status: "working" });
+    try {
+      const count = await signOutOtherSessions();
+      setPhase({ status: "done", count });
+      reload();
+    } catch (err) {
+      setPhase({
+        status: "failed",
+        message: err instanceof AuthRequestError ? err.message : a.sectionFailed,
+      });
+    }
+  };
+
+  return (
+    <AccountSection heading={a.sessionsHeading} intro={a.sessionsIntro}>
+      <SectionStatus load={load} />
+      {load.status === "loaded" && (
+        <>
+          <div className={scrollingTablePanel}>
+            <table className={table}>
+              <caption className={srOnly}>{a.sessionsHeading}</caption>
+              <thead>
+                <tr>
+                  <th scope="col" className={columnHeader}>
+                    {a.sessionStartedHeader}
+                  </th>
+                  <th scope="col" className={columnHeader}>
+                    {a.sessionMethodHeader}
+                  </th>
+                  <th scope="col" className={columnHeader}>
+                    {a.sessionExpiresHeader}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {load.data.map((session) => (
+                  <tr key={session.id}>
+                    <th scope="row" className={`${rowHeader} whitespace-nowrap`}>
+                      <span className="inline-flex flex-wrap items-center gap-2">
+                        {formatDateTime(session.created_at)}
+                        {session.current && <span className={currentBadge}>{a.thisBrowser}</span>}
+                      </span>
+                    </th>
+                    <td className={`${cell} whitespace-nowrap`}>
+                      {session.passkey_name === null
+                        ? a.sessionRecoveryCode
+                        : a.sessionPasskey(session.passkey_name)}
+                    </td>
+                    <td className={`${cell} whitespace-nowrap`}>{formatDateTime(session.expires_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled={others === 0 || phase.status === "working"}
+              onClick={() => void signOutOthers()}
+              className={`${secondaryButton} ${focusRing}`}
+            >
+              {phase.status === "working" ? a.signOutOthersWorking : a.signOutOthers}
+            </button>
+            <span role="status" className={`text-micro ${secondaryText}`}>
+              {phase.status === "done"
+                ? `${a.signedOutOthers} ${phase.count}`
+                : others === 0
+                  ? a.noOtherSessions
+                  : ""}
+            </span>
+          </div>
+          {phase.status === "failed" && (
+            <p role="alert" className={`${noticeBase} ${degraded}`}>
+              <span className={noticeBody}>{phase.message}</span>
+            </p>
+          )}
+        </>
+      )}
+    </AccountSection>
   );
 }

@@ -12,6 +12,12 @@
  *   POST /api/v1/auth/login/begin    -> a WebAuthn request challenge
  *   POST /api/v1/auth/login/finish   the browser's assertion -> a session
  *   POST /api/v1/auth/logout         revokes the session
+ *   GET  /api/v1/account/machines, /sessions, /repositories, /agents
+ *   POST /api/v1/account/machines/revoke/begin, .../finish
+ *   POST /api/v1/account/enrolment-tokens/begin, .../finish
+ *   POST /api/v1/account/sessions/sign-out-others
+ *                                     RM-333 (#511): the organisation, its
+ *                                     machines and the person's sign-ins
  *   POST /api/v1/alert-resolutions/begin, .../finish
  *                                     RM-330: resolve alerts, confirmed
  *                                     with a fresh passkey assertion
@@ -33,7 +39,19 @@
  * base64url itself.
  */
 
-import type { Account, AccountPasskey, RecoverResult, RecoveryCodes, SetupStatus } from "./types";
+import type {
+  Account,
+  AccountAgents,
+  AccountMachine,
+  AccountOrganisation,
+  AccountPasskey,
+  AccountRepository,
+  AccountSession,
+  EnrolmentToken,
+  RecoverResult,
+  RecoveryCodes,
+  SetupStatus,
+} from "./types";
 
 const DEFAULT_API_BASE = "/api/v1";
 
@@ -375,6 +393,9 @@ function accountOf(body: unknown): Account {
     passkeys: Array.isArray(o["passkeys"]) ? o["passkeys"].map(passkeyOf) : [],
     recovery_codes_remaining:
       typeof o["recovery_codes_remaining"] === "number" ? o["recovery_codes_remaining"] : 0,
+    organisations: Array.isArray(o["organisations"])
+      ? (o["organisations"] as AccountOrganisation[])
+      : [],
   };
 }
 
@@ -502,4 +523,106 @@ export async function resolveAlerts(
       ? (finished as Record<string, unknown>)["resolutions"]
       : undefined;
   return Array.isArray(list) ? (list as WrittenResolution[]) : [];
+}
+
+// ---------------------------------------------------------------------------
+// RM-333 (#511): the organisation, its machines, repositories and agents,
+// and the person's own sign-ins.
+// ---------------------------------------------------------------------------
+
+function listOf<T>(body: unknown, key: string): T[] {
+  if (typeof body !== "object" || body === null) return [];
+  const list = (body as Record<string, unknown>)[key];
+  return Array.isArray(list) ? (list as T[]) : [];
+}
+
+/** `GET /api/v1/account/machines`. A 503 (no accounts store) arrives as an
+ * AuthRequestError with status 503. */
+export async function fetchMachines(base: string = DEFAULT_API_BASE): Promise<AccountMachine[]> {
+  return listOf<AccountMachine>(await getJSON(base, "/account/machines"), "machines");
+}
+
+/** `GET /api/v1/account/repositories`. */
+export async function fetchAccountRepositories(
+  base: string = DEFAULT_API_BASE,
+): Promise<AccountRepository[]> {
+  return listOf<AccountRepository>(await getJSON(base, "/account/repositories"), "repositories");
+}
+
+/** `GET /api/v1/account/agents`. */
+export async function fetchAccountAgents(base: string = DEFAULT_API_BASE): Promise<AccountAgents> {
+  const body = await getJSON(base, "/account/agents");
+  return {
+    agent_types: listOf(body, "agent_types"),
+    recent_runs: listOf(body, "recent_runs"),
+  };
+}
+
+/** `GET /api/v1/account/sessions`. */
+export async function fetchSessions(base: string = DEFAULT_API_BASE): Promise<AccountSession[]> {
+  return listOf<AccountSession>(await getJSON(base, "/account/sessions"), "sessions");
+}
+
+/** `POST /api/v1/account/sessions/sign-out-others`: how many were ended. */
+export async function signOutOtherSessions(base: string = DEFAULT_API_BASE): Promise<number> {
+  const body = await postJSON(base, "/account/sessions/sign-out-others", {});
+  const n =
+    typeof body === "object" && body !== null
+      ? (body as Record<string, unknown>)["signed_out"]
+      : undefined;
+  return typeof n === "number" ? n : 0;
+}
+
+/** A begin/finish pair confirmed by a fresh passkey assertion — the shape
+ * resolveAlerts uses, for the account surface's two passkey-gated actions. */
+async function confirmWithPasskey(
+  base: string,
+  path: string,
+  request: unknown,
+  browser: WebAuthnBrowser,
+): Promise<unknown> {
+  const begin = asCeremonyOptions(await postJSON(base, `${path}/begin`, request));
+  if (!browser.supported) {
+    throw new Error("this browser has no passkey support");
+  }
+  const options = browser.publicKeyCredential.parseRequestOptionsFromJSON(begin.publicKey);
+  const credential = await browser.credentials.get({ publicKey: options });
+  if (credential === null) {
+    throw new Error("no passkey was offered");
+  }
+  return postJSON(base, `${path}/finish`, {
+    ceremony_id: begin.ceremonyId,
+    credential: credentialJSON(credential),
+  });
+}
+
+/** Revoke one machine, confirmed with a passkey. Answers the machine as it
+ * now stands. */
+export async function revokeMachine(
+  machineId: string,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<AccountMachine> {
+  return (await confirmWithPasskey(
+    base,
+    "/account/machines/revoke",
+    { machine_id: machineId },
+    browser,
+  )) as AccountMachine;
+}
+
+/** Mint a single-use enrolment token, confirmed with a passkey. The token
+ * is in the answer once; nothing here stores it. */
+export async function mintEnrolmentToken(
+  organisationId: string,
+  kind: string,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<EnrolmentToken> {
+  return (await confirmWithPasskey(
+    base,
+    "/account/enrolment-tokens",
+    { organisation_id: organisationId, kind, repos: ["*"] },
+    browser,
+  )) as EnrolmentToken;
 }

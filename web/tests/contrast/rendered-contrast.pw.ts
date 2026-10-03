@@ -38,6 +38,7 @@ import { expect, test } from "@playwright/test";
 
 import { scanRenderedContrast } from "../support/browser-scan";
 import { RUN_ID } from "../support/api-fixtures";
+import { installAccountMocks, installFakePasskey } from "../support/account-mocks";
 import { installApiMocks } from "../support/mock-routes";
 import { VIEWS } from "../support/views";
 
@@ -91,6 +92,29 @@ for (const mode of ["light", "dark"] as const) {
         expect(violations, formatViolations(violations)).toEqual([]);
       });
     }
+  });
+
+  // RM-333 (#511): the account page, with the minted token shown and the
+  // header's account menu open, so every new surface is scanned.
+  test.describe(`FE-100: rendered contrast, the account page (${mode})`, () => {
+    test.use({ colorScheme: mode });
+
+    test("account: every rendered text pair clears WCAG 2.1 AA, token and menu open", async ({ page }) => {
+      await installFakePasskey(page);
+      await installAccountMocks(page);
+      await page.goto("/account");
+      await page.getByRole("button", { name: "Connect a machine" }).click();
+      await expect(page.getByRole("button", { name: "Copy command" })).toBeVisible();
+      await expect(page.getByText("This browser")).toBeVisible();
+      await page.getByRole("button", { name: "Dev Operator" }).click();
+      await expect(page.getByRole("menu")).toBeVisible();
+
+      const violations = await page.evaluate(scanRenderedContrast, {
+        rootSelector: "body",
+        minAreaPx2: MIN_AREA_PX2,
+      });
+      expect(violations, formatViolations(violations)).toEqual([]);
+    });
   });
 
   test.describe(`FE-100: rendered contrast, component scenarios (${mode})`, () => {

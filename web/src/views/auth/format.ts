@@ -21,3 +21,19 @@ export function formatDate(iso: string): string {
   if (Number.isNaN(parsed.getTime())) return iso;
   return dateFormatter.format(parsed);
 }
+
+const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  hourCycle: "h23",
+  timeZone: "UTC",
+});
+
+/** `formatDate` with the time of day, in UTC and on a 24-hour clock
+ * ("Oct 1, 2026, 00:15 UTC"), for an instant that matters to the minute:
+ * a token's expiry, a sign-in. */
+export function formatDateTime(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return `${dateTimeFormatter.format(parsed)} UTC`;
+}

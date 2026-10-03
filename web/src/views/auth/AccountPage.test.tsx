@@ -13,8 +13,141 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AccountPage } from "./AccountPage";
 import { strings } from "./strings";
-import type { Account } from "./types";
+import type {
+  Account,
+  AccountAgents,
+  AccountMachine,
+  AccountOrganisation,
+  AccountRepository,
+  AccountSession,
+} from "./types";
 import type { WebAuthnBrowser } from "./client";
+
+const ALL_ACTIONS = [
+  "read_ledger",
+  "resolve_alerts",
+  "manage_own_sign_in",
+  "connect_machine",
+  "revoke_machine",
+  "grant_repositories",
+  "manage_members",
+] as const;
+
+function privileges(role: string) {
+  const manages = role === "owner" || role === "admin";
+  return ALL_ACTIONS.map((action) => ({
+    action,
+    allowed:
+      action === "connect_machine" || action === "revoke_machine"
+        ? manages
+        : action !== "grant_repositories" && action !== "manage_members",
+  }));
+}
+
+const ORG_OWNER: AccountOrganisation = {
+  id: "org-1",
+  name: "example-org",
+  role: "owner",
+  operator: true,
+  privileges: privileges("owner"),
+};
+
+const ORG_MEMBER: AccountOrganisation = { ...ORG_OWNER, role: "member", privileges: privileges("member") };
+
+function machines(canManage = true): AccountMachine[] {
+  return [
+    {
+      id: "m-1",
+      organisation_id: "org-1",
+      organisation: "example-org",
+      name: "build-runner-1",
+      kind: "service",
+      status: "active",
+      repos: ["github.com/example/app"],
+      enrolled_at: "2026-09-05T00:00:00Z",
+      last_renewed_at: "2026-09-20T00:00:00Z",
+      last_run_at: "2026-09-29T00:00:00Z",
+      revoked_at: null,
+      can_manage: canManage,
+    },
+    {
+      id: "m-2",
+      organisation_id: "org-1",
+      organisation: "example-org",
+      name: "laptop",
+      kind: "workstation",
+      status: "revoked",
+      repos: ["*"],
+      enrolled_at: "2026-09-02T00:00:00Z",
+      last_renewed_at: null,
+      last_run_at: null,
+      revoked_at: "2026-09-25T00:00:00Z",
+      can_manage: canManage,
+    },
+  ];
+}
+
+const SESSIONS: AccountSession[] = [
+  {
+    id: "s-1",
+    created_at: "2026-10-01T00:00:00Z",
+    expires_at: "2026-10-02T00:00:00Z",
+    current: true,
+    passkey_name: "MacBook",
+  },
+  {
+    id: "s-2",
+    created_at: "2026-09-30T00:00:00Z",
+    expires_at: "2026-10-01T12:00:00Z",
+    current: false,
+    passkey_name: null,
+  },
+];
+
+const REPOSITORIES: AccountRepository[] = [
+  {
+    repo: "github.com/example/app",
+    organisation_id: "org-1",
+    organisation: "example-org",
+    since: "2026-09-03T00:00:00Z",
+    runs: 12,
+    commits: 30,
+    last_event_at: "2026-09-29T00:00:00Z",
+  },
+  {
+    repo: "github.com/example/docs",
+    organisation_id: "org-1",
+    organisation: "example-org",
+    since: "2026-09-04T00:00:00Z",
+    runs: 0,
+    commits: 0,
+    last_event_at: null,
+  },
+];
+
+const AGENTS: AccountAgents = {
+  agent_types: [
+    { agent_type: "claude-code", runs: 9, last_registered_at: "2026-09-29T00:00:00Z" },
+    { agent_type: "reviewer", runs: 3, last_registered_at: "2026-09-28T00:00:00Z" },
+  ],
+  recent_runs: [
+    {
+      run_id: "run-abc",
+      agent_type: "claude-code",
+      task_ref: "fix the build",
+      registered_at: "2026-09-29T00:00:00Z",
+      machine_id: "m-1",
+      machine_name: "build-runner-1",
+    },
+  ],
+};
+
+interface Spine {
+  machines?: AccountMachine[] | "unavailable";
+  sessions?: AccountSession[];
+  repositories?: AccountRepository[] | "unavailable";
+  agents?: AccountAgents | "unavailable";
+}
 
 function account(overrides: Partial<Account> = {}): Account {
   return {
@@ -38,6 +171,7 @@ function account(overrides: Partial<Account> = {}): Account {
       },
     ],
     recovery_codes_remaining: 8,
+    organisations: [ORG_OWNER],
     ...overrides,
   };
 }
@@ -64,8 +198,12 @@ function workingBrowser(): WebAuthnBrowser {
  * so a mutation's effect is visible on the next GET — the same "the real
  * server would do this" level of fidelity Playwright's page.route mocks
  * give, kept here so this file does not have to hand-wire call counts. */
-function installAccountFetch(initial: Account) {
+function installAccountFetch(initial: Account, spine: Spine = {}) {
   let current = initial;
+  let machineList = spine.machines ?? machines();
+  let sessionList = spine.sessions ?? SESSIONS;
+  const unavailable = () =>
+    respond({ error: { code: "unavailable", message: "no accounts store" } }, 503);
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
 
   vi.stubGlobal(
@@ -114,6 +252,47 @@ function installAccountFetch(initial: Account) {
         };
         current = { ...current, passkeys: [...current.passkeys, added] };
         return respond(added);
+      }
+      if (url.endsWith("/account/machines") && method === "GET") {
+        return machineList === "unavailable" ? unavailable() : respond({ machines: machineList });
+      }
+      if (url.endsWith("/account/machines/revoke/begin") && method === "POST") {
+        return respond({ ceremony_id: "cer-revoke", publicKey: { challenge: "abc" } });
+      }
+      if (url.endsWith("/account/machines/revoke/finish") && method === "POST") {
+        if (machineList === "unavailable") return unavailable();
+        machineList = machineList.map((m) =>
+          m.id === "m-1" ? { ...m, status: "revoked", revoked_at: "2026-10-01T00:00:00Z" } : m,
+        );
+        return respond(machineList[0]);
+      }
+      if (url.endsWith("/account/enrolment-tokens/begin") && method === "POST") {
+        return respond({ ceremony_id: "cer-token", publicKey: { challenge: "abc" } });
+      }
+      if (url.endsWith("/account/enrolment-tokens/finish") && method === "POST") {
+        return respond({
+          token: "ie_0123456789abcdef_secret",
+          expires_at: "2026-10-01T00:15:00Z",
+          organisation_id: "org-1",
+          kind: "workstation",
+          repos: ["*"],
+        });
+      }
+      if (url.endsWith("/account/sessions") && method === "GET") {
+        return respond({ sessions: sessionList });
+      }
+      if (url.endsWith("/account/sessions/sign-out-others") && method === "POST") {
+        const before = sessionList.length;
+        sessionList = sessionList.filter((x) => x.current);
+        return respond({ signed_out: before - sessionList.length });
+      }
+      if (url.endsWith("/account/repositories") && method === "GET") {
+        const r = spine.repositories ?? REPOSITORIES;
+        return r === "unavailable" ? unavailable() : respond({ repositories: r });
+      }
+      if (url.endsWith("/account/agents") && method === "GET") {
+        const a = spine.agents ?? AGENTS;
+        return a === "unavailable" ? unavailable() : respond(a);
       }
       if (url.endsWith("/account/recovery-codes") && method === "POST") {
         current = { ...current, recovery_codes_remaining: 10 };
@@ -222,6 +401,9 @@ describe("AccountPage", () => {
     render(<AccountPage browser={workingBrowser()} />);
 
     await screen.findByText("MacBook");
+    // Compact: the name field is not on the page until the action is chosen.
+    expect(screen.queryByDisplayValue("Passkey 3")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: strings.account.addOpenButton }));
     expect(screen.getByDisplayValue("Passkey 3")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: strings.account.addButton }));
 
@@ -269,6 +451,160 @@ describe("AccountPage", () => {
     );
     render(<AccountPage browser={workingBrowser()} />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("no session");
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts[0]).toHaveTextContent("no session");
+  });
+  it("shows the user id with a copy control, and the organisation and role", async () => {
+    installAccountFetch(account());
+    render(<AccountPage browser={workingBrowser()} />);
+
+    expect(await screen.findByText("user-1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: strings.account.copyUserId })).toBeInTheDocument();
+    const identity = screen.getByRole("region", { name: "Dev Operator" });
+    expect(within(identity).getByText("example-org")).toBeInTheDocument();
+    expect(within(identity).getByText(strings.account.roles.owner)).toBeInTheDocument();
+  });
+
+  it("lists what the role may and may not do, saying where the rest is done", async () => {
+    installAccountFetch(account({ organisations: [ORG_MEMBER] }));
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.privilegesHeading });
+    const allowed = within(region).getByRole("list", { name: strings.account.privilegesAllowed });
+    const denied = within(region).getByRole("list", { name: strings.account.privilegesDenied });
+    expect(within(allowed).getByText(strings.account.privileges.read_ledger)).toBeInTheDocument();
+    expect(within(denied).getByText(strings.account.privileges.connect_machine)).toBeInTheDocument();
+    expect(within(denied).getByText(strings.account.privileges.grant_repositories)).toBeInTheDocument();
+    expect(within(denied).getByText(strings.account.privilegeNotes.grant_repositories)).toBeInTheDocument();
+  });
+
+  it("lists the organisation's machines with status, repositories and last activity", async () => {
+    installAccountFetch(account());
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    const row = (await within(region).findByText("build-runner-1")).closest("tr");
+    if (row === null) throw new Error("no row for build-runner-1");
+    expect(within(row).getByText(strings.account.machineStatus.active)).toBeInTheDocument();
+    expect(within(row).getByText(strings.account.machineKind.service)).toBeInTheDocument();
+    expect(within(row).getByText("github.com/example/app")).toBeInTheDocument();
+    expect(within(row).getByText("Sep 29, 2026")).toBeInTheDocument();
+    const laptop = within(region).getByText("laptop").closest("tr");
+    if (laptop === null) throw new Error("no row for laptop");
+    expect(within(laptop).getByText(strings.account.machineStatus.revoked)).toBeInTheDocument();
+    expect(within(laptop).getByText(strings.account.allRepositories)).toBeInTheDocument();
+    expect(within(laptop).getByText(strings.account.notYet)).toBeInTheDocument();
+    expect(within(laptop).queryByRole("button", { name: strings.account.revokeButton })).toBeNull();
+  });
+
+  it("revokes a machine after a confirm step and a passkey", async () => {
+    const fetches = installAccountFetch(account());
+    const user = userEvent.setup();
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    const row = (await within(region).findByText("build-runner-1")).closest("tr");
+    if (row === null) throw new Error("no row");
+    await user.click(within(row).getByRole("button", { name: strings.account.revokeButton }));
+    expect(within(row).getByText(strings.account.revokeConfirmPrompt)).toBeInTheDocument();
+    await user.click(within(row).getByRole("button", { name: strings.account.revokeConfirmButton }));
+
+    await waitFor(() =>
+      expect(within(row).getByText(strings.account.machineStatus.revoked)).toBeInTheDocument(),
+    );
+    const begin = fetches.calls.find((c) => c.url.endsWith("/machines/revoke/begin"));
+    expect(begin?.body).toEqual({ machine_id: "m-1" });
+    expect(fetches.calls.some((c) => c.url.endsWith("/machines/revoke/finish"))).toBe(true);
+  });
+
+  it("does not offer revoke or connect to a member, and says who can", async () => {
+    installAccountFetch(account({ organisations: [ORG_MEMBER] }), { machines: machines(false) });
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    await within(region).findByText("build-runner-1");
+    expect(within(region).queryByRole("button", { name: strings.account.revokeButton })).toBeNull();
+    expect(within(region).queryByRole("button", { name: strings.account.connectButton })).toBeNull();
+    expect(within(region).getByText(strings.account.connectNeedsRole)).toBeInTheDocument();
+  });
+
+  it("connects a machine: a passkey, then the token once with the one-line command and its expiry", async () => {
+    const fetches = installAccountFetch(account());
+    const user = userEvent.setup();
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    await user.click(within(region).getByRole("button", { name: strings.account.connectButton }));
+
+    expect(await within(region).findByText("ie_0123456789abcdef_secret")).toBeInTheDocument();
+    const command = `innsegl connect https://${window.location.hostname}:28095 --token ie_0123456789abcdef_secret --ca ${strings.account.connectCaPlaceholder}`;
+    expect(within(region).getByText(command)).toBeInTheDocument();
+    expect(within(region).getByText(/00:15/)).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: strings.account.copyToken })).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: strings.account.copyCommand })).toBeInTheDocument();
+    const begin = fetches.calls.find((c) => c.url.endsWith("/enrolment-tokens/begin"));
+    expect(begin?.body).toEqual({ organisation_id: "org-1", kind: "workstation", repos: ["*"] });
+
+    await user.click(within(region).getByRole("button", { name: strings.account.connectDone }));
+    expect(within(region).queryByText("ie_0123456789abcdef_secret")).toBeNull();
+  });
+
+  it("says quietly when the deployment keeps no organisation records, without failing the page", async () => {
+    installAccountFetch(account(), {
+      machines: "unavailable",
+      repositories: "unavailable",
+      agents: "unavailable",
+    });
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    expect(await within(region).findByText(strings.account.spineUnavailable)).toBeInTheDocument();
+    expect(screen.getByText("MacBook")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("lists the organisation's repositories with runs, commits and last activity", async () => {
+    installAccountFetch(account());
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.repositoriesHeading });
+    const row = (await within(region).findByText("github.com/example/app")).closest("tr");
+    if (row === null) throw new Error("no row");
+    expect(within(row).getByText("12")).toBeInTheDocument();
+    expect(within(row).getByText("30")).toBeInTheDocument();
+    const docs = within(region).getByText("github.com/example/docs").closest("tr");
+    if (docs === null) throw new Error("no row");
+    expect(within(docs).getByText(strings.account.nothingRecorded)).toBeInTheDocument();
+  });
+
+  it("summarises agent types and links each recent run to its run page", async () => {
+    installAccountFetch(account());
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.agentsHeading });
+    const types = await within(region).findByRole("list", { name: strings.account.agentTypesHeading });
+    expect(within(types).getByRole("link", { name: /claude-code/ })).toHaveAttribute(
+      "href",
+      "/agent-types/claude-code",
+    );
+    expect(within(types).getByText("9")).toBeInTheDocument();
+    expect(within(region).getByRole("link", { name: "run-abc" })).toHaveAttribute("href", "/runs/run-abc");
+    expect(within(region).getByText("build-runner-1")).toBeInTheDocument();
+  });
+
+  it("lists sign-ins, marks this browser, and signs the others out", async () => {
+    const fetches = installAccountFetch(account());
+    const user = userEvent.setup();
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.sessionsHeading });
+    expect(await within(region).findByText(strings.account.thisBrowser)).toBeInTheDocument();
+    expect(within(region).getByText(strings.account.sessionRecoveryCode)).toBeInTheDocument();
+    await user.click(within(region).getByRole("button", { name: strings.account.signOutOthers }));
+
+    await waitFor(() =>
+      expect(within(region).queryByText(strings.account.sessionRecoveryCode)).toBeNull(),
+    );
+    expect(fetches.calls.some((c) => c.url.endsWith("/sessions/sign-out-others"))).toBe(true);
   });
 });

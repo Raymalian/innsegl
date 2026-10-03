@@ -5,67 +5,24 @@
  * keyboard walkthrough, doc 07's FE-009 pattern applied to the profile,
  * passkeys table, add-a-passkey form and recovery-codes section.
  *
- * Self-contained mocks, the same shape run-page's a11y suite uses, rather
- * than tests/support/mock-routes.ts (RM-049's own path): this page's own
- * read (`/api/v1/account`) is not one of the six views' routes.
+ * RM-333 (#511) adds the organisation sections, the minted-token panel,
+ * the sign-ins and the header's account menu. The fixtures live in
+ * tests/support/account-mocks.ts, shared with the visual suite.
  */
 
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
-function json(route: Route, body: unknown): Promise<void> {
-  return route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify(body),
-  });
-}
-
-const ACCOUNT = {
-  user_id: "user-1",
-  display_name: "Dev Operator",
-  created_at: "2026-09-01T00:00:00Z",
-  passkeys: [
-    {
-      id: "pk-1",
-      name: "MacBook",
-      created_at: "2026-09-01T00:00:00Z",
-      last_used_at: "2026-09-30T00:00:00Z",
-      current: true,
-    },
-    {
-      id: "pk-2",
-      name: "Phone",
-      created_at: "2026-09-10T00:00:00Z",
-      last_used_at: null,
-      current: false,
-    },
-  ],
-  recovery_codes_remaining: 8,
-};
-
-async function installMocks(page: Page): Promise<void> {
-  await page.route("**/api/v1/**", async (route) => {
-    const req = route.request();
-    const p = new URL(req.url()).pathname;
-    if (p === "/api/v1/auth/session") {
-      return json(route, { authenticated: true, display_name: "Dev Operator" });
-    }
-    if (p === "/api/v1/auth/setup") return json(route, { needed: false });
-    if (p === "/api/v1/account" && req.method() === "GET") return json(route, ACCOUNT);
-    await route.fulfill({
-      status: 500,
-      contentType: "application/json",
-      body: JSON.stringify({ error: { code: "unmocked", message: `no fixture for ${p}` } }),
-    });
-  });
-}
+import { installAccountMocks, installFakePasskey } from "../support/account-mocks";
 
 test("RM-279: the account page has no WCAG 2.1 AA violations", async ({ page }) => {
-  await installMocks(page);
+  await installAccountMocks(page);
   await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Account", exact: true })).toBeVisible();
-  await expect(page.getByText("MacBook")).toBeVisible();
+  await expect(page.getByText("MacBook", { exact: true })).toBeVisible();
+  // RM-333: every section loads its own read; wait for the last ones.
+  await expect(page.getByText("This browser")).toBeVisible();
+  await expect(page.getByRole("link", { name: "claude-code" })).toBeVisible();
 
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
@@ -79,16 +36,26 @@ test("RM-279: the account page has no WCAG 2.1 AA violations", async ({ page }) 
 test("RM-279: the profile edit, passkey rename/remove, add-passkey and recovery-code controls are all keyboard-reachable with a visible focus ring", async ({
   page,
 }) => {
-  await installMocks(page);
+  await installAccountMocks(page);
   await page.goto("/account");
-  await expect(page.getByText("MacBook")).toBeVisible();
+  await expect(page.getByText("MacBook", { exact: true })).toBeVisible();
+  // RM-333: every section loads its own read; wait for the last ones.
+  await expect(page.getByText("This browser")).toBeVisible();
+  await expect(page.getByRole("link", { name: "claude-code" })).toBeVisible();
 
   const targets = [
     page.getByRole("button", { name: "Edit" }),
+    page.getByRole("button", { name: "Copy user ID" }),
+    page.getByRole("button", { name: "Revoke" }).first(),
+    page.getByRole("combobox", { name: "Kind" }),
+    page.getByRole("button", { name: "Connect a machine" }),
+    page.getByRole("link", { name: "github.com/example/app" }),
+    page.getByRole("link", { name: "claude-code" }),
     page.getByRole("button", { name: "Rename" }).first(),
     page.getByRole("button", { name: "Remove" }).first(),
-    page.getByRole("button", { name: "Create passkey" }),
+    page.getByRole("button", { name: "Add a passkey" }),
     page.getByRole("button", { name: "Generate new codes" }),
+    page.getByRole("button", { name: "Sign out other sign-ins" }),
   ];
 
   for (const target of targets) {
@@ -99,13 +66,46 @@ test("RM-279: the profile edit, passkey rename/remove, add-passkey and recovery-
   }
 });
 
-test("RM-279: the top bar's account-name link reaches /account and the sign-in page reaches no view behind it", async ({
+test("RM-333: the header's account menu opens from the keyboard, has no violations open, and reaches /account", async ({
   page,
 }) => {
-  await installMocks(page);
+  await installAccountMocks(page);
   await page.goto("/");
-  const accountLink = page.getByRole("link", { name: "Dev Operator" });
-  await expect(accountLink).toHaveAttribute("href", "/account");
-  await accountLink.click();
+  const menuButton = page.getByRole("button", { name: "Dev Operator" });
+  await expect(menuButton).toHaveAttribute("aria-haspopup", "menu");
+  await menuButton.focus();
+  await page.keyboard.press("ArrowDown");
+  const accountItem = page.getByRole("menuitem", { name: "Account" });
+  await expect(accountItem).toBeFocused();
+  await expect(page.getByRole("menuitem", { name: "Sign out" })).toBeVisible();
+
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(
+    results.violations,
+    results.violations.map((v) => `${v.id}: ${v.help} (${v.nodes.length} node(s))`).join("\n"),
+  ).toEqual([]);
+
+  await page.keyboard.press("Escape");
+  await expect(menuButton).toBeFocused();
+  await menuButton.click();
+  await page.getByRole("menuitem", { name: "Account" }).click();
   await expect(page.getByRole("heading", { name: "Account", exact: true })).toBeVisible();
+});
+
+test("RM-333: the minted enrolment token and its command have no violations", async ({ page }) => {
+  await installFakePasskey(page);
+  await installAccountMocks(page);
+  await page.goto("/account");
+  await page.getByRole("button", { name: "Connect a machine" }).click();
+  await expect(page.getByRole("button", { name: "Copy command" })).toBeVisible();
+
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(
+    results.violations,
+    results.violations.map((v) => `${v.id}: ${v.help} (${v.nodes.length} node(s))`).join("\n"),
+  ).toEqual([]);
 });
