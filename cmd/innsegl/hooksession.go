@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -55,31 +55,22 @@ func (e *gatewayRefusedError) Error() string {
 }
 
 // unreachableMessage is what a person sees when their prompt is stopped
-// because the gateway is down. It names the cause and both ways out.
+// because the local client service does not answer: the harness reaches the
+// model through it (ADR-0069), so the prompt would fail. It names the cause
+// and the ways out. The core being down is not this: the client journals.
 func unreachableMessage(base string, err error) string {
-	var certErr *tls.CertificateVerificationError
-	if errors.As(err, &certErr) {
-		return fmt.Sprintf(`innsegl: the gateway at %s answered with a certificate this machine
-does not trust (%v). The gateway's CA has changed since install.sh copied
-it, so this prompt would fail.
-
-  Fix it:  re-run install.sh from the innsegl checkout, then restart Claude Code
-`, base, err)
+	restart := "systemctl --user restart innsegl-client"
+	if runtime.GOOS == "darwin" {
+		restart = "launchctl kickstart -k gui/$(id -u)/dev.innsegl.client"
 	}
-	// The hook runs as the checkout's own binary (install.sh), so its
-	// directory is where make start and install.sh are.
-	checkout := "<innsegl checkout>"
-	if exe, exeErr := innseglBinaryPath(); exeErr == nil {
-		checkout = filepath.Dir(exe)
-	}
-	return fmt.Sprintf(`innsegl: the gateway at %s is not answering (%v).
-Every model request goes through it, so this prompt would fail.
-The usual cause is Docker, or the innsegl stack, not running.
+	return fmt.Sprintf(`innsegl: the client service at %s is not answering (%v).
+Claude Code reaches the model through it, so this prompt would fail.
 
-  Start it:              cd %s && make start
-  Work without innsegl:  cd %s && ./install.sh --pause
+  Start it:              %s
+  See what is down:      innsegl status
+  Work without innsegl:  innsegl connect --pause
                          then restart Claude Code; --resume puts it back
-`, base, err, checkout, checkout)
+`, base, err, restart)
 }
 
 // runHookSession is `innsegl hook session`: the harness's SessionStart,
