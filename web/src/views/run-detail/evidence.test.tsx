@@ -6,7 +6,7 @@
  *   U | Run detail puts each event's own evidence next to it, and states every
  *     gap in that evidence rather than leaving it blank | Tool calls expand to
  *     their payload digest and say the ledger holds no body; commits show SHA,
- *     Rekor index and Rekor entry; canonical members are shown with an honest
+ *     Rekor index and Transparency log entry; canonical members are shown with an honest
  *     bound on what they are; canonical bytes that will not decode say so |
  *     FD §3.3, P1, P2, P5; doc 02 §3, §4
  *
@@ -48,12 +48,11 @@ describe("FE-084 tool calls expand to their digests", () => {
     canonical: { tool_name: "edit_file", payload_digest: DIGEST },
   });
 
-  it("names the tool, and offers the digests behind a disclosure", async () => {
+  it("names the tool, and offers the digests behind Details", async () => {
     const { text } = renderNode(toolCall);
     expect(text).toContain("edit_file");
-    const digests = screen.getByText("Digests");
-    await userEvent.click(digests);
-    expect(screen.getByText("Payload digest")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Details"));
+    expect(screen.getByText("Content digest")).toBeInTheDocument();
   });
 
   it("says the ledger holds no body, so an empty panel is not read as withholding", () => {
@@ -107,7 +106,7 @@ describe("FE-084 the tool-call count", () => {
 });
 
 describe("FE-084 a recorded commit carries its external record", () => {
-  it("shows the commit SHA, the Rekor log index and the Rekor entry", () => {
+  it("shows the commit SHA, the Rekor log index and the Transparency log entry", () => {
     const recorded = healthyTimeline().find(
       (event) => event.event_type === EVENT_TYPES.commitRecorded,
     ) as TimelineEvent;
@@ -116,7 +115,7 @@ describe("FE-084 a recorded commit carries its external record", () => {
     // doc 06 §4.3: a Rekor index is never abbreviated — it is a number a
     // reader types into a log query.
     expect(text).toContain("82914");
-    expect(text).toContain("Rekor entry");
+    expect(text).toContain("Transparency log entry");
   });
 });
 
@@ -124,10 +123,10 @@ describe("FE-084 canonical members, with an honest bound", () => {
   it("offers the members and states that they are not the hashed bytes", async () => {
     const recorded = healthyTimeline()[4] as TimelineEvent;
     renderNode(recorded);
-    await userEvent.click(screen.getByText("Canonical members"));
+    await userEvent.click(screen.getByText("Details"));
     expect(
       screen.getByText(
-        "These are the event's canonical members after JSON decoding. Re-deriving the event hash needs the exact response bytes, which this rendering does not preserve.",
+        "The event's fields as decoded from JSON. To recompute the hash you need the exact bytes of the response, which this view does not keep.",
       ),
     ).toBeInTheDocument();
   });
@@ -135,7 +134,7 @@ describe("FE-084 canonical members, with an honest bound", () => {
   it("says an undecodable canonical is undecodable, rather than rendering nothing", () => {
     const broken = ledgerEvent(EVENT_TYPES.runRetired, 6, { canonical: 42 });
     const { text } = renderNode(broken);
-    expect(text).toContain("This event's canonical members could not be decoded.");
+    expect(text).toContain("This event's record could not be read.");
     expect(text).toContain(
       "The ledger returned something this dashboard could not read as JSON.",
     );
@@ -144,7 +143,7 @@ describe("FE-084 canonical members, with an honest bound", () => {
   it("says an absent canonical is absent", () => {
     const bare = ledgerEvent(EVENT_TYPES.runRetired, 6);
     expect(renderNode(bare).text).toContain(
-      "This response carried no canonical members for this event.",
+      "This response held no record for this event.",
     );
   });
 

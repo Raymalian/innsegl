@@ -196,7 +196,7 @@ describe("FE-113 the integrity alarm is outside the tabs", () => {
     const [timeline] = await tabs();
     expect(timeline).toHaveAttribute("aria-selected", "true");
     const alarm = await screen.findByRole("alert");
-    expect(alarm).toHaveTextContent("A chain link in this run does not hold");
+    expect(alarm).toHaveTextContent("An event in this run does not match the one before it");
   });
 
   it("renders the banner in neither panel", async () => {
@@ -217,7 +217,7 @@ describe("FE-113 the integrity alarm is outside the tabs", () => {
     const [, activity] = await tabs();
     await userEvent.click(activity as HTMLElement);
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "A chain link in this run does not hold",
+      "An event in this run does not match the one before it",
     );
     expect(screen.getByRole("alert")).toBeVisible();
   });

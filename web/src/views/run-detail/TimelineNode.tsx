@@ -129,25 +129,28 @@ const MEMBER_VIEWS: readonly {
   /** Shown only on this event type. `payload_digest` is a tool call's body
    * digest everywhere else, and only on run_adopted is it the claim. */
   readonly only?: string;
+  /** Hashes and ids a reader compares rather than reads: behind Details. */
+  readonly technical?: boolean;
 }[] = [
   { member: MEMBERS.agentType, label: strings.detail.agentType },
   { member: MEMBERS.taskRef, label: strings.detail.taskRef },
   { member: MEMBERS.toolName, label: strings.detail.toolName },
   { member: MEMBERS.audience, label: strings.detail.audience },
   { member: MEMBERS.repo, label: strings.detail.repo },
-  { member: MEMBERS.treeHash, label: strings.detail.treeHash, kind: "sha" },
+  { member: MEMBERS.treeHash, label: strings.detail.treeHash, kind: "sha", technical: true },
   { member: MEMBERS.commitSHA, label: strings.detail.commitSha, kind: "sha" },
-  { member: MEMBERS.rekorLogIndex, label: strings.detail.rekorLogIndex, kind: "rekor" },
-  { member: MEMBERS.rekorEntryUUID, label: strings.detail.rekorEntryUuid, kind: "generic" },
-  { member: MEMBERS.intentEventID, label: strings.detail.intentEventId, kind: "generic" },
+  { member: MEMBERS.rekorLogIndex, label: strings.detail.rekorLogIndex, kind: "rekor", technical: true },
+  { member: MEMBERS.rekorEntryUUID, label: strings.detail.rekorEntryUuid, kind: "generic", technical: true },
+  { member: MEMBERS.intentEventID, label: strings.detail.intentEventId, kind: "generic", technical: true },
   {
     member: MEMBERS.certificateIdentity,
     label: strings.detail.certificateIdentity,
     kind: "spiffe",
+    technical: true,
   },
-  { member: MEMBERS.subjectEventID, label: strings.detail.subjectEventId, kind: "generic" },
+  { member: MEMBERS.subjectEventID, label: strings.detail.subjectEventId, kind: "generic", technical: true },
   { member: MEMBERS.reason, label: strings.detail.reason },
-  { member: MEMBERS.supersedes, label: strings.detail.supersedes, kind: "generic" },
+  { member: MEMBERS.supersedes, label: strings.detail.supersedes, kind: "generic", technical: true },
   // Schema 3's adoption (ADR-0051): which dead run, how the ledger read it,
   // and the claim that proves what was handed over.
   { member: MEMBERS.adoptedRunID, label: strings.detail.adoptedRunId, kind: "run" },
@@ -157,8 +160,9 @@ const MEMBER_VIEWS: readonly {
     label: strings.detail.claimDigest,
     kind: "generic",
     only: EVENT_TYPES.runAdopted,
+    technical: true,
   },
-  { member: MEMBERS.adoptionEventID, label: strings.detail.adoptionEventId, kind: "generic" },
+  { member: MEMBERS.adoptionEventID, label: strings.detail.adoptionEventId, kind: "generic", technical: true },
 ];
 
 /** The rail marker for an event. Neutral in every case — a node is a statement
@@ -242,13 +246,11 @@ export function TimelineNode({
           </div>
         ) : null}
 
-        <ChainLinkLine link={chainLink} event={event} />
+        {/* A broken link is a condition (doc 06 §4.5) and stays where it is
+          * seen; a link that holds, or cannot be checked here, is in Details. */}
+        {chainLink === "broken" ? <BrokenLink /> : null}
 
-        <Members event={event} />
-
-        {event.event_type === EVENT_TYPES.toolCall ? (
-          <ToolCallDigests event={event} />
-        ) : null}
+        <Members event={event} technical={false} />
 
         {isCommit ? (
           commitSHA === undefined ? (
@@ -262,7 +264,18 @@ export function TimelineNode({
           )
         ) : null}
 
-        <CanonicalMembers canonical={canonical} />
+        {/* Everything a reader compares rather than reads, in one place. */}
+        <details className={factList}>
+          <summary className={`${disclosure} ${focusRing} ${link}`}>
+            {strings.details.summary}
+          </summary>
+          <ChainLinkLine link={chainLink} event={event} />
+          <Members event={event} technical />
+          {event.event_type === EVENT_TYPES.toolCall ? (
+            <ToolCallDigests event={event} />
+          ) : null}
+          <CanonicalMembers canonical={canonical} />
+        </details>
       </div>
     </li>
   );
@@ -347,6 +360,17 @@ function Mark({
 /** What can be said about this event's link to the one above it, and — for the
  * eleven types with one legal writer — who wrote it. Four link states, because
  * three of them would mean asserting a chain nobody followed. */
+function BrokenLink() {
+  return (
+    <Mark
+      icon="integrity-alert"
+      tone={integrityAlert}
+      label={strings.chain.broken}
+      meaning={strings.chain.brokenDetail}
+    />
+  );
+}
+
 function ChainLinkLine({
   link: chainLink,
   event,
@@ -386,21 +410,18 @@ function ChainLinkLine({
   const { icon, label, detail, tone } = presentation[chainLink];
 
   return (
-    <details className={factList}>
-      <summary className={`${disclosure} ${focusRing} ${factRow}`}>
-        {tone === null ? (
-          <span className={`${factRow} ${mutedText}`}>
-            <Icon name={icon} className="shrink-0" />
-            <span>{label}</span>
-          </span>
-        ) : (
-          <Mark icon={icon} tone={tone} label={label} meaning={detail} />
-        )}
-      </summary>
+    <div className="flex flex-col gap-2">
+      {tone === null ? (
+        <span className={`${factRow} ${mutedText}`}>
+          <Icon name={icon} className="shrink-0" />
+          <span>{label}</span>
+        </span>
+      ) : (
+        <Mark icon={icon} tone={tone} label={label} meaning={detail} />
+      )}
       <p className={secondaryText}>{detail}</p>
-      {/* Moved here, not dropped: P1 puts the evidence next to the claim, and
-        * this disclosure is the event's own evidence. The value is still the
-        * ledger's own enum value, passed through untouched. */}
+      {/* Moved here, not dropped: P1 puts the evidence next to the claim. The
+        * value is still the ledger's own enum value, passed through untouched. */}
       {writerIsInformative(event) ? null : <Writer event={event} />}
       <dl className={factList}>
         <Fact label={strings.timeline.eventId} value={event.event_id} kind="generic" />
@@ -411,19 +432,26 @@ function ChainLinkLine({
           kind="generic"
         />
       </dl>
-    </details>
+    </div>
   );
 }
 
-/** doc 02 §3's type-specific members, as the ledger returned them. */
-function Members({ event }: { readonly event: TimelineEvent }) {
+function Members({
+  event,
+  technical,
+}: {
+  readonly event: TimelineEvent;
+  readonly technical: boolean;
+}) {
   const canonical = canonicalOf(event);
   const shown = MEMBER_VIEWS.map((view) => ({
     ...view,
     value: memberString(canonical, view.member),
   })).filter(
     (view) =>
-      view.value !== undefined && (view.only === undefined || view.only === event.event_type),
+      view.value !== undefined &&
+      (view.only === undefined || view.only === event.event_type) &&
+      (view.technical === true) === technical,
   );
   if (shown.length === 0) return null;
 
@@ -453,10 +481,7 @@ function ToolCallDigests({ event }: { readonly event: TimelineEvent }) {
   const canonical = canonicalOf(event);
   const digest = memberString(canonical, MEMBERS.payloadDigest);
   return (
-    <details className={factList}>
-      <summary className={`${disclosure} ${focusRing} ${link}`}>
-        {strings.toolCall.expand}
-      </summary>
+    <div className="flex flex-col gap-2">
       {digest === undefined ? (
         <p className={secondaryText}>{strings.toolCall.noDigest}</p>
       ) : (
@@ -465,18 +490,10 @@ function ToolCallDigests({ event }: { readonly event: TimelineEvent }) {
         </dl>
       )}
       <p className={secondaryText}>{strings.toolCall.bodyNotStored}</p>
-    </details>
+    </div>
   );
 }
 
-/**
- * The event's canonical members — doc 06 P1 and P5, with an honest bound on
- * what they are. `internal/api` writes the RFC 8785 bytes into the response
- * verbatim, but the client's own `JSON.parse` has already consumed them by the
- * time a component sees them, so this is the decoded members and not the byte
- * sequence doc 02 §4 hashes. Saying so is the difference between evidence and
- * something that looks like evidence.
- */
 function CanonicalMembers({
   canonical,
 }: {
@@ -499,15 +516,13 @@ function CanonicalMembers({
     return <p className={mutedText}>{strings.canonical.absent}</p>;
   }
   return (
-    <details className={factList}>
-      <summary className={`${disclosure} ${focusRing} ${link}`}>
-        {strings.canonical.heading}
-      </summary>
+    <div className="flex flex-col gap-2">
+      <p className={mutedText}>{strings.canonical.heading}</p>
       <p className={secondaryText}>{strings.canonical.detail}</p>
       <pre className={`${identifierText} overflow-x-auto`}>
         {JSON.stringify(canonical.members, null, 2)}
       </pre>
-    </details>
+    </div>
   );
 }
 

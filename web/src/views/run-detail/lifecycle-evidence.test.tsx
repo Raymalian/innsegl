@@ -86,13 +86,13 @@ describe("FE-130 the run page states its evidence", () => {
 
     // The four instants and the parent, each under its own label.
     expect(text).toContain("Last activity");
-    expect(text).toContain("Credential withdrawn");
-    expect(text).toContain("Restorable until");
-    expect(text).toContain("Parent run");
+    expect(text).toContain("Access withdrawn");
+    expect(text).toContain("Can be resumed until");
+    expect(text).toContain("Started by");
     expect(text).toContain(PARENT_RUN);
 
     // And the number that decided which of the two withdrawn states this is.
-    expect(text).toContain("Restore horizon");
+    expect(text).toContain("Resume window");
     expect(text).toContain("30 d");
   });
 
@@ -100,7 +100,7 @@ describe("FE-130 the run page states its evidence", () => {
     const text = renderRun(withdrawnRun("lapsed"));
     expect(text).toMatch(/Nothing heard since 2026-08-31 11:43:00 UTC/);
     // "Lapsed" means restorable for now, so the sentence says until when.
-    expect(text).toMatch(/can be restored/i);
+    expect(text).toMatch(/can be resumed/i);
     expect(text).toContain("2026-09-30 11:44:00 UTC");
   });
 
@@ -109,7 +109,7 @@ describe("FE-130 the run page states its evidence", () => {
       withdrawnRun("abandoned", { restorable_until: "2026-08-31T11:45:00.000Z" }),
     );
     expect(text).toMatch(/Nothing heard since 2026-08-31 11:43:00 UTC/);
-    expect(text).toMatch(/can no longer be restored/i);
+    expect(text).toMatch(/can no longer be resumed/i);
     // The claim it must not make. FE-132 holds this across the whole product;
     // it is asserted here too because this is the page that would make it.
     expect(text).not.toMatch(/\b(?:dead|died|death|dying|killed)\b/i);
@@ -119,7 +119,7 @@ describe("FE-130 the run page states its evidence", () => {
     const text = renderRun(withdrawnRun("active"));
     // The run is active because its newest fact is its own, but the
     // withdrawal happened and erasing it would be a second kind of lie.
-    expect(text).toContain("Credential withdrawn");
+    expect(text).toContain("Access withdrawn");
     expect(text).toContain("2026-08-31 11:44:00 UTC");
   });
 
@@ -133,8 +133,8 @@ describe("FE-130 the run page states its evidence", () => {
     // The zero time, which is what a struct with no `omitempty` would have
     // produced on the wire and what a careless render would print.
     expect(text).not.toContain("0001-01-01");
-    expect(text).not.toContain("Restorable until");
-    expect(text).not.toContain("Parent run");
+    expect(text).not.toContain("Can be resumed until");
+    expect(text).not.toContain("Started by");
     expect(text).toMatch(/never withdrawn|no withdrawal/i);
   });
 
@@ -144,7 +144,7 @@ describe("FE-130 the run page states its evidence", () => {
     );
     // P2: "we were not told" and "no horizon is set" are different facts.
     expect(text).not.toContain("30 d");
-    expect(text).toMatch(/did not report/i);
+    expect(text).toMatch(/did not say/i);
   });
 
   it("says so when the deployment set no horizon at all", () => {
@@ -154,7 +154,7 @@ describe("FE-130 the run page states its evidence", () => {
         restorable_until: undefined,
       }),
     );
-    expect(text).toMatch(/no restore horizon/i);
-    expect(text).not.toContain("Restorable until");
+    expect(text).toMatch(/no limit is set/i);
+    expect(text).not.toContain("Can be resumed until");
   });
 });
