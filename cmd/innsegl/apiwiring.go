@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"innsegl.dev/innsegl/internal/accounts"
 	"innsegl.dev/innsegl/internal/api"
 )
 
@@ -141,6 +142,19 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 	}
 	closers = append(closers, authStore.Close)
 
+	// ---- the accounts spine (RM-333) ---------------------------------------
+	//
+	// The account page's organisations, machines and repositories, and the
+	// passkey-gated mint and revoke. The SAME auth-writer credential as
+	// above, in a pool of its own: accounts.Open runs the same refusal, so
+	// nothing here widens what this process may write.
+	orgs, err := accounts.Open(boot, o.authDSN)
+	if err != nil {
+		unwind()
+		return nil, err
+	}
+	closers = append(closers, orgs.Close)
+
 	// ---- the resolver credential, optional (RM-330) -------------------------
 	//
 	// ADR-0044's 2026-10-03 amendment: a THIRD credential, which may insert
@@ -200,6 +214,7 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 		},
 		SessionLifetime: o.sessionLifetime,
 		Resolver:        resolver,
+		Organisations:   orgs,
 	})
 	if err != nil {
 		unwind()

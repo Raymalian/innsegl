@@ -35,6 +35,7 @@ func (s *Server) newAccountMux() *http.ServeMux {
 	mux.HandleFunc("PATCH /api/v1/account/passkeys/{id}", s.handlePasskeyRename)
 	mux.HandleFunc("DELETE /api/v1/account/passkeys/{id}", s.handlePasskeyDelete)
 	mux.HandleFunc("POST /api/v1/account/recovery-codes", s.handleRecoveryCodesRegenerate)
+	s.registerOrganisationRoutes(mux)
 	return mux
 }
 
@@ -144,6 +145,10 @@ func (s *Server) accountFor(ctx context.Context, userID, currentPasskeyID string
 	if err != nil {
 		return Account{}, err
 	}
+	orgs, err := s.organisationsOf(ctx, userID)
+	if err != nil {
+		return Account{}, err
+	}
 
 	passkeys := make([]AccountPasskey, len(rows))
 	for i, row := range rows {
@@ -154,7 +159,7 @@ func (s *Server) accountFor(ctx context.Context, userID, currentPasskeyID string
 	}
 	return Account{
 		UserID: u.UserID, DisplayName: u.DisplayName, CreatedAt: u.CreatedAt,
-		Passkeys: passkeys, RecoveryCodesRemaining: remaining,
+		Passkeys: passkeys, RecoveryCodesRemaining: remaining, Organisations: orgs,
 	}, nil
 }
 

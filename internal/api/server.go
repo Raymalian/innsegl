@@ -70,6 +70,12 @@ type ServerConfig struct {
 	// only an alert resolution. Optional. Nil answers both resolution routes
 	// 503 and leaves `innsegl resolve-alert` as the way to resolve.
 	Resolver *Resolver
+
+	// Organisations is the accounts spine (RM-333, #511): the user's
+	// organisations, their machines and repositories, and the passkey-gated
+	// mint and revoke. Optional. Nil answers the account page's organisation
+	// routes 503 and lists no organisations.
+	Organisations Organisations
 }
 
 // Health is what an operator reads to see that "read-only" is a measured fact
@@ -158,6 +164,7 @@ type Server struct {
 	accountMux      *http.ServeMux
 	resolutionMux   *http.ServeMux
 	resolver        *Resolver
+	orgs            Organisations
 	webAuthn        *webauthn.WebAuthn
 	webAuthnConfig  WebAuthnConfig
 	sessionLifetime time.Duration
@@ -200,6 +207,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		webAuthnConfig:  cfg.WebAuthn,
 		sessionLifetime: sessionLifetime,
 		resolver:        cfg.Resolver,
+		orgs:            cfg.Organisations,
 	}
 	s.authMux = s.newAuthMux()
 	s.accountMux = s.newAccountMux()
