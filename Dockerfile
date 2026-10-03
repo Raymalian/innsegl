@@ -66,7 +66,12 @@ RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/g
       go install github.com/sigstore/gitsign@${GITSIGN_VERSION} \
  && ls /out/gitsign
 
-COPY . .
+# The Go sources and nothing else: a change to the dashboard, the docs or
+# the deployment files must not rebuild this image and restart every service
+# that runs it. The Makefile's GO_IMAGE_INPUTS is the same list.
+COPY cmd ./cmd
+COPY internal ./internal
+COPY migrations ./migrations
 
 # The version stamp. Defaulted rather than required so a bare `docker build .`
 # still produces a working image; the compose stack and the release workflow
