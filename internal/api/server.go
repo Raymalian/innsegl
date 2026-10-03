@@ -431,6 +431,7 @@ func runFilterFrom(r *http.Request) (RunFilter, error) {
 		Repo:      q.Get("repo"),
 		AgentType: q.Get("agent_type"),
 		Status:    q.Get("status"),
+		Activity:  q.Get("activity"),
 		Search:    q.Get("q"),
 		Cursor:    q.Get("cursor"),
 	}

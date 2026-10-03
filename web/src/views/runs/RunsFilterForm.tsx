@@ -93,10 +93,15 @@ export function endOfDay(day: string): string {
   return day === "" ? "" : `${day}T23:59:59Z`;
 }
 
+/** The Status control's choices. "working" and "idle" are the ledger's
+ * active state split by the idle bound, matching the badges; "active" is
+ * both, and is offered only when a link asked for it. */
+type StatusChoice = RunStatus | "working" | "idle" | "";
+
 interface Draft {
   repo: string;
   agentType: string;
-  status: RunStatus | "";
+  status: StatusChoice;
   from: string;
   to: string;
   search: string;
@@ -106,7 +111,7 @@ function draftOf(filters: RunsFilters): Draft {
   return {
     repo: filters.repo,
     agentType: filters.agentType,
-    status: filters.status,
+    status: choiceOf(filters),
     from: dateInputOf(filters.from),
     to: dateInputOf(filters.to),
     search: filters.search,
@@ -115,6 +120,25 @@ function draftOf(filters: RunsFilters): Draft {
 
 const isRunStatus = (value: string): value is RunStatus =>
   (RUN_STATUSES as readonly string[]).includes(value);
+
+const isStatusChoice = (value: string): value is StatusChoice =>
+  value === "working" || value === "idle" || isRunStatus(value);
+
+function choiceOf(filters: RunsFilters): StatusChoice {
+  if (filters.status === "active" && filters.activity) return filters.activity;
+  return filters.status;
+}
+
+/** The status and activity parameters a choice asks the query API for. */
+function filtersOfChoice(choice: StatusChoice): Pick<RunsFilters, "status" | "activity"> {
+  switch (choice) {
+    case "working":
+    case "idle":
+      return { status: "active", activity: choice };
+    default:
+      return { status: choice, activity: "" };
+  }
+}
 
 export interface RunsFilterFormProps {
   readonly filters: RunsFilters;
@@ -131,7 +155,7 @@ export function RunsFilterForm({ filters, repos = [] }: RunsFilterFormProps) {
       runsLinkPath({
         repo: draft.repo,
         agentType: draft.agentType,
-        status: draft.status,
+        ...filtersOfChoice(draft.status),
         search: draft.search,
         from: startOfDay(draft.from),
         to: endOfDay(draft.to),
@@ -208,14 +232,19 @@ export function RunsFilterForm({ filters, repos = [] }: RunsFilterFormProps) {
             onChange={(event) =>
               setDraft({
                 ...draft,
-                status: isRunStatus(event.target.value)
+                status: isStatusChoice(event.target.value)
                   ? event.target.value
                   : "",
               })
             }
           >
             <option value="">{strings.labels.filters.anyStatus}</option>
-            {RUN_STATUSES.map((status) => (
+            <option value="working">{common.status.active.label}</option>
+            <option value="idle">{common.idle.label}</option>
+            {draft.status === "active" && (
+              <option value="active">{strings.labels.filters.activeOrIdle}</option>
+            )}
+            {RUN_STATUSES.filter((status) => status !== "active").map((status) => (
               <option key={status} value={status}>
                 {common.status[status].label}
               </option>

@@ -211,3 +211,44 @@ describe("FE-010 the runs table's state lives in the URL", () => {
     expect(here()).toBe(link);
   });
 });
+
+/*
+ * The Status filter matches the badges: Active is a run working now, Idle is
+ * an active run that has recorded nothing for the idle bound. Both are the
+ * ledger's active state split by the query API's `activity` parameter.
+ */
+describe("the status filter splits active runs into Active and Idle", () => {
+  it("asks for working runs when Active is chosen", async () => {
+    const { requests, source } = recordingSource();
+    render(<RunsView source={source} />);
+    await screen.findByRole("table");
+    fireEvent.change(screen.getByLabelText(strings.labels.filters.status), { target: { value: "working" } });
+    fireEvent.click(screen.getByRole("button", { name: strings.labels.filters.apply }));
+    await waitFor(() => expect(here()).not.toBe(RUNS_PATH));
+    const q = new URL(here(), "http://dashboard.invalid").searchParams;
+    expect(q.get("status")).toBe("active");
+    expect(q.get("activity")).toBe("working");
+    await waitFor(() => expect(requests.at(-1)).toContain("activity=working"));
+  });
+
+  it("asks for idle runs when Idle is chosen", async () => {
+    const { source } = recordingSource();
+    render(<RunsView source={source} />);
+    await screen.findByRole("table");
+    fireEvent.change(screen.getByLabelText(strings.labels.filters.status), { target: { value: "idle" } });
+    fireEvent.click(screen.getByRole("button", { name: strings.labels.filters.apply }));
+    await waitFor(() => expect(here()).not.toBe(RUNS_PATH));
+    const q = new URL(here(), "http://dashboard.invalid").searchParams;
+    expect(q.get("status")).toBe("active");
+    expect(q.get("activity")).toBe("idle");
+  });
+
+  it("reads a link that names only the active state as active or idle", async () => {
+    window.history.replaceState(null, "", "/runs?status=active");
+    const { source } = recordingSource();
+    render(<RunsView source={source} />);
+    await screen.findByRole("table");
+    const select = screen.getByLabelText<HTMLSelectElement>(strings.labels.filters.status);
+    expect(select.selectedOptions[0]?.textContent).toBe(strings.labels.filters.activeOrIdle);
+  });
+});

@@ -155,6 +155,9 @@ type RunFilter struct {
 	Repo      string
 	AgentType string
 	Status    string
+	// Activity splits active runs by the idle bound (DefaultIdleAfter):
+	// ActivityWorking or ActivityIdle. Either one implies the active state.
+	Activity string
 	// Order is "asc" or "desc"; empty means newest-first.
 	Order    string
 	Search   string
@@ -401,6 +404,11 @@ const listRunsSQL = runIndexCTE + `, filtered AS (
             OR run_id    ILIKE $7 ESCAPE '\'
             OR spiffe_id ILIKE $7 ESCAPE '\'
             OR task_ref  ILIKE $7 ESCAPE '\')
+       AND ($10::text IS NULL
+            OR (status = '` + ledger.RunActive + `' AND
+                CASE WHEN $10 = '` + ActivityWorking + `'
+                     THEN last_activity_at >= $11::timestamptz
+                     ELSE last_activity_at IS NULL OR last_activity_at < $11::timestamptz END))
 )
 SELECT run_id, spiffe_id, agent_type, task_ref, status, repos, commits,
        chain_position, registered_at, last_event_at,
@@ -422,6 +430,13 @@ SELECT run_id, spiffe_id, agent_type, task_ref, status, repos, commits,
 var listRunsSQLAsc = strings.Replace(
 	strings.Replace(listRunsSQL, "chain_position < $8", "chain_position > $8", 1),
 	"ORDER BY chain_position DESC", "ORDER BY chain_position ASC", 1)
+
+// The two halves of an active run, split by the idle bound: the dashboard's
+// Active and Idle.
+const (
+	ActivityWorking = "working"
+	ActivityIdle    = "idle"
+)
 
 // The two directions the runs table sorts in. A closed set: the value reaches
 // SQL, so it is checked at the edge rather than carried as a string.
@@ -465,6 +480,10 @@ func (s *Store) ListRuns(ctx context.Context, f RunFilter) (RunPage, error) {
 		return RunPage{}, fmt.Errorf("%w: status %q is not one of %s",
 			ErrBadRequest, f.Status, strings.Join(RunStatuses, ", "))
 	}
+	if f.Activity != "" && f.Activity != ActivityWorking && f.Activity != ActivityIdle {
+		return RunPage{}, fmt.Errorf("%w: activity %q is neither %q nor %q",
+			ErrBadRequest, f.Activity, ActivityWorking, ActivityIdle)
+	}
 	var cursor *int64
 	if f.Cursor != "" {
 		n, err := strconv.ParseInt(f.Cursor, 10, 64)
@@ -487,7 +506,7 @@ func (s *Store) ListRuns(ctx context.Context, f RunFilter) (RunPage, error) {
 		abandonedBefore(horizon, now),
 		nullable(f.AgentType), nullable(f.Repo), nullable(f.Status),
 		nullableTime(f.From), nullableTime(f.To), likePattern(f.Search),
-		cursor, limit)
+		cursor, limit, nullable(f.Activity), now.Add(-s.idleAfter))
 	if err != nil {
 		return RunPage{}, fmt.Errorf("api: listing runs: %w", err)
 	}

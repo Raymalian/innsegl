@@ -57,6 +57,12 @@ export type ViewName = (typeof VIEWS)[number];
 export const RUN_STATUSES = ["active", "lapsed", "abandoned", "retired"] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
+/** internal/api's ActivityWorking and ActivityIdle. */
+export const RUN_ACTIVITIES = ["working", "idle"] as const;
+export type RunActivity = (typeof RUN_ACTIVITIES)[number];
+const isRunActivity = (v: string): v is RunActivity =>
+  (RUN_ACTIVITIES as readonly string[]).includes(v);
+
 /**
  * The runs table's filter set (FD §3.2). Every field is a string because the
  * URL is the source of truth and the query API takes strings; an absent filter
@@ -66,6 +72,9 @@ export interface RunsFilters {
   repo: string;
   agentType: string;
   status: RunStatus | "";
+  /** Splits active runs by the query API's idle bound: "working" is the
+   *  dashboard's Active, "idle" its Idle. Absent or empty: both. */
+  activity?: RunActivity | "";
   search: string;
   from: string;
   to: string;
@@ -307,12 +316,16 @@ export function parseRoute(pathWithQuery: string): Route {
 
 function filtersFrom(q: URLSearchParams): RunsFilters {
   const status = q.get("status") ?? "";
+  const activity = q.get("activity") ?? "";
   const limit = q.get("limit") ?? "";
   const order = q.get("order") ?? "";
   return {
     repo: q.get("repo") ?? "",
     agentType: q.get("agent_type") ?? "",
     status: isRunStatus(status) ? status : "",
+    // Present only when the link names one, so a link without it reads
+    // exactly as it did before activity existed.
+    ...(isRunActivity(activity) ? { activity } : {}),
     search: q.get("q") ?? "",
     from: q.get("from") ?? "",
     to: q.get("to") ?? "",
@@ -336,6 +349,7 @@ export function routeToPath(route: Route): string {
         ["repo", route.filters.repo],
         ["agent_type", route.filters.agentType],
         ["status", route.filters.status],
+        ["activity", route.filters.activity ?? ""],
         ["q", route.filters.search],
         ["from", route.filters.from],
         ["to", route.filters.to],

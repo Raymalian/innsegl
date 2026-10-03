@@ -60,6 +60,7 @@ export const strings = {
       agentType: "Agent type",
       status: "Status",
       anyStatus: "Any status",
+      activeOrIdle: "Active or idle",
       from: "Registered from",
       to: "Registered to",
       search: "Search IDs and tasks",
