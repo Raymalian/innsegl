@@ -61,6 +61,10 @@ const (
 	// on the ledger; db-init.sh provisions it beside the other three.
 	authwriterRole     = "innsegl_authwriter"
 	authwriterPassword = "innsegl-deploy-test-authwriter"
+	// The alert resolver (RM-330): may insert an alert resolution and
+	// nothing else; db-init.sh provisions it beside the other four.
+	resolverRole     = "innsegl_resolver"
+	resolverPassword = "innsegl-deploy-test-resolver"
 )
 
 var errDependencyAbsent = errors.New("a required dependency is absent")
@@ -179,6 +183,12 @@ func (c *ledgerContainer) authwriterDSN() string {
 		authwriterRole, authwriterPassword, c.port, ownerDatabase)
 }
 
+// resolverDSN is the alert resolver's credential (RM-330).
+func (c *ledgerContainer) resolverDSN() string {
+	return fmt.Sprintf("postgres://%s:%s@127.0.0.1:%s/%s?sslmode=disable",
+		resolverRole, resolverPassword, c.port, ownerDatabase)
+}
+
 func startLedger(ctx context.Context, t *testing.T) (*ledgerContainer, error) {
 	t.Helper()
 	if err := dockerUsable(ctx); err != nil {
@@ -257,6 +267,7 @@ func (c *ledgerContainer) copyDeployScripts(ctx context.Context, root string) er
 		// the one the API's own start-up assertion measures against.
 		{root + "/internal/api/readonly.sql", "/innsegl/api/readonly.sql"},
 		{root + "/internal/api/authwriter.sql", "/innsegl/api/authwriter.sql"},
+		{root + "/internal/api/resolver.sql", "/innsegl/api/resolver.sql"},
 	} {
 		dir := cp[1]
 		if strings.HasSuffix(dir, ".sql") {
@@ -291,6 +302,9 @@ func (c *ledgerContainer) runInit(ctx context.Context, script string, extra ...s
 		"--env", "INNSEGL_AUTHWRITER_ROLE=" + authwriterRole,
 		"--env", "INNSEGL_AUTHWRITER_PASSWORD=" + authwriterPassword,
 		"--env", "INNSEGL_AUTHWRITER_SQL=/innsegl/api/authwriter.sql",
+		"--env", "INNSEGL_RESOLVER_ROLE=" + resolverRole,
+		"--env", "INNSEGL_RESOLVER_PASSWORD=" + resolverPassword,
+		"--env", "INNSEGL_RESOLVER_SQL=/innsegl/api/resolver.sql",
 	}
 	args = append(args, extra...)
 	args = append(args, c.name, "sh", "/innsegl/init/"+script)

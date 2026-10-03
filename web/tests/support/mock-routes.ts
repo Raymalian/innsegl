@@ -19,6 +19,7 @@
 import type { Page, Route } from "@playwright/test";
 
 import {
+  ALERT_ID,
   RUN_ID,
   alertsPage,
   detail,
@@ -94,6 +95,35 @@ export async function installApiMocks(page: Page): Promise<void> {
     // and the alert detail view pages it to find one event ID.
     if (p === "/api/v1/alerts") {
       await json(route, alertsPage());
+      return;
+    }
+
+    // RM-330: resolving from the dashboard. Begin answers a WebAuthn request
+    // challenge; finish answers the resolutions as internal/api writes them.
+    if (p === "/api/v1/alert-resolutions/begin") {
+      await json(route, {
+        ceremony_id: "ceremony-fixture",
+        publicKey: {
+          challenge: "cmVzb2x2ZS1jaGFsbGVuZ2U",
+          rpId: "localhost",
+          allowCredentials: [],
+          userVerification: "required",
+          timeout: 300000,
+        },
+      });
+      return;
+    }
+    if (p === "/api/v1/alert-resolutions/finish") {
+      await json(route, {
+        resolutions: [
+          {
+            event_id: ALERT_ID,
+            resolved_by: "Test Operator",
+            resolved_at: "2026-08-31T12:00:00.000Z",
+            reason: "reviewed",
+          },
+        ],
+      });
       return;
     }
 

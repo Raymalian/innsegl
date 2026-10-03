@@ -31,7 +31,6 @@ export function HeaderAlerts({
       alerts={alerts}
       openCount={openCount}
       loading={loading}
-      apiBase={apiBase}
       {...(now === undefined ? {} : { now })}
     />
   );

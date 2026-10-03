@@ -13,6 +13,11 @@
  *          |   | with only the event ID filled in, copyable, two sentences of help;
  *          |   | absent on a resolved alert, which shows who, when and why | ADR-0044,
  *          |   | ADR-0054
+ *
+ * RM-330 (#506), ADR-0044's 2026-10-03 amendment, changes two of these: the
+ * page now resolves an open alert itself, behind a fresh passkey, with the
+ * command kept as the alternative; and the raw record is shown in place
+ * rather than linked to the API, which a browser renders as bare JSON.
  */
 
 import { render, screen, within } from "@testing-library/react";
@@ -69,11 +74,23 @@ describe("FE-136 a drift alert, in full", () => {
     expect(claim).toHaveTextContent(DRIFT.subject_event_id!);
   });
 
-  it("links to the raw record (P1)", () => {
+  it("shows the full record in place, behind a toggle (P1), and links to no API", () => {
+    const { container } = detail();
+    const toggle = screen.getByText(strings.detail.recordToggle, { selector: "summary" });
+    const record = toggle.closest("details");
+    expect(record).not.toHaveAttribute("open");
+    expect(record).toHaveTextContent(`"subject_event_id": "${DRIFT.subject_event_id!}"`);
+    for (const a of container.querySelectorAll("a")) {
+      expect(a.getAttribute("href") ?? "").not.toMatch(/^\/api\//);
+    }
+  });
+
+  it("links to every alert in the same run (RM-330)", () => {
     detail();
-    expect(
-      screen.getByRole("link", { name: strings.detail.rawRecord }),
-    ).toHaveAttribute("href", "/api/v1/alerts?event_type=ledger_drift_detected");
+    expect(screen.getByRole("link", { name: strings.detail.runAlerts })).toHaveAttribute(
+      "href",
+      `/alerts?kind=all&run=${DRIFT.run_id!}`,
+    );
   });
 
   it("says plainly when an alert names no run", () => {
@@ -81,51 +98,54 @@ describe("FE-136 a drift alert, in full", () => {
     expect(fact(strings.detail.runLabel)).toHaveTextContent(strings.detail.noRun);
   });
 
-  it("states that it is open and that this dashboard cannot change that", () => {
+  it("states that it is open", () => {
     detail();
     expect(fact(strings.detail.statusLabel)).toHaveTextContent(strings.detail.openStatus);
   });
 
-  it("offers no resolve and no dismiss control (ADR-0044)", () => {
+  it("offers to resolve it with a reason and a passkey, and never to dismiss it (RM-330)", () => {
     detail();
+    const form = screen.getByRole("form", { name: strings.resolve.heading });
+    expect(within(form).getByLabelText(strings.resolve.reasonLabel)).toBeInTheDocument();
+    expect(within(form).getByRole("button", { name: strings.resolve.confirmLabel })).toBeInTheDocument();
     for (const button of screen.queryAllByRole("button")) {
-      // A copy control may carry the command text; no control may BE a resolve.
-      expect(button.textContent ?? "").toMatch(/Copy$/);
+      expect(button.textContent ?? "").not.toMatch(/dismiss|mark as read|hide/i);
     }
-    expect(screen.queryByRole("form")).toBeNull();
+  });
+
+  it("explains what the alert means and what to do (RM-330)", () => {
+    detail();
+    expect(screen.getByRole("region", { name: strings.explain.whatHeading })).toHaveTextContent(
+      strings.explain.rekorMismatch.whatDetail,
+    );
+    expect(screen.getByRole("region", { name: strings.explain.todoHeading })).toHaveTextContent(
+      strings.explain.rekorMismatch.todoDetail,
+    );
   });
 });
 
-describe("FE-140 how an operator resolves an open alert (ADR-0054)", () => {
+describe("FE-140 the command-line alternative (ADR-0054, RM-330)", () => {
   const command = (id: string) =>
     `innsegl resolve-alert -event-id=${id} -resolved-by=<your name> -reason="<why it is resolved>"`;
 
   it("shows the exact command, with only the event ID filled in", () => {
     detail();
-    const section = screen.getByRole("region", { name: strings.detail.resolveHeading });
+    const section = screen.getByRole("region", { name: strings.resolve.cliHeading });
     expect(section).toHaveTextContent(command(DRIFT.event_id));
   });
 
   it("offers the command through the copy control, whole", () => {
     detail();
-    const section = screen.getByRole("region", { name: strings.detail.resolveHeading });
+    const section = screen.getByRole("region", { name: strings.resolve.cliHeading });
     const copy = within(section).getByRole("button");
     expect(copy).toHaveAttribute("title", command(DRIFT.event_id));
   });
 
-  it("says what resolving records, and that segment drift clears on its own", () => {
+  it("says what resolving records, and that the alert itself never changes", () => {
     detail();
-    const section = screen.getByRole("region", { name: strings.detail.resolveHeading });
-    expect(section).toHaveTextContent(strings.detail.resolveDetail);
-    expect(section).toHaveTextContent(strings.detail.autoClearDetail);
-    expect(strings.detail.resolveDetail).toMatch(/never changed/);
-  });
-
-  it("is a command to copy, not a button that resolves (ADR-0044)", () => {
-    detail();
-    const section = screen.getByRole("region", { name: strings.detail.resolveHeading });
-    expect(within(section).getAllByRole("button")).toHaveLength(1);
-    expect(within(section).getByRole("button").textContent ?? "").not.toMatch(/^resolve/i);
+    const section = screen.getByRole("region", { name: strings.resolve.heading });
+    expect(section).toHaveTextContent(strings.resolve.reasonDetail);
+    expect(strings.resolve.reasonDetail).toMatch(/never changed/);
   });
 
   it("is absent on a resolved alert, which shows who, when and why instead", () => {
@@ -136,7 +156,9 @@ describe("FE-140 how an operator resolves an open alert (ADR-0054)", () => {
       resolved_at: "2026-09-06T18:00:00Z",
       resolved_reason: "Rekor entry re-checked by hand",
     });
-    expect(screen.queryByRole("region", { name: strings.detail.resolveHeading })).toBeNull();
+    expect(screen.queryByRole("region", { name: strings.resolve.heading })).toBeNull();
+    expect(screen.queryByRole("region", { name: strings.resolve.cliHeading })).toBeNull();
+    expect(screen.queryByRole("form")).toBeNull();
     const status = fact(strings.detail.statusLabel);
     expect(status).toHaveTextContent("operator");
     expect(status).toHaveTextContent("2026-09-06 18:00:00 UTC");

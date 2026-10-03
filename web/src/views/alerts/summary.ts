@@ -7,8 +7,8 @@
  * raw hash or field name: those are the detail view's job, where each one
  * sits in an identifier chip that can be copied whole (doc 06 §4.3).
  *
- * The reconciler raises drift with one of five fixed reasons
- * (internal/reconciler/drift.go); those are matched exactly and said in plain
+ * The reconciler raises drift with one of seven fixed reasons
+ * (internal/reconciler/drift.go, witness.go, commitwatch.go); those are matched exactly and said in plain
  * words. A segment read raises drift with the storage error as its reason,
  * which is free text, so anything unmatched is shown as itself with long hex
  * runs shortened and field-name underscores spaced out. Nothing is inferred
@@ -16,6 +16,7 @@
  */
 
 import type { AlertRecord } from "../overview/types";
+import { UNANCHORED } from "./explain";
 import { strings } from "./strings";
 
 /** internal/reconciler/drift.go's reasons, verbatim, to their plain words. */
@@ -30,11 +31,11 @@ const KNOWN_REASONS: Readonly<Record<string, string>> = {
     strings.alert.reasons.otherIdentity,
   "the transparency log entry this commit_recorded names is at a different rekor_log_index":
     strings.alert.reasons.otherLogIndex,
+  "the harness's own OTLP telemetry recorded no tool_result for this tool call":
+    strings.alert.reasons.noTelemetryWitness,
+  "a git commit was made with no signature recorded for it":
+    strings.alert.reasons.commitNotSigned,
 };
-
-/** The sealer's anchoring failure, as internal/segment AnchorAlert words it. */
-const UNANCHORED =
-  /^segment sha256:[0-9a-f]+ \(positions (\d+)\.\.(\d+)\) is sealed but has no transparency log entry/;
 
 /** How long a summary may run before it is cut at a word. */
 const SUMMARY_MAX = 110;

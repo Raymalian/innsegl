@@ -151,6 +151,11 @@ const (
 	envAPIRPID            = "INNSEGL_API_RP_ID"
 	envAPIRPOrigin        = "INNSEGL_API_RP_ORIGIN"
 	envAPISessionLifetime = "INNSEGL_API_SESSION_LIFETIME"
+
+	// envAPIResolverDSN is RM-330's resolver credential (ADR-0044's
+	// 2026-10-03 amendment): internal/api.ResolverRole, which may insert an
+	// alert resolution and nothing else. Optional.
+	envAPIResolverDSN = "INNSEGL_API_RESOLVER_DSN"
 )
 
 const (
@@ -197,6 +202,10 @@ var apiRoutes = []string{
 	"POST /api/v1/auth/login/finish",
 	"POST /api/v1/auth/logout",
 	"GET /api/v1/auth/session",
+	// RM-330 (ADR-0044's 2026-10-03 amendment): resolving alerts after a
+	// fresh passkey ceremony. 503 unless -resolver-dsn is set.
+	"POST /api/v1/alert-resolutions/begin",
+	"POST /api/v1/alert-resolutions/finish",
 }
 
 // apiOptions is the resolved command line.
@@ -231,6 +240,10 @@ type apiOptions struct {
 	rpID            string
 	rpOrigin        string
 	sessionLifetime time.Duration
+
+	// resolverDSN is the RESOLVER credential (internal/api.ResolverRole).
+	// Empty: the dashboard cannot resolve alerts, and says so.
+	resolverDSN string
 }
 
 // servedAPI is the running query API, as this command needs it. It is an
@@ -415,6 +428,10 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		rpOrigin = fs.String("rp-origin", envOr(envAPIRPOrigin, defaultAPIRPOrigin),
 			"the exact origin the dashboard is served from; a request whose Origin header "+
 				"names anything else is refused ($"+envAPIRPOrigin+")")
+		resolverDSN = fs.String("resolver-dsn", os.Getenv(envAPIResolverDSN),
+			"the RESOLVER connection string ($"+envAPIResolverDSN+") — internal/api.ResolverRole, "+
+				"which may insert an alert resolution and nothing else. Optional: without it the "+
+				"dashboard cannot resolve alerts, and `innsegl resolve-alert` is the way to resolve one")
 		sessionLifetime = fs.Duration("session-lifetime", envDuration(envAPISessionLifetime, 0),
 			"how long a session lasts before it must be renewed by signing in again; zero "+
 				"applies internal/api's own default ($"+envAPISessionLifetime+")")
@@ -448,6 +465,7 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		snapshotDir:   resolveSnapshotDir(*snapshotDir, *logDir),
 		messageKeyDir: *messageKeyDir,
 		authDSN:       *authDSN, rpID: *rpID, rpOrigin: *rpOrigin, sessionLifetime: *sessionLifetime,
+		resolverDSN: *resolverDSN,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl api: %s\n", problem)
