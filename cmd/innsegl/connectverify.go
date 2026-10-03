@@ -33,8 +33,12 @@ func loadHarness(settings string, named bool, debugFile, _ string) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, claude, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, io.Discard, io.Discard
-	// Its exit status says nothing about the settings; the log does.
-	_ = cmd.Run()
+	// Its exit status says nothing about the settings; the log does. Only a
+	// harness that could not be started at all is an error.
+	var exitErr *exec.ExitError
+	if runErr := cmd.Run(); runErr != nil && !errors.As(runErr, &exitErr) {
+		return runErr
+	}
 	return nil
 }
 
@@ -57,12 +61,12 @@ func verifyHarnessLoaded(deps connectDeps, settings string, named bool, ca strin
 	_ = log.Close()
 	defer func() { _ = os.Remove(path) }()
 
-	if err := load(settings, named, path, ca); errors.Is(err, errNoHarness) {
+	if lerr := load(settings, named, path, ca); errors.Is(lerr, errNoHarness) {
 		fprintf(stdout, "innsegl connect: Claude Code is not installed here, so whether it loads %s "+
 			"could not be checked. Run `innsegl connect --update` once it is.\n", settings)
 		return exitOK
-	} else if err != nil {
-		fprintf(stderr, "innsegl connect: checking the harness loaded %s: %v\n", settings, err)
+	} else if lerr != nil {
+		fprintf(stderr, "innsegl connect: checking the harness loaded %s: %v\n", settings, lerr)
 		return exitConnectFailed
 	}
 	// #nosec G304 -- the temporary file this function created.
