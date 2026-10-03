@@ -147,6 +147,7 @@ interface Spine {
   sessions?: AccountSession[];
   repositories?: AccountRepository[] | "unavailable";
   agents?: AccountAgents | "unavailable";
+  caFingerprint?: string;
 }
 
 function account(overrides: Partial<Account> = {}): Account {
@@ -254,7 +255,7 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
         return respond(added);
       }
       if (url.endsWith("/account/machines") && method === "GET") {
-        return machineList === "unavailable" ? unavailable() : respond({ machines: machineList });
+        return machineList === "unavailable" ? unavailable() : respond({ machines: machineList, ca_fingerprint: spine.caFingerprint ?? "" });
       }
       if (url.endsWith("/account/machines/revoke/begin") && method === "POST") {
         return respond({ ceremony_id: "cer-revoke", publicKey: { challenge: "abc" } });
@@ -319,7 +320,9 @@ describe("AccountPage", () => {
     render(<AccountPage browser={workingBrowser()} />);
 
     expect(await screen.findByText("Dev Operator")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: strings.account.passkeyNameHeader })).toBeInTheDocument();
+    // Scoped: the machines table has a Name column too, and it may load first.
+    const passkeys = screen.getByRole("region", { name: strings.account.passkeysHeading });
+    expect(within(passkeys).getByRole("columnheader", { name: strings.account.passkeyNameHeader })).toBeInTheDocument();
     expect(screen.getByText("MacBook")).toBeInTheDocument();
     expect(screen.getByText("Phone")).toBeInTheDocument();
     expect(screen.getByText(strings.account.currentDevice)).toBeInTheDocument();
@@ -526,6 +529,19 @@ describe("AccountPage", () => {
     expect(within(region).queryByRole("button", { name: strings.account.revokeButton })).toBeNull();
     expect(within(region).queryByRole("button", { name: strings.account.connectButton })).toBeNull();
     expect(within(region).getByText(strings.account.connectNeedsRole)).toBeInTheDocument();
+  });
+
+  it("pins the core by its CA fingerprint in the connect command when the API knows it", async () => {
+    installAccountFetch(account(), { caFingerprint: "sha256:0a1b2c" });
+    const user = userEvent.setup();
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    await user.click(within(region).getByRole("button", { name: strings.account.connectButton }));
+
+    await within(region).findByText("ie_0123456789abcdef_secret");
+    const command = `innsegl connect https://${window.location.hostname}:28095 --token ie_0123456789abcdef_secret --ca-fingerprint sha256:0a1b2c`;
+    expect(within(region).getByText(command)).toBeInTheDocument();
   });
 
   it("connects a machine: a passkey, then the token once with the one-line command and its expiry", async () => {

@@ -20,12 +20,17 @@ import (
 // MaxAccountRuns bounds the account page's recent agent runs.
 const MaxAccountRuns = 20
 
-// MachineLastRun answers, per machine id, when a run was last mapped to it.
-// A machine with none is absent from the map.
+// MachineLastRun answers, per machine id, its last activity: the newest
+// ledger event of any run mapped to it, or when a run was mapped if that is
+// later. Not only the mapping time: one long session would leave a working
+// machine looking idle. A machine with no run is absent from the map.
 func (s *Store) MachineLastRun(ctx context.Context, machineIDs []string) (map[string]time.Time, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT client_id, max(recorded_at) FROM innsegl.gateway_run_mapping
-		 WHERE client_id = ANY($1) GROUP BY client_id`, nonNilIDs(machineIDs))
+		SELECT m.client_id,
+		       greatest(max(m.recorded_at),
+		                max((SELECT max(e.ts) FROM innsegl.events e WHERE e.run_id = m.run_id)))
+		  FROM innsegl.gateway_run_mapping m
+		 WHERE m.client_id = ANY($1) GROUP BY m.client_id`, nonNilIDs(machineIDs))
 	if err != nil {
 		return nil, fmt.Errorf("api: reading machine activity: %w", err)
 	}

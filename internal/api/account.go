@@ -130,6 +130,9 @@ type AccountMachine struct {
 // AccountMachines answers GET /api/v1/account/machines.
 type AccountMachines struct {
 	Machines []AccountMachine `json:"machines"`
+	// CAFingerprint is the core's CA as `innsegl connect --ca-fingerprint`
+	// takes it ("sha256:<hex>"), or empty when this API cannot read it.
+	CAFingerprint string `json:"ca_fingerprint"`
 }
 
 // MachineRevokeRequest is POST /api/v1/account/machines/revoke/begin's body.

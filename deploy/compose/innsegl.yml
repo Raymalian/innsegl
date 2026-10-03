@@ -1830,6 +1830,9 @@ services:
       # reachable from postgres, innsegl-dashboard, fulcio and rekor, and from
       # nothing else in the deployment or on the host.
       INNSEGL_API_LISTEN: 0.0.0.0:8082
+      # The gateway's CA certificate (public), so the account page's connect
+      # command carries its fingerprint rather than a placeholder.
+      INNSEGL_API_GATEWAY_CA_CERT: /run/innsegl/gateway-ca/gateway-ca.pem
       # doc 02 §5 spells a repo as an IDENTIFIER; the MCP resolves it beneath
       # its workspace root, so the pair is <identifier>=<root>/<identifier>.
       # OVERRIDE THIS TOGETHER WITH $INNSEGL_DEMO_REPO: a proof request naming a
@@ -1844,6 +1847,9 @@ services:
       INNSEGL_OIDC_ISSUER: *jwt-issuer
     volumes:
       - innsegl-workspace:/work:ro
+      # READ-ONLY: the gateway's public CA certificate, from the host folder
+      # innsegl-mcp writes it to (*gateway-ca-host-dir). Never the key.
+      - ${INNSEGL_GATEWAY_CA_HOST_DIR:-${HOME}/.innsegl/ca}:/run/innsegl/gateway-ca:ro
     healthcheck:
       # /api/v1/health and not a TCP dial: ADR-0024's rule, that a readiness
       # probe must fetch something it can parse. The body it returns is the

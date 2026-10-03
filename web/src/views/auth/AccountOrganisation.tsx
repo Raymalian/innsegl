@@ -234,7 +234,8 @@ export function MachinesSection({
     }
   };
 
-  const machines = load.status === "loaded" ? load.data : [];
+  const machines = load.status === "loaded" ? load.data.machines : [];
+  const caFingerprint = load.status === "loaded" ? load.data.ca_fingerprint : "";
   const anyManageable = machines.some((m) => m.can_manage && m.status !== "revoked");
   const canConnect = manageable.length > 0 && load.status !== "unavailable";
 
@@ -341,7 +342,7 @@ export function MachinesSection({
             <p className={`text-micro leading-prose ${secondaryText}`}>{a.connectIntro}</p>
           </div>
           {connect.status === "minted" ? (
-            <MintedToken token={connect.token} onDone={() => {
+            <MintedToken token={connect.token} caFingerprint={caFingerprint} onDone={() => {
               setConnect({ status: "idle" });
               reload();
             }} />
@@ -453,14 +454,18 @@ function MachineAction({
 
 function MintedToken({
   token,
+  caFingerprint,
   onDone,
 }: {
   readonly token: EnrolmentToken;
+  /** The core's CA fingerprint; empty when the API could not read it. */
+  readonly caFingerprint: string;
   readonly onDone: () => void;
 }) {
   const tokenLabelId = useId();
   const commandLabelId = useId();
-  const command = `innsegl connect https://${window.location.hostname}:${CORE_PORT} --token ${token.token} --ca ${a.connectCaPlaceholder}`;
+  const pin = caFingerprint ? `--ca-fingerprint ${caFingerprint}` : `--ca ${a.connectCaPlaceholder}`;
+  const command = `innsegl connect https://${window.location.hostname}:${CORE_PORT} --token ${token.token} ${pin}`;
   return (
     <div className={secretBlock}>
       <div className="flex flex-col gap-1">

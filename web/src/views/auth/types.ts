@@ -86,6 +86,14 @@ export interface AccountMachine {
   can_manage: boolean;
 }
 
+/** `GET /api/v1/account/machines`: the machines, and the core's CA
+ * fingerprint as `innsegl connect --ca-fingerprint` takes it ("" when the
+ * API cannot read it). */
+export interface AccountMachines {
+  readonly machines: AccountMachine[];
+  readonly ca_fingerprint: string;
+}
+
 export interface EnrolmentToken {
   token: string;
   expires_at: string;
