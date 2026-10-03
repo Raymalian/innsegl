@@ -57,6 +57,11 @@ export interface AnchorHeartbeat {
 /** `GET /api/v1/overview`. */
 export interface OverviewData {
   readonly active_runs: number;
+  /** How many of `active_runs` recorded nothing for `idle_after_seconds`.
+   * Counted INSIDE `active_runs`. Absent from an older query API: read as
+   * none idle. */
+  readonly idle_runs?: number;
+  readonly idle_after_seconds?: number;
   /** Runs whose newest recorded fact is the reaper withdrawing the credential,
    * and whose restore horizon has not passed (#256). NOT counted in
    * `active_runs`. */

@@ -87,15 +87,21 @@ const PRESENTATION: Record<
 
 export interface StatusBadgeProps {
   readonly status: RunStatus;
+  /** An active run that has recorded nothing lately (views/runs/activity.ts).
+   * Ignored on any other status. The ledger state stays on data-status. */
+  readonly idle?: boolean;
 }
 
-export function StatusBadge({ status }: StatusBadgeProps) {
-  const { icon, tone, outline } = PRESENTATION[status];
-  const { label, meaning } = strings.status[status];
+export function StatusBadge({ status, idle = false }: StatusBadgeProps) {
+  const quiet = idle && status === "active";
+  const { icon, outline } = PRESENTATION[status];
+  const tone = quiet ? statusRetired : PRESENTATION[status].tone;
+  const { label, meaning } = quiet ? strings.idle : strings.status[status];
 
   return (
     <span
       data-status={status}
+      data-idle={quiet ? "true" : undefined}
       title={meaning}
       className={`${badgeBase} ${outline} ${tone}`}
     >

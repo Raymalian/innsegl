@@ -30,6 +30,7 @@ describe("RM-331 the runs table", () => {
       "Task",
       "Started",
       "Last seen",
+      "Active for",
       "Commits",
     ]);
   });

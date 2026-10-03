@@ -50,6 +50,7 @@ export const strings = {
       task: "Task",
       started: "Started",
       lastSeen: "Last seen",
+      activeFor: "Active for",
       commits: "Commits",
     },
 

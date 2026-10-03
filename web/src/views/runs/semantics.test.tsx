@@ -38,6 +38,7 @@ const COLUMNS = [
   strings.labels.columns.task,
   strings.labels.columns.started,
   strings.labels.columns.lastSeen,
+  strings.labels.columns.activeFor,
   strings.labels.columns.commits,
 ];
 
@@ -77,7 +78,7 @@ describe("FE-050 the runs table is a table", () => {
     ).toBe(container.querySelector("table"));
   });
 
-  it("carries the seven columns RM-331 sets, in its order, as <th scope=col>", () => {
+  it("carries the eight columns, in its order, as <th scope=col>", () => {
     const { container } = mount();
     const headers = [...container.querySelectorAll("thead th")];
     expect(headers.map((th) => th.textContent)).toEqual(
@@ -99,8 +100,8 @@ describe("FE-050 the runs table is a table", () => {
       const header = row.querySelector("th");
       expect(header?.getAttribute("scope")).toBe("row");
       expect(header?.textContent).toContain(threeRuns()[index]?.task_ref ?? "");
-      // Six data cells beside the header: seven columns in total.
-      expect(row.querySelectorAll("td")).toHaveLength(6);
+      // Seven data cells beside the header: eight columns in total.
+      expect(row.querySelectorAll("td")).toHaveLength(7);
     }
     expect(screen.getAllByRole("rowheader")).toHaveLength(rows.length);
     // One header row plus the data rows.

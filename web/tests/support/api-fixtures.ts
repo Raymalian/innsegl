@@ -51,6 +51,8 @@ export function anchor(): AnchorHeartbeat {
 export function overview(): OverviewData {
   return {
     active_runs: 3,
+    idle_runs: 1,
+    idle_after_seconds: 15 * 60,
     retired_runs: 41,
     lapsed_runs: 1,
     abandoned_runs: 0,

@@ -40,9 +40,11 @@ export const strings = {
     howCounted: "How this is counted",
     activeAgents: {
       label: "Active agents",
-      description: "Runs still going.",
+      description: "Working in the last 15 minutes.",
       meaning:
-        "Runs whose newest recorded fact is not a retirement and not a credential withdrawal.",
+        "Runs whose newest recorded fact is not a retirement and not a credential withdrawal, and that recorded something in the last 15 minutes. A session closed without its end signal stays registered until the silence backstop retires it; until then it is counted idle.",
+      idle: (idle: string, after: string) =>
+        `${idle} idle: registered, nothing recorded for ${after} or more.`,
       breakdown: (lapsed: string, abandoned: string) =>
         `${lapsed} lapsed and ${abandoned} abandoned, counted apart from this number.`,
       horizon: (horizon: string) =>
@@ -162,6 +164,7 @@ export const strings = {
       repo: "Repository",
       agent: "Agent",
       task: "Task",
+      activeFor: "Active for",
       commits: "Commits",
     },
     emptyTitle: "No runs yet",

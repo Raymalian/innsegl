@@ -42,6 +42,7 @@
 
 import { EmptyState, IdentifierChip, StatusBadge } from "../../components/common";
 import { routeToPath } from "../../app/routes";
+import { activeFor, isIdle } from "../runs/activity";
 import { formatCount } from "./format";
 import { strings } from "./strings";
 import {
@@ -65,10 +66,13 @@ export interface RecentRunsProps {
   /** Null when the runs index did not answer: an absent list is not an empty
    * one, and this renders neither as the other (P2). */
   readonly runs: readonly RunSummary[] | null;
+  /** The instant idle is judged at. Defaults to the render's own clock. */
+  readonly now?: Date;
 }
 
-export function RecentRuns({ runs }: RecentRunsProps) {
+export function RecentRuns({ runs, now }: RecentRunsProps) {
   if (runs === null) return null;
+  const at = now ?? new Date();
   return (
     <section aria-label={strings.recentRuns.heading} className={tablePanel}>
       <div className={tablePanelHeader}>
@@ -105,13 +109,16 @@ export function RecentRuns({ runs }: RecentRunsProps) {
                   {strings.recentRuns.columns.task}
                 </th>
                 <th scope="col" className={columnHeader}>
+                  {strings.recentRuns.columns.activeFor}
+                </th>
+                <th scope="col" className={columnHeader}>
                   {strings.recentRuns.columns.commits}
                 </th>
               </tr>
             </thead>
             <tbody>
               {runs.map((run) => (
-                <RunRow key={run.run_id} run={run} />
+                <RunRow key={run.run_id} run={run} now={at} />
               ))}
             </tbody>
           </table>
@@ -121,11 +128,11 @@ export function RecentRuns({ runs }: RecentRunsProps) {
   );
 }
 
-function RunRow({ run }: { readonly run: RunSummary }) {
+function RunRow({ run, now }: { readonly run: RunSummary; readonly now: Date }) {
   return (
     <tr>
       <td className={cell}>
-        <StatusBadge status={run.status} />
+        <StatusBadge status={run.status} idle={isIdle(run.status, run.last_event_at, now)} />
       </td>
       {/* doc 06 P4: mono, middle-truncated, copyable, linked to its view. */}
       <th scope="row" className={rowHeader}>
@@ -140,6 +147,9 @@ function RunRow({ run }: { readonly run: RunSummary }) {
       </td>
       <td className={`${cell} ${cellText}`}>{run.agent_type}</td>
       <td className={`${cell} ${cellText}`}>{run.task_ref}</td>
+      <td className={`${cell} ${cellText} whitespace-nowrap`}>
+        {activeFor(run.registered_at, run.last_event_at) ?? "—"}
+      </td>
       <td className={numericCell}>{formatCount(run.commits)}</td>
     </tr>
   );
