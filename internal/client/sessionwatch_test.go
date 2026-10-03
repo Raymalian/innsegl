@@ -116,3 +116,60 @@ func TestProcessOfReadsThisProcess(t *testing.T) {
 		t.Fatalf("HarnessProcessQuery(%+v) = %q", p, HarnessProcessQuery(p))
 	}
 }
+
+// A session's end sent while the core is down used to be lost: the client
+// passed it on and the core never saw it, so the run stayed active until
+// the silence backstop. The client now keeps it and sends it once the core
+// answers -- a subagent's end too.
+func TestASessionEndSentWhileTheCoreIsDownIsDeliveredAfter(t *testing.T) {
+	core, paths := enrolled(t)
+	ends := make(chan string, 4)
+	core.Mux.HandleFunc(SessionEndPath, func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading the end signal: %v", err)
+		}
+		ends <- string(b)
+		w.WriteHeader(http.StatusAccepted)
+	})
+	srv, front, _ := startClient(t, paths)
+	core.Stop()
+
+	for _, body := range []string{`{"session_id":"s-9"}`, `{"session_id":"s-9","agent_id":"a1b2c3"}`} {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, front.URL+SessionEndPath, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("sending the end: %v", err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("end while the core is down answered %d, want 202 (kept)", resp.StatusCode)
+		}
+	}
+	if n := srv.watchedSessions(); n != 2 {
+		t.Fatalf("kept ends = %d, want 2", n)
+	}
+
+	core.Restart(t)
+	srv.CheckSessions(context.Background())
+	got := map[string]bool{}
+	for range 2 {
+		select {
+		case b := <-ends:
+			got[b] = true
+		case <-time.After(5 * time.Second):
+			t.Fatalf("ends delivered = %v, want both", got)
+		}
+	}
+	if !got[`{"session_id":"s-9"}`] || !got[`{"agent_id":"a1b2c3","session_id":"s-9"}`] {
+		t.Errorf("ends delivered = %v", got)
+	}
+	if n := srv.watchedSessions(); n != 0 {
+		t.Errorf("kept ends after delivery = %d, want 0", n)
+	}
+}

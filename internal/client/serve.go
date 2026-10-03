@@ -407,6 +407,10 @@ func (s *Server) Handler() http.Handler {
 			r, cancel = withStatementDeadline(r)
 			defer cancel()
 		}
+		if r.Method == http.MethodPost && r.URL.Path == SessionEndPath {
+			s.serveSessionEnd(w, r)
+			return
+		}
 		if r.Method == http.MethodPost && r.URL.Path == TelemetryLogsPath {
 			s.serveTelemetry(w, r)
 			return
