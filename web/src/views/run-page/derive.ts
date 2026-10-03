@@ -47,8 +47,6 @@ export function witnessAgreeCount(w: RecordWitnesses): number {
   return n;
 }
 
-export const WITNESS_TOTAL = 3;
-
 /** How many witnesses were active for this step's run (#438): the gateway
  * always, a snapshot or telemetry witness unless the run never had it. An
  * inactive witness proves nothing by its absence, so it is not counted. */
@@ -99,16 +97,6 @@ export function shortRunId(runId: string): string {
   const hex = match?.[1];
   if (hex === undefined || hex.length <= 12) return runId;
   return `run-${hex.slice(0, 8)}…${hex.slice(-4)}`;
-}
-
-/** A keyed digest for display — "hmac-sha256:gateway-v1:413c…0bec". */
-export function truncateDigest(digest: string, keep = 4): string {
-  const lastColon = digest.lastIndexOf(":");
-  if (lastColon === -1) return digest;
-  const prefix = digest.slice(0, lastColon + 1);
-  const hash = digest.slice(lastColon + 1);
-  if (hash.length <= keep * 2 + 1) return digest;
-  return `${prefix}${hash.slice(0, keep)}…${hash.slice(hash.length - keep)}`;
 }
 
 /* ── dates ─────────────────────────────────────────────────────────────── */

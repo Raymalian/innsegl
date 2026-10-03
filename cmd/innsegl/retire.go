@@ -135,8 +135,8 @@ import (
 // copied onto this machine, never read by this process and never printed; the
 // only value that crosses the boundary is the credential, on the child's stdout
 // pipe. It is the same mint, with the same variables, that
-// scripts/innsegl-commit.sh and scripts/hooks/subagent-identity.sh run, so an
-// operator who has either of those working has this working.
+// scripts/innsegl-commit.sh runs, so an operator who has that working has this
+// working.
 //
 // WHERE IT IS KEPT. In one struct field, for the life of one process. Never
 // exported, never written to a file, never logged, and never placed in an

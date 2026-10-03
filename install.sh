@@ -147,9 +147,9 @@ default_managed_settings_path() {
 }
 MANAGED_SETTINGS="${INNSEGL_INSTALL_MANAGED_SETTINGS:-$(default_managed_settings_path)}"
 
-# scripts/hooks/subagent-identity.sh's own header names the six events it
-# must be wired to — this is --uninstall-legacy's target, never installed by
-# this script, only ever removed.
+# The old hook script's path, as an install from before the gateway wrote it
+# into six hook entries. The script itself is gone; --uninstall-legacy matches
+# entries by this path and removes them. Never installed by this script.
 LEGACY_HOOK_SCRIPT="$ROOT/scripts/hooks/subagent-identity.sh"
 LEGACY_MCP_URL="${INNSEGL_INSTALL_LEGACY_MCP_URL:-http://127.0.0.1:28080/}"
 

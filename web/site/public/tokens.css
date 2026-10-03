@@ -140,6 +140,36 @@
   --innsegl-palette-content-800: #451f65;
   --innsegl-palette-content-900: #2b1341;
 
+  /* Diff added / diff removed. doc 06 §5.3's "One named exception: diffs"
+   * (operator decision, 2026-09-30, plan §10.4): inside a diff view, and only
+   * there, a soft green line background means added and a soft red one means
+   * removed, the way code review shows them.
+   *
+   * TWO NEW FAMILIES, not a draw from `verification` or `failure` — and that
+   * is the point rather than an oversight. check-tokens.sh reserves the
+   * `verification` family for the `proof-verified` group alone: "nothing else
+   * in the sheet can be green, because nothing else can name the family that
+   * holds the greens." A diff's added-line background is not a cryptographic
+   * verification and must never be able to satisfy a check that one passed,
+   * so it cannot be the same family even though the operator chose the same
+   * hue for it. These two ramps hold the identical hex values as
+   * `verification` and `failure` at every step they share — the diff palette
+   * is visually the same green and red, spent through a door doc 06 §5.3's
+   * reservation does not guard, so the guard keeps meaning what it says. */
+  --innsegl-palette-diffadded-50: #e6f4ec;
+  --innsegl-palette-diffadded-100: #c6e7d5;
+  --innsegl-palette-diffadded-300: #6ccf95;
+  --innsegl-palette-diffadded-700: #116039;
+  --innsegl-palette-diffadded-800: #0c462a;
+  --innsegl-palette-diffadded-900: #062e1c;
+
+  --innsegl-palette-diffremoved-50: #fdecec;
+  --innsegl-palette-diffremoved-100: #f9d2d4;
+  --innsegl-palette-diffremoved-300: #f0989d;
+  --innsegl-palette-diffremoved-700: #9b1921;
+  --innsegl-palette-diffremoved-800: #741218;
+  --innsegl-palette-diffremoved-900: #480a0e;
+
   /* Accent. The one semantically meaningless hue (§5.3): links, focus,
    * filters, selection. Indigo, deliberately outside the red-amber-green band
    * a reader scans for a verdict — a teal or a lime accent would sit at the
@@ -191,6 +221,20 @@
   --innsegl-color-proof-unavailable-text: light-dark(var(--innsegl-palette-degraded-700), var(--innsegl-palette-degraded-300));
   --innsegl-color-proof-unavailable-surface: light-dark(var(--innsegl-palette-degraded-50), var(--innsegl-palette-degraded-900));
   --innsegl-color-proof-unavailable-border: light-dark(var(--innsegl-palette-degraded-600), var(--innsegl-palette-degraded-400));
+
+  /* The diff exception (§5.3, run page E19). A background on the code line
+   * itself, a step darker on the gutter that holds its line number, and the
+   * +/− marker's own text — always alongside the marker and the line
+   * numbers, never a solid fill, an icon, or a badge (§5.3 forbids those
+   * three for a diff specifically, to keep a diff from being misread as a
+   * verification result on the same page). */
+  --innsegl-color-diff-added-surface: light-dark(var(--innsegl-palette-diffadded-50), var(--innsegl-palette-diffadded-900));
+  --innsegl-color-diff-added-gutter: light-dark(var(--innsegl-palette-diffadded-100), var(--innsegl-palette-diffadded-800));
+  --innsegl-color-diff-added-marker: light-dark(var(--innsegl-palette-diffadded-700), var(--innsegl-palette-diffadded-300));
+
+  --innsegl-color-diff-removed-surface: light-dark(var(--innsegl-palette-diffremoved-50), var(--innsegl-palette-diffremoved-900));
+  --innsegl-color-diff-removed-gutter: light-dark(var(--innsegl-palette-diffremoved-100), var(--innsegl-palette-diffremoved-800));
+  --innsegl-color-diff-removed-marker: light-dark(var(--innsegl-palette-diffremoved-700), var(--innsegl-palette-diffremoved-300));
 
   /* Degradation that is not a verdict: the §4.4 staleness marker and the
    * §3.1 anchoring-lag heartbeat. Same family as "unavailable" because it is

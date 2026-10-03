@@ -32,8 +32,7 @@
 // packages run exactly as they always did — they are the only proof of two
 // invariants and a permanent ban would cost more than the incident. A guard
 // that cannot be found or cannot be run is reported as an error, never as a
-// refusal: scripts/hooks/subagent-identity.sh carries this project's own words
-// for it, that a gate which blocks and offers nothing strands the work.
+// refusal: a gate which blocks and offers nothing strands the work.
 package stackguard
 
 import (

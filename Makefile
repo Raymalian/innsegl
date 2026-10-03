@@ -456,11 +456,11 @@ INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
 # in the same second, both past the same deadline at the sweep -- one appends a
 # tool_call and keeps its identity, the other is reaped.
 #
-# WHY THE SIGNAL CAN BE TRUSTED HERE. The hook that registers a run is the same
-# hook that records every tool call it makes (scripts/hooks/subagent-identity.sh,
-# #171). Measured on this deployment: working runs append every ~14 seconds,
-# while a run that finished or died goes quiet immediately. No hook means no
-# registration, so there is no run for the reaper to get wrong.
+# WHY THE SIGNAL CAN BE TRUSTED HERE. What registers a run is also what records
+# every tool call it makes: the gateway, from the run's own traffic (ADR-0057,
+# ADR-0058). A working run keeps appending, while a run that finished or died
+# goes quiet. No traffic means no registration, so there is no run for the
+# reaper to get wrong.
 #
 # It runs inside the MCP, with the sealer and the reconciler: compose's own
 # default for INNSEGL_MCP_ALSO is seal,reconcile,reap,gateway (ADR-0056, ADR-0060), and empty

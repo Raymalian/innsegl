@@ -3,6 +3,9 @@
 package api
 
 import (
+	"errors"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -482,5 +485,46 @@ func TestAPI034TheOverviewCountsSilentActiveRunsAsIdle(t *testing.T) {
 	if silent.ActiveRuns != 2 || silent.IdleRuns != 2 {
 		t.Errorf("ActiveRuns, IdleRuns = %d, %d past the idle bound, want 2, 2",
 			silent.ActiveRuns, silent.IdleRuns)
+	}
+}
+
+// TestAPI035TheRunsListFiltersActiveRunsByActivity: the dashboard's Active
+// and Idle are one ledger state split by the idle bound, so the list filters
+// by it -- an Active filter that listed idle runs disagreed with every
+// badge in it.
+func TestAPI035TheRunsListFiltersActiveRunsByActivity(t *testing.T) {
+	s := lifecycleFixture(t)
+	ctx := t.Context()
+	ids := func(f RunFilter) []string {
+		t.Helper()
+		page, err := s.ListRuns(ctx, f)
+		if err != nil {
+			t.Fatalf("ListRuns(%+v): %v", f, err)
+		}
+		var out []string
+		for _, r := range page.Runs {
+			out = append(out, r.RunID)
+		}
+		sort.Strings(out)
+		return out
+	}
+
+	if got := ids(RunFilter{Activity: ActivityWorking}); strings.Join(got, ",") != "run-alive,run-resumed" {
+		t.Errorf("working just after the fixture = %v", got)
+	}
+	if got := ids(RunFilter{Activity: ActivityIdle}); len(got) != 0 {
+		t.Errorf("idle just after the fixture = %v, want none", got)
+	}
+
+	s.SetIdleAfter(time.Nanosecond)
+	if got := ids(RunFilter{Activity: ActivityIdle}); strings.Join(got, ",") != "run-alive,run-resumed" {
+		t.Errorf("idle past the bound = %v", got)
+	}
+	if got := ids(RunFilter{Activity: ActivityWorking}); len(got) != 0 {
+		t.Errorf("working past the bound = %v, want none", got)
+	}
+
+	if _, err := s.ListRuns(ctx, RunFilter{Activity: "sleeping"}); !errors.Is(err, ErrBadRequest) {
+		t.Errorf("an unknown activity = %v, want ErrBadRequest", err)
 	}
 }

@@ -33,11 +33,9 @@ them is answered exactly as before (#266):
 The chosen port is printed on stdout so the caller can bind to :0 and not race
 anything.
 
-WHY IT IS ITS OWN FILE. It was written inside scripts/hooks/shim-selftest.sh
-for OPS-019..021 and the second shim's self-test needed the same seventy lines.
-Copying them would have been the exact failure E11 exists to answer -- a second
-caller reimplementing what the first already had -- in the test suite that
-proves E11. There is one stub, and both self-tests drive it.
+WHY IT IS ITS OWN FILE. scripts/innsegl-commit-selftest.sh drives it, and a
+copy of the transport inside that script would be one more thing that can
+disagree about what an SSE frame looks like.
 """
 
 import json
