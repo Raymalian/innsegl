@@ -965,6 +965,8 @@ services:
     <<: *innsegl-build
     container_name: innsegl-mcp
     restart: unless-stopped
+    # Longer than INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT: the gateway's drain.
+    stop_grace_period: 5m30s
     depends_on:
       innsegl-db-init:
         condition: service_completed_successfully
@@ -1069,6 +1071,12 @@ services:
       # RM-311 (#493): the dashboard's own certificate, for the same names,
       # written here and served by innsegl-dashboard over HTTPS.
       INNSEGL_DASHBOARD_TLS_DIR: /dashboard-tls
+      # A restart lets the gateway finish the model replies it is streaming:
+      # it closes its listener at once (the client sends new requests to the
+      # provider and journals them) and waits this long for the rest. The
+      # service's stop_grace_period is longer, so the runtime does not kill it
+      # mid-drain.
+      INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT: ${INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT:-5m}
       # `spiffe` requires a client SVID on the gateway. Required whenever
       # INNSEGL_BIND is not loopback.
       INNSEGL_GATEWAY_CLIENT_AUTH: ${INNSEGL_GATEWAY_CLIENT_AUTH:-}

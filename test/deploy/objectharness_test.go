@@ -304,6 +304,9 @@ type interpolatedService struct {
 	// Target: whether a container-side port is reachable from the host at
 	// all, and on which address — GW-005 reads this for the gateway's.
 	Ports []composePort `json:"ports"`
+	// StopGracePeriod is how long the runtime waits after SIGTERM before it
+	// kills the container; empty is the runtime's default (10s).
+	StopGracePeriod string `json:"stop_grace_period"`
 }
 
 // composePort is one resolved `ports:` entry, in the exact shape

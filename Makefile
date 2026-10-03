@@ -30,7 +30,7 @@ COVERPROFILE := cover.out
         innsegl-ca-custody-import innsegl-ca-custody-revoke test-ids \
         innsegl-stack-clean innsegl-up-here innsegl-link innsegl-install-signer verify-branch \
         install-hooks \
-        verify-branch-selftest start link sign clean
+        verify-branch-selftest start update innsegl-here-services link sign clean
 
 all: build test lint
 
@@ -485,7 +485,12 @@ test-clean:
 	@docker network prune -f >/dev/null 2>&1 || true
 
 ## innsegl-up-here: bring the stack up signing in this working tree, not a copy
-innsegl-up-here: sigstore-up
+innsegl-up-here: sigstore-up innsegl-here-services
+
+# innsegl-here-services: innsegl's own services in THIS working tree, built
+# and brought up; the trust services (SPIRE, Fulcio, Rekor) are left as they
+# are. innsegl-up-here starts those first; `make update` assumes they run.
+innsegl-here-services:
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
 	@echo "signing in $(REPO_PATH)  as  $(REPO)"
 	@# The stack's host folders are made here, as the user running make, for
@@ -568,6 +573,18 @@ start:
 	@# up to two minutes for innsegl-api, and then stops with one message that
 	@# says how to get the link later (RM-325); a failure here never fails start.
 	@scripts/setup-link.sh || true
+
+## update: rebuild and restart innsegl's own services only, for a stack that
+##   is already up (`make start` once). SPIRE, Fulcio and Rekor keep running
+##   and the log is not reindexed, so a code update takes the build and a
+##   restart of what changed, not a full start. `docker compose up -d`
+##   recreates only the services whose image or settings changed.
+update:
+	@docker ps --format '{{.Names}}' | grep -qx innsegl-spire-server && docker ps --format '{{.Names}}' | grep -qx innsegl-sigstore-rekor || \
+	  { echo "make update: SPIRE or Rekor is not running; run make start"; exit 2; }
+	@INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services
+	@echo
+	@echo "updated: innsegl's services rebuilt; the trust services were not touched"
 
 ## link: make a project signable — make link DIR=~/Applications/foo
 link:
