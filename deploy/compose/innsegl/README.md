@@ -205,6 +205,23 @@ one-time enrolment codes, pending WebAuthn ceremonies), and nothing at all on
 `innsegl` — no `SELECT`, even. `verify-authwriter-role.sh` asks the server
 both halves, the same way `verify-reader-role.sh` does for the other role.
 
+## A fourth database role: `innsegl_resolver`
+
+ADR-0044's 2026-10-03 amendment (RM-330, #506) lets the dashboard resolve an
+alert, or every open alert in a group, after a fresh passkey ceremony. The
+write goes through its own credential, on its own pool inside `innsegl-api`:
+`innsegl_resolver` may insert a row into `innsegl.alert_resolutions` and read
+whether an event is an alert. Nothing else — no update or delete of a
+resolution, no other ledger table, nothing in `innsegl_auth`.
+
+Its grants are **`internal/api/resolver.sql`**, mounted the same way as the
+other two. `api.AssertResolverScope` probes the credential at every start-up
+and refuses one that can do more; `verify-resolver-role.sh` asks the server
+the same questions when `db-init` provisions it.
+
+`INNSEGL_API_RESOLVER_DSN` is optional. Without it the dashboard shows the
+`innsegl resolve-alert` command instead, and the resolve routes answer 503.
+
 ## Enrolling the first operator
 
 Nobody can open the dashboard until one account exists. ADR-0062's amendment

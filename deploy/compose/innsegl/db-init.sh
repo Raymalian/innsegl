@@ -31,8 +31,13 @@
 #      on innsegl, the same mount-not-copy discipline as step 4's.
 #   9. runs verify-authwriter-role.sh, which asks the server the same
 #      question step 5 does, with the expectations reversed.
+#  10. creates the RESOLVER role (RM-330, ADR-0044's 2026-10-03 amendment)
+#      and applies internal/api/resolver.sql to it — insert an alert
+#      resolution, and nothing else, the same mount-not-copy discipline.
+#  11. runs verify-resolver-role.sh, which asks the server whether that is
+#      all it can do.
 #
-# Steps 3, 5 and 9 are the point. internal/api/readonly.go is the model:
+# Steps 3, 5, 9 and 11 are the point. internal/api/readonly.go is the model:
 #
 #     "The assertion matters more than the provisioning. A role is provisioned
 #      once and then lives in somebody's deployment; a later GRANT by an
@@ -91,6 +96,12 @@ BACKUP_ROLE="${INNSEGL_BACKUP_ROLE:-innsegl_backup}"
 AUTHWRITER_ROLE="${INNSEGL_AUTHWRITER_ROLE:-innsegl_authwriter}"
 : "${INNSEGL_AUTHWRITER_PASSWORD:?db-init: INNSEGL_AUTHWRITER_PASSWORD must be set}"
 
+# RM-330 (ADR-0044's 2026-10-03 amendment) — api.ResolverRole. It may insert
+# an alert resolution and nothing else; `innsegl api` resolves alerts from the
+# dashboard through it. Like the others, a default and not a protected string.
+RESOLVER_ROLE="${INNSEGL_RESOLVER_ROLE:-innsegl_resolver}"
+: "${INNSEGL_RESOLVER_PASSWORD:?db-init: INNSEGL_RESOLVER_PASSWORD must be set}"
+
 # internal/api/readonly.sql, reached BY MOUNT and not by copy.
 #
 # THIS IS THE WHOLE OF HOW THE READER'S GRANTS GET HERE, and it is the same
@@ -113,6 +124,9 @@ READONLY_SQL="${INNSEGL_READONLY_SQL:-/innsegl/api/readonly.sql}"
 # internal/api/authwriter.sql, reached BY MOUNT for the identical reason.
 AUTHWRITER_SQL="${INNSEGL_AUTHWRITER_SQL:-/innsegl/api/authwriter.sql}"
 
+# internal/api/resolver.sql, reached BY MOUNT for the identical reason.
+RESOLVER_SQL="${INNSEGL_RESOLVER_SQL:-/innsegl/api/resolver.sql}"
+
 # The same grammar internal/api/readonly.go accepts. A role name reaches SQL as
 # an identifier and psql quotes it, but a name this pattern rejects is a
 # configuration mistake worth catching where it is made.
@@ -127,6 +141,7 @@ check_role_name() {
 check_role_name "${ROLE}"
 check_role_name "${READER_ROLE}"
 check_role_name "${AUTHWRITER_ROLE}"
+check_role_name "${RESOLVER_ROLE}"
 if [ "${ROLE}" = "${READER_ROLE}" ]; then
   fail "the append-only role and the read-only role are both \"${ROLE}\"; one role cannot be both"
 fi
@@ -136,6 +151,10 @@ fi
 if [ "${AUTHWRITER_ROLE}" = "${ROLE}" ] || [ "${AUTHWRITER_ROLE}" = "${READER_ROLE}" ]; then
   fail "the auth-writer role \"${AUTHWRITER_ROLE}\" collides with another role this script provisions; RM-260/RM-261 requires it hold neither the appender's nor the reader's grants"
 fi
+case "${RESOLVER_ROLE}" in
+  "${ROLE}"|"${READER_ROLE}"|"${AUTHWRITER_ROLE}"|"${BACKUP_ROLE}"|"${PGUSER}")
+    fail "the resolver role \"${RESOLVER_ROLE}\" collides with another role; RM-330 requires a role that may insert an alert resolution and nothing else" ;;
+esac
 
 # psql, with errors fatal and nothing read from a user profile.
 psql_owner() { psql -X -q -v ON_ERROR_STOP=1 "$@"; }
@@ -371,4 +390,38 @@ apply_authwriter_sql "${AUTHWRITER_ROLE}"
 #    and 6 — and the last check this script runs.
 # ---------------------------------------------------------------------------
 log "verifying the auth-writer credential against the server"
-exec sh "${HERE}/verify-authwriter-role.sh"
+sh "${HERE}/verify-authwriter-role.sh"
+
+# ---------------------------------------------------------------------------
+# 10. RM-330 (ADR-0044's 2026-10-03 amendment) — the resolver role: insert an
+#     alert resolution, nothing else. Applied the SAME way (mount, not copy).
+# ---------------------------------------------------------------------------
+[ -f "${RESOLVER_SQL}" ] || fail "no resolver grants at ${RESOLVER_SQL} (\$INNSEGL_RESOLVER_SQL). deploy/compose/innsegl.yml mounts internal/api/resolver.sql there; a second copy of those GRANTs under deploy/ is the wrong fix"
+
+resolver_exists="$(psql_owner -A -t -c "SELECT 1 FROM pg_roles WHERE rolname = '${RESOLVER_ROLE}'")"
+if [ -z "${resolver_exists}" ]; then
+  resolver_verb=CREATE
+  log "creating role ${RESOLVER_ROLE}"
+else
+  resolver_verb=ALTER
+  log "role ${RESOLVER_ROLE} already exists; resetting its password and its grants"
+fi
+
+psql_owner -v pass="${INNSEGL_RESOLVER_PASSWORD}" -v role="${RESOLVER_ROLE}" <<SQL
+${resolver_verb} ROLE :"role" LOGIN PASSWORD :'pass';
+SQL
+
+# The same translation as apply_authwriter_sql, for the same two verbs.
+resolver_grants="$(sed -e 's/%\[1\]s/:"role"/g' -e 's/%\[2\]s/:"db"/g' "${RESOLVER_SQL}")"
+if printf '%s\n' "${resolver_grants}" | grep -Eq '%(\[|[A-Za-z])'; then
+  fail "${RESOLVER_SQL} still contains an fmt verb after translation; teach this translation the new verb rather than copying the GRANTs into deploy/"
+fi
+log "applying ${RESOLVER_SQL} to ${RESOLVER_ROLE}"
+printf '%s\n' "${resolver_grants}" |
+  psql_owner -v role="${RESOLVER_ROLE}" -v db="${PGDATABASE}" -f -
+
+# ---------------------------------------------------------------------------
+# 11. Ask the server about the resolver — the last check this script runs.
+# ---------------------------------------------------------------------------
+log "verifying the resolver credential against the server"
+exec sh "${HERE}/verify-resolver-role.sh"
