@@ -26,7 +26,10 @@ export const strings = {
     recoveryLink: "Use a recovery code",
     recoveryHideLink: "Use a passkey instead",
     recoveryLabel: "Recovery code",
-    recoveryHint: "One of the ten single-use codes shown when the account was created.",
+    recoveryHeading: "Sign in with a recovery code",
+    recoveryIntro:
+      "Use this when no passkey can sign you in. A code works once, then takes you to your account page to add a passkey.",
+    recoveryHint: "One of your ten single-use codes. Dashes and spaces do not matter.",
     recoveryButton: "Sign in with this code",
     recoveryWorking: "Checking the code",
     recoveryFailed: "That recovery code could not be used",

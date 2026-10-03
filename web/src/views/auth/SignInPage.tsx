@@ -26,7 +26,6 @@ import {
   pageShell,
   primaryButton,
   proseText,
-  secondaryButton,
   secondaryText,
 } from "./styles";
 
@@ -97,6 +96,68 @@ export function SignInPage({
     }
   };
 
+  const toggle = (
+    <button
+      type="button"
+      onClick={() => setShowRecovery((shown) => !shown)}
+      className={`${inlineLinkButton} self-start`}
+    >
+      {showRecovery ? strings.signIn.recoveryHideLink : strings.signIn.recoveryLink}
+    </button>
+  );
+
+  // One action per view: the passkey, or the recovery code, never both
+  // buttons at once.
+  if (showRecovery) {
+    return (
+      <section aria-labelledby={headingId} className={pageShell}>
+        <h1 id={headingId} className={pageHeading}>
+          {strings.signIn.recoveryHeading}
+        </h1>
+        <p className={proseText}>{strings.signIn.recoveryIntro}</p>
+        <form onSubmit={(e) => void submitRecovery(e)} className="flex flex-col gap-4">
+          <div className={fieldStack}>
+            <label htmlFor={recoveryId} className={fieldLabel}>
+              {strings.signIn.recoveryLabel}
+            </label>
+            <input
+              id={recoveryId}
+              name="code"
+              type="text"
+              spellCheck={false}
+              autoComplete="one-time-code"
+              autoCapitalize="none"
+              autoFocus
+              required
+              aria-describedby={recoveryHintId}
+              value={recoveryCode}
+              onChange={(event) => setRecoveryCode(event.target.value)}
+              className={`${fieldInput} font-mono ${focusRing}`}
+            />
+            <span id={recoveryHintId} className={secondaryText}>
+              {strings.signIn.recoveryHint}
+            </span>
+          </div>
+          <button
+            type="submit"
+            disabled={recoveryPhase.status === "working"}
+            className={`${primaryButton} ${focusRing}`}
+          >
+            {recoveryPhase.status === "working"
+              ? strings.signIn.recoveryWorking
+              : strings.signIn.recoveryButton}
+          </button>
+          {recoveryPhase.status === "failed" && (
+            <p role="alert" className={`${noticeBase} ${degraded}`}>
+              <span className={noticeBody}>{recoveryPhase.message}</span>
+            </p>
+          )}
+        </form>
+        {toggle}
+      </section>
+    );
+  }
+
   return (
     <section aria-labelledby={headingId} className={pageShell}>
       <h1 id={headingId} className={pageHeading}>
@@ -116,53 +177,7 @@ export function SignInPage({
           <span className={noticeBody}>{phase.message}</span>
         </p>
       )}
-
-      <button
-        type="button"
-        onClick={() => setShowRecovery((shown) => !shown)}
-        className={`${inlineLinkButton} self-start`}
-      >
-        {showRecovery ? strings.signIn.recoveryHideLink : strings.signIn.recoveryLink}
-      </button>
-
-      {showRecovery && (
-        <form onSubmit={(e) => void submitRecovery(e)} className="flex flex-col gap-4">
-          <div className={fieldStack}>
-            <label htmlFor={recoveryId} className={fieldLabel}>
-              {strings.signIn.recoveryLabel}
-            </label>
-            <input
-              id={recoveryId}
-              name="code"
-              type="text"
-              spellCheck={false}
-              autoComplete="off"
-              required
-              aria-describedby={recoveryHintId}
-              value={recoveryCode}
-              onChange={(event) => setRecoveryCode(event.target.value)}
-              className={`${fieldInput} font-mono ${focusRing}`}
-            />
-            <span id={recoveryHintId} className={secondaryText}>
-              {strings.signIn.recoveryHint}
-            </span>
-          </div>
-          <button
-            type="submit"
-            disabled={recoveryPhase.status === "working"}
-            className={`${secondaryButton} ${focusRing}`}
-          >
-            {recoveryPhase.status === "working"
-              ? strings.signIn.recoveryWorking
-              : strings.signIn.recoveryButton}
-          </button>
-          {recoveryPhase.status === "failed" && (
-            <p role="alert" className={`${noticeBase} ${degraded}`}>
-              <span className={noticeBody}>{recoveryPhase.message}</span>
-            </p>
-          )}
-        </form>
-      )}
+      {toggle}
     </section>
   );
 }
