@@ -163,7 +163,10 @@ func (g GitRepos) patchIDOf(ctx context.Context, worktree string, diffArgs []str
 	// worktree is a checkout already proven to be the run's repository
 	// (Workspace.Worktree, or commitPathWorktree on the commit path), and
 	// diffArgs are this package's own constants and object ids.
-	diff := exec.CommandContext(ctx, path, append([]string{"-C", worktree}, diffArgs...)...) //nolint:gosec // G702, see above
+	// nolintlint too: gosec's taint analysis reports G702 here on some runs
+	// and not others (measured 2026-10-03, one tree, one version), so the
+	// directive is unused on the runs that miss it.
+	diff := exec.CommandContext(ctx, path, append([]string{"-C", worktree}, diffArgs...)...) //nolint:gosec,nolintlint // G702, see above
 	diff.Env = signCommitGitEnv(worktree)
 	patch, err := diff.Output()
 	if err != nil {
@@ -175,7 +178,7 @@ func (g GitRepos) patchIDOf(ctx context.Context, worktree string, diffArgs []str
 			ErrNoChange, strings.Join(diffArgs, " "), worktree)
 	}
 
-	id := exec.CommandContext(ctx, path, "-C", worktree, "patch-id", "--verbatim") //nolint:gosec // G702, see diff above
+	id := exec.CommandContext(ctx, path, "-C", worktree, "patch-id", "--verbatim") //nolint:gosec,nolintlint // G702, see diff above
 	id.Env = signCommitGitEnv(worktree)
 	id.Stdin = strings.NewReader(string(patch))
 	out, err := id.Output()
