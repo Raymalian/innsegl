@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="description" content="Innsegl issues a single-purpose cryptographic identity to each AI agent run and makes the attribution of its commits checkable by someone who trusts nothing about the system that produced it." />
+    <meta name="description" content="Innsegl records what AI agents do from their own traffic, gives each agent run a single-purpose cryptographic identity, and makes the attribution of its commits checkable by someone who trusts nothing about the system that produced it." />
     <title>Innsegl — verifiable identity and attribution for AI agents</title>
     <link rel="stylesheet" href="/tokens.css" />
     <link rel="stylesheet" href="/site.css" />
@@ -30,10 +30,10 @@
 
       <section aria-labelledby="status">
         <div class="panel panel--status">
-          <h2 id="status">Status: pre-1.0, and several things below are not built</h2>
+          <h2 id="status">Status: pre-1.0, and you run your own core</h2>
           <p>
-            This is an in-progress open-source project, not a product. The
-            honest inventory, as of this page:
+            This is an in-progress open-source project, not a hosted product.
+            The honest inventory, as of this page:
           </p>
           <ul>
             <li>
@@ -43,11 +43,14 @@
               below can still change without notice.
             </li>
             <li>
-              <strong>Nothing is hosted.</strong> <code>innsegl.dev</code>
-              serves this page and the Go module path. The public verification
-              page and the operator dashboard are written but are not deployed
-              at any address, and there is no instance of the server you can
-              point an agent at.
+              <strong>Nothing is hosted for you.</strong> <code>innsegl.dev</code>
+              serves this page and the Go module path. To use Innsegl you run a
+              core from this repository on a host of your own and connect your
+              machines to it.
+            </li>
+            <li>
+              <strong>One harness.</strong> Recording works with Claude Code
+              today. Other agent harnesses are not supported yet.
             </li>
             <li>
               <strong>There is no public Go API.</strong> Every package except
@@ -56,15 +59,12 @@
               it.
             </li>
             <li>
-              <strong>The end-to-end claim is demonstrable, and nothing is
-              released.</strong> <code>make smoke</code> boots the reference
-              stack from this repository, registers an agent, signs a commit,
-              records it in a real Rekor, retires the agent, and then verifies
-              that commit from a container with no route to the ledger. It
-              takes about a minute. That is the claim, and you can run it —
-              but it runs from a clone of the default branch, not from a
-              release, and it is a stack on your machine rather than a service
-              anyone operates.
+              <strong>The end-to-end claim is demonstrable.</strong>
+              <code>make smoke</code> boots the reference stack from this
+              repository, signs a commit as an agent, records it in a real
+              Rekor, and then verifies that commit from a container with no
+              route to the ledger. It runs from a clone of the default branch,
+              not from a release.
             </li>
           </ul>
           <p class="footnote">
@@ -79,40 +79,61 @@
         <p>
           Agent work is unattributed. Nobody can prove which agent did what,
           and nothing stops an operator from disputing the attribution
-          afterwards. Innsegl is one identity service and one append-only
-          ledger, arranged so that issuance is centralized and verification is
+          afterwards. Innsegl is one core — an identity service and an
+          append-only ledger — and a small client on each machine that runs
+          agents, arranged so that issuance is centralized and verification is
           not.
         </p>
         <ul>
           <li>
-            <strong>One identity per run.</strong> SPIRE attests the workload
-            and issues a short-lived SVID for the SPIFFE ID
+            <strong>Recorded from the traffic itself.</strong> Claude Code
+            reaches the model through the client, and the client through the
+            core's gateway. The gateway forwards every request unchanged and
+            records what passed: the task, every tool call and its result, and
+            which agent started which. Agents call nothing themselves. The
+            harness's own telemetry is a second witness, and a disagreement
+            between the two is recorded as an alert, never resolved quietly.
+          </li>
+          <li>
+            <strong>One identity per run.</strong> When a session or subagent
+            first talks to the model, SPIRE issues it a short-lived identity
+            for the SPIFFE ID
             <code>spiffe://{trust-domain}/agent/{agent-type}/{task-id}/{run-id}</code>.
-            One registration entry per run, created at registration and deleted
-            at retirement: identity, run and purpose are the same thing.
+            When it ends, the identity is retired. Identity, run and purpose
+            are the same thing.
           </li>
           <li>
-            <strong>An MCP server with five tools</strong> —
-            <code>register_agent</code>, <code>get_credential</code>,
-            <code>record_event</code>, <code>sign_commit</code>,
-            <code>retire_agent</code>. Agents talk only to it, and never see
-            SPIRE's admin API. It never holds, caches or proxies an agent's
-            private key.
-          </li>
-          <li>
-            <strong>Commits signed, not asserted.</strong> A JWT-SVID bound to
-            Sigstore's audience buys a short-lived Fulcio certificate; the
-            commit is signed with it and its entry lands in the Rekor
-            transparency log. The commit carries
+            <strong>Commits signed, not asserted.</strong> A commit an agent
+            makes is tied to the tool call that made it, then signed with a
+            short-lived Fulcio certificate for the run's identity, and its
+            entry lands in the Rekor transparency log. The commit carries
             <code>Agent-Identity</code>, <code>Agent-Run</code> and
             <code>Agent-Task</code> trailers. The trailer is the claim; the
-            signature is the proof; verification requires that they agree.
+            signature is the proof; verification requires that they agree. If
+            any step fails, there is no signature.
           </li>
           <li>
             <strong>A ledger with no delete or update path.</strong> Events are
             hash-chained, sealed into content-addressed segments, and each
             segment's Merkle root is anchored in Rekor. Corrections are new
             events that supersede old ones. Nothing is ever rewritten.
+          </li>
+          <li>
+            <strong>Machines are enrolled, not trusted by address.</strong>
+            Each machine holds its own key and a short-lived certificate,
+            enrolled once with a single-use token that an organisation's member
+            creates behind a passkey. Revoking the machine shuts it out.
+          </li>
+          <li>
+            <strong>An outage does not stop the agent.</strong> If the core does
+            not answer, the client sends the request on and keeps a signed,
+            hash-chained journal of it, which the core checks and records when
+            it is back.
+          </li>
+          <li>
+            <strong>A dashboard to read it.</strong> Runs, repositories and
+            alerts, behind passkey sign-in. Resolving an alert takes a fresh
+            passkey confirmation and is itself recorded.
           </li>
         </ul>
       </section>
@@ -136,11 +157,16 @@
           <li>
             It answers <em>who did it</em>, not <em>whether it was allowed</em>.
             There is no policy engine and no authorization model beyond
-            protecting the server's own admin surface.
+            protecting the core's own surfaces.
           </li>
           <li>
             Attestation proves what a workload <em>is</em>, not that it
             behaved. Innsegl is not a sandbox.
+          </li>
+          <li>
+            Work outside any repository passes through unrecorded. A program an
+            agent starts that calls the model provider on its own is not
+            recorded either.
           </li>
           <li>
             GitHub's interface does not render gitsign signatures with its
@@ -150,7 +176,8 @@
           </li>
           <li>
             The ledger stores digests and references — commit SHA, tree hash,
-            payload digest — never diffs, code or tool-call bodies.
+            payload digest. The tool-call bodies the gateway captures are kept
+            by the deployment beside the ledger, never in it.
           </li>
           <li>
             Commits made before adoption stay unattributed. Nothing is
@@ -182,12 +209,26 @@
           different answer from <em>it does not hold</em>.
         </p>
 
-        <h3>Run the reference stack</h3>
+        <h3>Run a core</h3>
         <p>
-          The repository carries a Docker Compose stack — SPIRE, Postgres,
-          object storage, a self-hosted Sigstore, and the server itself — under
-          <code>deploy/compose/</code>. Read its README there; it is the part of
-          this project that changes fastest.
+          The repository carries the core as a Docker Compose stack — SPIRE,
+          Postgres, object storage, a self-hosted Sigstore, and the gateway and
+          dashboard — under <code>deploy/compose/</code>. Read its README there;
+          it is the part of this project that changes fastest.
+        </p>
+
+        <h3>Connect a machine</h3>
+        <pre><code>innsegl connect https://&lt;core&gt;:28095 \
+  --token &lt;ie_…&gt; \
+  --ca-fingerprint sha256:&lt;hex&gt;
+innsegl status</code></pre>
+        <p>
+          The dashboard's Account page creates the token and shows this command
+          with the core's fingerprint filled in. <code>innsegl status</code>
+          says what is up and what is down between the machine and its core,
+          and exits non-zero naming whatever is down.
+          <code>innsegl connect --disconnect</code> removes what connect wrote
+          and revokes the machine on the core.
         </p>
       </section>
 
