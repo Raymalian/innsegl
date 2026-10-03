@@ -47,8 +47,8 @@ test("RM-279: the profile edit, passkey rename/remove, add-passkey and recovery-
     page.getByRole("button", { name: "Edit" }),
     page.getByRole("button", { name: "Copy user ID" }),
     page.getByRole("button", { name: "Revoke" }).first(),
-    page.getByRole("combobox", { name: "Kind" }),
-    page.getByRole("button", { name: "Connect a machine" }),
+    page.getByRole("radio", { name: /Workstation/ }),
+    page.getByRole("button", { name: "Continue with passkey" }),
     page.getByRole("link", { name: "github.com/example/app" }),
     page.getByRole("link", { name: "claude-code" }),
     page.getByRole("button", { name: "Rename" }).first(),
@@ -98,7 +98,7 @@ test("RM-333: the minted enrolment token and its command have no violations", as
   await installFakePasskey(page);
   await installAccountMocks(page);
   await page.goto("/account");
-  await page.getByRole("button", { name: "Connect a machine" }).click();
+  await page.getByRole("button", { name: "Continue with passkey" }).click();
   await expect(page.getByRole("button", { name: "Copy command" })).toBeVisible();
 
   const results = await new AxeBuilder({ page })

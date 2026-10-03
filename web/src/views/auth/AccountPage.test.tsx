@@ -491,7 +491,8 @@ describe("AccountPage", () => {
     expect(within(row).getByText(strings.account.machineStatus.active)).toBeInTheDocument();
     expect(within(row).getByText(strings.account.machineKind.service)).toBeInTheDocument();
     expect(within(row).getByText("github.com/example/app")).toBeInTheDocument();
-    expect(within(row).getByText("Sep 29, 2026")).toBeInTheDocument();
+    // Last active reads as an age, with the full date on hover.
+    expect(within(row).getByText(/ ago$/)).toHaveAttribute("title", expect.stringContaining("2026"));
     const laptop = within(region).getByText("laptop").closest("tr");
     if (laptop === null) throw new Error("no row for laptop");
     expect(within(laptop).getByText(strings.account.machineStatus.revoked)).toBeInTheDocument();
@@ -529,6 +530,37 @@ describe("AccountPage", () => {
     expect(within(region).queryByRole("button", { name: strings.account.revokeButton })).toBeNull();
     expect(within(region).queryByRole("button", { name: strings.account.connectButton })).toBeNull();
     expect(within(region).getByText(strings.account.connectNeedsRole)).toBeInTheDocument();
+  });
+
+  it("chooses the kind of machine from two described choices", async () => {
+    const fetches = installAccountFetch(account());
+    const user = userEvent.setup();
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    const kinds = within(region).getByRole("radiogroup", { name: strings.account.connectKindLabel });
+    expect(within(kinds).getByRole("radio", { name: new RegExp(strings.account.machineKind.workstation) })).toBeChecked();
+    expect(within(kinds).getByText(strings.account.connectKindHelp.workstation)).toBeInTheDocument();
+    expect(within(kinds).getByText(strings.account.connectKindHelp.service)).toBeInTheDocument();
+
+    await user.click(within(kinds).getByRole("radio", { name: new RegExp(strings.account.machineKind.service) }));
+    await user.click(within(region).getByRole("button", { name: strings.account.connectButton }));
+    await within(region).findByText("ie_0123456789abcdef_secret");
+    const begin = fetches.calls.find((c) => c.url.endsWith("/enrolment-tokens/begin"));
+    expect(begin?.body).toEqual({ organisation_id: "org-1", kind: "service", repos: ["*"] });
+  });
+
+  it("says how long ago a machine was last active, with the date on hover", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-09-29T03:00:00Z") });
+    try {
+      installAccountFetch(account());
+      render(<AccountPage browser={workingBrowser()} />);
+      const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+      const cell = await within(region).findByText("3 hours ago");
+      expect(cell).toHaveAttribute("title");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("pins the core by its CA fingerprint in the connect command when the API knows it", async () => {

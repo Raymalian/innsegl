@@ -33,6 +33,7 @@ import {
   revokeMachine,
   type WebAuthnBrowser,
 } from "./client";
+import { lastSeenAgo } from "../runs/lastseen";
 import { formatDate, formatDateTime } from "./format";
 import { strings } from "./strings";
 import type {
@@ -76,6 +77,7 @@ import {
   table,
   scrollingTablePanel,
   focusRing,
+  kindChoice,
 } from "./styles";
 
 const a = strings.account;
@@ -311,7 +313,7 @@ export function MachinesSection({
                         {active === null ? (
                           <span className={mutedText}>{a.notYet}</span>
                         ) : (
-                          formatDate(active)
+                          <span title={formatDateTime(active)}>{lastSeenAgo(active, new Date())}</span>
                         )}
                       </td>
                       {anyManageable && (
@@ -347,7 +349,7 @@ export function MachinesSection({
               reload();
             }} />
           ) : (
-            <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-4">
               {manageable.length > 1 && (
                 <div className="flex flex-col gap-1">
                   <label htmlFor={orgSelectId} className={`text-micro ${fieldLabel}`}>
@@ -367,20 +369,35 @@ export function MachinesSection({
                   </select>
                 </div>
               )}
-              <div className="flex flex-col gap-1">
-                <label htmlFor={kindSelectId} className={`text-micro ${fieldLabel}`}>
+              <fieldset className="flex w-full flex-col gap-2">
+                <legend id={kindSelectId} className={`mb-2 text-micro ${fieldLabel}`}>
                   {a.connectKindLabel}
-                </label>
-                <select
-                  id={kindSelectId}
-                  value={kind}
-                  onChange={(e) => setKind(e.target.value)}
-                  className={inlineSelect}
+                </legend>
+                <div
+                  role="radiogroup"
+                  aria-labelledby={kindSelectId}
+                  className="grid w-full gap-3 sm:grid-cols-2"
                 >
-                  <option value="workstation">{a.machineKind.workstation}</option>
-                  <option value="service">{a.machineKind.service}</option>
-                </select>
-              </div>
+                  {(["workstation", "service"] as const).map((k) => (
+                    <label key={k} className={kindChoice}>
+                      <input
+                        type="radio"
+                        name="machine-kind"
+                        value={k}
+                        checked={kind === k}
+                        onChange={() => setKind(k)}
+                        className={`mt-1 accent-[var(--innsegl-color-accent-emphasis)] ${focusRing}`}
+                      />
+                      <span className="flex flex-col gap-0.5">
+                        <span className="font-medium text-ink">{a.machineKind[k]}</span>
+                        <span className={`text-micro leading-prose ${secondaryText}`}>
+                          {a.connectKindHelp[k]}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
               <button
                 type="button"
                 disabled={connect.status === "working"}
