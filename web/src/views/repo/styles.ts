@@ -76,3 +76,7 @@ export const inlineRow = "flex flex-wrap items-center gap-2";
 
 /** Prose inside a section: generous line height, bounded measure (§5.4). */
 export const explanation = "max-w-prose leading-prose text-ink-secondary";
+
+/** The Repositories list's title: the shell's page heading, as Overview and Runs set it. */
+export const listHeading =
+  "font-serif text-display font-semibold leading-tight tracking-display text-ink";

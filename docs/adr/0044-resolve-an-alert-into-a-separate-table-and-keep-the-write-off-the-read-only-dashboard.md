@@ -271,7 +271,7 @@ find an alert's ID.
   challenge for the signed-in user's own passkeys, with user verification
   required, and stores the request with the ceremony.
   `.../finish` verifies the assertion and only then writes. The ceremony is
-  its own kind (migration 0012), so a sign-in challenge cannot finish a
+  its own kind (migration 0013), so a sign-in challenge cannot finish a
   resolution and a resolution challenge cannot open a session.
 - The write goes through a third database credential, `innsegl_resolver`
   (`internal/api/resolver.sql`). It may read the two columns of

@@ -21,13 +21,13 @@ import { Link } from "../../app/router";
 import {
   identifierText,
   link,
+  listHeading,
   sectionShell,
   secondaryText,
   table,
   tableCell,
   tableHeader,
   tableScroll,
-  viewHeading,
   viewShell,
 } from "../repo/styles";
 import { fetchRepos } from "./query";
@@ -71,7 +71,7 @@ export function ReposView({ load = fetchRepos }: ReposViewProps) {
   return (
     <div className={viewShell}>
       <header className="flex flex-col gap-2">
-        <h1 className={viewHeading}>{strings.labels.title}</h1>
+        <h1 className={listHeading}>{strings.labels.title}</h1>
         <p className={secondaryText}>{strings.sentences.intro}</p>
       </header>
       <StalenessIndicator />

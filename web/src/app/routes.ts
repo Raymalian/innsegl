@@ -31,6 +31,7 @@ export const VIEWS = [
   "overview",
   "runs",
   "run",
+  "repos",
   "repo",
   "agentType",
   "verify",
@@ -129,6 +130,7 @@ export type Route =
    * deeper" fixture below: it is an escape hatch to the view this run's page
    * superseded, not a second view a reader navigates INTO. */
   | { view: "run"; runId: string; chain?: boolean }
+  | { view: "repos" }
   | { view: "repo"; repo: string; from: string; to: string }
   | { view: "agentType"; agentType: string; from: string; to: string }
   | { view: "verify"; commit: string; repo: string }
@@ -141,6 +143,7 @@ export const VIEW_ROOTS: Record<ViewName, string> = {
   overview: "/",
   runs: "/runs",
   run: "/runs",
+  repos: "/repos",
   repo: "/repos",
   agentType: "/agent-types",
   verify: "/verify",
@@ -162,11 +165,13 @@ export const VIEW_ROOTS: Record<ViewName, string> = {
  *
  * Alerts joined the rail with RM-330 (#506): an index of every alert has an
  * address of its own, and the bell's menu only ever lists the newest open
- * ones.
+ * ones. Repositories joined it with RM-332 (#508), as the index the
+ * paragraph above found missing: every repository the ledger holds.
  */
 export const NAV_VIEWS = [
   "overview",
   "runs",
+  "repos",
   "alerts",
   "verify",
 ] as const satisfies readonly ViewName[];
@@ -178,6 +183,8 @@ export function navRoute(view: (typeof NAV_VIEWS)[number]): Route {
       return { view: "overview" };
     case "runs":
       return { view: "runs", filters: emptyRunsFilters() };
+    case "repos":
+      return { view: "repos" };
     case "alerts":
       return { view: "alerts", filters: emptyAlertsFilters() };
     case "verify":
@@ -237,6 +244,8 @@ export function parseRoute(pathWithQuery: string): Route {
     switch (decoded[0]) {
       case "runs":
         return { view: "runs", filters: filtersFrom(q) };
+      case "repos":
+        return { view: "repos" };
       case "verify":
         return {
           view: "verify",
@@ -338,6 +347,8 @@ export function routeToPath(route: Route): string {
       return route.chain
         ? `/runs/${encodeURIComponent(route.runId)}/chain`
         : `/runs/${encodeURIComponent(route.runId)}`;
+    case "repos":
+      return "/repos";
     case "repo":
       return withQuery(`/repos/${encodeURIComponent(route.repo)}`, [
         ["from", route.from],

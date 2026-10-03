@@ -107,3 +107,7 @@ export const alertRowRunId = "font-mono";
 export const alertRowStatus = `shrink-0 text-micro ${secondaryText}`;
 export const recordPre = `${hairline} overflow-x-auto rounded-md border-line bg-sunken p-3 font-mono text-micro text-ink`;
 export const recordToggle = `cursor-pointer text-accent underline underline-offset-2 ${focusRing}`;
+
+/** The alerts page's title: the shell's page heading, as Overview and Runs set it. */
+export const pageHeading =
+  "font-serif text-display font-semibold leading-tight tracking-display text-ink";

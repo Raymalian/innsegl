@@ -26,6 +26,7 @@ describe("FE-016 route table", () => {
       "overview",
       "runs",
       "run",
+      "repos",
       "repo",
       "agentType",
       "verify",

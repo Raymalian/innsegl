@@ -39,7 +39,7 @@ import (
 // resolutionRoutePrefix is the prefix ServeHTTP hands to serveResolutions.
 const resolutionRoutePrefix = "/api/v1/alert-resolutions"
 
-// ceremonyKindResolveAlerts is migration 0012's ceremony kind.
+// ceremonyKindResolveAlerts is migration 0013's ceremony kind.
 const ceremonyKindResolveAlerts = "resolve_alerts"
 
 // maxResolutionReasonBytes mirrors migration 0003's CHECK on reason.

@@ -51,7 +51,9 @@ export const en = {
       overview: "Overview",
       runs: "Runs",
       run: "Run detail",
-      repo: "Repositories",
+      /** RM-332: every repository the ledger holds. */
+      repos: "Repositories",
+      repo: "Repository",
       agentType: "Agent types",
       verify: "Verify a commit",
       /** RM-330: every alert, open and resolved, grouped by what raised it. */

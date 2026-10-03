@@ -42,7 +42,6 @@ import {
   groupSubheading,
   groupTitle,
   groupTitleRow,
-  heading,
   mutedText,
   openCountBadge,
   page,
@@ -51,6 +50,7 @@ import {
   segment,
   segmented,
   summary,
+  pageHeading,
 } from "./styles";
 import { alertSummary } from "./summary";
 
@@ -81,7 +81,7 @@ export function AlertsPage({
   return (
     <article className={page}>
       <header className="flex flex-col gap-2">
-        <h1 className={heading}>{strings.page.heading}</h1>
+        <h1 className={pageHeading}>{strings.page.heading}</h1>
         <p className={summary}>{strings.page.introDetail}</p>
         {complete ? null : (
           <p className={summary}>{strings.page.incompleteDetail(alerts.length)}</p>
