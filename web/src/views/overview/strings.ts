@@ -110,7 +110,7 @@ export const strings = {
       `Ledger segment ${segment} sealed ${ago} ago, not yet anchored in Rekor`,
     sentenceBeyond: (over: string, bound: string) =>
       ` — ${over} beyond the ${bound} anchoring-lag bound`,
-    sealedAt: (when: string) => `Sealed ${when}.`,
+    sealedAt: (when: string) => `. Sealed ${when}.`,
     /** The state doc 02 §3 creates and the shared component has no words for:
      * sealed, with the anchoring members still to arrive on a superseding
      * event. */

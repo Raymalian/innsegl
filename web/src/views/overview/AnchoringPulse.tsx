@@ -245,15 +245,12 @@ export function AnchoringEvidence({
       >
         {summary.sentence}
         {sealedAt === null ? null : (
-          <>
-            {". "}
-            <time
-              dateTime={toDateTimeAttribute(sealedAt)}
-              className="tabular-nums"
-            >
-              {strings.heartbeat.sealedAt(formatAbsoluteUtc(sealedAt))}
-            </time>
-          </>
+          <time
+            dateTime={toDateTimeAttribute(sealedAt)}
+            className="tabular-nums"
+          >
+            {strings.heartbeat.sealedAt(formatAbsoluteUtc(sealedAt))}
+          </time>
         )}
       </p>
       {first === undefined || last === undefined ? null : (

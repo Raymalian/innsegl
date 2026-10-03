@@ -36,7 +36,7 @@ const formatted: Array<[string, string]> = [
   ["labels.formats.showing", strings.formats.showing(3, 4_000_000)],
   ["labels.formats.commits.one", strings.formats.commits(1)],
   ["labels.formats.commits.many", strings.formats.commits(0)],
-  ["sentences.formats.bounded", strings.formats.bounded(200)],
+  ["labels.formats.next", strings.formats.next(200)],
 ];
 
 const all = [...entries, ...formatted];
@@ -68,13 +68,15 @@ describe("FE-056 the catalogue is complete and reachable", () => {
     expect(entries.some(([k]) => k.startsWith("sentences."))).toBe(true);
   });
 
-  it("names doc 06 §3.2's five columns and no sixth", () => {
+  it("names RM-331's seven columns and no eighth", () => {
     expect(Object.keys(strings.labels.columns)).toEqual([
-      "runId",
-      "task",
-      "repo",
-      "commits",
       "status",
+      "repo",
+      "agentType",
+      "task",
+      "started",
+      "lastSeen",
+      "commits",
     ]);
   });
 
