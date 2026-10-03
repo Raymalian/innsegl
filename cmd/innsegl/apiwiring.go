@@ -154,6 +154,12 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 		return nil, err
 	}
 	closers = append(closers, orgs.Close)
+	// A deployment whose users predate the operator organisation gets it now,
+	// owned by its first user (accounts.FoundOperator). Not fatal: the
+	// account page says what is missing.
+	if _, ferr := orgs.FoundOperator(boot); ferr != nil {
+		log.warn("founding the operator organisation failed", "err", ferr)
+	}
 
 	// ---- the resolver credential, optional (RM-330) -------------------------
 	//
@@ -215,6 +221,7 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 		SessionLifetime: o.sessionLifetime,
 		Resolver:        resolver,
 		Organisations:   orgs,
+		CoreCACertFile:  o.gatewayCACert,
 	})
 	if err != nil {
 		unwind()

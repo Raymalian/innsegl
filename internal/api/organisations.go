@@ -37,6 +37,9 @@ type Organisations interface {
 	// plaintext, once. ErrOrgInvalid for a kind or repos list the spine
 	// refuses.
 	MintEnrolmentToken(ctx context.Context, accountID, actor, kind string, repos []string) (token string, expiresAt time.Time, err error)
+	// FoundOperator creates the deployment's own organisation, with its
+	// first user as owner, when there is none; it answers whether it did.
+	FoundOperator(ctx context.Context) (bool, error)
 }
 
 // OrgMembership is one live membership.
