@@ -454,3 +454,28 @@ func TestConnectDisconnectSaysSoWhenTheCoreCannotRevoke(t *testing.T) {
 		t.Errorf("stderr does not say the installation is still active and where to revoke it:\n%s", stderr)
 	}
 }
+
+// EGR-001. --egress-control, moved from install.sh: with --hardened, the sandbox's
+// network is locked to the hosts in the file (one per line, # comments and
+// blank lines ignored). Without --hardened it is refused.
+func TestEGR001ConnectEgressControlLocksTheSandboxNetwork(t *testing.T) {
+	f := newConnectFixture(t)
+	list := filepath.Join(t.TempDir(), "allow.txt")
+	if err := os.WriteFile(list, []byte("# build hosts\nproxy.golang.org\n\nregistry.npmjs.org\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--egress-control", list); code == exitOK {
+		t.Fatal("--egress-control without --hardened was accepted")
+	}
+	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--hardened", "--egress-control", list); code != exitOK {
+		t.Fatalf("connect: %s", stderr)
+	}
+	got := string(readFile(t, f.settings))
+	for _, want := range []string{`"strictAllowlist": true`, `"proxy.golang.org"`, `"registry.npmjs.org"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("managed settings lack %s:\n%s", want, got)
+		}
+	}
+}

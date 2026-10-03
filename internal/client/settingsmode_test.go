@@ -362,3 +362,31 @@ func TestRM312DisconnectAfterEachModeLeavesNoInnseglKey(t *testing.T) {
 		})
 	}
 }
+
+// --egress-control, moved here from install.sh's --local-client (RM-248,
+// #393): with --hardened, the sandbox's network is locked to an allowlist.
+// The provider's host is left out: model traffic goes through the client,
+// never from a sandboxed shell. Removing the lockdown removes all of it.
+func TestHardenedEgressAllowlistLocksTheSandboxNetwork(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed-settings.json")
+	cfg := hardenedConfig(t, "")
+	cfg.EgressAllowlist = []string{"proxy.golang.org", "api.anthropic.com", "registry.npmjs.org", "proxy.golang.org"}
+	if err := InstallSettings(path, cfg, fixedNow, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	net := objAt(t, objAt(t, readJSON(t, path), "sandbox"), "network")
+	if net["strictAllowlist"] != true || net["allowManagedDomainsOnly"] != true {
+		t.Fatalf("network = %v; want the allowlist enforced", net)
+	}
+	got, ok := net["allowedDomains"].([]any)
+	if !ok || len(got) != 2 || got[0] != "proxy.golang.org" || got[1] != "registry.npmjs.org" {
+		t.Fatalf("allowedDomains = %v; want the list without the provider and without repeats", got)
+	}
+
+	if err := UninstallSettings(path, cfg, fixedNow, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if text := readFile(t, path); string(text) != "{}\n" {
+		t.Fatalf("install then remove left %q", text)
+	}
+}
