@@ -26,8 +26,8 @@ func TestFoundOperatorMakesTheFirstUserOwner(t *testing.T) {
 	if err != nil || len(m) != 1 || !m[0].Operator || m[0].Role != RoleOwner || m[0].Name != "u-1" {
 		t.Fatalf("u-1 memberships = %+v, %v; want owner of the operator organisation", m, err)
 	}
-	if m2, _ := s.Memberships(ctx, "u-2"); len(m2) != 0 {
-		t.Fatalf("u-2 memberships = %+v; only the first user is made owner", m2)
+	if m2, err := s.Memberships(ctx, "u-2"); err != nil || len(m2) != 0 {
+		t.Fatalf("u-2 memberships = %+v, %v; only the first user is made owner", m2, err)
 	}
 
 	if again, err := s.FoundOperator(ctx); err != nil || again {
@@ -49,7 +49,7 @@ func TestFoundOperatorLeavesAnExistingOneAlone(t *testing.T) {
 	if created, err := s.FoundOperator(ctx); err != nil || created {
 		t.Fatalf("FoundOperator = %v, %v; want false, nil", created, err)
 	}
-	if m, _ := s.Memberships(ctx, "u-1"); len(m) != 0 {
-		t.Fatalf("u-1 was added to an organisation that existed: %+v", m)
+	if m, err := s.Memberships(ctx, "u-1"); err != nil || len(m) != 0 {
+		t.Fatalf("u-1 was added to an organisation that existed: %+v, %v", m, err)
 	}
 }

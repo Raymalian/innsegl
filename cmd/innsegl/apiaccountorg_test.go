@@ -49,7 +49,10 @@ func TestRM333TheCommandServesTheOrganisationRoutes(t *testing.T) {
 	if err := json.Unmarshal(body, &acc); err != nil {
 		t.Fatal(err)
 	}
-	if len(acc.Organisations) != 1 || acc.Organisations[0].Name != "example-org" || acc.Organisations[0].Role != "owner" {
+	// The first user owns the deployment's own organisation, founded at
+	// enrolment (accounts.FoundOperator), and the one seeded above.
+	if len(acc.Organisations) != 2 || acc.Organisations[0].Role != "owner" ||
+		acc.Organisations[1].Name != "example-org" || acc.Organisations[1].Role != "owner" {
 		t.Errorf("organisations = %+v", acc.Organisations)
 	}
 	for _, path := range []string{"/api/v1/account/machines", "/api/v1/account/repositories",
