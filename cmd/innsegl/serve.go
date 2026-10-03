@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -579,32 +580,11 @@ func runServe(parent context.Context, args []string, stdout, stderr io.Writer, d
 	//
 	// Nothing is started when -also is empty, which is every deployment that
 	// has not opted in.
-	companionFailed := make(chan struct{})
-	for _, name := range o.also {
-		companion := alsoCommands[name]
-		go func(name string, companion func([]string, io.Writer, io.Writer) int) {
-			log.info("running a companion subcommand in this process", "subcommand", name)
-			// No arguments: each reads the same environment this process was
-			// given, which is how the separate containers were configured too.
-			//
-			// ANY RETURN IS A FAILURE, INCLUDING A SUCCESSFUL ONE. A companion
-			// here is a component of a long-running process; one that finishes
-			// has stopped doing its job just as surely as one that crashes, and
-			// it does so without a non-zero status to notice it by.
-			//
-			// This guard used to fire only on a non-zero exit, and `reap` walked
-			// straight through it: it was a one-shot sweep with no interval, so
-			// it swept once at start-up, returned 0, and its goroutine ended in
-			// silence while /readyz kept answering. Measured 2026-09-18: one
-			// sweep in 34 hours, about fifty runs Active with their agents long
-			// gone. A component that exits cleanly and is never heard from again
-			// is the hardest kind of outage to see, so it is reported loudly.
-			code := companion(nil, stdout, stderr)
-			log.error("a companion subcommand stopped; this replica cannot do its whole job",
-				"subcommand", name, "exit", code)
-			close(companionFailed)
-		}(name, companion)
-	}
+	companionFailed, waitCompanions := startCompanions(ctx, o.also, func(name string) int {
+		// No arguments: each reads the same environment this process was
+		// given, which is how the separate containers were configured too.
+		return alsoCommands[name](nil, stdout, stderr)
+	}, log)
 
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ctx) }()
@@ -618,8 +598,50 @@ func runServe(parent context.Context, args []string, stdout, stderr io.Writer, d
 	case <-companionFailed:
 		return exitServeFailed
 	}
+	// An orderly stop: each companion caught the same signal and is
+	// finishing its own stop -- the gateway drains the replies it is
+	// streaming. The process ends when they have.
+	waitCompanions()
 	log.info("stopped")
 	return exitOK
+}
+
+// startCompanions runs each companion in a goroutine. failed closes when a
+// companion stops while ctx is still live. wait returns once every companion
+// has returned, which after ctx ends is each one's own orderly stop.
+//
+// A COMPANION THAT STOPS STOPS THE PROCESS. A sealer that exited would
+// otherwise leave a replica that answers /readyz, serves every tool, and
+// seals nothing -- and no other component reports that, because from their
+// side the sealer has simply not run yet. The orchestrator's restart is the
+// remedy, and it only gets one if this process ends.
+//
+// ANY RETURN WHILE THE PROCESS RUNS IS A FAILURE, INCLUDING A SUCCESSFUL ONE.
+// `reap` walked straight through a guard that fired only on a non-zero exit:
+// it swept once at start-up, returned 0, and its goroutine ended in silence
+// while /readyz kept answering (measured 2026-09-18: one sweep in 34 hours,
+// about fifty runs Active with their agents long gone). A return after ctx
+// ended is the stop the process asked for, and is not one.
+func startCompanions(ctx context.Context, names []string, run func(string) int, log *serveLog) (failed <-chan struct{}, wait func()) {
+	fail := make(chan struct{})
+	var once sync.Once
+	var wg sync.WaitGroup
+	for _, name := range names {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			log.info("running a companion subcommand in this process", "subcommand", name)
+			code := run(name)
+			if ctx.Err() != nil {
+				log.info("a companion subcommand stopped with the process", "subcommand", name, "exit", code)
+				return
+			}
+			log.error("a companion subcommand stopped; this replica cannot do its whole job",
+				"subcommand", name, "exit", code)
+			once.Do(func() { close(fail) })
+		}(name)
+	}
+	return fail, wg.Wait
 }
 
 // reportToolSurface names what is advertised and what is not.
