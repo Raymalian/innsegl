@@ -911,6 +911,11 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		// for free, with nothing here to remember to update.
 		Guards: gateway.Guards(rateLimit, identityGuard, witnesses...),
 	}
+	// The gateway sees a subagent finish (its final reply ends the turn and
+	// asks for no tool) and marks it, as SubagentStop does from the hook.
+	if running.sessionEnder != nil {
+		proxy.SubagentEnds = running.sessionEnder
+	}
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(boot, "tcp", o.listen)
@@ -1233,8 +1238,12 @@ func sessionEndHandler(ender *gateway.SessionEnder, rateLimit *gateway.SessionRa
 		}
 		var in struct {
 			SessionID string `json:"session_id"`
+			// AgentID names a subagent that finished (the harness's
+			// SubagentStop); empty for the session's own end.
+			AgentID string `json:"agent_id"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || !gateway.IsSessionID(in.SessionID) {
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || !gateway.IsSessionID(in.SessionID) ||
+			!isAgentIDShape(in.AgentID) {
 			http.Error(w, "innsegl gateway: session end: a JSON body naming a well-formed session_id "+
 				"is required", http.StatusBadRequest)
 			return
@@ -1247,13 +1256,34 @@ func sessionEndHandler(ender *gateway.SessionEnder, rateLimit *gateway.SessionRa
 		// signal retires nothing (see this handler's own doc comment), but
 		// it is still visible here, which is the whole of what makes a
 		// flood of them something an operator can notice.
-		log.info("session-end signal received", "session_id", in.SessionID)
-		if err := ender.SessionEnded(r.Context(), in.SessionID); err != nil {
+		log.info("session-end signal received", "session_id", in.SessionID, "agent_id", in.AgentID)
+		var endErr error
+		if in.AgentID != "" {
+			endErr = ender.SubagentEnded(r.Context(), in.SessionID, in.AgentID)
+		} else {
+			endErr = ender.SessionEnded(r.Context(), in.SessionID)
+		}
+		if err := endErr; err != nil {
 			http.Error(w, "innsegl gateway: session end: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// isAgentIDShape admits an empty agent id (the session's own end) or one a
+// harness sends: letters, digits, dash and underscore, at most 128 bytes.
+func isAgentIDShape(id string) bool {
+	if len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // openIdentityStack builds RM-235 (#380)'s identity stack: a Postgres-backed
@@ -1654,8 +1684,8 @@ func newGatewaySnapshotter(running *runningGateway) *gateway.Snapshotter {
 // session end, so these are deliberately far below the model-traffic rate
 // limit's own defaults (DefaultSessionRateLimitRate/Burst).
 const (
-	sessionEndRateLimitRate  = 5
-	sessionEndRateLimitBurst = 20
+	sessionEndRateLimitRate  = 20
+	sessionEndRateLimitBurst = 100
 )
 
 // sessionWorkspaceRateLimitRate and sessionWorkspaceRateLimitBurst bound

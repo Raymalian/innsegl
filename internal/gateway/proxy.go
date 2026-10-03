@@ -46,6 +46,9 @@ type Proxy struct {
 	// ReplyText, when set, is handed each streamed reply's own text once
 	// the message ends (sse.go's ReplyTextObserver). Nil hands nothing.
 	ReplyText ReplyTextObserver
+	// SubagentEnds, when set, is told when a subagent's reply ends its work:
+	// stop_reason end_turn, with no tool asked for. Nil tells nothing.
+	SubagentEnds SubagentEndRecorder
 
 	// Guards run in order, before anything else ServeHTTP does. The first
 	// to refuse ends the request there -- see guard.go for the interface

@@ -127,10 +127,15 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 	if base == "" {
 		base = commitpath.DefaultCoreURL
 	}
-	if in.HookEventName == "SessionEnd" {
-		// The session is over: say so, so its run is retired now rather
-		// than by the silence backstop days later. Never a stop.
-		body, err := json.Marshal(map[string]string{"session_id": in.SessionID})
+	if in.HookEventName == "SessionEnd" || (in.HookEventName == "SubagentStop" && in.AgentID != "") {
+		// The session, or one subagent, is over: say so, so its run is
+		// retired now rather than by the silence backstop days later. Never
+		// a stop.
+		end := map[string]string{"session_id": in.SessionID}
+		if in.HookEventName == "SubagentStop" {
+			end["agent_id"] = in.AgentID
+		}
+		body, err := json.Marshal(end)
 		if err == nil {
 			err = post(strings.TrimSuffix(base, "/")+gatewaySessionEndPath, body)
 		}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -428,6 +429,12 @@ func (s *SessionEndSignals) mark(sessionID string, now time.Time) {
 // session's main agent does (identity.go's IdentityGuard.Check), and what
 // Sweep itself does once a marked session's run has actually been acted on
 // (retired, or found to have no run at all).
+// CancelAgent removes a subagent's mark: what a request from that subagent
+// does.
+func (s *SessionEndSignals) CancelAgent(sessionID, agentID string) {
+	s.Cancel(agentMarkKey(sessionID, agentID))
+}
+
 func (s *SessionEndSignals) Cancel(sessionID string) {
 	s.mu.Lock()
 	_, marked := s.marks[sessionID]
@@ -518,6 +525,39 @@ func (e *SessionEnder) SessionEnded(_ context.Context, sessionID string) error {
 	return nil
 }
 
+// SubagentEnded marks one subagent of sessionID as finished (the harness's
+// SubagentStop). Its run is retired after the same grace period, unless the
+// subagent speaks again first (CancelAgent).
+func (e *SessionEnder) SubagentEnded(_ context.Context, sessionID, agentID string) error {
+	if sessionID == "" || agentID == "" || agentID == mainAgentID {
+		return errors.New("innsegl gateway: subagent end: a session id and a subagent id are both needed")
+	}
+	e.signals.Mark(agentMarkKey(sessionID, agentID), e.now())
+	return nil
+}
+
+// agentMarkKey is a subagent's mark in the same table as the sessions'. A
+// session id never holds the separator (IsSessionID), so the two kinds of
+// key cannot collide.
+func agentMarkKey(sessionID, agentID string) string { return sessionID + agentMarkSep + agentID }
+
+const agentMarkSep = "/"
+
+// splitMarkKey answers a mark's session and, for a subagent's, its agent.
+func splitMarkKey(key string) (sessionID, agentID string) {
+	if i := strings.Index(key, agentMarkSep); i >= 0 {
+		return key[:i], key[i+1:]
+	}
+	return key, ""
+}
+
+// SessionRuns is the optional MappingStore query that lets a session's end
+// retire every agent of the session, not only its main agent.
+type SessionRuns interface {
+	// AgentsOfSession answers each agent's newest mapping in sessionID.
+	AgentsOfSession(ctx context.Context, sessionID string) ([]RunMapping, error)
+}
+
 // Sweep retires, through the Registrar, the main-agent run of every session
 // whose signal has stood uncancelled for at least the grace period --
 // called periodically (cmd/innsegl's own ticker), the same shape
@@ -534,24 +574,56 @@ func (e *SessionEnder) SessionEnded(_ context.Context, sessionID string) error {
 func (e *SessionEnder) Sweep(ctx context.Context) (retired []string, err error) {
 	due := e.signals.Due(e.grace, e.now())
 	var errs []error
-	for _, sessionID := range due {
-		m, found, lookupErr := e.mappings.BySessionAgent(ctx, sessionID, mainAgentID)
+	for _, key := range due {
+		sessionID, agentID := splitMarkKey(key)
+		runs, lookupErr := e.runsFor(ctx, sessionID, agentID)
 		if lookupErr != nil {
-			errs = append(errs, fmt.Errorf("innsegl gateway: session end: look up the main-agent "+
-				"run for session %q: %w", sessionID, lookupErr))
+			errs = append(errs, lookupErr)
 			continue
 		}
-		if !found {
-			e.signals.Cancel(sessionID)
-			continue
+		failed := false
+		for _, m := range runs {
+			if _, retireErr := e.registrar.Retire(ctx, m.RunID); retireErr != nil {
+				if m.AgentID == mainAgentID || agentID != "" {
+					failed = true
+				}
+				errs = append(errs, fmt.Errorf("innsegl gateway: session end: retire run %q for "+
+					"session %q: %w", m.RunID, sessionID, retireErr))
+				continue
+			}
+			retired = append(retired, m.RunID)
 		}
-		if _, retireErr := e.registrar.Retire(ctx, m.RunID); retireErr != nil {
-			errs = append(errs, fmt.Errorf("innsegl gateway: session end: retire run %q for "+
-				"session %q: %w", m.RunID, sessionID, retireErr))
-			continue
+		// A subagent of an ended session that could not be retired (it may
+		// already be) does not hold the session's mark: the main agent's run
+		// decides, and the backstop is still there for the rest.
+		if !failed {
+			e.signals.Cancel(key)
 		}
-		e.signals.Cancel(sessionID)
-		retired = append(retired, m.RunID)
 	}
 	return retired, errors.Join(errs...)
+}
+
+// runsFor answers the runs a due mark retires: one subagent's, or for a
+// session every agent's when the store can list them, else the main
+// agent's alone.
+func (e *SessionEnder) runsFor(ctx context.Context, sessionID, agentID string) ([]RunMapping, error) {
+	if agentID == "" {
+		if lister, ok := e.mappings.(SessionRuns); ok {
+			all, err := lister.AgentsOfSession(ctx, sessionID)
+			if err != nil {
+				return nil, fmt.Errorf("innsegl gateway: session end: list the agents of session %q: %w", sessionID, err)
+			}
+			return all, nil
+		}
+		agentID = mainAgentID
+	}
+	m, found, err := e.mappings.BySessionAgent(ctx, sessionID, agentID)
+	if err != nil {
+		return nil, fmt.Errorf("innsegl gateway: session end: look up the run of agent %q in session %q: %w",
+			agentID, sessionID, err)
+	}
+	if !found {
+		return nil, nil
+	}
+	return []RunMapping{m}, nil
 }

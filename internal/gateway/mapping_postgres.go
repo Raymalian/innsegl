@@ -116,6 +116,32 @@ func (s *PostgresMappingStore) BySessionAgent(ctx context.Context, sessionID, ag
 	return m, true, nil
 }
 
+// AgentsOfSession answers each agent's newest mapping in sessionID
+// (SessionRuns), so a session's end retires its subagents too.
+func (s *PostgresMappingStore) AgentsOfSession(ctx context.Context, sessionID string) ([]RunMapping, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (agent_id) run_id, session_id, agent_id, fingerprint,
+		       parent_run_id, forked_from_run_id, adopted_from_run_id, client_id, agent_type_verbatim, recorded_at
+		  FROM innsegl.gateway_run_mapping
+		 WHERE session_id = $1
+		 ORDER BY agent_id, recorded_at DESC, id DESC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: list the agents of session %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+	var out []RunMapping
+	for rows.Next() {
+		m, serr := scanMapping(rows)
+		if serr != nil {
+			return nil, fmt.Errorf("gateway: list the agents of session %s: %w", sessionID, serr)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+var _ SessionRuns = (*PostgresMappingStore)(nil)
+
 // ByFingerprint answers every row recorded for fp, oldest first -- the same
 // order the fake in lifecycle_fakes_test.go answers in. An empty fp answers
 // no rows without a query at all: lifecycle_contract.go's Fingerprint is

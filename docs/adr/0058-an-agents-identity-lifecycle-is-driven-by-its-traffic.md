@@ -301,3 +301,25 @@ administrator boundary that already guards the managed settings. A stated
 directory is a harness claim of the same class as the agent-id header
 (decision 2): it still goes through `describe_workspace`, which admits only
 a git worktree under the projects mount and inside the admin scope.
+
+## Amendment (2026-10-03): a session's end retires its subagents, and a subagent's end is seen
+
+**What changed.**
+
+- **A session's end retires every agent of the session.** Decision 7a
+  retired the main agent's run only; a subagent's run then stood active
+  until the silence backstop's seven days. Measured 2026-10-03: forty runs
+  active, most of them finished subagents.
+- **A subagent's end is a signal of its own.** It is marked the same way a
+  session's end is, retired after the same grace period, and cancelled by
+  any later request from that subagent. Two sources raise it: the gateway
+  itself, when a subagent's reply ends with `stop_reason: end_turn` and asks
+  for no tool; and the harness's `SubagentStop` hook, which also covers a
+  subagent that finishes with a tool call.
+
+**Why.** A subagent sends nothing after its final answer, so nothing else
+would ever end its run.
+
+**What still holds.** No signal retires anything on receipt: a mark is
+retired only after the grace period with no traffic from the agent it names,
+so a forged signal against a live agent is still harmless.
