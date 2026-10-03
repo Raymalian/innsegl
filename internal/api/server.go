@@ -64,6 +64,12 @@ type ServerConfig struct {
 	// SessionLifetime bounds a session's server-side life. Zero applies
 	// defaultSessionLifetime.
 	SessionLifetime time.Duration
+
+	// Resolver is RM-330's resolver credential (ADR-0044's 2026-10-03
+	// amendment): the one credential this process holds that may write, and
+	// only an alert resolution. Optional. Nil answers both resolution routes
+	// 503 and leaves `innsegl resolve-alert` as the way to resolve.
+	Resolver *Resolver
 }
 
 // Health is what an operator reads to see that "read-only" is a measured fact
@@ -80,6 +86,9 @@ type Health struct {
 	// already is"), and whether any user has enrolled yet — a plain boolean
 	// (AB-27's own "no oracle" discipline).
 	Auth AuthHealth `json:"auth"`
+	// Resolver is RM-330's own measured fact: what the resolver credential
+	// was proved able to do at start-up. Absent when none is configured.
+	Resolver *ResolverReport `json:"resolver,omitempty"`
 }
 
 // AuthHealth is the sign-in surface's own share of GET /api/v1/health, which
@@ -104,6 +113,9 @@ const (
 	codeBadRequest = "bad_request"
 	codeNotFound   = "not_found"
 	codeInternal   = "internal"
+	// codeUnavailable is a write this server cannot make right now: no
+	// resolver credential, or a ledger that did not take it (RM-330).
+	codeUnavailable = "unavailable"
 )
 
 // authAllowedRoutes is ADR-0062's explicit, reviewed allow-list: the only
@@ -144,6 +156,8 @@ type Server struct {
 	authStore       *AuthStore
 	authMux         *http.ServeMux
 	accountMux      *http.ServeMux
+	resolutionMux   *http.ServeMux
+	resolver        *Resolver
 	webAuthn        *webauthn.WebAuthn
 	webAuthnConfig  WebAuthnConfig
 	sessionLifetime time.Duration
@@ -185,9 +199,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		authStore: cfg.AuthStore, webAuthn: webAuthn,
 		webAuthnConfig:  cfg.WebAuthn,
 		sessionLifetime: sessionLifetime,
+		resolver:        cfg.Resolver,
 	}
 	s.authMux = s.newAuthMux()
 	s.accountMux = s.newAccountMux()
+	s.resolutionMux = s.newResolutionMux()
 
 	s.mux.HandleFunc("GET /api/v1/runs", s.handleRuns)
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}", s.handleRun)
@@ -229,6 +245,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// is no public account route.
 	if strings.HasPrefix(r.URL.Path, accountRoutePrefix) {
 		s.serveAccount(w, r)
+		return
+	}
+	// RM-330: resolving alerts, after a fresh passkey ceremony, through the
+	// resolver credential. The read-only mux below never sees these paths and
+	// stays GET-only.
+	if strings.HasPrefix(r.URL.Path, resolutionRoutePrefix+"/") {
+		s.serveResolutions(w, r)
 		return
 	}
 
@@ -364,13 +387,18 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// reader of this endpoint actually wants. A query failure here answers
 	// "not enrolled" rather than failing the whole health response — this
 	// endpoint is on ADR-0062's own allow-list and must keep answering.
-	writeJSON(w, http.StatusOK, Health{
+	health := Health{
 		Database: s.store.ReadOnly(),
 		Auth: AuthHealth{
 			CannotWriteLedger: s.authStore.CannotWriteLedger(),
 			Enrolled:          err == nil && !enrolled,
 		},
-	})
+	}
+	if s.resolver != nil {
+		scope := s.resolver.Scope()
+		health.Resolver = &scope
+	}
+	writeJSON(w, http.StatusOK, health)
 }
 
 // runFilterFrom reads the runs table's state out of the URL.
