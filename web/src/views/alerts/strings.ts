@@ -38,6 +38,8 @@ export const strings = {
     unreadDetail: "The alerts could not be read, so how many are open is unknown.",
     countOnlyDetail: (count: number) =>
       `${plural(count, "alert is", "alerts are")} open. The list could not be read, so only the count is shown.`,
+    /** A grouped item's count: several open alerts of one kind. */
+    groupCount: (count: number) => `${count} open`,
     moreDetail: (count: number) =>
       `${plural(count, "more open alert is", "more open alerts are")} not listed here.`,
     /** The polite live region (doc 06 §6.4). */
