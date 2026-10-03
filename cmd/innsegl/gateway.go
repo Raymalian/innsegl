@@ -1337,6 +1337,15 @@ func openIdentityStack(
 	// and the SessionEnder built below (Mark, via the endpoint; Sweep, on
 	// running.sessionEnder's own ticker).
 	sessionEndSignals := gateway.NewSessionEndSignals(0)
+	// The marks survive a restart of the core (migration 0012): each is
+	// written to the gateway's own append-only table, and the open ones are
+	// reloaded here, so a restart inside a grace period loses none.
+	sessionEndSignals.Persist(context.WithoutCancel(ctx), gateway.NewPostgresSessionEndStore(mappings.Pool()), func(format string, args ...any) {
+		running.log.warn(fmt.Sprintf(format, args...))
+	})
+	if lerr := sessionEndSignals.Load(ctx, time.Now().Add(-gateway.SessionEndReload)); lerr != nil {
+		running.log.warn("could not reload the session-end marks; sessions that ended before this start are retired by the backstop", "err", lerr)
+	}
 	sessionWorkspaces := gateway.NewSessionWorkspaces(0)
 
 	cfg := gateway.IdentityGuardConfig{

@@ -49,6 +49,10 @@ func OpenPostgresMappingStore(ctx context.Context, dsn string) (*PostgresMapping
 
 // Close releases the pool. Safe on a nil or zero-valued store, so a failed
 // Open path in a caller's cleanup does not panic.
+// Pool is the store's connection pool, shared by the gateway's other
+// bookkeeping tables on the same database (PostgresSessionEndStore).
+func (s *PostgresMappingStore) Pool() *pgxpool.Pool { return s.pool }
+
 func (s *PostgresMappingStore) Close() {
 	if s != nil && s.pool != nil {
 		s.pool.Close()
