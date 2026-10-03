@@ -45,22 +45,21 @@ export const strings = {
 
     /** The accessible name of the block that carries the window and its counts. */
     summary: "This window at a glance",
-    windowFrom: "Window opens",
-    windowTo: "Window closes",
-    runsInWindow: "Runs registered in this window",
-    runsShown: "Runs drawn on this page",
+    windowFrom: "From",
+    windowTo: "To",
+    runsInWindow: "Runs",
+    commitsInWindow: "Commits",
 
-    coverage: "Attribution coverage",
+    /** The summary line of the collapsed note. */
+    coverage: "Why no coverage percentage",
 
-    groupedByIdentity: "Attributed runs, grouped by agent identity",
-    identity: "Agent identity",
-    runsForIdentity: "Runs by this identity in this window",
+    /** The table's caption, for screen readers; the page has one table. */
     runsTable: "Runs, newest first",
     runId: "Run",
     agentType: "Agent type",
     task: "Task",
     status: "Status",
-    commits: "Commits recorded by this run",
+    commits: "Commits",
     registered: "Registered",
 
     noRuns: "No runs in this window",
@@ -72,32 +71,27 @@ export const strings = {
   },
 
   sentences: {
-    defaultWindow:
-      "This address carries no usable window, so the last 30 days are shown.",
+    defaultWindow: "No dates in the address, so the last 30 days are shown.",
 
-    setIsComplete:
-      "The server counted the same number of runs it served, so every run in this window is grouped below and the counts beside each identity are the whole of it.",
     setIsTruncated:
-      "The server counted more runs in this window than it served, so what is grouped below is the most recent page of them and no count is taken over it.",
+      "There are more runs in this window than fit on this page. The newest are shown.",
 
     coverageDenominator:
-      "Coverage is the share of a repository's commits that carry a verified agent identity. This ledger records only the commits it was used to make, so it holds no count of the commits in this window that it did not make, and that count is a fact about the repository host rather than about the ledger.",
+      "Coverage would be the share of this repository's commits that carry a verified agent identity. Innsegl only knows the commits it recorded, so it cannot count the rest.",
     coverageNumerator:
-      "The numerator would have to be verified rather than recorded. A verified commit is one where three checks ran live against Fulcio and Rekor; the query API answers one commit at a time and exposes no commit listing for a repository, so a figure assembled here would be a count of stored rows wearing a verification result's clothes.",
+      "A commit counts as verified only after three live checks, and those run one commit at a time. A number built from stored rows would claim a check that never ran.",
     coverageRefusal:
-      "No percentage is shown, because the only one this data can produce is the share of recorded commits that were recorded, which is all of them and always will be.",
-    coverageNeeded:
-      "Two things would make this measurable: a commit total for this repository and window taken from the repository host, and a coverage query that runs the three checks live on the server.",
+      "The only percentage possible here is recorded commits out of recorded commits, which is always 100. So none is shown.",
 
     commitsSpanRepos:
-      "This run touched more than one repository, so this count is not this repository's alone.",
+      "This run also touched other repositories, so this count is not only this one's.",
 
     noHostLink:
-      "The recorded value is not in the host/org/name form, so no link to a repository host can be derived from it.",
+      "This name is not in the host/org/name form, so there is no link to a repository host.",
 
-    empty: "No run registered in this window touched this repository.",
+    empty: "No run in this window touched this repository.",
     wrongRoute:
-      "A repository view is reached from data that names a repository, and this address names none.",
+      "A repository page is opened from a repository name, and this address has none.",
   },
 } as const;
 

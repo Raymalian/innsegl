@@ -49,6 +49,9 @@ export const pageHeading =
 /** One block of the proof chain. */
 export const sectionShell = "flex flex-col gap-2 rounded-md bg-surface p-panel";
 
+/** The clickable line of a collapsed section. */
+export const sectionSummary = "cursor-pointer";
+
 export const sectionHeading = "text-heading font-semibold leading-tight";
 
 /** A label/value pair. The label is prose, the value is verbatim material. */

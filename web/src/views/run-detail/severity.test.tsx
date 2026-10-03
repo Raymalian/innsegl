@@ -43,7 +43,7 @@ function renderNode(event: TimelineEvent) {
 const drift = ledgerEvent(EVENT_TYPES.ledgerDriftDetected, 5, {
   source: "reconciler",
   canonical: {
-    reason: "no Rekor entry for a recorded commit",
+    reason: "no Transparency log entry for a recorded commit",
     subject_event_id: "01HQ8Z3K7M4N5P6Q7R8S9T0V04",
   },
 });
@@ -112,7 +112,7 @@ describe("FE-083 the page-level banner", () => {
   it("raises a banner for drift, linking to the event that established it", async () => {
     view([...healthyTimeline(), drift]);
     const banner = await screen.findByRole("alert");
-    expect(banner).toHaveTextContent("Ledger drift detected in this run");
+    expect(banner).toHaveTextContent("The ledger and the transparency log disagree");
     expect(screen.getByRole("link", { name: "Go to the event" })).toHaveAttribute(
       "href",
       "#run-event-5",
@@ -128,7 +128,7 @@ describe("FE-083 the page-level banner", () => {
       }),
     ]);
     const banner = await screen.findByRole("alert");
-    expect(banner).toHaveTextContent("A chain link in this run does not hold");
+    expect(banner).toHaveTextContent("An event in this run does not match the one before it");
   });
 
   it("is a compact inline notice about this run, not a page banner (ADR-0054)", async () => {

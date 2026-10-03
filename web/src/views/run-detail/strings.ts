@@ -47,8 +47,8 @@ export const strings = {
     retired: "Retired",
     stillRunning: "Not ended",
     runId: "Run",
-    chainPosition: "Latest chain position",
-    credentials: "Credential expiry history",
+    chainPosition: "Latest ledger position",
+    credentials: "Credential history",
     credentialIssued: "Issued",
     credentialExpiry: "Expires",
     credentialAudience: "Audience",
@@ -58,7 +58,7 @@ export const strings = {
      * RETIREMENT ONLY. A withdrawal is not an ending and has its own cells
      * below — collapsing the two into one "ended" fact is the conflation #256
      * exists to undo. */
-    noEnd: "This run has no retirement event in the ledger.",
+    noEnd: "This run has not been ended.",
   },
 
   /* The lifecycle state, and the facts it was derived from (#256).
@@ -82,33 +82,32 @@ export const strings = {
    */
   state: {
     lastActivity: "Last activity",
-    withdrawn: "Credential withdrawn",
-    restorableUntil: "Restorable until",
-    parent: "Parent run",
-    horizon: "Restore horizon",
+    withdrawn: "Access withdrawn",
+    restorableUntil: "Can be resumed until",
+    parent: "Started by",
+    horizon: "Resume window",
     /* P2: each of these says WHY the cell beside it is empty. */
-    noActivity: "Nothing but the reaper has ever been recorded for this run.",
-    noWithdrawal: "The reaper has never withdrawn this run's credential.",
+    noActivity: "Only the reaper has written to this run.",
+    noWithdrawal: "Never withdrawn.",
     noHorizon:
-      "No restore horizon is set, so a withdrawn run stays restorable until it is retired.",
+      "No limit is set, so a withdrawn run can be resumed until it is ended.",
     /* Not the same as the line above, and the difference matters: one is a
      * deployment's choice, the other is this dashboard not having been told. */
-    horizonUnknown:
-      "The query API did not report the horizon this state was computed with.",
+    horizonUnknown: "The server did not say how long a run can be resumed.",
     /* The conclusion, in one sentence, for each state. */
     active: (heard: string) => `Last heard from at ${heard}.`,
     activeAfterWithdrawal: (heard: string, withdrawn: string) =>
-      `Last heard from at ${heard}, which is later than the credential withdrawal at ${withdrawn}. The lapse is in the timeline below.`,
+      `Last heard from at ${heard}, which is after access was withdrawn at ${withdrawn}. The timeline below shows the gap.`,
     lapsed: (heard: string, until: string) =>
-      `Nothing heard since ${heard}. The identity can be restored by resuming this run until ${until}.`,
+      `Nothing heard since ${heard}. This run can be resumed until ${until}.`,
     lapsedUnbounded: (heard: string) =>
-      `Nothing heard since ${heard}. No horizon is set, so the identity can be restored by resuming this run.`,
+      `Nothing heard since ${heard}. No limit is set, so this run can still be resumed.`,
     abandoned: (heard: string) =>
-      `Nothing heard since ${heard}; the identity can no longer be restored.`,
+      `Nothing heard since ${heard}. This run can no longer be resumed.`,
     retired: (at: string) =>
-      `Ended at ${at} by its harness or by a person, which is a decision someone stated rather than silence this system observed.`,
+      `Ended at ${at} by its tool or by a person. Someone chose this; it was not silence.`,
     unrecognised:
-      "This dashboard does not recognise the state the query API reported for this run.",
+      "This dashboard does not recognise the state reported for this run.",
   },
 
   /* The tab control that holds the timeline and the activity log. The label is
@@ -122,7 +121,7 @@ export const strings = {
   timeline: {
     heading: "Timeline",
     /* doc 06 §3.3: "Each timeline node shows its chain position." */
-    chainPosition: (position: number) => `Chain position ${position}`,
+    chainPosition: (position: number) => `Ledger position ${position}`,
     eventId: "Event",
     eventHash: "Event hash",
     prevEventHash: "Previous event hash",
@@ -134,8 +133,8 @@ export const strings = {
       `chain positions ${from} to ${to}`,
     toolCallRunLinks: (broken: number) =>
       broken === 0
-        ? "every chain link in this run holds"
-        : `${broken} chain link${broken === 1 ? "" : "s"} in this run cannot be checked here`,
+        ? "every event in this run matches the one before it"
+        : `${broken} event${broken === 1 ? "" : "s"} in this run could not be checked against the one before`,
   },
 
   event: {
@@ -144,16 +143,16 @@ export const strings = {
     runRegistered: "Run registered",
     credentialIssued: "Credential issued",
     toolCall: "Tool call",
-    commitIntent: "Commit intent",
+    commitIntent: "Commit planned",
     commitRecorded: "Commit recorded",
-    commitIntentExpired: "Commit intent expired",
+    commitIntentExpired: "Planned commit expired",
     runRetired: "Run retired",
-    runExpired: "Run expired",
+    runExpired: "Access withdrawn",
     runAdopted: "Work adopted",
-    schemaMigrated: "Schema migrated",
-    unattributedSignatureDetected: "Unattributed signature detected",
-    ledgerDriftDetected: "Ledger drift detected",
-    segmentSealed: "Segment sealed",
+    schemaMigrated: "Record format upgraded",
+    unattributedSignatureDetected: "Signature with no matching record",
+    ledgerDriftDetected: "Ledger mismatch found",
+    segmentSealed: "Ledger section sealed",
     /* An event type this build does not know. It is shown, not dropped. */
     unrecognised: "Event type this dashboard does not recognise",
 
@@ -166,19 +165,19 @@ export const strings = {
     unexpectedWriter: "Not a writer this event type is emitted by",
     /* Who each writer is, for a reader who has not read doc 02. */
     writer: {
-      mcp: "Appended by the MCP server as the agent worked.",
+      mcp: "Added by the MCP server as the agent worked.",
       reconciler:
-        "Appended by the reconciler, which reads Rekor and repairs what the ledger missed.",
-      reaper: "Appended by the reaper, which ends runs whose credential ran out.",
-      system: "Appended by the system itself, outside any agent's work.",
-      unrecognised: "Appended by a writer this dashboard does not recognise.",
+        "Added by the reconciler, which checks the transparency log and fills in what the agent missed.",
+      reaper: "Added by the reaper, which withdraws access from runs that went quiet.",
+      system: "Added by the system itself, outside any agent's work.",
+      unrecognised: "Added by a writer this dashboard does not recognise.",
     },
     /* The sentence doc 06 §3.3 asks for: repaired history visible AS repaired.
      * Only for an event type whose ordinary writer is the agent (doc 02 §3's
      * "Emitted by" column) — the reconciler's own alerts are not repairs. */
     repaired: "Repaired history",
     repairedDetail:
-      "The agent never recorded this event. The reconciler reconstructed it afterwards from the transparency log, so the ledger lost this fact and got it back.",
+      "The agent never recorded this. The reconciler rebuilt it afterwards from the transparency log.",
   },
 
   chain: {
@@ -186,38 +185,38 @@ export const strings = {
      * Three states, and the third is why this exists: a run's events are not
      * adjacent in the ledger, so most links cannot be checked from this
      * response at all, and silence about that would read as "checked, fine". */
-    linked: "Chain link holds",
-    linkedDetail: "This event names the hash of the event immediately before it.",
-    broken: "Chain link broken",
+    linked: "Matches the event before it",
+    linkedDetail: "This event names the hash of the event just before it.",
+    broken: "Does not match the event before it",
     brokenDetail:
-      "This event follows the one above it in the ledger and does not name its hash. Either the ledger was altered or the response was.",
-    unchecked: "Chain link not checkable here",
+      "This event follows the one above it in the ledger and does not name its hash. Either the ledger or this response was altered.",
+    unchecked: "Not checked against the event before it",
     uncheckedDetail:
-      "Events from other runs sit between these two, so this response does not contain the event this one names. Verify it against the full chain.",
-    first: "First event in this response",
-    firstDetail: "There is no earlier event here to link it to.",
+      "Events from other runs sit between these two, so this page does not hold the one this event names. Check it against the full ledger.",
+    first: "First event on this page",
+    firstDetail: "There is no earlier event here to compare it with.",
   },
 
   detail: {
     /* Type-specific members, labelled. doc 02 §3's own field names in words. */
     agentType: "Agent type",
     taskRef: "Task",
-    audience: "Audience",
-    credentialExpiry: "Credential expiry",
+    audience: "Used for",
+    credentialExpiry: "Credential expires",
     toolName: "Tool",
     repo: "Repository",
-    treeHash: "Tree hash",
+    treeHash: "Code snapshot",
     commitSha: "Commit",
-    rekorLogIndex: "Rekor log index",
-    rekorEntryUuid: "Rekor entry",
-    intentEventId: "Intent event",
-    certificateIdentity: "Certificate identity",
-    subjectEventId: "Subject event",
+    rekorLogIndex: "Transparency log number",
+    rekorEntryUuid: "Transparency log entry",
+    intentEventId: "Planned in event",
+    certificateIdentity: "Signed as",
+    subjectEventId: "About event",
     reason: "Reason",
-    payloadDigest: "Payload digest",
+    payloadDigest: "Content digest",
     supersedes: "Supersedes",
-    adoptedRunId: "Adopted from",
-    adoptedRunState: "Its state when adopted",
+    adoptedRunId: "Taken over from",
+    adoptedRunState: "Its state when taken over",
     claimDigest: "Claim digest",
     adoptionEventId: "Adoption event",
   },
@@ -234,28 +233,33 @@ export const strings = {
     count: (n: number) => (n === 1 ? `${n} tool call` : `${n} tool calls`),
   },
 
+  /* The one disclosure each timeline node keeps its technical fields behind. */
+  details: {
+    summary: "Details",
+  },
+
   canonical: {
-    heading: "Canonical members",
+    heading: "Raw record",
     /* P5, honestly bounded: these are the decoded members, not the bytes. */
     detail:
-      "These are the event's canonical members after JSON decoding. Re-deriving the event hash needs the exact response bytes, which this rendering does not preserve.",
-    undecodable: "This event's canonical members could not be decoded.",
+      "The event's fields as decoded from JSON. To recompute the hash you need the exact bytes of the response, which this view does not keep.",
+    undecodable: "This event's record could not be read.",
     undecodableDetail:
-      "The ledger returned something this dashboard could not read as JSON. Read it from the API response directly.",
-    absent: "This response carried no canonical members for this event.",
+      "The ledger returned something this dashboard could not read as JSON. Read it from the response directly.",
+    absent: "This response held no record for this event.",
   },
 
   alert: {
     /* doc 06 §4.5 and P3. Page-level, red, persistent while the events stand. */
-    drift: "Ledger drift detected in this run",
+    drift: "The ledger and the transparency log disagree",
     driftDetail:
       "The ledger claims something the transparency log does not confirm. The events below carry the reason.",
-    unattributed: "A signature in this trust domain has no recorded intent",
+    unattributed: "A signature has no matching record",
     unattributedDetail:
-      "Something signed with an identity from this trust domain without a commit intent in the ledger. The events below carry the certificate identity.",
-    chainBroken: "A chain link in this run does not hold",
+      "Something was signed with an identity from this system, but no commit was planned in the ledger. The events below say who signed.",
+    chainBroken: "An event in this run does not match the one before it",
     chainBrokenDetail:
-      "An event does not name the hash of the event before it. Either the ledger was altered or the response was.",
+      "An event does not name the hash of the event before it. Either the ledger or this response was altered.",
     evidence: "Go to the event",
   },
 
@@ -265,7 +269,7 @@ export const strings = {
      * they are never the only cue — see styles.ts and Severity in
      * TimelineNode.tsx. */
     alert: "Integrity alert",
-    alertMeaning: "The reconciler found something the external record does not support.",
+    alertMeaning: "The reconciler found something the transparency log does not support.",
     degraded: "Ended without completing",
     degradedMeaning: "What this event describes was started and never finished.",
     /* The `run_expired` node's own words, not the ones above: a promised
@@ -276,9 +280,9 @@ export const strings = {
      * It says what the REAPER did, which is the only thing recorded. It does
      * not say the run ended — see the `state` catalogue above for why this
      * system is not entitled to that. */
-    expired: "Credential withdrawn",
+    expired: "Access withdrawn",
     expiredMeaning:
-      "The reaper withdrew this run's credential after it went quiet past policy. Anything done under that identity afterwards had nothing behind it until the run was resumed.",
+      "The reaper withdrew this run's credential after it went quiet for too long. Anything done under that identity afterwards had no credential behind it until the run was resumed.",
   },
 
   time: {

@@ -159,7 +159,7 @@ describe("FE-065 doc 06 §6.1's model error copy, used where it was written for"
 
 describe("FE-065 the page states what it cannot do", () => {
   it("tells the reader up front that no ledger answer is available here (I5)", () => {
-    expect(strings.page.intro).toContain("no access to the ledger");
+    expect(strings.page.intro).toContain("cannot read the ledger");
   });
 
   it("distinguishes an unreachable deployment from an unreadable answer (P2)", () => {
@@ -176,7 +176,7 @@ describe("FE-065 the page states what it cannot do", () => {
   });
 
   it("does not claim a re-derivation the response did not carry", () => {
-    expect(strings.rederivation.absent).toContain("no re-derivation");
+    expect(strings.rederivation.absent).toContain("no recomputed claims");
   });
 });
 

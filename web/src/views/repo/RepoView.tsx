@@ -47,7 +47,6 @@ import {
   EmptyState,
   ErrorState,
   Icon,
-  IdentifierChip,
   LoadingState,
   StalenessIndicator,
   StatusBadge,
@@ -58,8 +57,8 @@ import { Link } from "../../app/router";
 import type { Route } from "../../app/routes";
 import { PAGE_LIMIT, fetchRuns } from "./query";
 import type { LoadRuns, RunPage, RunSummary } from "./query";
-import { groupByIdentity, hostUrlOf, isComplete, resolveWindow } from "./repo";
-import type { IdentityGroup, StatedWindow } from "./repo";
+import { commitTotal, hostUrlOf, isComplete, resolveWindow } from "./repo";
+import type { StatedWindow } from "./repo";
 import { strings } from "./strings";
 import {
   explanation,
@@ -67,7 +66,6 @@ import {
   factRow,
   factTerm,
   identifierText,
-  identityGroup,
   inlineRow,
   link,
   mutedText,
@@ -76,7 +74,6 @@ import {
   secondaryText,
   table,
   tableScroll,
-  tableCaption,
   tableCell,
   tableHeader,
   viewHeading,
@@ -180,7 +177,6 @@ function Repository({
       <StalenessIndicator />
 
       <Summary window={window} state={state} />
-      <Coverage />
 
       {state.phase === "loading" ? (
         <LoadingState what={strings.nouns.runs} onRetry={retry} />
@@ -189,6 +185,8 @@ function Repository({
         <ErrorState detail={state.message} onRetry={retry} />
       ) : null}
       {state.phase === "ready" ? <Attributed page={state.page} /> : null}
+
+      <Coverage />
     </div>
   );
 }
@@ -212,6 +210,7 @@ function Summary({
   readonly window: StatedWindow;
   readonly state: Phase;
 }) {
+  const commits = state.phase === "ready" ? commitTotal(state.page) : null;
   return (
     <div role="group" aria-label={strings.labels.summary} className={sectionShell}>
       <dl className={factList}>
@@ -222,10 +221,10 @@ function Summary({
           <Instant at={window.to} />
         </Fact>
         {state.phase === "ready" ? (
-          <>
-            <Fact term={strings.labels.runsInWindow}>{state.page.total}</Fact>
-            <Fact term={strings.labels.runsShown}>{state.page.runs.length}</Fact>
-          </>
+          <Fact term={strings.labels.runsInWindow}>{state.page.total}</Fact>
+        ) : null}
+        {commits !== null ? (
+          <Fact term={strings.labels.commitsInWindow}>{commits}</Fact>
         ) : null}
       </dl>
       {window.source === "default" ? (
@@ -263,86 +262,44 @@ function Instant({ at }: { readonly at: Date }) {
 /* ── attribution coverage, refused ────────────────────────────────────────── */
 
 /**
- * The metric doc 06 §3.4 asks for, and the reasons it is not here.
- *
- * NEUTRAL, not amber. doc 06 §5.3 gives amber to "degraded/unavailable", and
- * this is unavailable — but amber is a state that CLEARS, and this one cannot:
- * it would be amber on every repository on every day for as long as the query
- * API has no coverage endpoint. A permanent amber teaches a reader to skip
- * amber, and the amber that matters is the one beside a verification that
- * could not run. So the absence is carried by prose and by the ruled-block
- * icon, which is the set's mark for "this claims nothing", and no alarm colour
- * is spent on a fact that is not an alarm.
+ * The metric doc 06 §3.4 asks for, and the reasons it is not here — a note
+ * behind a native <details>, so it is keyboard-operable and closed until asked
+ * for. Neutral rather than amber: this absence never clears, and a permanent
+ * amber teaches a reader to skip amber.
  */
 function Coverage() {
   return (
-    <section
-      role="group"
-      aria-label={strings.labels.coverage}
-      className={sectionShell}
-    >
-      <h2 className={sectionHeading}>
+    <details className={sectionShell}>
+      <summary className={`${sectionHeading} cursor-pointer`}>
         <Icon name="empty" className="shrink-0" />
         {strings.labels.coverage}
-      </h2>
+      </summary>
       <p className={explanation}>{strings.sentences.coverageDenominator}</p>
       <p className={explanation}>{strings.sentences.coverageNumerator}</p>
       <p className={explanation}>{strings.sentences.coverageRefusal}</p>
-      <p className={explanation}>{strings.sentences.coverageNeeded}</p>
-    </section>
+    </details>
   );
 }
 
-/* ── the runs, grouped by the identity that made them ─────────────────────── */
+/* ── the runs ─────────────────────────────────────────────────────────────── */
 
+/** One table, in the order the server served it (newest first). */
 function Attributed({ page }: { readonly page: RunPage }) {
-  const groups = groupByIdentity(page.runs);
-  if (groups.length === 0) {
+  if (page.runs.length === 0) {
     return (
       <EmptyState title={strings.labels.noRuns} detail={strings.sentences.empty} />
     );
   }
-  const complete = isComplete(page);
   return (
     <section className={sectionShell}>
-      <h2 className={sectionHeading}>{strings.labels.groupedByIdentity}</h2>
-      <p className={explanation}>
-        {complete ? strings.sentences.setIsComplete : strings.sentences.setIsTruncated}
-      </p>
-      {groups.map((group) => (
-        <Identity key={group.identity} group={group} complete={complete} />
-      ))}
-    </section>
-  );
-}
-
-function Identity({
-  group,
-  complete,
-}: {
-  readonly group: IdentityGroup;
-  readonly complete: boolean;
-}) {
-  return (
-    <div role="group" aria-label={group.identity} className={identityGroup}>
-      <div className={inlineRow}>
-        <span className={factTerm}>{strings.labels.identity}</span>
-        <IdentifierChip value={group.identity} kind="spiffe" />
-      </div>
-
-      {/* A count over a page is a number about a page. It is printed only when
-       * the page is the whole windowed set the server counted. */}
-      {complete ? (
-        <dl className={factList}>
-          <Fact term={strings.labels.runsForIdentity}>{group.runs.length}</Fact>
-        </dl>
-      ) : null}
-
+      {isComplete(page) ? null : (
+        <p className={explanation}>{strings.sentences.setIsTruncated}</p>
+      )}
       {/* doc 06 §5.4: a table scrolls inside its own shell rather than pushing
         * the page sideways. FE-128, measured at 720px. */}
       <div className={tableScroll}>
         <table className={table}>
-          <caption className={tableCaption}>{strings.labels.runsTable}</caption>
+          <caption className="sr-only">{strings.labels.runsTable}</caption>
           <thead>
             <tr>
               <th scope="col" className={tableHeader}>{strings.labels.runId}</th>
@@ -354,13 +311,13 @@ function Identity({
             </tr>
           </thead>
           <tbody>
-            {group.runs.map((run) => (
+            {page.runs.map((run) => (
               <Row key={run.run_id} run={run} />
             ))}
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -379,6 +336,7 @@ function Row({ run }: { readonly run: RunSummary }) {
         >
           {run.agent_type}
         </Link>
+        <p className={`${secondaryText} ${identifierText} break-all`}>{run.spiffe_id}</p>
       </td>
       <td className={`${tableCell} ${identifierText}`}>{run.task_ref}</td>
       <td className={tableCell}>

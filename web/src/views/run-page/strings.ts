@@ -55,7 +55,7 @@ export const strings = {
      * by a one-commit identity the session started rather than by the
      * session itself (#443). */
     oneCommitIdentities: (n: number) =>
-      `${n === 1 ? "1 commit" : `${n} commits`}, each signed under its own one-commit identity. They are commits, not agents, and are listed here rather than in the agents table.`,
+      `${n === 1 ? "1 commit" : `${n} commits`}, each signed under its own identity. They are commits, not agents, so they are listed here and not under agents.`,
     allCommits: (n: number) => `All ${n} commits`,
   },
 
@@ -77,7 +77,7 @@ export const strings = {
      * did not categorise that way (doc 06 P1: evidence over assertion). Every
      * other non-ok outcome gets the second, general sentence alone, which is
      * true of any failure. */
-    refusedBySandbox: "Refused by the harness sandbox.",
+    refusedBySandbox: "Blocked by the sandbox.",
     failedIsRecord: "A step that failed is part of the record, shown as it happened.",
     witnessGateway: "Gateway",
     witnessSnapshot: "Workspace snapshot",
@@ -126,7 +126,7 @@ export const strings = {
     sameIdentity: "Same identity",
     checkFailed: "Failed",
     checkUnavailable: "Unavailable",
-    signedBy: "Signed by this run in the core; recorded as intent → signature → record",
+    signedBy: "Signed by this run. Recorded as plan, then signature, then record.",
     verifyYourself: "Verify it yourself",
     loading: "the verification of this commit",
     unavailable: "the proof for this commit",
@@ -173,7 +173,7 @@ export const strings = {
      * (Session.dc.html's own distinction between the two). */
     thisSessionAside: "This session",
     startedByYou: "started by you · nothing above it",
-    spawnedAtStep: (step: number) => (step > 0 ? `spawned at step ${step}` : "not matched to a step"),
+    spawnedAtStep: (step: number) => (step > 0 ? `started at step ${step}` : "not matched to a step"),
     sessionLabel: "Session",
 
     askedTo: "Asked to",

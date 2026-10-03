@@ -78,7 +78,7 @@ const intentExpired = ledgerEvent(EVENT_TYPES.commitIntentExpired, 5, {
 });
 const drift = ledgerEvent(EVENT_TYPES.ledgerDriftDetected, 5, {
   source: "reconciler",
-  canonical: { reason: "no Rekor entry for a recorded commit" },
+  canonical: { reason: "no Transparency log entry for a recorded commit" },
 });
 const commitRecorded = ledgerEvent(EVENT_TYPES.commitRecorded, 5, {
   canonical: {
@@ -223,7 +223,7 @@ describe("FE-124 a run of tool calls folds into one disclosure", () => {
     const { container } = renderTimeline(many(n));
     await userEvent.click(foldOf(container).querySelector("summary") as HTMLElement);
     for (let position = 2; position < 2 + n; position += 1) {
-      expect(screen.getByText(`Chain position ${position}`)).toBeInTheDocument();
+      expect(screen.getByText(`Ledger position ${position}`)).toBeInTheDocument();
     }
   });
 });
@@ -240,7 +240,7 @@ describe("FE-126 a run that expired reads as degraded", () => {
     const { container, text } = renderTimeline([runExpired]);
     const body = bodyOf(rows(container)[0] as HTMLElement) as HTMLElement;
     expect(body.className).toMatch(/\bbg-degraded-surface\b/);
-    expect(text).toContain("Credential withdrawn");
+    expect(text).toContain("Access withdrawn");
   });
 
   it("keeps the dashed outline that tells expired from retired without a hue", () => {

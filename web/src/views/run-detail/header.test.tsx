@@ -79,14 +79,14 @@ describe("FE-082 the run-detail header", () => {
       ledgerEvent(EVENT_TYPES.runExpired, 2, { source: "reaper" }),
     ];
     const { text } = renderHeader(events, "lapsed");
-    expect(text).toContain("Credential withdrawn");
+    expect(text).toContain("Access withdrawn");
     expect(text).not.toContain("Retired");
   });
 
   it("says in a sentence that a running run has not ended, rather than blanking", () => {
     const events = [ledgerEvent(EVENT_TYPES.runRegistered, 1)];
     const { text } = renderHeader(events, "active");
-    expect(text).toContain("This run has no retirement event in the ledger.");
+    expect(text).toContain("This run has not been ended.");
   });
 
   it("lists the credential expiry history, every issue of it", () => {
@@ -100,7 +100,7 @@ describe("FE-082 the run-detail header", () => {
       }),
     ];
     const { text } = renderHeader(events);
-    expect(text).toContain("Credential expiry history");
+    expect(text).toContain("Credential history");
     // Two issues, so two expiries, each with its own instant. A view showing
     // only the newest would answer a different question.
     expect(text).toContain("in 42 min");

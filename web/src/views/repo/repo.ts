@@ -163,3 +163,15 @@ export function groupByIdentity(runs: readonly RunSummary[]): readonly IdentityG
 export function isComplete(page: RunPage): boolean {
   return page.runs.length >= page.total && (page.next_cursor ?? "") === "";
 }
+
+/**
+ * This repository's commit total over the window, or null when it cannot be
+ * stated. `commits` is a run's total across every repository it touched, so
+ * the sum is this repository's only when every run touched it alone, and it is
+ * the window's only when the page is the whole set.
+ */
+export function commitTotal(page: RunPage): number | null {
+  if (!isComplete(page)) return null;
+  if (page.runs.some((run) => run.repos.length > 1)) return null;
+  return page.runs.reduce((sum, run) => sum + run.commits, 0);
+}

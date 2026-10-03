@@ -115,7 +115,7 @@ describe("FE-040 the window is stated and it is what the server was asked for", 
       `${REPO_PATH}?from=2026-08-01T00:00:00Z&to=2026-08-15T00:00:00Z`,
       THREE_RUNS,
     );
-    await screen.findByText(strings.labels.groupedByIdentity);
+    await screen.findByText(strings.labels.runsTable);
 
     expect(calls[0]?.from?.toISOString()).toBe("2026-08-01T00:00:00.000Z");
     expect(calls[0]?.to?.toISOString()).toBe("2026-08-15T00:00:00.000Z");
@@ -135,7 +135,7 @@ describe("FE-040 the window is stated and it is what the server was asked for", 
 
   it("asks the server for this repository, once, and for no more than one page", async () => {
     const { calls } = renderRepo(REPO_PATH, THREE_RUNS);
-    await screen.findByText(strings.labels.groupedByIdentity);
+    await screen.findByText(strings.labels.runsTable);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.repo).toBe(REPO);
     expect(calls[0]?.limit).toBe(200);
@@ -148,6 +148,18 @@ describe("FE-041 attribution coverage is refused, not computed", () => {
     await screen.findByText(strings.labels.coverage);
     expect(container.textContent ?? "").not.toContain("%");
     expect(container.textContent ?? "").not.toMatch(/\d\s*(percent|pct)\b/i);
+  });
+
+  it("keeps the explanation in a collapsed note, after the data", async () => {
+    renderRepo(REPO_PATH, THREE_RUNS);
+    const note = (await screen.findByText(strings.labels.coverage)).closest("details");
+    expect(note).not.toBeNull();
+    expect(note).not.toHaveAttribute("open");
+    const table = screen.getByRole("table");
+    // The note follows the table in document order: data first.
+    expect(
+      table.compareDocumentPosition(note as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("names the missing denominator and the live numerator, both", async () => {
@@ -165,58 +177,79 @@ describe("FE-041 attribution coverage is refused, not computed", () => {
   });
 });
 
-describe("FE-042 the grouping states whether it is the whole windowed set", () => {
-  it("counts each identity's runs when the page is the whole set", async () => {
+describe("FE-042 one table of runs, and the summary says whether it is the whole set", () => {
+  it("leads with the summary and one table, with no repeated section headings", async () => {
     renderRepo(REPO_PATH, THREE_RUNS);
-    expect(await screen.findByText(strings.sentences.setIsComplete)).toBeInTheDocument();
-
-    const group = screen.getByRole("group", { name: FIX_CI });
-    expect(within(group).getByText(strings.labels.runsForIdentity)).toBeInTheDocument();
-    expect(within(group).getByText("2")).toBeInTheDocument();
-    // One header row plus this identity's two runs.
-    expect(within(group).getAllByRole("row")).toHaveLength(3);
+    await screen.findByRole("table");
+    expect(screen.getAllByRole("table")).toHaveLength(1);
+    // header row plus three runs
+    expect(screen.getAllByRole("row")).toHaveLength(4);
+    expect(screen.queryByText("Agent identity")).toBeNull();
+    expect(screen.queryByText(/Runs by this identity/)).toBeNull();
   });
 
-  it("renders no per-identity count when the server counted more than it served", async () => {
+  it("keeps the agent identity of each run on its row", async () => {
+    renderRepo(REPO_PATH, THREE_RUNS);
+    const row = (await screen.findByRole("link", { name: "dep-bump" })).closest("tr");
+    expect(row?.textContent ?? "").toContain(DEP_BUMP);
+  });
+
+  it("keeps the server's order", async () => {
+    renderRepo(REPO_PATH, THREE_RUNS);
+    await screen.findByRole("table");
+    const ids = screen
+      .getAllByRole("link")
+      .map((l) => l.textContent)
+      .filter((t) => t?.startsWith("run-"));
+    expect(ids).toEqual(["run-7f3a2c", "run-0e91bd", "run-115fac"]);
+  });
+
+  it("says nothing about truncation when the page is the whole set", async () => {
+    renderRepo(REPO_PATH, THREE_RUNS);
+    await screen.findByRole("table");
+    expect(screen.queryByText(strings.sentences.setIsTruncated)).toBeNull();
+  });
+
+  it("states the shortfall when the server counted more than it served", async () => {
     renderRepo(REPO_PATH, page(THREE_RUNS.runs, 41));
     expect(await screen.findByText(strings.sentences.setIsTruncated)).toBeInTheDocument();
-    expect(screen.queryByText(strings.sentences.setIsComplete)).toBeNull();
-
-    const group = screen.getByRole("group", { name: FIX_CI });
-    expect(within(group).queryByText(strings.labels.runsForIdentity)).toBeNull();
   });
 
   it("differs perceivably between the complete and the truncated render", async () => {
     const complete = renderRepo(REPO_PATH, THREE_RUNS);
-    await screen.findByText(strings.sentences.setIsComplete);
+    await screen.findByRole("table");
     const before = perceivable(complete.container);
-
     const truncated = renderRepo(REPO_PATH, page(THREE_RUNS.runs, 41));
     await screen.findByText(strings.sentences.setIsTruncated);
-    const after = perceivable(truncated.container);
-
     expect(before).not.toBe("");
-    expect(after).not.toBe(before);
+    expect(perceivable(truncated.container)).not.toBe(before);
   });
 
-  it("shows the server's total beside the number of rows it drew", async () => {
+  it("shows the server's total as the run count", async () => {
     renderRepo(REPO_PATH, page(THREE_RUNS.runs, 41));
     const summary = await screen.findByRole("group", { name: strings.labels.summary });
-    expect(within(summary).getByText(strings.labels.runsShown).nextElementSibling)
-      .toHaveTextContent("3");
     expect(within(summary).getByText(strings.labels.runsInWindow).nextElementSibling)
       .toHaveTextContent("41");
   });
 
-  it("sums no commit count over the page", async () => {
+  it("totals commits only when the whole set is here and each run touched this repository alone", async () => {
+    renderRepo(REPO_PATH, page([run({ commits: 3 }), run({ run_id: "b", commits: 4 })]));
+    const summary = await screen.findByRole("group", { name: strings.labels.summary });
+    expect(within(summary).getByText(strings.labels.commitsInWindow).nextElementSibling)
+      .toHaveTextContent("7");
+  });
+
+  it("sums no commit count over a page that is not the whole set", async () => {
     renderRepo(REPO_PATH, page([run({ commits: 3 }), run({ run_id: "b", commits: 4 })], 41));
-    await screen.findByText(strings.labels.groupedByIdentity);
-    const summary = screen.getByRole("group", { name: strings.labels.summary });
-    // A repository-wide commit total would have to live here, and 3 + 4 = 7 is
-    // the confident wrong number a page-derived sum would print: `commits` is
-    // a run's total across every repository it touched.
-    expect(within(summary).queryByText(strings.labels.commits)).toBeNull();
+    const summary = await screen.findByRole("group", { name: strings.labels.summary });
+    expect(within(summary).queryByText(strings.labels.commitsInWindow)).toBeNull();
     expect(summary.textContent ?? "").not.toMatch(/\b7\b/);
+  });
+
+  it("sums no commit count when a run touched other repositories too", async () => {
+    renderRepo(REPO_PATH, page([run({ commits: 3, repos: [REPO, "github.com/acme/web"] })]));
+    const summary = await screen.findByRole("group", { name: strings.labels.summary });
+    expect(within(summary).queryByText(strings.labels.commitsInWindow)).toBeNull();
   });
 });
 
@@ -235,7 +268,7 @@ describe("the repo view links out, and links on", () => {
 
   it("links every run to its detail view and every agent type to its own", async () => {
     renderRepo(REPO_PATH, THREE_RUNS);
-    await screen.findByText(strings.labels.groupedByIdentity);
+    await screen.findByText(strings.labels.runsTable);
     expect(screen.getByRole("link", { name: "run-7f3a2c" })).toHaveAttribute(
       "href",
       "/runs/run-7f3a2c",
@@ -257,7 +290,7 @@ describe("the repo view's honest states (FD §4.6)", () => {
   it("shows nothing rather than guessing when the ledger did not answer", async () => {
     renderRepo(REPO_PATH, new Error("dial tcp: connection refused"));
     expect(await screen.findByRole("alert")).toHaveTextContent("dial tcp: connection refused");
-    expect(screen.queryByText(strings.labels.groupedByIdentity)).toBeNull();
+    expect(screen.queryByText(strings.labels.runsTable)).toBeNull();
   });
 
   it("says the window holds no runs rather than drawing an empty table", async () => {
@@ -273,7 +306,7 @@ describe("the repo view's honest states (FD §4.6)", () => {
         <RepoView route={parseRoute(REPO_PATH)} load={load} now={NOW} />
       </StalenessProvider>,
     );
-    await screen.findByText(strings.labels.groupedByIdentity);
+    await screen.findByText(strings.labels.runsTable);
     expect(screen.getByText("2026-08-31 11:00:00 UTC", { selector: "time" })).toBeInTheDocument();
   });
 
@@ -291,7 +324,7 @@ describe("the per-run commit count says what it counts", () => {
 
   it("does not mark a run that touched this repository alone", async () => {
     renderRepo(REPO_PATH, page([run()]));
-    await screen.findByText(strings.labels.groupedByIdentity);
+    await screen.findByText(strings.labels.runsTable);
     expect(screen.queryByText(strings.sentences.commitsSpanRepos)).toBeNull();
   });
 });

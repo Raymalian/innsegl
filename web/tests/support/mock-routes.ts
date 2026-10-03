@@ -24,6 +24,7 @@ import {
   detail,
   overview,
   proof,
+  repoList,
   runPage,
   windowedCount,
 } from "./api-fixtures";
@@ -69,6 +70,11 @@ export async function installApiMocks(page: Page): Promise<void> {
 
     if (p === "/api/v1/overview") {
       await json(route, overview());
+      return;
+    }
+
+    if (p === "/api/v1/repos") {
+      await json(route, repoList());
       return;
     }
 

@@ -193,6 +193,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}", s.handleRun)
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}/log", s.handleRunLog)
 	s.mux.HandleFunc("GET /api/v1/overview", s.handleOverview)
+	s.mux.HandleFunc("GET /api/v1/repos", s.handleRepos)
 	s.mux.HandleFunc("GET /api/v1/alerts", s.handleAlerts)
 	s.mux.HandleFunc("GET /api/v1/proof/{commit_sha}", s.handleProof)
 	s.mux.HandleFunc("GET /api/v1/attribution/{commit_sha}", s.handleAttribution)

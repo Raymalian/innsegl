@@ -186,6 +186,7 @@ var apiRoutes = []string{
 	"GET /api/v1/runs/{run_id}/record",
 	"GET /api/v1/runs/{run_id}/steps/{n}/diff",
 	"GET /api/v1/overview",
+	"GET /api/v1/repos",
 	"GET /api/v1/proof/{commit_sha}",
 	"GET /api/v1/health",
 	// RM-260/RM-261 (ADR-0062): every route above except health and proof
