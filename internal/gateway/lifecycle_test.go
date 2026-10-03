@@ -557,7 +557,9 @@ func TestGID011ARequestWithinGraceCancelsTheSignalAndSweepRetiresNothing(t *test
 	}
 }
 
-func TestGID011SweepIgnoresOtherSessionsAndSubagents(t *testing.T) {
+// A session's end retires every agent of that session, its subagents
+// included (ADR-0058, amended 2026-10-03), and nothing of another session.
+func TestGID011SweepRetiresTheEndedSessionsAgentsAndNoOtherSessions(t *testing.T) {
 	mappings := &fakeMappingStore{}
 	reg := &fakeRegistrar{}
 	ctx := context.Background()
@@ -579,11 +581,8 @@ func TestGID011SweepIgnoresOtherSessionsAndSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
-	if len(retired) != 0 {
-		t.Errorf("Sweep retired %v, want none: session s1 has no main-agent mapping of its own", retired)
-	}
-	if len(reg.calls) != 0 {
-		t.Errorf("Registrar.calls = %v, want none: session s1 has no main-agent mapping of its own", reg.calls)
+	if len(retired) != 1 || retired[0] != "run-subagent" {
+		t.Errorf("Sweep retired %v, want only s1's subagent run and nothing of s2", retired)
 	}
 }
 

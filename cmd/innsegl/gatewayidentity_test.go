@@ -1035,3 +1035,20 @@ func TestSessionEndHandlerBoundsAFloodByRate(t *testing.T) {
 		t.Errorf("Len() = %d, more marks than requests the rate limit admitted", got)
 	}
 }
+
+// A subagent's end names its agent id; a malformed one is refused.
+func TestSessionEndHandlerTakesASubagentsEnd(t *testing.T) {
+	h, signals := sessionEndTestHandler(t)
+	rec := httptest.NewRecorder()
+	h(rec, sessionEndTestRequest(t, http.MethodPost, "127.0.0.1:54321",
+		`{"session_id":"d5a6a1a0-0000-4000-8000-0000000000aa","agent_id":"a1b2c3"}`))
+	if rec.Code != http.StatusNoContent || signals.Len() != 1 {
+		t.Fatalf("status %d, marks %d; want 204 and one mark", rec.Code, signals.Len())
+	}
+	rec = httptest.NewRecorder()
+	h(rec, sessionEndTestRequest(t, http.MethodPost, "127.0.0.1:54321",
+		`{"session_id":"d5a6a1a0-0000-4000-8000-0000000000aa","agent_id":"../etc"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("a malformed agent id answered %d, want 400", rec.Code)
+	}
+}

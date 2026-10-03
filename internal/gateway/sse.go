@@ -111,7 +111,10 @@ type messagesInterpreter struct {
 	pending  map[int]*pendingToolUse
 
 	// onText, when set, is handed the reply's text at message_stop.
-	onText       func(string)
+	onText func(string)
+	// onStop, when set, is handed the reply's stop_reason at message_stop.
+	onStop       func(stopReason string)
+	stopReason   string
 	texts        map[int]*strings.Builder
 	textOrder    []int
 	textLen      int
@@ -177,7 +180,12 @@ func (m *messagesInterpreter) handleEvent(event, data string) {
 		m.handleDelta(data)
 	case "content_block_stop":
 		m.handleStop(data)
+	case "message_delta":
+		m.handleMessageDelta(data)
 	case "message_stop":
+		if m.onStop != nil {
+			m.onStop(m.stopReason)
+		}
 		m.handleMessageStop()
 	}
 }
@@ -305,6 +313,19 @@ func (m *messagesInterpreter) addText(index int, text string) {
 
 // handleMessageStop hands the reply's text over, joined as joinText joins a
 // resent turn's blocks: in block order, empty blocks skipped, "\n\n" between.
+// handleMessageDelta keeps the reply's stop_reason, which a message_delta
+// carries before message_stop.
+func (m *messagesInterpreter) handleMessageDelta(data string) {
+	var evt struct {
+		Delta struct {
+			StopReason string `json:"stop_reason"`
+		} `json:"delta"`
+	}
+	if json.Unmarshal([]byte(data), &evt) == nil && evt.Delta.StopReason != "" {
+		m.stopReason = evt.Delta.StopReason
+	}
+}
+
 func (m *messagesInterpreter) handleMessageStop() {
 	if m.onText == nil || m.textOverflow {
 		return

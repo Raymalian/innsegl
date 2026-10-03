@@ -350,6 +350,9 @@ func (g *IdentityGuard) check(r *http.Request) (*http.Request, *Refusal) {
 	// what it turns out to mean.
 	if g.sessionEndSignals != nil && id.AgentID == mainAgentID {
 		g.sessionEndSignals.Cancel(id.SessionID)
+	} else if g.sessionEndSignals != nil && id.AgentID != "" {
+		// The same for a subagent and its own SubagentStop mark.
+		g.sessionEndSignals.CancelAgent(id.SessionID, id.AgentID)
 	}
 
 	facts := ExtractRequestFacts(r)

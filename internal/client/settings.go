@@ -113,9 +113,9 @@ func (c SettingsConfig) sessionCommand() string    { return c.HookBin + " hook s
 
 // sessionHookEvents are the events `innsegl hook session` runs on: a new or
 // resumed session, every user turn, every subagent and every move state the
-// working directory; the end of a session signals it, so its run is retired
-// then and not by the silence backstop.
-var sessionHookEvents = []string{"SessionStart", "UserPromptSubmit", "SubagentStart", "CwdChanged", "SessionEnd"}
+// working directory; the end of a session, or of a subagent, signals it, so
+// its run is retired then and not by the silence backstop.
+var sessionHookEvents = []string{"SessionStart", "UserPromptSubmit", "SubagentStart", "CwdChanged", "SessionEnd", "SubagentStop"}
 
 // NotWritableError is returned when the managed settings path cannot be
 // written by this user. Nothing was changed; Staged holds the full new file

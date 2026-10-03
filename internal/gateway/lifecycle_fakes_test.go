@@ -154,3 +154,25 @@ var (
 	_ LifecyclePolicy   = (*fakePolicy)(nil)
 	_ WorkspaceResolver = (*fakeWorkspaceResolver)(nil)
 )
+
+// AgentsOfSession implements SessionRuns: each agent's newest mapping.
+func (f *fakeMappingStore) AgentsOfSession(_ context.Context, sessionID string) ([]RunMapping, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	latest := map[string]RunMapping{}
+	var order []string
+	for _, r := range f.rows {
+		if r.SessionID != sessionID {
+			continue
+		}
+		if _, seen := latest[r.AgentID]; !seen {
+			order = append(order, r.AgentID)
+		}
+		latest[r.AgentID] = r
+	}
+	out := make([]RunMapping, 0, len(order))
+	for _, a := range order {
+		out = append(out, latest[a])
+	}
+	return out, nil
+}

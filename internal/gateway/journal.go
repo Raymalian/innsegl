@@ -158,7 +158,7 @@ func (p *Proxy) replay(r *http.Request, contentType string, reply []byte) Replay
 // replyObserver is the writer a reply of contentType is copied into besides
 // the caller, or nil when nobody watches it (proxy.go's stream).
 func (p *Proxy) replyObserver(r *http.Request, contentType string) io.Writer {
-	if (p.ToolUse == nil && p.ReplyText == nil) || !isEventStream(contentType) {
+	if (p.ToolUse == nil && p.ReplyText == nil && p.SubagentEnds == nil) || !isEventStream(contentType) {
 		return nil
 	}
 	var observer ToolUseObserver
@@ -170,5 +170,31 @@ func (p *Proxy) replyObserver(r *http.Request, contentType string) io.Writer {
 		ctx := r.Context()
 		interp.onText = func(text string) { p.ReplyText.OnReplyText(ctx, text) }
 	}
+	p.watchSubagentEnd(r.Context(), interp)
 	return interp
+}
+
+// SubagentEndRecorder is told that a subagent finished (SessionEnder).
+type SubagentEndRecorder interface {
+	SubagentEnded(ctx context.Context, sessionID, agentID string) error
+}
+
+// watchSubagentEnd marks a subagent ended when its reply ends its work:
+// stop_reason end_turn, no tool asked for. A subagent sends nothing after
+// its final answer; one that is resumed sends a request, and that cancels
+// the mark (identity.go). A main agent's end_turn is a turn waiting for the
+// person and marks nothing.
+func (p *Proxy) watchSubagentEnd(ctx context.Context, interp *messagesInterpreter) {
+	if p.SubagentEnds == nil {
+		return
+	}
+	id, ok := IdentificationFromContext(ctx)
+	if !ok || id.AgentID == "" || id.AgentID == mainAgentID {
+		return
+	}
+	interp.onStop = func(stopReason string) {
+		if stopReason == "end_turn" {
+			discardWriteError(0, p.SubagentEnds.SubagentEnded(ctx, id.SessionID, id.AgentID))
+		}
+	}
 }

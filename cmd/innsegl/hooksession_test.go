@@ -291,3 +291,18 @@ func TestHookSessionEndNeverBlocks(t *testing.T) {
 		t.Fatalf("exit %d, want 0", code)
 	}
 }
+
+// A subagent's end is signalled too (SubagentStop carries its agent_id), so
+// its run is retired when it finishes rather than by the backstop.
+func TestHookSessionSignalsTheEndOfASubagent(t *testing.T) {
+	posts, post := capturePosts(nil)
+	in := `{"session_id":"7dc5d783-9896-4aef-84d9-a82114505fff","agent_id":"a1b2c3","cwd":"/w","hook_event_name":"SubagentStop"}`
+	if code := runHookSession(strings.NewReader(in), &bytes.Buffer{}, &bytes.Buffer{},
+		env(map[string]string{"INNSEGL_CORE_URL": "http://127.0.0.1:28195"}), post); code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if len(*posts) != 1 || (*posts)[0].url != "http://127.0.0.1:28195"+gatewaySessionEndPath ||
+		(*posts)[0].body["agent_id"] != "a1b2c3" || (*posts)[0].body["session_id"] != "7dc5d783-9896-4aef-84d9-a82114505fff" {
+		t.Fatalf("posts %+v, want one session-end naming the subagent", *posts)
+	}
+}
