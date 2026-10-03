@@ -28,6 +28,13 @@ type stubAccountsStore struct {
 	err            error
 	token          string
 	tokenExpiresAt time.Time
+	recoveryFor    []string
+	recoveryCodes  []string
+}
+
+func (s *stubAccountsStore) RecoveryCodes(_ context.Context, userID string) ([]string, error) {
+	s.recoveryFor = append(s.recoveryFor, userID)
+	return s.recoveryCodes, s.err
 }
 
 func (s *stubAccountsStore) CreateAccount(_ context.Context, p accounts.CreateAccountParams) (accounts.Account, error) {
@@ -266,5 +273,34 @@ func TestAccountsCLIListPrintsIDsOwnersAndRepos(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("output %q lacks %q", out, want)
 		}
+	}
+}
+
+// An owner who never saw their recovery codes, or lost every passkey, gets
+// back in through the operator: `recovery-codes --user ID` replaces the
+// user's codes and prints the new ones on STDOUT only, once. A code signs in
+// once and leads to the account page, where a passkey is added. The account,
+// its installations and the history recorded under it stay as they were.
+func TestAccountsCLIRecoveryCodesPrintsNewCodesOnStdoutOnly(t *testing.T) {
+	s := &stubAccountsStore{recoveryCodes: []string{"aaaa-bbbb-cccc", "dddd-eeee-ffff"}}
+	code, stdout, stderr := runAccounts(s, "recovery-codes", "-dsn", "postgres://x", "--user", "u-1")
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	if stdout != "aaaa-bbbb-cccc\ndddd-eeee-ffff\n" {
+		t.Fatalf("stdout %q, want one code per line", stdout)
+	}
+	if strings.Contains(stderr, "aaaa") || !strings.Contains(stderr, "voided") {
+		t.Errorf("stderr %q: it must say the old codes are void and never repeat a code", stderr)
+	}
+	if len(s.recoveryFor) != 1 || s.recoveryFor[0] != "u-1" {
+		t.Fatalf("RecoveryCodes called for %v", s.recoveryFor)
+	}
+	if code, _, _ := runAccounts(s, "recovery-codes", "-dsn", "postgres://x"); code != exitUsage {
+		t.Errorf("without --user: exit %d, want usage", code)
+	}
+	s.err = errors.New("no such user")
+	if code, _, _ := runAccounts(s, "recovery-codes", "-dsn", "postgres://x", "--user", "nobody"); code == exitOK {
+		t.Error("an unknown user was accepted")
 	}
 }
