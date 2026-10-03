@@ -60,6 +60,9 @@ const (
 	// authWriterPassword is the auth-writer role's password in tests, the
 	// same "names itself as a fixture" reasoning as readerPassword.
 	authWriterPassword = "authwriter-test-password"
+
+	// resolverPassword is the resolver role's password in tests (RM-330).
+	resolverPassword = "resolver-test-password"
 )
 
 // errDependencyAbsent marks the only conditions under which skipping TC-API's
@@ -323,6 +326,25 @@ func migrated(t *testing.T) (owner *ledger.Store, ownerDSN, readerDSN string) {
 // the API in production and by AuthStore's own tests here.
 func migratedWithAuth(t *testing.T) (owner *ledger.Store, ownerDSN, readerDSN, authDSN string) {
 	t.Helper()
+	m := migratedWithRoles(t)
+	return m.owner, m.ownerDSN, m.readerDSN, m.authDSN
+}
+
+// migratedDB is one fresh, migrated database and every role provisioned on
+// it, by DSN.
+type migratedDB struct {
+	owner       *ledger.Store
+	ownerDSN    string
+	readerDSN   string
+	authDSN     string
+	resolverDSN string
+}
+
+// migratedWithRoles is migratedWithAuth plus RM-330's resolver role
+// (ADR-0044's 2026-10-03 amendment), which may insert alert resolutions and
+// nothing else.
+func migratedWithRoles(t *testing.T) migratedDB {
+	t.Helper()
 	c, database, ownerDSN := freshDB(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -342,7 +364,13 @@ func migratedWithAuth(t *testing.T) (owner *ledger.Store, ownerDSN, readerDSN, a
 	if err := EnsureAuthWriterRole(ctx, ownerDSN, AuthWriterRole, authWriterPassword); err != nil {
 		t.Fatalf("EnsureAuthWriterRole: %v", err)
 	}
-	return s, ownerDSN,
-		c.dsn(database, ReadOnlyRole, readerPassword),
-		c.dsn(database, AuthWriterRole, authWriterPassword)
+	if err := EnsureResolverRole(ctx, ownerDSN, ResolverRole, resolverPassword); err != nil {
+		t.Fatalf("EnsureResolverRole: %v", err)
+	}
+	return migratedDB{
+		owner: s, ownerDSN: ownerDSN,
+		readerDSN:   c.dsn(database, ReadOnlyRole, readerPassword),
+		authDSN:     c.dsn(database, AuthWriterRole, authWriterPassword),
+		resolverDSN: c.dsn(database, ResolverRole, resolverPassword),
+	}
 }

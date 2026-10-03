@@ -38,7 +38,7 @@ describe("ADP-018 — an adoption on the run timeline", () => {
     expect(text).toContain("Work adopted");
     expect(text).not.toContain("does not recognise");
     expect(text).not.toContain("Not a writer");
-    expect(text).toContain("Adopted from");
+    expect(text).toContain("Taken over from");
     expect(text).toContain("retired");
     expect(text).toContain("Claim digest");
   });

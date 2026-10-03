@@ -70,6 +70,8 @@ import {
   proseText,
   secondaryText,
   sectionHeading,
+  sectionSummary,
+  focusRing,
   sectionShell,
   table,
   tableCell,
@@ -128,22 +130,27 @@ export function ProofChain({ proof, findings, onRetry }: ProofChainProps) {
 function Section({
   heading,
   detail,
+  open = false,
   children,
 }: {
   readonly heading: string;
   readonly detail?: string;
+  /** Opens itself when the section carries a problem: doc 06 §4.5 does not
+   * let a condition hide inside a closed panel. */
+  readonly open?: boolean;
   readonly children: React.ReactNode;
 }) {
   return (
-    <section className={sectionShell}>
-      <h2 className={sectionHeading}>{heading}</h2>
+    <details className={sectionShell} {...(open ? { open: true } : {})}>
+      <summary className={`${sectionSummary} ${focusRing}`}>
+        <h2 className={sectionHeading}>{heading}</h2>
+      </summary>
       {detail === undefined ? null : <p className={proseText}>{detail}</p>}
       {children}
-    </section>
+    </details>
   );
 }
 
-/** One piece of verbatim material, under the name of what it is (doc 06 P4). */
 function Fact({
   label,
   value,
@@ -183,7 +190,11 @@ function LiveChecks({
   ];
 
   return (
-    <Section heading={strings.liveCheck.heading} detail={strings.liveCheck.detail}>
+    <Section
+      heading={strings.liveCheck.heading}
+      detail={strings.liveCheck.detail}
+      open={missing.length > 0 || proof.upstreams.some((upstream) => !upstream.reachable)}
+    >
       <table className={table}>
         <caption className={`${factLabel} text-left`}>
           {strings.liveCheck.tableLabel}
@@ -392,6 +403,7 @@ function Rederivation({ findings }: { readonly findings: readonly Finding[] }) {
     <Section
       heading={strings.rederivation.heading}
       detail={strings.rederivation.detail}
+      open={contradicted}
     >
       {findings.length === 0 ? (
         <p className={proseText}>{strings.rederivation.absent}</p>

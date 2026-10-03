@@ -147,7 +147,11 @@ export function useAlert(base: string, eventId: string): AlertResource {
 
   useEffect(() => {
     const controller = new AbortController();
-    setState({ status: "loading", alert: null, error: "" });
+    // A re-read of the same alert (after resolving it) keeps showing it until
+    // the new answer arrives, rather than flashing the loading state.
+    setState((prev) =>
+      prev.alert?.event_id === eventId ? prev : { status: "loading", alert: null, error: "" },
+    );
     findAlert(base, eventId, controller.signal).then(
       (alert) => {
         if (controller.signal.aborted) return;
@@ -168,6 +172,74 @@ export function useAlert(base: string, eventId: string): AlertResource {
     );
     return () => controller.abort();
   }, [base, eventId, nonce]);
+
+  return { ...state, reload };
+}
+
+/**
+ * Every alert the feed holds, newest first, for the alerts page (RM-330).
+ * The feed filters by event type only, so the page reads all of it and
+ * filters by kind and run itself. Bounded, like `findAlert`: `complete` is
+ * false when the bound stopped the read before the feed ended, and the page
+ * says so rather than presenting a partial list as the whole.
+ */
+export async function fetchAllAlerts(
+  base: string,
+  signal: AbortSignal,
+): Promise<{ readonly alerts: readonly AlertRecord[]; readonly complete: boolean }> {
+  const alerts: AlertRecord[] = [];
+  let cursor = "";
+  for (let page = 0; page < SEARCH_MAX_PAGES; page++) {
+    const url =
+      cursor === ""
+        ? `${base}/alerts?limit=${SEARCH_PAGE_SIZE}`
+        : `${base}/alerts?limit=${SEARCH_PAGE_SIZE}&cursor=${encodeURIComponent(cursor)}`;
+    const body = await getPage(url, signal);
+    alerts.push(...body.alerts);
+    if (!body.next_cursor) return { alerts, complete: true };
+    cursor = body.next_cursor;
+  }
+  return { alerts, complete: false };
+}
+
+export interface AllAlerts {
+  readonly status: "loading" | "ready" | "failed";
+  readonly alerts: readonly AlertRecord[];
+  readonly complete: boolean;
+  readonly error: string;
+  readonly reload: () => void;
+}
+
+/** `fetchAllAlerts` as a hook, re-read on `reload` — after a resolution. */
+export function useAllAlerts(base: string): AllAlerts {
+  const [nonce, setNonce] = useState(0);
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
+  const [state, setState] = useState<Omit<AllAlerts, "reload">>({
+    status: "loading",
+    alerts: [],
+    complete: true,
+    error: "",
+  });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchAllAlerts(base, controller.signal).then(
+      ({ alerts, complete }) => {
+        if (controller.signal.aborted) return;
+        setState({ status: "ready", alerts, complete, error: "" });
+      },
+      (reason: unknown) => {
+        if (controller.signal.aborted) return;
+        setState({
+          status: "failed",
+          alerts: [],
+          complete: true,
+          error: reason instanceof Error ? reason.message : String(reason),
+        });
+      },
+    );
+    return () => controller.abort();
+  }, [base, nonce]);
 
   return { ...state, reload };
 }

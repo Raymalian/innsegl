@@ -25,7 +25,7 @@ import type { RunsFilters } from "../../app/routes";
 
 import { runsLinkPath, type RunPage } from "./api";
 import { strings } from "./strings";
-import { pager, pagerLink, pagerNote } from "./styles";
+import { pager, pagerLink } from "./styles";
 
 export interface RunsPagerProps {
   readonly filters: RunsFilters;
@@ -52,12 +52,10 @@ export function RunsPager({ filters, page }: RunsPagerProps) {
           to={runsLinkPath({ ...filters, cursor: nextCursor })}
           className={pagerLink}
         >
-          {strings.labels.page.next}
+          {strings.formats.next(page.limit)}
         </Link>
       )}
 
-      <span className={pagerNote}>{strings.sentences.page.keyset}</span>
-      <span className={pagerNote}>{strings.formats.bounded(page.limit)}</span>
     </nav>
   );
 }

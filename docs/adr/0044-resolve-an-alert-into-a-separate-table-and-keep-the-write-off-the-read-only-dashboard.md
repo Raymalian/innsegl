@@ -1,6 +1,6 @@
 # ADR-0044: Resolve an alert into a separate table, and keep the write off the read-only dashboard
 
-- Status: accepted
+- Status: accepted; amended 2026-10-03 (see the Amendment)
 - Date: 2026-09-07
 - Deciders: #167 (RM-102), applying #118's precedent
 
@@ -243,3 +243,58 @@ against them — nothing else in this project depends on the table's
 existence. If instead a future decision widens the dashboard's role, that is
 squarely Alternative B and needs its own ADR arguing the FD §7/P6 change
 directly, not a quiet grant added to `readonly.sql`.
+
+## Amendment (2026-10-03): resolving from the dashboard, with a passkey
+
+**What changed.** The dashboard can now resolve an alert, or every open
+alert in a group, such as all the telemetry-witness alerts of one run (#506).
+The operator gives a reason and completes a fresh passkey ceremony; only
+then is the resolution written. `resolved_by` is the signed-in account's
+display name. `innsegl resolve-alert` is unchanged and stays the way to
+resolve from the core host.
+
+**Why.** The decision above rested on the dashboard being read-only. Since
+ADR-0062 and its 2026-10-01 amendments, it is not: the dashboard already
+performs passkey-gated writes for accounts, on a credential of its own that
+cannot touch the ledger. A resolution is the same kind of act: a statement
+made in a named person's name, beside the record, not a change to it. The
+friction this ADR accepted (a second credential and a second host to resolve
+anything) bought nothing that a fresh passkey ceremony and a narrow
+credential do not also give, and it left operators reading raw API output to
+find an alert's ID.
+
+**How it is built.**
+
+- `POST /api/v1/alert-resolutions/begin` takes the alerts and the reason and
+  refuses, before anyone is prompted, an unknown alert, an event that is not
+  an alert, or an alert already resolved (409). It answers a WebAuthn
+  challenge for the signed-in user's own passkeys, with user verification
+  required, and stores the request with the ceremony.
+  `.../finish` verifies the assertion and only then writes. The ceremony is
+  its own kind (migration 0013), so a sign-in challenge cannot finish a
+  resolution and a resolution challenge cannot open a session.
+- The write goes through a third database credential, `innsegl_resolver`
+  (`internal/api/resolver.sql`). It may read the two columns of
+  `innsegl.events` that say whether an event is an alert, and read and insert
+  `innsegl.alert_resolutions`. Nothing else: no update or delete of a
+  resolution, no other ledger table, no DDL, nothing in `innsegl_auth`.
+  `AssertResolverScope` proves this at every start and refuses a credential
+  that can do more; the health endpoint reports what it measured.
+- A batch is one transaction: every alert in it is resolved, or none is.
+- The credential is optional. Without it the routes answer 503 and the
+  dashboard shows the command instead.
+
+**What still holds.**
+
+- No ledger rewrite. `innsegl.events` is not touched; a resolution is an
+  append to `innsegl.alert_resolutions`, exactly the row `resolve-alert`
+  writes, with the same refusals. The alert stays in the chain forever.
+- The read-only pool stays read-only. `innsegl api` still opens the
+  ledger through the reader and `AssertReadOnly` still refuses a writable
+  one. The resolver is a separate pool, and it is never the appender.
+- Alternative B stays rejected: `AssertReadOnly` was not narrowed. The one
+  write the dashboard can make has its own credential, with its own proof
+  of scope, instead of a hole in the reader's.
+- The honest cost above still applies: a resolution row is less durable
+  than the alert it resolves.
+

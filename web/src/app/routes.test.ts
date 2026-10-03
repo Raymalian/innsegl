@@ -21,14 +21,16 @@ import {
 } from "./routes";
 
 describe("FE-016 route table", () => {
-  it("names the six views doc 06 §3 specifies, and ADR-0054's alert detail", () => {
+  it("names the six views doc 06 §3 specifies, the alerts page, and ADR-0054's alert detail", () => {
     expect([...VIEWS]).toEqual([
       "overview",
       "runs",
       "run",
+      "repos",
       "repo",
       "agentType",
       "verify",
+      "alerts",
       "alert",
     ]);
   });
@@ -38,7 +40,18 @@ describe("FE-016 route table", () => {
       view: "alert",
       eventId: "01a077c2-eff1-7762-8a61-91a3a5c390e8",
     });
-    expect(parseRoute("/alerts")).toEqual({ view: "notFound", path: "/alerts" });
+  });
+
+  it("addresses the alerts page, its kind and its run in the URL (RM-330)", () => {
+    expect(parseRoute("/alerts")).toEqual({ view: "alerts", filters: { kind: "", run: "" } });
+    expect(parseRoute("/alerts?kind=resolved&run=run-7f3a")).toEqual({
+      view: "alerts",
+      filters: { kind: "resolved", run: "run-7f3a" },
+    });
+    expect(parseRoute("/alerts?kind=nonsense")).toEqual({
+      view: "alerts",
+      filters: { kind: "", run: "" },
+    });
   });
 
   it("never nests deeper than view → detail", () => {
@@ -49,6 +62,7 @@ describe("FE-016 route table", () => {
       { view: "repo", repo: "acme/widgets", from: "", to: "" },
       { view: "agentType", agentType: "fix-ci", from: "", to: "" },
       { view: "verify", commit: "", repo: "" },
+      { view: "alerts", filters: { kind: "all", run: "run-7f3a" } },
       { view: "alert", eventId: "01a077c2-eff1-7762-8a61-91a3a5c390e8" },
     ];
     for (const route of routes) {
@@ -80,6 +94,9 @@ describe("FE-010 URL carries every view's state", () => {
     "/verify",
     "/verify?commit=9d4e1f0c",
     "/verify?commit=9d4e1f0c&repo=acme%2Fwidgets",
+    "/alerts",
+    "/alerts?kind=resolved",
+    "/alerts?kind=all&run=run-7f3a",
     "/alerts/01a077c2-eff1-7762-8a61-91a3a5c390e8",
   ];
 

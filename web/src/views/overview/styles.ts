@@ -44,7 +44,7 @@ export const prose = "max-w-prose leading-prose text-ink-secondary";
 /** doc 06 §5.4: hairline borders and background steps for structure, no
  * shadows and no gradients. */
 export const cardGrid = "grid gap-4 sm:grid-cols-2 lg:grid-cols-4";
-export const cardBase = "flex flex-col gap-1 rounded-md p-4";
+export const cardBase = "flex flex-col gap-1 rounded-md p-3";
 /** Small, uppercase, tracked open — the same treatment a table column header
  * gets, because it is the same thing: a name for the value under it, and not
  * part of the value. Never the serif: doc 06 §5.2 keeps the serif off labels. */
@@ -69,6 +69,7 @@ export const cardValueWord =
 /** What the number counts and over what window. doc 06 P1: the meaning travels
  * with the claim. */
 export const cardMeaning = "text-micro leading-default";
+export const disclosure = `cursor-pointer text-ink-secondary underline underline-offset-2 ${focusRing}`;
 export const cardRow = "flex items-center gap-2";
 
 /* ── the heartbeat ─────────────────────────────────────────────────────── */
@@ -76,7 +77,7 @@ export const cardRow = "flex items-center gap-2";
 /** The same geometry the shared component uses, so the states this view has to
  * render itself do not look like a different component. */
 export const pulseShell =
-  "inline-flex items-center gap-2 rounded-md py-1 text-body leading-tight";
+  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full py-0.5 text-micro leading-tight";
 export const pulseBreach = `${hairline} px-2`;
 
 /* ── the recent runs table ─────────────────────────────────────────────── */

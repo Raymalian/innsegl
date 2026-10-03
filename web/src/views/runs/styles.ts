@@ -117,3 +117,5 @@ export const cellList = "flex flex-col items-start gap-1 list-none p-0";
    filter in this view. Follows repoLink and pagerLink rather than inventing
    a third link idiom. */
 export const orderToggle = `text-accent underline underline-offset-2 ${focusRing}`;
+
+export const note = "text-micro text-ink-muted";

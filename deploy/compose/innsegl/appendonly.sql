@@ -108,6 +108,11 @@ GRANT SELECT, INSERT ON innsegl.alert_resolutions TO :"role";
 -- otherwise. That comment is corrected in the same commit that adds this line.
 GRANT SELECT, INSERT ON innsegl.gateway_run_mapping TO :"role";
 
+-- innsegl.gateway_session_end (migration 0012): the gateway's session-end
+-- marks, append-only for the same reason and granted explicitly for the
+-- same reason as the run mapping above.
+GRANT SELECT, INSERT ON innsegl.gateway_session_end TO :"role";
+
 -- innsegl_auth.installations and innsegl_auth.repo_grants (RM-280, #456;
 -- ADR-0063): the client-certificate guard checks an installation's status
 -- and its repositories within its organisation's live grants on every

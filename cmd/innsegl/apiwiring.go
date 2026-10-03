@@ -141,6 +141,22 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 	}
 	closers = append(closers, authStore.Close)
 
+	// ---- the resolver credential, optional (RM-330) -------------------------
+	//
+	// ADR-0044's 2026-10-03 amendment: a THIRD credential, which may insert
+	// an alert resolution and nothing else. api.OpenResolver proves that at
+	// every open and refuses anything wider, wrapping api.ErrWritable the
+	// same way the two above do. Absent, the dashboard cannot resolve alerts.
+	var resolver *api.Resolver
+	if o.resolverDSN != "" {
+		resolver, err = api.OpenResolver(boot, o.resolverDSN)
+		if err != nil {
+			unwind()
+			return nil, err
+		}
+		closers = append(closers, resolver.Close)
+	}
+
 	// ---- the proof BFF ----------------------------------------------------
 	prover, err := api.NewProver(api.ProofConfig{
 		FulcioURL: o.fulcioURL,
@@ -183,6 +199,7 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 			RPID: o.rpID, RPOrigin: o.rpOrigin, RPDisplayName: "Innsegl",
 		},
 		SessionLifetime: o.sessionLifetime,
+		Resolver:        resolver,
 	})
 	if err != nil {
 		unwind()

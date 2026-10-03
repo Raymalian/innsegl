@@ -109,7 +109,7 @@ export function App({ views = {}, heartbeat, alerts, account }: AppProps) {
         {strings.labels.app.skipToContent}
       </a>
 
-      <header className="flex flex-wrap items-center gap-4 border-b border-line bg-surface px-4 py-3">
+      <header className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-2">
         {/* The mark and the wordmark are one thing, so they are one element:
           * the seal never wraps away from the word it belongs to. The seal is
           * silent — see AppMark.tsx — so this span reads "Innsegl" once. */}
@@ -128,7 +128,7 @@ export function App({ views = {}, heartbeat, alerts, account }: AppProps) {
         <div
           role="status"
           aria-label={strings.labels.header.anchoring}
-          className="min-w-0 flex-1 text-micro text-ink-secondary sm:text-right"
+          className="min-w-0 text-micro text-ink-secondary sm:flex-1 sm:text-right"
         >
           {heartbeat}
         </div>

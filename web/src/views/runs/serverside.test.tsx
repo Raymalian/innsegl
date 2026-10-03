@@ -118,7 +118,7 @@ describe("FE-051 filtering and search happen on the server", () => {
       screen.getByText(strings.formats.showing(threeRuns().length, 4_000_000)),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: strings.labels.page.next }),
+      screen.getByRole("link", { name: strings.formats.next(50) }),
     ).toHaveAttribute("href", expect.stringContaining("cursor=4102"));
   });
 

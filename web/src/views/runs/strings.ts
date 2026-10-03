@@ -44,16 +44,13 @@ export const strings = {
       switchToNewest: "Sort newest first",
     },
     columns: {
-      runId: "Run ID",
-      task: "Task",
-      /* "Signed in" and not "Repositories". The column holds the repositories
-         this run CREATED COMMITS IN, which is not the same question as which
-         project the agent belongs to — and most runs sign nothing, so
-         "Repositories: none" read as "this agent belongs nowhere". Where an
-         agent belongs is in Task, which carries the project name. */
-      repo: "Signed in",
-      commits: "Commits and verification",
       status: "Status",
+      repo: "Repository",
+      agentType: "Agent type",
+      task: "Task",
+      started: "Started",
+      lastSeen: "Last seen",
+      commits: "Commits",
     },
 
     filters: {
@@ -71,7 +68,6 @@ export const strings = {
 
     page: {
       region: "Pages",
-      next: "Next page",
       first: "First page",
     },
 
@@ -80,12 +76,10 @@ export const strings = {
          recorded" describes a missing field; "Signed nothing" describes the
          run, which is what a reader is asking about. */
       noRepos: "Signed nothing",
+      noTime: "Unknown",
     },
 
     verification: {
-      /** doc 06 P2: what this row does NOT claim. Not a verdict — a statement
-       * that no verdict was sought here. */
-      notChecked: "No live check ran for this row",
       openRun: "Open the run",
     },
 
@@ -106,14 +100,11 @@ export const strings = {
         "Matches run IDs, SPIFFE IDs and task refs. The ledger does the matching; nothing is filtered in this browser.",
     },
 
-    page: {
-      keyset:
-        "Pages run forward from a keyset cursor. Use the browser's back button to return to an earlier page.",
-    },
-
-    verification: {
-      notChecked:
-        "A verification is three live checks against Fulcio and Rekor per commit, and this table runs none. Open the run to see them.",
+    /* One note above the table, in place of one per row (RM-331). It says
+     * what this list does not claim; doc 06 P2. */
+    list: {
+      noLiveVerification:
+        "This list runs no live verification. Open a run to check its commits.",
     },
   },
 
@@ -137,8 +128,7 @@ export const strings = {
     commits: (count: number): string =>
       count === 1 ? `${count} commit` : `${count} commits`,
     /** doc 06 §7's scale posture, said out loud on the page. */
-    bounded: (limit: number): string =>
-      `At most ${limit} runs are requested at a time.`,
+    next: (limit: number): string => `Next ${limit} runs`,
   },
 } as const;
 

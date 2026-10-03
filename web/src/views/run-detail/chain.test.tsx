@@ -51,7 +51,7 @@ describe("FE-080 chain position", () => {
     const events = healthyTimeline();
     const { text } = renderTimeline(events);
     for (const event of events) {
-      expect(text).toContain(`Chain position ${event.chain_position}`);
+      expect(text).toContain(`Ledger position ${event.chain_position}`);
     }
   });
 
@@ -63,10 +63,10 @@ describe("FE-080 chain position", () => {
       ledgerEvent(EVENT_TYPES.runRetired, 214),
     ];
     const { text } = renderTimeline(events);
-    expect(text).toContain("Chain position 7");
-    expect(text).toContain("Chain position 214");
-    expect(text).not.toContain("Chain position 0");
-    expect(text).not.toContain("Chain position 1 ");
+    expect(text).toContain("Ledger position 7");
+    expect(text).toContain("Ledger position 214");
+    expect(text).not.toContain("Ledger position 0");
+    expect(text).not.toContain("Ledger position 1 ");
   });
 });
 
@@ -78,7 +78,7 @@ describe("FE-080 what can be said about a chain link", () => {
 
   it("calls consecutive positions with matching hashes linked", () => {
     expect(chainLinkAt(linked, 1)).toEqual("linked");
-    expect(renderTimeline(linked).text).toContain("Chain link holds");
+    expect(renderTimeline(linked).text).toContain("Matches the event before it");
   });
 
   it("refuses to call a non-consecutive pair either linked or broken", () => {
@@ -88,9 +88,9 @@ describe("FE-080 what can be said about a chain link", () => {
     ];
     expect(chainLinkAt(sparse, 1)).toEqual("unchecked");
     const { text } = renderTimeline(sparse);
-    expect(text).toContain("Chain link not checkable here");
+    expect(text).toContain("Not checked against the event before it");
     // The claim it must never make about a pair it did not check.
-    expect(text).not.toContain("Chain link holds");
+    expect(text).not.toContain("Matches the event before it");
   });
 
   it("calls a consecutive pair whose hashes disagree broken, and says so loudly", () => {
@@ -103,7 +103,7 @@ describe("FE-080 what can be said about a chain link", () => {
     ];
     expect(chainLinkAt(broken, 1)).toEqual("broken");
     const { container, text } = renderTimeline(broken);
-    expect(text).toContain("Chain link broken");
+    expect(text).toContain("Does not match the event before it");
     // doc 06 §6.4: never colour alone. The node carries an icon beside the
     // words, and the words are what this asserts.
     expect(container.querySelectorAll("[data-icon]").length).toBeGreaterThan(0);
@@ -111,7 +111,7 @@ describe("FE-080 what can be said about a chain link", () => {
 
   it("says of the first event that there is nothing here to link it to", () => {
     expect(chainLinkAt(linked, 0)).toEqual("first");
-    expect(renderTimeline(linked).text).toContain("First event in this response");
+    expect(renderTimeline(linked).text).toContain("First event on this page");
   });
 
   it("puts the two hashes on the page, so the link is checkable by hand", () => {

@@ -168,6 +168,14 @@ x-reader-password: &reader-password ${INNSEGL_LEDGER_READER_PASSWORD:-innsegl-co
 x-auth-writer-role: &auth-writer-role innsegl_authwriter
 x-auth-writer-password: &auth-writer-password ${INNSEGL_LEDGER_AUTHWRITER_PASSWORD:-innsegl-compose-authwriter}
 
+# RM-330 (ADR-0044's 2026-10-03 amendment) — the alert resolver's own role.
+# It may insert a row into innsegl.alert_resolutions and nothing else
+# (internal/api/resolver.sql). `innsegl api` connects as it on a THIRD pool
+# and resolves alerts from the dashboard, after a fresh passkey ceremony,
+# through it alone. Its own variable, for the reason every role here has one.
+x-resolver-role: &resolver-role innsegl_resolver
+x-resolver-password: &resolver-password ${INNSEGL_LEDGER_RESOLVER_PASSWORD:-innsegl-compose-resolver}
+
 # doc 05 §1's BACKUP role (RM-146, #237). The reader's grants over the ledger,
 # plus CREATEDB — and CREATEDB only because the backup proves a dump restores by
 # restoring it into a throwaway database of its own. `innsegl-backup` connects as
@@ -524,6 +532,8 @@ services:
       INNSEGL_BACKUP_PASSWORD: *backup-password
       INNSEGL_AUTHWRITER_ROLE: *auth-writer-role
       INNSEGL_AUTHWRITER_PASSWORD: *auth-writer-password
+      INNSEGL_RESOLVER_ROLE: *resolver-role
+      INNSEGL_RESOLVER_PASSWORD: *resolver-password
     volumes:
       - ./innsegl:/innsegl/init:ro
       # The SHIPPED migrations, read straight from the repository. Not a copy:
@@ -548,6 +558,9 @@ services:
       # this exact file, and a copy under deploy/ is a posture that could
       # drift from the one AssertCannotWriteLedger measures.
       - ../../internal/api/authwriter.sql:/innsegl/api/authwriter.sql:ro
+      # internal/api/resolver.sql — RM-330's resolver grants, mounted for the
+      # identical reason: api.EnsureResolverRole embeds this exact file.
+      - ../../internal/api/resolver.sql:/innsegl/api/resolver.sql:ro
     entrypoint: ["sh", "/innsegl/init/db-init.sh"]
     security_opt:
       - no-new-privileges:true
@@ -1798,6 +1811,11 @@ services:
       # -auth-dsn for why a shared name here is the exact mistake this
       # deployment's whole role split exists to make impossible.
       INNSEGL_API_AUTH_DSN: postgres://innsegl_authwriter:${INNSEGL_LEDGER_AUTHWRITER_PASSWORD:-innsegl-compose-authwriter}@postgres:5432/innsegl?sslmode=disable
+      # RM-330 (ADR-0044's 2026-10-03 amendment) — THE RESOLVER. A THIRD
+      # credential, on a THIRD pool: it may insert an alert resolution and
+      # nothing else, and `innsegl api` refuses it at start-up if it can do
+      # more. Never the reader's name, the auth writer's or the appender's.
+      INNSEGL_API_RESOLVER_DSN: postgres://innsegl_resolver:${INNSEGL_LEDGER_RESOLVER_PASSWORD:-innsegl-compose-resolver}@postgres:5432/innsegl?sslmode=disable
       # localhost, never an IP literal: a WebAuthn RP ID must be a domain, and
       # the origin has to be the address a browser actually opens. install.sh
       # and runbooks/orchestrated-run.md both document localhost:8082 as that

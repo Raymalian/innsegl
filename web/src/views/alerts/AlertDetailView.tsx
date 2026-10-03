@@ -55,6 +55,7 @@ export function AlertDetailView({
           <AlertDetail
             alert={resource.alert!}
             apiBase={apiBase}
+            onResolved={resource.reload}
             {...(now === undefined ? {} : { now })}
           />
         </>

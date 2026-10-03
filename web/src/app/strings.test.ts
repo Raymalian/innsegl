@@ -107,9 +107,11 @@ describe("FE-019 the six views and the shell chrome are all named", () => {
       "overview",
       "runs",
       "run",
+      "repos",
       "repo",
       "agentType",
       "verify",
+      "alerts",
       "alert",
     ]);
   });

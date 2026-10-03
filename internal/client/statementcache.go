@@ -4,9 +4,11 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"sync"
+	"time"
 )
 
 // The statement cache (RM-313). The session hook states each session's
@@ -35,13 +37,16 @@ type statementCache struct {
 	max   int
 	order []statementKey
 	byKey map[statementKey]string // the header value
+	// changed is closed, and replaced, each time a statement is kept, so a
+	// request can wait for its session's first one (awaitSession).
+	changed chan struct{}
 }
 
 func newStatementCache(capacity int) *statementCache {
 	if capacity <= 0 {
 		capacity = DefaultMaxStatements
 	}
-	return &statementCache{max: capacity, byKey: make(map[statementKey]string)}
+	return &statementCache{max: capacity, byKey: make(map[statementKey]string), changed: make(chan struct{})}
 }
 
 // remember keeps body, a statement as the hook posted it, under its session
@@ -74,7 +79,32 @@ func (c *statementCache) remember(body []byte) (sessionID string) {
 		c.order = append(c.order, key)
 	}
 	c.byKey[key] = value
+	close(c.changed)
+	c.changed = make(chan struct{})
 	return in.SessionID
+}
+
+// awaitSession waits up to d, or until ctx ends, for any statement in
+// sessionID, and reports whether one is there.
+func (c *statementCache) awaitSession(ctx context.Context, sessionID string, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	for {
+		c.mu.Lock()
+		_, ok := c.byKey[statementKey{sessionID, ""}]
+		changed := c.changed
+		c.mu.Unlock()
+		if ok {
+			return true
+		}
+		select {
+		case <-changed:
+		case <-timer.C:
+			return false
+		case <-ctx.Done():
+			return false
+		}
+	}
 }
 
 // lookup answers the header value for a request of agentID ("" for the main

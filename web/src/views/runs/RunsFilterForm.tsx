@@ -67,6 +67,7 @@ import {
 
 const ID = {
   repo: "runs-filter-repo",
+  repoChoices: "runs-filter-repo-choices",
   agentType: "runs-filter-agent-type",
   status: "runs-filter-status",
   from: "runs-filter-from",
@@ -117,9 +118,11 @@ const isRunStatus = (value: string): value is RunStatus =>
 
 export interface RunsFilterFormProps {
   readonly filters: RunsFilters;
+  /** Repositories to offer as choices; the field still takes any name. */
+  readonly repos?: readonly string[];
 }
 
-export function RunsFilterForm({ filters }: RunsFilterFormProps) {
+export function RunsFilterForm({ filters, repos = [] }: RunsFilterFormProps) {
   const [draft, setDraft] = useState<Draft>(() => draftOf(filters));
 
   const apply = (event: FormEvent<HTMLFormElement>) => {
@@ -162,6 +165,7 @@ export function RunsFilterForm({ filters }: RunsFilterFormProps) {
             id={ID.repo}
             name="repo"
             type="text"
+            list={ID.repoChoices}
             className={filterControl}
             value={draft.repo}
             onChange={(event) =>
@@ -169,6 +173,12 @@ export function RunsFilterForm({ filters }: RunsFilterFormProps) {
             }
           />
         </div>
+
+        <datalist id={ID.repoChoices}>
+          {repos.map((repo) => (
+            <option key={repo} value={repo} />
+          ))}
+        </datalist>
 
         <div className={filterField}>
           <label className={filterLabel} htmlFor={ID.agentType}>

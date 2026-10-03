@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * One alert, in full — ADR-0054, doc 06 P1, P4, §4.3.
+ * One alert, in full — ADR-0054, RM-330, doc 06 P1, P4, §4.3.
  *
  * The menu in the header says what happened in one line. This says all of
  * it: every field the alerts feed carries for this event, each in a readable
- * form, the long identifiers in chips that copy the whole value, and the link
- * to the raw record behind it (P1). Presentational; `AlertDetailView` reads.
+ * form, the long identifiers in chips that copy the whole value, the full
+ * record behind a toggle (P1), what the alert means and what to do about it.
+ * Presentational; `AlertDetailView` reads.
  *
- * It offers no action. ADR-0044: the dashboard is read-only, and the status
- * line says who can resolve an alert and where, rather than a button that
- * cannot work.
+ * An open alert can be resolved here (ADR-0044's 2026-10-03 amendment): a
+ * reason and a fresh passkey, which records who, when and why beside the
+ * alert and never changes the alert itself. The resolve-alert command stays
+ * as the alternative for an operator on the core host.
  */
 
 import { useId, type ReactNode } from "react";
@@ -20,7 +22,10 @@ import { routeToPath } from "../../app/routes";
 import { Icon } from "../../components/common/Icon";
 import { IdentifierChip } from "../../components/common/IdentifierChip";
 import { elapsedSince, formatAbsoluteUtc } from "../../components/common/time";
+import type { WebAuthnBrowser } from "../auth/client";
 import type { AlertRecord } from "../overview/types";
+import { alertCause, explain } from "./explain";
+import { ResolveForm } from "./ResolveForm";
 import { strings } from "./strings";
 import {
   commandBox,
@@ -34,6 +39,9 @@ import {
   link,
   mutedText,
   page,
+  recordPre,
+  recordToggle,
+  resolveSection,
   summary,
 } from "./styles";
 import { alertSummary, alertTitle } from "./summary";
@@ -42,9 +50,12 @@ export interface AlertDetailProps {
   readonly alert: AlertRecord;
   readonly apiBase: string;
   readonly now?: Date;
+  /** Called once a resolution is written, so the view reads again. */
+  readonly onResolved?: () => void;
+  readonly browser?: WebAuthnBrowser;
 }
 
-export function AlertDetail({ alert, apiBase, now }: AlertDetailProps) {
+export function AlertDetail({ alert, apiBase, now, onResolved, browser }: AlertDetailProps) {
   const at = now ?? new Date();
   const ts = new Date(alert.ts);
   const drift = alert.event_type === "ledger_drift_detected";
@@ -104,23 +115,61 @@ export function AlertDetail({ alert, apiBase, now }: AlertDetailProps) {
         </Fact>
       </dl>
 
-      {alert.resolved ? null : <HowToResolve eventId={alert.event_id} />}
+      <Explanation alert={alert} />
+
+      {alert.resolved ? null : (
+        <Resolve
+          eventId={alert.event_id}
+          apiBase={apiBase}
+          onResolved={onResolved ?? (() => undefined)}
+          {...(browser === undefined ? {} : { browser })}
+        />
+      )}
 
       <section className={evidence}>
         <h2 className={evidenceHeading}>{strings.detail.evidenceHeading}</h2>
-        <a
-          href={`${apiBase}/alerts?event_type=${encodeURIComponent(alert.event_type)}`}
-          className={link}
-        >
-          {strings.detail.rawRecord}
-        </a>
         {alert.run_id ? (
-          <Link to={{ view: "run", runId: alert.run_id }} className={link}>
-            {strings.detail.viewRun}
-          </Link>
+          <>
+            <Link to={{ view: "run", runId: alert.run_id }} className={link}>
+              {strings.detail.viewRun}
+            </Link>
+            <Link
+              to={{ view: "alerts", filters: { kind: "all", run: alert.run_id } }}
+              className={link}
+            >
+              {strings.detail.runAlerts}
+            </Link>
+          </>
         ) : null}
+        <details>
+          <summary className={recordToggle}>{strings.detail.recordToggle}</summary>
+          <pre className={recordPre}>{JSON.stringify(alert, null, 2)}</pre>
+        </details>
       </section>
     </article>
+  );
+}
+
+/** What this alert means and what to do about it, by its cause. */
+function Explanation({ alert }: { readonly alert: AlertRecord }) {
+  const whatId = useId();
+  const todoId = useId();
+  const copy = explain(alertCause(alert));
+  return (
+    <>
+      <section aria-labelledby={whatId} className={evidence}>
+        <h2 id={whatId} className={evidenceHeading}>
+          {strings.explain.whatHeading}
+        </h2>
+        <p className={summary}>{copy.whatDetail}</p>
+      </section>
+      <section aria-labelledby={todoId} className={evidence}>
+        <h2 id={todoId} className={evidenceHeading}>
+          {strings.explain.todoHeading}
+        </h2>
+        <p className={summary}>{copy.todoDetail}</p>
+      </section>
+    </>
   );
 }
 
@@ -140,23 +189,45 @@ function Fact({
 }
 
 /**
- * The command an operator runs to resolve this alert — a thing to copy, not a
- * button (ADR-0044, ADR-0054). The identifier chip is the copy control, given
- * room for the whole command so nothing is abbreviated on screen.
+ * Resolve this alert: a reason and a fresh passkey (RM-330), and the
+ * resolve-alert command an operator on the core host can run instead. The
+ * identifier chip is the command's copy control, given room for the whole
+ * command so nothing is abbreviated on screen.
  */
-function HowToResolve({ eventId }: { readonly eventId: string }) {
+function Resolve({
+  eventId,
+  apiBase,
+  onResolved,
+  browser,
+}: {
+  readonly eventId: string;
+  readonly apiBase: string;
+  readonly onResolved: () => void;
+  readonly browser?: WebAuthnBrowser;
+}) {
   const headingId = useId();
+  const cliId = useId();
   const command = strings.detail.resolveCommand(eventId);
   return (
-    <section aria-labelledby={headingId} className={evidence}>
+    <section aria-labelledby={headingId} className={resolveSection}>
       <h2 id={headingId} className={evidenceHeading}>
-        {strings.detail.resolveHeading}
+        {strings.resolve.heading}
       </h2>
-      <p className={summary}>{strings.detail.resolveDetail}</p>
-      <p className={summary}>{strings.detail.autoClearDetail}</p>
-      <div className={commandBox}>
-        <IdentifierChip value={command} maxLength={command.length} />
-      </div>
+      <ResolveForm
+        eventIds={[eventId]}
+        onResolved={onResolved}
+        apiBase={apiBase}
+        {...(browser === undefined ? {} : { browser })}
+      />
+      <section aria-labelledby={cliId} className={evidence}>
+        <h3 id={cliId} className={evidenceHeading}>
+          {strings.resolve.cliHeading}
+        </h3>
+        <p className={summary}>{strings.resolve.cliDetail}</p>
+        <div className={commandBox}>
+          <IdentifierChip value={command} maxLength={command.length} />
+        </div>
+      </section>
     </section>
   );
 }

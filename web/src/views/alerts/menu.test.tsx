@@ -31,7 +31,6 @@ function menu(over: Partial<NotificationMenuProps> = {}) {
     <NotificationMenu
       alerts={[DRIFT, UNATTRIBUTED]}
       openCount={2}
-      apiBase="/api/v1"
       now={NOW}
       {...over}
     />,
@@ -129,11 +128,12 @@ describe("FE-134 the dropdown", () => {
     expect(screen.getAllByRole("menuitem")).toHaveLength(1);
   });
 
-  it("notes the rest when more are open than the list holds", async () => {
+  it("notes the rest when more are open than the list holds, linking to the alerts page", async () => {
     const user = userEvent.setup();
     menu({ openCount: 5 });
     await user.click(bell());
-    expect(screen.getByRole("menu")).toHaveTextContent(strings.menu.moreDetail(3));
+    const more = screen.getByRole("menuitem", { name: strings.menu.moreDetail(3) });
+    expect(more).toHaveAttribute("href", "/alerts");
   });
 
   it("says so when nothing is open, rather than showing an empty box", async () => {
@@ -152,7 +152,7 @@ describe("FE-137 the menu degrades honestly and stays read-only", () => {
     await user.click(bell());
     const item = screen.getByRole("menuitem");
     expect(item).toHaveTextContent(strings.menu.countOnlyDetail(4));
-    expect(item).toHaveAttribute("href", "/api/v1/overview");
+    expect(item).toHaveAttribute("href", "/alerts");
   });
 
   it("says the count is unknown when neither read answered, never zero", () => {
@@ -231,8 +231,7 @@ describe("FE-135 keyboard and announcements", () => {
       <NotificationMenu
         alerts={[DRIFT, UNATTRIBUTED]}
         openCount={2}
-        apiBase="/api/v1"
-        now={NOW}
+          now={NOW}
       />,
     );
     expect(live).toHaveTextContent(strings.menu.announceNew(1));

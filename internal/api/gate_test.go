@@ -22,6 +22,7 @@ func TestAUTH001EveryReadRouteRefusesWithNoSession(t *testing.T) {
 		"/api/v1/runs/run-000",
 		"/api/v1/runs/run-000/log",
 		"/api/v1/overview",
+		"/api/v1/repos",
 		"/api/v1/alerts",
 		"/api/v1/attribution/" + scenario.commit + "?repo=" + fixtureRepo,
 	} {

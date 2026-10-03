@@ -65,3 +65,49 @@ export const evidenceHeading = "text-prose font-semibold text-ink";
 
 /** The resolve command: a sunken well, so it reads as something to copy. */
 export const commandBox = `${hairline} rounded-md border-line bg-sunken px-3 py-2 [overflow-wrap:anywhere]`;
+
+/* ── resolving (RM-330) ─────────────────────────────────────────────────── */
+
+export const resolveForm = "flex flex-col gap-3";
+/** The resolve section on the detail page: the form, then the command. */
+export const resolveSection = "flex flex-col gap-4";
+export const fieldStack = "flex flex-col gap-1";
+export const fieldLabel = "font-medium text-ink";
+export const fieldHelp = `text-micro leading-default ${secondaryText}`;
+export const reasonInput = `${hairline} min-h-[5rem] w-full rounded-sm border-line-strong bg-raised px-3 py-2 text-body text-ink ${focusRing}`;
+export const formActions = "flex flex-wrap items-center gap-3";
+/** The one action that writes: the accent at emphasis strength, as the
+ * account page's own passkey actions are. */
+export const primaryButton = `${hairline} rounded-sm border-accent-line bg-accent-emphasis px-4 py-2 font-medium text-ink-on-emphasis whitespace-nowrap disabled:opacity-60 ${focusRing}`;
+/** A quiet control beside it: open or close a form. */
+export const secondaryButton = `${hairline} rounded-sm border-line bg-surface px-3 py-1 font-medium text-ink hover:bg-hover whitespace-nowrap ${focusRing} ${stateTransition}`;
+export const formError = `${hairline} rounded-sm px-3 py-2 text-body ${degraded}`;
+export const formDone = `${hairline} rounded-sm border-line bg-sunken px-3 py-2 text-body text-ink`;
+
+/* ── the alerts page (RM-330) ───────────────────────────────────────────── */
+
+export const filterBar = "flex flex-wrap items-end gap-4";
+export const segmented = "inline-flex flex-wrap gap-1";
+export const segment = `${hairline} rounded-sm border-line bg-surface px-3 py-1 text-body text-ink-secondary hover:bg-hover aria-pressed:border-accent-line aria-pressed:bg-accent-surface aria-pressed:text-accent ${focusRing} ${stateTransition}`;
+export const runSelect = `${hairline} rounded-sm border-line-strong bg-raised px-3 py-1 text-body text-ink ${focusRing}`;
+export const groupCard = `${hairline} flex flex-col rounded-md border-line bg-surface`;
+export const groupHeader = `${hairline} flex flex-col gap-2 border-0 border-b border-line px-4 py-3`;
+export const groupTitleRow = "flex flex-wrap items-baseline justify-between gap-2";
+export const groupTitle = "inline-flex items-center gap-2 text-prose font-semibold text-ink";
+export const groupCounts = `inline-flex flex-wrap gap-2 text-micro ${mutedText}`;
+export const openCountBadge = `${badgeOpen}`;
+export const groupBody = "flex flex-col gap-3";
+/** A heading inside a group: one step below the group's own title. */
+export const groupSubheading = "text-body font-semibold text-ink";
+export const alertList = "flex flex-col";
+export const alertRow = `${hairline} flex flex-col gap-1 border-0 border-t border-line px-4 py-2 first:border-t-0 text-ink hover:bg-hover focus:bg-hover sm:flex-row sm:items-baseline sm:gap-4 ${focusRing}`;
+export const alertRowTime = `shrink-0 text-micro ${mutedText} sm:w-[12rem]`;
+export const alertRowRun = "min-w-0 flex-1 text-micro [overflow-wrap:anywhere]";
+export const alertRowRunId = "font-mono";
+export const alertRowStatus = `shrink-0 text-micro ${secondaryText}`;
+export const recordPre = `${hairline} overflow-x-auto rounded-md border-line bg-sunken p-3 font-mono text-micro text-ink`;
+export const recordToggle = `cursor-pointer text-accent underline underline-offset-2 ${focusRing}`;
+
+/** The alerts page's title: the shell's page heading, as Overview and Runs set it. */
+export const pageHeading =
+  "font-serif text-display font-semibold leading-tight tracking-display text-ink";

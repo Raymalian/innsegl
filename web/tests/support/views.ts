@@ -19,6 +19,7 @@ const TITLE_SUFFIX = " · Innsegl";
 export const VIEWS: readonly ViewCase[] = [
   { name: "overview", path: "/", title: `Overview${TITLE_SUFFIX}` },
   { name: "runs", path: "/runs", title: `Runs${TITLE_SUFFIX}` },
+  { name: "repos", path: "/repos", title: `Repositories${TITLE_SUFFIX}` },
   // E19 (#395-397): `/runs/:runId` is now the run PAGE (doc 06 §3.3's
   // replacement), not this hash-chain timeline — the timeline moved to
   // `/runs/:runId/chain` and stayed reachable there, so this suite's own
@@ -27,7 +28,7 @@ export const VIEWS: readonly ViewCase[] = [
   // against. The run PAGE itself is E19's own suite: web/src/views/run-page's
   // vitest tests and tests/visual/run-page.pw.ts.
   { name: "run", path: `/runs/${RUN_ID}/chain`, title: `Run detail${TITLE_SUFFIX}` },
-  { name: "repo", path: `/repos/${REPO}`, title: `Repositories${TITLE_SUFFIX}` },
+  { name: "repo", path: `/repos/${REPO}`, title: `Repository${TITLE_SUFFIX}` },
   {
     name: "agentType",
     path: `/agent-types/${AGENT_TYPE}`,
@@ -38,6 +39,9 @@ export const VIEWS: readonly ViewCase[] = [
     path: `/verify?commit=${COMMIT_SHA}&repo=${REPO}`,
     title: `Verify a commit${TITLE_SUFFIX}`,
   },
-  // ADR-0054's alert detail, reached from the header's notification menu.
+  // RM-330's alerts page: every alert, grouped by what raised it.
+  { name: "alerts", path: "/alerts?kind=all", title: `Alerts${TITLE_SUFFIX}` },
+  // ADR-0054's alert detail, reached from the alerts page or the header's
+  // notification menu.
   { name: "alert", path: `/alerts/${ALERT_ID}`, title: `Alert${TITLE_SUFFIX}` },
 ];

@@ -23,17 +23,19 @@
 // request it produces then differ only in their path, and there is no
 // translation table between them to drift.
 
-/** The six views of doc 06 §3, in the order that document lists them, and
- * the one detail ADR-0054 added: a single alert, reached from the header's
- * notification menu. It has no index of its own — the menu is the list — so
- * it is not a nav destination either. */
+/** The six views of doc 06 §3, in the order that document lists them, then
+ * the alerts page RM-330 (#506) added — every alert, open and resolved,
+ * grouped by what raised it — and the one detail ADR-0054 added: a single
+ * alert, reached from that page or the header's notification menu. */
 export const VIEWS = [
   "overview",
   "runs",
   "run",
+  "repos",
   "repo",
   "agentType",
   "verify",
+  "alerts",
   "alert",
 ] as const;
 
@@ -96,6 +98,23 @@ export function emptyRunsFilters(): RunsFilters {
   };
 }
 
+/** Which alerts the alerts page lists. Empty is "open", the page's default. */
+export const ALERT_KINDS = ["open", "resolved", "all"] as const;
+export type AlertKind = (typeof ALERT_KINDS)[number];
+
+/** The alerts page's filters: which kind, and one run or every run. */
+export interface AlertsFilters {
+  kind: AlertKind | "";
+  run: string;
+}
+
+export function emptyAlertsFilters(): AlertsFilters {
+  return { kind: "", run: "" };
+}
+
+const isAlertKind = (v: string): v is AlertKind =>
+  (ALERT_KINDS as readonly string[]).includes(v);
+
 export type Route =
   | { view: "overview" }
   | { view: "runs"; filters: RunsFilters }
@@ -111,9 +130,11 @@ export type Route =
    * deeper" fixture below: it is an escape hatch to the view this run's page
    * superseded, not a second view a reader navigates INTO. */
   | { view: "run"; runId: string; chain?: boolean }
+  | { view: "repos" }
   | { view: "repo"; repo: string; from: string; to: string }
   | { view: "agentType"; agentType: string; from: string; to: string }
   | { view: "verify"; commit: string; repo: string }
+  | { view: "alerts"; filters: AlertsFilters }
   | { view: "alert"; eventId: string }
   | { view: "notFound"; path: string };
 
@@ -122,9 +143,11 @@ export const VIEW_ROOTS: Record<ViewName, string> = {
   overview: "/",
   runs: "/runs",
   run: "/runs",
+  repos: "/repos",
   repo: "/repos",
   agentType: "/agent-types",
   verify: "/verify",
+  alerts: "/alerts",
   alert: "/alerts",
 };
 
@@ -139,10 +162,17 @@ export const VIEW_ROOTS: Record<ViewName, string> = {
  * a disabled rail item is worse than an absent one. Those three views are
  * reached by their links from the data that names them, which is what §3's
  * "view → detail" describes. Reported as a question for the human.
+ *
+ * Alerts joined the rail with RM-330 (#506): an index of every alert has an
+ * address of its own, and the bell's menu only ever lists the newest open
+ * ones. Repositories joined it with RM-332 (#508), as the index the
+ * paragraph above found missing: every repository the ledger holds.
  */
 export const NAV_VIEWS = [
   "overview",
   "runs",
+  "repos",
+  "alerts",
   "verify",
 ] as const satisfies readonly ViewName[];
 
@@ -153,6 +183,10 @@ export function navRoute(view: (typeof NAV_VIEWS)[number]): Route {
       return { view: "overview" };
     case "runs":
       return { view: "runs", filters: emptyRunsFilters() };
+    case "repos":
+      return { view: "repos" };
+    case "alerts":
+      return { view: "alerts", filters: emptyAlertsFilters() };
     case "verify":
       return { view: "verify", commit: "", repo: "" };
   }
@@ -210,12 +244,21 @@ export function parseRoute(pathWithQuery: string): Route {
     switch (decoded[0]) {
       case "runs":
         return { view: "runs", filters: filtersFrom(q) };
+      case "repos":
+        return { view: "repos" };
       case "verify":
         return {
           view: "verify",
           commit: q.get("commit") ?? "",
           repo: q.get("repo") ?? "",
         };
+      case "alerts": {
+        const kind = q.get("kind") ?? "";
+        return {
+          view: "alerts",
+          filters: { kind: isAlertKind(kind) ? kind : "", run: q.get("run") ?? "" },
+        };
+      }
     }
   }
 
@@ -304,6 +347,8 @@ export function routeToPath(route: Route): string {
       return route.chain
         ? `/runs/${encodeURIComponent(route.runId)}/chain`
         : `/runs/${encodeURIComponent(route.runId)}`;
+    case "repos":
+      return "/repos";
     case "repo":
       return withQuery(`/repos/${encodeURIComponent(route.repo)}`, [
         ["from", route.from],
@@ -318,6 +363,11 @@ export function routeToPath(route: Route): string {
       return withQuery("/verify", [
         ["commit", route.commit],
         ["repo", route.repo],
+      ]);
+    case "alerts":
+      return withQuery("/alerts", [
+        ["kind", route.filters.kind],
+        ["run", route.filters.run],
       ]);
     case "alert":
       return `/alerts/${encodeURIComponent(route.eventId)}`;

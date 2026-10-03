@@ -157,13 +157,13 @@ describe("FE-122 the strip drops nothing doc 06 §3.3 names", () => {
     const { text } = renderHeader(events, "lapsed");
     // #256: a withdrawal is not an ending, so it is no longer filed beside a
     // retirement — it has its own cell, under the reaper's own verb.
-    expect(text).toContain("Credential withdrawn");
+    expect(text).toContain("Access withdrawn");
     expect(text).not.toContain("Retired");
   });
 
   it("still says in a sentence that a running run has not ended", () => {
     const { text } = renderHeader([ledgerEvent(EVENT_TYPES.runRegistered, 1)], "active");
-    expect(text).toContain("This run has no retirement event in the ledger.");
+    expect(text).toContain("This run has not been ended.");
   });
 
   it("still lists the credential expiry history, every issue of it", () => {
@@ -177,7 +177,7 @@ describe("FE-122 the strip drops nothing doc 06 §3.3 names", () => {
       }),
     ];
     const { text } = renderHeader(events);
-    expect(text).toContain("Credential expiry history");
+    expect(text).toContain("Credential history");
     expect(text).toContain("in 42 min");
     expect(text).toContain("in 1 h 12 min");
   });
@@ -190,7 +190,7 @@ describe("FE-122 the strip drops nothing doc 06 §3.3 names", () => {
   it("still carries the registered instant, the chain position and the repos", () => {
     const { text } = renderHeader();
     expect(text).toContain("Registered");
-    expect(text).toContain("Latest chain position");
+    expect(text).toContain("Latest ledger position");
     expect(text).toContain("46");
     expect(text).toContain("innsegl");
   });

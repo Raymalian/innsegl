@@ -1,6 +1,6 @@
 # ADR-0054: Alerts live in a header notification menu
 
-- Status: accepted
+- Status: accepted; amended 2026-10-03 (see the Amendment)
 - Date: 2026-09-27
 - Deciders: the operator
 
@@ -71,3 +71,15 @@ no nav entry: the menu is its list.
   already serves.
 - Exit cost: moving alerts back to the page is a new ADR; the menu reads its
   own data, so removing it touches the header and nothing else.
+
+## Amendment (2026-10-03): an alerts page, and resolving from the detail page
+
+Decision 5 and the copy-only resolve command no longer hold as written.
+ADR-0044's 2026-10-03 amendment lets the detail page resolve an open alert
+with a reason and a fresh passkey, and keeps the command beside the form as
+the alternative. The menu still offers no dismiss and no resolve: an alert
+leaves it only when a resolution is recorded. The menu's "more" item and its
+count-only item now open a new alerts page, `/alerts`, which lists every
+alert, open and resolved, grouped by cause, instead of linking to the API's
+raw JSON (#506).
+

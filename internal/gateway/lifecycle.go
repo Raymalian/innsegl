@@ -380,6 +380,10 @@ type SessionEndSignals struct {
 	max   int
 	order []string // session ids, oldest signal first
 	marks map[string]sessionEndMark
+	// store, when set (Persist), keeps marks across a restart.
+	store SessionEndStore
+	logf  func(format string, args ...any)
+	queue chan SessionEndEvent
 }
 
 // NewSessionEndSignals builds an empty table. maxSignals bounds it; zero or
@@ -401,6 +405,12 @@ func (s *SessionEndSignals) Mark(sessionID string, now time.Time) {
 	if sessionID == "" {
 		return
 	}
+	s.mark(sessionID, now)
+	s.record(SessionEndEvent{SessionID: sessionID, Kind: SessionEndSignalled, At: now})
+}
+
+// mark is Mark without the write, for Load.
+func (s *SessionEndSignals) mark(sessionID string, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.marks[sessionID]; !exists {
@@ -420,8 +430,12 @@ func (s *SessionEndSignals) Mark(sessionID string, now time.Time) {
 // (retired, or found to have no run at all).
 func (s *SessionEndSignals) Cancel(sessionID string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	_, marked := s.marks[sessionID]
 	s.remove(sessionID)
+	s.mu.Unlock()
+	if marked {
+		s.record(SessionEndEvent{SessionID: sessionID, Kind: SessionEndCancelled, At: time.Now().UTC()})
+	}
 }
 
 // remove deletes sessionID from both the map and the order slice. Called

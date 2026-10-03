@@ -30,7 +30,13 @@ import (
 //
 // So this is the fifth write-credentialed operator command beside `reap`,
 // `reconcile`, `seal` and `serve`: run from a trusted host, holding
-// $INNSEGL_LEDGER_DSN, never reachable from the public dashboard.
+// $INNSEGL_LEDGER_DSN.
+//
+// ADR-0044's 2026-10-03 amendment (RM-330, #506) added a second way to make
+// the same write: the dashboard, after a fresh passkey ceremony, through a
+// credential that may insert an alert resolution and nothing else
+// (internal/api/resolver.go). This command is unchanged and remains the way
+// to resolve from the core host.
 //
 // # It runs once and exits
 //
@@ -113,8 +119,8 @@ func runResolveAlertCommand(args []string, stdout, stderr io.Writer, deps resolv
 		fprintf(stderr, "Usage:\n  innsegl resolve-alert -event-id=<id> -resolved-by=<who> -reason=<why> [flags]\n\n")
 		fprintf(stderr, "Writes one row to innsegl.alert_resolutions. The alert event itself is never\n")
 		fprintf(stderr, "touched: innsegl.events is append-only and permanent (I4), and this command\n")
-		fprintf(stderr, "holds no path that could change that. Not reachable from the dashboard — see\n")
-		fprintf(stderr, "ADR-0044 for why.\n\n")
+		fprintf(stderr, "holds no path that could change that. The dashboard can make the same write\n")
+		fprintf(stderr, "after a fresh passkey ceremony (ADR-0044's 2026-10-03 amendment).\n\n")
 		fprintf(stderr, "Exit status:\n")
 		fprintf(stderr, "  %d  the alert now carries a resolution\n", exitOK)
 		fprintf(stderr, "  %d  the command line was not understood\n", exitUsage)

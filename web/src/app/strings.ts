@@ -51,10 +51,15 @@ export const en = {
       overview: "Overview",
       runs: "Runs",
       run: "Run detail",
-      repo: "Repositories",
+      /** RM-332: every repository the ledger holds. */
+      repos: "Repositories",
+      repo: "Repository",
       agentType: "Agent types",
       verify: "Verify a commit",
-      /** ADR-0054: one alert, opened from the header's notification menu. */
+      /** RM-330: every alert, open and resolved, grouped by what raised it. */
+      alerts: "Alerts",
+      /** ADR-0054: one alert, opened from the alerts page or the header's
+       * notification menu. */
       alert: "Alert",
     },
     theme: {

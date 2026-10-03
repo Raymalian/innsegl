@@ -79,6 +79,10 @@ type Server struct {
 	lastUploadMu   sync.Mutex
 	lastUpload     *UploadStatus
 	bypassed       *seenSet
+	// unrecorded holds the sessions whose first unrecorded request was said.
+	unrecorded *seenSet
+	// awaited holds the sessions whose first request waited for a statement.
+	awaited *seenSet
 
 	// recorded counts the core's answers to model requests by what its
 	// RecordedHeader said (RM-329); shown in the status.
@@ -154,6 +158,7 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 		provider:   provider, providerClient: opts.ProviderClient,
 		coreDownFor: opts.CoreDownFor, uploadInterval: opts.UploadInterval,
 		uploadKick: make(chan struct{}, 1), bypassed: newSeenSet(DefaultMaxStatements),
+		unrecorded: newSeenSet(DefaultMaxStatements), awaited: newSeenSet(DefaultMaxStatements),
 	}
 	if s.providerClient == nil {
 		s.providerClient = &http.Client{Transport: providerTransport()}

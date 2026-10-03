@@ -140,9 +140,14 @@ func (c TelemetryConfig) now() time.Time {
 // ever reads back. See this file's own package doc comment, "Privacy",
 // for why it holds exactly these five fields and nothing wider.
 type telemetryRecord struct {
-	ToolUseID string    `json:"tool_use_id"`
-	ToolName  string    `json:"tool_name,omitempty"`
-	Success   bool      `json:"success"`
+	ToolUseID string `json:"tool_use_id"`
+	ToolName  string `json:"tool_name,omitempty"`
+	Success   bool   `json:"success"`
+	// Decision is "reject" for a call the harness stopped before it ran (a
+	// refused permission, a hook's deny, an interrupt): such a call has no
+	// tool_result, and its tool_decision is the witness. Empty for a
+	// tool_result.
+	Decision  string    `json:"decision,omitempty"`
 	SessionID string    `json:"session_id,omitempty"`
 	Time      time.Time `json:"time"`
 }
@@ -379,6 +384,32 @@ func isToolResultLogRecord(lr otlpLogRecord, attrs map[string]otlpAnyValue) bool
 	return false
 }
 
+// toolDecisionReject is a tool_decision's decision for a call that did not run.
+const toolDecisionReject = "reject"
+
+// isRejectedToolDecision reports whether lr is a claude_code.tool_decision
+// whose decision is "reject": a call the harness stopped before it ran,
+// which therefore has no tool_result. Read by body or event.name, as
+// isToolResultLogRecord does.
+func isRejectedToolDecision(lr otlpLogRecord, attrs map[string]otlpAnyValue) bool {
+	named := false
+	if lr.Body != nil {
+		if body, ok := lr.Body.asString(); ok && (body == "claude_code.tool_decision" || body == "tool_decision") {
+			named = true
+		}
+	}
+	if name, ok := attrs["event.name"]; ok {
+		if s, ok := name.asString(); ok && (s == "tool_decision" || s == "claude_code.tool_decision") {
+			named = true
+		}
+	}
+	if !named {
+		return false
+	}
+	d, ok := attrs["decision"].asString()
+	return ok && d == toolDecisionReject
+}
+
 // extractToolResultRecords walks req and returns one telemetryRecord per
 // claude_code.tool_result log record that carries a usable tool_use_id
 // (commitpath.IsToolUseID -- the SAME shape check the commit path already
@@ -391,15 +422,20 @@ func extractToolResultRecords(req otlpLogsRequest, receivedAt time.Time) []telem
 		for _, sl := range rl.ScopeLogs {
 			for _, lr := range sl.LogRecords {
 				attrs := logRecordAttrs(lr)
+				decision := ""
 				if !isToolResultLogRecord(lr, attrs) {
-					continue
+					if !isRejectedToolDecision(lr, attrs) {
+						continue
+					}
+					decision = toolDecisionReject
 				}
 				toolUseID, ok := attrs["tool_use_id"]
 				id, hasID := toolUseID.asString()
 				if !ok || !hasID || !commitpath.IsToolUseID(id) {
 					continue
 				}
-				rec := telemetryRecord{ToolUseID: id, Success: attrs["success"].asBool(), Time: receivedAt}
+				rec := telemetryRecord{ToolUseID: id, Success: decision == "" && attrs["success"].asBool(),
+					Decision: decision, Time: receivedAt}
 				if v, ok := attrs["tool_name"]; ok {
 					rec.ToolName, _ = v.asString()
 				}

@@ -76,7 +76,7 @@ describe("FE-063 trailer contents", () => {
   it("shows all three Agent-* trailers, not only the one the panel compares", async () => {
     await show(wireProof());
     const section = screen.getByRole("heading", { name: strings.trailer.heading })
-      .parentElement as HTMLElement;
+      .closest("details") as HTMLElement;
     expect(within(section).getByText(strings.trailer.identity)).toBeInTheDocument();
     expect(within(section).getByText(strings.trailer.run)).toBeInTheDocument();
     expect(within(section).getByText(strings.trailer.task)).toBeInTheDocument();
@@ -156,7 +156,7 @@ describe("FE-063 the raw material for offline re-verification (doc 06 P5)", () =
   it("names the commit object it re-hashed, the repository and the response's time", async () => {
     const { container } = await show(wireProof());
     const section = screen.getByRole("heading", { name: strings.offline.heading })
-      .parentElement as HTMLElement;
+      .closest("details") as HTMLElement;
     expect(within(section).getByText(strings.offline.commitObjectId)).toBeInTheDocument();
     expect(within(section).getByText(strings.offline.repo)).toBeInTheDocument();
     expect(within(section).getByText(strings.offline.dataAsOf)).toBeInTheDocument();

@@ -295,3 +295,41 @@ func TestOTW001TelemetryHandlerGetIsNotAllowed(t *testing.T) {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}
 }
+
+// A tool call the harness stopped before it ran -- a permission the person
+// refused, a hook's deny, an interrupt, a cancelled sibling -- has no
+// tool_result: the harness reports it as a tool_decision with decision
+// "reject", under the same tool_use_id (code.claude.com/docs, monitoring).
+// Measured 2026-10-03: nine drift alerts on real sessions said such calls had
+// no witness. The decision is kept as the witness; an accept is not, since
+// the tool_result follows it.
+func TestOTW001TelemetryHandlerKeepsARejectedToolDecision(t *testing.T) {
+	dir := t.TempDir()
+	h := TelemetryHandler(TelemetryConfig{Dir: dir})
+	payload := `{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{},"logRecords":[` +
+		`{"timeUnixNano":"1","body":{"stringValue":"claude_code.tool_decision"},"attributes":[` +
+		`{"key":"event.name","value":{"stringValue":"tool_decision"}},` +
+		`{"key":"tool_use_id","value":{"stringValue":"toolu_01RejectedByHook000000"}},` +
+		`{"key":"tool_name","value":{"stringValue":"Bash"}},` +
+		`{"key":"decision","value":{"stringValue":"reject"}},` +
+		`{"key":"source","value":{"stringValue":"hook"}}]},` +
+		`{"timeUnixNano":"2","body":{"stringValue":"claude_code.tool_decision"},"attributes":[` +
+		`{"key":"event.name","value":{"stringValue":"tool_decision"}},` +
+		`{"key":"tool_use_id","value":{"stringValue":"toolu_01AcceptedWillHaveResult"}},` +
+		`{"key":"decision","value":{"stringValue":"accept"}}]}` +
+		`]}]}]}`
+	if rec := otwPost(t, h, "application/json", []byte(payload)); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	got := otwReadStored(t, dir, "toolu_01RejectedByHook000000")
+	if got.ToolName != "Bash" || got.Success {
+		t.Errorf("stored %+v, want the Bash call, not a success", got)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "telemetry", "toolu_01RejectedByHook000000.json"))
+	if err != nil || !strings.Contains(string(raw), `"decision":"reject"`) {
+		t.Errorf("the record does not say the call was rejected: %s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "telemetry", "toolu_01AcceptedWillHaveResult.json")); err == nil {
+		t.Error("an accepted decision was kept; its tool_result is the witness")
+	}
+}

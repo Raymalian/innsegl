@@ -6,8 +6,6 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // The auth-writer credential, and the proof that it cannot touch the ledger.
@@ -31,43 +29,7 @@ var authWriterGrants string
 // readonly.go's EnsureReadOnlyRole's own words, "deliberately not something
 // the API can do".
 func EnsureAuthWriterRole(ctx context.Context, adminDSN, role, password string) error {
-	if !roleNamePattern.MatchString(role) {
-		return fmt.Errorf("api: %q is not a usable role name", role)
-	}
-	admin, err := pgx.Connect(ctx, adminDSN)
-	if err != nil {
-		return fmt.Errorf("api: connecting as the administrator: %w", err)
-	}
-	defer func() { _ = admin.Close(ctx) }()
-
-	var database string
-	if derr := admin.QueryRow(ctx, `SELECT current_database()`).Scan(&database); derr != nil {
-		return fmt.Errorf("api: reading the current database: %w", derr)
-	}
-
-	var exists bool
-	if lerr := admin.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, role).Scan(&exists); lerr != nil {
-		return fmt.Errorf("api: looking up the role %s: %w", role, lerr)
-	}
-	ident := pgx.Identifier{role}.Sanitize()
-	switch {
-	case !exists && password != "":
-		_, err = admin.Exec(ctx, "CREATE ROLE "+ident+" LOGIN PASSWORD "+quoteLiteral(password))
-	case !exists:
-		_, err = admin.Exec(ctx, "CREATE ROLE "+ident+" LOGIN")
-	case password != "":
-		_, err = admin.Exec(ctx, "ALTER ROLE "+ident+" LOGIN PASSWORD "+quoteLiteral(password))
-	}
-	if err != nil {
-		return fmt.Errorf("api: provisioning the role %s: %w", role, err)
-	}
-
-	grants := fmt.Sprintf(authWriterGrants, ident, pgx.Identifier{database}.Sanitize())
-	if _, err := admin.Exec(ctx, grants); err != nil {
-		return fmt.Errorf("api: applying the auth-writer grants to %s: %w", role, err)
-	}
-	return nil
+	return ensureRole(ctx, adminDSN, role, password, authWriterGrants, "auth-writer")
 }
 
 // AssertCannotWriteLedger asks the server whether the auth-writer credential

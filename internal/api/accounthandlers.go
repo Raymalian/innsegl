@@ -59,16 +59,8 @@ func (s *Server) serveAccount(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if origin := r.Header.Get("Origin"); origin != "" && origin != s.webAuthnConfig.RPOrigin {
-		writeError(w, http.StatusForbidden, codeForbidden,
-			"this request's Origin does not match the dashboard's own origin")
-		return
-	}
-	userID, passkeyID, ok := s.sessionFromRequest(r)
+	sess, ok := s.sameOriginSession(w, r)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, codeUnauthorized,
-			"sign in required (ADR-0062): this dashboard and its read API answer "+
-				"nothing without an operator session")
 		return
 	}
 	// Verified once, here, and carried on the request's own context — every
@@ -76,8 +68,33 @@ func (s *Server) serveAccount(w http.ResponseWriter, r *http.Request) {
 	// sessionFromRequest a second time, which would either have to re-trust
 	// an answer already known or re-run the same query for no new
 	// information (the request has not changed between the two calls).
-	ctx := context.WithValue(r.Context(), accountSessionContextKey{}, accountSession{userID: userID, passkeyID: passkeyID})
-	s.accountMux.ServeHTTP(w, r.WithContext(ctx))
+	s.accountMux.ServeHTTP(w, r.WithContext(withAccountSession(r.Context(), sess)))
+}
+
+// sameOriginSession is the check every signed-in mutating surface shares
+// (#445's account routes, RM-330's alert resolutions): the request's Origin,
+// when it carries one, is the dashboard's own, and the request carries a live
+// session. It writes the refusal itself and returns false on either failure.
+func (s *Server) sameOriginSession(w http.ResponseWriter, r *http.Request) (accountSession, bool) {
+	if origin := r.Header.Get("Origin"); origin != "" && origin != s.webAuthnConfig.RPOrigin {
+		writeError(w, http.StatusForbidden, codeForbidden,
+			"this request's Origin does not match the dashboard's own origin")
+		return accountSession{}, false
+	}
+	userID, passkeyID, ok := s.sessionFromRequest(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, codeUnauthorized,
+			"sign in required (ADR-0062): this dashboard and its read API answer "+
+				"nothing without an operator session")
+		return accountSession{}, false
+	}
+	return accountSession{userID: userID, passkeyID: passkeyID}, true
+}
+
+// withAccountSession carries a verified session on a request's context, for
+// accountSessionFrom to read.
+func withAccountSession(ctx context.Context, sess accountSession) context.Context {
+	return context.WithValue(ctx, accountSessionContextKey{}, sess)
 }
 
 // accountSession is what serveAccount already verified about the caller:

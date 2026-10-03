@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -97,6 +98,7 @@ func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int { //nolint
 		ToolName  string          `json:"tool_name"`
 		ToolInput json.RawMessage `json:"tool_input"`
 		ToolUseID string          `json:"tool_use_id"`
+		Cwd       string          `json:"cwd"`
 	}
 	if json.Unmarshal(data, &event) != nil || event.ToolName != "Bash" {
 		return exitOK
@@ -128,6 +130,13 @@ func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int { //nolint
 	if bin, binErr := innseglBinaryPath(); binErr == nil && isShellSafeForInterpolation(bin) &&
 		!commandAlreadySetsGitConfigCount(command) {
 		assignments = append(assignments, gitConfigSigningAssignments(bin)...)
+		// The repository this signing is for (signrepo.go): a commit in any
+		// other one, made by something else in the same command, is refused.
+		if event.Cwd != "" {
+			if repo, rerr := gitCommonDir(context.Background(), event.Cwd); rerr == nil && isShellSafeForInterpolation(repo) {
+				assignments = append(assignments, envSignRepo+"="+repo)
+			}
+		}
 	}
 	if !commandAlreadySetsAuthorIdentity(command) {
 		assignments = append(assignments, agentIdentityAssignments()...)

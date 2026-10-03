@@ -65,6 +65,10 @@ const ENTITLED: Readonly<Record<string, readonly string[]>> = {
   // on every metric card (doc 06 §3.1).
   "views/overview/styles.ts": ["heading", "listHeading", "cardValue", "cardValueWord"],
   "views/runs/styles.ts": ["heading"],
+  // The alerts page and the Repositories list set their view heading as
+  // Overview and Runs do (RM-330, RM-332).
+  "views/alerts/styles.ts": ["pageHeading"],
+  "views/repo/styles.ts": ["listHeading"],
   "views/run-detail/styles.ts": ["pageHeading"],
   // The run page's own view heading — "<agent_type> agent" (doc 06 §3.3, E19).
   "views/run-page/styles.ts": ["pageHeading"],

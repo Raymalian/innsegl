@@ -115,6 +115,8 @@ describe("FE-021 flat navigation", () => {
     expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual([
       en.labels.views.overview,
       en.labels.views.runs,
+      en.labels.views.repos,
+      en.labels.views.alerts,
       en.labels.views.verify,
     ]);
   });

@@ -2,7 +2,8 @@
 
 import type { ViewRegistry } from "./App";
 import { AgentTypeView } from "../views/agent-type";
-import { AlertDetailView } from "../views/alerts";
+import { AlertDetailView, AlertsView } from "../views/alerts";
+import { ReposView } from "../views/repos";
 import { OverviewView } from "../views/overview";
 import { PublicVerifyView } from "../views/public-verify";
 import { RepoView } from "../views/repo";
@@ -40,8 +41,10 @@ export const views = {
   // same `run` route name, since routes.ts's `Route["run"]` carries the
   // `chain` bit rather than adding a second ViewName for one destination.
   run: RunRoute,
+  repos: () => <ReposView />,
   repo: RepoView,
   agentType: AgentTypeView,
   verify: PublicVerifyView,
+  alerts: AlertsView,
   alert: AlertDetailView,
 } satisfies ViewRegistry;
