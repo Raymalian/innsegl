@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -40,8 +41,14 @@ func statusCommand(args []string, stdout, stderr io.Writer) int {
 func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, deps statusDeps) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		fprintf(stderr, "usage: innsegl status\n")
+	fs.Usage = func() {
+		fprintf(stderr, "usage: innsegl status\n\nSay what is up and down between this machine and its core, "+
+			"the versions, and what this machine may record. Exits 1 naming whatever is down.\n")
+	}
+	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
+		return exitOK
+	} else if err != nil || fs.NArg() != 0 {
+		fs.Usage()
 		return exitUsage
 	}
 	paths := client.ClientPaths(deps.home)
