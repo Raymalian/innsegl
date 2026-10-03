@@ -44,15 +44,15 @@ export const strings = {
     /* The page's whole claim, stated before any result so a reader knows what
      * they are about to be shown. doc 06 P1: evidence over assertion. */
     intro:
-      "Enter a commit SHA. The checks below run against Fulcio and Rekor at the moment you ask, and this page has no access to the ledger it would need to answer any other way.",
+      "Enter a commit SHA. Three checks run live, when you ask, against Fulcio and Rekor. This page cannot read the ledger, so it has no other way to answer.",
     what: "this commit's proof",
   },
 
   form: {
     commitLabel: "Commit SHA",
-    commitHint: "The object name, or any revision this deployment can resolve.",
+    commitHint: "A commit SHA, or any name for a commit this server can resolve.",
     repoLabel: "Repository",
-    repoHint: "Optional. Left empty, every repository this deployment serves is searched.",
+    repoHint: "Optional. If empty, every repository on this server is searched.",
     submit: "Check this commit",
     /* Not an error state: nothing has been asked yet. */
     idleTitle: "No commit named yet",
@@ -73,7 +73,7 @@ export const strings = {
   liveCheck: {
     heading: "Live checks",
     detail:
-      "What this deployment asked of each upstream when you submitted, and what came back.",
+      "What this server asked each service when you submitted, and what came back.",
     endpoint: "Endpoint",
     checkedAt: "Checked at",
     answered: "Answered",
@@ -86,66 +86,66 @@ export const strings = {
   },
 
   trailer: {
-    heading: "Trailer contents",
+    heading: "What the commit message claims",
     detail:
-      "What the commit message claims. A claim, until a certificate proves it.",
+      "What the commit message says about who made it. This is only a claim until a certificate backs it up.",
     identity: "Agent-Identity",
     run: "Agent-Run",
     task: "Agent-Task",
     absent: "Not present.",
-    none: "This commit carries no Agent-Identity trailer, so it claims no agent identity.",
+    none: "This commit has no Agent-Identity line, so it claims no agent made it.",
   },
 
   certificate: {
-    heading: "Certificate identity",
-    detail: "What the signing certificate says about itself, as the log recorded it.",
-    spiffeId: "URI SAN",
+    heading: "Signing certificate",
+    detail: "What the certificate that signed this commit says about itself.",
+    spiffeId: "Identity in the certificate",
     issuer: "Issuer",
     serial: "Serial number",
     notBefore: "Valid from",
     notAfter: "Valid until",
     fingerprint: "SHA-256 fingerprint",
-    none: "No certificate was resolved for this commit.",
+    none: "No certificate was found for this commit.",
   },
 
   entry: {
-    heading: "Transparency-log entry",
-    detail: "The Rekor record the inclusion proof was checked against.",
-    uuid: "Entry UUID",
-    logIndex: "Log index",
+    heading: "Public log entry",
+    detail: "The Rekor record this commit's signature was checked against.",
+    uuid: "Entry ID",
+    logIndex: "Log number",
     logId: "Log ID",
     integratedAt: "Integrated at",
     /* doc 06 P2: a timestamp the log did not sign is a number in a response,
      * not a statement by the log, and the difference has to be visible. */
     attested: "Signed by the log",
-    unattested: "Not signed by the log — treat the time above as unverified.",
-    none: "No transparency-log entry was resolved for this commit.",
-    raw: "Entry, as the log served it",
+    unattested: "Not signed by the log. Treat the time above as unverified.",
+    none: "No public log entry was found for this commit.",
+    raw: "The entry as the log returned it",
   },
 
   rederivation: {
-    heading: "Re-derivation",
+    heading: "Claims recomputed",
     detail:
-      "The deployment re-computed each claim from the bytes it handed over, and reported where the two disagree.",
+      "This server recomputed each claim from the material it gave you, and says where they differ.",
     agrees: "Agrees",
-    contradicts: "Contradicts",
-    underivable: "Could not be derived",
+    contradicts: "Disagrees",
+    underivable: "Could not be worked out",
     /* The endpoint does not carry these today (see the module comment in
      * response.ts). Saying so is better than an empty section a reader takes
      * for a clean bill. */
     absent:
-      "This response carried no re-derivation, so nothing below has been checked against the material a second time.",
+      "This response held no recomputed claims, so nothing here was checked a second time.",
     contradicted:
-      "The response disagrees with the material it supplied, so nothing it asserts is taken on trust.",
+      "The response disagrees with its own material, so none of it is taken on trust.",
   },
 
   offline: {
-    heading: "Re-verify this without us",
+    heading: "Check this yourself",
     detail:
-      "Nothing here has to be taken on trust. Everything the three checks consumed is above, and the endpoints in the live-checks table are the ones a third party queries directly.",
+      "Nothing here has to be taken on trust. Everything the checks used is on this page, and anyone can ask the services in the live checks table directly.",
     command: "Command",
     commandValue: "innsegl verify <commit sha> --repo <path> --fulcio-url <url> --rekor-url <url>",
-    commitObjectId: "Commit object name, re-hashed",
+    commitObjectId: "Commit ID, recomputed",
     dataAsOf: "Response produced at",
     repo: "Repository",
   },
@@ -153,13 +153,13 @@ export const strings = {
   failure: {
     /* doc 06 §4.6's dependency-error state, said about this page's own
      * dependency rather than about the ledger. */
-    unreachableTitle: "Can't reach this deployment",
+    unreachableTitle: "Can't reach this server",
     unreachableDetail: "Showing nothing rather than guessing.",
     notFoundTitle: "No such commit here",
-    malformedTitle: "This deployment's answer is not a proof",
+    malformedTitle: "This server's answer is not a proof",
     malformedDetail:
       "Nothing is rendered from it. A response that cannot be read cannot be evidence.",
-    rejectedTitle: "This deployment refused the request",
+    rejectedTitle: "This server refused the request",
   },
 } as const;
 
