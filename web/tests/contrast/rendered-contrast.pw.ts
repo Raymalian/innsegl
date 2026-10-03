@@ -103,7 +103,7 @@ for (const mode of ["light", "dark"] as const) {
       await installFakePasskey(page);
       await installAccountMocks(page);
       await page.goto("/account");
-      await page.getByRole("button", { name: "Connect a machine" }).click();
+      await page.getByRole("button", { name: "Continue with passkey" }).click();
       await expect(page.getByRole("button", { name: "Copy command" })).toBeVisible();
       await expect(page.getByText("This browser")).toBeVisible();
       await page.getByRole("button", { name: "Dev Operator" }).click();

@@ -184,3 +184,8 @@ export const inlineSelect = `${hairline} rounded-sm border-line-strong bg-raised
  * on a narrow screen. `relative` keeps a visually hidden header label
  * positioned inside the panel, so it cannot widen the page. */
 export const scrollingTablePanel = `${tablePanel} ${tableScroll} relative`;
+
+/** One choice of a small radio group, as a card: the whole card is the
+ * label, and the chosen one carries the accent. */
+export const kindChoice =
+  "flex cursor-pointer items-start gap-3 rounded-md border-[length:var(--innsegl-border-width-hairline)] border-solid border-line-strong bg-raised p-3 has-[:checked]:border-accent-line has-[:checked]:bg-accent-surface";

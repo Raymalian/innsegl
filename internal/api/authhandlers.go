@@ -277,6 +277,15 @@ func (s *Server) handleEnrolFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAuth(ctx, AuthEventEnrolmentCompleted, ceremony.PendingUserID,
 		"attestation format: "+cred.AttestationFormat)
+	// The first user owns the deployment's own organisation, so the account
+	// page has one to connect machines from. A failure here does not undo
+	// the account: the API founds it again when it next starts.
+	if s.orgs != nil {
+		if _, ferr := s.orgs.FoundOperator(ctx); ferr != nil {
+			s.recordAuth(ctx, AuthEventEnrolmentCompleted, ceremony.PendingUserID,
+				"the operator organisation was not created: "+ferr.Error())
+		}
+	}
 
 	if serr := s.startSession(w, r, ceremony.PendingUserID, credentialIDString(cred.ID)); serr != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not create a session")
