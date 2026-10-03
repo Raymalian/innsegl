@@ -79,6 +79,16 @@ type Server struct {
 	lastUploadMu   sync.Mutex
 	lastUpload     *UploadStatus
 	bypassed       *seenSet
+
+	// recorded counts the core's answers to model requests by what its
+	// RecordedHeader said (RM-329); shown in the status.
+	recordedMu sync.Mutex
+	recorded   map[string]int64
+
+	// The proxy (RM-329, connectproxy.go).
+	proxyCA     *proxyCA
+	passThrough *httputil.ReverseProxy
+	plain       *httputil.ReverseProxy
 }
 
 // ServerOptions are the client service's settings beyond its enrolment.
@@ -154,9 +164,13 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 	if s.uploadInterval <= 0 {
 		s.uploadInterval = DefaultUploadInterval
 	}
-	if err := s.setCert(chain); err != nil {
+	if err = s.setCert(chain); err != nil {
 		return nil, err
 	}
+	if s.proxyCA, err = loadOrCreateProxyCA(paths.ProxyCA, paths.ProxyCAKey); err != nil {
+		return nil, err
+	}
+	s.initProxy()
 	journalDir := paths.Journal
 	if journalDir == "" {
 		journalDir = filepath.Join(paths.Dir, "journal")
@@ -347,6 +361,15 @@ func (s *Server) RenewAt() time.Time {
 // Handler serves the status route and forwards everything else.
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			s.serveConnect(w, r)
+			return
+		}
+		if r.URL.IsAbs() {
+			// Proxy form (HTTP_PROXY): forwarded as asked, never to the core.
+			s.plain.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == StatusPath {
 			s.serveStatus(w, r)
 			return
@@ -406,6 +429,33 @@ type Status struct {
 	CoreReachable        bool          `json:"core_reachable"`
 	Revoked              bool          `json:"revoked"`
 	Journal              JournalStatus `json:"journal"`
+	// Recorded counts, since the service started, the core's answers to
+	// model requests by whether it recorded them: "true", "false" (the
+	// client journaled it), "none" (no repository; nothing to record).
+	Recorded map[string]int64 `json:"recorded"`
+}
+
+// countRecorded notes one answer of the core to a model request.
+func (s *Server) countRecorded(value string) {
+	if value == "" {
+		value = "unsaid"
+	}
+	s.recordedMu.Lock()
+	defer s.recordedMu.Unlock()
+	if s.recorded == nil {
+		s.recorded = make(map[string]int64)
+	}
+	s.recorded[value]++
+}
+
+func (s *Server) recordedCounts() map[string]int64 {
+	s.recordedMu.Lock()
+	defer s.recordedMu.Unlock()
+	out := make(map[string]int64, len(s.recorded))
+	for k, v := range s.recorded {
+		out[k] = v
+	}
+	return out
 }
 
 // Status answers what GET /_client/status shows.
@@ -416,6 +466,7 @@ func (s *Server) Status(ctx context.Context) Status {
 		Journal: s.journal.status(),
 	}
 	st.Journal.LastUpload = s.uploadStatus()
+	st.Recorded = s.recordedCounts()
 	st.CoreReachable = s.reachable(ctx)
 	return st
 }

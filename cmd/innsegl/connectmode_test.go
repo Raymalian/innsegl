@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/client/clienttest"
 )
 
@@ -151,5 +152,28 @@ func TestRM312ConnectHardenedIsRefusedWithPauseResumeDisconnect(t *testing.T) {
 		if code, _, stderr := f.connect(mode, "--hardened", "--managed-settings", f.settings); code != exitUsage || !strings.Contains(stderr, "--hardened") {
 			t.Errorf("%s --hardened = %d: %s", mode, code, stderr)
 		}
+	}
+}
+
+// RM-329 (#500): the settings name the client's proxy CA, so connect makes
+// sure it exists before writing them, on enrolment and on --update.
+func TestRM329ConnectWritesTheProxyCABeforeTheSettingsNameIt(t *testing.T) {
+	f := newConnectFixture(t)
+	f.enrol(t)
+	paths := client.ClientPaths(f.home)
+	if _, err := os.Stat(paths.ProxyCA); err != nil {
+		t.Fatalf("enrolment wrote no proxy CA: %v", err)
+	}
+	if err := os.Remove(paths.ProxyCA); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(paths.ProxyCAKey); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := f.connect("--update", "--managed-settings", f.settings); code != exitOK {
+		t.Fatalf("--update: %s", stderr)
+	}
+	if _, err := os.Stat(paths.ProxyCA); err != nil {
+		t.Fatalf("--update wrote no proxy CA: %v", err)
 	}
 }

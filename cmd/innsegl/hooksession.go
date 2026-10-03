@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -117,6 +118,7 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 		fmt.Fprintf(stderr, "innsegl hook session: the hook input is not JSON: %v\n", err)
 		return exitOK
 	}
+	scrubProxyFromShell(getenv, stderr)
 	if in.SessionID == "" || in.Cwd == "" {
 		fmt.Fprintln(stderr, "innsegl hook session: the hook input names no session_id or cwd")
 		return exitOK
@@ -173,6 +175,61 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 func isTimeout(err error) bool {
 	var ne net.Error
 	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout())
+}
+
+// clientProxyVars are the proxy variables managed settings point at the
+// client (RM-329), in the order the unset line names them.
+var clientProxyVars = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"}
+
+// proxyCASuffix ends the path NODE_EXTRA_CA_CERTS names when it is the
+// client's proxy CA.
+var proxyCASuffix = string(filepath.Separator) + filepath.Join(".innsegl", "client", "proxy-ca.pem")
+
+// scrubProxyFromShell keeps the client's proxy out of the agent's shell
+// (RM-329, #500). The proxy is for Claude Code's own requests; the harness
+// gives every Bash command its environment, so without this git, npm, go
+// and gh would depend on the client being up and would trust its CA. The
+// harness runs what a hook appends to CLAUDE_ENV_FILE before each Bash
+// command. Only variables that point at the client are removed: another
+// proxy is the person's own.
+func scrubProxyFromShell(getenv func(string) string, stderr io.Writer) {
+	path := getenv("CLAUDE_ENV_FILE")
+	if path == "" {
+		return
+	}
+	base := strings.TrimSuffix(getenv(commitpath.EnvCoreURL), "/")
+	if base == "" {
+		base = commitpath.DefaultCoreURL
+	}
+	var names []string
+	for _, k := range clientProxyVars {
+		if v := strings.TrimSuffix(getenv(k), "/"); v != "" && v == base {
+			names = append(names, k)
+		}
+	}
+	if strings.HasSuffix(getenv("NODE_EXTRA_CA_CERTS"), proxyCASuffix) {
+		names = append(names, "NODE_EXTRA_CA_CERTS")
+	}
+	if len(names) == 0 {
+		return
+	}
+	line := "unset " + strings.Join(names, " ") + "\n"
+	// #nosec G304 -- the harness names this file for this hook.
+	if have, err := os.ReadFile(path); err == nil && strings.Contains(string(have), line) {
+		return
+	}
+	// #nosec G302 G304 -- the harness's own per-session file, read by its shell.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		fmt.Fprintf(stderr, "innsegl hook session: keeping the proxy out of the agent's shell: %v\n", err)
+		return
+	}
+	if _, err = f.WriteString(line); err != nil {
+		fmt.Fprintf(stderr, "innsegl hook session: keeping the proxy out of the agent's shell: %v\n", err)
+	}
+	if err = f.Close(); err != nil {
+		fmt.Fprintf(stderr, "innsegl hook session: keeping the proxy out of the agent's shell: %v\n", err)
+	}
 }
 
 // postToGateway sends body with the client that trusts only the gateway's

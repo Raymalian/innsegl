@@ -155,6 +155,7 @@ func (s *Server) modifyResponse(resp *http.Response) error {
 			return errCoreFailed{status: resp.StatusCode}
 		}
 		s.downUntil.Store(0)
+		s.countRecorded(recorded)
 		if recorded == clientjournal.RecordedFalse && ex.hasRepo {
 			if err := s.journal.reserve(int64(len(ex.body))); err != nil {
 				return journalRefusal{err}
@@ -422,10 +423,12 @@ func (c *statementCache) statement(sessionID, agentID string) (json.RawMessage, 
 }
 
 // providerTransport is the direct route's transport: the system roots, and
-// a bounded connect.
+// a bounded connect. It never reads the proxy environment: the client is
+// the proxy (RM-329), and started from a shell that names it, it would
+// send its own traffic to itself.
 func providerTransport() *http.Transport {
 	return &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
+		Proxy:               nil,
 		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:   true,
 		MaxIdleConns:        100,
