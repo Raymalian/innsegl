@@ -246,3 +246,157 @@ footer {
 footer p {
   margin-block-end: var(--innsegl-space-2);
 }
+
+/* ── The homepage (2026-10-03): a top bar, a hero with two actions, the
+ * flow, feature cards, verification, getting started. Tokens only. ── */
+.topbar {
+  border-block-end: var(--innsegl-border-width-hairline) solid var(--innsegl-color-border-hairline);
+  background: var(--innsegl-color-surface-default);
+}
+.topbar__inner {
+  max-width: 68rem;
+  margin: 0 auto;
+  padding: var(--innsegl-space-3) var(--innsegl-space-5);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--innsegl-space-3);
+}
+.brand {
+  font-weight: var(--innsegl-font-weight-semibold);
+  font-size: var(--innsegl-font-size-heading);
+  color: var(--innsegl-color-text-primary);
+  text-decoration: none;
+}
+.topbar nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--innsegl-space-4);
+  font-size: var(--innsegl-font-size-body);
+}
+.topbar nav a {
+  color: var(--innsegl-color-text-secondary);
+  text-decoration: none;
+}
+.topbar nav a:hover {
+  color: var(--innsegl-color-text-primary);
+}
+.page--wide {
+  max-width: 68rem;
+}
+.hero {
+  margin-block-start: var(--innsegl-space-6);
+  max-width: 48rem;
+}
+.hero h1 {
+  font-size: clamp(2rem, 5vw, 3rem);
+}
+.hero__lede {
+  margin-block-start: var(--innsegl-space-4);
+  font-size: 1.125rem;
+  color: var(--innsegl-color-text-secondary);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--innsegl-space-3);
+  margin-block: var(--innsegl-space-5);
+}
+.button {
+  display: inline-block;
+  padding: var(--innsegl-space-3) var(--innsegl-space-5);
+  border: var(--innsegl-border-width-hairline) solid var(--innsegl-color-border-strong);
+  border-radius: var(--innsegl-radius-md);
+  background: var(--innsegl-color-surface-raised);
+  color: var(--innsegl-color-text-primary);
+  font-weight: var(--innsegl-font-weight-semibold);
+  text-decoration: none;
+}
+.button:hover {
+  background: var(--innsegl-color-surface-hover);
+  text-decoration: none;
+}
+.button--primary {
+  background: var(--innsegl-color-accent-emphasis);
+  border-color: var(--innsegl-color-accent-border);
+  color: var(--innsegl-color-text-on-emphasis);
+}
+.button--primary:hover {
+  background: var(--innsegl-color-accent-emphasis);
+  text-decoration: underline;
+}
+.flow,
+.steps {
+  list-style: none;
+  padding-inline-start: 0;
+}
+.flow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: var(--innsegl-space-4);
+}
+.flow__step,
+.card {
+  margin: 0;
+  padding: var(--innsegl-space-5);
+  background: var(--innsegl-color-surface-default);
+  border: var(--innsegl-border-width-hairline) solid var(--innsegl-color-border-hairline);
+  border-radius: var(--innsegl-radius-md);
+}
+.flow__step h3,
+.card h3,
+.steps h3 {
+  margin-block-start: 0;
+}
+.flow__step p,
+.card p {
+  margin: 0;
+  color: var(--innsegl-color-text-secondary);
+  font-size: var(--innsegl-font-size-body);
+}
+.flow__num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-block-end: var(--innsegl-space-3);
+  border-radius: 999px;
+  background: var(--innsegl-color-accent-surface);
+  border: var(--innsegl-border-width-hairline) solid var(--innsegl-color-accent-border);
+  color: var(--innsegl-color-accent-text);
+  font-weight: var(--innsegl-font-weight-semibold);
+  font-size: var(--innsegl-font-size-body);
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--innsegl-space-4);
+}
+.steps li {
+  margin-block-end: var(--innsegl-space-5);
+}
+.facts-table {
+  width: 100%;
+  max-width: 40rem;
+  margin-block-end: var(--innsegl-space-4);
+  border-collapse: collapse;
+  font-size: var(--innsegl-font-size-body);
+}
+.facts-table th,
+.facts-table td {
+  padding: var(--innsegl-space-2) var(--innsegl-space-3);
+  border-block-end: var(--innsegl-border-width-hairline) solid var(--innsegl-color-border-hairline);
+  text-align: start;
+}
+.facts-table th {
+  width: 4rem;
+}
+.plain {
+  padding-inline-start: var(--innsegl-space-5);
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--innsegl-space-2);
+}
