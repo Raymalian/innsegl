@@ -38,6 +38,9 @@ export const VIEWS: readonly ViewCase[] = [
     path: `/verify?commit=${COMMIT_SHA}&repo=${REPO}`,
     title: `Verify a commit${TITLE_SUFFIX}`,
   },
-  // ADR-0054's alert detail, reached from the header's notification menu.
+  // RM-330's alerts page: every alert, grouped by what raised it.
+  { name: "alerts", path: "/alerts?kind=all", title: `Alerts${TITLE_SUFFIX}` },
+  // ADR-0054's alert detail, reached from the alerts page or the header's
+  // notification menu.
   { name: "alert", path: `/alerts/${ALERT_ID}`, title: `Alert${TITLE_SUFFIX}` },
 ];

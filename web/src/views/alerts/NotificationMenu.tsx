@@ -14,10 +14,13 @@
  *
  * What it deliberately does NOT have:
  *
- *   - no dismiss, no "mark as read", no resolve. ADR-0044: the dashboard
- *     renders no mutating action. An alert leaves this list when an operator
- *     resolves it at the command line and the ledger records that, never
- *     because a reader looked at it.
+ *   - no dismiss, no "mark as read", no resolve. An alert leaves this list
+ *     when someone resolves it — on its own page, with a passkey (RM-330),
+ *     or at the command line — and the ledger records that, never because a
+ *     reader looked at it.
+ *   - no link to the API. A link a browser opens as bare JSON is not a page;
+ *     the rest of the alerts, and the count when only the count is known,
+ *     point at the alerts page (RM-330).
  *   - no raw hash and no field name in the list. Those are on the detail view,
  *     in identifier chips that copy the whole value (doc 06 §4.3).
  *
@@ -38,6 +41,7 @@ import {
 } from "react";
 
 import { Link } from "../../app/router";
+import type { Route } from "../../app/routes";
 import { Icon } from "../../components/common/Icon";
 import { srOnly } from "../../components/common/styles";
 import { elapsedSince, formatAbsoluteUtc } from "../../components/common/time";
@@ -69,17 +73,18 @@ export interface NotificationMenuProps {
   readonly openCount: number | null;
   /** True before the first answer. Neither calm nor an alarm. */
   readonly loading?: boolean;
-  readonly apiBase: string;
   readonly now?: Date;
 }
 
 const ITEM = '[role="menuitem"]';
 
+/** The alerts page, open alerts, every run. */
+const ALERTS_PAGE: Route = { view: "alerts", filters: { kind: "", run: "" } };
+
 export function NotificationMenu({
   alerts,
   openCount,
   loading = false,
-  apiBase,
   now,
 }: NotificationMenuProps) {
   const [open, setOpen] = useState(false);
@@ -216,17 +221,21 @@ export function NotificationMenu({
               listed={listed}
               count={count}
               loading={loading}
-              apiBase={apiBase}
               now={at}
               onFollow={() => close(false)}
             />
-            {/* The rest are an item too, pointing at the paged feed that
-              * holds them (P1), so the list never ends in a claim that goes
+            {/* The rest are an item too, pointing at the alerts page that
+              * lists them (P1), so the list never ends in a claim that goes
               * nowhere. */}
             {remaining > 0 ? (
-              <a role="menuitem" href={`${apiBase}/alerts`} className={menuItem}>
+              <Link
+                role="menuitem"
+                to={ALERTS_PAGE}
+                className={menuItem}
+                onClick={() => close(false)}
+              >
                 <span className={menuItemSummary}>{strings.menu.moreDetail(remaining)}</span>
-              </a>
+              </Link>
             ) : null}
           </div>
         </div>
@@ -239,25 +248,24 @@ function MenuBody({
   listed,
   count,
   loading,
-  apiBase,
   now,
   onFollow,
 }: {
   readonly listed: readonly AlertRecord[] | null;
   readonly count: number | null;
   readonly loading: boolean;
-  readonly apiBase: string;
   readonly now: Date;
   readonly onFollow: () => void;
 }) {
   if (listed === null) {
     /* P2: the list did not answer. Say what is known — the count — and link
-     * to the response it came from; never an empty box that reads as calm. */
+     * to the alerts page, which reads the feed again; never an empty box
+     * that reads as calm. */
     if (count !== null && count > 0) {
       return (
-        <a role="menuitem" href={`${apiBase}/overview`} className={menuItem}>
+        <Link role="menuitem" to={ALERTS_PAGE} className={menuItem} onClick={onFollow}>
           <span className={menuItemSummary}>{strings.menu.countOnlyDetail(count)}</span>
-        </a>
+        </Link>
       );
     }
     return (

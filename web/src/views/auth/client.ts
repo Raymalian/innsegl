@@ -12,6 +12,9 @@
  *   POST /api/v1/auth/login/begin    -> a WebAuthn request challenge
  *   POST /api/v1/auth/login/finish   the browser's assertion -> a session
  *   POST /api/v1/auth/logout         revokes the session
+ *   POST /api/v1/alert-resolutions/begin, .../finish
+ *                                     RM-330: resolve alerts, confirmed
+ *                                     with a fresh passkey assertion
  *
  * This is the ONE file in the dashboard that calls `navigator.credentials`.
  * Every function that does is a thin wrapper taking the browser API as a
@@ -451,4 +454,52 @@ export async function generateRecoveryCodes(
   return {
     codes: Array.isArray(codes) ? codes.filter((c): c is string => typeof c === "string") : [],
   };
+}
+
+// ---------------------------------------------------------------------------
+// RM-330 (#506): resolving alerts, confirmed with a fresh passkey.
+// ---------------------------------------------------------------------------
+
+/** One resolution the server wrote. */
+export interface WrittenResolution {
+  readonly event_id: string;
+  readonly resolved_by: string;
+  readonly resolved_at: string;
+  readonly reason: string;
+}
+
+/**
+ * The whole resolve ceremony: name the alerts and the reason, sign the
+ * server's challenge with one of this account's passkeys, finish. The server
+ * holds the alerts and the reason with the ceremony, so finish sends only
+ * the assertion. Throws AuthRequestError for anything the server refused (an
+ * alert already resolved is a 409) and a plain Error for anything the
+ * browser refused, the same split as `enrol` and `signIn`.
+ */
+export async function resolveAlerts(
+  eventIds: readonly string[],
+  reason: string,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<readonly WrittenResolution[]> {
+  const begin = asCeremonyOptions(
+    await postJSON(base, "/alert-resolutions/begin", { event_ids: eventIds, reason }),
+  );
+  if (!browser.supported) {
+    throw new Error("this browser has no passkey support");
+  }
+  const options = browser.publicKeyCredential.parseRequestOptionsFromJSON(begin.publicKey);
+  const credential = await browser.credentials.get({ publicKey: options });
+  if (credential === null) {
+    throw new Error("no passkey was offered");
+  }
+  const finished = await postJSON(base, "/alert-resolutions/finish", {
+    ceremony_id: begin.ceremonyId,
+    credential: credentialJSON(credential),
+  });
+  const list =
+    typeof finished === "object" && finished !== null
+      ? (finished as Record<string, unknown>)["resolutions"]
+      : undefined;
+  return Array.isArray(list) ? (list as WrittenResolution[]) : [];
 }

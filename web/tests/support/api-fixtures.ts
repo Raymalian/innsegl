@@ -159,6 +159,9 @@ export function proof(): Proof {
  * RUN_ID, so following the detail view's run link lands on a fixture too. */
 export const ALERT_ID = "01a077c2-eff1-7762-8a61-91a3a5c390e8";
 
+/** A resolved alert the alerts page lists (RM-330). */
+export const RESOLVED_ALERT_ID = "01a077dd-7004-7ef5-befc-b91fe55d3f59";
+
 /** `GET /api/v1/alerts` — internal/api/query.go's AlertPage. */
 export function alertsPage(): AlertsPage {
   return {
@@ -173,8 +176,24 @@ export function alertsPage(): AlertsPage {
         reason: "commit_recorded claims a Rekor entry that the log does not contain",
         resolved: false,
       },
+      // RM-330: a resolved alert, so the alerts page has a resolved row and
+      // a second group. Resolved, so the header's open count stays at one.
+      {
+        chain_position: 30,
+        event_id: RESOLVED_ALERT_ID,
+        event_type: "unattributed_signature_detected",
+        ts: "2026-08-31T10:05:00.000Z",
+        certificate_identity: SPIFFE_ID,
+        rekor_entry_uuid:
+          "628d17d6783490c97e42fb59ab4d3f6d7a1550d945e2bed280f455bca226de78f76205cc0c68c131",
+        rekor_log_index: 2,
+        resolved: true,
+        resolved_by: "Test Operator",
+        resolved_at: "2026-08-31T11:00:00.000Z",
+        resolved_reason: "A key rotation, signed by hand and reviewed.",
+      },
     ],
-    total: 1,
+    total: 2,
     limit: 50,
     data_as_of: "2026-08-31T12:00:00.000Z",
   };

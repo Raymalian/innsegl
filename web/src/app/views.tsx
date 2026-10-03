@@ -2,7 +2,7 @@
 
 import type { ViewRegistry } from "./App";
 import { AgentTypeView } from "../views/agent-type";
-import { AlertDetailView } from "../views/alerts";
+import { AlertDetailView, AlertsView } from "../views/alerts";
 import { OverviewView } from "../views/overview";
 import { PublicVerifyView } from "../views/public-verify";
 import { RepoView } from "../views/repo";
@@ -43,5 +43,6 @@ export const views = {
   repo: RepoView,
   agentType: AgentTypeView,
   verify: PublicVerifyView,
+  alerts: AlertsView,
   alert: AlertDetailView,
 } satisfies ViewRegistry;
