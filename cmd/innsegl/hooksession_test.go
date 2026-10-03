@@ -256,3 +256,38 @@ func TestRM329TheHookWritesNothingWhenTheClientIsNotTheProxy(t *testing.T) {
 		t.Fatal("an env file was written with nothing to remove")
 	}
 }
+
+// When a session ends, the hook tells the gateway, so the session's run is
+// retired instead of standing active until the silence backstop (seven days
+// by default). Measured 2026-10-03: with no SessionEnd hook installed, thirty
+// finished sessions on one branch all stayed active. The signal names the
+// session only, states no workspace, and never stops anything.
+func TestHookSessionSignalsTheEndOfASession(t *testing.T) {
+	posts, post := capturePosts(nil)
+	in := `{"session_id":"7dc5d783-9896-4aef-84d9-a82114505fff","cwd":"/w","hook_event_name":"SessionEnd","reason":"prompt_input_exit"}`
+	code := runHookSession(strings.NewReader(in), &bytes.Buffer{}, &bytes.Buffer{},
+		env(map[string]string{"INNSEGL_CORE_URL": "http://127.0.0.1:28195"}), post)
+	if code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if len(*posts) != 1 {
+		t.Fatalf("posted %d times, want once", len(*posts))
+	}
+	p := (*posts)[0]
+	if p.url != "http://127.0.0.1:28195"+gatewaySessionEndPath {
+		t.Errorf("posted to %q", p.url)
+	}
+	if len(p.body) != 1 || p.body["session_id"] != "7dc5d783-9896-4aef-84d9-a82114505fff" {
+		t.Errorf("body %v, want the session id alone", p.body)
+	}
+}
+
+// An unreachable gateway at session end is said and never blocks: the
+// session is over either way, and the silence backstop still retires it.
+func TestHookSessionEndNeverBlocks(t *testing.T) {
+	_, post := capturePosts(&gatewayUnreachableError{err: errors.New("connection refused")})
+	in := `{"session_id":"7dc5d783-9896-4aef-84d9-a82114505fff","cwd":"/w","hook_event_name":"SessionEnd"}`
+	if code := runHookSession(strings.NewReader(in), &bytes.Buffer{}, &bytes.Buffer{}, env(nil), post); code != exitOK {
+		t.Fatalf("exit %d, want 0", code)
+	}
+}

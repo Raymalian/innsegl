@@ -111,10 +111,11 @@ func (c SettingsConfig) legacyEnv() []envVar {
 func (c SettingsConfig) preToolUseCommand() string { return c.HookBin + " hook pre-tool-use" }
 func (c SettingsConfig) sessionCommand() string    { return c.HookBin + " hook session" }
 
-// sessionHookEvents are the four events `innsegl hook session` states the
-// working directory on: a new or resumed session, every user turn, every
-// subagent, every move.
-var sessionHookEvents = []string{"SessionStart", "UserPromptSubmit", "SubagentStart", "CwdChanged"}
+// sessionHookEvents are the events `innsegl hook session` runs on: a new or
+// resumed session, every user turn, every subagent and every move state the
+// working directory; the end of a session signals it, so its run is retired
+// then and not by the silence backstop.
+var sessionHookEvents = []string{"SessionStart", "UserPromptSubmit", "SubagentStart", "CwdChanged", "SessionEnd"}
 
 // NotWritableError is returned when the managed settings path cannot be
 // written by this user. Nothing was changed; Staged holds the full new file

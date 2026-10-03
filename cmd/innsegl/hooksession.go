@@ -123,6 +123,22 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 		fmt.Fprintln(stderr, "innsegl hook session: the hook input names no session_id or cwd")
 		return exitOK
 	}
+	base := getenv(commitpath.EnvCoreURL)
+	if base == "" {
+		base = commitpath.DefaultCoreURL
+	}
+	if in.HookEventName == "SessionEnd" {
+		// The session is over: say so, so its run is retired now rather
+		// than by the silence backstop days later. Never a stop.
+		body, err := json.Marshal(map[string]string{"session_id": in.SessionID})
+		if err == nil {
+			err = post(strings.TrimSuffix(base, "/")+gatewaySessionEndPath, body)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "innsegl hook session: signalling the end of the session: %v\n", err)
+		}
+		return exitOK
+	}
 	statement := map[string]string{"session_id": in.SessionID, "agent_id": in.AgentID, "cwd": in.Cwd}
 	// RM-314: the harness's own name for the subagent's type, as it sent it.
 	// The gateway folds it; the model's subagent_type is only a witness.
@@ -144,10 +160,6 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 	body, err := json.Marshal(statement)
 	if err != nil {
 		return exitOK
-	}
-	base := getenv(commitpath.EnvCoreURL)
-	if base == "" {
-		base = commitpath.DefaultCoreURL
 	}
 	err = post(strings.TrimSuffix(base, "/")+gatewaySessionWorkspacePath, body)
 	var unreachable *gatewayUnreachableError
