@@ -5,7 +5,6 @@ package mcp
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,11 +12,10 @@ import (
 
 // MCP-039..MCP-043 — describe_workspace (RM-126, #205, E11), doc 07.
 //
-// The tool is a pure derivation: it answers what `derive_task` in
-// scripts/hooks/subagent-identity.sh answers, in the MCP rather than in one
-// harness's shell. So these tests are written against TWO specifications at
-// once — doc 07's five rows, and the shell itself, which MCP-043 runs side by
-// side with the Go and refuses a disagreement.
+// The tool is a pure derivation: it answers what `derive_task` in the
+// reference hook shim answered, in the MCP rather than in one harness's shell.
+// The shim is gone with the hook system (ADR-0057); MCP-043 keeps its recorded
+// answers as the expected values.
 //
 // The refusals are the point of the other four. A harness reports its OWN host
 // path; the MCP sees the same tree under a different root and cannot translate
@@ -353,20 +351,25 @@ func TestMCP042DescribeWorkspaceRefusesWhatIsNotAWorkingTree(t *testing.T) {
 	})
 }
 
-// MCP-043: branch and task derivation agrees with the reference shim's
-// `derive_task`, for every case the shell covers.
+// MCP-043: branch and task derivation, for every case the reference shim's
+// `derive_task` covered.
 //
-// The shell is the specification, so this runs it. A port that agreed with its
-// author's reading of the shell and not with the shell would put a different
-// task in the ledger depending on which harness registered the run, which is
-// the opposite of what E11 exists to do.
+// The shim was the specification while it ran; it is gone with the hook
+// system the gateway replaced (ADR-0057). Its answers for these cases were
+// recorded from it on 2026-10-03 and are the expected values here, so the
+// ledger keeps the task names runs already carry.
 func TestMCP043DescribeWorkspaceAgreesWithTheReferenceShim(t *testing.T) {
-	hook, err := filepath.Abs(filepath.Join("..", "..", "scripts", "hooks", "subagent-identity.sh"))
-	if err != nil {
-		t.Fatalf("resolving the reference shim: %v", err)
-	}
-	if _, serr := os.Stat(hook); serr != nil {
-		t.Fatalf("the reference shim is not where this test expects it: %v", serr)
+	want := map[string][2]string{ // name -> branch, task
+		"main":                            {"main", "main"},
+		"dev/rm126-describe-workspace":    {"dev/rm126-describe-workspace", "rm126"},
+		"dev/e11-wave2":                   {"dev/e11-wave2", "dev-e11-wave2"},
+		"Feature/RM-99_Thing":             {"Feature/RM-99_Thing", "feature-rm-99-thing"},
+		"RM126-Upper":                     {"RM126-Upper", "rm126"},
+		"rm12-and-rm34":                   {"rm12-and-rm34", "rm34"},
+		"wip_-_thing":                     {"wip_-_thing", "wip-thing"},
+		"worktree-agent-deadbeefdeadbeef": {"main", "main"},
+		"a detached HEAD":                 {"detached", "detached"},
+		"an unborn branch":                {"main", "main"},
 	}
 
 	tree := newWorkspaceTree(t, "git@github.com:Example-Org/Example-Repo.git")
@@ -406,14 +409,14 @@ func TestMCP043DescribeWorkspaceAgreesWithTheReferenceShim(t *testing.T) {
 
 	for name, dir := range dirs {
 		t.Run(name, func(t *testing.T) {
-			wantBranch, wantTask := shimDeriveTask(t, hook, dir)
+			wantBranch, wantTask := want[name][0], want[name][1]
 			gotBranch := describeWorkspaceBranch(t.Context(), dir, mainOf(t, dir))
 			gotTask := describeWorkspaceTask(gotBranch)
 			if gotBranch != wantBranch {
-				t.Errorf("branch = %q, the shim says %q", gotBranch, wantBranch)
+				t.Errorf("branch = %q, want %q", gotBranch, wantBranch)
 			}
 			if gotTask != wantTask {
-				t.Errorf("task = %q, the shim says %q", gotTask, wantTask)
+				t.Errorf("task = %q, want %q", gotTask, wantTask)
 			}
 		})
 	}
@@ -441,28 +444,6 @@ func mainOf(t *testing.T, dir string) string {
 		t.Fatalf("resolving the main worktree of %s: %v", dir, err)
 	}
 	return main
-}
-
-// shimDeriveTask sources the reference shim as a library and returns BRANCH
-// and TASK as its `derive_task` sets them for an agent standing in dir.
-//
-// INNSEGL_HOOK_LIB is the shim's own test seam: with it set, sourcing defines
-// the functions and dispatches no event, so this needs no harness, no MCP and
-// no network.
-func shimDeriveTask(t *testing.T, hook, dir string) (branch, task string) {
-	t.Helper()
-	const script = `. "$1" ; CWD="$2" ; derive_task ; printf '%s\n%s\n' "$BRANCH" "$TASK"`
-	cmd := exec.CommandContext(t.Context(), "sh", "-c", script, "sh", hook, dir)
-	cmd.Env = append(os.Environ(), "INNSEGL_HOOK_LIB=1")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("running the shim's derive_task in %s: %v\n%s", dir, err, out)
-	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("derive_task printed %q, want a branch line and a task line", out)
-	}
-	return lines[len(lines)-2], lines[len(lines)-1]
 }
 
 // MCP-071..MCP-074 — the repository git reports lives in the HOST namespace.

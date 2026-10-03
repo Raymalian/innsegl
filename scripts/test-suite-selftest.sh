@@ -67,9 +67,9 @@ for pkg in test/smoke test/failure; do
     bad "${pkg} is refused, exit 9" "exit ${rc}: $(printf '%s' "${out}" | head -2)"
   fi
 
-  # A REFUSAL THAT OFFERS NOTHING STRANDS THE WORK. scripts/hooks/subagent-identity.sh
-  # carries this project's own measurement of that: a gate whose message named
-  # the wrong command left nineteen finished files unsigned.
+  # A REFUSAL THAT OFFERS NOTHING STRANDS THE WORK. Measured on this project:
+  # a gate whose message named the wrong command left nineteen finished files
+  # unsigned.
   if printf '%s' "${out}" | grep -q "TO RUN IT PROPERLY" &&
      printf '%s' "${out}" | grep -q "make innsegl-down" &&
      printf '%s' "${out}" | grep -q "INNSEGL_ALLOW_DESTRUCTIVE_TESTS=${pkg}"; then

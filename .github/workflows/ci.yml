@@ -162,38 +162,6 @@ jobs:
       - name: Watch the gate fail on a planted operator path
         run: ./scripts/no-operator-paths-selftest.sh
 
-  reference-shim:
-    name: reference shim
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # OPS-019, OPS-020 and OPS-021. The shim is the only thing capturing
-      # identity and activity, and its failure mode is silent: a shim that
-      # registers runs and records nothing looks exactly like a shim that
-      # works. This drives it with a synthetic payload for each of the six
-      # harness events against a stub that records every tools/call, so a
-      # derivation that creeps back in fails here rather than in a blank
-      # activity log nobody reads for a week. No Docker, no MCP, no network.
-      - name: Drive the reference shim through all six harness events
-        run: ./scripts/hooks/shim-selftest.sh
-
-  second-shim:
-    name: second harness shim
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # OPS-022. E11's claim is that the three ingestion tools are
-      # harness-neutral, and the reference shim cannot demonstrate that: the
-      # tools were extracted from it. This drives the second harness's shim
-      # over a transcript against the same stub, and asserts both what it
-      # forwards and — the half that carries the weight — that it never
-      # registers, never resolves a workspace and never digests a body itself.
-      # A derivation creeping back into a shim fails here. ADR-0048.
-      - name: Drive the second harness's shim over a rollout transcript
-        run: ./scripts/hooks/rollout-shim-selftest.sh
-
   commit-signer:
     name: commit signer
     runs-on: ubuntu-latest
@@ -436,27 +404,6 @@ jobs:
       - name: A backup that fails reports that it failed
         run: ./scripts/backup-ledger-selftest.sh
 
-  tree-guard:
-    name: tree guard
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # OPS-090..095. A `git reset --hard` in a tree two runs held work in
-      # discarded every tracked modification; untracked files survived, tracked
-      # edits did not, and nothing refused or recorded it.
-      # The guard cannot be a git hook: measured, a reference-transaction hook
-      # that aborts on `prepared` leaves HEAD unmoved and the uncommitted line
-      # already gone, because git rewrites the index and tree before it opens
-      # the ref transaction.
-      # OPS-092 is the control and the reason to believe the rest -- a clean
-      # tree, a retired run, a tree no run names and every read-only git must
-      # all proceed. A guard that refused everything would pass every other
-      # case here and be worked around within the day.
-      # Hermetic: it builds its own scratch repository and starts no container.
-      - name: A destructive git is refused while a run holds work, and nothing else is
-        run: ./scripts/hooks/git-tree-guard-selftest.sh
-
   selftests-wired:
     name: self-tests wired
     runs-on: ubuntu-latest
@@ -497,22 +444,6 @@ jobs:
       # holding only what CI checks out.
       - name: The test-id gate refuses what it must
         run: ./scripts/test-ids-selftest.sh
-
-  orphan-sweep:
-    name: orphan sweep
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # OPS-106..108. A run killed with no stop event left its work in the tree
-      # and nothing said it was there: no hook fired, so no record was written.
-      # The sweep runs from the NEXT session's start and only records -- no run
-      # is retired, nothing is signed, the tree is never written to. Every
-      # "it records" case has a control that records nothing, so a sweep that
-      # did nothing and one that recorded every marker both fail here.
-      # Hermetic: scratch repositories and a stub ledger on loopback.
-      - name: A run that died unobserved is recorded, and nothing else is
-        run: ./scripts/hooks/orphan-sweep-selftest.sh
 
   dashboard:
     name: dashboard

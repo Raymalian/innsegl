@@ -48,9 +48,9 @@
 # invariants and they must stay runnable: with nothing from the deployment
 # running, `packages` returns `./...` unchanged and both run exactly as before.
 # What is refused is reaching them while there is something to destroy, and the
-# refusal says how to run them properly — scripts/hooks/subagent-identity.sh
-# carries the reason in its own words: "a gate that blocks and offers nothing is
-# worse than no gate, because the work is stranded rather than merely unsigned."
+# refusal says how to run them properly: a gate that blocks and offers nothing
+# is worse than no gate, because the work is stranded rather than merely
+# unsigned.
 #
 # POSIX sh, NOT bash, and it is load-bearing rather than tidiness. This file is
 # called from a Go TestMain, from a Makefile and from other gates, and

@@ -68,9 +68,8 @@ func TestCheckPassesTheDirectoryToTheGuard(t *testing.T) {
 
 func TestCheckIsNotARefusalWhenTheGuardIsMissing(t *testing.T) {
 	// A checkout with no script is a broken checkout, not a live deployment.
-	// scripts/hooks/subagent-identity.sh carries the reason a gate must not
-	// strand work it cannot judge; scripts/test-suite.sh's own `gate` is what
-	// keeps the file present.
+	// A gate must not strand work it cannot judge; scripts/test-suite.sh's own
+	// `gate` is what keeps the file present.
 	root := t.TempDir()
 
 	refusal, err := Check(root, "test/smoke")

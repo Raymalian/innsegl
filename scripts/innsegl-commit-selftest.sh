@@ -76,11 +76,10 @@ RUNSTATES="$WORK/runstates"  # <run_id> <status>, what the read API answers
 : > "$RUNSTATES"
 
 # ---------------------------------------------------------------------------
-# The stub MCP is scripts/hooks/stub-mcp.py, the one the two shim self-tests
-# already drive. A third copy of that transport would be a third thing that can
-# disagree about what an SSE frame looks like.
+# The stub MCP is scripts/stub-mcp.py: a recording stand-in for the MCP
+# transport, so this needs no server.
 # ---------------------------------------------------------------------------
-STUB="$ROOT/scripts/hooks/stub-mcp.py"
+STUB="$ROOT/scripts/stub-mcp.py"
 [ -f "$STUB" ] || { echo "commit-selftest: $STUB is missing" >&2; exit 4; }
 
 # EMPTY UNTIL THE CREDENTIAL SECTION FILLS IT, so every case above that one

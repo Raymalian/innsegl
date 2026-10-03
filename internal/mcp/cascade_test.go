@@ -475,8 +475,8 @@ func TestACascadeNeverReachesUpwards(t *testing.T) {
 // silently did not happen, because a stop never blocks and a harness has no way
 // to tell a refused argument from a deployment that is down.
 //
-// The reference shim sends a JSON boolean (scripts/hooks/subagent-identity.sh,
-// OPS-056 in the self-test); this is the half of that contract the MCP owns.
+// A caller sends a JSON boolean; this is the half of that contract the MCP
+// owns.
 func TestEndsDescendantsIsABooleanOnTheWire(t *testing.T) {
 	var asBool observeSessionIn
 	if err := json.Unmarshal([]byte(`{"phase":"stop","ends_descendants":true}`), &asBool); err != nil {
