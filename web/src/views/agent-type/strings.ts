@@ -43,29 +43,29 @@ export const strings = {
 
     /** The accessible name of the block that carries the window and its counts. */
     summary: "This window at a glance",
-    windowFrom: "Window opens",
-    windowTo: "Window closes",
-    runsInWindow: "Runs registered in this window",
-    runsShown: "Runs drawn on this page",
+    windowFrom: "From",
+    windowTo: "To",
+    runsInWindow: "Runs",
+    runsShown: "Runs shown",
 
-    frequency: "Run frequency across this window",
+    frequency: "Runs over time",
     bucketFrom: "From",
     bucketTo: "To",
-    bucketRuns: "Runs registered",
+    bucketRuns: "Runs",
 
     reposTouched: "Repositories touched",
 
-    aggregateVerification: "Aggregate verification status",
+    aggregateVerification: "Verification",
     verifyACommit: "Verify a commit",
 
-    runs: "Runs of this agent type in this window",
+    runs: "Runs",
     runId: "Run",
     identity: "Agent identity",
     task: "Task",
     status: "Status",
-    commits: "Commits recorded by this run",
+    commits: "Commits",
     registered: "Registered",
-    repos: "Repositories this run touched",
+    repos: "Repositories",
 
     noRuns: "No runs in this window",
     wrongRoute: "This address does not name an agent type",
@@ -77,31 +77,31 @@ export const strings = {
 
   sentences: {
     defaultWindow:
-      "This address carries no usable window, so the last 30 days are shown.",
+      "No dates in the address, so the last 30 days are shown.",
 
     bucketBounds:
-      "Each row is counted by the server over the window's start and the instant in its second column, and the row above it is subtracted, so a run on a boundary is counted once and none falls between two rows.",
+      "Each row counts runs from the start of the window up to its end time, less the row above. No run is counted twice or missed.",
 
     reposComplete:
-      "The server counted the same number of runs it served, so this is every repository this agent type touched in this window.",
+      "This is every repository this agent type touched in this window.",
     reposFromPage:
-      "The server counted more runs in this window than it served, so this is the set named by the runs drawn below and may be short of it.",
+      "More runs matched than are shown, so this list may be short.",
 
     verificationNotLive:
-      "Nothing on this page has been verified live, and nothing here is a verdict about any commit.",
+      "Nothing on this page was checked live, and nothing here is a verdict about a commit.",
     verificationNoAggregate:
-      "Verification is three checks run against Fulcio and Rekor for one named commit. The query API answers one commit at a time and holds no aggregate, so there is no verified-and-failed tally for this agent type to report.",
+      "Verification is three live checks against Fulcio and Rekor for one commit. The server answers one commit at a time and keeps no tally, so there is none to show for this agent type.",
     verificationDatabaseOnly:
-      "A status assembled from the ledger's own records would be a verdict read out of a database rather than checked against the logs, and this system does not issue one; the overview's pass rate was left out for the same reason.",
+      "A tally built from the ledger alone would be a verdict read from a database, not checked against the logs. So none is shown.",
 
     runsComplete:
-      "The server counted the same number of runs it served, so every run registered in this window is below.",
+      "Every run registered in this window is below.",
     runsTruncated:
-      "The server counted more runs in this window than it served, so this is the most recent page of them.",
+      "More runs matched than fit on this page. The newest are shown.",
 
     empty: "No run of this agent type was registered in this window.",
     wrongRoute:
-      "An agent-type view is reached from data that names an agent type, and this address names none.",
+      "An agent type page is opened from an agent type name, and this address has none.",
   },
 } as const;
 

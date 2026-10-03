@@ -67,7 +67,7 @@ describe("the subagent page (agent-record.json ↔ Agent.dc.html)", () => {
     const nav = await screen.findByRole("navigation", { name: "Where this agent came from" });
     const inNav = within(nav);
     expect(inNav.getByRole("link", { name: /Session/ })).toHaveAttribute("href", "/runs/run-bf9a1e9bc86c64de3347eb83887c4ce2");
-    const spawnedLink = inNav.getByRole("link", { name: "spawned at step 662" });
+    const spawnedLink = inNav.getByRole("link", { name: "started at step 662" });
     expect(spawnedLink).toHaveAttribute("href", "/runs/run-bf9a1e9bc86c64de3347eb83887c4ce2#step-662");
     expect(inNav.getByText("this agent")).toBeInTheDocument();
   });
@@ -249,7 +249,7 @@ describe("the session page (session-record.json ↔ Session.dc.html)", () => {
     const table = screen.getByRole("region", { name: "Agents it started" });
     const rows = within(table);
     expect(rows.getByText("Baseline snapshot before first step")).toBeInTheDocument();
-    expect(rows.getByText("spawned at step 2802")).toBeInTheDocument();
+    expect(rows.getByText("started at step 2802")).toBeInTheDocument();
     expect(rows.getAllByText("general-purpose · sonnet").length).toBeGreaterThan(0);
     expect(rows.getByText("1 Oct 07:45")).toBeInTheDocument();
     // The lapsed child (no model on record) names its status in the Ended
@@ -321,7 +321,7 @@ describe("the session page (session-record.json ↔ Session.dc.html)", () => {
     const inCommits = within(commits);
     expect(
       inCommits.getByText(
-        "3 commits, each signed under its own one-commit identity. They are commits, not agents, and are listed here rather than in the agents table.",
+        "3 commits, each signed under its own identity. They are commits, not agents, so they are listed here and not under agents.",
       ),
     ).toBeInTheDocument();
     expect(inCommits.getByText("8619ee7")).toBeInTheDocument();
@@ -345,7 +345,7 @@ describe("a plain root run (record.json) renders through the session layout", ()
     const commits = screen.getByRole("heading", { name: "Commits" }).closest("section") as HTMLElement;
     expect(within(commits).getByText("c906a8c")).toBeInTheDocument();
     expect(within(commits).getByText("e18 end to end")).toBeInTheDocument();
-    expect(within(commits).queryByText(/one-commit identity/)).not.toBeInTheDocument();
+    expect(within(commits).queryByText(/each signed under its own identity/)).not.toBeInTheDocument();
   });
 });
 
@@ -491,6 +491,6 @@ describe("#443 a child not linked to a spawn", () => {
     await screen.findByText("Agents it started");
     expect(screen.getAllByText("fork agent").length).toBeGreaterThan(0);
     expect(screen.getByText("not matched to a step")).toBeInTheDocument();
-    expect(screen.queryByText("spawned at step 0")).toBeNull();
+    expect(screen.queryByText("started at step 0")).toBeNull();
   });
 });
