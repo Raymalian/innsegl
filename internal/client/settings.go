@@ -40,6 +40,11 @@ type SettingsConfig struct {
 	// sandbox. Without it the client writes the route and its own hooks
 	// only, and removes any lockdown keys an earlier version wrote.
 	Hardened bool
+	// EgressAllowlist, with Hardened, locks the sandbox's network to these
+	// hosts (RM-248, #393; moved here from install.sh). The provider's host
+	// is never added: model traffic goes through the client, not from a
+	// sandboxed shell.
+	EgressAllowlist []string
 	// StatusLine is the user's own statusLine from ~/.claude/settings.json
 	// (nil when there is none). Under allowManagedHooksOnly the harness runs
 	// no statusLine command but a managed one, so --hardened copies it into
@@ -325,6 +330,18 @@ func installLockdown(obj *object, cfg SettingsConfig, path string, out io.Writer
 		return err
 	}
 	net.set("allowLocalBinding", true)
+	if len(cfg.EgressAllowlist) > 0 {
+		net.set("strictAllowlist", true)
+		net.set("allowManagedDomainsOnly", true)
+		for _, host := range cfg.EgressAllowlist {
+			if strings.EqualFold(host, ProviderAPIHost) {
+				continue
+			}
+			if err = appendUnique(net, "allowedDomains", host); err != nil {
+				return err
+			}
+		}
+	}
 
 	// allowManagedHooksOnly hides the user's own statusLine; a managed one
 	// still runs, so the user's is copied here. A managed statusLine the
@@ -373,8 +390,13 @@ func removeLockdown(obj *object, cfg SettingsConfig) {
 			dropIfEmpty(sandbox, "filesystem", fsys)
 		}
 		if net, ok := childIfObject(sandbox, "network"); ok {
-			if v, _ := net.get("allowLocalBinding"); v == true {
-				net.del("allowLocalBinding")
+			for _, key := range []string{"allowLocalBinding", "strictAllowlist", "allowManagedDomainsOnly"} {
+				if v, _ := net.get(key); v == true {
+					net.del(key)
+				}
+			}
+			for _, host := range cfg.EgressAllowlist {
+				removeFromList(net, "allowedDomains", host)
 			}
 			dropIfEmpty(sandbox, "network", net)
 		}

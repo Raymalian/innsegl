@@ -150,6 +150,10 @@ func newConnectFixture(t *testing.T) *connectFixture {
 		},
 		now:      func() time.Time { return time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC) },
 		hostname: func() (string, error) { return "dev-laptop", nil },
+		// A harness that loads whatever it is given, unless a test says not.
+		loadHarness: func(_ string, _ bool, debugFile string, ca string) error {
+			return os.WriteFile(debugFile, []byte("[DEBUG] extraCertsPath="+ca+"\n"), 0o600)
+		},
 	}
 	return f
 }
@@ -453,4 +457,62 @@ func TestConnectDisconnectSaysSoWhenTheCoreCannotRevoke(t *testing.T) {
 	if !strings.Contains(stderr, "still active on the core") || !strings.Contains(stderr, "Account page") {
 		t.Errorf("stderr does not say the installation is still active and where to revoke it:\n%s", stderr)
 	}
+}
+
+// EGR-001. --egress-control, moved from install.sh: with --hardened, the sandbox's
+// network is locked to the hosts in the file (one per line, # comments and
+// blank lines ignored). Without --hardened it is refused.
+func TestEGR001ConnectEgressControlLocksTheSandboxNetwork(t *testing.T) {
+	f := newConnectFixture(t)
+	list := filepath.Join(t.TempDir(), "allow.txt")
+	if err := os.WriteFile(list, []byte("# build hosts\nproxy.golang.org\n\nregistry.npmjs.org\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--egress-control", list); code == exitOK {
+		t.Fatal("--egress-control without --hardened was accepted")
+	}
+	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--hardened", "--egress-control", list); code != exitOK {
+		t.Fatalf("connect: %s", stderr)
+	}
+	got := string(readFile(t, f.settings))
+	for _, want := range []string{`"strictAllowlist": true`, `"proxy.golang.org"`, `"registry.npmjs.org"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("managed settings lack %s:\n%s", want, got)
+		}
+	}
+}
+
+// ENF-006, moved from install.sh: after writing the managed settings,
+// connect asks Claude Code to load them. It drops a whole file, silently,
+// when one value has the wrong type, so a file it did not load is a failed
+// connect that names the file. No Claude Code installed: it says the check
+// could not run.
+func TestENF006ConnectChecksTheHarnessLoadedTheSettings(t *testing.T) {
+	t.Run("loaded", func(t *testing.T) {
+		f := newConnectFixture(t)
+		code, stdout, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings)
+		if code != exitOK || !strings.Contains(stdout, "Claude Code loaded "+f.settings) {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		}
+	})
+	t.Run("discarded", func(t *testing.T) {
+		f := newConnectFixture(t)
+		f.deps.loadHarness = func(_ string, _ bool, debugFile string, _ string) error {
+			return os.WriteFile(debugFile, []byte("[DEBUG] settings: invalid value\n"), 0o600)
+		}
+		code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings)
+		if code == exitOK || !strings.Contains(stderr, "did NOT load "+f.settings) {
+			t.Fatalf("exit %d, stderr:\n%s", code, stderr)
+		}
+	})
+	t.Run("no harness", func(t *testing.T) {
+		f := newConnectFixture(t)
+		f.deps.loadHarness = func(string, bool, string, string) error { return errNoHarness }
+		code, stdout, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings)
+		if code != exitOK || !strings.Contains(stdout, "could not be checked") {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		}
+	})
 }

@@ -65,6 +65,9 @@ type connectDeps struct {
 	// underSudo: run as root through sudo; home and uid are the invoking
 	// user's (connectHome).
 	underSudo bool
+	// loadHarness has Claude Code read the settings (connectverify.go); nil
+	// means the real one.
+	loadHarness func(settings string, named bool, debugFile, ca string) error
 }
 
 // connectHome answers the home folder and uid connect acts for. Under sudo,
@@ -134,6 +137,8 @@ func defaultManagedSettingsPath(goos string) string {
 type connectFlags struct {
 	token, ca, fingerprint, name, listen, settings     string
 	noService, pause, resume, disconnect, update, hard bool
+	// egress is --egress-control's allowlist file (with --hardened).
+	egress string
 }
 
 func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, deps connectDeps) int {
@@ -151,6 +156,7 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	fs.BoolVar(&f.resume, "resume", false, "put paused managed settings back")
 	fs.BoolVar(&f.disconnect, "disconnect", false, "remove what connect wrote: the managed settings keys, the service, ~/.innsegl/client")
 	fs.BoolVar(&f.update, "update", false, "rewrite this enrolled machine's managed settings to the chosen mode; no token")
+	fs.StringVar(&f.egress, "egress-control", "", "with --hardened, lock the sandbox's network to the hosts in this file, one per line")
 	fs.BoolVar(&f.hard, "hardened", false, "also lock the harness down: managed hooks only, bypass mode disabled, the sandbox; the user's statusLine is copied in")
 	fs.Usage = func() {
 		fprintf(stderr, "innsegl connect - enrol this machine with an innsegl core (#461)\n\n")
@@ -185,6 +191,9 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 		return exitUsage
 	case modes == 1 && len(positional) > 0:
 		fprintf(stderr, "innsegl connect: --pause, --resume, --disconnect and --update take no other arguments\n")
+		return exitUsage
+	case f.egress != "" && !f.hard:
+		fprintf(stderr, "innsegl connect: --egress-control locks the --hardened sandbox; give --hardened too\n")
 		return exitUsage
 	case f.hard && (f.pause || f.resume || f.disconnect):
 		fprintf(stderr, "innsegl connect: --hardened chooses what connect or --update writes; --pause, --resume and --disconnect take no mode\n")
@@ -304,6 +313,10 @@ func connectUpdate(f connectFlags, stdout, stderr io.Writer, deps connectDeps) i
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
 	}
+	if settings.EgressAllowlist, err = readAllowlist(f.egress); err != nil {
+		fprintf(stderr, "innsegl connect: --egress-control: %v\n", err)
+		return exitConnectFailed
+	}
 	again := "`innsegl connect --update`"
 	if f.hard {
 		again = "`innsegl connect --update --hardened`"
@@ -320,6 +333,9 @@ func connectUpdate(f connectFlags, stdout, stderr io.Writer, deps connectDeps) i
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
+	}
+	if code := verifyHarnessLoaded(deps, f.settings, f.settings != defaultManagedSettingsPath(deps.goos), settings.ProxyCA, stdout, stderr); code != exitOK {
+		return code
 	}
 	mode := "the route and innsegl's hooks only"
 	if f.hard {
@@ -408,6 +424,10 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
 	}
+	if settings.EgressAllowlist, err = readAllowlist(f.egress); err != nil {
+		fprintf(stderr, "innsegl connect: --egress-control: %v\n", err)
+		return exitConnectFailed
+	}
 	err = client.CheckSettingsWritable(f.settings, settings)
 	if code, done := reportNotWritable(err, stderr, ", then run the same `innsegl connect` again (the token is not spent yet)"); done {
 		return code
@@ -457,6 +477,9 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
 	}
+	if code := verifyHarnessLoaded(deps, f.settings, f.settings != defaultManagedSettingsPath(deps.goos), settings.ProxyCA, stdout, stderr); code != exitOK {
+		return code
+	}
 
 	failed := false
 	if f.noService {
@@ -499,4 +522,29 @@ func connectCA(ctx context.Context, f connectFlags, coreURL string) (*x509.Certi
 		return nil, fmt.Errorf("--ca %s holds no PEM certificate", f.ca)
 	}
 	return x509.ParseCertificate(block.Bytes)
+}
+
+// readAllowlist reads --egress-control's file: one host per line, with blank
+// lines and lines starting with # ignored. No file is no allowlist.
+func readAllowlist(path string) ([]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+	// #nosec G304 -- the operator's own file, named on their command line.
+	text, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var hosts []string
+	for _, line := range strings.Split(string(text), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		hosts = append(hosts, line)
+	}
+	if len(hosts) == 0 {
+		return nil, fmt.Errorf("%s names no host", path)
+	}
+	return hosts, nil
 }

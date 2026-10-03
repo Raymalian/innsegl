@@ -69,7 +69,7 @@ func (s *Server) saveWatchedLocked() {
 func (s *Server) watchSession(session string, p Process) {
 	s.watchMu.Lock()
 	defer s.watchMu.Unlock()
-	if s.watched[session] == p {
+	if known, ok := s.watched[session]; ok && known == p {
 		return
 	}
 	if _, known := s.watched[session]; !known && len(s.watched) >= maxWatchedSessions {
@@ -129,8 +129,45 @@ func (s *Server) CheckSessions(ctx context.Context) {
 	}
 }
 
-func (s *Server) sendSessionEnd(ctx context.Context, session string) error {
-	body, err := json.Marshal(map[string]string{"session_id": session})
+// endKey names a kept end: the session, or "session/agent" for a subagent.
+// Session and agent ids never hold a slash (the gateway's id shapes).
+func endKey(session, agent string) string {
+	if agent == "" {
+		return session
+	}
+	return session + "/" + agent
+}
+
+// serveSessionEnd passes a session's end to the core and, when the core does
+// not take it, keeps it to send once the core answers. A lost end left the
+// run active until the silence backstop, days later.
+func (s *Server) serveSessionEnd(w http.ResponseWriter, r *http.Request) {
+	var end struct {
+		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&end); err != nil || end.SessionID == "" ||
+		strings.Contains(end.SessionID, "/") || strings.Contains(end.AgentID, "/") {
+		http.Error(w, "innsegl client: a session end needs a session_id", http.StatusBadRequest)
+		return
+	}
+	key := endKey(end.SessionID, end.AgentID)
+	if err := s.sendSessionEnd(r.Context(), key); err == nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	// A zero Process is never alive, so CheckSessions sends it.
+	s.watchSession(key, Process{})
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Server) sendSessionEnd(ctx context.Context, key string) error {
+	session, agent, _ := strings.Cut(key, "/")
+	end := map[string]string{"session_id": session}
+	if agent != "" {
+		end["agent_id"] = agent
+	}
+	body, err := json.Marshal(end)
 	if err != nil {
 		return err
 	}

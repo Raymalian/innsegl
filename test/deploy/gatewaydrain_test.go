@@ -37,6 +37,13 @@ func TestGatewayDrainFitsInsideTheStopGracePeriod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("innsegl-mcp stop_grace_period %q: %v (the runtime default is 10s)", mcp.StopGracePeriod, err)
 	}
+	// The drain is part of every update's restart: five minutes held each
+	// `make update` that long (measured 2026-10-03: 292s). A model reply
+	// rarely streams past two minutes, and what the drain does not wait for the
+	// client sends on and journals.
+	if drain > 2*time.Minute {
+		t.Errorf("the gateway drain %s is longer than two minutes; every update waits that long", drain)
+	}
 	if grace <= drain {
 		t.Errorf("stop_grace_period %s is not longer than the drain %s; the container is killed mid-drain", grace, drain)
 	}

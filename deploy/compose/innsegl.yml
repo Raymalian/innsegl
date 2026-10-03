@@ -979,7 +979,7 @@ services:
     container_name: innsegl-mcp
     restart: unless-stopped
     # Longer than INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT: the gateway's drain.
-    stop_grace_period: 5m30s
+    stop_grace_period: 2m30s
     depends_on:
       innsegl-db-init:
         condition: service_completed_successfully
@@ -1089,7 +1089,7 @@ services:
       # provider and journals them) and waits this long for the rest. The
       # service's stop_grace_period is longer, so the runtime does not kill it
       # mid-drain.
-      INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT: ${INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT:-5m}
+      INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT: ${INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT:-2m}
       # `spiffe` requires a client SVID on the gateway. Required whenever
       # INNSEGL_BIND is not loopback.
       INNSEGL_GATEWAY_CLIENT_AUTH: ${INNSEGL_GATEWAY_CLIENT_AUTH:-}

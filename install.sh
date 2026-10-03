@@ -1,17 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# One command from a fresh clone to an enforced, signable checkout — RM-245
-# (#390), RM-248 (#393), epic #361 E18.
-#
-# WHY THIS EXISTS. Getting to a first signed commit used to mean knowing, in
-# order, that you had to run `make start`, then `make innsegl-install-signer`,
-# then hand-edit two Claude Code configuration files, then `make link
-# DIR=...` — with no single place that said so, and nothing stopping an agent
-# from editing those files right back. This is that sequence, once, aimed at
-# the GATEWAY design instead: every request routes through the gateway, the
-# harness's managed settings are the one file an agent cannot edit, and the
-# sandbox denies the container socket and innsegl's own stores.
+# The server installer: one command from a fresh clone to a running core —
+# RM-245 (#390), RM-285 (#461), ADR-0063.
 #
 # WHAT IT DOES, IN ORDER
 #   1. Checks the prerequisites — including that the innsegl binary this
@@ -20,65 +11,35 @@
 #   2. Brings the stack up (`make start`, or $INNSEGL_INSTALL_START_CMD).
 #   3. Puts `innsegl-commit` on PATH (`make innsegl-install-signer`, or
 #      $INNSEGL_INSTALL_SIGNER_CMD).
-#   4. Only with --local-client: writes the harness's MANAGED settings — a
-#      file users and agents cannot override — to the system path (macOS
-#      `/Library/Application Support/ClaudeCode/managed-settings.json`,
-#      Linux `/etc/claude-code/managed-settings.json`), or wherever
-#      --managed-settings / $INNSEGL_INSTALL_MANAGED_SETTINGS names. It
-#      points ANTHROPIC_BASE_URL, INNSEGL_CORE_URL and telemetry at the
-#      gateway and registers the PreToolUse and session hooks — the route and
-#      innsegl's own hooks, nothing more (RM-312). With --hardened it also
-#      writes the lockdown: allowManagedHooksOnly, bypass mode disabled, the
-#      sandbox (denying a sandboxed shell innsegl's own stores, with `gh`
-#      excluded), and a copy of the user's own statusLine, which
-#      allowManagedHooksOnly would otherwise hide. Without --hardened, any of
-#      those keys an earlier run wrote are removed. Idempotent, additive
-#      (the operator's own keys survive), and every file is backed up,
-#      timestamped, the moment before it is first changed. This installer
-#      never sudos itself: when the target is not writable it prints the
-#      one-line command an administrator runs, and changes nothing.
+#   4. Builds the innsegl binary.
 #   5. Links each DIR argument (`$INNSEGL_BIN_PATH link DIR`, or
 #      $INNSEGL_INSTALL_LINK_CMD).
-#   6. Prints the dashboard URL and the managed settings path.
+#   6. Prints the dashboard URL, the one-time setup link while no account
+#      exists, and how a machine connects.
 #
-# THIS IS THE SERVER INSTALLER (RM-285, #461, ADR-0063). The core runs on its
-# own host, and a client machine enrols with `innsegl connect`, which writes
-# that machine's managed settings pointing at its own local client service.
-# So by default this script does not write managed settings at all: the core
-# host is not where the harness runs. `--local-client` keeps the single-host
-# shape working — the harness on the same machine as the stack, talking to the
-# gateway directly — exactly as this script has always written it.
+# IT WRITES NO HARNESS SETTINGS. Every machine that runs agents, the core
+# host included, connects with `innsegl connect`, which enrols it, runs its
+# client service, and writes its managed settings (ADR-0063, ADR-0069). This
+# script used to write them itself for the single-host shape (--local-client),
+# pointing the harness straight at the gateway with a base URL ADR-0069 rules
+# out; that, and --hardened, --egress-control, --pause and --resume, moved to
+# `innsegl connect`, and naming one here says so.
 #
 # `--dry-run` runs step 1 (so a missing prerequisite is still caught) and then
-# only computes and prints what steps 2-5 would do; nothing on disk changes.
+# only prints what steps 2-5 would run; nothing on disk changes.
 #
-# `--egress-control <allowlist file>` (RM-248, #393), with --hardened,
-# additionally locks the sandbox to a domain allowlist: the operator's own list (one host per line;
-# blank lines and lines starting with `#` are ignored), with any host the
-# gateway itself would reach removed — api.anthropic.com and the configured
-# upstream ($INNSEGL_GATEWAY_UPSTREAM). The harness's own model traffic goes
-# through the gateway on loopback, which the sandbox does not govern, so
-# those two hosts never need to be in a sandboxed shell's own allowlist.
-#
-# `--uninstall` removes exactly the keys THIS installer added to the managed
-# settings — the env vars, the hook entries, the permission and sandbox
-# flags, the statusLine copy — and the signer symlink, and nothing the
-# operator added themselves.
-# It does not touch the running stack; it prints the command that does.
+# `--uninstall` removes the signer symlink. A machine's managed settings are
+# `innsegl connect --disconnect`'s to remove. It does not touch the running
+# stack; it prints the command that does.
 #
 # `--uninstall-legacy` is separate and opt-in: it removes the OLD wiring an
 # earlier version of this installer wrote directly into the harness's own
-# $HOME/.claude/settings.json (six subagent-identity.sh hook entries) and
-# $HOME/.claude.json (the `innsegl` MCP entry). It never runs as a side
-# effect of a plain --uninstall, and it never installs that wiring — only
-# removes it.
+# $HOME/.claude/settings.json (six hook entries) and $HOME/.claude.json (the
+# `innsegl` MCP entry). It never runs as a side effect of a plain
+# --uninstall, and it never installs that wiring — only removes it.
 #
 # USAGE
-#   install.sh [--local-client [--hardened]] [--dry-run] [--uninstall] [--uninstall-legacy]
-#              [--managed-settings <path>] [--egress-control <file>] [DIR...]
-#
-# Every DIR becomes signable, the same as `$INNSEGL_BIN_PATH link DIR` run by
-# hand.
+#   install.sh [--local-client] [--dry-run] [--uninstall] [--uninstall-legacy] [DIR...]
 #
 # See scripts/install-selftest.sh for what this is tested against, and
 # deploy/compose/README.md for what the stack this brings up actually is.
@@ -91,61 +52,24 @@ ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 # linking without touching Docker, a real PATH entry, or a real deployment.
 START_CMD="${INNSEGL_INSTALL_START_CMD:-make start}"
 SIGNER_CMD="${INNSEGL_INSTALL_SIGNER_CMD:-make innsegl-install-signer}"
-# Builds the binary the PreToolUse hook names, so the settings never point at
-# an old one (ENF-008).
+# Builds the binary a connected machine's hooks run, so they never run an
+# old one (ENF-008).
 BUILD_CMD="${INNSEGL_INSTALL_BUILD_CMD:-make build}"
 # #445, ADR-0062's 2026-10-01 amendment: while no account exists yet, print
 # the one-time setup link rather than leaving the operator to run
 # `innsegl admin-credential enrol-code` and build the URL by hand.
 SETUP_LINK_CMD="${INNSEGL_INSTALL_SETUP_LINK_CMD:-scripts/setup-link.sh}"
 
-# The compiled innsegl binary this checkout's `make build` produces. The
-# PreToolUse hook command in managed settings names this path exactly — an
-# absolute path, so the harness need not resolve it against any PATH.
+# The compiled innsegl binary this checkout's `make build` produces.
 INNSEGL_BIN_PATH="${INNSEGL_BIN_PATH:-$ROOT/innsegl}"
 LINK_CMD="${INNSEGL_INSTALL_LINK_CMD:-$INNSEGL_BIN_PATH link}"
 
-# The gateway every request routes through (ADR-0060): ANTHROPIC_BASE_URL,
-# INNSEGL_CORE_URL and the telemetry endpoint all point here. Overridable for
-# a deployment that moved it, or for a self-test / live check running against
-# the plain-http gateway before its own TLS is wired up.
-GATEWAY_URL="${INNSEGL_INSTALL_GATEWAY_URL:-https://127.0.0.1:28095}"
-
-# innsegl's own CA, and the store the sandbox denies a shell read access to.
+# The gateway's CA, whose fingerprint `innsegl connect` pins.
 CA_PEM="${INNSEGL_INSTALL_CA_PEM:-$HOME/.innsegl/ca/gateway-ca.pem}"
-# How the install asks whether the gateway answers, over TLS against the CA it
-# will hand the harness. Any HTTP reply counts; no reply, or a certificate the
-# CA does not sign, does not. Overridable for the self-test only.
-GATEWAY_PROBE_CMD="${INNSEGL_INSTALL_GATEWAY_PROBE_CMD:-}"
-# How many 2-second tries the gateway gets: it starts with the MCP and can
-# take a few seconds after `make start` returns.
-GATEWAY_TRIES="${INNSEGL_INSTALL_GATEWAY_TRIES:-30}"
-# The agent's shell reads none of innsegl's host state (bodies, run tokens,
-# backups) except the gateway's CA certificate, which the host commands git
-# runs inside that shell need in order to trust the core.
-LOG_DENY="${INNSEGL_INSTALL_LOG_DENY:-$HOME/.innsegl}"
-CA_ALLOW="${INNSEGL_INSTALL_CA_ALLOW:-$HOME/.innsegl/ca}"
-
-# The gateway's own upstream (cmd/innsegl/gateway.go's INNSEGL_GATEWAY_UPSTREAM,
-# default https://api.anthropic.com) — read here only to know which host's
-# name to leave OUT of a --egress-control allowlist: model traffic reaches it
-# through the gateway on loopback, never directly from a sandboxed shell.
-GATEWAY_UPSTREAM="${INNSEGL_GATEWAY_UPSTREAM:-https://api.anthropic.com}"
-UPSTREAM_HOST="${GATEWAY_UPSTREAM#*://}"
-UPSTREAM_HOST="${UPSTREAM_HOST%%/*}"
-UPSTREAM_HOST="${UPSTREAM_HOST%%:*}"
 
 # Matches `make innsegl-install-signer`'s own default, so uninstall looks for
 # the symlink in the same place install put it.
 BIN_DIR="${INNSEGL_BIN:-$HOME/.local/bin}"
-
-default_managed_settings_path() {
-  case "$(uname -s)" in
-    Darwin) printf '%s' "/Library/Application Support/ClaudeCode/managed-settings.json" ;;
-    *)      printf '%s' "/etc/claude-code/managed-settings.json" ;;
-  esac
-}
-MANAGED_SETTINGS="${INNSEGL_INSTALL_MANAGED_SETTINGS:-$(default_managed_settings_path)}"
 
 # The old hook script's path, as an install from before the gateway wrote it
 # into six hook entries. The script itself is gone; --uninstall-legacy matches
@@ -155,43 +79,31 @@ LEGACY_MCP_URL="${INNSEGL_INSTALL_LEGACY_MCP_URL:-http://127.0.0.1:28080/}"
 
 DRY_RUN=0
 LOCAL_CLIENT=0
-HARDENED=0
 UNINSTALL=0
-PAUSE=0
-RESUME=0
 UNINSTALL_LEGACY=0
-EGRESS_FILE=""
 DIRS=()
 
 usage() {
   cat <<'EOF'
-usage: install.sh [--local-client [--hardened]] [--dry-run] [--uninstall] [--uninstall-legacy]
-                   [--pause | --resume] [--managed-settings <path>]
-                   [--egress-control <file>] [DIR...]
+usage: install.sh [--local-client] [--dry-run] [--uninstall] [--uninstall-legacy] [DIR...]
 
 Installs the innsegl server: brings the stack up, puts innsegl-commit on
-PATH, and makes each DIR signable. Client machines connect to it with
-`innsegl connect`, which writes their own managed settings.
+PATH, and makes each DIR signable. Every machine that runs agents, this one
+included, connects to it with `innsegl connect`, which writes that
+machine's managed settings, runs its client service, and can pause, update
+or remove them.
 
-  --local-client         also make THIS machine a client, the single-host
-                         shape: write the harness's managed settings (gateway
-                         env, the PreToolUse and session hooks) pointing
-                         straight at the gateway here
-  --hardened             with --local-client, also lock the harness down:
-                         managed hooks only, bypass mode disabled, the
-                         sandbox; the user's statusLine is copied in
+  --local-client         also say how to connect THIS machine to the core
   --dry-run              print what would change; touch nothing
-  --uninstall             remove exactly what this installer added
-  --uninstall-legacy      also remove the OLD hook-and-MCP wiring (opt-in)
-  --pause                 set the managed settings aside, unchanged, so the
-                          harness runs without the gateway (the stack is down)
-  --resume                put the paused managed settings back
-  --managed-settings <p>  write the managed settings to <p> instead of the
-                          system path
-  --egress-control <f>    with --hardened, lock the sandbox to the domains in
-                          <f>, one host per line, minus the gateway's own
-                          upstream
+  --uninstall            remove the signer symlink this installer added
+  --uninstall-legacy     also remove the OLD hook-and-MCP wiring (opt-in)
 EOF
+}
+
+# moved names the innsegl connect flag that replaced an install.sh one.
+moved() {
+  echo "install.sh: $1 moved to innsegl connect: $2" >&2
+  exit 2
 }
 
 parse_args() {
@@ -199,17 +111,13 @@ parse_args() {
     case "$1" in
       --dry-run) DRY_RUN=1; shift ;;
       --local-client) LOCAL_CLIENT=1; shift ;;
-      --hardened) HARDENED=1; shift ;;
       --uninstall) UNINSTALL=1; shift ;;
       --uninstall-legacy) UNINSTALL_LEGACY=1; shift ;;
-      --pause) PAUSE=1; shift ;;
-      --resume) RESUME=1; shift ;;
-      --managed-settings)
-        [ $# -ge 2 ] || { echo "install.sh: --managed-settings needs a path" >&2; exit 2; }
-        MANAGED_SETTINGS="$2"; shift 2 ;;
-      --egress-control)
-        [ $# -ge 2 ] || { echo "install.sh: --egress-control needs a file" >&2; exit 2; }
-        EGRESS_FILE="$2"; shift 2 ;;
+      --hardened) moved --hardened "innsegl connect ... --hardened" ;;
+      --egress-control) moved --egress-control "innsegl connect ... --hardened --egress-control <file>" ;;
+      --pause) moved --pause "innsegl connect --pause" ;;
+      --resume) moved --resume "innsegl connect --resume" ;;
+      --managed-settings) moved --managed-settings "innsegl connect ... --managed-settings <path>" ;;
       -h|--help) usage; exit 0 ;;
       -*)
         echo "install.sh: unrecognised option: $1" >&2
@@ -235,7 +143,6 @@ hint_macos() {
     python3)       echo "brew install python3" ;;
     curl)          echo "brew install curl" ;;
     innsegl-bin)   echo "make build" ;;
-    egress-file)   echo "create the allowlist file --egress-control names, one host per line" ;;
   esac
 }
 
@@ -248,7 +155,6 @@ hint_debian() {
     python3)       echo "sudo apt-get install -y python3" ;;
     curl)          echo "sudo apt-get install -y curl" ;;
     innsegl-bin)   echo "make build" ;;
-    egress-file)   echo "create the allowlist file --egress-control names, one host per line" ;;
   esac
 }
 
@@ -274,9 +180,6 @@ check_prereqs() {
   check python3       "python3"                        command -v python3
   check curl           "curl"                            command -v curl
   check innsegl-bin    "the innsegl binary ($INNSEGL_BIN_PATH)" test -x "$INNSEGL_BIN_PATH"
-  if [ -n "$EGRESS_FILE" ]; then
-    check egress-file "the --egress-control allowlist file ($EGRESS_FILE)" test -f "$EGRESS_FILE"
-  fi
 
   if [ "$MISSING" -ne 0 ]; then
     echo >&2
@@ -298,544 +201,6 @@ run_step() {
     return 0
   fi
   ( cd "$ROOT" && eval "$cmd" )
-}
-
-# ---------------------------------------------------------------------------
-# 4. THE MANAGED SETTINGS — the only step that edits a file, and the only one
-# --dry-run can show a diff for rather than merely naming.
-#
-# Done in Python because `json` is the only thing here that can tell "no
-# change" from "reformatted" — a sed edit cannot merge, and a naive rewrite
-# cannot tell an idempotent second run from a real change, which is what
-# would make it back up and rewrite a file it had already installed into.
-# ---------------------------------------------------------------------------
-
-connect_managed_settings() {
-  local action="$1"
-  INSTALL_FILE="$MANAGED_SETTINGS" \
-  INSTALL_ACTION="$action" \
-  INSTALL_HARDENED="$HARDENED" \
-  INSTALL_USER_SETTINGS="$HOME/.claude/settings.json" \
-  INSTALL_DRY_RUN="$DRY_RUN" \
-  INSTALL_HOOK_PATH="$INNSEGL_BIN_PATH" \
-  INSTALL_GATEWAY_URL="$GATEWAY_URL" \
-  INSTALL_CA_PEM="$CA_PEM" \
-  INSTALL_LOG_DENY="$LOG_DENY" INSTALL_CA_ALLOW="$CA_ALLOW" \
-  INSTALL_EGRESS="$([ -n "$EGRESS_FILE" ] && echo 1 || echo 0)" \
-  INSTALL_ALLOWLIST_FILE="$EGRESS_FILE" \
-  INSTALL_MODEL_HOSTS="api.anthropic.com
-$UPSTREAM_HOST" \
-  python3 - <<'PYEOF'
-import copy, datetime, difflib, json, os, shlex, sys, tempfile
-
-path = os.environ["INSTALL_FILE"]
-action = os.environ["INSTALL_ACTION"]
-dry_run = os.environ.get("INSTALL_DRY_RUN") == "1"
-hardened = os.environ.get("INSTALL_HARDENED") == "1"
-user_settings = os.environ.get("INSTALL_USER_SETTINGS", "")
-# The full command line the harness runs: the binary, then the subcommand
-# that names which of the commit path's three adapters this is (see
-# cmd/innsegl/commitpathcli.go) — the binary path alone would run with no
-# arguments and print top-level usage instead of acting as a hook.
-hook_command = os.environ["INSTALL_HOOK_PATH"] + " hook pre-tool-use"
-# The session hook states each session's working directory to the gateway
-# from the harness's own hook input (session_id, cwd, agent_id), so the
-# gateway never reads it out of the conversation. One command, four events:
-# a new or resumed session, every user turn, every subagent, every move.
-session_hook_command = os.environ["INSTALL_HOOK_PATH"] + " hook session"
-SESSION_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "SubagentStart", "CwdChanged")
-gateway_url = os.environ["INSTALL_GATEWAY_URL"]
-ca_pem = os.environ["INSTALL_CA_PEM"]
-log_deny = os.environ["INSTALL_LOG_DENY"]
-ca_allow = os.environ["INSTALL_CA_ALLOW"]
-egress = os.environ.get("INSTALL_EGRESS") == "1"
-allowlist_file = os.environ.get("INSTALL_ALLOWLIST_FILE", "")
-model_hosts = {
-    h.strip().lower()
-    for h in os.environ.get("INSTALL_MODEL_HOSTS", "").splitlines()
-    if h.strip()
-}
-
-# The four telemetry vars (Claude Code docs) plus the three that route this
-# harness's own traffic through the gateway. Managed env wins over every
-# other file and the shell (Claude Code docs), which is the whole point:
-# nothing an agent can write overrides these.
-DESIRED_ENV = {
-    "ANTHROPIC_BASE_URL": gateway_url,
-    "NODE_EXTRA_CA_CERTS": ca_pem,
-    "INNSEGL_CORE_URL": gateway_url,
-    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
-    "OTEL_LOGS_EXPORTER": "otlp",
-    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": gateway_url,
-    # Claude Code loads MCP tool definitions on demand only when it talks to
-    # the provider directly; behind any other base URL it sends every
-    # definition with every request. Measured 2026-10-01: 279 tools, 650 KB,
-    # ~224k tokens, refused as "Prompt is too long" before the conversation
-    # began. The gateway forwards to the provider unchanged, so on-demand
-    # loading works through it, and this turns it back on.
-    "ENABLE_TOOL_SEARCH": "true",
-}
-
-
-def load(p):
-    if not os.path.isfile(p):
-        return {}, ""
-    with open(p, "r", encoding="utf-8") as f:
-        text = f.read()
-    if not text.strip():
-        return {}, text
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError as e:
-        sys.stderr.write(
-            "install.sh: %s is not valid JSON (%s); refusing to touch it\n" % (p, e)
-        )
-        sys.exit(1)
-    if not isinstance(obj, dict):
-        sys.stderr.write(
-            "install.sh: %s does not hold a JSON object; refusing to touch it\n" % p
-        )
-        sys.exit(1)
-    return obj, text
-
-
-def is_ours_hook(h):
-    return (
-        isinstance(h, dict)
-        and h.get("type") == "command"
-        and h.get("command") in (hook_command, session_hook_command)
-    )
-
-
-def install_env(obj):
-    env = obj.setdefault("env", {})
-    for k, v in DESIRED_ENV.items():
-        env[k] = v
-
-
-def uninstall_env(obj):
-    env = obj.get("env")
-    if not isinstance(env, dict):
-        return
-    for k, v in DESIRED_ENV.items():
-        if k not in env:
-            continue
-        if env[k] == v:
-            env.pop(k, None)
-        else:
-            sys.stderr.write(
-                "install.sh: env.%s in %s does not match what this installer "
-                "writes; leaving it alone\n" % (k, path)
-            )
-    if not env:
-        obj.pop("env", None)
-
-
-def install_hook(hooks, event, group):
-    groups = hooks.setdefault(event, [])
-    if not isinstance(groups, list):
-        sys.stderr.write(
-            "install.sh: hooks.%s in %s is not a list; refusing to touch it\n"
-            % (event, path)
-        )
-        sys.exit(1)
-    already = any(
-        is_ours_hook(h)
-        for g in groups
-        if isinstance(g, dict) and isinstance(g.get("hooks"), list)
-        for h in g["hooks"]
-    )
-    if not already:
-        groups.append(group)
-
-
-def install_hooks(obj):
-    hooks = obj.setdefault("hooks", {})
-    install_hook(hooks, "PreToolUse",
-                 {"matcher": "Bash", "hooks": [{"type": "command", "command": hook_command}]})
-    for event in SESSION_HOOK_EVENTS:
-        install_hook(hooks, event, {"hooks": [{"type": "command", "command": session_hook_command}]})
-    if not hooks:
-        obj.pop("hooks", None)
-
-
-def uninstall_hooks(obj):
-    hooks = obj.get("hooks")
-    if not isinstance(hooks, dict):
-        return
-    for event in ("PreToolUse",) + SESSION_HOOK_EVENTS:
-        groups = hooks.get(event)
-        if not isinstance(groups, list):
-            continue
-        kept = []
-        for g in groups:
-            if not isinstance(g, dict) or not isinstance(g.get("hooks"), list):
-                kept.append(g)
-                continue
-            filtered = [h for h in g["hooks"] if not is_ours_hook(h)]
-            if filtered:
-                g2 = dict(g)
-                g2["hooks"] = filtered
-                kept.append(g2)
-            # else: this group held only our hook — drop the whole group.
-        if kept:
-            hooks[event] = kept
-        else:
-            hooks.pop(event, None)
-    if hooks:
-        obj["hooks"] = hooks
-    else:
-        obj.pop("hooks", None)
-
-
-def install_flags(obj):
-    # The harness's own co-author trailer is an identity claim I6 admits from
-    # no source, so a commit carrying it is refused; not writing it spares
-    # every agent a refused first commit. An empty string, measured
-    # 2026-09-30: `false` makes Claude Code discard the WHOLE settings file,
-    # silently — gateway, hook and sandbox with it.
-    attribution = obj.setdefault("attribution", {})
-    attribution["commit"] = ""
-
-
-def uninstall_flags(obj):
-    attribution = obj.get("attribution")
-    if isinstance(attribution, dict):
-        if attribution.get("commit") == "":
-            attribution.pop("commit", None)
-        if attribution:
-            obj["attribution"] = attribution
-        else:
-            obj.pop("attribution", None)
-
-
-def install_lockdown_flags(obj):
-    obj["allowManagedHooksOnly"] = True
-    perms = obj.setdefault("permissions", {})
-    perms["disableBypassPermissionsMode"] = "disable"
-
-
-def uninstall_lockdown_flags(obj):
-    if obj.get("allowManagedHooksOnly") is True:
-        obj.pop("allowManagedHooksOnly", None)
-    perms = obj.get("permissions")
-    if isinstance(perms, dict):
-        if perms.get("disableBypassPermissionsMode") == "disable":
-            perms.pop("disableBypassPermissionsMode", None)
-        if perms:
-            obj["permissions"] = perms
-        else:
-            obj.pop("permissions", None)
-
-
-def user_status_line():
-    # The user's own statusLine (~/.claude/settings.json), or None. Under
-    # allowManagedHooksOnly the harness runs only a managed statusLine, so
-    # --hardened copies it; every other mode removes a managed statusLine
-    # equal to it, which is that copy. Unreadable: no copy is assumed, and
-    # --hardened refuses rather than hide the user's status line.
-    if not user_settings or not os.path.isfile(user_settings):
-        return None
-    try:
-        with open(user_settings, "r", encoding="utf-8") as f:
-            text = f.read()
-        if not text.strip():
-            return None
-        data = json.loads(text)
-    except (OSError, ValueError) as e:
-        if hardened and action == "install":
-            sys.stderr.write(
-                "install.sh: reading the statusLine in %s to copy it: %s\n" % (user_settings, e)
-            )
-            sys.exit(1)
-        return None
-    if not isinstance(data, dict):
-        return None
-    return data.get("statusLine")
-
-
-def install_status_line(obj):
-    line = user_status_line()
-    if line is None:
-        return
-    if "statusLine" not in obj:
-        obj["statusLine"] = line
-    elif obj["statusLine"] != line:
-        sys.stderr.write(
-            "install.sh: statusLine in %s is not the user's own; leaving it alone\n" % path
-        )
-
-
-def uninstall_status_line(obj):
-    line = user_status_line()
-    if line is not None and obj.get("statusLine") == line:
-        obj.pop("statusLine", None)
-
-
-def compute_egress_domains():
-    domains = []
-    seen = set()
-    if not allowlist_file:
-        return domains
-    with open(allowlist_file, "r", encoding="utf-8") as f:
-        for line in f:
-            d = line.strip()
-            if not d or d.startswith("#"):
-                continue
-            dl = d.lower()
-            if dl in model_hosts or dl in seen:
-                continue
-            seen.add(dl)
-            domains.append(d)
-    return domains
-
-
-GH_EXCLUDED = "gh *"
-
-
-def install_sandbox(obj):
-    sandbox = obj.setdefault("sandbox", {})
-    sandbox["enabled"] = True
-    sandbox["allowUnsandboxedCommands"] = False
-    sandbox["failIfUnavailable"] = True
-    fs = sandbox.setdefault("filesystem", {})
-    deny = fs.setdefault("denyRead", [])
-    if not isinstance(deny, list):
-        sys.stderr.write(
-            "install.sh: sandbox.filesystem.denyRead in %s is not a list; "
-            "refusing to touch it\n" % path
-        )
-        sys.exit(1)
-    if log_deny not in deny:
-        deny.append(log_deny)
-    allow = fs.setdefault("allowRead", [])
-    if not isinstance(allow, list):
-        sys.stderr.write(
-            "install.sh: sandbox.filesystem.allowRead in %s is not a list; "
-            "refusing to touch it\n" % path
-        )
-        sys.exit(1)
-    if ca_allow not in allow:
-        allow.append(ca_allow)
-    # Go CLIs such as gh cannot verify TLS certificates under the macOS
-    # sandbox; Claude Code's documented remedies are to run them outside it
-    # and to allow the trust service.
-    excluded = sandbox.setdefault("excludedCommands", [])
-    if not isinstance(excluded, list):
-        sys.stderr.write(
-            "install.sh: sandbox.excludedCommands in %s is not a list; "
-            "refusing to touch it\n" % path
-        )
-        sys.exit(1)
-    if GH_EXCLUDED not in excluded:
-        excluded.append(GH_EXCLUDED)
-    sandbox["enableWeakerNetworkIsolation"] = True
-    # Loopback, measured 2026-09-30: without allowLocalBinding the sandboxed
-    # shell cannot reach the core at all, and listing 127.0.0.1 in
-    # allowedDomains does not help. git runs the signing program inside that
-    # shell, so every agent commit would fail. This opens loopback to the
-    # agent's shell (as it was before any sandbox); innsegl's loopback
-    # surfaces authenticate their callers.
-    net = sandbox.setdefault("network", {})
-    net["allowLocalBinding"] = True
-    # sandbox.network.allowUnixSockets is deliberately never set: unset blocks
-    # every unix socket on macOS, including the container socket, and listing
-    # it would be listing the one thing this contract exists to deny.
-    if egress:
-        net["strictAllowlist"] = True
-        net["allowManagedDomainsOnly"] = True
-        # Merged, never replaced: domains the operator already allowed stay.
-        existing = net.get("allowedDomains", [])
-        if not isinstance(existing, list):
-            sys.stderr.write(
-                "install.sh: sandbox.network.allowedDomains in %s is not a list; "
-                "refusing to touch it\n" % path
-            )
-            sys.exit(1)
-        net["allowedDomains"] = existing + [
-            d for d in compute_egress_domains() if d not in existing
-        ]
-
-
-def uninstall_sandbox(obj):
-    sandbox = obj.get("sandbox")
-    if not isinstance(sandbox, dict):
-        return
-    if sandbox.get("enabled") is True:
-        sandbox.pop("enabled", None)
-    if sandbox.get("allowUnsandboxedCommands") is False:
-        sandbox.pop("allowUnsandboxedCommands", None)
-    if sandbox.get("failIfUnavailable") is True:
-        sandbox.pop("failIfUnavailable", None)
-    if sandbox.get("enableWeakerNetworkIsolation") is True:
-        sandbox.pop("enableWeakerNetworkIsolation", None)
-    excluded = sandbox.get("excludedCommands")
-    if isinstance(excluded, list) and GH_EXCLUDED in excluded:
-        excluded.remove(GH_EXCLUDED)
-        if not excluded:
-            sandbox.pop("excludedCommands", None)
-    fs = sandbox.get("filesystem")
-    if isinstance(fs, dict):
-        deny = fs.get("denyRead")
-        if isinstance(deny, list) and log_deny in deny:
-            deny.remove(log_deny)
-            if deny:
-                fs["denyRead"] = deny
-            else:
-                fs.pop("denyRead", None)
-        allow = fs.get("allowRead")
-        if isinstance(allow, list) and ca_allow in allow:
-            allow.remove(ca_allow)
-            if allow:
-                fs["allowRead"] = allow
-            else:
-                fs.pop("allowRead", None)
-        if fs:
-            sandbox["filesystem"] = fs
-        else:
-            sandbox.pop("filesystem", None)
-    net = sandbox.get("network")
-    if isinstance(net, dict):
-        if net.get("strictAllowlist") is True:
-            net.pop("strictAllowlist", None)
-        if net.get("allowManagedDomainsOnly") is True:
-            net.pop("allowManagedDomainsOnly", None)
-        if net.get("allowLocalBinding") is True:
-            net.pop("allowLocalBinding", None)
-        domains = net.get("allowedDomains")
-        if isinstance(domains, list) and domains:
-            if egress:
-                # Only the domains the same allowlist file added go; any the
-                # operator allowed themselves stay.
-                ours = set(compute_egress_domains())
-                kept = [d for d in domains if d not in ours]
-                if kept:
-                    net["allowedDomains"] = kept
-                else:
-                    net.pop("allowedDomains", None)
-            else:
-                sys.stderr.write(
-                    "install.sh: sandbox.network.allowedDomains is left as it is: "
-                    "which of them this installer added is known only from the "
-                    "allowlist file. Run --uninstall --egress-control <that file> "
-                    "to remove exactly those.\n"
-                )
-        if net:
-            sandbox["network"] = net
-        else:
-            sandbox.pop("network", None)
-    if sandbox:
-        obj["sandbox"] = sandbox
-    else:
-        obj.pop("sandbox", None)
-
-
-obj, old_text = load(path)
-before = copy.deepcopy(obj)
-
-if action == "install":
-    install_env(obj)
-    install_hooks(obj)
-    install_flags(obj)
-    if hardened:
-        install_lockdown_flags(obj)
-        install_sandbox(obj)
-        install_status_line(obj)
-    else:
-        # The route and the hooks only (RM-312): a file an earlier run
-        # locked down is brought back to that, only where a key still holds
-        # what this installer wrote.
-        uninstall_lockdown_flags(obj)
-        uninstall_sandbox(obj)
-        uninstall_status_line(obj)
-elif action == "uninstall":
-    uninstall_env(obj)
-    uninstall_hooks(obj)
-    uninstall_flags(obj)
-    uninstall_lockdown_flags(obj)
-    uninstall_sandbox(obj)
-    uninstall_status_line(obj)
-else:
-    sys.stderr.write("install.sh: internal error: unknown action %r\n" % action)
-    sys.exit(1)
-
-if obj == before:
-    print("install.sh: %s already up to date" % path)
-    sys.exit(0)
-
-# ensure_ascii=False and the file's own final newline: a file this edits
-# must differ only in what it changes, never in how unrelated text is spelled.
-new_text = json.dumps(obj, indent=2, ensure_ascii=False)
-if not old_text or old_text.endswith("\n"):
-    new_text += "\n"
-diff = list(
-    difflib.unified_diff(
-        old_text.splitlines(keepends=True),
-        new_text.splitlines(keepends=True),
-        fromfile=path,
-        tofile=path,
-    )
-)
-sys.stdout.writelines(diff)
-
-if dry_run:
-    print("install.sh: (dry run) would update %s" % path)
-    sys.exit(0)
-
-
-def writable(target):
-    d = os.path.dirname(target) or "."
-    try:
-        os.makedirs(d, exist_ok=True)
-    except OSError:
-        return False
-    try:
-        fd, tmp = tempfile.mkstemp(dir=d)
-        os.close(fd)
-        os.unlink(tmp)
-    except OSError:
-        return False
-    if os.path.isfile(target) and not os.access(target, os.W_OK):
-        return False
-    return True
-
-
-if not writable(path):
-    fd, tmp_path = tempfile.mkstemp(prefix="innsegl-managed-settings.", suffix=".json")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(new_text)
-    sys.stderr.write("install.sh: %s is not writable.\n" % path)
-    sys.stderr.write(
-        "install.sh: run this once, as an administrator, then re-run install.sh:\n\n"
-    )
-    sys.stderr.write(
-        # install -m 0644, not cp: the temp file is 0600 (mkstemp), and cp
-        # keeps that, leaving settings the harness, running as the user,
-        # cannot read.
-        "  sudo mkdir -p %s && sudo install -m 0644 %s %s\n\n"
-        % (
-            shlex.quote(os.path.dirname(path)),
-            shlex.quote(tmp_path),
-            shlex.quote(path),
-        )
-    )
-    sys.exit(1)
-
-if os.path.isfile(path):
-    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    backup = "%s.bak.%s" % (path, ts)
-    with open(path, "r", encoding="utf-8") as f:
-        original = f.read()
-    with open(backup, "w", encoding="utf-8") as f:
-        f.write(original)
-    print("install.sh: backed up %s -> %s" % (path, backup))
-
-os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-with open(path, "w", encoding="utf-8") as f:
-    f.write(new_text)
-print("install.sh: updated %s" % path)
-PYEOF
 }
 
 # ---------------------------------------------------------------------------
@@ -1003,9 +368,6 @@ do_uninstall_legacy() {
 # ---------------------------------------------------------------------------
 
 do_uninstall() {
-  echo "==> removing the managed settings this installer added"
-  connect_managed_settings uninstall
-
   local link="$BIN_DIR/innsegl-commit"
   if [ "$DRY_RUN" -eq 1 ]; then
     if [ -L "$link" ]; then
@@ -1025,6 +387,9 @@ do_uninstall() {
 
   cat <<'EOF'
 
+Managed settings on a machine are innsegl connect's: `innsegl connect
+--disconnect` removes them, including what an older install.sh wrote.
+
 This does not stop or delete the running stack. To do that:
   make innsegl-down                stop innsegl, keep the ledger and the signed history
   make innsegl-purge                stop innsegl AND delete its data volumes
@@ -1043,29 +408,23 @@ print_finish() {
   # opened at the IP literal cannot complete a passkey ceremony against an
   # RP ID of "localhost" at all; this is the address that actually works.
   local dashboard="http://localhost:8082/"
+  cat <<EOF
+
+Ready. The server is up; this installer writes no managed settings.
+Dashboard:
+  $dashboard
+
+To record agents on a machine, this one included: sign in to the
+dashboard, open Account, choose "Connect a machine", and run the command it
+shows on that machine. It looks like:
+  innsegl connect https://<core-name>:28095 --token <ie_...> --ca-fingerprint sha256:<hex>
+Add --hardened to lock the harness down, and --egress-control <file> to
+limit the sandbox's network to the hosts in a file.
+EOF
   if [ "$LOCAL_CLIENT" -eq 1 ]; then
     cat <<EOF
-
-Ready. Managed settings:
-  $MANAGED_SETTINGS
-Dashboard:
-  $dashboard
-
-Claude Code's model traffic now runs through the gateway at $GATEWAY_URL,
-and an agent's git commit in a linked repository is signed automatically.
-EOF
-  else
-    cat <<EOF
-
-Ready. The server is up; no managed settings were written on this machine.
-Dashboard:
-  $dashboard
-
-To connect a client machine, mint a token here:
-  innsegl accounts enrol-token --account <id> --by <user> --repos <a,b|*>
-then, on that machine:
-  innsegl connect https://<core-name>:28095 --token <ie_...> --ca <copy of $CA_PEM>
-To use the harness on this machine too, run install.sh --local-client.
+For this machine the core is https://localhost:28095, and its CA is
+  $CA_PEM
 EOF
   fi
   # Only while no account exists yet (scripts/setup-link.sh asks the API
@@ -1077,138 +436,8 @@ EOF
   run_step "$SETUP_LINK_CMD" || true
 }
 
-# verify_harness_loaded proves Claude Code read the managed settings (#423).
-# Claude Code drops a WHOLE settings file when one value has the wrong type,
-# and says nothing: measured 2026-09-30, `attribution.commit: false` left the
-# gateway address, the hook and the sandbox all unloaded, and a session under
-# it committed unsigned with nothing recorded. Every key of the file loads or
-# none does, so one of them is enough to tell: the harness's own debug log
-# names the extra CA it loaded from the file's env. `mcp list` reads the
-# settings and makes no model call.
-verify_harness_loaded() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    return 0
-  fi
-  local claude_bin log
-  if ! claude_bin="$(command -v claude 2>/dev/null)"; then
-    echo "install.sh: Claude Code (claude) is not on PATH, so whether it loads"
-    echo "  $MANAGED_SETTINGS could not be checked. Run this again once it is installed."
-    return 0
-  fi
-  log="$(mktemp "${TMPDIR:-/tmp}/innsegl-install-verify.XXXXXX")"
-  local flags=()
-  # The system path is read by the harness on its own; any other path is
-  # read only when named.
-  if [ "$MANAGED_SETTINGS" != "$(default_managed_settings_path)" ]; then
-    flags=(--settings "$MANAGED_SETTINGS")
-  fi
-  "$claude_bin" ${flags[@]+"${flags[@]}"} --setting-sources "" --debug-file "$log" mcp list \
-    </dev/null >/dev/null 2>&1 || true
-  if grep -qF "extraCertsPath=$CA_PEM" "$log" 2>/dev/null; then
-    rm -f "$log"
-    echo "install.sh: Claude Code loaded $MANAGED_SETTINGS"
-    return 0
-  fi
-  rm -f "$log"
-  {
-    echo "install.sh: Claude Code did NOT load $MANAGED_SETTINGS."
-    echo "  It drops the whole file, silently, when any one value has the wrong type,"
-    echo "  so the gateway, the hook and the sandbox are all absent. Check every key"
-    echo "  in the file against the Claude Code settings reference, then run this again."
-  } >&2
-  exit 1
-}
-
-# The managed settings send every Claude Code request on this machine to the
-# gateway. Written while it is down, they break every session until it comes
-# back. So they are written only once it has answered (ENF-007).
-check_gateway_answers() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    printf 'install.sh: (dry run) would check that %s answers\n' "$GATEWAY_URL"
-    return 0
-  fi
-  local tries=0
-  while :; do
-    if [ -n "$GATEWAY_PROBE_CMD" ]; then
-      eval "$GATEWAY_PROBE_CMD" && return 0
-    elif curl -s -o /dev/null --max-time 5 --cacert "$CA_PEM" "$GATEWAY_URL/"; then
-      return 0
-    fi
-    tries=$((tries + 1))
-    [ "$tries" -lt "$GATEWAY_TRIES" ] || break
-    sleep 2
-  done
-  echo "install.sh: the gateway at $GATEWAY_URL did not answer (CA $CA_PEM)." >&2
-  echo "  The managed settings were NOT written: they would send every Claude Code" >&2
-  echo "  request here. Check that innsegl-mcp runs the gateway, then run this again." >&2
-  exit 1
-}
-
-# The settings make the harness run this binary before every Bash call, and
-# a PreToolUse hook that exits 2 blocks the call. A binary built before the
-# hook command existed does exactly that (ENF-008), so it is run once here,
-# on an empty event, before anything names it.
-check_hook_runs() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    printf 'install.sh: (dry run) would check that %s runs as the hook\n' "$INNSEGL_BIN_PATH"
-    return 0
-  fi
-  local err
-  if ! err="$(printf '{}' | "$INNSEGL_BIN_PATH" hook pre-tool-use 2>&1 >/dev/null)"; then
-    echo "install.sh: $INNSEGL_BIN_PATH does not run as the PreToolUse hook:" >&2
-    printf '  %s\n' "$err" >&2
-    echo "  The managed settings were NOT written: that hook would block every Bash call." >&2
-    echo "  Run \`make build\`, then run this again." >&2
-    exit 1
-  fi
-}
-
-# do_pause_or_resume moves the managed settings to <path>.paused and back.
-#
-# The gateway refuses every model request while the stack is down (ADR-0058
-# decision 11), and the managed settings are what route the harness through
-# it, so an operator who needs the harness while the stack is down sets them
-# aside. This does it as one reversible step instead of a hand edit: the file
-# is kept byte for byte, and --resume puts back exactly what was there.
-# Writing the system path needs an administrator, so when it is not writable
-# this prints the one command to run rather than asking for a password.
-do_pause_or_resume() {
-  local from to verb
-  if [ "$PAUSE" -eq 1 ]; then
-    from="$MANAGED_SETTINGS"; to="$MANAGED_SETTINGS.paused"; verb="paused"
-    [ -e "$from" ] || { echo "install.sh: $from does not exist; there is nothing to pause" >&2; exit 1; }
-  else
-    from="$MANAGED_SETTINGS.paused"; to="$MANAGED_SETTINGS"; verb="resumed"
-    [ -e "$from" ] || { echo "install.sh: nothing is paused: $from does not exist" >&2; exit 1; }
-  fi
-  [ -e "$to" ] && { echo "install.sh: $to already exists; refusing to overwrite it" >&2; exit 1; }
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo "install.sh: dry run: would move $from -> $to"
-    return
-  fi
-  if python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$from" "$to" 2>/dev/null; then
-    echo "install.sh: $verb: $from -> $to"
-  else
-    echo "install.sh: $(dirname "$to") is not writable. Run this once, as an administrator:" >&2
-    echo >&2
-    echo "  sudo mv $(printf '%q' "$from") $(printf '%q' "$to")" >&2
-    echo >&2
-    exit 1
-  fi
-  echo "install.sh: restart Claude Code for it to take effect"
-}
-
 main() {
   parse_args "$@"
-
-  if [ "$PAUSE" -eq 1 ] && [ "$RESUME" -eq 1 ]; then
-    echo "install.sh: --pause and --resume cannot both be given" >&2
-    exit 2
-  fi
-  if [ "$PAUSE" -eq 1 ] || [ "$RESUME" -eq 1 ]; then
-    do_pause_or_resume
-    exit 0
-  fi
 
   if [ "$UNINSTALL_LEGACY" -eq 1 ]; then
     do_uninstall_legacy
@@ -1218,19 +447,6 @@ main() {
   fi
   if [ "$UNINSTALL" -eq 1 ] || [ "$UNINSTALL_LEGACY" -eq 1 ]; then
     exit 0
-  fi
-
-  if [ -n "$EGRESS_FILE" ] && [ "$LOCAL_CLIENT" -ne 1 ]; then
-    echo "install.sh: --egress-control shapes the managed settings, which only --local-client writes" >&2
-    exit 2
-  fi
-  if [ "$HARDENED" -eq 1 ] && [ "$LOCAL_CLIENT" -ne 1 ]; then
-    echo "install.sh: --hardened shapes the managed settings, which only --local-client writes" >&2
-    exit 2
-  fi
-  if [ -n "$EGRESS_FILE" ] && [ "$HARDENED" -ne 1 ]; then
-    echo "install.sh: --egress-control shapes the sandbox, which only --hardened writes" >&2
-    exit 2
   fi
 
   check_prereqs
@@ -1243,24 +459,6 @@ main() {
 
   echo "==> building the innsegl binary"
   run_step "$BUILD_CMD"
-
-  if [ "$LOCAL_CLIENT" -eq 1 ]; then
-    check_hook_runs
-
-    echo "==> checking the gateway answers"
-    check_gateway_answers
-
-    if [ "$HARDENED" -eq 1 ]; then
-      echo "==> writing the managed settings (--local-client --hardened)"
-    else
-      echo "==> writing the managed settings (--local-client)"
-    fi
-    connect_managed_settings install
-    verify_harness_loaded
-  else
-    echo "==> not writing managed settings: this is the server install"
-    echo "    (client machines run \`innsegl connect\`; --local-client makes this machine one too)"
-  fi
 
   if [ "${#DIRS[@]}" -gt 0 ]; then
     echo "==> linking projects"

@@ -5,8 +5,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"os"
@@ -107,11 +105,11 @@ func TestHookSessionNeverBlocksTheHarness(t *testing.T) {
 	}
 }
 
-// When the gateway cannot be reached at all -- Docker or the stack is down --
-// every model request would fail with a bare "connection refused". Before a
-// user turn, the hook stops the prompt instead (exit 2, which the harness
-// shows the person) and says what is down and the two ways out. The prompt
-// would have failed anyway; this only makes the failure readable.
+// When the client service cannot be reached at all, every model request
+// would fail with a bare "connection refused": the harness reaches the model
+// through it. Before a user turn, the hook stops the prompt instead (exit 2,
+// which the harness shows the person) and says what is down and the ways
+// out. The core being down never stops a prompt; the client journals.
 func TestHookSessionStopsAPromptWhenTheGatewayIsUnreachable(t *testing.T) {
 	_, post := capturePosts(&gatewayUnreachableError{err: errors.New("dial tcp 127.0.0.1:28095: connect: connection refused")})
 	in := `{"session_id":"7dc5d783-9896-4aef-84d9-a82114505fff","cwd":"/w","hook_event_name":"UserPromptSubmit"}`
@@ -123,7 +121,7 @@ func TestHookSessionStopsAPromptWhenTheGatewayIsUnreachable(t *testing.T) {
 		t.Fatalf("exit = %d, want %d", code, exitBlock)
 	}
 	msg := errOut.String()
-	for _, want := range []string{"not answering", "connection refused", "make start", "install.sh --pause"} {
+	for _, want := range []string{"client service", "not answering", "connection refused", "innsegl status", "innsegl connect --pause"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message %q does not say %q", msg, want)
 		}
@@ -152,26 +150,6 @@ func TestHookSessionStopsOnlyAUserTurnAndOnlyWhenUnreachable(t *testing.T) {
 				t.Errorf("exit = %d, want 0", code)
 			}
 		})
-	}
-}
-
-// A gateway that answers with a certificate this machine does not trust is
-// up; what is wrong is the trust root. The message says so and names the fix.
-func TestHookSessionNamesAnUntrustedGatewayCertificate(t *testing.T) {
-	_, post := capturePosts(&gatewayUnreachableError{err: &tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}})
-	in := `{"session_id":"7dc5d783-9896-4aef-84d9-a82114505fff","cwd":"/w","hook_event_name":"UserPromptSubmit"}`
-	var errOut bytes.Buffer
-
-	if code := runHookSession(strings.NewReader(in), &bytes.Buffer{}, &errOut, env(nil), post); code != exitBlock {
-		t.Fatalf("exit = %d, want %d", code, exitBlock)
-	}
-	for _, want := range []string{"certificate", "install.sh"} {
-		if !strings.Contains(errOut.String(), want) {
-			t.Errorf("message %q does not say %q", errOut.String(), want)
-		}
-	}
-	if strings.Contains(errOut.String(), "make start") {
-		t.Errorf("message %q tells the person to start a stack that is already up", errOut.String())
 	}
 }
 

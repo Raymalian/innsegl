@@ -15,7 +15,7 @@ A run records, from a fresh Claude Code in the current directory:
     web fetch, network from the agent's shell, and an MCP call when one is
     connected
 
-Run it on a machine without innsegl (pause it: `sudo ./install.sh --pause`)
+Run it on a machine without innsegl (pause it: `sudo innsegl connect --pause`)
 and with it, on each new Claude Code version. It needs a signed-in Claude
 Code and a terminal; it is not a CI test. Extra environment for a run is
 passed through, so a setup can be described entirely by its environment.
