@@ -435,8 +435,10 @@ INNSEGL_MCP_ALSO ?=
 # the core keeps, and no branch until clients push their branches (#465).
 # Pointed at `main` it would report the branch unreadable every cycle and
 # record nothing. Name a branch here once clients push it.
+# Both or neither: the reconciler refuses one without the other, and it runs
+# inside the core (test/deploy TestTheRebaseDefaultsAreSetTogether).
 INNSEGL_REBASE_BRANCH ?=
-INNSEGL_REBASE_REPOS ?= $(REPO)
+INNSEGL_REBASE_REPOS ?=
 # RM-104 (#169): where the reconciler finds the retained bodies INSIDE the
 # container. innsegl.yml mounts the host path read-only at /harness-log.
 # RM-104 (#169). Safe to enable because the check now only COUNTS: it appends
@@ -558,8 +560,10 @@ update:
 	@docker ps --format '{{.Names}}' | grep -qx innsegl-spire-server && docker ps --format '{{.Names}}' | grep -qx innsegl-sigstore-rekor || \
 	  { echo "make update: SPIRE or Rekor is not running; run make start"; exit 2; }
 	@deployed=$$(cat '$(DEPLOYED_FILE)' 2>/dev/null); \
-	 if [ "$$deployed" = "$(DEPLOY_COMMIT)" ]; then \
+	 core=$$(docker inspect -f '{{.State.Status}} restarting={{.State.Restarting}}' innsegl-mcp 2>/dev/null); \
+	 if [ "$$deployed" = "$(DEPLOY_COMMIT)" ] && [ "$$core" = "running restarting=false" ]; then \
 	   echo "make update: already up to date ($(DEPLOY_COMMIT)); nothing to do"; exit 0; fi; \
+	 [ "$$deployed" = "$(DEPLOY_COMMIT)" ] && echo "make update: the core is $${core:-not there}; starting it again"; \
 	 echo "make update: deployed $${deployed:-an unrecorded checkout}, checkout is $(DEPLOY_COMMIT)"; \
 	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services && \
 	 mkdir -p "$$(dirname '$(DEPLOYED_FILE)')" && echo '$(DEPLOY_COMMIT)' > '$(DEPLOYED_FILE)'
