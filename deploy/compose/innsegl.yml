@@ -1196,12 +1196,11 @@ services:
       # file contents and commands, so it stays on the operator's own disk.
       # Unset, the tool refuses every call by name (#211).
       INNSEGL_MCP_LOG_DIR: /agentlog
-      # WHERE `observe_session` KEEPS THE SESSION-TO-RUN MAPPING (RM-128,
-      # #207). A named volume: nothing outside this process reads it. It
-      # outlives the stack on purpose; a mapping thrown away is a run nothing
-      # will ever retire. `docker compose down -v` removes it, and that is the
-      # one command that should.
-      INNSEGL_MCP_SESSION_DIR: /sessions
+      # No INNSEGL_MCP_SESSION_DIR: `observe_session` resolves a session's
+      # workspace in a host projects folder, which the core no longer mounts
+      # (it reads only the mirror, ADR-0065), and `innsegl serve` refuses a
+      # session folder without one. The gateway tracks sessions from the
+      # traffic instead (ADR-0058).
 
       # The working trees the `sign_commit` MCP tool and demo-agent use. A
       # repository reader on the core reads the mirror above, never this.
@@ -1270,8 +1269,6 @@ services:
       # writes the bodies, and a read path that could delete would be one
       # misconfiguration away from pruning on another schedule.
       - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/agentlog
-      # The session markers. See INNSEGL_MCP_SESSION_DIR above.
-      - innsegl-sessions:/sessions
       # The reconciler runs in this process by default (ADR-0056), and its
       # writes pass reads the bodies here, READ-ONLY, as innsegl-reconciler
       # mounts them. The read-write mount above is for writing them.
@@ -2259,8 +2256,9 @@ volumes:
   # MOUNTED BY: innsegl-mcp (rw), demo-agent (rw).
   innsegl-workspace:
   # observe_session's session-to-run mapping (RM-128, #207; wired by #211).
-  # MOUNTED BY: innsegl-mcp (rw). Nothing else, ever -- no other component has
-  # any business knowing which harness session a run came from.
+  # MOUNTED BY: nothing since the core stopped mounting a projects folder.
+  # Declared still, so a deployment's existing mappings are not deleted by a
+  # compose file that forgot the volume; `docker compose down -v` removes it.
   innsegl-sessions:
 
   # #264's PUBLIC key set: the keys whose repository-scoped credentials the

@@ -81,12 +81,13 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 	}
 
 	// What the overlay carried besides the projects folder is the core's own,
-	// and a plain `up` of the one file has it: the bodies, the session
-	// markers, and the query API's read of them.
+	// and a plain `up` of the one file has it: the bodies and the query
+	// API's read of them. Not the session markers: they need a projects
+	// folder (TestTheCoreSetsNoSessionFolderWithoutAProjectsFolder).
 	plain := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
 	for service, want := range map[string]map[string]bool{
 		// target -> read-only
-		"innsegl-mcp": {"/agentlog": false, "/sessions": false, "/harness-log": true},
+		"innsegl-mcp": {"/agentlog": false, "/harness-log": true},
 		"innsegl-api": {"/agentlog": true, "/message-key": true, "/mirror": true},
 	} {
 		got := map[string]bool{}
@@ -104,13 +105,35 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 		}
 	}
 	for service, keys := range map[string][]string{
-		"innsegl-mcp": {"INNSEGL_MCP_LOG_DIR", "INNSEGL_MCP_SESSION_DIR"},
+		"innsegl-mcp": {"INNSEGL_MCP_LOG_DIR"},
 		"innsegl-api": {"INNSEGL_API_LOG_DIR", "INNSEGL_API_SNAPSHOT_DIR", "INNSEGL_API_MESSAGE_KEY_DIR"},
 	} {
 		for _, key := range keys {
 			if v, ok := plain.env(service, key); !ok || v == "" {
 				t.Errorf("a plain up of innsegl.yml gives %s no %s", service, key)
 			}
+		}
+	}
+}
+
+// The core refuses a session folder without a host projects folder
+// (cmd/innsegl serve.go, validate): observe_session resolves workspaces
+// there. With the projects folder gone from the core, a session folder left
+// in innsegl.yml crash-looped innsegl-mcp on every host (measured
+// 2026-10-04). The two are set together or not at all.
+func TestTheCoreSetsNoSessionFolderWithoutAProjectsFolder(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := composeUsable(ctx); err != nil {
+		t.Skipf("skipping: %v", err)
+	}
+	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments",
+		[]string{"init", "separate", "demo", "canary"}, "deploy/compose/innsegl.yml")
+	for name, svc := range cfg.Services {
+		session := svc.Environment["INNSEGL_MCP_SESSION_DIR"]
+		projects := svc.Environment["INNSEGL_HOST_PROJECTS"]
+		if session != nil && *session != "" && (projects == nil || *projects == "") {
+			t.Errorf("%s sets INNSEGL_MCP_SESSION_DIR=%s without INNSEGL_HOST_PROJECTS; innsegl serve refuses to start", name, *session)
 		}
 	}
 }
