@@ -295,10 +295,14 @@ type interpolatedService struct {
 	// options are never read, only the membership, which is the access-control
 	// list doc 05 §1 asks for.
 	Networks map[string]any `json:"networks"`
-	// Volumes are read for their targets only: where a service expects a
-	// directory to be, which a service folded into another must keep.
+	// Volumes are read for their targets — where a service expects a
+	// directory to be, which a service folded into another must keep — and
+	// for what is mounted there and whether it can be written.
 	Volumes []struct {
-		Target string `json:"target"`
+		Type     string `json:"type"`
+		Source   string `json:"source"`
+		Target   string `json:"target"`
+		ReadOnly bool   `json:"read_only"`
 	} `json:"volumes"`
 	// Ports are the resolved `ports:` publish entries. Read for HostIP and
 	// Target: whether a container-side port is reachable from the host at

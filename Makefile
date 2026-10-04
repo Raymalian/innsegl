@@ -327,19 +327,15 @@ innsegl-up: sigstore-up
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) up -d
 
 # ---------------------------------------------------------------------------
-# innsegl-up-here: the stack, signing in THIS working tree.
+# innsegl-up-here: the stack, built from THIS working tree.
 #
-# Without it, sign_commit resolves a repository beneath the MCP's own empty
-# workspace volume, so signing one commit meant copying the repository in,
-# staging there, calling the tool, and tarring .git back out. Four of seven
-# steps were moving files between two copies of one repository.
+# The core reads repositories only from its mirror, which clients push to
+# (ADR-0065). It mounts no folder of the host's projects: on a core host that
+# folder is the core's own disk, not any client's.
 #
-# REPO and REPO_PATH default to this checkout, read from git rather than
+# REPO defaults to this checkout's identifier, read from git rather than
 # assumed: the identifier comes from `origin`, so a fork or a rename is
 # followed instead of hardcoded.
-#
-# Read deploy/compose/innsegl.workrepo.yml before using it. It gives the MCP
-# write access to the tree you are editing, which is a deliberate choice.
 # ---------------------------------------------------------------------------
 # The sed delimiter is `|` and not `#`, and that is the whole trick: `#` starts
 # a comment in a Makefile even inside $(shell ...), so make never sees the
@@ -348,27 +344,6 @@ innsegl-up: sigstore-up
 # same class of reason -- make counts them.
 #
 # git@host:org/name.git and https://host/org/name.git both become host/org/name.
-#
-# INNSEGL_PROJECTS is TWO things and has to stay one variable: the directory
-# mounted into the containers, and — since RM-126 — what the MCP is told that
-# mount corresponds to, as $INNSEGL_HOST_PROJECTS. deploy/compose/innsegl.workrepo.yml
-# writes both from this value, so a deployment cannot mount one directory and
-# describe another. `describe_workspace` refuses rather than guess when it is
-# unset, so the failure of forgetting it is a named refusal and not a wrong
-# repository in the ledger.
-INNSEGL_PROJECTS ?= $(HOME)/Applications
-# The repository's MAIN working tree, which is NOT the tree this command was
-# run from. `git rev-parse --show-toplevel` answers the latter, so running
-# bring-up from inside a linked worktree linked the WORKTREE — and because the
-# link is what every caller on the machine resolves through, one wrong link
-# stopped signing everywhere, not just in the worktree that made it.
-#
-# `git worktree list` reports the main worktree first from inside any linked
-# one. That is the same rule mainWorktreeOf uses in Go; keeping one rule means
-# the Makefile and the MCP cannot disagree about which tree is the repository.
-# The rule itself lives in scripts/repo-main-worktree.sh, so this and the
-# refusal in innsegl-link below cannot drift apart.
-REPO_PATH ?= $(shell $(CURDIR)/scripts/repo-main-worktree.sh)
 
 # INNSEGL_BUILD_SERVICES builds each image the stack runs exactly once. Several
 # services share one image, and `compose build` with no names builds and
@@ -399,32 +374,6 @@ GO_IMAGE_INPUTS := cmd internal migrations go.mod go.sum Dockerfile
 export BUILDX_NO_DEFAULT_ATTESTATIONS := 1
 GO_IMAGE_COMMIT := $(shell git log -1 --format=%h --abbrev=12 -- $(GO_IMAGE_INPUTS) 2>/dev/null)$(shell git diff --quiet HEAD -- $(GO_IMAGE_INPUTS) 2>/dev/null || echo -dirty)
 REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
-
-# The proof BFF serves an ALLOWLIST of repositories, not whatever is on disk,
-# and a repository missing from it makes every proof request about it a 404.
-# cmd/innsegl/api.go says why that is bad: it "reads as a verdict about the
-# commit and is a statement about the configuration". Measured 2026-09-08 --
-# the dashboard's "Verify this commit" answered 404 Not Found for a perfectly
-# good commit, because the list still held only the demo repository.
-#
-# So the list is computed from the projects that are actually there: every git
-# repository directly under INNSEGL_PROJECTS that has an origin, mapped to its
-# path under the /projects mount. Sorted, so the value does not churn between
-# runs and force a needless recreate.
-#
-# /projects/<dir> and NOT /work/<id>: the workspace path is a symlink that only
-# exists after `make innsegl-link`, so a repository would be in the allowlist
-# and still 404 until someone linked it. The API reads the real directory.
-API_REPOS = $(shell { echo 'github.com/innsegl-demo/scratch|0|/work/github.com/innsegl-demo/scratch'; \
-  for d in '$(INNSEGL_PROJECTS)'/*/; do \
-    id=$$(git -C "$$d" remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||'); \
-    [ -n "$$id" ] || continue; \
-    base=$$(basename "$$d"); \
-    name=$$(echo "$$id" | sed 's|.*/||'); \
-    if [ "$$base" = "$$name" ]; then k=0; else k=1; fi; \
-    echo "$$id|$$k|/projects/$$base"; \
-  done; } | sort -t'|' -k1,1 -k2,2n -k3,3 \
-    | awk -F'|' '!seen[$$1]++ { print $$1 "=" $$3 }' | paste -sd, -)
 
 # THE IDENTITY LISTENER, on for this target and not for the shipped default.
 #
@@ -480,10 +429,16 @@ INNSEGL_MCP_ALSO ?=
 # Those fifteen cannot be recovered: they were signed before schema 2, so no
 # patch_id was ever recorded for them. Everything signed from the cutover
 # onwards can be, and this is what does it.
-INNSEGL_REBASE_BRANCH ?= main
+#
+# OFF by default since the core reads repositories only from its mirror
+# (ADR-0065): a mirror holds the commits clients push and the signed commits
+# the core keeps, and no branch until clients push their branches (#465).
+# Pointed at `main` it would report the branch unreadable every cycle and
+# record nothing. Name a branch here once clients push it.
+INNSEGL_REBASE_BRANCH ?=
 INNSEGL_REBASE_REPOS ?= $(REPO)
 # RM-104 (#169): where the reconciler finds the retained bodies INSIDE the
-# container. The host path is mounted read-only by innsegl.workrepo.yml.
+# container. innsegl.yml mounts the host path read-only at /harness-log.
 # RM-104 (#169). Safe to enable because the check now only COUNTS: it appends
 # nothing to the chain and therefore cannot accuse anyone. It was briefly
 # enabled while it still appended and wrote 617 findings from 1121 claims —
@@ -491,10 +446,11 @@ INNSEGL_REBASE_REPOS ?= $(REPO)
 # had moved. What is worth watching is the corroboration RATE, not any single
 # uncorroborated write.
 INNSEGL_WRITES_LOG_DIR ?= /harness-log
-# The repositories RM-104's check may read: every project the API already
-# serves, because that is where agents WORK. The rebase list is this repository
-# alone, which is the wrong set — measured: 0 of 66 tool-call runs were in it.
-INNSEGL_WRITES_REPOS ?= $(shell printf '%s' '$(API_REPOS)' | tr ',' '\n' | cut -d= -f1 | paste -sd, -)
+# The repositories RM-104's check may read, read from the core's mirror. Name
+# the repositories agents WORK in: empty falls back to the rebase list, which
+# is this repository alone and the wrong set — measured: 0 of 66 tool-call
+# runs were in it.
+INNSEGL_WRITES_REPOS ?=
 
 ## test-clean: remove containers a killed test run left behind
 #
@@ -513,7 +469,7 @@ test-clean:
 	  docker rm --force --volumes $$ids >/dev/null; fi
 	@docker network prune -f >/dev/null 2>&1 || true
 
-## innsegl-up-here: bring the stack up signing in this working tree, not a copy
+## innsegl-up-here: bring the stack up, built from this working tree
 innsegl-up-here: sigstore-up innsegl-here-services
 
 # innsegl-here-services: innsegl's own services in THIS working tree, built
@@ -521,7 +477,6 @@ innsegl-up-here: sigstore-up innsegl-here-services
 # are. innsegl-up-here starts those first; `make update` assumes they run.
 innsegl-here-services:
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
-	@echo "signing in $(REPO_PATH)  as  $(REPO)"
 	@# The stack's host folders are made here, as the user running make, for
 	@# the reason innsegl-backup gives: a bind-mount source that does not exist
 	@# is created by the runtime, and on Linux that means owned by root and
@@ -534,8 +489,6 @@ innsegl-here-services:
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' \
-	  INNSEGL_PROJECTS='$(INNSEGL_PROJECTS)' \
-	  INNSEGL_API_REPOS='$(API_REPOS)' \
 	  INNSEGL_MCP_ADMIN_LISTEN='$(INNSEGL_MCP_ADMIN_LISTEN)' \
 	  INNSEGL_MCP_ALSO='$(INNSEGL_MCP_ALSO)' \
 	  INNSEGL_REBASE_BRANCH='$(INNSEGL_REBASE_BRANCH)' \
@@ -543,20 +496,14 @@ innsegl-here-services:
 	  INNSEGL_WRITES_LOG_DIR='$(INNSEGL_WRITES_LOG_DIR)' \
 	  INNSEGL_WRITES_REPOS='$(INNSEGL_WRITES_REPOS)' \
 	  INNSEGL_LOG_DIR='$(INNSEGL_LOG_DIR)' \
-	  $(INNSEGL_COMPOSE) -f deploy/compose/innsegl.workrepo.yml up -d
-	@$(MAKE) --no-print-directory innsegl-link DIR='$(REPO_PATH)'
+	  $(INNSEGL_COMPOSE) up -d
 
 # ---------------------------------------------------------------------------
-# innsegl-link: make one repository signable, without restarting anything.
+# innsegl-link: install the commit hook in one repository on this machine.
 #
-# The MCP resolves `host/org/name` beneath /work. This puts a symlink there
-# pointing into the projects mount, so the repository becomes signable while
-# the stack is running. A mount per repository would need the container
-# recreated to add one.
-#
-# The identifier is read from that repository's own `origin` rather than from
-# its directory name, because a clone's directory may be named anything and on
-# a real machine several of them do not match.
+# It is `innsegl link <dir>` (ADR-0059): the repository's prepare-commit-msg
+# hook, and nothing else about it. The core needs nothing per repository; a
+# repository reaches it when the client pushes it to the mirror (ADR-0065).
 # ---------------------------------------------------------------------------
 
 # ===========================================================================
@@ -567,7 +514,7 @@ innsegl-here-services:
 # stack, documented and unchanged; these are the easy path onto it.
 #
 #   make start                      bring it up, ready to sign
-#   make link DIR=~/Applications/x  make a project signable
+#   make link DIR=~/Applications/x  install the commit hook in a project
 #   make sign -- -m "message"       commit, signed
 #
 # The opinions baked in here, and each is a real choice rather than a default
@@ -578,8 +525,6 @@ innsegl-here-services:
 #     off can sign nothing.
 #   - the sealer and the reconciler run inside the MCP. That is innsegl.yml's
 #     own default (ADR-0056), not a setting of this target.
-#   - your projects are mounted. Signing in a copy of your repository was four
-#     of the seven steps this used to take.
 #   - Rekor's host port is chosen at run time from what is free. 3000 is the
 #     compose default and is taken by a great many development servers; the
 #     failure is a bind error during bring-up that reads like a broken stack.
@@ -588,13 +533,13 @@ innsegl-here-services:
 ## start: bring the whole thing up, ready to sign, with no setup
 start:
 	@port=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'); \
-	 echo "innsegl: rekor on 127.0.0.1:$$port, projects from $(INNSEGL_PROJECTS)"; \
+	 echo "innsegl: rekor on 127.0.0.1:$$port"; \
 	 INNSEGL_REKOR_PORT=$$port \
 	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 \
 	 $(MAKE) --no-print-directory innsegl-up-here
 	@echo
 	@echo "ready. Next:"
-	@echo "   make link DIR=~/Applications/<project>     make another project signable"
+	@echo "   make link DIR=~/Applications/<project>     install the commit hook in a project"
 	@echo "   make sign -- -m 'your message'             commit, signed"
 	@# #445, ADR-0062's 2026-10-01 amendment: while no account exists yet,
 	@# print the one-time setup link rather than making the operator run the
@@ -621,7 +566,7 @@ update:
 	@echo
 	@echo "updated: only the services whose image changed were restarted; the trust services were not touched"
 
-## link: make a project signable — make link DIR=~/Applications/foo
+## link: install the commit hook in a project — make link DIR=~/Applications/foo
 link:
 	@$(MAKE) --no-print-directory innsegl-link DIR='$(DIR)'
 
@@ -629,7 +574,7 @@ link:
 sign:
 	@scripts/innsegl-commit.sh $(filter-out $@,$(MAKECMDGOALS)) $(ARGS)
 
-## innsegl-link: make a repository signable — make innsegl-link DIR=~/Applications/foo
+## innsegl-link: install the commit hook in a repository — make innsegl-link DIR=~/Applications/foo
 # WHERE THE SIGNER LIVES, and it is not in this repository.
 #
 # The harness gate refuses a plain `git commit` and tells the agent to sign
@@ -652,29 +597,22 @@ innsegl-install-signer:
 	  && echo "innsegl-commit -> $$(command -v innsegl-commit)" \
 	  || echo "installed to $(INNSEGL_BIN)/innsegl-commit, which is NOT on your PATH"
 
+# The innsegl binary `innsegl-link` runs: the one `make build` writes here,
+# the same default install.sh uses.
+INNSEGL_BIN_PATH ?= $(CURDIR)/$(BINARY)
+
 innsegl-link:
 	@test -n "$(DIR)" || { echo 'innsegl-link: pass DIR=<path to a git repository>'; exit 2; }
 	@d="$$(cd '$(DIR)' && pwd -P)"; \
-	 id="$$(git -C "$$d" remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')"; \
-	 test -n "$$id" || { echo "innsegl-link: $$d has no origin remote"; exit 2; }; \
 	 main="$$($(CURDIR)/scripts/repo-main-worktree.sh "$$d" || true)"; \
 	 if [ -n "$$main" ] && [ "$$main" != "$$d" ]; then \
 	   echo "innsegl-link: $$d is a linked worktree, not a repository."; \
-	   echo "  Linking a worktree makes the wrong path signable, and every caller on this"; \
-	   echo "  machine resolves through that one link — so signing breaks everywhere, not"; \
-	   echo "  only here, and the failure shows up later as a doubled path in someone"; \
-	   echo "  else's signing error."; \
+	   echo "  A worktree shares its repository's hooks, so the hook belongs to the"; \
+	   echo "  repository; linking the worktree path names the wrong tree."; \
 	   echo "  Link the repository instead:  make innsegl-link DIR=$$main"; \
 	   exit 2; \
 	 fi; \
-	 base="$$(cd '$(INNSEGL_PROJECTS)' && pwd -P)"; \
-	 case "$$d" in "$$base"/*) : ;; *) echo "innsegl-link: $$d is not under INNSEGL_PROJECTS ($$base); the MCP would see a dangling link"; exit 2 ;; esac; \
-	 rel="$${d#$$base/}"; \
-	 docker exec innsegl-mcp sh -c "mkdir -p /work/$$(dirname $$id) && rm -rf /work/$$id && ln -s /projects/$$rel /work/$$id" \
-	   || { echo 'innsegl-link: is the stack up? make innsegl-up-here'; exit 1; }; \
-	 docker exec innsegl-mcp test -e "/work/$$id/.git" \
-	   || { echo "innsegl-link: linked, but /work/$$id/.git does not resolve — is $$d inside INNSEGL_PROJECTS?"; exit 1; }; \
-	 echo "linked  $$id  ->  $$rel"
+	 '$(INNSEGL_BIN_PATH)' link "$$d"
 
 # ---------------------------------------------------------------------------
 # The CA's key custody — rung 3 (RM-147, #238). OPT-IN, and nothing above
@@ -833,7 +771,6 @@ innsegl-verify-commit:
 	  --network innsegl-sigstore-published \
 	  --user 1000:1000 \
 	  --volume innsegl-core_innsegl-workspace:/work:ro \
-	  --volume '$(INNSEGL_PROJECTS)':/projects:ro \
 	  --env INNSEGL_FULCIO_URL=http://fulcio:5555 \
 	  --env INNSEGL_REKOR_URL=http://rekor:3000 \
 	  --env INNSEGL_OIDC_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \

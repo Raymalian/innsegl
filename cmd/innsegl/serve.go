@@ -153,9 +153,10 @@ const (
 	//
 	// The HOST ROOT has no constant here on purpose. `mcp.EnvHostProjects` is
 	// the name describe_workspace itself reads when nothing is installed over
-	// it, and deploy/compose/innsegl.workrepo.yml already sets that name beside
-	// the mount it is a translation of. A second spelling would be a deployment
-	// that can set the wrong one.
+	// it, and a single-host deployment that mounts its projects sets that name
+	// beside the mount it is a translation of. A second spelling would be a
+	// deployment that can set the wrong one. The hosted core mounts no
+	// projects folder (ADR-0065), so there the tool refuses by name.
 	//
 	// envProjectsMount is where that same directory is mounted INSIDE this
 	// process's filesystem. It defaults to what the compose override mounts it

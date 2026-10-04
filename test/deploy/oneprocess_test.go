@@ -28,12 +28,11 @@ func TestRM207OneProcessKeepsWhatTheFoldedServicesHad(t *testing.T) {
 	if err := composeUsable(ctx); err != nil {
 		t.Skipf("skipping RM-207: %v", err)
 	}
-	t.Setenv("INNSEGL_PROJECTS", "/srv/host-projects")
 	t.Setenv("INNSEGL_REBASE_BRANCH", "main")
 	t.Setenv("INNSEGL_REBASE_REPOS", "example.test/org/name")
 	t.Setenv("INNSEGL_WRITES_REPOS", "example.test/org/name")
 	t.Setenv("INNSEGL_MCP_ALSO", "")
-	files := []string{"deploy/compose/innsegl.yml", "deploy/compose/innsegl.workrepo.yml"}
+	files := []string{"deploy/compose/innsegl.yml"}
 	separate := interpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, files...)
 	plain := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, files...)
 

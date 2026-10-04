@@ -1094,7 +1094,9 @@ services:
       # INNSEGL_BIND is not loopback.
       INNSEGL_GATEWAY_CLIENT_AUTH: ${INNSEGL_GATEWAY_CLIENT_AUTH:-}
       # The per-repository mirror (ADR-0065): hosted clients push the objects
-      # of a commit about to be signed here. Read only in hosted mode.
+      # of a commit about to be signed here. It is also the ONLY place the
+      # core reads a repository from: the reconciler running in this process
+      # reads it rather than /work whenever this is set.
       INNSEGL_MIRROR_DIR: /mirror
       # The auth-writer DSN, for enrolment: the same credential and role the
       # API holds as INNSEGL_API_AUTH_DSN, never the appender's or the reader's.
@@ -1187,6 +1189,22 @@ services:
       # every start by configureGatewayAgentMessages; never logged.
       INNSEGL_MCP_MESSAGE_KEY_DIR: /message-key
 
+      # WHERE `observe_tool_call` AND THE GATEWAY KEEP THE BODIES. The same
+      # directory innsegl-api reads (and innsegl-reconciler, as /harness-log):
+      # one writer, readers that re-derive the path from a digest in the
+      # chain. The LEDGER never holds one (doc 02 §3, IP E4): a body carries
+      # file contents and commands, so it stays on the operator's own disk.
+      # Unset, the tool refuses every call by name (#211).
+      INNSEGL_MCP_LOG_DIR: /agentlog
+      # WHERE `observe_session` KEEPS THE SESSION-TO-RUN MAPPING (RM-128,
+      # #207). A named volume: nothing outside this process reads it. It
+      # outlives the stack on purpose; a mapping thrown away is a run nothing
+      # will ever retire. `docker compose down -v` removes it, and that is the
+      # one command that should.
+      INNSEGL_MCP_SESSION_DIR: /sessions
+
+      # The working trees the `sign_commit` MCP tool and demo-agent use. A
+      # repository reader on the core reads the mirror above, never this.
       INNSEGL_WORKSPACE: /work
       # THE AUTHOR NAMES THE DEPLOYMENT, NOT THE AGENT.
       #
@@ -1217,9 +1235,9 @@ services:
       # The Workload API socket, from spire.yml's project. Read-write because
       # a Unix socket is connected to, not read.
       - spire-agent-socket:/run/spire/agent-sockets
-      # The working trees `repo` resolves under, shared with the reconciler
-      # (which re-checks intents against them) and with demo-agent (which
-      # stages into them).
+      # The working trees the `sign_commit` MCP tool resolves `repo` under,
+      # shared with demo-agent (which stages into them). Nothing that reads a
+      # repository on the core's behalf reads it: they read the mirror.
       - innsegl-workspace:/work
       # READ-ONLY, and the only other mount of this volume is
       # innsegl-identity-init's rw one. One writer, one reader — the control the
@@ -1242,10 +1260,22 @@ services:
       # the run page's query API reads it to VERIFY a brief or a reply's own
       # keyed digest, and holds nothing that could mint one.
       - innsegl-message-key:/message-key
-      # READ-WRITE, and MOUNTED BY NO OTHER SERVICE: the per-repository
-      # mirror hosted clients push to (ADR-0065). It holds evidence; size
-      # and back it up as such.
+      # READ-WRITE, and the only read-write mount of it: the per-repository
+      # mirror hosted clients push to (ADR-0065). innsegl-api and
+      # innsegl-reconciler mount it read-only. It holds evidence; size and
+      # back it up as such.
       - innsegl-mirror:/mirror
+      # The bodies (INNSEGL_MCP_LOG_DIR above). READ-WRITE, and the ONLY
+      # read-write mount of this directory: retention belongs to whoever
+      # writes the bodies, and a read path that could delete would be one
+      # misconfiguration away from pruning on another schedule.
+      - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/agentlog
+      # The session markers. See INNSEGL_MCP_SESSION_DIR above.
+      - innsegl-sessions:/sessions
+      # The reconciler runs in this process by default (ADR-0056), and its
+      # writes pass reads the bodies here, READ-ONLY, as innsegl-reconciler
+      # mounts them. The read-write mount above is for writing them.
+      - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/harness-log:ro
       # READ-WRITE; innsegl-dashboard mounts it read-only. The dashboard's
       # certificate and key (RM-311), renewed here before they expire.
       - innsegl-dashboard-tls:/dashboard-tls
@@ -1459,7 +1489,9 @@ services:
       INNSEGL_LEDGER_DSN: postgres://innsegl_appender:${INNSEGL_LEDGER_APPENDER_PASSWORD:-innsegl-compose-appender}@postgres:5432/innsegl?sslmode=disable
       INNSEGL_REKOR_URL: *rekor-url
       INNSEGL_TRUST_DOMAIN: *trust-domain
-      INNSEGL_WORKSPACE: /work
+      # Repositories are read from the core's mirror and nowhere else
+      # (ADR-0065 decision 1), READ-ONLY: see the mount below.
+      INNSEGL_MIRROR_DIR: /mirror
       INNSEGL_RECONCILE_INTERVAL: ${INNSEGL_RECONCILE_INTERVAL:-1m}
       INNSEGL_RECONCILE_EXPIRE_AFTER: ${INNSEGL_RECONCILE_EXPIRE_AFTER:-10m}
       # ADR-0047 decision 4: record a rewritten commit's new SHA as a
@@ -1473,8 +1505,8 @@ services:
       #   INNSEGL_REBASE_BRANCH=main
       #   INNSEGL_REBASE_REPOS=github.com/<org>/<name>,github.com/<org>/<other>
       #
-      # The repositories must be reachable under /work, which is what
-      # `make innsegl-link` puts there.
+      # The repositories must be in the mirror: a client pushes them there.
+      # A branch no client pushed is reported, never recorded.
       INNSEGL_REBASE_BRANCH: ${INNSEGL_REBASE_BRANCH:-}
       INNSEGL_REBASE_REPOS: ${INNSEGL_REBASE_REPOS:-}
       # RM-104 (#169). The harness's retained tool-call bodies, READ-ONLY.
@@ -1490,7 +1522,13 @@ services:
       INNSEGL_WRITES_LOG_DIR: ${INNSEGL_WRITES_LOG_DIR:-}
       INNSEGL_WRITES_REPOS: ${INNSEGL_WRITES_REPOS:-}
     volumes:
-      - innsegl-workspace:/work
+      # READ-ONLY. innsegl-mcp holds the one read-write mount, for receiving
+      # pushes; a reconciler that could write the evidence it judges could
+      # also make its own findings go away.
+      - innsegl-mirror:/mirror:ro
+      # RM-104 (#169): the retained tool-call bodies, READ-ONLY for the same
+      # reason. The reconciler opens only the files a run's own events name.
+      - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/harness-log:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -1757,11 +1795,13 @@ services:
   # It is on NO network with the MCP, none with the object store, and none with
   # SPIRE.
   #
-  # THE WORKSPACE IS MOUNTED READ-ONLY. The proof BFF reads commit objects out
-  # of the working tree with git plumbing; `make innsegl-verify-commit` mounts
-  # the same volume the same way. A read-only mount is not the control — the
-  # database role is — but a BFF that could write into the tree it verifies
-  # would be answering questions about its own output.
+  # THE MIRROR IS MOUNTED READ-ONLY. The proof BFF, the run page and the
+  # account page read repositories from the core's per-repository mirror
+  # (ADR-0065 decision 1) and from nowhere else: no host folder, no list of
+  # repositories written at deploy time. A repository no client has pushed is
+  # answered "not held yet". A read-only mount is not the control — the
+  # database role is — but a BFF that could write into the repositories it
+  # verifies would be answering questions about its own output.
   #
   # THIS API HAS NO AUTHENTICATION, AND MUST NOT BE PUBLISHED DIRECTLY (#174).
   #
@@ -1833,12 +1873,26 @@ services:
       # The gateway's CA certificate (public), so the account page's connect
       # command carries its fingerprint rather than a placeholder.
       INNSEGL_API_GATEWAY_CA_CERT: /run/innsegl/gateway-ca/gateway-ca.pem
-      # doc 02 §5 spells a repo as an IDENTIFIER; the MCP resolves it beneath
-      # its workspace root, so the pair is <identifier>=<root>/<identifier>.
-      # OVERRIDE THIS TOGETHER WITH $INNSEGL_DEMO_REPO: a proof request naming a
-      # repository this list does not carry is a 404, which reads as a verdict
-      # about the commit and is a statement about the configuration.
-      INNSEGL_API_REPOS: ${INNSEGL_API_REPOS:-github.com/innsegl-demo/scratch=/work/github.com/innsegl-demo/scratch}
+      # The core's mirror (ADR-0065), where every repository is read from. A
+      # repository is listed once a client pushes it; nothing is configured
+      # per repository.
+      INNSEGL_MIRROR_DIR: /mirror
+      # The tool-call bodies the MCP writes, READ-ONLY below. The LEDGER may
+      # never hold one (doc 02 §3, IP E4): a `tool_call` event carries a name
+      # and a digest, and the digest proves a body unaltered. Bodies live 90
+      # days; identity is in the chain and never expires.
+      INNSEGL_API_LOG_DIR: /agentlog
+      INNSEGL_API_LOG_DAYS: ${INNSEGL_LOG_DAYS:-90}
+      # The run page's own read (E19, #395-#397): the gateway's workspace
+      # snapshot store, under the SAME /agentlog mount. Named explicitly so
+      # this file states what api.go would derive. A hosted core takes no
+      # snapshots (ADR-0060 decision 5, as amended), so there it is empty.
+      INNSEGL_API_SNAPSHOT_DIR: /agentlog/gateway-snapshots
+      # RM-237's derived agent-message key (ADR-0061 decision 2), written by
+      # innsegl-mcp to the innsegl-message-key volume, so this process can
+      # VERIFY a brief or a reply's keyed digest without the identity secret
+      # it was derived from.
+      INNSEGL_API_MESSAGE_KEY_DIR: /message-key
       # The same Sigstore a stranger is handed. doc 04 §5.4: a divergent
       # verifier is a divergence in what "verified" means, so the proof BFF runs
       # internal/verify against the endpoints `innsegl verify` uses.
@@ -1846,7 +1900,14 @@ services:
       INNSEGL_REKOR_URL: *rekor-url
       INNSEGL_OIDC_ISSUER: *jwt-issuer
     volumes:
-      - innsegl-workspace:/work:ro
+      # READ-ONLY. innsegl-mcp holds the one read-write mount, for receiving
+      # pushes. See the header above.
+      - innsegl-mirror:/mirror:ro
+      # READ-ONLY: retention belongs to the process that writes the bodies.
+      - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/agentlog:ro
+      # READ-ONLY. The only other mount of this volume is innsegl-mcp's
+      # read-write one: one writer, one reader.
+      - innsegl-message-key:/message-key:ro
       # READ-ONLY: the gateway's public CA certificate, from the host folder
       # innsegl-mcp writes it to (*gateway-ca-host-dir). Never the key.
       - ${INNSEGL_GATEWAY_CA_HOST_DIR:-${HOME}/.innsegl/ca}:/run/innsegl/gateway-ca:ro
@@ -2188,13 +2249,19 @@ volumes:
   # and never logged) and innsegl-api (ro). Nothing else, ever.
   innsegl-message-key:
   # The per-repository mirror (ADR-0065): one bare repository per repository
-  # id, fed by hosted clients' authenticated pushes.
-  # MOUNTED BY: innsegl-mcp (rw).
+  # id, fed by hosted clients' authenticated pushes. The only place the core
+  # reads a repository from.
+  # MOUNTED BY: innsegl-mcp (rw), innsegl-api (ro), innsegl-reconciler (ro).
   innsegl-mirror:
-  # The working trees `repo` resolves under (doc 02 §5: `repo` is an
-  # identifier, and the tree it names is the DEPLOYMENT's, not the caller's).
-  # MOUNTED BY: innsegl-mcp (rw), innsegl-reconciler (rw), demo-agent (rw).
+  # The working trees the `sign_commit` MCP tool resolves `repo` under (doc 02
+  # §5: `repo` is an identifier, and the tree it names is the DEPLOYMENT's,
+  # not the caller's). No repository reader on the core reads it.
+  # MOUNTED BY: innsegl-mcp (rw), demo-agent (rw).
   innsegl-workspace:
+  # observe_session's session-to-run mapping (RM-128, #207; wired by #211).
+  # MOUNTED BY: innsegl-mcp (rw). Nothing else, ever -- no other component has
+  # any business knowing which harness session a run came from.
+  innsegl-sessions:
 
   # #264's PUBLIC key set: the keys whose repository-scoped credentials the
   # identity-lifecycle listener admits.
