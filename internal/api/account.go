@@ -192,6 +192,10 @@ type AccountRepository struct {
 	Runs           int        `json:"runs"`
 	Commits        int        `json:"commits"`
 	LastEventAt    *time.Time `json:"last_event_at"`
+	// Held is whether the core holds a copy of this repository in its mirror
+	// (ADR-0065). False until a client pushes it: its commits cannot be
+	// proved here yet, and that is what the page says rather than a 404.
+	Held bool `json:"held"`
 }
 
 // AccountRepositories answers GET /api/v1/account/repositories.

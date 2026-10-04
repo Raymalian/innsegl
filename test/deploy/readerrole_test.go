@@ -514,16 +514,15 @@ func buildInnsegl(ctx context.Context, t *testing.T) string {
 // apiEnv is the environment deploy/compose/innsegl.yml gives the innsegl-api
 // service, minus the DSN, which each case supplies.
 //
-// A repository is named because `innsegl api` refuses to start without one:
-// "a proof BFF that serves no repository can answer nothing, and guessing is
-// not one of the states doc 06 §4.6 allows". Nothing here asks it a proof
-// question, so the path need only be named.
-func apiEnv(dsn, authDSN string) []string {
+// A mirror directory is named because `innsegl api` refuses to start without
+// one: it reads repositories only from the core's mirror (ADR-0065). Nothing
+// here asks it a proof question, so an empty mirror is enough.
+func apiEnv(dsn, authDSN, mirrorDir string) []string {
 	return append(os.Environ(),
 		"INNSEGL_API_DSN="+dsn,
 		"INNSEGL_API_AUTH_DSN="+authDSN,
 		"INNSEGL_API_LISTEN=127.0.0.1:0",
-		"INNSEGL_API_REPOS=github.com/innsegl-demo/scratch=/work/github.com/innsegl-demo/scratch",
+		"INNSEGL_MIRROR_DIR="+mirrorDir,
 		"INNSEGL_FULCIO_URL=http://127.0.0.1:1/fulcio",
 		"INNSEGL_REKOR_URL=http://127.0.0.1:1/rekor",
 		"INNSEGL_OIDC_ISSUER=",
@@ -535,7 +534,7 @@ func startAPI(ctx context.Context, t *testing.T, bin, dsn, authDSN string) (stri
 	t.Helper()
 	runCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(runCtx, bin, "api")
-	cmd.Env = apiEnv(dsn, authDSN)
+	cmd.Env = apiEnv(dsn, authDSN, t.TempDir())
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -602,7 +601,7 @@ func runAPIOnce(ctx context.Context, t *testing.T, bin, dsn, authDSN string) (in
 	runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, bin, "api")
-	cmd.Env = apiEnv(dsn, authDSN)
+	cmd.Env = apiEnv(dsn, authDSN, t.TempDir())
 	out, err := cmd.CombinedOutput()
 	if cmd.ProcessState == nil {
 		t.Fatalf("`innsegl api` did not run: %v\n%s", err, out)

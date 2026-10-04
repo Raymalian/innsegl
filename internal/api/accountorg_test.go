@@ -814,3 +814,38 @@ func TestMachinesLastActivityIsTheNewestEventOfItsRuns(t *testing.T) {
 		t.Fatalf("laptop last activity = %v, want the newest event %v", laptop.LastRunAt, newest.UTC())
 	}
 }
+
+// P1: the repositories view says, per repository, whether the core holds a
+// copy in its mirror. A repository granted but never pushed is listed, and
+// listed as not held, rather than dropped or shown as provable.
+func TestRepositoriesSayWhetherTheCoreHoldsEachOne(t *testing.T) {
+	s := newProofScenario(t, proofOptions{})
+	held := staticRepos{"github.com/innsegl/one": s.repo}
+	h := newOrgHarness(t, roleOwner, true, func(cfg *ServerConfig) {
+		p, err := NewProver(ProofConfig{FulcioURL: s.fulcio.URL, RekorURL: s.log.URL, Repos: held})
+		if err != nil {
+			t.Fatalf("NewProver: %v", err)
+		}
+		cfg.Prover = p
+	})
+	a := get(t, h.srv.URL, "/api/v1/account/repositories", h.cookie)
+	if a.status != http.StatusOK {
+		t.Fatalf("GET repositories: %d: %s", a.status, a.body)
+	}
+	if !strings.Contains(string(a.body), `"held":`) {
+		t.Fatalf("the repositories answer carries no held member: %s", a.body)
+	}
+	var got AccountRepositories
+	decodeBody(t, a, &got)
+	byRepo := map[string]AccountRepository{}
+	for _, r := range got.Repositories {
+		byRepo[r.Repo] = r
+	}
+	if !byRepo["github.com/innsegl/one"].Held {
+		t.Errorf("a repository the mirror holds is reported not held: %+v", byRepo["github.com/innsegl/one"])
+	}
+	quiet, ok := byRepo["github.com/example/quiet"]
+	if !ok || quiet.Held {
+		t.Errorf("a granted repository the mirror lacks = %+v (listed %v), want listed and not held", quiet, ok)
+	}
+}

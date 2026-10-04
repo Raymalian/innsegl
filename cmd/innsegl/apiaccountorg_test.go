@@ -19,7 +19,7 @@ func TestRM333TheCommandServesTheOrganisationRoutes(t *testing.T) {
 	repoDir, _ := newProofRepo(t)
 	fulcio, rekor := closedAddress(t), closedAddress(t)
 	addr, _ := startAPICommand(t,
-		apiArgsFor(readerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
+		apiArgsFor(t, readerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
 	base := "http://" + addr
 	cookie := enrolAndSignIn(t, base, authDSN)
 

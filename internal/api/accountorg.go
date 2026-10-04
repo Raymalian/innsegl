@@ -451,6 +451,7 @@ func (s *Server) handleAccountRepositories(w http.ResponseWriter, r *http.Reques
 		row := AccountRepository{
 			Repo: g.Repo, OrganisationID: g.AccountID, Organisation: orgs[g.AccountID].Name, Since: g.Since.UTC(),
 		}
+		_, row.Held = s.prover.RepoPath(g.Repo)
 		if a, ok := activity[g.Repo]; ok {
 			row.Runs, row.Commits = a.Runs, a.Commits
 			last := a.LastEventAt
