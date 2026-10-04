@@ -27,8 +27,8 @@ without which the discovery provider has no JWKS to publish. It is idempotent.
 Then:
 
 ```sh
-curl -s http://127.0.0.1:8443/.well-known/openid-configuration
-curl -s http://127.0.0.1:8443/keys
+curl -s http://127.0.0.1:28443/.well-known/openid-configuration
+curl -s http://127.0.0.1:28443/keys
 ```
 
 Both must answer, and `/keys` must contain a key. That is the readiness probe

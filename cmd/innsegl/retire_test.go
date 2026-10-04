@@ -529,9 +529,8 @@ func (g *credentialGate) admitted() int {
 	return n
 }
 
-// stubMint installs $INNSEGL_ADMIN_CREDENTIAL_MINT, the escape hatch the signer
-// and the harness hook already publish for an operator whose signing key is not
-// on this machine's container volume. Using it here is what keeps this suite
+// stubMint installs $INNSEGL_ADMIN_CREDENTIAL_MINT, the escape hatch for an
+// operator whose signing key is not on this machine's container volume. Using it here is what keeps this suite
 // off the Docker daemon: the shipped path runs a container, and a test that ran
 // one would be an integration test.
 //
@@ -759,7 +758,7 @@ func TestMCP094RetireScopesTheCredentialToARepository(t *testing.T) {
 			}
 		})
 
-	t.Run("$INNSEGL_REPO_ID is next, because the signer and the hook already read it",
+	t.Run("$INNSEGL_REPO_ID is next, the variable operators already set",
 		func(t *testing.T) {
 			t.Setenv(envRepoID, testRepo)
 			surface := newFakeLifecycleSurface(runID)
@@ -774,7 +773,7 @@ func TestMCP094RetireScopesTheCredentialToARepository(t *testing.T) {
 			}
 		})
 
-	t.Run("otherwise the working tree, by the rule the signer uses", func(t *testing.T) {
+	t.Run("otherwise the working tree, by doc 02 §5's rule", func(t *testing.T) {
 		t.Setenv(envRepoID, "")
 		t.Chdir(gitTreeWithOrigin(t, "git@github.com:Example-Org/Example-Repo.git"))
 

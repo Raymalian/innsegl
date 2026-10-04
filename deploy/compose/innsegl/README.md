@@ -13,7 +13,7 @@ doc 05 §1's other seven rows, none of which existed as a compose service before
 | `innsegl-mcp` | service | attested through the Workload API; append-only DB role. Runs the seal, reconcile and reap loops by default (ADR-0056) |
 | `innsegl-reconciler` | loop in `innsegl-mcp`; service, `--profile separate` | same binary, `reconcile` |
 | `innsegl-sealer` | loop in `innsegl-mcp`; service, `--profile separate` | same binary, `seal` |
-| `innsegl-dashboard` | **two services** | `innsegl-dashboard` is the UI — nginx and the built React bundle, holding no database credential at all — and `innsegl-api` is the BFF, the only holder of the read-only role. The row's "No write credentials mounted" is satisfied by both at once: nothing is mounted on the UI, and what is mounted next door cannot write |
+| `innsegl-dashboard` | `innsegl-api` | one service since #475: `innsegl api` serves the built UI, the query API and the proof BFF on one origin, and terminates the dashboard's TLS with the certificate the core writes (ADR-0066). It runs its own image — the runtime plus the UI — so a UI change restarts it alone. The row's "No write credentials mounted" holds: the read-only role it reads with cannot write |
 | `demo-agent` | service, `--profile demo` | a curl MCP client; runs to completion |
 
 ## Repositories come from the mirror
@@ -302,11 +302,11 @@ the account page) voids every earlier one.
 
 ## What used to be here
 
-**Authentication.** Before ADR-0062, neither `innsegl-dashboard` nor
+**Authentication.** Before ADR-0062, neither the dashboard nor
 `innsegl-api` authenticated anybody, and `innsegl api --help` said so; doc 05
 §3's Cloudflare Access (RM-062, #70) remains a *second*, independent door in
-front of this one, not a replacement for it — both services still publish on
-loopback only.
+front of this one, not a replacement for it — the dashboard still publishes on
+loopback unless `INNSEGL_BIND` says otherwise.
 
 What was, and still is, enforced independently of the session: the credential
 `innsegl-api` reads the ledger with **cannot write**, whoever reaches it. See
@@ -523,11 +523,11 @@ mergeable are deliberately not:
 | network | members |
 |---|---|
 | `innsegl-ledger` (internal) | postgres, db-init, mcp, reconciler, sealer |
-| `innsegl-ledger-readonly` (internal) | postgres, api, dashboard |
+| `innsegl-ledger-readonly` (internal) | postgres, api |
 | `innsegl-objects` (internal) | innsegl-s3, object-init, sealer, canary |
 | `innsegl-object-backend` (internal) | object-store, object-filer, innsegl-s3 |
 | `innsegl-mcp-clients` | mcp, demo-agent |
-| `innsegl-dashboard-frontend` | dashboard |
+| `innsegl-dashboard-frontend` | api (it serves the dashboard) |
 
 `innsegl-s3` is the only service on both object networks, and that is the whole
 of what makes it the only route to the Filer and the volume server. The MCP is
@@ -536,12 +536,10 @@ MCP — one shared frontend network would give it a route to the write surface,
 which is the one thing doc 05 §1's dashboard note forbids.
 
 `innsegl-api` **adds no network**. It joins `innsegl-ledger-readonly`, which
-#109 declared in advance for exactly this arrival, and `innsegl-sigstore`,
-which the proof BFF needs. The UI→BFF hop rides `innsegl-ledger-readonly`
-because both containers are already members of it for reasons doc 05 §1 gives,
-and a sixth network would buy no isolation the membership list does not already
-describe — unlike the dashboard/MCP frontend split, which buys the one thing
-that note forbids.
+#109 declared in advance for exactly this arrival, `innsegl-sigstore`, which
+the proof BFF needs, and `innsegl-dashboard-frontend`, the dashboard's public
+face, since it serves the dashboard (#475). A container on internal networks
+alone cannot publish a port.
 
 `innsegl-identity-init` and `innsegl-s3-identities` are on no network at all —
 `network_mode: none`, which costs zero of #100's twenty-nine. It generates key material and writes a file;

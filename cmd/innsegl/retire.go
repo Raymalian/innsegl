@@ -106,7 +106,7 @@ import (
 // from three places, first one wins:
 //
 //	-repo host/org/name    the operator names it outright
-//	$INNSEGL_REPO_ID       the variable the signer and the harness hook read
+//	$INNSEGL_REPO_ID       the variable the retired signer and old hook read
 //	the working tree       origin's URL, by doc 02 §5's rule
 //
 // The working tree is last and NOT the only way, because the run this command
@@ -134,9 +134,8 @@ import (
 // deployment's private signing key READ-ONLY, with no network. The key is never
 // copied onto this machine, never read by this process and never printed; the
 // only value that crosses the boundary is the credential, on the child's stdout
-// pipe. It is the same mint, with the same variables, that
-// scripts/innsegl-commit.sh runs, so an operator who has that working has this
-// working.
+// pipe. It is the same mint, with the same variables, that the retired
+// commit signer script ran.
 //
 // WHERE IT IS KEPT. In one struct field, for the life of one process. Never
 // exported, never written to a file, never logged, and never placed in an
@@ -158,9 +157,8 @@ import (
 
 const (
 	// envMCPAdminURL names the identity-lifecycle listener. It is the variable
-	// scripts/innsegl-commit.sh and the harness hooks already read, with the
-	// same default, so an operator who has one of those working has this
-	// working.
+	// the harness hooks already read, with the same default, so an operator
+	// who has those working has this working.
 	envMCPAdminURL = "INNSEGL_MCP_ADMIN_URL"
 	// defaultMCPAdminURL is the loopback address the reference deployment
 	// publishes the admin listener on.
@@ -213,8 +211,9 @@ const (
 	exitRetireUnauthorized = 21
 )
 
-// The credential's environment, every name shared with the signer and the
-// harness hook so that one deployment is configured once (#266, #268).
+// The credential's environment. Every name is the one the retired commit
+// signer script and the old shell harness hook read, so a deployment already
+// configured for them is configured for this (#266, #268).
 const (
 	// envRepoID names the repository when the working tree is not the run's
 	// own. `-repo` outranks it; it outranks the working tree.
@@ -667,10 +666,10 @@ func resolveRetireScope(ctx context.Context, explicit string) (retireScope, erro
 
 // repoFromWorkingTree reads doc 02 §5's `host/org/name` out of origin's URL.
 //
-// It is the rule internal/mcp applies to a worktree and the rule
-// scripts/innsegl-commit.sh applies in awk, expressed a third time because the
-// first is unexported and the second is a shell pipeline. A DIFFERENCE between
-// the three would appear as a refusal from the listener with no obvious cause,
+// It is the rule internal/mcp applies to a worktree, expressed a second time
+// because that one is unexported. (The retired commit signer script applied it
+// a third time, in awk.) A DIFFERENCE between the two would appear as a
+// refusal from the listener with no obvious cause,
 // so the one thing that is not restated is what counts as valid: that is
 // event.ValidateRepo, the single definition, called below.
 //
@@ -720,9 +719,9 @@ func repoFromWorkingTree(ctx context.Context) (string, error) {
 // ---------------------------------------------------------------------------
 
 // adminKeyVolume, adminKeyPath and adminImage are the deployment the signing
-// key lives in, with the shipped defaults. Every name is one the signer and the
-// harness hook already read, so a deployment that renamed its project or its
-// image configures that once.
+// key lives in, with the shipped defaults. Every name is one the retired
+// signer script and the old harness hook read, so a deployment that renamed
+// its project or its image configured that once.
 func adminKeyVolume() string {
 	return envOr(envAdminKeyVolume,
 		envOr(envComposeProject, defaultComposeProject)+adminKeyVolumeSuffix)
@@ -739,7 +738,7 @@ func adminImage() string { return envOr(envAdminImage, defaultAdminImage) }
 // argument (`ps` shows every argument of every process on this machine), never
 // a file, and never a stream this process writes.
 //
-// THE CHILD'S STDERR IS DISCARDED, as the signer's and the hook's is. A mint
+// THE CHILD'S STDERR IS DISCARDED, as the retired signer's was. A mint
 // that failed has nothing to say that the remedy below does not say better, and
 // an operator-supplied $INNSEGL_ADMIN_CREDENTIAL_MINT that wrote a credential to
 // its stderr must not be able to put one into this command's output.
@@ -777,8 +776,8 @@ func mintAdminCredential(ctx context.Context, repo string) (string, error) {
 func mintCommand(repo string) (string, []string) {
 	if override := strings.Fields(os.Getenv(envAdminCredentialMint)); len(override) > 0 {
 		// Deliberately word-split: a command with its own arguments is the
-		// normal case, and this is the contract the signer already publishes.
-		// The repository is the last argument, as it is there.
+		// normal case, and this is the contract the retired signer published.
+		// The repository is the last argument, as it was there.
 		return override[0], append(override[1:], repo)
 	}
 	key := adminKeyPath()
@@ -816,8 +815,7 @@ func reportRetireUnauthorized(
 		fprintf(stderr, "innsegl retire: The credential authorises a REPOSITORY and this command names a RUN,\n")
 		fprintf(stderr, "innsegl retire: so the run's own repository has to be named. Name it:\n")
 		fprintf(stderr, "innsegl retire:   innsegl retire -repo host/org/name %s\n", runID)
-		fprintf(stderr, "innsegl retire: or set $%s, which the signer and the harness hook read too.\n",
-			envRepoID)
+		fprintf(stderr, "innsegl retire: or set $%s.\n", envRepoID)
 		return exitRetireUnauthorized
 	}
 

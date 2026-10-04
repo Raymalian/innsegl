@@ -100,8 +100,11 @@ func TestTheGoImageIsBuiltFromTheGoSourcesAlone(t *testing.T) {
 		inputs[f] = true
 	}
 
+	// The Go build stage only: the UI stage (ui-build) copies web/, which
+	// is the point of it being a stage of its own.
+	goStage := []byte(dockerfileStage(t, string(df), "build"))
 	copied := map[string]bool{"Dockerfile": true}
-	for _, c := range regexp.MustCompile(`(?m)^COPY (?:--[a-z]+=\S+ )*(.+) \S+$`).FindAllSubmatch(df, -1) {
+	for _, c := range regexp.MustCompile(`(?m)^COPY (?:--[a-z]+=\S+ )*(.+) \S+$`).FindAllSubmatch(goStage, -1) {
 		line := string(c[0])
 		if strings.Contains(line, "--from=") {
 			continue
@@ -131,6 +134,34 @@ func TestTheGoImageIsBuiltFromTheGoSourcesAlone(t *testing.T) {
 	// new image ID and compose restarted every service on it.
 	if !regexp.MustCompile(`(?m)^export BUILDX_NO_DEFAULT_ATTESTATIONS := 1$`).Match(mk) {
 		t.Error("the Makefile does not turn off the default build attestations")
+	}
+}
+
+// The UI is built from web/ and nothing else, in a stage of its own, so a
+// Go change does not rebuild it; the api target adds only the built UI to
+// the runtime image, so a UI change rebuilds innsegl-api's image alone and
+// no Go stage (#475).
+func TestTheUIIsBuiltFromWebAlone(t *testing.T) {
+	df := readFile(t, filepath.Join(repoRoot(t), "Dockerfile"))
+	ui := dockerfileStage(t, df, "ui-build")
+	copies := regexp.MustCompile(`(?m)^COPY (.+) \S+$`).FindAllStringSubmatch(ui, -1)
+	if len(copies) == 0 {
+		t.Fatal("the ui-build stage copies nothing")
+	}
+	for _, c := range copies {
+		for _, src := range strings.Fields(c[1]) {
+			if !strings.HasPrefix(src, "web/") {
+				t.Errorf("the ui-build stage copies %s, which is not under web/", src)
+			}
+		}
+	}
+	if !regexp.MustCompile(`(?m)^FROM runtime AS api$`).MatchString(df) {
+		t.Error("the api target is not built on the runtime stage")
+	}
+	for _, c := range regexp.MustCompile(`(?m)^(?:COPY|ADD|RUN) .*$`).FindAllString(dockerfileStage(t, df, "api"), -1) {
+		if !strings.HasPrefix(c, "COPY --from=ui-build ") {
+			t.Errorf("the api target does more than add the built UI: %s", c)
+		}
 	}
 }
 

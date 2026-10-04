@@ -128,10 +128,11 @@ type CredentialEntries interface {
 // append-only chain — so the authorisation is re-creatable from the record.
 //
 // register_agent heals the same way on a replayed registration. That is not
-// enough on its own: an agent resuming through scripts/innsegl-commit.sh signs
-// under a run it already has and never re-registers, so it reached this gate
-// with a run the ledger calls live and SPIRE calls absent, and could do nothing
-// but mint a fresh identity. MEASURED on a real tree, 2026-09-10.
+// enough on its own: an agent resuming through the retired commit signer
+// script signed under a run it already had and never re-registered, so it
+// reached this gate with a run the ledger calls live and SPIRE calls absent,
+// and could do nothing but mint a fresh identity. MEASURED on a real tree,
+// 2026-09-10.
 //
 // OPTIONAL. Nil restores nothing and gate 4 refuses exactly as before.
 type CredentialRestorer interface {

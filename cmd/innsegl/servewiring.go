@@ -1197,11 +1197,12 @@ func migrateRunSelectors(ctx context.Context, m runSelectorMigrator,
 
 // runRestorer re-creates the SPIRE entry of a live, unretired run.
 //
-// It exists because an agent that resumes through scripts/innsegl-commit.sh
-// signs under a run it already holds and never re-registers, so register_agent's
-// own healing is never reached. It arrives at get_credential's fourth gate with
-// a run the ledger calls live and SPIRE calls absent, and before this could do
-// nothing but mint a fresh identity — fragmenting one task across several.
+// It exists because an agent that resumed through the retired commit signer
+// script signed under a run it already held and never re-registered, so
+// register_agent's own healing was never reached. Such a caller arrives at
+// get_credential's fourth gate with a run the ledger calls live and SPIRE
+// calls absent, and before this could do nothing but mint a fresh identity —
+// fragmenting one task across several.
 //
 // DUPLICATE_REQUEST is success: two callers racing to restore one run converge
 // on the one entry SPIRE already has, which is the same property register_agent

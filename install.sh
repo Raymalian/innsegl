@@ -9,12 +9,10 @@
 #      checkout builds (`make build`) exists — and refuses before touching
 #      anything if one is missing.
 #   2. Brings the stack up (`make start`, or $INNSEGL_INSTALL_START_CMD).
-#   3. Puts `innsegl-commit` on PATH (`make innsegl-install-signer`, or
-#      $INNSEGL_INSTALL_SIGNER_CMD).
-#   4. Builds the innsegl binary.
-#   5. Links each DIR argument (`$INNSEGL_BIN_PATH link DIR`, or
+#   3. Builds the innsegl binary.
+#   4. Links each DIR argument (`$INNSEGL_BIN_PATH link DIR`, or
 #      $INNSEGL_INSTALL_LINK_CMD).
-#   6. Prints the dashboard URL, the one-time setup link while no account
+#   5. Prints the dashboard URL, the one-time setup link while no account
 #      exists, and how a machine connects.
 #
 # IT WRITES NO HARNESS SETTINGS. Every machine that runs agents, the core
@@ -26,9 +24,14 @@
 # `innsegl connect`, and naming one here says so.
 #
 # `--dry-run` runs step 1 (so a missing prerequisite is still caught) and then
-# only prints what steps 2-5 would run; nothing on disk changes.
+# only prints what steps 2-4 would run; nothing on disk changes.
 #
-# `--uninstall` removes the signer symlink. A machine's managed settings are
+# Agents' commits are signed through the gateway (ADR-0059), and a human
+# commits with plain git, so nothing is put on PATH.
+#
+# `--uninstall` removes the `innsegl-commit` symlink an older version of this
+# installer put on PATH for the retired commit signer, if one is still there —
+# cleanup of an old install, like --uninstall-legacy. A machine's managed settings are
 # `innsegl connect --disconnect`'s to remove. It does not touch the running
 # stack; it prints the command that does.
 #
@@ -48,10 +51,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 
-# Overridable so the self-test can stub bring-up, the signer install and
-# linking without touching Docker, a real PATH entry, or a real deployment.
+# Overridable so the self-test can stub bring-up and linking without touching
+# Docker or a real deployment.
 START_CMD="${INNSEGL_INSTALL_START_CMD:-make start}"
-SIGNER_CMD="${INNSEGL_INSTALL_SIGNER_CMD:-make innsegl-install-signer}"
 # Builds the binary a connected machine's hooks run, so they never run an
 # old one (ENF-008).
 BUILD_CMD="${INNSEGL_INSTALL_BUILD_CMD:-make build}"
@@ -67,8 +69,9 @@ LINK_CMD="${INNSEGL_INSTALL_LINK_CMD:-$INNSEGL_BIN_PATH link}"
 # The gateway's CA, whose fingerprint `innsegl connect` pins.
 CA_PEM="${INNSEGL_INSTALL_CA_PEM:-$HOME/.innsegl/ca/gateway-ca.pem}"
 
-# Matches `make innsegl-install-signer`'s own default, so uninstall looks for
-# the symlink in the same place install put it.
+# Where an older install put the retired signer's `innsegl-commit` symlink
+# (the old `make innsegl-install-signer` default), so --uninstall looks for it
+# there. Nothing installs it any more.
 BIN_DIR="${INNSEGL_BIN:-$HOME/.local/bin}"
 
 # The old hook script's path, as an install from before the gateway wrote it
@@ -87,15 +90,15 @@ usage() {
   cat <<'EOF'
 usage: install.sh [--local-client] [--dry-run] [--uninstall] [--uninstall-legacy] [DIR...]
 
-Installs the innsegl server: brings the stack up, puts innsegl-commit on
-PATH, and makes each DIR signable. Every machine that runs agents, this one
-included, connects to it with `innsegl connect`, which writes that
+Installs the innsegl server: brings the stack up, builds the innsegl
+binary, and makes each DIR signable. Every machine that runs agents, this
+one included, connects to it with `innsegl connect`, which writes that
 machine's managed settings, runs its client service, and can pause, update
 or remove them.
 
   --local-client         also say how to connect THIS machine to the core
   --dry-run              print what would change; touch nothing
-  --uninstall            remove the signer symlink this installer added
+  --uninstall            remove the innsegl-commit symlink an older install added
   --uninstall-legacy     also remove the OLD hook-and-MCP wiring (opt-in)
 EOF
 }
@@ -376,7 +379,7 @@ do_uninstall() {
       printf 'install.sh: %s is not present; nothing to remove\n' "$link"
     fi
   else
-    echo "==> removing the signer symlink"
+    echo "==> removing the old innsegl-commit symlink"
     if [ -L "$link" ]; then
       rm -f "$link"
       echo "install.sh: removed $link"
@@ -453,9 +456,6 @@ main() {
 
   echo "==> bringing the stack up"
   run_step "$START_CMD"
-
-  echo "==> putting innsegl-commit on PATH"
-  run_step "$SIGNER_CMD"
 
   echo "==> building the innsegl binary"
   run_step "$BUILD_CMD"

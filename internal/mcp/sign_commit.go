@@ -199,10 +199,10 @@ type signCommitIn struct {
 	//
 	// omitempty for the reason `worktree` above is: absent, the tool behaves
 	// exactly as it did, and every existing caller is unaffected. Requiring it
-	// on the wire is the SCRIPT's business -- scripts/innsegl-commit.sh refuses
-	// a caller committing its own work that named nothing -- because a required
-	// argument here would refuse the harness's own capture, which is already
-	// bounded and cannot be changed to say so.
+	// on the wire is the CALLER's business -- the retired commit signer script
+	// refused a caller committing its own work that named nothing -- because a
+	// required argument here would refuse the harness's own capture, which is
+	// already bounded and cannot be changed to say so.
 	Paths []string `json:"paths,omitempty"`
 	// AdoptRun names a DEAD run whose uncommitted work this commit carries
 	// (ADR-0051). The signing run is still RunID; this one is named, never

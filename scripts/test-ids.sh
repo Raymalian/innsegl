@@ -60,8 +60,8 @@
 # WHAT IT DELIBERATELY DOES NOT READ, because the looser rule is worse than the
 # gap it leaves. An id named MID-SENTENCE is a CITATION, not a claim — the
 # backup selftest mentions LED-003 to say which case it is not driving, and
-# innsegl-commit's mentions OPS-039 as the half it cannot reach. A rule loose
-# enough to catch those also reads `"task_ref":"JIRA-118"` out of a fixture
+# the retired signer's mentioned OPS-039 as the half it could not reach. A rule
+# loose enough to catch those also reads `"task_ref":"JIRA-118"` out of a fixture
 # payload and reports a JIRA family that does not exist: a gate red for
 # something that is not a test at all, which is the failure #265 was about.
 # Only `*-selftest.sh` is read for the same reason — a production script naming

@@ -157,6 +157,15 @@ const (
 	// envAPIGatewayCACert is the gateway's CA certificate, read so the
 	// account page's connect command carries its fingerprint. Optional.
 	envAPIGatewayCACert = "INNSEGL_API_GATEWAY_CA_CERT"
+
+	// #475: this process serves the dashboard. envAPIUIDir is the built
+	// UI; empty serves the API alone. envAPITLSListen and envAPITLSCert
+	// are the browser's HTTPS listener and the file the core writes its
+	// certificate and key to (RM-311, ADR-0066's amendment); set together
+	// or not at all.
+	envAPIUIDir     = "INNSEGL_API_UI_DIR"
+	envAPITLSListen = "INNSEGL_API_TLS_LISTEN"
+	envAPITLSCert   = "INNSEGL_API_TLS_CERT"
 )
 
 const (
@@ -251,6 +260,13 @@ type apiOptions struct {
 	// gatewayCACert is the gateway's CA certificate file. Empty: the
 	// account page's connect command shows a placeholder for it.
 	gatewayCACert string
+
+	// uiDir is the built dashboard UI (#475). Empty: the API alone.
+	uiDir string
+	// tlsListen and tlsCert are the dashboard's HTTPS listener and the
+	// file holding its certificate and key. Both or neither.
+	tlsListen string
+	tlsCert   string
 }
 
 // servedAPI is the running query API, as this command needs it. It is an
@@ -445,6 +461,17 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		sessionLifetime = fs.Duration("session-lifetime", envDuration(envAPISessionLifetime, 0),
 			"how long a session lasts before it must be renewed by signing in again; zero "+
 				"applies internal/api's own default ($"+envAPISessionLifetime+")")
+		uiDir = fs.String("ui-dir", os.Getenv(envAPIUIDir),
+			"the built dashboard UI, served next to the API on the same origin; every path "+
+				"outside /api/ that is not a file is its index.html. Empty serves the API alone "+
+				"($"+envAPIUIDir+")")
+		tlsListen = fs.String("tls-listen", os.Getenv(envAPITLSListen),
+			"address the dashboard is served on over HTTPS, in addition to -listen; needs "+
+				"-tls-cert ($"+envAPITLSListen+")")
+		tlsCert = fs.String("tls-cert", os.Getenv(envAPITLSCert),
+			"one PEM file holding the dashboard's certificate chain and key, as the core writes "+
+				"it; re-read when it changes, so a renewal needs no restart. Needs -tls-listen "+
+				"($"+envAPITLSCert+")")
 	)
 
 	fs.Usage = func() { apiUsage(stderr, fs) }
@@ -471,6 +498,7 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		authDSN:       *authDSN, rpID: *rpID, rpOrigin: *rpOrigin, sessionLifetime: *sessionLifetime,
 		resolverDSN:   *resolverDSN,
 		gatewayCACert: *gatewayCACert,
+		uiDir:         *uiDir, tlsListen: *tlsListen, tlsCert: *tlsCert,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl api: %s\n", problem)
@@ -509,6 +537,12 @@ func (o apiOptions) validate() string {
 		return "-rp-id (or $" + envAPIRPID + ") is required"
 	case o.rpOrigin == "":
 		return "-rp-origin (or $" + envAPIRPOrigin + ") is required"
+	case o.tlsListen != "" && o.tlsCert == "":
+		return "-tls-listen (or $" + envAPITLSListen + ") needs -tls-cert (or $" + envAPITLSCert +
+			"): an HTTPS listener with no certificate refuses every browser"
+	case o.tlsCert != "" && o.tlsListen == "":
+		return "-tls-cert (or $" + envAPITLSCert + ") needs -tls-listen (or $" + envAPITLSListen +
+			"): a certificate with no listener serves nothing, and the dashboard would stay on plain HTTP"
 	case o.sessionLifetime < 0:
 		return "-session-lifetime is negative"
 	case o.shutdownTimeout < 0:
@@ -540,7 +574,7 @@ func resolveSnapshotDir(explicit, logDir string) string {
 // file cannot infer from the flags: which routes need no session, that the
 // RP ID must be a domain, and that the read-only gate cannot be switched off.
 func apiUsage(stderr io.Writer, fs *flag.FlagSet) {
-	fprintf(stderr, "innsegl api - serve the dashboard's read-only query API and proof BFF "+
+	fprintf(stderr, "innsegl api - serve the dashboard, its read-only query API and proof BFF "+
 		"(doc 05 §1, doc 06 §7)\n\n")
 	fprintf(stderr, "Usage:\n  innsegl api [flags]\n\n")
 	fprintf(stderr, "Routes:\n")
@@ -557,6 +591,9 @@ func apiUsage(stderr io.Writer, fs *flag.FlagSet) {
 		"reason.\n\n"+
 		"The FIRST passkey's enrolment is separately gated by a one-time code only the\n"+
 		"operator can mint — see `innsegl admin-credential enrol-code`.\n\n")
+	fprintf(stderr, "With -ui-dir it also serves the dashboard's built UI on the same origin, and\n"+
+		"with -tls-listen and -tls-cert it serves both over HTTPS too, from the certificate\n"+
+		"the core writes (ADR-0066). Every path under /api/ is the API's.\n\n")
 	fprintf(stderr, "It refuses to start on a database credential that can write. The check "+
 		"asks\nthe SERVER what the credential may do — not the DSN, and not this source\n"+
 		"file — and there is no flag that disables it: a query API that would start on\n"+

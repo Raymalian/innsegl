@@ -13,15 +13,16 @@ import (
 // ---------------------------------------------------------------------------
 // OPS-127 — the published host address is one setting, and loopback by default.
 //
-// The gateway (8095) and the dashboard (8080 inside its container) are the two
-// surfaces a hosted shape has to expose. Their host address is
+// The gateway (8095) and the dashboard (served by innsegl-api since #475, on
+// 8082 inside its container) are the two surfaces a hosted shape has to
+// expose. Their host address is
 // ${INNSEGL_BIND:-127.0.0.1}. Everything else stays on loopback exactly as it
 // is today, and no new port is published. Read the way GW-005 reads it:
 // `docker compose config`, never a container.
 // ---------------------------------------------------------------------------
 
 const (
-	dashboardContainerPort = 8080
+	dashboardContainerPort = 8082
 	// dashboardTLSContainerPort is the dashboard over HTTPS at the core's
 	// name (RM-311, #493), exposed with the plain port.
 	dashboardTLSContainerPort = 8443
@@ -53,9 +54,9 @@ func TestOPS127BindAddressIsConfigurableAndLoopbackByDefault(t *testing.T) {
 	bound := publishedHosts(interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml"))
 
 	exposed := map[string]bool{
-		"innsegl-mcp:" + strconv.Itoa(gatewayContainerPort):            true,
-		"innsegl-dashboard:" + strconv.Itoa(dashboardContainerPort):    true,
-		"innsegl-dashboard:" + strconv.Itoa(dashboardTLSContainerPort): true,
+		"innsegl-mcp:" + strconv.Itoa(gatewayContainerPort):      true,
+		"innsegl-api:" + strconv.Itoa(dashboardContainerPort):    true,
+		"innsegl-api:" + strconv.Itoa(dashboardTLSContainerPort): true,
 	}
 	for k := range exposed {
 		if _, ok := def[k]; !ok {
