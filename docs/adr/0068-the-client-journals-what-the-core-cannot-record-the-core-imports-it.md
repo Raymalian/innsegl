@@ -1,6 +1,6 @@
 # ADR-0068: The client journals what the core cannot record; the core imports it
 
-- Status: accepted
+- Status: accepted; amended 2026-10-04 (see the Amendment)
 - Date: 2026-10-02
 - Deciders: the operator
 
@@ -80,3 +80,44 @@ inside a repository was either a refusal or a gap.
   request the core refuses outright (a 4xx of its own, such as a lifecycle
   refusal) is still a refusal; turning those into a forward plus a finding
   is separate work.
+
+## Amendment (2026-10-04): one outbox
+
+**What changed.** The client kept three stores of what the core did not
+take: this journal, a spool of telemetry exports, and session ends kept in
+its table of watched processes. Each had its own folder or file, its own
+bound and its own retry loop. They are now one outbox: one folder, one bound
+and one delivery loop. Each item names its kind: a journal entry, a
+telemetry export, or a session end. The loop runs when an item is written,
+when the core answers a live request, and on a timer. It sends items oldest
+first. Delivery stops per kind: each kind stops at its own first item the
+core does not take now, and the other kinds go on. A core that does not
+answer at all stops every kind until the next pass. An item is deleted once
+the core takes it. A client that finds the old stores moves them into
+the outbox once, in order.
+
+**Why.** All three were the same mechanism: keep what the core did not take,
+and send it in order when the core answers. Three copies meant three bounds
+to size, three loops to reason about, and three places to look in an outage.
+
+**What still holds.**
+
+- Journal entries are still signed with the installation's key and
+  hash-chained. The chain runs over journal entries only, so the core sees
+  the same consecutive sequence it always has.
+- Each kind still goes to the core's own route for it, unchanged. The core
+  did not change, and old and new clients both work against it.
+- The bound now covers telemetry and ends too. Telemetry never causes the one
+  refusal of decision 4: when a journal entry or an end needs room, held
+  telemetry is dropped first, oldest first, and counted.
+- A rejected journal entry still stops delivery of every journal entry after
+  it until it is inspected. It does not hold back telemetry or session ends:
+  an end held back would leave a run active until the silence backstop.
+- A telemetry export or end that the core says it will never take (it
+  answers that the item itself is malformed) is dropped and counted, so it
+  does not stop the rest of its kind.
+- Telemetry stays outside the event chain. The table of watched processes
+  stays: it is state, not an outbox. Only the ends it decides on go to the
+  outbox.
+- `GET /_client/status` reports the outbox: items by kind, bytes, the bound,
+  the oldest item's age, what was dropped, and the newest delivery.
