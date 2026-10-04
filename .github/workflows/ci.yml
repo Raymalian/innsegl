@@ -372,6 +372,12 @@ jobs:
       # ever touches ~/.innsegl-update or a real checkout.
       - name: innsegl-update fetches, gates and redeploys, or refuses with no change
         run: ./scripts/innsegl-update-selftest.sh
+      # ADR-0070. A deployment host loads images built elsewhere only when
+      # every one carries the commit of every input it is built from, and
+      # refuses the bundle otherwise. Hermetic: docker is a fake on PATH and
+      # the repository is a throwaway one; nothing is built, loaded or run.
+      - name: an image bundle is accepted only for the commit it was built from
+        run: ./scripts/image-bundle-selftest.sh
 
   backup-gate:
     name: backup gate
