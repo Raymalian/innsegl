@@ -226,6 +226,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	s.mux.HandleFunc("GET /api/v1/repos", s.handleRepos)
 	s.mux.HandleFunc("GET /api/v1/alerts", s.handleAlerts)
 	s.mux.HandleFunc("GET /api/v1/proof/{commit_sha}", s.handleProof)
+	s.mux.HandleFunc("GET /api/v1/verification/recent", s.handleRecentVerification)
 	s.mux.HandleFunc("GET /api/v1/attribution/{commit_sha}", s.handleAttribution)
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	// The run record and step diff routes (#395, #396; recordhandler.go).
