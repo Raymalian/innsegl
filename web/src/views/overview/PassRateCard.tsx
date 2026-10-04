@@ -73,6 +73,8 @@ export interface PassRateCardProps {
   /** A live measurement, if one was ever made. Nothing in this build makes
    * one; see the report. */
   readonly rate?: PassRate;
+  /** A live measurement is running; say so rather than "Not measured". */
+  readonly measuring?: boolean;
   readonly now: Date;
   /** doc 06 §3.6's page, where the reader can run the check this card did
    * not. */
@@ -82,10 +84,23 @@ export interface PassRateCardProps {
 export function PassRateCard({
   commitsRecorded,
   rate,
+  measuring = false,
   now,
   verifyHref,
 }: PassRateCardProps) {
   const measured = isLive(rate) ? rate : undefined;
+
+  if (measured === undefined && measuring) {
+    return (
+      <Line
+        tone="neutral"
+        value={strings.passRate.measuring}
+        hover={strings.passRate.measuringMeaning}
+        note={strings.passRate.measuringMeaning}
+        href={verifyHref}
+      />
+    );
+  }
 
   if (measured === undefined) {
     return (

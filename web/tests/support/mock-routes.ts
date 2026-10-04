@@ -78,6 +78,14 @@ export async function installApiMocks(page: Page): Promise<void> {
       return;
     }
 
+    if (p === "/api/v1/verification/recent") {
+      await json(route, {
+        checked: 12, verified: 11, failed: 0, unavailable: 1,
+        measured_at: "2026-08-31T11:59:00.000Z", commits: [],
+      });
+      return;
+    }
+
     if (p === "/api/v1/repos") {
       await json(route, repoList());
       return;
