@@ -1,6 +1,6 @@
 # ADR-0066: One name, one certificate
 
-- Status: accepted; amended 2026-10-02
+- Status: accepted; amended 2026-10-02 and 2026-10-04 (see the Amendments)
 - Date: 2026-10-01
 - Deciders: the operator
 
@@ -48,3 +48,19 @@ address is secure only on `localhost`. A separate key means a dashboard that
 leaks its key cannot present the gateway's certificate.
 
 **What still holds.** One name, one CA. Plain HTTP stays for `localhost`.
+
+## Amendment (2026-10-04): the API serves the dashboard's certificate
+
+**What changed.** `innsegl api` serves the dashboard and terminates its TLS
+(#475). The dashboard's own web server is gone. The API reads the
+certificate and key the core writes, from the same read-only volume, and
+reads them again when the core renews them. The API now holds that key,
+which lets it present the dashboard's certificate and nothing else. The
+host ports, the relying-party ID and the origin do not change.
+
+**Why.** One process fewer between the browser and the API, and no proxy
+hop. The API and its UI share one origin without one.
+
+**What still holds.** The dashboard's key is its own, never the gateway's.
+The core is its one writer; the API only reads it. Plain HTTP stays for
+`localhost`.

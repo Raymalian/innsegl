@@ -110,8 +110,7 @@ purpose() {
     innsegl-spire-agent)                   echo "workload attestation" ;;
     innsegl-spire-oidc)                    echo "the JWKS the CA trusts" ;;
     innsegl-mcp)                           echo "the tool surface" ;;
-    innsegl-api)                           echo "the dashboard's read side" ;;
-    innsegl-dashboard)                     echo "the UI" ;;
+    innsegl-api)                           echo "the dashboard and its read side" ;;
     innsegl-sealer)                        echo "segment sealing" ;;
     innsegl-reconciler)                    echo "the reconcile pass" ;;
     innsegl-backup)                        echo "the ledger's backup" ;;

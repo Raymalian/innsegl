@@ -103,14 +103,15 @@ this project, and every line of it matters:
   `.../spire/agent/x509pop/<sha1 of the agent certificate>`, freshly minted on
   every `up` after a `down -v`. `register.sh` puts it where compose reads it
   for you. The file is gitignored, because it describes one booted stack.
-- **`build` before `up`.** Four of the eight services in `innsegl.yml` are the
-  same locally-built `innsegl` image and one is the dashboard, so the first
-  boot compiles rather than pulls. About a minute, warm.
+- **`build` before `up`.** Most services in `innsegl.yml` run the same
+  locally-built `innsegl` image; `innsegl-api` runs that image plus the built
+  dashboard UI, so the first boot compiles rather than pulls. About a minute,
+  warm.
 
 ### Check it came up
 
 ```sh
-curl -s http://127.0.0.1:8443/keys                  # a JWKS with a key in it
+curl -s http://127.0.0.1:28443/keys                  # a JWKS with a key in it
 curl -s http://127.0.0.1:5555/api/v1/rootCert       # a PEM CA certificate
 curl -s http://127.0.0.1:3000/api/v1/log/publicKey  # a PKIX public key
 curl -s http://127.0.0.1:28081/readyz               # the MCP's own readiness
@@ -119,8 +120,8 @@ curl -s http://127.0.0.1:8082/api/v1/health         # its backend, and what its
                                                     # credential may do
 ```
 
-The last line goes through the dashboard's own nginx to `innsegl-api`, so it
-answers two questions at once: the proxy is wired, and the query API is up. The
+Both of the last two lines reach `innsegl-api`, which serves the dashboard's
+UI and its query API on one origin (#475). The health
 body is the report `api.Open` measured **on the server** — `"role":
 "innsegl_reader"`, `"superuser": false`, and eight write probes each refused
 with SQLSTATE `42501`. doc 05 §1's "no write credentials mounted" is a fact you
@@ -302,7 +303,7 @@ summary:
 |---|---|
 | [`spire/README.md`](spire/README.md) | `spire-server`, `spire-agent`, `spire-oidc` — the trust domain, workload attestation, and the JWT-SVID → OIDC bridge |
 | [`sigstore/README.md`](sigstore/README.md) | `fulcio`, `rekor` and Rekor's backing Trillian log and database — the CA and the transparency log |
-| [`innsegl/README.md`](innsegl/README.md) | `postgres`, the object store (`innsegl-object-store`, `innsegl-object-filer`, `innsegl-s3`), `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api`, `innsegl-dashboard`, `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
+| [`innsegl/README.md`](innsegl/README.md) | `postgres`, the object store (`innsegl-object-store`, `innsegl-object-filer`, `innsegl-s3`), `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api` (which serves the dashboard), `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
 
 The first two are Innsegl's dependencies. The third is Innsegl.
 
@@ -339,12 +340,10 @@ harnesses take up to eight each, so a machine running both may need
 Nothing here is published beyond loopback, and that is doing more work than it
 looks like.
 
-**The query API has no authentication** (#174). It answers every caller, and it
-is safe today only because it publishes no host port — the dashboard reaches it
-over the compose network and nothing else can.
-
-Publish it, or put the dashboard on a public address, and the whole ledger is
-world-readable: `agent_type` and `task_ref` in clear, every run's timeline,
+**The query API is the dashboard's origin** (#475): `innsegl-api` serves both
+on the dashboard's ports, loopback by default. Its sign-in (ADR-0062) is the
+only door this stack provides. Put it on a public address without a second
+door in front and the ledger is one passkey away from world-readable: `agent_type` and `task_ref` in clear, every run's timeline,
 every payload digest, every repository signed in and when.
 
 **Pseudonymisation does not cover this, and it is easy to assume it does.**
@@ -400,7 +399,7 @@ reconciler were still two containers of their own:
 |---|---|---|
 | **separate loops** | **14** | `--profile separate` with `INNSEGL_MCP_ALSO=reap` runs the sealer and the reconciler as their own containers. For doc 05 §2's replicated MCP, where one process per replica would run a sealer per replica. The reconciler's SPIRE pass is off in this shape (ADR-0056). |
 | the full stack | 12 | the default: the sealer and the reconciler run inside the MCP (`INNSEGL_MCP_ALSO` defaults to `seal,reconcile,reap,gateway`) |
-| **without the UI** | **10** | `innsegl-dashboard` and `innsegl-api` serve the web view. Signing and verifying never touch them. |
+| **without the UI** | **11** | `innsegl-api` serves the web view (one container since #475). Signing and verifying never touch it. |
 | **public Rekor** | **~5** | ADR-0042. `rekor`, `rekor-redis` and the three Trillian containers exist only because the log is ours. |
 
 A stack brought up before the default changed keeps its `innsegl-sealer` and
@@ -497,19 +496,18 @@ statement fail?" would pass the database owner are in
 Two things, named here because a first-run experience that quietly omits part
 of its topology is worse than one that says so.
 
-**Authentication.** Neither the dashboard nor the query API authenticates
-anybody. `innsegl api` authenticates nobody and authorises nothing, and says so
-in its own `--help`; doc 05 §3 puts `dashboard.innsegl.dev` behind Cloudflare
-Access, and RM-062 (#70) is the issue that does it. Nothing here invents a
-scheme in the meantime, and every published port in the stack is bound to
-loopback. What *is* enforced is the half that survives a misconfigured proxy:
-the credential the query API holds cannot write, whoever reaches it — a
-Postgres role the server itself certifies, not the absence of write code.
+**A second door.** `innsegl api` requires a passkey session on every route
+but health and proof (ADR-0062). doc 05 §3 puts `dashboard.innsegl.dev` behind
+Cloudflare Access as a second, independent door, and RM-062 (#70) is the issue
+that does it; this stack does not provide it. Every published port is bound
+to loopback unless `INNSEGL_BIND` says otherwise. What *is* enforced, whoever
+reaches it: the credential the query API holds cannot write — a Postgres role
+the server itself certifies, not the absence of write code.
 
 The dashboard's BFF used to be on this list. It is here now: `innsegl-api`
 runs `innsegl api` against `innsegl_reader`, the read-only role
-`innsegl-db-init` provisions from `internal/api/readonly.sql`, and
-`innsegl-dashboard`'s nginx proxies `/api/v1/` to it. Ask it what its own
+`innsegl-db-init` provisions from `internal/api/readonly.sql`, and serves the
+dashboard's UI next to `/api/v1/`. Ask it what its own
 credential can do:
 
 ```bash
@@ -630,7 +628,7 @@ Four things worth knowing before you choose:
 | compose refuses, naming `INNSEGL_SPIRE_JWT_ISSUER` | the export was skipped. This refusal is deliberate; see above |
 | `innsegl serve` refuses, naming `-identity-mode / -identity-secret / -identity-secret-file` | the deployment secret is unset, under 16 bytes, or supplied twice. In the shipped stack `innsegl-identity-init` writes it, so check that one-shot's logs first. See "What an agent's identity says about it" |
 | `register: FAIL: no attested agent yet` | the SPIRE agent has not finished attesting. Re-run `register.sh`; it is idempotent |
-| ports 8443, 5555, 3000, 28080, 28081, 28095 or 8082 already bound | the stack publishes those seven on loopback. Free them, or override: `INNSEGL_SPIRE_OIDC_PORT`, `INNSEGL_MCP_PORT`, `INNSEGL_MCP_HEALTH_PORT`, `INNSEGL_GATEWAY_PORT`, `INNSEGL_DASHBOARD_PORT` |
+| ports 28443, 5555, 23000, 28080, 28081, 28095, 8082 or 8443 already bound | the stack publishes those on loopback. Free them, or override: `INNSEGL_SPIRE_OIDC_PORT`, `INNSEGL_MCP_PORT`, `INNSEGL_MCP_HEALTH_PORT`, `INNSEGL_GATEWAY_PORT`, `INNSEGL_DASHBOARD_PORT`, `INNSEGL_DASHBOARD_TLS_PORT` |
 | `all predefined address pools have been fully subnetted` | Docker is out of network address space, at roughly the twenty-ninth network. The three stacks hold twelve between them. `docker network prune` |
 | compose refuses, naming `INNSEGL_SPIRE_PARENT_ID` | `register.sh` has not run since this stack booted. It writes `deploy/compose/.env`; re-run it |
 | `innsegl-mcp` restarts, logging that the Workload API gave it no SVID | its registration entry is missing or names an older build of `innsegl:local`. Re-run `register.sh` — it detects a stale entry and replaces it |

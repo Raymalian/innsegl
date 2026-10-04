@@ -189,17 +189,15 @@ signed integration time rather than the verifier's clock.
 
 Attribution says *who*. The ledger says *what they did*.
 
-**The query API is not published to the host.** `innsegl-api` listens on 8082
-inside the compose network and nothing maps it out; only the dashboard is
-reachable, on `localhost:8082` (not `127.0.0.1:8082` — RM-260/RM-261,
-ADR-0062, put the dashboard behind a WebAuthn passkey sign-in, and a
-passkey's RP ID must be a domain; `localhost` is one and an IP literal is
-not). So from the host either browse the dashboard, or reach the API from
-inside the network:
+**The query API is the dashboard's origin.** `innsegl-api` serves the
+dashboard and its API together, on `localhost:8082` (not `127.0.0.1:8082` —
+RM-260/RM-261, ADR-0062, put the dashboard behind a WebAuthn passkey sign-in,
+and a passkey's RP ID must be a domain; `localhost` is one and an IP literal
+is not). So browse the dashboard, or, signed in, fetch the run's JSON from the
+same origin:
 
-```sh
-docker exec innsegl-dashboard \
-  wget -qO- http://innsegl-api:8082/api/v1/runs/run-dd41951f222496a135241a77d1430237
+```text
+http://localhost:8082/api/v1/runs/run-dd41951f222496a135241a77d1430237
 ```
 
 The `run_registered` row carries `agent_type` and `task_ref` in clear, which is
