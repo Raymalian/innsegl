@@ -133,3 +133,25 @@ func TestTheGoImageIsBuiltFromTheGoSourcesAlone(t *testing.T) {
 		t.Error("the Makefile does not turn off the default build attestations")
 	}
 }
+
+// `make update` skips when the deployed commit matches the checkout. A core
+// that crash-loops on that commit is not up to date: measured 2026-10-04,
+// update said "nothing to do" while innsegl-mcp restarted in a loop. It
+// skips only when innsegl-mcp is also running and not restarting.
+func TestUpdateSkipsOnlyWhenTheCoreIsRunning(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?ms)^update:\n(.*?)\n\n`).FindSubmatch(mk)
+	if m == nil {
+		t.Fatal("the Makefile has no update target")
+	}
+	if !strings.Contains(string(m[1]), "docker inspect") || !strings.Contains(string(m[1]), "Restarting") {
+		t.Fatal("make update decides there is nothing to do without asking whether innsegl-mcp is running")
+	}
+}
