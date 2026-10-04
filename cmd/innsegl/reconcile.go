@@ -17,6 +17,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
+	"innsegl.dev/innsegl/internal/mirror"
 	"innsegl.dev/innsegl/internal/reconciler"
 	"innsegl.dev/innsegl/internal/spire"
 )
@@ -138,8 +139,12 @@ func splitRepos(list string) []string {
 
 // reconcileOptions is the resolved command line.
 type reconcileOptions struct {
-	dsn         string
-	rekorURL    string
+	dsn      string
+	rekorURL string
+	// mirrorDir is the core's per-repository mirror (ADR-0065), read-only.
+	// When set it is the only place repositories are read from; workspace is
+	// then unused by the passes that read repositories.
+	mirrorDir   string
 	workspace   string
 	trustDomain string
 	expireAfter time.Duration
@@ -249,8 +254,12 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 			"ledger connection string — prefer the environment variable ($"+envLedgerDSN+")")
 		rekorURL = fs.String("rekor-url", os.Getenv(envRekorURL),
 			"transparency log base URL, e.g. https://rekor.sigstore.dev ($"+envRekorURL+")")
+		mirrorDir = fs.String("mirror-dir", os.Getenv(mirror.EnvDir),
+			"the core's per-repository mirror, read-only (ADR-0065): the repositories every pass "+
+				"reads, as <root>/host/org/name.git. Wins over -workspace ($"+mirror.EnvDir+")")
 		workspace = fs.String("workspace", os.Getenv(envWorkspace),
-			"root the `repo` of an intent is resolved under, as <root>/host/org/name ($"+envWorkspace+")")
+			"a single-host fixture's working trees, as <root>/host/org/name; read only when "+
+				"-mirror-dir is unset ($"+envWorkspace+")")
 		trustDomain = fs.String("trust-domain", os.Getenv(envTrustDomain),
 			"SPIFFE trust domain name, e.g. innsegl.dev ($"+envTrustDomain+")")
 		expireAfter = fs.Duration("expire-after",
@@ -361,8 +370,9 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 		missing = "-dsn (or $" + envLedgerDSN + ")"
 	case *rekorURL == "":
 		missing = "-rekor-url (or $" + envRekorURL + ")"
-	case *workspace == "":
-		missing = "-workspace (or $" + envWorkspace + ")"
+	case *mirrorDir == "" && *workspace == "":
+		missing = "-mirror-dir (or $" + mirror.EnvDir + "), or -workspace (or $" + envWorkspace +
+			") for a single-host fixture,"
 	case *trustDomain == "":
 		missing = "-trust-domain (or $" + envTrustDomain + ")"
 	}
@@ -387,7 +397,7 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 	}
 
 	opts := reconcileOptions{
-		dsn: *dsn, rekorURL: *rekorURL, workspace: *workspace,
+		dsn: *dsn, rekorURL: *rekorURL, mirrorDir: *mirrorDir, workspace: *workspace,
 		trustDomain: *trustDomain, expireAfter: *expireAfter,
 		driftWindow:    *driftWindow,
 		writesLogDir:   strings.TrimSpace(*writesLogDir),
@@ -774,6 +784,17 @@ func spireDriftView(d spire.Drift) spireDriftJSON {
 	}
 }
 
+// reconcileRepos is where every pass reads repositories: the core's mirror
+// when one is configured (ADR-0065 decision 1), and a single-host fixture's
+// working trees only when it is not. The MCP's environment carries both, and
+// the companion reads that environment, so the order is the decision.
+func reconcileRepos(opts reconcileOptions) (reconciler.Repos, error) {
+	if opts.mirrorDir != "" {
+		return reconciler.NewMirrorRepos(opts.mirrorDir)
+	}
+	return reconciler.NewGitWorkspace(opts.workspace)
+}
+
 // openReconciler is the production wiring: a ledger, the repositories this
 // deployment holds, the transparency log, and — when configured — the SPIRE
 // identity pass (#153, RM-096) sharing the same ledger connection.
@@ -784,7 +805,7 @@ func openReconciler(ctx context.Context, opts reconcileOptions) (reconcileEngine
 	}
 	closeAll := store.Close
 
-	repos, err := reconciler.NewGitWorkspace(opts.workspace)
+	repos, err := reconcileRepos(opts)
 	if err != nil {
 		closeAll()
 		return reconcileEngines{}, nil, err

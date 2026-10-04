@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -308,5 +309,47 @@ func TestReconcileReportNamesTheTelemetryWitness(t *testing.T) {
 	quiet := renderReconcileResult(reconciler.Result{Witness: reconciler.WitnessReport{Enabled: true}})
 	if want := "witness: no telemetry received yet"; !strings.Contains(quiet, want) {
 		t.Errorf("report lacks %q:\n%s", want, quiet)
+	}
+}
+
+// P1: the reconciler reads repositories from the core's mirror (ADR-0065
+// decision 1). -mirror-dir ($INNSEGL_MIRROR_DIR) is enough on its own, and
+// when a working-tree root is also set — the MCP's environment carries both,
+// and the companion reads it — the mirror is what is read.
+func TestReconcileReadsTheMirrorWhenOneIsSet(t *testing.T) {
+	mirrorDir, workspace := t.TempDir(), t.TempDir()
+	var seen reconcileOptions
+	var stdout, stderr bytes.Buffer
+	code := runReconcileCommand([]string{
+		"-dsn", "postgres://x/y", "-rekor-url", "http://rekor.example",
+		"-trust-domain", "innsegl.dev", "-mirror-dir", mirrorDir, "-once",
+	}, &stdout, &stderr, reconcileDeps{
+		open: func(_ context.Context, o reconcileOptions) (reconcileEngines, func(), error) {
+			seen = o
+			return reconcileEngines{Rekor: &fakeCycles{}}, func() {}, nil
+		},
+	})
+	if code != exitOK {
+		t.Fatalf("with -mirror-dir and no -workspace the command exited %d; stderr:\n%s", code, stderr.String())
+	}
+	if seen.mirrorDir != mirrorDir {
+		t.Fatalf("-mirror-dir did not reach the opener: %q", seen.mirrorDir)
+	}
+	repos, err := reconcileRepos(reconcileOptions{mirrorDir: mirrorDir, workspace: workspace})
+	if err != nil {
+		t.Fatalf("reconcileRepos: %v", err)
+	}
+	if _, ok := repos.(*reconciler.MirrorRepos); !ok {
+		t.Fatalf("with both set the reconciler reads %T, want the mirror", repos)
+	}
+	repos, err = reconcileRepos(reconcileOptions{workspace: workspace})
+	if err != nil {
+		t.Fatalf("reconcileRepos: %v", err)
+	}
+	if _, ok := repos.(*reconciler.GitWorkspace); !ok {
+		t.Fatalf("with only a working-tree root the reconciler reads %T", repos)
+	}
+	if _, err := reconcileRepos(reconcileOptions{mirrorDir: filepath.Join(mirrorDir, "absent")}); err == nil {
+		t.Fatal("a mirror root that does not exist was accepted")
 	}
 }

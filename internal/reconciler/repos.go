@@ -59,6 +59,10 @@ const (
 type GitWorkspace struct {
 	root string
 	git  string
+	// bare resolves `host/org/name` to `<root>/host/org/name.git`, the
+	// layout of the core's mirror (internal/mirror). Set only by
+	// NewMirrorRepos.
+	bare bool
 }
 
 var _ Repos = (*GitWorkspace)(nil)
@@ -92,6 +96,9 @@ func (w *GitWorkspace) worktree(repo string) (string, error) {
 		return "", fmt.Errorf("reconciler: %q is not a repo (doc 02 §5): %w", repo, err)
 	}
 	dir := filepath.Join(w.root, filepath.FromSlash(repo))
+	if w.bare {
+		dir += ".git"
+	}
 	info, err := os.Stat(dir)
 	if err != nil {
 		return "", fmt.Errorf("reconciler: no working tree for %s: %w", repo, err)
