@@ -26,9 +26,9 @@
 #                                  (same binary, subcommand)
 #   innsegl-dashboard   built      Read-only UI + BFF proof checks. No write
 #                                  credentials mounted — enforced by giving it
-#                                  a read-only DB role. TWO SERVICES here:
-#                                  innsegl-dashboard is the UI, innsegl-api is
-#                                  the BFF and the thing that holds the
+#                                  a read-only DB role. ONE SERVICE here since
+#                                  #475: innsegl-api serves the UI, the query
+#                                  API and the proof BFF, and holds the
 #                                  read-only role
 #   demo-agent          built      Scripted agent that registers, makes a
 #                                  scratch-repo commit, retires. This is the
@@ -58,13 +58,12 @@
 #   docker compose -f deploy/compose/innsegl.yml up -d
 #
 # WHAT IS STILL NOT HERE, said plainly rather than left to be discovered:
-#   * AUTHENTICATION, in front of the dashboard or the query API. `innsegl api`
-#     authenticates nobody and authorises nothing, and says so in its own usage;
-#     doc 05 §3 puts dashboard.innsegl.dev behind Cloudflare Access and RM-062
-#     (#70) is the issue that does it. Nothing here invents a scheme in the
-#     meantime, and neither service publishes a port on anything but loopback.
-#     What IS enforced is the half that survives a misconfigured proxy: the
-#     credential the query API holds cannot write, whoever reaches it.
+#   * A SECOND DOOR in front of the dashboard. `innsegl api` requires a passkey
+#     session on every route but health and proof (ADR-0062); doc 05 §3's
+#     Cloudflare Access (RM-062, #70) stays a second, independent door that this
+#     file does not provide. The dashboard publishes on loopback unless
+#     INNSEGL_BIND says otherwise. What is enforced whoever reaches it: the
+#     credential the query API holds cannot write.
 #
 # The dashboard's BFF used to be on that list. #121 landed `innsegl api` and
 # this file now runs it (innsegl-api), behind the read-only role
@@ -1082,7 +1081,7 @@ services:
       # Extra DNS names the gateway's certificate is issued for.
       INNSEGL_GATEWAY_CERT_NAMES: ${INNSEGL_GATEWAY_CERT_NAMES:-}
       # RM-311 (#493): the dashboard's own certificate, for the same names,
-      # written here and served by innsegl-dashboard over HTTPS.
+      # written here and served by innsegl-api over HTTPS (#475).
       INNSEGL_DASHBOARD_TLS_DIR: /dashboard-tls
       # A restart lets the gateway finish the model replies it is streaming:
       # it closes its listener at once (the client sends new requests to the
@@ -1273,7 +1272,7 @@ services:
       # writes pass reads the bodies here, READ-ONLY, as innsegl-reconciler
       # mounts them. The read-write mount above is for writing them.
       - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/harness-log:ro
-      # READ-WRITE; innsegl-dashboard mounts it read-only. The dashboard's
+      # READ-WRITE; innsegl-api mounts it read-only. The dashboard's
       # certificate and key (RM-311), renewed here before they expire.
       - innsegl-dashboard-tls:/dashboard-tls
       # READ-WRITE (this process writes the certificate here on every
@@ -1755,14 +1754,24 @@ services:
       - ALL
 
   # --------------------------------------------------------------------------
-  # innsegl-api — the OTHER HALF of doc 05 §1's innsegl-dashboard row: "Read-only
-  # UI + BFF proof checks. No write credentials mounted — enforced by giving it a
-  # read-only DB role."
+  # innsegl-api — doc 05 §1's innsegl-dashboard row: "Read-only UI + BFF proof
+  # checks. No write credentials mounted — enforced by giving it a read-only DB
+  # role."
   #
-  # #109 shipped the UI half alone and said why: no `main` in this module
-  # constructed an `api.Server`, so there was nothing to containerise, and the
-  # stack provisioned no read-only role for one to hold. #121 landed
-  # `innsegl api`. This service is the wire between them.
+  # ONE SERVICE FOR THE ROW SINCE #475. It serves the built UI (the api image
+  # target: the runtime image plus web/'s build at INNSEGL_API_UI_DIR), the
+  # query API and the proof BFF on one origin, so the browser's relative
+  # /api/v1 requests need no proxy. It terminates the browser's TLS on 8443
+  # with the dashboard's own certificate and key, which innsegl-mcp writes to
+  # the innsegl-dashboard-tls volume (RM-311, ADR-0066's amendment) and renews;
+  # this service mounts it read-only and reads the file again when it changes.
+  # Plain HTTP stays on 8082 for localhost and for the health check. The
+  # nginx container that did this before is gone; its security headers are in
+  # internal/api/ui.go.
+  #
+  # ITS OWN IMAGE, NOT innsegl:local. A UI change rebuilds and restarts this
+  # service alone; innsegl-mcp and the other Go services keep the runtime
+  # image, and the core is not restarted for a dashboard change.
   #
   # THE DSN IS $INNSEGL_API_DSN AND IT NAMES THE READER. Not $INNSEGL_LEDGER_DSN,
   # which every other innsegl-* service above sets and which names the APPENDER.
@@ -1771,60 +1780,40 @@ services:
   # line." Handed the appender this process exits 13 WRITABLE and publishes no
   # address — measured, and there is no flag that turns the check off.
   #
-  # IT HOLDS NO AUTHENTICATION. It authenticates nobody and authorises nothing;
-  # doc 05 §3 puts dashboard.innsegl.dev behind Cloudflare Access and RM-062
-  # (#70) is the issue that does it. Nothing here invents a scheme in the
-  # meantime. What this arrangement does enforce is the half that survives a
-  # misconfigured proxy: the credential cannot write, whoever reaches it. The
-  # service publishes no host port for the same reason — the dashboard's nginx
-  # is the only thing that reaches it, over the read-only network.
+  # SIGN-IN. Every route but health and proof requires a passkey session
+  # (ADR-0062). doc 05 §3's Cloudflare Access (RM-062, #70) remains a second,
+  # independent door, not provided here. The ledger it reads resolves
+  # pseudonyms (ADR-0041 protects only what reaches the public log), so do not
+  # publish it beyond loopback without the hosted shape's protections in front.
   #
-  # NETWORKS: two, and it costs the deployment NO NEW ONE.
-  #   innsegl-ledger-readonly  postgres, as the reader. This is the network doc
-  #                            05 §1 asked for and #109 declared in advance with
-  #                            two members and a note saying what it was waiting
-  #                            for. It is also how innsegl-dashboard's nginx
-  #                            reaches this service: both are already members,
-  #                            and #100 caps this machine at roughly twenty-nine
-  #                            networks, so a hop that can cost zero costs zero.
-  #   innsegl-sigstore         fulcio and rekor, for the proof BFF's live checks.
+  # NETWORKS: three, and it costs the deployment NO NEW ONE.
+  #   innsegl-ledger-readonly     postgres, as the reader (doc 05 §1).
+  #   innsegl-sigstore            fulcio and rekor, for the proof BFF.
+  #   innsegl-dashboard-frontend  the dashboard's public face; the only
+  #                               non-internal one, which is what lets its
+  #                               ports be published at all.
   #
   # It is on NO network with the MCP, none with the object store, and none with
   # SPIRE.
   #
   # THE MIRROR IS MOUNTED READ-ONLY. The proof BFF, the run page and the
   # account page read repositories from the core's per-repository mirror
-  # (ADR-0065 decision 1) and from nowhere else: no host folder, no list of
-  # repositories written at deploy time. A repository no client has pushed is
-  # answered "not held yet". A read-only mount is not the control — the
-  # database role is — but a BFF that could write into the repositories it
-  # verifies would be answering questions about its own output.
-  #
-  # THIS API HAS NO AUTHENTICATION, AND MUST NOT BE PUBLISHED DIRECTLY (#174).
-  #
-  # It answers every caller. That is safe here only because it publishes no
-  # host port: the dashboard reaches it over this network and nothing else can.
-  # Publish 8082, or put the dashboard on a public address, and the whole
-  # ledger is world-readable -- agent_type and task_ref IN CLEAR, every run's
-  # timeline, every payload digest, every repository signed in and when.
-  #
-  # ADR-0041's pseudonymisation does not help here and it is easy to think it
-  # does. It protects the SPIFFE ID that reaches the PUBLIC LOG --
-  # `cb590b02/e7cbb3a9` rather than `orchestrator/RM-101`. The ledger is where
-  # those pseudonyms are RESOLVED, and resolving them is what this API is for.
-  # The two surfaces have opposite properties:
-  #
-  #   Rekor    publishes pseudonyms      safe to expose (ADR-0042)
-  #   this     publishes the resolution  not
-  #
-  # If you need it reachable from elsewhere, put your own authenticating proxy
-  # in front of it. This project deliberately ships no token check: an
-  # authentication mechanism nobody has threat-modelled looks like a control
-  # and is not one, and saying plainly what the software does is worth more
-  # than a header comparison.
+  # (ADR-0065 decision 1) and from nowhere else. A read-only mount is not the
+  # control — the database role is — but a BFF that could write into the
+  # repositories it verifies would be answering questions about its own output.
   # --------------------------------------------------------------------------
   innsegl-api:
     <<: *innsegl-build
+    # The api target: the runtime image plus the built UI (#475).
+    image: ${INNSEGL_API_IMAGE:-innsegl-api:local}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: api
+      args:
+        VERSION: ${INNSEGL_VERSION:-compose}
+        COMMIT: ${INNSEGL_COMMIT:-unknown}
+        DATE: ${INNSEGL_BUILD_DATE:-unknown}
     container_name: innsegl-api
     restart: unless-stopped
     depends_on:
@@ -1833,6 +1822,7 @@ services:
     networks:
       - innsegl-ledger-readonly
       - innsegl-sigstore
+      - innsegl-dashboard-frontend
     labels:
       dev.innsegl.component: api
     user: "1000:1000"
@@ -1859,14 +1849,18 @@ services:
       # address now, for the identical reason.
       INNSEGL_API_RP_ID: ${INNSEGL_API_RP_ID:-localhost}
       INNSEGL_API_RP_ORIGIN: ${INNSEGL_API_RP_ORIGIN:-http://localhost:8082}
-      # 0.0.0.0 rather than the loopback default: the caller is the dashboard's
-      # nginx, in another container. The service publishes no host port, and
-      # BOTH its networks are internal — a container attached only to internal
-      # networks cannot have a port published at all (measured; see
-      # sigstore.yml's innsegl-sigstore-published) — so this listener is
-      # reachable from postgres, innsegl-dashboard, fulcio and rekor, and from
-      # nothing else in the deployment or on the host.
+      # 0.0.0.0 rather than the loopback default: the callers are the
+      # published ports below, which arrive from outside the container.
+      # Plain HTTP, for localhost (ADR-0066's amendment) and the health check.
       INNSEGL_API_LISTEN: 0.0.0.0:8082
+      # #475: the dashboard's HTTPS at the core's name, from the certificate
+      # and key innsegl-mcp writes to the innsegl-dashboard-tls volume
+      # (mounted below). Set together: `innsegl api` refuses one without the
+      # other.
+      INNSEGL_API_TLS_LISTEN: 0.0.0.0:8443
+      INNSEGL_API_TLS_CERT: /run/innsegl/dashboard-tls/dashboard-tls.pem
+      # The built UI, where the Dockerfile's api target puts it.
+      INNSEGL_API_UI_DIR: /usr/share/innsegl/ui
       # The gateway's CA certificate (public), so the account page's connect
       # command carries its fingerprint rather than a placeholder.
       INNSEGL_API_GATEWAY_CA_CERT: /run/innsegl/gateway-ca/gateway-ca.pem
@@ -1908,6 +1902,18 @@ services:
       # READ-ONLY: the gateway's public CA certificate, from the host folder
       # innsegl-mcp writes it to (*gateway-ca-host-dir). Never the key.
       - ${INNSEGL_GATEWAY_CA_HOST_DIR:-${HOME}/.innsegl/ca}:/run/innsegl/gateway-ca:ro
+      # READ-ONLY: the dashboard's certificate and key (RM-311). innsegl-mcp
+      # is the one writer and renews it; this process reads it again when it
+      # changes. The core's file is 0600 for uid 1000, this service's user.
+      - innsegl-dashboard-tls:/run/innsegl/dashboard-tls:ro
+    ports:
+      # The dashboard (#475), on the host ports the nginx container used, so
+      # the browser address, the passkey origin and bookmarks are unchanged.
+      # Loopback unless INNSEGL_BIND says otherwise (OPS-127).
+      - "${INNSEGL_BIND:-127.0.0.1}:${INNSEGL_DASHBOARD_PORT:-8082}:8082"
+      # HTTPS at the core's name (RM-311, ADR-0066): passkeys need a secure
+      # origin anywhere but localhost.
+      - "${INNSEGL_BIND:-127.0.0.1}:${INNSEGL_DASHBOARD_TLS_PORT:-8443}:8443"
     healthcheck:
       # /api/v1/health and not a TCP dial: ADR-0024's rule, that a readiness
       # probe must fetch something it can parse. The body it returns is the
@@ -1920,77 +1926,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-
-  # --------------------------------------------------------------------------
-  # innsegl-dashboard — doc 05 §1's "Read-only UI + BFF proof checks. No write
-  # credentials mounted — enforced by giving it a read-only DB role."
-  #
-  # THIS IS THE UI HALF. innsegl-api above is the other one, and until it landed
-  # this service held no database credential at all and every view that read the
-  # query API rendered its own load-failure state, permanently (#109, #121).
-  #
-  # THE DASHBOARD STILL HOLDS NO DATABASE CREDENTIAL, and that is the point
-  # rather than a leftover. The image is nginx and a built React bundle; the
-  # credential lives one container away, in innsegl-api, where it is a role the
-  # server itself certifies cannot write. doc 05 §1's "No write credentials
-  # mounted — enforced by giving it a read-only DB role" is satisfied by both
-  # halves at once: nothing is mounted here, and what is mounted next door is
-  # read-only by ACL rather than by convention.
-  #
-  # web/ fetches `/api/v1/...` SAME-ORIGIN — see web/src/views/overview/data.ts,
-  # where DEFAULT_API_BASE is the relative "/api/v1" — so the image's nginx
-  # proxies that prefix to innsegl-api over innsegl-ledger-readonly. There is no
-  # CORS anywhere in internal/api and none is invented here.
-  # deploy/docker/dashboard-nginx.conf carries the block and the reason it
-  # resolves the upstream at request time rather than at start-up.
-  #
-  # NETWORKS: doc 05 §1 puts the dashboard "on a network with read-only DB role
-  # and the proof endpoints", so it joins innsegl-ledger-readonly (which is now
-  # where the read-only credential is actually used, and where the WRITE
-  # network's five members are not) and innsegl-sigstore (fulcio and rekor). It
-  # is on NO network with the MCP.
-  # --------------------------------------------------------------------------
-  innsegl-dashboard:
-    image: ${INNSEGL_DASHBOARD_IMAGE:-innsegl-dashboard:local}
-    build:
-      context: ../..
-      dockerfile: deploy/docker/dashboard.Dockerfile
-    container_name: innsegl-dashboard
-    restart: unless-stopped
-    # `service_started` and not `service_healthy`: the UI must come up and show
-    # its own load-failure state if the backend is down, which is doc 06 §4.6's
-    # requirement and what an operator needs to SEE. A dashboard that refuses to
-    # start when its API is unhealthy would replace a visible failure with an
-    # invisible one.
-    depends_on:
-      innsegl-api:
-        condition: service_started
-    networks:
-      - innsegl-ledger-readonly
-      - innsegl-sigstore
-      - innsegl-dashboard-frontend
-    labels:
-      dev.innsegl.component: dashboard
-    # The image's user is nginx (101); this one is innsegl-mcp's, so the
-    # dashboard can read the key that process writes 0600 (RM-311).
-    user: "1000:1000"
-    volumes:
-      - innsegl-dashboard-tls:/run/innsegl/dashboard-tls:ro
-    ports:
-      - "${INNSEGL_BIND:-127.0.0.1}:${INNSEGL_DASHBOARD_PORT:-8082}:8080"
-      # HTTPS at the core's name (RM-311, ADR-0066): passkeys need a secure
-      # origin anywhere but localhost.
-      - "${INNSEGL_BIND:-127.0.0.1}:${INNSEGL_DASHBOARD_TLS_PORT:-8443}:8443"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/ >/dev/null || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 5s
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -2107,20 +2042,12 @@ networks:
 
   # THE READ PATH. doc 05 §1: "innsegl-dashboard on a network with read-only DB
   # role and the proof endpoints."
-  # MEMBERS: postgres, innsegl-api, innsegl-dashboard. #109 declared this
-  # network with two members and said what it was waiting for; innsegl-api is
-  # the arrival. Two directions and no more: innsegl-api reaches postgres as
-  # innsegl_reader — a credential api.Open proves read-only against the server
-  # before it serves a request — and innsegl-dashboard's nginx reaches
-  # innsegl-api. The WRITE network's five members are not here, and this
-  # network is not a route to any of them.
-  #
-  # THE UI/BFF HOP RIDES THIS NETWORK RATHER THAN A SIXTH ONE, and that is a
-  # decision rather than an omission: #100 caps this machine at roughly
-  # twenty-nine networks, both containers are already members for reasons doc 05
-  # §1 gives, and a separate network would buy no isolation the membership list
-  # does not already describe — unlike the dashboard/MCP frontend split below,
-  # which buys the one thing doc 05 §1's dashboard note forbids.
+  # MEMBERS: postgres, innsegl-api. One direction: innsegl-api reaches
+  # postgres as innsegl_reader — a credential api.Open proves read-only against
+  # the server before it serves a request. The WRITE network's five members
+  # are not here, and this network is not a route to any of them. (The
+  # dashboard's nginx was a third member until #475; innsegl-api serves the UI
+  # itself now.)
   innsegl-ledger-readonly:
     name: innsegl-ledger-readonly
     internal: true
@@ -2165,7 +2092,8 @@ networks:
   # The dashboard's public face. SEPARATE from innsegl-mcp-clients on purpose:
   # sharing one frontend network would give the dashboard a route to the MCP's
   # write surface, which is the one thing doc 05 §1's dashboard note forbids.
-  # MEMBERS: innsegl-dashboard, and whatever terminates TLS in front.
+  # MEMBERS: innsegl-api (it serves the dashboard since #475), and whatever
+  # terminates TLS in front.
   innsegl-dashboard-frontend:
     name: innsegl-dashboard-frontend
 
@@ -2314,7 +2242,7 @@ volumes:
   innsegl-gateway-ca-key:
 
   # The dashboard's certificate and key (RM-311). MOUNTED BY: innsegl-mcp
-  # (rw), innsegl-dashboard (ro). Losing it costs nothing: the core writes a
+  # (rw), innsegl-api (ro). Losing it costs nothing: the core writes a
   # new one on its next start.
   innsegl-dashboard-tls:
 

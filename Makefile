@@ -303,7 +303,7 @@ smoke-down: innsegl-stack-clean
 #
 # spire.yml and sigstore.yml are doc 05 §1's dependency rows; innsegl.yml is
 # the rest — postgres, the object store, the MCP, the reconciler, the sealer,
-# the dashboard and the demo agent — and until #109 none of them existed as a
+# the dashboard (innsegl-api) and the demo agent — and until #109 none of them existed as a
 # compose service. The object store is three of those services since RM-143
 # (#227): the bytes, the metadata, and the S3 gateway that is the only one of
 # the three enforcing object lock and the only one anything else can reach.
@@ -324,7 +324,7 @@ innsegl-up: sigstore-up
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES)
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
-	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) up -d
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) up -d --remove-orphans
 
 # ---------------------------------------------------------------------------
 # innsegl-up-here: the stack, built from THIS working tree.
@@ -350,7 +350,9 @@ innsegl-up: sigstore-up
 # unpacks that image once per service (measured: the same image exported
 # seven times, about 30s each, on every update). One service per image:
 # test/deploy/buildonce_test.go holds this list to the compose file.
-INNSEGL_BUILD_SERVICES := innsegl-mcp innsegl-backup innsegl-dashboard
+# innsegl-api has an image of its own (the runtime plus the built UI, #475),
+# so a dashboard change rebuilds and restarts it alone.
+INNSEGL_BUILD_SERVICES := innsegl-mcp innsegl-backup innsegl-api
 
 # DEPLOY_COMMIT names what a checkout is: HEAD, with "-dirty" when the
 # tracked files differ from it. `make update` records the one it deployed in
@@ -477,6 +479,11 @@ innsegl-up-here: sigstore-up innsegl-here-services
 # innsegl-here-services: innsegl's own services in THIS working tree, built
 # and brought up; the trust services (SPIRE, Fulcio, Rekor) are left as they
 # are. innsegl-up-here starts those first; `make update` assumes they run.
+#
+# --remove-orphans: a service removed from innsegl.yml leaves its container
+# running, and compose does not stop it. The old innsegl-dashboard (nginx)
+# held the dashboard's ports, so innsegl-api could not bind them (#475). The
+# trust services are other compose projects and are not touched.
 innsegl-here-services:
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
 	@# The stack's host folders are made here, as the user running make, for
@@ -498,7 +505,7 @@ innsegl-here-services:
 	  INNSEGL_WRITES_LOG_DIR='$(INNSEGL_WRITES_LOG_DIR)' \
 	  INNSEGL_WRITES_REPOS='$(INNSEGL_WRITES_REPOS)' \
 	  INNSEGL_LOG_DIR='$(INNSEGL_LOG_DIR)' \
-	  $(INNSEGL_COMPOSE) up -d
+	  $(INNSEGL_COMPOSE) up -d --remove-orphans
 
 # ---------------------------------------------------------------------------
 # innsegl-link: install the commit hook in one repository on this machine.

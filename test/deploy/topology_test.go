@@ -62,7 +62,9 @@ var doc05Rows = []struct {
 	{"innsegl-mcp", "the MCP server"},
 	{"innsegl-reconciler", "intent expiry, Rekor cross-check, drift detection"},
 	{"innsegl-sealer", "segment sealing and anchoring"},
-	{"innsegl-dashboard", "read-only UI and BFF proof checks"},
+	// The dashboard row is one service since #475: `innsegl api` serves the
+	// UI, the read-only query API and the proof BFF.
+	{"innsegl-api", "read-only UI and BFF proof checks"},
 	{"demo-agent", "scripted agent that registers, commits and retires"},
 }
 

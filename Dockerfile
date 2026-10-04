@@ -68,7 +68,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/g
 
 # The Go sources and nothing else: a change to the dashboard, the docs or
 # the deployment files must not rebuild this image and restart every service
-# that runs it. The Makefile's GO_IMAGE_INPUTS is the same list.
+# that runs it. The Makefile's GO_IMAGE_INPUTS is the same list. (The UI is
+# built in its own stage, ui-build, from web/ alone.)
 COPY cmd ./cmd
 COPY internal ./internal
 COPY migrations ./migrations
@@ -160,7 +161,8 @@ RUN mkdir -p /work /sessions && chown 1000:1000 /work /sessions
 RUN mkdir -p /mirror && chown 1000:1000 /mirror && chmod 0700 /mirror
 
 # /dashboard-tls is where this process writes the dashboard's certificate
-# and key (RM-311, #493); the dashboard mounts it read-only, as this user.
+# and key (RM-311, #493); innsegl-api mounts it read-only, as this user, and
+# serves the dashboard's HTTPS with it (#475).
 RUN mkdir -p /dashboard-tls && chown 1000:1000 /dashboard-tls && chmod 0700 /dashboard-tls
 
 # /message-key is RM-237's own derived agent-message key (E19, #395-#397): a
@@ -192,6 +194,35 @@ WORKDIR /home/innsegl
 # operator who mistyped `innsegl-reconciler` would get an MCP server.
 ENTRYPOINT ["/usr/local/bin/innsegl"]
 CMD ["help"]
+
+# ---------------------------------------------------------------------------
+# The dashboard's UI, built (#475).
+#
+# web/ and nothing else, so a Go change does not rebuild it and a UI change
+# does not rebuild the Go stages. `npm ci` and not `npm install`: the
+# lockfile is the pin. `npm run build` is `tsc --noEmit && vite build`, so an
+# image cannot be produced from source the compiler rejects.
+# ---------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS ui-build
+
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# innsegl-api's image: the runtime above plus the built UI (#475).
+#
+# `innsegl api` serves the dashboard from INNSEGL_API_UI_DIR, which the
+# compose file sets to this path. NOT go:embed: an embedded UI would make
+# every dashboard change a new innsegl binary, a new runtime image, and a
+# restart of the core. As its own target, a UI change rebuilds and restarts
+# innsegl-api alone; every other service keeps the runtime image.
+# ---------------------------------------------------------------------------
+FROM runtime AS api
+
+COPY --from=ui-build /src/web/dist /usr/share/innsegl/ui
 
 # ---------------------------------------------------------------------------
 # The backup's runtime (RM-146, #237).
