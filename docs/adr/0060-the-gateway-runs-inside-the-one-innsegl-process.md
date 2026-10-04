@@ -1,6 +1,6 @@
 # ADR-0060: The gateway runs inside the one innsegl process
 
-- Status: accepted; amended 2026-10-01 (see the Amendment)
+- Status: accepted; amended 2026-10-01 and 2026-10-03 (see the Amendments)
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -341,3 +341,20 @@ machine.
 **What still holds.** Decision 7 holds more strongly: agents cannot reach the
 container socket, because it is on another host. The other decisions and
 fail-closed behaviour are unchanged.
+
+## Amendment (2026-10-03): no snapshots of the core's own disk
+
+**What changed.** Decision 5 holds on the single-host shape only. A hosted
+core takes no workspace snapshots, and says so once at start-up. A recorded
+tool call then carries no `workspace_tree_hash`, which ADR-0061 allows.
+Snapshots return to a hosted core only as snapshot refs a client pushes to
+the mirror (ADR-0065 decision 3).
+
+**Why.** A snapshot reads a working tree through the projects mount. On a
+hosted core no client's tree is on its disk (ADR-0064 decision 2), and the
+core no longer mounts a projects folder at all (ADR-0065, as amended). A
+snapshot there would record the core's own files as the client's.
+
+**What still holds.** On the single-host shape, decision 5 is unchanged: a
+private `GIT_DIR` in the body-store volume, the working tree read and never
+written. The snapshot is a witness, never a gate.
