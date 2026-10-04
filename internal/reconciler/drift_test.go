@@ -59,6 +59,10 @@ type fakeSweep struct {
 	treeCalls  int
 	rangeCalls int
 	uuidCalls  int
+
+	// onRange runs as the log is read: what the ledger gains while a cycle
+	// is between reading the chain and reading the log.
+	onRange func()
 }
 
 func (f *fakeSweep) TreeSize(context.Context) (int64, error) {
@@ -71,6 +75,9 @@ func (f *fakeSweep) TreeSize(context.Context) (int64, error) {
 
 func (f *fakeSweep) EntriesFrom(_ context.Context, from, count int64) ([]reconciler.SweptEntry, error) {
 	f.rangeCalls++
+	if f.onRange != nil {
+		f.onRange()
+	}
 	if f.sweepErr != nil {
 		return nil, f.sweepErr
 	}
@@ -338,6 +345,28 @@ func TestREC003LeavesAnEntryAloneWhileTheRunsIntentIsStillOpen(t *testing.T) {
 	if result.Drift.Unattributed != 0 {
 		t.Fatalf("an entry whose run still holds an OPEN intent was called unattributed; "+
 			"that is REC-002's repair window, not a compromise: %+v", result.Drift.Findings)
+	}
+}
+
+// A commit signed while a cycle runs: the cycle read the chain before the
+// commit's intent was appended, and the log after its signature landed. The
+// signature is accounted for by the time the cycle would raise it, so it is
+// not unattributed (measured 2026-10-04: an alert raised six seconds after
+// the commit was recorded).
+func TestREC003ReadsTheChainAgainBeforeCallingASignatureUnattributed(t *testing.T) {
+	f := newDriftFixture(t)
+	f.plantEntry(spiffeIDFor(driftRunID), driftCommit, "signed-mid-cycle")
+	f.sweep.onRange = func() {
+		seedRun(t, f.ledger, driftRunID)
+		seedIntent(t, f.ledger, driftRunID, driftTree)
+		f.sweep.onRange = nil
+	}
+
+	result := f.cycle(t)
+
+	if result.Drift.Unattributed != 0 || len(f.eventsOf(t, event.EventTypeUnattributedSignatureDetected)) != 0 {
+		t.Fatalf("a signature whose intent was appended during the cycle was called "+
+			"unattributed: %+v", result.Drift.Findings)
 	}
 }
 
