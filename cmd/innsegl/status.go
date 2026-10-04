@@ -118,8 +118,13 @@ type localStatus struct {
 	CertificateExpiresAt string `json:"certificate_expires_at"`
 }
 
+// localStatusTimeout is longer than the client's own probe of the core
+// (internal/client's reachable, three seconds): a core outage makes the
+// client's status that slow, and must not read as the client being down.
+const localStatusTimeout = 8 * time.Second
+
 func localClientStatus(ctx context.Context, base string) (localStatus, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, localStatusTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(base, "/")+client.StatusPath, http.NoBody)
 	if err != nil {

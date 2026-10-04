@@ -693,25 +693,36 @@ func (r *Reconciler) sweepLog(ctx context.Context, view *ledgerView, result *Dri
 		return
 	}
 
-	// A run holding an OPEN intent may have a signature the chain has not
-	// recorded yet — that is REC-002's window, not a compromise.
-	inflight := map[string]struct{}{}
-	for _, intent := range view.open {
-		inflight[intent.spiffeID] = struct{}{}
-	}
-
+	var suspects []SweptEntry
 	for _, entry := range entries {
 		if !r.ours(entry.CertificateIdentity) {
 			continue
 		}
 		result.Entries++
-		if _, claimed := view.drift.claimed[entry.UUID]; claimed {
-			continue
+		if !accountedFor(view, entry) {
+			suspects = append(suspects, entry)
 		}
-		if _, open := inflight[entry.CertificateIdentity]; open {
-			continue
-		}
-		if _, already := view.drift.reported[entry.UUID]; already {
+	}
+	if len(suspects) == 0 {
+		return
+	}
+	// The chain was read before the log. A commit signed in between had its
+	// intent appended after that read and its signature in the log by this
+	// one, so it would look unattributed (measured 2026-10-04: an alert six
+	// seconds after the commit was recorded). Read the chain again: anything
+	// in the log now had its intent appended before it was signed.
+	fresh, err := r.readLedger(ctx)
+	if err != nil {
+		r.unresolved(ctx, result, DriftFinding{
+			Kind: DriftUnresolved,
+			Detail: fmt.Sprintf("%d log entries were not accounted for and the chain could "+
+				"not be read again to check them, so none is reported this cycle: %v",
+				len(suspects), err),
+		})
+		return
+	}
+	for _, entry := range suspects {
+		if accountedFor(fresh, entry) {
 			continue
 		}
 		finding := DriftFinding{
@@ -737,6 +748,24 @@ func (r *Reconciler) sweepLog(ctx context.Context, view *ledgerView, result *Dri
 			event.FieldCertificateIdentity: entry.CertificateIdentity,
 		})
 	}
+}
+
+// accountedFor reports whether the chain explains a log entry: a record
+// claims it, an intent of its run is open (REC-002's window: signed, not yet
+// recorded), or it was already reported.
+func accountedFor(view *ledgerView, entry SweptEntry) bool {
+	if _, claimed := view.drift.claimed[entry.UUID]; claimed {
+		return true
+	}
+	if _, reported := view.drift.reported[entry.UUID]; reported {
+		return true
+	}
+	for _, intent := range view.open {
+		if intent.spiffeID == entry.CertificateIdentity {
+			return true
+		}
+	}
+	return false
 }
 
 // unresolved records and alerts a finding that must never reach the chain.

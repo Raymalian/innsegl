@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"innsegl.dev/innsegl/internal/client/clienttest"
 )
@@ -67,5 +68,26 @@ func TestStatusNamesWhatIsDown(t *testing.T) {
 	}
 	if got := errOut.String(); !strings.Contains(got, "down: client service, sigstore") {
 		t.Errorf("stderr does not name what is down:\n%s", got)
+	}
+}
+
+// The client's own status asks the core and waits up to three seconds when
+// the core does not answer. `innsegl status` gave the client those same
+// three seconds, so a core outage read as the client service being down too
+// (measured 2026-10-04). A client that answers slowly is up.
+func TestStatusWaitsLongerThanTheClientsOwnCoreProbe(t *testing.T) {
+	deps := statusFixture(t, `[{"name":"ledger","up":true}]`, false)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(4 * time.Second)
+		if _, err := io.WriteString(w, `{"core_reachable":false,"revoked":false,"certificate_expires_at":"2026-10-05T00:00:00Z"}`); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(slow.Close)
+	deps.localURL = slow.URL
+	var out, errOut bytes.Buffer
+	runStatus(t.Context(), nil, &out, &errOut, deps)
+	if strings.Contains(errOut.String(), "client service") {
+		t.Fatalf("a client that answered in four seconds was reported down:\n%s", errOut.String())
 	}
 }
