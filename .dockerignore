@@ -29,6 +29,10 @@ innsegl
 innsegl-stub
 cover.out
 
+# `make image-bundle`'s output (ADR-0070): saved images, hundreds of
+# megabytes, and never an input to an image.
+dist
+
 # The dashboard's dependencies and its previous build. Both are regenerated
 # inside the image from package-lock.json, and node_modules is by far the
 # largest directory in the tree.

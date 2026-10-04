@@ -62,8 +62,16 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 # gitsign depends only on its pinned version, so it is built before the
 # sources are copied: a code change no longer downloads and compiles it again.
-RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOBIN=/out \
+#
+# No GOBIN: `go install` refuses to cross-compile into one, so a build for
+# another platform stopped here (measured 2026-10-04, arm64 building
+# linux/amd64). It lands in GOPATH/bin/<os>_<arch> when cross-compiling and in
+# GOPATH/bin when not; whichever it is, it is copied to /out.
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
       go install github.com/sigstore/gitsign@${GITSIGN_VERSION} \
+ && gobin="$(go env GOPATH)/bin" && mkdir -p /out \
+ && if [ -f "$gobin/${TARGETOS}_${TARGETARCH}/gitsign" ]; then cp "$gobin/${TARGETOS}_${TARGETARCH}/gitsign" /out/gitsign; \
+    else cp "$gobin/gitsign" /out/gitsign; fi \
  && ls /out/gitsign
 
 # The Go sources and nothing else: a change to the dashboard, the docs or
@@ -224,6 +232,13 @@ FROM runtime AS api
 
 COPY --from=ui-build /src/web/dist /usr/share/innsegl/ui
 
+# The UI's commit, beside the Go commit this image inherits from the runtime
+# stage: between them they name every input of this image, so a deployment
+# host can check an image it did not build (ADR-0070). After the COPY, so a
+# new value relabels the image without rebuilding anything.
+ARG UI_COMMIT=unknown
+LABEL dev.innsegl.ui-commit=${UI_COMMIT}
+
 # ---------------------------------------------------------------------------
 # The backup's runtime (RM-146, #237).
 # ---------------------------------------------------------------------------
@@ -271,6 +286,12 @@ WORKDIR /home/innsegl
 # No default command, for the reason the runtime stage gives: the scripts are
 # mounted, and a default would make a mistyped command the silent case.
 ENTRYPOINT ["/bin/sh"]
+
+# The last commit that touched this stage, which copies nothing from the build
+# context: the Dockerfile is its only input (ADR-0070). Last, so a new value
+# relabels the image and reruns no step above.
+ARG COMMIT=unknown
+LABEL dev.innsegl.commit=${COMMIT}
 
 # ---------------------------------------------------------------------------
 # The CA bootstrapper's runtime (RM-147, #238) — rung 3.

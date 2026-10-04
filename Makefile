@@ -30,7 +30,8 @@ COVERPROFILE := cover.out
         innsegl-ca-custody-import innsegl-ca-custody-revoke test-ids \
         innsegl-stack-clean innsegl-up-here innsegl-link verify-branch \
         install-hooks \
-        verify-branch-selftest start update innsegl-here-services link clean
+        verify-branch-selftest start update innsegl-here-services link clean \
+        image-bundle
 
 all: build test lint
 
@@ -375,6 +376,25 @@ GO_IMAGE_INPUTS := cmd internal migrations go.mod go.sum Dockerfile
 # local and never pushed, so the attestation was read by nothing.
 export BUILDX_NO_DEFAULT_ATTESTATIONS := 1
 GO_IMAGE_COMMIT := $(shell git log -1 --format=%h --abbrev=12 -- $(GO_IMAGE_INPUTS) 2>/dev/null)$(shell git diff --quiet HEAD -- $(GO_IMAGE_INPUTS) 2>/dev/null || echo -dirty)
+
+# The other two images, stamped the same way (ADR-0070). innsegl-api's image is
+# the runtime plus the built UI, so it carries GO_IMAGE_COMMIT and this one;
+# the ui-build stage copies web/ alone (test/deploy/buildonce_test.go). The
+# backup stage copies nothing from the build context.
+UI_IMAGE_INPUTS := web Dockerfile
+UI_IMAGE_COMMIT := $(shell git log -1 --format=%h --abbrev=12 -- $(UI_IMAGE_INPUTS) 2>/dev/null)$(shell git diff --quiet HEAD -- $(UI_IMAGE_INPUTS) 2>/dev/null || echo -dirty)
+BACKUP_IMAGE_INPUTS := Dockerfile
+BACKUP_IMAGE_COMMIT := $(shell git log -1 --format=%h --abbrev=12 -- $(BACKUP_IMAGE_INPUTS) 2>/dev/null)$(shell git diff --quiet HEAD -- $(BACKUP_IMAGE_INPUTS) 2>/dev/null || echo -dirty)
+
+# BUILD ONCE, DEPLOY A VERIFIED IMAGE (ADR-0070). `make image-bundle` builds
+# the three images on another machine for the deployment host's platform and
+# saves them into dist/ as one file with its .sha256. innsegl-here-services
+# loads that file instead of building when it is there for this commit, and
+# refuses it -- starting nothing -- unless every image carries the commits
+# above. INNSEGL_IMAGE_BUNDLE names a file elsewhere.
+INNSEGL_IMAGE_PLATFORM ?= linux/amd64
+INNSEGL_IMAGE_BUNDLE ?=
+IMAGE_BUNDLE_ENV := INNSEGL_DEPLOY_COMMIT='$(DEPLOY_COMMIT)' INNSEGL_GO_IMAGE_COMMIT='$(GO_IMAGE_COMMIT)' INNSEGL_UI_IMAGE_COMMIT='$(UI_IMAGE_COMMIT)' INNSEGL_BACKUP_IMAGE_COMMIT='$(BACKUP_IMAGE_COMMIT)' INNSEGL_IMAGE_INPUTS='$(sort $(GO_IMAGE_INPUTS) $(UI_IMAGE_INPUTS) $(BACKUP_IMAGE_INPUTS))' INNSEGL_IMAGE_BUNDLE='$(INNSEGL_IMAGE_BUNDLE)' INNSEGL_IMAGE_PLATFORM='$(INNSEGL_IMAGE_PLATFORM)'
 REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
 
 # THE IDENTITY LISTENER, on for this target and not for the shipped default.
@@ -480,6 +500,12 @@ innsegl-up-here: sigstore-up innsegl-here-services
 # running, and compose does not stop it. The old innsegl-dashboard (nginx)
 # held the dashboard's ports, so innsegl-api could not bind them (#475). The
 # trust services are other compose projects and are not touched.
+#
+# The images come from a verified bundle when one is there for this commit
+# (ADR-0070), and are built here when none is. A bundle that fails its checks
+# stops this target before anything starts; it never falls back to a build.
+# --no-build: the start that follows uses the images just loaded or built,
+# and never builds one of its own.
 innsegl-here-services:
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
 	@# The stack's host folders are made here, as the user running make, for
@@ -489,11 +515,19 @@ innsegl-here-services:
 	@# 2026-10-02: the gateway could not write its CA certificate.
 	mkdir -p "$${INNSEGL_GATEWAY_CA_HOST_DIR:-$$HOME/.innsegl/ca}" "$${INNSEGL_LOG_DIR:-$$HOME/.innsegl/log}" \
 	  "$${INNSEGL_BACKUP_HOST_DIR:-$$HOME/innsegl-backups}"
-	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES)
+	@bundle="$$($(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh find)" || exit $$?; \
+	 if [ -n "$$bundle" ]; then \
+	   $(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh load "$$bundle"; \
+	 else \
+	   echo "innsegl: no image bundle for $(DEPLOY_COMMIT); building here"; \
+	   INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' INNSEGL_UI_COMMIT='$(UI_IMAGE_COMMIT)' INNSEGL_BACKUP_COMMIT='$(BACKUP_IMAGE_COMMIT)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES); \
+	 fi
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' \
+	  INNSEGL_UI_COMMIT='$(UI_IMAGE_COMMIT)' \
+	  INNSEGL_BACKUP_COMMIT='$(BACKUP_IMAGE_COMMIT)' \
 	  INNSEGL_MCP_ADMIN_LISTEN='$(INNSEGL_MCP_ADMIN_LISTEN)' \
 	  INNSEGL_MCP_ALSO='$(INNSEGL_MCP_ALSO)' \
 	  INNSEGL_REBASE_BRANCH='$(INNSEGL_REBASE_BRANCH)' \
@@ -501,7 +535,7 @@ innsegl-here-services:
 	  INNSEGL_WRITES_LOG_DIR='$(INNSEGL_WRITES_LOG_DIR)' \
 	  INNSEGL_WRITES_REPOS='$(INNSEGL_WRITES_REPOS)' \
 	  INNSEGL_LOG_DIR='$(INNSEGL_LOG_DIR)' \
-	  $(INNSEGL_COMPOSE) up -d --remove-orphans
+	  $(INNSEGL_COMPOSE) up -d --remove-orphans --no-build
 
 # ---------------------------------------------------------------------------
 # innsegl-link: install the commit hook in one repository on this machine.
@@ -559,7 +593,9 @@ start:
 ##   is already up (`make start` once). SPIRE, Fulcio and Rekor keep running
 ##   and the log is not reindexed, so a code update takes the build and a
 ##   restart of what changed, not a full start. `docker compose up -d`
-##   recreates only the services whose image or settings changed.
+##   recreates only the services whose image or settings changed. With a
+##   bundle from `make image-bundle` in dist/ for this commit, it loads and
+##   checks that instead of building (ADR-0070).
 update:
 	@docker ps --format '{{.Names}}' | grep -qx innsegl-spire-server && docker ps --format '{{.Names}}' | grep -qx innsegl-sigstore-rekor || \
 	  { echo "make update: SPIRE or Rekor is not running; run make start"; exit 2; }
@@ -573,6 +609,14 @@ update:
 	 mkdir -p "$$(dirname '$(DEPLOYED_FILE)')" && echo '$(DEPLOY_COMMIT)' > '$(DEPLOYED_FILE)'
 	@echo
 	@echo "updated: only the services whose image changed were restarted; the trust services were not touched"
+
+## image-bundle: build the images once, here, for the deployment host
+##   (INNSEGL_IMAGE_PLATFORM, default linux/amd64), into one file in dist/
+##   with its .sha256 (ADR-0070). Refuses a dirty tree. Copy both files to
+##   the host's dist/ and run `make update` there: it loads and checks them
+##   instead of building.
+image-bundle:
+	@$(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh create
 
 ## link: install the commit hook in a project — make link DIR=~/Applications/foo
 link:

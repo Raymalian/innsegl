@@ -1609,6 +1609,10 @@ services:
       context: ../..
       dockerfile: Dockerfile
       target: backup
+      # The commit it is built from, as a label (ADR-0070); the Makefile
+      # passes BACKUP_IMAGE_COMMIT.
+      args:
+        COMMIT: ${INNSEGL_BACKUP_COMMIT:-unknown}
     container_name: innsegl-backup
     restart: unless-stopped
     depends_on:
@@ -1814,6 +1818,8 @@ services:
         VERSION: ${INNSEGL_VERSION:-compose}
         COMMIT: ${INNSEGL_COMMIT:-unknown}
         DATE: ${INNSEGL_BUILD_DATE:-unknown}
+        # The UI's commit, a label beside the Go one (ADR-0070).
+        UI_COMMIT: ${INNSEGL_UI_COMMIT:-unknown}
     container_name: innsegl-api
     restart: unless-stopped
     depends_on:
