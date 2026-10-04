@@ -4,10 +4,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"innsegl.dev/innsegl/internal/accounts"
@@ -51,6 +53,9 @@ const apiReadHeaderTimeout = 10 * time.Second
 type runningAPI struct {
 	server *http.Server
 	ln     net.Listener
+	// tlsLn is the dashboard's HTTPS listener (#475); nil without
+	// -tls-listen.
+	tlsLn net.Listener
 
 	readOnly api.ReadOnlyReport
 	repos    []string
@@ -60,21 +65,36 @@ type runningAPI struct {
 	log             *serveLog
 }
 
-func (a *runningAPI) Addr() string                 { return a.ln.Addr().String() }
+func (a *runningAPI) Addr() string { return a.ln.Addr().String() }
+
+// TLSAddr is the bound HTTPS address, or empty when there is none.
+func (a *runningAPI) TLSAddr() string {
+	if a.tlsLn == nil {
+		return ""
+	}
+	return a.tlsLn.Addr().String()
+}
 func (a *runningAPI) ReadOnly() api.ReadOnlyReport { return a.readOnly }
 func (a *runningAPI) Repos() []string              { return a.repos }
 
 // Serve runs the listener until ctx is done or it fails, then stops it in an
 // orderly way.
 func (a *runningAPI) Serve(ctx context.Context) error {
-	failed := make(chan error, 1)
-	go func() {
-		err := a.server.Serve(a.ln)
-		if errors.Is(err, http.ErrServerClosed) {
-			err = nil
-		}
-		failed <- err
-	}()
+	// One server, one handler, two listeners: Shutdown stops both.
+	listeners := []net.Listener{a.ln}
+	if a.tlsLn != nil {
+		listeners = append(listeners, tls.NewListener(a.tlsLn, a.server.TLSConfig))
+	}
+	failed := make(chan error, len(listeners))
+	for _, ln := range listeners {
+		go func() {
+			err := a.server.Serve(ln)
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
+			}
+			failed <- err
+		}()
+	}
 
 	var first error
 	select {
@@ -238,27 +258,57 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 		return nil, fmt.Errorf("wire the query API routes: %w", err)
 	}
 
-	// ---- the listener -----------------------------------------------------
-	var lc net.ListenConfig
-	ln, err := lc.Listen(boot, "tcp", o.listen)
+	// ---- the listeners ----------------------------------------------------
+	running, err := bindAPI(boot, o, handler, log)
 	if err != nil {
 		unwind()
-		return nil, fmt.Errorf("listen on %s: %w", o.listen, err)
+		return nil, err
 	}
-	closers = append(closers, func() { discardListenerError(ln.Close()) })
+	running.readOnly = store.ReadOnly()
+	running.repos = prover.Repos()
+	running.closers = append(closers, running.closers...)
+	return running, nil
+}
 
-	return &runningAPI{
+// bindAPI wraps the query API in the dashboard (#475) — the UI from
+// -ui-dir and the security headers — and binds the plain listener and,
+// with -tls-listen, the dashboard's HTTPS one. Both serve the same
+// handler. Nothing is served until Serve.
+func bindAPI(ctx context.Context, o apiOptions, apiHandler http.Handler, log *serveLog) (*runningAPI, error) {
+	handler, err := api.DashboardHandler(apiHandler, o.uiDir)
+	if err != nil {
+		return nil, fmt.Errorf("serve the dashboard UI (-ui-dir): %w", err)
+	}
+	a := &runningAPI{
 		server: &http.Server{
 			Handler:           handler,
 			ReadHeaderTimeout: apiReadHeaderTimeout,
 		},
-		ln:              ln,
-		readOnly:        store.ReadOnly(),
-		repos:           prover.Repos(),
 		shutdownTimeout: o.shutdownTimeout,
-		closers:         closers,
 		log:             log,
-	}, nil
+	}
+	var lc net.ListenConfig
+	if a.ln, err = lc.Listen(ctx, "tcp", o.listen); err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", o.listen, err)
+	}
+	a.closers = append(a.closers, func() { discardListenerError(a.ln.Close()) })
+	if o.tlsListen == "" {
+		return a, nil
+	}
+	if a.tlsLn, err = lc.Listen(ctx, "tcp", o.tlsListen); err != nil {
+		a.Close()
+		return nil, fmt.Errorf("listen on %s (-tls-listen): %w", o.tlsListen, err)
+	}
+	a.closers = append(a.closers, func() { discardListenerError(a.tlsLn.Close()) })
+	a.server.TLSConfig = api.DashboardTLSConfig(o.tlsCert)
+	if _, serr := os.Stat(o.tlsCert); serr != nil {
+		// Not fatal: the core writes it, and may not have yet.
+		log.warn("the dashboard's certificate is not there yet; HTTPS handshakes fail until "+
+			"the core writes it", "tls_cert", o.tlsCert, "err", serr)
+	}
+	log.info("serving the dashboard over HTTPS", "addr", a.TLSAddr(), "tls_cert", o.tlsCert,
+		"ui_dir", o.uiDir)
+	return a, nil
 }
 
 // discardListenerError swallows the error from closing a listener the HTTP
