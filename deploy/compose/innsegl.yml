@@ -2199,8 +2199,8 @@ volumes:
   # that could read this could mint its own admission to the listener this key
   # exists to protect.
   #
-  # #266 — WHO READS IT, AND HOW. The caller that reaches the identity
-  # lifecycle from the host — scripts/innsegl-commit.sh — mints its own
+  # #266 — WHO READS IT, AND HOW. A caller that reaches the identity
+  # lifecycle from the host — `innsegl retire` — mints its own
   # credential by running the shipped command in a THROWAWAY
   # container that mounts this volume read-only, has no network, no writable
   # root filesystem and no privilege escalation, and exits:

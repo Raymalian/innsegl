@@ -4,14 +4,14 @@
 # Self-test for install.sh, the server installer — RM-245 (#390), RM-285
 # (#461), ADR-0063.
 #
-# install.sh brings the stack up, puts the signer on PATH, builds the binary,
-# links each DIR, and prints how a machine connects. It writes no harness
-# settings: every machine, the core host included, connects with `innsegl
-# connect`, whose own tests hold the managed settings contract (ENF-006,
-# ENF-009, RM-312, EGR-001 in cmd/innsegl and internal/client).
+# install.sh brings the stack up, builds the binary, links each DIR, and
+# prints how a machine connects. It writes no harness settings: every machine,
+# the core host included, connects with `innsegl connect`, whose own tests
+# hold the managed settings contract (ENF-006, ENF-009, RM-312, EGR-001 in
+# cmd/innsegl and internal/client).
 #
 # Every case runs install.sh against a scratch $HOME. The side-effecting
-# commands (bring-up, the signer, the build, linking, the setup link) are
+# commands (bring-up, the build, linking, the setup link) are
 # replaced by recorders, and a fake `docker` on PATH answers `info` and
 # `compose version` without a daemon. Nothing here starts Docker or touches a
 # real Claude Code configuration file.
@@ -87,8 +87,7 @@ toolbin_without() {
 }
 
 # ---------------------------------------------------------------------------
-# Stubs that record their invocation instead of doing anything real. The
-# signer stub also creates the symlink the real Makefile target would.
+# Stubs that record their invocation instead of doing anything real.
 # ---------------------------------------------------------------------------
 RECORD="$WORK/record"
 mkdir -p "$RECORD"
@@ -99,13 +98,6 @@ make_stub() {
   {
     printf '#!/bin/sh\n'
     printf 'printf '\''%%s\\n'\'' "$*" >> %s\n' "$(printf '%q' "$RECORD/$name")"
-    if [ "$name" = signer ]; then
-      cat <<'EOF2'
-bin="${INNSEGL_BIN:-$HOME/.local/bin}"
-mkdir -p "$bin"
-ln -sf /bin/true "$bin/innsegl-commit"
-EOF2
-    fi
     printf 'exit 0\n'
   } > "$path"
   chmod +x "$path"
@@ -114,7 +106,6 @@ EOF2
 STUB_START="$(make_stub start)"
 STUB_BUILD="$(make_stub build)"
 export INNSEGL_INSTALL_BUILD_CMD="$STUB_BUILD"
-STUB_SIGNER="$(make_stub signer)"
 STUB_LINK="$(make_stub link)"
 STUB_SETUP_LINK="$(make_stub setup-link)"
 
@@ -127,7 +118,7 @@ chmod +x "$STUB_BIN"
 # friends), which is exactly what this self-test must never trigger — so
 # refuse to go any further rather than run install.sh against a stub this
 # test cannot prove is a stub.
-[ -n "$STUB_START" ] && [ -n "$STUB_SIGNER" ] && [ -n "$STUB_LINK" ] && [ -n "$STUB_BIN" ] && [ -n "$STUB_SETUP_LINK" ] \
+[ -n "$STUB_START" ] && [ -n "$STUB_LINK" ] && [ -n "$STUB_BIN" ] && [ -n "$STUB_SETUP_LINK" ] \
   || { echo "install-selftest: a stub command came out empty — refusing to run install.sh at all" >&2; exit 1; }
 
 run_install_server() {
@@ -135,7 +126,6 @@ run_install_server() {
   shift 2
   HOME="$home" PATH="$pathdir" \
     INNSEGL_INSTALL_START_CMD="$STUB_START" \
-    INNSEGL_INSTALL_SIGNER_CMD="$STUB_SIGNER" \
     INNSEGL_INSTALL_LINK_CMD="$STUB_LINK" \
     INNSEGL_INSTALL_SETUP_LINK_CMD="$STUB_SETUP_LINK" \
     INNSEGL_BIN_PATH="$STUB_BIN" \
@@ -216,10 +206,10 @@ home2="$WORK/home-server"; mkdir -p "$home2"
 : > "$RECORD/start"; : > "$RECORD/build"; : > "$RECORD/link"; : > "$RECORD/setup-link"
 out2="$(run_install_server "$home2" "$TOOLBIN" "$home2/project" 2>&1)"; rc2=$?
 if [ "$rc2" -eq 0 ] && [ -s "$RECORD/start" ] && [ -s "$RECORD/build" ] && [ -s "$RECORD/setup-link" ] \
-   && grep -q "project" "$RECORD/link" && [ -L "$home2/.local/bin/innsegl-commit" ] \
+   && grep -q "project" "$RECORD/link" && [ ! -L "$home2/.local/bin/innsegl-commit" ] \
    && [ ! -e "$home2/.claude" ] \
    && printf '%s' "$out2" | grep -q 'innsegl connect https://<core-name>:28095'; then
-  ok "the server install brings the stack up, builds, links, writes no harness settings, and says how to connect"
+  ok "the server install brings the stack up, builds, links, puts no signer on PATH, writes no harness settings, and says how to connect"
 else
   bad "the server install did not run every step, or wrote harness settings" "exit=$rc2"$'\n'"$out2"
 fi
@@ -254,11 +244,15 @@ for flag in --hardened --egress-control --pause --resume --managed-settings; do
   fi
 done
 
-# --- --uninstall removes the signer symlink and names --disconnect ----------
+# --- --uninstall removes an older install's innsegl-commit symlink ----------
+# The retired signer's symlink is planted the way an older install left it:
+# nothing installs it now, and --uninstall still cleans it up.
+mkdir -p "$home2/.local/bin"
+ln -sf /bin/true "$home2/.local/bin/innsegl-commit"
 out6="$(run_install_server "$home2" "$TOOLBIN" --uninstall 2>&1)"; rc6=$?
-if [ "$rc6" -eq 0 ] && [ ! -e "$home2/.local/bin/innsegl-commit" ] \
+if [ "$rc6" -eq 0 ] && [ ! -L "$home2/.local/bin/innsegl-commit" ] \
    && printf '%s' "$out6" | grep -q 'innsegl connect' && printf '%s' "$out6" | grep -q -- '--disconnect'; then
-  ok "--uninstall removes the signer symlink and names innsegl connect --disconnect"
+  ok "--uninstall removes an old innsegl-commit symlink and names innsegl connect --disconnect"
 else
   bad "--uninstall did not remove the symlink, or named nothing for the settings" "exit=$rc6"$'\n'"$out6"
 fi

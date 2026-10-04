@@ -28,9 +28,9 @@ COVERPROFILE := cover.out
         innsegl-trust-volumes innsegl-trust-status \
         innsegl-ca-custody-init innsegl-ca-custody-unseal innsegl-ca-custody-status \
         innsegl-ca-custody-import innsegl-ca-custody-revoke test-ids \
-        innsegl-stack-clean innsegl-up-here innsegl-link innsegl-install-signer verify-branch \
+        innsegl-stack-clean innsegl-up-here innsegl-link verify-branch \
         install-hooks \
-        verify-branch-selftest start update innsegl-here-services link sign clean
+        verify-branch-selftest start update innsegl-here-services link clean
 
 all: build test lint
 
@@ -381,14 +381,10 @@ REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' 
 #
 # innsegl.yml leaves INNSEGL_MCP_ADMIN_LISTEN empty and says why: with the split
 # on and nothing registering, no run can be created at all. This target is the
-# one where something does register -- scripts/innsegl-commit.sh and the harness
-# hook both call register_agent -- and without it innsegl-commit.sh refuses:
-#
-#   innsegl-commit: the identity service at http://127.0.0.1:28090/ could not
-#   be reached. No identity, no attributed work (IP §6.1).
-#
-# which is honest and was a dead end, because the target that exists to make
-# signing work did not start the listener signing needs.
+# one where something does register -- the harness hook calls register_agent --
+# and without the listener every registration is refused as unreachable:
+# honest, and a dead end, because the target that exists to make signing work
+# did not start the listener signing needs.
 INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
 
 # THE REAPER IS BACK ON (#180 fixed, 2026-09-09).
@@ -516,7 +512,7 @@ innsegl-here-services:
 # ---------------------------------------------------------------------------
 
 # ===========================================================================
-# The three commands.
+# The two commands.
 #
 # Everything below this line is one deployment's worth of settings that an
 # operator should not have to know about. The targets above are the reference
@@ -524,7 +520,9 @@ innsegl-here-services:
 #
 #   make start                      bring it up, ready to sign
 #   make link DIR=~/Applications/x  install the commit hook in a project
-#   make sign -- -m "message"       commit, signed
+#
+# Agents' commits are signed through the gateway (ADR-0059); a human commits
+# with plain git.
 #
 # The opinions baked in here, and each is a real choice rather than a default
 # nobody thought about:
@@ -549,7 +547,6 @@ start:
 	@echo
 	@echo "ready. Next:"
 	@echo "   make link DIR=~/Applications/<project>     install the commit hook in a project"
-	@echo "   make sign -- -m 'your message'             commit, signed"
 	@# #445, ADR-0062's 2026-10-01 amendment: while no account exists yet,
 	@# print the one-time setup link rather than making the operator run the
 	@# enrol-code command and build the URL by hand. The script reads the
@@ -581,33 +578,7 @@ update:
 link:
 	@$(MAKE) --no-print-directory innsegl-link DIR='$(DIR)'
 
-## sign: stage first, then — make sign -- -m "your message"
-sign:
-	@scripts/innsegl-commit.sh $(filter-out $@,$(MAKECMDGOALS)) $(ARGS)
-
 ## innsegl-link: install the commit hook in a repository — make innsegl-link DIR=~/Applications/foo
-# WHERE THE SIGNER LIVES, and it is not in this repository.
-#
-# The harness gate refuses a plain `git commit` and tells the agent to sign
-# instead. It used to name `scripts/innsegl-commit.sh`, a path that resolves
-# only here -- reported 2026-09-09 by an agent working in a project that has no
-# `scripts/` directory at all. It had nineteen finished files and was pointed at
-# a file that does not exist.
-#
-# A SYMLINK, not a copy: a copy goes stale the moment the script changes, and a
-# stale signer is worse than an absent one because it fails in ways nobody is
-# looking for. ~/.local/bin is already on PATH, so `innsegl-commit` becomes a
-# plain command in every repository.
-INNSEGL_BIN ?= $(HOME)/.local/bin
-
-## innsegl-install-signer: put `innsegl-commit` on PATH for every project
-innsegl-install-signer:
-	@mkdir -p '$(INNSEGL_BIN)'
-	@ln -sf '$(CURDIR)/scripts/innsegl-commit.sh' '$(INNSEGL_BIN)/innsegl-commit'
-	@command -v innsegl-commit >/dev/null 2>&1 \
-	  && echo "innsegl-commit -> $$(command -v innsegl-commit)" \
-	  || echo "installed to $(INNSEGL_BIN)/innsegl-commit, which is NOT on your PATH"
-
 # The innsegl binary `innsegl-link` runs: the one `make build` writes here,
 # the same default install.sh uses.
 INNSEGL_BIN_PATH ?= $(CURDIR)/$(BINARY)

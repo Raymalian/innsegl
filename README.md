@@ -20,8 +20,8 @@ cd innsegl
 ./install.sh ~/path/to/project
 ```
 
-That checks the prerequisites, brings the stack up, puts `innsegl-commit` on
-PATH, builds the binary, and installs the commit hook in `~/path/to/project`.
+That checks the prerequisites, brings the stack up, builds the binary, and
+installs the commit hook in `~/path/to/project`.
 The core mounts no project folder: it reads each repository from its own
 mirror, which a connected machine pushes to.
 It prints the dashboard's address and, while no account exists, a one-time
@@ -49,11 +49,11 @@ On the core host, by `install.sh`:
 | | |
 |---|---|
 | the stack | Docker containers, via `make start` — SPIRE, self-hosted Sigstore, and innsegl itself |
-| `innsegl-commit` | symlinked onto PATH at `~/.local/bin/innsegl-commit` |
 | each `DIR` argument | its `prepare-commit-msg` hook, the same as `innsegl link <dir>` (or `make link DIR=<dir>`) |
 
 `install.sh` writes no Claude Code settings. Those are `innsegl connect`'s,
-on every machine.
+on every machine. Nothing is put on PATH for signing: an agent's commits are
+signed through the gateway, and a human commits with plain git.
 
 On a machine, by `innsegl connect`:
 
@@ -102,7 +102,8 @@ If the core cannot be reached, it says so, and the machine is revoked from
 the dashboard's Account page instead.
 
 On the core host, `./install.sh --uninstall` removes the `innsegl-commit`
-symlink. It does not stop or delete anything running. To do that:
+symlink an older install put on PATH, if one is still there. It does not stop
+or delete anything running. To do that:
 
 ```sh
 make innsegl-down     # stop innsegl, keep the ledger and the signed history

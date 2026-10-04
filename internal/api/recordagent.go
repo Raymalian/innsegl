@@ -255,16 +255,18 @@ func childEndedAt(f ledger.RunFacts, status string, retiredAt time.Time, retired
 
 // ---------------------------------------------------------------------------
 // #443 rule 1: a signing identity's own commit, folded into the run that
-// caused it — Step resolved by scripts/innsegl-commit.sh's own printed
+// caused it — Step resolved by the retired commit signer's own printed
 // line, never by a step's own CommitSHA (that field names a commit THIS
 // run's own Bash made, which a signing identity's commit never is).
 // ---------------------------------------------------------------------------
 
 // signedStepFor is record.go rule 1's own Step rule: the FIRST step (lowest
 // N) of this run whose own Output contains "signed <the commit's own
-// 7-character short sha>" — scripts/innsegl-commit.sh's own
-// "innsegl-commit: signed <sha7>  rekor index N" line. 0 when sha is too
-// short to abbreviate, or no step's Output names it.
+// 7-character short sha>" — the "innsegl-commit: signed <sha7>  rekor
+// index N" line the retired commit signer script printed. It reads that
+// output for runs recorded while the script existed: their tool-call output
+// still carries the line, so the parser stays after the script has gone. 0
+// when sha is too short to abbreviate, or no step's Output names it.
 func signedStepFor(steps []RecordStep, sha string) int {
 	if len(sha) < 7 {
 		return 0
