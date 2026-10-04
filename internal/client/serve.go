@@ -67,24 +67,20 @@ type Server struct {
 	// through this service (RM-313).
 	statements *statementCache
 
-	// The availability layer (ADR-0068, fallback.go, journal.go).
+	// The availability layer (ADR-0068, fallback.go, outbox.go).
 	provider       *url.URL
 	providerClient *http.Client
 	coreDownFor    time.Duration
 	downUntil      atomic.Int64
-	journal        *journal
+	outbox         *outbox
 	uploadInterval time.Duration
-	uploadKick     chan struct{}
-	uploadMu       sync.Mutex
-	lastUploadMu   sync.Mutex
-	lastUpload     *UploadStatus
+	outboxKick     chan struct{}
+	deliverMu      sync.Mutex
 	bypassed       *seenSet
 	// unrecorded holds the sessions whose first unrecorded request was said.
 	unrecorded *seenSet
 	// awaited holds the sessions whose first request waited for a statement.
 	awaited *seenSet
-	// telemetryKick wakes the telemetry replay (telemetryspool.go).
-	telemetryKick chan struct{}
 	// watched maps a session to its harness process (sessionwatch.go).
 	watchMu sync.Mutex
 	watched map[string]Process
@@ -110,9 +106,9 @@ type ServerOptions struct {
 	// ProviderClient sends to the provider; nil means one over the system
 	// roots.
 	ProviderClient *http.Client
-	// JournalMaxBytes bounds the journal; zero means DefaultJournalMaxBytes.
-	JournalMaxBytes int64
-	// UploadInterval is the upload loop's period; zero means
+	// OutboxMaxBytes bounds the outbox; zero means DefaultOutboxMaxBytes.
+	OutboxMaxBytes int64
+	// UploadInterval is the outbox delivery loop's period; zero means
 	// DefaultUploadInterval.
 	UploadInterval time.Duration
 	// CoreDownFor is how long model requests skip the core after it failed
@@ -162,14 +158,12 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 		statements: newStatementCache(DefaultMaxStatements),
 		provider:   provider, providerClient: opts.ProviderClient,
 		coreDownFor: opts.CoreDownFor, uploadInterval: opts.UploadInterval,
-		uploadKick: make(chan struct{}, 1), bypassed: newSeenSet(DefaultMaxStatements),
+		outboxKick: make(chan struct{}, 1), bypassed: newSeenSet(DefaultMaxStatements),
 		unrecorded: newSeenSet(DefaultMaxStatements), awaited: newSeenSet(DefaultMaxStatements),
-		telemetryKick: make(chan struct{}, 1),
 	}
 	if s.providerClient == nil {
 		s.providerClient = &http.Client{Transport: providerTransport()}
 	}
-	s.loadWatchedSessions()
 	if s.coreDownFor <= 0 {
 		s.coreDownFor = DefaultCoreDownFor
 	}
@@ -183,15 +177,17 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 		return nil, err
 	}
 	s.initProxy()
-	journalDir := paths.Journal
-	if journalDir == "" {
-		journalDir = filepath.Join(paths.Dir, "journal")
+	outboxDir := paths.Outbox
+	if outboxDir == "" {
+		outboxDir = filepath.Join(paths.Dir, "outbox")
 	}
-	s.journal = openJournal(journalDir, core.InstallationID, key, opts.JournalMaxBytes)
-	if s.journal.openErr != nil {
-		s.log.Printf("the client journal at %s cannot be opened (%v): a request the core cannot record will be "+
-			"refused until it can", journalDir, s.journal.openErr)
+	s.outbox = openOutbox(outboxDir, core.InstallationID, key, opts.OutboxMaxBytes, s.log.Printf)
+	if s.outbox.openErr != nil {
+		s.log.Printf("the client outbox at %s cannot be opened (%v): a request the core cannot record will be "+
+			"refused until it can", outboxDir, s.outbox.openErr)
 	}
+	s.migrateOldLayout(paths.Dir)
+	s.loadWatchedSessions()
 	if _, err := os.Stat(paths.Revoked); err == nil {
 		s.revoked.Store(true)
 		s.log.Printf("%v; refusing every request. Run `innsegl connect --disconnect`, then enrol again.", ErrRevoked)
@@ -443,13 +439,13 @@ func (s *Server) keepStatement(w http.ResponseWriter, r *http.Request, err error
 
 // Status is the body of GET /_client/status.
 type Status struct {
-	InstallationID       string        `json:"installation_id"`
-	CoreURL              string        `json:"core_url"`
-	CertificateExpiresAt time.Time     `json:"certificate_expires_at"`
-	RenewAt              time.Time     `json:"renew_at"`
-	CoreReachable        bool          `json:"core_reachable"`
-	Revoked              bool          `json:"revoked"`
-	Journal              JournalStatus `json:"journal"`
+	InstallationID       string       `json:"installation_id"`
+	CoreURL              string       `json:"core_url"`
+	CertificateExpiresAt time.Time    `json:"certificate_expires_at"`
+	RenewAt              time.Time    `json:"renew_at"`
+	CoreReachable        bool         `json:"core_reachable"`
+	Revoked              bool         `json:"revoked"`
+	Outbox               OutboxStatus `json:"outbox"`
 	// Recorded counts, since the service started, the core's answers to
 	// model requests by whether it recorded them: "true", "false" (the
 	// client journaled it), "none" (no repository; nothing to record).
@@ -484,9 +480,8 @@ func (s *Server) Status(ctx context.Context) Status {
 	st := Status{
 		InstallationID: s.core.InstallationID, CoreURL: s.core.CoreURL,
 		CertificateExpiresAt: s.Leaf().NotAfter, RenewAt: s.RenewAt(), Revoked: s.revoked.Load(),
-		Journal: s.journal.status(),
+		Outbox: s.outbox.status(),
 	}
-	st.Journal.LastUpload = s.uploadStatus()
 	st.Recorded = s.recordedCounts()
 	st.CoreReachable = s.reachable(ctx)
 	return st

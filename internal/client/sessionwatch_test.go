@@ -76,6 +76,9 @@ func TestASessionWhoseProcessIsGoneIsEnded(t *testing.T) {
 		t.Fatal("the stand-in harness exited cleanly after a kill")
 	}
 	srv.CheckSessions(context.Background())
+	if _, err := srv.Drain(context.Background()); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
 	select {
 	case got := <-ends:
 		if got != `{"session_id":"s-1"}` {
@@ -85,7 +88,10 @@ func TestASessionWhoseProcessIsGoneIsEnded(t *testing.T) {
 		t.Fatal("the session of a gone process was not ended")
 	}
 	if n := srv.watchedSessions(); n != 0 {
-		t.Errorf("watched sessions after the end was delivered = %d, want 0", n)
+		t.Errorf("watched sessions after the end was held = %d, want 0", n)
+	}
+	if n := srv.outbox.status().Items; n != 0 {
+		t.Errorf("outbox after the end was delivered = %d, want 0", n)
 	}
 }
 
@@ -151,12 +157,17 @@ func TestASessionEndSentWhileTheCoreIsDownIsDeliveredAfter(t *testing.T) {
 			t.Fatalf("end while the core is down answered %d, want 202 (kept)", resp.StatusCode)
 		}
 	}
-	if n := srv.watchedSessions(); n != 2 {
+	if n := srv.outbox.status().Kinds[KindEnd]; n != 2 {
 		t.Fatalf("kept ends = %d, want 2", n)
+	}
+	if n := srv.watchedSessions(); n != 0 {
+		t.Fatalf("kept ends in the watch table = %d, want 0: the outbox holds them", n)
 	}
 
 	core.Restart(t)
-	srv.CheckSessions(context.Background())
+	if _, err := srv.Drain(context.Background()); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
 	got := map[string]bool{}
 	for range 2 {
 		select {
@@ -169,7 +180,7 @@ func TestASessionEndSentWhileTheCoreIsDownIsDeliveredAfter(t *testing.T) {
 	if !got[`{"session_id":"s-9"}`] || !got[`{"agent_id":"a1b2c3","session_id":"s-9"}`] {
 		t.Errorf("ends delivered = %v", got)
 	}
-	if n := srv.watchedSessions(); n != 0 {
+	if n := srv.outbox.status().Items; n != 0 {
 		t.Errorf("kept ends after delivery = %d, want 0", n)
 	}
 }

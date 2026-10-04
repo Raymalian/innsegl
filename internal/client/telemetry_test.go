@@ -44,13 +44,13 @@ func TestTelemetryHeldWhileTheCoreIsDownIsDeliveredAfter(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d while the core was down, want 200: the export is kept", resp.StatusCode)
 	}
-	if n := srv.telemetrySpoolDepth(); n != 1 {
-		t.Fatalf("spool depth %d, want 1", n)
+	if n := srv.outbox.status().Kinds[KindTelemetry]; n != 1 {
+		t.Fatalf("held exports %d, want 1", n)
 	}
 
 	core.Restart(t) // the core answers again
-	if err := srv.ReplayTelemetry(context.Background()); err != nil {
-		t.Fatalf("ReplayTelemetry: %v", err)
+	if _, err := srv.Drain(context.Background()); err != nil {
+		t.Fatalf("Drain: %v", err)
 	}
 	select {
 	case b := <-got:
@@ -60,7 +60,7 @@ func TestTelemetryHeldWhileTheCoreIsDownIsDeliveredAfter(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the held export never reached the core")
 	}
-	if n := srv.telemetrySpoolDepth(); n != 0 {
-		t.Fatalf("spool depth %d after delivery, want 0", n)
+	if n := srv.outbox.status().Kinds[KindTelemetry]; n != 0 {
+		t.Fatalf("held exports %d after delivery, want 0", n)
 	}
 }
