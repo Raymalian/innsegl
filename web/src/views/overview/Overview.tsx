@@ -71,6 +71,8 @@ export interface OverviewProps {
   readonly recentRuns?: readonly RunSummary[] | null;
   /** A LIVE pass rate, if anything ever measures one. Nothing does. */
   readonly passRate?: PassRate;
+  /** The live pass rate is being measured. */
+  readonly measuring?: boolean;
   /** Where the query API lives, for the links that point at raw material. */
   readonly apiBase: string;
   /** Injected for determinism; defaults to the wall clock. */
@@ -82,6 +84,7 @@ export function Overview({
   runsToday,
   recentRuns = null,
   passRate,
+  measuring = false,
   now,
 }: OverviewProps) {
   const at = now ?? new Date();
@@ -157,6 +160,7 @@ export function Overview({
       <PassRateCard
         commitsRecorded={data.commits_recorded}
         rate={passRate}
+        measuring={measuring}
         now={at}
         verifyHref={routeToPath({ view: "verify", commit: "", repo: "" })}
       />

@@ -82,6 +82,9 @@ export const strings = {
     label: "Verification pass rate",
 
     notMeasured: "Not measured",
+    measuring: "Checking the latest commits…",
+    measuringMeaning:
+      "The three checks are running now against git, Fulcio and Rekor on the most recent recorded commits.",
     notMeasuredMeaning:
       "No live check has run over these commits, so no rate is shown.",
     cachedMeaning:

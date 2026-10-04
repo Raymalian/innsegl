@@ -41,7 +41,15 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { startOfUtcDay } from "./format";
-import type { AlertRecord, AlertsPage, OverviewData, RunPage, RunSummary, WindowedCount } from "./types";
+import type {
+  AlertRecord,
+  AlertsPage,
+  OverviewData,
+  PassRate,
+  RunPage,
+  RunSummary,
+  WindowedCount,
+} from "./types";
 
 /** Same-origin by default: the dashboard is served beside its query API. */
 export const DEFAULT_API_BASE = "/api/v1";
@@ -109,6 +117,32 @@ export async function fetchRecentRuns(
   return body.runs;
 }
 
+/** `GET /api/v1/verification/recent`: the three checks run live on the most
+ * recent recorded commits. Undefined when there is no commit to check. */
+export async function fetchRecentVerification(
+  base: string,
+  signal: AbortSignal,
+): Promise<PassRate | undefined> {
+  const url = `${base}/verification/recent`;
+  const body = await getJSON(url, signal);
+  if (typeof body !== "object" || body === null) throw new Error(`${url} did not answer with a measurement`);
+  const o = body as Record<string, unknown>;
+  const n = (k: string) => (typeof o[k] === "number" ? (o[k] as number) : NaN);
+  const checked = n("checked");
+  if (Number.isNaN(checked) || typeof o["measured_at"] !== "string") {
+    throw new Error(`${url} did not answer with a measurement`);
+  }
+  if (checked === 0) return undefined;
+  return {
+    checked,
+    verified: n("verified"),
+    failed: n("failed"),
+    unavailable: n("unavailable"),
+    measuredAt: new Date(o["measured_at"] as string),
+    liveness: { source: "live" },
+  };
+}
+
 /** The most recent alert events, newest first — RM-102, #167. */
 export async function fetchAlerts(
   base: string,
@@ -131,6 +165,11 @@ export interface OverviewResource {
   readonly recentRuns: readonly RunSummary[] | null;
   /** Verbatim, for the reader (doc 06 §6.1). */
   readonly error: string;
+  /** The live pass rate, once measured; undefined while measuring, on a
+   * failed measurement, or with no commit to check. */
+  readonly passRate: PassRate | undefined;
+  /** The live measurement is still running. */
+  readonly measuring: boolean;
   readonly reload: () => void;
 }
 
@@ -194,7 +233,27 @@ export function useOverview({
     };
   }, [base, clock, nonce]);
 
-  return { ...state, reload };
+  // The pass rate runs twenty live proofs, so it is its own read: the page
+  // never waits for it, and the card says it is checking until it lands.
+  const [rate, setRate] = useState<{ passRate: PassRate | undefined; measuring: boolean }>({
+    passRate: undefined,
+    measuring: true,
+  });
+  useEffect(() => {
+    const controller = new AbortController();
+    let live = true;
+    setRate({ passRate: undefined, measuring: true });
+    fetchRecentVerification(base, controller.signal).then(
+      (passRate) => live && setRate({ passRate, measuring: false }),
+      () => live && setRate({ passRate: undefined, measuring: false }),
+    );
+    return () => {
+      live = false;
+      controller.abort();
+    };
+  }, [base, nonce]);
+
+  return { ...state, ...rate, reload };
 }
 
 function messageOf(reason: unknown): string {
