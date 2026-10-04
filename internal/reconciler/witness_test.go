@@ -342,8 +342,8 @@ func TestWitnessJudgesARunOnlyOnceItsOwnTelemetryArrived(t *testing.T) {
 	}
 }
 
-// A core restart holds telemetry in the client's spool until the core is
-// back (internal/client/telemetryspool.go); the window must outlast a
+// A core restart holds telemetry in the client's outbox until the core is
+// back (internal/client/outbox.go); the window must outlast a
 // restart's drain, or every tool call in it is reported as drift.
 func TestDefaultWitnessWindowOutlastsACoreRestart(t *testing.T) {
 	if reconciler.DefaultWitnessWindow < 30*time.Minute {

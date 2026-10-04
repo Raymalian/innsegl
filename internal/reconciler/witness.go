@@ -85,7 +85,7 @@ import (
 // before treating a still-unmatched tool_use_id as orphaned. Thirty
 // minutes: longer than a core restart. While the core is down the client
 // holds the harness's telemetry and delivers it once the core answers
-// (internal/client/telemetryspool.go); a shorter window reported every tool
+// (internal/client/outbox.go); a shorter window reported every tool
 // call of a restart as drift before its telemetry arrived.
 const DefaultWitnessWindow = 30 * time.Minute
 

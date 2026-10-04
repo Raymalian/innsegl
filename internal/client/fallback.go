@@ -141,7 +141,7 @@ func (s *Server) serveHeld(w http.ResponseWriter, r *http.Request, ex *exchange)
 		s.forwardDirect(w, r, ex)
 		return
 	}
-	s.flushJournalBeforeLive(r.Context())
+	s.flushOutboxBeforeLive(r.Context())
 	s.proxy.ServeHTTP(w, r)
 }
 
@@ -165,7 +165,10 @@ func (s *Server) modifyResponse(resp *http.Response) error {
 				resp.Request.Method, resp.Request.URL.Path, orNone(ex.session), resp.StatusCode, strings.TrimSpace(string(head)))
 			return errCoreFailed{status: resp.StatusCode}
 		}
-		s.downUntil.Store(0)
+		if s.downUntil.Swap(0) != 0 {
+			// The core is back: deliver what it did not take meanwhile.
+			s.kickOutbox()
+		}
 		s.countRecorded(recorded)
 		if recorded == clientjournal.RecordedNone && ex.session != "" && s.unrecorded.first(ex.session) {
 			// Once per session: what the core did not record, and whether a
@@ -174,7 +177,7 @@ func (s *Server) modifyResponse(resp *http.Response) error {
 				ex.method, ex.path, ex.session, resp.Request.Header.Get("X-Claude-Code-Request-Class"), len(ex.statement) > 0)
 		}
 		if recorded == clientjournal.RecordedFalse && ex.hasRepo {
-			if err := s.journal.reserve(int64(len(ex.body))); err != nil {
+			if err := s.outbox.reserve(int64(len(ex.body))); err != nil {
 				return journalRefusal{err}
 			}
 			resp.Body = s.capture(resp, ex, clientjournal.ReasonCoreNotRecorded)
@@ -207,17 +210,17 @@ func (s *Server) proxyError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // refuseUnjournaled is the one refusal: a request that must be journaled
-// when the journal cannot be written.
+// when the outbox cannot hold it.
 func (s *Server) refuseUnjournaled(w http.ResponseWriter, r *http.Request, err error) {
-	s.log.Printf("refusing %s %s for session %s: the core cannot record it and the client journal cannot "+
+	s.log.Printf("refusing %s %s for session %s: the core cannot record it and the client outbox cannot "+
 		"hold it: %v", r.Method, r.URL.Path, orNone(exchangeSession(r)), err)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	msg, merr := json.Marshal(map[string]string{"error": "innsegl client: this request is in a recorded repository, " +
-		"the core cannot record it now, and the client journal cannot hold it (" + err.Error() + "). " +
-		"Nothing was sent. Free space for the journal or bring the core back; GET " + StatusPath + " shows the journal."})
+		"the core cannot record it now, and the client outbox cannot hold it (" + err.Error() + "). " +
+		"Nothing was sent. Free space for the outbox or bring the core back; GET " + StatusPath + " shows the outbox."})
 	if merr != nil {
-		msg = []byte(`{"error":"innsegl client: the client journal cannot hold this request; nothing was sent"}`)
+		msg = []byte(`{"error":"innsegl client: the client outbox cannot hold this request; nothing was sent"}`)
 	}
 	if _, werr := w.Write(msg); werr != nil {
 		s.log.Printf("writing the refusal: %v", werr)
@@ -260,7 +263,7 @@ func stripHopByHop(h http.Header) {
 // so the reply can be journaled), and streams the reply back.
 func (s *Server) forwardDirect(w http.ResponseWriter, r *http.Request, ex *exchange) {
 	if ex.hasRepo {
-		if err := s.journal.reserve(int64(len(ex.body))); err != nil {
+		if err := s.outbox.reserve(int64(len(ex.body))); err != nil {
 			s.refuseUnjournaled(w, r, err)
 			return
 		}
@@ -383,14 +386,14 @@ func (c *capturingBody) finish(complete bool) {
 			ResponseBody: c.buf.Bytes(), ResponseComplete: complete && !c.truncated,
 			StartedAt: c.ex.started, EndedAt: c.s.Now().UTC(),
 		}
-		sealed, err := c.s.journal.append(e)
+		sealed, err := c.s.outbox.appendExchange(e)
 		if err != nil {
-			c.s.log.Printf("LOST: the exchange of session %s could not be written to the client journal: %v",
+			c.s.log.Printf("LOST: the exchange of session %s could not be written to the client outbox: %v",
 				orNone(c.ex.session), err)
 			return
 		}
 		c.s.log.Printf("journaled %s %s for session %s (%s) as %s", c.ex.method, c.ex.path, orNone(c.ex.session), c.reason, sealed.Hash())
-		c.s.kickUpload()
+		c.s.kickOutbox()
 	})
 }
 

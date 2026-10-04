@@ -28,8 +28,9 @@ type Paths struct {
 	Core   string // core.json
 	// Revoked exists once the core has refused a renewal.
 	Revoked string
-	// Journal holds what the core could not record (ADR-0068), 0700.
-	Journal string
+	// Outbox holds what the core did not take (ADR-0068): journal entries,
+	// telemetry exports and session ends, 0700.
+	Outbox string
 	// ProxyCA and ProxyCAKey are the client's own CA for opening the
 	// provider's traffic (RM-329): the certificate is what
 	// NODE_EXTRA_CA_CERTS names; the key never leaves this folder.
@@ -48,7 +49,7 @@ func ClientPaths(home string) Paths {
 		CA:         filepath.Join(dir, "gateway-ca.pem"),
 		Core:       filepath.Join(dir, "core.json"),
 		Revoked:    filepath.Join(dir, "revoked"),
-		Journal:    filepath.Join(dir, "journal"),
+		Outbox:     filepath.Join(dir, "outbox"),
 		ProxyCA:    filepath.Join(dir, "proxy-ca.pem"),
 		ProxyCAKey: filepath.Join(dir, "proxy-ca-key.pem"),
 	}

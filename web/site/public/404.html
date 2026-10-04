@@ -1,5 +1,4 @@
 <!doctype html>
-<!-- SPDX-License-Identifier: Apache-2.0 -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -11,19 +10,32 @@
     <link rel="stylesheet" href="/site.css" />
   </head>
   <body>
-    <main class="page page--narrow">
-      <p class="eyebrow"><a href="/">Innsegl</a></p>
-      <h1>Not found</h1>
-      <p class="lede">There is no page at this address.</p>
-      <ul class="links">
-        <li><a href="/">innsegl.dev</a> — what the project is</li>
-        <li><a href="/innsegl">innsegl.dev/innsegl</a> — the Go module path</li>
-        <li><a href="/repo">/repo</a> — the source repository</li>
-      </ul>
-      <p class="footnote">
-        If you arrived here from <code>go get</code>, the module path is
-        <code>innsegl.dev/innsegl</code> and only paths under it resolve.
-      </p>
+    <header class="topbar">
+      <div class="topbar__inner">
+        <a class="brand" href="/"><img src="/innsegl-mark.svg" alt="" width="28" height="28" />Innsegl</a>
+        <nav aria-label="Site">
+          <a href="/#how">How it works</a>
+          <a href="/#verify">Verify</a>
+          <a href="/#start">Get started</a>
+          <a href="https://github.com/Raymalian/innsegl">Source</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="page page--wide">
+      <section class="hero" aria-labelledby="title">
+        <p class="eyebrow">404</p>
+        <h1 id="title">Not found</h1>
+        <p class="hero__lede">There is no page at this address.</p>
+        <p class="actions">
+          <a class="button button--primary" href="/">Go to innsegl.dev</a>
+          <a class="button" href="/innsegl">The Go module</a>
+        </p>
+        <p class="footnote">
+          Arrived here from <code>go get</code>? The module path is
+          <code>innsegl.dev/innsegl</code>; only paths under it resolve.
+        </p>
+      </section>
     </main>
   </body>
 </html>

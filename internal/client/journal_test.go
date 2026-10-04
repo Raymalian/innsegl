@@ -112,7 +112,7 @@ func modelHeaders(session string) map[string]string {
 
 func readJournal(t *testing.T, paths Paths, key *ecdsa.PublicKey) []clientjournal.Entry {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(paths.Journal, "*.entry"))
+	files, err := filepath.Glob(filepath.Join(paths.Outbox, "*."+KindExchange))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,14 +190,18 @@ func TestJRN002CoreDownForwardsToTheProviderAndJournals(t *testing.T) {
 	if e.StartedAt.IsZero() || e.EndedAt.Before(e.StartedAt) {
 		t.Fatalf("client times %v..%v", e.StartedAt, e.EndedAt)
 	}
-	raw, err := os.ReadFile(filepath.Join(paths.Journal, "00000000000000000001.entry"))
+	files, err := filepath.Glob(filepath.Join(paths.Outbox, "*."+KindExchange))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("held exchanges %v, %v", files, err)
+	}
+	raw, err := os.ReadFile(files[0])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(raw, []byte("provider-canary")) {
 		t.Fatal("the provider credential is in the journal")
 	}
-	for _, f := range []string{paths.Journal, filepath.Join(paths.Journal, "00000000000000000001.entry")} {
+	for _, f := range []string{paths.Outbox, files[0]} {
 		st, err := os.Stat(f)
 		if err != nil {
 			t.Fatal(err)
@@ -223,8 +227,8 @@ func TestJRN002CoreDownForwardsToTheProviderAndJournals(t *testing.T) {
 	}
 
 	st := srv.Status(context.Background())
-	if st.Journal.Depth != 1 || st.Journal.Bytes == 0 || st.Journal.OldestEntryAt == nil {
-		t.Fatalf("status journal = %+v", st.Journal)
+	if st.Outbox.Kinds[KindExchange] != 1 || st.Outbox.Bytes == 0 || st.Outbox.OldestItemAt == nil {
+		t.Fatalf("status outbox = %+v", st.Outbox)
 	}
 }
 
@@ -233,13 +237,13 @@ func TestJRN002CoreDownForwardsToTheProviderAndJournals(t *testing.T) {
 func TestJRN002AnUnwritableJournalRefusesWithAClearMessage(t *testing.T) {
 	core, paths := enrolled(t)
 	p := newProvider(t)
-	_, front, _ := startJournalClient(t, paths, p, ServerOptions{JournalMaxBytes: 1})
+	_, front, _ := startJournalClient(t, paths, p, ServerOptions{OutboxMaxBytes: 1})
 	postJSON(t, front.URL+SessionStatementPath, repoStatement(jrnRepoSession), nil)
 	core.Close()
 
 	status, _, body := postJSON(t, front.URL+"/v1/messages", `{"messages":[]}`, modelHeaders(jrnRepoSession))
-	if status != http.StatusServiceUnavailable || !strings.Contains(body, "journal") || !strings.Contains(body, "innsegl client") {
-		t.Fatalf("full journal: %d %q, want a 503 naming the journal", status, body)
+	if status != http.StatusServiceUnavailable || !strings.Contains(body, "outbox") || !strings.Contains(body, "innsegl client") {
+		t.Fatalf("full outbox: %d %q, want a 503 naming the outbox", status, body)
 	}
 	if p.hits.Load() != 0 {
 		t.Fatal("a request that could not be journaled reached the provider")
@@ -252,17 +256,17 @@ func TestJRN002AnUnwritableJournalRefusesWithAClearMessage(t *testing.T) {
 	_, front2, _ := startJournalClient(t, paths2, p, ServerOptions{})
 	postJSON(t, front2.URL+SessionStatementPath, repoStatement(jrnRepoSession), nil)
 	core2.Close()
-	if err := os.Chmod(paths2.Journal, 0o500); err != nil {
+	if err := os.Chmod(paths2.Outbox, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := os.Chmod(paths2.Journal, 0o700); err != nil {
+		if err := os.Chmod(paths2.Outbox, 0o700); err != nil {
 			t.Error(err)
 		}
 	})
 	status, _, body = postJSON(t, front2.URL+"/v1/messages", `{"messages":[]}`, modelHeaders(jrnRepoSession))
-	if status != http.StatusServiceUnavailable || !strings.Contains(body, "journal") {
-		t.Fatalf("unwritable journal: %d %q", status, body)
+	if status != http.StatusServiceUnavailable || !strings.Contains(body, "outbox") {
+		t.Fatalf("unwritable outbox: %d %q", status, body)
 	}
 	if p.hits.Load() != 0 {
 		t.Fatal("a request that could not be journaled reached the provider")
@@ -414,11 +418,11 @@ func TestJRN009UploadDeletesOnlyAcknowledgedEntries(t *testing.T) {
 	}
 
 	accepting.Store(true)
-	res, err := srv.UploadJournal(context.Background())
+	res, err := srv.Drain(context.Background())
 	if err != nil {
-		t.Fatalf("UploadJournal: %v", err)
+		t.Fatalf("Drain: %v", err)
 	}
-	if res.Acknowledged != 1 || res.Rejected == nil {
+	if res.Delivered != 1 || res.Rejected == nil {
 		t.Fatalf("upload result %+v, want one acknowledged and a rejection", res)
 	}
 	left := readJournal(t, paths, &key.PublicKey)
@@ -426,8 +430,8 @@ func TestJRN009UploadDeletesOnlyAcknowledgedEntries(t *testing.T) {
 		t.Fatalf("left %d entries starting at %d, want 2 starting at 2", len(left), left[0].Seq)
 	}
 	st := srv.Status(context.Background())
-	if st.Journal.Depth != 2 || st.Journal.LastUpload == nil || !strings.Contains(st.Journal.LastUpload.Result, "rejected") {
-		t.Fatalf("status %+v", st.Journal)
+	if st.Outbox.Kinds[KindExchange] != 2 || st.Outbox.LastDelivery == nil || !strings.Contains(st.Outbox.LastDelivery.Result, "rejected") {
+		t.Fatalf("status %+v", st.Outbox)
 	}
 
 	// The core accepts everything now; a restarted service continues the
@@ -438,7 +442,7 @@ func TestJRN009UploadDeletesOnlyAcknowledgedEntries(t *testing.T) {
 	srv2, front2, _ := startJournalClient(t, paths, p, ServerOptions{})
 	postJSON(t, front2.URL+SessionStatementPath, repoStatement(jrnRepoSession), nil)
 	postJSON(t, front2.URL+"/v1/messages", `{}`, modelHeaders(jrnRepoSession))
-	if _, uerr := srv2.UploadJournal(context.Background()); uerr != nil {
+	if _, uerr := srv2.Drain(context.Background()); uerr != nil {
 		t.Fatal(uerr)
 	}
 	if n := len(readJournal(t, paths, &key.PublicKey)); n != 0 {
@@ -453,8 +457,8 @@ func TestJRN009UploadDeletesOnlyAcknowledgedEntries(t *testing.T) {
 	if last.Seq != 4 || last.Prev != im.received[len(im.received)-2].Hash() {
 		t.Fatalf("the restarted service wrote seq %d after %q", last.Seq, last.Prev)
 	}
-	if st := srv2.Status(context.Background()); st.Journal.Depth != 0 || st.Journal.LastUpload == nil || st.Journal.LastUpload.Result != "ok" {
-		t.Fatalf("status after a clean upload %+v", st.Journal)
+	if st := srv2.Status(context.Background()); st.Outbox.Items != 0 || st.Outbox.LastDelivery == nil || st.Outbox.LastDelivery.Result != "ok" {
+		t.Fatalf("status after a clean upload %+v", st.Outbox)
 	}
 }
 
@@ -473,11 +477,11 @@ func TestJRN009TheUploadLoopDrainsTheJournal(t *testing.T) {
 	srv, front, _ := startJournalClient(t, paths, newProvider(t), ServerOptions{UploadInterval: 20 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { srv.RunJournalUpload(ctx); close(done) }()
+	go func() { srv.RunOutbox(ctx); close(done) }()
 	postJSON(t, front.URL+SessionStatementPath, repoStatement(jrnRepoSession), nil)
 	postJSON(t, front.URL+"/v1/messages", `{}`, modelHeaders(jrnRepoSession))
 	deadline := time.Now().Add(10 * time.Second)
-	for srv.Status(context.Background()).Journal.Depth != 0 {
+	for srv.Status(context.Background()).Outbox.Items != 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("the upload loop never drained the journal")
 		}

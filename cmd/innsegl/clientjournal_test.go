@@ -273,19 +273,19 @@ func TestJRN010TheJournalIsImportedThroughTheHostedCore(t *testing.T) {
 	if providerHits.Load() != 2 || g.upstream.Load() != 0 {
 		t.Fatalf("provider saw %d, the core's upstream %d; want 2 and 0", providerHits.Load(), g.upstream.Load())
 	}
-	if d := srv.Status(ctx).Journal.Depth; d != 2 {
+	if d := srv.Status(ctx).Outbox.Kinds[client.KindExchange]; d != 2 {
 		t.Fatalf("journal depth %d, want 2", d)
 	}
-	held := readSealed(t, paths.Journal)
+	held := readSealed(t, paths.Outbox)
 
 	// The core comes back: the journal is imported.
 	front.set(true)
-	res, err := srv.UploadJournal(ctx)
-	if err != nil || res.Acknowledged != 2 || res.Rejected != nil || res.Retry != nil {
+	res, err := srv.Drain(ctx)
+	if err != nil || res.Delivered != 2 || res.Rejected != nil || res.Retry != nil {
 		t.Fatalf("upload: %+v %v", res, err)
 	}
-	if d := srv.Status(ctx).Journal.Depth; d != 0 {
-		t.Fatalf("journal depth %d after the import, want 0", d)
+	if d := srv.Status(ctx).Outbox.Items; d != 0 {
+		t.Fatalf("outbox holds %d after the import, want 0", d)
 	}
 	var runID, clientID string
 	if qerr := gwIdentityPool(t, f.ownerDSN).QueryRow(ctx,
@@ -349,10 +349,10 @@ func TestJRN010TheJournalIsImportedThroughTheHostedCore(t *testing.T) {
 	if status != http.StatusOK || header.Get(clientjournal.RecordedHeader) != clientjournal.RecordedFalse {
 		t.Fatalf("out-of-scope request: %d, %s %q", status, clientjournal.RecordedHeader, header.Get(clientjournal.RecordedHeader))
 	}
-	if d := srv.Status(ctx).Journal.Depth; d != 1 {
+	if d := srv.Status(ctx).Outbox.Kinds[client.KindExchange]; d != 1 {
 		t.Fatalf("journal depth %d after an unrecorded relay, want 1", d)
 	}
-	if res, err := srv.UploadJournal(ctx); err != nil || res.Acknowledged != 1 {
+	if res, err := srv.Drain(ctx); err != nil || res.Delivered != 1 {
 		t.Fatalf("upload of the unrecorded relay: %+v %v", res, err)
 	}
 	if n := f.count(t, `SELECT count(*) FROM innsegl.gateway_run_mapping WHERE session_id = $1`, outSession); n != 0 {
@@ -370,7 +370,7 @@ func TestJRN010TheJournalIsImportedThroughTheHostedCore(t *testing.T) {
 	if status, _, _ := post("/v1/messages", enMessage, messageHeaders(homeSession)); status != http.StatusOK {
 		t.Fatalf("repository-less request with the core down: %d", status)
 	}
-	if d := srv.Status(ctx).Journal.Depth; d != 0 {
+	if d := srv.Status(ctx).Outbox.Kinds[client.KindExchange]; d != 0 {
 		t.Fatalf("a repository-less session was journaled (depth %d)", d)
 	}
 	if n := f.count(t, `SELECT count(*) FROM innsegl.gateway_run_mapping WHERE session_id = $1`, homeSession); n != 0 {
@@ -380,7 +380,7 @@ func TestJRN010TheJournalIsImportedThroughTheHostedCore(t *testing.T) {
 
 func readSealed(t *testing.T, dir string) []clientjournal.Sealed {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "*.entry"))
+	files, err := filepath.Glob(filepath.Join(dir, "*."+client.KindExchange))
 	if err != nil {
 		t.Fatal(err)
 	}
