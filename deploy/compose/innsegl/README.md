@@ -16,6 +16,27 @@ doc 05 §1's other seven rows, none of which existed as a compose service before
 | `innsegl-dashboard` | **two services** | `innsegl-dashboard` is the UI — nginx and the built React bundle, holding no database credential at all — and `innsegl-api` is the BFF, the only holder of the read-only role. The row's "No write credentials mounted" is satisfied by both at once: nothing is mounted on the UI, and what is mounted next door cannot write |
 | `demo-agent` | service, `--profile demo` | a curl MCP client; runs to completion |
 
+## Repositories come from the mirror
+
+The core reads a repository only from its per-repository mirror
+(`innsegl-mirror`, [ADR-0065](../../../docs/adr/0065-a-per-repository-mirror-on-the-core-is-the-evidence-store.md)).
+Connected machines push to it. No service mounts a folder of the host's
+projects, and nothing lists repositories at deploy time.
+
+| service | mirror mount |
+|---|---|
+| `innsegl-mcp` | read-write: it receives the pushes |
+| `innsegl-api` | read-only: proof, run page, account page |
+| `innsegl-reconciler` (`--profile separate`) | read-only |
+
+A repository no machine has pushed yet is answered "not held yet". It is not
+a verdict about the commit. The next push may carry it.
+
+The hosted core takes no workspace snapshots. No client's working tree is on
+its disk, so there is nothing true to snapshot
+([ADR-0060](../../../docs/adr/0060-the-gateway-runs-inside-the-one-innsegl-process.md),
+decision 5 as amended).
+
 Five services here are not doc 05 §1 rows. `innsegl-db-init`,
 `innsegl-object-init`, `innsegl-identity-init` and `innsegl-s3-identities` are
 one-shots that exist for the same reason `spire-bootstrap` does — something has

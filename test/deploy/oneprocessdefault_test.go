@@ -24,12 +24,10 @@ func TestRM211OneProcessIsBuiltIn(t *testing.T) {
 	if err := composeUsable(ctx); err != nil {
 		t.Skipf("skipping RM-211: %v", err)
 	}
-	t.Setenv("INNSEGL_PROJECTS", "/srv/host-projects")
 	t.Setenv("INNSEGL_MCP_ALSO", "")
 
 	for _, files := range [][]string{
 		{"deploy/compose/innsegl.yml"},
-		{"deploy/compose/innsegl.yml", "deploy/compose/innsegl.workrepo.yml"},
 	} {
 		plain := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, files...)
 

@@ -12,6 +12,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/accounts"
 	"innsegl.dev/innsegl/internal/api"
+	"innsegl.dev/innsegl/internal/mirror"
 )
 
 // The wiring for `innsegl api`: a read-only store, a proof BFF, the five
@@ -178,12 +179,21 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 	}
 
 	// ---- the proof BFF ----------------------------------------------------
+	//
+	// Repositories come from the core's mirror and nowhere else (ADR-0065
+	// decision 1). Opened, never created: this process reads what clients
+	// pushed, from a read-only mount, and holds nothing that could add to it.
+	repos, err := mirror.Open(o.mirrorDir)
+	if err != nil {
+		unwind()
+		return nil, fmt.Errorf("open the repository mirror (-mirror-dir): %w", err)
+	}
 	prover, err := api.NewProver(api.ProofConfig{
 		FulcioURL: o.fulcioURL,
 		RekorURL:  o.rekorURL,
 		Issuer:    o.issuer,
 		GitPath:   o.gitPath,
-		Repos:     o.repos,
+		Repos:     repos,
 		HTTPClient: &http.Client{
 			Timeout: o.upstreamTimeout,
 		},
@@ -244,7 +254,7 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 		},
 		ln:              ln,
 		readOnly:        store.ReadOnly(),
-		repos:           sortedRepoNames(o.repos),
+		repos:           prover.Repos(),
 		shutdownTimeout: o.shutdownTimeout,
 		closers:         closers,
 		log:             log,

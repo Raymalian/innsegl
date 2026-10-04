@@ -928,8 +928,8 @@ func TestMCP059TheIngestionToolsAreConfiguredFromFlagsAndTheEnvironment(t *testi
 			t.Errorf("-session-dir = %q, want %q", o.sessionDir, sessions)
 		}
 		// The mount is where the container sees that directory, and defaults
-		// to the path deploy/compose/innsegl.workrepo.yml mounts it at. A
-		// deployment that mounts it elsewhere says so; nothing guesses.
+		// to /projects. A deployment that mounts it elsewhere says so; nothing
+		// guesses.
 		if o.projectsMount != mcp.DefaultProjectsMount {
 			t.Errorf("-projects-mount defaulted to %q, want %q", o.projectsMount, mcp.DefaultProjectsMount)
 		}

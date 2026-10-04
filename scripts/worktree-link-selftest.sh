@@ -6,11 +6,10 @@
 #
 # RM-148 (#240). `git rev-parse --show-toplevel` answers the tree you are
 # STANDING IN, and bring-up used it to choose the directory to link. Run from
-# inside a linked worktree it therefore linked the worktree. The link is one
-# symlink that every caller on the machine resolves through, so the damage was
-# never local: signing stopped for every caller, including from the main
-# checkout, and the failure appeared later and elsewhere as a doubled path in
-# somebody else's signing error. Hit twice on 2026-09-16.
+# inside a linked worktree it therefore linked the worktree. Hit twice on
+# 2026-09-16. The link step is now `innsegl link` (the commit hook); a
+# worktree shares its repository's hooks, so the repository is still the
+# thing to name, and the refusal stays.
 #
 # WHY A REFUSAL AS WELL AS A FIX. Bring-up is not the only caller of the link
 # step; anything that passes DIR by hand can still name a worktree. The rule
@@ -21,8 +20,7 @@
 # USAGE
 #   scripts/worktree-link-selftest.sh
 #
-# It needs bash, git and make. No Docker, no MCP, no network: every case exits
-# before the link step reaches a container.
+# It needs bash, git and make. No Docker, no MCP, no network.
 
 set -uo pipefail
 
@@ -38,9 +36,7 @@ bad()  { fail=$((fail + 1)); printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && prin
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# A repository with one commit and an origin, and a linked worktree of it. The
-# origin matters: the link step reads it before it reaches the guard, so a
-# repository without one would be refused for the wrong reason.
+# A repository with one commit and an origin, and a linked worktree of it.
 REPO="$TMP/example-repo"
 mkdir -p "$REPO"
 git -C "$REPO" init -q
@@ -106,15 +102,18 @@ else
   ok "linking a worktree is refused, naming the repository and the command"
 fi
 
-# 6. THE GUARD IS NOT REFUSING EVERYTHING. A plain repository must get PAST it;
-#    it then fails further on for a different reason, which is what this asserts
-#    on. Without this, case 5 would pass against a guard that refused every path.
+# 6. THE GUARD IS NOT REFUSING EVERYTHING. A plain repository must get PAST it
+#    to the link step, `innsegl link <repository>`; echo stands in for the
+#    binary so the step is observed without touching the repository's hooks.
+#    Without this, case 5 would pass against a guard that refused every path.
 out="$(cd "$ROOT" && make --no-print-directory innsegl-link DIR="$REPO_P" \
-        INNSEGL_PROJECTS="$TMP" 2>&1)"
+        INNSEGL_BIN_PATH=echo 2>&1)"
 if printf '%s' "$out" | grep -q "is a linked worktree"; then
   bad "a plain repository gets past the guard" "the guard refused it: $out"
+elif ! printf '%s' "$out" | grep -qx "link $REPO_P"; then
+  bad "a plain repository reaches \`innsegl link\`" "$out"
 else
-  ok "a plain repository gets past the guard"
+  ok "a plain repository gets past the guard to \`innsegl link\`"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

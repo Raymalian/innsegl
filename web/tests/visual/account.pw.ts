@@ -122,6 +122,9 @@ for (const mode of ["light", "dark"] as const) {
     });
 
     test(`the account page (${mode})`, async ({ page }) => {
+      // A fixed instant: the page shows ages ("4 days ago"), and a picture
+      // taken against the real clock changes every day.
+      await page.clock.install({ time: new Date("2026-10-03T12:00:00Z") });
       await installAccountMocks(page);
       await page.goto("/account");
       await expect(page.getByText("MacBook", { exact: true })).toBeVisible();

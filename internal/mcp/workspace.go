@@ -69,13 +69,14 @@ func init() { RegisterTool(ToolDescribeWorkspace, bindDescribeWorkspace) }
 
 const (
 	// EnvHostProjects names the host directory this deployment's projects
-	// mount corresponds to. It is the ONE value this tool adds, and it is set
-	// from the same INNSEGL_PROJECTS the Makefile already computes for the
-	// mount itself, so the two cannot disagree.
+	// mount corresponds to. It is the ONE value this tool adds. A single-host
+	// deployment sets it from the same value it mounts, so the two cannot
+	// disagree; the hosted core mounts no projects folder and leaves it
+	// unset, so the tool refuses by name (ADR-0065).
 	EnvHostProjects = "INNSEGL_HOST_PROJECTS"
 
-	// DefaultProjectsMount is where deploy/compose/innsegl.workrepo.yml mounts
-	// that directory inside the container.
+	// DefaultProjectsMount is where a single-host deployment mounts that
+	// directory inside the container.
 	DefaultProjectsMount = "/projects"
 )
 
@@ -297,8 +298,8 @@ func (c DescribeWorkspaceConfig) containerPath(cwd string) (string, error) {
 		return "", Errorf(ClassInvariantViolation, "",
 			"%s is unset: this deployment has not been told which host directory its %s "+
 				"mount corresponds to, so a host path cannot be translated. Set it to the "+
-				"same directory the mount is of — the deployment already computes that as "+
-				"INNSEGL_PROJECTS. Nothing is guessed here: a guessed translation describes "+
+				"same directory the mount is of. A hosted core mounts no projects folder and "+
+				"reads repositories from its mirror instead. Nothing is guessed here: a guessed translation describes "+
 				"the wrong repository and says nothing about being a guess",
 			EnvHostProjects, c.Projects)
 	}

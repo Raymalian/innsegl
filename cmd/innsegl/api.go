@@ -6,17 +6,16 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	"innsegl.dev/innsegl/internal/api"
+	"innsegl.dev/innsegl/internal/mirror"
 )
 
 // `innsegl api` — the dashboard's backend, wired.
@@ -119,7 +118,6 @@ const (
 const (
 	envAPIDSN     = "INNSEGL_API_DSN"
 	envAPIListen  = "INNSEGL_API_LISTEN"
-	envAPIRepos   = "INNSEGL_API_REPOS"
 	envAPILogDir  = "INNSEGL_API_LOG_DIR"
 	envAPILogDays = "INNSEGL_API_LOG_DAYS"
 	// envAPISnapshotDir names the run page's own read: the gateway's own
@@ -213,9 +211,11 @@ var apiRoutes = []string{
 
 // apiOptions is the resolved command line.
 type apiOptions struct {
-	dsn       string
-	listen    string
-	repos     map[string]string
+	dsn    string
+	listen string
+	// mirrorDir is the core's per-repository mirror (ADR-0065), read-only:
+	// the only place the proof BFF and the run page read a repository from.
+	mirrorDir string
 	fulcioURL string
 	rekorURL  string
 	issuer    string
@@ -262,7 +262,7 @@ type servedAPI interface {
 	Addr() string
 	// ReadOnly is the evidence api.Open gathered from the server itself.
 	ReadOnly() api.ReadOnlyReport
-	// Repos names the repositories the proof BFF can answer about.
+	// Repos names the repositories the core's mirror held at start-up.
 	Repos() []string
 	// Serve runs until ctx is done or the listener fails.
 	Serve(ctx context.Context) error
@@ -407,10 +407,10 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 				"answers every run page Brief and Reply unavailable — this process never holds "+
 				"the identity secret itself, only this narrower, derived key "+
 				"($"+envAPIMessageKeyDir+")")
-		repos = fs.String("repos", os.Getenv(envAPIRepos),
-			"comma-separated name=path pairs naming the repositories the proof BFF answers "+
-				"about, e.g. github.com/acme/app=/srv/repos/github.com/acme/app. A commit in "+
-				"no listed repository is a 404, never an empty verdict ($"+envAPIRepos+")")
+		mirrorDir = fs.String("mirror-dir", os.Getenv(mirror.EnvDir),
+			"the core's per-repository mirror, read-only: the only place repositories are read "+
+				"from (ADR-0065). A repository or commit it does not hold yet is a 404 that says "+
+				"so, never an empty verdict ($"+mirror.EnvDir+")")
 		fulcioURL = fs.String("fulcio-url", os.Getenv(envFulcioURL),
 			"base URL of the certificate authority the proof route checks against ($"+envFulcioURL+")")
 		rekorURL = fs.String("rekor-url", os.Getenv(envRekorURL),
@@ -461,14 +461,8 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		return apiOptions{}, exitUsage, false
 	}
 
-	parsed, err := parseRepos(*repos)
-	if err != nil && *repos != "" {
-		fprintf(stderr, "innsegl api: -repos (or $"+envAPIRepos+"): %v\n", err)
-		return apiOptions{}, exitUsage, false
-	}
-
 	o := apiOptions{
-		dsn: *dsn, listen: *listen, repos: parsed,
+		dsn: *dsn, listen: *listen, mirrorDir: *mirrorDir,
 		fulcioURL: *fulcioURL, rekorURL: *rekorURL, issuer: *issuer, gitPath: *gitPath,
 		shutdownTimeout: *shutdownTimeout, upstreamTimeout: *upstreamTimeout,
 		logDir: *logDir, logDays: *logDays,
@@ -493,10 +487,10 @@ func (o apiOptions) validate() string {
 	case o.dsn == "":
 		return "-dsn (or $" + envAPIDSN + ") is required: it is the READ-ONLY credential " +
 			"doc 05 §1 mounts on the dashboard, and it is not $" + envLedgerDSN
-	case len(o.repos) == 0:
-		return "-repos (or $" + envAPIRepos + ") is required: a proof BFF that serves no " +
-			"repository can answer nothing, and guessing is not one of the states " +
-			"doc 06 §4.6 allows"
+	case o.mirrorDir == "":
+		return "-mirror-dir (or $" + mirror.EnvDir + ") is required: the proof BFF reads " +
+			"repositories only from the core's mirror (ADR-0065), and guessing another " +
+			"place is not one of the states doc 06 §4.6 allows"
 	case o.fulcioURL == "":
 		return "-fulcio-url (or $" + envFulcioURL + ") is required: the proof route runs " +
 			"the same live checks a stranger would, and there is no default pair to fall " +
@@ -525,12 +519,6 @@ func (o apiOptions) validate() string {
 	return ""
 }
 
-// parseRepos reads the name=path list.
-//
-// Every failure is a refusal rather than a skipped entry: a repository silently
-// dropped from this map turns every proof request about it into "no repository
-// this deployment serves holds that commit", which reads as a verdict about
-// the commit and is a statement about the configuration.
 // resolveSnapshotDir answers -snapshot-dir (or $INNSEGL_API_SNAPSHOT_DIR)
 // when one was given, and otherwise the "gateway-snapshots" subdirectory of
 // logDir — the SAME path cmd/innsegl/gateway.go's own newGatewaySnapshotter
@@ -546,37 +534,6 @@ func resolveSnapshotDir(explicit, logDir string) string {
 		return ""
 	}
 	return filepath.Join(logDir, "gateway-snapshots")
-}
-
-func parseRepos(raw string) (map[string]string, error) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, errors.New("no repository was named")
-	}
-	out := make(map[string]string)
-	for _, entry := range strings.Split(raw, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		name, path, found := strings.Cut(entry, "=")
-		name, path = strings.TrimSpace(name), strings.TrimSpace(path)
-		switch {
-		case !found:
-			return nil, fmt.Errorf("%q is not a name=path pair", entry)
-		case name == "":
-			return nil, fmt.Errorf("%q names no repository", entry)
-		case path == "":
-			return nil, fmt.Errorf("%q gives %s no path", entry, name)
-		}
-		if existing, dup := out[name]; dup {
-			return nil, fmt.Errorf("%s is listed twice, as %s and %s", name, existing, path)
-		}
-		out[name] = path
-	}
-	if len(out) == 0 {
-		return nil, errors.New("no repository was named")
-	}
-	return out, nil
 }
 
 // apiUsage is the help block. It states the things a reader of a compose
@@ -618,14 +575,4 @@ func apiUsage(stderr io.Writer, fs *flag.FlagSet) {
 		"refused to hold it; no restart clears this\n", exitAPIWritable)
 	fprintf(stderr, "\nFlags:\n")
 	fs.PrintDefaults()
-}
-
-// sortedRepoNames is the repository list in a stable order, for the log line.
-func sortedRepoNames(repos map[string]string) []string {
-	out := make([]string, 0, len(repos))
-	for name := range repos {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
 }

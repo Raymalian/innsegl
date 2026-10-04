@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 
@@ -80,17 +79,34 @@ type ProofConfig struct {
 	Issuer string
 	// GitPath is the git binary; empty means a PATH lookup.
 	GitPath string
-	// Repos maps the repository name a caller uses to a local path holding
-	// its objects. A name that is not in this map is ErrNotFound: the public
-	// page answers about what this deployment serves, and guessing is not one
-	// of the states FD §4.6 allows.
-	Repos map[string]string
+	// Repos is where a repository's objects are read from: the core's
+	// per-repository mirror (ADR-0065 decision 1), which clients push to. A
+	// repository or a commit it does not hold is ErrNotHeld, which is also
+	// ErrNotFound: the public page answers about what the core holds, and
+	// guessing is not one of the states FD §4.6 allows. Required.
+	Repos RepoSource
 	// HTTPClient bounds the material fetches. The verifier is given the same
 	// one.
 	HTTPClient *http.Client
 	// Now is the clock, used only for timestamps in the response.
 	Now func() time.Time
 }
+
+// RepoSource is where the BFF finds a repository's objects. The production
+// value is the core's mirror (internal/mirror.Store), opened read-only.
+type RepoSource interface {
+	// Dir answers the directory holding repo's objects, or an error when
+	// the source holds no copy of repo (or repo is not an identifier).
+	Dir(repo string) (string, error)
+	// Repos lists the repositories the source holds, sorted.
+	Repos() ([]string, error)
+}
+
+// ErrNotHeld is a repository, or a commit, the core's mirror does not hold
+// yet. It is not a verdict about the commit: a client's next push may carry
+// it (ADR-0065 consequence 3). Every error wrapping it also wraps
+// ErrNotFound, so the HTTP answer is a 404 that says why.
+var ErrNotHeld = errors.New("not held yet")
 
 // Upstream is one dependency the BFF spoke to, and what it said. Reported on
 // every response, reachable or not: FD §6.1 wants errors that state what
@@ -200,9 +216,9 @@ type Prover struct {
 
 // NewProver builds the BFF, refusing a configuration it could not answer with.
 func NewProver(cfg ProofConfig) (*Prover, error) {
-	if len(cfg.Repos) == 0 {
-		return nil, fmt.Errorf("%w: a proof BFF that serves no repository can answer "+
-			"nothing; give it at least one", ErrBadRequest)
+	if cfg.Repos == nil {
+		return nil, fmt.Errorf("%w: a proof BFF with nowhere to read a repository from "+
+			"can answer nothing; give it the core's mirror", ErrBadRequest)
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -245,17 +261,17 @@ func NewProver(cfg ProofConfig) (*Prover, error) {
 	return p, nil
 }
 
-// RepoPath is the local path holding a served repository's objects, and false
-// for a name this deployment does not serve.
+// RepoPath is the local path holding a held repository's objects, and false
+// for a repository the core's mirror does not hold.
 //
-// Read-only and additive: it hands out what ProofConfig was already given, so a
-// caller can run git against the same checkout the Prover uses. It gives away no
+// Read-only and additive: it hands out what ProofConfig's source answers, so a
+// caller can run git against the same copy the Prover uses. It gives away no
 // database and creates no route to one — invariant 3 above is untouched, and
 // deliberately: the reason a Prover holds no ledger is that it must be incapable
-// of a database-only answer, not that its repository map is a secret.
+// of a database-only answer, not that where its repositories live is a secret.
 func (p *Prover) RepoPath(name string) (string, bool) {
-	path, ok := p.cfg.Repos[name]
-	return path, ok
+	path, err := p.cfg.Repos.Dir(name)
+	return path, err == nil
 }
 
 // GitPath is the git binary the Prover resolved, so a caller runs the same one.
@@ -282,14 +298,14 @@ func (p *Prover) CommitMessage(ctx context.Context, repo, rev string) (string, s
 	return strings.TrimSpace(text[:nl]), text[nl+1:], nil
 }
 
-// Repos returns the repository names this BFF serves, sorted. The public page
-// needs them to say what it can answer about.
+// Repos returns the repositories the core holds, sorted. The public page
+// needs them to say what it can answer about. A source that cannot be listed
+// holds nothing this BFF can name.
 func (p *Prover) Repos() []string {
-	out := make([]string, 0, len(p.cfg.Repos))
-	for name := range p.cfg.Repos {
-		out = append(out, name)
+	out, err := p.cfg.Repos.Repos()
+	if err != nil {
+		return nil
 	}
-	slices.Sort(out)
 	return out
 }
 
@@ -343,31 +359,42 @@ func (p *Prover) locate(ctx context.Context, repo, revision string) (
 	name, path string, object []byte, sha string, err error) {
 
 	if repo != "" {
-		path, ok := p.cfg.Repos[repo]
-		if !ok {
-			return "", "", nil, "", fmt.Errorf("%w: this deployment serves no repository "+
-				"named %q; it serves %v", ErrNotFound, repo, p.Repos())
+		path, derr := p.cfg.Repos.Dir(repo)
+		if derr != nil {
+			return "", "", nil, "", fmt.Errorf("%w: %w: the core holds no copy of %q; a "+
+				"repository appears once a client pushes it (ADR-0065): %w",
+				ErrNotFound, ErrNotHeld, repo, derr)
 		}
 		object, sha, err := p.readCommitObject(ctx, path, revision)
 		if err != nil {
-			return "", "", nil, "", fmt.Errorf("%w: %s holds no commit %s: %w",
-				ErrNotFound, repo, revision, err)
+			return "", "", nil, "", fmt.Errorf("%w: %w: the core's copy of %s has no commit "+
+				"%s; the next push from a client may carry it: %w",
+				ErrNotFound, ErrNotHeld, repo, revision, err)
 		}
 		return repo, path, object, sha, nil
 	}
 
-	// No repository named: search the ones this deployment serves, in a stable
-	// order so the same request gets the same answer.
+	// No repository named: search the ones the core holds, in a stable order
+	// so the same request gets the same answer.
+	held, lerr := p.cfg.Repos.Repos()
+	if lerr != nil {
+		return "", "", nil, "", fmt.Errorf("listing the repositories the core holds: %w", lerr)
+	}
 	var last error
-	for _, candidate := range p.Repos() {
-		object, sha, rerr := p.readCommitObject(ctx, p.cfg.Repos[candidate], revision)
+	for _, candidate := range held {
+		dir, derr := p.cfg.Repos.Dir(candidate)
+		if derr != nil {
+			last = derr
+			continue
+		}
+		object, sha, rerr := p.readCommitObject(ctx, dir, revision)
 		if rerr == nil {
-			return candidate, p.cfg.Repos[candidate], object, sha, nil
+			return candidate, dir, object, sha, nil
 		}
 		last = rerr
 	}
-	return "", "", nil, "", fmt.Errorf("%w: no repository this deployment serves holds "+
-		"%s (searched %v): %w", ErrNotFound, revision, p.Repos(), last)
+	return "", "", nil, "", fmt.Errorf("%w: %w: no repository the core holds has %s "+
+		"(searched %v): %v", ErrNotFound, ErrNotHeld, revision, held, last)
 }
 
 // readCommitObject resolves a revision and reads the object behind it, BYTE

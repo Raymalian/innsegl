@@ -74,6 +74,9 @@ type CommitMirror interface {
 	Missing(ctx context.Context, repo string, oids []string) ([]string, error)
 	// DropStaging deletes a tool call's staging ref.
 	DropStaging(ctx context.Context, repo, installation, toolUseID string) error
+	// StoreSigned writes the signed commit object, whose id is sha, into
+	// the mirror of repo and keeps it under a ref.
+	StoreSigned(ctx context.Context, repo, sha string, body []byte) error
 }
 
 func signWithSigner(ctx context.Context, s *signing.Signer, req signing.PayloadRequest) (signing.PayloadResult, error) {
@@ -339,6 +342,18 @@ func SignPayloadForGateway(
 	})
 	if err != nil {
 		return commitpath.SignResponse{}, svc.signingError(ctx, runID, err)
+	}
+
+	// A hosted core reads repositories only from its mirror, and the client
+	// pushed the commit's objects before it was signed, never the signed
+	// commit. So the core keeps the signed commit it just built, before
+	// recording it: a failure here is a signing failure, with nothing
+	// recorded and no signature handed back (ADR-0065).
+	if relayed.Installation != "" && cfg.mirror != nil {
+		if serr := cfg.mirror.StoreSigned(ctx, run.Repo, result.CommitSHA, result.Object); serr != nil {
+			return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, runID,
+				"the signed commit %s could not be kept in the mirror of %s: %v", result.CommitSHA, run.Repo, serr)
+		}
 	}
 
 	// ---- Phase C ------------------------------------------------------------

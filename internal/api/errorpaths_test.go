@@ -90,18 +90,18 @@ func TestNewProverRefusesAConfigurationItCouldNotAnswerWith(t *testing.T) {
 		t.Error("NewProver accepted a BFF that serves no repository")
 	}
 	if _, err := NewProver(ProofConfig{
-		Repos: map[string]string{"r": "/tmp"}, RekorURL: "https://rekor.example",
+		Repos: staticRepos{"r": "/tmp"}, RekorURL: "https://rekor.example",
 	}); err == nil {
 		t.Error("NewProver accepted a configuration with no Fulcio")
 	}
 	if _, err := NewProver(ProofConfig{
-		Repos: map[string]string{"r": "/tmp"}, FulcioURL: "https://f.example", RekorURL: "not a url",
+		Repos: staticRepos{"r": "/tmp"}, FulcioURL: "https://f.example", RekorURL: "not a url",
 	}); err == nil {
 		t.Error("NewProver accepted a Rekor URL it could not join a path onto")
 	}
 	// The defaults fill in, and the endpoints resolve.
 	p, err := NewProver(ProofConfig{
-		Repos:     map[string]string{"b": "/tmp/b", "a": "/tmp/a"},
+		Repos:     staticRepos{"b": "/tmp/b", "a": "/tmp/a"},
 		FulcioURL: "https://f.example", RekorURL: "https://r.example",
 	})
 	if err != nil {

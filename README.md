@@ -21,7 +21,9 @@ cd innsegl
 ```
 
 That checks the prerequisites, brings the stack up, puts `innsegl-commit` on
-PATH, builds the binary, and links `~/path/to/project` so it can be signed.
+PATH, builds the binary, and installs the commit hook in `~/path/to/project`.
+The core mounts no project folder: it reads each repository from its own
+mirror, which a connected machine pushes to.
 It prints the dashboard's address and, while no account exists, a one-time
 setup link.
 
@@ -48,7 +50,7 @@ On the core host, by `install.sh`:
 |---|---|
 | the stack | Docker containers, via `make start` — SPIRE, self-hosted Sigstore, and innsegl itself |
 | `innsegl-commit` | symlinked onto PATH at `~/.local/bin/innsegl-commit` |
-| each `DIR` argument | linked into the stack so it becomes signable, the same as `make link DIR=<dir>` |
+| each `DIR` argument | its `prepare-commit-msg` hook, the same as `innsegl link <dir>` (or `make link DIR=<dir>`) |
 
 `install.sh` writes no Claude Code settings. Those are `innsegl connect`'s,
 on every machine.

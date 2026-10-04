@@ -517,7 +517,7 @@ func (s *proofScenario) prover(t *testing.T) *Prover {
 	p, err := NewProver(ProofConfig{
 		FulcioURL: s.fulcio.URL,
 		RekorURL:  s.log.URL,
-		Repos:     map[string]string{fixtureRepo: s.repo},
+		Repos:     staticRepos{fixtureRepo: s.repo},
 		Now:       func() time.Time { return s.integrated.Add(365 * 24 * time.Hour) },
 	})
 	if err != nil {

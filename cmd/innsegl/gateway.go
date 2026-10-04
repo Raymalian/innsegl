@@ -1445,7 +1445,7 @@ func openIdentityStack(
 
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
 
-	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running))
+	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running, hosted != nil))
 	toolUse = gateway.CombineToolUseObservers(spawnRecorder, toolCallRecorder)
 
 	// The commit path (ADR-0059, E17) authorises a commit by a git commit
@@ -1638,14 +1638,14 @@ func writeMessageKeyFile(dir, keyID, keyBytes string) error {
 // gateway.ToolCallRecorderConfig's own doc comment on Snapshots warns
 // against for exactly this reason: an interface holding one is not itself
 // nil.
-func newToolCallRecorderConfig(running *runningGateway) gateway.ToolCallRecorderConfig {
+func newToolCallRecorderConfig(running *runningGateway, hosted bool) gateway.ToolCallRecorderConfig {
 	cfg := gateway.ToolCallRecorderConfig{
 		Trigger: gateway.NewSnapshotTrigger(),
 		OnRecordFailure: func(err error) {
 			running.log.error("gateway: could not record a tool call", "err", err)
 		},
 	}
-	if snap := newGatewaySnapshotter(running); snap != nil {
+	if snap := newGatewaySnapshotter(running, hosted); snap != nil {
 		cfg.Snapshots = snap
 	}
 	return cfg
@@ -1661,7 +1661,20 @@ func newToolCallRecorderConfig(running *runningGateway) gateway.ToolCallRecorder
 // case, and a missing snapshotter is reported the same way a snapshot
 // failure already is (record.go's own OnRecordFailure), once, at start-up,
 // rather than once per request.
-func newGatewaySnapshotter(running *runningGateway) *gateway.Snapshotter {
+//
+// A hosted core builds none (ADR-0060 decision 5, as amended 2026-10-03). The
+// snapshot reads a working tree on this process's own disk, and on a hosted
+// core no client's tree is there (ADR-0064 decision 2): it would record the
+// core's own files as if they were the client's. Snapshots return to the
+// hosted core only as snapshot refs a client pushes to the mirror (ADR-0065
+// decision 3).
+func newGatewaySnapshotter(running *runningGateway, hosted bool) *gateway.Snapshotter {
+	if hosted {
+		running.log.info("workspace snapshotting is off on a hosted core: no client's working " +
+			"tree is on this disk (ADR-0064), so recorded tool calls carry no workspace_tree_hash " +
+			"until clients push snapshot refs (ADR-0065)")
+		return nil
+	}
 	root := os.Getenv(envObserveBodyDir)
 	if root == "" {
 		running.log.info("workspace snapshotting is not configured: " +

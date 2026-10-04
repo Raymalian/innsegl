@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/api"
+	"innsegl.dev/innsegl/internal/mirror"
 )
 
 // API-008 (PROPOSED for doc 07's TC-API) — the operator-facing surface of
@@ -32,7 +33,7 @@ func minimalAPIArgs(extra ...string) []string {
 	return append([]string{
 		"-dsn", "postgres://innsegl_reader@ledger/innsegl",
 		"-auth-dsn", "postgres://innsegl_authwriter@ledger/innsegl",
-		"-repos", "github.com/innsegl/demo=/srv/repos/github.com/innsegl/demo",
+		"-mirror-dir", "/mirror",
 		"-fulcio-url", "http://fulcio:5555",
 		"-rekor-url", "http://rekor:3000",
 		"-listen", "127.0.0.1:0",
@@ -293,7 +294,7 @@ func TestAPI008RequiredFlagsAreRefusedByName(t *testing.T) {
 	}{
 		{"-dsn", envAPIDSN},
 		{"-auth-dsn", envAuthWriterDSN},
-		{"-repos", envAPIRepos},
+		{"-mirror-dir", mirror.EnvDir},
 		{"-fulcio-url", envFulcioURL},
 		{"-rekor-url", envRekorURL},
 	} {
@@ -352,7 +353,7 @@ func withoutAPIFlag(args []string, flag string) []string {
 func TestAPI008EveryRequiredFlagHasAnEnvironmentFallback(t *testing.T) {
 	t.Setenv(envAPIDSN, "postgres://innsegl_reader:secret@ledger/innsegl")
 	t.Setenv(envAuthWriterDSN, "postgres://innsegl_authwriter:secret@ledger/innsegl")
-	t.Setenv(envAPIRepos, "github.com/innsegl/demo=/srv/demo")
+	t.Setenv(mirror.EnvDir, "/srv/mirror")
 	t.Setenv(envFulcioURL, "http://fulcio:5555")
 	t.Setenv(envRekorURL, "http://rekor:3000")
 	t.Setenv(envAPIListen, "0.0.0.0:9999")
@@ -373,8 +374,8 @@ func TestAPI008EveryRequiredFlagHasAnEnvironmentFallback(t *testing.T) {
 	if seen.issuer != "https://oidc.innsegl.dev" {
 		t.Errorf("-issuer did not fall back to $%s: %q", envIssuer, seen.issuer)
 	}
-	if seen.repos["github.com/innsegl/demo"] != "/srv/demo" {
-		t.Errorf("-repos did not fall back to $%s: %v", envAPIRepos, seen.repos)
+	if seen.mirrorDir != "/srv/mirror" {
+		t.Errorf("-mirror-dir did not fall back to $%s: %q", mirror.EnvDir, seen.mirrorDir)
 	}
 	if strings.Contains(stderr, "secret") {
 		t.Errorf("the DSN's password was logged:\n%s", stderr)
@@ -399,26 +400,20 @@ func TestAPI008DefaultListenAddressIsLoopback(t *testing.T) {
 	}
 }
 
-func TestAPI008RefusesAReposListItCannotParse(t *testing.T) {
-	for _, tc := range []struct{ name, repos string }{
-		{"no equals sign", "github.com/innsegl/demo"},
-		{"empty name", "=/srv/demo"},
-		{"empty path", "github.com/innsegl/demo="},
-		{"a name twice", "a=/srv/one,a=/srv/two"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
+// P1: the proof BFF reads repositories only from the core's mirror. The
+// static name=path list it used to take is gone, and a command line that
+// still passes it is refused rather than silently ignored.
+func TestAPI008NoLongerTakesAStaticRepositoryList(t *testing.T) {
+	var stdout, stderr bytes.Buffer
 
-			code := runAPICommand(append(withoutAPIFlag(minimalAPIArgs(), "-repos"),
-				"-repos", tc.repos), &stdout, &stderr, stubAPIDeps(healthyStub(), nil))
+	code := runAPICommand(minimalAPIArgs("-repos", "github.com/innsegl/demo=/srv/demo"),
+		&stdout, &stderr, stubAPIDeps(healthyStub(), nil))
 
-			if code != exitUsage {
-				t.Fatalf("exit = %d, want %d. stderr: %s", code, exitUsage, stderr.String())
-			}
-			if !strings.Contains(stderr.String(), "-repos") {
-				t.Errorf("the refusal does not name -repos:\n%s", stderr.String())
-			}
-		})
+	if code != exitUsage {
+		t.Fatalf("exit = %d, want %d. stderr: %s", code, exitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "-repos") {
+		t.Errorf("the refusal does not name -repos:\n%s", stderr.String())
 	}
 }
 

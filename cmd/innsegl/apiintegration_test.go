@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"innsegl.dev/innsegl/internal/api"
+	"innsegl.dev/innsegl/internal/mirror"
 	"innsegl.dev/innsegl/internal/webauthntest"
 )
 
@@ -73,16 +74,30 @@ func startAPICommand(t *testing.T, args ...string) (addr string, stderr *syncBuf
 	}
 }
 
-// apiArgsFor is a command line pointed at one database and one repository.
+// apiArgsFor is a command line pointed at one database and one repository,
+// which it puts in a mirror of its own: the API reads repositories only from
+// the core's mirror (ADR-0065), so the repository is pushed there the way a
+// client's would be.
 // authDSN is RM-260/RM-261's auth-writer credential — always a validly
 // provisioned one in these cases, even when dsn deliberately is not, because
 // api.Open(dsn) is what every one of them is actually testing and it runs
 // before the auth store is ever opened (apiwiring.go's openAPI).
-func apiArgsFor(dsn, authDSN, repoName, repoPath, fulcio, rekor string) []string {
+func apiArgsFor(t *testing.T, dsn, authDSN, repoName, repoPath, fulcio, rekor string) []string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "mirror")
+	store, err := mirror.New(root)
+	if err != nil {
+		t.Fatalf("make a mirror: %v", err)
+	}
+	bare, err := store.Ensure(t.Context(), repoName)
+	if err != nil {
+		t.Fatalf("make the mirror of %s: %v", repoName, err)
+	}
+	gitCLI(t, repoPath, "push", "--quiet", "--no-verify", bare, "HEAD:refs/heads/main")
 	return []string{
 		"-dsn", dsn,
 		"-auth-dsn", authDSN,
-		"-repos", repoName + "=" + repoPath,
+		"-mirror-dir", root,
 		"-fulcio-url", fulcio,
 		"-rekor-url", rekor,
 		"-listen", "127.0.0.1:0",
@@ -399,7 +414,7 @@ func TestAPI009AnOverPrivilegedCredentialIsRefused(t *testing.T) {
 	// ---- the command, handed the owner ------------------------------------
 	var stdout, stderr syncBuffer
 	code := runAPI(context.Background(),
-		apiArgsFor(ownerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor),
+		apiArgsFor(t, ownerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor),
 		&stdout, &stderr, apiDeps{})
 
 	t.Logf("API-009 `innsegl api` on the OWNER credential exited %d\nstderr:\n%s",
@@ -422,7 +437,7 @@ func TestAPI009AnOverPrivilegedCredentialIsRefused(t *testing.T) {
 
 	// ---- the command, handed the reader -----------------------------------
 	addr, readerStderr := startAPICommand(t,
-		apiArgsFor(readerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
+		apiArgsFor(t, readerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
 	t.Logf("API-009 `innsegl api` on the READ-ONLY credential bound %s", addr)
 	if !strings.Contains(readerStderr.String(), apiReaderRole) {
 		t.Errorf("the start-up report does not name the role it probed:\n%s",
@@ -454,7 +469,7 @@ func TestAPI010TheFiveRoutesAnswerThroughTheCommand(t *testing.T) {
 	fulcio, rekor := closedAddress(t), closedAddress(t)
 
 	addr, _ := startAPICommand(t,
-		apiArgsFor(readerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
+		apiArgsFor(t, readerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
 	base := "http://" + addr
 
 	// RM-260/RM-261 (ADR-0062): every route below except health and proof
@@ -649,7 +664,7 @@ func TestAPI011ARouteThatNeedsTheLedgerDegradesHonestly(t *testing.T) {
 	}
 
 	addr, _ := startAPICommand(t,
-		apiArgsFor(proxied, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
+		apiArgsFor(t, proxied, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
 	base := "http://" + addr
 
 	// The auth-writer connection is NOT proxied — only the reader's is — so

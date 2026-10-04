@@ -17,9 +17,7 @@
 # it was read from deploy/compose/*.yml and the Makefile, not guessed:
 # trust-volumes.sh's five suffixes under its "innsegl-trust" prefix; the
 # `name:` a compose project gives its own volumes (spire.yml -> innsegl-spire,
-# innsegl.yml -> innsegl-core, sigstore.yml -> innsegl-sigstore); and
-# innsegl.workrepo.yml's own `innsegl-sessions`, which is an overlay of the
-# innsegl-core project and so carries that project's prefix too.
+# innsegl.yml -> innsegl-core, sigstore.yml -> innsegl-sigstore).
 #
 # WHAT IS DELIBERATELY NOT ON THE LIST. `spire-agent-socket` is a live Unix
 # socket directory, not state — nothing an archive of it could reproduce
@@ -303,9 +301,9 @@ create_volume_with_labels() {
 #
 # "<name>|<what it holds>", one per line. Verified against
 # deploy/compose/trust-volumes.sh (the five innsegl-trust-* suffixes),
-# deploy/compose/spire.yml, innsegl.yml, innsegl.workrepo.yml and sigstore.yml
-# (each project's `name:`, which is the prefix compose gives its own
-# volumes), on 2026-09-28.
+# deploy/compose/spire.yml, innsegl.yml and sigstore.yml (each project's
+# `name:`, which is the prefix compose gives its own volumes), on 2026-09-28;
+# innsegl-sessions moved into innsegl.yml on 2026-10-03 and kept its name.
 # ---------------------------------------------------------------------------
 volume_table() {
   local prefix="${INNSEGL_MIGRATE_VOLUME_PREFIX:-}"
@@ -335,7 +333,7 @@ innsegl-core_innsegl-admin-key|the admin-credential private signing key
 innsegl-core_innsegl-admin-jwks|the admin-credential public key set
 innsegl-core_innsegl-gateway-ca-key|the gateway's own CA private key (its certificate is republished on start)
 innsegl-core_innsegl-sessions|the harness's session-to-run mapping
-innsegl-core_innsegl-workspace|the working trees `repo` resolves under
+innsegl-core_innsegl-workspace|the working trees the sign_commit MCP tool resolves `repo` under
 innsegl-core_innsegl-backups|verified ledger backups and their reports
 innsegl-core_innsegl-mirror|the per-repository mirrors clients push commits to (ADR-0065)
 innsegl-core_innsegl-dashboard-tls|the dashboard's certificate and key (RM-311; rewritten on start)

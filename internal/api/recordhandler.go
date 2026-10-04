@@ -39,8 +39,8 @@ import (
 type RecordConfig struct {
 	// SnapshotDir is the gateway's own snapshot store root —
 	// internal/gateway/snapshot.go's SnapshotConfig.StoreRoot, mounted
-	// read-only into this process (deploy/compose/innsegl.workrepo.yml: the
-	// SAME /agentlog volume ServerConfig.LogDir already reads, subdirectory
+	// read-only into this process (deploy/compose/innsegl.yml: the SAME
+	// /agentlog volume ServerConfig.LogDir already reads, subdirectory
 	// "gateway-snapshots"). Empty disables every snapshot-derived member of
 	// the record: steps and files still come from the ledger and the
 	// retained bodies, tree_before/tree_after stay empty, and the diff route

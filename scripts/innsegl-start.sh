@@ -14,13 +14,6 @@
 #     looks like a bug and is a race.
 #   * Nothing prints where the dashboard is.
 #
-# NEVER CALL `docker compose -f deploy/compose/innsegl.yml` ALONE. The stack is
-# two files: the second adds the /projects mount and the repository list, and a
-# container recreated without it reports every repository as absent. Measured on
-# 2026-09-13: recreating the dashboard with one -f also recreated innsegl-api,
-# and "Verify a commit" answered 404 for every commit until it was brought back
-# through the make target. That is why this script is the entry point.
-#
 # USAGE
 #   scripts/innsegl-start.sh             boot, wait, report
 #   scripts/innsegl-start.sh --status    report only, change nothing
@@ -73,9 +66,9 @@ step() { printf '\n== %s\n' "$*"; }
 #                                       operator to ignore this report.
 #
 # WHICH FILES, and in which order: the three that `make innsegl-up-here`
-# composes, in the order it brings them up. `innsegl.workrepo.yml` is left out
-# deliberately — it overrides three services and declares no container of its
-# own, so it can add no row.
+# composes, in the order it brings them up. innsegl's own services are one
+# file: the core reads repositories only from its mirror (ADR-0065), so there
+# is no projects overlay to remember.
 #
 # THE SEALER AND THE RECONCILER ARE NOT ROWS BY DEFAULT (ADR-0056, #339). They
 # run inside innsegl-mcp, and their own containers sit behind the `separate`

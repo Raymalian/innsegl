@@ -113,6 +113,8 @@ type PayloadResult struct {
 	// CommitSHA is the commit id git will compute once it inserts Signature
 	// into Payload's header block — see commitSHAOf.
 	CommitSHA string
+	// Object is that signed commit object's bytes, whose id is CommitSHA.
+	Object []byte
 	// Certificate and Rekor are read back exactly as Sign reads them: the
 	// certificate out of the signature itself (never asked of Fulcio a
 	// second time), the Rekor entry FOUND by artifact hash and certificate
@@ -302,7 +304,7 @@ func (s *Signer) SignPayload(ctx context.Context, req PayloadRequest) (PayloadRe
 
 	// 4. The commit SHA git itself will compute once it inserts this
 	//    signature into the payload's header block.
-	commitSHA, err := commitSHAOf(req.Payload, signature)
+	object, commitSHA, err := signedCommitOf(req.Payload, signature)
 	if err != nil {
 		return PayloadResult{}, err
 	}
@@ -331,6 +333,7 @@ func (s *Signer) SignPayload(ctx context.Context, req PayloadRequest) (PayloadRe
 		Signature:          signature,
 		Status:             status,
 		CommitSHA:          commitSHA,
+		Object:             object,
 		Certificate:        describeCertificate(cert),
 		Rekor:              entry,
 		CredentialSPIFFEID: cred.SPIFFEID,
@@ -476,16 +479,24 @@ func (s *Signer) runGitsign(
 // against a real `git commit` and a real (fake) gpg.x509.program rather than
 // against this comment's say-so.
 func commitSHAOf(payload, signature []byte) (string, error) {
+	_, sha, err := signedCommitOf(payload, signature)
+	return sha, err
+}
+
+// signedCommitOf is commitSHAOf's construction, answering the signed commit
+// object's bytes as well as its id: the core writes those bytes into its
+// mirror (ADR-0065), so the mirror holds the very commit git records.
+func signedCommitOf(payload, signature []byte) ([]byte, string, error) {
 	idx := bytes.Index(payload, []byte("\n\n"))
 	if idx < 0 {
-		return "", fmt.Errorf(
+		return nil, "", fmt.Errorf(
 			"%w: no blank line separates the header block from the message", ErrPayload)
 	}
 	header, message := payload[:idx], payload[idx+2:]
 
 	sig := strings.TrimRight(string(signature), "\n")
 	if sig == "" {
-		return "", fmt.Errorf("%w: gitsign produced no signature on stdout", ErrSignature)
+		return nil, "", fmt.Errorf("%w: gitsign produced no signature on stdout", ErrSignature)
 	}
 	lines := strings.Split(sig, "\n")
 
@@ -505,5 +516,5 @@ func commitSHAOf(payload, signature []byte) (string, error) {
 
 	objHeader := "commit " + strconv.Itoa(body.Len()) + "\x00"
 	sum := sha1.Sum(append([]byte(objHeader), body.Bytes()...)) //nolint:gosec // G401: git's commit object id is SHA-1 by definition
-	return hex.EncodeToString(sum[:]), nil
+	return body.Bytes(), hex.EncodeToString(sum[:]), nil
 }

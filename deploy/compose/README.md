@@ -306,6 +306,11 @@ summary:
 
 The first two are Innsegl's dependencies. The third is Innsegl.
 
+`innsegl.yml` is the whole of Innsegl's own stack. There is no overlay to add:
+the core reads repositories only from its mirror, which connected machines
+push to, and mounts no folder of the host's projects
+([`innsegl/README.md`](innsegl/README.md#repositories-come-from-the-mirror)).
+
 All three stacks are segmented rather than flat: network membership is the
 access-control list, and the rule is written at each `networks:` declaration in
 the compose files. Fulcio has no route into SPIRE beyond fetching two public

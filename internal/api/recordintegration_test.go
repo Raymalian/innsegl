@@ -150,7 +150,7 @@ func newRecordFixture(t *testing.T) *recordFixture {
 	// ---- the Prover (RepoPath/GitPath, and commit subjects) ----------------
 	prover, err := NewProver(ProofConfig{
 		FulcioURL: "http://127.0.0.1:1", RekorURL: "http://127.0.0.1:1",
-		Repos:   map[string]string{recordIntegrationRepo: repoDir},
+		Repos:   staticRepos{recordIntegrationRepo: repoDir},
 		GitPath: gitPath,
 	})
 	if err != nil {
