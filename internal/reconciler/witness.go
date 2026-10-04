@@ -306,8 +306,31 @@ func (v *witnessView) observe(record event.Fields) {
 // already holds itself to, for the identical reason (that type is
 // unexported to its own package).
 type witnessCallBody struct {
-	Tool      string `json:"tool"`
-	ToolUseID string `json:"tool_use_id"`
+	Tool           string          `json:"tool"`
+	ToolUseID      string          `json:"tool_use_id"`
+	ResultObserved bool            `json:"result_observed"`
+	Result         json.RawMessage `json:"result,omitempty"`
+	IsError        bool            `json:"is_error,omitempty"`
+}
+
+// harnessBlockedPrefix begins the content of the tool_result a harness
+// answers the model with when its own input validation refuses a tool call
+// before any permission decision is made (a blocked `sleep`, an Edit of a
+// file not yet read). The text is the harness's, observed in recorded
+// tool_results (#451), not ours. The harness emits no tool_result telemetry
+// and no reject decision for such a call: it never ran.
+const harnessBlockedPrefix = "<tool_use_error>"
+
+// harnessBlocked reports whether the recorded result says the harness
+// refused this call itself: observed, marked is_error, and starting with
+// harnessBlockedPrefix. An error without the prefix is a tool that ran and
+// failed, and that still reports a tool_result.
+func (b witnessCallBody) harnessBlocked() bool {
+	if !b.ResultObserved || !b.IsError {
+		return false
+	}
+	text, ok := resultText(b.Result)
+	return ok && strings.HasPrefix(text, harnessBlockedPrefix)
 }
 
 // ---------------------------------------------------------------------------
@@ -445,6 +468,7 @@ func (r *Reconciler) checkWitness(ctx context.Context, view *ledgerView) Witness
 		toolUseID string
 		tool      string
 		matched   bool
+		blocked   bool // the harness refused it itself; no telemetry is expected
 	}
 	var read []readCall
 	runSince := map[string]time.Time{}
@@ -471,7 +495,8 @@ func (r *Reconciler) checkWitness(ctx context.Context, view *ledgerView) Witness
 		report.Checked++
 		relayed[body.ToolUseID] = struct{}{}
 		runSeen[call.runID] = true
-		rc := readCall{call: call, toolUseID: body.ToolUseID, tool: body.Tool}
+		rc := readCall{call: call, toolUseID: body.ToolUseID, tool: body.Tool,
+			blocked: body.harnessBlocked()}
 		if telemetryExists(cfg.LogDir, body.ToolUseID) {
 			rc.matched = true
 			report.Matched++
@@ -491,7 +516,7 @@ func (r *Reconciler) checkWitness(ctx context.Context, view *ledgerView) Witness
 	// export telemetry, made at or after the first call it corroborated.
 	for _, rc := range read {
 		call := rc.call
-		if rc.matched {
+		if rc.matched || rc.blocked {
 			continue
 		}
 		if _, already := view.drift.subjects[call.eventID]; already {

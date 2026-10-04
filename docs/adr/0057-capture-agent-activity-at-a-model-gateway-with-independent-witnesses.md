@@ -167,3 +167,16 @@ placement ADR (0060).
   the ledger does not already have (for an agent message, or a snapshot) is
   not decided here: any new event type goes through doc 02's protected-schema
   process on its own merits. No protected string changes with this decision.
+
+## Amendment (2026-10-04): a call the harness blocked itself expects no telemetry
+
+The telemetry witness expects a tool_result for every relayed tool call. One
+class never produces one: a call the harness's own input validation refuses
+before any permission decision is made. The harness answers the model with an
+error tool_result whose content begins `<tool_use_error>`, and emits neither a
+tool_result nor a reject decision. The reconciler now treats a tool call whose
+recorded result was observed, is marked as an error, and begins with that text
+as not expecting telemetry, so it raises no missing-telemetry finding. An error
+result without that prefix still expects telemetry, because a tool that ran and
+failed does report a result, and a call whose result was never observed still
+expects it. No event field, `reason` string or protected string changes.

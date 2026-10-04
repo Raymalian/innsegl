@@ -36,13 +36,29 @@ const witnessTestWindow = 5 * time.Minute
 // itself to).
 func witnessPlantToolCall(t *testing.T, m *memLedger, dir, runID, toolUseID string) event.Fields {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{
+	return witnessPlantToolCallResult(t, m, dir, runID, toolUseID, true, "hi\n", false)
+}
+
+// witnessPlantToolCallResult is witnessPlantToolCall with the recorded
+// result chosen by the caller: whether the next model request carried one
+// (result_observed), its raw content, and is_error — gatewayToolCallBody's
+// own fields.
+func witnessPlantToolCallResult(
+	t *testing.T, m *memLedger, dir, runID, toolUseID string,
+	observed bool, result any, isError bool,
+) event.Fields {
+	t.Helper()
+	body := map[string]any{
 		"tool":            "Bash",
 		"tool_use_id":     toolUseID,
 		"input":           map[string]any{"command": "echo hi"},
-		"result_observed": true,
-		"result":          "hi\n",
-	})
+		"result_observed": observed,
+		"result":          result,
+	}
+	if isError {
+		body["is_error"] = true
+	}
+	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,5 +364,57 @@ func TestWitnessJudgesARunOnlyOnceItsOwnTelemetryArrived(t *testing.T) {
 func TestDefaultWitnessWindowOutlastsACoreRestart(t *testing.T) {
 	if reconciler.DefaultWitnessWindow < 30*time.Minute {
 		t.Fatalf("DefaultWitnessWindow = %s, want at least 30m", reconciler.DefaultWitnessWindow)
+	}
+}
+
+// TestWitnessExpectsNoTelemetryForAToolCallTheHarnessBlocked — #451. The
+// harness's own input validation refuses some calls before any permission
+// decision is made (a `sleep` it blocks, an Edit of a file not yet read) and
+// answers the model with a tool_result whose content starts
+// "<tool_use_error>". Such a call never ran: the harness emits neither a
+// tool_result nor a reject decision for it, so its absence from telemetry is
+// not drift. A tool that ran and failed still reports a result, and a call
+// whose result was never observed proves nothing about itself.
+func TestWitnessExpectsNoTelemetryForAToolCallTheHarnessBlocked(t *testing.T) {
+	blockedText := "<tool_use_error>Blocked: sleep 35 followed by: echo done</tool_use_error>"
+	cases := []struct {
+		name        string
+		observed    bool
+		result      any
+		isError     bool
+		wantMissing int
+	}{
+		{"blocked string result", true, blockedText, true, 0},
+		{"blocked content-array result", true,
+			[]map[string]any{{"type": "text", "text": blockedText}}, true, 0},
+		{"error without the prefix", true, "exit status 1: boom", true, 1},
+		{"prefix without is_error", true, blockedText, false, 1},
+		{"result never observed", false, nil, false, 1},
+		{"unreadable result content", true, 42, true, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			const runID = "run-witness-blocked"
+			c := &clock{at: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+			m := newMemLedger(c.now)
+			seedRun(t, m, runID)
+			logDir := t.TempDir()
+
+			// Proves the run exports telemetry, so its absences are judged.
+			witnessPlantToolCall(t, m, logDir, runID, "toolu_witness_blocked_ok")
+			witnessPlantTelemetry(t, logDir, "toolu_witness_blocked_ok", true, c.at)
+			c.at = c.at.Add(time.Minute)
+			witnessPlantToolCallResult(t, m, logDir, runID, "toolu_witness_blocked_x",
+				tc.observed, tc.result, tc.isError)
+			c.at = c.at.Add(3 * witnessTestWindow)
+
+			report := runWitnessPass(t, m, logDir, c, witnessTestWindow)
+			if report.Missing != tc.wantMissing {
+				t.Fatalf("Witness = %+v, want Missing = %d", report, tc.wantMissing)
+			}
+			if len(report.Appended) != tc.wantMissing {
+				t.Errorf("Appended = %v, want %d alert(s)", report.Appended, tc.wantMissing)
+			}
+		})
 	}
 }
