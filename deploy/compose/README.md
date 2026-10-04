@@ -687,3 +687,31 @@ innsegl-update --rollback
 off. A host can only verify commits signed under trust roots it holds, so a
 deployment verifies its own history; a host whose trust roots differ refuses
 every update until it holds the same ones.
+
+### Building the images on another machine
+
+By default an update builds the images on the host. That build is the slowest
+part of an update. The images can be built once on another machine instead,
+and the host checks them before it uses them (ADR-0070).
+
+On the build machine, at the commit the host will deploy, with a clean tree:
+
+```sh
+make image-bundle
+```
+
+It builds for `linux/amd64` (set `INNSEGL_IMAGE_PLATFORM` for another),
+writes `dist/innsegl-images-<commit>-<os>-<arch>.tar.gz` and its `.sha256`,
+and prints the one-line copy command. Set `INNSEGL_DEPLOY_HOST` and
+`INNSEGL_DEPLOY_DIR` to have it filled in. Then, on the host, as usual:
+
+```sh
+make update
+```
+
+When the bundle for the host's commit and platform is in `dist/` (or
+`INNSEGL_IMAGE_BUNDLE` names one), the update checks its checksum, loads it,
+and requires every image to carry the commit of its inputs that the host
+computes from its own checkout. Then it starts the stack without building.
+Any mismatch refuses the update and starts nothing; it never falls back to a
+build. With no bundle there, the host builds as before.
