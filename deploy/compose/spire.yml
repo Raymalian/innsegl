@@ -330,7 +330,7 @@ services:
       # Loopback only. Production puts a TLS-terminating proxy in front
       # (doc 05 §3.1); binding 0.0.0.0 here would put an unauthenticated
       # http listener on every interface of a developer's machine.
-      - "127.0.0.1:${INNSEGL_SPIRE_OIDC_PORT:-8443}:8080"
+      - "127.0.0.1:${INNSEGL_SPIRE_OIDC_PORT:-28443}:8080"
     volumes:
       - ./spire/oidc-discovery-provider.conf:/run/spire/conf/oidc-discovery-provider.conf:ro
       - spire-agent-socket:/run/spire/agent-sockets

@@ -72,7 +72,7 @@ const (
 	// sigstore.yml default them. OPS-004 runs the README's commands verbatim,
 	// which means it takes the README's ports — for oidc and fulcio, which
 	// are not this defect's subject.
-	oidcURL   = "http://127.0.0.1:8443"
+	oidcURL   = "http://127.0.0.1:28443"
 	fulcioURL = "http://127.0.0.1:5555"
 
 	// Rekor is different (#131). Host port 3000 is a common development
