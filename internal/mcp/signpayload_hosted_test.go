@@ -230,3 +230,36 @@ func spSignedHosted(ctx context.Context, s *signing.Signer, req signing.PayloadR
 	r.CommitSHA, r.Object = spHostedSignedSHA, spHostedSigned
 	return r, err
 }
+
+// spRefusingStore is a real mirror whose StoreSigned refuses, as a full
+// disk or an unwritable mirror would.
+type spRefusingStore struct{ *mirror.Store }
+
+func (spRefusingStore) StoreSigned(context.Context, string, string, []byte) error {
+	return errors.New("no space left on device")
+}
+
+// A signed commit the mirror cannot keep is a signing failure: no signature
+// is handed back and nothing is recorded, so the ledger never holds a commit
+// the core cannot prove.
+func TestHostedSignFailsWhenTheMirrorCannotKeepTheSignedCommit(t *testing.T) {
+	resolver := spResolver{calls: map[string]commitpath.RelayedCall{spToolUseID: spHostedCall()}}
+	sc, clientRepo, tree := spWiringSigningWith(t, resolver, spSignedHosted)
+	sc.space.dir = t.TempDir()
+	store := spMirrorStore(t)
+	spWithMirror(t, spRefusingStore{store})
+	spPushToMirror(t, store, clientRepo, tree)
+
+	got, err := SignPayloadForGateway(context.Background(), commitpath.SignRequest{
+		ToolUseID: spToolUseID, Payload: spPayloadWithTree(t, spClaim(spRunID), tree, spAuthor, spAuthor),
+	})
+	if err == nil || !strings.Contains(err.Error(), "could not be kept in the mirror") {
+		t.Fatalf("err = %v, want the refusal naming the mirror", err)
+	}
+	if len(got.Signature) != 0 {
+		t.Fatal("a signature was handed back for a commit the mirror could not keep")
+	}
+	if recorded := sc.ledger.ofType(event.EventTypeCommitRecorded); len(recorded) != 0 {
+		t.Fatalf("commit_recorded appended for a commit the mirror could not keep: %+v", recorded)
+	}
+}
