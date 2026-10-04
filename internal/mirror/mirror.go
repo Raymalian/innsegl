@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -53,8 +54,58 @@ func New(root string) (*Store, error) {
 	return &Store{root: abs}, nil
 }
 
+// Open opens an existing store for reading and never creates anything. The
+// query API and the reconciler read the mirror this way, from a read-only
+// mount: they answer about what clients pushed, and must not be able to
+// make a mirror appear.
+func Open(root string) (*Store, error) {
+	if root == "" {
+		return nil, errors.New("mirror: no root directory")
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("mirror: %w", err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("mirror: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("mirror: %s is not a directory", abs)
+	}
+	return &Store{root: abs}, nil
+}
+
 // Root is the directory every mirror lives under.
 func (s *Store) Root() string { return s.root }
+
+// Repos lists the repositories this store holds a mirror of, sorted. A
+// directory is a mirror only when it sits at <root>/<host>/<org>/<name>.git,
+// its name is one doc 02 §5 admits, and it has a HEAD. Anything else under
+// the root is not a repository the core holds.
+func (s *Store) Repos() ([]string, error) {
+	hosts, err := os.ReadDir(s.root)
+	if err != nil {
+		return nil, fmt.Errorf("mirror: listing %s: %w", s.root, err)
+	}
+	var out []string
+	for _, host := range hosts {
+		for _, org := range entries(filepath.Join(s.root, host.Name())) {
+			for _, name := range entries(filepath.Join(s.root, host.Name(), org.Name())) {
+				base, ok := strings.CutSuffix(name.Name(), ".git")
+				if !ok || !name.IsDir() {
+					continue
+				}
+				repo := host.Name() + "/" + org.Name() + "/" + base
+				if _, derr := s.Dir(repo); derr == nil {
+					out = append(out, repo)
+				}
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
 
 // path is the mirror directory for repo, after repo is proven an identifier:
 // doc 02 §5's grammar admits no segment that could leave the root.
@@ -75,6 +126,17 @@ func (s *Store) Dir(repo string) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrNoMirror, repo)
 	}
 	return dir, nil
+}
+
+// entries lists dir, and nothing when dir cannot be read: a level that
+// cannot be read (a stray file among the hosts or organisations) holds no
+// mirror this process can serve. Dir is the check that decides.
+func entries(dir string) []os.DirEntry {
+	list, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	return list
 }
 
 // mirrorConfig is set in every mirror, and passed again on every receive:

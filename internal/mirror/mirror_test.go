@@ -375,3 +375,86 @@ func TestNewRefusesNoRoot(t *testing.T) {
 		t.Fatal("NewHandler accepted an empty configuration")
 	}
 }
+
+// The read side (P1): the query API and the reconciler open the mirror
+// read-only. Open never creates the root, and Repos lists only the
+// repositories a client has pushed.
+func TestOpenReadsAnExistingRootAndNeverCreatesOne(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent")
+	if _, err := Open(missing); err == nil {
+		t.Fatal("Open accepted a root that does not exist")
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("Open created the root it was given: %v", err)
+	}
+	if _, err := Open(""); err == nil {
+		t.Fatal("Open accepted an empty root")
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(file); err == nil {
+		t.Fatal("Open accepted a root that is a file")
+	}
+
+	writer := newStore(t)
+	bare, err := writer.Ensure(t.Context(), tRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := Open(writer.Root())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got, derr := reader.Dir(tRepo); derr != nil || got != bare {
+		t.Fatalf("Dir through Open = %q %v, want %q", got, derr, bare)
+	}
+}
+
+func TestReposListsOnlyTheMirrorsAClientPushed(t *testing.T) {
+	store := newStore(t)
+	if got, err := store.Repos(); err != nil || len(got) != 0 {
+		t.Fatalf("Repos of an empty store = %v %v, want none", got, err)
+	}
+	for _, repo := range []string{tRepo, tOtherRepo} {
+		if _, err := store.Ensure(t.Context(), repo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Directories that are not mirrors are not repositories the core holds:
+	// a half-made one with no HEAD, a stray file, and a name doc 02 §5's
+	// grammar does not admit.
+	for _, dir := range []string{"github.com/acme/halfmade.git", "github.com/.hidden/x.git", "github.com/acme/notbare"} {
+		if err := os.MkdirAll(filepath.Join(store.Root(), filepath.FromSlash(dir)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(store.Root(), "github.com", "stray.git"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(store.Root(), "github.com", ".hidden", "x.git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Root(), "github.com", ".hidden", "x.git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Repos()
+	if err != nil {
+		t.Fatalf("Repos: %v", err)
+	}
+	want := []string{tOtherRepo, tRepo}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Repos = %v, want %v (sorted, mirrors only)", got, want)
+	}
+}
+
+func TestReposReportsAnUnreadableRoot(t *testing.T) {
+	store := newStore(t)
+	if err := os.RemoveAll(store.Root()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Repos(); err == nil {
+		t.Fatal("Repos of a root that is gone answered no error")
+	}
+}
