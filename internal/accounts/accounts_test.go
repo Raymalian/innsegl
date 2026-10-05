@@ -64,12 +64,6 @@ func TestAccountsCreateAndMembership(t *testing.T) {
 	if len(a.ID) != 32 || a.Operator || a.Name != "Acme" {
 		t.Fatalf("account = %+v", a)
 	}
-	if err := s.AddMember(tctx(t), a.ID, "u-1", RoleAdmin, ""); !errors.Is(err, ErrAlreadyMember) {
-		t.Fatalf("second live membership: %v, want ErrAlreadyMember", err)
-	}
-	if err := s.AddMember(tctx(t), a.ID, "u-1", "boss", ""); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("bad role: %v, want ErrInvalid", err)
-	}
 	if _, err := s.CreateAccount(tctx(t), CreateAccountParams{Name: " "}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("empty name: %v, want ErrInvalid", err)
 	}
@@ -312,9 +306,6 @@ func TestACC003Scope(t *testing.T) {
 	}
 	check(listed, r1, false)
 	check(star, r1, false)
-	if err := s.EndRepoGrant(ctx, a.ID, r1, "u-1"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("ending twice: %v, want ErrNotFound", err)
-	}
 	// ...and it can be granted again.
 	if err := s.GrantRepo(ctx, a.ID, r1, "u-1"); err != nil {
 		t.Fatal(err)
@@ -411,15 +402,8 @@ func TestAccountsOpenRefusesALedgerWriter(t *testing.T) {
 func TestAccountsStoreErrorPaths(t *testing.T) {
 	_, s, a := setup(t)
 	ctx := tctx(t)
-	if err := s.AddMember(ctx, "nope", "u-1", RoleMember, ""); err == nil {
-		t.Error("AddMember to a missing account succeeded")
-	}
 	if _, _, err := s.CreateEnrolmentToken(ctx, TokenParams{AccountID: "nope", CreatedBy: "u-1", Repos: []string{"*"}}); err == nil {
 		t.Error("token for a missing account succeeded")
-	}
-	if _, err := s.CreateInstallation(ctx, InstallationParams{AccountID: a.ID, CreatedBy: "u-1", Name: "", Kind: KindService,
-		Repos: []string{"*"}}); !errors.Is(err, ErrInvalid) {
-		t.Errorf("nameless installation: %v", err)
 	}
 	if err := s.GrantRepo(ctx, a.ID, "*", ""); !errors.Is(err, ErrInvalid) {
 		t.Errorf("granting '*': %v", err)

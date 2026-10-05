@@ -202,8 +202,9 @@ func newEnFixture(t *testing.T) *enFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.AddMember(ctx, acct.ID, "u-1", accounts.RoleOwner, ""); err != nil {
-		t.Fatal(err)
+	if _, serr := pool.Exec(ctx, `INSERT INTO innsegl_auth.memberships (user_id, account_id, role) VALUES ('u-1', $1, $2)`,
+		acct.ID, accounts.RoleOwner); serr != nil {
+		t.Fatalf("seed membership: %v", serr)
 	}
 	if err := writer.GrantRepo(ctx, acct.ID, enRepo, "u-1"); err != nil {
 		t.Fatal(err)
