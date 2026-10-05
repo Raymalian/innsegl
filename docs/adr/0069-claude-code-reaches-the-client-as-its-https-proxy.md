@@ -67,3 +67,13 @@ and agent ids as request headers either way.
   core and was refused. The unrouted-session detector is what notices it.
 - A machine that already routes Claude Code through a proxy of its own is not
   covered yet: the client tunnels other hosts directly.
+
+## Amendment, 2026-10-05
+
+Connect also pins `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and
+`CLAUDE_CODE_USE_FOUNDRY` to `"0"` in the managed env. A truthy value in the
+user's environment or a lower settings layer sends the harness to that provider
+and not to the API the gateway records. Measured: with each at `"0"` the
+harness still answers through the API; with `CLAUDE_CODE_USE_BEDROCK=1` it
+does not. Connect says so when it replaces a different value, and disconnect
+removes the pins.

@@ -31,7 +31,10 @@ const goldenHardened = `{
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195"
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195",
+    "CLAUDE_CODE_USE_BEDROCK": "0",
+    "CLAUDE_CODE_USE_VERTEX": "0",
+    "CLAUDE_CODE_USE_FOUNDRY": "0"
   },
   "hooks": {
     "PreToolUse": [
@@ -158,7 +161,10 @@ const oldLockdown = `{
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195"
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195",
+    "CLAUDE_CODE_USE_BEDROCK": "0",
+    "CLAUDE_CODE_USE_VERTEX": "0",
+    "CLAUDE_CODE_USE_FOUNDRY": "0"
   },
   "hooks": {
     "PreToolUse": [
