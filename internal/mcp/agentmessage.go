@@ -19,8 +19,8 @@ import (
 // in-process seam internal/gateway reaches through to record the brief an
 // agent received and the text it produced, as one `agent_message` event
 // each — the same seam gateway.go (RM-231, #376) already gives
-// internal/gateway/registrar.go and internal/gateway/workspace.go for
-// register_agent, retire_agent and describe_workspace, extended here for a
+// internal/gateway/registrar.go for register_agent and retire_agent,
+// extended here for a
 // type doc 01 names no wire-facing MCP tool for at all: ADR-0061 decision 2
 // adds `agent_message` to doc 02 §3's schema, and doc 08 surface 4 (the
 // eight-tool list, tools.go) is closed and unrelated — nothing here binds

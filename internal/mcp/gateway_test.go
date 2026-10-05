@@ -13,24 +13,21 @@ package mcp
 // "exactly one run" and GID-002's replay both rest on ADR-0017's claim
 // mechanics, which an in-memory stand-in would assert rather than prove —
 // see register_agent_test.go's own header for the identical reasoning.
-// GID-004 is an integration test (type I): it runs against a real git
-// repository on disk, reusing describe_workspace's own MCP-039..043
-// fixtures (workspace_test.go).
+// GID-004 went with ResolveWorkspaceForGateway: the core reads no client
+// tree (ADR-0071).
 //
-// None of these tests re-proves register_agent, retire_agent or
-// describe_workspace's own behaviour — TestMCP001, TestMCP007,
-// TestRegisterAgentReplayRestoresAReapedEntry, TestMCP005-shaped retirement
-// cases and TestMCP039..043 already do that. What is proved here is only
-// that RegisterRunForGateway, RetireRunForGateway and
-// ResolveWorkspaceForGateway reach that SAME configured path in process — a
+// None of these tests re-proves register_agent or retire_agent's own
+// behaviour — TestMCP001, TestMCP007,
+// TestRegisterAgentReplayRestoresAReapedEntry and TestMCP005-shaped
+// retirement cases already do that. What is proved here is only that
+// RegisterRunForGateway and RetireRunForGateway reach that SAME configured
+// path in process — a
 // second implementation of any of it is exactly what ADR-0053 and this
 // issue's "no rule duplicated" forbid.
 
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -318,65 +315,6 @@ func TestGID003RetireRunForGatewayIsIdempotentAndAnswersTheOriginalInstant(t *te
 	}
 	if got := lg.calls(); got != 1 {
 		t.Fatalf("the ledger recorded %d appends across two retirements of one run, want 1", got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// GID-004 — workspace from the harness-reported directory: repo, branch and
-// task derived by the MCP's workspace logic; a directory outside the
-// projects mount or not a repository is refused, never guessed.
-// ---------------------------------------------------------------------------
-
-func TestGID004ResolveWorkspaceForGatewayDerivesFromTheTreeAndNeverGuesses(t *testing.T) {
-	tree := newWorkspaceTree(t, "git@github.com:Example-Org/Example-Repo.git")
-	run(t, tree.repo, "checkout", "-q", "-b", "dev/rm231-gateway-registrar")
-	configureWorkspace(t, tree.projects, tree.projects)
-
-	ws, err := ResolveWorkspaceForGateway(t.Context(), tree.repo)
-	if err != nil {
-		t.Fatalf("ResolveWorkspaceForGateway(%s): %v", tree.repo, err)
-	}
-	const wantRepo = "github.com/Example-Org/Example-Repo"
-	if ws.Repo != wantRepo {
-		t.Errorf("repo = %q, want %q (the origin's, never the directory's)", ws.Repo, wantRepo)
-	}
-	if ws.Branch != "dev/rm231-gateway-registrar" {
-		t.Errorf("branch = %q, want %q", ws.Branch, "dev/rm231-gateway-registrar")
-	}
-	if ws.Task != "rm231" {
-		t.Errorf("task = %q, want %q", ws.Task, "rm231")
-	}
-
-	// Refused, never guessed: a path outside the projects mount.
-	outside := filepath.Join(tree.projects, "..", "elsewhere")
-	outsideGot, outsideErr := ResolveWorkspaceForGateway(t.Context(), outside)
-	if outsideErr == nil {
-		t.Fatalf("a path outside the mount was accepted and answered %+v; a guess in a run "+
-			"registration is worse than a refusal", outsideGot)
-	} else {
-		var classified *Error
-		if !errors.As(outsideErr, &classified) {
-			t.Fatalf("the refusal is %T (%v), not an IP §4 classified error", outsideErr, outsideErr)
-		}
-	}
-
-	// Refused, never guessed: a directory that is not a repository.
-	notRepo := filepath.Join(tree.projects, "not-a-repo")
-	if mkErr := os.Mkdir(notRepo, 0o755); mkErr != nil {
-		t.Fatalf("creating a non-repository directory: %v", mkErr)
-	}
-	if notRepoGot, notRepoErr := ResolveWorkspaceForGateway(t.Context(), notRepo); notRepoErr == nil {
-		t.Fatalf("a non-repository directory was accepted and answered %+v", notRepoGot)
-	}
-
-	// Refused, never guessed: no projects mount configured at all.
-	unconfigure, err := ConfigureDescribeWorkspace(DescribeWorkspaceConfig{})
-	if err != nil {
-		t.Fatalf("ConfigureDescribeWorkspace({}): %v", err)
-	}
-	t.Cleanup(unconfigure)
-	if unsetGot, unsetErr := ResolveWorkspaceForGateway(t.Context(), tree.repo); unsetErr == nil {
-		t.Fatalf("an unset projects mount was accepted and answered %+v", unsetGot)
 	}
 }
 

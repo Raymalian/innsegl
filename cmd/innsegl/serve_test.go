@@ -32,10 +32,7 @@ var serveEnv = []string{
 	envMCPSessionTimeout, envMCPShutdownTimeout, envHealthTimeout,
 	envRequireAppendOnlyRole, envMigrate,
 	envIdentityMode, envIdentitySecret, envIdentitySecretFile,
-	// E11's three (#211). mcp.EnvHostProjects is the tool's OWN name for the
-	// host root and is cleared here for the same reason as the rest: a
-	// developer's shell must not be able to make a refusal case pass.
-	mcp.EnvHostProjects, envProjectsMount, envObserveBodyDir, envSessionDir,
+	envObserveBodyDir,
 }
 
 // testIdentitySecret is a 32-byte fixture for RM-079's pseudonymous default.
@@ -872,28 +869,18 @@ func TestServeRunTokenSecretStaysEmptyWithNeitherConfigured(t *testing.T) {
 
 // TestMCP059TheIngestionToolsAreConfiguredFromFlagsAndTheEnvironment.
 //
-// E11's three tools (#205, #206, #207) each need one thing this process cannot
-// work out for itself:
+// observe_tool_call needs the local volume it writes bodies to. Bodies carry
+// file contents and commands; doc 05 keeps them on the operator's machine, so
+// the MCP must be told where that is and may not invent it. It has no
+// defensible default, so it is opt-in — sign_commit's shape, for sign_commit's
+// reason — and is read from the environment as well as a flag, because doc 05
+// runs this as a container configured entirely by environment.
 //
-//   - the host directory the projects mount CORRESPONDS TO. A container knows
-//     where the mount is and never what it is a mount of, and every plausible
-//     guess describes a repository confidently and may describe the wrong one —
-//     into an append-only record.
-//   - the local volume `observe_tool_call` writes bodies to. Bodies carry file
-//     contents and commands; doc 05 keeps them on the operator's machine, so
-//     the MCP must be told where that is and may not invent it.
-//   - the local volume `observe_session` keeps its session→run mapping on. A
-//     mapping that was never written is a run nothing will ever retire.
-//
-// None has a defensible default, so each is opt-in — sign_commit's shape, for
-// sign_commit's reason — and each is read from the environment as well as a
-// flag, because doc 05 runs this as a container configured entirely by
-// environment.
+// describe_workspace and observe_session are deprecated (ADR-0071) and have
+// nothing to configure, so the three settings they read are gone.
 func TestMCP059TheIngestionToolsAreConfiguredFromFlagsAndTheEnvironment(t *testing.T) {
 	dir := t.TempDir()
-	projects := filepath.Join(dir, "projects")
 	bodies := filepath.Join(dir, "bodies")
-	sessions := filepath.Join(dir, "sessions")
 
 	capture := func(t *testing.T, args []string) serveOptions {
 		t.Helper()
@@ -913,25 +900,27 @@ func TestMCP059TheIngestionToolsAreConfiguredFromFlagsAndTheEnvironment(t *testi
 
 	t.Run("from flags", func(t *testing.T) {
 		clearServeEnv(t)
-		o := capture(t, completeServeArgs(
-			"-host-projects", projects,
-			"-observe-body-dir", bodies,
-			"-session-dir", sessions,
-		)[1:])
-		if o.hostProjects != projects {
-			t.Errorf("-host-projects = %q, want %q", o.hostProjects, projects)
-		}
+		o := capture(t, completeServeArgs("-observe-body-dir", bodies)[1:])
 		if o.observeBodyDir != bodies {
 			t.Errorf("-observe-body-dir = %q, want %q", o.observeBodyDir, bodies)
 		}
-		if o.sessionDir != sessions {
-			t.Errorf("-session-dir = %q, want %q", o.sessionDir, sessions)
-		}
-		// The mount is where the container sees that directory, and defaults
-		// to /projects. A deployment that mounts it elsewhere says so; nothing
-		// guesses.
-		if o.projectsMount != mcp.DefaultProjectsMount {
-			t.Errorf("-projects-mount defaulted to %q, want %q", o.projectsMount, mcp.DefaultProjectsMount)
+	})
+
+	// ADR-0071: the projects mount and the session-marker volume are gone, and
+	// so are their flags. One left behind would be a setting that configures
+	// nothing.
+	t.Run("the deprecated tools' settings are gone", func(t *testing.T) {
+		for _, flag := range []string{"-host-projects", "-projects-mount", "-session-dir"} {
+			clearServeEnv(t)
+			var stdout, stderr bytes.Buffer
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			deps := serveDeps{open: func(context.Context, serveOptions, *serveLog) (servedMCP, error) {
+				return &fakeServer{}, nil
+			}}
+			if code := runServe(ctx, completeServeArgs(flag, "/srv/x")[1:], &stdout, &stderr, deps); code == exitOK {
+				t.Errorf("serve accepted %s; ADR-0071 removed it", flag)
+			}
 		}
 	})
 
@@ -944,17 +933,10 @@ func TestMCP059TheIngestionToolsAreConfiguredFromFlagsAndTheEnvironment(t *testi
 		t.Setenv(envFulcioURL, "http://127.0.0.1:5555")
 		t.Setenv(envRekorURL, "http://127.0.0.1:5556")
 		t.Setenv(envIdentitySecret, testIdentitySecret)
-		// mcp.EnvHostProjects, and not a second spelling of it: the tool reads
-		// this name when nothing is installed over it, and two names for one
-		// setting is a deployment that can set the wrong one.
-		t.Setenv(mcp.EnvHostProjects, projects)
-		t.Setenv(envProjectsMount, projects)
 		t.Setenv(envObserveBodyDir, bodies)
-		t.Setenv(envSessionDir, sessions)
 
 		o := capture(t, nil)
-		if o.hostProjects != projects || o.projectsMount != projects ||
-			o.observeBodyDir != bodies || o.sessionDir != sessions {
+		if o.observeBodyDir != bodies {
 			t.Fatalf("the environment was not read into the options: %+v", o)
 		}
 	})
@@ -977,26 +959,9 @@ func TestMCP059TheIngestionToolsAreConfiguredFromFlagsAndTheEnvironment(t *testi
 			// A relative path here names a directory that resolves against
 			// whatever this process happens to be standing in, which is not a
 			// thing an operator can have meant.
-			{"a relative host root", func(o *serveOptions) {
-				o.hostProjects = "projects"
-			}, "-host-projects"},
-			{"a relative projects mount", func(o *serveOptions) {
-				o.projectsMount = "projects"
-			}, "-projects-mount"},
 			{"a relative body volume", func(o *serveOptions) {
 				o.observeBodyDir = "bodies"
 			}, "-observe-body-dir"},
-			{"a relative marker volume", func(o *serveOptions) {
-				o.sessionDir = "sessions"
-			}, "-session-dir"},
-			// observe_session RESOLVES the workspace through
-			// describe_workspace on every start. Without the host root, every
-			// start it was configured for would refuse — a tool wired to a
-			// dependency that is not, which is this issue's own defect in
-			// miniature.
-			{"a marker volume with no host root", func(o *serveOptions) {
-				o.sessionDir = sessions
-			}, "-host-projects"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				o := base
@@ -1011,11 +976,10 @@ func TestMCP059TheIngestionToolsAreConfiguredFromFlagsAndTheEnvironment(t *testi
 			})
 		}
 
-		// All three together, absolute, with the host root they need.
 		whole := base
-		whole.hostProjects, whole.observeBodyDir, whole.sessionDir = projects, bodies, sessions
+		whole.observeBodyDir = bodies
 		if problem := whole.validate(); problem != "" {
-			t.Errorf("the three ingestion settings together were refused: %s", problem)
+			t.Errorf("an absolute body volume was refused: %s", problem)
 		}
 	})
 }

@@ -5,19 +5,18 @@ package mcp
 import "context"
 
 // gateway.go — RM-231 (#376), E15 (#358): the in-process seam
-// internal/gateway/registrar.go and internal/gateway/workspace.go reach
-// through to register, restore, retire and resolve a workspace, without a
+// internal/gateway/registrar.go reaches through to register, restore and
+// retire a run, without a
 // second implementation of any of it (ADR-0053 unchanged: the MCP issues
 // every identity; ADR-0060: the gateway is a companion of this same process,
 // never a second service with a second path to one).
 //
 // Every function below is a thin translation over a tool this package
-// already owns and already tests: register_agent (register_agent.go),
-// retire_agent (retire_agent.go) and describe_workspace (workspace.go). No
-// rule is re-decided here — not the idempotency claim, not the
-// ledger-before-SPIRE append ordering (ADR-0018), not the parent checks, not
-// the projects-mount refusal. internal/gateway cannot reach registerAgentIn,
-// retireAgentIn or DescribeWorkspaceConfig.describe directly, because they
+// already owns and already tests: register_agent (register_agent.go) and
+// retire_agent (retire_agent.go). No rule is re-decided here — not the
+// idempotency claim, not the ledger-before-SPIRE append ordering (ADR-0018),
+// not the parent checks. internal/gateway cannot reach registerAgentIn or
+// retireAgentIn directly, because they
 // are unexported; that is exactly why this file exists — one package
 // boundary, one seam, crossed in exactly one place, so a rule enforced by
 // the tool cannot be bypassed by calling around it.
@@ -173,31 +172,4 @@ func RetireRunForGateway(ctx context.Context, runID string) (string, error) {
 		return "", Classify(err)
 	}
 	return out.RetiredAt, nil
-}
-
-// GatewayWorkspace mirrors the lifecycle contract's gateway.Workspace: Repo,
-// Branch and Task, and nothing else. This package does not import
-// internal/gateway to reuse its type directly — internal/gateway already
-// imports this package to reach these three functions, and a second import
-// the other way would be a cycle. Restating the three fields here is the
-// whole cost of avoiding it.
-type GatewayWorkspace struct {
-	Repo, Branch, Task string
-}
-
-// ResolveWorkspaceForGateway derives a workspace from a harness-reported
-// working directory through describe_workspace's own configured resolver
-// (DescribeWorkspaceConfig.describe, workspace.go:232) — no rule duplicated
-// here. An unset projects mount, a path outside it, or a directory that is
-// not a git working tree is refused by that same method, exactly as
-// describe_workspace refuses it over the wire: never guessed, because the
-// answer is on its way into a run registration (ADR-0045 — a run cannot be
-// registered without repo and branch).
-func ResolveWorkspaceForGateway(ctx context.Context, workingDirectory string) (GatewayWorkspace, error) {
-	cfg := describeWorkspaceConfigured()
-	out, err := cfg.describe(ctx, workingDirectory)
-	if err != nil {
-		return GatewayWorkspace{}, err
-	}
-	return GatewayWorkspace{Repo: out.Repo, Branch: out.Branch, Task: out.Task}, nil
 }

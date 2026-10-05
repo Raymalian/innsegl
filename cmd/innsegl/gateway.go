@@ -73,12 +73,12 @@ import (
 // this issue adds. Set, openGateway builds the real identity stack ADR-0058
 // describes: a Postgres-backed MappingStore and a RunStateReader on the
 // same database (ADR-0060 decision 3, "one database, no new store"), the
-// MCP's own register_agent/retire_agent/describe_workspace reached in
-// process (internal/gateway's registrar.go and workspace.go -- this file
+// MCP's own register_agent/retire_agent reached in process
+// (internal/gateway's registrar.go -- this file
 // does not configure those tools itself; when this command runs as `serve
 // -also gateway`, servewiring.go already has, and this is simply another
-// caller of what is already wired; run standalone with no MCP configured in
-// this same process, every registration attempt is refused exactly as
+// caller of what is already wired; with no MCP tool configured in this same
+// process, every registration attempt is refused exactly as
 // register_agent refuses an unconfigured call, which is the correct,
 // fail-closed reading of ADR-0058 decision 11 for a misconfigured
 // deployment), and the identity guard (ADR-0058 decision 11) is placed into
@@ -1117,9 +1117,9 @@ const maxWorkingDirectoryBytes = 4096
 //
 // In single-host mode, like sessionEndHandler, its checks are flood and noise
 // controls, never authentication: an agent's own shell could post here too.
-// What a forged statement buys is bounded by describe_workspace, which admits
-// only a git worktree under the projects mount and inside the admin scope --
-// a repository the agent can already work in (workspaceregistry.go). In
+// A statement that names only a directory is refused, because the core reads
+// no client tree (ADR-0071); one that names a repository is recorded as
+// stated (workspaceregistry.go). In
 // hosted mode (RM-284, #460) the client-certificate guard has verified the
 // installation, a stated repository must be in its scope (claimed on first
 // use; a statement naming none is a session outside any repository), and the session
@@ -1290,9 +1290,10 @@ func isAgentIDShape(id string) bool {
 
 // openIdentityStack builds RM-235 (#380)'s identity stack: a Postgres-backed
 // MappingStore and RunStateReader on o.dsn (ADR-0060 decision 3, the SAME
-// database the ledger already uses), the MCP's own register_agent,
-// retire_agent and describe_workspace reached in process (registrar.go,
-// workspace.go -- never configured here; see this file's own doc comment),
+// database the ledger already uses), the MCP's own register_agent and
+// retire_agent reached in process (registrar.go -- never configured here; see
+// this file's own doc comment), a resolver that refuses a directory-only
+// statement (workspace.go, ADR-0071),
 // the tree linker, the shipped LifecyclePolicy, and the silence backstop,
 // wired onto running so Serve can sweep it and Close can release every
 // pool this function opens.
@@ -1305,7 +1306,7 @@ func isAgentIDShape(id string) bool {
 // observe_tool_call this same process's `serve -also gateway` already
 // configures from `-observe-body-dir` (servewiring.go), reached here only
 // through mcp.RecordGatewayToolCall's own package-level seam, never
-// re-configured. A gateway run standalone with observe_tool_call
+// re-configured. A gateway whose process left observe_tool_call
 // unconfigured records nothing either, exactly as failing to configure it
 // already answers every other in-process caller (mcp.RecordGatewayToolCall's
 // own doc comment): a logged, counted failure per attempt, never a reason
@@ -1325,9 +1326,9 @@ func isAgentIDShape(id string) bool {
 // HERE, independently of servewiring.go: agent_message is not one of doc 01
 // §4's eight tools (internal/mcp/agentmessage.go's own doc comment), so it
 // has no reason to wait on that file's own tool-by-tool bookkeeping, and
-// building it here is what makes it work identically whether this process
-// is `serve -also gateway` or a genuinely standalone `innsegl gateway -dsn`
-// -- both run through this same function.
+// building it here is what makes it work identically whatever `serve`
+// configured -- the companion always runs through this same function. (A
+// standalone `innsegl gateway` command existed until ADR-0071.)
 //
 // guard.go's own Guards function now takes every witness as its own
 // variadic parameter (that function's own doc comment), so this function
@@ -1361,7 +1362,9 @@ func openIdentityStack(
 
 	tree := gateway.NewInMemoryTreeLinker(gateway.TreeLinkerConfig{})
 	registrar := gateway.NewMCPRegistrar()
-	resolver := gateway.NewMCPWorkspaceResolver()
+	// The core reads no client tree (ADR-0071): a session that stated only
+	// its directory is refused by name.
+	resolver := gateway.NoTreeResolver{}
 
 	// RM-235 (#380) code review: the session-end signal never retires by
 	// itself -- see lifecycle.go's own doc comment. sessionEndSignals is

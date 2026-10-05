@@ -32,11 +32,9 @@ import (
 
 func TestCLI011ServeAlsoAcceptsTheThreeCompanionCommands(t *testing.T) {
 	for _, want := range [][]string{
-		{"api"},
 		{"seal"},
 		{"reconcile"},
 		{"seal", "reconcile"},
-		{"api", "seal", "reconcile"},
 		{"reap"},
 		{"seal", "reconcile", "reap"},
 		// RM-224 (#369): ADR-0060's fifth companion.
@@ -57,13 +55,15 @@ func TestCLI011ServeAlsoAcceptsTheThreeCompanionCommands(t *testing.T) {
 func TestCLI012ServeAlsoRefusesANameItDoesNotUnderstand(t *testing.T) {
 	// "sealer" and "reconciler" are the CONTAINER names in doc 05 §1, and are
 	// the two most likely things an operator types. Neither is a subcommand.
-	for _, bad := range []string{"sealer", "reconciler", "dashboard", "serve", "verify", "nonsense"} {
+	// "api" was a companion until nothing set it: it would put the query API,
+	// and its database role, inside the process that holds SPIRE admin.
+	for _, bad := range []string{"sealer", "reconciler", "dashboard", "serve", "verify", "nonsense", "api"} {
 		if _, err := parseAlso(bad); err == nil {
 			t.Errorf("parseAlso(%q) was accepted; an unrecognised name must fail at parse "+
 				"time, or a deployment starts cleanly and silently never runs it", bad)
 		}
 	}
-	if _, err := parseAlso("api,,seal"); err == nil {
+	if _, err := parseAlso("seal,,reconcile"); err == nil {
 		t.Error("parseAlso accepted an empty element; a trailing or doubled comma is a typo, not a request")
 	}
 }

@@ -730,9 +730,9 @@ func TestMCP094RetirePresentsACredentialToAnEnforcingListener(t *testing.T) {
 
 // The ordering problem, and what it costs. The credential names a REPOSITORY
 // and this command names a RUN, so the repository has to come from somewhere
-// the listener is not: an explicit `-repo`, `$INNSEGL_REPO_ID`, or the working
-// tree — in that order, and lazily, so a listener that enforces nothing never
-// runs git at all.
+// the listener is not: an explicit `-repo`, or the working tree — in that
+// order, and lazily, so a listener that enforces nothing never runs git at
+// all.
 func TestMCP094RetireScopesTheCredentialToARepository(t *testing.T) {
 	const runID = "run-4c1f9a2b7d3e"
 	const token = "credential.for.the.listener"
@@ -744,7 +744,7 @@ func TestMCP094RetireScopesTheCredentialToARepository(t *testing.T) {
 
 	t.Run("-repo names it outright, which is the stranded run in another checkout",
 		func(t *testing.T) {
-			t.Setenv(envRepoID, "github.com/Example-Org/Somewhere-Else")
+			t.Setenv("INNSEGL_REPO_ID", "github.com/Example-Org/Somewhere-Else")
 			surface := newFakeLifecycleSurface(runID)
 			url, scopes := gated(t, surface)
 			var stdout, stderr bytes.Buffer
@@ -758,23 +758,25 @@ func TestMCP094RetireScopesTheCredentialToARepository(t *testing.T) {
 			}
 		})
 
-	t.Run("$INNSEGL_REPO_ID is next, the variable operators already set",
-		func(t *testing.T) {
-			t.Setenv(envRepoID, testRepo)
-			surface := newFakeLifecycleSurface(runID)
-			url, scopes := gated(t, surface)
-			var stdout, stderr bytes.Buffer
+	// ADR-0071: $INNSEGL_REPO_ID was the variable the retired signer and the
+	// old hook read. Nothing sets it any more, so it is not read: a stale
+	// value in an operator's shell must not scope the credential.
+	t.Run("$INNSEGL_REPO_ID is not read; the working tree is", func(t *testing.T) {
+		t.Setenv("INNSEGL_REPO_ID", "github.com/Example-Org/Somewhere-Else")
+		t.Chdir(gitTreeWithOrigin(t, "git@github.com:Example-Org/Example-Repo.git"))
+		surface := newFakeLifecycleSurface(runID)
+		url, scopes := gated(t, surface)
+		var stdout, stderr bytes.Buffer
 
-			if code := retireCommand([]string{"-url", url, runID}, &stdout, &stderr); code != exitOK {
-				t.Fatalf("code = %d, want exitOK; stderr=%s", code, stderr.String())
-			}
-			if got := scopes(); len(got) != 1 || got[0] != testRepo {
-				t.Errorf("the mint was asked for %v, want %q", got, testRepo)
-			}
-		})
+		if code := retireCommand([]string{"-url", url, runID}, &stdout, &stderr); code != exitOK {
+			t.Fatalf("code = %d, want exitOK; stderr=%s", code, stderr.String())
+		}
+		if got := scopes(); len(got) != 1 || got[0] != testRepo {
+			t.Errorf("the mint was asked for %v, want %q from the working tree", got, testRepo)
+		}
+	})
 
 	t.Run("otherwise the working tree, by doc 02 §5's rule", func(t *testing.T) {
-		t.Setenv(envRepoID, "")
 		t.Chdir(gitTreeWithOrigin(t, "git@github.com:Example-Org/Example-Repo.git"))
 
 		surface := newFakeLifecycleSurface(runID)
@@ -791,7 +793,6 @@ func TestMCP094RetireScopesTheCredentialToARepository(t *testing.T) {
 	})
 
 	t.Run("a tree with no origin is refused with the flag to type instead", func(t *testing.T) {
-		t.Setenv(envRepoID, "")
 		t.Chdir(t.TempDir())
 
 		surface := newFakeLifecycleSurface(runID)

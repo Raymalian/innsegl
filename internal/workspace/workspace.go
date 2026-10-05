@@ -4,10 +4,11 @@
 // from the tree itself. It is pure derivation: it reads git, writes nothing,
 // and knows nothing of mounts, hosts or credentials.
 //
-// It exists so the client (`innsegl hook session`) and the single-host core
-// (describe_workspace) derive a workspace with one rule. A second copy would
+// It exists so every component that derives a workspace — the client's
+// `innsegl hook session` today — does it with one rule. A second copy would
 // let two components describe the same tree differently, and the answer ends
-// up in an append-only record.
+// up in an append-only record. (describe_workspace was the other user until
+// ADR-0071.)
 package workspace
 
 import (

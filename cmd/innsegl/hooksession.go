@@ -145,8 +145,8 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 	// The client derives the workspace itself (internal/workspace) and states
 	// it; the core binds it to the caller's scope. A directory that is not a
 	// working tree with a usable origin states the directory alone: the hook
-	// never fails on one, and the gateway resolves a bare directory the
-	// single-host way.
+	// never fails on one, and the gateway registers no run from a bare
+	// directory (ADR-0071).
 	if derived, derr := workspace.Derive(ctx, in.Cwd); derr == nil {
 		// A repository is signable from its first use: link it when
 		// innsegl's prepare-commit-msg hook is not there yet, so its agent

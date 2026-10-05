@@ -120,6 +120,11 @@ type cell struct {
 	drive func(t *testing.T, s *stack) wireError
 }
 
+// deprecatedWhy is why ten of the eleven classes are unreachable for each
+// deprecated tool.
+const deprecatedWhy = "deprecated (ADR-0071): the tool refuses every call with INVARIANT_VIOLATION " +
+	"before it reads an argument or consults a dependency, so no other class can arise"
+
 // digestA and digestB are two well-formed doc 02 §1 payload digests. Two, so
 // one idempotency key can be presented against two different requests.
 const (
@@ -843,108 +848,28 @@ var matrix = []cell{
 	// -----------------------------------------------------------------------
 	// describe_workspace(cwd)
 	//
-	// RM-126 (#205), E11. The tool answers what repository, worktree, branch
-	// and task a path names. It is a PURE DERIVATION: it reads git plumbing on
-	// a local filesystem, returns the answer, and writes nothing anywhere.
-	//
-	// One fact decides ten of these eleven. DescribeWorkspaceConfig has two
-	// members and both of them are directories — the host root and the mount
-	// it corresponds to. There is no SPIRE client, no ledger, no idempotency
-	// store, no credential, no Fulcio and no Rekor; IP §4 gives the tool one
-	// argument and it is a path. Nine of the eleven classes name a dependency
-	// or an argument this tool does not have, and RUN_NOT_FOUND and
-	// RUN_ALREADY_RETIRED name a run it is never told about — this is the tool
-	// a harness calls BEFORE it has an identity, because its answer is what
-	// register_agent's `repo` and `branch` are built from.
-	//
-	// So exactly one class is reachable, and that is the finding rather than a
-	// gap: a tool with no dependencies has no dependency outage to report, and
-	// IP §4's closed vocabulary leaves INVARIANT_VIOLATION as the only thing
-	// it can say when a caller asks something it cannot answer. Every refusal
-	// in workspace.go is that class, which is also why none was invented for
-	// it — the vocabulary is a protected surface (doc 08 §3).
+	// Deprecated (ADR-0071). The name is a protected surface and stays bound
+	// until the next major release; every call is refused with
+	// INVARIANT_VIOLATION before any argument is read or any dependency is
+	// consulted, so that is the one reachable class and the other ten are
+	// unreachable for one reason.
 	// -----------------------------------------------------------------------
-	{
-		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassAttestationFailed, verdict: unreachable,
-		why: "DescribeWorkspaceConfig holds two directories and nothing else: the host root and " +
-			"the mount it corresponds to. There is no SPIRE client and no Workload API on this " +
-			"path — the tool describes a filesystem, and a filesystem does not attest.",
-	},
-	{
-		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassIdentityUnavailable, verdict: unreachable,
-		why: "the same absence: no SPIRE dependency of any kind. This is the tool a harness calls " +
-			"BEFORE it has an identity — its answer is what register_agent's repo and branch " +
-			"arguments are built from — so SPIRE being unreachable cannot stop it answering.",
-	},
-	{
-		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassCredentialExpired, verdict: unreachable,
-		why: "no credential is presented, minted or held. doc 01 §4 gives describe_workspace one " +
-			"argument and it is a path; there is nothing here carrying a validity window whose " +
-			"end could have passed, and no run token either — the tool authenticates nothing.",
-	},
-	{
-		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassAudienceMismatch, verdict: unreachable,
-		why: "the tool presents no credential to a relying party, so there is no audience to be " +
-			"mismatched, and its single argument is not one. Asserted on the advertised input " +
-			"schema by TestMCP006OnlyGetCredentialTakesAnAudience.",
-	},
-	{
-		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassLedgerUnavailable, verdict: unreachable,
-		why: "a pure derivation: it appends no event, resolves no run and holds neither a ledger " +
-			"nor an idempotency store in its configuration. It is the one tool on the surface " +
-			"that answers identically with Postgres gone, which is why it has no dead-ledger cell.",
-	},
-	{
-		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassSigningUnavailable, verdict: unreachable,
-		why: "describe_workspace signs nothing and has no Fulcio in its configuration. Every " +
-			"external call it makes is local read-only git plumbing — `worktree list`, " +
-			"`symbolic-ref`, `rev-parse`, `remote get-url` — and none of them reaches a CA.",
-	},
-	{
-		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassTransparencyUnavailable, verdict: unreachable,
-		why: "no Rekor dependency, and nothing on this path is published anywhere: the answer is " +
-			"derived from the filesystem, returned to the caller and not recorded. There is no " +
-			"transparency entry for it to be missing.",
-	},
-	{
-		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassRunNotFound, verdict: unreachable,
-		why: "the tool takes no run_id. It runs before any run exists — a harness that knows only " +
-			"its own cwd calls this first and register_agent second — so there is no run for it " +
-			"to look up and fail to find.",
-	},
-	{
-		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassRunAlreadyRetired, verdict: unreachable,
-		why: "the same absent argument, for the same reason: no run is named, resolved or written " +
-			"to, so none can be found already retired. I4 protects a retired run's history from " +
-			"growing, and this tool appends nothing to any run's history at all.",
-	},
-	{
-		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassDuplicateRequest, verdict: unreachable,
-		why: "the tool takes no idempotency_key, and ADR-0004 requires one on exactly the tools " +
-			"whose call has an effect. This one has none: the same cwd answers the same twice, " +
-			"so a repeated call is not a replay and cannot key a request it did not name.",
-	},
+	{tool: mcp.ToolDescribeWorkspace, class: mcp.ClassAttestationFailed, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolDescribeWorkspace, class: mcp.ClassIdentityUnavailable, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolDescribeWorkspace, class: mcp.ClassCredentialExpired, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolDescribeWorkspace, class: mcp.ClassAudienceMismatch, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolDescribeWorkspace, class: mcp.ClassLedgerUnavailable, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolDescribeWorkspace, class: mcp.ClassSigningUnavailable, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolDescribeWorkspace, class: mcp.ClassTransparencyUnavailable, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolDescribeWorkspace, class: mcp.ClassRunNotFound, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolDescribeWorkspace, class: mcp.ClassRunAlreadyRetired, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolDescribeWorkspace, class: mcp.ClassDuplicateRequest, verdict: unreachable, why: deprecatedWhy},
 	{
 		tool: mcp.ToolDescribeWorkspace, class: mcp.ClassInvariantViolation, verdict: reachable,
 		runID: runIDAbsent,
 		drive: func(t *testing.T, s *stack) wireError {
-			// THE ONLY CLASS THIS TOOL CAN PRODUCE, driven through the refusal
-			// it exists for: a cwd outside the directory the deployment mounts.
-			//
-			// A harness reports a path on its OWN machine, and the translation
-			// onto this process's mount is the one thing the container cannot
-			// work out for itself. Every way it can fail — the host root unset,
-			// the path outside it, the tree not a working tree, the repository
-			// with no `origin` — is a refusal rather than a guess, because a
-			// guessed translation describes the wrong repository confidently
-			// and the answer is on its way into an append-only record.
-			//
-			// run_id is ABSENT and not empty: the failure is scoped to a path,
-			// there is no run to scope it to, and doc 02 §1 distinguishes the
-			// two states.
-			return s.callExpectingError(t, mcp.ToolDescribeWorkspace, map[string]any{
-				"cwd": filepath.Join(s.projects, "..", "outside-the-mount"),
-			})
+			// The refusal every call gets. run_id is ABSENT: no run is named.
+			return s.callExpectingError(t, mcp.ToolDescribeWorkspace, map[string]any{"cwd": "/srv/example"})
 		},
 	},
 
@@ -1109,235 +1034,42 @@ var matrix = []cell{
 	// -----------------------------------------------------------------------
 	// observe_session(session_id, phase, cwd, agent_type?, task?)
 	//
-	// RM-128 (#207), E11. The eighth and last tool of IP §4's surface, and the
-	// only one that is a COMPOSITION: a start resolves the workspace through
-	// describe_workspace and mints the run through register_agent; a stop ends
-	// it through retire_agent. All three are the shipped tools called in
-	// process, so this tool's error surface is very nearly theirs.
-	//
-	// Two facts decide all eleven, and they pull in opposite directions.
-	//
-	// THE START PATH INHERITS register_agent's CLASSES, unchanged — this tool
-	// rewraps nothing, because IP §4's vocabulary is closed (doc 08 §3) and a
-	// second wording for one failure sends a shim author to the wrong file. So
-	// four classes that would be absurd for a tool "about sessions" are
-	// reachable here for exactly the reasons they are reachable for
-	// register_agent, and each cell below drives them the same way.
-	//
-	// THE STOP PATH PRODUCES NO CLASS AT ALL. IP §4: "a stop never blocks."
-	// A refused stop was answered by a harness with nine repeated invocations,
-	// and an MCP tool's equivalent of the shim's exit 2 is an error result — so
-	// every failure on that path comes back as a SUCCESSFUL reply carrying the
-	// class and the message in `detail`. Nothing a stop meets appears on this
-	// side of the matrix, which is why the unreachable cells below keep saying
-	// "and the stop path cannot raise it either".
-	//
-	// It is also the tool's own second store. The session-to-run mapping lives
-	// on a local volume, so LEDGER_UNAVAILABLE is driven through that volume
-	// rather than through Postgres, the same half of the class observe_tool_call
-	// has and no other tool on the surface can produce.
+	// Deprecated (ADR-0071). The name is a protected surface and stays bound
+	// until the next major release; every call is refused with
+	// INVARIANT_VIOLATION before any argument is read or any dependency is
+	// consulted, so that is the one reachable class and the other ten are
+	// unreachable for one reason.
 	// -----------------------------------------------------------------------
-	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassAttestationFailed, verdict: unreachable,
-		why: "the start path reaches SPIRE only through register_agent, and internal/spire's " +
-			"classifyAdmin has no path to ATTESTATION_FAILED — the class is raised by " +
-			"classifyWorkload on the Workload API, which no MCP tool calls. The stop path " +
-			"reaches SPIRE only to DELETE an entry, and raises nothing at all: every failure " +
-			"there is reported in the reply. Same finding as register_agent's own cell.",
-	},
-	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassIdentityUnavailable, verdict: reachable,
-		runID: runIDPresent,
-		drive: func(t *testing.T, s *stack) wireError {
-			// IP §6.1's headline case, met through a session start: the run is
-			// minted by register_agent, so spire-server being down stops a
-			// session getting an identity exactly as it stops an agent getting
-			// one. A START MAY REFUSE — IP §6.1 admits no attributed work
-			// without an identity, and this is the refusal that enforces it.
-			worktree := s.worktree
-			s.spire.failRegister = &spire.Error{
-				Class: spire.ClassIdentityUnavailable, Op: "register_agent",
-				Message: "connection refused", Retryable: true,
-			}
-			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
-				"session_id": "ident-down", "phase": mcp.ObserveSessionPhaseStart, "cwd": worktree,
-			})
-		},
-	},
-	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassCredentialExpired, verdict: unreachable,
-		why: "no credential is presented and none is minted. What a start returns is a " +
-			"credential HANDLE — the run's SPIFFE ID, the expiry SPIRE granted its entry, and " +
-			"the derived run token — and none of those is checked against a clock here; " +
-			"get_credential is where a credential is issued, and this tool never calls it.",
-	},
-	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassAudienceMismatch, verdict: unreachable,
-		why: "doc 01 §4 gives observe_session five arguments and none is an audience; it " +
-			"presents no credential to a relying party, so there is nothing to be mismatched. " +
-			"Asserted on the advertised input schema by TestMCP006OnlyGetCredentialTakesAnAudience.",
-	},
-	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassLedgerUnavailable, verdict: reachable,
-		runID: runIDAbsent,
-		drive: func(t *testing.T, s *stack) wireError {
-			// THE MARKER VOLUME, which is this tool's own second store and the
-			// one of the two that is not Postgres. IP §4's vocabulary is closed
-			// (doc 08 §3), so there is no MARKER_STORE_UNAVAILABLE to add and
-			// this is the class that carries it: a mount that came back clears
-			// it, which is what retryable tells the caller.
-			//
-			// What the cell pins is the REFUSAL. A session whose mapping was
-			// never written is a run no stop will ever find — the reference
-			// shim measured that as three runs still Active seventeen hours
-			// later — so a start that cannot record the mapping refuses rather
-			// than handing back an identity nothing can retire.
-			//
-			// run_id is ABSENT here and not empty: the volume is checked before
-			// anything is registered, so there is no run to scope the failure
-			// to and doc 02 §1 distinguishes the two states. Registered-and-
-			// unmapped is the other half of the same class, and it carries a
-			// run id; it is driven in internal/mcp, where the partial file name
-			// it needs is reachable.
-			//
-			// A dead Postgres reaches the same class one gate later, inside
-			// register_agent, and the dead-ledger group pins that shape there.
-			sessionOnBlockedMarkers(t)
-			worktree := s.worktree
-			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
-				"session_id": "markers-gone", "phase": mcp.ObserveSessionPhaseStart, "cwd": worktree,
-			})
-		},
-	},
-	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassSigningUnavailable, verdict: unreachable,
-		why: "observe_session signs nothing and has no Fulcio in any of the three configurations " +
-			"it composes. It begins and ends the session a commit is later signed under; the " +
-			"signing is sign_commit's, and so is IP §6.3's case.",
-	},
-	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassTransparencyUnavailable, verdict: unreachable,
-		why: "no Rekor dependency on either path. The events a session causes — run_registered " +
-			"and run_retired — go into the innsegl chain, and it is the SEGMENT that is " +
-			"anchored, asynchronously and not while a harness is waiting for its identity.",
-	},
-	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassRunNotFound, verdict: reachable,
-		runID: runIDPresent,
-		drive: func(t *testing.T, s *stack) wireError {
-			// NOT the missing session. A stop for a session that never started
-			// is required to SUCCEED with the terminal state (IP §4), because a
-			// shim cannot guarantee ordering and a refusal would be answered
-			// with a retry storm — so that, the obvious reading of this class
-			// for this tool, is a BUG here rather than a case.
-			//
-			// The class survives anyway, from register_agent: classifyAdmin
-			// maps codes.NotFound to RUN_NOT_FOUND, and a registration whose
-			// attested PARENT node is gone is exactly that. SPIRE has nothing
-			// to hang the session's entry off.
-			worktree := s.worktree
-			s.spire.failRegister = &spire.Error{
-				Class: spire.ClassRunNotFound, Op: "register_agent",
-				Message: "no such parent entry " + testParentID, Retryable: false,
-			}
-			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
-				"session_id": "no-parent", "phase": mcp.ObserveSessionPhaseStart, "cwd": worktree,
-			})
-		},
-	},
-	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassRunAlreadyRetired, verdict: reachable,
-		runID: runIDPresent,
-		drive: func(t *testing.T, s *stack) wireError {
-			// Neither of the two paths this tool owns can produce it. A stop
-			// for a retired session answers with the original instant, and a
-			// START for one answers with the terminal state rather than
-			// re-registering — which is not politeness: a run id is a pure
-			// function of (agent_type, task, key), so re-deriving would name
-			// the SAME retired run and hand back an identity that can no
-			// longer sign (#213's collision, from this tool's side).
-			//
-			// It survives from register_agent's fail-closed branch: SPIRE
-			// reports an existing entry and then holds none, which only
-			// retirement and the reaper cause, so it refuses rather than
-			// resurrecting an identity somebody chose to destroy.
-			worktree := s.worktree
-			s.spire.duplicateOnRegister = true
-			s.spire.vanishOnLookup = true
-			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
-				"session_id": "vanished", "phase": mcp.ObserveSessionPhaseStart, "cwd": worktree,
-			})
-		},
-	},
-	{
-		tool: mcp.ToolObserveSession, class: mcp.ClassDuplicateRequest, verdict: reachable,
-		runID: runIDAbsent,
-		drive: func(t *testing.T, s *stack) wireError {
-			// A DUPLICATE START IS NOT THIS CLASS and must never be: IP §6.6
-			// requires the same run back, never a second identity, and the
-			// derived key is what delivers it. The caller cannot present that
-			// key against another request by choice either — it is derived from
-			// the session id, exactly so that one session cannot be recorded
-			// twice under two keys.
-			//
-			// It still happens, and this is the way: the mapping is lost while
-			// the ledger keeps the registration — a container recreated without
-			// its marker volume — and the session then starts again describing
-			// itself differently. The key is necessarily the same and the
-			// fingerprint is not, and answering with the first call's reply
-			// would hand this caller a run registered as something it did not
-			// ask for.
-			//
-			// run_id is absent because the idempotency store refuses before any
-			// run is resolved (ADR-0017 §3).
-			markers, worktree := s.markerDir, s.worktree
-			var first struct {
-				RunID string `json:"run_id"`
-			}
-			s.callExpectingSuccess(t, mcp.ToolObserveSession, map[string]any{
-				"session_id": "lost-mapping", "phase": mcp.ObserveSessionPhaseStart, "cwd": worktree,
-			}, &first)
-			if first.RunID == "" {
-				t.Fatalf("the setup start registered no run: %+v", first)
-			}
-			if err := os.RemoveAll(markers); err != nil {
-				t.Fatalf("losing the marker volume: %v", err)
-			}
-			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
-				"session_id": "lost-mapping", "phase": mcp.ObserveSessionPhaseStart,
-				"cwd": worktree, "agent_type": "reviewer",
-			})
-		},
-	},
+	{tool: mcp.ToolObserveSession, class: mcp.ClassAttestationFailed, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolObserveSession, class: mcp.ClassIdentityUnavailable, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolObserveSession, class: mcp.ClassCredentialExpired, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolObserveSession, class: mcp.ClassAudienceMismatch, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolObserveSession, class: mcp.ClassLedgerUnavailable, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolObserveSession, class: mcp.ClassSigningUnavailable, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolObserveSession, class: mcp.ClassTransparencyUnavailable, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolObserveSession, class: mcp.ClassRunNotFound, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolObserveSession, class: mcp.ClassRunAlreadyRetired, verdict: unreachable, why: deprecatedWhy},
+	{tool: mcp.ToolObserveSession, class: mcp.ClassDuplicateRequest, verdict: unreachable, why: deprecatedWhy},
 	{
 		tool: mcp.ToolObserveSession, class: mcp.ClassInvariantViolation, verdict: reachable,
 		runID: runIDAbsent,
 		drive: func(t *testing.T, s *stack) wireError {
-			// The one argument the tool switches on. A phase that is neither
-			// `start` nor `stop` is not a session event this tool can act on,
-			// and guessing which was meant would either register a run nobody
-			// asked for or retire one that is still working.
-			//
-			// It does not touch the never-block rule: a malformed phase is not
-			// a stop, whatever it was meant to be, so there is nothing to
-			// retire and no terminal state to report. run_id is ABSENT, because
-			// the refusal happens before any run exists.
-			worktree := s.worktree
+			// The refusal every call gets. run_id is ABSENT: no run is named.
 			return s.callExpectingError(t, mcp.ToolObserveSession, map[string]any{
-				"session_id": "bad-phase", "phase": "restart", "cwd": worktree,
+				"session_id": "deprecated", "phase": "start", "cwd": "/srv/example",
 			})
 		},
 	},
 }
 
 // ---------------------------------------------------------------------------
-// The three ingestion tools' fixtures (RM-126/127/128, #205/#206/#207).
+// observe_tool_call's fixtures (RM-127, #206).
 //
-// The WORKING configuration of all three now lives in the stack (harness_test.go,
-// stackIngestion), because #211 wired them into `innsegl serve` and a contract
-// stack that did not wire them could no longer claim to be the shipped path.
-// What is left here is the opposite: two volumes that genuinely do not work,
-// installed by the one cell each that is about a volume failing.
+// The WORKING configuration lives in the stack (harness_test.go,
+// stackIngestion), because #211 wired it into `innsegl serve` and a contract
+// stack that did not wire it could no longer claim to be the shipped path.
+// What is left here is the opposite: a volume that genuinely does not work,
+// installed by the one cell that is about a volume failing.
 //
 // The distinction matters and is the whole of #211's third part. A HOSTILE
 // configuration is a fixture a cell needs; a MISSING one is a tool nobody
@@ -1378,35 +1110,6 @@ func observeConfigured(t *testing.T, s *stack, bodyDir string) {
 	})
 	if err != nil {
 		t.Fatalf("ConfigureObserveToolCall: %v", err)
-	}
-	t.Cleanup(restore)
-}
-
-// sessionOnBlockedMarkers configures observe_session against a volume that
-// genuinely cannot be used: the marker directory's parent is a regular file,
-// so MkdirAll fails whatever uid the tests run as.
-//
-// observe_session is a COMPOSITION — it resolves the workspace through
-// describe_workspace, mints the run through register_agent and ends it through
-// retire_agent, all in process, through the package state ADR-0016 §5 fixes as
-// the seam. So the stack's own configurations are the ones it runs on, and the
-// marker volume is the only thing a fixture here has to say anything about.
-func sessionOnBlockedMarkers(t *testing.T) {
-	t.Helper()
-	blocked := filepath.Join(t.TempDir(), "not-a-directory")
-	if err := os.WriteFile(blocked, []byte("the volume is not mounted"), 0o600); err != nil {
-		t.Fatalf("preparing the blocked marker volume: %v", err)
-	}
-	observeSessionConfigured(t, filepath.Join(blocked, "sessions"))
-}
-
-// observeSessionConfigured installs one marker volume over the stack's own,
-// for the life of the cell that asked for it.
-func observeSessionConfigured(t *testing.T, markerDir string) {
-	t.Helper()
-	restore, err := mcp.ConfigureObserveSession(mcp.ObserveSessionConfig{MarkerDir: markerDir})
-	if err != nil {
-		t.Fatalf("ConfigureObserveSession: %v", err)
 	}
 	t.Cleanup(restore)
 }
@@ -1734,18 +1437,8 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 
 	long := strings.Repeat("x", 4096)
 
-	// THE THREE INGESTION TOOLS ARE CONFIGURED BY THE STACK, and this test no
-	// longer installs anything (#211).
-	//
-	// It did, and had to, for as long as `cmd/innsegl/servewiring.go` wired
-	// five of the eight: three helpers installed a configuration here so the
-	// rows below would meet a working tool, and each carried a doc comment
-	// saying, in as many words, that a battery which forgot to call it would
-	// pass vacuously. That is a note about a landmine, not a guard against one.
-	// The wiring now installs all three in the entry point and the stack does
-	// the same, so there is nothing left here to forget — and TestMCP060 fails
-	// if a bound tool is ever unconfigured again.
-	dwProjects, dwWorktree := s.projects, s.worktree
+	// observe_tool_call is configured by the stack, and this test installs
+	// nothing (#211). TestMCP060 fails if a bound tool is ever unconfigured.
 
 	battery := map[mcp.ToolName][]map[string]any{
 		mcp.ToolRegisterAgent: {
@@ -1811,44 +1504,21 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 			{"run_id": "Run-42"},
 			{"run_id": "../../etc/passwd"},
 		},
-		// Every way a path can be wrong, plus one that is right. The last row
-		// is the one that keeps the rest honest: it SUCCEEDS, which is how
-		// this entry shows the tool was reachable and configured and that the
-		// refusals above are refusals of the input rather than of the fixture.
+		// Deprecated (ADR-0071): every row is refused with the one class the
+		// matrix calls reachable, whatever it carries.
 		mcp.ToolDescribeWorkspace: {
 			{},
 			{"cwd": ""},
 			{"cwd": "relative/path"},
 			{"cwd": long},
 			{"cwd": "/etc"},
-			{"cwd": "../../etc/passwd"},
-			{"cwd": filepath.Join(dwProjects, "..", "outside-the-mount")},
-			{"cwd": filepath.Join(dwProjects, "no-such-directory")},
-			{"cwd": dwProjects},
-			{"cwd": dwWorktree},
 		},
-		// Every way a session call can be wrong, and three that are right. The
-		// last three keep the rest honest: a stop for a session nobody started
-		// SUCCEEDS with the terminal state, and a start followed by its own
-		// stop succeeds twice — so this entry shows the tool was reachable and
-		// configured, and that the refusals above are refusals of the input.
 		mcp.ToolObserveSession: {
 			{},
 			{"session_id": "", "phase": "", "cwd": ""},
-			{"session_id": "battery-session", "phase": "", "cwd": dwWorktree},
-			{"session_id": "battery-session", "phase": "restart", "cwd": dwWorktree},
-			{"session_id": long, "phase": mcp.ObserveSessionPhaseStart, "cwd": dwWorktree},
-			{"session_id": "../../etc/passwd", "phase": mcp.ObserveSessionPhaseStart, "cwd": dwWorktree},
-			{"session_id": "battery-no-cwd", "phase": mcp.ObserveSessionPhaseStart},
-			{"session_id": "battery-outside", "phase": mcp.ObserveSessionPhaseStart, "cwd": "/etc"},
-			{"session_id": "battery-relative", "phase": mcp.ObserveSessionPhaseStart, "cwd": "relative/path"},
-			{"session_id": "battery-bad-type", "phase": mcp.ObserveSessionPhaseStart,
-				"cwd": dwWorktree, "agent_type": "Not An Identifier!"},
-			{"session_id": "battery-bad-task", "phase": mcp.ObserveSessionPhaseStart,
-				"cwd": dwWorktree, "task": long},
-			{"session_id": "battery-never-started", "phase": mcp.ObserveSessionPhaseStop},
-			{"session_id": "battery-live", "phase": mcp.ObserveSessionPhaseStart, "cwd": dwWorktree},
-			{"session_id": "battery-live", "phase": mcp.ObserveSessionPhaseStop},
+			{"session_id": "battery-session", "phase": "restart", "cwd": "/etc"},
+			{"session_id": long, "phase": "start", "cwd": "/etc"},
+			{"session_id": "battery-never-started", "phase": "stop"},
 		},
 		mcp.ToolObserveToolCall: {
 			{},
@@ -1876,13 +1546,6 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 	// and a guard that names one tool only guards one tool.
 	reached := map[mcp.ToolName]bool{}
 
-	// observe_session keeps a guard of its own, and it is the sharper kind:
-	// three of its rows must SUCCEED — a stop for a session nobody started, and
-	// a start with its own stop. A tool that only ever refuses can be a tool
-	// refusing its inputs or a tool refusing to run at all, and only a success
-	// tells the two apart.
-	sawObserveSessionSuccess := false
-
 	// NO TOOL IS SKIPPED. RM-131 (#210) put three names on the surface ahead of
 	// their implementations and this loop skipped what did not ship, because a
 	// tool with no binder cannot be driven at all — the transport answers
@@ -1905,9 +1568,6 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 				if !res.IsError {
 					// A success is not a class; the matrix is about failures.
 					reached[tool] = true
-					if tool == mcp.ToolObserveSession {
-						sawObserveSessionSuccess = true
-					}
 					return
 				}
 				if res.StructuredContent == nil {
@@ -1946,12 +1606,6 @@ func TestMCP006NoToolProducesAClassTheMatrixCallsUnreachable(t *testing.T) {
 				"validation; none of them reached the tool's own code, so this test's closure "+
 				"claim for %s was never actually exercised", tool, tool)
 		}
-	}
-	if !sawObserveSessionSuccess {
-		t.Fatal("every observe_session row in the battery was refused, including the stop for a " +
-			"session nobody started and the start/stop pair that must both succeed. That is what " +
-			"an UNCONFIGURED tool looks like — one INVARIANT_VIOLATION to every input — so this " +
-			"test's closure claim for observe_session held for the fixture, not for the tool")
 	}
 }
 
@@ -2491,14 +2145,12 @@ func (s *stack) countEvents(t *testing.T, runID, eventType string) int {
 // the vacuous pass this whole file is written against, and for three tools it
 // was the actual state of the repository until #211.
 //
-// Seven of the eight say it in the same words. describe_workspace says it by
-// naming the value it was never given, because its configuration is not a
-// dependency it holds but a fact about the deployment it was never told.
+// The tools that can be configured say it in the same words. The two
+// deprecated ones (ADR-0071) have nothing to configure and say "deprecated".
 func unconfiguredRefusal(message string) bool {
 	for _, gate := range []string{
 		"bound but not configured",
 		"advertised but not wired",
-		mcp.EnvHostProjects + " is unset",
 	} {
 		if strings.Contains(message, gate) {
 			return true
@@ -2528,12 +2180,6 @@ func TestMCP060EveryToolTheStackBindsIsAlsoConfigured(t *testing.T) {
 	run := s.registerRun(t, "mcp060-live")
 	doomed := s.registerRun(t, "mcp060-doomed")
 
-	// An absolute path that is deliberately NOT under this stack's projects
-	// root. A configured describe_workspace answers it with "that tree is
-	// outside the mount", which is a verdict about the input; an unconfigured
-	// one never gets that far, because the host root is checked first.
-	outside := t.TempDir()
-
 	probe := map[mcp.ToolName]map[string]any{
 		mcp.ToolRegisterAgent: {
 			"agent_type": testAgentType, "task_id": testTaskID,
@@ -2549,10 +2195,10 @@ func TestMCP060EveryToolTheStackBindsIsAlsoConfigured(t *testing.T) {
 			"message": "m", "task_ref": testTaskID, "idempotency_key": "mcp060-sign",
 		},
 		mcp.ToolRetireAgent:       {"run_id": doomed.RunID},
-		mcp.ToolDescribeWorkspace: {"cwd": outside},
+		mcp.ToolDescribeWorkspace: {"cwd": "/srv/example"},
 		mcp.ToolObserveToolCall:   {"run_id": run.RunID, "tool": "Edit", "body": observedBody},
 		mcp.ToolObserveSession: {
-			"session_id": "mcp060-session", "phase": mcp.ObserveSessionPhaseStop,
+			"session_id": "mcp060-session", "phase": "stop",
 		},
 	}
 

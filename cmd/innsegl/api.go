@@ -457,7 +457,7 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		resolverDSN = fs.String("resolver-dsn", os.Getenv(envAPIResolverDSN),
 			"the RESOLVER connection string ($"+envAPIResolverDSN+") — internal/api.ResolverRole, "+
 				"which may insert an alert resolution and nothing else. Optional: without it the "+
-				"dashboard cannot resolve alerts, and `innsegl resolve-alert` is the way to resolve one")
+				"dashboard cannot resolve alerts")
 		sessionLifetime = fs.Duration("session-lifetime", envDuration(envAPISessionLifetime, 0),
 			"how long a session lasts before it must be renewed by signing in again; zero "+
 				"applies internal/api's own default ($"+envAPISessionLifetime+")")

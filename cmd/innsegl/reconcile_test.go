@@ -353,3 +353,24 @@ func TestReconcileReadsTheMirrorWhenOneIsSet(t *testing.T) {
 		t.Fatal("a mirror root that does not exist was accepted")
 	}
 }
+
+// ADR-0071: the path rule's two roots translated a harness's host path onto a
+// projects mount, and the core mounts none — it reads the mirror (ADR-0065).
+// The flags are gone; one left behind would be a setting that scopes nothing.
+func TestReconcileHasNoProjectsMountFlags(t *testing.T) {
+	for _, flag := range []string{"-host-projects", "-writes-projects"} {
+		var stdout, stderr bytes.Buffer
+		code := runReconcileCommand([]string{
+			"-dsn", "postgres://x/y", "-rekor-url", "http://rekor.example",
+			"-trust-domain", "innsegl.dev", "-once", flag, "/srv/x",
+		}, &stdout, &stderr, reconcileDeps{
+			open: func(context.Context, reconcileOptions) (reconcileEngines, func(), error) {
+				return reconcileEngines{Rekor: &fakeCycles{}}, func() {}, nil
+			},
+		})
+		if code != exitUsage || !strings.Contains(stderr.String(), "flag provided but not defined: "+flag) {
+			t.Errorf("reconcile %s exited %d, want %d as an unknown flag: ADR-0071 removed it\n%s",
+				flag, code, exitUsage, stderr.String())
+		}
+	}
+}

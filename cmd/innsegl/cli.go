@@ -81,15 +81,6 @@ var commands = map[string]command{
 		summary: "attest a major schema cutover in this chain",
 		exec:    migrateSchemaCommand,
 	},
-	// resolve-alert is RM-102 (#167, ADR-0044): the write half of alert
-	// resolution. It is not a route on `api` — that binary IS doc 05 §1's
-	// read-only `innsegl-dashboard` row, and FD P6 forbids a mutating UI
-	// action categorically. This is an operator command, run the way `reap`
-	// and `reconcile` are: from a trusted host, holding the ledger DSN.
-	"resolve-alert": {
-		summary: "record that a human reviewed an integrity alert",
-		exec:    resolveAlertCommand,
-	},
 	// retire is RM-154 (#257): the one way positive knowledge that a run is
 	// over gets into the record without an MCP client. The reaper can only
 	// observe silence, and silence is not an ending at any threshold; a
@@ -126,15 +117,6 @@ var commands = map[string]command{
 	"canary": {
 		summary: "prove the object store refuses to delete a sealed segment (SEG-005)",
 		exec:    canaryCommand,
-	},
-	// The gateway is ADR-0060's fifth companion: a reverse proxy in front of
-	// the model provider a harness is pointed at (ADR-0057), forwarding
-	// every request unchanged and streaming the reply back as it arrives.
-	// This is the same body `serve -also gateway` runs in-process (RM-224,
-	// #369); this entry is for a deployment that runs it standalone.
-	"gateway": {
-		summary: "relay model traffic to the configured upstream and stream replies back",
-		exec:    gatewayCommand,
 	},
 	// The host half of ADR-0059's commit path (E17): the harness hook that
 	// hands a git commit its tool call id, git's prepare-commit-msg hook

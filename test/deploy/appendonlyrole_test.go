@@ -104,12 +104,14 @@ var appendOnlyExpectations = []struct {
 		"the same row transitions in_progress -> completed; without UPDATE the MCP " +
 			"could take a claim it could never settle"},
 
-	// RM-201 (#323). ADR-0044 gives `innsegl resolve-alert` this role, and
-	// the role never had the table: measured live, every resolution failed
-	// with "permission denied for table alert_resolutions".
+	// RM-201 (#323). ADR-0044 gave the resolve-alert CLI this role, and the
+	// role never had the table: measured live, every resolution failed with
+	// "permission denied for table alert_resolutions". The CLI is gone
+	// (ADR-0071); the sealer still closes drift alerts under this role
+	// (ADR-0055).
 	{"resolve an alert", `INSERT INTO innsegl.alert_resolutions (event_id, resolved_by, reason)
 	 VALUES ('deploy-probe', 'probe', 'probe') RETURNING event_id, resolved_at`, true,
-		"ADR-0044: innsegl resolve-alert runs under this role and appends a resolution"},
+		"ADR-0055: the sealer runs under this role and appends a drift alert's resolution"},
 
 	// RM-235 (#380). ADR-0060 decision 3: the gateway's own run mapping is a
 	// table beside innsegl.events, written by this SAME role -- appendonly.sql's

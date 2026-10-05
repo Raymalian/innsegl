@@ -82,11 +82,10 @@ package gateway
 //
 // Snapshot's workingDirectory argument is already resolved onto this
 // process's own filesystem. The one existing translation from a
-// harness-reported HOST path onto that filesystem is
-// internal/mcp/workspace.go's containerPath, reached in process through
-// internal/mcp/gateway.go's exported ResolveWorkspaceForGateway (used
-// elsewhere in this package by workspace.go's MCPWorkspaceResolver, over
-// the SAME RequestFacts.WorkingDirectory this package's facts.go extracts).
+// harness-reported HOST path onto that filesystem was describe_workspace's,
+// removed by ADR-0071 along with the resolver this package built on it; the
+// core now reads no client tree, and a session's workspace is what its
+// client states (ADR-0064).
 // This file does not repeat that translation, and does not import anything
 // that would let it: reusing it is whichever caller resolves a request's
 // working directory before deciding to snapshot it at all, so a working
@@ -432,8 +431,7 @@ func (s *Snapshotter) discover(ctx context.Context, dir string) (top, commonDir,
 //     AND every host of one repository, because remote config is shared
 //     verbatim project data, unlike any filesystem path a linked worktree's
 //     ".git" file might record in another namespace's spelling. The same
-//     source describe_workspace already prefers for the identifier it
-//     derives (internal/mcp/workspace.go).
+//     source internal/workspace prefers for the identifier it derives.
 //  2. Failing that, the repository's OWN first commit -- equally stable
 //     across every worktree and every clone of one repository, and immune
 //     to the same namespace-spelling risk, for a repository that simply has
