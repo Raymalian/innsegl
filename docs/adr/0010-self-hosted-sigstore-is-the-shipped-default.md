@@ -1,6 +1,6 @@
 # ADR-0010: Ship self-hosted Fulcio/Rekor as the default, and demote public Sigstore to "where an accepted issuer already exists"
 
-- Status: accepted
+- Status: accepted; amended 2026-10-05 (see the Amendment)
 - Date: 2026-08-28
 - Deciders: Mike
 - Supersedes in part: [ADR-0002](0002-public-sigstore-default.md) (its *Decision* only; its
@@ -302,3 +302,80 @@ answer would be useful to more than this project.
 That question is not on the critical path. This ADR does not wait for it, and
 the recommendation above does not change if the answer is a friendly one — an
 issuer added on Sigstore's timetable is a future upgrade, not a v0.1 default.
+
+## Amendment (2026-10-05): Rekor's search index moves into the log database
+
+The compose shape this ADR made the shipped default ran Rekor's search index
+in a Redis container, `rekor-redis`, on a volume of its own. That index is the
+map from artifact digest to entry UUID that `innsegl verify` asks through
+`/api/v1/index/retrieve` (invariant I5: a third party verifies against the
+log). Rekor writes an index row when it writes an entry and never afterwards.
+The Redis volume was not one of the trust volumes, so `down -v` removed it
+while Trillian kept every entry, and the log then answered "no such entry" for
+good commits (OPS-036). The answer was to walk the whole log at every start
+(`make sigstore-up` → `rekor-reindex`).
+
+**Decision.** The index is a table in MySQL on `trillian-db` (#451). Rekor
+v1.3.10 runs with `--search_index.storage_provider=mysql` and
+`--search_index.mysql.dsn=rekor:rekor-index@tcp(trillian-db:3306)/rekor_index`.
+`rekor-redis`, its network membership, its volume, the `--redis_server.*`
+flags and the reindex at start are removed. The stack has one container fewer.
+
+- **Its own database and user.** `deploy/compose/sigstore/rekor-index.sql`
+  creates the `rekor_index` database and a `rekor` user whose grant is that
+  database only. `trillian-db` runs the file with `--init-file` at every start,
+  so a volume made before this change gets the user without a manual step.
+  Rekor creates its own table, `EntryIndex`, on first connect.
+- **The network shape changes; the claim moves to the grant.**
+  `innsegl-sigstore-rekor-index` now has the members `rekor` and `trillian-db`,
+  replacing ADR-0029's `rekor`, `rekor-redis`. Rekor is still not on
+  `innsegl-sigstore-trillian-db`. It can reach the MySQL server, but only as a
+  user who may not read or write Trillian's tables.
+- **The index survives what the log survives.** It lives on
+  `sigstore-trillian-db-data`, the trust volume that OPS-032 shows `down -v`
+  only detaches. OPS-036 now holds because nothing can remove the index
+  without removing the log, not because start repairs it.
+
+**Measured** with the pinned images (rekor-server v1.3.10, Trillian
+scaffolding v1.7.1, `db_server` v1.4.0, which is MySQL 5.7.34), in a
+throwaway compose project:
+
+1. Rekor starts with the MySQL index and creates `EntryIndex`
+   (`UNIQUE (EntryKey, EntryUUID)`). Without the user it exits with
+   `Access denied for user 'rekor'` and restarts until the user exists.
+2. A new entry is found by its `sha256:` hash at once.
+3. It is still found after rekor is recreated and after trillian-db restarts.
+4. Entries written under the Redis index return `[]` after the switch. Rekor's
+   own `backfill-index` tool (v1.3.10) puts them in the table; all three
+   resolved afterwards. A second run over the same range adds no rows. `-end`
+   is inclusive, and an index past the end of the log fails the run.
+5. The `rekor` user is refused `SELECT` on `test.Trees`.
+6. With `CREATE USER IF NOT EXISTS` the init file failed on a fresh volume:
+   the image's first-boot entrypoint deletes the user's `mysql.user` row but
+   not its `mysql.db` grant. The file drops and recreates the user instead.
+
+**Upgrading an existing log is automatic.** Entries written before this
+change are not in the new table, and until they are, `innsegl verify` reports
+their commits as never logged, and the reconciler would act on the same
+answer. So every bring-up path (`make start`, `make update`, `innsegl-update`)
+brings trillian-db and rekor up on the new shape and then runs one Makefile
+target, `rekor-index-ready`, before the core starts. (`make update` brings up
+only the log's services, never Fulcio, which a key-custody host runs under
+`sigstore.keycustody.yml`.) It removes the `rekor-redis` container by name,
+then pins the log, then runs
+`scripts/rekor-reindex.sh --if-behind`. That counts the distinct entry UUIDs
+of the served tree in `EntryIndex` (a UUID begins with the tree id in hex) and
+runs `backfill-index` over 0..treeSize-1 only when the count is below the
+log's size. It fails the bring-up if the index cannot be read or the backfill
+does not finish. After one backfill Rekor indexes every new entry itself, so
+later starts read one count and do nothing. Measured: 1,600 entries backfilled
+in about 3 seconds at four workers; the no-op check took under a second.
+`--remove-orphans` is deliberately not used: `innsegl-ca-store` belongs to the
+same compose project (`sigstore.keycustody.yml`) and would be removed with
+it. The leftover Redis volume is unmounted and holds only digests and
+identities that are in the log anyway; it can be removed by hand.
+
+**The test harnesses match.** The harnesses that stand up their own Rekor
+(`internal/segment`, `test/chaos`, `test/load`) run the same
+`rekor-index.sql` with `--init-file` and the same index flags, so no test log
+is shaped differently from the shipped one.
