@@ -54,7 +54,7 @@ import (
 //
 //   - SPIRE is the shipped trio from deploy/compose/spire.yml, scoped to this
 //     process by deploy/compose/spire-testscope.yml.
-//   - Fulcio and Rekor (and Trillian, and Redis) are the shipped stack from
+//   - Fulcio and Rekor (and Trillian, and its MySQL) are the shipped stack from
 //     deploy/compose/sigstore.yml, scoped by
 //     internal/signing/testdata/sigstore-testscope.yml.
 //   - Postgres is a real postgres:16 container.

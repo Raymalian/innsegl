@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -61,7 +62,12 @@ const (
 	defaultTrillianLogServerImage = "ghcr.io/sigstore/scaffolding/trillian_log_server:v1.7.1"
 	defaultTrillianLogSignerImage = "ghcr.io/sigstore/scaffolding/trillian_log_signer:v1.7.1"
 	defaultTrillianDBImage        = "gcr.io/trillian-opensource-ci/db_server:v1.4.0"
-	defaultRekorRedisImage        = "redis:7-alpine"
+	// Rekor's search index is a table in the Trillian database, created by
+	// the shipped grant exactly as trillian-db creates it (#451). Relative to
+	// this package; test/deploy checks the compose DSN agrees.
+	rekorIndexSQL  = "../../deploy/compose/sigstore/rekor-index.sql"
+	rekorIndexUser = "rekor:rekor-index"
+	rekorIndexDB   = "rekor_index"
 
 	postgresUser     = "innsegl"
 	postgresPassword = "innsegl-load-test"
@@ -436,8 +442,8 @@ func (s *stack) waitForObjectStore(ctx context.Context, timeout time.Duration) e
 	return fmt.Errorf("the object store never became ready: %w", last)
 }
 
-// startRekor brings up MySQL, the Trillian log server and sequencer, Redis and
-// Rekor. The shape is internal/segment/rekorharness_test.go's, which is
+// startRekor brings up MySQL (which also holds the search index), the
+// Trillian log server and sequencer, and Rekor. The shape is internal/segment/rekorharness_test.go's, which is
 // upstream Rekor's own compose reference; OPS-002 anchors against the same log
 // SEG-003 does so that "the segment anchored" means the same thing in both.
 func (s *stack) startRekor(ctx context.Context, suffix string) error {
@@ -447,26 +453,24 @@ func (s *stack) startRekor(ctx context.Context, suffix string) error {
 	}
 	s.rekorBaseURL = "http://127.0.0.1:" + port
 
+	indexSQL, absErr := filepath.Abs(rekorIndexSQL)
+	if absErr != nil {
+		return fmt.Errorf("locate rekor-index.sql: %w", absErr)
+	}
 	db := "innsegl-load-tdb-" + suffix
 	if err := s.run(ctx, db,
 		"--env", "MYSQL_ROOT_PASSWORD="+trillianDBPassword,
 		"--env", "MYSQL_DATABASE="+trillianDBName,
 		"--env", "MYSQL_USER="+trillianDBUser,
 		"--env", "MYSQL_PASSWORD="+trillianDBPassword,
+		"--volume", indexSQL+":/etc/mysql/rekor-index.sql:ro",
 		envImage("INNSEGL_TEST_TRILLIAN_DB_IMAGE", defaultTrillianDBImage),
+		"mysqld", "--init-file=/etc/mysql/rekor-index.sql",
 	); err != nil {
 		return fmt.Errorf("start trillian database: %w", err)
 	}
 	if err := s.waitForTrillianSchema(ctx, db, 4*time.Minute); err != nil {
 		return err
-	}
-
-	redis := "innsegl-load-redis-" + suffix
-	if err := s.run(ctx, redis,
-		envImage("INNSEGL_TEST_REKOR_REDIS_IMAGE", defaultRekorRedisImage),
-		"--bind", "0.0.0.0", "--appendonly", "no",
-	); err != nil {
-		return fmt.Errorf("start redis: %w", err)
 	}
 
 	mysqlURI := fmt.Sprintf("%s:%s@tcp(%s:3306)/%s",
@@ -503,7 +507,8 @@ func (s *stack) startRekor(ctx context.Context, suffix string) error {
 		rekorImage(),
 		"serve",
 		"--trillian_log_server.address="+logServer, "--trillian_log_server.port=8090",
-		"--redis_server.address="+redis, "--redis_server.port=6379",
+		"--search_index.storage_provider=mysql",
+		"--search_index.mysql.dsn="+rekorIndexUser+"@tcp("+db+":3306)/"+rekorIndexDB,
 		"--host=0.0.0.0", "--port=3000", "--rekor_server.address=0.0.0.0",
 		"--rekor_server.signer=memory",
 		"--rekor_server.hostname="+rekorOrigin,
