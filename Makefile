@@ -22,7 +22,7 @@ COVERPROFILE := cover.out
 
 .PHONY: all build test test-clean lint cover smoke smoke-down spire-up spire-verify \
         spire-down spire-admin-relay-up spire-admin-relay-down \
-        sigstore-up sigstore-verify sigstore-down rekor-tlog-id rekor-reindex \
+        sigstore-up rekor-log-up rekor-index-ready sigstore-verify sigstore-down rekor-tlog-id rekor-reindex \
         innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
         innsegl-trust-volumes innsegl-trust-status \
@@ -187,36 +187,54 @@ sigstore-up: innsegl-trust-volumes
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
 	  $(INNSEGL_TRUST_ENV) docker compose -f deploy/compose/sigstore.yml up -d
+	@$(MAKE) --no-print-directory rekor-index-ready
+
+# rekor-log-up: the log's own services brought up again, for `make update`.
+# Compose recreates only what changed, so on most updates this does nothing;
+# when sigstore.yml changed the log (#451 did) it is how the change reaches a
+# running host. Fulcio is NOT named: on a host that runs it under
+# sigstore.keycustody.yml, an `up` of fulcio from sigstore.yml alone would
+# put the file CA back. `make start` brings Fulcio up as it always has.
+rekor-log-up:
+	@test -n '$(INNSEGL_REKOR_ALLOW_NEW_TREE)' || scripts/rekor-tlog-pin.sh guard
+	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
+	  $(INNSEGL_TRUST_ENV) docker compose -f deploy/compose/sigstore.yml up -d trillian-db trillian-log-server trillian-log-signer rekor
+	@$(MAKE) --no-print-directory rekor-index-ready
+
+# rekor-index-ready: the log pinned and its search index complete, before
+# anything that verifies starts. sigstore-up and rekor-log-up both end here.
+#
+# The old rekor-redis container (#451) is removed BY NAME. `up` leaves a
+# container whose service is gone running, and --remove-orphans is NOT the
+# answer: innsegl-ca-store is a service of this same compose project,
+# declared in sigstore.keycustody.yml, and an `up` of sigstore.yml alone with
+# --remove-orphans would remove the CA store on every host using key custody.
+# Its volume is left; nothing mounts it.
+#
+# THE SEARCH INDEX IS NOT REBUILT AT EVERY START, and that is the point of
+# #451. The index was Redis on a volume of its own, `down -v` removed it while
+# the log kept every entry, and `innsegl verify` then accused good commits
+# (OPS-036), so bring-up walked the whole log every time. Since ADR-0010's
+# 2026-10-05 amendment it is a table in trillian-db, on the trust volume the
+# log lives on. --if-behind asks the index how many of this tree's entries it
+# holds and backfills only when that is fewer than the log: ONCE on a host
+# whose log predates the move, and never after. It FAILS the bring-up when it
+# cannot finish, because the core must not start verifying against an index
+# that would call good commits never logged.
+rekor-index-ready:
+	@docker rm -f innsegl-sigstore-rekor-redis >/dev/null 2>&1 || true
 	@# Waits for the log, and a bring-up that cannot pin it FAILS (#345): an
 	@# unpinned log is refused by the guard on the next start.
 	@$(MAKE) --no-print-directory rekor-tlog-id
-	@$(MAKE) --no-print-directory rekor-reindex
+	@INNSEGL_REKOR_URL='$(or $(INNSEGL_REKOR_URL),http://127.0.0.1:$(INNSEGL_REKOR_PORT))' \
+	  scripts/rekor-reindex.sh --if-behind
 
-# REBUILDING THE SEARCH INDEX, and why bring-up does it every time.
-#
-# sigstore-rekor-search is Redis's map from artifact digest to entry UUID. It is
-# DERIVED — rebuildable from Trillian by walking the log — which is exactly why
-# it is not one of the four volumes doc 05 §2 puts outside the project. But
-# rebuildable is worth nothing if nothing rebuilds it, and `down -v` removes it
-# while leaving every entry in place.
-#
-# MEASURED 2026-09-16, proving OPS-032: after a `down -v` the log held the same
-# tree and the same 25 entries, and `innsegl verify` reported of a perfectly
-# good commit "the log answered, and it holds no entry whose artifact is
-# sha256:d8b5… Nothing ever logged a signature over this commit object."
-#
-# That is a FALSE ACCUSATION and not an unavailable verdict — doc 06 P2's
-# tri-state has no room for one, and AB-08 is about the opposite confusion.
-# Rekor indexes an entry when it is written and never afterwards, so nothing
-# was going to fix this on its own. The rebuild is idempotent and took under a
-# second for 25 entries. It skips itself when the index already covers the log
-# and otherwise indexes only what is new, with progress output (RM-324); it is best-effort because a log that is not answering
-# yet is a race and not a fault, and the readiness report asks again.
-
-## rekor-reindex: rebuild Rekor's digest->entry index from the log itself
+## rekor-reindex: backfill Rekor's search index from the whole log, always
+##   (bring-up does it only when the index is behind; this is the repair)
 rekor-reindex:
-	-@INNSEGL_REKOR_URL='$(or $(INNSEGL_REKOR_URL),http://127.0.0.1:$(INNSEGL_REKOR_PORT))' \
-	  scripts/rekor-reindex.sh 2>&1
+	@INNSEGL_REKOR_URL='$(or $(INNSEGL_REKOR_URL),http://127.0.0.1:$(INNSEGL_REKOR_PORT))' \
+	  scripts/rekor-reindex.sh
 
 ## sigstore-verify: obtain a real Fulcio certificate for a real JWT-SVID
 sigstore-verify:
@@ -589,8 +607,10 @@ start:
 	@scripts/setup-link.sh || true
 
 ## update: rebuild and restart innsegl's own services only, for a stack that
-##   is already up (`make start` once). SPIRE, Fulcio and Rekor keep running
-##   and the log is not reindexed, so a code update takes the build and a
+##   is already up (`make start` once). SPIRE and Fulcio keep running; the
+##   log's services are brought up again, which recreates only what changed
+##   in them, and the log's search index is backfilled if it is behind
+##   (#451). A code update takes the build and a
 ##   restart of what changed, not a full start. `docker compose up -d`
 ##   recreates only the services whose image or settings changed. With a
 ##   bundle from `make image-bundle` in dist/ for this commit, it loads and
@@ -604,10 +624,11 @@ update:
 	   echo "make update: already up to date ($(DEPLOY_COMMIT)); nothing to do"; exit 0; fi; \
 	 [ "$$deployed" = "$(DEPLOY_COMMIT)" ] && echo "make update: the core is $${core:-not there}; starting it again"; \
 	 echo "make update: deployed $${deployed:-an unrecorded checkout}, checkout is $(DEPLOY_COMMIT)"; \
+	 $(MAKE) --no-print-directory rekor-log-up && \
 	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services && \
 	 mkdir -p "$$(dirname '$(DEPLOYED_FILE)')" && echo '$(DEPLOY_COMMIT)' > '$(DEPLOYED_FILE)'
 	@echo
-	@echo "updated: only the services whose image changed were restarted; the trust services were not touched"
+	@echo "updated: only the services whose image or settings changed were restarted"
 
 ## image-bundle: build the images once, here, for the deployment host
 ##   (INNSEGL_IMAGE_PLATFORM, default linux/amd64), into one file in dist/

@@ -119,8 +119,7 @@ purpose() {
     innsegl-sigstore-rekor)                echo "the transparency log" ;;
     innsegl-sigstore-trillian-log-server)  echo "the log's storage" ;;
     innsegl-sigstore-trillian-log-signer)  echo "the log's sequencer" ;;
-    innsegl-sigstore-trillian-db)          echo "the log's database" ;;
-    innsegl-sigstore-rekor-redis)          echo "the log's search index" ;;
+    innsegl-sigstore-trillian-db)          echo "the log's database and search index" ;;
     *)                                     echo "(undescribed)" ;;
   esac
 }
