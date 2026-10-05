@@ -34,15 +34,11 @@ import (
 // written to return an error. The refusal has to come from a real server's own
 // authorization, over the real protocol.
 //
-// THE STORE RUNS AS ONE CONTAINER HERE AND AS THREE IN THE DEPLOYMENT, and
-// saying which difference that is matters. The deployment splits the S3
-// gateway from the Filer because the Filer is a second door to the same bytes
-// with no lock on it, and that split is about REACHABILITY — it is measured by
-// OPS-029, against the compose file, where networks exist. What these cases
-// measure is AUTHORIZATION, which is the gateway's alone: the same binary, the
-// same identity file, the same bucket. One container costs three fewer on a
-// machine #100 already has arithmetic about, and gives up nothing these cases
-// look at. The Filer's HTTP port is not published here either way.
+// THE STORE RUNS THE SHIPPED COMMAND. Since #451 the deployment's object store
+// is one process too, so the container here is started from innsegl-s3's own
+// `command:`, environment and host map, read out of the compose file. What
+// these cases measure is AUTHORIZATION, which is the S3 layer's alone; OPS-029
+// measures REACHABILITY against the same command on a real network.
 //
 // THE SCRIPTS RUN IN TWO IMAGES because the deployment runs them in two: the
 // identity file is written inside the store's own image by the one-shot that
@@ -151,27 +147,31 @@ func startObjectStore(ctx context.Context, t *testing.T, bucket string) (*object
 		client: shippedS3ClientImage(t, root), root: root,
 	}
 
-	if _, err := docker(ctx, "create",
+	if err := composeUsable(ctx); err != nil {
+		return nil, err
+	}
+	shipped := interpolateCompose(ctx, t, bucket, "deploy/compose/innsegl.yml").service(t, objectStoreService)
+	args := []string{"create",
 		"--name", name,
-		"--publish", "127.0.0.1:"+port+":8333",
+		"--publish", "127.0.0.1:" + port + ":8333",
 		// THE SHIPPED SCRIPTS AT THE PATH THE COMPOSE FILE MOUNTS THEM, and
 		// mounted the way the compose file mounts them. What this test runs
 		// must be the artifact an adopter runs, not a copy of it.
-		"--volume", root+"/deploy/compose/innsegl:/innsegl/init:ro",
-		"--env", "INNSEGL_S3_IDENTITIES_FILE="+storeIdentitiesFile,
-		"--env", "INNSEGL_OBJECT_STORE_ACCESS_KEY="+storeRootUser,
-		"--env", "INNSEGL_OBJECT_STORE_SECRET_KEY="+storeRootPassword,
-		"--env", "INNSEGL_OBJECT_STORE_BUCKET="+bucket,
-		"--env", "INNSEGL_OBJECT_STORE_PREFIX="+storeSegmentPrefix,
-		"--entrypoint", "sh",
-		shippedObjectStoreImage(t, root), "-c",
-		// The shipped one-shot, then the server, in the order the compose
-		// stack runs them: nothing may answer a signed request before the
-		// identity file exists.
-		"/innsegl/init/s3-identities.sh && exec weed server -dir=/data -volume.max=100 -s3 "+
-			"-s3.config="+storeIdentitiesFile+" -s3.port=8333 -s3.iam=false "+
-			"-s3.port.iceberg=0 -s3.port.lance=0",
-	); err != nil {
+		"--volume", root + "/deploy/compose/innsegl:/innsegl/init:ro",
+		"--env", "INNSEGL_S3_IDENTITIES_FILE=" + storeIdentitiesFile,
+		"--env", "INNSEGL_OBJECT_STORE_ACCESS_KEY=" + storeRootUser,
+		"--env", "INNSEGL_OBJECT_STORE_SECRET_KEY=" + storeRootPassword,
+		"--env", "INNSEGL_OBJECT_STORE_BUCKET=" + bucket,
+		"--env", "INNSEGL_OBJECT_STORE_PREFIX=" + storeSegmentPrefix,
+	}
+	args = append(args, shippedRunOptions(shipped)...)
+	args = append(args, "--entrypoint", "sh", shipped.Image, "-c",
+		// The shipped one-shot, then the shipped server, in the order the
+		// compose stack runs them: nothing may answer a signed request before
+		// the identity file exists.
+		"/innsegl/init/s3-identities.sh && exec sh /innsegl/init/object-store-start.sh "+
+			strings.Join(shipped.Command, " "))
+	if _, err := docker(ctx, args...); err != nil {
 		return nil, fmt.Errorf("creating the object store container: %w", err)
 	}
 	if _, err := docker(ctx, "start", name); err != nil {
@@ -291,6 +291,7 @@ type interpolatedService struct {
 	Environment map[string]*string `json:"environment"`
 	Image       string             `json:"image"`
 	Command     []string           `json:"command"`
+	Entrypoint  []string           `json:"entrypoint"`
 	// Networks is a map of network name to its per-service options; the
 	// options are never read, only the membership, which is the access-control
 	// list doc 05 §1 asks for.
@@ -308,6 +309,8 @@ type interpolatedService struct {
 	// Target: whether a container-side port is reachable from the host at
 	// all, and on which address — GW-005 reads this for the gateway's.
 	Ports []composePort `json:"ports"`
+	// ExtraHosts are the resolved `extra_hosts:` entries, as `name=address`.
+	ExtraHosts []string `json:"extra_hosts"`
 	// StopGracePeriod is how long the runtime waits after SIGTERM before it
 	// kills the container; empty is the runtime's default (10s).
 	StopGracePeriod string `json:"stop_grace_period"`

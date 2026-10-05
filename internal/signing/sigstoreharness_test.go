@@ -42,8 +42,9 @@ import (
 //
 //   - deploy/compose/spire.yml — spire-server, spire-agent and the OIDC
 //     discovery provider Fulcio fetches its JWKS from.
-//   - deploy/compose/sigstore.yml — Fulcio, Rekor, the Trillian pair, MySQL
-//     and Redis, wired and segmented as ADR-0029 decided.
+//   - deploy/compose/sigstore.yml — Fulcio, Rekor, the Trillian pair and
+//     MySQL (which also holds Rekor's search index, #451), wired and
+//     segmented as ADR-0029 decided.
 //
 // Without Docker, or without a `gitsign` binary, every integration case skips
 // with a message naming what went unproven rather than passing quietly.

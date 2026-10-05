@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -44,7 +45,8 @@ import (
 //            them, and never silently adopts another deployment's.
 //   OPS-034  readiness says "the pinned tree is absent" in those words.
 //   OPS-035  the backup that already exists runs on a timer.
-//   OPS-036  bring-up rebuilds the search index `down -v` takes with it.
+//   OPS-036  the search index lives in the log's database, so `down -v`
+//            cannot take it while leaving the log.
 //
 // A refusal nobody has watched happen is not known to work, which is why
 // OPS-031 runs a real `docker compose down -v` against a real project and
@@ -609,30 +611,41 @@ func TestOPS034ReadinessNamesAnAbsentPinnedTree(t *testing.T) {
 	}
 }
 
-// OPS-036 — the other way the log answers
-// wrongly after a teardown, and this one is worse than an outage.
+// OPS-036 — the other way the log answered wrongly after a teardown, and this
+// one is worse than an outage.
 //
-// MEASURED while proving OPS-032. `down -v` removes sigstore-rekor-search, the
-// Redis map from artifact digest to entry UUID. The entries themselves are
+// MEASURED while proving OPS-032. `down -v` removed sigstore-rekor-search, the
+// Redis map from artifact digest to entry UUID. The entries themselves were
 // untouched — same tree, same size — but Rekor indexes an entry when it is
-// written and never afterwards, so the log can no longer FIND them. `innsegl
-// verify` then reports, of a commit whose entry is sitting in the log:
+// written and never afterwards, so the log could no longer FIND them. `innsegl
+// verify` then reported, of a commit whose entry was sitting in the log:
 //
 //  2. Rekor inclusion proven — result: failed
 //     the log answered, and it holds no entry whose artifact is sha256:d8b5…
 //     Nothing ever logged a signature over this commit object.
 //
 // That is a FALSE ACCUSATION, not an unavailable verdict, and doc 06 P2's
-// tri-state has no room for one. The index is derived and rebuildable — which
-// is why it is not one of the irreplaceable four — but rebuildable is worth
-// nothing if nothing rebuilds it. Running scripts/rekor-reindex.sh turned the
-// same commit back to VERIFIED, 50 keys from 25 log entries.
-func TestOPS036BringUpRebuildsTheSearchIndex(t *testing.T) {
-	mk := readFile(t, filepath.Join(repoRoot(t), "Makefile"))
-	if !strings.Contains(mk, "rekor-reindex.sh") {
-		t.Errorf("no bring-up target rebuilds Rekor's search index. `down -v` " +
-			"removes it, and a log that cannot find an entry it holds makes " +
-			"`innsegl verify` accuse a commit that is perfectly good")
+// tri-state has no room for one. It was first repaired by reindexing at every
+// bring-up. Since ADR-0010's 2026-10-05 amendment it cannot happen: the index
+// is a table in trillian-db, on the trust volume OPS-032 proves `down -v`
+// only detaches, so the index survives exactly what the log survives. Measured
+// against the pinned images: an entry stays findable across a recreate of
+// rekor and a restart of trillian-db.
+func TestOPS036TheSearchIndexSurvivesWhatTheLogSurvives(t *testing.T) {
+	body := readFile(t, filepath.Join(repoRoot(t), "deploy", "compose", "sigstore.yml"))
+
+	dsn := regexp.MustCompile(`"--search_index\.mysql\.dsn=[^"]*@tcp\(([a-z-]+):3306\)/`).
+		FindStringSubmatch(serviceBlock(body, "rekor"))
+	if dsn == nil {
+		t.Fatal("rekor keeps its search index somewhere other than a MySQL database; " +
+			"`down -v` would take it while leaving every entry in place")
+	}
+	if !strings.Contains(serviceBlock(body, dsn[1]), "- sigstore-trillian-db-data:/var/lib/mysql") {
+		t.Errorf("the index database %s does not keep its data on sigstore-trillian-db-data, "+
+			"the trust volume `down -v` only detaches", dsn[1])
+	}
+	if !regexp.MustCompile(`(?m)^  sigstore-trillian-db-data:\n.*\n    external: \$\{INNSEGL_TRUST_VOLUMES_EXTERNAL`).MatchString(body) {
+		t.Error("sigstore-trillian-db-data is no longer one of the external trust volumes")
 	}
 }
 

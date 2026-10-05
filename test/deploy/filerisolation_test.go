@@ -5,6 +5,9 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,13 +16,18 @@ import (
 	"time"
 
 	"github.com/minio/minio-go/v7"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"innsegl.dev/innsegl/internal/segment"
 )
 
 // ---------------------------------------------------------------------------
 // OPS-029 (PROPOSED for doc 07's TC-OPS) — the store's Filer is a second door
-// to the same bytes, and nothing but the gateway can reach it.
+// to the same bytes, and nothing on the object network can reach it.
 //
 // THE FINDING THIS CASE EXISTS FOR, measured on the pinned image before any of
 // it was written:
@@ -33,27 +41,35 @@ import (
 //	No credential. No signature. One request, 204, and the S3 layer then
 //	reports NoSuchKey.
 //
-// Object lock is enforced at the S3 layer. The Filer is a different process
-// speaking a different protocol to the same metadata, and it has no lock on
-// it. So I4 — a sealed segment's bytes are never destroyed, by anyone — is
-// worth exactly what the reachability of that door is worth, and reachability
-// is the only thing there is to control.
+// Object lock is enforced at the S3 layer. The Filer is a different API to the
+// same metadata, and it has no lock on it. The master's and the volume
+// server's HTTP APIs write and delete raw needles with no credential either.
+// So I4 — a sealed segment's bytes are never destroyed, by anyone — is worth
+// exactly what the reachability of those doors is worth.
 //
-// TWO CONTROLS CLOSE IT IN THE REFERENCE STACK AND THIS CASE MEASURES BOTH:
+// THE STORE IS ONE PROCESS SINCE #451, AND TWO CONTROLS CLOSE THE DOORS:
 //
-//	1. the Filer's HTTP API is switched off at the process (-disableHttp),
-//	2. the Filer is on a network whose only other member is the gateway.
+//	1. every listener but S3 binds the container's loopback (-ip.bind), so
+//	   from innsegl-objects only the S3 port accepts a connection,
+//	2. the Filer's HTTP handlers are off (-filer.disableHttp), so even on
+//	   loopback the destroying request finds nothing.
+//
+// S3's own gRPC port binds where S3 does, so it is reachable from
+// innsegl-objects. It requires a per-host key. Phase B asserts an
+// administrative call there is refused unsigned and refused when signed with
+// the former public default, and accepted past authorisation only when signed
+// with this host's key.
 //
 // WHY PHASE A EXISTS. "The delete was refused" is also true of a wrong path, a
 // misspelled bucket, a server that is not running and an API that never
 // existed. A refusal is evidence only when the same request, in the same
-// shape, is shown WORKING somewhere — so phase A stands up the arrangement the
-// reference stack deliberately avoids (one process serving S3 and the Filer on
-// one bind address, which is what `weed server -s3` is), writes a retained
-// object through the gateway, watches the gateway refuse to delete it for the
-// ROOT identity, and then destroys it with the unauthenticated request. That
-// is the anti-vacuity control appendonlyrole_test.go and SEG-005's canary are
-// both built around, and it is why phase B's silence means something.
+// shape, is shown WORKING somewhere — so phase A stands up the same process
+// WITHOUT the controls (default bind address, Filer HTTP on, no key), writes a
+// retained object through the gateway, watches the gateway refuse to delete it
+// for the ROOT identity, and then destroys it with the unauthenticated
+// request. It also shows the gRPC call accepted there. That is the
+// anti-vacuity control appendonlyrole_test.go and SEG-005's canary are both
+// built around, and it is why phase B's silence means something.
 //
 // It also performs a destruction in order to report one, which every other
 // case in this package refuses to do. The difference is what is destroyed: an
@@ -111,35 +127,10 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 	// started, because if this has drifted the containers below would be
 	// measuring an arrangement the deployment does not have.
 	// -----------------------------------------------------------------------
-	filer := cfg.service(t, "innsegl-object-filer")
-	gateway := cfg.service(t, "innsegl-s3")
-	store := cfg.service(t, "innsegl-object-store")
-
-	for _, member := range []struct {
-		service string
-		want    []string
-	}{
-		{"innsegl-object-filer", []string{"innsegl-object-backend"}},
-		{"innsegl-object-store", []string{"innsegl-object-backend"}},
-		{"innsegl-s3", []string{"innsegl-object-backend", "innsegl-objects"}},
-	} {
-		got := cfg.service(t, member.service).networkNames()
-		if strings.Join(got, ",") != strings.Join(member.want, ",") {
-			t.Errorf("deploy/compose/innsegl.yml puts %s on %v; doc 05 §1 requires %v.\n\n"+
-				"The gateway is the only service that may be on both. A Filer that joins "+
-				"innsegl-objects is reachable by the sealer, the canary and the one-time "+
-				"init, and its API destroys a retained object with no credential.",
-				member.service, got, member.want)
-		}
-	}
-	for _, service := range []string{"innsegl-sealer", "innsegl-mcp", "innsegl-canary", "innsegl-object-init"} {
-		for _, network := range cfg.service(t, service).networkNames() {
-			if network == "innsegl-object-backend" {
-				t.Errorf("deploy/compose/innsegl.yml puts %s on innsegl-object-backend. "+
-					"That network exists so that the Filer and the volume server have "+
-					"exactly one route in, and it is the gateway.", service)
-			}
-		}
+	shipped := cfg.service(t, objectStoreService)
+	if got := shipped.networkNames(); strings.Join(got, ",") != "innsegl-objects" {
+		t.Errorf("deploy/compose/innsegl.yml puts %s on %v; doc 05 §1 requires innsegl-objects "+
+			"only. Phase B below measures the store on that network.", objectStoreService, got)
 	}
 
 	// -----------------------------------------------------------------------
@@ -157,6 +148,10 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 	if portErr != nil {
 		t.Fatalf("reserving a host port: %v", portErr)
 	}
+	aGRPC, portErr := freeHostPort(ctx)
+	if portErr != nil {
+		t.Fatalf("reserving a host port: %v", portErr)
+	}
 	aName := o.tag + "-oneprocess-store"
 	o.containers = append(o.containers, aName)
 	discardError(docker(ctx, "rm", "--force", "--volumes", aName))
@@ -165,6 +160,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 		"--network", aNet,
 		"--network-alias", "oneprocess",
 		"--publish", "127.0.0.1:"+aPort+":8333",
+		"--publish", "127.0.0.1:"+aGRPC+":18333",
 		"--volume", root+"/deploy/compose/innsegl:/innsegl/init:ro",
 		"--env", "INNSEGL_S3_IDENTITIES_FILE="+storeIdentitiesFile,
 		"--env", "INNSEGL_OBJECT_STORE_ACCESS_KEY="+storeRootUser,
@@ -173,7 +169,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 		"--env", "INNSEGL_OBJECT_STORE_PREFIX="+storeSegmentPrefix,
 		"--entrypoint", "sh", o.store, "-c",
 		// `weed server -s3` — S3 AND the Filer in one process on one bind
-		// address. This is the thing deploy/compose/innsegl.yml splits.
+		// address, with none of the shipped controls.
 		"/innsegl/init/s3-identities.sh && exec weed server -dir=/data -volume.max=100 -s3 -filer "+
 			"-s3.config="+storeIdentitiesFile+" -s3.port=8333 -s3.iam=false "+
 			"-s3.port.iceberg=0 -s3.port.lance=0",
@@ -266,109 +262,91 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 			minio.ToErrorResponse(statErr).Code)
 	}
 
-	// -----------------------------------------------------------------------
-	// PHASE B — the shipped arrangement, and the same request finding nothing.
-	// -----------------------------------------------------------------------
-	t.Log("OPS-029 phase B: the shipped three-container arrangement")
+	// And S3's gRPC IAM cache, with no key: the call gets past authorisation
+	// and stops only at the empty request. This is the control for phase B's
+	// Unauthenticated.
+	if c := s3AdminCall(ctx, "127.0.0.1:"+aGRPC, ""); c != codes.InvalidArgument {
+		t.Fatalf("phase A's unauthenticated PutIdentity answered %v, want InvalidArgument (past "+
+			"authorisation, refused only for the empty identity). Without this control phase "+
+			"B's refusal says nothing.", c)
+	}
+	t.Log("OPS-029 phase A  unauthenticated PutIdentity on S3's gRPC port: accepted past authorisation")
 
-	backend := o.tag + "-backend"
+	// -----------------------------------------------------------------------
+	// PHASE B — the shipped process, and the same requests finding nothing.
+	// -----------------------------------------------------------------------
+	t.Log("OPS-029 phase B: the shipped one-process store")
+
 	objects := o.tag + "-objects"
-	for _, n := range []string{backend, objects} {
-		if _, err := docker(ctx, "network", "create", n); err != nil {
-			t.Fatalf("creating %s: %v", n, err)
-		}
-		o.networks = append(o.networks, n)
+	if _, err := docker(ctx, "network", "create", objects); err != nil {
+		t.Fatalf("creating %s: %v", objects, err)
 	}
+	o.networks = append(o.networks, objects)
 
-	// Every container below runs THE SHIPPED IMAGE WITH THE SHIPPED COMMAND,
-	// read out of the compose file rather than restated. The container names
-	// are per-run so a live deployment is untouched; the network ALIASES are
-	// the compose service names, because the shipped commands address each
-	// other by those.
-	starts := []struct {
-		alias   string
-		service interpolatedService
-		nets    []string
-		publish string
-	}{
-		{"innsegl-object-store", store, []string{backend}, ""},
-		{"innsegl-object-filer", filer, []string{backend}, ""},
-		{"innsegl-s3", gateway, []string{backend, objects}, "8333"},
-	}
 	bPort, portErr := freeHostPort(ctx)
 	if portErr != nil {
 		t.Fatalf("reserving a host port: %v", portErr)
 	}
-	for _, st := range starts {
-		cname := o.tag + "-" + st.alias
-		o.containers = append(o.containers, cname)
-		discardError(docker(ctx, "rm", "--force", "--volumes", cname))
+	bGRPC, portErr := freeHostPort(ctx)
+	if portErr != nil {
+		t.Fatalf("reserving a host port: %v", portErr)
+	}
+	if len(shipped.Command) == 0 {
+		t.Fatalf("deploy/compose/innsegl.yml gives %s no command; this case runs the "+
+			"SHIPPED one rather than a copy of it", objectStoreService)
+	}
 
-		args := []string{"run", "--detach", "--name", cname,
-			"--network", st.nets[0], "--network-alias", st.alias,
-			"--volume", root + "/deploy/compose/innsegl:/innsegl/init:ro",
-			"--env", "INNSEGL_S3_IDENTITIES_FILE=" + storeIdentitiesFile,
-			"--env", "INNSEGL_OBJECT_STORE_ACCESS_KEY=" + storeRootUser,
-			"--env", "INNSEGL_OBJECT_STORE_SECRET_KEY=" + storeRootPassword,
-			"--env", "INNSEGL_OBJECT_STORE_BUCKET=innsegl-ops029",
-			"--env", "INNSEGL_OBJECT_STORE_PREFIX=" + storeSegmentPrefix,
-		}
-		if st.publish != "" {
-			args = append(args, "--publish", "127.0.0.1:"+bPort+":"+st.publish)
-		}
-		args = append(args, "--entrypoint", "sh", st.service.Image, "-c",
-			// The gateway needs the identity file the compose stack's own
-			// one-shot writes; the other two need nothing. Running it
-			// unconditionally keeps one command for all three.
-			//
-			// THE WHOLE `command:` IS PASSED, not its tail. The image's
-			// entrypoint is what supplies `weed`, so the compose file's first
-			// element is already the subcommand — dropping it once left three
-			// containers exiting on an unknown flag and a phase that could not
-			// start (measured, the first time this was written).
-			"/innsegl/init/s3-identities.sh >/dev/null && exec weed "+
-				strings.Join(st.service.Command, " "))
-		if len(st.service.Command) == 0 {
-			t.Fatalf("deploy/compose/innsegl.yml gives %s no command; this case runs the "+
-				"SHIPPED one rather than a copy of it", st.alias)
-		}
-		if _, err := docker(ctx, args...); err != nil {
-			t.Fatalf("starting %s from the shipped command %v: %v", st.alias, st.service.Command, err)
-		}
-		if len(st.nets) > 1 {
-			for _, extra := range st.nets[1:] {
-				if _, err := docker(ctx, "network", "connect", "--alias", st.alias, extra, cname); err != nil {
-					t.Fatalf("joining %s to %s: %v", cname, extra, err)
-				}
-			}
-		}
+	// THE SHIPPED IMAGE, COMMAND, ENVIRONMENT AND HOST MAP, read out of the
+	// compose file rather than restated. The container name is per-run so a
+	// live deployment is untouched; the network alias is the service name,
+	// because that is what the sealer and the canary dial.
+	//
+	// THE WHOLE `command:` IS PASSED, not its tail. The image's entrypoint is
+	// what supplies `weed`, so the compose file's first element is already the
+	// subcommand — dropping it once left containers exiting on an unknown flag
+	// (measured, the first time this was written).
+	bName := o.tag + "-" + objectStoreService
+	o.containers = append(o.containers, bName)
+	discardError(docker(ctx, "rm", "--force", "--volumes", bName))
+	args := []string{"run", "--detach", "--name", bName,
+		"--network", objects, "--network-alias", objectStoreService,
+		"--publish", "127.0.0.1:" + bPort + ":8333",
+		"--publish", "127.0.0.1:" + bGRPC + ":18333",
+		"--volume", root + "/deploy/compose/innsegl:/innsegl/init:ro",
+		"--env", "INNSEGL_S3_IDENTITIES_FILE=" + storeIdentitiesFile,
+		"--env", "INNSEGL_OBJECT_STORE_ACCESS_KEY=" + storeRootUser,
+		"--env", "INNSEGL_OBJECT_STORE_SECRET_KEY=" + storeRootPassword,
+		"--env", "INNSEGL_OBJECT_STORE_BUCKET=innsegl-ops029",
+		"--env", "INNSEGL_OBJECT_STORE_PREFIX=" + storeSegmentPrefix,
+	}
+	args = append(args, shippedRunOptions(shipped)...)
+	args = append(args, "--entrypoint", "sh", shipped.Image, "-c",
+		"/innsegl/init/s3-identities.sh >/dev/null && exec sh /innsegl/init/object-store-start.sh "+
+			strings.Join(shipped.Command, " "))
+	if _, err := docker(ctx, args...); err != nil {
+		t.Fatalf("starting %s from the shipped command %v: %v", objectStoreService, shipped.Command, err)
 	}
 
 	bStore := &objectStoreContainer{
-		name: o.tag + "-innsegl-s3", endpoint: "127.0.0.1:" + bPort,
+		name: bName, endpoint: "127.0.0.1:" + bPort,
 		bucket: "innsegl-ops029", client: o.client, root: root,
 	}
 	if err := waitForObjectStore(ctx, bStore); err != nil {
-		for _, st := range starts {
-			logs, _ := docker(ctx, "logs", "--tail", "30", o.tag+"-"+st.alias) //nolint:errcheck // a best-effort diagnostic on a path that is already failing
-			t.Logf("--- %s ---\n%s", st.alias, logs)
-		}
-		t.Fatalf("the shipped three-container arrangement never answered: %v", err)
+		logs, _ := docker(ctx, "logs", "--tail", "40", bName) //nolint:errcheck // a best-effort diagnostic on a path that is already failing
+		t.Fatalf("the shipped one-process store never answered: %v\n%s", err, logs)
 	}
-	// The endpoint is the gateway's SERVICE NAME here, not loopback: the
-	// client is on a docker network in this phase rather than in the store
-	// container's own namespace, which is the arrangement the compose stack
-	// has and the whole reason this phase exists.
+	// The endpoint is the service name, not loopback: the client is on the
+	// docker network the sealer is on, which is the arrangement under test.
 	out, initErr = bStore.runObjectInitOn(ctx, objects,
-		"--env", "INNSEGL_OBJECT_STORE_URL=http://innsegl-s3:8333")
+		"--env", "INNSEGL_OBJECT_STORE_URL=http://"+objectStoreService+":8333")
 	t.Logf("--- object-init.sh, phase B ---\n%s", out)
 	if initErr != nil {
-		t.Fatalf("object-init.sh failed against the shipped arrangement: %v", initErr)
+		t.Fatalf("object-init.sh failed against the shipped store: %v", initErr)
 	}
 
-	// A retained segment for the attempt to be aimed at. Without one the
-	// request below would be asking the Filer to destroy nothing, and "nothing
-	// was destroyed" would be true however reachable the Filer was.
+	// A retained segment for the attempts to be aimed at. Without one the
+	// requests below would be asking to destroy nothing, and "nothing was
+	// destroyed" would be true however reachable the doors were.
 	bWorm, bWormErr := segment.NewWORM(ctx, segment.WORMConfig{
 		Endpoint:  bStore.endpoint,
 		AccessKey: storeRootUser,
@@ -386,56 +364,96 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 		t.Fatalf("writing the phase B object: %v", putErr)
 	}
 
-	// ---- the attempt, from the network the sealer and the canary are on ----
+	// ---- the control: the store IS reachable from innsegl-objects, on S3 ---
 	//
-	// The same request phase A destroyed a retained object with, made from the
-	// one place a compromised sealer, canary or init would make it from.
+	// Without this every refusal below would be indistinguishable from a
+	// container that is not running or a name that does not resolve.
+	if err := o.tcpProbe(ctx, objects, objectStoreService, "8333"); err != nil {
+		t.Fatalf("S3 is not reachable from innsegl-objects: %v\n\nThen the refusals below say "+
+			"nothing about the bind address; they say the store is not there.", err)
+	}
+	t.Logf("OPS-029 phase B  from innsegl-objects, %s:8333 (S3) accepts a connection", objectStoreService)
+
+	// ---- every other listener, from the network the sealer is on ----------
+	//
+	// HTTP and gRPC of the master, the volume server and the Filer. Each
+	// HTTP API among them writes or deletes with no credential.
+	for _, p := range []struct{ port, what string }{
+		{"9333", "master HTTP"}, {"19333", "master gRPC"},
+		{"8080", "volume HTTP"}, {"18080", "volume gRPC"},
+		{"8888", "Filer HTTP"}, {"18888", "Filer gRPC"},
+	} {
+		if err := o.tcpProbe(ctx, objects, objectStoreService, p.port); err == nil {
+			t.Errorf("a container on innsegl-objects CONNECTED to %s:%s (%s). Only S3 may "+
+				"listen beyond the container's loopback; -ip.bind=127.0.0.1 is the control.",
+				objectStoreService, p.port, p.what)
+		} else {
+			t.Logf("OPS-029 phase B  from innsegl-objects, %-11s :%-5s refused", p.what, p.port)
+		}
+	}
+
+	// ---- the attempt phase A destroyed with, from innsegl-objects ---------
 	code, curlErr = o.curl(ctx, objects, "DELETE",
-		filerDestroyURL("innsegl-object-filer", bStore.bucket, key))
+		filerDestroyURL(objectStoreService, bStore.bucket, key))
 	switch {
 	case curlErr == nil && isHTTPSuccess(code):
 		t.Errorf("a container on innsegl-objects REACHED the Filer and its DELETE answered "+
 			"HTTP %s.\n\nThat request destroys a COMPLIANCE-retained object with no "+
-			"credential — phase A measured it. doc 05 §1 requires the Filer to have exactly "+
-			"one route in, and it is the gateway.", code)
+			"credential — phase A measured it.", code)
 	case curlErr == nil:
-		t.Errorf("a container on innsegl-objects RESOLVED and REACHED the Filer; the request "+
-			"answered HTTP %s rather than failing to connect.\n\nThe HTTP listener being off "+
-			"is the second control, not the first: the first is that this name should not "+
-			"resolve from here at all.", code)
+		t.Errorf("a container on innsegl-objects REACHED the Filer; the request answered HTTP "+
+			"%s rather than failing to connect. The handlers being off is the second "+
+			"control, not the first: the port should not accept a connection from here.", code)
 	default:
 		t.Logf("OPS-029 phase B  from innsegl-objects, the Filer is not reachable: %v", curlErr)
 	}
 
-	// ---- and the control: it IS reachable from the gateway's own network ---
+	// ---- the second lock: on the container's own loopback -----------------
 	//
-	// Without this the refusal above would be indistinguishable from a Filer
-	// that is not running, a wrong name, or a store that has no Filer at all.
-	// The gRPC port is what the gateway itself uses and what -disableHttp
-	// leaves alone, so a connection to it proves the process is up and
-	// routable from here while the HTTP door on 8888 answers nothing.
-	if err := o.tcpProbe(ctx, backend, "innsegl-object-filer", "18888"); err != nil {
-		t.Errorf("the Filer is not reachable from innsegl-object-backend either: %v\n\n"+
-			"Then the refusal above says nothing about the isolation — it says the Filer "+
-			"is not running, and the gateway could not be serving this bucket.", err)
-	} else {
-		t.Logf("OPS-029 phase B  from innsegl-object-backend, the Filer's gRPC port accepts a " +
-			"connection, so the container is up and routable from there")
+	// The same request from inside the container, where the listener is.
+	// -filer.disableHttp leaves the port open and removes the handlers, so it
+	// answers, and must not answer 2xx.
+	inside, insideErr := docker(ctx, "exec", bName, "curl", "--silent", "--max-time", "10",
+		"--output", "/dev/null", "--write-out", "%{http_code}", "-X", "DELETE",
+		filerDestroyURL("127.0.0.1", bStore.bucket, key))
+	switch {
+	case insideErr != nil:
+		t.Errorf("the Filer's HTTP port did not answer on the container's own loopback: %v. "+
+			"Then the refusal above may be a Filer that is not running.", insideErr)
+	case isHTTPSuccess(inside):
+		t.Errorf("on the container's loopback the Filer's DELETE answered HTTP %s. "+
+			"-filer.disableHttp is the control that closes the door itself rather than only "+
+			"fencing it.", inside)
+	default:
+		t.Logf("OPS-029 phase B  on the container's loopback the Filer's DELETE answers HTTP %s "+
+			"— the handlers are off on a listener that is up", inside)
 	}
 
-	code, curlErr = o.curl(ctx, backend, "DELETE",
-		filerDestroyURL("innsegl-object-filer", bStore.bucket, key))
-	switch {
-	case curlErr == nil && isHTTPSuccess(code):
-		t.Errorf("the Filer's HTTP API answered HTTP %s from innsegl-object-backend. "+
-			"-disableHttp is the control that closes the door itself rather than only "+
-			"fencing it; without it the network is the only thing between a segment and "+
-			"one unauthenticated request.", code)
-	case curlErr == nil:
-		t.Logf("OPS-029 phase B  from innsegl-object-backend, the Filer's HTTP DELETE answers "+
-			"HTTP %s — the listener is gone, on a process that is up and routable", code)
-	default:
-		t.Logf("OPS-029 phase B  the Filer's HTTP API refused the connection outright: %v", curlErr)
+	// ---- S3's gRPC port requires this host's key --------------------------
+	if c := s3AdminCall(ctx, "127.0.0.1:"+bGRPC, ""); c != codes.Unauthenticated {
+		t.Errorf("an unsigned call on S3's gRPC port answered %v, want Unauthenticated. "+
+			"Phase A showed the same call accepted without a key.", c)
+	} else {
+		t.Log("OPS-029 phase B  unsigned call on S3's gRPC port: Unauthenticated")
+	}
+	if c := s3AdminCall(ctx, "127.0.0.1:"+bGRPC, formerFilerKeyDefault); c != codes.Unauthenticated {
+		t.Errorf("a call signed with the former public default key answered %v, want "+
+			"Unauthenticated. The key must be this host's own.", c)
+	} else {
+		t.Log("OPS-029 phase B  call signed with the former public default: Unauthenticated")
+	}
+	// The control: signed with the key this host generated, the same call
+	// gets past authorisation. Without it the two refusals above could be a
+	// port that refuses everything.
+	hostKey, keyErr := docker(ctx, "exec", bName, "cat", "/run/innsegl/s3/"+filerKeyFileName)
+	if keyErr != nil {
+		t.Fatalf("reading the generated key out of the store container: %v", keyErr)
+	}
+	if c := s3AdminCall(ctx, "127.0.0.1:"+bGRPC, hostKey); c != codes.InvalidArgument {
+		t.Errorf("a call signed with this host's key answered %v, want InvalidArgument (past "+
+			"authorisation). Then the refusals above say nothing about the key.", c)
+	} else {
+		t.Log("OPS-029 phase B  call signed with this host's key: past authorisation")
 	}
 
 	// ---- THE FINDING: the segment is still there, byte for byte ------------
@@ -512,6 +530,83 @@ func (o *ops029) tcpProbe(ctx context.Context, network, host, port string) error
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// shippedRunOptions turns the parts of a compose service that change how the
+// process behaves — its environment and its host map — into `docker run`
+// options, so a case can run the shipped command with everything it relies on.
+func shippedRunOptions(svc interpolatedService) []string {
+	var out []string
+	for k, v := range svc.Environment {
+		if v != nil {
+			out = append(out, "--env", k+"="+*v)
+		}
+	}
+	for _, h := range svc.ExtraHosts {
+		out = append(out, "--add-host", strings.Replace(h, "=", ":", 1))
+	}
+	return out
+}
+
+// rawCodec sends and receives message bytes as they are. It lets a case call
+// one gRPC method without the store's generated types: an empty request is a
+// valid encoding of every proto message.
+type rawCodec struct{}
+
+func (rawCodec) Marshal(v any) ([]byte, error) {
+	b, ok := v.(*[]byte)
+	if !ok {
+		return nil, fmt.Errorf("rawCodec marshals *[]byte, not %T", v)
+	}
+	return *b, nil
+}
+
+func (rawCodec) Unmarshal(data []byte, v any) error {
+	b, ok := v.(*[]byte)
+	if !ok {
+		return fmt.Errorf("rawCodec unmarshals into *[]byte, not %T", v)
+	}
+	*b = append([]byte(nil), data...)
+	return nil
+}
+
+func (rawCodec) Name() string { return "proto" }
+
+// s3AdminCall makes one PutIdentity call, with an empty identity, to an S3
+// gateway's gRPC port and returns the status code. With a key it carries a
+// Bearer token signed with that key, the way the store's own admin calls do;
+// with "" it carries none.
+//
+// The empty identity is what makes the answer readable: authorisation runs
+// first, so Unauthenticated means the call was refused for want of a key, and
+// InvalidArgument means it got past authorisation and was stopped only for
+// carrying no identity. Nothing is ever added.
+func s3AdminCall(ctx context.Context, addr, key string) codes.Code {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return codes.Unknown
+	}
+	defer func() { _ = conn.Close() }()
+	call, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if key != "" {
+		call = metadata.AppendToOutgoingContext(call, "authorization", "Bearer "+adminToken(key))
+	}
+	req, resp := []byte{}, []byte{}
+	err = conn.Invoke(call, "/messaging_pb.SeaweedS3IamCache/PutIdentity", &req, &resp,
+		grpc.ForceCodec(rawCodec{}), grpc.WaitForReady(true))
+	return status.Code(err)
+}
+
+// adminToken is an HS256 JWT with only an expiry, signed with key: the shape
+// the store accepts as an admin token for its IAM gRPC services.
+func adminToken(key string) string {
+	enc := base64.RawURLEncoding
+	header := enc.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	claims := enc.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, time.Now().Add(time.Minute).Unix())))
+	mac := hmac.New(sha256.New, []byte(key))
+	mac.Write([]byte(header + "." + claims))
+	return header + "." + claims + "." + enc.EncodeToString(mac.Sum(nil))
 }
 
 // isHTTPSuccess is true for a 2xx, which is the only outcome that means the

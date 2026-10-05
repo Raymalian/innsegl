@@ -69,9 +69,6 @@ services:
   trillian-db:
     container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-trillian-db
 
-  rekor-redis:
-    container_name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-rekor-redis
-
 networks:
   innsegl-sigstore:
     name: ${INNSEGL_SIGSTORE_TEST_STACK:?set by the test harness to innsegl-<suite>test-<pid>; this overlay must never build a stack under a shared name}-sigstore

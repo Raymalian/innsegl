@@ -54,7 +54,7 @@ import (
 //
 //   - SPIRE is the shipped trio from deploy/compose/spire.yml, scoped to this
 //     process by deploy/compose/spire-testscope.yml.
-//   - Fulcio and Rekor (and Trillian, and Redis) are the shipped stack from
+//   - Fulcio and Rekor (and Trillian, and its MySQL) are the shipped stack from
 //     deploy/compose/sigstore.yml, scoped by
 //     internal/signing/testdata/sigstore-testscope.yml.
 //   - Postgres is a real postgres:16 container.
@@ -182,7 +182,7 @@ const (
 	// replacement is measured against doc 07 SEG-005 under the same
 	// configuration, so the store this matrix partitions is still the store
 	// the sealing case writes through.
-	prtObjectStoreImage = "chrislusf/seaweedfs:4.46@sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62"
+	prtObjectStoreImage = "chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
 
 	prtPGUser     = "innsegl"
 	prtPGPassword = "innsegl-partition-test"

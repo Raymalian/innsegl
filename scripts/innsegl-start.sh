@@ -114,15 +114,12 @@ purpose() {
     innsegl-sealer)                        echo "segment sealing" ;;
     innsegl-reconciler)                    echo "the reconcile pass" ;;
     innsegl-backup)                        echo "the ledger's backup" ;;
-    innsegl-object-store)                  echo "the segment bytes" ;;
-    innsegl-object-filer)                  echo "the segment metadata" ;;
-    innsegl-s3)                            echo "object lock" ;;
+    innsegl-s3)                            echo "the segments, under object lock" ;;
     innsegl-sigstore-fulcio)               echo "certificates" ;;
     innsegl-sigstore-rekor)                echo "the transparency log" ;;
     innsegl-sigstore-trillian-log-server)  echo "the log's storage" ;;
     innsegl-sigstore-trillian-log-signer)  echo "the log's sequencer" ;;
-    innsegl-sigstore-trillian-db)          echo "the log's database" ;;
-    innsegl-sigstore-rekor-redis)          echo "the log's search index" ;;
+    innsegl-sigstore-trillian-db)          echo "the log's database and search index" ;;
     *)                                     echo "(undescribed)" ;;
   esac
 }

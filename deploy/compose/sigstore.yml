@@ -40,6 +40,9 @@
 # `RM-012 FINDING` at the settings that encode them. RM-012's report asked for
 # exactly this lift; a second stack written from upstream's compose would drift
 # from the one SEG-003 actually runs against.
+#
+# Since #451 both keep Rekor's search index in the Trillian database, created
+# by sigstore/rekor-index.sql, so the stack is four long-running containers.
 # ============================================================================
 
 name: innsegl-sigstore
@@ -71,8 +74,6 @@ x-trillian-log-signer-image: &trillian-log-signer-image
 # one amd64-only image in the stack; see `platform:` on the service.
 x-trillian-db-image: &trillian-db-image
   gcr.io/trillian-opensource-ci/db_server:v1.4.0@sha256:0794abd3bdf44a567f5d6ef18a0b76802f388611b63aae33eaf28c3b0c5964d8
-x-rekor-redis-image: &rekor-redis-image
-  redis:7.4.11-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
 # Used once, by the one-shot PKI bootstrapper, and the same pin spire.yml uses.
 # The Sigstore images are distroless and carry no shell or OpenSSL, so the
 # bootstrap runs somewhere that does.
@@ -181,8 +182,8 @@ services:
   #                           the measurement that forced it.
   #
   # Fulcio is on NEITHER of Rekor's backend networks. It has no route to
-  # Trillian, to the log's MySQL, or to Redis. The CA and the log share nothing
-  # but a client.
+  # Trillian or to the log's MySQL. The CA and the log share nothing but a
+  # client.
   #
   # WHY THERE IS NO CT LOG. Fulcio can submit each issued certificate to a
   # Certificate Transparency log and embed the SCT. Doc 05 §1's table has no
@@ -255,15 +256,16 @@ services:
   #   innsegl-rekor-log    rekor -> trillian-log-server gRPC. Members: those
   #                        two only. The log *signer* is deliberately absent —
   #                        nothing calls it, it only writes.
-  #   innsegl-rekor-index  rekor -> redis, the search index. Members: those two
-  #                        only, which is why Redis needs no password: nothing
-  #                        else can open a socket to it at all.
+  #   innsegl-rekor-index  rekor -> trillian-db, for the search index only.
+  #                        Members: those two only.
   #
-  # Rekor is NOT on innsegl-trillian-db. The front end — the one component a
-  # verifier talks to — has no route to the database its proofs are built from.
-  # That is the least-privilege claim in this half of the stack, and it is
-  # checkable by reading the `networks:` keys rather than by trusting a
-  # sentence.
+  # Rekor is NOT on innsegl-trillian-db, the Trillian pair's network. Since
+  # ADR-0010's 2026-10-05 amendment it does reach the MySQL server, over
+  # innsegl-rekor-index, and the least-privilege claim moves from the network
+  # to the grant: rekor's MySQL user may touch the rekor_index database and
+  # nothing else (sigstore/rekor-index.sql). Measured: that user is refused
+  # SELECT on Trillian's tables. The front end can find entries; it cannot
+  # read or write the tables its proofs are built from.
   # --------------------------------------------------------------------------
   rekor:
     image: *rekor-image
@@ -283,8 +285,18 @@ services:
       - "serve"
       - "--trillian_log_server.address=trillian-log-server"
       - "--trillian_log_server.port=8090"
-      - "--redis_server.address=rekor-redis"
-      - "--redis_server.port=6379"
+      # THE SEARCH INDEX, in trillian-db (#451, ADR-0010 amendment 2026-10-05).
+      # The map from artifact digest to entry UUID that a verifier asks
+      # through /api/v1/index/retrieve. It was a Redis sidecar on a volume of
+      # its own, which `down -v` removed while the log kept every entry, so
+      # bring-up walked the whole log to rebuild it (OPS-036). In MySQL it is
+      # a table on the same trust volume as the log, and survives what the log
+      # survives. Rekor creates the table (EntryIndex) on first connect.
+      # Entries written before the move are not in it until they are
+      # backfilled; every bring-up does that once, when the index is behind
+      # the log (Makefile, rekor-index-ready; scripts/rekor-reindex.sh).
+      - "--search_index.storage_provider=mysql"
+      - "--search_index.mysql.dsn=rekor:rekor-index@tcp(trillian-db:3306)/rekor_index"
       - "--host=0.0.0.0"
       - "--port=3000"
       - "--rekor_server.address=0.0.0.0"
@@ -425,9 +437,11 @@ services:
   # --------------------------------------------------------------------------
   # trillian-db — MySQL carrying Trillian's storage schema.
   #
-  # NETWORKS: innsegl-trillian-db only, which has exactly three members. The
-  # database is unreachable from rekor, from fulcio, from the host and from
-  # every other doc 05 §1 service. No port is published.
+  # NETWORKS: innsegl-trillian-db, which has exactly three members, and
+  # innsegl-rekor-index, whose only other member is rekor. The database is
+  # unreachable from fulcio, from the host and from every other doc 05 §1
+  # service. No port is published. Rekor reaches it only as a user whose
+  # grant is the rekor_index database; see sigstore/rekor-index.sql.
   #
   # `platform: linux/amd64` because this is the one image in the stack with no
   # arm64 build; it runs under emulation, which is slow to boot and is why the
@@ -443,10 +457,18 @@ services:
       MYSQL_DATABASE: *trillian-db-name
       MYSQL_USER: *trillian-db-user
       MYSQL_PASSWORD: *trillian-db-password
+    # The image's own command plus one flag. --init-file runs
+    # sigstore/rekor-index.sql at EVERY start, not only on an empty data
+    # directory as /docker-entrypoint-initdb.d would: a database volume made
+    # before the index moved here has no index user, and rekor then exits with
+    # `Access denied for user 'rekor'` and restarts until it does.
+    command: ["mysqld", "--init-file=/etc/mysql/rekor-index.sql"]
     networks:
       - innsegl-trillian-db
+      - innsegl-rekor-index
     volumes:
       - sigstore-trillian-db-data:/var/lib/mysql
+      - ./sigstore/rekor-index.sql:/etc/mysql/rekor-index.sql:ro
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -474,64 +496,6 @@ services:
       retries: 40
       start_period: 60s
 
-  # --------------------------------------------------------------------------
-  # rekor-redis — Rekor's search index.
-  #
-  # NETWORKS: innsegl-rekor-index, whose only other member is rekor. No
-  # password, and that is a decision rather than an omission: upstream's
-  # compose sets `--requirepass test`, a shared secret on a shared network.
-  # A network with two members is the stronger control, and a password on the
-  # command line of a container anyone can `docker inspect` is not a second
-  # one. Nothing else in the stack can open a socket to this container.
-  #
-  # THE INDEX IS PERSISTED. It was held in memory and never written, on the
-  # reasoning that "losing it loses search, never a proof". RM-138 (#219)
-  # measured that premise false. A verifier proves inclusion by ASKING the log
-  # for the entry whose artifact is this commit; with the index gone the log
-  # answers "no such entry" and `innsegl verify` reports FAILED —
-  # indistinguishable from a signature that was never logged. Trillian still
-  # held every record; nothing could find one.
-  #
-  # I5 says a third party verifies with no access to
-  # this system's database, and check 2 is the half the transparency log
-  # answers: a log that holds the record and cannot serve it fails that claim
-  # exactly as completely as a log that lost it.
-  # --------------------------------------------------------------------------
-  rekor-redis:
-    image: *rekor-redis-image
-    container_name: innsegl-sigstore-rekor-redis
-    restart: unless-stopped
-    # MEASURED, not assumed. The official redis entrypoint starts as root and
-    # drops to the `redis` user with setpriv, which needs CAP_SETUID and
-    # CAP_SETGID. With `cap_drop: ALL` and nothing else, this container fails
-    # with `setpriv: setresuid failed: Operation not permitted`, exit 127, and
-    # restarts forever. Starting AS uid 999 — the image's own `redis` user —
-    # makes the entrypoint skip the drop entirely, so the capabilities are
-    # never needed rather than being granted back.
-    user: "999:999"
-    # appendonly, not snapshots: the index is a write-per-entry workload, and
-    # an RDB snapshot loses everything written since the last one — which is
-    # precisely the failure this is fixing, only smaller.
-    command: ["--bind", "0.0.0.0", "--appendonly", "yes", "--save", ""]
-    networks:
-      - innsegl-rekor-index
-    read_only: true
-    volumes:
-      # /data holds the append-only file. A named volume rather than a tmpfs:
-      # the point is that it outlives the container, which a tmpfs by
-      # definition does not.
-      - sigstore-rekor-search:/data
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 5s
-
 # ----------------------------------------------------------------------------
 # Networks. Membership is the access-control list; keep these comments accurate
 # when adding a service, because they are the only place the rule is written
@@ -540,8 +504,8 @@ services:
 # The shape, stated once: fulcio and rekor share a client-facing network, plus
 # one non-internal network that exists only so their ports can be published.
 # Fulcio's only other network is the one spire-oidc is on. Rekor reaches
-# Trillian and Redis on two networks of two members each, and reaches the
-# database on none.
+# Trillian and the index database on two networks of two members each, and is
+# not on the Trillian pair's database network.
 # ----------------------------------------------------------------------------
 networks:
   # DECLARED IN spire.yml, JOINED HERE. This is the whole of the wiring between
@@ -595,16 +559,16 @@ networks:
     name: innsegl-sigstore-rekor-log
     internal: true
 
-  # rekor -> redis.
-  # MEMBERS: rekor, rekor-redis. This two-member network is what stands in for
-  # a Redis password; see the service.
+  # rekor -> trillian-db, for the search index.
+  # MEMBERS: rekor, trillian-db. What rekor may do once there is the grant in
+  # sigstore/rekor-index.sql: the rekor_index database and nothing else.
   innsegl-rekor-index:
     name: innsegl-sigstore-rekor-index
     internal: true
 
   # The Trillian pair -> MySQL.
   # MEMBERS: trillian-log-server, trillian-log-signer, trillian-db. Rekor is
-  # deliberately not a member: the front end has no route to the database.
+  # deliberately not a member; it reaches the index over innsegl-rekor-index.
   innsegl-trillian-db:
     name: innsegl-sigstore-trillian-db
     internal: true
@@ -646,6 +610,8 @@ volumes:
     name: ${INNSEGL_TRUST_REKOR_KEY_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-sigstore}_sigstore-rekor-key}
     external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
   # Trillian's MySQL data directory — the log ITSELF, and not a cache of it.
+  # Since #451 it also holds Rekor's search index (database rekor_index), so
+  # the index survives every teardown the log survives (OPS-036).
   # The tree deploy/compose/.rekor-tlog-id pins lives here; lose this and the
   # pin names a tree that does not exist, which is how Rekor came to answer
   # HTTP 500 to every request on 2026-09-16 (see scripts/rekor-tlog-health.sh).
@@ -653,8 +619,3 @@ volumes:
   sigstore-trillian-db-data:
     name: ${INNSEGL_TRUST_TRILLIAN_DB_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-sigstore}_sigstore-trillian-db-data}
     external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
-  # Rekor's search index — the map from artifact digest and certificate
-  # identity to entry UUID. Rebuildable from Trillian by walking the log
-  # (scripts/rekor-reindex.sh), but not rebuilt automatically: Rekor indexes an
-  # entry when it is written and never afterwards. MOUNTED BY: rekor-redis.
-  sigstore-rekor-search:

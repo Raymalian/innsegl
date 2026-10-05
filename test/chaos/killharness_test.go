@@ -577,7 +577,9 @@ func (s *k9Stack) stop() {
 // The shape internal/segment/rekorharness_test.go established for SEG-003, and
 // the reasoning is the same one: Rekor is a front end over a Trillian log,
 // Trillian is a log over MySQL whose sequencer is a separate process, and
-// Rekor's search index needs Redis. The reconciler's convergence is a question
+// Rekor's search index is a table in that MySQL, created by the shipped
+// deploy/compose/sigstore/rekor-index.sql exactly as trillian-db creates it
+// (#451). The reconciler's convergence is a question
 // put to a transparency log, and a log that answers from a map answers about
 // nothing (IP §2).
 // ---------------------------------------------------------------------------
@@ -587,12 +589,17 @@ const (
 	k9TLogServerImage = "ghcr.io/sigstore/scaffolding/trillian_log_server:v1.7.1"
 	k9TLogSignerImage = "ghcr.io/sigstore/scaffolding/trillian_log_signer:v1.7.1"
 	k9TrillianDBImage = "gcr.io/trillian-opensource-ci/db_server:v1.4.0"
-	k9RedisImage      = "redis:7-alpine"
 
 	k9TrillianDB       = "test"
 	k9TrillianDBUser   = "test"
 	k9TrillianPassword = "zaphod"
 	k9RekorOrigin      = "rekor.innsegl.test"
+
+	// The shipped index grant, relative to this package, and the user and
+	// database it creates (test/deploy checks the compose DSN agrees).
+	k9RekorIndexSQL  = "../../deploy/compose/sigstore/rekor-index.sql"
+	k9RekorIndexUser = "rekor:rekor-index"
+	k9RekorIndexDB   = "rekor_index"
 )
 
 type k9RekorStack struct {
@@ -642,26 +649,24 @@ func startK9Rekor(ctx context.Context) (*k9RekorStack, error) {
 		return s, fmt.Errorf("create the rekor network: %w", err)
 	}
 
+	indexSQL, absErr := filepath.Abs(k9RekorIndexSQL)
+	if absErr != nil {
+		return s, fmt.Errorf("locate rekor-index.sql: %w", absErr)
+	}
 	db := "innsegl-kill9-rekordb-" + suffix
 	if err := s.run(ctx, db,
 		"--env", "MYSQL_ROOT_PASSWORD="+k9TrillianPassword,
 		"--env", "MYSQL_DATABASE="+k9TrillianDB,
 		"--env", "MYSQL_USER="+k9TrillianDBUser,
 		"--env", "MYSQL_PASSWORD="+k9TrillianPassword,
+		"--volume", indexSQL+":/etc/mysql/rekor-index.sql:ro",
 		k9EnvOr("INNSEGL_TEST_TRILLIAN_DB_IMAGE", k9TrillianDBImage),
+		"mysqld", "--init-file=/etc/mysql/rekor-index.sql",
 	); err != nil {
 		return s, fmt.Errorf("start the trillian database: %w", err)
 	}
 	if err := s.awaitSchema(ctx, db, 3*time.Minute); err != nil {
 		return s, err
-	}
-
-	redis := "innsegl-kill9-rekorredis-" + suffix
-	if err := s.run(ctx, redis,
-		k9EnvOr("INNSEGL_TEST_REKOR_REDIS_IMAGE", k9RedisImage),
-		"--bind", "0.0.0.0", "--appendonly", "no",
-	); err != nil {
-		return s, fmt.Errorf("start redis: %w", err)
 	}
 
 	uri := fmt.Sprintf("%s:%s@tcp(%s:3306)/%s",
@@ -694,7 +699,8 @@ func startK9Rekor(ctx context.Context) (*k9RekorStack, error) {
 		k9EnvOr("INNSEGL_TEST_REKOR_IMAGE", k9RekorImage),
 		"serve",
 		"--trillian_log_server.address="+logServer, "--trillian_log_server.port=8090",
-		"--redis_server.address="+redis, "--redis_server.port=6379",
+		"--search_index.storage_provider=mysql",
+		"--search_index.mysql.dsn="+k9RekorIndexUser+"@tcp("+db+":3306)/"+k9RekorIndexDB,
 		"--host=0.0.0.0", "--port=3000", "--rekor_server.address=0.0.0.0",
 		"--rekor_server.signer=memory",
 		"--rekor_server.hostname="+k9RekorOrigin,

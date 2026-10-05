@@ -151,8 +151,8 @@ written at each declaration in `../sigstore.yml`.
    reconciler, dashboard                                     │
    (when they land)                                          │
                                                              ├─ rekor-log ── trillian-log-server
-                                                             └─ rekor-index ── rekor-redis
-                                                                                    
+                                                             └─ rekor-index ── trillian-db
+                                                                               (rekor_index only)
               trillian-log-server ┐
               trillian-log-signer ┴── innsegl-sigstore-trillian-db ── trillian-db
 ```
@@ -163,11 +163,12 @@ sentence:
 - **Fulcio has no route into SPIRE beyond the OIDC frontend.** It is on no
   network with `spire-server` and cannot open a socket to the Agent API or the
   admin API. What it does over that network is read two public documents.
-- **Rekor has no route to Trillian's database.** The front end — the component
-  a verifier talks to — is not a member of `innsegl-sigstore-trillian-db`.
-- **Redis has no password, and that is stronger than one.** Upstream's compose
-  sets `--requirepass test`: a shared secret on a shared network. Here the
-  network has two members, so nothing else can open a socket to it at all.
+- **Rekor cannot touch Trillian's tables.** The front end — the component a
+  verifier talks to — is not a member of `innsegl-sigstore-trillian-db`. It
+  reaches the MySQL server only over `innsegl-sigstore-rekor-index`, a network
+  of two members, and only as the `rekor` user, whose grant is the
+  `rekor_index` database (`rekor-index.sql`). Measured: that user is refused
+  `SELECT` on Trillian's `Trees` table.
 
 `innsegl-sigstore-published` is the one non-internal network and it exists for a
 mechanical reason. MEASURED: a container attached only to `internal` networks
@@ -200,6 +201,58 @@ reachable from outside get one narrow network of their own.
   rework.
 - **Postgres, the object store and the built `innsegl-*` services.** The rest of doc 05 §1,
   and other issues' files.
+
+## Rekor's search index lives in trillian-db
+
+The index is the map from artifact digest to entry UUID that a verifier asks
+through `/api/v1/index/retrieve`. It is a table, `EntryIndex`, in the
+`rekor_index` database on `trillian-db` (#451, ADR-0010's 2026-10-05
+amendment). Rekor creates the table on first connect. `trillian-db` runs
+`rekor-index.sql` with `--init-file` at every start, so the database and its
+one user exist on a new volume and on one made before the index moved.
+
+It used to be a Redis container on a volume of its own. `down -v` removed that
+volume while the log kept every entry, and the log then answered "no such
+entry" for good commits (OPS-036), so bring-up walked the whole log to rebuild
+the index at every start. On the trust volume the log already lives on, the
+index survives what the log survives, and start no longer rebuilds it.
+
+Measured against the pinned images: Rekor starts with the MySQL index; a new
+entry is found by hash at once; it is still found after rekor is recreated and
+after trillian-db restarts.
+
+### Upgrading a log that predates the move: automatic
+
+Rekor indexes an entry only when it is written, so entries written while the
+index was Redis are not in the new table, and until they are `innsegl verify`
+reports their commits as never logged. Nothing has to be run by hand for
+this. `make start` and `innsegl-update` bring the Sigstore project up, and
+`make update` brings up the log's services (not Fulcio, which a key-custody
+host runs under `sigstore.keycustody.yml`). Either way trillian-db and rekor
+are recreated on the new shape, and both then run `rekor-index-ready`, which
+
+1. removes the old `innsegl-sigstore-rekor-redis` container by name (not
+   with `--remove-orphans`, which would also remove `innsegl-ca-store`, a
+   service of the same project declared in `sigstore.keycustody.yml`);
+2. pins the log (`rekor-tlog-id`), which waits for it to answer;
+3. runs `scripts/rekor-reindex.sh --if-behind`: it counts this tree's entries
+   in the index and, when that is fewer than the log's size, runs Rekor's own
+   `backfill-index` tool (the same release as `rekor-server`) over the whole
+   log. It does this before the core starts, and fails the bring-up if it
+   cannot finish.
+
+On every later start the index already holds the whole log and the step
+reads one count and does nothing. Measured: 1,600 entries backfilled in about
+3 seconds; the no-op check takes under a second.
+
+The old Redis volume, `innsegl-sigstore_sigstore-rekor-search`, is NOT
+removed. Nothing mounts
+it any more, and what it holds (digests and identities that are in the public
+log anyway) is not a secret. Remove it whenever convenient:
+`docker volume rm innsegl-sigstore_sigstore-rekor-search`.
+
+`make rekor-reindex` runs the backfill over the whole log unconditionally. It
+is idempotent; use it to repair an index that was damaged some other way.
 
 ## Lifted from RM-012, not rebuilt
 

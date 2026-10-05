@@ -193,10 +193,11 @@ jobs:
       - name: The setup link is printed only while an account is still needed, and never fabricated
         run: ./scripts/setup-link-selftest.sh
 
-      # RM-324. `make start` re-indexes Rekor on every run; the script skips
-      # when the index already covers the log and otherwise fetches in batches.
-      # Against a fake Rekor and a fake redis-cli, so no container is needed.
-      - name: The Rekor index is rebuilt once, extended incrementally, and bounded in time
+      # #451. Rekor's index lives in trillian-db and start no longer rebuilds
+      # it; the script is the one-time backfill for a log that predates that,
+      # run with Rekor's own tool. Against a fake Rekor and a fake docker, so no
+      # container is needed.
+      - name: The one-time Rekor index backfill covers the whole log with Rekor's own tool
         run: ./scripts/rekor-reindex-selftest.sh
 
   worktree-link:

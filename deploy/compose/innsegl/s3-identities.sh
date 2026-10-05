@@ -35,16 +35,23 @@
 # WHAT THE SCOPE IS, AND WHY IT IS A PREFIX
 # -----------------------------------------
 # doc 05 §2 requires the running stack to hold no identity that may weaken the
-# bucket, and RM-144 (#228) is the issue that made it so. On THIS store the
-# permission model has no separate action for setting a bucket's object-lock
-# configuration: measured on the pinned image, an identity granted a
-# bucket-wide `Write` may set it, and may therefore downgrade the default rule
-# from COMPLIANCE to GOVERNANCE.
+# bucket, and RM-144 (#228) is the issue that made it so. Up to 4.46 this
+# store's permission model had no separate action for setting a bucket's
+# object-lock configuration: an identity granted a bucket-wide `Write` could
+# set it, and so downgrade the default rule from COMPLIANCE to GOVERNANCE.
 #
-# What it does have is PREFIX-SCOPED actions, and they are enough. Measured,
-# same image, same bucket, one identity:
+# SINCE 4.48 (#451) BOTH LOCK-CONFIGURATION CALLS HAVE THEIR OWN ACTION:
+# GetBucketObjectLockConfiguration and PutBucketObjectLockConfiguration. The
+# scoped identity is granted the first and never the second, so the downgrade
+# is now withheld by name. THE PREFIX STAYS: it also bounds WHERE the sealer
+# may write, which no action replaces.
 #
-#     Read:<bucket>                      GetObjectLockConfiguration   allowed
+# Measured on the pinned image, same bucket, one identity (OPS-025..027):
+#
+#     Read:<bucket>                      GetObject                    allowed
+#     GetBucketObjectLockConfiguration:<bucket>
+#                                        GetObjectLockConfiguration   allowed
+#     GetObjectRetention:<bucket>        GetObjectRetention           allowed
 #     List:<bucket>                      ListObjectVersions           allowed
 #     Write:<bucket>/<prefix>*           PutObject under the prefix   allowed
 #                                        PutObject anywhere else      REFUSED
@@ -61,12 +68,11 @@
 # the server the same questions after the fact, because a file is provisioning
 # and provisioning is a claim.
 #
-# READ IS BUCKET-WIDE AND WRITE IS NOT, which looks asymmetric and is the
-# measurement: a prefix-scoped Read is also refused GetObjectLockConfiguration,
-# and SEG-005's canary reads exactly that on every scheduled run. Reading is
-# not a way to weaken anything; writing the bucket's configuration is the only
-# thing being withheld, so Read is granted where it has to be and Write is
-# granted only where segments and probes go.
+# THE TWO LOCK READS ARE GRANTED BY NAME because 4.48 stopped answering them
+# under `Read` (measured: AccessDenied for the 4.46 grant set). The sealer
+# reads the bucket's rule, and SEG-005's canary reads the rule and the probe's
+# retention. Reading is not a way to weaken
+# anything; writing the bucket's configuration is the thing being withheld.
 
 set -eu
 
@@ -142,6 +148,8 @@ cat > "${tmp}" <<IDENTITIES
       "credentials": [{"accessKey": "${SEALER_USER}", "secretKey": "${SEALER_PASSWORD}"}],
       "actions": [
         "Read:${BUCKET}",
+        "GetBucketObjectLockConfiguration:${BUCKET}",
+        "GetObjectRetention:${BUCKET}",
         "List:${BUCKET}",
         "Write:${BUCKET}/${PREFIX}*",
         "Write:${BUCKET}/${CANARY_PREFIX}*"
@@ -170,7 +178,40 @@ else
 fi
 mv -f "${tmp}" "${OUT}"
 
+# THE OBJECT STORE'S PER-HOST KEY (#451). S3's gRPC port requires it, and so
+# does the Filer's. It is generated here once, from /dev/urandom, and kept:
+# this volume persists across restarts and updates, and only this one-shot and
+# the object store mount it. object-store-start.sh refuses to start the store
+# without it. No shipped file carries a value for it.
+#
+# $INNSEGL_OBJECT_FILER_JWT_KEY, when set, is used instead and replaces the
+# file. Unset again later, the file keeps the last key it held.
+KEY_FILE="${INNSEGL_OBJECT_FILER_JWT_KEY_FILE:-$(dirname -- "${OUT}")/filer-jwt.key}"
+KEY_BYTES=32 # of randomness; 64 hex characters
+key_tmp="${KEY_FILE}.partial"
+if [ -n "${INNSEGL_OBJECT_FILER_JWT_KEY:-}" ]; then
+  [ "${#INNSEGL_OBJECT_FILER_JWT_KEY}" -ge 48 ] \
+    || fail "\$INNSEGL_OBJECT_FILER_JWT_KEY is ${#INNSEGL_OBJECT_FILER_JWT_KEY} characters; use at least 48, or unset it to have one generated"
+  printf '%s\n' "${INNSEGL_OBJECT_FILER_JWT_KEY}" > "${key_tmp}"
+  key_source="the operator's \$INNSEGL_OBJECT_FILER_JWT_KEY"
+elif [ -s "${KEY_FILE}" ]; then
+  key_source="kept from an earlier run"
+else
+  # 32 bytes from the kernel's CSPRNG, hex encoded: 64 characters.
+  head -c "${KEY_BYTES}" /dev/urandom | od -An -v -tx1 | tr -d ' \n' > "${key_tmp}"
+  printf '\n' >> "${key_tmp}"
+  key_source="generated"
+fi
+if [ -f "${key_tmp}" ]; then
+  [ "$(tr -d '\n' < "${key_tmp}" | wc -c)" -ge 48 ] || fail "the object store key came out short"
+  # Root-owned and 0400: the start script reads it as root, before the store
+  # drops to its own user, and nothing else needs it.
+  chmod 0400 "${key_tmp}"
+  mv -f "${key_tmp}" "${KEY_FILE}"
+fi
+
 log "wrote ${OUT}"
+log "object store key at ${KEY_FILE}: ${key_source}"
 log "  innsegl-root   ${ROOT_USER}: Admin, Read, Write, List, Tagging — the server and the one-time init, nothing that stays up"
-log "  innsegl-sealer ${SEALER_USER}: Read:${BUCKET}, List:${BUCKET}, Write:${BUCKET}/${PREFIX}*, Write:${BUCKET}/${CANARY_PREFIX}*"
+log "  innsegl-sealer ${SEALER_USER}: Read:${BUCKET}, GetBucketObjectLockConfiguration:${BUCKET}, GetObjectRetention:${BUCKET}, List:${BUCKET}, Write:${BUCKET}/${PREFIX}*, Write:${BUCKET}/${CANARY_PREFIX}*"
 log "  the scoped identity may write segments and probes and may weaken nothing; innsegl/verify-object-scope.sh measures that"

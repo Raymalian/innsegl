@@ -303,7 +303,7 @@ summary:
 |---|---|
 | [`spire/README.md`](spire/README.md) | `spire-server`, `spire-agent`, `spire-oidc` — the trust domain, workload attestation, and the JWT-SVID → OIDC bridge |
 | [`sigstore/README.md`](sigstore/README.md) | `fulcio`, `rekor` and Rekor's backing Trillian log and database — the CA and the transparency log |
-| [`innsegl/README.md`](innsegl/README.md) | `postgres`, the object store (`innsegl-object-store`, `innsegl-object-filer`, `innsegl-s3`), `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api` (which serves the dashboard), `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
+| [`innsegl/README.md`](innsegl/README.md) | `postgres`, the object store (`innsegl-s3`, one process), `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api` (which serves the dashboard), `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
 
 The first two are Innsegl's dependencies. The third is Innsegl.
 
@@ -318,10 +318,10 @@ the compose files. Fulcio has no route into SPIRE beyond fetching two public
 documents; Rekor has no route to Trillian's database; the SPIRE admin API is
 reachable from one network with two members, and the second is the MCP it was
 declared for. The MCP is on no network with the object store, and the dashboard
-is on no network with the MCP. The object store's Filer and volume server are on
-a network whose only other member is its S3 gateway, because object lock is
-enforced at the gateway and the Filer's own API destroys a retained object with
-no credential at all (#227). Neither Postgres nor the object store publishes a
+is on no network with the MCP. The object store's Filer, master and volume server
+bind the store container's loopback and only its S3 port is reachable, because
+object lock is enforced at the S3 layer and the Filer's own API destroys a
+retained object with no credential at all (#227, #451). Neither Postgres nor the object store publishes a
 host port, because
 a published port is reachable by address from an unrelated bridge network —
 measured, and explained in [`innsegl/README.md`](innsegl/README.md). Compose is
@@ -400,14 +400,14 @@ reconciler were still two containers of their own:
 | **separate loops** | **14** | `--profile separate` with `INNSEGL_MCP_ALSO=reap` runs the sealer and the reconciler as their own containers. For doc 05 §2's replicated MCP, where one process per replica would run a sealer per replica. The reconciler's SPIRE pass is off in this shape (ADR-0056). |
 | the full stack | 12 | the default: the sealer and the reconciler run inside the MCP (`INNSEGL_MCP_ALSO` defaults to `seal,reconcile,reap,gateway`) |
 | **without the UI** | **11** | `innsegl-api` serves the web view (one container since #475). Signing and verifying never touch it. |
-| **public Rekor** | **~5** | ADR-0042. `rekor`, `rekor-redis` and the three Trillian containers exist only because the log is ours. |
+| **public Rekor** | **~4** | ADR-0042. `rekor` and the three Trillian containers exist only because the log is ours. Rekor's search index is a table in `trillian-db` since #451. |
 
 A stack brought up before the default changed keeps its `innsegl-sealer` and
 `innsegl-reconciler` containers running: a plain `up` does not touch a service
 its profiles leave out. Remove them once, with
 `docker compose -f innsegl.yml --profile separate rm -sf innsegl-sealer innsegl-reconciler`.
 
-**The nine that are hardest to remove are SPIRE and Sigstore**, and they are
+**The eight that are hardest to remove are SPIRE and Sigstore**, and they are
 there for one reason: this deployment runs its own identity. Public Sigstore
 will not accept SPIRE as a login provider, so self-hosting the identity forces
 self-hosting Fulcio, and Fulcio's log has to come from somewhere.
@@ -687,6 +687,16 @@ innsegl-update --rollback
 off. A host can only verify commits signed under trust roots it holds, so a
 deployment verifies its own history; a host whose trust roots differ refuses
 every update until it holds the same ones.
+
+### Rekor's search index moved into trillian-db (#451)
+
+A deployment brought up before #451 kept Rekor's search index in a Redis
+container. It is now a table in `trillian-db`. The update moves it with
+nothing to run by hand: `make update` brings the log's services up again,
+removes the Redis container, and backfills the index from the log once,
+before the core starts, because it is behind. Later updates find it current
+and do nothing. The old Redis volume is left in place, unused;
+`sigstore/README.md` says how to remove it and what the backfill does.
 
 ### Building the images on another machine
 

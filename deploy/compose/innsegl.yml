@@ -11,12 +11,11 @@
 #                                  Single instance; volume-backed
 #   object store        upstream   Object storage with object lock enabled
 #                                  Buckets created with lock on; SEG-005 canary
-#                                  runs against it. THREE CONTAINERS here:
-#                                  innsegl-object-store holds the bytes,
-#                                  innsegl-object-filer the metadata, and
-#                                  innsegl-s3 is the gateway — the only one of
-#                                  the three that enforces object lock, and the
-#                                  only one anything else can reach
+#                                  runs against it. ONE PROCESS here
+#                                  (innsegl-s3, #451): master, volume, Filer
+#                                  and the S3 gateway, which alone enforces
+#                                  object lock and alone is reachable — every
+#                                  other listener binds loopback
 #   innsegl-mcp         built      The MCP server (register/credential/event/
 #                                  sign/retire). ONLY SERVICE HOLDING THE SPIRE
 #                                  ADMIN CREDENTIAL
@@ -98,8 +97,13 @@ x-postgres-image: &postgres-image
 # replacement is maintained, Apache-2.0, and was measured against SEG-005 under
 # exactly the configuration below: bucket default rule set at creation, the
 # writer setting no retention of its own, every check green.
+#
+# 4.48 SINCE #451. It is the first release with `-filer.disableHttp` for
+# `weed server`, which is what lets the store run as one process (see
+# innsegl-s3). Pinned by the multi-platform index digest, read from the
+# registry and pulled to check it.
 x-object-store-image: &object-store-image
-  chrislusf/seaweedfs:4.46@sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62
+  chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
 # The S3 client the one-time bucket init and its verifier run in. It is the
 # reference implementation of the protocol rather than any one server's own
 # tool, which is the point: what was here before was the client that shipped
@@ -204,7 +208,7 @@ x-backup-password: &backup-password ${INNSEGL_LEDGER_BACKUP_PASSWORD:-innsegl-co
 # does nothing else, and it used to be handed this same value.
 #
 # WHY IT MATTERS ON A STACK WHOSE STORE HAS NO PUBLISHED PORT. The network
-# below is `internal:` with three members and that control is real. It assumes
+# it is on is `internal:` and that control is real. It assumes
 # an attacker who is not on the host. A process ON the host with a container
 # runtime is effectively root there — it reads a running container's
 # environment and attaches a container of its own to any network — so the
@@ -214,25 +218,6 @@ x-object-store-user: &object-store-user ${INNSEGL_OBJECT_STORE_ACCESS_KEY:-innse
 x-object-store-password: &object-store-password ${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}
 x-object-store-bucket: &object-store-bucket ${INNSEGL_OBJECT_STORE_BUCKET:-innsegl-segments}
 
-# GATES THE FILER'S IAM gRPC SERVICE. The filer registers CreateUser, PutPolicy
-# and CreateAccessKey on its gRPC port and says so itself at start-up:
-# "Registered IAM gRPC service on filer (unauthenticated; set jwt.filer_signing.key
-# ... to require admin Bearer token)". `-disableHttp` does not reach it — that
-# closes the HTTP surface and this is gRPC on 18888.
-#
-# Upstream's own rule is "set the key ... if the gRPC port is reachable beyond a
-# trusted network", and here it is not: innsegl-object-backend is `internal:`
-# with three members, and measured 2026-09-18 the name does not resolve from the
-# MCP while it does from innsegl-s3. So this is a second lock rather than the
-# only one — the same position telemetry ended up in on the same day.
-#
-# A SHIPPED DEFAULT, for the reason AB-17 gives above for the object store's own
-# credentials: the network control assumes an attacker who is not on the host,
-# and a process on the host reads any container's environment anyway. What
-# matters is that what this gates cannot weaken anything — it admits IAM calls
-# to a gateway run with -iam=false against a static identities file, so there is
-# no user or policy for them to create.
-x-object-filer-jwt: &object-filer-jwt ${INNSEGL_OBJECT_FILER_JWT_KEY:-innsegl-compose-filer-admin}
 
 # THE SCOPED IDENTITY every long-running service that talks to the store runs
 # as. innsegl/s3-identities.sh writes it into the gateway's identity file, and
@@ -568,202 +553,137 @@ services:
   # THE OBJECT STORE — doc 05 §1's "Object storage with object lock enabled.
   # Buckets created with lock on; SEG-005 canary runs against it."
   #
-  # IT IS THREE CONTAINERS AND THAT IS NOT AN IMPLEMENTATION DETAIL (RM-143,
-  # #227). This store is a storage layer (master + volume), a metadata layer
-  # (the Filer) and an S3 gateway, and the gateway is the ONLY one of the three
-  # that enforces object lock.
+  # ONE PROCESS SINCE #451, AND ONLY ITS S3 PORT IS REACHABLE. This store is a
+  # storage layer (master + volume), a metadata layer (the Filer) and an S3
+  # gateway, and the gateway is the ONLY one that enforces object lock.
   #
-  # MEASURED, on the pinned image, against an object under COMPLIANCE retention
-  # that the gateway refuses to delete for EVERY identity including the store's
-  # own root account:
+  # MEASURED, on an object under COMPLIANCE retention that the gateway refuses
+  # to delete for EVERY identity including the store's own root account:
   #
-  #     curl -X DELETE http://<filer>:8888/buckets/<bucket>/<key>   -> 204
+  #     curl -X DELETE http://<filer>:8888/buckets/<bucket>/<key>.versions?recursive=true
   #     the object is gone; the S3 layer reports NoSuchKey
   #
-  # No credential. No signature. One request. The Filer's HTTP API is a second
-  # door to the same bytes and it has no lock on it, so the lock is only worth
-  # what the reachability of that door is worth. Two things close it here and
-  # both are load-bearing:
+  # No credential. No signature. One request. The master's and the volume
+  # server's HTTP APIs write and delete raw needles the same way. So the lock is
+  # only worth what the reachability of those doors is worth. Until #451 that
+  # meant three containers and a backend network only the gateway joined,
+  # because in one process every API shared one bind address.
   #
-  #   1. THE FILER'S HTTP API IS SWITCHED OFF AT THE PROCESS (`-disableHttp`).
-  #      The gateway reaches the Filer over gRPC, which that flag leaves alone
-  #      — measured: the whole stack, including SEG-005's canary, works with
-  #      the HTTP listener gone.
-  #   2. THE FILER IS ON A NETWORK NOTHING BUT THE GATEWAY JOINS. The sealer,
-  #      the canary and the one-time init are on innsegl-objects and reach the
-  #      gateway; innsegl-object-backend has exactly three members and the
-  #      gateway is the only one on both.
+  # The pinned release lets one process keep the fence. THREE CONTROLS:
   #
-  # OPS-029 attempts that delete from the object network and requires it to
-  # find nothing. The same arrangement in ONE process — the store's `server
-  # -s3` mode — publishes both doors on one bind address, so splitting them is
-  # what makes the isolation expressible at all.
+  #   1. EVERY LISTENER BUT S3 BINDS THE CONTAINER'S LOOPBACK. `-ip.bind`
+  #      covers the master, the volume server and the Filer, HTTP and gRPC;
+  #      `-s3.ip.bind` opens S3 alone. Measured from innsegl-objects: 8333 and
+  #      18333 accept a connection, 9333 19333 8080 18080 8888 18888 refuse.
+  #   2. THE FILER'S HTTP HANDLERS ARE OFF (`-filer.disableHttp`, new in 4.48).
+  #      Even on loopback the destroying request above answers 404. S3 reaches
+  #      the Filer over gRPC, which the flag leaves alone.
+  #   3. S3's gRPC PORT REQUIRES A PER-HOST KEY. It binds where S3 does.
+  #      innsegl-s3-identities generates the key once per host into the
+  #      identities volume, and object-store-start.sh refuses to start the
+  #      store without it. No shipped file carries a value for it;
+  #      $INNSEGL_OBJECT_FILER_JWT_KEY overrides it.
   #
-  # NO PUBLISHED PORT ANYWHERE IN THE THREE: see postgres for why a published
-  # port is a segmentation hole here rather than a convenience.
-  # --------------------------------------------------------------------------
-
-  # --------------------------------------------------------------------------
-  # innsegl-object-store — master and volume. Holds the BYTES.
+  # OPS-029 runs this exact command, probes every port from the network the
+  # sealer and the canary are on, and requires only S3 to answer.
   #
-  # It is on the backend network only, and it is worth saying what that buys
-  # and what it does not: its own HTTP APIs accept unauthenticated writes and
-  # deletes of raw needles from anything that can reach them (measured). There
-  # is no credential to scope here, so reachability IS the control.
-  # --------------------------------------------------------------------------
-  innsegl-object-store:
-    image: *object-store-image
-    container_name: innsegl-object-store
-    restart: unless-stopped
-    networks:
-      - innsegl-object-backend
-    volumes:
-      - innsegl-object-data:/data
-    # -ip: the address this advertises to the rest of the cluster. It has to be
-    # the name the Filer and the gateway resolve, not the container's own
-    # auto-detected address, or a volume lookup hands back something they
-    # cannot route to.
-    command:
-      - server
-      - -dir=/data
-      - -ip=innsegl-object-store
-      # EACH BUCKET IS A COLLECTION AND A NEW COLLECTION IMMEDIATELY RESERVES
-      # SEVEN VOLUMES; the default cap is eight. This deployment has one
-      # bucket, so the default would hold — but a write with nowhere to go
-      # comes back as HTTP 500 "We encountered an internal error, please try
-      # again" (measured), which is indistinguishable from a transient fault
-      # and says nothing about capacity. Volumes are sparse: eight of them
-      # measured 256 KiB on disk. Raising the cap costs nothing and moves the
-      # failure to a place an operator can read.
-      - -volume.max=32
-
-      # TELEMETRY, OFF. The master reports cluster statistics to
-      # https://telemetry.seaweedfs.com/api/collect every 24h once 10 GiB are
-      # stored, and the upstream default is ON. The payload is the cluster's
-      # shape — version, host OS, volume-server/volume/filer counts, total bytes
-      # — and, unavoidably, the source address, which is the operator's. None of
-      # that is this deployment's to send.
-      #
-      # innsegl-object-backend is `internal: true`, so the call cannot leave and
-      # the hostname does not even resolve (measured 2026-09-18: SERVFAIL, so not
-      # even the DNS query escapes). This flag is the second lock. The network is
-      # a property of the topology and a topology gets edited; this is a property
-      # of the process, and the two fail independently.
-      #
-      # THE FLAG IS NOT THE ONE THE LOG SUGGESTS. The startup banner says "use
-      # -telemetry=false to opt out". That is the standalone `weed master`
-      # spelling. This deployment runs `weed server`, which prefixes every master
-      # flag and rejects the banner's advice outright — measured against the
-      # pinned image:
-      #
-      #   weed server -telemetry=false  ->  flag provided but not defined
-      #
-      # which does not warn, it crashloops the object store. Anyone acting on the
-      # log line alone breaks the deployment, so the working spelling is written
-      # down here next to the reason.
-      - -master.telemetry=false
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9333/cluster/healthz || exit 1"]
-      interval: 3s
-      timeout: 5s
-      retries: 40
-      start_period: 5s
-    security_opt:
-      - no-new-privileges:true
-
-  # --------------------------------------------------------------------------
-  # innsegl-object-filer — the metadata layer, with its HTTP door removed.
+  # NO PUBLISHED PORT: see postgres for why a published port is a segmentation
+  # hole here rather than a convenience.
   #
-  # `-disableHttp` leaves gRPC, which is what the gateway uses, and takes away
-  # the unauthenticated delete described above. `-disableDirListing` is
-  # belt-and-braces for the same surface.
+  # -ip IS THE OLD STORAGE CONTAINER'S NAME, MAPPED TO LOOPBACK. The parts dial
+  # each other by the -ip name, and they listen on loopback only, so that name
+  # has to resolve to 127.0.0.1 inside this container (extra_hosts). It is
+  # `innsegl-object-store` and not a fresh name because the master keeps its
+  # raft state on innsegl-object-data and that state names the node: measured,
+  # a master started on an existing volume under a different name never
+  # becomes leader.
   #
-  # ITS OWN STORE IS ON A VOLUME. The Filer keeps the bucket and object
-  # metadata in an embedded database under -defaultStoreDir; without a volume a
-  # restart would leave the bytes in innsegl-object-data addressable by nothing.
-  #
-  # NO HEALTHCHECK, said plainly rather than left as an omission: with HTTP off
-  # there is no endpoint to ask. What gates everything downstream is
-  # innsegl-object-init, which retries an AUTHENTICATED S3 call until it works
-  # — and that call only works when all three of these are up and linked.
-  # --------------------------------------------------------------------------
-  innsegl-object-filer:
-    image: *object-store-image
-    container_name: innsegl-object-filer
-    restart: unless-stopped
-    depends_on:
-      innsegl-object-store:
-        condition: service_healthy
-    networks:
-      - innsegl-object-backend
-    volumes:
-      - innsegl-object-filer-data:/data
-    environment:
-      # See x-object-filer-jwt. Set here and NOT on innsegl-s3: the gateway runs
-      # -iam=false against a static identities file and makes no IAM call, and
-      # this same key doubles as the S3 STS fallback signer — behaviour this
-      # deployment has no reason to acquire.
-      WEED_JWT_FILER_SIGNING_KEY: *object-filer-jwt
-    command:
-      - filer
-      - -master=innsegl-object-store:9333
-      - -ip=innsegl-object-filer
-      - -defaultStoreDir=/data
-      - -disableHttp
-      - -disableDirListing
-    security_opt:
-      - no-new-privileges:true
-
-  # --------------------------------------------------------------------------
-  # innsegl-s3 — the gateway. The ONLY thing in this stack that enforces object
-  # lock, and the only member of both object networks.
-  #
-  # IT SHIPS NO DEFAULT CREDENTIALS, and this is the failure that reads like
-  # something else. Without -config every signed request is refused with
-  # "Signed request requires setting up SeaweedFS S3 authentication", which a
-  # caller sees as AccessDenied on a write and can easily mistake for object
-  # lock working. innsegl-s3-identities mints the file; this gates on it.
-  #
-  # THREE LISTENERS ARE TURNED OFF because none of them is part of storing a
-  # sealed segment and each is an authenticated write surface on a service
-  # whose entire job is refusing writes to sealed objects. This is the same
-  # argument the old store's disabled browser console carried:
-  #
-  #   -iam=false        an IAM API served on the S3 port itself
-  #   -port.iceberg=0   an Iceberg REST catalog
-  #   -port.lance=0     a Lance namespace server
+  # THE VOLUMES ARE THE OLD ONES, WHERE THEIR DATA ALREADY IS. innsegl-object-data
+  # was the storage container's /data and is /data here. innsegl-object-filer-data
+  # held the Filer's store at <volume>/filerldb2; it is mounted at
+  # /data/filerldb2 and the store pointed one level down, so an existing
+  # deployment comes up with its sealed segments addressable and nothing moved
+  # (measured: an object written and locked on the three-container 4.46 stack
+  # read back, still COMPLIANCE and still refused deletion, after the switch).
   # --------------------------------------------------------------------------
   innsegl-s3:
     image: *object-store-image
     container_name: innsegl-s3
     restart: unless-stopped
     depends_on:
-      innsegl-object-filer:
-        condition: service_started
       innsegl-s3-identities:
         condition: service_completed_successfully
     networks:
-      - innsegl-object-backend
       - innsegl-objects
+    extra_hosts:
+      - "innsegl-object-store=127.0.0.1"
+    # Reads this host's key and hands it to the image's own entrypoint; it
+    # refuses to start the store without one.
+    entrypoint: ["/bin/sh", "/innsegl/object-store-start.sh"]
+    environment:
+      INNSEGL_OBJECT_FILER_JWT_KEY_FILE: /run/innsegl/s3/filer-jwt.key
+      # The image's filer.toml puts the store at /data/filerldb2, which is the
+      # root of innsegl-object-filer-data here; the old Filer's store is one
+      # level down.
+      WEED_LEVELDB2_DIR: /data/filerldb2/filerldb2
     volumes:
+      - innsegl-object-data:/data
+      - innsegl-object-filer-data:/data/filerldb2
       # READ-ONLY, and the only other mount of this volume is the one-shot that
       # writes it. A gateway that could rewrite its own identity file could
       # grant itself the bucket-wide Write that OPS-026 exists to withhold.
       - innsegl-s3-identities:/run/innsegl/s3:ro
+      - ./innsegl/object-store-start.sh:/innsegl/object-store-start.sh:ro
     command:
-      - s3
-      - -filer=innsegl-object-filer:8888
-      - -port=8333
-      - -config=/run/innsegl/s3/identities.json
-      - -iam=false
-      - -port.iceberg=0
-      - -port.lance=0
+      - server
+      - -dir=/data
+      - -ip=innsegl-object-store
+      - -ip.bind=127.0.0.1
+      # EACH BUCKET IS A COLLECTION AND A NEW COLLECTION IMMEDIATELY RESERVES
+      # SEVEN VOLUMES; the default cap is eight. A write with nowhere to go
+      # comes back as HTTP 500 "We encountered an internal error, please try
+      # again" (measured), which says nothing about capacity. Volumes are
+      # sparse: eight of them measured 256 KiB on disk.
+      - -volume.max=32
+      # TELEMETRY, OFF. The master reports the cluster's shape and, by its
+      # source address, the operator to an upstream endpoint every 24h once
+      # 10 GiB are stored, and the default is ON. innsegl-objects is
+      # `internal: true`, so the call cannot leave; this is the second lock.
+      #
+      # THE FLAG IS NOT THE ONE THE LOG SUGGESTS. The banner says
+      # "-telemetry=false". `weed server` prefixes every master flag and
+      # rejects that spelling (measured: "flag provided but not defined", and
+      # the store crashloops).
+      - -master.telemetry=false
+      - -filer
+      - -filer.disableHttp
+      - -filer.disableDirListing
+      - -s3
+      - -s3.ip.bind=0.0.0.0
+      - -s3.port=8333
+      # IT SHIPS NO DEFAULT CREDENTIALS, and this is the failure that reads
+      # like something else. Without a config every signed request is refused
+      # with "Signed request requires setting up SeaweedFS S3 authentication",
+      # which a caller sees as AccessDenied on a write and can mistake for
+      # object lock working. innsegl-s3-identities mints the file.
+      - -s3.config=/run/innsegl/s3/identities.json
+      # THREE LISTENERS ARE TURNED OFF because none of them is part of storing
+      # a sealed segment and each is a write surface on a service whose job is
+      # refusing writes to sealed objects: an IAM API on the S3 port itself,
+      # an Iceberg REST catalog, and a Lance namespace server.
+      - -s3.iam=false
+      - -s3.port.iceberg=0
+      - -s3.port.lance=0
+    # READY MEANS S3 ANSWERS AND THE MASTER KNOWS THE VOLUME SERVER. After a
+    # restart S3 can answer before the volume server has reported in, and a
+    # read in that gap fails with "volume id N not found" (measured). The
+    # second check closes it.
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8333/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz && wget -q -O- http://127.0.0.1:9333/dir/status | grep -q '\"DataNodes\":\\[{' || exit 1"]
       interval: 3s
       timeout: 5s
       retries: 40
-      start_period: 5s
+      start_period: 15s
     security_opt:
       - no-new-privileges:true
 
@@ -782,6 +702,9 @@ services:
   # be preserved, it is the compose file's access-control decision rendered into
   # the format the gateway reads, and a stale one is a deployment whose scope
   # is whatever it was the first time it ever came up.
+  #
+  # THE OBJECT STORE'S PER-HOST KEY IS THE EXCEPTION (#451): generated on the
+  # first run, then kept, in the same volume. See s3-identities.sh.
   # --------------------------------------------------------------------------
   innsegl-s3-identities:
     image: *object-store-image
@@ -792,6 +715,9 @@ services:
     command: ["/innsegl/init/s3-identities.sh"]
     environment:
       INNSEGL_S3_IDENTITIES_FILE: *s3-identities-file
+      # Optional. Unset, the one-shot generates this host's object store key
+      # once and keeps it; set, it is used instead.
+      INNSEGL_OBJECT_FILER_JWT_KEY: ${INNSEGL_OBJECT_FILER_JWT_KEY:-}
       INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-user
       INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-password
       INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY: *object-store-sealer-user
@@ -1001,9 +927,8 @@ services:
       - innsegl-spire-admin
       - innsegl-sigstore
       - innsegl-mcp-clients
-      # The sealer's. The gateway, which enforces object lock, and NOT
-      # innsegl-object-backend: #227 put the Filer where nothing but the
-      # gateway can reach it.
+      # The sealer's. Only the object store's S3 port, which enforces object
+      # lock, answers here; its other listeners bind loopback (#451).
       - innsegl-objects
     labels:
       # The selector register.sh registers. Ours, not compose's own label
@@ -2063,29 +1988,15 @@ networks:
   # sealer's, and an MCP that could write to the segment store could write a
   # segment nothing sealed.
   #
-  # WHAT IS *NOT* HERE IS THE POINT (RM-143, #227): the Filer and the volume
-  # server are not members. Object lock lives in the gateway; the Filer's own
-  # API reaches the same bytes with no credential at all, and the volume
-  # server's accepts unauthenticated deletes of raw needles. A member of this
-  # network can reach neither. OPS-029 attempts it from here and requires the
-  # attempt to find nothing.
+  # WHAT IS *NOT* REACHABLE HERE IS THE POINT (RM-143 #227, #451): the Filer,
+  # the master and the volume server run in innsegl-s3 but bind its loopback.
+  # Object lock lives in the S3 layer; the Filer's own API reaches the same
+  # bytes with no credential at all, and the volume server's accepts
+  # unauthenticated deletes of raw needles. A member of this network can reach
+  # neither. OPS-029 attempts it from here and requires the attempt to find
+  # nothing.
   innsegl-objects:
     name: innsegl-objects
-    internal: true
-
-  # THE STORE'S INSIDES. MEMBERS: innsegl-object-store, innsegl-object-filer,
-  # innsegl-s3. Three, and never a fourth — the gateway is the only member that
-  # is also on innsegl-objects, which is the whole of what makes it the only
-  # route in.
-  #
-  # IT COSTS ONE OF #100's ROUGHLY TWENTY-NINE NETWORKS and there was no way to
-  # spend zero: the isolation being bought is between two containers that must
-  # talk to each other and a third that must not reach either, which is exactly
-  # what a second network is. The alternative — one process serving S3 and the
-  # Filer on one bind address — is the arrangement that has no expressible
-  # isolation at all.
-  innsegl-object-backend:
-    name: innsegl-object-backend
     internal: true
 
   # The agents' network, and the MCP's only non-internal one — a container on
@@ -2154,13 +2065,14 @@ volumes:
   innsegl-ledger-data:
     name: ${INNSEGL_TRUST_LEDGER_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-ledger-data}
     external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
-  # Sealed segments' BYTES, under object lock. MOUNTED BY: innsegl-object-store.
+  # Sealed segments' BYTES, under object lock. MOUNTED BY: innsegl-s3 (/data).
   innsegl-object-data:
 
   # The store's metadata — which bucket, which key, which version, and which
-  # retention. MOUNTED BY: innsegl-object-filer. Separate from the bytes because
-  # they are separate processes; losing this volume leaves innsegl-object-data
-  # full of segments addressable by nothing.
+  # retention. MOUNTED BY: innsegl-s3 (/data/filerldb2). A separate volume
+  # because it was a separate container's until #451, and keeping it is what
+  # carries an existing deployment's segments over. Losing it leaves
+  # innsegl-object-data full of segments addressable by nothing.
   innsegl-object-filer-data:
 
   # The gateway's identity file: the two S3 credentials and the scope of the

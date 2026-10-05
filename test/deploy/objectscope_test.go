@@ -32,17 +32,18 @@ import (
 // COMPLIANCE to GOVERNANCE, after which everything written is deletable by a
 // holder of a bypass-capable credential.
 //
-// THE NARROWING IS A KEY PREFIX AND NOT A PERMISSION NAME (RM-143, #227), and
-// that is the store's doing rather than a preference. Measured on the shipped
-// image: its permission model has NO separate action for setting a bucket's
-// object-lock configuration. An identity granted a bucket-wide `Write` may set
-// it, and the downgrade succeeds. There is nothing to withhold by name.
-//
-// What it does have is prefix-scoped grants, and they draw the line in exactly
-// the right place. Measured, same image, same bucket, one identity granted
-// `Read:<bucket>`, `List:<bucket>` and `Write:<bucket>/<prefix>*`:
+// THE NARROWING IS A KEY PREFIX, AND SINCE 4.48 ALSO A PERMISSION NAME. Up to
+// 4.46 the store's permission model had NO separate action for setting a
+// bucket's object-lock configuration: an identity granted a bucket-wide `Write`
+// could set it, and the downgrade succeeded (RM-143, #227). 4.48 (#451) gives
+// the lock calls their own actions; the scoped identity is granted the two
+// reads and never PutBucketObjectLockConfiguration. The prefix stays because it
+// bounds where the sealer writes. Measured, same image, same bucket, one
+// identity granted `Read:<bucket>`, `GetBucketObjectLockConfiguration:<bucket>`,
+// `GetObjectRetention:<bucket>`, `List:<bucket>` and `Write:<bucket>/<prefix>*`:
 //
 //	GetObjectLockConfiguration    allowed   the canary reads it every run
+//	GetObjectRetention            allowed   and the probe's retention
 //	PutObject under the prefix    allowed   the sealer's whole job
 //	PutObject anywhere else       REFUSED
 //	PutObjectLockConfiguration    REFUSED   the downgrade itself

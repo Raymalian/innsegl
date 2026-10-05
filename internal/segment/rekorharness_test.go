@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -28,11 +29,14 @@ import (
 // internal/ledger/pgharness_test.go stands Postgres up, and skips loudly when
 // Docker is absent rather than passing quietly.
 //
-// # Why five containers
+// # Why four containers
 //
 // Rekor is a front end over a Trillian log; Trillian is a log over MySQL, and
 // its sequencer is a separate process without which nothing is ever
-// integrated and no inclusion proof exists. Rekor's search index needs Redis.
+// integrated and no inclusion proof exists. Rekor's search index is a table
+// in that same MySQL, created as the shipped stack creates it (#451): the
+// database mounts deploy/compose/sigstore/rekor-index.sql and runs it with
+// --init-file, and Rekor connects as the user that file creates.
 // Doc 05 §1 anticipates exactly this: "Rekor's storage dependencies run as
 // sidecars per upstream's own compose reference; pin versions." The shape and
 // the flags below are upstream Rekor's own docker-compose, so RM-030 (#38) can
@@ -60,7 +64,6 @@ const (
 	// vendoring a copy of Trillian's schema that could drift from the server
 	// that reads it.
 	defaultTrillianDBImage = "gcr.io/trillian-opensource-ci/db_server:v1.4.0"
-	defaultRekorRedisImage = "redis:7-alpine"
 
 	// Credentials for a throwaway database inside a throwaway container.
 	trillianDBName     = "test"
@@ -70,6 +73,14 @@ const (
 	// rekorOrigin is the checkpoint origin the log signs under. Fixed so the
 	// checkpoint assertions have something stable to match.
 	rekorOrigin = "rekor.innsegl.test"
+
+	// rekorIndexSQL is the shipped file that creates Rekor's index database
+	// and user, relative to this package. rekorIndexDSNTail is the user,
+	// password and database it creates, as deploy/compose/sigstore.yml's DSN
+	// names them; test/deploy checks the two agree.
+	rekorIndexSQL  = "../../deploy/compose/sigstore/rekor-index.sql"
+	rekorIndexUser = "rekor:rekor-index"
+	rekorIndexDB   = "rekor_index"
 )
 
 var (
@@ -179,8 +190,9 @@ func (s *rekorStack) stop() []error {
 	return errs
 }
 
-// startRekorStack brings up MySQL, the Trillian log server and sequencer,
-// Redis and Rekor, and waits until the log answers.
+// startRekorStack brings up MySQL (which also holds the search index), the
+// Trillian log server and sequencer and Rekor, and waits until the log
+// answers.
 func startRekorStack(ctx context.Context) (*rekorStack, error) {
 	port, err := rekorFreeHostPort(ctx)
 	if err != nil {
@@ -194,26 +206,24 @@ func startRekorStack(ctx context.Context) (*rekorStack, error) {
 		return nil, fmt.Errorf("create network: %w", err)
 	}
 
+	indexSQL, absErr := filepath.Abs(rekorIndexSQL)
+	if absErr != nil {
+		return s, fmt.Errorf("locate rekor-index.sql: %w", absErr)
+	}
 	db := "innsegl-rekor-db-" + suffix
 	if err := s.run(ctx, db,
 		"--env", "MYSQL_ROOT_PASSWORD="+trillianDBPassword,
 		"--env", "MYSQL_DATABASE="+trillianDBName,
 		"--env", "MYSQL_USER="+trillianDBUser,
 		"--env", "MYSQL_PASSWORD="+trillianDBPassword,
+		"--volume", indexSQL+":/etc/mysql/rekor-index.sql:ro",
 		rekorEnvImage("INNSEGL_TEST_TRILLIAN_DB_IMAGE", defaultTrillianDBImage),
+		"mysqld", "--init-file=/etc/mysql/rekor-index.sql",
 	); err != nil {
 		return s, fmt.Errorf("start trillian database: %w", err)
 	}
 	if err := s.waitForSchema(ctx, db, 3*time.Minute); err != nil {
 		return s, err
-	}
-
-	redis := "innsegl-rekor-redis-" + suffix
-	if err := s.run(ctx, redis,
-		rekorEnvImage("INNSEGL_TEST_REKOR_REDIS_IMAGE", defaultRekorRedisImage),
-		"--bind", "0.0.0.0", "--appendonly", "no",
-	); err != nil {
-		return s, fmt.Errorf("start redis: %w", err)
 	}
 
 	mysqlURI := fmt.Sprintf("%s:%s@tcp(%s:3306)/%s",
@@ -254,7 +264,8 @@ func startRekorStack(ctx context.Context) (*rekorStack, error) {
 		rekorEnvImage("INNSEGL_TEST_REKOR_IMAGE", defaultRekorImage),
 		"serve",
 		"--trillian_log_server.address="+logServer, "--trillian_log_server.port=8090",
-		"--redis_server.address="+redis, "--redis_server.port=6379",
+		"--search_index.storage_provider=mysql",
+		"--search_index.mysql.dsn="+rekorIndexUser+"@tcp("+db+":3306)/"+rekorIndexDB,
 		"--host=0.0.0.0", "--port=3000", "--rekor_server.address=0.0.0.0",
 		// An in-memory signing key: the log's identity lasts as long as the
 		// container, which is exactly as long as the test trusts it.
