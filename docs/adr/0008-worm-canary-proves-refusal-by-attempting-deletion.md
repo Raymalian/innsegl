@@ -1,6 +1,6 @@
 # ADR-0008: Prove the WORM configuration by attempting a real deletion, and fail closed on anything short of a refusal
 
-- Status: accepted
+- Status: accepted; amended 2026-10-05 (see the Amendment)
 - Date: 2026-08-28
 - Deciders: Mike
 
@@ -192,3 +192,38 @@ a configuration check means every claim that this deployment refuses deletion
 rests on a bucket setting nobody exercised, and the two known ways a
 configuration check passes while deletion is permitted (an expired window, a
 bypass-privileged credential) become invisible again.
+
+## Amendment (2026-10-05): the object store runs as one process
+
+The canary proves the S3 layer refuses a deletion. It cannot prove that no
+other API reaches the same bytes, and on the reference store three do: the
+Filer's HTTP API, the master's and the volume server's. None of them checks a
+credential or object lock. Since #227 the reference deployment kept them
+unreachable by running the store as three containers, with the Filer and the
+storage server on a network only the S3 gateway joined.
+
+The store now runs as one `weed server` process (`innsegl-s3`, #451), pinned
+to 4.48, the first release with `-filer.disableHttp` for that command. The
+fence is kept by bind address, not by network:
+
+- every listener but S3 binds the container's loopback (`-ip.bind=127.0.0.1`,
+  `-s3.ip.bind=0.0.0.0`);
+- the Filer's HTTP handlers are off (`-filer.disableHttp`);
+- S3's gRPC port, which binds with S3, requires a per-host key. The key is
+  generated once per host, never shipped, and the store refuses to start
+  without it.
+
+OPS-029 runs the shipped command and requires that, from the network the
+sealer and the canary use, only S3 accepts a connection, the Filer's
+destroying request fails, and an administrative call on S3's gRPC port is
+refused unless signed with this host's key. Its control is the same process
+without these settings, where the request destroys a retained object.
+
+4.48 also gives the object-lock calls their own permissions. The scoped
+identity is granted `GetBucketObjectLockConfiguration` and `GetObjectRetention`
+by name and is never granted `PutBucketObjectLockConfiguration`. Its write grant
+keeps its key prefix, which bounds where the sealer writes.
+
+Existing data carries over: the process mounts the same two volumes and
+advertises the old storage container's name, which the master's saved state
+carries. No event field, MCP surface or other protected string changes.

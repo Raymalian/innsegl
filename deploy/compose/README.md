@@ -303,7 +303,7 @@ summary:
 |---|---|
 | [`spire/README.md`](spire/README.md) | `spire-server`, `spire-agent`, `spire-oidc` — the trust domain, workload attestation, and the JWT-SVID → OIDC bridge |
 | [`sigstore/README.md`](sigstore/README.md) | `fulcio`, `rekor` and Rekor's backing Trillian log and database — the CA and the transparency log |
-| [`innsegl/README.md`](innsegl/README.md) | `postgres`, the object store (`innsegl-object-store`, `innsegl-object-filer`, `innsegl-s3`), `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api` (which serves the dashboard), `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
+| [`innsegl/README.md`](innsegl/README.md) | `postgres`, the object store (`innsegl-s3`, one process), `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api` (which serves the dashboard), `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
 
 The first two are Innsegl's dependencies. The third is Innsegl.
 
@@ -318,10 +318,10 @@ the compose files. Fulcio has no route into SPIRE beyond fetching two public
 documents; Rekor has no route to Trillian's database; the SPIRE admin API is
 reachable from one network with two members, and the second is the MCP it was
 declared for. The MCP is on no network with the object store, and the dashboard
-is on no network with the MCP. The object store's Filer and volume server are on
-a network whose only other member is its S3 gateway, because object lock is
-enforced at the gateway and the Filer's own API destroys a retained object with
-no credential at all (#227). Neither Postgres nor the object store publishes a
+is on no network with the MCP. The object store's Filer, master and volume server
+bind the store container's loopback and only its S3 port is reachable, because
+object lock is enforced at the S3 layer and the Filer's own API destroys a
+retained object with no credential at all (#227, #451). Neither Postgres nor the object store publishes a
 host port, because
 a published port is reachable by address from an unrelated bridge network —
 measured, and explained in [`innsegl/README.md`](innsegl/README.md). Compose is

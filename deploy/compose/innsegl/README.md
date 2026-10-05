@@ -9,7 +9,7 @@ doc 05 §1's other seven rows, none of which existed as a compose service before
 | doc 05 §1 row | here | notes |
 |---|---|---|
 | `postgres` | service | ledger hot tier, volume-backed, **publishes no host port** |
-| object storage | **three services** | `innsegl-object-store` holds the bytes, `innsegl-object-filer` the metadata, and `innsegl-s3` is the S3 gateway — the only one of the three that enforces object lock, and the only one anything else can reach. Buckets get object lock **on at creation**, COMPLIANCE mode |
+| object storage | `innsegl-s3` | **one process** (#451): master, volume server, Filer and the S3 gateway. Only the S3 layer enforces object lock, and only its port is reachable; every other listener binds the container's loopback. Buckets get object lock **on at creation**, COMPLIANCE mode |
 | `innsegl-mcp` | service | attested through the Workload API; append-only DB role. Runs the seal, reconcile and reap loops by default (ADR-0056) |
 | `innsegl-reconciler` | loop in `innsegl-mcp`; service, `--profile separate` | same binary, `reconcile` |
 | `innsegl-sealer` | loop in `innsegl-mcp`; service, `--profile separate` | same binary, `seal` |
@@ -401,12 +401,13 @@ ever came up.
 
 ## The Filer is a second door, and it has no lock on it
 
-**#227, and it is the reason the object store is three containers.**
+**#227 made the object store three containers because of it. #451 made it one
+process again, and the door stays closed.**
 
-Object lock is enforced at the **S3 layer**. The Filer is a different process
-speaking a different protocol to the same metadata. Measured, on the pinned
-image, against an object under `COMPLIANCE` retention that the gateway refuses
-to delete for *every* identity including the store's own root account:
+Object lock is enforced at the **S3 layer**. The Filer is a different API to
+the same metadata. Measured, on the pinned image, against an object under
+`COMPLIANCE` retention that the gateway refuses to delete for *every* identity
+including the store's own root account:
 
 ```
 curl -X DELETE 'http://<filer>:8888/buckets/<bucket>/<key>.versions?recursive=true'
@@ -417,23 +418,47 @@ No credential. No signature. The S3 layer then reports `NoSuchKey`. The layer
 below has the same shape: the master and volume servers accept unauthenticated
 writes and deletes of raw needles from anything that can reach them.
 
-Three things close it, and OPS-029 measures all three by attempting the delete
-rather than by reading the configuration:
+Three things close it in `innsegl-s3`, and OPS-029 measures them by attempting
+the requests rather than by reading the configuration:
 
-1. **The Filer and the gateway are separate containers.** `weed server -s3`
-   runs both in one process on one bind address, and there is then no
-   arrangement of networks that admits the gateway and excludes the Filer.
-2. **The Filer runs with `-disableHttp`.** The gateway reaches it over gRPC,
-   which that flag leaves alone — the whole stack, canary included, works with
-   the HTTP listener gone.
-3. **`innsegl-object-backend` has three members**, and the gateway is the only
-   one also on `innsegl-objects`. A compromised sealer, canary or init cannot
-   resolve the Filer's name, let alone reach it.
+1. **Every listener but S3 binds the container's loopback.** `-ip.bind=127.0.0.1`
+   covers the master, the volume server and the Filer, HTTP and gRPC;
+   `-s3.ip.bind=0.0.0.0` opens S3 alone. From `innsegl-objects` only 8333
+   (S3) and 18333 (S3's gRPC) accept a connection.
+2. **The Filer runs with `-filer.disableHttp`** (first released in 4.48). Even
+   on loopback the request above answers 404. S3 reaches the Filer over gRPC,
+   which the flag leaves alone.
+3. **S3's gRPC port requires a per-host key.** `innsegl-s3-identities`
+   generates it once per host into its volume and keeps it across restarts
+   and updates; `object-store-start.sh` refuses to start the store without it.
+   No shipped file carries a value for it. To supply your own, set
+   `INNSEGL_OBJECT_FILER_JWT_KEY` (at least 48 characters).
 
-The gateway's own extra listeners are turned off for the reason the old browser
-console was: `-iam=false` (an IAM API on the S3 port itself), `-port.iceberg=0`,
-`-port.lance=0`. None is part of storing a sealed segment and each is an
-authenticated write surface on the service whose job is refusing writes.
+The S3 layer's own extra listeners are turned off for the reason the old
+browser console was: `-s3.iam=false` (an IAM API on the S3 port itself),
+`-s3.port.iceberg=0`, `-s3.port.lance=0`. None is part of storing a sealed
+segment and each is a write surface on the service whose job is refusing
+writes.
+
+### Upgrading from the three-container store
+
+The one process mounts the same two volumes, where their data already is:
+`innsegl-object-data` at `/data` and `innsegl-object-filer-data` at
+`/data/filerldb2`, with the Filer's store pointed at its old place inside it.
+It advertises itself as `innsegl-object-store`, the old storage container's
+name, because the master's saved state names the node. Nothing is copied.
+
+`make update` runs `up -d --remove-orphans`, which removes
+`innsegl-object-store` and `innsegl-object-filer` and recreates `innsegl-s3`.
+Two processes must never open the same data directory, so check afterwards that
+neither old container is left:
+
+```
+docker ps -a --filter name=innsegl-object-store --filter name=innsegl-object-filer
+```
+
+The old `innsegl-object-backend` network has no members afterwards and can be
+removed with `docker network rm innsegl-object-backend`.
 
 ---
 
@@ -525,13 +550,12 @@ mergeable are deliberately not:
 | `innsegl-ledger` (internal) | postgres, db-init, mcp, reconciler, sealer |
 | `innsegl-ledger-readonly` (internal) | postgres, api |
 | `innsegl-objects` (internal) | innsegl-s3, object-init, sealer, canary |
-| `innsegl-object-backend` (internal) | object-store, object-filer, innsegl-s3 |
 | `innsegl-mcp-clients` | mcp, demo-agent |
 | `innsegl-dashboard-frontend` | api (it serves the dashboard) |
 
-`innsegl-s3` is the only service on both object networks, and that is the whole
-of what makes it the only route to the Filer and the volume server. The MCP is
-on no network with either. The dashboard is on no network with the
+`innsegl-s3` runs the Filer and the volume server, and binds both on its own
+loopback, so S3 is the only route to them. The MCP is on no network with the
+object store. The dashboard is on no network with the
 MCP — one shared frontend network would give it a route to the write surface,
 which is the one thing doc 05 §1's dashboard note forbids.
 
@@ -545,9 +569,9 @@ alone cannot publish a port.
 `network_mode: none`, which costs zero of #100's twenty-nine. It generates key material and writes a file;
 nothing it does requires reaching anything, so nothing can reach it either.
 MEASURED: this file added exactly five networks (17 -> 22 on a machine already
-running the two dependency stacks and one test harness) and #227 made it six.
-The full reference deployment is fourteen: three for SPIRE, five for Sigstore,
-six here. Docker's
+running the two dependency stacks and one test harness), #227 made it six and
+#451 five again. The full reference deployment is thirteen: three for SPIRE,
+five for Sigstore, five here. Docker's
 default address pools run out at roughly twenty-nine and this repository's
 per-process test harnesses take up to eight each, so #100 is a real constraint
 and every network above had to earn its place — one that would have been merged

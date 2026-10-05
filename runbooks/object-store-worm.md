@@ -47,7 +47,7 @@ delisted from the registry the reference stack pulled it from, so SeaweedFS was
 measured as a replacement rather than read about. RM-143 (#227) made it the
 store the reference deployment ships.
 
-**Setup.** `chrislusf/seaweedfs:4.46`. Bucket created with
+**Setup.** `chrislusf/seaweedfs:4.46` (re-run on 4.48 for #451). Bucket created with
 `--object-lock-enabled-for-bucket`, then `put-object-lock-configuration` with
 `COMPLIANCE` for 1 day. The shipped `innsegl canary` binary, pointed at it with
 `-endpoint`. Not a re-implementation.
@@ -75,7 +75,7 @@ aws s3api get-object --version-id <the version S3 had just refused to delete>
 → NoSuchKey
 ```
 
-No credential. No signature. Re-measured at 4.46 and unchanged. The Filer is
+No credential. No signature. Re-measured at 4.46 and at 4.48, unchanged. The Filer is
 unauthenticated by default and lock-unaware. It is not a misconfiguration of
 object lock; it is a separate access path that object lock does not govern.
 
@@ -91,16 +91,26 @@ can reach them — measured: `GET /dir/assign` from the master, then `PUT` and
 
 **Therefore, if you deploy SeaweedFS: isolating everything below the S3 gateway
 is a hard requirement, not a hardening suggestion.** The reference deployment
-does three things, and OPS-029 measures all of them:
+runs the store as one process since #451 (`chrislusf/seaweedfs:4.48`, the first
+release with `-filer.disableHttp` for `weed server`), and does three things.
+OPS-029 measures all of them:
 
-1. **The Filer and the S3 gateway are separate containers.** `weed server -s3`
-   runs both in one process on one bind address, and there is then no
-   arrangement of networks that admits the gateway and excludes the Filer.
-2. **The Filer runs with `-disableHttp`.** The gateway talks to it over gRPC,
-   which that flag leaves alone; the HTTP door is simply gone.
-3. **The Filer and the master/volume server are on a network whose only other
-   member is the gateway**, and the gateway is the only service on both that
-   network and the one the sealer and the canary use.
+1. **Every listener but S3 binds the container's loopback.** `-ip.bind=127.0.0.1`
+   covers the master, the volume server and the Filer, HTTP and gRPC;
+   `-s3.ip.bind=0.0.0.0` opens S3 alone. Measured from the network the sealer
+   and the canary use: 8333 and 18333 (S3 and its gRPC port) accept a
+   connection; 9333, 19333, 8080, 18080, 8888 and 18888 refuse.
+2. **The Filer runs with `-filer.disableHttp`.** S3 talks to it over gRPC,
+   which that flag leaves alone. Even on loopback the destroying request
+   answers `404`.
+3. **S3's gRPC port requires a per-host key.** It binds where S3 does.
+   `innsegl-s3-identities` generates the key once per host, and the store's
+   start script refuses to start without it. No shipped file carries a value
+   for it; `$INNSEGL_OBJECT_FILER_JWT_KEY` overrides it.
+
+Until #451 the reference deployment split the store into three containers and
+put the Filer and the master/volume server on a network only the gateway
+joined, because in one process every API shared one bind address.
 
 An adopter who exposes the Filer has a WORM store that `curl` can empty, with a
 green canary.
@@ -109,7 +119,14 @@ green canary.
 default, an IAM API on the S3 port itself, an Iceberg REST catalog and a Lance
 namespace server. None is part of storing a sealed segment and each is an
 authenticated write surface on the service whose job is refusing writes:
-`-iam=false -port.iceberg=0 -port.lance=0`.
+`-s3.iam=false -s3.port.iceberg=0 -s3.port.lance=0` under `weed server`.
+
+**4.48 gives the lock calls their own permissions.** Reading a bucket's lock
+rule, reading an object's retention and setting the bucket's lock rule are
+`GetBucketObjectLockConfiguration`, `GetObjectRetention` and
+`PutBucketObjectLockConfiguration`, no longer `Read` and `Write`. A scoped
+identity that worked on 4.46 is refused the two reads on 4.48 (measured), so
+`s3-identities.sh` grants them by name and never the third.
 
 **It ships no default credentials, and the failure reads like something else.**
 Started without `-s3.config`, every signed request is refused with `Signed
