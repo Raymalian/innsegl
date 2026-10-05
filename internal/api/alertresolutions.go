@@ -49,7 +49,7 @@ const maxResolutionReasonBytes = 2048
 const (
 	AuthEventAlertsResolved          = "alerts_resolved"
 	AuthEventAlertResolutionRefused  = "alert_resolution_refused"
-	resolutionDisabledMessage        = "this deployment holds no resolver credential, so alerts cannot be resolved from the dashboard; run `innsegl resolve-alert` on the core host"
+	resolutionDisabledMessage        = "resolving an alert needs the resolver role configured on the API, and this deployment has none"
 	resolutionNeedsPasskeyMessage    = "resolving an alert is confirmed with a passkey, and this account has none; add one on the account page first"
 	resolutionCeremonyExpiredMessage = "this confirmation has expired or was already used; start over"
 )

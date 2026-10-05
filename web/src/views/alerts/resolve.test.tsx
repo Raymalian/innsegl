@@ -129,6 +129,21 @@ describe("RM-330 the resolve form", () => {
     render(<ResolveForm eventIds={["a"]} browser={browser({ supported: false })} onResolved={vi.fn()} />);
     await fillAndConfirm();
     expect(await screen.findByRole("alert")).toHaveTextContent(strings.resolve.unsupportedDetail);
+    expect(strings.resolve.unsupportedDetail).not.toMatch(/command/);
+  });
+
+  it("says resolution needs the resolver role when the API has none (ADR-0071)", async () => {
+    const message =
+      "resolving an alert needs the resolver role configured on the API, and this deployment has none";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => respond({ error: { code: "unavailable", message } }, 503)),
+    );
+    render(<ResolveForm eventIds={["a"]} browser={browser()} onResolved={vi.fn()} />);
+    await fillAndConfirm();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(strings.resolve.failedWith(message));
+    expect(alert).not.toHaveTextContent(/resolve-alert/);
   });
 
   it("is a labelled form, operable from the keyboard alone", async () => {

@@ -16,8 +16,8 @@ import (
 
 // RM-330 (#506), ADR-0044's 2026-10-03 amendment: the dashboard resolves an
 // alert, or every open alert in a group, through AlertResolver — a narrow
-// writer that holds no Append and no Migrate, only the write `innsegl
-// resolve-alert` already makes. These cases prove the batch is one
+// writer that holds no Append and no Migrate, only the write the removed
+// resolve-alert CLI made. These cases prove the batch is one
 // all-or-nothing write, and that it refuses exactly what ResolveAlert does.
 
 func newAlertResolver(t *testing.T, dsn string) *AlertResolver {

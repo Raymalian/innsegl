@@ -4,7 +4,7 @@
 -- #506, ADR-0044's 2026-10-03 amendment).
 --
 -- The dashboard may resolve an alert after a fresh passkey ceremony. The
--- write it makes is the one `innsegl resolve-alert` makes: one row in
+-- write it makes is the one the removed resolve-alert CLI made: one row in
 -- innsegl.alert_resolutions. This role may make that write and nothing else.
 -- It may read the two columns of innsegl.events that say whether an event_id
 -- names an alert, and read and insert innsegl.alert_resolutions. It may not

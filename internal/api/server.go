@@ -68,7 +68,7 @@ type ServerConfig struct {
 	// Resolver is RM-330's resolver credential (ADR-0044's 2026-10-03
 	// amendment): the one credential this process holds that may write, and
 	// only an alert resolution. Optional. Nil answers both resolution routes
-	// 503 and leaves `innsegl resolve-alert` as the way to resolve.
+	// 503: resolving needs this role configured (ADR-0071 removed the CLI).
 	Resolver *Resolver
 
 	// Organisations is the accounts spine (RM-333, #511): the user's

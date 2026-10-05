@@ -545,7 +545,7 @@ func (a *AuthStore) RecordAuthEvent(ctx context.Context, eventType, userID, deta
 // CreateEnrolmentCode mints a new one-time code and stores its hash. Minting
 // is the CLI's job (cmd/innsegl admin-credential enrol-code); this method is
 // what it calls having already opened an AuthStore with a write-capable DSN
-// of its own, the same shape `innsegl resolve-alert` uses for
+// of its own, the same shape the removed resolve-alert CLI used for
 // internal/ledger.Store.ResolveAlert.
 func (a *AuthStore) CreateEnrolmentCode(ctx context.Context, ttl time.Duration) (code string, expiresAt time.Time, err error) {
 	raw, err := newRandomID(16)

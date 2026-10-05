@@ -63,9 +63,6 @@ export const factValue = "min-w-0 text-body text-ink [overflow-wrap:anywhere]";
 export const evidence = "flex flex-col gap-2";
 export const evidenceHeading = "text-prose font-semibold text-ink";
 
-/** The resolve command: a sunken well, so it reads as something to copy. */
-export const commandBox = `${hairline} rounded-md border-line bg-sunken px-3 py-2 [overflow-wrap:anywhere]`;
-
 /* ── resolving (RM-330) ─────────────────────────────────────────────────── */
 
 export const resolveForm = "flex flex-col gap-3";
