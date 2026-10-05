@@ -23,14 +23,12 @@ COVERPROFILE := cover.out
 .PHONY: all build test test-clean lint cover smoke smoke-down spire-up spire-verify \
         spire-down spire-admin-relay-up spire-admin-relay-down \
         sigstore-up rekor-log-up rekor-index-ready sigstore-verify sigstore-down rekor-tlog-id rekor-reindex \
-        innsegl-up innsegl-verify innsegl-canary innsegl-demo innsegl-init \
+        innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
-        innsegl-trust-volumes innsegl-trust-status \
-        innsegl-ca-custody-init innsegl-ca-custody-unseal innsegl-ca-custody-status \
-        innsegl-ca-custody-import innsegl-ca-custody-revoke test-ids \
-        innsegl-stack-clean innsegl-up-here innsegl-link verify-branch \
+        innsegl-trust-volumes innsegl-ca-custody-init test-ids \
+        innsegl-stack-clean innsegl-up-here verify-branch \
         install-hooks \
-        verify-branch-selftest start update innsegl-here-services link clean \
+        verify-branch-selftest start backup-freshness update innsegl-here-services link clean \
         image-bundle
 
 all: build test lint
@@ -96,10 +94,6 @@ GUARD             := scripts/teardown-guard.sh
 ## innsegl-trust-volumes: create the four volumes the trust root lives in
 innsegl-trust-volumes:
 	deploy/compose/trust-volumes.sh ensure
-
-## innsegl-trust-status: what exists, whose deployment it is, and what it holds
-innsegl-trust-status:
-	@deploy/compose/trust-volumes.sh list
 
 ## spire-up: boot the reference SPIRE stack and create its bootstrap entries
 spire-up:
@@ -337,13 +331,6 @@ INNSEGL_COMPOSE := $(INNSEGL_TRUST_ENV) docker compose -f deploy/compose/innsegl
 # identifier, resolved beneath the deployment's workspace root.
 DEMO_REPO ?= github.com/innsegl-demo/scratch
 
-## innsegl-up: build the images, register the MCP, and boot the seven rows
-innsegl-up: sigstore-up
-	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES)
-	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  deploy/compose/spire/register.sh
-	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' $(INNSEGL_COMPOSE) up -d --remove-orphans
-
 # ---------------------------------------------------------------------------
 # innsegl-up-here: the stack, built from THIS working tree.
 #
@@ -555,7 +542,7 @@ innsegl-here-services:
 	  $(INNSEGL_COMPOSE) up -d --remove-orphans --no-build
 
 # ---------------------------------------------------------------------------
-# innsegl-link: install the commit hook in one repository on this machine.
+# link: install the commit hook in one repository on this machine.
 #
 # It is `innsegl link <dir>` (ADR-0059): the repository's prepare-commit-msg
 # hook, and nothing else about it. The core needs nothing per repository; a
@@ -605,6 +592,15 @@ start:
 	@# up to two minutes for innsegl-api, and then stops with one message that
 	@# says how to get the link later (RM-325); a failure here never fails start.
 	@scripts/setup-link.sh || true
+	@# The transparency log's pinned tree is still there; if not, nothing
+	@# signed now can be anchored (OPS-034). A fault, so it fails the start. A
+	@# host with no pin yet passes. The backup's age is NOT checked here: a
+	@# fresh install has no verified backup, and install.sh runs this target.
+	@INNSEGL_REKOR_PORT="$${INNSEGL_REKOR_PORT:-$$(scripts/rekor-port.sh)}" scripts/rekor-tlog-health.sh
+
+## backup-freshness: how old is the last VERIFIED backup, and did its host copy land
+backup-freshness:
+	@scripts/backup-freshness.sh
 
 ## update: rebuild and restart innsegl's own services only, for a stack that
 ##   is already up (`make start` once). SPIRE and Fulcio keep running; the
@@ -639,23 +635,19 @@ image-bundle:
 	@$(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh create
 
 ## link: install the commit hook in a project — make link DIR=~/Applications/foo
-link:
-	@$(MAKE) --no-print-directory innsegl-link DIR='$(DIR)'
-
-## innsegl-link: install the commit hook in a repository — make innsegl-link DIR=~/Applications/foo
-# The innsegl binary `innsegl-link` runs: the one `make build` writes here,
-# the same default install.sh uses.
+# The innsegl binary `link` runs: the one `make build` writes here, the same
+# default install.sh uses.
 INNSEGL_BIN_PATH ?= $(CURDIR)/$(BINARY)
 
-innsegl-link:
-	@test -n "$(DIR)" || { echo 'innsegl-link: pass DIR=<path to a git repository>'; exit 2; }
+link:
+	@test -n "$(DIR)" || { echo 'link: pass DIR=<path to a git repository>'; exit 2; }
 	@d="$$(cd '$(DIR)' && pwd -P)"; \
 	 main="$$($(CURDIR)/scripts/repo-main-worktree.sh "$$d" || true)"; \
 	 if [ -n "$$main" ] && [ "$$main" != "$$d" ]; then \
-	   echo "innsegl-link: $$d is a linked worktree, not a repository."; \
+	   echo "link: $$d is a linked worktree, not a repository."; \
 	   echo "  A worktree shares its repository's hooks, so the hook belongs to the"; \
 	   echo "  repository; linking the worktree path names the wrong tree."; \
-	   echo "  Link the repository instead:  make innsegl-link DIR=$$main"; \
+	   echo "  Link the repository instead:  make link DIR=$$main"; \
 	   exit 2; \
 	 fi; \
 	 '$(INNSEGL_BIN_PATH)' link "$$d"
@@ -676,27 +668,6 @@ CA_CUSTODY_COMPOSE = -f deploy/compose/sigstore.yml -f deploy/compose/sigstore.k
 innsegl-ca-custody-init:
 	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store
 	@scripts/ca-custody.sh init
-
-## innsegl-ca-custody-unseal: per start — unseal the store (prompts, never an argument)
-innsegl-ca-custody-unseal:
-	@scripts/ca-custody.sh unseal
-
-## innsegl-ca-custody-status: sealed or not, and whether the CA key is in
-innsegl-ca-custody-status:
-	@scripts/ca-custody.sh status
-
-## innsegl-ca-custody-import: move the EXISTING CA key into the store, keeping the root
-innsegl-ca-custody-import:
-	@test -n "$(INNSEGL_CA_STORE_TOKEN)" || { \
-	  echo 'innsegl-ca-custody-import: set INNSEGL_CA_STORE_TOKEN to a token scoped to'; \
-	  echo '  the CA key: INNSEGL_CA_STORE_TOKEN=$$(INNSEGL_CA_STORE_ROOT_TOKEN=... scripts/ca-custody.sh token)'; \
-	  exit 2; }
-	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) --profile ca-import up \
-	  --exit-code-from innsegl-ca-import innsegl-ca-import
-
-## innsegl-ca-custody-revoke: stop the CA signing (OPS-052)
-innsegl-ca-custody-revoke:
-	@scripts/ca-custody.sh revoke
 
 ## install-hooks: refuse a commit that would track a local-only spec
 # The gate in CI is the enforcement; this is the fast answer. Hooks do not
@@ -918,7 +889,7 @@ innsegl-backup:
 # Exit statuses are cmd/innsegl/verify.go's: 3 an attribution claim does not
 # hold, 4 Fulcio or Rekor unreachable so nothing was proved either way. 4 fails
 # the gate too -- doc 06 P2 and AB-08 forbid reading "could not check" as
-# "checked" -- and the remedy is `make innsegl-up` and run it again.
+# "checked" -- and the remedy is `make start` and run it again.
 # ---------------------------------------------------------------------------
 
 # The compose default, so the two targets below resolve to a real URL when

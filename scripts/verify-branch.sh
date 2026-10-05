@@ -230,7 +230,7 @@ if [ "$nunavail" -gt 0 ]; then
   printf '%s' "$unavailable" >&2
   echo "Fulcio or Rekor could not be reached, so nothing was proved either way." >&2
   echo "This is not a failure and must not be read as one (doc 06 P2, AB-08)." >&2
-  echo "Bring the deployment up — \`make innsegl-up\` — and run this again." >&2
+  echo "Bring the deployment up — \`make start\` — and run this again." >&2
 fi
 
 # Precedence, most consequential first. A checked claim that does not hold is

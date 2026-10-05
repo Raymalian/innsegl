@@ -327,25 +327,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# RM-190 (#310) — the readiness report states how old the last VERIFIED backup
-# is, and whether its copy outside the container runtime landed.
+# RM-190 (#310) — scripts/backup-freshness.sh states how old the last VERIFIED
+# backup is, and whether its copy outside the container runtime landed.
 #
 # A backup that stopped days ago looked exactly like a working one, and the only
 # copy lived in a container volume that a reset of the runtime removes.
-# scripts/backup-freshness.sh is what the readiness report
-# (scripts/innsegl-start.sh) asks. It is a pure function of two marker folders
-# and a clock, so it is driven here with no container and no database: the
-# volume's markers come from --state-dir, the host folder from --host-dir, and
-# the clock from --now.
+# scripts/backup-freshness.sh answers that. It is a pure function of two marker
+# folders and a clock, so it is driven here with no container and no database:
+# the volume's markers come from --state-dir, the host folder from --host-dir,
+# and the clock from --now.
 #
 #   RM-190-a  a fresh verified backup, copied to the host, reads fresh (exit 0)
 #   RM-190-b  one older than the bound reads STALE and fails
 #   RM-190-c  no verified backup at all says so and fails
 #   RM-190-d  a copy that failed is reported with its reason and fails
 #   RM-190-e  a copy that was never configured is not silence either
-#   RM-190-f  the deployment mounts the host folder and the report asks
+#   RM-190-f  the deployment mounts the host folder; make backup-freshness asks
+#             and make start does not
 # ---------------------------------------------------------------------------
-echo "RM-190 — backup freshness in the readiness report, and a copy on the host"
+echo "RM-190 — backup freshness, and a copy on the host"
 
 FRESH="${ROOT}/scripts/backup-freshness.sh"
 NOW=2000000000
@@ -447,11 +447,21 @@ else
   bad "RM-190-f the backup service mounts a host folder and copies into it" \
       "no INNSEGL_BACKUP_HOST_DIR bind or INNSEGL_BACKUP_COPY_DIR in the service block"
 fi
-if grep -qE '^[^#]*backup-freshness\.sh' "${ROOT}/scripts/innsegl-start.sh"; then
-  ok "RM-190-f the readiness report asks after the backup's freshness"
+
+backup_recipe="$(sed -n '/^backup-freshness:/,/^$/p' "${ROOT}/Makefile")"
+if printf '%s' "${backup_recipe}" | grep -qE '^[[:space:]]+@?scripts/backup-freshness\.sh'; then
+  ok "RM-190-f make backup-freshness asks after the backup's freshness"
 else
-  bad "RM-190-f the readiness report asks after the backup's freshness" \
-      "scripts/innsegl-start.sh does not call backup-freshness.sh"
+  bad "RM-190-f make backup-freshness asks after the backup's freshness" \
+      "the Makefile has no backup-freshness target that runs scripts/backup-freshness.sh"
+fi
+# A fresh install has no verified backup, and install.sh runs make start.
+start_recipe="$(sed -n '/^start:/,/^## backup-freshness:/p' "${ROOT}/Makefile")"
+if printf '%s' "${start_recipe}" | grep -qE '^[^#]*backup-freshness'; then
+  bad "RM-190-f make start does not call backup-freshness" \
+      "a fresh install has no verified backup yet, so start would fail it"
+else
+  ok "RM-190-f make start does not call backup-freshness (a fresh install has no backup yet)"
 fi
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"

@@ -495,7 +495,7 @@ See [`../README.md`](../README.md) for the boot block. The short version, once
 SPIRE and Sigstore are up:
 
 ```sh
-make innsegl-up             # build, register the MCP, boot the seven rows
+make start                  # SPIRE, Sigstore, build, register the MCP, boot the rows
 make innsegl-verify         # ask about the MCP's DB credential and the sealer's store credential
 make innsegl-canary         # SEG-005: prove a sealed segment cannot be deleted
 make innsegl-demo           # register -> sign -> retire, over the real transport

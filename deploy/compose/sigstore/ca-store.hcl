@@ -38,5 +38,5 @@ listener "tcp" {
 # back will get a store that will not boot with no idea why.
 
 # No `default_lease_ttl` heroics: the CA's token is minted per start by
-# `make innsegl-ca-custody-up` with its own TTL, and that is the lease that
+# `scripts/ca-custody.sh token` with its own TTL, and that is the lease that
 # matters — it is what bounds a reader of the CA container.

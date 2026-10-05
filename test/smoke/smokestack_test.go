@@ -1255,7 +1255,7 @@ func (s *stack) sh(ctx context.Context, script string) (string, error) {
 	//
 	// deploy/compose/sigstore.yml and spire.yml pin their own project names,
 	// so the documented commands ALWAYS act on `innsegl-sigstore` and
-	// `innsegl-spire` — the very projects `make innsegl-up` brings up. The
+	// `innsegl-spire` — the very projects `make start` brings up. The
 	// teardown block this harness runs verbatim ends in `down -v`, so running
 	// this test on a machine with the stack up deleted the developer's Rekor,
 	// Fulcio PKI and SPIRE data. Measured twice on 2026-09-07: the second time

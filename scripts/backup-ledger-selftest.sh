@@ -561,7 +561,7 @@ grep -qE '^[0-9]+ innsegl-[0-9]{8}T[0-9]{6}Z\.dump$' "${copy_out}/.last-verified
 check "RM-190 the volume records its last verified backup" "${g}" \
   "$(cat "${copy_out}/.last-verified" 2>/dev/null || echo absent)"
 grep -qE '^[0-9]+ ok ' "${copy_out}/.host-copy" 2>/dev/null && g=0 || g=1
-check "RM-190 the copy's verdict is left for the readiness report" "${g}" \
+check "RM-190 the copy's verdict is left for make start to report" "${g}" \
   "$(cat "${copy_out}/.host-copy" 2>/dev/null || echo absent)"
 
 printf '\n-- RM-190: a copy that fails is reported, never silent --\n'
@@ -573,7 +573,7 @@ check "RM-190 a failed copy does not un-verify the backup (exit 0)" \
 printf '%s' "${out}" | grep -qF "HOST COPY FAILED" && g=0 || g=1
 check "RM-190 a failed copy is logged" "${g}" "${out}"
 grep -qE '^[0-9]+ failed ' "${copy_out}/.host-copy" 2>/dev/null && g=0 || g=1
-check "RM-190 a failed copy is left for the readiness report" "${g}" \
+check "RM-190 a failed copy is left for make start to report" "${g}" \
   "$(cat "${copy_out}/.host-copy" 2>/dev/null || echo absent)"
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"

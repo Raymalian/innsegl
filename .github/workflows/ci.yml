@@ -200,6 +200,13 @@ jobs:
       - name: The one-time Rekor index backfill covers the whole log with Rekor's own tool
         run: ./scripts/rekor-reindex-selftest.sh
 
+      # The runbook's rebuilt-index gate. Its self-test sits beside the script
+      # in runbooks/, which the wired-self-tests gate did not scan, so no
+      # workflow ran it. Hermetic: it drives the gate with scratch segment
+      # files and no container.
+      - name: The rebuilt-index gate refuses a disagreeing, holed or unproved index
+        run: ./runbooks/verify-rebuilt-index-selftest.sh
+
   worktree-link:
     name: worktree link
     runs-on: ubuntu-latest
@@ -340,24 +347,6 @@ jobs:
       # throwaway volumes this job creates and removes.
       - name: Export and import round-trip a volume byte-for-byte, and both refuse what they must
         run: ./scripts/innsegl-migrate-selftest.sh
-
-  readiness-report:
-    name: readiness report
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # OPS-082..084. The readiness report answered for a hand-written list of
-      # services, and twelve of the deployment's containers were absent from it
-      # -- so the report could say READY while twelve services were never asked
-      # after at all. A list maintained by hand beside a list that grows is the
-      # shape of the bug, not the instance.
-      # The names now come from `container_name:` across the compose files,
-      # which is where the deployment itself gets them.
-      # Hermetic: measured against a tree holding only what CI checks out, and
-      # it starts no container.
-      - name: The readiness report asks after every service the compose files declare
-        run: ./scripts/innsegl-start-selftest.sh
 
   update-command:
     name: update command

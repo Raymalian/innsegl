@@ -337,7 +337,7 @@ services:
       #
       # 0 still means "create one", which is what a first boot needs. `make
       # rekor-tlog-id` prints the id of the tree in use and writes it to
-      # deploy/compose/.rekor-tlog-id, and the innsegl-up targets pass it back
+      # deploy/compose/.rekor-tlog-id, and innsegl-up-here passes it back
       # in, so the pin happens once and holds.
       - "--trillian_log_server.tlog_id=${INNSEGL_REKOR_TLOG_ID:-0}"
       - "--rekor_server.hostname=${INNSEGL_REKOR_ORIGIN:-rekor.innsegl.dev}"

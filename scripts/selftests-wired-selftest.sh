@@ -48,6 +48,12 @@ else
   bad "a stale reason passed"
 fi
 
+r="$(root runbook)"; printf '      run: ./scripts/a-selftest.sh\n' >> "$r/.github/workflows/ci.yml"
+mkdir -p "$r/runbooks"; printf '#!/bin/sh\nexit 0\n' > "$r/runbooks/b-selftest.sh"
+if ! gate "$r"; then ok "an unwired self-test under runbooks/ is refused"; else bad "an unwired runbooks/ self-test passed"; fi
+printf '      run: ./runbooks/b-selftest.sh\n' >> "$r/.github/workflows/ci.yml"
+if gate "$r"; then ok "a wired self-test under runbooks/ passes"; else bad "a wired runbooks/ self-test was refused"; fi
+
 r="$WORK/empty"; mkdir -p "$r/scripts" "$r/.github/workflows"
 if ! gate "$r"; then ok "a tree with no self-tests at all is refused, not passed on nothing"; else bad "an empty tree passed"; fi
 

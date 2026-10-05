@@ -35,13 +35,18 @@ make innsegl-backup                    # dumps to ./backups by default
 INNSEGL_BACKUP_DIR=/mnt/ledger-backups make innsegl-backup
 ```
 
+To check later that the service's backups are recent and copied off the container
+runtime, run `make backup-freshness`. It reports the age of the last verified
+backup and exits 1 if it is stale, missing, or its host copy failed. The service's
+own healthcheck cannot see that.
+
 or directly:
 
 ```bash
 scripts/backup-ledger.sh --out ./backups
 ```
 
-It needs the `innsegl-postgres` container from `make innsegl-up` running, and
+It needs the `innsegl-postgres` container from `make start` running, and
 reaches it and the object store only through `docker exec` / `docker run
 --network innsegl-objects` — the same no-published-port discipline
 `deploy/compose/innsegl.yml` uses, so nothing here opens a new hole in the

@@ -9,7 +9,7 @@
 # travel to a clone or another checkout, so "it runs on my machine" is not a
 # control.
 #
-# This lists every scripts/**/*-selftest.sh and fails on any that no workflow
+# This lists every *-selftest.sh under scripts/ and runbooks/ and fails on any that no workflow
 # under .github/workflows names, unless NOT_IN_CI below records why. An entry
 # there is a reason, not a way to make this green: each one says what the test
 # needs that CI cannot have.
@@ -39,7 +39,7 @@ while IFS= read -r test; do
   fi
   echo "selftests-wired: $rel is run by no workflow and has no recorded reason" >&2
   missing=$((missing + 1))
-done < <(find "$ROOT/scripts" -name '*-selftest.sh' -type f | sort)
+done < <(find "$ROOT/scripts" "$ROOT/runbooks" -name '*-selftest.sh' -type f 2>/dev/null | sort)
 
 # A recorded reason for a file that no longer exists is a reason for nothing.
 while IFS='|' read -r rel _; do
@@ -51,7 +51,7 @@ while IFS='|' read -r rel _; do
 done <<< "$NOT_IN_CI"
 
 if [ "$checked" -eq 0 ]; then
-  echo "selftests-wired: found no self-tests under $ROOT/scripts; refusing to pass on nothing" >&2
+  echo "selftests-wired: found no self-tests under $ROOT/scripts or $ROOT/runbooks; refusing to pass on nothing" >&2
   exit 1
 fi
 if [ "$missing" -gt 0 ]; then

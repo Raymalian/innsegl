@@ -114,12 +114,4 @@ under a shared name.
 
 ## Compose defaults vs shipped defaults
 
-Doc 05 §1 asks the compose README to state one asymmetry explicitly: the compose
-stack uses **local** Fulcio/Rekor so CI needs no network. As of
-[ADR-0010](../../../docs/adr/0010-self-hosted-sigstore-is-the-shipped-default.md)
-the *installed product* default is self-hosted too, so the asymmetry doc 05 §1
-was written against — local in compose, public Sigstore when installed — no
-longer exists. Public Sigstore is now the configured-in option, "where an
-accepted issuer already exists". Doc 05 §1's table still describes the old
-default; that is a spec edit for a human, not something an implementing agent
-may make.
+See [`../sigstore/README.md`](../sigstore/README.md#this-is-the-shipped-default-not-a-ci-convenience).

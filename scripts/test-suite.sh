@@ -340,7 +340,7 @@ refuse() {
     printf '    %-26s %s\n' "make innsegl-down"  "stop the deployment; the volumes survive"
     printf '    %-26s %s\n' "make sigstore-down" "stop Sigstore and SPIRE"
     printf '    %-26s %s\n' "go test ./${dir}"   "now it has nothing to destroy"
-    printf '    %-26s %s\n' "make innsegl-up"    "bring the deployment back"
+    printf '    %-26s %s\n' "make start"         "bring the deployment back"
     echo
     echo "  TO RUN THE REST OF THE SUITE, which is the default and needs no flag:"
     echo

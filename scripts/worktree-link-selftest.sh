@@ -90,7 +90,7 @@ fi
 echo "OPS-041 — the link step refuses a worktree by name"
 
 # 5. The refusal fires, names the repository, and names the command.
-out="$(cd "$ROOT" && make --no-print-directory innsegl-link DIR="$WT_P" 2>&1)"
+out="$(cd "$ROOT" && make --no-print-directory link DIR="$WT_P" 2>&1)"
 status=$?
 if [ "$status" -eq 0 ]; then
   bad "linking a worktree is refused" "it succeeded"
@@ -106,7 +106,7 @@ fi
 #    to the link step, `innsegl link <repository>`; echo stands in for the
 #    binary so the step is observed without touching the repository's hooks.
 #    Without this, case 5 would pass against a guard that refused every path.
-out="$(cd "$ROOT" && make --no-print-directory innsegl-link DIR="$REPO_P" \
+out="$(cd "$ROOT" && make --no-print-directory link DIR="$REPO_P" \
         INNSEGL_BIN_PATH=echo 2>&1)"
 if printf '%s' "$out" | grep -q "is a linked worktree"; then
   bad "a plain repository gets past the guard" "the guard refused it: $out"
