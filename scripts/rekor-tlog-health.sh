@@ -47,7 +47,7 @@ readonly EXIT_TREE_ABSENT=6
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 URL="${INNSEGL_REKOR_URL:-http://127.0.0.1:$("$(dirname "$0")/rekor-port.sh")}"
-PIN_FILE="${REPO_ROOT}/deploy/compose/.rekor-tlog-id"
+PIN_FILE="${REPO_ROOT}/$("$(dirname "$0")/rekor-tlog-pin.sh" rel)"
 QUIET=""
 
 usage() { sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; }

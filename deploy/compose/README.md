@@ -57,6 +57,22 @@ expected rather than broken.
 
 ---
 
+## A development stack
+
+A machine that develops innsegl runs `make dev-stack` once. From then on,
+`make start` in that repository brings up a DEVELOPMENT stack (ADR-0072):
+
+- every project, container and network is named `innsegl-dev-*`
+  (`deploy/compose/dev/*.yml`);
+- it has its own trust volumes, `innsegl-dev-trust-*`, created empty, so its
+  own CA, log and ledger;
+- its host folders are under `$HOME/.innsegl/dev`;
+- it is loopback only.
+
+It writes no harness settings and leaves the machine's client alone. With no
+marker, a stack is live and unchanged. `INNSEGL_STACK=dev|live` overrides the
+marker for one command.
+
 ## Boot it
 
 From the repository root:

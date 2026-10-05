@@ -311,6 +311,11 @@ jobs:
       # asked the wrong port. One helper answers for all of them.
       - name: Every tool finds the port Rekor listens on
         run: ./scripts/rekor-port-selftest.sh
+      # OPS-129 (#469, ADR-0072): a development stack takes its mode from an
+      # explicit marker only, refuses a non-loopback bind and a live-named
+      # stack beside it, and every host script names its dev containers.
+      - name: A development stack is never the live one
+        run: ./scripts/stack-mode-selftest.sh
 
   ca-custody:
     name: ca custody

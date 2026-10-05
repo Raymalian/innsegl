@@ -145,7 +145,9 @@ func TestBringUpBackfillsOnlyWhenTheIndexIsBehind(t *testing.T) {
 	// is removed BY NAME. Not with --remove-orphans: innsegl-ca-store is a
 	// service of this same project declared in sigstore.keycustody.yml, and
 	// an `up` of sigstore.yml alone with --remove-orphans would remove it.
-	if !strings.Contains(ready, "rm -f innsegl-sigstore-rekor-redis") {
+	// $(STACK_PREFIX) is innsegl on a live host and innsegl-dev on a dev
+	// stack (ADR-0072); either way the name is the project's own.
+	if !strings.Contains(ready, "rm -f $(STACK_PREFIX)-sigstore-rekor-redis") {
 		t.Error("bring-up does not remove the old rekor-redis container; it would keep running after the upgrade")
 	}
 	for _, target := range []string{"sigstore-up", "rekor-log-up"} {
@@ -163,7 +165,9 @@ func TestBringUpBackfillsOnlyWhenTheIndexIsBehind(t *testing.T) {
 	// log's services: an `up` of fulcio from sigstore.yml alone would undo the
 	// key-custody overlay on a host that uses it.
 	logUp := makeRecipe(t, mk, "rekor-log-up")
-	if !strings.Contains(logUp, "sigstore.yml up -d trillian-db trillian-log-server trillian-log-signer rekor") {
+	// $(SIGSTORE_FILES) is sigstore.yml alone on a live host, and with the dev
+	// names overlay on a dev stack (ADR-0072) — never the key-custody overlay.
+	if !strings.Contains(logUp, "$(SIGSTORE_FILES) up -d trillian-db trillian-log-server trillian-log-signer rekor") {
 		t.Error("rekor-log-up does not bring up exactly the log's services")
 	}
 	if strings.Contains(logUp, "fulcio") {

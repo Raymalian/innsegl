@@ -13,7 +13,8 @@ if [ -n "${INNSEGL_REKOR_PORT:-}" ]; then
   printf '%s\n' "$INNSEGL_REKOR_PORT"
   exit 0
 fi
-_p="$(docker port innsegl-sigstore-rekor 3000 2>/dev/null | head -n 1 | sed 's/.*://')"
+# INNSEGL_STACK_PREFIX names a DEV stack's containers (ADR-0072); unset is live.
+_p="$(docker port "${INNSEGL_STACK_PREFIX:-innsegl}-sigstore-rekor" 3000 2>/dev/null | head -n 1 | sed 's/.*://')"
 case "$_p" in
   ''|*[!0-9]*) printf '23000\n' ;;
   *) printf '%s\n' "$_p" ;;

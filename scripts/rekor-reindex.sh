@@ -64,11 +64,12 @@ set -uo pipefail
 BACKFILL_IMAGE="ghcr.io/sigstore/rekor/backfill-index:v1.3.10@sha256:4c09fd814a597fb8cb35dc77d9b8a42a1bd4e07d375ca2253fb51aaee2bd9066"
 
 REKOR="${INNSEGL_REKOR_URL:-http://127.0.0.1:$("$(dirname "$0")/rekor-port.sh")}"
-NETWORK="${INNSEGL_REKOR_REINDEX_NETWORK:-innsegl-sigstore-rekor-index}"
+# INNSEGL_STACK_PREFIX names a DEV stack's network and container (ADR-0072).
+NETWORK="${INNSEGL_REKOR_REINDEX_NETWORK:-${INNSEGL_STACK_PREFIX:-innsegl}-sigstore-rekor-index}"
 REKOR_IN_NETWORK="${INNSEGL_REKOR_REINDEX_REKOR:-http://rekor:3000}"
 DSN="${INNSEGL_REKOR_REINDEX_DSN:-rekor:rekor-index@tcp(trillian-db:3306)/rekor_index}"
 CONCURRENCY="${INNSEGL_REKOR_REINDEX_CONCURRENCY:-4}"
-DB="${INNSEGL_REKOR_REINDEX_DB:-innsegl-sigstore-trillian-db}"
+DB="${INNSEGL_REKOR_REINDEX_DB:-${INNSEGL_STACK_PREFIX:-innsegl}-sigstore-trillian-db}"
 DOCKER="${INNSEGL_REKOR_REINDEX_DOCKER:-docker}"
 DRY=()
 IF_BEHIND=0

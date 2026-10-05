@@ -29,7 +29,7 @@ COVERPROFILE := cover.out
         innsegl-stack-clean innsegl-up-here verify-branch \
         install-hooks \
         verify-branch-selftest start backup-freshness update innsegl-here-services link clean \
-        image-bundle
+        image-bundle dev-stack stack-announce
 
 all: build test lint
 
@@ -88,8 +88,47 @@ cover:
 # holding a key or the chain, names what it would have destroyed, and takes
 # INNSEGL_DESTROY_TRUST_ROOT=<volume> from an operator who means it.
 # ---------------------------------------------------------------------------
-INNSEGL_TRUST_ENV := $(shell deploy/compose/trust-volumes.sh env | tr '\n' ' ')
+# ---------------------------------------------------------------------------
+# LIVE OR DEV (RM-293, #469; ADR-0072; OPS-129).
+#
+# A machine that develops innsegl runs a stack too, and it ran it under the
+# live names and the live trust volumes: a commit it signed carried a
+# certificate from whatever CA key `innsegl-trust-fulcio-pki` held there, and
+# nothing marked the stack as dev. scripts/stack-mode.sh decides, from an
+# explicit marker only (`make dev-stack`, or INNSEGL_STACK=dev); no marker is
+# live, and live is byte-for-byte what it was — every variable below expands
+# to the text it always had.
+#
+# In dev, `env` is exported: the innsegl-dev name prefix the host-side scripts
+# build container names from, the innsegl-dev-trust volume prefix, and host
+# folders under $HOME/.innsegl/dev. The three compose file lists gain the
+# deploy/compose/dev/ overlays, which rename projects, containers and networks.
+#
+# $(shell) is handed the prefixes by name, not by export: make before 4.4 does
+# not pass exported variables to $(shell), and macOS ships 3.81.
+# ---------------------------------------------------------------------------
+INNSEGL_STACK_MODE := $(shell scripts/stack-mode.sh mode)
+ifeq ($(filter dev live,$(INNSEGL_STACK_MODE)),)
+$(error scripts/stack-mode.sh could not say whether this stack is dev or live; see above)
+endif
+$(foreach kv,$(shell scripts/stack-mode.sh env),$(eval export $(kv)))
+ifeq ($(INNSEGL_STACK_MODE),dev)
+unexport INNSEGL_TRUST_LEGACY_PREFIX
+DEV_OVERLAY = -f deploy/compose/dev/$(1)
+endif
+STACK_PREFIX   := $(or $(INNSEGL_STACK_PREFIX),innsegl)
+STACK_SHELL_ENV := INNSEGL_STACK_PREFIX='$(INNSEGL_STACK_PREFIX)' INNSEGL_TRUST_VOLUME_PREFIX='$(INNSEGL_TRUST_VOLUME_PREFIX)'
+SPIRE_FILES    := -f deploy/compose/spire.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,spire.yml))
+SIGSTORE_FILES := -f deploy/compose/sigstore.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,sigstore.yml))
+INNSEGL_FILES  := -f deploy/compose/innsegl.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,innsegl.yml))
+
+INNSEGL_TRUST_ENV := $(shell $(STACK_SHELL_ENV) deploy/compose/trust-volumes.sh env | tr '\n' ' ')
 GUARD             := scripts/teardown-guard.sh
+
+## dev-stack: mark this repository's stack as a DEVELOPMENT stack, once
+##   (its own names, its own trust root, loopback only; ADR-0072)
+dev-stack:
+	@scripts/stack-mode.sh mark-dev
 
 ## innsegl-trust-volumes: create the four volumes the trust root lives in
 innsegl-trust-volumes:
@@ -97,7 +136,7 @@ innsegl-trust-volumes:
 
 ## spire-up: boot the reference SPIRE stack and create its bootstrap entries
 spire-up:
-	docker compose -f deploy/compose/spire.yml up -d
+	docker compose $(SPIRE_FILES) up -d
 	deploy/compose/spire/register.sh
 
 ## spire-verify: prove the SPIRE stack issues an SVID for an agent run
@@ -106,7 +145,7 @@ spire-verify:
 
 ## spire-down: tear the SPIRE stack down, volumes included
 spire-down:
-	$(GUARD) docker compose -f deploy/compose/spire.yml --profile verify down -v
+	$(GUARD) docker compose $(SPIRE_FILES) --profile verify down -v
 
 # ---------------------------------------------------------------------------
 # The admin relay (RM-097, #156). OFF unless asked for: see spire.yml's
@@ -116,12 +155,12 @@ spire-down:
 
 ## spire-admin-relay-up: publish the SPIRE admin API to 127.0.0.1 (off by default)
 spire-admin-relay-up:
-	docker compose -f deploy/compose/spire.yml --profile adminrelay up -d spire-admin-relay
+	docker compose $(SPIRE_FILES) --profile adminrelay up -d spire-admin-relay
 
 ## spire-admin-relay-down: remove the admin relay — always run this when done
 spire-admin-relay-down:
-	docker compose -f deploy/compose/spire.yml --profile adminrelay rm --force --stop spire-admin-relay
-	docker network rm innsegl-spire-admin-relay >/dev/null 2>&1 || true
+	docker compose $(SPIRE_FILES) --profile adminrelay rm --force --stop spire-admin-relay
+	docker network rm $(STACK_PREFIX)-spire-admin-relay >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
 # Self-hosted Sigstore (RM-030, #38). ADR-0010 made this the shipped default,
@@ -155,8 +194,8 @@ INNSEGL_IMAGE ?= innsegl:local
 # measured 2026-09-16, 74 entries became 1 and every commit ever signed answered
 # `unavailable`. Nothing was destroyed and everything stopped being findable,
 # which reads the same from outside.
-REKOR_TLOG_FILE = $(shell scripts/rekor-tlog-pin.sh path 2>/dev/null || echo deploy/compose/.rekor-tlog-id)
-INNSEGL_REKOR_TLOG_ID ?= $(shell scripts/rekor-tlog-pin.sh read 2>/dev/null || echo 0)
+REKOR_TLOG_FILE = $(shell $(STACK_SHELL_ENV) scripts/rekor-tlog-pin.sh path 2>/dev/null || echo deploy/compose/.rekor-tlog-id)
+INNSEGL_REKOR_TLOG_ID ?= $(shell $(STACK_SHELL_ENV) scripts/rekor-tlog-pin.sh read 2>/dev/null || echo 0)
 
 ## rekor-tlog-id: print the tree rekor is serving and pin it for later boots
 rekor-tlog-id:
@@ -175,12 +214,12 @@ sigstore-up: innsegl-trust-volumes
 	@# front of a live log. Minting is only ever right when there is no log yet.
 	@test -n '$(INNSEGL_REKOR_ALLOW_NEW_TREE)' || scripts/rekor-tlog-pin.sh guard
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  docker compose -f deploy/compose/spire.yml up -d
+	  docker compose $(SPIRE_FILES) up -d
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
-	  $(INNSEGL_TRUST_ENV) docker compose -f deploy/compose/sigstore.yml up -d
+	  $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d
 	@$(MAKE) --no-print-directory rekor-index-ready
 
 # rekor-log-up: the log's own services brought up again, for `make update`.
@@ -193,7 +232,7 @@ rekor-log-up:
 	@test -n '$(INNSEGL_REKOR_ALLOW_NEW_TREE)' || scripts/rekor-tlog-pin.sh guard
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
-	  $(INNSEGL_TRUST_ENV) docker compose -f deploy/compose/sigstore.yml up -d trillian-db trillian-log-server trillian-log-signer rekor
+	  $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d trillian-db trillian-log-server trillian-log-signer rekor
 	@$(MAKE) --no-print-directory rekor-index-ready
 
 # rekor-index-ready: the log pinned and its search index complete, before
@@ -217,7 +256,7 @@ rekor-log-up:
 # cannot finish, because the core must not start verifying against an index
 # that would call good commits never logged.
 rekor-index-ready:
-	@docker rm -f innsegl-sigstore-rekor-redis >/dev/null 2>&1 || true
+	@docker rm -f $(STACK_PREFIX)-sigstore-rekor-redis >/dev/null 2>&1 || true
 	@# Waits for the log, and a bring-up that cannot pin it FAILS (#345): an
 	@# unpinned log is refused by the guard on the next start.
 	@$(MAKE) --no-print-directory rekor-tlog-id
@@ -238,7 +277,7 @@ sigstore-verify:
 ## sigstore-down: tear the Sigstore stack down, volumes included
 sigstore-down:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  $(INNSEGL_TRUST_ENV) $(GUARD) docker compose -f deploy/compose/sigstore.yml down -v
+	  $(INNSEGL_TRUST_ENV) $(GUARD) docker compose $(SIGSTORE_FILES) down -v
 
 # ---------------------------------------------------------------------------
 # The fresh-clone contract (RM-054, #62).
@@ -325,7 +364,7 @@ smoke-down: innsegl-stack-clean
 # cannot be brought up on its own and says so if you try.
 # ---------------------------------------------------------------------------
 
-INNSEGL_COMPOSE := $(INNSEGL_TRUST_ENV) docker compose -f deploy/compose/innsegl.yml
+INNSEGL_COMPOSE := $(INNSEGL_TRUST_ENV) docker compose $(INNSEGL_FILES)
 
 # The repository the demo agent commits into, as doc 02 §5 spells a repo: an
 # identifier, resolved beneath the deployment's workspace root.
@@ -364,7 +403,7 @@ INNSEGL_BUILD_SERVICES := innsegl-mcp innsegl-backup innsegl-api
 # $(DEPLOYED_FILE) and does nothing when the checkout still matches it; a
 # dirty tree never matches, so it is always built.
 DEPLOY_COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null)$(shell git diff --quiet HEAD -- 2>/dev/null || echo -dirty)
-DEPLOYED_FILE := .innsegl/deployed-commit
+DEPLOYED_FILE := .innsegl/deployed-commit$(if $(DEV_OVERLAY),-dev)
 
 # GO_IMAGE_COMMIT stamps the Go image (dev.innsegl.commit): the last commit
 # that touched what that image is built from. Stamped with HEAD instead, every
@@ -494,7 +533,13 @@ test-clean:
 	@docker network prune -f >/dev/null 2>&1 || true
 
 ## innsegl-up-here: bring the stack up, built from this working tree
-innsegl-up-here: sigstore-up innsegl-here-services
+innsegl-up-here: stack-announce sigstore-up innsegl-here-services
+
+# stack-announce: the one line that says which stack this is, and the refusals
+# a dev stack makes before anything starts (ADR-0072). `start` says it first
+# itself, so its sub-make does not say it twice.
+stack-announce:
+	@test -n '$(INNSEGL_STACK_ANNOUNCED)' || scripts/stack-mode.sh announce
 
 # innsegl-here-services: innsegl's own services in THIS working tree, built
 # and brought up; the trust services (SPIRE, Fulcio, Rekor) are left as they
@@ -511,6 +556,7 @@ innsegl-up-here: sigstore-up innsegl-here-services
 # --no-build: the start that follows uses the images just loaded or built,
 # and never builds one of its own.
 innsegl-here-services:
+	@scripts/stack-mode.sh check
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
 	@# The stack's host folders are made here, as the user running make, for
 	@# the reason innsegl-backup gives: a bind-mount source that does not exist
@@ -577,10 +623,12 @@ innsegl-here-services:
 
 ## start: bring the whole thing up, ready to sign, with no setup
 start:
+	@scripts/stack-mode.sh announce
 	@port=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'); \
 	 echo "innsegl: rekor on 127.0.0.1:$$port"; \
 	 INNSEGL_REKOR_PORT=$$port \
 	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 \
+	 INNSEGL_STACK_ANNOUNCED=1 \
 	 $(MAKE) --no-print-directory innsegl-up-here
 	@echo
 	@echo "ready. Next:"
@@ -612,10 +660,11 @@ backup-freshness:
 ##   bundle from `make image-bundle` in dist/ for this commit, it loads and
 ##   checks that instead of building (ADR-0070).
 update:
-	@docker ps --format '{{.Names}}' | grep -qx innsegl-spire-server && docker ps --format '{{.Names}}' | grep -qx innsegl-sigstore-rekor || \
+	@scripts/stack-mode.sh check
+	@docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-spire-server && docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-sigstore-rekor || \
 	  { echo "make update: SPIRE or Rekor is not running; run make start"; exit 2; }
 	@deployed=$$(cat '$(DEPLOYED_FILE)' 2>/dev/null); \
-	 core=$$(docker inspect -f '{{.State.Status}} restarting={{.State.Restarting}}' innsegl-mcp 2>/dev/null); \
+	 core=$$(docker inspect -f '{{.State.Status}} restarting={{.State.Restarting}}' $(STACK_PREFIX)-mcp 2>/dev/null); \
 	 if [ "$$deployed" = "$(DEPLOY_COMMIT)" ] && [ "$$core" = "running restarting=false" ]; then \
 	   echo "make update: already up to date ($(DEPLOY_COMMIT)); nothing to do"; exit 0; fi; \
 	 [ "$$deployed" = "$(DEPLOY_COMMIT)" ] && echo "make update: the core is $${core:-not there}; starting it again"; \
@@ -666,6 +715,7 @@ CA_CUSTODY_COMPOSE = -f deploy/compose/sigstore.yml -f deploy/compose/sigstore.k
 
 ## innsegl-ca-custody-init: once — start the store and mint its keys
 innsegl-ca-custody-init:
+	@test '$(INNSEGL_STACK_MODE)' = live || { echo 'innsegl-ca-custody-init: key custody is for a live core; a DEV stack keeps the file CA (ADR-0072)'; exit 2; }
 	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store
 	@scripts/ca-custody.sh init
 
@@ -785,9 +835,9 @@ innsegl-verify-commit:
 	  echo 'usage: make innsegl-verify-commit COMMIT=<sha> [DEMO_REPO=host/org/name]'; \
 	  exit 2; }
 	docker run --rm \
-	  --network innsegl-sigstore-published \
+	  --network $(STACK_PREFIX)-sigstore-published \
 	  --user 1000:1000 \
-	  --volume innsegl-core_innsegl-workspace:/work:ro \
+	  --volume $(STACK_PREFIX)-core_innsegl-workspace:/work:ro \
 	  --env INNSEGL_FULCIO_URL=http://fulcio:5555 \
 	  --env INNSEGL_REKOR_URL=http://rekor:3000 \
 	  --env INNSEGL_OIDC_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
@@ -813,7 +863,7 @@ innsegl-down:
 innsegl-purge:
 	-INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_SPIRE_PARENT_ID=unset \
-	  $(INNSEGL_TRUST_ENV) $(GUARD) docker compose -f deploy/compose/innsegl.yml \
+	  $(INNSEGL_TRUST_ENV) $(GUARD) docker compose $(INNSEGL_FILES) \
 	  --profile demo --profile canary --profile separate down -v
 
 # ---------------------------------------------------------------------------
@@ -906,7 +956,7 @@ innsegl-backup:
 # 3000 broke `innsegl-up-here` exactly that way. The MCP moved off 8080 for the
 # same reason and landed on 280xx; this is the same move. The port INSIDE the
 # container is still 3000 -- only the host binding moved.
-INNSEGL_REKOR_PORT ?= $(shell scripts/rekor-port.sh)
+INNSEGL_REKOR_PORT ?= $(shell $(STACK_SHELL_ENV) scripts/rekor-port.sh)
 
 ## verify-branch: verify every agent-signed commit on this branch before merging
 verify-branch:

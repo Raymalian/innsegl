@@ -13,6 +13,13 @@ Deprecations are announced here one minor release ahead of removal.
 
 ### Added
 
+- **A development stack that is never the live one** (#469, ADR-0072).
+  `make dev-stack` marks a repository's stack as a development stack: every
+  compose project, container and network is `innsegl-dev-*`, its trust
+  volumes are `innsegl-dev-trust-*` (its own CA, log and ledger), its host
+  folders are under `$HOME/.innsegl/dev`, and it is loopback only. With no
+  marker a stack is live and nothing about it changes. An enrolled client
+  without the marker is told about `make dev-stack` and is never switched.
 - **Pseudonymous agent identity, on by default** (#116). `register_agent` now
   fills the SPIFFE ID's `{agent_type}` and `{task_id}` with
   `HMAC-SHA256(deployment_secret, "<field>:" ‖ value)` truncated to eight hex

@@ -36,6 +36,11 @@ set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly COMPOSE_FILE="${SCRIPT_DIR}/../spire.yml"
+# A DEV stack (scripts/stack-mode.sh, ADR-0072) is the same file with
+# deploy/compose/dev/spire.yml over it; the Makefile exports INNSEGL_STACK_MODE
+# and INNSEGL_STACK_PREFIX for it, and both are unset on a live host.
+COMPOSE_FILES=(-f "${COMPOSE_FILE}")
+[ "${INNSEGL_STACK_MODE:-live}" = dev ] && COMPOSE_FILES+=(-f "${SCRIPT_DIR}/../dev/spire.yml")
 readonly TRUST_DOMAIN="innsegl.dev"
 readonly ADMIN_SOCKET="/run/spire/admin/api.sock"
 
@@ -57,7 +62,7 @@ readonly CONTROL_ID="spiffe://${TRUST_DOMAIN}/verify/${RUN_ID}"
 log()  { printf '\nverify: %s\n' "$*"; }
 fail() { printf 'verify: FAIL: %s\n' "$*" >&2; exit 1; }
 
-compose() { docker compose -f "${COMPOSE_FILE}" "$@"; }
+compose() { docker compose "${COMPOSE_FILES[@]}" "$@"; }
 spire()   { compose exec -T spire-server /opt/spire/bin/spire-server "$@" -socketPath "${ADMIN_SOCKET}"; }
 
 RUN_ENTRY=""

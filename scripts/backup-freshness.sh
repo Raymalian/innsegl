@@ -47,7 +47,7 @@ state_dir=""
 host_dir="${INNSEGL_BACKUP_HOST_DIR:-${HOME}/innsegl-backups}"
 stale_after="${INNSEGL_BACKUP_STALE_AFTER:-${INNSEGL_BACKUP_WINDOW:-172800}}"
 now=""
-container="${INNSEGL_BACKUP_CONTAINER:-innsegl-backup}"
+container="${INNSEGL_BACKUP_CONTAINER:-${INNSEGL_STACK_PREFIX:-innsegl}-backup}"
 
 usage() { sed -n '/^# USAGE/,/^# Portability/p' "$0" | sed 's/^# \{0,1\}//' >&2; }
 
