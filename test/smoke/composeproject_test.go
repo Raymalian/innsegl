@@ -17,7 +17,7 @@ import (
 //
 // deploy/compose/sigstore.yml and spire.yml pin their own project names —
 // `name: innsegl-sigstore`, `name: innsegl-spire` — so those commands always
-// acted on the projects `make innsegl-up` brings up. Running `go test ./...`
+// acted on the projects `make start` brings up. Running `go test ./...`
 // on a machine with the stack up therefore deleted the developer's Rekor,
 // Fulcio PKI and SPIRE data.
 //
@@ -84,7 +84,7 @@ func TestOPS017TheHarnessDoesNotActOnTheShippedComposeProjects(t *testing.T) {
 					smokeComposeProject, tc.file, got)
 			}
 			if got == tc.pinned {
-				t.Errorf("the harness would act on %q — the project `make innsegl-up` brings up", tc.pinned)
+				t.Errorf("the harness would act on %q — the project `make start` brings up", tc.pinned)
 			}
 		})
 	}

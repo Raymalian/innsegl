@@ -15,6 +15,7 @@ around.
 | [`orchestrated-run.md`](orchestrated-run.md) | Putting one agent's work through Innsegl end to end: the four MCP calls an orchestrator makes, checked from outside with no route to the ledger. Written from a run on 2026-09-05, with its real output. |
 | [`index-rebuild.md`](index-rebuild.md) | Rebuilding the Postgres hot tier from a backup, and adjudicating the result against the sealed segments and their Rekor anchors. Doc 05 §2's required deliverable. |
 | [`backup-ledger.md`](backup-ledger.md) | Taking that backup in the first place, checked against the sealed segments before it is called good rather than only when it is restored. Issue #160 (RM-099)'s deliverable. |
+| [`spire-admin-access.md`](spire-admin-access.md) | Reaching the SPIRE admin API for `innsegl init`: three ways, each measured, with a recommendation. RM-097 (#156)'s deliverable. |
 | [`trust-domain-re-rooting.md`](trust-domain-re-rooting.md) | Recovery from a trust-domain root compromise (threat model A1). What is recoverable, what is not, and what an operator must not pretend. Doc 04 §5.1's required deliverable. |
 | [`object-store-worm.md`](object-store-worm.md) | What a green `innsegl canary` proves about the object store, and the door it cannot see. Measured against SeaweedFS on 2026-09-06: S3 refused the deletion twice, the Filer performed it with one unauthenticated `curl`. |
 | [`verify-rebuilt-index.sh`](verify-rebuilt-index.sh) | The executable check `index-rebuild.md` §6 runs: does the index you just rebuilt hold the event hashes the segments sealed? |
@@ -46,8 +47,7 @@ runbooks/verify-rebuilt-index.sh --segments ./segments --index-hashes index.hash
 runbooks/verify-rebuilt-index-selftest.sh
 ```
 
-The self-test is not wired into CI — `.github/` is owned elsewhere — so run it
-by hand after changing the gate. It needs nothing but a POSIX shell and one of
+The self-test runs in CI. It needs nothing but a POSIX shell and one of
 `sha256sum`, `shasum` or `openssl`, and it reads the committed golden fixtures
 read-only.
 

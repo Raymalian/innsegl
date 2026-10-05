@@ -22,9 +22,9 @@ import "sync"
 //
 // Nothing an agent could not already do. A record is harness-asserted and
 // unauthenticated, the same class as the agent-id header (ADR-0058 decision
-// 2). The directory still goes through describe_workspace, which admits only
-// a git worktree under the projects mount and inside the admin scope, so a
-// forged directory names only a repository the agent can already work in.
+// 2). A record naming only a directory registers no run, because the core
+// reads no client tree (ADR-0071); one naming a repository is bound to the
+// installation's scope in hosted mode (ADR-0064).
 //
 // # Memory only
 //

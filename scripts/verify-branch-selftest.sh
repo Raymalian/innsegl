@@ -178,7 +178,7 @@ case "$FIXTURE_STATUS" in
   0) : ;;
   4)
     echo "verify-branch-selftest: the deployment is not reachable; the fixture cannot be verified." >&2
-    echo "  Bring it up — \`make innsegl-up\` — and run this again." >&2
+    echo "  Bring it up — \`make start\` — and run this again." >&2
     fixture_digest
     exit 4
     ;;

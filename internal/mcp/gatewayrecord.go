@@ -16,8 +16,8 @@ import (
 // end — the same body store, the same digest construction (event.Digest
 // over the exact body bytes), the same idempotency claim on (run_id,
 // digest) (ADR-0017) — in process, the same pattern gateway.go's own
-// RegisterRunForGateway and ResolveWorkspaceForGateway already use for
-// register_agent and describe_workspace: a thin translation over a tool
+// RegisterRunForGateway and RetireRunForGateway already use for
+// register_agent and retire_agent: a thin translation over a tool
 // this package already owns and already tests, with no rule re-decided
 // here.
 //
@@ -84,8 +84,8 @@ type GatewayToolCallOutput struct {
 // RecordGatewayToolCall appends one `tool_call` event for a tool_use/
 // tool_result pair the gateway observed directly in traffic (ADR-0057),
 // through observe_tool_call's own configured service — in process, the
-// same seam RegisterRunForGateway and ResolveWorkspaceForGateway already
-// use (gateway.go). It is idempotent on (run_id, digest), the same
+// same seam RegisterRunForGateway and RetireRunForGateway already use
+// (gateway.go). It is idempotent on (run_id, digest), the same
 // guarantee observe_tool_call gives an external caller (ADR-0017): a
 // replay with the identical body appends nothing a second time.
 //

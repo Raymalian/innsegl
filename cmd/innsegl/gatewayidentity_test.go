@@ -4,12 +4,13 @@ package main
 
 // gatewayidentity_test.go — RM-235 (#380): the identity Guard through the
 // REAL, production openGateway -- a real listener, real HTTP round trips,
-// and register_agent/retire_agent/describe_workspace configured with a real
+// and register_agent/retire_agent configured with a real
 // *ledger.Store on a real, throwaway Postgres (requireAPIPG,
 // apiharness_test.go), a fake SPIRE (RM-015's own SVID-issuing side is
 // proven against a real containerised SPIRE elsewhere; what this file
 // proves is the traffic-driven identity path end to end, not SPIRE), and a
-// real git repository under a real projects mount for describe_workspace.
+// real git repository whose workspace the test states the way `innsegl hook
+// session` derives it.
 //
 // GID-012, a three-level tree's parent_run_id, GID-009's resume across a
 // simulated restart, and a fork's forked_from_run_id are each end-to-end
@@ -38,6 +39,7 @@ import (
 	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/rundir"
 	"innsegl.dev/innsegl/internal/spire"
+	"innsegl.dev/innsegl/internal/workspace"
 )
 
 const (
@@ -126,10 +128,8 @@ func (f *gwIdentityFakeSPIRE) entryCount() int {
 }
 
 // ---------------------------------------------------------------------------
-// The real projects mount: one git repository, host path == container path
-// (the same simplification internal/mcp/workspace_test.go's own fixture
-// makes: the tree has to exist for git to read it, and a container path
-// does not exist on the host).
+// One real git repository, so the stated workspace is what the client
+// derives from a real tree.
 // ---------------------------------------------------------------------------
 
 func gwIdentityGitRun(t *testing.T, dir string, args ...string) {
@@ -141,12 +141,11 @@ func gwIdentityGitRun(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// configureGWIdentityWorkspace builds a projects root with one repository
-// under it (main branch, one commit), and configures describe_workspace to
-// read it -- host and container path identical, exactly as
-// internal/mcp/workspace_test.go's configureWorkspace does. A test that
-// wants workspace resolution to SUCCEED calls this; GID-012's own test
-// deliberately does not, so registration fails at exactly this step.
+// configureGWIdentityWorkspace builds a directory with one repository under
+// it (main branch, one commit). stateGatewayDirectory derives the workspace
+// from that repository the way `innsegl hook session` does. A test that wants
+// workspace resolution to SUCCEED calls this; GID-012's own test deliberately
+// does not, so registration fails at exactly this step.
 func configureGWIdentityWorkspace(t *testing.T) (projects, repo string) {
 	t.Helper()
 	projects = t.TempDir()
@@ -163,26 +162,18 @@ func configureGWIdentityWorkspace(t *testing.T) (projects, repo string) {
 	}
 	gwIdentityGitRun(t, repo, "add", "seed")
 	gwIdentityGitRun(t, repo, "commit", "-q", "-m", "seed", "--no-gpg-sign")
-
-	restore, err := mcp.ConfigureDescribeWorkspace(mcp.DescribeWorkspaceConfig{
-		HostProjects: projects, Projects: projects,
-	})
-	if err != nil {
-		t.Fatalf("ConfigureDescribeWorkspace: %v", err)
-	}
-	t.Cleanup(restore)
 	return projects, repo
 }
 
 // ---------------------------------------------------------------------------
-// The fixture: register_agent, retire_agent and describe_workspace, all
+// The fixture: register_agent and retire_agent, both
 // wired onto a real, throwaway Postgres, a real *ledger.Store and a fake
 // SPIRE -- exactly what a `serve`-configured process hands the gateway
 // companion in production (this file's own header).
 // ---------------------------------------------------------------------------
 
 // gwIdentityFixture wires register_agent and retire_agent for the duration
-// of a test; it does NOT configure describe_workspace -- see
+// of a test; the repository a session states comes from
 // configureGWIdentityWorkspace, called by every test but GID-012's own.
 type gwIdentityFixture struct {
 	dsn   string
@@ -370,11 +361,21 @@ func sendGWIdentityMessage(t *testing.T, addr string, client *http.Client, sessi
 
 // stateGatewayDirectory states workdir for sessionID (and agentID, when a
 // subagent) to the gateway's session-workspace endpoint, exactly as `innsegl
-// hook session` does before every user turn and subagent. The gateway
-// registers a new run from this statement and from nothing else.
+// hook session` does before every user turn and subagent: the workspace the
+// client derives when workdir is a working tree, the directory alone when it
+// is not. The gateway registers a new run from this statement and from
+// nothing else.
 func stateGatewayDirectory(t *testing.T, addr string, client *http.Client, sessionID, agentID, workdir string) {
 	t.Helper()
-	body, err := json.Marshal(map[string]string{"session_id": sessionID, "agent_id": agentID, "cwd": workdir})
+	statement := map[string]string{"session_id": sessionID, "agent_id": agentID, "cwd": workdir}
+	if derived, derr := workspace.Derive(t.Context(), workdir); derr == nil {
+		statement["repo"] = derived.Repo
+		statement["worktree"] = derived.Worktree
+		statement["branch"] = derived.Branch
+		statement["task"] = derived.Task
+		statement["head"] = derived.Head
+	}
+	body, err := json.Marshal(statement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +552,7 @@ func runRegisteredAgentType(t *testing.T, store *ledger.Store, runID string) (st
 
 // ---------------------------------------------------------------------------
 // GID-012: identity cannot be issued, end to end through the real
-// openGateway. describe_workspace is deliberately left unconfigured (no
+// openGateway. The session states a directory that is no working tree (no
 // call to configureGWIdentityWorkspace), so registration fails at
 // workspace resolution -- a real, deterministic "identity cannot be
 // issued" (ADR-0058 decision 11): 403, nothing forwarded.

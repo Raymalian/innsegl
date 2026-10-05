@@ -101,9 +101,9 @@ const serveBootTimeout = 60 * time.Second
 // considered at all.
 //
 // A tool may legitimately be served unconfigured: sign_commit without a
-// working-tree root cannot resolve a repository, describe_workspace without a
-// host root cannot translate a path, and both refuse every call by name and
-// say so. What may NOT happen is that nobody chose. The difference between
+// working-tree root cannot resolve a repository, refuses every call by name
+// and says so. A deprecated tool (ADR-0071) refuses every call with nothing
+// to configure. What may NOT happen is that nobody chose. The difference between
 // "the operator did not opt in" and "the wiring forgot" is invisible from
 // outside the process and identical from a caller's side, and the second is
 // what #205, #206 and #207 each shipped.
@@ -150,6 +150,14 @@ func (w *toolWiring) install(name mcp.ToolName) func(func(), error) (func(), err
 func (w *toolWiring) withhold(name mcp.ToolName, why string) {
 	w.decided[name] = why
 	w.log.warn(string(name) + " is NOT CONFIGURED: " + why)
+}
+
+// deprecate records a tool whose name is kept and whose every call is refused
+// (ADR-0071). There is nothing to configure, so it is decided by definition,
+// and the start-up log says so.
+func (w *toolWiring) deprecate(name mcp.ToolName) {
+	w.decided[name] = ""
+	w.log.info(string(name) + " is deprecated (ADR-0071): it stays advertised and refuses every call")
 }
 
 // undecided returns the advertised tools this wiring never decided about, in
@@ -596,28 +604,10 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 	// internal/mcp writes those — and the decision appears in this log every
 	// start.
 	//
-	// describe_workspace first, because the other two reach it: observe_session
-	// resolves a workspace on every start through the shipped tool rather than
-	// deriving one a second time, and a harness that has neither has nothing to
-	// address the rest of the surface with.
-	if o.hostProjects != "" {
-		restoreDescribe, derr := tools.install(mcp.ToolDescribeWorkspace)(
-			mcp.ConfigureDescribeWorkspace(mcp.DescribeWorkspaceConfig{
-				HostProjects: o.hostProjects,
-				Projects:     o.projectsMount,
-			}))
-		if derr != nil {
-			return fail("configure describe_workspace: %w", derr)
-		}
-		closers = append(closers, restoreDescribe)
-		log.info("describe_workspace is configured",
-			"host_projects", o.hostProjects, "projects_mount", o.projectsMount)
-	} else {
-		tools.withhold(mcp.ToolDescribeWorkspace, "-host-projects (or $"+mcp.EnvHostProjects+
-			") is unset, so this deployment has not been told which host directory its "+
-			"projects mount corresponds to. No harness can resolve a repository, a worktree "+
-			"or a branch through this replica.")
-	}
+	// describe_workspace and observe_session are deprecated (ADR-0071): bound,
+	// refusing every call by name, with nothing to configure.
+	tools.deprecate(mcp.ToolDescribeWorkspace)
+	tools.deprecate(mcp.ToolObserveSession)
 
 	if o.observeBodyDir != "" {
 		restoreObserve, oerr := tools.install(mcp.ToolObserveToolCall)(
@@ -644,29 +634,6 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 			") is unset, so there is nowhere to keep a body. A tool_call naming a digest "+
 			"whose body was never stored is a permanent record of evidence nobody has (I3), "+
 			"so the tool refuses rather than appending one.")
-	}
-
-	if o.sessionDir != "" {
-		restoreSession, serr := tools.install(mcp.ToolObserveSession)(
-			mcp.ConfigureObserveSession(mcp.ObserveSessionConfig{
-				MarkerDir: o.sessionDir,
-				// The parentage lookup a stop uses when it asserts it ends
-				// what it started (RM-157, #260). The ledger's own read, and
-				// the only thing this tool asks it: which runs named this one
-				// as their parent. Unwired, the flag is inert and every stop
-				// ends exactly its own run.
-				Descendants: store,
-			}))
-		if serr != nil {
-			return fail("configure observe_session: %w", serr)
-		}
-		closers = append(closers, restoreSession)
-		log.info("observe_session is configured", "marker_dir", o.sessionDir)
-	} else {
-		tools.withhold(mcp.ToolObserveSession, "-session-dir (or $"+envSessionDir+") is unset, "+
-			"so the session-to-run mapping has nowhere to live. Every stop would find nothing "+
-			"and every run a harness started would stay Active until the reaper took it "+
-			"(IP §6.7).")
 	}
 
 	// ---- the transport ----------------------------------------------------

@@ -391,8 +391,13 @@ func TestRM330WithNoResolverCredentialResolvingIsUnavailable(t *testing.T) {
 	if a.status != http.StatusServiceUnavailable {
 		t.Fatalf("begin with no resolver: %d, want 503: %s", a.status, a.body)
 	}
-	if !strings.Contains(string(a.body), "resolve-alert") {
-		t.Errorf("the 503 does not point at the command that still works: %s", a.body)
+	// The CLI it once named was removed (ADR-0071); the refusal says what
+	// the deployment is missing instead.
+	if !strings.Contains(string(a.body), "needs the resolver role configured on the API") {
+		t.Errorf("the 503 does not say what is missing: %s", a.body)
+	}
+	if strings.Contains(string(a.body), "resolve-alert") {
+		t.Errorf("the 503 names a command that no longer exists: %s", a.body)
 	}
 	if a := h.finish(t, `{"ceremony_id":"x","credential":{}}`); a.status != http.StatusServiceUnavailable {
 		t.Errorf("finish with no resolver: %d, want 503", a.status)

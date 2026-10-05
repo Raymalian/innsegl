@@ -70,63 +70,14 @@ import (
 // before the run directory is consulted at all. Answered differently, this
 // tool would tell an unauthenticated caller which run ids are real.
 //
-// # A call may name a SESSION instead of a run — RM-142 (#226)
+// # session_id is deprecated — ADR-0071
 //
-// Measured: runs in the ledger by agent type were 101 `orchestrator`, 69
-// `general-purpose` and 3 `session`. A subagent got an identity every time and
-// the operator's own session almost never did. `SessionStart` is not broken —
-// driven against a running deployment it minted a run at once — but it runs
-// ONCE, at the moment the stack is least likely to be up, it is deliberately
-// non-blocking, and nothing ever tried again.
-//
-// This tool made that loss much larger than a missing row. It required a run
-// id, so a shim whose start was refused had no run id and could not record
-// tool calls EITHER: the session lost its identity and every call it made,
-// silently, after one warning at the beginning.
-//
-// The fix is not a retry in the shim. E11's rule is that anything a second
-// harness would have to copy belongs here, and retry logic in one shim is
-// retry logic every future shim reimplements identically. So `session_id` is
-// an alternative to `run_id`, and a session this deployment has never seen is
-// registered by the call that names it — through observe_session's own start,
-// in process, so that there is ONE definition of what starting a session means
-// and not two. A shim then forwards its session id and stops: no retry, no
-// check on whether registration worked, and no remembered run id.
-//
-// Three consequences, each of which is a decision rather than a fallout:
-//
-// EXACTLY ONE IDENTITY IS NAMED. Both arguments given and disagreeing is a
-// refusal, never a precedence order, because the answer is on its way into an
-// append-only record — a tool implementing "run_id wins" would attribute one
-// observed call to whichever identity the caller happened to list first, for
-// good. Both given and agreeing is nothing to refuse.
-//
-// A FIRST-SIGHT REGISTRATION NEEDS THE WORKSPACE, so it takes `cwd` and
-// `agent_type` for the same reason observe_session's start does, and meets
-// describe_workspace's own refusal when the first is absent. The alternative
-// would be to register a run against a guessed repository and branch.
-//
-// A RETIRED SESSION IS NOT RESURRECTED. #207 keeps a session's marker AFTER
-// the retirement precisely so that a start on a stopped session reports the
-// terminal state rather than deriving the same dead run id; a tool call naming
-// one is the same call in a different spelling and is answered the same way.
-//
-// # The run token on the session path
-//
-// Not required, and that is a considered position rather than an oversight. A
-// run token exists because a run id is PUBLIC — it is in the `Agent-Run`
-// trailer of every commit, on the dashboard and in the query API — so knowing
-// one proves nothing (runtoken.go). A caller naming a session names no public
-// value, and the token it would present is one register_agent hands back at a
-// registration that, on this path, never happened: requiring it would refuse
-// exactly the caller this path exists for. The gate on the run-id path is
-// untouched, and a call naming both is held to it.
-//
-// What that leaves is stated rather than discovered: a caller that knows a
-// session id can record observations under that session. A session id is not
-// published by the harness and reaches the ledger only as the derived
-// idempotency key inside canonical event bytes, so it is a narrower thing to
-// know than a run id and a weaker one than a token.
+// RM-142 (#226) let a call name a SESSION instead of a run, registering an
+// unseen session through observe_session's start. observe_session is
+// deprecated (ADR-0071): the core mounts no projects folder, so that start
+// could never resolve a workspace. The argument stays in the schema until the
+// next major release, and a call that sends it is refused by name before
+// anything is consulted or written. Name the run with run_id.
 //
 // # No `tool_call` for a body that was not kept
 //
@@ -193,46 +144,16 @@ type observeToolCallIn struct {
 	// volume, and sent nowhere.
 	Body string `json:"body"`
 	// RunToken is the secret register_agent handed this run once. Required
-	// when the deployment configures RunTokenSecret and the caller names a
-	// RunID; unread on the session path, which names no public value. See the
-	// note on the run token at the top of this file.
+	// when the deployment configures RunTokenSecret.
 	RunToken string `json:"run_token,omitempty"`
 
-	// SessionID names the run the way a HARNESS knows it: its own session id,
-	// the one observe_session was or would have been started with. A session
-	// this deployment has never seen is registered by the call that names it
-	// (RM-142), so a shim whose start was refused recovers on its next tool
-	// call and keeps no run id of its own.
-	SessionID string `json:"session_id,omitempty"`
-	// CWD is the caller's working directory AS THE CALLER SEES IT — a host
-	// path, which describe_workspace translates. Read only when SessionID
-	// names a session that has to be registered; a session already recorded
-	// replays its own workspace, so a shim need not carry this on every event.
-	CWD string `json:"cwd,omitempty"`
-	// AgentType is what kind of agent the session is, for the same case and
-	// with observe_session's own default when it is absent. It is here because
-	// the measurement behind RM-142 is a count BY AGENT TYPE: a recovery that
-	// labelled every session `session` would answer the wrong question for a
-	// harness whose sessions are not.
-	AgentType string `json:"agent_type,omitempty"`
-	// ParentSessionID is the harness's own identifier for the session that
-	// started this one, read for the same case as CWD and AgentType: the call
-	// that has to REGISTER the session (RM-156, #259).
-	//
-	// # Why the first-sight path needs it
-	//
-	// This is the path that registers a run nobody announced, and until now it
-	// registered every one of them as a root run — observe_session's start was
-	// called with no parent at all, because this tool had none to give. So a
-	// harness whose SubagentStart was refused recovered its identity and its
-	// activity record on the next tool call and lost the edge permanently,
-	// which is exactly the case where knowing what spawned the run matters
-	// most.
-	//
-	// It is resolved by observe_session against the marker store and is NOT
-	// stored (E4): doc 02 §3 has no member for a harness's session id, and
-	// gains none. Ignored on a call that names a run id, which is already
-	// resolved and registers nothing.
+	// SessionID, CWD, AgentType and ParentSessionID named a run through
+	// observe_session's start (RM-142, RM-156). That start is deprecated
+	// (ADR-0071): a call sending session_id is refused, and the four stay in
+	// the schema only until the next major release.
+	SessionID       string `json:"session_id,omitempty"`
+	CWD             string `json:"cwd,omitempty"`
+	AgentType       string `json:"agent_type,omitempty"`
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 }
 
@@ -368,12 +289,10 @@ func bindObserveToolCall(s *Server) error {
 		Description: "Record one tool call a harness OBSERVED, with its body. " +
 			"The body is digested and written to the MCP's own local volume and is " +
 			"never sent anywhere; the event carries the digest and the tool name only. " +
-			"The same body observed twice for one run is one event. " +
-			"Name the run with either run_id or session_id: a session id this deployment " +
-			"has not seen is registered by this call, exactly as observe_session's start " +
-			"would have registered it, so a harness whose session never started still " +
-			"gets an identity and an activity record. That case needs cwd. Naming both a " +
-			"run id and a session id that disagree is refused rather than guessed.",
+			"The same body observed twice for one run is one event. Name the run with " +
+			"run_id. session_id, cwd, agent_type and parent_session_id are deprecated " +
+			"(ADR-0071): a call that sends session_id is refused, and they are removed at " +
+			"the next major release.",
 	}, observeToolCall)
 }
 
@@ -390,13 +309,10 @@ func observeToolCall(ctx context.Context, _ *sdk.CallToolRequest, in observeTool
 	return svc.observe(ctx, in)
 }
 
-// observe is the tool: check the request, resolve the identity, claim the key,
-// then act.
+// observe is the tool: check the request, claim the key, then act.
 //
-// EVERY PURE CHECK RUNS BEFORE ANY STATE IS TOUCHED, and that ordering earns
-// its keep now that gate 5 can REGISTER. A malformed tool name or an oversized
-// body costs one comparison and leaves no run behind it; before RM-142 the
-// same ordering only saved an idempotency key.
+// EVERY PURE CHECK RUNS BEFORE ANY STATE IS TOUCHED: a malformed tool name or
+// an oversized body costs one comparison and claims no idempotency key.
 func (c *observeService) observe(ctx context.Context, in observeToolCallIn) (observeToolCallOut, error) {
 	// Gate 1 — which identity this call names, and whether it can be one.
 	// Checked before any dependency is consulted.
@@ -404,28 +320,19 @@ func (c *observeService) observe(ctx context.Context, in observeToolCallIn) (obs
 		return observeToolCallOut{}, err
 	}
 
-	// Gate 2 — the run's own token, when the deployment requires one and the
-	// caller named a run.
+	// Gate 2 — the run's own token, when the deployment requires one.
 	//
 	// Before every gate that touches state, and answered identically to an
 	// unknown run: get_credential's rule, its message and its class. The gates
 	// below report whether a run exists and whether it was retired, which for
 	// an unauthenticated caller would be an oracle over every run id read off
-	// a commit trailer. A caller naming only a session presents no run id for
-	// this gate to be about; see the note on the run token at the top of this
-	// file for why that is not a hole the gate was closing.
-	if in.RunID != "" && c.runSecret != "" && !RunTokenValid(c.runSecret, in.RunID, in.RunToken) {
+	// a commit trailer.
+	if c.runSecret != "" && !RunTokenValid(c.runSecret, in.RunID, in.RunToken) {
 		return observeToolCallOut{}, Errorf(ClassRunNotFound, in.RunID,
 			"no run %q", in.RunID)
 	}
 
 	// Gate 3 — the tool that was invoked (ADR-0021).
-	//
-	// The refusals below are scoped to in.RunID, which is ABSENT rather than
-	// empty on the session path: at this point the tool has not resolved the
-	// session and genuinely does not know the run, and doc 02 §1 distinguishes
-	// the two states. Naming a run here would mean resolving one first, which
-	// is registering a session in order to refuse it.
 	toolName, err := observeToolName(in.RunID, in.Tool)
 	if err != nil {
 		return observeToolCallOut{}, err
@@ -440,12 +347,7 @@ func (c *observeService) observe(ctx context.Context, in observeToolCallIn) (obs
 	}
 	digest := event.Digest(body)
 
-	// Gate 5 — the run a session id names, registering one on first sight.
-	// The first gate that can change anything, and the last before the claim.
-	runID, err := observeRunForSession(ctx, in)
-	if err != nil {
-		return observeToolCallOut{}, err
-	}
+	runID := in.RunID
 
 	// The key is derived from the pair doc 01 §4 makes this tool idempotent
 	// on, and the fingerprint is taken over the CHECKED values: nothing that
@@ -478,114 +380,33 @@ func (c *observeService) observe(ctx context.Context, in observeToolCallIn) (obs
 	return out, nil
 }
 
-// observeNamedIdentity holds a call to naming exactly one run, in one of the
-// two ways there are to name one.
+// observeNamedIdentity holds a call to naming its run.
 //
-// Neither grammar is this file's own. A run id is doc 02 §5's identifier and a
-// session id is observe_session's deliberately wider pattern, both from their
-// one definition — a session id this tool accepted and observe_session refused
-// would be a session that could be observed and never started.
+// A run is named by run_id. session_id named one through observe_session's
+// start, which is deprecated (ADR-0071), so a call naming a session is
+// refused here, before any dependency is consulted and before anything is
+// written — with or without a run id beside it, because a call that names
+// two identities is not answered by ignoring one of them.
 func observeNamedIdentity(in observeToolCallIn) error {
-	if in.RunID == "" && in.SessionID == "" {
-		// INVARIANT_VIOLATION and not RUN_NOT_FOUND. RUN_NOT_FOUND says "the
-		// run you named does not exist", and no run was named; this is the
-		// malformed-request refusal observe_session makes for a missing
-		// session_id. It is not an oracle either way — a caller learns nothing
-		// here that it did not itself send.
-		return Errorf(ClassInvariantViolation, "",
-			"name the run: one of run_id or session_id is required. doc 02 §2 requires a "+
-				"tool_call to name a run, and this tool will not guess which one was observed")
-	}
-	if in.RunID != "" {
-		// A run id that cannot name a run names no run.
-		if err := event.ValidateIdentifier(in.RunID); err != nil {
-			return Errorf(ClassRunNotFound, "", "%q is not a run id: %v", in.RunID, err)
-		}
-	}
 	if in.SessionID != "" {
-		if _, err := observeSessionCheckID(in.SessionID); err != nil {
-			return err
-		}
+		return Errorf(ClassInvariantViolation, "",
+			"session_id names a session through %s, which is deprecated (%s) and registers "+
+				"nothing. Name the run with run_id", ToolObserveSession, deprecatedADR)
+	}
+	if in.RunID == "" {
+		// INVARIANT_VIOLATION and not RUN_NOT_FOUND. RUN_NOT_FOUND says "the
+		// run you named does not exist", and no run was named. It is not an
+		// oracle either way — a caller learns nothing here that it did not
+		// itself send.
+		return Errorf(ClassInvariantViolation, "",
+			"name the run: run_id is required. doc 02 §2 requires a tool_call to name a "+
+				"run, and this tool will not guess which one was observed")
+	}
+	// A run id that cannot name a run names no run.
+	if err := event.ValidateIdentifier(in.RunID); err != nil {
+		return Errorf(ClassRunNotFound, "", "%q is not a run id: %v", in.RunID, err)
 	}
 	return nil
-}
-
-// observeRunForSession resolves the run this call is about.
-//
-// A call naming only a run id is already resolved and this returns it. A call
-// naming a session goes through observe_session's own START — the shipped
-// tool, in process — which is what makes a first-sight registration identical
-// to the one a SessionStart would have made: the same workspace derivation,
-// the same derived idempotency key, the same marker, the same run id. A second
-// registration path here would be a second thing that can disagree about any
-// of them, and E11's whole rule is that a derivation exists once.
-//
-// It follows that this function holds no marker directory, no run directory
-// and no register_agent configuration of its own. A deployment that has not
-// installed observe_session meets observe_session's own refusal, by name.
-func observeRunForSession(ctx context.Context, in observeToolCallIn) (string, error) {
-	if in.SessionID == "" {
-		return in.RunID, nil
-	}
-
-	session, err := observeSession(ctx, nil, observeSessionIn{
-		SessionID: in.SessionID,
-		Phase:     ObserveSessionPhaseStart,
-		CWD:       in.CWD,
-		AgentType: in.AgentType,
-		// Forwarded unchanged and unresolved here: observe_session owns the
-		// marker store the parent is looked up in, and a second lookup in this
-		// file is a second thing that can disagree with the first. Inert on a
-		// session that is already registered, for the same reason CWD is.
-		ParentSessionID: in.ParentSessionID,
-		// A tool call never resumes a retired session (RM-191, #311): a
-		// retired marker proves the session's start reached this deployment,
-		// so a stray late call must not mint a run. Only a start does.
-		firstSight: true,
-	})
-	if err != nil {
-		// Unchanged, and deliberately: these are describe_workspace's and
-		// register_agent's refusals, and a second wording for one failure
-		// sends a shim author to the wrong file. The cwd case is the one a
-		// caller meets most — describe_workspace refuses an empty cwd because
-		// "this server's own directory is not a defensible default for it",
-		// and that is the whole answer to what a first-sight registration
-		// without a workspace does.
-		return "", err
-	}
-
-	if session.Retired {
-		// A START ON A STOPPED SESSION REPORTS THE TERMINAL STATE (#207), and
-		// observe_session reports it as a REPLY because its start never
-		// blocks. This tool does block, so the same fact is returned as I4's
-		// class, carrying observe_session's own wording rather than a second
-		// one. Registering here instead would derive the same dead run id and
-		// record work under an identity that can no longer sign.
-		//
-		// The message differs from the run-id path's retirement refusal below
-		// because the ARGUMENTS differ: one names a session that ended, the
-		// other a run that was retired, and a refusal that named the wrong one
-		// would send a shim author looking in the wrong place.
-		return "", Errorf(ClassRunAlreadyRetired, session.RunID,
-			"nothing was recorded: %s", session.Detail)
-	}
-
-	if in.RunID != "" && in.RunID != session.RunID {
-		// TWO IDENTITIES FOR ONE OBSERVED CALL, and no precedence order. The
-		// answer is on its way into an append-only record, so a tool that
-		// picked one would attribute the call to whichever the caller happened
-		// to list first, permanently.
-		//
-		// The session's run is not quoted back. The caller already holds
-		// everything this message names, and a refusal that answered "the run
-		// you did not name is this one" would map a session to a run for a
-		// caller that could not otherwise ask.
-		return "", Errorf(ClassInvariantViolation, in.RunID,
-			"run_id %q and session_id %q name different runs. Send one of them: this call "+
-				"is recorded against exactly one identity and the record cannot be amended",
-			in.RunID, in.SessionID)
-	}
-	return session.RunID, nil
 }
 
 // store resolves the run, writes the body, and appends the `tool_call`.

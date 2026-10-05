@@ -55,8 +55,7 @@ const envAuthWriterDSN = "INNSEGL_API_AUTH_DSN"
 
 // enrolCodeMinter is the one thing this command needs of an AuthStore — an
 // interface, so the flag handling and exit statuses are testable without a
-// Postgres, matching resolvealert.go's own resolver seam and reap.go's
-// sweeper.
+// Postgres, matching reap.go's sweeper.
 type enrolCodeMinter interface {
 	CreateEnrolmentCode(ctx context.Context, ttl time.Duration) (code string, expiresAt time.Time, err error)
 }

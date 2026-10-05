@@ -28,8 +28,9 @@ import (
 // database and the same writer credential as every other method here — the
 // separation #167 draws is "which TABLE", not "which service". internal/api's
 // Store, by contrast, never gets this credential at all (FD §7, doc 05 §1):
-// see the ADR for why the resolve path is a CLI subcommand
-// (`innsegl resolve-alert`) rather than a route on the read-only query API.
+// ADR-0044 kept the write off the read-only query API. Its 2026-10-03
+// amendment gave it to the API's own resolver role; the CLI that wrote it
+// first, `innsegl resolve-alert`, is gone (ADR-0071).
 
 // The two alert event types a resolution may name. doc 02 §3 calls both rows
 // "Alert:"; nothing else in the eleven-member enum is one, and this table

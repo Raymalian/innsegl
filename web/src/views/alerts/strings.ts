@@ -163,15 +163,13 @@ export const strings = {
     cancelLabel: "Cancel",
     needReasonDetail: "Give a reason before confirming.",
     unsupportedDetail:
-      "This browser has no passkey support, so it cannot confirm a resolution. Use the command instead.",
+      "This browser has no passkey support, so it cannot confirm a resolution.",
     cancelledDetail: "The passkey prompt was closed, so nothing was resolved.",
     failedWith: (reason: string) => `Nothing was resolved: ${reason}`,
     doneDetail: (count: number) =>
       count === 1
         ? "Resolved. The alert now records your name, the time and your reason."
         : `Resolved ${count} alerts. Each records your name, the time and your reason.`,
-    cliHeading: "Or from the core host",
-    cliDetail: "The same resolution, made with the ledger's own credential where it runs.",
   },
 
   detail: {
@@ -195,10 +193,6 @@ export const strings = {
     rekorIndexLabel: "Rekor log index",
     positionLabel: "Chain position",
     eventLabel: "Alert event",
-    /* The command-line alternative to the resolve form. The angle-bracket
-     * placeholders are left for the operator; only the event ID is filled. */
-    resolveCommand: (eventId: string) =>
-      `innsegl resolve-alert -event-id=${eventId} -resolved-by=<your name> -reason="<why it is resolved>"`,
     evidenceHeading: "Evidence",
     recordToggle: "Show the full record",
     viewRun: "View the run this claim concerns",

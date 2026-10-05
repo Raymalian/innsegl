@@ -15,9 +15,10 @@
  *          |   | ADR-0054
  *
  * RM-330 (#506), ADR-0044's 2026-10-03 amendment, changes two of these: the
- * page now resolves an open alert itself, behind a fresh passkey, with the
- * command kept as the alternative; and the raw record is shown in place
- * rather than linked to the API, which a browser renders as bare JSON.
+ * page now resolves an open alert itself, behind a fresh passkey; and the raw
+ * record is shown in place rather than linked to the API, which a browser
+ * renders as bare JSON. ADR-0071 removed the resolve-alert command, so the
+ * page no longer offers one.
  */
 
 import { render, screen, within } from "@testing-library/react";
@@ -124,21 +125,11 @@ describe("FE-136 a drift alert, in full", () => {
   });
 });
 
-describe("FE-140 the command-line alternative (ADR-0054, RM-330)", () => {
-  const command = (id: string) =>
-    `innsegl resolve-alert -event-id=${id} -resolved-by=<your name> -reason="<why it is resolved>"`;
-
-  it("shows the exact command, with only the event ID filled in", () => {
+describe("FE-140 resolving an open alert (ADR-0054, RM-330, ADR-0071)", () => {
+  it("offers no command-line alternative: the resolve-alert command was removed", () => {
     detail();
-    const section = screen.getByRole("region", { name: strings.resolve.cliHeading });
-    expect(section).toHaveTextContent(command(DRIFT.event_id));
-  });
-
-  it("offers the command through the copy control, whole", () => {
-    detail();
-    const section = screen.getByRole("region", { name: strings.resolve.cliHeading });
-    const copy = within(section).getByRole("button");
-    expect(copy).toHaveAttribute("title", command(DRIFT.event_id));
+    expect(document.body).not.toHaveTextContent(/resolve-alert/);
+    expect(screen.queryByRole("region", { name: /core host/i })).toBeNull();
   });
 
   it("says what resolving records, and that the alert itself never changes", () => {
@@ -157,7 +148,6 @@ describe("FE-140 the command-line alternative (ADR-0054, RM-330)", () => {
       resolved_reason: "Rekor entry re-checked by hand",
     });
     expect(screen.queryByRole("region", { name: strings.resolve.heading })).toBeNull();
-    expect(screen.queryByRole("region", { name: strings.resolve.cliHeading })).toBeNull();
     expect(screen.queryByRole("form")).toBeNull();
     const status = fact(strings.detail.statusLabel);
     expect(status).toHaveTextContent("operator");

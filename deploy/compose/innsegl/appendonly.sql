@@ -88,9 +88,12 @@ GRANT SELECT, INSERT, UPDATE ON innsegl.idempotency TO :"role";
 -- compose stack migrates as the owner, before this role is used at all.
 GRANT SELECT ON innsegl.schema_migrations TO :"role";
 
--- `innsegl resolve-alert` (ADR-0044) appends a resolution under this role.
--- SELECT for the RETURNING it reads back. No UPDATE or DELETE: a resolution is
--- one deliberate act, and correcting one is the owner's (#323).
+-- The sealer closes a drift alert once its segment is anchored (ADR-0055) by
+-- appending a resolution under this role. SELECT is kept for a RETURNING
+-- read-back (ledger.Store.ResolveAlert).
+-- No UPDATE or DELETE: a resolution is one deliberate act, and correcting one
+-- is the owner's (#323). A person resolves through the API's own resolver
+-- role (internal/api/resolver.sql), not this one.
 GRANT SELECT, INSERT ON innsegl.alert_resolutions TO :"role";
 
 -- innsegl.gateway_run_mapping (RM-235, #380; ADR-0060 decision 3) — the

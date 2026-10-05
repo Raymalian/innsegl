@@ -156,16 +156,10 @@ COPY --from=build /out/gitsign /usr/local/bin/gitsign
 # denied" on the first mkdir. Creating them here is what makes
 # `innsegl-workspace` writable by the three services doc 05 §1 shares it
 # between.
-#
-# /sessions is observe_session's marker volume (#207, #211) and was the same
-# defect a second time, found by RM-129's live run: every SubagentStart refused
-# with `open /sessions/....part: permission denied`, so the tool that moved the
-# bookkeeping into the MCP could not write any of it. A refusal at the start of
-# a run is loud, which is the only reason it was one command to find.
-RUN mkdir -p /work /sessions && chown 1000:1000 /work /sessions
+RUN mkdir -p /work && chown 1000:1000 /work
 
 # /mirror is the per-repository mirror hosted clients push to (ADR-0065),
-# owned by the image's user for the same reason as the two above.
+# owned by the image's user for the same reason as /work above.
 RUN mkdir -p /mirror && chown 1000:1000 /mirror && chmod 0700 /mirror
 
 # /dashboard-tls is where this process writes the dashboard's certificate

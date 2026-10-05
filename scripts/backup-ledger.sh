@@ -627,7 +627,7 @@ record_copy() {
 copy_failed() {
   warn "backup-ledger: HOST COPY FAILED -- $*"
   warn "  The backup itself verified and is kept in ${out_dir}, but it has NO copy outside the"
-  warn "  container runtime: a reset of the runtime would lose it. The readiness report says so."
+  warn "  container runtime: a reset of the runtime would lose it. scripts/backup-freshness.sh says so."
   record_copy "failed $*"
 }
 

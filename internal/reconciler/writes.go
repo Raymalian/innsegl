@@ -65,10 +65,11 @@ import (
 // repository was never asked. Those are UNCHECKABLE — the bucket that already
 // meant "this check is silent about it".
 //
-// Deciding it needs the host-to-mount translation `describe_workspace`
-// performs, for that tool's reason: a body records the path the HARNESS saw,
-// and nothing in this process says what its own mount corresponds to. See
-// WritesConfig.HostProjects.
+// Deciding it needs a host-to-mount translation: a body records the path the
+// HARNESS saw, and nothing in this process says what its own mount
+// corresponds to. See WritesConfig.HostProjects. The core mounts no projects
+// folder (ADR-0065), and since ADR-0071 `innsegl reconcile` sets neither root,
+// so the pass reports itself unscoped.
 //
 // # How much it is worth, measured rather than projected
 //
@@ -292,10 +293,9 @@ type WritesConfig struct {
 	// for the whole population and for the larger figure #169 projected from
 	// a different one.
 	//
-	// HostProjects is the host directory the Projects mount corresponds to —
-	// the same INNSEGL_HOST_PROJECTS `describe_workspace` is told, and told
-	// for the same reason: the container knows where its mount IS and nothing
-	// in it says what that mount CORRESPONDS TO. Nothing is guessed. The
+	// HostProjects is the host directory the Projects mount corresponds to:
+	// the container knows where its mount IS and nothing in it says what that
+	// mount CORRESPONDS TO. `innsegl reconcile` no longer sets it (ADR-0071). Nothing is guessed. The
 	// plausible rules — strip to the first existing directory, match on a
 	// repository's name — all answer confidently and some of the time answer
 	// wrongly, and this one decides whether a claim is judged at all.

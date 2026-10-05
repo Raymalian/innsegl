@@ -602,12 +602,23 @@ func TestOPS034ReadinessNamesAnAbsentPinnedTree(t *testing.T) {
 		t.Errorf("the report never names the tree that is missing:\n%s", out)
 	}
 
-	// The readiness reporter must actually call it. A health check nothing
-	// runs is the same shape as a gate nobody has watched fail.
-	start := readFile(t, filepath.Join(root, "scripts", "innsegl-start.sh"))
-	if !strings.Contains(start, "rekor-tlog-health.sh") {
-		t.Errorf("scripts/innsegl-start.sh — the thing that reports readiness — " +
-			"never calls scripts/rekor-tlog-health.sh")
+	// `make start` must actually call it, and its failure must fail the start.
+	// A health check nothing runs is the same shape as a gate nobody has
+	// watched fail.
+	mk := readFile(t, filepath.Join(root, "Makefile"))
+	at := strings.Index(mk, "\nstart:\n")
+	if at < 0 {
+		t.Fatal("the Makefile has no start target")
+	}
+	startRecipe := mk[at:]
+	if end := strings.Index(startRecipe, "\n## backup-freshness:"); end > 0 {
+		startRecipe = startRecipe[:end]
+	}
+	if !strings.Contains(startRecipe, "scripts/rekor-tlog-health.sh") {
+		t.Errorf("the Makefile's start target never calls scripts/rekor-tlog-health.sh")
+	}
+	if strings.Contains(startRecipe, "rekor-tlog-health.sh ||") {
+		t.Errorf("start tolerates a failing rekor-tlog-health.sh; an absent pinned tree is a fault")
 	}
 }
 

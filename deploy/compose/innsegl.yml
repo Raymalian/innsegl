@@ -311,7 +311,7 @@ x-rekor-url: &rekor-url ${INNSEGL_REKOR_URL:-http://rekor:3000}
 # The issuer, and the same variable spire.yml and sigstore.yml read. `innsegl
 # verify` is handed it so a certificate naming a different issuer is a failure
 # rather than a curiosity (ADR-0029 decision 3).
-x-jwt-issuer: &jwt-issuer ${INNSEGL_SPIRE_JWT_ISSUER:?set it to the issuer ALL THREE stacks use - http://spire-oidc:8080 for the compose default. `make innsegl-up` does this for you}
+x-jwt-issuer: &jwt-issuer ${INNSEGL_SPIRE_JWT_ISSUER:?set it to the issuer ALL THREE stacks use - http://spire-oidc:8080 for the compose default. `make start` does this for you}
 
 # ----------------------------------------------------------------------------
 # THE ATTESTED NODE.
@@ -1120,11 +1120,6 @@ services:
       # file contents and commands, so it stays on the operator's own disk.
       # Unset, the tool refuses every call by name (#211).
       INNSEGL_MCP_LOG_DIR: /agentlog
-      # No INNSEGL_MCP_SESSION_DIR: `observe_session` resolves a session's
-      # workspace in a host projects folder, which the core no longer mounts
-      # (it reads only the mirror, ADR-0065), and `innsegl serve` refuses a
-      # session folder without one. The gateway tracks sessions from the
-      # traffic instead (ADR-0058).
 
       # The working trees the `sign_commit` MCP tool and demo-agent use. A
       # repository reader on the core reads the mirror above, never this.
@@ -2101,11 +2096,6 @@ volumes:
   # not the caller's). No repository reader on the core reads it.
   # MOUNTED BY: innsegl-mcp (rw), demo-agent (rw).
   innsegl-workspace:
-  # observe_session's session-to-run mapping (RM-128, #207; wired by #211).
-  # MOUNTED BY: nothing since the core stopped mounting a projects folder.
-  # Declared still, so a deployment's existing mappings are not deleted by a
-  # compose file that forgot the volume; `docker compose down -v` removes it.
-  innsegl-sessions:
 
   # #264's PUBLIC key set: the keys whose repository-scoped credentials the
   # identity-lifecycle listener admits.

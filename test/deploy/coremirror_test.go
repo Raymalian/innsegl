@@ -116,12 +116,10 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 	}
 }
 
-// The core refuses a session folder without a host projects folder
-// (cmd/innsegl serve.go, validate): observe_session resolves workspaces
-// there. With the projects folder gone from the core, a session folder left
-// in innsegl.yml crash-looped innsegl-mcp on every host (measured
-// 2026-10-04). The two are set together or not at all.
-func TestTheCoreSetsNoSessionFolderWithoutAProjectsFolder(t *testing.T) {
+// ADR-0071: the projects mount and the session-marker volume are gone. The
+// variables that configured them configure nothing, the volume is mounted by
+// nothing, and the image makes no /sessions directory for it.
+func TestTheCoreCarriesNoProjectsMountOrSessionVolume(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := composeUsable(ctx); err != nil {
@@ -130,10 +128,27 @@ func TestTheCoreSetsNoSessionFolderWithoutAProjectsFolder(t *testing.T) {
 	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments",
 		[]string{"init", "separate", "demo", "canary"}, "deploy/compose/innsegl.yml")
 	for name, svc := range cfg.Services {
-		session := svc.Environment["INNSEGL_MCP_SESSION_DIR"]
-		projects := svc.Environment["INNSEGL_HOST_PROJECTS"]
-		if session != nil && *session != "" && (projects == nil || *projects == "") {
-			t.Errorf("%s sets INNSEGL_MCP_SESSION_DIR=%s without INNSEGL_HOST_PROJECTS; innsegl serve refuses to start", name, *session)
+		for _, key := range []string{"INNSEGL_MCP_SESSION_DIR", "INNSEGL_HOST_PROJECTS",
+			"INNSEGL_PROJECTS_MOUNT", "INNSEGL_WRITES_PROJECTS", "INNSEGL_REPO_ID"} {
+			if _, ok := svc.Environment[key]; ok {
+				t.Errorf("%s sets %s, which configures nothing since ADR-0071", name, key)
+			}
+		}
+		for _, v := range svc.Volumes {
+			if v.Target == "/sessions" {
+				t.Errorf("%s mounts %s at /sessions", name, v.Source)
+			}
+		}
+	}
+	for _, file := range []string{"deploy/compose/innsegl.yml", "Dockerfile"} {
+		raw, err := os.ReadFile(filepath.Join(repoRoot(t), file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, gone := range []string{"innsegl-sessions", "/sessions"} {
+			if strings.Contains(string(raw), gone) {
+				t.Errorf("%s still names %s", file, gone)
+			}
 		}
 	}
 }

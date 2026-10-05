@@ -1650,9 +1650,10 @@ type GitRepos struct {
 //
 // # safe.directory: the two project mounts, and nothing wider (#308)
 //
-// The container binds the host projects folder twice: at /projects, and at
-// INNSEGL_HOST_PROJECTS so that a linked worktree's `.git` file — which names
-// its gitdir by the HOST path — resolves. Through that second mount Docker
+// A container that binds the host projects folder binds it twice: at
+// /projects, and at INNSEGL_HOST_PROJECTS so that a linked worktree's `.git`
+// file — which names its gitdir by the HOST path — resolves. The shipped core
+// binds neither (ADR-0065, ADR-0071). Through that second mount Docker
 // Desktop can report `.git` and the gitdir as uid 0, and git then refuses the
 // repository as "dubious ownership". The config is isolated above, so the
 // only trust it holds is what is written here: each mount root's subtree.
@@ -1802,6 +1803,17 @@ func (g gitsignSigners) Open(src signing.CredentialSource) (SignCommitSigner, er
 	}
 	return signer, nil
 }
+
+const (
+	// EnvHostProjects names the host directory a projects mount corresponds
+	// to. Since ADR-0071 it is read here and nowhere else: it is one of the
+	// two roots git's ownership check trusts.
+	EnvHostProjects = "INNSEGL_HOST_PROJECTS"
+
+	// DefaultProjectsMount is where a projects folder was mounted inside the
+	// container.
+	DefaultProjectsMount = "/projects"
+)
 
 // ProjectMountRoots are the two places this container sees the host projects
 // folder: /projects, and INNSEGL_HOST_PROJECTS when it is set. They are the

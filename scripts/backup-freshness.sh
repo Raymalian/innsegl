@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # How old is the last VERIFIED backup, and did its copy outside the container
-# runtime land? (RM-190, #310). The readiness report (scripts/innsegl-start.sh)
-# asks this; it can also be run on its own.
+# runtime land? (RM-190, #310). Run it on its own.
 #
 # WHY. The backup service's healthcheck reads a marker the loop refreshes on
 # every run, including runs that verified nothing. A backup that stopped days

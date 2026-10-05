@@ -23,8 +23,13 @@
 # key anywhere in this repository. The operator holds it, supplies it per start,
 # and losing it costs the CA exactly as losing the key would.
 #
-#   make innsegl-ca-custody-init    once: initialise, print the keys ONCE
-#   make innsegl-ca-custody-up      per start: unseal, mint, run Fulcio on it
+#   make innsegl-ca-custody-init    once: start the store, initialise, print the keys ONCE
+#   scripts/ca-custody.sh unseal    per start: unseal the store (prompts for the key)
+#   INNSEGL_CA_STORE_ROOT_TOKEN=<root token> scripts/ca-custody.sh token
+#                                   per start: mint the CA's short-lived token
+#   INNSEGL_CA_STORE_TOKEN=<that token> docker compose \
+#     -f deploy/compose/sigstore.yml -f deploy/compose/sigstore.keycustody.yml up -d
+#                                   per start: bootstrap the root, run Fulcio on it
 #
 # WHY A SEPARATE NETWORK. The store is reachable from the CA and the
 # bootstrapper and from nothing else — the same shape doc 05 §1 gives the object
@@ -157,9 +162,9 @@ services:
     environment:
       INNSEGL_CA_STORE_ADDR: http://innsegl-ca-store:8200
       # NOT DEFAULTED, and there is no value for it in this repository. It is
-      # the token `make innsegl-ca-custody-up` mints from the operator's own
+      # the token `scripts/ca-custody.sh token` mints from the operator's own
       # credentials, scoped to the transit key and nothing else.
-      INNSEGL_CA_STORE_TOKEN: ${INNSEGL_CA_STORE_TOKEN:?the key-custody overlay needs a store token scoped to the CA key. `make innsegl-ca-custody-up` mints one; there is deliberately no default, because a default would be a shipped credential}
+      INNSEGL_CA_STORE_TOKEN: ${INNSEGL_CA_STORE_TOKEN:?the key-custody overlay needs a store token scoped to the CA key. `scripts/ca-custody.sh token` mints one; there is deliberately no default, because a default would be a shipped credential}
       INNSEGL_CA_STORE_KEY: ${INNSEGL_CA_STORE_KEY:-innsegl-ca}
       INNSEGL_TRUST_DOMAIN: ${INNSEGL_TRUST_DOMAIN:-innsegl.dev}
       INNSEGL_CA_CHAIN_PATH: /etc/fulcio-kms/chain.pem

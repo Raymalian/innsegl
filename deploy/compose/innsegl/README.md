@@ -240,8 +240,9 @@ other two. `api.AssertResolverScope` probes the credential at every start-up
 and refuses one that can do more; `verify-resolver-role.sh` asks the server
 the same questions when `db-init` provisions it.
 
-`INNSEGL_API_RESOLVER_DSN` is optional. Without it the dashboard shows the
-`innsegl resolve-alert` command instead, and the resolve routes answer 503.
+`INNSEGL_API_RESOLVER_DSN` is optional. Without it the resolve routes answer
+503, and the dashboard says that resolving an alert needs the resolver role
+configured on the API.
 
 ## Enrolling the first operator
 
@@ -494,7 +495,7 @@ See [`../README.md`](../README.md) for the boot block. The short version, once
 SPIRE and Sigstore are up:
 
 ```sh
-make innsegl-up             # build, register the MCP, boot the seven rows
+make start                  # SPIRE, Sigstore, build, register the MCP, boot the rows
 make innsegl-verify         # ask about the MCP's DB credential and the sealer's store credential
 make innsegl-canary         # SEG-005: prove a sealed segment cannot be deleted
 make innsegl-demo           # register -> sign -> retire, over the real transport

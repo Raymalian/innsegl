@@ -21,30 +21,20 @@ import (
 // api.Server, so every query-API view rendered its own load-failure state
 // permanently (RM-083, #121).
 //
-// `resolve-alert` is RM-102 (#167, ADR-0044): the write half of alert
-// resolution. It is a CLI subcommand and not a route on `api` because `api`
-// IS doc 05 §1's `innsegl-dashboard` — "No write credentials mounted", FD §7,
-// enforced at Open by AssertReadOnly (RM-083) — and FD P6 forbids a mutating
-// action anywhere in the UI. An operator runs this the way they run `reap` or
-// `reconcile`: from a trusted host, holding the ledger DSN, not through the
-// dashboard.
 // `migrate-schema` is doc 08 §3(c): a MAJOR schema release must append a
 // migration attestation to the ledger marking the cutover position. That is
 // the one of §3's four requirements that lives in a DEPLOYMENT's chain rather
 // than in this repository, so no test here can produce it and an operator has
-// to run something. Like `reap` and `resolve-alert`, it runs from a trusted
-// host holding the ledger DSN.
+// to run something. Like `reap`, it runs from a trusted host holding the
+// ledger DSN.
 //
 // `retire` is RM-154 (#257): the ONLY way an operator's positive knowledge
 // that a run is over reaches the ledger without an MCP client. It is unlike
 // its neighbours in what it holds — no ledger DSN, no SPIRE admin credential,
 // only the address of the identity-lifecycle listener — because the retirement
 // is `retire_agent`'s and this is a client of it.
-// `gateway` is ADR-0060's fifth companion of the one `innsegl` process
-// (RM-224, #369): a reverse proxy in front of the model provider a harness
-// is pointed at (ADR-0057). It is a subcommand in its own right, the same
-// shape `api`, `seal`, `reconcile` and `reap` already are, and `serve -also
-// gateway` runs the same body as a goroutine instead of a sixth container.
+// `gateway` is not an entry: it is ADR-0060's companion of the one
+// `innsegl` process, run only as `serve -also gateway` (ADR-0071).
 // `hook`, `git-hook` and `sign` are the host half of ADR-0059's commit path
 // (E17): what the harness and git run, each a client of the core. `link`
 // (RM-245, #390) installs the prepare-commit-msg hook `git-hook` and `sign`
@@ -52,8 +42,8 @@ import (
 // does not cover. `connect` and `client` (RM-285, #461, ADR-0063) belong to an
 // enrolled client machine: enrolment, and the service that holds its key.
 var documentedSubcommands = []string{
-	"accounts", "admin-credential", "api", "canary", "client", "connect", "gateway", "git-hook", "hook", "init", "link", "migrate-schema",
-	"reap", "reconcile", "resolve-alert", "retire", "seal", "serve", "sign", "status", "verify",
+	"accounts", "admin-credential", "api", "canary", "client", "connect", "git-hook", "hook", "init", "link", "migrate-schema",
+	"reap", "reconcile", "retire", "seal", "serve", "sign", "status", "verify",
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {

@@ -71,8 +71,9 @@ deploy/compose/spire/register.sh
 docker compose -f deploy/compose/innsegl.yml up -d
 ```
 
-`make innsegl-up` runs exactly that. It is the whole of `docker compose up` for
-this project, and every line of it matters:
+`make start` does this and more (host folders, the image bundle, commit
+labels); the lines above are the whole of `docker compose up` for this project,
+and every line of it matters:
 
 - **The export comes first.** Three files must name the same issuer — the `iss`
   claim SPIRE stamps, the issuer in the OIDC discovery document, and the
@@ -469,25 +470,8 @@ make innsegl-canary   # SEG-005: prove a sealed segment cannot be deleted
 
 ## The append-only database role
 
-**doc 05 §1 runs the MCP under a database role that can append and cannot
-delete.** Until [#109](https://github.com/Raymalian/innsegl/issues/109) nothing
-created one, so this stack ran the MCP as the database owner and
-`innsegl serve` printed `DATABASE ROLE IS OVER-PRIVILEGED` on an adopter's
-first contact with an attestation system.
-
-It does not any more. `innsegl-db-init` creates the role, applies the grants,
-and then **connects as the role and asks the server what it can actually do**,
-exiting non-zero if the answer is "delete". `innsegl-mcp` gates on its
-completion and runs with `-require-append-only-role`, so the server refuses to
-start behind anything else. The first line of the MCP's log is now:
-
-```
-level=INFO msg="database role is append-only on the chain (doc 05 §1)" role=innsegl_appender granted=[INSERT]
-```
-
-The reasoning, the measurement it rests on, and why a check that asked "did the
-statement fail?" would pass the database owner are in
-[`innsegl/README.md`](innsegl/README.md).
+The MCP runs under a database role that can append and cannot delete, and the
+stack proves it at boot. See [`innsegl/README.md`](innsegl/README.md#the-append-only-database-role).
 
 ---
 
@@ -528,29 +512,8 @@ release decision.
 
 ## Compose defaults versus shipped defaults
 
-doc 05 §1 asked this README to state one asymmetry explicitly — local Fulcio and
-Rekor in compose, public Sigstore in the installed product — so that nobody
-mistakes a CI convenience for the deployment shape.
-
-**That asymmetry no longer exists.** ADR-0010 measured the question: public-good
-Fulcio's allowlist contains no issuer of type `spiffe`, the SPIFFE federation
-process was closed `not_planned`, and the machinery that implemented it was
-deleted. A project-operated SPIRE trust domain cannot be onboarded there. So
-self-hosted Fulcio and Rekor are the shipped default **and** the reference
-deployment, in compose and installed alike; public Sigstore is demoted to a
-supported configuration, available where a deployment already holds a token
-from an issuer on Fulcio's published allowlist.
-
-doc 05 §1's table still describes the old default. That is a spec edit for a
-human, not something an implementing agent may make; it is flagged here, in
-`sigstore/README.md`, in `spire/README.md` and in ADR-0029.
-
-The consequence to carry away: **whoever deploys Innsegl runs the log that
-attests their own agents.** The mechanism is unchanged — a Merkle-backed
-append-only log with verifiable inclusion proofs, checkable by anyone holding
-the log's public key — but the "even we can't" claim does not survive it.
-Every place this project renders non-repudiation must render the log endpoint
-in use beside it.
+The compose stack and the installed product both default to self-hosted Fulcio and
+Rekor (ADR-0010): see [`sigstore/README.md`](sigstore/README.md#this-is-the-shipped-default-not-a-ci-convenience).
 
 ---
 

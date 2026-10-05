@@ -89,9 +89,9 @@ type registerAgentIn struct {
 	ParentRunID string `json:"parent_run_id,omitempty"`
 
 	// resumesRetiredParent lets ParentRunID name a RETIRED run, and nothing
-	// else does (RM-191, #311). Only observe_session sets it, in process, when
-	// a session resumes on a marker whose run it retired: the new run
-	// continues the retired one, and that is the edge. It is unexported, so
+	// else does (RM-191, #311). Only the gateway sets it, in process, through
+	// GatewayRegistration.ResumesRetiredParent, once its lifecycle policy has
+	// decided to adopt (ADR-0058 decision 8). It is unexported, so
 	// the JSON decoder never fills it and no caller of the tool can send it.
 	// Every other path keeps MCP-082's refusal.
 	resumesRetiredParent bool
@@ -513,7 +513,7 @@ func (c *RegisterAgentConfig) mint(ctx context.Context, run spire.RunRef, spiffe
 // # Why it runs inside mint, and not before the idempotency claim
 //
 // Before the claim it would run on every REPLAY, and a replay is how a resumed
-// run gets its entry healed and how observe_session answers a duplicate start.
+// run gets its entry healed and how the gateway restores a run.
 // A child whose parent has been retired since would then be refused an
 // identity it already holds — the run id is derived and does not depend on the
 // parent, so the second call cannot move the edge in any case. Inside mint the
@@ -529,7 +529,7 @@ func (c *RegisterAgentConfig) mint(ctx context.Context, run spire.RunRef, spiffe
 // be recorded: the call is refused rather than writing an edge on trust. A
 // deployment in that state registers root runs exactly as it always did.
 //
-// resumesRetired admits a retired parent. Only observe_session's resume path
+// resumesRetired admits a retired parent. Only the gateway's adopt decision
 // sets it (registerAgentIn.resumesRetiredParent); every other caller is
 // refused RUN_ALREADY_RETIRED, as MCP-082 requires.
 func (c *RegisterAgentConfig) checkParent(ctx context.Context, runID, parent string, resumesRetired bool) error {

@@ -73,12 +73,14 @@ type commitStager interface {
 	Stage(ctx context.Context, dir, toolUseID string, payload []byte) error
 }
 
-// runSign is `innsegl sign`. It is never dispatched through cli.go's
-// `commands` table — a deployment wires it as git's `gpg.x509.program`
-// directly, which is why its signature takes stdin, stdout and stderr
-// separately rather than the (args, stdout, stderr) shape every table entry
-// uses: git's own contract hands this process a payload on stdin and expects
-// two different things back on two different streams.
+// runSign is `innsegl sign`. It is reached two ways, both through
+// signCommand (commitpathcli.go): cli.go's `sign` table entry, and cli.go's
+// --status-fd/--verify dispatch, which is how git calls this binary when a
+// repository sets it as `gpg.x509.program` directly. Its signature takes
+// stdin, stdout and stderr separately rather than the (args, stdout, stderr)
+// shape every table entry uses: git's own contract hands this process a
+// payload on stdin and expects two different things back on two different
+// streams.
 func runSign(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, client signClient) int {
 	refuse := func(format string, a ...any) int {
 		fprintf(stderr, "innsegl sign: "+format+"\n", a...)

@@ -182,7 +182,7 @@ services:
   # not a client.
   #
   # OFF BY DEFAULT: the `adminrelay` profile, so a plain `up` (or `make
-  # innsegl-up`) never starts it — matching the constraint that made this a
+  # start`) never starts it — matching the constraint that made this a
   # question in the first place (ADR-0011, restated in spire-server's own
   # comment above): "an unauthenticated admin listener on a developer's
   # machine is worse than the inconvenience it removes."

@@ -2,46 +2,36 @@
 
 package gateway
 
-// workspace.go — RM-231 (#376): the contract's WorkspaceResolver
-// (lifecycle_contract.go), on top of describe_workspace's own configured
-// resolver (internal/mcp/gateway.go's ResolveWorkspaceForGateway, itself
-// DescribeWorkspaceConfig.describe, internal/mcp/workspace.go:232). No rule
-// is duplicated here: an unset projects mount, a path outside it, or a
-// directory that is not a git working tree is refused exactly as
-// describe_workspace refuses it over the wire — never guessed, because a
-// run cannot be registered without repo and branch (ADR-0045).
+// workspace.go — how a session's statement becomes a Workspace.
+//
+// The client derives its own workspace and states it (ADR-0064). The core
+// reads repositories only from its mirror and mounts no projects folder
+// (ADR-0065), so a statement that names only a directory has nothing to be
+// resolved against: NoTreeResolver refuses it by name (ADR-0071). It replaced
+// a resolver that called describe_workspace in process, which refused the
+// same statement for the same reason, less plainly.
 
 import (
 	"context"
-
-	"innsegl.dev/innsegl/internal/mcp"
+	"fmt"
 )
 
-// MCPWorkspaceResolver implements WorkspaceResolver by calling straight into
-// internal/mcp's describe_workspace path, in process.
-type MCPWorkspaceResolver struct{}
+// NoTreeResolver is the WorkspaceResolver every deployment wires: it refuses
+// every directory, because the core reads no client tree.
+type NoTreeResolver struct{}
 
-// NewMCPWorkspaceResolver returns the resolver every deployment wires by
-// default. It holds no state of its own: internal/mcp already holds the
-// configured projects mount (ConfigureDescribeWorkspace), and this type is
-// only ever a caller of that.
-func NewMCPWorkspaceResolver() MCPWorkspaceResolver { return MCPWorkspaceResolver{} }
-
-var _ WorkspaceResolver = MCPWorkspaceResolver{}
+var _ WorkspaceResolver = NoTreeResolver{}
 
 // Resolve implements WorkspaceResolver.
-func (MCPWorkspaceResolver) Resolve(ctx context.Context, workingDirectory string) (Workspace, error) {
-	ws, err := mcp.ResolveWorkspaceForGateway(ctx, workingDirectory)
-	if err != nil {
-		return Workspace{}, err
-	}
-	return Workspace{Repo: ws.Repo, Branch: ws.Branch, Task: ws.Task}, nil
+func (NoTreeResolver) Resolve(_ context.Context, workingDirectory string) (Workspace, error) {
+	return Workspace{}, fmt.Errorf("the session stated only its directory %q, and the core "+
+		"reads no client tree (ADR-0071): `innsegl hook session` states the repository, "+
+		"branch and task", workingDirectory)
 }
 
 // StatedWorkspaceResolver turns a session's statement into a Workspace. A
 // statement that carries the client's own derivation is used as stated, with
-// no filesystem access (the shape once the core cannot read a client's tree);
-// one that carries only a directory goes to Fallback, the single-host shape.
+// no filesystem access; one that carries only a directory goes to Fallback.
 type StatedWorkspaceResolver struct {
 	// Fallback resolves a directory-only statement.
 	Fallback WorkspaceResolver

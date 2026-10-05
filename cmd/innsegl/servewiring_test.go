@@ -355,6 +355,27 @@ func TestMCP058ABoundToolNothingConfiguredIsRefusedAtStartUp(t *testing.T) {
 		}
 	})
 
+	// ADR-0071: a deprecated tool has nothing to configure. It stays bound
+	// and refuses every call, which is decided by the tool itself, and the
+	// start-up log says so.
+	t.Run("a deprecated tool is decided, and says so every start", func(t *testing.T) {
+		var log bytes.Buffer
+		w := newToolWiring(newServeLog(&log))
+		deprecated := []mcp.ToolName{mcp.ToolDescribeWorkspace, mcp.ToolObserveSession}
+		for _, name := range deprecated {
+			w.deprecate(name)
+		}
+		if err := w.requireDecided(surface, deprecated); err != nil {
+			t.Errorf("a deprecated tool stopped the server: %v", err)
+		}
+		for _, name := range deprecated {
+			if !strings.Contains(log.String(), string(name)+" is deprecated") ||
+				!strings.Contains(log.String(), "ADR-0071") {
+				t.Errorf("deprecating %s was silent:\n%s", name, log.String())
+			}
+		}
+	})
+
 	t.Run("a configuration that FAILED is not a decision", func(t *testing.T) {
 		w := newToolWiring(newServeLog(io.Discard))
 		boom := errors.New("no body volume")

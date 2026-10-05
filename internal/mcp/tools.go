@@ -41,14 +41,16 @@ const (
 	ToolSignCommit ToolName = "sign_commit"
 	// ToolRetireAgent: retire_agent(run_id) → {retired_at}. RM-025.
 	ToolRetireAgent ToolName = "retire_agent"
-	// ToolDescribeWorkspace: describe_workspace(cwd) → {repo, worktree,
-	// branch, task}. Pure derivation, no writes. RM-126, E11.
+	// ToolDescribeWorkspace: describe_workspace(cwd). RM-126, E11.
+	// Deprecated by ADR-0071: bound, refuses every call, removed at the next
+	// major release.
 	ToolDescribeWorkspace ToolName = "describe_workspace"
 	// ToolObserveToolCall: observe_tool_call(run_id, tool, body) → {digest}.
 	// Digests and stores the body locally, appends the tool_call. RM-127, E11.
 	ToolObserveToolCall ToolName = "observe_tool_call"
-	// ToolObserveSession: observe_session(session_id, phase, cwd) → the run.
-	// Harness session start/stop, replacing marker bookkeeping. RM-128, E11.
+	// ToolObserveSession: observe_session(session_id, phase, cwd). RM-128,
+	// E11. Deprecated by ADR-0071: bound, refuses every call, removed at the
+	// next major release.
 	ToolObserveSession ToolName = "observe_session"
 )
 
@@ -95,9 +97,9 @@ var (
 // is. They are driven by the harness OBSERVING the agent, never by the model
 // reporting on itself; a model that could call observe_tool_call could write
 // its own activity log, and a reader could not tell an observed call from a
-// claimed one. That gap is doc 04 AB-14. describe_workspace writes nothing at
-// all, but it is the tool that makes the other two addressable, so exposing it
-// to the model would hand over the addressing without the recording.
+// claimed one. That gap is doc 04 AB-14. describe_workspace and observe_session
+// are deprecated (ADR-0071) and refuse every call; they stay on the admin side
+// until their names are removed.
 //
 // record_event moved to the admin side when #171 made the harness record tool
 // calls rather than the model reporting them. It is the one tool whose place

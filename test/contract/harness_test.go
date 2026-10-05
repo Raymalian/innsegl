@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -683,16 +682,9 @@ type stack struct {
 	scRoot   string
 	scSigner *fakeSCSigner
 
-	// E11's three tools, configured by the stack since #211 (see
-	// stackIngestion). projects is the host root describe_workspace
-	// translates against and the mount it translates onto — one directory,
-	// because a container path does not exist on the machine running this
-	// test. worktree is one real git repository under it. bodyDir and
-	// markerDir are observe_tool_call's and observe_session's local volumes.
-	projects  string
-	worktree  string
-	bodyDir   string
-	markerDir string
+	// observe_tool_call's local body volume, configured by the stack since
+	// #211 (see stackIngestion).
+	bodyDir string
 }
 
 // newStack wires all eight shipped tools onto a fresh chain and serves them.
@@ -804,8 +796,9 @@ func newStackOn(t *testing.T, dsn string) *stack {
 	return s
 }
 
-// stackIngestion configures describe_workspace, observe_tool_call and
-// observe_session on s, through their own shipped Configure functions.
+// stackIngestion configures observe_tool_call on s, through its own shipped
+// Configure function. describe_workspace and observe_session are deprecated
+// (ADR-0071) and have nothing to configure.
 //
 // # Why this is in the stack and no longer beside the cells
 //
@@ -819,40 +812,13 @@ func newStackOn(t *testing.T, dsn string) *stack {
 // while proving nothing whatever. Three doc comments in contract_test.go said
 // so in as many words and could do nothing about it.
 //
-// Now the stack wires all eight, exactly as `serve` does, and a cell that
+// Now the stack wires every configurable tool, exactly as `serve` does, and a cell that
 // needs a HOSTILE configuration — a volume that genuinely cannot be written to
 // — installs that over the top for its own duration. That is a different thing
 // from a missing one, and the difference is now visible: TestMCP060 drives
 // every bound tool and refuses any that answers its own unwired gate.
-//
-// The host root and the mount are the SAME directory, which is the one thing
-// here that is not a deployment's shape: a container path does not exist on
-// the machine running this test, so a host root that differed from the mount
-// could only be paired with a tree that is not there. The translation itself
-// is pinned by MCP-039 in internal/mcp against a host root that is
-// deliberately not the mount.
 func stackIngestion(t *testing.T, s *stack, runs ledgerRuns) {
 	t.Helper()
-
-	s.projects = t.TempDir()
-	s.worktree = filepath.Join(s.projects, fmt.Sprintf("contract-workspace-%d", scRepoSeq.Add(1)))
-	if err := os.MkdirAll(s.worktree, 0o700); err != nil {
-		t.Fatalf("mkdir %s: %v", s.worktree, err)
-	}
-	scGit(t, s.worktree, "init", "-q", "-b", "main")
-	// An origin, because `repo` is read from it and must satisfy doc 02 §5's
-	// three-segment host/org/name. A repository without one is a refusal, not
-	// a blank — describe_workspace never synthesises an identifier from a
-	// directory name.
-	scGit(t, s.worktree, "remote", "add", "origin", "git@github.com:innsegl/contract-workspace.git")
-
-	restoreDescribe, err := mcp.ConfigureDescribeWorkspace(mcp.DescribeWorkspaceConfig{
-		HostProjects: s.projects, Projects: s.projects,
-	})
-	if err != nil {
-		t.Fatalf("ConfigureDescribeWorkspace: %v", err)
-	}
-	t.Cleanup(restoreDescribe)
 
 	s.bodyDir = t.TempDir()
 	restoreObserve, err := mcp.ConfigureObserveToolCall(mcp.ObserveToolCallConfig{
@@ -862,13 +828,6 @@ func stackIngestion(t *testing.T, s *stack, runs ledgerRuns) {
 		t.Fatalf("ConfigureObserveToolCall: %v", err)
 	}
 	t.Cleanup(restoreObserve)
-
-	s.markerDir = t.TempDir()
-	restoreSession, err := mcp.ConfigureObserveSession(mcp.ObserveSessionConfig{MarkerDir: s.markerDir})
-	if err != nil {
-		t.Fatalf("ConfigureObserveSession: %v", err)
-	}
-	t.Cleanup(restoreSession)
 }
 
 // call invokes one tool over the transport and returns the raw result.

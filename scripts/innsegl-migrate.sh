@@ -302,8 +302,9 @@ create_volume_with_labels() {
 # "<name>|<what it holds>", one per line. Verified against
 # deploy/compose/trust-volumes.sh (the five innsegl-trust-* suffixes),
 # deploy/compose/spire.yml, innsegl.yml and sigstore.yml (each project's
-# `name:`, which is the prefix compose gives its own volumes), on 2026-09-28;
-# innsegl-sessions moved into innsegl.yml on 2026-10-03 and kept its name.
+# `name:`, which is the prefix compose gives its own volumes), on 2026-09-28.
+# innsegl-sessions is not listed: it held observe_session's markers, which
+# nothing reads since ADR-0071, and an old host's copy is left behind.
 # ---------------------------------------------------------------------------
 volume_table() {
   local prefix="${INNSEGL_MIGRATE_VOLUME_PREFIX:-}"
@@ -332,7 +333,6 @@ innsegl-core_innsegl-message-key|RM-237's own derived agent-message key (check-o
 innsegl-core_innsegl-admin-key|the admin-credential private signing key
 innsegl-core_innsegl-admin-jwks|the admin-credential public key set
 innsegl-core_innsegl-gateway-ca-key|the gateway's own CA private key (its certificate is republished on start)
-innsegl-core_innsegl-sessions|the harness's session-to-run mapping
 innsegl-core_innsegl-workspace|the working trees the sign_commit MCP tool resolves `repo` under
 innsegl-core_innsegl-backups|verified ledger backups and their reports
 innsegl-core_innsegl-mirror|the per-repository mirrors clients push commits to (ADR-0065)

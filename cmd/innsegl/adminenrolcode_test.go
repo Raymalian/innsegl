@@ -12,7 +12,7 @@ import (
 )
 
 // `innsegl admin-credential enrol-code`: flag handling and exit statuses
-// against a stub (resolvealert_test.go's own shape) — the real write against
+// against a stub — the real write against
 // a real Postgres is internal/api's own AUTH-002 coverage
 // (TestAUTH002EnrolmentWithADenyingFileAndAValidCodeCompletes and its
 // siblings), which exercises AuthStore.CreateEnrolmentCode directly; nothing

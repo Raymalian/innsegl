@@ -11,8 +11,7 @@
  *
  * An open alert can be resolved here (ADR-0044's 2026-10-03 amendment): a
  * reason and a fresh passkey, which records who, when and why beside the
- * alert and never changes the alert itself. The resolve-alert command stays
- * as the alternative for an operator on the core host.
+ * alert and never changes the alert itself.
  */
 
 import { useId, type ReactNode } from "react";
@@ -28,7 +27,6 @@ import { alertCause, explain } from "./explain";
 import { ResolveForm } from "./ResolveForm";
 import { strings } from "./strings";
 import {
-  commandBox,
   evidence,
   evidenceHeading,
   factRow,
@@ -188,12 +186,7 @@ function Fact({
   );
 }
 
-/**
- * Resolve this alert: a reason and a fresh passkey (RM-330), and the
- * resolve-alert command an operator on the core host can run instead. The
- * identifier chip is the command's copy control, given room for the whole
- * command so nothing is abbreviated on screen.
- */
+/** Resolve this alert: a reason and a fresh passkey (RM-330). */
 function Resolve({
   eventId,
   apiBase,
@@ -206,8 +199,6 @@ function Resolve({
   readonly browser?: WebAuthnBrowser;
 }) {
   const headingId = useId();
-  const cliId = useId();
-  const command = strings.detail.resolveCommand(eventId);
   return (
     <section aria-labelledby={headingId} className={resolveSection}>
       <h2 id={headingId} className={evidenceHeading}>
@@ -219,15 +210,6 @@ function Resolve({
         apiBase={apiBase}
         {...(browser === undefined ? {} : { browser })}
       />
-      <section aria-labelledby={cliId} className={evidence}>
-        <h3 id={cliId} className={evidenceHeading}>
-          {strings.resolve.cliHeading}
-        </h3>
-        <p className={summary}>{strings.resolve.cliDetail}</p>
-        <div className={commandBox}>
-          <IdentifierChip value={command} maxLength={command.length} />
-        </div>
-      </section>
     </section>
   );
 }

@@ -103,11 +103,14 @@ import (
 // is the RUN'S OWN — and the only party that knows which repository holds a run
 // is the listener, which will not answer without the credential. That circle
 // cannot be cut inside the protocol, so the repository comes from the caller,
-// from three places, first one wins:
+// from two places, first one wins:
 //
 //	-repo host/org/name    the operator names it outright
-//	$INNSEGL_REPO_ID       the variable the retired signer and old hook read
 //	the working tree       origin's URL, by doc 02 §5's rule
+//
+// $INNSEGL_REPO_ID was a third, between the two: the variable the retired
+// signer and the old hook read. Nothing sets it any more, and it is not read
+// (ADR-0071).
 //
 // The working tree is last and NOT the only way, because the run this command
 // exists for is a STRANDED one: a machine that is gone, a checkout that may
@@ -182,7 +185,8 @@ const (
 
 // Exit statuses, continuing cli.go's contract. The canary owns 3 and 4, the
 // reaper 5 and 6, the reconciler 7 and 8, the sealer 9 and 10, `api` 11-13,
-// `init` 14 and 15, `resolve-alert` 16 and 17; these are retire's. A
+// `init` 14 and 15, and 16 and 17 belonged to the removed `resolve-alert`
+// (ADR-0071) and stay unused; these are retire's. A
 // successful retirement is exitOK, which is the fourth of the four.
 const (
 	// exitRetireAlreadyEnded: the run was already retired when this ran. The
@@ -215,9 +219,6 @@ const (
 // signer script and the old shell harness hook read, so a deployment already
 // configured for them is configured for this (#266, #268).
 const (
-	// envRepoID names the repository when the working tree is not the run's
-	// own. `-repo` outranks it; it outranks the working tree.
-	envRepoID = "INNSEGL_REPO_ID"
 	// envAdminCredentialMint is the escape hatch for an operator whose signing
 	// key is not on this machine's container volume: any command that prints
 	// one credential for the repository it is given.
@@ -258,8 +259,7 @@ func retireCommand(args []string, stdout, stderr io.Writer) int {
 		repo = fs.String("repo", "",
 			"the RUN'S OWN repository, doc 02 §5's host/org/name. Needed only where the "+
 				"lifecycle listener authenticates (#264), and only when the run does not "+
-				"belong to this working tree — defaults to $"+envRepoID+
-				", then to this tree's origin remote")
+				"belong to this working tree — defaults to this tree's origin remote")
 	)
 
 	fs.Usage = func() {
@@ -634,11 +634,10 @@ type retireScope struct {
 
 const (
 	scopeFromFlag     = "-repo"
-	scopeFromEnv      = "$" + envRepoID
 	scopeFromWorktree = "this working tree's origin remote"
 )
 
-// resolveRetireScope answers the ordering problem in the header: three places,
+// resolveRetireScope answers the ordering problem in the header: two places,
 // first one wins.
 //
 // It is called LAZILY, only after the listener has refused something. A
@@ -650,12 +649,6 @@ func resolveRetireScope(ctx context.Context, explicit string) (retireScope, erro
 		// Already validated at the flag parse, so an operator who mistypes it
 		// is told before a call is made rather than inside a refusal.
 		return retireScope{repo: explicit, source: scopeFromFlag}, nil
-	}
-	if fromEnv := strings.TrimSpace(os.Getenv(envRepoID)); fromEnv != "" {
-		if err := event.ValidateRepo(fromEnv); err != nil {
-			return retireScope{}, fmt.Errorf("$%s is not a repository: %w", envRepoID, err)
-		}
-		return retireScope{repo: fromEnv, source: scopeFromEnv}, nil
 	}
 	repo, err := repoFromWorkingTree(ctx)
 	if err != nil {
@@ -815,7 +808,6 @@ func reportRetireUnauthorized(
 		fprintf(stderr, "innsegl retire: The credential authorises a REPOSITORY and this command names a RUN,\n")
 		fprintf(stderr, "innsegl retire: so the run's own repository has to be named. Name it:\n")
 		fprintf(stderr, "innsegl retire:   innsegl retire -repo host/org/name %s\n", runID)
-		fprintf(stderr, "innsegl retire: or set $%s.\n", envRepoID)
 		return exitRetireUnauthorized
 	}
 
