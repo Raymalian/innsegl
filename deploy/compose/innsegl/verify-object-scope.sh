@@ -28,12 +28,13 @@
 #
 # WHY THE SCOPE IS A PREFIX ON THIS STORE
 # ---------------------------------------
-# Measured on the pinned image: this store's permission model has no separate
-# action for setting a bucket's object-lock configuration. An identity granted
-# a bucket-wide `Write` may set it. There is no permission to withhold by name,
-# so the narrowing is expressed as the only thing that does distinguish the two
-# calls — the prefix the write is scoped to — and checks 2 and 3 below are what
-# prove that separates them on this server rather than in this comment.
+# Up to 4.46 this store's permission model had no separate action for setting
+# a bucket's object-lock configuration: an identity granted a bucket-wide
+# `Write` could set it. The narrowing was therefore a prefix on the write. Since
+# 4.48 (#451) the call has its own action, PutBucketObjectLockConfiguration,
+# which the scoped identity is not granted, so the refusal is now also by name.
+# The prefix stays because it bounds where the sealer writes. Checks 2 and 3
+# below prove the separation on this server rather than in this comment.
 #
 # WHY IT PROVES A PERMISSION IT HAS BEFORE IT PROVES THE ONES IT HAS NOT
 # ----------------------------------------------------------------------

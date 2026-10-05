@@ -305,9 +305,8 @@ smoke-down: innsegl-stack-clean
 # spire.yml and sigstore.yml are doc 05 §1's dependency rows; innsegl.yml is
 # the rest — postgres, the object store, the MCP, the reconciler, the sealer,
 # the dashboard (innsegl-api) and the demo agent — and until #109 none of them existed as a
-# compose service. The object store is three of those services since RM-143
-# (#227): the bytes, the metadata, and the S3 gateway that is the only one of
-# the three enforcing object lock and the only one anything else can reach.
+# compose service. The object store is one of those services (#451): one
+# process whose S3 layer alone enforces object lock and alone is reachable.
 #
 # These targets sit on top of the sigstore ones rather than replacing them: the
 # innsegl stack attaches to networks and a volume the other two own, so it

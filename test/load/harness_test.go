@@ -54,7 +54,7 @@ const (
 	// upstream and delisted from the registry this file pulled it from, so the
 	// pin stopped resolving at all. The replacement was measured against
 	// SEG-005 under the same configuration before it was adopted here.
-	defaultObjectStoreImage = "chrislusf/seaweedfs:4.46@sha256:08d516132314207d10c8e37cbffc1f32b147d870169688734cc61c6231625b62"
+	defaultObjectStoreImage = "chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
 	// The Rekor stack, matching internal/segment/rekorharness_test.go so that
 	// OPS-002 anchors against the same log SEG-003 does.
 	defaultRekorImage             = "ghcr.io/sigstore/rekor/rekor-server:v1.3.10"
