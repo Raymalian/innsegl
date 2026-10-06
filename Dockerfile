@@ -179,6 +179,13 @@ RUN mkdir -p /dashboard-tls && chown 1000:1000 /dashboard-tls && chmod 0700 /das
 # this image is ever run with the mountpoint pre-created some other way.
 RUN mkdir -p /message-key && chown 1000:1000 /message-key && chmod 0700 /message-key
 
+# /run/innsegl/gateway-ca-key holds the gateway's own CA private key
+# (RM-246), on a named volume only innsegl-mcp mounts. 0700 is the mode
+# internal/gateway enforces on every start; without the directory here a
+# fresh volume came up root-owned, the chmod failed, and the MCP restarted in
+# a loop (measured 2026-10-06, #470).
+RUN mkdir -p /run/innsegl/gateway-ca-key && chown 1000:1000 /run/innsegl/gateway-ca-key && chmod 0700 /run/innsegl/gateway-ca-key
+
 # git and gitsign both want a writable HOME, and gitsign writes its cache
 # there, so HOME is a real directory this user owns rather than `/`.
 #
