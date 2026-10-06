@@ -42,7 +42,10 @@ const goldenSettings = `{
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195"
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:28195",
+    "CLAUDE_CODE_USE_BEDROCK": "0",
+    "CLAUDE_CODE_USE_VERTEX": "0",
+    "CLAUDE_CODE_USE_FOUNDRY": "0"
   },
   "hooks": {
     "PreToolUse": [
@@ -476,6 +479,41 @@ func TestRM329UpdateMovesTheBaseURLRouteToTheProxy(t *testing.T) {
 		}
 	}
 	// Removed again, the file holds the operator's own key only.
+	if err := UninstallSettings(path, testSettingsConfig(), fixedNow, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if env := objAt(t, readJSON(t, path), "env"); len(env) != 1 || env["MY_VAR"] != "kept" {
+		t.Errorf("after removal env = %v", env)
+	}
+}
+
+var providerPinKeys = []string{"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"}
+
+// #451, ADR-0069: a provider route the harness takes instead of the
+// Anthropic API is not recorded. connect pins each off, says so when it
+// replaces a different value, and disconnect removes the pins again.
+func TestADR0069ProviderRoutesArePinnedOffAndRemoved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed-settings.json")
+	old := `{"env": {"CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_USE_VERTEX": "0", "MY_VAR": "kept"}}` + "\n"
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := InstallSettings(path, testSettingsConfig(), fixedNow, &out); err != nil {
+		t.Fatal(err)
+	}
+	env := objAt(t, readJSON(t, path), "env")
+	for _, k := range providerPinKeys {
+		if env[k] != "0" {
+			t.Errorf("%s = %v, want \"0\"", k, env[k])
+		}
+	}
+	if !strings.Contains(out.String(), "CLAUDE_CODE_USE_BEDROCK") || !strings.Contains(out.String(), "pinned off") {
+		t.Errorf("no note that BEDROCK was pinned off: %q", out.String())
+	}
+	if strings.Contains(out.String(), "CLAUDE_CODE_USE_VERTEX") || strings.Contains(out.String(), "CLAUDE_CODE_USE_FOUNDRY") {
+		t.Errorf("a note for a value that already was \"0\" or absent: %q", out.String())
+	}
 	if err := UninstallSettings(path, testSettingsConfig(), fixedNow, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}

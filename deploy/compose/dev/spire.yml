@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Compose overlay: the shipped SPIRE stack as a DEVELOPMENT stack
+# (RM-293, #469; ADR-0072)
+#
+# Applied on top of deploy/compose/spire.yml, never instead of it, and only
+# when scripts/stack-mode.sh says dev — `make dev-stack` once, or
+# INNSEGL_STACK=dev. The Makefile adds it; a live host never reads this file.
+#
+# It changes NOTHING but names, the spire-testscope.yml pattern: the compose
+# project, every container_name and every network. Volumes need no help:
+# spire.yml names none, so compose scopes them to this project. The names say
+# DEV wherever docker lists them, and none can collide with a live stack's or
+# attach to one.
+#
+# A name added to spire.yml needs its dev twin here; OPS-129
+# (test/deploy/devstack_test.go) fails until it has one.
+# ============================================================================
+
+name: innsegl-dev-spire
+
+services:
+  spire-bootstrap:
+    container_name: innsegl-dev-spire-bootstrap
+  spire-server:
+    container_name: innsegl-dev-spire-server
+  spire-admin-relay:
+    container_name: innsegl-dev-spire-admin-relay
+  spire-agent:
+    container_name: innsegl-dev-spire-agent
+  spire-oidc:
+    container_name: innsegl-dev-spire-oidc
+  spire-verify-workload:
+    container_name: innsegl-dev-spire-verify-workload
+
+networks:
+  innsegl-spire-node:
+    name: innsegl-dev-spire-node
+  innsegl-spire-admin:
+    name: innsegl-dev-spire-admin
+  innsegl-spire-admin-relay:
+    name: innsegl-dev-spire-admin-relay
+  innsegl-oidc-frontend:
+    name: innsegl-dev-oidc-frontend

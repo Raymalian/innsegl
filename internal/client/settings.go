@@ -101,7 +101,22 @@ func (c SettingsConfig) desiredEnv() []envVar {
 		{"OTEL_LOGS_EXPORTER", "otlp"},
 		{"OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"},
 		{"OTEL_EXPORTER_OTLP_ENDPOINT", c.LocalURL},
+		// A truthy provider switch, here or in any lower layer, sends the
+		// harness to that provider and not to the API the gateway records
+		// (ADR-0069). "0" was measured to turn each route off: with the
+		// switch at "0" the harness still answers through the API, and
+		// with it at "1" it does not.
+		{"CLAUDE_CODE_USE_BEDROCK", "0"},
+		{"CLAUDE_CODE_USE_VERTEX", "0"},
+		{"CLAUDE_CODE_USE_FOUNDRY", "0"},
 	}
+}
+
+// providerPins are the desiredEnv keys that turn a provider route off.
+var providerPins = map[string]bool{
+	"CLAUDE_CODE_USE_BEDROCK": true,
+	"CLAUDE_CODE_USE_VERTEX":  true,
+	"CLAUDE_CODE_USE_FOUNDRY": true,
 }
 
 // legacyEnv is what earlier versions wrote and this one removes: the base
@@ -250,6 +265,10 @@ func installKeys(obj *object, cfg SettingsConfig, path string, out io.Writer) er
 		return err
 	}
 	for _, kv := range cfg.desiredEnv() {
+		if v, present := env.get(kv.key); present && providerPins[kv.key] && v != kv.val {
+			fmt.Fprintf(out, "innsegl: pinned off env.%s (%v) in %s: a request sent to that provider "+
+				"does not reach the client and would not be recorded; the backup keeps it\n", kv.key, v, path)
+		}
 		env.set(kv.key, kv.val)
 	}
 	removeLegacyEnv(env, cfg, path, out)

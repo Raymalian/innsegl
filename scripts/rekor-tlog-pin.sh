@@ -31,6 +31,8 @@
 #
 # USAGE
 #   scripts/rekor-tlog-pin.sh path [repo]     print where the pin lives
+#   scripts/rekor-tlog-pin.sh rel             the pin's path inside a repository
+#                                             (a DEV stack's own: ADR-0072)
 #   scripts/rekor-tlog-pin.sh read [repo]     print the pinned id, or 0
 #   scripts/rekor-tlog-pin.sh guard [repo]    refuse a silent mint; exit 3 if unsafe
 
@@ -38,6 +40,12 @@ set -u
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 REL="deploy/compose/.rekor-tlog-id"
+# A DEV stack (ADR-0072) has its own log, so its own pin: the live one names a
+# tree its fresh database does not have. Unset prefix is live and unchanged.
+case "${INNSEGL_STACK_PREFIX:-innsegl}" in
+  innsegl) : ;;
+  *) REL="${REL}.${INNSEGL_STACK_PREFIX}" ;;
+esac
 
 repo_of() {
   _d="${1:-.}"
@@ -60,6 +68,7 @@ db_image() {
 
 case "${1:-}" in
   path) pin_path "${2:-.}" ;;
+  rel) printf '%s\n' "${REL}" ;;
 
   record)
     # record URL [dir] -- wait for the log at URL to answer, then pin the tree
@@ -114,7 +123,7 @@ case "${1:-}" in
     # No pin. That is correct on a machine that has never run this, and
     # dangerous on one that has. The log database is the evidence: bring-up
     # never recreates it, so its presence means a tree already exists.
-    _vol="${INNSEGL_TRUST_TRILLIAN_DB_VOLUME:-innsegl-trust-trillian-db}"
+    _vol="${INNSEGL_TRUST_TRILLIAN_DB_VOLUME:-${INNSEGL_TRUST_VOLUME_PREFIX:-innsegl-trust}-trillian-db}"
     if ! command -v docker >/dev/null 2>&1; then
       exit 0
     fi

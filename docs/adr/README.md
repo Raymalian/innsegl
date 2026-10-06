@@ -87,6 +87,7 @@ maintainer ask "why is it like this?"
 | [0069](0069-claude-code-reaches-the-client-as-its-https-proxy.md) | Claude Code reaches the client as its HTTPS proxy | accepted | 2026-10-03 |
 | [0070](0070-build-once-deploy-a-verified-image-bundle.md) | Build the images once; the host deploys a bundle only for the commit it verified | accepted | 2026-10-04 |
 | [0071](0071-the-projects-mount-tools-are-deprecated-and-their-implementation-removed.md) | The projects-mount tools are deprecated and their implementation removed | accepted | 2026-10-05 |
+| [0072](0072-a-development-stack-is-never-the-live-one.md) | A development stack is never the live one | accepted | 2026-10-05 |
 
 ## Open items
 

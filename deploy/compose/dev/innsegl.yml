@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Compose overlay: innsegl's own services as a DEVELOPMENT stack
+# (RM-293, #469; ADR-0072)
+#
+# Applied on top of deploy/compose/innsegl.yml when scripts/stack-mode.sh
+# says dev. Names only: the project, every container_name, every network
+# this file owns and the two it joins from the dev SPIRE and Sigstore stacks,
+# and the three volumes it shares with them — the ledger and the
+# pseudonymisation secret (the dev trust prefix) and the dev SPIRE agent's
+# socket. Services reach each other by SERVICE name, which is unchanged.
+#
+# The host folders the stack bind-mounts move too, but by environment rather
+# than here: scripts/stack-mode.sh env sets INNSEGL_GATEWAY_CA_HOST_DIR,
+# INNSEGL_LOG_DIR and INNSEGL_BACKUP_HOST_DIR under $HOME/.innsegl/dev.
+# ============================================================================
+
+name: innsegl-dev-core
+
+services:
+  postgres:
+    container_name: innsegl-dev-postgres
+  innsegl-db-init:
+    container_name: innsegl-dev-db-init
+  innsegl-s3:
+    container_name: innsegl-dev-s3
+  innsegl-s3-identities:
+    container_name: innsegl-dev-s3-identities
+  innsegl-object-init:
+    container_name: innsegl-dev-object-init
+  innsegl-identity-init:
+    container_name: innsegl-dev-identity-init
+  innsegl-admin-credential-init:
+    container_name: innsegl-dev-admin-credential-init
+  innsegl-mcp:
+    container_name: innsegl-dev-mcp
+  innsegl-init:
+    container_name: innsegl-dev-init
+  innsegl-reconciler:
+    container_name: innsegl-dev-reconciler
+  innsegl-backup:
+    container_name: innsegl-dev-backup
+  innsegl-sealer:
+    container_name: innsegl-dev-sealer
+  innsegl-api:
+    container_name: innsegl-dev-api
+  demo-agent:
+    container_name: innsegl-dev-demo-agent
+  innsegl-canary:
+    container_name: innsegl-dev-canary
+
+networks:
+  innsegl-ledger:
+    name: innsegl-dev-ledger
+  innsegl-ledger-readonly:
+    name: innsegl-dev-ledger-readonly
+  innsegl-objects:
+    name: innsegl-dev-objects
+  innsegl-mcp-clients:
+    name: innsegl-dev-mcp-clients
+  innsegl-dashboard-frontend:
+    name: innsegl-dev-dashboard-frontend
+  innsegl-spire-admin:
+    name: innsegl-dev-spire-admin
+  innsegl-sigstore:
+    name: innsegl-dev-sigstore
+
+volumes:
+  innsegl-ledger-data:
+    name: innsegl-dev-trust-ledger-data
+  innsegl-identity-secret:
+    name: innsegl-dev-trust-identity-secret
+  spire-agent-socket:
+    name: innsegl-dev-spire_spire-agent-socket

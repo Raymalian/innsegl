@@ -118,12 +118,15 @@ test/smoke|earns its clean slate with `docker compose down -v` on both shipped p
 # own stacks never look like one. test/smoke is the single exception and it
 # takes a lock before it starts, which is why it is on the list above rather
 # than expected to recognise itself here.
-DEPLOYMENT_PROJECTS='innsegl-core innsegl-sigstore innsegl-spire'
+#
+# A DEV stack (ADR-0072) is a deployment too, of the machine it runs on: the
+# same packages would re-point ITS log and remove ITS volumes.
+DEPLOYMENT_PROJECTS='innsegl-core innsegl-sigstore innsegl-spire innsegl-dev-core innsegl-dev-sigstore innsegl-dev-spire'
 
 # The log database volume, under the name the durable path gives it. Same
 # default as scripts/rekor-tlog-pin.sh, deliberately: two gates disagreeing
 # about which volume holds the log is the next version of this bug.
-TRILLIAN_DB_VOLUME="${INNSEGL_TRUST_TRILLIAN_DB_VOLUME:-innsegl-trust-trillian-db}"
+TRILLIAN_DB_VOLUME="${INNSEGL_TRUST_TRILLIAN_DB_VOLUME:-${INNSEGL_TRUST_VOLUME_PREFIX:-innsegl-trust}-trillian-db}"
 
 # ---------------------------------------------------------------------------
 # Detection.

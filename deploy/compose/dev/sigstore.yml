@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Compose overlay: the shipped Sigstore stack as a DEVELOPMENT stack
+# (RM-293, #469; ADR-0072)
+#
+# Applied on top of deploy/compose/sigstore.yml when scripts/stack-mode.sh
+# says dev. Names only: the project, every container_name, every network —
+# and the three trust volumes, pinned here to the dev prefix so that this
+# file can never attach to a live CA key, log key or log, whatever the
+# environment says. trust-volumes.sh creates them under the same prefix
+# (INNSEGL_TRUST_VOLUME_PREFIX=innsegl-dev-trust) and never migrates into it,
+# so a dev Fulcio mints its own CA and nothing it signs chains to a live root.
+#
+# Key custody (sigstore.keycustody.yml) has no dev twin: the Makefile refuses
+# it in dev.
+# ============================================================================
+
+name: innsegl-dev-sigstore
+
+services:
+  sigstore-bootstrap:
+    container_name: innsegl-dev-sigstore-bootstrap
+  fulcio:
+    container_name: innsegl-dev-sigstore-fulcio
+  rekor:
+    container_name: innsegl-dev-sigstore-rekor
+  trillian-log-server:
+    container_name: innsegl-dev-sigstore-trillian-log-server
+  trillian-log-signer:
+    container_name: innsegl-dev-sigstore-trillian-log-signer
+  trillian-db:
+    container_name: innsegl-dev-sigstore-trillian-db
+
+networks:
+  innsegl-oidc-frontend:
+    name: innsegl-dev-oidc-frontend
+  innsegl-sigstore:
+    name: innsegl-dev-sigstore
+  innsegl-sigstore-published:
+    name: innsegl-dev-sigstore-published
+  innsegl-rekor-log:
+    name: innsegl-dev-sigstore-rekor-log
+  innsegl-rekor-index:
+    name: innsegl-dev-sigstore-rekor-index
+  innsegl-trillian-db:
+    name: innsegl-dev-sigstore-trillian-db
+
+volumes:
+  sigstore-fulcio-pki:
+    name: innsegl-dev-trust-fulcio-pki
+  sigstore-rekor-key:
+    name: innsegl-dev-trust-rekor-key
+  sigstore-trillian-db-data:
+    name: innsegl-dev-trust-trillian-db
