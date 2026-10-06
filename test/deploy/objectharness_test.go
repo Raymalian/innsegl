@@ -290,8 +290,10 @@ func requireObjectStore(ctx context.Context, t *testing.T, id, bucket string) *o
 type interpolatedService struct {
 	Environment map[string]*string `json:"environment"`
 	Image       string             `json:"image"`
-	Command     []string           `json:"command"`
-	Entrypoint  []string           `json:"entrypoint"`
+	// User is the resolved `user:`, e.g. "1000:1000"; empty runs as the image's.
+	User       string   `json:"user"`
+	Command    []string `json:"command"`
+	Entrypoint []string `json:"entrypoint"`
 	// Networks is a map of network name to its per-service options; the
 	// options are never read, only the membership, which is the access-control
 	// list doc 05 §1 asks for.
