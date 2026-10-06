@@ -72,6 +72,19 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/innsegl-migrate-selftest.XXXXXX")"
 printf '42' >"${WORK}/pin.txt"
 export INNSEGL_MIGRATE_PIN_FILE="${WORK}/pin.txt"
 
+# THE LOG FOLDER OVERRIDE IS GLOBAL AND MANDATORY TOO, for the same reason
+# (BAK-024). innsegl-migrate.sh carries the host folder the bodies live in,
+# and its default is $HOME/.innsegl/log — this machine's real bodies, which an
+# import would WRITE into. Every case below runs against a folder under WORK;
+# the cases that are not about the folder get an empty one, so their imports
+# have nothing to write and nothing to refuse. The script itself also refuses
+# to run in test mode without INNSEGL_LOG_DIR set.
+mkdir -p "${WORK}/log-default"
+export INNSEGL_LOG_DIR="${WORK}/log-default"
+# Live, whatever this checkout is marked: the marker belongs to the operator,
+# and the dev refusal has a case of its own below.
+export INNSEGL_STACK=live
+
 cleanup() {
   status=$?
   # Independent of anything above: ask docker itself for what carries this
@@ -144,6 +157,7 @@ repack() {
   local src="$1" dest="$2" files="manifest.txt volumes"
   [ -f "${src}/manifest.sha256" ] && files="${files} manifest.sha256"
   [ -d "${src}/pin" ] && files="${files} pin"
+  [ -d "${src}/hostdirs" ] && files="${files} hostdirs"
   ( cd "${src}" && tar -cf "${dest}" ${files} )
   chmod 0600 "${dest}"
 }
@@ -533,10 +547,301 @@ else
 fi
 docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
 
+# ===========================================================================
+# BAK-024 (RM-292, #468) — the host folder the bodies live in moves with the
+# volumes. The ledger references every tool-call body, snapshot and telemetry
+# record by digest; they live in INNSEGL_LOG_DIR, a host bind mount and not a
+# volume, so a move that carried only the volumes left a ledger whose body
+# references resolved to nothing.
+# ===========================================================================
+
+# make_logdir DIR — bodies the way the core writes them: a 0700 run folder
+# holding a 0600 binary body, a snapshot, and a telemetry record.
+make_logdir() {
+  python3 - "$1" <<'PY'
+import os, sys
+root = sys.argv[1]
+os.makedirs(os.path.join(root, "run-aaa"), exist_ok=True)
+os.makedirs(os.path.join(root, "gateway-snapshots", "s1"), exist_ok=True)
+os.makedirs(os.path.join(root, "telemetry"), exist_ok=True)
+with open(os.path.join(root, "run-aaa", "body-1"), "wb") as f:
+    f.write(bytes(range(256)) * 16 + b"\x00tail")
+with open(os.path.join(root, "gateway-snapshots", "s1", "tree"), "wb") as f:
+    f.write(b"snapshot bytes\n")
+with open(os.path.join(root, "telemetry", "t.jsonl"), "wb") as f:
+    f.write(b'{"k":"v"}\n')
+os.chmod(os.path.join(root, "run-aaa", "body-1"), 0o600)
+os.chmod(os.path.join(root, "run-aaa"), 0o700)
+PY
+}
+
+# logdir_signature DIR — every entry's path, mode, size and sha256, one per
+# line, so two folders compare as one string. python3 rather than stat(1),
+# whose flags differ between GNU and BSD.
+logdir_signature() {
+  python3 - "$1" <<'PY'
+import hashlib, os, stat, sys
+root = sys.argv[1]
+out = []
+for d, dirs, files in os.walk(root):
+    for n in dirs + files:
+        p = os.path.join(d, n)
+        st = os.lstat(p)
+        rel = os.path.relpath(p, root)
+        if stat.S_ISREG(st.st_mode):
+            h = hashlib.sha256(open(p, "rb").read()).hexdigest()
+            out.append("f %s %o %d %s" % (rel, st.st_mode & 0o7777, st.st_size, h))
+        else:
+            out.append("d %s %o" % (rel, st.st_mode & 0o7777))
+print("\n".join(sorted(out)))
+PY
+}
+
+dir_is_empty() { [ ! -e "$1" ] || [ -z "$(ls -A "$1" 2>/dev/null)" ]; }
+vol_there() { docker volume inspect "$1" >/dev/null 2>&1 && echo 1 || echo 0; }
+
+bak_src="${WORK}/bak024-src"
+make_logdir "${bak_src}"
+bak_sig_before="$(logdir_signature "${bak_src}")"
+
+mkvol "${VOL_A}"; mkvol "${VOL_B}"
+write_fixture "${VOL_A}"; write_fixture "${VOL_B}"
+bak_vol_sig="$(fixture_signature "${VOL_A}")"
+bak_archive="${WORK}/bak024.tar"
+out="$(INNSEGL_LOG_DIR="${bak_src}" "${MIGRATE}" export "${bak_archive}" 2>&1)"; rc=$?
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+if [ "${rc}" -ne 0 ]; then
+  bad "BAK-024 export with a log folder failed" "exit=${rc}
+${out}"
+fi
+
+# --- BAK-024: a body survives export -> import byte-identical, mode kept ---
+bak_dst="${WORK}/bak024-dst"
+out="$(INNSEGL_LOG_DIR="${bak_dst}" "${MIGRATE}" import "${bak_archive}" 2>&1)"; rc=$?
+bak_sig_after="$(logdir_signature "${bak_dst}" 2>/dev/null)"
+if [ "${rc}" -eq 0 ] && [ -n "${bak_sig_before}" ] && [ "${bak_sig_before}" = "${bak_sig_after}" ]; then
+  ok "BAK-024 the log folder survives export and import byte-identical, modes kept"
+else
+  bad "BAK-024 the log folder did not survive the round trip" "exit=${rc}
+before:
+${bak_sig_before}
+after:
+${bak_sig_after}
+${out}"
+fi
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
+# --- BAK-024: every file is in the manifest with its sha256 ----------------
+man_dir="${WORK}/bak024-manifest"
+mkdir -p "${man_dir}"
+tar -xf "${bak_archive}" -C "${man_dir}" 2>/dev/null
+body_sum="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "${bak_src}/run-aaa/body-1")"
+if grep -q "^file	log	${body_sum}	4101	./run-aaa/body-1\$" "${man_dir}/manifest.txt" 2>/dev/null \
+   && [ "$(grep -c '^file	log	' "${man_dir}/manifest.txt" 2>/dev/null)" = "3" ]; then
+  ok "BAK-024 every file in the log folder is in the manifest with its sha256 and size"
+else
+  bad "BAK-024 the manifest does not list the log folder's files" "$(grep -v '^volume' "${man_dir}/manifest.txt" 2>/dev/null)"
+fi
+
+# --- BAK-024: a tampered body fails its checksum before anything is written
+# The body is altered inside the folder's tar and the tar re-made, so the
+# outer archive still extracts cleanly.
+tamper_dir="${WORK}/bak024-tamper"
+mkdir -p "${tamper_dir}"
+tar -xf "${bak_archive}" -C "${tamper_dir}"
+tampered=0
+if [ -f "${tamper_dir}/hostdirs/log.tar" ]; then
+  mkdir -p "${WORK}/bak024-x"
+  tar -xf "${tamper_dir}/hostdirs/log.tar" -C "${WORK}/bak024-x"
+  printf 'X' | dd of="${WORK}/bak024-x/run-aaa/body-1" bs=1 seek=100 conv=notrunc 2>/dev/null
+  ( cd "${WORK}/bak024-x" && tar -cf "${tamper_dir}/hostdirs/log.tar" . )
+  rm -rf "${WORK}/bak024-x"
+  tampered=1
+fi
+tamper_archive="${WORK}/bak024-tampered.tar"
+repack "${tamper_dir}" "${tamper_archive}"
+tamper_dst="${WORK}/bak024-tamper-dst"
+out="$(INNSEGL_LOG_DIR="${tamper_dst}" "${MIGRATE}" import "${tamper_archive}" 2>&1)"; rc=$?
+ta="$(vol_there "${VOL_A}")"; tb="$(vol_there "${VOL_B}")"
+if [ "${tampered}" -eq 1 ] && [ "${rc}" -ne 0 ] && [ "${ta}" -eq 0 ] && [ "${tb}" -eq 0 ] \
+   && dir_is_empty "${tamper_dst}" && printf '%s' "${out}" | grep -qi 'checksum\|verif'; then
+  ok "BAK-024 a tampered body is refused on its checksum before any volume or file is written"
+else
+  bad "BAK-024 a tampered body was not refused cleanly" "tampered=${tampered} exit=${rc} vol_a=${ta} vol_b=${tb}
+${out}"
+fi
+
+# The same tamper with the folder tar's own checksum brought up to date and
+# the manifest re-sealed: only the per-file sha256 can catch it now.
+resealed=0
+if [ "${tampered}" -eq 1 ]; then
+  python3 - "${tamper_dir}" <<'PY' && resealed=1
+import hashlib, os, sys
+d = sys.argv[1]
+tar = open(os.path.join(d, "hostdirs", "log.tar"), "rb").read()
+lines = open(os.path.join(d, "manifest.txt"), encoding="utf-8").read().split("\n")
+for i, ln in enumerate(lines):
+    f = ln.split("\t")
+    if f[0] == "hostdir" and len(f) > 4:
+        f[3] = hashlib.sha256(tar).hexdigest()
+        f[4] = str(len(tar))
+        lines[i] = "\t".join(f)
+m = "\n".join(lines)
+open(os.path.join(d, "manifest.txt"), "w", encoding="utf-8").write(m)
+open(os.path.join(d, "manifest.sha256"), "w").write(hashlib.sha256(m.encode()).hexdigest() + "\n")
+PY
+fi
+repack "${tamper_dir}" "${tamper_archive}.2"
+out="$(INNSEGL_LOG_DIR="${tamper_dst}" "${MIGRATE}" import "${tamper_archive}.2" 2>&1)"; rc=$?
+ta="$(vol_there "${VOL_A}")"
+if [ "${resealed}" -eq 1 ] && [ "${rc}" -ne 0 ] && [ "${ta}" -eq 0 ] && dir_is_empty "${tamper_dst}" \
+   && printf '%s' "${out}" | grep -q 'run-aaa/body-1'; then
+  ok "BAK-024 a tampered body under a re-sealed manifest is refused by its own sha256, by name"
+else
+  bad "BAK-024 the per-file checksum did not catch a re-sealed tamper" "resealed=${resealed} exit=${rc} vol_a=${ta}
+${out}"
+fi
+
+# --- BAK-024: a non-empty target folder is refused without --replace -------
+ne_dst="${WORK}/bak024-nonempty"
+mkdir -p "${ne_dst}"
+printf 'theirs\n' >"${ne_dst}/already-here"
+out="$(INNSEGL_LOG_DIR="${ne_dst}" "${MIGRATE}" import "${bak_archive}" 2>&1)"; rc=$?
+na="$(vol_there "${VOL_A}")"
+if [ "${rc}" -ne 0 ] && [ "${na}" -eq 0 ] && [ -f "${ne_dst}/already-here" ] \
+   && [ ! -e "${ne_dst}/run-aaa" ] && printf '%s' "${out}" | grep -qi 'replace'; then
+  ok "BAK-024 a non-empty log folder is refused without --replace, before any volume is written"
+else
+  bad "BAK-024 a non-empty log folder was not refused" "exit=${rc} vol_a=${na}
+${out}"
+fi
+
+out="$(INNSEGL_LOG_DIR="${ne_dst}" "${MIGRATE}" import --replace "${bak_archive}" 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ ! -e "${ne_dst}/already-here" ] \
+   && [ "$(logdir_signature "${ne_dst}")" = "${bak_sig_before}" ]; then
+  ok "BAK-024 import --replace replaces the log folder and leaves none of the old files"
+else
+  bad "BAK-024 import --replace did not cleanly replace the log folder" "exit=${rc}
+${out}"
+fi
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
+# --- BAK-024: an archive written before the folder was carried still imports
+# Rebuilt to the shape the earlier script wrote: schema 1, volume lines and
+# the pin, no folder and no prefixes. It imports its volumes and leaves the
+# target folder alone, even a non-empty one: it has nothing to put there.
+old_dir="${WORK}/bak024-old"
+mkdir -p "${old_dir}"
+tar -xf "${bak_archive}" -C "${old_dir}"
+rm -rf "${old_dir}/hostdirs"
+python3 - "${old_dir}" <<'PY'
+import hashlib, os, sys
+d = sys.argv[1]
+keep = []
+for ln in open(os.path.join(d, "manifest.txt"), encoding="utf-8").read().split("\n"):
+    f = ln.split("\t")
+    if f[0] in ("hostdir", "file", "prefix"):
+        continue
+    if f[0] == "schema":
+        ln = "schema\t1"
+    keep.append(ln)
+m = "\n".join(keep)
+open(os.path.join(d, "manifest.txt"), "w", encoding="utf-8").write(m)
+open(os.path.join(d, "manifest.sha256"), "w").write(hashlib.sha256(m.encode()).hexdigest() + "\n")
+PY
+old_archive="${WORK}/bak024-old.tar"
+repack "${old_dir}" "${old_archive}"
+old_dst="${WORK}/bak024-old-dst"
+mkdir -p "${old_dst}"
+printf 'keep\n' >"${old_dst}/already-here"
+out="$(INNSEGL_LOG_DIR="${old_dst}" "${MIGRATE}" import "${old_archive}" 2>&1)"; rc=$?
+oa="$(fixture_signature "${VOL_A}" 2>/dev/null)"
+if [ "${rc}" -eq 0 ] && [ "${oa}" = "${bak_vol_sig}" ] && [ -f "${old_dst}/already-here" ] \
+   && printf '%s' "${out}" | grep -qi 'carries no log folder'; then
+  ok "BAK-024 an archive in the earlier format still imports, and leaves the log folder alone"
+else
+  bad "BAK-024 an earlier-format archive did not import" "exit=${rc}
+${out}"
+fi
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
+# --- BAK-024: check reports the log folder's file count and bytes ----------
+out="$(INNSEGL_LOG_DIR="${bak_src}" INNSEGL_MIGRATE_LEDGER_COUNT_CMD='echo 7' "${MIGRATE}" check 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q '3 file(s), 4126 bytes'; then
+  ok "BAK-024 check reports the log folder's file count and bytes"
+else
+  bad "BAK-024 check did not report the log folder" "exit=${rc}
+${out}"
+fi
+
+# --- an import into a DEV stack is refused (ADR-0072) ----------------------
+# A dev stack mints its own trust root and never takes another deployment's.
+out="$(INNSEGL_STACK=dev INNSEGL_LOG_DIR="${WORK}/dev-dst" "${MIGRATE}" import "${bak_archive}" 2>&1)"; rc=$?
+da="$(vol_there "${VOL_A}")"
+if [ "${rc}" -ne 0 ] && [ "${da}" -eq 0 ] && dir_is_empty "${WORK}/dev-dst" \
+   && printf '%s' "${out}" | grep -q 'DEV'; then
+  ok "an import into a DEV stack is refused before anything is written (ADR-0072)"
+else
+  bad "an import into a DEV stack was not refused" "exit=${rc}
+${out}"
+fi
+
+# --- an archive imports under the target host's own prefix -----------------
+# The archive records the prefix its volumes were named under, and import
+# names them by the prefix this host resolves.
+OTHER="${PREFIX}b-"
+out="$(INNSEGL_MIGRATE_VOLUME_PREFIX="${OTHER}" INNSEGL_LOG_DIR="${WORK}/prefix-dst" "${MIGRATE}" import "${bak_archive}" 2>&1)"; rc=$?
+pa="$(fixture_signature "${OTHER}ledger-data" 2>/dev/null)"
+pa_src="$(vol_there "${VOL_A}")"
+if [ "${rc}" -eq 0 ] && [ "${pa}" = "${bak_vol_sig}" ] && [ "${pa_src}" -eq 0 ]; then
+  ok "an archive imports under the target host's own volume prefix"
+else
+  bad "an archive did not import under another prefix" "exit=${rc} source_name_created=${pa_src}
+${out}"
+fi
+docker volume rm "${OTHER}ledger-data" "${OTHER}trillian-db" >/dev/null 2>&1
+
+# A compose-made volume carries its project's name as a label, and the
+# project is named by the same prefix. Measured in the cutover rehearsal:
+# carried unchanged, compose on the new host warns that every volume "was
+# created for project" the old one. Import renames the label with the volume.
+docker volume create --label "com.docker.compose.project=${PREFIX}core" \
+  --label "com.docker.compose.volume=ledger-data" "${VOL_A}" >/dev/null
+mkvol "${VOL_B}"
+proj_archive="${WORK}/project-label.tar"
+"${MIGRATE}" export "${proj_archive}" >/dev/null 2>&1
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+out="$(INNSEGL_MIGRATE_VOLUME_PREFIX="${OTHER}" INNSEGL_LOG_DIR="${WORK}/project-dst" "${MIGRATE}" import "${proj_archive}" 2>&1)"; rc=$?
+plabel="$(docker volume inspect -f '{{index .Labels "com.docker.compose.project"}}' "${OTHER}ledger-data" 2>/dev/null)"
+vlabel="$(docker volume inspect -f '{{index .Labels "com.docker.compose.volume"}}' "${OTHER}ledger-data" 2>/dev/null)"
+if [ "${rc}" -eq 0 ] && [ "${plabel}" = "${OTHER}core" ] && [ "${vlabel}" = "ledger-data" ]; then
+  ok "a renamed volume's compose project label is renamed with it"
+else
+  bad "a renamed volume kept the old project's label" "exit=${rc} project=${plabel} volume=${vlabel}
+${out}"
+fi
+docker volume rm "${OTHER}ledger-data" "${OTHER}trillian-db" >/dev/null 2>&1
+
+# --- `volumes` names the set under whatever prefixes the host resolves -----
+out="$(env -u INNSEGL_MIGRATE_VOLUME_PREFIX INNSEGL_STACK=live INNSEGL_STACK_PREFIX=zz-mig \
+  INNSEGL_TRUST_VOLUME_PREFIX=zz-mig-trust INNSEGL_LOG_DIR=/nonexistent/log "${MIGRATE}" volumes 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q '^zz-mig-trust-ledger-data' \
+   && printf '%s' "${out}" | grep -q '^zz-mig-core_innsegl-object-data' \
+   && printf '%s' "${out}" | grep -q '^zz-mig-spire_spire-server-data' \
+   && printf '%s' "${out}" | grep -q '/nonexistent/log' \
+   && ! printf '%s' "${out}" | grep -q '^innsegl-'; then
+  ok "volumes names every volume and the log folder under the resolved prefixes"
+else
+  bad "volumes did not follow the resolved prefixes" "exit=${rc}
+${out}"
+fi
+
 # Every volume the compose file names without an override of its own is on
 # the migration list, so a volume added to the stack cannot be left behind on
 # the old host. The gateway's CA key was the first to slip past it.
 COMPOSE_FILE="${SCRIPT_DIR}/../deploy/compose/innsegl.yml"
+live_table="$(env -u INNSEGL_MIGRATE_VOLUME_PREFIX -u INNSEGL_STACK_PREFIX -u INNSEGL_TRUST_VOLUME_PREFIX \
+  INNSEGL_STACK=live "${MIGRATE}" volumes 2>/dev/null)"
 missing_volumes=""
 # A volume with a `name:` of its own is migrated under that name (the trust
 # volumes) or is not data at all (the SPIRE socket), so only the unnamed ones
@@ -550,7 +855,7 @@ unnamed_volumes="$(awk '
   END { if (k != "") print k }
 ' "${COMPOSE_FILE}")"
 for v in ${unnamed_volumes}; do
-  if ! grep -q "^innsegl-core_${v}|" "${MIGRATE}"; then
+  if ! printf '%s\n' "${live_table}" | grep -q "^innsegl-core_${v}	"; then
     missing_volumes="${missing_volumes} innsegl-core_${v}"
   fi
 done

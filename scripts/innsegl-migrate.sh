@@ -68,6 +68,46 @@
 # offers no way to relabel it short of destroying it, and nothing asked for
 # that here.
 #
+# THE HOST FOLDER THE BODIES LIVE IN MOVES TOO — RM-292 (#468), BAK-024.
+# Every tool-call body, workspace snapshot and telemetry record the ledger
+# references by digest lives in INNSEGL_LOG_DIR (default $HOME/.innsegl/log),
+# a HOST bind mount (innsegl.yml: /agentlog read-write, /harness-log and the
+# API's /agentlog read-only), not a volume. An archive of the volumes alone
+# moved a ledger whose every body reference resolved to nothing. Export packs
+# the folder into the same archive as hostdirs/log.tar, as root inside the
+# helper so mode and numeric ownership are kept, and lists EVERY FILE in the
+# manifest with its sha256 and size. Import checks the folder tar's checksum,
+# re-hashes every file it holds against those lines, and refuses a non-empty
+# target folder without --replace — all in the same pass that checks the
+# volumes, before anything is written. It restores into the folder THIS host
+# resolves, which is not necessarily the path the old host used.
+#
+# THE OTHER TWO HOST FOLDERS THE CORE BINDS ARE NOT CARRIED, on purpose.
+# INNSEGL_GATEWAY_CA_HOST_DIR (~/.innsegl/ca) holds the gateway's PUBLIC
+# certificate, rewritten on every start from innsegl-gateway-ca-key, which is
+# carried; on the old host it is also what that machine's commit hook trusts,
+# so it is left alone there. INNSEGL_BACKUP_HOST_DIR (~/innsegl-backups) is the
+# backup service's off-volume copy of what innsegl-backups holds, and that
+# volume is carried; the next backup on the new host writes a fresh copy.
+# sigstore.yml and spire.yml bind only files from this repository.
+#
+# PREFIXES. The volume names, and the log folder, follow the stack this host
+# resolves, exactly as the Makefile does: INNSEGL_STACK_PREFIX (default
+# innsegl), INNSEGL_TRUST_VOLUME_PREFIX (default innsegl-trust) and
+# INNSEGL_LOG_DIR, overridden by scripts/stack-mode.sh env on a DEV stack
+# (ADR-0072). The archive records the prefixes it was written under, and
+# import names each volume by this host's own — identical on an ordinary move.
+# An archive without them (schema 1) is imported under the names it carries.
+# IMPORT INTO A DEV STACK IS REFUSED: a dev stack mints its own trust root and
+# never takes another deployment's (ADR-0072).
+#
+# THE MANIFEST is versioned. schema 1 carried volumes and the pin; schema 2
+# adds `prefix`, `hostdir` and `file` lines. This script imports both. A
+# schema-1 archive carries no log folder and leaves the target's alone. A
+# script older than this one ignores lines it does not know, so it would
+# import a schema-2 archive's volumes and silently skip the bodies: import
+# with this version or later.
+#
 # CHECK has two modes. Run against a running stack with no archive, it
 # prints the ledger's current event count and the transparency log's tree id
 # — the number an operator notes down before taking the stack down, to pass
@@ -79,8 +119,13 @@
 #   scripts/innsegl-migrate.sh export [--event-count N] <archive>
 #   scripts/innsegl-migrate.sh import [--replace] <archive>
 #   scripts/innsegl-migrate.sh check [<archive>]
+#   scripts/innsegl-migrate.sh volumes      what this host would carry
 #
 # ENVIRONMENT
+#   INNSEGL_STACK, INNSEGL_STACK_PREFIX, INNSEGL_TRUST_VOLUME_PREFIX,
+#   INNSEGL_LOG_DIR                 resolved as the Makefile resolves them (see
+#                                   PREFIXES above). In test mode (below)
+#                                   INNSEGL_LOG_DIR must be set explicitly.
 #   INNSEGL_MIGRATE_VOLUME_PREFIX   TEST ONLY. Set, volume_table() answers a
 #                                   small synthetic table of throwaway
 #                                   volumes under this prefix instead of the
@@ -236,6 +281,7 @@ usage:
   innsegl-migrate.sh export [--event-count N] <archive>
   innsegl-migrate.sh import [--replace] <archive>
   innsegl-migrate.sh check [<archive>]
+  innsegl-migrate.sh volumes
 EOF
 }
 
@@ -297,12 +343,64 @@ create_volume_with_labels() {
 }
 
 # ---------------------------------------------------------------------------
+# resolve_stack — which stack this host runs, as the Makefile resolves it.
+#
+# Sets STACK_MODE (dev|live), STACK_PREFIX, TRUST_PREFIX and LOG_DIR. On a DEV
+# stack scripts/stack-mode.sh env's values win over the environment, as they
+# do in the Makefile (which exports them over whatever was there).
+# ---------------------------------------------------------------------------
+STACK_MODE="" STACK_PREFIX="" TRUST_PREFIX="" LOG_DIR=""
+resolve_stack() {
+  STACK_MODE="$("${SCRIPT_DIR}/stack-mode.sh" mode)" \
+    || die "scripts/stack-mode.sh could not say whether this stack is dev or live"
+  STACK_PREFIX="${INNSEGL_STACK_PREFIX:-}"
+  TRUST_PREFIX="${INNSEGL_TRUST_VOLUME_PREFIX:-}"
+  LOG_DIR="${INNSEGL_LOG_DIR:-}"
+  if [ "${STACK_MODE}" = dev ]; then
+    local line key val
+    while IFS= read -r line; do
+      key="${line%%=*}"; val="${line#*=}"
+      case "${key}" in
+        INNSEGL_STACK_PREFIX) STACK_PREFIX="${val}" ;;
+        INNSEGL_TRUST_VOLUME_PREFIX) TRUST_PREFIX="${val}" ;;
+        INNSEGL_LOG_DIR) LOG_DIR="${val}" ;;
+      esac
+    done <<EOF
+$("${SCRIPT_DIR}/stack-mode.sh" env)
+EOF
+  fi
+  STACK_PREFIX="${STACK_PREFIX:-innsegl}"
+  TRUST_PREFIX="${TRUST_PREFIX:-innsegl-trust}"
+  if [ -n "${INNSEGL_MIGRATE_VOLUME_PREFIX:-}" ] && [ -z "${INNSEGL_LOG_DIR:-}" ]; then
+    # TEST ONLY: the default is this machine's real bodies, and an import
+    # would write into them.
+    die "test mode (INNSEGL_MIGRATE_VOLUME_PREFIX) needs INNSEGL_LOG_DIR set explicitly"
+  fi
+  LOG_DIR="${LOG_DIR:-${HOME}/.innsegl/log}"
+}
+
+# The string prefixes volume names start with, as the manifest records them
+# and as import renames by. In test mode the synthetic table's one prefix.
+name_prefix_stack() {
+  if [ -n "${INNSEGL_MIGRATE_VOLUME_PREFIX:-}" ]; then
+    printf '%s' "${INNSEGL_MIGRATE_VOLUME_PREFIX}"
+  else
+    printf '%s-' "${STACK_PREFIX}"
+  fi
+}
+name_prefix_trust() {
+  [ -n "${INNSEGL_MIGRATE_VOLUME_PREFIX:-}" ] || printf '%s-' "${TRUST_PREFIX}"
+}
+
+# ---------------------------------------------------------------------------
 # volume_table — THE ONE PLACE the state volumes are named.
 #
 # "<name>|<what it holds>", one per line. Verified against
 # deploy/compose/trust-volumes.sh (the five innsegl-trust-* suffixes),
 # deploy/compose/spire.yml, innsegl.yml and sigstore.yml (each project's
-# `name:`, which is the prefix compose gives its own volumes), on 2026-09-28.
+# `name:`, which is the prefix compose gives its own volumes), on 2026-09-28,
+# and against deploy/compose/dev/*.yml (ADR-0072), whose projects are the
+# same names under the dev prefix, on 2026-10-06.
 # innsegl-sessions is not listed: it held observe_session's markers, which
 # nothing reads since ADR-0071, and an old host's copy is left behind.
 # ---------------------------------------------------------------------------
@@ -316,28 +414,29 @@ volume_table() {
     printf '%strillian-db|throwaway trillian volume (self-test)\n' "${prefix}"
     return 0
   fi
-  cat <<'EOF'
-innsegl-trust-ledger-data|the ledger hot tier: postgres's data directory
-innsegl-trust-trillian-db|the transparency log itself: trillian's mysql data directory
-innsegl-trust-rekor-key|the transparency log's signing key
-innsegl-trust-fulcio-pki|the Fulcio CA certificate and encrypted key
-innsegl-trust-identity-secret|this deployment's pseudonymisation secret
-innsegl-spire_spire-server-data|the SPIRE server's datastore and keys
-innsegl-spire_spire-pki-server|the SPIRE server's upstream CA cert+key and node CA cert
-innsegl-spire_spire-pki-agent|the SPIRE agent's node identity and bootstrap trust bundle
-innsegl-spire_spire-agent-data|the SPIRE agent's own data
-innsegl-core_innsegl-object-data|sealed segments' bytes, under object lock
-innsegl-core_innsegl-object-filer-data|the object store's metadata
-innsegl-core_innsegl-s3-identities|the object gateway's S3 credentials
-innsegl-core_innsegl-message-key|RM-237's own derived agent-message key (check-only; the run page's query API verifies with it)
-innsegl-core_innsegl-admin-key|the admin-credential private signing key
-innsegl-core_innsegl-admin-jwks|the admin-credential public key set
-innsegl-core_innsegl-gateway-ca-key|the gateway's own CA private key (its certificate is republished on start)
-innsegl-core_innsegl-workspace|the working trees the sign_commit MCP tool resolves `repo` under
-innsegl-core_innsegl-backups|verified ledger backups and their reports
-innsegl-core_innsegl-mirror|the per-repository mirrors clients push commits to (ADR-0065)
-innsegl-core_innsegl-dashboard-tls|the dashboard's certificate and key (RM-311; rewritten on start)
-innsegl-sigstore_sigstore-rekor-search|Rekor's search index
+  local t="${TRUST_PREFIX}" s="${STACK_PREFIX}"
+  cat <<EOF
+${t}-ledger-data|the ledger hot tier: postgres's data directory
+${t}-trillian-db|the transparency log itself: trillian's mysql data directory
+${t}-rekor-key|the transparency log's signing key
+${t}-fulcio-pki|the Fulcio CA certificate and encrypted key
+${t}-identity-secret|this deployment's pseudonymisation secret
+${s}-spire_spire-server-data|the SPIRE server's datastore and keys
+${s}-spire_spire-pki-server|the SPIRE server's upstream CA cert+key and node CA cert
+${s}-spire_spire-pki-agent|the SPIRE agent's node identity and bootstrap trust bundle
+${s}-spire_spire-agent-data|the SPIRE agent's own data
+${s}-core_innsegl-object-data|sealed segments' bytes, under object lock
+${s}-core_innsegl-object-filer-data|the object store's metadata
+${s}-core_innsegl-s3-identities|the object gateway's S3 credentials
+${s}-core_innsegl-message-key|RM-237's own derived agent-message key (check-only; the run page's query API verifies with it)
+${s}-core_innsegl-admin-key|the admin-credential private signing key
+${s}-core_innsegl-admin-jwks|the admin-credential public key set
+${s}-core_innsegl-gateway-ca-key|the gateway's own CA private key (its certificate is republished on start)
+${s}-core_innsegl-workspace|the working trees the sign_commit MCP tool resolves \`repo\` under
+${s}-core_innsegl-backups|verified ledger backups and their reports
+${s}-core_innsegl-mirror|the per-repository mirrors clients push commits to (ADR-0065)
+${s}-core_innsegl-dashboard-tls|the dashboard's certificate and key (RM-311; rewritten on start)
+${s}-sigstore_sigstore-rekor-search|Rekor's search index
 EOF
 }
 
@@ -453,6 +552,51 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# The log folder (BAK-024).
+# ---------------------------------------------------------------------------
+
+# dir_empty DIR — true when DIR does not exist or holds nothing at all.
+dir_empty() { [ ! -e "$1" ] || [ -z "$(ls -A "$1" 2>/dev/null)" ]; }
+
+# HASH_FILES_SH — the shell a helper runs, in the folder to list, to write
+# every regular file's sha256 (`sha256sum`) and size (`stat -c '%s %n'`) to
+# /out/<name>.sums and /out/<name>.sizes, and the NUL-counted number of files
+# to /out/<name>.count. Batched through `find -exec ... +`: a folder holds
+# tens of thousands of bodies, and a process per file is minutes.
+hash_files_sh() {
+  local name="$1"
+  printf '%s' "find . -type f -exec sha256sum {} + >/out/${name}.sums \
+&& find . -type f -exec stat -c '%s %n' {} + >/out/${name}.sizes \
+&& find . -type f -print0 | tr -cd '\\000' | wc -c >/out/${name}.count"
+}
+
+# file_lines DIR NAME — "<sha256>\t<bytes>\t<path>" per file, sorted, from
+# the three lists hash_files_sh wrote into DIR. Dies if a file name holds a
+# tab or a newline, which the manifest's one-line-per-record format cannot
+# carry: the line count would no longer match the NUL count.
+file_lines() {
+  local dir="$1" name="$2" want got
+  LC_ALL=C awk '
+    FNR == NR { sp = index($0, " "); size[substr($0, sp + 1)] = substr($0, 1, sp - 1); next }
+    { path = substr($0, 67); if (index(path, "\t")) { bad = 1 }
+      printf "%s\t%s\t%s\n", substr($0, 1, 64), size[path], path }
+    END { if (bad) exit 3 }
+  ' "${dir}/${name}.sizes" "${dir}/${name}.sums" | LC_ALL=C sort >"${dir}/${name}.lines" \
+    || die "a file in the log folder has a tab in its name; the manifest cannot carry it"
+  want="$(tr -dc '0-9' <"${dir}/${name}.count")"
+  got="$(wc -l <"${dir}/${name}.lines" | tr -d ' ')"
+  [ "${want:-0}" = "${got}" ] \
+    || die "the log folder holds ${want} file(s) but ${got} line(s) were listed: a file name has a newline in it"
+}
+
+# folder_stats DIR — "<files> <bytes>" of DIR, read by a helper as root so a
+# 0700 folder the services own reads the same as any other.
+folder_stats() {
+  run_helper -v "$1:/h:ro" -- \
+    "cd /h && find . -type f -exec stat -c '%s' {} + | awk '{n++; b+=\$1} END {printf \"%d %d\", n, b}'" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
 # export
 # ---------------------------------------------------------------------------
 
@@ -479,6 +623,7 @@ cmd_export() {
   esac
   [ -e "${archive}" ] && die "refusing: ${archive} already exists. Remove it first, or choose a different path."
 
+  resolve_stack
   refuse_if_helper_leftover
   refuse_if_running
 
@@ -487,7 +632,9 @@ cmd_export() {
 
   local manifest="${WORK}/manifest.txt"
   : >"${manifest}"
-  printf 'schema\t1\n' >>"${manifest}"
+  printf 'schema\t2\n' >>"${manifest}"
+  printf 'prefix\tstack\t%s\n' "$(name_prefix_stack)" >>"${manifest}"
+  [ -z "$(name_prefix_trust)" ] || printf 'prefix\ttrust\t%s\n' "$(name_prefix_trust)" >>"${manifest}"
   printf 'created_at\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${manifest}"
   printf 'tree_id\t%s\n' "$(pin_tree_id)" >>"${manifest}"
 
@@ -538,6 +685,29 @@ EOF
     note "no transparency-log pin file found at ${pin_src}; the archive carries none."
   fi
 
+  # The log folder (BAK-024): one tar, and a manifest line per file.
+  if [ -d "${LOG_DIR}" ]; then
+    note "archiving the log folder ${LOG_DIR} (tool-call bodies, snapshots, telemetry)"
+    mkdir -p "${WORK}/hostdirs"
+    if ! run_helper -v "${LOG_DIR}:/h:ro" -v "${WORK}/hostdirs:/out" \
+        -- "cd /h && tar --numeric-owner -cf /out/log.tar . && $(hash_files_sh log)" 2>"${WORK}/log.err"; then
+      die "could not archive the log folder ${LOG_DIR}: $(cat "${WORK}/log.err" 2>/dev/null)"
+    fi
+    file_lines "${WORK}/hostdirs" log
+    local lsum lbytes lfiles ltotal
+    lsum="$(sha256_of "${WORK}/hostdirs/log.tar")"
+    lbytes="$(wc -c <"${WORK}/hostdirs/log.tar" | tr -d ' ')"
+    lfiles="$(wc -l <"${WORK}/hostdirs/log.lines" | tr -d ' ')"
+    ltotal="$(awk -F'\t' '{b += $2} END {printf "%d", b}' "${WORK}/hostdirs/log.lines")"
+    printf 'hostdir\tlog\tpresent\t%s\t%s\t%s\t%s\n' "${lsum}" "${lbytes}" "${lfiles}" "${ltotal}" >>"${manifest}"
+    awk -F'\t' '{printf "file\tlog\t%s\t%s\t%s\n", $1, $2, $3}' "${WORK}/hostdirs/log.lines" >>"${manifest}"
+    rm -f "${WORK}/hostdirs/log.sums" "${WORK}/hostdirs/log.sizes" "${WORK}/hostdirs/log.count" "${WORK}/hostdirs/log.lines"
+    note "  ${lfiles} file(s), ${ltotal} bytes"
+  else
+    printf 'hostdir\tlog\tabsent\n' >>"${manifest}"
+    note "no log folder at ${LOG_DIR}; the archive carries none."
+  fi
+
   # manifest.txt now carries every volume's labels as plain text, and a
   # label is exactly as sensitive as the trust it stands for
   # (dev.innsegl.trust-root names what the volume holds). Its own checksum,
@@ -549,6 +719,7 @@ EOF
   mkdir -p "$(dirname -- "${archive}")" 2>/dev/null || true
   local files="manifest.txt manifest.sha256 volumes"
   [ -d "${WORK}/pin" ] && files="${files} pin"
+  [ -d "${WORK}/hostdirs" ] && files="${files} hostdirs"
   ( cd "${WORK}" && tar -cf "${archive}.tmp" ${files} ) || die "could not assemble ${archive}"
   chmod 0600 "${archive}.tmp"
   mv "${archive}.tmp" "${archive}"
@@ -578,6 +749,10 @@ cmd_import() {
   [ -n "${archive}" ] || usage_die "import needs an archive path"
   [ -f "${archive}" ] || die "no such archive: ${archive}"
 
+  resolve_stack
+  if [ "${STACK_MODE}" = dev ]; then
+    die "refusing: this host's stack is DEV (scripts/stack-mode.sh). A dev stack mints its own trust root and never takes another deployment's (ADR-0072). Import on the host that will be the live core, or run with INNSEGL_STACK=live if this one is meant to be. Nothing was written."
+  fi
   refuse_if_helper_leftover
   refuse_if_running
 
@@ -598,6 +773,44 @@ cmd_import() {
     die "refusing: ${archive}'s manifest failed verification (manifest says ${manifest_want:-<empty>}, archive has ${manifest_got}). Nothing was written to any volume."
   fi
 
+  local schema
+  schema="$(awk -F'\t' '$1=="schema"{print $2}' "${WORK}/manifest.txt")"
+  case "${schema}" in
+    1|2) : ;;
+    *) die "refusing: ${archive} has manifest schema '${schema}', and this script reads 1 and 2. Nothing was written." ;;
+  esac
+
+  # Each volume is named by THIS host's prefixes (see PREFIXES above). An
+  # archive that records none is imported under the names it carries.
+  local src_stack src_trust dst_stack dst_trust
+  src_stack="$(awk -F'\t' '$1=="prefix" && $2=="stack"{print $3}' "${WORK}/manifest.txt")"
+  src_trust="$(awk -F'\t' '$1=="prefix" && $2=="trust"{print $3}' "${WORK}/manifest.txt")"
+  dst_stack="$(name_prefix_stack)"
+  dst_trust="$(name_prefix_trust)"
+  target_name() {
+    local n="$1"
+    if [ -n "${src_trust}" ] && [ -n "${dst_trust}" ] && [ "${n#"${src_trust}"}" != "${n}" ]; then
+      printf '%s%s' "${dst_trust}" "${n#"${src_trust}"}"
+    elif [ -n "${src_stack}" ] && [ "${n#"${src_stack}"}" != "${n}" ]; then
+      printf '%s%s' "${dst_stack}" "${n#"${src_stack}"}"
+    else
+      printf '%s' "${n}"
+    fi
+  }
+  # target_labels JSON — a renamed volume's compose project label renamed
+  # with it, by the same prefix rule. Carried unchanged, compose on this host
+  # warns that each volume "was created for project" the old host's.
+  target_labels() {
+    local j="$1" proj
+    [ "${src_stack}" != "${dst_stack}" ] && [ -n "${src_stack}" ] && [ "${j}" != "null" ] || { printf '%s' "${j}"; return; }
+    proj="$(printf '%s' "${j}" | jq -r '."com.docker.compose.project" // empty')"
+    if [ -n "${proj}" ] && [ "${proj#"${src_stack}"}" != "${proj}" ]; then
+      printf '%s' "${j}" | jq -c --arg p "${dst_stack}${proj#"${src_stack}"}" '."com.docker.compose.project" = $p'
+    else
+      printf '%s' "${j}"
+    fi
+  }
+
   # PASS 1 — verify EVERY volume checksum, that every label decodes to valid
   # JSON, that no container — running or stopped — holds the target volume,
   # and that no existing target holds data without --replace: every check
@@ -605,20 +818,25 @@ cmd_import() {
   # writes a single byte to any of them. A volume late in the manifest that
   # fails one of these checks must not leave volumes earlier in the manifest
   # already replaced.
-  local bad="" vcount=0 kind name sum bytes labels_b64
-  while IFS="$(printf '\t')" read -r kind name sum bytes labels_b64; do
+  local bad="" vcount=0 kind src_name name sum bytes labels_b64
+  while IFS="$(printf '\t')" read -r kind src_name sum bytes labels_b64; do
     [ "${kind}" = "volume" ] || continue
-    progress "verifying ${name} ..."
-    case "${name}" in
+    case "${src_name}" in
       ''|.|..|*[!A-Za-z0-9_.-]*)
-        printf '  refusing: manifest names an unsafe volume %s\n' "${name}" >&2
+        printf '  refusing: manifest names an unsafe volume %s\n' "${src_name}" >&2
         bad=1; continue ;;
     esac
+    name="$(target_name "${src_name}")"
+    if [ "${name}" = "${src_name}" ]; then
+      progress "verifying ${name} ..."
+    else
+      progress "verifying ${src_name} (into ${name}) ..."
+    fi
     if ! known_volume "${name}"; then
       printf '  refusing: %s is not a volume this script manages\n' "${name}" >&2
       bad=1; continue
     fi
-    local f="${WORK}/volumes/${name}.tar"
+    local f="${WORK}/volumes/${src_name}.tar"
     if [ ! -f "${f}" ]; then
       printf '  missing tar for volume %s\n' "${name}" >&2
       bad=1; continue
@@ -655,8 +873,56 @@ cmd_import() {
     vcount=$((vcount + 1))
   done <"${WORK}/manifest.txt"
 
+  # The log folder (BAK-024), in the same pass: its tar's checksum, every
+  # file in it re-hashed against its own manifest line, and the target
+  # folder empty or --replace given — before anything is written.
+  local log_state
+  log_state="$(awk -F'\t' '$1=="hostdir" && $2=="log"{print $3}' "${WORK}/manifest.txt")"
+  if [ "${log_state}" = "present" ]; then
+    progress "verifying the log folder ..."
+    local lsum lbytes lfiles
+    lsum="$(awk -F'\t' '$1=="hostdir" && $2=="log"{print $4}' "${WORK}/manifest.txt")"
+    lbytes="$(awk -F'\t' '$1=="hostdir" && $2=="log"{print $5}' "${WORK}/manifest.txt")"
+    lfiles="$(awk -F'\t' '$1=="hostdir" && $2=="log"{print $6}' "${WORK}/manifest.txt")"
+    if [ ! -f "${WORK}/hostdirs/log.tar" ]; then
+      printf '  missing tar for the log folder\n' >&2
+      bad=1
+    elif [ "$(sha256_of "${WORK}/hostdirs/log.tar")" != "${lsum}" ] \
+         || [ "$(wc -c <"${WORK}/hostdirs/log.tar" | tr -d ' ')" != "${lbytes}" ]; then
+      printf '  checksum mismatch for the log folder: manifest says %s (%s bytes), archive has %s\n' \
+        "${lsum}" "${lbytes}" "$(sha256_of "${WORK}/hostdirs/log.tar")" >&2
+      bad=1
+    else
+      mkdir -p "${WORK}/verify"
+      if ! run_helper -v "${WORK}/hostdirs:/backup:ro" -v "${WORK}/verify:/out" \
+          -- "mkdir /x && tar -xf /backup/log.tar -C /x && cd /x && $(hash_files_sh log)" 2>"${WORK}/verify.err"; then
+        printf '  the log folder tar could not be read: %s\n' "$(cat "${WORK}/verify.err" 2>/dev/null)" >&2
+        bad=1
+      else
+        file_lines "${WORK}/verify" log
+        awk -F'\t' '$1=="file" && $2=="log"{printf "%s\t%s\t%s\n", $3, $4, $5}' "${WORK}/manifest.txt" \
+          | LC_ALL=C sort >"${WORK}/verify/want.lines"
+        if ! cmp -s "${WORK}/verify/want.lines" "${WORK}/verify/log.lines"; then
+          printf '  checksum mismatch in the log folder (manifest, then archive; first differences):\n' >&2
+          diff "${WORK}/verify/want.lines" "${WORK}/verify/log.lines" | grep '^[<>]' | head -n 10 | sed 's/^/    /' >&2
+          bad=1
+        elif [ "$(wc -l <"${WORK}/verify/log.lines" | tr -d ' ')" != "${lfiles}" ]; then
+          printf '  the log folder holds a different number of files than the manifest says (%s)\n' "${lfiles}" >&2
+          bad=1
+        fi
+      fi
+    fi
+    if [ -e "${LOG_DIR}" ] && [ ! -d "${LOG_DIR}" ]; then
+      printf '  refusing: the log folder %s exists and is not a directory\n' "${LOG_DIR}" >&2
+      bad=1
+    elif ! dir_empty "${LOG_DIR}" && [ -z "${replace}" ]; then
+      printf '  refusing: the log folder %s already exists and is not empty. Pass --replace to overwrite it.\n' "${LOG_DIR}" >&2
+      bad=1
+    fi
+  fi
+
   if [ -n "${bad}" ]; then
-    die "refusing: ${archive} failed verification. Nothing was written to any volume."
+    die "refusing: ${archive} failed verification. Nothing was written to any volume or folder."
   fi
   [ "${vcount}" -gt 0 ] || die "refusing: ${archive} names no volumes"
 
@@ -685,11 +951,12 @@ cmd_import() {
     fi
     exit 1
   }
-  while IFS="$(printf '\t')" read -r kind name sum bytes labels_b64; do
+  while IFS="$(printf '\t')" read -r kind src_name sum bytes labels_b64; do
     [ "${kind}" = "volume" ] || continue
+    name="$(target_name "${src_name}")"
     progress "importing ${name} ..."
     local label_json
-    label_json="$(labels_json_of_b64 "${labels_b64}")"
+    label_json="$(target_labels "$(labels_json_of_b64 "${labels_b64}")")"
     if vol_exists "${name}" && ! vol_empty "${name}"; then
       note "removing existing ${name} (--replace)"
       docker volume rm "${name}" >/dev/null || import_die "could not remove ${name}"
@@ -701,10 +968,29 @@ cmd_import() {
     fi
     note "loading ${name}"
     run_helper -v "${name}:/v" -v "${WORK}/volumes:/backup:ro" \
-      -- "tar --numeric-owner -xf /backup/${name}.tar -C /v" \
+      -- "tar --numeric-owner -xf /backup/${src_name}.tar -C /v" \
       || import_die "could not load ${name} from ${archive}"
     done_list="${done_list:+${done_list}, }${name}"
   done <"${WORK}/manifest.txt"
+
+  if [ "${log_state}" = "present" ]; then
+    progress "importing the log folder into ${LOG_DIR} ..."
+    mkdir -p "${LOG_DIR}" || import_die "could not create the log folder ${LOG_DIR}"
+    if ! dir_empty "${LOG_DIR}"; then
+      note "emptying ${LOG_DIR} (--replace)"
+      run_helper -v "${LOG_DIR}:/h" -- 'find /h -mindepth 1 -maxdepth 1 -exec rm -rf {} +' \
+        || import_die "could not empty the log folder ${LOG_DIR}"
+    fi
+    run_helper -v "${LOG_DIR}:/h" -v "${WORK}/hostdirs:/backup:ro" \
+      -- "tar --numeric-owner -xpf /backup/log.tar -C /h" \
+      || import_die "could not load the log folder ${LOG_DIR} from ${archive}"
+    done_list="${done_list:+${done_list}, }the log folder"
+    note "loaded the log folder into ${LOG_DIR} (${lfiles} file(s))"
+  elif [ "${log_state}" = "absent" ]; then
+    note "the old host had no log folder; ${LOG_DIR} is left as it is."
+  else
+    note "this archive carries no log folder (written before RM-292); ${LOG_DIR} is left as it is."
+  fi
 
   if [ -f "${WORK}/pin/rekor-tlog-id" ]; then
     local dest
@@ -737,15 +1023,30 @@ cmd_check() {
   fi
   [ $# -eq 0 ] || usage_die "check takes at most one argument"
 
+  resolve_stack
   local count tid
   count="$(ledger_event_count)"
   case "${count}" in ''|*[!0-9]*) count="" ;; esac
   tid="$(pin_tree_id)"
 
+  # The log folder's own numbers (BAK-024). Read by a helper as root; the
+  # folder is written by the services, not by whoever runs this.
+  local live_files="" live_bytes=""
+  if [ -d "${LOG_DIR}" ]; then
+    local stats
+    stats="$(folder_stats "${LOG_DIR}")"
+    live_files="${stats%% *}"; live_bytes="${stats##* }"
+  fi
+
   if [ -z "${archive}" ]; then
     [ -n "${count}" ] || die "the ledger is not reachable. Is the stack up?"
     note "ledger event count: ${count}"
     note "transparency-log tree id: ${tid}"
+    if [ -n "${live_files}" ]; then
+      note "log folder ${LOG_DIR}: ${live_files} file(s), ${live_bytes} bytes"
+    else
+      note "log folder ${LOG_DIR}: absent"
+    fi
     note "note these down: 'export --event-count ${count}' records the count in the manifest."
     exit 0
   fi
@@ -780,6 +1081,19 @@ cmd_check() {
     note "ledger event count: MATCH (${count})"
   fi
 
+  # The log folder keeps growing once the stack is up, so the check is that
+  # nothing the archive carried is missing: at least as many files.
+  local want_files
+  want_files="$(awk -F'\t' '$1=="hostdir" && $2=="log" && $3=="present"{print $6}' "${WORK}/manifest.txt")"
+  if [ -z "${want_files}" ]; then
+    note "log folder: the archive carries none; ${LOG_DIR} holds ${live_files:-no} file(s)"
+  elif [ -z "${live_files}" ] || [ "${live_files}" -lt "${want_files}" ]; then
+    printf 'innsegl-migrate: check: log folder MISMATCH: archive %s file(s), %s holds %s\n' "${want_files}" "${LOG_DIR}" "${live_files:-none}" >&2
+    ok=0
+  else
+    note "log folder: MATCH (archive ${want_files} file(s), ${LOG_DIR} holds ${live_files})"
+  fi
+
   if [ "${tid}" != "${want_tid}" ]; then
     printf 'innsegl-migrate: check: transparency-log tree id MISMATCH: manifest %s, running stack %s\n' "${want_tid}" "${tid}" >&2
     ok=0
@@ -796,6 +1110,25 @@ cmd_check() {
 }
 
 # ---------------------------------------------------------------------------
+# volumes — what export would carry from this host, and import would fill.
+# ---------------------------------------------------------------------------
+
+cmd_volumes() {
+  [ $# -eq 0 ] || usage_die "volumes takes no arguments"
+  resolve_stack
+  local table name desc
+  table="$(volume_table)"
+  while IFS='|' read -r name desc; do
+    [ -n "${name}" ] || continue
+    printf '%s\t%s\n' "${name}" "${desc}"
+  done <<EOF
+${table}
+EOF
+  printf 'log folder\t%s\n' "${LOG_DIR}"
+  printf 'stack\t%s\n' "${STACK_MODE}"
+}
+
+# ---------------------------------------------------------------------------
 
 cmd="${1:-}"
 [ $# -ge 1 ] && shift || true
@@ -804,6 +1137,7 @@ case "${cmd}" in
   export) cmd_export "$@" ;;
   import) cmd_import "$@" ;;
   check)  cmd_check "$@" ;;
+  volumes) cmd_volumes "$@" ;;
   -h|--help|help) usage; exit 0 ;;
   '') usage_die "a command is required" ;;
   *) usage_die "unknown command: ${cmd}" ;;

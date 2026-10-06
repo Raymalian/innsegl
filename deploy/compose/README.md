@@ -256,6 +256,22 @@ label. That matters beyond bookkeeping: `scripts/teardown-guard.sh` reads
 `dev.innsegl.trust-root` to refuse deleting a trust volume, so a moved
 volume that came back unlabelled would come back unprotected.
 
+The archive also carries **the log folder** (`INNSEGL_LOG_DIR`, by default
+`~/.innsegl/log`): every tool-call body, workspace snapshot and telemetry
+record the ledger references by digest. It is a host folder, not a volume,
+and a move without it leaves a ledger whose body references resolve to
+nothing. Every file goes in the manifest with its sha256; `import` re-hashes
+them all and refuses a non-empty target folder without `--replace`, in the
+same pass as the volumes. The gateway CA folder and the backup copy folder
+are not carried: the first is rewritten on every start, the second is a copy
+of a volume that is. `scripts/innsegl-migrate.sh volumes` prints exactly what
+this host would carry, under the prefixes it resolves (`INNSEGL_STACK_PREFIX`,
+`INNSEGL_TRUST_VOLUME_PREFIX`, `INNSEGL_LOG_DIR`, or a dev stack's own).
+`import` refuses on a dev stack (ADR-0072).
+
+The whole move, step by step, with a check and a rollback for each step, is
+[`../../runbooks/cutover.md`](../../runbooks/cutover.md).
+
 ```sh
 # On the OLD host, stack down (export refuses otherwise):
 scripts/innsegl-migrate.sh export innsegl.migration.tar
@@ -304,8 +320,9 @@ Once the new host is up, confirm it agrees with what was carried over:
 scripts/innsegl-migrate.sh check innsegl.migration.tar
 ```
 
-which compares the running stack's ledger event count and transparency-log
-tree id against the manifest and prints `MATCH` or `MISMATCH`.
+which compares the running stack's ledger event count, transparency-log
+tree id and log-folder file count against the manifest and prints `MATCH` or
+`MISMATCH`.
 
 ---
 
