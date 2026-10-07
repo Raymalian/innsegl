@@ -84,8 +84,8 @@ services:
   # has no store client. The plaintext key passes between them on a TMPFS volume
   # and touches no disk; both one-shots exit, and the volume dies with the
   # project. The key is plaintext for the length of one import and in memory
-  # only, which is the same trust boundary the encrypted-on-a-volume key had —
-  # its password is in this repository and has never been a secret.
+  # only, which is the same trust boundary the encrypted-on-a-volume key had:
+  # its password sits beside it on the same volume (ca.pass, #533).
   # --------------------------------------------------------------------------
   innsegl-ca-export:
     image: alpine/openssl:3.5.7@sha256:19f8eb9004a1dbaec323eed6094e9b6bcc1dbf2697ecb5fb8d2fad4e3336a8f7
@@ -107,13 +107,13 @@ services:
         fi
         # base64 DER, which is what `bao transit import` reads. Measured: it
         # refuses PEM with "illegal base64 data at input byte 0".
-        openssl pkcs8 -in /pki/ca.key -passin "pass:$${INNSEGL_FULCIO_CA_PASSWORD}" \
+        # The password is the host's own file beside the key (#533), read
+        # by openssl itself so it is never an argument.
+        openssl pkcs8 -in /pki/ca.key -passin file:/pki/ca.pass \
           -topk8 -nocrypt -outform DER -out /scratch/ca.der
         base64 /scratch/ca.der | tr -d '\n' > /scratch/ca.b64
         rm -f /scratch/ca.der
         echo "ca-export: the existing key is staged in memory for import"
-    environment:
-      INNSEGL_FULCIO_CA_PASSWORD: ${INNSEGL_FULCIO_CA_PASSWORD:-innsegl-compose-ca}
     volumes:
       - sigstore-fulcio-pki:/pki:ro
       - innsegl-ca-import-scratch:/scratch

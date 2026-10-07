@@ -52,6 +52,12 @@
 #
 # Exit status is the verdict.
 #
+# Two settings, for scripts/ca-rotate.sh's proof step (#533):
+#   INNSEGL_SIGSTORE_VERIFY_ROOT=<pem>  the certificate must chain to this
+#                                       root, and Fulcio must publish it
+#   INNSEGL_SIGSTORE_VERIFY_CERT_ONLY=1 stop after the certificate; write
+#                                       nothing to the transparency log
+#
 # WHAT THIS SCRIPT IS NOT. It is not TC-SIG and it must not become it. SIG-001
 # is a signed *commit* verified through the shipped tooling, and it belongs to
 # E5's Go tests against this stack. This is the infrastructure check that has
@@ -412,9 +418,37 @@ main() {
   mint_jwt_svid
   obtain_certificate
   check_certificate
+  check_expected_root
+
+  # The rotation's proof (scripts/ca-rotate.sh) stops at the certificate: it
+  # proves the NEW root issues, and a test entry in a deployment's own log is
+  # an entry that stays there forever.
+  if [ -n "${INNSEGL_SIGSTORE_VERIFY_CERT_ONLY:-}" ]; then
+    log 'OK — a real Fulcio certificate was issued for a real JWT-SVID (certificate only; Rekor not written to)'
+    return 0
+  fi
   check_rekor_round_trip
 
   log 'OK — a real Fulcio certificate was issued for a real JWT-SVID, and a real Rekor entry was proved included'
+}
+
+# check_expected_root: with INNSEGL_SIGSTORE_VERIFY_ROOT naming a PEM file,
+# the certificate must chain to THAT root, and it must be the root Fulcio
+# publishes. scripts/ca-rotate.sh passes the root it just staged, so a Fulcio
+# that came back up on the old key fails here rather than passing on "some
+# root".
+check_expected_root() {
+  local want="${INNSEGL_SIGSTORE_VERIFY_ROOT:-}"
+  [ -n "${want}" ] || return 0
+  log "checking the certificate chains to the expected root ${want}"
+  [ -r "${want}" ] || fail "INNSEGL_SIGSTORE_VERIFY_ROOT=${want} is not readable"
+  openssl verify -CAfile "${want}" -purpose any "${WORK}/leaf.pem" \
+    || fail 'the certificate does not chain to the expected root'
+  local a b
+  a="$(openssl x509 -in "${want}" -outform DER | openssl dgst -sha256 | awk '{print $NF}')"
+  b="$(openssl x509 -in "${WORK}/fulcio-root.pem" -outform DER | openssl dgst -sha256 | awk '{print $NF}')"
+  [ "${a}" = "${b}" ] || fail "Fulcio publishes root ${b}, not the expected ${a}"
+  note "the expected root ${a} issued it and is the one Fulcio publishes"
 }
 
 main "$@"

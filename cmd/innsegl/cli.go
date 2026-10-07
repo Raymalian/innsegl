@@ -94,6 +94,12 @@ var commands = map[string]command{
 		summary: "verify a commit's attribution without access to the ledger",
 		exec:    verifyCommand,
 	},
+	// #533: the rotation script's way into the trust history (ADR-0073),
+	// run inside the core, which is the history's one writer.
+	"trust-history": {
+		summary: "read, record and end entries in the trust history (for ca-rotate)",
+		exec:    trustHistoryCommand,
+	},
 	// #264's issuing side. The identity-lifecycle listener was published with
 	// six tools behind it and nothing authenticating a caller; this is the key
 	// file and the mint command that close it. Deliberately not a service: the

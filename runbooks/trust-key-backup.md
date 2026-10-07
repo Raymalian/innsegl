@@ -12,8 +12,8 @@ core. Every step names where it runs.
 
 | item | from | restore into |
 |---|---|---|
-| `fulcio-pki` | the Fulcio CA certificate, encrypted key and config | volume `innsegl-trust-fulcio-pki` |
-| `fulcio-ca-password` | `INNSEGL_FULCIO_CA_PASSWORD` | `deploy/compose/.env`, if it is not the default |
+| `fulcio-pki` | the Fulcio CA certificate, encrypted key, its password (`ca.pass`, ADR-0075) and config | volume `innsegl-trust-fulcio-pki` |
+| `fulcio-ca-password` | `INNSEGL_FULCIO_CA_PASSWORD`, only on a host not yet moved to `ca.pass`; absent otherwise | `deploy/compose/.env` |
 | `rekor-key` | the log's signing key | volume `innsegl-trust-rekor-key` |
 | `trillian-db` | the log's database, as SQL from one consistent snapshot | the log database, `test` |
 | `identity-secret` | the pseudonymisation secret | volume `innsegl-trust-identity-secret` |
