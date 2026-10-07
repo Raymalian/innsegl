@@ -1003,6 +1003,10 @@ services:
       # and appends to it daily; the sentinel commits beside it are verified
       # against it on the same schedule. Public material only.
       INNSEGL_TRUST_HISTORY: /run/innsegl/trust/trust-history.json
+      # ADR-0074: the encrypted trust-key backups innsegl-trust-backup writes,
+      # served to the operator's enrolled machine at /_core/trust-backup.
+      # Ciphertext only; this process holds no key that opens it.
+      INNSEGL_TRUST_BACKUP_DIR: /run/innsegl/trust-backups
 
       # The hosted shape (#462). The host address the gateway and dashboard are
       # published on, passed in so the process can refuse to start exposed
@@ -1214,6 +1218,8 @@ services:
       # READ-WRITE, and the only read-write mount: the trust history
       # (ADR-0073). innsegl-api mounts it read-only.
       - innsegl-trust-history:/run/innsegl/trust
+      # ADR-0074, READ-ONLY: the encrypted trust-key backups, to serve.
+      - innsegl-trust-backups:/run/innsegl/trust-backups:ro
     ports:
       # Loopback unless INNSEGL_BIND says otherwise, and INNSEGL_BIND moves
       # only the gateway and the dashboard. Every other line here stays on
@@ -1622,6 +1628,104 @@ services:
       # otherwise. It must be writable by uid 1000 (the user above); when it is
       # not, every copy fails and the readiness report says so.
       - ${INNSEGL_BACKUP_HOST_DIR:-${HOME}/innsegl-backups}:/host-backups
+
+  # --------------------------------------------------------------------------
+  # innsegl-trust-backup — the encrypted trust-key backup (ADR-0074).
+  #
+  # Once a day it writes ONE age-encrypted bundle of everything a lost host
+  # would otherwise take with it: the Fulcio CA certificate, key and key
+  # password, the Rekor signing key, the transparency log's database, the
+  # pseudonymisation secret, the SPIRE upstream CA, the gateway CA key and the
+  # trust history. The manifest inside carries every file's sha256. The
+  # bundles land in innsegl-trust-backups, the newest 14 kept, and
+  # innsegl-mcp serves them to the operator's enrolled machine, which keeps
+  # its own copies.
+  #
+  # ENCRYPTED TO PUBLIC KEYS ONLY. INNSEGL_TRUST_BACKUP_RECIPIENTS is a
+  # space-separated list of age recipients; this deployment holds none of the
+  # matching identities. Unset, no bundle is written and every run says so,
+  # in its log and in the status file /_core/trust-backup serves. The
+  # recipients are read on every run, so setting them needs no restart of
+  # anything but this file's environment.
+  #
+  # NOTHING IS WRITTEN IN THE CLEAR. Files are read into memory one at a time
+  # and the log database is exported straight into the encryptor (one
+  # consistent snapshot, the log kept running): plaintext never touches a
+  # disk outside the volumes it already lives in.
+  #
+  # ROOT, AND WHY. The key volumes are owned by four different images' users,
+  # and some files are 0400. The process runs as uid 0 with every capability
+  # dropped but DAC_READ_SEARCH, to read them, and CHOWN, to hand what it
+  # writes to uid 1000 for innsegl-mcp to serve. Every key volume is mounted
+  # read-only; the root filesystem is read-only; the only network is the log
+  # database's.
+  #
+  # THE `trust-backup` PROFILE: it mounts volumes of the SPIRE and Sigstore
+  # projects by name, and a stack brought up without them must not fail on
+  # their absence. Enable it with COMPOSE_PROFILES=trust-backup.
+  # --------------------------------------------------------------------------
+  innsegl-trust-backup:
+    <<: *innsegl-build
+    profiles: ["trust-backup"]
+    container_name: innsegl-trust-backup
+    restart: unless-stopped
+    networks:
+      - innsegl-trillian-db
+    labels:
+      dev.innsegl.component: trust-backup
+    user: "0:0"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+      - CHOWN
+    command:
+      - trust-backup
+      - create
+      - --dir
+      - /trust-backups
+      - --owner
+      - "1000:1000"
+      - --keep
+      - ${INNSEGL_TRUST_BACKUP_KEEP:-14}
+      - --every
+      - ${INNSEGL_TRUST_BACKUP_INTERVAL:-24h}
+      - --retry
+      - 15m
+      - --path
+      - fulcio-pki=/in/fulcio-pki
+      - --value
+      - fulcio-ca-password=INNSEGL_FULCIO_CA_PASSWORD
+      - --path
+      - rekor-key=/in/rekor-key
+      - --mysql
+      - trillian-db=trillian-db:3306/test
+      - --path
+      - identity-secret=/in/identity-secret
+      - --path
+      - spire-upstream-ca=/in/spire-pki-server
+      - --path
+      - gateway-ca-key=/in/gateway-ca-key
+      - --path
+      - trust-history=/in/trust-history
+    environment:
+      INNSEGL_TRUST_BACKUP_RECIPIENTS: ${INNSEGL_TRUST_BACKUP_RECIPIENTS:-}
+      # sigstore.yml's own values for the log database and the CA key's
+      # password, restated: compose cannot alias across files.
+      INNSEGL_TRUST_BACKUP_MYSQL_USER: test
+      INNSEGL_TRUST_BACKUP_MYSQL_PASSWORD: zaphod
+      INNSEGL_FULCIO_CA_PASSWORD: ${INNSEGL_FULCIO_CA_PASSWORD:-innsegl-compose-ca}
+    volumes:
+      - trust-backup-fulcio-pki:/in/fulcio-pki:ro
+      - trust-backup-rekor-key:/in/rekor-key:ro
+      - innsegl-identity-secret:/in/identity-secret:ro
+      - trust-backup-spire-pki-server:/in/spire-pki-server:ro
+      - innsegl-gateway-ca-key:/in/gateway-ca-key:ro
+      - innsegl-trust-history:/in/trust-history:ro
+      - innsegl-trust-backups:/trust-backups
 
   # THE `separate` PROFILE, as for innsegl-reconciler above: by default the
   # seal loop runs inside innsegl-mcp and this container is not started.
@@ -2040,6 +2144,12 @@ networks:
     name: ${INNSEGL_SIGSTORE_NETWORK:-innsegl-sigstore}
     external: true
 
+  # The transparency log's database network, joined by innsegl-trust-backup
+  # alone, to export the log (ADR-0074). Declared in sigstore.yml.
+  innsegl-trillian-db:
+    name: ${INNSEGL_TRILLIAN_DB_NETWORK:-innsegl-sigstore-trillian-db}
+    external: true
+
 # ----------------------------------------------------------------------------
 # Volumes.
 # ----------------------------------------------------------------------------
@@ -2150,9 +2260,11 @@ volumes:
   innsegl-admin-key:
 
   # RM-246 (#391) — the gateway's own TLS certificate authority's PRIVATE
-  # key. MOUNTED BY: innsegl-mcp, read-write, and NO OTHER SERVICE, ever — a
-  # service that could read this could mint a certificate for the gateway's
-  # own loopback address. The CERTIFICATE (public) is not here: it goes to a
+  # key. MOUNTED BY: innsegl-mcp, read-write, and no other running service —
+  # a service that could read this could mint a certificate for the gateway's
+  # own loopback address. The one exception is innsegl-trust-backup
+  # (ADR-0074), read-only, which reads it into an encrypted bundle and holds
+  # no network but the log database's. The CERTIFICATE (public) is not here: it goes to a
   # HOST bind mount instead (*gateway-ca-host-dir, above), because the host
   # commands (`innsegl git-hook`, `innsegl sign`) are the ones that have to
   # read it.
@@ -2172,9 +2284,10 @@ volumes:
   # THIS DEPLOYMENT's pseudonymisation secret, and the reason it is a volume
   # rather than a value in this file: a secret in the file would be the same
   # secret in every deployment (#124, ADR-0041).
-  # MOUNTED BY: innsegl-identity-init (rw), innsegl-mcp (ro). Nothing else,
-  # ever — the secret CREATES a pseudonym and is needed to resolve one never,
-  # so no read path in this stack has any use for it.
+  # MOUNTED BY: innsegl-identity-init (rw), innsegl-mcp (ro), and
+  # innsegl-trust-backup (ro, ADR-0074: into an encrypted bundle). No read
+  # path in this stack has any use for it — the secret CREATES a pseudonym
+  # and is needed to resolve one never.
   #
   # IRREPLACEABLE, and it took losing it to see why (doc 05 §2; OPS-032). A
   # `down -v` removed it, the deployment minted a new one, and the SAME task
@@ -2193,10 +2306,30 @@ volumes:
   # Public material only. A trust volume, for the reason the identity secret
   # is one: losing it loses the record of which roots were this deployment's,
   # and a commit signed under a rotated-away root then stops verifying.
-  # MOUNTED BY: innsegl-mcp (rw), innsegl-api (ro).
+  # MOUNTED BY: innsegl-mcp (rw), innsegl-api (ro), innsegl-trust-backup (ro).
   innsegl-trust-history:
     name: ${INNSEGL_TRUST_HISTORY_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-trust-history}
     external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
+
+  # ADR-0074: the encrypted trust-key bundles and the producer's status.
+  # Ciphertext only. Losing it loses backups, not keys: the operator's
+  # machine keeps its own copies.
+  # MOUNTED BY: innsegl-trust-backup (rw), innsegl-mcp (ro).
+  innsegl-trust-backups:
+
+  # ADR-0074: the other projects' key volumes, by name, READ-ONLY, for the
+  # backup and nothing else. Always external: this project never creates or
+  # removes them. The names are the ones trust-volumes.sh hands compose.
+  # MOUNTED BY: innsegl-trust-backup (ro).
+  trust-backup-fulcio-pki:
+    name: ${INNSEGL_TRUST_FULCIO_PKI_VOLUME:-innsegl-sigstore_sigstore-fulcio-pki}
+    external: true
+  trust-backup-rekor-key:
+    name: ${INNSEGL_TRUST_REKOR_KEY_VOLUME:-innsegl-sigstore_sigstore-rekor-key}
+    external: true
+  trust-backup-spire-pki-server:
+    name: ${INNSEGL_SPIRE_PKI_SERVER_VOLUME:-innsegl-spire_spire-pki-server}
+    external: true
 
   # DECLARED IN spire.yml, JOINED HERE, and the only thing this stack takes
   # from SPIRE besides one network. Compose names a project's volume

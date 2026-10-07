@@ -49,6 +49,8 @@ services:
     container_name: innsegl-dev-demo-agent
   innsegl-canary:
     container_name: innsegl-dev-canary
+  innsegl-trust-backup:
+    container_name: innsegl-dev-trust-backup
 
 networks:
   innsegl-ledger:
@@ -65,6 +67,8 @@ networks:
     name: innsegl-dev-spire-admin
   innsegl-sigstore:
     name: innsegl-dev-sigstore
+  innsegl-trillian-db:
+    name: innsegl-dev-sigstore-trillian-db
 
 volumes:
   innsegl-ledger-data:
@@ -75,3 +79,5 @@ volumes:
     name: innsegl-dev-trust-history
   spire-agent-socket:
     name: innsegl-dev-spire_spire-agent-socket
+  trust-backup-spire-pki-server:
+    name: innsegl-dev-spire_spire-pki-server
