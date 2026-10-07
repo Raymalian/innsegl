@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/client"
+	"innsegl.dev/innsegl/internal/trustbackup"
 )
 
 // `innsegl client serve` — RM-285 (#461), ADR-0063 decision 4. The
@@ -118,6 +119,9 @@ func runClientServe(ctx context.Context, args []string, _, stderr io.Writer, hom
 	// ADR-0068: what the core did not take is delivered when it answers.
 	go srv.RunOutbox(renewCtx)
 	go srv.RunSessionWatch(renewCtx)
+	// ADR-0074: keep copies of the core's encrypted trust-key backup.
+	go srv.RunTrustBackupFetch(renewCtx, &trustbackup.Store{Dir: paths.TrustBackups, Keep: client.TrustBackupKeep},
+		client.TrustBackupInterval)
 	go func() {
 		<-ctx.Done()
 		shutdown, done := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)

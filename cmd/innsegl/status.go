@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/client"
+	"innsegl.dev/innsegl/internal/trustbackup"
 	"innsegl.dev/innsegl/internal/trusthistory"
 	"innsegl.dev/innsegl/internal/version"
 )
@@ -28,6 +29,8 @@ type statusDeps struct {
 	// localURL overrides where the client service is asked; empty means the
 	// address the enrolment recorded.
 	localURL string
+	// now is the clock; nil is time.Now.
+	now func() time.Time
 }
 
 func statusCommand(args []string, stdout, stderr io.Writer) int {
@@ -117,6 +120,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 			fmt.Fprintf(tw, "this machine\t%s\t%s, %s, %s, %s\n", in.Status, in.Name, in.Kind, in.Organisation, repos)
 		}
 	}
+	trustBackupLine(tw, paths, deps.now)
 	if err := tw.Flush(); err != nil {
 		return exitConnectFailed
 	}
@@ -154,4 +158,41 @@ func localClientStatus(ctx context.Context, base string) (localStatus, error) {
 		return localStatus{}, err
 	}
 	return st, nil
+}
+
+// trustBackupStale is how old the newest local copy of the trust-key backup
+// may be before status warns (ADR-0074). The core writes one a day, so two
+// days is one missed day and then some.
+const trustBackupStale = 48 * time.Hour
+
+// trustBackupLine says how old the newest local copy of the core's trust-key
+// backup is. Missing or stale is a WARN line; like the trust lines above, it
+// does not change the exit status.
+func trustBackupLine(tw io.Writer, paths client.Paths, now func() time.Time) {
+	if now == nil {
+		now = time.Now
+	}
+	newest, err := (&trustbackup.Store{Dir: paths.TrustBackups}).Latest()
+	if err != nil {
+		fmt.Fprintf(tw, "trust backup\tWARN\tno local copy in %s; the client service fetches it on the "+
+			"operator's machine, or run `innsegl trust-backup fetch`\n", paths.TrustBackups)
+		return
+	}
+	age := now().Sub(newest.CreatedAt)
+	state := ""
+	if age > trustBackupStale {
+		state = "WARN"
+	}
+	fmt.Fprintf(tw, "trust backup\t%s\tnewest %s, %s old\n", state, newest.Name, roughAge(age))
+}
+
+// roughAge is an age a person reads at a glance: minutes, hours or days.
+func roughAge(d time.Duration) string {
+	switch {
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%d days", int(d.Hours()/24))
 }

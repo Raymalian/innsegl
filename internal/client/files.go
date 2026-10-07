@@ -36,6 +36,10 @@ type Paths struct {
 	// NODE_EXTRA_CA_CERTS names; the key never leaves this folder.
 	ProxyCA    string
 	ProxyCAKey string
+	// TrustBackups keeps the copies of the core's encrypted trust-key backup
+	// (ADR-0074), 0700, each bundle 0600. Beside the client folder, not in
+	// it: it is the operator's, not the enrolment's.
+	TrustBackups string
 }
 
 // ClientPaths are the paths under home.
@@ -52,6 +56,8 @@ func ClientPaths(home string) Paths {
 		Outbox:     filepath.Join(dir, "outbox"),
 		ProxyCA:    filepath.Join(dir, "proxy-ca.pem"),
 		ProxyCAKey: filepath.Join(dir, "proxy-ca-key.pem"),
+		// ADR-0074.
+		TrustBackups: filepath.Join(home, ".innsegl", "trust-backups"),
 	}
 }
 
