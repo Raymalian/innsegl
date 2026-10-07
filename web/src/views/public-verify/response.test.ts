@@ -163,3 +163,15 @@ describe("FE-061 reachable is a boolean or the body is not a proof", () => {
     },
   );
 });
+
+describe("ADR-0073 every verdict the deployment can send is read", () => {
+  // internal/verify's Verdict has six values. A page that knew four refused
+  // the whole answer for the other two, so a commit from before the trust
+  // history began read as "this server's answer is not a proof".
+  it.each(["verified", "content-verified", "failed", "unavailable", "unattributed", "pre-history"])(
+    "reads a proof whose verdict is %s",
+    (verdict) => {
+      expect(readProofResponse(mangled("verdict", verdict)).ok).toBe(true);
+    },
+  );
+});
