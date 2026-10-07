@@ -68,7 +68,10 @@ func TestOPS134AwkProgramsUseNoRegexIntervals(t *testing.T) {
 			prog := body[m[2]:m[3]]
 			for _, r := range regexInterval.FindAllIndex(prog, -1) {
 				line := 1 + strings.Count(string(body[:m[2]+r[0]]), "\n")
-				rel, _ := filepath.Rel(root, p)
+				rel, relErr := filepath.Rel(root, p)
+				if relErr != nil {
+					return relErr
+				}
 				found = append(found, rel+":"+itoa(int64(line))+": "+string(prog[r[0]:r[1]]))
 			}
 		}
@@ -102,7 +105,7 @@ func TestOPS134CertExtensionFindsCATrueUnderOldMawk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openssl x509 -text: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "ca.txt"), text, 0o600); err != nil {
+	if err = os.WriteFile(filepath.Join(dir, "ca.txt"), text, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
