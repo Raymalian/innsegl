@@ -199,6 +199,17 @@ func (d *Directory) CredentialRun(ctx context.Context, runID string) (mcp.Creden
 			//nolint:errcheck // an absent member reads as empty, which is
 			// exactly what a pre-ADR-0045 run has and what the tools refuse.
 			run.Repo, _ = rec[event.FieldRepo].(string)
+			// The rest of what a replay of this registration must repeat
+			// exactly (RM-334, #532), read as tolerantly as the repository:
+			// each is optional or newer than some runs on a chain.
+			//nolint:errcheck // an absent member reads as empty: none recorded.
+			run.Branch, _ = rec[event.FieldBranch].(string)
+			//nolint:errcheck // as above.
+			run.ParentRunID, _ = rec[event.FieldParentRunID].(string)
+			//nolint:errcheck // as above.
+			run.ForkedFromRunID, _ = rec[event.FieldForkedFromRunID].(string)
+			//nolint:errcheck // as above.
+			run.IdempotencyKey, _ = rec[event.FieldIdempotencyKey].(string)
 			registered = true
 
 		case event.EventTypeRunExpired:

@@ -1358,7 +1358,7 @@ func openIdentityStack(
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("build the run directory: %w", err)
 	}
-	runStates := gateway.NewCredentialRunStates(dir, ledger.RestoreHorizonFromEnv(), nil)
+	runStates := gateway.NewCredentialRunStates(dir, store, ledger.RestoreHorizonFromEnv(), nil)
 
 	tree := gateway.NewInMemoryTreeLinker(gateway.TreeLinkerConfig{})
 	registrar := gateway.NewMCPRegistrar()

@@ -35,14 +35,22 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
 )
 
@@ -59,12 +67,28 @@ type RunStateReader interface {
 	// registered. Restoring a run replays that registration, so it needs
 	// no working directory.
 	RunRegistration(ctx context.Context, runID string) (RunRegistration, error)
+	// RegistrationByKey answers the registration an idempotency key already
+	// names on the chain, and whether there is one.
+	RegistrationByKey(ctx context.Context, key string) (RunRegistration, bool, error)
+}
+
+// RegistrationKeys reads the event an idempotency key produced.
+// *ledger.Store implements it (EventByIdempotencyKey, LED-008's read half).
+type RegistrationKeys interface {
+	EventByIdempotencyKey(ctx context.Context, key string) (event.Fields, bool, error)
 }
 
 // RunRegistration is what run_registered recorded: the agent type and task
-// register_agent's idempotency claim is keyed on, and the repository.
+// register_agent's idempotency claim is keyed on, the repository, and every
+// other member a replay of the registration must repeat exactly -- the key it
+// was registered under, the branch, and its parent or fork origin (RM-334,
+// #532). Replaying these, never recomputing them, is what lets a restore or a
+// retried registration name the same run.
 type RunRegistration struct {
 	AgentType, TaskID, Repo string
+	RunID, IdempotencyKey   string
+	Branch, ParentRunID     string
+	ForkedFromRunID         string
 }
 
 // credentialRunStates implements RunStateReader on top of mcp.CredentialRuns
@@ -75,21 +99,50 @@ type RunRegistration struct {
 // state to guess at.
 type credentialRunStates struct {
 	runs    mcp.CredentialRuns
+	keys    RegistrationKeys
 	horizon time.Duration
 	now     func() time.Time
 }
 
 // NewCredentialRunStates builds a RunStateReader on runs -- in production,
 // internal/rundir.Directory over the same ledger the mapping store's DSN
-// names. horizon is ledger.DefaultRestoreHorizon's own meaning applied to
+// names -- and keys, that ledger itself (required). horizon is ledger.DefaultRestoreHorizon's own meaning applied to
 // this read: how long a withdrawn run may still be restored before it reads
 // as abandoned. Zero or less means no horizon, matching
 // mcp.CredentialRun.State's (and so ledger.RunStateOf's) own reading of it.
-func NewCredentialRunStates(runs mcp.CredentialRuns, horizon time.Duration, now func() time.Time) RunStateReader {
+func NewCredentialRunStates(runs mcp.CredentialRuns, keys RegistrationKeys, horizon time.Duration, now func() time.Time) RunStateReader {
 	if now == nil {
 		now = time.Now
 	}
-	return &credentialRunStates{runs: runs, horizon: horizon, now: now}
+	return &credentialRunStates{runs: runs, keys: keys, horizon: horizon, now: now}
+}
+
+// RegistrationByKey reads the event key produced off the chain and, when it
+// is a run_registered, that run's registration through the run directory,
+// the same read RunRegistration makes.
+func (r *credentialRunStates) RegistrationByKey(ctx context.Context, key string) (RunRegistration, bool, error) {
+	rec, found, err := r.keys.EventByIdempotencyKey(ctx, key)
+	if err != nil {
+		return RunRegistration{}, false, fmt.Errorf("read what idempotency_key %q names on the chain: %w", key, err)
+	}
+	if !found {
+		return RunRegistration{}, false, nil
+	}
+	if kind, ok := rec[event.FieldEventType].(string); !ok || kind != event.EventTypeRunRegistered {
+		return RunRegistration{}, false, fmt.Errorf("idempotency_key %q names a %v event on the chain, not a "+
+			"run_registered; refusing rather than registering a run under a key that names something else",
+			key, rec[event.FieldEventType])
+	}
+	runID, ok := rec[event.FieldRunID].(string)
+	if !ok || runID == "" {
+		return RunRegistration{}, false, fmt.Errorf("the run_registered under idempotency_key %q names no run; "+
+			"refusing rather than guessing which run the key registered", key)
+	}
+	reg, err := r.RunRegistration(ctx, runID)
+	if err != nil {
+		return RunRegistration{}, false, err
+	}
+	return reg, true, nil
 }
 
 func (r *credentialRunStates) RunState(ctx context.Context, runID string) (string, error) {
@@ -113,7 +166,11 @@ func (r *credentialRunStates) RunRegistration(ctx context.Context, runID string)
 		return RunRegistration{}, fmt.Errorf("run %q is in the gateway's own mapping but the chain does "+
 			"not know it; refusing rather than restoring a run that cannot be read", runID)
 	}
-	return RunRegistration{AgentType: run.AgentType, TaskID: run.TaskID, Repo: run.Repo}, nil
+	return RunRegistration{
+		AgentType: run.AgentType, TaskID: run.TaskID, Repo: run.Repo,
+		RunID: run.RunID, IdempotencyKey: run.IdempotencyKey,
+		Branch: run.Branch, ParentRunID: run.ParentRunID, ForkedFromRunID: run.ForkedFromRunID,
+	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +291,8 @@ type IdentityGuard struct {
 	runStates  RunStateReader
 	now        func() time.Time
 
-	cache             *identityCache
+	cache             *identityCache[RunMapping]
+	spawnClaims       *identityCache[spawnClaim]
 	sessionEndSignals *SessionEndSignals
 	sessionWorkspaces *SessionWorkspaces
 	pins              *SessionPins
@@ -283,7 +341,8 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 		workspaces:        StatedWorkspaceResolver{Fallback: cfg.Workspaces},
 		runStates:         cfg.RunStates,
 		now:               now,
-		cache:             newIdentityCache(size),
+		cache:             newIdentityCache[RunMapping](size),
+		spawnClaims:       newIdentityCache[spawnClaim](size),
 		sessionEndSignals: cfg.SessionEndSignals,
 		sessionWorkspaces: cfg.SessionWorkspaces,
 		pins:              cfg.Pins,
@@ -413,18 +472,19 @@ func (g *IdentityGuard) check(r *http.Request) (*http.Request, *Refusal) {
 
 	var parentRunID, spawnAgentType string
 	if !found {
-		if p, at, linked, rerr := g.tree.ResolveParent(ctx, id.SessionID, facts.Brief); rerr == nil && linked {
-			parentRunID = p
-			spawnAgentType = at
-		}
+		parentRunID, spawnAgentType = g.linkParent(ctx, id, facts.Brief)
 	}
 
-	decision, err := g.policy.Decide(ctx, LifecycleInput{
+	in := LifecycleInput{
 		ID: id, Facts: facts, Fingerprint: fp, ParentRunID: parentRunID,
 		Prior: prior, Found: found, PriorState: priorState, Now: g.now(),
-	})
+	}
+	decision, err := g.policy.Decide(ctx, in)
 	if err != nil {
 		return nil, g.refuse("the lifecycle policy could not decide: " + err.Error())
+	}
+	if decision == DecisionRefuse {
+		return nil, g.refuse(policyRefusal(in))
 	}
 
 	runID, actErr := g.act(ctx, decision, id, facts, fp, parentRunID, spawnAgentType, prior)
@@ -442,8 +502,49 @@ func (g *IdentityGuard) check(r *http.Request) (*http.Request, *Refusal) {
 	if actErr != nil {
 		return nil, g.refuseErr("", actErr)
 	}
+	g.spawnClaims.drop(id.SessionID, id.AgentID)
 
 	return r.WithContext(WithRunID(ctx, runID)), nil
+}
+
+// linkParent answers the parent a new agent was spawned by, and the type it
+// was spawned as. ResolveParent consumes the spawn it matches (one spawn
+// links one child), so the match is held for this agent until it is
+// registered (RM-334, #532): a registration that fails is retried with the
+// same parent and type, never as an unlinked agent whose content no longer
+// matches what its key was first used for.
+func (g *IdentityGuard) linkParent(ctx context.Context, id Identification, brief string) (parentRunID, agentType string) {
+	if c, ok := g.spawnClaims.get(id.SessionID, id.AgentID); ok {
+		return c.parentRunID, c.agentType
+	}
+	p, at, linked, err := g.tree.ResolveParent(ctx, id.SessionID, brief)
+	if err != nil || !linked {
+		return "", ""
+	}
+	g.spawnClaims.put(id.SessionID, id.AgentID, spawnClaim{parentRunID: p, agentType: at})
+	return p, at
+}
+
+// spawnClaim is a spawn ResolveParent matched for an agent not yet
+// registered.
+type spawnClaim struct{ parentRunID, agentType string }
+
+// policyRefusal says why the lifecycle policy refused, from the input it
+// refused (lifecycle.go's Decide: each DecisionRefuse is one of these), and
+// what can be done about it.
+func policyRefusal(in LifecycleInput) string {
+	switch {
+	case in.ID.SessionID == "" || in.ID.AgentID == "":
+		return "the lifecycle policy refused this request: it names no session or no agent, so there is no " +
+			"identity to resolve it to; the harness must send its session and agent headers"
+	case in.Prior.RunID == "":
+		return fmt.Sprintf("the lifecycle policy refused this request: the mapping row for session %q agent %q "+
+			"names no run; a new session registers under a key of its own", in.ID.SessionID, in.ID.AgentID)
+	default:
+		return fmt.Sprintf("the lifecycle policy refused this request: run %q's state on the chain read as %q, "+
+			"which is not active, lapsed, retired or abandoned; `innsegl retire %s` ends the run and the "+
+			"next request adopts a new one", in.Prior.RunID, in.PriorState, in.Prior.RunID)
+	}
 }
 
 // adoptHeaderStatement records the statement r carries (StatementHeader)
@@ -629,34 +730,58 @@ var errOutOfScope = errors.New("the stated repository is outside the installatio
 const outageRetryAfter = 5 * time.Second
 
 // refuseErr refuses for err, prefixed with the step that failed. A
-// dependency outage -- an MCP error whose class is retryable (IP §4:
-// IDENTITY_UNAVAILABLE, LEDGER_UNAVAILABLE, ...) or a connection that could
-// not be made at all -- is answered 503 with Retry-After, naming the class,
-// so the harness retries and the person reading it knows what is down. Any
-// other failure refuses the request itself and stays 403. Nothing is ever
-// forwarded either way (decision 11).
+// dependency outage is answered 503 with Retry-After, naming what is down, so
+// the harness retries and the person reading it knows what to start: an MCP
+// error whose class is retryable (IP §4: IDENTITY_UNAVAILABLE,
+// LEDGER_UNAVAILABLE, ...); a ledger StoreError marked retryable, or a
+// Postgres connection fault, read before any MCP layer classified them
+// (RM-334, #532: these were 403s); a run mapping that could not be stored;
+// or a connection that could not be made at all. Any other failure refuses
+// the request itself and stays 403. Nothing is ever forwarded either way
+// (decision 11).
 func (g *IdentityGuard) refuseErr(step string, err error) *Refusal {
 	detail := err.Error()
 	if step != "" {
 		detail = step + ": " + detail
 	}
-	var mcpErr *mcp.Error
-	var netErr net.Error
-	switch {
-	case errors.As(err, &mcpErr) && mcpErr.Retryable:
+	unavailable := func(what string) *Refusal {
 		return &Refusal{
 			Status:     http.StatusServiceUnavailable,
-			Reason:     identityGuardSource + ": " + string(mcpErr.Class) + " (a dependency is down; retrying): " + detail,
-			RetryAfter: outageRetryAfter,
-		}
-	case errors.As(err, &netErr):
-		return &Refusal{
-			Status:     http.StatusServiceUnavailable,
-			Reason:     identityGuardSource + ": a dependency could not be reached (retrying): " + detail,
+			Reason:     identityGuardSource + ": " + what + " (retrying): " + detail,
 			RetryAfter: outageRetryAfter,
 		}
 	}
+	var mcpErr *mcp.Error
+	var storeErr *ledger.StoreError
+	var pgErr *pgconn.PgError
+	var netErr net.Error
+	classified := errors.As(err, &mcpErr)
+	switch {
+	case classified && mcpErr.Retryable:
+		return unavailable(string(mcpErr.Class) + " (a dependency is down)")
+	case !classified && errors.As(err, &storeErr) && storeErr.Retryable:
+		return unavailable(storeErr.Class + " (the ledger is unavailable)")
+	case !classified && errors.As(err, &pgErr) && postgresOutage(pgErr.Code):
+		return unavailable("the database is unavailable (SQLSTATE " + pgErr.Code + ")")
+	case errors.Is(err, errMappingNotStored):
+		return unavailable("the gateway's run mapping could not be stored")
+	case errors.As(err, &netErr):
+		return unavailable("a dependency could not be reached")
+	}
 	return g.refuse(detail)
+}
+
+// postgresOutage reports whether a SQLSTATE says the database could not be
+// reached or is going away, rather than that it refused the statement: class
+// 08 (connection exception), 53300 (too many connections), and 57P01, 57P02,
+// 57P03 and 57P05 (shut down, crashed, starting up, idle session closed).
+// 57P04, a dropped database, does not come back by waiting.
+func postgresOutage(code string) bool {
+	switch code {
+	case "53300", "57P01", "57P02", "57P03", "57P05":
+		return true
+	}
+	return strings.HasPrefix(code, "08")
 }
 
 // sessionOwner answers the installation recorded for this session's runs:
@@ -725,6 +850,14 @@ func (g *IdentityGuard) priorMapping(ctx context.Context, id Identification, fp 
 // RM-263 (#416), RM-314: agentTypeFor turns it, the hook's own agent_type
 // (facts.Stated.AgentType) and id into what actually reaches
 // RegisterInput.AgentType, and the harness string the mapping row keeps.
+//
+// A new run (New, Fork, Adopt) is registered under a key that may already
+// name a registration on the chain: an earlier request registered it and
+// then failed before its mapping row was stored, or before SPIRE answered.
+// Such a key is finished, never re-decided (RM-334, #532): register replays
+// what the chain recorded under it, because register_agent refuses any
+// replay whose content differs, and the content this request would build
+// (branch, task, agent type, parent) is read from state that moves.
 func (g *IdentityGuard) act(
 	ctx context.Context, decision Decision, id Identification, facts RequestFacts,
 	fp Fingerprint, parentRunID, spawnAgentType string, prior RunMapping,
@@ -735,109 +868,225 @@ func (g *IdentityGuard) act(
 		return prior.RunID, nil
 
 	case DecisionRestore:
-		// A replay of the run's own registration, from what the chain
-		// recorded: register_agent's idempotency claim is keyed on agent
-		// type and task, so those must be the recorded values, and no
-		// working directory is needed at all.
-		reg, err := g.runStates.RunRegistration(ctx, prior.RunID)
-		if err != nil {
-			return "", fmt.Errorf("read run %q's registration to restore it: %w", prior.RunID, err)
-		}
-		out, err := g.registrar.Restore(ctx, prior, RegisterInput{
-			AgentType:      reg.AgentType,
-			IdempotencyKey: idempotencyKeyFor(id),
-			Workspace:      Workspace{Repo: reg.Repo, Task: reg.TaskID},
-		})
-		if err != nil {
-			return "", fmt.Errorf("restore run %q: %w", prior.RunID, err)
-		}
-		g.recordFingerprintIfNewlyKnown(ctx, id, prior, fp)
-		return out.RunID, nil
+		return g.restore(ctx, id, fp, prior)
 
 	case DecisionNew:
-		ws, err := g.resolveWorkspace(ctx, id, facts, prior)
-		if err != nil {
-			return "", fmt.Errorf("resolve the workspace to register a new run: %w", err)
-		}
-		agentType, verbatim := g.agentTypeFor(id, facts.Stated.AgentType, spawnAgentType)
-		out, err := g.registrar.Register(ctx, RegisterInput{
-			AgentType:      agentType,
-			IdempotencyKey: idempotencyKeyFor(id),
-			Workspace:      ws,
-			ParentRunID:    parentRunID,
+		return g.register(ctx, registration{
+			id: id, facts: facts, fp: fp, prior: prior, spawnAgentType: spawnAgentType,
+			key:  idempotencyKeyFor(id),
+			step: "register a new run",
+			row:  RunMapping{ParentRunID: parentRunID},
 		})
-		if err != nil {
-			return "", fmt.Errorf("register a new run: %w", err)
-		}
-		g.insertAndCache(ctx, id, RunMapping{
-			RunID: out.RunID, SessionID: id.SessionID, AgentID: id.AgentID,
-			Fingerprint: fp, ParentRunID: parentRunID, AgentTypeVerbatim: verbatim,
-		})
-		return out.RunID, nil
 
 	case DecisionFork:
-		ws, err := g.resolveWorkspace(ctx, id, facts, prior)
-		if err != nil {
-			return "", fmt.Errorf("resolve the workspace to register a fork of run %q: %w", prior.RunID, err)
-		}
-		agentType, verbatim := g.agentTypeFor(id, facts.Stated.AgentType, spawnAgentType)
-		out, err := g.registrar.Register(ctx, RegisterInput{
-			AgentType:       agentType,
-			IdempotencyKey:  idempotencyKeyFor(id),
-			Workspace:       ws,
-			ForkedFromRunID: prior.RunID,
+		return g.register(ctx, registration{
+			id: id, facts: facts, fp: fp, prior: prior, spawnAgentType: spawnAgentType,
+			key:  idempotencyKeyFor(id),
+			step: fmt.Sprintf("register a fork of run %q", prior.RunID),
+			row:  RunMapping{ForkedFromRunID: prior.RunID},
 		})
-		if err != nil {
-			return "", fmt.Errorf("register a fork of run %q: %w", prior.RunID, err)
-		}
-		g.insertAndCache(ctx, id, RunMapping{
-			RunID: out.RunID, SessionID: id.SessionID, AgentID: id.AgentID,
-			Fingerprint: fp, ForkedFromRunID: prior.RunID, AgentTypeVerbatim: verbatim,
-		})
-		return out.RunID, nil
 
 	case DecisionAdopt:
-		ws, err := g.resolveWorkspace(ctx, id, facts, prior)
-		if err != nil {
-			return "", fmt.Errorf("resolve the workspace to register a run adopting %q: %w", prior.RunID, err)
-		}
-		agentType, verbatim := g.agentTypeFor(id, facts.Stated.AgentType, spawnAgentType)
-		out, err := g.registrar.Register(ctx, RegisterInput{
-			AgentType:      agentType,
-			IdempotencyKey: adoptionKeyFor(id, prior.RunID),
-			Workspace:      ws,
+		return g.register(ctx, registration{
+			id: id, facts: facts, fp: fp, prior: prior, spawnAgentType: spawnAgentType,
+			key:  adoptionKeyFor(id, prior.RunID),
+			step: fmt.Sprintf("register a run adopting %q", prior.RunID),
+			row:  RunMapping{AdoptedFromRunID: prior.RunID},
 		})
-		if err != nil {
-			return "", fmt.Errorf("register a run adopting %q: %w", prior.RunID, err)
-		}
-		g.insertAndCache(ctx, id, RunMapping{
-			RunID: out.RunID, SessionID: id.SessionID, AgentID: id.AgentID,
-			Fingerprint: fp, AdoptedFromRunID: prior.RunID, AgentTypeVerbatim: verbatim,
-		})
-		return out.RunID, nil
 
 	default: // DecisionRefuse, and any value this policy might one day add.
-		return "", errors.New("the lifecycle policy refused this request")
+		return "", fmt.Errorf("the lifecycle policy answered decision %d, which this guard does not act on", decision)
 	}
 }
 
+// restore replays the run's own registration exactly as run_registered
+// recorded it: its idempotency key, agent type, task, repository, branch and
+// parent (RM-334, #532). The key is the one the chain holds, never one
+// recomputed from this request: an adopted run was registered under its
+// adoption key, and a recogniser whose version changed computes another.
+// register_agent's replay of that key is its heal (ADR-0058 decision 6).
+func (g *IdentityGuard) restore(ctx context.Context, id Identification, fp Fingerprint, prior RunMapping) (string, error) {
+	reg, err := g.runStates.RunRegistration(ctx, prior.RunID)
+	if err != nil {
+		return "", fmt.Errorf("read run %q's registration to restore it: %w", prior.RunID, err)
+	}
+	if reg.IdempotencyKey == "" {
+		return "", fmt.Errorf("run %q's registration recorded no idempotency_key, so it cannot be replayed "+
+			"to restore it; `innsegl retire %s` ends it and the next request adopts a new run",
+			prior.RunID, prior.RunID)
+	}
+	out, err := g.registrar.Restore(ctx, prior, reg.replay())
+	if err != nil {
+		return "", fmt.Errorf("restore run %q: %w. Nothing was forwarded; the next request tries again. "+
+			"If it is refused the same way, `innsegl retire %s` ends the run and the next request adopts a new one",
+			prior.RunID, err, prior.RunID)
+	}
+	g.recordFingerprintIfNewlyKnown(ctx, id, prior, fp)
+	return out.RunID, nil
+}
+
+// replay is the registration reg records, as register_agent must be asked
+// for it again: every member its idempotency digest and the ledger's replay
+// check compare.
+func (reg RunRegistration) replay() RegisterInput {
+	return RegisterInput{
+		AgentType:       reg.AgentType,
+		IdempotencyKey:  reg.IdempotencyKey,
+		Workspace:       Workspace{Repo: reg.Repo, Branch: reg.Branch, Task: reg.TaskID},
+		ParentRunID:     reg.ParentRunID,
+		ForkedFromRunID: reg.ForkedFromRunID,
+	}
+}
+
+// registration is one New, Fork or Adopt: the key it registers under, and
+// the lineage its mapping row carries.
+type registration struct {
+	id             Identification
+	facts          RequestFacts
+	fp             Fingerprint
+	prior          RunMapping
+	spawnAgentType string
+	key            string
+	step           string
+	// row carries the lineage columns: ParentRunID, ForkedFromRunID or
+	// AdoptedFromRunID.
+	row RunMapping
+}
+
+// register registers a new run under r.key and stores its mapping row.
+//
+// A key that already names a registration on the chain is replayed (see
+// act). A key the idempotency store holds for other content, with nothing on
+// the chain under it, is a call that was refused or failed before it wrote
+// anything, then retried after the branch, task or agent type moved: the
+// store answers DUPLICATE_REQUEST for that key for ever. Nothing was recorded
+// under it, so the registration moves to contentKeyFor's key, which names this
+// content and nothing else.
+func (g *IdentityGuard) register(ctx context.Context, r registration) (string, error) {
+	recorded, found, err := g.runStates.RegistrationByKey(ctx, r.key)
+	if err != nil {
+		return "", fmt.Errorf("%s: read whether idempotency_key %q already names a registration: %w", r.step, r.key, err)
+	}
+	if found {
+		return g.replayRegistration(ctx, r, recorded)
+	}
+
+	ws, err := g.resolveWorkspace(ctx, r.id, r.facts, r.prior)
+	if err != nil {
+		return "", fmt.Errorf("resolve the workspace to %s: %w", r.step, err)
+	}
+	agentType, verbatim := g.agentTypeFor(r.id, r.facts.Stated.AgentType, r.spawnAgentType)
+	in := RegisterInput{
+		AgentType:       agentType,
+		IdempotencyKey:  r.key,
+		Workspace:       ws,
+		ParentRunID:     r.row.ParentRunID,
+		ForkedFromRunID: r.row.ForkedFromRunID,
+	}
+	out, err := g.registrar.Register(ctx, in)
+	if errors.Is(err, mcp.ErrKeyNamesADifferentRequest) {
+		in.IdempotencyKey = contentKeyFor(r.key, in)
+		recorded, found, err = g.runStates.RegistrationByKey(ctx, in.IdempotencyKey)
+		if err != nil {
+			return "", fmt.Errorf("%s: read whether idempotency_key %q already names a registration: %w",
+				r.step, in.IdempotencyKey, err)
+		}
+		if found {
+			return g.replayRegistration(ctx, r, recorded)
+		}
+		out, err = g.registrar.Register(ctx, in)
+	}
+	if err != nil {
+		return "", fmt.Errorf("%s: %w. %s", r.step, err, registerHint(in, err))
+	}
+	m := r.row
+	m.RunID, m.AgentTypeVerbatim = out.RunID, verbatim
+	return out.RunID, g.storeMapping(ctx, r, m)
+}
+
+// replayRegistration finishes a registration the chain already holds under
+// r's key: the same run, replayed exactly as recorded (register_agent heals
+// its identity), and the mapping row an earlier request did not store.
+//
+// A run retired or abandoned since is never handed to a request (ADR-0058
+// decision 8): its mapping row is stored, so the session's history is whole,
+// and this request adopts.
+func (g *IdentityGuard) replayRegistration(ctx context.Context, r registration, recorded RunRegistration) (string, error) {
+	state, err := g.runStates.RunState(ctx, recorded.RunID)
+	if err != nil {
+		return "", fmt.Errorf("%s: read the state of run %q, already registered under idempotency_key %q: %w",
+			r.step, recorded.RunID, recorded.IdempotencyKey, err)
+	}
+	m := r.row
+	m.RunID, m.ParentRunID, m.ForkedFromRunID = recorded.RunID, recorded.ParentRunID, recorded.ForkedFromRunID
+	if _, verbatim := g.agentTypeFor(r.id, r.facts.Stated.AgentType, r.spawnAgentType); event.FoldIdentifier(verbatim) == recorded.AgentType {
+		m.AgentTypeVerbatim = verbatim
+	}
+	if state == ledger.RunRetired || state == ledger.RunAbandoned {
+		if serr := g.storeMapping(ctx, r, m); serr != nil {
+			return "", serr
+		}
+		adopted := m
+		adopted.SessionID, adopted.AgentID = r.id.SessionID, r.id.AgentID
+		return g.act(ctx, DecisionAdopt, r.id, r.facts, r.fp, "", r.spawnAgentType, adopted)
+	}
+	out, err := g.registrar.Restore(ctx, RunMapping{RunID: recorded.RunID}, recorded.replay())
+	if err != nil {
+		return "", fmt.Errorf("%s: replay run %q, already registered under idempotency_key %q: %w. "+
+			"Nothing was forwarded; the next request tries again. If it is refused the same way, "+
+			"`innsegl retire %s` ends the run and the next request adopts a new one",
+			r.step, recorded.RunID, recorded.IdempotencyKey, err, recorded.RunID)
+	}
+	return out.RunID, g.storeMapping(ctx, r, m)
+}
+
+// registerHint says what can be done about a registration register_agent
+// refused.
+func registerHint(in RegisterInput, err error) string {
+	class := mcp.Classify(err)
+	switch {
+	case class.Retryable:
+		return "Nothing was forwarded; the request is retried once the dependency is back."
+	case in.ParentRunID != "" && (class.Class == mcp.ClassRunAlreadyRetired || class.Class == mcp.ClassRunNotFound):
+		return fmt.Sprintf("This subagent was spawned by run %q, which can no longer be recorded as its parent. "+
+			"Spawn it again from the parent session, whose next request adopts a new run, or start a new session.",
+			in.ParentRunID)
+	default:
+		return "Nothing was forwarded. If the next request is refused the same way, a new session registers under a key of its own."
+	}
+}
+
+// storeMapping stores m for r's agent, filling in what every row carries.
+func (g *IdentityGuard) storeMapping(ctx context.Context, r registration, m RunMapping) error {
+	m.SessionID, m.AgentID, m.Fingerprint = r.id.SessionID, r.id.AgentID, r.fp
+	return g.insertAndCache(ctx, r.id, m)
+}
+
+// errMappingNotStored is a run registered whose mapping row could not be
+// stored. The request is a 503: the harness retries, and its next request
+// finds the run by its key on the chain and stores the row then.
+var errMappingNotStored = errors.New("the gateway's run mapping could not be stored")
+
 // insertAndCache inserts m and, only once the insert has actually
 // succeeded, caches it -- a cached row the store never has is worse than a
-// cache miss, since a miss merely repeats the lookup.
-func (g *IdentityGuard) insertAndCache(ctx context.Context, id Identification, m RunMapping) {
+// cache miss, since a miss merely repeats the lookup. A failed insert is
+// tried once more, then reported (errMappingNotStored): the run is real, and
+// a request forwarded without its row would leave the next one to re-decide
+// a registration that is already finished.
+func (g *IdentityGuard) insertAndCache(ctx context.Context, id Identification, m RunMapping) error {
 	if m.ClientID == "" {
 		m.ClientID, _ = InstallationFromContext(ctx)
 	}
-	if err := g.mappings.Insert(ctx, m); err != nil {
-		// Registration already succeeded and the run is real; a failure to
-		// record the mapping row is logged nowhere in this package
-		// (proxy.go's own doc comment: nothing here logs), but the row can
-		// be recorded on this same (session, agent)'s next request, which
-		// will find no prior row and try again. Not caching a row the
-		// store does not have keeps the two from disagreeing.
-		return
+	err := g.mappings.Insert(ctx, m)
+	if err != nil {
+		err = g.mappings.Insert(ctx, m)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: run %q is registered, and the next request stores its mapping row: %w",
+			errMappingNotStored, m.RunID, err)
 	}
 	g.cache.put(id.SessionID, id.AgentID, m)
+	return nil
 }
 
 // recordFingerprintIfNewlyKnown inserts the "later row" the contract's own
@@ -869,10 +1118,10 @@ func (g *IdentityGuard) recordFingerprintIfNewlyKnown(ctx context.Context, id Id
 const defaultSubagentType = "subagent"
 
 // idempotencyKeyFor is the SAME key on every request of one (session,
-// agent) pair -- required so that a later Restore replays register_agent's
-// own idempotency claim for the run this call first registered
-// (registrar.go's own doc comment on Restore), rather than minting a
-// second identity for a run that only went briefly quiet.
+// agent) pair, so a retried first registration names the run the first
+// attempt registered rather than a second identity. A restore does not
+// recompute it: it replays the key the chain recorded (restore), which an
+// adoption or a changed recogniser version makes a different one.
 func idempotencyKeyFor(id Identification) string {
 	return "gateway:" + id.Harness + ":" + id.Version + ":" + id.SessionID + ":" + id.AgentID
 }
@@ -888,6 +1137,17 @@ func adoptionKeyFor(id Identification, adoptedRunID string) string {
 	return idempotencyKeyFor(id) + ":adopts:" + adoptedRunID
 }
 
+// contentKeyFor is the key a registration moves to when key is held by the
+// idempotency store for other content and nothing on the chain is recorded
+// under it (register's doc comment). It names key and the two members the
+// store's request digest covers (agent type and task), so a retry of the same
+// content converges on the same key, and it stays within doc 02 §2's bound on
+// a key however long key is.
+func contentKeyFor(key string, in RegisterInput) string {
+	sum := sha256.Sum256([]byte(strconv.Quote(key) + strconv.Quote(in.AgentType) + strconv.Quote(in.Workspace.Task)))
+	return "gateway-content:" + hex.EncodeToString(sum[:16])
+}
+
 // ---------------------------------------------------------------------------
 // The in-memory cache in front of MappingStore. The store stays the truth
 // (a fresh process has an empty cache and asks the store again, which is
@@ -897,25 +1157,25 @@ func adoptionKeyFor(id Identification, adoptedRunID string) string {
 
 type identityCacheKey struct{ sessionID, agentID string }
 
-type identityCache struct {
+type identityCache[V any] struct {
 	mu    sync.Mutex
 	max   int
 	order []identityCacheKey // oldest first
-	byKey map[identityCacheKey]RunMapping
+	byKey map[identityCacheKey]V
 }
 
-func newIdentityCache(capacity int) *identityCache {
-	return &identityCache{max: capacity, byKey: make(map[identityCacheKey]RunMapping)}
+func newIdentityCache[V any](capacity int) *identityCache[V] {
+	return &identityCache[V]{max: capacity, byKey: make(map[identityCacheKey]V)}
 }
 
-func (c *identityCache) get(sessionID, agentID string) (RunMapping, bool) {
+func (c *identityCache[V]) get(sessionID, agentID string) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	m, ok := c.byKey[identityCacheKey{sessionID, agentID}]
 	return m, ok
 }
 
-func (c *identityCache) put(sessionID, agentID string, m RunMapping) {
+func (c *identityCache[V]) put(sessionID, agentID string, m V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key := identityCacheKey{sessionID, agentID}
@@ -928,6 +1188,23 @@ func (c *identityCache) put(sessionID, agentID string, m RunMapping) {
 		c.order = append(c.order, key)
 	}
 	c.byKey[key] = m
+}
+
+// drop forgets the entry for (sessionID, agentID), if there is one.
+func (c *identityCache[V]) drop(sessionID, agentID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := identityCacheKey{sessionID, agentID}
+	if _, exists := c.byKey[key]; !exists {
+		return
+	}
+	delete(c.byKey, key)
+	for i, k := range c.order {
+		if k == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
