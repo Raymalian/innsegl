@@ -222,13 +222,16 @@ sigstore-up: innsegl-trust-volumes
 	  $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d
 	@$(MAKE) --no-print-directory rekor-index-ready
 
+# Both this and innsegl-here-services ensure the trust volumes first: compose
+# will not create an external volume, so a release that adds one broke the next
+# `make update` on an existing host (#533).
 # rekor-log-up: the log's own services brought up again, for `make update`.
 # Compose recreates only what changed, so on most updates this does nothing;
 # when sigstore.yml changed the log (#451 did) it is how the change reaches a
 # running host. Fulcio is NOT named: on a host that runs it under
 # sigstore.keycustody.yml, an `up` of fulcio from sigstore.yml alone would
 # put the file CA back. `make start` brings Fulcio up as it always has.
-rekor-log-up:
+rekor-log-up: innsegl-trust-volumes
 	@test -n '$(INNSEGL_REKOR_ALLOW_NEW_TREE)' || scripts/rekor-tlog-pin.sh guard
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
@@ -555,7 +558,7 @@ stack-announce:
 # stops this target before anything starts; it never falls back to a build.
 # --no-build: the start that follows uses the images just loaded or built,
 # and never builds one of its own.
-innsegl-here-services:
+innsegl-here-services: innsegl-trust-volumes
 	@scripts/stack-mode.sh check
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
 	@# The stack's host folders are made here, as the user running make, for

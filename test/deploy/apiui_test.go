@@ -210,7 +210,7 @@ func TestTheAPIAcceptsItsOwnComposeSettings(t *testing.T) {
 // innsegl-api cannot bind 8443 and 8082.
 func TestTheUpdateRemovesTheContainersOfRemovedServices(t *testing.T) {
 	mk := readFile(t, filepath.Join(repoRoot(t), "Makefile"))
-	m := regexp.MustCompile(`(?ms)^innsegl-here-services:\n(.*?)\n\n`).FindStringSubmatch(mk)
+	m := regexp.MustCompile(`(?ms)^innsegl-here-services:[^\n]*\n(.*?)\n\n`).FindStringSubmatch(mk)
 	if m == nil {
 		t.Fatal("the Makefile has no innsegl-here-services target")
 	}
