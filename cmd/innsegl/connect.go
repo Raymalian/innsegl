@@ -137,6 +137,8 @@ func defaultManagedSettingsPath(goos string) string {
 type connectFlags struct {
 	token, ca, fingerprint, name, listen, settings     string
 	noService, pause, resume, disconnect, update, hard bool
+	// service: with --update, also rewrite and reload the client service.
+	service bool
 	// egress is --egress-control's allowlist file (with --hardened).
 	egress string
 }
@@ -152,6 +154,7 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	fs.StringVar(&f.listen, "listen", client.DefaultListen, "the loopback address the client service listens on")
 	fs.StringVar(&f.settings, "managed-settings", "", "write Claude Code's managed settings here instead of the system path")
 	fs.BoolVar(&f.noService, "no-service", false, "do not install or remove the user service")
+	fs.BoolVar(&f.service, "service", false, "with --update: also rewrite and reload the client service (ADR-0076)")
 	fs.BoolVar(&f.pause, "pause", false, "set the managed settings aside, unchanged")
 	fs.BoolVar(&f.resume, "resume", false, "put paused managed settings back")
 	fs.BoolVar(&f.disconnect, "disconnect", false, "remove what connect wrote: the managed settings keys, the service, ~/.innsegl/client")
@@ -191,6 +194,9 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 		return exitUsage
 	case modes == 1 && len(positional) > 0:
 		fprintf(stderr, "innsegl connect: --pause, --resume, --disconnect and --update take no other arguments\n")
+		return exitUsage
+	case f.service && !f.update:
+		fprintf(stderr, "innsegl connect: --service rewrites an enrolled machine's service; give it with --update\n")
 		return exitUsage
 	case f.egress != "" && !f.hard:
 		fprintf(stderr, "innsegl connect: --egress-control locks the --hardened sandbox; give --hardened too\n")
@@ -342,6 +348,16 @@ func connectUpdate(f connectFlags, stdout, stderr io.Writer, deps connectDeps) i
 		mode = "hardened"
 	}
 	fprintf(stdout, "innsegl connect: managed settings %s are %s\ninnsegl connect: restart Claude Code for it to take effect\n", f.settings, mode)
+	// ADR-0076: a machine enrolled before a change to the service definition
+	// gets it here, without a token. Only when asked: RM-312's --update
+	// changes no service on its own.
+	if f.service {
+		if err := deps.service().Install(settings.HookBin); err != nil {
+			fprintf(stderr, "innsegl connect: reinstalling the client service: %v\n", err)
+			return exitConnectFailed
+		}
+		fprintf(stdout, "innsegl connect: rewrote and restarted the client service (%s)\n", deps.service().Path())
+	}
 	return exitOK
 }
 

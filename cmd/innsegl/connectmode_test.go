@@ -177,3 +177,46 @@ func TestRM329ConnectWritesTheProxyCABeforeTheSettingsNameIt(t *testing.T) {
 		t.Fatalf("--update wrote no proxy CA: %v", err)
 	}
 }
+
+// BAK-025 (PROPOSED) — an enrolled machine gets the current service
+// definition without a new token: `--update --service` rewrites it and
+// reloads it, which is how a machine enrolled before ADR-0076 becomes an
+// interactive agent that may ask for Touch ID. Plain `--update` still
+// changes no service (RM-312).
+func TestBAK025UpdateWithServiceRewritesTheServiceDefinition(t *testing.T) {
+	f := newConnectFixture(t)
+	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings); code != exitOK {
+		t.Fatalf("connect: %s", stderr)
+	}
+	plist := filepath.Join(f.home, "Library", "LaunchAgents", "dev.innsegl.client.plist")
+	stale := strings.Replace(string(readFile(t, plist)), "<string>Interactive</string>", "<string>Background</string>", 1)
+	if err := os.WriteFile(plist, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enrolled, _ := f.core.Counts()
+	f.calls = nil
+
+	code, stdout, stderr := f.connect("--update", "--service", "--managed-settings", f.settings)
+	if code != exitOK {
+		t.Fatalf("--update --service = %d\n%s\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(string(readFile(t, plist)), "<string>Interactive</string>") {
+		t.Fatal("--update --service left the old service definition")
+	}
+	reloaded := false
+	for _, c := range f.calls {
+		if len(c) > 1 && c[0] == "launchctl" && c[1] == "bootstrap" {
+			reloaded = true
+		}
+	}
+	if !reloaded {
+		t.Fatalf("--update --service did not reload the service: %v", f.calls)
+	}
+	if n, _ := f.core.Counts(); n != enrolled {
+		t.Error("--update --service spent a token")
+	}
+	if code, _, _ := f.connect("--service", "--managed-settings", f.settings); code != exitUsage {
+		t.Errorf("--service without --update = %d, want usage", code)
+	}
+}
