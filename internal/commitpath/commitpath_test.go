@@ -23,6 +23,19 @@ func TestIsGitCommitCommandFindsCommitAsGitsOwnSubcommand(t *testing.T) {
 		"/usr/bin/git commit -m x",
 		"false || git --no-pager commit -m x",
 		"git status\ngit commit -m two-lines",
+		// Every subcommand that writes a commit object (#536).
+		"git merge feature",
+		"git -C ../repo merge --no-ff -m x feature",
+		"git pull origin main",
+		"git -c pull.rebase=false pull",
+		"git revert HEAD",
+		"git -C sub revert --no-edit abc123",
+		"git cherry-pick abc123",
+		"git cherry-pick -x abc123 def456",
+		"git rebase main",
+		"git -C ../repo rebase --onto main a b",
+		"GIT_EDITOR=true git merge --no-edit feature",
+		"git fetch && git merge origin/main",
 	} {
 		if !IsGitCommitCommand(cmd) {
 			t.Errorf("IsGitCommitCommand(%q) = false, want true", cmd)
@@ -41,6 +54,12 @@ func TestIsGitCommitCommandIgnoresEverythingElse(t *testing.T) {
 		"git show HEAD:commit.txt",
 		"ls commit",
 		"FOO=bar",
+		"echo git merge",
+		"git log --merges",
+		"git -C merge status",
+		"git branch --merged",
+		"git mergetool",
+		"git fetch",
 	} {
 		if IsGitCommitCommand(cmd) {
 			t.Errorf("IsGitCommitCommand(%q) = true, want false", cmd)

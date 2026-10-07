@@ -573,3 +573,82 @@ func TestHookCommitIsAuthoredByTheAgent(t *testing.T) {
 		}
 	}
 }
+
+// TestHookGivesEveryCommitCreatingGitCommandTheAgentIdentity (#536): a
+// `git merge` is authored as whoever git is configured as, and the core
+// refuses to sign a commit that is not the agent's (I6). Every subcommand that
+// writes a commit object gets the same four variables a `git commit` does.
+func TestHookGivesEveryCommitCreatingGitCommandTheAgentIdentity(t *testing.T) {
+	for _, command := range []string{
+		`git merge feature`,
+		`git -C /some/dir merge --no-ff feature`,
+		`git pull origin main`,
+		`git revert HEAD`,
+		`git cherry-pick abc123`,
+		`git rebase main`,
+		`git commit -m x`,
+	} {
+		_, stdout, _ := runHook(t, hookJSON(t, "Bash", command, "toolu_ident0000003", nil))
+		got := updatedCommand(t, decodeHookOutput(t, stdout))
+		for _, v := range []string{"GIT_AUTHOR_NAME=Innsegl", "GIT_AUTHOR_EMAIL=agent@innsegl.invalid",
+			"GIT_COMMITTER_NAME=Innsegl", "GIT_COMMITTER_EMAIL=agent@innsegl.invalid"} {
+			if !strings.Contains(got, " "+v) {
+				t.Errorf("%q: rewritten command lacks %q: %q", command, v, got)
+			}
+		}
+	}
+}
+
+// TestHookedGitMergeIsAuthoredAsTheAgent runs a real `git merge` under the
+// identity the hook injects, in a repository whose own git identity is the
+// operator's, and reads the merge commit back (#536).
+func TestHookedGitMergeIsAuthoredAsTheAgent(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is not on PATH: %v", err)
+	}
+	dir := t.TempDir()
+	env := append(os.Environ(),
+		"HOME="+dir, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_AUTHOR_NAME=Operator", "GIT_AUTHOR_EMAIL=operator@example.invalid",
+		"GIT_COMMITTER_NAME=Operator", "GIT_COMMITTER_EMAIL=operator@example.invalid")
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "base")
+	git("checkout", "-q", "-b", "feature")
+	git("commit", "-q", "--allow-empty", "-m", "on feature")
+	git("checkout", "-q", "main")
+	git("commit", "-q", "--allow-empty", "-m", "on main")
+
+	_, stdout, _ := runHook(t, hookJSON(t, "Bash", "git merge --no-ff -m merged feature", "toolu_ident0000004", nil))
+	rewritten := updatedCommand(t, decodeHookOutput(t, stdout))
+	// Only the identity part of the export: the signing configuration would
+	// call this test binary as the signing program.
+	var identity []string
+	for _, f := range strings.Fields(strings.TrimSuffix(strings.SplitN(rewritten, "; ", 2)[0], ";")) {
+		if strings.HasPrefix(f, "GIT_AUTHOR_") || strings.HasPrefix(f, "GIT_COMMITTER_") {
+			identity = append(identity, f)
+		}
+	}
+	if len(identity) != 4 {
+		t.Fatalf("want four identity assignments in %q, got %v", rewritten, identity)
+	}
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", "export "+strings.Join(identity, " ")+"; git merge --no-ff -m merged feature")
+	cmd.Dir = dir
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("hooked git merge: %v\n%s", err, out)
+	}
+	if got := git("log", "-1", "--format=%an <%ae> / %cn <%ce>"); got != "Innsegl <agent@innsegl.invalid> / Innsegl <agent@innsegl.invalid>" {
+		t.Errorf("merge commit authored as %q, want the agent identity", got)
+	}
+}

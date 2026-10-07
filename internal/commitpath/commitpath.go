@@ -68,19 +68,33 @@ type SignResponse struct {
 	Status    []byte `json:"status"`
 }
 
-// IsGitCommitCommand reports whether a shell command runs `git commit`: in
-// any of its simple commands, a `git` word whose subcommand, after git's own
-// options, is `commit`. It is a reading of the command, not a shell parser:
+// IsGitCommitCommand reports whether a shell command runs a git subcommand
+// that writes a commit object: in any of its simple commands, a `git` word
+// whose subcommand, after git's own options, is one of commitCreatingGit
+// (`commit`, and since #536 also `merge`, `pull`, `revert`, `cherry-pick` and
+// `rebase`, each of which authors a commit as whoever git is configured as).
+// It is a reading of the command, not a shell parser:
 // the harness hook uses it to decide where the tool call id goes, and the core
 // uses it to require that the tool call it resolves asked for a commit. Both
 // read it the same way because both call this.
 func IsGitCommitCommand(cmd string) bool {
 	for _, simple := range splitSimpleCommands(cmd) {
-		if gitSubcommand(strings.Fields(simple)) == "commit" {
+		if commitCreatingGit[gitSubcommand(strings.Fields(simple))] {
 			return true
 		}
 	}
 	return false
+}
+
+// commitCreatingGit is every git subcommand that can create a commit object.
+// `pull` may merge, and `rebase` replays commits as new ones.
+var commitCreatingGit = map[string]bool{
+	"commit":      true,
+	"merge":       true,
+	"pull":        true,
+	"revert":      true,
+	"cherry-pick": true,
+	"rebase":      true,
 }
 
 // splitSimpleCommands splits on the shell's command separators.
