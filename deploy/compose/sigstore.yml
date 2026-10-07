@@ -103,19 +103,20 @@ x-openssl-image: &openssl-image
 x-jwt-issuer: &jwt-issuer ${INNSEGL_SPIRE_JWT_ISSUER:?set it to the issuer BOTH stacks use - http://spire-oidc:8080 for the compose default; spire.yml must be brought up with the same value or Fulcio will reject every JWT-SVID. `make sigstore-up` does this for you}
 
 # ----------------------------------------------------------------------------
-# The Fulcio CA key password. Declared once, as an anchor, because it is used
-# in two places — the bootstrapper that encrypts the key and the fulcio flag
-# that decrypts it — and two copies of a default is how they come to disagree.
+# The Fulcio CA key password: NOT IN THIS FILE (#533, ADR-0075).
 #
-# NOT A SECRET BOUNDARY, and saying so is the point of writing it here. The
-# password and the key it protects live in the same compose project, and this
-# value ends up on fulcio's command line where `docker inspect` will show it.
-# What protects the CA key is the mount table: one writer, one reader,
-# read-only. The password exists because `fileca` expects an encrypted PKCS#8
-# key, and because a plaintext CA key on a volume invites being copied
-# somewhere it is not.
+# It used to be, with a default every reader of this repository had, and it
+# reached Fulcio as a command-line value that `docker inspect` showed. Now
+# sigstore-bootstrap generates one per host into the CA's own trust volume
+# (ca.pass) and writes Fulcio's config file (serve.yaml) from it; Fulcio reads
+# that with `--config`. sigstore/ca-lib.sh says why a config file: the Fulcio
+# image is distroless, so nothing in it can read a file and exec Fulcio with
+# the value.
+#
+# INNSEGL_FULCIO_CA_PASSWORD is still passed to the bootstrap, empty unless
+# set, for one reason: an existing host whose key is locked with a password
+# of its own has it there, and the bootstrap moves it into ca.pass once.
 # ----------------------------------------------------------------------------
-x-fulcio-ca-password: &fulcio-ca-password ${INNSEGL_FULCIO_CA_PASSWORD:-innsegl-compose-ca}
 
 # Trillian's throwaway database, inside a throwaway container, on an internal
 # network no client of the log can reach. These are upstream's compose
@@ -155,9 +156,12 @@ services:
       - no-new-privileges:true
     environment:
       INNSEGL_SPIRE_JWT_ISSUER: *jwt-issuer
-      INNSEGL_FULCIO_CA_PASSWORD: *fulcio-ca-password
+      # Read once, to move an existing host's password into ca.pass. No
+      # default: see the note above the services.
+      INNSEGL_FULCIO_CA_PASSWORD: ${INNSEGL_FULCIO_CA_PASSWORD:-}
     volumes:
       - ./sigstore/bootstrap.sh:/bootstrap.sh:ro
+      - ./sigstore/ca-lib.sh:/ca-lib.sh:ro
       - ./sigstore/fulcio-config.yaml:/in/fulcio-config.yaml:ro
       - sigstore-fulcio-pki:/out/fulcio
       - sigstore-rekor-key:/out/rekor
@@ -210,8 +214,9 @@ services:
       - "--ca=fileca"
       - "--fileca-cert=/etc/fulcio/ca.crt"
       - "--fileca-key=/etc/fulcio/ca.key"
-      - "--fileca-key-passwd"
-      - *fulcio-ca-password
+      # The key's password, from the file the bootstrap writes: Fulcio's own
+      # config file, so the value is never an argument (#533).
+      - "--config=/etc/fulcio/serve.yaml"
       # See "WHY THERE IS NO CT LOG" above. Empty is the off switch; the flag's
       # default is http://localhost:6962/test, so omitting it is not off.
       - "--ct-log-url="
@@ -228,8 +233,9 @@ services:
       - "127.0.0.1:${INNSEGL_FULCIO_PORT:-5555}:5555"
     volumes:
       # Read-only, and the whole of Fulcio's secret state: the CA certificate,
-      # the encrypted CA key, and the rendered issuer config. Only
-      # sigstore-bootstrap ever mounts this rw.
+      # the encrypted CA key, its password file and serve.yaml, and the
+      # rendered issuer config. Only sigstore-bootstrap, and the rotation's
+      # one-shot helper (scripts/ca-rotate.sh), ever mount this rw.
       - sigstore-fulcio-pki:/etc/fulcio:ro
     read_only: true
     security_opt:
@@ -599,8 +605,11 @@ volumes:
   # exist first, and compose will not create an external volume.
   # ---------------------------------------------------------------------
 
-  # The Fulcio CA certificate, its encrypted key, and the rendered issuer
-  # config. MOUNTED BY: sigstore-bootstrap (rw), fulcio (ro).
+  # The Fulcio CA certificate, its encrypted key and that key's password
+  # (ca.pass, serve.yaml), the rendered issuer config, and archive/, where a
+  # rotation keeps every earlier CA. MOUNTED BY: sigstore-bootstrap (rw),
+  # fulcio (ro), and scripts/ca-rotate.sh's one-shot helper (rw) during a
+  # rotation.
   sigstore-fulcio-pki:
     name: ${INNSEGL_TRUST_FULCIO_PKI_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-sigstore}_sigstore-fulcio-pki}
     external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}

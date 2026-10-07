@@ -37,33 +37,45 @@
 #                                 environment expansion and the issuer must
 #                                 match spire-server's `jwt_issuer` exactly.
 #
+#   /out/fulcio/ca.pass           The CA key's password, generated on this
+#   /out/fulcio/serve.yaml        host, and Fulcio's config file carrying it
+#                                 (#533, ADR-0075). ca-lib.sh says why a file
+#                                 and not a command-line value.
+#
 # IDEMPOTENT, AND ASYMMETRICALLY SO. The keys are generated once and then left
-# alone forever — `docker compose down -v` is the only way to rotate them, and
-# that is deliberate. The config is re-rendered on every run, because the
-# issuer is the one input an operator legitimately changes and a stale rendered
-# copy would mean Fulcio silently disagreeing with SPIRE about who the issuer
-# is.
+# alone: a CA is replaced only by `make innsegl-ca-rotate`
+# (runbooks/trust-rotation.md), which keeps the old root in the trust
+# history. The config is re-rendered on every run, because the issuer is the
+# one input an operator legitimately changes and a stale rendered copy would
+# mean Fulcio silently disagreeing with SPIRE about who the issuer is.
+#
+# THE CA PASSWORD, ON AN EXISTING HOST. Before #533 the password came from
+# INNSEGL_FULCIO_CA_PASSWORD, and the compose file defaulted it to a value
+# anyone could read. So the first run of this version moves a host onto a
+# password file, with no step for the operator:
+#   - ca.pass exists: it is the password. The variable is no longer read.
+#   - the variable is set: ca.pass is written from it, once, after checking it
+#     opens the key.
+#   - neither, and the key opens with the old public default: the key is
+#     re-locked under a generated password (ca-lib.sh, ca_relock).
+#   - neither, and it does not: refused, naming the variable to set once.
+#   - no key yet: a password is generated, then the key.
 
 set -eu
 
 FULCIO_OUT=/out/fulcio
 REKOR_OUT=/out/rekor
 CONFIG_IN=/in/fulcio-config.yaml
+CA_LIB=/ca-lib.sh
 
 # Both Sigstore images run as uid 65532 (`docker inspect ghcr.io/sigstore/
 # fulcio`, `.../rekor-server`). Docker creates a fresh named volume root-owned,
 # so what those two must read is chowned here rather than by running them as
-# root.
+# root. ca-lib.sh holds the same pair, and the CA's 10-year lifetime: the
+# certificates it issues are ten minutes long, because Fulcio hard-codes that
+# and short-lived certificates are the whole point of the design.
 RUN_UID=65532
 RUN_GID=65532
-
-# 10 years. These are compose credentials whose entire lifecycle is
-# `docker compose down -v`; a short lifetime would buy nothing and would break
-# long-lived local stacks in a way that looks like a Sigstore bug. Note this is
-# the *CA's* lifetime — the certificates it issues are ten minutes long,
-# because Fulcio hard-codes that and short-lived certificates are the whole
-# point of the design.
-DAYS=3650
 
 # The placeholder the template carries. Substituted by exact string match
 # rather than by `sed`, because the replacement is a URL: every sed delimiter
@@ -83,58 +95,82 @@ case "${INNSEGL_SPIRE_JWT_ISSUER}" in
   http://*|https://*) : ;;
   *) fail "INNSEGL_SPIRE_JWT_ISSUER must be an http(s) URL, got: ${INNSEGL_SPIRE_JWT_ISSUER}" ;;
 esac
-[ -n "${INNSEGL_FULCIO_CA_PASSWORD:-}" ] \
-  || fail 'INNSEGL_FULCIO_CA_PASSWORD is empty; fileca requires an encrypted key'
 [ -r "${CONFIG_IN}" ] || fail "${CONFIG_IN} is not readable; check the bind mount"
+[ -r "${CA_LIB}" ] || fail "${CA_LIB} is not readable; check the bind mount"
+# shellcheck source=ca-lib.sh
+. "${CA_LIB}"
 
 mkdir -p "${FULCIO_OUT}" "${REKOR_OUT}"
 
 # ---------------------------------------------------------------------------
-# The Fulcio CA.
+# The Fulcio CA, and its password.
 #
 # ECDSA P-256, matching spire/bootstrap.sh's choice throughout and Fulcio's own
-# ephemeral CA. Fulcio runs the loaded key through sigstore's `goodkey`
-# validator, which accepts P-256/384/521 and RSA 2048-4096; P-256 is the one
-# every part of this stack already speaks.
-#
-# The three extensions are not decoration — Fulcio's ca.VerifyCertChain checks
-# all of them at startup and refuses to serve if any is missing:
-#   basicConstraints CA:TRUE    "certificate is not a CA"
-#   keyUsage keyCertSign        needed to sign the leaves it will issue
-#   extendedKeyUsage codeSigning
-#                               VerifyCertChain calls x509.Verify with
-#                               KeyUsages=[CodeSigning]; without it the root
-#                               fails to verify against itself.
-#
-# The key is written as an ENCRYPTED PKCS#8 blob because that is what `fileca`
-# expects (sigstore/pkg/cryptoutils handles "ENCRYPTED PRIVATE KEY"). See the
-# password's comment in sigstore.yml for what that encryption is and is not
-# protecting.
+# ephemeral CA; ca-lib.sh's ca_generate says which extensions Fulcio checks.
+# The key is an ENCRYPTED PKCS#8 blob because that is what `fileca` expects.
+# Its password is this host's own (see the header): the encryption protects a
+# copy of ca.key that travels without ca.pass. What protects the key on the
+# volume is still the mount table: one writer, one reader, read-only.
 # ---------------------------------------------------------------------------
-if [ -s "${FULCIO_OUT}/ca.key" ] && [ -s "${FULCIO_OUT}/ca.crt" ]; then
-  log 'Fulcio CA already present; leaving it alone (rotating it would invalidate every certificate issued so far)'
+CA_KEY="${FULCIO_OUT}/ca.key"
+CA_CRT="${FULCIO_OUT}/ca.crt"
+CA_PASS="${FULCIO_OUT}/ca.pass"
+NL='
+'
+
+ca_finish_relock "${FULCIO_OUT}"
+
+# An existing host whose password is in the environment: move it into the file.
+if [ ! -s "${CA_PASS}" ] && [ -n "${INNSEGL_FULCIO_CA_PASSWORD:-}" ]; then
+  if [ "${INNSEGL_FULCIO_CA_PASSWORD}" = "${CA_LEGACY_PUBLIC_PASSWORD}" ]; then
+    log 'INNSEGL_FULCIO_CA_PASSWORD is the public default earlier releases shipped; it is not adopted'
+  else
+    case "${INNSEGL_FULCIO_CA_PASSWORD}" in
+      *"${NL}"*) fail 'INNSEGL_FULCIO_CA_PASSWORD holds a line break; a password file holds one line' ;;
+    esac
+    if [ -s "${CA_KEY}" ] && ! ca_opens "${CA_KEY}" env:INNSEGL_FULCIO_CA_PASSWORD; then
+      fail 'INNSEGL_FULCIO_CA_PASSWORD does not open the CA key; nothing was written. Set it to the password the key is locked with.'
+    fi
+    (umask 077 && printf '%s\n' "${INNSEGL_FULCIO_CA_PASSWORD}" > "${CA_PASS}.tmp") \
+      || fail "could not write ${CA_PASS}"
+    chmod 0400 "${CA_PASS}.tmp"
+    mv "${CA_PASS}.tmp" "${CA_PASS}"
+    log 'moved the CA password from INNSEGL_FULCIO_CA_PASSWORD into the trust volume (ca.pass); the variable is no longer read and can be removed from .env'
+  fi
+fi
+
+if [ ! -s "${CA_PASS}" ]; then
+  if [ ! -s "${CA_KEY}" ]; then
+    log 'generating this host'"'"'s CA password'
+    ca_new_password "${CA_PASS}"
+  elif ca_opens_legacy "${CA_KEY}"; then
+    log 'the CA key is locked with the public default earlier releases shipped; re-locking it with a password of this host'"'"'s own'
+    ca_relock "${FULCIO_OUT}" env:CA_LEGACY_PUBLIC_PASSWORD
+    log 'CA key re-locked: same key, new password, and the old one no longer opens it'
+  else
+    fail 'the CA key exists, but there is no ca.pass beside it and INNSEGL_FULCIO_CA_PASSWORD is not set. Set INNSEGL_FULCIO_CA_PASSWORD once, to the password the key is locked with, and run this again; it is then moved into ca.pass.'
+  fi
+elif [ -n "${INNSEGL_FULCIO_CA_PASSWORD:-}" ] \
+  && [ "$(head -n 1 "${CA_PASS}")" != "${INNSEGL_FULCIO_CA_PASSWORD}" ]; then
+  log 'INNSEGL_FULCIO_CA_PASSWORD is set and differs from ca.pass; ca.pass is the password and the variable is ignored. Remove it from .env.'
+fi
+
+if [ -s "${CA_KEY}" ] && [ -s "${CA_CRT}" ]; then
+  log 'Fulcio CA already present; leaving it alone (make innsegl-ca-rotate is how a CA is replaced)'
 else
   log 'generating the Fulcio CA'
-  work=$(mktemp -d)
-  openssl ecparam -name prime256v1 -genkey -noout -out "${work}/ca.plain.key"
-  openssl req -x509 -new -key "${work}/ca.plain.key" -sha256 -days "${DAYS}" \
-    -subj '/O=Innsegl/CN=innsegl.dev Fulcio CA (compose)' \
-    -addext 'basicConstraints=critical,CA:TRUE,pathlen:1' \
-    -addext 'keyUsage=critical,keyCertSign,cRLSign' \
-    -addext 'extendedKeyUsage=codeSigning' \
-    -out "${work}/ca.crt"
-  # -v2 aes-256-cbc: PBES2/PBKDF2-HMAC-SHA256, which is what Fulcio's PKCS#8
-  # reader understands. The legacy PBE algorithms it would otherwise pick are
-  # not accepted there.
-  INNSEGL_FULCIO_CA_PASSWORD="${INNSEGL_FULCIO_CA_PASSWORD}" \
-    openssl pkcs8 -topk8 -v2 aes-256-cbc \
-      -in "${work}/ca.plain.key" -out "${work}/ca.key" \
-      -passout env:INNSEGL_FULCIO_CA_PASSWORD
-  mv "${work}/ca.crt" "${FULCIO_OUT}/ca.crt"
-  mv "${work}/ca.key" "${FULCIO_OUT}/ca.key"
-  rm -rf "${work}"
+  ca_generate "${FULCIO_OUT}" "${CA_PASS}"
   log 'Fulcio CA written'
 fi
+
+ca_opens "${CA_KEY}" "file:${CA_PASS}" \
+  || fail 'the CA key does not open with ca.pass; nothing was changed. Restore the pair from the trust-key backup.'
+# ca.pass itself holding the public default: re-lock, the same as above.
+if ca_opens_legacy "${CA_KEY}"; then
+  log 'ca.pass is the public default earlier releases shipped; re-locking the key'
+  ca_relock "${FULCIO_OUT}" "file:${CA_PASS}"
+fi
+ca_render_serve_config "${CA_PASS}" "${FULCIO_OUT}/serve.yaml"
 
 # ---------------------------------------------------------------------------
 # The transparency log's signing key.
@@ -191,11 +227,10 @@ fi
 # /api/v1/rootCert. Private keys are 0400 and owned by the uid that must read
 # them.
 # ---------------------------------------------------------------------------
-chmod 0644 "${FULCIO_OUT}/ca.crt" "${FULCIO_OUT}/config.yaml"
-chmod 0400 "${FULCIO_OUT}/ca.key" "${REKOR_OUT}/log.key"
-chown "${RUN_UID}:${RUN_GID}" \
-  "${FULCIO_OUT}/ca.crt" "${FULCIO_OUT}/ca.key" "${FULCIO_OUT}/config.yaml" \
-  "${REKOR_OUT}/log.key"
+chmod 0644 "${FULCIO_OUT}/config.yaml"
+chmod 0400 "${REKOR_OUT}/log.key"
+chown "${RUN_UID}:${RUN_GID}" "${FULCIO_OUT}/config.yaml" "${REKOR_OUT}/log.key"
+ca_own "${FULCIO_OUT}"
 
 log 'ready'
 printf 'sigstore-bootstrap: Fulcio CA subject and validity:\n'
