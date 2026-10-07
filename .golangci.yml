@@ -11,6 +11,10 @@ run:
   # Tests are production artefacts here — the TDD mandate makes them the
   # specification — so they are linted like everything else.
   tests: true
+  # test/failure and test/smoke build only with this tag, so a plain
+  # `go test ./...` can never reach them; lint must still see them.
+  build-tags:
+    - destructive
   timeout: 5m
 
 linters:

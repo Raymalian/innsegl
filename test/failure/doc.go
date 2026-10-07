@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build destructive
+
 // Package failure holds the cross-component failure-injection suite: the
 // layer-F cases of doc 07 that cannot live inside the package they are about,
 // because proving them means pulling a dependency out from under it.
