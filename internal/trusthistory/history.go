@@ -24,7 +24,9 @@
 //
 // Save is the only writer. It refuses a history that drops, reorders or
 // alters an entry the file already holds. The one change it allows to an
-// existing entry is setting `retired_at` or `revoked_at` where it was unset.
+// existing entry is setting `retired_at` or `revoked_at`, and
+// `retired_reason`, where it was unset (ADR-0075). End is how a rotation
+// sets them.
 //
 // # What the verifier does with it
 //
@@ -324,7 +326,8 @@ func appendOnly(old, next *History) error {
 			!sameTime(o.LostAt, n.LostAt) || o.Reason != n.Reason {
 			return fmt.Errorf("%w: entry %d (%s %s) would change", ErrRewrite, i, o.Kind, o.KeyID)
 		}
-		if !endKept(o.RetiredAt, n.RetiredAt) || !endKept(o.RevokedAt, n.RevokedAt) {
+		if !endKept(o.RetiredAt, n.RetiredAt) || !endKept(o.RevokedAt, n.RevokedAt) ||
+			(o.RetiredReason != "" && o.RetiredReason != n.RetiredReason) {
 			return fmt.Errorf("%w: entry %d (%s %s) would lose or move an end date",
 				ErrRewrite, i, o.Kind, o.KeyID)
 		}
