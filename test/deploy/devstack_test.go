@@ -556,3 +556,43 @@ func markerSays(t *testing.T, root string) string {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// A release that adds a trust volume must not break the next `make update`
+// (#533): compose will not create an external volume, and only sigstore-up
+// used to ensure them, so an update on an existing host failed with
+// `external volume "innsegl-trust-history" not found`. Both targets the update
+// path runs -- rekor-log-up, then innsegl-here-services -- must ensure the
+// trust volumes before their first `up`, live and dev alike, and ensure the
+// whole set `trust-volumes.sh names` lists.
+func TestUpdatePathEnsuresTrustVolumesBeforeUp(t *testing.T) {
+	root := repoRoot(t)
+	for _, mode := range []string{"live", "dev"} {
+		for _, target := range []string{"rekor-log-up", "innsegl-here-services"} {
+			out := makeDryRun(t, mode, target)
+			ensure := strings.Index(out, "deploy/compose/trust-volumes.sh ensure")
+			up := strings.Index(out, " up -d")
+			if up < 0 {
+				t.Fatalf("%s (%s): the dry run never reaches an `up -d`:\n%s", target, mode, out)
+			}
+			if ensure < 0 || ensure > up {
+				t.Errorf("%s (%s) runs `up -d` without first ensuring the trust volumes:\n%s", target, mode, out)
+			}
+		}
+	}
+
+	// The set ensure covers is the set compose declares external.
+	cmd := exec.CommandContext(t.Context(), filepath.Join(root, "deploy", "compose", "trust-volumes.sh"), "names")
+	cmd.Dir = root
+	cmd.Env = stackEnv(t.TempDir(), "live")
+	names, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("trust-volumes.sh names: %v", err)
+	}
+	got := strings.Fields(string(names))
+	sort.Strings(got)
+	want := append([]string(nil), liveTrustVolumes...)
+	sort.Strings(want)
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("trust-volumes.sh names = %v; the compose files expect %v", got, want)
+	}
+}
