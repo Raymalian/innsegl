@@ -153,6 +153,9 @@ var commands = map[string]command{
 	"connect": {summary: "enrol this machine with an innsegl core and point Claude Code at it", exec: connectCommand},
 	"status":  {summary: "say what is up and down between this machine and its core, and this machine's scope", exec: statusCommand},
 	"client":  {summary: "the enrolled machine's local endpoint: forward to the core over its certificate", exec: clientCommand},
+	// ADR-0074: the encrypted trust-key backup. `create` runs on the core;
+	// `fetch` and `drill` on the operator's machine.
+	"trust-backup": {summary: "write, fetch or test-open the encrypted backup of the deployment's trust keys", exec: trustBackupCommand},
 }
 
 // run dispatches args (os.Args[1:]) and returns the process exit code. It

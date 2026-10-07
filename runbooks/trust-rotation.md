@@ -62,6 +62,10 @@ docker inspect -f '{{json .Config.Cmd}}' innsegl-sigstore-fulcio
 `--fileca-key-passwd`, run `make update` first. That moves the host onto its
 own CA password (ADR-0075) and recreates Fulcio.
 
+Once `ca.pass` exists, `INNSEGL_FULCIO_CA_PASSWORD` is no longer read.
+Remove its line from `deploy/compose/.env`; the password lives on in the
+CA volume and in its backups.
+
 ### 3. Pause agents
 
 Stop new agent sessions for a few minutes. Two reasons:

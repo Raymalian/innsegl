@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/client/clienttest"
+	"innsegl.dev/innsegl/internal/trustbackup"
 )
 
 // statusFixture is an enrolled machine whose core answers status with
@@ -126,5 +130,53 @@ func TestStatusShowsTheTrustWatchsProblems(t *testing.T) {
 	}
 	if !regexp.MustCompile(`trust +WARN +sentinel 6e55aa .*since 2026-10-06T09:00:00Z`).MatchString(out.String()) {
 		t.Errorf("stdout has no WARN line for the sentinel:\n%s", out.String())
+	}
+}
+
+// ADR-0074: status says how old the newest local copy of the trust-key
+// backup is, and warns when it is missing or more than two days old. A
+// warning, not an outage: the exit status does not change.
+func TestStatusSaysHowOldTheLocalTrustBackupIs(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	keep := func(t *testing.T, deps statusDeps, created time.Time) {
+		t.Helper()
+		st := &trustbackup.Store{Dir: client.ClientPaths(deps.home).TrustBackups, Keep: 5}
+		body := "ciphertext"
+		h := sha256.Sum256([]byte(body))
+		name := "trust-backup-" + created.UTC().Format("20060102T150405Z") + ".tar.age"
+		if _, err := st.Put(name, strings.NewReader(body), hex.EncodeToString(h[:])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(t *testing.T, deps statusDeps) string {
+		t.Helper()
+		deps.now = func() time.Time { return now }
+		var out, errOut bytes.Buffer
+		if code := runStatus(t.Context(), nil, &out, &errOut, deps); code != exitOK {
+			t.Fatalf("exit %d; stderr:\n%s", code, errOut.String())
+		}
+		return out.String()
+	}
+	trustLine := regexp.MustCompile(`(?m)^trust backup .*$`)
+	components := `[{"name":"ledger","up":true}]`
+
+	deps := statusFixture(t, components, true)
+	out := run(t, deps)
+	if l := trustLine.FindString(out); !strings.Contains(l, "WARN") || !strings.Contains(l, "no local copy") {
+		t.Fatalf("missing: %q\n%s", l, out)
+	}
+
+	deps = statusFixture(t, components, true)
+	keep(t, deps, now.Add(-5*time.Hour))
+	out = run(t, deps)
+	if l := trustLine.FindString(out); strings.Contains(l, "WARN") || !strings.Contains(l, "5h") {
+		t.Fatalf("fresh: %q\n%s", l, out)
+	}
+
+	deps = statusFixture(t, components, true)
+	keep(t, deps, now.Add(-73*time.Hour))
+	out = run(t, deps)
+	if l := trustLine.FindString(out); !strings.Contains(l, "WARN") || !strings.Contains(l, "3 days") {
+		t.Fatalf("stale: %q\n%s", l, out)
 	}
 }

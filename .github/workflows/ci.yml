@@ -47,7 +47,7 @@ jobs:
       - name: go build
         run: go build ./...
       - name: go vet
-        run: go vet ./...
+        run: go vet -tags destructive ./...
 
   test:
     name: test (race)
@@ -100,6 +100,10 @@ jobs:
         # compose stack now namespaces its project per test process
         # (RM-065, #81), so concurrent packages are the thing under test
         # rather than a hazard the runner has to be slowed down to avoid.
+        # The destructive packages build only with this tag (test/deploy
+        # destructivetag_test.go); a CI runner is the one place they belong.
+        env:
+          INNSEGL_TEST_FLAGS: -tags=destructive
         run: ./scripts/test-no-skips.sh
       # A Go skip exits zero, and `go test` without -v prints no SKIP line for a
       # subtest — so a skipped VER-001 is invisible in this log. Docker is
@@ -642,7 +646,7 @@ jobs:
           INNSEGL_SUITE_STACK="$(./scripts/test-suite.sh state)"
           export INNSEGL_SUITE_STACK
           PKGS="$(./scripts/test-suite.sh packages)"
-          go test ${PKGS} -race \
+          go test ${PKGS} -race -tags destructive \
             -covermode=atomic \
             -coverpkg=./... \
             -coverprofile=cover.out

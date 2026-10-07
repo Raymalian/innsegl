@@ -171,7 +171,7 @@ change and needs the major-release procedure. It is deferred, not refused.
   with `revoked_at`.
 - The history is now irreplaceable. Losing it brings back 2026-09-16 for every
   rotated-away root. It is a trust volume for that reason, and it is in the
-  migration's volume table. Off-host backup of it is follow-up work.
+  migration's volume table. ADR-0074 backs it up off the host, encrypted.
 - `pre-history` can still be reached by a forgery that copies a lost root's
   Authority Key Identifier into a self-made CA, backdates the certificate and
   matches the trailer. Naming lost roots shrinks the label from "any unknown

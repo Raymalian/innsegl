@@ -43,7 +43,7 @@ import (
 // enrolled client machine: enrolment, and the service that holds its key.
 var documentedSubcommands = []string{
 	"accounts", "admin-credential", "api", "canary", "client", "connect", "git-hook", "hook", "init", "link", "migrate-schema",
-	"reap", "reconcile", "retire", "seal", "serve", "sign", "status", "trust-history", "verify",
+	"reap", "reconcile", "retire", "seal", "serve", "sign", "status", "trust-backup", "trust-history", "verify",
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {
