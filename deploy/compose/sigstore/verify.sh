@@ -149,7 +149,9 @@ cert_extension() {
   openssl x509 -in "$1" -noout -text 2>/dev/null \
     | awk -v want="$2" '
         index($0, want) > 0 { grabbing = 1; print; next }
-        grabbing && /^ +[A-Za-z0-9]/ && !/^ {16}/ { grabbing = 0 }
+        # substr, not a regex repeat count: mawk 20200120 (Debian 12, Ubuntu 22.04)
+        # reads a regex interval as literal braces (OPS-134).
+        grabbing && /^ +[A-Za-z0-9]/ && substr($0, 1, 16) != "                " { grabbing = 0 }
         grabbing { print }
       '
 }
