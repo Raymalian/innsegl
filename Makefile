@@ -25,7 +25,8 @@ COVERPROFILE := cover.out
         sigstore-up rekor-log-up rekor-index-ready sigstore-verify sigstore-down rekor-tlog-id rekor-reindex \
         innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
-        innsegl-trust-volumes innsegl-ca-custody-init test-ids \
+        innsegl-trust-volumes innsegl-ca-custody-init innsegl-ca-rotate innsegl-ca-rollback \
+        fulcio-file-ca-up test-ids \
         innsegl-stack-clean innsegl-up-here verify-branch \
         install-hooks \
         verify-branch-selftest start backup-freshness update innsegl-here-services link clean \
@@ -237,6 +238,25 @@ rekor-log-up: innsegl-trust-volumes
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
 	  $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d trillian-db trillian-log-server trillian-log-signer rekor
 	@$(MAKE) --no-print-directory rekor-index-ready
+
+# fulcio-file-ca-up: Fulcio brought up again from sigstore.yml, for
+# `make update`, on a host that runs the file CA. #533 changed how Fulcio
+# gets its CA key's password: from serve.yaml, which the bootstrap writes,
+# instead of a command-line value. The bootstrap runs on every update (rekor
+# depends on it), and may re-lock a key that was on the old public default;
+# a Fulcio left on its old command line would then fail on its next restart.
+# So the update recreates it. Compose recreates only what changed, so on most
+# updates this does nothing. A host that runs Fulcio under
+# sigstore.keycustody.yml is left alone: an `up` of fulcio from sigstore.yml
+# alone would put the file CA back there (see rekor-log-up).
+fulcio-file-ca-up: innsegl-trust-volumes
+	@cmd=$$(docker inspect -f '{{json .Config.Cmd}}' $(STACK_PREFIX)-sigstore-fulcio 2>/dev/null); \
+	 case "$$cmd" in \
+	   *--ca=kmsca*) echo "make update: Fulcio runs under key custody; left as it is" ;; \
+	   *) INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	        INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
+	        $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d fulcio ;; \
+	 esac
 
 # rekor-index-ready: the log pinned and its search index complete, before
 # anything that verifies starts. sigstore-up and rekor-log-up both end here.
@@ -673,6 +693,7 @@ update:
 	 [ "$$deployed" = "$(DEPLOY_COMMIT)" ] && echo "make update: the core is $${core:-not there}; starting it again"; \
 	 echo "make update: deployed $${deployed:-an unrecorded checkout}, checkout is $(DEPLOY_COMMIT)"; \
 	 $(MAKE) --no-print-directory rekor-log-up && \
+	 $(MAKE) --no-print-directory fulcio-file-ca-up && \
 	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services && \
 	 mkdir -p "$$(dirname '$(DEPLOYED_FILE)')" && echo '$(DEPLOY_COMMIT)' > '$(DEPLOYED_FILE)'
 	@echo
@@ -721,6 +742,20 @@ innsegl-ca-custody-init:
 	@test '$(INNSEGL_STACK_MODE)' = live || { echo 'innsegl-ca-custody-init: key custody is for a live core; a DEV stack keeps the file CA (ADR-0072)'; exit 2; }
 	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store
 	@scripts/ca-custody.sh init
+
+## innsegl-ca-rotate: replace the Fulcio CA; the old root stays trusted for what
+##   it signed. CONFIRM=rotate MODE=retire|revoke REASON='...'
+##   [BACKUP_MAX_AGE_HOURS=N]. Read runbooks/trust-rotation.md first.
+innsegl-ca-rotate:
+	@INNSEGL_STACK_PREFIX='$(STACK_PREFIX)' INNSEGL_STACK_MODE='$(INNSEGL_STACK_MODE)' \
+	  INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  INNSEGL_REKOR_PORT="$${INNSEGL_REKOR_PORT:-$$(scripts/rekor-port.sh)}" \
+	  scripts/ca-rotate.sh rotate
+
+## innsegl-ca-rollback: put an archived Fulcio CA back, keeping the current one
+##   in the archive. CONFIRM=rollback STAMP=<archive name>
+innsegl-ca-rollback:
+	@INNSEGL_STACK_PREFIX='$(STACK_PREFIX)' scripts/ca-rotate.sh rollback '$(STAMP)'
 
 ## install-hooks: refuse a commit that would track a local-only spec
 # The gate in CI is the enforcement; this is the fast answer. Hooks do not

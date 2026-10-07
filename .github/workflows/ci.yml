@@ -331,6 +331,17 @@ jobs:
       # because nothing had changed.
       - name: The default keeps its file CA, and the overlay hands the CA no key
         run: ./scripts/ca-custody-selftest.sh
+      # OPS-131 (#533): the shipped bootstrap, in the pinned openssl image,
+      # gives a fresh host its own CA password and moves an existing host onto
+      # one -- from the old variable, or by re-locking a key on the old public
+      # default -- with nothing to do by hand.
+      - name: Each host gets its own CA password, and an existing host is moved onto one
+        run: ./scripts/sigstore-bootstrap-selftest.sh
+      # OPS-132 (#533): the rotation's pre-flight, order and rollback, with
+      # fakes for docker, Fulcio and the core. The real chain is OPS-133 in
+      # internal/verify.
+      - name: The CA rotation refuses, rotates and rolls back as it says
+        run: ./scripts/ca-rotate-selftest.sh
 
   migrate:
     name: migrate to another host
