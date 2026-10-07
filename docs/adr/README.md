@@ -89,6 +89,7 @@ maintainer ask "why is it like this?"
 | [0071](0071-the-projects-mount-tools-are-deprecated-and-their-implementation-removed.md) | The projects-mount tools are deprecated and their implementation removed | accepted | 2026-10-05 |
 | [0072](0072-a-development-stack-is-never-the-live-one.md) | A development stack is never the live one | accepted | 2026-10-05 |
 | [0073](0073-trust-roots-are-kept-as-an-append-only-history.md) | Trust roots are kept as an append-only history | accepted | 2026-10-07 |
+| [0075](0075-each-host-has-its-own-ca-password-and-the-ca-rotates-by-script.md) | Each host has its own CA password, and the CA rotates by script | accepted | 2026-10-07 |
 
 ## Open items
 
