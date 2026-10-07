@@ -29,3 +29,24 @@ func TestRM189HealthResponseNamesNoRepository(t *testing.T) {
 		t.Errorf("the health response carries a %q field:\n%s", "repos", a.body)
 	}
 }
+
+// ADR-0073: the health response carries when each CA in use expires, so the
+// dashboard can warn a year and 90 days ahead. Always a list: empty when the
+// deployment has no trust history to read them from, never absent.
+func TestHealthCarriesTheTrustExpiries(t *testing.T) {
+	srv, _ := testServer(t)
+	a := get(t, srv.URL, "/api/v1/health")
+	var fields map[string]json.RawMessage
+	decodeBody(t, a, &fields)
+	if _, ok := fields["trust_problems"]; !ok {
+		t.Errorf("the health response carries no trust_problems:\n%s", a.body)
+	}
+	raw, ok := fields["trust_expiries"]
+	if !ok {
+		t.Fatalf("the health response carries no trust_expiries:\n%s", a.body)
+	}
+	var list []map[string]any
+	if err := json.Unmarshal(raw, &list); err != nil || list == nil {
+		t.Errorf("trust_expiries is not a list: %s", raw)
+	}
+}

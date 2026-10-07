@@ -261,6 +261,10 @@ type apiOptions struct {
 	// account page's connect command shows a placeholder for it.
 	gatewayCACert string
 
+	// trustHistory is the deployment's trust history (ADR-0073), read on
+	// every proof. Empty: the published root and log key only.
+	trustHistory string
+
 	// uiDir is the built dashboard UI (#475). Empty: the API alone.
 	uiDir string
 	// tlsListen and tlsCert are the dashboard's HTTPS listener and the
@@ -454,6 +458,9 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		gatewayCACert = fs.String("gateway-ca-cert", os.Getenv(envAPIGatewayCACert),
 			"the gateway's CA certificate ($"+envAPIGatewayCACert+"), whose fingerprint the account "+
 				"page's connect command pins. Optional")
+		trustHistory = fs.String("trust-history", os.Getenv(envTrustHistory),
+			"the deployment's trust history ($"+envTrustHistory+"): every Fulcio root and log key "+
+				"it has used (ADR-0073), read on every proof. Optional")
 		resolverDSN = fs.String("resolver-dsn", os.Getenv(envAPIResolverDSN),
 			"the RESOLVER connection string ($"+envAPIResolverDSN+") — internal/api.ResolverRole, "+
 				"which may insert an alert resolution and nothing else. Optional: without it the "+
@@ -498,6 +505,7 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		authDSN:       *authDSN, rpID: *rpID, rpOrigin: *rpOrigin, sessionLifetime: *sessionLifetime,
 		resolverDSN:   *resolverDSN,
 		gatewayCACert: *gatewayCACert,
+		trustHistory:  *trustHistory,
 		uiDir:         *uiDir, tlsListen: *tlsListen, tlsCert: *tlsCert,
 	}
 	if problem := o.validate(); problem != "" {

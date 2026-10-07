@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
+
+	"innsegl.dev/innsegl/internal/trusthistory"
+	"innsegl.dev/innsegl/internal/trustwatch"
 )
 
 // The HTTP surface, and why the method guard is the first thing in it.
@@ -99,6 +102,14 @@ type Health struct {
 	// Resolver is RM-330's own measured fact: what the resolver credential
 	// was proved able to do at start-up. Absent when none is configured.
 	Resolver *ResolverReport `json:"resolver,omitempty"`
+	// TrustExpiries is when each CA in use expires, read from the trust
+	// history (ADR-0073), with a warning a year and 90 days ahead. The roots
+	// are public certificates, so their dates are too. Empty when there is
+	// no history to read.
+	TrustExpiries []trusthistory.Expiry `json:"trust_expiries"`
+	// TrustProblems is what the trust watch's last pass found wrong, each
+	// with when it was first seen. Empty when it found nothing.
+	TrustProblems []trustwatch.Problem `json:"trust_problems"`
 }
 
 // AuthHealth is the sign-in surface's own share of GET /api/v1/health, which
@@ -414,6 +425,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if s.resolver != nil {
 		scope := s.resolver.Scope()
 		health.Resolver = &scope
+	}
+	health.TrustExpiries = s.prover.TrustExpiries(time.Now())
+	if health.TrustExpiries == nil {
+		health.TrustExpiries = []trusthistory.Expiry{}
+	}
+	health.TrustProblems = s.prover.TrustProblems()
+	if health.TrustProblems == nil {
+		health.TrustProblems = []trustwatch.Problem{}
 	}
 	writeJSON(w, http.StatusOK, health)
 }

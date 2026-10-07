@@ -13,9 +13,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"innsegl.dev/innsegl/internal/trusthistory"
+	"innsegl.dev/innsegl/internal/trustwatch"
 	"innsegl.dev/innsegl/internal/verify"
 )
 
@@ -90,6 +93,14 @@ type ProofConfig struct {
 	HTTPClient *http.Client
 	// Now is the clock, used only for timestamps in the response.
 	Now func() time.Time
+	// TrustHistoryFile is the deployment's trust history (ADR-0073): every
+	// Fulcio root and log key it has used. Read on EVERY proof, not once:
+	// the core appends to it at its own start, which on an update is the same
+	// moment this process starts, and a copy read before the seed would be
+	// answered from until the next restart. Empty: the published root and
+	// log key only. An absent file is the same, and says nothing; an
+	// unreadable one is said in the proof's notes.
+	TrustHistoryFile string
 }
 
 // RepoSource is where the BFF finds a repository's objects. The production
@@ -328,7 +339,8 @@ func (p *Prover) Prove(ctx context.Context, repo, revision string) (Proof, error
 	}
 
 	// The verdict, and nothing else, comes from here.
-	rep, verr := p.verifier.Verify(ctx, path, sha)
+	verifier, historyNote := p.verifierWithHistory()
+	rep, verr := verifier.Verify(ctx, path, sha)
 	if verr != nil {
 		if errors.Is(verr, verify.ErrRevision) {
 			return Proof{}, fmt.Errorf("%w: %s in %s: %w", ErrNotFound, revision, name, verr)
@@ -350,8 +362,67 @@ func (p *Prover) Prove(ctx context.Context, repo, revision string) (Proof, error
 		Notes:       rep.Notes,
 		DataAsOf:    p.now().UTC(),
 	}
+	if historyNote != "" {
+		out.Notes = append(out.Notes, historyNote)
+	}
 	out.Material, out.Upstreams = p.collect(ctx, object, sha, rep)
 	return out, nil
+}
+
+// loadHistory reads the trust history, if one is configured. nil with no
+// error is "none": no file configured, or none written yet.
+func (p *Prover) loadHistory() (*trusthistory.History, error) {
+	if p.cfg.TrustHistoryFile == "" {
+		return nil, nil
+	}
+	h, err := trusthistory.Load(p.cfg.TrustHistoryFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return h, err
+}
+
+// verifierWithHistory is the verifier for one proof: the configured one, given
+// the trust history as it is on disk now. A history that cannot be read
+// leaves the configured verifier, which trusts the published root and log key
+// alone: narrower, never wider. The note says so.
+func (p *Prover) verifierWithHistory() (*verify.Verifier, string) {
+	h, err := p.loadHistory()
+	if err != nil {
+		return p.verifier, "The trust history could not be read, so this verification " +
+			"used the published root and log key only (ADR-0073): " + err.Error()
+	}
+	if h == nil {
+		return p.verifier, ""
+	}
+	return p.verifier.WithHistory(h), ""
+}
+
+// TrustProblems is what the trust watch's last pass found wrong (ADR-0073),
+// read from beside the history: a sentinel that stopped verifying, a history
+// it could not read. Nil when there is no history or no pass has written one.
+func (p *Prover) TrustProblems() []trustwatch.Problem {
+	if p == nil || p.cfg.TrustHistoryFile == "" {
+		return nil
+	}
+	st, err := trustwatch.LoadStatus(filepath.Join(filepath.Dir(p.cfg.TrustHistoryFile), trustwatch.StatusFileName))
+	if err != nil {
+		return nil
+	}
+	return st.Problems
+}
+
+// TrustExpiries is when each CA in use expires, from the trust history, for
+// the dashboard's warning (ADR-0073). Nil when there is no history to read.
+func (p *Prover) TrustExpiries(now time.Time) []trusthistory.Expiry {
+	if p == nil {
+		return nil
+	}
+	h, err := p.loadHistory()
+	if err != nil || h == nil {
+		return nil
+	}
+	return trusthistory.Expiries(h, now)
 }
 
 // locate finds the repository holding revision and reads its commit object.

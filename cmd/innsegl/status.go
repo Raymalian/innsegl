@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/client"
+	"innsegl.dev/innsegl/internal/trusthistory"
 	"innsegl.dev/innsegl/internal/version"
 )
 
@@ -94,6 +95,19 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 			line("core", true, st.Version)
 			for _, c := range st.Components {
 				line(c.Name, c.Up, c.Detail)
+			}
+			// ADR-0073: a CA near expiry, or a sentinel that stopped
+			// verifying, is a WARN line. Neither is an outage, so neither
+			// changes the exit status.
+			for _, e := range st.TrustExpiries {
+				fmt.Fprintf(tw, "%s\t\texpires %s\n", e.Name, e.NotAfter.Format(time.DateOnly))
+				if e.Warning != trusthistory.WarningNone {
+					fmt.Fprintf(tw, "trust\tWARN\tthe %s %s on %s\n", e.Name, e.Warning,
+						e.NotAfter.Format(time.DateOnly))
+				}
+			}
+			for _, p := range st.TrustProblems {
+				fmt.Fprintf(tw, "trust\tWARN\t%s (since %s)\n", p.Text, p.Since.UTC().Format(time.RFC3339))
 			}
 			in := st.Installation
 			repos := strings.Join(in.Repos, ", ")

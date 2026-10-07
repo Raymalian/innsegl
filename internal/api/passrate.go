@@ -27,7 +27,7 @@ const recentProofTimeout = 15 * time.Second
 type RecentCommit struct {
 	Repo      string `json:"repo"`
 	CommitSHA string `json:"commit_sha"`
-	// Verdict is "verified", "failed" or "unavailable".
+	// Verdict is "verified", "failed" or "unavailable"; see passRateBucket.
 	Verdict string `json:"verdict"`
 }
 
@@ -90,12 +90,7 @@ func MeasureRecent(ctx context.Context, store *Store, prover *Prover, limit int)
 			if perr != nil {
 				return
 			}
-			switch verify.Verdict(proof.Verdict) {
-			case verify.VerdictVerified, verify.VerdictContentVerified:
-				c.Verdict = string(verify.VerdictVerified)
-			case verify.VerdictFailed, verify.VerdictUnattributed:
-				c.Verdict = string(verify.VerdictFailed)
-			}
+			c.Verdict = passRateBucket(verify.Verdict(proof.Verdict))
 		}(&commits[i])
 	}
 	wg.Wait()
@@ -115,6 +110,23 @@ func MeasureRecent(ctx context.Context, store *Store, prover *Prover, limit int)
 		}
 	}
 	return out, nil
+}
+
+// passRateBucket places a verdict in one of the pass rate's three buckets.
+//
+// A pre-history commit (ADR-0073) is "could not be checked": the evidence that
+// would settle it is gone. It is never verified, and it is not a failure,
+// because nothing in it was found wrong. Anything this function does not
+// know is also "could not be checked" rather than either of the others.
+func passRateBucket(v verify.Verdict) string {
+	switch v {
+	case verify.VerdictVerified, verify.VerdictContentVerified:
+		return string(verify.VerdictVerified)
+	case verify.VerdictFailed, verify.VerdictUnattributed:
+		return string(verify.VerdictFailed)
+	default:
+		return string(verify.VerdictUnavailable)
+	}
 }
 
 func (s *Server) handleRecentVerification(w http.ResponseWriter, r *http.Request) {

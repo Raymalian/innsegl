@@ -10,10 +10,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"innsegl.dev/innsegl/internal/accounts"
 	"innsegl.dev/innsegl/internal/gateway"
+	"innsegl.dev/innsegl/internal/trusthistory"
+	"innsegl.dev/innsegl/internal/trustwatch"
 	"innsegl.dev/innsegl/internal/version"
 )
 
@@ -27,6 +30,13 @@ type coreStatus struct {
 	Version      string           `json:"version"`
 	Components   []coreComponent  `json:"components"`
 	Installation coreInstallation `json:"installation"`
+	// TrustExpiries is when each CA in use expires (ADR-0073), read from the
+	// trust history. Absent when the core keeps none.
+	TrustExpiries []trusthistory.Expiry `json:"trust_expiries,omitempty"`
+	// TrustProblems is what the trust watch's last pass found wrong: a
+	// sentinel that stopped verifying, a history it could not read. Absent
+	// when it found nothing, or has not run.
+	TrustProblems []trustwatch.Problem `json:"trust_problems,omitempty"`
 }
 
 // coreComponent is one part of the core and whether it is up.
@@ -82,6 +92,8 @@ func statusHandler(store statusStore, log *serveLog) http.HandlerFunc {
 		if out.Installation.Repos == nil {
 			out.Installation.Repos = []string{}
 		}
+		out.TrustExpiries = coreTrustExpiries(os.Getenv(envTrustHistory), time.Now())
+		out.TrustProblems = coreTrustProblems(os.Getenv(envTrustHistory))
 		if list, lerr := store.ListAccounts(r.Context()); lerr == nil {
 			for _, a := range list {
 				if a.ID == inst.AccountID {
@@ -91,6 +103,33 @@ func statusHandler(store statusStore, log *serveLog) http.HandlerFunc {
 		}
 		writeCoreJSON(w, http.StatusOK, out)
 	}
+}
+
+// coreTrustExpiries reads the CAs in use from the trust history. A history
+// that is absent or unreadable gives none: the status answer is about what is
+// up, and the trust watch is what alerts on a damaged history.
+func coreTrustExpiries(path string, now time.Time) []trusthistory.Expiry {
+	if path == "" {
+		return nil
+	}
+	h, err := trusthistory.Load(path)
+	if err != nil {
+		return nil
+	}
+	return trusthistory.Expiries(h, now)
+}
+
+// coreTrustProblems reads the trust watch's last problems from beside the
+// history. None when there is no history or no pass has written one.
+func coreTrustProblems(historyPath string) []trustwatch.Problem {
+	if historyPath == "" {
+		return nil
+	}
+	st, err := trustwatch.LoadStatus(filepath.Join(filepath.Dir(historyPath), trustwatch.StatusFileName))
+	if err != nil || len(st.Problems) == 0 {
+		return nil
+	}
+	return st.Problems
 }
 
 // coreReadiness reads the core's own readiness checks (internal/mcp's
