@@ -83,6 +83,13 @@ export const strings = {
       meaning:
         "This commit carries no Agent-Identity trailer and no signature this system issued, so it claims nothing for a check to settle.",
     },
+    /* ADR-0073. Not a pass and not a failure: the CA and the log it was
+     * signed under were lost before the deployment kept a trust history. */
+    "pre-history": {
+      label: "Before trust history",
+      meaning:
+        "Signed before this deployment's trust history began; cannot be verified. The certificate authority and the transparency log it was signed under are gone, so nothing can prove it, and nothing in it was found wrong.",
+    },
   },
 
   /* One check's own result. Never collapsed into the rollup's (doc 06 §4.1). */
