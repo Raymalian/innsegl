@@ -26,7 +26,8 @@ COVERPROFILE := cover.out
         innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
         innsegl-trust-volumes innsegl-ca-custody-init innsegl-ca-rotate innsegl-ca-rollback \
-        fulcio-file-ca-up test-ids \
+        fulcio-file-ca-up test-ids ca-custody-up ca-custody-volumes ca-custody-ready \
+        ca-custody-stage ca-custody-switch ca-custody-back \
         innsegl-stack-clean innsegl-up-here verify-branch \
         install-hooks \
         verify-branch-selftest start backup-freshness update innsegl-here-services link clean \
@@ -782,6 +783,30 @@ ca-custody-volumes:
 	@docker run --rm -v innsegl-trust-ca-custody:/d $(CA_CUSTODY_CHOWN_IMAGE) chown 65532:65532 /d
 
 CA_CUSTODY_CHOWN_IMAGE = alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
+# The volume the store's root and Fulcio's issuer config live in under custody.
+CA_CUSTODY_KMS_VOLUME = $(STACK_PREFIX)-sigstore_sigstore-fulcio-kms
+
+# The steps `make innsegl-ca-rotate TO=custody` runs (scripts/ca-rotate.sh).
+## ca-custody-ready: exit 0 when the store is unlocked and the CA has a token
+ca-custody-ready:
+	@docker exec innsegl-ca-custodian innsegl ca-custodian ready
+
+## ca-custody-stage: mint the store's root, if there is none, and print it
+ca-custody-stage:
+	@$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) create --no-recreate innsegl-ca-bootstrap >&2
+	@docker run --rm -v $(CA_CUSTODY_KMS_VOLUME):/k $(CA_CUSTODY_CHOWN_IMAGE) chown 65532:65532 /k
+	@$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) run --rm --no-deps innsegl-ca-bootstrap >&2
+	@docker run --rm -v $(CA_CUSTODY_KMS_VOLUME):/k:ro $(CA_CUSTODY_CHOWN_IMAGE) cat /k/chain.pem
+
+## ca-custody-switch: Fulcio onto the store
+ca-custody-switch:
+	@INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  $(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d --no-deps fulcio >&2
+
+## ca-custody-back: Fulcio onto the file CA again, which custody left untouched
+ca-custody-back:
+	@INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d --no-deps fulcio >&2
 
 ## innsegl-ca-custody-init: once — start the store and mint its keys
 innsegl-ca-custody-init:
@@ -791,11 +816,13 @@ innsegl-ca-custody-init:
 
 ## innsegl-ca-rotate: replace the Fulcio CA; the old root stays trusted for what
 ##   it signed. CONFIRM=rotate MODE=retire|revoke REASON='...'
-##   [BACKUP_MAX_AGE_HOURS=N]. Read runbooks/trust-rotation.md first.
+##   [BACKUP_MAX_AGE_HOURS=N] [TO=custody]. Read runbooks/trust-rotation.md
+##   first; TO=custody moves Fulcio onto the CA key store (runbooks/ca-custody.md).
 innsegl-ca-rotate:
 	@INNSEGL_STACK_PREFIX='$(STACK_PREFIX)' INNSEGL_STACK_MODE='$(INNSEGL_STACK_MODE)' \
 	  INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_PORT="$${INNSEGL_REKOR_PORT:-$$(scripts/rekor-port.sh)}" \
+	  TO='$(TO)' \
 	  scripts/ca-rotate.sh rotate
 
 ## innsegl-ca-rollback: put an archived Fulcio CA back, keeping the current one

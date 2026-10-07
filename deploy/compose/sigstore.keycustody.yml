@@ -163,6 +163,9 @@ services:
       target: ca-bootstrap
     container_name: innsegl-ca-bootstrap
     restart: "no"
+    # The CA's uid (ADR-0076): it reads the CA's token, 0600, and writes the
+    # root Fulcio reads, 0600. As the image's own uid it could do neither.
+    user: "65532:65532"
     networks:
       - innsegl-ca-store
     environment:

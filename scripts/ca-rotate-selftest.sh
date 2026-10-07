@@ -160,6 +160,20 @@ cmp -s "${INNSEGL_SIGSTORE_VERIFY_ROOT}" "${FAKE}/next.pem"
 EOF
 chmod +x "${BIN}/docker" "${BIN}/curl" "${BIN}/proof"
 
+# ADR-0076's custody steps, as the Makefile targets the script runs.
+cat > "${BIN}/custody" <<'STUB'
+echo "custody $1" >> "${FAKE:?}/calls"
+case ",${FAKE_FAIL:-}," in *",custody-$1,"*) exit 1 ;; esac
+case "$1" in
+  ready)  [ -z "${FAKE_CUSTODY_NOT_READY:-}" ] ;;
+  stage)  cat "${FAKE}/next.pem" ;;
+  switch) cp "${FAKE}/next.pem" "${FAKE}/served.pem" ;;
+  back)   cp "${FAKE}/disk.pem" "${FAKE}/served.pem" ;;
+  *) exit 2 ;;
+esac
+STUB
+chmod +x "${BIN}/custody"
+
 # fresh: a new state directory, a running stack on root1, root1 in the history.
 fresh() {
   FAKE="$(mktemp -d "${TOP}/case.XXXXXX")"
@@ -300,6 +314,32 @@ rollback_with FAKE_STUCK=1 "${SCRIPT}" rollback "${stamp}"
 if [ "${CODE}" = 6 ]; then ok "Fulcio does not come back on the archived root: exit 6"; else bad "Fulcio does not come back on the archived root: exit 6" "exit ${CODE}: ${OUT}"; fi
 fresh; rollback_with FAKE_FAIL=archive "${SCRIPT}" rollback whatever
 if [ "${CODE}" = 3 ] && disk_is root1; then ok "the current CA cannot be kept: refused, nothing changed"; else bad "the current CA cannot be kept: refused, nothing changed" "exit ${CODE}: ${OUT}"; fi
+
+
+echo "OPS-152 — TO=custody: onto the CA key store (ADR-0076)"
+custody() {
+  OUT="$(env PATH="${BIN}:${PATH}" INNSEGL_ROTATE_PROOF_CMD="${BIN}/proof" \
+    INNSEGL_ROTATE_WAIT_TRIES=2 INNSEGL_ROTATE_POLL_SECONDS=0 \
+    INNSEGL_ROTATE_CUSTODY_CMD="${BIN}/custody" \
+    CONFIRM=rotate TO=custody MODE=retire REASON='CA key custody' FAKE_FAIL='' "$@" \
+    "${SCRIPT}" rotate 2>&1)"
+  CODE=$?
+}
+custody_touched() { grep -qE '^custody (stage|switch|back)|^history (end|record)|^helper (archive|stage|swap)' "${FAKE}/calls"; }
+fresh; custody TO=elsewhere
+if [ "${CODE}" = 2 ] && ! custody_touched; then ok "TO names something else: usage, nothing touched"; else bad "TO names something else: usage, nothing touched" "exit ${CODE}: ${OUT}"; fi
+fresh; custody FAKE_CUSTODY_NOT_READY=1
+if [ "${CODE}" = 3 ] && ! custody_touched && served_is root1 && history_untouched; then ok "the custodian not ready: refused, nothing touched"; else bad "the custodian not ready: refused, nothing touched" "exit ${CODE}: ${OUT}"; fi
+fresh; custody
+if [ "${CODE}" = 0 ] && served_is root2; then ok "Fulcio serves the store's root"; else bad "Fulcio serves the store's root" "exit ${CODE}: ${OUT}"; fi
+if disk_is root1 && ! grep -qE '^helper (archive|stage|swap)' "${FAKE}/calls"; then ok "the file CA is left as it was, for the way back"; else bad "the file CA is left as it was, for the way back"; fi
+if grep -q "^$(fp "${TOP}/root1.pem") retire|.*|CA key custody$" "${FAKE}/history" && grep -q "^$(fp "${TOP}/root2.pem") current$" "${FAKE}/history"; then ok "the file CA's era is retired and the store's root recorded"; else bad "the file CA's era is retired and the store's root recorded" "$(cat "${FAKE}/history")"; fi
+fresh; custody FAKE_FAIL=proof
+if [ "${CODE}" = 5 ] && served_is root1 && history_untouched && grep -q '^custody back' "${FAKE}/calls"; then ok "the proof fails: back on the file CA, history untouched, exit 5"; else bad "the proof fails: back on the file CA, history untouched, exit 5" "exit ${CODE}: ${OUT}"; fi
+fresh; custody FAKE_FAIL=custody-stage
+if [ "${CODE}" = 4 ] && served_is root1 && history_untouched && ! grep -q '^custody switch' "${FAKE}/calls"; then ok "no root from the store: nothing switched, exit 4"; else bad "no root from the store: nothing switched, exit 4" "exit ${CODE}: ${OUT}"; fi
+fresh; custody FAKE_FAIL=proof,custody-back
+if [ "${CODE}" = 6 ]; then ok "the proof fails and the way back too: exit 6"; else bad "the proof fails and the way back too: exit 6" "exit ${CODE}: ${OUT}"; fi
 
 echo "the command line"
 OUT="$(env PATH="${BIN}:${PATH}" "${SCRIPT}" 2>&1)"; CODE=$?
