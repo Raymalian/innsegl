@@ -20,6 +20,8 @@ Pause agents first (pre-flight step 3).
 
 This rotates a **file CA** only. A host running Fulcio under key custody
 (`sigstore.keycustody.yml`) is refused; see the gaps at the end.
+`TO=custody` moves a file CA onto the CA key store instead
+(`runbooks/ca-custody.md`, ADR-0076).
 
 ## Pre-flight
 
