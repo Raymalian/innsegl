@@ -1698,7 +1698,7 @@ services:
       - --path
       - fulcio-pki=/in/fulcio-pki
       - --value
-      - fulcio-ca-password=INNSEGL_FULCIO_CA_PASSWORD
+      - fulcio-ca-password=INNSEGL_FULCIO_CA_PASSWORD?
       - --path
       - rekor-key=/in/rekor-key
       - --mysql
@@ -1717,7 +1717,7 @@ services:
       # password, restated: compose cannot alias across files.
       INNSEGL_TRUST_BACKUP_MYSQL_USER: test
       INNSEGL_TRUST_BACKUP_MYSQL_PASSWORD: zaphod
-      INNSEGL_FULCIO_CA_PASSWORD: ${INNSEGL_FULCIO_CA_PASSWORD:-innsegl-compose-ca}
+      INNSEGL_FULCIO_CA_PASSWORD: ${INNSEGL_FULCIO_CA_PASSWORD:-}
     volumes:
       - trust-backup-fulcio-pki:/in/fulcio-pki:ro
       - trust-backup-rekor-key:/in/rekor-key:ro

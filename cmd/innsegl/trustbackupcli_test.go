@@ -375,3 +375,47 @@ func must[T any](v T, err error) func(*testing.T) T {
 		return v
 	}
 }
+
+// The CA password is optional in a bundle: a deployment that never set its
+// own must still be backed up, and no shipped file may carry a default for
+// it. A trailing "?" marks a --value that may be unset; one without it is
+// still required.
+func TestTrustBackupAnOptionalValueThatIsUnsetIsLeftOutAndSaid(t *testing.T) {
+	env, args := trustVolumes(t)
+	delete(env, "INNSEGL_FULCIO_CA_PASSWORD")
+	for i, a := range args {
+		if a == "fulcio-ca-password=INNSEGL_FULCIO_CA_PASSWORD" {
+			args[i] = a + "?"
+		}
+	}
+	var out, errOut bytes.Buffer
+	code := runTrustBackup(t.Context(), append([]string{"create"}, args...), &out, &errOut, trustBackupDeps{exportMySQL: fakeExport,
+		getenv: getenvFrom(env), now: func() time.Time { return time.Date(2026, 10, 7, 3, 0, 0, 0, time.UTC) },
+	})
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String()+out.String(), "INNSEGL_FULCIO_CA_PASSWORD is unset") {
+		t.Errorf("the backup did not say the CA password was left out:\nstdout %s\nstderr %s", out.String(), errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	// The drill stays strict: a bundle without the CA password cannot be
+	// restored on its own, so it is a failed drill that names the item.
+	if code := runTrustBackup(t.Context(), []string{"drill", "--dir", env["TEST_BACKUP_DIR"],
+		"--identity", env["TEST_IDENTITY_FILE"]}, &out, &errOut, trustBackupDeps{exportMySQL: fakeExport, getenv: getenvFrom(env)}); code == exitOK {
+		t.Fatalf("drill passed a bundle with no CA password:\n%s", out.String())
+	}
+	if all := out.String() + errOut.String(); !strings.Contains(all, "fulcio-ca-password") || !strings.Contains(all, "MISSING") {
+		t.Errorf("the drill does not name the left-out CA password as missing:\n%s", out.String()+errOut.String())
+	}
+}
+
+func TestTrustBackupARequiredValueThatIsUnsetIsStillRefused(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := runTrustBackup(t.Context(), []string{"create", "--dir", t.TempDir(), "--value", "x=UNSET_VAR"}, &out, &errOut,
+		trustBackupDeps{getenv: func(string) string { return "" }})
+	if code == exitOK || !strings.Contains(errOut.String(), "UNSET_VAR is unset") {
+		t.Fatalf("exit %d, stderr %q: an unset required value must refuse", code, errOut.String())
+	}
+}

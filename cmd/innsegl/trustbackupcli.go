@@ -57,6 +57,9 @@ type trustBackupDeps struct {
 	exportMySQL func(ctx context.Context, dsn string, w io.Writer) error
 	// home is the operator's home, for fetch and drill's defaults.
 	home string
+	// notes receives what create left out on purpose; stderr unless a test
+	// replaces it.
+	notes io.Writer
 }
 
 func trustBackupCommand(args []string, stdout, stderr io.Writer) int {
@@ -78,6 +81,9 @@ func trustBackupUsage(w io.Writer) {
 }
 
 func runTrustBackup(ctx context.Context, args []string, stdout, stderr io.Writer, deps trustBackupDeps) int {
+	if deps.notes == nil {
+		deps.notes = stderr
+	}
 	if deps.now == nil {
 		deps.now = time.Now
 	}
@@ -243,7 +249,16 @@ func trustBackupSources(ctx context.Context, paths, mysqls, values multiFlag, de
 		if err != nil {
 			return nil, err
 		}
+		// A trailing "?" marks a value the deployment may not have set (the
+		// CA password, before a host generates its own): left out of the
+		// bundle and said, so the drill names it MISSING. Without the "?"
+		// an unset value still refuses.
+		env, optional := strings.CutSuffix(env, "?")
 		val := deps.getenv(env)
+		if val == "" && optional {
+			fprintf(deps.notes, "innsegl trust-backup: %s is unset; %s is not in this bundle\n", env, name)
+			continue
+		}
 		if val == "" {
 			return nil, fmt.Errorf("--value %s: %s is unset", name, env)
 		}
