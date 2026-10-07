@@ -125,6 +125,31 @@ func TestCredentialRunReadsTheRunOffTheChain(t *testing.T) {
 	}
 }
 
+// TestCredentialRunReadsWhatAReplayMustRepeat: the members a replay of the
+// registration must repeat exactly are read as recorded (RM-334, #532), and
+// read as empty when the registration recorded none.
+func TestCredentialRunReadsWhatAReplayMustRepeat(t *testing.T) {
+	rec := registered(7, "2026-08-29T10:00:00.000Z")
+	rec[event.FieldIdempotencyKey] = "gateway:h:1:s:main"
+	rec[event.FieldParentRunID] = "run-parent"
+	rec[event.FieldForkedFromRunID] = "run-origin"
+	run, found, err := newDirectory(t, []event.Fields{rec}).CredentialRun(context.Background(), testRunID)
+	if err != nil || !found {
+		t.Fatalf("CredentialRun: found=%v err=%v", found, err)
+	}
+	if run.Branch != testBranch || run.IdempotencyKey != "gateway:h:1:s:main" ||
+		run.ParentRunID != "run-parent" || run.ForkedFromRunID != "run-origin" {
+		t.Errorf("run = %+v, want the recorded branch, key, parent and fork origin", run)
+	}
+
+	bare := registered(7, "2026-08-29T10:00:00.000Z")
+	delete(bare, event.FieldBranch)
+	run, _, err = newDirectory(t, []event.Fields{bare}).CredentialRun(context.Background(), testRunID)
+	if err != nil || run.Branch != "" || run.IdempotencyKey != "" || run.ParentRunID != "" || run.ForkedFromRunID != "" {
+		t.Errorf("run = %+v err=%v, want each unrecorded member empty", run, err)
+	}
+}
+
 // TestTheEarliestRunRetiredWinsWhenSeveralArePresent is ADR-0020 §5.
 //
 // Two genuinely concurrent FIRST retirements of one run can both find no

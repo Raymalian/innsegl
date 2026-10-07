@@ -65,6 +65,13 @@ type CredentialRun struct {
 	// it under any credential — a run that cannot be shown to be in this
 	// credential's repository is not in it.
 	Repo string
+	// Branch, ParentRunID, ForkedFromRunID and IdempotencyKey are
+	// `run_registered`'s own members of those names, as recorded; empty when
+	// the registration recorded none. They are read so that a caller can
+	// replay a registration exactly as it was made -- the ledger refuses a
+	// replay of a key whose content differs (LED-008) -- rather than rebuild
+	// it from state that has moved since (RM-334, #532).
+	Branch, ParentRunID, ForkedFromRunID, IdempotencyKey string
 	// RetiredAt is the instant `run_retired` was appended, zero for a live
 	// run. I4: retirement removes the identity, never the record.
 	RetiredAt time.Time
