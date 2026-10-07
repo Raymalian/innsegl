@@ -30,6 +30,10 @@ const (
 // directory. It is on the trust root's list: losing it loses the store.
 const MaterialFile = "unlock.age"
 
+// SnapshotFile is the store's own consistent snapshot, in the custodian's
+// snapshot directory (ADR-0076). The trust-key backup carries it.
+const SnapshotFile = "store.snap"
+
 // maxUnlockBody bounds what an unlock may send. The material is three short
 // strings; anything near this size is not material.
 const maxUnlockBody = 64 << 10
