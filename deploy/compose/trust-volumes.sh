@@ -111,7 +111,8 @@ VOLUMES='ledger-data|INNSEGL_TRUST_LEDGER_VOLUME|innsegl-core_innsegl-ledger-dat
 identity-secret|INNSEGL_TRUST_IDENTITY_SECRET_VOLUME|innsegl-core_innsegl-identity-secret|the pseudonymisation secret every agent and task id in the ledger was derived from
 fulcio-pki|INNSEGL_TRUST_FULCIO_PKI_VOLUME|innsegl-sigstore_sigstore-fulcio-pki|the Fulcio CA key that issued every certificate
 rekor-key|INNSEGL_TRUST_REKOR_KEY_VOLUME|innsegl-sigstore_sigstore-rekor-key|the Rekor key that signed every transparency-log entry
-trillian-db|INNSEGL_TRUST_TRILLIAN_DB_VOLUME|innsegl-sigstore_sigstore-trillian-db-data|the transparency log itself'
+trillian-db|INNSEGL_TRUST_TRILLIAN_DB_VOLUME|innsegl-sigstore_sigstore-trillian-db-data|the transparency log itself
+history|INNSEGL_TRUST_HISTORY_VOLUME|innsegl-core_innsegl-trust-history|the trust history: every root and log key this deployment has used'
 
 # The label scripts/teardown-guard.sh reads. Its VALUE is the sentence above,
 # so a volume explains itself with no table anywhere.

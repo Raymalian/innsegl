@@ -52,6 +52,7 @@ var (
 		"innsegl-trust-fulcio-pki",
 		"innsegl-trust-rekor-key",
 		"innsegl-trust-trillian-db",
+		"innsegl-trust-history",
 	}
 )
 
