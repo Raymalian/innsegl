@@ -12,7 +12,7 @@ import (
 
 // GID-013: a session that stated {repo, branch, task} registers a run with
 // exactly those, and the filesystem resolver is never asked.
-func TestIdentityGuardGID013RegistersTheWorkspaceTheClientStated(t *testing.T) {
+func TestGID013IdentityGuardRegistersTheWorkspaceTheClientStated(t *testing.T) {
 	f := newIdentityFixture(t)
 	f.sessionWorkspaces.RecordStated("s-stated", "", StatedWorkspace{
 		Cwd: "/client/only/path", Repo: "github.com/example-org/example-repo",
@@ -39,7 +39,7 @@ func TestIdentityGuardGID013RegistersTheWorkspaceTheClientStated(t *testing.T) {
 
 // GID-014: a session that stated only a cwd still resolves through the
 // existing resolver (the single-host shape).
-func TestIdentityGuardGID014ResolvesACwdOnlyStatementThroughTheResolver(t *testing.T) {
+func TestGID014IdentityGuardResolvesACwdOnlyStatementThroughTheResolver(t *testing.T) {
 	f := newIdentityFixture(t)
 	id := Identification{SessionID: "s1", AgentID: mainAgentID}
 
