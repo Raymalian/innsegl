@@ -27,7 +27,7 @@ COVERPROFILE := cover.out
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
         innsegl-trust-volumes innsegl-ca-custody-init innsegl-ca-rotate innsegl-ca-rollback \
         fulcio-file-ca-up test-ids ca-custody-up ca-custody-volumes ca-custody-ready \
-        ca-custody-stage ca-custody-switch ca-custody-back \
+        ca-custody-stage ca-custody-switch ca-custody-back ca-custody-restore \
         innsegl-stack-clean innsegl-up-here verify-branch \
         install-hooks \
         verify-branch-selftest start backup-freshness update innsegl-here-services link clean \
@@ -797,6 +797,27 @@ ca-custody-stage:
 	@docker run --rm -v $(CA_CUSTODY_KMS_VOLUME):/k $(CA_CUSTODY_CHOWN_IMAGE) chown 65532:65532 /k
 	@$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) run --rm --no-deps innsegl-ca-bootstrap >&2
 	@docker run --rm -v $(CA_CUSTODY_KMS_VOLUME):/k:ro $(CA_CUSTODY_CHOWN_IMAGE) cat /k/chain.pem
+
+## ca-custody-restore: the store and its sealed material from a trust-key
+##   backup extracted with `innsegl trust-backup drill --extract DIR`.
+##   FROM=DIR CONFIRM=restore. The store comes back sealed under its original
+##   keys; the operator's machine unlocks it (runbooks/ca-custody.md).
+ca-custody-restore:
+	@test '$(CONFIRM)' = restore || { echo 'ca-custody-restore: set CONFIRM=restore; it replaces the CA key store with the backup'"'"'s'; exit 2; }
+	@test -s '$(FROM)/ca-store/store.snap' && test -s '$(FROM)/ca-custody/unlock.age' || \
+	  { echo 'ca-custody-restore: FROM must be an extracted backup holding ca-store/store.snap and ca-custody/unlock.age'; exit 2; }
+	@# The custodian initialises any new store it finds, so it is stopped first.
+	-$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) stop innsegl-ca-custodian innsegl-ca-store
+	-$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) rm -f innsegl-ca-custodian innsegl-ca-store
+	docker volume rm innsegl-trust-ca-store
+	@$(MAKE) --no-print-directory ca-custody-volumes
+	docker run --rm -v innsegl-trust-ca-custody:/c -v '$(abspath $(FROM))/ca-custody:/in:ro' $(CA_CUSTODY_CHOWN_IMAGE) \
+	  sh -c 'mkdir -p /c/material && cp /in/unlock.age /c/material/unlock.age && chown -R 65532:65532 /c && chmod 0600 /c/material/unlock.age'
+	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d --no-deps innsegl-ca-store
+	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) run --rm --no-deps \
+	  -v '$(abspath $(FROM))/ca-store:/restore:ro' innsegl-ca-custodian restore /restore/store.snap
+	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d --no-deps innsegl-ca-custodian
+	@echo 'ca-custody-restore: done. Unlock it from the operator'"'"'s machine: innsegl ca-custody unlock'
 
 ## ca-custody-switch: Fulcio onto the store
 ca-custody-switch:

@@ -8,10 +8,11 @@
 #   - innsegl-mcp joins the unlock network, whose only other member is the
 #     custodian, and is told where the custodian is. That is the whole of its
 #     reach into custody: three routes, for the operator's machine (ADR-0076).
-#   - the trust-key backup (ADR-0074) also carries the store's data and the
-#     sealed unlock material. Both are needed to restore the CA, and neither is
-#     readable without the operator's key: the store's storage is encrypted
-#     under its unseal key, and the unseal key is in the sealed material.
+#   - the trust-key backup (ADR-0074) also carries the store's own snapshot,
+#     which the custodian takes, and the sealed unlock material. Both are
+#     needed to restore the CA, and neither is readable without the
+#     operator's key: the snapshot is encrypted under the store's unseal key,
+#     and the unseal key is in the sealed material.
 
 services:
 
@@ -55,11 +56,16 @@ services:
       - --path
       - trust-history=/in/trust-history
       - --path
-      - ca-store=/in/ca-store
+      - ca-store=/in/ca-custody/snapshot
       - --path
-      - ca-custody=/in/ca-custody
+      - ca-custody=/in/ca-custody/material
+      - --value
+      - custody=INNSEGL_CA_CUSTODY
+    environment:
+      # The marker the drill reads: a custody bundle must hold the store's
+      # snapshot and the sealed material, or it fails the drill (BAK-030).
+      INNSEGL_CA_CUSTODY: "on"
     volumes:
-      - trust-backup-ca-store:/in/ca-store:ro
       - trust-backup-ca-custody:/in/ca-custody:ro
 
 networks:
@@ -68,9 +74,6 @@ networks:
     external: true
 
 volumes:
-  trust-backup-ca-store:
-    name: ${INNSEGL_TRUST_CA_STORE_VOLUME:-innsegl-trust-ca-store}
-    external: true
   trust-backup-ca-custody:
     name: ${INNSEGL_TRUST_CA_CUSTODY_VOLUME:-innsegl-trust-ca-custody}
     external: true

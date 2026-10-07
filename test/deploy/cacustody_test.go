@@ -227,20 +227,52 @@ func TestOPS150TheCustodyNetworksAndTheCAsHands(t *testing.T) {
 func TestOPS151TheBackupCarriesTheStoreAndTheMaterial(t *testing.T) {
 	base := composeRender(t, nil, coreBase).Services["innsegl-trust-backup"]
 	on := composeRender(t, nil, coreBase, coreCustody).Services["innsegl-trust-backup"]
+	// The store's own snapshot, not its files: a copy of the files taken
+	// while the store writes is not a backup (OPS-155). And the marker the
+	// drill reads to require both (BAK-030).
 	want := append(slices.Clone(base.Command),
-		"--path", "ca-store=/in/ca-store", "--path", "ca-custody=/in/ca-custody")
+		"--path", "ca-store=/in/ca-custody/snapshot", "--path", "ca-custody=/in/ca-custody/material",
+		"--value", "custody=INNSEGL_CA_CUSTODY")
 	if !reflect.DeepEqual(on.Command, want) {
 		t.Fatalf("the custody backup's command is not the base command plus the two custody items:\n got %v\nwant %v",
 			on.Command, want)
 	}
-	targets := map[string]bool{}
+	ro, found := false, false
 	for _, v := range on.Volumes {
-		if v.Target == "/in/ca-store" || v.Target == "/in/ca-custody" {
-			targets[v.Target] = v.ReadOnly
+		if v.Target == "/in/ca-custody" {
+			found, ro = true, v.ReadOnly
+		}
+		if v.Target == "/in/ca-store" {
+			t.Errorf("the backup mounts the store's raw files (%s); it carries the store's snapshot instead", v.Source)
 		}
 	}
-	if !targets["/in/ca-store"] || !targets["/in/ca-custody"] {
-		t.Fatalf("the custody volumes are not mounted read-only for the backup: %v", targets)
+	if !found || !ro {
+		t.Fatalf("the custody volume is not mounted read-only for the backup")
+	}
+	if v := on.Environment["INNSEGL_CA_CUSTODY"]; v == nil || *v != "on" {
+		t.Fatalf("the backup does not mark its bundles as custody bundles: %v", v)
+	}
+}
+
+// OPS-155 (PROPOSED) — the store keeps integrated storage, which can
+// snapshot itself, on the directory the store image owns.
+func TestOPS155TheStoreCanSnapshotItself(t *testing.T) {
+	hcl, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy", "compose", "sigstore", "ca-store.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hcl), `storage "raft"`) || !strings.Contains(string(hcl), `path    = "/openbao/file"`) {
+		t.Fatalf("ca-store.hcl does not use integrated storage on /openbao/file:\n%s", hcl)
+	}
+	store := composeRender(t, nil, sigstoreBase, sigstoreCustod).Services["innsegl-ca-store"]
+	mounted := false
+	for _, v := range store.Volumes {
+		if v.Target == "/openbao/file" {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Fatal("the store's volume is not mounted on /openbao/file, the directory the image owns and the config names")
 	}
 }
 

@@ -36,9 +36,9 @@ with a SPIRE JWT.
    - creates a signer policy that allows signing with that key and reading its
      public half, and nothing else;
    - creates an AppRole whose tokens carry that policy alone, with a 24-hour
-     period.
+     period, and a snapshot role (decision 8).
 
-   It then seals the unseal key and the AppRole's secret id to the operator's
+   It then seals the unseal key and the AppRoles' secret ids to the operator's
    recipients (age, the same recipients as ADR-0074's backup), and revokes the
    root token.
 
@@ -80,9 +80,21 @@ with a SPIRE JWT.
    untouched as the way back. Until the rotation runs, bring-up starts the
    store and the custodian and leaves Fulcio on the file CA.
 
-8. **The backup carries custody.** Under custody the trust-key backup
-   (ADR-0074) also holds the store's data and the sealed material. A restore
-   needs both. Neither opens without the operator's key.
+8. **The backup carries custody, as the store's own snapshot.** The store
+   uses integrated storage, one node, so it can snapshot itself. A copy of
+   its files taken while it writes is not a backup. The custodian takes the
+   snapshot hourly, and at every init and unlock. It uses a third AppRole,
+   whose tokens may take snapshots and nothing else; its secret is in the
+   sealed material, and its token lives in memory only.
+
+   The trust-key backup (ADR-0074) carries the newest snapshot and the sealed
+   material, and marks the bundle as a custody bundle. The drill fails a
+   custody bundle that lacks either.
+
+   Measured on the pinned store:
+   - the snapshot, restored into a new store, leaves it sealed;
+   - only the original unseal key opens it;
+   - it holds the same CA key (OPS-155, from a real bundle).
 
 ## Consequences
 

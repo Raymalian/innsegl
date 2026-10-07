@@ -99,10 +99,29 @@ a new file CA (`runbooks/trust-rotation.md`), then remove the `.env` line and
 
 ## Restore
 
-The trust-key backup holds the store's data (`ca-store`) and the sealed
-material (`ca-custody`). Restore both volumes as for the other items
-(`runbooks/trust-key-backup.md` §4). Then bring the stack up and unlock it
-from the operator's machine.
+The trust-key backup holds the store's own snapshot (`ca-store`) and the
+sealed material (`ca-custody`). A bundle that says custody is on and lacks
+either fails the drill.
+
+On the operator's machine, extract the newest bundle:
+
+```sh
+innsegl trust-backup drill --extract <dir>
+```
+
+Copy `<dir>` to the core. Then, on the core:
+
+```sh
+make ca-custody-restore CONFIRM=restore FROM=<dir>
+```
+
+It replaces the store with a new one and restores the snapshot into it. It
+puts the sealed material back. The store is left sealed under its original
+keys. Unlock it from the operator's machine (step 3), then remove `<dir>` from
+both machines.
+
+**Check:** `innsegl ca-custody status` prints `unlocked`, and Fulcio serves the
+root it served before.
 
 Losing the operator's Secure Enclave key loses the unlock. The store's data
 stays unreadable. Recovery is a new store and a new root:

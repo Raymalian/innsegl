@@ -62,7 +62,7 @@ services:
     # longer exists, which is the worst of both.
     volumes:
       - ./sigstore/ca-store.hcl:/openbao/config/store.hcl:ro
-      - innsegl-ca-store-data:/openbao/data
+      - innsegl-ca-store-data:/openbao/file
     healthcheck:
       # 501 is "sealed", 200 is "unsealed and ready". Both mean the process is
       # answering, and a sealed store is a correct resting state here — the
