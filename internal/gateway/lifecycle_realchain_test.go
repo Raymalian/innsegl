@@ -200,3 +200,52 @@ func TestGID011RealChainALaterRequestOfThatConversationIsAdoptedNeverRevived(t *
 			"a retired run is never revived)", decision)
 	}
 }
+
+// TestGID011RealChainTheSameSessionIsAdoptedAfterItsRunIsRetired drives the
+// guard, not just the policy, through real register_agent: one (session,
+// agent) registers, its run is retired, and its next request must be issued
+// a NEW run. The adoption cannot reuse the key that registered the retired
+// run: register_agent answers that key with the retired run (a revival) or,
+// once the input differs, DUPLICATE_REQUEST on every request after.
+func TestGID011RealChainTheSameSessionIsAdoptedAfterItsRunIsRetired(t *testing.T) {
+	f := newRealChainFixture(t)
+	registrar := NewMCPRegistrar()
+	states := NewCredentialRunStates(f.dir, ledger.DefaultRestoreHorizon, nil)
+	workspaces := &fakeWorkspaceResolver{ws: realChainWorkspace()}
+	sessionWorkspaces := NewSessionWorkspaces(0)
+	id := Identification{Harness: "claude-code", Version: "2.1", SessionID: "gid011-same-session", AgentID: mainAgentID}
+	sessionWorkspaces.Record(id.SessionID, "", fixtureDirectory)
+	guard, err := NewIdentityGuard(IdentityGuardConfig{
+		Mappings: f.mapping, Tree: &fakeTreeLinker{}, Policy: NewPolicy(), Registrar: registrar,
+		Workspaces: workspaces, RunStates: states,
+		SessionEndSignals: NewSessionEndSignals(0), SessionWorkspaces: sessionWorkspaces,
+	})
+	if err != nil {
+		t.Fatalf("NewIdentityGuard: %v", err)
+	}
+
+	r1, refusal := guard.Check(identityRequest(t, id, "hello", ""))
+	if refusal != nil {
+		t.Fatalf("first request refused: %+v", refusal)
+	}
+	first := mustRunID(t, r1)
+	if _, retireErr := registrar.Retire(t.Context(), first); retireErr != nil {
+		t.Fatalf("Retire: %v", retireErr)
+	}
+
+	// The branch moved between the two requests, as it does when a session
+	// switches worktree: the adoption's input is not the first run's input.
+	workspaces.ws.Branch = "dev/elsewhere"
+	r2, refusal := guard.Check(identityRequest(t, id, "hello", "hi"))
+	if refusal != nil {
+		t.Fatalf("request after retirement refused: %s", refusal.Reason)
+	}
+	second := mustRunID(t, r2)
+	if second == first {
+		t.Fatalf("request after retirement was handed the retired run %q; a retired run is never revived", first)
+	}
+	m, found, err := f.mapping.BySessionAgent(t.Context(), id.SessionID, id.AgentID)
+	if err != nil || !found || m.RunID != second || m.AdoptedFromRunID != first {
+		t.Fatalf("mapping after adoption = %+v (found=%v err=%v), want run %q adopting %q", m, found, err, second, first)
+	}
+}

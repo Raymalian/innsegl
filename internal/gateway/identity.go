@@ -804,7 +804,7 @@ func (g *IdentityGuard) act(
 		agentType, verbatim := g.agentTypeFor(id, facts.Stated.AgentType, spawnAgentType)
 		out, err := g.registrar.Register(ctx, RegisterInput{
 			AgentType:      agentType,
-			IdempotencyKey: idempotencyKeyFor(id),
+			IdempotencyKey: adoptionKeyFor(id, prior.RunID),
 			Workspace:      ws,
 		})
 		if err != nil {
@@ -875,6 +875,17 @@ const defaultSubagentType = "subagent"
 // second identity for a run that only went briefly quiet.
 func idempotencyKeyFor(id Identification) string {
 	return "gateway:" + id.Harness + ":" + id.Version + ":" + id.SessionID + ":" + id.AgentID
+}
+
+// adoptionKeyFor is the key an adoption registers under. It cannot be
+// idempotencyKeyFor(id): when the same (session, agent) adopts its own
+// retired run, that key already names the retired run's registration, so
+// register_agent would replay it (reviving the run) or, for different
+// input, refuse it as DUPLICATE_REQUEST on every request after. Naming the
+// adopted run keeps a retry of one adoption idempotent while each later
+// adoption of a later run gets a key of its own.
+func adoptionKeyFor(id Identification, adoptedRunID string) string {
+	return idempotencyKeyFor(id) + ":adopts:" + adoptedRunID
 }
 
 // ---------------------------------------------------------------------------
