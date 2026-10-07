@@ -40,8 +40,8 @@
  *
  * ── THE VERDICT FIELD IS PARSED AND THEN IGNORED ───────────────────────────
  *
- * `verdict` has to be one of four for the response to be readable, and then
- * nothing renders it: `verdictOf` in components/verification rolls the badge
+ * `verdict` has to be one of the server's six for the response to be readable,
+ * and then nothing renders it, except `unattributed` and `pre-history`: `verdictOf` in components/verification rolls the badge
  * up from the checks in front of the reader (doc 06 P1). The field is kept
  * because `unattributed` is not derivable from checks — a commit that claims
  * nothing has none — and dropping it would collapse VER-006's fourth state
@@ -70,7 +70,16 @@ export type ProofReading =
   | { readonly ok: true; readonly proof: Proof; readonly findings: readonly Finding[] }
   | { readonly ok: false; readonly reason: string };
 
-const VERDICTS: readonly string[] = ["verified", "failed", "unavailable", "unattributed"];
+// Every value internal/verify's Verdict can take. A value missing here makes
+// the whole answer unreadable, so this list follows the server's exactly.
+const VERDICTS: readonly string[] = [
+  "verified",
+  "content-verified",
+  "failed",
+  "unavailable",
+  "unattributed",
+  "pre-history",
+];
 const CHECK_RESULTS: readonly string[] = ["verified", "failed", "unavailable"];
 const AGREEMENTS: readonly string[] = ["agrees", "contradicts", "underivable"];
 

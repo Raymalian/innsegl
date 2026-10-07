@@ -209,3 +209,23 @@ describe("FE-003 a live check that errored outranks a cached verdict", () => {
     );
   });
 });
+
+describe("ADR-0073 a commit from before the trust history began", () => {
+  // The deployment cannot check a lost era's chain or log entry, so those two
+  // checks arrive unavailable and the trailer still holds. The verdict field
+  // is the only place the reason lives, the same way unattributed's does.
+  it("shows the pre-history verdict when the checks it can run do not fail", () => {
+    const proof = proofWithResults(["unavailable", "unavailable", "verified"], { verdict: "pre-history" });
+    expect(verdictOf(proof, { source: "live" }).verdict).toBe("pre-history");
+  });
+
+  it("never lets the field hide a failed check", () => {
+    const proof = proofWithResults(["unavailable", "unavailable", "failed"], { verdict: "pre-history" });
+    expect(verdictOf(proof, { source: "live" }).verdict).toBe("failed");
+  });
+
+  it("never turns the field into a green", () => {
+    const proof = proofWithResults(["verified", "verified", "verified"], { verdict: "pre-history" });
+    expect(verdictOf(proof, { source: "live" }).verdict).not.toBe("pre-history");
+  });
+});

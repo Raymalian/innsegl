@@ -117,7 +117,8 @@ function allThreePresent(checks: readonly Check[]): boolean {
  *
  * The proof's own `verdict` field is deliberately NOT consulted, except for
  * `unattributed`, which describes the commit rather than a check and cannot be
- * derived from checks that do not exist. Everything else is rolled up here
+ * derived from checks that do not exist, and `pre-history`, honoured only over
+ * an unavailable rollup. Everything else is rolled up here
  * from the checks in front of the reader — doc 06 P1, evidence over assertion.
  * A server that asserts a verdict its own checks contradict is answered with
  * the checks.
@@ -141,6 +142,22 @@ export function verdictOf(
   }
 
   const derived = rollupChecks(proof.checks);
+
+  // `pre-history` (ADR-0073) is the server's reason why two checks could not
+  // run: the commit was signed before the trust history began, under a root
+  // recorded as lost. The checks alone can only say "unavailable", so the
+  // field is honoured, but only over an unavailable rollup: a failed check
+  // stays failed, and the field can never stand in for a green.
+  if (proof.verdict === "pre-history" && derived === "unavailable") {
+    return {
+      verdict: "pre-history",
+      derived,
+      downgraded: false,
+      reasons: [],
+      errors: [],
+    };
+  }
+
   const reasons: DowngradeReason[] = [];
   const errors: string[] = [];
 
