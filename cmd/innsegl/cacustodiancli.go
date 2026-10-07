@@ -26,6 +26,8 @@ import (
 //	        unlock the operator's machine sends back
 //	ready   the container's health: the store unlocked and the CA's token
 //	        written, which is what Fulcio's bootstrap waits for
+//	restore put a backup's store snapshot into a new store, sealed under the
+//	        original keys, for the operator's machine to unlock
 const (
 	envCAStoreAddr  = "INNSEGL_CA_STORE_ADDR"
 	envCARecipients = "INNSEGL_CA_CUSTODY_RECIPIENTS"
@@ -42,6 +44,8 @@ const caCustodianUsage = `Usage:
   innsegl ca-custodian init     initialise a new CA key store, once
   innsegl ca-custodian serve    initialise it if new; renew the CA's token; serve the core
   innsegl ca-custodian ready    exit 0 when the store is unlocked and the CA has a token
+  innsegl ca-custodian restore SNAPSHOT
+                                put a backup's store into a new store (runbooks/ca-custody.md)
 
 From the environment: ` + envCAStoreAddr + `, ` + envCARecipients + `,
 ` + envCADir + `, ` + envCATokenPath + `, ` + envCAStoreKey + ` (default innsegl-ca),
@@ -59,8 +63,12 @@ func runCACustodian(ctx context.Context, args []string, stdout, stderr io.Writer
 		fprintf(stderr, "%s", caCustodianUsage)
 		return exitOK
 	}
-	if len(args) == 0 || (args[0] != "init" && args[0] != "serve" && args[0] != "ready") {
-		fprintf(stderr, "innsegl ca-custodian: name a verb: init, serve or ready\n\n%s", caCustodianUsage)
+	if len(args) == 0 || (args[0] != "init" && args[0] != "serve" && args[0] != "ready" && args[0] != "restore") {
+		fprintf(stderr, "innsegl ca-custodian: name a verb: init, serve, ready or restore\n\n%s", caCustodianUsage)
+		return exitUsage
+	}
+	if args[0] == "restore" && len(args) != 2 {
+		fprintf(stderr, "innsegl ca-custodian: restore takes the snapshot file, from a backup's ca-store item\n\n%s", caCustodianUsage)
 		return exitUsage
 	}
 	c, err := custodianFromEnv(getenv, stdout)
@@ -83,6 +91,21 @@ func runCACustodian(ctx context.Context, args []string, stdout, stderr io.Writer
 			return exitOK
 		}
 		return exitCACustodyFailed
+	}
+	if args[0] == "restore" {
+		f, err := os.Open(args[1]) //nolint:gosec // G304: the operator names the snapshot to restore
+		if err != nil {
+			fprintf(stderr, "innsegl ca-custodian: %v\n", err)
+			return exitCACustodyFailed
+		}
+		defer func() { _ = f.Close() }()
+		if err := c.Store.Restore(ctx, f); err != nil {
+			fprintf(stderr, "innsegl ca-custodian: %v\n", err)
+			return exitCACustodyFailed
+		}
+		fprintf(stdout, "innsegl ca-custodian: restored; the store is sealed under the original keys. "+
+			"Unlock it from the operator's machine: innsegl ca-custody unlock\n")
+		return exitOK
 	}
 	if args[0] == "init" {
 		if err := c.Init(ctx); err != nil {
@@ -144,6 +167,7 @@ func serveCACustodian(ctx context.Context, c *cacustody.Custodian, listen string
 	}
 	srv := &http.Server{Handler: c.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go c.RunRenewer(ctx, cacustody.RenewEvery)
+	go c.RunSnapshots(ctx, cacustody.SnapshotEvery)
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

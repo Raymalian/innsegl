@@ -79,7 +79,8 @@ func sealedCustody(t *testing.T) (*coreCustody, *age.X25519Identity, cacustody.M
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := cacustody.Material{UnsealKey: "unseal", RoleID: "role", SecretID: "secret"}
+	m := cacustody.Material{UnsealKey: "unseal", RoleID: "role", SecretID: "secret",
+		BackupRoleID: "backup-role", BackupSecretID: "backup-secret"}
 	ct, err := cacustody.Seal(m, []age.Recipient{id.Recipient()})
 	if err != nil {
 		t.Fatal(err)

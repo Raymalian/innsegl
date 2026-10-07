@@ -89,20 +89,24 @@ func TestOPS141InitLeavesOnlyCiphertextBehind(t *testing.T) {
 	}
 
 	for _, dir := range []string{f.c.Dir, filepath.Dir(f.c.TokenPath)} {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, e := range entries {
-			body, err := os.ReadFile(filepath.Join(dir, e.Name()))
-			if err != nil {
-				t.Fatal(err)
+		err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
 			}
-			for name, secret := range map[string]string{"unseal key": m.UnsealKey, "secret id": m.SecretID} {
+			body, err := os.ReadFile(p) //nolint:gosec // G304: the test's own temp dirs
+			if err != nil {
+				return err
+			}
+			for name, secret := range map[string]string{"unseal key": m.UnsealKey, "secret id": m.SecretID,
+				"snapshot secret id": m.BackupSecretID} {
 				if bytes.Contains(body, []byte(secret)) {
-					t.Errorf("%s holds the %s in plaintext", e.Name(), name)
+					t.Errorf("%s holds the %s in plaintext", p, name)
 				}
 			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 	for name, secret := range map[string]string{"unseal key": m.UnsealKey, "secret id": m.SecretID} {
@@ -310,7 +314,7 @@ func TestOPS145TheMaterialOpensOnlyForTheOperator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := Material{UnsealKey: "u", RoleID: "r", SecretID: "s"}
+	m := Material{UnsealKey: "u", RoleID: "r", SecretID: "s", BackupRoleID: "br", BackupSecretID: "bs"}
 	ct, err := Seal(m, []age.Recipient{id.Recipient()})
 	if err != nil {
 		t.Fatal(err)

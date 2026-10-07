@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"filippo.io/age"
@@ -70,6 +71,11 @@ type Custodian struct {
 	Recipients []age.Recipient
 	// Log receives one line per event, never a secret.
 	Log io.Writer
+
+	mu sync.Mutex
+	// snapshotToken takes the store's snapshot. Memory only: a restart
+	// leaves it empty until the next unlock, when the store is sealed anyway.
+	snapshotToken string
 }
 
 // Seal encrypts m to recipients.
@@ -137,13 +143,16 @@ func (c *Custodian) Init(ctx context.Context) error {
 	if err = c.Store.Unseal(ctx, unseal); err != nil {
 		return err
 	}
-	roleID, secretID, err := c.Store.Provision(ctx, root, c.Key)
+	m, err := c.Store.Provision(ctx, root, c.Key)
 	if err != nil {
 		return err
 	}
-	m := Material{UnsealKey: unseal, RoleID: roleID, SecretID: secretID}
+	m.UnsealKey = unseal
 	sealed, err := Seal(m, c.Recipients)
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(c.materialPath()), 0o700); err != nil {
 		return err
 	}
 	if err := writeAtomic(c.materialPath(), sealed); err != nil {
@@ -155,6 +164,9 @@ func (c *Custodian) Init(ctx context.Context) error {
 	}
 	if err := c.Store.RevokeSelf(ctx, root); err != nil {
 		return fmt.Errorf("ca custody: revoking the root token: %w", err)
+	}
+	if err := c.Snapshot(ctx); err != nil {
+		return fmt.Errorf("ca custody: the first snapshot: %w", err)
 	}
 	c.logf("initialised: the CA key %q is in the store, the unlock material is sealed to %d recipient(s), and the root token is revoked",
 		c.Key, len(c.Recipients))
@@ -215,6 +227,9 @@ func (c *Custodian) Unlock(ctx context.Context, m Material) error {
 		}
 		return err
 	}
+	if err := c.Snapshot(ctx); err != nil {
+		c.logf("the snapshot after the unlock failed (%v); the next scheduled one tries again", err)
+	}
 	c.logf("unlocked: the store is unsealed and the CA has a new token")
 	return nil
 }
@@ -225,7 +240,16 @@ func (c *Custodian) Renew(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ca custody: the CA's token: %w", err)
 	}
-	return c.Store.RenewSelf(ctx, string(tok))
+	if err := c.Store.RenewSelf(ctx, string(tok)); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	snap := c.snapshotToken
+	c.mu.Unlock()
+	if snap == "" {
+		return nil
+	}
+	return c.Store.RenewSelf(ctx, snap)
 }
 
 // RunRenewer renews the CA's token every period until ctx ends. A failure
@@ -251,11 +275,28 @@ func (c *Custodian) RunRenewer(ctx context.Context, every time.Duration) {
 }
 
 // login logs the CA in, puts the token where the CA reads it, and revokes the
-// token it replaces.
+// token it replaces; and logs the snapshot role in, keeping its token in
+// memory.
 func (c *Custodian) login(ctx context.Context, m Material) error {
 	tok, err := c.Store.Login(ctx, m.RoleID, m.SecretID)
 	if err != nil {
 		return err
+	}
+	snap, err := c.Store.Login(ctx, m.BackupRoleID, m.BackupSecretID)
+	if err != nil {
+		if rerr := c.Store.RevokeSelf(ctx, tok); rerr != nil {
+			c.logf("the CA token of a failed unlock was not revoked (%v); its period ends it", rerr)
+		}
+		return err
+	}
+	c.mu.Lock()
+	old := c.snapshotToken
+	c.snapshotToken = snap
+	c.mu.Unlock()
+	if old != "" {
+		if rerr := c.Store.RevokeSelf(ctx, old); rerr != nil && !errors.Is(rerr, ErrRefused) {
+			c.logf("the previous snapshot token could not be revoked (%v); its period ends it", rerr)
+		}
 	}
 	// No previous token is the first login, not a failure.
 	previous, readErr := os.ReadFile(c.TokenPath)
@@ -332,7 +373,7 @@ func (c *Custodian) Handler() http.Handler {
 	return mux
 }
 
-func (c *Custodian) materialPath() string { return filepath.Join(c.Dir, MaterialFile) }
+func (c *Custodian) materialPath() string { return filepath.Join(c.Dir, "material", MaterialFile) }
 
 func (c *Custodian) logf(format string, args ...any) {
 	if c.Log != nil {
@@ -376,4 +417,58 @@ func discardEncode(error) {}
 
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+// SnapshotEvery is how often the custodian takes the store's snapshot. The
+// trust-key backup carries the newest one.
+const SnapshotEvery = time.Hour
+
+// SnapshotPath is the store's newest snapshot: the trust backup's ca-store.
+func (c *Custodian) SnapshotPath() string { return filepath.Join(c.Dir, "snapshot", SnapshotFile) }
+
+// MaterialPath is the sealed unlock material: the trust backup's ca-custody.
+func (c *Custodian) MaterialPath() string { return c.materialPath() }
+
+// Snapshot writes the store's own snapshot over the previous one, through a
+// temporary file, so a failure leaves the last good snapshot in place. Its
+// token lives in memory only, from the last init or unlock.
+func (c *Custodian) Snapshot(ctx context.Context) error {
+	c.mu.Lock()
+	tok := c.snapshotToken
+	c.mu.Unlock()
+	if tok == "" {
+		return errors.New("ca custody: no snapshot token yet; the store has not been unlocked since the custodian started")
+	}
+	var buf bytes.Buffer
+	if err := c.Store.Snapshot(ctx, tok, &buf); err != nil {
+		return err
+	}
+	if buf.Len() == 0 {
+		return errors.New("ca custody: the store answered an empty snapshot")
+	}
+	if err := os.MkdirAll(filepath.Dir(c.SnapshotPath()), 0o700); err != nil {
+		return err
+	}
+	return writeAtomic(c.SnapshotPath(), buf.Bytes())
+}
+
+// RunSnapshots takes a snapshot every period until ctx ends, logging a
+// failure once until it changes.
+func (c *Custodian) RunSnapshots(ctx context.Context, every time.Duration) {
+	last := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		}
+		err := c.Snapshot(ctx)
+		switch {
+		case err == nil:
+			last = ""
+		case err.Error() != last:
+			last = err.Error()
+			c.logf("taking the store's snapshot: %v", err)
+		}
+	}
 }

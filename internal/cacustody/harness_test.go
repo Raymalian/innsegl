@@ -19,16 +19,20 @@ import (
 // multi-architecture index digest, as the overlay pins it.
 const storeImage = "openbao/openbao:2.4.1@sha256:597f62847dd382382056a1d6704d50465908c2040038c4611832a23269a67112"
 
-// storeConfig is the overlay's own store config: file storage, no dev mode,
-// so the store starts sealed and uninitialised exactly as it does there.
+// storeConfig is the overlay's own store config (deploy/compose/sigstore/
+// ca-store.hcl): integrated storage, no dev mode, so the store starts sealed
+// and uninitialised exactly as it does there, and can snapshot itself.
 const storeConfig = `ui = false
-storage "file" {
-  path = "/openbao/data"
+storage "raft" {
+  path    = "/openbao/file"
+  node_id = "innsegl-ca-store"
 }
 listener "tcp" {
   address     = "0.0.0.0:8200"
   tls_disable = true
 }
+api_addr     = "http://127.0.0.1:8200"
+cluster_addr = "http://127.0.0.1:8201"
 `
 
 // testStore is one real store in its own container.

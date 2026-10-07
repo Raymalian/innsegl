@@ -35,7 +35,8 @@ func TestBAK029TheOperatorUnlocksTheCAFromATerminal(t *testing.T) {
 	if err = os.WriteFile(identity, []byte(id.String()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := cacustody.Material{UnsealKey: "unseal-key-value", RoleID: "role", SecretID: "secret-id-value"}
+	m := cacustody.Material{UnsealKey: "unseal-key-value", RoleID: "role", SecretID: "secret-id-value",
+		BackupRoleID: "backup-role", BackupSecretID: "backup-secret-value"}
 	sealed, err := cacustody.Seal(m, []age.Recipient{id.Recipient()})
 	if err != nil {
 		t.Fatal(err)

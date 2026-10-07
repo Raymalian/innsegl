@@ -31,8 +31,8 @@ func TestOPS146TheCustodianNamesWhatItIsMissing(t *testing.T) {
 		want string
 		code int
 	}{
-		{"no verb", nil, nil, "init, serve or ready", exitUsage},
-		{"unknown verb", []string{"export"}, nil, "init, serve or ready", exitUsage},
+		{"no verb", nil, nil, "init, serve, ready or restore", exitUsage},
+		{"unknown verb", []string{"export"}, nil, "init, serve, ready or restore", exitUsage},
 		{"no store", []string{"init"}, map[string]string{envCARecipients: id.Recipient().String(),
 			envCADir: t.TempDir(), envCATokenPath: t.TempDir() + "/t"}, envCAStoreAddr, exitCACustodyFailed},
 		{"no recipient", []string{"init"}, map[string]string{envCAStoreAddr: "http://127.0.0.1:1",
@@ -92,5 +92,39 @@ func TestOPS146ReadyIsTheStoreUnlockedAndATokenWritten(t *testing.T) {
 	initialised = false
 	if code := ready(); code != exitCACustodyFailed {
 		t.Fatalf("an uninitialised store is ready: exit %d", code)
+	}
+}
+
+// OPS-155 (PROPOSED) — `restore SNAPSHOT` puts a backup's store into a new
+// store, sealed under the original keys, for the operator's machine to
+// unlock. It names what it is missing, and refuses a store that holds data.
+func TestOPS155RestoreNamesWhatItNeedsAndRefusesAStoreWithData(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialised := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"initialized":true,"sealed":true}`)
+	}))
+	defer initialised.Close()
+	snap := filepath.Join(t.TempDir(), "store.snap")
+	if err = os.WriteFile(snap, []byte("snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{envCAStoreAddr: initialised.URL, envCARecipients: id.Recipient().String(),
+		envCADir: t.TempDir(), envCATokenPath: filepath.Join(t.TempDir(), "t")}
+	run := func(args ...string) (int, string) {
+		var out, errOut bytes.Buffer
+		code := runCACustodian(t.Context(), args, &out, &errOut, func(k string) string { return env[k] })
+		return code, errOut.String()
+	}
+	if code, msg := run("restore"); code != exitUsage || !strings.Contains(msg, "snapshot") {
+		t.Fatalf("restore with no snapshot: exit %d: %s", code, msg)
+	}
+	if code, msg := run("restore", filepath.Join(t.TempDir(), "absent")); code != exitCACustodyFailed || !strings.Contains(msg, "absent") {
+		t.Fatalf("restore of an absent file: exit %d: %s", code, msg)
+	}
+	if code, msg := run("restore", snap); code != exitCACustodyFailed || !strings.Contains(msg, "initialised") {
+		t.Fatalf("restore over a store with data: exit %d: %s", code, msg)
 	}
 }

@@ -33,11 +33,12 @@ func provisioned(t *testing.T) (*testStore, *Store, Material, string) {
 	if err = s.Unseal(ctx, unseal); err != nil {
 		t.Fatalf("unseal: %v", err)
 	}
-	roleID, secretID, err := s.Provision(ctx, root, "innsegl-ca")
+	m, err := s.Provision(ctx, root, "innsegl-ca")
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
-	return ts, s, Material{UnsealKey: unseal, RoleID: roleID, SecretID: secretID}, root
+	m.UnsealKey = unseal
+	return ts, s, m, root
 }
 
 func TestOPS136TheCATokenSignsAndDoesNothingElse(t *testing.T) {

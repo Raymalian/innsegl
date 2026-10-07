@@ -58,11 +58,16 @@ type Material struct {
 	UnsealKey string `json:"unseal_key"`
 	RoleID    string `json:"role_id"`
 	SecretID  string `json:"secret_id"`
+	// The snapshot role: a token that takes the store's snapshot and does
+	// nothing else (ADR-0076).
+	BackupRoleID   string `json:"backup_role_id"`
+	BackupSecretID string `json:"backup_secret_id"`
 }
 
 // Valid says whether every field is present.
 func (m Material) Valid() bool {
-	return m.UnsealKey != "" && m.RoleID != "" && m.SecretID != ""
+	return m.UnsealKey != "" && m.RoleID != "" && m.SecretID != "" &&
+		m.BackupRoleID != "" && m.BackupSecretID != ""
 }
 
 // SealStatus asks the store whether it is initialised and sealed.
@@ -100,7 +105,7 @@ func (s *Store) Unseal(ctx context.Context, key string) error {
 	if st.Sealed {
 		return fmt.Errorf("%w: the unseal key was not accepted", ErrSealed)
 	}
-	return nil
+	return s.waitActive(ctx)
 }
 
 // signerPolicy grants signing with the CA key and reading its public half.
@@ -111,10 +116,12 @@ func signerPolicy(key string) string {
 }
 
 // Provision makes a fresh store ready for the CA: the transit engine, a
-// non-exportable P-256 key, the signer policy, and an AppRole whose tokens
-// carry that policy alone and are periodic. It answers the role's id and one
-// secret id. rootToken is the token from Init.
-func (s *Store) Provision(ctx context.Context, rootToken, key string) (roleID, secretID string, err error) {
+// non-exportable P-256 key, and two AppRoles whose periodic tokens carry one
+// policy each: the CA's, which signs with that key and reads its public half,
+// and the custodian's snapshot role, which takes the store's snapshot. It
+// answers both roles' ids and one secret id each; the caller adds the unseal
+// key. rootToken is the token from Init.
+func (s *Store) Provision(ctx context.Context, rootToken, key string) (Material, error) {
 	steps := []struct {
 		method, path string
 		body         any
@@ -130,32 +137,54 @@ func (s *Store) Provision(ctx context.Context, rootToken, key string) (roleID, s
 			"secret_id_ttl":      0,
 			"token_type":         "service",
 		}},
+		{http.MethodPut, "/v1/sys/policies/acl/" + SnapshotPolicy, map[string]string{
+			"policy": "path \"sys/storage/raft/snapshot\" {\n  capabilities = [\"read\"]\n}\n"}},
+		{http.MethodPost, "/v1/auth/approle/role/" + SnapshotRoleName, map[string]any{
+			"token_policies":     []string{SnapshotPolicy},
+			"token_period":       int(TokenPeriod.Seconds()),
+			"secret_id_num_uses": 0,
+			"secret_id_ttl":      0,
+			"token_type":         "service",
+		}},
 	}
 	for _, st := range steps {
 		if err := s.call(ctx, st.method, st.path, rootToken, st.body, nil); err != nil {
-			return "", "", fmt.Errorf("ca custody: provisioning %s: %w", st.path, err)
+			return Material{}, fmt.Errorf("ca custody: provisioning %s: %w", st.path, err)
 		}
 	}
-	var role struct {
+	var m Material
+	var err error
+	if m.RoleID, m.SecretID, err = s.roleCredentials(ctx, rootToken, RoleName); err != nil {
+		return Material{}, err
+	}
+	if m.BackupRoleID, m.BackupSecretID, err = s.roleCredentials(ctx, rootToken, SnapshotRoleName); err != nil {
+		return Material{}, err
+	}
+	return m, nil
+}
+
+// roleCredentials answers an AppRole's id and a new secret id.
+func (s *Store) roleCredentials(ctx context.Context, rootToken, role string) (roleID, secretID string, err error) {
+	var r struct {
 		Data struct {
 			RoleID string `json:"role_id"`
 		} `json:"data"`
 	}
-	if err := s.call(ctx, http.MethodGet, "/v1/auth/approle/role/"+RoleName+"/role-id", rootToken, nil, &role); err != nil {
-		return "", "", fmt.Errorf("ca custody: reading the role id: %w", err)
+	if err := s.call(ctx, http.MethodGet, "/v1/auth/approle/role/"+role+"/role-id", rootToken, nil, &r); err != nil {
+		return "", "", fmt.Errorf("ca custody: reading the role id of %s: %w", role, err)
 	}
-	var secret struct {
+	var sec struct {
 		Data struct {
 			SecretID string `json:"secret_id"`
 		} `json:"data"`
 	}
-	if err := s.call(ctx, http.MethodPost, "/v1/auth/approle/role/"+RoleName+"/secret-id", rootToken, nil, &secret); err != nil {
-		return "", "", fmt.Errorf("ca custody: minting the secret id: %w", err)
+	if err := s.call(ctx, http.MethodPost, "/v1/auth/approle/role/"+role+"/secret-id", rootToken, nil, &sec); err != nil {
+		return "", "", fmt.Errorf("ca custody: minting a secret id for %s: %w", role, err)
 	}
-	if role.Data.RoleID == "" || secret.Data.SecretID == "" {
-		return "", "", errors.New("ca custody: the store answered an empty role id or secret id")
+	if r.Data.RoleID == "" || sec.Data.SecretID == "" {
+		return "", "", fmt.Errorf("ca custody: the store answered an empty role id or secret id for %s", role)
 	}
-	return role.Data.RoleID, secret.Data.SecretID, nil
+	return r.Data.RoleID, sec.Data.SecretID, nil
 }
 
 // Login logs the CA in and answers its token.
@@ -261,4 +290,162 @@ func storeErrors(payload []byte) string {
 		return strings.Join(e.Errors, "; ")
 	}
 	return "no detail"
+}
+
+// activeWait bounds how long an unsealed store may take to become its own
+// active node. Integrated storage elects itself after an unseal; until then
+// every write answers "local node not active".
+const activeWait = 60 * time.Second
+
+// waitActive returns once the store answers its health check as the active
+// node, unsealed.
+func (s *Store) waitActive(ctx context.Context) error {
+	client := s.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	deadline := time.Now().Add(activeWait)
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(s.Addr, "/")+"/v1/sys/health", http.NoBody)
+		if err != nil {
+			return err
+		}
+		if resp, derr := client.Do(req); derr == nil {
+			discardClose(resp.Body.Close())
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("ca custody: the store at %s did not become active within %v", s.Addr, activeWait)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+func discardClose(error) {}
+
+// SnapshotPolicy is the only policy the snapshot role's tokens carry.
+const SnapshotPolicy = "innsegl-ca-snapshot"
+
+// SnapshotRoleName is the AppRole the custodian takes snapshots through.
+const SnapshotRoleName = "innsegl-ca-snapshot"
+
+// Snapshot writes the store's own consistent snapshot to w.
+func (s *Store) Snapshot(ctx context.Context, token string, w io.Writer) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(s.Addr, "/")+"/v1/sys/storage/raft/snapshot", http.NoBody)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Vault-Token", token)
+	client := s.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Minute}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("ca custody: the store at %s is not answering: %w", s.Addr, err)
+	}
+	defer func() { discardClose(resp.Body.Close()) }()
+	switch {
+	case resp.StatusCode == http.StatusServiceUnavailable:
+		return ErrSealed
+	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("%w (snapshot)", ErrRefused)
+	case resp.StatusCode != http.StatusOK:
+		b, rerr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		if rerr != nil {
+			return rerr
+		}
+		return fmt.Errorf("ca custody: snapshot answered %d: %s", resp.StatusCode, storeErrors(b))
+	}
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		return fmt.Errorf("ca custody: reading the snapshot: %w", err)
+	}
+	return nil
+}
+
+// Restore puts a snapshot into a store that has never been initialised. It
+// initialises the new store with keys of its own, only to be allowed to
+// restore, and forgets them: the restored store is sealed under the keys of
+// the store the snapshot came from, and opens only with that store's unlock
+// material. Measured on the pinned store: the new store's own key is then
+// refused, and the original unseal key opens it with the original CA key.
+func (s *Store) Restore(ctx context.Context, snapshot io.Reader) error {
+	st, err := s.SealStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if st.Initialized {
+		return errors.New("ca custody: restore needs a new store; this one is initialised. " +
+			"Restoring over it would replace whatever it holds")
+	}
+	unseal, root, err := s.Init(ctx)
+	if err != nil {
+		return err
+	}
+	if err = s.Unseal(ctx, unseal); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimSuffix(s.Addr, "/")+"/v1/sys/storage/raft/snapshot-force", snapshot)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Vault-Token", root)
+	client := s.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Minute}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("ca custody: restoring: %w", err)
+	}
+	b, rerr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	discardClose(resp.Body.Close())
+	if rerr != nil {
+		return rerr
+	}
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ca custody: restore answered %d: %s", resp.StatusCode, storeErrors(b))
+	}
+	// The restore reseals the store under the snapshot's keys; wait for it.
+	deadline := time.Now().Add(activeWait)
+	for {
+		if st, err = s.SealStatus(ctx); err == nil && st.Sealed {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("ca custody: the restored store did not seal itself under the snapshot's keys")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// PublicKey answers the newest public half of the transit key, as PEM.
+func (s *Store) PublicKey(ctx context.Context, token, key string) (string, error) {
+	var out struct {
+		Data struct {
+			LatestVersion int `json:"latest_version"`
+			Keys          map[string]struct {
+				PublicKey string `json:"public_key"`
+			} `json:"keys"`
+		} `json:"data"`
+	}
+	if err := s.call(ctx, http.MethodGet, "/v1/transit/keys/"+key, token, nil, &out); err != nil {
+		return "", err
+	}
+	k, ok := out.Data.Keys[fmt.Sprint(out.Data.LatestVersion)]
+	if !ok || k.PublicKey == "" {
+		return "", fmt.Errorf("ca custody: the key %q has no public half", key)
+	}
+	return k.PublicKey, nil
 }
