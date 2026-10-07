@@ -1,6 +1,6 @@
 # ADR-0058: An agent's identity lifecycle is driven by its traffic
 
-- Status: accepted; amended 2026-10-01 and 2026-10-03, twice (see the Amendments)
+- Status: accepted; amended 2026-10-01, 2026-10-03 (twice) and 2026-10-07 (see the Amendments)
 - Date: 2026-09-28
 - Deciders: the operator
 
@@ -343,3 +343,47 @@ endpoint: a mark, retired only after the grace period with no traffic from
 the session. A resumed session cancels it, or is adopted if it comes back
 later. The process id never leaves the machine. The silence backstop stays,
 for a machine whose client is gone for good.
+
+## Amendment (2026-10-07): a registration is replayed as recorded, never rebuilt
+
+**What changed.**
+
+- **A restore replays the run's own registration in full.** The 2026-10-01
+  amendment replayed agent type, task and repository, under a key computed
+  from the request. A restore now replays every member `run_registered`
+  recorded that a replay must repeat: the idempotency key, the branch, and
+  the parent or fork origin. A run that adopted a retired one was registered
+  under a key of its own, and a key computed from the request named the
+  retired run instead; a harness whose recorded version changed computed a
+  key nothing was registered under.
+- **A key that already names a registration is finished.** When a new run,
+  a fork or an adoption is about to be registered under a key the chain
+  already holds, the gateway replays what the chain recorded under it rather
+  than what the request would build now. The request content is read from
+  state that moves (branch, task, agent type, a pending spawn), and the MCP
+  refuses a replay whose content differs. A key the idempotency store holds
+  for other content, with nothing on the chain under it, moves to a key named
+  by the registration's own content.
+- **A spawn is held for its child until the child is registered**, so a
+  registration that failed is retried with the same parent and type.
+- **An appended registration is not refused for a parent retired since.**
+  When `register_agent` runs again for a key whose `run_registered` is
+  already on the chain (the append succeeded, SPIRE did not), it gives the
+  recorded run its identity. The parent was checked when that edge was
+  written. A new registration naming a retired parent is still refused.
+- **A transient database fault is an outage.** A retryable ledger error, or a
+  Postgres connection fault, is 503 with `Retry-After`, as an MCP outage
+  already was. A mapping row that could not be stored is 503 too: the next
+  request finds the run by its key and stores the row.
+- **Every refusal says what can be done**: try again, `innsegl retire
+  <run>`, spawn the subagent again, or start a new session.
+
+**Why.** Each of these refused a legitimate agent on every request: a
+lapsed run that had adopted a retired one, a subagent whose first
+registration reached the ledger but not SPIRE, a registration whose mapping
+row was lost and whose branch then moved.
+
+**What still holds.** Decision 11 is unchanged: a request the gateway cannot
+resolve to a live, restorable identity is refused and never forwarded. A
+retired run is never handed to a request: a replayed key whose run was
+retired since is adopted (decision 8). Signing stays fail-closed.
