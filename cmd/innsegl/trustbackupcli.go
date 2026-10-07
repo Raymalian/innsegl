@@ -13,7 +13,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -295,7 +294,7 @@ func runTrustBackupDrill(args []string, stdout, stderr io.Writer, deps trustBack
 	fs := flag.NewFlagSet("drill", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", client.ClientPaths(deps.home).TrustBackups, "the directory the bundles are kept in")
-	identity := fs.String("identity", filepath.Join(deps.home, ".innsegl", "trust-backup", "identity.txt"),
+	identity := fs.String("identity", client.ClientPaths(deps.home).TrustIdentity,
 		"the age identity file that opens the bundle (a Secure Enclave identity asks for Touch ID)")
 	extract := fs.String("extract", "", "also write the files under this new directory, 0600, for a restore; "+
 		"empty checks without writing anything")

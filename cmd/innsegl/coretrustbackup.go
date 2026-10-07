@@ -14,7 +14,6 @@ import (
 
 	"innsegl.dev/innsegl/internal/accounts"
 	"innsegl.dev/innsegl/internal/api"
-	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/trustbackup"
 )
 
@@ -63,35 +62,7 @@ func trustBackupHandler(dir string, store trustBackupStore, limit *backupLimiter
 			writeCoreError(w, http.StatusMethodNotAllowed, "innsegl core: trust backup: only GET is accepted")
 			return
 		}
-		id, ok := gateway.InstallationFromContext(r.Context())
-		if !ok {
-			gateway.WriteClientRefusal(w)
-			return
-		}
-		inst, err := store.GetInstallation(r.Context(), id)
-		if errors.Is(err, accounts.ErrNotFound) {
-			gateway.WriteClientRefusal(w)
-			return
-		}
-		if err != nil {
-			log.warn("trust backup: reading the installation", "installation_id", id, "err", err)
-			writeCoreError(w, http.StatusServiceUnavailable, "innsegl core: trust backup is unavailable; retry")
-			return
-		}
-		allowed, err := mayFetchTrustBackup(r.Context(), store, inst)
-		if err != nil {
-			log.warn("trust backup: reading memberships", "installation_id", id, "err", err)
-			writeCoreError(w, http.StatusServiceUnavailable, "innsegl core: trust backup is unavailable; retry")
-			return
-		}
-		if !allowed {
-			log.warn("trust backup: refused", "installation_id", id)
-			writeCoreError(w, http.StatusForbidden, trustBackupForbidden)
-			return
-		}
-		if wait, ok := limit.allow(id); !ok {
-			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
-			writeCoreError(w, http.StatusTooManyRequests, "innsegl core: trust backup: too many requests; retry later")
+		if !admitOperatorMachine(w, r, store, limit, log, "trust backup", trustBackupForbidden) {
 			return
 		}
 		if dir == "" {
@@ -180,6 +151,8 @@ func serveLatestTrustBackup(w http.ResponseWriter, store *trustbackup.Store, log
 type backupLimiter struct {
 	mu      sync.Mutex
 	now     func() time.Time
+	burst   float64
+	refill  time.Duration
 	buckets map[string]*backupBucket
 }
 
@@ -192,7 +165,7 @@ func newBackupLimiter(now func() time.Time) *backupLimiter {
 	if now == nil {
 		now = time.Now
 	}
-	return &backupLimiter{now: now, buckets: map[string]*backupBucket{}}
+	return &backupLimiter{now: now, burst: backupBurst, refill: backupRefill, buckets: map[string]*backupBucket{}}
 }
 
 // allow spends a token for id, or answers how long until one is back.
@@ -202,13 +175,13 @@ func (l *backupLimiter) allow(id string) (time.Duration, bool) {
 	now := l.now()
 	b := l.buckets[id]
 	if b == nil {
-		b = &backupBucket{tokens: backupBurst, at: now}
+		b = &backupBucket{tokens: l.burst, at: now}
 		l.buckets[id] = b
 	}
-	b.tokens = math.Min(backupBurst, b.tokens+float64(now.Sub(b.at))/float64(backupRefill))
+	b.tokens = math.Min(l.burst, b.tokens+float64(now.Sub(b.at))/float64(l.refill))
 	b.at = now
 	if b.tokens < 1 {
-		return time.Duration((1 - b.tokens) * float64(backupRefill)), false
+		return time.Duration((1 - b.tokens) * float64(l.refill)), false
 	}
 	b.tokens--
 	return 0, true

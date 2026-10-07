@@ -1076,6 +1076,10 @@ func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (
 	backup := trustBackupHandler(os.Getenv(envTrustBackupDir), h.writer, newBackupLimiter(nil), log)
 	mux.Handle(coreTrustBackupPath, backup)
 	mux.Handle(coreTrustBackupPath+"/", backup)
+	// ADR-0076: the CA key store's unlock, for the same machine.
+	custody := caCustodyHandler(os.Getenv(envCACustodianURL), h.writer, newCustodyLimiter(nil), log)
+	mux.Handle(coreCACustodyPath, custody)
+	mux.Handle(coreCACustodyPath+"/", custody)
 
 	outer := http.NewServeMux()
 	outer.Handle(coreEnrolPath, enrolHandler(h.writer, h.authority, log))
