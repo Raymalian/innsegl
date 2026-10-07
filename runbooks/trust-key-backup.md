@@ -90,11 +90,11 @@ Sigstore and SPIRE projects, as `cutover.md` step 1), load each volume:
 
 ```sh
 deploy/compose/trust-volumes.sh ensure
-for pair in fulcio-pki:innsegl-trust-fulcio-pki rekor-key:innsegl-trust-rekor-key \
-            identity-secret:innsegl-trust-identity-secret trust-history:innsegl-trust-history; do
-  item=${pair%%:*}; vol=${pair#*:}
-  docker run --rm -v "<dir>/$item":/from:ro -v "$vol":/to alpine:3.22 sh -c 'cp -a /from/. /to/'
-done
+restore() { docker run --rm -v "<dir>/$1":/from:ro -v "$2":/to alpine:3.22 sh -c 'cp -a /from/. /to/'; }
+restore fulcio-pki      innsegl-trust-fulcio-pki
+restore rekor-key       innsegl-trust-rekor-key
+restore trust-history   innsegl-trust-history
+restore identity-secret innsegl-trust-identity-secret
 ```
 
 Restore `spire-upstream-ca` and `gateway-ca-key` into their volumes the same
