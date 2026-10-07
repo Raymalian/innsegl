@@ -75,7 +75,7 @@ func TestOPS154TheCustodianKeepsASnapshot(t *testing.T) {
 	if err = f.c.Snapshot(ctx); err == nil {
 		t.Fatal("a sealed store gave a snapshot")
 	}
-	if after, _ := os.Stat(f.c.SnapshotPath()); after == nil || after.Size() == 0 {
+	if after, serr := os.Stat(f.c.SnapshotPath()); serr != nil || after.Size() == 0 {
 		t.Fatal("a failed snapshot removed the last good one")
 	}
 }

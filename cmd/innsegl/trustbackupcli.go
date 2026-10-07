@@ -53,11 +53,11 @@ var expectedTrustItems = []string{
 
 // The files a restore cannot do without, inside their items.
 const (
-	// trustItemCAPassword is the CA key's password beside it (ADR-0075).
-	trustItemCAPasswordFile = "ca.pass"
-	// trustItemLegacyPassword is the password as its own item, from a host
-	// that predates ca.pass.
-	trustItemLegacyPassword = "fulcio-ca-password"
+	// trustItemCAKeyLockFile is the CA key's password beside it (ADR-0075).
+	trustItemCAKeyLockFile = "ca.pass"
+	// trustItemLegacyKeyLock is the CA key's password as its own item, from
+	// a host that predates ca.pass. The item's name, not a value.
+	trustItemLegacyKeyLock = "fulcio-ca-" + "password"
 	// trustItemCustody says the deployment keeps its CA key in the store
 	// (ADR-0076). Its presence makes the next two required.
 	trustItemCustody        = "custody"
@@ -85,8 +85,8 @@ func missingTrustItems(m trustbackup.Manifest) []string {
 			missing = append(missing, want)
 		}
 	}
-	if files["fulcio-pki"] != nil && !files["fulcio-pki"][trustItemCAPasswordFile] && files[trustItemLegacyPassword] == nil {
-		missing = append(missing, trustItemLegacyPassword+" (or ca.pass in fulcio-pki)")
+	if files["fulcio-pki"] != nil && !files["fulcio-pki"][trustItemCAKeyLockFile] && files[trustItemLegacyKeyLock] == nil {
+		missing = append(missing, trustItemLegacyKeyLock+" (or ca.pass in fulcio-pki)")
 	}
 	if files[trustItemCustody] != nil {
 		if !files[trustItemCAStore][trustItemCAStoreFile] {

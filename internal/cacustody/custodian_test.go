@@ -93,7 +93,7 @@ func TestOPS141InitLeavesOnlyCiphertextBehind(t *testing.T) {
 			if err != nil || d.IsDir() {
 				return err
 			}
-			body, err := os.ReadFile(p) //nolint:gosec // G304: the test's own temp dirs
+			body, err := os.ReadFile(p)
 			if err != nil {
 				return err
 			}
