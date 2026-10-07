@@ -194,6 +194,10 @@ function fnargs(v, args,    open, inner, depth, i, c, cur, n) {
   return n
 }
 
+# is_hex6: a literal #rrggbb. Spelt with length(), not {6}: mawk 20200120
+# reads a regex interval as literal braces (OPS-134).
+function is_hex6(v) { return length(v) == 7 && v ~ /^#[0-9a-f]+$/ }
+
 # Resolve a token to a #rrggbb in one mode. mode is 1 (light) or 2 (dark).
 # Returns "" when it cannot, recording why in resolve_err.
 function resolve(name, mode, depth,    v) {
@@ -204,7 +208,7 @@ function resolve(name, mode, depth,    v) {
 
 function resolve_value(v, mode, depth, origin,    args, n, inner) {
   v = trim(v)
-  if (v ~ /^#[0-9a-f]{6}$/) return v
+  if (is_hex6(v)) return v
   if (v ~ /^light-dark[ \t]*\(/) {
     n = fnargs(v, args)
     if (n != 2) { resolve_err = origin ": light-dark() needs exactly two arms, found " n; return "" }
@@ -290,7 +294,7 @@ END {
     name = order[i]
     v = val[name]
     if (name ~ /^--innsegl-palette-/) {
-      if (v !~ /^#[0-9a-f]{6}$/)
+      if (!is_hex6(v))
         fail("palette token must be a literal #rrggbb: " name " = " v " (line " lineno[name] ")")
       npalette++
       stem = name; sub(/^--innsegl-palette-/, "", stem)

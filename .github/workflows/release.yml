@@ -170,7 +170,7 @@ jobs:
                 gsub(/[ \t]+$/, "", ref)
                 if (ref ~ /^\.\//) next
                 n = split(ref, part, "@")
-                if (n != 2 || part[2] !~ /^[0-9a-f]{40}$/) {
+                if (n != 2 || length(part[2]) != 40 || part[2] !~ /^[0-9a-f]+$/) {
                   printf "  %s:%d: uses: is not pinned to a 40-hex commit SHA -- %s\n", FILENAME, FNR, ref
                   bad++; next
                 }
@@ -184,7 +184,7 @@ jobs:
                 img = $0
                 sub(/^[ \t]*image:[ \t]*/, "", img)
                 gsub(/[ \t]+$/, "", img)
-                if (img !~ /@sha256:[0-9a-f]{64}$/) {
+                if (!match(img, /@sha256:[0-9a-f]+$/) || RLENGTH != 72) {
                   printf "  %s:%d: container image is not pinned by digest -- %s\n", FILENAME, FNR, img
                   bad++
                 }

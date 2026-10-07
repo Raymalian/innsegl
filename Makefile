@@ -426,6 +426,12 @@ INNSEGL_BUILD_SERVICES := innsegl-mcp innsegl-backup innsegl-api
 # $(DEPLOYED_FILE) and does nothing when the checkout still matches it; a
 # dirty tree never matches, so it is always built.
 DEPLOY_COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null)$(shell git diff --quiet HEAD -- 2>/dev/null || echo -dirty)
+# DEPLOY_STATE is what the marker holds: the commit and a checksum of the
+# compose .env, which git does not track. Turning a profile on is a change to
+# .env alone, and an update that compared only the commit started nothing
+# (OPS-135).
+COMPOSE_ENV_FILE ?= deploy/compose/.env
+DEPLOY_STATE := $(DEPLOY_COMMIT) env:$(shell if [ -f '$(COMPOSE_ENV_FILE)' ]; then cksum < '$(COMPOSE_ENV_FILE)' | cut -d' ' -f1; else echo none; fi)
 DEPLOYED_FILE := .innsegl/deployed-commit$(if $(DEV_OVERLAY),-dev)
 
 # GO_IMAGE_COMMIT stamps the Go image (dev.innsegl.commit): the last commit
@@ -688,14 +694,14 @@ update:
 	  { echo "make update: SPIRE or Rekor is not running; run make start"; exit 2; }
 	@deployed=$$(cat '$(DEPLOYED_FILE)' 2>/dev/null); \
 	 core=$$(docker inspect -f '{{.State.Status}} restarting={{.State.Restarting}}' $(STACK_PREFIX)-mcp 2>/dev/null); \
-	 if [ "$$deployed" = "$(DEPLOY_COMMIT)" ] && [ "$$core" = "running restarting=false" ]; then \
-	   echo "make update: already up to date ($(DEPLOY_COMMIT)); nothing to do"; exit 0; fi; \
-	 [ "$$deployed" = "$(DEPLOY_COMMIT)" ] && echo "make update: the core is $${core:-not there}; starting it again"; \
-	 echo "make update: deployed $${deployed:-an unrecorded checkout}, checkout is $(DEPLOY_COMMIT)"; \
+	 if [ "$$deployed" = "$(DEPLOY_STATE)" ] && [ "$$core" = "running restarting=false" ]; then \
+	   echo "make update: already up to date ($(DEPLOY_STATE)); nothing to do"; exit 0; fi; \
+	 [ "$$deployed" = "$(DEPLOY_STATE)" ] && echo "make update: the core is $${core:-not there}; starting it again"; \
+	 echo "make update: deployed $${deployed:-an unrecorded checkout}, checkout is $(DEPLOY_STATE)"; \
 	 $(MAKE) --no-print-directory rekor-log-up && \
 	 $(MAKE) --no-print-directory fulcio-file-ca-up && \
 	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services && \
-	 mkdir -p "$$(dirname '$(DEPLOYED_FILE)')" && echo '$(DEPLOY_COMMIT)' > '$(DEPLOYED_FILE)'
+	 mkdir -p "$$(dirname '$(DEPLOYED_FILE)')" && echo '$(DEPLOY_STATE)' > '$(DEPLOYED_FILE)'
 	@echo
 	@echo "updated: only the services whose image or settings changed were restarted"
 
