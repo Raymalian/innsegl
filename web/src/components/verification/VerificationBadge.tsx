@@ -36,6 +36,8 @@ const TONE: Record<Verdict, string> = {
   "content-verified": proofContent,
   // Not a verdict about cryptography, so not one of the three hues (§5.3).
   unattributed: proofNeutral,
+  // ADR-0073: cannot be verified. The unavailable tone, never the green.
+  "pre-history": proofUnavailable,
 };
 
 export interface VerificationBadgeProps {

@@ -55,6 +55,8 @@ import { PassRateCard } from "./PassRateCard";
 import { RecentRuns } from "./RecentRuns";
 import { strings } from "./strings";
 import { cardGrid, heading, link, mutedText, page, prose } from "./styles";
+import { TrustExpiryNotice } from "./TrustExpiryNotice";
+import type { TrustExpiry, TrustProblem } from "./TrustExpiryNotice";
 import type { OverviewData, PassRate, RunSummary, WindowedCount } from "./types";
 
 /** The alerts view lives at this path. */
@@ -73,6 +75,11 @@ export interface OverviewProps {
   readonly passRate?: PassRate;
   /** The live pass rate is being measured. */
   readonly measuring?: boolean;
+  /** ADR-0073: the CAs in use and when they expire; a warning renders for
+   * any within a year. Empty renders nothing. */
+  readonly trustExpiries?: readonly TrustExpiry[];
+  /** ADR-0073: what the trust watch's last pass found wrong. */
+  readonly trustProblems?: readonly TrustProblem[];
   /** Where the query API lives, for the links that point at raw material. */
   readonly apiBase: string;
   /** Injected for determinism; defaults to the wall clock. */
@@ -85,6 +92,8 @@ export function Overview({
   recentRuns = null,
   passRate,
   measuring = false,
+  trustExpiries = [],
+  trustProblems = [],
   now,
 }: OverviewProps) {
   const at = now ?? new Date();
@@ -98,6 +107,8 @@ export function Overview({
         <h1 className={heading}>{appStrings.labels.views.overview}</h1>
         <p className={prose}>{strings.page.summary}</p>
       </header>
+
+      <TrustExpiryNotice expiries={trustExpiries} problems={trustProblems} />
 
       <section aria-label={strings.metrics.regionLabel} className={cardGrid}>
         <MetricCard

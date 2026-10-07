@@ -32,6 +32,7 @@ import { AnchoringPulse, DEFAULT_LAG_BOUND_MS } from "./AnchoringPulse";
 import { DEFAULT_API_BASE, useOverview } from "./data";
 import { Overview } from "./Overview";
 import { strings } from "./strings";
+import { useTrustState } from "./TrustExpiryNotice";
 
 export interface OverviewViewProps {
   /** Where the query API lives. Same-origin by default. */
@@ -48,6 +49,7 @@ export function OverviewView({
   now,
 }: OverviewViewProps = {}) {
   const resource = useOverview({ base: apiBase, now });
+  const trust = useTrustState(apiBase);
 
   if (resource.status === "loading") {
     return <LoadingState what={strings.loading.what} onRetry={resource.reload} />;
@@ -78,6 +80,8 @@ export function OverviewView({
       recentRuns={resource.recentRuns}
       passRate={resource.passRate}
       measuring={resource.measuring}
+      trustExpiries={trust.expiries}
+      trustProblems={trust.problems}
       apiBase={apiBase}
       now={now}
     />

@@ -162,3 +162,20 @@ describe("the header's heartbeat", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("ADR-0073 the CA expiry warning on the overview", () => {
+  it("shows a CA near expiry from the health response", async () => {
+    api((url) => {
+      if (url.includes("/health")) {
+        return ok({
+          trust_expiries: [
+            { name: "gateway CA", kind: "gateway_ca", key_id: "bb", not_after: "2026-11-01T00:00:00Z", warning: "expires within 90 days" },
+          ],
+        });
+      }
+      return everythingAnswers(url);
+    });
+    render(<OverviewView now={NOW} />);
+    expect(await screen.findByText(/The gateway CA expires within 90 days, on 2026-11-01/)).toBeInTheDocument();
+  });
+});

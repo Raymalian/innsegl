@@ -19,6 +19,7 @@ import (
 	"innsegl.dev/innsegl/internal/mirror"
 	"innsegl.dev/innsegl/internal/reconciler"
 	"innsegl.dev/innsegl/internal/spire"
+	"innsegl.dev/innsegl/internal/trustwatch"
 )
 
 // `innsegl reconcile` — the component IP §6.5 makes required.
@@ -167,6 +168,12 @@ type reconcileOptions struct {
 	spireServerID string
 	workloadAPI   string
 	spireTimeout  time.Duration
+
+	// The trust watch (ADR-0073). trustHistory empty leaves it off.
+	trustHistory   string
+	trustSentinels string
+	fulcioURL      string
+	gatewayCADir   string
 }
 
 // cycler is the one thing this command needs of the transparency-log
@@ -198,6 +205,9 @@ type reconcileEngines struct {
 	Spire          spireCycler
 	SpireEnabled   bool
 	DisabledReason string
+	// Trust is the trust watch (ADR-0073); nil when no history is
+	// configured. It runs on the first cycle and then daily.
+	Trust *trustwatch.Watch
 }
 
 // reconcileDeps are the seams this command's tests replace. Production wiring
@@ -294,6 +304,19 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 			"Workload API socket this process fetches its own admin SVID from, used only when -spire-address is set ($"+envWorkloadAPI+")")
 		spireTimeout = fs.Duration("timeout", envDuration(envSPIRETimeout, spire.DefaultTimeout),
 			"bound on one SPIRE admin RPC, used only when -spire-address is set ($"+envSPIRETimeout+")")
+
+		// The trust watch (ADR-0073).
+		trustHistory = fs.String("trust-history", os.Getenv(envTrustHistory),
+			"the trust history this deployment keeps; daily, the roots in use are recorded "+
+				"in it and the sentinel commits verified against it. Empty leaves it off ($"+envTrustHistory+")")
+		trustSentinels = fs.String("trust-sentinels", os.Getenv(envTrustSentinels),
+			"the sentinel commits; empty means "+trustwatch.SentinelsFileName+" beside the "+
+				"history ($"+envTrustSentinels+")")
+		fulcioURL = fs.String("fulcio-url", os.Getenv(envFulcioURL),
+			"the certificate authority's base URL, read by the trust watch ($"+envFulcioURL+")")
+		gatewayCADir = fs.String("gateway-ca-dir", os.Getenv(envGatewayCACertDir),
+			"where the gateway writes its CA certificate, so the trust watch can record it "+
+				"and warn before it expires ($"+envGatewayCACertDir+")")
 	)
 
 	fs.Usage = func() {
@@ -385,6 +408,9 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 		interval:     *interval, once: *once,
 		spireAddress: *spireAddress, spireServerID: *spireServerID,
 		workloadAPI: *workloadAPI, spireTimeout: *spireTimeout,
+		trustHistory:   *trustHistory,
+		trustSentinels: trustSentinelsFor(*trustHistory, *trustSentinels),
+		fulcioURL:      *fulcioURL, gatewayCADir: *gatewayCADir,
 	}
 
 	engines, closeAll, err := deps.opener()(ctx, opts)
@@ -400,7 +426,9 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 
 	report := reconcileReporter{stdout: stdout, stderr: stderr, asJSON: *asJSON, quiet: *quiet}
 	if *once {
-		return report.cycle(ctx, engines)
+		code := report.cycle(ctx, engines)
+		report.trustIfDue(ctx, engines)
+		return code
 	}
 
 	ticker := time.NewTicker(*interval)
@@ -410,6 +438,7 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 		if code := report.cycle(ctx, engines); code != exitOK {
 			worst = code
 		}
+		report.trustIfDue(ctx, engines)
 		select {
 		case <-ctx.Done():
 			// A cancelled context is the operator stopping the loop, not a
@@ -419,6 +448,14 @@ func runReconcileLoop(ctx context.Context, args []string, stdout, stderr io.Writ
 			return worst
 		case <-ticker.C:
 		}
+	}
+}
+
+// trustIfDue runs the trust watch when it is due. Its alerts never change the
+// exit status, which is about intents; they are ALERT lines of their own.
+func (r reconcileReporter) trustIfDue(ctx context.Context, engines reconcileEngines) {
+	if engines.Trust.Due() {
+		r.trust(engines.Trust.Pass(ctx))
 	}
 }
 
@@ -848,7 +885,13 @@ func openReconciler(ctx context.Context, opts reconcileOptions) (reconcileEngine
 		}
 	}
 
-	engines := reconcileEngines{Rekor: engine, Spire: spireEngine, SpireEnabled: spireEngine != nil}
+	trust, trustErr := openTrustWatch(opts)
+	if trustErr != nil {
+		closeAll()
+		return reconcileEngines{}, nil, trustErr
+	}
+
+	engines := reconcileEngines{Rekor: engine, Spire: spireEngine, SpireEnabled: spireEngine != nil, Trust: trust}
 	if !engines.SpireEnabled {
 		engines.DisabledReason = "-spire-address (or $" + envSPIREAddress + ") is not set; " +
 			"SPIRE registration entries are not being compared against the ledger, and the " +

@@ -358,6 +358,7 @@ func TestAPI008EveryRequiredFlagHasAnEnvironmentFallback(t *testing.T) {
 	t.Setenv(envRekorURL, "http://rekor:3000")
 	t.Setenv(envAPIListen, "0.0.0.0:9999")
 	t.Setenv(envIssuer, "https://oidc.innsegl.dev")
+	t.Setenv(envTrustHistory, "/run/innsegl/trust/trust-history.json")
 
 	var seen apiOptions
 	code, _, stderr := runAPIUntilStopped(t, nil, stubAPIDeps(healthyStub(), &seen))
@@ -376,6 +377,9 @@ func TestAPI008EveryRequiredFlagHasAnEnvironmentFallback(t *testing.T) {
 	}
 	if seen.mirrorDir != "/srv/mirror" {
 		t.Errorf("-mirror-dir did not fall back to $%s: %q", mirror.EnvDir, seen.mirrorDir)
+	}
+	if seen.trustHistory != "/run/innsegl/trust/trust-history.json" {
+		t.Errorf("-trust-history did not fall back to $%s: %q", envTrustHistory, seen.trustHistory)
 	}
 	if strings.Contains(stderr, "secret") {
 		t.Errorf("the DSN's password was logged:\n%s", stderr)

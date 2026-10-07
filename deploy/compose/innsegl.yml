@@ -997,6 +997,12 @@ services:
       # to.
       INNSEGL_GATEWAY_CA_KEY_DIR: /run/innsegl/gateway-ca-key
       INNSEGL_GATEWAY_CA_CERT_DIR: /run/innsegl/gateway-ca
+      # ADR-0073: the trust history, every Fulcio root and log key this
+      # deployment has used. The reconcile companion running in this process
+      # seeds it on its first cycle (an existing deployment needs no step)
+      # and appends to it daily; the sentinel commits beside it are verified
+      # against it on the same schedule. Public material only.
+      INNSEGL_TRUST_HISTORY: /run/innsegl/trust/trust-history.json
 
       # The hosted shape (#462). The host address the gateway and dashboard are
       # published on, passed in so the process can refuse to start exposed
@@ -1205,6 +1211,9 @@ services:
       # x-admin-jwks-file's own comment gives: compose cannot interpolate a
       # YAML alias into a mapping key the way ${...} nests here.
       - ${INNSEGL_GATEWAY_CA_HOST_DIR:-${HOME}/.innsegl/ca}:/run/innsegl/gateway-ca
+      # READ-WRITE, and the only read-write mount: the trust history
+      # (ADR-0073). innsegl-api mounts it read-only.
+      - innsegl-trust-history:/run/innsegl/trust
     ports:
       # Loopback unless INNSEGL_BIND says otherwise, and INNSEGL_BIND moves
       # only the gateway and the dashboard. Every other line here stays on
@@ -1816,6 +1825,10 @@ services:
       INNSEGL_FULCIO_URL: *fulcio-url
       INNSEGL_REKOR_URL: *rekor-url
       INNSEGL_OIDC_ISSUER: *jwt-issuer
+      # ADR-0073: the trust history, read on every proof so a commit signed
+      # under a root this deployment has since rotated away from still
+      # verifies, and read for the CA expiry dates the dashboard warns on.
+      INNSEGL_TRUST_HISTORY: /run/innsegl/trust/trust-history.json
     volumes:
       # READ-ONLY. innsegl-mcp holds the one read-write mount, for receiving
       # pushes. See the header above.
@@ -1832,6 +1845,8 @@ services:
       # is the one writer and renews it; this process reads it again when it
       # changes. The core's file is 0600 for uid 1000, this service's user.
       - innsegl-dashboard-tls:/run/innsegl/dashboard-tls:ro
+      # READ-ONLY: the trust history (ADR-0073). innsegl-mcp writes it.
+      - innsegl-trust-history:/run/innsegl/trust:ro
     ports:
       # The dashboard (#475), on the host ports the nginx container used, so
       # the browser address, the passkey origin and bookmarks are unchanged.
@@ -2171,6 +2186,16 @@ volumes:
   # makes it unrecoverable.
   innsegl-identity-secret:
     name: ${INNSEGL_TRUST_IDENTITY_SECRET_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-identity-secret}
+    external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
+
+  # ADR-0073: the trust history, every Fulcio root and log key this deployment
+  # has used, and the sentinel commits that prove each era still verifies.
+  # Public material only. A trust volume, for the reason the identity secret
+  # is one: losing it loses the record of which roots were this deployment's,
+  # and a commit signed under a rotated-away root then stops verifying.
+  # MOUNTED BY: innsegl-mcp (rw), innsegl-api (ro).
+  innsegl-trust-history:
+    name: ${INNSEGL_TRUST_HISTORY_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-trust-history}
     external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
 
   # DECLARED IN spire.yml, JOINED HERE, and the only thing this stack takes

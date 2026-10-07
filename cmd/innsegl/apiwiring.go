@@ -217,6 +217,7 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 		HTTPClient: &http.Client{
 			Timeout: o.upstreamTimeout,
 		},
+		TrustHistoryFile: o.trustHistory,
 	})
 	if err != nil {
 		unwind()

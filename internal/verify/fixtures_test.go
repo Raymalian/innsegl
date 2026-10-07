@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/segment"
+	"innsegl.dev/innsegl/internal/trusthistory"
 )
 
 // Fixtures for the unit half of TC-VER.
@@ -593,6 +594,10 @@ type scenario struct {
 	integrated time.Time
 	// issuer is the OIDC issuer the verifier is told to expect, if any.
 	issuer string
+	// issuing is the CA that issued the leaf: ca itself, or the foreign one.
+	issuing *testCA
+	// history is the trust history the verifier is given, if any (ADR-0073).
+	history *trusthistory.History
 }
 
 // scenarioOptions are the knobs each case turns exactly one of.
@@ -709,6 +714,7 @@ func newScenario(t *testing.T, opt scenarioOptions) *scenario {
 		fulcio:     newFakeCA(t, ca.pem),
 		integrated: integrated,
 		issuer:     opt.issuer,
+		issuing:    issuing,
 	}
 }
 
@@ -727,6 +733,7 @@ func (s *scenario) verifier(t *testing.T) *Verifier {
 		RekorURL:  s.log.URL,
 		Issuer:    s.issuer,
 		Now:       func() time.Time { return s.integrated.Add(365 * 24 * time.Hour) },
+		History:   s.history,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

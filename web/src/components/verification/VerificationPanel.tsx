@@ -314,6 +314,8 @@ const VERDICT_TONE: Record<Verdict, string> = {
   unavailable: proofUnavailable,
   unattributed: proofNeutral,
   "content-verified": proofContent,
+  // ADR-0073: cannot be verified. The unavailable tone, never the green.
+  "pre-history": proofUnavailable,
 };
 
 /* ── one check ────────────────────────────────────────────────────────────── */

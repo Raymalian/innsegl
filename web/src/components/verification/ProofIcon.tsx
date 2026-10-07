@@ -28,6 +28,8 @@ const SHARED: Record<Exclude<Verdict, "verified" | "content-verified">, IconName
   failed: "integrity-alert",
   unavailable: "unknown",
   unattributed: "empty",
+  // ADR-0073: the clock, for a commit older than the record that could prove it.
+  "pre-history": "staleness",
 };
 
 export interface ProofIconProps {

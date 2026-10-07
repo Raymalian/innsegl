@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -16,14 +17,15 @@ import (
 
 // statusFixture is an enrolled machine whose core answers status with
 // components, and whose local client service answers or not.
-func statusFixture(t *testing.T, components string, serviceUp bool) statusDeps {
+func statusFixture(t *testing.T, components string, serviceUp bool, extra ...string) statusDeps {
 	t.Helper()
+	more := strings.Join(extra, "")
 	f := newConnectFixture(t)
 	f.core.Mux.HandleFunc(coreStatusPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if _, err := io.WriteString(w, `{"version":"v0.4.0","components":`+components+`,`+
 			`"installation":{"id":"inst-1","name":"dev-laptop","kind":"workstation","status":"active",`+
-			`"organisation":"example-org","repos":["*"]}}`); err != nil {
+			`"organisation":"example-org","repos":["*"]}`+more+`}`); err != nil {
 			t.Error(err)
 		}
 	})
@@ -89,5 +91,40 @@ func TestStatusWaitsLongerThanTheClientsOwnCoreProbe(t *testing.T) {
 	runStatus(t.Context(), nil, &out, &errOut, deps)
 	if strings.Contains(errOut.String(), "client service") {
 		t.Fatalf("a client that answered in four seconds was reported down:\n%s", errOut.String())
+	}
+}
+
+// ADR-0073: the core's status carries when each CA in use expires, and
+// `innsegl status` lists them and warns a year and 90 days ahead. A warning is
+// not an outage: the exit stays zero.
+func TestStatusWarnsBeforeACAInUseExpires(t *testing.T) {
+	soon := time.Now().AddDate(0, 0, 60).UTC().Format(time.RFC3339)
+	deps := statusFixture(t, `[{"name":"ledger","up":true}]`, true,
+		`,"trust_expiries":[`+
+			`{"name":"Fulcio root CA","kind":"fulcio_root","key_id":"aa","not_after":"2036-09-13T00:00:00Z"},`+
+			`{"name":"gateway CA","kind":"gateway_ca","key_id":"bb","not_after":"`+soon+`","warning":"expires within 90 days"}]`)
+	var out, errOut bytes.Buffer
+	if code := runStatus(t.Context(), nil, &out, &errOut, deps); code != exitOK {
+		t.Fatalf("exit %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "Fulcio root CA") || !strings.Contains(out.String(), "2036-09-13") {
+		t.Errorf("stdout does not list the Fulcio root's expiry:\n%s", out.String())
+	}
+	if !regexp.MustCompile(`trust +WARN +the gateway CA expires within 90 days`).MatchString(out.String()) {
+		t.Errorf("stdout has no WARN line for the gateway CA:\n%s", out.String())
+	}
+}
+
+// A sentinel that stopped verifying is shown as a WARN line with the time it
+// was first seen. It is not an outage: the exit stays zero.
+func TestStatusShowsTheTrustWatchsProblems(t *testing.T) {
+	deps := statusFixture(t, `[{"name":"ledger","up":true}]`, true,
+		`,"trust_problems":[{"text":"sentinel 6e55aa in github.com/o/r (era \"x\") should verify as verified: it verified as failed","since":"2026-10-06T09:00:00Z"}]`)
+	var out, errOut bytes.Buffer
+	if code := runStatus(t.Context(), nil, &out, &errOut, deps); code != exitOK {
+		t.Fatalf("exit %d; stderr:\n%s", code, errOut.String())
+	}
+	if !regexp.MustCompile(`trust +WARN +sentinel 6e55aa .*since 2026-10-06T09:00:00Z`).MatchString(out.String()) {
+		t.Errorf("stdout has no WARN line for the sentinel:\n%s", out.String())
 	}
 }

@@ -88,6 +88,7 @@ maintainer ask "why is it like this?"
 | [0070](0070-build-once-deploy-a-verified-image-bundle.md) | Build the images once; the host deploys a bundle only for the commit it verified | accepted | 2026-10-04 |
 | [0071](0071-the-projects-mount-tools-are-deprecated-and-their-implementation-removed.md) | The projects-mount tools are deprecated and their implementation removed | accepted | 2026-10-05 |
 | [0072](0072-a-development-stack-is-never-the-live-one.md) | A development stack is never the live one | accepted | 2026-10-05 |
+| [0073](0073-trust-roots-are-kept-as-an-append-only-history.md) | Trust roots are kept as an append-only history | accepted | 2026-10-07 |
 
 ## Open items
 

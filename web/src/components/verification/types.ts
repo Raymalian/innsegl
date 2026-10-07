@@ -39,8 +39,13 @@ export type CheckResult = "verified" | "failed" | "unavailable";
  * agent's commit once it reaches a default branch. It is weaker than
  * `verified` — the message, the parent and the author belong to whoever merged
  * it — and it is not `failed`, which would accuse a genuine signature.
+ *
+ * `pre-history` is ADR-0073's: the commit was signed before this deployment's
+ * trust history began, under a CA and a log that were lost before anything
+ * recorded them. Nothing can prove it and nothing in it was found wrong. It is
+ * not a pass and not a failure, and is never shown as either.
  */
-export type Verdict = CheckResult | "unattributed" | "content-verified";
+export type Verdict = CheckResult | "unattributed" | "content-verified" | "pre-history";
 
 /** One piece of evidence behind a check (doc 06 P1). */
 export interface Fact {

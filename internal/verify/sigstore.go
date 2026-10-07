@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/segment"
+	"innsegl.dev/innsegl/internal/trusthistory"
 )
 
 // The two endpoints a stranger is given, and the reads this verifier makes of
@@ -128,7 +130,7 @@ func sha256Hex(s string) string {
 // VER-004 fail, and VER-004 is the case that makes the system work a year
 // later.
 func (v *Verifier) checkChain(ctx context.Context, leaf *x509.Certificate,
-	intermediates []*x509.Certificate, entry EntryInfo) Check {
+	intermediates []*x509.Certificate, entry EntryInfo) (Check, bool) {
 
 	c := Check{Name: CheckCertificateChain, Facts: []Fact{
 		{"certificate identity", uriSANOf(leaf)},
@@ -146,14 +148,13 @@ func (v *Verifier) checkChain(ctx context.Context, leaf *x509.Certificate,
 
 	body, err := v.get(ctx, v.fulcioRoot)
 	if err != nil {
-		return unavailable(c, fmt.Sprintf("the certificate authority could not be reached: %v", err))
+		return unavailable(c, fmt.Sprintf("the certificate authority could not be reached: %v", err)), false
 	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(body) {
+	published := parseCertificates(body)
+	if len(published) == 0 {
 		return unavailable(c, fmt.Sprintf("%s did not return a PEM certificate, so there is "+
-			"no root to chain to", v.fulcioRoot))
+			"no root to chain to", v.fulcioRoot)), false
 	}
-	c.Facts = append(c.Facts, Fact{"trust root", v.fulcioRoot})
 
 	pool := x509.NewCertPool()
 	for _, i := range intermediates {
@@ -162,25 +163,37 @@ func (v *Verifier) checkChain(ctx context.Context, leaf *x509.Certificate,
 	// Evaluated at the certificate's own NotBefore: this half of the check is
 	// about the PATH, and mixing the validity window into it would report a
 	// chain problem for an expired certificate.
-	if _, err := leaf.Verify(x509.VerifyOptions{
-		Roots:         roots,
-		Intermediates: pool,
-		CurrentTime:   leaf.NotBefore,
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
-	}); err != nil {
-		return failed(c, fmt.Sprintf("the certificate does not chain to the root this "+
-			"deployment's Fulcio publishes: %v", err))
+	root, from, err := chainToAny(leaf, pool, v.rootCandidates(published))
+	if err != nil {
+		var unknown x509.UnknownAuthorityError
+		isUnknown := errors.As(err, &unknown)
+		where := "the root this deployment's Fulcio publishes"
+		if len(v.cfg.History.OfKind(trusthistory.KindFulcioRoot)) > 0 {
+			where += " or to any root in its trust history"
+		}
+		return failed(c, fmt.Sprintf("the certificate does not chain to %s: %v", where, err)), isUnknown
 	}
+	if from == nil {
+		c.Facts = append(c.Facts, Fact{"trust root", v.fulcioRoot})
+	} else {
+		c.Facts = append(c.Facts, Fact{"trust root", "trust history entry " + from.KeyID +
+			" (a Fulcio root this deployment has used, first used " +
+			from.FirstUsed.UTC().Format(time.RFC3339) + ")"})
+	}
+	c.Facts = append(c.Facts, Fact{FactTrustRootKeyID, keyIDOfCert(root)})
+	// The history's word on the root that chained, whichever list it came
+	// from: the published root can itself be retired or revoked.
+	ended, inHistory := v.cfg.History.Lookup(trusthistory.KindFulcioRoot, keyIDOfCert(root))
 	if v.cfg.Issuer != "" && fulcioIssuerOf(leaf) != v.cfg.Issuer {
 		return failed(c, fmt.Sprintf("the certificate names the OIDC issuer %q; this "+
-			"verifier was told to expect %q", fulcioIssuerOf(leaf), v.cfg.Issuer))
+			"verifier was told to expect %q", fulcioIssuerOf(leaf), v.cfg.Issuer)), false
 	}
 
 	if !entry.TimeAttested {
 		return unavailable(c, "the certificate chains to Fulcio's root, but the transparency "+
 			"log did not sign an integration time for this commit, so there is no trusted "+
 			"moment to evaluate the validity window at. Evaluating it against this machine's "+
-			"clock would fail every historical commit (IP §6.8)")
+			"clock would fail every historical commit (IP §6.8)"), false
 	}
 	at := entry.IntegratedAt.UTC()
 	c.Facts = append(c.Facts,
@@ -188,18 +201,115 @@ func (v *Verifier) checkChain(ctx context.Context, leaf *x509.Certificate,
 			" (the log's signed integration time)"},
 		Fact{"clock skew allowed", v.cfg.Skew.String()})
 
+	if inHistory {
+		if err := ended.AcceptsAt(at, v.cfg.Skew); err != nil {
+			return failed(c, "the certificate chains to a root this deployment no longer "+
+				"trusts for this moment: "+err.Error()), false
+		}
+	}
 	if at.Before(leaf.NotBefore.Add(-v.cfg.Skew)) {
 		return failed(c, fmt.Sprintf("the log integrated this entry at %s, before the "+
 			"certificate became valid at %s, by more than the %s bound",
-			at.Format(time.RFC3339), leaf.NotBefore.UTC().Format(time.RFC3339), v.cfg.Skew))
+			at.Format(time.RFC3339), leaf.NotBefore.UTC().Format(time.RFC3339), v.cfg.Skew)), false
 	}
 	if at.After(leaf.NotAfter.Add(v.cfg.Skew)) {
 		return failed(c, fmt.Sprintf("the log integrated this entry at %s, after the "+
 			"certificate expired at %s, by more than the %s bound",
-			at.Format(time.RFC3339), leaf.NotAfter.UTC().Format(time.RFC3339), v.cfg.Skew))
+			at.Format(time.RFC3339), leaf.NotAfter.UTC().Format(time.RFC3339), v.cfg.Skew)), false
+	}
+	if from != nil {
+		return verified(c, "the certificate chains to a Fulcio root in this deployment's "+
+			"trust history and was inside its validity window when the log integrated this "+
+			"commit"), false
 	}
 	return verified(c, "the certificate chains to Fulcio's published root and was inside "+
-		"its validity window when the log integrated this commit")
+		"its validity window when the log integrated this commit"), false
+}
+
+// FactTrustRootKeyID names the fact carrying the key id of the root the
+// certificate chained to, in the trust history's own form (ADR-0073). The
+// trust watch reads it to know which era a verified commit belongs to.
+const FactTrustRootKeyID = "trust root key id"
+
+// rootCandidate is one root the chain may end at, and the history entry it
+// came from (nil for the root Fulcio publishes now).
+type rootCandidate struct {
+	cert  *x509.Certificate
+	entry *trusthistory.Entry
+}
+
+// rootCandidates is the published root first, then every Fulcio root in the
+// history that is not the published one. Order matters only for which error
+// is reported when nothing chains.
+func (v *Verifier) rootCandidates(published []*x509.Certificate) []rootCandidate {
+	out := make([]rootCandidate, 0, len(published))
+	seen := map[string]bool{}
+	for _, p := range published {
+		seen[keyIDOfCert(p)] = true
+		out = append(out, rootCandidate{cert: p})
+	}
+	for _, e := range v.cfg.History.OfKind(trusthistory.KindFulcioRoot) {
+		cert, err := e.Certificate()
+		if err != nil || seen[e.KeyID] {
+			continue
+		}
+		seen[e.KeyID] = true
+		out = append(out, rootCandidate{cert: cert, entry: &e})
+	}
+	return out
+}
+
+// chainToAny verifies the leaf against each candidate root ON ITS OWN, so the
+// root it chained to is known and its history entry can be applied. The first
+// candidate's error is the one reported when nothing chains: it is the
+// published root, which is what a reader expects to be told about.
+func chainToAny(leaf *x509.Certificate, intermediates *x509.CertPool,
+	candidates []rootCandidate) (*x509.Certificate, *trusthistory.Entry, error) {
+
+	var first error
+	for _, cand := range candidates {
+		roots := x509.NewCertPool()
+		roots.AddCert(cand.cert)
+		if _, err := leaf.Verify(x509.VerifyOptions{
+			Roots:         roots,
+			Intermediates: intermediates,
+			CurrentTime:   leaf.NotBefore,
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
+		}); err != nil {
+			if first == nil {
+				first = err
+			}
+			continue
+		}
+		return cand.cert, cand.entry, nil
+	}
+	return nil, nil, first
+}
+
+// parseCertificates reads every CERTIFICATE block in a PEM document, skipping
+// anything that does not parse, which is AppendCertsFromPEM's own rule.
+func parseCertificates(body []byte) []*x509.Certificate {
+	var out []*x509.Certificate
+	for {
+		var block *pem.Block
+		block, body = pem.Decode(body)
+		if block == nil {
+			return out
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
+			out = append(out, cert)
+		}
+	}
+}
+
+// keyIDOfCert is the trust history's key id for a certificate: hex sha256 of
+// its SubjectPublicKeyInfo.
+func keyIDOfCert(c *x509.Certificate) string {
+	sum := sha256.Sum256(c.RawSubjectPublicKeyInfo)
+	return hex.EncodeToString(sum[:])
 }
 
 // ---------------------------------------------------------------------------
@@ -252,8 +362,12 @@ type hashedRekordBody struct {
 // certificate this commit is signed with, is a third party's record that the
 // holder of that certificate's private key signed THIS object and no other.
 // Change one byte of the commit and its SHA changes and there is no entry.
+//
+// The bool is true only when the log answered and holds no entry at all for
+// this commit: the one inclusion failure the pre-history verdict may follow
+// (see preHistory). Every other failure is about an entry that exists.
 func (v *Verifier) checkInclusion(ctx context.Context, commitSHA string,
-	leaf *x509.Certificate) (EntryInfo, Check) {
+	leaf *x509.Certificate) (EntryInfo, Check, bool) {
 
 	info := EntryInfo{LogIndex: -1}
 	digest := sha256.Sum256([]byte(commitSHA))
@@ -264,21 +378,21 @@ func (v *Verifier) checkInclusion(ctx context.Context, commitSHA string,
 
 	uuids, err := v.searchLog(ctx, want)
 	if err != nil {
-		return info, unavailable(c, fmt.Sprintf("the transparency log could not be searched: %v", err))
+		return info, unavailable(c, fmt.Sprintf("the transparency log could not be searched: %v", err)), false
 	}
 	if len(uuids) == 0 {
 		return info, failed(c, fmt.Sprintf("the log answered, and it holds no entry whose "+
 			"artifact is %s:%s. Nothing ever logged a signature over this commit object.",
-			rekorSHA256, want))
+			rekorSHA256, want)), true
 	}
 
 	uuid, entry, body, reach, mismatch := v.matchEntry(ctx, uuids, want, digest[:], leaf)
 	if entry == nil && reach != nil {
-		return info, unavailable(c, fmt.Sprintf("the log's entry could not be read: %v", reach))
+		return info, unavailable(c, fmt.Sprintf("the log's entry could not be read: %v", reach)), false
 	}
 	if entry == nil {
 		return info, failed(c, fmt.Sprintf("the log holds %d entry(s) for this artifact and "+
-			"none of them is this commit's: %v", len(uuids), mismatch))
+			"none of them is this commit's: %v", len(uuids), mismatch)), false
 	}
 
 	info.UUID = uuid
@@ -292,14 +406,15 @@ func (v *Verifier) checkInclusion(ctx context.Context, commitSHA string,
 	logKey, err := v.logPublicKey(ctx)
 	if err != nil {
 		return info, unavailable(c, fmt.Sprintf("the log's public key could not be fetched, "+
-			"so its proof cannot be checked against anything: %v", err))
+			"so its proof cannot be checked against anything: %v", err)), false
 	}
+	keys := v.logKeyCandidates(logKey)
 	proof := entry.Verification.InclusionProof
 	if proof == nil {
 		return info, unavailable(c, "the entry carries no inclusion proof: it has been "+
-			"accepted and not yet integrated into the tree")
+			"accepted and not yet integrated into the tree"), false
 	}
-	if err := (segment.InclusionProof{
+	signer, err := proveUnderAny(segment.InclusionProof{
 		EntryUUID:  uuid,
 		Body:       body,
 		LogIndex:   proof.LogIndex,
@@ -307,29 +422,49 @@ func (v *Verifier) checkInclusion(ctx context.Context, commitSHA string,
 		RootHash:   proof.RootHash,
 		Hashes:     proof.Hashes,
 		Checkpoint: proof.Checkpoint,
-	}).Verify(logKey); err != nil {
-		return info, failed(c, fmt.Sprintf("the log's inclusion proof does not verify: %v", err))
+	}, keys)
+	if err != nil {
+		return info, failed(c, fmt.Sprintf("the log's inclusion proof does not verify: %v", err)), false
 	}
 	c.Facts = append(c.Facts,
 		Fact{"tree size", fmt.Sprintf("%d", proof.TreeSize)},
 		Fact{"tree root", proof.RootHash})
 
+	if !signer.published {
+		c.Facts = append(c.Facts, Fact{"log key", "trust history entry " + signer.entry.KeyID +
+			" (a log key this deployment has used, first used " +
+			signer.entry.FirstUsed.UTC().Format(time.RFC3339) + ")"})
+	}
+	ended := signer.entry
+	constrained := ended != nil && (ended.RetiredAt != nil || ended.RevokedAt != nil)
+
 	if entry.Verification.SignedEntryTimestamp == "" {
 		c.Facts = append(c.Facts, Fact{"integration time",
 			"UNATTESTED — the log returned no signed entry timestamp"})
 		info.TimeAttested = false
+		if constrained {
+			return info, unavailable(c, "the entry's inclusion proof verifies under a log key "+
+				"this deployment has retired or revoked, and the log signed no integration "+
+				"time, so whether it was logged before that cannot be settled"), false
+		}
 		return info, verified(c, "the entry is this commit's and its inclusion proof "+
-			"verifies under the log's key, but the log signed no integration time")
+			"verifies under the log's key, but the log signed no integration time"), false
 	}
-	if err := verifyEntryTimestamp(*entry, logKey); err != nil {
+	if err := verifyEntryTimestamp(*entry, signer.key); err != nil {
 		return info, failed(c, fmt.Sprintf("the log's signature over this entry's timestamp "+
-			"does not verify: %v", err))
+			"does not verify: %v", err)), false
+	}
+	if ended != nil {
+		if err := ended.AcceptsAt(info.IntegratedAt, v.cfg.Skew); err != nil {
+			return info, failed(c, "the entry was logged under a log key this deployment no "+
+				"longer trusts for this moment: "+err.Error()), false
+		}
 	}
 	info.TimeAttested = true
 	c.Facts = append(c.Facts, Fact{"integration time",
 		info.IntegratedAt.Format(time.RFC3339) + " (signed by the log)"})
 	return info, verified(c, "the entry is this commit's, logged under this commit's "+
-		"certificate, and its inclusion proof verifies under the log's key")
+		"certificate, and its inclusion proof verifies under the log's key"), false
 }
 
 func (v *Verifier) searchLog(ctx context.Context, artifactHash string) ([]string, error) {
@@ -447,6 +582,51 @@ func verifyDigestSignature(pub any, digest, signature []byte) error {
 		return fmt.Errorf("the certificate carries a %T public key, which this verifier "+
 			"does not check; Fulcio issues ECDSA and RSA", pub)
 	}
+}
+
+// logKeyCandidate is one key a checkpoint may verify under, and its history
+// entry when the history holds one. published marks the key the log publishes
+// now, which may itself be in the history (and may itself be end-dated).
+type logKeyCandidate struct {
+	key       *ecdsa.PublicKey
+	entry     *trusthistory.Entry
+	published bool
+}
+
+// logKeyCandidates is the published key first, then every other log key in
+// the history. A history key that segment's reader does not accept as a log
+// key is skipped: that reader decides what a log key is.
+func (v *Verifier) logKeyCandidates(published *ecdsa.PublicKey) []logKeyCandidate {
+	out := []logKeyCandidate{{key: published, published: true}}
+	for _, e := range v.cfg.History.OfKind(trusthistory.KindTransparencyLog) {
+		key, err := segment.ParseLogPublicKey([]byte(e.PublicPEM))
+		if err != nil {
+			continue
+		}
+		if key.Equal(published) {
+			out[0].entry = &e
+			continue
+		}
+		out = append(out, logKeyCandidate{key: key, entry: &e})
+	}
+	return out
+}
+
+// proveUnderAny verifies an inclusion proof under each candidate key and
+// returns the one it verified under. The published key's error is the one
+// reported when none does.
+func proveUnderAny(proof segment.InclusionProof, keys []logKeyCandidate) (logKeyCandidate, error) {
+	var first error
+	for _, k := range keys {
+		err := proof.Verify(k.key)
+		if err == nil {
+			return k, nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return logKeyCandidate{}, first
 }
 
 // verifyEntryTimestamp checks the log's signature over (body, integratedTime,

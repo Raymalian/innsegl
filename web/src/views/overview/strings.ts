@@ -25,6 +25,17 @@
 export const GROUP_SEPARATOR = ",";
 
 export const strings = {
+  /* ADR-0073: a CA in use near its expiry. The warning words come from the
+   * server ("expires within 90 days"), so the dashboard and `innsegl status`
+   * say the same thing. */
+  trustExpiry: {
+    regionLabel: "Trust roots",
+    /* The trust watch's own words, and the day it first saw the problem. */
+    problem: (text: string, since: string) => `Trust watch: ${text} (since ${since}).`,
+    line: (name: string, warning: string, date: string) =>
+      `The ${name} ${warning}, on ${date}. Plan its rotation now; ADR-0073 records how a rotated root keeps old commits verifiable.`,
+  },
+
   page: {
     summary:
       "What the ledger holds, and how far behind the public record is.",

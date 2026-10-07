@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"innsegl.dev/innsegl/internal/trusthistory"
 	"innsegl.dev/innsegl/internal/verify"
 )
 
@@ -48,12 +49,20 @@ const (
 	// exitVerifyUnusable: the request could not be acted on at all — no such
 	// repository, no such commit, a configuration that cannot verify.
 	exitVerifyUnusable = 6
+	// exitVerifyPreHistory: the commit was signed before this deployment's
+	// trust history began, under a root and a log that are gone (ADR-0073).
+	// Not verified and not failed; it cannot be verified.
+	exitVerifyPreHistory = 7
 )
 
 // Flags fall back to the environment so a CI job can be configured once.
 // envFulcioURL and envRekorURL are serve.go's, reused rather than respelled:
 // two names for one endpoint is a deployment that can set the wrong one.
 const envIssuer = "INNSEGL_OIDC_ISSUER"
+
+// envTrustHistory is the trust history file (ADR-0073), the same name every
+// service that reads it uses.
+const envTrustHistory = "INNSEGL_TRUST_HISTORY"
 
 // verifyTimeout bounds the whole verification. Two HTTP round trips and a few
 // git reads; a verifier that has not answered in a minute should say so.
@@ -70,6 +79,9 @@ func verifyCommand(args []string, stdout, stderr io.Writer) int {
 	issuer := fs.String("issuer", os.Getenv(envIssuer),
 		"the OIDC issuer the certificate must name; empty means report it and do not "+
 			"constrain it ($"+envIssuer+")")
+	historyPath := fs.String("trust-history", os.Getenv(envTrustHistory),
+		"the deployment's trust history: every Fulcio root and log key it has used "+
+			"(ADR-0073). Empty means the published root and log key only ($"+envTrustHistory+")")
 	asJSON := fs.Bool("json", false, "write the report as JSON")
 	fs.Usage = func() {
 		fprintf(stderr, "Usage:\n  innsegl verify <commit> [flags]\n\n"+
@@ -82,8 +94,10 @@ func verifyCommand(args []string, stdout, stderr io.Writer) int {
 			"  %d  failed — the checks ran and the attribution does not hold\n"+
 			"  %d  verification unavailable — a check could not run\n"+
 			"  %d  unattributed — the commit makes no attribution claim\n"+
-			"  %d  unusable — no such commit, or a configuration that cannot verify\n",
-			exitVerifyFailed, exitVerifyUnavailable, exitVerifyUnattributed, exitVerifyUnusable)
+			"  %d  unusable — no such commit, or a configuration that cannot verify\n"+
+			"  %d  pre-history — signed before the trust history began; cannot be verified\n",
+			exitVerifyFailed, exitVerifyUnavailable, exitVerifyUnattributed, exitVerifyUnusable,
+			exitVerifyPreHistory)
 	}
 	// Parsed in a loop so that `innsegl verify <sha> --repo x` works as well as
 	// `innsegl verify --repo x <sha>`. Go's flag package stops at the first
@@ -103,10 +117,20 @@ func verifyCommand(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
+	var history *trusthistory.History
+	if *historyPath != "" {
+		h, herr := trusthistory.Load(*historyPath)
+		if herr != nil {
+			fprintf(stderr, "innsegl verify: the trust history: %v\n", herr)
+			return exitVerifyUnusable
+		}
+		history = h
+	}
 	v, verr := verify.New(verify.Config{
 		FulcioURL: *fulcio,
 		RekorURL:  *rekor,
 		Issuer:    *issuer,
+		History:   history,
 	})
 	if verr != nil {
 		fprintf(stderr, "innsegl verify: %v\n", verr)
@@ -147,6 +171,8 @@ func verdictExit(v verify.Verdict) int {
 		return exitVerifyUnavailable
 	case verify.VerdictUnattributed:
 		return exitVerifyUnattributed
+	case verify.VerdictPreHistory:
+		return exitVerifyPreHistory
 	default:
 		return exitVerifyUnusable
 	}

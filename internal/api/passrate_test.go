@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/verify"
 )
 
 // The overview's verification pass rate is measured live: the ledger only
@@ -80,5 +81,25 @@ func TestTheRecentPassRateIsMeasuredLiveNeverReadFromTheLedger(t *testing.T) {
 	}
 	if down.Checked != 1 || down.Unavailable != 1 || down.Verified != 0 {
 		t.Fatalf("with the upstreams down: %+v, want one could-not-check, never a ledger answer", down)
+	}
+}
+
+// The pass rate has three buckets. A commit signed before the trust history
+// began (ADR-0073) cannot be verified: it must never count as verified, and
+// it is not a failure either, so it counts as could not be checked.
+func TestThePassRateNeverCountsAPreHistoryCommitAsVerified(t *testing.T) {
+	cases := map[verify.Verdict]string{
+		verify.VerdictVerified:        string(verify.VerdictVerified),
+		verify.VerdictContentVerified: string(verify.VerdictVerified),
+		verify.VerdictFailed:          string(verify.VerdictFailed),
+		verify.VerdictUnattributed:    string(verify.VerdictFailed),
+		verify.VerdictUnavailable:     string(verify.VerdictUnavailable),
+		verify.VerdictPreHistory:      string(verify.VerdictUnavailable),
+		verify.Verdict("a new state"): string(verify.VerdictUnavailable),
+	}
+	for verdict, want := range cases {
+		if got := passRateBucket(verdict); got != want {
+			t.Errorf("passRateBucket(%q) = %q, want %q", verdict, got, want)
+		}
 	}
 }

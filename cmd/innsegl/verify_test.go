@@ -106,6 +106,13 @@ func TestVerifyCommandRefusesAConfigurationThatCannotVerify(t *testing.T) {
 		{"no such commit", []string{"verify", "no-such-revision",
 			"--fulcio-url", unreachableFulcio, "--rekor-url", unreachableRekor},
 			exitVerifyUnusable},
+		// ADR-0073: a trust history that cannot be read is refused, never
+		// ignored. Verifying without it would quietly be a narrower verifier
+		// than the one asked for.
+		{"an unreadable trust history", []string{"verify", "abc",
+			"--fulcio-url", unreachableFulcio, "--rekor-url", unreachableRekor,
+			"--trust-history", "/nonexistent/trust-history.json"},
+			exitVerifyUnusable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -150,6 +157,7 @@ func TestVerdictExitMapsEveryStateToItsOwnStatus(t *testing.T) {
 		verify.VerdictFailed:            exitVerifyFailed,
 		verify.VerdictUnavailable:       exitVerifyUnavailable,
 		verify.VerdictUnattributed:      exitVerifyUnattributed,
+		verify.VerdictPreHistory:        exitVerifyPreHistory,
 		verify.Verdict("something new"): exitVerifyUnusable,
 	}
 	seen := map[int]verify.Verdict{}

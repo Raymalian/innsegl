@@ -79,6 +79,10 @@ var trustVolumeKeys = []string{
 	"sigstore-fulcio-pki",
 	"sigstore-rekor-key",
 	"sigstore-trillian-db-data",
+	// ADR-0073: the record of which roots and log keys were this
+	// deployment's. Lose it and a commit signed under a rotated-away root
+	// stops verifying.
+	"innsegl-trust-history",
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +303,7 @@ func TestOPS032TheIrreplaceableVolumesAreExternal(t *testing.T) {
 		"INNSEGL_TRUST_FULCIO_PKI_VOLUME=innsegl-trust-fulcio-pki",
 		"INNSEGL_TRUST_REKOR_KEY_VOLUME=innsegl-trust-rekor-key",
 		"INNSEGL_TRUST_TRILLIAN_DB_VOLUME=innsegl-trust-trillian-db",
+		"INNSEGL_TRUST_HISTORY_VOLUME=innsegl-trust-history",
 		"INNSEGL_SPIRE_JWT_ISSUER=http://spire-oidc:8080",
 		"INNSEGL_SPIRE_PARENT_ID=unset",
 	}
@@ -308,6 +313,7 @@ func TestOPS032TheIrreplaceableVolumesAreExternal(t *testing.T) {
 		"sigstore-fulcio-pki":       "innsegl-trust-fulcio-pki",
 		"sigstore-rekor-key":        "innsegl-trust-rekor-key",
 		"sigstore-trillian-db-data": "innsegl-trust-trillian-db",
+		"innsegl-trust-history":     "innsegl-trust-history",
 	}
 	found := map[string]composeVolume{}
 	for _, rel := range []string{"deploy/compose/sigstore.yml", "deploy/compose/innsegl.yml"} {
@@ -417,6 +423,7 @@ func TestOPS033TrustVolumesAreCreatedAndNeverAdopted(t *testing.T) {
 		prefix + "-fulcio-pki",
 		prefix + "-rekor-key",
 		prefix + "-trillian-db",
+		prefix + "-history",
 	}
 	t.Cleanup(func() {
 		//nolint:usetesting // cleanup must outlive the test's cancelled context
@@ -530,7 +537,8 @@ func TestOPS033EnsureMigratesAnEmptyDestination(t *testing.T) {
 		//nolint:usetesting // cleanup must outlive the test's cancelled context
 		c := context.Background()
 		for _, n := range []string{src, dest, prefix + "-ledger-data",
-			prefix + "-identity-secret", prefix + "-rekor-key", prefix + "-trillian-db"} {
+			prefix + "-identity-secret", prefix + "-rekor-key", prefix + "-trillian-db",
+			prefix + "-history"} {
 			discardError(docker(c, "volume", "rm", "--force", n))
 		}
 	})

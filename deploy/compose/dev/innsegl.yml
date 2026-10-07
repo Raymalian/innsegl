@@ -71,5 +71,7 @@ volumes:
     name: innsegl-dev-trust-ledger-data
   innsegl-identity-secret:
     name: innsegl-dev-trust-identity-secret
+  innsegl-trust-history:
+    name: innsegl-dev-trust-history
   spire-agent-socket:
     name: innsegl-dev-spire_spire-agent-socket
