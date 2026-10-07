@@ -1072,6 +1072,10 @@ func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (
 	mux.Handle(coreRenewPath, renewHandler(h.writer, h.authority, log))
 	mux.Handle(coreDisconnectPath, disconnectHandler(h.writer, log))
 	mux.Handle(coreStatusPath, statusHandler(h.writer, log))
+	// ADR-0074: the encrypted trust-key backup, for the operator's machine.
+	backup := trustBackupHandler(os.Getenv(envTrustBackupDir), h.writer, newBackupLimiter(nil), log)
+	mux.Handle(coreTrustBackupPath, backup)
+	mux.Handle(coreTrustBackupPath+"/", backup)
 
 	outer := http.NewServeMux()
 	outer.Handle(coreEnrolPath, enrolHandler(h.writer, h.authority, log))
