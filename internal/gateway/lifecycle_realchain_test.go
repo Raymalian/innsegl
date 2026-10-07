@@ -176,7 +176,7 @@ func TestGID011RealChainALaterRequestOfThatConversationIsAdoptedNeverRevived(t *
 		t.Fatalf("Sweep: %v", sweepErr)
 	}
 
-	states := NewCredentialRunStates(f.dir, ledger.DefaultRestoreHorizon, nil)
+	states := NewCredentialRunStates(f.dir, f.store, ledger.DefaultRestoreHorizon, nil)
 	state, err := states.RunState(t.Context(), out.RunID)
 	if err != nil {
 		t.Fatalf("RunState: %v", err)
@@ -210,7 +210,7 @@ func TestGID011RealChainALaterRequestOfThatConversationIsAdoptedNeverRevived(t *
 func TestGID011RealChainTheSameSessionIsAdoptedAfterItsRunIsRetired(t *testing.T) {
 	f := newRealChainFixture(t)
 	registrar := NewMCPRegistrar()
-	states := NewCredentialRunStates(f.dir, ledger.DefaultRestoreHorizon, nil)
+	states := NewCredentialRunStates(f.dir, f.store, ledger.DefaultRestoreHorizon, nil)
 	workspaces := &fakeWorkspaceResolver{ws: realChainWorkspace()}
 	sessionWorkspaces := NewSessionWorkspaces(0)
 	id := Identification{Harness: "claude-code", Version: "2.1", SessionID: "gid011-same-session", AgentID: mainAgentID}

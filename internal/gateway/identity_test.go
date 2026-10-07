@@ -37,6 +37,8 @@ type fakeRunStates struct {
 	states        map[string]string
 	registrations map[string]RunRegistration
 	err           error
+	// stateErrs and keyErrs fail one run's state read, or one key's lookup.
+	stateErrs, keyErrs map[string]error
 }
 
 func newFakeRunStates() *fakeRunStates {
@@ -62,6 +64,26 @@ func (f *fakeRunStates) RunRegistration(_ context.Context, runID string) (RunReg
 	return reg, nil
 }
 
+// RegistrationByKey reads the registrations seeded with register by their
+// recorded key.
+func (f *fakeRunStates) RegistrationByKey(_ context.Context, key string) (RunRegistration, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return RunRegistration{}, false, f.err
+	}
+	if err := f.keyErrs[key]; err != nil {
+		return RunRegistration{}, false, err
+	}
+	for runID, reg := range f.registrations {
+		if key != "" && reg.IdempotencyKey == key {
+			reg.RunID = runID
+			return reg, true, nil
+		}
+	}
+	return RunRegistration{}, false, nil
+}
+
 func (f *fakeRunStates) set(runID, state string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -73,6 +95,9 @@ func (f *fakeRunStates) RunState(_ context.Context, runID string) (string, error
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return "", f.err
+	}
+	if err := f.stateErrs[runID]; err != nil {
+		return "", err
 	}
 	return f.states[runID], nil
 }
@@ -295,7 +320,7 @@ func TestIdentityGuardRestoresALapsedRun(t *testing.T) {
 		t.Fatalf("seed Insert: %v", err)
 	}
 	f.runStates.set("run-restore", ledger.RunLapsed)
-	f.runStates.register("run-restore", RunRegistration{AgentType: mainAgentID, TaskID: "task-1", Repo: "acme/id-test"})
+	f.runStates.register("run-restore", RunRegistration{AgentType: mainAgentID, TaskID: "task-1", Repo: "acme/id-test", IdempotencyKey: "k-restore"})
 
 	r2, refusal := f.guard.Check(identityRequest(t, id, "hello", "hi"))
 	if refusal != nil {
@@ -707,19 +732,22 @@ func TestIdentityGuardDoesNotCacheARowTheStoreFailedToInsert(t *testing.T) {
 	}
 	id := Identification{SessionID: "s1", AgentID: mainAgentID}
 
-	// A registration still succeeds -- Insert's own failure does not refuse
-	// the request, since the run itself is real and already registered.
-	if _, refusal := g.Check(identityRequest(t, id, "hello", "")); refusal != nil {
-		t.Fatalf("refused: %+v", refusal)
+	// The run is registered, but a request forwarded without its mapping row
+	// would leave the next one to re-decide a registration that is already
+	// finished (RM-334, #532): the insert is tried twice, then the request is
+	// a 503 the harness retries.
+	_, refusal := g.Check(identityRequest(t, id, "hello", ""))
+	if refusal == nil || refusal.Status != http.StatusServiceUnavailable || refusal.RetryAfter <= 0 {
+		t.Fatalf("refusal = %+v, want 503 with Retry-After", refusal)
+	}
+	if !strings.Contains(refusal.Reason, "run mapping could not be stored") {
+		t.Errorf("reason = %q, want it to name the mapping", refusal.Reason)
 	}
 
-	// But nothing was cached: a second request looks the run up again
-	// (fakeMappingStore never learned of it either, since Insert always
-	// failed), so it registers a SECOND time rather than continuing the
-	// first -- which is the honest consequence of a mapping store that
-	// cannot record what happened, not a defect in the cache.
-	if _, refusal := g.Check(identityRequest(t, id, "hello", "")); refusal != nil {
-		t.Fatalf("refused (second request): %+v", refusal)
+	// Nothing was cached: a second request looks the run up again rather
+	// than trusting a row the store never has.
+	if _, refusal := g.Check(identityRequest(t, id, "hello", "")); refusal == nil {
+		t.Fatal("second request permitted, want it refused while the store is down")
 	}
 	if len(f.registrar.calls) != 2 {
 		t.Errorf("registrar calls = %v, want 2 (both requests registered, since neither was ever recorded)",
@@ -827,7 +855,7 @@ func TestIdentityGuardRestoresFromTheChainWithoutADirectory(t *testing.T) {
 		t.Fatalf("seed Insert: %v", err)
 	}
 	f.runStates.set("run-restore", ledger.RunLapsed)
-	f.runStates.register("run-restore", RunRegistration{AgentType: "reviewer", TaskID: "task-9", Repo: "acme/chain"})
+	f.runStates.register("run-restore", RunRegistration{AgentType: "reviewer", TaskID: "task-9", Repo: "acme/chain", IdempotencyKey: "k-restore"})
 
 	if _, refusal := f.guard.Check(identityRequest(t, id, "hello", "hi")); refusal != nil {
 		t.Fatalf("refused: %+v", refusal)

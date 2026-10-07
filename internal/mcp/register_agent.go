@@ -459,7 +459,13 @@ func (c *RegisterAgentConfig) mint(ctx context.Context, run spire.RunRef, spiffe
 	// than before the idempotency claim. See checkParent for both halves of
 	// that placement.
 	if err := c.checkParent(ctx, run.RunID, in.ParentRunID, in.resumesRetiredParent); err != nil {
-		return nil, err
+		appended, rerr := c.alreadyAppended(ctx, run.RunID, in)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if !appended {
+			return nil, err
+		}
 	}
 	if _, err := c.Ledger.Append(ctx, registerAgentEvent(run, spiffeID, in)); err != nil {
 		return nil, registerAgentLedgerError(run.RunID, err)
@@ -520,7 +526,9 @@ func (c *RegisterAgentConfig) mint(ctx context.Context, run spire.RunRef, spiffe
 // check runs exactly when a `run_registered` is about to be written, which is
 // the only moment an edge can be created. A failure here releases the
 // idempotency claim (see IdempotencyStore.run), so nothing is appended and
-// nothing is held.
+// nothing is held. A re-run of a call whose append already succeeded is the
+// one exception (alreadyAppended): its edge is on the chain, so a parent
+// retired since does not refuse it.
 //
 // # A deployment with no run directory
 //
@@ -574,6 +582,38 @@ func (c *RegisterAgentConfig) checkParent(ctx context.Context, runID, parent str
 			parent, event.NewTimestamp(known.RetiredAt))
 	}
 	return nil
+}
+
+// registeredByKey is the ledger read alreadyAppended needs. *ledger.Store
+// implements it (LED-008's read half); a ledger that does not is asked
+// nothing, and a refused parent stays refused.
+type registeredByKey interface {
+	EventByIdempotencyKey(ctx context.Context, key string) (event.Fields, bool, error)
+}
+
+// alreadyAppended reports whether in's run_registered is already on the chain
+// under its idempotency key, naming this run and this parent (RM-334, #532).
+//
+// It is asked only after checkParent refused. A re-run of a call whose append
+// succeeded and whose SPIRE entry did not (ADR-0017 §5: the claim was
+// released, and the retry runs mint again) is not a new edge: the edge was
+// checked when it was appended and the chain holds it, so a parent retired
+// since cannot unmake it. Refusing that re-run refused the child an identity
+// the chain already records it holding, on every retry. A first registration
+// has nothing under its key, so checkParent's refusal stands for it unchanged.
+func (c *RegisterAgentConfig) alreadyAppended(ctx context.Context, runID string, in registerAgentIn) (bool, error) {
+	byKey, ok := c.Ledger.(registeredByKey)
+	if !ok {
+		return false, nil
+	}
+	rec, found, err := byKey.EventByIdempotencyKey(ctx, in.IdempotencyKey)
+	if err != nil {
+		return false, registerAgentLedgerError(runID, err)
+	}
+	return found &&
+		rec[event.FieldEventType] == event.EventTypeRunRegistered &&
+		rec[event.FieldRunID] == runID &&
+		rec[event.FieldParentRunID] == in.ParentRunID, nil
 }
 
 // identity creates the run's SPIRE entry, or adopts the one already there.

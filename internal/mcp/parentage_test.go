@@ -3,12 +3,15 @@
 package mcp
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/ledger"
+	"innsegl.dev/innsegl/internal/spire"
 )
 
 // MCP-081 and MCP-082 — a run's parent, named by run id, is checked before it
@@ -300,4 +303,123 @@ func ptChainLen(t *testing.T, env *raEnv) int64 {
 		t.Fatalf("ledger.Count: %v", err)
 	}
 	return n
+}
+
+// ---------------------------------------------------------------------------
+// MCP-100 — a re-run of an appended registration is not refused by a parent
+// retired since (RM-334, #532).
+// ---------------------------------------------------------------------------
+
+// keyBlindLedger is a ledger that cannot be asked what a key names.
+type keyBlindLedger struct{ RegisterAgentLedger }
+
+// keyReadFailsLedger is a ledger whose key read fails.
+type keyReadFailsLedger struct {
+	RegisterAgentLedger
+	err error
+}
+
+func (l keyReadFailsLedger) EventByIdempotencyKey(context.Context, string) (event.Fields, bool, error) {
+	return nil, false, l.err
+}
+
+// mcp100Child registers a child of a live parent whose SPIRE entry is not
+// created (the append succeeded), then retires the parent: the state a retry
+// meets.
+func mcp100Child(t *testing.T, env *raEnv, key string) registerAgentIn {
+	t.Helper()
+	env.runs.remember("run-live-parent")
+	in := registerAgentIn{
+		AgentType: raAgentType, TaskID: raTaskID, IdempotencyKey: key,
+		Repo: raRepo, Branch: raBranch, ParentRunID: "run-live-parent",
+	}
+	env.identities.mu.Lock()
+	env.identities.registerErr = &spire.Error{Class: spire.ClassIdentityUnavailable, Op: "create",
+		Message: "spire-server is down", Retryable: true}
+	env.identities.mu.Unlock()
+	if _, err := registerAgent(t.Context(), nil, in); err == nil {
+		t.Fatal("the outage did not interrupt the registration")
+	}
+	env.identities.mu.Lock()
+	env.identities.registerErr = nil
+	env.identities.mu.Unlock()
+	env.runs.retire("run-live-parent", env.clock.Now())
+	return in
+}
+
+// MCP-100: the re-run of a registration the chain already holds is the
+// recorded run, given its identity, though its parent was retired after the
+// append. The parent was checked when the edge was written.
+func TestMCP100AnAppendedChildIsNotRefusedForAParentRetiredSince(t *testing.T) {
+	env := raSetup(t, 0, nil)
+	in := mcp100Child(t, env, "mcp100-appended")
+
+	before := ptChainLen(t, env)
+	out, err := registerAgent(t.Context(), nil, in)
+	if err != nil {
+		t.Fatalf("the re-run was refused: %v", err)
+	}
+	if got := len(env.runRegisteredFor(t, out.RunID)); got != 1 {
+		t.Errorf("run_registered count = %d, want 1", got)
+	}
+	if after := ptChainLen(t, env); after != before {
+		t.Errorf("the re-run appended %d events, want none", after-before)
+	}
+}
+
+// MCP-100: what the exception does not cover keeps checkParent's refusal: a
+// different parent under the same key, a ledger that cannot be asked, and a
+// key read that fails, which is reported as itself.
+func TestMCP100TheExceptionIsOnlyForTheRecordedEdge(t *testing.T) {
+	t.Run("another parent under the key", func(t *testing.T) {
+		env := raSetup(t, 0, nil)
+		in := mcp100Child(t, env, "mcp100-other-parent")
+		env.runs.remember("run-other-parent")
+		env.runs.retire("run-other-parent", env.clock.Now())
+		in.ParentRunID = "run-other-parent"
+		_, err := registerAgent(t.Context(), nil, in)
+		if got := Classify(err).Class; got != ClassRunAlreadyRetired {
+			t.Fatalf("class = %s (%v), want %s", got, err, ClassRunAlreadyRetired)
+		}
+	})
+	t.Run("a ledger that cannot be asked", func(t *testing.T) {
+		env := raSetup(t, 0, nil)
+		in := mcp100Child(t, env, "mcp100-blind")
+		restore := reconfigure(t, func(c *RegisterAgentConfig) { c.Ledger = keyBlindLedger{c.Ledger} })
+		defer restore()
+		_, err := registerAgent(t.Context(), nil, in)
+		if got := Classify(err).Class; got != ClassRunAlreadyRetired {
+			t.Fatalf("class = %s (%v), want %s", got, err, ClassRunAlreadyRetired)
+		}
+	})
+	t.Run("the key read fails", func(t *testing.T) {
+		env := raSetup(t, 0, nil)
+		in := mcp100Child(t, env, "mcp100-read-fails")
+		restore := reconfigure(t, func(c *RegisterAgentConfig) {
+			c.Ledger = keyReadFailsLedger{RegisterAgentLedger: c.Ledger, err: &ledger.StoreError{
+				Class: ledger.ClassLedgerUnavailable, Op: "event", Retryable: true, Err: errors.New("down")}}
+		})
+		defer restore()
+		_, err := registerAgent(t.Context(), nil, in)
+		if c := Classify(err); c.Class != ClassLedgerUnavailable || !c.Retryable {
+			t.Fatalf("classified %+v, want LEDGER_UNAVAILABLE, retryable", c)
+		}
+	})
+}
+
+// reconfigure reinstalls the current register_agent configuration with
+// mutate applied.
+func reconfigure(t *testing.T, mutate func(*RegisterAgentConfig)) func() {
+	t.Helper()
+	cfg, err := registerAgentConfigured()
+	if err != nil {
+		t.Fatalf("registerAgentConfigured: %v", err)
+	}
+	next := *cfg
+	mutate(&next)
+	restore, err := ConfigureRegisterAgent(next)
+	if err != nil {
+		t.Fatalf("ConfigureRegisterAgent: %v", err)
+	}
+	return restore
 }
