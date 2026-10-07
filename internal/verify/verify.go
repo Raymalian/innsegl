@@ -85,6 +85,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"innsegl.dev/innsegl/internal/trusthistory"
 )
 
 // Errors a caller can act on. A malformed request is an error; a commit that
@@ -138,6 +140,13 @@ const (
 	// signature and no Agent-* trailer. It is not a failure, and reporting it
 	// as one would make every pre-adoption commit look like an attack (E7).
 	VerdictUnattributed Verdict = "unattributed"
+	// VerdictPreHistory is a commit signed before this deployment's trust
+	// history began, under a root and a log that are gone (ADR-0073). It is
+	// NOT a pass: nothing proves it. It is not a failure either, because
+	// nothing in it was found wrong; the evidence that would settle it no
+	// longer exists. It is reached only when the one check that can still
+	// run, the trailer against the certificate, holds; see preHistory.
+	VerdictPreHistory Verdict = "pre-history"
 )
 
 // The three check names, spelled as doc 06 §4.1 spells them.
@@ -268,6 +277,13 @@ type Config struct {
 	// began requiring a ledger would be one a stranger cannot run. Without it
 	// the three checks are exactly what they were.
 	Content ContentSource
+	// History, when set, is this deployment's trust history (ADR-0073): every
+	// Fulcio root and log key it has used. A certificate may chain to any
+	// root in it and an inclusion proof may verify under any log key in it,
+	// each subject to the entry's retirement and revocation. OPTIONAL: nil
+	// is exactly the verifier this was before, which trusts the published
+	// root and log key alone.
+	History *trusthistory.History
 }
 
 // Verifier performs the three checks. It holds no state between calls: there
@@ -325,6 +341,16 @@ func New(cfg Config) (*Verifier, error) {
 	}
 	v.cfg = cfg
 	return v, nil
+}
+
+// WithHistory is this verifier with a trust history (ADR-0073) in place of the
+// one it was built with. Everything else is unchanged, and the receiver is not
+// modified: a caller that reads the history afresh for each verification gets
+// a verifier per read and shares nothing between them.
+func (v *Verifier) WithHistory(h *trusthistory.History) *Verifier {
+	out := *v
+	out.cfg.History = h
+	return &out
 }
 
 // Verify reads one commit out of a repository and reports on it.
@@ -418,18 +444,80 @@ func (v *Verifier) verifyCommit(ctx context.Context, repo string, c commit) (Rep
 	}
 	rep.Certificate = describeCertificate(leaf)
 
-	entry, rekorCheck := v.checkInclusion(ctx, c.SHA, leaf)
+	entry, rekorCheck, noEntry := v.checkInclusion(ctx, c.SHA, leaf)
 	rep.Entry = entry
-	chainCheck := v.checkChain(ctx, leaf, intermediates, entry)
+	chainCheck, unknownRoot := v.checkChain(ctx, leaf, intermediates, entry)
 	identityCheck := checkIdentity(claim, claimErr, leaf)
 
 	rep.Checks = []Check{chainCheck, rekorCheck, identityCheck}
 	rep.Verdict = rollup(rep.Checks)
+	if began := v.cfg.History.Began(); unknownRoot && noEntry &&
+		identityCheck.Result == Verified && preHistory(v.cfg.History, leaf, began) {
+		rep.Verdict = VerdictPreHistory
+		rep.Checks = []Check{
+			beyondHistory(chainCheck, began), beyondHistory(rekorCheck, began), identityCheck,
+		}
+		rep.Notes = append(rep.Notes, preHistoryNote(began))
+		return rep, nil
+	}
 	if rekorCheck.Result == Failed {
 		rep.Recovered, rep.Notes = v.recover(ctx, repo, c, rep.Notes)
 	}
 	v.attributeByContent(ctx, repo, c, claim, &rep)
 	return rep, nil
+}
+
+// preHistory says whether a commit that chains to no known root and that the
+// log holds nothing for was signed under a root the operator named as lost,
+// before the trust history began.
+//
+// The caller has already required the rest, and every condition is load-
+// bearing:
+//   - the certificate chains to NO root, current or in the history, and the
+//     reason is an unknown authority, not an expired or misused certificate;
+//   - the log answered and holds NO entry for the commit: an entry that exists
+//     and does not match is evidence of something wrong, not of something lost;
+//   - the trailer matches the certificate: the one check that needs neither
+//     the root nor the log still runs, and still has to pass.
+//
+// Here: the certificate's Authority Key Identifier names a lost_root entry,
+// and its NotBefore precedes the history's first verifiable entry. Any other
+// unknown CA stays failed.
+//
+// NEITHER IS CRYPTOGRAPHIC. A certificate's issuer writes its own Authority
+// Key Identifier and its own NotBefore, and nothing this verifier can still
+// check signed either. The match narrows the label to an era the operator
+// named; it proves nothing about origin, which is exactly why the verdict is
+// never a pass. A history with no beginning has no "before".
+func preHistory(h *trusthistory.History, leaf *x509.Certificate, began time.Time) bool {
+	if began.IsZero() || !leaf.NotBefore.Before(began) {
+		return false
+	}
+	_, lost := h.LostRoot(leaf.AuthorityKeyId)
+	return lost
+}
+
+// preHistoryText is the verdict's meaning, in the words a reader sees.
+func preHistoryText(began time.Time) string {
+	return "signed before this deployment's trust history began (" +
+		began.UTC().Format(time.DateOnly) + "); cannot be verified"
+}
+
+// beyondHistory restates a check whose evidence predates the history: it
+// could not be settled, so it is unavailable, and what it measured against
+// today's trust material is kept as a fact rather than discarded.
+func beyondHistory(c Check, began time.Time) Check {
+	c.Facts = append(c.Facts, Fact{"measured against today's trust material", c.Detail})
+	return unavailable(c, "this commit was "+preHistoryText(began)+". The root and the log "+
+		"that would settle this check are not in this deployment's trust history.")
+}
+
+func preHistoryNote(began time.Time) string {
+	return "This commit was " + preHistoryText(began) + ". Its certificate names a root this " +
+		"deployment recorded as lost, and its transparency log holds no entry for it: the CA " +
+		"and the log it was signed under were lost before the trust history existed " +
+		"(ADR-0073). The name is the certificate's own claim and is not cryptographic. This " +
+		"is NOT a pass. Nothing in it was found to be wrong, and nothing can prove it either."
 }
 
 // contentVerifiedNote says what a rewritten-but-attributed commit means, in
