@@ -26,6 +26,9 @@ const SystemdUnit = "innsegl-client.service"
 
 // RenderPlist is the LaunchAgent that keeps `innsegl client serve` running
 // for the logged-in user. KeepAlive restarts it whenever it exits.
+// Interactive, not Background: the service unlocks the CA store with a
+// Secure Enclave key, and that asks the operator for Touch ID on screen
+// (ADR-0076).
 func RenderPlist(bin, logPath string) string {
 	esc := html.EscapeString
 	return `<?xml version="1.0" encoding="UTF-8"?>
@@ -45,7 +48,7 @@ func RenderPlist(bin, logPath string) string {
   <key>KeepAlive</key>
   <true/>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Interactive</string>
   <key>StandardOutPath</key>
   <string>` + esc(logPath) + `</string>
   <key>StandardErrorPath</key>
