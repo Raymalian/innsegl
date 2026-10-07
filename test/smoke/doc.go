@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build destructive
+
 // Package smoke holds OPS-004, the fresh-clone contract (RM-054, #62).
 //
 // This package is the adopter's first five minutes, executed. Everything else

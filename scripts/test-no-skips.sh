@@ -171,7 +171,17 @@ fi
 #       Remove this line when #195 rebuilds the gate on ADR-0047's content
 #       check, where a rebased commit is matched by patch-id and main becomes
 #       checkable again.
-ALLOWED='TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures|TestGenerateV3Fixtures|TestGenerateV4Fixtures'
+#
+#   TestASecureEnclaveIdentityOpensABundle
+#       ADR-0074. It opens a trust-key bundle with an age-plugin-se identity,
+#       which needs a Mac's Secure Enclave and a person's Touch ID: no runner
+#       has either, and no test can press the sensor. It skips naming what is
+#       missing. What CI does prove is the half the core runs: an age1se1
+#       recipient encrypts with no plugin, to the p256tag stanza the plugin's
+#       identity opens (TestASecureEnclaveRecipientEncryptsWithNoPlugin), and
+#       every other path of the bundle is exercised with an X25519 identity.
+#
+ALLOWED='TestASecureEnclaveIdentityOpensABundle|TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures|TestGenerateV3Fixtures|TestGenerateV4Fixtures'
 
 unexpected=$(grep -F '"Action":"skip"' "${out}" | grep -F '"Test":' | grep -Ev "\"Test\":\"(${ALLOWED})\"" || true)
 skipped=$(printf '%s' "${unexpected}" | grep -c . || true)

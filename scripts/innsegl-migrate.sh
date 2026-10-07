@@ -435,6 +435,7 @@ ${s}-core_innsegl-admin-jwks|the admin-credential public key set
 ${s}-core_innsegl-gateway-ca-key|the gateway's own CA private key (its certificate is republished on start)
 ${s}-core_innsegl-workspace|the working trees the sign_commit MCP tool resolves \`repo\` under
 ${s}-core_innsegl-backups|verified ledger backups and their reports
+${s}-core_innsegl-trust-backups|the encrypted trust-key bundles (ADR-0074); only the operator's own key can read them
 ${s}-core_innsegl-mirror|the per-repository mirrors clients push commits to (ADR-0065)
 ${s}-core_innsegl-dashboard-tls|the dashboard's certificate and key (RM-311; rewritten on start)
 ${s}-sigstore_sigstore-rekor-search|Rekor's search index
