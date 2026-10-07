@@ -30,7 +30,7 @@ const (
 	envCAStoreAddr  = "INNSEGL_CA_STORE_ADDR"
 	envCARecipients = "INNSEGL_CA_CUSTODY_RECIPIENTS"
 	envCADir        = "INNSEGL_CA_CUSTODY_DIR"
-	envCATokenPath  = "INNSEGL_CA_TOKEN_PATH"
+	envCATokenPath  = "INNSEGL_CA_TOKEN_PATH" //nolint:gosec // G101: a variable's name, not its value
 	envCAStoreKey   = "INNSEGL_CA_STORE_KEY"
 	envCAListen     = "INNSEGL_CA_CUSTODIAN_LISTEN"
 )

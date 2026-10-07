@@ -99,12 +99,12 @@ func caCustodyHandler(custodian string, store trustBackupStore, limit *backupLim
 }
 
 func proxyCustodyStatus(ctx context.Context, w http.ResponseWriter, client *http.Client, base string, log *serveLog) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+cacustody.PathStatus, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+cacustody.PathStatus, http.NoBody) //nolint:gosec // G704: the deployment's own custodian, from INNSEGL_CA_CUSTODIAN_URL
 	if err != nil {
 		writeCoreError(w, http.StatusInternalServerError, "innsegl core: ca custody: "+err.Error())
 		return
 	}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // G704: the deployment's own custodian
 	if err != nil {
 		log.warn("ca custody: the custodian is not answering", "err", err)
 		writeCoreJSON(w, http.StatusOK, caCustodyStatus{Enabled: true, Sealed: true,
@@ -130,7 +130,7 @@ func proxyCustody(ctx context.Context, w http.ResponseWriter, client *http.Clien
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, url, reader)
+	req, err := http.NewRequestWithContext(ctx, method, url, reader) //nolint:gosec // G704: the deployment's own custodian, from INNSEGL_CA_CUSTODIAN_URL
 	if err != nil {
 		writeCoreError(w, http.StatusInternalServerError, "innsegl core: ca custody: "+err.Error())
 		return
@@ -138,7 +138,7 @@ func proxyCustody(ctx context.Context, w http.ResponseWriter, client *http.Clien
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // G704: the deployment's own custodian
 	if err != nil {
 		log.warn("ca custody: the custodian is not answering", "err", err)
 		writeCoreError(w, http.StatusServiceUnavailable, "innsegl core: ca custody: the custodian is not answering; retry")
