@@ -4,6 +4,11 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -26,8 +31,8 @@ func TestOPS146TheCustodianNamesWhatItIsMissing(t *testing.T) {
 		want string
 		code int
 	}{
-		{"no verb", nil, nil, "init or serve", exitUsage},
-		{"unknown verb", []string{"export"}, nil, "init or serve", exitUsage},
+		{"no verb", nil, nil, "init, serve or ready", exitUsage},
+		{"unknown verb", []string{"export"}, nil, "init, serve or ready", exitUsage},
 		{"no store", []string{"init"}, map[string]string{envCARecipients: id.Recipient().String(),
 			envCADir: t.TempDir(), envCATokenPath: t.TempDir() + "/t"}, envCAStoreAddr, exitCACustodyFailed},
 		{"no recipient", []string{"init"}, map[string]string{envCAStoreAddr: "http://127.0.0.1:1",
@@ -47,5 +52,45 @@ func TestOPS146TheCustodianNamesWhatItIsMissing(t *testing.T) {
 				t.Fatalf("exit %d (want %d), stderr %q (want it to name %q)", code, c.code, errOut.String(), c.want)
 			}
 		})
+	}
+}
+
+// OPS-146 (PROPOSED) — `ready` is the custodian container's health: the
+// store answers, is initialised and unlocked, and the CA has a token. Fulcio's
+// bootstrap waits for it, so it must say no to each missing piece.
+func TestOPS146ReadyIsTheStoreUnlockedAndATokenWritten(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed := true
+	initialised := true
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"initialized":%t,"sealed":%t}`, initialised, sealed)
+	}))
+	defer store.Close()
+	tokenPath := filepath.Join(t.TempDir(), ".vault-token")
+	env := map[string]string{envCAStoreAddr: store.URL, envCARecipients: id.Recipient().String(),
+		envCADir: t.TempDir(), envCATokenPath: tokenPath}
+	ready := func() int {
+		var out, errOut bytes.Buffer
+		return runCACustodian(t.Context(), []string{"ready"}, &out, &errOut, func(k string) string { return env[k] })
+	}
+	if code := ready(); code != exitCACustodyFailed {
+		t.Fatalf("a sealed store is ready: exit %d", code)
+	}
+	sealed = false
+	if code := ready(); code != exitCACustodyFailed {
+		t.Fatalf("an unlocked store with no token written is ready: exit %d", code)
+	}
+	if err = os.WriteFile(tokenPath, []byte("s.token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := ready(); code != exitOK {
+		t.Fatalf("an unlocked store with a token is not ready: exit %d", code)
+	}
+	initialised = false
+	if code := ready(); code != exitCACustodyFailed {
+		t.Fatalf("an uninitialised store is ready: exit %d", code)
 	}
 }

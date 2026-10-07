@@ -24,6 +24,8 @@ import (
 //	serve   initialise it if it is new, then renew the CA's token and serve
 //	        the core: the store's status, the sealed unlock material, and the
 //	        unlock the operator's machine sends back
+//	ready   the container's health: the store unlocked and the CA's token
+//	        written, which is what Fulcio's bootstrap waits for
 const (
 	envCAStoreAddr  = "INNSEGL_CA_STORE_ADDR"
 	envCARecipients = "INNSEGL_CA_CUSTODY_RECIPIENTS"
@@ -39,6 +41,7 @@ const exitCACustodyFailed = 27
 const caCustodianUsage = `Usage:
   innsegl ca-custodian init     initialise a new CA key store, once
   innsegl ca-custodian serve    initialise it if new; renew the CA's token; serve the core
+  innsegl ca-custodian ready    exit 0 when the store is unlocked and the CA has a token
 
 From the environment: ` + envCAStoreAddr + `, ` + envCARecipients + `,
 ` + envCADir + `, ` + envCATokenPath + `, ` + envCAStoreKey + ` (default innsegl-ca),
@@ -56,13 +59,29 @@ func runCACustodian(ctx context.Context, args []string, stdout, stderr io.Writer
 		fprintf(stderr, "%s", caCustodianUsage)
 		return exitOK
 	}
-	if len(args) == 0 || (args[0] != "init" && args[0] != "serve") {
-		fprintf(stderr, "innsegl ca-custodian: name a verb: init or serve\n\n%s", caCustodianUsage)
+	if len(args) == 0 || (args[0] != "init" && args[0] != "serve" && args[0] != "ready") {
+		fprintf(stderr, "innsegl ca-custodian: name a verb: init, serve or ready\n\n%s", caCustodianUsage)
 		return exitUsage
 	}
 	c, err := custodianFromEnv(getenv, stdout)
 	if err != nil {
 		fprintf(stderr, "innsegl ca-custodian: %v\n", err)
+		return exitCACustodyFailed
+	}
+	if args[0] == "ready" {
+		st := c.Status(ctx)
+		switch {
+		case st.Error != "":
+			fprintf(stderr, "innsegl ca-custodian: not ready: %s\n", st.Error)
+		case !st.Initialized:
+			fprintf(stderr, "innsegl ca-custodian: not ready: the store is not initialised\n")
+		case st.Sealed:
+			fprintf(stderr, "innsegl ca-custodian: not ready: the store is sealed; the operator's machine unlocks it\n")
+		case !st.TokenPresent:
+			fprintf(stderr, "innsegl ca-custodian: not ready: the CA has no token yet\n")
+		default:
+			return exitOK
+		}
 		return exitCACustodyFailed
 	}
 	if args[0] == "init" {

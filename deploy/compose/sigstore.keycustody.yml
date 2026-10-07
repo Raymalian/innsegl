@@ -2,6 +2,12 @@
 #
 # RUNG 3 — the CA's private key never enters the CA process (RM-147, #238).
 #
+# ADR-0076 (#533) is how a deployment turns this on: one line in
+# deploy/compose/.env, INNSEGL_CA_CUSTODY=on, and the Makefile adds this file
+# and deploy/compose/innsegl.custody.yml. The custodian below keeps the store's
+# unlock material sealed to the operator's machine, which unlocks the store
+# after every restart; nobody types an unseal key. runbooks/ca-custody.md.
+#
 # AN OVERLAY, NOT A PROFILE, AND NOT THE DEFAULT. It is applied with a second
 # `-f` and it changes exactly one thing about Fulcio: where its key is. Without
 # it the stack is byte-for-byte what it was, which is what OPS-051 asserts —
@@ -39,7 +45,7 @@
 services:
 
   innsegl-ca-store:
-    image: openbao/openbao:2.4.1@sha256:2e4a5c84c4d2b6f1f8e4fd0fdbb0dca0f06bd0e4e40b2b5ee8fdbb0e1b9bd2e4
+    image: openbao/openbao:2.4.1@sha256:597f62847dd382382056a1d6704d50465908c2040038c4611832a23269a67112
     container_name: innsegl-ca-store
     restart: unless-stopped
     # NO `server -dev`. Dev mode holds everything in memory, unseals itself and
@@ -119,7 +125,7 @@ services:
       - innsegl-ca-import-scratch:/scratch
 
   innsegl-ca-import:
-    image: openbao/openbao:2.4.1
+    image: openbao/openbao:2.4.1@sha256:597f62847dd382382056a1d6704d50465908c2040038c4611832a23269a67112
     container_name: innsegl-ca-import
     restart: "no"
     profiles: ["ca-import"]
@@ -137,7 +143,10 @@ services:
       - "type=ecdsa-p256"
     environment:
       BAO_ADDR: http://innsegl-ca-store:8200
-      BAO_TOKEN: ${INNSEGL_CA_STORE_TOKEN:?see innsegl-ca-bootstrap below}
+      # The ca-import profile's own token, which the operator mints for the
+      # import alone (`scripts/ca-custody.sh token`). Not defaulted: empty,
+      # the store refuses the import, and nothing else uses this service.
+      BAO_TOKEN: ${INNSEGL_CA_STORE_TOKEN:-}
     volumes:
       - innsegl-ca-import-scratch:/scratch:ro
 
@@ -154,9 +163,6 @@ services:
       target: ca-bootstrap
     container_name: innsegl-ca-bootstrap
     restart: "no"
-    depends_on:
-      innsegl-ca-store:
-        condition: service_healthy
     networks:
       - innsegl-ca-store
     environment:
@@ -164,7 +170,12 @@ services:
       # NOT DEFAULTED, and there is no value for it in this repository. It is
       # the token `scripts/ca-custody.sh token` mints from the operator's own
       # credentials, scoped to the transit key and nothing else.
-      INNSEGL_CA_STORE_TOKEN: ${INNSEGL_CA_STORE_TOKEN:?the key-custody overlay needs a store token scoped to the CA key. `scripts/ca-custody.sh token` mints one; there is deliberately no default, because a default would be a shipped credential}
+      # ADR-0076: the token the custodian writes to the token volume. A token
+      # in the environment still wins, for a deployment that mints its own
+      # with `scripts/ca-custody.sh token`; there is no default for it,
+      # because a default would be a shipped credential.
+      INNSEGL_CA_STORE_TOKEN: ${INNSEGL_CA_STORE_TOKEN:-}
+      INNSEGL_CA_STORE_TOKEN_FILE: /run/ca-token/.vault-token
       INNSEGL_CA_STORE_KEY: ${INNSEGL_CA_STORE_KEY:-innsegl-ca}
       INNSEGL_TRUST_DOMAIN: ${INNSEGL_TRUST_DOMAIN:-innsegl.dev}
       INNSEGL_CA_CHAIN_PATH: /etc/fulcio-kms/chain.pem
@@ -176,10 +187,22 @@ services:
       # the same key still signs and the same certificate still presents, so
       # nothing already issued changes. Absent, a root is minted instead, which
       # is the fresh-deployment case.
-      INNSEGL_CA_CERT_SRC: /etc/fulcio-src/ca.crt
+      #
+      # ADR-0076 does NOT adopt: turning custody on is a rotation to a new
+      # root that the store generated (`make innsegl-ca-rotate TO=custody`),
+      # and the file CA's era ends in the trust history. A deployment that
+      # imported its key with the ca-import profile sets
+      # INNSEGL_CA_CUSTODY_ADOPT_ROOT=/etc/fulcio-src/ca.crt instead.
+      INNSEGL_CA_CERT_SRC: ${INNSEGL_CA_CUSTODY_ADOPT_ROOT:-}
+    depends_on:
+      innsegl-ca-store:
+        condition: service_healthy
+      innsegl-ca-custodian:
+        condition: service_healthy
     volumes:
       - sigstore-fulcio-pki:/etc/fulcio-src:ro
       - sigstore-fulcio-kms:/etc/fulcio-kms
+      - innsegl-ca-token:/run/ca-token:ro
 
   # Fulcio, with its key somewhere else. Everything else about it — the ports,
   # the networks, the read-only root, the dropped capabilities — is sigstore.yml's
@@ -193,7 +216,11 @@ services:
       - innsegl-ca-store
     environment:
       VAULT_ADDR: http://innsegl-ca-store:8200
-      VAULT_TOKEN: ${INNSEGL_CA_STORE_TOKEN:?see innsegl-ca-bootstrap above}
+      # ADR-0076: the KMS client reads VAULT_TOKEN, then ~/.vault-token, once
+      # at start. HOME is the token volume, where the custodian writes the
+      # token; empty here unless a deployment passes its own.
+      VAULT_TOKEN: ${INNSEGL_CA_STORE_TOKEN:-}
+      HOME: /run/ca-token
     command:
       - "serve"
       - "--host=0.0.0.0"
@@ -213,10 +240,67 @@ services:
       # which is what OPS-049 reads the filesystem for. This volume holds the
       # certificate and the issuer config, both public.
       - sigstore-fulcio-kms:/etc/fulcio:ro
+      - innsegl-ca-token:/run/ca-token:ro
+
+  # ADR-0076. The custodian: it initialises a new store once, keeps the unlock
+  # material sealed to the operator's recipients (ciphertext only, on a trust
+  # volume), writes the CA's token to the token volume, renews it, and unlocks
+  # the store with material the operator's machine sends back through the
+  # core. The store's network admits it; the unlock network is its only other,
+  # and the core is that network's only other member.
+  innsegl-ca-custodian:
+    image: ${INNSEGL_IMAGE:-innsegl:local}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: innsegl-ca-custodian
+    restart: unless-stopped
+    command: ["ca-custodian", "serve"]
+    depends_on:
+      innsegl-ca-store:
+        condition: service_healthy
+    networks:
+      - innsegl-ca-store
+      - innsegl-ca-unlock
+    labels:
+      dev.innsegl.component: ca-custodian
+    # The CA's uid, so the token it writes 0600 is one the CA can read.
+    user: "65532:65532"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      INNSEGL_CA_STORE_ADDR: http://innsegl-ca-store:8200
+      INNSEGL_CA_STORE_KEY: ${INNSEGL_CA_STORE_KEY:-innsegl-ca}
+      INNSEGL_CA_CUSTODY_DIR: /custody
+      INNSEGL_CA_TOKEN_PATH: /run/ca-token/.vault-token
+      INNSEGL_CA_CUSTODIAN_LISTEN: ":8210"
+      # Who can open the unlock material: the operator's machine. The trust
+      # backup's recipients unless set apart (ADR-0074).
+      INNSEGL_CA_CUSTODY_RECIPIENTS: ${INNSEGL_CA_CUSTODY_RECIPIENTS:-${INNSEGL_TRUST_BACKUP_RECIPIENTS:-}}
+    volumes:
+      - innsegl-ca-custody-data:/custody
+      - innsegl-ca-token:/run/ca-token
+    healthcheck:
+      # Healthy once the store is initialised and the CA has a token: what
+      # the bootstrap needs before it can mint the root.
+      test: ["CMD", "innsegl", "ca-custodian", "ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 networks:
   innsegl-ca-store:
     name: ${INNSEGL_CA_STORE_NETWORK:-innsegl-ca-store}
+  # ADR-0076. MEMBERS: innsegl-ca-custodian and innsegl-mcp (which joins it
+  # from deploy/compose/innsegl.custody.yml). Internal: it reaches nothing.
+  innsegl-ca-unlock:
+    name: ${INNSEGL_CA_UNLOCK_NETWORK:-innsegl-ca-unlock}
+    internal: true
 
 volumes:
   # The plaintext key's only resting place, and it is memory. tmpfs so the
@@ -241,3 +325,20 @@ volumes:
   innsegl-ca-store-data:
     name: ${INNSEGL_TRUST_CA_STORE_VOLUME:-innsegl-trust-ca-store}
     external: true
+
+  # ADR-0076. The sealed unlock material. On the trust root's list beside the
+  # store: losing it leaves a store nobody can unseal.
+  innsegl-ca-custody-data:
+    name: ${INNSEGL_TRUST_CA_CUSTODY_VOLUME:-innsegl-trust-ca-custody}
+    external: true
+
+  # ADR-0076. The CA's token, in memory only: gone at a reboot, when the store
+  # is sealed anyway. Owned by the CA's uid so the custodian, running as it,
+  # can write the token there.
+  innsegl-ca-token:
+    name: ${INNSEGL_CA_TOKEN_VOLUME:-innsegl-ca-token}
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=64k,uid=65532,gid=65532,mode=0700

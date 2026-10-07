@@ -121,7 +121,17 @@ STACK_PREFIX   := $(or $(INNSEGL_STACK_PREFIX),innsegl)
 STACK_SHELL_ENV := INNSEGL_STACK_PREFIX='$(INNSEGL_STACK_PREFIX)' INNSEGL_TRUST_VOLUME_PREFIX='$(INNSEGL_TRUST_VOLUME_PREFIX)'
 SPIRE_FILES    := -f deploy/compose/spire.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,spire.yml))
 SIGSTORE_FILES := -f deploy/compose/sigstore.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,sigstore.yml))
-INNSEGL_FILES  := -f deploy/compose/innsegl.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,innsegl.yml))
+
+# ADR-0076 (#533): CA key custody, unlocked by the operator's machine. OFF
+# unless the compose .env says INNSEGL_CA_CUSTODY=on, so the shipped default is
+# the file CA (OPS-051). On, the core runs with innsegl.custody.yml, and the
+# store and its custodian run under sigstore.keycustody.yml. Fulcio itself
+# moves onto the store only through `make innsegl-ca-rotate TO=custody`, which
+# ends the file CA's era in the trust history; until then bring-up leaves it on
+# the file CA and says so (OPS-149).
+COMPOSE_ENV_FILE ?= deploy/compose/.env
+CA_CUSTODY := $(shell grep -qsx 'INNSEGL_CA_CUSTODY=on' '$(COMPOSE_ENV_FILE)' && echo on)
+INNSEGL_FILES  := -f deploy/compose/innsegl.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,innsegl.yml))$(if $(CA_CUSTODY), -f deploy/compose/innsegl.custody.yml)
 
 INNSEGL_TRUST_ENV := $(shell $(STACK_SHELL_ENV) deploy/compose/trust-volumes.sh env | tr '\n' ' ')
 GUARD             := scripts/teardown-guard.sh
@@ -220,7 +230,8 @@ sigstore-up: innsegl-trust-volumes
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
-	  $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d
+	  $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d$(if $(CA_CUSTODY), $(SIGSTORE_UP_EXCEPT_FULCIO))
+	$(if $(CA_CUSTODY),@$(MAKE) --no-print-directory ca-custody-up)
 	@$(MAKE) --no-print-directory rekor-index-ready
 
 # Both this and innsegl-here-services ensure the trust volumes first: compose
@@ -250,6 +261,7 @@ rekor-log-up: innsegl-trust-volumes
 # sigstore.keycustody.yml is left alone: an `up` of fulcio from sigstore.yml
 # alone would put the file CA back there (see rekor-log-up).
 fulcio-file-ca-up: innsegl-trust-volumes
+	$(if $(CA_CUSTODY),@$(MAKE) --no-print-directory ca-custody-up; exit 0)
 	@cmd=$$(docker inspect -f '{{json .Config.Cmd}}' $(STACK_PREFIX)-sigstore-fulcio 2>/dev/null); \
 	 case "$$cmd" in \
 	   *--ca=kmsca*) echo "make update: Fulcio runs under key custody; left as it is" ;; \
@@ -429,8 +441,7 @@ DEPLOY_COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null)$(shell git d
 # DEPLOY_STATE is what the marker holds: the commit and a checksum of the
 # compose .env, which git does not track. Turning a profile on is a change to
 # .env alone, and an update that compared only the commit started nothing
-# (OPS-135).
-COMPOSE_ENV_FILE ?= deploy/compose/.env
+# (OPS-135). COMPOSE_ENV_FILE is set above, beside CA_CUSTODY.
 DEPLOY_STATE := $(DEPLOY_COMMIT) env:$(shell if [ -f '$(COMPOSE_ENV_FILE)' ]; then cksum < '$(COMPOSE_ENV_FILE)' | cut -d' ' -f1; else echo none; fi)
 DEPLOYED_FILE := .innsegl/deployed-commit$(if $(DEV_OVERLAY),-dev)
 
@@ -742,6 +753,35 @@ link:
 # remove. Losing the unseal key loses the CA exactly as losing a key file would
 # — the same loss, a different custodian, and the custodian is now a person.
 CA_CUSTODY_COMPOSE = -f deploy/compose/sigstore.yml -f deploy/compose/sigstore.keycustody.yml
+
+# Every service of sigstore.yml but Fulcio: with custody on, Fulcio is brought
+# up by ca-custody-up, under the overlay or left on the file CA.
+SIGSTORE_UP_EXCEPT_FULCIO = sigstore-bootstrap trillian-db trillian-log-server trillian-log-signer rekor
+
+## ca-custody-up: ADR-0076 — the CA key store and its custodian; Fulcio on the
+##   store once `make innsegl-ca-rotate TO=custody` has moved it there
+ca-custody-up: ca-custody-volumes
+	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store innsegl-ca-custodian
+	@cmd=$$(docker inspect -f '{{json .Config.Cmd}}' $(STACK_PREFIX)-sigstore-fulcio 2>/dev/null); \
+	 case "$$cmd" in \
+	   *--ca=fileca*) echo "ca custody: on in .env, and Fulcio still runs the file CA."; \
+	                  echo "  Finish the switch: make innsegl-ca-rotate CONFIRM=rotate TO=custody MODE=retire REASON='CA key custody'"; \
+	                  echo "  (runbooks/ca-custody.md). Until then nothing about signing changes." ;; \
+	   *) INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	        $(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-bootstrap fulcio ;; \
+	 esac
+
+## ca-custody-volumes: ADR-0076 — the store's data and the sealed unlock
+##   material, trust-root volumes the teardown guard refuses to remove
+ca-custody-volumes:
+	@for v in innsegl-trust-ca-store innsegl-trust-ca-custody; do \
+	   docker volume inspect "$$v" >/dev/null 2>&1 || \
+	   docker volume create --label dev.innsegl.trust-root="the CA key store and its sealed unlock material (ADR-0076)" "$$v" >/dev/null || exit 1; \
+	 done
+	@# The custodian runs as the CA's uid and writes the sealed material here.
+	@docker run --rm -v innsegl-trust-ca-custody:/d $(CA_CUSTODY_CHOWN_IMAGE) chown 65532:65532 /d
+
+CA_CUSTODY_CHOWN_IMAGE = alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
 
 ## innsegl-ca-custody-init: once — start the store and mint its keys
 innsegl-ca-custody-init:
