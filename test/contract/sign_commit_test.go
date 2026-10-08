@@ -162,7 +162,7 @@ func (f *fakeSCSigner) Close() error {
 // already covered by internal/mcp's own TestConfigureSignCommitRefusesAnIncompleteConfiguration.
 type fakeSCSigners struct{ signer *fakeSCSigner }
 
-func (f fakeSCSigners) Admits(string) error { return nil }
+func (f fakeSCSigners) Admits(string, string) error { return nil }
 
 func (f fakeSCSigners) Open(signing.CredentialSource) (mcp.SignCommitSigner, error) {
 	return f.signer, nil

@@ -791,3 +791,18 @@ func TestRunGitsignFailsToStartWithNoStatusPipeOpen(t *testing.T) {
 		t.Fatal("want an error: the gitsign binary does not exist")
 	}
 }
+
+// GH-006 (PROPOSED for doc 07) — the payload's display names are read, so the
+// I6 gate can hold an operator address to the name pinned to it.
+func TestGH006ParseCommitPayloadReadsTheDisplayNames(t *testing.T) {
+	payload := []byte("tree " + strings.Repeat("a", 40) + "\n" +
+		"author Op Erator <1+op@users.noreply.github.com> 1700000000 +0000\n" +
+		"committer Innsegl <agent@innsegl.invalid> 1700000000 +0000\n\nmsg\n")
+	p, err := ParseCommitPayload(payload)
+	if err != nil {
+		t.Fatalf("ParseCommitPayload: %v", err)
+	}
+	if p.AuthorName != "Op Erator" || p.CommitterName != "Innsegl" {
+		t.Fatalf("names = %q / %q, want %q / %q", p.AuthorName, p.CommitterName, "Op Erator", "Innsegl")
+	}
+}

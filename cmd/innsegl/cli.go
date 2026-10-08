@@ -160,6 +160,8 @@ var commands = map[string]command{
 	// `ca-custodian` runs on the core; `ca-custody` on the operator's machine.
 	"ca-custodian": {summary: "keep the CA key store's custody on the core: init, renew, unlock", exec: caCustodianCommand},
 	"ca-custody":   {summary: "say whether the core's CA is sealed, and unlock it (Touch ID)", exec: caCustodyCommand},
+	// ENF-010: which repositories author agent commits as the operator.
+	"author": {summary: "set which repositories author agent commits as the operator (I6)", exec: authorCommand},
 }
 
 // run dispatches args (os.Args[1:]) and returns the process exit code. It

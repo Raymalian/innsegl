@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/commitpath"
 )
 
@@ -127,19 +128,25 @@ func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int { //nolint
 	// event.ToolUseID contains no shell metacharacter for the child shell to
 	// misread.
 	assignments := []string{commitpath.EnvToolUseID + "=" + event.ToolUseID}
+	// The repository the commit is in: what signing is bound to (signrepo.go)
+	// and what the per-repository author setting is keyed by.
+	var repo string
+	if event.Cwd != "" {
+		if r, rerr := gitCommonDir(context.Background(), event.Cwd); rerr == nil {
+			repo = r
+		}
+	}
 	if bin, binErr := innseglBinaryPath(); binErr == nil && isShellSafeForInterpolation(bin) &&
 		!commandAlreadySetsGitConfigCount(command) {
 		assignments = append(assignments, gitConfigSigningAssignments(bin)...)
-		// The repository this signing is for (signrepo.go): a commit in any
-		// other one, made by something else in the same command, is refused.
-		if event.Cwd != "" {
-			if repo, rerr := gitCommonDir(context.Background(), event.Cwd); rerr == nil && isShellSafeForInterpolation(repo) {
-				assignments = append(assignments, envSignRepo+"="+repo)
-			}
+		// A commit in any other repository, made by something else in the
+		// same command, is refused.
+		if isShellSafeForInterpolation(repo) {
+			assignments = append(assignments, envSignRepo+"="+repo)
 		}
 	}
 	if !commandAlreadySetsAuthorIdentity(command) {
-		assignments = append(assignments, agentIdentityAssignments()...)
+		assignments = append(assignments, authorIdentityAssignments(repo)...)
 	}
 	// Nothing above is fatal to this branch: an unresolved binary path, an
 	// unsafe one, or a command that already claims GIT_CONFIG_COUNT each just
@@ -297,6 +304,38 @@ func agentIdentityAssignments() []string {
 		"GIT_AUTHOR_EMAIL=" + agentAuthorEmail,
 		"GIT_COMMITTER_NAME=" + agentAuthorName,
 		"GIT_COMMITTER_EMAIL=" + agentAuthorEmail,
+	}
+}
+
+// authorIdentityAssignments is the agent identity, unless the operator set
+// this repository to author agent commits as the operator (ENF-010,
+// internal/client/authors.go). Then it is the operator's identity, which I6
+// allows; the trailers and the signature still name the agent. The values are
+// single-quoted: client.Authors stores no identity holding a quote or a
+// control character, so nothing inside needs escaping. Anything unreadable
+// leaves the agent identity, the default.
+func authorIdentityAssignments(repo string) []string {
+	if repo == "" {
+		return agentIdentityAssignments()
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return agentIdentityAssignments()
+	}
+	authors, err := client.ReadAuthors(client.ClientPaths(home))
+	if err != nil {
+		return agentIdentityAssignments()
+	}
+	name, email, ok := authors.OperatorFor(repo)
+	if !ok {
+		return agentIdentityAssignments()
+	}
+	quoted := func(s string) string { return "'" + s + "'" }
+	return []string{
+		"GIT_AUTHOR_NAME=" + quoted(name),
+		"GIT_AUTHOR_EMAIL=" + quoted(email),
+		"GIT_COMMITTER_NAME=" + quoted(name),
+		"GIT_COMMITTER_EMAIL=" + quoted(email),
 	}
 }
 

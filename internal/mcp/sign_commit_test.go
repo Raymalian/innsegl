@@ -466,7 +466,7 @@ type scSigners struct {
 	opens    int
 }
 
-func (f *scSigners) Admits(string) error { return f.admitErr }
+func (f *scSigners) Admits(string, string) error { return f.admitErr }
 
 func (f *scSigners) Open(src signing.CredentialSource) (SignCommitSigner, error) {
 	f.opens++
@@ -1707,17 +1707,17 @@ func TestTheGitsignFactoryCarriesTheAuthorPolicyItWasBuiltWith(t *testing.T) {
 		Issuer:    "http://issuer.invalid",
 		Author:    signing.AuthorPolicy{AllowUnlinked: true},
 	})
-	if err := f.Admits(scAuthorEmail); err != nil {
+	if err := f.Admits(scAuthorName, scAuthorEmail); err != nil {
 		t.Errorf("Admits(%q) = %v, want nil", scAuthorEmail, err)
 	}
-	if err := f.Admits("someone@github.com"); err == nil {
+	if err := f.Admits(scAuthorName, "someone@github.com"); err == nil {
 		t.Error("a linkable address was admitted; I6 has no cryptographic backstop")
 	}
 
 	// The zero-value policy admits nothing, which is what makes an
 	// unconfigured deployment refuse rather than sign (ADR-0028 decision 6).
 	zero := NewGitsignSigners(signing.Config{})
-	if err := zero.Admits(scAuthorEmail); err == nil {
+	if err := zero.Admits(scAuthorName, scAuthorEmail); err == nil {
 		t.Error("the zero-value author policy admitted an address")
 	}
 	if _, err := zero.Open(nil); err == nil {

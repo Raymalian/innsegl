@@ -1159,6 +1159,13 @@ services:
       # address here would put an agent's work under a person's name.
       INNSEGL_SIGN_AUTHOR_EMAIL: ${INNSEGL_SIGN_AUTHOR_EMAIL:-agent@innsegl.invalid}
       INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED: ${INNSEGL_SIGN_AUTHOR_ALLOW_UNLINKED:-true}
+      # The operator `Name <address>` pairs this deployment admits as a commit
+      # author, comma-separated (I6 allows the operator; GH-006 holds the
+      # address to its pinned name). Empty by default: no operator is admitted
+      # until the deployment's own .env says so. A repository set to author
+      # agent commits as the operator (`innsegl author`, ENF-010) needs its
+      # pair here. Never in a tracked file: it is a person's identity.
+      INNSEGL_SIGN_AUTHOR_OPERATORS: ${INNSEGL_SIGN_AUTHOR_OPERATORS:-}
     volumes:
       # The Workload API socket, from spire.yml's project. Read-write because
       # a Unix socket is connected to, not read.
