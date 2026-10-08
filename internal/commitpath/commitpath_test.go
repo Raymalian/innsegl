@@ -309,3 +309,67 @@ func TestResolverFromContext(t *testing.T) {
 		t.Error("the request's resolver was not used")
 	}
 }
+
+// TestInsertGitOptionsPutsThemBeforeTheCommitSubcommand (ENF-012, PROPOSED):
+// the options land inside every commit-creating git invocation, immediately
+// before its subcommand word — after git's own options, so an option the
+// command itself passes comes first and the inserted one, which git reads
+// last, wins. Nothing else moves.
+func TestInsertGitOptionsPutsThemBeforeTheCommitSubcommand(t *testing.T) {
+	opts := []string{"-c", "a.b=1", "-c", "c.d=2"}
+	const ins = "-c a.b=1 -c c.d=2 "
+	for _, c := range []struct{ in, want string }{
+		{"git commit -m x", "git " + ins + "commit -m x"},
+		{"git -C d commit -m x", "git -C d " + ins + "commit -m x"},
+		{"a && git commit -m x", "a && git " + ins + "commit -m x"},
+		{"GIT_X=1 git commit", "GIT_X=1 git " + ins + "commit"},
+		{"git pull origin main", "git " + ins + "pull origin main"},
+		{"git merge --no-ff feature", "git " + ins + "merge --no-ff feature"},
+		{"git revert HEAD", "git " + ins + "revert HEAD"},
+		{"git cherry-pick abc123", "git " + ins + "cherry-pick abc123"},
+		{"git rebase main", "git " + ins + "rebase main"},
+		// The command's own -c stays first; the inserted one is read last.
+		{"git -c a.b=0 commit", "git -c a.b=0 " + ins + "commit"},
+		{"git -c user.name=a --no-pager commit -F msg.txt", "git -c user.name=a --no-pager " + ins + "commit -F msg.txt"},
+		{"/usr/bin/git commit -m x", "/usr/bin/git " + ins + "commit -m x"},
+		{"git add . && git commit -m a; git commit -m b", "git add . && git " + ins + "commit -m a; git " + ins + "commit -m b"},
+		{"git status\ngit commit -m two-lines", "git status\ngit " + ins + "commit -m two-lines"},
+		{"false || git --no-pager commit -m x", "false || git --no-pager " + ins + "commit -m x"},
+		{"git commit -m x 2>&1", "git " + ins + "commit -m x 2>&1"},
+	} {
+		if got := InsertGitOptions(c.in, opts); got != c.want {
+			t.Errorf("InsertGitOptions(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestInsertGitOptionsLeavesQuotedTextAndOtherCommandsAlone (ENF-012,
+// PROPOSED): a separator or a `git commit` inside a quoted argument is prose,
+// not a command, so it is left byte for byte; a command with no
+// commit-creating git invocation comes back unchanged.
+func TestInsertGitOptionsLeavesQuotedTextAndOtherCommandsAlone(t *testing.T) {
+	opts := []string{"-c", "a.b=1"}
+	const ins = "-c a.b=1 "
+	for _, c := range []struct{ in, want string }{
+		{`git commit -m "fix; git commit later"`, `git ` + ins + `commit -m "fix; git commit later"`},
+		{`git commit -m 'a && git commit -m b'`, `git ` + ins + `commit -m 'a && git commit -m b'`},
+		{`git commit -m "one | git commit" && echo done`, `git ` + ins + `commit -m "one | git commit" && echo done`},
+		{`git -C "my dir" commit -m x`, `git -C "my dir" ` + ins + `commit -m x`},
+		{`git commit -m a\;b`, `git ` + ins + `commit -m a\;b`},
+		{"git commit -m \"multi\nline\"", "git " + ins + "commit -m \"multi\nline\""},
+		{`echo "x; git commit"`, `echo "x; git commit"`},
+		{`echo 'git commit'`, `echo 'git commit'`},
+		{"echo git commit", "echo git commit"},
+		{"git status", "git status"},
+		{"git -C commit status", "git -C commit status"},
+		{"git log --grep commit", "git log --grep commit"},
+		{"", ""},
+	} {
+		if got := InsertGitOptions(c.in, opts); got != c.want {
+			t.Errorf("InsertGitOptions(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	if got := InsertGitOptions("git commit -m x", nil); got != "git commit -m x" {
+		t.Errorf("InsertGitOptions with no options = %q, want the command unchanged", got)
+	}
+}
