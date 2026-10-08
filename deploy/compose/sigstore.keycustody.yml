@@ -52,6 +52,8 @@ services:
     # prints a root token to the log; every one of those is the opposite of what
     # this overlay is for.
     command: ["server", "-config=/openbao/config/store.hcl"]
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
     networks:
       - innsegl-ca-store
     labels:
@@ -72,10 +74,11 @@ services:
     volumes:
       - innsegl-ca-store-data:/openbao/file
     healthcheck:
-      # 501 is "sealed", 200 is "unsealed and ready". Both mean the process is
-      # answering, and a sealed store is a correct resting state here — the
-      # operator has not unsealed it yet — so both are healthy. A store that is
-      # not answering at all is not.
+      # `bao status` exits 0 unsealed, 2 sealed, 1 when it cannot ask. Sealed
+      # is a correct resting state here (the operator has not unlocked it
+      # yet), so 0 and 2 are healthy. It asks BAO_ADDR, set below to the
+      # plain listener: its default is https, which this listener does not
+      # speak, and the check then never passed (OPS-158).
       test: ["CMD-SHELL", "bao status >/dev/null 2>&1 || [ $$? -eq 2 ]"]
       interval: 10s
       timeout: 5s

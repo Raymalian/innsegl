@@ -103,3 +103,15 @@ func TestHookNamesTheAgentsRepositoryForSigning(t *testing.T) {
 		t.Fatalf("the common dir %q is not absolute", common)
 	}
 }
+
+// gitCommonDir runs git on a directory the harness's hook input names, as
+// one argument to -C with no shell. What is not a directory git can enter --
+// a missing path, or a value shaped like an option -- answers an error, not a
+// repository (the guard gosec's G702 note in signrepo.go relies on).
+func TestGitCommonDirRefusesWhatIsNotADirectory(t *testing.T) {
+	for _, dir := range []string{"no/such/dir", "-c", "--exec-path=/tmp", filepath.Join(t.TempDir(), "missing")} {
+		if got, err := gitCommonDir(t.Context(), dir); err == nil {
+			t.Errorf("gitCommonDir(%q) = %q, want an error", dir, got)
+		}
+	}
+}

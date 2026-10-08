@@ -347,3 +347,48 @@ func TestOPS157TheStoreConfigDoesNotDependOnTheCheckoutsFileModes(t *testing.T) 
 	}
 	t.Fatal("the store has no config at /openbao/config/store.hcl")
 }
+
+// OPS-158 (PROPOSED) — the store's health check asks the store over the
+// scheme it listens on.
+//
+// MEASURED on a live core: `bao status` defaults to https://127.0.0.1:8200,
+// the store listens without TLS on its two-member network, so the check
+// failed every time ("server gave HTTP response to HTTPS client"), the store
+// was never healthy, and `make update` stopped on the custodian's
+// depends_on. Against http the same command answers 2, sealed, as designed.
+func TestOPS158TheStoreHealthCheckUsesTheListenersScheme(t *testing.T) {
+	doc := composeRender(t, nil, sigstoreBase, sigstoreCustod)
+	hcl := storeConfig(t, doc)
+	if !strings.Contains(hcl, "tls_disable = true") {
+		t.Skip("the store listens with TLS; this case is for the plain listener")
+	}
+	addr := doc.Services["innsegl-ca-store"].Environment["BAO_ADDR"]
+	if addr == nil || *addr != "http://127.0.0.1:8200" {
+		t.Fatalf("the store's BAO_ADDR is %v; bao status then speaks https to a plain listener and the health check never passes", addr)
+	}
+}
+
+// OPS-160 (PROPOSED) — the custodian runs the image this checkout builds.
+//
+// MEASURED on a live core: `make update` brought the store and its
+// custodian up (fulcio-file-ca-up) before it built innsegl:local
+// (innsegl-here-services). The custodian, which runs that image, provisioned
+// a fresh store with the previous build's policy, and Fulcio's signing was
+// refused again after the fix had merged. The image comes first.
+func TestOPS160TheCustodianRunsTheImageThisCheckoutBuilds(t *testing.T) {
+	on := filepath.Join(t.TempDir(), "on.env")
+	if err := os.WriteFile(on, []byte("INNSEGL_CA_CUSTODY=on\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"ca-custody-up", "fulcio-file-ca-up"} {
+		run := makeDryRunEnv(t, target, "COMPOSE_ENV_FILE="+on)
+		img := strings.Index(run, "image-bundle.sh find")
+		up := strings.Index(run, "up -d innsegl-ca-store innsegl-ca-custodian")
+		if up < 0 {
+			t.Fatalf("%s does not bring the custodian up:\n%s", target, run)
+		}
+		if img < 0 || img > up {
+			t.Errorf("%s brings the custodian up before it builds or loads the innsegl image (image at %d, custodian at %d)", target, img, up)
+		}
+	}
+}

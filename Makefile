@@ -26,7 +26,7 @@ COVERPROFILE := cover.out
         innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
         innsegl-trust-volumes innsegl-ca-custody-init innsegl-ca-rotate innsegl-ca-rollback \
-        fulcio-file-ca-up fulcio-file-ca-run test-ids ca-custody-up ca-custody-volumes ca-custody-ready \
+        fulcio-file-ca-up fulcio-file-ca-run test-ids ca-custody-up ca-custody-volumes innsegl-images ca-custody-reset ca-custody-ready \
         ca-custody-stage ca-custody-switch ca-custody-back ca-custody-restore \
         innsegl-stack-clean innsegl-up-here verify-branch \
         install-hooks \
@@ -591,6 +591,19 @@ innsegl-up-here: stack-announce sigstore-up innsegl-here-services
 stack-announce:
 	@test -n '$(INNSEGL_STACK_ANNOUNCED)' || scripts/stack-mode.sh announce
 
+## innsegl-images: load this checkout's image bundle, or build the images here.
+##   Everything that runs innsegl:local depends on it, the CA custodian
+##   included: it once provisioned a store with the previous build's policy
+##   because the store came up before the build (OPS-160).
+innsegl-images:
+	@bundle="$$($(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh find)" || exit $$?; \
+	 if [ -n "$$bundle" ]; then \
+	   $(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh load "$$bundle"; \
+	 else \
+	   echo "innsegl: no image bundle for $(DEPLOY_COMMIT); building here"; \
+	   INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' INNSEGL_UI_COMMIT='$(UI_IMAGE_COMMIT)' INNSEGL_BACKUP_COMMIT='$(BACKUP_IMAGE_COMMIT)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES); \
+	 fi
+
 # innsegl-here-services: innsegl's own services in THIS working tree, built
 # and brought up; the trust services (SPIRE, Fulcio, Rekor) are left as they
 # are. innsegl-up-here starts those first; `make update` assumes they run.
@@ -605,7 +618,7 @@ stack-announce:
 # stops this target before anything starts; it never falls back to a build.
 # --no-build: the start that follows uses the images just loaded or built,
 # and never builds one of its own.
-innsegl-here-services: innsegl-trust-volumes
+innsegl-here-services: innsegl-trust-volumes innsegl-images
 	@scripts/stack-mode.sh check
 	@test -n "$(REPO)" || { echo 'innsegl-up-here: no origin remote; pass REPO=host/org/name'; exit 2; }
 	@# The stack's host folders are made here, as the user running make, for
@@ -615,13 +628,6 @@ innsegl-here-services: innsegl-trust-volumes
 	@# 2026-10-02: the gateway could not write its CA certificate.
 	mkdir -p "$${INNSEGL_GATEWAY_CA_HOST_DIR:-$$HOME/.innsegl/ca}" "$${INNSEGL_LOG_DIR:-$$HOME/.innsegl/log}" \
 	  "$${INNSEGL_BACKUP_HOST_DIR:-$$HOME/innsegl-backups}"
-	@bundle="$$($(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh find)" || exit $$?; \
-	 if [ -n "$$bundle" ]; then \
-	   $(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh load "$$bundle"; \
-	 else \
-	   echo "innsegl: no image bundle for $(DEPLOY_COMMIT); building here"; \
-	   INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' INNSEGL_UI_COMMIT='$(UI_IMAGE_COMMIT)' INNSEGL_BACKUP_COMMIT='$(BACKUP_IMAGE_COMMIT)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES); \
-	 fi
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
@@ -770,7 +776,7 @@ SIGSTORE_UP_EXCEPT_FULCIO = sigstore-bootstrap trillian-db trillian-log-server t
 
 ## ca-custody-up: ADR-0076 — the CA key store and its custodian; Fulcio on the
 ##   store once `make innsegl-ca-rotate TO=custody` has moved it there
-ca-custody-up: ca-custody-volumes
+ca-custody-up: ca-custody-volumes innsegl-images
 	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store innsegl-ca-custodian
 	@cmd=$$(docker inspect -f '{{json .Config.Cmd}}' $(STACK_PREFIX)-sigstore-fulcio 2>/dev/null); \
 	 case "$$cmd" in \
@@ -796,6 +802,12 @@ CA_CUSTODY_CHOWN_IMAGE = alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33
 CA_CUSTODY_KMS_VOLUME = $(STACK_PREFIX)-sigstore_sigstore-fulcio-kms
 
 # The steps `make innsegl-ca-rotate TO=custody` runs (scripts/ca-rotate.sh).
+## ca-custody-reset: remove a CA key store nothing depends on, so `make update`
+##   provisions a fresh one (CONFIRM=reset; refuses while Fulcio runs on it or
+##   the trust history holds its root)
+ca-custody-reset:
+	@INNSEGL_STACK_PREFIX='$(STACK_PREFIX)' scripts/ca-custody-reset.sh
+
 ## ca-custody-ready: exit 0 when the store is unlocked and the CA has a token
 ca-custody-ready:
 	@docker exec innsegl-ca-custodian innsegl ca-custodian ready
