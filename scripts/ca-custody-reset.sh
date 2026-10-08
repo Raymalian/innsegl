@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# make ca-custody-reset CONFIRM=reset — remove the CA key store, its sealed
+# make ca-custody-reset CONFIRM=reset — empty the CA key store, its sealed
 # unlock material and the store's root, so `make update` provisions a fresh
 # store (ADR-0076, OPS-159).
 #
@@ -49,6 +49,13 @@ if [ -n "${chain}" ]; then
 fi
 
 "${DOCKER}" rm -f "${PREFIX}-ca-custodian" "${PREFIX}-ca-store" "${PREFIX}-ca-bootstrap" >/dev/null 2>&1
-"${DOCKER}" volume rm innsegl-trust-ca-store innsegl-trust-ca-custody "${KMS_VOLUME}" >/dev/null \
-  || die 3 "could not remove the store's volumes; see docker volume ls"
-echo "ca-custody-reset: removed. \`make update\` provisions a new store; then a new backup and drill."
+# EMPTIED, NOT REMOVED. The core and the trust-key backup mount the sealed
+# material read-only, so `docker volume rm` refused it on a live core after
+# removing the store's: a half reset, a fresh store beside the old store's
+# material. Emptying works whoever has the volume mounted, and leaves each
+# volume where the compose files expect it.
+for v in innsegl-trust-ca-store innsegl-trust-ca-custody "${KMS_VOLUME}"; do
+  "${DOCKER}" run --rm -v "${v}:/v" "${IMAGE}" find /v -mindepth 1 -delete \
+    || die 3 "could not empty ${v}; nothing after it was touched. Run the reset again."
+done
+echo "ca-custody-reset: the store, its sealed material and its root are emptied. \`make update\` provisions a new store; then a new backup and drill."
