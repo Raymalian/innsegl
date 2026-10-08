@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
@@ -190,7 +191,7 @@ func TestREC001And002And005AgainstRealSigstoreAndARealChain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		requireStartup(t, err, "REC-002 proves nothing about I3 or I5 against a "+
 			"mock — IP §2, \"a mocked Fulcio proves nothing about I5\".")
 	}

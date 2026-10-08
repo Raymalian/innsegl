@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // The harness's own routing, measured.
@@ -24,21 +26,21 @@ import (
 // the stack cannot run.
 
 func TestTheHarnessSeparatesAnAbsentDockerFromAStackThatDidNotStart(t *testing.T) {
-	absent := fmt.Errorf("no reachable docker daemon: %w", errDependencyAbsent)
-	skip, failure := startupOutcome(absent)
+	absent := fmt.Errorf("no reachable docker daemon: %w", dockertest.ErrDependencyAbsent)
+	skip, failure := dockertest.StartupOutcome(absent)
 	if skip == "" || failure != "" {
 		t.Fatalf("an absent dependency must be a skip and nothing else; "+
 			"got skip=%q failure=%q", skip, failure)
 	}
 
 	broke := errors.New("the OPS-002 stack did not come up: start rekor: port already allocated")
-	skip, failure = startupOutcome(broke)
+	skip, failure = dockertest.StartupOutcome(broke)
 	if failure == "" || skip != "" {
 		t.Fatalf("a stack that did not start on a machine with Docker is a FAILURE, "+
 			"never a skip: that is #101. got skip=%q failure=%q", skip, failure)
 	}
 
-	if skip, failure := startupOutcome(nil); skip != "" || failure != "" {
+	if skip, failure := dockertest.StartupOutcome(nil); skip != "" || failure != "" {
 		t.Fatalf("a clean start-up is neither: got skip=%q failure=%q", skip, failure)
 	}
 }
@@ -72,8 +74,8 @@ func TestOnlyAbsenceWrapsTheSentinel(t *testing.T) {
 	// a change this case sees.
 	fromStartup := fmt.Errorf("the OPS-002 stack did not come up: %w",
 		errors.New("start "+objectStoreImage()+": no space left on device"))
-	if errors.Is(fromStartup, errDependencyAbsent) {
-		t.Fatal("a start-up failure wraps errDependencyAbsent; it would be routed to a " +
+	if errors.Is(fromStartup, dockertest.ErrDependencyAbsent) {
+		t.Fatal("a start-up failure wraps dockertest.ErrDependencyAbsent; it would be routed to a " +
 			"skip and OPS-002 would report ok having measured nothing")
 	}
 }

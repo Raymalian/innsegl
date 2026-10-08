@@ -10,9 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // storeImage is the store the key-custody overlay runs. Pinned by the
@@ -41,17 +42,6 @@ type testStore struct {
 	addr string
 }
 
-func docker(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
 // startStore starts a sealed, uninitialised store, or ends the test the
 // honest way: a skip when there is no Docker, a FAILURE when Docker is
 // there and the store is not (#101).
@@ -62,7 +52,7 @@ func startStore(t *testing.T) *testStore {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("skipping: docker is not on PATH (%v); these tests need a real store", err)
 	}
-	if _, err := docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
+	if _, err := dockertest.Docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
 		t.Skipf("skipping: no reachable docker daemon (%v); these tests need a real store", err)
 	}
 	dir := t.TempDir()
@@ -74,7 +64,7 @@ func startStore(t *testing.T) *testStore {
 		t.Fatal(err)
 	}
 	name := fmt.Sprintf("innsegl-cacustody-test-%d", time.Now().UnixNano())
-	if _, err := docker(ctx, "run", "--detach", "--name", name, "--label", "dev.innsegl.test=1",
+	if _, err := dockertest.Docker(ctx, "run", "--detach", "--name", name, "--label", "dev.innsegl.test=1",
 		"--publish", "127.0.0.1:"+port+":8200",
 		"--volume", dir+":/openbao/config:ro",
 		storeImage, "server", "-config=/openbao/config/store.hcl"); err != nil {
@@ -85,7 +75,7 @@ func startStore(t *testing.T) *testStore {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if _, err := docker(ctx, "rm", "--force", "--volumes", name); err != nil {
+		if _, err := dockertest.Docker(ctx, "rm", "--force", "--volumes", name); err != nil {
 			t.Logf("removing the test store: %v", err)
 		}
 	})
@@ -106,7 +96,7 @@ func (s *testStore) waitAnswering(t *testing.T) {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	logs, err := docker(context.Background(), "logs", s.name)
+	logs, err := dockertest.Docker(context.Background(), "logs", s.name)
 	if err != nil {
 		logs = err.Error()
 	}
@@ -119,7 +109,7 @@ func (s *testStore) restart(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if _, err := docker(ctx, "restart", s.name); err != nil {
+	if _, err := dockertest.Docker(ctx, "restart", s.name); err != nil {
 		t.Fatal(err)
 	}
 	s.waitAnswering(t)

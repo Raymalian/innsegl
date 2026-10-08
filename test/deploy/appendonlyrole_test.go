@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/ledger"
 )
 
@@ -180,7 +181,7 @@ func TestOPS009TheAppendOnlyRoleIsProvisionedAndProven(t *testing.T) {
 	defer cancel()
 
 	pg, err := startLedger(ctx, t)
-	skip, failure := startupOutcome(err)
+	skip, failure := dockertest.StartupOutcome(err)
 	if pg != nil {
 		defer pg.stop()
 	}
@@ -299,7 +300,7 @@ func TestOPS010TheRoleCheckBitesAndTheSchemaIsTheRunners(t *testing.T) {
 	defer cancel()
 
 	pg, err := startLedger(ctx, t)
-	skip, failure := startupOutcome(err)
+	skip, failure := dockertest.StartupOutcome(err)
 	if pg != nil {
 		defer pg.stop()
 	}

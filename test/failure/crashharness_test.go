@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
@@ -308,7 +309,7 @@ func requireCrashCampaign(t *testing.T) *campaign {
 	t.Helper()
 
 	ctx := context.Background()
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		requireStartup(t, err, "Crash-and-replay is a claim about what a SIGKILLed "+
 			"process leaves in Postgres and in SPIRE; with neither running there is "+
 			"nothing to leave anything in, and a green test here would mean nothing. "+

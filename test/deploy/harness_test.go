@@ -4,14 +4,14 @@ package deploy
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // ---------------------------------------------------------------------------
@@ -67,20 +67,6 @@ const (
 	resolverPassword = "innsegl-deploy-test-resolver"
 )
 
-var errDependencyAbsent = errors.New("a required dependency is absent")
-
-// startupOutcome routes a start-up error to exactly one of the two variables.
-func startupOutcome(err error) (skip, failure string) {
-	switch {
-	case err == nil:
-		return "", ""
-	case errors.Is(err, errDependencyAbsent):
-		return err.Error(), ""
-	default:
-		return "", err.Error()
-	}
-}
-
 // requirement is what a harness must do for the calling test.
 type requirement int
 
@@ -101,48 +87,6 @@ func containerRequirement(up bool, skip, failure string) requirement {
 	default:
 		return proceed
 	}
-}
-
-// docker runs one docker command and returns its trimmed stdout.
-func docker(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// dockerUsable reports whether a docker daemon is reachable. Its error is the
-// ONLY one in this package wrapped as an absent dependency.
-func dockerUsable(ctx context.Context) error {
-	if os.Getenv("INNSEGL_TEST_NO_DOCKER") != "" {
-		return fmt.Errorf("%w: INNSEGL_TEST_NO_DOCKER is set", errDependencyAbsent)
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker is not on PATH: %w: %w", err, errDependencyAbsent)
-	}
-	if _, err := docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
-		return fmt.Errorf("no reachable docker daemon: %w: %w", err, errDependencyAbsent)
-	}
-	return nil
-}
-
-// freeHostPort reserves an ephemeral port and hands it back.
-func freeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
 }
 
 // ledgerContainer is one containerised Postgres carrying the shipped ledger
@@ -191,19 +135,19 @@ func (c *ledgerContainer) resolverDSN() string {
 
 func startLedger(ctx context.Context, t *testing.T) (*ledgerContainer, error) {
 	t.Helper()
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		return nil, err
 	}
-	port, err := freeHostPort(ctx)
+	port, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reserving a host port: %w", err)
 	}
 	name := fmt.Sprintf("innsegl-deploy-pg-%d", os.Getpid())
 	// A previous run that was killed rather than torn down leaves the name
 	// taken; removing it is not an error worth reporting.
-	discardError(docker(ctx, "rm", "--force", "--volumes", name))
+	discardError(dockertest.Docker(ctx, "rm", "--force", "--volumes", name))
 
-	if _, err := docker(ctx, "run", "--detach",
+	if _, err := dockertest.Docker(ctx, "run", "--detach",
 		"--name", name,
 		"--publish", "127.0.0.1:"+port+":5432",
 		"--env", "POSTGRES_USER="+ownerRole,
@@ -218,7 +162,7 @@ func startLedger(ctx context.Context, t *testing.T) (*ledgerContainer, error) {
 	deadline := time.Now().Add(2 * time.Minute)
 	var last error
 	for time.Now().Before(deadline) {
-		if _, last = docker(ctx, "exec", name,
+		if _, last = dockertest.Docker(ctx, "exec", name,
 			"pg_isready", "-U", ownerRole, "-d", ownerDatabase); last == nil {
 			return c, nil
 		}
@@ -239,7 +183,7 @@ func (c *ledgerContainer) stop() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	discardError(docker(ctx, "rm", "--force", "--volumes", c.name))
+	discardError(dockertest.Docker(ctx, "rm", "--force", "--volumes", c.name))
 }
 
 // discardError swallows an error a caller genuinely cannot act on. errcheck
@@ -254,7 +198,7 @@ func discardError(string, error) {}
 // The paths match the compose file on purpose: what this test runs must be the
 // artifact an adopter runs, not a second arrangement of the same files.
 func (c *ledgerContainer) copyDeployScripts(ctx context.Context, root string) error {
-	if _, err := docker(ctx, "exec", c.name, "mkdir", "-p", "/innsegl"); err != nil {
+	if _, err := dockertest.Docker(ctx, "exec", c.name, "mkdir", "-p", "/innsegl"); err != nil {
 		return err
 	}
 	for _, cp := range [][2]string{
@@ -273,10 +217,10 @@ func (c *ledgerContainer) copyDeployScripts(ctx context.Context, root string) er
 		if strings.HasSuffix(dir, ".sql") {
 			dir = dir[:strings.LastIndexByte(dir, '/')]
 		}
-		if _, err := docker(ctx, "exec", c.name, "mkdir", "-p", dir); err != nil {
+		if _, err := dockertest.Docker(ctx, "exec", c.name, "mkdir", "-p", dir); err != nil {
 			return err
 		}
-		if _, err := docker(ctx, "cp", cp[0], c.name+":"+cp[1]); err != nil {
+		if _, err := dockertest.Docker(ctx, "cp", cp[0], c.name+":"+cp[1]); err != nil {
 			return fmt.Errorf("copying %s into the container: %w", cp[0], err)
 		}
 	}
@@ -317,7 +261,7 @@ func (c *ledgerContainer) runInit(ctx context.Context, script string, extra ...s
 // psqlAsOwner runs one statement as the schema owner, for the tests that have
 // to widen the role in order to prove the check bites.
 func (c *ledgerContainer) psqlAsOwner(ctx context.Context, sql string) error {
-	_, err := docker(ctx, "exec",
+	_, err := dockertest.Docker(ctx, "exec",
 		"--env", "PGPASSWORD="+ownerPassword,
 		c.name, "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1",
 		"-U", ownerRole, "-d", ownerDatabase, "-c", sql)

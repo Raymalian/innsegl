@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // ---------------------------------------------------------------------------
@@ -470,7 +472,7 @@ type healthBody struct {
 func ledgerForTest(ctx context.Context, t *testing.T, id, why string) *ledgerContainer {
 	t.Helper()
 	pg, err := startLedger(ctx, t)
-	skip, failure := startupOutcome(err)
+	skip, failure := dockertest.StartupOutcome(err)
 	if pg != nil {
 		t.Cleanup(pg.stop)
 	}

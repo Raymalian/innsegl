@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/ledger"
 )
 
@@ -30,8 +31,6 @@ import (
 // by the positive control — because "the ledger is empty" is worth nothing
 // unless the same writer, in the same shape, demonstrably fills it when the
 // dependency is healthy.
-
-const defaultPostgresImage = "postgres:16"
 
 var (
 	pgOnce      sync.Once
@@ -56,12 +55,12 @@ func pgDSN(port, database string) string {
 }
 
 func startPostgres(ctx context.Context) (id, port string, err error) {
-	image := envOr("INNSEGL_TEST_POSTGRES_IMAGE", defaultPostgresImage)
-	port, err = freeHostPort(ctx)
+	image := envOr("INNSEGL_TEST_POSTGRES_IMAGE", dockertest.DefaultPostgresImage)
+	port, err = dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return "", "", err
 	}
-	id, err = docker(ctx, "run", "--detach",
+	id, err = dockertest.Docker(ctx, "run", "--detach",
 		// Labelled so a killed run's leak is findable; see
 		// internal/ledger/pgharness_test.go and `make test-clean`.
 		"--label", "dev.innsegl.test=1",
@@ -90,7 +89,7 @@ func startPostgres(ctx context.Context) (id, port string, err error) {
 		last = cerr
 		time.Sleep(250 * time.Millisecond)
 	}
-	if _, rmErr := docker(context.Background(), "rm", "--force", "--volumes", id); rmErr != nil {
+	if _, rmErr := dockertest.Docker(context.Background(), "rm", "--force", "--volumes", id); rmErr != nil {
 		last = errors.Join(last, rmErr)
 	}
 	return "", "", fmt.Errorf("postgres never became ready: %w", last)
@@ -103,27 +102,27 @@ func requireLedger(t *testing.T) *ledger.Store {
 	pgOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer cancel()
-		if err := dockerUsable(ctx); err != nil {
+		if err := dockertest.Usable(ctx); err != nil {
 			pgSkip = err.Error()
 			return
 		}
 		id, port, err := startPostgres(ctx)
 		if err != nil {
 			// Docker works; the database did not start. A failure (#101).
-			pgSkip, pgFailure = startupOutcome(err)
+			pgSkip, pgFailure = dockertest.StartupOutcome(err)
 			return
 		}
 		pgContainer, pgPort = id, port
 	})
-	switch harnessNeed(pgContainer != "", pgSkip, pgFailure) {
-	case harnessFailTest:
+	switch dockertest.Need(pgContainer != "", pgSkip, pgFailure) {
+	case dockertest.FailTest:
 		t.Fatalf("the test Postgres did not come up, and Docker is present and "+
 			"working: %s\n\nThis is a FAILURE and not a skip (#101): SPI-007 "+
 			"goes undemonstrated while the package reports ok.", pgFailure)
-	case harnessSkipTest:
+	case dockertest.SkipTest:
 		t.Skipf("skipping: no real Postgres (%s). SPI-007's \"nothing reached Phase A\" "+
 			"is a claim about a ledger and is not demonstrated without one.", pgSkip)
-	case harnessProceed:
+	case dockertest.Proceed:
 	}
 
 	pgDBSeqMu.Lock()
@@ -167,7 +166,7 @@ func stopPostgres() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if _, err := docker(ctx, "rm", "--force", "--volumes", pgContainer); err != nil {
+	if _, err := dockertest.Docker(ctx, "rm", "--force", "--volumes", pgContainer); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: removing postgres container: %v\n", err)
 	}
 }

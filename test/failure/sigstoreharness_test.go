@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/segment"
 	"innsegl.dev/innsegl/internal/signing"
 )
@@ -150,7 +151,7 @@ func sigStackPrefix() string { return fmt.Sprintf("innsegl-sigfail-%d", os.Getpi
 func findSigGitsign(ctx context.Context) (string, error) {
 	if p := os.Getenv("INNSEGL_GITSIGN"); p != "" {
 		if _, err := os.Stat(p); err != nil {
-			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w: %w", p, err, errDependencyAbsent)
+			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w: %w", p, err, dockertest.ErrDependencyAbsent)
 		}
 		return p, nil
 	}
@@ -166,7 +167,7 @@ func findSigGitsign(ctx context.Context) (string, error) {
 	}
 	return "", fmt.Errorf("no gitsign binary; install the pinned release with "+
 		"`go install github.com/sigstore/gitsign@%s` or set INNSEGL_GITSIGN: %w",
-		sigGitsignVersion, errDependencyAbsent)
+		sigGitsignVersion, dockertest.ErrDependencyAbsent)
 }
 
 // sigCompose runs one docker compose command against one of this stack's two
@@ -186,7 +187,7 @@ func (s *sigStack) sigCompose(ctx context.Context, files []string, args ...strin
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(full, " "), err, oneLine(stderr.String()))
+			strings.Join(full, " "), err, dockertest.OneLine(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -196,15 +197,15 @@ func startSigStack(ctx context.Context, root string) (*sigStack, error) {
 	if err != nil {
 		return nil, err
 	}
-	oidcPort, err := freeHostPort(ctx)
+	oidcPort, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return nil, err
 	}
-	fulcioPort, err := freeHostPort(ctx)
+	fulcioPort, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rekorPort, err := freeHostPort(ctx)
+	rekorPort, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -298,11 +299,11 @@ func (s *sigStack) registerSigOIDCProvider(ctx context.Context) error {
 		return fmt.Errorf("no attested agent in `agent list`:\n%s", out)
 	}
 
-	imageConfigDigest, err := docker(ctx, "inspect", "--format", "{{.Image}}", container)
+	imageConfigDigest, err := dockertest.Docker(ctx, "inspect", "--format", "{{.Image}}", container)
 	if err != nil {
 		return err
 	}
-	imageRef, err := docker(ctx, "inspect", "--format", "{{.Config.Image}}", container)
+	imageRef, err := dockertest.Docker(ctx, "inspect", "--format", "{{.Config.Image}}", container)
 	if err != nil {
 		return err
 	}
@@ -312,7 +313,7 @@ func (s *sigStack) registerSigOIDCProvider(ctx context.Context) error {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	binary := filepath.Join(dir, "oidc")
-	if _, cperr := docker(ctx, "cp",
+	if _, cperr := dockertest.Docker(ctx, "cp",
 		container+":/opt/spire/bin/oidc-discovery-provider", binary); cperr != nil {
 		return cperr
 	}
@@ -1086,7 +1087,7 @@ func requireSigStack(t *testing.T) *sigStack {
 			return
 		}
 		root := filepath.Dir(filepath.Dir(wd))
-		if derr := dockerUsable(ctx); derr != nil {
+		if derr := dockertest.Usable(ctx); derr != nil {
 			// The only honest skip: there is no daemon to ask.
 			sigSkip = derr.Error()
 			return
@@ -1094,7 +1095,7 @@ func requireSigStack(t *testing.T) *sigStack {
 		s, serr := startSigStack(ctx, root)
 		if serr != nil {
 			// An absent gitsign is still a skip; anything else is a FAILURE.
-			sigSkip, sigFailure = startupOutcome(serr)
+			sigSkip, sigFailure = dockertest.StartupOutcome(serr)
 			if s != nil {
 				s.stop()
 			}
@@ -1102,19 +1103,19 @@ func requireSigStack(t *testing.T) *sigStack {
 		}
 		sigShared = s
 	})
-	switch harnessNeed(sigShared != nil, sigSkip, sigFailure) {
-	case harnessFailTest:
+	switch dockertest.Need(sigShared != nil, sigSkip, sigFailure) {
+	case dockertest.FailTest:
 		t.Fatalf("the SPIRE + Sigstore stacks did not come up, and Docker and "+
 			"gitsign are both present: %s\n\nThis is a FAILURE and not a skip "+
 			"(#101): an infrastructure fault reported as a skip exits zero and "+
 			"reports ok while TC-SIG's layer-F cases did not run.", sigFailure)
-	case harnessSkipTest:
+	case dockertest.SkipTest:
 		t.Skipf("skipping: no real SPIRE + Sigstore from deploy/compose/ and no gitsign (%s). "+
 			"A failure-injection case with no dependency to remove proves nothing, and "+
 			"IP §2 is explicit that \"a mocked Fulcio proves nothing about I5\". Start "+
 			"Docker, `go install github.com/sigstore/gitsign@%s`, and re-run.",
 			sigSkip, sigGitsignVersion)
-	case harnessProceed:
+	case dockertest.Proceed:
 	}
 	t.Cleanup(func() {
 		sigShared.stop()

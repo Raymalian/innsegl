@@ -17,6 +17,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/signing"
@@ -280,7 +281,7 @@ func (s *stack) ledgerEventsForRun(t *testing.T, runID string) []event.Fields {
 // absence rather than a segmentation.
 func (s *stack) proveLedgerReachableFromItsOwnNetwork(t *testing.T) {
 	t.Helper()
-	if _, err := docker(t.Context(), "run", "--rm", "--network", ledgerNetwork,
+	if _, err := dockertest.Docker(t.Context(), "run", "--rm", "--network", ledgerNetwork,
 		"--entrypoint", "sh", runnerImage,
 		"-c", "nc -z -w 5 "+s.ledgerIP+" 5432"); err != nil {
 		t.Fatalf("the control probe could not reach the ledger on its own network, so "+

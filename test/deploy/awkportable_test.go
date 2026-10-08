@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // ---------------------------------------------------------------------------
@@ -89,7 +91,7 @@ func TestOPS134AwkProgramsUseNoRegexIntervals(t *testing.T) {
 func TestOPS134CertExtensionFindsCATrueUnderOldMawk(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		t.Skipf("skipping OPS-134 (cert_extension under mawk 20200120): %v", err)
 	}
 	if _, err := exec.LookPath("openssl"); err != nil {
@@ -117,7 +119,7 @@ openssl() { cat /in/ca.txt; }
 . /tmp/fn.sh
 awk -W version 2>&1 | head -n 1
 cert_extension /in/ca.crt 'X509v3 Basic Constraints'`
-	out, err := docker(ctx, "run", "--rm",
+	out, err := dockertest.Docker(ctx, "run", "--rm",
 		"--volume", dir+":/in:ro", "--volume", verify+":/verify.sh:ro",
 		mawk2020Image, "sh", "-c", script)
 	if err != nil {

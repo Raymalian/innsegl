@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/segment"
@@ -1135,7 +1136,7 @@ func runtimeConditions(s *stack) string {
 		runtime.Version(), runtime.GOOS, runtime.GOARCH,
 		runtime.GOMAXPROCS(0), runtime.NumCPU(), raceDetectorState,
 		s.dockerVersion, s.dockerOS, s.dockerCPUs, s.dockerMemory,
-		postgresImage(), objectStoreImage(), rekorImage())
+		dockertest.PostgresImage(), objectStoreImage(), rekorImage())
 }
 
 // percentile returns the p-th percentile of a sorted slice.

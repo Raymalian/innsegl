@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // OPS-004's harness must READ the stack in the same compose project it BOOTS
@@ -64,7 +66,7 @@ func TestOPS004HarnessReadsTheProjectItBoots(t *testing.T) {
 		}
 	}
 
-	if err := dockerUsable(context.Background()); err != nil {
+	if err := dockertest.Usable(context.Background()); err != nil {
 		t.Skipf("docker is not usable here: %v", err)
 	}
 
