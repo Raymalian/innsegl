@@ -34,6 +34,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"innsegl.dev/innsegl/internal/version"
+	"innsegl.dev/innsegl/reference"
 )
 
 // ServerName is the name this server registers under. IP §1: "The MCP server
@@ -130,6 +131,11 @@ func New(cfg Config) (*Server, error) {
 		Instructions: cfg.Instructions,
 		Logger:       cfg.Logger,
 	})
+
+	// The reference pages, read-only, on every listener (MCP-101..105).
+	if err := addReference(s.sdk, reference.Pages); err != nil {
+		return nil, err
+	}
 
 	serve, err := selectedTools(cfg.Tools)
 	if err != nil {
