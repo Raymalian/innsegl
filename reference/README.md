@@ -12,7 +12,7 @@ help lines. When the code changes, the code wins; fix the page.
 | Every `innsegl` subcommand, one line each | [cli.md](cli.md) |
 | Client service, `connect`, `status` | [client-and-connect.md](client-and-connect.md) |
 | Commit hook and signing path (`hook`, `git-hook`, `sign`, `link`, `init`) | [commit-path.md](commit-path.md) |
-| Identity: register, retire, admin credential, identity guard | [identity.md](identity.md) |
+| Identity: register, retire, admin credential, identity guard; the MCP server and its reference resources | [identity.md](identity.md) |
 | Gateway capture of model traffic | [gateway.md](gateway.md) |
 | Ledger, segments, sealing, canary, ledger backup | [ledger-and-segments.md](ledger-and-segments.md) |
 | Reconciler and reaper | [reconciler-and-reaper.md](reconciler-and-reaper.md) |
