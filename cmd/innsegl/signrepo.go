@@ -28,6 +28,9 @@ const gitCommonDirTimeout = 3 * time.Second
 func gitCommonDir(ctx context.Context, dir string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitCommonDirTimeout)
 	defer cancel()
+	// #nosec G702 -- argv, no shell: dir is one argument to -C, and a dir that
+	// is not a directory git can enter is refused by git itself
+	// (TestGitCommonDirRefusesWhatIsNotADirectory).
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	out, err := cmd.Output()
 	if err != nil {
