@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -226,17 +225,6 @@ type observeService struct {
 	runSecret string
 }
 
-// observeActive holds the installed configuration.
-//
-// Package state because ADR-0016 §5 fixes the seam: a tool file registers its
-// own binder from its own init and the binder receives only the *Server, so
-// there is nowhere else for a tool's dependencies to be handed in without a
-// file every tool author would have to edit.
-var (
-	observeMu     sync.RWMutex
-	observeActive *observeService
-)
-
 // ConfigureObserveToolCall installs the dependencies observe_tool_call runs on
 // and returns a function restoring whatever was installed before.
 //
@@ -267,15 +255,7 @@ func ConfigureObserveToolCall(cfg ObserveToolCallConfig) (func(), error) {
 		bodyDir:   cfg.BodyDir,
 		runSecret: cfg.RunTokenSecret,
 	}
-	observeMu.Lock()
-	defer observeMu.Unlock()
-	previous := observeActive
-	observeActive = svc
-	return func() {
-		observeMu.Lock()
-		defer observeMu.Unlock()
-		observeActive = previous
-	}, nil
+	return install(&active.observe, svc), nil
 }
 
 // observeMisconfigured names a dependency the tool cannot run without.
@@ -297,9 +277,7 @@ func bindObserveToolCall(s *Server) error {
 }
 
 func observeToolCall(ctx context.Context, _ *sdk.CallToolRequest, in observeToolCallIn) (observeToolCallOut, error) {
-	observeMu.RLock()
-	svc := observeActive
-	observeMu.RUnlock()
+	svc := installed(&active.observe)
 	if svc == nil {
 		// Alert-level: a bound tool with no dependencies behind it is a defect
 		// in the wiring, and IP §4 has no "internal error" class (ADR-0016).
@@ -409,69 +387,12 @@ func observeNamedIdentity(in observeToolCallIn) error {
 	return nil
 }
 
-// store resolves the run, writes the body, and appends the `tool_call`.
-//
-// The run checks are here, inside the claim, for record_event's reason: IP §6.6
-// requires a replay to return the original result, so a run retired after a
-// completed call must not turn that call's replay into a refusal. A replay
-// never reaches them.
-//
-// The order of the last two steps is the substance of this function. See the
+// store resolves the run, writes the body, and appends the `tool_call` —
+// the gateway's own store with no workspace tree hash, through the one
+// recorder (appendToolCall). The body is written before the append: see the
 // note on I3's converse at the top of the file.
 func (c *observeService) store(ctx context.Context, runID, toolName, digest, key string, body []byte) (any, error) {
-	// The ledger is what knows the difference between a run that was retired
-	// and one that never existed; SPIRE cannot tell them apart, because both
-	// have no entry.
-	run, found, err := c.runs.CredentialRun(ctx, runID)
-	if err != nil {
-		return nil, credentialLedgerError(runID, err)
-	}
-	// record_event's rule, from the same reasoning: a run the caller's
-	// credential does not authorise is answered exactly as a run that does not
-	// exist (#264).
-	if !found || !adminScopeAdmits(ctx, run.Repo) {
-		return nil, Errorf(ClassRunNotFound, runID, "no run %q", runID)
-	}
-	if run.Retired() {
-		// I4: retirement removes the identity, never the record. A retired
-		// run's history stays readable; it stops growing.
-		return nil, Errorf(ClassRunAlreadyRetired, runID,
-			"run %q was retired at %s; retirement is effective immediately (IP §6.2)",
-			runID, event.NewTimestamp(run.RetiredAt))
-	}
-
-	// The directory's answer is checked, not trusted — the same check
-	// get_credential makes, from the one implementation of it, so that an
-	// observation cannot be attributed to another run's identity (I2).
-	spiffeID, _, err := credentialRunIdentity(runID, run)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := observeWriteBody(c.bodyDir, runID, digest, body); err != nil {
-		return nil, err
-	}
-
-	if _, err := c.ledger.Append(ctx, event.Fields{
-		event.FieldSchemaVersion:  event.SchemaVersion,
-		event.FieldEventType:      event.EventTypeToolCall,
-		event.FieldSource:         event.SourceMCP,
-		event.FieldRunID:          run.RunID,
-		event.FieldSpiffeID:       spiffeID,
-		event.FieldIdempotencyKey: key,
-		event.FieldToolName:       toolName,
-		// doc 02 §2: "Present iff a payload exists." One always does here —
-		// this tool refuses an empty body — so unlike record_event there is no
-		// absent case to spell.
-		event.FieldPayloadDigest: digest,
-	}); err != nil {
-		return nil, credentialLedgerError(runID, err)
-	}
-
-	// Neither member is read back off the appended record, because neither is
-	// the ledger's to assign: the digest is this tool's own derivation from
-	// bytes it holds, and `stored` is a fact about a file it has just written.
-	return observeToolCallOut{Digest: digest, Stored: true}, nil
+	return c.storeGatewayToolCall(ctx, runID, toolName, digest, key, "", body)
 }
 
 // observeWriteBody writes one body to the operator's volume, at the path the
@@ -571,30 +492,10 @@ func observeIdempotencyKey(runID, digest string) string {
 // value is by definition one of eleven known strings: an error message is a
 // second place a payload could come to rest.
 func observeToolName(runID, s string) (string, error) {
-	reject := func(format string, args ...any) (string, error) {
-		return "", Errorf(ClassInvariantViolation, runID, format, args...)
-	}
-	switch {
-	case s == "":
-		return reject("tool is required: it names the agent tool that was observed, " +
-			"which doc 02 §3 records as the tool_call event's tool_name (ADR-0021)")
-	case len(s) > event.MaxReferenceBytes:
-		// Length first, so a body is refused on its size without a regexp
-		// being run over it.
-		return reject("tool is %d bytes and names a tool, which doc 02 §3 bounds at %d; "+
-			"the ledger stores references, never payloads (IP E4). The body goes in body, "+
-			"and stays on this machine", len(s), event.MaxReferenceBytes)
-	case !recordEventToolNamePattern.MatchString(s):
-		return reject("tool does not name a tool: it must match %s. The ledger stores "+
-			"references, never payloads (IP E4). The body goes in body, and stays on this machine",
-			recordEventToolNamePattern)
-	case event.IsEventType(s):
-		return reject("tool %q spells one of doc 02 §3's event types. observe_tool_call writes "+
-			"exactly one event type, %s, and the caller does not choose it; the argument names "+
-			"the agent tool that was observed and is recorded as that event's %s (ADR-0021)",
-			s, event.EventTypeToolCall, event.FieldToolName)
-	}
-	return s, nil
+	return checkToolName(runID, s, toolNameArg{
+		name: "tool", tool: string(ToolObserveToolCall), verb: "observed",
+		hint: ". The body goes in body, and stays on this machine",
+	})
 }
 
 // observeBody holds the body to what one call may commit of the operator's

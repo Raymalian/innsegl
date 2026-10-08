@@ -5,7 +5,6 @@ package mcp
 import (
 	"context"
 	"errors"
-	"sync"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -173,17 +172,6 @@ type retireService struct {
 	ledger  RetireAgentLedger
 }
 
-// retireActive holds the installed configuration.
-//
-// It is package state because ADR-0016 §5 fixes the seam: a tool file
-// registers its own binder from its own init and the binder receives only the
-// *Server, so there is nowhere else for a tool's dependencies to be handed in
-// without a file every tool author would have to edit.
-var (
-	retireMu     sync.RWMutex
-	retireActive *retireService
-)
-
 // ConfigureRetireAgent installs the dependencies retire_agent runs on and
 // returns a function restoring whatever was installed before.
 //
@@ -204,15 +192,7 @@ func ConfigureRetireAgent(cfg RetireAgentConfig) (func(), error) {
 	}
 	svc := &retireService{runs: cfg.Runs, entries: cfg.Entries, ledger: cfg.Ledger}
 
-	retireMu.Lock()
-	defer retireMu.Unlock()
-	previous := retireActive
-	retireActive = svc
-	return func() {
-		retireMu.Lock()
-		defer retireMu.Unlock()
-		retireActive = previous
-	}, nil
+	return install(&active.retire, svc), nil
 }
 
 // retireAgentMisconfigured names a dependency the tool cannot run without.
@@ -232,9 +212,7 @@ func bindRetireAgent(s *Server) error {
 }
 
 func retireAgent(ctx context.Context, _ *sdk.CallToolRequest, in retireAgentIn) (retireAgentOut, error) {
-	retireMu.RLock()
-	svc := retireActive
-	retireMu.RUnlock()
+	svc := installed(&active.retire)
 	if svc == nil {
 		// Alert-level: a bound tool with no dependencies behind it is a defect
 		// in the wiring, and IP §4 has no "internal error" class (ADR-0016).

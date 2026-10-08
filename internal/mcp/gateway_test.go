@@ -382,15 +382,7 @@ func TestRegisterRunForGatewaySurfacesAMintFailure(t *testing.T) {
 // An advertised wrapper with no dependencies behind retire_agent refuses the
 // same way a wire caller does (TestRetireAgentIsNotServedUntilItIsConfigured).
 func TestRetireRunForGatewayIsNotServedUntilRetireAgentIsConfigured(t *testing.T) {
-	retireMu.Lock()
-	saved := retireActive
-	retireActive = nil
-	retireMu.Unlock()
-	t.Cleanup(func() {
-		retireMu.Lock()
-		retireActive = saved
-		retireMu.Unlock()
-	})
+	t.Cleanup(install(&active.retire, nil))
 
 	_, err := RetireRunForGateway(t.Context(), "run-gw-unconfigured")
 	var classified *Error

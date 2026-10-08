@@ -124,15 +124,7 @@ func TestConfigureCommitClaimRefusesAnIncompleteConfiguration(t *testing.T) {
 func TestCommitClaimIsNotServedUntilItIsConfigured(t *testing.T) {
 	// Force the unconfigured state directly, whatever another test in this
 	// file happens to have left active, and restore it afterward.
-	commitClaimMu.Lock()
-	previous := commitClaimActive
-	commitClaimActive = nil
-	commitClaimMu.Unlock()
-	t.Cleanup(func() {
-		commitClaimMu.Lock()
-		commitClaimActive = previous
-		commitClaimMu.Unlock()
-	})
+	t.Cleanup(install(&active.commitClaim, nil))
 
 	_, err := CommitClaimForRun(t.Context(), "run-42")
 	requireClass(t, err, ClassInvariantViolation)

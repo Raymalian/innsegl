@@ -643,15 +643,7 @@ func TestAgentMessageReportsAVolumeItCannotWriteInto(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAgentMessageIsNotServedUntilItIsConfigured(t *testing.T) {
-	agentMessageMu.Lock()
-	saved := agentMessageActive
-	agentMessageActive = nil
-	agentMessageMu.Unlock()
-	t.Cleanup(func() {
-		agentMessageMu.Lock()
-		agentMessageActive = saved
-		agentMessageMu.Unlock()
-	})
+	t.Cleanup(install(&active.agentMessage, nil))
 
 	_, err := RecordAgentMessageForGateway(amCtx(t), amRunID, AgentMessageRoleBrief, []byte(amBrief))
 	if got := mcpError(t, err).Class; got != ClassInvariantViolation {
@@ -714,9 +706,7 @@ func TestAgentMessageRefusesAStoredReplyItCannotRead(t *testing.T) {
 	ctx := amCtx(t)
 
 	plainDigest := event.Digest([]byte(amBrief))
-	agentMessageMu.RLock()
-	svc := agentMessageActive
-	agentMessageMu.RUnlock()
+	svc := installed(&active.agentMessage)
 	keyedDigest := svc.keyedDigest([]byte(amBrief))
 
 	key := agentMessageIdempotencyKey(amRunID, AgentMessageRoleBrief, plainDigest)

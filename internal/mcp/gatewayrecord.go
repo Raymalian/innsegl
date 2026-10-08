@@ -94,9 +94,7 @@ type GatewayToolCallOutput struct {
 // a record, and there is nowhere to write one — and this is refused exactly
 // as observeToolCall's own bound-but-unconfigured case is (observe.go).
 func RecordGatewayToolCall(ctx context.Context, in GatewayToolCallInput) (GatewayToolCallOutput, error) {
-	observeMu.RLock()
-	svc := observeActive
-	observeMu.RUnlock()
+	svc := installed(&active.observe)
 	if svc == nil {
 		return GatewayToolCallOutput{}, Errorf(ClassInvariantViolation, in.RunID,
 			"observe_tool_call is not configured; the gateway cannot record this tool call (I3)")
@@ -155,57 +153,20 @@ func (c *observeService) recordGatewayToolCall(ctx context.Context, in GatewayTo
 }
 
 // storeGatewayToolCall resolves the run, writes the body, and appends the
-// `tool_call` — observeService.store's own three steps (observe.go),
-// restated here rather than called, because this is the one call site that
-// also has a workspace_tree_hash to carry (ADR-0061 member 3) and store's
-// own ledger.Fields literal has no member for it. Every other line matches
-// store's own, on purpose: one behaviour, checked identically, whichever
-// path reached it.
+// `tool_call`, carrying workspace_tree_hash when the gateway has one
+// (ADR-0061 member 3). It is observe_tool_call's store too, with treeHash
+// empty: one recorder, checked identically whichever path reached it.
 func (c *observeService) storeGatewayToolCall(
 	ctx context.Context, runID, toolName, digest, key, treeHash string, body []byte,
 ) (any, error) {
-	run, found, err := c.runs.CredentialRun(ctx, runID)
-	if err != nil {
-		return nil, credentialLedgerError(runID, err)
-	}
-	if !found || !adminScopeAdmits(ctx, run.Repo) {
-		return nil, Errorf(ClassRunNotFound, runID, "no run %q", runID)
-	}
-	if run.Retired() {
-		return nil, Errorf(ClassRunAlreadyRetired, runID,
-			"run %q was retired at %s; retirement is effective immediately (IP §6.2)",
-			runID, event.NewTimestamp(run.RetiredAt))
-	}
-
-	spiffeID, _, err := credentialRunIdentity(runID, run)
-	if err != nil {
+	if _, err := appendToolCall(ctx, c.runs, c.ledger, toolCall{
+		runID: runID, toolName: toolName, digest: digest, key: key,
+		treeHash: treeHash, body: body, bodyDir: c.bodyDir,
+	}); err != nil {
 		return nil, err
 	}
-
-	if err := observeWriteBody(c.bodyDir, runID, digest, body); err != nil {
-		return nil, err
-	}
-
-	fields := event.Fields{
-		event.FieldSchemaVersion:  event.SchemaVersion,
-		event.FieldEventType:      event.EventTypeToolCall,
-		event.FieldSource:         event.SourceMCP,
-		event.FieldRunID:          run.RunID,
-		event.FieldSpiffeID:       spiffeID,
-		event.FieldIdempotencyKey: key,
-		event.FieldToolName:       toolName,
-		event.FieldPayloadDigest:  digest,
-	}
-	if treeHash != "" {
-		// ADR-0061 member 3, optional: a snapshot failure — or no
-		// snapshotter configured at all — records the tool call without
-		// it, never in place of it.
-		fields[event.FieldWorkspaceTreeHash] = treeHash
-	}
-
-	if _, err := c.ledger.Append(ctx, fields); err != nil {
-		return nil, credentialLedgerError(runID, err)
-	}
-
+	// Neither member is read back off the appended record, because neither is
+	// the ledger's to assign: the digest is this path's own derivation from
+	// bytes it holds, and `stored` is a fact about a file it has just written.
 	return observeToolCallOut{Digest: digest, Stored: true}, nil
 }

@@ -38,13 +38,9 @@ func spHostedCall() commitpath.RelayedCall {
 // spWiringSigningWith installs its signing step.
 func spWithMirror(t *testing.T, m CommitMirror) {
 	t.Helper()
-	signPayloadMu.Lock()
-	st := *signPayloadCfg
+	st := *installed(&active.signPayload)
 	st.mirror = m
-	previous := signPayloadCfg
-	signPayloadCfg = &st
-	signPayloadMu.Unlock()
-	t.Cleanup(func() { signPayloadMu.Lock(); signPayloadCfg = previous; signPayloadMu.Unlock() })
+	t.Cleanup(install(&active.signPayload, &st))
 }
 
 // spPushToMirror pushes the client repository's tree, as a throwaway commit,

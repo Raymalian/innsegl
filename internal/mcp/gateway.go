@@ -157,9 +157,7 @@ func RegisterRunForGateway(ctx context.Context, in GatewayRegistration) (Gateway
 // RegisterRunForGateway's comment for why calling the tool body directly
 // needs it here and would not over the wire.
 func RetireRunForGateway(ctx context.Context, runID string) (string, error) {
-	retireMu.RLock()
-	svc := retireActive
-	retireMu.RUnlock()
+	svc := installed(&active.retire)
 	if svc == nil {
 		// The same refusal retireAgent itself gives a bound-but-unconfigured
 		// call (retire_agent.go): an alert-level defect in the wiring, not a

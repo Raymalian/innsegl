@@ -299,14 +299,8 @@ type credFixture struct {
 // withCredentialConfig installs cfg for the duration of the test.
 func withCredentialConfig(t *testing.T, cfg CredentialConfig) {
 	t.Helper()
-	credentialMu.Lock()
-	saved := credentialActive
-	credentialMu.Unlock()
-	t.Cleanup(func() {
-		credentialMu.Lock()
-		credentialActive = saved
-		credentialMu.Unlock()
-	})
+	saved := installed(&active.credential)
+	t.Cleanup(func() { install(&active.credential, saved) })
 	if err := ConfigureGetCredential(cfg); err != nil {
 		t.Fatalf("ConfigureGetCredential: %v", err)
 	}
@@ -1144,15 +1138,7 @@ func TestAMintFailureIsReportedWithItsOwnClass(t *testing.T) {
 // on a server with no SPIRE and no ledger behind it is a defect, and a defect
 // is alert-level (ADR-0016).
 func TestAnUnconfiguredServerRefusesRatherThanImprovises(t *testing.T) {
-	credentialMu.Lock()
-	saved := credentialActive
-	credentialActive = nil
-	credentialMu.Unlock()
-	t.Cleanup(func() {
-		credentialMu.Lock()
-		credentialActive = saved
-		credentialMu.Unlock()
-	})
+	t.Cleanup(install(&active.credential, nil))
 
 	session := serveGetCredential(t)
 	res, err := session.CallTool(t.Context(), &sdk.CallToolParams{
@@ -1206,18 +1192,17 @@ func TestConfigureGetCredentialRefusesAHalfWiredServer(t *testing.T) {
 	if err := ConfigureGetCredential(cfg); err != nil {
 		t.Fatalf("ConfigureGetCredential refused a complete config: %v", err)
 	}
-	credentialMu.Lock()
-	defer credentialMu.Unlock()
-	if credentialActive == nil {
+	svc := installed(&active.credential)
+	defer install(&active.credential, nil)
+	if svc == nil {
 		t.Fatalf("a complete config was not installed")
 	}
-	if got := credentialActive.audiences; !equalStrings(got, []string{AudienceSigstore}) {
+	if got := svc.audiences; !equalStrings(got, []string{AudienceSigstore}) {
 		t.Errorf("default allowlist = %v, IP §4 says %v initially", got, []string{AudienceSigstore})
 	}
-	if credentialActive.now == nil {
+	if svc.now == nil {
 		t.Errorf("no clock was installed")
 	}
-	credentialActive = nil
 }
 
 // TestTheAudienceAllowlistIsConfigurableButClosed. IP §4 says "`sigstore`

@@ -1402,15 +1402,7 @@ func TestRetireAgentRefusesARetirementTheLedgerDidNotTimestamp(t *testing.T) {
 // dependencies behind it is a defect in the wiring, and IP §4 has no "internal
 // error" class (ADR-0016).
 func TestRetireAgentIsNotServedUntilItIsConfigured(t *testing.T) {
-	retireMu.Lock()
-	saved := retireActive
-	retireActive = nil
-	retireMu.Unlock()
-	t.Cleanup(func() {
-		retireMu.Lock()
-		retireActive = saved
-		retireMu.Unlock()
-	})
+	t.Cleanup(install(&active.retire, nil))
 
 	f := &retireFixture{session: serveRetire(t, false)}
 	f.mustRefuse(t, "run-a", ClassInvariantViolation)
@@ -1451,17 +1443,13 @@ func TestConfigureRetireAgentRefusesAnIncompleteConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureRetireAgent: %v", err)
 	}
-	retireMu.RLock()
-	installed := retireActive
-	retireMu.RUnlock()
-	if installed == nil {
+	got := installed(&active.retire)
+	if got == nil {
 		t.Fatalf("ConfigureRetireAgent installed nothing")
 	}
 	restore()
-	retireMu.RLock()
-	after := retireActive
-	retireMu.RUnlock()
-	if after == installed {
+	after := installed(&active.retire)
+	if after == got {
 		t.Errorf("restore() left the new configuration installed")
 	}
 }

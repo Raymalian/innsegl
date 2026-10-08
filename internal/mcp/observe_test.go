@@ -971,15 +971,7 @@ func TestObserveToolCallReportsARunDirectoryItCannotRead(t *testing.T) {
 // dependencies behind it refuses rather than improvising: IP §4 has no
 // "internal error" class, so a wiring defect is alert-level (ADR-0016).
 func TestObserveToolCallIsNotServedUntilItIsConfigured(t *testing.T) {
-	observeMu.Lock()
-	saved := observeActive
-	observeActive = nil
-	observeMu.Unlock()
-	t.Cleanup(func() {
-		observeMu.Lock()
-		observeActive = saved
-		observeMu.Unlock()
-	})
+	t.Cleanup(install(&active.observe, nil))
 
 	session := otcServe(t)
 	otcCallFail(t, session, otcArgs(), ClassInvariantViolation)

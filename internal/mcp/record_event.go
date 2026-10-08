@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
-	"sync"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -133,17 +132,6 @@ type recordEventService struct {
 	idem   *IdempotencyStore
 }
 
-// recordEventState holds the installed configuration.
-//
-// It is package state because ADR-0016 §5 fixes the seam: a tool file
-// registers its own binder from its own init and the binder receives only the
-// *Server, so there is nowhere else for a tool's dependencies to be handed in
-// without a file every tool author would have to edit.
-var (
-	recordEventMu     sync.RWMutex
-	recordEventActive *recordEventService
-)
-
 // ConfigureRecordEvent installs the dependencies record_event runs on and
 // returns a function restoring whatever was installed before.
 //
@@ -164,15 +152,7 @@ func ConfigureRecordEvent(cfg RecordEventConfig) (func(), error) {
 	}
 
 	svc := &recordEventService{runs: cfg.Runs, ledger: cfg.Ledger, idem: cfg.Idempotency}
-	recordEventMu.Lock()
-	defer recordEventMu.Unlock()
-	previous := recordEventActive
-	recordEventActive = svc
-	return func() {
-		recordEventMu.Lock()
-		defer recordEventMu.Unlock()
-		recordEventActive = previous
-	}, nil
+	return install(&active.recordEvent, svc), nil
 }
 
 // recordEventMisconfigured names a dependency the tool cannot run without.
@@ -191,9 +171,7 @@ func bindRecordEvent(s *Server) error {
 }
 
 func recordEvent(ctx context.Context, _ *sdk.CallToolRequest, in recordEventIn) (recordEventOut, error) {
-	recordEventMu.RLock()
-	svc := recordEventActive
-	recordEventMu.RUnlock()
+	svc := installed(&active.recordEvent)
 	if svc == nil {
 		// Alert-level: a bound tool with no dependencies behind it is a defect
 		// in the wiring, and IP §4 has no "internal error" class (ADR-0016).
@@ -260,46 +238,61 @@ func (c *recordEventService) record(ctx context.Context, in recordEventIn) (reco
 // The run checks are here, inside the claim, on purpose: see the note at the
 // top of this file. A replay of a completed call never reaches them.
 func (c *recordEventService) append(ctx context.Context, runID, toolName, digest, key string) (any, error) {
-	// The ledger is what knows the difference between a run that was retired
-	// and one that never existed; SPIRE cannot tell them apart, because both
-	// have no entry.
-	run, found, err := c.runs.CredentialRun(ctx, runID)
-	if err != nil {
-		return nil, credentialLedgerError(runID, err)
-	}
-	// A run this caller's credential does not authorise is answered EXACTLY as
-	// a run that does not exist (#264). Same class, same message, same bytes,
-	// from the same line — a run id is public in every Agent-Run trailer, so a
-	// distinguishable answer would turn one into an oracle over which
-	// repository holds it. With no credential in force adminScopeAdmits is
-	// true and this reads as it always did.
-	if !found || !adminScopeAdmits(ctx, run.Repo) {
-		return nil, Errorf(ClassRunNotFound, runID, "no run %q", runID)
-	}
-	if run.Retired() {
-		// I4: retirement removes the identity, never the record. A retired
-		// run's history stays readable; it stops growing.
-		return nil, Errorf(ClassRunAlreadyRetired, runID,
-			"run %q was retired at %s; retirement is effective immediately (IP §6.2)",
-			runID, event.NewTimestamp(run.RetiredAt))
-	}
-
-	// The directory's answer is checked, not trusted — the same check
-	// get_credential makes, from the one implementation of it, so that an
-	// event cannot be attributed to another run's identity (I2).
-	spiffeID, _, err := credentialRunIdentity(runID, run)
+	// No body: record_event takes a digest and never the bytes behind it.
+	record, err := appendToolCall(ctx, c.runs, c.ledger, toolCall{
+		runID: runID, toolName: toolName, digest: digest, key: key,
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	record, err := c.ledger.Append(ctx, recordEventBody(run.RunID, spiffeID, toolName, digest, key))
-	if err != nil {
-		return nil, credentialLedgerError(runID, err)
 	}
 	return recordEventResult(runID, record)
 }
 
-// recordEventBody is the `tool_call` event of doc 02 §3.
+// toolCall is one `tool_call` to record, from whichever path observed it.
+type toolCall struct {
+	runID, toolName, digest, key string
+	// treeHash is ADR-0061 member 3, optional; only the gateway has one.
+	treeHash string
+	// body is written to bodyDir BEFORE the append whenever bodyDir is set
+	// (I3's converse: no record of an observation whose body was not kept).
+	// record_event has neither.
+	body    []byte
+	bodyDir string
+}
+
+// toolCallLedger is the append half every tool_call recorder needs.
+type toolCallLedger interface {
+	Append(ctx context.Context, body event.Fields) (event.Fields, error)
+}
+
+// appendToolCall is the one tool_call recorder: record_event,
+// observe_tool_call and the gateway's own observation all append through it,
+// so the three cannot drift apart on the run gate, the body ordering or the
+// event's members.
+//
+// The run checks are inside the caller's idempotency claim, on purpose: IP
+// §6.6 requires a replay to return the original result, so a run retired
+// after a completed call must not turn that call's replay into a refusal.
+func appendToolCall(ctx context.Context, runs CredentialRuns, lg toolCallLedger, tc toolCall) (event.Fields, error) {
+	// The one run gate, scoped (#264): a run this caller's credential does
+	// not authorise reads exactly as a run that does not exist.
+	run, spiffeID, err := resolveRun(ctx, runs, tc.runID, runGate{scoped: true})
+	if err != nil {
+		return nil, err
+	}
+	if tc.bodyDir != "" {
+		if err := observeWriteBody(tc.bodyDir, tc.runID, tc.digest, tc.body); err != nil {
+			return nil, err
+		}
+	}
+	record, err := lg.Append(ctx, toolCallBody(run.RunID, spiffeID, tc))
+	if err != nil {
+		return nil, credentialLedgerError(tc.runID, err)
+	}
+	return record, nil
+}
+
+// toolCallBody is the `tool_call` event of doc 02 §3.
 //
 // Every member name here is a protected string. `source` is `mcp` because an
 // MCP tool call appended it, and `idempotency_key` is present because ADR-0004
@@ -310,22 +303,28 @@ func (c *recordEventService) append(ctx context.Context, runID, toolName, digest
 // There is no member for a body, and that is the point: doc 02 §3's row is
 // "body only as `payload_digest`", so a payload has nowhere to live even if a
 // caller found a way to supply one (IP E4).
-func recordEventBody(runID, spiffeID, toolName, digest, key string) event.Fields {
+func toolCallBody(runID, spiffeID string, tc toolCall) event.Fields {
 	body := event.Fields{
 		event.FieldSchemaVersion:  event.SchemaVersion,
 		event.FieldEventType:      event.EventTypeToolCall,
 		event.FieldSource:         event.SourceMCP,
 		event.FieldRunID:          runID,
 		event.FieldSpiffeID:       spiffeID,
-		event.FieldIdempotencyKey: key,
-		event.FieldToolName:       toolName,
+		event.FieldIdempotencyKey: tc.key,
+		event.FieldToolName:       tc.toolName,
 	}
 	// doc 02 §2: payload_digest is "Present iff a payload exists", and doc 02
 	// §1 makes absent and empty distinct states with only absent allowed for a
 	// missing value. So a tool call with no body omits the member rather than
 	// writing it blank.
-	if digest != "" {
-		body[event.FieldPayloadDigest] = digest
+	if tc.digest != "" {
+		body[event.FieldPayloadDigest] = tc.digest
+	}
+	if tc.treeHash != "" {
+		// ADR-0061 member 3, optional: a snapshot failure — or no
+		// snapshotter configured at all — records the tool call without
+		// it, never in place of it.
+		body[event.FieldWorkspaceTreeHash] = tc.treeHash
 	}
 	return body
 }
@@ -396,27 +395,48 @@ var recordEventToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@
 // definition one of eleven known strings: an error message is a second place a
 // payload could come to rest.
 func recordEventToolName(runID, s string) (string, error) {
+	return checkToolName(runID, s, toolNameArg{
+		name: "event_type", tool: string(ToolRecordEvent), verb: "invoked",
+	})
+}
+
+// toolNameArg is how one tool spells the argument that becomes a tool_call's
+// tool_name. IP §4 spells it differently per tool, and a refusal that named
+// the wrong argument would send a caller looking in the wrong place.
+type toolNameArg struct {
+	name, tool, verb string
+	// hint is appended to the refusals about a body arriving where a name
+	// belongs.
+	hint string
+}
+
+// checkToolName is the one tool-name validator: record_event's and
+// observe_tool_call's arguments become the same member of the same event
+// type, so a name one accepted and the other refused would be one
+// `tool_name` with two meanings.
+func checkToolName(runID, s string, a toolNameArg) (string, error) {
 	reject := func(format string, args ...any) (string, error) {
 		return "", Errorf(ClassInvariantViolation, runID, format, args...)
 	}
 	switch {
 	case s == "":
-		return reject("event_type is required: it names the agent tool that was invoked, " +
-			"which doc 02 §3 records as the tool_call event's tool_name (ADR-0021)")
+		return reject("%s is required: it names the agent tool that was %s, "+
+			"which doc 02 §3 records as the tool_call event's tool_name (ADR-0021)", a.name, a.verb)
 	case len(s) > event.MaxReferenceBytes:
 		// Length first, so a body is refused on its size without a regexp
 		// being run over it.
-		return reject("event_type is %d bytes and names a tool, which doc 02 §3 bounds at %d; "+
-			"the ledger stores references, never payloads (IP E4)", len(s), event.MaxReferenceBytes)
+		return reject("%s is %d bytes and names a tool, which doc 02 §3 bounds at %d; "+
+			"the ledger stores references, never payloads (IP E4)%s",
+			a.name, len(s), event.MaxReferenceBytes, a.hint)
 	case !recordEventToolNamePattern.MatchString(s):
-		return reject("event_type does not name a tool: it must match %s. "+
-			"The ledger stores references, never payloads (IP E4)",
-			recordEventToolNamePattern)
+		return reject("%s does not name a tool: it must match %s. "+
+			"The ledger stores references, never payloads (IP E4)%s",
+			a.name, recordEventToolNamePattern, a.hint)
 	case event.IsEventType(s):
-		return reject("event_type %q spells one of doc 02 §3's event types. record_event writes "+
+		return reject("%s %q spells one of doc 02 §3's event types. %s writes "+
 			"exactly one event type, %s, and the caller does not choose it; the argument names "+
-			"the agent tool that was invoked and is recorded as that event's %s (ADR-0021)",
-			s, event.EventTypeToolCall, event.FieldToolName)
+			"the agent tool that was %s and is recorded as that event's %s (ADR-0021)",
+			a.name, s, a.tool, event.EventTypeToolCall, a.verb, event.FieldToolName)
 	}
 	return s, nil
 }
