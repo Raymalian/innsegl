@@ -205,9 +205,9 @@ func init() { RegisterTool(ToolRetireAgent, bindRetireAgent) }
 func bindRetireAgent(s *Server) error {
 	return Bind(s, &sdk.Tool{
 		Name: string(ToolRetireAgent),
-		Description: "Retire one agent run: record run_retired in the ledger and delete the run's " +
+		Description: wireDeprecated("Retire one agent run: record run_retired in the ledger and delete the run's " +
 			"SPIRE entry. Effective immediately, and idempotent — retiring a retired run " +
-			"succeeds with the instant it was originally retired. No ledger event is ever removed.",
+			"succeeds with the instant it was originally retired. No ledger event is ever removed."),
 	}, retireAgent)
 }
 

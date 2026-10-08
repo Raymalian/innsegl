@@ -163,10 +163,10 @@ func recordEventMisconfigured(detail string) error {
 func bindRecordEvent(s *Server) error {
 	return Bind(s, &sdk.Tool{
 		Name: string(ToolRecordEvent),
-		Description: "Record one agent tool invocation against a run, by reference only. " +
+		Description: wireDeprecated("Record one agent tool invocation against a run, by reference only. " +
 			"event_type names the agent tool that was invoked; payload_digest is the " +
 			"sha256: digest of its body, which is never sent and never stored. " +
-			"The same idempotency_key always names the same event.",
+			"The same idempotency_key always names the same event."),
 	}, recordEvent)
 }
 

@@ -310,8 +310,8 @@ func registerAgentConfigured() (*RegisterAgentConfig, error) {
 func bindRegisterAgent(s *Server) error {
 	return Bind(s, &sdk.Tool{
 		Name: string(ToolRegisterAgent),
-		Description: "Register one agent run: record run_registered in the ledger and create the " +
-			"run's SPIRE entry. The same idempotency_key always names the same run.",
+		Description: wireDeprecated("Register one agent run: record run_registered in the ledger and create the " +
+			"run's SPIRE entry. The same idempotency_key always names the same run."),
 	}, registerAgent)
 }
 

@@ -142,3 +142,37 @@ func TestObserveToolCallNamingNoRunIsRefused(t *testing.T) {
 		t.Fatalf("err = %v, want %s naming run_id", err, ClassInvariantViolation)
 	}
 }
+
+// ADR-0077: the MCP wire surface is deprecated as a whole. Every one of the
+// eight tools says so in its tools/list description, in one identical
+// sentence, one minor release ahead of the major that removes the binding
+// (VERSIONING.md). The six working tools keep working; only the description
+// changes.
+func TestADR0077EveryToolAnnouncesTheWireDeprecation(t *testing.T) {
+	session := serveShipped(t)
+	list, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("tools/list: %v", err)
+	}
+	seen := map[string]string{}
+	for _, tool := range list.Tools {
+		seen[tool.Name] = tool.Description
+	}
+	const want = "Deprecated (ADR-0077): innsegl's gateway and commit hook replace the MCP wire " +
+		"surface, and this tool is removed from it at the next major release."
+	for _, name := range ToolNames() {
+		desc, ok := seen[string(name)]
+		if !ok {
+			t.Errorf("%s is not advertised; every name stays bound until the next major", name)
+			continue
+		}
+		rest, found := strings.CutPrefix(desc, want+" ")
+		if !found {
+			t.Errorf("%s description %q does not begin with the wire deprecation %q", name, desc, want)
+			continue
+		}
+		if strings.TrimSpace(rest) == "" {
+			t.Errorf("%s description is the notice alone; it must still say what the tool does", name)
+		}
+	}
+}
