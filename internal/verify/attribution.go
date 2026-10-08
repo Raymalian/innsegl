@@ -46,28 +46,19 @@ type ContentConfig struct {
 	Source ContentSource
 }
 
-// AttributeContent asks whether a signed run produced this change.
-//
-// runID is the run the commit CLAIMS, read from its `Agent-Run` trailer by the
-// caller (verify.ReadClaim). It is passed in rather than parsed here because
-// the caller has already read the commit object to find it, and reading it
-// twice would let the two reads disagree.
+// AttributeClaim asks whether a signed run produced this change, given the
+// WHOLE claim the commit makes: its Agent-Run trailer and its
+// Agent-Adopted-Run (ADR-0051), as read by ReadClaim. The claim is passed in
+// rather than parsed here because the caller has already read the commit
+// object to find it, and reading it twice would let the two reads disagree.
+// Asked with the run alone, a commit that adopted a dead run's work reads as
+// one whose adoption trailer was stripped. Measured on the live deployment on
+// 2026-09-24, through the attribution API.
 //
 // It never returns an error: every way this can fail to reach an answer is one
 // of ContentAttribution's own results, with the reason in Detail. An error
 // return would give a caller a fourth state to render that doc 06 §4.2 has no
 // badge for.
-func AttributeContent(
-	ctx context.Context, cfg ContentConfig, repo, sha, runID string,
-) ContentAttribution {
-	return AttributeClaim(ctx, cfg, repo, sha, Claim{Run: runID})
-}
-
-// AttributeClaim is AttributeContent over the WHOLE claim the commit makes,
-// its Agent-Adopted-Run included (ADR-0051). A caller holding a claim read by
-// ReadClaim asks this: asked with the run alone, a commit that adopted a dead
-// run's work reads as one whose adoption trailer was stripped. Measured on the
-// live deployment on 2026-09-24, through the attribution API.
 func AttributeClaim(
 	ctx context.Context, cfg ContentConfig, repo, sha string, claim Claim,
 ) ContentAttribution {

@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
-	"sync"
 
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/ledger"
@@ -155,18 +154,6 @@ type agentMessageService struct {
 	key string
 }
 
-// agentMessageActive holds the installed configuration. Package state for
-// the same reason observeActive (observe.go) is: ADR-0016 §5 fixes the seam
-// as a file registering its own binder from its own init, receiving only
-// the *Server — but this recorder binds no sdk.Tool at all (see this
-// file's own doc comment), so there is no init/bindX pair here, only the
-// Configure/Record pair internal/mcp/gateway.go's own functions already use
-// for register_agent and retire_agent.
-var (
-	agentMessageMu     sync.RWMutex
-	agentMessageActive *agentMessageService
-)
-
 // ConfigureAgentMessageRecorder installs the dependencies
 // RecordAgentMessageForGateway runs on, and returns a function restoring
 // whatever was installed before.
@@ -211,15 +198,7 @@ func ConfigureAgentMessageRecorder(cfg AgentMessageRecorderConfig) (func(), erro
 		keyID:   cfg.KeyID,
 		key:     key,
 	}
-	agentMessageMu.Lock()
-	defer agentMessageMu.Unlock()
-	previous := agentMessageActive
-	agentMessageActive = svc
-	return func() {
-		agentMessageMu.Lock()
-		defer agentMessageMu.Unlock()
-		agentMessageActive = previous
-	}, nil
+	return install(&active.agentMessage, svc), nil
 }
 
 // agentMessageMisconfigured names a dependency this recorder cannot run
@@ -272,9 +251,7 @@ type agentMessageRecordOut struct {
 // wire-facing tool's unclassified failure a class before a caller ever sees
 // it.
 func RecordAgentMessageForGateway(ctx context.Context, runID, role string, body []byte) (string, error) {
-	agentMessageMu.RLock()
-	svc := agentMessageActive
-	agentMessageMu.RUnlock()
+	svc := installed(&active.agentMessage)
 	if svc == nil {
 		// Alert-level: a caller with nothing configured behind it is a defect
 		// in the wiring, and IP §4 has no "internal error" class (ADR-0016).
@@ -358,33 +335,10 @@ func (c *agentMessageService) keyedDigest(body []byte) string {
 func (c *agentMessageService) store(
 	ctx context.Context, runID, role, plainDigest, keyedDigest, key string, body []byte,
 ) (any, error) {
-	run, found, err := c.runs.CredentialRun(ctx, runID)
-	if err != nil {
-		return nil, credentialLedgerError(runID, err)
-	}
-	// record_event's and observe_tool_call's rule, from the one
-	// implementation of it: a run the caller's credential does not
-	// authorise is answered exactly as a run that does not exist (#264). A
-	// context carrying no admin scope at all — every call this recorder's
-	// own caller (internal/gateway) makes — admits everything
-	// (adminScopeAdmits's own doc comment); this check is here for the
-	// deployments that DO enforce a scope, on the identical path every
-	// other run-scoped tool already checks it on.
-	if !found || !adminScopeAdmits(ctx, run.Repo) {
-		return nil, Errorf(ClassRunNotFound, runID, "no run %q", runID)
-	}
-	if run.Retired() {
-		// I4: retirement removes the identity, never the record. A retired
-		// run's history stays readable; it stops growing.
-		return nil, Errorf(ClassRunAlreadyRetired, runID,
-			"run %q was retired at %s; retirement is effective immediately (IP §6.2)",
-			runID, event.NewTimestamp(run.RetiredAt))
-	}
-
-	// The directory's answer is checked, not trusted — get_credential's own
-	// check, from the one implementation of it, so a brief or a message
-	// cannot be attributed to another run's identity (I2).
-	spiffeID, _, err := credentialRunIdentity(runID, run)
+	// The one run gate, scoped (#264). A context carrying no admin scope —
+	// every call internal/gateway makes — admits everything; the scope is
+	// checked for the deployments that DO enforce one.
+	run, spiffeID, err := resolveRun(ctx, c.runs, runID, runGate{scoped: true})
 	if err != nil {
 		return nil, err
 	}

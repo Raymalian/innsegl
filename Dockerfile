@@ -80,8 +80,6 @@ RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/g
 # built in its own stage, ui-build, from web/ alone.)
 COPY cmd ./cmd
 COPY internal ./internal
-# reference/ embeds the reference pages the MCP server offers (OPS-162).
-COPY reference ./reference
 COPY migrations ./migrations
 
 # The version stamp. Defaulted rather than required so a bare `docker build .`

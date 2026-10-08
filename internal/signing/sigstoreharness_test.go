@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -22,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/segment"
 )
 
@@ -110,124 +110,12 @@ type stack struct {
 
 func stackPrefix() string { return fmt.Sprintf("innsegl-signtest-%d", os.Getpid()) }
 
-func docker(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(args, " "), err, oneLine(stderr.String()))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// ---------------------------------------------------------------------------
-// #101: a failed dependency is not a skip.
-//
-// errDependencyAbsent marks the ONLY conditions under which skipping TC-SIG's
-// integration cases is honest: there is no Docker daemon (or
-// INNSEGL_TEST_NO_DOCKER asks for none), or there is no gitsign binary.
-// Nothing else wraps it.
-//
-// Everything else that can go wrong while standing the stacks up — an image
-// that cannot be pulled, a port that cannot be bound, a network Docker refuses
-// to create because its predefined address pools are used up, a container that
-// never becomes healthy — is a FAILURE. Reporting one of those as a skip turns
-// it into a pass-shaped outcome: `go test` exits zero, the package reports ok,
-// and the SIG-* suite — I2, I3 and the signing half of I5 — did not run. That
-// is what CI produced on a runner whose "Require Docker" step had already
-// passed, on a message that even claimed a gitsign the preceding step had
-// installed was missing, because that was the only text the branch could
-// produce.
-//
-// internal/verify/verifyharness_test.go carries the reference shape; both
-// branches here are exercised by
-// TestHAR008AnAbsentDependencyIsASkipAndAFaultIsAFailure.
-// ---------------------------------------------------------------------------
-var errDependencyAbsent = errors.New("a required dependency is absent")
-
-// startupOutcome routes a start-up error to exactly one of the two variables.
-// An absent dependency is a skip; anything else is a failure. There is no
-// third answer, and the third answer is how this package came to report ok
-// with nothing having run.
-func startupOutcome(err error) (skip, failure string) {
-	switch {
-	case err == nil:
-		return "", ""
-	case errors.Is(err, errDependencyAbsent):
-		return err.Error(), ""
-	default:
-		return "", err.Error()
-	}
-}
-
-// harnessRequirement is what a require-function must do for the calling test.
-type harnessRequirement int
-
-const (
-	harnessProceed harnessRequirement = iota
-	harnessSkipTest
-	harnessFailTest
-)
-
-// harnessNeed decides between the three. A failure outranks a skip: if the
-// dependency broke, the reason it broke is what the developer needs to read.
-func harnessNeed(up bool, skip, failure string) harnessRequirement {
-	switch {
-	case failure != "":
-		return harnessFailTest
-	case !up:
-		return harnessSkipTest
-	default:
-		return harnessProceed
-	}
-}
-
-// oneLine collapses a multi-line subprocess error into a single line.
-//
-// `docker compose` reports progress on stderr, so a failure arrives as several
-// lines of which only the last usually names the cause. Go's test JSON stream
-// emits each line as its own event, and the CI failure behind #101 read
-// "Network innsegl-verifytest-40427-spire-admin  Creating" — compose's first
-// progress line, with the fault itself on a line the summary never showed.
-func oneLine(s string) string {
-	return strings.Join(strings.Fields(s), " ")
-}
-
-func dockerUsable(ctx context.Context) error {
-	if os.Getenv("INNSEGL_TEST_NO_DOCKER") != "" {
-		return fmt.Errorf("INNSEGL_TEST_NO_DOCKER is set: %w", errDependencyAbsent)
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker is not on PATH: %w: %w", err, errDependencyAbsent)
-	}
-	if _, err := docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
-		return fmt.Errorf("no reachable docker daemon: %w: %w", err, errDependencyAbsent)
-	}
-	return nil
-}
-
-// freeHostPort reserves an ephemeral loopback port and hands it back.
-func freeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
-}
-
 // findGitsign locates the released gitsign binary. It never builds one from
 // source: IP §7 says Sigstore is used as a released upstream component.
 func findGitsign(ctx context.Context) (string, error) {
 	if p := os.Getenv("INNSEGL_GITSIGN"); p != "" {
 		if _, err := os.Stat(p); err != nil {
-			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w: %w", p, err, errDependencyAbsent)
+			return "", fmt.Errorf("INNSEGL_GITSIGN=%s: %w: %w", p, err, dockertest.ErrDependencyAbsent)
 		}
 		return p, nil
 	}
@@ -243,7 +131,7 @@ func findGitsign(ctx context.Context) (string, error) {
 	}
 	return "", fmt.Errorf("no gitsign binary; install the pinned release with "+
 		"`go install github.com/sigstore/gitsign@%s` or set INNSEGL_GITSIGN: %w",
-		harnessGitsignVersion, errDependencyAbsent)
+		harnessGitsignVersion, dockertest.ErrDependencyAbsent)
 }
 
 func (s *stack) compose(ctx context.Context, files []string, args ...string) (string, error) {
@@ -259,7 +147,7 @@ func (s *stack) compose(ctx context.Context, files []string, args ...string) (st
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(full, " "), err, oneLine(stderr.String()))
+			strings.Join(full, " "), err, dockertest.OneLine(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -270,15 +158,15 @@ func startStack(ctx context.Context, root string) (*stack, error) {
 		return nil, err
 	}
 
-	oidcPort, err := freeHostPort(ctx)
+	oidcPort, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return nil, err
 	}
-	fulcioPort, err := freeHostPort(ctx)
+	fulcioPort, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rekorPort, err := freeHostPort(ctx)
+	rekorPort, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -368,11 +256,11 @@ func (s *stack) registerOIDCProvider(ctx context.Context) error {
 		return fmt.Errorf("no attested agent in `agent list`:\n%s", out)
 	}
 
-	imageConfigDigest, err := docker(ctx, "inspect", "--format", "{{.Image}}", container)
+	imageConfigDigest, err := dockertest.Docker(ctx, "inspect", "--format", "{{.Image}}", container)
 	if err != nil {
 		return err
 	}
-	imageRef, err := docker(ctx, "inspect", "--format", "{{.Config.Image}}", container)
+	imageRef, err := dockertest.Docker(ctx, "inspect", "--format", "{{.Config.Image}}", container)
 	if err != nil {
 		return err
 	}
@@ -382,7 +270,7 @@ func (s *stack) registerOIDCProvider(ctx context.Context) error {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	binary := filepath.Join(dir, "oidc")
-	if _, cperr := docker(ctx, "cp",
+	if _, cperr := dockertest.Docker(ctx, "cp",
 		container+":/opt/spire/bin/oidc-discovery-provider", binary); cperr != nil {
 		return cperr
 	}
@@ -578,7 +466,7 @@ func TestMain(m *testing.M) {
 	}
 	root := filepath.Dir(filepath.Dir(wd))
 
-	switch err := dockerUsable(ctx); {
+	switch err := dockertest.Usable(ctx); {
 	case err != nil:
 		// The only honest skip: there is no daemon to ask.
 		stackSkip = err.Error()
@@ -587,7 +475,7 @@ func TestMain(m *testing.M) {
 			// An absent gitsign is still a skip; anything else — a network
 			// Docker will not create, a container that never goes healthy —
 			// is a FAILURE (#101).
-			stackSkip, stackFailure = startupOutcome(serr)
+			stackSkip, stackFailure = dockertest.StartupOutcome(serr)
 			if s != nil {
 				s.stop()
 			}
@@ -610,20 +498,20 @@ func TestMain(m *testing.M) {
 // integration case pass without them.
 func requireStack(t *testing.T) *stack {
 	t.Helper()
-	switch harnessNeed(sharedStack != nil, stackSkip, stackFailure) {
-	case harnessFailTest:
+	switch dockertest.Need(sharedStack != nil, stackSkip, stackFailure) {
+	case dockertest.FailTest:
 		t.Fatalf("the SPIRE + Sigstore stack did not come up, and Docker and "+
 			"gitsign are both present: %s\n\nThis is a FAILURE and not a skip "+
 			"(#101). TC-SIG's integration cases are what demonstrate I5; "+
 			"reporting an infrastructure fault as a skip exits zero and reports "+
 			"ok while none of them ran.", stackFailure)
-	case harnessSkipTest:
+	case dockertest.SkipTest:
 		t.Skipf("skipping: no real SPIRE + Sigstore from deploy/compose/ and no gitsign (%s). "+
 			"TC-SIG proves nothing about I2, I3 or I5 against a mock — IP §2, "+
 			"\"a mocked Fulcio proves nothing about I5\". Start Docker, "+
 			"`go install github.com/sigstore/gitsign@%s`, and re-run.",
 			stackSkip, harnessGitsignVersion)
-	case harnessProceed:
+	case dockertest.Proceed:
 	}
 	return sharedStack
 }
@@ -756,15 +644,15 @@ func fetchJSON(t *testing.T, url string, into any) {
 func TestHAR008AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 	t.Run("no docker is a skip", func(t *testing.T) {
 		t.Setenv("INNSEGL_TEST_NO_DOCKER", "1")
-		err := dockerUsable(t.Context())
+		err := dockertest.Usable(t.Context())
 		if err == nil {
 			t.Fatal("dockerUsable answered nil with INNSEGL_TEST_NO_DOCKER set")
 		}
-		if !errors.Is(err, errDependencyAbsent) {
-			t.Fatalf("%v does not wrap errDependencyAbsent, so it would be routed to a "+
+		if !errors.Is(err, dockertest.ErrDependencyAbsent) {
+			t.Fatalf("%v does not wrap dockertest.ErrDependencyAbsent, so it would be routed to a "+
 				"FAILURE and a developer with no Docker could not run this package", err)
 		}
-		skip, failure := startupOutcome(err)
+		skip, failure := dockertest.StartupOutcome(err)
 		if skip == "" || failure != "" {
 			t.Fatalf("startupOutcome(%v) = (%q, %q), want a skip and no failure", err, skip, failure)
 		}
@@ -776,11 +664,11 @@ func TestHAR008AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 		if err == nil {
 			t.Fatal("findGitsign accepted a path that does not exist")
 		}
-		if !errors.Is(err, errDependencyAbsent) {
-			t.Fatalf("%v does not wrap errDependencyAbsent; a machine without gitsign "+
+		if !errors.Is(err, dockertest.ErrDependencyAbsent) {
+			t.Fatalf("%v does not wrap dockertest.ErrDependencyAbsent; a machine without gitsign "+
 				"would be told the suite FAILED", err)
 		}
-		skip, failure := startupOutcome(err)
+		skip, failure := dockertest.StartupOutcome(err)
 		if skip == "" || failure != "" {
 			t.Fatalf("startupOutcome(%v) = (%q, %q), want a skip and no failure", err, skip, failure)
 		}
@@ -794,18 +682,18 @@ func TestHAR008AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 			errors.New("Error response from daemon: could not find an available, "+
 				"non-overlapping IPv4 address pool among the defaults to assign "+
 				"to the network"))
-		if errors.Is(err, errDependencyAbsent) {
-			t.Fatal("an exhausted Docker address pool wraps errDependencyAbsent; it would " +
+		if errors.Is(err, dockertest.ErrDependencyAbsent) {
+			t.Fatal("an exhausted Docker address pool wraps dockertest.ErrDependencyAbsent; it would " +
 				"be reported as a skip and the SIG-* suite would silently not run")
 		}
-		skip, failure := startupOutcome(err)
+		skip, failure := dockertest.StartupOutcome(err)
 		if failure == "" || skip != "" {
 			t.Fatalf("startupOutcome(%v) = (%q, %q), want a failure and no skip", err, skip, failure)
 		}
 	})
 
 	t.Run("a healthy start-up is neither", func(t *testing.T) {
-		if skip, failure := startupOutcome(nil); skip != "" || failure != "" {
+		if skip, failure := dockertest.StartupOutcome(nil); skip != "" || failure != "" {
 			t.Fatalf("startupOutcome(nil) = (%q, %q), want both empty", skip, failure)
 		}
 	})
@@ -815,14 +703,14 @@ func TestHAR008AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 			name          string
 			up            bool
 			skip, failure string
-			want          harnessRequirement
+			want          dockertest.Requirement
 		}{
-			{"a failure outranks everything", false, "no docker", "boom", harnessFailTest},
-			{"nothing up and no failure is a skip", false, "no docker", "", harnessSkipTest},
-			{"a live dependency proceeds", true, "", "", harnessProceed},
+			{"a failure outranks everything", false, "no docker", "boom", dockertest.FailTest},
+			{"nothing up and no failure is a skip", false, "no docker", "", dockertest.SkipTest},
+			{"a live dependency proceeds", true, "", "", dockertest.Proceed},
 		} {
-			if got := harnessNeed(tc.up, tc.skip, tc.failure); got != tc.want {
-				t.Errorf("%s: harnessNeed(%v, %q, %q) = %d, want %d",
+			if got := dockertest.Need(tc.up, tc.skip, tc.failure); got != tc.want {
+				t.Errorf("%s: dockertest.Need(%v, %q, %q) = %d, want %d",
 					tc.name, tc.up, tc.skip, tc.failure, got, tc.want)
 			}
 		}

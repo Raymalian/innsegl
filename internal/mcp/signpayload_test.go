@@ -475,12 +475,8 @@ func TestSignPayloadForGatewayRefusesWhenNotConfigured(t *testing.T) {
 	// this test's own scope: package state may carry whatever an earlier test
 	// in this binary left restored to nil, which is what every other test's
 	// t.Cleanup guarantees.
-	signCommitMu.RLock()
-	activeAtStart := signCommitActive
-	signCommitMu.RUnlock()
-	signPayloadMu.RLock()
-	cfgAtStart := signPayloadCfg
-	signPayloadMu.RUnlock()
+	activeAtStart := installed(&active.commitSigner)
+	cfgAtStart := installed(&active.signPayload)
 	if activeAtStart != nil || cfgAtStart != nil {
 		t.Skip("another test left package state installed; order-dependent, skipping")
 	}
@@ -504,12 +500,8 @@ func TestSignPayloadForGatewayRefusesWhenSignCommitIsNotConfigured(t *testing.T)
 	}
 	defer restoreSP()
 
-	signCommitMu.RLock()
-	activeAtStart := signCommitActive
-	signCommitMu.RUnlock()
-	if activeAtStart != nil {
-		t.Skip("another test left sign_commit configured; order-dependent, skipping")
-	}
+	// Nothing to sign with: neither sign_commit nor a bare commit signer.
+	t.Cleanup(install(&active.commitSigner, nil))
 
 	_, err = SignPayloadForGateway(context.Background(), commitpath.SignRequest{
 		ToolUseID: spToolUseID, Payload: spPayload(t, spClaim(spRunID), spAuthor, spAuthor),
@@ -532,9 +524,7 @@ func TestConfigureSignPayloadAcceptsACustomNow(t *testing.T) {
 	}
 	defer restore()
 
-	signCommitMu.RLock()
-	needSC := signCommitActive == nil
-	signCommitMu.RUnlock()
+	needSC := installed(&active.signCommit) == nil
 	if needSC {
 		sc := newSCWiring()
 		restoreSC, cerr := ConfigureSignCommit(sc.cfg)
@@ -1615,13 +1605,9 @@ func spWiringSigningWith(t *testing.T, resolver spResolver,
 		t.Fatalf("re-ConfigureSignCommit: %v", err)
 	}
 	t.Cleanup(restoreSC)
-	signPayloadMu.Lock()
-	st := *signPayloadCfg
+	st := *installed(&active.signPayload)
 	st.sign = sign
-	previous := signPayloadCfg
-	signPayloadCfg = &st
-	signPayloadMu.Unlock()
-	t.Cleanup(func() { signPayloadMu.Lock(); signPayloadCfg = previous; signPayloadMu.Unlock() })
+	t.Cleanup(install(&active.signPayload, &st))
 	return sc, repo, tree
 }
 
@@ -1734,5 +1720,106 @@ func TestGH006Gate3AdmitsTheOperatorOnlyWithItsPinnedName(t *testing.T) {
 				t.Fatalf("Admits(%q, %q) = %v, want %v", tc.author, tc.email, err, signing.ErrAuthorNotAdmitted)
 			}
 		})
+	}
+}
+
+// #555: the gateway's commit-sign path runs on its own signing dependencies,
+// not sign_commit's. A core with no -workspace (so no sign_commit tool) still
+// signs a commit whose relayed call states the agent's own checkout.
+func TestSignPayloadForGatewaySignsWithNoWorkspaceConfigured(t *testing.T) {
+	repo, tree := spLocalRepo(t)
+	scGit(t, repo, "remote", "add", "origin", "https://"+spRepo+".git")
+	call := spPendingGitCommit(spRunID)
+	call.WorkingDirectory = repo
+	resolver := spResolver{calls: map[string]commitpath.RelayedCall{spToolUseID: call}}
+
+	sc := newSCWiring()
+	sc.runs.run = CredentialRun{
+		RunID: spRunID, AgentType: "demo", TaskID: spTaskID,
+		SPIFFEID: spSPIFFEID(spRunID), Repo: spRepo,
+	}
+	fakeGitsign := filepath.Join(t.TempDir(), "fake-gitsign")
+	if err := os.WriteFile(fakeGitsign, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("writing a fake gitsign: %v", err)
+	}
+	sc.cfg.Signers = NewGitsignSigners(signing.Config{
+		FulcioURL: "http://127.0.0.1:1", RekorURL: "http://127.0.0.1:1",
+		Issuer: "http://spire-oidc:8080", GitsignPath: fakeGitsign,
+		Author: signing.AuthorPolicy{AllowUnlinked: true},
+	})
+	// No workspace and no author: what a core started without -workspace has.
+	sc.cfg.Workspace = nil
+	sc.cfg.AuthorName, sc.cfg.AuthorEmail = "", ""
+
+	t.Cleanup(install(&active.signCommit, nil))
+	restoreSigner, err := ConfigureCommitSigner(sc.cfg)
+	if err != nil {
+		t.Fatalf("ConfigureCommitSigner with no workspace: %v", err)
+	}
+	t.Cleanup(restoreSigner)
+	restoreSP, err := ConfigureSignPayload(SignPayloadConfig{Resolver: resolver, ClaimFor: spClaimForOK(t)})
+	if err != nil {
+		t.Fatalf("ConfigureSignPayload: %v", err)
+	}
+	t.Cleanup(restoreSP)
+	st := *installed(&active.signPayload)
+	st.sign = spSignedOK
+	t.Cleanup(install(&active.signPayload, &st))
+
+	got, err := SignPayloadForGateway(context.Background(), commitpath.SignRequest{
+		ToolUseID: spToolUseID, Payload: spPayloadWithTree(t, spClaim(spRunID), tree, spAuthor, spAuthor),
+	})
+	if err != nil {
+		t.Fatalf("SignPayloadForGateway with no workspace: %v", err)
+	}
+	if string(got.Signature) != "SIG" {
+		t.Errorf("answer %+v", got)
+	}
+	if n := len(sc.ledger.ofType(event.EventTypeCommitRecorded)); n != 1 {
+		t.Fatalf("%d commit_recorded, want 1", n)
+	}
+	if installed(&active.signCommit) != nil {
+		t.Error("configuring the commit signer also configured the sign_commit tool")
+	}
+}
+
+// #555: with no workspace, a relayed call that states no working directory
+// has nowhere to read the commit from, and is refused before Phase A.
+func TestSignPayloadWithNoWorkspaceRefusesACallWithNoWorkingDirectory(t *testing.T) {
+	resolver := spResolver{calls: map[string]commitpath.RelayedCall{spToolUseID: spPendingGitCommit(spRunID)}}
+	sc := newSCWiring()
+	sc.runs.run = CredentialRun{
+		RunID: spRunID, AgentType: "demo", TaskID: spTaskID,
+		SPIFFEID: spSPIFFEID(spRunID), Repo: spRepo,
+	}
+	sc.cfg.Workspace = nil
+	restoreSigner, err := ConfigureCommitSigner(sc.cfg)
+	if err != nil {
+		t.Fatalf("ConfigureCommitSigner: %v", err)
+	}
+	t.Cleanup(restoreSigner)
+	restoreSP, err := ConfigureSignPayload(SignPayloadConfig{Resolver: resolver, ClaimFor: spClaimForOK(t)})
+	if err != nil {
+		t.Fatalf("ConfigureSignPayload: %v", err)
+	}
+	t.Cleanup(restoreSP)
+
+	_, err = SignPayloadForGateway(context.Background(), commitpath.SignRequest{
+		ToolUseID: spToolUseID, Payload: spPayload(t, spClaim(spRunID), spAuthor, spAuthor),
+	})
+	if err == nil || !strings.Contains(err.Error(), "no working tree") {
+		t.Fatalf("err = %v, want a refusal naming the missing working tree", err)
+	}
+	if n := len(sc.ledger.ofType(event.EventTypeCommitIntent)); n != 0 {
+		t.Errorf("%d commit_intent appended before the refusal", n)
+	}
+}
+
+// ConfigureCommitSigner refuses a missing gate exactly as sign_commit does.
+func TestConfigureCommitSignerRefusesAMissingGate(t *testing.T) {
+	cfg := newSCWiring().cfg
+	cfg.Signers = nil
+	if _, err := ConfigureCommitSigner(cfg); err == nil {
+		t.Fatal("a commit signer with no signer factory was installed")
 	}
 }

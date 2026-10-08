@@ -75,7 +75,7 @@ func runReconcile(t *testing.T, args []string, cycles *fakeCycles, openErr error
 func runReconcileWithEngines(t *testing.T, args []string, engines reconcileEngines, openErr error) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := runReconcileCommand(args, &stdout, &stderr, reconcileDeps{
+	code := runReconcileLoop(context.Background(), args, &stdout, &stderr, reconcileDeps{
 		open: func(context.Context, reconcileOptions) (reconcileEngines, func(), error) {
 			if openErr != nil {
 				return reconcileEngines{}, nil, openErr
@@ -320,7 +320,7 @@ func TestReconcileReadsTheMirrorWhenOneIsSet(t *testing.T) {
 	mirrorDir, workspace := t.TempDir(), t.TempDir()
 	var seen reconcileOptions
 	var stdout, stderr bytes.Buffer
-	code := runReconcileCommand([]string{
+	code := runReconcileLoop(context.Background(), []string{
 		"-dsn", "postgres://x/y", "-rekor-url", "http://rekor.example",
 		"-trust-domain", "innsegl.dev", "-mirror-dir", mirrorDir, "-once",
 	}, &stdout, &stderr, reconcileDeps{
@@ -360,7 +360,7 @@ func TestReconcileReadsTheMirrorWhenOneIsSet(t *testing.T) {
 func TestReconcileHasNoProjectsMountFlags(t *testing.T) {
 	for _, flag := range []string{"-host-projects", "-writes-projects"} {
 		var stdout, stderr bytes.Buffer
-		code := runReconcileCommand([]string{
+		code := runReconcileLoop(context.Background(), []string{
 			"-dsn", "postgres://x/y", "-rekor-url", "http://rekor.example",
 			"-trust-domain", "innsegl.dev", "-once", flag, "/srv/x",
 		}, &stdout, &stderr, reconcileDeps{

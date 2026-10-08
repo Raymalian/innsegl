@@ -30,13 +30,6 @@ MCP tools (`internal/mcp/tools.go`; names are protected strings):
 | `observe_tool_call` | main | stores a body locally, appends the tool call |
 | `describe_workspace`, `observe_session` | main | deprecated (ADR-0071); bound, refuse every call |
 
-MCP resources (`internal/mcp/reference.go`): every page in `reference/`,
-read-only, on every listener, as `innsegl://reference/<page>.md`
-(`text/markdown`). The pages are embedded in the binary, so an agent in any
-repository reads the text that matches the running version. They are not
-tools and change nothing. On the admin listener they sit behind its
-credential like everything else.
-
 `innsegl retire` calls `retire_agent` on the admin listener. Use it when a
 run is known to be over; a quiet run is the reaper's job.
 
@@ -120,7 +113,6 @@ MCP error classes (`internal/mcp/errors.go`, protected): `ATTESTATION_FAILED`,
 ## Tests
 
 - `internal/mcp/*_test.go` (MCP-001 to MCP-100, PRI-003, PRI-004)
-- `internal/mcp/reference_test.go` (MCP-101 to MCP-105: the reference pages as resources)
 - `internal/mcp/admincred_test.go`, `adminscope_test.go` (MCP-078 to MCP-093)
 - `cmd/innsegl/retire_test.go` (MCP-005, MCP-086, MCP-087, MCP-094)
 - `cmd/innsegl/admincred_test.go` (MCP-090), `adminenrolcode_test.go` (AUTH-002)

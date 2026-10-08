@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/segment"
 )
 
@@ -92,10 +93,10 @@ func (o *ops029) cleanup() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	for _, name := range o.containers {
-		discardError(docker(ctx, "rm", "--force", "--volumes", name))
+		discardError(dockertest.Docker(ctx, "rm", "--force", "--volumes", name))
 	}
 	for _, name := range o.networks {
-		discardError(docker(ctx, "network", "rm", name))
+		discardError(dockertest.Docker(ctx, "network", "rm", name))
 	}
 }
 
@@ -106,7 +107,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 	if err := composeUsable(ctx); err != nil {
 		t.Skipf("skipping OPS-029: %v", err)
 	}
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		t.Skipf("skipping OPS-029: %v. The Filer's reachability is measured against real "+
 			"containers on real networks — a mocked refusal proves only that the mock was "+
 			"written to refuse. Start Docker and re-run.", err)
@@ -139,23 +140,23 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 	t.Log("OPS-029 phase A: the arrangement the reference stack avoids — S3 and the Filer in one process")
 
 	aNet := o.tag + "-oneprocess"
-	if _, err := docker(ctx, "network", "create", aNet); err != nil {
+	if _, err := dockertest.Docker(ctx, "network", "create", aNet); err != nil {
 		t.Fatalf("creating the phase A network: %v", err)
 	}
 	o.networks = append(o.networks, aNet)
 
-	aPort, portErr := freeHostPort(ctx)
+	aPort, portErr := dockertest.FreeHostPort(ctx)
 	if portErr != nil {
 		t.Fatalf("reserving a host port: %v", portErr)
 	}
-	aGRPC, portErr := freeHostPort(ctx)
+	aGRPC, portErr := dockertest.FreeHostPort(ctx)
 	if portErr != nil {
 		t.Fatalf("reserving a host port: %v", portErr)
 	}
 	aName := o.tag + "-oneprocess-store"
 	o.containers = append(o.containers, aName)
-	discardError(docker(ctx, "rm", "--force", "--volumes", aName))
-	if _, err := docker(ctx, "run", "--detach",
+	discardError(dockertest.Docker(ctx, "rm", "--force", "--volumes", aName))
+	if _, err := dockertest.Docker(ctx, "run", "--detach",
 		"--name", aName,
 		"--network", aNet,
 		"--network-alias", "oneprocess",
@@ -182,7 +183,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 		client: o.client, root: root,
 	}
 	if err := waitForObjectStore(ctx, aStore); err != nil {
-		logs, _ := docker(ctx, "logs", "--tail", "40", aName) //nolint:errcheck // a best-effort diagnostic on a path that is already failing
+		logs, _ := dockertest.Docker(ctx, "logs", "--tail", "40", aName) //nolint:errcheck // a best-effort diagnostic on a path that is already failing
 		t.Fatalf("the one-process store never answered: %v\n%s", err, logs)
 	}
 	out, initErr := aStore.runObjectInit(ctx)
@@ -278,16 +279,16 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 	t.Log("OPS-029 phase B: the shipped one-process store")
 
 	objects := o.tag + "-objects"
-	if _, err := docker(ctx, "network", "create", objects); err != nil {
+	if _, err := dockertest.Docker(ctx, "network", "create", objects); err != nil {
 		t.Fatalf("creating %s: %v", objects, err)
 	}
 	o.networks = append(o.networks, objects)
 
-	bPort, portErr := freeHostPort(ctx)
+	bPort, portErr := dockertest.FreeHostPort(ctx)
 	if portErr != nil {
 		t.Fatalf("reserving a host port: %v", portErr)
 	}
-	bGRPC, portErr := freeHostPort(ctx)
+	bGRPC, portErr := dockertest.FreeHostPort(ctx)
 	if portErr != nil {
 		t.Fatalf("reserving a host port: %v", portErr)
 	}
@@ -307,7 +308,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 	// (measured, the first time this was written).
 	bName := o.tag + "-" + objectStoreService
 	o.containers = append(o.containers, bName)
-	discardError(docker(ctx, "rm", "--force", "--volumes", bName))
+	discardError(dockertest.Docker(ctx, "rm", "--force", "--volumes", bName))
 	args := []string{"run", "--detach", "--name", bName,
 		"--network", objects, "--network-alias", objectStoreService,
 		"--publish", "127.0.0.1:" + bPort + ":8333",
@@ -323,7 +324,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 	args = append(args, "--entrypoint", "sh", shipped.Image, "-c",
 		"/innsegl/init/s3-identities.sh >/dev/null && exec sh /innsegl/init/object-store-start.sh "+
 			strings.Join(shipped.Command, " "))
-	if _, err := docker(ctx, args...); err != nil {
+	if _, err := dockertest.Docker(ctx, args...); err != nil {
 		t.Fatalf("starting %s from the shipped command %v: %v", objectStoreService, shipped.Command, err)
 	}
 
@@ -332,7 +333,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 		bucket: "innsegl-ops029", client: o.client, root: root,
 	}
 	if err := waitForObjectStore(ctx, bStore); err != nil {
-		logs, _ := docker(ctx, "logs", "--tail", "40", bName) //nolint:errcheck // a best-effort diagnostic on a path that is already failing
+		logs, _ := dockertest.Docker(ctx, "logs", "--tail", "40", bName) //nolint:errcheck // a best-effort diagnostic on a path that is already failing
 		t.Fatalf("the shipped one-process store never answered: %v\n%s", err, logs)
 	}
 	// The endpoint is the service name, not loopback: the client is on the
@@ -413,7 +414,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 	// The same request from inside the container, where the listener is.
 	// -filer.disableHttp leaves the port open and removes the handlers, so it
 	// answers, and must not answer 2xx.
-	inside, insideErr := docker(ctx, "exec", bName, "curl", "--silent", "--max-time", "10",
+	inside, insideErr := dockertest.Docker(ctx, "exec", bName, "curl", "--silent", "--max-time", "10",
 		"--output", "/dev/null", "--write-out", "%{http_code}", "-X", "DELETE",
 		filerDestroyURL("127.0.0.1", bStore.bucket, key))
 	switch {
@@ -445,7 +446,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 	// The control: signed with the key this host generated, the same call
 	// gets past authorisation. Without it the two refusals above could be a
 	// port that refuses everything.
-	hostKey, keyErr := docker(ctx, "exec", bName, "cat", "/run/innsegl/s3/"+filerKeyFileName)
+	hostKey, keyErr := dockertest.Docker(ctx, "exec", bName, "cat", "/run/innsegl/s3/"+filerKeyFileName)
 	if keyErr != nil {
 		t.Fatalf("reading the generated key out of the store container: %v", keyErr)
 	}

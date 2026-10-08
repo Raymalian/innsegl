@@ -104,7 +104,7 @@ func TestSEG013CleanCycleExitsZero(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cycler := &stubCycler{cycles: []stubCycle{{result: cleanCycle()}}}
 
-	code := runSealCommand(minimalSealArgs(), &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), minimalSealArgs(), &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d. stderr: %s", code, exitOK, stderr.String())
@@ -121,7 +121,7 @@ func TestSEG013UnanchoredSegmentExitsUnanchored(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cycler := &stubCycler{cycles: []stubCycle{{result: unanchoredCycle()}}}
 
-	code := runSealCommand(minimalSealArgs(), &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), minimalSealArgs(), &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitSealUnanchored {
 		t.Fatalf("exit = %d, want %d (UNANCHORED)", code, exitSealUnanchored)
@@ -135,7 +135,7 @@ func TestSEG013ACycleThatCouldNotRunExitsInconclusive(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cycler := &stubCycler{cycles: []stubCycle{{err: errors.New("ledger unavailable")}}}
 
-	code := runSealCommand(minimalSealArgs(), &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), minimalSealArgs(), &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitSealInconclusive {
 		t.Fatalf("exit = %d, want %d (INCONCLUSIVE)", code, exitSealInconclusive)
@@ -153,7 +153,7 @@ func TestSEG013OpeningFailureIsInconclusive(t *testing.T) {
 		},
 	}
 
-	code := runSealCommand(minimalSealArgs(), &stdout, &stderr, deps)
+	code := runSealLoop(context.Background(), minimalSealArgs(), &stdout, &stderr, deps)
 
 	if code != exitSealInconclusive {
 		t.Fatalf("exit = %d, want %d (INCONCLUSIVE)", code, exitSealInconclusive)
@@ -184,7 +184,7 @@ func TestSEG013RequiredFlagsAreRefusedByName(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			cycler := &stubCycler{cycles: []stubCycle{{result: cleanCycle()}}}
 
-			code := runSealCommand(withoutFlag(minimalSealArgs(), tc.drop),
+			code := runSealLoop(context.Background(), withoutFlag(minimalSealArgs(), tc.drop),
 				&stdout, &stderr, stubDeps(cycler))
 
 			if code != exitUsage {
@@ -232,7 +232,7 @@ func TestSEG013EveryRequiredFlagHasAnEnvironmentFallback(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cycler := &stubCycler{cycles: []stubCycle{{result: cleanCycle()}}}
 
-	code := runSealCommand([]string{"-once"}, &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), []string{"-once"}, &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitOK {
 		t.Fatalf("exit = %d with everything in the environment, want %d. stderr: %s",
@@ -244,7 +244,7 @@ func TestSEG013RefusesANonPositiveSegmentSize(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cycler := &stubCycler{cycles: []stubCycle{{result: cleanCycle()}}}
 
-	code := runSealCommand(minimalSealArgs("-segment-events", "0"), &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), minimalSealArgs("-segment-events", "0"), &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitUsage {
 		t.Fatalf("exit = %d for -segment-events 0, want %d", code, exitUsage)
@@ -259,7 +259,7 @@ func TestSEG013RefusesANonPositiveIntervalWithoutOnce(t *testing.T) {
 	cycler := &stubCycler{cycles: []stubCycle{{result: cleanCycle()}}}
 
 	args := withoutFlag(minimalSealArgs(), "-once")
-	code := runSealCommand(append(args, "-interval", "0"), &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), append(args, "-interval", "0"), &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitUsage {
 		t.Fatalf("exit = %d for -interval 0 without -once, want %d", code, exitUsage)
@@ -273,7 +273,7 @@ func TestSEG013RefusesATrailingArgument(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cycler := &stubCycler{cycles: []stubCycle{{result: cleanCycle()}}}
 
-	code := runSealCommand(minimalSealArgs("segments"), &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), minimalSealArgs("segments"), &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitUsage {
 		t.Fatalf("exit = %d for a trailing argument, want %d", code, exitUsage)
@@ -287,7 +287,7 @@ func TestSEG013HelpExitsZeroAndDocumentsTheExitStatuses(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cycler := &stubCycler{cycles: []stubCycle{{result: cleanCycle()}}}
 
-	code := runSealCommand([]string{"-h"}, &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), []string{"-h"}, &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitOK {
 		t.Fatalf("exit = %d for -h, want %d", code, exitOK)
@@ -303,7 +303,7 @@ func TestSEG013JSONReportIsMachineReadable(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cycler := &stubCycler{cycles: []stubCycle{{result: cleanCycle()}}}
 
-	code := runSealCommand(minimalSealArgs("-json"), &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), minimalSealArgs("-json"), &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d. stderr: %s", code, exitOK, stderr.String())
@@ -326,7 +326,7 @@ func TestSEG013QuietPrintsNothingForACycleThatDidNothing(t *testing.T) {
 		Lag: segment.LagSnapshot{ObservedAt: time.Now(), Anchored: true}}
 	cycler := &stubCycler{cycles: []stubCycle{{result: idle}}}
 
-	code := runSealCommand(minimalSealArgs("-quiet"), &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), minimalSealArgs("-quiet"), &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d", code, exitOK)
@@ -340,7 +340,7 @@ func TestSEG013QuietStillReportsAFailure(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cycler := &stubCycler{cycles: []stubCycle{{result: unanchoredCycle()}}}
 
-	code := runSealCommand(minimalSealArgs("-quiet"), &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), minimalSealArgs("-quiet"), &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitSealUnanchored {
 		t.Fatalf("exit = %d, want %d", code, exitSealUnanchored)
@@ -430,7 +430,7 @@ func TestSEG013RefusesABadFlagValue(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cycler := &stubCycler{cycles: []stubCycle{{result: cleanCycle()}}}
 
-	code := runSealCommand(minimalSealArgs("-interval", "purple"), &stdout, &stderr, stubDeps(cycler))
+	code := runSealLoop(context.Background(), minimalSealArgs("-interval", "purple"), &stdout, &stderr, stubDeps(cycler))
 
 	if code != exitUsage {
 		t.Fatalf("exit = %d for an unparseable duration, want %d", code, exitUsage)
@@ -446,7 +446,7 @@ func TestSEG013RefusesAWindowlessSurveyAndAnAttemptlessAnchor(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			cycler := &stubCycler{cycles: []stubCycle{{result: cleanCycle()}}}
 
-			code := runSealCommand(minimalSealArgs(tc.flag, tc.value), &stdout, &stderr, stubDeps(cycler))
+			code := runSealLoop(context.Background(), minimalSealArgs(tc.flag, tc.value), &stdout, &stderr, stubDeps(cycler))
 
 			if code != exitUsage {
 				t.Fatalf("exit = %d for %s %s, want %d", code, tc.flag, tc.value, exitUsage)
@@ -466,7 +466,7 @@ func TestSEG013AnOpenerThatReturnsNothingIsInconclusive(t *testing.T) {
 		},
 	}
 
-	code := runSealCommand(minimalSealArgs(), &stdout, &stderr, deps)
+	code := runSealLoop(context.Background(), minimalSealArgs(), &stdout, &stderr, deps)
 
 	if code != exitSealInconclusive {
 		t.Fatalf("exit = %d, want %d", code, exitSealInconclusive)

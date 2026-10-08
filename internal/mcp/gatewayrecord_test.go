@@ -216,15 +216,7 @@ func TestGREC007RecordGatewayToolCallStatesATruncationInTheBodyItStores(t *testi
 // ---------------------------------------------------------------------------
 
 func TestGREC001RecordGatewayToolCallIsNotServedUntilObserveToolCallIsConfigured(t *testing.T) {
-	observeMu.Lock()
-	saved := observeActive
-	observeActive = nil
-	observeMu.Unlock()
-	t.Cleanup(func() {
-		observeMu.Lock()
-		observeActive = saved
-		observeMu.Unlock()
-	})
+	t.Cleanup(install(&active.observe, nil))
 
 	_, err := RecordGatewayToolCall(context.Background(), GatewayToolCallInput{
 		RunID: otcRunID, Tool: grecTool, Body: []byte("x"),

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // The harness's own routing, measured.
@@ -16,21 +18,21 @@ import (
 // these two cases exist to bite if anyone ever collapses them again.
 
 func TestTheHarnessSeparatesAnAbsentDockerFromAContainerThatDidNotStart(t *testing.T) {
-	absent := fmt.Errorf("no reachable docker daemon: %w", errDependencyAbsent)
-	skip, failure := startupOutcome(absent)
+	absent := fmt.Errorf("no reachable docker daemon: %w", dockertest.ErrDependencyAbsent)
+	skip, failure := dockertest.StartupOutcome(absent)
 	if skip == "" || failure != "" {
 		t.Fatalf("an absent dependency must be a skip and nothing else; "+
 			"got skip=%q failure=%q", skip, failure)
 	}
 
 	broke := errors.New("could not start postgres:16: port already allocated")
-	skip, failure = startupOutcome(broke)
+	skip, failure = dockertest.StartupOutcome(broke)
 	if failure == "" || skip != "" {
 		t.Fatalf("a container that did not start on a machine with Docker is a "+
 			"FAILURE, never a skip: that is #101. got skip=%q failure=%q", skip, failure)
 	}
 
-	if skip, failure := startupOutcome(nil); skip != "" || failure != "" {
+	if skip, failure := dockertest.StartupOutcome(nil); skip != "" || failure != "" {
 		t.Fatalf("a clean start-up is neither: got skip=%q failure=%q", skip, failure)
 	}
 }

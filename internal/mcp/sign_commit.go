@@ -422,35 +422,52 @@ func newSignCommitService(cfg SignCommitConfig) (*signCommitService, error) {
 		return nil, Errorf(ClassInvariantViolation, "", "sign_commit configuration: %s", detail)
 	}
 	switch {
-	case cfg.Runs == nil:
-		return refuse("no run directory: sign_commit cannot say which identity a commit is attributed to (I2)")
-	case cfg.Ledger == nil:
-		return refuse("no ledger: I3 admits no action without a record, and there would be nowhere to put the intent (IP §6.5)")
-	case cfg.Idempotency == nil:
-		return refuse("no idempotency store: a replay could sign a second commit (IP §6.6, ADR-0017)")
 	case cfg.Workspace == nil:
 		return refuse("no workspace: there is no working tree to sign in, and `repo` is an identifier rather than a path")
-	case cfg.Sigstore == nil:
-		return refuse("no Sigstore probe: an outage would be discovered only after the intent was appended (IP §6.3)")
-	case cfg.Credentials == nil:
-		return refuse("no credential source: I2 admits no signing without a credential for this run")
-	case cfg.Signers == nil:
-		return refuse("no signer factory: there is nothing to sign with")
 	case cfg.AuthorName == "":
 		return refuse("no author name: a commit's author line is part of the bytes that get signed")
 	case cfg.AuthorEmail == "":
 		return refuse("no author email: I6 constrains it and an empty one is not a value the policy can admit")
-	case cfg.Pseudonyms == nil:
-		return refuse("no pseudonymiser: nothing would render the Agent-Task trailer the way " +
-			"register_agent rendered the identity's {task_id}, so every claim would be refused " +
-			"as inconsistent (RM-079, #116)")
+	}
+	svc, err := newCommitSigner(cfg)
+	if err != nil {
+		return nil, err
 	}
 	if err := cfg.Signers.Admits(cfg.AuthorName, cfg.AuthorEmail); err != nil {
 		return refuse(fmt.Sprintf(
 			"the configured author %q is not admitted by the signer's author policy: %v "+
 				"(I6 — the one invariant with no cryptographic backstop)", cfg.AuthorEmail, err))
 	}
+	return svc, nil
+}
 
+// newCommitSigner checks and builds the dependencies signing needs whatever
+// asks for it: sign_commit, and the gateway's commit-sign path. Workspace and
+// the configured author are sign_commit's alone (the commit-sign path reads
+// the payload's own author and the agent's own checkout), so they are
+// optional here; everything else is a gate and is required.
+func newCommitSigner(cfg SignCommitConfig) (*signCommitService, error) {
+	refuse := func(detail string) (*signCommitService, error) {
+		return nil, Errorf(ClassInvariantViolation, "", "sign_commit configuration: %s", detail)
+	}
+	switch {
+	case cfg.Runs == nil:
+		return refuse("no run directory: sign_commit cannot say which identity a commit is attributed to (I2)")
+	case cfg.Ledger == nil:
+		return refuse("no ledger: I3 admits no action without a record, and there would be nowhere to put the intent (IP §6.5)")
+	case cfg.Idempotency == nil:
+		return refuse("no idempotency store: a replay could sign a second commit (IP §6.6, ADR-0017)")
+	case cfg.Sigstore == nil:
+		return refuse("no Sigstore probe: an outage would be discovered only after the intent was appended (IP §6.3)")
+	case cfg.Credentials == nil:
+		return refuse("no credential source: I2 admits no signing without a credential for this run")
+	case cfg.Signers == nil:
+		return refuse("no signer factory: there is nothing to sign with")
+	case cfg.Pseudonyms == nil:
+		return refuse("no pseudonymiser: nothing would render the Agent-Task trailer the way " +
+			"register_agent rendered the identity's {task_id}, so every claim would be refused " +
+			"as inconsistent (RM-079, #116)")
+	}
 	repos := cfg.Repos
 	if repos == nil {
 		repos = GitRepos{}
@@ -472,16 +489,6 @@ func newSignCommitService(cfg SignCommitConfig) (*signCommitService, error) {
 	}, nil
 }
 
-// signCommitState holds the installed configuration.
-//
-// It is package state because ADR-0016 §5 fixes the seam: a tool file
-// registers its own binder from its own init and the binder receives only the
-// *Server.
-var (
-	signCommitMu     sync.RWMutex
-	signCommitActive *signCommitService
-)
-
 // ConfigureSignCommit installs the dependencies sign_commit runs on and
 // returns a function restoring whatever was installed before.
 func ConfigureSignCommit(cfg SignCommitConfig) (func(), error) {
@@ -489,15 +496,25 @@ func ConfigureSignCommit(cfg SignCommitConfig) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	signCommitMu.Lock()
-	defer signCommitMu.Unlock()
-	previous := signCommitActive
-	signCommitActive = svc
-	return func() {
-		signCommitMu.Lock()
-		defer signCommitMu.Unlock()
-		signCommitActive = previous
-	}, nil
+	// The tool's dependencies are also the commit-sign path's: one signer,
+	// one ledger, one credential path in a process that has both.
+	restoreSigner := install(&active.commitSigner, svc)
+	restoreTool := install(&active.signCommit, svc)
+	return func() { restoreTool(); restoreSigner() }, nil
+}
+
+// ConfigureCommitSigner installs only the dependencies the gateway's
+// commit-sign path (SignPayloadForGateway) needs, with no workspace and no
+// configured author, and returns a function restoring what was there before.
+// It is what a core started without -workspace installs: the sign_commit
+// tool stays unconfigured and refuses every call, and the gateway still signs
+// commits made in the agent's own checkout.
+func ConfigureCommitSigner(cfg SignCommitConfig) (func(), error) {
+	svc, err := newCommitSigner(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return install(&active.commitSigner, svc), nil
 }
 
 func bindSignCommit(s *Server) error {
@@ -511,9 +528,7 @@ func bindSignCommit(s *Server) error {
 }
 
 func signCommit(ctx context.Context, _ *sdk.CallToolRequest, in signCommitIn) (signCommitOut, error) {
-	signCommitMu.RLock()
-	svc := signCommitActive
-	signCommitMu.RUnlock()
+	svc := installed(&active.signCommit)
 	if svc == nil {
 		// Alert-level: a bound tool with no dependencies behind it is a defect
 		// in the wiring, and IP §4 has no "internal error" class (ADR-0016).
@@ -638,7 +653,7 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (_ any,
 
 	// ---- before Phase A: everything that can fail cheaply ------------------
 
-	run, spiffeID, err := c.resolveRun(ctx, in.RunID)
+	run, spiffeID, err := resolveRun(ctx, c.runs, in.RunID, runGate{})
 	if err != nil {
 		return nil, err
 	}
@@ -985,32 +1000,6 @@ func (c *signCommitService) convergeOnRecorded(
 		RekorEntry: SignCommitRekorEntry{UUID: entryUUID, LogIndex: logIndex},
 		Trailers:   signCommitTrailers(trailers),
 	}, true, nil
-}
-
-// resolveRun is the run gate: the run exists, it has not been retired, and the
-// identity the directory named is that run's own.
-//
-// It is the same three checks record_event and retire_agent make, through the
-// same two functions, so no tool can disagree with another about what a run is.
-func (c *signCommitService) resolveRun(ctx context.Context, runID string) (CredentialRun, string, error) {
-	run, found, err := c.runs.CredentialRun(ctx, runID)
-	if err != nil {
-		return CredentialRun{}, "", credentialLedgerError(runID, err)
-	}
-	if !found {
-		return CredentialRun{}, "", Errorf(ClassRunNotFound, runID, "no run %q", runID)
-	}
-	if run.Retired() {
-		// I4: retirement removes the identity, never the record.
-		return CredentialRun{}, "", Errorf(ClassRunAlreadyRetired, runID,
-			"run %q was retired at %s; retirement is effective immediately (IP §6.2)",
-			runID, event.NewTimestamp(run.RetiredAt))
-	}
-	spiffeID, _, err := credentialRunIdentity(runID, run)
-	if err != nil {
-		return CredentialRun{}, "", err
-	}
-	return run, spiffeID, nil
 }
 
 // checkResult reads the signature back and refuses anything it cannot record.

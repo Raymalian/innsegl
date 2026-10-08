@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 )
@@ -43,7 +44,7 @@ func TestRM330TheResolverDSNFallsBackToItsEnvironmentVariable(t *testing.T) {
 
 func TestRM330TheUsageNamesTheResolutionRoutes(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	runAPICommand([]string{"-h"}, &stdout, &stderr, stubAPIDeps(healthyStub(), nil))
+	runAPI(context.Background(), []string{"-h"}, &stdout, &stderr, stubAPIDeps(healthyStub(), nil))
 	for _, want := range []string{
 		"POST /api/v1/alert-resolutions/begin",
 		"POST /api/v1/alert-resolutions/finish",

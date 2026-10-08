@@ -24,6 +24,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/mcp"
 )
@@ -278,12 +279,12 @@ func signAdminProxy(t *testing.T, sig *sigStack) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	port, err := freeHostPort(ctx)
+	port, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		t.Fatalf("reserve a host port for sig's admin proxy: %v", err)
 	}
 	name := sig.project + "-signadminproxy"
-	if _, err := docker(ctx, "run", "--detach", "--name", name,
+	if _, err := dockertest.Docker(ctx, "run", "--detach", "--name", name,
 		"--publish", "127.0.0.1:"+port+":8081",
 		envOr("INNSEGL_TEST_PROXY_IMAGE", defaultProxyImage),
 		"TCP-LISTEN:8081,fork,reuseaddr", "TCP:spire-server:8081",
@@ -293,12 +294,12 @@ func signAdminProxy(t *testing.T, sig *sigStack) string {
 	t.Cleanup(func() {
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer rmCancel()
-		if _, err := docker(rmCtx, "rm", "--force", name); err != nil {
+		if _, err := dockertest.Docker(rmCtx, "rm", "--force", name); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", name, err)
 		}
 	})
 	network := sig.project + "-spire-admin"
-	if _, err := docker(ctx, "network", "connect", network, name); err != nil {
+	if _, err := dockertest.Docker(ctx, "network", "connect", network, name); err != nil {
 		t.Fatalf("join %s to %s: %v", name, network, err)
 	}
 	return "127.0.0.1:" + port

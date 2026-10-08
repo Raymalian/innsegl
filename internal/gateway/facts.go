@@ -265,33 +265,11 @@ func WithRequestFacts(ctx context.Context, facts RequestFacts) context.Context {
 	return context.WithValue(ctx, requestFactsContextKey{}, facts)
 }
 
-// RequestFactsFromContext returns the RequestFacts a RequestFactsGuard
-// attached to ctx, and whether one was found.
+// RequestFactsFromContext returns the RequestFacts attached to ctx (the
+// identity guard attaches them), and whether one was found.
 func RequestFactsFromContext(ctx context.Context) (RequestFacts, bool) {
 	facts, ok := ctx.Value(requestFactsContextKey{}).(RequestFacts)
 	return facts, ok
-}
-
-// ---------------------------------------------------------------------------
-// The Guard.
-// ---------------------------------------------------------------------------
-
-// RequestFactsGuard extracts RequestFacts once per request and attaches
-// them to the request's context before returning it. It never refuses:
-// whatever ExtractRequestFacts found -- including nothing at all -- is
-// forwarded to the next Guard or observer, and to the upstream, exactly the
-// same way either way. Deciding whether a request may proceed without
-// usable facts is the identity guard's job (E15, #380), not this one's; add
-// this guard to the chain Guards builds (guard.go), never wire it in here.
-type RequestFactsGuard struct{}
-
-// NewRequestFactsGuard returns the request-facts guard.
-func NewRequestFactsGuard() *RequestFactsGuard { return &RequestFactsGuard{} }
-
-// Check implements Guard.
-func (*RequestFactsGuard) Check(r *http.Request) (*http.Request, *Refusal) {
-	facts := ExtractRequestFacts(r)
-	return r.WithContext(WithRequestFacts(r.Context(), facts)), nil
 }
 
 // ---------------------------------------------------------------------------

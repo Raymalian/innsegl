@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // ---------------------------------------------------------------------------
@@ -96,9 +98,9 @@ func TestOPS005TheREADMEIsWhatTheSmokeCommandRuns(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOPS006AnAbsentDockerIsASkipAndABrokenStackIsAFailure(t *testing.T) {
-	absent := errors.New("no reachable docker daemon: " + errDependencyAbsent.Error())
+	absent := errors.New("no reachable docker daemon: " + dockertest.ErrDependencyAbsent.Error())
 	absent = wrapDependencyAbsent(absent)
-	skip, failure := startupOutcome(absent)
+	skip, failure := dockertest.StartupOutcome(absent)
 	if skip == "" || failure != "" {
 		t.Fatalf("an absent dependency is a skip and nothing else; got skip=%q failure=%q",
 			skip, failure)
@@ -106,14 +108,14 @@ func TestOPS006AnAbsentDockerIsASkipAndABrokenStackIsAFailure(t *testing.T) {
 
 	broke := errors.New("bringing up the SPIRE stack: network innsegl-spire-node: " +
 		"all predefined address pools have been fully subnetted")
-	skip, failure = startupOutcome(broke)
+	skip, failure = dockertest.StartupOutcome(broke)
 	if failure == "" || skip != "" {
 		t.Fatalf("a stack that did not come up on a machine WITH Docker is a FAILURE, "+
 			"never a skip — that is #101, and OPS-004 is the one case that measures "+
 			"the adopter's first-run experience. got skip=%q failure=%q", skip, failure)
 	}
 
-	if skip, failure := startupOutcome(nil); skip != "" || failure != "" {
+	if skip, failure := dockertest.StartupOutcome(nil); skip != "" || failure != "" {
 		t.Fatalf("a clean start-up is neither: got skip=%q failure=%q", skip, failure)
 	}
 

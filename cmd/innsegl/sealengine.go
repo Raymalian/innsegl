@@ -344,7 +344,7 @@ func hasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
 
-// sealRange seals positions first..last and appends the `segment_sealed` event
+// sealRecords seals positions first..last and appends the `segment_sealed` event
 // that records it.
 //
 // The object goes to the store before the event goes to the ledger, and that
@@ -354,16 +354,8 @@ func hasPrefix(s, prefix string) bool {
 // is benign: an object written but never named is an immutable orphan that
 // costs storage and proves nothing, and the next cycle re-derives the same
 // content address and adopts it.
-func (e *sealEngine) sealRange(ctx context.Context, first, last int64) (surveyedSegment, error) {
-	records, err := e.chain.Events(ctx, first, last)
-	if err != nil {
-		return surveyedSegment{}, fmt.Errorf("reading positions %d..%d to seal them: %w", first, last, err)
-	}
-	return e.sealRecords(ctx, first, last, records)
-}
-
-// sealRecords is sealRange over records the caller has already read. The seal
-// pass has them in hand from the rollover decision, and reading a segment out
+//
+// The seal pass holds the records from the rollover decision, so reading a segment out
 // of Postgres twice to reach the same bytes is a cost with nothing behind it.
 func (e *sealEngine) sealRecords(
 	ctx context.Context, first, last int64, records []event.Fields,

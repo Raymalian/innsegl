@@ -4,12 +4,10 @@ package mcp
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/identity"
-	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/signing"
 )
 
@@ -102,40 +100,16 @@ func (c *commitClaimService) claim(ctx context.Context, runID string) (signing.C
 		return signing.Claim{}, Errorf(ClassRunNotFound, runID, "%q is not a run id: %v", runID, err)
 	}
 
-	run, found, err := c.runs.CredentialRun(ctx, runID)
-	if err != nil {
-		return signing.Claim{}, credentialLedgerError(runID, err)
-	}
-	if !found {
-		return signing.Claim{}, Errorf(ClassRunNotFound, runID, "no run %q", runID)
-	}
-
-	// Retirement keeps its own class — the same one get_credential and
-	// sign_commit both use — because it is a settled, permanent fact and not
-	// merely "not active right now" the way a lapse is.
-	if run.Retired() {
-		return signing.Claim{}, Errorf(ClassRunAlreadyRetired, runID,
-			"run %q was retired at %s; a retired run cannot claim a commit's trailers (IP §6.2)",
-			runID, event.NewTimestamp(run.RetiredAt))
-	}
-
-	// A run that is merely not-retired is not enough here — see this file's
-	// own package comment for why this gate is stricter than sign_commit's
-	// own resolveRun. get_credential's own gate 4 answers a lapsed or
-	// abandoned run's SPIRE lookup with RUN_NOT_FOUND once no restore is
-	// possible (get_credential.go); this reads the same as that, directly
-	// off the ledger's own rule (CredentialRun.State), rather than waiting to
-	// discover it the expensive way against SPIRE.
-	if state := run.State(c.now(), c.abandonAfter); state != ledger.RunActive {
-		return signing.Claim{}, Errorf(ClassRunNotFound, runID,
-			"run %q is %s, not active; a run that is not working cannot claim a commit's trailers",
-			runID, state)
-	}
-
-	// The directory's answer is checked, not trusted — the same defensive
-	// read get_credential.go and sign_commit.go both perform before minting
-	// or signing anything against it.
-	spiffeID, _, err := credentialRunIdentity(runID, run)
+	// The one run gate, with commit claims' own two differences: no admin
+	// scope (#264 does not apply on this path), and the run must be ACTIVE,
+	// not merely not-retired — see this file's package comment. A lapsed or
+	// abandoned run reads as get_credential's gate 4 reads it once no restore
+	// is possible, straight off the ledger's own rule (CredentialRun.State).
+	run, spiffeID, err := resolveRun(ctx, c.runs, runID, runGate{
+		retiredDetail: "a retired run cannot claim a commit's trailers (IP §6.2)",
+		activeAt:      c.now,
+		abandonAfter:  c.abandonAfter,
+	})
 	if err != nil {
 		return signing.Claim{}, err
 	}
@@ -159,11 +133,6 @@ func (c *commitClaimService) claim(ctx context.Context, runID string) (signing.C
 	return claim, nil
 }
 
-var (
-	commitClaimMu     sync.RWMutex
-	commitClaimActive *commitClaimService
-)
-
 // ConfigureCommitClaim installs the dependencies CommitClaimForRun runs on
 // and returns a function restoring whatever was installed before — the same
 // shape as ConfigureSignCommit (sign_commit.go), so wiring this follows one
@@ -173,15 +142,7 @@ func ConfigureCommitClaim(cfg CommitClaimConfig) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	commitClaimMu.Lock()
-	defer commitClaimMu.Unlock()
-	previous := commitClaimActive
-	commitClaimActive = svc
-	return func() {
-		commitClaimMu.Lock()
-		defer commitClaimMu.Unlock()
-		commitClaimActive = previous
-	}, nil
+	return install(&active.commitClaim, svc), nil
 }
 
 // CommitClaimForRun is ADR-0059 decision 2's claim: what
@@ -189,9 +150,7 @@ func ConfigureCommitClaim(cfg CommitClaimConfig) (func(), error) {
 // and what the signing agent (#386) will receive by injection. See this
 // file's own doc comment for what it refuses and why.
 func CommitClaimForRun(ctx context.Context, runID string) (signing.Claim, error) {
-	commitClaimMu.RLock()
-	svc := commitClaimActive
-	commitClaimMu.RUnlock()
+	svc := installed(&active.commitClaim)
 	if svc == nil {
 		return signing.Claim{}, Errorf(ClassInvariantViolation, runID,
 			"commit claim is bound but not configured; no claim is built rather than one "+

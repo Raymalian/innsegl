@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/spire"
 )
@@ -197,4 +198,68 @@ func credentialLedgerError(runID string, err error) error {
 		return classifyAs(Class(stored.Class), runID, stored.Error(), stored.Retryable, "internal/ledger", err)
 	}
 	return classifyAs(ClassInvariantViolation, runID, err.Error(), false, "the ledger", err)
+}
+
+// runGate says how strict one caller's run gate is. Its zero value is the
+// plainest gate: the run exists, is not retired, and the identity the
+// directory named is the run's own.
+type runGate struct {
+	// scoped answers a run outside the caller's admin credential exactly as a
+	// run that does not exist (#264). sign_commit leaves it off: it is not
+	// served behind an admin credential.
+	scoped bool
+	// retiredDetail replaces the default tail of the retired-run refusal.
+	retiredDetail string
+	// activeAt, when set, also requires the run to be RunActive at that
+	// instant, under abandonAfter — commit claims (ADR-0059 decision 2): a
+	// lapsed or abandoned run cannot claim a commit's trailers.
+	activeAt     func() time.Time
+	abandonAfter time.Duration
+}
+
+// resolveRun is the one run gate every run-scoped tool and gateway entry
+// point asks: the run exists, the caller may see it, it has not been retired,
+// and the identity the directory named is that run's own (I2, I4). Callers
+// differ only in the runGate they pass, so no two can disagree about what a
+// run is.
+func resolveRun(ctx context.Context, runs CredentialRuns, runID string, g runGate) (CredentialRun, string, error) {
+	// The ledger is what knows the difference between a run that was retired
+	// and one that never existed; SPIRE cannot tell them apart, because both
+	// have no entry.
+	run, found, err := runs.CredentialRun(ctx, runID)
+	if err != nil {
+		return CredentialRun{}, "", credentialLedgerError(runID, err)
+	}
+	// A run this caller's credential does not authorise is answered EXACTLY as
+	// a run that does not exist (#264): same class, same message, from the
+	// same line. A run id is public in every Agent-Run trailer, so a
+	// distinguishable answer would be an oracle over which repository holds
+	// it. With no credential in force adminScopeAdmits is true.
+	if !found || (g.scoped && !adminScopeAdmits(ctx, run.Repo)) {
+		return CredentialRun{}, "", Errorf(ClassRunNotFound, runID, "no run %q", runID)
+	}
+	if run.Retired() {
+		// I4: retirement removes the identity, never the record. A retired
+		// run's history stays readable; it stops growing.
+		detail := g.retiredDetail
+		if detail == "" {
+			detail = "retirement is effective immediately (IP §6.2)"
+		}
+		return CredentialRun{}, "", Errorf(ClassRunAlreadyRetired, runID,
+			"run %q was retired at %s; %s", runID, event.NewTimestamp(run.RetiredAt), detail)
+	}
+	if g.activeAt != nil {
+		if state := run.State(g.activeAt(), g.abandonAfter); state != ledger.RunActive {
+			return CredentialRun{}, "", Errorf(ClassRunNotFound, runID,
+				"run %q is %s, not active; a run that is not working cannot claim a commit's trailers",
+				runID, state)
+		}
+	}
+	// The directory's answer is checked, not trusted — get_credential's own
+	// check, so nothing can be attributed to another run's identity (I2).
+	spiffeID, _, err := credentialRunIdentity(runID, run)
+	if err != nil {
+		return CredentialRun{}, "", err
+	}
+	return run, spiffeID, nil
 }

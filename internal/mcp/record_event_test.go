@@ -767,15 +767,7 @@ func TestRecordEventRefusesAKeyItCannotRecord(t *testing.T) {
 // dependencies behind it refuses rather than improvising: IP §4 has no
 // "internal error" class, so a wiring defect is alert-level (ADR-0016).
 func TestRecordEventIsNotServedUntilItIsConfigured(t *testing.T) {
-	recordEventMu.Lock()
-	saved := recordEventActive
-	recordEventActive = nil
-	recordEventMu.Unlock()
-	t.Cleanup(func() {
-		recordEventMu.Lock()
-		recordEventActive = saved
-		recordEventMu.Unlock()
-	})
+	t.Cleanup(install(&active.recordEvent, nil))
 
 	session := reServe(t)
 	reCallFail(t, session, reArgs("rec-unwired"), ClassInvariantViolation)

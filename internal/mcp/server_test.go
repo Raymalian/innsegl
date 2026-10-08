@@ -388,10 +388,8 @@ func TestServerAdvertisesToolsAndNoOtherSurface(t *testing.T) {
 	if caps.Tools == nil {
 		t.Errorf("the server does not advertise a tools capability")
 	}
-	// Resources: the reference pages and nothing else (MCP-101). They are
-	// read-only text, not a second way to act.
-	if caps.Resources == nil {
-		t.Errorf("the server does not advertise its reference pages as resources")
+	if caps.Resources != nil {
+		t.Errorf("the server advertises a resources capability: %+v", caps.Resources)
 	}
 	if caps.Prompts != nil {
 		t.Errorf("the server advertises a prompts capability: %+v", caps.Prompts)
@@ -402,17 +400,8 @@ func TestServerAdvertisesToolsAndNoOtherSurface(t *testing.T) {
 	if len(caps.Experimental) != 0 {
 		t.Errorf("the server advertises experimental capabilities: %+v", caps.Experimental)
 	}
-	listed, err := session.ListResources(t.Context(), nil)
-	if err != nil {
-		t.Fatalf("resources/list: %v", err)
-	}
-	for _, r := range listed.Resources {
-		if !strings.HasPrefix(r.URI, ReferenceURIPrefix) {
-			t.Errorf("resources/list offers %q, which is not a reference page", r.URI)
-		}
-	}
-	if templates, err := session.ListResourceTemplates(t.Context(), nil); err == nil && len(templates.ResourceTemplates) != 0 {
-		t.Errorf("resources/templates/list returned %d templates", len(templates.ResourceTemplates))
+	if listed, err := session.ListResources(t.Context(), nil); err == nil && len(listed.Resources) != 0 {
+		t.Errorf("resources/list returned %d resources", len(listed.Resources))
 	}
 }
 

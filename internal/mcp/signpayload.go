@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"innsegl.dev/innsegl/internal/commitpath"
@@ -35,9 +34,11 @@ import (
 // Everything decision 4 shares with `sign_commit` — the ledger, the run
 // directory, the credential path (get_credential, through
 // SignCommitThroughGetCredential), the I6 author policy, the signer's own
-// Fulcio/Rekor/issuer configuration — is `sign_commit`'s OWN configured
-// service (ConfigureSignCommit, sign_commit.go), read directly from package
-// state below rather than duplicated. This file adds exactly the two
+// Fulcio/Rekor/issuer configuration — is the commit signer (deps.go):
+// `sign_commit`'s own service when that tool is configured
+// (ConfigureSignCommit), or the same dependencies without a workspace
+// (ConfigureCommitSigner) on a core that serves no sign_commit. This file
+// adds exactly the two
 // dependencies decision 4 needs that `sign_commit` has no use for: the
 // resolver gate 1 checks a tool call id against (commitpath.Resolve's own
 // dependency), and the function that says what a run may CLAIM its commit's
@@ -84,7 +85,7 @@ func signWithSigner(ctx context.Context, s *signing.Signer, req signing.PayloadR
 }
 
 // SignPayloadConfig carries the two dependencies ADR-0059 decision 4 needs
-// beyond sign_commit's own configured service (ConfigureSignCommit).
+// beyond the commit signer (ConfigureSignCommit or ConfigureCommitSigner).
 type SignPayloadConfig struct {
 	// Resolver finds a relayed, still-pending `git commit` tool call by its
 	// id — commitpath.Resolve's own dependency (gate 1).
@@ -104,11 +105,6 @@ type SignPayloadConfig struct {
 	// read and is refused.
 	Mirror CommitMirror
 }
-
-var (
-	signPayloadMu  sync.RWMutex
-	signPayloadCfg *signPayloadState
-)
 
 // ConfigureSignPayload installs SignPayloadConfig and returns a function
 // restoring whatever was installed before.
@@ -131,15 +127,7 @@ func ConfigureSignPayload(cfg SignPayloadConfig) (func(), error) {
 	}
 	st := &signPayloadState{resolver: cfg.Resolver, claimFor: cfg.ClaimFor, now: now, sign: signWithSigner, mirror: cfg.Mirror}
 
-	signPayloadMu.Lock()
-	defer signPayloadMu.Unlock()
-	previous := signPayloadCfg
-	signPayloadCfg = st
-	return func() {
-		signPayloadMu.Lock()
-		defer signPayloadMu.Unlock()
-		signPayloadCfg = previous
-	}, nil
+	return install(&active.signPayload, st), nil
 }
 
 // SignPayloadForGateway is ADR-0059 decision 4's one call: the gates, then
@@ -154,22 +142,18 @@ func ConfigureSignPayload(cfg SignPayloadConfig) (func(), error) {
 func SignPayloadForGateway(
 	ctx context.Context, req commitpath.SignRequest,
 ) (commitpath.SignResponse, error) {
-	signPayloadMu.RLock()
-	cfg := signPayloadCfg
-	signPayloadMu.RUnlock()
+	cfg := installed(&active.signPayload)
 	if cfg == nil {
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, "",
 			"the commit-sign path is not configured; no payload is signed rather than "+
 				"one signed with a gate silently unchecked")
 	}
 
-	signCommitMu.RLock()
-	svc := signCommitActive
-	signCommitMu.RUnlock()
+	svc := installed(&active.commitSigner)
 	if svc == nil {
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, "",
-			"sign_commit is not configured; the commit-sign path shares its ledger, "+
-				"credential and signer dependencies and has none of its own")
+			"sign_commit is not configured and no commit signer is installed; the "+
+				"commit-sign path has no ledger, credential or signer to sign with")
 	}
 
 	// ---- gate 1: the tool call this payload claims to be for --------------
@@ -229,7 +213,7 @@ func SignPayloadForGateway(
 	// own). It is the one fact ADR-0046 mechanism 1 already establishes once
 	// per session, carried on the run's own registration and reused here
 	// rather than asked again — ADR-0059's Consequences, in as many words.
-	run, _, err := svc.resolveRun(ctx, runID)
+	run, _, err := resolveRun(ctx, svc.runs, runID, runGate{})
 	if err != nil {
 		return commitpath.SignResponse{}, err
 	}
@@ -262,6 +246,8 @@ func SignPayloadForGateway(
 		}
 	case relayed.WorkingDirectory != "":
 		worktree, err = commitPathWorktree(ctx, relayed.WorkingDirectory, run.Repo)
+	case svc.workspace == nil:
+		err = errors.New("the call states no working directory and this core has no workspace (-workspace)")
 	default:
 		worktree, err = svc.workspace.Worktree(ctx, run.Repo)
 	}

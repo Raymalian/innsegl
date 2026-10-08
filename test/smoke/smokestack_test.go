@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -23,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/segment"
 	"innsegl.dev/innsegl/internal/stackguard"
@@ -175,24 +175,10 @@ var documentedCommands = append(
 // asserted by OPS-006.
 // ---------------------------------------------------------------------------
 
-var errDependencyAbsent = errors.New("a required dependency is absent")
-
 // wrapDependencyAbsent marks an error as an absent dependency. It exists so
 // OPS-006 can build one without knowing how the marking is done.
 func wrapDependencyAbsent(err error) error {
-	return fmt.Errorf("%w: %w", err, errDependencyAbsent)
-}
-
-// startupOutcome routes a start-up error to exactly one of the two variables.
-func startupOutcome(err error) (skip, failure string) {
-	switch {
-	case err == nil:
-		return "", ""
-	case errors.Is(err, errDependencyAbsent):
-		return err.Error(), ""
-	default:
-		return "", err.Error()
-	}
+	return fmt.Errorf("%w: %w", err, dockertest.ErrDependencyAbsent)
 }
 
 // requirement is what requireStack must do for the calling test.
@@ -270,7 +256,7 @@ func requireStack(t *testing.T) *stack {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 		defer cancel()
 		s, err := startStack(ctx, t)
-		stackSkip, stackFailure = startupOutcome(err)
+		stackSkip, stackFailure = dockertest.StartupOutcome(err)
 		if err != nil && s != nil {
 			s.stop()
 		}
@@ -321,7 +307,7 @@ func TestMain(m *testing.M) {
 // ---------------------------------------------------------------------------
 
 func startStack(ctx context.Context, t *testing.T) (*stack, error) {
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		return nil, err
 	}
 	if err := lockTheShippedStack(ctx, t); err != nil {
@@ -333,7 +319,7 @@ func startStack(ctx context.Context, t *testing.T) (*stack, error) {
 	// one. An error path that returned nil would hold the lock for the rest of
 	// the process.
 	s := &stack{}
-	arch, err := docker(ctx, "version", "--format", "{{.Server.Arch}}")
+	arch, err := dockertest.Docker(ctx, "version", "--format", "{{.Server.Arch}}")
 	if err != nil {
 		return s, err
 	}
@@ -362,7 +348,7 @@ func startStack(ctx context.Context, t *testing.T) (*stack, error) {
 	// probed-then-released port can be taken before it is bound; this does
 	// not close that window, it only declines to widen it — and (below)
 	// does not trust anything that answers in it without checking first.
-	rekorPort, err := freeHostPort(ctx)
+	rekorPort, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return s, fmt.Errorf("choosing a host port for Rekor: %w", err)
 	}
@@ -477,19 +463,6 @@ func unlockTheShippedStack() {
 	smokeLockFile = nil
 }
 
-func dockerUsable(ctx context.Context) error {
-	if os.Getenv("INNSEGL_TEST_NO_DOCKER") != "" {
-		return wrapDependencyAbsent(errors.New("INNSEGL_TEST_NO_DOCKER is set"))
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		return wrapDependencyAbsent(fmt.Errorf("docker is not on PATH: %w", err))
-	}
-	if _, err := docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
-		return wrapDependencyAbsent(fmt.Errorf("no reachable docker daemon: %w", err))
-	}
-	return nil
-}
-
 // cleanSlate is the closest this can get to "a clean machine" from inside one
 // that is not.
 //
@@ -508,7 +481,7 @@ func (s *stack) cleanSlate(ctx context.Context, t *testing.T) error {
 		return fmt.Errorf("tearing the shipped stacks down before starting: %w\n%s", err, out)
 	}
 
-	left, err := docker(ctx, "volume", "ls", "--quiet")
+	left, err := dockertest.Docker(ctx, "volume", "ls", "--quiet")
 	if err != nil {
 		return err
 	}
@@ -632,7 +605,7 @@ func (s *stack) probeTrustMaterial(ctx context.Context) error {
 // connection reset are all equally consistent with "someone else is there,"
 // so none of them is asked first.
 func (s *stack) assertRekorPortIsOurs(ctx context.Context) error {
-	out, err := docker(ctx, "ps", "--filter", "publish="+s.rekorPort,
+	out, err := dockertest.Docker(ctx, "ps", "--filter", "publish="+s.rekorPort,
 		"--format", "{{.Names}}\t{{.Image}}")
 	if err != nil {
 		return fmt.Errorf("checking what Docker has bound to host port %s before "+
@@ -786,10 +759,10 @@ func buildGitsign(ctx context.Context, arch string) (string, error) {
 // reading the chain back is created only after the verification has been
 // measured — see openLedgerThroughARelay.
 func (s *stack) startLedger(ctx context.Context, t *testing.T) error {
-	if _, err := docker(ctx, "network", "create", ledgerNetwork); err != nil {
+	if _, err := dockertest.Docker(ctx, "network", "create", ledgerNetwork); err != nil {
 		return fmt.Errorf("creating the ledger network: %w", err)
 	}
-	if _, err := docker(ctx, "run", "-d",
+	if _, err := dockertest.Docker(ctx, "run", "-d",
 		"--name", ledgerContainer,
 		"--network", ledgerNetwork,
 		"--env", "POSTGRES_USER="+ledgerUser,
@@ -798,7 +771,7 @@ func (s *stack) startLedger(ctx context.Context, t *testing.T) error {
 		postgresImage); err != nil {
 		return fmt.Errorf("starting the ledger's postgres: %w", err)
 	}
-	ip, err := docker(ctx, "inspect", "-f",
+	ip, err := dockertest.Docker(ctx, "inspect", "-f",
 		`{{(index .NetworkSettings.Networks "`+ledgerNetwork+`").IPAddress}}`, ledgerContainer)
 	if err != nil {
 		return fmt.Errorf("reading the ledger's address: %w", err)
@@ -808,7 +781,7 @@ func (s *stack) startLedger(ctx context.Context, t *testing.T) error {
 	deadline := time.Now().Add(3 * time.Minute)
 	var last error
 	for time.Now().Before(deadline) {
-		if _, last = docker(ctx, "exec", ledgerContainer,
+		if _, last = dockertest.Docker(ctx, "exec", ledgerContainer,
 			"pg_isready", "-U", ledgerUser, "-d", ledgerDatabase); last == nil {
 			t.Logf("OPS-004 ledger: postgres at %s on %s, publishing nothing", ip, ledgerNetwork)
 			return nil
@@ -840,11 +813,11 @@ func (s *stack) startLedger(ctx context.Context, t *testing.T) error {
 func (s *stack) openLedgerThroughARelay(t *testing.T) (*ledger.Store, func()) {
 	t.Helper()
 	ctx := t.Context()
-	port, err := freeHostPort(ctx)
+	port, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := docker(ctx, "run", "-d",
+	if _, err := dockertest.Docker(ctx, "run", "-d",
 		"--name", relayContainer,
 		"--network", ledgerNetwork,
 		"--publish", "127.0.0.1:"+port+":5432",
@@ -853,7 +826,7 @@ func (s *stack) openLedgerThroughARelay(t *testing.T) (*ledger.Store, func()) {
 	); err != nil {
 		t.Fatalf("starting the ledger read relay: %v", err)
 	}
-	stop := func() { dockerIgnore(docker(context.Background(), "rm", "--force", relayContainer)) }
+	stop := func() { dockerIgnore(dockertest.Docker(context.Background(), "rm", "--force", relayContainer)) }
 
 	dsn := fmt.Sprintf("postgres://%s:%s@127.0.0.1:%s/%s?sslmode=disable",
 		ledgerUser, ledgerPassword, port, ledgerDatabase)
@@ -903,11 +876,11 @@ func (s *stack) startMCP(ctx context.Context, t *testing.T) error {
 	}
 	s.workspace = workspace
 
-	mcpPort, err := freeHostPort(ctx)
+	mcpPort, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return err
 	}
-	healthPort, err := freeHostPort(ctx)
+	healthPort, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return err
 	}
@@ -965,19 +938,19 @@ func (s *stack) startMCP(ctx context.Context, t *testing.T) error {
 		"--entrypoint", "/innsegl/innsegl",
 		runnerImage, "serve",
 	}
-	if _, err := docker(ctx, args...); err != nil {
+	if _, err := dockertest.Docker(ctx, args...); err != nil {
 		return fmt.Errorf("creating the MCP container: %w", err)
 	}
 	for _, network := range []string{"innsegl-spire-admin", ledgerNetwork} {
-		if _, err := docker(ctx, "network", "connect", network, mcpContainer); err != nil {
+		if _, err := dockertest.Docker(ctx, "network", "connect", network, mcpContainer); err != nil {
 			return fmt.Errorf("joining the MCP to %s: %w", network, err)
 		}
 	}
-	if _, err := docker(ctx, "start", mcpContainer); err != nil {
+	if _, err := dockertest.Docker(ctx, "start", mcpContainer); err != nil {
 		return fmt.Errorf("starting the MCP container: %w", err)
 	}
 	if err := s.awaitReady(ctx); err != nil {
-		logs, logErr := docker(ctx, "logs", mcpContainer)
+		logs, logErr := dockertest.Docker(ctx, "logs", mcpContainer)
 		if logErr != nil {
 			logs = "the server's own logs could not be read either: " + logErr.Error()
 		}
@@ -1135,9 +1108,9 @@ func (s *stack) stop() {
 
 func (s *stack) teardownContainers(ctx context.Context) {
 	for _, name := range []string{mcpContainer, relayContainer, ledgerContainer} {
-		dockerIgnore(docker(ctx, "rm", "--force", "--volumes", name))
+		dockerIgnore(dockertest.Docker(ctx, "rm", "--force", "--volumes", name))
 	}
-	dockerIgnore(docker(ctx, "network", "rm", ledgerNetwork))
+	dockerIgnore(dockertest.Docker(ctx, "network", "rm", ledgerNetwork))
 }
 
 // ---------------------------------------------------------------------------
@@ -1292,7 +1265,7 @@ func (s *stack) dockerIn(ctx context.Context, args ...string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(args, " "), err, oneLine(stderr.String()))
+			strings.Join(args, " "), err, dockertest.OneLine(stderr.String()))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -1301,35 +1274,6 @@ func (s *stack) dockerIn(ctx context.Context, args ...string) (string, error) {
 // one place where failing to remove something already absent is the expected
 // outcome rather than an error worth reporting.
 func dockerIgnore(string, error) {}
-
-func docker(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(args, " "), err, oneLine(stderr.String()))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// oneLine collapses a multi-line subprocess error into a single line, so the
-// cause survives Go's per-line test JSON stream.
-func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
-
-func freeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
-}
 
 func httpGET(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

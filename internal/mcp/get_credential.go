@@ -7,7 +7,6 @@ import (
 	"errors"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -201,11 +200,6 @@ type credentialService struct {
 	now       func() time.Time
 }
 
-var (
-	credentialMu     sync.RWMutex
-	credentialActive *credentialService
-)
-
 // ConfigureGetCredential installs the dependencies get_credential runs on.
 //
 // It is a package-level installation rather than a field on Config because the
@@ -244,9 +238,7 @@ func ConfigureGetCredential(cfg CredentialConfig) error {
 		now = time.Now
 	}
 
-	credentialMu.Lock()
-	defer credentialMu.Unlock()
-	credentialActive = &credentialService{
+	install(&active.credential, &credentialService{
 		runs:      cfg.Runs,
 		entries:   cfg.Entries,
 		restorer:  cfg.Restorer,
@@ -256,7 +248,7 @@ func ConfigureGetCredential(cfg CredentialConfig) error {
 		ledger:    cfg.Ledger,
 		audiences: slices.Clone(audiences),
 		now:       now,
-	}
+	})
 	return nil
 }
 
@@ -296,9 +288,7 @@ func bindGetCredential(s *Server) error {
 }
 
 func getCredential(ctx context.Context, _ *sdk.CallToolRequest, in getCredentialIn) (getCredentialOut, error) {
-	credentialMu.RLock()
-	svc := credentialActive
-	credentialMu.RUnlock()
+	svc := installed(&active.credential)
 	if svc == nil {
 		// Alert-level: a bound tool with no dependencies behind it is a defect
 		// in the wiring, and IP §4 has no "internal error" class (ADR-0016).

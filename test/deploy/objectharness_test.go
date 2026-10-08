@@ -16,6 +16,8 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // ---------------------------------------------------------------------------
@@ -129,17 +131,17 @@ type objectStoreContainer struct {
 // dockerUsable's wrap an absent dependency.
 func startObjectStore(ctx context.Context, t *testing.T, bucket string) (*objectStoreContainer, error) {
 	t.Helper()
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		return nil, err
 	}
-	port, err := freeHostPort(ctx)
+	port, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reserving a host port: %w", err)
 	}
 	name := fmt.Sprintf("innsegl-deploy-obj-%d-%s", os.Getpid(), bucket)
 	// A previous run that was killed rather than torn down leaves the name
 	// taken; removing it is not an error worth reporting.
-	discardError(docker(ctx, "rm", "--force", "--volumes", name))
+	discardError(dockertest.Docker(ctx, "rm", "--force", "--volumes", name))
 
 	root := repoRoot(t)
 	c := &objectStoreContainer{
@@ -171,15 +173,15 @@ func startObjectStore(ctx context.Context, t *testing.T, bucket string) (*object
 		// the identity file exists.
 		"/innsegl/init/s3-identities.sh && exec sh /innsegl/init/object-store-start.sh "+
 			strings.Join(shipped.Command, " "))
-	if _, err := docker(ctx, args...); err != nil {
+	if _, err := dockertest.Docker(ctx, args...); err != nil {
 		return nil, fmt.Errorf("creating the object store container: %w", err)
 	}
-	if _, err := docker(ctx, "start", name); err != nil {
+	if _, err := dockertest.Docker(ctx, "start", name); err != nil {
 		return nil, fmt.Errorf("starting the object store: %w", err)
 	}
 
 	if err := waitForObjectStore(ctx, c); err != nil {
-		logs, _ := docker(ctx, "logs", "--tail", "40", name) //nolint:errcheck // a best-effort diagnostic on a path that is already failing
+		logs, _ := dockertest.Docker(ctx, "logs", "--tail", "40", name) //nolint:errcheck // a best-effort diagnostic on a path that is already failing
 		c.stop()
 		// THIS STORE SHIPS NO DEFAULT CREDENTIALS, so "never answered" has one
 		// failure mode that reads like a different problem entirely: without
@@ -196,7 +198,7 @@ func (c *objectStoreContainer) stop() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	discardError(docker(ctx, "rm", "--force", "--volumes", c.name))
+	discardError(dockertest.Docker(ctx, "rm", "--force", "--volumes", c.name))
 }
 
 // clientAs is a client for this store under one identity. Every test below
@@ -253,7 +255,7 @@ func requireObjectStore(ctx context.Context, t *testing.T, id, bucket string) *o
 	t.Helper()
 
 	store, err := startObjectStore(ctx, t, bucket)
-	skip, failure := startupOutcome(err)
+	skip, failure := dockertest.StartupOutcome(err)
 	if store != nil {
 		t.Cleanup(store.stop)
 	}
@@ -377,13 +379,13 @@ func (c composeConfig) env(service, key string) (string, bool) {
 // its error is an absent dependency.
 func composeUsable(ctx context.Context) error {
 	if os.Getenv("INNSEGL_TEST_NO_DOCKER") != "" {
-		return fmt.Errorf("%w: INNSEGL_TEST_NO_DOCKER is set", errDependencyAbsent)
+		return fmt.Errorf("%w: INNSEGL_TEST_NO_DOCKER is set", dockertest.ErrDependencyAbsent)
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker is not on PATH: %w: %w", err, errDependencyAbsent)
+		return fmt.Errorf("docker is not on PATH: %w: %w", err, dockertest.ErrDependencyAbsent)
 	}
-	if _, err := docker(ctx, "compose", "version", "--short"); err != nil {
-		return fmt.Errorf("no usable docker compose: %w: %w", err, errDependencyAbsent)
+	if _, err := dockertest.Docker(ctx, "compose", "version", "--short"); err != nil {
+		return fmt.Errorf("no usable docker compose: %w: %w", err, dockertest.ErrDependencyAbsent)
 	}
 	return nil
 }

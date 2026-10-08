@@ -29,6 +29,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/spire"
 	"innsegl.dev/innsegl/internal/stackguard"
 )
@@ -111,70 +112,12 @@ var (
 	nameSeq      atomic.Int64
 )
 
-// ---------------------------------------------------------------------------
-// #101: a failed dependency is not a skip.
-//
-// errDependencyAbsent marks the ONLY conditions under which skipping this
-// suite is honest: there is no Docker daemon (or INNSEGL_TEST_NO_DOCKER asks
-// for none), or there is no gitsign binary. Nothing else wraps it.
-//
-// Everything else that can go wrong while standing a dependency up — an image
-// that cannot be pulled, a port that cannot be bound, a network Docker refuses
-// to create because its predefined address pools are used up, a container that
-// never becomes healthy — is a FAILURE. Reporting one of those as a skip turns
-// it into a pass-shaped outcome: `go test` exits zero, the package reports ok,
-// and the crash and outage matrix did not run. That is what CI produced on a
-// runner whose "Require Docker" step had already passed.
-//
-// internal/verify/verifyharness_test.go carries the reference shape; both
-// branches here are exercised by
-// TestHAR006AnAbsentDependencyIsASkipAndAFaultIsAFailure.
-// ---------------------------------------------------------------------------
-var errDependencyAbsent = errors.New("a required dependency is absent")
-
-// startupOutcome routes a start-up error to exactly one of the two variables.
-// An absent dependency is a skip; anything else is a failure. There is no
-// third answer, and the third answer is how this package came to report ok
-// with nothing having run.
-func startupOutcome(err error) (skip, failure string) {
-	switch {
-	case err == nil:
-		return "", ""
-	case errors.Is(err, errDependencyAbsent):
-		return err.Error(), ""
-	default:
-		return "", err.Error()
-	}
-}
-
-// harnessRequirement is what a require-function must do for the calling test.
-type harnessRequirement int
-
-const (
-	harnessProceed harnessRequirement = iota
-	harnessSkipTest
-	harnessFailTest
-)
-
-// harnessNeed decides between the three. A failure outranks a skip: if the
-// dependency broke, the reason it broke is what the developer needs to read.
-func harnessNeed(up bool, skip, failure string) harnessRequirement {
-	switch {
-	case failure != "":
-		return harnessFailTest
-	case !up:
-		return harnessSkipTest
-	default:
-		return harnessProceed
-	}
-}
-
 // requireStartup ends the calling test the honest way when a lazily-built
 // dependency did not come up. ADR-0032 records why the Sigstore half of this
 // suite cannot use TestMain; it routes through here instead.
 func requireStartup(t *testing.T, err error, unproven string) {
 	t.Helper()
-	skip, failure := startupOutcome(err)
+	skip, failure := dockertest.StartupOutcome(err)
 	if failure != "" {
 		t.Fatalf("a dependency this case needs did not come up, and Docker and "+
 			"gitsign are both present: %s\n\nThis is a FAILURE and not a skip "+
@@ -183,17 +126,6 @@ func requireStartup(t *testing.T, err error, unproven string) {
 	if skip != "" {
 		t.Skipf("skipping: %s. %s", skip, unproven)
 	}
-}
-
-// oneLine collapses a multi-line subprocess error into a single line.
-//
-// `docker compose` reports progress on stderr, so a failure arrives as several
-// lines of which only the last usually names the cause. Go's test JSON stream
-// emits each line as its own event, and the CI failure behind #101 read
-// "Network innsegl-verifytest-40427-spire-admin  Creating" — compose's first
-// progress line, with the fault itself on a line the summary never showed.
-func oneLine(s string) string {
-	return strings.Join(strings.Fields(s), " ")
 }
 
 // stackPrefix names this process's stack, and everything in it.
@@ -216,47 +148,6 @@ func envOr(name, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// docker runs one docker command and returns its trimmed stdout.
-func docker(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(args, " "), err, oneLine(stderr.String()))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// dockerUsable reports whether a docker daemon is reachable.
-func dockerUsable(ctx context.Context) error {
-	if os.Getenv("INNSEGL_TEST_NO_DOCKER") != "" {
-		return fmt.Errorf("%w: INNSEGL_TEST_NO_DOCKER is set", errDependencyAbsent)
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("%w: %w", errDependencyAbsent, err)
-	}
-	if _, err := docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
-		return fmt.Errorf("%w: no reachable daemon: %w", errDependencyAbsent, err)
-	}
-	return nil
-}
-
-// freeHostPort reserves an ephemeral loopback port and hands it back.
-func freeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
 }
 
 // ---------------------------------------------------------------------------
@@ -389,7 +280,7 @@ type stack struct {
 
 func (s *stack) compose(ctx context.Context, args ...string) (string, error) {
 	full := []string{"compose", "-p", s.prefix, "-f", s.composeFile, "-f", s.overlayFile}
-	return docker(ctx, append(full, args...)...)
+	return dockertest.Docker(ctx, append(full, args...)...)
 }
 
 // spireLocal runs the SPIRE server CLI inside the server container against the
@@ -516,7 +407,7 @@ func (s *stack) adminClient(t *testing.T) *spire.Client {
 // containerField reads one docker inspect field, or "" when the container is
 // gone.
 func containerField(ctx context.Context, name, format string) string {
-	out, err := docker(ctx, "inspect", "--format", format, name)
+	out, err := dockertest.Docker(ctx, "inspect", "--format", format, name)
 	if err != nil {
 		return ""
 	}
@@ -540,7 +431,7 @@ func containerHealthy(ctx context.Context, name string) bool {
 // call under test races the kill, and a test that happened to run before the
 // process died would pass while proving nothing.
 func killContainer(ctx context.Context, name string) error {
-	if _, err := docker(ctx, "kill", "--signal", "KILL", name); err != nil {
+	if _, err := dockertest.Docker(ctx, "kill", "--signal", "KILL", name); err != nil {
 		// Already dead is the one acceptable failure, and only if it really is
 		// dead — checked immediately below.
 		if containerRunning(ctx, name) {
@@ -562,7 +453,7 @@ func killContainer(ctx context.Context, name string) error {
 // startContainer starts a stopped container and waits for its healthcheck.
 func startContainer(ctx context.Context, name string, deadline time.Duration) error {
 	if !containerRunning(ctx, name) {
-		if _, err := docker(ctx, "start", name); err != nil {
+		if _, err := dockertest.Docker(ctx, "start", name); err != nil {
 			return fmt.Errorf("start %s: %w", name, err)
 		}
 	}
@@ -730,10 +621,10 @@ func (s *stack) createProbeContainer(ctx context.Context, name string, is spire.
 		s.probeImage,
 	}
 	args = append(args, cmd[1:]...)
-	if _, err := docker(ctx, args...); err != nil {
+	if _, err := dockertest.Docker(ctx, args...); err != nil {
 		return fmt.Errorf("create probe container: %w", err)
 	}
-	if _, err := docker(ctx, "cp", s.probeBinary, name+":/svidprobe"); err != nil {
+	if _, err := dockertest.Docker(ctx, "cp", s.probeBinary, name+":/svidprobe"); err != nil {
 		return fmt.Errorf("copy svidprobe into %s: %w", name, err)
 	}
 	return nil
@@ -746,7 +637,7 @@ func (s *stack) probeName() string {
 func removeContainer(name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if _, err := docker(ctx, "rm", "--force", name); err != nil {
+	if _, err := dockertest.Docker(ctx, "rm", "--force", name); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", name, err)
 	}
 }
@@ -1045,11 +936,11 @@ func (s *stack) registerForTest(t *testing.T, c *spire.Client, run spire.RunRef)
 
 // buildProbe cross-compiles internal/spire/svidprobe for the daemon's platform.
 func buildProbe(ctx context.Context, root, outDir string) (string, error) {
-	goos, err := docker(ctx, "version", "--format", "{{.Server.Os}}")
+	goos, err := dockertest.Docker(ctx, "version", "--format", "{{.Server.Os}}")
 	if err != nil {
 		return "", err
 	}
-	goarch, err := docker(ctx, "version", "--format", "{{.Server.Arch}}")
+	goarch, err := dockertest.Docker(ctx, "version", "--format", "{{.Server.Arch}}")
 	if err != nil {
 		return "", err
 	}
@@ -1088,7 +979,7 @@ func startStack(ctx context.Context, root, outDir string) (*stack, error) {
 		return nil, fmt.Errorf("compose up: %w", err)
 	}
 
-	vol, err := docker(ctx, "inspect", "--format",
+	vol, err := dockertest.Docker(ctx, "inspect", "--format",
 		`{{range .Mounts}}{{if eq .Destination "`+agentSocketMount+`"}}{{.Name}}{{end}}{{end}}`,
 		s.agentContainer)
 	if err != nil || vol == "" {
@@ -1121,19 +1012,19 @@ func startStack(ctx context.Context, root, outDir string) (*stack, error) {
 	// published — docker skips port publishing for a container whose only
 	// network is `internal: true` — then joined to the admin network, which is
 	// the membership that grants admin reachability (ADR-0011).
-	port, err := freeHostPort(ctx)
+	port, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reserve a host port: %w", err)
 	}
 	s.proxyName = s.prefix + "-adminproxy"
-	if _, err = docker(ctx, "run", "--detach", "--name", s.proxyName,
+	if _, err = dockertest.Docker(ctx, "run", "--detach", "--name", s.proxyName,
 		"--publish", "127.0.0.1:"+port+":8081",
 		envOr("INNSEGL_TEST_PROXY_IMAGE", defaultProxyImage),
 		"TCP-LISTEN:8081,fork,reuseaddr", "TCP:spire-server:8081",
 	); err != nil {
 		return nil, fmt.Errorf("start the admin proxy: %w", err)
 	}
-	if _, err = docker(ctx, "network", "connect", s.adminNetwork, s.proxyName); err != nil {
+	if _, err = dockertest.Docker(ctx, "network", "connect", s.adminNetwork, s.proxyName); err != nil {
 		return nil, fmt.Errorf("join %s: %w", s.adminNetwork, err)
 	}
 	s.socatAddr = "127.0.0.1:" + port
@@ -1142,7 +1033,7 @@ func startStack(ctx context.Context, root, outDir string) (*stack, error) {
 		return nil, fmt.Errorf("start the counting proxy: %w", err)
 	}
 
-	if _, err = docker(ctx, "pull", "--quiet", s.probeImage); err != nil {
+	if _, err = dockertest.Docker(ctx, "pull", "--quiet", s.probeImage); err != nil {
 		return nil, fmt.Errorf("pull %s: %w", s.probeImage, err)
 	}
 	if s.probeBinary, err = buildProbe(ctx, root, outDir); err != nil {
@@ -1158,7 +1049,7 @@ func (s *stack) stop() {
 		s.counter.close()
 	}
 	if s.proxyName != "" {
-		if _, err := docker(ctx, "rm", "--force", s.proxyName); err != nil {
+		if _, err := dockertest.Docker(ctx, "rm", "--force", s.proxyName); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", s.proxyName, err)
 		}
 	}
@@ -1200,14 +1091,14 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
-	if derr := dockerUsable(ctx); derr != nil {
+	if derr := dockertest.Usable(ctx); derr != nil {
 		// The only honest skip: there is no daemon to ask.
 		stackSkip = derr.Error()
 	} else if s, serr := startStack(ctx, root, outDir); serr != nil {
 		// Docker is present and working and the stack still did not come up.
 		// That is an infrastructure FAILURE, not an absent dependency, and
 		// conflating the two is #101.
-		stackSkip, stackFailure = startupOutcome(serr)
+		stackSkip, stackFailure = dockertest.StartupOutcome(serr)
 		if s != nil {
 			s.stop()
 		}
@@ -1232,17 +1123,17 @@ func TestMain(m *testing.M) {
 // what went unproven. It never lets a case here pass without one.
 func requireStack(t *testing.T) *stack {
 	t.Helper()
-	switch harnessNeed(sharedStack != nil, stackSkip, stackFailure) {
-	case harnessFailTest:
+	switch dockertest.Need(sharedStack != nil, stackSkip, stackFailure) {
+	case dockertest.FailTest:
 		t.Fatalf("the isolated SPIRE stack did not come up, and Docker is present "+
 			"and working: %s\n\nThis is a FAILURE and not a skip (#101): an "+
 			"infrastructure fault reported as a skip exits zero and reports ok "+
 			"while the crash and outage matrix did not run.", stackFailure)
-	case harnessSkipTest:
+	case dockertest.SkipTest:
 		t.Skipf("skipping: no isolated SPIRE stack from deploy/compose/spire.yml + "+
 			"test/failure/spire-isolated.yml (%s). A failure-injection case with no "+
 			"dependency to remove proves nothing; start Docker and re-run.", stackSkip)
-	case harnessProceed:
+	case dockertest.Proceed:
 	}
 	sharedStack.requireHealthy(t)
 	return sharedStack
@@ -1260,15 +1151,15 @@ func requireStack(t *testing.T) *stack {
 func TestHAR006AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 	t.Run("no docker is a skip", func(t *testing.T) {
 		t.Setenv("INNSEGL_TEST_NO_DOCKER", "1")
-		err := dockerUsable(t.Context())
+		err := dockertest.Usable(t.Context())
 		if err == nil {
 			t.Fatal("dockerUsable answered nil with INNSEGL_TEST_NO_DOCKER set")
 		}
-		if !errors.Is(err, errDependencyAbsent) {
-			t.Fatalf("%v does not wrap errDependencyAbsent, so it would be routed to a "+
+		if !errors.Is(err, dockertest.ErrDependencyAbsent) {
+			t.Fatalf("%v does not wrap dockertest.ErrDependencyAbsent, so it would be routed to a "+
 				"FAILURE and a developer with no Docker could not run this package", err)
 		}
-		skip, failure := startupOutcome(err)
+		skip, failure := dockertest.StartupOutcome(err)
 		if skip == "" || failure != "" {
 			t.Fatalf("startupOutcome(%v) = (%q, %q), want a skip and no failure", err, skip, failure)
 		}
@@ -1280,11 +1171,11 @@ func TestHAR006AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 		if err == nil {
 			t.Fatal("findSigGitsign accepted a path that does not exist")
 		}
-		if !errors.Is(err, errDependencyAbsent) {
-			t.Fatalf("%v does not wrap errDependencyAbsent; a machine without gitsign "+
+		if !errors.Is(err, dockertest.ErrDependencyAbsent) {
+			t.Fatalf("%v does not wrap dockertest.ErrDependencyAbsent; a machine without gitsign "+
 				"would be told the suite FAILED", err)
 		}
-		skip, failure := startupOutcome(err)
+		skip, failure := dockertest.StartupOutcome(err)
 		if skip == "" || failure != "" {
 			t.Fatalf("startupOutcome(%v) = (%q, %q), want a skip and no failure", err, skip, failure)
 		}
@@ -1298,18 +1189,18 @@ func TestHAR006AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 			errors.New("Error response from daemon: could not find an available, "+
 				"non-overlapping IPv4 address pool among the defaults to assign "+
 				"to the network"))
-		if errors.Is(err, errDependencyAbsent) {
-			t.Fatal("an exhausted Docker address pool wraps errDependencyAbsent; it would " +
+		if errors.Is(err, dockertest.ErrDependencyAbsent) {
+			t.Fatal("an exhausted Docker address pool wraps dockertest.ErrDependencyAbsent; it would " +
 				"be reported as a skip and the crash and outage matrix would silently not run")
 		}
-		skip, failure := startupOutcome(err)
+		skip, failure := dockertest.StartupOutcome(err)
 		if failure == "" || skip != "" {
 			t.Fatalf("startupOutcome(%v) = (%q, %q), want a failure and no skip", err, skip, failure)
 		}
 	})
 
 	t.Run("a healthy start-up is neither", func(t *testing.T) {
-		if skip, failure := startupOutcome(nil); skip != "" || failure != "" {
+		if skip, failure := dockertest.StartupOutcome(nil); skip != "" || failure != "" {
 			t.Fatalf("startupOutcome(nil) = (%q, %q), want both empty", skip, failure)
 		}
 	})
@@ -1319,14 +1210,14 @@ func TestHAR006AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 			name          string
 			up            bool
 			skip, failure string
-			want          harnessRequirement
+			want          dockertest.Requirement
 		}{
-			{"a failure outranks everything", false, "no docker", "boom", harnessFailTest},
-			{"nothing up and no failure is a skip", false, "no docker", "", harnessSkipTest},
-			{"a live dependency proceeds", true, "", "", harnessProceed},
+			{"a failure outranks everything", false, "no docker", "boom", dockertest.FailTest},
+			{"nothing up and no failure is a skip", false, "no docker", "", dockertest.SkipTest},
+			{"a live dependency proceeds", true, "", "", dockertest.Proceed},
 		} {
-			if got := harnessNeed(tc.up, tc.skip, tc.failure); got != tc.want {
-				t.Errorf("%s: harnessNeed(%v, %q, %q) = %d, want %d",
+			if got := dockertest.Need(tc.up, tc.skip, tc.failure); got != tc.want {
+				t.Errorf("%s: dockertest.Need(%v, %q, %q) = %d, want %d",
 					tc.name, tc.up, tc.skip, tc.failure, got, tc.want)
 			}
 		}

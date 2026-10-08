@@ -158,36 +158,6 @@ func TestExtractRequestFactsOverCapLeavesFactsEmptyButForwards(t *testing.T) {
 	}
 }
 
-// TestRequestFactsGuardAttachesFactsToContext: the Guard never refuses, and
-// hands the next Guard or observer facts through the context, the same
-// pattern harness.go's HarnessGuard already uses for Identification.
-func TestRequestFactsGuardAttachesFactsToContext(t *testing.T) {
-	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
-	req := newFactsRequest(t, body)
-
-	guard := NewRequestFactsGuard()
-	next, refusal := guard.Check(req)
-	if refusal != nil {
-		t.Fatalf("RequestFactsGuard refused: %+v", refusal)
-	}
-	if next == nil {
-		t.Fatal("RequestFactsGuard returned a nil request with no refusal")
-	}
-
-	facts, ok := RequestFactsFromContext(next.Context())
-	if !ok {
-		t.Fatal("no RequestFacts attached to the returned request's context")
-	}
-	if facts.Brief != "hello" {
-		t.Fatalf("Brief = %q, want %q", facts.Brief, "hello")
-	}
-
-	got, err := io.ReadAll(next.Body)
-	if err != nil || string(got) != string(body) {
-		t.Fatalf("restored body mismatch: err=%v got=%q want=%q", err, got, body)
-	}
-}
-
 // TestWithRequestFactsRoundTrip and TestRequestFactsFromContextAbsent cover
 // the context helpers directly.
 func TestWithRequestFactsRoundTrip(t *testing.T) {
