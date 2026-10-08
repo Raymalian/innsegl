@@ -281,8 +281,8 @@ func appendToolCall(ctx context.Context, runs CredentialRuns, lg toolCallLedger,
 		return nil, err
 	}
 	if tc.bodyDir != "" {
-		if err := observeWriteBody(tc.bodyDir, tc.runID, tc.digest, tc.body); err != nil {
-			return nil, err
+		if werr := observeWriteBody(tc.bodyDir, tc.runID, tc.digest, tc.body); werr != nil {
+			return nil, werr
 		}
 	}
 	record, err := lg.Append(ctx, toolCallBody(run.RunID, spiffeID, tc))

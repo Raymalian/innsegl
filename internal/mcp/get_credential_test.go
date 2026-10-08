@@ -1193,7 +1193,7 @@ func TestConfigureGetCredentialRefusesAHalfWiredServer(t *testing.T) {
 		t.Fatalf("ConfigureGetCredential refused a complete config: %v", err)
 	}
 	svc := installed(&active.credential)
-	defer install(&active.credential, nil)
+	defer func() { install(&active.credential, nil) }()
 	if svc == nil {
 		t.Fatalf("a complete config was not installed")
 	}
