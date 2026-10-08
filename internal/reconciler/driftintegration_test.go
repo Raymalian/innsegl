@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/reconciler"
@@ -239,7 +240,7 @@ func TestREC003AndREC004AgainstARealRekorAndARealSignature(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), driftIntegrationTimeout)
 	defer cancel()
 
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		requireStartup(t, err, "REC-004 is the claim that a compromised MCP cannot "+
 			"forge attribution; a mocked Rekor cannot prove it — IP §2.")
 	}

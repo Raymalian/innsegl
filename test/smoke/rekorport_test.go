@@ -8,6 +8,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // ---------------------------------------------------------------------------
@@ -82,24 +84,24 @@ func TestOPS014RekorPortConflictDecidesFromDockerPS(t *testing.T) {
 
 func TestOPS015AssertRekorPortIsOursNamesARealOccupier(t *testing.T) {
 	ctx := t.Context()
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		t.Skipf("skipping OPS-015: %v", err)
 	}
 
-	port, err := freeHostPort(ctx)
+	port, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		t.Fatalf("choosing a port to squat on: %v", err)
 	}
 
 	const decoy = "innsegl-smoke-ops015-decoy"
-	dockerIgnore(docker(ctx, "rm", "--force", decoy)) // in case a previous run of this test was killed mid-way
-	if _, runErr := docker(ctx, "run", "-d", "--name", decoy,
+	dockerIgnore(dockertest.Docker(ctx, "rm", "--force", decoy)) // in case a previous run of this test was killed mid-way
+	if _, runErr := dockertest.Docker(ctx, "run", "-d", "--name", decoy,
 		"--publish", "127.0.0.1:"+port+":80",
 		"--entrypoint", "sleep",
 		runnerImage, "60"); runErr != nil {
 		t.Fatalf("starting a decoy container on port %s: %v", port, runErr)
 	}
-	t.Cleanup(func() { dockerIgnore(docker(context.Background(), "rm", "--force", decoy)) })
+	t.Cleanup(func() { dockerIgnore(dockertest.Docker(context.Background(), "rm", "--force", decoy)) })
 
 	s := &stack{rekorPort: port}
 	err = s.assertRekorPortIsOurs(ctx)

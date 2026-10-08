@@ -6,9 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,6 +14,8 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // A real object store with object lock, never a mock.
@@ -30,7 +30,7 @@ import (
 //
 // Without Docker these tests skip with a message naming what was not proven,
 // rather than passing quietly. With Docker present and the object store
-// refusing to start, they FAIL — see errDependencyAbsent.
+// refusing to start, they FAIL — see dockertest.ErrDependencyAbsent.
 
 const (
 	// defaultObjectStoreImage is pinned to a release digest rather than
@@ -69,121 +69,11 @@ const (
 
 var bucketSeq atomic.Int64
 
-// ---------------------------------------------------------------------------
-// #126: a failed dependency is not a skip.
-//
-// errDependencyAbsent marks the ONLY conditions under which skipping this
-// package's WORM cases is honest: there is no Docker daemon, or
-// INNSEGL_TEST_NO_DOCKER asks for none. Nothing else wraps it, and that
-// distinction is the point.
-//
-// Everything else that can go wrong bringing the object store up — a port that
-// cannot be reserved, an image that will not resolve, an exhausted Docker
-// address pool, a server that never becomes ready — happens on a machine that
-// HAS Docker, and is a FAILURE. Reporting one as a skip turns it into a
-// pass-shaped outcome: `go test` exits zero, the package reports ok, and
-// SEG-005's deletion canary — the control that proves WORM refuses deletion —
-// never asked. #101 fixed this in nine harnesses; this package was outside
-// that issue's ownership and kept it until #126.
-//
-// Both branches are exercised by
-// TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure.
-// ---------------------------------------------------------------------------
-var errDependencyAbsent = errors.New("a required dependency is absent")
-
-// startupOutcome routes a start-up error to exactly one of two outcomes.
-func startupOutcome(err error) (skip, failure string) {
-	switch {
-	case err == nil:
-		return "", ""
-	case errors.Is(err, errDependencyAbsent):
-		return err.Error(), ""
-	default:
-		return "", err.Error()
-	}
-}
-
-// harnessRequirement is what requireObjectStore must do for the calling test.
-type harnessRequirement int
-
-const (
-	harnessProceed harnessRequirement = iota
-	harnessSkipTest
-	harnessFailTest
-)
-
-// harnessNeed decides between the three. A failure outranks a skip: if the
-// dependency broke, the reason it broke is what the developer needs to read.
-func harnessNeed(up bool, skip, failure string) harnessRequirement {
-	switch {
-	case failure != "":
-		return harnessFailTest
-	case !up:
-		return harnessSkipTest
-	default:
-		return harnessProceed
-	}
-}
-
-// oneLine collapses a multi-line subprocess error into a single line.
-//
-// docker writes progress and diagnostics across several lines, and Go's test
-// JSON stream emits each line as its own event, so in a summary only the first
-// survives. The CI failure that prompted #101 read "Network ... Creating"
-// while the line naming the fault never appeared; a `docker run` against an
-// unresolvable tag reads "Unable to find image ... locally" while "failed to
-// resolve reference" is on the line after it.
-func oneLine(s string) string {
-	return strings.Join(strings.Fields(s), " ")
-}
-
 func objectStoreImage() string {
 	if v := os.Getenv("INNSEGL_TEST_OBJECT_STORE_IMAGE"); v != "" {
 		return v
 	}
 	return defaultObjectStoreImage
-}
-
-// dockerCmd runs one docker command and returns its trimmed stdout.
-func dockerCmd(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(args, " "), err, oneLine(stderr.String()))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// dockerUsable reports whether a docker daemon is reachable. Its errors are
-// the ONLY ones here wrapped as an absent dependency.
-func dockerUsable(ctx context.Context) error {
-	if os.Getenv("INNSEGL_TEST_NO_DOCKER") != "" {
-		return fmt.Errorf("INNSEGL_TEST_NO_DOCKER is set: %w", errDependencyAbsent)
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker is not on PATH: %w: %w", err, errDependencyAbsent)
-	}
-	if _, err := dockerCmd(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
-		return fmt.Errorf("no reachable docker daemon: %w: %w", err, errDependencyAbsent)
-	}
-	return nil
-}
-
-// freeHostPort reserves an ephemeral port and hands it back.
-func freeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
 }
 
 // objectStoreContainer is one containerised object store.
@@ -215,7 +105,7 @@ type objectStoreContainer struct {
 // port is not published here either way.
 //
 // Every error it returns is a fault on a machine that has Docker; none of them
-// wrap errDependencyAbsent.
+// wrap dockertest.ErrDependencyAbsent.
 //
 // There is no TestMain here on purpose. internal/segment already re-executes
 // its own test binary as a child process for the SEG-002 crash matrix
@@ -224,7 +114,7 @@ type objectStoreContainer struct {
 // unambiguous.
 func startObjectStore(ctx context.Context) (*objectStoreContainer, error) {
 	image := objectStoreImage()
-	port, err := freeHostPort(ctx)
+	port, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reserve a host port: %w", err)
 	}
@@ -236,7 +126,7 @@ func startObjectStore(ctx context.Context) (*objectStoreContainer, error) {
 	// -s3.port.lance=0 a Lance namespace server. None of them is part of
 	// storing a sealed segment, and each is an authenticated write surface on
 	// a service whose entire job here is refusing writes to sealed objects.
-	id, err := dockerCmd(ctx, "run", "--detach",
+	id, err := dockertest.Docker(ctx, "run", "--detach",
 		"--publish", "127.0.0.1:"+port+":8333",
 		"--env", "INNSEGL_S3_IDENTITIES="+storeIdentities,
 		"--entrypoint", "sh",
@@ -302,7 +192,7 @@ func (c *objectStoreContainer) waitReady(ctx context.Context, timeout time.Durat
 func (c *objectStoreContainer) remove() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	_, err := dockerCmd(ctx, "rm", "--force", "--volumes", c.id)
+	_, err := dockertest.Docker(ctx, "rm", "--force", "--volumes", c.id)
 	return err
 }
 
@@ -317,25 +207,25 @@ func requireObjectStore(t *testing.T) *objectStoreContainer {
 	defer cancel()
 
 	var c *objectStoreContainer
-	skip, failure := startupOutcome(dockerUsable(ctx))
+	skip, failure := dockertest.StartupOutcome(dockertest.Usable(ctx))
 	if skip == "" && failure == "" {
 		var err error
 		c, err = startObjectStore(ctx)
-		skip, failure = startupOutcome(err)
+		skip, failure = dockertest.StartupOutcome(err)
 	}
 
-	switch harnessNeed(c != nil, skip, failure) {
-	case harnessFailTest:
+	switch dockertest.Need(c != nil, skip, failure) {
+	case dockertest.FailTest:
 		t.Fatalf("the WORM harness's object store did not come up, and Docker is "+
 			"present and working: %s\n\nThis is a FAILURE and not a skip (#126): an "+
 			"infrastructure fault reported as a skip exits zero and reports ok while "+
 			"SEG-005's deletion canary — the control that proves WORM refuses a "+
 			"deletion — never asked.", failure)
-	case harnessSkipTest:
+	case dockertest.SkipTest:
 		t.Skipf("skipping: no real object store (%s). "+
 			"This test proves nothing about WORM without one; "+
 			"start Docker, or set INNSEGL_TEST_OBJECT_STORE_IMAGE, and re-run.", skip)
-	case harnessProceed:
+	case dockertest.Proceed:
 	}
 
 	t.Cleanup(func() {
@@ -405,15 +295,15 @@ func setBucketRetention(t *testing.T, c *objectStoreContainer, bucket string, mo
 func TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 	t.Run("no docker is a skip", func(t *testing.T) {
 		t.Setenv("INNSEGL_TEST_NO_DOCKER", "1")
-		err := dockerUsable(t.Context())
+		err := dockertest.Usable(t.Context())
 		if err == nil {
 			t.Fatal("dockerUsable answered nil with INNSEGL_TEST_NO_DOCKER set")
 		}
-		if !errors.Is(err, errDependencyAbsent) {
-			t.Fatalf("%v does not wrap errDependencyAbsent, so it would be routed to a "+
+		if !errors.Is(err, dockertest.ErrDependencyAbsent) {
+			t.Fatalf("%v does not wrap dockertest.ErrDependencyAbsent, so it would be routed to a "+
 				"FAILURE and a developer with no Docker could not run this package", err)
 		}
-		skip, failure := startupOutcome(err)
+		skip, failure := dockertest.StartupOutcome(err)
 		if skip == "" || failure != "" {
 			t.Fatalf("startupOutcome(%v) = (%q, %q), want a skip and no failure", err, skip, failure)
 		}
@@ -427,11 +317,11 @@ func TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 			errors.New("Error response from daemon: could not find an available, "+
 				"non-overlapping IPv4 address pool among the defaults to assign "+
 				"to the network"))
-		if errors.Is(err, errDependencyAbsent) {
-			t.Fatal("an exhausted Docker address pool wraps errDependencyAbsent; it would " +
+		if errors.Is(err, dockertest.ErrDependencyAbsent) {
+			t.Fatal("an exhausted Docker address pool wraps dockertest.ErrDependencyAbsent; it would " +
 				"be reported as a skip and SEG-005's deletion canary would silently not run")
 		}
-		skip, failure := startupOutcome(err)
+		skip, failure := dockertest.StartupOutcome(err)
 		if failure == "" || skip != "" {
 			t.Fatalf("startupOutcome(%v) = (%q, %q), want a failure and no skip", err, skip, failure)
 		}
@@ -443,17 +333,17 @@ func TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 		err := fmt.Errorf("starting %s: %w: %s", "chrislusf/seaweedfs:NO-SUCH-TAG",
 			errors.New("exit status 125"),
 			"docker: Error response from daemon: failed to resolve reference: not found")
-		if errors.Is(err, errDependencyAbsent) {
-			t.Fatal("an unresolvable image wraps errDependencyAbsent; it would be reported " +
+		if errors.Is(err, dockertest.ErrDependencyAbsent) {
+			t.Fatal("an unresolvable image wraps dockertest.ErrDependencyAbsent; it would be reported " +
 				"as a skip and the package would report ok having proved nothing about WORM")
 		}
-		if _, failure := startupOutcome(err); failure == "" {
+		if _, failure := dockertest.StartupOutcome(err); failure == "" {
 			t.Fatalf("startupOutcome(%v) routed an unresolvable image somewhere other than a failure", err)
 		}
 	})
 
 	t.Run("a healthy start-up is neither", func(t *testing.T) {
-		if skip, failure := startupOutcome(nil); skip != "" || failure != "" {
+		if skip, failure := dockertest.StartupOutcome(nil); skip != "" || failure != "" {
 			t.Fatalf("startupOutcome(nil) = (%q, %q), want both empty", skip, failure)
 		}
 	})
@@ -463,14 +353,14 @@ func TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 			name          string
 			up            bool
 			skip, failure string
-			want          harnessRequirement
+			want          dockertest.Requirement
 		}{
-			{"a failure outranks everything", false, "no docker", "boom", harnessFailTest},
-			{"nothing up and no failure is a skip", false, "no docker", "", harnessSkipTest},
-			{"a live dependency proceeds", true, "", "", harnessProceed},
+			{"a failure outranks everything", false, "no docker", "boom", dockertest.FailTest},
+			{"nothing up and no failure is a skip", false, "no docker", "", dockertest.SkipTest},
+			{"a live dependency proceeds", true, "", "", dockertest.Proceed},
 		} {
-			if got := harnessNeed(tc.up, tc.skip, tc.failure); got != tc.want {
-				t.Errorf("%s: harnessNeed(%v, %q, %q) = %d, want %d",
+			if got := dockertest.Need(tc.up, tc.skip, tc.failure); got != tc.want {
+				t.Errorf("%s: dockertest.Need(%v, %q, %q) = %d, want %d",
 					tc.name, tc.up, tc.skip, tc.failure, got, tc.want)
 			}
 		}
@@ -514,7 +404,7 @@ func TestHAR010AnAbsentDependencyIsASkipAndAFaultIsAFailure(t *testing.T) {
 		raw := "Unable to find image 'chrislusf/seaweedfs:NO-SUCH-TAG' locally\n" +
 			"docker: Error response from daemon: failed to resolve reference\n\n" +
 			"Run 'docker run --help' for more information.\n"
-		got := oneLine(raw)
+		got := dockertest.OneLine(raw)
 		if strings.Contains(got, "\n") {
 			t.Fatalf("oneLine left a newline in %q", got)
 		}

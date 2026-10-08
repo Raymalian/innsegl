@@ -13,6 +13,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
@@ -51,7 +52,7 @@ func TestADP015AnAdoptionEndToEndOnARealStack(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		requireStartup(t, err, "ADP-015 proves adoption against a real signature and a real log; "+
 			"a mocked Fulcio proves nothing about I5.")
 	}

@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // ---------------------------------------------------------------------------
@@ -91,7 +93,7 @@ var trustVolumeKeys = []string{
 
 func TestOPS031TeardownRefusesToDestroyTheTrustRoot(t *testing.T) {
 	ctx := t.Context()
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		t.Skipf("skipping OPS-031: %v. A refusal nobody has watched happen is "+
 			"not known to work, so this runs a real `docker compose down -v` "+
 			"against a real project rather than a parsed command line", err)
@@ -132,11 +134,11 @@ volumes:
 	t.Cleanup(func() {
 		//nolint:usetesting // cleanup must outlive the test's cancelled context
 		c := context.Background()
-		discardError(docker(c, "compose", "-f", filepath.Join(dir, "compose.yml"), "down", "-v"))
-		discardError(docker(c, "volume", "rm", "--force", protectedVol, otherVol, scratchVol))
+		discardError(dockertest.Docker(c, "compose", "-f", filepath.Join(dir, "compose.yml"), "down", "-v"))
+		discardError(dockertest.Docker(c, "volume", "rm", "--force", protectedVol, otherVol, scratchVol))
 	})
 
-	if out, err := docker(ctx, "compose", "-f", filepath.Join(dir, "compose.yml"), "up", "-d"); err != nil {
+	if out, err := dockertest.Docker(ctx, "compose", "-f", filepath.Join(dir, "compose.yml"), "up", "-d"); err != nil {
 		t.Fatalf("bringing the throwaway project up: %v\n%s", err, out)
 	}
 
@@ -167,7 +169,7 @@ volumes:
 		t.Errorf("%s is gone after a REFUSED teardown: the guard let the command "+
 			"run and then complained, which is not a gate", scratchVol)
 	}
-	if ids, err := docker(ctx, "compose", "-f", filepath.Join(dir, "compose.yml"), "ps", "-q"); err != nil || ids == "" {
+	if ids, err := dockertest.Docker(ctx, "compose", "-f", filepath.Join(dir, "compose.yml"), "ps", "-q"); err != nil || ids == "" {
 		t.Errorf("the containers are gone after a REFUSED teardown (%v): a refusal "+
 			"that still stops the stack is a teardown with a rude message", err)
 	}
@@ -239,14 +241,14 @@ volumes:
 // compose would be guarding the door nobody uses.
 func TestOPS031RefusesRemovalByName(t *testing.T) {
 	ctx := t.Context()
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		t.Skipf("skipping OPS-031 (by name): %v", err)
 	}
 	root := repoRoot(t)
 	guard := filepath.Join(root, "scripts", "teardown-guard.sh")
 
 	name := uniqueName(t, "innsegl-guardtest") + "-fulcio-pki"
-	if _, err := docker(ctx, "volume", "create",
+	if _, err := dockertest.Docker(ctx, "volume", "create",
 		"--label", "dev.innsegl.trust-root=the Fulcio CA key",
 		"--label", "dev.innsegl.deployment=ops031",
 		name); err != nil {
@@ -254,7 +256,7 @@ func TestOPS031RefusesRemovalByName(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		//nolint:usetesting // cleanup must outlive the test's cancelled context
-		discardError(docker(context.Background(), "volume", "rm", "--force", name))
+		discardError(dockertest.Docker(context.Background(), "volume", "rm", "--force", name))
 	})
 
 	out, code := run(t, guard, nil, "docker", "volume", "rm", name)
@@ -285,7 +287,7 @@ func TestOPS031RefusesRemovalByName(t *testing.T) {
 
 func TestOPS032TheIrreplaceableVolumesAreExternal(t *testing.T) {
 	ctx := t.Context()
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		t.Skipf("skipping OPS-032: %v", err)
 	}
 	root := repoRoot(t)
@@ -357,7 +359,7 @@ func TestOPS032TheIrreplaceableVolumesAreExternal(t *testing.T) {
 	dir := t.TempDir()
 	external := project + "-external"
 	local := project + "-local"
-	if _, err := docker(ctx, "volume", "create", external); err != nil {
+	if _, err := dockertest.Docker(ctx, "volume", "create", external); err != nil {
 		t.Fatalf("creating the external volume: %v", err)
 	}
 	writeFile(t, filepath.Join(dir, "compose.yml"), fmt.Sprintf(`name: %s
@@ -378,17 +380,17 @@ volumes:
 	t.Cleanup(func() {
 		//nolint:usetesting // cleanup must outlive the test's cancelled context
 		c := context.Background()
-		discardError(docker(c, "compose", "-f", filepath.Join(dir, "compose.yml"), "down", "-v"))
-		discardError(docker(c, "volume", "rm", "--force", external, local))
+		discardError(dockertest.Docker(c, "compose", "-f", filepath.Join(dir, "compose.yml"), "down", "-v"))
+		discardError(dockertest.Docker(c, "volume", "rm", "--force", external, local))
 	})
 
-	if out, err := docker(ctx, "compose", "-f", filepath.Join(dir, "compose.yml"), "up", "-d", "--wait"); err != nil {
+	if out, err := dockertest.Docker(ctx, "compose", "-f", filepath.Join(dir, "compose.yml"), "up", "-d", "--wait"); err != nil {
 		t.Logf("up --wait: %v\n%s", err, out)
 	}
 	if got := readMark(ctx, external); got != "trust-root" {
 		t.Fatalf("the external volume never got its mark: %q", got)
 	}
-	if out, err := docker(ctx, "compose", "-f", filepath.Join(dir, "compose.yml"), "down", "-v"); err != nil {
+	if out, err := dockertest.Docker(ctx, "compose", "-f", filepath.Join(dir, "compose.yml"), "down", "-v"); err != nil {
 		t.Fatalf("down -v: %v\n%s", err, out)
 	}
 	if volumeExists(ctx, local) {
@@ -409,7 +411,7 @@ volumes:
 
 func TestOPS033TrustVolumesAreCreatedAndNeverAdopted(t *testing.T) {
 	ctx := t.Context()
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		t.Skipf("skipping OPS-033: %v", err)
 	}
 	root := repoRoot(t)
@@ -429,7 +431,7 @@ func TestOPS033TrustVolumesAreCreatedAndNeverAdopted(t *testing.T) {
 		//nolint:usetesting // cleanup must outlive the test's cancelled context
 		c := context.Background()
 		for _, n := range names {
-			discardError(docker(c, "volume", "rm", "--force", n))
+			discardError(dockertest.Docker(c, "volume", "rm", "--force", n))
 		}
 	})
 
@@ -475,10 +477,10 @@ func TestOPS033TrustVolumesAreCreatedAndNeverAdopted(t *testing.T) {
 
 	// --- 3. another deployment's volume is refused, not adopted ------------
 	foreign := names[1]
-	if _, err := docker(ctx, "volume", "rm", "--force", foreign); err != nil {
+	if _, err := dockertest.Docker(ctx, "volume", "rm", "--force", foreign); err != nil {
 		t.Fatalf("removing %s to re-create it under a foreign stamp: %v", foreign, err)
 	}
-	if _, err := docker(ctx, "volume", "create",
+	if _, err := dockertest.Docker(ctx, "volume", "create",
 		"--label", "dev.innsegl.trust-root=the Fulcio CA key",
 		"--label", "dev.innsegl.deployment=some-other-deployment",
 		foreign); err != nil {
@@ -511,7 +513,7 @@ func TestOPS033TrustVolumesAreCreatedAndNeverAdopted(t *testing.T) {
 // of the test's own instead.
 func TestOPS033EnsureMigratesAnEmptyDestination(t *testing.T) {
 	ctx := t.Context()
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		t.Skipf("skipping OPS-033 (migration): %v", err)
 	}
 	ensure := filepath.Join(repoRoot(t), "deploy", "compose", "trust-volumes.sh")
@@ -521,16 +523,16 @@ func TestOPS033EnsureMigratesAnEmptyDestination(t *testing.T) {
 	dest := prefix + "-fulcio-pki"
 	src := legacy + "-fulcio-pki"
 
-	if _, err := docker(ctx, "volume", "create", src); err != nil {
+	if _, err := dockertest.Docker(ctx, "volume", "create", src); err != nil {
 		t.Fatalf("creating the legacy volume: %v", err)
 	}
-	if out, err := docker(ctx, "run", "--rm", "--volume", src+":/d", "alpine:3.20",
+	if out, err := dockertest.Docker(ctx, "run", "--rm", "--volume", src+":/d", "alpine:3.20",
 		"sh", "-c", "echo the-ca-key > /d/mark"); err != nil {
 		t.Fatalf("seeding the legacy volume: %v\n%s", err, out)
 	}
 	// The destination already exists and is empty: the state a refused
 	// migration leaves behind.
-	if _, err := docker(ctx, "volume", "create", dest); err != nil {
+	if _, err := dockertest.Docker(ctx, "volume", "create", dest); err != nil {
 		t.Fatalf("creating the empty destination: %v", err)
 	}
 	t.Cleanup(func() {
@@ -539,7 +541,7 @@ func TestOPS033EnsureMigratesAnEmptyDestination(t *testing.T) {
 		for _, n := range []string{src, dest, prefix + "-ledger-data",
 			prefix + "-identity-secret", prefix + "-rekor-key", prefix + "-trillian-db",
 			prefix + "-history"} {
-			discardError(docker(c, "volume", "rm", "--force", n))
+			discardError(dockertest.Docker(c, "volume", "rm", "--force", n))
 		}
 	})
 
@@ -788,12 +790,12 @@ func run(t *testing.T, script string, env []string, args ...string) (string, int
 }
 
 func volumeExists(ctx context.Context, name string) bool {
-	_, err := docker(ctx, "volume", "inspect", name)
+	_, err := dockertest.Docker(ctx, "volume", "inspect", name)
 	return err == nil
 }
 
 func volumeLabel(ctx context.Context, name, label string) string {
-	out, err := docker(ctx, "volume", "inspect", name,
+	out, err := dockertest.Docker(ctx, "volume", "inspect", name,
 		"--format", "{{index .Labels \""+label+"\"}}")
 	if err != nil {
 		return ""
@@ -806,7 +808,7 @@ func volumeLabel(ctx context.Context, name, label string) string {
 
 // readMark reads /d/mark out of a volume with a throwaway container.
 func readMark(ctx context.Context, volume string) string {
-	out, err := docker(ctx, "run", "--rm", "--volume", volume+":/d",
+	out, err := dockertest.Docker(ctx, "run", "--rm", "--volume", volume+":/d",
 		"alpine:3.20", "cat", "/d/mark")
 	if err != nil {
 		return ""

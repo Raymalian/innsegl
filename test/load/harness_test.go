@@ -4,12 +4,9 @@ package load
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -19,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // The real stack, never a mock.
@@ -40,7 +39,7 @@ import (
 // zero and print `ok` while the case that carries the evidence never ran.
 //
 // So this harness routes them apart, in the shape internal/verify and
-// internal/api corrected to: errDependencyAbsent is wrapped ONLY by the
+// internal/api corrected to: dockertest.ErrDependencyAbsent is wrapped ONLY by the
 // genuinely-absent conditions, everything else lands in stackFailure, and
 // requireStack calls t.Fatalf on it. Both branches are exercised by
 // harnesshonesty_test.go, because a routing rule nothing exercises is a
@@ -50,7 +49,6 @@ const (
 	// Pinned images. The versions are part of the evidence: a throughput
 	// number and a bytes-per-event number are both properties of the server
 	// that produced them, and ADR-0039 quotes these tags beside the numbers.
-	defaultPostgresImage = "postgres:16"
 	// The object store changed in RM-143 (#227): the previous one was archived
 	// upstream and delisted from the registry this file pulled it from, so the
 	// pin stopped resolving at all. The replacement was measured against
@@ -102,14 +100,6 @@ const (
 	rekorOrigin = "rekor.innsegl.test"
 )
 
-// errDependencyAbsent marks the only condition under which skipping OPS-002 is
-// honest: there is no Docker daemon. On a developer's machine that is a
-// legitimate reason not to run a test that needs eight containers.
-//
-// A container that would not start on a machine that HAS Docker is not one of
-// them. See the file comment.
-var errDependencyAbsent = errors.New("a required dependency is absent")
-
 var (
 	sharedStack  *stack
 	stackSkip    string
@@ -124,59 +114,17 @@ func envImage(name, fallback string) string {
 	return fallback
 }
 
-func postgresImage() string { return envImage("INNSEGL_TEST_POSTGRES_IMAGE", defaultPostgresImage) }
-func rekorImage() string    { return envImage("INNSEGL_TEST_REKOR_IMAGE", defaultRekorImage) }
+func rekorImage() string { return envImage("INNSEGL_TEST_REKOR_IMAGE", defaultRekorImage) }
 
 func objectStoreImage() string {
 	return envImage("INNSEGL_TEST_OBJECT_STORE_IMAGE", defaultObjectStoreImage)
 }
 
-// docker runs one docker command and returns its trimmed stdout.
-func docker(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("docker %s: %w: %s",
-			strings.Join(args, " "), err, oneLine(stderr.String()))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// oneLine collapses a multi-line subprocess error into a single line, so that
-// Go's test JSON stream does not scatter the cause across events and show only
-// the first progress line.
-func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
-
 // dependenciesPresent reports the absence of a dependency, and nothing else.
-// Every error it returns wraps errDependencyAbsent; no other function in this
-// harness does.
+// Every error it returns wraps dockertest.ErrDependencyAbsent; no other function in
+// this harness does.
 func dependenciesPresent(ctx context.Context) error {
-	if os.Getenv("INNSEGL_TEST_NO_DOCKER") != "" {
-		return fmt.Errorf("INNSEGL_TEST_NO_DOCKER is set: %w", errDependencyAbsent)
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker is not on PATH: %w: %w", err, errDependencyAbsent)
-	}
-	if _, err := docker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
-		return fmt.Errorf("no reachable docker daemon: %w: %w", err, errDependencyAbsent)
-	}
-	return nil
-}
-
-// startupOutcome routes a TestMain start-up error into exactly one of the two
-// buckets. It is a named function rather than an inline `if` so that both of
-// its branches can be exercised by a test — the #101 defect was a branch
-// nothing measured.
-func startupOutcome(err error) (skip, failure string) {
-	if err == nil {
-		return "", ""
-	}
-	if errors.Is(err, errDependencyAbsent) {
-		return err.Error(), ""
-	}
-	return "", err.Error()
+	return dockertest.Usable(ctx)
 }
 
 // requirement is what requireStack must do for the calling test.
@@ -235,7 +183,7 @@ func (s *stack) objectStoreClient() (*minio.Client, error) {
 // run starts one detached container on the stack's network and remembers it.
 func (s *stack) run(ctx context.Context, name string, args ...string) error {
 	full := append([]string{"run", "--detach", "--name", name, "--network", s.network}, args...)
-	id, err := docker(ctx, full...)
+	id, err := dockertest.Docker(ctx, full...)
 	if err != nil {
 		return err
 	}
@@ -252,29 +200,16 @@ func (s *stack) stop() []error {
 
 	var errs []error
 	for i := len(s.containers) - 1; i >= 0; i-- {
-		if _, err := docker(ctx, "rm", "--force", "--volumes", s.containers[i]); err != nil {
+		if _, err := dockertest.Docker(ctx, "rm", "--force", "--volumes", s.containers[i]); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	if s.network != "" {
-		if _, err := docker(ctx, "network", "rm", s.network); err != nil {
+		if _, err := dockertest.Docker(ctx, "network", "rm", s.network); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errs
-}
-
-func freeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
 }
 
 // One network for the whole stack, not one per service.
@@ -289,7 +224,7 @@ func startStack(ctx context.Context) (*stack, error) {
 	suffix := fmt.Sprintf("%d-%d", os.Getpid(), nameSeq.Add(1))
 	s := &stack{network: "innsegl-load-" + suffix}
 
-	if _, err := docker(ctx, "network", "create", s.network); err != nil {
+	if _, err := dockertest.Docker(ctx, "network", "create", s.network); err != nil {
 		return s, fmt.Errorf("create network: %w", err)
 	}
 	if err := s.recordHostFacts(ctx); err != nil {
@@ -312,7 +247,7 @@ func startStack(ctx context.Context) (*stack, error) {
 // not a measurement, so the machine is read from the daemon rather than
 // assumed.
 func (s *stack) recordHostFacts(ctx context.Context) error {
-	out, err := docker(ctx, "info", "--format",
+	out, err := dockertest.Docker(ctx, "info", "--format",
 		"{{.ServerVersion}}\t{{.OperatingSystem}}\t{{.NCPU}}\t{{.MemTotal}}")
 	if err != nil {
 		return fmt.Errorf("read docker host facts: %w", err)
@@ -326,7 +261,7 @@ func (s *stack) recordHostFacts(ctx context.Context) error {
 }
 
 func (s *stack) startPostgres(ctx context.Context, suffix string) error {
-	port, err := freeHostPort(ctx)
+	port, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return fmt.Errorf("reserve a host port for postgres: %w", err)
 	}
@@ -340,9 +275,9 @@ func (s *stack) startPostgres(ctx context.Context, suffix string) error {
 		// number about a database that can lose an acknowledged append, which
 		// is not the database this project ships and not the one doc 05 §4 is
 		// being sized for.
-		postgresImage(), "-c", "fsync=on",
+		dockertest.PostgresImage(), "-c", "fsync=on",
 	); err != nil {
-		return fmt.Errorf("start %s: %w", postgresImage(), err)
+		return fmt.Errorf("start %s: %w", dockertest.PostgresImage(), err)
 	}
 	return s.waitForPostgres(ctx, 2*time.Minute)
 }
@@ -380,7 +315,7 @@ func (s *stack) waitForPostgres(ctx context.Context, timeout time.Duration) erro
 // networks exist. Running three containers here would cost three more on a
 // machine #100 already has arithmetic about and would move no number.
 func (s *stack) startObjectStore(ctx context.Context, suffix string) error {
-	port, err := freeHostPort(ctx)
+	port, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return fmt.Errorf("reserve a host port for the object store: %w", err)
 	}
@@ -447,7 +382,7 @@ func (s *stack) waitForObjectStore(ctx context.Context, timeout time.Duration) e
 // upstream Rekor's own compose reference; OPS-002 anchors against the same log
 // SEG-003 does so that "the segment anchored" means the same thing in both.
 func (s *stack) startRekor(ctx context.Context, suffix string) error {
-	port, err := freeHostPort(ctx)
+	port, err := dockertest.FreeHostPort(ctx)
 	if err != nil {
 		return fmt.Errorf("reserve a host port for rekor: %w", err)
 	}
@@ -529,7 +464,7 @@ func (s *stack) waitForTrillianSchema(ctx context.Context, container string, tim
 	var last error
 	for time.Now().Before(deadline) {
 		attempt, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_, err := docker(attempt, "exec", container,
+		_, err := dockertest.Docker(attempt, "exec", container,
 			"mysql", "--protocol=TCP", "--host=127.0.0.1", "--port=3306",
 			"-u"+trillianDBUser, "-p"+trillianDBPassword,
 			"-e", "SELECT 1 FROM "+trillianDBName+".Trees LIMIT 1")
@@ -569,13 +504,13 @@ func (s *stack) waitForRekor(ctx context.Context, timeout time.Duration) error {
 func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	if err := dependenciesPresent(ctx); err != nil {
-		stackSkip, stackFailure = startupOutcome(err)
+		stackSkip, stackFailure = dockertest.StartupOutcome(err)
 	} else if s, err := startStack(ctx); err != nil {
 		// Docker answered a moment ago and the stack still did not come up.
 		// That is an infrastructure fault, and startupOutcome sends it to
 		// stackFailure precisely because reporting it as a skip is what #101
 		// was.
-		stackSkip, stackFailure = startupOutcome(
+		stackSkip, stackFailure = dockertest.StartupOutcome(
 			fmt.Errorf("the OPS-002 stack did not come up: %w", err))
 		if s != nil {
 			for _, serr := range s.stop() {

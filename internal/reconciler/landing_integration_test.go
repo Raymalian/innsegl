@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"innsegl.dev/innsegl/internal/dockertest"
 	"innsegl.dev/innsegl/internal/event"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/reconciler"
@@ -213,7 +214,7 @@ func TestCMT015NConcurrentIdenticalCommitsOneLands(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), driftIntegrationTimeout)
 	defer cancel()
 
-	if err := dockerUsable(ctx); err != nil {
+	if err := dockertest.Usable(ctx); err != nil {
 		requireStartup(t, err, "CMT-015 is the claim that a lost ref race is landing's own "+
 			"derived report and never REC-004's drift alert -- against a mocked Rekor this "+
 			"proves nothing about I5 (IP §2).")
