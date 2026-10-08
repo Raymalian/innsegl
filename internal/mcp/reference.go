@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"innsegl.dev/innsegl/reference"
 )
 
 // ReferenceURIPrefix is the scheme the reference pages are offered under:
@@ -29,13 +31,22 @@ const referenceMIMEType = "text/markdown"
 // They carry no secrets: the same pages ship in the public repository. On a
 // listener that requires a credential they sit behind it like everything else.
 
-// addReference offers every *.md page in pages as one resource.
+// referenceFS is the page set New offers; a test swaps in one that fails.
+var referenceFS fs.FS = reference.Pages
+
+// addReference offers every *.md page in pages as one resource. The SDK
+// routes a read to the handler of the resource whose URI it names, and
+// answers any other URI with its own not-found error (MCP-103).
 func addReference(s *sdk.Server, pages fs.FS) error {
-	names, err := fs.Glob(pages, "*.md")
+	entries, err := fs.ReadDir(pages, ".")
 	if err != nil {
 		return fmt.Errorf("reference pages: %w", err)
 	}
-	for _, name := range names {
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".md") {
+			continue
+		}
 		body, err := fs.ReadFile(pages, name)
 		if err != nil {
 			return fmt.Errorf("reference page %s: %w", name, err)
@@ -53,10 +64,7 @@ func addReference(s *sdk.Server, pages fs.FS) error {
 			Description: purposeLine(body),
 			MIMEType:    referenceMIMEType,
 			Size:        int64(len(body)),
-		}, func(_ context.Context, req *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
-			if req.Params.URI != uri {
-				return nil, sdk.ResourceNotFoundError(req.Params.URI)
-			}
+		}, func(context.Context, *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
 			return &sdk.ReadResourceResult{Contents: []*sdk.ResourceContents{{
 				URI: uri, MIMEType: referenceMIMEType, Text: text,
 			}}}, nil
