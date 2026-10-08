@@ -131,7 +131,7 @@ func assertCredentialCanaryDeliveredUpstream(t *testing.T, label, canary string,
 }
 
 // runGatewayForCanary runs the real `innsegl gateway` command (runGateway,
-// the same function gatewayCommand and runGatewayCommand both call) against
+// the same function gatewayCommand and runGateway both call) against
 // upstreamURL, waits for it to publish its bound address the way
 // TestGatewayCommandRelaysRealTrafficEndToEnd (gateway_test.go) does, and
 // returns that address, the syncBuffer (api_test.go) its *serveLog is

@@ -60,7 +60,7 @@ func TestReconcileTrustOptionsFallBackToTheEnvironment(t *testing.T) {
 	t.Setenv(envFulcioURL, "http://fulcio:5555")
 	var seen reconcileOptions
 	var stdout, stderr bytes.Buffer
-	code := runReconcileCommand(append(validReconcileArgs(t), "-once"), &stdout, &stderr, reconcileDeps{
+	code := runReconcileLoop(context.Background(), append(validReconcileArgs(t), "-once"), &stdout, &stderr, reconcileDeps{
 		open: func(_ context.Context, o reconcileOptions) (reconcileEngines, func(), error) {
 			seen = o
 			return reconcileEngines{Rekor: &fakeCycles{}}, func() {}, nil

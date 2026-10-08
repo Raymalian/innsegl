@@ -233,10 +233,6 @@ func reconcileCommand(args []string, stdout, stderr io.Writer) int {
 	return runReconcileLoop(ctx, args, stdout, stderr, reconcileDeps{})
 }
 
-func runReconcileCommand(args []string, stdout, stderr io.Writer, deps reconcileDeps) int {
-	return runReconcileLoop(context.Background(), args, stdout, stderr, deps)
-}
-
 // runReconcileLoop is the whole command: parse, refuse, open, cycle.
 //
 //nolint:gocyclo // One refusal per flag, then one branch per verdict; splitting it would put the exit-status contract in a different file from the flags it is a function of.

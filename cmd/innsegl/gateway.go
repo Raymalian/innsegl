@@ -439,12 +439,6 @@ func gatewayCommand(args []string, stdout, stderr io.Writer) int {
 	return runGateway(ctx, args, stdout, stderr, gatewayDeps{})
 }
 
-// runGatewayCommand is the entry point for tests that do not drive the
-// lifecycle with an OS signal.
-func runGatewayCommand(args []string, stdout, stderr io.Writer, deps gatewayDeps) int {
-	return runGateway(context.Background(), args, stdout, stderr, deps)
-}
-
 // runGateway is the whole command: parse, open, serve.
 func runGateway(ctx context.Context, args []string, stdout, stderr io.Writer, deps gatewayDeps) int {
 	o, code, ok := parseGatewayFlags(args, stderr)

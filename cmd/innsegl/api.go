@@ -312,11 +312,6 @@ func apiCommand(args []string, stdout, stderr io.Writer) int {
 	return runAPI(ctx, args, stdout, stderr, apiDeps{})
 }
 
-// runAPICommand is the entry point for tests that do not drive the lifecycle.
-func runAPICommand(args []string, stdout, stderr io.Writer, deps apiDeps) int {
-	return runAPI(context.Background(), args, stdout, stderr, deps)
-}
-
 // runAPI is the whole command: parse, refuse, open, serve.
 func runAPI(ctx context.Context, args []string, stdout, stderr io.Writer, deps apiDeps) int {
 	o, code, ok := parseAPIFlags(args, stderr)

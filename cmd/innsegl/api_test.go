@@ -168,7 +168,7 @@ func TestAPI008AWritableCredentialIsRefusedWithItsOwnExitStatus(t *testing.T) {
 		api.ErrWritable, "innsegl"))
 
 	var stdout, stderr bytes.Buffer
-	code := runAPICommand(minimalAPIArgs(), &stdout, &stderr, deps)
+	code := runAPI(context.Background(), minimalAPIArgs(), &stdout, &stderr, deps)
 
 	if code != exitAPIWritable {
 		t.Fatalf("exit = %d, want %d (WRITABLE). stderr: %s", code, exitAPIWritable, stderr.String())
@@ -186,7 +186,7 @@ func TestAPI008AWritableCredentialIsRefusedWithItsOwnExitStatus(t *testing.T) {
 func TestAPI008AnUnreachableLedgerIsUnavailableAndNotWritable(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := runAPICommand(minimalAPIArgs(), &stdout, &stderr,
+	code := runAPI(context.Background(), minimalAPIArgs(), &stdout, &stderr,
 		failingAPIDeps(errors.New("dial tcp 10.0.0.1:5432: connect: connection refused")))
 
 	if code != exitAPIUnavailable {
@@ -202,7 +202,7 @@ func TestAPI008AnUnreachableLedgerIsUnavailableAndNotWritable(t *testing.T) {
 func TestAPI008ThereIsNoFlagThatDisablesTheReadOnlyAssertion(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := runAPICommand(minimalAPIArgs("-require-read-only-role=false"), &stdout, &stderr,
+	code := runAPI(context.Background(), minimalAPIArgs("-require-read-only-role=false"), &stdout, &stderr,
 		stubAPIDeps(healthyStub(), nil))
 
 	if code != exitUsage {
@@ -211,7 +211,7 @@ func TestAPI008ThereIsNoFlagThatDisablesTheReadOnlyAssertion(t *testing.T) {
 	}
 
 	var help bytes.Buffer
-	if hc := runAPICommand([]string{"-h"}, &help, &help, apiDeps{}); hc != exitOK {
+	if hc := runAPI(context.Background(), []string{"-h"}, &help, &help, apiDeps{}); hc != exitOK {
 		t.Fatalf("-h exit = %d, want %d", hc, exitOK)
 	}
 	if !strings.Contains(help.String(), "no flag") {
@@ -266,7 +266,7 @@ func TestAPI008AServerThatStopsOnAnErrorExitsFailed(t *testing.T) {
 	s.serveErr = errors.New("accept tcp 127.0.0.1:8082: use of closed network connection")
 
 	var stdout, stderr bytes.Buffer
-	code := runAPICommand(minimalAPIArgs(), &stdout, &stderr, stubAPIDeps(s, nil))
+	code := runAPI(context.Background(), minimalAPIArgs(), &stdout, &stderr, stubAPIDeps(s, nil))
 
 	if code != exitAPIFailed {
 		t.Fatalf("exit = %d, want %d (FAILED). stderr: %s", code, exitAPIFailed, stderr.String())
@@ -276,7 +276,7 @@ func TestAPI008AServerThatStopsOnAnErrorExitsFailed(t *testing.T) {
 func TestAPI008AnOpenerThatReturnsNothingIsUnavailable(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := runAPICommand(minimalAPIArgs(), &stdout, &stderr, stubAPIDeps(nil, nil))
+	code := runAPI(context.Background(), minimalAPIArgs(), &stdout, &stderr, stubAPIDeps(nil, nil))
 
 	if code != exitAPIUnavailable {
 		t.Fatalf("exit = %d, want %d. stderr: %s", code, exitAPIUnavailable, stderr.String())
@@ -301,7 +301,7 @@ func TestAPI008RequiredFlagsAreRefusedByName(t *testing.T) {
 		t.Run(tc.drop, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 
-			code := runAPICommand(withoutAPIFlag(minimalAPIArgs(), tc.drop),
+			code := runAPI(context.Background(), withoutAPIFlag(minimalAPIArgs(), tc.drop),
 				&stdout, &stderr, stubAPIDeps(healthyStub(), nil))
 
 			if code != exitUsage {
@@ -322,7 +322,7 @@ func TestAPI008RequiredFlagsAreRefusedByName(t *testing.T) {
 func TestAPI008AnEmptyListenAddressIsRefusedByName(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := runAPICommand(append(withoutAPIFlag(minimalAPIArgs(), "-listen"), "-listen", ""),
+	code := runAPI(context.Background(), append(withoutAPIFlag(minimalAPIArgs(), "-listen"), "-listen", ""),
 		&stdout, &stderr, stubAPIDeps(healthyStub(), nil))
 
 	if code != exitUsage {
@@ -410,7 +410,7 @@ func TestAPI008DefaultListenAddressIsLoopback(t *testing.T) {
 func TestAPI008NoLongerTakesAStaticRepositoryList(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := runAPICommand(minimalAPIArgs("-repos", "github.com/innsegl/demo=/srv/demo"),
+	code := runAPI(context.Background(), minimalAPIArgs("-repos", "github.com/innsegl/demo=/srv/demo"),
 		&stdout, &stderr, stubAPIDeps(healthyStub(), nil))
 
 	if code != exitUsage {
@@ -424,7 +424,7 @@ func TestAPI008NoLongerTakesAStaticRepositoryList(t *testing.T) {
 func TestAPI008RefusesATrailingArgument(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := runAPICommand(minimalAPIArgs("dashboard"), &stdout, &stderr,
+	code := runAPI(context.Background(), minimalAPIArgs("dashboard"), &stdout, &stderr,
 		stubAPIDeps(healthyStub(), nil))
 
 	if code != exitUsage {
@@ -438,7 +438,7 @@ func TestAPI008RefusesATrailingArgument(t *testing.T) {
 func TestAPI008RefusesABadFlagValue(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := runAPICommand(minimalAPIArgs("-shutdown-timeout", "soon"), &stdout, &stderr,
+	code := runAPI(context.Background(), minimalAPIArgs("-shutdown-timeout", "soon"), &stdout, &stderr,
 		stubAPIDeps(healthyStub(), nil))
 
 	if code != exitUsage {
@@ -449,7 +449,7 @@ func TestAPI008RefusesABadFlagValue(t *testing.T) {
 func TestAPI008RefusesANegativeShutdownTimeout(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := runAPICommand(minimalAPIArgs("-shutdown-timeout", "-1s"), &stdout, &stderr,
+	code := runAPI(context.Background(), minimalAPIArgs("-shutdown-timeout", "-1s"), &stdout, &stderr,
 		stubAPIDeps(healthyStub(), nil))
 
 	if code != exitUsage {
@@ -460,7 +460,7 @@ func TestAPI008RefusesANegativeShutdownTimeout(t *testing.T) {
 func TestAPI008HelpExitsZeroAndDocumentsEveryExitStatus(t *testing.T) {
 	var out bytes.Buffer
 
-	code := runAPICommand([]string{"-h"}, &out, &out, apiDeps{})
+	code := runAPI(context.Background(), []string{"-h"}, &out, &out, apiDeps{})
 
 	if code != exitOK {
 		t.Fatalf("exit = %d, want %d", code, exitOK)
@@ -485,7 +485,7 @@ func TestAPI008HelpExitsZeroAndDocumentsEveryExitStatus(t *testing.T) {
 func TestAPI008HelpSaysTheCommandRequiresASession(t *testing.T) {
 	var out bytes.Buffer
 
-	if code := runAPICommand([]string{"-h"}, &out, &out, apiDeps{}); code != exitOK {
+	if code := runAPI(context.Background(), []string{"-h"}, &out, &out, apiDeps{}); code != exitOK {
 		t.Fatalf("exit = %d, want %d", code, exitOK)
 	}
 	help := strings.ToLower(out.String())
@@ -505,7 +505,7 @@ func TestAPI008HelpSaysTheCommandRequiresASession(t *testing.T) {
 func TestAPI008HelpNamesTheRoutesItServes(t *testing.T) {
 	var out bytes.Buffer
 
-	if code := runAPICommand([]string{"-h"}, &out, &out, apiDeps{}); code != exitOK {
+	if code := runAPI(context.Background(), []string{"-h"}, &out, &out, apiDeps{}); code != exitOK {
 		t.Fatalf("exit = %d, want %d", code, exitOK)
 	}
 	for _, route := range apiRoutes {
