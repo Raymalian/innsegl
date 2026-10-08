@@ -131,11 +131,6 @@ func New(cfg Config) (*Server, error) {
 		Logger:       cfg.Logger,
 	})
 
-	// The reference pages, read-only, on every listener (MCP-101..105).
-	if err := addReference(s.sdk, referenceFS); err != nil {
-		return nil, err
-	}
-
 	serve, err := selectedTools(cfg.Tools)
 	if err != nil {
 		return nil, err
