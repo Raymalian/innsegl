@@ -33,6 +33,7 @@ Every target with a `##` help line:
 | `make spire-down` | tear SPIRE down, volumes included (guarded) |
 | `make spire-admin-relay-up` | publish the SPIRE admin API to `127.0.0.1` (off by default) |
 | `make spire-admin-relay-down` | remove the admin relay; always run when done |
+| `make fulcio-file-ca-run` | Fulcio on the file CA, unless it already runs under custody. `make update` reaches it through `fulcio-file-ca-up`, which picks this or `ca-custody-up` by `INNSEGL_CA_CUSTODY` (OPS-156) |
 | `make sigstore-up` | boot SPIRE and Fulcio/Rekor (see [transparency-log.md](transparency-log.md)) |
 | `make sigstore-verify` | get a real Fulcio certificate for a real JWT-SVID |
 | `make sigstore-down` | tear Sigstore down, volumes included (guarded) |
