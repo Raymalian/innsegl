@@ -460,7 +460,7 @@ DEPLOYED_FILE := .innsegl/deployed-commit$(if $(DEV_OVERLAY),-dev)
 # commit -- a dashboard or README change too -- made a new image, and compose
 # restarted every service running it. The Dockerfile copies these paths and
 # nothing else; test/deploy/buildonce_test.go holds the two lists together.
-GO_IMAGE_INPUTS := cmd internal migrations go.mod go.sum Dockerfile
+GO_IMAGE_INPUTS := cmd internal reference migrations go.mod go.sum Dockerfile
 
 # No default build attestations. They record the build's own time, so every
 # build -- even of unchanged sources, every layer cached -- had a new image
