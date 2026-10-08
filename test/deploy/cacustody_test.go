@@ -347,3 +347,23 @@ func TestOPS157TheStoreConfigDoesNotDependOnTheCheckoutsFileModes(t *testing.T) 
 	}
 	t.Fatal("the store has no config at /openbao/config/store.hcl")
 }
+
+// OPS-158 (PROPOSED) — the store's health check asks the store over the
+// scheme it listens on.
+//
+// MEASURED on a live core: `bao status` defaults to https://127.0.0.1:8200,
+// the store listens without TLS on its two-member network, so the check
+// failed every time ("server gave HTTP response to HTTPS client"), the store
+// was never healthy, and `make update` stopped on the custodian's
+// depends_on. Against http the same command answers 2, sealed, as designed.
+func TestOPS158TheStoreHealthCheckUsesTheListenersScheme(t *testing.T) {
+	doc := composeRender(t, nil, sigstoreBase, sigstoreCustod)
+	hcl := storeConfig(t, doc)
+	if !strings.Contains(hcl, "tls_disable = true") {
+		t.Skip("the store listens with TLS; this case is for the plain listener")
+	}
+	addr := doc.Services["innsegl-ca-store"].Environment["BAO_ADDR"]
+	if addr == nil || *addr != "http://127.0.0.1:8200" {
+		t.Fatalf("the store's BAO_ADDR is %v; bao status then speaks https to a plain listener and the health check never passes", addr)
+	}
+}
