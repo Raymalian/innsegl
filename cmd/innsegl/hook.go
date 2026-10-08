@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -32,25 +31,32 @@ import (
 // 2026-09-30 (RM-245, #390): a human's own `git commit` in a linked
 // repository is left completely alone, so the signing configuration must
 // travel WITH an agent's commit rather than live in the repository's own git
-// config — the same one `export` statement extended with git's own
-// GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n mechanism
-// (measured to work with no `-c` flag and no repository config write; see
-// hook_test.go's TestENF005…): commit.gpgsign=true, gpg.format=x509, and
+// config — the signing configuration placed inside the git invocation
+// itself, as git's own `-c key=value` options immediately before the
+// subcommand word (commitpath.InsertGitOptions; `git -C dir commit` becomes
+// `git -C dir -c … commit`): commit.gpgsign=true, gpg.format=x509, and
 // gpg.x509.program set to the resolved, absolute path of this same running
 // innsegl binary — the one a linked repository's git then invokes directly
 // as its signing program (cli.go's --status-fd/--verify dispatch, decision 2
-// of the operator's plan). The id, and every literal git config key and
-// value here, are safe to interpolate directly into the shell command — no
-// quoting, no escaping — only because commitpath.IsToolUseID was checked
-// first (it accepts nothing but "toolu_" followed by letters, digits and
-// underscores) and the resolved binary path is checked by
-// isShellSafeForInterpolation before it is ever used: a path outside that
-// conservative set is refused (see that function's own comment), and the
-// signing configuration is simply omitted for that one commit rather than
-// pasted in unquoted. The same omission happens, for a different reason,
-// when the command itself already assigns GIT_CONFIG_COUNT — see
-// commandAlreadySetsGitConfigCount's comment for why this hook cannot safely
-// merge into it from a shell prefix alone. Neither omission drops the tool
+// of the operator's plan). Options, not environment: the harness's own
+// worktree-isolation guard refuses any command that sets GIT_CONFIG_COUNT,
+// GIT_CONFIG_PARAMETERS or GIT_CONFIG_GLOBAL, so an earlier version of this
+// hook, which carried the same three keys as GIT_CONFIG_COUNT /
+// GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n in the export, had every isolated
+// agent's commit refused outright; the guard reads `-c` per key and allows
+// these three (CMT-018). Placing them after the command's own options also
+// settles precedence without parsing anything: git reads the last `-c` for
+// a key, and reads any `-c` over a GIT_CONFIG_* variable, so a command that
+// carries its own `-c` or its own GIT_CONFIG_COUNT entries still signs
+// (ENF-012; hook_test.go measures both against a real git). The id, and
+// every literal git config key and value here, are safe to interpolate
+// directly into the shell command — no quoting, no escaping — only because
+// commitpath.IsToolUseID was checked first (it accepts nothing but "toolu_"
+// followed by letters, digits and underscores) and the resolved binary path
+// is checked by isShellSafeForInterpolation before it is ever used: a path
+// outside that conservative set is refused (see that function's own
+// comment), and the signing configuration is simply omitted for that one
+// commit rather than pasted in unquoted. The omission does not drop the tool
 // call id: an agent's commit that lands unsigned this way is still
 // attributed, and is caught by the reconciler's own unsigned-commit alert
 // (CMT-016), which is the documented limitation this decision accepts.
@@ -136,23 +142,29 @@ func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int { //nolint
 			repo = r
 		}
 	}
-	if bin, binErr := innseglBinaryPath(); binErr == nil && isShellSafeForInterpolation(bin) &&
-		!commandAlreadySetsGitConfigCount(command) {
-		assignments = append(assignments, gitConfigSigningAssignments(bin)...)
+	// Decided on the command as the model wrote it, before anything is
+	// placed inside it.
+	addIdentity := !commandAlreadySetsAuthorIdentity(command)
+	if bin, binErr := innseglBinaryPath(); binErr == nil && isShellSafeForInterpolation(bin) {
+		// The signing configuration goes inside each commit-creating git
+		// invocation as `-c` options, never into the export (see the doc
+		// comment above); the command is otherwise byte for byte the one
+		// the model asked for.
+		command = commitpath.InsertGitOptions(command, gitConfigSigningOptions(bin))
 		// A commit in any other repository, made by something else in the
 		// same command, is refused.
 		if isShellSafeForInterpolation(repo) {
 			assignments = append(assignments, envSignRepo+"="+repo)
 		}
 	}
-	if !commandAlreadySetsAuthorIdentity(command) {
+	if addIdentity {
 		assignments = append(assignments, authorIdentityAssignments(repo)...)
 	}
-	// Nothing above is fatal to this branch: an unresolved binary path, an
-	// unsafe one, or a command that already claims GIT_CONFIG_COUNT each just
-	// leave assignments holding only the tool call id, exactly the export
-	// this hook always produced before RM-245 — see the package doc above for
-	// why that is still safe rather than merely convenient.
+	// Nothing above is fatal to this branch: an unresolved binary path or an
+	// unsafe one just leaves the command without its `-c` options and the
+	// export without INNSEGL_SIGN_REPO — the tool call id and the identity
+	// still travel — see the package doc above for why that is still safe
+	// rather than merely convenient.
 	rewritten, err := json.Marshal("export " + strings.Join(assignments, " ") + "; " + command)
 	if err != nil {
 		return exitOK
@@ -224,64 +236,31 @@ func isShellSafeForInterpolation(s string) bool {
 	return true
 }
 
-// gitConfigCountAssignment matches a literal GIT_CONFIG_COUNT= assignment
-// anywhere in a command, as a shell word rather than merely a substring — the
-// character immediately before the match (or the start of the command) must
-// not itself be part of an identifier, so "MY_GIT_CONFIG_COUNT=1" does not
-// false-positive.
-var gitConfigCountAssignment = regexp.MustCompile(`(^|[^A-Za-z0-9_])GIT_CONFIG_COUNT=`)
-
-// commandAlreadySetsGitConfigCount reports whether cmd's own text assigns
-// GIT_CONFIG_COUNT anywhere — a per-command prefix on the git invocation
-// itself (`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=... git commit`) or an earlier
-// `export` in a composite command.
-//
-// This hook cannot safely add its own entries on top of that from a shell
-// prefix alone, in either direction: a POSIX shell's temporary, per-command
-// variable assignments override the general (exported) environment for the
-// duration of that one command, so a `GIT_CONFIG_COUNT=1 ... git commit`
-// written directly on the command line beats anything this hook exports
-// beforehand, silently dropping the signing configuration entirely rather
-// than merging with it; and if the command instead exports GIT_CONFIG_COUNT
-// itself later in a `&&`-joined sequence, that later export overwrites
-// whatever this hook exported first. Counting the command's own entries by
-// text and appending after them does not fix either case — the count this
-// hook could read is not necessarily the count the shell will actually see
-// applied to the git invocation, without a full shell parse this hook does
-// not attempt. So when this is true, the exported assignments carry only the
-// tool call id: no GIT_CONFIG_* entry from this hook, clobbering nothing and
-// clobbered by nothing. The commit this produces is still attributed (the id
-// is untouched) but may land unsigned, which is exactly what the reconciler's
-// CMT-016 alert exists to catch — the documented limitation RM-245 accepts
-// rather than a shell-level merge this function cannot prove safe.
-func commandAlreadySetsGitConfigCount(cmd string) bool {
-	return gitConfigCountAssignment.MatchString(cmd)
-}
-
 // gitConfigSigningEntries is the git configuration RM-245's host decision
 // carries onto one child git process, in order: git.commit's own contract for
 // `gpg.format=x509` plus ADR-0059 decision 3's signing program. The program
 // path itself is not fixed, so it is not in this table — see
-// gitConfigSigningAssignments.
+// gitConfigSigningOptions.
 var gitConfigSigningEntries = [][2]string{
 	{"commit.gpgsign", "true"},
 	{"gpg.format", "x509"},
 }
 
-// gitConfigSigningAssignments builds the GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n
-// / GIT_CONFIG_VALUE_n environment assignments (git's own mechanism, measured
-// against a real git by hook_test.go's TestENF005… to work with no `-c` flag
-// and no write to any repository's config file) that configure exactly the
-// three keys ADR-0059 decision 3 needs on the one process a `git commit` tool
-// call is about to become: commit.gpgsign, gpg.format, and gpg.x509.program
-// set to programPath. The caller is responsible for having already proven
-// programPath safe to interpolate unquoted (isShellSafeForInterpolation).
-func gitConfigSigningAssignments(programPath string) []string {
+// gitConfigSigningOptions builds the `-c key=value` option words (git's own
+// per-invocation configuration, which it reads last — over the repository's
+// config, over any GIT_CONFIG_* variable, and over an earlier `-c` for the
+// same key; measured against a real git by hook_test.go's TestENF005… and
+// TestHookSigningOptionsWin…) that configure exactly the three keys ADR-0059
+// decision 3 needs on the one process a `git commit` tool call is about to
+// become: commit.gpgsign, gpg.format, and gpg.x509.program set to
+// programPath. commitpath.InsertGitOptions places them. The caller is
+// responsible for having already proven programPath safe to interpolate
+// unquoted (isShellSafeForInterpolation).
+func gitConfigSigningOptions(programPath string) []string {
 	entries := append(append([][2]string{}, gitConfigSigningEntries...), [2]string{"gpg.x509.program", programPath})
-	out := make([]string, 0, 1+2*len(entries))
-	out = append(out, fmt.Sprintf("GIT_CONFIG_COUNT=%d", len(entries)))
-	for i, kv := range entries {
-		out = append(out, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
+	out := make([]string, 0, 2*len(entries))
+	for _, kv := range entries {
+		out = append(out, "-c", kv[0]+"="+kv[1])
 	}
 	return out
 }
@@ -340,8 +319,10 @@ func authorIdentityAssignments(repo string) []string {
 }
 
 // gitIdentityAssignment matches an assignment of any of the four identity
-// variables in a command's own text, with the same identifier-boundary rule as
-// gitConfigCountAssignment.
+// variables in a command's own text, as a shell word rather than merely a
+// substring: the character immediately before the match (or the start of
+// the command) must not itself be part of an identifier, so
+// "MY_GIT_AUTHOR_NAME=x" does not false-positive.
 var gitIdentityAssignment = regexp.MustCompile(`(^|[^A-Za-z0-9_])GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL)=`)
 
 // commandAlreadySetsAuthorIdentity reports whether cmd assigns any of
