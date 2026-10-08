@@ -101,17 +101,23 @@ func hookExpectSelfBinary(t *testing.T) string {
 }
 
 // hookWantExport builds the export statement runHookPreToolUse is expected
-// to prefix an ordinary, safe-path git commit with: the tool call id plus the
-// full signing configuration (RM-245).
+// to prefix an ordinary git commit with: the tool call id plus the agent
+// identity (RM-315). The signing configuration is not here: it travels as
+// git's own `-c` options inside the command (hookWantSigningOptions).
 func hookWantExport(t *testing.T, toolUseID string) string {
 	t.Helper()
-	bin := hookExpectSelfBinary(t)
 	return fmt.Sprintf(
-		"export %s=%s GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=true "+
-			"GIT_CONFIG_KEY_1=gpg.format GIT_CONFIG_VALUE_1=x509 GIT_CONFIG_KEY_2=gpg.x509.program GIT_CONFIG_VALUE_2=%s "+
-			"GIT_AUTHOR_NAME=Innsegl GIT_AUTHOR_EMAIL=agent@innsegl.invalid "+
+		"export %s=%s GIT_AUTHOR_NAME=Innsegl GIT_AUTHOR_EMAIL=agent@innsegl.invalid "+
 			"GIT_COMMITTER_NAME=Innsegl GIT_COMMITTER_EMAIL=agent@innsegl.invalid; ",
-		commitpath.EnvToolUseID, toolUseID, bin)
+		commitpath.EnvToolUseID, toolUseID)
+}
+
+// hookWantSigningOptions builds the `-c` options runHookPreToolUse is
+// expected to place before the subcommand word of a safe-path git commit:
+// the full signing configuration (RM-245), naming this same binary.
+func hookWantSigningOptions(t *testing.T) string {
+	t.Helper()
+	return "-c commit.gpgsign=true -c gpg.format=x509 -c gpg.x509.program=" + hookExpectSelfBinary(t)
 }
 
 // decodeHookOutput parses stdout as the hook's JSON shape.
@@ -163,7 +169,7 @@ func TestCMT001HookInjectsThisToolCallsIDIntoAGitCommit(t *testing.T) {
 		}
 
 		got := updatedCommand(t, out)
-		want := hookWantExport(t, toolUseID) + `git commit -m "add notes"`
+		want := hookWantExport(t, toolUseID) + "git " + hookWantSigningOptions(t) + ` commit -m "add notes"`
 		if got != want {
 			t.Errorf("updatedInput.command = %q, want %q", got, want)
 		}
@@ -306,8 +312,9 @@ func TestCMT003HookOutputGrantsNoPermission(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // RM-245 (#390): the signing configuration travels with the one child git
-// process, through GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n,
-// never through the repository's own config.
+// process, as git's own `-c key=value` options placed before the subcommand
+// word (ENF-012), never through the repository's own config and never as a
+// GIT_CONFIG_* environment variable (CMT-018).
 // ---------------------------------------------------------------------------
 
 func TestIsShellSafeForInterpolation(t *testing.T) {
@@ -338,57 +345,80 @@ func TestIsShellSafeForInterpolation(t *testing.T) {
 	}
 }
 
-func TestCommandAlreadySetsGitConfigCount(t *testing.T) {
-	cases := []struct {
-		name string
-		cmd  string
-		want bool
-	}{
-		{"no GIT_CONFIG_COUNT at all", `git commit -m x`, false},
-		{"a per-command prefix on the git invocation", `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=Bob git commit -m x`, true},
-		{"an earlier export in a composite command", `export GIT_CONFIG_COUNT=1; git commit -m x`, true},
-		{"a longer identifier is not a false positive", `MY_GIT_CONFIG_COUNT=1 git commit -m x`, false},
-		{"a different suffix is not a false positive", `GIT_CONFIG_COUNTX=1 git commit -m x`, false},
-		{"at the very start of the command", `GIT_CONFIG_COUNT=2 git commit -m x`, true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := commandAlreadySetsGitConfigCount(c.cmd); got != c.want {
-				t.Errorf("commandAlreadySetsGitConfigCount(%q) = %v, want %v", c.cmd, got, c.want)
-			}
-		})
-	}
-}
-
-func TestGitConfigSigningAssignments(t *testing.T) {
-	got := gitConfigSigningAssignments("/opt/innsegl/bin/innsegl")
+func TestGitConfigSigningOptions(t *testing.T) {
+	got := gitConfigSigningOptions("/opt/innsegl/bin/innsegl")
 	want := []string{
-		"GIT_CONFIG_COUNT=3",
-		"GIT_CONFIG_KEY_0=commit.gpgsign", "GIT_CONFIG_VALUE_0=true",
-		"GIT_CONFIG_KEY_1=gpg.format", "GIT_CONFIG_VALUE_1=x509",
-		"GIT_CONFIG_KEY_2=gpg.x509.program", "GIT_CONFIG_VALUE_2=/opt/innsegl/bin/innsegl",
+		"-c", "commit.gpgsign=true",
+		"-c", "gpg.format=x509",
+		"-c", "gpg.x509.program=/opt/innsegl/bin/innsegl",
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Errorf("gitConfigSigningAssignments = %v, want %v", got, want)
+		t.Errorf("gitConfigSigningOptions = %v, want %v", got, want)
 	}
 }
 
-// TestHookDoesNotAppendGitConfigWhenTheCommandAlreadyAssignsGitConfigCount
-// documents RM-245's own limitation (see commandAlreadySetsGitConfigCount's
-// comment in hook.go): the hook cannot safely add its own GIT_CONFIG_* entries
-// on top of a command that already assigns GIT_CONFIG_COUNT, in either
-// direction, from a shell prefix alone. The tool call id is unaffected.
-func TestHookDoesNotAppendGitConfigWhenTheCommandAlreadyAssignsGitConfigCount(t *testing.T) {
-	const toolUseID = "toolu_precount000001"
-	const command = `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=Bob git commit -m x`
+// TestHookSigningOptionsWinOverTheCommandsOwnGitConfigCount (ENF-012,
+// PROPOSED): a command that carries its own GIT_CONFIG_COUNT entries — here
+// one turning signing off — still gets the hook's `-c` options, and git reads
+// a `-c` over any GIT_CONFIG_* variable, so the commit is signed. Measured
+// off a real git's committed object, not off the command text.
+func TestHookSigningOptionsWinOverTheCommandsOwnGitConfigCount(t *testing.T) {
+	git := ghGitOrSkip(t)
+	home := t.TempDir()
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := ghIsolatedEnv(home)
+	ghRun(t, git, repo, env, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ghRun(t, git, repo, env, "add", "a.txt")
 
-	body := hookJSON(t, "Bash", command, toolUseID, nil)
-	_, stdout, _ := runHook(t, body)
-	out := decodeHookOutput(t, stdout)
-	got := updatedCommand(t, out)
-	want := fmt.Sprintf("export %s=%s %s; %s", commitpath.EnvToolUseID, toolUseID, strings.Join(agentIdentityAssignments(), " "), command)
-	if got != want {
-		t.Errorf("updatedInput.command = %q, want %q", got, want)
+	const toolUseID = "toolu_precount000001"
+	const command = `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false git commit -m x`
+	_, stdout, _ := runHook(t, hookJSON(t, "Bash", command, toolUseID, nil))
+	rewritten := updatedCommand(t, decodeHookOutput(t, stdout))
+	want := hookWantExport(t, toolUseID) +
+		`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false git ` + hookWantSigningOptions(t) + ` commit -m x`
+	if rewritten != want {
+		t.Fatalf("updatedInput.command = %q, want %q", rewritten, want)
+	}
+
+	sh := exec.CommandContext(t.Context(), "sh", "-c", rewritten)
+	sh.Dir = repo
+	sh.Env = append(append([]string{}, env...), hookFakeSignEnv+"=1")
+	if out, err := sh.CombinedOutput(); err != nil {
+		t.Fatalf("sh -c %q: %v\n%s", rewritten, err, out)
+	}
+	got := ghRun(t, git, repo, env, "cat-file", "commit", "HEAD")
+	if !strings.Contains(got, "gpgsig "+hookFakeSignature) {
+		t.Errorf("the command's own commit.gpgsign=false won over the hook's -c; object:\n%s", got)
+	}
+}
+
+// TestCMT018HookRewriteCarriesNoGitConfigVariable (CMT-018, PROPOSED): the
+// rewritten command assigns no GIT_CONFIG_* variable at all, in the export
+// prefix or anywhere else. A harness that isolates an agent's worktree
+// refuses any command that sets GIT_CONFIG_COUNT, GIT_CONFIG_PARAMETERS or
+// GIT_CONFIG_GLOBAL, so a hook that added one would have every such agent's
+// commit refused; the signing configuration travels as `-c` options instead.
+func TestCMT018HookRewriteCarriesNoGitConfigVariable(t *testing.T) {
+	for _, command := range []string{
+		`git commit -m "add notes"`,
+		`git -C /some/dir merge --no-ff feature`,
+		`cd sub && git pull origin main`,
+		`git rebase main`,
+	} {
+		_, stdout, _ := runHook(t, hookJSON(t, "Bash", command, "toolu_cmt018fixture01", nil))
+		got := updatedCommand(t, decodeHookOutput(t, stdout))
+		if strings.Contains(got, "GIT_CONFIG_") {
+			t.Errorf("%q: the rewritten command sets a GIT_CONFIG_ variable: %q", command, got)
+		}
+		if !strings.Contains(got, " -c gpg.x509.program=") {
+			t.Errorf("%q: the rewritten command carries no -c gpg.x509.program: %q", command, got)
+		}
 	}
 }
 
@@ -400,9 +430,9 @@ func TestHookDoesNotAppendGitConfigWhenTheCommandAlreadyAssignsGitConfigCount(t 
 // does receive a signature from it. It deliberately does not implement
 // ADR-0059 decision 3's real client (commitpathcli.go's signCommand has its
 // own tests, sign_test.go); this only has to prove that git actually invoked
-// the program the hook's GIT_CONFIG_VALUE_2 named, using x509 signing to do
-// it. Never set except by TestENF005…, and never true during an ordinary
-// `go test` run.
+// the program the hook's `-c gpg.x509.program=` named, using x509 signing to
+// do it. Never set except by the real-git hook tests, and never true during
+// an ordinary `go test` run.
 const hookFakeSignEnv = "INNSEGL_HOOK_TEST_FAKE_SIGN"
 
 // hookFakeSignature is what the fake signing program writes to stdout;
@@ -432,10 +462,9 @@ func init() {
 // the tool call id and the signing configuration for that one git process;
 // nothing is written to the repository's config. Driven against a REAL git,
 // through the hook's own rewritten command run by `sh -c`: what proves the
-// GIT_CONFIG_COUNT mechanism actually took effect is x509 signing having
-// actually happened, measured off the committed object itself and off
-// .git/config's own bytes before and after — not merely that the command
-// text looks right.
+// `-c` options actually took effect is x509 signing having actually
+// happened, measured off the committed object itself and off .git/config's
+// own bytes before and after — not merely that the command text looks right.
 func TestENF005HookCarriesToolCallIDAndSigningConfigForOneGitProcessOnly(t *testing.T) {
 	git := ghGitOrSkip(t)
 	home := t.TempDir()
@@ -461,8 +490,8 @@ func TestENF005HookCarriesToolCallIDAndSigningConfigForOneGitProcessOnly(t *test
 	_, stdout, _ := runHook(t, body)
 	out := decodeHookOutput(t, stdout)
 	rewritten := updatedCommand(t, out)
-	if !strings.Contains(rewritten, "GIT_CONFIG_KEY_2=gpg.x509.program") {
-		t.Fatalf("rewritten command carries no gpg.x509.program assignment: %q", rewritten)
+	if !strings.Contains(rewritten, " -c gpg.x509.program="+hookExpectSelfBinary(t)+" commit ") {
+		t.Fatalf("rewritten command carries no -c gpg.x509.program option before the subcommand: %q", rewritten)
 	}
 
 	cmdEnv := append(append([]string{}, env...), hookFakeSignEnv+"=1")
@@ -511,11 +540,11 @@ func TestHookDoesNotOverrideAnExplicitAuthorIdentity(t *testing.T) {
 		command := name + `=Bob git commit -m x`
 		_, stdout, _ := runHook(t, hookJSON(t, "Bash", command, "toolu_ident0000002", nil))
 		got := updatedCommand(t, decodeHookOutput(t, stdout))
-		prefix := strings.TrimSuffix(got, command)
+		prefix, _, _ := strings.Cut(got, "; ")
 		if strings.Contains(prefix, "GIT_AUTHOR_") || strings.Contains(prefix, "GIT_COMMITTER_") {
 			t.Errorf("%s: hook overrode an explicit identity: %q", name, got)
 		}
-		if !strings.Contains(prefix, "GIT_CONFIG_COUNT=3") {
+		if !strings.Contains(got, " -c gpg.x509.program=") {
 			t.Errorf("%s: signing config should still be injected: %q", name, got)
 		}
 	}

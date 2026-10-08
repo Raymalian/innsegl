@@ -108,12 +108,22 @@ func splitSimpleCommands(cmd string) []string {
 // git, skipping leading VAR=value assignments and git's own options. Only the
 // command word counts: `echo git commit` is echo's.
 func gitSubcommand(words []string) string {
+	if i := gitSubcommandIndex(words); i >= 0 {
+		return words[i]
+	}
+	return ""
+}
+
+// gitSubcommandIndex is gitSubcommand's reading as a position: the index of
+// the subcommand word, or -1 when the command word is not git or git was
+// given no subcommand.
+func gitSubcommandIndex(words []string) int {
 	i := 0
 	for i < len(words) && strings.Contains(words[i], "=") && !strings.HasPrefix(words[i], "-") {
 		i++
 	}
 	if i >= len(words) || path.Base(words[i]) != "git" {
-		return ""
+		return -1
 	}
 	for i++; i < len(words); i++ {
 		w := words[i]
@@ -122,10 +132,119 @@ func gitSubcommand(words []string) string {
 			i++ // the option's own argument
 		case strings.HasPrefix(w, "-"):
 		default:
-			return w
+			return i
 		}
 	}
-	return ""
+	return -1
+}
+
+// InsertGitOptions returns cmd with options placed inside every git
+// invocation that creates a commit (commitCreatingGit, the same reading
+// IsGitCommitCommand makes), immediately before its subcommand word: after
+// any global option the command itself passes, so `git -C dir commit`
+// becomes `git -C dir <options> commit`, and a `-c key=value` the command
+// already carries comes first — git reads the last `-c` for a key, so the
+// inserted one wins. Everything else is returned byte for byte: a separator
+// or a `git commit` inside a quoted argument (a commit message) is prose and
+// splits nothing, and a command with no commit-creating git invocation comes
+// back unchanged. The harness hook uses this to hand git the signing
+// configuration as git's own options rather than as environment variables
+// (ENF-012): a harness that inspects a command's environment assignments
+// refuses GIT_CONFIG_* outright, and inspects `-c` per key.
+func InsertGitOptions(cmd string, options []string) string {
+	if len(options) == 0 {
+		return cmd
+	}
+	insertion := strings.Join(options, " ") + " "
+	var b strings.Builder
+	last := 0
+	for _, words := range simpleCommandWords(cmd) {
+		texts := make([]string, len(words))
+		for i, w := range words {
+			texts[i] = w.text
+		}
+		i := gitSubcommandIndex(texts)
+		if i < 0 || !commitCreatingGit[texts[i]] {
+			continue
+		}
+		b.WriteString(cmd[last:words[i].start])
+		b.WriteString(insertion)
+		last = words[i].start
+	}
+	b.WriteString(cmd[last:])
+	return b.String()
+}
+
+// word is one shell word of a command as written, quotes and all, with the
+// byte offset it starts at.
+type word struct {
+	text  string
+	start int
+}
+
+// simpleCommandWords splits cmd into simple commands on the same separators
+// splitSimpleCommands splits on, and each simple command into words with
+// their positions, honouring single quotes, double quotes and backslash
+// escapes: a separator or whitespace inside a quoted argument splits nothing.
+// Like IsGitCommitCommand it is a reading of the command, not a shell
+// parser; it reads quotes only so that it never inserts inside one.
+func simpleCommandWords(cmd string) [][]word {
+	var (
+		cmds  [][]word
+		words []word
+		start = -1 // the current word's first byte, or -1 between words
+		quote byte // the quote the scan is inside, or 0
+	)
+	endWord := func(end int) {
+		if start >= 0 {
+			words = append(words, word{text: cmd[start:end], start: start})
+			start = -1
+		}
+	}
+	endCommand := func() {
+		if len(words) > 0 {
+			cmds = append(cmds, words)
+			words = nil
+		}
+	}
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case quote == '\'':
+			if c == '\'' {
+				quote = 0
+			}
+		case quote == '"':
+			switch c {
+			case '\\':
+				i++ // the escaped byte, whatever it is
+			case '"':
+				quote = 0
+			}
+		case c == '\\':
+			if start < 0 {
+				start = i
+			}
+			i++ // the escaped byte, whatever it is
+		case c == '\'' || c == '"':
+			if start < 0 {
+				start = i
+			}
+			quote = c
+		case c == ';' || c == '&' || c == '|' || c == '\n':
+			endWord(i)
+			endCommand()
+		case c == ' ' || c == '\t' || c == '\r' || c == '\v' || c == '\f':
+			endWord(i)
+		default:
+			if start < 0 {
+				start = i
+			}
+		}
+	}
+	endWord(len(cmd))
+	endCommand()
+	return cmds
 }
 
 // maxToolUseIDBytes bounds a tool call id; the harness's are far shorter.
