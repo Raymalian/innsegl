@@ -58,6 +58,16 @@ Deprecations are announced here one minor release ahead of removal.
 
 ### Changed
 
+- **`innsegl retire` runs on the core** (ADR-0077): `docker exec innsegl-mcp
+  innsegl retire <run_id>`, or `make innsegl-retire RUN=<run_id>`. It calls the
+  retirement engine the gateway uses, in process, under the core's own SPIRE
+  admin identity and ledger credential, so it no longer needs the admin
+  listener, which is off by default. The five exit statuses keep their
+  numbers; 21 (REFUSED) now means the process holds no SPIRE admin identity,
+  which is what running it anywhere but the core produces. Its `-url` and
+  `-repo` flags are removed, and with them the admin credential it minted
+  (`INNSEGL_MCP_ADMIN_URL`, `INNSEGL_ADMIN_CREDENTIAL_MINT` and the
+  `INNSEGL_ADMIN_KEY_*` variables are no longer read by it).
 - `idempotency_key` is now required only on events whose originating MCP tool
   accepts one (`run_registered`, `tool_call`, `commit_intent`,
   `commit_recorded`), and is forbidden on `credential_issued` and `run_retired`
@@ -70,6 +80,12 @@ Deprecations are announced here one minor release ahead of removal.
 
 ### Deprecated
 
+- **The MCP wire surface** (ADR-0077). innsegl's gateway and commit hook call the
+  engine in process, and no shipped client calls the eight tools over the wire.
+  Every tool's description now begins with the same deprecation sentence. All
+  eight stay bound, with their arguments, results and error classes unchanged,
+  and the six working tools keep working. **The wire binding, both MCP
+  listeners and the admin credential are removed at the next major release.**
 - **`describe_workspace` and `observe_session`** (ADR-0071). Both read a
   projects folder mounted into the core, and the core mounts none: it reads
   repositories only from its mirror (ADR-0065). Their names are a protected
