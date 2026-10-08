@@ -31,7 +31,7 @@ import (
 func TestAPIUIAndTLSSettingsHaveFlagsAndEnvironmentNames(t *testing.T) {
 	var seen apiOptions
 	var stderr bytes.Buffer
-	code := runAPICommand(minimalAPIArgs(
+	code := runAPI(context.Background(), minimalAPIArgs(
 		"-ui-dir", "/srv/ui",
 		"-tls-listen", "0.0.0.0:8443",
 		"-tls-cert", "/run/tls/dashboard-tls.pem",
@@ -47,7 +47,7 @@ func TestAPIUIAndTLSSettingsHaveFlagsAndEnvironmentNames(t *testing.T) {
 	t.Setenv(envAPITLSListen, "0.0.0.0:9443")
 	t.Setenv(envAPITLSCert, "/env/dashboard-tls.pem")
 	seen = apiOptions{}
-	code = runAPICommand(minimalAPIArgs(), io.Discard, &stderr, stubAPIDeps(&stubAPI{serveErr: io.EOF}, &seen))
+	code = runAPI(context.Background(), minimalAPIArgs(), io.Discard, &stderr, stubAPIDeps(&stubAPI{serveErr: io.EOF}, &seen))
 	if code == exitUsage {
 		t.Fatalf("the environment was refused: %s", stderr.String())
 	}
@@ -59,7 +59,7 @@ func TestAPIUIAndTLSSettingsHaveFlagsAndEnvironmentNames(t *testing.T) {
 // Unset, the command is what it was before #475: the API alone, plain HTTP.
 func TestAPIUIAndTLSAreOffByDefault(t *testing.T) {
 	var seen apiOptions
-	if code := runAPICommand(minimalAPIArgs(), io.Discard, io.Discard,
+	if code := runAPI(context.Background(), minimalAPIArgs(), io.Discard, io.Discard,
 		stubAPIDeps(&stubAPI{serveErr: io.EOF}, &seen)); code == exitUsage {
 		t.Fatal("the minimal command line was refused")
 	}
@@ -84,7 +84,7 @@ func TestAPITLSListenAndCertAreSetTogether(t *testing.T) {
 			return nil, nil
 		}}
 		var stderr bytes.Buffer
-		code := runAPICommand(minimalAPIArgs(tc.args...), io.Discard, &stderr, deps)
+		code := runAPI(context.Background(), minimalAPIArgs(tc.args...), io.Discard, &stderr, deps)
 		if code != exitUsage {
 			t.Errorf("%v: exit %d, want %d", tc.args, code, exitUsage)
 		}
@@ -99,7 +99,7 @@ func TestAPITLSListenAndCertAreSetTogether(t *testing.T) {
 
 func TestAPIHelpNamesTheUIAndTLSSettings(t *testing.T) {
 	var stderr bytes.Buffer
-	runAPICommand([]string{"-h"}, io.Discard, &stderr, apiDeps{})
+	runAPI(context.Background(), []string{"-h"}, io.Discard, &stderr, apiDeps{})
 	for _, want := range []string{"-ui-dir", envAPIUIDir, "-tls-listen", envAPITLSListen, "-tls-cert", envAPITLSCert} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("help does not mention %s", want)

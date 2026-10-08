@@ -39,7 +39,7 @@ func gatewayTestCADirs(t *testing.T) (keyDir, certDir string) {
 // t ends). RM-246 makes both flags required with no fallback default --
 // TestGatewayCommandRefusesWithNoCADirsConfigured is the test that holds
 // that -- so every OTHER test in this file that reaches
-// gatewayOptions.validate() (directly or through runGatewayCommand /
+// gatewayOptions.validate() (directly or through runGateway /
 // parseGatewayFlags) needs this first, or the CA-directory check earlier in
 // that same switch masks whatever ONE thing the test actually means to
 // prove.
@@ -476,7 +476,7 @@ func TestGatewayCommandRefusesAnHTTPUpstreamBeforeOpeningAnything(t *testing.T) 
 	}}
 
 	var stdout, stderr bytes.Buffer
-	code := runGatewayCommand(
+	code := runGateway(context.Background(),
 		[]string{"-listen", "127.0.0.1:0", "-upstream", "http://example.invalid"},
 		&stdout, &stderr, deps)
 
@@ -500,7 +500,7 @@ func TestGatewayCommandRefusesAnyNonHTTPSScheme(t *testing.T) {
 				return nil, nil
 			}}
 			var stdout, stderr bytes.Buffer
-			code := runGatewayCommand([]string{"-listen", "127.0.0.1:0", "-upstream", upstream},
+			code := runGateway(context.Background(), []string{"-listen", "127.0.0.1:0", "-upstream", upstream},
 				&stdout, &stderr, deps)
 			if code != exitUsage {
 				t.Errorf("gateway -upstream %s = %d, want %d (exitUsage). stderr:\n%s",
@@ -545,7 +545,7 @@ func TestUpstreamMustBeHTTPS(t *testing.T) {
 
 func TestGatewayCommandHelpExitsZero(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := runGatewayCommand([]string{"-h"}, &stdout, &stderr, gatewayDeps{}); code != exitOK {
+	if code := runGateway(context.Background(), []string{"-h"}, &stdout, &stderr, gatewayDeps{}); code != exitOK {
 		t.Errorf("gateway -h = %d, want %d. stderr:\n%s", code, exitOK, stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "innsegl gateway") {
@@ -555,7 +555,7 @@ func TestGatewayCommandHelpExitsZero(t *testing.T) {
 
 func TestGatewayCommandRefusesAnEmptyUpstream(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := runGatewayCommand([]string{"-listen", "127.0.0.1:0", "-upstream", ""},
+	code := runGateway(context.Background(), []string{"-listen", "127.0.0.1:0", "-upstream", ""},
 		&stdout, &stderr, gatewayDeps{})
 	if code != exitUsage {
 		t.Errorf("gateway -upstream '' = %d, want %d (exitUsage)", code, exitUsage)
@@ -585,7 +585,7 @@ func TestGatewayCommandRefusesWithNoCADirsConfigured(t *testing.T) {
 	}}
 
 	var stdout, stderr bytes.Buffer
-	code := runGatewayCommand(
+	code := runGateway(context.Background(),
 		[]string{"-listen", "127.0.0.1:0", "-upstream", "https://example.invalid"},
 		&stdout, &stderr, deps)
 
@@ -601,7 +601,7 @@ func TestGatewayCommandRefusesWithNoCADirsConfigured(t *testing.T) {
 func TestGatewayCommandRefusesAnUnparseableUpstreamURL(t *testing.T) {
 	gatewayTestValidCADirs(t)
 	var stdout, stderr bytes.Buffer
-	code := runGatewayCommand([]string{"-listen", "127.0.0.1:0", "-upstream", "not a url"},
+	code := runGateway(context.Background(), []string{"-listen", "127.0.0.1:0", "-upstream", "not a url"},
 		&stdout, &stderr, gatewayDeps{})
 	if code != exitGatewayUnavailable {
 		t.Errorf("gateway -upstream 'not a url' = %d, want %d (exitGatewayUnavailable). stderr:\n%s",
@@ -611,7 +611,7 @@ func TestGatewayCommandRefusesAnUnparseableUpstreamURL(t *testing.T) {
 
 func TestGatewayCommandRefusesANegativeShutdownTimeout(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := runGatewayCommand([]string{"-shutdown-timeout", "-1s"}, &stdout, &stderr, gatewayDeps{})
+	code := runGateway(context.Background(), []string{"-shutdown-timeout", "-1s"}, &stdout, &stderr, gatewayDeps{})
 	if code != exitUsage {
 		t.Errorf("gateway -shutdown-timeout -1s = %d, want %d (exitUsage)", code, exitUsage)
 	}
@@ -623,7 +623,7 @@ func TestGatewayCommandRefusesANegativeShutdownTimeout(t *testing.T) {
 func TestGatewayCommandRefusesANonPositiveRateLimitRate(t *testing.T) {
 	for _, rate := range []string{"0", "-1"} {
 		var stdout, stderr bytes.Buffer
-		code := runGatewayCommand([]string{"-rate-limit-rate", rate}, &stdout, &stderr, gatewayDeps{})
+		code := runGateway(context.Background(), []string{"-rate-limit-rate", rate}, &stdout, &stderr, gatewayDeps{})
 		if code != exitUsage {
 			t.Errorf("gateway -rate-limit-rate %s = %d, want %d (exitUsage)", rate, code, exitUsage)
 		}
@@ -636,7 +636,7 @@ func TestGatewayCommandRefusesANonPositiveRateLimitRate(t *testing.T) {
 func TestGatewayCommandRefusesANonPositiveRateLimitBurst(t *testing.T) {
 	for _, burst := range []string{"0", "-1"} {
 		var stdout, stderr bytes.Buffer
-		code := runGatewayCommand([]string{"-rate-limit-burst", burst}, &stdout, &stderr, gatewayDeps{})
+		code := runGateway(context.Background(), []string{"-rate-limit-burst", burst}, &stdout, &stderr, gatewayDeps{})
 		if code != exitUsage {
 			t.Errorf("gateway -rate-limit-burst %s = %d, want %d (exitUsage)", burst, code, exitUsage)
 		}
@@ -736,12 +736,12 @@ func TestGatewayCommandReportsFailedWhenServeReturnsAnError(t *testing.T) {
 	}}
 
 	var stdout, stderr bytes.Buffer
-	code := runGatewayCommand(
+	code := runGateway(context.Background(),
 		[]string{"-listen", "127.0.0.1:0", "-upstream", "https://example.invalid"},
 		&stdout, &stderr, deps)
 
 	if code != exitGatewayFailed {
-		t.Fatalf("runGatewayCommand = %d, want %d (exitGatewayFailed). stderr:\n%s",
+		t.Fatalf("runGateway = %d, want %d (exitGatewayFailed). stderr:\n%s",
 			code, exitGatewayFailed, stderr.String())
 	}
 	if fake.closed != 1 {
@@ -754,7 +754,7 @@ func TestGatewayCommandReportsFailedWhenServeReturnsAnError(t *testing.T) {
 
 func TestGatewayCommandRejectsTrailingArguments(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := runGatewayCommand([]string{"extra"}, &stdout, &stderr, gatewayDeps{})
+	code := runGateway(context.Background(), []string{"extra"}, &stdout, &stderr, gatewayDeps{})
 	if code != exitUsage {
 		t.Errorf("gateway with a trailing argument = %d, want %d (exitUsage)", code, exitUsage)
 	}
@@ -779,7 +779,7 @@ func TestGatewayCommandDefaultsAgentMessageKeyID(t *testing.T) {
 func TestGatewayCommandRefusesAMalformedAgentMessageKeyID(t *testing.T) {
 	gatewayTestValidCADirs(t)
 	var stdout, stderr bytes.Buffer
-	code := runGatewayCommand([]string{"-agent-message-key-id", "Not Valid!"}, &stdout, &stderr, gatewayDeps{})
+	code := runGateway(context.Background(), []string{"-agent-message-key-id", "Not Valid!"}, &stdout, &stderr, gatewayDeps{})
 	if code != exitUsage {
 		t.Errorf("gateway -agent-message-key-id %q = %d, want %d (exitUsage)", "Not Valid!", code, exitUsage)
 	}
@@ -828,7 +828,7 @@ func TestGatewayCommandRefusesBothIdentitySecretAndIdentitySecretFile(t *testing
 		t.Fatalf("WriteFile: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := runGatewayCommand(
+	code := runGateway(context.Background(),
 		[]string{"-identity-secret", "s3cr3t", "-identity-secret-file", path}, &stdout, &stderr, gatewayDeps{})
 	if code != exitUsage {
 		t.Errorf("gateway with both -identity-secret and -identity-secret-file = %d, want %d (exitUsage)",
@@ -843,7 +843,7 @@ func TestGatewayCommandRefusesAnIdentitySecretFileThatDoesNotExist(t *testing.T)
 	t.Setenv(envIdentitySecret, "")
 	t.Setenv(envIdentitySecretFile, "")
 	var stdout, stderr bytes.Buffer
-	code := runGatewayCommand(
+	code := runGateway(context.Background(),
 		[]string{"-identity-secret-file", "/does/not/exist"}, &stdout, &stderr, gatewayDeps{})
 	if code != exitUsage {
 		t.Errorf("gateway with a missing -identity-secret-file = %d, want %d (exitUsage)", code, exitUsage)

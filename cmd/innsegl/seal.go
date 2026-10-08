@@ -194,10 +194,6 @@ func sealCommand(args []string, stdout, stderr io.Writer) int {
 	return runSealLoop(ctx, args, stdout, stderr, sealDeps{})
 }
 
-func runSealCommand(args []string, stdout, stderr io.Writer, deps sealDeps) int {
-	return runSealLoop(context.Background(), args, stdout, stderr, deps)
-}
-
 // runSealLoop is the whole command: parse, refuse, open, cycle.
 func runSealLoop(ctx context.Context, args []string, stdout, stderr io.Writer, deps sealDeps) int {
 	opts, asJSON, quiet, code := parseSealFlags(args, stderr)

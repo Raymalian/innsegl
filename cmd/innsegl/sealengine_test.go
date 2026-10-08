@@ -567,7 +567,7 @@ func TestSEG010ConflictingSegmentSizeIsRefusedNotOverwritten(t *testing.T) {
 	// chain does hold one, so the survey must find it and the sizes must not
 	// collide. The collision this case is about is the one a *concurrent*
 	// sealer with a different size produces, so the range is offered directly.
-	_, err := rerun.engine.sealRange(context.Background(), 1, 2)
+	_, err := sealRange(context.Background(), rerun.engine, 1, 2)
 
 	if err == nil {
 		t.Fatalf("sealing 1..2 over a chain that already sealed 1..4 succeeded; "+
@@ -1047,7 +1047,7 @@ func TestAnchorReportsALedgerThatWillNotTakeTheSupersedingEvent(t *testing.T) {
 	f := newEngineFixture(t, nil)
 	f.chain.seed(t, 4)
 
-	seg, serr := f.engine.sealRange(context.Background(), 1, 4)
+	seg, serr := sealRange(context.Background(), f.engine, 1, 4)
 	if serr != nil {
 		t.Fatalf("sealRange: %v", serr)
 	}
@@ -1099,7 +1099,7 @@ func TestSealRangeReportsAReadItCannotMake(t *testing.T) {
 	f.chain.seed(t, 8)
 	f.engine.chain = &readFailsAfter{fakeChain: f.chain, after: 0}
 
-	if _, err := f.engine.sealRange(context.Background(), 5, 8); err == nil {
+	if _, err := sealRange(context.Background(), f.engine, 5, 8); err == nil {
 		t.Fatal("sealRange returned no error when the range could not be read")
 	}
 }
@@ -1110,7 +1110,7 @@ func TestSealRangeSealsARangeThatDoesNotStartAtOne(t *testing.T) {
 	f := newEngineFixture(t, nil)
 	f.chain.seed(t, 8)
 
-	seg, err := f.engine.sealRange(context.Background(), 5, 8)
+	seg, err := sealRange(context.Background(), f.engine, 5, 8)
 	if err != nil {
 		t.Fatalf("sealRange(5, 8): %v", err)
 	}
@@ -1191,7 +1191,7 @@ func TestAlertRefusesARecordThatIsNotASegmentSeal(t *testing.T) {
 func TestAnchoredBodyRefusesAnAnchorThatDoesNotMatch(t *testing.T) {
 	f := newEngineFixture(t, nil)
 	f.chain.seed(t, 4)
-	seg, err := f.engine.sealRange(context.Background(), 1, 4)
+	seg, err := sealRange(context.Background(), f.engine, 1, 4)
 	if err != nil {
 		t.Fatalf("sealRange: %v", err)
 	}
@@ -1225,7 +1225,7 @@ func TestAnEventIDThatCannotBeMintedStopsBeforeAnythingIsWritten(t *testing.T) {
 	t.Run("anchor", func(t *testing.T) {
 		f := newEngineFixture(t, nil)
 		f.chain.seed(t, 4)
-		seg, err := f.engine.sealRange(context.Background(), 1, 4)
+		seg, err := sealRange(context.Background(), f.engine, 1, 4)
 		if err != nil {
 			t.Fatalf("sealRange: %v", err)
 		}
@@ -1238,7 +1238,7 @@ func TestAnEventIDThatCannotBeMintedStopsBeforeAnythingIsWritten(t *testing.T) {
 	t.Run("alert", func(t *testing.T) {
 		f := newEngineFixture(t, nil)
 		f.chain.seed(t, 4)
-		seg, err := f.engine.sealRange(context.Background(), 1, 4)
+		seg, err := sealRange(context.Background(), f.engine, 1, 4)
 		if err != nil {
 			t.Fatalf("sealRange: %v", err)
 		}
@@ -1531,4 +1531,14 @@ func TestRM204AChainWithoutTheQueryKeepsTheWalk(t *testing.T) {
 	if len(survey.backlog) != 1 || survey.backlog[0].first != 1 {
 		t.Errorf("backlog = %+v, want the one unanchored segment at 1", survey.backlog)
 	}
+}
+
+// sealRange reads positions first..last and seals them, as the seal pass does
+// once it has chosen a range.
+func sealRange(ctx context.Context, e *sealEngine, first, last int64) (surveyedSegment, error) {
+	records, err := e.chain.Events(ctx, first, last)
+	if err != nil {
+		return surveyedSegment{}, fmt.Errorf("reading positions %d..%d to seal them: %w", first, last, err)
+	}
+	return e.sealRecords(ctx, first, last, records)
 }

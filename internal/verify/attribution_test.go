@@ -37,7 +37,7 @@ func (f fakeContentSource) RunsForPatchID(_ context.Context, _ string) ([]verify
 	return f.records, f.err
 }
 
-func TestAttributeContentAnswersWithoutTheThreeChecks(t *testing.T) {
+func TestAttributeClaimAnswersWithoutTheThreeChecks(t *testing.T) {
 	repo := t.TempDir()
 	sha, runID := seedRebasedCommit(t, repo)
 
@@ -49,11 +49,11 @@ func TestAttributeContentAnswersWithoutTheThreeChecks(t *testing.T) {
 		EventID:   "01a08a8f-f68b-7c04-8c4b-632faf03ff9f",
 	}}}
 
-	got := verify.AttributeContent(context.Background(),
-		verify.ContentConfig{Source: src}, repo, sha, runID)
+	got := verify.AttributeClaim(context.Background(),
+		verify.ContentConfig{Source: src}, repo, sha, verify.Claim{Run: runID})
 
 	if got.Result != verify.Verified {
-		t.Fatalf("AttributeContent returned %v (%s), want Verified — the ledger holds "+
+		t.Fatalf("AttributeClaim returned %v (%s), want Verified — the ledger holds "+
 			"this exact change under the run the commit claims", got.Result, got.Detail)
 	}
 	if got.PatchID != patchID {
@@ -66,42 +66,42 @@ func TestAttributeContentAnswersWithoutTheThreeChecks(t *testing.T) {
 	}
 }
 
-func TestAttributeContentWithNoLedgerSaysSoRatherThanFailing(t *testing.T) {
+func TestAttributeClaimWithNoLedgerSaysSoRatherThanFailing(t *testing.T) {
 	repo := t.TempDir()
 	sha, runID := seedRebasedCommit(t, repo)
 
-	got := verify.AttributeContent(context.Background(),
-		verify.ContentConfig{Source: nil}, repo, sha, runID)
+	got := verify.AttributeClaim(context.Background(),
+		verify.ContentConfig{Source: nil}, repo, sha, verify.Claim{Run: runID})
 
 	if got.Result != verify.Unavailable {
-		t.Fatalf("with no ledger AttributeContent returned %v (%s), want Unavailable — "+
+		t.Fatalf("with no ledger AttributeClaim returned %v (%s), want Unavailable — "+
 			"\"could not ask\" is not \"the content changed\" (doc 06 P2)",
 			got.Result, got.Detail)
 	}
 }
 
-func TestAttributeContentReportsAChangedContentAsFailedNotUnavailable(t *testing.T) {
+func TestAttributeClaimReportsAChangedContentAsFailedNotUnavailable(t *testing.T) {
 	repo := t.TempDir()
 	sha, runID := seedRebasedCommit(t, repo)
 
 	// The ledger holds nothing for this change.
 	src := fakeContentSource{records: nil}
-	got := verify.AttributeContent(context.Background(),
-		verify.ContentConfig{Source: src}, repo, sha, runID)
+	got := verify.AttributeClaim(context.Background(),
+		verify.ContentConfig{Source: src}, repo, sha, verify.Claim{Run: runID})
 
 	if got.Result != verify.Failed {
-		t.Fatalf("AttributeContent returned %v (%s), want Failed — no run recorded this "+
+		t.Fatalf("AttributeClaim returned %v (%s), want Failed — no run recorded this "+
 			"change, which is a finding and not an absence of one", got.Result, got.Detail)
 	}
 }
 
-func TestAttributeContentSurfacesALedgerErrorAsUnavailable(t *testing.T) {
+func TestAttributeClaimSurfacesALedgerErrorAsUnavailable(t *testing.T) {
 	repo := t.TempDir()
 	sha, runID := seedRebasedCommit(t, repo)
 
 	src := fakeContentSource{err: errors.New("connection refused")}
-	got := verify.AttributeContent(context.Background(),
-		verify.ContentConfig{Source: src}, repo, sha, runID)
+	got := verify.AttributeClaim(context.Background(),
+		verify.ContentConfig{Source: src}, repo, sha, verify.Claim{Run: runID})
 
 	if got.Result != verify.Unavailable {
 		t.Fatalf("a ledger error produced %v (%s), want Unavailable — an outage must "+
@@ -181,7 +181,7 @@ func output(t *testing.T, dir string, args ...string) string {
 // ledger on 2026-09-10, on the very commit this endpoint was built to answer
 // about. Naming the object the change was signed as is the useful half of the
 // answer.
-func TestAttributeContentPrefersTheRecordThatNamesTheCommit(t *testing.T) {
+func TestAttributeClaimPrefersTheRecordThatNamesTheCommit(t *testing.T) {
 	repo := t.TempDir()
 	sha, runID := seedRebasedCommit(t, repo)
 	patchID := patchIDOfCommit(t, repo, sha)
@@ -193,8 +193,8 @@ func TestAttributeContentPrefersTheRecordThatNamesTheCommit(t *testing.T) {
 		{RunID: runID, PatchID: patchID, CommitSHA: original, EventID: "recorded"},
 	}}
 
-	got := verify.AttributeContent(context.Background(),
-		verify.ContentConfig{Source: src}, repo, sha, runID)
+	got := verify.AttributeClaim(context.Background(),
+		verify.ContentConfig{Source: src}, repo, sha, verify.Claim{Run: runID})
 
 	if got.Result != verify.Verified {
 		t.Fatalf("result %v (%s), want Verified", got.Result, got.Detail)
@@ -210,7 +210,7 @@ func TestAttributeContentPrefersTheRecordThatNamesTheCommit(t *testing.T) {
 
 // An intent alone still answers: the content is attributed, and the message
 // says plainly that the object it was signed as is not on the chain.
-func TestAttributeContentAnswersFromAnIntentAlone(t *testing.T) {
+func TestAttributeClaimAnswersFromAnIntentAlone(t *testing.T) {
 	repo := t.TempDir()
 	sha, runID := seedRebasedCommit(t, repo)
 	patchID := patchIDOfCommit(t, repo, sha)
@@ -218,8 +218,8 @@ func TestAttributeContentAnswersFromAnIntentAlone(t *testing.T) {
 	src := fakeContentSource{records: []verify.ContentRecord{
 		{RunID: runID, PatchID: patchID, CommitSHA: "", EventID: "intent"},
 	}}
-	got := verify.AttributeContent(context.Background(),
-		verify.ContentConfig{Source: src}, repo, sha, runID)
+	got := verify.AttributeClaim(context.Background(),
+		verify.ContentConfig{Source: src}, repo, sha, verify.Claim{Run: runID})
 
 	if got.Result != verify.Verified {
 		t.Fatalf("result %v (%s), want Verified — an intent proves the change was claimed",
@@ -238,7 +238,7 @@ func TestAttributeContentAnswersFromAnIntentAlone(t *testing.T) {
 // already chosen, the condition that would replace it must be exercised as
 // FALSE, or the preference is only ever tested one way and a rewrite that
 // inverted it would pass.
-func TestAttributeContentKeepsTheRecordWhenAnIntentFollowsIt(t *testing.T) {
+func TestAttributeClaimKeepsTheRecordWhenAnIntentFollowsIt(t *testing.T) {
 	repo := t.TempDir()
 	sha, runID := seedRebasedCommit(t, repo)
 	patchID := patchIDOfCommit(t, repo, sha)
@@ -248,8 +248,8 @@ func TestAttributeContentKeepsTheRecordWhenAnIntentFollowsIt(t *testing.T) {
 		{RunID: runID, PatchID: patchID, CommitSHA: original, EventID: "recorded"},
 		{RunID: runID, PatchID: patchID, CommitSHA: "", EventID: "intent"},
 	}}
-	got := verify.AttributeContent(context.Background(),
-		verify.ContentConfig{Source: src}, repo, sha, runID)
+	got := verify.AttributeClaim(context.Background(),
+		verify.ContentConfig{Source: src}, repo, sha, verify.Claim{Run: runID})
 
 	if got.Result != verify.Verified {
 		t.Fatalf("result %v (%s), want Verified", got.Result, got.Detail)
@@ -288,7 +288,7 @@ func TestADP017AttributeClaimCarriesTheAdoption(t *testing.T) {
 
 	// The control that reproduces the incident: the run alone is half the
 	// claim, and the ledger's adoption then reads as a missing trailer.
-	if got := verify.AttributeContent(context.Background(), cfg, repo, sha, runID); got.Result != verify.Failed {
+	if got := verify.AttributeClaim(context.Background(), cfg, repo, sha, verify.Claim{Run: runID}); got.Result != verify.Failed {
 		t.Errorf("the run alone against a recorded adoption = %v, want failed", got.Result)
 	}
 }
