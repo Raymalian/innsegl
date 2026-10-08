@@ -29,7 +29,7 @@ F="$(dirname "$0")"
 echo "$*" >> "${F}/calls"
 case "$1" in
   inspect) [ -n "${FAKE_KMSCA:-}" ] && echo '["serve","--ca=kmsca"]' || echo '["serve","--ca=fileca"]' ;;
-  run) [ -n "${FAKE_CHAIN:-}" ] && echo "-----BEGIN CERTIFICATE-----" ;;
+  run) if [ -n "${FAKE_CHAIN:-}" ] && [ "${*: -2:1}" = cat ]; then echo "-----BEGIN CERTIFICATE-----"; fi ;;
   exec) cat >/dev/null; exit "${FAKE_HAS:-4}" ;;
   *) exit 0 ;;
 esac
@@ -37,7 +37,7 @@ SH
 chmod +x "${FAKE}/docker"
 
 fresh() { rm -f "${FAKE}/calls"; : > "${FAKE}/calls"; }
-removed() { grep -q "^volume rm" "${FAKE}/calls"; }
+removed() { grep -q "find /v -mindepth 1 -delete" "${FAKE}/calls"; }
 run() { OUT="$(env INNSEGL_RESET_DOCKER="${FAKE}/docker" "$@" "${SUT}" 2>&1)"; CODE=$?; }
 
 echo "OPS-159 — ca-custody-reset"
@@ -50,7 +50,7 @@ if [ "${CODE}" = 3 ] && ! removed && printf '%s' "${OUT}" | grep -q 'trust histo
 fresh; run env CONFIRM=reset FAKE_CHAIN=1 FAKE_HAS=3
 if [ "${CODE}" = 3 ] && ! removed; then ok "the history unreadable: refused, nothing removed"; else bad "the history unreadable: refused, nothing removed" "exit ${CODE}: ${OUT}"; fi
 fresh; run env CONFIRM=reset FAKE_CHAIN=1 FAKE_HAS=4
-if [ "${CODE}" = 0 ] && grep -q "volume rm innsegl-trust-ca-store innsegl-trust-ca-custody innsegl-sigstore_sigstore-fulcio-kms" "${FAKE}/calls"; then ok "a root that never signed: the store, its material and the root's volume removed"; else bad "a root that never signed: removed" "exit ${CODE}: ${OUT} / $(cat "${FAKE}/calls")"; fi
+if [ "${CODE}" = 0 ] && grep -q "run --rm -v innsegl-trust-ca-store:/v" "${FAKE}/calls" && grep -q "run --rm -v innsegl-trust-ca-custody:/v" "${FAKE}/calls" && grep -q "run --rm -v innsegl-sigstore_sigstore-fulcio-kms:/v" "${FAKE}/calls" && ! grep -q "^volume rm" "${FAKE}/calls"; then ok "a root that never signed: the store, its material and the root's volume removed"; else bad "a root that never signed: removed" "exit ${CODE}: ${OUT} / $(cat "${FAKE}/calls")"; fi
 fresh; run env CONFIRM=reset
 if [ "${CODE}" = 0 ] && removed; then ok "no root minted: removed"; else bad "no root minted: removed" "exit ${CODE}: ${OUT}"; fi
 
