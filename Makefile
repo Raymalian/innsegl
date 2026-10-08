@@ -720,10 +720,13 @@ update:
 	@docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-spire-server && docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-sigstore-rekor || \
 	  { echo "make update: SPIRE or Rekor is not running; run make start"; exit 2; }
 	@deployed=$$(cat '$(DEPLOYED_FILE)' 2>/dev/null); \
-	 core=$$(docker inspect -f '{{.State.Status}} restarting={{.State.Restarting}}' $(STACK_PREFIX)-mcp 2>/dev/null); \
-	 if [ "$$deployed" = "$(DEPLOY_STATE)" ] && [ "$$core" = "running restarting=false" ]; then \
+	 down=""; for c in $(STACK_PREFIX)-mcp $(if $(CA_CUSTODY),innsegl-ca-store innsegl-ca-custodian); do \
+	   st=$$(docker inspect -f '{{.State.Status}} restarting={{.State.Restarting}}' $$c 2>/dev/null); \
+	   [ "$$st" = "running restarting=false" ] || down="$$down $$c"; \
+	 done; \
+	 if [ "$$deployed" = "$(DEPLOY_STATE)" ] && [ -z "$$down" ]; then \
 	   echo "make update: already up to date ($(DEPLOY_STATE)); nothing to do"; exit 0; fi; \
-	 [ "$$deployed" = "$(DEPLOY_STATE)" ] && echo "make update: the core is $${core:-not there}; starting it again"; \
+	 [ "$$deployed" = "$(DEPLOY_STATE)" ] && echo "make update: not running:$$down; starting again"; \
 	 echo "make update: deployed $${deployed:-an unrecorded checkout}, checkout is $(DEPLOY_STATE)"; \
 	 $(MAKE) --no-print-directory rekor-log-up && \
 	 $(MAKE) --no-print-directory fulcio-file-ca-up && \
