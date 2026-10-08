@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"filippo.io/age"
+
 	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/trustbackup"
 )
@@ -122,6 +124,10 @@ func runClientServe(ctx context.Context, args []string, _, stderr io.Writer, hom
 	// ADR-0074: keep copies of the core's encrypted trust-key backup.
 	go srv.RunTrustBackupFetch(renewCtx, &trustbackup.Store{Dir: paths.TrustBackups, Keep: client.TrustBackupKeep},
 		client.TrustBackupInterval)
+	// ADR-0076: unlock the core's CA key store when it restarts sealed.
+	go srv.RunCAUnlock(renewCtx, func() ([]age.Identity, error) {
+		return trustbackup.LoadIdentities(paths.TrustIdentity, nil)
+	}, client.CAUnlockInterval, client.CAUnlockBackoff)
 	go func() {
 		<-ctx.Done()
 		shutdown, done := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)

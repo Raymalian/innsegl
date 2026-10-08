@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Exit statuses, distinct because an operator acts differently on each.
@@ -23,7 +24,11 @@ func main() { os.Exit(run()) }
 
 func run() int {
 	addr := firstSet("INNSEGL_CA_STORE_ADDR", "BAO_ADDR", "VAULT_ADDR")
-	token := firstSet("INNSEGL_CA_STORE_TOKEN", "BAO_TOKEN", "VAULT_TOKEN")
+	token, err := storeToken(os.Getenv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ca-bootstrap: %v\n", err)
+		return exitStore
+	}
 	key := envOr("INNSEGL_CA_STORE_KEY", "innsegl-ca")
 	trustDomain := envOr("INNSEGL_TRUST_DOMAIN", "innsegl.dev")
 	out := envOr("INNSEGL_CA_CHAIN_PATH", "/etc/fulcio/chain.pem")
@@ -42,7 +47,7 @@ func run() int {
 	// IDEMPOTENT, and it has to be: this runs on every bring-up of the profile,
 	// and a second run that minted a SECOND key would leave Fulcio presenting a
 	// root that no longer matches the key the store signs with.
-	if err := ensureKey(addr, token, key); err != nil {
+	if err = ensureKey(addr, token, key); err != nil {
 		fmt.Fprintf(os.Stderr, "ca-bootstrap: %v\n", err)
 		return exitStore
 	}
@@ -244,4 +249,26 @@ func adoptExistingRoot(src, out string) (bool, error) {
 		return false, fmt.Errorf("writing %s: %w", out, err)
 	}
 	return true, f.Close()
+}
+
+// storeToken is the CA's token: from the environment, or from the file the
+// custodian writes it to (ADR-0076). A named file that is not there is an
+// error: the store has not been unlocked yet, and saying so beats minting
+// nothing with no token.
+func storeToken(getenv func(string) string) (string, error) {
+	for _, n := range []string{"INNSEGL_CA_STORE_TOKEN", "BAO_TOKEN", "VAULT_TOKEN"} {
+		if v := getenv(n); v != "" {
+			return v, nil
+		}
+	}
+	file := getenv("INNSEGL_CA_STORE_TOKEN_FILE")
+	if file == "" {
+		return "", nil
+	}
+	b, err := os.ReadFile(filepath.Clean(file))
+	if err != nil {
+		return "", fmt.Errorf("the CA's token file %s: %w. Under key custody the custodian writes it "+
+			"once the operator's machine has unlocked the store", file, err)
+	}
+	return strings.TrimSpace(string(b)), nil
 }

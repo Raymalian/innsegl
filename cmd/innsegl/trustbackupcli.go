@@ -13,7 +13,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 
+	"innsegl.dev/innsegl/internal/cacustody"
 	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/trustbackup"
 )
@@ -44,10 +44,59 @@ const (
 )
 
 // expectedTrustItems are the items a deployment's bundle holds (ADR-0074).
-// The drill names any one that is missing.
+// The drill names any one that is missing. The CA's password and CA custody
+// are checked by missingTrustItems, which reads inside the items.
 var expectedTrustItems = []string{
-	"fulcio-pki", "fulcio-ca-password", "rekor-key", "trillian-db",
+	"fulcio-pki", "rekor-key", "trillian-db",
 	"identity-secret", "spire-upstream-ca", "gateway-ca-key", "trust-history",
+}
+
+// The files a restore cannot do without, inside their items.
+const (
+	// trustItemCAKeyLockFile is the CA key's password beside it (ADR-0075).
+	trustItemCAKeyLockFile = "ca.pass"
+	// trustItemLegacyKeyLock is the CA key's password as its own item, from
+	// a host that predates ca.pass. The item's name, not a value.
+	trustItemLegacyKeyLock = "fulcio-ca-" + "password"
+	// trustItemCustody says the deployment keeps its CA key in the store
+	// (ADR-0076). Its presence makes the next two required.
+	trustItemCustody        = "custody"
+	trustItemCAStore        = "ca-store"
+	trustItemCAStoreFile    = cacustody.SnapshotFile
+	trustItemCAMaterial     = "ca-custody"
+	trustItemCAMaterialFile = cacustody.MaterialFile
+)
+
+// missingTrustItems names what a bundle lacks to restore the trust keys:
+// any expected item; the CA's password, as ca.pass beside the key or as the
+// older item; and under custody, the store's snapshot and the sealed unlock
+// material, without which the CA key is lost.
+func missingTrustItems(m trustbackup.Manifest) []string {
+	files := map[string]map[string]bool{}
+	for _, it := range m.Items {
+		files[it.Name] = map[string]bool{}
+		for _, f := range it.Files {
+			files[it.Name][f.Path] = true
+		}
+	}
+	var missing []string
+	for _, want := range expectedTrustItems {
+		if files[want] == nil {
+			missing = append(missing, want)
+		}
+	}
+	if files["fulcio-pki"] != nil && !files["fulcio-pki"][trustItemCAKeyLockFile] && files[trustItemLegacyKeyLock] == nil {
+		missing = append(missing, trustItemLegacyKeyLock+" (or ca.pass in fulcio-pki)")
+	}
+	if files[trustItemCustody] != nil {
+		if !files[trustItemCAStore][trustItemCAStoreFile] {
+			missing = append(missing, trustItemCAStore+" ("+trustItemCAStoreFile+")")
+		}
+		if !files[trustItemCAMaterial][trustItemCAMaterialFile] {
+			missing = append(missing, trustItemCAMaterial+" ("+trustItemCAMaterialFile+")")
+		}
+	}
+	return missing
 }
 
 type trustBackupDeps struct {
@@ -295,7 +344,7 @@ func runTrustBackupDrill(args []string, stdout, stderr io.Writer, deps trustBack
 	fs := flag.NewFlagSet("drill", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", client.ClientPaths(deps.home).TrustBackups, "the directory the bundles are kept in")
-	identity := fs.String("identity", filepath.Join(deps.home, ".innsegl", "trust-backup", "identity.txt"),
+	identity := fs.String("identity", client.ClientPaths(deps.home).TrustIdentity,
 		"the age identity file that opens the bundle (a Secure Enclave identity asks for Touch ID)")
 	extract := fs.String("extract", "", "also write the files under this new directory, 0600, for a restore; "+
 		"empty checks without writing anything")
@@ -362,18 +411,15 @@ func printDrill(stdout io.Writer, e trustbackup.Entry, m trustbackup.Manifest, e
 			fmt.Fprintf(tw, "\t  %s\t%d bytes, sha256 %s\n", f.Path, f.Size, f.SHA256[:16])
 		}
 	}
-	missing := 0
-	for _, want := range expectedTrustItems {
-		if !have[want] {
-			missing++
-			fmt.Fprintf(tw, "item\t%s\tMISSING from this bundle\n", want)
-		}
+	missing := missingTrustItems(m)
+	for _, want := range missing {
+		fmt.Fprintf(tw, "item\t%s\tMISSING from this bundle\n", want)
 	}
 	fmt.Fprintf(tw, "check\tok\tevery checksum matches: %d files, %d bytes\n", m.Files(), m.Bytes())
 	if extracted != "" {
 		fmt.Fprintf(tw, "extracted\t\tplaintext keys in %s: remove it when the restore is done\n", extracted)
 	}
-	if err := tw.Flush(); err != nil || missing > 0 {
+	if err := tw.Flush(); err != nil || len(missing) > 0 {
 		return exitTrustBackupFailed
 	}
 	return exitOK

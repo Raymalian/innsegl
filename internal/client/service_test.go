@@ -27,7 +27,7 @@ const goldenPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>KeepAlive</key>
   <true/>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Interactive</string>
   <key>StandardOutPath</key>
   <string>/opt/home-dev/Library/Logs/innsegl-client.log</string>
   <key>StandardErrorPath</key>
@@ -50,6 +50,19 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 `
+
+// BAK-025 (PROPOSED for doc 07's TC-BAK) — the client service may ask for
+// Touch ID (#533). It opens the CA store's unlock material with a Secure
+// Enclave key, and that asks the operator on screen. MEASURED 2026-10-07: a
+// LaunchAgent with ProcessType Interactive showed the prompt and decrypted;
+// Background is the class launchd throttles and keeps away from the user.
+func TestBAK025TheClientServiceRunsAsAnInteractiveAgent(t *testing.T) {
+	got := RenderPlist("/opt/innsegl/innsegl", "/tmp/innsegl-client.log")
+	want := "<key>ProcessType</key>\n  <string>Interactive</string>"
+	if !strings.Contains(got, want) {
+		t.Fatalf("the client service is not an interactive agent, so it cannot ask for Touch ID to unlock the CA store:\n%s", got)
+	}
+}
 
 func TestServicePlistGolden(t *testing.T) {
 	got := RenderPlist("/opt/innsegl & co/innsegl", "/opt/home-dev/Library/Logs/innsegl-client.log")

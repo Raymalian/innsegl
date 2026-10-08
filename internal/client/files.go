@@ -40,6 +40,10 @@ type Paths struct {
 	// (ADR-0074), 0700, each bundle 0600. Beside the client folder, not in
 	// it: it is the operator's, not the enrolment's.
 	TrustBackups string
+	// TrustIdentity is the operator's age identity: a Secure Enclave key
+	// that opens the trust-key backup (ADR-0074) and the CA store's unlock
+	// material (ADR-0076), asking for Touch ID each time.
+	TrustIdentity string
 }
 
 // ClientPaths are the paths under home.
@@ -58,6 +62,8 @@ func ClientPaths(home string) Paths {
 		ProxyCAKey: filepath.Join(dir, "proxy-ca-key.pem"),
 		// ADR-0074.
 		TrustBackups: filepath.Join(home, ".innsegl", "trust-backups"),
+		// ADR-0074, ADR-0076.
+		TrustIdentity: filepath.Join(home, ".innsegl", "trust-backup", "identity.txt"),
 	}
 }
 

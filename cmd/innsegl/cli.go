@@ -156,6 +156,10 @@ var commands = map[string]command{
 	// ADR-0074: the encrypted trust-key backup. `create` runs on the core;
 	// `fetch` and `drill` on the operator's machine.
 	"trust-backup": {summary: "write, fetch or test-open the encrypted backup of the deployment's trust keys", exec: trustBackupCommand},
+	// ADR-0076: the CA key store, unlocked by the operator's machine.
+	// `ca-custodian` runs on the core; `ca-custody` on the operator's machine.
+	"ca-custodian": {summary: "keep the CA key store's custody on the core: init, renew, unlock", exec: caCustodianCommand},
+	"ca-custody":   {summary: "say whether the core's CA is sealed, and unlock it (Touch ID)", exec: caCustodyCommand},
 }
 
 // run dispatches args (os.Args[1:]) and returns the process exit code. It

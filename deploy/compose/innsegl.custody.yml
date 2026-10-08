@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ADR-0076 (#533): the core's half of CA key custody, applied with a second
+# `-f` after innsegl.yml when deploy/compose/.env says INNSEGL_CA_CUSTODY=on.
+# Without it the core is exactly what innsegl.yml says.
+#
+# Two things change:
+#   - innsegl-mcp joins the unlock network, whose only other member is the
+#     custodian, and is told where the custodian is. That is the whole of its
+#     reach into custody: three routes, for the operator's machine (ADR-0076).
+#   - the trust-key backup (ADR-0074) also carries the store's own snapshot,
+#     which the custodian takes, and the sealed unlock material. Both are
+#     needed to restore the CA, and neither is readable without the
+#     operator's key: the snapshot is encrypted under the store's unseal key,
+#     and the unseal key is in the sealed material.
+
+services:
+
+  innsegl-mcp:
+    networks:
+      - innsegl-ca-unlock
+    environment:
+      INNSEGL_CA_CUSTODIAN_URL: http://innsegl-ca-custodian:8210
+
+  # The base command with two more items. Compose replaces a command rather
+  # than appending to it, so the base list is repeated here, and
+  # test/deploy/cacustody_test.go fails the day the two drift apart.
+  innsegl-trust-backup:
+    command:
+      - trust-backup
+      - create
+      - --dir
+      - /trust-backups
+      - --owner
+      - "1000:1000"
+      - --keep
+      - ${INNSEGL_TRUST_BACKUP_KEEP:-14}
+      - --every
+      - ${INNSEGL_TRUST_BACKUP_INTERVAL:-24h}
+      - --retry
+      - 15m
+      - --path
+      - fulcio-pki=/in/fulcio-pki
+      - --value
+      - fulcio-ca-password=INNSEGL_FULCIO_CA_PASSWORD?
+      - --path
+      - rekor-key=/in/rekor-key
+      - --mysql
+      - trillian-db=trillian-db:3306/test
+      - --path
+      - identity-secret=/in/identity-secret
+      - --path
+      - spire-upstream-ca=/in/spire-pki-server
+      - --path
+      - gateway-ca-key=/in/gateway-ca-key
+      - --path
+      - trust-history=/in/trust-history
+      - --path
+      - ca-store=/in/ca-custody/snapshot
+      - --path
+      - ca-custody=/in/ca-custody/material
+      - --value
+      - custody=INNSEGL_CA_CUSTODY
+    environment:
+      # The marker the drill reads: a custody bundle must hold the store's
+      # snapshot and the sealed material, or it fails the drill (BAK-030).
+      INNSEGL_CA_CUSTODY: "on"
+    volumes:
+      - trust-backup-ca-custody:/in/ca-custody:ro
+
+networks:
+  innsegl-ca-unlock:
+    name: ${INNSEGL_CA_UNLOCK_NETWORK:-innsegl-ca-unlock}
+    external: true
+
+volumes:
+  trust-backup-ca-custody:
+    name: ${INNSEGL_TRUST_CA_CUSTODY_VOLUME:-innsegl-trust-ca-custody}
+    external: true

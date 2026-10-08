@@ -84,6 +84,11 @@ CORE="${INNSEGL_ROTATE_CORE_CONTAINER-${PREFIX}-mcp}"
 FULCIO_URL="${INNSEGL_ROTATE_FULCIO_URL:-}"
 HISTORY_CMD="${INNSEGL_ROTATE_HISTORY_CMD:-docker exec -i ${CORE} innsegl trust-history}"
 PROOF_CMD="${INNSEGL_ROTATE_PROOF_CMD:-${SIG}/verify.sh}"
+# ADR-0076: TO=custody moves Fulcio onto the CA key store instead. CUSTODY_CMD
+# VERB is `make ca-custody-VERB`: ready, stage (print the store's root), switch
+# (Fulcio onto the store), back (Fulcio onto the file CA again).
+TO="${TO:-file}"
+CUSTODY_CMD="${INNSEGL_ROTATE_CUSTODY_CMD:-custody_make}"
 WAIT_TRIES="${INNSEGL_ROTATE_WAIT_TRIES:-60}"
 POLL_SECONDS="${INNSEGL_ROTATE_POLL_SECONDS:-2}"
 
@@ -115,6 +120,14 @@ helper() {
 history() {
   # shellcheck disable=SC2086
   ${HISTORY_CMD} "$@"
+}
+
+custody_make() { make -s --no-print-directory -C "${ROOT}" "ca-custody-$1"; }
+
+# custody VERB runs one of TO=custody's steps. Word-split on purpose.
+custody() {
+  # shellcheck disable=SC2086
+  ${CUSTODY_CMD} "$@"
 }
 
 served_root() { curl -fsS --max-time 15 "${FULCIO_URL}/api/v1/rootCert" > "$1" 2>/dev/null; }
@@ -171,6 +184,10 @@ preflight() {
     *) die "${EXIT_USAGE}" "MODE must be retire (a planned rotation) or revoke (the key may have been exposed), got '${MODE:-}'" ;;
   esac
   [ -n "$(printf '%s' "${REASON:-}" | tr -d '[:space:]')" ] || die "${EXIT_USAGE}" "REASON is required: it is written into the trust history"
+  case "${TO}" in
+    file|custody) : ;;
+    *) die "${EXIT_USAGE}" "TO must be file (a new file CA) or custody (the CA key store, ADR-0076), got '${TO}'" ;;
+  esac
 
   docker version >/dev/null 2>&1 || die "${EXIT_REFUSED}" "docker is not reachable"
   running "${FULCIO}" || die "${EXIT_REFUSED}" "${FULCIO} is not running; the stack must be up (make start)"
@@ -220,11 +237,64 @@ preflight() {
     [ -n "${found}" ] || die "${EXIT_REFUSED}" "no trust-key backup newer than ${BACKUP_MAX_AGE_HOURS}h on the core (runbooks/trust-key-backup.md); take one first"
     log "a trust-key backup newer than ${BACKUP_MAX_AGE_HOURS}h: ${found}"
   fi
+  if [ "${TO}" = custody ]; then
+    custody ready >&2 || die "${EXIT_REFUSED}" "the CA key store is not ready: it must be initialised and unlocked, and the custodian must have the CA's token (runbooks/ca-custody.md)"
+  fi
   log "pre-flight passed: Fulcio serves root ${OLD_ID}, and the trust history holds it"
+}
+
+# after_custody_switch_failed MESSAGE: Fulcio back on the file CA, which the
+# switch left untouched, and exit 5; or exit 6.
+after_custody_switch_failed() {
+  warn "$1; putting Fulcio back on the file CA"
+  if custody back >&2 && wait_for_root "${WORK}/old.crt"; then
+    die "${EXIT_ROLLED_BACK}" "rolled back: Fulcio serves the file CA's root again and the trust history was not touched. Find the cause and run the rotation again."
+  fi
+  die "${EXIT_STUCK}" "THE WAY BACK FAILED TOO. The file CA is unchanged in its volume. Put Fulcio back on it by hand:
+    make ca-custody-back
+  then check that Fulcio serves the old root:
+    curl -s ${FULCIO_URL}/api/v1/rootCert | openssl x509 -noout -fingerprint -sha256
+  The trust history was not touched."
+}
+
+# to_custody: ADR-0076. The file CA is not archived or changed: it is the way
+# back. The store's root is minted from the store's own key (no import).
+to_custody() {
+  log '1 stage: the root of the CA key store'
+  if ! custody stage > "${WORK}/new.crt" || ! openssl x509 -in "${WORK}/new.crt" -noout 2>/dev/null; then
+    die "${EXIT_BEFORE}" "the store gave no root; nothing in use was changed"
+  fi
+  log '2 switch: Fulcio onto the store'
+  SWITCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  custody switch >&2 || after_custody_switch_failed "moving Fulcio onto the store failed"
+  wait_for_root "${WORK}/new.crt" || after_custody_switch_failed "Fulcio did not come back serving the store's root"
+
+  log '3 prove: a real certificate from the new root'
+  INNSEGL_SIGSTORE_VERIFY_CERT_ONLY=1 INNSEGL_SIGSTORE_VERIFY_ROOT="${WORK}/new.crt" \
+    INNSEGL_FULCIO_URL="${FULCIO_URL}" ${PROOF_CMD} >&2 || after_custody_switch_failed "the new root did not issue a certificate that chains to it"
+
+  log "4 end: the file CA's root (${MODE}), at ${SWITCHED_AT}"
+  history end --kind fulcio_root --key-id "${OLD_ID}" --mode "${MODE}" \
+    --at "${SWITCHED_AT}" --reason "${REASON}" >&2 \
+    || after_custody_switch_failed "the trust history refused the end date"
+
+  log "5 record: the store's root"
+  local recorded=1
+  history record --kind fulcio_root < "${WORK}/new.crt" >&2 || recorded=0
+  log "moved onto the CA key store. The file CA's root ${OLD_ID} is ${MODE}d at ${SWITCHED_AT}, and the file CA is left in its volume."
+  log "new root sha256 fingerprint $(fingerprint "${WORK}/new.crt")"
+  if [ "${recorded}" = 0 ]; then
+    warn "the new root is not in the trust history yet; the core's trust pass records it on its next run, or record it now: ${HISTORY_CMD} record --kind fulcio_root < new-root.pem"
+  fi
+  log 'next: take a new trust-key backup, and check a commit from each era (runbooks/ca-custody.md)'
 }
 
 rotate() {
   preflight
+  if [ "${TO}" = custody ]; then
+    to_custody
+    return
+  fi
   STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
   log "1 archive: the current CA, as archive/${STAMP}"
