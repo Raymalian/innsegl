@@ -626,7 +626,7 @@ func TestGate2RefusesWhenTheClaimIsInternallyInconsistent(t *testing.T) {
 // Admits ignores which email it was asked about.
 type spPerEmailPolicy struct{ refuse string }
 
-func (p spPerEmailPolicy) Admits(email string) error {
+func (p spPerEmailPolicy) Admits(_, email string) error {
 	if email == p.refuse {
 		return signing.ErrAuthorNotAdmitted
 	}
@@ -1697,6 +1697,41 @@ func TestSignPayloadUsesTheStatedWorkingDirectoryOnlyForTheRunsRepository(t *tes
 			})
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, want error %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// GH-006 (PROPOSED for doc 07) — gate 3 holds an operator address to the
+// display name pinned to it, and still admits the unlinked agent address.
+//
+// I6 allows the operator as an author. A repository whose deploy host builds
+// only commits authored by a member of its team is set to author agent commits
+// as the operator; the pinned pair on the core is what admits that, and a
+// different name on the same address must not ride on it.
+func TestGH006Gate3AdmitsTheOperatorOnlyWithItsPinnedName(t *testing.T) {
+	const opAddr = "1+op@users.noreply.github.com"
+	signers := NewGitsignSigners(signing.Config{Author: signing.AuthorPolicy{
+		Operators:     []signing.Operator{{Name: "Op Erator", Address: opAddr}},
+		AllowUnlinked: true,
+	}})
+	cases := []struct {
+		name, author, email string
+		admit               bool
+	}{
+		{"the pinned operator pair", "Op Erator", opAddr, true},
+		{"the operator address under another name", "Someone Else", opAddr, false},
+		{"the unlinked agent address", "Innsegl", "agent@innsegl.invalid", true},
+		{"an address nobody listed", "Op Erator", "op@corp.dev", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := signers.Admits(tc.author, tc.email)
+			if tc.admit && err != nil {
+				t.Fatalf("Admits(%q, %q) = %v, want admitted", tc.author, tc.email, err)
+			}
+			if !tc.admit && !errors.Is(err, signing.ErrAuthorNotAdmitted) {
+				t.Fatalf("Admits(%q, %q) = %v, want %v", tc.author, tc.email, err, signing.ErrAuthorNotAdmitted)
 			}
 		})
 	}

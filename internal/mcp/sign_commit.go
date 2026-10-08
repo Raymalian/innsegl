@@ -308,10 +308,12 @@ type SignCommitSigner interface {
 // SignCommitSigners opens a signer bound to one run's credential source.
 type SignCommitSigners interface {
 	// Admits reports whether the I6 author policy behind this factory admits
-	// email as a commit author. It is asked at CONFIGURATION time so that a
-	// deployment whose policy does not admit its own author refuses to start,
-	// rather than leaving a dangling `commit_intent` on its first signature.
-	Admits(email string) error
+	// `name <email>` as a commit author: an operator address only with the
+	// display name pinned to it (GH-006). It is asked at CONFIGURATION time so
+	// that a deployment whose policy does not admit its own author refuses to
+	// start, rather than leaving a dangling `commit_intent` on its first
+	// signature, and by sign_payload's gate 3 of each commit it signs.
+	Admits(name, email string) error
 	// Open returns a signer for one run. The caller closes it.
 	Open(src signing.CredentialSource) (SignCommitSigner, error)
 }
@@ -443,7 +445,7 @@ func newSignCommitService(cfg SignCommitConfig) (*signCommitService, error) {
 			"register_agent rendered the identity's {task_id}, so every claim would be refused " +
 			"as inconsistent (RM-079, #116)")
 	}
-	if err := cfg.Signers.Admits(cfg.AuthorEmail); err != nil {
+	if err := cfg.Signers.Admits(cfg.AuthorName, cfg.AuthorEmail); err != nil {
 		return refuse(fmt.Sprintf(
 			"the configured author %q is not admitted by the signer's author policy: %v "+
 				"(I6 — the one invariant with no cryptographic backstop)", cfg.AuthorEmail, err))
@@ -1792,7 +1794,9 @@ type gitsignSigners struct{ cfg signing.Config }
 
 // Admits asks the wrapper's own author policy, so there is exactly one
 // statement of who may author a commit in this deployment (I6).
-func (g gitsignSigners) Admits(email string) error { return g.cfg.Author.CheckAuthor(email) }
+func (g gitsignSigners) Admits(name, email string) error {
+	return g.cfg.Author.CheckIdentity(name, email)
+}
 
 func (g gitsignSigners) Open(src signing.CredentialSource) (SignCommitSigner, error) {
 	signer, err := signing.NewSigner(g.cfg, src)

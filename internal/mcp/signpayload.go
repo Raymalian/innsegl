@@ -209,15 +209,16 @@ func SignPayloadForGateway(
 
 	// ---- gate 3: I6, on the payload's own author and committer ------------
 	//
-	// AuthorPolicy.CheckAuthor, unchanged in what it checks: sign_commit's
-	// own configured signer factory is asked, exactly as sign_commit asks it
-	// at configuration time (Admits) — one statement of who may author a
-	// commit in this deployment.
-	if aerr := svc.signers.Admits(parsed.AuthorEmail); aerr != nil {
+	// AuthorPolicy.CheckIdentity, through sign_commit's own configured signer
+	// factory, exactly as sign_commit asks it at configuration time (Admits)
+	// — one statement of who may author a commit in this deployment. The name
+	// is asked too: an operator address is admitted only with the display
+	// name pinned to it (GH-006); the unlinked agent address is unaffected.
+	if aerr := svc.signers.Admits(parsed.AuthorName, parsed.AuthorEmail); aerr != nil {
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, runID,
 			"author %q is not admitted (I6): %w", parsed.AuthorEmail, aerr)
 	}
-	if aerr := svc.signers.Admits(parsed.CommitterEmail); aerr != nil {
+	if aerr := svc.signers.Admits(parsed.CommitterName, parsed.CommitterEmail); aerr != nil {
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, runID,
 			"committer %q is not admitted (I6): %w", parsed.CommitterEmail, aerr)
 	}

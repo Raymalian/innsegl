@@ -145,11 +145,13 @@ type ParsedCommit struct {
 	// them. Empty for a root commit.
 	Parents []string
 	// AuthorEmail and CommitterEmail are read out of the bracketed <email> of
-	// the `author` and `committer` header lines — the two fields ADR-0059
-	// decision 4 gate 3 holds to the I6 author policy, and the only two
-	// fields this type reads out of either line: the display name is not
-	// interpreted, because nothing here needs it to be.
+	// the `author` and `committer` header lines, and AuthorName and
+	// CommitterName are the display names before them. ADR-0059 decision 4
+	// gate 3 holds each pair to the I6 author policy: an operator address is
+	// admitted only with the name pinned to it (GH-006).
+	AuthorName     string
 	AuthorEmail    string
+	CommitterName  string
 	CommitterEmail string
 	// Message is everything after the header block's terminating blank line
 	// — the commit message, trailers included, exactly as the payload
@@ -193,17 +195,17 @@ func ParseCommitPayload(payload []byte) (ParsedCommit, error) {
 		case strings.HasPrefix(line, "parent "):
 			p.Parents = append(p.Parents, strings.TrimPrefix(line, "parent "))
 		case strings.HasPrefix(line, "author "):
-			email, err := emailOfHeaderLine(line, "author ")
+			name, email, err := identityOfHeaderLine(line, "author ")
 			if err != nil {
 				return ParsedCommit{}, err
 			}
-			p.AuthorEmail = email
+			p.AuthorName, p.AuthorEmail = name, email
 		case strings.HasPrefix(line, "committer "):
-			email, err := emailOfHeaderLine(line, "committer ")
+			name, email, err := identityOfHeaderLine(line, "committer ")
 			if err != nil {
 				return ParsedCommit{}, err
 			}
-			p.CommitterEmail = email
+			p.CommitterName, p.CommitterEmail = name, email
 		}
 	}
 
@@ -236,22 +238,22 @@ func ParseCommitPayload(payload []byte) (ParsedCommit, error) {
 	return p, nil
 }
 
-// emailOfHeaderLine reads the bracketed <email> out of an `author` or
-// `committer` header line. The display name is not interpreted: it can
-// contain almost anything, including a literal "<", so only the LAST
-// bracket pair on the line is trusted — the pair git itself writes the
-// address into.
-func emailOfHeaderLine(line, prefix string) (string, error) {
+// identityOfHeaderLine reads the display name and the bracketed <email> out
+// of an `author` or `committer` header line. The name can contain almost
+// anything, including a literal "<", so only the LAST bracket pair on the
+// line is trusted — the pair git itself writes the address into — and the
+// name is everything before it, trimmed. The name is compared, never parsed.
+func identityOfHeaderLine(line, prefix string) (name, email string, err error) {
 	rest := strings.TrimPrefix(line, prefix)
 	open := strings.LastIndexByte(rest, '<')
 	if open < 0 {
-		return "", fmt.Errorf("%w: %q carries no <email>", ErrPayload, line)
+		return "", "", fmt.Errorf("%w: %q carries no <email>", ErrPayload, line)
 	}
 	closeIdx := strings.IndexByte(rest[open:], '>')
 	if closeIdx < 0 {
-		return "", fmt.Errorf("%w: %q carries an unterminated <email>", ErrPayload, line)
+		return "", "", fmt.Errorf("%w: %q carries an unterminated <email>", ErrPayload, line)
 	}
-	return rest[open+1 : open+closeIdx], nil
+	return strings.TrimSpace(rest[:open]), rest[open+1 : open+closeIdx], nil
 }
 
 func isHexObjectID(s string, n int) bool {
