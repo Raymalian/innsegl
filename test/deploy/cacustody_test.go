@@ -39,10 +39,19 @@ type renderedService struct {
 		ReadOnly bool   `json:"read_only"`
 	} `json:"volumes"`
 	Profiles []string `json:"profiles"`
+	Configs  []struct {
+		Source string          `json:"source"`
+		Target string          `json:"target"`
+		Mode   json.RawMessage `json:"mode"`
+	} `json:"configs"`
 }
 
 type composeDoc struct {
 	Services map[string]renderedService `json:"services"`
+	Configs  map[string]struct {
+		Content string `json:"content"`
+		File    string `json:"file"`
+	} `json:"configs"`
 	Networks map[string]struct {
 		Name     string `json:"name"`
 		Internal bool   `json:"internal"`
@@ -114,7 +123,10 @@ func TestOPS149CustodyIsOnOnlyWhereEnvTurnsItOn(t *testing.T) {
 		onRun := makeDryRunEnv(t, target, "COMPOSE_ENV_FILE="+on)
 		// rekor-log-up names the log's services alone and never Fulcio, so
 		// it needs no overlay; the other two are how Fulcio comes up.
-		if target != "innsegl-here-services" && target != "rekor-log-up" && !strings.Contains(onRun, "ca-custody-up") {
+		// sigstore-up calls the target by name; fulcio-file-ca-up has it as a
+		// prerequisite, so its dry run shows what the target runs.
+		brought := strings.Contains(onRun, "ca-custody-up") || strings.Contains(onRun, "up -d innsegl-ca-store innsegl-ca-custodian")
+		if target != "innsegl-here-services" && target != "rekor-log-up" && !brought {
 			t.Errorf("%s with custody on does not bring the store up (ca-custody-up):\n%s", target, onRun)
 		}
 		if target == "innsegl-here-services" && !strings.Contains(onRun, coreCustody) {
@@ -257,14 +269,12 @@ func TestOPS151TheBackupCarriesTheStoreAndTheMaterial(t *testing.T) {
 // OPS-155 (PROPOSED) — the store keeps integrated storage, which can
 // snapshot itself, on the directory the store image owns.
 func TestOPS155TheStoreCanSnapshotItself(t *testing.T) {
-	hcl, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy", "compose", "sigstore", "ca-store.hcl"))
-	if err != nil {
-		t.Fatal(err)
+	doc := composeRender(t, nil, sigstoreBase, sigstoreCustod)
+	hcl := storeConfig(t, doc)
+	if !strings.Contains(hcl, `storage "raft"`) || !strings.Contains(hcl, `path    = "/openbao/file"`) {
+		t.Fatalf("the store's config does not use integrated storage on /openbao/file:\n%s", hcl)
 	}
-	if !strings.Contains(string(hcl), `storage "raft"`) || !strings.Contains(string(hcl), `path    = "/openbao/file"`) {
-		t.Fatalf("ca-store.hcl does not use integrated storage on /openbao/file:\n%s", hcl)
-	}
-	store := composeRender(t, nil, sigstoreBase, sigstoreCustod).Services["innsegl-ca-store"]
+	store := doc.Services["innsegl-ca-store"]
 	mounted := false
 	for _, v := range store.Volumes {
 		if v.Target == "/openbao/file" {
@@ -291,4 +301,49 @@ func makeDryRunEnv(t *testing.T, target string, vars ...string) string {
 		t.Fatalf("make -n %s: %v\n%s", target, err, out)
 	}
 	return string(out)
+}
+
+// storeConfig is the store's config as compose delivers it: the content of
+// the config mounted at /openbao/config/store.hcl.
+func storeConfig(t *testing.T, doc composeDoc) string {
+	t.Helper()
+	for _, c := range doc.Services["innsegl-ca-store"].Configs {
+		if c.Target == "/openbao/config/store.hcl" {
+			return doc.Configs[c.Source].Content
+		}
+	}
+	t.Fatal("the store has no config at /openbao/config/store.hcl")
+	return ""
+}
+
+// OPS-157 (PROPOSED) — the store reads its config whatever the checkout's
+// file modes are.
+//
+// MEASURED on a core whose operator's umask is 0077: every file the checkout
+// wrote was mode 600, the store (a non-root user) could not read the config
+// bind-mounted from it, and restarted forever on "permission denied". CI's
+// umask is 022, so nothing there saw it. Compose delivers inline config
+// content into the container with the mode it is given; a bind mount carries
+// the host file's mode.
+func TestOPS157TheStoreConfigDoesNotDependOnTheCheckoutsFileModes(t *testing.T) {
+	doc := composeRender(t, nil, sigstoreBase, sigstoreCustod)
+	store := doc.Services["innsegl-ca-store"]
+	for _, v := range store.Volumes {
+		if v.Type == "bind" {
+			t.Fatalf("the store bind-mounts %s from the host; under a 0077 umask its user cannot read it", v.Source)
+		}
+	}
+	for _, c := range store.Configs {
+		if c.Target != "/openbao/config/store.hcl" {
+			continue
+		}
+		if doc.Configs[c.Source].File != "" || doc.Configs[c.Source].Content == "" {
+			t.Fatalf("the store's config %q is a host file, which compose bind-mounts with the host's mode", c.Source)
+		}
+		if m := strings.Trim(string(c.Mode), `"`); m != "0444" && m != "292" {
+			t.Fatalf("the store's config is not delivered readable by every user (mode 0444): %s", c.Mode)
+		}
+		return
+	}
+	t.Fatal("the store has no config at /openbao/config/store.hcl")
 }

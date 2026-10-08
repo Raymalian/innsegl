@@ -114,7 +114,7 @@ case "$1" in
     [ "$1" = "-i" ] && shift
     shift   # the container
     if [ "$1" = sh ]; then
-      [ -n "${FAKE_BACKUP:-}" ] && echo /run/innsegl/trust-backups/trust-backup-x.tar.age
+      [ -n "${FAKE_BACKUP:-}" ] && echo "/run/innsegl/trust-backups/${FAKE_BACKUP}"
       exit 0
     fi
     shift 2  # innsegl trust-history
@@ -234,8 +234,12 @@ if [ "${CODE}" = 2 ] && ! touched; then ok "a backup age that is not a number: u
 fresh; preflight "Fulcio mounts no CA volume" FAKE_NO_MOUNT=1
 fresh; preflight "the CA on the volume cannot be read" FAKE_FAIL=show
 fresh; preflight "a fresh backup asked for with no core to hold it" BACKUP_MAX_AGE_HOURS=24 INNSEGL_ROTATE_CORE_CONTAINER=
-fresh; rotate BACKUP_MAX_AGE_HOURS=24 FAKE_BACKUP=1
+fresh; rotate BACKUP_MAX_AGE_HOURS=24 FAKE_BACKUP=trust-backup-20991231T235959Z.tar.age
 if [ "${CODE}" = 0 ]; then ok "a fresh backup there: the rotation runs"; else bad "a fresh backup there: the rotation runs" "exit ${CODE}: ${OUT}"; fi
+# MEASURED 2026-10-07: the newest bundle in the window was taken before the CA
+# in use was made, so it held the previous CA, and the rotation accepted it.
+fresh; rotate BACKUP_MAX_AGE_HOURS=24 FAKE_BACKUP=trust-backup-20000101T000000Z.tar.age
+if [ "${CODE}" = 3 ] && ! touched && printf '%s' "${OUT}" | grep -q 'older than the CA in use'; then ok "a backup older than the CA in use: refused, nothing touched"; else bad "a backup older than the CA in use: refused, nothing touched" "exit ${CODE}: ${OUT}"; fi
 
 echo "OPS-132c — a rotation"
 fresh

@@ -110,14 +110,17 @@ func TestOPS130TheBootstrapGeneratesThePassword(t *testing.T) {
 func TestOPS130TheUpdateRecreatesAFileCAFulcio(t *testing.T) {
 	root := repoRoot(t)
 	mk := readFile(t, filepath.Join(root, "Makefile"))
-	recipe := makeRecipe(t, mk, "fulcio-file-ca-up")
+	// fulcio-file-ca-up chooses between custody and the file CA by
+	// prerequisite; the file-CA work is fulcio-file-ca-run's.
+	recipe := makeRecipe(t, mk, "fulcio-file-ca-run")
 	if !strings.Contains(recipe, "*--ca=kmsca*)") {
 		t.Error("fulcio-file-ca-up does not leave a Fulcio under key custody alone")
 	}
 	if !strings.Contains(recipe, "$(SIGSTORE_FILES) up -d fulcio") {
 		t.Error("fulcio-file-ca-up does not bring fulcio up from $(SIGSTORE_FILES)")
 	}
-	if !regexp.MustCompile(`(?m)^fulcio-file-ca-up: innsegl-trust-volumes$`).MatchString(mk) {
+	if !regexp.MustCompile(`(?m)^fulcio-file-ca-up: innsegl-trust-volumes `).MatchString(mk) ||
+		!regexp.MustCompile(`(?m)^fulcio-file-ca-run: innsegl-trust-volumes$`).MatchString(mk) {
 		t.Error("fulcio-file-ca-up does not ensure the trust volumes first")
 	}
 	upd := makeRecipe(t, mk, "update")
