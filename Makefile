@@ -26,7 +26,7 @@ COVERPROFILE := cover.out
         innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
         innsegl-trust-volumes innsegl-ca-custody-init innsegl-ca-rotate innsegl-ca-rollback \
-        fulcio-file-ca-up test-ids ca-custody-up ca-custody-volumes ca-custody-ready \
+        fulcio-file-ca-up fulcio-file-ca-run test-ids ca-custody-up ca-custody-volumes ca-custody-ready \
         ca-custody-stage ca-custody-switch ca-custody-back ca-custody-restore \
         innsegl-stack-clean innsegl-up-here verify-branch \
         install-hooks \
@@ -187,6 +187,10 @@ spire-admin-relay-down:
 # stops the two stacks booting in disagreement.
 # ---------------------------------------------------------------------------
 INNSEGL_SPIRE_JWT_ISSUER ?= http://spire-oidc:8080
+# Exported, so every recipe and sub-make has it: sigstore.yml refuses to
+# interpolate without it, for any compose verb, and a call site that forgot
+# to pass it is how `make ca-custody-up` once failed on a live core (OPS-156).
+export INNSEGL_SPIRE_JWT_ISSUER
 # The tag deploy/compose/innsegl.yml builds and register.sh registers.
 INNSEGL_IMAGE ?= innsegl:local
 
@@ -261,8 +265,13 @@ rekor-log-up: innsegl-trust-volumes
 # updates this does nothing. A host that runs Fulcio under
 # sigstore.keycustody.yml is left alone: an `up` of fulcio from sigstore.yml
 # alone would put the file CA back there (see rekor-log-up).
-fulcio-file-ca-up: innsegl-trust-volumes
-	$(if $(CA_CUSTODY),@$(MAKE) --no-print-directory ca-custody-up; exit 0)
+# Make chooses the branch, not a shell `if`: a failed ca-custody-up stops the
+# update with its own error (it was once `make ca-custody-up; exit 0`, which
+# hid the failure), and `make -n` shows the branch instead of running it.
+fulcio-file-ca-up: innsegl-trust-volumes $(if $(CA_CUSTODY),ca-custody-up,fulcio-file-ca-run)
+
+## fulcio-file-ca-run: Fulcio on the file CA, unless it already runs under custody
+fulcio-file-ca-run: innsegl-trust-volumes
 	@cmd=$$(docker inspect -f '{{json .Config.Cmd}}' $(STACK_PREFIX)-sigstore-fulcio 2>/dev/null); \
 	 case "$$cmd" in \
 	   *--ca=kmsca*) echo "make update: Fulcio runs under key custody; left as it is" ;; \
