@@ -97,6 +97,21 @@ Fulcio is then on the file CA again, and that root's era has ended. Rotate to
 a new file CA (`runbooks/trust-rotation.md`), then remove the `.env` line and
 `make update`.
 
+## Start the store over — the core
+
+Only for a store nothing depends on yet: Fulcio is not on it, and its root
+is not in the trust history. A store's policies cannot be changed after
+provisioning (its root token is revoked), so a store provisioned with a wrong
+one is replaced, never repaired.
+
+```sh
+cd <repo> && make ca-custody-reset CONFIRM=reset && make update
+```
+
+**Check:** `docker logs innsegl-ca-custodian` prints `initialised`. Then take
+a new trust-key backup and drill it before step 2. It refuses (exit 3) while
+Fulcio runs on the store or the trust history holds its root.
+
 ## Restore
 
 The trust-key backup holds the store's own snapshot (`ca-store`) and the

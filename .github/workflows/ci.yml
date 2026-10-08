@@ -346,6 +346,10 @@ jobs:
       # internal/verify.
       - name: The CA rotation refuses, rotates and rolls back as it says
         run: ./scripts/ca-rotate-selftest.sh
+      # OPS-159 (#533): a CA key store is removed only when nothing depends
+      # on it -- never while Fulcio runs on it or its root is in the history.
+      - name: The CA key store reset refuses while anything depends on the store
+        run: ./scripts/ca-custody-reset-selftest.sh
 
   migrate:
     name: migrate to another host

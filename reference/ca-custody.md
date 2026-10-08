@@ -31,6 +31,7 @@ the unlock only when the store is sealed.
 | `make ca-custody-stage` | mint the store's root if there is none, and print it |
 | `make ca-custody-switch` | Fulcio onto the store |
 | `make ca-custody-back` | Fulcio onto the file CA again (custody leaves it untouched) |
+| `make ca-custody-reset CONFIRM=reset` | remove a store nothing depends on (Fulcio not on it, its root not in the trust history), so `make update` provisions a fresh one |
 | `make ca-custody-restore FROM=DIR CONFIRM=restore` | restore the store and sealed material from an extracted trust-key backup |
 
 Turning custody on is a rotation: `make innsegl-ca-rotate CONFIRM=rotate
@@ -84,6 +85,8 @@ the custodian on an internal unlock network and logs none of what it carries.
 | `ca-custodian`, `ca-custody` | 27 | the command failed |
 | `ca-custody status` | 28 | SEALED: the CA cannot sign |
 | `ca-custody-restore`, `innsegl-ca-custody-init` | 2 | refused: missing `CONFIRM`/`FROM`, or a dev stack |
+| `ca-custody-reset` | 2 | missing `CONFIRM=reset` |
+| `ca-custody-reset` | 3 | refused: Fulcio runs on the store, its root is in the trust history, or the history could not be asked |
 
 ## Tests
 
@@ -94,6 +97,8 @@ the custodian on an internal unlock network and logs none of what it carries.
 - `internal/client/cacustody_test.go` (BAK-026 to BAK-028)
 - `test/deploy/cacustody_test.go` (OPS-051, OPS-149 to OPS-151, OPS-155, BAK-030)
 - `scripts/ca-custody-selftest.sh` (OPS-049 to OPS-051)
+- `scripts/ca-custody-reset-selftest.sh` (OPS-159)
+- `internal/cacustody/store_test.go` OPS-136 also signs the way Fulcio asks, `transit/sign/<key>/sha2-256`
 
 ## Decisions
 
