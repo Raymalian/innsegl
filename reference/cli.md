@@ -13,6 +13,7 @@ dispatch table is `commands` in `cmd/innsegl/cli.go`; a test asserts the set.
 |---|---|---|
 | `innsegl accounts` | manage organisations, enrolment tokens, installations and repository grants | [dashboard-api.md](dashboard-api.md) |
 | `innsegl admin-credential` | issue the repository-scoped credential the identity lifecycle requires | [identity.md](identity.md) |
+| `innsegl author` | which repositories author agent commits as the operator | [commit-path.md](commit-path.md) |
 | `innsegl api` | serve the dashboard's read-only query API and proof BFF | [dashboard-api.md](dashboard-api.md) |
 | `innsegl ca-custodian` | keep the CA key store's custody on the core: init, renew, unlock | [ca-custody.md](ca-custody.md) |
 | `innsegl ca-custody` | say whether the core's CA is sealed, and unlock it | [ca-custody.md](ca-custody.md) |

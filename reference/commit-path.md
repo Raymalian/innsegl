@@ -51,6 +51,22 @@ make link DIR=<path to a git repository>
 | `-json` | report as JSON |
 | `-undo` | reverse a prior run exactly, and exit |
 
+### Commit author per repository
+
+```
+innsegl author                                    list the setting
+innsegl author operator 'Name <address>'           the operator identity, once
+innsegl author repo <path> operator|agent          one repository's mode
+```
+
+Every repository is `agent` mode unless set otherwise: agent commits are
+authored and committed as `Innsegl <agent@innsegl.invalid>`. In `operator`
+mode they are authored as the operator identity (I6 allows it); the agent
+stays in the trailers and the signature. The core signs such a commit only
+when `INNSEGL_SIGN_AUTHOR_OPERATORS` pins the same name and address. Use a
+GitHub noreply address. A command that sets `GIT_AUTHOR_*` itself is left
+as it is.
+
 ## Settings
 
 | Variable | Read by | Meaning |
@@ -58,6 +74,7 @@ make link DIR=<path to a git repository>
 | `INNSEGL_CORE_URL` | `hook`, `git-hook`, `sign` | the client service, which forwards to the core (`internal/commitpath/commitpath.go:36`) |
 | `INNSEGL_TOOL_USE_ID` | `git-hook`, `sign` | the tool call id the hook injected |
 | `INNSEGL_BIN_PATH` | `make link` | the binary to run [`./innsegl`] |
+| `INNSEGL_SIGN_AUTHOR_OPERATORS` | the core (`.env`) | pinned `Name <address>` pairs an agent commit may be authored as; empty by default |
 
 Core routes: `/_gateway/commit-trailers` and `/_gateway/commit-sign`, on the
 gateway's listener, scoped to the calling installation.
@@ -65,6 +82,7 @@ gateway's listener, scoped to the calling installation.
 ## Files, volumes, containers
 
 - The repository's `prepare-commit-msg` hook, written by `innsegl link`.
+- `~/.innsegl/client/authors.json` (0600): the operator identity and the repositories set to `operator` mode.
 - No repository git config is written by the hook path; the signing config
   travels with the one commit as `GIT_CONFIG_*` variables.
 - `make innsegl-init` runs `innsegl init` in the `innsegl-init` container
@@ -93,7 +111,9 @@ gateway's listener, scoped to the calling installation.
 - `cmd/innsegl/init*_test.go` (INIT-001 to INIT-010)
 - `internal/commitpath/*_test.go` (CMT-006, TLS-001, TLS-002)
 - `internal/mcp/signpayload_test.go`, `signpayload_crash_test.go` (CMT-007 to CMT-012)
-- `internal/signing/*_test.go` (SIG-001 to SIG-012)
+- `internal/signing/*_test.go` (SIG-001 to SIG-012), `signpayload_test.go` (GH-006)
+- `cmd/innsegl/hookauthor_test.go` (ENF-010), `authorcli_test.go` and `internal/client/authors_test.go` (ENF-011)
+- `test/deploy/authoroperators_test.go` (GH-007)
 
 ## Decisions
 
@@ -107,3 +127,4 @@ gateway's listener, scoped to the calling installation.
 ## Runbooks
 
 - [orchestrated-run.md](../runbooks/orchestrated-run.md)
+- [commit-author.md](../runbooks/commit-author.md)

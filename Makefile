@@ -79,7 +79,7 @@ cover:
 # The rule that follows is one sentence: THE TRUST ROOT MUST NOT LIVE WHERE THE
 # TEARDOWN REACHES. Two lines below are what puts it out of reach.
 #
-# INNSEGL_TRUST_ENV names the four volumes and turns on their external
+# INNSEGL_TRUST_ENV names the six volumes and turns on their external
 # declaration, so every compose invocation in this file resolves them to
 # volumes DECLARED OUTSIDE the project: `down -v` can only detach them.
 # The names come from the script rather than being repeated here, because a
@@ -142,7 +142,7 @@ GUARD             := scripts/teardown-guard.sh
 dev-stack:
 	@scripts/stack-mode.sh mark-dev
 
-## innsegl-trust-volumes: create the four volumes the trust root lives in
+## innsegl-trust-volumes: create the six volumes the trust root lives in
 innsegl-trust-volumes:
 	deploy/compose/trust-volumes.sh ensure
 
@@ -725,7 +725,7 @@ update:
 image-bundle:
 	@$(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh create
 
-## link: install the commit hook in a project — make link DIR=~/Applications/foo
+## link: install the commit hook in a project — make link DIR=<project>
 # The innsegl binary `link` runs: the one `make build` writes here, the same
 # default install.sh uses.
 INNSEGL_BIN_PATH ?= $(CURDIR)/$(BINARY)
