@@ -177,6 +177,17 @@ after_switch_failed() {
   The trust history was not touched."
 }
 
+# not_before_stamp CERT prints the certificate's NotBefore as YYYYMMDDTHHMMSSZ,
+# the form bundle names use, so the two compare as strings. awk with a month
+# table, not `date -d` (GNU only) or regex repeat counts (mawk 20200120).
+not_before_stamp() {
+  openssl x509 -in "$1" -noout -startdate 2>/dev/null | sed 's/^notBefore=//' | awk '
+    BEGIN { split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", m, " ")
+            for (i = 1; i <= 12; i++) mon[m[i]] = sprintf("%02d", i) }
+    NF >= 4 && ($1 in mon) { split($3, t, ":")
+      printf "%s%s%02dT%s%s%sZ\n", $4, mon[$1], $2, t[1], t[2], t[3] }'
+}
+
 preflight() {
   [ "${CONFIRM:-}" = rotate ] || die "${EXIT_USAGE}" "refusing: set CONFIRM=rotate to replace the Fulcio CA (runbooks/trust-rotation.md)"
   case "${MODE:-}" in
@@ -233,9 +244,20 @@ preflight() {
     esac
     [ -n "${CORE}" ] || die "${EXIT_REFUSED}" "BACKUP_MAX_AGE_HOURS needs the core, where the backups are"
     local found
-    found="$(docker exec "${CORE}" sh -c "find /run/innsegl/trust-backups -name 'trust-backup-*.tar.age' -mmin -$((BACKUP_MAX_AGE_HOURS * 60)) 2>/dev/null | head -n 1")"
+    # The NEWEST bundle in the window, and it must postdate the CA in use: a
+    # bundle from before that CA was made holds the previous one, and a
+    # rotation guarded by it has no copy of the key it is about to replace.
+    # Bundle names carry their UTC time, so they sort by it.
+    found="$(docker exec "${CORE}" sh -c "find /run/innsegl/trust-backups -name 'trust-backup-*.tar.age' -mmin -$((BACKUP_MAX_AGE_HOURS * 60)) 2>/dev/null | sort | tail -n 1")"
     [ -n "${found}" ] || die "${EXIT_REFUSED}" "no trust-key backup newer than ${BACKUP_MAX_AGE_HOURS}h on the core (runbooks/trust-key-backup.md); take one first"
-    log "a trust-key backup newer than ${BACKUP_MAX_AGE_HOURS}h: ${found}"
+    local bundle_at root_at
+    bundle_at="$(basename "${found}" | sed -n 's/^trust-backup-\([0-9]*T[0-9]*Z\)\.tar\.age$/\1/p')"
+    root_at="$(not_before_stamp "${WORK}/old.crt")"
+    [ -n "${bundle_at}" ] && [ -n "${root_at}" ] \
+      || die "${EXIT_REFUSED}" "cannot tell whether ${found} postdates the CA in use; take a new backup (runbooks/trust-key-backup.md)"
+    [ "${bundle_at}" \> "${root_at}" ] \
+      || die "${EXIT_REFUSED}" "the newest trust-key backup (${found}) is older than the CA in use (made ${root_at}), so it does not hold it; take a new backup first (runbooks/trust-key-backup.md)"
+    log "a trust-key backup newer than ${BACKUP_MAX_AGE_HOURS}h and than the CA in use: ${found}"
   fi
   if [ "${TO}" = custody ]; then
     custody ready >&2 || die "${EXIT_REFUSED}" "the CA key store is not ready: it must be initialised and unlocked, and the custodian must have the CA's token (runbooks/ca-custody.md)"
