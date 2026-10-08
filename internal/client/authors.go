@@ -90,7 +90,8 @@ func (a Authors) SetOperator(identity string) (Authors, error) {
 }
 
 // SetRepo returns a with one repository, named by its git common directory,
-// set to mode. Operator mode needs an operator identity first.
+// set to mode. Operator mode needs no typed identity: the hook reads the
+// repository's own GitHub noreply address from git (#545, ENF-013).
 func (a Authors) SetRepo(commonDir, mode string) (Authors, error) {
 	repos := make(map[string]string, len(a.Repos)+1)
 	for k, v := range a.Repos {
@@ -100,10 +101,6 @@ func (a Authors) SetRepo(commonDir, mode string) (Authors, error) {
 	case AuthorAgent:
 		delete(repos, commonDir)
 	case AuthorOperator:
-		if _, _, err := parseAuthorIdentity(a.Operator); err != nil {
-			return a, fmt.Errorf("%w: set the operator identity before a repository can use it: %w",
-				ErrAuthorIdentity, err)
-		}
 		repos[commonDir] = AuthorOperator
 	default:
 		return a, fmt.Errorf("a repository's author mode is %q or %q, not %q", AuthorAgent, AuthorOperator, mode)
@@ -115,8 +112,13 @@ func (a Authors) SetRepo(commonDir, mode string) (Authors, error) {
 	return a, nil
 }
 
-// OperatorFor returns the operator identity when the repository with this git
-// common directory is in operator mode.
+// IsOperator reports whether the repository with this git common directory
+// is in operator mode.
+func (a Authors) IsOperator(commonDir string) bool { return a.Repos[commonDir] == AuthorOperator }
+
+// OperatorFor returns the typed operator identity (the optional override)
+// when the repository with this git common directory is in operator mode and
+// one is set.
 func (a Authors) OperatorFor(commonDir string) (name, email string, ok bool) {
 	if a.Repos[commonDir] != AuthorOperator {
 		return "", "", false
