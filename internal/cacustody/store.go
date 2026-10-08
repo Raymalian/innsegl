@@ -110,9 +110,12 @@ func (s *Store) Unseal(ctx context.Context, key string) error {
 
 // signerPolicy grants signing with the CA key and reading its public half.
 // Nothing else: no export, no key creation, no configuration, no tokens.
+// Fulcio's KMS signer names the hash in the path, transit/sign/<key>/sha2-256
+// (OPS-136): that one path, not a wildcard, beside the bare form.
 func signerPolicy(key string) string {
 	return fmt.Sprintf("path \"transit/sign/%s\" {\n  capabilities = [\"update\"]\n}\n"+
-		"path \"transit/keys/%s\" {\n  capabilities = [\"read\"]\n}\n", key, key)
+		"path \"transit/sign/%s/sha2-256\" {\n  capabilities = [\"update\"]\n}\n"+
+		"path \"transit/keys/%s\" {\n  capabilities = [\"read\"]\n}\n", key, key, key)
 }
 
 // Provision makes a fresh store ready for the CA: the transit engine, a
