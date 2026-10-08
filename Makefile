@@ -956,6 +956,16 @@ innsegl-demo:
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  $(INNSEGL_COMPOSE) --profile demo run --rm demo-agent
 
+## innsegl-retire: end a run an operator knows is over (RUN=<run_id>)
+#
+# ADR-0077: `innsegl retire` runs inside the core's container, under the
+# core's own SPIRE admin identity and ledger credential. `compose exec` finds
+# the container by service, so this works on a development stack too.
+innsegl-retire:
+	@test -n "$(RUN)" || { echo 'usage: make innsegl-retire RUN=<run_id>'; exit 2; }
+	@INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
+	  $(INNSEGL_COMPOSE) exec -T innsegl-mcp innsegl retire '$(RUN)'
+
 ## innsegl-init: run `innsegl init` as a one-shot workload on the admin network
 #
 # RM-097 (#156), option 2. REPO=<host path> is required — it is bind-mounted

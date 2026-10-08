@@ -27,7 +27,7 @@ dispatch table is `commands` in `cmd/innsegl/cli.go`; a test asserts the set.
 | `innsegl migrate-schema` | attest a major schema cutover in this chain | [ledger-and-segments.md](ledger-and-segments.md) |
 | `innsegl reap` | delete identity entries orphaned past their TTL | [reconciler-and-reaper.md](reconciler-and-reaper.md) |
 | `innsegl reconcile` | reconcile signing intents against the transparency log | [reconciler-and-reaper.md](reconciler-and-reaper.md) |
-| `innsegl retire` | end a run an operator knows is over | [identity.md](identity.md) |
+| `innsegl retire` | end a run an operator knows is over; runs on the core | [identity.md](identity.md) |
 | `innsegl seal` | seal ledger segments and anchor them in the log | [ledger-and-segments.md](ledger-and-segments.md) |
 | `innsegl serve` | run the MCP server; with `-also`, the companions too | [identity.md](identity.md), [gateway.md](gateway.md) |
 | `innsegl sign` | git's signing program: ask the core to sign a commit | [commit-path.md](commit-path.md) |

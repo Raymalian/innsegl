@@ -43,6 +43,7 @@ Every target with a `##` help line:
 | `make innsegl-verify` | ask Postgres and the object store what the credentials can do |
 | `make innsegl-canary` | SEG-005: the object store refuses to delete a segment |
 | `make innsegl-demo` | register an identity, sign a commit under it, retire it |
+| `make innsegl-retire` | end a run an operator knows is over, on the core: `RUN=<run_id>` |
 | `make innsegl-init` | run `innsegl init` as a one-shot workload: `REPO=<path> ARGS='...'` |
 | `make innsegl-verify-commit` | verify a commit with no route to the ledger: `COMMIT=<sha>` |
 | `make innsegl-down` | stop the innsegl stack, keeping the ledger and segments |

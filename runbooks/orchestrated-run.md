@@ -9,6 +9,11 @@ this system does, and `innsegl init` deliberately does not configure it —
 see #158. Every identity here belongs to a run, is issued by the MCP server,
 and cannot be altered by the agent that receives it.
 
+**Deprecated (ADR-0077).** The MCP tools this runbook calls are deprecated and
+are removed at the next major release. They still work. The gateway and the
+commit hook do this work in process, and an operator ends a run on the core
+with `make innsegl-retire RUN=<run_id>`.
+
 ---
 
 ## 0. Who does what
@@ -155,6 +160,9 @@ retirement is effective immediately (IP §6.2)
 ```
 
 Retiring is not cleanup you can skip. Until it happens the identity is live.
+
+An operator who knows a run is over, and is not its orchestrator, ends it on
+the core instead: `docker exec innsegl-mcp innsegl retire <run_id>`.
 
 ---
 
