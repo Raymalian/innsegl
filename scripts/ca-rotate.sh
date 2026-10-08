@@ -188,6 +188,19 @@ not_before_stamp() {
       printf "%s%s%02dT%s%s%sZ\n", $4, mon[$1], $2, t[1], t[2], t[3] }'
 }
 
+# switch_second waits for the next whole second and prints it, as the
+# switch time. The log stamps entries in whole seconds and the history
+# compares strictly (logged before revoked_at), so a switch stamped inside a
+# second refused the old CA's own commits logged earlier in that second
+# (OPS-133, measured in CI). Every second before the stamp ended before the
+# switch began. `sleep 0.1` is in GNU and BSD sleep alike.
+switch_second() {
+  local s0
+  s0="$(date -u +%s)"
+  while [ "$(date -u +%s)" = "${s0}" ]; do sleep 0.1; done
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+
 preflight() {
   [ "${CONFIRM:-}" = rotate ] || die "${EXIT_USAGE}" "refusing: set CONFIRM=rotate to replace the Fulcio CA (runbooks/trust-rotation.md)"
   case "${MODE:-}" in
@@ -287,7 +300,7 @@ to_custody() {
     die "${EXIT_BEFORE}" "the store gave no root; nothing in use was changed"
   fi
   log '2 switch: Fulcio onto the store'
-  SWITCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  SWITCHED_AT="$(switch_second)"
   custody switch >&2 || after_custody_switch_failed "moving Fulcio onto the store failed"
   wait_for_root "${WORK}/new.crt" || after_custody_switch_failed "Fulcio did not come back serving the store's root"
 
@@ -331,7 +344,7 @@ rotate() {
   fi
 
   log '3 switch: the new CA in place, Fulcio restarted on it'
-  SWITCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  SWITCHED_AT="$(switch_second)"
   helper swap "${STAMP}" >&2 || after_switch_failed "moving the new CA into place failed"
   docker restart "${FULCIO}" >/dev/null || after_switch_failed "restarting Fulcio failed"
   wait_for_root "${WORK}/new.crt" || after_switch_failed "Fulcio did not come back serving the new root"

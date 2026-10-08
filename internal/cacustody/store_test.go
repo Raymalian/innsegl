@@ -53,12 +53,21 @@ func TestOPS136TheCATokenSignsAndDoesNothingElse(t *testing.T) {
 		`{"input":"aGVsbG8=","hash_algorithm":"sha2-256","marshaling_algorithm":"asn1"}`); code != http.StatusOK {
 		t.Fatalf("the CA's token could not sign with the CA key: %d", code)
 	}
+	// MEASURED on a live core: Fulcio's KMS signer names the hash in the
+	// path, transit/sign/<key>/sha2-256, and a policy for transit/sign/<key>
+	// alone answered 403, so Fulcio could issue nothing under custody.
+	if code := s.raw(t, http.MethodPost, "/v1/transit/sign/innsegl-ca/sha2-256", tok,
+		`{"input":"aGVsbG8=","marshaling_algorithm":"asn1"}`); code != http.StatusOK {
+		t.Fatalf("the CA's token could not sign the way Fulcio asks, transit/sign/<key>/sha2-256: %d", code)
+	}
 	if code := s.raw(t, http.MethodGet, "/v1/transit/keys/innsegl-ca", tok, ""); code != http.StatusOK {
 		t.Fatalf("the CA's token could not read the key's public half: %d", code)
 	}
 
 	refused := []struct{ method, path, body string }{
 		{http.MethodGet, "/v1/transit/export/signing-key/innsegl-ca", ""},
+		{http.MethodPost, "/v1/transit/sign/innsegl-ca/sha2-512", `{"input":"aGVsbG8="}`},
+		{http.MethodPost, "/v1/transit/sign/another/sha2-256", `{"input":"aGVsbG8="}`},
 		{http.MethodPost, "/v1/transit/keys/another", `{"type":"ecdsa-p256"}`},
 		{http.MethodPost, "/v1/transit/keys/innsegl-ca/config", `{"exportable":true}`},
 		{http.MethodGet, "/v1/sys/policies/acl/innsegl-ca-signer", ""},

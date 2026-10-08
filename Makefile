@@ -26,7 +26,7 @@ COVERPROFILE := cover.out
         innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
         innsegl-trust-volumes innsegl-ca-custody-init innsegl-ca-rotate innsegl-ca-rollback \
-        fulcio-file-ca-up fulcio-file-ca-run test-ids ca-custody-up ca-custody-volumes ca-custody-ready \
+        fulcio-file-ca-up fulcio-file-ca-run test-ids ca-custody-up ca-custody-volumes ca-custody-reset ca-custody-ready \
         ca-custody-stage ca-custody-switch ca-custody-back ca-custody-restore \
         innsegl-stack-clean innsegl-up-here verify-branch \
         install-hooks \
@@ -796,6 +796,12 @@ CA_CUSTODY_CHOWN_IMAGE = alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33
 CA_CUSTODY_KMS_VOLUME = $(STACK_PREFIX)-sigstore_sigstore-fulcio-kms
 
 # The steps `make innsegl-ca-rotate TO=custody` runs (scripts/ca-rotate.sh).
+## ca-custody-reset: remove a CA key store nothing depends on, so `make update`
+##   provisions a fresh one (CONFIRM=reset; refuses while Fulcio runs on it or
+##   the trust history holds its root)
+ca-custody-reset:
+	@INNSEGL_STACK_PREFIX='$(STACK_PREFIX)' scripts/ca-custody-reset.sh
+
 ## ca-custody-ready: exit 0 when the store is unlocked and the CA has a token
 ca-custody-ready:
 	@docker exec innsegl-ca-custodian innsegl ca-custodian ready
