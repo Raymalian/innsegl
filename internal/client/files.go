@@ -44,6 +44,10 @@ type Paths struct {
 	// that opens the trust-key backup (ADR-0074) and the CA store's unlock
 	// material (ADR-0076), asking for Touch ID each time.
 	TrustIdentity string
+	// Authors is which repositories author agent commits as the operator
+	// rather than the unlinked agent address, and the operator identity they
+	// use (ENF-010), 0600. Written by `innsegl author`, read by the hook.
+	Authors string
 }
 
 // ClientPaths are the paths under home.
@@ -64,6 +68,7 @@ func ClientPaths(home string) Paths {
 		TrustBackups: filepath.Join(home, ".innsegl", "trust-backups"),
 		// ADR-0074, ADR-0076.
 		TrustIdentity: filepath.Join(home, ".innsegl", "trust-backup", "identity.txt"),
+		Authors:       filepath.Join(dir, "authors.json"),
 	}
 }
 
