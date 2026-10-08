@@ -23,7 +23,7 @@ make link DIR=<path to a git repository>
 
 | Command | Run by | Does |
 |---|---|---|
-| `innsegl hook pre-tool-use` | the harness, before a Bash tool call | for a `git commit`, prefixes the command with `INNSEGL_TOOL_USE_ID` and git signing config (`GIT_CONFIG_COUNT`), using this same binary as `gpg.x509.program` |
+| `innsegl hook pre-tool-use` | the harness, before a Bash tool call | for a `git commit`, prefixes the command with `INNSEGL_TOOL_USE_ID` and places the signing config inside the git invocation as `-c` options, using this same binary as `gpg.x509.program` |
 | `innsegl hook session` | the harness, on session start, user prompt, subagent start, cwd change | tells the gateway the session's working directory |
 | `innsegl git-hook prepare-commit-msg` | git | asks the core for the trailers `Agent-Identity`, `Agent-Run`, `Agent-Task` and writes them into the message |
 | `innsegl sign` | git | sends the commit payload to the core and returns the signature; `--verify` is git's verify mode |
@@ -84,7 +84,10 @@ gateway's listener, scoped to the calling installation.
 - The repository's `prepare-commit-msg` hook, written by `innsegl link`.
 - `~/.innsegl/client/authors.json` (0600): the operator identity and the repositories set to `operator` mode.
 - No repository git config is written by the hook path; the signing config
-  travels with the one commit as `GIT_CONFIG_*` variables.
+  travels with the one commit as `git -c` options placed before the
+  subcommand word (`git -C dir -c commit.gpgsign=true … commit`), never as
+  a `GIT_CONFIG_*` variable: the harness's worktree-isolation guard refuses
+  a command that sets one.
 - `make innsegl-init` runs `innsegl init` in the `innsegl-init` container
   (compose profile `init`); see [stack-and-make.md](stack-and-make.md).
 
