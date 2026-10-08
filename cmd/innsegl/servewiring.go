@@ -592,7 +592,13 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		closers = append(closers, restoreSign)
 	} else {
 		tools.withhold(mcp.ToolSignCommit, "-workspace (or $"+envWorkspace+") is unset, so "+
-			"the tool is advertised and refuses every call. No commit can be signed by this replica.")
+			"the tool is advertised and refuses every call. Commits made through the gateway "+
+			"are still signed when -oidc-issuer is set (#555).")
+		restoreSigner, serr := configureCommitSigner(o, runs, store, idem, sigstore, pseudonyms, log)
+		if serr != nil {
+			return fail("configure the commit signer: %w", serr)
+		}
+		closers = append(closers, restoreSigner)
 	}
 
 	// ---- the three ingestion tools (E11, #205/#206/#207, wired by #211) ----
@@ -863,14 +869,7 @@ func configureSignCommit(
 		return nil, fmt.Errorf("the configured commit author is not admitted by the I6 "+
 			"policy, so this deployment would refuse its own first signature: %w", identErr)
 	}
-	signers := mcp.NewGitsignSigners(signing.Config{
-		FulcioURL:    o.fulcioURL,
-		RekorURL:     o.rekorURL,
-		Issuer:       o.oidcIssuer,
-		GitsignPath:  o.gitsignPath,
-		Author:       author,
-		TrustedRoots: mcp.ProjectMountRoots(),
-	})
+	signers := newSigners(o, author)
 	// adopt_run (ADR-0051) proves a dead run's work against its own bodies, so
 	// it is on exactly when there is a body volume to prove against, and
 	// refused by name when there is not.
@@ -904,14 +903,7 @@ func configureSignCommit(
 	if err != nil {
 		return nil, err
 	}
-	// The commit path's claim builder (ADR-0059 decision 2, E17): the run
-	// store and the pseudonymiser sign_commit holds, never second ones, so a
-	// trailer rendered for prepare-commit-msg is the one a signature checks.
-	restoreClaim, err := mcp.ConfigureCommitClaim(mcp.CommitClaimConfig{
-		Runs:         runs,
-		Pseudonyms:   pseudonyms,
-		AbandonAfter: o.abandonAfter,
-	})
+	restoreClaim, err := configureCommitClaim(o, runs, pseudonyms)
 	if err != nil {
 		restore()
 		return nil, err
@@ -920,6 +912,81 @@ func configureSignCommit(
 		"workspace", o.workspace,
 		"issuer", o.oidcIssuer,
 		"author", o.signAuthorEmail,
+		"author_operators", len(o.signAuthorOperators),
+		"author_allow_unlinked", o.signAllowUnlinked)
+	return func() { restoreClaim(); restore() }, nil
+}
+
+// newSigners is the one signer factory: the shipped gitsign wrapper under
+// this deployment's I6 author policy.
+func newSigners(o serveOptions, author signing.AuthorPolicy) mcp.SignCommitSigners {
+	return mcp.NewGitsignSigners(signing.Config{
+		FulcioURL:    o.fulcioURL,
+		RekorURL:     o.rekorURL,
+		Issuer:       o.oidcIssuer,
+		GitsignPath:  o.gitsignPath,
+		Author:       author,
+		TrustedRoots: mcp.ProjectMountRoots(),
+	})
+}
+
+// configureCommitClaim is the commit path's claim builder (ADR-0059 decision
+// 2, E17): the run store and the pseudonymiser register_agent holds, never
+// second ones, so a trailer rendered for prepare-commit-msg is the one a
+// signature checks.
+func configureCommitClaim(o serveOptions, runs *rundir.Directory, pseudonyms *identity.Pseudonymiser) (func(), error) {
+	return mcp.ConfigureCommitClaim(mcp.CommitClaimConfig{
+		Runs:         runs,
+		Pseudonyms:   pseudonyms,
+		AbandonAfter: o.abandonAfter,
+	})
+}
+
+// configureCommitSigner installs what the gateway's commit-sign path needs on
+// a core with no -workspace (#555): the same ledger, credential path and
+// signer factory sign_commit would hold, without a workspace or a configured
+// author — the path reads the payload's own author and the agent's own
+// checkout. Without -oidc-issuer there is no issuer to sign under, and a
+// signer that fails after Phase A would leave a dangling intent, so it stays
+// off and the log says so.
+func configureCommitSigner(
+	o serveOptions,
+	runs *rundir.Directory,
+	store *ledger.Store,
+	idem *mcp.IdempotencyStore,
+	sigstore *mcp.SigstoreEndpoints,
+	pseudonyms *identity.Pseudonymiser,
+	log *serveLog,
+) (func(), error) {
+	if o.oidcIssuer == "" {
+		log.info("gateway commit signing is off: -oidc-issuer (or $" + envOIDCIssuer +
+			") is unset, so there is no issuer to sign under")
+		return func() {}, nil
+	}
+	author := signing.AuthorPolicy{
+		Operators:     o.signAuthorOperators,
+		AllowUnlinked: o.signAllowUnlinked,
+	}
+	restore, err := mcp.ConfigureCommitSigner(mcp.SignCommitConfig{
+		Runs:           runs,
+		Ledger:         store,
+		Idempotency:    idem,
+		Sigstore:       sigstore,
+		Credentials:    mcp.SignCommitThroughGetCredential{},
+		Signers:        newSigners(o, author),
+		Pseudonyms:     pseudonyms,
+		RunTokenSecret: o.runTokenSecret,
+	})
+	if err != nil {
+		return nil, err
+	}
+	restoreClaim, err := configureCommitClaim(o, runs, pseudonyms)
+	if err != nil {
+		restore()
+		return nil, err
+	}
+	log.info("gateway commit signing is configured without a workspace",
+		"issuer", o.oidcIssuer,
 		"author_operators", len(o.signAuthorOperators),
 		"author_allow_unlinked", o.signAllowUnlinked)
 	return func() { restoreClaim(); restore() }, nil
