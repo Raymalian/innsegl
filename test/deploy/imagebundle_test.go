@@ -87,14 +87,16 @@ func TestEveryBuiltImageIsLabelledWithTheCommitOfItsInputs(t *testing.T) {
 		t.Error("compose does not pass the backup's commit to the backup build")
 	}
 
+	// The build is innsegl-images (OPS-160); the start is innsegl-here-services.
+	images := makeRecipe(t, mk, "innsegl-images")
 	here := makeRecipe(t, mk, "innsegl-here-services")
 	for _, want := range []string{
 		"INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)'",
 		"INNSEGL_UI_COMMIT='$(UI_IMAGE_COMMIT)'",
 		"INNSEGL_BACKUP_COMMIT='$(BACKUP_IMAGE_COMMIT)'",
 	} {
-		if strings.Count(here, want) < 2 {
-			t.Errorf("innsegl-here-services does not pass %s to both the build and the start", want)
+		if !strings.Contains(images, want) || !strings.Contains(here, want) {
+			t.Errorf("%s does not reach both the build (innsegl-images) and the start (innsegl-here-services)", want)
 		}
 	}
 }
@@ -104,20 +106,25 @@ func TestEveryBuiltImageIsLabelledWithTheCommitOfItsInputs(t *testing.T) {
 // A bundle that fails its checks stops the target before anything starts.
 func TestTheHostTakesABundleOrBuildsAndTheStartNeverBuilds(t *testing.T) {
 	mk := readFile(t, filepath.Join(repoRoot(t), "Makefile"))
+	// innsegl-images finds, loads or builds; innsegl-here-services has it as a
+	// prerequisite, so the images are in place before it registers or starts.
+	images := makeRecipe(t, mk, "innsegl-images")
 	here := makeRecipe(t, mk, "innsegl-here-services")
 
-	find := strings.Index(here, "scripts/image-bundle.sh find")
-	load := strings.Index(here, "scripts/image-bundle.sh load")
-	build := strings.Index(here, "$(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES)")
-	register := strings.Index(here, "deploy/compose/spire/register.sh")
-	if find < 0 || load < 0 || build < 0 || register < 0 {
-		t.Fatalf("innsegl-here-services does not find, load or build the images before registering:\n%s", here)
+	find := strings.Index(images, "scripts/image-bundle.sh find")
+	load := strings.Index(images, "scripts/image-bundle.sh load")
+	build := strings.Index(images, "$(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES)")
+	if find < 0 || load < 0 || build < 0 || find > load {
+		t.Fatalf("innsegl-images does not find, then load or build, the images:\n%s", images)
 	}
-	if find > load || load > register || build > register {
-		t.Error("innsegl-here-services registers before the images are in place")
+	if !regexp.MustCompile(`(?m)^innsegl-here-services:.*\binnsegl-images\b`).MatchString(mk) {
+		t.Error("innsegl-here-services does not depend on innsegl-images, so it may register before the images are in place")
 	}
-	if !strings.Contains(here, "$(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh") {
-		t.Error("innsegl-here-services does not hand the bundle script the expected commits")
+	if !strings.Contains(here, "deploy/compose/spire/register.sh") {
+		t.Error("innsegl-here-services no longer registers")
+	}
+	if !strings.Contains(images, "$(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh") {
+		t.Error("innsegl-images does not hand the bundle script the expected commits")
 	}
 	up := regexp.MustCompile(`(?m)\$\(INNSEGL_COMPOSE\) up -d[^\n]*$`).FindString(here)
 	if up == "" || !strings.Contains(up, "--no-build") {

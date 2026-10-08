@@ -33,6 +33,7 @@ Every target with a `##` help line:
 | `make spire-down` | tear SPIRE down, volumes included (guarded) |
 | `make spire-admin-relay-up` | publish the SPIRE admin API to `127.0.0.1` (off by default) |
 | `make spire-admin-relay-down` | remove the admin relay; always run when done |
+| `make innsegl-images` | load this checkout's image bundle (ADR-0070), or build the images here; every target that runs `innsegl:local` depends on it, the CA custodian included (OPS-160) |
 | `make fulcio-file-ca-run` | Fulcio on the file CA, unless it already runs under custody. `make update` reaches it through `fulcio-file-ca-up`, which picks this or `ca-custody-up` by `INNSEGL_CA_CUSTODY` (OPS-156) |
 | `make sigstore-up` | boot SPIRE and Fulcio/Rekor (see [transparency-log.md](transparency-log.md)) |
 | `make sigstore-verify` | get a real Fulcio certificate for a real JWT-SVID |
