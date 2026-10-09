@@ -64,6 +64,9 @@ jobs:
           # commits; there is nothing to save here.
           fetch-depth: 0
           persist-credentials: false
+      - name: Docker Hub through a mirror
+        # Anonymous pulls hit Docker Hub's rate limit (PR #567); see the action.
+        uses: ./.github/actions/docker-hub-mirror
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -627,6 +630,9 @@ jobs:
           # commits; there is nothing to save here.
           fetch-depth: 0
           persist-credentials: false
+      - name: Docker Hub through a mirror
+        # Anonymous pulls hit Docker Hub's rate limit (PR #567); see the action.
+        uses: ./.github/actions/docker-hub-mirror
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -768,6 +774,9 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Docker Hub through a mirror
+        # Anonymous pulls hit Docker Hub's rate limit (PR #567); see the action.
+        uses: ./.github/actions/docker-hub-mirror
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -799,6 +808,9 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Docker Hub through a mirror
+        # Anonymous pulls hit Docker Hub's rate limit (PR #567); see the action.
+        uses: ./.github/actions/docker-hub-mirror
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
