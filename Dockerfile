@@ -187,6 +187,9 @@ RUN mkdir -p /message-key && chown 1000:1000 /message-key && chmod 0700 /message
 RUN mkdir -p /run/innsegl/gateway-ca-key && chown 1000:1000 /run/innsegl/gateway-ca-key && chmod 0700 /run/innsegl/gateway-ca-key
 # ADR-0073: the trust history's volume, written by the core as uid 1000.
 RUN mkdir -p /run/innsegl/trust && chown 1000:1000 /run/innsegl/trust
+# doc 05 §2: the scheduled WORM canary's last result, written by whichever
+# process runs the sealer and read by the core's health.
+RUN mkdir -p /run/innsegl/canary && chown 1000:1000 /run/innsegl/canary
 
 # git and gitsign both want a writable HOME, and gitsign writes its cache
 # there, so HOME is a real directory this user owns rather than `/`.

@@ -147,6 +147,12 @@ type sealOptions struct {
 	anchorBase     time.Duration
 	anchorKey      string
 	once           bool
+
+	// The scheduled deletion canary (doc 05 §2). Zero interval is off.
+	canaryInterval           time.Duration
+	canaryStatusFile         string
+	canaryProbeRetention     time.Duration
+	canaryMinBucketRetention time.Duration
 }
 
 func defaultSealOptions() sealOptions {
@@ -173,6 +179,15 @@ type sealCycler interface {
 // the zero value.
 type sealDeps struct {
 	open func(context.Context, sealOptions) (sealCycler, func(), error)
+	// canary builds the scheduled canary. Nil is newCanarySchedule.
+	canary func(sealOptions) *segment.CanarySchedule
+}
+
+func (d sealDeps) canaryBuilder() func(sealOptions) *segment.CanarySchedule {
+	if d.canary != nil {
+		return d.canary
+	}
+	return newCanarySchedule
 }
 
 func (d sealDeps) opener() func(context.Context, sealOptions) (sealCycler, func(), error) {
@@ -224,12 +239,22 @@ func runSealLoop(ctx context.Context, args []string, stdout, stderr io.Writer, d
 		return report.cycle(ctx, engine)
 	}
 
+	// The scheduled canary rides this loop: it looks once a cycle and runs
+	// once per its own interval. Off for -once, which is a single cycle.
+	var canary *segment.CanarySchedule
+	if opts.canaryInterval > 0 {
+		canary = deps.canaryBuilder()(*opts)
+	}
+
 	ticker := time.NewTicker(opts.interval)
 	defer ticker.Stop()
 	worst := exitOK
 	for {
 		if code := report.cycle(ctx, engine); code != exitOK {
 			worst = code
+		}
+		if rec, ran := canary.RunIfDue(ctx); ran {
+			report.canary(rec)
 		}
 		select {
 		case <-ctx.Done():
@@ -294,7 +319,17 @@ func parseSealFlags(args []string, stderr io.Writer) (*sealOptions, bool, bool, 
 		anchorKey = fs.String("anchor-key", os.Getenv(envAnchorKey),
 			"PEM file holding the EC private key that signs log submissions; "+
 				"empty generates an ephemeral one per process ($"+envAnchorKey+")")
-		once   = fs.Bool("once", false, "run one cycle and exit, for a scheduled job")
+		once           = fs.Bool("once", false, "run one cycle and exit, for a scheduled job")
+		canaryInterval = fs.Duration("canary-interval", envDuration(envCanaryInterval, 0),
+			"run SEG-005's deletion canary this often from the loop (doc 05 §2); 0 is off, "+
+				"and -once never runs it ($"+envCanaryInterval+")")
+		canaryStatusFile = fs.String("canary-status-file", os.Getenv(envCanaryStatusFile),
+			"record each scheduled canary run here, for the core's health ($"+envCanaryStatusFile+")")
+		canaryProbeRetention = fs.Duration("canary-probe-retention", envDuration(envProbeRetn, 0),
+			"retention for the scheduled canary's probe; 0 uses -retention ($"+envProbeRetn+")")
+		canaryMinBucket = fs.Duration("canary-min-bucket-retention", envDuration(envMinBucket, 0),
+			"the scheduled canary requires the bucket's default retention to be at least this; "+
+				"0 does not check ($"+envMinBucket+")")
 		asJSON = fs.Bool("json", false, "write each cycle's report as JSON")
 		quiet  = fs.Bool("quiet", false,
 			"print nothing for a cycle that sealed nothing; failures are always reported")
@@ -369,6 +404,10 @@ func parseSealFlags(args []string, stderr io.Writer) (*sealOptions, bool, bool, 
 		fprintf(stderr, "innsegl seal: -anchor-attempts %d never submits, so no segment "+
 			"is ever anchored\n", *anchorAttempts)
 		return nil, false, false, exitUsage
+	case *canaryInterval < 0:
+		fprintf(stderr, "innsegl seal: -canary-interval %s is negative; 0 turns the "+
+			"scheduled canary off\n", *canaryInterval)
+		return nil, false, false, exitUsage
 	case !*once && *interval <= 0:
 		fprintf(stderr, "innsegl seal: -interval %s is not positive; use -once for a "+
 			"single cycle\n", *interval)
@@ -387,6 +426,8 @@ func parseSealFlags(args []string, stderr io.Writer) (*sealOptions, bool, bool, 
 	opts.anchorBound, opts.anchorAttempts = *anchorBound, *anchorAttempts
 	opts.anchorKey = *anchorKey
 	opts.once = *once
+	opts.canaryInterval, opts.canaryStatusFile = *canaryInterval, *canaryStatusFile
+	opts.canaryProbeRetention, opts.canaryMinBucketRetention = *canaryProbeRetention, *canaryMinBucket
 	return &opts, *asJSON, *quiet, exitOK
 }
 

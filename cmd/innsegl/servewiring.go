@@ -749,6 +749,9 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		// process a third listener for exactly these, and "this listener is
 		// open" published where a stranger can read it is an invitation.
 		AdminCredentialEnforced: adminCred != nil,
+		// doc 05 §2: the scheduled WORM canary's last run, from the file the
+		// sealer records it in. A report, never a reason to be unready.
+		Reports: canaryHealthReports(os.Getenv(envCanaryStatusFile), time.Now),
 	})
 	if err != nil {
 		return fail("build the health endpoints: %w", err)
