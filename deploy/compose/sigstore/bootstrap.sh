@@ -68,6 +68,15 @@ REKOR_OUT=/out/rekor
 CONFIG_IN=/in/fulcio-config.yaml
 CA_LIB=/ca-lib.sh
 
+# ADR-0078. Set by sigstore.yml; unset, as in a run of this script on its own
+# (sigstore-bootstrap-selftest.sh), the credentials step is skipped.
+CRED_LIB=/credentials-lib.sh
+CRED_STORE="${INNSEGL_CREDENTIALS_STORE:-}"
+CRED_RENDER=/run/innsegl/render
+REKOR_INDEX_TEMPLATE=/in/rekor-index.sql
+TRILLIAN_DB_USER="${INNSEGL_TRILLIAN_DB_USER:-test}"
+TRILLIAN_DB_NAME="${INNSEGL_TRILLIAN_DB_NAME:-test}"
+
 # Both Sigstore images run as uid 65532 (`docker inspect ghcr.io/sigstore/
 # fulcio`, `.../rekor-server`). Docker creates a fresh named volume root-owned,
 # so what those two must read is chowned here rather than by running them as
@@ -231,6 +240,71 @@ chmod 0644 "${FULCIO_OUT}/config.yaml"
 chmod 0400 "${REKOR_OUT}/log.key"
 chown "${RUN_UID}:${RUN_GID}" "${FULCIO_OUT}/config.yaml" "${REKOR_OUT}/log.key"
 ca_own "${FULCIO_OUT}"
+
+# ---------------------------------------------------------------------------
+# The log database's credentials (ADR-0078).
+#
+# Three, generated for this host and kept in the trust volume
+# sigstore-credentials-store: MySQL's root, Trillian's user and Rekor's index
+# user. Each reader gets its own rendered volume:
+#   logdb/        trillian-db: the entrypoint's *_PASSWORD_FILE values, the
+#                 init file it runs at every start, and two client option
+#                 files (its healthcheck; scripts/rekor-reindex.sh)
+#   trillian/     the Trillian pair's flag file (--config)
+#   rekor-index/  Rekor's config file (--config)
+#
+# THE INIT FILE IS THE MOVE. MySQL runs it as the superuser at every start,
+# so it needs no old password: it sets every user's password from the files.
+# On an existing host that is the step from the old public values to this
+# host's own; after that it is a no-op. It also removes root@'%', which
+# nothing uses; root stays on the container's local socket.
+#
+# root@localhost is set only once Trillian's user exists. On a first start the
+# image runs the init file during its own setup too, before it has set the
+# root password itself, and a password set there would lock the image out of
+# the rest of its setup.
+# ---------------------------------------------------------------------------
+if [ -n "${CRED_STORE:-}" ]; then
+  CRED_WHO=sigstore-bootstrap
+  . "${CRED_LIB}"
+  cred_ensure "${CRED_STORE}" logdb-root logdb-trillian logdb-rekor
+  for d in "${CRED_RENDER}/logdb" "${CRED_RENDER}/trillian" "${CRED_RENDER}/rekor-index"; do
+    [ -d "${d}" ] || fail "${d} is not mounted; sigstore.yml gives this one-shot every per-credential volume"
+  done
+  [ -r "${REKOR_INDEX_TEMPLATE}" ] || fail "${REKOR_INDEX_TEMPLATE} is not readable; check the bind mount"
+  root_pw=$(cred_value "${CRED_STORE}" logdb-root) || exit 1
+  trillian_pw=$(cred_value "${CRED_STORE}" logdb-trillian) || exit 1
+  rekor_pw=$(cred_value "${CRED_STORE}" logdb-rekor) || exit 1
+
+  printf '%s\n' "${root_pw}" | cred_put "${CRED_RENDER}/logdb/root" 0444
+  printf '%s\n' "${trillian_pw}" | cred_put "${CRED_RENDER}/logdb/trillian" 0444
+  {
+    sed "s/@REKOR_INDEX_PASSWORD@/${rekor_pw}/" "${REKOR_INDEX_TEMPLATE}"
+    printf '%s\n' \
+      "-- ADR-0078: every user's password from this host's files, at every start." \
+      "ALTER USER IF EXISTS '${TRILLIAN_DB_USER}'@'%' IDENTIFIED BY '${trillian_pw}';" \
+      "DROP USER IF EXISTS 'root'@'%';" \
+      "SET @innsegl_root = IF((SELECT COUNT(*) FROM mysql.user WHERE user = '${TRILLIAN_DB_USER}' AND host = '%') > 0, 'ALTER USER IF EXISTS ''root''@''localhost'' IDENTIFIED BY ''${root_pw}''', 'DO 0');" \
+      "PREPARE innsegl_root FROM @innsegl_root;" \
+      "EXECUTE innsegl_root;" \
+      "DEALLOCATE PREPARE innsegl_root;" \
+      "SET @innsegl_root = NULL;" \
+      "FLUSH PRIVILEGES;"
+  } | cred_put "${CRED_RENDER}/logdb/init.sql" 0444
+  grep -q '@REKOR_INDEX_PASSWORD@' "${CRED_RENDER}/logdb/init.sql" \
+    && fail 'the rendered init file still holds the placeholder; substitution failed'
+  printf '[client]\nuser=%s\npassword=%s\n' "${TRILLIAN_DB_USER}" "${trillian_pw}" \
+    | cred_put "${CRED_RENDER}/logdb/healthcheck.cnf" 0444
+  printf '[client]\nuser=rekor\npassword=%s\n' "${rekor_pw}" \
+    | cred_put "${CRED_RENDER}/logdb/rekor.cnf" 0444
+
+  printf '%s\n' "--mysql_uri=${TRILLIAN_DB_USER}:${trillian_pw}@tcp(trillian-db:3306)/${TRILLIAN_DB_NAME}" \
+    | cred_put "${CRED_RENDER}/trillian/flags" 0444
+  printf 'search_index:\n  mysql:\n    dsn: rekor:%s@tcp(trillian-db:3306)/rekor_index\n' "${rekor_pw}" \
+    | cred_put "${CRED_RENDER}/rekor-index/rekor-server.yaml" 0444
+  root_pw=''; trillian_pw=''; rekor_pw=''
+  log "the log database's credentials are in the trust volume and rendered for their readers"
+fi
 
 log 'ready'
 printf 'sigstore-bootstrap: Fulcio CA subject and validity:\n'

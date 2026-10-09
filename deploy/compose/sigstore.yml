@@ -118,13 +118,17 @@ x-jwt-issuer: &jwt-issuer ${INNSEGL_SPIRE_JWT_ISSUER:?set it to the issuer BOTH 
 # of its own has it there, and the bootstrap moves it into ca.pass once.
 # ----------------------------------------------------------------------------
 
-# Trillian's throwaway database, inside a throwaway container, on an internal
-# network no client of the log can reach. These are upstream's compose
-# credentials and RM-012's, kept identical for the same reason the image tags
-# are: so the harness and the stack cannot describe different databases.
+# Trillian's database and user names: upstream's compose names and RM-012's,
+# kept identical for the same reason the image tags are.
+#
+# THE PASSWORDS ARE NOT IN THIS FILE (ADR-0078). Earlier releases used
+# upstream's well-known one for every user here. sigstore-bootstrap generates
+# three per host (MySQL's root, Trillian's user, Rekor's index user) into the
+# trust volume sigstore-credentials-store, and renders each into a volume for
+# its readers. Trillian and Rekor read theirs from their own --config files;
+# MySQL from *_PASSWORD_FILE and its init file.
 x-trillian-db-name: &trillian-db-name test
 x-trillian-db-user: &trillian-db-user test
-x-trillian-db-password: &trillian-db-password zaphod
 
 services:
 
@@ -159,12 +163,22 @@ services:
       # Read once, to move an existing host's password into ca.pass. No
       # default: see the note above the services.
       INNSEGL_FULCIO_CA_PASSWORD: ${INNSEGL_FULCIO_CA_PASSWORD:-}
+      # ADR-0078: the log database's credentials.
+      INNSEGL_CREDENTIALS_STORE: /run/innsegl/credentials-store
+      INNSEGL_TRILLIAN_DB_USER: *trillian-db-user
+      INNSEGL_TRILLIAN_DB_NAME: *trillian-db-name
     volumes:
       - ./sigstore/bootstrap.sh:/bootstrap.sh:ro
       - ./sigstore/ca-lib.sh:/ca-lib.sh:ro
+      - ./credentials-lib.sh:/credentials-lib.sh:ro
       - ./sigstore/fulcio-config.yaml:/in/fulcio-config.yaml:ro
+      - ./sigstore/rekor-index.sql:/in/rekor-index.sql:ro
       - sigstore-fulcio-pki:/out/fulcio
       - sigstore-rekor-key:/out/rekor
+      - sigstore-credentials-store:/run/innsegl/credentials-store
+      - sigstore-credential-logdb:/run/innsegl/render/logdb
+      - sigstore-credential-trillian:/run/innsegl/render/trillian
+      - sigstore-credential-rekor-index:/run/innsegl/render/rekor-index
 
   # --------------------------------------------------------------------------
   # fulcio — the local CA (doc 05 §1).
@@ -302,7 +316,9 @@ services:
       # backfilled; every bring-up does that once, when the index is behind
       # the log (Makefile, rekor-index-ready; scripts/rekor-reindex.sh).
       - "--search_index.storage_provider=mysql"
-      - "--search_index.mysql.dsn=rekor:rekor-index@tcp(trillian-db:3306)/rekor_index"
+      # The DSN, with this host's password in it, is in Rekor's own config
+      # file, never on this command line (ADR-0078).
+      - "--config=/run/innsegl/credentials/rekor-index/rekor-server.yaml"
       - "--host=0.0.0.0"
       - "--port=3000"
       - "--rekor_server.address=0.0.0.0"
@@ -363,6 +379,7 @@ services:
       - "127.0.0.1:${INNSEGL_REKOR_PORT:-23000}:3000"
     volumes:
       - sigstore-rekor-key:/etc/rekor:ro
+      - sigstore-credential-rekor-index:/run/innsegl/credentials/rekor-index:ro
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -389,13 +406,17 @@ services:
     restart: on-failure
     command:
       - "--storage_system=mysql"
-      - "--mysql_uri=test:zaphod@tcp(trillian-db:3306)/test"
+      # --mysql_uri, with this host's password in it, is in Trillian's own
+      # flag file, never on this command line (ADR-0078).
+      - "--config=/run/innsegl/credentials/trillian/flags"
       - "--rpc_endpoint=0.0.0.0:8090"
       - "--http_endpoint=0.0.0.0:8091"
       - "--quota_system=noop"
     networks:
       - innsegl-rekor-log
       - innsegl-trillian-db
+    volumes:
+      - sigstore-credential-trillian:/run/innsegl/credentials/trillian:ro
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -427,13 +448,17 @@ services:
     restart: on-failure
     command:
       - "--storage_system=mysql"
-      - "--mysql_uri=test:zaphod@tcp(trillian-db:3306)/test"
+      # --mysql_uri, with this host's password in it, is in Trillian's own
+      # flag file, never on this command line (ADR-0078).
+      - "--config=/run/innsegl/credentials/trillian/flags"
       - "--rpc_endpoint=0.0.0.0:8090"
       - "--http_endpoint=0.0.0.0:8091"
       - "--force_master"
       - "--quota_system=noop"
     networks:
       - innsegl-trillian-db
+    volumes:
+      - sigstore-credential-trillian:/run/innsegl/credentials/trillian:ro
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -458,23 +483,29 @@ services:
     container_name: innsegl-sigstore-trillian-db
     platform: linux/amd64
     restart: unless-stopped
+    # The init file and both password files are this host's, rendered by
+    # sigstore-bootstrap (ADR-0078).
+    depends_on:
+      sigstore-bootstrap:
+        condition: service_completed_successfully
     environment:
-      MYSQL_ROOT_PASSWORD: *trillian-db-password
+      # Read at the first start only, when the data directory is empty.
+      MYSQL_ROOT_PASSWORD_FILE: /run/innsegl/credentials/logdb/root
       MYSQL_DATABASE: *trillian-db-name
       MYSQL_USER: *trillian-db-user
-      MYSQL_PASSWORD: *trillian-db-password
+      MYSQL_PASSWORD_FILE: /run/innsegl/credentials/logdb/trillian
     # The image's own command plus one flag. --init-file runs
     # sigstore/rekor-index.sql at EVERY start, not only on an empty data
     # directory as /docker-entrypoint-initdb.d would: a database volume made
     # before the index moved here has no index user, and rekor then exits with
     # `Access denied for user 'rekor'` and restarts until it does.
-    command: ["mysqld", "--init-file=/etc/mysql/rekor-index.sql"]
+    command: ["mysqld", "--init-file=/run/innsegl/credentials/logdb/init.sql"]
     networks:
       - innsegl-trillian-db
       - innsegl-rekor-index
     volumes:
       - sigstore-trillian-db-data:/var/lib/mysql
-      - ./sigstore/rekor-index.sql:/etc/mysql/rekor-index.sql:ro
+      - sigstore-credential-logdb:/run/innsegl/credentials/logdb:ro
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -490,11 +521,13 @@ services:
       test:
         - "CMD"
         - "mysql"
+        # User and password from the rendered option file, which must be the
+        # first option. Nothing on this command line is a credential
+        # (ADR-0078).
+        - "--defaults-extra-file=/run/innsegl/credentials/logdb/healthcheck.cnf"
         - "--protocol=TCP"
         - "--host=127.0.0.1"
         - "--port=3306"
-        - "-utest"
-        - "-pzaphod"
         - "-e"
         - "SELECT 1 FROM test.Trees LIMIT 1"
       interval: 5s
@@ -628,3 +661,16 @@ volumes:
   sigstore-trillian-db-data:
     name: ${INNSEGL_TRUST_TRILLIAN_DB_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-sigstore}_sigstore-trillian-db-data}
     external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
+  # ADR-0078: the log database's three credentials, generated per host.
+  # MOUNTED BY: sigstore-bootstrap (rw), and innsegl-trust-backup (ro, by
+  # name, from the core project).
+  sigstore-credentials-store:
+    name: ${INNSEGL_TRUST_SIGSTORE_CREDENTIALS_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-sigstore}_sigstore-credentials}
+    external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
+
+  # ADR-0078: one volume per reader, rewritten by sigstore-bootstrap on every
+  # start. MOUNTED BY: sigstore-bootstrap (rw) and, read-only, trillian-db
+  # (logdb), the Trillian pair (trillian), rekor (rekor-index).
+  sigstore-credential-logdb:
+  sigstore-credential-trillian:
+  sigstore-credential-rekor-index:

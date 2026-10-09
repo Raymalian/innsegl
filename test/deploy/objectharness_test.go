@@ -57,6 +57,10 @@ const (
 	// proves a refusal is the scope.
 	storeRootUser     = "innsegl"
 	storeRootPassword = "innsegl-deploy-test-objects"
+	// The scoped identity's own secret. Since ADR-0078 it is generated per
+	// host like the root's and never derived from it, so a harness hands
+	// both over, as innsegl-credentials renders them.
+	storeSealerPassword = "innsegl-deploy-test-objects-sealer"
 
 	// storeSegmentPrefix is deploy/compose/innsegl.yml's x-object-store-prefix
 	// default. It is the prefix the scoped identity's write grant is scoped to,
@@ -163,6 +167,7 @@ func startObjectStore(ctx context.Context, t *testing.T, bucket string) (*object
 		"--env", "INNSEGL_S3_IDENTITIES_FILE=" + storeIdentitiesFile,
 		"--env", "INNSEGL_OBJECT_STORE_ACCESS_KEY=" + storeRootUser,
 		"--env", "INNSEGL_OBJECT_STORE_SECRET_KEY=" + storeRootPassword,
+		"--env", "INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY=" + storeSealerPassword,
 		"--env", "INNSEGL_OBJECT_STORE_BUCKET=" + bucket,
 		"--env", "INNSEGL_OBJECT_STORE_PREFIX=" + storeSegmentPrefix,
 	}
@@ -235,6 +240,7 @@ func (c *objectStoreContainer) runObjectInitOn(ctx context.Context, network stri
 		"--volume", c.root + "/deploy/compose/innsegl:/innsegl/init:ro",
 		"--env", "INNSEGL_OBJECT_STORE_ACCESS_KEY=" + storeRootUser,
 		"--env", "INNSEGL_OBJECT_STORE_SECRET_KEY=" + storeRootPassword,
+		"--env", "INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY=" + storeSealerPassword,
 		"--env", "INNSEGL_OBJECT_STORE_URL=http://127.0.0.1:8333",
 		"--env", "INNSEGL_OBJECT_STORE_BUCKET=" + c.bucket,
 		"--env", "INNSEGL_OBJECT_STORE_PREFIX=" + storeSegmentPrefix,

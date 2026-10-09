@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -282,6 +283,11 @@ func TestOPS012TheReaderGateBitesAndTheStackHandsItTheReader(t *testing.T) {
 	// grepped the comments would be satisfied by the argument rather than by
 	// the configuration — or, worse, refuse the argument for making it.
 	block := stripComments(composeServiceBlock(t, stack, "innsegl-api"))
+	// The DSN is an anchor declared once at the head of the file (ADR-0078:
+	// it names a passfile and carries no password). Read through the alias.
+	if m := regexp.MustCompile(`(?m)^x-reader-dsn: &reader-dsn (\S+)$`).FindStringSubmatch(stack); m != nil {
+		block = strings.ReplaceAll(block, "*reader-dsn", m[1])
+	}
 	for _, want := range []struct{ needle, why string }{
 		{"INNSEGL_API_DSN",
 			"cmd/innsegl/api.go reads the query API's DSN from this variable and no other"},

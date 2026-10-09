@@ -166,6 +166,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 		"--env", "INNSEGL_S3_IDENTITIES_FILE="+storeIdentitiesFile,
 		"--env", "INNSEGL_OBJECT_STORE_ACCESS_KEY="+storeRootUser,
 		"--env", "INNSEGL_OBJECT_STORE_SECRET_KEY="+storeRootPassword,
+		"--env", "INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY="+storeSealerPassword,
 		"--env", "INNSEGL_OBJECT_STORE_BUCKET=innsegl-ops029",
 		"--env", "INNSEGL_OBJECT_STORE_PREFIX="+storeSegmentPrefix,
 		"--entrypoint", "sh", o.store, "-c",
@@ -317,6 +318,7 @@ func TestOPS029TheFilerIsReachableOnlyFromTheGateway(t *testing.T) {
 		"--env", "INNSEGL_S3_IDENTITIES_FILE=" + storeIdentitiesFile,
 		"--env", "INNSEGL_OBJECT_STORE_ACCESS_KEY=" + storeRootUser,
 		"--env", "INNSEGL_OBJECT_STORE_SECRET_KEY=" + storeRootPassword,
+		"--env", "INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY=" + storeSealerPassword,
 		"--env", "INNSEGL_OBJECT_STORE_BUCKET=innsegl-ops029",
 		"--env", "INNSEGL_OBJECT_STORE_PREFIX=" + storeSegmentPrefix,
 	}

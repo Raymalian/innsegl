@@ -58,6 +58,50 @@ readonly MIGRATIONS="${INNSEGL_MIGRATIONS_DIR:-/innsegl/migrations}"
 log()  { printf 'db-init: %s\n' "$*"; }
 fail() { printf 'db-init: FAIL: %s\n' "$*" >&2; exit 1; }
 
+# ---------------------------------------------------------------------------
+# 0. The credentials (ADR-0078).
+#
+# In the stack, every password is a file in the trust credentials volume
+# that innsegl-credentials generated for this host. $INNSEGL_CREDENTIALS_DIR
+# names it, and the owner's and the five roles' are read from there into this
+# process's own environment. No compose value and no command line carries
+# them. Run by hand or by a test without that variable, the values come from
+# the environment as before.
+#
+# THE ONE OLD VALUE. Earlier releases gave the owner a password every reader
+# of this repository had. The owner is the one credential whose server needs
+# the old password before it takes a new one, so the move in step 1b needs
+# it, and this is the only place a shipped file names it. OPS-130 refuses
+# every other old value wherever it appears.
+# ---------------------------------------------------------------------------
+LEDGER_OWNER_LEGACY_PUBLIC_PASSWORD='innsegl-compose-owner'
+CREDENTIALS_DIR="${INNSEGL_CREDENTIALS_DIR:-}"
+
+# check_password refuses a value that would need quoting in SQL or a pgpass
+# line. Every generated value is hex; this is what lets \set take it as is.
+check_password() {
+  case "$2" in
+    ''|*[!A-Za-z0-9._~-]*) fail "the password for $1 is empty or holds a character outside [A-Za-z0-9._~-]" ;;
+  esac
+}
+
+read_credential() {
+  [ -s "${CREDENTIALS_DIR}/$1" ] || fail "${CREDENTIALS_DIR}/$1 is missing; innsegl-credentials writes it before this runs"
+  head -n 1 "${CREDENTIALS_DIR}/$1"
+}
+
+if [ -n "${CREDENTIALS_DIR}" ]; then
+  PGPASSWORD="$(read_credential ledger-owner)" || exit 1
+  INNSEGL_APPENDER_PASSWORD="$(read_credential ledger-appender)" || exit 1
+  INNSEGL_READER_PASSWORD="$(read_credential ledger-reader)" || exit 1
+  INNSEGL_BACKUP_PASSWORD="$(read_credential ledger-backup)" || exit 1
+  INNSEGL_AUTHWRITER_PASSWORD="$(read_credential ledger-authwriter)" || exit 1
+  INNSEGL_RESOLVER_PASSWORD="$(read_credential ledger-resolver)" || exit 1
+  # Exported: the verify-*.sh scripts this runs read them.
+  export PGPASSWORD INNSEGL_APPENDER_PASSWORD INNSEGL_READER_PASSWORD \
+    INNSEGL_BACKUP_PASSWORD INNSEGL_AUTHWRITER_PASSWORD INNSEGL_RESOLVER_PASSWORD
+fi
+
 : "${PGHOST:?db-init: PGHOST must name the ledger}"
 : "${PGUSER:?db-init: PGUSER must name the role that OWNS the schema}"
 : "${PGDATABASE:?db-init: PGDATABASE must name the ledger database}"
@@ -101,6 +145,13 @@ AUTHWRITER_ROLE="${INNSEGL_AUTHWRITER_ROLE:-innsegl_authwriter}"
 # dashboard through it. Like the others, a default and not a protected string.
 RESOLVER_ROLE="${INNSEGL_RESOLVER_ROLE:-innsegl_resolver}"
 : "${INNSEGL_RESOLVER_PASSWORD:?db-init: INNSEGL_RESOLVER_PASSWORD must be set}"
+
+check_password owner "${PGPASSWORD}"
+check_password appender "${INNSEGL_APPENDER_PASSWORD}"
+check_password reader "${INNSEGL_READER_PASSWORD}"
+check_password backup "${INNSEGL_BACKUP_PASSWORD}"
+check_password authwriter "${INNSEGL_AUTHWRITER_PASSWORD}"
+check_password resolver "${INNSEGL_RESOLVER_PASSWORD}"
 
 # internal/api/readonly.sql, reached BY MOUNT and not by copy.
 #
@@ -169,6 +220,96 @@ until pg_isready -q -h "${PGHOST}" -p "${PGPORT:-5432}" -U "${PGUSER}" -d "${PGD
   sleep 1
 done
 log "ledger at ${PGHOST}:${PGPORT:-5432} is up, database ${PGDATABASE}, owner ${PGUSER}"
+
+# ---------------------------------------------------------------------------
+# 1b. Move an existing ledger onto this host's own passwords (ADR-0078).
+#
+# A ledger made by an earlier release has its owner and roles on the old
+# public values, or on values an operator set. The files are this host's
+# own. When the server refuses the owner's file password, the old one is
+# tried: $INNSEGL_LEDGER_OWNER_PASSWORD if the operator set it, else the old
+# public default. If one opens, ONE transaction sets the owner's password and
+# every existing role's from the files. It commits whole or not at all: a
+# failure leaves every old password working, and the run refuses. The lock
+# timeout makes a role held by another session fail the run rather than hang
+# the bring-up.
+#
+# A second run finds that the file's password opens, and moves nothing.
+# ---------------------------------------------------------------------------
+
+# owner_try prints "open", "refused" (the server rejected the password) or
+# the error, for one candidate owner password. psql is called directly, not
+# through a function, so the PGPASSWORD given here applies to it alone.
+owner_try() {
+  try_out="$(PGPASSWORD="$1" psql -X -q -A -t -c 'SELECT 1' 2>&1)" && { echo open; return 0; }
+  case "${try_out}" in
+    *"password authentication failed"*) echo refused ;;
+    *) printf '%s\n' "${try_out}" ;;
+  esac
+}
+
+move_ledger_passwords() {
+  old="$1"
+  existing="$(PGPASSWORD="${old}" psql -X -q -v ON_ERROR_STOP=1 -A -t -c \
+    "SELECT rolname FROM pg_roles WHERE rolname IN ('${ROLE}', '${READER_ROLE}', '${BACKUP_ROLE}', '${AUTHWRITER_ROLE}', '${RESOLVER_ROLE}') ORDER BY rolname")" \
+    || fail "could not list the ledger's roles with the old owner password; nothing was changed"
+  sql="BEGIN;
+SET LOCAL lock_timeout = '${INNSEGL_CREDENTIALS_LOCK_TIMEOUT:-10s}';
+\\set owner '${PGUSER}'
+\\set pass '${PGPASSWORD}'
+ALTER ROLE :\"owner\" PASSWORD :'pass';"
+  for r in ${existing}; do
+    if   [ "${r}" = "${ROLE}" ];            then p="${INNSEGL_APPENDER_PASSWORD}"
+    elif [ "${r}" = "${READER_ROLE}" ];     then p="${INNSEGL_READER_PASSWORD}"
+    elif [ "${r}" = "${BACKUP_ROLE}" ];     then p="${INNSEGL_BACKUP_PASSWORD}"
+    elif [ "${r}" = "${AUTHWRITER_ROLE}" ]; then p="${INNSEGL_AUTHWRITER_PASSWORD}"
+    else                                         p="${INNSEGL_RESOLVER_PASSWORD}"
+    fi
+    sql="${sql}
+\\set role '${r}'
+\\set pass '${p}'
+ALTER ROLE :\"role\" PASSWORD :'pass';"
+  done
+  p=''
+  sql="${sql}
+COMMIT;"
+  # ON_ERROR_STOP ends the session at the first error, and a session that
+  # ends inside BEGIN is rolled back: all of these, or none.
+  if ! printf '%s\n' "${sql}" | PGPASSWORD="${old}" psql -X -q -v ON_ERROR_STOP=1 -f - >/dev/null; then
+    sql=''
+    fail "REFUSED: moving the ledger's passwords did not complete and was rolled back. Every old password still works; nothing was changed. Run the update again; if it fails the same way, the error above says why"
+  fi
+  sql=''
+  log "moved the owner and $(printf '%s\n' ${existing} | grep -c .) role(s) onto this host's own passwords, in one transaction"
+}
+
+if [ -n "${CREDENTIALS_DIR}" ]; then
+  state="$(owner_try "${PGPASSWORD}")"
+  case "${state}" in
+    open) log "the owner opens with this host's own password; nothing to move" ;;
+    refused)
+      old=''
+      if [ -n "${INNSEGL_LEDGER_OWNER_PASSWORD:-}" ] \
+        && [ "$(owner_try "${INNSEGL_LEDGER_OWNER_PASSWORD}")" = open ]; then
+        old="${INNSEGL_LEDGER_OWNER_PASSWORD}"
+        log "the owner opens with \$INNSEGL_LEDGER_OWNER_PASSWORD; moving the ledger onto this host's own passwords"
+      elif [ "$(owner_try "${LEDGER_OWNER_LEGACY_PUBLIC_PASSWORD}")" = open ]; then
+        old="${LEDGER_OWNER_LEGACY_PUBLIC_PASSWORD}"
+        log "the owner opens with the public default earlier releases shipped; moving the ledger onto this host's own passwords"
+      else
+        fail "REFUSED: the ledger's owner opens with none of: this host's password file, \$INNSEGL_LEDGER_OWNER_PASSWORD, the old public default. Nothing was changed. Restore the trust credentials volume from the trust-key backup, or set INNSEGL_LEDGER_OWNER_PASSWORD once to the owner's current password and run the update again"
+      fi
+      move_ledger_passwords "${old}"
+      [ "$(owner_try "${PGPASSWORD}")" = open ] \
+        || fail "the move committed, but the owner does not open with the new password"
+      [ "$(owner_try "${old}")" = refused ] \
+        || fail "the move committed, but the old owner password still opens"
+      old=''
+      log 'the old owner password is refused now, and the new one opens'
+      ;;
+    *) fail "could not connect as the owner: ${state}" ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # 2. The migrations.
@@ -241,8 +382,11 @@ fi
 # Fed on stdin rather than through -c: psql substitutes :vars in a SCRIPT, and
 # `-c` is handed to the server as one already-parsed command with no
 # substitution at all. The password therefore reaches SQL through psql's own
-# :'pass' literal quoting and never through the shell's.
-psql_owner -v pass="${INNSEGL_APPENDER_PASSWORD}" -v role="${ROLE}" <<SQL
+# :'pass' literal quoting and never through the shell's. The password is set
+# with \set inside that script, so it is on no command line (ADR-0078);
+# check_password is why the \set needs no escaping.
+psql_owner -v role="${ROLE}" <<SQL
+\set pass '${INNSEGL_APPENDER_PASSWORD}'
 ${verb} ROLE :"role" LOGIN PASSWORD :'pass';
 SQL
 
@@ -279,7 +423,8 @@ else
   log "role ${READER_ROLE} already exists; resetting its password and its grants"
 fi
 
-psql_owner -v pass="${INNSEGL_READER_PASSWORD}" -v role="${READER_ROLE}" <<SQL
+psql_owner -v role="${READER_ROLE}" <<SQL
+\set pass '${INNSEGL_READER_PASSWORD}'
 ${reader_verb} ROLE :"role" LOGIN PASSWORD :'pass';
 SQL
 
@@ -316,7 +461,8 @@ else
   log "role ${BACKUP_ROLE} already exists; resetting its password and its grants"
 fi
 
-psql_owner -v pass="${INNSEGL_BACKUP_PASSWORD}" -v role="${BACKUP_ROLE}" <<SQL
+psql_owner -v role="${BACKUP_ROLE}" <<SQL
+\set pass '${INNSEGL_BACKUP_PASSWORD}'
 ${backup_verb} ROLE :"role" LOGIN PASSWORD :'pass';
 SQL
 
@@ -361,7 +507,8 @@ else
   log "role ${AUTHWRITER_ROLE} already exists; resetting its password and its grants"
 fi
 
-psql_owner -v pass="${INNSEGL_AUTHWRITER_PASSWORD}" -v role="${AUTHWRITER_ROLE}" <<SQL
+psql_owner -v role="${AUTHWRITER_ROLE}" <<SQL
+\set pass '${INNSEGL_AUTHWRITER_PASSWORD}'
 ${authwriter_verb} ROLE :"role" LOGIN PASSWORD :'pass';
 SQL
 
@@ -407,7 +554,8 @@ else
   log "role ${RESOLVER_ROLE} already exists; resetting its password and its grants"
 fi
 
-psql_owner -v pass="${INNSEGL_RESOLVER_PASSWORD}" -v role="${RESOLVER_ROLE}" <<SQL
+psql_owner -v role="${RESOLVER_ROLE}" <<SQL
+\set pass '${INNSEGL_RESOLVER_PASSWORD}'
 ${resolver_verb} ROLE :"role" LOGIN PASSWORD :'pass';
 SQL
 

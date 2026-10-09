@@ -39,12 +39,29 @@ set -eu
 log()  { printf 'object-init: %s\n' "$*"; }
 fail() { printf 'object-init: FAIL: %s\n' "$*" >&2; exit 1; }
 
+# secret_from NAME prints $NAME, or the first line of the file $NAME_FILE
+# names. The stack sets only the _FILE form (ADR-0078): the value is then in
+# this process's environment and nowhere else. Both set is refused.
+secret_from() {
+  eval "sf_value=\${$1:-}; sf_file=\${$1_FILE:-}"
+  if [ -n "${sf_value}" ] && [ -n "${sf_file}" ]; then
+    fail "both \$$1 and \$$1_FILE are set; set one"
+  fi
+  if [ -n "${sf_file}" ]; then
+    [ -s "${sf_file}" ] || fail "\$$1_FILE names ${sf_file}, which is missing or empty"
+    head -n 1 "${sf_file}"
+    return 0
+  fi
+  [ -n "${sf_value}" ] || fail "\$$1_FILE (or \$$1) must be set"
+  printf '%s\n' "${sf_value}"
+}
+
 # The directory this script was invoked from, so its verifier is found beside
 # it whatever the caller's working directory. db-init.sh's line, verbatim.
 readonly HERE="$(cd -- "$(dirname -- "$0")" && pwd)"
 
 : "${INNSEGL_OBJECT_STORE_ACCESS_KEY:?object-init: INNSEGL_OBJECT_STORE_ACCESS_KEY must be set}"
-: "${INNSEGL_OBJECT_STORE_SECRET_KEY:?object-init: INNSEGL_OBJECT_STORE_SECRET_KEY must be set}"
+ROOT_SECRET="$(secret_from INNSEGL_OBJECT_STORE_SECRET_KEY)" || exit 1
 BUCKET="${INNSEGL_OBJECT_STORE_BUCKET:-innsegl-segments}"
 ENDPOINT="${INNSEGL_OBJECT_STORE_URL:-http://innsegl-s3:8333}"
 MODE="${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}"
@@ -86,7 +103,7 @@ esac
 [ "${RETENTION_COUNT}" -gt 0 ] || fail "retention window ${RETENTION} is zero; a lock that expires immediately protects nothing"
 
 export AWS_ACCESS_KEY_ID="${INNSEGL_OBJECT_STORE_ACCESS_KEY}"
-export AWS_SECRET_ACCESS_KEY="${INNSEGL_OBJECT_STORE_SECRET_KEY}"
+export AWS_SECRET_ACCESS_KEY="${ROOT_SECRET}"
 export AWS_DEFAULT_REGION="${INNSEGL_OBJECT_STORE_REGION:-us-east-1}"
 # The client's own defaults would otherwise send a trailing checksum header
 # this gateway answers with a signature mismatch (measured). The request is
@@ -175,7 +192,9 @@ log "  docker compose -f deploy/compose/innsegl.yml --profile canary run --rm in
 # in s3-identities.sh is the only copy of it.
 # ---------------------------------------------------------------------------
 export INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY="${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY:-innsegl-sealer}"
-export INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY="${INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY:-${INNSEGL_OBJECT_STORE_SECRET_KEY}-sealer}"
+INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY="$(secret_from INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY)" || exit 1
+unset INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY_FILE
+export INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY
 export INNSEGL_OBJECT_STORE_URL="${ENDPOINT}"
 export INNSEGL_OBJECT_STORE_BUCKET="${BUCKET}"
 export INNSEGL_OBJECT_STORE_PREFIX="${INNSEGL_OBJECT_STORE_PREFIX:-segments/}"

@@ -62,7 +62,10 @@ cat > "${TMP}/fakedocker" <<SHIM
 printf '%s\n' "\$*" >> "${CALLS}"
 if [ "\$1" = exec ]; then
   [ "\${FAKE_EXEC_RC:-0}" = 0 ] || exit "\$FAKE_EXEC_RC"
-  printf '%s\n' "\${FAKE_INDEX_COUNT:-0}"
+  case "\$*" in
+    *" sed "*rekor.cnf*) printf '%s\n' "\${FAKE_REKOR_PW:-0123abcd0123abcd}" ;;
+    *) printf '%s\n' "\${FAKE_INDEX_COUNT:-0}" ;;
+  esac
   exit 0
 fi
 exit "\${FAKE_DOCKER_RC:-0}"
@@ -86,14 +89,18 @@ PORT="$(cat "${PORTFILE}")"
 
 # The DSN rekor itself is given, read from the compose file, so the backfill
 # cannot write to a database the server does not read.
-COMPOSE_DSN="$(sed -n 's/.*"--search_index\.mysql\.dsn=\([^"]*\)".*/\1/p' "${ROOT}/deploy/compose/sigstore.yml")"
+# The DSN Rekor reads is rendered by the bootstrap into its config file
+# (ADR-0078); the backfill must write as the same user, to the same database.
+REKOR_DSN_FORMAT="$(sed -n 's/.*dsn: \(rekor:%s@tcp([^)]*)\/[a-z_]*\).*/\1/p' "${ROOT}/deploy/compose/sigstore/bootstrap.sh")"
+COMPOSE_DSN="$(printf "${REKOR_DSN_FORMAT:-unset}" 0123abcd0123abcd)"
 
 # ---------------------------------------------------------------------------
 echo "a log of 25 entries is backfilled over 0..24 by Rekor's own tool"
 
 run "${SCRIPT}"
 if [ "${rc}" = 0 ]; then ok "exits 0"; else bad "exits 0" "exit ${rc}: ${out}"; fi
-if [ "$(wc -l < "${CALLS}" | tr -d ' ')" = 1 ]; then ok "runs docker once"; else bad "runs docker once" "$(call)"; fi
+if [ "$(grep -c '^run ' "${CALLS}")" = 1 ]; then ok "runs one container"; else bad "runs one container" "$(call)"; fi
+if ! grep -q -- ' -p' "${CALLS}" && has "sed -n s/^password=//p /run/innsegl/credentials/logdb/rekor.cnf"; then ok "reads the password inside trillian-db, never from this script's own text"; else bad "reads the password inside trillian-db" "$(call)"; fi
 if has "run --rm --network innsegl-sigstore-rekor-index "; then ok "on the network rekor and trillian-db share"; else bad "on the network rekor and trillian-db share" "$(call)"; fi
 if printf '%s' "$(call)" | grep -Eq 'ghcr\.io/sigstore/rekor/backfill-index:v[0-9.]+@sha256:[0-9a-f]{64} '; then ok "runs backfill-index pinned by tag and digest"; else bad "runs backfill-index pinned by tag and digest" "$(call)"; fi
 if has "-rekor-address http://rekor:3000 "; then ok "reads the log from inside the network"; else bad "reads the log from inside the network" "$(call)"; fi
@@ -144,7 +151,7 @@ echo "--if-behind: an index that covers the log is left alone"
 run FAKE_INDEX_COUNT=25 "${SCRIPT}" --if-behind
 if [ "${rc}" = 0 ]; then ok "exits 0"; else bad "exits 0" "exit ${rc}: ${out}"; fi
 if ! grep -q '^run ' "${CALLS}"; then ok "runs no backfill"; else bad "runs no backfill" "$(call)"; fi
-if has "exec innsegl-sigstore-trillian-db mysql"; then ok "asks trillian-db how much the index holds"; else bad "asks trillian-db how much the index holds" "$(call)"; fi
+if has "exec innsegl-sigstore-trillian-db mysql --defaults-extra-file=/run/innsegl/credentials/logdb/rekor.cnf"; then ok "asks trillian-db how much the index holds, as rekor, from the option file"; else bad "asks trillian-db how much the index holds" "$(call)"; fi
 if has "LIKE '3cce3710ee0baa4d%'"; then ok "counts only this tree's entries (UUID prefix = tree id in hex)"; else bad "counts only this tree's entries" "$(call)"; fi
 
 echo

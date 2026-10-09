@@ -67,7 +67,11 @@ REKOR="${INNSEGL_REKOR_URL:-http://127.0.0.1:$("$(dirname "$0")/rekor-port.sh")}
 # INNSEGL_STACK_PREFIX names a DEV stack's network and container (ADR-0072).
 NETWORK="${INNSEGL_REKOR_REINDEX_NETWORK:-${INNSEGL_STACK_PREFIX:-innsegl}-sigstore-rekor-index}"
 REKOR_IN_NETWORK="${INNSEGL_REKOR_REINDEX_REKOR:-http://rekor:3000}"
-DSN="${INNSEGL_REKOR_REINDEX_DSN:-rekor:rekor-index@tcp(trillian-db:3306)/rekor_index}"
+# The DSN has this host's generated password in it (ADR-0078), so it has no
+# default here. Unset, the password is read from the option file trillian-db
+# holds, the same value Rekor's config file carries.
+DSN="${INNSEGL_REKOR_REINDEX_DSN:-}"
+REKOR_CNF=/run/innsegl/credentials/logdb/rekor.cnf
 CONCURRENCY="${INNSEGL_REKOR_REINDEX_CONCURRENCY:-4}"
 DB="${INNSEGL_REKOR_REINDEX_DB:-${INNSEGL_STACK_PREFIX:-innsegl}-sigstore-trillian-db}"
 DOCKER="${INNSEGL_REKOR_REINDEX_DOCKER:-docker}"
@@ -96,11 +100,22 @@ if [ "$size" -eq 0 ]; then
   exit 0
 fi
 
+if [ -z "$DSN" ]; then
+  pass=$("$DOCKER" exec "$DB" sed -n 's/^password=//p' "$REKOR_CNF" </dev/null 2>/dev/null | tail -n 1)
+  case "$pass" in
+    ''|*[!A-Za-z0-9._~-]*) echo "rekor-reindex: could not read the index user's password from $DB; nothing was changed" >&2; exit 4 ;;
+  esac
+  DSN="rekor:${pass}@tcp(trillian-db:3306)/rekor_index"
+  pass=''
+fi
+
 if [ "$IF_BEHIND" = 1 ]; then
-  # The DSN's own user and database: the same grant rekor has, nothing more.
-  user="${DSN%%:*}"; rest="${DSN#*:}"; pass="${rest%%@*}"; dbname="${DSN##*/}"
+  # Rekor's own user and database: the same grant rekor has, nothing more.
+  # The password comes from the option file inside the container, never this
+  # command line (ADR-0078).
+  dbname="${DSN##*/}"
   case "$tree" in ''|*[!0-9a-f]*) echo "rekor-reindex: the log at $REKOR named no tree; nothing was changed" >&2; exit 4 ;; esac
-  indexed=$("$DOCKER" exec "$DB" mysql --protocol=TCP -h127.0.0.1 -N -B -u"$user" -p"$pass" "$dbname" \
+  indexed=$("$DOCKER" exec "$DB" mysql --defaults-extra-file="$REKOR_CNF" --protocol=TCP -h127.0.0.1 -N -B "$dbname" \
     -e "SELECT COUNT(DISTINCT EntryUUID) FROM EntryIndex WHERE EntryUUID LIKE '${tree}%'" </dev/null 2>/dev/null | tr -d '\r' | tail -n 1)
   case "$indexed" in
     ''|*[!0-9]*) echo "rekor-reindex: the index in $DB could not be read; nothing was changed" >&2; exit 4 ;;

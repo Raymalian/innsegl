@@ -53,6 +53,8 @@ var (
 		"innsegl-trust-rekor-key",
 		"innsegl-trust-trillian-db",
 		"innsegl-trust-history",
+		"innsegl-trust-credentials",
+		"innsegl-trust-sigstore-credentials",
 	}
 )
 

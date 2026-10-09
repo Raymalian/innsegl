@@ -45,9 +45,15 @@ func TestRekorIndexIsMySQLInTheLogDatabase(t *testing.T) {
 	if !strings.Contains(rekor, `"--search_index.storage_provider=mysql"`) {
 		t.Error("rekor does not select the MySQL search index (--search_index.storage_provider=mysql)")
 	}
-	dsn := regexp.MustCompile(`"--search_index\.mysql\.dsn=([^"]+)"`).FindStringSubmatch(rekor)
+	// The DSN carries this host's password, so it is in Rekor's own config
+	// file, which the bootstrap renders (ADR-0078).
+	if !strings.Contains(rekor, `"--config=/run/innsegl/credentials/rekor-index/rekor-server.yaml"`) {
+		t.Error("rekor does not read its config file, where the index DSN is")
+	}
+	boot := readFile(t, filepath.Join(repoRoot(t), "deploy", "compose", "sigstore", "bootstrap.sh"))
+	dsn := regexp.MustCompile(`dsn: ([^\s\\]+)`).FindStringSubmatch(boot)
 	if dsn == nil {
-		t.Fatal("rekor has no --search_index.mysql.dsn")
+		t.Fatal("the bootstrap renders no index DSN for rekor")
 	}
 	if !strings.Contains(dsn[1], "@tcp(trillian-db:3306)/") {
 		t.Errorf("rekor's index DSN %q does not name trillian-db", dsn[1])
@@ -80,22 +86,23 @@ func TestRekorReachesTheIndexDatabaseAndNothingElse(t *testing.T) {
 	}
 
 	db := serviceBlock(body, "trillian-db")
-	if !strings.Contains(db, "--init-file=/etc/mysql/rekor-index.sql") {
+	if !strings.Contains(db, "--init-file=/run/innsegl/credentials/logdb/init.sql") {
 		t.Error("trillian-db does not run the index grant at start (--init-file); " +
 			"an existing database volume would never get the user")
 	}
-	if !strings.Contains(db, "./sigstore/rekor-index.sql:/etc/mysql/rekor-index.sql:ro") {
-		t.Error("trillian-db does not mount sigstore/rekor-index.sql read-only")
+	boot := readFile(t, filepath.Join(root, "deploy", "compose", "sigstore", "bootstrap.sh"))
+	if !strings.Contains(boot, "/in/rekor-index.sql") || !strings.Contains(body, "./sigstore/rekor-index.sql:/in/rekor-index.sql:ro") {
+		t.Error("the bootstrap does not render the init file from sigstore/rekor-index.sql")
 	}
 
 	sql := readFile(t, filepath.Join(root, "deploy", "compose", "sigstore", "rekor-index.sql"))
 	// The DSN and the grant are written in two files; they must name one user.
-	dsn := regexp.MustCompile(`"--search_index\.mysql\.dsn=([^:]+):([^@]+)@tcp\(trillian-db:3306\)/([a-z_]+)"`).
-		FindStringSubmatch(serviceBlock(body, "rekor"))
+	// The password is this host's, filled into the template's placeholder.
+	dsn := regexp.MustCompile(`dsn: ([^:]+):(%s)@tcp\(trillian-db:3306\)/([a-z_]+)`).FindStringSubmatch(boot)
 	if dsn == nil {
 		t.Fatal("rekor's index DSN is not user:password@tcp(trillian-db:3306)/database")
 	}
-	if want := "CREATE USER '" + dsn[1] + "'@'%' IDENTIFIED BY '" + dsn[2] + "';"; !strings.Contains(sql, want) {
+	if want := "CREATE USER '" + dsn[1] + "'@'%' IDENTIFIED BY '@REKOR_INDEX_PASSWORD@';"; !strings.Contains(sql, want) {
 		t.Errorf("rekor-index.sql does not create the DSN's user: want %q", want)
 	}
 	if want := "CREATE DATABASE IF NOT EXISTS " + dsn[3] + ";"; !strings.Contains(sql, want) {
