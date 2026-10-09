@@ -373,3 +373,25 @@ func TestInsertGitOptionsLeavesQuotedTextAndOtherCommandsAlone(t *testing.T) {
 		t.Errorf("InsertGitOptions with no options = %q, want the command unchanged", got)
 	}
 }
+
+// ADR-0079 decision 2: adoption is looked for only when every commit the
+// command makes is a plain `git commit`, whose parent is HEAD.
+func TestIsAdoptableCommitIsAPlainCommitOnly(t *testing.T) {
+	for cmd, want := range map[string]bool{
+		"git commit -m x":                       true,
+		"git add -A && git commit -m 'feat: x'": true,
+		"git -C ../repo commit -F msg.txt":      true,
+		`git commit -m "do not --amend this"`:   true,
+		"git commit --amend --no-edit":          false,
+		"git commit -m x --amend":               false,
+		"git merge dev":                         false,
+		"git commit -m x && git rebase main":    false,
+		"git cherry-pick abc123":                false,
+		"git status":                            false,
+		"":                                      false,
+	} {
+		if got := IsAdoptableCommit(cmd); got != want {
+			t.Errorf("IsAdoptableCommit(%q) = %v, want %v", cmd, got, want)
+		}
+	}
+}

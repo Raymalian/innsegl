@@ -332,57 +332,20 @@ func (c *signCommitService) planAdoption(ctx context.Context, runID, adopted, wo
 			"adopt_run is not configured on this deployment: it has no body volume to prove "+
 				"a dead run's work against (ADR-0051)")
 	}
-	state, events, err := c.adoption.AdoptionEvidence(ctx, adopted)
-	if err != nil {
-		return nil, Errorf(ClassLedgerUnavailable, runID,
-			"the ledger could not say how run %q ended or what it wrote: %v", adopted, err)
-	}
-	switch state {
-	case "":
-		return nil, Errorf(ClassRunNotFound, runID, "no run %q to adopt", adopted)
-	case "retired", "lapsed", "abandoned":
-	default:
-		return nil, Errorf(ClassInvariantViolation, runID,
-			"run %q is %s in the ledger; a run that may still be working is not dead, and its "+
-				"work is not this run's to adopt (ADR-0051)", adopted, state)
-	}
-
 	staged, err := c.adoption.StagedFiles(ctx, worktree)
 	if err != nil {
 		return nil, Errorf(ClassInvariantViolation, runID, "the staged files cannot be read: %v", err)
 	}
-	if len(staged) == 0 {
-		return nil, Errorf(ClassInvariantViolation, runID, "nothing is staged, so there is nothing to adopt")
-	}
-	names := make([]string, 0, len(staged))
-	for name := range staged {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	proofs, err := rebuildLeftBytes(events, c.adoption.BodyDir(), adopted, names, nil)
-	if err != nil {
-		return nil, Errorf(ClassInvariantViolation, runID, "run %q's work cannot be adopted: %v", adopted, err)
-	}
-	claim := adoptionClaim{AdoptedRunID: adopted}
-	for _, name := range names {
-		p := proofs[name]
-		if got := strings.TrimPrefix(event.Digest(staged[name]), event.HashPrefix); got != p.SHA256 {
-			return nil, Errorf(ClassInvariantViolation, runID,
-				"%s is staged with bytes run %q did not leave: its last Write or Edit (%s) left "+
-					"sha256 %s, and the index holds %s. Commit that change as this run's own work",
-				name, adopted, p.ToolCall, p.SHA256, got)
+	// An Edit the gateway recorded is replayed on HEAD's blob (ADR-0079
+	// decision 4), when the evidence can read one.
+	var base func(string) ([]byte, bool)
+	if a := c.commitAdoption(); a != nil {
+		base = func(path string) ([]byte, bool) {
+			b, ok, berr := a.ParentFile(ctx, worktree, "HEAD", path)
+			return b, ok && berr == nil
 		}
-		claim.Paths = append(claim.Paths, adoptionClaimPath{Path: name, SHA256: p.SHA256, ToolCall: p.ToolCall})
 	}
-	if serr := c.refuseSpent(ctx, runID, adopted, claim); serr != nil {
-		return nil, serr
-	}
-	body, err := adoptionMarshal(claim)
-	if err != nil {
-		return nil, Errorf(ClassInvariantViolation, runID, "the adoption claim cannot be encoded: %v", err)
-	}
-	return &adoptionPlan{adoptedRun: adopted, state: state, claim: body, digest: event.Digest(body)}, nil
+	return c.proveAdoption(ctx, runID, adopted, "", staged, base)
 }
 
 // refuseSpent is ADR-0051 decision 6: bytes of a path already adopted from
@@ -422,10 +385,10 @@ func (c *signCommitService) refuseSpent(ctx context.Context, runID, adopted stri
 	return nil
 }
 
-// recordAdoption stores the claim and appends run_adopted, and returns its
-// event id for the intent to carry.
+// recordAdoption stores the claim and appends run_adopted under
+// idempotencyKey, and returns its event id for the intent to carry.
 func (c *signCommitService) recordAdoption(
-	ctx context.Context, runID, spiffeID, key string, plan *adoptionPlan,
+	ctx context.Context, runID, spiffeID, idempotencyKey string, plan *adoptionPlan,
 ) (string, error) {
 	if err := observeWriteBody(c.adoption.BodyDir(), runID, plan.digest, plan.claim); err != nil {
 		return "", err
@@ -436,7 +399,7 @@ func (c *signCommitService) recordAdoption(
 		event.FieldSource:          event.SourceMCP,
 		event.FieldRunID:           runID,
 		event.FieldSpiffeID:        spiffeID,
-		event.FieldIdempotencyKey:  signCommitPhaseKey(signCommitAdoptedKeyPrefix, key),
+		event.FieldIdempotencyKey:  idempotencyKey,
 		event.FieldAdoptedRunID:    plan.adoptedRun,
 		event.FieldAdoptedRunState: plan.state,
 		event.FieldPayloadDigest:   plan.digest,
@@ -463,6 +426,9 @@ type LedgerAdoption struct {
 	Events       RunEvents
 	Bodies       string
 	AbandonAfter time.Duration
+	// Candidates lists the ended runs a commit may adopt from (ADR-0079);
+	// nil searches nothing, and the commit path then proposes no adoption.
+	Candidates DeadRunLister
 	// GitPath is the git binary; "" means `git` on PATH.
 	GitPath string
 	// Now is the clock the state is read at; nil is time.Now.

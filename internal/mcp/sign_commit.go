@@ -801,7 +801,8 @@ func (c *signCommitService) phases(ctx context.Context, in signCommitIn) (_ any,
 	}
 	wrote = true
 	if adoption != nil {
-		adoptedID, aerr := c.recordAdoption(ctx, run.RunID, spiffeID, in.IdempotencyKey, adoption)
+		adoptedID, aerr := c.recordAdoption(ctx, run.RunID, spiffeID,
+			signCommitPhaseKey(signCommitAdoptedKeyPrefix, in.IdempotencyKey), adoption)
 		if aerr != nil {
 			return nil, aerr
 		}
