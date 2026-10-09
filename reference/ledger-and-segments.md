@@ -25,8 +25,9 @@ make innsegl-verify
 - `innsegl canary` tries to delete a probe object and must be refused (SEG-005).
 - With `-canary-interval` set, `innsegl seal` also runs that canary from its
   loop, once per interval, and records each run in `-canary-status-file`.
-  `-once` never runs it. Before each run it deletes earlier probes whose
-  retention has passed, so the probe prefix stays at about one object.
+  `-once` never runs it. The probe takes the bucket's default retention.
+  Before each run it deletes earlier probes whose retention has passed, so
+  the probe prefix holds about one probe per interval inside that window.
 - `innsegl migrate-schema` appends one `schema_migrated` event naming where
   the chain starts writing schema_version `4`. Run it before the upgraded
   writers start. Running it twice appends nothing the second time.
@@ -60,7 +61,7 @@ make innsegl-verify
 | `-once`, `-json`, `-quiet` | | one cycle; JSON; quiet when idle |
 | `-canary-interval` | `INNSEGL_CANARY_INTERVAL` | run the deletion canary this often; `0` is off [`0`; compose `24h`] |
 | `-canary-status-file` | `INNSEGL_CANARY_STATUS_FILE` | where each run is recorded [compose `/run/innsegl/canary/worm-canary.json`] |
-| `-canary-probe-retention` | `INNSEGL_CANARY_PROBE_RETENTION` | the probe's retention; `0` uses `-retention` [`0`; compose `24h`] |
+| `-canary-probe-retention` | `INNSEGL_CANARY_PROBE_RETENTION` | the probe's retention; `0` uses `-retention` [`0`]. Leave it `0` with the scoped identity: it may not set a retention, so the store refuses the probe |
 | `-canary-min-bucket-retention` | `INNSEGL_CANARY_MIN_BUCKET_RETENTION` | required bucket default retention; `0` does not check [`0`] |
 
 `innsegl canary` takes the same object-store flags plus
@@ -113,7 +114,8 @@ means no run in twice the interval.
 - `cmd/innsegl/seal_test.go`, `sealengine_test.go` (SEG-001, SEG-007 to SEG-013)
 - `cmd/innsegl/canary_test.go` (SEG-005, OPS-029, HAR-009)
 - `internal/segment/canaryschedule_test.go`, `cmd/innsegl/sealcanary_test.go`
-  (SEG-014 to SEG-016, OPS-172, PROPOSED), `internal/mcp/healthreport_test.go` (OPS-172)
+  (SEG-014 to SEG-016, OPS-172, PROPOSED), `internal/mcp/healthreport_test.go` (OPS-172),
+  `test/deploy/scheduledcanary_test.go` (OPS-173, PROPOSED)
 - `cmd/innsegl/migrateschema_test.go` (LED-035, LED-036)
 - `internal/event/*_test.go` (SER-001 to SER-026)
 - `test/deploy/appendonlyrole_test.go` (OPS-009, OPS-010), `objectscope_test.go`

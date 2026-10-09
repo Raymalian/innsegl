@@ -1147,11 +1147,14 @@ services:
       # the sealer's identity. Daily by default; each run is recorded in the
       # file below, which this process's /readyz reports and `innsegl status`
       # shows as "worm canary" (DOWN on a failure, or on no run within two
-      # intervals). The probe is held 24h and swept once expired, so the probe
-      # prefix keeps about one object however long the stack runs.
+      # intervals). NO PROBE RETENTION IS SET: this identity may not set one
+      # (PutObjectRetention is withheld, and the store refuses a PUT carrying
+      # retention headers for the same reason; measured in the update
+      # rehearsal, every run failed probe_written). The probe takes the
+      # bucket's default rule, and each run sweeps the probes whose window has
+      # passed, so the prefix holds about one probe per interval in that window.
       INNSEGL_CANARY_INTERVAL: ${INNSEGL_CANARY_INTERVAL:-24h}
       INNSEGL_CANARY_STATUS_FILE: /run/innsegl/canary/worm-canary.json
-      INNSEGL_CANARY_PROBE_RETENTION: ${INNSEGL_CANARY_PROBE_RETENTION:-24h}
       # The reconciler's, including the rebase (#194) and writes (#169) passes.
       # Empty leaves each pass off, as on the reconciler service.
       INNSEGL_RECONCILE_INTERVAL: ${INNSEGL_RECONCILE_INTERVAL:-1m}
@@ -1884,7 +1887,6 @@ services:
       # sealer, so it runs the canary and writes the file innsegl-mcp reports.
       INNSEGL_CANARY_INTERVAL: ${INNSEGL_CANARY_INTERVAL:-24h}
       INNSEGL_CANARY_STATUS_FILE: /run/innsegl/canary/worm-canary.json
-      INNSEGL_CANARY_PROBE_RETENTION: ${INNSEGL_CANARY_PROBE_RETENTION:-24h}
       # NO $INNSEGL_OBJECT_STORE_RETENTION HERE, AND THAT IS THE FIX RATHER
       # THAN AN OMISSION. Found by #112's review of this file:
       #
