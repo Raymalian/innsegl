@@ -109,7 +109,7 @@ func adoptOpOf(tool, hash string, raw []byte) (*adoptOp, error) {
 		// The hook shape: the call's own bytes, whole.
 		left, err := leftBy(tool, b)
 		if err != nil {
-			return nil, fmt.Errorf("%s %s on %s cannot be replayed: %v", tool, hash, b.ToolInput.FilePath, err)
+			return nil, fmt.Errorf("%s %s on %s cannot be replayed: %w", tool, hash, b.ToolInput.FilePath, err)
 		}
 		return &adoptOp{file: b.ToolInput.FilePath, hash: hash, set: left}, nil
 	}

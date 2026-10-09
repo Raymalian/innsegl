@@ -358,8 +358,8 @@ func TestCommitTrailersHandlerAddsTheAdoptedRunTheCoreProposes(t *testing.T) {
 				return
 			}
 			var resp commitpath.TrailersResponse
-			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-				t.Fatal(err)
+			if uerr := json.Unmarshal(rec.Body.Bytes(), &resp); uerr != nil {
+				t.Fatal(uerr)
 			}
 			claim := ctClaim
 			claim.AdoptedRun = tc.adopted

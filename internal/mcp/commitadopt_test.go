@@ -183,13 +183,7 @@ func TestADP021NoProposalWhenTheChangeIsNotExactlyOneDeadRunsWork(t *testing.T) 
 			a.states[cpDead] = "active"
 		}},
 		{"its work was adopted and committed before", func(a *cpAdoption, _ *adpFixture) {
-			claim, _ := json.Marshal(adoptionClaim{AdoptedRunID: cpDead, Paths: []adoptionClaimPath{{
-				Path: "work.txt", SHA256: strings.TrimPrefix(event.Digest([]byte(cpWork)), event.HashPrefix)}}})
-			digest := event.Digest(claim)
-			if err := observeWriteBody(a.bodyDir, "run-earlier", digest, claim); err != nil {
-				panic(err)
-			}
-			a.prior[cpDead] = []ledger.Adoption{{EventID: "e", RunID: "run-earlier", PayloadDigest: digest, Committed: true}}
+			spendWorkTxt(a)
 		}},
 		{"its bodies are gone", func(a *cpAdoption, _ *adpFixture) {
 			if err := os.RemoveAll(filepath.Join(a.bodyDir, cpDead)); err != nil {
@@ -287,8 +281,25 @@ func TestADP021OnlyAPlainCommitIsSearched(t *testing.T) {
 }
 
 func jsonString(s string) string {
-	b, _ := json.Marshal(s)
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
 	return string(b)
+}
+
+// spendWorkTxt records an earlier, committed adoption of cpDead's work.txt.
+func spendWorkTxt(a *cpAdoption) {
+	claim, err := json.Marshal(adoptionClaim{AdoptedRunID: cpDead, Paths: []adoptionClaimPath{{
+		Path: "work.txt", SHA256: strings.TrimPrefix(event.Digest([]byte(cpWork)), event.HashPrefix)}}})
+	if err != nil {
+		panic(err)
+	}
+	digest := event.Digest(claim)
+	if err := observeWriteBody(a.bodyDir, "run-earlier", digest, claim); err != nil {
+		panic(err)
+	}
+	a.prior[cpDead] = []ledger.Adoption{{EventID: "e", RunID: "run-earlier", PayloadDigest: digest, Committed: true}}
 }
 
 // ---------------------------------------------------------------------------
@@ -403,13 +414,7 @@ func TestADP008OnTheCommitPathEveryRefusalRecordsNothing(t *testing.T) {
 			return nil
 		}, "mine.txt"},
 		{"ADP-014: bytes already adopted and committed", func(_ *scWiring, a *cpAdoption) []byte {
-			claim, _ := json.Marshal(adoptionClaim{AdoptedRunID: cpDead, Paths: []adoptionClaimPath{{
-				Path: "work.txt", SHA256: strings.TrimPrefix(event.Digest([]byte(cpWork)), event.HashPrefix)}}})
-			digest := event.Digest(claim)
-			if err := observeWriteBody(a.bodyDir, "run-earlier", digest, claim); err != nil {
-				panic(err)
-			}
-			a.prior[cpDead] = []ledger.Adoption{{EventID: "e", RunID: "run-earlier", PayloadDigest: digest, Committed: true}}
+			spendWorkTxt(a)
 			return nil
 		}, "spent"},
 		{"evidence that cannot be read", func(_ *scWiring, a *cpAdoption) []byte {

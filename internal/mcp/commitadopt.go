@@ -182,7 +182,7 @@ func (c *signCommitService) searchAdoption(
 	}
 	changed, base, err := commitChange(ctx, a, dir, tree, parent)
 	if err != nil || len(changed) == 0 {
-		return "", nil
+		return "", nil //nolint:nilerr // a change that cannot be read is no proposal (ADR-0079 decision 3); signing reads it again
 	}
 	_, own, err := a.AdoptionEvidence(ctx, runID)
 	if err != nil {
@@ -262,11 +262,11 @@ func AdoptionForCommit(ctx context.Context, call commitpath.RelayedCall, tree st
 		Command string `json:"command"`
 	}
 	if json.Unmarshal(call.Input, &input) != nil || !commitpath.IsAdoptableCommit(input.Command) {
-		return "", nil
+		return "", nil //nolint:nilerr // a command that is not a plain commit is no proposal (ADR-0079 decision 2)
 	}
 	run, _, err := resolveRun(ctx, svc.runs, call.RunID, runGate{})
 	if err != nil || run.Repo == "" {
-		return "", nil
+		return "", nil //nolint:nilerr // the claim step already answered for this run; no repository, no proposal
 	}
 	parent := ""
 	if len(parents) == 1 {
@@ -274,7 +274,7 @@ func AdoptionForCommit(ctx context.Context, call commitpath.RelayedCall, tree st
 	}
 	dir, err := commitPathDir(ctx, cfg, svc, call, run.Repo, tree, parents)
 	if err != nil {
-		return "", nil
+		return "", nil //nolint:nilerr // no objects to read is no proposal; signing refuses a missing tree by itself
 	}
 	return svc.searchAdoption(ctx, call.RunID, run.Repo, dir, tree, parent, cfg.now())
 }
@@ -366,7 +366,7 @@ func (a LedgerAdoption) ParentFile(ctx context.Context, dir, parent, path string
 		return nil, false, nil
 	}
 	if _, err := (GitRepos{GitPath: a.GitPath}).git(ctx, dir, "cat-file", "-e", parent+":"+path); err != nil {
-		return nil, false, nil
+		return nil, false, nil //nolint:nilerr // `cat-file -e` failing is the answer: the parent holds no such path
 	}
 	b, err := a.blob(ctx, dir, parent, path)
 	if err != nil {
