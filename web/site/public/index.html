@@ -126,8 +126,8 @@ innsegl verify &lt;commit&gt; -repo .</code></pre>
           <li>
             <h3>Run a core on a host of your own</h3>
             <pre><code>git clone https://github.com/Raymalian/innsegl.git
-cd innsegl &amp;&amp; ./install.sh</code></pre>
-            <p>It brings the stack up — SPIRE, Postgres, a self-hosted Sigstore and Innsegl — and prints the dashboard's address and a one-time setup link.</p>
+cd innsegl &amp;&amp; make build &amp;&amp; ./install.sh</code></pre>
+            <p>It needs Docker, and the Go version <code>go.mod</code> pins. It brings the stack up — SPIRE, Postgres, a self-hosted Sigstore and Innsegl — and prints the dashboard's address and a one-time setup link.</p>
           </li>
           <li>
             <h3>Connect each machine that runs agents</h3>
@@ -180,6 +180,9 @@ cd innsegl &amp;&amp; ./install.sh</code></pre>
             keys, the SPIFFE ID grammar, and the MCP tool names and error
             classes change only in a major release, with a migration
             attestation — changing them would invalidate proofs already made.
+            The MCP tools are deprecated: agents are recorded at the gateway
+            and sign through the commit hook, and the tools are removed at the
+            next major release.
           </dd>
         </dl>
       </section>
