@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strings"
 
 	"innsegl.dev/innsegl/internal/commitpath"
 )
@@ -52,7 +54,7 @@ type trailersClient interface {
 // caller's own message plus the run's three trailers, placed by ADR-0028's
 // render (cmd/innsegl/committrailers.go, ADR-0059 decision 2) — replaces the
 // file's contents, and nothing else about it changes.
-func runGitHookPrepareCommitMsg(ctx context.Context, args []string, getenv func(string) string, stderr io.Writer, client trailersClient) int {
+func runGitHookPrepareCommitMsg(ctx context.Context, dir string, args []string, getenv func(string) string, stderr io.Writer, client trailersClient) int {
 	refuse := func(format string, a ...any) int {
 		fmt.Fprintf(stderr, "innsegl: prepare-commit-msg: "+format+"\n", a...)
 		return 1
@@ -82,7 +84,11 @@ func runGitHookPrepareCommitMsg(ctx context.Context, args []string, getenv func(
 		return refuse("cannot read %s: %v", msgfile, err)
 	}
 
-	resp, err := client.Trailers(ctx, commitpath.TrailersRequest{ToolUseID: id, Message: string(raw)})
+	req := commitpath.TrailersRequest{ToolUseID: id, Message: string(raw)}
+	if adoptableSource(args[1:]) {
+		req.Tree, req.Parents = commitAboutToBeMade(ctx, dir, id, stderr, client)
+	}
+	resp, err := client.Trailers(ctx, req)
 	if err != nil {
 		return refuse("%v", err)
 	}
@@ -92,4 +98,52 @@ func runGitHookPrepareCommitMsg(ctx context.Context, args []string, getenv func(
 		return refuse("cannot write %s: %v", msgfile, err)
 	}
 	return 0
+}
+
+// adoptableSource reports whether git's message source leaves HEAD as the
+// commit's parent: a message given, a template, or none. A message taken from
+// an existing commit (--amend, -c, -C), a merge or a squash does not, or may
+// not (ADR-0079 decision 2).
+func adoptableSource(rest []string) bool {
+	if len(rest) == 0 {
+		return true
+	}
+	return rest[0] == "message" || rest[0] == "template"
+}
+
+// commitAboutToBeMade reads the tree git is about to commit (the index it
+// commits, GIT_INDEX_FILE included, which git hands this hook) and HEAD, its
+// parent, so the core can ask whether the change is a dead run's work
+// (ADR-0079). A hosted client pushes the objects to the core first. Nothing
+// here can fail the commit: anything that cannot be read sends no tree, and
+// the commit is then the run's own work.
+func commitAboutToBeMade(ctx context.Context, dir, toolUseID string, stderr io.Writer, client trailersClient) (string, []string) {
+	tree, err := hookGit(ctx, dir, "write-tree")
+	if err != nil || tree == "" {
+		return "", nil
+	}
+	var parents []string
+	if head, herr := hookGit(ctx, dir, "rev-parse", "-q", "--verify", "HEAD^{commit}"); herr == nil && head != "" {
+		parents = []string{head}
+	}
+	if st, ok := client.(commitStager); ok {
+		header := "tree " + tree + "\n"
+		for _, p := range parents {
+			header += "parent " + p + "\n"
+		}
+		if serr := st.Stage(ctx, dir, toolUseID, []byte(header)); serr != nil {
+			fmt.Fprintf(stderr, "innsegl: prepare-commit-msg: the commit's objects did not reach the core, "+
+				"so it is not checked for a dead run's work: %v\n", serr)
+			return "", nil
+		}
+	}
+	return tree, parents
+}
+
+// hookGit runs git in dir with this process's environment, which is git's own.
+func hookGit(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
 }

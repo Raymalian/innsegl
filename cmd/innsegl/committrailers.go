@@ -40,6 +40,21 @@ const maxCommitTrailersBodyBytes = 1 << 20
 // deliberate split gateway.go's own doc comment on sessionEndHandler
 // describes for that endpoint.
 func commitTrailersHandler(res commitpath.Resolver, claimFor func(ctx context.Context, runID string) (signing.Claim, error), now func() time.Time) http.Handler {
+	return commitTrailersHandlerAdopting(res, claimFor, nil, now)
+}
+
+// adoptionFor answers the dead run whose work a commit hands over, or ""
+// (internal/mcp.AdoptionForCommit, ADR-0079).
+type adoptionFor func(ctx context.Context, call commitpath.RelayedCall, tree string, parents []string) (string, error)
+
+// commitTrailersHandlerAdopting is commitTrailersHandler that also asks
+// adoptFor, when it is not nil, whether the commit hands over a dead run's
+// work, and renders Agent-Adopted-Run for the run it names (ADR-0079
+// decision 3). Signing proves that run again; nothing here records anything.
+func commitTrailersHandlerAdopting(
+	res commitpath.Resolver, claimFor func(ctx context.Context, runID string) (signing.Claim, error),
+	adoptFor adoptionFor, now func() time.Time,
+) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "innsegl: commit trailers: only POST is accepted", http.StatusMethodNotAllowed)
@@ -79,6 +94,14 @@ func commitTrailersHandler(res commitpath.Resolver, claimFor func(ctx context.Co
 		if err != nil {
 			writeCommitPathError(w, err)
 			return
+		}
+
+		if adoptFor != nil {
+			claim.AdoptedRun, err = adoptFor(r.Context(), call, req.Tree, req.Parents)
+			if err != nil {
+				writeCommitPathError(w, err)
+				return
+			}
 		}
 
 		trailers, err := claim.Trailers()

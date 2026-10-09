@@ -537,3 +537,23 @@ func TestStartupRewritesLegacyRunSelectors(t *testing.T) {
 		}
 	})
 }
+
+// ADR-0079: the commit path's adoption evidence is the body volume and the
+// ledger's own candidates, on a core with and without a workspace alike; with
+// no body volume there is nothing to prove against and adoption is off.
+func TestADR0079AdoptionEvidenceIsWiredWhereThereAreBodies(t *testing.T) {
+	if got := newLedgerAdoption(serveOptions{}, nil, nil); got != nil {
+		t.Errorf("no body volume = %#v, want no adoption", got)
+	}
+	got := newLedgerAdoption(serveOptions{observeBodyDir: "/bodies", abandonAfter: 3}, nil, nil)
+	a, ok := got.(mcp.LedgerAdoption)
+	if !ok {
+		t.Fatalf("adoption = %T, want mcp.LedgerAdoption", got)
+	}
+	if a.Bodies != "/bodies" || a.AbandonAfter != 3 || a.Candidates == nil || a.Events == nil {
+		t.Errorf("adoption = %+v, want the body volume, the horizon and the ledger as candidates and events", a)
+	}
+	if _, ok := got.(mcp.CommitPathAdoption); !ok {
+		t.Error("the shipped adoption does not serve the commit path")
+	}
+}

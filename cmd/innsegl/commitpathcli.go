@@ -59,7 +59,7 @@ func gitHookCommand(args []string, stdout, stderr io.Writer) int {
 		fprintf(stderr, gitHookUsage)
 		return exitUsage
 	}
-	return runGitHookPrepareCommitMsg(context.Background(), args[1:], os.Getenv, stderr, commitpath.ClientFromEnv(os.Getenv))
+	return runGitHookPrepareCommitMsg(context.Background(), ".", args[1:], os.Getenv, stderr, commitpath.ClientFromEnv(os.Getenv))
 }
 
 func signCommand(args []string, stdout, stderr io.Writer) int {
@@ -81,7 +81,7 @@ func mountCommitPath(mux *http.ServeMux, resolver commitpath.Resolver) {
 		return
 	}
 	mux.Handle(commitpath.TrailersPath, scopeCommitPath(resolver,
-		commitTrailersHandler(resolver, mcp.CommitClaimForRun, time.Now)))
+		commitTrailersHandlerAdopting(resolver, mcp.CommitClaimForRun, mcp.AdoptionForCommit, time.Now)))
 	mux.Handle(commitpath.SignPath, scopeCommitPath(resolver, commitSignHandler(mcp.SignPayloadForGateway)))
 }
 
