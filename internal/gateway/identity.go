@@ -542,8 +542,8 @@ func policyRefusal(in LifecycleInput) string {
 			"names no run; a new session registers under a key of its own", in.ID.SessionID, in.ID.AgentID)
 	default:
 		return fmt.Sprintf("the lifecycle policy refused this request: run %q's state on the chain read as %q, "+
-			"which is not active, lapsed, retired or abandoned; `innsegl retire %s` ends the run and the "+
-			"next request adopts a new one", in.Prior.RunID, in.PriorState, in.Prior.RunID)
+			"which is not active, lapsed, retired or abandoned; `innsegl retire %s`, run on the core host (`make innsegl-retire RUN=%s`), "+
+			"ends the run and the next request adopts a new one", in.Prior.RunID, in.PriorState, in.Prior.RunID, in.Prior.RunID)
 	}
 }
 
@@ -912,14 +912,16 @@ func (g *IdentityGuard) restore(ctx context.Context, id Identification, fp Finge
 	}
 	if reg.IdempotencyKey == "" {
 		return "", fmt.Errorf("run %q's registration recorded no idempotency_key, so it cannot be replayed "+
-			"to restore it; `innsegl retire %s` ends it and the next request adopts a new run",
-			prior.RunID, prior.RunID)
+			"to restore it; `innsegl retire %s`, run on the core host (`make innsegl-retire RUN=%s`), ends it "+
+			"and the next request adopts a new run",
+			prior.RunID, prior.RunID, prior.RunID)
 	}
 	out, err := g.registrar.Restore(ctx, prior, reg.replay())
 	if err != nil {
 		return "", fmt.Errorf("restore run %q: %w. Nothing was forwarded; the next request tries again. "+
-			"If it is refused the same way, `innsegl retire %s` ends the run and the next request adopts a new one",
-			prior.RunID, err, prior.RunID)
+			"If it is refused the same way, `innsegl retire %s`, run on the core host (`make innsegl-retire RUN=%s`), "+
+			"ends the run and the next request adopts a new one",
+			prior.RunID, err, prior.RunID, prior.RunID)
 	}
 	g.recordFingerprintIfNewlyKnown(ctx, id, prior, fp)
 	return out.RunID, nil
@@ -1034,8 +1036,9 @@ func (g *IdentityGuard) replayRegistration(ctx context.Context, r registration, 
 	if err != nil {
 		return "", fmt.Errorf("%s: replay run %q, already registered under idempotency_key %q: %w. "+
 			"Nothing was forwarded; the next request tries again. If it is refused the same way, "+
-			"`innsegl retire %s` ends the run and the next request adopts a new one",
-			r.step, recorded.RunID, recorded.IdempotencyKey, err, recorded.RunID)
+			"`innsegl retire %s`, run on the core host (`make innsegl-retire RUN=%s`), ends the run and the "+
+			"next request adopts a new one",
+			r.step, recorded.RunID, recorded.IdempotencyKey, err, recorded.RunID, recorded.RunID)
 	}
 	return out.RunID, g.storeMapping(ctx, r, m)
 }
