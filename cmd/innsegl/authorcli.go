@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"sort"
@@ -17,7 +18,7 @@ import (
 // machine; the hook only reads what it writes.
 
 const authorUsage = `usage:
-  innsegl author                                    list the setting
+  innsegl author                                    list the setting, and the pair the core holds for this machine
   innsegl author repo <path> operator|agent          one repository's mode
   innsegl author operator 'Name <address>'           optional: a typed identity instead
 
@@ -25,13 +26,41 @@ Agent commits are authored as the unlinked agent address unless a repository is
 set to operator. In operator mode they are authored as that repository's own
 git user.email, which must be a GitHub noreply address, with its login as the
 name; user.name is never used. I6 allows the operator as author; the agent
-stays in the trailers and the signature. Setting operator mode reports the
-address to the core, which pins it for this machine on first use.
+stays in the trailers and the signature.
+
+Setting operator mode reports the identity (the typed one if set, else the
+repository's) to the core, which pins it for this machine on first use, and
+prints one result line. Exit status:
+  0   pinned on the core now, or already pinned (the same pair)
+  2   usage: not a git repository, or a malformed command
+  29  refused: the core holds a different pair for this machine; reset it on
+      the core host, then run this again
+  30  the core could not be reached, or did not answer
+  31  not pinned: the identity is not a GitHub noreply address named by its
+      own login, which is all the core pins
 `
 
-// reportOperatorAuthor tells the core this machine's operator author.
-// A variable so a test can stand in for the core.
-var reportOperatorAuthor = client.ReportOperatorAuthor
+// Exit statuses of `innsegl author repo <path> operator` (ENF-014).
+const (
+	// exitAuthorRefused: the core holds a different pair for this machine.
+	exitAuthorRefused = 29
+	// exitAuthorUnreachable: the core was not reached, or did not answer.
+	exitAuthorUnreachable = 30
+	// exitAuthorNotPinnable: the identity is not one the core pins.
+	exitAuthorNotPinnable = 31
+)
+
+// The reset an operator runs on a compose core (deploy/compose/innsegl.yml's
+// container_name for the accounts credential's holder).
+const authorResetCommand = "docker exec innsegl-api innsegl accounts author-reset "
+
+// reportOperatorAuthor tells the core this machine's operator author;
+// readOperatorAuthorPin reads what it holds. Variables so a test can stand
+// in for the core.
+var (
+	reportOperatorAuthor  = client.ReportOperatorAuthor
+	readOperatorAuthorPin = client.PinnedOperatorAuthor
+)
 
 func authorCommand(args []string, stdout, stderr io.Writer) int {
 	home, err := os.UserHomeDir()
@@ -50,8 +79,11 @@ func runAuthor(ctx context.Context, args []string, stdout, stderr io.Writer, hom
 		return exitUsage
 	}
 	if len(args) == 0 {
-		return listAuthors(stdout, authors)
+		listAuthors(stdout, authors)
+		listCorePin(ctx, stdout, paths)
+		return exitOK
 	}
+	result := exitOK
 	switch args[0] {
 	case "-h", "--help", "help":
 		fprintf(stdout, "%s", authorUsage)
@@ -72,9 +104,11 @@ func runAuthor(ctx context.Context, args []string, stdout, stderr io.Writer, hom
 			fprintf(stderr, "innsegl author: %s is not a git repository: %v\n", args[1], gerr)
 			return exitUsage
 		}
-		if args[2] == client.AuthorOperator && authors.Operator == "" {
-			if code := pinOperatorAuthor(ctx, paths, args[1], stderr); code != exitOK {
-				return code
+		if args[2] == client.AuthorOperator {
+			var set bool
+			result, set = pinOperatorAuthor(ctx, paths, authors, args[1], stdout, stderr)
+			if !set {
+				return result
 			}
 		}
 		authors, err = authors.SetRepo(commonDir, args[2])
@@ -90,29 +124,84 @@ func runAuthor(ctx context.Context, args []string, stdout, stderr io.Writer, hom
 		fprintf(stderr, "innsegl author: %v\n", err)
 		return exitUsage
 	}
-	return listAuthors(stdout, authors)
+	listAuthors(stdout, authors)
+	return result
 }
 
-// pinOperatorAuthor reads the repository's noreply address and reports it to
-// the core, which pins it for this machine on first use. Operator mode is set
-// only once the core holds it: a commit authored as an address the core has
-// not pinned would be refused at signing.
-func pinOperatorAuthor(ctx context.Context, paths client.Paths, repo string, stderr io.Writer) int {
-	name, email, err := client.NoreplyIdentity(ctx, repo)
-	if err != nil {
-		fprintf(stderr, "innsegl author: %v. Set it in that repository: "+
-			"git config user.email <id>+<login>@users.noreply.github.com\n", err)
-		return exitUsage
+// pinOperatorAuthor reports the effective operator identity to the core and
+// prints exactly one result line (ENF-014). The identity is the typed
+// override when one is set, else the repository's noreply pair. It answers
+// the exit status, and whether the repository may be set to operator mode:
+// only once the core holds the pair, since a commit authored as a pair the
+// core has not pinned would be refused at signing — or, for a typed override
+// the core cannot pin, because that override is the manual path, admitted
+// only by the core's own configuration.
+func pinOperatorAuthor(ctx context.Context, paths client.Paths, authors client.Authors, repo string,
+	stdout, stderr io.Writer,
+) (code int, set bool) {
+	name, email, override := authors.TypedOperator()
+	if override {
+		if err := client.CheckPinnable(name, email); err != nil {
+			fprintf(stderr, "innsegl author: not pinned: the typed operator identity %s <%s> is not one the core "+
+				"pins (%v). The repository is set to operator mode; its commits are signed only if the core's "+
+				"INNSEGL_SIGN_AUTHOR_OPERATORS lists this pair.\n", name, email, err)
+			return exitAuthorNotPinnable, true
+		}
+	} else {
+		var err error
+		name, email, err = client.NoreplyIdentity(ctx, repo)
+		if err != nil {
+			fprintf(stderr, "innsegl author: not pinned: %v; the repository stays in agent mode. Set it, then "+
+				"run this again: git -C %s config user.email <id>+<login>@users.noreply.github.com\n", err, repo)
+			return exitAuthorNotPinnable, false
+		}
 	}
-	if err := reportOperatorAuthor(ctx, paths, name, email); err != nil {
-		fprintf(stderr, "innsegl author: the core did not pin this machine's operator author, "+
-			"so the repository stays in agent mode: %v\n", err)
-		return exitConnectFailed
+	pair := name + " <" + email + ">"
+	outcome, err := reportOperatorAuthor(ctx, paths, name, email)
+	switch {
+	case err == nil && outcome == client.PinHeld:
+		fprintf(stdout, "innsegl author: already pinned on the core for this machine (same pair): %s\n", pair)
+		return exitOK, true
+	case err == nil:
+		fprintf(stdout, "innsegl author: pinned on the core for this machine: %s\n", pair)
+		return exitOK, true
+	case errors.Is(err, client.ErrOperatorAuthorPinned):
+		fprintf(stderr, "innsegl author: refused: the core holds a different pair for this machine, so the "+
+			"repository stays in agent mode. To pin %s instead, run on the core host: %s%s, then run this again\n",
+			pair, authorResetCommand, installationOrPlaceholder(paths))
+		return exitAuthorRefused, false
+	default:
+		fprintf(stderr, "innsegl author: core unreachable: %v; the repository stays in agent mode. "+
+			"Check `innsegl status`, then run this again\n", err)
+		return exitAuthorUnreachable, false
 	}
-	return exitOK
 }
 
-func listAuthors(stdout io.Writer, a client.Authors) int {
+// installationOrPlaceholder is this machine's installation id, or a
+// placeholder when core.json cannot be read.
+func installationOrPlaceholder(paths client.Paths) string {
+	if cfg, err := client.ReadCoreConfig(paths); err == nil {
+		return cfg.InstallationID
+	}
+	return "<installation-id>"
+}
+
+// listCorePin prints the pair the core holds for this machine (ENF-015). A
+// core that cannot be asked is shown on that line; the local listing above
+// stands either way.
+func listCorePin(ctx context.Context, stdout io.Writer, paths client.Paths) {
+	name, email, ok, err := readOperatorAuthorPin(ctx, paths)
+	switch {
+	case err != nil:
+		fprintf(stdout, "pinned on the core for this machine: unknown (core unreachable: %v)\n", err)
+	case ok:
+		fprintf(stdout, "pinned on the core for this machine: %s <%s>\n", name, email)
+	default:
+		fprintf(stdout, "pinned on the core for this machine: none\n")
+	}
+}
+
+func listAuthors(stdout io.Writer, a client.Authors) {
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	operator := a.Operator
 	if operator == "" {
@@ -129,5 +218,4 @@ func listAuthors(stdout io.Writer, a client.Authors) int {
 	}
 	fprintf(tw, "every other repository\t%s\n", client.AuthorAgent)
 	_ = tw.Flush()
-	return exitOK
 }
