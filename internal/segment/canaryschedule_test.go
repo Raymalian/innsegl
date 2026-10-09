@@ -297,7 +297,9 @@ func TestSEG016ScheduledCanarySweepsExpiredProbesOnly(t *testing.T) {
 	w := newTestWORM(t, c, bucket, RetentionCompliance, probeRetention)
 
 	// A probe that expires within the test, and one that does not.
-	short, err := RunCanary(ctx, w, CanaryOptions{ProbeRetention: 4 * time.Second})
+	// Long enough that the run's own checks finish inside it on a loaded
+	// machine (4s expired mid-run under -race, measured), short enough to wait out.
+	short, err := RunCanary(ctx, w, CanaryOptions{ProbeRetention: 30 * time.Second})
 	if err != nil || !short.OK() {
 		t.Fatalf("the short-retention canary did not pass: %v\n%s", err, short)
 	}
@@ -311,7 +313,8 @@ func TestSEG016ScheduledCanarySweepsExpiredProbesOnly(t *testing.T) {
 		t.Fatalf("writing a segment: %v", err)
 	}
 
-	time.Sleep(6 * time.Second)
+	// Wait out the short probe's own retain-until, as the store recorded it.
+	time.Sleep(time.Until(short.RetainUntil) + time.Second)
 
 	swept, err := SweepCanaryProbes(ctx, w, time.Now())
 	if err != nil {
