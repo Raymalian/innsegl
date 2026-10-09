@@ -35,7 +35,8 @@ prints one result line. Exit status:
   2   usage: not a git repository, or a malformed command
   29  refused: the core holds a different pair for this machine; reset it on
       the core host, then run this again
-  30  the core could not be reached, or did not answer
+  30  the core could not be reached, did not answer, or is older than this
+      client; or the client service, which the call goes through, is down
   31  not pinned: the identity is not a GitHub noreply address named by its
       own login, which is all the core pins
 `
@@ -170,11 +171,23 @@ func pinOperatorAuthor(ctx context.Context, paths client.Paths, authors client.A
 			"repository stays in agent mode. To pin %s instead, run on the core host: %s%s, then run this again\n",
 			pair, authorResetCommand, installationOrPlaceholder(paths))
 		return exitAuthorRefused, false
+	case versionSkewOrService(err):
+		// ENF-016: not the core being unreachable; the message says which part.
+		fprintf(stderr, "innsegl author: %v; the repository stays in agent mode. Then run this again\n", err)
+		return exitAuthorUnreachable, false
 	default:
 		fprintf(stderr, "innsegl author: core unreachable: %v; the repository stays in agent mode. "+
 			"Check `innsegl status`, then run this again\n", err)
 		return exitAuthorUnreachable, false
 	}
+}
+
+// versionSkewOrService is an error that is not the core being unreachable:
+// a core older than this client, or the local client service down or older
+// than this command. Its own message names the part and the fix (ENF-016).
+func versionSkewOrService(err error) bool {
+	return errors.Is(err, client.ErrCoreOlder) || errors.Is(err, client.ErrClientServiceDown) ||
+		errors.Is(err, client.ErrClientServiceOld)
 }
 
 // installationOrPlaceholder is this machine's installation id, or a
@@ -192,6 +205,8 @@ func installationOrPlaceholder(paths client.Paths) string {
 func listCorePin(ctx context.Context, stdout io.Writer, paths client.Paths) {
 	name, email, ok, err := readOperatorAuthorPin(ctx, paths)
 	switch {
+	case versionSkewOrService(err):
+		fprintf(stdout, "pinned on the core for this machine: unknown (%v)\n", err)
 	case err != nil:
 		fprintf(stdout, "pinned on the core for this machine: unknown (core unreachable: %v)\n", err)
 	case ok:

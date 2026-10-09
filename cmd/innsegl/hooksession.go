@@ -59,10 +59,7 @@ func (e *gatewayRefusedError) Error() string {
 // model through it (ADR-0069), so the prompt would fail. It names the cause
 // and the ways out. The core being down is not this: the client journals.
 func unreachableMessage(base string, err error) string {
-	restart := "systemctl --user restart innsegl-client"
-	if runtime.GOOS == "darwin" {
-		restart = "launchctl kickstart -k gui/$(id -u)/dev.innsegl.client"
-	}
+	restart := client.RestartCommand(runtime.GOOS)
 	return fmt.Sprintf(`innsegl: the client service at %s is not answering (%v).
 Claude Code reaches the model through it, so this prompt would fail.
 

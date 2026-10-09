@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -78,7 +79,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		local = "http://" + enrolledListen(paths)
 	}
 	if svc, err := localClientStatus(ctx, local); err != nil {
-		line("client service", false, "not answering at "+local+": run `innsegl connect --update` or restart it")
+		line("client service", false, "not answering at "+local+"; start it: "+client.RestartCommand(runtime.GOOS))
 	} else {
 		detail := "certificate until " + svc.CertificateExpiresAt
 		if svc.Revoked {
@@ -87,7 +88,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		line("client service", !svc.Revoked, detail)
 	}
 
-	body, err := client.FetchCoreStatus(ctx, paths)
+	body, err := client.FetchCoreStatus(ctx, paths, local)
 	if err != nil {
 		line("core", false, err.Error())
 	} else {

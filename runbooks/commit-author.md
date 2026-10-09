@@ -49,6 +49,8 @@ machine authored as that pair, or as the agent address, and nothing else
 | `already pinned on the core for this machine (same pair): …` | 0 | nothing changed on the core; the repository is in operator mode |
 | `refused: the core holds a different pair for this machine … docker exec innsegl-api innsegl accounts author-reset <installation-id>` | 29 | the repository stays in agent mode. If the new pair is right, run the printed command on the core, then run this again |
 | `core unreachable: <error>` | 30 | nothing changed; the repository stays in agent mode. Check `innsegl status`, then run this again |
+| `the core is older than this client; update the core …` | 30 | nothing changed; update the core (`make update` on the core host), then run this again |
+| `the client service is not answering …` or `… is older than this command …` | 30 | nothing changed; start or restart the client service with the command printed (or `make client-restart` after a rebuild), then run this again |
 | `not pinned: … not a GitHub noreply address …` | 31 | set the address (above), then run this again |
 
 Run it again any time: a second run prints `already pinned` and changes
@@ -63,7 +65,8 @@ innsegl author
 ```
 
 It lists each repository's mode, and the last line is the pair the core holds
-for this machine: the pair, `none`, or `unknown (core unreachable: …)`.
+for this machine: the pair, `none`, or `unknown (…)` saying why: the core
+unreachable, the core older than this client, or the client service down.
 
 The next agent commit in that repository shows your login and noreply address
 as author and committer, and still carries the three trailers:

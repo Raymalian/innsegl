@@ -103,21 +103,21 @@ func CheckPinnable(name, email string) error {
 // enrolled with, and answers whether the core pinned them now or already
 // held them.
 func ReportOperatorAuthor(ctx context.Context, paths Paths, name, email string) (PinOutcome, error) {
-	s, err := NewServer(paths, io.Discard)
+	c, err := cliConn(paths)
 	if err != nil {
 		return "", err
 	}
-	return reportOperatorAuthor(ctx, s.transport, s.core.CoreURL, name, email)
+	return reportOperatorAuthor(ctx, c.rt, c.base, name, email)
 }
 
 // PinnedOperatorAuthor answers the pair the core holds for this machine, ok
 // false when it holds none.
 func PinnedOperatorAuthor(ctx context.Context, paths Paths) (name, email string, ok bool, err error) {
-	s, err := NewServer(paths, io.Discard)
+	c, err := cliConn(paths)
 	if err != nil {
 		return "", "", false, err
 	}
-	return readOperatorAuthor(ctx, s.transport, s.core.CoreURL)
+	return readOperatorAuthor(ctx, c.rt, c.base)
 }
 
 func reportOperatorAuthor(ctx context.Context, rt http.RoundTripper, coreURL, name, email string) (PinOutcome, error) {
@@ -180,15 +180,15 @@ func operatorAuthorCall(ctx context.Context, rt http.RoundTripper, method, coreU
 	if resp.StatusCode == http.StatusOK {
 		return raw, nil
 	}
-	var answer struct {
-		Error string `json:"error"`
-	}
-	if json.Unmarshal(raw, &answer) != nil || answer.Error == "" {
-		// Not the core's JSON (a proxy's page, say): its text is the message.
-		answer.Error = strings.TrimSpace(string(raw))
-	}
 	if resp.StatusCode == http.StatusConflict {
+		var answer struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &answer) != nil || answer.Error == "" {
+			answer.Error = strings.TrimSpace(string(raw))
+		}
 		return nil, fmt.Errorf("%w: %s", ErrOperatorAuthorPinned, answer.Error)
 	}
-	return nil, fmt.Errorf("the core answered %d: %s", resp.StatusCode, answer.Error)
+	// A core older than the GET answers 405 (ENF-016): ErrCoreOlder.
+	return nil, coreAnswerError(resp.StatusCode, raw)
 }

@@ -99,7 +99,7 @@ func TestWriteEnrolmentModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.InstallationID != core.EnrolledID() || !strings.HasPrefix(cfg.CoreURL, "https://") || cfg.Listen != "127.0.0.1:28195" {
+	if cfg.InstallationID != core.EnrolledID() || !strings.HasPrefix(cfg.CoreURL, "https://") || cfg.Listen != "127.0.0.1:1" {
 		t.Fatalf("core.json = %+v", cfg)
 	}
 }

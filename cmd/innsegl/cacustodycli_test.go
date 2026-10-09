@@ -14,7 +14,6 @@ import (
 	"filippo.io/age"
 
 	"innsegl.dev/innsegl/internal/cacustody"
-	"innsegl.dev/innsegl/internal/client/clienttest"
 )
 
 // BAK-029 (PROPOSED for doc 07's TC-BAK) — `innsegl ca-custody` is the
@@ -23,10 +22,7 @@ import (
 // Touch ID. No secret is typed or printed.
 func TestBAK029TheOperatorUnlocksTheCAFromATerminal(t *testing.T) {
 	f := newConnectFixture(t)
-	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
-		"--managed-settings", f.settings, "--no-service"); code != exitOK {
-		t.Fatalf("connect: %s", stderr)
-	}
+	f.connectServed(t, nil)
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
 		t.Fatal(err)

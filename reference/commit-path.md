@@ -83,12 +83,12 @@ it is.
 | 0 | `pinned on the core for this machine: …`, or `already pinned … (same pair)`; the repository is set |
 | 2 | usage, or the path is not a git repository |
 | 29 | `refused:` the core holds a different pair; prints the reset command with this machine's installation id; the repository stays in agent mode |
-| 30 | `core unreachable:` with the error; the repository stays in agent mode |
+| 30 | `core unreachable:` with the error; or, said as such, the core is older than this client (`update the core`, ENF-016) or the client service is down or older (with the command that starts it); the repository stays in agent mode |
 | 31 | `not pinned:` the pair is not a noreply address named by its own login. With no typed identity the repository stays in agent mode; with one, it is set, and signed only if `INNSEGL_SIGN_AUTHOR_OPERATORS` lists it |
 
 `innsegl author` with no arguments ends with the pair the core holds for this
 machine (`GET /_core/operator-author`, ENF-015): the pair, `none`, or
-`unknown (core unreachable: …)`. The local listing prints either way.
+`unknown (core unreachable: …)`, or `unknown (the core is older than this client; update the core …)` for a core older than the GET (ENF-016). The local listing prints either way.
 
 ## Settings
 

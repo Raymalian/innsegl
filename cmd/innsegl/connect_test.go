@@ -5,7 +5,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,8 +159,38 @@ func newConnectFixture(t *testing.T) *connectFixture {
 		loadHarness: func(_ string, _ bool, debugFile string, ca string) error {
 			return os.WriteFile(debugFile, []byte("[DEBUG] extraCertsPath="+ca+"\n"), 0o600)
 		},
+		// Never the enrolment's default address: on a developer's machine
+		// their own client service listens there, in front of their own
+		// core. Nothing listens on port 1, so --disconnect falls back to
+		// the fake core directly; a test that wants a service starts one.
+		serviceURL: "http://127.0.0.1:1",
 	}
 	return f
+}
+
+// connectServed enrols f with its own client service on a loopback port,
+// as `innsegl connect --listen <addr> --no-service` and then the service
+// would, and answers that service. wrap, when set, stands in front of the
+// real handler.
+func (f *connectFixture) connectServed(t *testing.T, wrap func(http.Handler) http.Handler) *httptest.Server {
+	t.Helper()
+	svc := httptest.NewUnstartedServer(nil)
+	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--no-service", "--listen", svc.Listener.Addr().String()); code != exitOK {
+		t.Fatalf("connect: %s", stderr)
+	}
+	s, err := client.NewServer(client.ClientPaths(f.home), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.Handler()
+	if wrap != nil {
+		h = wrap(h)
+	}
+	svc.Config.Handler = h
+	svc.Start()
+	t.Cleanup(svc.Close)
+	return svc
 }
 
 func (f *connectFixture) connect(args ...string) (int, string, string) {
@@ -439,6 +471,34 @@ func TestConnectDisconnectRevokesTheInstallationOnTheCore(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "revoked on the core") {
 		t.Errorf("stdout does not say the installation was revoked:\n%s", stdout)
+	}
+}
+
+// CLI-020 (PROPOSED for doc 07) — the CLI's calls to the core go through the
+// client service on loopback, not by dialling the core: --disconnect's
+// revocation arrives at the core over the service's connection, under the
+// pass-through route.
+func TestCLI020DisconnectRevokesThroughTheClientService(t *testing.T) {
+	f := newConnectFixture(t)
+	revoked := make(chan struct{}, 1)
+	f.core.Mux.HandleFunc(coreDisconnectPath, func(w http.ResponseWriter, _ *http.Request) {
+		revoked <- struct{}{}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	var passed []string
+	svc := f.connectServed(t, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			passed = append(passed, r.Method+" "+r.URL.Path)
+			h.ServeHTTP(w, r)
+		})
+	})
+	f.deps.serviceURL = svc.URL
+	if code, stdout, stderr := f.connect("--disconnect", "--managed-settings", f.settings); code != exitOK ||
+		!strings.Contains(stdout, "revoked on the core") {
+		t.Fatalf("disconnect: exit %d\n%s%s", code, stdout, stderr)
+	}
+	if len(revoked) != 1 || len(passed) != 1 || passed[0] != "POST "+client.CorePassPrefix+coreDisconnectPath {
+		t.Fatalf("revocations %d; through the service: %v", len(revoked), passed)
 	}
 }
 
