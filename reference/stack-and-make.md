@@ -13,7 +13,8 @@ Every target with a `##` help line:
 
 | Target | Does |
 |---|---|
-| `make build` | compile the single innsegl binary |
+| `make build` | compile the single innsegl binary; on macOS, sign it with the newest-issued Developer ID the keychain holds, so it keeps its Local Network permission across rebuilds (`scripts/codesign-cli.sh`, OPS-169). Restarts nothing |
+| `make client-restart` | restart this machine's client service, only if it runs the binary `make build` wrote (`scripts/client-restart.sh`, OPS-170); see [client-and-connect.md](client-and-connect.md) |
 | `make test` | the full suite with the race detector, through `scripts/test-suite.sh` |
 | `make lint` | `go vet` and `golangci-lint` |
 | `make cover` | coverage profile and per-function summary |
@@ -128,6 +129,7 @@ Make variables and environment (defaults in brackets):
 | Name | Used by | Meaning |
 |---|---|---|
 | `COMPOSE_ENV_FILE` | all | [`deploy/compose/.env`] |
+| `INNSEGL_CODESIGN_IDENTITY` | build (macOS) | the identity to sign with, a SHA-1 hash or a name `security find-identity -v -p codesigning` lists; `none` leaves the binary unsigned [the newest-issued `Developer ID Application`] |
 | `INNSEGL_SPIRE_JWT_ISSUER` | all | [`http://spire-oidc:8080`] |
 | `INNSEGL_IMAGE` | verify-commit | [`innsegl:local`] |
 | `REPO` | up-here, innsegl-init | `host/org/name`, default from `origin`; for innsegl-init a host path |
@@ -195,6 +197,8 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
 | `teardown-guard.sh` | 9 | REFUSED: would have destroyed a trust volume |
 | `image-bundle.sh` | 1 | refused (dirty tree, or a bundle that fails its checks) |
 | `make update` | 2 | SPIRE or Rekor is not running |
+| `codesign-cli.sh` (`make build`) | 1 | the identity asked for is not held, or `codesign` failed |
+| `client-restart.sh` | 1 | not restarted: no service, it runs another binary (named), or the restart failed |
 
 ## Tests
 
@@ -207,7 +211,9 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
 - `test/deploy/referencedocs_test.go` (DOC-001, PROPOSED)
 - `scripts/stack-mode-selftest.sh` (OPS-129), `innsegl-update-selftest.sh`,
   `image-bundle-selftest.sh`, `install-selftest.sh`, `setup-link-selftest.sh`,
-  `test-suite-selftest.sh`, `worktree-link-selftest.sh` (OPS-040, OPS-041)
+  `test-suite-selftest.sh`, `worktree-link-selftest.sh` (OPS-040, OPS-041),
+  `codesign-cli-selftest.sh` (OPS-169, PROPOSED), `client-restart-selftest.sh`
+  (OPS-170, PROPOSED), `innsegl-migrate-selftest.sh` (OPS-168, PROPOSED, #560)
 - `test/smoke/*_test.go` (OPS-004 to OPS-006, OPS-014 to OPS-018)
 
 ## Decisions
