@@ -106,6 +106,8 @@ service once, because the label was empty before.
 Every target that runs compose over the trust volumes (`innsegl-backup`,
 `innsegl-verify`, `innsegl-init`, the `ca-custody-*` targets, ...) runs
 `innsegl-trust-volumes` first (OPS-166).
+Bringing the log up again passes Rekor's running host port, so a
+recreated Rekor stays where `make start` put it (OPS-167).
 
 ## Settings
 
@@ -201,7 +203,7 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
   `updateenv_test.go` (OPS-135), `buildonce_test.go`, `imagebundle_test.go`,
   `hostports_test.go`, `bindaddress_test.go` (OPS-127), `oneprocess*_test.go`,
   `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134),
-  `startinputs_test.go` (OPS-165, OPS-166, PROPOSED)
+  `startinputs_test.go` (OPS-165 to OPS-167, PROPOSED)
 - `test/deploy/referencedocs_test.go` (DOC-001, PROPOSED)
 - `scripts/stack-mode-selftest.sh` (OPS-129), `innsegl-update-selftest.sh`,
   `image-bundle-selftest.sh`, `install-selftest.sh`, `setup-link-selftest.sh`,
