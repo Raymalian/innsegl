@@ -84,6 +84,11 @@ the one-time code for the first passkey (see [dashboard-api.md](dashboard-api.md
 | `-trusted-origins` | `INNSEGL_TRUSTED_ORIGINS` | browser origins allowed to change state |
 | `-addr-file` | `INNSEGL_MCP_ADDR_FILE` | publish the bound address |
 
+`/readyz` also lists `reports`: scheduled controls' last results, never a
+reason to be unready. With `INNSEGL_CANARY_STATUS_FILE` set (no flag; the
+same variable `innsegl seal` writes), the scheduled WORM canary is one, named
+`worm canary` ([ledger-and-segments.md](ledger-and-segments.md)).
+
 `innsegl retire` reads the variables the core's container already sets:
 `-dsn` (`INNSEGL_LEDGER_DSN`), `-spire-address` (`INNSEGL_SPIRE_ADDRESS`),
 `-trust-domain` (`INNSEGL_TRUST_DOMAIN`), `-spire-server-id`

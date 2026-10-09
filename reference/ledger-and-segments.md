@@ -5,7 +5,8 @@
 The ledger is one append-only hash chain of events in Postgres (ADR-0005).
 The sealer cuts it into segments, writes each to a write-once object store
 and anchors it in the transparency log (ADR-0006, ADR-0009). The canary
-proves the store refuses deletion. A backup is checked against the sealed
+proves the store refuses deletion; the sealer runs it on a schedule (doc 05
+§2), and `innsegl status` shows the last result as `worm canary`. A backup is checked against the sealed
 segments before it counts.
 
 ## Commands
@@ -22,6 +23,10 @@ make innsegl-verify
 
 - `innsegl seal` runs continuously; `-once` runs one cycle. Run it single-active.
 - `innsegl canary` tries to delete a probe object and must be refused (SEG-005).
+- With `-canary-interval` set, `innsegl seal` also runs that canary from its
+  loop, once per interval, and records each run in `-canary-status-file`.
+  `-once` never runs it. Before each run it deletes earlier probes whose
+  retention has passed, so the probe prefix stays at about one object.
 - `innsegl migrate-schema` appends one `schema_migrated` event naming where
   the chain starts writing schema_version `4`. Run it before the upgraded
   writers start. Running it twice appends nothing the second time.
@@ -53,6 +58,10 @@ make innsegl-verify
 | `-mode`, `-retention` | `INNSEGL_OBJECT_STORE_RETENTION_MODE`, `INNSEGL_OBJECT_STORE_RETENTION` | object lock [`COMPLIANCE`, `0` = bucket default] |
 | `-tls`, `-timeout` | `INNSEGL_OBJECT_STORE_TLS`, `INNSEGL_OBJECT_STORE_TIMEOUT` | [`true`, `1m`] |
 | `-once`, `-json`, `-quiet` | | one cycle; JSON; quiet when idle |
+| `-canary-interval` | `INNSEGL_CANARY_INTERVAL` | run the deletion canary this often; `0` is off [`0`; compose `24h`] |
+| `-canary-status-file` | `INNSEGL_CANARY_STATUS_FILE` | where each run is recorded [compose `/run/innsegl/canary/worm-canary.json`] |
+| `-canary-probe-retention` | `INNSEGL_CANARY_PROBE_RETENTION` | the probe's retention; `0` uses `-retention` [`0`; compose `24h`] |
+| `-canary-min-bucket-retention` | `INNSEGL_CANARY_MIN_BUCKET_RETENTION` | required bucket default retention; `0` does not check [`0`] |
 
 `innsegl canary` takes the same object-store flags plus
 `-min-bucket-retention` (`INNSEGL_CANARY_MIN_BUCKET_RETENTION`) and
@@ -74,7 +83,8 @@ for `make innsegl-backup` [`backups`].
 | `innsegl-s3`, `innsegl-object-init`, `innsegl-s3-identities` | the object store, its bucket and identities |
 | volumes `innsegl-object-data`, `innsegl-object-filer-data`, `innsegl-s3-identities` | object store data |
 | `innsegl-sealer` | the sealer as its own container (profile `separate`); default runs it in `innsegl-mcp` |
-| `innsegl-canary` | the canary (profile `canary`) |
+| `innsegl-canary` | the canary on demand (profile `canary`) |
+| volume `innsegl-canary-status` | the scheduled canary's last result; written by whichever container runs the sealer, read by `innsegl-mcp` |
 | `innsegl-backup`, volume `innsegl-backups` | scheduled ledger backup |
 | `migrations/` | SQL migrations, embedded by `migrations/migrations.go` |
 
@@ -86,6 +96,12 @@ for `make innsegl-backup` [`backups`].
 | `seal` | 10 | INCONCLUSIVE: the cycle could not run |
 | `canary` | 3 | the store permits deletion; fail the deploy |
 | `canary` | 4 | the canary could not run; fails closed |
+
+A failed scheduled run does not change the sealer's exit status. It is logged
+(`innsegl seal: worm canary: FAILED - <checks>`), and the core's `/readyz`
+lists it under `reports` without turning not-ready. `innsegl status` then shows
+`worm canary DOWN`, with the failing check or `stale`, and exits 1. Stale
+means no run in twice the interval.
 | `migrate-schema` | 5 | the chain mixes versions, or the attestation landed wrong; stop the old writers |
 | `migrate-schema` | 6 | the ledger could not be opened, read or appended to |
 | `backup-freshness.sh` | 1 | stale, missing or no host copy |
@@ -96,6 +112,8 @@ for `make innsegl-backup` [`backups`].
 - `internal/segment/*_test.go` (SEG-001 to SEG-006, HAR-010, OPS-029)
 - `cmd/innsegl/seal_test.go`, `sealengine_test.go` (SEG-001, SEG-007 to SEG-013)
 - `cmd/innsegl/canary_test.go` (SEG-005, OPS-029, HAR-009)
+- `internal/segment/canaryschedule_test.go`, `cmd/innsegl/sealcanary_test.go`
+  (SEG-014 to SEG-016, OPS-172, PROPOSED), `internal/mcp/healthreport_test.go` (OPS-172)
 - `cmd/innsegl/migrateschema_test.go` (LED-035, LED-036)
 - `internal/event/*_test.go` (SER-001 to SER-026)
 - `test/deploy/appendonlyrole_test.go` (OPS-009, OPS-010), `objectscope_test.go`
