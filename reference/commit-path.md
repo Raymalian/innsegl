@@ -90,6 +90,28 @@ it is.
 machine (`GET /_core/operator-author`, ENF-015): the pair, `none`, or
 `unknown (core unreachable: …)`, or `unknown (the core is older than this client; update the core …)` for a core older than the GET (ENF-016). The local listing prints either way.
 
+### A dead run's work (adoption)
+
+When a commit hands over work a run left behind and that run has ended, the
+commit says so: it gains `Agent-Adopted-Run: <dead run>` after the three
+usual trailers, and the ledger gets a `run_adopted` event before the commit's
+intent (ADR-0051, ADR-0079). Nobody asks for it.
+
+- `prepare-commit-msg` sends the core the index's tree and `HEAD`. A hosted
+  client pushes those objects to the core first. It sends nothing for
+  `--amend`, `-c`/`-C`, merges and squashes.
+- The core looks at the repository's runs that are not active and were last
+  active in the past 7 days (at most 32, newest first). It proposes a run only
+  when exactly one of them wrote every changed path through `Write` or `Edit`,
+  and the bytes match what it left. The committing run must not have written
+  any of those paths itself.
+- Signing proves the named run again against the commit's own tree, and
+  refuses the commit if the proof fails.
+- A change that mixes two runs' work is committed as the live run's own.
+  Commit each run's paths separately to adopt them.
+- The proof reads the gateway's recorded bodies on the core's body volume
+  (`-observe-body-dir`). With no body volume, nothing is adopted.
+
 ## Settings
 
 | Variable | Read by | Meaning |
@@ -141,6 +163,11 @@ behind the client certificate guard, and never another installation's).
 - `cmd/innsegl/init*_test.go` (INIT-001 to INIT-010)
 - `internal/commitpath/*_test.go` (CMT-006, TLS-001, TLS-002)
 - `internal/mcp/signpayload_test.go`, `signpayload_crash_test.go` (CMT-007 to CMT-012)
+- `internal/mcp/commitadopt_test.go`, `commitadopt_ledger_test.go`, `adopt_gateway_test.go`
+  (ADP-008, ADP-009 and ADP-014 on the commit path; ADP-019, ADP-021),
+  `internal/ledger/deadruns_test.go` (ADP-020, real Postgres),
+  `internal/reconciler/adoption_commitpath_integration_test.go` (ADP-015 on a real stack),
+  `cmd/innsegl/githookadopt_test.go`
 - `internal/signing/*_test.go` (SIG-001 to SIG-012), `signpayload_test.go` (GH-006)
 - `cmd/innsegl/hookauthor_test.go` (ENF-010), `authorcli_test.go` and `internal/client/authors_test.go` (ENF-011)
 - `cmd/innsegl/hookauthorauto_test.go` (ENF-013): the repository's noreply address, never `user.name`
@@ -157,6 +184,8 @@ behind the client certificate guard, and never another installation's).
 - [ADR-0046](../docs/adr/0046-make-every-agent-commit-signed-without-anyone-remembering-to.md) every agent commit signed
 - [ADR-0047](../docs/adr/0047-anchor-attribution-to-the-change-not-the-commit-object.md) attribution to the change
 - [ADR-0059](../docs/adr/0059-a-commit-is-attributed-through-the-tool-call-that-made-it.md) the commit path
+- [ADR-0051](../docs/adr/0051-let-a-live-run-adopt-a-dead-runs-work-and-record-the-handover.md) adoption
+- [ADR-0079](../docs/adr/0079-adoption-runs-on-the-commit-path.md) adoption runs on the commit path
 - [ADR-0071](../docs/adr/0071-the-projects-mount-tools-are-deprecated-and-their-implementation-removed.md) mount tools removed
 
 ## Runbooks
