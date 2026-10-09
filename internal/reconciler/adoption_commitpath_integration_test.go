@@ -230,7 +230,9 @@ func TestADP015OnTheCommitPathAnAdoptionEndToEndOnARealStack(t *testing.T) {
 	}
 }
 
-type adpResolver struct{ calls map[string]commitpath.RelayedCall }
+type adpResolver struct {
+	calls map[string]commitpath.RelayedCall
+}
 
 func (r *adpResolver) LookupPending(id string) (commitpath.RelayedCall, bool) {
 	c, ok := r.calls[id]
