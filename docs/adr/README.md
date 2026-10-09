@@ -30,11 +30,11 @@ maintainer ask "why is it like this?"
 | [0005](0005-one-chain-per-database.md) | Scope a ledger chain to a database | accepted | 2026-08-28 |
 | [0006](0006-segment-object-format-and-content-addressed-segment-id.md) | Address a sealed segment by the digest of its object, and make that digest its `segment_id` | accepted | 2026-08-28 |
 | [0007](0007-protected-surfaces-gate-semantics.md) | Enforce the protected surfaces with a self-verifying gate, and define what it does before the first tag exists | accepted | 2026-08-28 |
-| [0008](0008-worm-canary-proves-refusal-by-attempting-deletion.md) | Prove the WORM configuration by attempting a real deletion, and fail closed on anything short of a refusal | accepted | 2026-08-28 |
+| [0008](0008-worm-canary-proves-refusal-by-attempting-deletion.md) | Prove the WORM configuration by attempting a real deletion, and fail closed on anything short of a refusal | accepted; amended 2026-10-05 | 2026-08-28 |
 | [0009](0009-anchor-a-segment-as-a-signed-hashedrekord-entry.md) | Anchor a sealed segment as a signed `hashedrekord` entry, verify it from first principles, and accept at-least-once anchoring | accepted | 2026-08-28 |
 | [0010](0010-self-hosted-sigstore-is-the-shipped-default.md) | Ship self-hosted Fulcio/Rekor as the default, and demote public Sigstore to "where an accepted issuer already exists" | accepted; amended 2026-10-05 | 2026-08-28 |
 | [0011](0011-compose-spire-admin-api-segmentation.md) | Segment the SPIRE admin API by mount and by network, and state the part SPIRE will not segment | accepted | 2026-08-28 |
-| [0012](0012-scope-the-mcp-admin-credential-with-an-opa-authorization-policy.md) | Scope the MCP admin credential with an OPA authorization policy | accepted | 2026-08-28 |
+| [0012](0012-scope-the-mcp-admin-credential-with-an-opa-authorization-policy.md) | Scope the MCP admin credential with an OPA authorization policy | accepted; amended 2026-10-01 | 2026-08-28 |
 | [0013](0013-record-spire-entry-drift-as-ledger-drift-detected.md) | Record SPIRE entry drift as `ledger_drift_detected` where a subject event exists, and refuse to record the unattributed case at all | accepted | 2026-08-29 |
 | [0014](0014-reaper-orphan-test-and-expiry-idempotency-key.md) | Bound a run identity by its entry's TTL plus a configured grace, and key `run_expired` by run id | accepted | 2026-08-29 |
 | [0015](0015-failure-injection-stack-per-test-process.md) | Give SPIRE failure injection a stack per test process, and record the half of SPI-007 that `sign_commit` must finish | accepted | 2026-08-29 |
@@ -47,12 +47,12 @@ maintainer ask "why is it like this?"
 | [0022](0022-a-compose-project-per-test-process-for-the-shipped-spire-stack.md) | Give every test process that drives the shipped SPIRE stack a compose project of its own, and require the project name rather than defaulting it | accepted | 2026-08-29 |
 | [0023](0023-read-the-recorded-reply-through-a-locking-read.md) | Read the recorded reply through a locking read, so a completion that loses the race is handed the winner's bytes | accepted | 2026-08-29 |
 | [0024](0024-readiness-probes-sigstore-by-fetching-its-trust-material.md) | Define Sigstore reachability as serving parseable trust material, and keep every readiness probe read-only | accepted | 2026-08-29 |
-| [0025](0025-rate-limit-register-agent-per-asserted-caller-and-alert-out-of-band.md) | Rate-limit `register_agent` per asserted caller, meter it on the ledger appender, and raise the trip out of band | accepted | 2026-08-29 |
+| [0025](0025-rate-limit-register-agent-per-asserted-caller-and-alert-out-of-band.md) | Rate-limit `register_agent` per asserted caller, meter it on the ledger appender, and raise the trip out of band | accepted; amended 2026-10-01 | 2026-08-29 |
 | [0026](0026-mcp-006-is-reachability-through-the-shipped-tool-and-an-unreachable-cell-is-a-finding.md) | Read MCP-006 as reachability through the shipped tool, and record an unreachable cell as a finding rather than manufacturing a path to it | accepted | 2026-08-29 |
 | [0027](0027-crash-mcp-011-by-sigkilling-a-purpose-built-server-and-hold-the-narrow-windows-open.md) | Crash MCP-011 by SIGKILLing a purpose-built MCP process, fuzz the kill timing against a measured call, and hold the two narrowest windows open rather than chase them | accepted | 2026-08-29 |
 | [0028](0028-place-commit-trailers-in-process-and-refuse-the-messages-git-places-ambiguously.md) | Place commit trailers in process, refuse the messages git places ambiguously, and read I6 as "never emit `Co-authored-by:` at all" | accepted | 2026-08-30 |
 | [0029](0029-compose-self-hosted-sigstore-as-its-own-project-joined-to-spires-oidc-network.md) | Compose self-hosted Sigstore as its own project joined to SPIRE's OIDC network, give the log a key that survives a restart, and issue no SCT | accepted | 2026-08-30 |
-| [0030](0030-ship-the-mcp-entry-point-and-read-a-run-out-of-the-chain.md) | Ship the MCP entry point, read a run out of the chain in its own package, and make the earliest `run_retired` the answer | accepted | 2026-08-30 |
+| [0030](0030-ship-the-mcp-entry-point-and-read-a-run-out-of-the-chain.md) | Ship the MCP entry point, read a run out of the chain in its own package, and make the earliest `run_retired` the answer | accepted; amended 2026-10-01 | 2026-08-30 |
 | [0031](0031-orchestrate-released-gitsign-through-git-commit-and-configure-around-the-absent-ct-log.md) | Orchestrate released gitsign through `git commit`, build its environment from nothing, and configure around the absent CT log | accepted | 2026-08-30 |
 | [0032](0032-inject-a-sigstore-outage-by-stopping-the-shipped-container-and-assert-the-absence-of-a-commit-against-the-object-database.md) | Inject a Sigstore outage by stopping the shipped container, inject slowness by delaying a real one, and assert the absence of a commit against the object database | accepted | 2026-08-30 |
 | [0033](0033-append-the-intent-before-the-credential-is-spent-and-derive-a-ledger-key-per-phase.md) | Order `sign_commit` so nothing that can fail cheaply happens after Phase A, and give each phase its own derived ledger key | accepted | 2026-08-30 |
@@ -66,24 +66,31 @@ maintainer ask "why is it like this?"
 | [0041](0041-pseudonymise-agent-type-and-task-ref-in-the-spiffe-id-and-resolve-through-the-ledger-row.md) | Pseudonymise `agent_type` and `task_ref` in the SPIFFE ID, and resolve them through the ledger row rather than a key | accepted | 2026-09-02 |
 | [0042](0042-answer-anyone-can-verify-with-a-public-rekor-anchor-over-a-self-hosted-fulcio-root.md) | Answer #117's "anyone can verify" with a public Rekor anchor over a self-hosted Fulcio root | accepted | 2026-09-05 |
 | [0043](0043-enforce-the-branch-floor-with-gobco-as-a-separate-rerunning-ci-job.md) | Enforce IP §2's 100% branch floor with gobco, in a job that reruns the tests | accepted | 2026-09-05 |
+| [0044](0044-resolve-an-alert-into-a-separate-table-and-keep-the-write-off-the-read-only-dashboard.md) | Resolve an alert into a separate table, and keep the write off the read-only dashboard | accepted; amended 2026-10-03 | 2026-09-07 |
+| [0045](0045-record-repo-branch-and-parentage-on-a-run.md) | Record which repository, which branch, and which agent started it | accepted | 2026-09-08 |
+| [0046](0046-make-every-agent-commit-signed-without-anyone-remembering-to.md) | Make every agent commit signed, without anyone remembering to | accepted | 2026-09-08 |
+| [0047](0047-anchor-attribution-to-the-change-not-the-commit-object.md) | Anchor attribution to the change, not the commit object | accepted | 2026-09-09 |
+| [0048](0048-drive-the-three-ingestion-tools-from-a-second-harnesss-transcript-and-pin-their-names.md) | Drive the three ingestion tools from a second harness's transcript, and pin their names | accepted | 2026-09-13 |
+| [0049](0049-decide-whether-ownership-belongs-in-the-spiffe-id-or-in-a-record-beside-it.md) | Decide whether ownership belongs in the SPIFFE ID or in a record beside it | proposed | 2026-09-16 |
+| [0050](0050-prune-the-hot-tier-without-deleting-a-row.md) | Prune the hot tier without deleting a row | accepted | 2026-09-17 |
 | [0051](0051-let-a-live-run-adopt-a-dead-runs-work-and-record-the-handover.md) | Let a live run adopt a dead run's work, and record the handover as an event | accepted | 2026-09-24 |
 | [0052](0052-a-withdrawn-credential-is-a-lapse-not-a-death.md) | A withdrawn credential is a lapse, not a death | accepted | 2026-09-26 |
-| [0053](0053-issue-a-runs-identity-only-through-the-attested-mcp.md) | Issue a run's identity only through the attested MCP, never to a workload that declares a label | accepted | 2026-09-26 |
-| [0054](0054-alerts-live-in-a-header-notification-menu.md) | Alerts live in a header notification menu, not in banners on one page | accepted | 2026-09-27 |
+| [0053](0053-issue-a-runs-identity-only-through-the-attested-mcp.md) | Issue a run's identity only through the attested MCP, never to a workload that declares a label | accepted; amended 2026-10-01 | 2026-09-26 |
+| [0054](0054-alerts-live-in-a-header-notification-menu.md) | Alerts live in a header notification menu, not in banners on one page | accepted; amended 2026-10-03 | 2026-09-27 |
 | [0055](0055-an-anchor-resolves-the-drift-alert-about-its-segment.md) | An anchor resolves the drift alert about its segment | accepted | 2026-09-27 |
 | [0056](0056-a-single-machine-deployment-runs-the-loops-in-the-mcp.md) | A single-machine deployment runs the loops in the MCP | accepted | 2026-09-27 |
 | [0057](0057-capture-agent-activity-at-a-model-gateway-with-independent-witnesses.md) | Capture agent activity at a model gateway, with independent witnesses | accepted | 2026-09-28 |
-| [0058](0058-an-agents-identity-lifecycle-is-driven-by-its-traffic.md) | An agent's identity lifecycle is driven by its traffic | accepted | 2026-09-28 |
+| [0058](0058-an-agents-identity-lifecycle-is-driven-by-its-traffic.md) | An agent's identity lifecycle is driven by its traffic | accepted; amended 2026-10-01, 2026-10-03 and 2026-10-07 | 2026-09-28 |
 | [0059](0059-a-commit-is-attributed-through-the-tool-call-that-made-it.md) | A commit is attributed through the tool call that made it | accepted | 2026-09-28 |
-| [0060](0060-the-gateway-runs-inside-the-one-innsegl-process.md) | The gateway runs inside the one innsegl process | accepted | 2026-09-28 |
+| [0060](0060-the-gateway-runs-inside-the-one-innsegl-process.md) | The gateway runs inside the one innsegl process | accepted; amended 2026-10-01 and 2026-10-03 | 2026-09-28 |
 | [0061](0061-schema-version-4-records-forks-agent-messages-and-workspace-trees.md) | Schema version 4 records a fork's origin, an agent's own messages, and a per-step workspace tree hash | accepted | 2026-09-28 |
-| [0062](0062-reading-the-ledger-requires-a-signed-in-user.md) | Reading the ledger requires a signed-in user | accepted | 2026-09-28 |
+| [0062](0062-reading-the-ledger-requires-a-signed-in-user.md) | Reading the ledger requires a signed-in user | accepted; amended 2026-10-01 and 2026-10-03 | 2026-09-28 |
 | [0063](0063-the-core-runs-on-its-own-host-and-every-client-machine-holds-its-own-enrolled-certificate.md) | The core runs on its own host, and every client machine holds its own enrolled certificate | accepted | 2026-10-01 |
 | [0064](0064-the-client-derives-the-workspace-and-the-core-binds-it-to-the-installations-scope.md) | The client derives the workspace; the core binds it to the installation's scope | accepted | 2026-10-01 |
-| [0065](0065-a-per-repository-mirror-on-the-core-is-the-evidence-store.md) | A per-repository mirror on the core is the evidence store | accepted | 2026-10-01 |
-| [0066](0066-one-name-one-certificate.md) | One name, one certificate | accepted | 2026-10-01 |
+| [0065](0065-a-per-repository-mirror-on-the-core-is-the-evidence-store.md) | A per-repository mirror on the core is the evidence store | accepted; amended 2026-10-03 | 2026-10-01 |
+| [0066](0066-one-name-one-certificate.md) | One name, one certificate | accepted; amended 2026-10-02 and 2026-10-04 | 2026-10-01 |
 | [0067](0067-the-developer-machine-runs-a-development-stack-never-the-live-one.md) | The developer machine runs a development stack, never the live one | accepted | 2026-10-01 |
-| [0068](0068-the-client-journals-what-the-core-cannot-record-the-core-imports-it.md) | The client journals what the core cannot record; the core imports it | accepted | 2026-10-02 |
+| [0068](0068-the-client-journals-what-the-core-cannot-record-the-core-imports-it.md) | The client journals what the core cannot record; the core imports it | accepted; amended 2026-10-04 | 2026-10-02 |
 | [0069](0069-claude-code-reaches-the-client-as-its-https-proxy.md) | Claude Code reaches the client as its HTTPS proxy | accepted | 2026-10-03 |
 | [0070](0070-build-once-deploy-a-verified-image-bundle.md) | Build the images once; the host deploys a bundle only for the commit it verified | accepted | 2026-10-04 |
 | [0071](0071-the-projects-mount-tools-are-deprecated-and-their-implementation-removed.md) | The projects-mount tools are deprecated and their implementation removed | accepted | 2026-10-05 |
