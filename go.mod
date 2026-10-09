@@ -1,6 +1,9 @@
 module innsegl.dev/innsegl
 
-go 1.27
+// The exact Go CI and every host build with: setup-go reads this line, and
+// unpinned it took a new patch release (1.27.2) the pinned golangci-lint
+// could not read. A Go bump is a deliberate commit, not a runner update.
+go 1.27.1
 
 require (
 	filippo.io/age v1.3.2

@@ -11,14 +11,18 @@ lifecycle listener admits only a repository-scoped admin credential.
 
 ```
 innsegl serve [flags]
-innsegl retire [flags] <run_id>
+docker exec innsegl-mcp innsegl retire <run_id>   # on the core host
+make innsegl-retire RUN=<run_id>                  # the same, from the checkout
 innsegl admin-credential keygen -key FILE -jwks FILE [-force]
 innsegl admin-credential mint -key FILE -repo host/org/name [-ttl D]
 innsegl admin-credential verify -jwks FILE [-token TOKEN]
 innsegl admin-credential enrol-code -dsn <auth-writer DSN> [-ttl D]
 ```
 
-MCP tools (`internal/mcp/tools.go`; names are protected strings):
+MCP tools (`internal/mcp/tools.go`; names are protected strings). The whole
+wire surface is deprecated (ADR-0077): every description begins with the
+same notice, the tools keep working, and the binding is removed at the next
+major release.
 
 | Tool | Listener | Note |
 |---|---|---|
@@ -30,8 +34,11 @@ MCP tools (`internal/mcp/tools.go`; names are protected strings):
 | `observe_tool_call` | main | stores a body locally, appends the tool call |
 | `describe_workspace`, `observe_session` | main | deprecated (ADR-0071); bound, refuse every call |
 
-`innsegl retire` calls `retire_agent` on the admin listener. Use it when a
-run is known to be over; a quiet run is the reaper's job.
+`innsegl retire` runs on the core, inside the `innsegl-mcp` container, and
+calls the retirement engine the gateway uses, in process, under the core's
+own SPIRE admin identity and ledger credential. It needs no listener and no
+admin credential. Use it when a run is known to be over; a quiet run is the
+reaper's job. Run anywhere else, it has no SPIRE admin identity and exits 21.
 
 `admin-credential`: `keygen` adds a public key to the key set (rotation is an
 overlap); `mint` prints one credential for one repository (max TTL 15m);
@@ -74,8 +81,12 @@ the one-time code for the first passkey (see [dashboard-api.md](dashboard-api.md
 | `-trusted-origins` | `INNSEGL_TRUSTED_ORIGINS` | browser origins allowed to change state |
 | `-addr-file` | `INNSEGL_MCP_ADDR_FILE` | publish the bound address |
 
-`innsegl retire`: `-url` (`INNSEGL_MCP_ADMIN_URL`) [`http://127.0.0.1:28090/`],
-`-repo` (the run's own `host/org/name`, default this tree's origin), `-timeout` [`30s`].
+`innsegl retire` reads the variables the core's container already sets:
+`-dsn` (`INNSEGL_LEDGER_DSN`), `-spire-address` (`INNSEGL_SPIRE_ADDRESS`),
+`-trust-domain` (`INNSEGL_TRUST_DOMAIN`), `-spire-server-id`
+(`INNSEGL_SPIRE_SERVER_ID`), `-workload-api` (`INNSEGL_WORKLOAD_API_ADDRESS`),
+`-spire-timeout` (`INNSEGL_SPIRE_TIMEOUT`) [`15s`], `-timeout`
+(`INNSEGL_RETIRE_TIMEOUT`) [`30s`].
 
 ## Files, volumes, containers
 
@@ -99,8 +110,8 @@ The gateway's identity guard (`internal/gateway/registrar.go`,
 | `serve` | 8 | FAILED: stopped on an error while serving |
 | `retire` | 18 | ALREADY ENDED |
 | `retire` | 19 | NO SUCH RUN |
-| `retire` | 20 | UNREACHABLE: nothing decided |
-| `retire` | 21 | REFUSED: the listener would not admit this caller |
+| `retire` | 20 | UNREACHABLE: the ledger or SPIRE could not finish; run it again |
+| `retire` | 21 | REFUSED: no SPIRE admin identity; run it on the core |
 | `admin-credential` | 18 | REFUSED: the credential is not admissible |
 | `admin-credential` | 19 | UNUSABLE: the command could not do its job |
 
@@ -114,7 +125,7 @@ MCP error classes (`internal/mcp/errors.go`, protected): `ATTESTATION_FAILED`,
 
 - `internal/mcp/*_test.go` (MCP-001 to MCP-100, PRI-003, PRI-004)
 - `internal/mcp/admincred_test.go`, `adminscope_test.go` (MCP-078 to MCP-093)
-- `cmd/innsegl/retire_test.go` (MCP-005, MCP-086, MCP-087, MCP-094)
+- `cmd/innsegl/retire_test.go` (MCP-086, on a real Postgres)
 - `cmd/innsegl/admincred_test.go` (MCP-090), `adminenrolcode_test.go` (AUTH-002)
 - `cmd/innsegl/serve_test.go`, `servewiring_test.go` (MCP-058 to MCP-060),
   `servealso_test.go` (CLI-011, CLI-012)
@@ -135,6 +146,7 @@ MCP error classes (`internal/mcp/errors.go`, protected): `ATTESTATION_FAILED`,
 - [ADR-0053](../docs/adr/0053-issue-a-runs-identity-only-through-the-attested-mcp.md) identity only through the MCP
 - [ADR-0056](../docs/adr/0056-a-single-machine-deployment-runs-the-loops-in-the-mcp.md) loops run in the MCP
 - [ADR-0058](../docs/adr/0058-an-agents-identity-lifecycle-is-driven-by-its-traffic.md) lifecycle driven by traffic
+- [ADR-0077](../docs/adr/0077-the-mcp-wire-surface-is-deprecated.md) the MCP wire surface is deprecated; retire runs on the core
 
 ## Runbooks
 

@@ -281,9 +281,9 @@ func init() { RegisterTool(ToolGetCredential, bindGetCredential) }
 func bindGetCredential(s *Server) error {
 	return Bind(s, &sdk.Tool{
 		Name: string(ToolGetCredential),
-		Description: "Issue a JWT-SVID for one agent run, bound to one audience. " +
+		Description: wireDeprecated("Issue a JWT-SVID for one agent run, bound to one audience. " +
 			"The credential belongs to the run it was issued for and to no other; " +
-			"it is short-lived and is re-fetched rather than extended.",
+			"it is short-lived and is re-fetched rather than extended."),
 	}, getCredential)
 }
 

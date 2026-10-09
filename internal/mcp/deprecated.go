@@ -31,6 +31,23 @@ func init() {
 // deprecatedADR is the decision both refusals cite.
 const deprecatedADR = "ADR-0071"
 
+// The whole MCP wire surface is DEPRECATED (ADR-0077). The gateway and the
+// commit hook call the engine in process, and nothing in a shipped deployment
+// calls these tools over the wire. The names are a protected surface
+// (VERSIONING.md surface 4), so the binding is removed only at the next major
+// release, announced one minor ahead in CHANGELOG.md and in the descriptions.
+// Unlike ADR-0071's two, the six working tools keep working until then.
+
+// wireDeprecationNotice is the one sentence every tool's description begins
+// with. It is identical for all eight so a client can match it.
+const wireDeprecationNotice = "Deprecated (ADR-0077): innsegl's gateway and commit hook replace " +
+	"the MCP wire surface, and this tool is removed from it at the next major release."
+
+// wireDeprecated puts the notice in front of a tool's own description.
+func wireDeprecated(description string) string {
+	return wireDeprecationNotice + " " + description
+}
+
 // deprecatedRefusal is the one answer a deprecated tool gives.
 func deprecatedRefusal(tool ToolName) *Error {
 	return Errorf(ClassInvariantViolation, "",
@@ -58,9 +75,9 @@ type describeWorkspaceOut struct {
 func bindDescribeWorkspace(s *Server) error {
 	return Bind(s, &sdk.Tool{
 		Name: string(ToolDescribeWorkspace),
-		Description: "Deprecated (" + deprecatedADR + "): refuses every call and is removed at " +
+		Description: wireDeprecated("Deprecated (" + deprecatedADR + "): refuses every call and is removed at " +
 			"the next major release. It described a workspace from a projects folder mounted " +
-			"into the core; the core mounts none, and the client states its own workspace.",
+			"into the core; the core mounts none, and the client states its own workspace."),
 	}, describeWorkspace)
 }
 
@@ -104,9 +121,9 @@ type observeSessionOut struct {
 func bindObserveSession(s *Server) error {
 	return Bind(s, &sdk.Tool{
 		Name: string(ToolObserveSession),
-		Description: "Deprecated (" + deprecatedADR + "): refuses every call and is removed at " +
+		Description: wireDeprecated("Deprecated (" + deprecatedADR + "): refuses every call and is removed at " +
 			"the next major release. It began and ended a harness session against a projects " +
-			"folder mounted into the core; the session hook now reports to the gateway.",
+			"folder mounted into the core; the session hook now reports to the gateway."),
 	}, observeSession)
 }
 

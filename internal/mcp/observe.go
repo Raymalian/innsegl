@@ -266,13 +266,13 @@ func observeMisconfigured(detail string) error {
 func bindObserveToolCall(s *Server) error {
 	return Bind(s, &sdk.Tool{
 		Name: string(ToolObserveToolCall),
-		Description: "Record one tool call a harness OBSERVED, with its body. " +
+		Description: wireDeprecated("Record one tool call a harness OBSERVED, with its body. " +
 			"The body is digested and written to the MCP's own local volume and is " +
 			"never sent anywhere; the event carries the digest and the tool name only. " +
 			"The same body observed twice for one run is one event. Name the run with " +
 			"run_id. session_id, cwd, agent_type and parent_session_id are deprecated " +
 			"(ADR-0071): a call that sends session_id is refused, and they are removed at " +
-			"the next major release.",
+			"the next major release."),
 	}, observeToolCall)
 }
 

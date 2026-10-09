@@ -58,6 +58,11 @@ func adpRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	adpGit(t, dir, "init", "-q")
+	// No background maintenance: a newer git runs it detached after a commit,
+	// and it was still writing under .git/objects when the test's TempDir was
+	// removed ("directory not empty", a CI-only flake).
+	adpGit(t, dir, "config", "maintenance.auto", "false")
+	adpGit(t, dir, "config", "gc.auto", "0")
 	adpGit(t, dir, "-c", "user.name=t", "-c", "user.email=t@innsegl.invalid",
 		"commit", "-q", "--allow-empty", "-m", "root")
 	return dir

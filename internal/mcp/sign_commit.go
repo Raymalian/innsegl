@@ -520,10 +520,10 @@ func ConfigureCommitSigner(cfg SignCommitConfig) (func(), error) {
 func bindSignCommit(s *Server) error {
 	return Bind(s, &sdk.Tool{
 		Name: string(ToolSignCommit),
-		Description: "Sign one staged commit under this run's identity, recording the intent " +
+		Description: wireDeprecated("Sign one staged commit under this run's identity, recording the intent " +
 			"before signing and the result after it. The commit is created only if Fulcio " +
 			"issues a certificate and Rekor records the signature; there is no unsigned " +
-			"fallback. The same idempotency_key always names the same commit.",
+			"fallback. The same idempotency_key always names the same commit."),
 	}, signCommit)
 }
 
