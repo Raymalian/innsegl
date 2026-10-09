@@ -46,8 +46,9 @@ imply otherwise.
 Fail closed. Every design decision in this system converts an integrity attack
 into an availability problem; this is the moment you cash that in.
 
-1. **Stop issuing.** Stop `innsegl-mcp`. With no MCP there is no
-   `register_agent` and no `get_credential`; IP §6 makes that a clean refusal,
+1. **Stop issuing.** Stop `innsegl-mcp`, the core. With it stopped the
+   gateway registers no run and nothing is issued a credential, over the
+   (deprecated) MCP tools or in process; IP §6 makes that a clean refusal,
    not a corruption.
 2. **Stop signing.** Stop anything holding a workload identity in the trust
    domain. A signature produced now lands in Rekor inside the window and widens
@@ -170,8 +171,8 @@ Steps:
    ```
 
    This creates only the fixed infrastructure entries (today, `spire-oidc`'s
-   own identity). Per-run agent entries are the MCP's and are created on
-   `register_agent` — never by hand.
+   own identity). Per-run agent entries are the core's, created when it
+   registers a run (the gateway, or `register_agent`) — never by hand.
 4. Point Fulcio at the new OIDC issuer. Fulcio believes **exactly one** issuer;
    `INNSEGL_SPIRE_JWT_ISSUER` is threaded through both compose files for that
    reason (see the `Makefile`'s `sigstore-up`). A stack booted with the two

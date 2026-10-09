@@ -44,35 +44,35 @@ func TestGH008TheFirstReportPinsTheOperatorAuthor(t *testing.T) {
 	if _, _, ok, err := s.OperatorAuthor(tctx(t), id); err != nil || ok {
 		t.Fatalf("a new installation has a pinned author (ok=%v, err=%v)", ok, err)
 	}
-	if err := s.PinOperatorAuthor(tctx(t), id, fixtureName, fixtureEmail); err != nil {
+	if _, err := s.PinOperatorAuthor(tctx(t), id, fixtureName, fixtureEmail); err != nil {
 		t.Fatalf("first report: %v", err)
 	}
 	name, email, ok, err := s.OperatorAuthor(tctx(t), id)
 	if err != nil || !ok || name != fixtureName || email != fixtureEmail {
 		t.Fatalf("OperatorAuthor = %q %q %v %v", name, email, ok, err)
 	}
-	if err := s.PinOperatorAuthor(tctx(t), id, fixtureName, fixtureEmail); err != nil {
+	if _, err := s.PinOperatorAuthor(tctx(t), id, fixtureName, fixtureEmail); err != nil {
 		t.Fatalf("the same report again: %v", err)
 	}
 }
 
 func TestGH008ADifferentReportIsRefusedUntilReset(t *testing.T) {
 	s, id := newInstallation(t)
-	if err := s.PinOperatorAuthor(tctx(t), id, fixtureName, fixtureEmail); err != nil {
+	if _, err := s.PinOperatorAuthor(tctx(t), id, fixtureName, fixtureEmail); err != nil {
 		t.Fatal(err)
 	}
 	for _, other := range [][2]string{
 		{"beta", "67890+beta@users.noreply.github.com"},
 		{"alpha", "99999+alpha@users.noreply.github.com"},
 	} {
-		if err := s.PinOperatorAuthor(tctx(t), id, other[0], other[1]); !errors.Is(err, ErrAuthorPinned) {
+		if _, err := s.PinOperatorAuthor(tctx(t), id, other[0], other[1]); !errors.Is(err, ErrAuthorPinned) {
 			t.Errorf("a different pair %q <%s>: err = %v, want ErrAuthorPinned", other[0], other[1], err)
 		}
 	}
 	if err := s.ResetOperatorAuthor(tctx(t), id, ""); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
-	if err := s.PinOperatorAuthor(tctx(t), id, "beta", "67890+beta@users.noreply.github.com"); err != nil {
+	if _, err := s.PinOperatorAuthor(tctx(t), id, "beta", "67890+beta@users.noreply.github.com"); err != nil {
 		t.Fatalf("a report after the reset: %v", err)
 	}
 }
@@ -80,13 +80,13 @@ func TestGH008ADifferentReportIsRefusedUntilReset(t *testing.T) {
 func TestGH008OnlyANoreplyAddressIsPinned(t *testing.T) {
 	s, id := newInstallation(t)
 	for _, email := range []string{"alpha@example.com", "agent@innsegl.invalid", "alpha@users.noreply.github.com", ""} {
-		if err := s.PinOperatorAuthor(tctx(t), id, fixtureName, email); !errors.Is(err, ErrInvalid) {
+		if _, err := s.PinOperatorAuthor(tctx(t), id, fixtureName, email); !errors.Is(err, ErrInvalid) {
 			t.Errorf("PinOperatorAuthor(%q): err = %v, want ErrInvalid", email, err)
 		}
 	}
 	// The name is the address's login, never a person's name.
 	for _, name := range []string{"", "Personal Fixture Name", "beta"} {
-		if err := s.PinOperatorAuthor(tctx(t), id, name, fixtureEmail); !errors.Is(err, ErrInvalid) {
+		if _, err := s.PinOperatorAuthor(tctx(t), id, name, fixtureEmail); !errors.Is(err, ErrInvalid) {
 			t.Errorf("name %q, not the address's login: err = %v, want ErrInvalid", name, err)
 		}
 	}
@@ -97,13 +97,32 @@ func TestGH008OnlyANoreplyAddressIsPinned(t *testing.T) {
 
 func TestGH008AnUnknownOrRevokedInstallationPinsNothing(t *testing.T) {
 	s, id := newInstallation(t)
-	if err := s.PinOperatorAuthor(tctx(t), "0123456789abcdef0123456789abcdef", fixtureName, fixtureEmail); !errors.Is(err, ErrNotFound) {
+	if _, err := s.PinOperatorAuthor(tctx(t), "0123456789abcdef0123456789abcdef", fixtureName, fixtureEmail); !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown installation: err = %v, want ErrNotFound", err)
 	}
 	if err := s.SetInstallationStatus(tctx(t), id, StatusRevoked, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PinOperatorAuthor(tctx(t), id, fixtureName, fixtureEmail); !errors.Is(err, ErrRevoked) {
+	if _, err := s.PinOperatorAuthor(tctx(t), id, fixtureName, fixtureEmail); !errors.Is(err, ErrRevoked) {
 		t.Errorf("revoked installation: err = %v, want ErrRevoked", err)
+	}
+}
+
+// GH-011 (PROPOSED for doc 07) — a report says whether it pinned the pair
+// now or found that same pair already pinned, so the operator's machine can
+// print which (#545). A different pair is still ErrAuthorPinned.
+func TestGH011APinSaysWhetherItIsNewOrAlreadyHeld(t *testing.T) {
+	s, id := newInstallation(t)
+	created, err := s.PinOperatorAuthor(tctx(t), id, fixtureName, fixtureEmail)
+	if err != nil || !created {
+		t.Fatalf("first report: created=%v err=%v, want created", created, err)
+	}
+	created, err = s.PinOperatorAuthor(tctx(t), id, fixtureName, fixtureEmail)
+	if err != nil || created {
+		t.Fatalf("the same report again: created=%v err=%v, want already held", created, err)
+	}
+	created, err = s.PinOperatorAuthor(tctx(t), id, "beta", "67890+beta@users.noreply.github.com")
+	if !errors.Is(err, ErrAuthorPinned) || created {
+		t.Fatalf("a different report: created=%v err=%v, want ErrAuthorPinned", created, err)
 	}
 }

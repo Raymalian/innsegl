@@ -29,14 +29,17 @@ GET  /api/v1/repos                    POST /api/v1/auth/logout
                                       POST /api/v1/alert-resolutions/begin|finish
 ```
 
-`innsegl accounts` verbs (each takes `-dsn`, default `$INNSEGL_API_AUTH_DSN`):
+`innsegl accounts` verbs (each takes `-dsn`, default `$INNSEGL_API_AUTH_DSN`,
+which is set in the `innsegl-api` container: run them as
+`docker exec innsegl-api innsegl accounts <verb> …`; without it the error
+says so). Listings print a header line first.
 
 | Verb | Arguments | Does |
 |---|---|---|
-| `list` | | every account: id, name, owners, repositories |
+| `list` | | every account: `ID NAME OPERATOR OWNERS REPOS` |
 | `new` | `--name NAME` | create an account; prints its id |
 | `enrol-token` | `--account ID --by USER --repos a,b\|* [--kind workstation\|service]` | a 15-minute single-use token for `innsegl connect` |
-| `installations` | `--account ID` | list an account's installations; the last column is each one's pinned operator author, `-` for none |
+| `installations` | `[--account ID]` | every account's installations, or one account's: `ACCOUNT ID STATUS KIND NAME REPOS OPERATOR-AUTHOR`; the last column is the pinned operator author, `-` for none |
 | `revoke-installation` | `ID` | revoke one installation, for good |
 | `author-reset` | `ID` | clear one installation's pinned operator author ([commit-path.md](commit-path.md)) |
 | `grant-repo` | `--account ID REPO` | give an account a repository |

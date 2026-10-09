@@ -8,6 +8,10 @@ witnesses, instead of trusting a harness's own hooks (ADR-0057). It also
 registers and ends runs from that traffic (ADR-0058) and serves the commit
 path. It runs inside the one innsegl process (ADR-0060).
 
+The gateway and the commit hook are how agents are recorded and how their
+commits are signed. The MCP wire surface is deprecated (ADR-0077): it is
+still served, and removed at the next major release.
+
 ## Commands
 
 There is no `gateway` entry in the command table. It runs as a companion:
@@ -92,6 +96,7 @@ As a companion of `serve`, a failure here ends the process with `serve`'s codes.
 - [ADR-0063](../docs/adr/0063-the-core-runs-on-its-own-host-and-every-client-machine-holds-its-own-enrolled-certificate.md) hosted mode
 - [ADR-0066](../docs/adr/0066-one-name-one-certificate.md) one name, one certificate
 - [ADR-0069](../docs/adr/0069-claude-code-reaches-the-client-as-its-https-proxy.md) the client as proxy
+- [ADR-0077](../docs/adr/0077-the-mcp-wire-surface-is-deprecated.md) the MCP wire surface is deprecated
 
 ## Runbooks
 

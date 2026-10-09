@@ -70,6 +70,8 @@ is a no-op.
 
 ### Building and testing
 
+Build with the Go version `go.mod` pins (`go 1.27.1`); CI reads the same line.
+
 ```bash
 go build ./...
 go vet ./...
@@ -77,6 +79,12 @@ go test ./... -race
 golangci-lint run
 go test ./... -coverprofile=cover.out && go tool cover -func=cover.out
 ```
+
+`go test ./...` reaches `test/failure` and `test/smoke`, which re-point the
+transparency log and end with `docker compose down -v`. Both are correct on a
+clean host and refuse to run while a deployment is up. `make test` runs the
+suite through `scripts/test-suite.sh`, which decides what the whole suite is
+on this host.
 
 Dashboard, from `web/`:
 

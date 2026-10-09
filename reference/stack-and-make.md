@@ -42,7 +42,7 @@ Every target with a `##` help line:
 | `make rekor-reindex` | backfill the log's search index from the whole log |
 | `make innsegl-verify` | ask Postgres and the object store what the credentials can do |
 | `make innsegl-canary` | SEG-005: the object store refuses to delete a segment |
-| `make innsegl-demo` | register an identity, sign a commit under it, retire it |
+| `make innsegl-demo` | register an identity, sign a commit under it, retire it, over the deprecated MCP wire (ADR-0077) |
 | `make innsegl-retire` | end a run an operator knows is over, on the core: `RUN=<run_id>` |
 | `make innsegl-init` | run `innsegl init` as a one-shot workload: `REPO=<path> ARGS='...'` |
 | `make innsegl-verify-commit` | verify a commit with no route to the ledger: `COMMIT=<sha>` |
@@ -62,6 +62,7 @@ Every target with a `##` help line:
 | `make ca-custody-ready` | is the store unlocked |
 | `make ca-custody-stage` | mint the store's root and print it |
 | `make ca-custody-restore` | restore custody from a backup |
+| `make ca-custody-reset` | remove a CA key store nothing depends on, so `make update` provisions a fresh one (`CONFIRM=reset`) |
 | `make ca-custody-switch` | Fulcio onto the store |
 | `make ca-custody-back` | Fulcio onto the file CA |
 

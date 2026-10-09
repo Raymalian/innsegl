@@ -130,6 +130,19 @@ func (a Authors) OperatorFor(commonDir string) (name, email string, ok bool) {
 	return name, email, true
 }
 
+// TypedOperator returns the typed operator identity (the optional override),
+// ok false when none is set or it no longer parses.
+func (a Authors) TypedOperator() (name, email string, ok bool) {
+	if a.Operator == "" {
+		return "", "", false
+	}
+	name, email, err := parseAuthorIdentity(a.Operator)
+	if err != nil {
+		return "", "", false
+	}
+	return name, email, true
+}
+
 // parseAuthorIdentity reads `Name <address>` with internal/signing's own
 // parser — the syntax the core's pinned operator pairs are written in — and
 // refuses what the hook could not quote.

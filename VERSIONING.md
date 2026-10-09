@@ -20,7 +20,9 @@ and only with a migration attestation.
    `get_credential`, `record_event`, `sign_commit`, `retire_agent`,
    `describe_workspace`, `observe_tool_call`, `observe_session`, and the
    `error_class` values they return. Adding a tool is not a change to this
-   surface; renaming or removing one is.
+   surface; renaming or removing one is. All eight are deprecated
+   (ADR-0077): they stay bound, unchanged, until the next major release
+   removes them by the procedure below.
 5. **The project namespace**: the `innsegl` MCP server name, the package
    names, and the CLI binary name. The canonical names are enumerated in
    exactly one place — `namespace/canonical-names.txt` — together with where

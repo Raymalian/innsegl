@@ -53,8 +53,10 @@ identity on the same workload's labels, outside the agent subtree, must be
 issued first, so the refusal cannot pass because the stack issues nothing.
 Exit status is the verdict.
 
-A run's credential has one path: the MCP's `get_credential`, which mints
-through the admin API and writes a ledger event.
+A run's credential has one path: `get_credential`'s engine in the core, which
+mints through the admin API and writes a ledger event. The commit path calls it
+in process when it signs; the MCP tool of the same name is the deprecated wire
+binding in front of it (ADR-0077).
 
 ## Tear it down
 
@@ -89,8 +91,9 @@ under a shared name.
   networks and volumes they attach to; see the membership rules written at each
   declaration in `../spire.yml`.
 - **Per-run registration entries.** Doc 01 §1: one entry per run, short TTL,
-  created at registration and deleted at retirement — by the MCP, over the admin
-  API. That lifecycle is `internal/spire` (RM-015, #23); `register.sh` creates
+  created at registration and deleted at retirement — by the core
+  (`innsegl serve`: the gateway, the reaper and `innsegl retire`), over the
+  admin API. That lifecycle is `internal/spire` (RM-015, #23); `register.sh` creates
   infrastructure entries only and must not grow a path that creates a run entry.
 - ~~**Admin scoping to the `/agent/` subtree.**~~ Landed with RM-015 (#23):
   `authz-policy.rego` plus `authz-policy-data.json`, wired at

@@ -12,16 +12,20 @@ resulting ledger.
 
 ## Quickstart
 
-On the host that runs the core:
+On the host that runs the core you need Docker with compose v2, git, make,
+python3, curl, and the Go toolchain `go.mod` names (`go 1.27.1`):
 
 ```sh
 git clone https://github.com/Raymalian/innsegl.git
 cd innsegl
+make build
 ./install.sh ~/path/to/project
 ```
 
-That checks the prerequisites, brings the stack up, builds the binary, and
-installs the commit hook in `~/path/to/project`.
+`install.sh` checks the prerequisites, the binary `make build` wrote among
+them, and refuses before changing anything if one is missing. Then it brings
+the stack up, rebuilds the binary, and installs the commit hook in
+`~/path/to/project`.
 The core mounts no project folder: it reads each repository from its own
 mirror, which a connected machine pushes to.
 It prints the dashboard's address and, while no account exists, a one-time
@@ -71,6 +75,29 @@ already in place. Writing the system path needs an administrator; when it
 is not writable, `connect` prints the one command to run, before it spends
 the token.
 
+## How an agent is recorded
+
+Nothing in the agent is configured to talk to innsegl. The client service is
+the harness's HTTPS proxy, so the core's gateway sees every model request: it
+registers the agent's run, records what the run does, and ends the run, all
+from that traffic (ADR-0057, ADR-0058). The commit hook adds the run's
+trailers to an agent's `git commit` and has the core sign it (ADR-0059).
+
+innsegl also serves eight MCP tools. No shipped client calls them, and that
+wire surface is deprecated (ADR-0077): the tools still work, and they are
+removed at the next major release.
+
+Agent commits are authored as an unlinked agent address by default. To author
+them as yourself in one repository, run `innsegl author repo <path> operator`
+on the machine; [`runbooks/commit-author.md`](runbooks/commit-author.md) has
+the whole procedure.
+
+To end a run you know is over, on the core host:
+
+```sh
+make innsegl-retire RUN=<run_id>
+```
+
 ## When the core is down
 
 Claude Code keeps working. When the core does not answer, the client sends
@@ -119,3 +146,6 @@ An install from before the gateway wired six hooks into
 [`deploy/compose/README.md`](deploy/compose/README.md) is the full
 reference: what the stack is made of, how to boot it by hand, the
 `make smoke` first-run contract, and what it deliberately does not expose.
+[`reference/`](reference/README.md) has one page per part of innsegl, every
+command and make target, and [`runbooks/`](runbooks/README.md) the operator
+procedures.
