@@ -2,6 +2,12 @@ module innsegl.dev/innsegl
 
 go 1.27
 
+// The exact toolchain CI and every host build with. Unpinned, CI took a new
+// patch release the pinned golangci-lint could not read ("could not import
+// errors"), and coverage counted statements differently, on code that had
+// not changed. A toolchain bump is a deliberate commit, not a runner update.
+toolchain go1.27.1
+
 require (
 	filippo.io/age v1.3.2
 	github.com/fxamacker/cbor/v2 v2.9.4
