@@ -126,7 +126,7 @@ func TestTheHostTakesABundleOrBuildsAndTheStartNeverBuilds(t *testing.T) {
 	if !strings.Contains(images, "$(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh") {
 		t.Error("innsegl-images does not hand the bundle script the expected commits")
 	}
-	up := regexp.MustCompile(`(?m)\$\(INNSEGL_COMPOSE\) up -d[^\n]*$`).FindString(here)
+	up := regexp.MustCompile(`(?m)\$\(INNSEGL_COMPOSE_UP\) up -d[^\n]*$`).FindString(here)
 	if up == "" || !strings.Contains(up, "--no-build") {
 		t.Errorf("the start may build an image the bundle did not supply: %q", up)
 	}

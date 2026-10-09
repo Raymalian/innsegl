@@ -214,9 +214,9 @@ func TestTheUpdateRemovesTheContainersOfRemovedServices(t *testing.T) {
 	if m == nil {
 		t.Fatal("the Makefile has no innsegl-here-services target")
 	}
-	up := regexp.MustCompile(`\$\(INNSEGL_COMPOSE\) up -d[^\n]*`).FindString(m[1])
+	up := regexp.MustCompile(`\$\(INNSEGL_COMPOSE_UP\) up -d[^\n]*`).FindString(m[1])
 	if up == "" {
-		t.Fatal("innsegl-here-services runs no `$(INNSEGL_COMPOSE) up -d`")
+		t.Fatal("innsegl-here-services runs no `$(INNSEGL_COMPOSE_UP) up -d`")
 	}
 	if !strings.Contains(up, "--remove-orphans") {
 		t.Errorf("innsegl-here-services runs %q without --remove-orphans; an old innsegl-dashboard "+

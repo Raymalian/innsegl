@@ -242,9 +242,9 @@ func TestOPS129LiveIsUnchanged(t *testing.T) {
 			}
 			out := makeDryRun(t, mode, "sigstore-up", "innsegl-here-services")
 			for _, want := range []string{
-				"docker compose -f deploy/compose/spire.yml up -d",
-				"docker compose -f deploy/compose/sigstore.yml up -d",
-				"docker compose -f deploy/compose/innsegl.yml up -d --remove-orphans --no-build",
+				"scripts/compose-up.py -f deploy/compose/spire.yml up -d",
+				"scripts/compose-up.py -f deploy/compose/sigstore.yml up -d",
+				"scripts/compose-up.py -f deploy/compose/innsegl.yml up -d --remove-orphans --no-build",
 				"INNSEGL_TRUST_FULCIO_PKI_VOLUME=innsegl-trust-fulcio-pki",
 				"INNSEGL_TRUST_LEDGER_VOLUME=innsegl-trust-ledger-data",
 			} {
