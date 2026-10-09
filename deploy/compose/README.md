@@ -130,8 +130,8 @@ and every line of it matters:
 ```sh
 curl -s http://127.0.0.1:28443/keys                  # a JWKS with a key in it
 curl -s http://127.0.0.1:5555/api/v1/rootCert       # a PEM CA certificate
-curl -s http://127.0.0.1:3000/api/v1/log/publicKey  # a PKIX public key
-curl -s http://127.0.0.1:28081/readyz               # the MCP's own readiness
+curl -s http://127.0.0.1:23000/api/v1/log/publicKey # a PKIX public key ($INNSEGL_REKOR_PORT if set)
+curl -s http://127.0.0.1:28081/readyz               # the core's own readiness
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/  # the dashboard
 curl -s http://127.0.0.1:8082/api/v1/health         # its backend, and what its
                                                     # credential may do
@@ -173,8 +173,9 @@ test catalogue, which does four things in order:
    its own Postgres and its own `innsegl serve` with plain `docker run`; that
    is the gap named under "What the reference stack still does not contain",
    and closing it is a change to a compatibility surface rather than a tidy-up.
-2. **Runs the demo agent.** An MCP client, over the real HTTP transport,
-   calling the five tools by their published names: `register_agent`,
+2. **Runs the demo agent.** An MCP client, over the real HTTP transport of
+   the deprecated MCP wire surface (ADR-0077), calling the five tools by their
+   published names: `register_agent`,
    `get_credential`, `sign_commit`, `retire_agent`, and a refusal check that
    retirement really is immediate. The commit it produces is signed by the
    Fulcio you just booted and logged in the Rekor you just booted.
@@ -408,16 +409,18 @@ for a hosted shape, set in `deploy/compose/.env` or the shell:
 
 | variable | effect |
 |---|---|
-| `INNSEGL_BIND` | host address the gateway (8095) and dashboard are published on. Unset means `127.0.0.1`. Example: `192.0.2.10` |
+| `INNSEGL_BIND` | host address the gateway (host port 28095) and dashboard are published on. Unset means `127.0.0.1`. Example: `192.0.2.10` |
 | `INNSEGL_GATEWAY_CLIENT_AUTH` | `spiffe` requires a client SVID on the gateway. Required whenever `INNSEGL_BIND` is not loopback |
 | `INNSEGL_GATEWAY_CERT_NAMES` | extra DNS names for the gateway certificate, e.g. `<core-name>` |
 | `INNSEGL_GATEWAY_ACCOUNTS_DSN` | set by the compose file to the auth-writer DSN; not an operator setting |
 
-`innsegl gateway` refuses to start when `INNSEGL_BIND` is not loopback and
-`INNSEGL_GATEWAY_CLIENT_AUTH` is not `spiffe`. Nothing else moves: the tool
-surface, admin port, Rekor, Fulcio and SPIRE stay on loopback. The dashboard
-and query API still have no authentication (see below), so put your own
-authenticating proxy in front before binding the dashboard off loopback.
+The gateway (`innsegl serve -also gateway`) refuses to start when
+`INNSEGL_BIND` is not loopback and `INNSEGL_GATEWAY_CLIENT_AUTH` is not
+`spiffe`. Nothing else moves: the MCP listener (deprecated, ADR-0077), the
+admin port, Rekor, Fulcio and SPIRE stay on loopback. The dashboard and query
+API require a passkey session (ADR-0062) but have no second, independent door
+(see below), so put your own authenticating proxy in front before binding the
+dashboard off loopback.
 
 ---
 
@@ -479,6 +482,13 @@ registers an identity, gets a JWT-SVID, stages a commit in the deployment's
 workspace, has it signed by the Fulcio you booted and logged in the Rekor you
 booted, retires the run, and then proves the retired run cannot spend a
 credential. It prints the commit SHA.
+
+The demo drives the MCP wire surface, which is deprecated (ADR-0077): the
+tools still work and are removed, with the demo profile, at the next major
+release. A real agent is not an MCP client. Its run is registered, recorded
+and retired by the gateway from its own model traffic, and its commits are
+signed through the commit hook (`innsegl connect` and `innsegl link`; see
+[`../../README.md`](../../README.md)).
 
 Then verify that commit **with no route to the ledger**:
 

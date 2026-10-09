@@ -3,9 +3,12 @@
 ## Purpose
 
 Every agent run gets a short-lived SPIFFE identity from SPIRE, issued only
-through the MCP server (ADR-0053). The gateway registers a run from its own
-traffic and the reaper or an operator ends it (ADR-0058). The identity
-lifecycle listener admits only a repository-scoped admin credential.
+by the core, `innsegl serve`, the one process that holds SPIRE admin
+(ADR-0053). The gateway registers a run from its own traffic and the reaper
+or an operator ends it (ADR-0058); both call the identity engine in process.
+The MCP tools in front of that engine are deprecated (ADR-0077). While they
+are served, the identity lifecycle listener admits only a repository-scoped
+admin credential.
 
 ## Commands
 
@@ -72,7 +75,7 @@ the one-time code for the first passkey (see [dashboard-api.md](dashboard-api.md
 | `-oidc-issuer` | `INNSEGL_SPIRE_JWT_ISSUER` | the issuer SPIRE stamps and Fulcio believes |
 | `-fulcio-url`, `-rekor-url` | `INNSEGL_FULCIO_URL`, `INNSEGL_REKOR_URL` | probed by `/readyz` |
 | `-gitsign` | `INNSEGL_GITSIGN` | gitsign binary; empty is a PATH lookup |
-| `-workspace` | `INNSEGL_WORKSPACE` | root `sign_commit` signs in |
+| `-workspace` | `INNSEGL_WORKSPACE` | root the `sign_commit` tool signs in; empty leaves the tool unconfigured. The commit path signs without it |
 | `-observe-body-dir` | `INNSEGL_MCP_LOG_DIR` | where tool-call bodies are kept |
 | `-sign-author-name`, `-sign-author-email`, `-sign-author-operators`, `-sign-author-allow-unlinked` | `INNSEGL_SIGN_AUTHOR_*` | commit author and the I6 gate |
 | `-idempotency-lease` | `INNSEGL_IDEMPOTENCY_LEASE` | [`1m`] |

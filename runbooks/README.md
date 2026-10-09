@@ -12,7 +12,7 @@ around.
 
 | | |
 |---|---|
-| [`orchestrated-run.md`](orchestrated-run.md) | Putting one agent's work through Innsegl end to end: the four MCP calls an orchestrator makes, checked from outside with no route to the ledger. Written from a run on 2026-09-05, with its real output. |
+| [`orchestrated-run.md`](orchestrated-run.md) | Putting one agent's work through Innsegl end to end: the four MCP calls an orchestrator makes, checked from outside with no route to the ledger. The MCP wire is deprecated (ADR-0077); a connected agent goes through the gateway and the commit hook instead. Written from a run on 2026-09-05, with its real output. |
 | [`index-rebuild.md`](index-rebuild.md) | Rebuilding the Postgres hot tier from a backup, and adjudicating the result against the sealed segments and their Rekor anchors. Doc 05 §2's required deliverable. |
 | [`backup-ledger.md`](backup-ledger.md) | Taking that backup in the first place, checked against the sealed segments before it is called good rather than only when it is restored. Issue #160 (RM-099)'s deliverable. |
 | [`spire-admin-access.md`](spire-admin-access.md) | Reaching the SPIRE admin API for `innsegl init`: three ways, each measured, with a recommendation. RM-097 (#156)'s deliverable. |
