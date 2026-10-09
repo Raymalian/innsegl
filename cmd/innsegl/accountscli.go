@@ -31,6 +31,10 @@ type accountsStore interface {
 	CreateEnrolmentToken(ctx context.Context, p accounts.TokenParams) (string, accounts.TokenMeta, error)
 	ListInstallations(ctx context.Context, accountID string) ([]accounts.Installation, error)
 	SetInstallationStatus(ctx context.Context, id, status, actor string) error
+	// OperatorAuthor and ResetOperatorAuthor read and clear an installation's
+	// pinned operator author; its machine's next report pins again (#545).
+	OperatorAuthor(ctx context.Context, id string) (name, email string, ok bool, err error)
+	ResetOperatorAuthor(ctx context.Context, id, actor string) error
 	GrantRepo(ctx context.Context, accountID, repo, actor string) error
 	ListAccounts(ctx context.Context) ([]accounts.AccountSummary, error)
 	// RecoveryCodes replaces an existing user's recovery codes and returns
@@ -88,8 +92,9 @@ func accountsUsage(w io.Writer) {
 	fprintf(w, "  new                  --name NAME                          create an account; prints its id\n")
 	fprintf(w, "  enrol-token          --account ID --by USER --repos a,b|* [--kind workstation|service]\n")
 	fprintf(w, "                                                            mint a 15-minute single-use token, on stdout\n")
-	fprintf(w, "  installations        --account ID                         list an account's installations\n")
+	fprintf(w, "  installations        --account ID                         list an account's installations, last column its pinned operator author\n")
 	fprintf(w, "  revoke-installation  ID                                   revoke one installation, for good\n")
+	fprintf(w, "  author-reset         ID                                   clear one installation's pinned operator author\n")
 	fprintf(w, "  grant-repo           --account ID REPO                    give an account a repository\n")
 	fprintf(w, "  recovery-codes       --user ID                            replace a user's recovery codes; the new ones on stdout\n\n")
 	fprintf(w, "Every verb takes -dsn (default $%s), the auth-writer connection string.\n", envAuthWriterDSN)
@@ -105,7 +110,8 @@ func runAccountsCommand(args []string, stdout, stderr io.Writer, deps accountsCL
 	case "help", "-h", "--help":
 		accountsUsage(stdout)
 		return exitOK
-	case "new", "enrol-token", "installations", "revoke-installation", "grant-repo", "list", "recovery-codes":
+	case "new", "enrol-token", "installations", "revoke-installation", "grant-repo", "list", "recovery-codes",
+		"author-reset":
 		return accountsVerb(verb, rest, stdout, stderr, deps)
 	default:
 		fprintf(stderr, "innsegl accounts: unknown verb %q\n\n", verb)
@@ -162,7 +168,7 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 		return exitUsage
 	}
 	wantPositional := 0
-	if verb == "revoke-installation" || verb == "grant-repo" {
+	if verb == "revoke-installation" || verb == "grant-repo" || verb == "author-reset" {
 		wantPositional = 1
 	}
 	if len(positional) != wantPositional {
@@ -249,13 +255,27 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 			return fail(err)
 		}
 		for _, i := range list {
-			fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", i.ID, i.Status, i.Kind, i.Name, strings.Join(i.Repos, ","))
+			// The last column is the installation's pinned operator author
+			// (#545), "-" when none is pinned.
+			author := "-"
+			if n, e, ok, aerr := store.OperatorAuthor(ctx, i.ID); aerr != nil {
+				return fail(aerr)
+			} else if ok {
+				author = n + " <" + e + ">"
+			}
+			fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", i.ID, i.Status, i.Kind, i.Name, strings.Join(i.Repos, ","), author)
 		}
 	case "revoke-installation":
 		if err := store.SetInstallationStatus(ctx, positional[0], accounts.StatusRevoked, ""); err != nil {
 			return fail(err)
 		}
 		fprintf(stderr, "%s: %s revoked\n", name, positional[0])
+	case "author-reset":
+		if err := store.ResetOperatorAuthor(ctx, positional[0], ""); err != nil {
+			return fail(err)
+		}
+		fprintf(stderr, "%s: %s has no operator author pinned; its machine's next "+
+			"`innsegl author repo <path> operator` pins one\n", name, positional[0])
 	case "grant-repo":
 		if err := store.GrantRepo(ctx, *account, positional[0], ""); err != nil {
 			return fail(err)

@@ -87,11 +87,12 @@ import (
 // The return is always exitOK: a hook that refused to run would be a second,
 // competing gate on top of the one ADR-0059 decision 7 already places
 // downstream, so every path here — matched or not, well-formed or not —
-// exits clean and lets the harness proceed. stdout carries the only signal
-// this hook ever gives; stderr is unused for the same reason nothing is
-// printed on the fail-open paths: there is nothing for this hook to say that
-// the commit path itself will not say more precisely if it matters.
-func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int { //nolint:unparam // see the comment above: this hook never fails, only advises
+// exits clean and lets the harness proceed. stdout carries the hook's
+// signal. stderr carries one note only: an operator-mode repository with no
+// usable noreply address, whose commit goes ahead as the agent (ENF-013) —
+// the one case the commit path itself would never mention, because nothing
+// downstream is refused.
+func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int {
 	// internal/gateway bounds request bodies the same way; a PreToolUse
 	// payload is never legitimately this large.
 	const maxHookStdinBytes = 8 << 20 // 8 MiB
@@ -158,7 +159,7 @@ func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int { //nolint
 		}
 	}
 	if addIdentity {
-		assignments = append(assignments, authorIdentityAssignments(repo)...)
+		assignments = append(assignments, authorIdentityAssignments(repo, event.Cwd, stderr)...)
 	}
 	// Nothing above is fatal to this branch: an unresolved binary path or an
 	// unsafe one just leaves the command without its `-c` options and the
@@ -289,11 +290,19 @@ func agentIdentityAssignments() []string {
 // authorIdentityAssignments is the agent identity, unless the operator set
 // this repository to author agent commits as the operator (ENF-010,
 // internal/client/authors.go). Then it is the operator's identity, which I6
-// allows; the trailers and the signature still name the agent. The values are
-// single-quoted: client.Authors stores no identity holding a quote or a
-// control character, so nothing inside needs escaping. Anything unreadable
-// leaves the agent identity, the default.
-func authorIdentityAssignments(repo string) []string {
+// allows; the trailers and the signature still name the agent.
+//
+// The operator's identity is read from the repository itself (ENF-013): its
+// git user.email, when that is a GitHub noreply address, with the address's
+// login as the name. Nothing is typed, and user.name is never read. A typed
+// identity (`innsegl author operator`) overrides it. A repository with no
+// usable address keeps the agent identity and says so on stderr; the commit
+// is never blocked for it.
+//
+// The values are single-quoted: a noreply login and address hold no quote,
+// and client.Authors stores no typed identity holding a quote or a control
+// character, so nothing inside needs escaping.
+func authorIdentityAssignments(repo, cwd string, stderr io.Writer) []string {
 	if repo == "" {
 		return agentIdentityAssignments()
 	}
@@ -302,12 +311,17 @@ func authorIdentityAssignments(repo string) []string {
 		return agentIdentityAssignments()
 	}
 	authors, err := client.ReadAuthors(client.ClientPaths(home))
-	if err != nil {
+	if err != nil || !authors.IsOperator(repo) {
 		return agentIdentityAssignments()
 	}
 	name, email, ok := authors.OperatorFor(repo)
 	if !ok {
-		return agentIdentityAssignments()
+		name, email, err = client.NoreplyIdentity(context.Background(), cwd)
+		if err != nil {
+			fprintf(stderr, "innsegl hook: this repository is in operator mode, but %v; "+
+				"this commit is authored as the agent\n", err)
+			return agentIdentityAssignments()
+		}
 	}
 	quoted := func(s string) string { return "'" + s + "'" }
 	return []string{

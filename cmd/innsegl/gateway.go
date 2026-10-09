@@ -1074,6 +1074,8 @@ func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (
 	custody := caCustodyHandler(os.Getenv(envCACustodianURL), h.writer, newCustodyLimiter(nil), log)
 	mux.Handle(coreCACustodyPath, custody)
 	mux.Handle(coreCACustodyPath+"/", custody)
+	// #545: the operator author a machine reports, pinned on first use.
+	mux.Handle(coreOperatorAuthorPath, operatorAuthorHandler(h.writer, log))
 
 	outer := http.NewServeMux()
 	outer.Handle(coreEnrolPath, enrolHandler(h.writer, h.authority, log))
@@ -1459,6 +1461,9 @@ func openIdentityStack(
 		Resolver: toolCallRecorder,
 		ClaimFor: mcp.CommitClaimForRun,
 		Mirror:   commitMirror(hosted),
+		// #545: each installation's pinned operator author, admitted by
+		// gate 3 for that installation's commits.
+		OperatorAuthors: operatorAuthors(hosted),
 	})
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("configure the commit-sign path: %w", err)

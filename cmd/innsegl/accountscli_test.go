@@ -30,6 +30,7 @@ type stubAccountsStore struct {
 	tokenExpiresAt time.Time
 	recoveryFor    []string
 	recoveryCodes  []string
+	authorResets   [][2]string
 }
 
 func (s *stubAccountsStore) RecoveryCodes(_ context.Context, userID string) ([]string, error) {
@@ -55,6 +56,37 @@ func (s *stubAccountsStore) ListInstallations(_ context.Context, account string)
 func (s *stubAccountsStore) SetInstallationStatus(_ context.Context, id, status, actor string) error {
 	s.statuses = append(s.statuses, [3]string{id, status, actor})
 	return s.err
+}
+
+func (s *stubAccountsStore) OperatorAuthor(_ context.Context, id string) (string, string, bool, error) {
+	if id == "i1" {
+		return "alpha", "12345+alpha@users.noreply.github.com", true, nil
+	}
+	return "", "", false, nil
+}
+
+func (s *stubAccountsStore) ResetOperatorAuthor(_ context.Context, id, actor string) error {
+	s.authorResets = append(s.authorResets, [2]string{id, actor})
+	return s.err
+}
+
+// GH-008's reset: the one way a pinned operator author changes, run on the
+// core host (#545).
+func TestGH008AccountsCLIAuthorResetTakesAPositionalID(t *testing.T) {
+	s := &stubAccountsStore{}
+	if code, _, stderr := runAccounts(s, "author-reset", "-dsn", "x", "abc123"); code != exitOK {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if len(s.authorResets) != 1 || s.authorResets[0] != [2]string{"abc123", ""} {
+		t.Fatalf("resets = %v", s.authorResets)
+	}
+	if code, _, _ := runAccounts(s, "author-reset", "-dsn", "x"); code != exitUsage {
+		t.Errorf("no id: exit %d, want usage", code)
+	}
+	s.err = accounts.ErrNotFound
+	if code, _, _ := runAccounts(s, "author-reset", "-dsn", "x", "nope"); code == exitOK {
+		t.Error("an unknown installation: exit 0")
+	}
 }
 
 func (s *stubAccountsStore) ListAccounts(context.Context) ([]accounts.AccountSummary, error) {
@@ -186,8 +218,12 @@ func TestAccountsCLIInstallationsListsOnePerLine(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "i1\tactive\tworkstation\tlaptop\t*") ||
-		!strings.HasSuffix(lines[1], "github.com/a/b,github.com/a/c") {
+		!strings.HasSuffix(lines[1], "github.com/a/b,github.com/a/c\t-") {
 		t.Fatalf("stdout = %q", stdout)
+	}
+	// GH-008: the pinned operator author is the last column, "-" for none.
+	if !strings.HasSuffix(lines[0], "\talpha <12345+alpha@users.noreply.github.com>") {
+		t.Fatalf("the pinned operator author is not listed: %q", lines[0])
 	}
 	if s.listed[0] != "acct-1" {
 		t.Fatalf("listed %v", s.listed)

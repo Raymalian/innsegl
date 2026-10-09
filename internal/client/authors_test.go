@@ -87,9 +87,18 @@ func TestENF011RefusesAnIdentityTheHookCannotQuote(t *testing.T) {
 	}
 }
 
-func TestENF011OperatorModeNeedsAnOperatorIdentity(t *testing.T) {
-	if _, err := (Authors{}).SetRepo("/r/.git", AuthorOperator); !errors.Is(err, ErrAuthorIdentity) {
-		t.Fatalf("SetRepo operator with no identity = %v, want %v", err, ErrAuthorIdentity)
+// Operator mode needs no typed identity (#545): the hook reads the
+// repository's own noreply address (ENF-013). The override stays optional.
+func TestENF011OperatorModeNeedsNoTypedIdentity(t *testing.T) {
+	a, err := (Authors{}).SetRepo("/r/.git", AuthorOperator)
+	if err != nil {
+		t.Fatalf("SetRepo operator with no typed identity = %v, want nil", err)
+	}
+	if !a.IsOperator("/r/.git") {
+		t.Fatal("the repository is not in operator mode")
+	}
+	if _, _, ok := a.OperatorFor("/r/.git"); ok {
+		t.Fatal("OperatorFor answered a typed identity that was never set")
 	}
 	if _, err := (Authors{}).SetRepo("/r/.git", "someone"); err == nil {
 		t.Fatal("SetRepo accepted a mode that is neither agent nor operator")

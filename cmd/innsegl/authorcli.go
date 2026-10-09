@@ -18,15 +18,20 @@ import (
 
 const authorUsage = `usage:
   innsegl author                                    list the setting
-  innsegl author operator 'Name <address>'           the operator identity, once
   innsegl author repo <path> operator|agent          one repository's mode
+  innsegl author operator 'Name <address>'           optional: a typed identity instead
 
 Agent commits are authored as the unlinked agent address unless a repository is
-set to operator. In operator mode they are authored as the operator identity,
-which I6 allows; the agent stays in the trailers and the signature. The core
-signs such a commit only when its own configuration pins the same pair
-(INNSEGL_SIGN_AUTHOR_OPERATORS). Use a GitHub noreply address.
+set to operator. In operator mode they are authored as that repository's own
+git user.email, which must be a GitHub noreply address, with its login as the
+name; user.name is never used. I6 allows the operator as author; the agent
+stays in the trailers and the signature. Setting operator mode reports the
+address to the core, which pins it for this machine on first use.
 `
+
+// reportOperatorAuthor tells the core this machine's operator author.
+// A variable so a test can stand in for the core.
+var reportOperatorAuthor = client.ReportOperatorAuthor
 
 func authorCommand(args []string, stdout, stderr io.Writer) int {
 	home, err := os.UserHomeDir()
@@ -67,6 +72,11 @@ func runAuthor(ctx context.Context, args []string, stdout, stderr io.Writer, hom
 			fprintf(stderr, "innsegl author: %s is not a git repository: %v\n", args[1], gerr)
 			return exitUsage
 		}
+		if args[2] == client.AuthorOperator && authors.Operator == "" {
+			if code := pinOperatorAuthor(ctx, paths, args[1], stderr); code != exitOK {
+				return code
+			}
+		}
 		authors, err = authors.SetRepo(commonDir, args[2])
 	default:
 		fprintf(stderr, "%s", authorUsage)
@@ -83,11 +93,30 @@ func runAuthor(ctx context.Context, args []string, stdout, stderr io.Writer, hom
 	return listAuthors(stdout, authors)
 }
 
+// pinOperatorAuthor reads the repository's noreply address and reports it to
+// the core, which pins it for this machine on first use. Operator mode is set
+// only once the core holds it: a commit authored as an address the core has
+// not pinned would be refused at signing.
+func pinOperatorAuthor(ctx context.Context, paths client.Paths, repo string, stderr io.Writer) int {
+	name, email, err := client.NoreplyIdentity(ctx, repo)
+	if err != nil {
+		fprintf(stderr, "innsegl author: %v. Set it in that repository: "+
+			"git config user.email <id>+<login>@users.noreply.github.com\n", err)
+		return exitUsage
+	}
+	if err := reportOperatorAuthor(ctx, paths, name, email); err != nil {
+		fprintf(stderr, "innsegl author: the core did not pin this machine's operator author, "+
+			"so the repository stays in agent mode: %v\n", err)
+		return exitConnectFailed
+	}
+	return exitOK
+}
+
 func listAuthors(stdout io.Writer, a client.Authors) int {
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	operator := a.Operator
 	if operator == "" {
-		operator = "(not set)"
+		operator = "each repository's own noreply user.email"
 	}
 	fprintf(tw, "operator identity\t%s\n", operator)
 	repos := make([]string, 0, len(a.Repos))

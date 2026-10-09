@@ -63,6 +63,9 @@ type signPayloadState struct {
 	// mirror is the hosted core's evidence store (ADR-0065); nil on a
 	// single-host core.
 	mirror CommitMirror
+	// operatorAuthors is each installation's pinned operator author (GH-009);
+	// nil on a single-host core.
+	operatorAuthors OperatorAuthors
 }
 
 // CommitMirror is the hosted core's per-repository mirror (ADR-0065,
@@ -104,6 +107,10 @@ type SignPayloadConfig struct {
 	// Nil on a single-host core; a hosted request then has no objects to
 	// read and is refused.
 	Mirror CommitMirror
+	// OperatorAuthors answers each installation's pinned operator author
+	// (GH-008), admitted by gate 3 for that installation's commits (GH-009).
+	// Nil on a single-host core, which has no installations.
+	OperatorAuthors OperatorAuthors
 }
 
 // ConfigureSignPayload installs SignPayloadConfig and returns a function
@@ -125,7 +132,8 @@ func ConfigureSignPayload(cfg SignPayloadConfig) (func(), error) {
 	if now == nil {
 		now = time.Now
 	}
-	st := &signPayloadState{resolver: cfg.Resolver, claimFor: cfg.ClaimFor, now: now, sign: signWithSigner, mirror: cfg.Mirror}
+	st := &signPayloadState{resolver: cfg.Resolver, claimFor: cfg.ClaimFor, now: now, sign: signWithSigner, mirror: cfg.Mirror,
+		operatorAuthors: cfg.OperatorAuthors}
 
 	return install(&active.signPayload, st), nil
 }
@@ -198,11 +206,15 @@ func SignPayloadForGateway(
 	// — one statement of who may author a commit in this deployment. The name
 	// is asked too: an operator address is admitted only with the display
 	// name pinned to it (GH-006); the unlinked agent address is unaffected.
-	if aerr := svc.signers.Admits(parsed.AuthorName, parsed.AuthorEmail); aerr != nil {
+	// On a hosted core the installation that relayed the call adds its own
+	// pinned operator author (GH-009), and nothing else.
+	if aerr := admitsAuthor(ctx, svc.signers, cfg.operatorAuthors, relayed.Installation,
+		parsed.AuthorName, parsed.AuthorEmail); aerr != nil {
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, runID,
 			"author %q is not admitted (I6): %w", parsed.AuthorEmail, aerr)
 	}
-	if aerr := svc.signers.Admits(parsed.CommitterName, parsed.CommitterEmail); aerr != nil {
+	if aerr := admitsAuthor(ctx, svc.signers, cfg.operatorAuthors, relayed.Installation,
+		parsed.CommitterName, parsed.CommitterEmail); aerr != nil {
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, runID,
 			"committer %q is not admitted (I6): %w", parsed.CommitterEmail, aerr)
 	}
