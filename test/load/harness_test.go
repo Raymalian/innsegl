@@ -388,7 +388,7 @@ func (s *stack) startRekor(ctx context.Context, suffix string) error {
 	}
 	s.rekorBaseURL = "http://127.0.0.1:" + port
 
-	indexSQL, absErr := filepath.Abs(rekorIndexSQL)
+	indexSQL, absErr := renderRekorIndexTemplate(rekorIndexSQL, strings.TrimPrefix(rekorIndexUser, "rekor:"))
 	if absErr != nil {
 		return fmt.Errorf("locate rekor-index.sql: %w", absErr)
 	}
@@ -593,4 +593,26 @@ func freshLockedBucket(t *testing.T, s *stack) string {
 		t.Fatalf("create locked bucket %s: %v", name, err)
 	}
 	return name
+}
+
+// renderRekorIndexTemplate fills deploy/compose/sigstore/rekor-index.sql's
+// password placeholder, as sigstore/bootstrap.sh does with the host's own
+// generated value (ADR-0078), and returns the path of the rendered copy.
+func renderRekorIndexTemplate(template, password string) (string, error) {
+	body, err := os.ReadFile(template)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp("", "rekor-index-*.sql")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(strings.ReplaceAll(string(body), "@REKOR_INDEX_PASSWORD@", password)); err != nil {
+		return "", err
+	}
+	if err := f.Chmod(0o644); err != nil {
+		return "", err
+	}
+	return filepath.Abs(f.Name())
 }

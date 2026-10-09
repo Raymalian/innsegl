@@ -129,6 +129,7 @@ func runCanaryCommand(args []string, stdout, stderr io.Writer, deps canaryDeps) 
 		fs.PrintDefaults()
 	}
 
+	redactCredentialDefaults(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return exitOK
@@ -139,6 +140,15 @@ func runCanaryCommand(args []string, stdout, stderr io.Writer, deps canaryDeps) 
 		fprintf(stderr, "innsegl canary: unexpected argument %q\n", fs.Arg(0))
 		fs.Usage()
 		return exitUsage
+	}
+
+	if *secretKey == "" {
+		v, err := envSecret(os.Getenv, envSecretKey)
+		if err != nil {
+			fprintf(stderr, "innsegl canary: %v\n", err)
+			return exitUsage
+		}
+		*secretKey = v
 	}
 
 	missing := ""

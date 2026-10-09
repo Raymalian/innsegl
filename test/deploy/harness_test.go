@@ -135,6 +135,13 @@ func (c *ledgerContainer) resolverDSN() string {
 
 func startLedger(ctx context.Context, t *testing.T) (*ledgerContainer, error) {
 	t.Helper()
+	return startLedgerOwner(ctx, t, ownerPassword)
+}
+
+// startLedgerOwner is startLedger with the owner's password chosen by the
+// caller, the way POSTGRES_PASSWORD_FILE chooses it on a first start.
+func startLedgerOwner(ctx context.Context, t *testing.T, owner string) (*ledgerContainer, error) {
+	t.Helper()
 	if err := dockertest.Usable(ctx); err != nil {
 		return nil, err
 	}
@@ -151,7 +158,7 @@ func startLedger(ctx context.Context, t *testing.T) (*ledgerContainer, error) {
 		"--name", name,
 		"--publish", "127.0.0.1:"+port+":5432",
 		"--env", "POSTGRES_USER="+ownerRole,
-		"--env", "POSTGRES_PASSWORD="+ownerPassword,
+		"--env", "POSTGRES_PASSWORD="+owner,
 		"--env", "POSTGRES_DB="+ownerDatabase,
 		postgresImage,
 	); err != nil {

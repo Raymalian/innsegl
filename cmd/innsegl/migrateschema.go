@@ -97,6 +97,7 @@ func runMigrateSchemaCommand(args []string, stdout, stderr io.Writer) int {
 		fs.PrintDefaults()
 	}
 
+	redactCredentialDefaults(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return exitOK

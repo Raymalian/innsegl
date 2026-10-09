@@ -20,6 +20,8 @@ core. Every step names where it runs.
 | `spire-upstream-ca` | SPIRE's upstream CA | volume `innsegl-spire_spire-pki-server` |
 | `gateway-ca-key` | the gateway's CA key | volume `innsegl-core_innsegl-gateway-ca-key` |
 | `trust-history` | ADR-0073's history and sentinels | volume `innsegl-trust-history` |
+| `credentials` | the ledger and object store passwords (ADR-0078) | volume `innsegl-trust-credentials` |
+| `sigstore-credentials` | the log database passwords (ADR-0078) | volume `innsegl-trust-sigstore-credentials` |
 
 The ledger is not in it: `runbooks/backup-ledger.md` covers the ledger.
 
@@ -36,7 +38,7 @@ INNSEGL_TRUST_BACKUP_RECIPIENTS=<recipient>
 More than one recipient is a space-separated list. Then `make update`.
 
 **Check:** `docker logs innsegl-trust-backup` prints
-`wrote trust-backup-<time>.tar.age: 8 items`. With no recipient it prints
+`wrote trust-backup-<time>.tar.age: 10 items`. With no recipient it prints
 `NO BUNDLE WRITTEN: … no recipient is configured`, and writes nothing.
 
 **Rollback:** remove the two lines and `make update`. The bundles stay on the
@@ -95,7 +97,13 @@ restore fulcio-pki      innsegl-trust-fulcio-pki
 restore rekor-key       innsegl-trust-rekor-key
 restore trust-history   innsegl-trust-history
 restore identity-secret innsegl-trust-identity-secret
+restore credentials     innsegl-trust-credentials
+restore sigstore-credentials innsegl-trust-sigstore-credentials
 ```
+
+The two credentials volumes go back BEFORE the first bring-up: a restored
+ledger or log database opens only with the passwords it was left with. Their
+files stay root-owned, mode 0400.
 
 Restore `spire-upstream-ca` and `gateway-ca-key` into their volumes the same
 way. Then fix the owners: the files arrive owned by the copying user.

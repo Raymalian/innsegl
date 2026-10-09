@@ -49,6 +49,9 @@ const (
 var expectedTrustItems = []string{
 	"fulcio-pki", "rekor-key", "trillian-db",
 	"identity-secret", "spire-upstream-ca", "gateway-ca-key", "trust-history",
+	// Every service credential, per project (ADR-0078): a restored ledger or
+	// log database opens with the passwords it was left with.
+	"credentials", "sigstore-credentials",
 }
 
 // The files a restore cannot do without, inside their items.
@@ -286,7 +289,11 @@ func trustBackupSources(ctx context.Context, paths, mysqls, values multiFlag, de
 		}
 		cfg := mysql.NewConfig()
 		cfg.Net, cfg.Addr, cfg.DBName = "tcp", hostport, db
-		cfg.User, cfg.Passwd = deps.getenv(envTrustBackupMySQLUser), deps.getenv(envTrustBackupMySQLPassword)
+		pass, perr := envSecret(deps.getenv, envTrustBackupMySQLPassword)
+		if perr != nil {
+			return nil, perr
+		}
+		cfg.User, cfg.Passwd = deps.getenv(envTrustBackupMySQLUser), pass
 		cfg.Timeout = 30 * time.Second
 		dsn := cfg.FormatDSN()
 		export := deps.exportMySQL

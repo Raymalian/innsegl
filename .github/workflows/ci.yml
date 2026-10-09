@@ -341,6 +341,12 @@ jobs:
       # default -- with nothing to do by hand.
       - name: Each host gets its own CA password, and an existing host is moved onto one
         run: ./scripts/sigstore-bootstrap-selftest.sh
+      # OPS-164 (ADR-0078): the shipped generators, in the pinned openssl
+      # image, give each host its own service credentials, keep them, and
+      # render each one for its readers. The move itself is OPS-163, in
+      # test/deploy, against a real Postgres and the pinned MySQL.
+      - name: Each host gets its own service credentials, rendered for their readers
+        run: ./scripts/credentials-selftest.sh
       # OPS-132 (#533): the rotation's pre-flight, order and rollback, with
       # fakes for docker, Fulcio and the core. The real chain is OPS-133 in
       # internal/verify.

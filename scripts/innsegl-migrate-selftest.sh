@@ -855,6 +855,10 @@ unnamed_volumes="$(awk '
   END { if (k != "") print k }
 ' "${COMPOSE_FILE}")"
 for v in ${unnamed_volumes}; do
+  # ADR-0078's per-credential volumes hold no data of their own: they are
+  # rewritten from the trust credentials volume (which is on the list) on
+  # every start.
+  case "${v}" in innsegl-credential-*) continue ;; esac
   if ! printf '%s\n' "${live_table}" | grep -q "^innsegl-core_${v}	"; then
     missing_volumes="${missing_volumes} innsegl-core_${v}"
   fi

@@ -166,7 +166,11 @@ while :; do
   started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   log "starting a backup at ${started}"
   status=0
-  "${BACKUP_SH}" --out "${BACKUP_DIR}" || status=$?
+  # The service's own arguments go through (the object store's endpoint,
+  # bucket, prefix and identity). Before ADR-0078 they were dropped here, and
+  # the backup read the segments as the store's root account, on its old
+  # public default.
+  "${BACKUP_SH}" --out "${BACKUP_DIR}" "$@" || status=$?
 
   case "${status}" in
     0) log "OK — the dump restores and matches every sealed segment it covers"

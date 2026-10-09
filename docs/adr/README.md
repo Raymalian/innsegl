@@ -100,6 +100,7 @@ maintainer ask "why is it like this?"
 | [0075](0075-each-host-has-its-own-ca-password-and-the-ca-rotates-by-script.md) | Each host has its own CA password, and the CA rotates by script | accepted | 2026-10-07 |
 | [0076](0076-the-ca-key-store-is-unlocked-by-the-operators-machine.md) | The CA key store is unlocked by the operator's machine | accepted | 2026-10-07 |
 | [0077](0077-the-mcp-wire-surface-is-deprecated.md) | The MCP wire surface is deprecated | accepted | 2026-10-08 |
+| [0078](0078-every-service-credential-is-generated-per-host-and-read-from-a-file.md) | Every service credential is generated per host and read from a file | accepted | 2026-10-09 |
 
 ## Open items
 

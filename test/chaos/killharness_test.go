@@ -649,7 +649,7 @@ func startK9Rekor(ctx context.Context) (*k9RekorStack, error) {
 		return s, fmt.Errorf("create the rekor network: %w", err)
 	}
 
-	indexSQL, absErr := filepath.Abs(k9RekorIndexSQL)
+	indexSQL, absErr := renderRekorIndexTemplate(k9RekorIndexSQL, strings.TrimPrefix(k9RekorIndexUser, "rekor:"))
 	if absErr != nil {
 		return s, fmt.Errorf("locate rekor-index.sql: %w", absErr)
 	}
@@ -2847,4 +2847,26 @@ func k9FlipDigest(s string) string {
 		}
 	}
 	return s
+}
+
+// renderRekorIndexTemplate fills deploy/compose/sigstore/rekor-index.sql's
+// password placeholder, as sigstore/bootstrap.sh does with the host's own
+// generated value (ADR-0078), and returns the path of the rendered copy.
+func renderRekorIndexTemplate(template, password string) (string, error) {
+	body, err := os.ReadFile(template)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp("", "rekor-index-*.sql")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(strings.ReplaceAll(string(body), "@REKOR_INDEX_PASSWORD@", password)); err != nil {
+		return "", err
+	}
+	if err := f.Chmod(0o644); err != nil {
+		return "", err
+	}
+	return filepath.Abs(f.Name())
 }

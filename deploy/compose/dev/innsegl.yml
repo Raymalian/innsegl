@@ -19,6 +19,8 @@
 name: innsegl-dev-core
 
 services:
+  innsegl-credentials:
+    container_name: innsegl-dev-credentials
   postgres:
     container_name: innsegl-dev-postgres
   innsegl-db-init:
@@ -77,6 +79,10 @@ volumes:
     name: innsegl-dev-trust-identity-secret
   innsegl-trust-history:
     name: innsegl-dev-trust-history
+  innsegl-credentials-store:
+    name: innsegl-dev-trust-credentials
+  trust-backup-sigstore-credentials:
+    name: innsegl-dev-trust-sigstore-credentials
   spire-agent-socket:
     name: innsegl-dev-spire_spire-agent-socket
   trust-backup-spire-pki-server:

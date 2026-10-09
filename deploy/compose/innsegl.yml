@@ -122,27 +122,27 @@ x-openssl-image: &openssl-image
   alpine/openssl:3.5.7@sha256:19f8eb9004a1dbaec323eed6094e9b6bcc1dbf2697ecb5fb8d2fad4e3336a8f7
 
 # ----------------------------------------------------------------------------
-# The ledger's credentials.
+# The ledger's credentials (ADR-0078).
 #
-# NOT A SECRET BOUNDARY, and saying so is the point of writing it here. These
-# values sit in a compose file and end up in `docker inspect`. What protects
-# the ledger in this stack is the network membership below — `innsegl-ledger`
-# is internal and has five members — and, for the MCP specifically, the
-# append-only ROLE, which is a boundary a leaked password does not cross: the
-# credential the MCP holds cannot delete an event no matter who holds it.
+# NO VALUE IN THIS FILE. Every password is generated for this host by
+# innsegl-credentials, kept in the trust volume innsegl-credentials-store, and
+# rendered into one small volume per credential. A service mounts exactly the
+# credentials it uses, so the mount table below is the grant, and
+# test/deploy/credentials_test.go reads it. A connection string carries no
+# password: it names the rendered pgpass with `passfile=`, and pgx reads it.
 #
-# A real deployment overrides both from a secret store. doc 05 §2's production
-# sketch is where that belongs; this is the compose default.
+# Earlier releases gave each of these a default here, which every reader of
+# this repository had. An existing host moves onto its own at the next
+# `make update`: innsegl/db-init.sh, step 1b.
 # ----------------------------------------------------------------------------
 x-ledger-database: &ledger-database innsegl
 x-ledger-owner: &ledger-owner innsegl
-x-ledger-owner-password: &ledger-owner-password ${INNSEGL_LEDGER_OWNER_PASSWORD:-innsegl-compose-owner}
 
 # doc 05 §1's append-only role. The MCP, the reconciler and the sealer connect
 # as this and nothing else connects as it. innsegl/appendonly.sql is what it
 # may do and innsegl/verify-role.sh is what proves it.
 x-appender-role: &appender-role innsegl_appender
-x-appender-password: &appender-password ${INNSEGL_LEDGER_APPENDER_PASSWORD:-innsegl-compose-appender}
+x-appender-dsn: &appender-dsn postgres://innsegl_appender@postgres:5432/innsegl?sslmode=disable&passfile=/run/innsegl/credentials/appender/pgpass
 
 # doc 05 §1's read-only role — FD §7's "no credentials capable of writing
 # anywhere", as a ROLE rather than as the absence of write code. `innsegl-api`
@@ -151,12 +151,12 @@ x-appender-password: &appender-password ${INNSEGL_LEDGER_APPENDER_PASSWORD:-inns
 # and `innsegl api` asks the same question again at every start-up — exit 13
 # WRITABLE if the answer is "write", with no flag to switch the check off.
 #
-# THE PASSWORD IS A SEPARATE VARIABLE FROM THE APPENDER'S, deliberately.
+# ITS OWN CREDENTIAL AND ITS OWN DSN, deliberately, not the appender's.
 # cmd/innsegl/api.go made the same choice for the DSN: "One name for two
 # different roles is a deployment that can hand the dashboard the writer by
 # copying a line."
 x-reader-role: &reader-role innsegl_reader
-x-reader-password: &reader-password ${INNSEGL_LEDGER_READER_PASSWORD:-innsegl-compose-reader}
+x-reader-dsn: &reader-dsn postgres://innsegl_reader@postgres:5432/innsegl?sslmode=disable&passfile=/run/innsegl/credentials/reader/pgpass
 
 # RM-260/RM-261 (ADR-0062) — the sign-in surface's own role. Full CRUD on
 # innsegl_auth (users, passkeys, sessions, auth events, enrolment codes), and
@@ -165,19 +165,19 @@ x-reader-password: &reader-password ${INNSEGL_LEDGER_READER_PASSWORD:-innsegl-co
 # connects as this on a SECOND pool, beside the reader's; nothing else
 # connects as it.
 #
-# ITS OWN VARIABLE, for the reason the reader's is its own: "One name for two
+# ITS OWN CREDENTIAL, for the reason the reader's is its own: "One name for two
 # different roles is a deployment that can hand the dashboard the writer by
 # copying a line."
 x-auth-writer-role: &auth-writer-role innsegl_authwriter
-x-auth-writer-password: &auth-writer-password ${INNSEGL_LEDGER_AUTHWRITER_PASSWORD:-innsegl-compose-authwriter}
+x-auth-writer-dsn: &auth-writer-dsn postgres://innsegl_authwriter@postgres:5432/innsegl?sslmode=disable&passfile=/run/innsegl/credentials/authwriter/pgpass
 
 # RM-330 (ADR-0044's 2026-10-03 amendment) — the alert resolver's own role.
 # It may insert a row into innsegl.alert_resolutions and nothing else
 # (internal/api/resolver.sql). `innsegl api` connects as it on a THIRD pool
 # and resolves alerts from the dashboard, after a fresh passkey ceremony,
-# through it alone. Its own variable, for the reason every role here has one.
+# through it alone. Its own credential, for the reason every role here has one.
 x-resolver-role: &resolver-role innsegl_resolver
-x-resolver-password: &resolver-password ${INNSEGL_LEDGER_RESOLVER_PASSWORD:-innsegl-compose-resolver}
+x-resolver-dsn: &resolver-dsn postgres://innsegl_resolver@postgres:5432/innsegl?sslmode=disable&passfile=/run/innsegl/credentials/resolver/pgpass
 
 # doc 05 §1's BACKUP role (RM-146, #237). The reader's grants over the ledger,
 # plus CREATEDB — and CREATEDB only because the backup proves a dump restores by
@@ -191,11 +191,10 @@ x-resolver-password: &resolver-password ${INNSEGL_LEDGER_RESOLVER_PASSWORD:-inns
 # the ledger, and innsegl/verify-backup-role.sh proves both halves against the
 # server rather than trusting the GRANTs that produced them.
 #
-# ITS OWN VARIABLE, for the reason the reader's is its own: "One name for two
+# ITS OWN CREDENTIAL, for the reason the reader's is its own: "One name for two
 # different roles is a deployment that can hand the dashboard the writer by
 # copying a line."
 x-backup-role: &backup-role innsegl_backup
-x-backup-password: &backup-password ${INNSEGL_LEDGER_BACKUP_PASSWORD:-innsegl-compose-backup}
 
 # THE OBJECT STORE'S ROOT ACCOUNT. It reaches TWO things: the server, and the
 # one-shot that creates the locked bucket. Nothing that stays up holds it, and
@@ -214,8 +213,11 @@ x-backup-password: &backup-password ${INNSEGL_LEDGER_BACKUP_PASSWORD:-innsegl-co
 # environment and attaches a container of its own to any network — so the
 # defensible position is not that the credential cannot be reached, but that
 # the one it finds cannot weaken anything. doc 04 AB-17.
+#
+# THE ACCESS KEY IS A NAME, AND STAYS A SETTING. The secret is generated per
+# host (ADR-0078) and read from the file below.
 x-object-store-user: &object-store-user ${INNSEGL_OBJECT_STORE_ACCESS_KEY:-innsegl}
-x-object-store-password: &object-store-password ${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}
+x-object-store-secret-file: &object-store-secret-file /run/innsegl/credentials/objects-root/secret
 x-object-store-bucket: &object-store-bucket ${INNSEGL_OBJECT_STORE_BUCKET:-innsegl-segments}
 
 
@@ -249,15 +251,13 @@ x-object-store-bucket: &object-store-bucket ${INNSEGL_OBJECT_STORE_BUCKET:-innse
 # writes, by making the rule that governs them unreachable from anything
 # long-running.
 #
-# THE SECRET IS DERIVED WHEN UNSET, NOT REQUIRED, and innsegl/s3-identities.sh
-# derives it the same way from the root secret. An operator upgrading an
-# existing deployment has set $INNSEGL_OBJECT_STORE_SECRET_KEY once and never
-# heard of this issue; a narrowing that needed a new variable before the stack
-# came up would be switched off rather than adopted. Setting
-# $INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY takes over from the derivation, which
-# is what a deployment holding the two in a secret manager wants.
+# BOTH SECRETS ARE GENERATED PER HOST (ADR-0078), each its own credential and
+# never derived from the other. They reach a reader as files, by these paths;
+# no value is in this file. Earlier releases derived the sealer's from the
+# root's public default, so a host that never set either ran on secrets every
+# reader of this repository had.
 x-object-store-sealer-user: &object-store-sealer-user ${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY:-innsegl-sealer}
-x-object-store-sealer-password: &object-store-sealer-password ${INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY:-${INNSEGL_OBJECT_STORE_SECRET_KEY:-innsegl-compose-objects}-sealer}
+x-object-store-sealer-secret-file: &object-store-sealer-secret-file /run/innsegl/credentials/objects-sealer/secret
 
 # THE SEGMENT KEY PREFIX, declared once because THREE things have to agree on
 # it: the sealer writes under it, the scoped identity is granted write access to
@@ -432,6 +432,41 @@ x-innsegl-build: &innsegl-build
 services:
 
   # --------------------------------------------------------------------------
+  # innsegl-credentials — one-shot. Every credential of this project,
+  # generated per host and kept (ADR-0078).
+  #
+  # The shape of innsegl-identity-init and for its reasons: it generates
+  # secrets and writes files, so it reaches nothing (`network_mode: none`).
+  # It is the only container that mounts the trust volume read-write, and it
+  # renders each credential into its own volume for that credential's
+  # readers. innsegl/credentials-init.sh has the layout.
+  # --------------------------------------------------------------------------
+  innsegl-credentials:
+    image: *openssl-image
+    container_name: innsegl-credentials
+    network_mode: none
+    entrypoint: ["/bin/sh"]
+    command: ["/innsegl/credentials-init.sh"]
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./credentials-lib.sh:/innsegl/credentials-lib.sh:ro
+      - ./innsegl/credentials-init.sh:/innsegl/credentials-init.sh:ro
+      - innsegl-credentials-store:/run/innsegl/credentials-store
+      - innsegl-credential-ledger-owner:/run/innsegl/render/ledger-owner
+      - innsegl-credential-appender:/run/innsegl/render/appender
+      - innsegl-credential-reader:/run/innsegl/render/reader
+      - innsegl-credential-authwriter:/run/innsegl/render/authwriter
+      - innsegl-credential-resolver:/run/innsegl/render/resolver
+      - innsegl-credential-backup:/run/innsegl/render/backup
+      - innsegl-credential-objects-root:/run/innsegl/render/objects-root
+      - innsegl-credential-objects-sealer:/run/innsegl/render/objects-sealer
+
+  # --------------------------------------------------------------------------
   # postgres — doc 05 §1's ledger hot tier.
   #
   # IT PUBLISHES NO HOST PORT, AND THAT IS LOAD-BEARING RATHER THAN TIDY.
@@ -458,13 +493,18 @@ services:
       - innsegl-ledger-readonly
     environment:
       POSTGRES_USER: *ledger-owner
-      POSTGRES_PASSWORD: *ledger-owner-password
+      # Read at the first start only, when the data directory is empty.
+      POSTGRES_PASSWORD_FILE: /run/innsegl/credentials/ledger-owner/password
       POSTGRES_DB: *ledger-database
       # The initdb locale, fixed. A collation that varies by host is a text
       # index that sorts differently on two machines reading one volume.
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    depends_on:
+      innsegl-credentials:
+        condition: service_completed_successfully
     volumes:
       - innsegl-ledger-data:/var/lib/postgresql/data
+      - innsegl-credential-ledger-owner:/run/innsegl/credentials/ledger-owner:ro
     # fsync stays ON. LED-009 asserts that an acknowledged append survives a
     # SIGKILL, and a ledger that loses a committed event is not a ledger.
     command: ["-c", "fsync=on"]
@@ -506,20 +546,22 @@ services:
       PGHOST: postgres
       PGPORT: "5432"
       PGUSER: *ledger-owner
-      PGPASSWORD: *ledger-owner-password
+      # Every password, read from the trust credentials volume (ADR-0078).
+      INNSEGL_CREDENTIALS_DIR: /run/innsegl/credentials-store
+      # Read once, by the move in step 1b, on a host whose owner password
+      # the operator set. No default.
+      INNSEGL_LEDGER_OWNER_PASSWORD: ${INNSEGL_LEDGER_OWNER_PASSWORD:-}
       PGDATABASE: *ledger-database
       INNSEGL_APPENDER_ROLE: *appender-role
-      INNSEGL_APPENDER_PASSWORD: *appender-password
       INNSEGL_READER_ROLE: *reader-role
-      INNSEGL_READER_PASSWORD: *reader-password
       INNSEGL_BACKUP_ROLE: *backup-role
-      INNSEGL_BACKUP_PASSWORD: *backup-password
       INNSEGL_AUTHWRITER_ROLE: *auth-writer-role
-      INNSEGL_AUTHWRITER_PASSWORD: *auth-writer-password
       INNSEGL_RESOLVER_ROLE: *resolver-role
-      INNSEGL_RESOLVER_PASSWORD: *resolver-password
     volumes:
       - ./innsegl:/innsegl/init:ro
+      # The trust credentials volume, read-only: this one-shot sets every
+      # ledger password on the server, so it reads them all (ADR-0078).
+      - innsegl-credentials-store:/run/innsegl/credentials-store:ro
       # The SHIPPED migrations, read straight from the repository. Not a copy:
       # a second copy of migrations/*.sql is a schema that can drift from the
       # code that writes to it, which is the whole reason the Go runner embeds
@@ -711,6 +753,13 @@ services:
     container_name: innsegl-s3-identities
     network_mode: none
     restart: "no"
+    # ADR-0078: the store takes the new secrets only after the ledger's move
+    # has committed, so a refused move changes nothing here either.
+    depends_on:
+      innsegl-credentials:
+        condition: service_completed_successfully
+      innsegl-db-init:
+        condition: service_completed_successfully
     entrypoint: ["/bin/sh"]
     command: ["/innsegl/init/s3-identities.sh"]
     environment:
@@ -719,12 +768,15 @@ services:
       # once and keeps it; set, it is used instead.
       INNSEGL_OBJECT_FILER_JWT_KEY: ${INNSEGL_OBJECT_FILER_JWT_KEY:-}
       INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-user
-      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-password
+      INNSEGL_OBJECT_STORE_SECRET_KEY_FILE: /run/innsegl/credentials-store/objects-root
       INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY: *object-store-sealer-user
-      INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY: *object-store-sealer-password
+      INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY_FILE: /run/innsegl/credentials-store/objects-sealer
       INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
       INNSEGL_OBJECT_STORE_PREFIX: *object-store-prefix
     volumes:
+      # ADR-0078: the trust credentials volume, read-only. This one-shot sets
+      # both object-store secrets on the server, so it reads them both.
+      - innsegl-credentials-store:/run/innsegl/credentials-store:ro
       - ./innsegl:/innsegl/init:ro
       # THE ONLY rw MOUNT OF THIS VOLUME ANYWHERE IN THE STACK.
       - innsegl-s3-identities:/run/innsegl/s3
@@ -756,7 +808,7 @@ services:
     environment:
       INNSEGL_OBJECT_STORE_URL: http://innsegl-s3:8333
       INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-user
-      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-password
+      INNSEGL_OBJECT_STORE_SECRET_KEY_FILE: *object-store-secret-file
       INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
       INNSEGL_OBJECT_STORE_PREFIX: *object-store-prefix
       # The scoped identity this one-shot measures. Passed rather than left to
@@ -765,7 +817,7 @@ services:
       # two copies of a derivation rule is a stack that starts and then cannot
       # authenticate.
       INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY: *object-store-sealer-user
-      INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY: *object-store-sealer-password
+      INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY_FILE: *object-store-sealer-secret-file
       # doc 05 §2: "Object lock in compliance mode with a retention window >=
       # the organization's audit horizon". One day is the COMPOSE window — long
       # enough that SEG-005's deletion canary has something real to be refused
@@ -782,6 +834,9 @@ services:
       AWS_REQUEST_CHECKSUM_CALCULATION: when_required
       AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
     volumes:
+      # ADR-0078: the credentials this service uses, and no others.
+      - innsegl-credential-objects-root:/run/innsegl/credentials/objects-root:ro
+      - innsegl-credential-objects-sealer:/run/innsegl/credentials/objects-sealer:ro
       - ./innsegl:/innsegl/init:ro
     entrypoint: ["sh", "/innsegl/init/object-init.sh"]
     security_opt:
@@ -942,7 +997,7 @@ services:
     # would make one of the five rows the silent case.
     command: ["serve"]
     environment:
-      INNSEGL_LEDGER_DSN: postgres://innsegl_appender:${INNSEGL_LEDGER_APPENDER_PASSWORD:-innsegl-compose-appender}@postgres:5432/innsegl?sslmode=disable
+      INNSEGL_LEDGER_DSN: *appender-dsn
       # #109: refuse to start on an over-privileged role rather than warn.
       INNSEGL_REQUIRE_APPEND_ONLY_ROLE: "1"
       # innsegl-db-init migrated, as the owner. The MCP's own role has no DDL
@@ -1034,7 +1089,7 @@ services:
       INNSEGL_MIRROR_DIR: /mirror
       # The auth-writer DSN, for enrolment: the same credential and role the
       # API holds as INNSEGL_API_AUTH_DSN, never the appender's or the reader's.
-      INNSEGL_GATEWAY_ACCOUNTS_DSN: postgres://innsegl_authwriter:${INNSEGL_LEDGER_AUTHWRITER_PASSWORD:-innsegl-compose-authwriter}@postgres:5432/innsegl?sslmode=disable
+      INNSEGL_GATEWAY_ACCOUNTS_DSN: *auth-writer-dsn
 
       # Companion subcommands to run inside this process (serve.go's -also).
       # Subcommand names, not container names: `serve` refuses a name it does
@@ -1072,7 +1127,7 @@ services:
       INNSEGL_OBJECT_STORE_ENDPOINT: innsegl-s3:8333
       INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
       INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-sealer-user
-      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-sealer-password
+      INNSEGL_OBJECT_STORE_SECRET_KEY_FILE: *object-store-sealer-secret-file
       INNSEGL_OBJECT_STORE_TLS: "false"
       INNSEGL_OBJECT_STORE_PREFIX: *object-store-prefix
       INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
@@ -1167,6 +1222,10 @@ services:
       # pair here. Never in a tracked file: it is a person's identity.
       INNSEGL_SIGN_AUTHOR_OPERATORS: ${INNSEGL_SIGN_AUTHOR_OPERATORS:-}
     volumes:
+      # ADR-0078: the credentials this service uses, and no others.
+      - innsegl-credential-appender:/run/innsegl/credentials/appender:ro
+      - innsegl-credential-authwriter:/run/innsegl/credentials/authwriter:ro
+      - innsegl-credential-objects-sealer:/run/innsegl/credentials/objects-sealer:ro
       # The Workload API socket, from spire.yml's project. Read-write because
       # a Unix socket is connected to, not read.
       - spire-agent-socket:/run/spire/agent-sockets
@@ -1424,7 +1483,7 @@ services:
     user: "1000:1000"
     command: ["reconcile"]
     environment:
-      INNSEGL_LEDGER_DSN: postgres://innsegl_appender:${INNSEGL_LEDGER_APPENDER_PASSWORD:-innsegl-compose-appender}@postgres:5432/innsegl?sslmode=disable
+      INNSEGL_LEDGER_DSN: *appender-dsn
       INNSEGL_REKOR_URL: *rekor-url
       INNSEGL_TRUST_DOMAIN: *trust-domain
       # Repositories are read from the core's mirror and nowhere else
@@ -1460,6 +1519,8 @@ services:
       INNSEGL_WRITES_LOG_DIR: ${INNSEGL_WRITES_LOG_DIR:-}
       INNSEGL_WRITES_REPOS: ${INNSEGL_WRITES_REPOS:-}
     volumes:
+      # ADR-0078: the credentials this service uses, and no others.
+      - innsegl-credential-appender:/run/innsegl/credentials/appender:ro
       # READ-ONLY. innsegl-mcp holds the one read-write mount, for receiving
       # pushes; a reconciler that could write the evidence it judges could
       # also make its own findings go away.
@@ -1572,7 +1633,7 @@ services:
       PGPORT: "5432"
       PGDATABASE: *ledger-database
       INNSEGL_BACKUP_ROLE: *backup-role
-      INNSEGL_BACKUP_PASSWORD: *backup-password
+      INNSEGL_BACKUP_PASSWORD_FILE: /run/innsegl/credentials/backup/password
       INNSEGL_BACKUP_SCRIPT: /innsegl/scripts/backup-ledger.sh
       INNSEGL_BACKUP_DIR: /backups
       INNSEGL_BACKUP_MARKER: /backups/.last-run
@@ -1611,8 +1672,9 @@ services:
       - *object-store-prefix
       - --object-store-access-key
       - *object-store-sealer-user
-      - --object-store-secret-key
-      - *object-store-sealer-password
+      # The secret is a file, never an argument (ADR-0078).
+      - --object-store-secret-key-file
+      - *object-store-sealer-secret-file
     healthcheck:
       test: ["CMD", "/innsegl/init/backup-health.sh"]
       interval: 60s
@@ -1623,6 +1685,9 @@ services:
       # backup is still being written.
       start_period: 300s
     volumes:
+      # ADR-0078: the credentials this service uses, and no others.
+      - innsegl-credential-backup:/run/innsegl/credentials/backup:ro
+      - innsegl-credential-objects-sealer:/run/innsegl/credentials/objects-sealer:ro
       - ./innsegl:/innsegl/init:ro
       # The script and the gate it adjudicates with, read straight from the
       # repository for the reason the migrations are: a copy is a thing that
@@ -1718,14 +1783,22 @@ services:
       - gateway-ca-key=/in/gateway-ca-key
       - --path
       - trust-history=/in/trust-history
+      - --path
+      - credentials=/in/credentials
+      - --path
+      - sigstore-credentials=/in/sigstore-credentials
     environment:
       INNSEGL_TRUST_BACKUP_RECIPIENTS: ${INNSEGL_TRUST_BACKUP_RECIPIENTS:-}
-      # sigstore.yml's own values for the log database and the CA key's
-      # password, restated: compose cannot alias across files.
+      # sigstore.yml's log database user, restated: compose cannot alias
+      # across files. Its password is the Sigstore project's own generated
+      # credential, read from the file (ADR-0078).
       INNSEGL_TRUST_BACKUP_MYSQL_USER: test
-      INNSEGL_TRUST_BACKUP_MYSQL_PASSWORD: zaphod
+      INNSEGL_TRUST_BACKUP_MYSQL_PASSWORD_FILE: /in/sigstore-credentials/logdb-trillian
       INNSEGL_FULCIO_CA_PASSWORD: ${INNSEGL_FULCIO_CA_PASSWORD:-}
     volumes:
+      # ADR-0078: both projects' credentials, for the bundle.
+      - innsegl-credentials-store:/in/credentials:ro
+      - trust-backup-sigstore-credentials:/in/sigstore-credentials:ro
       - trust-backup-fulcio-pki:/in/fulcio-pki:ro
       - trust-backup-rekor-key:/in/rekor-key:ro
       - innsegl-identity-secret:/in/identity-secret:ro
@@ -1756,7 +1829,7 @@ services:
     user: "1000:1000"
     command: ["seal"]
     environment:
-      INNSEGL_LEDGER_DSN: postgres://innsegl_appender:${INNSEGL_LEDGER_APPENDER_PASSWORD:-innsegl-compose-appender}@postgres:5432/innsegl?sslmode=disable
+      INNSEGL_LEDGER_DSN: *appender-dsn
       INNSEGL_REKOR_URL: *rekor-url
       INNSEGL_OBJECT_STORE_ENDPOINT: innsegl-s3:8333
       INNSEGL_OBJECT_STORE_BUCKET: *object-store-bucket
@@ -1764,7 +1837,7 @@ services:
       # anchor declaration at the head of this file for what it may do and for
       # the two permissions withheld from it by name.
       INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-sealer-user
-      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-sealer-password
+      INNSEGL_OBJECT_STORE_SECRET_KEY_FILE: *object-store-sealer-secret-file
       # Plain HTTP to a gateway on an internal network with four members. A
       # deployment whose object store is off-box sets this to true and gets a
       # trust store from the image's ca-certificates.
@@ -1792,6 +1865,10 @@ services:
       # it. A deployment that wants a per-object window longer than the
       # bucket's sets $INNSEGL_OBJECT_STORE_RETENTION itself, in GO's grammar
       # (`24h`, not `1d`).
+    volumes:
+      # ADR-0078: the credentials this service uses, and no others.
+      - innsegl-credential-appender:/run/innsegl/credentials/appender:ro
+      - innsegl-credential-objects-sealer:/run/innsegl/credentials/objects-sealer:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -1877,18 +1954,18 @@ services:
       # THE READER. Compare the three services above, which set
       # $INNSEGL_LEDGER_DSN and name innsegl_appender; this one must not, and
       # `innsegl api` would refuse to serve if it did.
-      INNSEGL_API_DSN: postgres://innsegl_reader:${INNSEGL_LEDGER_READER_PASSWORD:-innsegl-compose-reader}@postgres:5432/innsegl?sslmode=disable
+      INNSEGL_API_DSN: *reader-dsn
       # RM-260/RM-261 (ADR-0062) — THE AUTH-WRITER. A SECOND credential, on a
       # SECOND pool: full CRUD on innsegl_auth, nothing on innsegl. Never the
       # reader's name and never the appender's — see api.go's own comment on
       # -auth-dsn for why a shared name here is the exact mistake this
       # deployment's whole role split exists to make impossible.
-      INNSEGL_API_AUTH_DSN: postgres://innsegl_authwriter:${INNSEGL_LEDGER_AUTHWRITER_PASSWORD:-innsegl-compose-authwriter}@postgres:5432/innsegl?sslmode=disable
+      INNSEGL_API_AUTH_DSN: *auth-writer-dsn
       # RM-330 (ADR-0044's 2026-10-03 amendment) — THE RESOLVER. A THIRD
       # credential, on a THIRD pool: it may insert an alert resolution and
       # nothing else, and `innsegl api` refuses it at start-up if it can do
       # more. Never the reader's name, the auth writer's or the appender's.
-      INNSEGL_API_RESOLVER_DSN: postgres://innsegl_resolver:${INNSEGL_LEDGER_RESOLVER_PASSWORD:-innsegl-compose-resolver}@postgres:5432/innsegl?sslmode=disable
+      INNSEGL_API_RESOLVER_DSN: *resolver-dsn
       # localhost, never an IP literal: a WebAuthn RP ID must be a domain, and
       # the origin has to be the address a browser actually opens. install.sh
       # and runbooks/orchestrated-run.md both document localhost:8082 as that
@@ -1941,6 +2018,10 @@ services:
       # verifies, and read for the CA expiry dates the dashboard warns on.
       INNSEGL_TRUST_HISTORY: /run/innsegl/trust/trust-history.json
     volumes:
+      # ADR-0078: the credentials this service uses, and no others.
+      - innsegl-credential-reader:/run/innsegl/credentials/reader:ro
+      - innsegl-credential-authwriter:/run/innsegl/credentials/authwriter:ro
+      - innsegl-credential-resolver:/run/innsegl/credentials/resolver:ro
       # READ-ONLY. innsegl-mcp holds the one read-write mount, for receiving
       # pushes. See the header above.
       - innsegl-mirror:/mirror:ro
@@ -2060,13 +2141,16 @@ services:
       # anchor declaration at the head of this file for what it may do and for
       # the two permissions withheld from it by name.
       INNSEGL_OBJECT_STORE_ACCESS_KEY: *object-store-sealer-user
-      INNSEGL_OBJECT_STORE_SECRET_KEY: *object-store-sealer-password
+      INNSEGL_OBJECT_STORE_SECRET_KEY_FILE: *object-store-sealer-secret-file
       INNSEGL_OBJECT_STORE_TLS: "false"
       INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
       # No $INNSEGL_OBJECT_STORE_RETENTION, for the reason spelled out on the
       # sealer: `1d` is the bucket rule's grammar and not Go's. The canary's own default is
       # 0, which requires whatever retention the bucket rule gives the probe —
       # which is exactly the question SEG-005 asks.
+    volumes:
+      # ADR-0078: the credentials this service uses, and no others.
+      - innsegl-credential-objects-sealer:/run/innsegl/credentials/objects-sealer:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -2321,6 +2405,26 @@ volumes:
     name: ${INNSEGL_TRUST_HISTORY_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-trust-history}
     external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
 
+  # ADR-0078: this project's credentials, one file each, generated per host.
+  # A trust volume: losing it stops the ledger from starting until the
+  # owner's password is set again. MOUNTED BY: innsegl-credentials (rw),
+  # innsegl-db-init, innsegl-s3-identities, innsegl-trust-backup (ro).
+  innsegl-credentials-store:
+    name: ${INNSEGL_TRUST_CREDENTIALS_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-credentials}
+    external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
+
+  # ADR-0078: one volume per credential, rewritten from the trust volume by
+  # innsegl-credentials on every start. Which service mounts which is the
+  # grant; test/deploy/credentials_test.go holds the table.
+  innsegl-credential-ledger-owner:
+  innsegl-credential-appender:
+  innsegl-credential-reader:
+  innsegl-credential-authwriter:
+  innsegl-credential-resolver:
+  innsegl-credential-backup:
+  innsegl-credential-objects-root:
+  innsegl-credential-objects-sealer:
+
   # ADR-0074: the encrypted trust-key bundles and the producer's status.
   # Ciphertext only. Losing it loses backups, not keys: the operator's
   # machine keeps its own copies.
@@ -2336,6 +2440,9 @@ volumes:
     external: true
   trust-backup-rekor-key:
     name: ${INNSEGL_TRUST_REKOR_KEY_VOLUME:-innsegl-sigstore_sigstore-rekor-key}
+    external: true
+  trust-backup-sigstore-credentials:
+    name: ${INNSEGL_TRUST_SIGSTORE_CREDENTIALS_VOLUME:-innsegl-sigstore_sigstore-credentials}
     external: true
   trust-backup-spire-pki-server:
     name: ${INNSEGL_SPIRE_PKI_SERVER_VOLUME:-innsegl-spire_spire-pki-server}

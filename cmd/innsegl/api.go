@@ -478,6 +478,7 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 
 	fs.Usage = func() { apiUsage(stderr, fs) }
 
+	redactCredentialDefaults(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return apiOptions{}, exitOK, false

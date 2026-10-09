@@ -65,6 +65,7 @@ func runS3Identities(t *testing.T, dir string, env ...string) (string, string, e
 		"INNSEGL_S3_IDENTITIES_FILE="+filepath.Join(dir, "identities.json"),
 		"INNSEGL_OBJECT_STORE_ACCESS_KEY="+storeRootUser,
 		"INNSEGL_OBJECT_STORE_SECRET_KEY="+storeRootPassword,
+		"INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY="+storeSealerPassword,
 		filerKeyEnv+"=",
 	)
 	cmd.Env = append(cmd.Env, env...)

@@ -138,7 +138,8 @@ Options:
   --database NAME         database to dump (default: innsegl)
   --role NAME             database role to connect as (default:
                           $INNSEGL_BACKUP_ROLE or innsegl_backup). Its password
-                          comes from $INNSEGL_BACKUP_PASSWORD, never an
+                          comes from the file $INNSEGL_BACKUP_PASSWORD_FILE
+                          names, or from $INNSEGL_BACKUP_PASSWORD; never an
                           argument, so it cannot reach a process listing.
   --segments DIR          a directory of already-fetched sealed segment
                           objects (see runbooks/index-rebuild.md §6.1). Skips
@@ -154,7 +155,13 @@ Options:
                           (default: segments/, deploy/compose/innsegl.yml's
                           default -- the innsegl binary's own default is "")
   --object-store-access-key K  (default: innsegl)
-  --object-store-secret-key K  (default: innsegl-compose-objects)
+  --object-store-secret-key-file F
+                          a file holding the secret key (default: the file
+                          $INNSEGL_OBJECT_STORE_SECRET_KEY_FILE names, or
+                          $INNSEGL_OBJECT_STORE_SECRET_KEY). There is no
+                          default value (ADR-0078)
+  --object-store-secret-key K  the secret key itself; visible in a process
+                          listing, so prefer the file
   --copy-to DIR           after a backup VERIFIES, also copy the dump and its
                           report here (default: $INNSEGL_BACKUP_COPY_DIR). The
                           deployment points it at a host folder bind-mounted
@@ -184,7 +191,8 @@ object_store_endpoint="innsegl-s3:8333"
 object_store_bucket="innsegl-segments"
 object_store_prefix="segments/"
 object_store_access_key="innsegl"
-object_store_secret_key="innsegl-compose-objects"
+object_store_secret_key="${INNSEGL_OBJECT_STORE_SECRET_KEY:-}"
+object_store_secret_key_file="${INNSEGL_OBJECT_STORE_SECRET_KEY_FILE:-}"
 object_store_region="${INNSEGL_OBJECT_STORE_REGION:-us-east-1}"
 copy_dir="${INNSEGL_BACKUP_COPY_DIR:-}"
 quiet=0
@@ -201,7 +209,8 @@ while [ $# -gt 0 ]; do
     --object-store-bucket)     object_store_bucket="${2-}"; shift 2 || true ;;
     --object-store-prefix)     object_store_prefix="${2-}"; shift 2 || true ;;
     --object-store-access-key) object_store_access_key="${2-}"; shift 2 || true ;;
-    --object-store-secret-key) object_store_secret_key="${2-}"; shift 2 || true ;;
+    --object-store-secret-key) object_store_secret_key="${2-}"; object_store_secret_key_file=""; shift 2 || true ;;
+    --object-store-secret-key-file) object_store_secret_key_file="${2-}"; object_store_secret_key=""; shift 2 || true ;;
     --copy-to)                 copy_dir="${2-}"; shift 2 || true ;;
     --quiet)                   quiet=1; shift ;;
     -h|--help)                 usage; exit "${EXIT_OK}" ;;
@@ -216,6 +225,21 @@ done
 if [ ! -x "${GATE}" ]; then
   printf 'backup-ledger: %s is missing or not executable\n' "${GATE}" >&2
   exit "${EXIT_USAGE}"
+fi
+# ADR-0078: the stack hands both credentials over as files.
+if [ -n "${INNSEGL_BACKUP_PASSWORD_FILE:-}" ]; then
+  if [ ! -s "${INNSEGL_BACKUP_PASSWORD_FILE}" ]; then
+    printf 'backup-ledger: INNSEGL_BACKUP_PASSWORD_FILE names %s, which is missing or empty\n' "${INNSEGL_BACKUP_PASSWORD_FILE}" >&2
+    exit "${EXIT_USAGE}"
+  fi
+  INNSEGL_BACKUP_PASSWORD="$(head -n 1 "${INNSEGL_BACKUP_PASSWORD_FILE}")"
+fi
+if [ -n "${object_store_secret_key_file}" ]; then
+  if [ ! -s "${object_store_secret_key_file}" ]; then
+    printf 'backup-ledger: the object store secret key file %s is missing or empty\n' "${object_store_secret_key_file}" >&2
+    exit "${EXIT_USAGE}"
+  fi
+  object_store_secret_key="$(head -n 1 "${object_store_secret_key_file}")"
 fi
 if [ -z "${INNSEGL_BACKUP_PASSWORD:-}" ]; then
   printf 'backup-ledger: INNSEGL_BACKUP_PASSWORD is unset. This connects over the network as\n' >&2

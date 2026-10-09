@@ -53,3 +53,5 @@ volumes:
     name: innsegl-dev-trust-rekor-key
   sigstore-trillian-db-data:
     name: innsegl-dev-trust-trillian-db
+  sigstore-credentials-store:
+    name: innsegl-dev-trust-sigstore-credentials

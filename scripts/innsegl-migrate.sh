@@ -422,6 +422,8 @@ ${t}-rekor-key|the transparency log's signing key
 ${t}-fulcio-pki|the Fulcio CA certificate and encrypted key
 ${t}-identity-secret|this deployment's pseudonymisation secret
 ${t}-history|the trust history: every root and log key this deployment has used (ADR-0073)
+${t}-credentials|the ledger and object store passwords this host generated (ADR-0078)
+${t}-sigstore-credentials|the log database passwords this host generated (ADR-0078)
 ${s}-spire_spire-server-data|the SPIRE server's datastore and keys
 ${s}-spire_spire-pki-server|the SPIRE server's upstream CA cert+key and node CA cert
 ${s}-spire_spire-pki-agent|the SPIRE agent's node identity and bootstrap trust bundle

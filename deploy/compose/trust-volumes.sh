@@ -34,6 +34,12 @@
 # no rebuild-from-segments-alone"). A blanket `external: true` would make
 # `down -v` a no-op and teach an operator to reach for `docker volume rm`.
 #
+# THE CREDENTIALS ARE THE ONE EXCEPTION TO "IRREPLACEABLE" (ADR-0078). Every
+# service password is generated per host and kept in these two volumes. Lost,
+# they can be set again over the servers' own sockets, so nothing that
+# verifies stops verifying; but until someone does, the ledger refuses every
+# bring-up. That is reason enough to keep them out of `down -v`'s reach.
+#
 # WHY SPIRE's CA IS NOT ONE OF THEM. Losing it costs a re-attestation: every
 # workload gets a new SVID and carries on. No commit that already verifies
 # stops verifying, because a gitsign certificate chains to Fulcio and not to
@@ -112,7 +118,9 @@ identity-secret|INNSEGL_TRUST_IDENTITY_SECRET_VOLUME|innsegl-core_innsegl-identi
 fulcio-pki|INNSEGL_TRUST_FULCIO_PKI_VOLUME|innsegl-sigstore_sigstore-fulcio-pki|the Fulcio CA key that issued every certificate
 rekor-key|INNSEGL_TRUST_REKOR_KEY_VOLUME|innsegl-sigstore_sigstore-rekor-key|the Rekor key that signed every transparency-log entry
 trillian-db|INNSEGL_TRUST_TRILLIAN_DB_VOLUME|innsegl-sigstore_sigstore-trillian-db-data|the transparency log itself
-history|INNSEGL_TRUST_HISTORY_VOLUME|innsegl-core_innsegl-trust-history|the trust history: every root and log key this deployment has used'
+history|INNSEGL_TRUST_HISTORY_VOLUME|innsegl-core_innsegl-trust-history|the trust history: every root and log key this deployment has used
+credentials|INNSEGL_TRUST_CREDENTIALS_VOLUME|innsegl-core_innsegl-credentials|the ledger and object store passwords this host generated; without them the ledger refuses to start
+sigstore-credentials|INNSEGL_TRUST_SIGSTORE_CREDENTIALS_VOLUME|innsegl-sigstore_sigstore-credentials|the log database passwords this host generated'
 
 # The label scripts/teardown-guard.sh reads. Its VALUE is the sentence above,
 # so a volume explains itself with no table anywhere.

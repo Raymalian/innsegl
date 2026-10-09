@@ -95,10 +95,14 @@ func composeSealerCredential(ctx context.Context, t *testing.T, bucket string) s
 	if !ok {
 		t.Fatalf("deploy/compose/innsegl.yml gives innsegl-sealer no object-store access key")
 	}
-	secret, ok := cfg.env("innsegl-sealer", "INNSEGL_OBJECT_STORE_SECRET_KEY")
-	if !ok {
-		t.Fatalf("deploy/compose/innsegl.yml gives innsegl-sealer no object-store secret key")
+	// The secret is a file the stack renders (ADR-0078); which file is what
+	// the compose file decides, and the harness provisioned the scoped
+	// identity's secret under that name.
+	file, ok := cfg.env("innsegl-sealer", "INNSEGL_OBJECT_STORE_SECRET_KEY_FILE")
+	if !ok || file != sealerSecretFile {
+		t.Fatalf("deploy/compose/innsegl.yml gives innsegl-sealer the secret file %q, want %q", file, sealerSecretFile)
 	}
+	secret := storeSealerPassword
 	prefix, _ := cfg.env("innsegl-sealer", "INNSEGL_OBJECT_STORE_PREFIX")
 	return sealerCredential{access: access, secret: secret, prefix: prefix, bucket: bucket}
 }
@@ -474,6 +478,15 @@ var storeCredentialHolders = []struct {
 // and everything that stays up gates on them.
 var rootCredentialHolders = []string{"innsegl-s3-identities", "innsegl-object-init"}
 
+// The files the two identities' secrets are read from (ADR-0078): the
+// rendered ones a service mounts, and the trust volume's own, which only the
+// one-shot that writes the identity file reads.
+const (
+	sealerSecretFile    = "/run/innsegl/credentials/objects-sealer/secret"
+	rootSecretFile      = "/run/innsegl/credentials/objects-root/secret"
+	rootSecretStoreFile = "/run/innsegl/credentials-store/objects-root"
+)
+
 func isRootCredentialHolder(name string) bool {
 	for _, holder := range rootCredentialHolders {
 		if name == holder {
@@ -501,10 +514,10 @@ func TestOPS028NothingLongRunningHoldsTheStoreRootCredential(t *testing.T) {
 					arrangement.files, service, arrangement.why)
 				continue
 			}
-			secret, _ := cfg.env(service, "INNSEGL_OBJECT_STORE_SECRET_KEY")
+			secret, _ := cfg.env(service, "INNSEGL_OBJECT_STORE_SECRET_KEY_FILE")
 
 			switch {
-			case access == storeRootUser && secret == storeRootPassword:
+			case access == storeRootUser || secret == rootSecretFile:
 				t.Errorf("%v runs %s on the store's ROOT credential.\n\n"+
 					"%s.\n\nAB-17: an agent on the host reads this off the running "+
 					"container and may then set the bucket's object-lock configuration. "+
@@ -522,8 +535,8 @@ func TestOPS028NothingLongRunningHoldsTheStoreRootCredential(t *testing.T) {
 		// init that creates the locked bucket. A stack where nothing holds it
 		// is a stack with no bucket.
 		for _, service := range rootCredentialHolders {
-			secret, ok := cfg.env(service, "INNSEGL_OBJECT_STORE_SECRET_KEY")
-			if !ok || secret != storeRootPassword {
+			secret, ok := cfg.env(service, "INNSEGL_OBJECT_STORE_SECRET_KEY_FILE")
+			if !ok || (secret != rootSecretFile && secret != rootSecretStoreFile) {
 				t.Errorf("%v gives %s no root credential. The bucket can only be created "+
 					"with object lock at creation, and only an Admin identity may set the "+
 					"default rule — so this is not a tighter deployment, it is one with no "+
@@ -545,8 +558,8 @@ func TestOPS028NothingLongRunningHoldsTheStoreRootCredential(t *testing.T) {
 			if isRootCredentialHolder(name) {
 				continue
 			}
-			if secret, ok := service.Environment["INNSEGL_OBJECT_STORE_SECRET_KEY"]; ok &&
-				secret != nil && *secret == storeRootPassword {
+			if secret, ok := service.Environment["INNSEGL_OBJECT_STORE_SECRET_KEY_FILE"]; ok &&
+				secret != nil && (*secret == rootSecretFile || *secret == rootSecretStoreFile) {
 				t.Errorf("%v gives %s the store's ROOT credential. Only the one-shot that "+
 					"writes the identity file and the one-time bucket init may hold it, and "+
 					"neither of them stays up.", arrangement.files, name)

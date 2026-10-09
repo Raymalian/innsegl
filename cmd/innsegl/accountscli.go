@@ -152,6 +152,7 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 	var positional []string
 	rest := args
 	for {
+		redactCredentialDefaults(fs)
 		if err := fs.Parse(rest); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				return exitOK

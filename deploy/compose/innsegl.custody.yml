@@ -56,6 +56,10 @@ services:
       - --path
       - trust-history=/in/trust-history
       - --path
+      - credentials=/in/credentials
+      - --path
+      - sigstore-credentials=/in/sigstore-credentials
+      - --path
       - ca-store=/in/ca-custody/snapshot
       - --path
       - ca-custody=/in/ca-custody/material

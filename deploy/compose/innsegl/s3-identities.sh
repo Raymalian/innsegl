@@ -79,13 +79,29 @@ set -eu
 log()  { printf 's3-identities: %s\n' "$*"; }
 fail() { printf 's3-identities: FAIL: %s\n' "$*" >&2; exit 1; }
 
+# secret_from NAME prints $NAME, or the first line of the file $NAME_FILE
+# names. The stack sets only the _FILE form (ADR-0078): the value is then in
+# this process's environment and nowhere else. Both set is refused.
+secret_from() {
+  eval "sf_value=\${$1:-}; sf_file=\${$1_FILE:-}"
+  if [ -n "${sf_value}" ] && [ -n "${sf_file}" ]; then
+    fail "both \$$1 and \$$1_FILE are set; set one"
+  fi
+  if [ -n "${sf_file}" ]; then
+    [ -s "${sf_file}" ] || fail "\$$1_FILE names ${sf_file}, which is missing or empty"
+    head -n 1 "${sf_file}"
+    return 0
+  fi
+  [ -n "${sf_value}" ] || fail "\$$1_FILE (or \$$1) must be set"
+  printf '%s\n' "${sf_value}"
+}
+
 OUT="${INNSEGL_S3_IDENTITIES_FILE:?s3-identities: INNSEGL_S3_IDENTITIES_FILE must name the file to write}"
 
 : "${INNSEGL_OBJECT_STORE_ACCESS_KEY:?s3-identities: INNSEGL_OBJECT_STORE_ACCESS_KEY must be set}"
-: "${INNSEGL_OBJECT_STORE_SECRET_KEY:?s3-identities: INNSEGL_OBJECT_STORE_SECRET_KEY must be set}"
 
 ROOT_USER="${INNSEGL_OBJECT_STORE_ACCESS_KEY}"
-ROOT_PASSWORD="${INNSEGL_OBJECT_STORE_SECRET_KEY}"
+ROOT_PASSWORD="$(secret_from INNSEGL_OBJECT_STORE_SECRET_KEY)" || exit 1
 BUCKET="${INNSEGL_OBJECT_STORE_BUCKET:-innsegl-segments}"
 PREFIX="${INNSEGL_OBJECT_STORE_PREFIX:-segments/}"
 
@@ -97,13 +113,11 @@ PREFIX="${INNSEGL_OBJECT_STORE_PREFIX:-segments/}"
 # test/deploy asserts this string still matches the Go constant.
 CANARY_PREFIX="innsegl-worm-canary/"
 
-# DERIVED WHEN UNSET, NOT REQUIRED — deploy/compose/innsegl.yml derives the
-# same value from the same expression. An operator upgrading an existing
-# deployment set a root credential once and never heard of #228; a narrowing
-# that had to be configured before the stack came up would be switched off
-# rather than adopted.
+# The scoped identity's secret is its own credential, generated per host like
+# the root's and never derived from it (ADR-0078). Earlier releases derived it
+# from the root's public default.
 SEALER_USER="${INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY:-innsegl-sealer}"
-SEALER_PASSWORD="${INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY:-${ROOT_PASSWORD}-sealer}"
+SEALER_PASSWORD="$(secret_from INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY)" || exit 1
 
 [ "${SEALER_USER}" != "${ROOT_USER}" ] \
   || fail "the scoped identity \$INNSEGL_OBJECT_STORE_SEALER_ACCESS_KEY is the store's root account (${SEALER_USER}). The whole point is that they are two identities; pick another name"
@@ -113,7 +127,7 @@ SEALER_PASSWORD="${INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY:-${ROOT_PASSWORD}-seal
 for secret in "${ROOT_PASSWORD}" "${SEALER_PASSWORD}"; do
   case "${secret}" in
     ????????*) : ;;
-    *) fail "an S3 secret is shorter than eight characters. Set \$INNSEGL_OBJECT_STORE_SECRET_KEY, and \$INNSEGL_OBJECT_STORE_SEALER_SECRET_KEY if it is not derived from it" ;;
+    *) fail "an S3 secret is shorter than eight characters; innsegl-credentials generates 64" ;;
   esac
 done
 

@@ -85,6 +85,11 @@ var trustVolumeKeys = []string{
 	// deployment's. Lose it and a commit signed under a rotated-away root
 	// stops verifying.
 	"innsegl-trust-history",
+	// ADR-0078: every service credential, generated per host. Lose them and
+	// the ledger refuses every bring-up until the owner's password is set
+	// again by hand.
+	"innsegl-credentials-store",
+	"sigstore-credentials-store",
 }
 
 // ---------------------------------------------------------------------------
@@ -306,16 +311,20 @@ func TestOPS032TheIrreplaceableVolumesAreExternal(t *testing.T) {
 		"INNSEGL_TRUST_REKOR_KEY_VOLUME=innsegl-trust-rekor-key",
 		"INNSEGL_TRUST_TRILLIAN_DB_VOLUME=innsegl-trust-trillian-db",
 		"INNSEGL_TRUST_HISTORY_VOLUME=innsegl-trust-history",
+		"INNSEGL_TRUST_CREDENTIALS_VOLUME=innsegl-trust-credentials",
+		"INNSEGL_TRUST_SIGSTORE_CREDENTIALS_VOLUME=innsegl-trust-sigstore-credentials",
 		"INNSEGL_SPIRE_JWT_ISSUER=http://spire-oidc:8080",
 		"INNSEGL_SPIRE_PARENT_ID=unset",
 	}
 	wantName := map[string]string{
-		"innsegl-ledger-data":       "innsegl-trust-ledger-data",
-		"innsegl-identity-secret":   "innsegl-trust-identity-secret",
-		"sigstore-fulcio-pki":       "innsegl-trust-fulcio-pki",
-		"sigstore-rekor-key":        "innsegl-trust-rekor-key",
-		"sigstore-trillian-db-data": "innsegl-trust-trillian-db",
-		"innsegl-trust-history":     "innsegl-trust-history",
+		"innsegl-ledger-data":        "innsegl-trust-ledger-data",
+		"innsegl-identity-secret":    "innsegl-trust-identity-secret",
+		"sigstore-fulcio-pki":        "innsegl-trust-fulcio-pki",
+		"sigstore-rekor-key":         "innsegl-trust-rekor-key",
+		"sigstore-trillian-db-data":  "innsegl-trust-trillian-db",
+		"innsegl-trust-history":      "innsegl-trust-history",
+		"innsegl-credentials-store":  "innsegl-trust-credentials",
+		"sigstore-credentials-store": "innsegl-trust-sigstore-credentials",
 	}
 	found := map[string]composeVolume{}
 	for _, rel := range []string{"deploy/compose/sigstore.yml", "deploy/compose/innsegl.yml"} {
@@ -655,8 +664,10 @@ func TestOPS034ReadinessNamesAnAbsentPinnedTree(t *testing.T) {
 func TestOPS036TheSearchIndexSurvivesWhatTheLogSurvives(t *testing.T) {
 	body := readFile(t, filepath.Join(repoRoot(t), "deploy", "compose", "sigstore.yml"))
 
-	dsn := regexp.MustCompile(`"--search_index\.mysql\.dsn=[^"]*@tcp\(([a-z-]+):3306\)/`).
-		FindStringSubmatch(serviceBlock(body, "rekor"))
+	// The DSN is in Rekor's config file, which the bootstrap renders
+	// (ADR-0078).
+	boot := readFile(t, filepath.Join(repoRoot(t), "deploy", "compose", "sigstore", "bootstrap.sh"))
+	dsn := regexp.MustCompile(`dsn: [^\s]*@tcp\(([a-z-]+):3306\)/`).FindStringSubmatch(boot)
 	if dsn == nil {
 		t.Fatal("rekor keeps its search index somewhere other than a MySQL database; " +
 			"`down -v` would take it while leaving every entry in place")

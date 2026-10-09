@@ -88,12 +88,16 @@ key|innsegl-identity-secret|the pseudonymisation secret every agent and task id 
 key|sigstore-fulcio-pki|the Fulcio CA key that issued every certificate
 key|sigstore-rekor-key|the Rekor key that signed every transparency-log entry
 key|sigstore-trillian-db-data|the transparency log itself
+key|innsegl-credentials-store|the ledger and object store passwords this host generated (ADR-0078)
+key|sigstore-credentials-store|the log database passwords this host generated (ADR-0078)
 name|innsegl-core_innsegl-ledger-data|the ledger: the hash chain and every event body
 name|innsegl-core_innsegl-identity-secret|the pseudonymisation secret every agent and task id in the ledger was derived from
 name|innsegl-trust-identity-secret|the pseudonymisation secret every agent and task id in the ledger was derived from
 name|innsegl-sigstore_sigstore-fulcio-pki|the Fulcio CA key that issued every certificate
 name|innsegl-sigstore_sigstore-rekor-key|the Rekor key that signed every transparency-log entry
-name|innsegl-sigstore_sigstore-trillian-db-data|the transparency log itself'
+name|innsegl-sigstore_sigstore-trillian-db-data|the transparency log itself
+name|innsegl-core_innsegl-credentials|the ledger and object store passwords this host generated (ADR-0078)
+name|innsegl-sigstore_sigstore-credentials|the log database passwords this host generated (ADR-0078)'
 
 # The label deploy/compose/trust-volumes.sh stamps. Its VALUE is the human
 # sentence above, so a labelled volume explains itself with no table at all.
