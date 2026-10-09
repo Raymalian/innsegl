@@ -17,9 +17,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -117,16 +119,40 @@ func Usable(ctx context.Context) error {
 	return nil
 }
 
-// FreeHostPort reserves an ephemeral loopback port and hands it back.
+// FreePortLow and FreePortHigh bound the ports FreeHostPort hands out.
+//
+// A harness releases the port before Docker binds it, so the port must not
+// come from the kernel's ephemeral range (Linux 32768-60999, macOS
+// 49152-65535): there, the same allocator gives it to the next outgoing
+// connection, or to Docker's own published ports, inside that gap. Measured
+// in CI on 2026-10-09: INIT-008's Rekor failed with "Bind for
+// 127.0.0.1:46659 failed: port is already allocated", a port net.Listen(":0")
+// had handed out and released minutes before. This band is below every
+// default ephemeral range and clear of the ports innsegl's stack publishes
+// (5555, 8082, 23000, 28080-28095, 28195, 28443).
+const (
+	FreePortLow   = 24000
+	FreePortHigh  = 27999
+	freePortTries = 200
+)
+
+// FreeHostPort finds a loopback port in FreePortLow..FreePortHigh that
+// nothing holds, and hands it back released. Two picks can still meet only
+// when two processes draw the same random port in the same moment; the
+// kernel's own allocations never land here.
 func FreeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
+	span := FreePortHigh - FreePortLow + 1
+	for range freePortTries {
+		port := strconv.Itoa(FreePortLow + rand.IntN(span)) //nolint:gosec // G404: spreads picks across a band; nothing secret depends on it
+		var lc net.ListenConfig
+		l, err := lc.Listen(ctx, "tcp", "127.0.0.1:"+port)
+		if err != nil {
+			continue
+		}
+		if err := l.Close(); err != nil {
+			return "", err
+		}
+		return port, nil
 	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
+	return "", fmt.Errorf("no free loopback port in %d-%d after %d tries", FreePortLow, FreePortHigh, freePortTries)
 }

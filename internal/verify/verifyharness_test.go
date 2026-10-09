@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -19,6 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 
 	"innsegl.dev/innsegl/internal/segment"
 	"innsegl.dev/innsegl/internal/signing"
@@ -136,16 +137,8 @@ func oneLine(s string) string {
 }
 
 func freeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
+	// One mechanism for every harness: see dockertest.FreeHostPort.
+	return dockertest.FreeHostPort(ctx)
 }
 
 func findGitsign(ctx context.Context) (string, error) {

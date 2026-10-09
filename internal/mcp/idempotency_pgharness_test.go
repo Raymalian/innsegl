@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -189,16 +190,8 @@ func (c *pgContainer) dsn(database string) string {
 // changes on every start — which would look like recovery failing when it is
 // the test moving the goal.
 func freeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
+	// One mechanism for every harness: see dockertest.FreeHostPort.
+	return dockertest.FreeHostPort(ctx)
 }
 
 func startPG(ctx context.Context) (*pgContainer, error) {

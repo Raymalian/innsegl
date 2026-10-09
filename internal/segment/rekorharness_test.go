@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/internal/dockertest"
 )
 
 // A real Rekor, never a mock.
@@ -137,16 +138,8 @@ func rekorDockerUsable(ctx context.Context) error {
 
 // rekorFreeHostPort reserves an ephemeral port and hands it back.
 func rekorFreeHostPort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
+	// One mechanism for every harness: see dockertest.FreeHostPort.
+	return dockertest.FreeHostPort(ctx)
 }
 
 // rekorStack is one containerised Rekor and everything under it.
