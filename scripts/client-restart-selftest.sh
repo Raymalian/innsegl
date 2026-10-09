@@ -16,6 +16,13 @@
 #             innsegl-client.service; another binary or no unit: left alone.
 #   OPS-170e  the Makefile's build target signs and never restarts; the
 #             client-restart target runs this script on the built binary.
+#   OPS-170f  after the restart, it returns only once the service answers on
+#             its loopback port (the --listen the service was started with,
+#             else 127.0.0.1:28195), polling until then.
+#   OPS-170g  a service that never answers: exit 1 after the timeout
+#             ($INNSEGL_CLIENT_RESTART_TIMEOUT seconds), saying so.
+#
+# curl is a fake too: nothing here reaches a real client service.
 set -uo pipefail
 
 ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
@@ -50,9 +57,20 @@ echo "launchctl $*" >>"${FAKE_CALLS}"
 case "$1" in
   print)
     [ -n "${FAKE_PROGRAM}" ] || { echo "Could not find service" >&2; exit 113; }
-    printf 'gui/501/dev.innsegl.client = {\n\tactive count = 1\n\tstate = running\n\n\tprogram = %s\n\targuments = {\n\t\t%s\n\t}\n}\n' \
-      "${FAKE_PROGRAM}" "${FAKE_PROGRAM}" ;;
+    printf 'gui/501/dev.innsegl.client = {\n\tactive count = 1\n\tstate = running\n\n\tprogram = %s\n\targuments = {\n\t\t%s\n\t\tclient\n\t\tserve\n%b\t}\n}\n' \
+      "${FAKE_PROGRAM}" "${FAKE_PROGRAM}" "${FAKE_LISTEN:+\t\t--listen\n\t\t${FAKE_LISTEN}\n}" ;;
 esac
+EOF
+# curl answers 000 (nothing listening) for the first $FAKE_DOWN calls, then
+# 200; FAKE_DOWN=never never answers.
+cat >"${FAKEBIN}/curl" <<'EOF'
+#!/usr/bin/env bash
+echo "curl $*" >>"${FAKE_CALLS}"
+n=$(grep -c '^curl ' "${FAKE_CALLS}")
+if [ "${FAKE_DOWN:-0}" = never ] || [ "${n}" -le "${FAKE_DOWN:-0}" ]; then
+  printf '000'; exit 7
+fi
+printf '200'
 EOF
 # systemctl --user show answers the unit as running $FAKE_PROGRAM, or as not
 # found when it is empty.
@@ -62,12 +80,13 @@ echo "systemctl $*" >>"${FAKE_CALLS}"
 case "$*" in
   *"show -p LoadState --value"*) if [ -n "${FAKE_PROGRAM}" ]; then echo loaded; else echo not-found; fi ;;
   *"show -p ExecStart --value"*)
-    [ -n "${FAKE_PROGRAM}" ] && echo "{ path=${FAKE_PROGRAM} ; argv[]=${FAKE_PROGRAM} client serve ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }" ;;
+    [ -n "${FAKE_PROGRAM}" ] && echo "{ path=${FAKE_PROGRAM} ; argv[]=${FAKE_PROGRAM} client serve${FAKE_LISTEN:+ --listen ${FAKE_LISTEN}} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }" ;;
 esac
 EOF
 chmod +x "${FAKEBIN}"/*
 
-export FAKE_UNAME FAKE_PROGRAM FAKE_CALLS
+export FAKE_UNAME FAKE_PROGRAM FAKE_CALLS FAKE_LISTEN FAKE_DOWN INNSEGL_CLIENT_RESTART_TIMEOUT
+FAKE_LISTEN=""; FAKE_DOWN=0; INNSEGL_CLIENT_RESTART_TIMEOUT=10
 run() {
   FAKE_CALLS="$(mktemp "${TOP}/calls.XXXXXX")"
   out="$(PATH="${FAKEBIN}:${PATH}" "${SCRIPT}" "$1" 2>&1)"
@@ -146,6 +165,39 @@ else
 ${build}
 client-restart:
 ${restart}"
+fi
+
+# OPS-170f
+for os in Darwin Linux; do
+  FAKE_UNAME="${os}" FAKE_DOWN=3 FAKE_PROGRAM="${BIN}" run "${BIN}"
+  restarted="$(grep -nE 'kickstart|--user restart' <<<"${calls}" | head -n 1 | cut -d: -f1)"
+  first_poll="$(grep -n '^curl ' <<<"${calls}" | head -n 1 | cut -d: -f1)"
+  polls="$(grep -c '^curl ' <<<"${calls}")"
+  if [ "${rc}" -eq 0 ] && [ -n "${restarted}" ] && [ -n "${first_poll}" ] && [ "${first_poll}" -gt "${restarted}" ] \
+    && [ "${polls}" -eq 4 ] && grep -q 'http://127.0.0.1:28195/_client/status' <<<"${calls}" \
+    && grep -q 'answers' <<<"${out}"; then
+    ok "OPS-170f ${os}: after the restart it polls the default port until the service answers"
+  else
+    bad "OPS-170f ${os}: did not wait for the service" "exit=${rc} out=${out}
+${calls}"
+  fi
+  FAKE_UNAME="${os}" FAKE_LISTEN=127.0.0.1:39999 FAKE_PROGRAM="${BIN}" run "${BIN}"
+  if [ "${rc}" -eq 0 ] && grep -q 'http://127.0.0.1:39999/_client/status' <<<"${calls}" \
+    && ! grep -q 28195 <<<"${calls}"; then
+    ok "OPS-170f ${os}: the service's own --listen is the port polled"
+  else
+    bad "OPS-170f ${os}: the service's --listen was not used" "exit=${rc} out=${out}
+${calls}"
+  fi
+done
+
+# OPS-170g
+FAKE_UNAME=Darwin FAKE_DOWN=never INNSEGL_CLIENT_RESTART_TIMEOUT=1 FAKE_PROGRAM="${BIN}" run "${BIN}"
+if [ "${rc}" -eq 1 ] && grep -q kickstart <<<"${calls}" && grep -q 'did not answer' <<<"${out}" \
+  && grep -q '127.0.0.1:28195' <<<"${out}"; then
+  ok "OPS-170g a service that never answers: exit 1 after the timeout, naming the port"
+else
+  bad "OPS-170g a service that never answers" "exit=${rc} out=${out}"
 fi
 
 out="$("${SCRIPT}" 2>&1)"; rc=$?
