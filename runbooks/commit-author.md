@@ -14,26 +14,16 @@ Keep public repositories in agent mode. Operator mode puts your GitHub account
 on every agent commit in that repository.
 
 "Machine" below is the operator's machine, enrolled with `innsegl connect`.
-"Core" is the host running the stack; `innsegl` runs there inside the
-`innsegl-api` container, which holds the accounts credential.
+"Core" is the host running the stack.
 
-## How the identity is found
+## Before you start
 
-Nothing is typed. In operator mode innsegl reads one value: the repository's
-`git config user.email`. It must be your GitHub noreply address
-(`<id>+<login>@users.noreply.github.com`, from GitHub → Settings → Emails),
-which is what the deploy host matches. The author name is that `<login>`.
+The repository's `git config user.email` must be your GitHub noreply address
+(`<id>+<login>@users.noreply.github.com`, from GitHub → Settings → Emails).
+That is what the deploy host matches. The author name is that `<login>`.
 `git config user.name` is never read and never published.
 
-So the author of an agent commit there is `<login> <<id>+<login>@users.noreply.github.com>`.
-
-**Machine:** check the address the repository uses:
-
-```sh
-git -C <path-to-repository> config user.email
-```
-
-**Machine:** set it, if it is not the noreply address:
+**Machine:** set it, if it is not already:
 
 ```sh
 git -C <path-to-repository> config user.email '<id>+<login>@users.noreply.github.com'
@@ -47,58 +37,63 @@ git -C <path-to-repository> config user.email '<id>+<login>@users.noreply.github
 innsegl author repo <path-to-repository> operator
 ```
 
-It reads the address, and reports it to the core over this machine's
-certificate. On the first report the core **pins** it for this machine: from
-then on the core signs agent commits from this machine authored as that pair,
-or as the agent address, and nothing else (GH-008, GH-009, GH-010). The
-repository is set to operator mode only once the core holds the pin.
+That is the whole step. It reads the address, reports it to the core over
+this machine's certificate, and prints one result line. The core pins the
+first pair a machine reports; from then on it signs agent commits from this
+machine authored as that pair, or as the agent address, and nothing else
+(GH-008, GH-009, GH-010).
 
-**Machine:** see the setting:
+| Result line | Exit | What happened |
+|---|---|---|
+| `pinned on the core for this machine: <login> <address>` | 0 | pinned now; the repository is in operator mode |
+| `already pinned on the core for this machine (same pair): …` | 0 | nothing changed on the core; the repository is in operator mode |
+| `refused: the core holds a different pair for this machine … docker exec innsegl-api innsegl accounts author-reset <installation-id>` | 29 | the repository stays in agent mode. If the new pair is right, run the printed command on the core, then run this again |
+| `core unreachable: <error>` | 30 | nothing changed; the repository stays in agent mode. Check `innsegl status`, then run this again |
+| `not pinned: … not a GitHub noreply address …` | 31 | set the address (above), then run this again |
+
+Run it again any time: a second run prints `already pinned` and changes
+nothing.
+
+## Check
+
+**Machine:**
 
 ```sh
 innsegl author
 ```
 
-**Machine:** check the next agent commit there. It shows your login and
-noreply address as author and committer, and still carries the three
-trailers:
+It lists each repository's mode, and the last line is the pair the core holds
+for this machine: the pair, `none`, or `unknown (core unreachable: …)`.
+
+The next agent commit in that repository shows your login and noreply address
+as author and committer, and still carries the three trailers:
 
 ```sh
 git -C <path-to-repository> log -1 --format='%an <%ae>%n%(trailers)'
 ```
 
-## See what the core pinned
+## Change the pinned pair
 
-**Core:** your account's id (first column):
+Only on the core. A machine's git config is within an agent's reach; the pin
+on the core is not, so a machine cannot change its own pin.
 
-```sh
-docker exec innsegl-api innsegl accounts list
-```
-
-**Core:** its machines. The last column is each machine's pinned operator
-author, `-` for none:
-
-```sh
-docker exec innsegl-api innsegl accounts installations --account <account-id>
-```
-
-## Change the pinned address
-
-The core keeps the first address a machine reported. A different one later is
-refused: the machine's git config is within an agent's reach, the pin on the
-core is not. To pin another:
-
-**Core:**
+**Core:** run the command the `refused` line printed:
 
 ```sh
 docker exec innsegl-api innsegl accounts author-reset <installation-id>
 ```
 
-**Machine:** then report again:
+**Machine:** then run `innsegl author repo <path-to-repository> operator`
+again.
+
+To see every machine and its pin, **Core:**
 
 ```sh
-innsegl author repo <path-to-repository> operator
+docker exec innsegl-api innsegl accounts installations
 ```
+
+The last column is each machine's pinned pair, `-` for none. `--account <id>`
+narrows it to one account.
 
 ## Turn it off
 
@@ -112,15 +107,12 @@ New agent commits there are authored as the agent address again. Commits
 already made keep their author: history is not rewritten. The pin on the core
 stays until `author-reset`; it admits nothing a machine does not use.
 
-## What a refusal means
+## Refusals at commit time
 
 | Where | Message | What to do |
 |---|---|---|
-| `innsegl author repo … operator` | `this repository's git user.email is not a GitHub noreply address` | set it (above), then run the command again |
-| `innsegl author repo … operator` | `the core did not pin … already pinned to a different identity … innsegl accounts author-reset <id>` | the core holds another address for this machine. If the new one is right, reset on the core and run again |
-| `innsegl author repo … operator` | `the core did not pin … ` followed by a connection error | the core was not reached; nothing changed. Check `innsegl status`, then run again |
 | the commit hook (stderr) | `this repository is in operator mode, but …; this commit is authored as the agent` | the repository lost its noreply `user.email`; the commit went through as the agent. Set the address back |
-| `git commit` (signing) | `author … is not admitted (I6) … this installation has no operator author pinned` | operator mode was set before this feature, or the pin was reset. Run `innsegl author repo … operator` again |
+| `git commit` (signing) | `author … is not admitted (I6) … this installation has no operator author pinned` | the pin was reset. Run `innsegl author repo … operator` again |
 | `git commit` (signing) | `author … is not admitted (I6) … it is not the operator author this installation pinned` | the repository's address differs from the pin. Fix `user.email`, or reset the pin on the core |
 
 ## A fixed pair instead (override)
@@ -141,6 +133,11 @@ cd <repo> && echo "INNSEGL_SIGN_AUTHOR_OPERATORS='<name> <<address>>'" >> deploy
 ```sh
 innsegl author operator '<name> <<address>>'
 ```
+
+`innsegl author repo … operator` then reports this pair instead. A noreply
+pair named by its own login is pinned like any other. Any other pair prints
+`not pinned` (exit 31) and sets the repository anyway: it is signed only
+because the core's configuration lists it.
 
 More than one pair is comma-separated. The core admits each address only with
 its own name (GH-006).

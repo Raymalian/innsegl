@@ -54,7 +54,7 @@ make link DIR=<path to a git repository>
 ### Commit author per repository
 
 ```
-innsegl author                                    list the setting
+innsegl author                                    list the setting, and the pair the core holds for this machine
 innsegl author repo <path> operator|agent          one repository's mode
 innsegl author operator 'Name <address>'           optional: a typed identity instead
 ```
@@ -66,14 +66,29 @@ must be a GitHub noreply address, with that address's login as the name;
 `user.name` is never read. The agent stays in the trailers and the signature
 (I6 allows the operator as author).
 
-Setting operator mode reports the pair to the core (`POST
-/_core/operator-author`, over the machine's certificate). The core pins it
-for that installation on first use, and gate 3 of the sign path then admits
-it for that installation's commits, beside the agent address and any pair in
-`INNSEGL_SIGN_AUTHOR_OPERATORS`. A different pair later is refused (409) until
-`innsegl accounts author-reset <installation>` on the core. A repository with
-no noreply address falls back to the agent address, with a note on stderr.
-A command that sets `GIT_AUTHOR_*` itself is left as it is.
+`innsegl author repo <path> operator` always reports the effective pair (the
+typed identity if set, else the repository's) to the core (`POST
+/_core/operator-author`, over the machine's certificate) and prints one
+result line (ENF-014). The core pins it for that installation on first use,
+and gate 3 of the sign path then admits it for that installation's commits,
+beside the agent address and any pair in `INNSEGL_SIGN_AUTHOR_OPERATORS`. A
+different pair later is refused (409) until
+`docker exec innsegl-api innsegl accounts author-reset <installation>` on the
+core. A repository with no noreply address falls back to the agent address,
+with a note on stderr. A command that sets `GIT_AUTHOR_*` itself is left as
+it is.
+
+| Exit | Result line |
+|---|---|
+| 0 | `pinned on the core for this machine: …`, or `already pinned … (same pair)`; the repository is set |
+| 2 | usage, or the path is not a git repository |
+| 29 | `refused:` the core holds a different pair; prints the reset command with this machine's installation id; the repository stays in agent mode |
+| 30 | `core unreachable:` with the error; the repository stays in agent mode |
+| 31 | `not pinned:` the pair is not a noreply address named by its own login. With no typed identity the repository stays in agent mode; with one, it is set, and signed only if `INNSEGL_SIGN_AUTHOR_OPERATORS` lists it |
+
+`innsegl author` with no arguments ends with the pair the core holds for this
+machine (`GET /_core/operator-author`, ENF-015): the pair, `none`, or
+`unknown (core unreachable: …)`. The local listing prints either way.
 
 ## Settings
 
@@ -86,7 +101,8 @@ A command that sets `GIT_AUTHOR_*` itself is left as it is.
 
 Core routes: `/_gateway/commit-trailers` and `/_gateway/commit-sign`, on the
 gateway's listener, scoped to the calling installation; and, on a hosted
-core, `/_core/operator-author` (POST, behind the client certificate guard).
+core, `/_core/operator-author` (POST pins, GET reads the caller's own pin;
+behind the client certificate guard, and never another installation's).
 
 ## Files, volumes, containers
 
