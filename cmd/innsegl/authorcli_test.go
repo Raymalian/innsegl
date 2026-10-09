@@ -79,7 +79,7 @@ func writeCoreConfig(t *testing.T, home, installation string) {
 	if err := os.MkdirAll(filepath.Dir(p.Core), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"core_url":"https://core.invalid","installation_id":"` + installation + `"}`
+	body := `{"core_url":"https://core.invalid","listen":"127.0.0.1:1","installation_id":"` + installation + `"}`
 	if err := os.WriteFile(p.Core, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -357,5 +357,47 @@ func TestENF011AuthorCommandRefusesWhatIsNotARepositoryOrAnIdentity(t *testing.T
 	}
 	if code, _, _ := runAuthorCLI(t, home, "repo"); code != exitUsage {
 		t.Fatalf("`author repo` with no path: exit %d, want %d", code, exitUsage)
+	}
+}
+
+// ENF-016 (PROPOSED for doc 07) — `innsegl author` says a core older than
+// this client is older, and a client service that is down is the service,
+// not the core: neither reads "core unreachable".
+func TestENF016AuthorSaysWhichSideIsOlderOrDown(t *testing.T) {
+	older := fmt.Errorf("%w (it answered 405: )", client.ErrCoreOlder)
+	down := fmt.Errorf("%w at http://127.0.0.1:1; start it: x", client.ErrClientServiceDown)
+	cases := []struct {
+		desc, list, pin string
+		err             error
+	}{
+		{"an older core", "unknown (the core is older than this client; update the core",
+			"the core is older than this client; update the core", older},
+		{"the service down", "unknown (the client service is not answering",
+			"the client service is not answering", down},
+	}
+	for _, c := range cases {
+		t.Run("list: "+c.desc, func(t *testing.T) {
+			home := t.TempDir()
+			isolateGit(t, home)
+			stubCorePin(t, "", "", false, c.err)
+			_, out, _ := runAuthorCLI(t, home)
+			if !strings.Contains(out, "pinned on the core for this machine: "+c.list) || strings.Contains(out, "core unreachable") {
+				t.Fatalf("stdout:\n%s", out)
+			}
+		})
+		t.Run("pin: "+c.desc, func(t *testing.T) {
+			home := t.TempDir()
+			isolateGit(t, home)
+			writeCoreConfig(t, home, enf014Installation)
+			repo, env := enf010Repo(t, home)
+			ghRun(t, ghGitOrSkip(t), repo, env, "config", "user.email", enf014Email)
+			recordReportsAnswering(t, "", c.err)
+			code, out, errOut := runAuthorCLI(t, home, "repo", repo, "operator")
+			lines := resultLines(out + errOut)
+			if code != exitAuthorUnreachable || len(lines) != 1 || !strings.Contains(lines[0], c.pin) ||
+				strings.Contains(lines[0], "core unreachable") {
+				t.Fatalf("exit %d, lines %q", code, lines)
+			}
+		})
 	}
 }

@@ -76,11 +76,53 @@ Also `~/.innsegl/trust-backups/` and `~/.innsegl/trust-backup/identity.txt`
 The user service: LaunchAgent `dev.innsegl.client` on macOS, systemd user
 unit `innsegl-client.service` on Linux (`internal/client/service.go`).
 
-Local routes: `GET /_client/status`. Core routes it calls: `/_core/enrol`,
-`/_core/renew`, `/_core/status`, `/_core/disconnect`, `/_core/journal`,
-`/_core/git/`, `/_core/trust-backup`, `/_core/ca-custody`.
+Local routes: `GET /_client/status`, and `/_client/core/<core path>` for the
+CLI (below). Core routes it calls: `/_core/enrol`, `/_core/renew`,
+`/_core/status`, `/_core/disconnect`, `/_core/journal`, `/_core/git/`,
+`/_core/trust-backup`, `/_core/ca-custody`, `/_core/operator-author`.
 
 The certificate is renewed at half-life.
+
+### The CLI reaches the core through the service
+
+`innsegl status`, `ca-custody`, `trust-backup fetch`, `author` and
+`connect --disconnect` never dial the core. They send their calls to the
+client service on its loopback address, under `/_client/core`, and the
+service sends them on over its own certificate (`internal/client/corepass.go`).
+On macOS a binary started from a terminal without the Local Network
+permission cannot reach a core on the LAN ("no route to host"); the launchd
+service can, and loopback is never "local network".
+
+The service passes exactly these, and refuses anything else itself, without
+asking the core (CLI-018):
+
+| Method | Core path | Used by |
+|---|---|---|
+| GET | `/_core/status` | `status` |
+| GET | `/_core/ca-custody`, `/_core/ca-custody/material` | `ca-custody status`, `ca-custody unlock` |
+| POST | `/_core/ca-custody/unlock` | `ca-custody unlock` |
+| GET | `/_core/trust-backup`, `/_core/trust-backup/latest` | `trust-backup fetch` |
+| GET, POST | `/_core/operator-author` | `author` |
+| POST | `/_core/disconnect` | `connect --disconnect` |
+
+A call names its installation (`X-Innsegl-Installation`, from `core.json`);
+the service refuses one for another installation (409), and a revoked
+installation's service refuses every call (403). Every answer it gives
+carries `X-Innsegl-Client-Pass`.
+
+What the CLI says when the way is not there:
+
+| Situation | The CLI says |
+|---|---|
+| the service does not answer | the client service is not answering at `<addr>`; start it: `launchctl kickstart -k gui/$(id -u)/dev.innsegl.client` (macOS) or `systemctl --user restart innsegl-client.service` |
+| the service predates this route (the binary was rebuilt, the service not restarted) | the client service is older than this command; restart it so it runs this build (the same command), or `make client-restart` |
+| the service could not reach the core | the core did not answer the client service |
+| the core does not know a route or method (405, or a path its gateway refuses as an unrecognised harness shape) | the core is older than this client; update the core |
+
+`connect --disconnect` alone dials the core itself when the service is down
+or older: a disconnect is the last thing the machine does with its key and
+must not depend on the service it removes. Where that dial is refused too, it
+says to revoke the machine from the Account page.
 
 ## Exit codes and error classes
 
@@ -88,16 +130,22 @@ The certificate is renewed at half-life.
 |---|---|---|
 | `connect` | 24 | enrolment or a settings change failed |
 | `client serve` | 25 | the service could not run |
-| `status` | 1 | something is down; the output names it |
+| `status` | 1 | something is down; the output names it. With the client service down, both it and the core are down: the core is asked through it |
 
 ## Tests
 
 - `cmd/innsegl/connect_test.go` (EGR-001, ENF-006), `connectmode_test.go`
   (BAK-025), `connectsudo_test.go`
 - `cmd/innsegl/enrol_test.go` (GW-016 to GW-019, KEY-001 to KEY-005, SPI-020)
-- `cmd/innsegl/clientserve_test.go`, `status_test.go`, `disconnect_core_test.go`,
-  `clientjournal_test.go`
-- `internal/client/*_test.go` (JRN-002, JRN-008, JRN-009, BAK-025 to BAK-028)
+- `cmd/innsegl/clientserve_test.go`, `status_test.go` (CLI-019, PROPOSED),
+  `disconnect_core_test.go`, `clientjournal_test.go`, `connect_test.go`
+  (CLI-020, PROPOSED), `authorcli_test.go` (ENF-016, PROPOSED)
+- `internal/client/*_test.go` (JRN-002, JRN-008, JRN-009, BAK-025 to BAK-028);
+  `corepass_test.go` (CLI-017 to CLI-019, PROPOSED: the pass-through over a
+  real loopback listener, its refusals, and what the CLI says);
+  `operatorauthor_test.go` (ENF-016, PROPOSED)
+- `scripts/codesign-cli-selftest.sh` (OPS-169, PROPOSED),
+  `scripts/client-restart-selftest.sh` (OPS-170, PROPOSED)
 - `internal/clientjournal/entry_test.go` (JRN-001)
 - `internal/accounts/enrol_test.go` (KEY-001 to KEY-005)
 
@@ -112,4 +160,6 @@ The certificate is renewed at half-life.
 
 ## Runbooks
 
+- [client-update.md](../runbooks/client-update.md): update the client on a
+  machine — `git pull && make build && make client-restart`
 - [cutover.md](../runbooks/cutover.md)

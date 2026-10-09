@@ -106,7 +106,7 @@ func (c *coreBackups) add(t *testing.T) trustbackup.Entry {
 }
 
 func TestTheClientKeepsTheCoresNewestTrustBackup(t *testing.T) {
-	core, paths := enrolled(t)
+	core, paths := enrolledServed(t)
 	cb := newCoreBackups(t)
 	cb.mount(t, core)
 	e := cb.add(t)
@@ -147,7 +147,7 @@ func TestTheClientKeepsTheCoresNewestTrustBackup(t *testing.T) {
 }
 
 func TestTheClientRefusesABundleThatFailsItsChecksum(t *testing.T) {
-	core, paths := enrolled(t)
+	core, paths := enrolledServed(t)
 	cb := newCoreBackups(t)
 	cb.mount(t, core)
 	cb.add(t)
@@ -162,7 +162,7 @@ func TestTheClientRefusesABundleThatFailsItsChecksum(t *testing.T) {
 }
 
 func TestTheClientSaysWhatTheCoreSaidWhenThereIsNoBackup(t *testing.T) {
-	core, paths := enrolled(t)
+	core, paths := enrolledServed(t)
 	cb := newCoreBackups(t)
 	cb.mount(t, core)
 	local := &trustbackup.Store{Dir: paths.TrustBackups, Keep: 2}

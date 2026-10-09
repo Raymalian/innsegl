@@ -96,7 +96,7 @@ func identitiesOf(ids ...age.Identity) func() ([]age.Identity, error) {
 // BAK-026 (PROPOSED) — a sealed store is unlocked with exactly the material
 // the core holds, opened by the operator's identity.
 func TestBAK026TheOperatorsMachineUnlocksASealedStore(t *testing.T) {
-	core, paths := enrolled(t)
+	core, paths := enrolledServed(t)
 	cc, id, m := sealedCustody(t)
 	cc.mount(t, core)
 
@@ -118,7 +118,7 @@ func TestBAK027NoTouchIDWhenThereIsNothingToUnlock(t *testing.T) {
 		"unsealed":    {Enabled: true, Initialized: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			core, paths := enrolled(t)
+			core, paths := enrolledServed(t)
 			cc, _, _ := sealedCustody(t)
 			cc.status = st
 			cc.mount(t, core)
@@ -136,7 +136,7 @@ func TestBAK027NoTouchIDWhenThereIsNothingToUnlock(t *testing.T) {
 // nothing; a refusal by the core is an error that says so; and the service
 // does not ask again until its back-off has passed.
 func TestBAK028AFailedUnlockSendsNothingAndDoesNotNag(t *testing.T) {
-	core, paths := enrolled(t)
+	core, paths := enrolledServed(t)
 	cc, _, _ := sealedCustody(t)
 	cc.mount(t, core)
 
@@ -153,7 +153,7 @@ func TestBAK028AFailedUnlockSendsNothingAndDoesNotNag(t *testing.T) {
 	}
 
 	cc2, id2, _ := sealedCustody(t)
-	core2, paths2 := enrolled(t)
+	core2, paths2 := enrolledServed(t)
 	cc2.unlockErr = http.StatusForbidden
 	cc2.mount(t, core2)
 	if _, err = UnlockCA(t.Context(), paths2, identitiesOf(id2)); err == nil ||

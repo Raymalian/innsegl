@@ -26,22 +26,25 @@ const TrustBackupKeep = 30
 // one bundle a day, so an hour finds each one the same hour.
 const TrustBackupInterval = time.Hour
 
-// FetchTrustBackup asks the core for its newest bundle over this machine's
-// certificate and keeps it in store, unless store already holds it. It does
-// not need the client service to be running.
+// FetchTrustBackup asks the core for its newest bundle, through the client
+// service, and keeps it in store, unless store already holds it.
 func FetchTrustBackup(ctx context.Context, paths Paths, store *trustbackup.Store) (trustbackup.Entry, bool, error) {
-	s, err := NewServer(paths, io.Discard)
+	c, err := cliConn(paths)
 	if err != nil {
 		return trustbackup.Entry{}, false, err
 	}
-	return s.FetchTrustBackup(ctx, store)
+	return c.fetchTrustBackup(ctx, store)
 }
 
 // FetchTrustBackup is FetchTrustBackup through this service's connection. It
 // answers the newest bundle store holds and whether it was downloaded now.
 func (s *Server) FetchTrustBackup(ctx context.Context, store *trustbackup.Store) (trustbackup.Entry, bool, error) {
+	return s.conn().fetchTrustBackup(ctx, store)
+}
+
+func (c coreConn) fetchTrustBackup(ctx context.Context, store *trustbackup.Store) (trustbackup.Entry, bool, error) {
 	var listing trustbackup.Listing
-	if err := s.coreGet(ctx, trustbackup.CorePath, 30*time.Second, func(resp *http.Response) error {
+	if err := c.coreGet(ctx, trustbackup.CorePath, 30*time.Second, func(resp *http.Response) error {
 		return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&listing)
 	}); err != nil {
 		return trustbackup.Entry{}, false, err
@@ -57,7 +60,7 @@ func (s *Server) FetchTrustBackup(ctx context.Context, store *trustbackup.Store)
 		}
 	}
 	var got trustbackup.Entry
-	err := s.coreGet(ctx, trustbackup.CoreLatestPath, 10*time.Minute, func(resp *http.Response) error {
+	err := c.coreGet(ctx, trustbackup.CoreLatestPath, 10*time.Minute, func(resp *http.Response) error {
 		var perr error
 		got, perr = store.Put(resp.Header.Get(trustbackup.HeaderName), resp.Body, resp.Header.Get(trustbackup.HeaderSHA256))
 		return perr
@@ -70,26 +73,24 @@ func (s *Server) FetchTrustBackup(ctx context.Context, store *trustbackup.Store)
 
 // coreGet sends one GET to the core and hands a 200 to read. Any other
 // status is an error carrying the core's own message.
-func (s *Server) coreGet(ctx context.Context, path string, timeout time.Duration, read func(*http.Response) error) error {
+func (c coreConn) coreGet(ctx context.Context, path string, timeout time.Duration, read func(*http.Response) error) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(s.core.CoreURL, "/")+path, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(c.base, "/")+path, http.NoBody)
 	if err != nil {
 		return err
 	}
-	resp, err := s.transport.RoundTrip(req)
+	resp, err := c.rt.RoundTrip(req)
 	if err != nil {
 		return fmt.Errorf("trust backup: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		var body struct {
-			Error string `json:"error"`
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		if err != nil {
+			return fmt.Errorf("trust backup: the core answered %d, and its body could not be read: %w", resp.StatusCode, err)
 		}
-		if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body) != nil || body.Error == "" {
-			body.Error = http.StatusText(resp.StatusCode)
-		}
-		return fmt.Errorf("trust backup: the core answered %d: %s", resp.StatusCode, body.Error)
+		return fmt.Errorf("trust backup: %w", coreAnswerError(resp.StatusCode, body))
 	}
 	if err := read(resp); err != nil {
 		return fmt.Errorf("trust backup: %w", err)

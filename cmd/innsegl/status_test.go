@@ -10,12 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"innsegl.dev/innsegl/internal/client"
-	"innsegl.dev/innsegl/internal/client/clienttest"
 	"innsegl.dev/innsegl/internal/trustbackup"
 )
 
@@ -33,20 +33,42 @@ func statusFixture(t *testing.T, components string, serviceUp bool, extra ...str
 			t.Error(err)
 		}
 	})
-	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings, "--no-service"); code != exitOK {
-		t.Fatalf("connect: %s", stderr)
-	}
-	local := "http://127.0.0.1:1" // nothing listens
-	if serviceUp {
-		svc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	// The machine's own client service: its status route says what this
+	// test wants; everything else, the CLI's calls to the core included, is
+	// the real service.
+	svc := f.connectServed(t, func(service http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != client.StatusPath {
+				service.ServeHTTP(w, r)
+				return
+			}
 			if _, err := io.WriteString(w, `{"core_reachable":true,"revoked":false,"certificate_expires_at":"2026-10-04T00:00:00Z"}`); err != nil {
 				t.Error(err)
 			}
-		}))
-		t.Cleanup(svc.Close)
+		})
+	})
+	local := "http://127.0.0.1:1" // nothing listens
+	if serviceUp {
 		local = svc.URL
 	}
 	return statusDeps{home: f.home, localURL: local}
+}
+
+// CLI-019 (PROPOSED for doc 07) — with the client service down, status says
+// so, names how to start it, and says the core was not asked: the core is
+// reached through the service.
+func TestCLI019StatusSaysTheServiceIsDownAndHowToStartIt(t *testing.T) {
+	deps := statusFixture(t, `[{"name":"ledger","up":true}]`, false)
+	var out, errOut bytes.Buffer
+	if code := runStatus(t.Context(), nil, &out, &errOut, deps); code == exitOK {
+		t.Fatalf("exit 0 with the client service down; stdout:\n%s", out.String())
+	}
+	if got := errOut.String(); !strings.Contains(got, "down: client service, core") {
+		t.Errorf("stderr does not name what is down:\n%s", got)
+	}
+	if !strings.Contains(out.String(), client.RestartCommand(runtime.GOOS)) {
+		t.Errorf("stdout does not say how to start the service:\n%s", out.String())
+	}
 }
 
 // #472: one command says what is up, what is down, the versions and the
@@ -67,12 +89,12 @@ func TestStatusSaysEverythingIsUp(t *testing.T) {
 
 // Anything down is named, and the exit is non-zero.
 func TestStatusNamesWhatIsDown(t *testing.T) {
-	deps := statusFixture(t, `[{"name":"ledger","up":true},{"name":"sigstore","up":false}]`, false)
+	deps := statusFixture(t, `[{"name":"ledger","up":true},{"name":"sigstore","up":false}]`, true)
 	var out, errOut bytes.Buffer
 	if code := runStatus(t.Context(), nil, &out, &errOut, deps); code == exitOK {
-		t.Fatalf("exit 0 with sigstore and the client service down; stdout:\n%s", out.String())
+		t.Fatalf("exit 0 with sigstore down; stdout:\n%s", out.String())
 	}
-	if got := errOut.String(); !strings.Contains(got, "down: client service, sigstore") {
+	if got := errOut.String(); !strings.Contains(got, "down: sigstore") {
 		t.Errorf("stderr does not name what is down:\n%s", got)
 	}
 }

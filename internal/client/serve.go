@@ -383,6 +383,10 @@ func (s *Server) Handler() http.Handler {
 			s.serveStatus(w, r)
 			return
 		}
+		if r.URL.Path == CorePassPrefix || strings.HasPrefix(r.URL.Path, CorePassPrefix+"/") {
+			s.serveCorePass(w, r)
+			return
+		}
 		if s.revoked.Load() {
 			http.Error(w, "innsegl client: this installation was revoked; the core refused its renewal. "+
 				"Run `innsegl connect --disconnect`, then enrol again with a new token.", http.StatusForbidden)

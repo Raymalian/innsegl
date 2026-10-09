@@ -124,3 +124,32 @@ func TestENF014CheckPinnable(t *testing.T) {
 		}
 	}
 }
+
+// ENF-016 (PROPOSED for doc 07) — a core older than this client does not
+// know the GET (405), or the route at all (its gateway refuses the path as
+// an unrecognised harness shape): that is version skew, said as such, never
+// "unreachable".
+func TestENF016AnOlderCoreIsSaidToBeOlder(t *testing.T) {
+	for name, answer := range map[string]struct {
+		status int
+		body   string
+	}{
+		"no GET":   {http.StatusMethodNotAllowed, ""},
+		"no route": {http.StatusBadRequest, "innsegl gateway: unrecognised harness shape, refusing rather than guessing"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, answer.body, answer.status)
+			}))
+			t.Cleanup(core.Close)
+			_, _, _, err := readOperatorAuthor(t.Context(), http.DefaultTransport, core.URL)
+			if !errors.Is(err, ErrCoreOlder) || !strings.Contains(err.Error(), "update the core") {
+				t.Fatalf("read: %v", err)
+			}
+			_, err = reportOperatorAuthor(t.Context(), http.DefaultTransport, core.URL, "alpha", "1+alpha@users.noreply.github.com")
+			if !errors.Is(err, ErrCoreOlder) {
+				t.Fatalf("report: %v", err)
+			}
+		})
+	}
+}

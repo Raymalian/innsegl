@@ -37,7 +37,11 @@ func enrolled(t *testing.T) (*clienttest.Core, Paths) {
 	if err != nil {
 		t.Fatalf("Enrol: %v", err)
 	}
-	if err := WriteEnrolment(paths, e, "127.0.0.1:28195"); err != nil {
+	// Never DefaultListen: the CLI's calls go to the service at this
+	// address, and on a developer's machine their own service listens at
+	// the default, in front of their own core. Nothing listens on port 1; a
+	// test that needs a service starts one (serveFor).
+	if err := WriteEnrolment(paths, e, "127.0.0.1:1"); err != nil {
 		t.Fatalf("WriteEnrolment: %v", err)
 	}
 	return core, paths

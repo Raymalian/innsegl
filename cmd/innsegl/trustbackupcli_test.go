@@ -18,7 +18,6 @@ import (
 	"github.com/go-sql-driver/mysql"
 
 	"innsegl.dev/innsegl/internal/client"
-	"innsegl.dev/innsegl/internal/client/clienttest"
 	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/trustbackup"
 )
@@ -337,10 +336,7 @@ func TestTrustBackupDrillNamesAMissingItem(t *testing.T) {
 
 func TestTrustBackupFetchKeepsTheCoresNewestBundle(t *testing.T) {
 	f := newConnectFixture(t)
-	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
-		"--managed-settings", f.settings, "--no-service"); code != exitOK {
-		t.Fatalf("connect: %s", stderr)
-	}
+	f.connectServed(t, nil)
 	coreDir, e := backupDirWithOne(t)
 	h := trustBackupHandler(coreDir, operatorMachine(), newBackupLimiter(nil), newServeLog(os.Stderr))
 	f.core.Mux.Handle(coreTrustBackupPath, withInstallation("inst-1", h))

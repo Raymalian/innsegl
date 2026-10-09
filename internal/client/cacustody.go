@@ -31,39 +31,63 @@ const CAUnlockInterval = time.Minute
 // asking for Touch ID again, so a declined prompt is not repeated every minute.
 const CAUnlockBackoff = 15 * time.Minute
 
+// coreConn is one way to the core: the service's own certificate, or the
+// CLI's way through the service (corepass.go).
+type coreConn struct {
+	rt   http.RoundTripper
+	base string
+}
+
+// conn is this service's own connection to the core.
+func (s *Server) conn() coreConn { return coreConn{rt: s.transport, base: s.core.CoreURL} }
+
+// cliConn is the CLI's connection: through the client service on loopback.
+func cliConn(paths Paths) (coreConn, error) {
+	rt, base, err := coreViaService(paths, "")
+	return coreConn{rt: rt, base: base}, err
+}
+
 // UnlockCA unlocks the core's CA key store if it is sealed. identities is
 // called only then, and is what asks for Touch ID. It answers whether it sent
-// an unlock that the core accepted. It does not need the client service.
+// an unlock that the core accepted. It goes through the client service; the
+// material is opened here, in this process.
 func UnlockCA(ctx context.Context, paths Paths, identities func() ([]age.Identity, error)) (bool, error) {
-	s, err := NewServer(paths, io.Discard)
+	c, err := cliConn(paths)
 	if err != nil {
 		return false, err
 	}
-	return s.UnlockCA(ctx, identities)
+	return c.unlockCA(ctx, identities)
 }
 
-// CAStatus answers the core's CA custody status. It does not need the client
-// service.
+// CAStatus answers the core's CA custody status, through the client service.
 func CAStatus(ctx context.Context, paths Paths) (cacustody.CoreStatus, error) {
-	s, err := NewServer(paths, io.Discard)
+	c, err := cliConn(paths)
 	if err != nil {
 		return cacustody.CoreStatus{}, err
 	}
-	return s.CAStatus(ctx)
+	return c.caStatus(ctx)
 }
 
 // CAStatus asks the core whether its CA key store is sealed.
 func (s *Server) CAStatus(ctx context.Context) (cacustody.CoreStatus, error) {
+	return s.conn().caStatus(ctx)
+}
+
+// UnlockCA is UnlockCA through this service's connection.
+func (s *Server) UnlockCA(ctx context.Context, identities func() ([]age.Identity, error)) (bool, error) {
+	return s.conn().unlockCA(ctx, identities)
+}
+
+func (c coreConn) caStatus(ctx context.Context) (cacustody.CoreStatus, error) {
 	var st cacustody.CoreStatus
-	err := s.custodyCall(ctx, http.MethodGet, cacustody.CorePath, nil, func(b []byte) error {
+	err := c.custodyCall(ctx, http.MethodGet, cacustody.CorePath, nil, func(b []byte) error {
 		return json.Unmarshal(b, &st)
 	})
 	return st, err
 }
 
-// UnlockCA is UnlockCA through this service's connection.
-func (s *Server) UnlockCA(ctx context.Context, identities func() ([]age.Identity, error)) (bool, error) {
-	st, err := s.CAStatus(ctx)
+func (c coreConn) unlockCA(ctx context.Context, identities func() ([]age.Identity, error)) (bool, error) {
+	st, err := c.caStatus(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -71,7 +95,7 @@ func (s *Server) UnlockCA(ctx context.Context, identities func() ([]age.Identity
 		return false, nil
 	}
 	var sealed []byte
-	if err = s.custodyCall(ctx, http.MethodGet, cacustody.CoreMaterialPath, nil, func(b []byte) error {
+	if err = c.custodyCall(ctx, http.MethodGet, cacustody.CoreMaterialPath, nil, func(b []byte) error {
 		sealed = b
 		return nil
 	}); err != nil {
@@ -89,7 +113,7 @@ func (s *Server) UnlockCA(ctx context.Context, identities func() ([]age.Identity
 	if err != nil {
 		return false, err
 	}
-	if err := s.custodyCall(ctx, http.MethodPost, cacustody.CoreUnlockPath, body, nil); err != nil {
+	if err := c.custodyCall(ctx, http.MethodPost, cacustody.CoreUnlockPath, body, nil); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -124,21 +148,21 @@ func (s *Server) RunCAUnlock(ctx context.Context, identities func() ([]age.Ident
 
 // custodyCall sends one request to the core; a 2xx body goes to read. Any
 // other status is an error carrying the core's own message.
-func (s *Server) custodyCall(ctx context.Context, method, path string, body []byte, read func([]byte) error) error {
+func (c coreConn) custodyCall(ctx context.Context, method, path string, body []byte, read func([]byte) error) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	var reader io.Reader = http.NoBody
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(s.core.CoreURL, "/")+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(c.base, "/")+path, reader)
 	if err != nil {
 		return err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := s.transport.RoundTrip(req)
+	resp, err := c.rt.RoundTrip(req)
 	if err != nil {
 		return fmt.Errorf("ca custody: %w", err)
 	}
@@ -148,13 +172,7 @@ func (s *Server) custodyCall(ctx context.Context, method, path string, body []by
 		return fmt.Errorf("ca custody: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(payload, &e) != nil || e.Error == "" {
-			e.Error = http.StatusText(resp.StatusCode)
-		}
-		return fmt.Errorf("ca custody: the core answered %d: %s", resp.StatusCode, e.Error)
+		return fmt.Errorf("ca custody: %w", coreAnswerError(resp.StatusCode, payload))
 	}
 	if read == nil {
 		return nil

@@ -68,6 +68,9 @@ type connectDeps struct {
 	// loadHarness has Claude Code read the settings (connectverify.go); nil
 	// means the real one.
 	loadHarness func(settings string, named bool, debugFile, ca string) error
+	// serviceURL is where --disconnect asks the client service to revoke
+	// this machine; empty means the address the enrolment names.
+	serviceURL string
 }
 
 // connectHome answers the home folder and uid connect acts for. Under sudo,
@@ -381,7 +384,7 @@ func connectDisconnect(ctx context.Context, f connectFlags, stdout, stderr io.Wr
 	// reached does not stop the disconnect; it is said, with where to finish.
 	revokedOnCore := false
 	if _, statErr := os.Stat(paths.Core); statErr == nil {
-		if rerr := client.RevokeInstallation(ctx, paths); rerr != nil {
+		if rerr := client.RevokeInstallation(ctx, paths, deps.serviceURL); rerr != nil {
 			fprintf(stderr, "innsegl connect: the core could not revoke this machine (%v); its installation is "+
 				"still active on the core. Revoke it from the Account page, under Machines.\n", rerr)
 		} else {

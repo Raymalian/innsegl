@@ -20,7 +20,7 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 
 COVERPROFILE := cover.out
 
-.PHONY: all build test test-clean lint cover smoke smoke-down spire-up spire-verify \
+.PHONY: all build client-restart test test-clean lint cover smoke smoke-down spire-up spire-verify \
         spire-down spire-services-up spire-admin-relay-up spire-admin-relay-down \
         sigstore-up rekor-log-up rekor-index-ready sigstore-verify sigstore-down rekor-tlog-id rekor-reindex \
         innsegl-verify innsegl-canary innsegl-demo innsegl-init \
@@ -35,9 +35,19 @@ COVERPROFILE := cover.out
 
 all: build test lint
 
-## build: compile the single innsegl binary
+## build: compile the single innsegl binary; on macOS, sign it with a Developer ID if one is held
+#
+# The signature is what lets macOS keep the binary's Local Network permission
+# across rebuilds (scripts/codesign-cli.sh; $INNSEGL_CODESIGN_IDENTITY picks
+# the identity, =none skips it). Nothing on Linux. It restarts nothing: that
+# is client-restart, asked for on its own.
 build:
 	go build -ldflags '$(LDFLAGS)' -o $(BINARY) $(CMD)
+	@scripts/codesign-cli.sh $(BINARY)
+
+## client-restart: restart this machine's client service, if it runs the binary build just wrote
+client-restart:
+	@scripts/client-restart.sh $(CURDIR)/$(BINARY)
 
 ## test: run the full suite with the race detector
 #
