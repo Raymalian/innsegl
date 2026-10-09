@@ -263,6 +263,10 @@ services:
     # as the definition — GET /api/v1/rootCert must return bytes that parse as
     # a PEM CA certificate. sigstore/verify.sh does exactly that.
     restart: unless-stopped
+    # The hash of what it reads at start, set by scripts/compose-up.py: a
+    # changed input recreates it (OPS-165).
+    labels:
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_FULCIO:-}
 
   # --------------------------------------------------------------------------
   # rekor — the local transparency log (doc 05 §1).
@@ -301,6 +305,10 @@ services:
     # is no healthcheck to gate on, because the images are distroless, so this
     # is the mechanism — without it the stack looks like it hung.
     restart: on-failure
+    # The hash of what it reads at start, set by scripts/compose-up.py: a
+    # changed input recreates it (OPS-165).
+    labels:
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_REKOR:-}
     command:
       - "serve"
       - "--trillian_log_server.address=trillian-log-server"
@@ -404,6 +412,10 @@ services:
       trillian-db:
         condition: service_healthy
     restart: on-failure
+    # The hash of what it reads at start, set by scripts/compose-up.py: a
+    # changed input recreates it (OPS-165).
+    labels:
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_TRILLIAN_LOG_SERVER:-}
     command:
       - "--storage_system=mysql"
       # --mysql_uri, with this host's password in it, is in Trillian's own
@@ -446,6 +458,10 @@ services:
       trillian-db:
         condition: service_healthy
     restart: on-failure
+    # The hash of what it reads at start, set by scripts/compose-up.py: a
+    # changed input recreates it (OPS-165).
+    labels:
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_TRILLIAN_LOG_SIGNER:-}
     command:
       - "--storage_system=mysql"
       # --mysql_uri, with this host's password in it, is in Trillian's own
@@ -483,6 +499,10 @@ services:
     container_name: innsegl-sigstore-trillian-db
     platform: linux/amd64
     restart: unless-stopped
+    # The hash of what it reads at start, set by scripts/compose-up.py: a
+    # changed input recreates it (OPS-165).
+    labels:
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_TRILLIAN_DB:-}
     # The init file and both password files are this host's, rendered by
     # sigstore-bootstrap (ADR-0078).
     depends_on:

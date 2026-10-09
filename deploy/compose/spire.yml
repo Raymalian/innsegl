@@ -165,6 +165,10 @@ services:
       retries: 24
       start_period: 10s
     restart: unless-stopped
+    # The hash of what it reads at start, set by scripts/compose-up.py: a
+    # changed input recreates it (OPS-165).
+    labels:
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_SPIRE_SERVER:-}
 
   # --------------------------------------------------------------------------
   # spire-admin-relay — RM-097 (#156), option 1 of that issue: ship the socat
@@ -295,6 +299,10 @@ services:
       retries: 24
       start_period: 10s
     restart: unless-stopped
+    # The hash of what it reads at start, set by scripts/compose-up.py: a
+    # changed input recreates it (OPS-165).
+    labels:
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_SPIRE_AGENT:-}
 
   # --------------------------------------------------------------------------
   # spire-oidc — the JWT-SVID → OIDC bridge Fulcio validates against.
@@ -317,6 +325,9 @@ services:
     # every container; selecting on those would tie the trust domain's identity
     # policy to compose's internal label scheme. These are ours.
     labels:
+      # The hash of what it reads at start, set by scripts/compose-up.py:
+      # a changed input recreates it (OPS-165).
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_SPIRE_OIDC:-}
       dev.innsegl.component: oidc-discovery-provider
     depends_on:
       spire-agent:

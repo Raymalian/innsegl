@@ -21,7 +21,7 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 COVERPROFILE := cover.out
 
 .PHONY: all build test test-clean lint cover smoke smoke-down spire-up spire-verify \
-        spire-down spire-admin-relay-up spire-admin-relay-down \
+        spire-down spire-services-up spire-admin-relay-up spire-admin-relay-down \
         sigstore-up rekor-log-up rekor-index-ready sigstore-verify sigstore-down rekor-tlog-id rekor-reindex \
         innsegl-verify innsegl-canary innsegl-demo innsegl-init \
         innsegl-verify-commit innsegl-down innsegl-purge innsegl-backup \
@@ -137,6 +137,27 @@ INNSEGL_FILES  := -f deploy/compose/innsegl.yml$(if $(DEV_OVERLAY), $(call DEV_O
 INNSEGL_TRUST_ENV := $(shell $(STACK_SHELL_ENV) deploy/compose/trust-volumes.sh env | tr '\n' ' ')
 GUARD             := scripts/teardown-guard.sh
 
+# ---------------------------------------------------------------------------
+# EVERY `up` GOES THROUGH COMPOSE_UP (OPS-165).
+#
+# Compose recreates a service only when its own definition changed. A service
+# that reads a key, credential or config file once, at start, is not
+# recreated when a one-shot rewrites that file or an update changes a config
+# it mounts from this checkout. MEASURED on a live core 2026-10-09 (#563):
+# innsegl-s3-identities rewrote the object store's identity file with new
+# keys, innsegl-s3 (up four days, definition unchanged) kept serving the old
+# ones, innsegl-object-init was refused, and the update stopped with the core
+# down until the store was restarted by hand.
+#
+# scripts/compose-up.py runs the one-shots that write such files first,
+# hashes every long-running service's start-read inputs into its
+# dev.innsegl.inputs label (INNSEGL_INPUTS_<SERVICE> in the compose files),
+# then runs the `up`. A changed input is a changed label is a recreated
+# service; nothing else moves. test/deploy pins both halves: every such
+# service carries the label, and no line here runs a bare `docker compose up`.
+# ---------------------------------------------------------------------------
+COMPOSE_UP        := scripts/compose-up.py
+
 ## dev-stack: mark this repository's stack as a DEVELOPMENT stack, once
 ##   (its own names, its own trust root, loopback only; ADR-0072)
 dev-stack:
@@ -148,8 +169,14 @@ innsegl-trust-volumes:
 
 ## spire-up: boot the reference SPIRE stack and create its bootstrap entries
 spire-up:
-	docker compose $(SPIRE_FILES) up -d
+	$(COMPOSE_UP) $(SPIRE_FILES) up -d
 	deploy/compose/spire/register.sh
+
+# spire-services-up: SPIRE's services brought up again, for `make update`.
+# Through COMPOSE_UP, so a changed server.conf, agent.conf or SPIRE key reaches
+# the running server and agent (OPS-165); on most updates it changes nothing.
+spire-services-up:
+	$(COMPOSE_UP) $(SPIRE_FILES) up -d
 
 ## spire-verify: prove the SPIRE stack issues an SVID for an agent run
 spire-verify:
@@ -167,7 +194,7 @@ spire-down:
 
 ## spire-admin-relay-up: publish the SPIRE admin API to 127.0.0.1 (off by default)
 spire-admin-relay-up:
-	docker compose $(SPIRE_FILES) --profile adminrelay up -d spire-admin-relay
+	$(COMPOSE_UP) $(SPIRE_FILES) --profile adminrelay up -d spire-admin-relay
 
 ## spire-admin-relay-down: remove the admin relay — always run this when done
 spire-admin-relay-down:
@@ -230,12 +257,12 @@ sigstore-up: innsegl-trust-volumes
 	@# front of a live log. Minting is only ever right when there is no log yet.
 	@test -n '$(INNSEGL_REKOR_ALLOW_NEW_TREE)' || scripts/rekor-tlog-pin.sh guard
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  docker compose $(SPIRE_FILES) up -d
+	  $(COMPOSE_UP) $(SPIRE_FILES) up -d
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
-	  $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d$(if $(CA_CUSTODY), $(SIGSTORE_UP_EXCEPT_FULCIO))
+	  $(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(SIGSTORE_FILES) up -d$(if $(CA_CUSTODY), $(SIGSTORE_UP_EXCEPT_FULCIO))
 	$(if $(CA_CUSTODY),@$(MAKE) --no-print-directory ca-custody-up)
 	@$(MAKE) --no-print-directory rekor-index-ready
 
@@ -252,7 +279,7 @@ rekor-log-up: innsegl-trust-volumes
 	@test -n '$(INNSEGL_REKOR_ALLOW_NEW_TREE)' || scripts/rekor-tlog-pin.sh guard
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
-	  $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d trillian-db trillian-log-server trillian-log-signer rekor
+	  $(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(SIGSTORE_FILES) up -d trillian-db trillian-log-server trillian-log-signer rekor
 	@$(MAKE) --no-print-directory rekor-index-ready
 
 # fulcio-file-ca-up: Fulcio brought up again from sigstore.yml, for
@@ -277,7 +304,7 @@ fulcio-file-ca-run: innsegl-trust-volumes
 	   *--ca=kmsca*) echo "make update: Fulcio runs under key custody; left as it is" ;; \
 	   *) INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	        INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
-	        $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d fulcio ;; \
+	        $(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(SIGSTORE_FILES) up -d fulcio ;; \
 	 esac
 
 # rekor-index-ready: the log pinned and its search index complete, before
@@ -410,6 +437,9 @@ smoke-down: innsegl-stack-clean
 # ---------------------------------------------------------------------------
 
 INNSEGL_COMPOSE := $(INNSEGL_TRUST_ENV) docker compose $(INNSEGL_FILES)
+# The same files through scripts/compose-up.py, the only way this file runs
+# `up` (OPS-165): see COMPOSE_UP.
+INNSEGL_COMPOSE_UP := $(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(INNSEGL_FILES)
 
 # The repository the demo agent commits into, as doc 02 §5 spells a repo: an
 # identifier, resolved beneath the deployment's workspace root.
@@ -641,7 +671,7 @@ innsegl-here-services: innsegl-trust-volumes innsegl-images
 	  INNSEGL_WRITES_LOG_DIR='$(INNSEGL_WRITES_LOG_DIR)' \
 	  INNSEGL_WRITES_REPOS='$(INNSEGL_WRITES_REPOS)' \
 	  INNSEGL_LOG_DIR='$(INNSEGL_LOG_DIR)' \
-	  $(INNSEGL_COMPOSE) up -d --remove-orphans --no-build
+	  $(INNSEGL_COMPOSE_UP) up -d --remove-orphans --no-build
 
 # ---------------------------------------------------------------------------
 # link: install the commit hook in one repository on this machine.
@@ -728,6 +758,7 @@ update:
 	   echo "make update: already up to date ($(DEPLOY_STATE)); nothing to do"; exit 0; fi; \
 	 [ "$$deployed" = "$(DEPLOY_STATE)" ] && echo "make update: not running:$$down; starting again"; \
 	 echo "make update: deployed $${deployed:-an unrecorded checkout}, checkout is $(DEPLOY_STATE)"; \
+	 $(MAKE) --no-print-directory spire-services-up && \
 	 $(MAKE) --no-print-directory rekor-log-up && \
 	 $(MAKE) --no-print-directory fulcio-file-ca-up && \
 	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services && \
@@ -779,15 +810,15 @@ SIGSTORE_UP_EXCEPT_FULCIO = sigstore-bootstrap trillian-db trillian-log-server t
 
 ## ca-custody-up: ADR-0076 — the CA key store and its custodian; Fulcio on the
 ##   store once `make innsegl-ca-rotate TO=custody` has moved it there
-ca-custody-up: ca-custody-volumes innsegl-images
-	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store innsegl-ca-custodian
+ca-custody-up: innsegl-trust-volumes ca-custody-volumes innsegl-images
+	$(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store innsegl-ca-custodian
 	@cmd=$$(docker inspect -f '{{json .Config.Cmd}}' $(STACK_PREFIX)-sigstore-fulcio 2>/dev/null); \
 	 case "$$cmd" in \
 	   *--ca=fileca*) echo "ca custody: on in .env, and Fulcio still runs the file CA."; \
 	                  echo "  Finish the switch: make innsegl-ca-rotate CONFIRM=rotate TO=custody MODE=retire REASON='CA key custody'"; \
 	                  echo "  (runbooks/ca-custody.md). Until then nothing about signing changes." ;; \
 	   *) INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	        $(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-bootstrap fulcio ;; \
+	        $(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-bootstrap fulcio ;; \
 	 esac
 
 ## ca-custody-volumes: ADR-0076 — the store's data and the sealed unlock
@@ -816,7 +847,7 @@ ca-custody-ready:
 	@docker exec innsegl-ca-custodian innsegl ca-custodian ready
 
 ## ca-custody-stage: mint the store's root, if there is none, and print it
-ca-custody-stage:
+ca-custody-stage: innsegl-trust-volumes
 	@$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) create --no-recreate innsegl-ca-bootstrap >&2
 	@docker run --rm -v $(CA_CUSTODY_KMS_VOLUME):/k $(CA_CUSTODY_CHOWN_IMAGE) chown 65532:65532 /k
 	@$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) run --rm --no-deps innsegl-ca-bootstrap >&2
@@ -826,7 +857,7 @@ ca-custody-stage:
 ##   backup extracted with `innsegl trust-backup drill --extract DIR`.
 ##   FROM=DIR CONFIRM=restore. The store comes back sealed under its original
 ##   keys; the operator's machine unlocks it (runbooks/ca-custody.md).
-ca-custody-restore:
+ca-custody-restore: innsegl-trust-volumes
 	@test '$(CONFIRM)' = restore || { echo 'ca-custody-restore: set CONFIRM=restore; it replaces the CA key store with the backup'"'"'s'; exit 2; }
 	@test -s '$(FROM)/ca-store/store.snap' && test -s '$(FROM)/ca-custody/unlock.age' || \
 	  { echo 'ca-custody-restore: FROM must be an extracted backup holding ca-store/store.snap and ca-custody/unlock.age'; exit 2; }
@@ -837,26 +868,26 @@ ca-custody-restore:
 	@$(MAKE) --no-print-directory ca-custody-volumes
 	docker run --rm -v innsegl-trust-ca-custody:/c -v '$(abspath $(FROM))/ca-custody:/in:ro' $(CA_CUSTODY_CHOWN_IMAGE) \
 	  sh -c 'mkdir -p /c/material && cp /in/unlock.age /c/material/unlock.age && chown -R 65532:65532 /c && chmod 0600 /c/material/unlock.age'
-	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d --no-deps innsegl-ca-store
+	$(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(CA_CUSTODY_COMPOSE) up -d --no-deps innsegl-ca-store
 	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) run --rm --no-deps \
 	  -v '$(abspath $(FROM))/ca-store:/restore:ro' innsegl-ca-custodian restore /restore/store.snap
-	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d --no-deps innsegl-ca-custodian
+	$(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(CA_CUSTODY_COMPOSE) up -d --no-deps innsegl-ca-custodian
 	@echo 'ca-custody-restore: done. Unlock it from the operator'"'"'s machine: innsegl ca-custody unlock'
 
 ## ca-custody-switch: Fulcio onto the store
-ca-custody-switch:
+ca-custody-switch: innsegl-trust-volumes
 	@INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  $(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d --no-deps fulcio >&2
+	  $(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(CA_CUSTODY_COMPOSE) up -d --no-deps fulcio >&2
 
 ## ca-custody-back: Fulcio onto the file CA again, which custody left untouched
-ca-custody-back:
+ca-custody-back: innsegl-trust-volumes
 	@INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  $(INNSEGL_TRUST_ENV) docker compose $(SIGSTORE_FILES) up -d --no-deps fulcio >&2
+	  $(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(SIGSTORE_FILES) up -d --no-deps fulcio >&2
 
 ## innsegl-ca-custody-init: once — start the store and mint its keys
-innsegl-ca-custody-init:
+innsegl-ca-custody-init: innsegl-trust-volumes
 	@test '$(INNSEGL_STACK_MODE)' = live || { echo 'innsegl-ca-custody-init: key custody is for a live core; a DEV stack keeps the file CA (ADR-0072)'; exit 2; }
-	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store
+	$(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store
 	@scripts/ca-custody.sh init
 
 ## innsegl-ca-rotate: replace the Fulcio CA; the old root stays trusted for what
@@ -938,7 +969,7 @@ test-ids:
 # an identity file written once lives in somebody's deployment and one line
 # changed in it later — a bucket-wide write grant in place of the prefix-scoped
 # one — leaves no trace in this repository.
-innsegl-verify:
+innsegl-verify: innsegl-trust-volumes
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  $(INNSEGL_COMPOSE) run --rm --entrypoint sh innsegl-db-init \
 	  /innsegl/init/verify-role.sh
@@ -947,12 +978,12 @@ innsegl-verify:
 	  /innsegl/init/verify-object-scope.sh
 
 ## innsegl-canary: SEG-005 — prove the object store refuses to delete a segment
-innsegl-canary:
+innsegl-canary: innsegl-trust-volumes
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  $(INNSEGL_COMPOSE) --profile canary run --rm innsegl-canary
 
 ## innsegl-demo: register an identity, sign a commit under it, retire it
-innsegl-demo:
+innsegl-demo: innsegl-trust-volumes
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  $(INNSEGL_COMPOSE) --profile demo run --rm demo-agent
 
@@ -978,7 +1009,7 @@ innsegl-retire:
 #
 #   make innsegl-init REPO=/path/to/repo ARGS='-trust-root self-hosted \
 #     -gitsign-path /usr/local/bin/gitsign -non-interactive -identity-mode pseudonymous'
-innsegl-init:
+innsegl-init: innsegl-trust-volumes
 	@test -n "$(REPO)" || { \
 	  echo "usage: make innsegl-init REPO=/path/to/repo ARGS='[innsegl init flags]'"; \
 	  exit 2; }
@@ -1064,7 +1095,7 @@ INNSEGL_BACKUP_DIR ?= backups
 # The host folder the copy lands in (RM-190, #310) is made here first, as the
 # user running make: a bind-mount source that does not exist is created by the
 # runtime, and on Linux that means owned by root and unwritable by the backup.
-innsegl-backup:
+innsegl-backup: innsegl-trust-volumes
 	mkdir -p "$${INNSEGL_BACKUP_HOST_DIR:-$$HOME/innsegl-backups}"
 	$(INNSEGL_COMPOSE) run --rm --entrypoint /innsegl/scripts/backup-ledger.sh \
 	  innsegl-backup --out /backups
