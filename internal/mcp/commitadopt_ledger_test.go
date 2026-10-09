@@ -66,10 +66,29 @@ func TestADP009OnTheCommitPathADeletionCannotBeAdopted(t *testing.T) {
 		!strings.Contains(err.Error(), "gone.txt") {
 		t.Errorf("err = %v, want the deletion refused by name", err)
 	}
-	for _, fail := range []string{"--diff-filter=D", "-z", "cat-file"} {
+}
+
+// Every git call the evidence makes can fail, and each failure is an answer,
+// never a change read wrong. The change here deletes nothing, so each call is
+// reached.
+func TestADP009OnTheCommitPathEveryGitFailureAnswers(t *testing.T) {
+	dir := t.TempDir()
+	scGit(t, dir, "init", "-q", "-b", "main")
+	scStage(t, dir, "a.txt", "a\n")
+	scGit(t, dir, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "base")
+	parent := scGit(t, dir, "rev-parse", "HEAD")
+	scStage(t, dir, "a.txt", "b\n")
+	tree := scGit(t, dir, "write-tree")
+	if _, err := (LedgerAdoption{}).ChangedFiles(t.Context(), dir, tree, parent); err != nil {
+		t.Fatalf("control: %v", err)
+	}
+	for _, fail := range []string{"--diff-filter=D", "-z", "cat-file blob"} {
 		if _, err := (LedgerAdoption{GitPath: fakeGitFailing(t, fail)}).ChangedFiles(t.Context(), dir, tree, parent); err == nil {
 			t.Errorf("git failing on %s still answered a change", fail)
 		}
+	}
+	if _, ok, err := (LedgerAdoption{GitPath: fakeGitFailing(t, "cat-file blob")}).ParentFile(t.Context(), dir, parent, "a.txt"); ok || err == nil {
+		t.Errorf("a parent blob that cannot be read = %v, %v; want an error", ok, err)
 	}
 }
 

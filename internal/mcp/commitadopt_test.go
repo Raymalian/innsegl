@@ -45,6 +45,8 @@ type cpAdoption struct {
 	candidates []string
 	candErr    error
 	evErr      error
+	evErrFor   map[string]error
+	changedErr error
 	prior      map[string][]ledger.Adoption
 	asked      int // DeadRuns calls
 	since      time.Time
@@ -53,6 +55,9 @@ type cpAdoption struct {
 func (a *cpAdoption) AdoptionEvidence(_ context.Context, runID string) (string, []event.Fields, error) {
 	if a.evErr != nil {
 		return "", nil, a.evErr
+	}
+	if err := a.evErrFor[runID]; err != nil {
+		return "", nil, err
 	}
 	return a.states[runID], a.events[runID], nil
 }
@@ -74,7 +79,7 @@ func (a *cpAdoption) DeadRuns(_ context.Context, _ string, since time.Time, _ in
 }
 
 func (a *cpAdoption) ChangedFiles(context.Context, string, string, string) (map[string][]byte, error) {
-	return a.changed, nil
+	return a.changed, a.changedErr
 }
 
 func (a *cpAdoption) ParentFile(_ context.Context, _, _, path string) ([]byte, bool, error) {
@@ -461,5 +466,184 @@ func TestADP008OnTheCommitPathARunCannotAdoptItself(t *testing.T) {
 	}
 	if n := len(sc.ledger.ofType(event.EventTypeCommitIntent)); n != 0 {
 		t.Errorf("%d commit_intent appended", n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The remaining branches of the search, the proof and the commit path.
+// ---------------------------------------------------------------------------
+
+func TestADP021TheSearchSkipsTheCommittingRunAndWhatItDidNotTouch(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*cpAdoption, *adpFixture)
+	}{
+		{"the committing run is among the candidates", func(a *cpAdoption, _ *adpFixture) {
+			a.candidates = []string{spRunID, cpDead}
+		}},
+		{"the committing run's write failed", func(a *cpAdoption, f *adpFixture) {
+			f.runID = spRunID
+			f.gwCall("Write", map[string]any{"file_path": adpTop + "/work.txt", "content": "x\n"}, "denied", true, true)
+			a.sync(f)
+		}},
+		{"the committing run wrote another path", func(a *cpAdoption, f *adpFixture) {
+			f.runID = spRunID
+			f.gwWrite("other.txt", "o\n")
+			a.sync(f)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, f := newCPAdoption(t)
+			tc.setup(a, f)
+			if got, err := cpSearch(t, a); err != nil || got != cpDead {
+				t.Errorf("search = %q, %v; want %s", got, err, cpDead)
+			}
+		})
+	}
+}
+
+func TestADP021NoProposalWhenTheEvidenceCannotBeRead(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*cpAdoption, *adpFixture)
+	}{
+		{"the change cannot be read", func(a *cpAdoption, _ *adpFixture) {
+			a.changedErr = errors.New("git refused")
+		}},
+		{"a body of the committing run is gone", func(a *cpAdoption, f *adpFixture) {
+			f.runID = spRunID
+			f.gwWrite("other.txt", "o\n")
+			a.sync(f)
+			if err := os.RemoveAll(filepath.Join(a.bodyDir, spRunID)); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a body of the committing run is not a tool call", func(a *cpAdoption, f *adpFixture) {
+			f.runID = spRunID
+			f.call(spRunID, "Write", map[string]any{"neither": "shape"})
+			a.sync(f)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, f := newCPAdoption(t)
+			tc.setup(a, f)
+			if got, err := cpSearch(t, a); err != nil || got != "" {
+				t.Errorf("search = %q, %v; want no proposal", got, err)
+			}
+		})
+	}
+}
+
+func TestADP021ALedgerThatCannotSayWhatARunWroteRefusesTheSearch(t *testing.T) {
+	for _, run := range []string{spRunID, cpDead} {
+		a, _ := newCPAdoption(t)
+		a.evErrFor = map[string]error{run: errors.New("down")}
+		if _, err := cpSearch(t, a); Classify(err).Class != ClassLedgerUnavailable {
+			t.Errorf("evidence of %s unreadable: err = %v, want LEDGER_UNAVAILABLE", run, err)
+		}
+	}
+}
+
+func TestADP021NoProposalWhereTheCommitCannotBeRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  CredentialRun
+		dir  func(t *testing.T) string
+	}{
+		{"a run with no repository", CredentialRun{RunID: spRunID, AgentType: "demo", TaskID: spTaskID,
+			SPIFFEID: spSPIFFEID(spRunID)}, func(t *testing.T) string {
+			dir, _ := spLocalRepo(t)
+			return dir
+		}},
+		{"a working directory that is not the run's repository", CredentialRun{RunID: spRunID, AgentType: "demo",
+			TaskID: spTaskID, SPIFFEID: spSPIFFEID(spRunID), Repo: spRepo}, func(t *testing.T) string {
+			return t.TempDir()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := newCPAdoption(t)
+			call := spPendingGitCommit(spRunID)
+			call.WorkingDirectory = tc.dir(t)
+			sc := newSCWiring()
+			sc.runs.run = tc.run
+			sc.cfg.Adoption = a
+			restore, err := ConfigureCommitSigner(sc.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(restore)
+			restoreSP, err := ConfigureSignPayload(SignPayloadConfig{
+				Resolver: spResolver{calls: map[string]commitpath.RelayedCall{spToolUseID: call}}, ClaimFor: spClaimForOK(t)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(restoreSP)
+			if got, err := AdoptionForCommit(context.Background(), call, strings.Repeat("a", 40), nil); err != nil || got != "" {
+				t.Errorf("AdoptionForCommit = %q, %v; want none", got, err)
+			}
+		})
+	}
+}
+
+// sign_commit's adopt_run replays a gateway Edit on HEAD's blob when its
+// evidence can read one (ADR-0079 decision 4).
+func TestADP008SignCommitReplaysAGatewayEditOnHEAD(t *testing.T) {
+	a, f := newCPAdoption(t)
+	f.events = nil
+	f.gwEdit("work.txt", "old line", "commit-sign path unit fixture", false)
+	a.sync(f)
+	a.parent["work.txt"] = "old line\n"
+	plan, err := cpService(t, a).planAdoption(context.Background(), spRunID, cpDead, "/repo")
+	if err != nil || plan.adoptedRun != cpDead {
+		t.Fatalf("planAdoption = %+v, %v; want the edit proved on HEAD's blob", plan, err)
+	}
+}
+
+func TestADP008OnTheCommitPathAChangeThatCannotBeReadIsRefused(t *testing.T) {
+	sc, a, payload := cpSigning(t)
+	a.changedErr = errors.New("git refused")
+	if err := cpSign(payload); err == nil || !strings.Contains(err.Error(), "cannot be read") {
+		t.Fatalf("err = %v, want the unreadable change refused", err)
+	}
+	if n := len(sc.ledger.ofType(event.EventTypeCommitIntent)); n != 0 {
+		t.Errorf("%d commit_intent appended", n)
+	}
+}
+
+func TestADP008OnTheCommitPathARunAdoptedThatCannotBeRecordedStopsBeforeTheIntent(t *testing.T) {
+	sc, _, payload := cpSigning(t)
+	sc.ledger.failOn[event.EventTypeRunAdopted] = errors.New("the chain is unreachable")
+	if err := cpSign(payload); err == nil {
+		t.Fatal("a run_adopted the ledger refused still signed")
+	}
+	if n := len(sc.ledger.ofType(event.EventTypeCommitIntent)); n != 0 {
+		t.Errorf("%d commit_intent appended after run_adopted was refused", n)
+	}
+}
+
+// A commit with a parent is proved against that parent.
+func TestADP008OnTheCommitPathAChildCommitIsProvedAgainstItsParent(t *testing.T) {
+	resolver := spResolver{calls: map[string]commitpath.RelayedCall{spToolUseID: spPendingGitCommit(spRunID)}}
+	sc, _, _ := spWiringSigningWith(t, resolver, spSignedOK)
+	repo, tree, parent := spLocalRepoWithParent(t)
+	sc.space.dir = repo
+	a, f := newCPAdoption(t)
+	f.events = nil
+	f.gwWrite("work.txt", "commit-sign path unit fixture: second change\n")
+	a.sync(f)
+	a.changed = map[string][]byte{"work.txt": []byte("commit-sign path unit fixture: second change\n")}
+	sc.cfg.Adoption = a
+	restore, err := ConfigureSignCommit(sc.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	claim := spClaim(spRunID)
+	claim.AdoptedRun = cpDead
+	if err := cpSign(spPayloadWithParent(t, claim, tree, parent, spAuthor, spAuthor)); err != nil {
+		t.Fatalf("SignPayloadForGateway: %v", err)
+	}
+	if n := len(sc.ledger.ofType(event.EventTypeRunAdopted)); n != 1 {
+		t.Errorf("%d run_adopted, want 1", n)
 	}
 }
