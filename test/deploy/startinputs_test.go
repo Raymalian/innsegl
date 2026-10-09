@@ -4,6 +4,7 @@ package deploy
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -256,7 +257,9 @@ volumes:
 	file := filepath.Join(dir, "compose.yml")
 	writeFile(t, file, compose)
 	t.Cleanup(func() {
-		_ = exec.Command("docker", "compose", "-f", file, "down", "-v", "--remove-orphans").Run()
+		if out, err := exec.CommandContext(context.Background(), "docker", "compose", "-f", file, "down", "-v", "--remove-orphans").CombinedOutput(); err != nil {
+			t.Logf("removing the test project %s: %v\n%s", project, err, out)
+		}
 	})
 
 	up := func(content string) {
