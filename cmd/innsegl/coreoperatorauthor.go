@@ -31,17 +31,19 @@ const coreOperatorAuthorPath = client.OperatorAuthorPath
 // operatorAuthorReport is the body a machine sends.
 type operatorAuthorReport = client.OperatorAuthorReport
 
-// operatorAuthorPinner is the store the route pins into.
+// operatorAuthorPinner is the store the route pins into and reads from.
 type operatorAuthorPinner interface {
-	PinOperatorAuthor(ctx context.Context, installationID, name, email string) error
+	PinOperatorAuthor(ctx context.Context, installationID, name, email string) (created bool, err error)
+	OperatorAuthor(ctx context.Context, installationID string) (name, email string, ok bool, err error)
 }
 
-// operatorAuthorHandler pins the reported pair for the calling installation.
-// Neither the name nor the address is logged.
+// operatorAuthorHandler pins the reported pair for the calling installation
+// (POST), or answers the pair pinned for it (GET, GH-011). Only the caller's
+// own installation is ever read. Neither the name nor the address is logged.
 func operatorAuthorHandler(store operatorAuthorPinner, log *serveLog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeCoreError(w, http.StatusMethodNotAllowed, "innsegl core: operator author: only POST is accepted")
+		if r.Method != http.MethodPost && r.Method != http.MethodGet {
+			writeCoreError(w, http.StatusMethodNotAllowed, "innsegl core: operator author: only GET and POST are accepted")
 			return
 		}
 		id, ok := gateway.InstallationFromContext(r.Context())
@@ -49,19 +51,33 @@ func operatorAuthorHandler(store operatorAuthorPinner, log *serveLog) http.Handl
 			gateway.WriteClientRefusal(w)
 			return
 		}
+		if r.Method == http.MethodGet {
+			name, email, pinned, err := store.OperatorAuthor(r.Context(), id)
+			if err != nil {
+				log.warn("operator author: reading", "installation_id", id, "err", err)
+				writeCoreError(w, http.StatusServiceUnavailable, "innsegl core: operator author is unavailable; retry")
+				return
+			}
+			writeCoreJSON(w, http.StatusOK, client.OperatorAuthorPin{Pinned: pinned, Name: name, Email: email})
+			return
+		}
 		var report operatorAuthorReport
 		if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&report); err != nil {
 			writeCoreError(w, http.StatusBadRequest, "innsegl core: operator author: the body is not a report")
 			return
 		}
-		err := store.PinOperatorAuthor(r.Context(), id, report.Name, report.Email)
+		created, err := store.PinOperatorAuthor(r.Context(), id, report.Name, report.Email)
 		switch {
 		case err == nil:
-			writeCoreJSON(w, http.StatusOK, map[string]bool{"pinned": true})
+			result := client.PinHeld
+			if created {
+				result = client.PinNew
+			}
+			writeCoreJSON(w, http.StatusOK, client.OperatorAuthorPinResult{Pinned: true, Result: result})
 		case errors.Is(err, accounts.ErrAuthorPinned):
 			writeCoreError(w, http.StatusConflict, "innsegl core: this machine's operator author is already "+
 				"pinned to a different identity. To pin another, run on the core host: "+
-				"innsegl accounts author-reset "+id)
+				"docker exec innsegl-api innsegl accounts author-reset "+id)
 		case errors.Is(err, accounts.ErrInvalid):
 			writeCoreError(w, http.StatusBadRequest, "innsegl core: operator author: "+err.Error())
 		case errors.Is(err, accounts.ErrNotFound), errors.Is(err, accounts.ErrRevoked):

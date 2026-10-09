@@ -60,16 +60,20 @@ func (s *Store) OperatorAuthor(ctx context.Context, installationID string) (name
 // ErrAuthorPinned. Only an active installation pins, only a GitHub noreply
 // address, and only with that address's own login as the name: a pinned name
 // is published on every commit it authors, so it is never a person's name.
-func (s *Store) PinOperatorAuthor(ctx context.Context, installationID, name, email string) error {
+//
+// created reports whether this call pinned the pair, rather than finding the
+// same pair already pinned (GH-011), so the machine can say which.
+func (s *Store) PinOperatorAuthor(ctx context.Context, installationID, name, email string) (bool, error) {
+	created := false
 	login, ok := signing.NoreplyLogin(email)
 	if !ok {
-		return fmt.Errorf("%w: only a GitHub noreply address (<id>+<login>@users.noreply.github.com) is "+
+		return false, fmt.Errorf("%w: only a GitHub noreply address (<id>+<login>@users.noreply.github.com) is "+
 			"pinned automatically; set that address as this repository's git user.email", ErrInvalid)
 	}
 	if name != login {
-		return fmt.Errorf("%w: an operator author's name is its noreply address's login", ErrInvalid)
+		return false, fmt.Errorf("%w: an operator author's name is its noreply address's login", ErrInvalid)
 	}
-	return s.inTx(ctx, func(tx pgx.Tx) error {
+	txErr := s.inTx(ctx, func(tx pgx.Tx) error {
 		var account, status string
 		var n, e *string
 		err := tx.QueryRow(ctx,
@@ -102,10 +106,15 @@ func (s *Store) PinOperatorAuthor(ctx context.Context, installationID, name, ema
 		}
 		// The pair itself is not in the audit detail: a display name is a
 		// person's, and the row is enough to say a pin happened and when.
-		return appendAudit(ctx, tx, AuditEntry{Actor: ClaimActor(installationID), AccountID: account,
+		if err := appendAudit(ctx, tx, AuditEntry{Actor: ClaimActor(installationID), AccountID: account,
 			Action: "installation.operator_author_pinned", Subject: installationID,
-			Detail: map[string]any{"source": "first use"}})
+			Detail: map[string]any{"source": "first use"}}); err != nil {
+			return err
+		}
+		created = true
+		return nil
 	})
+	return created && txErr == nil, txErr
 }
 
 // ResetOperatorAuthor clears the installation's pinned operator author, so

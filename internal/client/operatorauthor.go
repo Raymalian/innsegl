@@ -59,54 +59,136 @@ func NoreplyIdentity(ctx context.Context, dir string) (name, email string, err e
 	return login, email, nil
 }
 
+// PinOutcome is what a report did on the core (GH-011).
+type PinOutcome string
+
+// The two outcomes of a report the core accepted.
+const (
+	// PinNew is a report that pinned the pair now.
+	PinNew PinOutcome = "pinned"
+	// PinHeld is the same pair, already pinned: nothing changed.
+	PinHeld PinOutcome = "already-pinned"
+)
+
+// OperatorAuthorPinResult is the core's answer to an accepted report.
+type OperatorAuthorPinResult struct {
+	Pinned bool       `json:"pinned"`
+	Result PinOutcome `json:"result,omitempty"`
+}
+
+// OperatorAuthorPin is the core's answer to GET: the pair pinned for the
+// calling installation, if any (GH-011).
+type OperatorAuthorPin struct {
+	Pinned bool   `json:"pinned"`
+	Name   string `json:"name,omitempty"`
+	Email  string `json:"email,omitempty"`
+}
+
+// ErrNotPinnable is an identity the core would not pin: it pins only a
+// GitHub noreply address, named by that address's own login.
+var ErrNotPinnable = errors.New("the core pins only a GitHub noreply address " +
+	"(<id>+<login>@users.noreply.github.com) named by its own <login>")
+
+// CheckPinnable applies the core's pin rule (accounts.PinOperatorAuthor) on
+// the machine, before asking.
+func CheckPinnable(name, email string) error {
+	login, ok := signing.NoreplyLogin(email)
+	if !ok || name != login {
+		return ErrNotPinnable
+	}
+	return nil
+}
+
 // ReportOperatorAuthor reports name and email to the core this machine is
-// enrolled with.
-func ReportOperatorAuthor(ctx context.Context, paths Paths, name, email string) error {
+// enrolled with, and answers whether the core pinned them now or already
+// held them.
+func ReportOperatorAuthor(ctx context.Context, paths Paths, name, email string) (PinOutcome, error) {
 	s, err := NewServer(paths, io.Discard)
 	if err != nil {
-		return err
+		return "", err
 	}
 	return reportOperatorAuthor(ctx, s.transport, s.core.CoreURL, name, email)
 }
 
-func reportOperatorAuthor(ctx context.Context, rt http.RoundTripper, coreURL, name, email string) error {
+// PinnedOperatorAuthor answers the pair the core holds for this machine, ok
+// false when it holds none.
+func PinnedOperatorAuthor(ctx context.Context, paths Paths) (name, email string, ok bool, err error) {
+	s, err := NewServer(paths, io.Discard)
+	if err != nil {
+		return "", "", false, err
+	}
+	return readOperatorAuthor(ctx, s.transport, s.core.CoreURL)
+}
+
+func reportOperatorAuthor(ctx context.Context, rt http.RoundTripper, coreURL, name, email string) (PinOutcome, error) {
 	body, err := json.Marshal(OperatorAuthorReport{Name: name, Email: email})
 	if err != nil {
-		return err
+		return "", err
 	}
+	raw, err := operatorAuthorCall(ctx, rt, http.MethodPost, coreURL, body)
+	if err != nil {
+		return "", err
+	}
+	var answer OperatorAuthorPinResult
+	if json.Unmarshal(raw, &answer) == nil && answer.Result == PinHeld {
+		return PinHeld, nil
+	}
+	// A core older than GH-011 answers no result; it pinned or held the pair.
+	return PinNew, nil
+}
+
+func readOperatorAuthor(ctx context.Context, rt http.RoundTripper, coreURL string) (name, email string, ok bool, err error) {
+	raw, err := operatorAuthorCall(ctx, rt, http.MethodGet, coreURL, nil)
+	if err != nil {
+		return "", "", false, err
+	}
+	var pin OperatorAuthorPin
+	if err := json.Unmarshal(raw, &pin); err != nil {
+		return "", "", false, fmt.Errorf("the core's answer is not a pin: %w", err)
+	}
+	if !pin.Pinned {
+		return "", "", false, nil
+	}
+	return pin.Name, pin.Email, true, nil
+}
+
+// operatorAuthorCall makes one request to the route and answers a 200's
+// body, or the core's refusal as an error.
+func operatorAuthorCall(ctx context.Context, rt http.RoundTripper, method, coreURL string, body []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimSuffix(coreURL, "/")+OperatorAuthorPath, bytes.NewReader(body))
-	if err != nil {
-		return err
+	var reader io.Reader = http.NoBody
+	if body != nil {
+		reader = bytes.NewReader(body)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(coreURL, "/")+OperatorAuthorPath, reader)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := rt.RoundTrip(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	if err != nil {
-		return fmt.Errorf("the core answered %d, and its body could not be read: %w", resp.StatusCode, err)
+		return nil, fmt.Errorf("the core answered %d, and its body could not be read: %w", resp.StatusCode, err)
+	}
+	if resp.StatusCode == http.StatusOK {
+		return raw, nil
 	}
 	var answer struct {
 		Error string `json:"error"`
 	}
-	if json.Unmarshal(raw, &answer) != nil {
+	if json.Unmarshal(raw, &answer) != nil || answer.Error == "" {
 		// Not the core's JSON (a proxy's page, say): its text is the message.
-		answer.Error = ""
+		answer.Error = strings.TrimSpace(string(raw))
 	}
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return nil
-	case http.StatusConflict:
-		return fmt.Errorf("%w: %s", ErrOperatorAuthorPinned, answer.Error)
-	default:
-		if answer.Error == "" {
-			answer.Error = strings.TrimSpace(string(raw))
-		}
-		return fmt.Errorf("the core answered %d: %s", resp.StatusCode, answer.Error)
+	if resp.StatusCode == http.StatusConflict {
+		return nil, fmt.Errorf("%w: %s", ErrOperatorAuthorPinned, answer.Error)
 	}
+	return nil, fmt.Errorf("the core answered %d: %s", resp.StatusCode, answer.Error)
 }
