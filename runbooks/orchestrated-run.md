@@ -10,9 +10,12 @@ see #158. Every identity here belongs to a run, is issued by the MCP server,
 and cannot be altered by the agent that receives it.
 
 **Deprecated (ADR-0077).** The MCP tools this runbook calls are deprecated and
-are removed at the next major release. They still work. The gateway and the
-commit hook do this work in process, and an operator ends a run on the core
-with `make innsegl-retire RUN=<run_id>`.
+are removed at the next major release. They still work. A connected agent
+needs none of them: the gateway registers, records and retires its run from
+its own model traffic, and the commit hook signs its commits through the
+core's commit path, with no `innsegl-workspace` copy of the repository (see
+`reference/gateway.md` and `reference/commit-path.md`). An operator ends a run
+on the core with `make innsegl-retire RUN=<run_id>`.
 
 ---
 
@@ -241,4 +244,3 @@ The `innsegl-backup` service takes and verifies backups on a schedule, and
 | `register_agent` takes `task_id`; `sign_commit` takes `task_ref`. | Pass the same value under both names. |
 | The MCP workspace is empty on a fresh stack. | Place the repository under `/work/<host>/<org>/<name>` in the `innsegl-workspace` volume before calling `sign_commit`. |
 | `innsegl init` cannot reach the SPIRE admin API in the shipped deployment (#156). | Not needed for this runbook — only `innsegl init` needs it. Three ways to give it one are in `runbooks/spire-admin-access.md`; `make innsegl-init REPO=...` (option 2 there) is the recommended one. |
-| The query API is not published to the host, so §5 needs `docker exec`. | Reach it through the compose network, or publish 8082 yourself. |

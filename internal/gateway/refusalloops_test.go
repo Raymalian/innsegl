@@ -584,8 +584,8 @@ func TestGID015ARestoreThatCannotBeReplayedSaysWhatToDo(t *testing.T) {
 			f.registrar.err = tc.err
 
 			_, ref := f.guard.Check(identityRequest(t, id, "hello", "hi"))
-			if ref == nil || ref.Status != http.StatusForbidden || !strings.Contains(ref.Reason, "`innsegl retire run-r`") {
-				t.Fatalf("refusal = %+v, want 403 naming `innsegl retire run-r`", ref)
+			if ref == nil || ref.Status != http.StatusForbidden || !strings.Contains(ref.Reason, "`innsegl retire run-r`, run on the core host (`make innsegl-retire RUN=run-r`)") {
+				t.Fatalf("refusal = %+v, want 403 naming `innsegl retire run-r` run on the core host", ref)
 			}
 		})
 	}
@@ -693,8 +693,8 @@ func TestGID018AReplayThatCannotFinishIsRefusedWithAReason(t *testing.T) {
 		seed(t, f, id, ledger.RunActive)
 		f.registrar.err = mcp.Errorf(mcp.ClassInvariantViolation, "run-k", "named another run")
 		_, ref := f.guard.Check(identityRequest(t, id, "hello", ""))
-		if ref == nil || ref.Status != http.StatusForbidden || !strings.Contains(ref.Reason, "`innsegl retire run-k`") {
-			t.Fatalf("refusal = %+v, want 403 naming `innsegl retire run-k`", ref)
+		if ref == nil || ref.Status != http.StatusForbidden || !strings.Contains(ref.Reason, "`innsegl retire run-k`, run on the core host (`make innsegl-retire RUN=run-k`)") {
+			t.Fatalf("refusal = %+v, want 403 naming `innsegl retire run-k` run on the core host", ref)
 		}
 	})
 }
@@ -758,8 +758,8 @@ func TestGID012EveryRefusalSaysWhatCanBeDone(t *testing.T) {
 		}
 		f.runStates.set("run-odd", "sideways")
 		_, ref := f.guard.Check(identityRequest(t, id, "hello", ""))
-		if ref == nil || !strings.Contains(ref.Reason, `read as "sideways"`) || !strings.Contains(ref.Reason, "`innsegl retire run-odd`") {
-			t.Fatalf("refusal = %+v, want it to name the state and `innsegl retire run-odd`", ref)
+		if ref == nil || !strings.Contains(ref.Reason, `read as "sideways"`) || !strings.Contains(ref.Reason, "`innsegl retire run-odd`, run on the core host (`make innsegl-retire RUN=run-odd`)") {
+			t.Fatalf("refusal = %+v, want it to name the state and `innsegl retire run-odd` run on the core host", ref)
 		}
 	})
 	t.Run("a decision this guard does not know", func(t *testing.T) {

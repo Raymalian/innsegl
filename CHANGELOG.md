@@ -13,6 +13,24 @@ Deprecations are announced here one minor release ahead of removal.
 
 ### Added
 
+- **Agent commits authored as the operator, per repository** (#545).
+  `innsegl author repo <path> operator` on a machine authors that repository's
+  agent commits as its own GitHub noreply `user.email`, and reports the pair to
+  the core, which pins it for that installation on first use. It prints one
+  result line and exits 0 (pinned), 29 (the core holds a different pair), 30
+  (core unreachable) or 31 (not a pinnable noreply address). A pin is cleared
+  on the core with `docker exec innsegl-api innsegl accounts author-reset
+  <installation>`. `innsegl author` lists the setting and the pair the core
+  holds. The agent stays in the trailers and the signature (I6). See
+  `runbooks/commit-author.md`.
+- **CA key custody, optional** (ADR-0076). The Fulcio CA key can live in a
+  sealed key store that the operator's machine unlocks after a restart:
+  `innsegl ca-custodian` on the core, `innsegl ca-custody status|unlock` on the
+  operator's machine, and the `make ca-custody-*` targets, including
+  `make ca-custody-reset CONFIRM=reset` for a store nothing depends on. Off by
+  default; turning it on is a CA rotation. See `runbooks/ca-custody.md`.
+- `make innsegl-images` loads this checkout's verified image bundle, or builds
+  the images here. Every target that runs `innsegl:local` depends on it.
 - **A development stack that is never the live one** (#469, ADR-0072).
   `make dev-stack` marks a repository's stack as a development stack: every
   compose project, container and network is `innsegl-dev-*`, its trust
@@ -58,6 +76,15 @@ Deprecations are announced here one minor release ahead of removal.
 
 ### Changed
 
+- Go is pinned to `1.27.1` by the `go` directive in `go.mod`, which CI reads.
+  A Go bump is a deliberate commit.
+- The commit hook passes the signing configuration as `git -c` options placed
+  before the commit subcommand, not as `GIT_CONFIG_COUNT` variables, which a
+  harness's worktree-isolation guard refuses (#554).
+- The commit path signs on a core with no `-workspace`. `-workspace` now only
+  configures the deprecated `sign_commit` tool (#555).
+- The gateway's refusals that name `innsegl retire` say it runs on the core
+  host, with `make innsegl-retire RUN=<run_id>`.
 - **`innsegl retire` runs on the core** (ADR-0077): `docker exec innsegl-mcp
   innsegl retire <run_id>`, or `make innsegl-retire RUN=<run_id>`. It calls the
   retirement engine the gateway uses, in process, under the core's own SPIRE
@@ -107,8 +134,9 @@ Deprecations are announced here one minor release ahead of removal.
   `innsegl-sessions` volume and the image's `/sessions` directory.
   `INNSEGL_HOST_PROJECTS` is no longer read by either tool or by the
   reconciler; it remains one of the two roots git's ownership check trusts.
-- `innsegl retire` no longer reads `INNSEGL_REPO_ID`; the repository comes
-  from `-repo` or the working tree (ADR-0071).
+- `innsegl retire` no longer reads `INNSEGL_REPO_ID` (ADR-0071), and no longer
+  takes `-url` or `-repo` (ADR-0077): it retires a run by its run id alone, on
+  the core.
 - `innsegl resolve-alert` (ADR-0071). Resolve an alert from the dashboard,
   which needs the API's resolver role (`INNSEGL_API_RESOLVER_DSN`).
 - `innsegl serve -also api`. Nothing set it, and it would have run the query

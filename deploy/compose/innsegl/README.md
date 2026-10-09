@@ -14,7 +14,7 @@ doc 05 §1's other seven rows, none of which existed as a compose service before
 | `innsegl-reconciler` | loop in `innsegl-mcp`; service, `--profile separate` | same binary, `reconcile` |
 | `innsegl-sealer` | loop in `innsegl-mcp`; service, `--profile separate` | same binary, `seal` |
 | `innsegl-dashboard` | `innsegl-api` | one service since #475: `innsegl api` serves the built UI, the query API and the proof BFF on one origin, and terminates the dashboard's TLS with the certificate the core writes (ADR-0066). It runs its own image — the runtime plus the UI — so a UI change restarts it alone. The row's "No write credentials mounted" holds: the read-only role it reads with cannot write |
-| `demo-agent` | service, `--profile demo` | a curl MCP client; runs to completion |
+| `demo-agent` | service, `--profile demo` | a curl client of the deprecated MCP wire surface (ADR-0077); runs to completion. Removed with the wire at the next major release |
 
 ## Repositories come from the mirror
 
@@ -498,7 +498,7 @@ SPIRE and Sigstore are up:
 make start                  # SPIRE, Sigstore, build, register the MCP, boot the rows
 make innsegl-verify         # ask about the MCP's DB credential and the sealer's store credential
 make innsegl-canary         # SEG-005: prove a sealed segment cannot be deleted
-make innsegl-demo           # register -> sign -> retire, over the real transport
+make innsegl-demo           # register -> sign -> retire, over the deprecated MCP wire
 make innsegl-verify-commit COMMIT=<sha>   # verify with NO route to the ledger
 make innsegl-down
 ```
@@ -578,8 +578,8 @@ per-process test harnesses take up to eight each, so #100 is a real constraint
 and every network above had to earn its place — one that would have been merged
 (a shared MCP/dashboard frontend) is deliberately two.
 
-**Nothing in this file publishes a host port except the MCP and the dashboard,
-and that is a control rather than an omission.** MEASURED by RM-054 (#62): publishing a container's
+**Nothing in this file publishes a host port except `innsegl-mcp` (the MCP,
+health, admin and gateway ports) and the dashboard, and that is a control rather than an omission.** MEASURED by RM-054 (#62): publishing a container's
 port inserts an ACCEPT rule for that container's address into Docker's own
 filter chain, matched *before* the isolation rules that keep one bridge network
 out of another. A published Postgres is reachable **by address** from a
