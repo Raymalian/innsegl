@@ -49,7 +49,7 @@ make innsegl-verify
 | `-anchor-key` | `INNSEGL_ANCHOR_KEY` | EC key that signs submissions; empty is ephemeral |
 | `-rekor-url` | `INNSEGL_REKOR_URL` | transparency log |
 | `-endpoint`, `-bucket`, `-prefix`, `-region` | `INNSEGL_OBJECT_STORE_*` | object store |
-| `-access-key`, `-secret-key` | `INNSEGL_OBJECT_STORE_ACCESS_KEY`, `INNSEGL_OBJECT_STORE_SECRET_KEY` | store credential |
+| `-access-key`, `-secret-key` | `INNSEGL_OBJECT_STORE_ACCESS_KEY`, `INNSEGL_OBJECT_STORE_SECRET_KEY` or `INNSEGL_OBJECT_STORE_SECRET_KEY_FILE` (the stack sets the file; [service-credentials.md](service-credentials.md)) | store credential |
 | `-mode`, `-retention` | `INNSEGL_OBJECT_STORE_RETENTION_MODE`, `INNSEGL_OBJECT_STORE_RETENTION` | object lock [`COMPLIANCE`, `0` = bucket default] |
 | `-tls`, `-timeout` | `INNSEGL_OBJECT_STORE_TLS`, `INNSEGL_OBJECT_STORE_TIMEOUT` | [`true`, `1m`] |
 | `-once`, `-json`, `-quiet` | | one cycle; JSON; quiet when idle |
