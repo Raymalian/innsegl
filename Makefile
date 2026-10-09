@@ -262,6 +262,7 @@ sigstore-up: innsegl-trust-volumes
 	  deploy/compose/spire/register.sh
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
+	  INNSEGL_REKOR_PORT='$(INNSEGL_REKOR_PORT)' \
 	  $(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(SIGSTORE_FILES) up -d$(if $(CA_CUSTODY), $(SIGSTORE_UP_EXCEPT_FULCIO))
 	$(if $(CA_CUSTODY),@$(MAKE) --no-print-directory ca-custody-up)
 	@$(MAKE) --no-print-directory rekor-index-ready
@@ -279,6 +280,7 @@ rekor-log-up: innsegl-trust-volumes
 	@test -n '$(INNSEGL_REKOR_ALLOW_NEW_TREE)' || scripts/rekor-tlog-pin.sh guard
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
+	  INNSEGL_REKOR_PORT='$(INNSEGL_REKOR_PORT)' \
 	  $(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(SIGSTORE_FILES) up -d trillian-db trillian-log-server trillian-log-signer rekor
 	@$(MAKE) --no-print-directory rekor-index-ready
 

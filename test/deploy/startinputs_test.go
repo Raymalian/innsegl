@@ -362,3 +362,27 @@ func TestOPS166EveryTrustVolumeComposeEnsuresTheVolumes(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// OPS-167 (PROPOSED for doc 07's TC-OPS) — bringing the log up again keeps
+// Rekor on the host port it runs on.
+//
+// `make start` publishes Rekor on a port chosen at run time. rekor-log-up and
+// sigstore-up did not pass that port to compose, so any update that
+// recreated Rekor moved it to the compose default, 23000. MEASURED in the
+// in-place rehearsal of OPS-165 on 2026-10-09: the recreate failed with
+// "Bind for 127.0.0.1:23000 failed: port is already allocated".
+// ---------------------------------------------------------------------------
+
+func TestOPS167TheLogKeepsItsRekorPort(t *testing.T) {
+	for _, target := range []string{"rekor-log-up", "sigstore-up"} {
+		out := strings.ReplaceAll(makeDryRun(t, "live", target), "\\\n", " ")
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "sigstore.yml") && volumeVerb.MatchString(line) &&
+				!strings.Contains(line, "INNSEGL_REKOR_PORT='23000'") {
+				t.Errorf("make %s brings the log up without its running port (want INNSEGL_REKOR_PORT='23000' "+
+					"from the environment):\n  %s", target, line)
+			}
+		}
+	}
+}
