@@ -36,8 +36,9 @@ GET  /api/v1/repos                    POST /api/v1/auth/logout
 | `list` | | every account: id, name, owners, repositories |
 | `new` | `--name NAME` | create an account; prints its id |
 | `enrol-token` | `--account ID --by USER --repos a,b\|* [--kind workstation\|service]` | a 15-minute single-use token for `innsegl connect` |
-| `installations` | `--account ID` | list an account's installations |
+| `installations` | `--account ID` | list an account's installations; the last column is each one's pinned operator author, `-` for none |
 | `revoke-installation` | `ID` | revoke one installation, for good |
+| `author-reset` | `ID` | clear one installation's pinned operator author ([commit-path.md](commit-path.md)) |
 | `grant-repo` | `--account ID REPO` | give an account a repository |
 | `recovery-codes` | `--user ID` | replace a user's recovery codes |
 

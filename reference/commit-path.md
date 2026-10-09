@@ -55,17 +55,25 @@ make link DIR=<path to a git repository>
 
 ```
 innsegl author                                    list the setting
-innsegl author operator 'Name <address>'           the operator identity, once
 innsegl author repo <path> operator|agent          one repository's mode
+innsegl author operator 'Name <address>'           optional: a typed identity instead
 ```
 
 Every repository is `agent` mode unless set otherwise: agent commits are
 authored and committed as `Innsegl <agent@innsegl.invalid>`. In `operator`
-mode they are authored as the operator identity (I6 allows it); the agent
-stays in the trailers and the signature. The core signs such a commit only
-when `INNSEGL_SIGN_AUTHOR_OPERATORS` pins the same name and address. Use a
-GitHub noreply address. A command that sets `GIT_AUTHOR_*` itself is left
-as it is.
+mode they are authored as the repository's own `git config user.email`, which
+must be a GitHub noreply address, with that address's login as the name;
+`user.name` is never read. The agent stays in the trailers and the signature
+(I6 allows the operator as author).
+
+Setting operator mode reports the pair to the core (`POST
+/_core/operator-author`, over the machine's certificate). The core pins it
+for that installation on first use, and gate 3 of the sign path then admits
+it for that installation's commits, beside the agent address and any pair in
+`INNSEGL_SIGN_AUTHOR_OPERATORS`. A different pair later is refused (409) until
+`innsegl accounts author-reset <installation>` on the core. A repository with
+no noreply address falls back to the agent address, with a note on stderr.
+A command that sets `GIT_AUTHOR_*` itself is left as it is.
 
 ## Settings
 
@@ -77,12 +85,15 @@ as it is.
 | `INNSEGL_SIGN_AUTHOR_OPERATORS` | the core (`.env`) | pinned `Name <address>` pairs an agent commit may be authored as; empty by default |
 
 Core routes: `/_gateway/commit-trailers` and `/_gateway/commit-sign`, on the
-gateway's listener, scoped to the calling installation.
+gateway's listener, scoped to the calling installation; and, on a hosted
+core, `/_core/operator-author` (POST, behind the client certificate guard).
 
 ## Files, volumes, containers
 
 - The repository's `prepare-commit-msg` hook, written by `innsegl link`.
-- `~/.innsegl/client/authors.json` (0600): the operator identity and the repositories set to `operator` mode.
+- `~/.innsegl/client/authors.json` (0600): the repositories set to `operator` mode, and the optional typed operator identity.
+- On the core, `innsegl_auth.installations.operator_author_name` and
+  `operator_author_email` (migration 0015): each installation's pinned pair.
 - No repository git config is written by the hook path; the signing config
   travels with the one commit as `git -c` options placed before the
   subcommand word (`git -C dir -c commit.gpgsign=true … commit`), never as
@@ -116,6 +127,11 @@ gateway's listener, scoped to the calling installation.
 - `internal/mcp/signpayload_test.go`, `signpayload_crash_test.go` (CMT-007 to CMT-012)
 - `internal/signing/*_test.go` (SIG-001 to SIG-012), `signpayload_test.go` (GH-006)
 - `cmd/innsegl/hookauthor_test.go` (ENF-010), `authorcli_test.go` and `internal/client/authors_test.go` (ENF-011)
+- `cmd/innsegl/hookauthorauto_test.go` (ENF-013): the repository's noreply address, never `user.name`
+- `internal/client/operatorauthor_test.go` (ENF-012): the machine's report to the core
+- `internal/accounts/operatorauthor_test.go` (GH-008, real Postgres): first-use pin, refusal, reset
+- `internal/mcp/operatorauthor_test.go` (GH-009): gate 3 admits the installation's pin only
+- `cmd/innsegl/coreoperatorauthor_test.go` (GH-010): the core route, including an enrolled machine end to end
 - `test/deploy/authoroperators_test.go` (GH-007)
 
 ## Decisions
