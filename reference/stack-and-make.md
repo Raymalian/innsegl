@@ -68,10 +68,46 @@ Every target with a `##` help line:
 
 `make update` in detail: refuses unless SPIRE and Rekor run; does nothing
 when `.innsegl/deployed-commit` matches the checkout and the core runs;
-otherwise brings the log's services up again, recreates a file-CA Fulcio,
-then builds (or loads a matching bundle from `dist/`) and runs
-`docker compose up -d --remove-orphans --no-build`. The deployed state is
-the commit plus a checksum of the compose `.env`.
+otherwise brings SPIRE's and the log's services up again, then Fulcio, then
+builds (or loads a matching bundle from `dist/`) and runs
+`up -d --remove-orphans --no-build`. The deployed state is the commit plus a
+checksum of the compose `.env`.
+
+Every `up` goes through `scripts/compose-up.py` (OPS-165). Compose recreates
+a service only when its own definition changes; a service that reads a key,
+credential or config file at start would keep the old one. The script:
+
+1. runs the one-shots that write those files (`innsegl-credentials`,
+   `innsegl-s3-identities`, `sigstore-bootstrap`, `spire-bootstrap`, ...)
+   and waits for them;
+2. hashes each long-running service's start-read inputs: every volume it
+   mounts read-only that no long-running service writes, and every
+   read-only bind mount from this checkout;
+3. runs the `up` with each hash in `INNSEGL_INPUTS_<SERVICE>`, which the
+   compose files put in the service's `dev.innsegl.inputs` label.
+
+A changed input changes the label, so compose recreates that service and no
+other. `scripts/compose-up.py <compose args> list` prints each service's
+inputs. The first update with this mechanism recreates every labelled
+service once, because the label was empty before.
+
+| Service | Start-read inputs |
+|---|---|
+| `postgres` | ledger-owner password (used at first init only) |
+| `innsegl-s3` | `identities.json` and its key; `object-store-start.sh` |
+| `innsegl-mcp`, `innsegl-api`, `innsegl-sealer`, `innsegl-reconciler`, `innsegl-backup` | their ledger and object-store credentials; mcp also the identity secret and admin JWKS; backup also `scripts/`, `runbooks/`, `deploy/compose/innsegl/` |
+| `innsegl-trust-backup` | the trust volumes it backs up |
+| `trillian-db` | `init.sql` (users reset at every start) |
+| `trillian-log-server`, `trillian-log-signer` | the log database flags |
+| `rekor` | its signing key and index credentials |
+| `fulcio` | `serve.yaml`, CA key and password (`sigstore-fulcio-kms` under custody) |
+| `spire-server`, `spire-agent`, `spire-oidc` | their `.conf` files, the authz policy, their keys |
+
+Every target that runs compose over the trust volumes (`innsegl-backup`,
+`innsegl-verify`, `innsegl-init`, the `ca-custody-*` targets, ...) runs
+`innsegl-trust-volumes` first (OPS-166).
+Bringing the log up again passes Rekor's running host port, so a
+recreated Rekor stays where `make start` put it (OPS-167).
 
 ## Settings
 
@@ -166,7 +202,8 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
   (OPS-007, OPS-008), `trustroot_test.go` (OPS-031 to OPS-047),
   `updateenv_test.go` (OPS-135), `buildonce_test.go`, `imagebundle_test.go`,
   `hostports_test.go`, `bindaddress_test.go` (OPS-127), `oneprocess*_test.go`,
-  `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134)
+  `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134),
+  `startinputs_test.go` (OPS-165 to OPS-167, PROPOSED)
 - `test/deploy/referencedocs_test.go` (DOC-001, PROPOSED)
 - `scripts/stack-mode-selftest.sh` (OPS-129), `innsegl-update-selftest.sh`,
   `image-bundle-selftest.sh`, `install-selftest.sh`, `setup-link-selftest.sh`,

@@ -488,6 +488,10 @@ services:
     image: *postgres-image
     container_name: innsegl-postgres
     restart: unless-stopped
+    # The hash of what it reads at start, set by scripts/compose-up.py: a
+    # changed input recreates it (OPS-165).
+    labels:
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_POSTGRES:-}
     networks:
       - innsegl-ledger
       - innsegl-ledger-readonly
@@ -652,6 +656,10 @@ services:
     image: *object-store-image
     container_name: innsegl-s3
     restart: unless-stopped
+    # The hash of what it reads at start, set by scripts/compose-up.py: a
+    # changed input recreates it (OPS-165).
+    labels:
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_S3:-}
     depends_on:
       innsegl-s3-identities:
         condition: service_completed_successfully
@@ -986,6 +994,9 @@ services:
       # lock, answers here; its other listeners bind loopback (#451).
       - innsegl-objects
     labels:
+      # The hash of what it reads at start, set by scripts/compose-up.py:
+      # a changed input recreates it (OPS-165).
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_MCP:-}
       # The selector register.sh registers. Ours, not compose's own label
       # scheme, and part of the attestation surface rather than metadata.
       dev.innsegl.component: mcp
@@ -1479,6 +1490,9 @@ services:
       - innsegl-ledger
       - innsegl-sigstore
     labels:
+      # The hash of what it reads at start, set by scripts/compose-up.py:
+      # a changed input recreates it (OPS-165).
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_RECONCILER:-}
       dev.innsegl.component: reconciler
     user: "1000:1000"
     command: ["reconcile"]
@@ -1625,6 +1639,9 @@ services:
       - innsegl-ledger
       - innsegl-objects
     labels:
+      # The hash of what it reads at start, set by scripts/compose-up.py:
+      # a changed input recreates it (OPS-165).
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_BACKUP:-}
       dev.innsegl.component: backup
     user: "1000:1000"
     entrypoint: ["/innsegl/init/backup-loop.sh"]
@@ -1744,6 +1761,9 @@ services:
     networks:
       - innsegl-trillian-db
     labels:
+      # The hash of what it reads at start, set by scripts/compose-up.py:
+      # a changed input recreates it (OPS-165).
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_TRUST_BACKUP:-}
       dev.innsegl.component: trust-backup
     user: "0:0"
     read_only: true
@@ -1825,6 +1845,9 @@ services:
       - innsegl-objects
       - innsegl-sigstore
     labels:
+      # The hash of what it reads at start, set by scripts/compose-up.py:
+      # a changed input recreates it (OPS-165).
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_SEALER:-}
       dev.innsegl.component: sealer
     user: "1000:1000"
     command: ["seal"]
@@ -1947,6 +1970,9 @@ services:
       - innsegl-sigstore
       - innsegl-dashboard-frontend
     labels:
+      # The hash of what it reads at start, set by scripts/compose-up.py:
+      # a changed input recreates it (OPS-165).
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_API:-}
       dev.innsegl.component: api
     user: "1000:1000"
     command: ["api"]
