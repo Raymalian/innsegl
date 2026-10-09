@@ -484,6 +484,46 @@ fi
 docker rm -f "${holder_export_stopped}" >/dev/null 2>&1
 docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
 
+# --- case: a container `docker ps` still lists moments after it exited is
+#     not a running writer — OPS-168 (PROPOSED), #560 ---------------------
+# The daemon tells `docker run` (and `docker stop`) that a container exited
+# BEFORE it updates the view `docker ps` reads: moby's handleContainerExit
+# calls SetStopped, which wakes the waiters, and only then CheckpointTo, which
+# writes the container's state to disk and to that view. On a loaded runner
+# the gap is long enough for the export's preflight to see a just-exited
+# container as running (#560: once in CI, passed on rerun). The gap cannot be
+# made to happen on demand, so a shim in front of docker answers the
+# preflight's `docker ps` the way the stale view does, naming the stopped
+# holder; everything else is the real daemon. `docker inspect` reads the
+# container itself, under its lock, so it says stopped.
+mkvol_labeled "${VOL_A}"; mkvol "${VOL_B}"
+write_fixture "${VOL_A}"; write_fixture "${VOL_B}"
+holder_lag="${PREFIX}holder-lag"
+docker run --name "${holder_lag}" -v "${VOL_A}:/data" "${IMG}" true >/dev/null 2>&1
+lag_id="$(docker inspect -f '{{.Id}}' "${holder_lag}" 2>/dev/null | cut -c1-12)"
+stale_bin="${WORK}/stale-ps"
+mkdir -p "${stale_bin}"
+cat >"${stale_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = ps ] && [ "$2" = -q ] && [ "$3" = --filter ] && [ "$4" = "volume=${STALE_VOL}" ]; then
+  printf '%s\n' "${STALE_ID}"
+  exit 0
+fi
+exec "${REAL_DOCKER}" "$@"
+EOF
+chmod +x "${stale_bin}/docker"
+lag_archive="${WORK}/export-lag-ok.tar"
+out="$(PATH="${stale_bin}:${PATH}" REAL_DOCKER="$(command -v docker)" STALE_VOL="${VOL_A}" STALE_ID="${lag_id}" \
+  "${MIGRATE}" export "${lag_archive}" 2>&1)"; rc=$?
+if [ -n "${lag_id}" ] && [ "${rc}" -eq 0 ] && [ -f "${lag_archive}" ]; then
+  ok "export proceeds when docker ps still lists a container that has already exited (OPS-168, #560)"
+else
+  bad "export refused a container docker ps listed but that had already exited (#560)" "exit=${rc} id=${lag_id}
+${out}"
+fi
+docker rm -f "${holder_lag}" >/dev/null 2>&1
+docker volume rm "${VOL_A}" "${VOL_B}" >/dev/null 2>&1
+
 # --- case: a leftover helper container from an earlier, interrupted run is
 #     refused by the preflight, naming it and the exact removal ------------
 mkvol "${VOL_A}"; mkvol "${VOL_B}"

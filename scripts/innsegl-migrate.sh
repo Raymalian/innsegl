@@ -515,8 +515,23 @@ vol_empty() {
   [ -z "${out}" ]
 }
 
+# vol_holders NAME — the running containers that hold volume NAME, as ids.
+# `docker ps` alone is not the answer (#560): the daemon tells `docker run`
+# and `docker stop` that a container exited before it updates the view
+# `docker ps` reads (moby's handleContainerExit: SetStopped wakes the
+# waiters, then CheckpointTo writes the state to disk and to that view). For
+# that moment a stopped container is still listed as running. `docker
+# inspect` reads the container itself, under the lock the exit holds until
+# its state is written, so each one listed is confirmed there. One that is
+# gone by then holds nothing.
 vol_holders() {
-  docker ps -q --filter "volume=$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
+  local id running=""
+  for id in $(docker ps -q --filter "volume=$1" 2>/dev/null); do
+    if [ "$(docker inspect -f '{{.State.Running}}' "${id}" 2>/dev/null)" = "true" ]; then
+      running="${running:+${running} }${id}"
+    fi
+  done
+  printf '%s' "${running}"
 }
 
 # vol_holders_all NAME — every container that references volume NAME,
