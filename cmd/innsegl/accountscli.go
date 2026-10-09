@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"innsegl.dev/innsegl/internal/accounts"
@@ -92,12 +93,13 @@ func accountsUsage(w io.Writer) {
 	fprintf(w, "  new                  --name NAME                          create an account; prints its id\n")
 	fprintf(w, "  enrol-token          --account ID --by USER --repos a,b|* [--kind workstation|service]\n")
 	fprintf(w, "                                                            mint a 15-minute single-use token, on stdout\n")
-	fprintf(w, "  installations        --account ID                         list an account's installations, last column its pinned operator author\n")
+	fprintf(w, "  installations        [--account ID]                       every account's installations, or one account's; last column the pinned operator author\n")
 	fprintf(w, "  revoke-installation  ID                                   revoke one installation, for good\n")
 	fprintf(w, "  author-reset         ID                                   clear one installation's pinned operator author\n")
 	fprintf(w, "  grant-repo           --account ID REPO                    give an account a repository\n")
 	fprintf(w, "  recovery-codes       --user ID                            replace a user's recovery codes; the new ones on stdout\n\n")
 	fprintf(w, "Every verb takes -dsn (default $%s), the auth-writer connection string.\n", envAuthWriterDSN)
+	fprintf(w, "On a compose core that is set in the innsegl-api container: docker exec innsegl-api innsegl accounts <verb> ...\n")
 }
 
 func runAccountsCommand(args []string, stdout, stderr io.Writer, deps accountsCLIDeps) int {
@@ -139,7 +141,7 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 	case "installations", "grant-repo":
 		account = fs.String("account", "", "the account id")
 	case "recovery-codes":
-		user = fs.String("user", "", "the user id (owners= in `accounts list`)")
+		user = fs.String("user", "", "the user id (the OWNERS column of `accounts list`)")
 	}
 	fs.Usage = func() {
 		fprintf(stderr, "%s\n\nFlags:\n", name)
@@ -175,7 +177,11 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 		return usage("expected " + map[int]string{0: "no positional arguments", 1: "exactly one positional argument"}[wantPositional])
 	}
 	if *dsn == "" {
-		return usage("-dsn (or $" + envAuthWriterDSN + ") is required")
+		// The credential lives in one container on a compose core
+		// (deploy/compose/innsegl.yml): say where, in the form to paste.
+		return usage("-dsn (or $" + envAuthWriterDSN + ") is required. On the core host it is set in the " +
+			"innsegl-api container; run it there: docker exec innsegl-api innsegl accounts " +
+			strings.Join(append([]string{verb}, args...), " "))
 	}
 	switch verb {
 	case "new":
@@ -189,7 +195,7 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 		if *kind != accounts.KindWorkstation && *kind != accounts.KindService {
 			return usage("--kind must be workstation or service")
 		}
-	case "installations", "grant-repo":
+	case "grant-repo":
 		if *account == "" {
 			return usage("--account is required")
 		}
@@ -219,13 +225,14 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 		if err != nil {
 			return fail(err)
 		}
+		tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+		fprintf(tw, "ID\tNAME\tOPERATOR\tOWNERS\tREPOS\n")
 		for _, a := range list {
-			flagText := ""
-			if a.Operator {
-				flagText = "\toperator"
-			}
-			fprintf(stdout, "%s\t%s%s\towners=%s\trepos=%s\n", a.ID, a.Name, flagText,
-				strings.Join(a.Owners, ","), strings.Join(a.Repos, ","))
+			fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", a.ID, a.Name, map[bool]string{true: "operator", false: "-"}[a.Operator],
+				dashIfEmpty(strings.Join(a.Owners, ",")), dashIfEmpty(strings.Join(a.Repos, ",")))
+		}
+		if err := tw.Flush(); err != nil {
+			return fail(err)
 		}
 	case "new":
 		a, err := store.CreateAccount(ctx, accounts.CreateAccountParams{Name: *acctName})
@@ -250,20 +257,40 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 		fprintf(stdout, "%s\n", token)
 		fprintf(stderr, "%s: issued, single use, valid until %s\n", name, meta.ExpiresAt.UTC().Format(time.RFC3339))
 	case "installations":
-		list, err := store.ListInstallations(ctx, *account)
-		if err != nil {
-			return fail(err)
-		}
-		for _, i := range list {
-			// The last column is the installation's pinned operator author
-			// (#545), "-" when none is pinned.
-			author := "-"
-			if n, e, ok, aerr := store.OperatorAuthor(ctx, i.ID); aerr != nil {
-				return fail(aerr)
-			} else if ok {
-				author = n + " <" + e + ">"
+		// One account with --account; every account without it (GH-012).
+		ids := []string{*account}
+		if *account == "" {
+			all, err := store.ListAccounts(ctx)
+			if err != nil {
+				return fail(err)
 			}
-			fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", i.ID, i.Status, i.Kind, i.Name, strings.Join(i.Repos, ","), author)
+			ids = ids[:0]
+			for _, a := range all {
+				ids = append(ids, a.ID)
+			}
+		}
+		tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+		fprintf(tw, "ACCOUNT\tID\tSTATUS\tKIND\tNAME\tREPOS\tOPERATOR-AUTHOR\n")
+		for _, acct := range ids {
+			list, err := store.ListInstallations(ctx, acct)
+			if err != nil {
+				return fail(err)
+			}
+			for _, i := range list {
+				// The last column is the installation's pinned operator
+				// author (#545), "-" when none is pinned.
+				author := "-"
+				if n, e, ok, aerr := store.OperatorAuthor(ctx, i.ID); aerr != nil {
+					return fail(aerr)
+				} else if ok {
+					author = n + " <" + e + ">"
+				}
+				fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", acct, i.ID, i.Status, i.Kind, i.Name,
+					dashIfEmpty(strings.Join(i.Repos, ",")), author)
+			}
+		}
+		if err := tw.Flush(); err != nil {
+			return fail(err)
 		}
 	case "revoke-installation":
 		if err := store.SetInstallationStatus(ctx, positional[0], accounts.StatusRevoked, ""); err != nil {
@@ -296,4 +323,12 @@ func accountsVerb(verb string, args []string, stdout, stderr io.Writer, deps acc
 			name, len(codes), *user)
 	}
 	return exitOK
+}
+
+// dashIfEmpty keeps a listing's columns aligned when a value is empty.
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }

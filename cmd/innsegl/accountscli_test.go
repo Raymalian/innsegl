@@ -18,19 +18,21 @@ import (
 // internal/accounts' own ACC-001..003.
 
 type stubAccountsStore struct {
-	createAccount  []accounts.CreateAccountParams
-	tokens         []accounts.TokenParams
-	listed         []string
-	statuses       [][3]string
-	grants         [][2]string
-	installations  []accounts.Installation
-	accounts       []accounts.AccountSummary
-	err            error
-	token          string
-	tokenExpiresAt time.Time
-	recoveryFor    []string
-	recoveryCodes  []string
-	authorResets   [][2]string
+	createAccount []accounts.CreateAccountParams
+	tokens        []accounts.TokenParams
+	listed        []string
+	statuses      [][3]string
+	grants        [][2]string
+	installations []accounts.Installation
+	// installationsBy, when set, answers ListInstallations per account.
+	installationsBy map[string][]accounts.Installation
+	accounts        []accounts.AccountSummary
+	err             error
+	token           string
+	tokenExpiresAt  time.Time
+	recoveryFor     []string
+	recoveryCodes   []string
+	authorResets    [][2]string
 }
 
 func (s *stubAccountsStore) RecoveryCodes(_ context.Context, userID string) ([]string, error) {
@@ -50,6 +52,9 @@ func (s *stubAccountsStore) CreateEnrolmentToken(_ context.Context, p accounts.T
 
 func (s *stubAccountsStore) ListInstallations(_ context.Context, account string) ([]accounts.Installation, error) {
 	s.listed = append(s.listed, account)
+	if s.installationsBy != nil {
+		return s.installationsBy[account], s.err
+	}
 	return s.installations, s.err
 }
 
@@ -217,16 +222,74 @@ func TestAccountsCLIInstallationsListsOnePerLine(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "i1\tactive\tworkstation\tlaptop\t*") ||
-		!strings.HasSuffix(lines[1], "github.com/a/b,github.com/a/c\t-") {
-		t.Fatalf("stdout = %q", stdout)
+	if len(lines) != 3 {
+		t.Fatalf("stdout = %q, want a header and two rows", stdout)
+	}
+	if got := strings.Fields(lines[1]); len(got) < 6 ||
+		strings.Join(got[:6], " ") != "acct-1 i1 active workstation laptop *" {
+		t.Fatalf("first row = %q", lines[1])
+	}
+	if !strings.HasSuffix(strings.TrimSpace(lines[2]), "github.com/a/b,github.com/a/c  -") {
+		t.Fatalf("second row = %q", lines[2])
 	}
 	// GH-008: the pinned operator author is the last column, "-" for none.
-	if !strings.HasSuffix(lines[0], "\talpha <12345+alpha@users.noreply.github.com>") {
-		t.Fatalf("the pinned operator author is not listed: %q", lines[0])
+	if !strings.HasSuffix(strings.TrimSpace(lines[1]), "alpha <12345+alpha@users.noreply.github.com>") {
+		t.Fatalf("the pinned operator author is not listed: %q", lines[1])
 	}
-	if s.listed[0] != "acct-1" {
+	if len(s.listed) != 1 || s.listed[0] != "acct-1" {
 		t.Fatalf("listed %v", s.listed)
+	}
+}
+
+// GH-012 (PROPOSED for doc 07) — the core's listings read on their own: a
+// header line names the columns, and `installations` with no --account
+// lists every account's machines (#545).
+func TestGH012AccountsListingsHaveHeadersAndInstallationsCoverEveryAccount(t *testing.T) {
+	s := &stubAccountsStore{
+		accounts: []accounts.AccountSummary{
+			{ID: "acct-1", Name: "Acme", Owners: []string{"u-1"}},
+			{ID: "acct-2", Name: "Beta", Operator: true, Owners: []string{"u-2"}},
+		},
+		installationsBy: map[string][]accounts.Installation{
+			"acct-1": {{ID: "i1", Status: "active", Kind: "workstation", Name: "laptop", Repos: []string{"*"}}},
+			"acct-2": {{ID: "i9", Status: "active", Kind: "service", Name: "ci", Repos: []string{"*"}}},
+		},
+	}
+	code, out, errOut := runAccounts(s, "list", "-dsn", "x")
+	if code != exitOK {
+		t.Fatalf("list: exit %d: %s", code, errOut)
+	}
+	if h := strings.Fields(strings.SplitN(out, "\n", 2)[0]); strings.Join(h, " ") != "ID NAME OPERATOR OWNERS REPOS" {
+		t.Fatalf("list header = %q", h)
+	}
+
+	code, out, errOut = runAccounts(s, "installations", "-dsn", "x")
+	if code != exitOK {
+		t.Fatalf("installations with no --account: exit %d: %s", code, errOut)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if h := strings.Fields(lines[0]); strings.Join(h, " ") != "ACCOUNT ID STATUS KIND NAME REPOS OPERATOR-AUTHOR" {
+		t.Fatalf("installations header = %q", h)
+	}
+	if len(lines) != 3 || !strings.HasPrefix(lines[1], "acct-1") || !strings.HasPrefix(lines[2], "acct-2") ||
+		!strings.Contains(lines[2], "i9") {
+		t.Fatalf("installations of every account:\n%s", out)
+	}
+
+	s.listed = nil
+	if code, out, _ = runAccounts(s, "installations", "-dsn", "x", "--account", "acct-2"); code != exitOK ||
+		strings.Contains(out, "i1") || !strings.Contains(out, "i9") {
+		t.Fatalf("--account still filters: exit %d\n%s", code, out)
+	}
+}
+
+// GH-012 — a verb with no credential says where the credential is: in the
+// innsegl-api container (deploy/compose/innsegl.yml).
+func TestGH012AMissingDSNNamesTheContainerThatHoldsIt(t *testing.T) {
+	t.Setenv(envAuthWriterDSN, "")
+	code, _, stderr := runAccounts(&stubAccountsStore{}, "author-reset", "abc")
+	if code != exitUsage || !strings.Contains(stderr, "docker exec innsegl-api innsegl accounts author-reset") {
+		t.Fatalf("exit %d, stderr %q; want the docker exec form", code, stderr)
 	}
 }
 
