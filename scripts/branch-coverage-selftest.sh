@@ -204,4 +204,32 @@ if ! printf '%s\n' "${green_output}" | grep -q 'branch coverage: OK'; then
 fi
 printf 'OK: the gate passed once every branch was covered\n\n'
 
+# --- Phase 3 (red): gobco itself fails. --------------------------------------
+# Measured 2026-10-09: a gobco built against a Go toolchain that was since
+# upgraded panics before running a single test ("could not import context ...
+# go list: no such file or directory"). Its output then names no file, and a
+# gate that only counted findings reported every surface at 100%.
+cat >"${workdir}/broken-gobco" <<'SH_EOF'
+#!/bin/sh
+echo "panic: could not import context (go list: no such file or directory)" >&2
+exit 2
+SH_EOF
+chmod +x "${workdir}/broken-gobco"
+
+printf '=== phase 3 (red): gobco does not run ===\n'
+set +e
+broken_output="$(cd -- "${workdir}" && GOBCO="${workdir}/broken-gobco" "${BRANCH_COVERAGE_SH}" 2>&1)"
+broken_status=$?
+set -e
+printf '%s\n' "${broken_output}"
+if [ "${broken_status}" -eq 0 ] || printf '%s\n' "${broken_output}" | grep -q '^    ok'; then
+  printf 'FAIL: a gobco that never ran passed the gate (exit %d)\n' "${broken_status}" >&2
+  exit 1
+fi
+if ! printf '%s\n' "${broken_output}" | grep -q 'gobco did not run'; then
+  printf 'FAIL: the gate did not say gobco did not run\n' >&2
+  exit 1
+fi
+printf 'OK: a gobco that never ran fails the gate\n\n'
+
 printf 'branch coverage gate self-test: PASS\n'
