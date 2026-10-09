@@ -1,6 +1,7 @@
 # ADR-0051: Let a live run adopt a dead run's work, and record the handover as an event
 
-- Status: accepted
+- Status: accepted; superseded in part by ADR-0079 (the trigger, and the
+  `sign_commit` binding)
 - Date: 2026-09-24
 - Deciders: the operator
 

@@ -150,6 +150,7 @@ MCP error classes (`internal/mcp/errors.go`, protected): `ATTESTATION_FAILED`,
 - [ADR-0056](../docs/adr/0056-a-single-machine-deployment-runs-the-loops-in-the-mcp.md) loops run in the MCP
 - [ADR-0058](../docs/adr/0058-an-agents-identity-lifecycle-is-driven-by-its-traffic.md) lifecycle driven by traffic
 - [ADR-0077](../docs/adr/0077-the-mcp-wire-surface-is-deprecated.md) the MCP wire surface is deprecated; retire runs on the core
+- [ADR-0079](../docs/adr/0079-adoption-runs-on-the-commit-path.md) an ended run's uncommitted work is adopted on the commit path; its identity never signs again (see [commit-path.md](commit-path.md))
 
 ## Runbooks
 

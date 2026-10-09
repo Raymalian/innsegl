@@ -18,6 +18,10 @@ innsegl client serve [--listen 127.0.0.1:28195]
 innsegl status
 ```
 
+`innsegl` by name is `~/.local/bin/innsegl`, the link `make build` makes to
+the checkout's `./innsegl`; with `~/.local/bin` not on PATH, run `./innsegl`
+in the checkout.
+
 `innsegl connect` flags:
 
 | Flag | Meaning |
@@ -145,7 +149,8 @@ says to revoke the machine from the Account page.
   real loopback listener, its refusals, and what the CLI says);
   `operatorauthor_test.go` (ENF-016, PROPOSED)
 - `scripts/codesign-cli-selftest.sh` (OPS-169, PROPOSED),
-  `scripts/client-restart-selftest.sh` (OPS-170, PROPOSED)
+  `scripts/client-restart-selftest.sh` (OPS-170, PROPOSED),
+  `scripts/link-bin-selftest.sh` (OPS-171, PROPOSED)
 - `internal/clientjournal/entry_test.go` (JRN-001)
 - `internal/accounts/enrol_test.go` (KEY-001 to KEY-005)
 
@@ -161,5 +166,8 @@ says to revoke the machine from the Account page.
 ## Runbooks
 
 - [client-update.md](../runbooks/client-update.md): update the client on a
-  machine — `git pull && make build && make client-restart`
+  machine — `git pull && make build && make client-restart`, in the checkout
+  (or `make -C <checkout> …`). `make build` links the binary as
+  `~/.local/bin/innsegl`, so `innsegl status` runs by name once
+  `~/.local/bin` is on PATH.
 - [cutover.md](../runbooks/cutover.md)

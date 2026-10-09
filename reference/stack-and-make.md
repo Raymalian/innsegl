@@ -13,8 +13,8 @@ Every target with a `##` help line:
 
 | Target | Does |
 |---|---|
-| `make build` | compile the single innsegl binary; on macOS, sign it with the newest-issued Developer ID the keychain holds, so it keeps its Local Network permission across rebuilds (`scripts/codesign-cli.sh`, OPS-169). Restarts nothing |
-| `make client-restart` | restart this machine's client service, only if it runs the binary `make build` wrote (`scripts/client-restart.sh`, OPS-170); see [client-and-connect.md](client-and-connect.md) |
+| `make build` | compile the single innsegl binary; on macOS, sign it with the newest-issued Developer ID the keychain holds, so it keeps its Local Network permission across rebuilds (`scripts/codesign-cli.sh`, OPS-169); then link it as `~/.local/bin/innsegl`, leaving a file there that is not a link alone, and say so if `~/.local/bin` is not on PATH (`scripts/link-bin.sh`, OPS-171). Restarts nothing |
+| `make client-restart` | restart this machine's client service, only if it runs the binary `make build` wrote, and return once it answers on its port (`scripts/client-restart.sh`, OPS-170; `INNSEGL_CLIENT_RESTART_TIMEOUT` seconds, default 30). Run it in the checkout, or `make -C <checkout> client-restart`; see [client-and-connect.md](client-and-connect.md) |
 | `make test` | the full suite with the race detector, through `scripts/test-suite.sh` |
 | `make lint` | `go vet` and `golangci-lint` |
 | `make cover` | coverage profile and per-function summary |
@@ -198,7 +198,8 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
 | `image-bundle.sh` | 1 | refused (dirty tree, or a bundle that fails its checks) |
 | `make update` | 2 | SPIRE or Rekor is not running |
 | `codesign-cli.sh` (`make build`) | 1 | the identity asked for is not held, or `codesign` failed |
-| `client-restart.sh` | 1 | not restarted: no service, it runs another binary (named), or the restart failed |
+| `client-restart.sh` | 1 | not restarted: no service, it runs another binary (named), or the restart failed; or restarted and it did not answer within the timeout |
+| `link-bin.sh` (`make build`) | 0 | always: a link it cannot make, or a file there that is not a link, is a warning |
 
 ## Tests
 
@@ -213,7 +214,7 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
   `image-bundle-selftest.sh`, `install-selftest.sh`, `setup-link-selftest.sh`,
   `test-suite-selftest.sh`, `worktree-link-selftest.sh` (OPS-040, OPS-041),
   `codesign-cli-selftest.sh` (OPS-169, PROPOSED), `client-restart-selftest.sh`
-  (OPS-170, PROPOSED), `innsegl-migrate-selftest.sh` (OPS-168, PROPOSED, #560)
+  (OPS-170, PROPOSED), `link-bin-selftest.sh` (OPS-171, PROPOSED), `innsegl-migrate-selftest.sh` (OPS-168, PROPOSED, #560)
 - `test/smoke/*_test.go` (OPS-004 to OPS-006, OPS-014 to OPS-018)
 
 ## Decisions

@@ -5,7 +5,9 @@ package dockertest
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -93,6 +95,60 @@ func TestFreeHostPortReturnsAUsablePort(t *testing.T) {
 	port, err := FreeHostPort(t.Context())
 	if err != nil || port == "" || port == "0" {
 		t.Fatalf("FreeHostPort = (%q, %v)", port, err)
+	}
+}
+
+// A port handed to `docker compose` is released before Docker binds it. Drawn
+// from the kernel's ephemeral range (Linux 32768-60999, macOS 49152-65535),
+// the same allocator hands it to the next outgoing connection or to Docker's
+// own published ports in that gap: CI's INIT-008 failed 2026-10-09 with
+// "Bind for 127.0.0.1:46659 failed: port is already allocated". So a port
+// comes from FreePortLow..FreePortHigh, below every default ephemeral range
+// and clear of the ports innsegl's own stack publishes.
+func TestFreeHostPortAvoidsTheEphemeralRangeAndTheStacksOwnPorts(t *testing.T) {
+	if FreePortLow < 1024 || FreePortHigh >= 32768 || FreePortLow > FreePortHigh {
+		t.Fatalf("band %d-%d is not below the ephemeral ranges", FreePortLow, FreePortHigh)
+	}
+	for _, stack := range []int{5555, 8082, 23000, 28080, 28081, 28090, 28095, 28195, 28443} {
+		if stack >= FreePortLow && stack <= FreePortHigh {
+			t.Errorf("the band %d-%d holds %d, a port the stack publishes", FreePortLow, FreePortHigh, stack)
+		}
+	}
+	for range 50 {
+		port, err := FreeHostPort(t.Context())
+		if err != nil {
+			t.Fatalf("FreeHostPort: %v", err)
+		}
+		n, err := strconv.Atoi(port)
+		if err != nil || n < FreePortLow || n > FreePortHigh {
+			t.Fatalf("FreeHostPort = %q, want a port in %d-%d", port, FreePortLow, FreePortHigh)
+		}
+	}
+}
+
+// A port something already holds is never handed out.
+func TestFreeHostPortSkipsAPortInUse(t *testing.T) {
+	var held []net.Listener
+	t.Cleanup(func() {
+		for _, l := range held {
+			_ = l.Close()
+		}
+	})
+	for p := FreePortLow; p <= FreePortLow+20; p++ {
+		if l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:"+strconv.Itoa(p)); err == nil {
+			held = append(held, l)
+		}
+	}
+	for range 50 {
+		port, err := FreeHostPort(t.Context())
+		if err != nil {
+			t.Fatalf("FreeHostPort: %v", err)
+		}
+		for _, l := range held {
+			if strings.HasSuffix(l.Addr().String(), ":"+port) {
+				t.Fatalf("FreeHostPort handed out %s, which is held", port)
+			}
+		}
 	}
 }
 

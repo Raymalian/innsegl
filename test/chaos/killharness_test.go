@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"innsegl.dev/innsegl/internal/dockertest"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -343,16 +345,8 @@ func k9DockerUsable(ctx context.Context) error {
 }
 
 func k9FreePort(ctx context.Context) (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if cerr := l.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
-	return port, err
+	// One mechanism for every harness: see dockertest.FreeHostPort.
+	return dockertest.FreeHostPort(ctx)
 }
 
 func k9WaitFor(budget time.Duration, cond func() bool) bool {

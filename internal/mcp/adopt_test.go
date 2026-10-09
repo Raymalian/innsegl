@@ -85,7 +85,7 @@ func (f *adpFixture) edit(path, original, oldS, newS string, all bool) string {
 }
 
 func (f *adpFixture) rebuild(staged ...string) (map[string]adoptedPath, error) {
-	return rebuildLeftBytes(f.events, f.bodyDir, f.runID, staged)
+	return rebuildLeftBytes(f.events, f.bodyDir, f.runID, staged, nil)
 }
 
 func TestADP001AWriteIsRebuiltByteForByte(t *testing.T) {

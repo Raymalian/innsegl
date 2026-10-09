@@ -312,3 +312,64 @@ func TestCommitPathIsScopedToTheCallingInstallation(t *testing.T) {
 		t.Errorf("refusals differ:\n%s\n%s", foreign.Body.String(), unknown.Body.String())
 	}
 }
+
+// ADR-0079 decision 3: the trailers step asks whether the commit hands over
+// a dead run's work, with the tree and parents the hook sent, and renders
+// Agent-Adopted-Run last when it does.
+func TestCommitTrailersHandlerAddsTheAdoptedRunTheCoreProposes(t *testing.T) {
+	now := time.Now()
+	tree, parent := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	for _, tc := range []struct {
+		name    string
+		adopted string
+		err     error
+		status  int
+	}{
+		{"a proposal", "run-dead", nil, http.StatusOK},
+		{"none", "", nil, http.StatusOK},
+		{"a ledger that cannot be read", "", mcp.Errorf(mcp.ClassLedgerUnavailable, ctRunID, "down"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := newCTResolver()
+			res.relay(ctRunID, now)
+			var gotTree string
+			var gotParents []string
+			adoptFor := func(_ context.Context, call commitpath.RelayedCall, tr string, ps []string) (string, error) {
+				if call.RunID != ctRunID {
+					t.Errorf("asked about run %q", call.RunID)
+				}
+				gotTree, gotParents = tr, ps
+				return tc.adopted, tc.err
+			}
+			h := commitTrailersHandlerAdopting(res, ctClaimFor(ctClaim, nil), adoptFor, ctNow(now))
+			body, err := json.Marshal(commitpath.TrailersRequest{ToolUseID: ctToolUseID, Message: "subject\n",
+				Tree: tree, Parents: []string{parent}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := ctDo(t, h, http.MethodPost, body)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
+			}
+			if gotTree != tree || len(gotParents) != 1 || gotParents[0] != parent {
+				t.Errorf("asked with tree %q parents %v, want what the hook sent", gotTree, gotParents)
+			}
+			if tc.status != http.StatusOK {
+				return
+			}
+			var resp commitpath.TrailersResponse
+			if uerr := json.Unmarshal(rec.Body.Bytes(), &resp); uerr != nil {
+				t.Fatal(uerr)
+			}
+			claim := ctClaim
+			claim.AdoptedRun = tc.adopted
+			want, err := signing.PlaceTrailers(claim, "subject\n")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.Message != want {
+				t.Errorf("message =\n%q\nwant\n%q", resp.Message, want)
+			}
+		})
+	}
+}

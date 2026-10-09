@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,6 +46,12 @@ const (
 type TrailersRequest struct {
 	ToolUseID string `json:"tool_use_id"`
 	Message   string `json:"message"`
+	// Tree and Parents are the commit about to be made, as the hook reads
+	// them from the index and HEAD: what the core checks for a dead run's
+	// work (ADR-0079 decision 2). Optional; an older hook sends neither, and
+	// its commits adopt nothing.
+	Tree    string   `json:"tree,omitempty"`
+	Parents []string `json:"parents,omitempty"`
 }
 
 // TrailersResponse is the message with the run's trailers placed by
@@ -84,6 +91,30 @@ func IsGitCommitCommand(cmd string) bool {
 		}
 	}
 	return false
+}
+
+// IsAdoptableCommit reports whether every commit the command makes is a
+// plain `git commit` without --amend: a commit whose parent is HEAD, which is
+// what prepare-commit-msg's change is read against (ADR-0079 decision 2). It
+// reads quotes the way InsertGitOptions does, so --amend inside a message is
+// prose.
+func IsAdoptableCommit(cmd string) bool {
+	found := false
+	for _, words := range simpleCommandWords(cmd) {
+		texts := make([]string, len(words))
+		for i, w := range words {
+			texts[i] = w.text
+		}
+		i := gitSubcommandIndex(texts)
+		if i < 0 || !commitCreatingGit[texts[i]] {
+			continue
+		}
+		if texts[i] != "commit" || slices.Contains(texts[i+1:], "--amend") {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 // commitCreatingGit is every git subcommand that can create a commit object.

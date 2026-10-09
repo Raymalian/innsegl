@@ -63,7 +63,7 @@ func ghMsgFile(t *testing.T, contents string, mode os.FileMode) string {
 func TestRunGitHookPrepareCommitMsgRefusesWithNoMessageFileArgument(t *testing.T) {
 	client := &ghFakeClient{}
 	var stderr bytes.Buffer
-	code := runGitHookPrepareCommitMsg(t.Context(), nil, ghGetenv(nil), &stderr, client)
+	code := runGitHookPrepareCommitMsg(t.Context(), t.TempDir(), nil, ghGetenv(nil), &stderr, client)
 	if code == 0 {
 		t.Fatal("exit code 0 with no message file argument")
 	}
@@ -87,7 +87,7 @@ func TestRunGitHookPrepareCommitMsgWithNoToolUseIDLeavesTheMessageUntouched(t *t
 	client := &ghFakeClient{}
 	var stderr bytes.Buffer
 
-	code := runGitHookPrepareCommitMsg(t.Context(), []string{path}, ghGetenv(nil), &stderr, client)
+	code := runGitHookPrepareCommitMsg(t.Context(), t.TempDir(), []string{path}, ghGetenv(nil), &stderr, client)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0 (a human commit, nothing to attribute)", code)
 	}
@@ -110,7 +110,7 @@ func TestRunGitHookPrepareCommitMsgRefusesWhenTheFileDoesNotExist(t *testing.T) 
 	client := &ghFakeClient{}
 	var stderr bytes.Buffer
 	env := ghGetenv(map[string]string{commitpath.EnvToolUseID: "toolu_abc123"})
-	code := runGitHookPrepareCommitMsg(t.Context(), []string{filepath.Join(t.TempDir(), "nope")}, env, &stderr, client)
+	code := runGitHookPrepareCommitMsg(t.Context(), t.TempDir(), []string{filepath.Join(t.TempDir(), "nope")}, env, &stderr, client)
 	if code == 0 {
 		t.Fatal("exit code 0 for a message file that does not exist")
 	}
@@ -126,7 +126,7 @@ func TestRunGitHookPrepareCommitMsgRefusesWhenTheFileCannotBeRead(t *testing.T) 
 	client := &ghFakeClient{}
 	var stderr bytes.Buffer
 	env := ghGetenv(map[string]string{commitpath.EnvToolUseID: "toolu_abc123"})
-	code := runGitHookPrepareCommitMsg(t.Context(), []string{dir}, env, &stderr, client)
+	code := runGitHookPrepareCommitMsg(t.Context(), t.TempDir(), []string{dir}, env, &stderr, client)
 	if code == 0 {
 		t.Fatal("exit code 0 for a message file that cannot be read")
 	}
@@ -142,7 +142,7 @@ func TestRunGitHookPrepareCommitMsgRefusesWhenTheCoreRefuses(t *testing.T) {
 	var stderr bytes.Buffer
 	env := ghGetenv(map[string]string{commitpath.EnvToolUseID: "toolu_abc123"})
 
-	code := runGitHookPrepareCommitMsg(t.Context(), []string{path}, env, &stderr, client)
+	code := runGitHookPrepareCommitMsg(t.Context(), t.TempDir(), []string{path}, env, &stderr, client)
 	if code == 0 {
 		t.Fatal("exit code 0 when the core refused")
 	}
@@ -168,7 +168,7 @@ func TestRunGitHookPrepareCommitMsgWritesTheAnsweredMessageBackAndPreservesMode(
 	var stderr bytes.Buffer
 	env := ghGetenv(map[string]string{commitpath.EnvToolUseID: "toolu_abc123"})
 
-	code := runGitHookPrepareCommitMsg(t.Context(), []string{path, "message"}, env, &stderr, client)
+	code := runGitHookPrepareCommitMsg(t.Context(), t.TempDir(), []string{path, "message"}, env, &stderr, client)
 	if code != 0 {
 		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
 	}
@@ -204,7 +204,7 @@ func TestRunGitHookPrepareCommitMsgIgnoresSourceAndSha(t *testing.T) {
 	var stderr bytes.Buffer
 	env := ghGetenv(map[string]string{commitpath.EnvToolUseID: "toolu_abc123"})
 
-	code := runGitHookPrepareCommitMsg(t.Context(), []string{path, "commit", "abcdef1234"}, env, &stderr, client)
+	code := runGitHookPrepareCommitMsg(t.Context(), t.TempDir(), []string{path, "commit", "abcdef1234"}, env, &stderr, client)
 	if code != 0 {
 		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
 	}
@@ -390,5 +390,5 @@ func TestHelperProcess(t *testing.T) {
 		os.Exit(2)
 	}
 	client := commitpath.ClientFromEnv(os.Getenv)
-	os.Exit(runGitHookPrepareCommitMsg(context.Background(), args[1:], os.Getenv, os.Stderr, client))
+	os.Exit(runGitHookPrepareCommitMsg(context.Background(), ".", args[1:], os.Getenv, os.Stderr, client))
 }

@@ -6,7 +6,8 @@ the CLI reaches the core through it, and an old service does not know the
 CLI's newer calls.
 
 "Machine" below is the enrolled machine, in the checkout its client service
-runs from.
+runs from. The `make` targets run there: `cd` into the checkout first, or
+name it, `make -C <checkout> client-restart`.
 
 ## Update
 
@@ -23,10 +24,14 @@ git pull && make build && make client-restart
   after every build. Most commands reach the core through the client service
   and do not need it; `innsegl connect` itself does, and so does
   `connect --disconnect` when the service is down. With no Developer ID
-  identity it builds unsigned and says so. It restarts nothing.
+  identity it builds unsigned and says so. It then links the binary as
+  `~/.local/bin/innsegl`, so `innsegl` runs by name from any directory, and
+  says so once if `~/.local/bin` is not on your PATH. It restarts nothing.
 - `make client-restart` restarts the client service, but only if it runs the
   `./innsegl` this checkout just built. If it runs another binary, it names
-  that binary and leaves the service alone.
+  that binary and leaves the service alone. It returns once the restarted
+  service answers on its port, at most 30 seconds
+  (`INNSEGL_CLIENT_RESTART_TIMEOUT`).
 
 To sign with another identity, name it by its SHA-1 hash (two identities can
 share one name):
@@ -46,8 +51,10 @@ INNSEGL_CODESIGN_IDENTITY=<sha-1> make build
 innsegl status
 ```
 
-`client service up`, and a `core up` line with the core's version. On macOS,
-`codesign -dv ./innsegl` shows `Identifier=dev.innsegl.cli`.
+`innsegl` here is `~/.local/bin/innsegl`, the link `make build` made; in the
+checkout, `./innsegl status` is the same binary. It says `client service up`,
+and a `core up` line with the core's version. On macOS, `codesign -dv ./innsegl`
+shows `Identifier=dev.innsegl.cli`.
 
 ## When it says something else
 
@@ -55,6 +62,9 @@ innsegl status
 |---|---|
 | `client-restart: the client service runs <path>, not <path>; left as it is` | the service runs another binary. To move it onto this checkout's: `./innsegl connect --update --service`, with the same `--hardened` and `--managed-settings` you connected with. To restart it as it is: the command printed |
 | `client-restart: the client service (…) is not loaded` | the machine has no client service. `innsegl connect` installs it |
+| `client-restart: restarted the client service on <path>, but it did not answer on <addr> within 30s` | the service restarted and is not serving. Read its log (macOS: `tail -n 50 ~/Library/Logs/innsegl-client.log`; Linux: `journalctl --user -u innsegl-client.service -n 50`), then `innsegl status` |
+| `innsegl: command not found` | `~/.local/bin` is not on your PATH: add `export PATH="$HOME/.local/bin:$PATH"` to your shell's startup file, or run `./innsegl` in the checkout |
+| `link-bin: ~/.local/bin/innsegl is not a link; left as it is` | a file of your own is there. Remove it to have `make build` link this checkout's binary, or run `./innsegl` |
 | `the client service is not answering at <addr>; start it: …` | run the command printed (macOS: `launchctl kickstart -k gui/$(id -u)/dev.innsegl.client`; Linux: `systemctl --user restart innsegl-client.service`) |
 | `the client service is older than this command` | the binary was rebuilt and the service still runs the old one: `make client-restart` |
 | `the core is older than this client; update the core` | update the core host, then run the command again |

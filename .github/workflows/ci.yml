@@ -197,6 +197,10 @@ jobs:
       # stand in for uname, id, launchctl and systemctl.
       - name: make client-restart restarts only a service that runs this build
         run: ./scripts/client-restart-selftest.sh
+      # OPS-171. `make build` links the binary as ~/.local/bin/innsegl, under
+      # a temporary HOME here; a file there that is not a link is left alone.
+      - name: make build puts the binary on the PATH
+        run: ./scripts/link-bin-selftest.sh
 
   setup-link:
     name: setup link

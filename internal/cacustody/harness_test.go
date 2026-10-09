@@ -5,7 +5,6 @@ package cacustody
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -116,12 +115,6 @@ func (s *testStore) restart(t *testing.T) {
 }
 
 func freePort() (string, error) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = l.Close() }()
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	return port, err
+	// One mechanism for every harness: see dockertest.FreeHostPort.
+	return dockertest.FreeHostPort(context.Background())
 }

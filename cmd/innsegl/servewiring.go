@@ -870,17 +870,10 @@ func configureSignCommit(
 			"policy, so this deployment would refuse its own first signature: %w", identErr)
 	}
 	signers := newSigners(o, author)
-	// adopt_run (ADR-0051) proves a dead run's work against its own bodies, so
-	// it is on exactly when there is a body volume to prove against, and
-	// refused by name when there is not.
-	var adoption mcp.SignCommitAdoption
-	if o.observeBodyDir != "" {
-		adoption = mcp.LedgerAdoption{
-			Runs: runs, Events: store, Bodies: o.observeBodyDir, AbandonAfter: o.abandonAfter,
-		}
-	}
+	// adopt_run (ADR-0051) and the commit path's adoption (ADR-0079) share
+	// one evidence: newLedgerAdoption.
 	restore, err := mcp.ConfigureSignCommit(mcp.SignCommitConfig{
-		Adoption:    adoption,
+		Adoption:    newLedgerAdoption(o, runs, store),
 		Runs:        runs,
 		Ledger:      store,
 		Idempotency: idem,
@@ -915,6 +908,19 @@ func configureSignCommit(
 		"author_operators", len(o.signAuthorOperators),
 		"author_allow_unlinked", o.signAllowUnlinked)
 	return func() { restoreClaim(); restore() }, nil
+}
+
+// newLedgerAdoption is the adoption evidence (ADR-0051, ADR-0079): a dead
+// run's work is proved against its own bodies, so adoption is on exactly when
+// there is a body volume to prove against, and refused by name when there is
+// not. The ledger answers the runs a commit may adopt from.
+func newLedgerAdoption(o serveOptions, runs *rundir.Directory, store *ledger.Store) mcp.SignCommitAdoption {
+	if o.observeBodyDir == "" {
+		return nil
+	}
+	return mcp.LedgerAdoption{
+		Runs: runs, Events: store, Candidates: store, Bodies: o.observeBodyDir, AbandonAfter: o.abandonAfter,
+	}
 }
 
 // newSigners is the one signer factory: the shipped gitsign wrapper under
@@ -968,6 +974,9 @@ func configureCommitSigner(
 		AllowUnlinked: o.signAllowUnlinked,
 	}
 	restore, err := mcp.ConfigureCommitSigner(mcp.SignCommitConfig{
+		// The commit path adopts too (ADR-0079), on a core with no
+		// workspace as on one with it.
+		Adoption:       newLedgerAdoption(o, runs, store),
 		Runs:           runs,
 		Ledger:         store,
 		Idempotency:    idem,

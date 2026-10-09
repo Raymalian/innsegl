@@ -47,7 +47,12 @@ type adoptedPath struct {
 	ToolCall string
 }
 
-// adoptBody is the part of a stored tool-call body the proof reads.
+// adoptBody is the part of a stored tool-call body the proof reads, in either
+// of the two shapes a body has been recorded in. The hook shape (ADR-0051)
+// carries tool_name, tool_input and tool_response; the gateway shape
+// (ADR-0058, internal/gateway's buildToolCallBody) carries tool, input,
+// whether the result was observed and whether it was an error (ADR-0079
+// decision 4).
 type adoptBody struct {
 	ToolName  string `json:"tool_name"`
 	ToolInput struct {
@@ -60,17 +65,87 @@ type adoptBody struct {
 		NewString    string `json:"newString"`
 		ReplaceAll   bool   `json:"replaceAll"`
 	} `json:"tool_response"`
+
+	Tool  string `json:"tool"`
+	Input struct {
+		FilePath   string `json:"file_path"`
+		Content    string `json:"content"`
+		OldString  string `json:"old_string"`
+		NewString  string `json:"new_string"`
+		ReplaceAll bool   `json:"replace_all"`
+	} `json:"input"`
+	InputTruncated bool `json:"input_truncated"`
+	ResultObserved bool `json:"result_observed"`
+	IsError        bool `json:"is_error"`
 }
 
-// rebuildLeftBytes returns, for every staged path, the bytes runID's last
-// Write or Edit left there, or an error naming what could not be proved.
-func rebuildLeftBytes(events []event.Fields, bodyDir, runID string, staged []string) (map[string]adoptedPath, error) {
-	type call struct {
-		file  string
-		bytes []byte
-		hash  string
+// adoptOp is what one Write or Edit did to one file: left exactly `set`,
+// replayed `edit` on the bytes before it, or left bytes nothing can know
+// (`unknown`, saying why).
+type adoptOp struct {
+	file    string
+	hash    string
+	set     []byte
+	edit    *adoptEdit
+	unknown string
+}
+
+// adoptEdit is a gateway-recorded Edit: its input, and nothing of the file.
+type adoptEdit struct {
+	oldS, newS string
+	all        bool
+}
+
+// adoptOpOf reads one verified body into what the call did. A body that is
+// not a tool call, or names no file, is an error: which path it touched
+// cannot be known. A gateway call whose result was an error changed nothing,
+// and is (nil, nil).
+func adoptOpOf(tool, hash string, raw []byte) (*adoptOp, error) {
+	var b adoptBody
+	if err := json.Unmarshal(raw, &b); err != nil || (b.ToolName == "" && b.Tool == "") {
+		return nil, fmt.Errorf("the body of %s %s is not a tool call", tool, hash)
 	}
-	var calls []call
+	if b.Tool == "" {
+		// The hook shape: the call's own bytes, whole.
+		left, err := leftBy(tool, b)
+		if err != nil {
+			return nil, fmt.Errorf("%s %s on %s cannot be replayed: %w", tool, hash, b.ToolInput.FilePath, err)
+		}
+		return &adoptOp{file: b.ToolInput.FilePath, hash: hash, set: left}, nil
+	}
+	in := b.Input
+	if in.FilePath == "" {
+		return nil, fmt.Errorf("the body of %s %s names no file", tool, hash)
+	}
+	op := &adoptOp{file: in.FilePath, hash: hash}
+	switch {
+	case b.InputTruncated:
+		op.unknown = fmt.Sprintf("%s %s was recorded with its input cut short", tool, hash)
+	case !b.ResultObserved:
+		op.unknown = fmt.Sprintf("the result of %s %s was never observed, so whether it ran cannot be known",
+			tool, hash)
+	case b.IsError:
+		return nil, nil
+	case tool == "Write":
+		op.set = []byte(in.Content)
+	default:
+		op.edit = &adoptEdit{oldS: in.OldString, newS: in.NewString, all: in.ReplaceAll}
+	}
+	return op, nil
+}
+
+// rebuildLeftBytes returns, for every staged path, the bytes runID's Write and
+// Edit calls left there, or an error naming what could not be proved.
+//
+// A path's calls are replayed in chain order (ADR-0079 decision 4). A Write,
+// and a hook-shaped Edit, leave whole bytes of their own. A gateway Edit is
+// replayed on the bytes before it: the run's own earlier calls, or the path's
+// blob in the parent commit, which base answers (nil: there is none). The
+// tool call that proves a path is the last one that changed it.
+func rebuildLeftBytes(
+	events []event.Fields, bodyDir, runID string, staged []string, base func(string) ([]byte, bool),
+) (map[string]adoptedPath, error) {
+	var ops []adoptOp
 	var bad []string
 	for _, ev := range events {
 		if ev[event.FieldEventType] != event.EventTypeToolCall || ev[event.FieldRunID] != runID {
@@ -92,79 +167,116 @@ func rebuildLeftBytes(events []event.Fields, bodyDir, runID string, staged []str
 			bad = append(bad, fmt.Sprintf("the body of %s %s does not match its digest", tool, hash))
 			continue
 		}
-		var b adoptBody
-		if err = json.Unmarshal(raw, &b); err != nil {
-			bad = append(bad, fmt.Sprintf("the body of %s %s is not a tool call", tool, hash))
-			continue
-		}
-		left, err := leftBy(tool, b)
+		op, err := adoptOpOf(tool, hash, raw)
 		if err != nil {
-			bad = append(bad, fmt.Sprintf("%s %s on %s cannot be replayed: %v", tool, hash, b.ToolInput.FilePath, err))
+			bad = append(bad, err.Error())
 			continue
 		}
-		calls = append(calls, call{file: b.ToolInput.FilePath, bytes: left, hash: hash})
+		if op != nil {
+			ops = append(ops, *op)
+		}
 	}
 
 	out := make(map[string]adoptedPath, len(staged))
 	top := ""
-	var unproved []string
+	var unproved, why []string
 	for _, path := range staged {
-		found := false
-		for i := len(calls) - 1; i >= 0; i-- {
-			c := calls[i]
-			if !strings.HasSuffix(c.file, "/"+path) {
+		var mine []adoptOp
+		for i := len(ops) - 1; i >= 0; i-- {
+			if !strings.HasSuffix(ops[i].file, "/"+path) {
 				continue
 			}
-			here := strings.TrimSuffix(c.file, "/"+path)
+			here := strings.TrimSuffix(ops[i].file, "/"+path)
 			if top == "" {
 				top = here
 			}
-			if here != top {
-				continue
+			if here == top {
+				mine = append([]adoptOp{ops[i]}, mine...)
 			}
-			out[path] = adoptedPath{Path: path, Bytes: c.bytes,
-				SHA256: strings.TrimPrefix(event.Digest(c.bytes), event.HashPrefix), ToolCall: c.hash}
-			found = true
-			break
 		}
-		if !found {
+		if len(mine) == 0 {
 			unproved = append(unproved, path)
+			continue
 		}
+		p, reason := replayPath(path, mine, base)
+		if reason != "" {
+			why = append(why, path+": "+reason)
+			continue
+		}
+		out[path] = p
 	}
-	if len(unproved) == 0 && len(bad) == 0 {
+	if len(unproved) == 0 && len(bad) == 0 && len(why) == 0 {
 		return out, nil
 	}
 	sort.Strings(unproved)
-	msg := ""
+	var parts []string
 	if len(unproved) > 0 {
-		msg = fmt.Sprintf("no Write or Edit by %s in %s proves %s", runID, orUnknown(top),
-			strings.Join(unproved, ", "))
+		parts = append(parts, fmt.Sprintf("no Write or Edit by %s in %s proves %s", runID, orUnknown(top),
+			strings.Join(unproved, ", ")))
 	}
-	if len(bad) > 0 {
-		if msg != "" {
-			msg += "; and "
-		}
-		msg += strings.Join(bad, "; ")
-	}
-	return nil, fmt.Errorf("%s", msg)
+	parts = append(parts, why...)
+	parts = append(parts, bad...)
+	return nil, fmt.Errorf("%s", strings.Join(parts, "; and "))
 }
 
-// leftBy is the whole file one call left behind.
+// replayPath replays one path's calls in chain order, and answers the bytes
+// they left and the call that left them, or why those bytes cannot be known.
+func replayPath(path string, ops []adoptOp, base func(string) ([]byte, bool)) (adoptedPath, string) {
+	var cur []byte
+	have := false
+	if base != nil {
+		cur, have = base(path)
+	}
+	reason, proof := "", ""
+	for _, op := range ops {
+		switch {
+		case op.unknown != "":
+			have, reason = false, op.unknown
+		case op.edit == nil:
+			cur, have, reason, proof = op.set, true, "", op.hash
+		case !have:
+			if reason == "" {
+				reason = fmt.Sprintf("Edit %s edits bytes that neither an earlier call of the run "+
+					"nor the parent commit holds", op.hash)
+			}
+		default:
+			next, err := replayEdit(string(cur), op.edit.oldS, op.edit.newS, op.edit.all)
+			if err != nil {
+				have, reason = false, fmt.Sprintf("Edit %s cannot be replayed: %v", op.hash, err)
+				continue
+			}
+			cur, proof = next, op.hash
+		}
+	}
+	if !have {
+		return adoptedPath{}, reason
+	}
+	return adoptedPath{Path: path, Bytes: cur,
+		SHA256: strings.TrimPrefix(event.Digest(cur), event.HashPrefix), ToolCall: proof}, ""
+}
+
+// leftBy is the whole file one hook-shaped call left behind.
 func leftBy(tool string, b adoptBody) ([]byte, error) {
 	if tool == "Write" {
 		return []byte(b.ToolInput.Content), nil
 	}
 	r := b.ToolResponse
-	n := strings.Count(r.OriginalFile, r.OldString)
+	return replayEdit(r.OriginalFile, r.OldString, r.NewString, r.ReplaceAll)
+}
+
+// replayEdit is one Edit on the file it edited: its old string must occur,
+// and exactly once unless it replaced all.
+func replayEdit(original, oldS, newS string, all bool) ([]byte, error) {
+	n := strings.Count(original, oldS)
 	switch {
-	case r.OldString == "" || n == 0:
+	case oldS == "" || n == 0:
 		return nil, fmt.Errorf("its old string is not in the file it edited")
-	case r.ReplaceAll:
-		return []byte(strings.ReplaceAll(r.OriginalFile, r.OldString, r.NewString)), nil
+	case all:
+		return []byte(strings.ReplaceAll(original, oldS, newS)), nil
 	case n > 1:
 		return nil, fmt.Errorf("its old string occurs %d times and it did not replace all", n)
 	}
-	return []byte(strings.Replace(r.OriginalFile, r.OldString, r.NewString, 1)), nil
+	return []byte(strings.Replace(original, oldS, newS, 1)), nil
 }
 
 // fieldString is one string member of an event, or "" when it is absent or
@@ -220,57 +332,20 @@ func (c *signCommitService) planAdoption(ctx context.Context, runID, adopted, wo
 			"adopt_run is not configured on this deployment: it has no body volume to prove "+
 				"a dead run's work against (ADR-0051)")
 	}
-	state, events, err := c.adoption.AdoptionEvidence(ctx, adopted)
-	if err != nil {
-		return nil, Errorf(ClassLedgerUnavailable, runID,
-			"the ledger could not say how run %q ended or what it wrote: %v", adopted, err)
-	}
-	switch state {
-	case "":
-		return nil, Errorf(ClassRunNotFound, runID, "no run %q to adopt", adopted)
-	case "retired", "lapsed", "abandoned":
-	default:
-		return nil, Errorf(ClassInvariantViolation, runID,
-			"run %q is %s in the ledger; a run that may still be working is not dead, and its "+
-				"work is not this run's to adopt (ADR-0051)", adopted, state)
-	}
-
 	staged, err := c.adoption.StagedFiles(ctx, worktree)
 	if err != nil {
 		return nil, Errorf(ClassInvariantViolation, runID, "the staged files cannot be read: %v", err)
 	}
-	if len(staged) == 0 {
-		return nil, Errorf(ClassInvariantViolation, runID, "nothing is staged, so there is nothing to adopt")
-	}
-	names := make([]string, 0, len(staged))
-	for name := range staged {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	proofs, err := rebuildLeftBytes(events, c.adoption.BodyDir(), adopted, names)
-	if err != nil {
-		return nil, Errorf(ClassInvariantViolation, runID, "run %q's work cannot be adopted: %v", adopted, err)
-	}
-	claim := adoptionClaim{AdoptedRunID: adopted}
-	for _, name := range names {
-		p := proofs[name]
-		if got := strings.TrimPrefix(event.Digest(staged[name]), event.HashPrefix); got != p.SHA256 {
-			return nil, Errorf(ClassInvariantViolation, runID,
-				"%s is staged with bytes run %q did not leave: its last Write or Edit (%s) left "+
-					"sha256 %s, and the index holds %s. Commit that change as this run's own work",
-				name, adopted, p.ToolCall, p.SHA256, got)
+	// An Edit the gateway recorded is replayed on HEAD's blob (ADR-0079
+	// decision 4), when the evidence can read one.
+	var base func(string) ([]byte, bool)
+	if a := c.commitAdoption(); a != nil {
+		base = func(path string) ([]byte, bool) {
+			b, ok, berr := a.ParentFile(ctx, worktree, "HEAD", path)
+			return b, ok && berr == nil
 		}
-		claim.Paths = append(claim.Paths, adoptionClaimPath{Path: name, SHA256: p.SHA256, ToolCall: p.ToolCall})
 	}
-	if serr := c.refuseSpent(ctx, runID, adopted, claim); serr != nil {
-		return nil, serr
-	}
-	body, err := adoptionMarshal(claim)
-	if err != nil {
-		return nil, Errorf(ClassInvariantViolation, runID, "the adoption claim cannot be encoded: %v", err)
-	}
-	return &adoptionPlan{adoptedRun: adopted, state: state, claim: body, digest: event.Digest(body)}, nil
+	return c.proveAdoption(ctx, runID, adopted, "", staged, base)
 }
 
 // refuseSpent is ADR-0051 decision 6: bytes of a path already adopted from
@@ -310,10 +385,10 @@ func (c *signCommitService) refuseSpent(ctx context.Context, runID, adopted stri
 	return nil
 }
 
-// recordAdoption stores the claim and appends run_adopted, and returns its
-// event id for the intent to carry.
+// recordAdoption stores the claim and appends run_adopted under
+// idempotencyKey, and returns its event id for the intent to carry.
 func (c *signCommitService) recordAdoption(
-	ctx context.Context, runID, spiffeID, key string, plan *adoptionPlan,
+	ctx context.Context, runID, spiffeID, idempotencyKey string, plan *adoptionPlan,
 ) (string, error) {
 	if err := observeWriteBody(c.adoption.BodyDir(), runID, plan.digest, plan.claim); err != nil {
 		return "", err
@@ -324,7 +399,7 @@ func (c *signCommitService) recordAdoption(
 		event.FieldSource:          event.SourceMCP,
 		event.FieldRunID:           runID,
 		event.FieldSpiffeID:        spiffeID,
-		event.FieldIdempotencyKey:  signCommitPhaseKey(signCommitAdoptedKeyPrefix, key),
+		event.FieldIdempotencyKey:  idempotencyKey,
 		event.FieldAdoptedRunID:    plan.adoptedRun,
 		event.FieldAdoptedRunState: plan.state,
 		event.FieldPayloadDigest:   plan.digest,
@@ -351,6 +426,9 @@ type LedgerAdoption struct {
 	Events       RunEvents
 	Bodies       string
 	AbandonAfter time.Duration
+	// Candidates lists the ended runs a commit may adopt from (ADR-0079);
+	// nil searches nothing, and the commit path then proposes no adoption.
+	Candidates DeadRunLister
 	// GitPath is the git binary; "" means `git` on PATH.
 	GitPath string
 	// Now is the clock the state is read at; nil is time.Now.

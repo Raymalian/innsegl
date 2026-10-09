@@ -73,7 +73,7 @@ maintainer ask "why is it like this?"
 | [0048](0048-drive-the-three-ingestion-tools-from-a-second-harnesss-transcript-and-pin-their-names.md) | Drive the three ingestion tools from a second harness's transcript, and pin their names | accepted | 2026-09-13 |
 | [0049](0049-decide-whether-ownership-belongs-in-the-spiffe-id-or-in-a-record-beside-it.md) | Decide whether ownership belongs in the SPIFFE ID or in a record beside it | proposed | 2026-09-16 |
 | [0050](0050-prune-the-hot-tier-without-deleting-a-row.md) | Prune the hot tier without deleting a row | accepted | 2026-09-17 |
-| [0051](0051-let-a-live-run-adopt-a-dead-runs-work-and-record-the-handover.md) | Let a live run adopt a dead run's work, and record the handover as an event | accepted | 2026-09-24 |
+| [0051](0051-let-a-live-run-adopt-a-dead-runs-work-and-record-the-handover.md) | Let a live run adopt a dead run's work, and record the handover as an event | accepted; superseded in part by [0079](0079-adoption-runs-on-the-commit-path.md) | 2026-09-24 |
 | [0052](0052-a-withdrawn-credential-is-a-lapse-not-a-death.md) | A withdrawn credential is a lapse, not a death | accepted | 2026-09-26 |
 | [0053](0053-issue-a-runs-identity-only-through-the-attested-mcp.md) | Issue a run's identity only through the attested MCP, never to a workload that declares a label | accepted; amended 2026-10-01 | 2026-09-26 |
 | [0054](0054-alerts-live-in-a-header-notification-menu.md) | Alerts live in a header notification menu, not in banners on one page | accepted; amended 2026-10-03 | 2026-09-27 |
@@ -101,6 +101,7 @@ maintainer ask "why is it like this?"
 | [0076](0076-the-ca-key-store-is-unlocked-by-the-operators-machine.md) | The CA key store is unlocked by the operator's machine | accepted | 2026-10-07 |
 | [0077](0077-the-mcp-wire-surface-is-deprecated.md) | The MCP wire surface is deprecated | accepted | 2026-10-08 |
 | [0078](0078-every-service-credential-is-generated-per-host-and-read-from-a-file.md) | Every service credential is generated per host and read from a file | accepted | 2026-10-09 |
+| [0079](0079-adoption-runs-on-the-commit-path.md) | Adoption runs on the commit path | accepted | 2026-10-09 |
 
 ## Open items
 

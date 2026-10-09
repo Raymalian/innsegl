@@ -187,6 +187,11 @@ func SignPayloadForGateway(
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, runID,
 			"no claim for run %s: %v", runID, err)
 	}
+	// A payload that adopts a dead run carries a fourth trailer, last
+	// (ADR-0079 decision 5). It is read back here only to be held to the
+	// same agreement rule and then proved, before Phase A, against the
+	// payload's own tree: whoever wrote it, the proof is what admits it.
+	claim.AdoptedRun = adoptedRunOf(parsed.Message)
 	wantTrailers, err := claim.Trailers()
 	if err != nil {
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, runID, "%w", err)
@@ -245,27 +250,32 @@ func SignPayloadForGateway(
 	// objects exist only there until it pushes them. So the hosted path reads
 	// the core's mirror of run.Repo (ADR-0065), which the client fed before
 	// asking, and never the stated directory.
-	var worktree string
-	switch {
-	case relayed.Installation != "":
-		worktree, err = commitPathMirror(ctx, cfg.mirror, run.Repo, parsed.Tree, parsed.Parents)
-		if err == nil {
-			// The staging ref has done its job once this call ends, however
-			// it ends; the client pushes again for another attempt.
-			defer func() {
-				discardDropStagingError(cfg.mirror.DropStaging(context.WithoutCancel(ctx), run.Repo, relayed.Installation, req.ToolUseID))
-			}()
-		}
-	case relayed.WorkingDirectory != "":
-		worktree, err = commitPathWorktree(ctx, relayed.WorkingDirectory, run.Repo)
-	case svc.workspace == nil:
-		err = errors.New("the call states no working directory and this core has no workspace (-workspace)")
-	default:
-		worktree, err = svc.workspace.Worktree(ctx, run.Repo)
-	}
+	worktree, err := commitPathDir(ctx, cfg, svc, relayed, run.Repo, parsed.Tree, parsed.Parents)
 	if err != nil {
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, runID,
 			"no working tree for %s: %v", run.Repo, err)
+	}
+	if relayed.Installation != "" {
+		// The staging ref has done its job once this call ends, however it
+		// ends; the client pushes again for another attempt.
+		defer func() {
+			discardDropStagingError(cfg.mirror.DropStaging(context.WithoutCancel(ctx), run.Repo, relayed.Installation, req.ToolUseID))
+		}()
+	}
+
+	// The adoption the payload's trailer names is proved here, before
+	// anything is appended (ADR-0079 decision 5): against the payload's tree
+	// and its first parent, with every one of ADR-0051's refusals.
+	var adoption *adoptionPlan
+	if claim.AdoptedRun != "" {
+		parent := ""
+		if len(parsed.Parents) > 0 {
+			parent = parsed.Parents[0]
+		}
+		adoption, err = svc.proveCommitAdoption(ctx, runID, run.Repo, claim.AdoptedRun, worktree, parsed.Tree, parent)
+		if err != nil {
+			return commitpath.SignResponse{}, err
+		}
 	}
 
 	// The credential comes through the identical path sign_commit uses
@@ -294,7 +304,7 @@ func SignPayloadForGateway(
 		return commitpath.SignResponse{}, Errorf(ClassInvariantViolation, runID,
 			"the change %s claims cannot be identified: %v", parsed.Tree, perr)
 	}
-	intent, err := svc.append(ctx, runID, event.EventTypeCommitIntent, event.Fields{
+	intentFields := event.Fields{
 		event.FieldSchemaVersion:  event.SchemaVersion,
 		event.FieldEventType:      event.EventTypeCommitIntent,
 		event.FieldSource:         event.SourceMCP,
@@ -304,7 +314,17 @@ func SignPayloadForGateway(
 		event.FieldRepo:           run.Repo,
 		event.FieldTreeHash:       parsed.Tree,
 		event.FieldPatchID:        patchID,
-	})
+	}
+	// run_adopted precedes the intent that names it (ADR-0051 decision 3).
+	if adoption != nil {
+		adoptedID, aerr := svc.recordAdoption(ctx, runID, claim.Identity,
+			commitPathPhaseKey(commitPathAdoptedKeyPrefix, req.ToolUseID, req.Payload), adoption)
+		if aerr != nil {
+			return commitpath.SignResponse{}, aerr
+		}
+		intentFields[event.FieldAdoptionEventID] = adoptedID
+	}
+	intent, err := svc.append(ctx, runID, event.EventTypeCommitIntent, intentFields)
 	if err != nil {
 		return commitpath.SignResponse{}, err
 	}
@@ -455,6 +475,7 @@ func commitPathPatchID(ctx context.Context, worktree, tree string, parents []str
 const (
 	commitPathIntentKeyPrefix   = "commit_sign_payload/intent/"
 	commitPathRecordedKeyPrefix = "commit_sign_payload/recorded/"
+	commitPathAdoptedKeyPrefix  = "commit_sign_payload/adopted/"
 )
 
 func commitPathPhaseKey(prefix, toolUseID string, payload []byte) string {

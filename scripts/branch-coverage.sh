@@ -60,8 +60,20 @@ done | sort -u)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+# gobco exits non-zero for a failing test as well as for a crash, and a crash
+# names no file: counting findings alone would read "gobco never ran" as 100%
+# (measured 2026-10-09: a gobco built against a Go toolchain since upgraded
+# panicked before any test, and every surface read ok). So a package's run
+# counts only when gobco exited 0 and printed its own summary line.
 for p in $pkgs; do
-  "$GOBCO" -branch "./$p" > "$tmp/$(echo "$p" | tr / _).txt" 2>&1 || true
+  f="$tmp/$(echo "$p" | tr / _).txt"
+  rc=0
+  "$GOBCO" -branch "./$p" > "$f" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ] || ! grep -q '^Branch coverage: ' "$f"; then
+    echo "$p" >> "$tmp/norun"
+    echo "gobco exited $rc on ./$p; its last lines:" >> "$tmp/norun.log"
+    tail -n 15 "$f" >> "$tmp/norun.log"
+  fi
 done
 
 printf '%s\n' "$SURFACES" | while IFS='|' read -r pkg file desc; do
@@ -71,6 +83,10 @@ printf '%s\n' "$SURFACES" | while IFS='|' read -r pkg file desc; do
     continue
   fi
   out="$tmp/$(echo "$pkg" | tr / _).txt"
+  if grep -qx "$pkg" "$tmp/norun" 2>/dev/null; then
+    printf '    FAIL     %-46s gobco did not run on %s\n' "$desc" "$pkg"
+    continue
+  fi
   hits=$(grep -c "^$file" "$out" 2>/dev/null || true)
   hits=${hits:-0}
   if [ "$hits" -gt 0 ]; then
@@ -87,6 +103,7 @@ pending=$(grep -c '^    PENDING' "$tmp/report" || true); pending=${pending:-0}
 checked=$(grep -c '^    ok' "$tmp/report" || true);      checked=${checked:-0}
 
 printf '\n'
+[ -s "$tmp/norun.log" ] && cat "$tmp/norun.log" && printf '\n'
 if [ "$fail" -gt 0 ]; then
   printf 'branch coverage: BREACHED (%s surface(s) below 100%%)\n' "$fail"
   exit 1

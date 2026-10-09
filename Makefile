@@ -35,15 +35,17 @@ COVERPROFILE := cover.out
 
 all: build test lint
 
-## build: compile the single innsegl binary; on macOS, sign it with a Developer ID if one is held
+## build: compile the single innsegl binary, sign it on macOS if a Developer ID is held, and link it as ~/.local/bin/innsegl
 #
 # The signature is what lets macOS keep the binary's Local Network permission
 # across rebuilds (scripts/codesign-cli.sh; $INNSEGL_CODESIGN_IDENTITY picks
-# the identity, =none skips it). Nothing on Linux. It restarts nothing: that
-# is client-restart, asked for on its own.
+# the identity, =none skips it). Nothing on Linux. The link puts the binary on
+# the PATH (scripts/link-bin.sh); a file there that is not a link is left
+# alone. It restarts nothing: that is client-restart, asked for on its own.
 build:
 	go build -ldflags '$(LDFLAGS)' -o $(BINARY) $(CMD)
 	@scripts/codesign-cli.sh $(BINARY)
+	@scripts/link-bin.sh $(CURDIR)/$(BINARY)
 
 ## client-restart: restart this machine's client service, if it runs the binary build just wrote
 client-restart:
