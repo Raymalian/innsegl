@@ -806,6 +806,7 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		fs.PrintDefaults()
 	}
 
+	redactCredentialDefaults(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return serveOptions{}, exitOK, false

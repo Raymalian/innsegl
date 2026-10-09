@@ -39,6 +39,21 @@ func fileCABundle() map[string][]string {
 		"spire-upstream-ca": {"upstream-ca.key"},
 		"gateway-ca-key":    {"gateway-ca-key.pem"},
 		"trust-history":     {"trust-history.json"},
+		// ADR-0078: every service credential, per project.
+		"credentials":          {"ledger-owner", "objects-root"},
+		"sigstore-credentials": {"logdb-trillian"},
+	}
+}
+
+// A bundle written before ADR-0078 cannot restore a host made after it: a
+// restored ledger or log database opens only with the passwords it had.
+func TestBAK030ABundleWithoutTheCredentialsFailsTheDrill(t *testing.T) {
+	for _, item := range []string{"credentials", "sigstore-credentials"} {
+		b := fileCABundle()
+		delete(b, item)
+		if code, out := drill(t, b); code != exitTrustBackupFailed || !strings.Contains(out, item+" ") {
+			t.Errorf("a bundle without %s passed the drill: exit %d\n%s", item, code, out)
+		}
 	}
 }
 

@@ -315,6 +315,7 @@ func parseSealFlags(args []string, stderr io.Writer) (*sealOptions, bool, bool, 
 		fs.PrintDefaults()
 	}
 
+	redactCredentialDefaults(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil, false, false, exitOK
@@ -325,6 +326,15 @@ func parseSealFlags(args []string, stderr io.Writer) (*sealOptions, bool, bool, 
 		fprintf(stderr, "innsegl seal: unexpected argument %q\n", fs.Arg(0))
 		fs.Usage()
 		return nil, false, false, exitUsage
+	}
+
+	if *secretKey == "" {
+		v, err := envSecret(os.Getenv, envSecretKey)
+		if err != nil {
+			fprintf(stderr, "innsegl seal: %v\n", err)
+			return nil, false, false, exitUsage
+		}
+		*secretKey = v
 	}
 
 	missing := ""

@@ -547,6 +547,7 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 
 	fs.Usage = func() { gatewayUsage(stderr, fs) }
 
+	redactCredentialDefaults(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return gatewayOptions{}, exitOK, false

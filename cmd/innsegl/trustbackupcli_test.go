@@ -35,6 +35,10 @@ func trustVolumes(t *testing.T) (env map[string]string, args []string) {
 		"spire/upstream-ca.key":   "SPIREKEY",
 		"gateway/ca.key":          "GWKEY",
 		"history/trust-history.j": "{}",
+		// ADR-0078: the generated credentials, one volume per project. The
+		// log database's password is read from the second, as in the stack.
+		"credentials/ledger-owner":            "OWNERPW",
+		"sigstore-credentials/logdb-trillian": "hunter2\n",
 	} {
 		full := filepath.Join(root, filepath.FromSlash(p))
 		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
@@ -53,12 +57,12 @@ func trustVolumes(t *testing.T) (env map[string]string, args []string) {
 		t.Fatal(err)
 	}
 	env = map[string]string{
-		trustbackup.EnvRecipients:    id.Recipient().String(),
-		envTrustBackupMySQLUser:      "test",
-		envTrustBackupMySQLPassword:  "hunter2",
-		"INNSEGL_FULCIO_CA_PASSWORD": "capw",
-		"TEST_IDENTITY_FILE":         idFile,
-		"TEST_BACKUP_DIR":            filepath.Join(root, "backups"),
+		trustbackup.EnvRecipients:             id.Recipient().String(),
+		envTrustBackupMySQLUser:               "test",
+		envTrustBackupMySQLPassword + "_FILE": filepath.Join(root, "sigstore-credentials", "logdb-trillian"),
+		"INNSEGL_FULCIO_CA_PASSWORD":          "capw",
+		"TEST_IDENTITY_FILE":                  idFile,
+		"TEST_BACKUP_DIR":                     filepath.Join(root, "backups"),
 	}
 	args = []string{
 		"--dir", env["TEST_BACKUP_DIR"], "--keep", "3", "--owner", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
@@ -68,6 +72,8 @@ func trustVolumes(t *testing.T) (env map[string]string, args []string) {
 		"--path", "spire-upstream-ca=" + filepath.Join(root, "spire"),
 		"--path", "gateway-ca-key=" + filepath.Join(root, "gateway"),
 		"--path", "trust-history=" + filepath.Join(root, "history"),
+		"--path", "credentials=" + filepath.Join(root, "credentials"),
+		"--path", "sigstore-credentials=" + filepath.Join(root, "sigstore-credentials"),
 		"--mysql", "trillian-db=trillian-db:3306/test",
 		"--value", "fulcio-ca-password=INNSEGL_FULCIO_CA_PASSWORD",
 	}
@@ -179,6 +185,7 @@ func TestTrustBackupCreateRefusesABrokenSourceAndKeepsTheLastGoodBundle(t *testi
 	if code := runTrustBackup(t.Context(), append([]string{"create"}, args...), &out, &errOut, deps); code != exitOK {
 		t.Fatalf("first run: %s", errOut.String())
 	}
+	delete(env, envTrustBackupMySQLPassword+"_FILE")
 	env[envTrustBackupMySQLPassword] = "wrong"
 	errOut.Reset()
 	if code := runTrustBackup(t.Context(), append([]string{"create"}, args...), &out, &errOut, deps); code != exitTrustBackupFailed ||

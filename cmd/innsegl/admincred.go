@@ -453,6 +453,7 @@ func adminCredentialVerify(args []string, stdout, stderr io.Writer) int {
 // adminCredentialParse runs one verb's flag set, mapping -h and a bad flag
 // onto cli.go's statuses.
 func adminCredentialParse(fs *flag.FlagSet, args []string) (int, bool) {
+	redactCredentialDefaults(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return exitOK, false
