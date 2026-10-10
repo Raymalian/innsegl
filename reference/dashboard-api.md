@@ -42,6 +42,22 @@ POST /api/v1/alert-resolutions/begin
 POST /api/v1/alert-resolutions/finish
 ```
 
+### Scoped reads
+
+Every ledger read answers only the viewer's runs: runs list, run pages and
+their steps, overview counts, repositories, alerts, recent verification
+and attribution. A run belongs to the organisation of the machine the
+gateway mapped it from (`gateway_run_mapping.client_id`). A run no machine
+is mapped to is unowned: the operator's own organisation sees those, every
+other organisation never does, and `-hide-unowned-runs` hides them from
+the operator too. A run outside the viewer's scope answers 404 with the
+same body as a run that does not exist. Alerts with no run are unowned.
+
+A person in several organisations sees all of them at once, or one: the
+dashboard's switcher sets the `innsegl_organisation` cookie to an
+organisation id, and the reads narrow to it. A cookie naming an
+organisation the person is not a member of is ignored.
+
 `GET /api/v1/auth/session` also answers the signed-in person's
 organisations with their roles, read on every request. The three
 `/api/v1/auth/invitation` routes need no session: they are how a person
@@ -167,6 +183,7 @@ Rows written before this release may still hold names.
 | `-snapshot-dir` | `INNSEGL_API_SNAPSHOT_DIR` | workspace snapshots |
 | `-message-key-dir` | `INNSEGL_API_MESSAGE_KEY_DIR` | check-only agent-message key |
 | `-gateway-ca-cert` | `INNSEGL_API_GATEWAY_CA_CERT` | fingerprint pinned by the connect command shown to users |
+| `-hide-unowned-runs` | `INNSEGL_API_HIDE_UNOWNED_RUNS` | hide runs no machine is mapped to from the operator's organisation too; default `false` |
 | `-upstream-timeout`, `-shutdown-timeout` | `INNSEGL_API_UPSTREAM_TIMEOUT`, `INNSEGL_API_SHUTDOWN_TIMEOUT` | [`15s`, `15s`] |
 
 Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
@@ -213,6 +230,10 @@ last owner or an existing membership.
   AUTH-007; real Postgres)
 - `internal/api/accountmembers_test.go`, `accountorg_test.go` (ACC-004,
   AUTH-005 to AUTH-007)
+- `internal/api/scope_test.go` (API-035: every read answers the viewer's
+  runs only; API-036: another organisation's run reads as no run; ACC-013:
+  the switcher narrows; ACC-014: unowned runs are the operator's), and
+  `cmd/innsegl/apiscope_test.go` (ACC-014's setting)
 - `cmd/innsegl/accountsorgcli_test.go`, `eraseorganisation_test.go`
   (ACC-005, ACC-006, ACC-009 to ACC-011, AUTH-006)
 - `internal/accounts/erase_test.go` (ACC-015: no accounts table names an

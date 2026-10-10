@@ -249,10 +249,11 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 		WebAuthn: api.WebAuthnConfig{
 			RPID: o.rpID, RPOrigin: o.rpOrigin, RPDisplayName: "Innsegl",
 		},
-		SessionLifetime: o.sessionLifetime,
-		Resolver:        resolver,
-		Organisations:   orgs,
-		CoreCACertFile:  o.gatewayCACert,
+		SessionLifetime:   o.sessionLifetime,
+		Resolver:          resolver,
+		Organisations:     orgs,
+		CoreCACertFile:    o.gatewayCACert,
+		UnownedRunsHidden: o.hideUnownedRuns,
 	})
 	if err != nil {
 		unwind()

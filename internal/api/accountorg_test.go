@@ -27,6 +27,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/webauthntest"
 )
 
@@ -156,6 +157,8 @@ type orgHarness struct {
 	auth      *webauthntest.Authenticator
 	cookie    *http.Cookie
 	userID    string
+	owner     *ledger.Store // the ledger, written as its owner (scope_test.go)
+	store     *Store        // the query API's read-only store
 }
 
 // newOrgHarness signs a user in and makes them role in organisation A and a
@@ -215,7 +218,7 @@ func newOrgHarness(t *testing.T, role string, withOrgs bool, opts ...func(*Serve
 	}
 	return orgHarness{
 		srv: listening, authStore: authStore, ownerDSN: m.ownerDSN, orgs: orgs,
-		auth: auth, cookie: cookie, userID: userID,
+		auth: auth, cookie: cookie, userID: userID, owner: m.owner, store: store,
 	}
 }
 

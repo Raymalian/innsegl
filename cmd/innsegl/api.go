@@ -157,6 +157,9 @@ const (
 	// envAPIGatewayCACert is the gateway's CA certificate, read so the
 	// account page's connect command carries its fingerprint. Optional.
 	envAPIGatewayCACert = "INNSEGL_API_GATEWAY_CA_CERT"
+	// envAPIHideUnownedRuns hides runs no machine is mapped to from the
+	// operator's organisation too (RM-307, #486). Shown by default.
+	envAPIHideUnownedRuns = "INNSEGL_API_HIDE_UNOWNED_RUNS"
 
 	// #475: this process serves the dashboard. envAPIUIDir is the built
 	// UI; empty serves the API alone. envAPITLSListen and envAPITLSCert
@@ -265,6 +268,10 @@ type apiOptions struct {
 	// gatewayCACert is the gateway's CA certificate file. Empty: the
 	// account page's connect command shows a placeholder for it.
 	gatewayCACert string
+
+	// hideUnownedRuns hides runs no machine is mapped to from the
+	// operator's organisation as well as from every other.
+	hideUnownedRuns bool
 
 	// trustHistory is the deployment's trust history (ADR-0073), read on
 	// every proof. Empty: the published root and log key only.
@@ -458,6 +465,9 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		gatewayCACert = fs.String("gateway-ca-cert", os.Getenv(envAPIGatewayCACert),
 			"the gateway's CA certificate ($"+envAPIGatewayCACert+"), whose fingerprint the account "+
 				"page's connect command pins. Optional")
+		hideUnownedRuns = fs.Bool("hide-unowned-runs", envBool(envAPIHideUnownedRuns, false),
+			"hide runs no enrolled machine is mapped to from the operator's organisation too "+
+				"($"+envAPIHideUnownedRuns+"); every other organisation never sees them")
 		trustHistory = fs.String("trust-history", os.Getenv(envTrustHistory),
 			"the deployment's trust history ($"+envTrustHistory+"): every Fulcio root and log key "+
 				"it has used (ADR-0073), read on every proof. Optional")
@@ -504,10 +514,11 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		snapshotDir:   resolveSnapshotDir(*snapshotDir, *logDir),
 		messageKeyDir: *messageKeyDir,
 		authDSN:       *authDSN, rpID: *rpID, rpOrigin: *rpOrigin, sessionLifetime: *sessionLifetime,
-		resolverDSN:   *resolverDSN,
-		gatewayCACert: *gatewayCACert,
-		trustHistory:  *trustHistory,
-		uiDir:         *uiDir, tlsListen: *tlsListen, tlsCert: *tlsCert,
+		resolverDSN:     *resolverDSN,
+		gatewayCACert:   *gatewayCACert,
+		hideUnownedRuns: *hideUnownedRuns,
+		trustHistory:    *trustHistory,
+		uiDir:           *uiDir, tlsListen: *tlsListen, tlsCert: *tlsCert,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl api: %s\n", problem)
