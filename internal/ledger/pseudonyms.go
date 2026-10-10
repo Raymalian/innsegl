@@ -57,8 +57,20 @@ func (s *Store) pseudonymise(p *pending) error {
 		return &StoreError{Class: ClassInvariantViolation, Op: "append", Retryable: false, Err: err}
 	}
 
+	// The repository first: the branch is keyed by its literal, and its alias
+	// names the repository's pseudonym.
+	var repoPN string
+	if hasRepo && !event.IsPseudonym(repo) {
+		pn, err := r.Repo(repo)
+		if err != nil {
+			return reject(err)
+		}
+		repoPN = pn
+		p.aliases = append(p.aliases, alias{value: pn, kind: "repo", literal: repo, keyID: r.KeyID()})
+		p.body[event.FieldRepo] = pn
+	}
 	if hasBranch && !event.IsPseudonym(branch) {
-		if !hasRepo || event.IsPseudonym(repo) {
+		if repoPN == "" {
 			// A branch is keyed by its repository's literal, which this
 			// append does not have.
 			return reject(fmt.Errorf("a literal branch %q beside no literal repository cannot be "+
@@ -69,22 +81,10 @@ func (s *Store) pseudonymise(p *pending) error {
 			return reject(err)
 		}
 		if pn != branch {
-			repoPN, err := r.Repo(repo)
-			if err != nil {
-				return reject(err)
-			}
 			p.aliases = append(p.aliases, alias{value: pn, kind: "branch", literal: branch,
 				repoValue: repoPN, keyID: r.KeyID()})
 			p.body[event.FieldBranch] = pn
 		}
-	}
-	if hasRepo && !event.IsPseudonym(repo) {
-		pn, err := r.Repo(repo)
-		if err != nil {
-			return reject(err)
-		}
-		p.aliases = append(p.aliases, alias{value: pn, kind: "repo", literal: repo, keyID: r.KeyID()})
-		p.body[event.FieldRepo] = pn
 	}
 	return nil
 }
