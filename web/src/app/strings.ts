@@ -49,6 +49,9 @@ export const en = {
       accountPage: "Account",
       signOut: "Sign out",
       signOutWorking: "Signing out",
+      /** RM-307 (#486): which organisation's runs every view shows. */
+      organisation: "Organisation",
+      allOrganisations: "All organisations",
     },
     views: {
       overview: "Overview",

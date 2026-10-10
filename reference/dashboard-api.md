@@ -63,8 +63,8 @@ organisations with their roles, read on every request. The three
 `/api/v1/auth/invitation` routes need no session: they are how a person
 with no account yet accepts an invitation with a new passkey.
 
-The account routes (all need a session; the dashboard's pages for the
-member routes come next):
+The account routes (all need a session; the dashboard has no members page
+yet, so invite with `innsegl accounts invite`):
 
 | Route | Does |
 |---|---|
@@ -98,7 +98,12 @@ suspended machine is refused within 30 seconds.
 An invitation is a single-use link, `<origin>/invite#iv_<64 hex>`, valid
 for 72 hours. Only a hash of the code is stored and no email is asked for
 or kept. The code is in the URL fragment, which a browser never sends to
-a server.
+a server. The dashboard's `/invite` page reads it: a person with no
+account gives a display name and creates a passkey, then saves their
+recovery codes; a signed-in person joins with the account they have.
+A person in several organisations gets a switcher in the header (see
+Scoped reads); connecting a machine from the account page mints the token
+for the organisation it names.
 
 `innsegl accounts` verbs (each takes `-dsn`, default `$INNSEGL_API_AUTH_DSN`,
 which is set in the `innsegl-api` container: run them as
@@ -244,7 +249,11 @@ last owner or an existing membership.
 - `test/deploy/apiui_test.go`, `readerrole_test.go` (OPS-011 to OPS-013),
   `resolverrole_test.go`
 - `scripts/setup-link-selftest.sh`
-- `web/` unit tests (`npm test`)
+- `web/` unit tests (`npm test`): FE-141 (`AccountPage.test.tsx`), FE-142
+  (`app/OrganisationSwitcher.test.tsx`), FE-143 (`InvitePage.test.tsx`),
+  FE-144 (`run-page/scoped.test.tsx`)
+- `web/tests/a11y/organisations.pw.ts` (FE-142, FE-143 in Chromium, axe in
+  both themes)
 
 ## Decisions
 

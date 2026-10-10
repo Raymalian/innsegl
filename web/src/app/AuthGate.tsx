@@ -19,14 +19,16 @@
 // slot), and a render prop is what lets this file own that control without
 // App.tsx importing anything from views/auth.
 
-import { useId, type ReactNode } from "react";
+import { Fragment, useId, useState, type ReactNode } from "react";
 
+import { OrganisationSwitcher } from "./OrganisationSwitcher";
 import { AccountMenu } from "./SignOutControl";
 import { useStrings } from "./i18n";
 import { navigate, usePath } from "./router";
-import { isSetupPath, setupCodeFrom } from "./routes";
+import { isInvitePath, isSetupPath, setupCodeFrom } from "./routes";
 import { strings as authStrings } from "../views/auth/strings";
 import { SetupPage, SignInPage, useSessionState } from "../views/auth";
+import { InvitePage } from "../views/auth/InvitePage";
 import { mutedText, noticeBase } from "../views/auth/styles";
 
 export interface AuthGateProps {
@@ -39,7 +41,10 @@ export function AuthGate({ children, apiBase }: AuthGateProps) {
   const headingId = useId();
   const strings = useStrings();
   const path = usePath();
-  const { state, markAuthenticated, markSignedOut } = useSessionState(apiBase);
+  const { state, markAuthenticated, markSignedOut, reload } = useSessionState(apiBase);
+  // RM-307 (#486): a new organisation choice remounts the dashboard, so
+  // every view reads again under the scope the server now applies.
+  const [scopeKey, setScopeKey] = useState(0);
 
   if (state.status === "checking") {
     return (
@@ -51,6 +56,25 @@ export function AuthGate({ children, apiBase }: AuthGateProps) {
       >
         <span id={headingId}>{authStrings.session.checking}</span>
       </p>
+    );
+  }
+
+  // An invitation link (#481): a new person makes an account with it; a
+  // signed-in one joins with theirs. Either way, then the dashboard.
+  if (isInvitePath(path)) {
+    const signedIn = state.status === "authenticated";
+    return (
+      <InvitePage
+        signedIn={signedIn}
+        onJoined={(displayName) => {
+          if (!signedIn) {
+            navigate("/");
+            reload();
+          } else if (displayName === "") {
+            reload();
+          }
+        }}
+      />
     );
   }
 
@@ -80,7 +104,7 @@ export function AuthGate({ children, apiBase }: AuthGateProps) {
   }
 
   return (
-    <>
+    <Fragment key={scopeKey}>
       {children(
         <>
           {/* RM-333 (#511): the account name is a menu button holding Account
@@ -88,11 +112,15 @@ export function AuthGate({ children, apiBase }: AuthGateProps) {
            * now lives inside it; `max-w` + `truncate` keep a long name from
            * crowding the anchoring heartbeat (FE-128 measures that row at
            * 720px). */}
+          <OrganisationSwitcher
+            organisations={state.organisations}
+            onChange={() => setScopeKey((k) => k + 1)}
+          />
           <div role="group" aria-label={strings.labels.header.account} className="flex items-center">
             <AccountMenu displayName={state.displayName} onSignedOut={markSignedOut} />
           </div>
         </>,
       )}
-    </>
+    </Fragment>
   );
 }

@@ -14,6 +14,7 @@
 
 import { useId, useState } from "react";
 
+import { chosenOrganisation } from "../../app/OrganisationSwitcher";
 import { Link } from "../../app/router";
 import {
   AccountSection,
@@ -206,7 +207,11 @@ export function MachinesSection({
   const [rows, setRows] = useState<Record<string, RowPhase>>({});
   const [connect, setConnect] = useState<ConnectPhase>({ status: "idle" });
   const manageable = organisations.filter(managesMachines);
-  const [orgId, setOrgId] = useState(manageable[0]?.id ?? "");
+  // FE-141: the organisation the header's switcher chose, when they may
+  // connect a machine to it.
+  const [orgId, setOrgId] = useState(
+    () => manageable.find((o) => o.id === chosenOrganisation())?.id ?? manageable[0]?.id ?? "",
+  );
   const [kind, setKind] = useState("workstation");
   const orgSelectId = useId();
   const kindSelectId = useId();

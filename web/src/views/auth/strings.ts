@@ -53,6 +53,33 @@ export const strings = {
     cancelled: "The passkey prompt was closed before it finished. Try again.",
     failed: "Setting up the account failed",
   },
+  invite: {
+    heading: "Join an organisation",
+    invitedTo: (organisation: string, role: string) =>
+      `You are invited to ${organisation} as ${role === "admin" ? "an" : "a"} ${role}.`,
+    expires: "The link works once and expires",
+    loading: "Reading the invitation",
+    missingHeading: "No invitation in this link",
+    missingBody:
+      "This page needs the whole invitation link. Open the link you were sent, or ask for a new one.",
+    unusableHeading: "This invitation link is not usable",
+    unusableBody:
+      "It may be wrong, already used, withdrawn or expired. Ask the person who invited you for a new one.",
+    newIntro: "This browser will create the passkey you sign in with from now on.",
+    displayNameLabel: "Display name",
+    displayNameHint: "Shown to the other members of the organisation.",
+    createButton: "Create passkey and join",
+    joinIntro: "You are signed in. Join with the account you have.",
+    joinButton: "Join",
+    working: "Joining",
+    joinedHeading: "You have joined",
+    joinedBody: (organisation: string) =>
+      `You are now a member of ${organisation}. Choose it in the header to see only its runs.`,
+    continueLink: "Go to the dashboard",
+    unsupported: "This browser has no passkey support, so you cannot join from it.",
+    cancelled: "The passkey prompt was closed before it finished. Try again.",
+    failed: "Joining failed",
+  },
   recoveryCodes: {
     heading: "Save your recovery codes",
     intro:

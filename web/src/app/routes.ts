@@ -226,6 +226,12 @@ export function setupCodeFrom(pathWithQuery: string): string {
   return new URL(pathWithQuery, "http://dashboard.invalid").searchParams.get("code") ?? "";
 }
 
+/** The page an invitation link opens (#481): `/invite#iv_…`. The code is
+ * the fragment, read by InvitePage itself. */
+export function isInvitePath(pathWithQuery: string): boolean {
+  return new URL(pathWithQuery, "http://dashboard.invalid").pathname === "/invite";
+}
+
 /** The account page the top bar's own name link points at. */
 export function isAccountPath(pathWithQuery: string): boolean {
   return new URL(pathWithQuery, "http://dashboard.invalid").pathname === "/account";

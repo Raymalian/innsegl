@@ -142,9 +142,34 @@ async function deleteJSON(base: string, path: string): Promise<void> {
   }
 }
 
+/** One live membership, as `GET /api/v1/auth/session` reports it. */
+export interface SessionOrganisation {
+  readonly id: string;
+  readonly name: string;
+  readonly role: string;
+  readonly operator: boolean;
+}
+
 export interface SessionStatus {
   readonly authenticated: boolean;
   readonly displayName: string;
+  /** The person's live memberships; the organisation switcher's options. */
+  readonly organisations: readonly SessionOrganisation[];
+}
+
+function sessionOrganisations(value: unknown): SessionOrganisation[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((v: unknown) => {
+    if (typeof v !== "object" || v === null) return [];
+    const o = v as Record<string, unknown>;
+    if (typeof o["id"] !== "string" || typeof o["name"] !== "string") return [];
+    return [{
+      id: o["id"],
+      name: o["name"],
+      role: typeof o["role"] === "string" ? o["role"] : "",
+      operator: o["operator"] === true,
+    }];
+  });
 }
 
 /** `GET /api/v1/auth/session`. Never throws on "not signed in" — that is an
@@ -156,15 +181,16 @@ export async function fetchSessionStatus(
     credentials: "same-origin",
     headers: { Accept: "application/json" },
   });
-  if (!response.ok) return { authenticated: false, displayName: "" };
+  if (!response.ok) return { authenticated: false, displayName: "", organisations: [] };
   const body = (await response.json()) as unknown;
   if (typeof body !== "object" || body === null) {
-    return { authenticated: false, displayName: "" };
+    return { authenticated: false, displayName: "", organisations: [] };
   }
   const o = body as Record<string, unknown>;
   return {
     authenticated: o["authenticated"] === true,
     displayName: typeof o["display_name"] === "string" ? o["display_name"] : "",
+    organisations: sessionOrganisations(o["organisations"]),
   };
 }
 
@@ -632,4 +658,61 @@ export async function mintEnrolmentToken(
     { organisation_id: organisationId, kind, repos: ["*"] },
     browser,
   )) as EnrolmentToken;
+}
+
+// ---------------------------------------------------------------------------
+// Invitations (#481): the link's code rides in the URL fragment.
+// ---------------------------------------------------------------------------
+
+/** What a usable invitation invites to. */
+export interface InvitationPreview {
+  readonly organisation_id: string;
+  readonly organisation: string;
+  readonly role: string;
+  readonly expires_at: string;
+}
+
+/** `POST /api/v1/auth/invitation` {code}: what it invites to, spending
+ * nothing. Any unusable code is one 404, whatever made it unusable. */
+export async function previewInvitation(
+  code: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<InvitationPreview> {
+  return (await postJSON(base, "/auth/invitation", { code })) as InvitationPreview;
+}
+
+/** A person with no account: a new passkey, the user and the membership,
+ * made together or not at all. Answers the new account's recovery codes. */
+export async function joinWithNewPasskey(
+  code: string,
+  displayName: string,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<EnrolResult> {
+  const begin = asCeremonyOptions(
+    await postJSON(base, "/auth/invitation/begin", { code, display_name: displayName }),
+  );
+  if (!browser.supported) {
+    throw new Error("this browser has no passkey support");
+  }
+  const options = browser.publicKeyCredential.parseCreationOptionsFromJSON(begin.publicKey);
+  const credential = await browser.credentials.create({ publicKey: options });
+  if (credential === null) {
+    throw new Error("no passkey was created");
+  }
+  const finished = await postJSON(base, "/auth/invitation/finish", {
+    ceremony_id: begin.ceremonyId,
+    credential: credentialJSON(credential),
+    code,
+  });
+  return enrolResultOf(finished);
+}
+
+/** `POST /api/v1/account/invitations/accept` {code}: the signed-in person
+ * joins with the account they have. */
+export async function acceptInvitation(
+  code: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<void> {
+  await postJSON(base, "/account/invitations/accept", { code });
 }

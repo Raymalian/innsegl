@@ -656,3 +656,32 @@ describe("AccountPage", () => {
     expect(fetches.calls.some((c) => c.url.endsWith("/sessions/sign-out-others"))).toBe(true);
   });
 });
+
+/*
+ * FE-141 (#471, #486): connecting a machine from the dashboard. A fresh
+ * passkey, then the single-use token once with the one-line `innsegl
+ * connect` command (the "connects a machine" case above). For a person in
+ * several organisations the token is minted for the organisation the
+ * header's switcher chose, so the machine records where they are looking.
+ */
+describe("FE-141 connecting a machine from the dashboard", () => {
+  afterEach(() => {
+    document.cookie = "innsegl_organisation=; Path=/; Max-Age=0";
+  });
+
+  it("mints for the organisation the switcher chose", async () => {
+    const TEAM: AccountOrganisation = { ...ORG_OWNER, id: "org-2", name: "example-team", operator: false };
+    document.cookie = "innsegl_organisation=org-2; Path=/";
+    const fetches = installAccountFetch(account({ organisations: [ORG_OWNER, TEAM] }));
+    const user = userEvent.setup();
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    expect(within(region).getByLabelText(strings.account.connectOrganisationLabel)).toHaveValue("org-2");
+    await user.click(within(region).getByRole("button", { name: strings.account.connectButton }));
+
+    expect(await within(region).findByText("ie_0123456789abcdef_secret")).toBeInTheDocument();
+    const begin = fetches.calls.find((c) => c.url.endsWith("/enrolment-tokens/begin"));
+    expect(begin?.body).toEqual({ organisation_id: "org-2", kind: "workstation", repos: ["*"] });
+  });
+});

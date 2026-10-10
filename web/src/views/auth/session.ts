@@ -12,12 +12,18 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { fetchSessionStatus, fetchSetupStatus } from "./client";
+import { fetchSessionStatus, fetchSetupStatus, type SessionOrganisation } from "./client";
 
 export type SessionState =
   | { readonly status: "checking" }
   | { readonly status: "unauthenticated"; readonly setupNeeded: boolean }
-  | { readonly status: "authenticated"; readonly displayName: string };
+  | {
+      readonly status: "authenticated";
+      readonly displayName: string;
+      /** RM-307 (#486): the switcher's options. Empty until the session is
+       * read again after a ceremony. */
+      readonly organisations: readonly SessionOrganisation[];
+    };
 
 export interface SessionResource {
   readonly state: SessionState;
@@ -44,7 +50,11 @@ export function useSessionState(base?: string): SessionResource {
       if (!live) return;
       setState(
         session.authenticated
-          ? { status: "authenticated", displayName: session.displayName }
+          ? {
+              status: "authenticated",
+              displayName: session.displayName,
+              organisations: session.organisations,
+            }
           : { status: "unauthenticated", setupNeeded: setup.needed },
       );
     })();
@@ -55,7 +65,7 @@ export function useSessionState(base?: string): SessionResource {
   }, [base, nonce]);
 
   const markAuthenticated = useCallback((displayName: string) => {
-    setState({ status: "authenticated", displayName });
+    setState({ status: "authenticated", displayName, organisations: [] });
   }, []);
 
   const markSignedOut = useCallback(() => {
