@@ -344,11 +344,11 @@ func TestACC017ErasureNamesTheRunsWhoseBodiesGo(t *testing.T) {
 
 	dir := t.TempDir()
 	for _, run := range []string{"run-erase-0", "run-erase-1", "run-erase-3"} {
-		if err := os.MkdirAll(filepath.Join(dir, run), 0o700); err != nil {
-			t.Fatal(err)
+		if merr := os.MkdirAll(filepath.Join(dir, run), 0o700); merr != nil {
+			t.Fatal(merr)
 		}
-		if err := os.WriteFile(filepath.Join(dir, run, "ab.json"), []byte(`{"cwd":"`+f.betaRepo+`"}`), 0o600); err != nil {
-			t.Fatal(err)
+		if werr := os.WriteFile(filepath.Join(dir, run, "ab.json"), []byte(`{"cwd":"`+f.betaRepo+`"}`), 0o600); werr != nil {
+			t.Fatal(werr)
 		}
 	}
 	removed, err := erasure.RemoveBodies(dir, res.Runs)
