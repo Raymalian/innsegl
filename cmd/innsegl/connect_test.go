@@ -55,6 +55,16 @@ const connectGolden = `{
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/innsegl/bin/innsegl hook post-tool-use"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

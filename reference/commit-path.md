@@ -11,8 +11,10 @@ alone.
 ## Commands
 
 ```
-innsegl hook pre-tool-use | session
+innsegl hook pre-tool-use | post-tool-use | session
 innsegl git-hook prepare-commit-msg <message file> [<source> [<sha>]]
+innsegl git-hook post-commit
+innsegl git-hook push-mirror <dir> branch|snapshot <core url> ...   (started by the hooks, detached)
 innsegl sign --status-fd=<fd> -bsau <key>      (run by git as gpg.x509.program)
 innsegl link <repo dir>
 innsegl link -remove <repo dir>
@@ -24,10 +26,13 @@ make link DIR=<path to a git repository>
 | Command | Run by | Does |
 |---|---|---|
 | `innsegl hook pre-tool-use` | the harness, before a Bash tool call | in a linked repository, for a `git commit`, prefixes the command with `INNSEGL_TOOL_USE_ID` and places the signing config inside the git invocation as `-c` options, using this same binary as `gpg.x509.program` |
-| `innsegl hook session` | the harness, on session start, user prompt, subagent start, cwd change | tells the gateway the session's working directory |
+| `innsegl hook post-tool-use` | the harness, after every tool call | in a linked repository, on a hosted client: snapshots the working tree as the tool call left it and sends it to the core's mirror (see below) |
+| `innsegl hook session` | the harness, on session start, user prompt, subagent start, cwd change, session end | tells the gateway the session's working directory; at session end, also sends a linked repository's branch to the core's mirror |
 | `innsegl git-hook prepare-commit-msg` | git | asks the core for the trailers `Agent-Identity`, `Agent-Run`, `Agent-Task` and writes them into the message |
+| `innsegl git-hook post-commit` | git | after a commit innsegl signed for an agent, sends its branch to the core's mirror (see below); always exits 0 |
+| `innsegl git-hook push-mirror` | the two hooks above and `hook session` | the push itself, in a process of its own; not run by hand |
 | `innsegl sign` | git | sends the commit payload to the core and returns the signature; `--verify` is git's verify mode |
-| `innsegl link` | the operator | installs (or with `-remove`, restores) the repository's prepare-commit-msg hook; touches nothing else |
+| `innsegl link` | the operator | installs (or with `-remove`, restores) the repository's prepare-commit-msg and post-commit hooks; touches nothing else |
 | `make link` | the operator | runs `innsegl link` with the binary `make build` wrote; refuses a linked worktree path |
 | `innsegl init` | the operator | the older one-repository path: pins gitsign, chooses a trust root, signs a test commit and verifies it; `--local` git config only |
 
@@ -65,6 +70,33 @@ make link DIR=<path to a git repository>
 
 A linked worktree, the harness's isolated one included, shares its
 repository's hooks, so it counts as linked when the repository is.
+
+### What a hosted client sends to the core's mirror
+
+On a client connected to a hosted core, a linked repository sends the core's
+per-repository mirror (ADR-0065) two things besides a commit's objects:
+
+| What | When | Ref on the mirror | The mirror's rule |
+|---|---|---|---|
+| the branch | after a commit innsegl signed (`git-hook post-commit`), and at session end | `refs/heads/<branch>` | created or fast-forwarded only; a rewrite or a delete is refused |
+| a workspace snapshot | after every tool call (`hook post-tool-use`) | `refs/innsegl/snap/<installation>/<tool call id>` | written once; another installation's, a second write and a delete are refused |
+
+- Only a linked repository sends anything, and only to a client service
+  (`INNSEGL_CORE_URL` is plain `http://` on loopback). A commit with no tool
+  call id, an unsigned one, or a detached `HEAD` sends nothing.
+- Nothing waits for the core. The push runs as `innsegl git-hook push-mirror`,
+  detached; a push that fails is carried by the next one. Its last output is
+  in `<git common dir>/innsegl/last-push.log`.
+- A snapshot is taken with a private index into a private object store
+  (`<git common dir>/innsegl/snapshots/objects`, a cache), so the
+  repository's own index, objects and refs are never written. Like `git add
+  --all`, it leaves ignored files out.
+- The core puts a snapshot's tree on the tool call's `workspace_tree_hash`
+  only when its mirror holds that tree, waiting at most 10 s on the
+  recording, never on the request. A snapshot that does not arrive leaves the
+  tool call recorded without one. The ledger holds the hash only (E4).
+- A branch push that is not a fast-forward of the mirror's branch is refused
+  and does not retry: the mirror keeps what it had.
 
 ### Commit author per repository
 
@@ -131,7 +163,7 @@ intent (ADR-0051, ADR-0079). Nobody asks for it.
 
 | Variable | Read by | Meaning |
 |---|---|---|
-| `INNSEGL_CORE_URL` | `hook`, `git-hook`, `sign` | the client service, which forwards to the core (`internal/commitpath/commitpath.go:36`) |
+| `INNSEGL_CORE_URL` | `hook`, `git-hook`, `sign` | the client service, which forwards to the core (`internal/commitpath/commitpath.go:36`); the mirror pushes go only to a plain `http://` one |
 | `INNSEGL_TOOL_USE_ID` | `git-hook`, `sign` | the tool call id the hook injected |
 | `INNSEGL_BIN_PATH` | `make link` | the binary to run [`./innsegl`] |
 | `INNSEGL_SIGN_AUTHOR_OPERATORS` | the core (`.env`) | pinned `Name <address>` pairs an agent commit may be authored as; empty by default |
@@ -143,7 +175,11 @@ behind the client certificate guard, and never another installation's).
 
 ## Files, volumes, containers
 
-- The repository's `prepare-commit-msg` hook, written by `innsegl link`.
+- The repository's `prepare-commit-msg` and `post-commit` hooks, written by `innsegl link`.
+- `<git common dir>/innsegl/snapshots/objects` and `<git dir>/innsegl-snapshot-index`:
+  the client's private snapshot store and index. A cache; the core's mirror is
+  the evidence.
+- `<git common dir>/innsegl/last-push.log`: the last mirror push's output.
 - `~/.innsegl/client/authors.json` (0600): the repositories set to `operator` mode, and the optional typed operator identity.
 - On the core, `innsegl_auth.installations.operator_author_name` and
   `operator_author_email` (migration 0015): each installation's pinned pair.
@@ -175,6 +211,13 @@ behind the client certificate guard, and never another installation's).
 - `cmd/innsegl/sign_test.go` (CMT-013, CMT-014), `commitsign_test.go`,
   `signpush_test.go`, `signrepo_test.go`, `commitpathmount_test.go`
 - `cmd/innsegl/link_test.go` (ENF-004, ENF-005)
+- `cmd/innsegl/mirrorpush_test.go`, `internal/commitpath/mirrorpush_test.go` and
+  `internal/mirror/clientrefs_test.go` (SNAP-006, SNAP-007): the branch after a
+  signed commit and at session end, and a tool call's snapshot, reach the
+  mirror without holding anything up; an unlinked repository and an unsigned
+  commit send nothing; the mirror's fast-forward and write-once rules
+- `internal/gateway/mirrorsnapshot_test.go`, `cmd/innsegl/gatewaysnapshot_test.go`
+  (SNAP-008): the core records a client's snapshot only for a tree its mirror holds
 - `cmd/innsegl/hooklinked_test.go` (CMT-019, CMT-020): an unlinked repository is left alone;
   a linked one and its worktrees are rewritten as before
 - `cmd/innsegl/init*_test.go` (INIT-001 to INIT-010)
@@ -201,6 +244,7 @@ behind the client certificate guard, and never another installation's).
 - [ADR-0046](../docs/adr/0046-make-every-agent-commit-signed-without-anyone-remembering-to.md) every agent commit signed
 - [ADR-0047](../docs/adr/0047-anchor-attribution-to-the-change-not-the-commit-object.md) attribution to the change
 - [ADR-0059](../docs/adr/0059-a-commit-is-attributed-through-the-tool-call-that-made-it.md) the commit path
+- [ADR-0065](../docs/adr/0065-a-per-repository-mirror-on-the-core-is-the-evidence-store.md) the mirror clients push to
 - [ADR-0051](../docs/adr/0051-let-a-live-run-adopt-a-dead-runs-work-and-record-the-handover.md) adoption
 - [ADR-0079](../docs/adr/0079-adoption-runs-on-the-commit-path.md) adoption runs on the commit path
 - [ADR-0071](../docs/adr/0071-the-projects-mount-tools-are-deprecated-and-their-implementation-removed.md) mount tools removed

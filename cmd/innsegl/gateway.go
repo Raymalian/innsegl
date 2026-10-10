@@ -1444,7 +1444,7 @@ func openIdentityStack(
 
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
 
-	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running, hosted != nil))
+	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running, hosted))
 	toolUse = gateway.CombineToolUseObservers(spawnRecorder, toolCallRecorder)
 
 	// The commit path (ADR-0059, E17) authorises a commit by a git commit
@@ -1640,14 +1640,19 @@ func writeMessageKeyFile(dir, keyID, keyBytes string) error {
 // gateway.ToolCallRecorderConfig's own doc comment on Snapshots warns
 // against for exactly this reason: an interface holding one is not itself
 // nil.
-func newToolCallRecorderConfig(running *runningGateway, hosted bool) gateway.ToolCallRecorderConfig {
+func newToolCallRecorderConfig(running *runningGateway, hosted *hostedCore) gateway.ToolCallRecorderConfig {
 	cfg := gateway.ToolCallRecorderConfig{
 		Trigger: gateway.NewSnapshotTrigger(),
 		OnRecordFailure: func(err error) {
 			running.log.error("gateway: could not record a tool call", "err", err)
 		},
 	}
-	if snap := newGatewaySnapshotter(running, hosted); snap != nil {
+	if hosted != nil && hosted.mirror != nil {
+		// A hosted client snapshots its own tree and pushes it to the
+		// mirror (#467); the recorder reads it there.
+		cfg.MirrorSnapshots = hosted.mirror
+	}
+	if snap := newGatewaySnapshotter(running, hosted != nil); snap != nil {
 		cfg.Snapshots = snap
 	}
 	return cfg
@@ -1667,14 +1672,14 @@ func newToolCallRecorderConfig(running *runningGateway, hosted bool) gateway.Too
 // A hosted core builds none (ADR-0060 decision 5, as amended 2026-10-03). The
 // snapshot reads a working tree on this process's own disk, and on a hosted
 // core no client's tree is there (ADR-0064 decision 2): it would record the
-// core's own files as if they were the client's. Snapshots return to the
-// hosted core only as snapshot refs a client pushes to the mirror (ADR-0065
-// decision 3).
+// core's own files as if they were the client's. Snapshots reach the hosted
+// core only as snapshot refs a client pushes to the mirror (ADR-0065
+// decision 3, #467), which newToolCallRecorderConfig reads.
 func newGatewaySnapshotter(running *runningGateway, hosted bool) *gateway.Snapshotter {
 	if hosted {
-		running.log.info("workspace snapshotting is off on a hosted core: no client's working " +
-			"tree is on this disk (ADR-0064), so recorded tool calls carry no workspace_tree_hash " +
-			"until clients push snapshot refs (ADR-0065)")
+		running.log.info("the core takes no workspace snapshots on a hosted core: no client's working " +
+			"tree is on this disk (ADR-0064). A recorded tool call carries a workspace_tree_hash " +
+			"only from a snapshot ref its client pushed to the mirror (ADR-0065)")
 		return nil
 	}
 	root := os.Getenv(envObserveBodyDir)

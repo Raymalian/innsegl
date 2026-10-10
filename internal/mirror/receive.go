@@ -200,11 +200,10 @@ func (h *handler) receive(w http.ResponseWriter, r *http.Request, repo, installa
 		http.Error(w, "innsegl core: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	for _, c := range commands {
-		if cerr := checkCommand(c, installation); cerr != nil {
-			http.Error(w, "innsegl core: "+cerr.Error(), http.StatusForbidden)
-			return
-		}
+	extra, cerr := checkCommands(commands, installation)
+	if cerr != nil {
+		http.Error(w, "innsegl core: "+cerr.Error(), http.StatusForbidden)
+		return
 	}
 	dir, err := h.cfg.Store.Ensure(r.Context(), repo)
 	if err != nil {
@@ -213,7 +212,7 @@ func (h *handler) receive(w http.ResponseWriter, r *http.Request, repo, installa
 	}
 
 	// G204: an argument list; dir is the validated repository's mirror.
-	cmd := exec.CommandContext(r.Context(), "git", gitArgs(dir, "receive-pack", "--stateless-rpc", ".")...) //nolint:gosec // see above
+	cmd := exec.CommandContext(r.Context(), "git", gitArgs(dir, append(extra, "receive-pack", "--stateless-rpc", ".")...)...) //nolint:gosec // see above
 	cmd.Env = h.cfg.Store.gitEnv()
 	cmd.Stdin = io.MultiReader(bytes.NewReader(head), br)
 	out := &resultWriter{w: w}
@@ -268,27 +267,82 @@ func readCommands(br *bufio.Reader) (head []byte, commands []string, err error) 
 	}
 }
 
-// checkCommand admits exactly one shape: create or move this installation's
-// staging ref for one tool call. No delete, no other ref.
-func checkCommand(line, installation string) error {
+// The kinds of ref a push may update. Anything else is refused.
+type refKind int
+
+const (
+	refStaging  refKind = iota + 1 // the commit-sign path's objects (#464)
+	refBranch                      // a client's branch (#465)
+	refSnapshot                    // a workspace snapshot (#467)
+)
+
+// checkCommands admits a push's commands, and answers the git options its
+// receive runs with. A staging ref is moved by force on purpose (the same
+// tool call may amend), so it never shares a push with anything else; a
+// branch only moves forward; a snapshot ref is written once. Nothing is
+// deleted.
+func checkCommands(commands []string, installation string) ([]string, error) {
+	var staging, branch bool
+	for _, c := range commands {
+		kind, err := checkCommand(c, installation)
+		if err != nil {
+			return nil, err
+		}
+		staging = staging || kind == refStaging
+		branch = branch || kind == refBranch
+	}
+	switch {
+	case staging && len(commands) > 1:
+		return nil, errors.New("a staging ref is pushed on its own")
+	case branch:
+		// receive-pack itself refuses a branch update that is not a
+		// fast-forward, forced or not.
+		return []string{"-c", "receive.denyNonFastForwards=true"}, nil
+	}
+	return nil, nil
+}
+
+// checkCommand admits three shapes: create or move this installation's
+// staging ref for one tool call; create or fast-forward a branch; create
+// this installation's snapshot ref for one tool call.
+func checkCommand(line, installation string) (refKind, error) {
 	line = strings.TrimSuffix(line, "\n")
 	if i := strings.IndexByte(line, 0); i >= 0 {
 		line = line[:i]
 	}
 	parts := strings.Split(line, " ")
 	if len(parts) != 3 || !isHexOID(parts[0]) || !isHexOID(parts[1]) {
-		return errors.New("a push command is not `<old> <new> <ref>`")
+		return 0, errors.New("a push command is not `<old> <new> <ref>`")
 	}
-	ref := parts[2]
-	if strings.Trim(parts[1], "0") == "" {
-		return fmt.Errorf("deleting %s is refused; the mirror is evidence", ref)
+	old, ref := parts[0], parts[2]
+	if isZeroOID(parts[1]) {
+		return 0, fmt.Errorf("deleting %s is refused; the mirror is evidence", ref)
 	}
-	prefix := commitpath.StagingRef(installation, "")
-	if id, ok := strings.CutPrefix(ref, prefix); !ok || !commitpath.IsToolUseID(id) {
-		return fmt.Errorf("%s is refused; this endpoint accepts only %s<tool call id>", ref, prefix)
+	if id, ok := strings.CutPrefix(ref, commitpath.StagingRef(installation, "")); ok && commitpath.IsToolUseID(id) {
+		return refStaging, nil
 	}
-	return nil
+	if id, ok := strings.CutPrefix(ref, commitpath.SnapshotRef(installation, "")); ok && commitpath.IsToolUseID(id) {
+		if !isZeroOID(old) {
+			return 0, fmt.Errorf("%s exists; a snapshot is written once", ref)
+		}
+		return refSnapshot, nil
+	}
+	// git receive-pack refuses a branch name git itself would not accept.
+	if name, ok := strings.CutPrefix(ref, BranchRefPrefix); ok && name != "" && len(name) <= maxBranchBytes {
+		return refBranch, nil
+	}
+	return 0, fmt.Errorf("%s is refused; this endpoint accepts only %s<tool call id>, %s<tool call id> and %s<branch>",
+		ref, commitpath.StagingRef(installation, ""), commitpath.SnapshotRef(installation, ""), BranchRefPrefix)
 }
+
+// BranchRefPrefix is where a client's branches live in the mirror, under the
+// names they have in the client's repository.
+const BranchRefPrefix = "refs/heads/"
+
+// maxBranchBytes is doc 02 §5's bound on a branch name.
+const maxBranchBytes = 255
+
+func isZeroOID(s string) bool { return strings.Trim(s, "0") == "" }
 
 func isHexOID(s string) bool {
 	if len(s) != 40 && len(s) != 64 {

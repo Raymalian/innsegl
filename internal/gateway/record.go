@@ -106,6 +106,9 @@ type pendingCall struct {
 	// installation is the client installation whose request carried this
 	// call (hosted shape); the commit path scopes lookups to it (#489).
 	installation string
+	// repo is the repository the client stated for the request (hosted
+	// shape); a client's snapshot is looked up in its mirror (#467).
+	repo string
 	// journalEntry is the signed client-journal entry whose reply carried
 	// this call, when it was imported (ADR-0068).
 	journalEntry string
@@ -156,6 +159,14 @@ type ToolCallRecorderConfig struct {
 	// snapshotting (snapshot.go's own SnapshotTrigger). Required whenever
 	// Snapshots is set; ignored otherwise.
 	Trigger *SnapshotTrigger
+	// MirrorSnapshots is a hosted core's source of workspace snapshots: the
+	// one a client pushed to the mirror after each tool call (#467,
+	// mirrorsnapshot.go). Nil on a single-host core, which snapshots the
+	// working tree itself (Snapshots).
+	MirrorSnapshots MirrorSnapshots
+	// MirrorSnapshotWait bounds how long a recording waits for a client's
+	// snapshot to arrive. Zero or less is DefaultMirrorSnapshotWait.
+	MirrorSnapshotWait time.Duration
 	// MaxPending bounds the pending table. Zero or less means
 	// DefaultMaxPendingToolCalls.
 	MaxPending int
@@ -209,7 +220,10 @@ type ToolCallRecorder struct {
 	baselined map[string]struct{}
 
 	snapshots snapshotWitness
-	trigger   *SnapshotTrigger
+
+	mirrorSnaps MirrorSnapshots
+	mirrorWait  time.Duration
+	trigger     *SnapshotTrigger
 
 	record      func(ctx context.Context, in mcp.GatewayToolCallInput) (mcp.GatewayToolCallOutput, error)
 	onFailure   func(error)
@@ -229,6 +243,10 @@ func NewToolCallRecorder(cfg ToolCallRecorderConfig) *ToolCallRecorder {
 	if record == nil {
 		record = mcp.RecordGatewayToolCall
 	}
+	mirrorWait := cfg.MirrorSnapshotWait
+	if mirrorWait <= 0 {
+		mirrorWait = DefaultMirrorSnapshotWait
+	}
 	onFailure := cfg.OnRecordFailure
 	if onFailure == nil {
 		onFailure = func(error) {}
@@ -238,6 +256,8 @@ func NewToolCallRecorder(cfg ToolCallRecorderConfig) *ToolCallRecorder {
 		max:         maxPending,
 		baselined:   make(map[string]struct{}),
 		snapshots:   cfg.Snapshots,
+		mirrorSnaps: cfg.MirrorSnapshots,
+		mirrorWait:  mirrorWait,
 		trigger:     cfg.Trigger,
 		record:      record,
 		onFailure:   onFailure,
@@ -301,9 +321,10 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	if !ok || runID == "" {
 		return
 	}
-	var workingDirectory string
+	var workingDirectory, repo string
 	if facts, ok := RequestFactsFromContext(ctx); ok {
 		workingDirectory = facts.WorkingDirectory
+		repo = facts.Stated.Repo
 	}
 	//nolint:contextcheck // deliberate: baselineIfNeeded's own eventual SnapshotBaseline call (on
 	// a new run) uses a detached, bounded context of its own rather than ctx -- see
@@ -316,12 +337,12 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	//nolint:contextcheck // deliberate: addPending's own eventual recording (on eviction) uses
 	// a detached, bounded context of its own rather than ctx -- see recordAsync's own doc
 	// comment for why a request/reply's context must never be allowed to cut a recording short.
-	r.addPending(runID, workingDirectory, installation, journalEntry, t)
+	r.addPending(runID, workingDirectory, repo, installation, journalEntry, t)
 }
 
 // addPending records t as pending, evicting and recording the oldest
 // pending entry (input-only) first if the table is already at its cap.
-func (r *ToolCallRecorder) addPending(runID, workingDirectory, installation, journalEntry string, t ToolUse) {
+func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installation, journalEntry string, t ToolUse) {
 	key := pendingKey{runID: runID, toolUseID: t.ID}
 	call := pendingCall{
 		tool:       t.Name,
@@ -331,6 +352,7 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory, installation, jou
 
 		workingDirectory: workingDirectory,
 		installation:     installation,
+		repo:             repo,
 		journalEntry:     journalEntry,
 	}
 
@@ -522,6 +544,10 @@ func (r *ToolCallRecorder) recordAsync(runID, toolUseID string, call pendingCall
 	ctx, cancel := context.WithTimeout(context.Background(), recordTimeout)
 	defer cancel()
 
+	if treeHash == "" && result != nil {
+		// A hosted core's snapshot is the client's (mirrorsnapshot.go).
+		treeHash = r.mirrorTree(ctx, toolUseID, call)
+	}
 	body := buildToolCallBody(toolUseID, call, result)
 	_, err := r.record(ctx, mcp.GatewayToolCallInput{
 		RunID: runID, Tool: call.tool, Body: body, WorkspaceTreeHash: treeHash,

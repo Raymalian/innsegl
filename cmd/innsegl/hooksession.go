@@ -131,6 +131,11 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 		if err != nil {
 			fmt.Fprintf(stderr, "innsegl hook session: signalling the end of the session: %v\n", err)
 		}
+		if in.HookEventName == "SessionEnd" {
+			// The branch goes to a hosted core's mirror (#465), without
+			// waiting for it.
+			pushBranchAtSessionEnd(ctx, in.Cwd, base, stderr)
+		}
 		return exitOK
 	}
 	statement := map[string]string{"session_id": in.SessionID, "agent_id": in.AgentID, "cwd": in.Cwd}

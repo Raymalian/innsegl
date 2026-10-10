@@ -62,6 +62,7 @@ The managed settings connect writes point the harness at the client service
 | `NODE_EXTRA_CA_CERTS` | the client's proxy CA |
 | `OTEL_*`, `CLAUDE_CODE_ENABLE_TELEMETRY` | telemetry sent to the client service |
 | provider switches | pinned to `0` so traffic goes through the recorded API |
+| `hooks` | `innsegl hook pre-tool-use` (Bash), `innsegl hook post-tool-use` (every tool), `innsegl hook session` (session events); see [commit-path.md](commit-path.md). A machine connected before a hook was added gains it with `innsegl connect --update` |
 
 Default managed-settings path: `/Library/Application Support/ClaudeCode/managed-settings.json`
 on macOS, `/etc/claude-code/managed-settings.json` elsewhere

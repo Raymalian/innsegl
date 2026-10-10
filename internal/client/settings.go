@@ -128,8 +128,9 @@ func (c SettingsConfig) legacyEnv() []envVar {
 	}
 }
 
-func (c SettingsConfig) preToolUseCommand() string { return c.HookBin + " hook pre-tool-use" }
-func (c SettingsConfig) sessionCommand() string    { return c.HookBin + " hook session" }
+func (c SettingsConfig) preToolUseCommand() string  { return c.HookBin + " hook pre-tool-use" }
+func (c SettingsConfig) postToolUseCommand() string { return c.HookBin + " hook post-tool-use" }
+func (c SettingsConfig) sessionCommand() string     { return c.HookBin + " hook session" }
 
 // sessionHookEvents are the events `innsegl hook session` runs on: a new or
 // resumed session, every user turn, every subagent and every move state the
@@ -278,6 +279,12 @@ func installKeys(obj *object, cfg SettingsConfig, path string, out io.Writer) er
 		return err
 	}
 	if err = installHook(hooks, "PreToolUse", hookGroup("Bash", cfg.preToolUseCommand()), cfg); err != nil {
+		return err
+	}
+	// Every tool call, not only Bash: an edit changes the working tree as
+	// much as a command does. The hook snapshots it for a hosted core's
+	// mirror (#467) and does nothing anywhere else.
+	if err = installHook(hooks, "PostToolUse", hookGroup("", cfg.postToolUseCommand()), cfg); err != nil {
 		return err
 	}
 	for _, event := range sessionHookEvents {
@@ -448,7 +455,7 @@ func isOurHook(v any, cfg SettingsConfig) bool {
 	}
 	typ, _ := h.get("type")
 	cmd, _ := h.get("command")
-	return typ == "command" && (cmd == cfg.preToolUseCommand() || cmd == cfg.sessionCommand())
+	return typ == "command" && (cmd == cfg.preToolUseCommand() || cmd == cfg.postToolUseCommand() || cmd == cfg.sessionCommand())
 }
 
 func installHook(hooks *object, event string, group *object, cfg SettingsConfig) error {
@@ -549,7 +556,7 @@ func uninstallKeys(obj *object, cfg SettingsConfig, path string, out io.Writer) 
 	}
 
 	if hooks, ok := childIfObject(obj, "hooks"); ok {
-		for _, event := range append([]string{"PreToolUse"}, sessionHookEvents...) {
+		for _, event := range append([]string{"PreToolUse", "PostToolUse"}, sessionHookEvents...) {
 			groups, isList := hooks.vals[event].([]any)
 			if !isList {
 				continue
