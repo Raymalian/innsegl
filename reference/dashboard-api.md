@@ -119,6 +119,8 @@ setup link while no account exists.
 Flags:
   -account string
     	the organisation's id: the ID column of innsegl accounts list
+  -body-dir string
+    	the core's captured bodies; the bodies of runs in each erased repository are removed ($INNSEGL_MCP_LOG_DIR)
   -by string
     	the owner who asked; refused unless they are a live owner (default: the operator)
   -dsn string
@@ -131,13 +133,22 @@ It runs as the database owner, like `innsegl erase-repository`
 ([repository-names.md](repository-names.md)). In one transaction it erases
 the aliases of every repository only this organisation held, revokes its
 members' sessions, and deletes its enrolment tokens, invitations,
-memberships, repository grants, installations and account row; then it
-removes those repositories' mirrors. A repository another organisation
-holds now keeps its name. Users are kept: a person may belong to another
-organisation. The deployment's own organisation cannot be erased. No event
-changes. The audit trail keeps its rows (it refuses deletion) and gains
-one `account.erased` row with counts and pseudonyms, never a name; the
-`account.created` row it already holds still names the organisation.
+memberships, repository grants, installations, pending passkey
+confirmations and account row; then it removes those repositories'
+mirrors and the captured bodies of every run registered in them. A
+repository another organisation holds now keeps its name. Users are kept:
+a person may belong to another organisation. The deployment's own
+organisation cannot be erased. No event changes. The audit trail keeps
+its rows (it refuses deletion) and gains one `account.erased` row with
+counts and pseudonyms. Audit rows hold ids only (account, user,
+installation, grant, token), never an organisation or machine name or a
+repository, so nothing readable about an erased organisation remains.
+Rows written before this release may still hold names.
+
+`innsegl api` waits, before it listens, until the core has applied the
+newest migration its own code needs, and logs what it waits for. The core
+applies migrations at its start; a `make update` that recreates both
+therefore never serves the new API against the old schema.
 
 ## Settings
 
@@ -209,6 +220,9 @@ last owner or an existing membership.
   AUTH-005 to AUTH-007)
 - `cmd/innsegl/accountsorgcli_test.go`, `eraseorganisation_test.go`
   (ACC-005, ACC-006, ACC-009 to ACC-011, AUTH-006)
+- `internal/accounts/erase_test.go` (ACC-015: no accounts table names an
+  erased organisation; ACC-017: the runs whose bodies erasure removes),
+  `cmd/innsegl/apischema_test.go` (ACC-016: the API waits for its schema)
 - `cmd/innsegl/noprincipal_test.go` (ACC-012: no organisation or person
   identifier in the machine certificate, the run's SPIRE entries, the
   commit trailers, the ledger schema or the gateway log)

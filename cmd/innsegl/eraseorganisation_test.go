@@ -80,6 +80,7 @@ func TestACC010EraseOrganisationRemovesRowsAliasesAndMirrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	bodyRoot := bodyStore(t, "run-org-erase", "run-elsewhere")
 	mirrorRoot := t.TempDir()
 	bare := filepath.Join(mirrorRoot, "example.test", "withdrawn", "plans.git")
 	if merr := os.MkdirAll(bare, 0o700); merr != nil {
@@ -98,11 +99,12 @@ func TestACC010EraseOrganisationRemovesRowsAliasesAndMirrors(t *testing.T) {
 		!strings.Contains(stderr, "owner") {
 		t.Fatalf("an admin erases: exit %d: %s", code, stderr)
 	}
-	code, out, stderr := run("-dsn", ownerDSN, "-mirror-dir", mirrorRoot, "-account", org.ID, "-by", "u-owner")
+	code, out, stderr := run("-dsn", ownerDSN, "-mirror-dir", mirrorRoot, "-body-dir", bodyRoot, "-account", org.ID, "-by", "u-owner")
 	if code != exitOK {
 		t.Fatalf("exit %d\n%s", code, stderr)
 	}
-	for _, want := range []string{org.ID, "1 repositories", "2 members", "removed the mirror of " + repo} {
+	assertBodies(t, bodyRoot, map[string]bool{"run-org-erase": false, "run-elsewhere": true})
+	for _, want := range []string{org.ID, "1 repositories", "2 members", "removed the mirror of " + repo, "bodies of 1 runs"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout does not report %q:\n%s", want, out)
 		}
@@ -129,6 +131,32 @@ func TestACC010EraseOrganisationRemovesRowsAliasesAndMirrors(t *testing.T) {
 
 	if code, _, stderr := run("-dsn", ownerDSN, "-account", org.ID); code == exitOK || !strings.Contains(stderr, "no such") {
 		t.Errorf("erasing again: exit %d: %s", code, stderr)
+	}
+}
+
+// bodyStore makes a body store holding one captured body for each run.
+func bodyStore(t *testing.T, runs ...string) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, r := range runs {
+		if err := os.MkdirAll(filepath.Join(root, r), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, r, "00ff.json"), []byte(`{"cwd":"/work"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// assertBodies checks which runs still have bodies.
+func assertBodies(t *testing.T, root string, want map[string]bool) {
+	t.Helper()
+	for run, kept := range want {
+		_, err := os.Stat(filepath.Join(root, run))
+		if (err == nil) != kept {
+			t.Errorf("%s's bodies present = %v, want %v", run, err == nil, kept)
+		}
 	}
 }
 

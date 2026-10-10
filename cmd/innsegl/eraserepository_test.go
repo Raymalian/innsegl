@@ -48,6 +48,7 @@ func TestLED046EraseRepositoryRemovesTheAliasesAndTheMirror(t *testing.T) {
 		t.Fatalf("the chain holds %v, want a pseudonym", rec[event.FieldRepo])
 	}
 
+	bodyRoot := bodyStore(t, "run-erase", "run-elsewhere")
 	mirrorRoot := t.TempDir()
 	bare := filepath.Join(mirrorRoot, "example.test", "acme", "withdrawn.git")
 	if merr := os.MkdirAll(bare, 0o700); merr != nil {
@@ -58,9 +59,13 @@ func TestLED046EraseRepositoryRemovesTheAliasesAndTheMirror(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	code := runEraseRepository(ctx, []string{"-dsn", ownerDSN, "-mirror-dir", mirrorRoot, "-repo", repo}, &out, &errOut)
+	code := runEraseRepository(ctx, []string{"-dsn", ownerDSN, "-mirror-dir", mirrorRoot, "-body-dir", bodyRoot, "-repo", repo}, &out, &errOut)
 	if code != exitOK {
 		t.Fatalf("exit %d\n%s", code, errOut.String())
+	}
+	assertBodies(t, bodyRoot, map[string]bool{"run-erase": false, "run-elsewhere": true})
+	if !strings.Contains(out.String(), "bodies of 1 runs") {
+		t.Errorf("stdout does not report the bodies:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "2 aliases") || !strings.Contains(out.String(), "mirror") {
 		t.Errorf("stdout does not report what was erased:\n%s", out.String())

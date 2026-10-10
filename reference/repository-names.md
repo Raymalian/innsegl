@@ -34,6 +34,8 @@ innsegl status
 Flags:
   -actor string
     	who asked, for the audit record
+  -body-dir string
+    	the core's captured bodies; the bodies of runs in the repository are removed ($INNSEGL_MCP_LOG_DIR)
   -dsn string
     	the ledger database as its OWNER; the append role cannot delete an alias ($INNSEGL_LEDGER_DSN)
   -mirror-dir string
@@ -45,7 +47,8 @@ Flags:
 - `innsegl erase-repository` deletes the repository's aliases under every
   key id and its branches' aliases in one transaction, writes an audit row
   naming the pseudonyms (never the name), and removes the repository's
-  mirror. It runs as the database owner: the role every service holds may
+  mirror and the captured bodies of every run registered in it (ADR-0080
+  §6). The run page then shows those bodies as not kept. It runs as the database owner: the role every service holds may
   insert an alias and never delete one.
 - `innsegl status` shows the mode as the component `repository names`.
 

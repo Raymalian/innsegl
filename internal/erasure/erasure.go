@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 
 	"github.com/jackc/pgx/v5"
@@ -43,18 +45,80 @@ const OrganisationAuditAction = "account.erased"
 // pseudonyms it removed, and answers them. A second call removes nothing,
 // records nothing and is not an error. actor names who asked; it may be "".
 func Repository(ctx context.Context, db DB, repo, actor string) (erased []string, err error) {
+	erased, _, err = RepositoryAndRuns(ctx, db, repo, actor)
+	return erased, err
+}
+
+// RepositoryAndRuns is Repository that also answers the runs registered in
+// the repository, under any of its names, so the caller can remove their
+// captured bodies (RemoveBodies, ADR-0080 §6). The runs are read before the
+// aliases go: afterwards nothing could find them.
+func RepositoryAndRuns(ctx context.Context, db DB, repo, actor string) (erased, runs []string, err error) {
 	if verr := event.ValidateRepo(repo); verr != nil {
-		return nil, verr
+		return nil, nil, verr
 	}
 	err = inTx(ctx, db, func(tx pgx.Tx) error {
 		var rerr error
+		if runs, rerr = runsInTx(ctx, tx, repo); rerr != nil {
+			return rerr
+		}
 		erased, rerr = repositoryTx(ctx, tx, repo, "", actor)
 		return rerr
 	})
 	if err != nil {
-		return nil, fmt.Errorf("erasing the aliases of %s: %w", repo, err)
+		return nil, nil, fmt.Errorf("erasing the aliases of %s: %w", repo, err)
 	}
-	return erased, nil
+	return erased, runs, nil
+}
+
+// runsInTx answers the runs whose registration names the repository, by its
+// literal (before the switch) or by any of its pseudonyms, sorted.
+func runsInTx(ctx context.Context, tx pgx.Tx, repo string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		WITH names AS (
+		    SELECT value FROM innsegl.pseudonyms WHERE kind = 'repo' AND literal = $1
+		    UNION SELECT $1)
+		SELECT DISTINCT run_id FROM innsegl.events
+		 WHERE event_type = 'run_registered'
+		   AND convert_from(canonical, 'UTF8')::jsonb->>'repo' IN (SELECT value FROM names)
+		 ORDER BY run_id`, repo)
+	if err != nil {
+		return nil, fmt.Errorf("finding the runs in a repository: %w", err)
+	}
+	runs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("finding the runs in a repository: %w", err)
+	}
+	if runs == nil {
+		runs = []string{}
+	}
+	return runs, nil
+}
+
+// RemoveBodies deletes the captured bodies of runs from the body store at
+// dir (each run's bodies are dir/<run id>/), and answers how many runs had
+// any. A body holds what the agent saw and did in its repository, names
+// included; erasing the repository's name erases them (ADR-0080 §6). The
+// chain is not touched: a reader shows the body as not kept. Every run id
+// is checked first, and one that is not a run id refuses the whole call.
+func RemoveBodies(dir string, runs []string) (int, error) {
+	for _, r := range runs {
+		if err := event.ValidateIdentifier(r); err != nil || filepath.Base(r) != r {
+			return 0, fmt.Errorf("erasure: %q is not a run id", r)
+		}
+	}
+	removed := 0
+	for _, r := range runs {
+		p := filepath.Join(dir, r)
+		if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := os.RemoveAll(p); err != nil {
+			return removed, fmt.Errorf("erasure: removing the bodies of %s: %w", r, err)
+		}
+		removed++
+	}
+	return removed, nil
 }
 
 func inTx(ctx context.Context, db DB, fn func(tx pgx.Tx) error) (err error) {
@@ -140,6 +204,9 @@ type OrganisationResult struct {
 	// Kept: repositories it once held that another organisation holds now.
 	// Their names stay; they are that organisation's.
 	Kept []string
+	// Runs registered in the erased repositories: the caller removes their
+	// captured bodies (RemoveBodies).
+	Runs []string
 	// Pseudonyms whose aliases were deleted.
 	Pseudonyms []string
 	// Rows deleted, and sessions revoked.
@@ -208,13 +275,18 @@ func Organisation(ctx context.Context, db DB, accountID, actor string, mayErase 
 		if err != nil {
 			return err
 		}
-		res.Repositories, res.Kept, res.Pseudonyms = []string{}, []string{}, []string{}
+		res.Repositories, res.Kept, res.Pseudonyms, res.Runs = []string{}, []string{}, []string{}, []string{}
 		for _, h := range repos {
 			if h.other {
 				res.Kept = append(res.Kept, h.repo)
 				continue
 			}
 			res.Repositories = append(res.Repositories, h.repo)
+			runs, rerr := runsInTx(ctx, tx, h.repo)
+			if rerr != nil {
+				return rerr
+			}
+			res.Runs = append(res.Runs, runs...)
 			erased, rerr := repositoryTx(ctx, tx, h.repo, accountID, actor)
 			if rerr != nil {
 				return fmt.Errorf("erasing the aliases of a repository: %w", rerr)
@@ -260,6 +332,7 @@ func Organisation(ctx context.Context, db DB, accountID, actor string, mayErase 
 				*d.n = int(tag.RowsAffected())
 			}
 		}
+		slices.Sort(res.Runs)
 		return audit(ctx, tx, actor, accountID, OrganisationAuditAction, accountID, map[string]any{
 			"repositories_erased": len(res.Repositories), "repositories_kept": len(res.Kept),
 			"pseudonyms": res.Pseudonyms, "members": res.Members, "installations": res.Installations,

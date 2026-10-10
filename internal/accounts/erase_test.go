@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -321,6 +323,45 @@ func TestACC010ErasingAnOrganisationLeavesTheChainByteIdentical(t *testing.T) {
 		if strings.Contains(detail, leak) {
 			t.Errorf("the erasure's audit row names %q: %s", leak, detail)
 		}
+	}
+}
+
+// ACC-017 (ADR-0080 §6): erasing an organisation also forgets the captured
+// bodies of the runs that worked in the repositories it erases — and only
+// those: a run in a repository another organisation holds keeps its bodies.
+func TestACC017ErasureNamesTheRunsWhoseBodiesGo(t *testing.T) {
+	f := newErasureFixture(t)
+	ctx := tctx(t)
+	res, err := erasure.Organisation(ctx, f.ownerPool(t), f.beta.ID, "", mayErase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixture registered run-erase-0 and run-erase-3 in betaRepo,
+	// run-erase-1 in the handed-over repository and run-erase-2 in Acme's.
+	if !slices.Equal(res.Runs, []string{"run-erase-0", "run-erase-3"}) {
+		t.Fatalf("runs = %v, want run-erase-0 and run-erase-3", res.Runs)
+	}
+
+	dir := t.TempDir()
+	for _, run := range []string{"run-erase-0", "run-erase-1", "run-erase-3"} {
+		if err := os.MkdirAll(filepath.Join(dir, run), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, run, "ab.json"), []byte(`{"cwd":"`+f.betaRepo+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err := erasure.RemoveBodies(dir, res.Runs)
+	if err != nil || removed != 2 {
+		t.Fatalf("RemoveBodies = %d, %v; want 2", removed, err)
+	}
+	for run, want := range map[string]bool{"run-erase-0": false, "run-erase-3": false, "run-erase-1": true} {
+		if _, serr := os.Stat(filepath.Join(dir, run)); (serr == nil) != want {
+			t.Errorf("%s's bodies present = %v, want %v", run, serr == nil, want)
+		}
+	}
+	if n, rerr := erasure.RemoveBodies(dir, []string{"../escape", "run-erase-0"}); rerr == nil || n != 0 {
+		t.Errorf("a run id that is not one: removed %d, err %v; want refused", n, rerr)
 	}
 }
 

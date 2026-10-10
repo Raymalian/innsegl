@@ -41,7 +41,9 @@ func runEraseRepository(ctx context.Context, args []string, stdout, stderr io.Wr
 		repo      = fs.String("repo", "", "the repository to erase, as host/org/name")
 		mirrorDir = fs.String("mirror-dir", os.Getenv(mirror.EnvDir),
 			"the core's repository mirror; the repository's mirror is removed with its name ($"+mirror.EnvDir+")")
-		actor = fs.String("actor", "", "who asked, for the audit record")
+		actor   = fs.String("actor", "", "who asked, for the audit record")
+		bodyDir = fs.String("body-dir", os.Getenv(envObserveBodyDir),
+			"the core's captured bodies; the bodies of runs in the repository are removed ($"+envObserveBodyDir+")")
 	)
 	fs.Usage = func() {
 		fprintf(stderr, "innsegl erase-repository - erase a repository's name from this deployment (ADR-0080)\n\n")
@@ -81,7 +83,7 @@ func runEraseRepository(ctx context.Context, args []string, stdout, stderr io.Wr
 	}
 	defer func() { _ = conn.Close(ctx) }()
 
-	erased, err := erasure.Repository(ctx, conn, *repo, *actor)
+	erased, runs, err := erasure.RepositoryAndRuns(ctx, conn, *repo, *actor)
 	if err != nil {
 		fprintf(stderr, "innsegl erase-repository: %v\n", err)
 		return exitReapInconclusive
@@ -92,9 +94,10 @@ func runEraseRepository(ctx context.Context, args []string, stdout, stderr io.Wr
 		fprintf(stdout, "innsegl erase-repository: erased %d aliases of %s and its branches\n", len(erased), *repo)
 	}
 
+	bodiesOK := removeErasedBodies(stdout, stderr, "innsegl erase-repository", *bodyDir, runs)
 	if *mirrorDir == "" {
 		fprintf(stdout, "  no mirror directory configured; no mirror removed\n")
-		return exitOK
+		return exitCodeFor(!bodiesOK)
 	}
 	m, err := mirror.Open(*mirrorDir)
 	if err != nil {
@@ -113,5 +116,5 @@ func runEraseRepository(ctx context.Context, args []string, stdout, stderr io.Wr
 	} else {
 		fprintf(stdout, "  no mirror of %s is held\n", *repo)
 	}
-	return exitOK
+	return exitCodeFor(!bodiesOK)
 }

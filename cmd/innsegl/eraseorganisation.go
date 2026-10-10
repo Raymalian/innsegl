@@ -45,6 +45,8 @@ func runEraseOrganisation(ctx context.Context, args []string, stdout, stderr io.
 		by        = fs.String("by", "", "the owner who asked; refused unless they are a live owner (default: the operator)")
 		mirrorDir = fs.String("mirror-dir", os.Getenv(mirror.EnvDir),
 			"the core's repository mirror; each erased repository's mirror is removed ($"+mirror.EnvDir+")")
+		bodyDir = fs.String("body-dir", os.Getenv(envObserveBodyDir),
+			"the core's captured bodies; the bodies of runs in each erased repository are removed ($"+envObserveBodyDir+")")
 	)
 	fs.Usage = func() {
 		fprintf(stderr, "innsegl erase-organisation - erase an organisation, its account data and its repositories' names\n\n")
@@ -92,12 +94,13 @@ func runEraseOrganisation(ctx context.Context, args []string, stdout, stderr io.
 	fprintf(stdout, "  names erased: %d repositories (%d aliases); kept, held by another organisation: %d\n",
 		len(res.Repositories), len(res.Pseudonyms), len(res.Kept))
 
+	failed := !removeErasedBodies(stdout, stderr, "innsegl erase-organisation", *bodyDir, res.Runs)
 	if len(res.Repositories) == 0 {
-		return exitOK
+		return exitCodeFor(failed)
 	}
 	if *mirrorDir == "" {
 		fprintf(stdout, "  no mirror directory configured; no mirror removed\n")
-		return exitOK
+		return exitCodeFor(failed)
 	}
 	m, err := mirror.Open(*mirrorDir)
 	if err != nil {
@@ -105,7 +108,6 @@ func runEraseOrganisation(ctx context.Context, args []string, stdout, stderr io.
 			"opened: %v. Remove each erased repository's mirror by hand: a mirror keeps the name in its path\n", err)
 		return exitReapIncomplete
 	}
-	failed := false
 	for _, repo := range res.Repositories {
 		removed, rerr := m.Remove(repo)
 		switch {
@@ -118,8 +120,30 @@ func runEraseOrganisation(ctx context.Context, args []string, stdout, stderr io.
 			fprintf(stdout, "  no mirror of %s is held\n", repo)
 		}
 	}
-	if failed {
+	return exitCodeFor(failed)
+}
+
+func exitCodeFor(incomplete bool) int {
+	if incomplete {
 		return exitReapIncomplete
 	}
 	return exitOK
+}
+
+// removeErasedBodies removes the captured bodies of runs in erased
+// repositories (ADR-0080 §6), reporting on stdout, and answers false when
+// it could not.
+func removeErasedBodies(stdout, stderr io.Writer, name, dir string, runs []string) bool {
+	if dir == "" {
+		fprintf(stdout, "  no body directory configured; no captured bodies removed (%d runs)\n", len(runs))
+		return true
+	}
+	n, err := erasure.RemoveBodies(dir, runs)
+	if err != nil {
+		fprintf(stderr, "%s: the names are erased, and the captured bodies were not all removed: %v. "+
+			"Remove them by hand: a body keeps what the agent saw, names included\n", name, err)
+		return false
+	}
+	fprintf(stdout, "  removed the captured bodies of %d runs\n", n)
+	return true
 }
