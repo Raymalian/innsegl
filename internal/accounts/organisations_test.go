@@ -18,6 +18,7 @@ var _ api.Organisations = (*Store)(nil)
 func TestRM333MembershipsAreTheUsersLiveOnesWithRoles(t *testing.T) {
 	e, s, a := setup(t)
 	ctx := tctx(t)
+	recordPseudonymous(t, e) // a second account needs the switch (ACC-008)
 	b, err := s.CreateAccount(ctx, CreateAccountParams{Name: "Beta"})
 	if err != nil {
 		t.Fatal(err)
@@ -52,8 +53,9 @@ func TestRM333MembershipsAreTheUsersLiveOnesWithRoles(t *testing.T) {
 }
 
 func TestRM333MachinesAndGrantsAreThoseOfTheNamedOrganisations(t *testing.T) {
-	_, s, a := setup(t)
+	e, s, a := setup(t)
 	ctx := tctx(t)
+	recordPseudonymous(t, e) // a second account needs the switch (ACC-008)
 	other, err := s.CreateAccount(ctx, CreateAccountParams{Name: "Other"})
 	if err != nil {
 		t.Fatal(err)

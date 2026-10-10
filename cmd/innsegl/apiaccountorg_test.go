@@ -30,6 +30,7 @@ func TestRM333TheCommandServesTheOrganisationRoutes(t *testing.T) {
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	if _, err = conn.Exec(ctx, `
+		INSERT INTO innsegl.repo_mode (mode, key_id) VALUES ('pseudonymous', 'rk-test0001') ON CONFLICT DO NOTHING;
 		INSERT INTO innsegl_auth.accounts (account_id, name) VALUES ('0123456789abcdef0123456789abcdef', 'example-org');
 		INSERT INTO innsegl_auth.memberships (user_id, account_id, role)
 		     SELECT user_id, '0123456789abcdef0123456789abcdef', 'owner' FROM innsegl_auth.users`); err != nil {

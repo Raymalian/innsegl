@@ -66,6 +66,7 @@ func TestClaimRepoGrantsAnUnheldRepositoryOnFirstUse(t *testing.T) {
 	claim(listed, listedOnly, true)
 
 	// Another organisation holds it: refused, and nothing changes hands.
+	recordPseudonymous(t, e) // a second account needs the switch (ACC-008)
 	rival, err := s.CreateAccount(ctx, CreateAccountParams{Name: "Rival"})
 	if err != nil {
 		t.Fatal(err)

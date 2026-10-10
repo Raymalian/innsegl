@@ -35,6 +35,13 @@ const (
 // rivalHolds gives a second organisation a live grant on fuHeld.
 func rivalHolds(t *testing.T, f *enFixture) {
 	t.Helper()
+	// A second organisation needs the deployment's switch to pseudonymous
+	// repositories recorded first (ACC-008).
+	pool := gwIdentityPool(t, f.ownerDSN)
+	if _, err := pool.Exec(t.Context(),
+		`INSERT INTO innsegl.repo_mode (mode, key_id) VALUES ('pseudonymous', 'rk-test0001') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
 	rival, err := f.writer.CreateAccount(t.Context(), accounts.CreateAccountParams{Name: "Rival"})
 	if err != nil {
 		t.Fatal(err)
