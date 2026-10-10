@@ -80,7 +80,7 @@ calls them):
 | `POST /api/v1/account/machines/revoke\|suspend\|resume/begin\|finish` | `{machine_id}`, after a fresh passkey; suspended is undone by resume, revoked is final |
 | `GET /api/v1/account/sso?organisation_id=ID` | the organisation's sign-in: name for a member; issuer, client id, redirect URI and whether a secret is saved for the owner; never the secret |
 | `POST /api/v1/account/sso/configure\|remove/begin\|finish` | owner only, after a fresh passkey; configure takes `{organisation_id, sign_in_name, issuer, client_id, client_secret, keep_secret}` |
-| `POST /api/v1/account/sso/link` | `{organisation_id}`: where to send the browser to connect the organisation's sign-in to this account |
+| `POST /api/v1/account/sso/link` | `{organisation_id}` or `{sign_in_name}`: where to send the browser to connect the organisation's sign-in to this account; by name is how a person not yet a member joins |
 | `DELETE /api/v1/account/sign-ins/{id}` | disconnect one of your own connected sign-ins |
 
 ### Organisation sign-in
