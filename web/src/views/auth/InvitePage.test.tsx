@@ -156,4 +156,39 @@ describe("FE-143 the invitation page", () => {
     expect(screen.queryByRole("heading", { name: strings.signIn.heading })).not.toBeInTheDocument();
     expect(screen.queryByTestId("protected")).not.toBeInTheDocument();
   });
+
+  // Measured on the dev stack: the gate re-read the session on join, which
+  // remounted this page, which asked about the now-spent code and said the
+  // link was unusable. The joined page must stay.
+  it("says a signed-in person has joined, through the gate", async () => {
+    let spent = false;
+    let sessionReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/auth/session")) {
+          sessionReads += 1;
+          return respond({ authenticated: true, display_name: "Ada" });
+        }
+        if (url.includes("/auth/setup")) return respond({ needed: false });
+        if (url.endsWith("/auth/invitation")) {
+          return spent
+            ? respond({ error: { code: "not_found", message: "not usable" } }, 404)
+            : respond(PREVIEW);
+        }
+        if (url.endsWith("/account/invitations/accept")) {
+          spent = true;
+          return respond({ id: PREVIEW.organisation_id, name: "example-team", role: "member" });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      }),
+    );
+    render(<AuthGate>{() => <div data-testid="protected">the dashboard</div>}</AuthGate>);
+    await userEvent.click(await screen.findByRole("button", { name: strings.invite.joinButton }));
+    expect(await screen.findByRole("heading", { name: strings.invite.joinedHeading })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(screen.getByRole("heading", { name: strings.invite.joinedHeading })).toBeInTheDocument();
+    // Re-reading the session would remount the page onto the spent code.
+    expect(sessionReads).toBe(1);
+  });
 });

@@ -66,11 +66,13 @@ export function AuthGate({ children, apiBase }: AuthGateProps) {
     return (
       <InvitePage
         signedIn={signedIn}
-        onJoined={(displayName) => {
+        onJoined={() => {
+          // A new person's session opened with the passkey: on to the
+          // dashboard. A signed-in person stays on the "joined" page, whose
+          // link loads the dashboard afresh; re-reading the session here
+          // would remount this page onto the code it just spent.
           if (!signedIn) {
             navigate("/");
-            reload();
-          } else if (displayName === "") {
             reload();
           }
         }}
