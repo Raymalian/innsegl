@@ -17,6 +17,7 @@ import {
   formatAbsoluteUtc,
   toDateTimeAttribute,
 } from "../../components/common";
+import { displayName } from "../../app/pseudonym";
 import { Link } from "../../app/router";
 import {
   identifierText,
@@ -115,7 +116,7 @@ function Table({ list }: { readonly list: RepoList }) {
                       to={{ view: "repo", repo: row.repo, from: "", to: "" }}
                       className={`${link} ${identifierText} break-all`}
                     >
-                      {row.repo}
+                      {displayName(row.repo)}
                     </Link>
                   </td>
                   <td className={tableCell}>
