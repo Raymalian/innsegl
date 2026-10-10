@@ -121,6 +121,12 @@ func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 
+	// A repository not linked to innsegl is not innsegl's (#575): the
+	// command runs exactly as written, with no signing and no refusal.
+	if !linkedForHook(context.Background(), event.Cwd) {
+		return exitOK
+	}
+
 	if turnsSigningOff(command) {
 		writeDeny(stdout, unsignedCommitReason)
 		return exitOK

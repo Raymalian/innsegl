@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +81,16 @@ func TestACC012NoPrincipalReachesTheSigningPath(t *testing.T) {
 		ssoSubject  = "idp-subject-acc012-zq7"
 		ssoSessHash = "acc012acc012acc012acc012acc012acc012acc012acc012acc012acc012acc0"
 	)
+	// The secret is stored sealed (#574), as the API stores it.
+	keyFile := filepath.Join(t.TempDir(), "sso-key")
+	if err = os.WriteFile(keyFile, []byte(strings.Repeat("ac", 32)+"\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	ssoKey, err := accounts.LoadSSOSecretKey(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.writer.SetSSOSecretKey(ssoKey)
 	conn, err := f.writer.SetSSOConnection(ctx, org.ID, api.SSOConnectionParams{SignInName: ssoName,
 		Issuer: ssoIssuer, ClientID: ssoClient, ClientSecret: "zephyrine-secret-acc012"}, ownerID)
 	if err != nil {

@@ -28,23 +28,30 @@ import (
 var signInNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
 
 const ssoColumns = `c.connection_id, c.account_id, a.name, c.sign_in_name, c.issuer, c.client_id,
-	c.client_secret, c.updated_at`
+	c.client_secret, c.client_secret_sealed, c.updated_at`
 
-func scanSSO(row pgx.Row) (api.SSOConnection, error) {
-	var c api.SSOConnection
+// scanSSO reads one connection and opens its secret (ssosecret.go, #574).
+func (s *Store) scanSSO(row pgx.Row) (api.SSOConnection, error) {
+	var (
+		c              api.SSOConnection
+		legacy, sealed string
+	)
 	err := row.Scan(&c.ID, &c.AccountID, &c.AccountName, &c.SignInName, &c.Issuer, &c.ClientID,
-		&c.ClientSecret, &c.UpdatedAt)
+		&legacy, &sealed, &c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return api.SSOConnection{}, api.ErrSSONotConfigured
 	}
 	if err != nil {
 		return api.SSOConnection{}, fmt.Errorf("accounts: reading the organisation's sign-in: %w", err)
 	}
+	if c.ClientSecret, err = s.openSecret(c.ID, legacy, sealed); err != nil {
+		return api.SSOConnection{}, err
+	}
 	return c, nil
 }
 
 func (s *Store) ssoWhere(ctx context.Context, q Querier, where string, arg any) (api.SSOConnection, error) {
-	return scanSSO(q.QueryRow(ctx, `SELECT `+ssoColumns+`
+	return s.scanSSO(q.QueryRow(ctx, `SELECT `+ssoColumns+`
 		FROM innsegl_auth.sso_connections c JOIN innsegl_auth.accounts a USING (account_id)
 		WHERE `+where, arg))
 }
@@ -113,14 +120,21 @@ func (s *Store) SetSSOConnection(ctx context.Context, accountID string, p api.SS
 				return err
 			}
 		}
+		// The secret is stored sealed, never as given (#574).
+		sealed, err := s.sealSecret(id, p.ClientSecret)
+		if err != nil {
+			return err
+		}
 		if _, err = tx.Exec(ctx, `
 			INSERT INTO innsegl_auth.sso_connections
-			    (connection_id, account_id, sign_in_name, issuer, client_id, client_secret, created_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			    (connection_id, account_id, sign_in_name, issuer, client_id, client_secret,
+			     client_secret_sealed, created_by)
+			VALUES ($1, $2, $3, $4, $5, '', $6, $7)
 			ON CONFLICT (account_id) DO UPDATE SET sign_in_name = EXCLUDED.sign_in_name,
 			    issuer = EXCLUDED.issuer, client_id = EXCLUDED.client_id,
-			    client_secret = EXCLUDED.client_secret, updated_at = clock_timestamp()`,
-			id, accountID, p.SignInName, p.Issuer, p.ClientID, p.ClientSecret, nullable(actor)); err != nil {
+			    client_secret = '', client_secret_sealed = EXCLUDED.client_secret_sealed,
+			    updated_at = clock_timestamp()`,
+			id, accountID, p.SignInName, p.Issuer, p.ClientID, sealed, nullable(actor)); err != nil {
 			if pgCode(err) == "23505" {
 				return api.ErrSSONameTaken
 			}

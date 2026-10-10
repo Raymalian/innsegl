@@ -758,7 +758,8 @@ backup-freshness:
 ##   restart of what changed, not a full start. `docker compose up -d`
 ##   recreates only the services whose image or settings changed. With a
 ##   bundle from `make image-bundle` in dist/ for this commit, it loads and
-##   checks that instead of building (ADR-0070).
+##   checks that instead of building (ADR-0070). It waits for every service
+##   it restarted and exits non-zero, naming one that does not come up (#573).
 update:
 	@scripts/stack-mode.sh check
 	@docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-spire-server && docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-sigstore-rekor || \

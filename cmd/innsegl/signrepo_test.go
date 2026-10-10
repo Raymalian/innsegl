@@ -86,6 +86,7 @@ func TestRunSignSignsInTheAgentsRepository(t *testing.T) {
 // The hook names the repository of the tool call's own directory.
 func TestHookNamesTheAgentsRepositoryForSigning(t *testing.T) {
 	agent := gitInitRepo(t)
+	markLinked(t, agent)
 	common, err := gitCommonDir(t.Context(), agent)
 	if err != nil {
 		t.Fatal(err)

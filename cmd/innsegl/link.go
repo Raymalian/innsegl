@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"innsegl.dev/innsegl/internal/workspace"
 )
 
 // `innsegl link` — RM-245 (#390), the operator's decision of 2026-09-30's
@@ -158,10 +160,10 @@ func runLinkInstall(ctx context.Context, repo string, stdout, stderr io.Writer) 
 		return exitUsage
 	}
 
-	existing, readErr := os.ReadFile(hookPath)
+	existing, readErr := os.ReadFile(hookPath) // #nosec G703 -- a path git resolved for the repository
 	switch {
 	case readErr == nil && !strings.Contains(string(existing), linkHookMarker):
-		if _, statErr := os.Stat(previousPath); statErr == nil {
+		if _, statErr := os.Stat(previousPath); statErr == nil { // #nosec G703 -- see above
 			fprintf(stderr, "innsegl link: %s already exists and is not managed by innsegl, and %s "+
 				"already holds a previously saved hook — refusing to overwrite either\n", hookPath, previousPath)
 			return exitUsage
@@ -169,11 +171,11 @@ func runLinkInstall(ctx context.Context, repo string, stdout, stderr io.Writer) 
 			fprintf(stderr, "innsegl link: checking %s: %v\n", previousPath, statErr)
 			return exitUsage
 		}
-		if mkdirErr := os.MkdirAll(filepath.Dir(previousPath), 0o755); mkdirErr != nil {
+		if mkdirErr := os.MkdirAll(filepath.Dir(previousPath), 0o755); mkdirErr != nil { // #nosec G703 -- see above
 			fprintf(stderr, "innsegl link: creating the hooks directory: %v\n", mkdirErr)
 			return exitUsage
 		}
-		if renameErr := os.Rename(hookPath, previousPath); renameErr != nil {
+		if renameErr := os.Rename(hookPath, previousPath); renameErr != nil { // #nosec G703 -- see above
 			fprintf(stderr, "innsegl link: moving the existing hook aside: %v\n", renameErr)
 			return exitUsage
 		}
@@ -191,7 +193,7 @@ func runLinkInstall(ctx context.Context, repo string, stdout, stderr io.Writer) 
 		return exitUsage
 	}
 
-	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil { // #nosec G703 -- see above
 		fprintf(stderr, "innsegl link: creating the hooks directory: %v\n", err)
 		return exitUsage
 	}
@@ -270,4 +272,39 @@ func linkEnsure(ctx context.Context, repo string) (bool, error) {
 		return false, errors.New(strings.TrimSpace(errOut.String()))
 	}
 	return true, nil
+}
+
+// linkedForHook reports whether the PreToolUse hook acts on a command run in
+// cwd (#575). It does in a repository linked to innsegl: one carrying the
+// hook `innsegl link` installs, or one innsegl links on first use, a working
+// tree with a usable origin (the session hook's rule, hooksession.go), which
+// is linked here when it is not yet. It does not in any other repository:
+// that repository's commits are not innsegl's to sign, refuse or send.
+//
+// A cwd that is not in a repository at all (or none given) answers true: the
+// command may commit anywhere, and an agent's commit is never left
+// unrecorded on a guess.
+func linkedForHook(ctx context.Context, cwd string) bool {
+	if cwd == "" {
+		return true
+	}
+	if _, err := gitCommonDir(ctx, cwd); err != nil {
+		return true
+	}
+	hookPath, _, err := linkHookPaths(ctx, cwd)
+	if err != nil {
+		return true
+	}
+	// #nosec G304 -- the hook path git itself resolved for this repository.
+	if existing, rerr := os.ReadFile(hookPath); rerr == nil && strings.Contains(string(existing), linkHookMarker) {
+		return true
+	}
+	derived, err := workspace.Derive(ctx, cwd)
+	if err != nil {
+		return false
+	}
+	// Linked on first use, as the session hook would have. A failure to
+	// link still acts: the repository is one innsegl records.
+	_, _ = linkEnsure(ctx, derived.Main) //nolint:errcheck // see above
+	return true
 }

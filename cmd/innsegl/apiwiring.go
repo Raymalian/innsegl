@@ -175,6 +175,25 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 		return nil, err
 	}
 	closers = append(closers, orgs.Close)
+	// An organisation's sign-in client secret is stored sealed (#574). A
+	// key that is set and unreadable stops the start: the dashboard would
+	// otherwise answer every sign-in through that organisation with an
+	// error. A secret 0019 left in plain text is sealed now.
+	if o.ssoKeyFile != "" {
+		key, kerr := accounts.LoadSSOSecretKey(o.ssoKeyFile)
+		if kerr != nil {
+			unwind()
+			return nil, kerr
+		}
+		orgs.SetSSOSecretKey(key)
+		if n, serr := orgs.SealSSOSecrets(boot); serr != nil {
+			log.warn("sealing organisation sign-in secrets failed", "err", serr)
+		} else if n > 0 {
+			log.info("sealed organisation sign-in secrets kept in plain text", "count", n)
+		}
+	} else {
+		log.warn("no " + envAPISSOKeyFile + ": an organisation's sign-in can use a public client only")
+	}
 	// A deployment whose users predate the operator organisation gets it now,
 	// owned by its first user (accounts.FoundOperator). Not fatal: the
 	// account page says what is missing.

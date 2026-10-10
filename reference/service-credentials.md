@@ -30,6 +30,7 @@ kept; a missing one is 32 bytes from `openssl rand -hex 32`.
 | ledger | backup | `ledger-backup` | `innsegl-backup` |
 | object store | root identity | `objects-root` | `innsegl-s3-identities`, `innsegl-object-init` |
 | object store | sealer identity | `objects-sealer` | `innsegl-mcp`, sealer, backup, canary |
+| auth database | the key an organisation's sign-in client secret is sealed under (#574) | `sso-key` | `innsegl-api` (`INNSEGL_API_SSO_KEY_FILE`) |
 | log database | MySQL root | `logdb-root` | `trillian-db` |
 | log database | Trillian's user | `logdb-trillian` | Trillian pair, `innsegl-trust-backup` |
 | log database | Rekor's index user | `logdb-rekor` | `rekor`, `scripts/rekor-reindex.sh` |
@@ -58,9 +59,9 @@ No longer read: `INNSEGL_LEDGER_APPENDER_PASSWORD`,
 
 | volume | holds | mounted by |
 |---|---|---|
-| `innsegl-trust-credentials` | the core's eight credentials, 0400 | `innsegl-credentials` (rw); `innsegl-db-init`, `innsegl-s3-identities`, `innsegl-trust-backup` (ro) |
+| `innsegl-trust-credentials` | the core's nine credentials, 0400 | `innsegl-credentials` (rw); `innsegl-db-init`, `innsegl-s3-identities`, `innsegl-trust-backup` (ro) |
 | `innsegl-trust-sigstore-credentials` | the log database's three | `sigstore-bootstrap` (rw); `innsegl-trust-backup` (ro) |
-| `innsegl-credential-<name>` (core) | one credential in its reader's form: `password`, `pgpass`, or `secret` | the services that use it, read-only |
+| `innsegl-credential-<name>` (core) | one credential in its reader's form: `password`, `pgpass`, `secret`, or `key` | the services that use it, read-only |
 | `sigstore-credential-logdb` | `root`, `trillian`, `init.sql`, `healthcheck.cnf`, `rekor.cnf` | `trillian-db` |
 | `sigstore-credential-trillian` | `flags` (Trillian's `--config`) | the Trillian pair |
 | `sigstore-credential-rekor-index` | `rekor-server.yaml` (Rekor's `--config`) | `rekor` |

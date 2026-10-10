@@ -85,7 +85,15 @@ credential or config file at start would keep the old one. The script:
    mounts read-only that no long-running service writes, and every
    read-only bind mount from this checkout;
 3. runs the `up` with each hash in `INNSEGL_INPUTS_<SERVICE>`, which the
-   compose files put in the service's `dev.innsegl.inputs` label.
+   compose files put in the service's `dev.innsegl.inputs` label;
+4. with `-d`, waits for every long-running service the `up` started or
+   replaced (OPS-179, #573): healthy when it has a health check, running
+   and unrestarted for 5 s when it has none. One that stops, keeps
+   restarting, turns unhealthy, or is not up within
+   `INNSEGL_UP_WAIT_TIMEOUT` seconds fails the run with exit 1, its name
+   and its last 30 log lines. The clock starts after compose returns, so an
+   old container's slow stop is not counted. So `make update` and
+   `make start` exit non-zero when the new core does not come up.
 
 A changed input changes the label, so compose recreates that service and no
 other. `scripts/compose-up.py <compose args> list` prints each service's
@@ -141,6 +149,7 @@ Make variables and environment (defaults in brackets):
 | `INNSEGL_IMAGE_PLATFORM`, `INNSEGL_IMAGE_BUNDLE` | image-bundle, update | [`linux/amd64`, `dist/` for this commit] |
 | `INNSEGL_REKOR_PORT` | many | [`scripts/rekor-port.sh`, compose default `23000`] |
 | `INNSEGL_BIND` | compose | [`127.0.0.1`] |
+| `INNSEGL_UP_WAIT_TIMEOUT` | every `up` | seconds to wait for the services it started [`600`] |
 | `DIR` | link | the repository |
 | `COMMIT`, `DEMO_REPO` | verify-commit | the commit, and the repository identifier it is in |
 | `ARGS` | innsegl-init | flags passed to `innsegl init` |
@@ -197,6 +206,7 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
 | `teardown-guard.sh` | 9 | REFUSED: would have destroyed a trust volume |
 | `image-bundle.sh` | 1 | refused (dirty tree, or a bundle that fails its checks) |
 | `make update` | 2 | SPIRE or Rekor is not running |
+| `compose-up.py` (`make update`, `make start`) | 1 | a service the `up` started did not come up; named, with its last log lines |
 | `codesign-cli.sh` (`make build`) | 1 | the identity asked for is not held, or `codesign` failed |
 | `client-restart.sh` | 1 | not restarted: no service, it runs another binary (named), or the restart failed; or restarted and it did not answer within the timeout |
 | `link-bin.sh` (`make build`) | 0 | always: a link it cannot make, or a file there that is not a link, is a warning |
@@ -208,7 +218,7 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
   `updateenv_test.go` (OPS-135), `buildonce_test.go`, `imagebundle_test.go`,
   `hostports_test.go`, `bindaddress_test.go` (OPS-127), `oneprocess*_test.go`,
   `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134),
-  `startinputs_test.go` (OPS-165 to OPS-167, PROPOSED)
+  `startinputs_test.go` (OPS-165 to OPS-167, PROPOSED), `upwait_test.go` (OPS-179, PROPOSED)
 - `test/deploy/referencedocs_test.go` (DOC-001, PROPOSED)
 - `scripts/stack-mode-selftest.sh` (OPS-129), `innsegl-update-selftest.sh`,
   `image-bundle-selftest.sh`, `install-selftest.sh`, `setup-link-selftest.sh`,

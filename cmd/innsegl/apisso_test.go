@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,8 +49,14 @@ func TestAUTH011TheOrganisationSignInEndToEndThroughTheCommand(t *testing.T) {
 		RedirectURIs: []string{apiIntegrationOrigin + "/api/v1/auth/sso/callback"}})
 	idp.SignInAs(subject, email, "Member Person")
 
-	addr, stderr := startAPICommandWith(t, apiDeps{ssoClient: idp.HTTPClient()},
-		apiArgsFor(t, readerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor)...)
+	// The client secret is stored sealed under a per-host key (#574).
+	keyFile := filepath.Join(t.TempDir(), "sso-key")
+	if err = os.WriteFile(keyFile, []byte(strings.Repeat("5e", 32)+"\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	args := append(apiArgsFor(t, readerDSN, authDSN, "github.com/innsegl/demo", repoDir, fulcio, rekor),
+		"-sso-key-file", keyFile)
+	addr, stderr := startAPICommandWith(t, apiDeps{ssoClient: idp.HTTPClient()}, args...)
 	base := "http://" + addr
 	ownerCookie := enrolAndSignIn(t, base, authDSN)
 
@@ -59,6 +67,11 @@ func TestAUTH011TheOrganisationSignInEndToEndThroughTheCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(spine.Close)
+	key, err := accounts.LoadSSOSecretKey(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spine.SetSSOSecretKey(key)
 	authStore, err := api.OpenAuthStore(ctx, authDSN)
 	if err != nil {
 		t.Fatal(err)
@@ -150,6 +163,14 @@ func TestAUTH011TheOrganisationSignInEndToEndThroughTheCommand(t *testing.T) {
 				t.Errorf("%s holds %q", what, leak)
 			}
 		}
+	}
+	// AUTH-012: the sign-in worked with the secret, and the table never held it.
+	var rowText string
+	if err = conn.QueryRow(ctx, `SELECT row_to_json(c)::text FROM innsegl_auth.sso_connections c`).Scan(&rowText); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(rowText, secret) {
+		t.Errorf("the connection's row holds the client secret: %s", rowText)
 	}
 }
 

@@ -139,6 +139,10 @@ const (
 	// holds the identity secret itself, only this narrower, derived key.
 	envAPIMessageKeyDir   = "INNSEGL_API_MESSAGE_KEY_DIR"
 	envAPIShutdownTimeout = "INNSEGL_API_SHUTDOWN_TIMEOUT"
+	// envAPISSOKeyFile names the per-host credential an organisation's
+	// sign-in client secret is sealed under (#574, ADR-0078). Unset, the
+	// dashboard stores public clients only.
+	envAPISSOKeyFile      = "INNSEGL_API_SSO_KEY_FILE"
 	envAPIUpstreamTimeout = "INNSEGL_API_UPSTREAM_TIMEOUT"
 	envAPIGit             = "INNSEGL_GIT"
 
@@ -254,6 +258,8 @@ type apiOptions struct {
 	// read-only. Empty means the run page's Brief and Replies stay
 	// unavailable — see envAPIMessageKeyDir.
 	messageKeyDir string
+	// ssoKeyFile is envAPISSOKeyFile's file.
+	ssoKeyFile string
 
 	shutdownTimeout time.Duration
 	upstreamTimeout time.Duration
@@ -447,6 +453,9 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 				"answers every run page Brief and Reply unavailable — this process never holds "+
 				"the identity secret itself, only this narrower, derived key "+
 				"($"+envAPIMessageKeyDir+")")
+		ssoKeyFile = fs.String("sso-key-file", os.Getenv(envAPISSOKeyFile),
+			"the per-host key an organisation's sign-in client secret is stored encrypted under; "+
+				"empty stores public clients only ($"+envAPISSOKeyFile+")")
 		mirrorDir = fs.String("mirror-dir", os.Getenv(mirror.EnvDir),
 			"the core's per-repository mirror, read-only: the only place repositories are read "+
 				"from (ADR-0065). A repository or commit it does not hold yet is a 404 that says "+
@@ -526,6 +535,7 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		logDir: *logDir, logDays: *logDays,
 		snapshotDir:   resolveSnapshotDir(*snapshotDir, *logDir),
 		messageKeyDir: *messageKeyDir,
+		ssoKeyFile:    *ssoKeyFile,
 		authDSN:       *authDSN, rpID: *rpID, rpOrigin: *rpOrigin, sessionLifetime: *sessionLifetime,
 		resolverDSN:     *resolverDSN,
 		gatewayCACert:   *gatewayCACert,

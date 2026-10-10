@@ -237,6 +237,7 @@ Rows written before this release may still hold names.
 | `-log-dir`, `-log-retention-days` | `INNSEGL_API_LOG_DIR`, `INNSEGL_API_LOG_DAYS` | tool-call bodies [`90` days] |
 | `-snapshot-dir` | `INNSEGL_API_SNAPSHOT_DIR` | workspace snapshots |
 | `-message-key-dir` | `INNSEGL_API_MESSAGE_KEY_DIR` | check-only agent-message key |
+| `-sso-key-file` | `INNSEGL_API_SSO_KEY_FILE` | the per-host key an organisation's sign-in client secret is stored encrypted under (#574); empty stores public clients only. At start, a secret kept in plain text before migration 0020 is sealed |
 | `-gateway-ca-cert` | `INNSEGL_API_GATEWAY_CA_CERT` | fingerprint pinned by the connect command shown to users |
 | `-hide-unowned-runs` | `INNSEGL_API_HIDE_UNOWNED_RUNS` | hide runs no machine is mapped to from the operator's organisation too; default `false` |
 | `-upstream-timeout`, `-shutdown-timeout` | `INNSEGL_API_UPSTREAM_TIMEOUT`, `INNSEGL_API_SHUTDOWN_TIMEOUT` | [`15s`, `15s`] |
@@ -310,7 +311,10 @@ organisation holds.
   `sso_test.go` (AUTH-008 to AUTH-011 through the server),
   `internal/accounts/sso_test.go` (AUTH-008, AUTH-011 against the real spine
   and migration 0019), `cmd/innsegl/apisso_test.go` (AUTH-011 end to end
-  through `innsegl api`), and ACC-012's scan for the provider's identifiers.
+  through `innsegl api`, with AUTH-012: the row holds no secret),
+  `internal/accounts/ssosecret_test.go` (AUTH-012: the client secret sealed under
+  the per-host key, bound to its connection, and a 0019 row sealed at start),
+  and ACC-012's scan for the provider's identifiers.
   The provider is `internal/oidctest`: TLS, signed tokens, exact redirect
   URIs, PKCE, single-use codes
 - `internal/api/accountwithdraw_test.go` (ACC-018)
