@@ -188,10 +188,10 @@ func TestADP009ForkedFromRunIDIsOptionalOnRunRegisteredFromSchema4(t *testing.T)
 	}
 }
 
-// TestADP010WorkspaceTreeHashIsOptionalOnToolCallFromSchema4 covers ADR-0061
+// TestSER029WorkspaceTreeHashIsOptionalOnToolCallFromSchema4 covers ADR-0061
 // decision 3: the same git object id grammar commit_intent.tree_hash already
 // uses, optional, and not a duplicate of it.
-func TestADP010WorkspaceTreeHashIsOptionalOnToolCallFromSchema4(t *testing.T) {
+func TestSER029WorkspaceTreeHashIsOptionalOnToolCallFromSchema4(t *testing.T) {
 	plain := fixtureFor(t, EventTypeToolCall)
 	if _, ok := plain[FieldWorkspaceTreeHash]; ok {
 		t.Fatal("the plain tool_call vector carries workspace_tree_hash; want the one without")

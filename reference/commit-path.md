@@ -233,7 +233,7 @@ behind the client certificate guard, and never another installation's).
 - `internal/client/mirrorbehind_test.go`, `internal/commitpath/mirrordiverged_test.go`,
   `cmd/innsegl/mirrorbehind_test.go` (SNAP-009): a refused rewrite is recorded once,
   shown by `innsegl status`, and cleared by the next push the mirror takes
-- `internal/api/mirrorsnapshot_test.go`, `test/deploy/coremirror_test.go` (API-034):
+- `internal/api/mirrorsnapshot_test.go`, `test/deploy/coremirror_test.go` (API-038):
   the run page's step diffs read the mirror
 - `cmd/innsegl/hooklinked_test.go` (CMT-019, CMT-020): an unlinked repository is left alone;
   a linked one and its worktrees are rewritten as before
@@ -248,7 +248,7 @@ behind the client certificate guard, and never another installation's).
 - `internal/signing/*_test.go` (SIG-001 to SIG-012), `signpayload_test.go` (GH-006)
 - `cmd/innsegl/hookauthor_test.go` (ENF-010), `authorcli_test.go` and `internal/client/authors_test.go` (ENF-011)
 - `cmd/innsegl/hookauthorauto_test.go` (ENF-013): the repository's noreply address, never `user.name`
-- `internal/client/operatorauthor_test.go` (ENF-012): the machine's report to the core
+- `internal/client/operatorauthor_test.go` (ENF-017): the machine's report to the core
 - `internal/accounts/operatorauthor_test.go` (GH-008, real Postgres): first-use pin, refusal, reset
 - `internal/mcp/operatorauthor_test.go` (GH-009): gate 3 admits the installation's pin only
 - `cmd/innsegl/coreoperatorauthor_test.go` (GH-010): the core route, including an enrolled machine end to end

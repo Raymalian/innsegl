@@ -114,7 +114,7 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 			}
 		}
 	}
-	// API-034: the run page reads snapshot trees from the mirror; the
+	// API-038: the run page reads snapshot trees from the mirror; the
 	// gateway's snapshot store is no longer named to the API.
 	if v, ok := plain.env("innsegl-api", "INNSEGL_API_SNAPSHOT_DIR"); ok {
 		t.Errorf("innsegl-api is still given INNSEGL_API_SNAPSHOT_DIR=%q; it reads snapshots from the mirror", v)

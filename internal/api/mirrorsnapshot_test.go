@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// API-034 (#467, the E23 exit criterion): a step's diff is read from the
+// API-038 (#467, the E23 exit criterion): a step's diff is read from the
 // core's per-repository mirror, which holds the trees a client pushed as
 // snapshot refs. The run page needs no snapshot store of its own.
-func TestAPI034AStepsDiffIsReadFromTheRepositorysMirror(t *testing.T) {
+func TestAPI038AStepsDiffIsReadFromTheRepositorysMirror(t *testing.T) {
 	mirror := newBareStore(t)
 	before := mirror.tree(t, map[string]string{"a.txt": mirror.blob(t, "one\n")})
 	after := mirror.tree(t, map[string]string{"a.txt": mirror.blob(t, "one\ntwo\n"), "b.txt": mirror.blob(t, "new\n")})
