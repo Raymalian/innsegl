@@ -19,7 +19,7 @@ import (
 func TestAUTH004AForgedAssertionIsRefused(t *testing.T) {
 	srv, _, cookie := testServerWithSession(t)
 	whoAmI := get(t, srv.URL, "/api/v1/auth/session", cookie)
-	var status sessionStatus
+	var status SessionStatus
 	decodeBody(t, whoAmI, &status)
 	if !status.Authenticated {
 		t.Fatal("no signed-in session to attack")

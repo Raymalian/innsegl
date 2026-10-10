@@ -62,6 +62,10 @@ func (s *Server) newAuthMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/auth/login/finish", s.handleLoginFinish)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	mux.HandleFunc("POST /api/v1/auth/recover", s.handleRecover)
+	// #481: an invited person with no account yet, holding the link.
+	mux.HandleFunc("POST /api/v1/auth/invitation", s.handleInvitationPreview)
+	mux.HandleFunc("POST /api/v1/auth/invitation/begin", s.handleInvitationBegin)
+	mux.HandleFunc("POST /api/v1/auth/invitation/finish", s.handleInvitationFinish)
 	return mux
 }
 
@@ -103,23 +107,48 @@ func (s *Server) serveAuth(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/auth/session — "am I signed in"
 // ---------------------------------------------------------------------------
 
-type sessionStatus struct {
-	Authenticated bool   `json:"authenticated"`
-	DisplayName   string `json:"display_name,omitempty"`
+// SessionStatus answers GET /api/v1/auth/session. Organisations are the
+// signed-in person's live memberships (AUTH-005, #480), read on every
+// request: the dashboard's organisation switcher reads them here, and a
+// removal shows on the next request.
+type SessionStatus struct {
+	Authenticated bool                  `json:"authenticated"`
+	DisplayName   string                `json:"display_name,omitempty"`
+	Organisations []SessionOrganisation `json:"organisations,omitempty"`
+}
+
+// SessionOrganisation is one membership as the session reports it.
+type SessionOrganisation struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+	Operator bool   `json:"operator"`
 }
 
 func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	userID, _, ok := s.sessionFromRequest(r)
 	if !ok {
-		writeJSON(w, http.StatusOK, sessionStatus{Authenticated: false})
+		writeJSON(w, http.StatusOK, SessionStatus{Authenticated: false})
 		return
 	}
 	u, err := s.authStore.UserByID(r.Context(), userID)
 	if err != nil {
-		writeJSON(w, http.StatusOK, sessionStatus{Authenticated: false})
+		writeJSON(w, http.StatusOK, SessionStatus{Authenticated: false})
 		return
 	}
-	writeJSON(w, http.StatusOK, sessionStatus{Authenticated: true, DisplayName: u.DisplayName})
+	out := SessionStatus{Authenticated: true, DisplayName: u.DisplayName, Organisations: []SessionOrganisation{}}
+	if s.orgs != nil {
+		ms, merr := s.orgs.Memberships(r.Context(), userID)
+		if merr != nil {
+			writeError(w, http.StatusInternalServerError, codeInternal, organisationsLoadMessage)
+			return
+		}
+		for _, m := range ms {
+			out.Organisations = append(out.Organisations,
+				SessionOrganisation{ID: m.AccountID, Name: m.Name, Role: m.Role, Operator: m.Operator})
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ---------------------------------------------------------------------------
@@ -483,14 +512,14 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, userID, pa
 	return nil
 }
 
-// issueSession is startSession plus the ordinary sessionStatus body
+// issueSession is startSession plus the ordinary SessionStatus body
 // login/finish answers with.
 func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, userID, passkeyID, displayName string) {
 	if err := s.startSession(w, r, userID, passkeyID); err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not create a session")
 		return
 	}
-	writeJSON(w, http.StatusOK, sessionStatus{Authenticated: true, DisplayName: displayName})
+	writeJSON(w, http.StatusOK, SessionStatus{Authenticated: true, DisplayName: displayName})
 }
 
 // setSessionCookie sets the one cookie this surface issues. ADR-0062: the

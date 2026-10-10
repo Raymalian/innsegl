@@ -107,6 +107,51 @@ func TestACC001MigrationIsAdditiveAndGivesEveryUserAnAccount(t *testing.T) {
 	}
 }
 
+// ACC-005: migration 0017 is additive. An invitation and a ceremony written
+// before it are untouched and still read; the operator's CLI may then invite
+// with no inviter, and an accepted invitation names who accepted it.
+func TestACC005Migration0017KeepsWhatWasThere(t *testing.T) {
+	e, l := premigration(t, "0017")
+	c, ctx := ownerConn(t, e.ownerDSN)
+	if _, err := c.Exec(ctx, `
+		INSERT INTO innsegl_auth.users (user_id, display_name) VALUES ('u-old', 'Old');
+		INSERT INTO innsegl_auth.accounts (account_id, name) VALUES ('acct-old', 'Old Org');
+		INSERT INTO innsegl_auth.invitations (account_id, role, code_hash, created_by, expires_at)
+		     VALUES ('acct-old', 'member', repeat('c', 64), 'u-old', now() + interval '1 day');
+		INSERT INTO innsegl_auth.webauthn_ceremonies (ceremony_id, kind, session_data, expires_at)
+		     VALUES ('cer-old', 'revoke_installation', '{}', now() + interval '1 minute')`); err != nil {
+		t.Fatalf("seed before 0017: %v", err)
+	}
+	snapshot := func() string {
+		var s string
+		if err := c.QueryRow(ctx, `SELECT
+			(SELECT string_agg(concat_ws('|', invitation_id, account_id, role, code_hash, created_by, expires_at, used_at), ',')
+			   FROM innsegl_auth.invitations) ||
+			(SELECT string_agg(concat_ws('|', ceremony_id, kind, session_data), ',') FROM innsegl_auth.webauthn_ceremonies)`).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	before := snapshot()
+	if err := l.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if after := snapshot(); after != before {
+		t.Fatalf("0017 changed existing rows:\n%s\n%s", before, after)
+	}
+	if _, err := c.Exec(ctx, `INSERT INTO innsegl_auth.invitations (account_id, role, code_hash, expires_at)
+		VALUES ('acct-old', 'admin', repeat('d', 64), now() + interval '1 day')`); err != nil {
+		t.Errorf("an invitation with no inviter: %v", err)
+	}
+	if _, err := c.Exec(ctx, `UPDATE innsegl_auth.invitations SET used_at = now() WHERE code_hash = repeat('c', 64)`); err == nil {
+		t.Errorf("an accepted invitation that names nobody was admitted")
+	}
+	if _, err := c.Exec(ctx, `INSERT INTO innsegl_auth.webauthn_ceremonies (ceremony_id, kind, session_data, expires_at)
+		VALUES ('cer-new', 'register_invited', '{}', now() + interval '1 minute')`); err != nil {
+		t.Errorf("the new ceremony kind: %v", err)
+	}
+}
+
 // ACC-001: a deployment with no users gets no account.
 func TestACC001EmptyDeploymentGetsNoAccounts(t *testing.T) {
 	e, _ := migrated(t)

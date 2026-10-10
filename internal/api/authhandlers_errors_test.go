@@ -135,7 +135,7 @@ func TestHandleAuthSessionWithNoCookie(t *testing.T) {
 	if a.status != http.StatusOK {
 		t.Fatalf("GET /api/v1/auth/session = %d, want %d", a.status, http.StatusOK)
 	}
-	var status sessionStatus
+	var status SessionStatus
 	decodeBody(t, a, &status)
 	if status.Authenticated {
 		t.Error("Authenticated = true with no cookie at all")
@@ -149,7 +149,7 @@ func TestHandleAuthSessionWithAGarbageCookie(t *testing.T) {
 	if a.status != http.StatusOK {
 		t.Fatalf("GET /api/v1/auth/session = %d, want %d", a.status, http.StatusOK)
 	}
-	var status sessionStatus
+	var status SessionStatus
 	decodeBody(t, a, &status)
 	if status.Authenticated {
 		t.Error("Authenticated = true with a cookie naming no live session")

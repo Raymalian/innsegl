@@ -57,7 +57,7 @@ const (
 const (
 	orgsUnavailableMessage = "this deployment has no accounts store, so organisations, machines and " +
 		"repositories cannot be shown; run `innsegl accounts` on the core host"
-	orgsNeedsRoleMessage = "connecting or revoking a machine needs the owner or an admin of its " +
+	orgsNeedsRoleMessage = "revoking a machine someone else connected needs the owner or an admin of its " +
 		"organisation; ask one of them"
 	orgsNotMemberMessage     = "you are not a member of that organisation"
 	confirmNeedsPasskey      = "this is confirmed with a passkey, and this account has none; add one first"
@@ -75,6 +75,7 @@ func (s *Server) registerOrganisationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/account/enrolment-tokens/finish", s.withOrgs(s.handleMintFinish))
 	mux.HandleFunc("GET /api/v1/account/repositories", s.withOrgs(s.handleAccountRepositories))
 	mux.HandleFunc("GET /api/v1/account/agents", s.withOrgs(s.handleAccountAgents))
+	s.registerMemberRoutes(mux)
 	mux.HandleFunc("GET /api/v1/account/sessions", s.handleSessions)
 	mux.HandleFunc("POST /api/v1/account/sessions/sign-out-others", s.handleSignOutOthers)
 }
@@ -126,11 +127,11 @@ func (s *Server) membershipIndex(ctx context.Context, userID string) (map[string
 	return byID, ids, nil
 }
 
-func accountMachine(m OrgMachine, org OrgMembership, lastRun map[string]time.Time) AccountMachine {
+func accountMachine(m OrgMachine, org OrgMembership, userID string, lastRun map[string]time.Time) AccountMachine {
 	out := AccountMachine{
 		ID: m.ID, OrganisationID: m.AccountID, Organisation: org.Name, Name: m.Name, Kind: m.Kind,
 		Status: m.Status, Repos: m.Repos, EnrolledAt: m.CreatedAt.UTC(), LastRenewedAt: m.LastRenewedAt,
-		RevokedAt: m.RevokedAt, CanManage: roleMay(org.Role, PrivilegeRevokeMachine),
+		RevokedAt: m.RevokedAt, CanManage: roleMay(org.Role, PrivilegeRevokeMachine) || (userID != "" && m.CreatedBy == userID),
 	}
 	if out.Repos == nil {
 		out.Repos = []string{}
@@ -164,7 +165,7 @@ func (s *Server) handleMachines(w http.ResponseWriter, r *http.Request) {
 	}
 	out := AccountMachines{Machines: make([]AccountMachine, len(machines)), CAFingerprint: s.coreCAFingerprint()}
 	for i, m := range machines {
-		out.Machines[i] = accountMachine(m, orgs[m.AccountID], lastRun)
+		out.Machines[i] = accountMachine(m, orgs[m.AccountID], accountSessionFrom(r).userID, lastRun)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -320,7 +321,7 @@ func (s *Server) handleRevokeBegin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.mayManage(ctx, w, userID, m.AccountID, PrivilegeRevokeMachine) {
+	if m.CreatedBy != userID && !s.mayManage(ctx, w, userID, m.AccountID, PrivilegeRevokeMachine) {
 		return
 	}
 	if m.Status == "revoked" {
@@ -341,7 +342,7 @@ func (s *Server) handleRevokeFinish(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.mayManage(ctx, w, userID, m.AccountID, PrivilegeRevokeMachine) {
+	if m.CreatedBy != userID && !s.mayManage(ctx, w, userID, m.AccountID, PrivilegeRevokeMachine) {
 		return
 	}
 	if err := s.orgs.RevokeMachine(ctx, m.ID, userID); err != nil {
@@ -360,7 +361,7 @@ func (s *Server) handleRevokeFinish(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, accountMachine(m, org, nil))
+	writeJSON(w, http.StatusOK, accountMachine(m, org, userID, nil))
 }
 
 // ---------------------------------------------------------------------------

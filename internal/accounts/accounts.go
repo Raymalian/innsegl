@@ -218,11 +218,13 @@ type Account struct {
 }
 
 // CreateAccountParams: Operator marks the deployment's own organisation.
+// Owner, when set, is the user made its first owner in the same transaction.
 type CreateAccountParams struct {
 	Name     string
 	Shard    string
 	Operator bool
 	Actor    string
+	Owner    string
 }
 
 // CreateAccount inserts an account.
@@ -243,8 +245,11 @@ func (s *Store) CreateAccount(ctx context.Context, p CreateAccountParams) (Accou
 			a.ID, a.Name, a.Shard, a.Operator).Scan(&a.CreatedAt); qerr != nil {
 			return fmt.Errorf("accounts: creating the account: %w", qerr)
 		}
-		return appendAudit(ctx, tx, AuditEntry{Actor: p.Actor, AccountID: a.ID, Action: "account.created",
-			Subject: a.ID, Detail: map[string]any{"name": a.Name, "operator": a.Operator}})
+		if aerr := appendAudit(ctx, tx, AuditEntry{Actor: p.Actor, AccountID: a.ID, Action: "account.created",
+			Subject: a.ID, Detail: map[string]any{"name": a.Name, "operator": a.Operator}}); aerr != nil || p.Owner == "" {
+			return aerr
+		}
+		return insertMemberTx(ctx, tx, a.ID, p.Owner, RoleOwner, p.Actor, nil)
 	})
 	if pgCode(err) == repositoriesLiteralSQLState {
 		return Account{}, fmt.Errorf("%w: set INNSEGL_REPO_MODE=pseudonymous and restart the core, "+
