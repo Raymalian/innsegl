@@ -44,7 +44,6 @@ import (
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/providers/dns"
 	"github.com/go-acme/lego/v4/registration"
 )
 
@@ -158,7 +157,7 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 	}
 	provider := cfg.Provider
 	if provider == nil {
-		p, err := dns.NewDNSChallengeProviderByName(cfg.ProviderName)
+		p, err := providerByName(cfg.ProviderName)
 		if err != nil {
 			return nil, fmt.Errorf("acme: the DNS provider %q: %w", cfg.ProviderName, err)
 		}

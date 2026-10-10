@@ -51,7 +51,7 @@ Read from the environment when the gateway starts (`cmd/innsegl/gateway.go`):
 | `INNSEGL_ACME_EMAIL` | required when on | the ACME account's contact |
 | `INNSEGL_ACME_DIRECTORY` | the public CA's production directory | an ACME directory URL, `https` only; set the staging directory here to try it |
 | `INNSEGL_ACME_ZONE` | required when on | the one DNS zone the DNS credential is for; every DNS name in `INNSEGL_GATEWAY_CERT_NAMES` must be in it |
-| `INNSEGL_ACME_DNS_PROVIDER` | required when on | the DNS provider, by the ACME library's name for it |
+| `INNSEGL_ACME_DNS_PROVIDER` | required when on | the DNS provider, by the name `internal/acme/providers.go` gives it (a set compiled in, plus `rfc2136`, `httpreq` and `exec`, which reach any DNS); each reads its own settings |
 | `INNSEGL_ACME_DNS_CREDENTIAL_VAR` | required when on | the provider's own credential variable; the core sets its `_FILE` form to the stored credential |
 | `INNSEGL_ACME_CREDENTIAL_DIR` | `/run/innsegl/credentials/acme-dns` | where the credential file `dns-token` is |
 | `INNSEGL_ACME_STATE_DIR` | `/run/innsegl/acme` | the ACME account and both certificates |

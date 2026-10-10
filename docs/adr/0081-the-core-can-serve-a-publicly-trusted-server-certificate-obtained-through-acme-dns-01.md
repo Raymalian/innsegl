@@ -30,7 +30,13 @@ itself. It has to be a DNS record in the name's own zone.
    2026-10-02 amendment).
 3. The DNS record is written through a DNS provider chosen by configuration,
    through a maintained ACME library that supports many providers, pinned to
-   a version. No provider is built into the code.
+   a version. No provider is the default. The build compiles in a set of
+   them, the ones that take a plain API token plus three generic ones (RFC
+   2136 dynamic updates, an HTTP endpoint, a command) that reach any DNS a
+   deployment runs. Not all of them: the library's all-providers set more
+   than doubles the binary, past the size the identity agent hashes a
+   workload's binary up to, and the core would get no identity (measured in
+   an update rehearsal). A test holds the binary under that size.
 4. The DNS credential is a per-host credential (ADR-0078): a file in its own
    volume, read-only to the core and to nothing else, handed to the provider
    as the `_FILE` form of the provider's own setting. The operator scopes it
