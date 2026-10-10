@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -129,7 +130,32 @@ func hashSecret(secret string) string {
 // Audit
 // ---------------------------------------------------------------------------
 
-// AuditEntry is one row of innsegl_auth.audit.
+// grantSubject is a repository grant as the audit trail names it: by its
+// grant id, never by the repository's name.
+func grantSubject(grant int64) string { return "grant:" + strconv.FormatInt(grant, 10) }
+
+// reposDetail describes a repos list without naming a repository: whether it
+// is every repository, and how many it names.
+func reposDetail(repos []string) map[string]any {
+	all := len(repos) == 0 || (len(repos) == 1 && repos[0] == AllRepos)
+	n := len(repos)
+	if all {
+		n = 0
+	}
+	return map[string]any{"all_repositories": all, "repositories": n}
+}
+
+func withKind(d map[string]any, kind string) map[string]any {
+	d["kind"] = kind
+	return d
+}
+
+// AuditEntry is one row of innsegl_auth.audit. It holds identifiers only —
+// account, user, installation, grant and token ids — and never a name: no
+// organisation or machine name, no display name, no repository or branch.
+// The trail is append-only, so a name written here could never be erased
+// (#482); with ids only, erasing an organisation's rows elsewhere leaves
+// nothing readable here about it.
 type AuditEntry struct {
 	Actor     string // user id; empty for the system or the operator's CLI
 	AccountID string // empty when the action belongs to no account
@@ -246,7 +272,7 @@ func (s *Store) CreateAccount(ctx context.Context, p CreateAccountParams) (Accou
 			return fmt.Errorf("accounts: creating the account: %w", qerr)
 		}
 		if aerr := appendAudit(ctx, tx, AuditEntry{Actor: p.Actor, AccountID: a.ID, Action: "account.created",
-			Subject: a.ID, Detail: map[string]any{"name": a.Name, "operator": a.Operator}}); aerr != nil || p.Owner == "" {
+			Subject: a.ID, Detail: map[string]any{"operator": a.Operator}}); aerr != nil || p.Owner == "" {
 			return aerr
 		}
 		return insertMemberTx(ctx, tx, a.ID, p.Owner, RoleOwner, p.Actor, nil)
@@ -331,15 +357,17 @@ func (s *Store) GrantRepo(ctx context.Context, accountID, repo, actor string) er
 		case !errors.Is(err, pgx.ErrNoRows):
 			return fmt.Errorf("accounts: reading the grant: %w", err)
 		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO innsegl_auth.repo_grants (account_id, repo) VALUES ($1, $2)`, accountID, repo); err != nil {
+		var grant int64
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO innsegl_auth.repo_grants (account_id, repo) VALUES ($1, $2) RETURNING grant_id`,
+			accountID, repo).Scan(&grant); err != nil {
 			if pgCode(err) == "23505" {
 				return ErrRepoHeld
 			}
 			return fmt.Errorf("accounts: granting the repository: %w", err)
 		}
 		return appendAudit(ctx, tx, AuditEntry{Actor: actor, AccountID: accountID, Action: "repo_grant.created",
-			Subject: repo})
+			Subject: grantSubject(grant)})
 	})
 }
 
@@ -394,7 +422,7 @@ func (s *Store) CreateEnrolmentToken(ctx context.Context, p TokenParams) (string
 		}
 		return appendAudit(ctx, tx, AuditEntry{Actor: p.CreatedBy, AccountID: p.AccountID,
 			Action: "enrolment_token.created", Subject: tokenID,
-			Detail: map[string]any{"repos": repos, "kind": kind}})
+			Detail: withKind(reposDetail(repos), kind)})
 	})
 	if err != nil {
 		return "", TokenMeta{}, err
@@ -529,7 +557,7 @@ func insertInstallationTx(ctx context.Context, tx pgx.Tx, id, accountID, created
 	}
 	if err := appendAudit(ctx, tx, AuditEntry{Actor: createdBy, AccountID: accountID,
 		Action: "installation.created", Subject: id,
-		Detail: map[string]any{"name": name, "kind": kind, "repos": repos}}); err != nil {
+		Detail: withKind(reposDetail(repos), kind)}); err != nil {
 		return Installation{}, err
 	}
 	return out, nil
@@ -665,16 +693,17 @@ func (s *Store) ClaimRepo(ctx context.Context, installationID, repo string) (boo
 		if status != StatusActive || !reposAdmit(repos, repo) {
 			return nil
 		}
-		tag, err := tx.Exec(ctx,
+		var grant int64
+		err = tx.QueryRow(ctx,
 			`INSERT INTO innsegl_auth.repo_grants (account_id, repo) VALUES ($1, $2)
-			 ON CONFLICT (repo) WHERE until IS NULL DO NOTHING`, account, repo)
-		if err != nil {
+			 ON CONFLICT (repo) WHERE until IS NULL DO NOTHING RETURNING grant_id`, account, repo).Scan(&grant)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("accounts: claiming the repository: %w", err)
 		}
-		if tag.RowsAffected() == 1 {
+		if err == nil {
 			in = true
 			return appendAudit(ctx, tx, AuditEntry{Actor: ClaimActor(installationID), AccountID: account,
-				Action: "repo_grant.created", Subject: repo,
+				Action: "repo_grant.created", Subject: grantSubject(grant),
 				Detail: map[string]any{"installation_id": installationID, "source": "first use"}})
 		}
 		var holder string

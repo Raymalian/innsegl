@@ -13,7 +13,6 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -414,7 +413,7 @@ func (s *Server) handleMintFinish(w http.ResponseWriter, r *http.Request) {
 	// The token is in the answer and nowhere else: not the auth event, not a
 	// log line, not a cache.
 	s.recordAuth(ctx, AuthEventEnrolmentTokenMinted, userID,
-		"organisation "+req.OrganisationID+", "+req.Kind+", repos "+strings.Join(req.Repos, ","))
+		"organisation "+req.OrganisationID+", "+req.Kind+", "+strconv.Itoa(len(req.Repos))+" repos entries")
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, EnrolmentToken{
 		Token: token, ExpiresAt: expiresAt.UTC(), OrganisationID: req.OrganisationID,

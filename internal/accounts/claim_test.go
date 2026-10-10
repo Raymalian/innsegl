@@ -52,7 +52,8 @@ func TestClaimRepoGrantsAnUnheldRepositoryOnFirstUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := c.QueryRow(cctx, `SELECT count(*), min(actor) FROM innsegl_auth.audit
-	                             WHERE account_id = $1 AND action = 'repo_grant.created' AND subject = $2`,
+	                             WHERE account_id = $1 AND action = 'repo_grant.created' AND subject = (
+	                               SELECT 'grant:' || grant_id FROM innsegl_auth.repo_grants WHERE repo = $2 AND until IS NULL)`,
 		a.ID, fresh).Scan(&audits, &actor); err != nil {
 		t.Fatal(err)
 	}

@@ -324,6 +324,60 @@ func TestACC010ErasingAnOrganisationLeavesTheChainByteIdentical(t *testing.T) {
 	}
 }
 
+// ACC-013: the audit trail holds no name — no organisation or machine name
+// and no repository literal — so erasing an organisation leaves nothing
+// readable about it in any accounts table, while its audit rows stay.
+func TestACC013AfterErasureNoAccountsTableNamesTheOrganisation(t *testing.T) {
+	f := newErasureFixture(t)
+	ctx := tctx(t)
+	c, cctx := ownerConn(t, f.e.ownerDSN)
+	// A passkey confirmation still pending for the organisation holds its
+	// request, repositories included, as a mint's does.
+	if _, err := c.Exec(cctx, `INSERT INTO innsegl_auth.webauthn_ceremonies
+		(ceremony_id, kind, session_data, pending_user_id, expires_at)
+		VALUES ('cer-beta', 'mint_enrolment_token', $1, 'u-beta-owner', now() + interval '5 minutes')`,
+		`{"request":{"organisation_id":"`+f.beta.ID+`","repos":["`+f.betaRepo+`"]}}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := erasure.Organisation(ctx, f.ownerPool(t), f.beta.ID, "", mayErase); err != nil {
+		t.Fatal(err)
+	}
+
+	var auditRows int
+	if err := c.QueryRow(cctx, `SELECT count(*) FROM innsegl_auth.audit WHERE account_id = $1`, f.beta.ID).Scan(&auditRows); err != nil {
+		t.Fatal(err)
+	}
+	if auditRows < 5 {
+		t.Fatalf("the erased organisation has %d audit rows; the trail is append-only and keeps them", auditRows)
+	}
+	rows, err := c.Query(cctx, `SELECT table_name FROM information_schema.tables
+		WHERE table_schema = 'innsegl_auth' AND table_type = 'BASE TABLE'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		tables = append(tables, n)
+	}
+	rows.Close()
+	for _, table := range tables {
+		var dump string
+		if err := c.QueryRow(cctx, `SELECT coalesce(string_agg(row_to_json(x)::text, E'\n'), '') FROM innsegl_auth.`+table+` x`).Scan(&dump); err != nil {
+			t.Fatal(err)
+		}
+		for what, name := range map[string]string{"organisation name": "Beta Corp", "repository": f.betaRepo,
+			"machine name": "beta laptop"} {
+			if strings.Contains(dump, name) {
+				t.Errorf("innsegl_auth.%s still holds the erased organisation's %s", table, what)
+			}
+		}
+	}
+}
+
 // ACC-011: who may erase, and what is never erased.
 func TestACC011ErasureIsTheOwnersAndNeverTheOperators(t *testing.T) {
 	f := newErasureFixture(t)

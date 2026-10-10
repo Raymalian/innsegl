@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -90,6 +91,20 @@ func TestACC004MemberRoutesRefuseAndFailCleanly(t *testing.T) {
 	}
 	if !RoleMay(roleOwner, PrivilegeEraseOrganisation) || RoleMay(roleAdmin, PrivilegeEraseOrganisation) {
 		t.Error("RoleMay disagrees with the table")
+	}
+}
+
+// ACC-013 on the API: the auth events a machine's connection records name
+// no repository (the auth tables keep no name an erasure would have to find).
+func TestACC013TheMintAuthEventNamesNoRepository(t *testing.T) {
+	h := newOrgHarness(t, roleOwner, true)
+	const repo = "github.com/example/secret-plan"
+	if a := h.confirm(t, "enrolment-tokens", EnrolmentTokenRequest{OrganisationID: orgA, Repos: []string{repo}}, h.auth); a.status != http.StatusOK {
+		t.Fatalf("mint: %d %s", a.status, a.body)
+	}
+	events := h.authEventDetails(t)
+	if !strings.Contains(events, AuthEventEnrolmentTokenMinted+":") || strings.Contains(events, "secret-plan") {
+		t.Errorf("the mint's auth event must exist and name no repository:\n%s", events)
 	}
 }
 

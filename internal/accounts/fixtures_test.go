@@ -4,6 +4,7 @@ package accounts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -18,17 +19,18 @@ import (
 // is ErrNotFound.
 func (s *Store) EndRepoGrant(ctx context.Context, accountID, repo, actor string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx,
+		var grant int64
+		err := tx.QueryRow(ctx,
 			`UPDATE innsegl_auth.repo_grants SET until = clock_timestamp()
-			  WHERE account_id = $1 AND repo = $2 AND until IS NULL`, accountID, repo)
+			  WHERE account_id = $1 AND repo = $2 AND until IS NULL RETURNING grant_id`, accountID, repo).Scan(&grant)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		if err != nil {
 			return fmt.Errorf("accounts: ending the grant: %w", err)
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrNotFound
-		}
 		return appendAudit(ctx, tx, AuditEntry{Actor: actor, AccountID: accountID, Action: "repo_grant.ended",
-			Subject: repo})
+			Subject: grantSubject(grant)})
 	})
 }
 

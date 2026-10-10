@@ -234,6 +234,13 @@ func Organisation(ctx context.Context, db DB, accountID, actor string, mayErase 
 			return err
 		}
 
+		// A passkey confirmation still pending for the organisation holds the
+		// request it confirms, repositories included: it goes with it.
+		if _, err := tx.Exec(ctx, `DELETE FROM innsegl_auth.webauthn_ceremonies
+			WHERE session_data->'request'->>'organisation_id' = $1`, accountID); err != nil {
+			return fmt.Errorf("deleting the organisation's pending confirmations: %w", err)
+		}
+
 		for _, d := range []struct {
 			table string
 			n     *int

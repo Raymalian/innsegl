@@ -68,7 +68,7 @@ func TestHostedRepositoryIsRecordedOnFirstUse(t *testing.T) {
 		t.Fatalf("live grants for the organisation on %s = %d, want 1", fuFresh, n)
 	}
 	if n := f.count(t, `SELECT count(*) FROM innsegl_auth.audit
-	                     WHERE account_id = $1 AND action = 'repo_grant.created' AND subject = $2 AND actor = $3`,
+	                     WHERE account_id = $1 AND action = 'repo_grant.created' AND subject = (SELECT 'grant:' || grant_id FROM innsegl_auth.repo_grants WHERE repo = $2 AND until IS NULL) AND actor = $3`,
 		f.account, fuFresh, accounts.ClaimActor(c.id)); n != 1 {
 		t.Fatalf("audit rows for the first-use grant = %d, want 1", n)
 	}
