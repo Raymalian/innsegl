@@ -540,6 +540,13 @@ func (s *Store) ListRuns(ctx context.Context, f RunFilter) (RunPage, error) {
 	if err := rows.Err(); err != nil {
 		return RunPage{}, fmt.Errorf("api: listing runs: %w", err)
 	}
+	parents := make([]*string, len(page.Runs))
+	for i := range page.Runs {
+		parents[i] = &page.Runs[i].ParentRunID
+	}
+	if err := s.hideRelativesOutOfScope(ctx, parents...); err != nil {
+		return RunPage{}, err
+	}
 	if len(page.Runs) == limit && len(page.Runs) > 0 {
 		page.NextCursor = strconv.FormatInt(page.Runs[len(page.Runs)-1].ChainPosition, 10)
 	}
@@ -607,6 +614,9 @@ func (s *Store) Run(ctx context.Context, runID string) (RunDetail, error) {
 	d.RegisteredAt = d.RegisteredAt.UTC()
 	d.LastEventAt = d.LastEventAt.UTC()
 	normaliseRunEvidence(&d.RunSummary, parent, horizon)
+	if herr := s.hideRelativesOutOfScope(ctx, &d.ParentRunID); herr != nil {
+		return RunDetail{}, herr
+	}
 	d.RestoreHorizonSeconds = int64(horizon.Seconds())
 	d.DataAsOf = now
 

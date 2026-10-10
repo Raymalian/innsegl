@@ -85,6 +85,15 @@ func (rs *recordServer) buildRunRecord(ctx context.Context, runID string) (RunRe
 	if err != nil {
 		return RunRecord{}, err
 	}
+	// RM-307: relatives out of the reader's scope are not part of this
+	// record at all: not in the tree, the lineage, the children or the
+	// run's own parent and fork fields.
+	if family, err = rs.store.familyInScope(ctx, runID, family); err != nil {
+		return RunRecord{}, err
+	}
+	if err = rs.store.hideRelativesOutOfScope(ctx, &run.ParentRunID, &run.ForkedFromRunID, &reg.ParentRunID); err != nil {
+		return RunRecord{}, err
+	}
 	// Direct children, oldest-first — recordspawn.go's own FIFO rule for
 	// matching a spawn step against its candidates. RunRecord.Children
 	// itself is reordered newest-first separately (recordagent.go's own

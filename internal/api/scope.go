@@ -186,3 +186,79 @@ func (s *Store) visibleRuns(ctx context.Context, ids []string) (map[string]bool,
 	}
 	return out, rows.Err()
 }
+
+// hideRelativesOutOfScope blanks every run id among ids that is out of
+// ctx's scope: a parent or fork named on a run the reader may see, which
+// must not name a run they may not.
+func (s *Store) hideRelativesOutOfScope(ctx context.Context, ids ...*string) error {
+	var named []string
+	for _, id := range ids {
+		if *id != "" {
+			named = append(named, *id)
+		}
+	}
+	if len(named) == 0 {
+		return nil
+	}
+	visible, err := s.visibleRuns(ctx, named)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if *id != "" && !visible[*id] {
+			*id = ""
+		}
+	}
+	return nil
+}
+
+// familyInScope keeps runID and the members of its family in ctx's scope.
+// A kept member whose parent is dropped reads as having none.
+func (s *Store) familyInScope(ctx context.Context, runID string, family []familyNode) ([]familyNode, error) {
+	ids := make([]string, len(family))
+	for i, n := range family {
+		ids[i] = n.RunID
+	}
+	visible, err := s.visibleRuns(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	visible[runID] = true
+	out := family[:0:0]
+	for _, n := range family {
+		if !visible[n.RunID] {
+			continue
+		}
+		if n.ParentRunID != "" && !visible[n.ParentRunID] {
+			n.ParentRunID = ""
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+// eventsInScope answers, of eventIDs, the events in ctx's scope and whether
+// each is an alert.
+func (s *Store) eventsInScope(ctx context.Context, eventIDs []string) (map[string]bool, error) {
+	machines, unowned := scopeArgs(ctx)
+	rows, err := s.pool.Query(ctx, `
+		SELECT event_id::text,
+		       event_type IN ('unattributed_signature_detected', 'ledger_drift_detected')
+		  FROM innsegl.events
+		 WHERE event_id::text = ANY($1) AND `+scopeSQL("run_id", 2, 3),
+		nonNilIDs(eventIDs), machines, unowned)
+	if err != nil {
+		return nil, fmt.Errorf("api: reading which events are in scope: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		var alert bool
+		if err := rows.Scan(&id, &alert); err != nil {
+			return nil, fmt.Errorf("api: reading which events are in scope: %w", err)
+		}
+		out[id] = alert
+	}
+	return out, rows.Err()
+}

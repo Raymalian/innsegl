@@ -175,9 +175,14 @@ func newOrgHarness(t *testing.T, role string, withOrgs bool, opts ...func(*Serve
 	t.Cleanup(authStore.Close)
 
 	orgs := &fakeOrgs{memberships: map[string][]OrgMembership{}, ownerDSN: m.ownerDSN}
+	resolver, err := OpenResolver(context.Background(), m.resolverDSN)
+	if err != nil {
+		t.Fatalf("OpenResolver: %v", err)
+	}
+	t.Cleanup(resolver.Close)
 	cfg := ServerConfig{
 		Store: store, Prover: newProofScenario(t, proofOptions{}).prover(t),
-		AuthStore: authStore, WebAuthn: testWebAuthnConfig,
+		AuthStore: authStore, WebAuthn: testWebAuthnConfig, Resolver: resolver,
 	}
 	if withOrgs {
 		cfg.Organisations = orgs
