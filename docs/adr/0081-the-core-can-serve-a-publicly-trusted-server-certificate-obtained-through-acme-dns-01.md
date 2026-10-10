@@ -52,7 +52,11 @@ itself. It has to be a DNS record in the name's own zone.
 7. The account and both certificates are kept in a volume, so a restart
    orders nothing. A certificate is renewed with a third of its lifetime
    left; a failed renewal is retried hourly while the certificate in use is
-   still valid.
+   still valid. A first order that fails never keeps the core down: it
+   serves its own CA's certificate, says why, and tries again until the
+   public one is obtained, then swaps it in (measured in an update
+   rehearsal: an order that failed at start had the core restarting in a
+   loop).
 8. `innsegl status` names the server certificate's source, names and expiry.
 9. Tests never reach a real certificate authority. They run against a local
    ACME test server with a fake DNS.

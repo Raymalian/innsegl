@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-acme/lego/v4/challenge/dns01"
@@ -109,6 +110,9 @@ func describeServerCert(st serverCertStatus) string {
 	if st.Source != serverCertACME {
 		out = strings.Replace(out, "the core's own CA", "own CA", 1)
 	}
+	if st.Problem != "" {
+		out += "; public certificate not obtained: " + st.Problem
+	}
 	return out
 }
 
@@ -165,7 +169,10 @@ func acmeConfigFromEnvSet(getenv func(string) string, setenv func(string, string
 				servers = append(servers, s)
 			}
 		}
-		cfg.ChallengeOptions = append(cfg.ChallengeOptions, dns01.AddRecursiveNameservers(servers))
+		// Asked through them only: the zone's own servers may not be
+		// reachable from where the core runs.
+		cfg.ChallengeOptions = append(cfg.ChallengeOptions, dns01.AddRecursiveNameservers(servers),
+			dns01.DisableAuthoritativeNssPropagationRequirement())
 	}
 	if f := getenv(envACMERootsFile); f != "" {
 		// A local ACME server's own TLS (a test server): its root beside the
@@ -187,28 +194,101 @@ func acmeConfigFromEnvSet(getenv func(string) string, setenv func(string, string
 	return cfg, true, nil
 }
 
-// acmeRenewer renews the ACME certificates and rewrites the dashboard's file
-// after each renewal. It checks hourly; a failure is logged and tried again
-// at the next check, while the certificate in use is still valid.
+// acmeSource is an obtained ACME certificate pair (acme.Manager).
+type acmeSource interface {
+	serverCerts
+	RenewDue(ctx context.Context) (int, error)
+}
+
+// switchableCerts is the listener's certificate source when ACME is asked
+// for: the own CA's until the public certificate is obtained, then that one,
+// swapped in with no restart (TLS-011). A public certificate that cannot be
+// obtained never keeps the core down; the status says why.
+type switchableCerts struct {
+	mu      sync.RWMutex
+	cur     serverCerts
+	problem string
+}
+
+func newSwitchableCerts(initial serverCerts) *switchableCerts { return &switchableCerts{cur: initial} }
+
+func (s *switchableCerts) current() serverCerts {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cur
+}
+
+func (s *switchableCerts) GetCertificate(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return s.current().GetCertificate(h)
+}
+
+func (s *switchableCerts) WriteDashboardCert(dir string) (time.Time, error) {
+	return s.current().WriteDashboardCert(dir)
+}
+
+func (s *switchableCerts) Status() serverCertStatus {
+	st := s.current().Status()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	st.Problem = s.problem
+	return st
+}
+
+func (s *switchableCerts) set(c serverCerts) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cur, s.problem = c, ""
+}
+
+func (s *switchableCerts) failed(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.problem = err.Error()
+}
+
+// acmeRenewer obtains the public certificates, then renews them and rewrites
+// the dashboard's file after each renewal. Until they are obtained it tries
+// every retry; after, it checks every `every`. A failure is logged and tried
+// again, while the certificate in use is still valid.
 type acmeRenewer struct {
-	m            *acme.Manager
+	certs        *switchableCerts
+	obtain       func(context.Context) (acmeSource, error)
+	m            acmeSource
 	dashboardDir string
 	log          *serveLog
 	every        time.Duration
+	retry        time.Duration
 }
 
 func (a *acmeRenewer) run(ctx context.Context) {
 	for {
+		a.check(ctx)
+		wait := a.every
+		if a.m == nil && a.retry > 0 {
+			wait = a.retry
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(a.every):
+		case <-time.After(wait):
 		}
-		a.check(ctx)
 	}
 }
 
 func (a *acmeRenewer) check(ctx context.Context) {
+	if a.m == nil {
+		m, err := a.obtain(ctx)
+		if err != nil {
+			a.certs.failed(err)
+			a.log.warn("could not obtain the public server certificate; serving the own CA's and trying again", "err", err)
+			return
+		}
+		a.m = m
+		a.certs.set(m)
+		a.log.info("serving the public server certificate", "expires", m.Status().NotAfter.UTC().Format(time.RFC3339))
+		a.writeDashboard()
+		return
+	}
 	renewed, err := a.m.RenewDue(ctx)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		a.log.warn("could not renew the server certificate; trying again", "err", err)
@@ -217,9 +297,14 @@ func (a *acmeRenewer) check(ctx context.Context) {
 		return
 	}
 	a.log.info("renewed the server certificate", "expires", a.m.Status().NotAfter.UTC().Format(time.RFC3339))
-	if a.dashboardDir != "" {
-		if _, werr := a.m.WriteDashboardCert(a.dashboardDir); werr != nil {
-			a.log.warn("could not write the renewed dashboard certificate", "dir", a.dashboardDir, "err", werr)
-		}
+	a.writeDashboard()
+}
+
+func (a *acmeRenewer) writeDashboard() {
+	if a.dashboardDir == "" {
+		return
+	}
+	if _, err := a.m.WriteDashboardCert(a.dashboardDir); err != nil {
+		a.log.warn("could not write the dashboard certificate", "dir", a.dashboardDir, "err", err)
 	}
 }

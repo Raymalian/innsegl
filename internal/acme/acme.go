@@ -100,6 +100,8 @@ type Status struct {
 	Source   string    `json:"source"`
 	Names    []string  `json:"names"`
 	NotAfter time.Time `json:"not_after"`
+	// Problem is why a public certificate asked for is not being served.
+	Problem string `json:"problem,omitempty"`
 }
 
 // Manager keeps the two certificates current.

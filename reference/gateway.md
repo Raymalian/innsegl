@@ -56,13 +56,15 @@ Read from the environment when the gateway starts (`cmd/innsegl/gateway.go`):
 | `INNSEGL_ACME_CREDENTIAL_DIR` | `/run/innsegl/credentials/acme-dns` | where the credential file `dns-token` is |
 | `INNSEGL_ACME_STATE_DIR` | `/run/innsegl/acme` | the ACME account and both certificates |
 | `INNSEGL_ACME_ROOTS_FILE` | unset | an extra root for reaching the ACME directory, for a local ACME test server |
-| `INNSEGL_ACME_DNS_RESOLVERS` | the system's | `host:port` list the DNS-01 check asks whether the record is out (a split-horizon or test DNS) |
+| `INNSEGL_ACME_DNS_RESOLVERS` | the system's | `host:port` list the DNS-01 check asks, and only those, whether the record is out (a split-horizon or test DNS) |
 
 With `INNSEGL_ACME=on` the core obtains two certificates for the DNS names
 in `INNSEGL_GATEWAY_CERT_NAMES` (addresses are left out: a public
 certificate names none), one for the gateway and one for the dashboard, each
 with its own key. It renews each with a third of its lifetime left, checking
-hourly, and swaps it in with no restart. Hosted mode still requires a client
+hourly, and swaps it in with no restart. A first order that fails never keeps
+the core down: it serves its own CA's certificate, the status line says why,
+and it tries again every 10 minutes. Hosted mode still requires a client
 certificate from the deployment's own authority. `innsegl status` shows a
 `server certificate` line: its source, names and expiry. Clients trust the
 system's roots for a core with a public certificate once `innsegl connect`

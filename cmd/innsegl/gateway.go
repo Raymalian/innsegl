@@ -945,35 +945,32 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		return nil, fmt.Errorf("configure the public server certificate ($%s): %w", envACME, err)
 	}
 	if acmeOn {
-		m, mErr := acme.New(boot, acmeCfg)
-		if mErr != nil {
-			running.Close()
-			return nil, fmt.Errorf("obtain the public server certificate: %w", mErr)
+		// The own CA's until the public certificate is obtained; ordering
+		// never holds up start-up or keeps the core down (TLS-011).
+		sw := newSwitchableCerts(certs)
+		certs = sw
+		running.acmeRenewer = &acmeRenewer{
+			certs: sw, dashboardDir: os.Getenv(envDashboardTLSDir), log: log,
+			every: time.Hour, retry: 10 * time.Minute,
+			obtain: func(ctx context.Context) (acmeSource, error) { return acme.New(ctx, acmeCfg) },
 		}
-		certs = m
-		running.acmeRenewer = &acmeRenewer{m: m, dashboardDir: os.Getenv(envDashboardTLSDir), log: log, every: time.Hour}
-		log.info("the server certificate is public (ACME)", "names", strings.Join(acmeCfg.Names, ","),
-			"expires", m.Status().NotAfter.UTC().Format(time.RFC3339))
+		log.info("a public server certificate is asked for; serving the own CA's until it is obtained",
+			"names", strings.Join(acmeCfg.Names, ","))
 	}
 	if hosted != nil {
 		hosted.serverCert = certs.Status
 	}
 
 	if dir := os.Getenv(envDashboardTLSDir); dir != "" {
-		if acmeOn {
-			// The ACME renewer rewrites it after each renewal.
-			if _, dErr := certs.WriteDashboardCert(dir); dErr != nil {
-				running.Close()
-				return nil, fmt.Errorf("write the dashboard's certificate ($%s): %w", envDashboardTLSDir, dErr)
-			}
-		} else {
-			d, dErr := openDashboardCert(ca, dir, log)
-			if dErr != nil {
-				running.Close()
-				return nil, fmt.Errorf("write the dashboard's certificate ($%s): %w", envDashboardTLSDir, dErr)
-			}
-			running.dashboardCert = d
+		// Written through the source in use: the own CA's, renewed by
+		// dashboardCert; once a public certificate is obtained the ACME
+		// renewer writes it, and dashboardCert's own renewal is far off.
+		d, dErr := openDashboardCert(certs, dir, log)
+		if dErr != nil {
+			running.Close()
+			return nil, fmt.Errorf("write the dashboard's certificate ($%s): %w", envDashboardTLSDir, dErr)
 		}
+		running.dashboardCert = d
 	}
 
 	mux := http.NewServeMux()

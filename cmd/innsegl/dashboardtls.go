@@ -21,7 +21,7 @@ const dashboardCertRetry = time.Minute
 // written again before it expires. The web server reads the file on every
 // handshake, so nothing has to be reloaded.
 type dashboardCert struct {
-	ca       *gateway.CA
+	ca       dashboardWriter
 	dir      string
 	log      *serveLog
 	notAfter time.Time
@@ -30,7 +30,13 @@ type dashboardCert struct {
 
 // openDashboardCert writes the first certificate. A directory the core
 // cannot write is a configuration error, refused at boot like the CA's own.
-func openDashboardCert(ca *gateway.CA, dir string, log *serveLog) (*dashboardCert, error) {
+// dashboardWriter writes the dashboard's certificate: the own CA, or the
+// source in use when a public certificate is asked for (#473).
+type dashboardWriter interface {
+	WriteDashboardCert(dir string) (time.Time, error)
+}
+
+func openDashboardCert(ca dashboardWriter, dir string, log *serveLog) (*dashboardCert, error) {
 	notAfter, err := ca.WriteDashboardCert(dir)
 	if err != nil {
 		return nil, err

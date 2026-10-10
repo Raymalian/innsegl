@@ -62,7 +62,7 @@ func TestTLS007ACMEIsOffByDefaultAndConfiguredFromSettings(t *testing.T) {
 		t.Error("challenge options set with no resolvers asked for")
 	}
 	set[envACMEResolvers] = "192.0.2.53:53, 192.0.2.54:53"
-	if cfg, _, err = acmeConfigFromEnvSet(env2(set), setenv); err != nil || len(cfg.ChallengeOptions) != 1 {
+	if cfg, _, err = acmeConfigFromEnvSet(env2(set), setenv); err != nil || len(cfg.ChallengeOptions) != 2 {
 		t.Fatalf("with resolvers: %d options, %v; want the resolvers the DNS-01 check asks", len(cfg.ChallengeOptions), err)
 	}
 	delete(set, envACMEResolvers)
