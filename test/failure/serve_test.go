@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -800,10 +801,12 @@ func TestServeRunsUnderAnAppendOnlyDatabaseRole(t *testing.T) {
 }
 
 // grantAppendOnlyRole creates the role doc 05 §1 describes and returns a DSN
-// for it. The grants are the smallest set that lets the MCP do its job: read
-// the chain's identity, append events, and keep the idempotency store — which
-// is UPDATEable by design (ADR-0017 records a reply into a claimed row) and
-// whose TRUNCATE migration 0002 already revokes.
+// for it. Its grants are the SHIPPED ones: deploy/compose/innsegl/appendonly.sql,
+// the file db-init applies to the appender every deployment's core connects
+// as, with psql's :"role" and :"db" filled in. This test once wrote its own
+// list, which drifted from that file when migration 0016 added tables the
+// core reads at start (ADR-0080): production was granted them and this role
+// was not. One file now decides both.
 func grantAppendOnlyRole(t *testing.T, ownerDSN, role, password string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -816,18 +819,23 @@ func grantAppendOnlyRole(t *testing.T, ownerDSN, role, password string) string {
 	defer func() { _ = conn.Close(context.Background()) }()
 
 	database := databaseOf(t, ownerDSN)
-	for _, stmt := range []string{
-		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", role, password),
-		fmt.Sprintf("GRANT CONNECT ON DATABASE %q TO %s", database, role),
-		fmt.Sprintf("GRANT USAGE ON SCHEMA innsegl TO %s", role),
-		fmt.Sprintf("GRANT SELECT ON innsegl.chain TO %s", role),
-		// The whole point: SELECT and INSERT, and nothing that unmakes a row.
-		fmt.Sprintf("GRANT SELECT, INSERT ON innsegl.events TO %s", role),
-		fmt.Sprintf("GRANT SELECT, INSERT, UPDATE ON innsegl.idempotency TO %s", role),
-	} {
-		if _, err := conn.Exec(ctx, stmt); err != nil {
-			t.Fatalf("%s: %v", stmt, err)
-		}
+	shipped, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy", "compose", "innsegl", "appendonly.sql"))
+	if err != nil {
+		t.Fatalf("read the shipped grants: %v", err)
+	}
+	grants := strings.NewReplacer(
+		`:"role"`, pgx.Identifier{role}.Sanitize(),
+		`:"db"`, pgx.Identifier{database}.Sanitize(),
+	).Replace(string(shipped))
+	if strings.Contains(grants, `:"`) {
+		t.Fatalf("appendonly.sql uses a psql variable this test does not fill in")
+	}
+	if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", role, password)); err != nil {
+		t.Fatalf("create the role: %v", err)
+	}
+	// One simple-protocol Exec: the file is a script of statements.
+	if _, err := conn.Exec(ctx, grants); err != nil {
+		t.Fatalf("apply appendonly.sql to %s: %v", role, err)
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 60*time.Second)
