@@ -541,7 +541,7 @@ function MintedToken({
           </code>
           <CopyButton value={command} label={a.copyCommand} />
         </div>
-        <span className={`text-micro ${secondaryText}`}>{a.connectCaNote}</span>
+        {caFingerprint === "" && <span className={`text-micro ${secondaryText}`}>{a.connectCaNote}</span>}
       </div>
       <p className="text-micro">
         <span className={fieldLabel}>{a.expiresLabel}</span>{" "}
