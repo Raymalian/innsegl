@@ -95,8 +95,18 @@ per-repository mirror (ADR-0065) two things besides a commit's objects:
   only when its mirror holds that tree, waiting at most 10 s on the
   recording, never on the request. A snapshot that does not arrive leaves the
   tool call recorded without one. The ledger holds the hash only (E4).
-- A branch push that is not a fast-forward of the mirror's branch is refused
-  and does not retry: the mirror keeps what it had.
+- A branch push that is not a fast-forward of the mirror's branch (a
+  rebase, an amend, a reset, or a branch moved on from another machine) is
+  refused, and the mirror keeps what it had: it holds no rewrites. The
+  client records the refusal once, in `~/.innsegl/client/mirror-behind.json`,
+  and `innsegl status` shows a `mirror WARN` line naming the branch, the
+  repository, since when and why, and what to do: merge rather than rebase or
+  amend once a branch has reached the mirror, or carry on under a new branch
+  name. The next push of that branch the mirror takes clears it. Signed
+  commits are kept either way.
+- The dashboard's per-step diffs read the snapshot trees from the mirror
+  (`innsegl api -mirror-dir`). A root run's first step has no "before" there,
+  so it shows no diff.
 
 ### Commit author per repository
 
@@ -180,6 +190,8 @@ behind the client certificate guard, and never another installation's).
   the client's private snapshot store and index. A cache; the core's mirror is
   the evidence.
 - `<git common dir>/innsegl/last-push.log`: the last mirror push's output.
+- `~/.innsegl/client/mirror-behind.json` (0600 folder): branches the mirror
+  refused as a rewrite, read by `innsegl status`.
 - `~/.innsegl/client/authors.json` (0600): the repositories set to `operator` mode, and the optional typed operator identity.
 - On the core, `innsegl_auth.installations.operator_author_name` and
   `operator_author_email` (migration 0015): each installation's pinned pair.
@@ -218,6 +230,11 @@ behind the client certificate guard, and never another installation's).
   commit send nothing; the mirror's fast-forward and write-once rules
 - `internal/gateway/mirrorsnapshot_test.go`, `cmd/innsegl/gatewaysnapshot_test.go`
   (SNAP-008): the core records a client's snapshot only for a tree its mirror holds
+- `internal/client/mirrorbehind_test.go`, `internal/commitpath/mirrordiverged_test.go`,
+  `cmd/innsegl/mirrorbehind_test.go` (SNAP-009): a refused rewrite is recorded once,
+  shown by `innsegl status`, and cleared by the next push the mirror takes
+- `internal/api/mirrorsnapshot_test.go`, `test/deploy/coremirror_test.go` (API-034):
+  the run page's step diffs read the mirror
 - `cmd/innsegl/hooklinked_test.go` (CMT-019, CMT-020): an unlinked repository is left alone;
   a linked one and its worktrees are rewritten as before
 - `cmd/innsegl/init*_test.go` (INIT-001 to INIT-010)

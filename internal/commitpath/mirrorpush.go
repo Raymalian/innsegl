@@ -37,6 +37,19 @@ type Snapshot struct {
 	Objects string
 }
 
+// ErrBranchDiverged is a branch push the mirror refused because it is not a
+// fast-forward of the mirror's copy: the branch was rewritten here (a
+// rebase, an amend, a reset), or moved on from another machine. The mirror
+// keeps no rewrites, so its copy stays where it was (#465).
+var ErrBranchDiverged = errors.New("the core's mirror holds a copy of this branch that this push does not build on; " +
+	"it keeps no rewrites")
+
+// divergedMarks are what git says, on either side, for a push that is not
+// a fast-forward: the client's own check ("non-fast-forward", or "fetch
+// first" when it lacks the mirror's tip) and the mirror's
+// receive.denyNonFastForwards.
+var divergedMarks = []string{"non-fast-forward", "fetch first", "denying non-fast-forward"}
+
 // PushBranch pushes commit to branch on the core's mirror of dir's
 // repository (#465). The core moves a branch only forward.
 func (c Client) PushBranch(ctx context.Context, dir, branch, commit string) error {
@@ -52,7 +65,15 @@ func (c Client) PushBranch(ctx context.Context, dir, branch, commit string) erro
 	}
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	return c.pushRef(ctx, dir, nil, repo, commit+":refs/heads/"+branch)
+	err = c.pushRef(ctx, dir, nil, repo, commit+":refs/heads/"+branch)
+	if err != nil {
+		for _, mark := range divergedMarks {
+			if strings.Contains(err.Error(), mark) {
+				return fmt.Errorf("%w: %w", ErrBranchDiverged, err)
+			}
+		}
+	}
+	return err
 }
 
 // TakeSnapshot writes dir's working tree as it is now -- tracked and

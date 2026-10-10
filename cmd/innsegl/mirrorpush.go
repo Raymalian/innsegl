@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -12,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/commitpath"
+	"innsegl.dev/innsegl/internal/workspace"
 )
 
 // mirrorpush.go — #465 and #467, ADR-0065 decisions 2 and 3: what a hosted
@@ -205,6 +208,37 @@ func withoutHookGitEnv(env []string) []string {
 	return out
 }
 
+// noteMirrorBehind keeps `innsegl status` honest about a branch the mirror
+// refused as a rewrite (SNAP-009): recorded once, the first time, and
+// cleared by the next push of it the mirror takes. Any other failure is the
+// next push's to carry, and changes nothing here.
+func noteMirrorBehind(ctx context.Context, dir, branch, local string, pushErr error, stderr io.Writer) {
+	if pushErr != nil && !errors.Is(pushErr, commitpath.ErrBranchDiverged) {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	repo, err := workspace.RepoID(ctx, dir)
+	if err != nil {
+		return
+	}
+	paths := client.ClientPaths(home)
+	if pushErr == nil {
+		err = client.ClearMirrorBehind(paths, repo, branch)
+	} else {
+		_, err = client.RecordMirrorBehind(paths, client.MirrorBehind{
+			Repo: repo, Branch: branch, Local: local, Since: time.Now().UTC(),
+			Reason: "not a fast-forward of the mirror's copy: the branch was rewritten here (rebase, amend, reset) " +
+				"or moved on from another machine",
+		})
+	}
+	if err != nil {
+		fprintf(stderr, "innsegl git-hook push-mirror: recording the mirror's copy of %s: %v\n", branch, err)
+	}
+}
+
 // runGitHookPushMirror is `innsegl git-hook push-mirror`, the detached push:
 //
 //	push-mirror <dir> branch   <core url> <branch> <commit>
@@ -222,6 +256,7 @@ func runGitHookPushMirror(args []string, stderr io.Writer) int {
 	switch {
 	case kind == "branch" && len(rest) == 2:
 		err = c.PushBranch(ctx, dir, rest[0], rest[1])
+		noteMirrorBehind(ctx, dir, rest[0], rest[1], err, stderr)
 	case kind == "snapshot" && len(rest) == 4:
 		err = c.PushSnapshot(ctx, dir, commitpath.Snapshot{Commit: rest[1], Tree: rest[2], Objects: rest[3]}, rest[0])
 	default:

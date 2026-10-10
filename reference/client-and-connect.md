@@ -43,6 +43,10 @@ in the checkout.
 `innsegl client serve` takes only `-listen` (default: the address connect
 wrote). `innsegl status` takes no flags.
 
+`innsegl status` also prints a `mirror WARN` line for each branch the core's
+mirror refused as a rewrite ([commit-path.md](commit-path.md)); a warning,
+not an outage, so the exit status is unchanged.
+
 `innsegl status` prints one line per part of the core: its readiness checks
 (`spire`, `ledger`, `sigstore`) and its scheduled controls. The scheduled
 WORM canary is `worm canary`: `up` with when it last passed, or `DOWN` with

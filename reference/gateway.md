@@ -56,7 +56,7 @@ Read from the environment when the gateway starts (`cmd/innsegl/gateway.go`):
 | volume `innsegl-gateway-ca-key` | the gateway CA private key, mounted into the core only |
 | host folder `~/.innsegl/ca` | the gateway CA certificate (public) |
 | volume `innsegl-message-key` | derived agent-message key, read-only into `innsegl-api` |
-| `gateway-snapshots` under the log dir | workspace snapshots, single-host shape only |
+| `gateway-snapshots` under the log dir | workspace snapshots, single-host shape only; the dashboard reads snapshots from the mirror, not from here |
 | `INNSEGL_MIRROR_DIR` (hosted) | the per-repository mirror: the `/_core/git/` push endpoint writes it, and a tool call's `workspace_tree_hash` is read from the snapshot ref its client pushed there ([commit-path.md](commit-path.md)) |
 
 Routes on its listener: model traffic, `/_gateway/session-end`,

@@ -2053,11 +2053,6 @@ services:
       # days; identity is in the chain and never expires.
       INNSEGL_API_LOG_DIR: /agentlog
       INNSEGL_API_LOG_DAYS: ${INNSEGL_LOG_DAYS:-90}
-      # The run page's own read (E19, #395-#397): the gateway's workspace
-      # snapshot store, under the SAME /agentlog mount. Named explicitly so
-      # this file states what api.go would derive. A hosted core takes no
-      # snapshots (ADR-0060 decision 5, as amended), so there it is empty.
-      INNSEGL_API_SNAPSHOT_DIR: /agentlog/gateway-snapshots
       # RM-237's derived agent-message key (ADR-0061 decision 2), written by
       # innsegl-mcp to the innsegl-message-key volume, so this process can
       # VERIFY a brief or a reply's keyed digest without the identity secret

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -121,15 +120,6 @@ const (
 	envAPIListen  = "INNSEGL_API_LISTEN"
 	envAPILogDir  = "INNSEGL_API_LOG_DIR"
 	envAPILogDays = "INNSEGL_API_LOG_DAYS"
-	// envAPISnapshotDir names the run page's own read: the gateway's own
-	// snapshot store (internal/gateway/snapshot.go's own StoreRoot), which
-	// this issue's own routes (api.registerRecordRoutes) read commits and
-	// diffs out of. Unset defaults to the "gateway-snapshots" subdirectory
-	// of $INNSEGL_API_LOG_DIR, which is where the gateway writes it
-	// (cmd/innsegl/gateway.go's own newGatewaySnapshotter) — no second mount
-	// is needed for the ordinary case, this variable exists for a
-	// deployment that has a reason to point it somewhere else.
-	envAPISnapshotDir = "INNSEGL_API_SNAPSHOT_DIR"
 	// envAPIMessageKeyDir names the operator's own decision on top of E19
 	// (#395-#397): where this process reads RM-237's own derived,
 	// CHECK-ONLY agent-message key from, by key id
@@ -250,10 +240,6 @@ type apiOptions struct {
 	// this deployment keeps none, which is a valid answer and not a fault.
 	logDir  string
 	logDays int
-	// snapshotDir is the gateway's own workspace-snapshot store, read-only.
-	// Empty means the run page's steps and diffs carry no tree data — see
-	// envAPISnapshotDir.
-	snapshotDir string
 	// messageKeyDir is RM-237's own derived agent-message key directory,
 	// read-only. Empty means the run page's Brief and Replies stay
 	// unavailable — see envAPIMessageKeyDir.
@@ -444,10 +430,6 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		logDays = fs.Int("log-retention-days", envIntOr(envAPILogDays, 90),
 			"how long the harness keeps those bodies, reported so a reader can tell an "+
 				"expired body from one that never existed ($"+envAPILogDays+")")
-		snapshotDir = fs.String("snapshot-dir", os.Getenv(envAPISnapshotDir),
-			"the gateway's own workspace-snapshot store, read-only; empty defaults to "+
-				"\"gateway-snapshots\" under -log-dir (where the gateway writes it) when -log-dir "+
-				"is set, and serves no snapshot data otherwise ($"+envAPISnapshotDir+")")
 		messageKeyDir = fs.String("message-key-dir", os.Getenv(envAPIMessageKeyDir),
 			"RM-237's own derived, CHECK-ONLY agent-message key, by key id, read-only; empty "+
 				"answers every run page Brief and Reply unavailable — this process never holds "+
@@ -533,7 +515,6 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		fulcioURL: *fulcioURL, rekorURL: *rekorURL, issuer: *issuer, gitPath: *gitPath,
 		shutdownTimeout: *shutdownTimeout, upstreamTimeout: *upstreamTimeout,
 		logDir: *logDir, logDays: *logDays,
-		snapshotDir:   resolveSnapshotDir(*snapshotDir, *logDir),
 		messageKeyDir: *messageKeyDir,
 		ssoKeyFile:    *ssoKeyFile,
 		authDSN:       *authDSN, rpID: *rpID, rpOrigin: *rpOrigin, sessionLifetime: *sessionLifetime,
@@ -594,23 +575,6 @@ func (o apiOptions) validate() string {
 		return "-upstream-timeout is negative"
 	}
 	return ""
-}
-
-// resolveSnapshotDir answers -snapshot-dir (or $INNSEGL_API_SNAPSHOT_DIR)
-// when one was given, and otherwise the "gateway-snapshots" subdirectory of
-// logDir — the SAME path cmd/innsegl/gateway.go's own newGatewaySnapshotter
-// writes the store under, so a deployment that has not been told to point
-// this anywhere else still finds it without a second mount or a second
-// variable. Empty when logDir is also empty: a deployment keeping no
-// bodies keeps no snapshots either, and that is a valid answer.
-func resolveSnapshotDir(explicit, logDir string) string {
-	if explicit != "" {
-		return explicit
-	}
-	if logDir == "" {
-		return ""
-	}
-	return filepath.Join(logDir, "gateway-snapshots")
 }
 
 // apiUsage is the help block. It states the things a reader of a compose

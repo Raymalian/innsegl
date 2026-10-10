@@ -122,6 +122,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		}
 	}
 	trustBackupLine(tw, paths, deps.now)
+	mirrorBehindLines(tw, paths)
 	if err := tw.Flush(); err != nil {
 		return exitConnectFailed
 	}
@@ -185,6 +186,25 @@ func trustBackupLine(tw io.Writer, paths client.Paths, now func() time.Time) {
 		state = "WARN"
 	}
 	fmt.Fprintf(tw, "trust backup\t%s\tnewest %s, %s old\n", state, newest.Name, roughAge(age))
+}
+
+// mirrorBehindLines warns for each branch whose push the core's mirror
+// refused as a rewrite (SNAP-009, #465). A warning, not an outage: the
+// commits are signed and recorded either way; what is behind is the copy the
+// reconciler's rebase pass walks.
+func mirrorBehindLines(tw io.Writer, paths client.Paths) {
+	behind, err := client.ReadMirrorBehind(paths)
+	if err != nil {
+		fmt.Fprintf(tw, "mirror\tWARN\tcannot read what the mirror refused: %v\n", err)
+		return
+	}
+	for _, b := range behind {
+		fmt.Fprintf(tw, "mirror\tWARN\tthe core's copy of %s in %s is behind since %s: %s. "+
+			"The mirror keeps no rewrites: once a branch has reached it, merge rather than rebase "+
+			"or amend, or carry on under a new branch name. Signed commits are kept either way; "+
+			"the next push of this branch the mirror takes clears this\n",
+			b.Branch, b.Repo, b.Since.UTC().Format(time.RFC3339), b.Reason)
+	}
 }
 
 // roughAge is an age a person reads at a glance: minutes, hours or days.

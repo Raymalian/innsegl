@@ -254,7 +254,6 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 	// Server.registerRecordRoutes (server.go, another issue's own edit)
 	// reads this state at that point, not before.
 	restoreRecordConfig := api.ConfigureRecordRoutes(api.RecordConfig{
-		SnapshotDir:   o.snapshotDir,
 		GitPath:       o.gitPath,
 		MessageKeyDir: o.messageKeyDir,
 	})
