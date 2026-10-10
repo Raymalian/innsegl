@@ -347,7 +347,8 @@ export const strings = {
     heading: "Run detail",
     loading: "the run",
     notFound: "No run with this identifier",
-    notFoundDetail: "The ledger holds no run with this identifier. Check the link.",
+    notFoundDetail:
+      "You can see no run with this identifier. It may belong to an organisation you are not in, or the link may be wrong.",
     failed: "Can't reach the ledger",
     failedDetail: "Showing nothing rather than guessing.",
     retry: "Retry",

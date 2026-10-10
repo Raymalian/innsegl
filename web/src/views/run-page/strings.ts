@@ -143,7 +143,8 @@ export const strings = {
 
   empty: {
     title: "No record for this run",
-    detail: "The ledger holds no record with this identifier. Check the link.",
+    detail:
+      "You can see no run with this identifier. It may belong to an organisation you are not in, or the link may be wrong.",
   },
 
   error: {
