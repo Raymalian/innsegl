@@ -527,7 +527,7 @@ func (r *Reconciler) checkWrites(
 			continue
 		}
 
-		repo := view.repoOf[claim.runID]
+		repo := r.repoName(ctx, view.repoOf[claim.runID])
 		holdings, known := blobsFor[repo]
 		if !known {
 			holdings = r.repoBlobs(ctx, repo, served)
