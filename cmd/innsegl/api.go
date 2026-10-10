@@ -212,6 +212,11 @@ var apiRoutes = []string{
 	"POST /api/v1/auth/login/finish",
 	"POST /api/v1/auth/logout",
 	"GET /api/v1/auth/session",
+	// #481: an invited person with no account yet, holding the link. Public,
+	// as enrolment is; the code is in the body, never the URL.
+	"POST /api/v1/auth/invitation",
+	"POST /api/v1/auth/invitation/begin",
+	"POST /api/v1/auth/invitation/finish",
 	// RM-330 (ADR-0044's 2026-10-03 amendment): resolving alerts after a
 	// fresh passkey ceremony. 503 unless -resolver-dsn is set.
 	"POST /api/v1/alert-resolutions/begin",

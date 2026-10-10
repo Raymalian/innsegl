@@ -33,6 +33,7 @@ type stubAccountsStore struct {
 	recoveryFor     []string
 	recoveryCodes   []string
 	authorResets    [][2]string
+	orgState        *orgCalls
 }
 
 func (s *stubAccountsStore) RecoveryCodes(_ context.Context, userID string) ([]string, error) {
