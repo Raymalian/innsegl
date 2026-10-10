@@ -66,6 +66,8 @@ func (s *Server) newAuthMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/auth/invitation", s.handleInvitationPreview)
 	mux.HandleFunc("POST /api/v1/auth/invitation/begin", s.handleInvitationBegin)
 	mux.HandleFunc("POST /api/v1/auth/invitation/finish", s.handleInvitationFinish)
+	// #485: signing in with an organisation's identity provider.
+	s.registerSSOAuthRoutes(mux)
 	return mux
 }
 

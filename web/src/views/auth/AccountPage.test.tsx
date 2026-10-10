@@ -173,6 +173,7 @@ function account(overrides: Partial<Account> = {}): Account {
     ],
     recovery_codes_remaining: 8,
     organisations: [ORG_OWNER],
+    sign_ins: [],
     ...overrides,
   };
 }
@@ -316,6 +317,10 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
       if (url.endsWith("/account/recovery-codes") && method === "POST") {
         current = { ...current, recovery_codes_remaining: 10 };
         return respond({ codes: Array.from({ length: 10 }, (_, i) => `new-code-${i}`) });
+      }
+      if (url.includes("/account/sso?") && method === "GET") {
+        if (machineList === "unavailable") return unavailable();
+        return respond({ organisation_id: "org-1", configured: false, has_client_secret: false, can_manage: false });
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
     }),
@@ -742,5 +747,34 @@ describe("FE-146 suspending and resuming a machine", () => {
 
     const revoked = rowOf(region, "laptop");
     expect(within(revoked).queryByRole("button")).toBeNull();
+  });
+});
+
+describe("FE-151 the account page and an organisation's sign-in", () => {
+  it("names the organisation whose sign-in opened a session", async () => {
+    installAccountFetch(account(), {
+      sessions: [{ ...SESSIONS[0]!, passkey_name: null, organisation_sign_in: "example-org" }],
+    });
+    render(<AccountPage browser={workingBrowser()} />);
+    const region = await screen.findByRole("region", { name: strings.account.sessionsHeading });
+    expect(await within(region).findByText(strings.account.sessionOrganisation("example-org"))).toBeInTheDocument();
+    expect(within(region).queryByText(strings.account.sessionRecoveryCode)).not.toBeInTheDocument();
+  });
+
+  it("shows the organisation sign-in section, and says once that a sign-in was connected", async () => {
+    window.history.replaceState(null, "", "/account?notice=sso-linked");
+    installAccountFetch(account());
+    render(<AccountPage browser={workingBrowser()} />);
+    expect(await screen.findByText(strings.account.ssoLinkedNotice)).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: strings.account.ssoHeading })).toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).toBe(""));
+  });
+
+  it("says why connecting a sign-in was refused, from the catalogue only", async () => {
+    window.history.replaceState(null, "", "/account?sso=taken");
+    installAccountFetch(account());
+    render(<AccountPage browser={workingBrowser()} />);
+    expect(await screen.findByText(strings.ssoReasons["taken"] ?? "")).toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).toBe(""));
   });
 });

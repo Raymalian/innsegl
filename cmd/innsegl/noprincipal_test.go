@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/accounts"
+	"innsegl.dev/innsegl/internal/api"
 	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/mcp"
@@ -22,7 +23,8 @@ import (
 // SPIFFE identity, ever): no principal in the signing path. An invited
 // member of a second organisation enrols a machine and runs through the real
 // hosted gateway; then every place the run's identity and evidence live is
-// scanned for the organisation's and the people's identifiers: the machine's
+// scanned for the organisation's and the people's identifiers, and (#485)
+// what the organisation's identity provider calls them: the machine's
 // certificate (DER), the SPIRE entries the run registered, the trailers the
 // core would write into its commit, every row of every table in the ledger
 // schema, and the gateway's log. The installation id may appear: it names a
@@ -65,6 +67,29 @@ func TestACC012NoPrincipalReachesTheSigningPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = f.writer.AcceptInvitation(ctx, code, memberID); err != nil {
+		t.Fatal(err)
+	}
+	// #485: the organisation signs in through its own identity provider, and
+	// the member's identity there is linked, with a session it opened. None
+	// of what the provider calls them may reach the signing path either.
+	const (
+		ssoName     = "zephyrine-acc012"
+		ssoIssuer   = "https://idp.zephyrine-acc012.example"
+		ssoClient   = "zephyrine-client-acc012"
+		ssoSubject  = "idp-subject-acc012-zq7"
+		ssoSessHash = "acc012acc012acc012acc012acc012acc012acc012acc012acc012acc012acc0"
+	)
+	conn, err := f.writer.SetSSOConnection(ctx, org.ID, api.SSOConnectionParams{SignInName: ssoName,
+		Issuer: ssoIssuer, ClientID: ssoClient, ClientSecret: "zephyrine-secret-acc012"}, ownerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO innsegl_auth.oidc_identities (issuer, subject, user_id, connection_id)
+		VALUES ($1, $2, $3, $4)`, ssoIssuer, ssoSubject, memberID, conn.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO innsegl_auth.sessions (session_id_hash, user_id, expires_at, sso_connection_id)
+		VALUES ($1, $2, now() + interval '1 hour', $3)`, ssoSessHash, memberID, conn.ID); err != nil {
 		t.Fatal(err)
 	}
 	token, _, err := f.writer.CreateEnrolmentToken(ctx, accounts.TokenParams{
@@ -166,13 +191,19 @@ func TestACC012NoPrincipalReachesTheSigningPath(t *testing.T) {
 		"member id": memberID, "member name": memberName,
 		"owner id": ownerID, "owner name": ownerName,
 		"invitation code": strings.TrimPrefix(code, "iv_"),
+		"sign-in name":    ssoName, "identity provider": strings.TrimPrefix(ssoIssuer, "https://"),
+		"provider client id": ssoClient, "provider subject": ssoSubject,
+		"provider session": ssoSessHash, "provider connection": conn.ID,
 	}
 	// The control: the same scan finds every identifier where it is meant to
 	// be, in the accounts schema. A scan that could not find them would
 	// prove nothing by finding nothing.
 	var control string
 	if err = pool.QueryRow(ctx, `SELECT (SELECT string_agg(row_to_json(u)::text, '') FROM innsegl_auth.users u) ||
-		(SELECT string_agg(row_to_json(a)::text, '') FROM innsegl_auth.accounts a)`).Scan(&control); err != nil {
+		(SELECT string_agg(row_to_json(a)::text, '') FROM innsegl_auth.accounts a) ||
+		(SELECT string_agg(row_to_json(c)::text, '') FROM innsegl_auth.sso_connections c) ||
+		(SELECT string_agg(row_to_json(i)::text, '') FROM innsegl_auth.oidc_identities i) ||
+		(SELECT string_agg(row_to_json(s)::text, '') FROM innsegl_auth.sessions s)`).Scan(&control); err != nil {
 		t.Fatal(err)
 	}
 	for what, value := range principals {

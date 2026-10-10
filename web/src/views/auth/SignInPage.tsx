@@ -9,9 +9,17 @@
  * voice: factual, unvarnished, no reassurance copy.
  */
 
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 
-import { AuthRequestError, realBrowser, recover, signIn, type WebAuthnBrowser } from "./client";
+import { navigate } from "../../app/router";
+import {
+  AuthRequestError,
+  beginOrganisationSignIn,
+  realBrowser,
+  recover,
+  signIn,
+  type WebAuthnBrowser,
+} from "./client";
 import { strings } from "./strings";
 import {
   degraded,
@@ -39,6 +47,18 @@ export interface SignInPageProps {
   readonly onRecovered: (displayName: string, remaining: number) => void;
   /** Injected for tests; defaults to the real browser. */
   readonly browser?: WebAuthnBrowser;
+  /** Sends the browser to the organisation's identity provider (#485).
+   * Injected for tests; defaults to a full-page navigation. */
+  readonly goTo?: (url: string) => void;
+}
+
+/** `?sso=<reason>` on the very first render: why the organisation's
+ * sign-in sent the browser back. Worded from the catalogue only, never
+ * echoed; a reason it does not know reads as the generic one. */
+function initialSSOReason(): string | null {
+  const reason = new URLSearchParams(window.location.search).get("sso");
+  if (reason === null) return null;
+  return strings.ssoReasons[reason] ?? strings.ssoReasons["internal"] ?? null;
 }
 
 type Phase =
@@ -51,15 +71,27 @@ export function SignInPage({
   onSignedIn,
   onRecovered,
   browser = realBrowser(),
+  goTo = (url: string) => window.location.assign(url),
 }: SignInPageProps) {
   const headingId = useId();
   const recoveryId = useId();
   const recoveryHintId = useId();
+  const ssoId = useId();
+  const ssoHintId = useId();
 
   const [phase, setPhase] = useState<Phase>({ status: "idle" });
   const [showRecovery, setShowRecovery] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState("");
   const [recoveryPhase, setRecoveryPhase] = useState<Phase>({ status: "idle" });
+  const [showSSO, setShowSSO] = useState(false);
+  const [ssoName, setSSOName] = useState("");
+  const [ssoPhase, setSSOPhase] = useState<Phase>({ status: "idle" });
+  const [ssoReason] = useState(initialSSOReason);
+
+  // Shown once: a reload of /?sso=… would otherwise repeat it forever.
+  useEffect(() => {
+    if (ssoReason !== null) navigate(window.location.pathname, { replace: true });
+  }, [ssoReason]);
 
   if (setupNeeded) {
     return (
@@ -106,8 +138,80 @@ export function SignInPage({
     </button>
   );
 
-  // One action per view: the passkey, or the recovery code, never both
-  // buttons at once.
+  const submitSSO = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSSOPhase({ status: "working" });
+    try {
+      goTo(await beginOrganisationSignIn(ssoName.trim()));
+    } catch (err) {
+      setSSOPhase({
+        status: "failed",
+        message: err instanceof AuthRequestError ? err.message : strings.signIn.ssoFailed,
+      });
+    }
+  };
+
+  const ssoToggle = (
+    <button
+      type="button"
+      onClick={() => setShowSSO((shown) => !shown)}
+      className={`${inlineLinkButton} self-start`}
+    >
+      {showSSO ? strings.signIn.ssoHideLink : strings.signIn.ssoLink}
+    </button>
+  );
+
+  // #485: the organisation's own sign-in, a view of its own.
+  if (showSSO) {
+    return (
+      <section aria-labelledby={headingId} className={pageShell}>
+        <h1 id={headingId} className={pageHeading}>
+          {strings.signIn.ssoHeading}
+        </h1>
+        <p className={proseText}>{strings.signIn.ssoIntro}</p>
+        <form onSubmit={(e) => void submitSSO(e)} className="flex flex-col gap-4">
+          <div className={fieldStack}>
+            <label htmlFor={ssoId} className={fieldLabel}>
+              {strings.signIn.ssoLabel}
+            </label>
+            <input
+              id={ssoId}
+              name="sign_in_name"
+              type="text"
+              spellCheck={false}
+              autoComplete="organization"
+              autoCapitalize="none"
+              autoFocus
+              required
+              aria-describedby={ssoHintId}
+              value={ssoName}
+              onChange={(event) => setSSOName(event.target.value)}
+              className={`${fieldInput} font-mono ${focusRing}`}
+            />
+            <span id={ssoHintId} className={secondaryText}>
+              {strings.signIn.ssoHint}
+            </span>
+          </div>
+          <button
+            type="submit"
+            disabled={ssoPhase.status === "working"}
+            className={`${primaryButton} ${focusRing}`}
+          >
+            {ssoPhase.status === "working" ? strings.signIn.ssoWorking : strings.signIn.ssoButton}
+          </button>
+          {ssoPhase.status === "failed" && (
+            <p role="alert" className={`${noticeBase} ${degraded}`}>
+              <span className={noticeBody}>{ssoPhase.message}</span>
+            </p>
+          )}
+        </form>
+        {ssoToggle}
+      </section>
+    );
+  }
+
+  // One action per view: the passkey, the recovery code or the
+  // organisation's sign-in, never two buttons at once.
   if (showRecovery) {
     return (
       <section aria-labelledby={headingId} className={pageShell}>
@@ -177,7 +281,15 @@ export function SignInPage({
           <span className={noticeBody}>{phase.message}</span>
         </p>
       )}
-      {toggle}
+      {phase.status !== "failed" && ssoReason !== null && (
+        <p role="alert" className={`${noticeBase} ${degraded}`}>
+          <span className={noticeBody}>{ssoReason}</span>
+        </p>
+      )}
+      <div className="flex flex-col gap-2">
+        {toggle}
+        {ssoToggle}
+      </div>
     </section>
   );
 }

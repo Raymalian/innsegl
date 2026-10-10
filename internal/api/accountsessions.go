@@ -21,10 +21,11 @@ const sessionLabelLen = 12
 
 // UserSessionRow is one live session of a user.
 type UserSessionRow struct {
-	Hash        string
-	CreatedAt   time.Time
-	ExpiresAt   time.Time
-	PasskeyName *string // nil for a recovery-code sign-in
+	Hash         string
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
+	PasskeyName  *string // nil for a recovery-code or organisation sign-in
+	Organisation *string // the organisation whose sign-in opened it (#485), else nil
 }
 
 // UserSessions lists a user's live (unrevoked, unexpired) sessions, newest
@@ -32,9 +33,11 @@ type UserSessionRow struct {
 func (a *AuthStore) UserSessions(ctx context.Context, userID string) ([]UserSessionRow, error) {
 	rows, err := a.pool.Query(ctx, `
 		SELECT s.session_id_hash, s.created_at, s.expires_at,
-		       CASE WHEN p.credential_id IS NULL THEN NULL ELSE p.name END
+		       CASE WHEN p.credential_id IS NULL THEN NULL ELSE p.name END, a.name
 		  FROM innsegl_auth.sessions s
 		  LEFT JOIN innsegl_auth.passkeys p ON p.credential_id = s.passkey_id
+		  LEFT JOIN innsegl_auth.sso_connections c ON c.connection_id = s.sso_connection_id
+		  LEFT JOIN innsegl_auth.accounts a ON a.account_id = c.account_id
 		 WHERE s.user_id = $1 AND s.revoked_at IS NULL AND s.expires_at > clock_timestamp()
 		 ORDER BY s.created_at DESC, s.session_id_hash`, userID)
 	if err != nil {
@@ -42,7 +45,7 @@ func (a *AuthStore) UserSessions(ctx context.Context, userID string) ([]UserSess
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (UserSessionRow, error) {
 		var r UserSessionRow
-		err := row.Scan(&r.Hash, &r.CreatedAt, &r.ExpiresAt, &r.PasskeyName)
+		err := row.Scan(&r.Hash, &r.CreatedAt, &r.ExpiresAt, &r.PasskeyName, &r.Organisation)
 		return r, err
 	})
 }

@@ -610,7 +610,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	for i, row := range rows {
 		out.Sessions[i] = AccountSession{
 			ID: row.Hash[:sessionLabelLen], CreatedAt: row.CreatedAt.UTC(), ExpiresAt: row.ExpiresAt.UTC(),
-			Current: row.Hash == current, PasskeyName: row.PasskeyName,
+			Current: row.Hash == current, PasskeyName: row.PasskeyName, OrganisationSignIn: row.Organisation,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

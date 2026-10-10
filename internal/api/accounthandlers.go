@@ -36,6 +36,7 @@ func (s *Server) newAccountMux() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/v1/account/passkeys/{id}", s.handlePasskeyDelete)
 	mux.HandleFunc("POST /api/v1/account/recovery-codes", s.handleRecoveryCodesRegenerate)
 	s.registerOrganisationRoutes(mux)
+	s.registerSSOAccountRoutes(mux)
 	return mux
 }
 
@@ -149,6 +150,10 @@ func (s *Server) accountFor(ctx context.Context, userID, currentPasskeyID string
 	if err != nil {
 		return Account{}, err
 	}
+	signIns, err := s.accountSignIns(ctx, userID)
+	if err != nil {
+		return Account{}, err
+	}
 
 	passkeys := make([]AccountPasskey, len(rows))
 	for i, row := range rows {
@@ -159,7 +164,7 @@ func (s *Server) accountFor(ctx context.Context, userID, currentPasskeyID string
 	}
 	return Account{
 		UserID: u.UserID, DisplayName: u.DisplayName, CreatedAt: u.CreatedAt,
-		Passkeys: passkeys, RecoveryCodesRemaining: remaining, Organisations: orgs,
+		Passkeys: passkeys, RecoveryCodesRemaining: remaining, Organisations: orgs, SignIns: signIns,
 	}, nil
 }
 

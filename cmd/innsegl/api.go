@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -220,6 +221,10 @@ var apiRoutes = []string{
 	"POST /api/v1/auth/invitation",
 	"POST /api/v1/auth/invitation/begin",
 	"POST /api/v1/auth/invitation/finish",
+	// #485: signing in with an organisation's identity provider. Public, as
+	// login is; the provider sends the browser back to the callback.
+	"POST /api/v1/auth/sso/begin",
+	"GET /api/v1/auth/sso/callback",
 	// RM-330 (ADR-0044's 2026-10-03 amendment): resolving alerts after a
 	// fresh passkey ceremony. 503 unless -resolver-dsn is set.
 	"POST /api/v1/alert-resolutions/begin",
@@ -283,6 +288,11 @@ type apiOptions struct {
 	// file holding its certificate and key. Both or neither.
 	tlsListen string
 	tlsCert   string
+
+	// ssoHTTPClient reaches organisations' identity providers. Never a
+	// flag: nil in production (internal/api's guarded client); a test hands
+	// one that trusts its own provider (apiDeps.ssoClient).
+	ssoHTTPClient *http.Client
 }
 
 // servedAPI is the running query API, as this command needs it. It is an
@@ -306,6 +316,8 @@ type servedAPI interface {
 // zero value.
 type apiDeps struct {
 	open func(context.Context, apiOptions, *serveLog) (servedAPI, error)
+	// ssoClient is apiOptions.ssoHTTPClient.
+	ssoClient *http.Client
 }
 
 func (d apiDeps) opener() func(context.Context, apiOptions, *serveLog) (servedAPI, error) {
@@ -333,6 +345,7 @@ func runAPI(ctx context.Context, args []string, stdout, stderr io.Writer, deps a
 
 	log := newServeLog(stderr)
 
+	o.ssoHTTPClient = deps.ssoClient
 	srv, err := deps.opener()(ctx, o, log)
 	if err != nil {
 		return reportAPIStartFailure(err, log, stderr)
@@ -602,7 +615,9 @@ func apiUsage(stderr io.Writer, fs *flag.FlagSet) {
 		fprintf(stderr, "  %s\n", route)
 	}
 	fprintf(stderr, "\nEVERY ROUTE ABOVE EXCEPT health AND proof REQUIRES A SIGNED-IN SESSION\n"+
-		"(RM-260/RM-261, ADR-0062). Passkey (WebAuthn) only, no passwords. -rp-id must be\n"+
+		"(RM-260/RM-261, ADR-0062). Passkeys (WebAuthn), or an organisation's own identity\n"+
+		"provider (OpenID Connect) for a person already linked to it; no passwords. The\n"+
+		"provider redirects back to <rp-origin>/api/v1/auth/sso/callback. -rp-id must be\n"+
 		"a DOMAIN — 127.0.0.1 is not a valid RP ID, localhost is — and -rp-origin must be\n"+
 		"the exact origin the dashboard is served from; doc 05 §3's Cloudflare Access\n"+
 		"(RM-062, #70) remains a second, independent door in front of this one, not a\n"+

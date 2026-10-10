@@ -33,7 +33,34 @@ export const strings = {
     recoveryButton: "Sign in with this code",
     recoveryWorking: "Checking the code",
     recoveryFailed: "That recovery code could not be used",
+    // #485: an organisation's own identity provider.
+    ssoLink: "Sign in with your organisation",
+    ssoHideLink: "Use a passkey instead",
+    ssoHeading: "Sign in with your organisation",
+    ssoIntro:
+      "Use your organisation's own sign-in. It works once you have connected it on your account page; until then, sign in with your passkey.",
+    ssoLabel: "Organisation sign-in name",
+    ssoHint: "The short name your organisation's owner set up, such as example-org.",
+    ssoButton: "Continue to your organisation",
+    ssoWorking: "Opening your organisation's sign-in",
+    ssoFailed: "Your organisation's sign-in could not be opened",
   },
+  /** Why the organisation's sign-in sent the browser back without signing
+   * in: internal/api/sso.go's ?sso= reasons, one sentence each. */
+  ssoReasons: {
+    expired: "That sign-in took too long or was already used. Start again.",
+    browser: "That sign-in was started in another browser. Start again in this one.",
+    denied: "Your organisation's sign-in did not let you in.",
+    changed: "The organisation changed its sign-in while you were signing in. Start again.",
+    provider: "Your organisation's identity provider could not be reached, or refused the request.",
+    refused: "Your organisation's identity provider sent a sign-in this dashboard does not accept.",
+    unknown:
+      "That sign-in is not connected to an account here. Sign in with your passkey, then connect it on your account page.",
+    removed:
+      "The organisation removed you, so its sign-in no longer lets you in. Ask its owner or an admin for a new invitation.",
+    taken: "That sign-in is already connected to another account.",
+    internal: "The sign-in could not be finished. Try again.",
+  } as Readonly<Record<string, string>>,
   setup: {
     heading: "Create your account",
     intro:
@@ -310,7 +337,52 @@ export const strings = {
     sessionMethodHeader: "With",
     sessionRecoveryCode: "A recovery code",
     sessionPasskey: (name: string) => (name === "" ? "A passkey" : `Passkey \u201c${name}\u201d`),
+    sessionOrganisation: (organisation: string) =>
+      organisation === "" ? "An organisation's sign-in" : `${organisation}'s sign-in`,
     thisBrowser: "This browser",
+
+    // #485: an organisation's own identity provider.
+    ssoHeading: "Organisation sign-in",
+    ssoIntro:
+      "Sign in through an organisation's own identity provider. Connect it here once while signed in; after that the sign-in page takes it. Passkeys keep working.",
+    ssoNotConfigured: "No organisation sign-in is set up.",
+    ssoSignInName: (name: string) => `Sign-in name: ${name}`,
+    ssoConnectButton: "Connect this sign-in",
+    ssoConnectWorking: "Opening the organisation's sign-in",
+    ssoConnectFailed: "The organisation's sign-in could not be opened",
+    ssoConnected: "Connected to your account",
+    ssoLinkedNotice: "Your organisation's sign-in is connected. The sign-in page takes it from now on.",
+    ssoJoinLabel: "Connect an organisation's sign-in by name",
+    ssoJoinHint: "The sign-in name its owner gave you. Connecting makes you a member if you are not one yet.",
+    ssoJoinButton: "Connect",
+    ssoLinkedHeading: "Connected sign-ins",
+    ssoLinkedItem: (organisation: string, name: string) =>
+      organisation === "" ? `A removed organisation sign-in (${name || "no name"})` : `${organisation} (${name})`,
+    ssoLinkedWhen: (linked: string, lastUsed: string | null) =>
+      `connected ${linked}, ${lastUsed === null ? "not used yet" : `last used ${lastUsed}`}`,
+    ssoDisconnectButton: "Disconnect",
+    ssoDisconnectFailed: "The sign-in could not be disconnected",
+    ssoOwnerHeading: "Set up the organisation's sign-in",
+    ssoOwnerIntro:
+      "Register this dashboard as an OpenID Connect client at your identity provider, with the redirect URI below. Saving asks the provider for its settings first, then for your passkey.",
+    ssoNameLabel: "Sign-in name",
+    ssoNameHint: "What members type on the sign-in page: lowercase letters, digits and hyphens.",
+    ssoIssuerLabel: "Issuer URL",
+    ssoIssuerHint: "Exactly as the provider's discovery document names it. https only.",
+    ssoClientLabel: "Client ID",
+    ssoSecretLabel: "Client secret",
+    ssoSecretHint: "Leave empty for a public client.",
+    ssoSecretKeepHint: "A secret is saved. Leave empty to keep it.",
+    ssoRedirectLabel: "Redirect URI",
+    copyRedirect: "Copy redirect URI",
+    ssoSaveButton: "Save with a passkey",
+    ssoSaving: "Saving",
+    ssoSaved: "Saved.",
+    ssoSaveFailed: "The organisation's sign-in could not be saved",
+    ssoRemoveButton: "Remove sign-in",
+    ssoRemovePrompt: "Remove it? Everyone signed in through it is signed out.",
+    ssoRemoveConfirmButton: "Remove",
+    ssoRemoveFailed: "The organisation's sign-in could not be removed",
     signOutOthers: "Sign out other sign-ins",
     signOutOthersWorking: "Signing out",
     signedOutOthers: "Other sign-ins signed out:",

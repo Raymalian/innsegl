@@ -38,6 +38,8 @@ export interface Account {
   recovery_codes_remaining: number;
   /** RM-333 (#511): every organisation the user holds a live membership in. */
   organisations: AccountOrganisation[];
+  /** #485: every organisation sign-in linked to the account. */
+  sign_ins: AccountSignIn[];
 }
 
 /* ── RM-333 (#511): the organisation, its machines, repositories and agents,
@@ -109,6 +111,8 @@ export interface AccountSession {
   current: boolean;
   /** Null for a sign-in a recovery code opened. */
   passkey_name: string | null;
+  /** #485: the organisation whose sign-in opened it; null otherwise. */
+  organisation_sign_in?: string | null;
 }
 
 export interface AccountRepository {
@@ -175,4 +179,40 @@ export interface InvitationLink {
 
 export interface RecoveryCodes {
   codes: string[];
+}
+
+/* ── #485: an organisation's own identity provider. internal/api/sso.go. */
+
+/** One identity linked to the account, by the organisation whose sign-in
+ * linked it. Never the provider's own identifiers. */
+export interface AccountSignIn {
+  id: number;
+  /** Empty when that organisation's sign-in has since been removed. */
+  organisation: string;
+  sign_in_name: string;
+  linked_at: string;
+  last_used_at: string | null;
+}
+
+/** `GET /api/v1/account/sso`. Issuer, client id and redirect URI are the
+ * owner's to see; the secret never comes back. */
+export interface AccountSSO {
+  organisation_id: string;
+  configured: boolean;
+  sign_in_name?: string;
+  issuer?: string;
+  client_id?: string;
+  has_client_secret: boolean;
+  redirect_uri?: string;
+  can_manage: boolean;
+  updated_at?: string;
+}
+
+/** What an owner sets. `keep_secret` with an empty secret keeps the saved one. */
+export interface SSOSettings {
+  sign_in_name: string;
+  issuer: string;
+  client_id: string;
+  client_secret: string;
+  keep_secret: boolean;
 }

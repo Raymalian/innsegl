@@ -43,12 +43,18 @@ import (
 // constructs an api.Server itself.
 func startAPICommand(t *testing.T, args ...string) (addr string, stderr *syncBuffer) {
 	t.Helper()
+	return startAPICommandWith(t, apiDeps{}, args...)
+}
+
+// startAPICommandWith is startAPICommand with the command's test seams set.
+func startAPICommandWith(t *testing.T, deps apiDeps, args ...string) (addr string, stderr *syncBuffer) {
+	t.Helper()
 	var out syncBuffer
 	errBuf := &syncBuffer{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int, 1)
-	go func() { done <- runAPI(ctx, args, &out, errBuf, apiDeps{}) }()
+	go func() { done <- runAPI(ctx, args, &out, errBuf, deps) }()
 	t.Cleanup(func() {
 		cancel()
 		select {

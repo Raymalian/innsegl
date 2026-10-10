@@ -50,6 +50,9 @@ import type {
   AccountPasskey,
   AccountRepository,
   AccountSession,
+  AccountSignIn,
+  AccountSSO,
+  SSOSettings,
   EnrolmentToken,
   RecoverResult,
   RecoveryCodes,
@@ -425,6 +428,7 @@ function accountOf(body: unknown): Account {
     organisations: Array.isArray(o["organisations"])
       ? (o["organisations"] as AccountOrganisation[])
       : [],
+    sign_ins: Array.isArray(o["sign_ins"]) ? (o["sign_ins"] as AccountSignIn[]) : [],
   };
 }
 
@@ -790,4 +794,84 @@ export async function withdrawInvitation(
 ): Promise<void> {
   await postJSON(base, "/account/invitations/withdraw",
     { organisation_id: organisationId, invitation_id: invitationId });
+}
+
+// ---------------------------------------------------------------------------
+// #485: an organisation's own identity provider.
+// ---------------------------------------------------------------------------
+
+function redirectOf(body: unknown): string {
+  const url =
+    typeof body === "object" && body !== null
+      ? (body as Record<string, unknown>)["redirect_url"]
+      : undefined;
+  if (typeof url !== "string" || !url.startsWith("https://")) {
+    throw new Error("the server's response named no identity provider to go to");
+  }
+  return url;
+}
+
+/** `POST /api/v1/auth/sso/begin` {sign_in_name}: where to send the browser
+ * to sign in at the organisation's provider. An unknown name is a 404. */
+export async function beginOrganisationSignIn(
+  signInName: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<string> {
+  return redirectOf(await postJSON(base, "/auth/sso/begin", { sign_in_name: signInName }));
+}
+
+/** `POST /api/v1/account/sso/link` {organisation_id}: where to send the
+ * browser to connect the organisation's sign-in to this account. */
+export async function beginLinkOrganisationSignIn(
+  organisationId: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<string> {
+  return redirectOf(await postJSON(base, "/account/sso/link", { organisation_id: organisationId }));
+}
+
+/** `POST /api/v1/account/sso/link` {sign_in_name}: connect an
+ * organisation's sign-in by its name, which is how a person who is not its
+ * member yet joins through it. */
+export async function beginLinkOrganisationSignInByName(
+  signInName: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<string> {
+  return redirectOf(await postJSON(base, "/account/sso/link", { sign_in_name: signInName }));
+}
+
+/** `GET /api/v1/account/sso?organisation_id=…`. */
+export async function fetchOrganisationSignIn(
+  organisationId: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<AccountSSO> {
+  return (await getJSON(
+    base,
+    `/account/sso?organisation_id=${encodeURIComponent(organisationId)}`,
+  )) as AccountSSO;
+}
+
+/** Set the organisation's sign-in, confirmed with a passkey (owner only). */
+export async function saveOrganisationSignIn(
+  organisationId: string,
+  settings: SSOSettings,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<AccountSSO> {
+  return (await confirmWithPasskey(base, "/account/sso/configure",
+    { organisation_id: organisationId, ...settings }, browser)) as AccountSSO;
+}
+
+/** Remove the organisation's sign-in, confirmed with a passkey (owner
+ * only). Everyone signed in through it is signed out. */
+export async function removeOrganisationSignIn(
+  organisationId: string,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<void> {
+  await confirmWithPasskey(base, "/account/sso/remove", { organisation_id: organisationId }, browser);
+}
+
+/** `DELETE /api/v1/account/sign-ins/{id}`: disconnect one of your own. */
+export async function disconnectSignIn(id: number, base: string = DEFAULT_API_BASE): Promise<void> {
+  await deleteJSON(base, `/account/sign-ins/${encodeURIComponent(String(id))}`);
 }

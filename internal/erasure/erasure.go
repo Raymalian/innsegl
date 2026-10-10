@@ -322,6 +322,10 @@ func Organisation(ctx context.Context, db DB, accountID, actor string, mayErase 
 			{"memberships", nil},
 			{"repo_grants", &res.Grants},
 			{"installations", &res.Installations},
+			// The organisation's sign-in (#485). Its sessions were revoked
+			// above with every live member's; the identities it linked
+			// belong to their people and stay, their reference cleared.
+			{"sso_connections", nil},
 			{"accounts", nil},
 		} {
 			tag, derr := tx.Exec(ctx, `DELETE FROM innsegl_auth.`+d.table+` WHERE account_id = $1`, accountID)
