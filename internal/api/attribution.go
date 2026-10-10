@@ -66,8 +66,21 @@ func (c contentSource) RunsForPatchID(
 	if err != nil {
 		return nil, err
 	}
+	// Only the runs in the reader's scope (RM-307): another organisation's
+	// run that recorded the same change is not named.
+	ids := make([]string, 0, len(records))
+	for _, r := range records {
+		ids = append(ids, r.RunID)
+	}
+	visible, err := c.store.visibleRuns(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]verify.ContentRecord, 0, len(records))
 	for _, r := range records {
+		if !visible[r.RunID] {
+			continue
+		}
 		out = append(out, verify.ContentRecord{
 			RunID:      r.RunID,
 			PatchID:    r.PatchID,

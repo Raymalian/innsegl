@@ -508,6 +508,15 @@ type servedMCP interface {
 // the zero value.
 type serveDeps struct {
 	open func(context.Context, serveOptions, *serveLog) (servedMCP, error)
+	// companions replaces alsoCommands in a test. Nil runs the real ones.
+	companions map[string]companionFunc
+}
+
+func (d serveDeps) companion(name string) companionFunc {
+	if d.companions != nil {
+		return d.companions[name]
+	}
+	return alsoCommands[name]
 }
 
 func (d serveDeps) opener() func(context.Context, serveOptions, *serveLog) (servedMCP, error) {
@@ -541,12 +550,30 @@ func (d serveDeps) opener() func(context.Context, serveOptions, *serveLog) (serv
 //
 // `api` is not one (ADR-0071). Nothing set it, and it would put the query API
 // and its database role inside the process that holds SPIRE admin.
-var alsoCommands = map[string]func([]string, io.Writer, io.Writer) int{
-	"seal":      sealCommand,
-	"reconcile": reconcileCommand,
-	"reap":      reapCommand,
-	"gateway":   gatewayCommand,
+//
+// EACH RUNS ON SERVE'S OWN CONTEXT (OPS-177). They used to be the standalone
+// commands, each catching SIGTERM for itself, and `reap` caught none: its
+// loop waited on a context.Background() that never ends, so serve's wait for
+// its companions lasted until the runtime killed the container (measured
+// 2026-10-10: every `docker stop` took the whole 2m30s grace period). A
+// companion is now handed the context serve cancels, so none can miss a stop.
+var alsoCommands = map[string]companionFunc{
+	"seal": func(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+		return runSealLoop(ctx, args, stdout, stderr, sealDeps{})
+	},
+	"reconcile": func(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+		return runReconcileLoop(ctx, args, stdout, stderr, reconcileDeps{})
+	},
+	"reap": func(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+		return runReap(ctx, args, stdout, stderr, reapDeps{})
+	},
+	"gateway": func(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+		return runGateway(ctx, args, stdout, stderr, gatewayDeps{})
+	},
 }
+
+// companionFunc is one companion: a subcommand that stops when ctx ends.
+type companionFunc func(ctx context.Context, args []string, stdout, stderr io.Writer) int
 
 // parseAlso resolves -also into a list of companion subcommands, in the order
 // given. Empty means none, which is what every deployment before this did.
@@ -641,7 +668,7 @@ func runServe(parent context.Context, args []string, stdout, stderr io.Writer, d
 	companionFailed, waitCompanions := startCompanions(ctx, o.also, func(name string) int {
 		// No arguments: each reads the same environment this process was
 		// given, which is how the separate containers were configured too.
-		return alsoCommands[name](nil, stdout, stderr)
+		return deps.companion(name)(ctx, nil, stdout, stderr)
 	}, log)
 
 	served := make(chan error, 1)

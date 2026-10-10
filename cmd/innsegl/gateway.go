@@ -14,11 +14,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -427,19 +425,12 @@ func (d gatewayDeps) opener() func(context.Context, gatewayOptions, *serveLog) (
 	return openGateway
 }
 
-// gatewayCommand is the subcommand body wired into cli.go's dispatch table,
-// and the function `serve -also gateway` runs as a goroutine in this
-// process instead of a fifth container (ADR-0060 decision 1).
-func gatewayCommand(args []string, stdout, stderr io.Writer) int {
-	// SIGINT and SIGTERM stop the gateway. Nothing here decides identity or
-	// writes the ledger, so a process killed mid-request loses a relay in
-	// flight and nothing else.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	return runGateway(ctx, args, stdout, stderr, gatewayDeps{})
-}
-
-// runGateway is the whole command: parse, open, serve.
+// runGateway is the whole command: parse, open, serve. `serve -also
+// gateway` runs it as a goroutine in this process instead of a fifth
+// container (ADR-0060 decision 1), on serve's own context: SIGINT and
+// SIGTERM stop it with the process (OPS-177). Nothing here decides identity
+// or writes the ledger, so a process killed mid-request loses a relay in
+// flight and nothing else.
 func runGateway(ctx context.Context, args []string, stdout, stderr io.Writer, deps gatewayDeps) int {
 	o, code, ok := parseGatewayFlags(args, stderr)
 	if !ok {

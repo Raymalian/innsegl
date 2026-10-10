@@ -19,6 +19,11 @@ By default both run inside `innsegl-mcp` (`-also seal,reconcile,reap,gateway`,
 ADR-0056). The compose profile `separate` runs `innsegl-reconciler` and
 `innsegl-sealer` as their own containers instead.
 
+Inside `innsegl-mcp` each companion runs on `serve`'s own context, so SIGTERM
+(`docker stop`, `make update`) stops all of them together. A reap sweep in
+flight finishes first; then the process exits within seconds. Run on its own,
+`innsegl reap -interval` stops on SIGINT or SIGTERM the same way.
+
 ## Settings
 
 `innsegl reconcile` (defaults in brackets):
@@ -80,11 +85,16 @@ permanent end (see [identity.md](identity.md)).
 - `cmd/innsegl/reconcile_test.go` (REC-001), `reconcilewiring_test.go`
   (OPS-016, SPI-008), `rebasewiring_test.go` (OPS-006), `reconciletrust_test.go`
 - `cmd/innsegl/reap_test.go` (OPS-066 to OPS-068, SPI-003)
+- `cmd/innsegl/servestop_test.go` (OPS-177: reap and every companion stop on
+  SIGTERM, after the sweep in flight)
+- `test/chaos/sigterm_test.go` (OPS-178: the built `innsegl serve`, real
+  Postgres and SPIRE, agents calling it, stops within 5 s of SIGTERM with
+  exit 0, no claim left in progress and a chain that verifies)
 - `internal/spire/reaper*_test.go`, `silence*_test.go`, `population_test.go`
   (SPI-003, SPI-011 to SPI-019)
 - `internal/rundir/*_test.go` (MCP-022, MCP-023, MCP-078, REC-017, REC-018)
 - `test/deploy/rebasedefaults_test.go`
-- `test/chaos/*_test.go` (OPS-001, OPS-003, REC-002, REC-005)
+- `test/chaos/*_test.go` (OPS-001, OPS-003, OPS-178, REC-002, REC-005)
 
 ## Decisions
 

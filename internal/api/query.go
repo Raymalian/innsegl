@@ -392,7 +392,10 @@ WITH scoped AS (
       FROM registered r JOIN rollup g USING (run_id) CROSS JOIN cutoff
 )`
 
-const listRunsSQL = runIndexCTE + `, filtered AS (
+// scopeRunsSQL is the runs table's scope (scope.go): $12 and $13.
+var scopeRunsSQL = scopeSQL("run_id", 12, 13)
+
+var listRunsSQL = runIndexCTE + `, filtered AS (
     SELECT runs.*, count(*) OVER ()::int AS total
       FROM runs
      WHERE ($2::text IS NULL OR agent_type = $2)
@@ -409,6 +412,7 @@ const listRunsSQL = runIndexCTE + `, filtered AS (
                 CASE WHEN $10 = '` + ActivityWorking + `'
                      THEN last_activity_at >= $11::timestamptz
                      ELSE last_activity_at IS NULL OR last_activity_at < $11::timestamptz END))
+       AND ` + scopeRunsSQL + `
 )
 SELECT run_id, spiffe_id, agent_type, task_ref, status, repos, commits,
        chain_position, registered_at, last_event_at,
@@ -501,12 +505,13 @@ func (s *Store) ListRuns(ctx context.Context, f RunFilter) (RunPage, error) {
 	// One clock for the whole answer. See abandonedBefore.
 	now := time.Now().UTC()
 	horizon := s.RestoreHorizon()
+	machines, unowned := scopeArgs(ctx)
 
 	rows, err := s.pool.Query(ctx, runsQuery(order),
 		abandonedBefore(horizon, now),
 		nullable(f.AgentType), nullable(f.Repo), nullable(f.Status),
 		nullableTime(f.From), nullableTime(f.To), likePattern(f.Search),
-		cursor, limit, nullable(f.Activity), now.Add(-s.idleAfter))
+		cursor, limit, nullable(f.Activity), now.Add(-s.idleAfter), machines, unowned)
 	if err != nil {
 		return RunPage{}, fmt.Errorf("api: listing runs: %w", err)
 	}
@@ -534,6 +539,13 @@ func (s *Store) ListRuns(ctx context.Context, f RunFilter) (RunPage, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return RunPage{}, fmt.Errorf("api: listing runs: %w", err)
+	}
+	parents := make([]*string, len(page.Runs))
+	for i := range page.Runs {
+		parents[i] = &page.Runs[i].ParentRunID
+	}
+	if err := s.hideRelativesOutOfScope(ctx, parents...); err != nil {
+		return RunPage{}, err
 	}
 	if len(page.Runs) == limit && len(page.Runs) > 0 {
 		page.NextCursor = strconv.FormatInt(page.Runs[len(page.Runs)-1].ChainPosition, 10)
@@ -594,7 +606,7 @@ func (s *Store) Run(ctx context.Context, runID string) (RunDetail, error) {
 		&d.Commits, &d.ChainPosition, &d.RegisteredAt, &d.LastEventAt,
 		&d.LastActivityAt, &d.WithdrawnAt, &parent)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return RunDetail{}, fmt.Errorf("%w: no run %q in this ledger", ErrNotFound, runID)
+		return RunDetail{}, unknownRun(runID)
 	}
 	if err != nil {
 		return RunDetail{}, fmt.Errorf("api: reading run %s: %w", runID, err)
@@ -602,6 +614,9 @@ func (s *Store) Run(ctx context.Context, runID string) (RunDetail, error) {
 	d.RegisteredAt = d.RegisteredAt.UTC()
 	d.LastEventAt = d.LastEventAt.UTC()
 	normaliseRunEvidence(&d.RunSummary, parent, horizon)
+	if herr := s.hideRelativesOutOfScope(ctx, &d.ParentRunID); herr != nil {
+		return RunDetail{}, herr
+	}
 	d.RestoreHorizonSeconds = int64(horizon.Seconds())
 	d.DataAsOf = now
 
@@ -627,7 +642,7 @@ func (s *Store) Run(ctx context.Context, runID string) (RunDetail, error) {
 	return d, nil
 }
 
-const overviewSQL = `
+var overviewSQL = `
 WITH scoped AS (
     SELECT run_id, event_type, ts, source FROM innsegl.events WHERE run_id IS NOT NULL
 ), rollup AS (
@@ -646,6 +661,7 @@ WITH scoped AS (
     -- copy now and it is internal/ledger's.
     SELECT registered, last_activity_at, ` + ledger.RunStateSQL + ` AS status
       FROM rollup CROSS JOIN cutoff
+     WHERE ` + scopeSQL("run_id", 3, 4) + `
 )
 SELECT
     count(*) FILTER (WHERE registered AND status = '` + ledger.RunActive + `')::int,
@@ -655,13 +671,15 @@ SELECT
     count(*) FILTER (WHERE status = '` + ledger.RunAbandoned + `')::int,
     count(*) FILTER (WHERE status = '` + ledger.RunRetired + `')::int,
     (SELECT count(*) FROM innsegl.events
-      WHERE event_type = 'commit_recorded')::int,
+      WHERE event_type = 'commit_recorded'
+        AND ` + scopeSQL("run_id", 3, 4) + `)::int,
     -- #167: "open" is derived, not stored — an alert event with no row in
     -- innsegl.alert_resolutions. The alert events themselves are untouched by
     -- this: a resolved alert stays in innsegl.events forever, it just stops
     -- being counted here.
     (SELECT count(*) FROM innsegl.events e
       WHERE e.event_type IN ('unattributed_signature_detected', 'ledger_drift_detected')
+        AND ` + scopeSQL("e.run_id", 3, 4) + `
         AND NOT EXISTS (
             SELECT 1 FROM innsegl.alert_resolutions r WHERE r.event_id = e.event_id
         ))::int
@@ -680,7 +698,9 @@ func (s *Store) Overview(ctx context.Context) (Overview, error) {
 	horizon := s.RestoreHorizon()
 
 	var o Overview
-	if err := s.pool.QueryRow(ctx, overviewSQL, abandonedBefore(horizon, now), now.Add(-s.idleAfter)).Scan(
+	machines, unowned := scopeArgs(ctx)
+	if err := s.pool.QueryRow(ctx, overviewSQL, abandonedBefore(horizon, now), now.Add(-s.idleAfter),
+		machines, unowned).Scan(
 		&o.ActiveRuns, &o.IdleRuns, &o.LapsedRuns, &o.AbandonedRuns, &o.RetiredRuns,
 		&o.CommitsRecorded, &o.OpenAlerts); err != nil {
 		return Overview{}, fmt.Errorf("api: reading the overview: %w", err)
@@ -787,12 +807,13 @@ type AlertPage struct {
 	DataAsOf   time.Time `json:"data_as_of"`
 }
 
-const listAlertsSQL = `
+var listAlertsSQL = `
 WITH alerts AS (
     SELECT chain_position, event_id, event_type, run_id, ts,
            convert_from(canonical, 'UTF8')::jsonb AS body
       FROM innsegl.events
      WHERE event_type IN ('unattributed_signature_detected', 'ledger_drift_detected')
+       AND ` + scopeSQL("run_id", 4, 5) + `
 ), filtered AS (
     SELECT alerts.*, count(*) OVER ()::int AS total
       FROM alerts
@@ -831,7 +852,8 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter) (AlertPage, error
 		cursor = &n
 	}
 
-	rows, err := s.pool.Query(ctx, listAlertsSQL, nullable(f.EventType), cursor, limit)
+	machines, unowned := scopeArgs(ctx)
+	rows, err := s.pool.Query(ctx, listAlertsSQL, nullable(f.EventType), cursor, limit, machines, unowned)
 	if err != nil {
 		return AlertPage{}, fmt.Errorf("api: listing alerts: %w", err)
 	}

@@ -3,8 +3,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -112,6 +114,16 @@ func (s *Server) serveResolutions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := withAccountSession(r.Context(), sess)
+	// RM-307: an alert of a run out of the viewer's scope is not theirs to
+	// resolve, and reads as no alert at all.
+	scope, scoped, err := s.runScopeFor(r, sess.userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, organisationsLoadMessage)
+		return
+	}
+	if scoped {
+		ctx = WithRunScope(ctx, scope)
+	}
 	s.resolutionMux.ServeHTTP(w, r.WithContext(ctx))
 }
 
@@ -128,7 +140,11 @@ func (s *Server) handleResolveBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Refuse what could never be written before anyone is asked for a
-	// passkey: unknown, not an alert, or already resolved.
+	// passkey: out of scope, unknown, not an alert, or already resolved.
+	if err := s.alertsInScope(ctx, req.EventIDs); err != nil {
+		writeResolutionError(w, err)
+		return
+	}
 	if err := s.resolver.alerts.CheckOpen(ctx, req.EventIDs); err != nil {
 		writeResolutionError(w, err)
 		return
@@ -204,6 +220,10 @@ func (s *Server) handleResolveFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if serr := s.alertsInScope(ctx, pending.EventIDs); serr != nil {
+		writeResolutionError(w, serr)
+		return
+	}
 	written, err := s.resolver.alerts.ResolveAlerts(ctx, pending.EventIDs, user.displayName, pending.Reason)
 	if err != nil {
 		writeResolutionError(w, err)
@@ -235,4 +255,21 @@ func writeResolutionError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, codeUnavailable,
 			"the ledger did not take the resolution; nothing was written")
 	}
+}
+
+// alertsInScope refuses the first of eventIDs that is out of the viewer's
+// scope with the ledger's own "no event with that event_id", word for word,
+// so an alert of another organisation reads as no alert. Events in scope
+// are left to CheckOpen.
+func (s *Server) alertsInScope(ctx context.Context, eventIDs []string) error {
+	inScope, err := s.store.eventsInScope(ctx, eventIDs)
+	if err != nil {
+		return err
+	}
+	for _, id := range eventIDs {
+		if _, ok := inScope[id]; !ok {
+			return fmt.Errorf("%w: %q", ledger.ErrAlertNotFound, id)
+		}
+	}
+	return nil
 }

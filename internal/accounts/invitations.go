@@ -207,6 +207,11 @@ func (s *Store) RevokeInvitation(ctx context.Context, accountID string, invitati
 	})
 }
 
+// WithdrawInvitation is RevokeInvitation for the dashboard's members page.
+func (s *Store) WithdrawInvitation(ctx context.Context, accountID string, invitationID int64, actor string) error {
+	return s.RevokeInvitation(ctx, accountID, invitationID, actor)
+}
+
 // Invitations answers an account's invitations, newest first, with the
 // state each is in now.
 func (s *Store) Invitations(ctx context.Context, accountID string) ([]api.OrgInvitation, error) {

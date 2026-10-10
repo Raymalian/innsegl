@@ -186,6 +186,19 @@ export const ENROLMENT_TOKEN = {
   repos: ["*"],
 };
 
+/** E28: the members section's read, as an owner sees it. */
+export const MEMBERS = {
+  can_manage: true,
+  members: [
+    { user_id: "6f1c2a9b3d4e5f60718293a4b5c6d7e8", display_name: "Dev Operator", role: "owner", since: "2026-09-01T00:00:00Z", you: true },
+    { user_id: "7a8b9c0d1e2f30415263748596a7b8c9", display_name: "Grace Hopper", role: "admin", since: "2026-09-12T00:00:00Z", you: false },
+    { user_id: "8b9c0d1e2f30415263748596a7b8c9d0", display_name: "Ada Lovelace", role: "member", since: "2026-09-20T00:00:00Z", you: false },
+  ],
+  invitations: [
+    { id: 3, role: "member", state: "pending", created_by: "6f1c2a9b3d4e5f60718293a4b5c6d7e8", accepted_by: "", expires_at: "2026-10-04T09:00:00Z" },
+  ],
+};
+
 function json(route: Route, body: unknown): Promise<void> {
   return route.fulfill({
     status: 200,
@@ -219,6 +232,10 @@ export async function answerAccountRoute(
   }
   if (p === "/api/v1/account/agents") {
     await json(route, AGENTS);
+    return true;
+  }
+  if (p === "/api/v1/account/members") {
+    await json(route, MEMBERS);
     return true;
   }
   if (p === "/api/v1/account/sessions") {

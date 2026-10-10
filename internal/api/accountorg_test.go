@@ -27,6 +27,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"innsegl.dev/innsegl/internal/ledger"
 	"innsegl.dev/innsegl/internal/webauthntest"
 )
 
@@ -128,6 +129,30 @@ func (f *fakeOrgs) RevokeMachine(_ context.Context, machineID, actor string) err
 	return ErrMachineNotFound
 }
 
+func (f *fakeOrgs) SuspendMachine(_ context.Context, machineID, _ string) error {
+	return f.setStatus(machineID, "suspended")
+}
+
+func (f *fakeOrgs) ResumeMachine(_ context.Context, machineID, _ string) error {
+	return f.setStatus(machineID, "active")
+}
+
+func (f *fakeOrgs) setStatus(machineID, status string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.machines {
+		if f.machines[i].ID != machineID {
+			continue
+		}
+		if f.machines[i].Status == "revoked" {
+			return ErrMachineRevoked
+		}
+		f.machines[i].Status = status
+		return nil
+	}
+	return ErrMachineNotFound
+}
+
 func (f *fakeOrgs) MintEnrolmentToken(_ context.Context, accountID, actor, kind string, repos []string) (string, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -156,6 +181,8 @@ type orgHarness struct {
 	auth      *webauthntest.Authenticator
 	cookie    *http.Cookie
 	userID    string
+	owner     *ledger.Store // the ledger, written as its owner (scope_test.go)
+	store     *Store        // the query API's read-only store
 }
 
 // newOrgHarness signs a user in and makes them role in organisation A and a
@@ -172,9 +199,14 @@ func newOrgHarness(t *testing.T, role string, withOrgs bool, opts ...func(*Serve
 	t.Cleanup(authStore.Close)
 
 	orgs := &fakeOrgs{memberships: map[string][]OrgMembership{}, ownerDSN: m.ownerDSN}
+	resolver, err := OpenResolver(context.Background(), m.resolverDSN)
+	if err != nil {
+		t.Fatalf("OpenResolver: %v", err)
+	}
+	t.Cleanup(resolver.Close)
 	cfg := ServerConfig{
 		Store: store, Prover: newProofScenario(t, proofOptions{}).prover(t),
-		AuthStore: authStore, WebAuthn: testWebAuthnConfig,
+		AuthStore: authStore, WebAuthn: testWebAuthnConfig, Resolver: resolver,
 	}
 	if withOrgs {
 		cfg.Organisations = orgs
@@ -215,7 +247,7 @@ func newOrgHarness(t *testing.T, role string, withOrgs bool, opts ...func(*Serve
 	}
 	return orgHarness{
 		srv: listening, authStore: authStore, ownerDSN: m.ownerDSN, orgs: orgs,
-		auth: auth, cookie: cookie, userID: userID,
+		auth: auth, cookie: cookie, userID: userID, owner: m.owner, store: store,
 	}
 }
 

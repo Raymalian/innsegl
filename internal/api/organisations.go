@@ -36,6 +36,11 @@ type Organisations interface {
 	// RevokeMachine revokes one installation for good, audited with actor.
 	// ErrMachineNotFound or ErrMachineRevoked when it cannot.
 	RevokeMachine(ctx context.Context, machineID, actor string) error
+	// SuspendMachine and ResumeMachine move one installation between active
+	// and suspended, audited with actor (#471). ErrMachineNotFound, or
+	// ErrMachineRevoked for a revoked one.
+	SuspendMachine(ctx context.Context, machineID, actor string) error
+	ResumeMachine(ctx context.Context, machineID, actor string) error
 	// MintEnrolmentToken mints a single-use enrolment token and answers its
 	// plaintext, once. ErrOrgInvalid for a kind or repos list the spine
 	// refuses.
@@ -60,6 +65,10 @@ type Organisations interface {
 	// CreateInvitation mints a single-use invitation and answers its code,
 	// once. ErrOrgForbidden when the actor may not invite to that role.
 	CreateInvitation(ctx context.Context, accountID, role, actor string) (code string, inv OrgInvitation, err error)
+	// WithdrawInvitation withdraws a pending invitation, with actor's role
+	// checked as creating one is. ErrOrgNotFound for no such pending
+	// invitation, ErrOrgForbidden when the actor may not.
+	WithdrawInvitation(ctx context.Context, accountID string, invitationID int64, actor string) error
 	// PeekInvitation answers what a usable code invites to, spending
 	// nothing. ErrInvitationInvalid for any code that is not usable.
 	PeekInvitation(ctx context.Context, code string) (OrgInvitationPeek, error)

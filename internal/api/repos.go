@@ -31,12 +31,13 @@ type RepoList struct {
 	DataAsOf time.Time     `json:"data_as_of"`
 }
 
-const reposSQL = `
+var reposSQL = `
 WITH scoped AS (
     SELECT run_id, ts, event_type,
            innsegl.resolve_alias(convert_from(canonical, 'UTF8')::jsonb->>'repo') AS repo
       FROM innsegl.events
      WHERE run_id IS NOT NULL
+       AND ` + scopeSQL("run_id", 2, 3) + `
 )
 SELECT repo,
        count(DISTINCT run_id)::int AS runs,
@@ -50,7 +51,8 @@ SELECT repo,
 
 // Repos serves the repositories index.
 func (s *Store) Repos(ctx context.Context) (RepoList, error) {
-	rows, err := s.pool.Query(ctx, reposSQL, MaxRepos)
+	machines, unowned := scopeArgs(ctx)
+	rows, err := s.pool.Query(ctx, reposSQL, MaxRepos, machines, unowned)
 	if err != nil {
 		return RepoList{}, fmt.Errorf("api: listing repositories: %w", err)
 	}

@@ -53,6 +53,33 @@ export const strings = {
     cancelled: "The passkey prompt was closed before it finished. Try again.",
     failed: "Setting up the account failed",
   },
+  invite: {
+    heading: "Join an organisation",
+    invitedTo: (organisation: string, role: string) =>
+      `You are invited to ${organisation} as ${role === "admin" ? "an" : "a"} ${role}.`,
+    expires: "The link works once and expires",
+    loading: "Reading the invitation",
+    missingHeading: "No invitation in this link",
+    missingBody:
+      "This page needs the whole invitation link. Open the link you were sent, or ask for a new one.",
+    unusableHeading: "This invitation link is not usable",
+    unusableBody:
+      "It may be wrong, already used, withdrawn or expired. Ask the person who invited you for a new one.",
+    newIntro: "This browser will create the passkey you sign in with from now on.",
+    displayNameLabel: "Display name",
+    displayNameHint: "Shown to the other members of the organisation.",
+    createButton: "Create passkey and join",
+    joinIntro: "You are signed in. Join with the account you have.",
+    joinButton: "Join",
+    working: "Joining",
+    joinedHeading: "You have joined",
+    joinedBody: (organisation: string) =>
+      `You are now a member of ${organisation}. Choose it in the header to see only its runs.`,
+    continueLink: "Go to the dashboard",
+    unsupported: "This browser has no passkey support, so you cannot join from it.",
+    cancelled: "The passkey prompt was closed before it finished. Try again.",
+    failed: "Joining failed",
+  },
   recoveryCodes: {
     heading: "Save your recovery codes",
     intro:
@@ -152,8 +179,38 @@ export const strings = {
       revoke_machine: "An owner or admin can.",
       grant_repositories:
         "Done on the core host with innsegl accounts grant-repo. A repository is also claimed the first time a machine records for it.",
-      manage_members: "Not on the dashboard yet.",
+      manage_members: "An owner or admin can, under Members below.",
     },
+
+    // E28: members, roles and invitation links.
+    membersHeading: "Members",
+    membersIntro:
+      "Who is in each of your organisations, and with which role. An owner or admin changes roles, removes members and makes invitation links; each change is confirmed with a passkey.",
+    membersCaption: (organisation: string) => `Members of ${organisation}`,
+    memberNameHeader: "Name",
+    memberRoleHeader: "Role",
+    memberSinceHeader: "Member since",
+    memberActionsHeader: "Changes",
+    memberYou: "You",
+    memberRoleLabel: (name: string) => `Role for ${name}`,
+    memberRoleButton: "Change role with passkey",
+    memberRoleFailed: "The role could not be changed",
+    memberRemoveButton: "Remove",
+    memberRemovePrompt: "Remove this member? Their sign-ins end and the machines they connected here are suspended.",
+    memberRemoveConfirmButton: "Remove with passkey",
+    memberRemoveFailed: "The member could not be removed",
+    invitationsHeading: "Invitation links",
+    noPendingInvitations: "No invitation link is waiting to be used.",
+    pendingInvitation: (role: string, expires: string) => `${role} link, unused, works until ${expires}`,
+    inviteRoleLabel: "Invite as",
+    inviteButton: "Make a link with passkey",
+    inviteFailed: "The invitation link could not be made",
+    inviteLinkLabel: "Invitation link",
+    inviteLinkOnce: (expires: string) =>
+      `Shown once. Send it to one person; it works once, until ${expires}. Nobody needs an email address.`,
+    copyInviteLink: "Copy link",
+    inviteWithdrawButton: "Withdraw",
+    inviteWithdrawFailed: "The link could not be withdrawn",
 
     machinesHeading: "Machines",
     machinesIntro:
@@ -184,6 +241,16 @@ export const strings = {
     revokeWorking: "Waiting for your passkey",
     revokeFailed: "The machine could not be revoked",
     revokeNeedsRole: "Only an owner or admin can revoke",
+    // #471: a pause that can be undone, beside revoke.
+    suspendButton: "Suspend",
+    suspendConfirmPrompt:
+      "Suspend this machine? It stops recording within a minute, until it is resumed. Your passkey confirms it.",
+    suspendConfirmButton: "Suspend with passkey",
+    suspendFailed: "The machine could not be suspended",
+    resumeButton: "Resume",
+    resumeConfirmPrompt: "Resume this machine? It records again. Your passkey confirms it.",
+    resumeConfirmButton: "Resume with passkey",
+    resumeFailed: "The machine could not be resumed",
 
     connectHeading: "Connect a machine",
     connectIntro:

@@ -49,11 +49,12 @@ const (
 
 // Auth events these routes record. A code never reaches one.
 const (
-	AuthEventInvitationCreated  = "invitation_created"
-	AuthEventInvitationAccepted = "invitation_accepted"
-	AuthEventInvitationRefused  = "invitation_refused"
-	AuthEventMemberRoleChanged  = "member_role_changed"
-	AuthEventMemberRemoved      = "member_removed"
+	AuthEventInvitationCreated   = "invitation_created"
+	AuthEventInvitationAccepted  = "invitation_accepted"
+	AuthEventInvitationRefused   = "invitation_refused"
+	AuthEventInvitationWithdrawn = "invitation_withdrawn"
+	AuthEventMemberRoleChanged   = "member_role_changed"
+	AuthEventMemberRemoved       = "member_removed"
 )
 
 const (
@@ -127,6 +128,13 @@ type MemberRemoved struct {
 	SuspendedMachines []string `json:"suspended_machines"`
 }
 
+// InvitationWithdrawRequest is POST /api/v1/account/invitations/withdraw's
+// body.
+type InvitationWithdrawRequest struct {
+	OrganisationID string `json:"organisation_id"`
+	InvitationID   int64  `json:"invitation_id"`
+}
+
 // InvitationCode is the body that carries a code.
 type InvitationCode struct {
 	Code string `json:"code"`
@@ -165,6 +173,7 @@ func (s *Server) registerMemberRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/account/members/remove/begin", s.withOrgs(s.handleRemoveBegin))
 	mux.HandleFunc("POST /api/v1/account/members/remove/finish", s.withOrgs(s.handleRemoveFinish))
 	mux.HandleFunc("POST /api/v1/account/invitations/accept", s.withOrgs(s.handleInvitationAccept))
+	mux.HandleFunc("POST /api/v1/account/invitations/withdraw", s.withOrgs(s.handleInvitationWithdraw))
 }
 
 func accountOrganisation(m OrgMembership) AccountOrganisation {
@@ -396,6 +405,28 @@ func (s *Server) handleRemoveFinish(w http.ResponseWriter, r *http.Request) {
 		out.SuspendedMachines = []string{}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleInvitationWithdraw withdraws a pending invitation. No passkey:
+// withdrawing only takes access away, as signing out other sessions does.
+// The role is checked here and again by the spine, with this user as actor.
+func (s *Server) handleInvitationWithdraw(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := accountSessionFrom(r).userID
+	var req InvitationWithdrawRequest
+	if !decodeAuthRequest(w, r, &req) {
+		return
+	}
+	if !s.mayChangeMembers(ctx, w, userID, req.OrganisationID, PrivilegeManageMembers) {
+		return
+	}
+	if err := s.orgs.WithdrawInvitation(ctx, req.OrganisationID, req.InvitationID, userID); err != nil {
+		writeMemberError(w, err, "withdraw the invitation")
+		return
+	}
+	s.recordAuth(ctx, AuthEventInvitationWithdrawn, userID,
+		"organisation "+req.OrganisationID+", invitation "+strconv.FormatInt(req.InvitationID, 10))
+	writeJSON(w, http.StatusOK, struct{}{})
 }
 
 // handleInvitationAccept joins the signed-in person to the organisation the

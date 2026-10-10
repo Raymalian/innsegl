@@ -267,6 +267,24 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
         );
         return respond(machineList[0]);
       }
+      if (url.includes("/account/members?") && method === "GET") {
+        if (machineList === "unavailable") return unavailable();
+        return respond({
+          can_manage: false,
+          members: [{ user_id: "user-1", display_name: "Dev Operator", role: "owner", since: "2026-09-01T00:00:00Z", you: true }],
+          invitations: [],
+        });
+      }
+      const statusMatch = /\/account\/machines\/(suspend|resume)\/(begin|finish)$/.exec(url);
+      if (statusMatch && method === "POST") {
+        if (statusMatch[2] === "begin") {
+          return respond({ ceremony_id: `cer-${statusMatch[1]}`, publicKey: { challenge: "abc" } });
+        }
+        if (machineList === "unavailable") return unavailable();
+        const to = statusMatch[1] === "suspend" ? "suspended" : "active";
+        machineList = machineList.map((m) => (m.id === "m-1" ? { ...m, status: to } : m));
+        return respond(machineList[0]);
+      }
       if (url.endsWith("/account/enrolment-tokens/begin") && method === "POST") {
         return respond({ ceremony_id: "cer-token", publicKey: { challenge: "abc" } });
       }
@@ -574,6 +592,8 @@ describe("AccountPage", () => {
     await within(region).findByText("ie_0123456789abcdef_secret");
     const command = `innsegl connect https://${window.location.hostname}:28095 --token ie_0123456789abcdef_secret --ca-fingerprint sha256:0a1b2c`;
     expect(within(region).getByText(command)).toBeInTheDocument();
+    // FE-148: a pinned command has no placeholder to replace.
+    expect(within(region).queryByText(strings.account.connectCaNote)).toBeNull();
   });
 
   it("connects a machine: a passkey, then the token once with the one-line command and its expiry", async () => {
@@ -654,5 +674,73 @@ describe("AccountPage", () => {
       expect(within(region).queryByText(strings.account.sessionRecoveryCode)).toBeNull(),
     );
     expect(fetches.calls.some((c) => c.url.endsWith("/sessions/sign-out-others"))).toBe(true);
+  });
+});
+
+/*
+ * FE-141 (#471, #486): connecting a machine from the dashboard. A fresh
+ * passkey, then the single-use token once with the one-line `innsegl
+ * connect` command (the "connects a machine" case above). For a person in
+ * several organisations the token is minted for the organisation the
+ * header's switcher chose, so the machine records where they are looking.
+ */
+describe("FE-141 connecting a machine from the dashboard", () => {
+  afterEach(() => {
+    document.cookie = "innsegl_organisation=; Path=/; Max-Age=0";
+  });
+
+  it("mints for the organisation the switcher chose", async () => {
+    const TEAM: AccountOrganisation = { ...ORG_OWNER, id: "org-2", name: "example-team", operator: false };
+    document.cookie = "innsegl_organisation=org-2; Path=/";
+    const fetches = installAccountFetch(account({ organisations: [ORG_OWNER, TEAM] }));
+    const user = userEvent.setup();
+    render(<AccountPage browser={workingBrowser()} />);
+
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    expect(within(region).getByLabelText(strings.account.connectOrganisationLabel)).toHaveValue("org-2");
+    await user.click(within(region).getByRole("button", { name: strings.account.connectButton }));
+
+    expect(await within(region).findByText("ie_0123456789abcdef_secret")).toBeInTheDocument();
+    const begin = fetches.calls.find((c) => c.url.endsWith("/enrolment-tokens/begin"));
+    expect(begin?.body).toEqual({ organisation_id: "org-2", kind: "workstation", repos: ["*"] });
+  });
+});
+
+/*
+ * FE-146 (#471): suspend and resume a machine from the account page, each
+ * confirmed with a passkey, beside revoke. Suspended is shown and undone;
+ * revoked offers nothing.
+ */
+function rowOf(region: HTMLElement, name: string): HTMLElement {
+  const row = within(region)
+    .getAllByRole("row")
+    .find((r) => r.textContent?.includes(name));
+  if (!row) throw new Error(`no row for ${name}`);
+  return row;
+}
+
+describe("FE-146 suspending and resuming a machine", () => {
+  it("suspends an active machine and resumes it, each after a passkey", async () => {
+    const fetches = installAccountFetch(account());
+    const user = userEvent.setup();
+    render(<AccountPage browser={workingBrowser()} />);
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    const row = await waitFor(() => rowOf(region, "build-runner-1"));
+
+    await user.click(within(row).getByRole("button", { name: strings.account.suspendButton }));
+    expect(within(row).getByText(strings.account.suspendConfirmPrompt)).toBeInTheDocument();
+    await user.click(within(row).getByRole("button", { name: strings.account.suspendConfirmButton }));
+    const suspended = await waitFor(() => rowOf(region, "build-runner-1"));
+    expect(await within(suspended).findByText(strings.account.machineStatus.suspended)).toBeInTheDocument();
+    expect(fetches.calls.some((c) => c.url.endsWith("/machines/suspend/finish"))).toBe(true);
+
+    await user.click(within(suspended).getByRole("button", { name: strings.account.resumeButton }));
+    await user.click(within(suspended).getByRole("button", { name: strings.account.resumeConfirmButton }));
+    const resumed = await waitFor(() => rowOf(region, "build-runner-1"));
+    expect(await within(resumed).findByText(strings.account.machineStatus.active)).toBeInTheDocument();
+    expect(fetches.calls.find((c) => c.url.endsWith("/machines/resume/begin"))?.body).toEqual({ machine_id: "m-1" });
+
+    const revoked = rowOf(region, "laptop");
+    expect(within(revoked).queryByRole("button")).toBeNull();
   });
 });

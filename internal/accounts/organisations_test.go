@@ -126,6 +126,50 @@ func TestRM333RevokeMachineIsFinalAndNamedErrors(t *testing.T) {
 	}
 }
 
+// ACC-016 against Postgres: suspend and resume are audited and undoable;
+// revoked stays final; migration 0018's ceremony kinds are admitted.
+func TestACC016SuspendAndResumeAMachine(t *testing.T) {
+	e, s, a := setup(t)
+	ctx := tctx(t)
+	inst, err := s.CreateInstallation(ctx, InstallationParams{AccountID: a.ID, CreatedBy: "u-1",
+		Name: "laptop", Kind: KindWorkstation, Repos: []string{"*"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SuspendMachine(ctx, inst.ID, "u-1"); err != nil {
+		t.Fatalf("SuspendMachine: %v", err)
+	}
+	if got, gerr := s.GetInstallation(ctx, inst.ID); gerr != nil || got.Status != StatusSuspended {
+		t.Fatalf("after suspend: %+v, %v", got, gerr)
+	}
+	if err = s.ResumeMachine(ctx, inst.ID, "u-1"); err != nil {
+		t.Fatalf("ResumeMachine: %v", err)
+	}
+	if got, gerr := s.GetInstallation(ctx, inst.ID); gerr != nil || got.Status != StatusActive {
+		t.Fatalf("after resume: %+v, %v", got, gerr)
+	}
+	if err = s.RevokeMachine(ctx, inst.ID, "u-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ResumeMachine(ctx, inst.ID, "u-1"); !errors.Is(err, api.ErrMachineRevoked) {
+		t.Fatalf("resume of a revoked machine: %v, want api.ErrMachineRevoked", err)
+	}
+	if err = s.SuspendMachine(ctx, strings.Repeat("0", 32), "u-1"); !errors.Is(err, api.ErrMachineNotFound) {
+		t.Fatalf("unknown machine: %v, want api.ErrMachineNotFound", err)
+	}
+	actions := strings.Join(auditActions(t, e, a.ID), ",")
+	if !strings.Contains(actions, "installation.suspended,installation.active") {
+		t.Fatalf("audit = %s", actions)
+	}
+	c, _ := ownerConn(t, e.ownerDSN)
+	for _, kind := range []string{"suspend_installation", "resume_installation"} {
+		if _, err := c.Exec(ctx, `INSERT INTO innsegl_auth.webauthn_ceremonies (ceremony_id, kind, session_data, expires_at)
+			VALUES ($1, $1, '{}', now() + interval '1 minute')`, kind); err != nil {
+			t.Errorf("ceremony kind %s: %v", kind, err)
+		}
+	}
+}
+
 func TestRM333MintEnrolmentTokenAnswersAConsumableToken(t *testing.T) {
 	_, s, a := setup(t)
 	ctx := tctx(t)

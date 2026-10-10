@@ -14,6 +14,7 @@
 
 import { useId, useState } from "react";
 
+import { chosenOrganisation } from "../../app/OrganisationSwitcher";
 import { Link } from "../../app/router";
 import {
   AccountSection,
@@ -29,6 +30,7 @@ import {
   fetchAccountAgents,
   fetchAccountRepositories,
   fetchMachines,
+  changeMachineStatus,
   mintEnrolmentToken,
   revokeMachine,
   type WebAuthnBrowser,
@@ -176,11 +178,22 @@ function PrivilegeLists({
 // Machines, and connecting a new one
 // ---------------------------------------------------------------------------
 
+/** What a machine row is asked to do: revoke it, or (#471) suspend or
+ * resume it. */
+type MachineChange = "revoke" | "suspend" | "resume";
+
 type RowPhase =
   | { readonly status: "idle" }
-  | { readonly status: "confirming" }
-  | { readonly status: "working" }
+  | { readonly status: "confirming"; readonly change: MachineChange }
+  | { readonly status: "working"; readonly change: MachineChange }
   | { readonly status: "failed"; readonly message: string };
+
+/** The copy for each change. */
+const changeCopy: Record<MachineChange, { button: string; prompt: string; confirm: string; failed: string }> = {
+  revoke: { button: a.revokeButton, prompt: a.revokeConfirmPrompt, confirm: a.revokeConfirmButton, failed: a.revokeFailed },
+  suspend: { button: a.suspendButton, prompt: a.suspendConfirmPrompt, confirm: a.suspendConfirmButton, failed: a.suspendFailed },
+  resume: { button: a.resumeButton, prompt: a.resumeConfirmPrompt, confirm: a.resumeConfirmButton, failed: a.resumeFailed },
+};
 
 type ConnectPhase =
   | { readonly status: "idle" }
@@ -206,7 +219,11 @@ export function MachinesSection({
   const [rows, setRows] = useState<Record<string, RowPhase>>({});
   const [connect, setConnect] = useState<ConnectPhase>({ status: "idle" });
   const manageable = organisations.filter(managesMachines);
-  const [orgId, setOrgId] = useState(manageable[0]?.id ?? "");
+  // FE-141: the organisation the header's switcher chose, when they may
+  // connect a machine to it.
+  const [orgId, setOrgId] = useState(
+    () => manageable.find((o) => o.id === chosenOrganisation())?.id ?? manageable[0]?.id ?? "",
+  );
   const [kind, setKind] = useState("workstation");
   const orgSelectId = useId();
   const kindSelectId = useId();
@@ -215,14 +232,18 @@ export function MachinesSection({
   const rowOf = (id: string): RowPhase => rows[id] ?? { status: "idle" };
   const setRow = (id: string, phase: RowPhase) => setRows((prev) => ({ ...prev, [id]: phase }));
 
-  const revoke = async (machine: AccountMachine) => {
-    setRow(machine.id, { status: "working" });
+  const change = async (machine: AccountMachine, what: MachineChange) => {
+    setRow(machine.id, { status: "working", change: what });
     try {
-      await revokeMachine(machine.id, browser);
+      if (what === "revoke") {
+        await revokeMachine(machine.id, browser);
+      } else {
+        await changeMachineStatus(machine.id, what, browser);
+      }
       setRow(machine.id, { status: "idle" });
       reload();
     } catch (err) {
-      setRow(machine.id, { status: "failed", message: ceremonyMessage(err, a.revokeFailed) });
+      setRow(machine.id, { status: "failed", message: ceremonyMessage(err, changeCopy[what].failed) });
     }
   };
 
@@ -321,9 +342,10 @@ export function MachinesSection({
                           {machine.can_manage && machine.status !== "revoked" && (
                             <MachineAction
                               phase={phase}
-                              onAsk={() => setRow(machine.id, { status: "confirming" })}
+                              changes={machine.status === "suspended" ? ["resume", "revoke"] : ["suspend", "revoke"]}
+                              onAsk={(what) => setRow(machine.id, { status: "confirming", change: what })}
                               onCancel={() => setRow(machine.id, { status: "idle" })}
-                              onConfirm={() => void revoke(machine)}
+                              onConfirm={(what) => void change(machine, what)}
                             />
                           )}
                         </td>
@@ -426,27 +448,30 @@ export function MachinesSection({
 
 function MachineAction({
   phase,
+  changes,
   onAsk,
   onCancel,
   onConfirm,
 }: {
   readonly phase: RowPhase;
-  readonly onAsk: () => void;
+  readonly changes: readonly MachineChange[];
+  readonly onAsk: (what: MachineChange) => void;
   readonly onCancel: () => void;
-  readonly onConfirm: () => void;
+  readonly onConfirm: (what: MachineChange) => void;
 }) {
   if (phase.status === "confirming" || phase.status === "working") {
+    const copy = changeCopy[phase.change];
     return (
       <div className="flex min-w-[14rem] flex-col gap-2">
-        <span className={`text-micro ${secondaryText}`}>{a.revokeConfirmPrompt}</span>
+        <span className={`text-micro ${secondaryText}`}>{copy.prompt}</span>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
             disabled={phase.status === "working"}
-            onClick={onConfirm}
+            onClick={() => onConfirm(phase.change)}
             className={`${secondaryButton} ${focusRing}`}
           >
-            {phase.status === "working" ? a.revokeWorking : a.revokeConfirmButton}
+            {phase.status === "working" ? a.revokeWorking : copy.confirm}
           </button>
           <button type="button" onClick={onCancel} className={`${secondaryButton} ${focusRing}`}>
             {a.revokeCancelButton}
@@ -457,9 +482,18 @@ function MachineAction({
   }
   return (
     <div className="flex flex-col gap-2">
-      <button type="button" onClick={onAsk} className={`${secondaryButton} ${focusRing}`}>
-        {a.revokeButton}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        {changes.map((what) => (
+          <button
+            key={what}
+            type="button"
+            onClick={() => onAsk(what)}
+            className={`${secondaryButton} ${focusRing}`}
+          >
+            {changeCopy[what].button}
+          </button>
+        ))}
+      </div>
       {phase.status === "failed" && (
         <p role="alert" className={`text-micro ${mutedText}`}>
           {phase.message}
@@ -507,7 +541,7 @@ function MintedToken({
           </code>
           <CopyButton value={command} label={a.copyCommand} />
         </div>
-        <span className={`text-micro ${secondaryText}`}>{a.connectCaNote}</span>
+        {caFingerprint === "" && <span className={`text-micro ${secondaryText}`}>{a.connectCaNote}</span>}
       </div>
       <p className="text-micro">
         <span className={fieldLabel}>{a.expiresLabel}</span>{" "}

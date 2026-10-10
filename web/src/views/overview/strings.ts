@@ -78,7 +78,7 @@ export const strings = {
       label: "Commits attributed",
       description: "Commits the ledger holds.",
       meaning:
-        "Commits the ledger holds a commit_recorded event for. A record, not a verification.",
+        "Commits an agent signed that the ledger recorded. A record, not a verification.",
     },
     openAlerts: {
       label: "Open alerts",
@@ -182,7 +182,7 @@ export const strings = {
       commits: "Commits",
     },
     emptyTitle: "No runs yet",
-    emptyDetail: "The ledger holds no run_registered event.",
+    emptyDetail: "No agent you can see has started a run. Runs show here once an agent on a connected machine starts work.",
     commits: (count: number) =>
       count === 1 ? "1 commit" : `${count} commits`,
     registered: "Registered",

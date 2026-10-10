@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +77,16 @@ func (f *fakeOrgs) CreateInvitation(_ context.Context, accountID, role, actor st
 	f.invites[code] = &fakeInvite{account: accountID, role: role}
 	return code, OrgInvitation{ID: int64(len(f.invites)), AccountID: accountID, Role: role, State: InvitationPending,
 		ExpiresAt: time.Now().Add(72 * time.Hour).UTC()}, nil
+}
+
+func (f *fakeOrgs) WithdrawInvitation(_ context.Context, accountID string, invitationID int64, actor string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.memberErr != nil {
+		return f.memberErr
+	}
+	f.changes = append(f.changes, "withdraw|"+accountID+"|"+strconv.FormatInt(invitationID, 10)+"|"+actor)
+	return nil
 }
 
 func (f *fakeOrgs) usable(code string) (*fakeInvite, error) {

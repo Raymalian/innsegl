@@ -83,6 +83,9 @@ type ServerConfig struct {
 	// fingerprint the account page's connect command pins. Empty: the page
 	// shows a placeholder instead.
 	CoreCACertFile string
+	// UnownedRunsHidden hides runs no machine is mapped to from the
+	// operator's own organisation too.
+	UnownedRunsHidden bool
 }
 
 // Health is what an operator reads to see that "read-only" is a measured fact
@@ -174,16 +177,17 @@ type Server struct {
 	logDir    string
 	logRetain int
 
-	authStore       *AuthStore
-	authMux         *http.ServeMux
-	accountMux      *http.ServeMux
-	resolutionMux   *http.ServeMux
-	resolver        *Resolver
-	orgs            Organisations
-	coreCACertFile  string
-	webAuthn        *webauthn.WebAuthn
-	webAuthnConfig  WebAuthnConfig
-	sessionLifetime time.Duration
+	authStore         *AuthStore
+	authMux           *http.ServeMux
+	accountMux        *http.ServeMux
+	resolutionMux     *http.ServeMux
+	resolver          *Resolver
+	orgs              Organisations
+	coreCACertFile    string
+	unownedRunsHidden bool
+	webAuthn          *webauthn.WebAuthn
+	webAuthnConfig    WebAuthnConfig
+	sessionLifetime   time.Duration
 }
 
 // NewServer wires the routes. It refuses to construct at all without a way
@@ -220,11 +224,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		store: cfg.Store, prover: cfg.Prover, mux: http.NewServeMux(),
 		logDir: cfg.LogDir, logRetain: retain,
 		authStore: cfg.AuthStore, webAuthn: webAuthn,
-		webAuthnConfig:  cfg.WebAuthn,
-		sessionLifetime: sessionLifetime,
-		resolver:        cfg.Resolver,
-		orgs:            cfg.Organisations,
-		coreCACertFile:  cfg.CoreCACertFile,
+		webAuthnConfig:    cfg.WebAuthn,
+		sessionLifetime:   sessionLifetime,
+		resolver:          cfg.Resolver,
+		orgs:              cfg.Organisations,
+		coreCACertFile:    cfg.CoreCACertFile,
+		unownedRunsHidden: cfg.UnownedRunsHidden,
 	}
 	s.authMux = s.newAuthMux()
 	s.accountMux = s.newAccountMux()
@@ -305,12 +310,29 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// and never added to the list is therefore refused, not silently
 	// admitted, however it got onto the mux.
 	if _, pattern := s.mux.Handler(r); !authAllowedRoutes[pattern] {
-		if _, _, ok := s.sessionFromRequest(r); !ok {
+		userID, _, ok := s.sessionFromRequest(r)
+		if !ok {
 			writeError(w, http.StatusUnauthorized, codeUnauthorized,
 				"sign in required (ADR-0062): this dashboard and its read API answer "+
 					"nothing without an operator session")
 			return
 		}
+		// RM-307 (#486): every read below sees only the viewer's runs.
+		scope, scoped, err := s.runScopeFor(r, userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, codeInternal, organisationsLoadMessage)
+			return
+		}
+		if scoped {
+			r = r.WithContext(WithRunScope(r.Context(), scope))
+		}
+		if s.gateRun(w, r) {
+			return
+		}
+	} else {
+		// An allow-listed route reads no run; should one ever try, it reads
+		// none.
+		r = r.WithContext(WithRunScope(r.Context(), RunScope{}))
 	}
 	s.mux.ServeHTTP(w, r)
 }

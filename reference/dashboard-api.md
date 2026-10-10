@@ -42,13 +42,29 @@ POST /api/v1/alert-resolutions/begin
 POST /api/v1/alert-resolutions/finish
 ```
 
+### Scoped reads
+
+Every ledger read answers only the viewer's runs: runs list, run pages and
+their steps, overview counts, repositories, alerts, recent verification
+and attribution. A run belongs to the organisation of the machine the
+gateway mapped it from (`gateway_run_mapping.client_id`). A run no machine
+is mapped to is unowned: the operator's own organisation sees those, every
+other organisation never does, and `-hide-unowned-runs` hides them from
+the operator too. A run outside the viewer's scope answers 404 with the
+same body as a run that does not exist. Alerts with no run are unowned.
+
+A person in several organisations sees all of them at once, or one: the
+dashboard's switcher sets the `innsegl_organisation` cookie to an
+organisation id, and the reads narrow to it. A cookie naming an
+organisation the person is not a member of is ignored.
+
 `GET /api/v1/auth/session` also answers the signed-in person's
 organisations with their roles, read on every request. The three
 `/api/v1/auth/invitation` routes need no session: they are how a person
 with no account yet accepts an invitation with a new passkey.
 
-The account routes (all need a session; the dashboard's pages for the
-member routes come next):
+The account routes (all need a session; the account page's Members section
+calls them):
 
 | Route | Does |
 |---|---|
@@ -57,6 +73,8 @@ member routes come next):
 | `POST /api/v1/account/members/role/begin\|finish` | `{organisation_id, user_id, role}`, after a fresh passkey |
 | `POST /api/v1/account/members/remove/begin\|finish` | `{organisation_id, user_id}`, after a fresh passkey |
 | `POST /api/v1/account/invitations/accept` | `{code}`: join with the account already signed in |
+| `POST /api/v1/account/invitations/withdraw` | `{organisation_id, invitation_id}`: withdraw a pending link; owner or admin, no passkey |
+| `POST /api/v1/account/machines/revoke\|suspend\|resume/begin\|finish` | `{machine_id}`, after a fresh passkey; suspended is undone by resume, revoked is final |
 
 ### Roles
 
@@ -68,7 +86,7 @@ installation and the grants, never a role.
 |---|---|---|---|
 | read the ledger, resolve alerts, own passkeys and sign-ins | yes | yes | yes |
 | connect a machine | yes | yes | yes |
-| revoke a machine | yes | yes | their own only |
+| revoke, suspend or resume a machine | yes | yes | their own only |
 | invite, change a role, remove a member (not an owner) | yes | yes | no |
 | give or take the owner role, invite an owner | yes | no | no |
 | erase the organisation | yes | no | no |
@@ -82,7 +100,12 @@ suspended machine is refused within 30 seconds.
 An invitation is a single-use link, `<origin>/invite#iv_<64 hex>`, valid
 for 72 hours. Only a hash of the code is stored and no email is asked for
 or kept. The code is in the URL fragment, which a browser never sends to
-a server.
+a server. The dashboard's `/invite` page reads it: a person with no
+account gives a display name and creates a passkey, then saves their
+recovery codes; a signed-in person joins with the account they have.
+A person in several organisations gets a switcher in the header (see
+Scoped reads); connecting a machine from the account page mints the token
+for the organisation it names.
 
 `innsegl accounts` verbs (each takes `-dsn`, default `$INNSEGL_API_AUTH_DSN`,
 which is set in the `innsegl-api` container: run them as
@@ -167,6 +190,7 @@ Rows written before this release may still hold names.
 | `-snapshot-dir` | `INNSEGL_API_SNAPSHOT_DIR` | workspace snapshots |
 | `-message-key-dir` | `INNSEGL_API_MESSAGE_KEY_DIR` | check-only agent-message key |
 | `-gateway-ca-cert` | `INNSEGL_API_GATEWAY_CA_CERT` | fingerprint pinned by the connect command shown to users |
+| `-hide-unowned-runs` | `INNSEGL_API_HIDE_UNOWNED_RUNS` | hide runs no machine is mapped to from the operator's organisation too; default `false` |
 | `-upstream-timeout`, `-shutdown-timeout` | `INNSEGL_API_UPSTREAM_TIMEOUT`, `INNSEGL_API_SHUTDOWN_TIMEOUT` | [`15s`, `15s`] |
 
 Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
@@ -213,6 +237,12 @@ last owner or an existing membership.
   AUTH-007; real Postgres)
 - `internal/api/accountmembers_test.go`, `accountorg_test.go` (ACC-004,
   AUTH-005 to AUTH-007)
+- `internal/api/accountsuspend_test.go`, `internal/accounts/organisations_test.go`
+  (ACC-016: suspend and resume, migration 0018's ceremony kinds)
+- `internal/api/scope_test.go`, `scoperelatives_test.go` (API-035: every read answers the viewer's
+  runs only; API-036: another organisation's run reads as no run; ACC-013:
+  the switcher narrows; ACC-014: unowned runs are the operator's), and
+  `cmd/innsegl/apiscope_test.go` (ACC-014's setting)
 - `cmd/innsegl/accountsorgcli_test.go`, `eraseorganisation_test.go`
   (ACC-005, ACC-006, ACC-009 to ACC-011, AUTH-006)
 - `internal/accounts/erase_test.go` (ACC-015: no accounts table names an
@@ -223,7 +253,13 @@ last owner or an existing membership.
 - `test/deploy/apiui_test.go`, `readerrole_test.go` (OPS-011 to OPS-013),
   `resolverrole_test.go`
 - `scripts/setup-link-selftest.sh`
-- `web/` unit tests (`npm test`)
+- `internal/api/accountwithdraw_test.go` (ACC-018)
+- `web/` unit tests (`npm test`): FE-146 (`AccountPage.test.tsx`), FE-147
+  (`AccountMembers.test.tsx`), FE-148 (`app/plain-empty-states.test.ts`), FE-141 (`AccountPage.test.tsx`), FE-142
+  (`app/OrganisationSwitcher.test.tsx`), FE-143 (`InvitePage.test.tsx`),
+  FE-144 (`run-page/scoped.test.tsx`)
+- `web/tests/a11y/organisations.pw.ts` (FE-142, FE-143 in Chromium, axe in
+  both themes)
 
 ## Decisions
 

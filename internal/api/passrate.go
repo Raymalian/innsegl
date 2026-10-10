@@ -41,17 +41,19 @@ type RecentVerification struct {
 	Commits     []RecentCommit `json:"commits"`
 }
 
-const recentCommitsSQL = `
+var recentCommitsSQL = `
 SELECT innsegl.resolve_alias(convert_from(canonical, 'UTF8')::jsonb->>'repo'),
        convert_from(canonical, 'UTF8')::jsonb->>'commit_sha'
   FROM innsegl.events
  WHERE event_type = 'commit_recorded'
+   AND ` + scopeSQL("run_id", 2, 3) + `
  ORDER BY chain_position DESC
  LIMIT $1`
 
 // RecentCommits names the most recently recorded commits, newest first.
 func (s *Store) RecentCommits(ctx context.Context, limit int) ([]RecentCommit, error) {
-	rows, err := s.pool.Query(ctx, recentCommitsSQL, limit)
+	machines, unowned := scopeArgs(ctx)
+	rows, err := s.pool.Query(ctx, recentCommitsSQL, limit, machines, unowned)
 	if err != nil {
 		return nil, fmt.Errorf("api: listing recent commits: %w", err)
 	}

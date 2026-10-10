@@ -43,12 +43,17 @@ import (
 const (
 	ceremonyKindMintToken     = "mint_enrolment_token" //nolint:gosec // a ceremony kind, not a credential
 	ceremonyKindRevokeMachine = "revoke_installation"
+	// Migration 0018's (#471).
+	ceremonyKindSuspendMachine = "suspend_installation"
+	ceremonyKindResumeMachine  = "resume_installation"
 )
 
 // Auth events these routes record. The token itself never reaches one.
 const (
 	AuthEventEnrolmentTokenMinted   = "enrolment_token_minted" //nolint:gosec // an event name, not a credential
 	AuthEventMachineRevoked         = "machine_revoked"
+	AuthEventMachineSuspended       = "machine_suspended"
+	AuthEventMachineResumed         = "machine_resumed"
 	AuthEventConfirmationRefused    = "confirmation_refused"
 	AuthEventOtherSessionsSignedOut = "other_sessions_signed_out"
 )
@@ -58,18 +63,24 @@ const (
 		"repositories cannot be shown; run `innsegl accounts` on the core host"
 	orgsNeedsRoleMessage = "revoking a machine someone else connected needs the owner or an admin of its " +
 		"organisation; ask one of them"
-	orgsNotMemberMessage     = "you are not a member of that organisation"
-	confirmNeedsPasskey      = "this is confirmed with a passkey, and this account has none; add one first"
-	confirmExpiredMessage    = "this confirmation has expired or was already used; start over"
-	machineNotFoundMessage   = "no such machine in your organisations"
-	machineRevokedMessage    = "that machine is already revoked"
-	organisationsLoadMessage = "could not load your organisations"
+	orgsNotMemberMessage       = "you are not a member of that organisation"
+	confirmNeedsPasskey        = "this is confirmed with a passkey, and this account has none; add one first"
+	confirmExpiredMessage      = "this confirmation has expired or was already used; start over"
+	machineNotFoundMessage     = "no such machine in your organisations"
+	machineRevokedMessage      = "that machine is already revoked"
+	machineNotActiveMessage    = "only an active machine can be suspended"
+	machineNotSuspendedMessage = "only a suspended machine can be resumed"
+	organisationsLoadMessage   = "could not load your organisations"
 )
 
 func (s *Server) registerOrganisationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/account/machines", s.withOrgs(s.handleMachines))
 	mux.HandleFunc("POST /api/v1/account/machines/revoke/begin", s.withOrgs(s.handleRevokeBegin))
 	mux.HandleFunc("POST /api/v1/account/machines/revoke/finish", s.withOrgs(s.handleRevokeFinish))
+	mux.HandleFunc("POST /api/v1/account/machines/suspend/begin", s.withOrgs(s.machineStatusBegin(suspendChange)))
+	mux.HandleFunc("POST /api/v1/account/machines/suspend/finish", s.withOrgs(s.machineStatusFinish(suspendChange)))
+	mux.HandleFunc("POST /api/v1/account/machines/resume/begin", s.withOrgs(s.machineStatusBegin(resumeChange)))
+	mux.HandleFunc("POST /api/v1/account/machines/resume/finish", s.withOrgs(s.machineStatusFinish(resumeChange)))
 	mux.HandleFunc("POST /api/v1/account/enrolment-tokens/begin", s.withOrgs(s.handleMintBegin))
 	mux.HandleFunc("POST /api/v1/account/enrolment-tokens/finish", s.withOrgs(s.handleMintFinish))
 	mux.HandleFunc("GET /api/v1/account/repositories", s.withOrgs(s.handleAccountRepositories))
@@ -361,6 +372,98 @@ func (s *Server) handleRevokeFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, accountMachine(m, org, userID, nil))
+}
+
+// ---------------------------------------------------------------------------
+// Suspend and resume a machine (#471)
+// ---------------------------------------------------------------------------
+
+// statusChange is suspending or resuming: the status a machine must hold
+// first, the ceremony kind, and the change itself.
+type statusChange struct {
+	from, kind, event, refusal string
+	apply                      func(o Organisations) func(ctx context.Context, id, actor string) error
+}
+
+var (
+	suspendChange = statusChange{
+		from: "active", kind: ceremonyKindSuspendMachine, event: AuthEventMachineSuspended,
+		refusal: machineNotActiveMessage,
+		apply:   func(o Organisations) func(context.Context, string, string) error { return o.SuspendMachine },
+	}
+	resumeChange = statusChange{
+		from: "suspended", kind: ceremonyKindResumeMachine, event: AuthEventMachineResumed,
+		refusal: machineNotSuspendedMessage,
+		apply:   func(o Organisations) func(context.Context, string, string) error { return o.ResumeMachine },
+	}
+)
+
+// machineForStatusChange finds the machine and checks who may change it
+// (the revoke rule) and that it holds the status the change starts from.
+func (s *Server) machineForStatusChange(ctx context.Context, w http.ResponseWriter, userID, machineID string, c statusChange) (OrgMachine, bool) {
+	m, _, ok := s.findMachine(ctx, w, userID, machineID)
+	if !ok {
+		return OrgMachine{}, false
+	}
+	if m.CreatedBy != userID && !s.mayManage(ctx, w, userID, m.AccountID, PrivilegeRevokeMachine) {
+		return OrgMachine{}, false
+	}
+	switch m.Status {
+	case c.from:
+		return m, true
+	case "revoked":
+		writeError(w, http.StatusConflict, codeConflict, machineRevokedMessage)
+	default:
+		writeError(w, http.StatusConflict, codeConflict, c.refusal)
+	}
+	return OrgMachine{}, false
+}
+
+func (s *Server) machineStatusBegin(c statusChange) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		userID := accountSessionFrom(r).userID
+		var req MachineRevokeRequest
+		if !decodeAuthRequest(w, r, &req) {
+			return
+		}
+		if _, ok := s.machineForStatusChange(ctx, w, userID, req.MachineID, c); !ok {
+			return
+		}
+		s.beginConfirmation(ctx, w, c.kind, userID, req)
+	}
+}
+
+func (s *Server) machineStatusFinish(c statusChange) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		userID := accountSessionFrom(r).userID
+		var req MachineRevokeRequest
+		if !s.finishConfirmation(w, r, c.kind, userID, &req) {
+			return
+		}
+		m, ok := s.machineForStatusChange(ctx, w, userID, req.MachineID, c)
+		if !ok {
+			return
+		}
+		if err := c.apply(s.orgs)(ctx, m.ID, userID); err != nil {
+			switch {
+			case errors.Is(err, ErrMachineRevoked):
+				writeError(w, http.StatusConflict, codeConflict, machineRevokedMessage)
+			case errors.Is(err, ErrMachineNotFound):
+				writeError(w, http.StatusNotFound, codeNotFound, machineNotFoundMessage)
+			default:
+				writeError(w, http.StatusInternalServerError, codeInternal, "could not change the machine")
+			}
+			return
+		}
+		s.recordAuth(ctx, c.event, userID, m.ID)
+		m, org, ok := s.findMachine(ctx, w, userID, m.ID)
+		if !ok {
+			return
+		}
+		writeJSON(w, http.StatusOK, accountMachine(m, org, userID, nil))
+	}
 }
 
 // ---------------------------------------------------------------------------

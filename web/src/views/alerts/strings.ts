@@ -175,7 +175,8 @@ export const strings = {
   detail: {
     loadingWhat: "the alert",
     notFoundTitle: "No such alert",
-    notFoundDetail: "The alerts feed holds no alert with this event ID.",
+    notFoundDetail:
+      "You can see no alert with this ID. It may belong to an organisation you are not in, or the link may be wrong.",
     failedWith: (reason: string) =>
       `Showing nothing rather than guessing. The read failed with: ${reason}`,
     factsLabel: "What this alert records",
