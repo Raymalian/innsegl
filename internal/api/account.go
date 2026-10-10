@@ -172,6 +172,9 @@ type AccountSession struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 	Current     bool      `json:"current"`
 	PasskeyName *string   `json:"passkey_name"`
+	// OrganisationSignIn names the organisation whose identity provider
+	// opened this session (#485); null for a passkey or recovery code.
+	OrganisationSignIn *string `json:"organisation_sign_in"`
 }
 
 // AccountSessions answers GET /api/v1/account/sessions.

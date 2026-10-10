@@ -5,9 +5,9 @@ package api
 import (
 	"context"
 	"io"
-	"strconv"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -291,6 +291,20 @@ func TestAUTH009AnExistingPersonSignsInThroughTheOrganisation(t *testing.T) {
 	if after := h.count(t, `SELECT count(*) FROM innsegl_auth.users`); after != users {
 		t.Fatalf("signing in made %d users", after-users)
 	}
+	// The account page's sign-ins say this one came through the
+	// organisation, not through a passkey or a recovery code.
+	var sessions AccountSessions
+	decodeBody(t, get(t, h.srv.URL, "/api/v1/account/sessions", session), &sessions)
+	var current *AccountSession
+	for i := range sessions.Sessions {
+		if sessions.Sessions[i].Current {
+			current = &sessions.Sessions[i]
+		}
+	}
+	if current == nil || current.PasskeyName != nil || current.OrganisationSignIn == nil ||
+		*current.OrganisationSignIn != "example-org" {
+		t.Fatalf("the SSO session as the account page lists it = %+v", current)
+	}
 	if got := strings.Join(h.orgs.sso().joins, ","); !strings.Contains(got, "|"+h.userID) {
 		t.Fatalf("joins asked = %s", got)
 	}
@@ -490,4 +504,3 @@ func enrolSecondUser(t *testing.T, h ssoHarness) (string, *http.Cookie) {
 	h.orgs.mu.Unlock()
 	return id, &http.Cookie{Name: sessionCookieName, Value: token}
 }
-
