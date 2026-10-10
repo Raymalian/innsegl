@@ -28,6 +28,14 @@ WHAT THIS DOES, in three steps.
   3. The `up` asked for runs with those values. A changed label is a changed
      definition, so compose recreates exactly the services whose inputs
      changed, and no others.
+  4. With `-d`, every long-running service the `up` started or replaced is
+     waited for (#573): healthy when it has a health check, running and
+     unrestarted for a few seconds when it has none. One that stops, keeps
+     restarting, turns unhealthy or is not up within INNSEGL_UP_WAIT_TIMEOUT
+     seconds (600) fails the run: exit 1, its name and its last log lines.
+     The clock starts when compose returns, after every old container has
+     stopped, so a slow stop is never counted against the new one. A service
+     the `up` left alone is not waited for.
 
 `list` prints each long-running service's inputs and the variable it needs,
 without touching a container:
@@ -43,6 +51,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import time
 
 LABEL = "dev.innsegl.inputs"
 # Up flags that take a value; every other flag is a switch.
@@ -304,7 +313,105 @@ def main(argv):
             say("%s: its start-read inputs changed; it is recreated" % svc)
 
     # Step 3: the up that was asked for.
-    os.execvpe("docker", ["docker", "compose", *gargs, "up", *uargs], env)
+    detached = any(a in ("-d", "--detach") for a in uargs) and "--wait" not in uargs
+    if not detached:
+        os.execvpe("docker", ["docker", "compose", *gargs, "up", *uargs], env)
+    services = cfg.get("services") or {}
+    watched = sorted(s for s in closure if s in services and long_running(services[s]))
+    before = started(cfg, watched)
+    p = subprocess.run(["docker", "compose", *gargs, "up", *uargs], env=env)
+    if p.returncode != 0:
+        return p.returncode
+
+    # Step 4 (#573): wait for what the up started or replaced. Its clock
+    # starts now, after compose has stopped every old container, however long
+    # that took.
+    after = started(cfg, watched)
+    fresh = [s for s in watched if s in after and after[s] != before.get(s)]
+    return wait_up(fresh, after, services)
+
+
+def started(cfg, names):
+    """{service: (container id, start time)} for each named service's
+    container; a container started again has a new start time."""
+    project = cfg.get("name") or ""
+    out = {}
+    for svc in names:
+        ids = docker("ps", "-a", "-q", "--filter", "label=com.docker.compose.project=" + project,
+                     "--filter", "label=com.docker.compose.service=" + svc).stdout.decode().split()
+        if ids:
+            st = docker("inspect", "-f", "{{.Id}} {{.State.StartedAt}}", ids[0]).stdout.decode().split()
+            out[svc] = tuple(st)
+    return out
+
+
+WAIT_POLL = 1.0
+# A service with no health check is up once it has run this long unrestarted.
+STEADY_SECONDS = 5.0
+# Restarts that say a service is failing on start, not merely restarting once.
+CRASH_RESTARTS = 2
+
+
+def wait_up(fresh, ids, services):
+    """Wait until every service in fresh is healthy, or running and steady
+    when it has no health check. 0 when all are; 1, naming the first that is
+    not and showing its last log lines, when one fails or the time runs out."""
+    if not fresh:
+        return 0
+    try:
+        timeout = float(os.environ.get("INNSEGL_UP_WAIT_TIMEOUT") or 600)
+    except ValueError:
+        fail("INNSEGL_UP_WAIT_TIMEOUT is not a number of seconds", 2)
+    say("waiting for %s (up to %ds)" % (" ".join(fresh), timeout))
+    deadline = time.monotonic() + timeout
+    base = {}
+    steady = {}
+    pending = list(fresh)
+    while pending:
+        for svc in list(pending):
+            cid = ids[svc][0]
+            p = docker("inspect", "-f", "{{json .State}}", cid, check=False)
+            if p.returncode != 0:
+                return failed(svc, cid, "its container is gone")
+            st = json.loads(p.stdout or b"{}")
+            restarts = int(docker("inspect", "-f", "{{.RestartCount}}", cid).stdout.decode().strip() or 0)
+            base.setdefault(svc, restarts)
+            health = (st.get("Health") or {}).get("Status")
+            status = st.get("Status")
+            policy = services[svc].get("restart") or ""
+            if status == "exited" and st.get("ExitCode") == 0 and policy.startswith("on-failure"):
+                say("%s: finished" % svc)
+                pending.remove(svc)
+            elif status in ("exited", "dead") or restarts - base[svc] >= CRASH_RESTARTS:
+                return failed(svc, cid, "it stopped on start (%s, exit %s, restarted %d times)"
+                              % (status, st.get("ExitCode"), restarts - base[svc]))
+            elif health == "unhealthy":
+                return failed(svc, cid, "its health check fails")
+            elif health == "healthy":
+                say("%s: healthy" % svc)
+                pending.remove(svc)
+            elif health is None and status == "running" and not st.get("Restarting"):
+                first = steady.setdefault(svc, (time.monotonic(), restarts))
+                if first[1] != restarts:
+                    steady[svc] = (time.monotonic(), restarts)
+                elif time.monotonic() - first[0] >= STEADY_SECONDS:
+                    say("%s: running" % svc)
+                    pending.remove(svc)
+            else:
+                steady.pop(svc, None)
+        if pending and time.monotonic() >= deadline:
+            return failed(pending[0], ids[pending[0]][0],
+                          "not up after %ds (still %s)" % (timeout, " ".join(pending)))
+        if pending:
+            time.sleep(WAIT_POLL)
+    return 0
+
+
+def failed(svc, cid, why):
+    say("FAIL: %s did not come up: %s. Its last log lines:" % (svc, why))
+    sys.stderr.flush()
+    subprocess.run(["docker", "logs", "--tail", "30", cid], stdout=sys.stderr, stderr=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
