@@ -81,6 +81,12 @@ var commands = map[string]command{
 		summary: "attest a major schema cutover in this chain",
 		exec:    migrateSchemaCommand,
 	},
+	// ADR-0080: the operator's erasure of a repository's name, its aliases
+	// and its mirror, run as the database owner.
+	"erase-repository": {
+		summary: "erase a repository's name: its aliases and its mirror",
+		exec:    eraseRepositoryCommand,
+	},
 	// retire is RM-154 (#257): the one way positive knowledge that a run is
 	// over gets into the record without an MCP client. The reaper can only
 	// observe silence, and silence is not an ending at any threshold; a

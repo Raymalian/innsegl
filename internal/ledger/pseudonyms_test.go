@@ -228,14 +228,22 @@ func TestLED046ErasingAnAliasChangesNoByteOfTheChain(t *testing.T) {
 	}
 	repoA, _ := repos.Repo(pnRepo)
 
-	n, err := erasure.Repository(ctx, s.pool, pnRepo)
+	erased, err := erasure.Repository(ctx, s.pool, pnRepo, "test")
 	if err != nil {
 		t.Fatalf("erasure.Repository: %v", err)
 	}
 	// Two repository pseudonyms (two keys) and three branch pseudonyms
 	// (pnBranch and main under key A, pnBranch under key B).
-	if n != 5 {
-		t.Errorf("erased %d rows, want 5", n)
+	if len(erased) != 5 {
+		t.Errorf("erased %v, want 5 pseudonyms", erased)
+	}
+	var audited []byte
+	if err := s.pool.QueryRow(ctx,
+		`SELECT detail::text FROM innsegl_auth.audit WHERE action = $1`, erasure.AuditAction).Scan(&audited); err != nil {
+		t.Fatalf("the erasure left no audit row: %v", err)
+	}
+	if bytes.Contains(audited, []byte("acme")) || !bytes.Contains(audited, []byte(erased[0])) {
+		t.Errorf("the audit row %s must name the pseudonyms and never the literal", audited)
 	}
 
 	after := canonicalRows(t, s)
@@ -274,10 +282,10 @@ func TestLED046ErasingAnAliasChangesNoByteOfTheChain(t *testing.T) {
 		t.Errorf("an erased pseudonym resolves to %q, want itself", got[repoA])
 	}
 
-	if n, err := erasure.Repository(ctx, s.pool, pnRepo); err != nil || n != 0 {
-		t.Errorf("a second erasure = %d, %v; want 0, nil", n, err)
+	if again, err := erasure.Repository(ctx, s.pool, pnRepo, "test"); err != nil || len(again) != 0 {
+		t.Errorf("a second erasure = %v, %v; want none, nil", again, err)
 	}
-	if _, err := erasure.Repository(ctx, s.pool, "not a repository"); !errors.Is(err, event.ErrInvalidRepo) {
+	if _, err := erasure.Repository(ctx, s.pool, "not a repository", "test"); !errors.Is(err, event.ErrInvalidRepo) {
 		t.Errorf("erasing a non-repository = %v, want %v", err, event.ErrInvalidRepo)
 	}
 }
@@ -322,7 +330,7 @@ func TestMCP099DeadRunsAreFoundAcrossAModeSwitchAndAKeyRotation(t *testing.T) {
 		t.Errorf("dead runs = %v, want %v", got, want)
 	}
 
-	if _, err := erasure.Repository(ctx, s.pool, pnRepo); err != nil {
+	if _, err := erasure.Repository(ctx, s.pool, pnRepo, "test"); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.DeadRunsForRepo(ctx, pnRepo, since, 10)
