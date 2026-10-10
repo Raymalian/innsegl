@@ -122,7 +122,13 @@ func NewUserID() (string, error) { return newRandomID(16) }
 // completes (CompleteEnrolment), keeping a never-finished registration from
 // leaving a user with no passkey.
 func (a *AuthStore) CreateUser(ctx context.Context, userID, displayName string) error {
-	_, err := a.pool.Exec(ctx,
+	return createUserIn(ctx, a.pool, userID, displayName)
+}
+
+// createUserIn is CreateUser on q: the pool, or a transaction another store
+// lends (an invited person's user, created with their membership, #481).
+func createUserIn(ctx context.Context, q Querier, userID, displayName string) error {
+	_, err := q.Exec(ctx,
 		`INSERT INTO innsegl_auth.users (user_id, display_name) VALUES ($1, $2)`,
 		userID, displayName)
 	if err != nil {
@@ -214,12 +220,17 @@ func credentialIDString(id []byte) string {
 // rather than approximating it client-side, the same "ask the server"
 // discipline the rest of this file holds to.
 func (a *AuthStore) AddPasskey(ctx context.Context, userID, name string, cred webauthn.Credential) (createdAt time.Time, err error) {
+	return addPasskeyIn(ctx, a.pool, userID, name, cred)
+}
+
+// addPasskeyIn is AddPasskey on q, as createUserIn is CreateUser.
+func addPasskeyIn(ctx context.Context, q Querier, userID, name string, cred webauthn.Credential) (createdAt time.Time, err error) {
 	body, err := json.Marshal(cred)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("api: encoding the passkey credential: %w", err)
 	}
 	credentialID := credentialIDString(cred.ID)
-	err = a.pool.QueryRow(ctx,
+	err = q.QueryRow(ctx,
 		`INSERT INTO innsegl_auth.passkeys (credential_id, user_id, credential, attestation_format, name)
 		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING created_at`,

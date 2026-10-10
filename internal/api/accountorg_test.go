@@ -52,6 +52,13 @@ type fakeOrgs struct {
 	mintErr     error
 	revokeErr   error
 	founded     int // FoundOperator calls
+
+	// Members, roles and invitations (#480, #481): accountmembers_test.go.
+	members   map[string][]OrgMember // by account
+	invites   map[string]*fakeInvite // by code
+	changes   []string               // what SetRole, RemoveMember and the invitations were asked
+	memberErr error                  // answered by every member change when set
+	ownerDSN  string                 // the real database a new user is created in
 }
 
 func (f *fakeOrgs) FoundOperator(context.Context) (bool, error) {
@@ -164,7 +171,7 @@ func newOrgHarness(t *testing.T, role string, withOrgs bool, opts ...func(*Serve
 	}
 	t.Cleanup(authStore.Close)
 
-	orgs := &fakeOrgs{memberships: map[string][]OrgMembership{}}
+	orgs := &fakeOrgs{memberships: map[string][]OrgMembership{}, ownerDSN: m.ownerDSN}
 	cfg := ServerConfig{
 		Store: store, Prover: newProofScenario(t, proofOptions{}).prover(t),
 		AuthStore: authStore, WebAuthn: testWebAuthnConfig,
@@ -282,13 +289,13 @@ func TestRM333AccountNamesOrganisationsRolesAndPrivileges(t *testing.T) {
 	for action, want := range map[string]bool{
 		PrivilegeReadLedger: true, PrivilegeResolveAlerts: true, PrivilegeManageOwnSignIn: true,
 		PrivilegeConnectMachine: true, PrivilegeRevokeMachine: true,
-		PrivilegeGrantRepositories: false, PrivilegeManageMembers: false,
+		PrivilegeGrantRepositories: false, PrivilegeManageMembers: true,
 	} {
 		if pa[action] != want {
 			t.Errorf("admin %s = %v, want %v", action, pa[action], want)
 		}
 	}
-	if pb[PrivilegeConnectMachine] || pb[PrivilegeRevokeMachine] || !pb[PrivilegeReadLedger] {
+	if !pb[PrivilegeConnectMachine] || pb[PrivilegeRevokeMachine] || pb[PrivilegeManageMembers] || !pb[PrivilegeReadLedger] {
 		t.Errorf("member privileges = %+v", b.Privileges)
 	}
 }
@@ -300,10 +307,13 @@ func TestRM333RolePrivilegesTable(t *testing.T) {
 	}{
 		{roleOwner, PrivilegeConnectMachine, true},
 		{roleAdmin, PrivilegeRevokeMachine, true},
-		{roleMember, PrivilegeConnectMachine, false},
+		{roleMember, PrivilegeConnectMachine, true},
+		{roleMember, PrivilegeRevokeMachine, false},
+		{roleAdmin, PrivilegeManageOwners, false},
+		{roleOwner, PrivilegeEraseOrganisation, true},
 		{roleMember, PrivilegeResolveAlerts, true},
 		{roleOwner, PrivilegeGrantRepositories, false},
-		{roleOwner, PrivilegeManageMembers, false},
+		{roleOwner, PrivilegeManageMembers, true},
 		{"stranger", PrivilegeReadLedger, false},
 		{roleOwner, "unknown", false},
 	} {
@@ -438,17 +448,31 @@ func TestRM333MintingWithoutAFreshPasskeyCeremonyIsRefused(t *testing.T) {
 	}
 }
 
-func TestRM333MembersMayNotConnectOrRevokeMachines(t *testing.T) {
+// ACC-004 (plan, Authorization E1): a member connects machines of their own
+// and revokes only those; everyone else's needs an owner or an admin.
+func TestACC004MembersConnectTheirOwnMachinesAndRevokeOnlyThose(t *testing.T) {
 	h := newOrgHarness(t, roleMember, true)
 	a := do(t, http.MethodPost, h.srv.URL+"/api/v1/account/enrolment-tokens/begin",
 		mustJSON(t, EnrolmentTokenRequest{OrganisationID: orgA}), h.cookie)
-	if a.status != http.StatusForbidden || !strings.Contains(string(a.body), "owner or an admin") {
-		t.Errorf("member mint = %d: %s", a.status, a.body)
+	if a.status != http.StatusOK {
+		t.Errorf("member mint = %d, want a passkey challenge: %s", a.status, a.body)
 	}
 	a = do(t, http.MethodPost, h.srv.URL+"/api/v1/account/machines/revoke/begin",
 		mustJSON(t, MachineRevokeRequest{MachineID: machineLaptop}), h.cookie)
 	if a.status != http.StatusForbidden || !strings.Contains(string(a.body), "owner or an admin") {
-		t.Errorf("member revoke = %d: %s", a.status, a.body)
+		t.Errorf("member revoke of someone else's machine = %d: %s", a.status, a.body)
+	}
+	h.orgs.mu.Lock()
+	h.orgs.machines[0].CreatedBy = h.userID
+	h.orgs.mu.Unlock()
+	machines := do(t, http.MethodGet, h.srv.URL+"/api/v1/account/machines", "", h.cookie)
+	var listed AccountMachines
+	decodeBody(t, machines, &listed)
+	if len(listed.Machines) == 0 || listed.Machines[0].ID != machineLaptop || !listed.Machines[0].CanManage {
+		t.Errorf("their own machine is not manageable: %+v", listed.Machines)
+	}
+	if r := h.confirm(t, "machines/revoke", MachineRevokeRequest{MachineID: machineLaptop}, h.auth); r.status != http.StatusOK {
+		t.Errorf("member revoke of their own machine = %d: %s", r.status, r.body)
 	}
 	// Organisation C is not theirs at all.
 	a = do(t, http.MethodPost, h.srv.URL+"/api/v1/account/enrolment-tokens/begin",
@@ -468,7 +492,7 @@ func TestRM333FinishChecksTheRoleAgain(t *testing.T) {
 	}
 	body := h.assertion(t, begin, h.auth)
 	h.orgs.mu.Lock()
-	h.orgs.memberships[h.userID][0].Role = roleMember
+	h.orgs.memberships[h.userID] = h.orgs.memberships[h.userID][1:]
 	h.orgs.mu.Unlock()
 	if a := h.finish(t, "enrolment-tokens", body); a.status != http.StatusForbidden {
 		t.Errorf("finish after demotion = %d, want 403: %s", a.status, a.body)

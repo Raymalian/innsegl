@@ -33,7 +33,7 @@ func TestAUTH002EnrolmentWithAValidCodeCompletes(t *testing.T) {
 	if a.status != http.StatusOK {
 		t.Fatalf("GET /api/v1/auth/session: %d: %s", a.status, a.body)
 	}
-	var status sessionStatus
+	var status SessionStatus
 	decodeBody(t, a, &status)
 	if !status.Authenticated {
 		t.Fatal("a completed enrolment did not leave a valid session behind")

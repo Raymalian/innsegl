@@ -15,46 +15,22 @@ import (
 // the *Tx internals, and the dashboard's account setup is the operator path.
 // The tests use them to build a known starting state.
 
-// ErrAlreadyMember: the user already holds a live membership.
-var ErrAlreadyMember = errors.New("accounts: the user is already a member of this account")
-
-// AddMember gives a user a live membership. A second live membership for the
-// same pair is ErrAlreadyMember.
-func (s *Store) AddMember(ctx context.Context, accountID, userID, role, actor string) error {
-	switch role {
-	case RoleOwner, RoleAdmin, RoleMember:
-	default:
-		return fmt.Errorf("%w: role %q is not owner, admin or member", ErrInvalid, role)
-	}
-	return s.inTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO innsegl_auth.memberships (user_id, account_id, role) VALUES ($1, $2, $3)`,
-			userID, accountID, role); err != nil {
-			if pgCode(err) == "23505" {
-				return ErrAlreadyMember
-			}
-			return fmt.Errorf("accounts: adding the member: %w", err)
-		}
-		return appendAudit(ctx, tx, AuditEntry{Actor: actor, AccountID: accountID, Action: "membership.added",
-			Subject: userID, Detail: map[string]any{"role": role}})
-	})
-}
-
 // EndRepoGrant ends the account's live grant on a repository. No live grant
 // is ErrNotFound.
 func (s *Store) EndRepoGrant(ctx context.Context, accountID, repo, actor string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx,
+		var grant int64
+		err := tx.QueryRow(ctx,
 			`UPDATE innsegl_auth.repo_grants SET until = clock_timestamp()
-			  WHERE account_id = $1 AND repo = $2 AND until IS NULL`, accountID, repo)
+			  WHERE account_id = $1 AND repo = $2 AND until IS NULL RETURNING grant_id`, accountID, repo).Scan(&grant)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		if err != nil {
 			return fmt.Errorf("accounts: ending the grant: %w", err)
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrNotFound
-		}
 		return appendAudit(ctx, tx, AuditEntry{Actor: actor, AccountID: accountID, Action: "repo_grant.ended",
-			Subject: repo})
+			Subject: grantSubject(grant)})
 	})
 }
 

@@ -87,6 +87,12 @@ var commands = map[string]command{
 		summary: "erase a repository's name: its aliases and its mirror",
 		exec:    eraseRepositoryCommand,
 	},
+	// #482: an organisation's erasure, its account rows and the names and
+	// mirrors of the repositories only it held, run as the database owner.
+	"erase-organisation": {
+		summary: "erase an organisation: its account data, repository names and mirrors",
+		exec:    eraseOrganisationCommand,
+	},
 	// retire is RM-154 (#257): the one way positive knowledge that a run is
 	// over gets into the record without an MCP client. The reaper can only
 	// observe silence, and silence is not an ending at any threshold; a

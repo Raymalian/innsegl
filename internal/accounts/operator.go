@@ -47,7 +47,7 @@ func (s *Store) FoundOperator(ctx context.Context) (created bool, err error) {
 			return fmt.Errorf("accounts: creating the operator organisation: %w", xerr)
 		}
 		if xerr := appendAudit(ctx, tx, AuditEntry{AccountID: id, Action: "account.created",
-			Subject: id, Detail: map[string]any{"name": name, "operator": true}}); xerr != nil {
+			Subject: id, Detail: map[string]any{"operator": true}}); xerr != nil {
 			return xerr
 		}
 		if _, xerr := tx.Exec(ctx,

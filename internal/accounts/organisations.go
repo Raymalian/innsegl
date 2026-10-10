@@ -46,7 +46,7 @@ func (s *Store) Machines(ctx context.Context, accountIDs []string) ([]api.OrgMac
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (api.OrgMachine, error) {
 		i, err := scanInstallation(row)
 		return api.OrgMachine{
-			ID: i.ID, AccountID: i.AccountID, Name: i.Name, Kind: i.Kind, Repos: i.Repos,
+			ID: i.ID, AccountID: i.AccountID, CreatedBy: i.CreatedBy, Name: i.Name, Kind: i.Kind, Repos: i.Repos,
 			Status: i.Status, CreatedAt: i.CreatedAt, LastRenewedAt: i.LastRenewedAt, RevokedAt: i.RevokedAt,
 		}, err
 	})

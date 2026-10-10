@@ -5,39 +5,103 @@
 `innsegl api` serves the dashboard UI, a read-only query API over the ledger,
 and the proof route that verifies a commit (doc 05 §1, doc 06 §7). Every
 route except `health` and `proof` needs a signed-in passkey session
-(ADR-0062). `innsegl accounts` manages who may sign in and which machines
-may enrol.
+(ADR-0062). `innsegl accounts` manages organisations, their members and
+invitations, and which machines may enrol. `innsegl erase-organisation`
+erases an organisation.
 
 ## Commands
 
 ```
 innsegl api [flags]
 innsegl accounts <verb> [flags]
+innsegl erase-organisation -account ID [flags]
 innsegl admin-credential enrol-code -dsn <auth-writer DSN> [-ttl D]
 ```
 
 Routes (from `innsegl api -h`):
 
 ```
-GET  /api/v1/runs                     GET  /api/v1/proof/{commit_sha}
-GET  /api/v1/runs/{run_id}            GET  /api/v1/health
-GET  /api/v1/runs/{run_id}/record     POST /api/v1/auth/enrol/begin|finish
-GET  /api/v1/runs/{run_id}/steps/{n}/diff
-GET  /api/v1/overview                 POST /api/v1/auth/login/begin|finish
-GET  /api/v1/repos                    POST /api/v1/auth/logout
-                                      GET  /api/v1/auth/session
-                                      POST /api/v1/alert-resolutions/begin|finish
+GET /api/v1/runs
+GET /api/v1/runs/{run_id}
+GET /api/v1/runs/{run_id}/record
+GET /api/v1/runs/{run_id}/steps/{n}/diff
+GET /api/v1/overview
+GET /api/v1/repos
+GET /api/v1/proof/{commit_sha}
+GET /api/v1/health
+POST /api/v1/auth/enrol/begin
+POST /api/v1/auth/enrol/finish
+POST /api/v1/auth/login/begin
+POST /api/v1/auth/login/finish
+POST /api/v1/auth/logout
+GET /api/v1/auth/session
+POST /api/v1/auth/invitation
+POST /api/v1/auth/invitation/begin
+POST /api/v1/auth/invitation/finish
+POST /api/v1/alert-resolutions/begin
+POST /api/v1/alert-resolutions/finish
 ```
+
+`GET /api/v1/auth/session` also answers the signed-in person's
+organisations with their roles, read on every request. The three
+`/api/v1/auth/invitation` routes need no session: they are how a person
+with no account yet accepts an invitation with a new passkey.
+
+The account routes (all need a session; the dashboard's pages for the
+member routes come next):
+
+| Route | Does |
+|---|---|
+| `GET /api/v1/account/members?organisation_id=ID` | the members and their roles; the invitations too for an owner or admin |
+| `POST /api/v1/account/invitations/begin\|finish` | `{organisation_id, role}`; after a fresh passkey, the link, once |
+| `POST /api/v1/account/members/role/begin\|finish` | `{organisation_id, user_id, role}`, after a fresh passkey |
+| `POST /api/v1/account/members/remove/begin\|finish` | `{organisation_id, user_id}`, after a fresh passkey |
+| `POST /api/v1/account/invitations/accept` | `{code}`: join with the account already signed in |
+
+### Roles
+
+Three roles. They decide what a person may change in the accounts data.
+They never decide what an agent may do: scope checks read the
+installation and the grants, never a role.
+
+| Action | owner | admin | member |
+|---|---|---|---|
+| read the ledger, resolve alerts, own passkeys and sign-ins | yes | yes | yes |
+| connect a machine | yes | yes | yes |
+| revoke a machine | yes | yes | their own only |
+| invite, change a role, remove a member (not an owner) | yes | yes | no |
+| give or take the owner role, invite an owner | yes | no | no |
+| erase the organisation | yes | no | no |
+
+The last owner cannot be removed or demoted. Removing a member ends the
+membership, revokes every session of that person, and suspends the active
+installations they connected in that organisation, in one transaction.
+The gateway reads an installation's status with a 30 second cache, so a
+suspended machine is refused within 30 seconds.
+
+An invitation is a single-use link, `<origin>/invite#iv_<64 hex>`, valid
+for 72 hours. Only a hash of the code is stored and no email is asked for
+or kept. The code is in the URL fragment, which a browser never sends to
+a server.
 
 `innsegl accounts` verbs (each takes `-dsn`, default `$INNSEGL_API_AUTH_DSN`,
 which is set in the `innsegl-api` container: run them as
 `docker exec innsegl-api innsegl accounts <verb> …`; without it the error
-says so). Listings print a header line first.
+says so). Listings print a header line first. Without `--by` a change is
+the operator's and is audited with no actor; with `--by USER` it is that
+user's, and their role is checked as the dashboard checks it.
 
 | Verb | Arguments | Does |
 |---|---|---|
 | `list` | | every account: `ID NAME OPERATOR OWNERS REPOS` |
-| `new` | `--name NAME` | create an account; prints its id |
+| `new` | `--name NAME [--owner USER]` | create an account, with its first owner; prints its id |
+| `members` | `--account ID` | `USER NAME ROLE SINCE` |
+| `set-role` | `--account ID [--by USER] USER ROLE` | give a member the role `owner`, `admin` or `member` |
+| `remove-member` | `--account ID [--by USER] USER` | end a membership; revokes their sessions, suspends their machines there |
+| `invite` | `--account ID --role ROLE [--by USER] [--origin URL]` | the invitation link on stdout; `--origin` defaults to `$INNSEGL_API_RP_ORIGIN` |
+| `invitations` | `--account ID` | `ID ROLE STATE CREATED-BY ACCEPTED-BY EXPIRES` |
+| `withdraw-invitation` | `--account ID [--by USER] ID` | withdraw a pending invitation |
+| `audit` | `[--account ID] [--limit N]` | `AT ACCOUNT ACTOR ACTION SUBJECT DETAIL`, newest first; `--limit` 200, 0 for all |
 | `enrol-token` | `--account ID --by USER --repos a,b\|* [--kind workstation\|service]` | a 15-minute single-use token for `innsegl connect` |
 | `installations` | `[--account ID]` | every account's installations, or one account's: `ACCOUNT ID STATUS KIND NAME REPOS OPERATOR-AUTHOR`; the last column is the pinned operator author, `-` for none |
 | `revoke-installation` | `ID` | revoke one installation, for good |
@@ -48,6 +112,38 @@ says so). Listings print a header line first.
 `enrol-code` mints the one-time code the first passkey enrolment (or a
 recovery) consumes. `scripts/setup-link.sh`, run by `make start`, prints the
 setup link while no account exists.
+
+`innsegl erase-organisation -h`:
+
+```
+Flags:
+  -account string
+    	the organisation's id: the ID column of innsegl accounts list
+  -body-dir string
+    	the core's captured bodies; the bodies of runs in each erased repository are removed ($INNSEGL_MCP_LOG_DIR)
+  -by string
+    	the owner who asked; refused unless they are a live owner (default: the operator)
+  -dsn string
+    	the ledger database as its OWNER; no service role can delete an alias ($INNSEGL_LEDGER_DSN)
+  -mirror-dir string
+    	the core's repository mirror; each erased repository's mirror is removed ($INNSEGL_MIRROR_DIR)
+```
+
+It runs as the database owner, like `innsegl erase-repository`
+([repository-names.md](repository-names.md)). In one transaction it erases
+the aliases of every repository only this organisation held, revokes its
+members' sessions, and deletes its enrolment tokens, invitations,
+memberships, repository grants, installations, pending passkey
+confirmations and account row; then it removes those repositories'
+mirrors and the captured bodies of every run registered in them. A
+repository another organisation holds now keeps its name. Users are kept:
+a person may belong to another organisation. The deployment's own
+organisation cannot be erased. No event changes. The audit trail keeps
+its rows (it refuses deletion) and gains one `account.erased` row with
+counts and pseudonyms. Audit rows hold ids only (account, user,
+installation, grant, token), never an organisation or machine name or a
+repository, so nothing readable about an erased organisation remains.
+Rows written before this release may still hold names.
 
 ## Settings
 
@@ -84,6 +180,8 @@ Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
 | volume `innsegl-dashboard-tls` | certificate and key, written by the core |
 | `web/` | the dashboard source (`npx tsc --noEmit && npm run build && npm test`) |
 | migrations `0013`, `0014` | alert resolutions and account ceremonies |
+| migration `0017` | invitations' acceptor and withdrawal, an inviter-less invitation from the CLI, the member ceremonies |
+| `innsegl_auth.audit` | one row per change to the accounts data; refuses `UPDATE`, `DELETE`, `TRUNCATE` |
 
 ## Exit codes and error classes
 
@@ -93,7 +191,15 @@ Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
 | `api` | 12 | FAILED: stopped on an error while serving |
 | `api` | 13 | WRITABLE: the database credential can write; refused |
 | `accounts` | 2 | the command line was not understood |
-| `accounts` | 19 | the database could not be opened, or the verb failed |
+| `accounts` | 19 | the database could not be opened, or the verb failed, including a role that does not allow the change |
+| `erase-organisation` | 0 | erased |
+| `erase-organisation` | 2 | usage: no `-account`, no `-dsn` |
+| `erase-organisation` | 5 | the organisation was erased and a mirror was not removed; remove it by hand |
+| `erase-organisation` | 6 | not erased: no such organisation, the operator's own, `-by` not an owner, or the role cannot delete aliases |
+
+API answers on the member routes: 403 when the role does not allow the
+change, 404 for no such member or an unusable invitation link, 409 for the
+last owner or an existing membership.
 
 ## Tests
 
@@ -102,6 +208,18 @@ Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
 - `cmd/innsegl/api*_test.go` (API-008 to API-011, VER-001), `dashboardtls_test.go`
 - `cmd/innsegl/accountscli_test.go` (ACC-001), `internal/accounts/*_test.go`
   (ACC-001 to ACC-003)
+- `internal/accounts/members_test.go`, `invitations_test.go`, `erase_test.go`,
+  `migration_test.go` (ACC-004 to ACC-007, ACC-009 to ACC-011, AUTH-006,
+  AUTH-007; real Postgres)
+- `internal/api/accountmembers_test.go`, `accountorg_test.go` (ACC-004,
+  AUTH-005 to AUTH-007)
+- `cmd/innsegl/accountsorgcli_test.go`, `eraseorganisation_test.go`
+  (ACC-005, ACC-006, ACC-009 to ACC-011, AUTH-006)
+- `internal/accounts/erase_test.go` (ACC-015: no accounts table names an
+  erased organisation; ACC-017: the runs whose bodies erasure removes)
+- `cmd/innsegl/noprincipal_test.go` (ACC-012: no organisation or person
+  identifier in the machine certificate, the run's SPIRE entries, the
+  commit trailers, the ledger schema or the gateway log)
 - `test/deploy/apiui_test.go`, `readerrole_test.go` (OPS-011 to OPS-013),
   `resolverrole_test.go`
 - `scripts/setup-link-selftest.sh`
@@ -119,3 +237,21 @@ Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
 ## Runbooks
 
 - [cutover.md](../runbooks/cutover.md)
+
+**Add a second organisation.** The deployment must be pseudonymous first
+(ACC-008, [repository-names.md](repository-names.md)). Then
+`docker exec innsegl-api innsegl accounts new --name NAME`, and
+`docker exec innsegl-api innsegl accounts invite --account ID --role owner`
+for its first owner; send them the link. They open it, add a passkey, and
+are its owner.
+
+**Remove a member.** `innsegl accounts remove-member --account ID USER`, or
+an owner or admin from the dashboard. Their sessions end now; machines they
+connected there are suspended within 30 seconds. `innsegl accounts
+installations --account ID` shows them; an admin may reactivate one the
+organisation keeps.
+
+**Erase an organisation.** Run `innsegl erase-organisation -account ID` with
+the database owner's DSN and the mirror directory. It is deliberate and
+cannot be undone. An erasure is complete once every backup taken before it
+has expired.
