@@ -113,6 +113,9 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 			for _, p := range st.TrustProblems {
 				fmt.Fprintf(tw, "trust\tWARN\t%s (since %s)\n", p.Text, p.Since.UTC().Format(time.RFC3339))
 			}
+			if sc := st.ServerCertificate; sc != nil {
+				fmt.Fprintf(tw, "server certificate\t\t%s\n", describeServerCert(*sc))
+			}
 			in := st.Installation
 			repos := strings.Join(in.Repos, ", ")
 			if len(in.Repos) == 0 || (len(in.Repos) == 1 && in.Repos[0] == "*") {

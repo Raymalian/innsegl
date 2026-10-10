@@ -38,6 +38,9 @@ type coreStatus struct {
 	// sentinel that stopped verifying, a history it could not read. Absent
 	// when it found nothing, or has not run.
 	TrustProblems []trustwatch.Problem `json:"trust_problems,omitempty"`
+	// ServerCertificate is where the core's server certificate comes from
+	// and when it expires (#473). Absent from a core older than this.
+	ServerCertificate *serverCertStatus `json:"server_certificate,omitempty"`
 }
 
 // coreComponent is one part of the core and whether it is up.
@@ -63,7 +66,7 @@ type statusStore interface {
 	ListAccounts(ctx context.Context) ([]accounts.AccountSummary, error)
 }
 
-func statusHandler(store statusStore, log *serveLog) http.HandlerFunc {
+func statusHandler(store statusStore, serverCert func() serverCertStatus, log *serveLog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeCoreError(w, http.StatusMethodNotAllowed, "innsegl core: status: only GET is accepted")
@@ -95,6 +98,10 @@ func statusHandler(store statusStore, log *serveLog) http.HandlerFunc {
 		}
 		out.TrustExpiries = coreTrustExpiries(os.Getenv(envTrustHistory), time.Now())
 		out.TrustProblems = coreTrustProblems(os.Getenv(envTrustHistory))
+		if serverCert != nil {
+			sc := serverCert()
+			out.ServerCertificate = &sc
+		}
 		if list, lerr := store.ListAccounts(r.Context()); lerr == nil {
 			for _, a := range list {
 				if a.ID == inst.AccountID {

@@ -82,6 +82,9 @@ type CoreConfig struct {
 	// ProviderURL is where model requests go when the core does not answer
 	// (ADR-0068); empty means DefaultProviderURL.
 	ProviderURL string `json:"provider_url,omitempty"`
+	// ServerCertificate is ServerCertificatePublic for a core whose server
+	// certificate is publicly trusted (#473); empty for the core's own CA.
+	ServerCertificate string `json:"server_certificate,omitempty"`
 }
 
 // ErrNotEnrolled means there is no core.json: this machine never connected.
@@ -120,7 +123,11 @@ func WriteEnrolment(p Paths, e *Enrolment, listen string) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := json.MarshalIndent(CoreConfig{CoreURL: e.CoreURL, InstallationID: e.InstallationID, Listen: listen}, "", "  ")
+	core := CoreConfig{CoreURL: e.CoreURL, InstallationID: e.InstallationID, Listen: listen}
+	if e.PublicServer {
+		core.ServerCertificate = ServerCertificatePublic
+	}
+	cfg, err := json.MarshalIndent(core, "", "  ")
 	if err != nil {
 		return err
 	}

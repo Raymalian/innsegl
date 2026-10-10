@@ -190,6 +190,10 @@ RUN mkdir -p /run/innsegl/trust && chown 1000:1000 /run/innsegl/trust
 # doc 05 §2: the scheduled WORM canary's last result, written by whichever
 # process runs the sealer and read by the core's health.
 RUN mkdir -p /run/innsegl/canary && chown 1000:1000 /run/innsegl/canary
+# #473: the ACME account and certificates (read-write), and the ACME DNS
+# credential's mount point (read-only; written by `make innsegl-acme-credential`).
+RUN mkdir -p /run/innsegl/acme && chown 1000:1000 /run/innsegl/acme && chmod 0700 /run/innsegl/acme
+RUN mkdir -p /run/innsegl/credentials/acme-dns && chown 1000:1000 /run/innsegl/credentials/acme-dns
 
 # git and gitsign both want a writable HOME, and gitsign writes its cache
 # there, so HOME is a real directory this user owns rather than `/`.

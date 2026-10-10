@@ -43,6 +43,14 @@ in the checkout.
 `innsegl client serve` takes only `-listen` (default: the address connect
 wrote). `innsegl status` takes no flags.
 
+A core whose server certificate is publicly trusted (ACME, ADR-0081) is
+recorded in `core.json` as `"server_certificate": "public"`; the client then
+trusts the system's roots for it as well as the core's own CA. `innsegl
+connect` records it when it enrols, and `innsegl connect --update` checks it
+again (restart the client service after a change). A core on its own CA is
+trusted through that CA alone. `innsegl status` shows the core's `server
+certificate` line.
+
 `innsegl status` also prints a `mirror WARN` line for each branch the core's
 mirror refused as a rewrite ([commit-path.md](commit-path.md)); a warning,
 not an outage, so the exit status is unchanged.

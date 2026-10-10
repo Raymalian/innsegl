@@ -193,13 +193,16 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 		s.log.Printf("%v; refusing every request. Run `innsegl connect --disconnect`, then enrol again.", ErrRevoked)
 	}
 
-	roots := x509.NewCertPool()
+	// The core's own CA; and the system's roots too only for a core whose
+	// server certificate is public (#473).
+	roots := CoreRoots(nil, core.PublicServer())
 	for _, c := range cas {
 		roots.AddCert(c)
 	}
 	s.transport = &http.Transport{
 		TLSClientConfig: &tls.Config{
-			// Only the core's own CA: never the system roots.
+			// The core's own CA, and the system's roots only for a core
+			// recorded with a public server certificate.
 			RootCAs:    roots,
 			MinVersion: tls.VersionTLS12,
 			GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {

@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"innsegl.dev/innsegl/internal/accounts"
+	"innsegl.dev/innsegl/internal/acme"
 	"innsegl.dev/innsegl/internal/commitpath"
 	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/ledger"
@@ -691,6 +692,9 @@ type runningGateway struct {
 	// dashboardCert keeps the dashboard's certificate current (RM-311);
 	// nil when $INNSEGL_DASHBOARD_TLS_DIR is unset.
 	dashboardCert *dashboardCert
+	// acmeRenewer renews a public server certificate (#473); nil when the
+	// core's own CA issues it.
+	acmeRenewer *acmeRenewer
 
 	// closers release every resource openGateway opened beyond the
 	// listener (the mapping store's pool, the ledger connection, the
@@ -714,6 +718,9 @@ func (g *runningGateway) Serve(ctx context.Context) error {
 	}
 	if g.dashboardCert != nil {
 		go g.dashboardCert.run(ctx)
+	}
+	if g.acmeRenewer != nil {
+		go g.acmeRenewer.run(ctx)
 	}
 
 	failed := make(chan error, 1)
@@ -930,13 +937,43 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		return nil, fmt.Errorf("configure the gateway's own TLS certificate authority: %w", err)
 	}
 
-	if dir := os.Getenv(envDashboardTLSDir); dir != "" {
-		d, dErr := openDashboardCert(ca, dir, log)
-		if dErr != nil {
+	// #473: the server certificate is the own CA's unless ACME is asked for.
+	var certs serverCerts = ownCACerts{ca: ca, names: caConfig.DNSNames}
+	acmeCfg, acmeOn, err := acmeConfigFromEnv(os.Getenv)
+	if err != nil {
+		running.Close()
+		return nil, fmt.Errorf("configure the public server certificate ($%s): %w", envACME, err)
+	}
+	if acmeOn {
+		m, mErr := acme.New(boot, acmeCfg)
+		if mErr != nil {
 			running.Close()
-			return nil, fmt.Errorf("write the dashboard's certificate ($%s): %w", envDashboardTLSDir, dErr)
+			return nil, fmt.Errorf("obtain the public server certificate: %w", mErr)
 		}
-		running.dashboardCert = d
+		certs = m
+		running.acmeRenewer = &acmeRenewer{m: m, dashboardDir: os.Getenv(envDashboardTLSDir), log: log, every: time.Hour}
+		log.info("the server certificate is public (ACME)", "names", strings.Join(acmeCfg.Names, ","),
+			"expires", m.Status().NotAfter.UTC().Format(time.RFC3339))
+	}
+	if hosted != nil {
+		hosted.serverCert = certs.Status
+	}
+
+	if dir := os.Getenv(envDashboardTLSDir); dir != "" {
+		if acmeOn {
+			// The ACME renewer rewrites it after each renewal.
+			if _, dErr := certs.WriteDashboardCert(dir); dErr != nil {
+				running.Close()
+				return nil, fmt.Errorf("write the dashboard's certificate ($%s): %w", envDashboardTLSDir, dErr)
+			}
+		} else {
+			d, dErr := openDashboardCert(ca, dir, log)
+			if dErr != nil {
+				running.Close()
+				return nil, fmt.Errorf("write the dashboard's certificate ($%s): %w", envDashboardTLSDir, dErr)
+			}
+			running.dashboardCert = d
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -969,7 +1006,7 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	}
 
 	var handler http.Handler = mux
-	tlsConfig := ca.ServerTLSConfig()
+	tlsConfig := serverTLSConfig(certs)
 	if hosted != nil {
 		handler, tlsConfig = hosted.wrap(mux, tlsConfig, log) //nolint:contextcheck // each handshake's own context bounds its bundle read, not boot's
 	}
@@ -991,6 +1028,9 @@ type hostedCore struct {
 	scope     gateway.ScopeChecker
 	writer    *accounts.Store
 	authority clientAuthority
+	// serverCert is the server certificate's status for /_core/status
+	// (#473); set by openGateway once the source is chosen.
+	serverCert func() serverCertStatus
 	// mirror is the per-repository evidence store (ADR-0065), nil when
 	// INNSEGL_MIRROR_DIR is unset (coregit.go).
 	mirror *mirror.Store
@@ -1057,7 +1097,7 @@ func openHostedCore(ctx context.Context, o gatewayOptions, running *runningGatew
 func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (http.Handler, *tls.Config) {
 	mux.Handle(coreRenewPath, renewHandler(h.writer, h.authority, log))
 	mux.Handle(coreDisconnectPath, disconnectHandler(h.writer, log))
-	mux.Handle(coreStatusPath, statusHandler(h.writer, log))
+	mux.Handle(coreStatusPath, statusHandler(h.writer, h.serverCert, log))
 	// ADR-0074: the encrypted trust-key backup, for the operator's machine.
 	backup := trustBackupHandler(os.Getenv(envTrustBackupDir), h.writer, newBackupLimiter(nil), log)
 	mux.Handle(coreTrustBackupPath, backup)
