@@ -832,6 +832,8 @@ func openReconciler(ctx context.Context, opts reconcileOptions) (reconcileEngine
 	// cycle, so a deployment cannot believe it is watching when it is not.
 	cfg := reconciler.Config{
 		Ledger: store, Appender: store, Repos: repos, Log: log,
+		// ADR-0080: a pseudonymous repository is read by its resolved name.
+		Names:       store,
 		TrustDomain: opts.trustDomain, ExpireAfter: opts.expireAfter,
 	}
 	if opts.driftWindow > 0 {

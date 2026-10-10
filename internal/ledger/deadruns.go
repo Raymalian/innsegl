@@ -19,7 +19,7 @@ const deadRunsQuery = `
 	WITH reg AS (
 	    SELECT DISTINCT run_id FROM innsegl.events
 	     WHERE event_type = '` + event.EventTypeRunRegistered + `'
-	       AND (innsegl.event_body(canonical) ->> '` + event.FieldRepo + `') = $1),
+	       AND innsegl.resolve_alias(innsegl.event_body(canonical) ->> '` + event.FieldRepo + `') = $1),
 	facts AS (
 	    SELECT e.run_id,
 	           bool_or(e.event_type = '` + event.EventTypeRunRetired + `') AS retired,

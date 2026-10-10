@@ -29,8 +29,10 @@ make innsegl-verify
   Before each run it deletes earlier probes whose retention has passed, so
   the probe prefix holds about one probe per interval inside that window.
 - `innsegl migrate-schema` appends one `schema_migrated` event naming where
-  the chain starts writing schema_version `4`. Run it before the upgraded
-  writers start. Running it twice appends nothing the second time.
+  the chain starts writing schema_version `5` (ADR-0080). Pass `-from 4` on a
+  chain that was writing schema 4. The cutover is found from the chain, so it
+  is right even when the upgraded core started first. Running it twice
+  appends nothing the second time.
 - `make innsegl-canary` runs the canary in its container (profile `canary`).
 - `make innsegl-backup` runs `pg_dump`, restores it into a throwaway
   database and checks it against the sealed segments before keeping it.

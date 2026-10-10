@@ -258,6 +258,10 @@ type HealthConfig struct {
 	// which file, and how many, are start-up log lines on the operator's own
 	// stream.
 	AdminCredentialEnforced bool
+	// RepoMode is the repository mode this process writes, "literal" or
+	// "pseudonymous" (ADR-0080 decision 5). Reported, never gated on; empty
+	// reads as literal.
+	RepoMode string
 	// Reports are scheduled controls whose last result readiness REPORTS and
 	// never gates on: doc 05 §2's WORM canary is the first. Nil reports none.
 	Reports func() []HealthReport
@@ -275,6 +279,7 @@ type Health struct {
 	version        string
 	logger         *slog.Logger
 	adminCred      bool
+	repoMode       string
 	reports        func() []HealthReport
 }
 
@@ -325,6 +330,7 @@ func NewHealth(cfg HealthConfig) (*Health, error) {
 		version:        cfg.Version,
 		logger:         cfg.Logger,
 		adminCred:      cfg.AdminCredentialEnforced,
+		repoMode:       cfg.RepoMode,
 		reports:        cfg.Reports,
 	}
 	if h.timeout <= 0 {
@@ -417,6 +423,8 @@ type Readiness struct {
 	// a reason to be unready: a deployment that has not split its listeners
 	// requires no credential and is perfectly ready.
 	AdminCredentialEnforced bool
+	// RepoMode is the repository mode this process writes (ADR-0080).
+	RepoMode string
 	// Reports are the scheduled controls' last results. Reported, never a
 	// reason to be unready.
 	Reports []HealthReport
@@ -482,6 +490,7 @@ func (h *Health) Ready(ctx context.Context) Readiness {
 		ClockSkewBound:          h.clockSkewBound,
 		Version:                 h.version,
 		AdminCredentialEnforced: h.adminCred,
+		RepoMode:                h.repoMode,
 		ObservedAt:              time.Now(),
 	}
 	for _, s := range statuses {
@@ -657,6 +666,9 @@ type readinessWire struct {
 	// omitted: an absent field reads as "this build does not report it", and
 	// the one state an operator must not have to infer is the open one.
 	AdminCredential string `json:"admin_credential"`
+	// RepoMode is "literal" or "pseudonymous", always present for the reason
+	// AdminCredential is (ADR-0080 decision 5).
+	RepoMode string `json:"repo_mode"`
 	// Reports never changes Ready; see HealthConfig.Reports.
 	Reports []HealthReport `json:"reports,omitempty"`
 }
@@ -689,6 +701,7 @@ func (r Readiness) MarshalJSON() ([]byte, error) {
 		Dependencies:    r.Dependencies,
 		MissingTools:    r.MissingTools,
 		AdminCredential: healthAdminCredentialState(r.AdminCredentialEnforced),
+		RepoMode:        healthRepoMode(r.RepoMode),
 		Reports:         r.Reports,
 	})
 }
@@ -700,6 +713,15 @@ func healthAdminCredentialState(enforced bool) string {
 		return "enforced"
 	}
 	return "absent"
+}
+
+// healthRepoMode renders ADR-0080's mode; a process that set none writes
+// the literal.
+func healthRepoMode(mode string) string {
+	if mode == "" {
+		return "literal"
+	}
+	return mode
 }
 
 // MarshalJSON renders one dependency's status.

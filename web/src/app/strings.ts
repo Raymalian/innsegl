@@ -74,6 +74,11 @@ export const en = {
     notFound: {
       heading: "Page not found",
     },
+    names: {
+      /** ADR-0080: a repository or branch whose name was erased. Shown with
+       * a short form of its pseudonym, never as a blank. */
+      erased: "Name erased",
+    },
   },
   sentences: {
     placeholder: {

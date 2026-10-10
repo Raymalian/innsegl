@@ -272,3 +272,20 @@ func (s *Store) git(ctx context.Context, dir string, stdin *strings.Reader, args
 	}
 	return out, nil
 }
+
+// Remove deletes the mirror of repo, and reports whether there was one. It is
+// erasure's (ADR-0080, operator decision 6): a mirror left behind keeps a
+// repository's name in its path, which would undo the erasure of its alias.
+func (s *Store) Remove(repo string) (bool, error) {
+	dir, err := s.path(repo)
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return false, nil
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return false, fmt.Errorf("mirror: removing %s: %w", repo, err)
+	}
+	return true, nil
+}

@@ -13,6 +13,7 @@
  * `record.tree`/`record.files`, which this page no longer renders.
  */
 
+import { displayName, isPseudonym } from "../../app/pseudonym";
 import { strings } from "./strings";
 import type {
   RecordChild,
@@ -28,6 +29,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * fact card's "Repository" value — doc 06's mockup shows
  * "Raymalian/innsegl", not "github.com/Raymalian/innsegl". */
 export function shortRepo(repo: string): string {
+  if (isPseudonym(repo)) return displayName(repo);
   const slash = repo.indexOf("/");
   if (slash === -1) return repo;
   const host = repo.slice(0, slash);

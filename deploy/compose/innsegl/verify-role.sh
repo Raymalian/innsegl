@@ -167,6 +167,10 @@ expect_refused "UPDATE innsegl.chain" "UPDATE innsegl.chain SET chain_id = gen_r
 expect_refused "DELETE innsegl.chain" "DELETE FROM innsegl.chain WHERE true"
 expect_refused "TRUNCATE innsegl.idempotency" "TRUNCATE innsegl.idempotency"
 expect_refused "DELETE innsegl.idempotency" "DELETE FROM innsegl.idempotency WHERE false"
+# ADR-0080: an alias is erased by the owner, never by the role that appends.
+expect_refused "DELETE innsegl.pseudonyms" "DELETE FROM innsegl.pseudonyms WHERE false"
+expect_refused "UPDATE innsegl.pseudonyms" "UPDATE innsegl.pseudonyms SET literal = 'x' WHERE false"
+expect_refused "DELETE innsegl.repo_mode" "DELETE FROM innsegl.repo_mode WHERE false"
 # A role with CREATE anywhere is a role that can write. "It has no INSERT on
 # innsegl.events" would be a comforting half of the answer.
 expect_refused "CREATE TABLE in schema innsegl" "CREATE TABLE innsegl.verify_role_probe (x int)"

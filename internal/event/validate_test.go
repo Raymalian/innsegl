@@ -451,8 +451,8 @@ func TestVerifiersTolerateUnknownMembersOnlyForANewerSchema(t *testing.T) {
 		// version 2's table and a v1 body relabelled as v2 is genuinely
 		// invalid — it has no `repo` and no `branch`. The case is about a
 		// version this build knows nothing about. Schema 4 now exists
-		// (ADR-0061), so the unknown one is 5.
-		f[FieldSchemaVersion] = "5"
+		// (ADR-0061), and schema 5 (ADR-0080), so the unknown one is 6.
+		f[FieldSchemaVersion] = "6"
 		f["future_member"] = "x"
 		if err := ValidateEventForVerification(f); err != nil {
 			t.Errorf("ValidateEventForVerification = %v, want nil", err)

@@ -347,6 +347,24 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		log.info("ledger migrations applied")
 	}
 
+	// ---- the repository mode (ADR-0080) -----------------------------------
+	//
+	// Before anything can append: the mode decides what every run_registered,
+	// commit_intent and commit_recorded records for repo and branch. Validated
+	// already, so the error is unreachable here.
+	repos, err := o.repositories()
+	if err != nil {
+		return fail("%w", err)
+	}
+	if rerr := applyRepoMode(boot, store, repos); rerr != nil {
+		return fail("%w", rerr)
+	}
+	log.info("repository mode", "mode", string(repos.Mode()), "key_id", repos.KeyID())
+	if repos.Mode() == identity.ModeLiteral {
+		log.info("repository names are recorded literally: a second account is refused until " +
+			envRepoMode + "=pseudonymous (ADR-0080, ACC-008)")
+	}
+
 	// The idempotency store shares the chain's database (ADR-0005, ADR-0017)
 	// and takes a pool the caller owns. It is a second pool to the same
 	// database rather than the ledger's own, because *ledger.Store keeps its
@@ -743,6 +761,7 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		Tools:          server,
 		Timeout:        o.healthTimeout,
 		ClockSkewBound: o.clockSkewBound,
+		RepoMode:       string(repos.Mode()),
 		Logger:         log.logger,
 		// #264, and ON THE HEALTH LISTENER ONLY. Whether the identity
 		// lifecycle is authenticated is an operator's fact: doc 05 gives this
@@ -876,9 +895,11 @@ func configureSignCommit(
 	// adopt_run (ADR-0051) and the commit path's adoption (ADR-0079) share
 	// one evidence: newLedgerAdoption.
 	restore, err := mcp.ConfigureSignCommit(mcp.SignCommitConfig{
-		Adoption:    newLedgerAdoption(o, runs, store),
-		Runs:        runs,
-		Ledger:      store,
+		Adoption: newLedgerAdoption(o, runs, store),
+		Runs:     runs,
+		// Resolving: a replay compares the recorded repository with the one
+		// the call names (ADR-0080).
+		Ledger:      ledger.Resolving{Store: store},
 		Idempotency: idem,
 		Workspace:   workspace,
 		Sigstore:    sigstore,
@@ -922,7 +943,10 @@ func newLedgerAdoption(o serveOptions, runs *rundir.Directory, store *ledger.Sto
 		return nil
 	}
 	return mcp.LedgerAdoption{
-		Runs: runs, Events: store, Candidates: store, Bodies: o.observeBodyDir, AbandonAfter: o.abandonAfter,
+		// Resolving: adoption compares the dead run's repository with the
+		// committing run's, which is the name a caller states (ADR-0080).
+		Runs: runs, Events: ledger.Resolving{Store: store}, Candidates: store,
+		Bodies: o.observeBodyDir, AbandonAfter: o.abandonAfter,
 	}
 }
 
@@ -981,7 +1005,7 @@ func configureCommitSigner(
 		// workspace as on one with it.
 		Adoption:       newLedgerAdoption(o, runs, store),
 		Runs:           runs,
-		Ledger:         store,
+		Ledger:         ledger.Resolving{Store: store},
 		Idempotency:    idem,
 		Sigstore:       sigstore,
 		Credentials:    mcp.SignCommitThroughGetCredential{},

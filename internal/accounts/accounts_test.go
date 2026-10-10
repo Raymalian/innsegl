@@ -319,6 +319,7 @@ func TestACC003Scope(t *testing.T) {
 	check(listed, r1, false)
 
 	// Another account's grant never admits.
+	recordPseudonymous(t, e) // a second account needs the switch (ACC-008)
 	other, err := s.CreateAccount(ctx, CreateAccountParams{Name: "Other"})
 	if err != nil {
 		t.Fatal(err)
@@ -341,6 +342,7 @@ func TestACC003Scope(t *testing.T) {
 func TestACC003OneLiveHolderPerRepoIsEnforcedByTheDatabase(t *testing.T) {
 	e, s, a := setup(t)
 	ctx := tctx(t)
+	recordPseudonymous(t, e) // a second account needs the switch (ACC-008)
 	other, err := s.CreateAccount(ctx, CreateAccountParams{Name: "Other"})
 	if err != nil {
 		t.Fatal(err)

@@ -356,7 +356,7 @@ func (r *Reconciler) checkLanding(ctx context.Context, view *landingView, cfg *L
 			repoErr     error
 		)
 		if canCheckRepo {
-			reachable, repoErr = checker.CommitReachable(ctx, rec.repo, rec.commitSHA)
+			reachable, repoErr = checker.CommitReachable(ctx, r.repoName(ctx, rec.repo), rec.commitSHA)
 			repoChecked = repoErr == nil
 		}
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"innsegl.dev/innsegl/internal/event"
+	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/migrations"
 )
 
@@ -53,6 +55,9 @@ import (
 // rolled-back append leaves no gap and no reserved position (LED-007).
 type Store struct {
 	pool *pgxpool.Pool
+	// repos decides what repo and branch the chain records (ADR-0080). nil
+	// is literal. See UseRepositories.
+	repos atomic.Pointer[identity.Repositories]
 }
 
 // Error classes, from IP §5's vocabulary. The string values are a protected
@@ -309,6 +314,9 @@ func (s *Store) Append(ctx context.Context, body event.Fields) (event.Fields, er
 	if err != nil {
 		return nil, err
 	}
+	if err := s.pseudonymise(&p); err != nil {
+		return nil, err
+	}
 
 	var last error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -358,6 +366,9 @@ type pending struct {
 	source         string
 	runID          string
 	idempotencyKey string
+	// aliases are the innsegl.pseudonyms rows this append's transaction
+	// writes beside the event (ADR-0080).
+	aliases []alias
 }
 
 // prepare validates what the caller supplied and returns the body the ledger
@@ -510,6 +521,9 @@ func (s *Store) appendOnce(ctx context.Context, p pending) (record event.Fields,
 		}
 	}
 
+	if ierr := insertAliases(ctx, tx, p.aliases); ierr != nil {
+		return nil, ierr
+	}
 	if ierr := insertEvent(ctx, tx, eventRow{
 		position:       position,
 		eventID:        id.String(),

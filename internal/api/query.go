@@ -321,7 +321,7 @@ type Overview struct {
 const runIndexCTE = `
 WITH scoped AS (
     SELECT chain_position, run_id, ts, event_type, source,
-           convert_from(canonical, 'UTF8')::jsonb AS body
+           innsegl.resolved_body(convert_from(canonical, 'UTF8')::jsonb) AS body
       FROM innsegl.events
      WHERE run_id IS NOT NULL
 ), registered AS (

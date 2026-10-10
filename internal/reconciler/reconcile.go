@@ -238,6 +238,28 @@ type Repos interface {
 	ReachableBlobs(ctx context.Context, repo string) (map[string]struct{}, error)
 }
 
+// Names resolves repository pseudonyms through the alias table (ADR-0080).
+type Names interface {
+	ResolveNames(ctx context.Context, values ...string) (map[string]string, error)
+}
+
+// repoName is the name a repository is READ by. The chain's own value is
+// what every append copies; this is only ever handed to Repos. A pseudonym
+// that does not resolve -- erased, or an alias table that did not answer --
+// is returned as itself, which no repository is read by, so the read fails
+// and the intent stays open: a missing name is never evidence that nothing
+// was signed (ADR-0065's amendment).
+func (r *Reconciler) repoName(ctx context.Context, repo string) string {
+	if r.cfg.Names == nil || !event.IsPseudonym(repo) {
+		return repo
+	}
+	names, err := r.cfg.Names.ResolveNames(ctx, repo)
+	if err != nil {
+		return repo
+	}
+	return names[repo]
+}
+
 // TransparencyLog is Rekor, read-only. *RekorLog is the shipped
 // implementation.
 type TransparencyLog interface {
@@ -366,6 +388,10 @@ type Config struct {
 	Appender LedgerAppender
 	// Repos reads the repositories named by `repo`. Required.
 	Repos Repos
+	// Names resolves schema 5's repository pseudonyms to the names Repos
+	// reads by (ADR-0080). nil reads every value as itself, which is right for
+	// a chain that holds none. *ledger.Store is one.
+	Names Names
 	// Log is the transparency log. Required — without it no repair can be
 	// established and no expiry can be justified.
 	Log TransparencyLog
@@ -644,7 +670,7 @@ func (r *Reconciler) resolve(ctx context.Context, in openIntent) Finding {
 		return finding
 	}
 
-	commits, err := r.cfg.Repos.SignedCommitsWithTree(ctx, in.repo, in.treeHash)
+	commits, err := r.cfg.Repos.SignedCommitsWithTree(ctx, r.repoName(ctx, in.repo), in.treeHash)
 	if err != nil {
 		finding.Outcome = OutcomeUnresolved
 		finding.Detail = fmt.Sprintf(

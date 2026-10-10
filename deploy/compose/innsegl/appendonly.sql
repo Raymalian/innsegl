@@ -116,6 +116,13 @@ GRANT SELECT, INSERT ON innsegl.gateway_run_mapping TO :"role";
 -- same reason as the run mapping above.
 GRANT SELECT, INSERT ON innsegl.gateway_session_end TO :"role";
 
+-- innsegl.pseudonyms and innsegl.repo_mode (ADR-0080, migration 0016). The
+-- append path writes an alias beside the event that first carries it, and the
+-- core records the switch to pseudonymous at start. INSERT and SELECT only:
+-- erasing an alias is the owner's, and the switch is one-way for everyone.
+GRANT SELECT, INSERT ON innsegl.pseudonyms TO :"role";
+GRANT SELECT, INSERT ON innsegl.repo_mode TO :"role";
+
 -- innsegl_auth.installations and innsegl_auth.repo_grants (RM-280, #456;
 -- ADR-0063): the client-certificate guard checks an installation's status
 -- and its repositories within its organisation's live grants on every

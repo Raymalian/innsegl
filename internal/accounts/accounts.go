@@ -246,11 +246,24 @@ func (s *Store) CreateAccount(ctx context.Context, p CreateAccountParams) (Accou
 		return appendAudit(ctx, tx, AuditEntry{Actor: p.Actor, AccountID: a.ID, Action: "account.created",
 			Subject: a.ID, Detail: map[string]any{"name": a.Name, "operator": a.Operator}})
 	})
+	if pgCode(err) == repositoriesLiteralSQLState {
+		return Account{}, fmt.Errorf("%w: set INNSEGL_REPO_MODE=pseudonymous and restart the core, "+
+			"then create the account (ADR-0080, ACC-008)", ErrRepositoriesLiteral)
+	}
 	if err != nil {
 		return Account{}, err
 	}
 	return a, nil
 }
+
+// ErrRepositoriesLiteral refuses an account beyond the first while the
+// deployment stores repository names literally (ACC-008, ADR-0080 decision 5).
+// The database refuses it (migration 0016), so every path that creates an
+// account meets the same check.
+var ErrRepositoriesLiteral = errors.New("a second account is refused while repository names are stored literally")
+
+// repositoriesLiteralSQLState is migration 0016's refusal.
+const repositoriesLiteralSQLState = "IN006"
 
 // ---------------------------------------------------------------------------
 // Repositories

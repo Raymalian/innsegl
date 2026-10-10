@@ -332,15 +332,17 @@ Three files, and the split is the same one the database roles use:
 | [`object-init.sh`](object-init.sh) | creates the locked bucket **as root**, sets the default rule, and reads the whole configuration back off the server |
 | [`verify-object-scope.sh`](verify-object-scope.sh) | **connects as the scoped identity and asks the server what it can actually do** |
 
-### The narrowing is a key prefix, not a withheld permission
+### The narrowing is a withheld permission and a key prefix
 
-The deployed store's permission model has **no separate action for setting a
-bucket's object-lock configuration**. Measured: an identity granted a
-bucket-wide `Write` may set it, and may therefore downgrade the default rule
-from `COMPLIANCE` to `GOVERNANCE`. There is nothing to withhold by name.
+Up to 4.46 the store's permission model had **no separate action for setting a
+bucket's object-lock configuration**: measured, an identity granted a
+bucket-wide `Write` could set it, and could therefore downgrade the default rule
+from `COMPLIANCE` to `GOVERNANCE`. Since 4.48 (#451) that call has its own
+action, `PutBucketObjectLockConfiguration`, and the scoped identity is not
+granted it, so the refusal is by name.
 
-What it does have is prefix-scoped grants, and they draw the line in exactly the
-right place. The scoped identity holds:
+The prefix-scoped grants stay, because they do a second job the named action
+does not: they bound where the sealer may write. The scoped identity holds:
 
 ```
 Read:<bucket>                        List:<bucket>

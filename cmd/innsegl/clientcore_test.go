@@ -20,12 +20,14 @@ import (
 	"innsegl.dev/innsegl/internal/gateway"
 )
 
-// OPS-130 (in process): the real client against the real hosted core. #460
+// OPS-176 (in process), cited as OPS-130 until ADR-0080's decision 10 gave
+// that id back to the credential tests: the real client against the real
+// hosted core. #460
 // and #461 were built in parallel against a written contract and each tested
 // against a fake of the other; this proves the two halves agree: enrolment,
 // a statement and a model request through `innsegl client serve`, renewal,
 // and revocation.
-func TestOPS130TheClientEnrolsAndWorksThroughTheHostedCore(t *testing.T) {
+func TestOPS176TheClientEnrolsAndWorksThroughTheHostedCore(t *testing.T) {
 	f := newEnFixture(t)
 	g := startHostedGateway(t, f)
 

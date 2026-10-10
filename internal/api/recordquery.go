@@ -44,7 +44,7 @@ type recordEventRow struct {
 
 const runTimelineSQL = `
 SELECT chain_position, event_id, event_type, source, ts,
-       convert_from(canonical, 'UTF8')::jsonb
+       innsegl.resolved_body(convert_from(canonical, 'UTF8')::jsonb)
   FROM innsegl.events
  WHERE run_id = $1
  ORDER BY chain_position`
@@ -381,7 +381,7 @@ type commitRow struct {
 }
 
 const commitsByRunSQL = `
-SELECT event_id, run_id, ts, convert_from(canonical, 'UTF8')::jsonb
+SELECT event_id, run_id, ts, innsegl.resolved_body(convert_from(canonical, 'UTF8')::jsonb)
   FROM innsegl.events
  WHERE run_id = $1 AND event_type = 'commit_recorded'
  ORDER BY chain_position`
@@ -530,7 +530,7 @@ func (s *Store) childCounts(ctx context.Context, ids []string) (map[string]child
 }
 
 const commitsByRunsSQL = `
-SELECT event_id, run_id, ts, convert_from(canonical, 'UTF8')::jsonb
+SELECT event_id, run_id, ts, innsegl.resolved_body(convert_from(canonical, 'UTF8')::jsonb)
   FROM innsegl.events
  WHERE run_id = ANY($1) AND event_type = 'commit_recorded'
  ORDER BY run_id, chain_position`

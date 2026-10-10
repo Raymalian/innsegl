@@ -133,6 +133,10 @@ func coreTrustProblems(historyPath string) []trustwatch.Problem {
 	return st.Problems
 }
 
+// repoModeComponent names the repository mode in `innsegl status`. A
+// setting, not a dependency, so it is never down.
+const repoModeComponent = "repository names"
+
 // coreReadiness reads the core's own readiness checks (internal/mcp's
 // /readyz: ledger, SPIRE, Sigstore) from its health listener in this same
 // process. When they cannot be read, that is itself the answer.
@@ -166,6 +170,9 @@ func coreReadiness(ctx context.Context) []coreComponent {
 		// Scheduled controls (doc 05 §2's WORM canary): reported as
 		// components, so a failed or stale one is DOWN in `innsegl status`.
 		Reports []mcp.HealthReport `json:"reports"`
+		// RepoMode is ADR-0080's repository mode, shown so an operator can
+		// see which form the chain records without reading configuration.
+		RepoMode string `json:"repo_mode"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ready); err != nil || len(ready.Dependencies) == 0 {
 		return unknown
@@ -176,6 +183,9 @@ func coreReadiness(ctx context.Context) []coreComponent {
 	}
 	for _, r := range ready.Reports {
 		out = append(out, coreComponent{Name: r.Name, Up: r.OK, Detail: r.Detail})
+	}
+	if ready.RepoMode != "" {
+		out = append(out, coreComponent{Name: repoModeComponent, Up: true, Detail: ready.RepoMode})
 	}
 	return out
 }

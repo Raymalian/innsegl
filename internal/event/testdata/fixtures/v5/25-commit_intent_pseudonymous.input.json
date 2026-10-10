@@ -1,0 +1,15 @@
+{
+  "ts": "2026-08-28T09:15:47.318Z",
+  "tree_hash": "5dda8fd290f4d08d527bbe82c310a27fc0cddadb",
+  "spiffe_id": "spiffe://innsegl.dev/agent/fix-ci/jira-118/run-45",
+  "source": "mcp",
+  "schema_version": "5",
+  "run_id": "run-45",
+  "repo": "pn:rk-fixture1:acf4dee573a5ab90a96b56adbef44954",
+  "prev_event_hash": "sha256:623669c5bf524e4df5b835c4fcb389def90f3264db3908163dd0a92211c057ed",
+  "patch_id": "5e4c6c1f0a2d9b3e8f7a1c4d6b0e9f2a3c5d7e81",
+  "idempotency_key": "sign-2c5e1-pn",
+  "event_type": "commit_intent",
+  "event_id": "01a047b3-0a1e-7c41-9d2b-5e6f7a8b9c02",
+  "chain_position": 23
+}
