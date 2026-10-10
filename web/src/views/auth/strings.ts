@@ -352,6 +352,9 @@ export const strings = {
     ssoConnectFailed: "The organisation's sign-in could not be opened",
     ssoConnected: "Connected to your account",
     ssoLinkedNotice: "Your organisation's sign-in is connected. The sign-in page takes it from now on.",
+    ssoJoinLabel: "Connect an organisation's sign-in by name",
+    ssoJoinHint: "The sign-in name its owner gave you. Connecting makes you a member if you are not one yet.",
+    ssoJoinButton: "Connect",
     ssoLinkedHeading: "Connected sign-ins",
     ssoLinkedItem: (organisation: string, name: string) =>
       organisation === "" ? `A removed organisation sign-in (${name || "no name"})` : `${organisation} (${name})`,

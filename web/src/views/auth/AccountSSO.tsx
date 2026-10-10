@@ -25,6 +25,7 @@ import { AccountSection, CopyButton, SectionStatus, useSectionLoad } from "./acc
 import {
   AuthRequestError,
   beginLinkOrganisationSignIn,
+  beginLinkOrganisationSignInByName,
   disconnectSignIn,
   fetchOrganisationSignIn,
   removeOrganisationSignIn,
@@ -73,7 +74,20 @@ export function OrganisationSignInSection({
   goTo = (url: string) => window.location.assign(url),
 }: OrganisationSignInSectionProps) {
   const [failure, setFailure] = useState<string | null>(null);
-  if (organisations.length === 0 && signIns.length === 0) return null;
+  const [joinName, setJoinName] = useState("");
+  const [joining, setJoining] = useState<string | null>(null);
+  const joinId = useId();
+  const joinHintId = useId();
+
+  const join = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setJoining("");
+    try {
+      goTo(await beginLinkOrganisationSignInByName(joinName.trim()));
+    } catch (err) {
+      setJoining(message(err, a.ssoConnectFailed));
+    }
+  };
 
   const disconnect = async (id: number) => {
     setFailure(null);
@@ -127,6 +141,34 @@ export function OrganisationSignInSection({
           goTo={goTo}
         />
       ))}
+      <form onSubmit={(e) => void join(e)} className={`${card} flex flex-col gap-2`}>
+        <label htmlFor={joinId} className={`text-micro ${fieldLabel}`}>
+          {a.ssoJoinLabel}
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            id={joinId}
+            required
+            spellCheck={false}
+            autoCapitalize="none"
+            aria-describedby={joinHintId}
+            value={joinName}
+            onChange={(e) => setJoinName(e.target.value)}
+            className={`${fieldInput} max-w-xs font-mono ${focusRing}`}
+          />
+          <button type="submit" disabled={joining === ""} className={`${secondaryButton} ${focusRing}`}>
+            {joining === "" ? a.ssoConnectWorking : a.ssoJoinButton}
+          </button>
+        </div>
+        <span id={joinHintId} className={`text-micro ${secondaryText}`}>
+          {a.ssoJoinHint}
+        </span>
+        {joining !== null && joining !== "" && (
+          <p role="alert" className={`text-micro ${mutedText}`}>
+            {joining}
+          </p>
+        )}
+      </form>
     </AccountSection>
   );
 }

@@ -25,7 +25,7 @@ import (
 //	GET    /api/v1/account/sso?organisation_id=ID   the organisation's sign-in
 //	POST   /api/v1/account/sso/configure/begin|finish   owner, fresh passkey
 //	POST   /api/v1/account/sso/remove/begin|finish      owner, fresh passkey
-//	POST   /api/v1/account/sso/link       {organisation_id} -> {redirect_url}
+//	POST   /api/v1/account/sso/link       {organisation_id or sign_in_name} -> {redirect_url}
 //	DELETE /api/v1/account/sign-ins/{id}  unlink one of your own
 //
 // A sign-in joins an EXISTING person. The provider's identity (issuer and
@@ -83,6 +83,14 @@ const (
 // SSOSignInRequest is POST /api/v1/auth/sso/begin's body.
 type SSOSignInRequest struct {
 	SignInName string `json:"sign_in_name"`
+}
+
+// SSOLinkRequest is POST /api/v1/account/sso/link's body: the organisation
+// by id (a member's own) or by its sign-in name (a person joining through
+// it). The name wins when both are given.
+type SSOLinkRequest struct {
+	OrganisationID string `json:"organisation_id"`
+	SignInName     string `json:"sign_in_name"`
 }
 
 // SSOBegin answers begin and link: where to send the browser.
@@ -183,11 +191,19 @@ func (s *Server) handleSSOBegin(w http.ResponseWriter, r *http.Request) {
 // signed-in person. Membership is not required: linking is how a person the
 // organisation's provider vouches for joins it.
 func (s *Server) handleSSOLink(w http.ResponseWriter, r *http.Request) {
-	var req MemberRequest
+	var req SSOLinkRequest
 	if !decodeAuthRequest(w, r, &req) {
 		return
 	}
-	c, err := s.orgs.SSOConnection(r.Context(), req.OrganisationID)
+	var (
+		c   SSOConnection
+		err error
+	)
+	if strings.TrimSpace(req.SignInName) != "" {
+		c, err = s.orgs.SSOConnectionByName(r.Context(), req.SignInName)
+	} else {
+		c, err = s.orgs.SSOConnection(r.Context(), req.OrganisationID)
+	}
 	if err != nil {
 		writeSSOLookupError(w, err)
 		return

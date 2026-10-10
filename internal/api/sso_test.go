@@ -445,6 +445,19 @@ func TestAUTH011PasskeysKeepWorkingAndARemovedMemberIsRefused(t *testing.T) {
 	if where, _ := h.land(t, f, f.binding); where != "/account?sso=taken" {
 		t.Fatalf("a second person took a linked identity: %q", where)
 	}
+	// A person who is no member yet names the organisation's sign-in to
+	// connect it: that is how they join.
+	h.idp.SignInAs("second-subject", "second@example.test", "Second")
+	f = h.start(t, do(t, http.MethodPost, h.srv.URL+"/api/v1/account/sso/link",
+		mustJSON(t, SSOLinkRequest{SignInName: "Example-Org"}), cookie2))
+	if where, _ := h.land(t, f, f.binding); where != "/account?notice=sso-linked" {
+		t.Fatalf("linking by sign-in name: %q", where)
+	}
+	if a := do(t, http.MethodPost, h.srv.URL+"/api/v1/account/sso/link",
+		mustJSON(t, SSOLinkRequest{SignInName: "nobody"}), cookie2); a.status != http.StatusNotFound {
+		t.Fatalf("linking an unknown sign-in name: %d", a.status)
+	}
+	h.idp.SignInAs(ssoTestSubject, ssoTestEmail, "A Person")
 
 	acct := get(t, h.srv.URL, "/api/v1/account", h.cookie)
 	var account Account

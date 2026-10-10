@@ -142,6 +142,17 @@ describe("FE-150 the organisation sign-in section", () => {
     expect(calls.find((c) => c.url.includes("/account/sign-ins/7"))?.method).toBe("DELETE");
   });
 
+  it("lets a person in no organisation yet connect one by its sign-in name", async () => {
+    const calls = install({ configured: false, has_client_secret: false, can_manage: false });
+    const go = vi.fn();
+    render(<OrganisationSignInSection organisations={[]} signIns={[]} browser={browser()} reload={() => {}} goTo={go} />);
+    const region = await screen.findByRole("region", { name: a.ssoHeading });
+    await userEvent.type(within(region).getByLabelText(a.ssoJoinLabel), " example-org ");
+    await userEvent.click(within(region).getByRole("button", { name: a.ssoJoinButton }));
+    await waitFor(() => expect(go).toHaveBeenCalledWith("https://idp.example.test/authorize?state=s"));
+    expect(calls.find((c) => c.url.endsWith("/account/sso/link"))?.body).toEqual({ sign_in_name: "example-org" });
+  });
+
   it("says plainly when no organisation sign-in is set up", async () => {
     install({ configured: false, has_client_secret: false, can_manage: false });
     render(

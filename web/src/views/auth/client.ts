@@ -829,6 +829,16 @@ export async function beginLinkOrganisationSignIn(
   return redirectOf(await postJSON(base, "/account/sso/link", { organisation_id: organisationId }));
 }
 
+/** `POST /api/v1/account/sso/link` {sign_in_name}: connect an
+ * organisation's sign-in by its name, which is how a person who is not its
+ * member yet joins through it. */
+export async function beginLinkOrganisationSignInByName(
+  signInName: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<string> {
+  return redirectOf(await postJSON(base, "/account/sso/link", { sign_in_name: signInName }));
+}
+
 /** `GET /api/v1/account/sso?organisation_id=…`. */
 export async function fetchOrganisationSignIn(
   organisationId: string,
