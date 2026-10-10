@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"innsegl.dev/innsegl/internal/ledger"
@@ -106,7 +108,18 @@ func reapCommand(args []string, stdout, stderr io.Writer) int {
 	return runReapCommand(args, stdout, stderr, reapDeps{})
 }
 
+// runReapCommand is the standalone command: it stops on SIGINT or SIGTERM.
 func runReapCommand(args []string, stdout, stderr io.Writer, deps reapDeps) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runReap(ctx, args, stdout, stderr, deps)
+}
+
+// runReap is the whole command, stopping when ctx ends. `serve -also reap`
+// calls it with serve's own context (OPS-177): it waited on a
+// context.Background() until 2026-10-10, so serve's stop waited for it until
+// the runtime killed the container.
+func runReap(ctx context.Context, args []string, stdout, stderr io.Writer, deps reapDeps) int {
 	fs := flag.NewFlagSet("innsegl reap", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -192,8 +205,6 @@ func runReapCommand(args []string, stdout, stderr io.Writer, deps reapDeps) int 
 		timeout:      *timeout,
 	}
 
-	ctx := context.Background()
-
 	reaper, closeAll, err := deps.opener()(ctx, opts)
 	if err != nil {
 		fprintf(stderr, "innsegl reap: %v\n", err)
@@ -217,8 +228,13 @@ func runReapCommand(args []string, stdout, stderr io.Writer, deps reapDeps) int 
 	// §6.7 exists to prevent, under a setting whose name says it is prevented.
 	// `innsegl seal` had the loop all along (its -interval, its ticker); this
 	// command never did, and nothing reconciled the two.
+	//
+	// A sweep in flight finishes before the command stops: it records expiries
+	// in the ledger, so it runs on a context the stop does not cancel. Its
+	// SPIRE calls are bounded by -timeout either way.
+	sweepCtx := context.WithoutCancel(ctx)
 	sweepOnce := func() int {
-		report, err := reaper.Sweep(ctx)
+		report, err := reaper.Sweep(sweepCtx)
 		if err != nil {
 			fprintf(stderr, "innsegl reap: %v\n", err)
 			fprintf(stderr, "innsegl reap: INCONCLUSIVE - no entry was examined, so no orphan has been ruled out\n")
