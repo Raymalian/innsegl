@@ -51,7 +51,7 @@ func (s *Store) MachineLastRun(ctx context.Context, machineIDs []string) (map[st
 const repoActivitySQL = `
 WITH scoped AS (
     SELECT run_id, ts, event_type,
-           convert_from(canonical, 'UTF8')::jsonb->>'repo' AS repo
+           innsegl.resolve_alias(convert_from(canonical, 'UTF8')::jsonb->>'repo') AS repo
       FROM innsegl.events
      WHERE run_id IS NOT NULL
 )

@@ -18,6 +18,7 @@
 --   innsegl.resolve_alias the read every SQL reader goes through: the literal
 --                         for a pseudonym that still has an alias, the value
 --                         itself otherwise (a literal, or an erased name).
+--                         innsegl.resolved_body applies it to a whole body.
 --
 --   innsegl.repo_mode     the deployment's recorded switch to pseudonymous.
 --                         One row, written by the core at its first start in
@@ -51,6 +52,23 @@ CREATE FUNCTION innsegl.resolve_alias(value text) RETURNS text
         SELECT coalesce(
             (SELECT p.literal FROM innsegl.pseudonyms p WHERE p.value = resolve_alias.value),
             resolve_alias.value)
+    $$;
+
+-- innsegl.resolved_body is an event body with its repo and branch resolved:
+-- what a reader that SHOWS a run reads. Never hashed, never verified: the
+-- chain's bytes are canonical, and this is not them.
+CREATE FUNCTION innsegl.resolved_body(body jsonb) RETURNS jsonb
+    LANGUAGE sql
+    STABLE
+    PARALLEL SAFE
+    AS $$
+        SELECT CASE
+            WHEN body ? 'repo' OR body ? 'branch' THEN
+                body || jsonb_strip_nulls(jsonb_build_object(
+                    'repo', innsegl.resolve_alias(body ->> 'repo'),
+                    'branch', innsegl.resolve_alias(body ->> 'branch')))
+            ELSE body
+        END
     $$;
 
 CREATE TABLE innsegl.repo_mode (

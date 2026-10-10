@@ -42,7 +42,7 @@ type RecentVerification struct {
 }
 
 const recentCommitsSQL = `
-SELECT convert_from(canonical, 'UTF8')::jsonb->>'repo',
+SELECT innsegl.resolve_alias(convert_from(canonical, 'UTF8')::jsonb->>'repo'),
        convert_from(canonical, 'UTF8')::jsonb->>'commit_sha'
   FROM innsegl.events
  WHERE event_type = 'commit_recorded'
