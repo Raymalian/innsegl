@@ -94,9 +94,9 @@ func TestACC004MemberRoutesRefuseAndFailCleanly(t *testing.T) {
 	}
 }
 
-// ACC-013 on the API: the auth events a machine's connection records name
+// ACC-015 on the API: the auth events a machine's connection records name
 // no repository (the auth tables keep no name an erasure would have to find).
-func TestACC013TheMintAuthEventNamesNoRepository(t *testing.T) {
+func TestACC015TheMintAuthEventNamesNoRepository(t *testing.T) {
 	h := newOrgHarness(t, roleOwner, true)
 	const repo = "github.com/example/secret-plan"
 	if a := h.confirm(t, "enrolment-tokens", EnrolmentTokenRequest{OrganisationID: orgA, Repos: []string{repo}}, h.auth); a.status != http.StatusOK {

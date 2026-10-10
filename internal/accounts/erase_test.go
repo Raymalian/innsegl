@@ -324,10 +324,10 @@ func TestACC010ErasingAnOrganisationLeavesTheChainByteIdentical(t *testing.T) {
 	}
 }
 
-// ACC-013: the audit trail holds no name — no organisation or machine name
+// ACC-015: the audit trail holds no name — no organisation or machine name
 // and no repository literal — so erasing an organisation leaves nothing
 // readable about it in any accounts table, while its audit rows stay.
-func TestACC013AfterErasureNoAccountsTableNamesTheOrganisation(t *testing.T) {
+func TestACC015AfterErasureNoAccountsTableNamesTheOrganisation(t *testing.T) {
 	f := newErasureFixture(t)
 	ctx := tctx(t)
 	c, cctx := ownerConn(t, f.e.ownerDSN)
