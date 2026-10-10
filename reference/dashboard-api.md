@@ -63,8 +63,8 @@ organisations with their roles, read on every request. The three
 `/api/v1/auth/invitation` routes need no session: they are how a person
 with no account yet accepts an invitation with a new passkey.
 
-The account routes (all need a session; the dashboard has no members page
-yet, so invite with `innsegl accounts invite`):
+The account routes (all need a session; the account page's Members section
+calls them):
 
 | Route | Does |
 |---|---|
@@ -73,6 +73,7 @@ yet, so invite with `innsegl accounts invite`):
 | `POST /api/v1/account/members/role/begin\|finish` | `{organisation_id, user_id, role}`, after a fresh passkey |
 | `POST /api/v1/account/members/remove/begin\|finish` | `{organisation_id, user_id}`, after a fresh passkey |
 | `POST /api/v1/account/invitations/accept` | `{code}`: join with the account already signed in |
+| `POST /api/v1/account/invitations/withdraw` | `{organisation_id, invitation_id}`: withdraw a pending link; owner or admin, no passkey |
 | `POST /api/v1/account/machines/revoke\|suspend\|resume/begin\|finish` | `{machine_id}`, after a fresh passkey; suspended is undone by resume, revoked is final |
 
 ### Roles
@@ -252,7 +253,9 @@ last owner or an existing membership.
 - `test/deploy/apiui_test.go`, `readerrole_test.go` (OPS-011 to OPS-013),
   `resolverrole_test.go`
 - `scripts/setup-link-selftest.sh`
-- `web/` unit tests (`npm test`): FE-141 (`AccountPage.test.tsx`), FE-142
+- `internal/api/accountwithdraw_test.go` (ACC-018)
+- `web/` unit tests (`npm test`): FE-146 (`AccountPage.test.tsx`), FE-147
+  (`AccountMembers.test.tsx`), FE-148 (`app/plain-empty-states.test.ts`), FE-141 (`AccountPage.test.tsx`), FE-142
   (`app/OrganisationSwitcher.test.tsx`), FE-143 (`InvitePage.test.tsx`),
   FE-144 (`run-page/scoped.test.tsx`)
 - `web/tests/a11y/organisations.pw.ts` (FE-142, FE-143 in Chromium, axe in
