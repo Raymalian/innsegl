@@ -116,7 +116,7 @@ func TestREC019APseudonymousIntentIsReadByItsNameAndRepairedWithTheChainsValue(t
 
 func TestREC019AnErasedNameLeavesTheIntentOpen(t *testing.T) {
 	for name, names := range map[string]reconciler.Names{
-		"erased":                       fakeNames{},
+		"erased":                        fakeNames{},
 		"the alias table cannot answer": failingNames{},
 	} {
 		t.Run(name, func(t *testing.T) {
