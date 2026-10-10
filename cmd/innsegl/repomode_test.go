@@ -122,8 +122,14 @@ func (f *fakeRepoModeStore) UseRepositories(r *identity.Repositories) { f.used =
 
 func TestOPS175TheSwitchIsOneWay(t *testing.T) {
 	ctx := context.Background()
-	literal, _ := identity.NewRepositories(identity.ModeLiteral, "")
-	pseudo, _ := identity.NewRepositories(identity.ModePseudonymous, testRepoKey)
+	literal, err := identity.NewRepositories(identity.ModeLiteral, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pseudo, err := identity.NewRepositories(identity.ModePseudonymous, testRepoKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("literal on a ledger that switched is refused, naming the setting", func(t *testing.T) {
 		f := &fakeRepoModeStore{recorded: true}
@@ -164,8 +170,10 @@ func TestOPS175TheSwitchIsOneWay(t *testing.T) {
 // component that is never down.
 func TestOPS175StatusShowsTheRepositoryMode(t *testing.T) {
 	ready := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"ready":true,"repo_mode":"pseudonymous",` +
-			`"dependencies":[{"dependency":"ledger","reachable":true}]}`))
+		if _, err := w.Write([]byte(`{"ready":true,"repo_mode":"pseudonymous",` +
+			`"dependencies":[{"dependency":"ledger","reachable":true}]}`)); err != nil {
+			t.Error(err)
+		}
 	}))
 	t.Cleanup(ready.Close)
 	t.Setenv(envMCPHealthListen, strings.TrimPrefix(ready.URL, "http://"))

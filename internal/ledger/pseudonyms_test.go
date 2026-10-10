@@ -38,6 +38,17 @@ func pseudonymous(t *testing.T, key string) *identity.Repositories {
 	return r
 }
 
+// must fails the test on an error a case did not expect.
+func must(t *testing.T) func(string, error) string {
+	return func(v string, err error) string {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return v
+	}
+}
+
 func registeredIn(runID, repo, branch string, n int) event.Fields {
 	b := childBody(runID, "", n)
 	b[event.FieldRepo] = repo
@@ -100,8 +111,8 @@ func TestMCP097TheAppendPathWritesPseudonymsAndTheirAliasesTogether(t *testing.T
 	repos := pseudonymous(t, pnKeyA)
 	s.UseRepositories(repos)
 
-	wantRepo, _ := repos.Repo(pnRepo)
-	wantBranch, _ := repos.Branch(pnRepo, pnBranch)
+	wantRepo := must(t)(repos.Repo(pnRepo))
+	wantBranch := must(t)(repos.Branch(pnRepo, pnBranch))
 
 	reg, err := s.Append(ctx, registeredIn("run-pn", pnRepo, pnBranch, 1))
 	if err != nil {
@@ -226,7 +237,7 @@ func TestLED046ErasingAnAliasChangesNoByteOfTheChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the chain does not verify before erasure: %v", err)
 	}
-	repoA, _ := repos.Repo(pnRepo)
+	repoA := must(t)(repos.Repo(pnRepo))
 
 	erased, err := erasure.Repository(ctx, s.pool, pnRepo, "test")
 	if err != nil {
@@ -238,9 +249,9 @@ func TestLED046ErasingAnAliasChangesNoByteOfTheChain(t *testing.T) {
 		t.Errorf("erased %v, want 5 pseudonyms", erased)
 	}
 	var audited []byte
-	if err := s.pool.QueryRow(ctx,
-		`SELECT detail::text FROM innsegl_auth.audit WHERE action = $1`, erasure.AuditAction).Scan(&audited); err != nil {
-		t.Fatalf("the erasure left no audit row: %v", err)
+	if qerr := s.pool.QueryRow(ctx,
+		`SELECT detail::text FROM innsegl_auth.audit WHERE action = $1`, erasure.AuditAction).Scan(&audited); qerr != nil {
+		t.Fatalf("the erasure left no audit row: %v", qerr)
 	}
 	if bytes.Contains(audited, []byte("acme")) || !bytes.Contains(audited, []byte(erased[0])) {
 		t.Errorf("the audit row %s must name the pseudonyms and never the literal", audited)
@@ -330,8 +341,8 @@ func TestMCP099DeadRunsAreFoundAcrossAModeSwitchAndAKeyRotation(t *testing.T) {
 		t.Errorf("dead runs = %v, want %v", got, want)
 	}
 
-	if _, err := erasure.Repository(ctx, s.pool, pnRepo, "test"); err != nil {
-		t.Fatal(err)
+	if _, eerr := erasure.Repository(ctx, s.pool, pnRepo, "test"); eerr != nil {
+		t.Fatal(eerr)
 	}
 	got, err = s.DeadRunsForRepo(ctx, pnRepo, since, 10)
 	if err != nil {
@@ -398,11 +409,11 @@ func TestMCP098TheResolvingReadsAnswerNames(t *testing.T) {
 	if err != nil || !found || rec[event.FieldRepo] != pnRepo {
 		t.Errorf("EventByIdempotencyKey = %v, %v, %v", rec[event.FieldRepo], found, err)
 	}
-	if _, found, err := r.EventByIdempotencyKey(ctx, "no-such-key"); err != nil || found {
-		t.Errorf("an absent key = %v, %v", found, err)
+	if _, found, kerr := r.EventByIdempotencyKey(ctx, "no-such-key"); kerr != nil || found {
+		t.Errorf("an absent key = %v, %v", found, kerr)
 	}
 	raw, err := s.EventsForRun(ctx, "run-r")
-	if err != nil || !event.IsPseudonym(raw[0][event.FieldRepo].(string)) {
+	if repo, ok := raw[0][event.FieldRepo].(string); err != nil || !ok || !event.IsPseudonym(repo) {
 		t.Errorf("the store's own read resolved the chain's bytes: %v", raw[0][event.FieldRepo])
 	}
 }

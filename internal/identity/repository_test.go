@@ -31,6 +31,17 @@ func mustRepositories(t *testing.T, mode Mode, key string) *Repositories {
 	return r
 }
 
+// value fails the test on an error a case did not expect.
+func value(t *testing.T) func(string, error) string {
+	return func(v string, err error) string {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return v
+	}
+}
+
 func TestPRI007RepositoryPseudonyms(t *testing.T) {
 	p := mustRepositories(t, ModePseudonymous, testRepoKey)
 
@@ -74,8 +85,8 @@ func TestPRI007RepositoryPseudonyms(t *testing.T) {
 
 	t.Run("stable for one key", func(t *testing.T) {
 		again := mustRepositories(t, ModePseudonymous, testRepoKey)
-		r2, _ := again.Repo(testRepo)
-		b2, _ := again.Branch(testRepo, testBranch)
+		r2 := value(t)(again.Repo(testRepo))
+		b2 := value(t)(again.Branch(testRepo, testBranch))
 		if r2 != repo || b2 != branch {
 			t.Errorf("a second instance on the same key gave %q, %q", r2, b2)
 		}
@@ -83,7 +94,7 @@ func TestPRI007RepositoryPseudonyms(t *testing.T) {
 
 	t.Run("different under another key, and under another key id", func(t *testing.T) {
 		other := mustRepositories(t, ModePseudonymous, otherTestRepoKey)
-		r2, _ := other.Repo(testRepo)
+		r2 := value(t)(other.Repo(testRepo))
 		if r2 == repo || other.KeyID() == p.KeyID() {
 			t.Errorf("two keys gave %q and %q (ids %q, %q)", repo, r2, p.KeyID(), other.KeyID())
 		}
@@ -95,15 +106,15 @@ func TestPRI007RepositoryPseudonyms(t *testing.T) {
 	t.Run("repo and branch are domain-separated", func(t *testing.T) {
 		// A branch spelled like the repository is still a different
 		// pseudonym, and so is the agent_type domain ADR-0041 uses.
-		b, _ := p.Branch(testRepo, "github.com/acme/payments")
+		b := value(t)(p.Branch(testRepo, "github.com/acme/payments"))
 		if b == repo {
 			t.Error("a branch named like its repository pseudonymises to the repository")
 		}
 	})
 
 	t.Run("one branch name in two repositories gives two values", func(t *testing.T) {
-		a, _ := p.Branch("github.com/acme/api", "main")
-		b, _ := p.Branch("github.com/acme/web", "main")
+		a := value(t)(p.Branch("github.com/acme/api", "main"))
+		b := value(t)(p.Branch("github.com/acme/web", "main"))
 		if a == b {
 			t.Errorf("main has one pseudonym across repositories: %q", a)
 		}
@@ -151,7 +162,7 @@ func TestPRI007RepositoryPseudonyms(t *testing.T) {
 
 	t.Run("literal mode may hold a key, because the generator always writes one", func(t *testing.T) {
 		l := mustRepositories(t, ModeLiteral, testRepoKey)
-		if r, _ := l.Repo(testRepo); r != testRepo {
+		if r := value(t)(l.Repo(testRepo)); r != testRepo {
 			t.Errorf("literal mode with a key hid the repository: %q", r)
 		}
 	})

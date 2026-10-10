@@ -95,8 +95,8 @@ func TestAPI037TheQueryAPIResolvesRepositoryNames(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = conn.Close(ctx) }()
-		if _, err := erasure.Repository(ctx, conn, "github.com/innsegl/gone", "test"); err != nil {
-			t.Fatal(err)
+		if _, eerr := erasure.Repository(ctx, conn, "github.com/innsegl/gone", "test"); eerr != nil {
+			t.Fatal(eerr)
 		}
 		list, err := s.Repos(ctx)
 		if err != nil {

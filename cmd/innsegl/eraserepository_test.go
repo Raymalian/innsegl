@@ -43,15 +43,18 @@ func TestLED046EraseRepositoryRemovesTheAliasesAndTheMirror(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pn, _ := rec[event.FieldRepo].(string)
+	pn, ok := rec[event.FieldRepo].(string)
+	if !ok || !event.IsPseudonym(pn) {
+		t.Fatalf("the chain holds %v, want a pseudonym", rec[event.FieldRepo])
+	}
 
 	mirrorRoot := t.TempDir()
 	bare := filepath.Join(mirrorRoot, "example.test", "acme", "withdrawn.git")
-	if err := os.MkdirAll(bare, 0o700); err != nil {
-		t.Fatal(err)
+	if merr := os.MkdirAll(bare, 0o700); merr != nil {
+		t.Fatal(merr)
 	}
-	if err := os.WriteFile(filepath.Join(bare, "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
-		t.Fatal(err)
+	if werr := os.WriteFile(filepath.Join(bare, "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); werr != nil {
+		t.Fatal(werr)
 	}
 
 	var out, errOut bytes.Buffer
@@ -62,8 +65,8 @@ func TestLED046EraseRepositoryRemovesTheAliasesAndTheMirror(t *testing.T) {
 	if !strings.Contains(out.String(), "2 aliases") || !strings.Contains(out.String(), "mirror") {
 		t.Errorf("stdout does not report what was erased:\n%s", out.String())
 	}
-	if _, err := os.Stat(bare); !os.IsNotExist(err) {
-		t.Errorf("the mirror is still there: %v", err)
+	if _, serr := os.Stat(bare); !os.IsNotExist(serr) {
+		t.Errorf("the mirror is still there: %v", serr)
 	}
 	names, err := store.ResolveNames(ctx, pn)
 	if err != nil || names[pn] != pn {

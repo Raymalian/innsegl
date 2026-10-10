@@ -37,8 +37,8 @@ const AuditAction = "repository.erased"
 // pseudonyms it removed, and answers them. A second call removes nothing,
 // records nothing and is not an error. actor names who asked; it may be "".
 func Repository(ctx context.Context, db DB, repo, actor string) (erased []string, err error) {
-	if err := event.ValidateRepo(repo); err != nil {
-		return nil, err
+	if verr := event.ValidateRepo(repo); verr != nil {
+		return nil, verr
 	}
 	tx, err := db.Begin(ctx)
 	if err != nil {
@@ -75,13 +75,13 @@ func Repository(ctx context.Context, db DB, repo, actor string) (erased []string
 	if actor != "" {
 		who = &actor
 	}
-	if _, err := tx.Exec(ctx,
+	if _, xerr := tx.Exec(ctx,
 		`INSERT INTO innsegl_auth.audit (actor, action, subject, detail) VALUES ($1, $2, '', $3)`,
-		who, AuditAction, detail); err != nil {
-		return nil, fmt.Errorf("recording the erasure of %s: %w", repo, err)
+		who, AuditAction, detail); xerr != nil {
+		return nil, fmt.Errorf("recording the erasure of %s: %w", repo, xerr)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("erasing the aliases of %s: %w", repo, err)
+	if cerr := tx.Commit(ctx); cerr != nil {
+		return nil, fmt.Errorf("erasing the aliases of %s: %w", repo, cerr)
 	}
 	return erased, nil
 }

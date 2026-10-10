@@ -4,6 +4,7 @@ package rundir
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -26,7 +27,7 @@ func TestMCP098TheRunDirectoryResolvesRepositoryAndBranch(t *testing.T) {
 		store.UseRepositories(repos)
 		runID := "run-" + key[:1]
 		rec := appendRegistered(t, store, runID, "register-"+runID)
-		if !event.IsPseudonym(rec[event.FieldRepo].(string)) {
+		if repo, ok := rec[event.FieldRepo].(string); !ok || !event.IsPseudonym(repo) {
 			t.Fatalf("the chain holds %v for %s, want a pseudonym", rec[event.FieldRepo], runID)
 		}
 	}
@@ -79,7 +80,10 @@ func TestMCP098ResolutionPaths(t *testing.T) {
 
 	t.Run("a literal record is read as it is", func(t *testing.T) {
 		n := &namingEvents{fakeEvents: fakeEvents{records: withRepo(testRepo)}, err: errResolverDown}
-		d, _ := New(Config{Events: n})
+		d, err := New(Config{Events: n})
+		if err != nil {
+			t.Fatal(err)
+		}
 		run, found, err := d.CredentialRun(context.Background(), testRunID)
 		if err != nil || !found || run.Repo != testRepo {
 			t.Errorf("= %q, %v, %v", run.Repo, found, err)
@@ -87,7 +91,10 @@ func TestMCP098ResolutionPaths(t *testing.T) {
 	})
 	t.Run("an erased name reads as its pseudonym", func(t *testing.T) {
 		n := &namingEvents{fakeEvents: fakeEvents{records: withRepo(pn)}}
-		d, _ := New(Config{Events: n})
+		d, err := New(Config{Events: n})
+		if err != nil {
+			t.Fatal(err)
+		}
 		run, _, err := d.CredentialRun(context.Background(), testRunID)
 		if err != nil || run.Repo != pn {
 			t.Errorf("= %q, %v", run.Repo, err)
@@ -95,9 +102,12 @@ func TestMCP098ResolutionPaths(t *testing.T) {
 	})
 	t.Run("the resolver's failure is the read's failure", func(t *testing.T) {
 		n := &namingEvents{fakeEvents: fakeEvents{records: withRepo(pn)}, err: errResolverDown}
-		d, _ := New(Config{Events: n})
-		if _, _, err := d.CredentialRun(context.Background(), testRunID); err != errResolverDown {
-			t.Errorf("err = %v, want %v", err, errResolverDown)
+		d, err := New(Config{Events: n})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, cerr := d.CredentialRun(context.Background(), testRunID); !errors.Is(cerr, errResolverDown) {
+			t.Errorf("err = %v, want %v", cerr, errResolverDown)
 		}
 	})
 }
