@@ -41,7 +41,7 @@ func runEraseRepository(ctx context.Context, args []string, stdout, stderr io.Wr
 		repo      = fs.String("repo", "", "the repository to erase, as host/org/name")
 		mirrorDir = fs.String("mirror-dir", os.Getenv(mirror.EnvDir),
 			"the core's repository mirror; the repository's mirror is removed with its name ($"+mirror.EnvDir+")")
-		actor = fs.String("actor", os.Getenv("USER"), "who asked, for the audit record")
+		actor = fs.String("actor", "", "who asked, for the audit record")
 	)
 	fs.Usage = func() {
 		fprintf(stderr, "innsegl erase-repository - erase a repository's name from this deployment (ADR-0080)\n\n")

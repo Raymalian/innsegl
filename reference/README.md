@@ -15,6 +15,7 @@ help lines. When the code changes, the code wins; fix the page.
 | Identity: register, retire, admin credential, identity guard; the MCP server (deprecated wire, ADR-0077) | [identity.md](identity.md) |
 | Gateway capture of model traffic | [gateway.md](gateway.md) |
 | Ledger, segments, sealing, canary, ledger backup | [ledger-and-segments.md](ledger-and-segments.md) |
+| Repository names: literal or pseudonymous, the switch, erasure (ADR-0080) | [repository-names.md](repository-names.md) |
 | Reconciler and reaper | [reconciler-and-reaper.md](reconciler-and-reaper.md) |
 | Verify: CLI, verdicts, pre-history, branch gate | [verify.md](verify.md) |
 | Dashboard and query API, accounts | [dashboard-api.md](dashboard-api.md) |

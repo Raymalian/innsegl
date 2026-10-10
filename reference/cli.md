@@ -20,6 +20,7 @@ dispatch table is `commands` in `cmd/innsegl/cli.go`; a test asserts the set.
 | `innsegl canary` | prove the object store refuses to delete a sealed segment (SEG-005) | [ledger-and-segments.md](ledger-and-segments.md) |
 | `innsegl client` | the enrolled machine's local endpoint | [client-and-connect.md](client-and-connect.md) |
 | `innsegl connect` | enrol this machine with a core and point the harness at it | [client-and-connect.md](client-and-connect.md) |
+| `innsegl erase-repository` | erase a repository's name: its aliases and its mirror | [repository-names.md](repository-names.md) |
 | `innsegl git-hook` | git's prepare-commit-msg hook: add the run's trailers | [commit-path.md](commit-path.md) |
 | `innsegl hook` | the harness hook that passes a git commit its tool call id | [commit-path.md](commit-path.md) |
 | `innsegl init` | set up signed commits in one repository end to end | [commit-path.md](commit-path.md) |
