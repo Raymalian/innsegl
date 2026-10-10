@@ -147,6 +147,11 @@ says to revoke the machine from the Account page.
 - `cmd/innsegl/connect_test.go` (EGR-001, ENF-006), `connectmode_test.go`
   (BAK-025), `connectsudo_test.go`
 - `cmd/innsegl/enrol_test.go` (GW-016 to GW-019, KEY-001 to KEY-005, SPI-020)
+- `cmd/innsegl/twomachine_test.go` (OPS-174): a second machine, the shipped
+  binary under a home of its own, enrols, works through `innsegl client
+  serve` and `innsegl status`, and is refused with 401 on requests and
+  renewal once revoked
+- `cmd/innsegl/clientcore_test.go` (OPS-176): the same client and core in one process
 - `cmd/innsegl/sealcanary_test.go` (OPS-172, PROPOSED: the canary's line in status)
 - `cmd/innsegl/clientserve_test.go`, `status_test.go` (CLI-019, PROPOSED),
   `disconnect_core_test.go`, `clientjournal_test.go`, `connect_test.go`
