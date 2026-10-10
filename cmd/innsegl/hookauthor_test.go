@@ -40,6 +40,8 @@ func enf010Repo(t *testing.T, home string) (repo string, env []string) {
 		t.Fatal(err)
 	}
 	ghRun(t, git, repo, env, "add", "a.txt")
+	// The hook acts only in a linked repository (#575).
+	markLinked(t, repo)
 	return repo, env
 }
 

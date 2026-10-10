@@ -23,7 +23,7 @@ make link DIR=<path to a git repository>
 
 | Command | Run by | Does |
 |---|---|---|
-| `innsegl hook pre-tool-use` | the harness, before a Bash tool call | for a `git commit`, prefixes the command with `INNSEGL_TOOL_USE_ID` and places the signing config inside the git invocation as `-c` options, using this same binary as `gpg.x509.program` |
+| `innsegl hook pre-tool-use` | the harness, before a Bash tool call | in a linked repository, for a `git commit`, prefixes the command with `INNSEGL_TOOL_USE_ID` and places the signing config inside the git invocation as `-c` options, using this same binary as `gpg.x509.program` |
 | `innsegl hook session` | the harness, on session start, user prompt, subagent start, cwd change | tells the gateway the session's working directory |
 | `innsegl git-hook prepare-commit-msg` | git | asks the core for the trailers `Agent-Identity`, `Agent-Run`, `Agent-Task` and writes them into the message |
 | `innsegl sign` | git | sends the commit payload to the core and returns the signature; `--verify` is git's verify mode |
@@ -50,6 +50,21 @@ make link DIR=<path to a git repository>
 | `-non-interactive` | never prompt (`$INNSEGL_INIT_NONINTERACTIVE`) |
 | `-json` | report as JSON |
 | `-undo` | reverse a prior run exactly, and exit |
+
+### Which repositories the hook acts on
+
+`innsegl hook pre-tool-use` acts only in a repository linked to innsegl
+(#575). The repository is the one the tool call's working directory is in.
+
+| The working directory is | The hook |
+|---|---|
+| in a repository whose prepare-commit-msg hook `innsegl link` wrote | rewrites the commit and refuses one with signing off |
+| in a repository with a usable `origin`, not linked yet | links it (as `innsegl hook session` does) and acts |
+| in any other repository, such as a local one with no remote | prints nothing: no `-c` options, no refusal, nothing sent to the core |
+| not in a repository, or not given | acts, since the command may commit anywhere |
+
+A linked worktree, the harness's isolated one included, shares its
+repository's hooks, so it counts as linked when the repository is.
 
 ### Commit author per repository
 
@@ -160,6 +175,8 @@ behind the client certificate guard, and never another installation's).
 - `cmd/innsegl/sign_test.go` (CMT-013, CMT-014), `commitsign_test.go`,
   `signpush_test.go`, `signrepo_test.go`, `commitpathmount_test.go`
 - `cmd/innsegl/link_test.go` (ENF-004, ENF-005)
+- `cmd/innsegl/hooklinked_test.go` (CMT-019, CMT-020): an unlinked repository is left alone;
+  a linked one and its worktrees are rewritten as before
 - `cmd/innsegl/init*_test.go` (INIT-001 to INIT-010)
 - `internal/commitpath/*_test.go` (CMT-006, TLS-001, TLS-002)
 - `internal/mcp/signpayload_test.go`, `signpayload_crash_test.go` (CMT-007 to CMT-012)
