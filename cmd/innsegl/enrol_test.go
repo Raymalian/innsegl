@@ -242,6 +242,7 @@ type enGateway struct {
 	addr     string
 	certDir  string
 	upstream *atomic.Int32
+	log      *syncBuffer // everything the gateway wrote to its log
 }
 
 func startHostedGateway(t *testing.T, f *enFixture) *enGateway {
@@ -284,9 +285,9 @@ func startHostedGatewayWith(t *testing.T, f *enFixture, reply http.Handler) *enG
 		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
 		"-client-auth", clientAuthSPIFFE, "-accounts-dsn", f.authDSN,
 	}
-	var stderr bytes.Buffer
+	stderr := &syncBuffer{}
 	done := make(chan int, 1)
-	go func() { done <- runGateway(ctx, args, io.Discard, &stderr, deps) }()
+	go func() { done <- runGateway(ctx, args, io.Discard, stderr, deps) }()
 	var addr string
 	select {
 	case addr = <-addrCh:
@@ -303,7 +304,7 @@ func startHostedGatewayWith(t *testing.T, f *enFixture, reply http.Handler) *enG
 			t.Error("the hosted gateway did not stop")
 		}
 	})
-	return &enGateway{addr: addr, certDir: certDir, upstream: &hits}
+	return &enGateway{addr: addr, certDir: certDir, upstream: &hits, log: stderr}
 }
 
 // client answers an HTTPS client trusting the gateway, presenting cert when
