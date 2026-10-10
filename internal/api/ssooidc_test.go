@@ -63,7 +63,11 @@ func (r ssoRun) code(t *testing.T, state, nonce, challenge, redirect string) str
 	u := r.meta.authorizationURL(ssoTestClient, redirect, state, nonce, challenge)
 	noFollow := *r.hc
 	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := noFollow.Get(u)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := noFollow.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,8 +198,8 @@ func TestAUTH010TheProviderRefusesAnotherVerifierOrRedirectURI(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := r.code(t, "s", "n", challenge, ssoTestRedirect)
-	if _, err := exchangeCode(context.Background(), r.hc, r.meta, ssoTestClient, ssoTestSecret, code,
-		otherVerifier, ssoTestRedirect); err == nil {
+	if _, xerr := exchangeCode(context.Background(), r.hc, r.meta, ssoTestClient, ssoTestSecret, code,
+		otherVerifier, ssoTestRedirect); xerr == nil {
 		t.Fatal("a code was exchanged with another PKCE verifier")
 	}
 
@@ -204,8 +208,8 @@ func TestAUTH010TheProviderRefusesAnotherVerifierOrRedirectURI(t *testing.T) {
 		t.Fatal(err)
 	}
 	code = r.code(t, "s", "n", challenge, ssoTestRedirect)
-	if _, err := exchangeCode(context.Background(), r.hc, r.meta, ssoTestClient, ssoTestSecret, code,
-		verifier, ssoTestRedirect+"/"); err == nil {
+	if _, xerr := exchangeCode(context.Background(), r.hc, r.meta, ssoTestClient, ssoTestSecret, code,
+		verifier, ssoTestRedirect+"/"); xerr == nil {
 		t.Fatal("a code was exchanged with a redirect URI that differs by one character")
 	}
 	// A refused exchange spends nothing; a code exchanged once is spent for
@@ -217,8 +221,8 @@ func TestAUTH010TheProviderRefusesAnotherVerifierOrRedirectURI(t *testing.T) {
 	if raw == "" {
 		t.Fatal("no ID token")
 	}
-	if _, err := exchangeCode(context.Background(), r.hc, r.meta, ssoTestClient, ssoTestSecret, code,
-		verifier, ssoTestRedirect); err == nil {
+	if _, xerr := exchangeCode(context.Background(), r.hc, r.meta, ssoTestClient, ssoTestSecret, code,
+		verifier, ssoTestRedirect); xerr == nil {
 		t.Fatal("a code was exchanged twice")
 	}
 	if verifier == otherVerifier || len(verifier) < 43 {
@@ -263,7 +267,11 @@ func TestSSOClientRefusesLoopbackAndLinkLocalAddresses(t *testing.T) {
 	hc := newSSOHTTPClient()
 	for _, u := range []string{"https://127.0.0.1:1/.well-known/openid-configuration",
 		"https://[::1]:1/x", "https://169.254.169.254/latest", "https://0.0.0.0:1/x"} {
-		resp, err := hc.Get(u)
+		req, rerr := http.NewRequestWithContext(t.Context(), http.MethodGet, u, nil)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		resp, err := hc.Do(req)
 		if err == nil {
 			discardError(resp.Body.Close())
 			t.Errorf("%s was reached", u)

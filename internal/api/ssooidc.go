@@ -101,9 +101,15 @@ func newSSOHTTPClient() *http.Client {
 			return nil
 		},
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = dialer.DialContext
-	transport.Proxy = nil
+	// No proxy: the address checked is the one dialled.
+	transport := &http.Transport{
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          16,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   ssoHTTPTimeout,
+		ResponseHeaderTimeout: ssoHTTPTimeout,
+	}
 	return &http.Client{
 		Timeout:   ssoHTTPTimeout,
 		Transport: transport,
@@ -296,8 +302,8 @@ func verifyIDToken(ctx context.Context, hc *http.Client, m oidcProviderMeta, raw
 	header := jws.Signatures[0].Header
 
 	var set jose.JSONWebKeySet
-	if err := ssoGetJSON(ctx, hc, m.JWKSURI, &set); err != nil {
-		return oidcIdentity{}, err
+	if kerr := ssoGetJSON(ctx, hc, m.JWKSURI, &set); kerr != nil {
+		return oidcIdentity{}, kerr
 	}
 	var candidates []jose.JSONWebKey
 	if header.KeyID != "" {
@@ -322,7 +328,7 @@ func verifyIDToken(ctx context.Context, hc *http.Client, m oidcProviderMeta, raw
 	var c idTokenClaims
 	dec := json.NewDecoder(strings.NewReader(string(payload)))
 	dec.UseNumber()
-	if err := dec.Decode(&c); err != nil {
+	if derr := dec.Decode(&c); derr != nil {
 		return oidcIdentity{}, refuse("its claims are not JSON")
 	}
 	if c.Issuer != m.Issuer {

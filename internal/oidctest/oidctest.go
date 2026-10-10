@@ -350,6 +350,7 @@ func (p *Provider) redirectWithCode(w http.ResponseWriter, r *http.Request, q ur
 	v.Set("code", code)
 	v.Set("state", q.Get("state"))
 	target.RawQuery = v.Encode()
+	//nolint:gosec // G710: the target is a redirect URI registered for this client, checked exactly by checkAuthorize.
 	http.Redirect(w, r, target.String(), http.StatusFound)
 }
 
