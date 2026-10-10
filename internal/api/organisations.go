@@ -65,6 +65,10 @@ type Organisations interface {
 	// CreateInvitation mints a single-use invitation and answers its code,
 	// once. ErrOrgForbidden when the actor may not invite to that role.
 	CreateInvitation(ctx context.Context, accountID, role, actor string) (code string, inv OrgInvitation, err error)
+	// WithdrawInvitation withdraws a pending invitation, with actor's role
+	// checked as creating one is. ErrOrgNotFound for no such pending
+	// invitation, ErrOrgForbidden when the actor may not.
+	WithdrawInvitation(ctx context.Context, accountID string, invitationID int64, actor string) error
 	// PeekInvitation answers what a usable code invites to, spending
 	// nothing. ErrInvitationInvalid for any code that is not usable.
 	PeekInvitation(ctx context.Context, code string) (OrgInvitationPeek, error)

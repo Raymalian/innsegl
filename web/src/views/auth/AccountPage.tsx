@@ -31,6 +31,7 @@ import {
   PrivilegesSection,
   RepositoriesSection,
 } from "./AccountOrganisation";
+import { MembersSection } from "./AccountMembers";
 import { RecoveryCodesStep } from "./RecoveryCodesStep";
 import { AccountSection, CopyButton, SectionStatus, useSectionLoad, wordFor } from "./accountShared";
 import {
@@ -187,6 +188,7 @@ function AccountLoaded({
       <ProfileSection account={account} reload={reload} />
       <PrivilegesSection organisations={account.organisations} />
       <MachinesSection organisations={account.organisations} browser={browser} />
+      <MembersSection organisations={account.organisations} browser={browser} />
       <RepositoriesSection multiOrg={account.organisations.length > 1} />
       <AgentsSection />
       <PasskeysSection account={account} reload={reload} browser={browser} />

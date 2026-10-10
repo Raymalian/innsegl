@@ -141,6 +141,38 @@ export interface AccountAgents {
   recent_runs: AccountAgentRun[];
 }
 
+/** `GET /api/v1/account/members?organisation_id=…`. */
+export interface AccountMember {
+  user_id: string;
+  display_name: string;
+  role: string;
+  since: string;
+  you: boolean;
+}
+
+export interface AccountInvitation {
+  id: number;
+  role: string;
+  state: string;
+  created_by: string;
+  accepted_by: string;
+  expires_at: string;
+}
+
+export interface AccountMembers {
+  members: AccountMember[];
+  invitations: AccountInvitation[];
+  can_manage: boolean;
+}
+
+/** An invitation link, shown once. */
+export interface InvitationLink {
+  link: string;
+  organisation_id: string;
+  role: string;
+  expires_at: string;
+}
+
 export interface RecoveryCodes {
   codes: string[];
 }

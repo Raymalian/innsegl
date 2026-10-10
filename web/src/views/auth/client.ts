@@ -40,6 +40,8 @@
  */
 
 import type {
+  AccountMembers,
+  InvitationLink,
   Account,
   AccountAgents,
   AccountMachine,
@@ -731,4 +733,61 @@ export async function acceptInvitation(
   base: string = DEFAULT_API_BASE,
 ): Promise<void> {
   await postJSON(base, "/account/invitations/accept", { code });
+}
+
+// ---------------------------------------------------------------------------
+// Members (#480, #481): the account page's members section.
+// ---------------------------------------------------------------------------
+
+/** `GET /api/v1/account/members?organisation_id=…`. */
+export async function fetchMembers(
+  organisationId: string,
+  base: string = DEFAULT_API_BASE,
+): Promise<AccountMembers> {
+  return (await getJSON(base, `/account/members?organisation_id=${encodeURIComponent(organisationId)}`)) as AccountMembers;
+}
+
+/** Give a member another role, confirmed with a passkey. */
+export async function changeMemberRole(
+  organisationId: string,
+  userId: string,
+  role: string,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<void> {
+  await confirmWithPasskey(base, "/account/members/role",
+    { organisation_id: organisationId, user_id: userId, role }, browser);
+}
+
+/** Remove a member, confirmed with a passkey. */
+export async function removeMember(
+  organisationId: string,
+  userId: string,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<void> {
+  await confirmWithPasskey(base, "/account/members/remove",
+    { organisation_id: organisationId, user_id: userId }, browser);
+}
+
+/** Make an invitation link, confirmed with a passkey. The link is in the
+ * answer once; nothing here stores it. */
+export async function createInvitation(
+  organisationId: string,
+  role: string,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<InvitationLink> {
+  return (await confirmWithPasskey(base, "/account/invitations",
+    { organisation_id: organisationId, role }, browser)) as InvitationLink;
+}
+
+/** Withdraw a pending invitation link. */
+export async function withdrawInvitation(
+  organisationId: string,
+  invitationId: number,
+  base: string = DEFAULT_API_BASE,
+): Promise<void> {
+  await postJSON(base, "/account/invitations/withdraw",
+    { organisation_id: organisationId, invitation_id: invitationId });
 }

@@ -179,8 +179,38 @@ export const strings = {
       revoke_machine: "An owner or admin can.",
       grant_repositories:
         "Done on the core host with innsegl accounts grant-repo. A repository is also claimed the first time a machine records for it.",
-      manage_members: "Not on the dashboard yet.",
+      manage_members: "An owner or admin can, under Members below.",
     },
+
+    // E28: members, roles and invitation links.
+    membersHeading: "Members",
+    membersIntro:
+      "Who is in each of your organisations, and with which role. An owner or admin changes roles, removes members and makes invitation links; each change is confirmed with a passkey.",
+    membersCaption: (organisation: string) => `Members of ${organisation}`,
+    memberNameHeader: "Name",
+    memberRoleHeader: "Role",
+    memberSinceHeader: "Member since",
+    memberActionsHeader: "Changes",
+    memberYou: "You",
+    memberRoleLabel: (name: string) => `Role for ${name}`,
+    memberRoleButton: "Change role with passkey",
+    memberRoleFailed: "The role could not be changed",
+    memberRemoveButton: "Remove",
+    memberRemovePrompt: "Remove this member? Their sign-ins end and the machines they connected here are suspended.",
+    memberRemoveConfirmButton: "Remove with passkey",
+    memberRemoveFailed: "The member could not be removed",
+    invitationsHeading: "Invitation links",
+    noPendingInvitations: "No invitation link is waiting to be used.",
+    pendingInvitation: (role: string, expires: string) => `${role} link, unused, works until ${expires}`,
+    inviteRoleLabel: "Invite as",
+    inviteButton: "Make a link with passkey",
+    inviteFailed: "The invitation link could not be made",
+    inviteLinkLabel: "Invitation link",
+    inviteLinkOnce: (expires: string) =>
+      `Shown once. Send it to one person; it works once, until ${expires}. Nobody needs an email address.`,
+    copyInviteLink: "Copy link",
+    inviteWithdrawButton: "Withdraw",
+    inviteWithdrawFailed: "The link could not be withdrawn",
 
     machinesHeading: "Machines",
     machinesIntro:

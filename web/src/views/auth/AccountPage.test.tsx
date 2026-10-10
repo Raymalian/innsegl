@@ -267,6 +267,14 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
         );
         return respond(machineList[0]);
       }
+      if (url.includes("/account/members?") && method === "GET") {
+        if (machineList === "unavailable") return unavailable();
+        return respond({
+          can_manage: false,
+          members: [{ user_id: "user-1", display_name: "Dev Operator", role: "owner", since: "2026-09-01T00:00:00Z", you: true }],
+          invitations: [],
+        });
+      }
       const statusMatch = /\/account\/machines\/(suspend|resume)\/(begin|finish)$/.exec(url);
       if (statusMatch && method === "POST") {
         if (statusMatch[2] === "begin") {
@@ -584,6 +592,8 @@ describe("AccountPage", () => {
     await within(region).findByText("ie_0123456789abcdef_secret");
     const command = `innsegl connect https://${window.location.hostname}:28095 --token ie_0123456789abcdef_secret --ca-fingerprint sha256:0a1b2c`;
     expect(within(region).getByText(command)).toBeInTheDocument();
+    // FE-148: a pinned command has no placeholder to replace.
+    expect(within(region).queryByText(strings.account.connectCaNote)).toBeNull();
   });
 
   it("connects a machine: a passkey, then the token once with the one-line command and its expiry", async () => {
