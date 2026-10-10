@@ -65,7 +65,7 @@ Every target with a `##` help line:
 | `make ca-custody-restore` | restore custody from a backup |
 | `make ca-custody-reset` | remove a CA key store nothing depends on, so `make update` provisions a fresh one (`CONFIRM=reset`) |
 | `make ca-custody-switch` | Fulcio onto the store |
-| `make innsegl-acme-credential FILE=<file>` | store the DNS provider's token for a public server certificate (ADR-0081, [gateway.md](gateway.md)); a changed token recreates the core on the next `make update` |
+| `make innsegl-acme-credential FILE=<file>` | store the DNS provider's token for a public server certificate (ADR-0081, [gateway.md](gateway.md)); a changed token recreates a running core at once |
 | `make ca-custody-back` | Fulcio onto the file CA |
 
 `make update` in detail: refuses unless SPIRE and Rekor run; does nothing
