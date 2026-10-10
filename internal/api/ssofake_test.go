@@ -22,6 +22,7 @@ type fakeSSO struct {
 	setErr     error                    // answered by SetSSOConnection when set
 	removed    []string                 // accountID|actor
 	removedErr error
+	lookupErr  error // answered by every connection lookup when set
 }
 
 func (f *fakeOrgs) sso() *fakeSSO {
@@ -34,6 +35,9 @@ func (f *fakeOrgs) sso() *fakeSSO {
 func (f *fakeOrgs) SSOConnection(_ context.Context, accountID string) (SSOConnection, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.sso().lookupErr != nil {
+		return SSOConnection{}, f.sso().lookupErr
+	}
 	c, ok := f.sso().conns[accountID]
 	if !ok {
 		return SSOConnection{}, ErrSSONotConfigured
@@ -44,6 +48,9 @@ func (f *fakeOrgs) SSOConnection(_ context.Context, accountID string) (SSOConnec
 func (f *fakeOrgs) SSOConnectionByName(_ context.Context, name string) (SSOConnection, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.sso().lookupErr != nil {
+		return SSOConnection{}, f.sso().lookupErr
+	}
 	for _, c := range f.sso().conns {
 		if c.SignInName == strings.ToLower(strings.TrimSpace(name)) {
 			return c, nil
@@ -55,6 +62,9 @@ func (f *fakeOrgs) SSOConnectionByName(_ context.Context, name string) (SSOConne
 func (f *fakeOrgs) SSOConnectionByID(_ context.Context, id string) (SSOConnection, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.sso().lookupErr != nil {
+		return SSOConnection{}, f.sso().lookupErr
+	}
 	for _, c := range f.sso().conns {
 		if c.ID == id {
 			return c, nil
