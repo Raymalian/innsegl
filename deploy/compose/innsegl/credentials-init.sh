@@ -21,6 +21,9 @@
 #   <role>/password, <role>/pgpass                the five service roles; a DSN
 #                                                names pgpass with passfile=
 #   objects-root/secret, objects-sealer/secret    the two object-store identities
+#   sso-key/key                                   the key innsegl-api seals an
+#                                                 organisation's sign-in client
+#                                                 secret under (#574)
 #
 # Nothing here prints a value.
 
@@ -36,7 +39,7 @@ LEDGER_ROLES='appender reader authwriter resolver backup'
 
 cred_ensure "${STORE}" ledger-owner \
   ledger-appender ledger-reader ledger-authwriter ledger-resolver ledger-backup \
-  objects-root objects-sealer
+  objects-root objects-sealer sso-key
 
 render_dir() {
   [ -d "${RENDER}/$1" ] || cred_fail "${RENDER}/$1 is not mounted; innsegl.yml gives this one-shot every per-credential volume"
@@ -61,6 +64,10 @@ for name in objects-root objects-sealer; do
   v=$(cred_value "${STORE}" "${name}") || exit 1
   printf '%s\n' "${v}" | cred_put "${RENDER}/${name}/secret" 0444
 done
+
+render_dir sso-key
+v=$(cred_value "${STORE}" sso-key) || exit 1
+printf '%s\n' "${v}" | cred_put "${RENDER}/sso-key/key" 0444
 v=
 
 cred_log 'ready: every credential is in the trust volume and rendered for its readers'

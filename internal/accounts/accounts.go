@@ -82,6 +82,9 @@ var (
 type Store struct {
 	pool *pgxpool.Pool
 	own  bool
+	// ssoKey seals organisation sign-in client secrets (#574); nil stores
+	// public clients only.
+	ssoKey *SSOSecretKey
 }
 
 // New wraps a pool the caller owns and closes.

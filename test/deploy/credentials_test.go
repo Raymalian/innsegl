@@ -225,7 +225,7 @@ func TestOPS130EachServiceMountsOnlyTheCredentialsItUses(t *testing.T) {
 		"innsegl-credentials": {
 			"TRUST:rw",
 			"authwriter:rw", "backup:rw", "ledger-owner:rw", "objects-root:rw",
-			"objects-sealer:rw", "reader:rw", "resolver:rw", "appender:rw",
+			"objects-sealer:rw", "reader:rw", "resolver:rw", "appender:rw", "sso-key:rw",
 		},
 		// What sets passwords on a server reads the trust volume.
 		"innsegl-db-init":       {"TRUST"},
@@ -237,7 +237,7 @@ func TestOPS130EachServiceMountsOnlyTheCredentialsItUses(t *testing.T) {
 		"innsegl-reconciler":    {"appender"},
 		"innsegl-sealer":        {"appender", "objects-sealer"},
 		"innsegl-backup":        {"backup", "objects-sealer"},
-		"innsegl-api":           {"authwriter", "reader", "resolver"},
+		"innsegl-api":           {"authwriter", "reader", "resolver", "sso-key"},
 		"innsegl-canary":        {"objects-sealer"},
 	}
 	for k := range want {

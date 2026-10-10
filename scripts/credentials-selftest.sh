@@ -36,8 +36,8 @@ command -v docker >/dev/null 2>&1 || { echo 'credentials-selftest: docker is req
 IMAGE="$(sed -n 's/^  \(alpine\/openssl:[^ ]*\)$/\1/p' "${COMPOSE_DIR}/innsegl.yml" | head -n 1)"
 [ -n "${IMAGE}" ] || { echo 'credentials-selftest: no openssl image pin in innsegl.yml' >&2; exit 1; }
 
-CORE_RENDER='ledger-owner appender reader authwriter resolver backup objects-root objects-sealer'
-CORE_STORE='ledger-owner ledger-appender ledger-reader ledger-authwriter ledger-resolver ledger-backup objects-root objects-sealer'
+CORE_RENDER='ledger-owner appender reader authwriter resolver backup objects-root objects-sealer sso-key'
+CORE_STORE='ledger-owner ledger-appender ledger-reader ledger-authwriter ledger-resolver ledger-backup objects-root objects-sealer sso-key'
 SIG_RENDER='logdb trillian rekor-index'
 VOLS=()
 SEQ=0
@@ -101,7 +101,7 @@ n=0
 for name in ${CORE_STORE}; do
   if printf '%s\n' "${listing}" | grep -qE "^${name} 400 [0-9a-f]{64}$"; then n=$((n + 1)); else bad "${name} is 64 hex characters, 0400" "$(printf '%s\n' "${listing}" | grep "^${name} " | cut -d' ' -f1-2)"; fi
 done
-[ "${n}" = 8 ] && ok "all eight core credentials are 64 hex characters, 0400"
+[ "${n}" = 9 ] && ok "all nine core credentials are 64 hex characters, 0400"
 leaked=0
 for v in $(printf '%s\n' "${listing}" | cut -d' ' -f3); do
   printf '%s' "${out}" | grep -qF "${v}" && leaked=1
@@ -117,6 +117,7 @@ check="$(look "${A}" '
   for o in objects-root objects-sealer; do
     [ "$(cat $r/$o/secret)" = "$(cat $s/$o)" ] || echo "$o secret"
   done
+  [ "$(cat $r/sso-key/key)" = "$(cat $s/sso-key)" ] || echo "sso-key key"
   [ "$(cat $s/objects-root)" != "$(cat $s/objects-sealer)" ] || echo "sealer equals root"')"
 if [ -z "${check}" ]; then ok "every reader's file holds its credential, in its reader's form"; else bad "every reader's file holds its credential" "${check}"; fi
 

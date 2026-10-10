@@ -201,6 +201,8 @@ func (e *env) openStore(t *testing.T) *Store {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(s.Close)
+	// As the API is: a store that can seal an organisation's client secret.
+	s.SetSSOSecretKey(testSSOKey(t))
 	return s
 }
 

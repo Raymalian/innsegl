@@ -468,6 +468,7 @@ services:
       - innsegl-credential-backup:/run/innsegl/render/backup
       - innsegl-credential-objects-root:/run/innsegl/render/objects-root
       - innsegl-credential-objects-sealer:/run/innsegl/render/objects-sealer
+      - innsegl-credential-sso-key:/run/innsegl/render/sso-key
 
   # --------------------------------------------------------------------------
   # postgres — doc 05 §1's ledger hot tier.
@@ -2062,6 +2063,9 @@ services:
       # VERIFY a brief or a reply's keyed digest without the identity secret
       # it was derived from.
       INNSEGL_API_MESSAGE_KEY_DIR: /message-key
+      # #574: the per-host key an organisation's sign-in client secret is
+      # stored encrypted under (ADR-0078). Only this service mounts it.
+      INNSEGL_API_SSO_KEY_FILE: /run/innsegl/credentials/sso-key/key
       # The same Sigstore a stranger is handed. doc 04 §5.4: a divergent
       # verifier is a divergence in what "verified" means, so the proof BFF runs
       # internal/verify against the endpoints `innsegl verify` uses.
@@ -2077,6 +2081,7 @@ services:
       - innsegl-credential-reader:/run/innsegl/credentials/reader:ro
       - innsegl-credential-authwriter:/run/innsegl/credentials/authwriter:ro
       - innsegl-credential-resolver:/run/innsegl/credentials/resolver:ro
+      - innsegl-credential-sso-key:/run/innsegl/credentials/sso-key:ro
       # READ-ONLY. innsegl-mcp holds the one read-write mount, for receiving
       # pushes. See the header above.
       - innsegl-mirror:/mirror:ro
@@ -2479,6 +2484,7 @@ volumes:
   innsegl-credential-backup:
   innsegl-credential-objects-root:
   innsegl-credential-objects-sealer:
+  innsegl-credential-sso-key:
 
   # ADR-0074: the encrypted trust-key bundles and the producer's status.
   # Ciphertext only. Losing it loses backups, not keys: the operator's
