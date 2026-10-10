@@ -79,6 +79,58 @@ type Organisations interface {
 	// in the same transaction: a failure leaves neither the user nor a
 	// spent code.
 	AcceptInvitationAsNewUser(ctx context.Context, code string, create func(q Querier) (userID string, err error)) (OrgMembership, error)
+
+	SSOConnections
+}
+
+// SSOConnections is an organisation's identity-provider connection (#485):
+// at most one per organisation, set and removed by its owner.
+type SSOConnections interface {
+	// SSOConnection answers the organisation's connection, or
+	// ErrSSONotConfigured.
+	SSOConnection(ctx context.Context, accountID string) (SSOConnection, error)
+	// SSOConnectionByName answers the connection a person names on the
+	// sign-in page, or ErrSSONotConfigured.
+	SSOConnectionByName(ctx context.Context, signInName string) (SSOConnection, error)
+	// SSOConnectionByID answers one connection, or ErrSSONotConfigured.
+	SSOConnectionByID(ctx context.Context, connectionID string) (SSOConnection, error)
+	// SetSSOConnection creates or replaces the organisation's connection,
+	// audited with actor, who must be an owner (ErrOrgForbidden). A new
+	// issuer or client revokes the sessions the old one opened.
+	// ErrOrgInvalid for a field the spine refuses, ErrSSONameTaken for a
+	// sign-in name another organisation holds.
+	SetSSOConnection(ctx context.Context, accountID string, p SSOConnectionParams, actor string) (SSOConnection, error)
+	// RemoveSSOConnection removes it and revokes every session it opened,
+	// answering how many. ErrOrgForbidden, or ErrSSONotConfigured.
+	RemoveSSOConnection(ctx context.Context, accountID, actor string) (sessionsRevoked int, err error)
+	// JoinThroughSSO answers userID's live membership of the connection's
+	// organisation, making them a member when they have never been one
+	// (joined true). ErrRemovedMember when the organisation removed them and
+	// has not invited them back; ErrSSONotConfigured for no such connection.
+	JoinThroughSSO(ctx context.Context, connectionID, userID string) (m OrgMembership, joined bool, err error)
+}
+
+// SSOConnection is one organisation's identity-provider connection.
+// ClientSecret never leaves the server.
+type SSOConnection struct {
+	ID           string
+	AccountID    string
+	AccountName  string
+	SignInName   string
+	Issuer       string
+	ClientID     string
+	ClientSecret string
+	UpdatedAt    time.Time
+}
+
+// SSOConnectionParams is what an owner sets. KeepSecret with an empty
+// ClientSecret keeps the one already stored.
+type SSOConnectionParams struct {
+	SignInName   string `json:"sign_in_name"`
+	Issuer       string `json:"issuer"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	KeepSecret   bool   `json:"keep_secret"`
 }
 
 // Querier is the transaction AcceptInvitationAsNewUser lends to create.
@@ -175,6 +227,15 @@ var (
 	// unknown, expired, withdrawn or already used: telling them apart would
 	// be an oracle.
 	ErrInvitationInvalid = errors.New("api: that invitation link is not usable")
+	// ErrSSONotConfigured: the organisation has no identity-provider
+	// connection, or no connection has that name or id (#485).
+	ErrSSONotConfigured = errors.New("api: no organisation sign-in is set up under that name")
+	// ErrSSONameTaken: another organisation's connection holds the sign-in
+	// name.
+	ErrSSONameTaken = errors.New("api: another organisation uses that sign-in name")
+	// ErrRemovedMember: the organisation removed this person; its sign-in
+	// does not bring them back, an invitation does.
+	ErrRemovedMember = errors.New("api: the organisation removed this person; only an invitation brings them back")
 )
 
 // Roles, spelled as migration 0010's CHECK spells them.
@@ -199,6 +260,9 @@ const (
 	// erasing the organisation.
 	PrivilegeManageOwners      = "manage_owners"
 	PrivilegeEraseOrganisation = "erase_organisation"
+	// PrivilegeManageSSO is setting or removing the organisation's
+	// identity-provider connection (#485): the owner's alone.
+	PrivilegeManageSSO = "manage_sso"
 )
 
 // privilegeActions is the order the page lists them in.
@@ -213,7 +277,8 @@ var privilegeActions = []string{
 // internal/accounts' Authorise gate on it. It scopes the account surface
 // only: nothing an agent does is refused because of a role.
 //
-//	owner   everything, including the owner role and erasing the organisation
+//	owner   everything, including the owner role, the organisation's sign-in
+//	        and erasing the organisation
 //	admin   members other than owners, and every machine
 //	member  read, and connecting machines of their own (revoking their own
 //	        machine is the handlers' own-machine rule, not a privilege)
@@ -229,7 +294,7 @@ func roleMay(role, action string) bool {
 		return role == roleOwner || role == roleAdmin || role == roleMember
 	case PrivilegeRevokeMachine, PrivilegeManageMembers:
 		return role == roleOwner || role == roleAdmin
-	case PrivilegeManageOwners, PrivilegeEraseOrganisation:
+	case PrivilegeManageOwners, PrivilegeEraseOrganisation, PrivilegeManageSSO:
 		return role == roleOwner
 	default:
 		return false
