@@ -193,6 +193,9 @@ func validateEvent(f Fields, verifying bool) error {
 		}
 	}
 
+	if err := checkPseudonymVersion(f, version); err != nil {
+		return err
+	}
 	return checkCrossMemberRules(f, spec)
 }
 
@@ -227,7 +230,7 @@ func resolveSchemaVersion(f Fields, verifying bool) (bool, error) {
 // constant of this package, not an input, and a parse of it would be an error
 // path no test could ever reach. The two are held together by
 // TestSchemaVersionConstantsAgree, in the same spirit as the SER-005 gate.
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 // CanRead reports whether this build can fully verify events of a schema
 // version, and refuses a string that is not a version at all.
@@ -572,6 +575,9 @@ func checkRepo(name string, v any) error {
 	if err != nil {
 		return err
 	}
+	if IsPseudonym(s) {
+		return checkPseudonymMember(name, s)
+	}
 	if err := ValidateRepo(s); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -583,6 +589,9 @@ func checkBranch(name string, v any) error {
 	s, err := checkBoundedString(name, v, MaxReferenceBytes)
 	if err != nil {
 		return err
+	}
+	if IsPseudonym(s) {
+		return checkPseudonymMember(name, s)
 	}
 	if err := ValidateBranch(s); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
@@ -865,6 +874,70 @@ func checkAgentMessagePayloadDigest(name string, v any) error {
 	}
 	if err := ValidateKeyedDigest(s); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Schema 5's pseudonymous form (ADR-0080).
+// ---------------------------------------------------------------------------
+
+// ErrInvalidPseudonym rejects a value in the pseudonymous form that does not
+// match its grammar.
+var ErrInvalidPseudonym = errors.New("not a repository pseudonym")
+
+// PseudonymPrefix opens every value in schema 5's pseudonymous form. It holds
+// no slash, so no value is both a pseudonym and doc 02 §5's host/org/name, and
+// a colon, which git refuses in a branch name, so none is both a pseudonym
+// and a literal branch.
+const PseudonymPrefix = "pn:"
+
+// PseudonymSince is the first schema_version whose repo and branch may carry
+// the pseudonymous form (doc 02 §5's schema-5 errata).
+const PseudonymSince = "5"
+
+// pseudonymPattern is pn:<key-id>:<32 lowercase hex>, with <key-id> in doc 02
+// §5's identifier grammar, as ADR-0061's keyed digest has it.
+var pseudonymPattern = regexp.MustCompile(`^pn:[a-z0-9][a-z0-9-]{0,62}:[0-9a-f]{32}$`)
+
+// IsPseudonym reports whether a repo or branch value is in the pseudonymous
+// form at all. It reads the form, not the grammar: a malformed pseudonym is
+// still one, and is refused as such rather than as a strange literal.
+func IsPseudonym(s string) bool { return strings.HasPrefix(s, PseudonymPrefix) }
+
+// ValidatePseudonym checks doc 02 §5's schema-5 pseudonymous form.
+func ValidatePseudonym(s string) error {
+	if !pseudonymPattern.MatchString(s) {
+		return fmt.Errorf("%w: %q is not pn:<key-id>:<32 lowercase hex> with the key id in "+
+			"[a-z0-9][a-z0-9-]{0,62} (doc 02 §5, schema 5)", ErrInvalidPseudonym, s)
+	}
+	return nil
+}
+
+func checkPseudonymMember(name, s string) error {
+	if err := ValidatePseudonym(s); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// checkPseudonymVersion is doc 02 §7's rule for a change to the values a
+// member may take: a value is validated by the rule of its own event's
+// schema_version. A pseudonym in an event older than schema 5 is refused as
+// the literal that schema requires and did not get.
+func checkPseudonymVersion(f Fields, version string) error {
+	if version >= PseudonymSince {
+		return nil
+	}
+	for _, m := range []struct {
+		name string
+		err  error
+	}{{FieldRepo, ErrInvalidRepo}, {FieldBranch, ErrInvalidBranch}} {
+		if s, ok := f[m.name].(string); ok && IsPseudonym(s) {
+			return fmt.Errorf("%s: %w: %q is schema %s's pseudonymous form, and this event "+
+				"declares schema_version %q, which takes only the literal (doc 02 §5, §7)",
+				m.name, m.err, s, PseudonymSince, version)
+		}
 	}
 	return nil
 }

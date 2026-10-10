@@ -127,6 +127,11 @@ fi
 #       INNSEGL_WRITE_V4_FIXTURES=1. SER-024 re-derives the v4 set it wrote on
 #       every run, and ADP-011 holds it to adding only what ADR-0061 specifies.
 #
+#   TestGenerateV5Fixtures
+#       The same, for schema 5 (ADR-0080): a generator that skips unless
+#       INNSEGL_WRITE_V5_FIXTURES=1. SER-024 re-derives the v5 set it wrote on
+#       every run, and SER-027 re-derives every pseudonym in it.
+#
 #   TestGH001NoContributorAppearsForAnUnlinkedAuthor
 #       doc 07 GH-001 (RM-038, #46). It is the one case in the catalogue that
 #       measures somebody else's system: it pushes commits with an unlinked
@@ -181,7 +186,7 @@ fi
 #       identity opens (TestASecureEnclaveRecipientEncryptsWithNoPlugin), and
 #       every other path of the bundle is exercised with an X25519 identity.
 #
-ALLOWED='TestASecureEnclaveIdentityOpensABundle|TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures|TestGenerateV3Fixtures|TestGenerateV4Fixtures'
+ALLOWED='TestASecureEnclaveIdentityOpensABundle|TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures|TestGenerateV3Fixtures|TestGenerateV4Fixtures|TestGenerateV5Fixtures'
 
 unexpected=$(grep -F '"Action":"skip"' "${out}" | grep -F '"Test":' | grep -Ev "\"Test\":\"(${ALLOWED})\"" || true)
 skipped=$(printf '%s' "${unexpected}" | grep -c . || true)
