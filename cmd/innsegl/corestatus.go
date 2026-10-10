@@ -15,6 +15,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/accounts"
 	"innsegl.dev/innsegl/internal/gateway"
+	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/trusthistory"
 	"innsegl.dev/innsegl/internal/trustwatch"
 	"innsegl.dev/innsegl/internal/version"
@@ -162,6 +163,9 @@ func coreReadiness(ctx context.Context) []coreComponent {
 			Dependency string `json:"dependency"`
 			Reachable  bool   `json:"reachable"`
 		} `json:"dependencies"`
+		// Scheduled controls (doc 05 §2's WORM canary): reported as
+		// components, so a failed or stale one is DOWN in `innsegl status`.
+		Reports []mcp.HealthReport `json:"reports"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ready); err != nil || len(ready.Dependencies) == 0 {
 		return unknown
@@ -169,6 +173,9 @@ func coreReadiness(ctx context.Context) []coreComponent {
 	out := make([]coreComponent, 0, len(ready.Dependencies))
 	for _, d := range ready.Dependencies {
 		out = append(out, coreComponent{Name: d.Dependency, Up: d.Reachable})
+	}
+	for _, r := range ready.Reports {
+		out = append(out, coreComponent{Name: r.Name, Up: r.OK, Detail: r.Detail})
 	}
 	return out
 }

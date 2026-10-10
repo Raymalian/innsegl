@@ -440,6 +440,7 @@ ${s}-core_innsegl-backups|verified ledger backups and their reports
 ${s}-core_innsegl-trust-backups|the encrypted trust-key bundles (ADR-0074); only the operator's own key can read them
 ${s}-core_innsegl-mirror|the per-repository mirrors clients push commits to (ADR-0065)
 ${s}-core_innsegl-dashboard-tls|the dashboard's certificate and key (RM-311; rewritten on start)
+${s}-core_innsegl-canary-status|the scheduled WORM canary's last result (doc 05 §2; rewritten on the next run)
 ${s}-sigstore_sigstore-rekor-search|Rekor's search index
 EOF
 }

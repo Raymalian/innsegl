@@ -1143,6 +1143,18 @@ services:
       INNSEGL_OBJECT_STORE_PREFIX: *object-store-prefix
       INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
       INNSEGL_SEAL_INTERVAL: ${INNSEGL_SEAL_INTERVAL:-1m}
+      # doc 05 §2's SCHEDULED deletion canary, run from the sealer's loop with
+      # the sealer's identity. Daily by default; each run is recorded in the
+      # file below, which this process's /readyz reports and `innsegl status`
+      # shows as "worm canary" (DOWN on a failure, or on no run within two
+      # intervals). NO PROBE RETENTION IS SET: this identity may not set one
+      # (PutObjectRetention is withheld, and the store refuses a PUT carrying
+      # retention headers for the same reason; measured in the update
+      # rehearsal, every run failed probe_written). The probe takes the
+      # bucket's default rule, and each run sweeps the probes whose window has
+      # passed, so the prefix holds about one probe per interval in that window.
+      INNSEGL_CANARY_INTERVAL: ${INNSEGL_CANARY_INTERVAL:-24h}
+      INNSEGL_CANARY_STATUS_FILE: /run/innsegl/canary/worm-canary.json
       # The reconciler's, including the rebase (#194) and writes (#169) passes.
       # Empty leaves each pass off, as on the reconciler service.
       INNSEGL_RECONCILE_INTERVAL: ${INNSEGL_RECONCILE_INTERVAL:-1m}
@@ -1297,6 +1309,9 @@ services:
       - innsegl-trust-history:/run/innsegl/trust
       # ADR-0074, READ-ONLY: the encrypted trust-key backups, to serve.
       - innsegl-trust-backups:/run/innsegl/trust-backups:ro
+      # doc 05 §2: the scheduled canary's last result. Written here by the
+      # sealer companion, read here by /readyz.
+      - innsegl-canary-status:/run/innsegl/canary
     ports:
       # Loopback unless INNSEGL_BIND says otherwise, and INNSEGL_BIND moves
       # only the gateway and the dashboard. Every other line here stays on
@@ -1868,6 +1883,10 @@ services:
       INNSEGL_OBJECT_STORE_PREFIX: *object-store-prefix
       INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
       INNSEGL_SEAL_INTERVAL: ${INNSEGL_SEAL_INTERVAL:-1m}
+      # The scheduled canary, as on innsegl-mcp: this container runs the
+      # sealer, so it runs the canary and writes the file innsegl-mcp reports.
+      INNSEGL_CANARY_INTERVAL: ${INNSEGL_CANARY_INTERVAL:-24h}
+      INNSEGL_CANARY_STATUS_FILE: /run/innsegl/canary/worm-canary.json
       # NO $INNSEGL_OBJECT_STORE_RETENTION HERE, AND THAT IS THE FIX RATHER
       # THAN AN OMISSION. Found by #112's review of this file:
       #
@@ -1892,6 +1911,7 @@ services:
       # ADR-0078: the credentials this service uses, and no others.
       - innsegl-credential-appender:/run/innsegl/credentials/appender:ro
       - innsegl-credential-objects-sealer:/run/innsegl/credentials/objects-sealer:ro
+      - innsegl-canary-status:/run/innsegl/canary
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -2138,12 +2158,12 @@ services:
       - ALL
 
   # --------------------------------------------------------------------------
-  # innsegl-canary — SEG-005's deletion canary, under a profile.
+  # innsegl-canary — SEG-005's deletion canary, ON DEMAND, under a profile.
   #
-  # Not a doc 05 §1 row, but doc 05 §2 requires it: "SEG-005's deletion canary
-  # runs as a scheduled job in production, not only at deploy". A subcommand
-  # whose exit status is the verdict serves both callers, and having it here
-  # means the object-lock claim can be MEASURED on a first run rather than read:
+  # The SCHEDULED run doc 05 §2 requires is not this service: it runs from the
+  # sealer's loop inside innsegl-mcp (INNSEGL_CANARY_INTERVAL there). This one
+  # is the same check by hand, so the object-lock claim can be MEASURED on a
+  # first run rather than read:
   #
   #   docker compose -f deploy/compose/innsegl.yml --profile canary run --rm innsegl-canary
   # --------------------------------------------------------------------------
@@ -2456,6 +2476,12 @@ volumes:
   # machine keeps its own copies.
   # MOUNTED BY: innsegl-trust-backup (rw), innsegl-mcp (ro).
   innsegl-trust-backups:
+
+  # doc 05 §2: the scheduled WORM canary's last result, one small JSON file.
+  # Not a trust volume: losing it costs one "no run recorded" until the next
+  # run. MOUNTED BY: innsegl-mcp (rw), innsegl-sealer (rw; one of the two runs
+  # the sealer at a time).
+  innsegl-canary-status:
 
   # ADR-0074: the other projects' key volumes, by name, READ-ONLY, for the
   # backup and nothing else. Always external: this project never creates or

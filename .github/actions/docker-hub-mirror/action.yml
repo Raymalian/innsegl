@@ -1,0 +1,36 @@
+# Docker Hub through a pull-through mirror, for every job that pulls images.
+#
+# A runner pulls anonymously, and Docker Hub limits anonymous pulls per
+# address. Measured on PR #567 (2026-10-09): about eighty tests in `test
+# (race)` and `coverage floors` failed on "toomanyrequests: You have reached
+# your unauthenticated pull rate limit" (busybox, postgres, debian, alpine),
+# and the suite pulls more images every month. Re-running does not fix that.
+#
+# The daemon is pointed at mirror.gcr.io, Google's public cache of Docker
+# Hub. Docker falls back to Docker Hub itself for anything the mirror does
+# not hold, so this can only add a source, never remove one. Images pinned
+# by digest are checked against that digest whichever registry serves them.
+# Images from other registries (ghcr.io, gcr.io) are untouched.
+name: Docker Hub mirror
+description: Point the runner's Docker daemon at a Docker Hub pull-through mirror
+runs:
+  using: composite
+  steps:
+    - name: Configure the Docker daemon's registry mirror
+      shell: bash
+      run: |
+        set -euo pipefail
+        cfg=/etc/docker/daemon.json
+        sudo mkdir -p /etc/docker
+        if [ -s "$cfg" ]; then current="$(sudo cat "$cfg")"; else current='{}'; fi
+        printf '%s' "$current" \
+          | jq '.["registry-mirrors"] = ((.["registry-mirrors"] // []) + ["https://mirror.gcr.io"] | unique)' \
+          | sudo tee "$cfg" >/dev/null
+        sudo systemctl restart docker
+        for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+        mirrors="$(docker info --format '{{.RegistryConfig.Mirrors}}')"
+        echo "docker registry mirrors: $mirrors"
+        case "$mirrors" in
+          *mirror.gcr.io*) ;;
+          *) echo "::error::the Docker daemon did not take the registry mirror"; exit 1 ;;
+        esac

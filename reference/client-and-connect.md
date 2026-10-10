@@ -43,6 +43,12 @@ in the checkout.
 `innsegl client serve` takes only `-listen` (default: the address connect
 wrote). `innsegl status` takes no flags.
 
+`innsegl status` prints one line per part of the core: its readiness checks
+(`spire`, `ledger`, `sigstore`) and its scheduled controls. The scheduled
+WORM canary is `worm canary`: `up` with when it last passed, or `DOWN` with
+the check that failed, `stale` (no run in twice the interval), or `no run
+recorded` ([ledger-and-segments.md](ledger-and-segments.md)).
+
 ## Settings
 
 The managed settings connect writes point the harness at the client service
@@ -141,6 +147,7 @@ says to revoke the machine from the Account page.
 - `cmd/innsegl/connect_test.go` (EGR-001, ENF-006), `connectmode_test.go`
   (BAK-025), `connectsudo_test.go`
 - `cmd/innsegl/enrol_test.go` (GW-016 to GW-019, KEY-001 to KEY-005, SPI-020)
+- `cmd/innsegl/sealcanary_test.go` (OPS-172, PROPOSED: the canary's line in status)
 - `cmd/innsegl/clientserve_test.go`, `status_test.go` (CLI-019, PROPOSED),
   `disconnect_core_test.go`, `clientjournal_test.go`, `connect_test.go`
   (CLI-020, PROPOSED), `authorcli_test.go` (ENF-016, PROPOSED)

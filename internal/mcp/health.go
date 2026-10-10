@@ -258,6 +258,9 @@ type HealthConfig struct {
 	// which file, and how many, are start-up log lines on the operator's own
 	// stream.
 	AdminCredentialEnforced bool
+	// Reports are scheduled controls whose last result readiness REPORTS and
+	// never gates on: doc 05 §2's WORM canary is the first. Nil reports none.
+	Reports func() []HealthReport
 	// Logger receives the one thing that can go wrong while answering: a
 	// response that could not be written. Nil disables it.
 	Logger *slog.Logger
@@ -272,6 +275,15 @@ type Health struct {
 	version        string
 	logger         *slog.Logger
 	adminCred      bool
+	reports        func() []HealthReport
+}
+
+// HealthReport is one scheduled control's last result, on /readyz. A failed
+// one is a finding for the operator, never a reason to stop taking traffic.
+type HealthReport struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // healthProbe is one dependency and the read that reaches it. Built once, in
@@ -313,6 +325,7 @@ func NewHealth(cfg HealthConfig) (*Health, error) {
 		version:        cfg.Version,
 		logger:         cfg.Logger,
 		adminCred:      cfg.AdminCredentialEnforced,
+		reports:        cfg.Reports,
 	}
 	if h.timeout <= 0 {
 		h.timeout = DefaultHealthTimeout
@@ -404,6 +417,9 @@ type Readiness struct {
 	// a reason to be unready: a deployment that has not split its listeners
 	// requires no credential and is perfectly ready.
 	AdminCredentialEnforced bool
+	// Reports are the scheduled controls' last results. Reported, never a
+	// reason to be unready.
+	Reports []HealthReport
 	// ObservedAt is when the report was composed.
 	ObservedAt time.Time
 }
@@ -475,6 +491,9 @@ func (h *Health) Ready(ctx context.Context) Readiness {
 	}
 	if h.tools != nil {
 		r.MissingTools = h.tools.MissingTools()
+	}
+	if h.reports != nil {
+		r.Reports = h.reports()
 	}
 	return r
 }
@@ -638,6 +657,8 @@ type readinessWire struct {
 	// omitted: an absent field reads as "this build does not report it", and
 	// the one state an operator must not have to infer is the open one.
 	AdminCredential string `json:"admin_credential"`
+	// Reports never changes Ready; see HealthConfig.Reports.
+	Reports []HealthReport `json:"reports,omitempty"`
 }
 
 type dependencyWire struct {
@@ -668,6 +689,7 @@ func (r Readiness) MarshalJSON() ([]byte, error) {
 		Dependencies:    r.Dependencies,
 		MissingTools:    r.MissingTools,
 		AdminCredential: healthAdminCredentialState(r.AdminCredentialEnforced),
+		Reports:         r.Reports,
 	})
 }
 
