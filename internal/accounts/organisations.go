@@ -82,6 +82,28 @@ func (s *Store) RevokeMachine(ctx context.Context, machineID, actor string) erro
 	return err
 }
 
+// SuspendMachine suspends one active installation (#471): the gateway
+// refuses it within its 30 s cache, and ResumeMachine undoes it.
+func (s *Store) SuspendMachine(ctx context.Context, machineID, actor string) error {
+	return s.machineStatus(ctx, machineID, StatusSuspended, actor)
+}
+
+// ResumeMachine makes a suspended installation active again.
+func (s *Store) ResumeMachine(ctx context.Context, machineID, actor string) error {
+	return s.machineStatus(ctx, machineID, StatusActive, actor)
+}
+
+func (s *Store) machineStatus(ctx context.Context, machineID, status, actor string) error {
+	err := s.SetInstallationStatus(ctx, machineID, status, actor)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return fmt.Errorf("%w: %s", api.ErrMachineNotFound, machineID)
+	case errors.Is(err, ErrRevoked):
+		return fmt.Errorf("%w: %s", api.ErrMachineRevoked, machineID)
+	}
+	return err
+}
+
 // MintEnrolmentToken is CreateEnrolmentToken for the account page. An empty
 // kind is a workstation and an empty repos list is every repository ("*").
 func (s *Store) MintEnrolmentToken(ctx context.Context, accountID, actor, kind string, repos []string) (string, time.Time, error) {

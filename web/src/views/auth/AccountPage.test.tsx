@@ -267,6 +267,16 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
         );
         return respond(machineList[0]);
       }
+      const statusMatch = /\/account\/machines\/(suspend|resume)\/(begin|finish)$/.exec(url);
+      if (statusMatch && method === "POST") {
+        if (statusMatch[2] === "begin") {
+          return respond({ ceremony_id: `cer-${statusMatch[1]}`, publicKey: { challenge: "abc" } });
+        }
+        if (machineList === "unavailable") return unavailable();
+        const to = statusMatch[1] === "suspend" ? "suspended" : "active";
+        machineList = machineList.map((m) => (m.id === "m-1" ? { ...m, status: to } : m));
+        return respond(machineList[0]);
+      }
       if (url.endsWith("/account/enrolment-tokens/begin") && method === "POST") {
         return respond({ ceremony_id: "cer-token", publicKey: { challenge: "abc" } });
       }
@@ -683,5 +693,44 @@ describe("FE-141 connecting a machine from the dashboard", () => {
     expect(await within(region).findByText("ie_0123456789abcdef_secret")).toBeInTheDocument();
     const begin = fetches.calls.find((c) => c.url.endsWith("/enrolment-tokens/begin"));
     expect(begin?.body).toEqual({ organisation_id: "org-2", kind: "workstation", repos: ["*"] });
+  });
+});
+
+/*
+ * FE-146 (#471): suspend and resume a machine from the account page, each
+ * confirmed with a passkey, beside revoke. Suspended is shown and undone;
+ * revoked offers nothing.
+ */
+function rowOf(region: HTMLElement, name: string): HTMLElement {
+  const row = within(region)
+    .getAllByRole("row")
+    .find((r) => r.textContent?.includes(name));
+  if (!row) throw new Error(`no row for ${name}`);
+  return row;
+}
+
+describe("FE-146 suspending and resuming a machine", () => {
+  it("suspends an active machine and resumes it, each after a passkey", async () => {
+    const fetches = installAccountFetch(account());
+    const user = userEvent.setup();
+    render(<AccountPage browser={workingBrowser()} />);
+    const region = await screen.findByRole("region", { name: strings.account.machinesHeading });
+    const row = await waitFor(() => rowOf(region, "build-runner-1"));
+
+    await user.click(within(row).getByRole("button", { name: strings.account.suspendButton }));
+    expect(within(row).getByText(strings.account.suspendConfirmPrompt)).toBeInTheDocument();
+    await user.click(within(row).getByRole("button", { name: strings.account.suspendConfirmButton }));
+    const suspended = await waitFor(() => rowOf(region, "build-runner-1"));
+    expect(await within(suspended).findByText(strings.account.machineStatus.suspended)).toBeInTheDocument();
+    expect(fetches.calls.some((c) => c.url.endsWith("/machines/suspend/finish"))).toBe(true);
+
+    await user.click(within(suspended).getByRole("button", { name: strings.account.resumeButton }));
+    await user.click(within(suspended).getByRole("button", { name: strings.account.resumeConfirmButton }));
+    const resumed = await waitFor(() => rowOf(region, "build-runner-1"));
+    expect(await within(resumed).findByText(strings.account.machineStatus.active)).toBeInTheDocument();
+    expect(fetches.calls.find((c) => c.url.endsWith("/machines/resume/begin"))?.body).toEqual({ machine_id: "m-1" });
+
+    const revoked = rowOf(region, "laptop");
+    expect(within(revoked).queryByRole("button")).toBeNull();
   });
 });

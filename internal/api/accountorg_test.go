@@ -129,6 +129,30 @@ func (f *fakeOrgs) RevokeMachine(_ context.Context, machineID, actor string) err
 	return ErrMachineNotFound
 }
 
+func (f *fakeOrgs) SuspendMachine(_ context.Context, machineID, _ string) error {
+	return f.setStatus(machineID, "suspended")
+}
+
+func (f *fakeOrgs) ResumeMachine(_ context.Context, machineID, _ string) error {
+	return f.setStatus(machineID, "active")
+}
+
+func (f *fakeOrgs) setStatus(machineID, status string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.machines {
+		if f.machines[i].ID != machineID {
+			continue
+		}
+		if f.machines[i].Status == "revoked" {
+			return ErrMachineRevoked
+		}
+		f.machines[i].Status = status
+		return nil
+	}
+	return ErrMachineNotFound
+}
+
 func (f *fakeOrgs) MintEnrolmentToken(_ context.Context, accountID, actor, kind string, repos []string) (string, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

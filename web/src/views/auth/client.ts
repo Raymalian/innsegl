@@ -644,6 +644,22 @@ export async function revokeMachine(
   )) as AccountMachine;
 }
 
+/** Suspend or resume one machine, confirmed with a passkey (#471). Answers
+ * the machine as it now stands. */
+export async function changeMachineStatus(
+  machineId: string,
+  change: "suspend" | "resume",
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<AccountMachine> {
+  return (await confirmWithPasskey(
+    base,
+    `/account/machines/${change}`,
+    { machine_id: machineId },
+    browser,
+  )) as AccountMachine;
+}
+
 /** Mint a single-use enrolment token, confirmed with a passkey. The token
  * is in the answer once; nothing here stores it. */
 export async function mintEnrolmentToken(

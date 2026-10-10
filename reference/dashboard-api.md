@@ -73,6 +73,7 @@ yet, so invite with `innsegl accounts invite`):
 | `POST /api/v1/account/members/role/begin\|finish` | `{organisation_id, user_id, role}`, after a fresh passkey |
 | `POST /api/v1/account/members/remove/begin\|finish` | `{organisation_id, user_id}`, after a fresh passkey |
 | `POST /api/v1/account/invitations/accept` | `{code}`: join with the account already signed in |
+| `POST /api/v1/account/machines/revoke\|suspend\|resume/begin\|finish` | `{machine_id}`, after a fresh passkey; suspended is undone by resume, revoked is final |
 
 ### Roles
 
@@ -84,7 +85,7 @@ installation and the grants, never a role.
 |---|---|---|---|
 | read the ledger, resolve alerts, own passkeys and sign-ins | yes | yes | yes |
 | connect a machine | yes | yes | yes |
-| revoke a machine | yes | yes | their own only |
+| revoke, suspend or resume a machine | yes | yes | their own only |
 | invite, change a role, remove a member (not an owner) | yes | yes | no |
 | give or take the owner role, invite an owner | yes | no | no |
 | erase the organisation | yes | no | no |
@@ -235,7 +236,9 @@ last owner or an existing membership.
   AUTH-007; real Postgres)
 - `internal/api/accountmembers_test.go`, `accountorg_test.go` (ACC-004,
   AUTH-005 to AUTH-007)
-- `internal/api/scope_test.go` (API-035: every read answers the viewer's
+- `internal/api/accountsuspend_test.go`, `internal/accounts/organisations_test.go`
+  (ACC-016: suspend and resume, migration 0018's ceremony kinds)
+- `internal/api/scope_test.go`, `scoperelatives_test.go` (API-035: every read answers the viewer's
   runs only; API-036: another organisation's run reads as no run; ACC-013:
   the switcher narrows; ACC-014: unowned runs are the operator's), and
   `cmd/innsegl/apiscope_test.go` (ACC-014's setting)

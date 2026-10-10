@@ -36,6 +36,11 @@ type Organisations interface {
 	// RevokeMachine revokes one installation for good, audited with actor.
 	// ErrMachineNotFound or ErrMachineRevoked when it cannot.
 	RevokeMachine(ctx context.Context, machineID, actor string) error
+	// SuspendMachine and ResumeMachine move one installation between active
+	// and suspended, audited with actor (#471). ErrMachineNotFound, or
+	// ErrMachineRevoked for a revoked one.
+	SuspendMachine(ctx context.Context, machineID, actor string) error
+	ResumeMachine(ctx context.Context, machineID, actor string) error
 	// MintEnrolmentToken mints a single-use enrolment token and answers its
 	// plaintext, once. ErrOrgInvalid for a kind or repos list the spine
 	// refuses.

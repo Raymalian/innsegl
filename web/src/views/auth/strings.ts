@@ -211,6 +211,16 @@ export const strings = {
     revokeWorking: "Waiting for your passkey",
     revokeFailed: "The machine could not be revoked",
     revokeNeedsRole: "Only an owner or admin can revoke",
+    // #471: a pause that can be undone, beside revoke.
+    suspendButton: "Suspend",
+    suspendConfirmPrompt:
+      "Suspend this machine? It stops recording within a minute, until it is resumed. Your passkey confirms it.",
+    suspendConfirmButton: "Suspend with passkey",
+    suspendFailed: "The machine could not be suspended",
+    resumeButton: "Resume",
+    resumeConfirmPrompt: "Resume this machine? It records again. Your passkey confirms it.",
+    resumeConfirmButton: "Resume with passkey",
+    resumeFailed: "The machine could not be resumed",
 
     connectHeading: "Connect a machine",
     connectIntro:
