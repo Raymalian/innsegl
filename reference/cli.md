@@ -11,7 +11,7 @@ dispatch table is `commands` in `cmd/innsegl/cli.go`; a test asserts the set.
 
 | Subcommand | What it does | Page |
 |---|---|---|
-| `innsegl accounts` | manage organisations, enrolment tokens, installations and repository grants | [dashboard-api.md](dashboard-api.md) |
+| `innsegl accounts` | manage organisations, members, invitations, the audit trail, enrolment tokens, installations and repository grants | [dashboard-api.md](dashboard-api.md) |
 | `innsegl admin-credential` | issue the repository-scoped credential the identity lifecycle requires | [identity.md](identity.md) |
 | `innsegl author` | which repositories author agent commits as the operator | [commit-path.md](commit-path.md) |
 | `innsegl api` | serve the dashboard's read-only query API and proof BFF | [dashboard-api.md](dashboard-api.md) |
@@ -20,6 +20,7 @@ dispatch table is `commands` in `cmd/innsegl/cli.go`; a test asserts the set.
 | `innsegl canary` | prove the object store refuses to delete a sealed segment (SEG-005) | [ledger-and-segments.md](ledger-and-segments.md) |
 | `innsegl client` | the enrolled machine's local endpoint | [client-and-connect.md](client-and-connect.md) |
 | `innsegl connect` | enrol this machine with a core and point the harness at it | [client-and-connect.md](client-and-connect.md) |
+| `innsegl erase-organisation` | erase an organisation: its account data, repository names and mirrors | [dashboard-api.md](dashboard-api.md) |
 | `innsegl erase-repository` | erase a repository's name: its aliases and its mirror | [repository-names.md](repository-names.md) |
 | `innsegl git-hook` | git's prepare-commit-msg hook: add the run's trailers | [commit-path.md](commit-path.md) |
 | `innsegl hook` | the harness hook that passes a git commit its tool call id | [commit-path.md](commit-path.md) |

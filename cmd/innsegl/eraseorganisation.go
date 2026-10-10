@@ -41,13 +41,13 @@ func runEraseOrganisation(ctx context.Context, args []string, stdout, stderr io.
 	var (
 		dsn = fs.String("dsn", os.Getenv(envLedgerDSN),
 			"the ledger database as its OWNER; no service role can delete an alias ($"+envLedgerDSN+")")
-		account   = fs.String("account", "", "the organisation's id (the ID column of `innsegl accounts list`)")
+		account   = fs.String("account", "", "the organisation's id: the ID column of innsegl accounts list")
 		by        = fs.String("by", "", "the owner who asked; refused unless they are a live owner (default: the operator)")
 		mirrorDir = fs.String("mirror-dir", os.Getenv(mirror.EnvDir),
 			"the core's repository mirror; each erased repository's mirror is removed ($"+mirror.EnvDir+")")
 	)
 	fs.Usage = func() {
-		fprintf(stderr, "innsegl erase-organisation - erase an organisation and its repositories' names (#482)\n\n")
+		fprintf(stderr, "innsegl erase-organisation - erase an organisation, its account data and its repositories' names\n\n")
 		fprintf(stderr, "Usage:\n  innsegl erase-organisation -account ID [flags]\n\n")
 		fprintf(stderr, "Deletes the organisation's members, installations, tokens, invitations and\n")
 		fprintf(stderr, "repository grants, revokes its members' sessions, and erases the names\n")
