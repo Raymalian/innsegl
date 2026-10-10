@@ -46,6 +46,9 @@ type Account struct {
 	// Organisations is every organisation the user holds a live membership
 	// in (RM-333, #511). Empty, never null.
 	Organisations []AccountOrganisation `json:"organisations"`
+	// SignIns is every organisation sign-in linked to the account (#485).
+	// Empty, never null.
+	SignIns []AccountSignIn `json:"sign_ins"`
 }
 
 // AccountPasskey is one passkey on the account. Current is the one this
