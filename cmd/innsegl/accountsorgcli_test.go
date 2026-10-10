@@ -159,8 +159,8 @@ func TestAUTH006AccountsCLIInviteGivesALinkOnStdoutOnly(t *testing.T) {
 		{"invite", "-dsn", "x", "--account", "a", "--role", "member", "--origin", ""},
 		{"invite", "-dsn", "x", "--account", "a", "--role", "member", "--origin", "ftp://c"},
 	} {
-		if code, _, _ := runAccounts(s, args...); code != exitUsage {
-			t.Errorf("%v: exit %d, want usage", args, code)
+		if got, _, _ := runAccounts(s, args...); got != exitUsage {
+			t.Errorf("%v: exit %d, want usage", args, got)
 		}
 	}
 

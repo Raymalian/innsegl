@@ -157,14 +157,16 @@ func runAccountsCommand(args []string, stdout, stderr io.Writer, deps accountsCL
 // accountsFlags are every flag a verb may declare; nil when it does not.
 type accountsFlags struct {
 	dsn, name, owner, account, by, repos, kind, user, role, origin *string
-	limit                                                         *int
+	limit                                                          *int
 }
 
 func declareAccountsFlags(verb string, fs *flag.FlagSet) accountsFlags {
 	var f accountsFlags
 	f.dsn = fs.String("dsn", os.Getenv(envAuthWriterDSN),
 		"the auth-writer connection string ($"+envAuthWriterDSN+")")
-	byFlag := func() { f.by = fs.String("by", "", "the user making the change; their role is checked (default: the operator)") }
+	byFlag := func() {
+		f.by = fs.String("by", "", "the user making the change; their role is checked (default: the operator)")
+	}
 	accountFlag := func(usage string) { f.account = fs.String("account", "", usage) }
 	switch verb {
 	case "new":
@@ -369,7 +371,10 @@ func runAccountsVerb(ctx context.Context, verb string, f accountsFlags, position
 		}
 		return tw.Flush()
 	case "withdraw-invitation":
-		id, _ := strconv.ParseInt(positional[0], 10, 64) // validated
+		id, perr := strconv.ParseInt(positional[0], 10, 64)
+		if perr != nil {
+			return perr
+		}
 		if err := store.RevokeInvitation(ctx, *f.account, id, *f.by); err != nil {
 			return err
 		}

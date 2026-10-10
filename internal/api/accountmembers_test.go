@@ -139,7 +139,7 @@ func (f *fakeOrgs) AcceptInvitationAsNewUser(ctx context.Context, code string,
 	if err != nil {
 		return OrgMembership{}, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { discardError(tx.Rollback(ctx)) }()
 	userID, err := create(tx)
 	if err != nil {
 		return OrgMembership{}, err

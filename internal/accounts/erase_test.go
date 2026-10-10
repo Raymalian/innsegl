@@ -90,7 +90,7 @@ func TestACC009EveryChangeIsOneAuditRowAndTheTrailIsAppendOnly(t *testing.T) {
 // mayErase is the role table's answer, as the CLI passes it.
 func mayErase(role string) bool { return api.RoleMay(role, api.PrivilegeEraseOrganisation) }
 
-const eraseKey ="abababababababababababababababababababababababababababababababab"
+const eraseKey = "abababababababababababababababababababababababababababababababab"
 
 // erasureFixture is two organisations on a pseudonymous chain: Beta, which
 // will be erased, with a member, a machine, an invitation, a token and two
@@ -160,7 +160,6 @@ func newErasureFixture(t *testing.T) *erasureFixture {
 	if _, _, err = s.CreateInvitation(ctx, beta.ID, RoleMember, "u-beta-owner"); err != nil {
 		t.Fatal(err)
 	}
-
 
 	l, err := ledger.Open(ctx, e.ownerDSN)
 	if err != nil {

@@ -71,7 +71,10 @@ func TestACC010EraseOrganisationRemovesRowsAliasesAndMirrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pn, _ := rec[event.FieldRepo].(string)
+	pn, ok := rec[event.FieldRepo].(string)
+	if !ok {
+		t.Fatalf("the chain holds %v, want a pseudonym", rec[event.FieldRepo])
+	}
 	headBefore, err := store.Head(ctx)
 	if err != nil {
 		t.Fatal(err)
