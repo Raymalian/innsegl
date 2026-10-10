@@ -145,11 +145,6 @@ installation, grant, token), never an organisation or machine name or a
 repository, so nothing readable about an erased organisation remains.
 Rows written before this release may still hold names.
 
-`innsegl api` waits, before it listens, until the core has applied the
-newest migration its own code needs, and logs what it waits for. The core
-applies migrations at its start; a `make update` that recreates both
-therefore never serves the new API against the old schema.
-
 ## Settings
 
 `innsegl api` (defaults in brackets):
@@ -221,8 +216,7 @@ last owner or an existing membership.
 - `cmd/innsegl/accountsorgcli_test.go`, `eraseorganisation_test.go`
   (ACC-005, ACC-006, ACC-009 to ACC-011, AUTH-006)
 - `internal/accounts/erase_test.go` (ACC-015: no accounts table names an
-  erased organisation; ACC-017: the runs whose bodies erasure removes),
-  `cmd/innsegl/apischema_test.go` (ACC-016: the API waits for its schema)
+  erased organisation; ACC-017: the runs whose bodies erasure removes)
 - `cmd/innsegl/noprincipal_test.go` (ACC-012: no organisation or person
   identifier in the machine certificate, the run's SPIRE entries, the
   commit trailers, the ledger schema or the gateway log)

@@ -148,20 +148,6 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 	}
 	closers = append(closers, store.Close)
 
-	// ---- the schema this code needs (ACC-016) ------------------------------
-	//
-	// Bounded by ctx, not the boot deadline: the core may take a while to
-	// migrate, and waiting is the point.
-	want, err := neededSchema()
-	if err != nil {
-		unwind()
-		return nil, err
-	}
-	if werr := waitForSchema(ctx, store.SchemaVersion, want, log, schemaPoll); werr != nil {
-		unwind()
-		return nil, werr
-	}
-
 	// ---- the auth-writer credential, and the SAME refusal ------------------
 	//
 	// RM-260/RM-261 (ADR-0062): a SEPARATE credential and a separate pool,

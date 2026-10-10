@@ -133,15 +133,3 @@ func (s *Store) Close() {
 		s.pool.Close()
 	}
 }
-
-// SchemaVersion answers the newest migration the core has applied, "" for
-// none. The API reads it at start and waits for the schema its own code
-// needs: the core applies migrations, never the API.
-func (s *Store) SchemaVersion(ctx context.Context) (string, error) {
-	var v string
-	if err := s.pool.QueryRow(ctx,
-		`SELECT coalesce(max(version), '') FROM innsegl.schema_migrations`).Scan(&v); err != nil {
-		return "", fmt.Errorf("api: reading the applied schema: %w", err)
-	}
-	return v, nil
-}
