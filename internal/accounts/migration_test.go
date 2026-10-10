@@ -48,11 +48,14 @@ func TestACC001MigrationIsAdditiveAndGivesEveryUserAnAccount(t *testing.T) {
 		t.Fatalf("session: %v", err)
 	}
 
+	// Sessions by the columns 0010 knew: 0019 adds sso_connection_id, which
+	// is additive and changes no value here.
 	snapshot := func() string {
 		var s string
 		q := `SELECT (SELECT coalesce(string_agg(u::text, '|' ORDER BY user_id), '') FROM innsegl_auth.users u) ||
 			(SELECT coalesce(string_agg(p::text, '|' ORDER BY credential_id), '') FROM innsegl_auth.passkeys p) ||
-			(SELECT coalesce(string_agg(s::text, '|' ORDER BY session_id_hash), '') FROM innsegl_auth.sessions s)`
+			(SELECT coalesce(string_agg(row(s.session_id_hash, s.user_id, s.passkey_id, s.created_at,
+			     s.expires_at, s.revoked_at)::text, '|' ORDER BY session_id_hash), '') FROM innsegl_auth.sessions s)`
 		if err := c.QueryRow(ctx, q).Scan(&s); err != nil {
 			t.Fatalf("snapshot: %v", err)
 		}

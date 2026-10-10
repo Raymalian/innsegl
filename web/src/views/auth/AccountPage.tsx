@@ -32,6 +32,7 @@ import {
   RepositoriesSection,
 } from "./AccountOrganisation";
 import { MembersSection } from "./AccountMembers";
+import { OrganisationSignInSection } from "./AccountSSO";
 import { RecoveryCodesStep } from "./RecoveryCodesStep";
 import { AccountSection, CopyButton, SectionStatus, useSectionLoad, wordFor } from "./accountShared";
 import {
@@ -107,10 +108,22 @@ function initialNoticeFlag(): boolean {
   return new URLSearchParams(window.location.search).get("notice") === "recovery-signin";
 }
 
+/** #485: what the organisation's sign-in reported on its way back here —
+ * `?notice=sso-linked`, or `?sso=<reason>` worded from the catalogue only.
+ * Captured once, like the recovery notice. */
+function initialSSONotice(): { readonly text: string; readonly refused: boolean } | null {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("notice") === "sso-linked") return { text: strings.account.ssoLinkedNotice, refused: false };
+  const reason = params.get("sso");
+  if (reason === null) return null;
+  return { text: strings.ssoReasons[reason] ?? strings.ssoReasons["internal"] ?? "", refused: true };
+}
+
 export function AccountPage({ browser = realBrowser() }: AccountPageProps) {
   const headingId = useId();
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [showRecoverySignInNotice] = useState(initialNoticeFlag);
+  const [ssoNotice] = useState(initialSSONotice);
 
   const reload = () => {
     void (async () => {
@@ -131,8 +144,8 @@ export function AccountPage({ browser = realBrowser() }: AccountPageProps) {
   // A refresh of /account?notice=… would otherwise show the banner again
   // forever; the state above already captured whether to show it once.
   useEffect(() => {
-    if (showRecoverySignInNotice) navigate("/account", { replace: true });
-  }, [showRecoverySignInNotice]);
+    if (showRecoverySignInNotice || ssoNotice !== null) navigate("/account", { replace: true });
+  }, [showRecoverySignInNotice, ssoNotice]);
 
   return (
     <section aria-labelledby={headingId} className={accountShell}>
@@ -142,6 +155,15 @@ export function AccountPage({ browser = realBrowser() }: AccountPageProps) {
         </h1>
         <p className={introText}>{strings.account.summary}</p>
       </header>
+
+      {ssoNotice !== null && (
+        <p
+          role={ssoNotice.refused ? "alert" : "status"}
+          className={ssoNotice.refused ? `${noticeBase} ${degraded}` : `${noticeBase} ${mutedText}`}
+        >
+          <span className={noticeBody}>{ssoNotice.text}</span>
+        </p>
+      )}
 
       {load.status === "loading" && <p className={proseText}>{strings.session.checking}</p>}
 
@@ -189,6 +211,12 @@ function AccountLoaded({
       <PrivilegesSection organisations={account.organisations} />
       <MachinesSection organisations={account.organisations} browser={browser} />
       <MembersSection organisations={account.organisations} browser={browser} />
+      <OrganisationSignInSection
+        organisations={account.organisations}
+        signIns={account.sign_ins}
+        browser={browser}
+        reload={reload}
+      />
       <RepositoriesSection multiOrg={account.organisations.length > 1} />
       <AgentsSection />
       <PasskeysSection account={account} reload={reload} browser={browser} />
@@ -801,9 +829,11 @@ function SessionsSection() {
                       </span>
                     </th>
                     <td className={`${cell} whitespace-nowrap`}>
-                      {session.passkey_name === null
-                        ? a.sessionRecoveryCode
-                        : a.sessionPasskey(session.passkey_name)}
+                      {typeof session.organisation_sign_in === "string"
+                        ? a.sessionOrganisation(session.organisation_sign_in)
+                        : session.passkey_name === null
+                          ? a.sessionRecoveryCode
+                          : a.sessionPasskey(session.passkey_name)}
                     </td>
                     <td className={`${cell} whitespace-nowrap`}>{formatDateTime(session.expires_at)}</td>
                   </tr>

@@ -162,6 +162,14 @@ func newErasureFixture(t *testing.T) *erasureFixture {
 	if _, _, err = s.CreateInvitation(ctx, beta.ID, RoleMember, "u-beta-owner"); err != nil {
 		t.Fatal(err)
 	}
+	// Beta signs in through its own identity provider (#485): the connection
+	// goes with the organisation, and a session it opened is revoked.
+	betaSSO, err := s.SetSSOConnection(ctx, beta.ID, api.SSOConnectionParams{SignInName: "beta-corp-signin",
+		Issuer: "https://idp.beta-corp.example", ClientID: "beta-client", ClientSecret: "beta-secret"}, "u-beta-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedSSOSession(t, e, "u-beta-member", strings.Repeat("f", 64), betaSSO.ID)
 
 	l, err := ledger.Open(ctx, e.ownerDSN)
 	if err != nil {
@@ -281,7 +289,7 @@ func TestACC010ErasingAnOrganisationLeavesTheChainByteIdentical(t *testing.T) {
 	if !slices.Equal(res.Repositories, []string{f.betaRepo}) || !slices.Equal(res.Kept, []string{f.handed}) {
 		t.Errorf("erased repositories %v kept %v, want [%s] and [%s]", res.Repositories, res.Kept, f.betaRepo, f.handed)
 	}
-	if res.Members != 3 || res.Installations != 1 || res.SessionsRevoked != 1 || len(res.Pseudonyms) == 0 {
+	if res.Members != 3 || res.Installations != 1 || res.SessionsRevoked != 2 || len(res.Pseudonyms) == 0 {
 		t.Errorf("result = %+v", res)
 	}
 
@@ -411,7 +419,8 @@ func TestACC015AfterErasureNoAccountsTableNamesTheOrganisation(t *testing.T) {
 			t.Fatal(err)
 		}
 		for what, name := range map[string]string{"organisation name": "Beta Corp", "repository": f.betaRepo,
-			"machine name": "beta laptop"} {
+			"machine name": "beta laptop", "sign-in name": "beta-corp-signin", "identity provider": "idp.beta-corp.example",
+			"client secret": "beta-secret"} {
 			if strings.Contains(dump, name) {
 				t.Errorf("innsegl_auth.%s still holds the erased organisation's %s", table, what)
 			}

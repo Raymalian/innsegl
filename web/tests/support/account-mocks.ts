@@ -199,6 +199,19 @@ export const MEMBERS = {
   ],
 };
 
+/** #485: the organisation sign-in section's read, as an owner sees it. */
+export const ORGANISATION_SIGN_IN = {
+  organisation_id: "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+  configured: true,
+  sign_in_name: "example-org",
+  issuer: "https://idp.example.test",
+  client_id: "innsegl-dashboard",
+  has_client_secret: true,
+  redirect_uri: "http://localhost:8082/api/v1/auth/sso/callback",
+  can_manage: true,
+  updated_at: "2026-09-30T12:00:00Z",
+};
+
 function json(route: Route, body: unknown): Promise<void> {
   return route.fulfill({
     status: 200,
@@ -240,6 +253,10 @@ export async function answerAccountRoute(
   }
   if (p === "/api/v1/account/sessions") {
     await json(route, SESSIONS);
+    return true;
+  }
+  if (p === "/api/v1/account/sso") {
+    await json(route, ORGANISATION_SIGN_IN);
     return true;
   }
   if (p.endsWith("/begin") && method === "POST" && p.startsWith("/api/v1/account/")) {

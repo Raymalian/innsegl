@@ -86,6 +86,11 @@ type ServerConfig struct {
 	// UnownedRunsHidden hides runs no machine is mapped to from the
 	// operator's own organisation too.
 	UnownedRunsHidden bool
+	// SSOHTTPClient is how the server reaches an organisation's identity
+	// provider (#485). Nil uses newSSOHTTPClient: the system's trust roots,
+	// bounded, no redirects, never a loopback or link-local address. Tests
+	// hand it a client that trusts their own provider.
+	SSOHTTPClient *http.Client
 }
 
 // Health is what an operator reads to see that "read-only" is a measured fact
@@ -188,6 +193,7 @@ type Server struct {
 	webAuthn          *webauthn.WebAuthn
 	webAuthnConfig    WebAuthnConfig
 	sessionLifetime   time.Duration
+	ssoHTTPClient     *http.Client
 }
 
 // NewServer wires the routes. It refuses to construct at all without a way
@@ -230,6 +236,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		orgs:              cfg.Organisations,
 		coreCACertFile:    cfg.CoreCACertFile,
 		unownedRunsHidden: cfg.UnownedRunsHidden,
+		ssoHTTPClient:     cfg.SSOHTTPClient,
+	}
+	if s.ssoHTTPClient == nil {
+		s.ssoHTTPClient = newSSOHTTPClient()
 	}
 	s.authMux = s.newAuthMux()
 	s.accountMux = s.newAccountMux()

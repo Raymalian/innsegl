@@ -60,6 +60,9 @@ type fakeOrgs struct {
 	changes   []string               // what SetRole, RemoveMember and the invitations were asked
 	memberErr error                  // answered by every member change when set
 	ownerDSN  string                 // the real database a new user is created in
+
+	// The organisation sign-in (#485): ssofake_test.go.
+	ssoState *fakeSSO
 }
 
 func (f *fakeOrgs) FoundOperator(context.Context) (bool, error) {

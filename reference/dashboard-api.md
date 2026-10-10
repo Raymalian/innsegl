@@ -4,8 +4,9 @@
 
 `innsegl api` serves the dashboard UI, a read-only query API over the ledger,
 and the proof route that verifies a commit (doc 05 §1, doc 06 §7). Every
-route except `health` and `proof` needs a signed-in passkey session
-(ADR-0062). `innsegl accounts` manages organisations, their members and
+route except `health` and `proof` needs a signed-in session, opened with a
+passkey or, for a person already linked to it, an organisation's own identity
+provider (ADR-0062, #485). `innsegl accounts` manages organisations, their members and
 invitations, and which machines may enrol. `innsegl erase-organisation`
 erases an organisation.
 
@@ -38,6 +39,8 @@ GET /api/v1/auth/session
 POST /api/v1/auth/invitation
 POST /api/v1/auth/invitation/begin
 POST /api/v1/auth/invitation/finish
+POST /api/v1/auth/sso/begin
+GET /api/v1/auth/sso/callback
 POST /api/v1/alert-resolutions/begin
 POST /api/v1/alert-resolutions/finish
 ```
@@ -75,6 +78,50 @@ calls them):
 | `POST /api/v1/account/invitations/accept` | `{code}`: join with the account already signed in |
 | `POST /api/v1/account/invitations/withdraw` | `{organisation_id, invitation_id}`: withdraw a pending link; owner or admin, no passkey |
 | `POST /api/v1/account/machines/revoke\|suspend\|resume/begin\|finish` | `{machine_id}`, after a fresh passkey; suspended is undone by resume, revoked is final |
+| `GET /api/v1/account/sso?organisation_id=ID` | the organisation's sign-in: name for a member; issuer, client id, redirect URI and whether a secret is saved for the owner; never the secret |
+| `POST /api/v1/account/sso/configure\|remove/begin\|finish` | owner only, after a fresh passkey; configure takes `{organisation_id, sign_in_name, issuer, client_id, client_secret, keep_secret}` |
+| `POST /api/v1/account/sso/link` | `{organisation_id}` or `{sign_in_name}`: where to send the browser to connect the organisation's sign-in to this account; by name is how a person not yet a member joins |
+| `DELETE /api/v1/account/sign-ins/{id}` | disconnect one of your own connected sign-ins |
+
+### Organisation sign-in
+
+An organisation's owner can let its members sign in through the
+organisation's own OpenID Connect provider (#485). One connection per
+organisation: a sign-in name (what a person types on the sign-in page), the
+issuer, a client id and, for a confidential client, a secret. Register the
+dashboard at the provider with the redirect URI
+`<rp-origin>/api/v1/auth/sso/callback`, exactly. Saving fetches the
+provider's discovery document first, then asks for the owner's passkey.
+
+The flow is the authorization code flow with PKCE (S256). The state is a
+single-use ceremony that expires after 10 minutes and is bound to the
+browser that began it by the `innsegl_sso` cookie (HttpOnly, SameSite=Lax,
+path `/api/v1/auth/sso/callback`). The ID token's signature must verify
+under a key the issuer publishes, with an asymmetric algorithm (RS, PS, ES
+or EdDSA; never `none` or HMAC); its issuer, audience (and `azp` when there
+are several), nonce, expiry and issue time are checked. The provider must
+be https and is never reached at a loopback, link-local or unspecified
+address; redirects are not followed. The API trusts the system's
+certificate roots; a provider behind a private CA needs that CA added to
+the container's roots (`SSL_CERT_FILE`).
+
+A sign-in joins an existing person and never makes one. A person signed in
+some other way connects the organisation's sign-in from the account page;
+that links the provider's issuer and subject (nothing else: no email, no
+name) to their account and makes them a member if they never were one. An
+identity no account holds is refused; one already linked to another account
+is refused. The session is the same cookie a passkey opens, and names the
+connection. Removing a member revokes all their sessions, these included,
+and the organisation's sign-in does not bring them back; an invitation
+does. Changing the issuer or client id, or removing the connection, revokes
+every session it opened. Passkeys keep working throughout.
+
+When a sign-in is refused the browser lands on `/?sso=<reason>` (or
+`/account?sso=<reason>` for a connect): `expired`, `browser`, `denied`,
+`changed`, `provider`, `refused`, `unknown`, `removed`, `taken`, `internal`.
+Auth events record the connection id and the reason, never anything the
+provider sent; the audit trail records `sso.configured` and `sso.removed`
+by connection id only.
 
 ### Roles
 
@@ -90,6 +137,7 @@ installation and the grants, never a role.
 | invite, change a role, remove a member (not an owner) | yes | yes | no |
 | give or take the owner role, invite an owner | yes | no | no |
 | erase the organisation | yes | no | no |
+| set or remove the organisation's sign-in | yes | no | no |
 
 The last owner cannot be removed or demoted. Removing a member ends the
 membership, revokes every session of that person, and suspends the active
@@ -156,7 +204,7 @@ It runs as the database owner, like `innsegl erase-repository`
 ([repository-names.md](repository-names.md)). In one transaction it erases
 the aliases of every repository only this organisation held, revokes its
 members' sessions, and deletes its enrolment tokens, invitations,
-memberships, repository grants, installations, pending passkey
+memberships, repository grants, installations, sign-in connection, pending passkey
 confirmations and account row; then it removes those repositories'
 mirrors and the captured bodies of every run registered in them. A
 repository another organisation holds now keeps its name. Users are kept:
@@ -204,6 +252,7 @@ Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
 | volume `innsegl-dashboard-tls` | certificate and key, written by the core |
 | `web/` | the dashboard source (`npx tsc --noEmit && npm run build && npm test`) |
 | migrations `0013`, `0014` | alert resolutions and account ceremonies |
+| migration `0019` | organisation sign-in: `sso_connections`, `oidc_identities`, `sessions.sso_connection_id`, the `sso` ceremony kinds |
 | migration `0017` | invitations' acceptor and withdrawal, an inviter-less invitation from the CLI, the member ceremonies |
 | `innsegl_auth.audit` | one row per change to the accounts data; refuses `UPDATE`, `DELETE`, `TRUNCATE` |
 
@@ -223,7 +272,10 @@ Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
 
 API answers on the member routes: 403 when the role does not allow the
 change, 404 for no such member or an unusable invitation link, 409 for the
-last owner or an existing membership.
+last owner or an existing membership. On the sign-in routes: 404 for no
+sign-in under that name, 502 when the provider's discovery document does
+not load or names another issuer, 409 for a sign-in name another
+organisation holds.
 
 ## Tests
 
@@ -253,11 +305,20 @@ last owner or an existing membership.
 - `test/deploy/apiui_test.go`, `readerrole_test.go` (OPS-011 to OPS-013),
   `resolverrole_test.go`
 - `scripts/setup-link-selftest.sh`
+- organisation sign-in (#485): `internal/api/ssooidc_test.go` (AUTH-010:
+  every way an ID token, discovery, PKCE or a redirect URI can be wrong),
+  `sso_test.go` (AUTH-008 to AUTH-011 through the server),
+  `internal/accounts/sso_test.go` (AUTH-008, AUTH-011 against the real spine
+  and migration 0019), `cmd/innsegl/apisso_test.go` (AUTH-011 end to end
+  through `innsegl api`), and ACC-012's scan for the provider's identifiers.
+  The provider is `internal/oidctest`: TLS, signed tokens, exact redirect
+  URIs, PKCE, single-use codes
 - `internal/api/accountwithdraw_test.go` (ACC-018)
 - `web/` unit tests (`npm test`): FE-146 (`AccountPage.test.tsx`), FE-147
   (`AccountMembers.test.tsx`), FE-148 (`app/plain-empty-states.test.ts`), FE-141 (`AccountPage.test.tsx`), FE-142
   (`app/OrganisationSwitcher.test.tsx`), FE-143 (`InvitePage.test.tsx`),
-  FE-144 (`run-page/scoped.test.tsx`)
+  FE-144 (`run-page/scoped.test.tsx`), FE-149 (`SignInPage.sso.test.tsx`), FE-150
+  (`AccountSSO.test.tsx`), FE-151 (`AccountPage.test.tsx`)
 - `web/tests/a11y/organisations.pw.ts` (FE-142, FE-143 in Chromium, axe in
   both themes)
 
