@@ -356,6 +356,9 @@ x-parent-id: &parent-id ${INNSEGL_SPIRE_PARENT_ID:?run deploy/compose/spire/regi
 # process table can read.
 # ----------------------------------------------------------------------------
 x-identity-secret-file: &identity-secret-file /run/innsegl/identity/secret
+# The repository key (ADR-0080): generated beside the secret above by the same
+# one-shot, read by the core only in pseudonymous repository mode.
+x-repo-key-file: &repo-key-file /run/innsegl/identity/repo-key
 
 # ----------------------------------------------------------------------------
 # #264 — THE IDENTITY LIFECYCLE'S CREDENTIAL. Two paths, never the key.
@@ -886,6 +889,7 @@ services:
     environment:
       # The path it writes. innsegl-mcp reads the same anchor.
       INNSEGL_IDENTITY_SECRET_FILE: *identity-secret-file
+      INNSEGL_REPO_KEY_FILE: *repo-key-file
     volumes:
       - ./innsegl/identity-init.sh:/identity-init.sh:ro
       # THE ONLY rw MOUNT OF THIS VOLUME ANYWHERE IN THE STACK.
@@ -1194,6 +1198,11 @@ services:
       # caller's ticket reference (ADR-0041). An operator who wants the literal
       # values sets INNSEGL_IDENTITY_MODE=literal deliberately and removes this.
       INNSEGL_IDENTITY_SECRET_FILE: *identity-secret-file
+      # ADR-0080: what the chain records for a run's repository and branch.
+      # literal by default; pseudonymous is one-way, and a second account is
+      # refused until it is set. The key is read only in pseudonymous mode.
+      INNSEGL_REPO_MODE: ${INNSEGL_REPO_MODE:-literal}
+      INNSEGL_REPO_KEY_FILE: *repo-key-file
       # RM-237's own derived agent-message key (ADR-0061 decision 2),
       # restated here so the run page's read-only query API can VERIFY a
       # brief or a reply's own keyed digest without ever holding the

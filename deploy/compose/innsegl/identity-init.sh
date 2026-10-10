@@ -102,5 +102,29 @@ fi
 # The secret is NEVER printed. sigstore/bootstrap.sh ends by printing the Rekor
 # log's PUBLIC key, which a verifier needs; there is no public half of this one,
 # and a `docker compose logs` that leaked it would undo the whole exercise.
+# The repository key (ADR-0080 decision 2): a separate secret from the one
+# above, generated beside it so that ADR-0074's backup of this volume covers
+# it, and so that switching a deployment to pseudonymous repositories needs no
+# second step. A literal deployment holds it and never reads it. Left alone
+# once written: a new key is a rotation, which is survivable (resolution is
+# the alias table) but never an accident.
+REPO_KEY_FILE="${INNSEGL_REPO_KEY_FILE:-}"
+if [ -n "${REPO_KEY_FILE}" ]; then
+  if [ -s "${REPO_KEY_FILE}" ]; then
+    log "a repository key is already present at ${REPO_KEY_FILE}; leaving it alone"
+  else
+    log "generating this deployment's repository key"
+    tmp="${REPO_KEY_FILE}.partial"
+    openssl rand -hex 32 > "${tmp}"
+    [ -s "${tmp}" ] || fail 'openssl rand produced nothing'
+    mv "${tmp}" "${REPO_KEY_FILE}"
+    log "wrote ${REPO_KEY_FILE}"
+  fi
+  chmod 0400 "${REPO_KEY_FILE}"
+  if [ "$(id -u)" = "0" ]; then
+    chown "${RUN_UID}:${RUN_GID}" "${REPO_KEY_FILE}"
+  fi
+fi
+
 log 'ready'
 ls -l "${SECRET_FILE}"
