@@ -82,7 +82,20 @@ type Config struct {
 }
 
 // Directory answers mcp.CredentialRuns out of the hash chain.
-type Directory struct{ events RunEvents }
+type Directory struct {
+	events RunEvents
+	names  nameResolver
+}
+
+// nameResolver resolves schema 5's repository and branch pseudonyms to the
+// names a tool compares against (ADR-0080 decision 4). *ledger.Store is one;
+// a RunEvents that is not reads every value as itself, which is right for a
+// chain that holds no pseudonym.
+type nameResolver interface {
+	ResolveNames(ctx context.Context, values ...string) (map[string]string, error)
+}
+
+var _ nameResolver = (*ledger.Store)(nil)
 
 var _ mcp.CredentialRuns = (*Directory)(nil)
 
@@ -98,7 +111,11 @@ func New(cfg Config) (*Directory, error) {
 		return nil, mcp.Errorf(mcp.ClassInvariantViolation, "",
 			"rundir: no ledger to read; a run directory with no chain reports every run unknown")
 	}
-	return &Directory{events: cfg.Events}, nil
+	d := &Directory{events: cfg.Events}
+	if n, ok := cfg.Events.(nameResolver); ok {
+		d.names = n
+	}
+	return d, nil
 }
 
 // CredentialRun returns the run named by runID, and whether the chain knows
@@ -262,6 +279,17 @@ func (d *Directory) CredentialRun(ctx context.Context, runID string) (mcp.Creden
 				run.RetiredAt = at
 			}
 		}
+	}
+
+	if registered && d.names != nil && (event.IsPseudonym(run.Repo) || event.IsPseudonym(run.Branch)) {
+		// The chain holds pseudonyms; every tool compares the names a caller
+		// states. An erased name resolves to itself, and a pseudonym is in
+		// no credential's repository, so the run is then out of every scope.
+		names, err := d.names.ResolveNames(ctx, run.Repo, run.Branch)
+		if err != nil {
+			return mcp.CredentialRun{}, false, err
+		}
+		run.Repo, run.Branch = names[run.Repo], names[run.Branch]
 	}
 
 	if !registered {

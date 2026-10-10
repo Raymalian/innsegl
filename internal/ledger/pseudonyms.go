@@ -196,3 +196,49 @@ func (s *Store) RecordedPseudonymous(ctx context.Context) (bool, error) {
 // ErrRepoModeOneWay is returned when a literal core starts on a ledger that
 // has recorded the switch to pseudonymous.
 var ErrRepoModeOneWay = errors.New("this deployment switched to pseudonymous repositories, and the switch is one-way")
+
+// Resolving is a Store whose run-scoped and keyed reads answer resolved
+// names. It is what a reader that COMPARES a repository is given -- adoption
+// (ADR-0079), the commit path's replay -- so a value it compares is the name
+// a caller states, not a pseudonym. Appends and every other read are the
+// Store's own. Nothing that verifies, hashes or re-appends a record may read
+// through it.
+type Resolving struct{ *Store }
+
+// EventsForRun is Store.EventsForRun with repo and branch resolved.
+func (r Resolving) EventsForRun(ctx context.Context, runID string) ([]event.Fields, error) {
+	evs, err := r.Store.EventsForRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	var values []string
+	for _, f := range evs {
+		for _, m := range []string{event.FieldRepo, event.FieldBranch} {
+			if v, ok := f[m].(string); ok {
+				values = append(values, v)
+			}
+		}
+	}
+	names, err := r.ResolveNames(ctx, values...)
+	if err != nil {
+		return nil, err
+	}
+	for i, f := range evs {
+		evs[i] = ResolveRecord(f, names)
+	}
+	return evs, nil
+}
+
+// EventByIdempotencyKey is Store.EventByIdempotencyKey with repo and branch
+// resolved.
+func (r Resolving) EventByIdempotencyKey(ctx context.Context, key string) (event.Fields, bool, error) {
+	f, found, err := r.Store.EventByIdempotencyKey(ctx, key)
+	if err != nil || !found {
+		return f, found, err
+	}
+	resolved, err := r.Resolved(ctx, f)
+	if err != nil {
+		return nil, false, err
+	}
+	return resolved, true, nil
+}

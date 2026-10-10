@@ -366,3 +366,35 @@ func TestOPS175TheSwitchToPseudonymousIsRecordedOnceAndNeverUndone(t *testing.T)
 		}
 	}
 }
+
+// TestMCP098TheResolvingReadsAnswerNames is the ledger half of MCP-098: the
+// reads adoption and the commit path take a run's records through answer
+// literal names, while the store's own reads keep the chain's bytes.
+func TestMCP098TheResolvingReadsAnswerNames(t *testing.T) {
+	s, _ := newStore(t)
+	ctx := testCtx(t, 60*time.Second)
+	s.UseRepositories(pseudonymous(t, pnKeyA))
+	if _, err := s.Append(ctx, registeredIn("run-r", pnRepo, pnBranch, 1)); err != nil {
+		t.Fatal(err)
+	}
+	r := Resolving{Store: s}
+
+	evs, err := r.EventsForRun(ctx, "run-r")
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("EventsForRun = %v, %v", evs, err)
+	}
+	if evs[0][event.FieldRepo] != pnRepo || evs[0][event.FieldBranch] != pnBranch {
+		t.Errorf("resolved record = %v on %v", evs[0][event.FieldRepo], evs[0][event.FieldBranch])
+	}
+	rec, found, err := r.EventByIdempotencyKey(ctx, "run-scoped-run-r-1")
+	if err != nil || !found || rec[event.FieldRepo] != pnRepo {
+		t.Errorf("EventByIdempotencyKey = %v, %v, %v", rec[event.FieldRepo], found, err)
+	}
+	if _, found, err := r.EventByIdempotencyKey(ctx, "no-such-key"); err != nil || found {
+		t.Errorf("an absent key = %v, %v", found, err)
+	}
+	raw, err := s.EventsForRun(ctx, "run-r")
+	if err != nil || !event.IsPseudonym(raw[0][event.FieldRepo].(string)) {
+		t.Errorf("the store's own read resolved the chain's bytes: %v", raw[0][event.FieldRepo])
+	}
+}
