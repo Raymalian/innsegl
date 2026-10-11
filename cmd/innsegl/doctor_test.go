@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -123,6 +124,14 @@ type doctorRun struct {
 	onRun    func(argv []string)
 	identity string
 	now      func() time.Time
+	// git is the real git the fake runner hands an allowed git call to,
+	// resolved before a test narrows PATH.
+	git string
+	// self and settings override the fixture's: this binary, and the
+	// managed settings connect wrote.
+	self, settings string
+	// uid is the user doctor checks writability for; zero is 501.
+	uid int
 }
 
 func newDoctorRun(t *testing.T, core *doctorCore) *doctorRun {
@@ -135,10 +144,28 @@ func newDoctorRun(t *testing.T, core *doctorCore) *doctorRun {
 
 func (d *doctorRun) deps(t *testing.T) doctorDeps {
 	t.Helper()
+	if d.git == "" {
+		g, err := exec.LookPath("git")
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.git = g
+	}
+	self, settings := d.self, d.settings
+	if self == "" {
+		self = connectTestBin
+	}
+	if settings == "" {
+		settings = d.f.settings
+	}
+	uid := d.uid
+	if uid == 0 {
+		uid = 501
+	}
 	return doctorDeps{
-		home: d.f.home, goos: "darwin", uid: 501, cwd: t.TempDir(),
-		now: d.now,
-		run: func(_ context.Context, name string, args ...string) error {
+		home: d.f.home, goos: "darwin", uid: uid, cwd: t.TempDir(),
+		now: d.now, self: self, settings: settings,
+		run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			argv := append([]string{name}, args...)
 			d.mu.Lock()
 			d.calls = append(d.calls, argv)
@@ -146,10 +173,29 @@ func (d *doctorRun) deps(t *testing.T) doctorDeps {
 			if d.onRun != nil {
 				d.onRun(argv)
 			}
-			return nil
+			if name == "git" {
+				// A read-only call the allow-list admitted: the real git
+				// answers it, by its absolute path.
+				return exec.CommandContext(ctx, d.git, args...).Output()
+			}
+			return nil, nil
 		},
 		poll: 50 * time.Millisecond, serviceWait: 5 * time.Second,
 	}
+}
+
+// repairs are the calls that changed something: everything but the
+// read-only git calls.
+func (d *doctorRun) repairs() [][]string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out [][]string
+	for _, argv := range d.calls {
+		if !doctorReadOnly(argv) {
+			out = append(out, argv)
+		}
+	}
+	return out
 }
 
 func (d *doctorRun) run(t *testing.T, args ...string) (int, string) {
@@ -167,9 +213,16 @@ func (d *doctorRun) assertSafe(t *testing.T) {
 	t.Helper()
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	uid := d.uid
+	if uid == 0 {
+		uid = 501
+	}
 	for _, argv := range d.calls {
-		if !doctorCommandAllowed("darwin", 501, argv) {
+		if !doctorCommandAllowed("darwin", uid, argv) {
 			t.Errorf("doctor ran %q, which is not on its allow-list", argv)
+		}
+		if doctorReadOnly(argv) {
+			continue
 		}
 		for _, w := range destructiveWords {
 			for _, a := range argv {
@@ -229,11 +282,11 @@ func TestCLI023TheAllowListHoldsOnlyTheClientRestart(t *testing.T) {
 		}
 	}
 	called := false
-	d := &doctor{deps: doctorDeps{goos: "darwin", uid: 501, run: func(context.Context, string, ...string) error {
+	d := &doctor{deps: doctorDeps{goos: "darwin", uid: 501, run: func(context.Context, string, ...string) ([]byte, error) {
 		called = true
-		return nil
+		return nil, nil
 	}}}
-	if err := d.exec(t.Context(), []string{"docker", "compose", "down", "-v"}); err == nil || called {
+	if _, err := d.exec(t.Context(), []string{"docker", "compose", "down", "-v"}); err == nil || called {
 		t.Fatalf("exec of a command off the allow-list: err %v, runner called %v", err, called)
 	}
 }
@@ -259,8 +312,8 @@ func TestCLI023AWorkingChainIsOneLinePerCheckAndRunsNothing(t *testing.T) {
 	if strings.Contains(out, "VM:") {
 		t.Errorf("a working chain printed a VM line:\n%s", out)
 	}
-	if len(d.calls) != 0 {
-		t.Errorf("a working chain ran %q", d.calls)
+	if len(d.repairs()) != 0 {
+		t.Errorf("a working chain ran %q", d.repairs())
 	}
 }
 
@@ -282,14 +335,18 @@ func TestCLI023AClientServiceThatIsDownIsRestarted(t *testing.T) {
 	t.Cleanup(svc.Close)
 	core.mount(t, f)
 	d := &doctorRun{f: f}
-	d.onRun = func([]string) { svc.Start() }
+	d.onRun = func(argv []string) {
+		if !doctorReadOnly(argv) {
+			svc.Start()
+		}
+	}
 
 	code, out := d.run(t)
 	if code != exitOK || !strings.Contains(out, "client service: DOWN") || !strings.Contains(out, "restarted") {
 		t.Fatalf("a client service that is down: exit %d\n%s", code, out)
 	}
-	if len(d.calls) != 1 || strings.Join(d.calls[0], " ") != "launchctl kickstart -k gui/501/"+client.LaunchdLabel {
-		t.Fatalf("doctor ran %q; want the one client restart", d.calls)
+	if len(d.repairs()) != 1 || strings.Join(d.repairs()[0], " ") != "launchctl kickstart -k gui/501/"+client.LaunchdLabel {
+		t.Fatalf("doctor ran %q; want the one client restart", d.repairs())
 	}
 	d.assertSafe(t)
 }
@@ -319,8 +376,8 @@ func TestCLI023ASealedStoreIsUnlockedWithTheOperatorsIdentity(t *testing.T) {
 	if strings.Contains(out, m.UnsealKey) || strings.Contains(out, m.SecretID) {
 		t.Fatal("doctor printed unlock material")
 	}
-	if len(d.calls) != 0 {
-		t.Errorf("an unlock ran %q; it is not a command", d.calls)
+	if len(d.repairs()) != 0 {
+		t.Errorf("an unlock ran %q; it is not a command", d.repairs())
 	}
 }
 
@@ -381,8 +438,8 @@ func TestCLI023CoreRepairsArePrintedAsVMLines(t *testing.T) {
 			t.Errorf("a core command not labelled VM: %q", line)
 		}
 	}
-	if len(d.calls) != 0 {
-		t.Errorf("core repairs were run: %q", d.calls)
+	if len(d.repairs()) != 0 {
+		t.Errorf("core repairs were run: %q", d.repairs())
 	}
 }
 
@@ -405,7 +462,7 @@ func TestCLI023ARepositoryWithoutTheHooksIsNamed(t *testing.T) {
 	if !strings.Contains(out, "hooks: MISSING") || !strings.Contains(out, "innsegl link "+repo) {
 		t.Fatalf("a repository without hooks:\n%s", out)
 	}
-	if len(d.calls) != 0 {
-		t.Errorf("doctor ran %q", d.calls)
+	if len(d.repairs()) != 0 {
+		t.Errorf("doctor ran %q", d.repairs())
 	}
 }
