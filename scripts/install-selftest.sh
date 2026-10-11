@@ -62,7 +62,13 @@ prefer_real() {
   fi
 }
 for t in python3 dirname cat rm mkdir ln mktemp grep; do require_real "$t"; done
-for t in git make curl uname; do prefer_real "$t"; done
+for t in git make curl uname openssl jq; do prefer_real "$t"; done
+# install.sh reads git's and Go's versions; stand-ins that answer one that
+# passes, so a host without either still runs every case.
+if ! "$TOOLBIN/git" --version 2>/dev/null | grep -q '^git version'; then
+  rm -f "$TOOLBIN/git"; printf '#!/bin/sh\necho "git version 2.40.0"\n' > "$TOOLBIN/git"; chmod +x "$TOOLBIN/git"
+fi
+printf '#!/bin/sh\necho "go version go1.27.1 linux/amd64"\n' > "$TOOLBIN/go"; chmod +x "$TOOLBIN/go"
 
 cat > "$TOOLBIN/docker" <<'EOF'
 #!/bin/sh
@@ -199,6 +205,43 @@ if [ "$rc1" -ne 0 ] && printf '%s' "$out1" | grep -q 'missing prerequisite: curl
   ok "a missing prerequisite is refused before anything runs"
 else
   bad "a missing prerequisite was not refused, or something ran" "exit=$rc1"$'\n'"$out1"
+fi
+
+# --- OPS-195 (PROPOSED for doc 07, #592): every missing prerequisite is named
+# in one run, with the one install command for this OS, and nothing runs ------
+release_debian="$WORK/os-release-debian"; printf 'NAME="Debian GNU/Linux"\nID=debian\n' > "$release_debian"
+release_fedora="$WORK/os-release-fedora"; printf 'NAME="Rocky Linux"\nID="rocky"\nID_LIKE="rhel centos fedora"\n' > "$release_fedora"
+no_build_tools="$(toolbin_without go)"; rm -f "$no_build_tools/openssl" "$no_build_tools/jq"
+: > "$RECORD/start"
+out_deb="$(INNSEGL_INSTALL_OS_RELEASE="$release_debian" run_install_server "$home1" "$no_build_tools" 2>&1)"; rc_deb=$?
+if [ "$rc_deb" -ne 0 ] && [ ! -s "$RECORD/start" ] \
+   && printf '%s' "$out_deb" | grep -q 'missing prerequisite: go' \
+   && printf '%s' "$out_deb" | grep -q 'sudo apt-get install -y golang-go' \
+   && printf '%s' "$out_deb" | grep -q 'missing prerequisite: openssl' \
+   && printf '%s' "$out_deb" | grep -q 'sudo apt-get install -y openssl' \
+   && printf '%s' "$out_deb" | grep -q 'missing prerequisite: jq' \
+   && printf '%s' "$out_deb" | grep -q 'sudo apt-get install -y jq' \
+   && ! printf '%s' "$out_deb" | grep -q -e 'brew ' -e 'dnf '; then
+  ok "OPS-195: Go, openssl and jq missing on Debian are all named, each with its apt line, and nothing runs"
+else
+  bad "OPS-195: a missing Go, openssl or jq on Debian was not named with its apt line, or something ran" "exit=$rc_deb"$'\n'"$out_deb"
+fi
+out_fed="$(INNSEGL_INSTALL_OS_RELEASE="$release_fedora" run_install_server "$home1" "$no_build_tools" 2>&1)"; rc_fed=$?
+if [ "$rc_fed" -ne 0 ] && printf '%s' "$out_fed" | grep -q 'sudo dnf install -y jq' \
+   && printf '%s' "$out_fed" | grep -q 'sudo dnf install -y golang' \
+   && ! printf '%s' "$out_fed" | grep -q 'apt-get'; then
+  ok "OPS-195: a Fedora-like host gets dnf lines"
+else
+  bad "OPS-195: a Fedora-like host did not get dnf lines" "exit=$rc_fed"$'\n'"$out_fed"
+fi
+old_tools="$WORK/toolbin-old-git"; mkdir -p "$old_tools"
+for f in "$TOOLBIN"/*; do ln -s "$f" "$old_tools/$(basename "$f")"; done
+rm -f "$old_tools/git"; printf '#!/bin/sh\necho "git version 2.30.1"\n' > "$old_tools/git"; chmod +x "$old_tools/git"
+out_git="$(INNSEGL_INSTALL_OS_RELEASE="$release_debian" run_install_server "$home1" "$old_tools" 2>&1)"; rc_git=$?
+if [ "$rc_git" -ne 0 ] && printf '%s' "$out_git" | grep -q 'missing prerequisite: git 2.31 or later'; then
+  ok "OPS-195: a git older than 2.31 is named"
+else
+  bad "OPS-195: a git older than 2.31 was accepted" "exit=$rc_git"$'\n'"$out_git"
 fi
 
 # --- the server install runs each step, writes no settings, and says how to connect

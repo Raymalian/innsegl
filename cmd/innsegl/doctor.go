@@ -21,6 +21,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/cacustody"
 	"innsegl.dev/innsegl/internal/client"
+	"innsegl.dev/innsegl/internal/hostdeps"
 	"innsegl.dev/innsegl/internal/signprobe"
 	"innsegl.dev/innsegl/internal/version"
 )
@@ -72,6 +73,8 @@ type doctorDeps struct {
 	poll time.Duration
 	// serviceWait bounds the wait for a restarted client service.
 	serviceWait time.Duration
+	// host is the machine whose tools the first line checks; nil is this one.
+	host *hostdeps.Env
 }
 
 func doctorCommand(args []string, stdout, stderr io.Writer) int {
@@ -184,6 +187,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 	if len(repos) == 0 && deps.cwd != "" {
 		repos = repoList{deps.cwd}
 	}
+	d.hostTools()
 	if !d.clientService(ctx) {
 		return exitDoctorFailing
 	}
@@ -195,6 +199,24 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 	unlocked, custodyOK := d.custody(ctx)
 	d.components(st)
 	return d.signing(ctx, st, coreAt, unlocked, custodyOK, *wait)
+}
+
+// hostTools is doctor's first line (CLI-027, #592): what this machine lacks,
+// each with the command that installs it. It installs nothing, and the
+// checks after it run either way: they say what the gap breaks.
+func (d *doctor) hostTools() {
+	env := hostdeps.Real(d.deps.goos, d.identity)
+	if d.deps.host != nil {
+		env = *d.deps.host
+	}
+	missing := hostdeps.Check(env)
+	if len(missing) == 0 {
+		d.line("host", "ok", "")
+		return
+	}
+	for _, m := range missing {
+		d.line("host", "MISSING", m.Name+" ("+m.Why+"); install: "+m.Install)
+	}
 }
 
 // clientService checks the client service answers, runs this build, and

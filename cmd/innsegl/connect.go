@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/client"
+	"innsegl.dev/innsegl/internal/hostdeps"
 )
 
 // `innsegl connect` — RM-285 (#461), ADR-0063 decisions 2 and 4. One
@@ -73,6 +74,25 @@ type connectDeps struct {
 	serviceURL string
 	// lookPath finds a program on this shell's PATH; nil is exec.LookPath.
 	lookPath func(string) (string, error)
+	// host is the machine the preflight checks; nil is this one.
+	host *hostdeps.Env
+}
+
+// preflight names every dependency this machine lacks (CLI-027, #592) and
+// says whether connect may go on: not when one it cannot work without is
+// missing. It installs nothing.
+func (d connectDeps) preflight(stderr io.Writer) bool {
+	env := hostdeps.Real(d.goos, client.ClientPaths(d.home).TrustIdentity)
+	if d.host != nil {
+		env = *d.host
+	}
+	missing := hostdeps.Check(env)
+	hostdeps.Report(stderr, "innsegl connect", missing)
+	if hostdeps.AnyRequired(missing) {
+		fprintf(stderr, "innsegl connect: install what is missing above, then run the same command again. Nothing was changed.\n")
+		return false
+	}
+	return true
 }
 
 func (d connectDeps) look() func(string) (string, error) {
@@ -389,6 +409,9 @@ func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer
 			"--update rewrites an enrolled machine's settings. Run `innsegl connect <core-url> --token ...` first.\n", paths.Core)
 		return exitConnectFailed
 	}
+	if !deps.preflight(stderr) {
+		return exitConnectFailed
+	}
 	settings, err := deps.settingsConfig(enrolledListen(paths), f.hard)
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
@@ -504,6 +527,9 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 	if err := client.CheckLoopback(f.listen); err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitUsage
+	}
+	if !deps.preflight(stderr) {
+		return exitConnectFailed
 	}
 	paths := client.ClientPaths(deps.home)
 	if _, err := os.Stat(paths.Core); err == nil {
