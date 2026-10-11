@@ -53,7 +53,7 @@ the manual path from before the custodian.
 | `INNSEGL_CA_TOKEN_PATH` | | the CA's token file (memory-backed volume) |
 | `INNSEGL_CA_STORE_KEY` | `innsegl-ca` | the CA key's name in the store |
 | `INNSEGL_CA_CUSTODIAN_LISTEN` | `:8210` | `serve` |
-| `INNSEGL_CA_CHAIN_PATH` | unset | the chain the CA presents; the custodian requires the store's key to match its first certificate. Unset, or not yet written, skips that check |
+| `INNSEGL_CA_CHAIN_PATH` | unset; the overlay sets `/etc/fulcio/chain.pem` | the chain the CA presents; the custodian requires the store's key to match its first certificate. Unset, or not yet written, skips that check |
 | `INNSEGL_CA_CUSTODIAN_URL` | | where the core reaches the custodian |
 | `ca-custody --identity` | `~/.innsegl/trust-backup/identity.txt` | the age identity that opens the material |
 
@@ -93,7 +93,7 @@ the reason.
 | trust volume `innsegl-trust-ca-store` | the store's data |
 | trust volume `innsegl-trust-ca-custody` | the sealed unlock material (`material/unlock.age`) |
 | volume `innsegl-ca-token` | the CA's token, in memory |
-| volume `<prefix>-sigstore_sigstore-fulcio-kms` | the store's root chain and issuer config |
+| volume `<prefix>-sigstore_sigstore-fulcio-kms` | the store's root chain and issuer config; Fulcio and the custodian mount it read-only (the custodian is recreated when it changes, OPS-165) |
 | backup items `ca-store/store.snap`, `ca-custody/unlock.age` | custody in a trust-key bundle |
 
 Core routes (operator organisation workstations only): `/_core/ca-custody`,
@@ -119,7 +119,7 @@ the custodian on an internal unlock network and logs none of what it carries.
   `cacustodycli_test.go` (BAK-029, CLI-021), `corecacustody_test.go` (OPS-147)
 - `cmd/ca-bootstrap/*_test.go` (OPS-049, OPS-050, OPS-052, OPS-148)
 - `internal/client/cacustody_test.go` (BAK-026 to BAK-028)
-- `test/deploy/cacustody_test.go` (OPS-051, OPS-149 to OPS-151, OPS-155, BAK-030)
+- `test/deploy/cacustody_test.go` (OPS-051, OPS-149 to OPS-151, OPS-155, OPS-186: the custodian mounts the chain the CA presents, BAK-030)
 - `scripts/ca-custody-selftest.sh` (OPS-049 to OPS-051)
 - `scripts/ca-custody-reset-selftest.sh` (OPS-159)
 - `internal/cacustody/store_test.go` OPS-136 also signs the way Fulcio asks, `transit/sign/<key>/sha2-256`

@@ -279,6 +279,10 @@ services:
       - innsegl-ca-unlock
     labels:
       dev.innsegl.component: ca-custodian
+      # OPS-165: it mounts the CA's chain read-only, so a new chain
+      # recreates it. It also reads the chain on every status, so the label
+      # is the rule's mechanism, not what keeps its check current.
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_CA_CUSTODIAN:-}
     # The CA's uid, so the token it writes 0600 is one the CA can read.
     user: "65532:65532"
     read_only: true
@@ -295,9 +299,15 @@ services:
       # Who can open the unlock material: the operator's machine. The trust
       # backup's recipients unless set apart (ADR-0074).
       INNSEGL_CA_CUSTODY_RECIPIENTS: ${INNSEGL_CA_CUSTODY_RECIPIENTS:-${INNSEGL_TRUST_BACKUP_RECIPIENTS:-}}
+      # The chain the CA presents (#582, OPS-186): the custodian checks the
+      # store's key is that chain's key, the check Fulcio makes only at
+      # start. Absent until the bootstrap writes it, which skips the check.
+      INNSEGL_CA_CHAIN_PATH: /etc/fulcio/chain.pem
     volumes:
       - innsegl-ca-custody-data:/custody
       - innsegl-ca-token:/run/ca-token
+      # Public: the certificate and the issuer config Fulcio reads.
+      - sigstore-fulcio-kms:/etc/fulcio:ro
     healthcheck:
       # Healthy once the store is initialised and the CA has a token: what
       # the bootstrap needs before it can mint the root.

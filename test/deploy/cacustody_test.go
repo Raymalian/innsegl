@@ -392,3 +392,54 @@ func TestOPS160TheCustodianRunsTheImageThisCheckoutBuilds(t *testing.T) {
 		}
 	}
 }
+
+// OPS-186 (PROPOSED) — the live path of the custodian's drift check (#582):
+// the shipped overlay gives the custodian the very chain the CA presents,
+// read-only. Without it INNSEGL_CA_CHAIN_PATH is unset and the check is
+// skipped, so a store key and a chain that drifted apart are found only when
+// Fulcio refuses to start.
+func TestOPS186TheCustodianReadsTheChainTheCAPresents(t *testing.T) {
+	sig := composeRender(t, nil, sigstoreBase, sigstoreCustod)
+	fulcio := sig.Services["fulcio"]
+	var chain string
+	for _, a := range fulcio.Command {
+		if v, ok := strings.CutPrefix(a, "--kms-cert-chain-path="); ok {
+			chain = v
+		}
+	}
+	if chain == "" {
+		t.Fatalf("Fulcio names no --kms-cert-chain-path: %v", fulcio.Command)
+	}
+	// The volume Fulcio reads its chain from, and the chain's path inside it.
+	var volume, inside string
+	for _, v := range fulcio.Volumes {
+		if rel, ok := strings.CutPrefix(chain, v.Target+"/"); ok && v.Type == "volume" {
+			volume, inside = v.Source, rel
+		}
+	}
+	if volume == "" {
+		t.Fatalf("Fulcio's chain %s is on no volume it mounts", chain)
+	}
+
+	c := sig.Services["innsegl-ca-custodian"]
+	got := c.Environment["INNSEGL_CA_CHAIN_PATH"]
+	if got == nil || *got == "" {
+		t.Fatal("the custodian is not given INNSEGL_CA_CHAIN_PATH: its drift check never runs")
+	}
+	found := false
+	for _, v := range c.Volumes {
+		if v.Source != volume {
+			continue
+		}
+		found = true
+		if !v.ReadOnly {
+			t.Errorf("the custodian mounts %s writable; it only reads the chain", volume)
+		}
+		if want := v.Target + "/" + inside; *got != want {
+			t.Errorf("INNSEGL_CA_CHAIN_PATH is %s; the chain the CA presents is at %s", *got, want)
+		}
+	}
+	if !found {
+		t.Errorf("the custodian does not mount %s, where the CA's chain is", volume)
+	}
+}
