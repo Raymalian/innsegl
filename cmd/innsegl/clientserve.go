@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -122,6 +123,8 @@ func runClientServe(ctx context.Context, args []string, _, stderr io.Writer, hom
 	go srv.RunOutbox(renewCtx)
 	go srv.RunSessionWatch(renewCtx)
 	go srv.RunUnroutedWatch(renewCtx)
+	// RM-339: tell the operator when the core's CA stops signing.
+	go srv.RunSigningWatch(renewCtx, client.SigningWatchInterval, client.DesktopNotifier(runtime.GOOS))
 	// ADR-0074: keep copies of the core's encrypted trust-key backup.
 	go srv.RunTrustBackupFetch(renewCtx, &trustbackup.Store{Dir: paths.TrustBackups, Keep: client.TrustBackupKeep},
 		client.TrustBackupInterval)

@@ -59,7 +59,14 @@ not an outage, so the exit status is unchanged.
 (`spire`, `ledger`, `sigstore`) and its scheduled controls. The scheduled
 WORM canary is `worm canary`: `up` with when it last passed, or `DOWN` with
 the check that failed, `stale` (no run in twice the interval), or `no run
-recorded` ([ledger-and-segments.md](ledger-and-segments.md)).
+recorded` ([ledger-and-segments.md](ledger-and-segments.md)). The signing
+probe is `signing`: when it fails, one line, `signing: FAILING since <time>
+— <reason>`, counted as down ([signing-probe.md](signing-probe.md)). The
+`sigstore` line means only that Fulcio and Rekor answer.
+
+The client service reads the signing probe from the core every minute and
+shows a macOS notification on the first failure of an outage, and a log line;
+nothing more until signing has worked again.
 
 ## Settings
 
@@ -200,6 +207,7 @@ says to revoke the machine from the Account page.
   `scripts/link-bin-selftest.sh` (OPS-171, PROPOSED)
 - `internal/clientjournal/entry_test.go` (JRN-001)
 - `internal/client/unrouted_test.go`, `cmd/innsegl/status_test.go` (HAR-022)
+- `internal/client/signingwatch_test.go`, `cmd/innsegl/status_test.go` (SIG-015, PROPOSED)
 - `internal/accounts/enrol_test.go` (KEY-001 to KEY-005)
 
 ## Decisions
