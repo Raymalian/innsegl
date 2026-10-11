@@ -750,6 +750,9 @@ start:
 backup-freshness:
 	@scripts/backup-freshness.sh
 
+# SIGNING_ENV: what scripts/update-signing.sh needs to name the core and the repair.
+SIGNING_ENV = INNSEGL_STACK_PREFIX='$(STACK_PREFIX)' INNSEGL_CA_CUSTODY='$(CA_CUSTODY)'
+
 ## update: rebuild and restart innsegl's own services only, for a stack that
 ##   is already up (`make start` once). SPIRE and Fulcio keep running; the
 ##   log's services are brought up again, which recreates only what changed
@@ -760,6 +763,9 @@ backup-freshness:
 ##   bundle from `make image-bundle` in dist/ for this commit, it loads and
 ##   checks that instead of building (ADR-0070). It waits for every service
 ##   it restarted and exits non-zero, naming one that does not come up (#573).
+##   Once they are up it runs the signing probe in the core and exits non-zero
+##   with the reason and the repair when the CA cannot sign; a probe that
+##   already failed before the update is said so first (#587).
 update:
 	@scripts/stack-mode.sh check
 	@docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-spire-server && docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-sigstore-rekor || \
@@ -773,10 +779,12 @@ update:
 	   echo "make update: already up to date ($(DEPLOY_STATE)); nothing to do"; exit 0; fi; \
 	 [ "$$deployed" = "$(DEPLOY_STATE)" ] && echo "make update: not running:$$down; starting again"; \
 	 echo "make update: deployed $${deployed:-an unrecorded checkout}, checkout is $(DEPLOY_STATE)"; \
+	 $(SIGNING_ENV) scripts/update-signing.sh before; before=$$?; \
 	 $(MAKE) --no-print-directory spire-services-up && \
 	 $(MAKE) --no-print-directory rekor-log-up && \
 	 $(MAKE) --no-print-directory fulcio-file-ca-up && \
 	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services && \
+	 $(SIGNING_ENV) INNSEGL_SIGNING_BEFORE=$$before scripts/update-signing.sh after && \
 	 mkdir -p "$$(dirname '$(DEPLOYED_FILE)')" && echo '$(DEPLOY_STATE)' > '$(DEPLOYED_FILE)'
 	@echo
 	@echo "updated: only the services whose image or settings changed were restarted"
