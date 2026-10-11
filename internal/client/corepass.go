@@ -8,9 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"runtime"
 	"strings"
 
@@ -25,9 +23,10 @@ import (
 // host"), while the launchd service is not affected. Loopback is never
 // "local network". So `innsegl status`, `ca-custody`, `trust-backup fetch`,
 // `author` and `connect --disconnect` send their calls to the service on its
-// loopback address, under CorePassPrefix, and the service sends them on over
-// its own certificate. Only the routes in CorePassRoutes pass, only with
-// their own method, and only for the installation the service serves.
+// CLI socket (socket.go, #600), under CorePassPrefix, and the service sends
+// them on over its own certificate. Only the routes in CorePassRoutes pass,
+// only with their own method, only for the installation the service serves,
+// and only from the service's own user.
 
 // CorePassPrefix is the client service's route for the CLI's own calls to
 // the core: <prefix><core path>.
@@ -75,7 +74,7 @@ func corePassAllowed(method, path string) bool {
 	return false
 }
 
-// ErrClientServiceDown is the client service not answering on loopback.
+// ErrClientServiceDown is the client service not answering on its CLI socket.
 var ErrClientServiceDown = errors.New("the client service is not answering")
 
 // ErrClientServiceOld is a client service that predates the pass-through:
@@ -197,35 +196,21 @@ func (c serviceCaller) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // coreViaService answers the transport and base URL a CLI call to the core
-// uses: the client service at local ("http://host:port"), or, when local is
-// empty, at the loopback address the enrolment names. A path is appended to
-// the base as it would be to the core's URL.
-func coreViaService(paths Paths, local string) (http.RoundTripper, string, error) {
+// uses: the client service on the socket at socket, or, when socket is
+// empty, the enrolment's own (SocketPath). A path is appended to the base as
+// it would be to the core's URL.
+func coreViaService(paths Paths, socket string) (http.RoundTripper, string, error) {
 	cfg, err := ReadCoreConfig(paths)
 	if err != nil {
 		return nil, "", err
 	}
-	if local == "" {
-		listen := cfg.Listen
-		if listen == "" {
-			listen = DefaultListen
-		}
-		local = "http://" + listen
+	if socket == "" {
+		socket = SocketPath(paths)
 	}
-	u, err := url.Parse(local)
-	if err != nil || u.Scheme != "http" || u.Host == "" {
-		return nil, "", fmt.Errorf("the client service address %q is not http://<loopback>:<port>", local)
-	}
-	if err := CheckLoopback(u.Host); err != nil {
-		return nil, "", err
-	}
-	base := strings.TrimSuffix(local, "/")
 	rt := serviceCaller{
-		// Never through a proxy: a shell inside a harness carries
-		// HTTPS_PROXY pointing at this same service.
-		rt:           &http.Transport{Proxy: nil, DialContext: (&net.Dialer{}).DialContext},
-		base:         base,
+		rt:           SocketTransport(socket),
+		base:         socket,
 		installation: cfg.InstallationID,
 	}
-	return rt, base + CorePassPrefix, nil
+	return rt, SocketBase + CorePassPrefix, nil
 }

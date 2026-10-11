@@ -110,9 +110,35 @@ func runClientServe(ctx context.Context, args []string, _, stderr io.Writer, hom
 		}
 	}
 
+	// #600: the CLI's own calls go over a socket only this user may use,
+	// open before the TCP address is, so a service that answers there
+	// answers the CLI too. A socket that cannot be opened stops the CLI's
+	// calls, never the harness's recording on the TCP address.
+	sockPath := client.SocketPath(paths)
+	sockLn, err := client.ListenSocket(ctx, sockPath, func(format string, a ...any) {
+		fprintf(stderr, "innsegl client serve: "+format+"\n", a...)
+	})
+	var sockServer *http.Server
+	if err != nil {
+		fprintf(stderr, "innsegl client serve: the CLI socket cannot be opened (%v); `innsegl status`, "+
+			"`ca-custody`, `trust-backup fetch`, `author` and `connect --disconnect` cannot reach the core "+
+			"through this service\n", err)
+	} else {
+		sockServer = &http.Server{Handler: srv.SocketHandler(), ReadHeaderTimeout: 30 * time.Second}
+		go func() {
+			if serr := sockServer.Serve(sockLn); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+				fprintf(stderr, "innsegl client serve: the CLI socket: %v\n", serr)
+			}
+		}()
+		fprintf(stderr, "innsegl client serve: the CLI's calls on %s\n", sockPath)
+	}
+
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
 	if err != nil {
 		fprintf(stderr, "innsegl client serve: %v\n", err)
+		if sockServer != nil {
+			_ = sockServer.Close()
+		}
 		return exitClientFailed
 	}
 	server := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 30 * time.Second}
@@ -138,6 +164,11 @@ func runClientServe(ctx context.Context, args []string, _, stderr io.Writer, hom
 		defer done()
 		if err := server.Shutdown(shutdown); err != nil {
 			fprintf(stderr, "innsegl client serve: shutting down: %v\n", err)
+		}
+		if sockServer != nil {
+			if err := sockServer.Shutdown(shutdown); err != nil {
+				fprintf(stderr, "innsegl client serve: shutting down the CLI socket: %v\n", err)
+			}
 		}
 	}()
 	fprintf(stderr, "innsegl client serve: listening on http://%s\n", addr)

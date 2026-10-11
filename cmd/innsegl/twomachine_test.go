@@ -54,7 +54,7 @@ func TestOPS174ASecondMachineEnrolsWorksAndIsRefusedOnceRevoked(t *testing.T) {
 	defer cancel()
 
 	bin := buildInnsegl(ctx, t)
-	home := t.TempDir()
+	home := shortTempDir(t) // short enough for the client socket under it (#600)
 	listen := freeLoopbackAddr(t)
 	machine := func(args ...string) (int, string) {
 		t.Helper()

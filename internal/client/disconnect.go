@@ -27,10 +27,10 @@ const DisconnectPath = "/_core/disconnect"
 // a disconnect is the last thing this machine does with its key, and it must
 // not depend on a service it is about to remove. Where the direct dial is
 // refused too (macOS's Local Network permission), the caller says to revoke
-// the machine from the Account page. local is the service's address; empty
+// the machine from the Account page. socket is the service's CLI socket; empty
 // means the one the enrolment names.
-func RevokeInstallation(ctx context.Context, paths Paths, local string) error {
-	rt, base, err := coreViaService(paths, local)
+func RevokeInstallation(ctx context.Context, paths Paths, socket string) error {
+	rt, base, err := coreViaService(paths, socket)
 	if err != nil {
 		return err
 	}
@@ -76,18 +76,18 @@ func revokeInstallation(ctx context.Context, rt http.RoundTripper, base string) 
 const CoreStatusPath = "/_core/status"
 
 // FetchCoreStatus asks the core for its status through the client service
-// at local (empty: the address the enrolment names): the body as the core
+// on the socket at socket (empty: the enrolment's own): the body as the core
 // sent it.
-func FetchCoreStatus(ctx context.Context, paths Paths, local string) ([]byte, error) {
-	body, _, err := FetchCoreStatusAt(ctx, paths, local)
+func FetchCoreStatus(ctx context.Context, paths Paths, socket string) ([]byte, error) {
+	body, _, err := FetchCoreStatusAt(ctx, paths, socket)
 	return body, err
 }
 
 // FetchCoreStatusAt is FetchCoreStatus, with the core's clock as its answer
 // carried it (the Date header; zero when it carries none), for `innsegl
 // doctor`'s clock check (#588).
-func FetchCoreStatusAt(ctx context.Context, paths Paths, local string) ([]byte, time.Time, error) {
-	rt, base, err := coreViaService(paths, local)
+func FetchCoreStatusAt(ctx context.Context, paths Paths, socket string) ([]byte, time.Time, error) {
+	rt, base, err := coreViaService(paths, socket)
 	if err != nil {
 		return nil, time.Time{}, err
 	}

@@ -383,7 +383,9 @@ func (s *Server) RenewAt() time.Time {
 	return leaf.NotBefore.Add(leaf.NotAfter.Sub(leaf.NotBefore) / 2)
 }
 
-// Handler serves the status route and forwards everything else.
+// Handler is the loopback TCP address the harness uses: the status route,
+// and everything else forwarded. The CLI's own calls are served on the
+// socket instead (SocketHandler).
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodConnect {
@@ -400,7 +402,8 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		if r.URL.Path == CorePassPrefix || strings.HasPrefix(r.URL.Path, CorePassPrefix+"/") {
-			s.serveCorePass(w, r)
+			// The CLI's calls go over the socket (#600), never this address.
+			s.serveCorePassGone(w)
 			return
 		}
 		if s.revoked.Load() {

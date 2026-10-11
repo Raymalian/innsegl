@@ -30,7 +30,7 @@ func enrolled(t *testing.T) (*clienttest.Core, Paths) {
 		t.Fatal(err)
 	}
 	t.Cleanup(core.Close)
-	paths := ClientPaths(t.TempDir())
+	paths := ClientPaths(shortTempDir(t))
 	e, err := Enrol(context.Background(), EnrolOptions{
 		CoreURL: core.URL(), Token: clienttest.Token, Name: "dev-laptop", CA: core.CA,
 	})

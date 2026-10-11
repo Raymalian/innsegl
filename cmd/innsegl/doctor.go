@@ -183,7 +183,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		return exitDoctorFailing
 	}
 	d := &doctor{deps: deps, out: stdout, paths: paths, identity: *identity,
-		local: "http://" + enrolledListen(paths)}
+		local: client.SocketPath(paths)}
 	if len(repos) == 0 && deps.cwd != "" {
 		repos = repoList{deps.cwd}
 	}

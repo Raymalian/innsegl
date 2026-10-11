@@ -282,7 +282,10 @@ func TestCLI023AClientServiceThatIsDownIsRestarted(t *testing.T) {
 	t.Cleanup(svc.Close)
 	core.mount(t, f)
 	d := &doctorRun{f: f}
-	d.onRun = func([]string) { svc.Start() }
+	d.onRun = func([]string) {
+		svc.Start()
+		serveClientSocket(t, client.SocketPath(client.ClientPaths(f.home)), s.SocketHandler())
+	}
 
 	code, out := d.run(t)
 	if code != exitOK || !strings.Contains(out, "client service: DOWN") || !strings.Contains(out, "restarted") {
