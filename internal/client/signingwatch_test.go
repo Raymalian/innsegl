@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -181,17 +182,17 @@ func TestRunSigningWatchChecksOnSchedule(t *testing.T) {
 }
 
 // The desktop notifier runs osascript on macOS with the text as arguments,
-// never inside the script, and does nothing elsewhere.
+// never inside the script, and does nothing where no notifier is known.
 func TestDesktopNotifier(t *testing.T) {
 	var ran [][]string
 	run := func(_ context.Context, name string, args ...string) error {
 		ran = append(ran, append([]string{name}, args...))
 		return nil
 	}
-	if err := desktopNotifier("linux", run)(t.Context(), "t", "b"); err != nil || len(ran) != 0 {
+	if err := desktopNotifier("plan9", exec.LookPath, run)(t.Context(), "t", "b"); err != nil || len(ran) != 0 {
 		t.Fatalf("linux: %v %v", err, ran)
 	}
-	if err := desktopNotifier("darwin", run)(t.Context(), `innsegl "x"`, `it's; do shell script "rm"`); err != nil {
+	if err := desktopNotifier("darwin", exec.LookPath, run)(t.Context(), `innsegl "x"`, `it's; do shell script "rm"`); err != nil {
 		t.Fatal(err)
 	}
 	if len(ran) != 1 || ran[0][0] != "osascript" {

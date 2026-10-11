@@ -137,6 +137,34 @@ parse_args() {
 # this point has touched the filesystem.
 # ---------------------------------------------------------------------------
 
+# Each prerequisite gets ONE install command, for this host's OS (#592): the
+# package family comes from uname on macOS and /etc/os-release on Linux. An
+# OS with no known family gets every line, labelled. Nothing is installed.
+# INNSEGL_INSTALL_OS_RELEASE points the self-test at a stand-in os-release.
+OS_RELEASE="${INNSEGL_INSTALL_OS_RELEASE:-/etc/os-release}"
+
+os_family() {
+  if [ -z "${INNSEGL_INSTALL_OS_RELEASE:-}" ] && [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    echo macos
+    return
+  fi
+  local k v ids=""
+  if [ -r "$OS_RELEASE" ]; then
+    while IFS='=' read -r k v; do
+      case "$k" in
+        ID|ID_LIKE) v="${v//\"/}"; ids="$ids ${v//\'/}" ;;
+      esac
+    done < "$OS_RELEASE"
+  fi
+  for v in $ids; do
+    case "$v" in
+      debian|ubuntu)    echo debian; return ;;
+      fedora|rhel|centos) echo fedora; return ;;
+    esac
+  done
+  echo other
+}
+
 hint_macos() {
   case "$1" in
     docker-daemon) echo "install and start Docker Desktop: https://www.docker.com/products/docker-desktop/" ;;
@@ -145,6 +173,9 @@ hint_macos() {
     make)          echo "xcode-select --install" ;;
     python3)       echo "brew install python3" ;;
     curl)          echo "brew install curl" ;;
+    go)            echo "brew install go" ;;
+    openssl)       echo "brew install openssl" ;;
+    jq)            echo "brew install jq" ;;
     innsegl-bin)   echo "make build" ;;
   esac
 }
@@ -157,11 +188,30 @@ hint_debian() {
     make)          echo "sudo apt-get install -y make" ;;
     python3)       echo "sudo apt-get install -y python3" ;;
     curl)          echo "sudo apt-get install -y curl" ;;
+    go)            echo "sudo apt-get install -y golang-go (1.21 or later; an older one: https://go.dev/dl/)" ;;
+    openssl)       echo "sudo apt-get install -y openssl" ;;
+    jq)            echo "sudo apt-get install -y jq" ;;
+    innsegl-bin)   echo "make build" ;;
+  esac
+}
+
+hint_fedora() {
+  case "$1" in
+    docker-daemon) echo "sudo dnf install -y docker-ce docker-compose-plugin && sudo systemctl enable --now docker (Docker's dnf repository)" ;;
+    compose)       echo "sudo dnf install -y docker-compose-plugin" ;;
+    git)           echo "sudo dnf install -y git" ;;
+    make)          echo "sudo dnf install -y make" ;;
+    python3)       echo "sudo dnf install -y python3" ;;
+    curl)          echo "sudo dnf install -y curl" ;;
+    go)            echo "sudo dnf install -y golang" ;;
+    openssl)       echo "sudo dnf install -y openssl" ;;
+    jq)            echo "sudo dnf install -y jq" ;;
     innsegl-bin)   echo "make build" ;;
   esac
 }
 
 MISSING=0
+FAMILY=""
 
 check() {
   # check <key> <label> <test-command...>
@@ -169,19 +219,46 @@ check() {
   shift 2
   if ! "$@" >/dev/null 2>&1; then
     printf 'install.sh: missing prerequisite: %s\n' "$label" >&2
-    printf '  macOS:          %s\n' "$(hint_macos "$key")" >&2
-    printf '  Debian/Ubuntu:  %s\n' "$(hint_debian "$key")" >&2
+    case "$FAMILY" in
+      macos)  printf '  install: %s\n' "$(hint_macos "$key")" >&2 ;;
+      debian) printf '  install: %s\n' "$(hint_debian "$key")" >&2 ;;
+      fedora) printf '  install: %s\n' "$(hint_fedora "$key")" >&2 ;;
+      *)
+        printf '  macOS:          %s\n' "$(hint_macos "$key")" >&2
+        printf '  Debian/Ubuntu:  %s\n' "$(hint_debian "$key")" >&2
+        printf '  Fedora:         %s\n' "$(hint_fedora "$key")" >&2
+        ;;
+    esac
     MISSING=1
   fi
 }
 
+# version_at_least <program> <regex-prefix> <major> <minor> <version-args...>:
+# the first "<prefix>MAJOR.MINOR" in the program's output is at least that.
+version_at_least() {
+  local prog="$1" prefix="$2" want_major="$3" want_minor="$4" out
+  shift 4
+  out="$("$prog" "$@" 2>/dev/null)" || return 1
+  [[ "$out" =~ ${prefix}([0-9]+)\.([0-9]+) ]] || return 1
+  local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}"
+  [ "$major" -gt "$want_major" ] || { [ "$major" -eq "$want_major" ] && [ "$minor" -ge "$want_minor" ]; }
+}
+
 check_prereqs() {
+  FAMILY="$(os_family)"
   check docker-daemon "the Docker daemon (reachable)" docker info
   check compose       "docker compose v2"             docker compose version
-  check git           "git"                            command -v git
+  # rev-parse --path-format, which innsegl's hooks use, arrived in git 2.31.
+  check git           "git 2.31 or later"              version_at_least git 'git version ' 2 31 --version
   check make          "make"                           command -v make
   check python3       "python3"                        command -v python3
   check curl           "curl"                            command -v curl
+  # `make build` compiles innsegl: go.mod names the toolchain, and Go 1.21 or
+  # later fetches it itself.
+  check go             "go 1.21 or later (make build)"  version_at_least go 'go version go' 1 21 version
+  # scripts/ca-rotate.sh reads certificates with openssl; innsegl-migrate.sh needs jq.
+  check openssl        "openssl (CA rotation)"          command -v openssl
+  check jq             "jq (migration)"                 command -v jq
   check innsegl-bin    "the innsegl binary ($INNSEGL_BIN_PATH)" test -x "$INNSEGL_BIN_PATH"
 
   if [ "$MISSING" -ne 0 ]; then

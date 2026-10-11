@@ -66,6 +66,8 @@ test:
 	@scripts/test-suite.sh run -race
 
 ## lint: vet and golangci-lint
+# CI runs golangci-lint v2.13.2; another version reports differently. Install it with
+#   go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 lint:
 	go vet ./...
 	golangci-lint run

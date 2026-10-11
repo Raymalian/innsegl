@@ -10,8 +10,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+
+	"innsegl.dev/innsegl/internal/trustbackup"
 )
 
 // LaunchdLabel names the macOS LaunchAgent.
@@ -28,9 +31,18 @@ const SystemdUnit = "innsegl-client.service"
 // for the logged-in user. KeepAlive restarts it whenever it exits.
 // Interactive, not Background: the service unlocks the CA store with a
 // Secure Enclave key, and that asks the operator for Touch ID on screen
-// (ADR-0076).
-func RenderPlist(bin, logPath string) string {
+// (ADR-0076). path, when set, is the service's PATH (ServicePATH).
+func RenderPlist(bin, logPath, path string) string {
 	esc := html.EscapeString
+	env := ""
+	if path != "" {
+		env = `  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>` + esc(path) + `</string>
+  </dict>
+`
+	}
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -49,7 +61,7 @@ func RenderPlist(bin, logPath string) string {
   <true/>
   <key>ProcessType</key>
   <string>Interactive</string>
-  <key>StandardOutPath</key>
+` + env + `  <key>StandardOutPath</key>
   <string>` + esc(logPath) + `</string>
   <key>StandardErrorPath</key>
   <string>` + esc(logPath) + `</string>
@@ -59,8 +71,15 @@ func RenderPlist(bin, logPath string) string {
 }
 
 // RenderUnit is the systemd --user unit for `innsegl client serve`. Its
-// output goes to the user journal.
-func RenderUnit(bin string) string {
+// output goes to the user journal. path, when set, is the service's PATH
+// (ServicePATH).
+func RenderUnit(bin, path string) string {
+	env := ""
+	if path != "" {
+		// Environment= expands specifiers (%) but not variables ($).
+		r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`)
+		env = `Environment="PATH=` + r.Replace(path) + `"` + "\n"
+	}
 	return `[Unit]
 Description=innsegl client: the local endpoint for the harness, hooks and git
 After=network-online.target
@@ -68,7 +87,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=` + systemdQuote(bin) + ` client serve
+` + env + `ExecStart=` + systemdQuote(bin) + ` client serve
 Restart=always
 RestartSec=5
 
@@ -93,6 +112,59 @@ type Service struct {
 	Run  func(name string, args ...string) error
 	// Log, when set, receives notes about expected failures.
 	Log io.Writer
+	// PATH, when set, is written into the service definition (ServicePATH);
+	// empty leaves the service manager's default.
+	PATH string
+}
+
+// DefaultServicePATH is the PATH a user service gets when its definition
+// sets none: launchd's for a LaunchAgent (measured on macOS), systemd's
+// for a --user unit.
+func DefaultServicePATH(goos string) string {
+	if goos == "darwin" {
+		return "/usr/bin:/bin:/usr/sbin:/sbin"
+	}
+	return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+}
+
+// ServicePATH is the PATH the client service needs to run the age plugins
+// the operator's identity file names (CLI-025, #592): the service manager's
+// default with each plugin's directory, as lookPath resolves it now, added
+// after it. It is empty when the default already finds every plugin, or
+// when there is no identity file or no plugin identity in it. missing names
+// each plugin lookPath did not find.
+func ServicePATH(goos, identityFile string, lookPath func(string) (string, error)) (path string, missing []string, err error) {
+	f, err := os.Open(identityFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	defer func() { _ = f.Close() }()
+	names, err := trustbackup.PluginNames(f)
+	if err != nil {
+		return "", nil, err
+	}
+	base := DefaultServicePATH(goos)
+	dirs := filepath.SplitList(base)
+	added := false
+	for _, n := range names {
+		bin := "age-plugin-" + n
+		p, lerr := lookPath(bin)
+		if lerr != nil {
+			missing = append(missing, bin)
+			continue
+		}
+		if d := filepath.Dir(p); !slices.Contains(dirs, d) {
+			dirs = append(dirs, d)
+			added = true
+		}
+	}
+	if !added {
+		return "", missing, nil
+	}
+	return strings.Join(dirs, string(os.PathListSeparator)), missing, nil
 }
 
 // Path is where the service definition is written.
@@ -135,9 +207,9 @@ func (s Service) Install(bin string) error {
 		if err := f.Close(); err != nil {
 			return err
 		}
-		content = RenderPlist(bin, logPath)
+		content = RenderPlist(bin, logPath, s.PATH)
 	default:
-		content = RenderUnit(bin)
+		content = RenderUnit(bin, s.PATH)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

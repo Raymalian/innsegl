@@ -43,7 +43,7 @@ if ! command -v "$GOBCO" >/dev/null 2>&1; then
     GOBCO="$(go env GOPATH)/bin/gobco"
   else
     echo "branch-coverage: gobco not found. Install with:" >&2
-    echo "  go install github.com/rillig/gobco@latest" >&2
+    echo "  go install github.com/rillig/gobco@v1.3.4" >&2
     exit 4
   fi
 fi

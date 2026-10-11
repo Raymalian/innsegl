@@ -131,6 +131,30 @@ Every target that runs compose over the trust volumes (`innsegl-backup`,
 Bringing the log up again passes Rekor's running host port, so a
 recreated Rekor stays where `make start` put it (OPS-167).
 
+### Host prerequisites (`install.sh`)
+
+`install.sh` checks the core host before it runs anything, and names every
+missing tool in one run with one install command for this OS: macOS from
+`uname`, Debian/Ubuntu or Fedora from `/etc/os-release` (`ID`, `ID_LIKE`).
+Any other OS gets the three lines, labelled. It installs nothing, and refuses
+with nothing changed while one is missing.
+
+| Tool | Why | Debian/Ubuntu | Fedora |
+|---|---|---|---|
+| Docker daemon, `docker compose` v2 | the stack | `sudo apt-get install -y docker.io docker-compose-plugin` | `sudo dnf install -y docker-ce docker-compose-plugin` |
+| git 2.31 or later | version stamps, hooks | `sudo apt-get install -y git` | `sudo dnf install -y git` |
+| make, python3, curl | every target; `compose-up.py`; setup and rotation scripts | `sudo apt-get install -y make python3 curl` | `sudo dnf install -y make python3 curl` |
+| go 1.21 or later | `make build` (go.mod names the toolchain; 1.21 or later fetches it) | `sudo apt-get install -y golang-go` | `sudo dnf install -y golang` |
+| openssl | `scripts/ca-rotate.sh` | `sudo apt-get install -y openssl` | `sudo dnf install -y openssl` |
+| jq | `scripts/innsegl-migrate.sh` | `sudo apt-get install -y jq` | `sudo dnf install -y jq` |
+
+On macOS the lines are Docker Desktop, `brew install <tool>` and
+`xcode-select --install` for make. A client machine's tools are checked by
+`innsegl connect` ([client-and-connect.md](client-and-connect.md)).
+
+Developer tools pinned to what CI runs: golangci-lint v2.13.2, gobco v1.3.4
+(`CONTRIBUTING.md`).
+
 ## Settings
 
 Stack mode (`scripts/stack-mode.sh`):
@@ -234,9 +258,9 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
   `hostports_test.go`, `bindaddress_test.go` (OPS-127), `oneprocess*_test.go`,
   `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134),
   `startinputs_test.go` (OPS-165 to OPS-167, PROPOSED), `upwait_test.go` (OPS-179, PROPOSED), `updatesigning_test.go` (OPS-190, OPS-191, PROPOSED)
-- `test/deploy/referencedocs_test.go` (DOC-001, PROPOSED)
+- `test/deploy/referencedocs_test.go` (DOC-001, PROPOSED); `devpins_test.go` (OPS-196, PROPOSED: install hints name the CI pins)
 - `scripts/stack-mode-selftest.sh` (OPS-129), `innsegl-update-selftest.sh`,
-  `image-bundle-selftest.sh`, `install-selftest.sh`, `setup-link-selftest.sh`,
+  `image-bundle-selftest.sh`, `install-selftest.sh` (OPS-195, PROPOSED), `setup-link-selftest.sh`,
   `test-suite-selftest.sh`, `worktree-link-selftest.sh` (OPS-040, OPS-041),
   `codesign-cli-selftest.sh` (OPS-169, PROPOSED), `client-restart-selftest.sh`
   (OPS-170, PROPOSED), `link-bin-selftest.sh` (OPS-171, PROPOSED), `innsegl-migrate-selftest.sh` (OPS-168, PROPOSED, #560)

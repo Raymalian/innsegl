@@ -52,7 +52,7 @@ admin credential settings ([identity.md](identity.md)).
 |---|---|
 | `/readyz` `reports` | `{"name":"signing","ok":false,"detail":"FAILING since <time> — <reason>"}`, or `ok: true` with `a certificate was issued at <time>`. A report: it never makes the core unready |
 | `innsegl status` | `signing: FAILING since <time> — <reason>`, counted as down (exit 1); `signing up a certificate was issued at <time>` when it works |
-| Client service | a macOS notification on the first failure, and a log line; nothing more until signing has worked again. `GET /_client/status` `signing` holds the last reading |
+| Client service | a desktop notification on the first failure (macOS; Linux with `notify-send`), and a log line; nothing more until signing has worked again. `GET /_client/status` `signing` holds the last reading |
 | Commit hook | a refused unsigned commit says `signing is down since <time> (<reason>)` ([commit-path.md](commit-path.md)) |
 
 `since` is the first failed probe of the current outage. A result older than
