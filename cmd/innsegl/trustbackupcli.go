@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -104,7 +105,10 @@ func missingTrustItems(m trustbackup.Manifest) []string {
 
 type trustBackupDeps struct {
 	getenv func(string) string
-	now    func() time.Time
+	// recipientsFile is the custody recipients file `create` reads beside
+	// the env list; empty reads the env list only.
+	recipientsFile string
+	now            func() time.Time
 	// exportMySQL is trustbackup.ExportMySQL unless a test replaces it.
 	exportMySQL func(ctx context.Context, dsn string, w io.Writer) error
 	// home is the operator's home, for fetch and drill's defaults.
@@ -214,6 +218,15 @@ func runTrustBackupCreate(ctx context.Context, args []string, stdout, stderr io.
 		fprintf(stderr, "innsegl trust-backup create: %v\n", err)
 		return exitUsage
 	}
+	// The custody reseal writes the applied recipients beside the unlock
+	// material; the file is read on every run, absent means the env list only.
+	recipientsFile := ""
+	for _, v := range paths {
+		if name, p, perr := splitPair(v); perr == nil && name == trustItemCAMaterial {
+			recipientsFile = filepath.Join(p, trustbackup.RecipientsFile)
+		}
+	}
+	deps.recipientsFile = recipientsFile
 	store := &trustbackup.Store{Dir: *dir, Keep: *keep, Now: deps.now}
 	if *ownerFlag != "" {
 		if store.Owner, err = trustbackup.ParseOwner(*ownerFlag); err != nil {
@@ -249,7 +262,7 @@ func createTrustBackupOnce(store *trustbackup.Store, sources []trustbackup.Sourc
 	if prev, perr := store.ReadStatus(); perr == nil {
 		st.LastSuccess, st.Latest = prev.LastSuccess, prev.Latest
 	}
-	recipients, err := trustbackup.ParseRecipients(deps.getenv(trustbackup.EnvRecipients))
+	recipients, err := trustbackup.LoadRecipients(deps.getenv(trustbackup.EnvRecipients), deps.recipientsFile)
 	var e trustbackup.Entry
 	var m trustbackup.Manifest
 	if err == nil {

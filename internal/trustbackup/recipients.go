@@ -12,6 +12,7 @@ package trustbackup
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"filippo.io/age"
@@ -27,6 +28,54 @@ const EnvRecipients = "INNSEGL_TRUST_BACKUP_RECIPIENTS"
 // bundle is written: an unencrypted key backup is never an option.
 var ErrNoRecipients = errors.New("trust backup: no recipient is configured; set " + EnvRecipients +
 	" to the public key the bundle is encrypted to")
+
+// RecipientsFile is the name of the public recipients file the CA custody
+// reseal writes beside the custody material: one recipient per line, blank
+// lines and # comments allowed.
+const RecipientsFile = "recipients.txt"
+
+// LoadRecipients returns the recipients of this run: the space-separated env
+// list plus every recipient in the file at path, each once. An absent file, or
+// an empty path, means the env list only. A file that exists but cannot be
+// read, or holds a line that is not a recipient this package can encrypt to,
+// is an error naming the line: a recipient is never dropped silently.
+func LoadRecipients(envList, path string) ([]age.Recipient, error) {
+	seen := map[string]bool{}
+	var all []string
+	for _, f := range strings.Fields(envList) {
+		if !seen[f] {
+			seen[f] = true
+			all = append(all, f)
+		}
+	}
+	if path != "" {
+		data, err := os.ReadFile(path)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+		case err != nil:
+			return nil, fmt.Errorf("trust backup: reading the recipients file: %w", err)
+		default:
+			for i, line := range strings.Split(string(data), "\n") {
+				line, _, _ = strings.Cut(line, "#")
+				fields := strings.Fields(line)
+				if len(fields) == 0 {
+					continue
+				}
+				if len(fields) > 1 {
+					return nil, fmt.Errorf("trust backup: %s:%d: want one recipient per line, got %d", path, i+1, len(fields))
+				}
+				if _, err := parseRecipient(fields[0]); err != nil {
+					return nil, fmt.Errorf("trust backup: %s:%d: recipient %q: %w", path, i+1, fields[0], err)
+				}
+				if !seen[fields[0]] {
+					seen[fields[0]] = true
+					all = append(all, fields[0])
+				}
+			}
+		}
+	}
+	return ParseRecipients(strings.Join(all, " "))
+}
 
 // ParseRecipients reads a space-separated recipient list. It takes recipients
 // the core can encrypt to with no plugin binary:
