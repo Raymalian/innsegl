@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"innsegl.dev/innsegl/internal/ledger"
 )
 
@@ -63,6 +65,15 @@ func withWriterLease(open func(context.Context, serveOptions, *serveLog) (served
 		if ttl <= 0 {
 			ttl = defaultWriterLeaseTTL
 		}
+		// The lease is the singletons': the companions (seal, reconcile,
+		// reap, gateway) are single-active (doc 05 §2). A replica that runs
+		// none serves beside the core that holds it, as doc 05 §2's N MCP
+		// replicas do; the database still refuses its appends to a frozen
+		// ledger.
+		if len(o.also) == 0 {
+			log.info("no companion subcommands: serving as a replica, without the writer lease")
+			return open(ctx, o, log)
+		}
 		// With -migrate the core makes its own schema (a fresh clone's
 		// bootstrap): the lease's table is one of the migrations, so they
 		// run first. Migrating twice is a no-op; openServer's own run then
@@ -71,6 +82,11 @@ func withWriterLease(open func(context.Context, serveOptions, *serveLog) (served
 			if err := migrateLedger(ctx, o.dsn); err != nil {
 				return nil, err
 			}
+		}
+		// Refusals come before the wait: a core this database role cannot
+		// run is told so at once, not after another core lets go.
+		if err := preflightRole(ctx, o, log); err != nil {
+			return nil, err
 		}
 		leases, err := ledger.OpenLeases(ctx, o.dsn)
 		if err != nil {
@@ -98,6 +114,17 @@ func withWriterLease(open func(context.Context, serveOptions, *serveLog) (served
 		}
 		return &leasedServer{servedMCP: srv, held: h}, nil
 	}
+}
+
+// preflightRole is openServer's database-role check, run before the lease
+// wait so a refused role fails fast.
+func preflightRole(ctx context.Context, o serveOptions, log *serveLog) error {
+	pool, err := pgxpool.New(ctx, o.dsn)
+	if err != nil {
+		return fmt.Errorf("open the ledger to check its role: %w", err)
+	}
+	defer pool.Close()
+	return enforceChainPrivileges(ctx, pool, o, log)
 }
 
 // migrateLedger applies the shipped migrations through a store of its own.

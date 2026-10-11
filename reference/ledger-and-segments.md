@@ -59,16 +59,23 @@ The ledger connection is -dsn or $INNSEGL_LEDGER_DSN.
 
 ### One writer, and the freeze
 
-One core writes a ledger at a time. `innsegl serve` takes the writer lease
-(table `innsegl.writer_lease`, migration 0021) before it opens anything, and
-renews it every third of `-writer-lease-ttl`. A second core against the same
+One core writes a ledger at a time. A core is `innsegl serve` with
+companions (`-also`: seal, reconcile, reap, gateway), which are
+single-active; the compose stack runs one. It checks its database role
+first, so a refused role fails at once, then takes the writer lease (table
+`innsegl.writer_lease`, migration 0021) before it opens anything, and renews
+it every third of `-writer-lease-ttl`. A second core against the same
 database logs `waiting for the writer lease` with the holder, and waits. A
 core that loses the lease stops (exit 8) and starts again, waiting its turn.
-A core that stops cleanly releases the lease, so the next one starts at
-once; one that crashed holds it up for at most the TTL. While a core holds
-the lease, the database refuses an append from a connection that names
-another writer (SQLSTATE `IN008`). One-shot commands such as `innsegl
-retire` name no writer and append through the same serialized path.
+A core that stops cleanly releases the lease. Each holder also keeps a
+database session holding an advisory lock; a core killed without releasing
+loses that session at once, and the next core takes over within about a
+quarter second. Only a holder whose host vanished holds the next one up for
+the TTL. While a core holds the lease, the database refuses an append from
+a connection that names another writer (SQLSTATE `IN008`). A replica with no
+companions (doc 05 §2's N MCP replicas) takes no lease and serves beside the
+core. One-shot commands such as `innsegl retire` name no writer and append
+through the same serialized path.
 
 A frozen ledger refuses every append in the database itself (SQLSTATE
 `IN007`), whatever program asks. A core started on it logs `the ledger is
