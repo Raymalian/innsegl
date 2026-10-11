@@ -1,6 +1,6 @@
 # ADR-0076: The CA key store is unlocked by the operator's machine
 
-- Status: accepted
+- Status: accepted; amended 2026-10-11 by ADR-0082 (decisions 2, 5 and 6)
 - Date: 2026-10-07
 - Deciders: the operator
 - Amends: the key-custody overlay of #238 (how the store is unsealed, how the
