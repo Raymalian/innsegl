@@ -84,6 +84,8 @@ services are up. A failure exits 1 with the reason and one repair line:
 custody it also names `runbooks/ca-custody.md`, section "Signing stopped". Probe exit 36 (could not be set up) is
 reported as that, not as a signing failure. A stack with no Fulcio
 (`INNSEGL_FULCIO_URL` unset in the core) skips with `signing: not configured`.
+A core built before the probe existed is not checked before the update
+(`signing: not checked before the update`); that is no outage.
 
 Every `up` goes through `scripts/compose-up.py` (OPS-165). Compose recreates
 a service only when its own definition changes; a service that reads a key,

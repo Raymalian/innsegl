@@ -56,6 +56,13 @@ repair() {
 }
 
 if [ "$mode" = before ]; then
+	# The first update onto this code finds a core built before the probe:
+	# its `innsegl` refuses the subcommand (exit 2). That is no outage.
+	case $out in *'unknown subcommand "signing-probe"'*)
+		say "not checked before the update ($core was built before the signing probe)"
+		exit 0
+		;;
+	esac
 	case $rc in
 	0) echo "$out" ;;
 	36)

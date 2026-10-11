@@ -173,3 +173,27 @@ func TestOPS191ReportsASigningFailureThatPredatesTheUpdate(t *testing.T) {
 		t.Errorf("a healthy stack before the update says nothing alarming (exit %d):\n%s", rc, out)
 	}
 }
+
+// OPS-191: the first update onto this code finds a core built before the
+// probe existed. Its `innsegl` answers `signing-probe` with usage and exit 2.
+// MEASURED in the in-place rehearsal of #591: `before` read that as a signing
+// outage, printed "was already failing before the update" over the whole
+// usage text, and named a repair, on a core that signed. A core with no
+// probe is not checked before the update; it is not a failure.
+func TestOPS191ACoreBuiltBeforeTheProbeIsNotAFailure(t *testing.T) {
+	requireDocker(t, "OPS-191")
+	prefix := uniqueName(t, "ops191o")
+	fakeCore(t, prefix, true)
+	setProbe(t, prefix, 2, "innsegl: unknown subcommand \"signing-probe\"\n\nUsage:\n  innsegl <subcommand> [arguments]")
+
+	out, rc := runSigning(t, prefix, "before")
+	if rc != 0 {
+		t.Errorf("a core with no probe: want exit 0 before the update, got %d:\n%s", rc, out)
+	}
+	if strings.Contains(out, "already failing") || strings.Contains(out, "repair:") || strings.Contains(out, "Usage:") {
+		t.Errorf("a core with no probe is reported as a signing outage:\n%s", out)
+	}
+	if !strings.Contains(out, "signing: not checked before the update") {
+		t.Errorf("want one line saying it was not checked:\n%s", out)
+	}
+}
