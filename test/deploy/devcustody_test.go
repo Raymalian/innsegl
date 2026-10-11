@@ -22,14 +22,14 @@ import (
 // had, byte for byte: renaming a live store's volume would orphan the CA key.
 // ---------------------------------------------------------------------------
 
-// The custody overlays' live names, as they are on a running core. Nothing
-// that exists is renamed.
+// The custody overlays' live names, as they are on a running core. #585 adds
+// the CA's network and the token keeper; nothing that existed is renamed.
 var (
 	liveCustodyContainers = []string{"innsegl-ca-bootstrap", "innsegl-ca-custodian", "innsegl-ca-export",
-		"innsegl-ca-import", "innsegl-ca-store"}
+		"innsegl-ca-import", "innsegl-ca-store", "innsegl-ca-token-keeper"}
 	// innsegl-sigstore_default is the import profile's export one-shot's,
 	// which names no network.
-	liveCustodyNetworks = []string{"innsegl-ca-store", "innsegl-ca-unlock", "innsegl-sigstore_default"}
+	liveCustodyNetworks = []string{"innsegl-ca-sign", "innsegl-ca-store", "innsegl-ca-unlock", "innsegl-sigstore_default"}
 	liveCustodyVolumes  = []string{"innsegl-ca-token", "innsegl-sigstore_innsegl-ca-import-scratch",
 		"innsegl-sigstore_sigstore-fulcio-kms", "innsegl-trust-ca-custody", "innsegl-trust-ca-store"}
 	liveCoreCustodyNetworks = []string{"innsegl-ca-unlock"}

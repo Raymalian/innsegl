@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -11,7 +12,9 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -228,5 +231,79 @@ func TestOPS155RestoreNamesWhatItNeedsAndRefusesAStoreWithData(t *testing.T) {
 	}
 	if code, msg := run("restore", snap); code != exitCACustodyFailed || !strings.Contains(msg, "initialised") {
 		t.Fatalf("restore over a store with data: exit %d: %s", code, msg)
+	}
+}
+
+// freeLoopback is a loopback address nothing listens on yet.
+func freeLoopback(t *testing.T) string {
+	t.Helper()
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+func getCode(t *testing.T, url string) int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			return resp.StatusCode
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET %s: %v", url, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// OPS-188 (PROPOSED) — `serve` puts the CA's signing gateway on its own
+// listener, INNSEGL_CA_SIGN_LISTEN, which the overlay binds to the network
+// only the CA shares. The core's routes are not on it, and the gateway is not
+// on the core's listener: the core cannot ask for a CA signature.
+func TestOPS188ServeGivesTheGatewayItsOwnListener(t *testing.T) {
+	rs, store := newReadyStore(t)
+	rs.sealed = false
+	env := readyEnv(t, store.URL)
+	if err := os.WriteFile(env[envCATokenPath], []byte("hvs.ca-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	core, sign := freeLoopback(t), freeLoopback(t)
+	env[envCAListen], env[envCASignListen] = core, sign
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan int, 1)
+	var errOut bytes.Buffer
+	go func() {
+		done <- runCACustodian(ctx, []string{"serve"}, io.Discard, &errOut, func(k string) string { return env[k] })
+	}()
+	if code := getCode(t, "http://"+sign+"/v1/transit/keys/innsegl-ca"); code != http.StatusOK {
+		t.Errorf("the CA's key read through the gateway answered %d", code)
+	}
+	if code := getCode(t, "http://"+sign+"/status"); code != http.StatusForbidden {
+		t.Errorf("the core's /status on the CA's listener answered %d; want 403", code)
+	}
+	if code := getCode(t, "http://"+core+"/v1/transit/keys/innsegl-ca"); code == http.StatusOK {
+		t.Error("the gateway answers on the core's listener: the core could ask for CA signatures")
+	}
+	cancel()
+	select {
+	case code := <-done:
+		if code != exitOK {
+			t.Errorf("serve exited %d: %s", code, errOut.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("serve did not stop")
 	}
 }

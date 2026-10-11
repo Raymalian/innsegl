@@ -36,6 +36,11 @@ const (
 	envCAStoreKey   = "INNSEGL_CA_STORE_KEY"
 	envCAListen     = "INNSEGL_CA_CUSTODIAN_LISTEN"
 	envCAChainPath  = "INNSEGL_CA_CHAIN_PATH"
+	// envCASignListen is where the CA's signing gateway listens (#585).
+	// Unset, there is no gateway. The overlay names the custodian's alias on
+	// the network it shares with the CA alone, so the listener is bound to
+	// that network and the core, on the unlock network, cannot reach it.
+	envCASignListen = "INNSEGL_CA_SIGN_LISTEN"
 )
 
 // exitCACustodyFailed: the custodian could not start, or init failed.
@@ -50,7 +55,9 @@ const caCustodianUsage = `Usage:
 
 From the environment: ` + envCAStoreAddr + `, ` + envCARecipients + `,
 ` + envCADir + `, ` + envCATokenPath + `, ` + envCAStoreKey + ` (default innsegl-ca),
-` + envCAListen + ` (serve; default :8210), ` + envCAChainPath + ` (the CA's chain.pem; unset skips the key match).
+` + envCAListen + ` (serve; default :8210), ` + envCAChainPath + ` (the CA's chain.pem; unset skips the key match),
+` + envCASignListen + ` (serve; the CA's signing gateway, which forwards only its sign and key-read
+calls, with the current token; unset, no gateway).
 `
 
 func caCustodianCommand(args []string, stdout, stderr io.Writer) int {
@@ -115,7 +122,7 @@ func runCACustodian(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		return exitOK
 	}
-	return serveCACustodian(ctx, c, envOrDefault(getenv, envCAListen, ":8210"), stderr)
+	return serveCACustodian(ctx, c, envOrDefault(getenv, envCAListen, ":8210"), getenv(envCASignListen), stderr)
 }
 
 func custodianFromEnv(getenv func(string) string, log io.Writer) (*cacustody.Custodian, error) {
@@ -149,7 +156,7 @@ func custodianFromEnv(getenv func(string) string, log io.Writer) (*cacustody.Cus
 	}, nil
 }
 
-func serveCACustodian(ctx context.Context, c *cacustody.Custodian, listen string, stderr io.Writer) int {
+func serveCACustodian(ctx context.Context, c *cacustody.Custodian, listen, signListen string, stderr io.Writer) int {
 	st, err := c.Store.SealStatus(ctx)
 	if err != nil {
 		fprintf(stderr, "innsegl ca-custodian: %v\n", err)
@@ -168,13 +175,34 @@ func serveCACustodian(ctx context.Context, c *cacustody.Custodian, listen string
 		return exitCACustodyFailed
 	}
 	srv := &http.Server{Handler: c.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	servers := []*http.Server{srv}
+	if signListen != "" {
+		sl, err := lc.Listen(ctx, "tcp", signListen)
+		if err != nil {
+			discardListenerError(l.Close())
+			fprintf(stderr, "innsegl ca-custodian: the CA's signing gateway on %s: %v\n", signListen, err)
+			return exitCACustodyFailed
+		}
+		gw := &http.Server{Handler: c.SigningGateway(), ReadHeaderTimeout: 10 * time.Second}
+		servers = append(servers, gw)
+		go func() {
+			// A gateway that stops serving stops the custodian, so the
+			// container restarts rather than run with the CA cut off.
+			if err := gw.Serve(sl); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fprintf(stderr, "innsegl ca-custodian: the CA's signing gateway: %v\n", err)
+				discardListenerError(srv.Close())
+			}
+		}()
+	}
 	go c.RunRenewer(ctx, cacustody.RenewEvery)
 	go c.RunSnapshots(ctx, cacustody.SnapshotEvery)
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		discardListenerError(srv.Shutdown(shut))
+		for _, s := range servers {
+			discardListenerError(s.Shutdown(shut))
+		}
 	}()
 	if s := c.Status(ctx); s.Sealed {
 		fprintf(stderr, "innsegl ca-custodian: the store is sealed: the CA cannot sign until the operator's machine unlocks it\n")

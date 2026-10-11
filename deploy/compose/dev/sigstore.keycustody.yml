@@ -30,12 +30,16 @@ services:
     container_name: innsegl-dev-ca-bootstrap
   innsegl-ca-custodian:
     container_name: innsegl-dev-ca-custodian
+  innsegl-ca-token-keeper:
+    container_name: innsegl-dev-ca-token-keeper
 
 networks:
   innsegl-ca-store:
     name: innsegl-dev-ca-store
   innsegl-ca-unlock:
     name: innsegl-dev-ca-unlock
+  innsegl-ca-sign:
+    name: innsegl-dev-ca-sign
 
 volumes:
   innsegl-ca-import-scratch:
