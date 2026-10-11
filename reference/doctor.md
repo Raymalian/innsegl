@@ -32,7 +32,8 @@ The checks, in order:
 
 | Line | Source | Repair |
 |---|---|---|
-| `client service` | `/_client/status`: answers, runs this binary's build, not revoked, certificate not expired | restarts the service (`launchctl kickstart -k`, or `systemctl --user restart`) |
+| `host` | this machine's tools: git 2.31 or later, and each age plugin the identity file names ([client-and-connect.md](client-and-connect.md), Host dependencies) | none; each `MISSING` line names the install command for this OS. The checks after it run either way |
+| `client service` | `/_client/status`: answers, runs this binary's build, not revoked, certificate not expired | restarts the service (`launchctl kickstart -k`, or `systemctl --user restart`). A service still down is pointed at its log: `~/Library/Logs/innsegl-client.log` on macOS, `journalctl --user -u innsegl-client.service` on Linux |
 | `hooks` | each `--repo`: innsegl's `prepare-commit-msg`, `post-commit` and `reference-transaction` hooks | none; prints `innsegl link <repo>` |
 | `core` | `/_core/status` over the machine's certificate | none; prints a `VM:` line |
 | `clock` | the core answer's `Date` against this machine; more than 30 s apart is `SKEWED` | none; prints a `VM:` line |
@@ -41,6 +42,10 @@ The checks, in order:
 | `signing` | the signing probe's report | after an unlock, waits up to `--wait` for a probe that passed after it |
 
 The last line is `signing: OK (probe passed <time>)` when signing works.
+
+An age plugin's own prompt during the unlock (for example, to touch a key)
+is printed as a line starting `innsegl:`. `innsegl ca-custody unlock` and
+`innsegl trust-backup drill` print it the same way, on stderr.
 
 A run makes at most three custody calls. The core allows six per machine per
 ten minutes; past that, doctor says to run it again in ten minutes.
@@ -81,6 +86,11 @@ unlock` does ([ca-custody.md](ca-custody.md)).
   behaviour the token dies, and on the new a revoked token, and each is
   reported by the probe within two intervals; doctor repairs each with one
   unlock, no command run and no container restarted
+- `cmd/innsegl/doctorhost_test.go` (CLI-024, PROPOSED): the log hint on Linux
+  is the user journal; `cmd/innsegl/preflight_test.go` (CLI-027, PROPOSED):
+  the first line is the host check
+- `cmd/innsegl/pluginprompt_test.go` (BAK-031, PROPOSED): a fake age plugin's
+  message reaches the terminal
 
 ## Decisions
 

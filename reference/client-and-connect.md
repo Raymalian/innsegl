@@ -65,8 +65,11 @@ probe is `signing`: when it fails, one line, `signing: FAILING since <time>
 `sigstore` line means only that Fulcio and Rekor answer.
 
 The client service reads the signing probe from the core every minute and
-shows a macOS notification on the first failure of an outage, and a log line;
-nothing more until signing has worked again. `GET /_client/status` carries
+shows a desktop notification on the first failure of an outage, and a log
+line; nothing more until signing has worked again. On macOS the notification
+comes from Notification Centre; on Linux from `notify-send`, with the text as
+arguments. Without `notify-send` nothing is shown, and the log says so once.
+Elsewhere only the log line is written. `GET /_client/status` carries
 the last reading as `signing` (`up`, `detail`, and while it fails `since` and
 `reason`); it is absent before the first reading and while the core does not
 answer. The commit hook reads it to say in a refusal since when signing is
@@ -112,7 +115,38 @@ Also `~/.innsegl/trust-backups/` and `~/.innsegl/trust-backup/identity.txt`
 (see [trust-key-backup.md](trust-key-backup.md)).
 
 The user service: LaunchAgent `dev.innsegl.client` on macOS, systemd user
-unit `innsegl-client.service` on Linux (`internal/client/service.go`).
+unit `innsegl-client.service` on Linux (`internal/client/service.go`). Its
+log: `~/Library/Logs/innsegl-client.log` on macOS; `journalctl --user -u
+innsegl-client.service` on Linux.
+
+The service unlocks the CA key store itself (ADR-0076), with the age plugin
+the identity file names (`age-plugin-<name>`). A service manager gives a
+service a short default PATH (launchd: `/usr/bin:/bin:/usr/sbin:/sbin`), which
+does not hold the usual plugin directories. So `innsegl connect` resolves
+each plugin on its own PATH and writes the plugin's directory into the
+service definition's PATH, after the default (`EnvironmentVariables` in the
+plist, `Environment="PATH=…"` in the unit). It writes no PATH when the default
+already finds every plugin. After installing a plugin, or moving it, run
+`innsegl connect --update --service`.
+
+### Host dependencies
+
+`innsegl connect` (enrolment and `--update`) checks the host first and names
+everything missing in one run, each with one install command for this OS. It
+installs nothing. A missing required tool stops it before anything is
+written. `innsegl doctor`'s first line is the same check: `host: ok`, or one
+`host: MISSING` line per tool. The core host's tools are checked by
+`install.sh` ([stack-and-make.md](stack-and-make.md)).
+
+| Tool | Needed for | macOS | Debian/Ubuntu | Fedora |
+|---|---|---|---|---|
+| git 2.31 or later | hooks, linking, signing (required) | `xcode-select --install` | `sudo apt-get install -y git` | `sudo dnf install -y git` |
+| `age-plugin-<name>` named in the identity file | the CA unlock and backup restore | `brew install age-plugin-se` | `cargo install age-plugin-yubikey` | `cargo install age-plugin-yubikey` |
+| `notify-send` | the signing-down notification (optional) | — | `sudo apt-get install -y libnotify-bin` | `sudo dnf install -y libnotify` |
+
+A Secure Enclave identity (`age-plugin-se`) works on macOS only. A missing
+plugin does not stop connect: it is named, and the CA unlock fails until it
+is installed.
 
 Local routes: `GET /_client/status`, and `/_client/core/<core path>` for the
 CLI (below). Core routes it calls: `/_core/enrol`, `/_core/renew`,
@@ -215,6 +249,13 @@ says to revoke the machine from the Account page.
 - `internal/client/unrouted_test.go`, `cmd/innsegl/status_test.go` (HAR-022)
 - `internal/client/signingwatch_test.go`, `cmd/innsegl/status_test.go` (SIG-015, PROPOSED)
 - `internal/accounts/enrol_test.go` (KEY-001 to KEY-005)
+- `internal/client/hostos_test.go` (CLI-024, CLI-026, PROPOSED: the log hint
+  per OS; `notify-send` on Linux, and said once when it is absent)
+- `internal/client/servicepath_test.go`, `cmd/innsegl/connectpath_test.go`
+  (CLI-025, PROPOSED: the plugin's directory in the service's PATH)
+- `internal/hostdeps/hostdeps_test.go`, `cmd/innsegl/preflight_test.go`
+  (CLI-027, PROPOSED: every missing tool named in one run, with this OS's
+  command; connect refuses before writing anything)
 
 ## Decisions
 
