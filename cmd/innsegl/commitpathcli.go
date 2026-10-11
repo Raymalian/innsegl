@@ -33,6 +33,7 @@ const (
 	hookUsage    = "usage: innsegl hook pre-tool-use | post-tool-use | session\n"
 	gitHookUsage = "usage: innsegl git-hook prepare-commit-msg <message file> [<source> [<sha>]]\n" +
 		"       innsegl git-hook post-commit\n" +
+		"       innsegl git-hook reference-transaction prepared|committed|aborted   (run by git; ref updates on stdin)\n" +
 		"       innsegl git-hook push-mirror <dir> branch|snapshot <core url> ...   (started by the hooks, detached)\n"
 	signUsage = "usage: innsegl sign --status-fd=<fd> -bsau <key>   (run by git as gpg.x509.program)\n"
 )
@@ -62,6 +63,9 @@ func gitHookCommand(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) >= 1 && args[0] == "post-commit" {
 		return runGitHookPostCommit(context.Background(), ".", os.Getenv, stderr)
+	}
+	if len(args) >= 1 && args[0] == "reference-transaction" {
+		return runGitHookReferenceTransaction(context.Background(), ".", args[1:], os.Stdin, os.Getenv, stderr)
 	}
 	if len(args) >= 1 && args[0] == "push-mirror" {
 		return runGitHookPushMirror(args[1:], stderr)

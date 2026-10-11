@@ -22,9 +22,11 @@ import (
 // configuration (hook.go). A human's own `git commit` in a linked repository
 // is unaffected either way — see githook.go's own doc comment for CMT-004.
 //
-// This command touches exactly two things: the repository's prepare-commit-msg
-// and post-commit hooks (the second sends a signed commit's branch to a hosted
-// core's mirror, #465), each found through `git rev-parse --git-path hooks/<name>`,
+// This command touches exactly three things: the repository's
+// prepare-commit-msg, post-commit (it sends a signed commit's branch to a
+// hosted core's mirror, #465) and reference-transaction hooks (the ref
+// backstop: an agent session's branch never takes an unsigned commit, #584),
+// each found through `git rev-parse --git-path hooks/<name>`,
 // which resolves core.hooksPath the same way any other git command would.
 // Nothing else about the repository — no git config key, no other hook, no
 // file outside the hooks directory — is read or written.
@@ -77,7 +79,7 @@ func runLinkCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 			"(#390)\n\n")
 		fprintf(stderr, "So an agent's git commit in this repository carries the run's trailers and "+
 			"its\nsigning configuration; a human's own commit here is unaffected either way. "+
-			"After a\nsigned commit, its branch is sent to a hosted core's mirror. Touches nothing about\nthe repository except its prepare-commit-msg and post-commit hooks.\n\n")
+			"After a\nsigned commit, its branch is sent to a hosted core's mirror. In an agent session, a\nbranch update that would add an unsigned commit is refused. Touches nothing about\nthe repository except its prepare-commit-msg, post-commit and reference-transaction\nhooks.\n\n")
 		fprintf(stderr, "Usage:\n  innsegl link <repo dir>\n  innsegl link -remove <repo dir>\n\n")
 		fprintf(stderr, "Flags:\n")
 		fs.PrintDefaults()
@@ -114,7 +116,8 @@ func linkHookPaths(ctx context.Context, repo string) (hookPath, previousPath str
 
 // managedHook is one git hook `innsegl link` installs: prepare-commit-msg
 // for the run's trailers and signing (#390), and post-commit, which sends a
-// signed commit's branch to a hosted core's mirror (#465, ADR-0065).
+// signed commit's branch to a hosted core's mirror (#465, ADR-0065), and
+// reference-transaction, the ref backstop (#584, hookreftx.go).
 type managedHook struct {
 	name   string
 	marker string
@@ -124,6 +127,7 @@ type managedHook struct {
 var managedHooks = []managedHook{
 	{name: "prepare-commit-msg", marker: linkHookMarker, script: linkHookScript},
 	{name: "post-commit", marker: linkPostCommitMarker, script: linkPostCommitScript},
+	{name: "reference-transaction", marker: linkRefTxMarker, script: linkRefTxScript},
 }
 
 // linkHookPathsFor resolves one hook's path and where an existing one is
