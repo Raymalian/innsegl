@@ -157,8 +157,11 @@ func newConnectFixture(t *testing.T) *connectFixture {
 	f.deps = connectDeps{
 		home:    f.home,
 		binPath: func() (string, error) { return connectTestBin, nil },
-		goos:    "darwin",
-		uid:     501,
+		// connectTestBin stands for an installed copy no user can change
+		// (#599); connectrelease_test.go tests the changeable kind.
+		writable: func(string) string { return "" },
+		goos:     "darwin",
+		uid:      501,
 		run: func(name string, args ...string) error {
 			f.calls = append(f.calls, append([]string{name}, args...))
 			return nil
