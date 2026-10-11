@@ -30,7 +30,7 @@ const exitCACustodySealed = 28
 
 const caCustodyUsage = `Usage:
   innsegl ca-custody status                 say whether the core's CA can sign
-  innsegl ca-custody unlock [--identity F]  unlock it if it is sealed (asks for Touch ID)
+  innsegl ca-custody unlock [--identity F]  unlock it, or repair a dead token, when the CA cannot sign (asks for Touch ID)
 `
 
 func caCustodyCommand(args []string, stdout, stderr io.Writer) int {
@@ -88,6 +88,17 @@ func runCACustody(ctx context.Context, args []string, stdout, stderr io.Writer, 
 			fprintf(stdout, "ca custody: unlocked; the CA can sign\n")
 		}
 		return exitOK
+	}
+	if st, err := client.CAStatus(ctx, paths); err == nil && st.Enabled {
+		switch {
+		case st.Sealed:
+			fprintf(stdout, "ca custody: repairing: the store is sealed\n")
+		case !st.CanSign && st.Reason != "":
+			fprintf(stdout, "ca custody: repairing: %s\n", st.Reason)
+		case !st.CanSign:
+			fprintf(stdout, "ca custody: the core does not say whether its CA can sign; "+
+				"update the core to repair an unsealed store\n")
+		}
 	}
 	unlocked, err := client.UnlockCA(ctx, paths, func() ([]age.Identity, error) {
 		return trustbackup.LoadIdentities(*identity, nil)

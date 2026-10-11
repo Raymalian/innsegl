@@ -69,6 +69,8 @@ func (c *coreCustody) mount(t *testing.T, core *clienttest.Core) {
 		}
 		c.unlocked = b
 		c.status.Sealed = false
+		c.status.CanSign = true
+		c.status.Reason = ""
 		w.WriteHeader(http.StatusNoContent)
 	})
 }
@@ -129,6 +131,50 @@ func TestBAK027NoTouchIDWhenThereIsNothingToUnlock(t *testing.T) {
 				t.Fatalf("unlocked=%v err=%v asked=%v fetches=%d", unlocked, err, asked, cc.fetches.Load())
 			}
 		})
+	}
+}
+
+// CLI-022 — an unsealed store whose CA token is dead is repaired by the same
+// unlock: the core reports can_sign false, the operator's machine opens the
+// material and sends it, and the CA can sign again. The service offers the
+// prompt for it too. A core too old to say whether it can sign keeps today's
+// behaviour on an unsealed store (BAK-027).
+func TestCLI022UnlockRepairsADeadTokenOnAnUnsealedStore(t *testing.T) {
+	core, paths := enrolledServed(t)
+	cc, id, m := sealedCustody(t)
+	cc.status = cacustody.CoreStatus{Enabled: true, Initialized: true,
+		Reason: "the CA's token was refused by the store"}
+	cc.mount(t, core)
+
+	unlocked, err := UnlockCA(t.Context(), paths, identitiesOf(id))
+	if err != nil || !unlocked {
+		t.Fatalf("UnlockCA = %v, %v", unlocked, err)
+	}
+	var sent cacustody.Material
+	if err = json.Unmarshal(cc.unlocked, &sent); err != nil || sent != m {
+		t.Fatalf("the core was sent %q, want the opened material", cc.unlocked)
+	}
+	st, err := CAStatus(t.Context(), paths)
+	if err != nil || !st.CanSign {
+		t.Fatalf("after the unlock: %+v, %v; want CanSign", st, err)
+	}
+
+	// The service offers the prompt for a dead token.
+	core2, paths2 := enrolledServed(t)
+	cc2, _, _ := sealedCustody(t)
+	cc2.status = cacustody.CoreStatus{Enabled: true, Initialized: true, Reason: "has expired"}
+	cc2.mount(t, core2)
+	s, err := NewServer(paths2, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asked atomic.Int32
+	ids := func() ([]age.Identity, error) { asked.Add(1); return nil, errors.New("declined") }
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	s.RunCAUnlock(ctx, ids, 10*time.Millisecond, time.Hour)
+	if asked.Load() != 1 {
+		t.Fatalf("the service asked %d times for a dead token; want once", asked.Load())
 	}
 }
 
