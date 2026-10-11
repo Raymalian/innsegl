@@ -144,7 +144,7 @@ SIGSTORE_FILES := -f deploy/compose/sigstore.yml$(if $(DEV_OVERLAY), $(call DEV_
 # the file CA and says so (OPS-149).
 COMPOSE_ENV_FILE ?= deploy/compose/.env
 CA_CUSTODY := $(shell grep -qsx 'INNSEGL_CA_CUSTODY=on' '$(COMPOSE_ENV_FILE)' && echo on)
-INNSEGL_FILES  := -f deploy/compose/innsegl.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,innsegl.yml))$(if $(CA_CUSTODY), -f deploy/compose/innsegl.custody.yml)
+INNSEGL_FILES  := -f deploy/compose/innsegl.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,innsegl.yml))$(if $(CA_CUSTODY), -f deploy/compose/innsegl.custody.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,innsegl.custody.yml)))
 
 INNSEGL_TRUST_ENV := $(shell $(STACK_SHELL_ENV) deploy/compose/trust-volumes.sh env | tr '\n' ' ')
 GUARD             := scripts/teardown-guard.sh
@@ -765,7 +765,7 @@ update:
 	@docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-spire-server && docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-sigstore-rekor || \
 	  { echo "make update: SPIRE or Rekor is not running; run make start"; exit 2; }
 	@deployed=$$(cat '$(DEPLOYED_FILE)' 2>/dev/null); \
-	 down=""; for c in $(STACK_PREFIX)-mcp $(if $(CA_CUSTODY),innsegl-ca-store innsegl-ca-custodian); do \
+	 down=""; for c in $(STACK_PREFIX)-mcp $(if $(CA_CUSTODY),$(STACK_PREFIX)-ca-store $(STACK_PREFIX)-ca-custodian); do \
 	   st=$$(docker inspect -f '{{.State.Status}} restarting={{.State.Restarting}}' $$c 2>/dev/null); \
 	   [ "$$st" = "running restarting=false" ] || down="$$down $$c"; \
 	 done; \
@@ -817,7 +817,17 @@ link:
 # something on this machine can read, which is the property this rung exists to
 # remove. Losing the unseal key loses the CA exactly as losing a key file would
 # — the same loss, a different custodian, and the custodian is now a person.
-CA_CUSTODY_COMPOSE = -f deploy/compose/sigstore.yml -f deploy/compose/sigstore.keycustody.yml
+#
+# A DEV STACK RUNS CUSTODY UNDER ITS OWN NAMES (#585). The compose files gain
+# the dev overlays, and every container and trust volume named here follows
+# STACK_PREFIX: innsegl-ca-store, innsegl-trust-ca-store and the rest on a live
+# core, exactly as before; innsegl-dev-* on a dev stack, which can then never
+# open, unlock or empty a live store (test/deploy OPS-129).
+CA_CUSTODY_COMPOSE = $(SIGSTORE_FILES) -f deploy/compose/sigstore.keycustody.yml$(if $(DEV_OVERLAY), $(call DEV_OVERLAY,sigstore.keycustody.yml))
+CA_CUSTODY_STORE_VOLUME   = $(STACK_PREFIX)-trust-ca-store
+CA_CUSTODY_DATA_VOLUME    = $(STACK_PREFIX)-trust-ca-custody
+CA_CUSTODY_CUSTODIAN      = $(STACK_PREFIX)-ca-custodian
+CA_CUSTODY_STORE          = $(STACK_PREFIX)-ca-store
 
 # Every service of sigstore.yml but Fulcio: with custody on, Fulcio is brought
 # up by ca-custody-up, under the overlay or left on the file CA.
@@ -839,12 +849,12 @@ ca-custody-up: innsegl-trust-volumes ca-custody-volumes innsegl-images
 ## ca-custody-volumes: ADR-0076 — the store's data and the sealed unlock
 ##   material, trust-root volumes the teardown guard refuses to remove
 ca-custody-volumes:
-	@for v in innsegl-trust-ca-store innsegl-trust-ca-custody; do \
+	@for v in $(CA_CUSTODY_STORE_VOLUME) $(CA_CUSTODY_DATA_VOLUME); do \
 	   docker volume inspect "$$v" >/dev/null 2>&1 || \
 	   docker volume create --label dev.innsegl.trust-root="the CA key store and its sealed unlock material (ADR-0076)" "$$v" >/dev/null || exit 1; \
 	 done
 	@# The custodian runs as the CA's uid and writes the sealed material here.
-	@docker run --rm -v innsegl-trust-ca-custody:/d $(CA_CUSTODY_CHOWN_IMAGE) chown 65532:65532 /d
+	@docker run --rm -v $(CA_CUSTODY_DATA_VOLUME):/d $(CA_CUSTODY_CHOWN_IMAGE) chown 65532:65532 /d
 
 CA_CUSTODY_CHOWN_IMAGE = alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
 # The volume the store's root and Fulcio's issuer config live in under custody.
@@ -859,7 +869,7 @@ ca-custody-reset:
 
 ## ca-custody-ready: exit 0 when the store is unlocked and the CA has a token
 ca-custody-ready:
-	@docker exec innsegl-ca-custodian innsegl ca-custodian ready
+	@docker exec $(CA_CUSTODY_CUSTODIAN) innsegl ca-custodian ready
 
 ## ca-custody-stage: mint the store's root, if there is none, and print it
 ca-custody-stage: innsegl-trust-volumes
@@ -879,9 +889,9 @@ ca-custody-restore: innsegl-trust-volumes
 	@# The custodian initialises any new store it finds, so it is stopped first.
 	-$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) stop innsegl-ca-custodian innsegl-ca-store
 	-$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) rm -f innsegl-ca-custodian innsegl-ca-store
-	docker volume rm innsegl-trust-ca-store
+	docker volume rm $(CA_CUSTODY_STORE_VOLUME)
 	@$(MAKE) --no-print-directory ca-custody-volumes
-	docker run --rm -v innsegl-trust-ca-custody:/c -v '$(abspath $(FROM))/ca-custody:/in:ro' $(CA_CUSTODY_CHOWN_IMAGE) \
+	docker run --rm -v $(CA_CUSTODY_DATA_VOLUME):/c -v '$(abspath $(FROM))/ca-custody:/in:ro' $(CA_CUSTODY_CHOWN_IMAGE) \
 	  sh -c 'mkdir -p /c/material && cp /in/unlock.age /c/material/unlock.age && chown -R 65532:65532 /c && chmod 0600 /c/material/unlock.age'
 	$(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(CA_CUSTODY_COMPOSE) up -d --no-deps innsegl-ca-store
 	$(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) run --rm --no-deps \
@@ -920,9 +930,8 @@ ca-custody-back: innsegl-trust-volumes
 
 ## innsegl-ca-custody-init: once — start the store and mint its keys
 innsegl-ca-custody-init: innsegl-trust-volumes
-	@test '$(INNSEGL_STACK_MODE)' = live || { echo 'innsegl-ca-custody-init: key custody is for a live core; a DEV stack keeps the file CA (ADR-0072)'; exit 2; }
 	$(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(CA_CUSTODY_COMPOSE) up -d innsegl-ca-store
-	@scripts/ca-custody.sh init
+	@INNSEGL_CA_STORE_CONTAINER='$(CA_CUSTODY_STORE)' scripts/ca-custody.sh init
 
 ## innsegl-ca-rotate: replace the Fulcio CA; the old root stays trusted for what
 ##   it signed. CONFIRM=rotate MODE=retire|revoke REASON='...'
