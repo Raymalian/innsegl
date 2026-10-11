@@ -34,6 +34,7 @@ import {
 import { MembersSection } from "./AccountMembers";
 import { OrganisationSignInSection } from "./AccountSSO";
 import { RecoveryCodesStep } from "./RecoveryCodesStep";
+import { UnlockKeys } from "../unlock/UnlockKeys";
 import { AccountSection, CopyButton, SectionStatus, useSectionLoad, wordFor } from "./accountShared";
 import {
   AuthRequestError,
@@ -208,6 +209,7 @@ function AccountLoaded({
       )}
 
       <ProfileSection account={account} reload={reload} />
+      <UnlockKeys organisations={account.organisations} browser={browser} />
       <PrivilegesSection organisations={account.organisations} />
       <MachinesSection organisations={account.organisations} browser={browser} />
       <MembersSection organisations={account.organisations} browser={browser} />

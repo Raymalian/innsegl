@@ -322,6 +322,10 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
         if (machineList === "unavailable") return unavailable();
         return respond({ organisation_id: "org-1", configured: false, has_client_secret: false, can_manage: false });
       }
+      if (url.includes("/account/unlock-keys") || url.includes("/account/ca-custody")) {
+        // #616: an API without the unlock routes; the section stays away.
+        return respond({ error: { code: "not_found", message: "not found" } }, 404);
+      }
       throw new Error(`unexpected fetch ${method} ${url}`);
     }),
   );

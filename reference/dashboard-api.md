@@ -126,6 +126,21 @@ fingerprints only. Answers: 409 with no active key of yours, or a set
 already current; 503 with custody off or the custodian not answering; the
 custodian's own 400, 403 or 409 for material or a set it refuses.
 
+On the account page (#616), an owner or admin of the operator's
+organisation sees an **Unlock keys** section: each key with its state,
+custody fingerprint, added and last-used dates; **Add a security key**;
+and **Revoke**, after a confirmation and a fresh passkey. Until one key is
+active, the section shows the command that applies a pending key from the
+operator machine, `innsegl ca-custody reseal --add <custody recipient>`.
+When `GET /api/v1/account/ca-custody` reports `can_sign: false`, a banner
+says so and opens the unlock page (also at `/account?unlock`): touch an
+active key, and the browser derives its identity from the PRF, opens
+`sealed` with the pinned `age-encryption` library (pure JavaScript, no
+eval or WebAssembly, loaded only on the first unlock), and sends the
+material with the assertion. Safari and every iOS browser are told to use
+Chrome, Edge or Firefox; a key or browser that returns no PRF stops there,
+with nothing sent on.
+
 ### Organisation sign-in
 
 An organisation's owner can let its members sign in through the
