@@ -23,6 +23,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/hostdeps"
+	"innsegl.dev/innsegl/internal/trustbackup"
 )
 
 // `innsegl connect` — RM-285 (#461), ADR-0063 decisions 2 and 4. One
@@ -327,21 +328,46 @@ func (d connectDeps) service() client.Service {
 	return client.Service{GOOS: d.goos, Home: d.home, UID: d.uid, Run: d.run}
 }
 
-// serviceToInstall is service() with the PATH the client service needs to
-// run the age plugins the operator's identity file names (CLI-025, #592):
-// their directories as this shell resolves them now.
-func (d connectDeps) serviceToInstall(stderr io.Writer) client.Service {
-	svc := d.service()
-	idFile := client.ClientPaths(d.home).TrustIdentity
-	path, missing, err := client.ServicePATH(d.goos, idFile, d.look())
+// pinPlugins resolves each age plugin the operator's identity file names,
+// as this shell finds it now, and records its absolute path and SHA-256 in
+// the client folder (#598). Every later use runs only that file. A plugin
+// not found, or one someone other than its owner could replace, is not
+// pinned and is named here; using it is then refused until it is fixed and
+// connect pins it. It answers the pins written and the ones there before.
+func (d connectDeps) pinPlugins(stdout, stderr io.Writer) (pins, before []trustbackup.PluginPin) {
+	paths := client.ClientPaths(d.home)
+	file := client.PluginPinsFile(paths)
+	before, err := trustbackup.ReadPluginPins(file)
 	if err != nil {
-		fprintf(stderr, "innsegl connect: reading %s: %v; the client service keeps its default PATH\n", idFile, err)
+		fprintf(stderr, "innsegl connect: %v; it is replaced\n", err)
 	}
-	for _, m := range missing {
-		fprintf(stderr, "innsegl connect: %s is not on PATH, so the client service cannot unlock the CA with it; "+
-			"install it, then run `innsegl connect --update --service`\n", m)
+	pins, problems, err := client.PinPlugins(paths.TrustIdentity, d.look())
+	if err != nil {
+		fprintf(stderr, "innsegl connect: reading %s: %v; no age plugin is pinned\n", paths.TrustIdentity, err)
 	}
-	svc.PATH = path
+	for _, p := range problems {
+		fprintf(stderr, "innsegl connect: %s; the CA cannot be unlocked with it until it is pinned\n", p)
+	}
+	if err := os.MkdirAll(paths.Dir, 0o700); err != nil {
+		fprintf(stderr, "innsegl connect: %v\n", err)
+		return before, before
+	}
+	if err := trustbackup.WritePluginPins(file, pins); err != nil {
+		fprintf(stderr, "innsegl connect: recording the age plugins: %v\n", err)
+		return before, before
+	}
+	for _, p := range pins {
+		fprintf(stdout, "innsegl connect: pinned age-plugin-%s at %s (sha256 %s)\n", p.Name, p.Path, p.SHA256)
+	}
+	return pins, before
+}
+
+// serviceToInstall is service() with the PATH the client service needs to
+// run the pinned age plugins (CLI-025, #592; #598): each pinned file's own
+// directory.
+func (d connectDeps) serviceToInstall(pins []trustbackup.PluginPin) client.Service {
+	svc := d.service()
+	svc.PATH = client.ServicePATH(d.goos, pins)
 	return svc
 }
 
@@ -447,11 +473,18 @@ func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer
 		mode = "hardened"
 	}
 	fprintf(stdout, "innsegl connect: managed settings %s are %s\ninnsegl connect: restart Claude Code for it to take effect\n", f.settings, mode)
+	// #598: --update is the repair for a refused plugin, so it pins again.
+	// The service reads the pins at each unlock; only its PATH is fixed at
+	// start, so a pinned plugin whose directory moved (an upgrade) rewrites
+	// and restarts an installed service on its own.
+	pins, before := deps.pinPlugins(stdout, stderr)
+	_, statErr := os.Stat(deps.service().Path())
+	moved := statErr == nil && client.ServicePATH(deps.goos, pins) != client.ServicePATH(deps.goos, before)
 	// ADR-0076: a machine enrolled before a change to the service definition
-	// gets it here, without a token. Only when asked: RM-312's --update
-	// changes no service on its own.
-	if f.service {
-		if err := deps.serviceToInstall(stderr).Install(settings.HookBin); err != nil {
+	// gets it here, without a token. Otherwise only when asked: RM-312's
+	// --update changes no service on its own.
+	if f.service || moved {
+		if err := deps.serviceToInstall(pins).Install(settings.HookBin); err != nil {
 			fprintf(stderr, "innsegl connect: reinstalling the client service: %v\n", err)
 			return exitConnectFailed
 		}
@@ -600,10 +633,11 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 	}
 
 	failed := false
+	pins, _ := deps.pinPlugins(stdout, stderr)
 	if f.noService {
 		fprintf(stdout, "innsegl connect: --no-service: run `%s client serve` yourself; the managed settings point at http://%s\n",
 			settings.HookBin, f.listen)
-	} else if err := deps.serviceToInstall(stderr).Install(settings.HookBin); err != nil {
+	} else if err := deps.serviceToInstall(pins).Install(settings.HookBin); err != nil {
 		fprintf(stderr, "innsegl connect: installing the client service: %v\n"+
 			"  Run `%s client serve` yourself until it is fixed.\n", err, settings.HookBin)
 		failed = true

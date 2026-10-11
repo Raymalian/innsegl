@@ -11,6 +11,8 @@ import (
 
 	"filippo.io/age"
 	"filippo.io/age/plugin"
+
+	"innsegl.dev/innsegl/internal/trustbackup"
 )
 
 // CLI-025 (PROPOSED for doc 07, #592) — the client service unlocks the CA
@@ -41,22 +43,57 @@ func lookIn(dirs map[string]string) func(string) (string, error) {
 	}
 }
 
-func TestCLI025ThePluginDirectoryIsAddedToTheServicePATH(t *testing.T) {
-	id := writeIdentityFile(t, "# created: today", plugin.EncodeIdentity("se", []byte("handle")))
-	look := lookIn(map[string]string{"age-plugin-se": "/opt/plugins/bin"})
-
-	got, missing, err := ServicePATH("darwin", id, look)
-	if err != nil || len(missing) != 0 {
-		t.Fatalf("ServicePATH = %q, %v, %v", got, missing, err)
-	}
-	if want := DefaultServicePATH("darwin") + ":/opt/plugins/bin"; got != want {
-		t.Fatalf("darwin PATH = %q, want %q", got, want)
-	}
-	if got, _, err = ServicePATH("linux", id, look); err != nil {
+// pluginFile writes an executable stand-in for age-plugin-<name> in a fresh
+// 0755 directory and answers the directory.
+func pluginFile(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "plugins", "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if want := DefaultServicePATH("linux") + ":/opt/plugins/bin"; got != want {
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "age-plugin-"+name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
+func TestCLI025ThePinnedPluginDirectoryIsAddedToTheServicePATH(t *testing.T) {
+	id := writeIdentityFile(t, "# created: today", plugin.EncodeIdentity("se", []byte("handle")))
+	dir := pluginFile(t, "se")
+	pins, problems, err := PinPlugins(id, lookIn(map[string]string{"age-plugin-se": dir}))
+	if err != nil || len(problems) != 0 || len(pins) != 1 {
+		t.Fatalf("PinPlugins = %+v, %v, %v", pins, problems, err)
+	}
+	if pins[0].Path != filepath.Join(dir, "age-plugin-se") || len(pins[0].SHA256) != 64 {
+		t.Fatalf("pin = %+v", pins[0])
+	}
+	if got, want := ServicePATH("darwin", pins), DefaultServicePATH("darwin")+":"+dir; got != want {
+		t.Fatalf("darwin PATH = %q, want %q", got, want)
+	}
+	if got, want := ServicePATH("linux", pins), DefaultServicePATH("linux")+":"+dir; got != want {
 		t.Fatalf("linux PATH = %q, want %q", got, want)
+	}
+}
+
+// CLI-046 (#598): a plugin anyone but its owner could replace is not pinned
+// at connect, and the reason is named.
+func TestCLI046ConnectDoesNotPinAWritablePlugin(t *testing.T) {
+	id := writeIdentityFile(t, plugin.EncodeIdentity("se", []byte("h")))
+	dir := pluginFile(t, "se")
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	pins, problems, err := PinPlugins(id, lookIn(map[string]string{"age-plugin-se": dir}))
+	if err != nil || len(pins) != 0 || len(problems) != 1 || !strings.Contains(problems[0], "writable") ||
+		!strings.Contains(problems[0], "innsegl connect --update") {
+		t.Fatalf("PinPlugins = %+v, %v, %v; want the writable directory named", pins, problems, err)
 	}
 }
 
@@ -66,24 +103,26 @@ func TestCLI025NoPATHWhenTheDefaultFindsEveryPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, id := range map[string]string{
-		"no identity file":     filepath.Join(t.TempDir(), "absent.txt"),
-		"an X25519 key":        writeIdentityFile(t, x.String()),
-		"a plugin in /usr/bin": writeIdentityFile(t, plugin.EncodeIdentity("yubikey", []byte("h"))),
+		"no identity file": filepath.Join(t.TempDir(), "absent.txt"),
+		"an X25519 key":    writeIdentityFile(t, x.String()),
 	} {
-		got, missing, err := ServicePATH("darwin", id, lookIn(map[string]string{"age-plugin-yubikey": "/usr/bin"}))
-		if err != nil || got != "" || len(missing) != 0 {
-			t.Errorf("%s: ServicePATH = %q, %v, %v; want no PATH", name, got, missing, err)
+		pins, problems, err := PinPlugins(id, lookIn(nil))
+		if err != nil || len(pins) != 0 || len(problems) != 0 || ServicePATH("darwin", pins) != "" {
+			t.Errorf("%s: PinPlugins = %+v, %v, %v; want nothing pinned and no PATH", name, pins, problems, err)
 		}
+	}
+	if got := ServicePATH("darwin", []trustbackup.PluginPin{{Name: "yubikey", Path: "/usr/bin/age-plugin-yubikey"}}); got != "" {
+		t.Errorf("a plugin in /usr/bin: PATH = %q; want none", got)
 	}
 }
 
 func TestCLI025APluginNotFoundIsNamed(t *testing.T) {
 	id := writeIdentityFile(t, plugin.EncodeIdentity("se", []byte("h")))
-	got, missing, err := ServicePATH("darwin", id, lookIn(nil))
-	if err != nil || got != "" || len(missing) != 1 || missing[0] != "age-plugin-se" {
-		t.Fatalf("ServicePATH = %q, %v, %v; want age-plugin-se missing", got, missing, err)
+	pins, problems, err := PinPlugins(id, lookIn(nil))
+	if err != nil || len(pins) != 0 || len(problems) != 1 || !strings.Contains(problems[0], "age-plugin-se") {
+		t.Fatalf("PinPlugins = %+v, %v, %v; want age-plugin-se named", pins, problems, err)
 	}
-	if _, _, err := ServicePATH("darwin", writeIdentityFile(t, "AGE-PLUGIN-SE-1QQQ"), lookIn(nil)); err == nil {
+	if _, _, err := PinPlugins(writeIdentityFile(t, "AGE-PLUGIN-SE-1QQQ"), lookIn(nil)); err == nil {
 		t.Fatal("a broken identity line was accepted")
 	}
 }

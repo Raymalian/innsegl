@@ -91,6 +91,14 @@ Fulcio's signing gateway:
 | `INNSEGL_CA_CUSTODIAN_URL` | | where the core reaches the custodian |
 | `ca-custody --identity` | `~/.innsegl/trust-backup/identity.txt` | the age identity that opens the material |
 
+A plugin identity runs its plugin only as `innsegl connect` pinned it, by
+absolute path and SHA-256, in `~/.innsegl/client/age-plugins.json` (#598). The
+pin is checked before every unlock, by the CLI and by the client service. A
+plugin that has changed, that PATH finds somewhere else, or that is writable
+by someone other than its owner is refused. Repair: check that it is the
+plugin you installed, then run `innsegl connect --update`. See
+[client-and-connect.md](client-and-connect.md).
+
 The custodian renews the CA token when it starts and every 15 minutes after.
 The token period is 24 hours, so the token dies only when no custodian has
 run for a day, however often the custodian is recreated. A refused renewal is

@@ -127,44 +127,60 @@ func DefaultServicePATH(goos string) string {
 	return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 }
 
-// ServicePATH is the PATH the client service needs to run the age plugins
-// the operator's identity file names (CLI-025, #592): the service manager's
-// default with each plugin's directory, as lookPath resolves it now, added
-// after it. It is empty when the default already finds every plugin, or
-// when there is no identity file or no plugin identity in it. missing names
-// each plugin lookPath did not find.
-func ServicePATH(goos, identityFile string, lookPath func(string) (string, error)) (path string, missing []string, err error) {
+// PluginPinsFile is where connect records the age plugins it pinned
+// (#598): beside core.json, in the client's 0700 folder.
+func PluginPinsFile(p Paths) string {
+	return filepath.Join(p.Dir, "age-plugins.json")
+}
+
+// PinPlugins resolves each age plugin the operator's identity file names,
+// once, as lookPath finds it now, and pins its file and hash (CLI-046,
+// CLI-047, #598). No identity file, or one with no plugin identity, pins
+// nothing. problems names each plugin not pinned and why: not found, or
+// replaceable by someone other than its owner.
+func PinPlugins(identityFile string, lookPath func(string) (string, error)) (pins []trustbackup.PluginPin, problems []string, err error) {
 	f, err := os.Open(identityFile)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return "", nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = f.Close() }()
 	names, err := trustbackup.PluginNames(f)
 	if err != nil {
-		return "", nil, err
+		return nil, nil, err
 	}
-	base := DefaultServicePATH(goos)
-	dirs := filepath.SplitList(base)
-	added := false
 	for _, n := range names {
-		bin := "age-plugin-" + n
-		p, lerr := lookPath(bin)
-		if lerr != nil {
-			missing = append(missing, bin)
+		pin, perr := trustbackup.PinPlugin(n, lookPath)
+		if perr != nil {
+			problems = append(problems, perr.Error())
 			continue
 		}
-		if d := filepath.Dir(p); !slices.Contains(dirs, d) {
+		pins = append(pins, pin)
+	}
+	return pins, problems, nil
+}
+
+// ServicePATH is the PATH the client service needs to run the pinned age
+// plugins (CLI-025, #592; #598): the service manager's default with each
+// pinned plugin's own directory added after it. That is the directory of
+// the file the pin names, symlinks resolved, not a shared bin folder, so
+// the service's PATH holds nothing else the plugin's installer put there.
+// It is empty when the default already finds every plugin.
+func ServicePATH(goos string, pins []trustbackup.PluginPin) string {
+	dirs := filepath.SplitList(DefaultServicePATH(goos))
+	added := false
+	for _, p := range pins {
+		if d := filepath.Dir(p.Path); !slices.Contains(dirs, d) {
 			dirs = append(dirs, d)
 			added = true
 		}
 	}
 	if !added {
-		return "", missing, nil
+		return ""
 	}
-	return strings.Join(dirs, string(os.PathListSeparator)), missing, nil
+	return strings.Join(dirs, string(os.PathListSeparator))
 }
 
 // Path is where the service definition is written.
