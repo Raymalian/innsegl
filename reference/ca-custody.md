@@ -228,6 +228,8 @@ method, under one per-machine rate limit): `GET /_core/ca-custody`,
 the same name. The core reaches the custodian on an internal unlock network
 and logs none of what it carries: one line per forwarded POST, with the
 route and the installation.
+The unlock network has three members: the custodian, `innsegl-mcp` and
+`innsegl-api` (ADR-0082). The API is on no other new network.
 
 ## Exit codes and error classes
 
