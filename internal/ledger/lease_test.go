@@ -104,6 +104,37 @@ func TestLED047OneCoreHoldsTheWriterLease(t *testing.T) {
 		}
 	})
 
+	t.Run("a holder that died without releasing is taken over at once", func(t *testing.T) {
+		// A core killed with SIGKILL never releases, and its lease is
+		// still live for its whole TTL. Its connection to the ledger is
+		// gone the moment the process is, and that is what the next core
+		// reads: it takes over at once rather than waiting out the TTL.
+		dying, err := OpenLeases(ctx, dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		k, err := dying.Acquire(ctx, "core-killed", time.Minute)
+		if err != nil {
+			t.Fatalf("core-killed Acquire: %v", err)
+		}
+		other := openLeases(t, dsn)
+		if _, herr := other.Acquire(ctx, "core-next", time.Minute); herr == nil {
+			t.Fatal("core-next took the lease while core-killed was alive")
+		}
+		dying.Close() // the process is gone: its sessions end, nothing is released
+		start := time.Now()
+		n, err := other.Acquire(ctx, "core-next", time.Minute)
+		if err != nil {
+			t.Fatalf("core-next could not take over from a dead holder with a live lease: %v", err)
+		}
+		if waited := time.Since(start); waited > 2*time.Second || n.Epoch <= k.Epoch {
+			t.Fatalf("takeover took %s with epoch %d after %d; want at once and a later epoch", waited, n.Epoch, k.Epoch)
+		}
+		if err := other.Release(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	t.Run("an expired lease nobody took is renewed by its holder", func(t *testing.T) {
 		// A core whose ledger was unreachable for longer than its lease
 		// (a Postgres restart) keeps it when nobody took it meanwhile: the
