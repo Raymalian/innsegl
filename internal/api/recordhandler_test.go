@@ -20,8 +20,7 @@ func TestRegisterRecordRoutesWiresThroughTheRealServer(t *testing.T) {
 	f := newRecordFixture(t)
 
 	restore := ConfigureRecordRoutes(RecordConfig{
-		SnapshotDir: f.rs.cfg.root,
-		GitPath:     f.rs.cfg.gitPath,
+		GitPath: f.rs.cfg.gitPath,
 	})
 	t.Cleanup(restore)
 

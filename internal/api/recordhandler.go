@@ -37,25 +37,16 @@ import (
 
 // RecordConfig is what ConfigureRecordRoutes installs.
 type RecordConfig struct {
-	// SnapshotDir is the gateway's own snapshot store root —
-	// internal/gateway/snapshot.go's SnapshotConfig.StoreRoot, mounted
-	// read-only into this process (deploy/compose/innsegl.yml: the SAME
-	// /agentlog volume ServerConfig.LogDir already reads, subdirectory
-	// "gateway-snapshots"). Empty disables every snapshot-derived member of
-	// the record: steps and files still come from the ledger and the
-	// retained bodies, tree_before/tree_after stay empty, and the diff route
-	// answers "no snapshot store is configured" rather than guessing.
-	SnapshotDir string
-	// GitPath is the git binary this file reads the snapshot store and the
-	// served repositories with. Empty means the same PATH lookup
-	// NewProver's own GitPath falls back to.
+	// GitPath is the git binary this file reads the mirror's snapshot trees
+	// (snapshotstore.go) and the served repositories with. Empty means the
+	// same PATH lookup NewProver's own GitPath falls back to.
 	GitPath string
 	// MessageKeyDir is where cmd/innsegl/gateway.go's own writeMessageKeyFile
 	// writes RM-237's own derived, CHECK-ONLY agent-message key, by key id —
 	// mounted read-only into this process on the SAME volume the writer
 	// mounts read-write (deploy/compose/innsegl.yml's innsegl-message-key).
 	// Empty answers every Brief and Reply unavailable, the same "unset means
-	// off" posture SnapshotDir already holds.
+	// off" posture.
 	MessageKeyDir string
 }
 
@@ -111,7 +102,7 @@ func (s *Server) registerRecordRoutes() {
 		prover:        s.prover,
 		logDir:        s.logDir,
 		messageKeyDir: cfg.MessageKeyDir,
-		cfg:           snapshotStoreConfig{root: cfg.SnapshotDir, gitPath: cfg.GitPath},
+		cfg:           snapshotStoreConfig{gitPath: cfg.GitPath},
 	}
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}/record", rs.handleRunRecord)
 	s.mux.HandleFunc("GET /api/v1/runs/{run_id}/steps/{n}/diff", rs.handleStepDiff)

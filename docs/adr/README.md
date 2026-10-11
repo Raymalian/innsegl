@@ -103,6 +103,7 @@ maintainer ask "why is it like this?"
 | [0078](0078-every-service-credential-is-generated-per-host-and-read-from-a-file.md) | Every service credential is generated per host and read from a file | accepted | 2026-10-09 |
 | [0079](0079-adoption-runs-on-the-commit-path.md) | Adoption runs on the commit path | accepted | 2026-10-09 |
 | [0080](0080-schema-version-5-records-repository-and-branch-as-keyed-pseudonyms.md) | Schema version 5 records repository and branch as keyed pseudonyms, resolved through an erasable alias table | accepted | 2026-10-10 |
+| [0081](0081-the-core-can-serve-a-publicly-trusted-server-certificate-obtained-through-acme-dns-01.md) | The core can serve a publicly trusted server certificate, obtained through ACME DNS-01 | accepted | 2026-10-10 |
 
 ## Open items
 

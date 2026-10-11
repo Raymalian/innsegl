@@ -188,7 +188,7 @@ func TestTheMirrorRefusesEveryOtherPush(t *testing.T) {
 	for _, tc := range []struct {
 		name, ref string
 	}{
-		{"a branch", "refs/heads/main"},
+		{"a remote-tracking ref", "refs/remotes/origin/main"},
 		{"a tag", "refs/tags/v1"},
 		{"another installation's staging ref", commitpath.StagingRef(tOtherInst, tToolUseID)},
 		{"a staging ref with no tool call id", "refs/innsegl/staging/" + tInstallation + "/not-a-tool-call"},

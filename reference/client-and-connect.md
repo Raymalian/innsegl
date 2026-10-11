@@ -43,6 +43,18 @@ in the checkout.
 `innsegl client serve` takes only `-listen` (default: the address connect
 wrote). `innsegl status` takes no flags.
 
+A core whose server certificate is publicly trusted (ACME, ADR-0081) is
+recorded in `core.json` as `"server_certificate": "public"`; the client then
+trusts the system's roots for it as well as the core's own CA. `innsegl
+connect` records it when it enrols, and `innsegl connect --update` checks it
+again (restart the client service after a change). A core on its own CA is
+trusted through that CA alone. `innsegl status` shows the core's `server
+certificate` line.
+
+`innsegl status` also prints a `mirror WARN` line for each branch the core's
+mirror refused as a rewrite ([commit-path.md](commit-path.md)); a warning,
+not an outage, so the exit status is unchanged.
+
 `innsegl status` prints one line per part of the core: its readiness checks
 (`spire`, `ledger`, `sigstore`) and its scheduled controls. The scheduled
 WORM canary is `worm canary`: `up` with when it last passed, or `DOWN` with
@@ -62,6 +74,7 @@ The managed settings connect writes point the harness at the client service
 | `NODE_EXTRA_CA_CERTS` | the client's proxy CA |
 | `OTEL_*`, `CLAUDE_CODE_ENABLE_TELEMETRY` | telemetry sent to the client service |
 | provider switches | pinned to `0` so traffic goes through the recorded API |
+| `hooks` | `innsegl hook pre-tool-use` (Bash), `innsegl hook post-tool-use` (every tool), `innsegl hook session` (session events); see [commit-path.md](commit-path.md). A machine connected before a hook was added gains it with `innsegl connect --update` |
 
 Default managed-settings path: `/Library/Application Support/ClaudeCode/managed-settings.json`
 on macOS, `/etc/claude-code/managed-settings.json` elsewhere

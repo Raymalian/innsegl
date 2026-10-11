@@ -22,10 +22,10 @@ dispatch table is `commands` in `cmd/innsegl/cli.go`; a test asserts the set.
 | `innsegl connect` | enrol this machine with a core and point the harness at it | [client-and-connect.md](client-and-connect.md) |
 | `innsegl erase-organisation` | erase an organisation: its account data, repository names and mirrors | [dashboard-api.md](dashboard-api.md) |
 | `innsegl erase-repository` | erase a repository's name: its aliases and its mirror | [repository-names.md](repository-names.md) |
-| `innsegl git-hook` | git's prepare-commit-msg hook: add the run's trailers | [commit-path.md](commit-path.md) |
-| `innsegl hook` | the harness hook that passes a git commit its tool call id | [commit-path.md](commit-path.md) |
+| `innsegl git-hook` | git's hooks: add the run's trailers; after a signed commit, send its branch to the core's mirror | [commit-path.md](commit-path.md) |
+| `innsegl hook` | the harness hooks: a git commit's tool call id, the session's workspace, a tool call's snapshot | [commit-path.md](commit-path.md) |
 | `innsegl init` | set up signed commits in one repository end to end | [commit-path.md](commit-path.md) |
-| `innsegl link` | install the prepare-commit-msg hook in a repository | [commit-path.md](commit-path.md) |
+| `innsegl link` | install the git hooks the commit path needs in a repository | [commit-path.md](commit-path.md) |
 | `innsegl migrate-schema` | attest a major schema cutover in this chain | [ledger-and-segments.md](ledger-and-segments.md) |
 | `innsegl reap` | delete identity entries orphaned past their TTL | [reconciler-and-reaper.md](reconciler-and-reaper.md) |
 | `innsegl reconcile` | reconcile signing intents against the transparency log | [reconciler-and-reaper.md](reconciler-and-reaper.md) |

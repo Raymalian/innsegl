@@ -67,6 +67,9 @@ type Enrolment struct {
 	InstallationID string
 	Key            *ecdsa.PrivateKey
 	CA             *x509.Certificate
+	// PublicServer is true when the core's server certificate is publicly
+	// trusted (#473); recorded in core.json.
+	PublicServer bool
 	issued
 }
 
@@ -95,8 +98,14 @@ func Enrol(ctx context.Context, opts EnrolOptions) (*Enrolment, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool := x509.NewCertPool()
-	pool.AddCert(opts.CA)
+	// A core with a publicly trusted server certificate (#473) is verified
+	// against the system's roots as well; every other core only against its
+	// own CA.
+	public, err := ProbeServerCertificate(ctx, opts.CoreURL, opts.CA)
+	if err != nil {
+		return nil, err
+	}
+	pool := CoreRoots(opts.CA, public)
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -140,7 +149,7 @@ func Enrol(ctx context.Context, opts EnrolOptions) (*Enrolment, error) {
 	}
 	return &Enrolment{
 		CoreURL: coreURL, InstallationID: got.InstallationID,
-		Key: key, CA: opts.CA, issued: got,
+		Key: key, CA: opts.CA, PublicServer: public, issued: got,
 	}, nil
 }
 

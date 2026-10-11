@@ -22,8 +22,9 @@ import (
 // configuration (hook.go). A human's own `git commit` in a linked repository
 // is unaffected either way — see githook.go's own doc comment for CMT-004.
 //
-// This command touches exactly one thing: the repository's prepare-commit-msg
-// hook, found through `git rev-parse --git-path hooks/prepare-commit-msg`,
+// This command touches exactly two things: the repository's prepare-commit-msg
+// and post-commit hooks (the second sends a signed commit's branch to a hosted
+// core's mirror, #465), each found through `git rev-parse --git-path hooks/<name>`,
 // which resolves core.hooksPath the same way any other git command would.
 // Nothing else about the repository — no git config key, no other hook, no
 // file outside the hooks directory — is read or written.
@@ -70,13 +71,13 @@ func runLinkCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.SetOutput(stderr)
 	var remove bool
 	fs.BoolVar(&remove, "remove", false,
-		"remove the hook this command installed, restoring exactly what was there before")
+		"remove the hooks this command installed, restoring exactly what was there before")
 	fs.Usage = func() {
-		fprintf(stderr, "innsegl link - install the prepare-commit-msg hook the commit path needs "+
+		fprintf(stderr, "innsegl link - install the git hooks the commit path needs "+
 			"(#390)\n\n")
 		fprintf(stderr, "So an agent's git commit in this repository carries the run's trailers and "+
 			"its\nsigning configuration; a human's own commit here is unaffected either way. "+
-			"Touches\nnothing about the repository except its own prepare-commit-msg hook.\n\n")
+			"After a\nsigned commit, its branch is sent to a hosted core's mirror. Touches nothing about\nthe repository except its prepare-commit-msg and post-commit hooks.\n\n")
 		fprintf(stderr, "Usage:\n  innsegl link <repo dir>\n  innsegl link -remove <repo dir>\n\n")
 		fprintf(stderr, "Flags:\n")
 		fs.PrintDefaults()
@@ -108,7 +109,27 @@ func runLinkCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 // core.hooksPath answers relative to the repository root, and an absolute one
 // is returned as given).
 func linkHookPaths(ctx context.Context, repo string) (hookPath, previousPath string, err error) {
-	out, err := runGitOutput(ctx, "", repo, "rev-parse", "--git-path", "hooks/prepare-commit-msg")
+	return linkHookPathsFor(ctx, repo, "prepare-commit-msg")
+}
+
+// managedHook is one git hook `innsegl link` installs: prepare-commit-msg
+// for the run's trailers and signing (#390), and post-commit, which sends a
+// signed commit's branch to a hosted core's mirror (#465, ADR-0065).
+type managedHook struct {
+	name   string
+	marker string
+	script func(bin, previousPath string) string
+}
+
+var managedHooks = []managedHook{
+	{name: "prepare-commit-msg", marker: linkHookMarker, script: linkHookScript},
+	{name: "post-commit", marker: linkPostCommitMarker, script: linkPostCommitScript},
+}
+
+// linkHookPathsFor resolves one hook's path and where an existing one is
+// moved to.
+func linkHookPathsFor(ctx context.Context, repo, name string) (hookPath, previousPath string, err error) {
+	out, err := runGitOutput(ctx, "", repo, "rev-parse", "--git-path", "hooks/"+name)
 	if err != nil {
 		return "", "", fmt.Errorf("locating the hooks directory: %w", err)
 	}
@@ -153,8 +174,42 @@ func shellQuoteSingle(s string) string {
 // harmlessly), or someone else's hook (moved aside exactly once, refusing
 // rather than guessing if a previous one is already saved and unaccounted
 // for).
+//
+// Every managed hook is checked before any is written, so a refusal leaves
+// the repository exactly as it was.
 func runLinkInstall(ctx context.Context, repo string, stdout, stderr io.Writer) int {
-	hookPath, previousPath, err := linkHookPaths(ctx, repo)
+	for _, h := range managedHooks {
+		hookPath, previousPath, err := linkHookPathsFor(ctx, repo, h.name)
+		if err != nil {
+			fprintf(stderr, "innsegl link: %v\n", err)
+			return exitUsage
+		}
+		existing, readErr := os.ReadFile(hookPath) // #nosec G703 -- a path git resolved for the repository
+		if readErr != nil || strings.Contains(string(existing), h.marker) {
+			continue
+		}
+		if _, statErr := os.Stat(previousPath); statErr == nil { // #nosec G703 -- see above
+			fprintf(stderr, "innsegl link: %s already exists and is not managed by innsegl, and %s "+
+				"already holds a previously saved hook — refusing to overwrite either\n", hookPath, previousPath)
+			return exitUsage
+		}
+	}
+	bin, err := innseglBinaryPath()
+	if err != nil {
+		fprintf(stderr, "innsegl link: resolving this binary's own path: %v\n", err)
+		return exitUsage
+	}
+	for _, h := range managedHooks {
+		if code := linkInstallHook(ctx, repo, bin, h, stdout, stderr); code != exitOK {
+			return code
+		}
+	}
+	return exitOK
+}
+
+// linkInstallHook installs one managed hook.
+func linkInstallHook(ctx context.Context, repo, bin string, h managedHook, stdout, stderr io.Writer) int {
+	hookPath, previousPath, err := linkHookPathsFor(ctx, repo, h.name)
 	if err != nil {
 		fprintf(stderr, "innsegl link: %v\n", err)
 		return exitUsage
@@ -162,7 +217,7 @@ func runLinkInstall(ctx context.Context, repo string, stdout, stderr io.Writer) 
 
 	existing, readErr := os.ReadFile(hookPath) // #nosec G703 -- a path git resolved for the repository
 	switch {
-	case readErr == nil && !strings.Contains(string(existing), linkHookMarker):
+	case readErr == nil && !strings.Contains(string(existing), h.marker):
 		if _, statErr := os.Stat(previousPath); statErr == nil { // #nosec G703 -- see above
 			fprintf(stderr, "innsegl link: %s already exists and is not managed by innsegl, and %s "+
 				"already holds a previously saved hook — refusing to overwrite either\n", hookPath, previousPath)
@@ -187,17 +242,11 @@ func runLinkInstall(ctx context.Context, repo string, stdout, stderr io.Writer) 
 	// The remaining case — nothing there, or already innsegl's own — is safe
 	// to (re)write below with no further action.
 
-	bin, err := innseglBinaryPath()
-	if err != nil {
-		fprintf(stderr, "innsegl link: resolving this binary's own path: %v\n", err)
-		return exitUsage
-	}
-
 	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil { // #nosec G703 -- see above
 		fprintf(stderr, "innsegl link: creating the hooks directory: %v\n", err)
 		return exitUsage
 	}
-	script := linkHookScript(bin, previousPath)
+	script := h.script(bin, previousPath)
 	if err := os.WriteFile(hookPath, []byte(script), 0o755); err != nil { //nolint:gosec // a hook must be executable
 		fprintf(stderr, "innsegl link: writing %s: %v\n", hookPath, err)
 		return exitUsage
@@ -211,46 +260,76 @@ func runLinkInstall(ctx context.Context, repo string, stdout, stderr io.Writer) 
 // (and only it) takes the removed hook's place — via os.Rename, so the
 // restored file's bytes and mode are exactly what they were before, not a
 // copy this command reconstructed.
+//
+// Each managed hook is handled on its own. A hook of that name innsegl did
+// not write is left alone, and when none of them is innsegl's, that is a
+// refusal.
 func runLinkRemove(ctx context.Context, repo string, stdout, stderr io.Writer) int {
-	hookPath, previousPath, err := linkHookPaths(ctx, repo)
+	removed, foreign := 0, 0
+	for _, h := range managedHooks {
+		switch linkRemoveHook(ctx, repo, h, stdout, stderr) {
+		case linkRemoved:
+			removed++
+		case linkForeign:
+			foreign++
+		case linkFailed:
+			return exitUsage
+		}
+	}
+	if foreign > 0 && removed == 0 {
+		return exitUsage
+	}
+	return exitOK
+}
+
+// The outcomes of removing one managed hook.
+const (
+	linkAbsent = iota
+	linkRemoved
+	linkForeign
+	linkFailed
+)
+
+func linkRemoveHook(ctx context.Context, repo string, h managedHook, stdout, stderr io.Writer) int {
+	hookPath, previousPath, err := linkHookPathsFor(ctx, repo, h.name)
 	if err != nil {
 		fprintf(stderr, "innsegl link -remove: %v\n", err)
-		return exitUsage
+		return linkFailed
 	}
 
 	existing, err := os.ReadFile(hookPath)
 	switch {
 	case os.IsNotExist(err):
 		fprintf(stdout, "innsegl link -remove: %s does not exist; nothing to remove\n", hookPath)
-		return exitOK
+		return linkAbsent
 	case err != nil:
 		fprintf(stderr, "innsegl link -remove: reading %s: %v\n", hookPath, err)
-		return exitUsage
-	case !strings.Contains(string(existing), linkHookMarker):
+		return linkFailed
+	case !strings.Contains(string(existing), h.marker):
 		fprintf(stderr, "innsegl link -remove: %s exists and was not written by `innsegl link` — "+
 			"refusing to remove a hook it does not own\n", hookPath)
-		return exitUsage
+		return linkForeign
 	}
 
 	if err := os.Remove(hookPath); err != nil {
 		fprintf(stderr, "innsegl link -remove: removing %s: %v\n", hookPath, err)
-		return exitUsage
+		return linkFailed
 	}
 
 	if _, statErr := os.Stat(previousPath); statErr == nil {
 		if err := os.Rename(previousPath, hookPath); err != nil {
 			fprintf(stderr, "innsegl link -remove: restoring %s from %s: %v\n", hookPath, previousPath, err)
-			return exitUsage
+			return linkFailed
 		}
 		fprintf(stdout, "innsegl link -remove: removed %s, restored the hook that was there before\n", hookPath)
-		return exitOK
+		return linkRemoved
 	} else if !os.IsNotExist(statErr) {
 		fprintf(stderr, "innsegl link -remove: checking %s: %v\n", previousPath, statErr)
-		return exitUsage
+		return linkFailed
 	}
 
 	fprintf(stdout, "innsegl link -remove: removed %s; there was nothing there before\n", hookPath)
-	return exitOK
+	return linkRemoved
 }
 
 // linkEnsure links repo when innsegl's hook is not there yet and reports
@@ -258,13 +337,18 @@ func runLinkRemove(ctx context.Context, repo string, stdout, stderr io.Writer) i
 // an agent works in, so a repository is signable from its first use with no
 // `innsegl link` by hand; a repository already linked is only read. A hook
 // the repository had is kept, exactly as `innsegl link` keeps it.
+//
+// A repository linked before a hook was added to managedHooks gains it here.
 func linkEnsure(ctx context.Context, repo string) (bool, error) {
-	hookPath, _, err := linkHookPaths(ctx, repo)
-	if err != nil {
-		return false, err
+	complete := true
+	for _, h := range managedHooks {
+		ours, err := hasManagedHook(ctx, repo, h)
+		if err != nil {
+			return false, err
+		}
+		complete = complete && ours
 	}
-	// #nosec G304 -- the hook path git itself resolved for this repository.
-	if existing, readErr := os.ReadFile(hookPath); readErr == nil && strings.Contains(string(existing), linkHookMarker) {
+	if complete {
 		return false, nil
 	}
 	var out, errOut strings.Builder
@@ -272,6 +356,24 @@ func linkEnsure(ctx context.Context, repo string) (bool, error) {
 		return false, errors.New(strings.TrimSpace(errOut.String()))
 	}
 	return true, nil
+}
+
+// hasManagedHook reports whether repo's hook h is the one innsegl wrote.
+func hasManagedHook(ctx context.Context, repo string, h managedHook) (bool, error) {
+	hookPath, _, err := linkHookPathsFor(ctx, repo, h.name)
+	if err != nil {
+		return false, err
+	}
+	// #nosec G304 -- the hook path git itself resolved for this repository.
+	existing, readErr := os.ReadFile(hookPath)
+	return readErr == nil && strings.Contains(string(existing), h.marker), nil
+}
+
+// isLinked reports whether dir is in a repository linked to innsegl: its
+// prepare-commit-msg hook is innsegl's (#575). It never links anything.
+func isLinked(ctx context.Context, dir string) bool {
+	ours, err := hasManagedHook(ctx, dir, managedHooks[0])
+	return err == nil && ours
 }
 
 // linkedForHook reports whether the PreToolUse hook acts on a command run in

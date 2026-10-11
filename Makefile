@@ -889,6 +889,25 @@ ca-custody-restore: innsegl-trust-volumes
 	$(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(CA_CUSTODY_COMPOSE) up -d --no-deps innsegl-ca-custodian
 	@echo 'ca-custody-restore: done. Unlock it from the operator'"'"'s machine: innsegl ca-custody unlock'
 
+## innsegl-acme-credential: store the DNS provider's credential for a public server
+##   certificate (#473) — make innsegl-acme-credential FILE=<file holding only the token>
+# The token goes into its own volume, read-only to the core and to nothing else
+# (ADR-0078's per-host credential). A changed token recreates a running core
+# at once (scripts/compose-up.py hashes the volume; see the recipe).
+ACME_CREDENTIAL_VOLUME = $(STACK_PREFIX)-core_innsegl-credential-acme-dns
+innsegl-acme-credential:
+	@test -s '$(FILE)' || { echo 'innsegl-acme-credential: FILE=<a file holding only the DNS provider token>'; exit 2; }
+	@docker volume create $(ACME_CREDENTIAL_VOLUME) >/dev/null
+	@docker run --rm -i --network none -v $(ACME_CREDENTIAL_VOLUME):/c $(CA_CUSTODY_CHOWN_IMAGE) \
+	  sh -c 'umask 077 && cat > /c/dns-token.new && mv /c/dns-token.new /c/dns-token && chown 1000:1000 /c /c/dns-token && chmod 0400 /c/dns-token' < '$(FILE)'
+	@# The core reads the credential at start, and `make update` does nothing for
+	@# an unchanged checkout: bring the services up here, so the changed volume
+	@# recreates the core now (scripts/compose-up.py). A stack that is not up
+	@# is left alone; `make start` reads it.
+	@if docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-mcp; then \
+	   INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services; fi
+	@echo 'innsegl-acme-credential: stored; with INNSEGL_ACME=on and the INNSEGL_ACME_* settings in the compose .env, the core uses it'
+
 ## ca-custody-switch: Fulcio onto the store
 ca-custody-switch: innsegl-trust-volumes
 	@INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \

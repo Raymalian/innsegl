@@ -177,7 +177,7 @@ func TestMCP087EveryCredentialFailureIsOneByteIdenticalRefusal(t *testing.T) {
 	badRepo := goodClaims("not a repository")
 
 	tampered := issuer.mint(t, goodClaims("github.com/acme/widgets"))
-	tampered = tampered[:len(tampered)-2] + "AA"
+	tampered = tamperSignature(t, tampered)
 
 	cases := []struct {
 		name  string

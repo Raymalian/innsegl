@@ -38,7 +38,7 @@ flight finishes first; then the process exits within seconds. Run on its own,
 | `-spire-address`, `-spire-server-id`, `-trust-domain`, `-workload-api`, `-timeout` | `INNSEGL_SPIRE_*`, `INNSEGL_TRUST_DOMAIN`, `INNSEGL_WORKLOAD_API_ADDRESS` | SPIRE entry pass; off when the address is empty |
 | `-mirror-dir` | `INNSEGL_MIRROR_DIR` | the core's mirror, `<root>/host/org/name.git` (wins over `-workspace`) |
 | `-workspace` | `INNSEGL_WORKSPACE` | single-host working trees |
-| `-rebase-branch`, `-rebase-repos` | `INNSEGL_REBASE_BRANCH`, `INNSEGL_REBASE_REPOS` | ADR-0047 pass; set both or neither |
+| `-rebase-branch`, `-rebase-repos` | `INNSEGL_REBASE_BRANCH`, `INNSEGL_REBASE_REPOS` | ADR-0047 pass; set both or neither. On the mirror it walks the branch clients push after a signed commit and at session end ([commit-path.md](commit-path.md)) |
 | `-tool-body-dir` | `INNSEGL_MCP_LOG_DIR` | turns on the unsigned-commit check |
 | `-writes-log-dir`, `-writes-repos` | `INNSEGL_WRITES_LOG_DIR`, `INNSEGL_WRITES_REPOS` | reported-writes check (counts only) |
 | `-trust-history`, `-trust-sentinels` | `INNSEGL_TRUST_HISTORY`, `INNSEGL_TRUST_SENTINELS` | daily trust pass (see [trust-history.md](trust-history.md)) |

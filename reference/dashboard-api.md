@@ -232,10 +232,9 @@ Rows written before this release may still hold names.
 | `-ui-dir` | `INNSEGL_API_UI_DIR` | built UI, served on the same origin |
 | `-fulcio-url`, `-rekor-url`, `-issuer` | `INNSEGL_FULCIO_URL`, `INNSEGL_REKOR_URL`, `INNSEGL_OIDC_ISSUER` | proof route |
 | `-trust-history` | `INNSEGL_TRUST_HISTORY` | read on every proof |
-| `-mirror-dir` | `INNSEGL_MIRROR_DIR` | the only place repositories are read from |
+| `-mirror-dir` | `INNSEGL_MIRROR_DIR` | the only place repositories are read from, and the step diffs' snapshot trees (the snapshot refs clients push, [commit-path.md](commit-path.md)) |
 | `-git` | `INNSEGL_GIT` | git binary; empty is a PATH lookup |
 | `-log-dir`, `-log-retention-days` | `INNSEGL_API_LOG_DIR`, `INNSEGL_API_LOG_DAYS` | tool-call bodies [`90` days] |
-| `-snapshot-dir` | `INNSEGL_API_SNAPSHOT_DIR` | workspace snapshots |
 | `-message-key-dir` | `INNSEGL_API_MESSAGE_KEY_DIR` | check-only agent-message key |
 | `-sso-key-file` | `INNSEGL_API_SSO_KEY_FILE` | the per-host key an organisation's sign-in client secret is stored encrypted under (#574); empty stores public clients only. At start, a secret kept in plain text before migration 0020 is sealed |
 | `-gateway-ca-cert` | `INNSEGL_API_GATEWAY_CA_CERT` | fingerprint pinned by the connect command shown to users |

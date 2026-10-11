@@ -141,11 +141,11 @@ var commands = map[string]command{
 	// that asks the core for the run's trailers, and git's signing program
 	// that asks the core to sign. See commitpathcli.go.
 	"hook": {
-		summary: "the harness hook that passes a git commit its tool call id",
+		summary: "the harness hooks: a git commit's tool call id, the session's workspace, a tool call's snapshot",
 		exec:    hookCommand,
 	},
 	"git-hook": {
-		summary: "git's prepare-commit-msg hook: add the run's trailers",
+		summary: "git's hooks: add the run's trailers; after a signed commit, send its branch to the core's mirror",
 		exec:    gitHookCommand,
 	},
 	"sign": {
@@ -157,7 +157,7 @@ var commands = map[string]command{
 	// piece of ADR-0059's host half `innsegl init` does not already cover,
 	// since init's own hook is the opt-in pre-push refusal, not this one.
 	"link": {
-		summary: "install the prepare-commit-msg hook the commit path needs in a repository",
+		summary: "install the git hooks the commit path needs in a repository",
 		exec:    linkCommand,
 	},
 	// RM-285 (#461), ADR-0063: enrol this machine with a hosted core, and

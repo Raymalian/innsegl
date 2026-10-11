@@ -47,6 +47,28 @@ Read from the environment when the gateway starts (`cmd/innsegl/gateway.go`):
 | `INNSEGL_GATEWAY_ACCOUNTS_DSN` | unset | accounts writer; required in hosted mode |
 | `INNSEGL_GATEWAY_PORT` | `28095` | compose host port |
 | `INNSEGL_GATEWAY_CA_HOST_DIR` | `~/.innsegl/ca` | host folder the CA certificate is published to |
+| `INNSEGL_ACME` | `off` | `on`: the server certificate is publicly trusted, obtained through ACME DNS-01 (ADR-0081); the own CA otherwise |
+| `INNSEGL_ACME_EMAIL` | required when on | the ACME account's contact |
+| `INNSEGL_ACME_DIRECTORY` | the public CA's production directory | an ACME directory URL, `https` only; set the staging directory here to try it |
+| `INNSEGL_ACME_ZONE` | required when on | the one DNS zone the DNS credential is for; every DNS name in `INNSEGL_GATEWAY_CERT_NAMES` must be in it |
+| `INNSEGL_ACME_DNS_PROVIDER` | required when on | the DNS provider, by the name `internal/acme/providers.go` gives it (a set compiled in, plus `rfc2136`, `httpreq` and `exec`, which reach any DNS); each reads its own settings |
+| `INNSEGL_ACME_DNS_CREDENTIAL_VAR` | required when on | the provider's own credential variable; the core sets its `_FILE` form to the stored credential |
+| `INNSEGL_ACME_CREDENTIAL_DIR` | `/run/innsegl/credentials/acme-dns` | where the credential file `dns-token` is |
+| `INNSEGL_ACME_STATE_DIR` | `/run/innsegl/acme` | the ACME account and both certificates |
+| `INNSEGL_ACME_ROOTS_FILE` | unset | an extra root for reaching the ACME directory, for a local ACME test server |
+| `INNSEGL_ACME_DNS_RESOLVERS` | the system's | `host:port` list the DNS-01 check asks, and only those, whether the record is out (a split-horizon or test DNS) |
+
+With `INNSEGL_ACME=on` the core obtains two certificates for the DNS names
+in `INNSEGL_GATEWAY_CERT_NAMES` (addresses are left out: a public
+certificate names none), one for the gateway and one for the dashboard, each
+with its own key. It renews each with a third of its lifetime left, checking
+hourly, and swaps it in with no restart. A first order that fails never keeps
+the core down: it serves its own CA's certificate, the status line says why,
+and it tries again every 10 minutes. Hosted mode still requires a client
+certificate from the deployment's own authority. `innsegl status` shows a
+`server certificate` line: its source, names and expiry. Clients trust the
+system's roots for a core with a public certificate once `innsegl connect`
+(or `innsegl connect --update`) has recorded it ([client-and-connect.md](client-and-connect.md)).
 
 ## Files, volumes, containers
 
@@ -56,7 +78,10 @@ Read from the environment when the gateway starts (`cmd/innsegl/gateway.go`):
 | volume `innsegl-gateway-ca-key` | the gateway CA private key, mounted into the core only |
 | host folder `~/.innsegl/ca` | the gateway CA certificate (public) |
 | volume `innsegl-message-key` | derived agent-message key, read-only into `innsegl-api` |
-| `gateway-snapshots` under the log dir | workspace snapshots |
+| `gateway-snapshots` under the log dir | workspace snapshots, single-host shape only; the dashboard reads snapshots from the mirror, not from here |
+| volume `innsegl-credential-acme-dns` | the ACME DNS credential, read-only; written by `make innsegl-acme-credential` |
+| volume `innsegl-acme-state` | the ACME account and both certificates, read-write, this service only |
+| `INNSEGL_MIRROR_DIR` (hosted) | the per-repository mirror: the `/_core/git/` push endpoint writes it, and a tool call's `workspace_tree_hash` is read from the snapshot ref its client pushed there ([commit-path.md](commit-path.md)) |
 
 Routes on its listener: model traffic, `/_gateway/session-end`,
 `/_gateway/session-workspace`, `/_gateway/commit-trailers`,
@@ -82,6 +107,9 @@ As a companion of `serve`, a failure here ends the process with `serve`'s codes.
   GREC-001 to GREC-007, SNAP-001 to SNAP-005, JRN-003 to JRN-007, OTW-001, TLS-001)
 - `cmd/innsegl/gateway*_test.go` (GW-004, GW-007, GW-010, GW-011, GW-013,
   GID-009, GID-012, GREC-001 to GREC-007)
+- `internal/acme/*_test.go` (TLS-004 to TLS-006, against a local ACME test
+  server and a fake DNS, never a real CA), `cmd/innsegl/acmecert_test.go`
+  (TLS-007 to TLS-009), `internal/client/coretrust_test.go` (TLS-010)
 - `cmd/innsegl/exposure_test.go` (GW-015), `enrol_test.go` (GW-016 to GW-019)
 - `internal/mcp/gateway_test.go`, `gatewayrecord_test.go` (GID-001 to GID-004, GREC)
 - `test/deploy/gatewaypublish_test.go`, `bindaddress_test.go` (GW-005),
@@ -95,6 +123,7 @@ As a companion of `serve`, a failure here ends the process with `serve`'s codes.
 - [ADR-0061](../docs/adr/0061-schema-version-4-records-forks-agent-messages-and-workspace-trees.md) schema 4 events
 - [ADR-0063](../docs/adr/0063-the-core-runs-on-its-own-host-and-every-client-machine-holds-its-own-enrolled-certificate.md) hosted mode
 - [ADR-0066](../docs/adr/0066-one-name-one-certificate.md) one name, one certificate
+- [ADR-0081](../docs/adr/0081-the-core-can-serve-a-publicly-trusted-server-certificate-obtained-through-acme-dns-01.md) a public server certificate through ACME DNS-01
 - [ADR-0069](../docs/adr/0069-claude-code-reaches-the-client-as-its-https-proxy.md) the client as proxy
 - [ADR-0077](../docs/adr/0077-the-mcp-wire-surface-is-deprecated.md) the MCP wire surface is deprecated
 

@@ -212,7 +212,7 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	case f.disconnect:
 		return connectDisconnect(ctx, f, stdout, stderr, deps)
 	case f.update:
-		return connectUpdate(f, stdout, stderr, deps)
+		return connectUpdate(ctx, f, stdout, stderr, deps)
 	}
 	if deps.underSudo {
 		// Enrolment under sudo would leave root-owned files in the user's
@@ -307,10 +307,55 @@ func enrolledListen(paths client.Paths) string {
 	return client.DefaultListen
 }
 
+// recheckServerCertificate asks the core once whether its server certificate
+// is public (#473) and records the answer in core.json, so a core moved to or
+// from a public certificate is reached again after `connect --update` and a
+// restart of the client service. A core that cannot be reached leaves
+// core.json as it is.
+func recheckServerCertificate(ctx context.Context, paths client.Paths, stdout, stderr io.Writer) {
+	core, err := client.ReadCoreConfig(paths)
+	if err != nil {
+		return
+	}
+	cas, err := os.ReadFile(paths.CA)
+	if err != nil {
+		return
+	}
+	block, _ := pem.Decode(cas)
+	if block == nil {
+		return
+	}
+	own, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	public, err := client.ProbeServerCertificate(ctx, core.CoreURL, own)
+	if err != nil {
+		fprintf(stderr, "innsegl connect: could not check the core's server certificate (%v); core.json is unchanged\n", err)
+		return
+	}
+	if public == core.PublicServer() {
+		return
+	}
+	core.ServerCertificate = ""
+	if public {
+		core.ServerCertificate = client.ServerCertificatePublic
+	}
+	if err := client.WriteCoreConfig(paths, core); err != nil {
+		fprintf(stderr, "innsegl connect: recording the core's server certificate: %v\n", err)
+		return
+	}
+	fprintf(stdout, "innsegl connect: the core's server certificate is now %s; restart the client service: %s\n",
+		map[bool]string{true: "public", false: "from its own CA"}[public], client.RestartCommand(runtime.GOOS))
+}
+
 // connectUpdate rewrites an enrolled machine's managed settings to the mode
-// chosen now, from the enrolment already in ~/.innsegl/client: no token, no
-// core, no service change.
-func connectUpdate(f connectFlags, stdout, stderr io.Writer, deps connectDeps) int {
+// chosen now, from the enrolment already in ~/.innsegl/client: no token and
+// no service change; it asks the core once whether its server certificate is
+// public (recheckServerCertificate).
+func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer, deps connectDeps) int {
 	paths := client.ClientPaths(deps.home)
 	if _, err := os.Stat(paths.Core); err != nil {
 		fprintf(stderr, "innsegl connect: this machine is not connected (%s is missing); "+
@@ -335,6 +380,7 @@ func connectUpdate(f connectFlags, stdout, stderr io.Writer, deps connectDeps) i
 		fprintf(stderr, "innsegl connect: the client's proxy CA: %v\n", err)
 		return exitConnectFailed
 	}
+	recheckServerCertificate(ctx, paths, stdout, stderr)
 	err = client.InstallSettings(f.settings, settings, deps.now, stdout)
 	if code, done := reportNotWritable(err, stderr, ", then run "+again+" again"); done {
 		return code

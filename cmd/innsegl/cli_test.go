@@ -183,7 +183,7 @@ func TestRunVersionSucceedsAndPrintsTheVersionString(t *testing.T) {
 // a usage error, never a silent success git or the harness would read as
 // consent.
 func TestCommitPathHostCommandsRefuseAnUnknownStep(t *testing.T) {
-	for _, args := range [][]string{{"hook"}, {"hook", "post-tool-use"}, {"git-hook"}, {"git-hook", "commit-msg"}} {
+	for _, args := range [][]string{{"hook"}, {"hook", "stop"}, {"git-hook"}, {"git-hook", "commit-msg"}} {
 		var stdout, stderr strings.Builder
 		if code := run(args, &stdout, &stderr); code != exitUsage {
 			t.Errorf("run(%q) = %d, want %d", args, code, exitUsage)

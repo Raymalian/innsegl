@@ -106,13 +106,18 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 	}
 	for service, keys := range map[string][]string{
 		"innsegl-mcp": {"INNSEGL_MCP_LOG_DIR"},
-		"innsegl-api": {"INNSEGL_API_LOG_DIR", "INNSEGL_API_SNAPSHOT_DIR", "INNSEGL_API_MESSAGE_KEY_DIR"},
+		"innsegl-api": {"INNSEGL_API_LOG_DIR", "INNSEGL_API_MESSAGE_KEY_DIR"},
 	} {
 		for _, key := range keys {
 			if v, ok := plain.env(service, key); !ok || v == "" {
 				t.Errorf("a plain up of innsegl.yml gives %s no %s", service, key)
 			}
 		}
+	}
+	// API-038: the run page reads snapshot trees from the mirror; the
+	// gateway's snapshot store is no longer named to the API.
+	if v, ok := plain.env("innsegl-api", "INNSEGL_API_SNAPSHOT_DIR"); ok {
+		t.Errorf("innsegl-api is still given INNSEGL_API_SNAPSHOT_DIR=%q; it reads snapshots from the mirror", v)
 	}
 }
 

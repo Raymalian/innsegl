@@ -1254,8 +1254,30 @@ services:
       # agent commits as the operator (`innsegl author`, ENF-010) needs its
       # pair here. Never in a tracked file: it is a person's identity.
       INNSEGL_SIGN_AUTHOR_OPERATORS: ${INNSEGL_SIGN_AUTHOR_OPERATORS:-}
+      # #473, ADR-0081: a publicly trusted server certificate through ACME
+      # DNS-01, instead of the core's own CA. OFF unless INNSEGL_ACME=on; the
+      # own CA is the default. Client certificates stay on the deployment's
+      # own authority either way. The DNS credential is a per-host file
+      # (ADR-0078), written with `make innsegl-acme-credential`, scoped by
+      # the operator to the one zone INNSEGL_ACME_ZONE names; the provider's
+      # own credential variable (INNSEGL_ACME_DNS_CREDENTIAL_VAR) is pointed
+      # at it as <variable>_FILE.
+      INNSEGL_ACME: ${INNSEGL_ACME:-off}
+      INNSEGL_ACME_EMAIL: ${INNSEGL_ACME_EMAIL:-}
+      INNSEGL_ACME_DIRECTORY: ${INNSEGL_ACME_DIRECTORY:-}
+      INNSEGL_ACME_ZONE: ${INNSEGL_ACME_ZONE:-}
+      INNSEGL_ACME_DNS_PROVIDER: ${INNSEGL_ACME_DNS_PROVIDER:-}
+      INNSEGL_ACME_DNS_CREDENTIAL_VAR: ${INNSEGL_ACME_DNS_CREDENTIAL_VAR:-}
+      INNSEGL_ACME_CREDENTIAL_DIR: /run/innsegl/credentials/acme-dns
+      INNSEGL_ACME_STATE_DIR: /run/innsegl/acme
+      INNSEGL_ACME_ROOTS_FILE: ${INNSEGL_ACME_ROOTS_FILE:-}
+      INNSEGL_ACME_DNS_RESOLVERS: ${INNSEGL_ACME_DNS_RESOLVERS:-}
     volumes:
       # ADR-0078: the credentials this service uses, and no others.
+      # READ-ONLY: the ACME DNS credential (#473), empty unless the operator
+      # wrote one. A start-read input: a new credential recreates this service
+      # (scripts/compose-up.py).
+      - innsegl-credential-acme-dns:/run/innsegl/credentials/acme-dns:ro
       - innsegl-credential-appender:/run/innsegl/credentials/appender:ro
       - innsegl-credential-authwriter:/run/innsegl/credentials/authwriter:ro
       - innsegl-credential-objects-sealer:/run/innsegl/credentials/objects-sealer:ro
@@ -1322,6 +1344,10 @@ services:
       # doc 05 §2: the scheduled canary's last result. Written here by the
       # sealer companion, read here by /readyz.
       - innsegl-canary-status:/run/innsegl/canary
+      # READ-WRITE, and mounted by no other service: the ACME account and the
+      # server certificates obtained through it (#473), kept so a restart
+      # orders nothing.
+      - innsegl-acme-state:/run/innsegl/acme
     ports:
       # Loopback unless INNSEGL_BIND says otherwise, and INNSEGL_BIND moves
       # only the gateway and the dashboard. Every other line here stays on
@@ -2053,11 +2079,6 @@ services:
       # days; identity is in the chain and never expires.
       INNSEGL_API_LOG_DIR: /agentlog
       INNSEGL_API_LOG_DAYS: ${INNSEGL_LOG_DAYS:-90}
-      # The run page's own read (E19, #395-#397): the gateway's workspace
-      # snapshot store, under the SAME /agentlog mount. Named explicitly so
-      # this file states what api.go would derive. A hosted core takes no
-      # snapshots (ADR-0060 decision 5, as amended), so there it is empty.
-      INNSEGL_API_SNAPSHOT_DIR: /agentlog/gateway-snapshots
       # RM-237's derived agent-message key (ADR-0061 decision 2), written by
       # innsegl-mcp to the innsegl-message-key volume, so this process can
       # VERIFY a brief or a reply's keyed digest without the identity secret
@@ -2485,6 +2506,10 @@ volumes:
   innsegl-credential-objects-root:
   innsegl-credential-objects-sealer:
   innsegl-credential-sso-key:
+  # #473: the ACME DNS credential, written by `make innsegl-acme-credential`
+  # and nothing else, and the ACME account and certificates the core keeps.
+  innsegl-credential-acme-dns:
+  innsegl-acme-state:
 
   # ADR-0074: the encrypted trust-key bundles and the producer's status.
   # Ciphertext only. Losing it loses backups, not keys: the operator's

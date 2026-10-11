@@ -4,13 +4,10 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -18,140 +15,40 @@ import (
 	"innsegl.dev/innsegl/internal/signing"
 )
 
-// snapshotstore.go reads internal/gateway/snapshot.go's own store —
-// /agentlog/gateway-snapshots/<repo-key>/, one bare GIT_DIR per repository —
-// to answer what a step changed (files.go) and what one step's diff looks
-// like (diff.go). It never writes to that store: every command here is a
-// read, and `git prune`/`git update-ref` — the store's own housekeeping —
-// belong to the gateway that owns it, never to this read-only process.
+// snapshotstore.go reads the trees a step's diff is made of (files.go,
+// diff.go) from the core's per-repository mirror (ADR-0065 decision 3,
+// #467): the client snapshots its working tree after each tool call and
+// pushes it as a snapshot ref, and the recorder puts that tree on the
+// tool call's workspace_tree_hash only when the mirror holds it. So every
+// tree id the chain names for a step is readable from the same mirror the
+// proof BFF already reads (Server.prover), and this file needs no store of
+// its own. It never writes to the mirror: every command here is a read.
 //
-// # Finding the store: re-deriving the key, not being told it
-//
-// The store is keyed by repoKey (internal/gateway/snapshot.go), which the
-// gateway derives from the repository itself — its "origin" remote, or
-// failing that its root commit — never from a path, so that the SAME key
-// comes out of the SAME repository regardless of which checkout computed
-// it. Nothing records that key anywhere this process can read it back from
-// (it is not on the chain — workspace_tree_hash is a tree id, not a store
-// path), so this file recomputes it, against the SAME served checkout the
-// proof BFF already reads (Server.prover), by running the identical two
-// git queries in the identical order. A repository this deployment does not
-// serve to the proof BFF (RepoPath returns false) cannot be resolved to a
-// store at all; every caller here treats that exactly like a store that
-// does not exist — files and diffs answer empty, never guessed.
+// The gateway's own single-host snapshot store, keyed by a hash of each
+// checkout's origin, was read here before. Since the query API reads
+// repositories only from the mirror (ADR-0065's 2026-10-03 amendment) no
+// key derived from the mirror could find that store, so the path is gone.
 //
 // # Isolation
 //
 // Every command below runs with an explicit, minimal environment and a
-// `safe.directory` entry for the ONE directory it is about to read —
-// internal/gateway/snapshot.go's own isolatedEnv, restated here for a
-// read-only reader of the SAME store rather than imported: that function is
-// unexported to its own package, and its GIT_INDEX_FILE/GIT_WORK_TREE
-// overrides answer a question this file never asks (nothing here ever
-// touches a working tree). `--no-ext-diff` accompanies every diff-tree
-// invocation so a project's own `.gitattributes` `diff=` driver — arbitrary
-// configuration read from a tree this process does not control — can never
-// run as this process.
+// `safe.directory` entry for the ONE directory it is about to read.
+// `--no-ext-diff` accompanies every diff-tree invocation so a project's own
+// `.gitattributes` `diff=` driver -- arbitrary configuration read from a
+// tree this process does not control -- can never run as this process.
 
-// snapshotRoot is where ConfigureRecordRoutes was told the gateway's
-// snapshot stores live. Set once, at start-up, through the same
-// package-level Configure/restore shape internal/mcp already uses
-// (observeActive, agentMessageActive) because Server (server.go) is not
-// this issue's file to add a field to — see recordhandler.go.
+// snapshotStoreConfig is how this file runs git.
 type snapshotStoreConfig struct {
-	root    string
 	gitPath string
 }
 
-// repoKey re-derives internal/gateway/snapshot.go's own per-repository store
-// key from a served checkout: the "origin" remote if one is configured,
-// else the repository's own root commit, else a source this process can
-// never reproduce from a different checkout (commonDir) — which is reported
-// as "no store", never guessed at. Unlike the gateway's own repoKey, this
-// never falls back to a directory path: this process was not the one that
-// created the store, and a path-derived key computed here would only ever
-// coincidentally match one computed from the gateway's own mount.
-func repoKey(ctx context.Context, cfg snapshotStoreConfig, repoDir string) (string, bool) {
-	if out, err := runGit(ctx, repoDir, isolatedGitEnv(repoDir), cfg.gitPath,
-		"remote", "get-url", "origin"); err == nil {
-		return hashRepoKey("origin", out), true
-	}
-	if out, err := runGit(ctx, repoDir, isolatedGitEnv(repoDir), cfg.gitPath,
-		"rev-list", "--max-parents=0", "HEAD"); err == nil {
-		if first := firstLine(out); first != "" {
-			return hashRepoKey("root-commit", first), true
-		}
-	}
-	return "", false
-}
-
-// hashRepoKey matches internal/gateway/snapshot.go's own construction byte
-// for byte: sha256(source + "\x00" + trimmed material), hex-encoded. A
-// different construction here would compute a DIFFERENT key for the
-// IDENTICAL repository, and every lookup against the real store would miss.
-func hashRepoKey(source, material string) string {
-	sum := sha256.Sum256([]byte(source + "\x00" + strings.TrimSpace(material)))
-	return hex.EncodeToString(sum[:])
-}
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
-}
-
-// baselineRefPrefix and baselineKeySource match
-// internal/gateway/snapshot.go's own constants of the identical name, byte
-// for byte — restated here rather than imported, this file's own package
-// comment's "re-derive, never be told" posture applied to a second value
-// (#437, RM-274): a different construction here would look up a DIFFERENT
-// ref name for the IDENTICAL run, and every baseline lookup would miss.
-const (
-	baselineRefPrefix = "refs/innsegl/baselines/"
-	baselineKeySource = "run-baseline"
-)
-
-// runBaselineTree answers the workspace tree internal/gateway/snapshot.go's
-// own SnapshotBaseline captured for runID before its first tool call ever
-// ran, or "" when none was ever taken: a deployment running before #437
-// shipped, a run whose first tool_use the gateway missed for any of the
-// ordinary reasons a snapshot can fail (snapshot.go's own "witness, never
-// gate"), or simply a run this store never heard of. Never an error — the
-// same "understate, never guess" posture every other read in this file
-// already holds for a tree it cannot resolve.
-func runBaselineTree(ctx context.Context, cfg snapshotStoreConfig, storeDir, runID string) string {
-	ref := baselineRefPrefix + hashRepoKey(baselineKeySource, runID)
-	out, err := runStoreGit(ctx, cfg, storeDir, "rev-parse", "--verify", "--quiet", "--end-of-options", ref)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(out)
-}
-
-// storeDirFor resolves repoName to its snapshot store directory, or false
-// when this process cannot: the repository is not one the proof BFF serves,
-// the store root is not configured, the checkout's key could not be
-// derived, or the derived store simply is not on disk (a repository the
-// gateway has never snapshotted at all — no tool call of any run in it ever
-// triggered one).
-func (rs *recordServer) storeDirFor(ctx context.Context, repoName string) (string, bool) {
-	if rs.cfg.root == "" || repoName == "" {
+// storeDirFor resolves repoName to the mirror that holds its snapshot
+// trees, or false when the core holds no mirror of it.
+func (rs *recordServer) storeDirFor(_ context.Context, repoName string) (string, bool) {
+	if repoName == "" || rs.prover == nil {
 		return "", false
 	}
-	repoDir, ok := rs.prover.RepoPath(repoName)
-	if !ok {
-		return "", false
-	}
-	key, ok := repoKey(ctx, rs.cfg, repoDir)
-	if !ok {
-		return "", false
-	}
-	dir := filepath.Join(rs.cfg.root, key)
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return "", false
-	}
-	return dir, true
+	return rs.prover.RepoPath(repoName)
 }
 
 // isolatedGitEnv is this file's own minimal environment: no inherited

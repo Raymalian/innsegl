@@ -11,9 +11,9 @@ import (
 	"testing"
 )
 
-// ENF-012 (PROPOSED for doc 07) — the machine reports its operator author to
+// ENF-017 (PROPOSED for doc 07) — the machine reports its operator author to
 // the core, and says plainly what the core answered (#545).
-func TestENF012TheMachineReportsItsOperatorAuthor(t *testing.T) {
+func TestENF017TheMachineReportsItsOperatorAuthor(t *testing.T) {
 	var got OperatorAuthorReport
 	answer := http.StatusOK
 	body := `{"pinned":true}`

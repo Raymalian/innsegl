@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"innsegl.dev/innsegl/internal/accounts"
+	"innsegl.dev/innsegl/internal/acme"
 	"innsegl.dev/innsegl/internal/commitpath"
 	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/ledger"
@@ -691,6 +692,9 @@ type runningGateway struct {
 	// dashboardCert keeps the dashboard's certificate current (RM-311);
 	// nil when $INNSEGL_DASHBOARD_TLS_DIR is unset.
 	dashboardCert *dashboardCert
+	// acmeRenewer renews a public server certificate (#473); nil when the
+	// core's own CA issues it.
+	acmeRenewer *acmeRenewer
 
 	// closers release every resource openGateway opened beyond the
 	// listener (the mapping store's pool, the ledger connection, the
@@ -714,6 +718,9 @@ func (g *runningGateway) Serve(ctx context.Context) error {
 	}
 	if g.dashboardCert != nil {
 		go g.dashboardCert.run(ctx)
+	}
+	if g.acmeRenewer != nil {
+		go g.acmeRenewer.run(ctx)
 	}
 
 	failed := make(chan error, 1)
@@ -930,8 +937,35 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 		return nil, fmt.Errorf("configure the gateway's own TLS certificate authority: %w", err)
 	}
 
+	// #473: the server certificate is the own CA's unless ACME is asked for.
+	var certs serverCerts = ownCACerts{ca: ca, names: caConfig.DNSNames}
+	acmeCfg, acmeOn, err := acmeConfigFromEnv(os.Getenv)
+	if err != nil {
+		running.Close()
+		return nil, fmt.Errorf("configure the public server certificate ($%s): %w", envACME, err)
+	}
+	if acmeOn {
+		// The own CA's until the public certificate is obtained; ordering
+		// never holds up start-up or keeps the core down (TLS-011).
+		sw := newSwitchableCerts(certs)
+		certs = sw
+		running.acmeRenewer = &acmeRenewer{
+			certs: sw, dashboardDir: os.Getenv(envDashboardTLSDir), log: log,
+			every: time.Hour, retry: 10 * time.Minute,
+			obtain: func(ctx context.Context) (acmeSource, error) { return acme.New(ctx, acmeCfg) },
+		}
+		log.info("a public server certificate is asked for; serving the own CA's until it is obtained",
+			"names", strings.Join(acmeCfg.Names, ","))
+	}
+	if hosted != nil {
+		hosted.serverCert = certs.Status
+	}
+
 	if dir := os.Getenv(envDashboardTLSDir); dir != "" {
-		d, dErr := openDashboardCert(ca, dir, log)
+		// Written through the source in use: the own CA's, renewed by
+		// dashboardCert; once a public certificate is obtained the ACME
+		// renewer writes it, and dashboardCert's own renewal is far off.
+		d, dErr := openDashboardCert(certs, dir, log)
 		if dErr != nil {
 			running.Close()
 			return nil, fmt.Errorf("write the dashboard's certificate ($%s): %w", envDashboardTLSDir, dErr)
@@ -969,7 +1003,7 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	}
 
 	var handler http.Handler = mux
-	tlsConfig := ca.ServerTLSConfig()
+	tlsConfig := serverTLSConfig(certs)
 	if hosted != nil {
 		handler, tlsConfig = hosted.wrap(mux, tlsConfig, log) //nolint:contextcheck // each handshake's own context bounds its bundle read, not boot's
 	}
@@ -991,6 +1025,9 @@ type hostedCore struct {
 	scope     gateway.ScopeChecker
 	writer    *accounts.Store
 	authority clientAuthority
+	// serverCert is the server certificate's status for /_core/status
+	// (#473); set by openGateway once the source is chosen.
+	serverCert func() serverCertStatus
 	// mirror is the per-repository evidence store (ADR-0065), nil when
 	// INNSEGL_MIRROR_DIR is unset (coregit.go).
 	mirror *mirror.Store
@@ -1057,7 +1094,7 @@ func openHostedCore(ctx context.Context, o gatewayOptions, running *runningGatew
 func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (http.Handler, *tls.Config) {
 	mux.Handle(coreRenewPath, renewHandler(h.writer, h.authority, log))
 	mux.Handle(coreDisconnectPath, disconnectHandler(h.writer, log))
-	mux.Handle(coreStatusPath, statusHandler(h.writer, log))
+	mux.Handle(coreStatusPath, statusHandler(h.writer, h.serverCert, log))
 	// ADR-0074: the encrypted trust-key backup, for the operator's machine.
 	backup := trustBackupHandler(os.Getenv(envTrustBackupDir), h.writer, newBackupLimiter(nil), log)
 	mux.Handle(coreTrustBackupPath, backup)
@@ -1444,7 +1481,7 @@ func openIdentityStack(
 
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
 
-	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running, hosted != nil))
+	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running, hosted))
 	toolUse = gateway.CombineToolUseObservers(spawnRecorder, toolCallRecorder)
 
 	// The commit path (ADR-0059, E17) authorises a commit by a git commit
@@ -1640,14 +1677,19 @@ func writeMessageKeyFile(dir, keyID, keyBytes string) error {
 // gateway.ToolCallRecorderConfig's own doc comment on Snapshots warns
 // against for exactly this reason: an interface holding one is not itself
 // nil.
-func newToolCallRecorderConfig(running *runningGateway, hosted bool) gateway.ToolCallRecorderConfig {
+func newToolCallRecorderConfig(running *runningGateway, hosted *hostedCore) gateway.ToolCallRecorderConfig {
 	cfg := gateway.ToolCallRecorderConfig{
 		Trigger: gateway.NewSnapshotTrigger(),
 		OnRecordFailure: func(err error) {
 			running.log.error("gateway: could not record a tool call", "err", err)
 		},
 	}
-	if snap := newGatewaySnapshotter(running, hosted); snap != nil {
+	if hosted != nil && hosted.mirror != nil {
+		// A hosted client snapshots its own tree and pushes it to the
+		// mirror (#467); the recorder reads it there.
+		cfg.MirrorSnapshots = hosted.mirror
+	}
+	if snap := newGatewaySnapshotter(running, hosted != nil); snap != nil {
 		cfg.Snapshots = snap
 	}
 	return cfg
@@ -1667,14 +1709,14 @@ func newToolCallRecorderConfig(running *runningGateway, hosted bool) gateway.Too
 // A hosted core builds none (ADR-0060 decision 5, as amended 2026-10-03). The
 // snapshot reads a working tree on this process's own disk, and on a hosted
 // core no client's tree is there (ADR-0064 decision 2): it would record the
-// core's own files as if they were the client's. Snapshots return to the
-// hosted core only as snapshot refs a client pushes to the mirror (ADR-0065
-// decision 3).
+// core's own files as if they were the client's. Snapshots reach the hosted
+// core only as snapshot refs a client pushes to the mirror (ADR-0065
+// decision 3, #467), which newToolCallRecorderConfig reads.
 func newGatewaySnapshotter(running *runningGateway, hosted bool) *gateway.Snapshotter {
 	if hosted {
-		running.log.info("workspace snapshotting is off on a hosted core: no client's working " +
-			"tree is on this disk (ADR-0064), so recorded tool calls carry no workspace_tree_hash " +
-			"until clients push snapshot refs (ADR-0065)")
+		running.log.info("the core takes no workspace snapshots on a hosted core: no client's working " +
+			"tree is on this disk (ADR-0064). A recorded tool call carries a workspace_tree_hash " +
+			"only from a snapshot ref its client pushed to the mirror (ADR-0065)")
 		return nil
 	}
 	root := os.Getenv(envObserveBodyDir)

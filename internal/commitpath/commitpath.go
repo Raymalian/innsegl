@@ -448,6 +448,16 @@ func StagingRef(installation, toolUseID string) string {
 	return StagingRefPrefix + installation + "/" + toolUseID
 }
 
+// SnapshotRefPrefix names the refs a client pushes its workspace snapshots
+// to (ADR-0065 decision 3, #467).
+const SnapshotRefPrefix = "refs/innsegl/snap/"
+
+// SnapshotRef is the one ref an installation pushes the workspace snapshot
+// it took after a tool call to.
+func SnapshotRef(installation, toolUseID string) string {
+	return SnapshotRefPrefix + installation + "/" + toolUseID
+}
+
 // clientStatusPath is the client service's own status route
 // (internal/client.StatusPath, repeated: that package's tests import this
 // one's, and the value is pinned by a test that imports both).
@@ -468,10 +478,7 @@ const clientStatusPath = "/_client/status"
 // the repository's own: a refused commit leaves no commit object behind
 // (CMT-014).
 func (c Client) Stage(ctx context.Context, dir, toolUseID string, payload []byte) error {
-	if !strings.HasPrefix(c.BaseURL, "http://") {
-		return nil
-	}
-	installation, ok := c.installation(ctx)
+	installation, ok := c.hosted(ctx)
 	if !ok {
 		return nil
 	}
@@ -514,9 +521,15 @@ func (c Client) Stage(ctx context.Context, dir, toolUseID string, payload []byte
 	if err != nil {
 		return err
 	}
+	return c.pushRef(ctx, dir, env, repo, "+"+commit+":"+StagingRef(installation, toolUseID))
+}
+
+// pushRef pushes one refspec to the core's mirror of repo, through the
+// client service, with no hook and no prompt.
+func (c Client) pushRef(ctx context.Context, dir string, env []string, repo, refspec string) error {
 	remote := strings.TrimSuffix(c.BaseURL, "/") + GitPathPrefix + repo + ".git"
-	_, err = stageGit(ctx, dir, env, "-c", "push.gpgSign=false", "-c", "http.followRedirects=false",
-		"push", "--no-verify", "--quiet", remote, "+"+commit+":"+StagingRef(installation, toolUseID))
+	_, err := stageGit(ctx, dir, env, "-c", "push.gpgSign=false", "-c", "http.followRedirects=false",
+		"push", "--no-verify", "--quiet", remote, refspec)
 	return err
 }
 

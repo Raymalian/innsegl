@@ -79,4 +79,9 @@ func TestTheCoreAnswersItsStatusToAnEnrolledMachine(t *testing.T) {
 	if got.Installation.ID != c.id || got.Installation.Status != accounts.StatusActive || got.Installation.Organisation == "" {
 		t.Errorf("installation = %+v", got.Installation)
 	}
+	// TLS-009: the server certificate's source and expiry; the own CA by
+	// default.
+	if sc := got.ServerCertificate; sc == nil || sc.Source != serverCertOwnCA || sc.NotAfter.IsZero() {
+		t.Errorf("server_certificate = %+v, want the own CA's with its expiry", got.ServerCertificate)
+	}
 }
