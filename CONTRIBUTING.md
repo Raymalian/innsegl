@@ -80,6 +80,13 @@ golangci-lint run
 go test ./... -coverprofile=cover.out && go tool cover -func=cover.out
 ```
 
+Use the tool versions CI runs; another version reports differently:
+
+```bash
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+go install github.com/rillig/gobco@v1.3.4
+```
+
 `go test ./...` reaches `test/failure` and `test/smoke`, which re-point the
 transparency log and end with `docker compose down -v`. Both are correct on a
 clean host and refuse to run while a deployment is up. `make test` runs the

@@ -48,7 +48,7 @@ if ! command -v "${gobco_bin}" >/dev/null 2>&1; then
     gobco_bin="${gopath_bin}"
   else
     printf 'FAIL: gobco not found on PATH or under `go env GOPATH`/bin.\n' >&2
-    printf '  Install with: go install github.com/rillig/gobco@latest\n' >&2
+    printf '  Install with: go install github.com/rillig/gobco@v1.3.4\n' >&2
     exit 1
   fi
 fi
