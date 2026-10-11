@@ -441,6 +441,7 @@ ${s}-core_innsegl-trust-backups|the encrypted trust-key bundles (ADR-0074); only
 ${s}-core_innsegl-mirror|the per-repository mirrors clients push commits to (ADR-0065)
 ${s}-core_innsegl-dashboard-tls|the dashboard's certificate and key (RM-311; rewritten on start)
 ${s}-core_innsegl-canary-status|the scheduled WORM canary's last result (doc 05 §2; rewritten on the next run)
+${s}-core_innsegl-acme-state|the ACME account key and public server certificates (#473; moved, so the new host reorders nothing and keeps the account)
 ${s}-sigstore_sigstore-rekor-search|Rekor's search index
 EOF
 }
