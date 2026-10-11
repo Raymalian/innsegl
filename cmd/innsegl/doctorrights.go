@@ -225,8 +225,8 @@ func (d *doctor) hookBinaries(repo string, scripts []hookScript) bool {
 }
 
 // doctorInstallAdvice is the repair for a binary the user can change.
-const doctorInstallAdvice = "install innsegl where only an administrator can write it (owned by root, " +
-	"not group- or world-writable, nor any folder above it), then run: innsegl connect --update"
+const doctorInstallAdvice = "install this build as the root-owned copy the hooks and the service run (#599): " +
+	"make install-release (in the innsegl checkout), then run: innsegl connect --update"
 
 // self is this binary's resolved path.
 func (d *doctor) self() string {

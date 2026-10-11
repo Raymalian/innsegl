@@ -56,7 +56,11 @@ user can change, and names `make install-release`. That holds whenever it
 writes the system managed settings, which every session loads, or a client
 service. Settings of your own (`--managed-settings <path>`) with
 `--no-service` run nothing on their own and name this binary when no
-installed copy of it is there. `--disconnect` is never refused for it. `--update` also moves a client service that starts another
+installed copy of it is there. `--disconnect` is never refused for it.
+`innsegl link` writes the same binary into a repository's git hooks, under
+the same rule. A repository linked earlier, whose hooks name another binary,
+is rewritten onto the installed copy the next time the session hook runs in
+it; with no installed copy of this build there, its hooks stay as they are. `--update` also moves a client service that starts another
 binary (an earlier connect's checkout build) onto the installed copy and
 restarts it. `make build` says when the installed copy is another build; until
 it is installed again, the hooks and the service run the old one.
@@ -348,7 +352,7 @@ says to revoke the machine from the Account page.
 - `internal/hostdeps/hostdeps_test.go`, `cmd/innsegl/preflight_test.go`
   (CLI-027, PROPOSED: every missing tool named in one run, with this OS's
   command; connect refuses before writing anything)
-- `cmd/innsegl/connectrelease_test.go` (CLI-041, CLI-042, PROPOSED: connect
+- `cmd/innsegl/connectrelease_test.go`, `linkrelease_test.go` (CLI-041, CLI-042, PROPOSED: connect and link
   refuses a binary the user can change unless the installed copy holds it;
   hooks, plist and unit name the installed copy; `--update` moves the service
   onto it; the leftover host backup job is named with its removal)
