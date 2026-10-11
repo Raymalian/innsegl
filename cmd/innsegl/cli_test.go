@@ -42,8 +42,8 @@ import (
 // does not cover. `connect` and `client` (RM-285, #461, ADR-0063) belong to an
 // enrolled client machine: enrolment, and the service that holds its key.
 var documentedSubcommands = []string{
-	"accounts", "admin-credential", "api", "author", "ca-custodian", "ca-custody", "canary", "client", "connect", "erase-organisation", "erase-repository", "git-hook", "hook", "init", "link", "migrate-schema",
-	"reap", "reconcile", "retire", "seal", "serve", "sign", "status", "trust-backup", "trust-history", "verify",
+	"accounts", "admin-credential", "api", "author", "ca-custodian", "ca-custody", "canary", "client", "connect", "erase-organisation", "erase-repository", "git-hook", "hook", "init", "ledger", "link", "migrate-schema",
+	"reap", "reconcile", "resign", "retire", "seal", "serve", "sign", "status", "trust-backup", "trust-history", "verify",
 }
 
 func TestSubcommandSetIsExactlyTheDocumentedFive(t *testing.T) {

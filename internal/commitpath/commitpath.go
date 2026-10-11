@@ -84,13 +84,27 @@ type SignResponse struct {
 // the harness hook uses it to decide where the tool call id goes, and the core
 // uses it to require that the tool call it resolves asked for a commit. Both
 // read it the same way because both call this.
+//
+// `innsegl resign` counts too (RM-328): it re-signs a range by running
+// `git rebase` itself, so the commits it makes are this tool call's.
 func IsGitCommitCommand(cmd string) bool {
 	for _, simple := range splitSimpleCommands(cmd) {
-		if commitCreatingGit[gitSubcommand(strings.Fields(simple))] {
+		words := strings.Fields(simple)
+		if commitCreatingGit[gitSubcommand(words)] || isResign(words) {
 			return true
 		}
 	}
 	return false
+}
+
+// isResign reports whether the command word is innsegl and its subcommand
+// is resign.
+func isResign(words []string) bool {
+	i := 0
+	for i < len(words) && strings.Contains(words[i], "=") && !strings.HasPrefix(words[i], "-") {
+		i++
+	}
+	return i+1 < len(words) && path.Base(words[i]) == "innsegl" && words[i+1] == "resign"
 }
 
 // IsAdoptableCommit reports whether every commit the command makes is a

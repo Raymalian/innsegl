@@ -36,6 +36,10 @@ func TestIsGitCommitCommandFindsCommitAsGitsOwnSubcommand(t *testing.T) {
 		"git -C ../repo rebase --onto main a b",
 		"GIT_EDITOR=true git merge --no-edit feature",
 		"git fetch && git merge origin/main",
+		// SIG-013 (RM-328): innsegl's own re-signing runs a rebase.
+		"innsegl resign origin/main..HEAD",
+		"/opt/innsegl/bin/innsegl resign main",
+		"git fetch && innsegl resign origin/main..HEAD",
 	} {
 		if !IsGitCommitCommand(cmd) {
 			t.Errorf("IsGitCommitCommand(%q) = false, want true", cmd)
@@ -60,6 +64,10 @@ func TestIsGitCommitCommandIgnoresEverythingElse(t *testing.T) {
 		"git branch --merged",
 		"git mergetool",
 		"git fetch",
+		"innsegl status",
+		"echo innsegl resign main",
+		"innsegl",
+		"innsegl-other resign main",
 	} {
 		if IsGitCommitCommand(cmd) {
 			t.Errorf("IsGitCommitCommand(%q) = true, want false", cmd)

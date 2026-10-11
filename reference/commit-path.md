@@ -16,6 +16,7 @@ innsegl git-hook prepare-commit-msg <message file> [<source> [<sha>]]
 innsegl git-hook post-commit
 innsegl git-hook push-mirror <dir> branch|snapshot <core url> ...   (started by the hooks, detached)
 innsegl sign --status-fd=<fd> -bsau <key>      (run by git as gpg.x509.program)
+innsegl resign <range>                          (run by the agent)
 innsegl link <repo dir>
 innsegl link -remove <repo dir>
 innsegl init [flags]
@@ -32,6 +33,7 @@ make link DIR=<path to a git repository>
 | `innsegl git-hook post-commit` | git | after a commit innsegl signed for an agent, sends its branch to the core's mirror (see below); always exits 0 |
 | `innsegl git-hook push-mirror` | the two hooks above and `hook session` | the push itself, in a process of its own; not run by hand |
 | `innsegl sign` | git | sends the commit payload to the core and returns the signature; `--verify` is git's verify mode |
+| `innsegl resign` | the agent, as its own Bash command | signs the unsigned commits of a range on the current branch again, through `innsegl sign` (see below) |
 | `innsegl link` | the operator | installs (or with `-remove`, restores) the repository's prepare-commit-msg and post-commit hooks; touches nothing else |
 | `make link` | the operator | runs `innsegl link` with the binary `make build` wrote; refuses a linked worktree path |
 | `innsegl init` | the operator | the older one-repository path: pins gitsign, chooses a trust root, signs a test commit and verifies it; `--local` git config only |
@@ -203,6 +205,41 @@ behind the client certificate guard, and never another installation's).
 - `make innsegl-init` runs `innsegl init` in the `innsegl-init` container
   (compose profile `init`); see [stack-and-make.md](stack-and-make.md).
 
+### Signing commits left unsigned: `innsegl resign`
+
+Signing is fail-closed, so a commit made while signing could not run is left
+unsigned. `innsegl resign <range>` is the recovery (RM-328). The agent runs
+it as its own command: the harness hook gives it the tool call id and the
+agent's identity, as it does `git rebase`, and the core signs each commit
+under that tool call. It rebases the range from the first unsigned commit
+with this binary as git's signing program. Trees are unchanged; each
+rewritten commit keeps its message and carries the trailers of the run that
+signed it, since git runs prepare-commit-msg for every commit it replays. It
+prints each old commit with its new one.
+
+It refuses, with nothing changed: a range that does not end at the current
+branch's tip, a detached HEAD, a dirty working tree, a merge in the range, a
+run outside an agent's tool call, and any commit a remote-tracking branch or
+tag already contains. Published history is never rewritten, and no flag
+allows it. If the core refuses a signature, the rebase is aborted and the
+branch is where it was.
+
+`innsegl resign -h`:
+
+```
+usage: innsegl resign <range>
+
+Sign the unsigned commits in <range> again, through the core, as the agent's
+own command. <range> is <base>..HEAD, or <base> for the same. Every commit from
+the first unsigned one to HEAD is rewritten and signed; earlier ones are kept.
+
+Refused, with nothing changed: a range that does not end at the current
+branch's tip, a dirty working tree, a commit any remote-tracking branch or tag
+already contains (published history is never rewritten), a merge, and a run
+outside an agent's tool call. If the core refuses a signature, the branch is
+left where it was.
+```
+
 ## Exit codes and error classes
 
 | Command | Code | Meaning |
@@ -211,6 +248,10 @@ behind the client certificate guard, and never another installation's).
 | `hook session` | 2 | before a user turn only: the client service is unreachable, so the prompt is stopped |
 | `git-hook`, `sign` | 1 | refused (no resolvable tool call id, or the core said no); git aborts the commit |
 | `link` | 2 | usage or a refusal; the message says which |
+| `resign` | 0 | re-signed, or nothing to sign |
+| `resign` | 2 | usage |
+| `resign` | 33 | refused: the range may not be re-signed; nothing changed |
+| `resign` | 34 | a signature was refused or git failed; the branch is where it was |
 | `init` | 14 | UNVERIFIED: setup did not prove itself |
 | `init` | 15 | INCONCLUSIVE: nothing could be attempted, or nothing to undo |
 
@@ -223,6 +264,7 @@ behind the client certificate guard, and never another installation's).
 - `cmd/innsegl/sign_test.go` (CMT-013, CMT-014), `commitsign_test.go`,
   `signpush_test.go`, `signrepo_test.go`, `commitpathmount_test.go`
 - `cmd/innsegl/link_test.go` (ENF-004, ENF-005)
+- `cmd/innsegl/resign_test.go` (SIG-013, SIG-014), `internal/commitpath/commitpath_test.go` (SIG-013)
 - `cmd/innsegl/mirrorpush_test.go`, `internal/commitpath/mirrorpush_test.go` and
   `internal/mirror/clientrefs_test.go` (SNAP-006, SNAP-007): the branch after a
   signed commit and at session end, and a tool call's snapshot, reach the

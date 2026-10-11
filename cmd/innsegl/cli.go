@@ -104,6 +104,12 @@ var commands = map[string]command{
 		summary: "say who holds the writer lease, and freeze or thaw the ledger",
 		exec:    ledgerCommand,
 	},
+	// RM-328 (#581): the recovery for commits left unsigned, through the
+	// same signing program, never rewriting published history.
+	"resign": {
+		summary: "sign the unsigned commits of a range on this branch again, through the core",
+		exec:    resignCommand,
+	},
 	"retire": {
 		summary: "end a run an operator knows is over",
 		exec:    retireCommand,
