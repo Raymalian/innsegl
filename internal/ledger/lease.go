@@ -185,13 +185,16 @@ func (l *Leases) Acquire(ctx context.Context, holder string, ttl time.Duration) 
 }
 
 // Renew extends held's lease by ttl. ErrLeaseLost when another holder or a
-// later epoch has it, or it expired; ErrFrozen on a frozen ledger.
+// later epoch has it; ErrFrozen on a frozen ledger. A lease that expired
+// while nobody took it (the same holder and epoch) is renewed: no other core
+// acquired it, and the fence refused this core's appends while it was
+// expired, so a ledger outage longer than the TTL does not stop the core.
 func (l *Leases) Renew(ctx context.Context, held WriterLease, ttl time.Duration) (WriterLease, error) {
-	return l.inTx(ctx, "lease_renew", func(tx pgx.Tx, cur WriterLease, live bool) (WriterLease, error) {
+	return l.inTx(ctx, "lease_renew", func(tx pgx.Tx, cur WriterLease, _ bool) (WriterLease, error) {
 		if cur.FrozenAt != nil {
 			return WriterLease{}, ErrFrozen
 		}
-		if !live || cur.Holder != held.Holder || cur.Epoch != held.Epoch {
+		if cur.Holder == "" || cur.Holder != held.Holder || cur.Epoch != held.Epoch {
 			return WriterLease{}, ErrLeaseLost
 		}
 		return scanLease(tx.QueryRow(ctx, `UPDATE innsegl.writer_lease
