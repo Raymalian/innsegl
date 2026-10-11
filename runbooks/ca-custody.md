@@ -75,9 +75,11 @@ innsegl ca-custody unlock
 
 **Check:** `innsegl ca-custody status` prints `unlocked; the CA can sign`.
 
-Fulcio may take up to a minute to come back after the unlock: it restarts on
-its own once its token is there. While the store is sealed, Fulcio's log
-reads `ecdsa public keys are not equal`.
+The same unlock repairs an unsealed store whose CA token is dead: `status`
+then prints `unlocked, but the CA CANNOT sign` with the reason, and `make
+update` prints `repair: on the operator machine, run: innsegl ca-custody
+unlock`. Signing resumes at once; no container restarts, because Fulcio
+holds no token (it signs through the custodian).
 
 If you decline the prompt, the service waits 15 minutes before asking again.
 `innsegl ca-custody unlock` asks at once.

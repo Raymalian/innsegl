@@ -78,11 +78,13 @@ func runCACustody(ctx context.Context, args []string, stdout, stderr io.Writer, 
 			}
 			return exitCACustodySealed
 		case !st.CanSign:
-			reason := st.Reason
-			if reason == "" {
-				reason = "the core does not say whether its CA can sign; update the core"
+			if st.Reason == "" {
+				fprintf(stdout, "ca custody: unlocked, but the CA CANNOT sign: "+
+					"the core does not say whether its CA can sign; update the core\n")
+				return exitCACustodySealed
 			}
-			fprintf(stdout, "ca custody: unlocked, but the CA CANNOT sign: %s\n", reason)
+			fprintf(stdout, "ca custody: unlocked, but the CA CANNOT sign: %s\n", st.Reason)
+			fprintf(stdout, "ca custody: run `innsegl ca-custody unlock` to repair it; no restart\n")
 			return exitCACustodySealed
 		default:
 			fprintf(stdout, "ca custody: unlocked; the CA can sign\n")
