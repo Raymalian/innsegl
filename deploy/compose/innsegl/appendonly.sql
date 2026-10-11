@@ -126,6 +126,9 @@ GRANT SELECT, INSERT ON innsegl.repo_mode TO :"role";
 -- renews and releases the lease, and the operator freezes and thaws through
 -- the core's own container. UPDATE, never DELETE: the one row stays.
 GRANT SELECT, INSERT, UPDATE ON innsegl.writer_lease TO :"role";
+-- Sessions machines report as bypassing innsegl (RM-319, migration 0022):
+-- the gateway keeps one row per session and moves its activity forward.
+GRANT SELECT, INSERT, UPDATE ON innsegl.unrouted_sessions TO :"role";
 
 -- innsegl_auth.installations and innsegl_auth.repo_grants (RM-280, #456;
 -- ADR-0063): the client-certificate guard checks an installation's status

@@ -23,6 +23,14 @@ import (
 // components, and whose local client service answers or not.
 func statusFixture(t *testing.T, components string, serviceUp bool, extra ...string) statusDeps {
 	t.Helper()
+	return statusFixtureLocal(t, components, serviceUp,
+		`{"core_reachable":true,"revoked":false,"certificate_expires_at":"2026-10-04T00:00:00Z"}`, extra...)
+}
+
+// statusFixtureLocal is statusFixture with the client service's own status
+// body.
+func statusFixtureLocal(t *testing.T, components string, serviceUp bool, localBody string, extra ...string) statusDeps {
+	t.Helper()
 	more := strings.Join(extra, "")
 	f := newConnectFixture(t)
 	f.core.Mux.HandleFunc(coreStatusPath, func(w http.ResponseWriter, _ *http.Request) {
@@ -42,7 +50,7 @@ func statusFixture(t *testing.T, components string, serviceUp bool, extra ...str
 				service.ServeHTTP(w, r)
 				return
 			}
-			if _, err := io.WriteString(w, `{"core_reachable":true,"revoked":false,"certificate_expires_at":"2026-10-04T00:00:00Z"}`); err != nil {
+			if _, err := io.WriteString(w, localBody); err != nil {
 				t.Error(err)
 			}
 		})
@@ -200,5 +208,24 @@ func TestStatusSaysHowOldTheLocalTrustBackupIs(t *testing.T) {
 	out = run(t, deps)
 	if l := trustLine.FindString(out); !strings.Contains(l, "WARN") || !strings.Contains(l, "3 days") {
 		t.Fatalf("stale: %q\n%s", l, out)
+	}
+}
+
+// HAR-022 (RM-319, #579): a session whose model traffic bypassed innsegl is
+// a WARN line naming the session, its repository and its last activity. It
+// is a finding, not an outage: the exit stays zero.
+func TestHAR022StatusWarnsOfAnUnroutedSession(t *testing.T) {
+	deps := statusFixtureLocal(t, `[{"name":"ledger","up":true}]`, true,
+		`{"core_reachable":true,"revoked":false,"certificate_expires_at":"2026-10-04T00:00:00Z",`+
+			`"unrouted_sessions":[{"session_id":"s-unrouted","repo":"github.com/acme/app",`+
+			`"first_seen":"2026-10-11T05:00:00Z","last_activity":"2026-10-11T05:01:00Z"}]}`)
+	var out, errOut bytes.Buffer
+	if code := runStatus(t.Context(), nil, &out, &errOut, deps); code != exitOK {
+		t.Fatalf("exit %d with an unrouted session; it is a finding, not an outage\n%s", code, errOut.String())
+	}
+	for _, want := range []string{"unrouted", "WARN", "s-unrouted", "github.com/acme/app", "2026-10-11T05:01:00Z"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("stdout lacks %q:\n%s", want, out.String())
+		}
 	}
 }

@@ -56,6 +56,7 @@ import { RecentRuns } from "./RecentRuns";
 import { strings } from "./strings";
 import { cardGrid, heading, link, mutedText, page, prose } from "./styles";
 import { TrustExpiryNotice } from "./TrustExpiryNotice";
+import { UnroutedNotice } from "./UnroutedNotice";
 import type { TrustExpiry, TrustProblem } from "./TrustExpiryNotice";
 import type { OverviewData, PassRate, RunSummary, WindowedCount } from "./types";
 
@@ -109,6 +110,7 @@ export function Overview({
       </header>
 
       <TrustExpiryNotice expiries={trustExpiries} problems={trustProblems} />
+      <UnroutedNotice sessions={data.unrouted_sessions} />
 
       <section aria-label={strings.metrics.regionLabel} className={cardGrid}>
         <MetricCard

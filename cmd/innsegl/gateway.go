@@ -1031,6 +1031,9 @@ type hostedCore struct {
 	// mirror is the per-repository evidence store (ADR-0065), nil when
 	// INNSEGL_MIRROR_DIR is unset (coregit.go).
 	mirror *mirror.Store
+	// unrouted keeps the sessions machines report as bypassing innsegl
+	// (RM-319), on the gateway's own ledger role.
+	unrouted unroutedReporter
 }
 
 // openHostedCore builds hosted mode. The authority is the MCP's own admin
@@ -1085,6 +1088,7 @@ func openHostedCore(ctx context.Context, o gatewayOptions, running *runningGatew
 	return &hostedCore{
 		guard: guard, pins: gateway.NewSessionPins(0), scope: firstUseScope{reader: installations, writer: writer},
 		writer: writer, authority: authority, mirror: store,
+		unrouted: gateway.NewPostgresUnroutedStore(pool),
 	}, nil
 }
 
@@ -1105,6 +1109,10 @@ func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (
 	mux.Handle(coreCACustodyPath+"/", custody)
 	// #545: the operator author a machine reports, pinned on first use.
 	mux.Handle(coreOperatorAuthorPath, operatorAuthorHandler(h.writer, log))
+	// RM-319: a session a machine saw bypass innsegl.
+	if h.unrouted != nil {
+		mux.Handle(coreUnroutedPath, unroutedHandler(h.unrouted, log))
+	}
 
 	outer := http.NewServeMux()
 	outer.Handle(coreEnrolPath, enrolHandler(h.writer, h.authority, log))

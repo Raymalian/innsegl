@@ -86,7 +86,15 @@ system's roots for a core with a public certificate once `innsegl connect`
 Routes on its listener: model traffic, `/_gateway/session-end`,
 `/_gateway/session-workspace`, `/_gateway/commit-trailers`,
 `/_gateway/commit-sign`, and in hosted mode the `/_core/...` routes
-(enrol, renew, status, disconnect, journal, git, trust-backup, ca-custody).
+(enrol, renew, status, disconnect, journal, git, trust-backup, ca-custody,
+operator-author, unrouted-session).
+
+`/_core/unrouted-session` (RM-319) takes a machine's report of a session
+whose model traffic bypassed innsegl: `POST {"session_id", "last_activity_at"}`,
+behind the client guard, so the machine is the verified installation. It is
+kept in `innsegl.unrouted_sessions` (migration 0022), one row per machine and
+session, with the newest activity; no repository is stored. 204 kept, 400 not
+a report, 401 no verified machine, 503 not kept (the client sends it again).
 
 Guards run in order before anything is forwarded (`internal/gateway/guard.go`).
 Refusal statuses: 400 unrecognised harness shape, 403 identity, 429 rate
@@ -111,6 +119,7 @@ As a companion of `serve`, a failure here ends the process with `serve`'s codes.
   server and a fake DNS, never a real CA), `cmd/innsegl/acmecert_test.go`
   (TLS-007 to TLS-009), `internal/client/coretrust_test.go` (TLS-010)
 - `cmd/innsegl/exposure_test.go` (GW-015), `enrol_test.go` (GW-016 to GW-019)
+- `internal/gateway/unrouted_test.go`, `cmd/innsegl/coreunrouted_test.go` (GW-020)
 - `internal/mcp/gateway_test.go`, `gatewayrecord_test.go` (GID-001 to GID-004, GREC)
 - `test/deploy/gatewaypublish_test.go`, `bindaddress_test.go` (GW-005),
   `gatewaydrain_test.go`

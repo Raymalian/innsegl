@@ -92,6 +92,8 @@ Under `~/.innsegl/client/` (`internal/client/files.go:50`):
 | `revoked` | present when the core revoked this installation |
 | `outbox/` | the signed client journal, for what the core could not record (ADR-0068) |
 | `proxy-ca.pem`, `proxy-ca-key.pem` | the local proxy CA |
+| `session-processes.json` | the harness process of each watched session |
+| `unrouted-sessions.json` | sessions whose model traffic bypassed innsegl (below) |
 
 Also `~/.innsegl/trust-backups/` and `~/.innsegl/trust-backup/identity.txt`
 (see [trust-key-backup.md](trust-key-backup.md)).
@@ -102,9 +104,29 @@ unit `innsegl-client.service` on Linux (`internal/client/service.go`).
 Local routes: `GET /_client/status`, and `/_client/core/<core path>` for the
 CLI (below). Core routes it calls: `/_core/enrol`, `/_core/renew`,
 `/_core/status`, `/_core/disconnect`, `/_core/journal`, `/_core/git/`,
-`/_core/trust-backup`, `/_core/ca-custody`, `/_core/operator-author`.
+`/_core/trust-backup`, `/_core/ca-custody`, `/_core/operator-author`,
+`/_core/unrouted-session`.
 
 The certificate is renewed at half-life.
+
+### Sessions that bypass innsegl
+
+The service never locks the machine down, so a session can reach the
+provider without passing through it (its own base URL, a proxy setting left
+out). Once a minute it reads the harness's transcripts
+(`$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`) changed since it
+started. A session with model replies there since the service started, in a
+repository innsegl records (one with an origin), whose model traffic never
+reached the service, is a finding (RM-319). It is kept in
+`unrouted-sessions.json`, shown in `GET /_client/status` as
+`unrouted_sessions`, and reported to the core at `/_core/unrouted-session`,
+again whenever its activity moves on; a report the core does not take is
+sent again later. `innsegl status` prints one `unrouted WARN` line for each,
+naming the session, its repository and its last activity. It does not change
+the exit status, and nothing is refused: the remedy is to start the session
+again after `innsegl connect`. A session outside any repository is not a
+finding. The dashboard overview lists the findings
+([dashboard-api.md](dashboard-api.md)).
 
 ### The CLI reaches the core through the service
 
@@ -177,6 +199,7 @@ says to revoke the machine from the Account page.
   `scripts/client-restart-selftest.sh` (OPS-170, PROPOSED),
   `scripts/link-bin-selftest.sh` (OPS-171, PROPOSED)
 - `internal/clientjournal/entry_test.go` (JRN-001)
+- `internal/client/unrouted_test.go`, `cmd/innsegl/status_test.go` (HAR-022)
 - `internal/accounts/enrol_test.go` (KEY-001 to KEY-005)
 
 ## Decisions
