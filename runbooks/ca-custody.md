@@ -108,6 +108,52 @@ not change it. It comes from a rotation or a restore that did not finish:
 see [trust-rotation.md](trust-rotation.md) and the Restore section below.
 Do not start the store over: Fulcio and the trust history depend on it.
 
+## Add a second unlock device — the operator's machine
+
+With one recipient, losing that machine's key loses the unlock. A reseal
+seals the **same** material to a new set (ADR-0082 decision 7). The CA key,
+the store and its unseal key do not change, and nothing restarts.
+
+You need the new device's public recipient, `age1…`. It is public: copying
+it opens nothing.
+
+1. Mac: list the set the material is sealed to now:
+
+   ```sh
+   innsegl ca-custody recipients
+   ```
+
+2. Mac: add the new recipient:
+
+   ```sh
+   innsegl ca-custody reseal --add age1...
+   ```
+
+   It prints the current set, the new set, the added member (`+`) and both
+   digests, then asks `[y/N]`. Check the added recipient character by
+   character against the new device, then answer `y`. Approve Touch ID
+   twice: once to open the material, once to open the staged copy.
+
+3. **Check:** it prints `resealed: the unlock material is sealed to 2
+   recipient(s)`, and `innsegl ca-custody recipients` lists both.
+
+4. Prove the new device: on it, after the next sealed restart (or a
+   planned one), run `innsegl ca-custody unlock --identity <its identity
+   file>`. It prints `unlocked; the CA can sign`.
+
+5. Take a new trust-key backup and drill it. New bundles also encrypt to the
+   new set; older bundles keep the recipients they were written to.
+
+To remove a device, use `--remove age1...` from a device that stays in the
+set. A removed device no longer opens new copies, but older copies and older
+bundles still open with it. To replace the whole set, write it to a file, one
+recipient per line, and use `--set <file>`.
+
+Refused, with nothing opened and nothing changed: an empty set, a set
+without the machine you run it on, and a member that is not a recipient.
+If the confirm does not arrive within 10 minutes, the custodian drops the
+staged copy and the old material stands. Run the command again.
+
 ## Rollback
 
 **During step 2:** the rotation puts Fulcio back on the file CA on its own

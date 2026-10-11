@@ -16,6 +16,24 @@ innsegl ca-custodian ready                 exit 0 when the CA can sign: store un
 innsegl ca-custodian restore SNAPSHOT      put a backup's store into a new store
 innsegl ca-custody status                  say whether the core's CA can sign
 innsegl ca-custody unlock [--identity F]   unlock it, or repair a dead token, when the CA cannot sign (asks for Touch ID)
+innsegl ca-custody recipients             list the recipients the unlock material is sealed to
+innsegl ca-custody reseal --add R | --remove R | --set FILE [--identity F] [--opener R]
+                                          re-seal the same material to a new set (asks, then Touch ID twice)
+```
+
+`ca-custody reseal` flags, from `innsegl ca-custody reseal -h`:
+
+```
+  -add value
+    	a recipient to add (age1…); repeatable
+  -identity string
+    	the age identity file that opens the unlock material (a Secure Enclave identity asks for Touch ID) (default "~/.innsegl/trust-backup/identity.txt")
+  -opener string
+    	this machine's own recipient, when the identity file does not name it
+  -remove value
+    	a recipient to remove; repeatable
+  -set string
+    	a file holding the whole new set, one recipient per line, # comments allowed
 ```
 
 `ca-custodian` runs on the core. `ca-custody` runs on the operator's
@@ -161,6 +179,31 @@ the custodian's log, with set digests and recipients, never material.
 set). The digest is `sha256:` over the members, trimmed, each once, sorted,
 one per line, each line ending in a newline.
 
+### `innsegl ca-custody reseal`
+
+On the operator's machine, through the client service and the core:
+
+1. `GET /_core/ca-custody/recipients`: the current set.
+2. The new set: the current one with `--add` and `--remove` applied, or the
+   whole of `--set FILE`. Refused here, before anything is opened: an empty
+   set, a member that is no recipient, and a set without this machine. This
+   machine is the recipient its identity file names: an X25519 key's own, or
+   a `# public key: age1…` or `# recipient: age1…` comment line. `--opener`
+   names it when the file does not. An unchanged set does nothing.
+3. It prints the current set, the new set, each member added (`+`) or
+   removed (`-`), both digests, and asks `[y/N]`. Anything but `y` or `yes`
+   opens nothing and exits 27.
+4. It opens the material (Touch ID), posts the reseal, checks that the
+   staged copy is for the digest it showed, opens that copy (Touch ID again),
+   and posts the confirm. A staged copy for any other set is never
+   confirmed and expires.
+5. It prints the new set's size and digest, and that trust-key backups now
+   also encrypt to it.
+
+A reseal is four custody calls; it fits in the core's per-machine limit.
+The client service must be at least as new as the command: an older one
+refuses the reseal routes with 403 (`restart the client service`).
+
 ## Files, volumes, containers
 
 | Item | Holds |
@@ -177,9 +220,14 @@ one per line, each line ending in a newline.
 | volume `<prefix>-sigstore_sigstore-fulcio-kms` | the store's root chain and issuer config; Fulcio and the custodian mount it read-only (the custodian is recreated when it changes, OPS-165). The bootstrap writes it as 65532; a new volume takes that owner from the bootstrap image, so no chown is needed (OPS-192) |
 | backup items `ca-store/store.snap`, `ca-custody/unlock.age` | custody in a trust-key bundle |
 
-Core routes (operator organisation workstations only): `/_core/ca-custody`,
-`/_core/ca-custody/material`, `/_core/ca-custody/unlock`. The core reaches
-the custodian on an internal unlock network and logs none of what it carries.
+Core routes (operator organisation workstations only, each with its one
+method, under one per-machine rate limit): `GET /_core/ca-custody`,
+`GET /_core/ca-custody/material`, `POST /_core/ca-custody/unlock`,
+`GET /_core/ca-custody/recipients`, `POST /_core/ca-custody/reseal`,
+`POST /_core/ca-custody/reseal/confirm`. Each goes to the custodian route of
+the same name. The core reaches the custodian on an internal unlock network
+and logs none of what it carries: one line per forwarded POST, with the
+route and the installation.
 
 ## Exit codes and error classes
 
@@ -187,6 +235,8 @@ the custodian on an internal unlock network and logs none of what it carries.
 |---|---|---|
 | `ca-custodian`, `ca-custody` | 27 | the command failed |
 | `ca-custody status` | 28 | the CA cannot sign: SEALED, or unsealed with the reason printed |
+| `ca-custody reseal` | 27 | refused, declined, or failed; the material is unchanged unless the confirm was accepted |
+| `ca-custody reseal` | 2 | no change named, or `--set` with `--add`/`--remove` |
 | `ca-custodian ready` | 27 | not ready: the reason is printed |
 | `ca-custody-restore` | 2 | refused: missing `CONFIRM`/`FROM` |
 | `ca-custody-reset` | 2 | missing `CONFIRM=reset` |
@@ -201,7 +251,12 @@ the custodian on an internal unlock network and logs none of what it carries.
   `reseal_test.go`: the reseal and its refusals)
 - `cmd/innsegl/cacustodiancli_test.go` (OPS-146, OPS-155, OPS-185, OPS-186,
   OPS-188: the gateway has its own listener),
-  `cacustodycli_test.go` (BAK-029, CLI-021), `corecacustody_test.go` (OPS-147)
+  `cacustodycli_test.go` (BAK-029, CLI-021), `corecacustody_test.go` (OPS-147),
+  `corecacustodyreseal_test.go` (CLI-052: the core carries the reseal routes,
+  operator machines only), `cacustodyreseal_test.go` (CLI-053: `reseal`
+  shows both sets, stops on no, refuses before any Touch ID, never confirms
+  another set), `cacustodyresealstore_test.go` (CLI-054: a real store,
+  reseal to two, restart sealed, unlock with the second; Docker, `-p 1`)
 - `cmd/ca-bootstrap/*_test.go` (OPS-049, OPS-050, OPS-052, OPS-148)
 - `internal/client/cacustody_test.go` (BAK-026 to BAK-028)
 - `test/deploy/cacustody_test.go` (OPS-051, OPS-149 to OPS-151, OPS-155, OPS-186: the custodian mounts the chain the CA presents, OPS-187: Fulcio holds no token, BAK-030)
