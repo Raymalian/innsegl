@@ -128,7 +128,7 @@ func runHookPreToolUse(stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	if turnsSigningOff(command) {
-		writeDeny(stdout, unsignedCommitReason)
+		writeDeny(stdout, signingOffReason())
 		return exitOK
 	}
 
