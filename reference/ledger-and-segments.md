@@ -87,8 +87,9 @@ Moving a deployment: `make innsegl-freeze REASON=...` on the old host, stop
 it, export, import on the new host and start it. The new core waits, frozen.
 Check the copy, then `make innsegl-thaw` on the new host only. The old host
 stays frozen, so it never writes again.
-- `make innsegl-backup` runs `pg_dump`, restores it into a throwaway
-  database and checks it against the sealed segments before keeping it.
+- `make innsegl-backup` runs `pg_dump`, restores it into a private
+  Postgres it starts itself (the backup role has no `CREATEDB`, RM-356)
+  and checks it against the sealed segments before keeping it.
 - `make backup-freshness` reports the age of the last verified backup and
   whether its host copy landed.
 - `make innsegl-verify` asks Postgres and the object store what this
@@ -181,10 +182,10 @@ means no run in twice the interval.
 - `cmd/innsegl/migrateschema_test.go` (LED-035, LED-036)
 - `internal/ledger/lease_test.go` (LED-047, LED-048), `cmd/innsegl/writerlease_test.go` (OPS-182)
 - `internal/event/*_test.go` (SER-001 to SER-026)
-- `test/deploy/ledgerdb/appendonlyrole_test.go` (OPS-009, OPS-010)
+- `test/deploy/ledgerdb/appendonlyrole_test.go` (OPS-009, OPS-010), `backuprole_test.go` (OPS-212)
 - `test/deploy/objectstore/objectscope_test.go` (OPS-025 to OPS-030),
   `filerisolation_test.go`; `test/deploy/objectoneprocess_test.go`
-- `scripts/backup-ledger-selftest.sh` (BAK-001 to BAK-008, BAK-014, BAK-015),
+- `scripts/backup-ledger-selftest.sh` (BAK-001 to BAK-008, BAK-014, BAK-015, OPS-213),
   `scripts/backup-service-selftest.sh` (BAK-009 to BAK-013)
 - `runbooks/verify-rebuilt-index-selftest.sh` (SEG-006)
 

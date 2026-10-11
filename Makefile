@@ -1148,7 +1148,7 @@ innsegl-purge:
 # nothing shipped here took one before now.
 #
 # scripts/backup-ledger.sh does not call itself done on "pg_dump exited 0".
-# It restores the dump into a throwaway database in the same container and
+# It restores the dump into a private Postgres it starts itself (RM-356) and
 # checks the restored chain against the sealed segments with
 # runbooks/verify-rebuilt-index.sh before writing anything to
 # $(INNSEGL_BACKUP_DIR) (default ./backups) -- the adjudication

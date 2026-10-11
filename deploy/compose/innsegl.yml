@@ -180,15 +180,15 @@ x-resolver-role: &resolver-role innsegl_resolver
 x-resolver-dsn: &resolver-dsn postgres://innsegl_resolver@postgres:5432/innsegl?sslmode=disable&passfile=/run/innsegl/credentials/resolver/pgpass
 
 # doc 05 §1's BACKUP role (RM-146, #237). The reader's grants over the ledger,
-# plus CREATEDB — and CREATEDB only because the backup proves a dump restores by
-# restoring it into a throwaway database of its own. `innsegl-backup` connects as
-# this and NOTHING ELSE DOES.
+# and no CREATEDB (RM-356, #604): the backup proves a dump restores by restoring
+# it into a private Postgres it starts in its own container, never on this
+# server. `innsegl-backup` connects as this and NOTHING ELSE DOES.
 #
 # WHAT IT REPLACES IS WORSE. Until now the backup ran on the HOST, from a
 # scheduler, reaching the database through the container runtime — so the thing
 # taking backups held the runtime socket, which is root on the machine. This
-# credential can read the ledger and own throwaway databases. It cannot write
-# the ledger, and innsegl/verify-backup-role.sh proves both halves against the
+# credential can read the ledger. It can neither create a database nor write
+# the ledger, and innsegl/verify-backup-role.sh proves each half against the
 # server rather than trusting the GRANTs that produced them.
 #
 # ITS OWN CREDENTIAL, for the reason the reader's is its own: "One name for two
@@ -1657,7 +1657,7 @@ services:
   # in and it is the gateway (doc 05 §1).
   #
   # THE CREDENTIALS IT HOLDS ARE BOTH READERS. innsegl_backup can read the
-  # ledger and own throwaway databases and cannot write the ledger
+  # ledger, cannot create a database on its server and cannot write the ledger
   # (verify-backup-role.sh, OPS-043); the object identity needs GetObject and
   # ListBucket under the segment prefix, and nothing on this store can delete a
   # retained segment in any case.

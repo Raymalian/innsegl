@@ -56,9 +56,11 @@ Read `scripts/backup-ledger.sh`'s header comment for the full contract; the
 short version:
 
 1. `pg_dump` the whole `innsegl` schema from the running container.
-2. Restore that dump into a throwaway database in the **same** container,
-   never the live one (`index-rebuild.md` §2.2) — this is what proves the
-   dump restores, not merely that `pg_dump` exited `0`.
+2. Restore that dump into a private Postgres the run starts in its own work
+   directory and stops at the end — never the ledger's server
+   (`index-rebuild.md` §2.2) — this is what proves the dump restores, not
+   merely that `pg_dump` exited `0`. The backup role needs no `CREATEDB`
+   (RM-356, #604); the server tools (`initdb`, `pg_ctl`) must be on `PATH`.
 3. Extract the restored `event_hash` column, in `chain_position` order.
 4. Fetch the sealed segments from object storage (or use `--segments DIR` for
    a directory already staged) and adjudicate the restored chain against them
