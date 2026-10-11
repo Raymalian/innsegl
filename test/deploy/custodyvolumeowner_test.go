@@ -86,9 +86,9 @@ func TestOPS192AFreshKMSVolumeIsWritableByTheBootstrap(t *testing.T) {
 	// this package past go test's 10-minute limit (#591). Every other line,
 	// the mkdir/chown under test included, runs exactly as written; an empty
 	// context makes any other COPY from the checkout fail here, loudly.
-	df, err := os.ReadFile(filepath.Join(root, "Dockerfile"))
-	if err != nil {
-		t.Fatal(err)
+	df, readErr := os.ReadFile(filepath.Join(root, "Dockerfile"))
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
 	from := regexp.MustCompile(`(?m)^FROM ([^\n]*) AS ca-bootstrap$`).FindStringSubmatch(string(df))
 	if from == nil {
