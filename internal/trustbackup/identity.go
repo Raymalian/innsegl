@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"filippo.io/age"
@@ -49,6 +50,23 @@ func ParseIdentities(r io.Reader, ui *plugin.ClientUI) ([]age.Identity, error) {
 		return nil, errors.New("trust backup: the identity file holds no identity")
 	}
 	return out, nil
+}
+
+// PluginNames are the plugins an identity file's plugin identities run, in
+// order, each once: "se" for an AGE-PLUGIN-SE-1… line, run as age-plugin-se.
+// Nothing is run to find them.
+func PluginNames(r io.Reader) ([]string, error) {
+	ids, err := ParseIdentities(r, nil)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, id := range ids {
+		if p, ok := id.(*plugin.Identity); ok && !slices.Contains(names, p.Name()) {
+			names = append(names, p.Name())
+		}
+	}
+	return names, nil
 }
 
 // TerminalUI is a plugin prompt for an interactive command: the plugin's

@@ -71,6 +71,15 @@ type connectDeps struct {
 	// serviceURL is where --disconnect asks the client service to revoke
 	// this machine; empty means the address the enrolment names.
 	serviceURL string
+	// lookPath finds a program on this shell's PATH; nil is exec.LookPath.
+	lookPath func(string) (string, error)
+}
+
+func (d connectDeps) look() func(string) (string, error) {
+	if d.lookPath == nil {
+		return exec.LookPath
+	}
+	return d.lookPath
 }
 
 // connectHome answers the home folder and uid connect acts for. Under sudo,
@@ -298,6 +307,24 @@ func (d connectDeps) service() client.Service {
 	return client.Service{GOOS: d.goos, Home: d.home, UID: d.uid, Run: d.run}
 }
 
+// serviceToInstall is service() with the PATH the client service needs to
+// run the age plugins the operator's identity file names (CLI-025, #592):
+// their directories as this shell resolves them now.
+func (d connectDeps) serviceToInstall(stderr io.Writer) client.Service {
+	svc := d.service()
+	idFile := client.ClientPaths(d.home).TrustIdentity
+	path, missing, err := client.ServicePATH(d.goos, idFile, d.look())
+	if err != nil {
+		fprintf(stderr, "innsegl connect: reading %s: %v; the client service keeps its default PATH\n", idFile, err)
+	}
+	for _, m := range missing {
+		fprintf(stderr, "innsegl connect: %s is not on PATH, so the client service cannot unlock the CA with it; "+
+			"install it, then run `innsegl connect --update --service`\n", m)
+	}
+	svc.PATH = path
+	return svc
+}
+
 // enrolledListen is the loopback address the enrolment in ~/.innsegl/client
 // names, or the default.
 func enrolledListen(paths client.Paths) string {
@@ -401,7 +428,7 @@ func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer
 	// gets it here, without a token. Only when asked: RM-312's --update
 	// changes no service on its own.
 	if f.service {
-		if err := deps.service().Install(settings.HookBin); err != nil {
+		if err := deps.serviceToInstall(stderr).Install(settings.HookBin); err != nil {
 			fprintf(stderr, "innsegl connect: reinstalling the client service: %v\n", err)
 			return exitConnectFailed
 		}
@@ -550,7 +577,7 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 	if f.noService {
 		fprintf(stdout, "innsegl connect: --no-service: run `%s client serve` yourself; the managed settings point at http://%s\n",
 			settings.HookBin, f.listen)
-	} else if err := deps.service().Install(settings.HookBin); err != nil {
+	} else if err := deps.serviceToInstall(stderr).Install(settings.HookBin); err != nil {
 		fprintf(stderr, "innsegl connect: installing the client service: %v\n"+
 			"  Run `%s client serve` yourself until it is fixed.\n", err, settings.HookBin)
 		failed = true

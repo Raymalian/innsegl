@@ -57,7 +57,7 @@ WantedBy=default.target
 // LaunchAgent with ProcessType Interactive showed the prompt and decrypted;
 // Background is the class launchd throttles and keeps away from the user.
 func TestBAK025TheClientServiceRunsAsAnInteractiveAgent(t *testing.T) {
-	got := RenderPlist("/opt/innsegl/innsegl", "/tmp/innsegl-client.log")
+	got := RenderPlist("/opt/innsegl/innsegl", "/tmp/innsegl-client.log", "")
 	want := "<key>ProcessType</key>\n  <string>Interactive</string>"
 	if !strings.Contains(got, want) {
 		t.Fatalf("the client service is not an interactive agent, so it cannot ask for Touch ID to unlock the CA store:\n%s", got)
@@ -65,14 +65,14 @@ func TestBAK025TheClientServiceRunsAsAnInteractiveAgent(t *testing.T) {
 }
 
 func TestServicePlistGolden(t *testing.T) {
-	got := RenderPlist("/opt/innsegl & co/innsegl", "/opt/home-dev/Library/Logs/innsegl-client.log")
+	got := RenderPlist("/opt/innsegl & co/innsegl", "/opt/home-dev/Library/Logs/innsegl-client.log", "")
 	if got != goldenPlist {
 		t.Fatalf("plist differs\n--- got\n%s\n--- want\n%s", got, goldenPlist)
 	}
 }
 
 func TestServiceUnitGolden(t *testing.T) {
-	got := RenderUnit("/opt/innsegl/bin/innsegl")
+	got := RenderUnit("/opt/innsegl/bin/innsegl", "")
 	if got != goldenUnit {
 		t.Fatalf("unit differs\n--- got\n%s\n--- want\n%s", got, goldenUnit)
 	}
@@ -97,7 +97,7 @@ func TestServiceInstallAndUninstallOnDarwin(t *testing.T) {
 		t.Fatalf("Path = %q", svc.Path())
 	}
 	text, err := os.ReadFile(plist)
-	if err != nil || string(text) != RenderPlist("/opt/innsegl/bin/innsegl", filepath.Join(home, "Library", "Logs", "innsegl-client.log")) {
+	if err != nil || string(text) != RenderPlist("/opt/innsegl/bin/innsegl", filepath.Join(home, "Library", "Logs", "innsegl-client.log"), "") {
 		t.Fatalf("plist not written as rendered (err=%v)", err)
 	}
 	// The log exists before launchd starts anything, so a service that
