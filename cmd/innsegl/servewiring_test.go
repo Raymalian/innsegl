@@ -217,6 +217,7 @@ func TestValidateRefusesEveryUnusableCombination(t *testing.T) {
 		{"a negative rate limit", func(o *serveOptions) { o.rateCalls = -1 }, "-register-rate-calls"},
 		{"a limit over no time", func(o *serveOptions) { o.rateWindow = 0 }, "-register-rate-window"},
 		{"a negative lease", func(o *serveOptions) { o.lease = -1 }, "-idempotency-lease"},
+		{"a negative writer lease", func(o *serveOptions) { o.writerLeaseTTL = -1 }, "-writer-lease-ttl"},
 		{"a negative shutdown bound", func(o *serveOptions) { o.shutdownTimeout = -1 }, "-shutdown-timeout"},
 		{"a credential with no key", func(o *serveOptions) { o.svidFile = "svid.pem" }, "-svid, -key and -bundle"},
 		{"a credential with no bundle", func(o *serveOptions) {

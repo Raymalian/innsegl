@@ -1076,8 +1076,8 @@ func (o serveOptions) validate() string {
 	case o.rateCalls > 0 && o.rateWindow <= 0:
 		return fmt.Sprintf("-register-rate-window %s is not positive; a limit measured over "+
 			"no time is not a limit", o.rateWindow)
-	case o.writerLeaseTTL <= 0:
-		return "-writer-lease-ttl must be positive"
+	case o.writerLeaseTTL < 0:
+		return "-writer-lease-ttl must not be negative; 0 is the default"
 	case o.lease < 0:
 		return "-idempotency-lease is negative"
 	case o.shutdownTimeout < 0:
