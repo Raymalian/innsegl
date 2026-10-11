@@ -49,9 +49,9 @@ rc=$?
 
 repair() {
 	if [ "${INNSEGL_CA_CUSTODY:-}" = on ]; then
-		echo "repair: on the operator machine, run: innsegl ca-custody unlock"
+		echo "repair: on the operator machine, run: innsegl doctor (it unlocks the CA with Touch ID when that is the repair)"
 	else
-		echo "repair: see runbooks/ca-custody.md, section 3 (After a restart); once 'innsegl doctor' exists, run it on the operator machine"
+		echo "repair: on the operator machine, run: innsegl doctor; see runbooks/ca-custody.md, section \"Signing stopped\""
 	fi
 }
 

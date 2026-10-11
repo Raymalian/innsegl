@@ -23,6 +23,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"innsegl.dev/innsegl/internal/version"
 )
 
 // StatusPath is the client service's own health route. Everything else is
@@ -474,6 +476,9 @@ type Status struct {
 	// Signing is the core's signing probe as last read (RM-339); absent
 	// before the first reading, or while the core does not answer.
 	Signing *SigningStatus `json:"signing,omitempty"`
+	// Version is the build this service runs, so `innsegl doctor` can tell
+	// a service still running an old binary (#588).
+	Version string `json:"version,omitempty"`
 }
 
 // countRecorded notes one answer of the core to a model request.
@@ -504,7 +509,7 @@ func (s *Server) Status(ctx context.Context) Status {
 	st := Status{
 		InstallationID: s.core.InstallationID, CoreURL: s.core.CoreURL,
 		CertificateExpiresAt: s.Leaf().NotAfter, RenewAt: s.RenewAt(), Revoked: s.revoked.Load(),
-		Outbox: s.outbox.status(),
+		Outbox: s.outbox.status(), Version: version.String(),
 	}
 	st.Recorded = s.recordedCounts()
 	st.Unrouted = s.unroutedFindings()

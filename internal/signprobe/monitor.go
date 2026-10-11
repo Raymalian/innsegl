@@ -99,15 +99,17 @@ type State struct {
 // issued.
 func (s State) Detail() string {
 	if s.OK {
-		return "a certificate was issued at " + stamp(s.CheckedAt)
+		return passingPrefix + stamp(s.CheckedAt)
 	}
 	return failingPrefix + stamp(s.Since) + failingSep + s.Reason
 }
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
-// failingPrefix and failingSep frame a failing Detail.
+// failingPrefix and failingSep frame a failing Detail; passingPrefix a
+// passing one.
 const (
+	passingPrefix = "a certificate was issued at "
 	failingPrefix = "FAILING since "
 	failingSep    = " — "
 )
@@ -128,6 +130,17 @@ func ParseFailing(detail string) (since time.Time, reason string, ok bool) {
 		return time.Time{}, "", false
 	}
 	return since, reason, true
+}
+
+// ParsePassing reads a passing Detail back: when the certificate was
+// issued. ok is false for a failing Detail or a line it cannot read.
+func ParsePassing(detail string) (at time.Time, ok bool) {
+	rest, found := strings.CutPrefix(detail, passingPrefix)
+	if !found {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339, rest)
+	return at, err == nil
 }
 
 // State answers what readiness reports now.

@@ -98,5 +98,6 @@ service reads it from `/_core/status` every minute.
 
 ## Runbooks
 
-`signing: FAILING` with `HTTP 500` from Fulcio usually means the CA cannot
+`signing: FAILING`: on the operator's machine, run `innsegl doctor`
+([doctor.md](doctor.md)). `HTTP 500` from Fulcio usually means the CA cannot
 reach its key. See [ca-custody.md](ca-custody.md).

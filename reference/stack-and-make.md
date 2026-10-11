@@ -80,8 +80,8 @@ Signing is proved on both sides of the update (OPS-190, OPS-191, #587):
 (`docker exec <prefix>-mcp`) first and, if it already fails, says so, so the
 update is not blamed; `scripts/update-signing.sh after` runs it once the
 services are up. A failure exits 1 with the reason and one repair line:
-`innsegl ca-custody unlock` on the operator machine when custody is on, else
-`runbooks/ca-custody.md` section 3. Probe exit 36 (could not be set up) is
+`innsegl doctor` on the operator machine ([doctor.md](doctor.md)); without
+custody it also names `runbooks/ca-custody.md`, section "Signing stopped". Probe exit 36 (could not be set up) is
 reported as that, not as a signing failure. A stack with no Fulcio
 (`INNSEGL_FULCIO_URL` unset in the core) skips with `signing: not configured`.
 

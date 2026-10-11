@@ -118,13 +118,16 @@ func TestOPS190UpdateFailsWhenSigningIsBrokenAfterTheServicesAreUp(t *testing.T)
 	if !strings.Contains(out, "the CA key is unreadable") {
 		t.Errorf("the reason is missing:\n%s", out)
 	}
-	if !strings.Contains(out, "runbooks/ca-custody.md") || strings.Contains(out, "ca-custody unlock") {
-		t.Errorf("without custody the repair names the runbook, not unlock:\n%s", out)
+	// #588: the repair is `innsegl doctor` on the operator machine, which
+	// runs the unlock itself when that is the repair.
+	if !strings.Contains(out, "runbooks/ca-custody.md") || !strings.Contains(out, "innsegl doctor") ||
+		strings.Contains(out, "ca-custody unlock") {
+		t.Errorf("without custody the repair names doctor and the runbook, not unlock:\n%s", out)
 	}
 
 	out, rc = runSigning(t, prefix, "after", "INNSEGL_CA_CUSTODY=on")
-	if rc == 0 || !strings.Contains(out, "innsegl ca-custody unlock") {
-		t.Errorf("with custody the repair is `innsegl ca-custody unlock` (exit %d):\n%s", rc, out)
+	if rc == 0 || !strings.Contains(out, "innsegl doctor") {
+		t.Errorf("with custody the repair is `innsegl doctor` (exit %d):\n%s", rc, out)
 	}
 
 	setProbe(t, prefix, 36, "signing: could not be set up - no SPIRE credential")

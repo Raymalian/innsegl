@@ -100,11 +100,30 @@ func needsUnlock(st cacustody.CoreStatus) bool {
 	return !st.CanSign && st.Reason != ""
 }
 
+// UnlockCAWith is UnlockCA for a caller that has just read st itself
+// (`innsegl doctor`, #588): it does not ask for the status again, so a
+// repair is three custody calls, not four, under the core's per-machine
+// limit on them.
+func UnlockCAWith(ctx context.Context, paths Paths, st cacustody.CoreStatus,
+	identities func() ([]age.Identity, error)) (bool, error) {
+	c, err := cliConn(paths)
+	if err != nil {
+		return false, err
+	}
+	return c.unlockCAFrom(ctx, st, identities)
+}
+
 func (c coreConn) unlockCA(ctx context.Context, identities func() ([]age.Identity, error)) (bool, error) {
 	st, err := c.caStatus(ctx)
 	if err != nil {
 		return false, err
 	}
+	return c.unlockCAFrom(ctx, st, identities)
+}
+
+func (c coreConn) unlockCAFrom(ctx context.Context, st cacustody.CoreStatus,
+	identities func() ([]age.Identity, error)) (bool, error) {
+	var err error
 	if !needsUnlock(st) {
 		return false, nil
 	}

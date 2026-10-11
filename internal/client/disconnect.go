@@ -79,30 +79,42 @@ const CoreStatusPath = "/_core/status"
 // at local (empty: the address the enrolment names): the body as the core
 // sent it.
 func FetchCoreStatus(ctx context.Context, paths Paths, local string) ([]byte, error) {
+	body, _, err := FetchCoreStatusAt(ctx, paths, local)
+	return body, err
+}
+
+// FetchCoreStatusAt is FetchCoreStatus, with the core's clock as its answer
+// carried it (the Date header; zero when it carries none), for `innsegl
+// doctor`'s clock check (#588).
+func FetchCoreStatusAt(ctx context.Context, paths Paths, local string) ([]byte, time.Time, error) {
 	rt, base, err := coreViaService(paths, local)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		strings.TrimSuffix(base, "/")+CoreStatusPath, http.NoBody)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	resp, err := rt.RoundTrip(req)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, coreAnswerError(resp.StatusCode, body)
+		return nil, time.Time{}, coreAnswerError(resp.StatusCode, body)
 	}
-	return body, nil
+	at, derr := http.ParseTime(resp.Header.Get("Date"))
+	if derr != nil {
+		at = time.Time{}
+	}
+	return body, at, nil
 }
 
 // ErrCoreOlder is a core that does not know a route or method this client
