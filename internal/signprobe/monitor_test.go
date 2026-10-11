@@ -173,3 +173,22 @@ func TestSIG015TheDetailReadsBackSinceAndReason(t *testing.T) {
 		}
 	}
 }
+
+// CLI-023 (PROPOSED) — `innsegl doctor` reads a passing Detail back to know
+// the probe passed after its repair (#588).
+func TestCLI023APassingDetailReadsBackItsTime(t *testing.T) {
+	at := time.Date(2026, 10, 11, 9, 5, 0, 0, time.UTC)
+	got, ok := ParsePassing(State{OK: true, CheckedAt: at}.Detail())
+	if !ok || !got.Equal(at) {
+		t.Fatalf("ParsePassing = %v %v; want %v", got, ok, at)
+	}
+	for _, d := range []string{
+		State{Since: at, Reason: "x"}.Detail(),
+		"",
+		"a certificate was issued at yesterday",
+	} {
+		if _, ok := ParsePassing(d); ok {
+			t.Errorf("ParsePassing(%q) read a pass", d)
+		}
+	}
+}

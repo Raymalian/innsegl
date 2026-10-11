@@ -271,10 +271,15 @@ func (c *Custodian) chainProblem(storePEM string) string {
 	}
 	if !pub.Equal(cert.PublicKey) {
 		return fmt.Sprintf("the CA key %q in the store is not the key in the certificate the CA presents (%s): "+
-			"they have drifted, and Fulcio refuses to start on them", c.Key, c.ChainPath)
+			DriftedPhrase+", and Fulcio refuses to start on them", c.Key, c.ChainPath)
 	}
 	return ""
 }
+
+// DriftedPhrase is in the reason when the store's key is not the key in the
+// chain the CA presents. Nothing on the operator's machine repairs that: an
+// unlock does not change a key, and a trust root is never "fixed" (#588).
+const DriftedPhrase = "they have drifted"
 
 func firstCertificate(chain []byte) (*x509.Certificate, error) {
 	for rest := chain; ; {

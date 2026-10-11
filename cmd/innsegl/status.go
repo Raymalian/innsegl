@@ -151,6 +151,7 @@ type localStatus struct {
 	Revoked              bool                     `json:"revoked"`
 	CertificateExpiresAt string                   `json:"certificate_expires_at"`
 	Unrouted             []client.UnroutedSession `json:"unrouted_sessions"`
+	Version              string                   `json:"version"`
 }
 
 // unroutedLines warns for each session whose model traffic did not pass

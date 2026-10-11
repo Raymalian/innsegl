@@ -70,7 +70,9 @@ nothing more until signing has worked again. `GET /_client/status` carries
 the last reading as `signing` (`up`, `detail`, and while it fails `since` and
 `reason`); it is absent before the first reading and while the core does not
 answer. The commit hook reads it to say in a refusal since when signing is
-down ([commit-path.md](commit-path.md)).
+down ([commit-path.md](commit-path.md)). It also carries `version`, the
+build the service runs: `innsegl doctor` restarts a service whose build is
+not its own ([doctor.md](doctor.md)).
 
 ## Settings
 

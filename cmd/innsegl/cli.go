@@ -190,6 +190,9 @@ var commands = map[string]command{
 	// `ca-custodian` runs on the core; `ca-custody` on the operator's machine.
 	"ca-custodian": {summary: "keep the CA key store's custody on the core: init, renew, unlock", exec: caCustodianCommand},
 	"ca-custody":   {summary: "say whether the core's CA is sealed, and unlock it (Touch ID)", exec: caCustodyCommand},
+	// RM-344 (#588): the signing chain checked in order from the operator's
+	// machine, with only the repairs that cannot lose data.
+	"doctor": {summary: "check the signing chain to the core's CA and run the safe repairs (Touch ID)", exec: doctorCommand},
 	// ENF-010: which repositories author agent commits as the operator.
 	"author": {summary: "set which repositories author agent commits as the operator (I6)", exec: authorCommand},
 }
