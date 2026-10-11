@@ -367,7 +367,7 @@ func runTrustBackupDrill(args []string, stdout, stderr io.Writer, deps trustBack
 	if err != nil {
 		return fail(err)
 	}
-	ids, err := trustbackup.LoadIdentities(*identity, nil)
+	ids, err := operatorIdentities(*identity, stderr)()
 	if err != nil {
 		return fail(err)
 	}

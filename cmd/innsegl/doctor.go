@@ -19,12 +19,9 @@ import (
 	"syscall"
 	"time"
 
-	"filippo.io/age"
-
 	"innsegl.dev/innsegl/internal/cacustody"
 	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/signprobe"
-	"innsegl.dev/innsegl/internal/trustbackup"
 	"innsegl.dev/innsegl/internal/version"
 )
 
@@ -380,9 +377,7 @@ func (d *doctor) custody(ctx context.Context) (unlocked, ok bool) {
 		d.line(check, "CANNOT SIGN", reason)
 	}
 	d.line(check, "repairing", "unlocking the CA key store; approve the Touch ID prompt")
-	done, err := client.UnlockCAWith(ctx, d.paths, st, func() ([]age.Identity, error) {
-		return trustbackup.LoadIdentities(d.identity, nil)
-	})
+	done, err := client.UnlockCAWith(ctx, d.paths, st, operatorIdentities(d.identity, d.out))
 	if err != nil {
 		d.line(check, "NOT REPAIRED", custodyErr(err))
 		return false, false

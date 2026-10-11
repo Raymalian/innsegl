@@ -51,6 +51,14 @@ func ParseIdentities(r io.Reader, ui *plugin.ClientUI) ([]age.Identity, error) {
 	return out, nil
 }
 
+// TerminalUI is a plugin prompt for an interactive command: the plugin's
+// messages ("touch your key") and warnings are written to w, one line each,
+// and a value it asks for is read from the terminal.
+func TerminalUI(w io.Writer) *plugin.ClientUI {
+	line := func(format string, v ...any) { _, _ = fmt.Fprintf(w, "innsegl: "+format+"\n", v...) }
+	return plugin.NewTerminalUI(line, line)
+}
+
 // LoadIdentities reads the identity file at path.
 func LoadIdentities(path string, ui *plugin.ClientUI) ([]age.Identity, error) {
 	f, err := os.Open(path) //nolint:gosec // G304: the operator names the identity file

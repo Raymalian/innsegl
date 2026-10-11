@@ -90,6 +90,10 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// BAK-031: this binary, started as a fake age plugin, is that plugin.
+	if code, ok := runAsFakeAgePlugin(); ok {
+		os.Exit(code)
+	}
 	clearConnectedMachineEnv()
 	// No test asks the developer's own client service whether signing is
 	// down; the one that tests the asking points HOME at a stand-in.

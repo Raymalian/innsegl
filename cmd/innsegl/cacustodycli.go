@@ -10,10 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"filippo.io/age"
-
 	"innsegl.dev/innsegl/internal/client"
-	"innsegl.dev/innsegl/internal/trustbackup"
 )
 
 // `innsegl ca-custody` (ADR-0076), on the operator's machine:
@@ -102,9 +99,7 @@ func runCACustody(ctx context.Context, args []string, stdout, stderr io.Writer, 
 				"update the core to repair an unsealed store\n")
 		}
 	}
-	unlocked, err := client.UnlockCA(ctx, paths, func() ([]age.Identity, error) {
-		return trustbackup.LoadIdentities(*identity, nil)
-	})
+	unlocked, err := client.UnlockCA(ctx, paths, operatorIdentities(*identity, stderr))
 	if err != nil {
 		fprintf(stderr, "innsegl ca-custody: %v\n", err)
 		return exitCACustodyFailed
