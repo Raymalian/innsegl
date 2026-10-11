@@ -23,6 +23,7 @@ import (
 	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/client/clienttest"
 	"innsegl.dev/innsegl/internal/signprobe"
+	"innsegl.dev/innsegl/internal/trusthistory"
 )
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,8 @@ type doctorCore struct {
 	probeWhy  string
 	spireUp   bool
 	unlockFix bool // an unlock makes the CA able to sign and the next probe pass
+	trust     []trusthistory.Expiry
+	server    *serverCertStatus
 }
 
 func (c *doctorCore) mount(t *testing.T, f *connectFixture) {
@@ -100,7 +103,9 @@ func (c *doctorCore) mount(t *testing.T, f *connectFixture) {
 				{Name: canaryComponent, Up: true, Detail: "passed"},
 				{Name: signprobe.ReportName, Up: c.probeOK, Detail: st.Detail()},
 			},
-			Installation: coreInstallation{ID: "inst-1", Repos: []string{"*"}}})
+			Installation:      coreInstallation{ID: "inst-1", Repos: []string{"*"}},
+			TrustExpiries:     c.trust,
+			ServerCertificate: c.server})
 	})
 }
 

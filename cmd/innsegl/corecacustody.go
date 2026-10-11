@@ -119,7 +119,8 @@ func proxyCustodyStatus(ctx context.Context, w http.ResponseWriter, client *http
 		return
 	}
 	writeCoreJSON(w, http.StatusOK, caCustodyStatus{Enabled: true, Initialized: st.Initialized,
-		Sealed: st.Sealed, CanSign: st.CanSign, Reason: st.Reason, Error: st.Error})
+		Sealed: st.Sealed, CanSign: st.CanSign, Reason: st.Reason, Error: st.Error,
+		TokenSecondsLeft: st.TokenSecondsLeft})
 }
 
 // proxyCustody forwards one request and hands back the custodian's status and

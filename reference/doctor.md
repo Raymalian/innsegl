@@ -46,7 +46,11 @@ The checks, in order:
 | `core` | `/_core/status` over the machine's certificate | none; prints a `VM:` line |
 | `clock` | the core answer's `Date` against this machine; more than 30 s apart is `SKEWED` | none; prints a `VM:` line |
 | `ca custody` | `/_core/ca-custody`: `can_sign` and its reason | sealed, or a token absent, refused, expired or unable to read the key: unlock (Touch ID). A key that drifted from `chain.pem`: none, the runbook |
+| `ca token` | `/_core/ca-custody`, `token_seconds_left` (read from the store): `ok — renews in 12m, expires in 23h`. `LOW` under 6 hours; `OVERDUE` when a renewal (every 15 minutes) was missed; `not reported` from a core that does not send it. Not shown when the unlock repair ran | none; reports only |
 | `spire`, `ledger`, `sigstore`, `worm canary`, others | `/readyz` through `/_core/status` | none; prints a `VM:` line |
+| `client certificate`, `server certificate`, `Fulcio root CA`, `SPIRE upstream CA`, `gateway CA` | the service's certificate expiry, and `server_certificate` and `trust_expiries` in `/_core/status`. `EXPIRING` under 7 days (the client certificate lives hours and renews itself, so it is `EXPIRING` under 1 hour: the renewal is stuck); `EXPIRED` fails doctor (exit 37) | none; reports only |
+| `trust backup` | the newest `~/.innsegl/trust-backups/trust-backup-<stamp>.tar.age`: `STALE` past 2 days, `NONE` when there is none | none; prints `innsegl trust-backup fetch` |
+| `ledger backup` | the newest `~/.innsegl/backups/innsegl-<stamp>.dump` that has its `.verify.txt` report (a dump without it is not counted): `STALE` past 2 days, `NONE` | none; prints `launchctl kickstart gui/<uid>/dev.innsegl.backup-ledger` (macOS) or `scripts/backup-ledger.sh` |
 | `signing` | the signing probe's report | after an unlock, waits up to `--wait` for a probe that passed after it |
 
 The last line is `signing: OK (probe passed <time>)` when signing works.
@@ -106,6 +110,11 @@ unlock` does ([ca-custody.md](ca-custody.md)).
   command reaches the fake runner and is on the allow-list, a plugin off it
   is refused, and programs on `PATH` that record being run never run; modes
   are only tightened, only on innsegl's own files
+- `cmd/innsegl/doctorexpiry_test.go` (CLI-048 CA token time left, CLI-049
+  certificate expiry, CLI-050 trust-key backup age, CLI-051 ledger backup age,
+  PROPOSED): each line, the warn thresholds, an expired certificate fails and
+  a stale backup does not, nothing is run, and the token's seconds left pass
+  through the core's custody status
 - `cmd/innsegl/doctorincident_test.go` (OPS-192, PROPOSED): a real store;
   custodians recreated faster than renewal keep the token alive; on the old
   behaviour the token dies, and on the new a revoked token, and each is
