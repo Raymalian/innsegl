@@ -4,6 +4,7 @@ package deploy
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -78,8 +79,38 @@ func TestOPS192AFreshKMSVolumeIsWritableByTheBootstrap(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	if out, err := docker("build", "-q", "--target", "ca-bootstrap", "-t", image, "."); err != nil {
-		t.Fatalf("building the ca-bootstrap stage: %v\n%s", err, out)
+	// The ca-bootstrap stage as the Dockerfile writes it, minus its one
+	// `COPY --from=build`. The binary has no bearing on the mountpoint's
+	// owner, and building it means building the whole `build` stage: on a
+	// cold CI runner that is gitsign plus every Go module, minutes that pushed
+	// this package past go test's 10-minute limit (#591). Every other line,
+	// the mkdir/chown under test included, runs exactly as written; an empty
+	// context makes any other COPY from the checkout fail here, loudly.
+	df, err := os.ReadFile(filepath.Join(root, "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := regexp.MustCompile(`(?m)^FROM ([^\n]*) AS ca-bootstrap$`).FindStringSubmatch(string(df))
+	if from == nil {
+		t.Fatal("the Dockerfile has no ca-bootstrap stage")
+	}
+	var stage strings.Builder
+	stage.WriteString("FROM " + from[1] + "\n")
+	dropped := 0
+	for _, line := range strings.Split(dockerfileStage(t, string(df), "ca-bootstrap"), "\n") {
+		if strings.HasPrefix(line, "COPY --from=build ") {
+			dropped++
+			continue
+		}
+		stage.WriteString(line + "\n")
+	}
+	if dropped != 1 {
+		t.Fatalf("the ca-bootstrap stage has %d `COPY --from=build` lines, want 1: revisit what this test leaves out", dropped)
+	}
+	build := exec.CommandContext(t.Context(), "docker", "build", "-q", "-t", image, "-f", "-", t.TempDir())
+	build.Stdin = strings.NewReader(stage.String())
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building the ca-bootstrap stage: %v\n%s\n%s", err, out, stage.String())
 	}
 	t.Cleanup(func() {
 		if err := exec.CommandContext(context.Background(), "docker", "rmi", "-f", image).Run(); err != nil {
