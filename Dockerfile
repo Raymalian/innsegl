@@ -324,6 +324,13 @@ RUN addgroup -g 1000 innsegl \
 
 COPY --from=build /out/ca-bootstrap /usr/local/bin/ca-bootstrap
 
+# The KMS volume's mountpoint, owned by the CA's uid the bootstrap runs as
+# (OPS-192, #589). Docker gives an empty named volume the ownership of the
+# image's directory at the mount path; with none here, a fresh volume was
+# root's and the bootstrap failed "permission denied" writing chain.pem. A
+# volume that already holds the chain keeps its owner.
+RUN mkdir -p /etc/fulcio-kms && chown 65532:65532 /etc/fulcio-kms
+
 USER 1000:1000
 WORKDIR /home/innsegl
 ENTRYPOINT ["/usr/local/bin/ca-bootstrap"]

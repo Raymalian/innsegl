@@ -64,6 +64,7 @@ type composeDoc struct {
 		Name       string            `json:"name"`
 		Driver     string            `json:"driver"`
 		DriverOpts map[string]string `json:"driver_opts"`
+		External   bool              `json:"external"`
 	} `json:"volumes"`
 }
 

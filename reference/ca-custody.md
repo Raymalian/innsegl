@@ -129,7 +129,7 @@ the reason.
 | trust volume `innsegl-trust-ca-store` | the store's data |
 | trust volume `innsegl-trust-ca-custody` | the sealed unlock material (`material/unlock.age`) |
 | volume `innsegl-ca-token` | the CA's token, in memory; the custodian, the bootstrap and the keeper mount it, Fulcio does not |
-| volume `<prefix>-sigstore_sigstore-fulcio-kms` | the store's root chain and issuer config; Fulcio and the custodian mount it read-only (the custodian is recreated when it changes, OPS-165) |
+| volume `<prefix>-sigstore_sigstore-fulcio-kms` | the store's root chain and issuer config; Fulcio and the custodian mount it read-only (the custodian is recreated when it changes, OPS-165). The bootstrap writes it as 65532; a new volume takes that owner from the bootstrap image, so no chown is needed (OPS-192) |
 | backup items `ca-store/store.snap`, `ca-custody/unlock.age` | custody in a trust-key bundle |
 
 Core routes (operator organisation workstations only): `/_core/ca-custody`,
@@ -159,6 +159,7 @@ the custodian on an internal unlock network and logs none of what it carries.
 - `cmd/ca-bootstrap/*_test.go` (OPS-049, OPS-050, OPS-052, OPS-148)
 - `internal/client/cacustody_test.go` (BAK-026 to BAK-028)
 - `test/deploy/cacustody_test.go` (OPS-051, OPS-149 to OPS-151, OPS-155, OPS-186: the custodian mounts the chain the CA presents, OPS-187: Fulcio holds no token, BAK-030)
+- `test/deploy/custodyvolumeowner_test.go` (OPS-192: a fresh KMS volume is the bootstrap's to write)
 - `test/deploy/devcustody_test.go` (OPS-129: live custody names unchanged, dev custody innsegl-dev-* throughout)
 - `scripts/ca-custody-selftest.sh` (OPS-049 to OPS-051)
 - `scripts/ca-custody-reset-selftest.sh` (OPS-159)
