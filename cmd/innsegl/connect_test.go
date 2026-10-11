@@ -389,7 +389,7 @@ func TestCLI015ConnectStopsBeforeEnrolmentWhenSettingsAreNotWritable(t *testing.
 	}
 	f.settings = filepath.Join(blocker, "managed-settings.json")
 	code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings)
-	if code == exitOK || !strings.Contains(stderr, "sudo install -m 0644") {
+	if code == exitOK || !strings.Contains(stderr, "sudo sh -c ") || !strings.Contains(stderr, "install -m 0644") {
 		t.Fatalf("connect = %d: %s", code, stderr)
 	}
 	if n, _ := f.core.Counts(); n != 0 {
