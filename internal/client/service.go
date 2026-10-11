@@ -134,7 +134,7 @@ func DefaultServicePATH(goos string) string {
 // when there is no identity file or no plugin identity in it. missing names
 // each plugin lookPath did not find.
 func ServicePATH(goos, identityFile string, lookPath func(string) (string, error)) (path string, missing []string, err error) {
-	f, err := os.Open(identityFile) //nolint:gosec // G304: the operator's own identity file
+	f, err := os.Open(identityFile)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil, nil
 	}

@@ -40,12 +40,15 @@ func TestOPS196InstallHintsNameTheCIPins(t *testing.T) {
 		files = append(files, m...)
 	}
 	for _, f := range files {
-		b, err := os.ReadFile(f) //nolint:gosec // G304: repository files
+		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
 		text := string(b)
-		rel, _ := filepath.Rel(root, f)
+		rel, err := filepath.Rel(root, f)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, h := range gobcoHint.FindAllStringSubmatch(text, -1) {
 			if h[1] != gobco[1] {
 				t.Errorf("%s: gobco hint names @%s; CI runs %s", rel, h[1], gobco[1])

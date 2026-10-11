@@ -62,12 +62,12 @@ func TestBAK031APluginPromptReachesTheTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	if err := os.Symlink(self, filepath.Join(dir, "age-plugin-"+fakePluginName)); err != nil {
+	if err = os.Symlink(self, filepath.Join(dir, "age-plugin-"+fakePluginName)); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	idFile := filepath.Join(t.TempDir(), "identity.txt")
-	if err := os.WriteFile(idFile, []byte(plugin.EncodeIdentity(fakePluginName, []byte("handle"))+"\n"), 0o600); err != nil {
+	if err = os.WriteFile(idFile, []byte(plugin.EncodeIdentity(fakePluginName, []byte("handle"))+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

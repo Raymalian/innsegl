@@ -10,6 +10,7 @@
 package hostdeps
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"innsegl.dev/innsegl/internal/trustbackup"
 )
@@ -42,12 +44,19 @@ type Env struct {
 
 // Real is this machine.
 func Real(goos, identityFile string) Env {
-	release, _ := os.ReadFile("/etc/os-release")
+	// No os-release (macOS, or an OS without one) is an unknown family,
+	// which gets every family's command.
+	release, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		release = nil
+	}
 	return Env{
 		GOOS: goos, OSRelease: string(release), IdentityFile: identityFile,
 		LookPath: exec.LookPath,
 		Output: func(name string, args ...string) (string, error) {
-			out, err := exec.Command(name, args...).Output() //nolint:gosec // G204: fixed program names
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, name, args...).Output()
 			return string(out), err
 		},
 	}
@@ -127,13 +136,29 @@ func pluginInstall(name, family string) string {
 	return "install age-plugin-" + name + " and put it on PATH"
 }
 
-var gitVersion = regexp.MustCompile(`git version (\d+)\.(\d+)`)
+var (
+	gitVersion = regexp.MustCompile(`git version (\d+)\.(\d+)`)
+	minVersion = regexp.MustCompile(`^(\d+)\.(\d+)$`)
+)
 
-// atLeast says whether major.minor is at least min ("2.31").
-func atLeast(major, minor int, min string) bool {
-	mj, mn, _ := strings.Cut(min, ".")
-	wantMajor, _ := strconv.Atoi(mj)
-	wantMinor, _ := strconv.Atoi(mn)
+// majorMinor reads the two numbers re captured from s.
+func majorMinor(re *regexp.Regexp, s string) (major, minor int, ok bool) {
+	m := re.FindStringSubmatch(s)
+	if m == nil {
+		return 0, 0, false
+	}
+	major, err1 := strconv.Atoi(m[1])
+	minor, err2 := strconv.Atoi(m[2])
+	return major, minor, err1 == nil && err2 == nil
+}
+
+// gitRecentEnough says whether `git --version` printed MinGit or later.
+func gitRecentEnough(versionOutput string) bool {
+	major, minor, ok := majorMinor(gitVersion, versionOutput)
+	wantMajor, wantMinor, wantOK := majorMinor(minVersion, MinGit)
+	if !ok || !wantOK {
+		return false
+	}
 	return major > wantMajor || (major == wantMajor && minor >= wantMinor)
 }
 
@@ -146,15 +171,11 @@ func Check(e Env) []Missing {
 	if _, err := e.LookPath("git"); err != nil {
 		out = append(out, Missing{Name: "git", Why: gitWhy, Install: gitInstall.pick(family), Required: true})
 	} else {
-		v, _ := e.Output("git", "--version")
-		m := gitVersion.FindStringSubmatch(v)
-		ok := false
-		if m != nil {
-			major, _ := strconv.Atoi(m[1])
-			minor, _ := strconv.Atoi(m[2])
-			ok = atLeast(major, minor, MinGit)
+		v, err := e.Output("git", "--version")
+		if err != nil {
+			v = "nothing it could run: " + err.Error()
 		}
-		if !ok {
+		if !gitRecentEnough(v) {
 			out = append(out, Missing{Name: "git", Why: gitWhy + "; this one says " + strings.TrimSpace(v),
 				Install: gitInstall.pick(family), Required: true})
 		}
@@ -176,7 +197,7 @@ func identityPlugins(path string) []string {
 	if path == "" {
 		return nil
 	}
-	f, err := os.Open(path) //nolint:gosec // G304: the operator's own identity file
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}

@@ -52,7 +52,9 @@ func TestCLI025ThePluginDirectoryIsAddedToTheServicePATH(t *testing.T) {
 	if want := DefaultServicePATH("darwin") + ":/opt/plugins/bin"; got != want {
 		t.Fatalf("darwin PATH = %q, want %q", got, want)
 	}
-	got, _, _ = ServicePATH("linux", id, look)
+	if got, _, err = ServicePATH("linux", id, look); err != nil {
+		t.Fatal(err)
+	}
 	if want := DefaultServicePATH("linux") + ":/opt/plugins/bin"; got != want {
 		t.Fatalf("linux PATH = %q, want %q", got, want)
 	}
