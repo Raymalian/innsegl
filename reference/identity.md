@@ -14,7 +14,7 @@ admin credential.
 
 ```
 innsegl serve [flags]
-docker exec innsegl-mcp innsegl retire <run_id>   # on the core host
+docker exec innsegl-core innsegl retire <run_id>   # on the core host
 make innsegl-retire RUN=<run_id>                  # the same, from the checkout
 innsegl admin-credential keygen -key FILE -jwks FILE [-force]
 innsegl admin-credential mint -key FILE -repo host/org/name [-ttl D]
@@ -37,7 +37,7 @@ major release.
 | `observe_tool_call` | main | stores a body locally, appends the tool call |
 | `describe_workspace`, `observe_session` | main | deprecated (ADR-0071); bound, refuse every call |
 
-`innsegl retire` runs on the core, inside the `innsegl-mcp` container, and
+`innsegl retire` runs on the core, inside the `innsegl-core` container, and
 calls the retirement engine the gateway uses, in process, under the core's
 own SPIRE admin identity and ledger credential. It needs no listener and no
 admin credential. Use it when a run is known to be over; a quiet run is the
@@ -103,7 +103,7 @@ Fulcio and Rekor answer, not that the CA can sign.
 
 | Item | Holds |
 |---|---|
-| `innsegl-mcp` container | `innsegl serve`; host ports `127.0.0.1:28080` (MCP), `28081` (health), `28090` (admin) |
+| `innsegl-core` container | `innsegl serve`; host ports `127.0.0.1:28080` (MCP), `28081` (health), `28090` (admin) |
 | `innsegl-admin-credential-init` | mints the admin key set at bring-up |
 | `innsegl-identity-init` | generates the identity secret |
 | volumes `innsegl-admin-jwks`, `innsegl-admin-key` | public key set, private signing key |

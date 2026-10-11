@@ -22,7 +22,7 @@ set -uo pipefail
 
 DOCKER="${INNSEGL_RESET_DOCKER:-docker}"
 PREFIX="${INNSEGL_STACK_PREFIX:-innsegl}"
-CORE="${INNSEGL_RESET_CORE:-${PREFIX}-mcp}"
+CORE="${INNSEGL_RESET_CORE:-${PREFIX}-core}"
 FULCIO="${PREFIX}-sigstore-fulcio"
 KMS_VOLUME="${PREFIX}-sigstore_sigstore-fulcio-kms"
 IMAGE="${INNSEGL_RESET_IMAGE:-alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}"

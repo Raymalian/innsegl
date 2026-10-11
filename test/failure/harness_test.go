@@ -66,7 +66,7 @@ import (
 // Same two problems internal/spire's harness solves, solved the same way, for
 // the same reasons (ADR-0011): the admin API is on an internal network with no
 // published port, so a socat container joins that network and publishes a
-// loopback port; and there is no innsegl-mcp workload yet, so the admin SVID is
+// loopback port; and there is no innsegl-core workload yet, so the admin SVID is
 // minted with `spire-server x509 mint` on the container-private admin socket.
 //
 // One thing is added. The test process does not talk to the socat port

@@ -111,13 +111,13 @@ sm "$REPO" INNSEGL_TRUST_LEGACY_PREFIX=innsegl-trust "$REPO/scripts/stack-mode.s
 check "OPS-129 dev refuses a legacy trust prefix" "$rc" "4"
 
 # --- beside a live-named stack ---------------------------------------------
-out="$(sm "$REPO" STUB_RUNNING="innsegl-postgres innsegl-mcp" "$REPO/scripts/stack-mode.sh" announce)"; rc=$?
-if [ "$rc" = 5 ] && printf '%s' "$out" | grep -q 'innsegl-mcp'; then
+out="$(sm "$REPO" STUB_RUNNING="innsegl-postgres innsegl-core" "$REPO/scripts/stack-mode.sh" announce)"; rc=$?
+if [ "$rc" = 5 ] && printf '%s' "$out" | grep -q 'innsegl-core'; then
   ok "OPS-129 dev refuses to start beside a running live-named stack"
 else
   bad "OPS-129 dev refuses to start beside a running live-named stack" "exit $rc: $out"
 fi
-out="$(sm "$REPO" STUB_RUNNING="innsegl-dev-mcp" "$REPO/scripts/stack-mode.sh" announce)"; rc=$?
+out="$(sm "$REPO" STUB_RUNNING="innsegl-dev-core" "$REPO/scripts/stack-mode.sh" announce)"; rc=$?
 case "$rc:$out" in
   "0:innsegl: starting a DEV stack ("*) ok "OPS-129 a running dev stack is not a live one" ;;
   *) bad "OPS-129 a running dev stack is not a live one" "exit $rc: $out" ;;

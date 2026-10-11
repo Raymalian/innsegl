@@ -7,7 +7,7 @@
 #
 # WHY. An update can leave every service healthy and the CA unable to sign.
 # The probe is the core's one-shot `innsegl signing-probe` (exit 0 ok, 35
-# failing, 36 could not be set up), run with `docker exec` into <prefix>-mcp,
+# failing, 36 could not be set up), run with `docker exec` into <prefix>-core,
 # so it works for a live and a dev stack alike.
 #
 # before: never fails the update. A failing probe is reported first, so the
@@ -27,10 +27,19 @@ case "$mode" in before | after) ;; *)
 	;;
 esac
 
-core="${INNSEGL_STACK_PREFIX:-innsegl}-mcp"
+core="${INNSEGL_STACK_PREFIX:-innsegl}-core"
 say() { echo "signing: $*"; }
 
-if ! docker inspect -f '{{.State.Running}}' "$core" 2>/dev/null | grep -qx true; then
+# The update onto RM-346 (#594) finds the core still running under its old
+# name: `before` probes that one, since the rename happens during the update.
+# `after` never does; by then the old container must be gone.
+running() { docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null | grep -qx true; }
+old="${INNSEGL_STACK_PREFIX:-innsegl}-mcp"
+if [ "$mode" = before ] && ! running "$core" && running "$old"; then
+	core=$old
+fi
+
+if ! running "$core"; then
 	if [ "$mode" = before ]; then
 		say "not checked before the update ($core is not running)"
 		exit 0

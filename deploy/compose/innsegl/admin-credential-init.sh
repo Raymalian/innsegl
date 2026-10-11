@@ -3,7 +3,7 @@
 #
 # Mint THIS DEPLOYMENT's identity-lifecycle signing key, once (#264).
 #
-# Runs to completion before innsegl-mcp starts, in the shape
+# Runs to completion before innsegl-core starts, in the shape
 # innsegl/identity-init.sh established: one container, no network at all, the
 # only place either volume is writable, and then it exits.
 #
@@ -22,7 +22,7 @@
 #
 # TWO FILES, TWO VOLUMES
 # ----------------------
-# The PUBLIC key set is what innsegl-mcp reads, and it is the only one of the
+# The PUBLIC key set is what innsegl-core reads, and it is the only one of the
 # two that service mounts (E8: the MCP holds no key material). The PRIVATE
 # signing key stays on a volume nothing else in this stack mounts at all — a
 # process that could read it could mint its own admission to the listener the
@@ -51,7 +51,7 @@ set -eu
 JWKS_FILE="${INNSEGL_MCP_ADMIN_JWKS_FILE:-}"
 KEY_FILE="${INNSEGL_ADMIN_CREDENTIAL_KEY_FILE:-}"
 
-# The uid innsegl-mcp runs as (innsegl.yml: `user: "1000:1000"`, one of the
+# The uid innsegl-core runs as (innsegl.yml: `user: "1000:1000"`, one of the
 # five selectors register.sh registers). Docker creates a named volume
 # root-owned, so what the MCP must read is chowned here rather than by running
 # the MCP as root.
@@ -89,7 +89,7 @@ else
   log "wrote ${KEY_FILE} (private) and ${JWKS_FILE} (public)"
 fi
 
-[ -s "${JWKS_FILE}" ] || fail "${JWKS_FILE} holds no key set; innsegl-mcp would refuse to start"
+[ -s "${JWKS_FILE}" ] || fail "${JWKS_FILE} holds no key set; innsegl-core would refuse to start"
 
 # 0400 on the private half, owned by nobody the MCP runs as — it does not mount
 # this volume at all. The key set is public and is chowned to the reader.

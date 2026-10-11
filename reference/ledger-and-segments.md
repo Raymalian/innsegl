@@ -41,7 +41,7 @@ make innsegl-verify
 - `innsegl ledger lease` says which core holds the writer lease and whether
   the ledger is frozen. `freeze -reason WHY` freezes it; `thaw` ends the
   freeze. `make innsegl-ledger-lease`, `make innsegl-freeze` and `make
-  innsegl-thaw` run them in `innsegl-mcp` with its own ledger
+  innsegl-thaw` run them in `innsegl-core` with its own ledger
   credential (RM-326).
 
 `innsegl ledger -h`:
@@ -142,9 +142,9 @@ for `make innsegl-backup` [`backups`].
 | `innsegl-db-init` | migrations and database roles (`deploy/compose/innsegl/db-init.sh`) |
 | `innsegl-s3`, `innsegl-object-init`, `innsegl-s3-identities` | the object store, its bucket and identities |
 | volumes `innsegl-object-data`, `innsegl-object-filer-data`, `innsegl-s3-identities` | object store data |
-| `innsegl-sealer` | the sealer as its own container (profile `separate`); default runs it in `innsegl-mcp` |
+| `innsegl-sealer` | the sealer as its own container (profile `separate`); default runs it in `innsegl-core` |
 | `innsegl-canary` | the canary on demand (profile `canary`) |
-| volume `innsegl-canary-status` | the scheduled canary's last result; written by whichever container runs the sealer, read by `innsegl-mcp` |
+| volume `innsegl-canary-status` | the scheduled canary's last result; written by whichever container runs the sealer, read by `innsegl-core` |
 | `innsegl-backup`, volume `innsegl-backups` | scheduled ledger backup |
 | `migrations/` | SQL migrations, embedded by `migrations/migrations.go` |
 

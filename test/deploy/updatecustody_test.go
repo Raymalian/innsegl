@@ -70,11 +70,11 @@ func TestOPS161UpdateIsNotUpToDateWhileTheCustodianIsDown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	all := fakeDocker(t, "innsegl-mcp", "innsegl-ca-store", "innsegl-ca-custodian")
+	all := fakeDocker(t, "innsegl-core", "innsegl-ca-store", "innsegl-ca-custodian")
 	if out := runUpdate(t, env, deployed, all); !strings.Contains(out, "already up to date") {
 		t.Fatalf("control: everything running and the same state should be up to date:\n%s", out)
 	}
-	down := fakeDocker(t, "innsegl-mcp", "innsegl-ca-store")
+	down := fakeDocker(t, "innsegl-core", "innsegl-ca-store")
 	if out := runUpdate(t, env, deployed, down); strings.Contains(out, "already up to date") {
 		t.Fatalf("the custodian is down and update called it up to date:\n%s", out)
 	}

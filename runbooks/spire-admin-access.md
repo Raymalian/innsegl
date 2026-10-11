@@ -22,7 +22,7 @@ make start
 
 Nothing is published, ever. `innsegl-init` (`deploy/compose/innsegl.yml`) is a
 one-shot job — the same shape as `demo-agent` and `innsegl-canary` — that
-reuses `innsegl-mcp`'s image, uid and `dev.innsegl.component` label. Those are
+reuses `innsegl-core`'s image, uid and `dev.innsegl.component` label. Those are
 exactly the five selectors `register.sh` already matched to
 `spiffe://innsegl.dev/innsegl/mcp`, so this container is attested with the
 *same* admin identity the running MCP holds, over the Workload API socket, on
@@ -63,7 +63,7 @@ VERIFIED: this deployment can sign. refs/innsegl/init-verify signed a real commi
 exists for the length of one `init` invocation and is removed automatically
 when it exits — confirmed (`docker ps -a` shows nothing left behind
 immediately after the run above). What the container holds *while it runs* is
-the same admin reach `innsegl-mcp` already holds continuously; nothing new is
+the same admin reach `innsegl-core` already holds continuously; nothing new is
 granted, and there is nothing new to revoke afterwards.
 
 ### Failure mode if the operator forgets to undo it

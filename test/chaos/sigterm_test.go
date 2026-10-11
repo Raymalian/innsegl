@@ -18,7 +18,7 @@ import (
 // exits 0, and leaves no call half done: no idempotency claim still in
 // progress, and a chain that verifies end to end.
 //
-// Measured before #570: `docker stop` on innsegl-mcp took its whole 2m30s
+// Measured before #570: `docker stop` on innsegl-core took its whole 2m30s
 // grace period and ended in SIGKILL. The cause was a companion (reap) that
 // never saw the stop; cmd/innsegl/servestop_test.go holds the companions.
 // This case holds the process: the MCP server itself, its listeners and its

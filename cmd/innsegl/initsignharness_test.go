@@ -519,7 +519,7 @@ func startSignE2EStack(ctx context.Context, t *testing.T) *signE2EStack {
 		t.Fatalf("starting the admin proxy: %v", err)
 	}
 	// ADR-0011: the admin network is internal, no published port, whose only
-	// member the deployment names is innsegl-mcp. Joining the proxy to it is
+	// member the deployment names is innsegl-core. Joining the proxy to it is
 	// this test process standing in for exactly that membership so spire.Dial
 	// (called by spireSignVerifier.Run, in this same process) has a route at
 	// all — a Docker Desktop VM gives the host no route to a container

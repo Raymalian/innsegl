@@ -19,7 +19,7 @@ import (
 // OPS-177: `innsegl serve` stops within seconds of SIGTERM, every companion
 // with it, and work in flight finishes first.
 //
-// Measured 2026-10-10: `docker stop` on innsegl-mcp took its whole
+// Measured 2026-10-10: `docker stop` on innsegl-core took its whole
 // stop_grace_period (2m30s) and ended in SIGKILL. The reap companion waited
 // for a context.Background() that never ends, so serve's wait for its
 // companions never returned. Every companion now runs on serve's own

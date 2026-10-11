@@ -62,7 +62,7 @@ readonly DEV_PREFIX='innsegl-dev'
 readonly DEV_TRUST_PREFIX='innsegl-dev-trust'
 readonly MARKER_REL='.innsegl/stack-mode'
 # The containers whose presence means a live-named stack is up here.
-readonly LIVE_NAMES='innsegl-spire-server innsegl-sigstore-rekor innsegl-mcp innsegl-api'
+readonly LIVE_NAMES='innsegl-spire-server innsegl-sigstore-rekor innsegl-core innsegl-api'
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 ROOT="$(CDPATH= cd -- "${HERE}/.." && pwd -P)"

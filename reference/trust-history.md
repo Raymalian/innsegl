@@ -43,7 +43,7 @@ end date or reason where it was unset.
 
 ## Files, volumes, containers
 
-On the trust volume `<prefix>-history` (mounted in `innsegl-mcp` at
+On the trust volume `<prefix>-history` (mounted in `innsegl-core` at
 `/run/innsegl/trust/`):
 
 | File | Written by | Holds |

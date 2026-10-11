@@ -17,7 +17,7 @@ import (
 // workload's binary up to. Over it, the agent's unix attestor refuses to
 // attest the core, the core gets no identity and never comes up. Measured
 // on a dev-stack update rehearsal (#473): an ACME library's all-providers
-// import took the binary from 42 MB to 100 MB, and innsegl-mcp hung at
+// import took the binary from 42 MB to 100 MB, and innsegl-core hung at
 // start waiting for an SVID while the agent logged "exceeds size limit".
 // Built the way the Dockerfile builds it, for the platform the image
 // targets.

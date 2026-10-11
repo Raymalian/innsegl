@@ -724,7 +724,7 @@ func TestTheHealthEndpointsThroughTheShippedServer(t *testing.T) {
 // TestServeRunsUnderAnAppendOnlyDatabaseRole is doc 05 §1's least-privilege
 // requirement, measured rather than asserted.
 //
-//	innsegl-mcp | built | The MCP server | Only service holding SPIRE admin credential
+//	<the MCP server row> | built | The MCP server | Only service holding SPIRE admin credential
 //
 // and, one line down in the same table, `innsegl-dashboard`'s "No write
 // credentials mounted — enforced by giving it a read-only DB role". The MCP's

@@ -73,7 +73,7 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 			t.Errorf("%s does not mount the innsegl-mirror volume at /mirror", name)
 		}
 		if mounted && !readOnly {
-			t.Errorf("%s mounts the mirror read-write; only innsegl-mcp, which receives pushes, may", name)
+			t.Errorf("%s mounts the mirror read-write; only innsegl-core, which receives pushes, may", name)
 		}
 		if dir, _ := cfg.env(name, "INNSEGL_MIRROR_DIR"); dir != "/mirror" {
 			t.Errorf("%s has INNSEGL_MIRROR_DIR=%q, want /mirror", name, dir)
@@ -87,8 +87,8 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 	plain := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
 	for service, want := range map[string]map[string]bool{
 		// target -> read-only
-		"innsegl-mcp": {"/agentlog": false, "/harness-log": true},
-		"innsegl-api": {"/agentlog": true, "/message-key": true, "/mirror": true},
+		"innsegl-core": {"/agentlog": false, "/harness-log": true},
+		"innsegl-api":  {"/agentlog": true, "/message-key": true, "/mirror": true},
 	} {
 		got := map[string]bool{}
 		for _, v := range plain.service(t, service).Volumes {
@@ -105,8 +105,8 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 		}
 	}
 	for service, keys := range map[string][]string{
-		"innsegl-mcp": {"INNSEGL_MCP_LOG_DIR"},
-		"innsegl-api": {"INNSEGL_API_LOG_DIR", "INNSEGL_API_MESSAGE_KEY_DIR"},
+		"innsegl-core": {"INNSEGL_MCP_LOG_DIR"},
+		"innsegl-api":  {"INNSEGL_API_LOG_DIR", "INNSEGL_API_MESSAGE_KEY_DIR"},
 	} {
 		for _, key := range keys {
 			if v, ok := plain.env(service, key); !ok || v == "" {

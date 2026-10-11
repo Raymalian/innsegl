@@ -50,7 +50,7 @@ import (
 //	          same reason: "A container of its own: this test kills the server")
 //	SPIRE     the SHIPPED compose stack under a project name unique to this
 //	          test process (ADR-0022), reached over a socat proxy onto the
-//	          admin network exactly as innsegl-mcp will reach it; blocked by
+//	          admin network exactly as innsegl-core will reach it; blocked by
 //	          removing the proxy, which closes the port for real
 //	Sigstore  two real HTTP servers serving real trust material — a real
 //	          X.509 CA certificate and a real ECDSA public key — blocked by
@@ -277,7 +277,7 @@ func (s *healthSPIRE) mintAdmin(ctx context.Context) (healthMintedSVID, error) {
 	return healthMintedSVID{svid: svid, roots: roots}, nil
 }
 
-// client dials the admin API the way innsegl-mcp will: mTLS over SPIFFE
+// client dials the admin API the way innsegl-core will: mTLS over SPIFFE
 // identities, the server authorized by ID.
 func (s *healthSPIRE) client(t *testing.T) *spire.Client {
 	t.Helper()

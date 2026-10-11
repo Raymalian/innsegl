@@ -12,7 +12,7 @@ import (
 // ---------------------------------------------------------------------------
 // GW-005 — the gateway is reachable from the host on loopback only.
 //
-// ADR-0060 decision 1 folds the gateway into innsegl-mcp as a fifth
+// ADR-0060 decision 1 folds the gateway into innsegl-core as a fifth
 // companion, the same process `seal`, `reconcile` and `reap` already run
 // inside. Decision 2 is the point of this case: inside the container the
 // gateway listens the way the tool surface already does, so the only thing
@@ -66,7 +66,7 @@ func TestGW005TheGatewayIsPublishedOnLoopbackOnly(t *testing.T) {
 		t.Fatalf("deploy/compose/innsegl.yml publishes no host port for the gateway's "+
 			"container port %d. ADR-0060 decision 2: the host guarantee IS the compose "+
 			"publish line — add \"127.0.0.1:${INNSEGL_GATEWAY_PORT:-28095}:%d\" to "+
-			"innsegl-mcp's ports:, next to its %d and %d lines.",
+			"innsegl-core's ports:, next to its %d and %d lines.",
 			gatewayContainerPort, gatewayContainerPort, 8080, 8081)
 		return
 	case 1:
@@ -77,15 +77,15 @@ func TestGW005TheGatewayIsPublishedOnLoopbackOnly(t *testing.T) {
 			names = append(names, p.service)
 		}
 		t.Fatalf("the gateway's container port %d is published by more than one service: "+
-			"%s. ADR-0060 decision 1 folds the gateway into innsegl-mcp alone; a second "+
+			"%s. ADR-0060 decision 1 folds the gateway into innsegl-core alone; a second "+
 			"publisher is a second, unaccounted door to the same traffic.",
 			gatewayContainerPort, strings.Join(names, ", "))
 		return
 	}
 
 	got := publishers[0]
-	if got.service != "innsegl-mcp" {
-		t.Errorf("the gateway's container port %d is published by %q, not innsegl-mcp. "+
+	if got.service != "innsegl-core" {
+		t.Errorf("the gateway's container port %d is published by %q, not innsegl-core. "+
 			"ADR-0060 decision 1: the gateway is a fifth companion of the one innsegl "+
 			"process, not a service of its own.", gatewayContainerPort, got.service)
 	}

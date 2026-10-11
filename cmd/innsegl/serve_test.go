@@ -591,7 +591,7 @@ func TestTheShippedSurfaceIsAllEightToolsOfIP4(t *testing.T) {
 // TestPRI005ServeReadsTheDeploymentSecretFromAFile.
 //
 // RM-084 (#124). #119 made the secret mandatory in the default mode and the
-// shipped compose stack set neither variable, so `innsegl-mcp` crashlooped on
+// shipped compose stack set neither variable, so `innsegl-core` crashlooped on
 // a clean `docker compose up`. The stack's fix is a one-shot that writes 32
 // random bytes into a volume, and a volume is a FILE — compose cannot inject a
 // file's contents into an environment variable, so the server has to be able

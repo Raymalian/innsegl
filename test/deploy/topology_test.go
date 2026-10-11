@@ -55,7 +55,7 @@ var doc05Rows = []struct {
 	// the container's loopback. Object lock lives in the S3 layer only, so
 	// what matters is that nothing else is reachable; OPS-029 measures that.
 	{"innsegl-s3", "object storage with object lock enabled"},
-	{"innsegl-mcp", "the MCP server"},
+	{"innsegl-core", "the MCP server"},
 	{"innsegl-reconciler", "intent expiry, Rekor cross-check, drift detection"},
 	{"innsegl-sealer", "segment sealing and anchoring"},
 	// The dashboard row is one service since #475: `innsegl api` serves the

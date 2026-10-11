@@ -48,7 +48,7 @@ import (
 //
 // Two things about the process are still the harness's and not a deployment's,
 // and both are flags the shipped binary takes rather than code written here.
-// The admin SVID arrives as PEM files, because there is no attested innsegl-mcp
+// The admin SVID arrives as PEM files, because there is no attested innsegl-core
 // workload on this host and the containerised agent's Workload API socket is
 // inside the container. And -fulcio-url / -rekor-url point at a closed port:
 // they are required configuration, they are read only by /readyz, and MCP-011

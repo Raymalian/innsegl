@@ -21,10 +21,10 @@ func TestGatewayDrainFitsInsideTheStopGracePeriod(t *testing.T) {
 		t.Skipf("skipping: %v", err)
 	}
 	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
-	mcp := cfg.service(t, "innsegl-mcp")
+	mcp := cfg.service(t, "innsegl-core")
 	raw := mcp.Environment["INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT"]
 	if raw == nil {
-		t.Fatal("innsegl-mcp sets no INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT; the gateway drains for 15s")
+		t.Fatal("innsegl-core sets no INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT; the gateway drains for 15s")
 	}
 	drain, err := time.ParseDuration(*raw)
 	if err != nil {
@@ -35,7 +35,7 @@ func TestGatewayDrainFitsInsideTheStopGracePeriod(t *testing.T) {
 	}
 	grace, err := time.ParseDuration(mcp.StopGracePeriod)
 	if err != nil {
-		t.Fatalf("innsegl-mcp stop_grace_period %q: %v (the runtime default is 10s)", mcp.StopGracePeriod, err)
+		t.Fatalf("innsegl-core stop_grace_period %q: %v (the runtime default is 10s)", mcp.StopGracePeriod, err)
 	}
 	// The drain is part of every update's restart: five minutes held each
 	// `make update` that long (measured 2026-10-03: 292s). A model reply

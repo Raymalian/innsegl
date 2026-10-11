@@ -233,7 +233,7 @@ func TestOPS130EachServiceMountsOnlyTheCredentialsItUses(t *testing.T) {
 		"innsegl-trust-backup":  {"TRUST"},
 		"postgres":              {"ledger-owner"},
 		"innsegl-object-init":   {"objects-root", "objects-sealer"},
-		"innsegl-mcp":           {"acme-dns", "appender", "authwriter", "objects-sealer"},
+		"innsegl-core":          {"acme-dns", "appender", "authwriter", "objects-sealer"},
 		"innsegl-reconciler":    {"appender"},
 		"innsegl-sealer":        {"appender", "objects-sealer"},
 		"innsegl-backup":        {"backup", "objects-sealer"},

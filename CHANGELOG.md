@@ -76,6 +76,12 @@ Deprecations are announced here one minor release ahead of removal.
 
 ### Changed
 
+- **The core container is `innsegl-core`** (RM-346, #594), renamed from
+  `innsegl-mcp` (`innsegl-dev-core` on a dev stack). `docker exec` and
+  `docker logs` lines name the new container. The old name stays a DNS alias
+  on `innsegl-mcp-clients` for one release. `make update` removes the old
+  container and starts the new one on the same volumes. The compose project,
+  volumes, networks, SPIFFE ID and `innsegl serve` are unchanged.
 - Go is pinned to `1.27.1` by the `go` directive in `go.mod`, which CI reads.
   A Go bump is a deliberate commit.
 - The commit hook passes the signing configuration as `git -c` options placed
@@ -85,7 +91,7 @@ Deprecations are announced here one minor release ahead of removal.
   configures the deprecated `sign_commit` tool (#555).
 - The gateway's refusals that name `innsegl retire` say it runs on the core
   host, with `make innsegl-retire RUN=<run_id>`.
-- **`innsegl retire` runs on the core** (ADR-0077): `docker exec innsegl-mcp
+- **`innsegl retire` runs on the core** (ADR-0077): `docker exec innsegl-core
   innsegl retire <run_id>`, or `make innsegl-retire RUN=<run_id>`. It calls the
   retirement engine the gateway uses, in process, under the core's own SPIRE
   admin identity and ledger credential, so it no longer needs the admin

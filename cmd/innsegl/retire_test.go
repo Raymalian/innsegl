@@ -267,7 +267,7 @@ func TestRetireRefusesAProcessWithNoAdminIdentity(t *testing.T) {
 		t.Fatalf("code = %d, want exitRetireUnauthorized (%d); stderr=%s",
 			code, exitRetireUnauthorized, stderr.String())
 	}
-	for _, want := range []string{"REFUSED", "docker exec innsegl-mcp innsegl retire " + f.runID} {
+	for _, want := range []string{"REFUSED", "docker exec innsegl-core innsegl retire " + f.runID} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
 		}
@@ -288,7 +288,7 @@ func TestRetireRefusesACommandLineItCannotActOn(t *testing.T) {
 		{"two run ids", append(append([]string{}, complete...), "run-aaaaaaaaaaaa", "run-bbbbbbbbbbbb"), "one run at a time"},
 		{"an unknown flag", append([]string{"-force"}, complete...), "-force"},
 		{"the retired listener flag", append([]string{"-url", "http://127.0.0.1:28090/"}, complete...), "-url"},
-		{"no ledger", []string{"-dsn", "", "-spire-address", "s:1", "-trust-domain", "innsegl.dev", "run-aaaaaaaaaaaa"}, "docker exec innsegl-mcp"},
+		{"no ledger", []string{"-dsn", "", "-spire-address", "s:1", "-trust-domain", "innsegl.dev", "run-aaaaaaaaaaaa"}, "docker exec innsegl-core"},
 		{"no SPIRE", []string{"-dsn", "postgres://x@y/z", "-spire-address", "", "-trust-domain", "innsegl.dev", "run-aaaaaaaaaaaa"}, "-spire-address"},
 		{"no trust domain", []string{"-dsn", "postgres://x@y/z", "-spire-address", "s:1", "-trust-domain", "", "run-aaaaaaaaaaaa"}, "-trust-domain"},
 	} {
@@ -324,7 +324,7 @@ func TestRetireUsageNamesEveryExitStatusAndWhereToRunIt(t *testing.T) {
 
 	usage := stdout.String() + stderr.String()
 	for _, want := range []string{
-		"innsegl retire", "docker exec innsegl-mcp innsegl retire", envLedgerDSN,
+		"innsegl retire", "docker exec innsegl-core innsegl retire", envLedgerDSN,
 		fmt.Sprintf("  %d ", exitOK),
 		fmt.Sprintf("  %d ", exitUsage),
 		fmt.Sprintf("  %d ", exitRetireAlreadyEnded),

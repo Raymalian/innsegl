@@ -167,8 +167,8 @@ func TestTheUIIsBuiltFromWebAlone(t *testing.T) {
 
 // `make update` skips when the deployed commit matches the checkout. A core
 // that crash-loops on that commit is not up to date: measured 2026-10-04,
-// update said "nothing to do" while innsegl-mcp restarted in a loop. It
-// skips only when innsegl-mcp is also running and not restarting.
+// update said "nothing to do" while innsegl-core restarted in a loop. It
+// skips only when innsegl-core is also running and not restarting.
 func TestUpdateSkipsOnlyWhenTheCoreIsRunning(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -183,6 +183,6 @@ func TestUpdateSkipsOnlyWhenTheCoreIsRunning(t *testing.T) {
 		t.Fatal("the Makefile has no update target")
 	}
 	if !strings.Contains(string(m[1]), "docker inspect") || !strings.Contains(string(m[1]), "Restarting") {
-		t.Fatal("make update decides there is nothing to do without asking whether innsegl-mcp is running")
+		t.Fatal("make update decides there is nothing to do without asking whether innsegl-core is running")
 	}
 }

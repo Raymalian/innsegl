@@ -49,18 +49,18 @@ import (
 //
 //  1. REACH THE ADMIN API FROM THE TEST PROCESS. ADR-0011 puts the server's TCP
 //     endpoint on `innsegl-spire-admin`, an internal network with no published
-//     port, whose only future member is innsegl-mcp. The test process is on the
+//     port, whose only future member is innsegl-core. The test process is on the
 //     host, and on a Docker Desktop VM the host has no route to a container
 //     address at all. So the harness starts one socat container, joins it to
 //     that network, and publishes a loopback port — standing in for exactly the
-//     membership ADR-0011 says innsegl-mcp will have. It forwards TCP and
+//     membership ADR-0011 says innsegl-core will have. It forwards TCP and
 //     nothing else: the gRPC channel is mTLS between this process's minted
 //     X509-SVID and the server's, end to end through the proxy, so the proxy
 //     authenticates nothing and can read nothing.
 //
-//  2. OBTAIN AN ADMIN CREDENTIAL. In the deployment innsegl-mcp is an attested
+//  2. OBTAIN AN ADMIN CREDENTIAL. In the deployment innsegl-core is an attested
 //     workload and its SVID comes from the Workload API. There is no
-//     innsegl-mcp yet (E4), so the harness mints one with `spire-server x509
+//     innsegl-core yet (E4), so the harness mints one with `spire-server x509
 //     mint` on the local admin socket, inside the server container. That is the
 //     unauthenticated socket ADR-0011 contains with a private tmpfs, reached
 //     the way ADR-0011 says an operator reaches it: `docker compose exec`. The
