@@ -166,9 +166,9 @@ the custodian on an internal unlock network and logs none of what it carries.
   `cacustodycli_test.go` (BAK-029, CLI-021), `corecacustody_test.go` (OPS-147)
 - `cmd/ca-bootstrap/*_test.go` (OPS-049, OPS-050, OPS-052, OPS-148)
 - `internal/client/cacustody_test.go` (BAK-026 to BAK-028)
-- `test/deploy/cacustody_test.go` (OPS-051, OPS-149 to OPS-151, OPS-155, OPS-186: the custodian mounts the chain the CA presents, OPS-187: Fulcio holds no token, BAK-030)
-- `test/deploy/custodyvolumeowner_test.go` (OPS-192: a fresh KMS volume is the bootstrap's to write)
-- `test/deploy/devcustody_test.go` (OPS-129: live custody names unchanged, dev custody innsegl-dev-* throughout)
+- `test/deploy/custody/cacustody_test.go` (OPS-051, OPS-149 to OPS-151, OPS-155, OPS-186: the custodian mounts the chain the CA presents, OPS-187: Fulcio holds no token, BAK-030)
+- `test/deploy/custody/custodyvolumeowner_test.go` (OPS-192: a fresh KMS volume is the bootstrap's to write)
+- `test/deploy/custody/devcustody_test.go` (OPS-129: live custody names unchanged, dev custody innsegl-dev-* throughout)
 - `scripts/ca-custody-selftest.sh` (OPS-049 to OPS-051)
 - `scripts/ca-custody-reset-selftest.sh` (OPS-159)
 - `internal/cacustody/store_test.go` OPS-136 also signs the way Fulcio asks, `transit/sign/<key>/sha2-256`

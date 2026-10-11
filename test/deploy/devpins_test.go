@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // OPS-196 (PROPOSED for doc 07, #592) — a hint that tells a developer how to
@@ -23,8 +25,8 @@ var (
 )
 
 func TestOPS196InstallHintsNameTheCIPins(t *testing.T) {
-	root := repoRoot(t)
-	ci := readFile(t, filepath.Join(root, ".github", "workflows", "ci.yml"))
+	root := deploytest.RepoRoot(t)
+	ci := deploytest.ReadFile(t, filepath.Join(root, ".github", "workflows", "ci.yml"))
 	gobco := ciGobcoPin.FindStringSubmatch(ci)
 	lint := ciLintPin.FindStringSubmatch(ci)
 	if gobco == nil || lint == nil {

@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"innsegl.dev/innsegl/test/deploy/deploytest"
+
 	"innsegl.dev/innsegl/internal/dockertest"
 )
 
@@ -45,7 +47,7 @@ var awkProgram = regexp.MustCompile(`\bawk\b[^'\n|;]*'([^']*)'`)
 var regexInterval = regexp.MustCompile(`/[^/\n]*\{[0-9]+(,[0-9]*)?\}[^/\n]*/`)
 
 func TestOPS134AwkProgramsUseNoRegexIntervals(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	var found []string
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -74,7 +76,7 @@ func TestOPS134AwkProgramsUseNoRegexIntervals(t *testing.T) {
 				if relErr != nil {
 					return relErr
 				}
-				found = append(found, rel+":"+itoa(int64(line))+": "+string(prog[r[0]:r[1]]))
+				found = append(found, rel+":"+deploytest.Itoa(int64(line))+": "+string(prog[r[0]:r[1]]))
 			}
 		}
 		return nil
@@ -111,7 +113,7 @@ func TestOPS134CertExtensionFindsCATrueUnderOldMawk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	verify := filepath.Join(repoRoot(t), "deploy", "compose", "sigstore", "verify.sh")
+	verify := filepath.Join(deploytest.RepoRoot(t), "deploy", "compose", "sigstore", "verify.sh")
 	// The container has no openssl: a shell function stands in for it and
 	// prints the text the host's openssl wrote. Only the awk is under test.
 	script := `sed -n '/^cert_extension()/,/^}/p' /verify.sh > /tmp/fn.sh

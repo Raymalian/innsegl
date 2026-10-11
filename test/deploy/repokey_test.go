@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"innsegl.dev/innsegl/test/deploy/deploytest"
+
 	"innsegl.dev/innsegl/internal/identity"
 )
 
@@ -17,7 +19,7 @@ import (
 // core its path and a literal default. The key is never a constant in a
 // shipped file.
 func TestOPS175TheStackGeneratesItsOwnRepositoryKey(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	script := filepath.Join(root, identityInitScript)
 	if _, err := exec.LookPath("openssl"); err != nil {
 		t.Skipf("openssl is not on PATH, so the shipped generator cannot be run here: %v", err)

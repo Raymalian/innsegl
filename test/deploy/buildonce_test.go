@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // Several services share one image, and `docker compose build` with no
@@ -22,10 +24,10 @@ import (
 func TestEveryBuiltImageIsBuiltOnceByTheMakefile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := composeUsable(ctx); err != nil {
+	if err := deploytest.ComposeUsable(ctx); err != nil {
 		t.Skipf("skipping: %v", err)
 	}
-	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
+	cfg := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
 	images := map[string]bool{}
 	byService := map[string]string{}
 	for name, svc := range cfg.Services {
@@ -102,7 +104,7 @@ func TestTheGoImageIsBuiltFromTheGoSourcesAlone(t *testing.T) {
 
 	// The Go build stage only: the UI stage (ui-build) copies web/, which
 	// is the point of it being a stage of its own.
-	goStage := []byte(dockerfileStage(t, string(df), "build"))
+	goStage := []byte(deploytest.DockerfileStage(t, string(df), "build"))
 	copied := map[string]bool{"Dockerfile": true}
 	for _, c := range regexp.MustCompile(`(?m)^COPY (?:--[a-z]+=\S+ )*(.+) \S+$`).FindAllSubmatch(goStage, -1) {
 		line := string(c[0])
@@ -142,8 +144,8 @@ func TestTheGoImageIsBuiltFromTheGoSourcesAlone(t *testing.T) {
 // the runtime image, so a UI change rebuilds innsegl-api's image alone and
 // no Go stage (#475).
 func TestTheUIIsBuiltFromWebAlone(t *testing.T) {
-	df := readFile(t, filepath.Join(repoRoot(t), "Dockerfile"))
-	ui := dockerfileStage(t, df, "ui-build")
+	df := deploytest.ReadFile(t, filepath.Join(deploytest.RepoRoot(t), "Dockerfile"))
+	ui := deploytest.DockerfileStage(t, df, "ui-build")
 	copies := regexp.MustCompile(`(?m)^COPY (.+) \S+$`).FindAllStringSubmatch(ui, -1)
 	if len(copies) == 0 {
 		t.Fatal("the ui-build stage copies nothing")
@@ -158,7 +160,7 @@ func TestTheUIIsBuiltFromWebAlone(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^FROM runtime AS api$`).MatchString(df) {
 		t.Error("the api target is not built on the runtime stage")
 	}
-	for _, c := range regexp.MustCompile(`(?m)^(?:COPY|ADD|RUN) .*$`).FindAllString(dockerfileStage(t, df, "api"), -1) {
+	for _, c := range regexp.MustCompile(`(?m)^(?:COPY|ADD|RUN) .*$`).FindAllString(deploytest.DockerfileStage(t, df, "api"), -1) {
 		if !strings.HasPrefix(c, "COPY --from=ui-build ") {
 			t.Errorf("the api target does more than add the built UI: %s", c)
 		}

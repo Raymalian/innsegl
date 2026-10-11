@@ -97,7 +97,7 @@ back. `innsegl-credentials` exits 1 when a stored credential is malformed.
 - OPS-130 (`test/deploy/credentials_test.go`, `cmd/innsegl/credentialenv_test.go`):
   no shipped default, no password in a DSN or compose value, the mount table,
   `-h` never prints a credential.
-- OPS-163 (`test/deploy/credentialsmove_test.go`, `logdbcredentials_test.go`):
+- OPS-163 (`test/deploy/ledgerdb/credentialsmove_test.go`, `logdbcredentials_test.go`):
   the move against a real Postgres and the pinned MySQL.
 - OPS-164 (`scripts/credentials-selftest.sh`): the generators.
 

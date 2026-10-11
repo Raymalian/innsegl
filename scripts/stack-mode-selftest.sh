@@ -4,7 +4,7 @@
 # scripts/stack-mode.sh, and the host-side scripts that name a DEV stack's
 # containers — OPS-129, RM-293 (#469), ADR-0072.
 #
-# test/deploy/devstack_test.go holds the compose files and the Makefile to
+# test/deploy/custody/devstack_test.go holds the compose files and the Makefile to
 # the mode. This holds what only a real checkout shows: where the marker is
 # read from (a linked worktree follows its repository), what refuses, and
 # that every script that calls a container by name calls the dev one in dev.

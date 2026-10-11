@@ -464,6 +464,11 @@ jobs:
       # was cut off. This buries an assertion under that kind of noise.
       - name: A failed test's reason is shown, however much it printed first
         run: ./scripts/test-failure-reasons-selftest.sh
+      # PR #620: test/deploy hit go test's per-package timeout with no earlier
+      # sign. The report lists each package's runtime against its limit and
+      # warns before one reaches it.
+      - name: Each package's runtime is shown against its timeout
+        run: ./scripts/test-package-times-selftest.sh
 
   test-ids-selftest:
     name: test ids self-test

@@ -6,6 +6,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // A restart lets the gateway finish the model replies it is streaming. The
@@ -17,11 +19,11 @@ import (
 func TestGatewayDrainFitsInsideTheStopGracePeriod(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := composeUsable(ctx); err != nil {
+	if err := deploytest.ComposeUsable(ctx); err != nil {
 		t.Skipf("skipping: %v", err)
 	}
-	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
-	mcp := cfg.service(t, "innsegl-core")
+	cfg := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
+	mcp := cfg.Service(t, "innsegl-core")
 	raw := mcp.Environment["INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT"]
 	if raw == nil {
 		t.Fatal("innsegl-core sets no INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT; the gateway drains for 15s")

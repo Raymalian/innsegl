@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // OPS-180: the core's binary fits under the size the SPIRE agent hashes a
@@ -25,7 +27,7 @@ func TestOPS180TheCoreBinaryFitsTheAttestorsSizeLimit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	conf, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "spire", "agent.conf"))
 	if err != nil {
 		t.Fatal(err)

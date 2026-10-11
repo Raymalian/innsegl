@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // OPS-181 (#473): the ACME DNS credential is read by the core at start, so
@@ -16,7 +18,7 @@ import (
 // "already up to date" (nothing in the checkout changed) and the core kept
 // the old credential.
 func TestOPS181StoringTheACMECredentialRecreatesTheCore(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "Makefile"))
+	raw, err := os.ReadFile(filepath.Join(deploytest.RepoRoot(t), "Makefile"))
 	if err != nil {
 		t.Fatal(err)
 	}

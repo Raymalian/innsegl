@@ -4,11 +4,11 @@ package deploy
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // ---------------------------------------------------------------------------
@@ -65,11 +65,11 @@ var doc05Rows = []struct {
 }
 
 func TestOPS007TheComposeStackShipsEveryDoc05Row(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 
 	declared := map[string]string{}
 	for _, rel := range composeFiles {
-		for _, name := range composeServices(t, filepath.Join(root, rel)) {
+		for _, name := range deploytest.ComposeServices(t, filepath.Join(root, rel)) {
 			declared[name] = rel
 		}
 	}
@@ -108,8 +108,8 @@ func TestOPS007TheComposeStackShipsEveryDoc05Row(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOPS008TheStackRunsTheMCPUnderTheAppendOnlyRole(t *testing.T) {
-	root := repoRoot(t)
-	stack := readFile(t, filepath.Join(root, "deploy", "compose", "innsegl.yml"))
+	root := deploytest.RepoRoot(t)
+	stack := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", "innsegl.yml"))
 
 	for _, want := range []struct{ needle, why string }{
 		{"INNSEGL_REQUIRE_APPEND_ONLY_ROLE",
@@ -140,57 +140,3 @@ func TestOPS008TheStackRunsTheMCPUnderTheAppendOnlyRole(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
-
-// serviceLine matches a top-level service key in a compose file: exactly two
-// spaces of indent, a name, a colon, end of line. The shipped files are hand
-// written with that convention and every comment in them is a `#` line, so a
-// regexp is enough and buys the package no YAML dependency.
-var serviceLine = regexp.MustCompile(`^ {2}([a-z][a-z0-9_-]*):\s*$`)
-
-// composeServices returns the service names a compose file declares.
-func composeServices(t *testing.T, path string) []string {
-	t.Helper()
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("%s is part of the reference deployment and must exist: %v", path, err)
-	}
-
-	var out []string
-	inServices := false
-	for _, line := range strings.Split(string(body), "\n") {
-		switch {
-		case strings.HasPrefix(line, "services:"):
-			inServices = true
-			continue
-		case line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "#"):
-			inServices = false
-		}
-		if !inServices {
-			continue
-		}
-		if m := serviceLine.FindStringSubmatch(line); m != nil {
-			out = append(out, m[1])
-		}
-	}
-	return out
-}
-
-func readFile(t *testing.T, path string) string {
-	t.Helper()
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("%s must exist: %v", path, err)
-	}
-	return string(body)
-}
-
-// repoRoot finds the module root from the test's working directory.
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	out, err := exec.CommandContext(t.Context(),
-		"git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		t.Fatalf("locating the repository root: %v", err)
-	}
-	return strings.TrimSpace(string(out))
-}

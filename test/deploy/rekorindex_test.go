@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,19 +31,19 @@ import (
 // The shape: no Redis anywhere in the Sigstore stack, and rekor's index flags
 // point at trillian-db.
 func TestRekorIndexIsMySQLInTheLogDatabase(t *testing.T) {
-	body := readFile(t, filepath.Join(repoRoot(t), "deploy", "compose", "sigstore.yml"))
+	body := deploytest.ReadFile(t, filepath.Join(deploytest.RepoRoot(t), "deploy", "compose", "sigstore.yml"))
 
-	if slices.Contains(composeServices(t, filepath.Join(repoRoot(t), "deploy", "compose", "sigstore.yml")), "rekor-redis") {
+	if slices.Contains(deploytest.ComposeServices(t, filepath.Join(deploytest.RepoRoot(t), "deploy", "compose", "sigstore.yml")), "rekor-redis") {
 		t.Error("sigstore.yml still declares rekor-redis; the index lives in trillian-db")
 	}
-	code := composeCode(body)
+	code := deploytest.ComposeCode(body)
 	for _, gone := range []string{"rekor-redis", "redis:", "sigstore-rekor-search", "--redis_server."} {
 		if strings.Contains(code, gone) {
 			t.Errorf("sigstore.yml still carries %q outside a comment", gone)
 		}
 	}
 
-	rekor := serviceBlock(body, "rekor")
+	rekor := deploytest.ServiceBlock(body, "rekor")
 	if !strings.Contains(rekor, `"--search_index.storage_provider=mysql"`) {
 		t.Error("rekor does not select the MySQL search index (--search_index.storage_provider=mysql)")
 	}
@@ -50,7 +52,7 @@ func TestRekorIndexIsMySQLInTheLogDatabase(t *testing.T) {
 	if !strings.Contains(rekor, `"--config=/run/innsegl/credentials/rekor-index/rekor-server.yaml"`) {
 		t.Error("rekor does not read its config file, where the index DSN is")
 	}
-	boot := readFile(t, filepath.Join(repoRoot(t), "deploy", "compose", "sigstore", "bootstrap.sh"))
+	boot := deploytest.ReadFile(t, filepath.Join(deploytest.RepoRoot(t), "deploy", "compose", "sigstore", "bootstrap.sh"))
 	dsn := regexp.MustCompile(`dsn: ([^\s\\]+)`).FindStringSubmatch(boot)
 	if dsn == nil {
 		t.Fatal("the bootstrap renders no index DSN for rekor")
@@ -69,12 +71,12 @@ func TestRekorIndexIsMySQLInTheLogDatabase(t *testing.T) {
 // over a network of two members, still has no route on innsegl-trillian-db,
 // and its MySQL user may touch the index database and nothing else.
 func TestRekorReachesTheIndexDatabaseAndNothingElse(t *testing.T) {
-	root := repoRoot(t)
-	body := readFile(t, filepath.Join(root, "deploy", "compose", "sigstore.yml"))
+	root := deploytest.RepoRoot(t)
+	body := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", "sigstore.yml"))
 
 	members := map[string][]string{}
-	for _, svc := range composeServices(t, filepath.Join(root, "deploy", "compose", "sigstore.yml")) {
-		for _, n := range serviceNetworks(serviceBlock(body, svc)) {
+	for _, svc := range deploytest.ComposeServices(t, filepath.Join(root, "deploy", "compose", "sigstore.yml")) {
+		for _, n := range serviceNetworks(deploytest.ServiceBlock(body, svc)) {
 			members[n] = append(members[n], svc)
 		}
 	}
@@ -85,17 +87,17 @@ func TestRekorReachesTheIndexDatabaseAndNothingElse(t *testing.T) {
 		t.Error("rekor is on innsegl-trillian-db; the front end must have no route to the Trillian pair's network")
 	}
 
-	db := serviceBlock(body, "trillian-db")
+	db := deploytest.ServiceBlock(body, "trillian-db")
 	if !strings.Contains(db, "--init-file=/run/innsegl/credentials/logdb/init.sql") {
 		t.Error("trillian-db does not run the index grant at start (--init-file); " +
 			"an existing database volume would never get the user")
 	}
-	boot := readFile(t, filepath.Join(root, "deploy", "compose", "sigstore", "bootstrap.sh"))
+	boot := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", "sigstore", "bootstrap.sh"))
 	if !strings.Contains(boot, "/in/rekor-index.sql") || !strings.Contains(body, "./sigstore/rekor-index.sql:/in/rekor-index.sql:ro") {
 		t.Error("the bootstrap does not render the init file from sigstore/rekor-index.sql")
 	}
 
-	sql := readFile(t, filepath.Join(root, "deploy", "compose", "sigstore", "rekor-index.sql"))
+	sql := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", "sigstore", "rekor-index.sql"))
 	// The DSN and the grant are written in two files; they must name one user.
 	// The password is this host's, filled into the template's placeholder.
 	dsn := regexp.MustCompile(`dsn: ([^:]+):(%s)@tcp\(trillian-db:3306\)/([a-z_]+)`).FindStringSubmatch(boot)
@@ -135,9 +137,9 @@ func TestRekorReachesTheIndexDatabaseAndNothingElse(t *testing.T) {
 // holds, and backfills only when that is fewer than the log's size. What the
 // script does with each answer is scripts/rekor-reindex-selftest.sh.
 func TestBringUpBackfillsOnlyWhenTheIndexIsBehind(t *testing.T) {
-	mk := readFile(t, filepath.Join(repoRoot(t), "Makefile"))
+	mk := deploytest.ReadFile(t, filepath.Join(deploytest.RepoRoot(t), "Makefile"))
 
-	ready := makeRecipe(t, mk, "rekor-index-ready")
+	ready := deploytest.MakeRecipe(t, mk, "rekor-index-ready")
 	if !strings.Contains(ready, "scripts/rekor-reindex.sh --if-behind") {
 		t.Error("rekor-index-ready does not run the conditional backfill (rekor-reindex.sh --if-behind)")
 	}
@@ -158,7 +160,7 @@ func TestBringUpBackfillsOnlyWhenTheIndexIsBehind(t *testing.T) {
 		t.Error("bring-up does not remove the old rekor-redis container; it would keep running after the upgrade")
 	}
 	for _, target := range []string{"sigstore-up", "rekor-log-up"} {
-		r := makeRecipe(t, mk, target)
+		r := deploytest.MakeRecipe(t, mk, target)
 		if strings.Contains(r, "--remove-orphans") {
 			t.Errorf("%s brings sigstore.yml up with --remove-orphans, which removes innsegl-ca-store "+
 				"(sigstore.keycustody.yml, same project)", target)
@@ -171,7 +173,7 @@ func TestBringUpBackfillsOnlyWhenTheIndexIsBehind(t *testing.T) {
 	// `make update` reaches it before it starts the core, and touches only the
 	// log's services: an `up` of fulcio from sigstore.yml alone would undo the
 	// key-custody overlay on a host that uses it.
-	logUp := makeRecipe(t, mk, "rekor-log-up")
+	logUp := deploytest.MakeRecipe(t, mk, "rekor-log-up")
 	// $(SIGSTORE_FILES) is sigstore.yml alone on a live host, and with the dev
 	// names overlay on a dev stack (ADR-0072) — never the key-custody overlay.
 	if !strings.Contains(logUp, "$(SIGSTORE_FILES) up -d trillian-db trillian-log-server trillian-log-signer rekor") {
@@ -180,7 +182,7 @@ func TestBringUpBackfillsOnlyWhenTheIndexIsBehind(t *testing.T) {
 	if strings.Contains(logUp, "fulcio") {
 		t.Error("rekor-log-up touches fulcio")
 	}
-	upd := makeRecipe(t, mk, "update")
+	upd := deploytest.MakeRecipe(t, mk, "update")
 	l, c := strings.Index(upd, "--no-print-directory rekor-log-up"), strings.Index(upd, "--no-print-directory innsegl-here-services")
 	if l < 0 || c < 0 || l > c {
 		t.Error("make update does not run rekor-log-up before it starts the core; " +
@@ -191,9 +193,9 @@ func TestBringUpBackfillsOnlyWhenTheIndexIsBehind(t *testing.T) {
 // The backfill runs Rekor's own backfill tool, of the same release as the
 // server, so the keys it writes are the keys the server writes.
 func TestTheBackfillToolIsTheServersRelease(t *testing.T) {
-	root := repoRoot(t)
-	compose := readFile(t, filepath.Join(root, "deploy", "compose", "sigstore.yml"))
-	script := readFile(t, filepath.Join(root, "scripts", "rekor-reindex.sh"))
+	root := deploytest.RepoRoot(t)
+	compose := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", "sigstore.yml"))
+	script := deploytest.ReadFile(t, filepath.Join(root, "scripts", "rekor-reindex.sh"))
 
 	server := regexp.MustCompile(`rekor-server:(v[0-9.]+)@sha256:`).FindStringSubmatch(compose)
 	tool := regexp.MustCompile(`rekor/backfill-index:(v[0-9.]+)@sha256:[0-9a-f]{64}`).FindStringSubmatch(script)
@@ -203,39 +205,6 @@ func TestTheBackfillToolIsTheServersRelease(t *testing.T) {
 	if server[1] != tool[1] {
 		t.Errorf("rekor-server is %s but backfill-index is %s; when one moves, both move", server[1], tool[1])
 	}
-}
-
-// composeCode is a compose file with its comment lines removed.
-func composeCode(body string) string {
-	var b strings.Builder
-	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-// serviceBlock returns one service's lines, comments removed.
-func serviceBlock(body, name string) string {
-	var b strings.Builder
-	in := false
-	for _, line := range strings.Split(composeCode(body), "\n") {
-		if m := serviceLine.FindStringSubmatch(line); m != nil {
-			in = m[1] == name
-			continue
-		}
-		if line != "" && !strings.HasPrefix(line, " ") {
-			in = false
-		}
-		if in {
-			b.WriteString(line)
-			b.WriteByte('\n')
-		}
-	}
-	return b.String()
 }
 
 // serviceNetworks reads the list under a service's `networks:` key.
@@ -261,13 +230,13 @@ func serviceNetworks(block string) []string {
 // shipped stack does, so no test runs against a log shaped differently from
 // production: MySQL in trillian-db, created by the same rekor-index.sql.
 func TestEveryRekorHarnessKeepsTheIndexInTheLogDatabase(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	for _, rel := range []string{
 		"internal/segment/rekorharness_test.go",
 		"test/chaos/killharness_test.go",
 		"test/load/harness_test.go",
 	} {
-		body := readFile(t, filepath.Join(root, rel))
+		body := deploytest.ReadFile(t, filepath.Join(root, rel))
 		if strings.Contains(body, "--redis_server.") || strings.Contains(body, "redis:7") {
 			t.Errorf("%s still runs Rekor with a Redis index", rel)
 		}

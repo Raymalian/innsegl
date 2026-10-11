@@ -265,12 +265,18 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
 
 ## Tests
 
-- `test/deploy/devstack_test.go` (OPS-033, OPS-127, OPS-129), `topology_test.go`
-  (OPS-007, OPS-008), `trustroot_test.go` (OPS-031 to OPS-047),
-  `updateenv_test.go` (OPS-135), `buildonce_test.go`, `imagebundle_test.go`,
+- `test/deploy/topology_test.go` (OPS-007, OPS-008), `buildonce_test.go`, `imagebundle_test.go`,
   `hostports_test.go`, `bindaddress_test.go` (OPS-127), `oneprocess*_test.go`,
-  `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134),
+  `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134)
+- `test/deploy/custody/devstack_test.go` (OPS-033, OPS-127, OPS-129),
+  `trustroot_test.go` (OPS-031 to OPS-047)
+- `test/deploy/lifecycle/updateenv_test.go` (OPS-135),
   `startinputs_test.go` (OPS-165 to OPS-167, PROPOSED), `upwait_test.go` (OPS-179, PROPOSED), `updatesigning_test.go` (OPS-190, OPS-191, PROPOSED), `corename_test.go` (OPS-197, PROPOSED: the core container is `innsegl-core`)
+- `test/deploy/deploytest`: the container harnesses and compose helpers the
+  `test/deploy` packages share. The container-heavy tests are split across
+  `ledgerdb`, `objectstore`, `lifecycle` and `custody` so each package runs
+  well inside `go test`'s ten-minute `-timeout` (`scripts/test-no-skips.sh`
+  prints each package's runtime).
 - `test/deploy/referencedocs_test.go` (DOC-001, PROPOSED); `devpins_test.go` (OPS-196, PROPOSED: install hints name the CI pins)
 - `scripts/stack-mode-selftest.sh` (OPS-129), `innsegl-update-selftest.sh`,
   `image-bundle-selftest.sh`, `install-selftest.sh` (OPS-195, PROPOSED), `setup-link-selftest.sh`,

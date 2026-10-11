@@ -7,6 +7,8 @@ import (
 	"path"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // OPS-173 (proposed for doc 07) — the stack runs SEG-005's canary on a
@@ -22,26 +24,26 @@ import (
 func TestOPS173TheStackSchedulesTheCanaryWithoutAskingForRetention(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := composeUsable(ctx); err != nil {
+	if err := deploytest.ComposeUsable(ctx); err != nil {
 		t.Skipf("skipping OPS-173: %v", err)
 	}
 	files := []string{"deploy/compose/innsegl.yml"}
-	plain := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, files...)
-	separate := interpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, files...)
+	plain := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", nil, files...)
+	separate := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, files...)
 
 	for _, c := range []struct {
-		cfg     composeConfig
+		cfg     deploytest.ComposeConfig
 		service string
 	}{{plain, "innsegl-core"}, {separate, "innsegl-sealer"}} {
-		if v, _ := c.cfg.env(c.service, "INNSEGL_CANARY_INTERVAL"); v == "" || v == "0" {
+		if v, _ := c.cfg.Env(c.service, "INNSEGL_CANARY_INTERVAL"); v == "" || v == "0" {
 			t.Errorf("%s runs the sealer with no scheduled canary (INNSEGL_CANARY_INTERVAL=%q)", c.service, v)
 		}
-		file, _ := c.cfg.env(c.service, "INNSEGL_CANARY_STATUS_FILE")
+		file, _ := c.cfg.Env(c.service, "INNSEGL_CANARY_STATUS_FILE")
 		if file == "" {
 			t.Errorf("%s records no canary result", c.service)
 		}
 		mounted := false
-		for _, v := range c.cfg.service(t, c.service).Volumes {
+		for _, v := range c.cfg.Service(t, c.service).Volumes {
 			if v.Source == "innsegl-canary-status" && v.Target == path.Dir(file) && !v.ReadOnly {
 				mounted = true
 			}
@@ -50,7 +52,7 @@ func TestOPS173TheStackSchedulesTheCanaryWithoutAskingForRetention(t *testing.T)
 			t.Errorf("%s writes %s, which is not on the innsegl-canary-status volume", c.service, file)
 		}
 		for _, key := range []string{"INNSEGL_CANARY_PROBE_RETENTION", "INNSEGL_OBJECT_STORE_RETENTION"} {
-			if v, ok := c.cfg.env(c.service, key); ok && v != "" && v != "0" {
+			if v, ok := c.cfg.Env(c.service, key); ok && v != "" && v != "0" {
 				t.Errorf("%s sets %s=%s; the scoped identity cannot set a retention, so every probe write is refused", c.service, key, v)
 			}
 		}

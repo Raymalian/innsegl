@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // ---------------------------------------------------------------------------
@@ -38,7 +40,7 @@ const gatewayContainerPort = 8095
 func TestGW005TheGatewayIsPublishedOnLoopbackOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := composeUsable(ctx); err != nil {
+	if err := deploytest.ComposeUsable(ctx); err != nil {
 		t.Skipf("skipping GW-005: %v", err)
 	}
 
@@ -46,11 +48,11 @@ func TestGW005TheGatewayIsPublishedOnLoopbackOnly(t *testing.T) {
 	// guarantee ADR-0060 decision 2 states — the same "plain up" reading
 	// TestRM207OneProcessKeepsWhatTheFoldedServicesHad uses for the other
 	// folded settings.
-	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
+	cfg := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
 
 	type publisher struct {
 		service string
-		port    composePort
+		port    deploytest.ComposePort
 	}
 	var publishers []publisher
 	for name, svc := range cfg.Services {

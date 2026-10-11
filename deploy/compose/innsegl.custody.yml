@@ -24,7 +24,7 @@ services:
 
   # The base command with two more items. Compose replaces a command rather
   # than appending to it, so the base list is repeated here, and
-  # test/deploy/cacustody_test.go fails the day the two drift apart.
+  # test/deploy/custody/cacustody_test.go fails the day the two drift apart.
   innsegl-trust-backup:
     command:
       - trust-backup

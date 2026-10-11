@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // RM-211 (#339). One-process mode is built into the compose file, not a flag.
@@ -21,7 +23,7 @@ import (
 func TestRM211OneProcessIsBuiltIn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := composeUsable(ctx); err != nil {
+	if err := deploytest.ComposeUsable(ctx); err != nil {
 		t.Skipf("skipping RM-211: %v", err)
 	}
 	t.Setenv("INNSEGL_MCP_ALSO", "")
@@ -29,9 +31,9 @@ func TestRM211OneProcessIsBuiltIn(t *testing.T) {
 	for _, files := range [][]string{
 		{"deploy/compose/innsegl.yml"},
 	} {
-		plain := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, files...)
+		plain := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", nil, files...)
 
-		also, _ := plain.env("innsegl-core", "INNSEGL_MCP_ALSO")
+		also, _ := plain.Env("innsegl-core", "INNSEGL_MCP_ALSO")
 		have := map[string]bool{}
 		for _, name := range strings.Split(also, ",") {
 			have[strings.TrimSpace(name)] = true
@@ -50,7 +52,7 @@ func TestRM211OneProcessIsBuiltIn(t *testing.T) {
 		}
 
 		// The multi-replica topology (doc 05 §2) still has both, by name.
-		separate := interpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, files...)
+		separate := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, files...)
 		for _, folded := range []string{"innsegl-sealer", "innsegl-reconciler"} {
 			if _, ok := separate.Services[folded]; !ok {
 				t.Errorf("%v with --profile separate does not declare %s", files, folded)
@@ -61,8 +63,8 @@ func TestRM211OneProcessIsBuiltIn(t *testing.T) {
 	// And the loop list is still the operator's to set: the separate
 	// topology runs the MCP with the reaper alone.
 	t.Setenv("INNSEGL_MCP_ALSO", "reap")
-	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, "deploy/compose/innsegl.yml")
-	if also, _ := cfg.env("innsegl-core", "INNSEGL_MCP_ALSO"); also != "reap" {
+	cfg := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, "deploy/compose/innsegl.yml")
+	if also, _ := cfg.Env("innsegl-core", "INNSEGL_MCP_ALSO"); also != "reap" {
 		t.Errorf("INNSEGL_MCP_ALSO=reap is not honoured: innsegl-core gets %q", also)
 	}
 }

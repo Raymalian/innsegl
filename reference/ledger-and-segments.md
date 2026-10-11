@@ -181,8 +181,9 @@ means no run in twice the interval.
 - `cmd/innsegl/migrateschema_test.go` (LED-035, LED-036)
 - `internal/ledger/lease_test.go` (LED-047, LED-048), `cmd/innsegl/writerlease_test.go` (OPS-182)
 - `internal/event/*_test.go` (SER-001 to SER-026)
-- `test/deploy/appendonlyrole_test.go` (OPS-009, OPS-010), `objectscope_test.go`
-  (OPS-025 to OPS-030), `filerisolation_test.go`, `objectoneprocess_test.go`
+- `test/deploy/ledgerdb/appendonlyrole_test.go` (OPS-009, OPS-010)
+- `test/deploy/objectstore/objectscope_test.go` (OPS-025 to OPS-030),
+  `filerisolation_test.go`; `test/deploy/objectoneprocess_test.go`
 - `scripts/backup-ledger-selftest.sh` (BAK-001 to BAK-008, BAK-014, BAK-015),
   `scripts/backup-service-selftest.sh` (BAK-009 to BAK-013)
 - `runbooks/verify-rebuilt-index-selftest.sh` (SEG-006)
