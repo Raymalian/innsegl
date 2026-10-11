@@ -232,4 +232,42 @@ if ! printf '%s\n' "${broken_output}" | grep -q 'gobco did not run'; then
 fi
 printf 'OK: a gobco that never ran fails the gate\n\n'
 
+# --- Phase 4 (red): a test fails under gobco, and the gate says which. -------
+# Measured on a PR's CI run (2026-10-10): gobco exited 1 on internal/ledger,
+# and the gate showed only gobco's last 15 lines, all uncovered-condition
+# notes printed after the test run. Which test failed, and why, was not in the
+# log, and the run did not reproduce locally. A failing run must name its
+# failing tests and panics, wherever in the output they are.
+cat >"${workdir}/failing-gobco" <<'SH_EOF'
+#!/bin/sh
+echo "--- FAIL: TestSomethingUnderGobco (0.01s)"
+echo "    something_test.go:12: the reason it failed"
+echo "FAIL"
+i=0
+while [ "$i" -lt 30 ]; do
+  echo "internal/x/x.go:$i:1: condition \"err != nil\" was once false but never true"
+  i=$((i + 1))
+done
+echo "Branch coverage: 1/2"
+exit 1
+SH_EOF
+chmod +x "${workdir}/failing-gobco"
+
+printf '=== phase 4 (red): a test fails under gobco ===\n'
+set +e
+failing_output="$(cd -- "${workdir}" && GOBCO="${workdir}/failing-gobco" "${BRANCH_COVERAGE_SH}" 2>&1)"
+failing_status=$?
+set -e
+printf '%s\n' "${failing_output}"
+if [ "${failing_status}" -eq 0 ] || ! printf '%s\n' "${failing_output}" | grep -q 'gobco did not run'; then
+  printf 'FAIL: a run whose tests failed passed the gate (exit %d)\n' "${failing_status}" >&2
+  exit 1
+fi
+if ! printf '%s\n' "${failing_output}" | grep -q -- '--- FAIL: TestSomethingUnderGobco' ||
+  ! printf '%s\n' "${failing_output}" | grep -q 'the reason it failed'; then
+  printf 'FAIL: the gate did not name the failing test and its reason\n' >&2
+  exit 1
+fi
+printf 'OK: a failing test under gobco fails the gate and is named\n\n'
+
 printf 'branch coverage gate self-test: PASS\n'

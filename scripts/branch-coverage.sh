@@ -71,7 +71,12 @@ for p in $pkgs; do
   "$GOBCO" -branch "./$p" > "$f" 2>&1 || rc=$?
   if [ "$rc" -ne 0 ] || ! grep -q '^Branch coverage: ' "$f"; then
     echo "$p" >> "$tmp/norun"
-    echo "gobco exited $rc on ./$p; its last lines:" >> "$tmp/norun.log"
+    # The failing tests and panics first, wherever they are: gobco prints its
+    # uncovered-condition notes after the test run, so its last lines alone
+    # can hide why it failed (measured on a PR's CI run, 2026-10-10).
+    echo "gobco exited $rc on ./$p; its failing tests and panics:" >> "$tmp/norun.log"
+    grep -E -A8 '^(--- FAIL|FAIL|panic:|fatal error:)' "$f" | grep -v '^internal/.*: condition ' >> "$tmp/norun.log" || true
+    echo "its last lines:" >> "$tmp/norun.log"
     tail -n 15 "$f" >> "$tmp/norun.log"
   fi
 done
