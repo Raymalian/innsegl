@@ -752,6 +752,11 @@ backup-freshness:
 
 # SIGNING_ENV: what scripts/update-signing.sh needs to name the core and the repair.
 SIGNING_ENV = INNSEGL_STACK_PREFIX='$(STACK_PREFIX)' INNSEGL_CA_CUSTODY='$(CA_CUSTODY)'
+# The update's recipe line runs its $(MAKE) calls, so make runs the whole
+# line even under `make -n`. A dry run asks no core whether it can sign: the
+# probe is `:` there, which keeps `make -n update` a dry run (OPS-135).
+DRY_RUN = $(findstring n,$(filter-out --% %=%,$(MAKEFLAGS)))
+UPDATE_SIGNING = $(if $(DRY_RUN),:,$(SIGNING_ENV) scripts/update-signing.sh)
 
 ## update: rebuild and restart innsegl's own services only, for a stack that
 ##   is already up (`make start` once). SPIRE and Fulcio keep running; the
@@ -779,12 +784,12 @@ update:
 	   echo "make update: already up to date ($(DEPLOY_STATE)); nothing to do"; exit 0; fi; \
 	 [ "$$deployed" = "$(DEPLOY_STATE)" ] && echo "make update: not running:$$down; starting again"; \
 	 echo "make update: deployed $${deployed:-an unrecorded checkout}, checkout is $(DEPLOY_STATE)"; \
-	 $(SIGNING_ENV) scripts/update-signing.sh before; before=$$?; \
+	 $(UPDATE_SIGNING) before; before=$$?; \
 	 $(MAKE) --no-print-directory spire-services-up && \
 	 $(MAKE) --no-print-directory rekor-log-up && \
 	 $(MAKE) --no-print-directory fulcio-file-ca-up && \
 	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services && \
-	 $(SIGNING_ENV) INNSEGL_SIGNING_BEFORE=$$before scripts/update-signing.sh after && \
+	 INNSEGL_SIGNING_BEFORE=$$before $(UPDATE_SIGNING) after && \
 	 mkdir -p "$$(dirname '$(DEPLOYED_FILE)')" && echo '$(DEPLOY_STATE)' > '$(DEPLOYED_FILE)'
 	@echo
 	@echo "updated: only the services whose image or settings changed were restarted"
