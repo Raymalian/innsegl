@@ -92,6 +92,70 @@ func TestSIG015TheClientNotifiesOnTheFirstSigningFailure(t *testing.T) {
 	}
 }
 
+// JRN-011 (#584): the hook asks the client service, not the core, whether
+// signing is down: GET /_client/status carries the probe's last reading,
+// and SigningOutage reads it from where core.json says the service listens.
+func TestJRN011TheClientServiceTellsTheHookSigningIsDown(t *testing.T) {
+	core, paths := enrolled(t)
+	var mu sync.Mutex
+	body := `{"components":[{"name":"signing","up":false,"detail":"FAILING since 2026-10-11T09:05:00Z — the CA store token was revoked"}]}`
+	core.Mux.HandleFunc(CoreStatusPath, func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if body == "" {
+			http.Error(w, "down", http.StatusBadGateway)
+			return
+		}
+		write(t, w, body)
+	})
+	set := func(b string) { mu.Lock(); body = b; mu.Unlock() }
+
+	// No service listening: nothing is known, and nothing is said.
+	setListen(t, paths, "127.0.0.1:1")
+	if _, _, down := SigningOutage(t.Context(), paths); down {
+		t.Fatal("an outage read from a service that is not running")
+	}
+
+	srv, front, _ := startClient(t, paths)
+	setListen(t, paths, strings.TrimPrefix(front.URL, "http://"))
+	if _, _, down := SigningOutage(t.Context(), paths); down {
+		t.Fatal("an outage before the service has read the probe")
+	}
+
+	srv.CheckSigning(t.Context(), (&notes{}).notify)
+	since, reason, down := SigningOutage(t.Context(), paths)
+	if !down || !since.Equal(time.Date(2026, 10, 11, 9, 5, 0, 0, time.UTC)) ||
+		reason != "the CA store token was revoked" {
+		t.Fatalf("SigningOutage = %v %q %v", since, reason, down)
+	}
+
+	set(`{"components":[{"name":"signing","up":true,"detail":"a certificate was issued at 2026-10-11T09:10:00Z"}]}`)
+	srv.CheckSigning(t.Context(), (&notes{}).notify)
+	if _, _, down := SigningOutage(t.Context(), paths); down {
+		t.Fatal("an outage after signing recovered")
+	}
+
+	// A core that stops answering says nothing about signing: the last
+	// reading is dropped, not kept as news.
+	set(`{"components":[{"name":"signing","up":false,"detail":"FAILING since 2026-10-11T09:20:00Z — x"}]}`)
+	srv.CheckSigning(t.Context(), (&notes{}).notify)
+	set("")
+	srv.CheckSigning(t.Context(), (&notes{}).notify)
+	if _, _, down := SigningOutage(t.Context(), paths); down {
+		t.Fatal("an outage kept after the core stopped answering")
+	}
+
+	// Not enrolled: nothing.
+	if _, _, down := SigningOutage(t.Context(), ClientPaths(t.TempDir())); down {
+		t.Fatal("an outage on a machine that is not connected")
+	}
+	// A listen address that is not loopback is never asked.
+	setListen(t, paths, "192.0.2.1:28195")
+	if _, _, down := SigningOutage(t.Context(), paths); down {
+		t.Fatal("an outage read from a non-loopback address")
+	}
+}
+
 func TestRunSigningWatchChecksOnSchedule(t *testing.T) {
 	core, paths := enrolled(t)
 	var mu sync.Mutex

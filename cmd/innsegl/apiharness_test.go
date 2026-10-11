@@ -91,6 +91,9 @@ var (
 
 func TestMain(m *testing.M) {
 	clearConnectedMachineEnv()
+	// No test asks the developer's own client service whether signing is
+	// down; the one that tests the asking points HOME at a stand-in.
+	signingOutageNow = func() (signingOutage, bool) { return signingOutage{}, false }
 	code := m.Run()
 	if apiPGShared != nil {
 		if err := apiPGShared.remove(); err != nil {

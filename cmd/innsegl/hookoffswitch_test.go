@@ -4,9 +4,16 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/internal/client"
 )
 
 // hookDecision runs the hook on one Bash command and returns its
@@ -171,5 +178,63 @@ func TestJRN011BackstopRefusalNamesASigningOutage(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("refusal does not contain %q:\n%s", want, got)
 		}
+	}
+}
+
+// JRN-011 (#584, wired with #583): the refusal learns of the outage from
+// this machine's client service, at the address core.json names. The
+// package's TestMain keeps every other test from asking the developer's own
+// service; this one points HOME at a stand-in.
+func TestJRN011TheRefusalReadsTheOutageFromTheClientService(t *testing.T) {
+	var mu sync.Mutex
+	status := `{"signing":{"up":false,"detail":"FAILING since 2026-10-11T09:30:00Z — the CA store token was revoked",` +
+		`"since":"2026-10-11T09:30:00Z","reason":"the CA store token was revoked"}}`
+	svc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != client.StatusPath {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		_, _ = io.WriteString(w, status)
+	}))
+	t.Cleanup(svc.Close)
+	home := t.TempDir()
+	paths := client.ClientPaths(home)
+	if err := os.MkdirAll(paths.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	core := `{"core_url":"https://core.invalid","installation_id":"inst-1","listen":"` +
+		strings.TrimPrefix(svc.URL, "http://") + `"}`
+	if err := os.WriteFile(paths.Core, []byte(core), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	o, down := signingOutageFromClient()
+	if !down || !o.Since.Equal(time.Date(2026, 10, 11, 9, 30, 0, 0, time.UTC)) || o.Reason != "the CA store token was revoked" {
+		t.Fatalf("signingOutageFromClient = %+v %v", o, down)
+	}
+
+	restore := signingOutageNow
+	signingOutageNow = signingOutageFromClient
+	t.Cleanup(func() { signingOutageNow = restore })
+	offSwitch := "git commit " + "--no-gpg" + "-sign -m x"
+	_, reason := hookDecision(t, offSwitch)
+	if !strings.Contains(reason, "signing is down since 2026-10-11T09:30:00Z (the CA store token was revoked)") {
+		t.Fatalf("the refusal does not carry the probe's outage:\n%s", reason)
+	}
+
+	// Signing works: the refusal names no outage.
+	mu.Lock()
+	status = `{"signing":{"up":true,"detail":"a certificate was issued at 2026-10-11T09:35:00Z"}}`
+	mu.Unlock()
+	if _, reason := hookDecision(t, offSwitch); strings.Contains(reason, "down since") {
+		t.Fatalf("an outage named while signing works:\n%s", reason)
+	}
+	// No HOME to read: nothing known.
+	t.Setenv("HOME", "")
+	if _, down := signingOutageFromClient(); down {
+		t.Fatal("an outage with no home directory")
 	}
 }

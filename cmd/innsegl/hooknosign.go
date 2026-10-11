@@ -3,11 +3,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 	"time"
+
+	"innsegl.dev/innsegl/internal/client"
 )
 
 // An agent's commit is signed or not made (ADR-0059; signing is fail-closed).
@@ -120,11 +124,22 @@ type signingOutage struct {
 	Reason string
 }
 
-// signingOutageNow answers whether signing is down right now. Until the
-// core's signing probe (#583) is readable on this machine it knows of no
-// outage, and a refusal carries no outage line; wiring it is this one
-// assignment.
-var signingOutageNow = func() (signingOutage, bool) { return signingOutage{}, false }
+// signingOutageNow answers whether signing is down right now. A variable so
+// a test can set the answer.
+var signingOutageNow = signingOutageFromClient
+
+// signingOutageFromClient asks this machine's client service, which reads
+// the core's signing probe (#583) every minute, whether signing is down.
+// It is asked only when a command is refused, and anything that keeps it
+// from knowing is "not known to be down": the refusal then names no outage.
+func signingOutageFromClient() (signingOutage, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return signingOutage{}, false
+	}
+	since, reason, down := client.SigningOutage(context.Background(), client.ClientPaths(home))
+	return signingOutage{Since: since, Reason: reason}, down
+}
 
 // outageText is the sentence a refusal carries while signing is down
 // (JRN-011), or "" when no outage is known.

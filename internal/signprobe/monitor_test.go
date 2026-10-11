@@ -152,3 +152,24 @@ func TestNewMonitorDefaultsTheInterval(t *testing.T) {
 		t.Fatalf("interval %v", m.Interval())
 	}
 }
+
+// SIG-015, JRN-011 (#584): what a refusal says while signing is down is read
+// back from the report line, so the line and its reading change together.
+func TestSIG015TheDetailReadsBackSinceAndReason(t *testing.T) {
+	since := time.Date(2026, 10, 11, 9, 5, 0, 0, time.UTC)
+	failing := State{Since: since, Reason: "the CA refused the certificate: HTTP 500"}
+	gotSince, reason, ok := ParseFailing(failing.Detail())
+	if !ok || !gotSince.Equal(since) || reason != failing.Reason {
+		t.Fatalf("ParseFailing(%q) = %v %q %v", failing.Detail(), gotSince, reason, ok)
+	}
+	for _, d := range []string{
+		State{OK: true, CheckedAt: since}.Detail(),
+		"",
+		"FAILING since yesterday — x",
+		"FAILING since 2026-10-11T09:05:00Z",
+	} {
+		if _, _, ok := ParseFailing(d); ok {
+			t.Errorf("ParseFailing(%q) read an outage", d)
+		}
+	}
+}

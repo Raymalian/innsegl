@@ -4,6 +4,7 @@ package signprobe
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 )
@@ -100,10 +101,34 @@ func (s State) Detail() string {
 	if s.OK {
 		return "a certificate was issued at " + stamp(s.CheckedAt)
 	}
-	return "FAILING since " + stamp(s.Since) + " — " + s.Reason
+	return failingPrefix + stamp(s.Since) + failingSep + s.Reason
 }
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+
+// failingPrefix and failingSep frame a failing Detail.
+const (
+	failingPrefix = "FAILING since "
+	failingSep    = " — "
+)
+
+// ParseFailing reads a failing Detail back: since when, and why. ok is
+// false for a passing Detail or a line it cannot read.
+func ParseFailing(detail string) (since time.Time, reason string, ok bool) {
+	rest, found := strings.CutPrefix(detail, failingPrefix)
+	if !found {
+		return time.Time{}, "", false
+	}
+	at, reason, found := strings.Cut(rest, failingSep)
+	if !found {
+		return time.Time{}, "", false
+	}
+	since, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	return since, reason, true
+}
 
 // State answers what readiness reports now.
 func (m *Monitor) State() State {

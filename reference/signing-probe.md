@@ -52,7 +52,8 @@ admin credential settings ([identity.md](identity.md)).
 |---|---|
 | `/readyz` `reports` | `{"name":"signing","ok":false,"detail":"FAILING since <time> — <reason>"}`, or `ok: true` with `a certificate was issued at <time>`. A report: it never makes the core unready |
 | `innsegl status` | `signing: FAILING since <time> — <reason>`, counted as down (exit 1); `signing up a certificate was issued at <time>` when it works |
-| Client service | a macOS notification on the first failure, and a log line; nothing more until signing has worked again |
+| Client service | a macOS notification on the first failure, and a log line; nothing more until signing has worked again. `GET /_client/status` `signing` holds the last reading |
+| Commit hook | a refused unsigned commit says `signing is down since <time> (<reason>)` ([commit-path.md](commit-path.md)) |
 
 `since` is the first failed probe of the current outage. A result older than
 two intervals (10 minutes) is a failure: `no probe has finished since then;
@@ -83,7 +84,10 @@ service reads it from `/_core/status` every minute.
 - `cmd/innsegl/servesignprobe_test.go` (SIG-015): the `/readyz` report and
   the one-shot command
 - `cmd/innsegl/status_test.go` (SIG-015): the `signing: FAILING since` line
-- `internal/client/signingwatch_test.go` (SIG-015): one notification per outage
+- `internal/client/signingwatch_test.go` (SIG-015): one notification per outage;
+  (JRN-011) the last reading in `/_client/status`, read back by the hook
+- `cmd/innsegl/hookoffswitch_test.go` (JRN-011): the refusal carries the
+  outage the client service reports
 
 ## Decisions
 

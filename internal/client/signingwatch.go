@@ -27,17 +27,40 @@ const SigningWatchInterval = time.Minute
 // Notify shows the operator one message.
 type Notify func(ctx context.Context, title, body string) error
 
-// signingWatch remembers whether the current outage has been told.
-type signingWatch struct{ notified atomic.Bool }
+// signingWatch remembers whether the current outage has been told, and the
+// last reading, for GET /_client/status.
+type signingWatch struct {
+	notified atomic.Bool
+	last     atomic.Pointer[SigningStatus]
+}
+
+// SigningStatus is the core's signing probe as the client service last read
+// it: the `signing` part of GET /_client/status. The hook reads it to say,
+// in a refusal, since when signing is down (JRN-011).
+type SigningStatus struct {
+	Up     bool   `json:"up"`
+	Detail string `json:"detail"`
+	// Since and Reason are the outage's, read from Detail; absent while
+	// signing works.
+	Since  time.Time `json:"since,omitzero"`
+	Reason string    `json:"reason,omitempty"`
+}
 
 // CheckSigning reads the core's signing probe once and notifies on the
 // first failure. A core that does not answer, an answer it cannot read, or a
-// core with no probe says nothing about signing, so it changes nothing.
+// core with no probe says nothing about signing, so it changes nothing but
+// the last reading, which it drops.
 func (s *Server) CheckSigning(ctx context.Context, notify Notify) {
 	up, detail, ok := s.signingState(ctx)
 	if !ok {
+		s.signing.last.Store(nil)
 		return
 	}
+	reading := &SigningStatus{Up: up, Detail: detail}
+	if !up {
+		reading.Since, reading.Reason, _ = signprobe.ParseFailing(detail)
+	}
+	s.signing.last.Store(reading)
 	if up {
 		if s.signing.notified.Swap(false) {
 			s.log.Printf("signing works again")
@@ -99,6 +122,54 @@ func (s *Server) signingState(ctx context.Context) (up bool, detail string, ok b
 		}
 	}
 	return false, "", false
+}
+
+// signingOutageTimeout bounds the hook's question: a refusal waits on it.
+const signingOutageTimeout = 2 * time.Second
+
+// SigningOutage asks this machine's client service, at the address
+// core.json names, whether the core's signing is down: since when and why.
+// Anything that keeps it from knowing -- no enrolment, no service, an
+// address that is not loopback, an older service, a reading without a time
+// -- is "not known to be down".
+func SigningOutage(ctx context.Context, paths Paths) (since time.Time, reason string, down bool) {
+	cfg, err := ReadCoreConfig(paths)
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	listen := cfg.Listen
+	if listen == "" {
+		listen = DefaultListen
+	}
+	if CheckLoopback(listen) != nil {
+		return time.Time{}, "", false
+	}
+	ctx, cancel := context.WithTimeout(ctx, signingOutageTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+listen+StatusPath, http.NoBody)
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	// Never through a proxy: a shell inside a harness carries HTTPS_PROXY
+	// pointing at this same service.
+	rt := &http.Transport{Proxy: nil}
+	defer rt.CloseIdleConnections()
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return time.Time{}, "", false
+	}
+	var st struct {
+		Signing *SigningStatus `json:"signing"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&st); err != nil || st.Signing == nil ||
+		st.Signing.Up || st.Signing.Since.IsZero() {
+		return time.Time{}, "", false
+	}
+	return st.Signing.Since, st.Signing.Reason, true
 }
 
 // DesktopNotifier is the operator's desktop notification: Notification

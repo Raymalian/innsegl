@@ -115,8 +115,10 @@ same arguments and input.
 
 **While signing is down**, both refusals say `signing is down since <time>`
 and the reason, then `do not retry with signing off; keep working and commit
-after repair`. The outage comes from the core's signing probe (#583); until
-that is readable on this machine, the refusals carry no outage line.
+after repair`. The outage comes from the core's signing probe (#583), as the
+client service last read it: the hook asks `GET /_client/status` at the
+address `core.json` names, with a 2-second limit. No client service, no
+reading yet, or a core that does not answer: the refusals carry no outage line.
 Afterwards, commit again with plain `git commit`, or run `innsegl resign` for
 unsigned commits already on a branch.
 

@@ -471,6 +471,9 @@ type Status struct {
 	// Unrouted are the sessions whose model traffic did not pass through
 	// innsegl (RM-319), newest activity first.
 	Unrouted []UnroutedSession `json:"unrouted_sessions,omitempty"`
+	// Signing is the core's signing probe as last read (RM-339); absent
+	// before the first reading, or while the core does not answer.
+	Signing *SigningStatus `json:"signing,omitempty"`
 }
 
 // countRecorded notes one answer of the core to a model request.
@@ -505,6 +508,7 @@ func (s *Server) Status(ctx context.Context) Status {
 	}
 	st.Recorded = s.recordedCounts()
 	st.Unrouted = s.unroutedFindings()
+	st.Signing = s.signing.last.Load()
 	st.CoreReachable = s.reachable(ctx)
 	return st
 }

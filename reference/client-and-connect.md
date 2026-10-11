@@ -66,7 +66,11 @@ probe is `signing`: when it fails, one line, `signing: FAILING since <time>
 
 The client service reads the signing probe from the core every minute and
 shows a macOS notification on the first failure of an outage, and a log line;
-nothing more until signing has worked again.
+nothing more until signing has worked again. `GET /_client/status` carries
+the last reading as `signing` (`up`, `detail`, and while it fails `since` and
+`reason`); it is absent before the first reading and while the core does not
+answer. The commit hook reads it to say in a refusal since when signing is
+down ([commit-path.md](commit-path.md)).
 
 ## Settings
 
