@@ -221,7 +221,7 @@ func (d *doctor) clientService(ctx context.Context) bool {
 		}
 		svc, err = d.awaitService(ctx)
 		if err != nil {
-			d.line(check, "DOWN", "still "+err.Error()+"; its log: ~/Library/Logs/"+client.LogFileName)
+			d.line(check, "DOWN", "still "+err.Error()+"; its log: "+client.LogHint(d.deps.goos))
 			return false
 		}
 		d.line(check, "ok", "restarted; runs "+svc.Version)

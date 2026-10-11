@@ -5,10 +5,12 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -173,26 +175,57 @@ func SigningOutage(ctx context.Context, paths Paths) (since time.Time, reason st
 }
 
 // DesktopNotifier is the operator's desktop notification: Notification
-// Centre on macOS, nothing elsewhere (the service's log still has it).
+// Centre on macOS, notify-send on Linux when it is installed, nothing
+// elsewhere (the service's log still has it).
 func DesktopNotifier(goos string) Notify {
-	return desktopNotifier(goos, func(ctx context.Context, name string, args ...string) error {
+	return desktopNotifier(goos, exec.LookPath, func(ctx context.Context, name string, args ...string) error {
 		return exec.CommandContext(ctx, name, args...).Run()
 	})
 }
 
-func desktopNotifier(goos string, run func(ctx context.Context, name string, args ...string) error) Notify {
+func desktopNotifier(goos string, lookPath func(string) (string, error),
+	run func(ctx context.Context, name string, args ...string) error) Notify {
+	var absent sync.Once
 	return func(ctx context.Context, title, body string) error {
-		if goos != "darwin" {
+		var argv []string
+		switch goos {
+		case "darwin":
+			// The text goes in as arguments, never into the script: what the
+			// core says is shown, not run.
+			argv = []string{"osascript",
+				"-e", "on run argv",
+				"-e", "display notification (item 2 of argv) with title (item 1 of argv)",
+				"-e", "end run",
+				title, body}
+		case "linux":
+			if _, err := lookPath("notify-send"); err != nil {
+				// Said once, so the log shows why no notification appears;
+				// the line before it in the log has the message itself.
+				var said error
+				absent.Do(func() {
+					said = errors.New("notify-send is not installed, so no desktop notification is shown " +
+						"(Debian/Ubuntu: sudo apt-get install -y libnotify-bin; Fedora: sudo dnf install -y libnotify)")
+				})
+				return said
+			}
+			// "--" ends the options: a message that starts with a dash is text.
+			argv = []string{"notify-send", "--app-name=innsegl", "--", title, body}
+		default:
 			return nil
 		}
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		// The text goes in as arguments, never into the script: what the
-		// core says is shown, not run.
-		return run(ctx, "osascript",
-			"-e", "on run argv",
-			"-e", "display notification (item 2 of argv) with title (item 1 of argv)",
-			"-e", "end run",
-			title, body)
+		return run(ctx, argv[0], argv[1:]...)
 	}
+}
+
+// LogHint says where the client service's log is on goos.
+func LogHint(goos string) string {
+	switch goos {
+	case "darwin":
+		return "~/Library/Logs/" + LogFileName
+	case "linux":
+		return "journalctl --user -u " + SystemdUnit
+	}
+	return "the output of `innsegl client serve`, which no service runs on " + goos
 }
