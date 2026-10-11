@@ -18,6 +18,41 @@ import (
 	"innsegl.dev/innsegl/internal/ledger"
 )
 
+// OPS-182, a killed core: the next core on the same ledger starts within a
+// poll of the old one's death, not after its lease's TTL (MCP-011 restarts a
+// SIGKILLed core again and again).
+func TestOPS182ACoreKilledWithoutReleasingIsReplacedAtOnce(t *testing.T) {
+	dsn, _, _ := freshLedgerDB(t)
+	testLeases(t, dsn)
+	open := withWriterLease(func(context.Context, serveOptions, *serveLog) (servedMCP, error) {
+		return &fakeServer{}, nil
+	}, writerLeasePoll)
+	o := leaseTestOptions(dsn)
+	o.writerLeaseTTL = time.Minute
+	first, err := open(t.Context(), o, newServeLog(&bytes.Buffer{}))
+	if err != nil {
+		t.Fatalf("first core: %v", err)
+	}
+	// SIGKILL: renewal stops and every session ends; nothing is released.
+	ls, ok := first.(*leasedServer)
+	if !ok {
+		t.Fatalf("open answered %T, not a leased server", first)
+	}
+	held := ls.held
+	held.stopRenew()
+	held.leases.Close()
+
+	start := time.Now()
+	second, err := open(t.Context(), o, newServeLog(&bytes.Buffer{}))
+	if err != nil {
+		t.Fatalf("second core: %v", err)
+	}
+	defer second.Close()
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Fatalf("the second core waited %s for a dead core's lease; want about one poll (%s)", waited, writerLeasePoll)
+	}
+}
+
 // OPS-182, fresh database: a core started with -migrate on an empty ledger
 // (the bootstrap OPS-004 drives) migrates before it takes the lease. Taking
 // the lease first asked for a table no migration had made yet, and the core

@@ -31,8 +31,12 @@ import (
 // of it.
 const defaultWriterLeaseTTL = 15 * time.Second
 
-// writerLeasePoll is how often a waiting core asks again.
-const writerLeasePoll = 2 * time.Second
+// writerLeasePoll is how often a waiting core asks again. A core killed
+// without releasing is taken over as soon as the ledger has ended its
+// session (internal/ledger's presence lock), so a restart waits about this
+// long, not the TTL; only a holder whose host vanished holds the next core
+// up for the TTL.
+const writerLeasePoll = 250 * time.Millisecond
 
 // exitLedgerUnavailable is `innsegl ledger`'s status when the ledger cannot
 // be reached or read.

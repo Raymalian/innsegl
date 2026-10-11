@@ -4,9 +4,12 @@ package ledger
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -65,7 +68,29 @@ func (e *LeaseHeldError) Error() string {
 }
 
 // Leases reads and changes one ledger's writer lease.
-type Leases struct{ pool *pgxpool.Pool }
+//
+// # A holder's presence is a session, not only a row
+//
+// A core killed with SIGKILL never releases its lease, and the row stays
+// live for its whole TTL. Each holder therefore also keeps one connection of
+// its own holding a session advisory lock (presenceLockKey). The kernel
+// closes a killed process's sockets at once, the database ends the session,
+// and the lock is free: a core that obtains it knows the row's holder is
+// gone and takes over without waiting out the TTL. A holder that is alive
+// keeps the lock, so a live lease still blocks every other core. A holder
+// whose host vanished (its session lingering) is taken over when the row
+// expires, as before.
+type Leases struct {
+	pool *pgxpool.Pool
+	dsn  string
+
+	mu       sync.Mutex
+	presence map[string]*pgx.Conn
+}
+
+// presenceLockKey is the session advisory lock a lease holder keeps.
+var presenceLockKey = int64(binary.BigEndian.Uint64(
+	func() []byte { sum := sha256.Sum256([]byte("innsegl-writer-lease-presence-v1")); return sum[:8] }()))
 
 // OpenLeases connects to the ledger database for its lease.
 func OpenLeases(ctx context.Context, dsn string) (*Leases, error) {
@@ -77,13 +102,65 @@ func OpenLeases(ctx context.Context, dsn string) (*Leases, error) {
 		pool.Close()
 		return nil, classify("open_leases", err)
 	}
-	return &Leases{pool: pool}, nil
+	return &Leases{pool: pool, dsn: dsn, presence: map[string]*pgx.Conn{}}, nil
 }
 
-// Close releases the pool.
+// Close ends every session this Leases opened, holding nothing back: what a
+// process that dies does. It releases no lease; Release does that.
 func (l *Leases) Close() {
-	if l != nil && l.pool != nil {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	for holder, c := range l.presence {
+		// The socket, dropped as a dying process drops it.
+		_ = c.PgConn().Conn().Close()
+		delete(l.presence, holder)
+	}
+	l.mu.Unlock()
+	if l.pool != nil {
 		l.pool.Close()
+	}
+}
+
+// present makes holder's presence session hold the presence lock, opening
+// the session when it has none or it was lost, and answers whether it holds
+// the lock now. A failure to reach the ledger answers false.
+func (l *Leases) present(ctx context.Context, holder string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c := l.presence[holder]
+	if c != nil && c.IsClosed() {
+		c = nil
+	}
+	if c == nil {
+		var err error
+		if c, err = pgx.Connect(ctx, l.dsn); err != nil {
+			delete(l.presence, holder)
+			return false
+		}
+		l.presence[holder] = c
+	}
+	var got bool
+	if err := c.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, presenceLockKey).Scan(&got); err != nil {
+		_ = c.Close(ctx)
+		delete(l.presence, holder)
+		return false
+	}
+	if !got {
+		_ = c.Close(ctx)
+		delete(l.presence, holder)
+	}
+	return got
+}
+
+// absent ends holder's presence session, which frees the presence lock.
+func (l *Leases) absent(ctx context.Context, holder string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if c := l.presence[holder]; c != nil {
+		_ = c.Close(context.WithoutCancel(ctx))
+		delete(l.presence, holder)
 	}
 }
 
@@ -164,17 +241,20 @@ func ttlInterval(ttl time.Duration) string {
 }
 
 // Acquire takes the lease for holder for ttl. A live lease another holder
-// has is a *LeaseHeldError; a frozen ledger is ErrFrozen. Taking the lease
-// starts a new epoch, even for the same holder name.
+// has, whose holder is still present, is a *LeaseHeldError; a live lease
+// whose holder's session is gone (a killed core) is taken over at once. A
+// frozen ledger is ErrFrozen. Taking the lease starts a new epoch, even for
+// the same holder name.
 func (l *Leases) Acquire(ctx context.Context, holder string, ttl time.Duration) (WriterLease, error) {
 	if strings.TrimSpace(holder) == "" || ttl <= 0 {
 		return WriterLease{}, fmt.Errorf("ledger: a lease needs a holder and a positive ttl")
 	}
-	return l.inTx(ctx, "lease_acquire", func(tx pgx.Tx, cur WriterLease, live bool) (WriterLease, error) {
+	present := l.present(ctx, holder)
+	w, err := l.inTx(ctx, "lease_acquire", func(tx pgx.Tx, cur WriterLease, live bool) (WriterLease, error) {
 		if cur.FrozenAt != nil {
 			return WriterLease{}, fmt.Errorf("%w since %s: %s", ErrFrozen, cur.FrozenAt.UTC().Format(time.RFC3339), cur.FrozenReason)
 		}
-		if live && cur.Holder != holder {
+		if live && cur.Holder != holder && !present {
 			return WriterLease{}, &LeaseHeldError{Lease: cur}
 		}
 		return scanLease(tx.QueryRow(ctx, `UPDATE innsegl.writer_lease
@@ -182,6 +262,10 @@ func (l *Leases) Acquire(ctx context.Context, holder string, ttl time.Duration) 
 			       renewed_at = clock_timestamp(), expires_at = clock_timestamp() + $2::interval
 			 WHERE id = 1 RETURNING `+leaseColumns, holder, ttlInterval(ttl)))
 	})
+	if err != nil {
+		l.absent(ctx, holder)
+	}
+	return w, err
 }
 
 // Renew extends held's lease by ttl. ErrLeaseLost when another holder or a
@@ -190,6 +274,10 @@ func (l *Leases) Acquire(ctx context.Context, holder string, ttl time.Duration) 
 // acquired it, and the fence refused this core's appends while it was
 // expired, so a ledger outage longer than the TTL does not stop the core.
 func (l *Leases) Renew(ctx context.Context, held WriterLease, ttl time.Duration) (WriterLease, error) {
+	// Best effort: a holder that took over an expired lease without the
+	// presence lock, or lost its session in a ledger restart, takes it as
+	// soon as it is free. The row's holder and epoch decide either way.
+	l.present(ctx, held.Holder)
 	return l.inTx(ctx, "lease_renew", func(tx pgx.Tx, cur WriterLease, _ bool) (WriterLease, error) {
 		if cur.FrozenAt != nil {
 			return WriterLease{}, ErrFrozen
@@ -206,6 +294,7 @@ func (l *Leases) Renew(ctx context.Context, held WriterLease, ttl time.Duration)
 // Release gives up held's lease, so the next core need not wait for it to
 // expire. Releasing a lease already lost is not an error.
 func (l *Leases) Release(ctx context.Context, held WriterLease) error {
+	defer l.absent(ctx, held.Holder)
 	_, err := l.inTx(ctx, "lease_release", func(tx pgx.Tx, cur WriterLease, _ bool) (WriterLease, error) {
 		if cur.Holder != held.Holder || cur.Epoch != held.Epoch {
 			return cur, nil
