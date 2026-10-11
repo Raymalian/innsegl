@@ -90,6 +90,42 @@ calls them):
 | `POST /api/v1/account/sso/link` | `{organisation_id}` or `{sign_in_name}`: where to send the browser to connect the organisation's sign-in to this account; by name is how a person not yet a member joins |
 | `DELETE /api/v1/account/sign-ins/{id}` | disconnect one of your own connected sign-ins |
 
+### Unlock keys
+
+Hardware security keys that unlock the CA key store from the dashboard
+(ADR-0082, [ca-custody.md](ca-custody.md#unlock-keys-dashboard)). Every
+route needs an owner or admin of the operator's organisation; a reseal
+needs an owner. A POST must carry the dashboard's own `Origin` (a missing
+one is refused, 403), and each person has 20 POSTs here, one back every
+15 seconds (429 with `Retry-After`).
+
+| Route | Does |
+|---|---|
+| `GET /api/v1/account/unlock-keys` | every key: label, owner, `state` (`pending`, `active`, `revoked`, or `unknown` while the custodian is not answering), both recipients with fingerprints; and `custody`: on, reachable, the sealed set's digest |
+| `POST /api/v1/account/unlock-keys/begin` | `{label}` (1-64 characters) -> `confirm` (your sign-in passkey), `create` (the security key: cross-platform, non-discoverable, PIN required, PRF), `prf` (a get() evaluating `custody_salt` and `backup_salt`; the browser names the new credential in `allowCredentials`) |
+| `POST /api/v1/account/unlock-keys/finish` | `{ceremony_id, confirmation, credential, assertion, custody_recipient, backup_recipient}` -> the key, `pending` |
+| `POST /api/v1/account/unlock-keys/revoke/begin\|finish` | `{id}`, after a fresh passkey; your own key, or anyone's for an owner. Revoked stays revoked |
+| `GET /api/v1/account/ca-custody` | the custodian's status, as `GET /_core/ca-custody` answers it |
+| `POST /api/v1/account/ca-custody/unlock/begin` | -> an assertion over your active keys, each with its custody salt, and `sealed`, the material to open in the browser |
+| `POST /api/v1/account/ca-custody/unlock/finish` | `{ceremony_id, credential, material}` -> `{status}` |
+| `POST /api/v1/account/ca-custody/reseal/begin` | owner -> the same, plus the proposed set (`recipients`, `added`, `removed`, each labelled with a fingerprint) and its `set_digest` |
+| `POST /api/v1/account/ca-custody/reseal/finish` | `{ceremony_id, credential, material}` -> `{confirm_id, staged}`; open `staged.sealed` with the same key |
+| `POST /api/v1/account/ca-custody/reseal/confirm` | `{confirm_id, material, check}`, within 10 minutes -> `{set_digest, recipients}` |
+
+The API verifies the assertion against an active unlock key of yours
+before it reads `material`, forwards the material once to the custodian on
+the unlock network, and keeps none of it. An enrolment is refused for a
+backup-eligible (synced) credential, no user verification, no PRF, a
+recipient that is not a plain `age1…` X25519 one, or the same recipient
+twice. Any request that carries a PRF result (`prf.results`,
+`hmacGetSecret`) is refused, 400: the PRF output never leaves the browser.
+Auth events: `unlock_key_added`, `unlock_key_refused`, `unlock_key_revoked`,
+`ca_unlocked`, `ca_unlock_refused`, `custody_reseal_staged`,
+`custody_resealed`, `custody_reseal_refused`; key ids and recipient
+fingerprints only. Answers: 409 with no active key of yours, or a set
+already current; 503 with custody off or the custodian not answering; the
+custodian's own 400, 403 or 409 for material or a set it refuses.
+
 ### Organisation sign-in
 
 An organisation's owner can let its members sign in through the
@@ -245,6 +281,7 @@ Rows written before this release may still hold names.
 | `-message-key-dir` | `INNSEGL_API_MESSAGE_KEY_DIR` | check-only agent-message key |
 | `-sso-key-file` | `INNSEGL_API_SSO_KEY_FILE` | the per-host key an organisation's sign-in client secret is stored encrypted under (#574); empty stores public clients only. At start, a secret kept in plain text before migration 0020 is sealed |
 | `-gateway-ca-cert` | `INNSEGL_API_GATEWAY_CA_CERT` | fingerprint pinned by the connect command shown to users |
+| `-ca-custodian-url` | `INNSEGL_CA_CUSTODIAN_URL` | the custodian on the unlock network, for unlock keys (ADR-0082); the custody overlay sets it. Empty: custody is off |
 | `-hide-unowned-runs` | `INNSEGL_API_HIDE_UNOWNED_RUNS` | hide runs no machine is mapped to from the operator's organisation too; default `false` |
 | `-upstream-timeout`, `-shutdown-timeout` | `INNSEGL_API_UPSTREAM_TIMEOUT`, `INNSEGL_API_SHUTDOWN_TIMEOUT` | [`15s`, `15s`] |
 
@@ -261,6 +298,7 @@ Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
 | migrations `0013`, `0014` | alert resolutions and account ceremonies |
 | migration `0019` | organisation sign-in: `sso_connections`, `oidc_identities`, `sessions.sso_connection_id`, the `sso` ceremony kinds |
 | migration `0017` | invitations' acceptor and withdrawal, an inviter-less invitation from the CLI, the member ceremonies |
+| migration `0023` | `innsegl_auth.unlock_keys` (never deleted; a revoked key stays revoked; recipients and salts never change, SQLSTATE `IN009`) and the five unlock ceremony kinds |
 | `innsegl_auth.audit` | one row per change to the accounts data; refuses `UPDATE`, `DELETE`, `TRUNCATE` |
 
 ## Exit codes and error classes
@@ -325,6 +363,12 @@ organisation holds.
   The provider is `internal/oidctest`: TLS, signed tokens, exact redirect
   URIs, PKCE, single-use codes
 - `internal/api/accountwithdraw_test.go` (ACC-018)
+- unlock keys (#613): `internal/api/unlockkeys_test.go` (AUTH-013: enrolment
+  and its refusals; AUTH-014: the assertion before the material; AUTH-015:
+  no material or PRF output in a record or an answer; AUTH-016: Origin and
+  session; AUTH-017: forward-only revoke, the owner's reseal; API-041: the
+  rate limit), `unlockkeys_store_test.go` (AUTH-018: a real store, Docker,
+  `-p 1`), `cmd/innsegl/apiunlock_test.go` (API-040: `-ca-custodian-url`)
 - `web/` unit tests (`npm test`): FE-146 (`AccountPage.test.tsx`), FE-147
   (`AccountMembers.test.tsx`), FE-148 (`app/plain-empty-states.test.ts`), FE-141 (`AccountPage.test.tsx`), FE-142
   (`app/OrganisationSwitcher.test.tsx`), FE-143 (`InvitePage.test.tsx`),
@@ -341,6 +385,7 @@ organisation holds.
 - [ADR-0062](../docs/adr/0062-reading-the-ledger-requires-a-signed-in-user.md) signed-in users
 - [ADR-0065](../docs/adr/0065-a-per-repository-mirror-on-the-core-is-the-evidence-store.md) the mirror
 - [ADR-0066](../docs/adr/0066-one-name-one-certificate.md) dashboard certificate
+- [ADR-0082](../docs/adr/0082-a-second-unlock-device-a-hardware-security-key-through-the-dashboard.md) unlock keys
 
 ## Runbooks
 

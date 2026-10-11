@@ -106,7 +106,7 @@ Fulcio's signing gateway:
 | `INNSEGL_CA_SIGN_LISTEN` | unset (no gateway); the overlay sets `innsegl-ca-signer:8211` | `serve`: the CA's signing gateway |
 | `INNSEGL_CA_SIGN_NETWORK` | `innsegl-ca-sign` | the network Fulcio and the custodian share |
 | `INNSEGL_CA_CHAIN_PATH` | unset; the overlay sets `/etc/fulcio/chain.pem` | the chain the CA presents; the custodian requires the store's key to match its first certificate. Unset, or not yet written, skips that check |
-| `INNSEGL_CA_CUSTODIAN_URL` | | where the core reaches the custodian |
+| `INNSEGL_CA_CUSTODIAN_URL` | | where the core reaches the custodian; on `innsegl-api` (its `-ca-custodian-url`), where the dashboard does. Unset there: the dashboard's unlock routes answer 503 "custody is off" |
 | `ca-custody --identity` | `~/.innsegl/trust-backup/identity.txt` | the age identity that opens the material |
 
 The custodian renews the CA token when it starts and every 15 minutes after.
@@ -229,7 +229,32 @@ the same name. The core reaches the custodian on an internal unlock network
 and logs none of what it carries: one line per forwarded POST, with the
 route and the installation.
 The unlock network has three members: the custodian, `innsegl-mcp` and
-`innsegl-api` (ADR-0082). The API is on no other new network.
+`innsegl-api` (ADR-0082). The API is on no other new network. It requests
+only the six custodian routes above, from an allowlist in its code, and
+only after it has verified a fresh assertion from an active unlock key
+([dashboard-api.md](dashboard-api.md#unlock-keys)). It logs none of what
+they carry; each unlock and reseal step is an auth event with key ids and
+recipient fingerprints.
+
+## Unlock keys (dashboard)
+
+An owner or admin of the operator's organisation enrols a hardware security
+key from the account page. The browser derives two age X25519 recipients
+from the key's PRF output (`internal/unlockkey`, format `innsegl unlock
+v1`); the API stores them with the salts and never sees the PRF output. A
+synced passkey (backup-eligible) and a key without a PIN are refused.
+
+A key is **pending** until its custody recipient is in the sealed set,
+**active** while it is, **revoked** for good once revoked. The state is read
+from `GET /recipients` on every list, so a reseal from this command and one
+from the dashboard both make a key active. A first key is applied from the
+operator's machine (`innsegl ca-custody reseal --add <recipient>`); after
+that an owner with an active key can apply new ones from the dashboard,
+which proposes the current set plus every key not revoked, less every
+revoked one. Revoking is forward-only (ADR-0082 decision 8): a revoked key
+still opens older sealed copies and older bundles. The backup recipient is
+recorded; bundles go to `recipients.txt`, which holds the custody
+recipients.
 
 ## Exit codes and error classes
 
@@ -264,6 +289,9 @@ The unlock network has three members: the custodian, `innsegl-mcp` and
 - `test/deploy/cacustody_test.go` (OPS-051, OPS-149 to OPS-151, OPS-155, OPS-186: the custodian mounts the chain the CA presents, OPS-187: Fulcio holds no token, BAK-030)
 - `test/deploy/custodyvolumeowner_test.go` (OPS-192: a fresh KMS volume is the bootstrap's to write)
 - `test/deploy/devcustody_test.go` (OPS-129: live custody names unchanged, dev custody innsegl-dev-* throughout)
+- `internal/api/unlockkeys_test.go`, `unlockkeys_store_test.go` (AUTH-013 to
+  AUTH-018: the dashboard's unlock keys; AUTH-018 applies one by a reseal and
+  unlocks a real store after a restart; Docker, `-p 1`)
 - `scripts/ca-custody-selftest.sh` (OPS-049 to OPS-051)
 - `scripts/ca-custody-reset-selftest.sh` (OPS-159)
 - `internal/cacustody/store_test.go` OPS-136 also signs the way Fulcio asks, `transit/sign/<key>/sha2-256`

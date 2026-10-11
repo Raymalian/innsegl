@@ -91,6 +91,11 @@ type ServerConfig struct {
 	// bounded, no redirects, never a loopback or link-local address. Tests
 	// hand it a client that trusts their own provider.
 	SSOHTTPClient *http.Client
+	// CACustodianURL is where the API reaches the CA key store's custodian,
+	// on the unlock network (ADR-0082 decision 4), to forward an unlock or a
+	// reseal from an unlock key. Empty: custody is off, and the unlock-key
+	// routes say so.
+	CACustodianURL string
 }
 
 // Health is what an operator reads to see that "read-only" is a measured fact
@@ -194,6 +199,10 @@ type Server struct {
 	webAuthnConfig    WebAuthnConfig
 	sessionLifetime   time.Duration
 	ssoHTTPClient     *http.Client
+	// custody reaches the CA key store's custodian (unlockcustody.go); nil
+	// when custody is off. unlockLimit bounds each person's unlock-key POSTs.
+	custody     *custodyClient
+	unlockLimit *unlockLimiter
 }
 
 // NewServer wires the routes. It refuses to construct at all without a way
@@ -237,6 +246,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		coreCACertFile:    cfg.CoreCACertFile,
 		unownedRunsHidden: cfg.UnownedRunsHidden,
 		ssoHTTPClient:     cfg.SSOHTTPClient,
+		custody:           newCustodyClient(cfg.CACustodianURL),
+		unlockLimit:       newUnlockLimiter(nil),
 	}
 	if s.ssoHTTPClient == nil {
 		s.ssoHTTPClient = newSSOHTTPClient()

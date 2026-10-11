@@ -37,6 +37,8 @@ func (s *Server) newAccountMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/account/recovery-codes", s.handleRecoveryCodesRegenerate)
 	s.registerOrganisationRoutes(mux)
 	s.registerSSOAccountRoutes(mux)
+	// #613: unlock keys and the dashboard's unlock (ADR-0082).
+	s.registerUnlockKeyRoutes(mux)
 	return mux
 }
 
