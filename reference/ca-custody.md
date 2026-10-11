@@ -135,6 +135,8 @@ the reason.
 Core routes (operator organisation workstations only): `/_core/ca-custody`,
 `/_core/ca-custody/material`, `/_core/ca-custody/unlock`. The core reaches
 the custodian on an internal unlock network and logs none of what it carries.
+The unlock network has three members: the custodian, `innsegl-mcp` and
+`innsegl-api` (ADR-0082). The API is on no other new network.
 
 ## Exit codes and error classes
 
