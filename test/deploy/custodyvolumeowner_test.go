@@ -3,6 +3,7 @@
 package deploy
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -80,11 +81,19 @@ func TestOPS192AFreshKMSVolumeIsWritableByTheBootstrap(t *testing.T) {
 	if out, err := docker("build", "-q", "--target", "ca-bootstrap", "-t", image, "."); err != nil {
 		t.Fatalf("building the ca-bootstrap stage: %v\n%s", err, out)
 	}
-	t.Cleanup(func() { _, _ = exec.Command("docker", "rmi", "-f", image).CombinedOutput() })
+	t.Cleanup(func() {
+		if err := exec.CommandContext(context.Background(), "docker", "rmi", "-f", image).Run(); err != nil {
+			t.Logf("removing %s: %v", image, err)
+		}
+	})
 	if out, err := docker("volume", "create", vol); err != nil {
 		t.Fatalf("volume create: %v\n%s", err, out)
 	}
-	t.Cleanup(func() { _, _ = exec.Command("docker", "volume", "rm", "-f", vol).CombinedOutput() })
+	t.Cleanup(func() {
+		if err := exec.CommandContext(context.Background(), "docker", "volume", "rm", "-f", vol).Run(); err != nil {
+			t.Logf("removing %s: %v", vol, err)
+		}
+	})
 
 	const alpine = "alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
 	if out, err := docker("run", "--rm", "-v", vol+":/etc/fulcio:ro", alpine, "true"); err != nil {
