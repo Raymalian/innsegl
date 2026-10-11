@@ -116,6 +116,51 @@ order, and makes no signature:
 `ca-custodian ready` and `ca-custody status` both read `can_sign` and print
 the reason.
 
+## Reseal
+
+The material is sealed at init to `INNSEGL_CA_CUSTODY_RECIPIENTS`. A reseal
+seals the **same** material to a new set of recipients (ADR-0082 decision 7).
+The CA key, the store, the unseal key and the secret ids do not change. It
+is two steps on the custodian:
+
+1. `POST /reseal` with the material the opener opened, the opener's own
+   recipient, the set, and the set's digest. The custodian proves the
+   material (below), seals it to the set with a fresh check inside, and
+   keeps that copy staged. `unlock.age` is not touched. The answer is the
+   staged copy, the set and its digest.
+2. `POST /reseal/confirm` with the material and the check, both read from
+   the staged copy, and the digest again. Only then is the staged copy
+   swapped in and the set written to `recipients.txt`. Opening the staged
+   copy takes the opener's touch again.
+
+A staged copy not confirmed within 10 minutes is dropped, and a custodian
+restart drops it too; `unlock.age` stays as it was. A new reseal replaces a
+staged one.
+
+Refused, with the material unchanged:
+
+| Refusal | Answer |
+|---|---|
+| an empty set | 400 |
+| a set without the opener's recipient | 400 |
+| a member that is not a recipient the core seals to | 400 |
+| a digest other than the set's, at either step | 409 |
+| a confirm with nothing staged, or after the window | 409 |
+| an unsealed store with no material commitment yet | 409 |
+| material the store does not accept | 403 |
+| a confirm without the staged copy's check | 403 |
+
+Proving the material: a sealed store is unsealed with it. An unsealed store
+cannot test an unseal key, so the material must match `unlock.sha256`, the
+commitment written at init and at every unlock of a sealed store. In both
+cases both roles log in, as an unlock does. Every step is one audit line in
+the custodian's log, with set digests and recipients, never material.
+
+`GET /recipients` lists the set: `recipients`, `digest`, and `recorded`
+(false for a store initialised before the reseal existed: the configured
+set). The digest is `sha256:` over the members, trimmed, each once, sorted,
+one per line, each line ending in a newline.
+
 ## Files, volumes, containers
 
 | Item | Holds |
@@ -127,7 +172,7 @@ the reason.
 | `innsegl-ca-token-keeper` | keeps the token volume mounted; reads nothing |
 | network `innsegl-ca-sign` | Fulcio and the custodian's signing gateway, nothing else |
 | trust volume `innsegl-trust-ca-store` | the store's data |
-| trust volume `innsegl-trust-ca-custody` | the sealed unlock material (`material/unlock.age`) |
+| trust volume `innsegl-trust-ca-custody` | the sealed unlock material (`material/unlock.age`); beside it `recipients.txt` (the set it is sealed to, which the trust backup also encrypts to), `recipients.sha256` (that set's digest) and `unlock.sha256` (the material's commitment). None of the three opens anything |
 | volume `innsegl-ca-token` | the CA's token, in memory; the custodian, the bootstrap and the keeper mount it, Fulcio does not |
 | volume `<prefix>-sigstore_sigstore-fulcio-kms` | the store's root chain and issuer config; Fulcio and the custodian mount it read-only (the custodian is recreated when it changes, OPS-165). The bootstrap writes it as 65532; a new volume takes that owner from the bootstrap image, so no chown is needed (OPS-192) |
 | backup items `ca-store/store.snap`, `ca-custody/unlock.age` | custody in a trust-key bundle |
@@ -152,7 +197,8 @@ the custodian on an internal unlock network and logs none of what it carries.
 - `internal/cacustody/*_test.go` (OPS-136 to OPS-145, OPS-153 to OPS-155,
   OPS-183 to OPS-186 in `continuity_test.go`, OPS-188 and OPS-189 in
   `gateway_test.go`: the gateway forwards only the two calls, and a store
-  restart and unlock need no CA restart)
+  restart and unlock need no CA restart; OPS-201 to OPS-206 in
+  `reseal_test.go`: the reseal and its refusals)
 - `cmd/innsegl/cacustodiancli_test.go` (OPS-146, OPS-155, OPS-185, OPS-186,
   OPS-188: the gateway has its own listener),
   `cacustodycli_test.go` (BAK-029, CLI-021), `corecacustody_test.go` (OPS-147)
@@ -170,6 +216,7 @@ the custodian on an internal unlock network and logs none of what it carries.
 - [ADR-0074](../docs/adr/0074-trust-keys-are-backed-up-encrypted-and-off-the-host.md) the backup carries custody
 - [ADR-0075](../docs/adr/0075-each-host-has-its-own-ca-password-and-the-ca-rotates-by-script.md) rotation
 - [ADR-0076](../docs/adr/0076-the-ca-key-store-is-unlocked-by-the-operators-machine.md) custody
+- [ADR-0082](../docs/adr/0082-a-second-unlock-device-a-hardware-security-key-through-the-dashboard.md) the reseal
 
 ## Runbooks
 
