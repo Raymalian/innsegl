@@ -196,7 +196,9 @@ func TestJRN011TheRefusalReadsTheOutageFromTheClientService(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		_, _ = io.WriteString(w, status)
+		if _, err := io.WriteString(w, status); err != nil {
+			t.Error(err)
+		}
 	}))
 	t.Cleanup(svc.Close)
 	home := t.TempDir()
