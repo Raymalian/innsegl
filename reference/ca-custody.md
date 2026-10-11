@@ -15,12 +15,12 @@ innsegl ca-custodian serve                 initialise if new; renew the CA's tok
 innsegl ca-custodian ready                 exit 0 when the CA can sign: store unlocked, token alive, key readable and matching the chain
 innsegl ca-custodian restore SNAPSHOT      put a backup's store into a new store
 innsegl ca-custody status                  say whether the core's CA can sign
-innsegl ca-custody unlock [--identity F]   unlock it if it is sealed (asks for Touch ID)
+innsegl ca-custody unlock [--identity F]   unlock it, or repair a dead token, when the CA cannot sign (asks for Touch ID)
 ```
 
 `ca-custodian` runs on the core. `ca-custody` runs on the operator's
 machine; the client service does the same check once a minute and asks for
-the unlock only when the store is sealed.
+the unlock whenever the core reports `can_sign: false`: sealed, or unsealed with a dead token. One Touch ID repairs either; no container restart. The command prints the reason it is repairing. A core too old to report `can_sign` is unlocked only when sealed.
 
 | Make target | Does |
 |---|---|
