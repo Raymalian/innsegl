@@ -15,6 +15,10 @@ segments before it counts.
 innsegl seal [flags]
 innsegl canary [flags]
 innsegl migrate-schema [-dsn DSN] [-from VERSION]
+innsegl ledger <lease|freeze|thaw> [-dsn DSN] [flags]
+make innsegl-ledger-lease
+make innsegl-freeze REASON=<why>
+make innsegl-thaw
 make innsegl-canary
 make innsegl-backup
 make backup-freshness
@@ -34,6 +38,48 @@ make innsegl-verify
   is right even when the upgraded core started first. Running it twice
   appends nothing the second time.
 - `make innsegl-canary` runs the canary in its container (profile `canary`).
+- `innsegl ledger lease` says which core holds the writer lease and whether
+  the ledger is frozen. `freeze -reason WHY` freezes it; `thaw` ends the
+  freeze. `make innsegl-ledger-lease`, `make innsegl-freeze` and `make
+  innsegl-thaw` run them in `innsegl-mcp` with its own ledger
+  credential (RM-326).
+
+`innsegl ledger -h`:
+
+```
+usage: innsegl ledger <lease|freeze|thaw> [-dsn DSN] [flags]
+
+  lease    say who holds the writer lease and whether the ledger is frozen
+  freeze   freeze the ledger: every append is refused, and no core serves it,
+           until it is thawed. -reason is required
+  thaw     end a freeze
+
+The ledger connection is -dsn or $INNSEGL_LEDGER_DSN.
+```
+
+### One writer, and the freeze
+
+One core writes a ledger at a time. `innsegl serve` takes the writer lease
+(table `innsegl.writer_lease`, migration 0021) before it opens anything, and
+renews it every third of `-writer-lease-ttl`. A second core against the same
+database logs `waiting for the writer lease` with the holder, and waits. A
+core that loses the lease stops (exit 8) and starts again, waiting its turn.
+A core that stops cleanly releases the lease, so the next one starts at
+once; one that crashed holds it up for at most the TTL. While a core holds
+the lease, the database refuses an append from a connection that names
+another writer (SQLSTATE `IN008`). One-shot commands such as `innsegl
+retire` name no writer and append through the same serialized path.
+
+A frozen ledger refuses every append in the database itself (SQLSTATE
+`IN007`), whatever program asks. A core started on it logs `the ledger is
+frozen` with the reason, does not serve or run its loops, and waits for a
+thaw. Freezing also ends the current holding. The mark is in the database,
+so a copy taken after the freeze is frozen too.
+
+Moving a deployment: `make innsegl-freeze REASON=...` on the old host, stop
+it, export, import on the new host and start it. The new core waits, frozen.
+Check the copy, then `make innsegl-thaw` on the new host only. The old host
+stays frozen, so it never writes again.
 - `make innsegl-backup` runs `pg_dump`, restores it into a throwaway
   database and checks it against the sealed segments before keeping it.
 - `make backup-freshness` reports the age of the last verified backup and
@@ -66,6 +112,9 @@ make innsegl-verify
 | `-canary-probe-retention` | `INNSEGL_CANARY_PROBE_RETENTION` | the probe's retention; `0` uses `-retention` [`0`]. Leave it `0` with the scoped identity: it may not set a retention, so the store refuses the probe |
 | `-canary-min-bucket-retention` | `INNSEGL_CANARY_MIN_BUCKET_RETENTION` | required bucket default retention; `0` does not check [`0`] |
 
+`innsegl serve` takes `-writer-lease-ttl` (`INNSEGL_WRITER_LEASE_TTL`):
+how long the writer lease lasts unrenewed [`15s`].
+
 `innsegl canary` takes the same object-store flags plus
 `-min-bucket-retention` (`INNSEGL_CANARY_MIN_BUCKET_RETENTION`) and
 `-probe-retention` (`INNSEGL_CANARY_PROBE_RETENTION`).
@@ -81,6 +130,7 @@ for `make innsegl-backup` [`backups`].
 | Item | Holds |
 |---|---|
 | `innsegl-postgres` | the ledger database |
+| table `innsegl.writer_lease` | the writer lease and the freeze; one row, outside the chain |
 | trust volume `<prefix>-ledger-data` | the chain and every event body |
 | `innsegl-db-init` | migrations and database roles (`deploy/compose/innsegl/db-init.sh`) |
 | `innsegl-s3`, `innsegl-object-init`, `innsegl-s3-identities` | the object store, its bucket and identities |
@@ -107,6 +157,9 @@ lists it under `reports` without turning not-ready. `innsegl status` then shows
 means no run in twice the interval.
 | `migrate-schema` | 5 | the chain mixes versions, or the attestation landed wrong; stop the old writers |
 | `migrate-schema` | 6 | the ledger could not be opened, read or appended to |
+| `ledger` | 2 | usage: no subcommand, no `-dsn`, `freeze` without `-reason` |
+| `ledger` | 32 | the ledger could not be reached or read |
+| `serve` | 8 | the writer lease was lost; the core starts again and waits |
 | `backup-freshness.sh` | 1 | stale, missing or no host copy |
 
 ## Tests
@@ -119,6 +172,7 @@ means no run in twice the interval.
   (SEG-014 to SEG-016, OPS-172, PROPOSED), `internal/mcp/healthreport_test.go` (OPS-172),
   `test/deploy/scheduledcanary_test.go` (OPS-173, PROPOSED)
 - `cmd/innsegl/migrateschema_test.go` (LED-035, LED-036)
+- `internal/ledger/lease_test.go` (LED-047, LED-048), `cmd/innsegl/writerlease_test.go` (OPS-182)
 - `internal/event/*_test.go` (SER-001 to SER-026)
 - `test/deploy/appendonlyrole_test.go` (OPS-009, OPS-010), `objectscope_test.go`
   (OPS-025 to OPS-030), `filerisolation_test.go`, `objectoneprocess_test.go`

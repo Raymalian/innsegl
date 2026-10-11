@@ -98,6 +98,12 @@ var commands = map[string]command{
 	// observe silence, and silence is not an ending at any threshold; a
 	// harness's stop hook speaks for the process it owned and nothing else.
 	// An operator who knows the machine is gone had no way to say so.
+	// RM-326 (#580): the writer lease and the freeze. Run inside the core's
+	// container, with its own ledger credential.
+	"ledger": {
+		summary: "say who holds the writer lease, and freeze or thaw the ledger",
+		exec:    ledgerCommand,
+	},
 	"retire": {
 		summary: "end a run an operator knows is over",
 		exec:    retireCommand,
