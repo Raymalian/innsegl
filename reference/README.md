@@ -23,6 +23,8 @@ help lines. When the code changes, the code wins; fix the page.
 | Trust-key backup and drill (ADR-0074) | [trust-key-backup.md](trust-key-backup.md) |
 | CA password and rotation (ADR-0075) | [ca-password-and-rotation.md](ca-password-and-rotation.md) |
 | CA key custody (ADR-0076) | [ca-custody.md](ca-custody.md) |
+| Signing probe: can the CA sign, measured every 5 minutes | [signing-probe.md](signing-probe.md) |
+| Doctor: the signing chain checked from the operator's machine, safe repairs | [doctor.md](doctor.md) |
 | Service credentials, generated per host (ADR-0078) | [service-credentials.md](service-credentials.md) |
 | Stack modes, trust volumes, every make target | [stack-and-make.md](stack-and-make.md) |
 | Transparency log (Rekor and Trillian) operations | [transparency-log.md](transparency-log.md) |

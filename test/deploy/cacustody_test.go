@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/internal/cacustody"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,6 +31,7 @@ type renderedService struct {
 	Image       string                     `json:"image"`
 	User        string                     `json:"user"`
 	ReadOnly    bool                       `json:"read_only"`
+	NetworkMode string                     `json:"network_mode"`
 	Command     []string                   `json:"command"`
 	Environment map[string]*string         `json:"environment"`
 	Networks    map[string]json.RawMessage `json:"networks"`
@@ -61,6 +64,7 @@ type composeDoc struct {
 		Name       string            `json:"name"`
 		Driver     string            `json:"driver"`
 		DriverOpts map[string]string `json:"driver_opts"`
+		External   bool              `json:"external"`
 	} `json:"volumes"`
 }
 
@@ -178,24 +182,9 @@ func TestOPS150TheCustodyNetworksAndTheCAsHands(t *testing.T) {
 			t.Errorf("Fulcio mounts %s writable", v.Target)
 		}
 	}
-	if tok := fulcio.Environment["VAULT_TOKEN"]; tok != nil && *tok != "" {
-		t.Errorf("Fulcio has a token in its environment: a reader of the container's config would have it")
-	}
-	if home := fulcio.Environment["HOME"]; home == nil || *home != "/run/ca-token" {
-		t.Errorf("Fulcio's HOME is %v; its KMS client reads ~/.vault-token from the token volume", home)
-	}
+	// What Fulcio holds instead of a token is OPS-187's.
 
-	members := func(doc composeDoc, network string) []string {
-		var out []string
-		for name, s := range doc.Services {
-			if _, ok := s.Networks[network]; ok {
-				out = append(out, name)
-			}
-		}
-		slices.Sort(out)
-		return out
-	}
-	if got, want := members(sig, "innsegl-ca-store"), []string{"fulcio", "innsegl-ca-bootstrap",
+	if got, want := members(sig, "innsegl-ca-store"), []string{"innsegl-ca-bootstrap",
 		"innsegl-ca-custodian", "innsegl-ca-import", "innsegl-ca-store"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("the store's network admits %v; want %v (ADR-0076)", got, want)
 	}
@@ -230,6 +219,108 @@ func TestOPS150TheCustodyNetworksAndTheCAsHands(t *testing.T) {
 			t.Errorf("the store images are %v; want one pinned reference", images)
 			break
 		}
+	}
+}
+
+func strOf(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// members lists the services of doc on network, sorted.
+func members(doc composeDoc, network string) []string {
+	var out []string
+	for name, s := range doc.Services {
+		if _, ok := s.Networks[network]; ok {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// OPS-187 (PROPOSED) — the CA holds no store token (#585). Under custody
+// Fulcio mounts no token volume, is not on the store's network, and has no
+// token in its environment but the fixed placeholder its KMS client needs to
+// start; it reaches the store only through the custodian's gateway, on a
+// network the two of them alone share. A token in the operator's environment
+// does not reach it either.
+func TestOPS187TheCAHoldsNoStoreToken(t *testing.T) {
+	sig := composeRender(t, []string{"INNSEGL_CA_STORE_TOKEN=hvs.from-the-environment"}, sigstoreBase, sigstoreCustod)
+	fulcio := sig.Services["fulcio"]
+
+	tokenVolume := sig.Volumes["innsegl-ca-token"].Name
+	for _, v := range fulcio.Volumes {
+		if v.Source == "innsegl-ca-token" || v.Source == tokenVolume || strings.Contains(v.Target, "ca-token") {
+			t.Errorf("Fulcio mounts the CA's token volume (%s at %s)", v.Source, v.Target)
+		}
+	}
+	for name := range fulcio.Networks {
+		if slices.Contains(members(sig, name), "innsegl-ca-store") {
+			t.Errorf("Fulcio shares the network %s with the store", name)
+		}
+	}
+	for k, v := range fulcio.Environment {
+		val := strOf(v)
+		switch {
+		case strings.Contains(val, "hvs.from-the-environment"):
+			t.Errorf("Fulcio's %s carries the operator's token", k)
+		case k == "VAULT_TOKEN":
+			if val != cacustody.FulcioPlaceholderToken {
+				t.Errorf("Fulcio's VAULT_TOKEN is %q; want only the placeholder %q", val, cacustody.FulcioPlaceholderToken)
+			}
+		case k == "BAO_TOKEN", strings.Contains(k, "STORE_TOKEN"):
+			t.Errorf("Fulcio has %s in its environment", k)
+		case k == "HOME" && strings.Contains(val, "ca-token"):
+			t.Errorf("Fulcio's HOME is %s, where a token would be read from", val)
+		}
+	}
+
+	// Its way to the store: the custodian's gateway, by the alias the
+	// gateway listens on, on a network of two.
+	if addr := fulcio.Environment["VAULT_ADDR"]; addr == nil || *addr != "http://innsegl-ca-signer:8211" {
+		t.Fatalf("Fulcio's VAULT_ADDR is %q; want the custodian's gateway", strOf(addr))
+	}
+	if got, want := members(sig, "innsegl-ca-sign"), []string{"fulcio", "innsegl-ca-custodian"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the CA's network has %v; want %v", got, want)
+	}
+	if !sig.Networks["innsegl-ca-sign"].Internal {
+		t.Error("the CA's network is not internal")
+	}
+	c := sig.Services["innsegl-ca-custodian"]
+	var attach struct {
+		Aliases []string `json:"aliases"`
+	}
+	if raw := c.Networks["innsegl-ca-sign"]; len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &attach); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Contains(attach.Aliases, "innsegl-ca-signer") {
+		t.Errorf("the custodian is not innsegl-ca-signer on the CA's network: %+v", attach)
+	}
+	if l := c.Environment["INNSEGL_CA_SIGN_LISTEN"]; l == nil || *l != "innsegl-ca-signer:8211" {
+		t.Errorf("the gateway listens on %q; want the alias on the CA's network alone", strOf(l))
+	}
+
+	// The token volume stays mounted while the custodian is replaced, by a
+	// container that cannot read it.
+	k, ok := sig.Services["innsegl-ca-token-keeper"]
+	if !ok {
+		t.Fatal("nothing keeps the token volume mounted while the custodian is recreated")
+	}
+	if k.User == "" || strings.HasPrefix(k.User, "65532") || k.NetworkMode != "none" || !k.ReadOnly {
+		t.Errorf("the token keeper runs as %q network %q read_only=%t; want not the CA's uid, no network, read-only",
+			k.User, k.NetworkMode, k.ReadOnly)
+	}
+	held := false
+	for _, v := range k.Volumes {
+		held = held || (v.Source == "innsegl-ca-token" && v.ReadOnly)
+	}
+	if !held {
+		t.Error("the token keeper does not hold the token volume (read-only)")
 	}
 }
 
@@ -390,5 +481,56 @@ func TestOPS160TheCustodianRunsTheImageThisCheckoutBuilds(t *testing.T) {
 		if img < 0 || img > up {
 			t.Errorf("%s brings the custodian up before it builds or loads the innsegl image (image at %d, custodian at %d)", target, img, up)
 		}
+	}
+}
+
+// OPS-186 (PROPOSED) — the live path of the custodian's drift check (#582):
+// the shipped overlay gives the custodian the very chain the CA presents,
+// read-only. Without it INNSEGL_CA_CHAIN_PATH is unset and the check is
+// skipped, so a store key and a chain that drifted apart are found only when
+// Fulcio refuses to start.
+func TestOPS186TheCustodianReadsTheChainTheCAPresents(t *testing.T) {
+	sig := composeRender(t, nil, sigstoreBase, sigstoreCustod)
+	fulcio := sig.Services["fulcio"]
+	var chain string
+	for _, a := range fulcio.Command {
+		if v, ok := strings.CutPrefix(a, "--kms-cert-chain-path="); ok {
+			chain = v
+		}
+	}
+	if chain == "" {
+		t.Fatalf("Fulcio names no --kms-cert-chain-path: %v", fulcio.Command)
+	}
+	// The volume Fulcio reads its chain from, and the chain's path inside it.
+	var volume, inside string
+	for _, v := range fulcio.Volumes {
+		if rel, ok := strings.CutPrefix(chain, v.Target+"/"); ok && v.Type == "volume" {
+			volume, inside = v.Source, rel
+		}
+	}
+	if volume == "" {
+		t.Fatalf("Fulcio's chain %s is on no volume it mounts", chain)
+	}
+
+	c := sig.Services["innsegl-ca-custodian"]
+	got := c.Environment["INNSEGL_CA_CHAIN_PATH"]
+	if got == nil || *got == "" {
+		t.Fatal("the custodian is not given INNSEGL_CA_CHAIN_PATH: its drift check never runs")
+	}
+	found := false
+	for _, v := range c.Volumes {
+		if v.Source != volume {
+			continue
+		}
+		found = true
+		if !v.ReadOnly {
+			t.Errorf("the custodian mounts %s writable; it only reads the chain", volume)
+		}
+		if want := v.Target + "/" + inside; *got != want {
+			t.Errorf("INNSEGL_CA_CHAIN_PATH is %s; the chain the CA presents is at %s", *got, want)
+		}
+	}
+	if !found {
+		t.Errorf("the custodian does not mount %s, where the CA's chain is", volume)
 	}
 }

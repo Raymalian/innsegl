@@ -47,8 +47,8 @@ func cliConn(paths Paths) (coreConn, error) {
 	return coreConn{rt: rt, base: base}, err
 }
 
-// UnlockCA unlocks the core's CA key store if it is sealed. identities is
-// called only then, and is what asks for Touch ID. It answers whether it sent
+// UnlockCA unlocks the core's CA key store if it is sealed, or unsealed but
+// cannot sign (a dead token). identities is called only then, and is what asks for Touch ID. It answers whether it sent
 // an unlock that the core accepted. It goes through the client service; the
 // material is opened here, in this process.
 func UnlockCA(ctx context.Context, paths Paths, identities func() ([]age.Identity, error)) (bool, error) {
@@ -86,12 +86,45 @@ func (c coreConn) caStatus(ctx context.Context) (cacustody.CoreStatus, error) {
 	return st, err
 }
 
+// needsUnlock says whether an unlock would repair the core's CA: it is
+// sealed, or unsealed but cannot sign (a dead token). A core too old to report
+// can_sign gives no reason when it cannot sign; on an unsealed store that is
+// told apart from a real answer, and today's behaviour (do nothing) holds.
+func needsUnlock(st cacustody.CoreStatus) bool {
+	if !st.Enabled {
+		return false
+	}
+	if st.Sealed {
+		return true
+	}
+	return !st.CanSign && st.Reason != ""
+}
+
+// UnlockCAWith is UnlockCA for a caller that has just read st itself
+// (`innsegl doctor`, #588): it does not ask for the status again, so a
+// repair is three custody calls, not four, under the core's per-machine
+// limit on them.
+func UnlockCAWith(ctx context.Context, paths Paths, st cacustody.CoreStatus,
+	identities func() ([]age.Identity, error)) (bool, error) {
+	c, err := cliConn(paths)
+	if err != nil {
+		return false, err
+	}
+	return c.unlockCAFrom(ctx, st, identities)
+}
+
 func (c coreConn) unlockCA(ctx context.Context, identities func() ([]age.Identity, error)) (bool, error) {
 	st, err := c.caStatus(ctx)
 	if err != nil {
 		return false, err
 	}
-	if !st.Enabled || !st.Sealed {
+	return c.unlockCAFrom(ctx, st, identities)
+}
+
+func (c coreConn) unlockCAFrom(ctx context.Context, st cacustody.CoreStatus,
+	identities func() ([]age.Identity, error)) (bool, error) {
+	var err error
+	if !needsUnlock(st) {
 		return false, nil
 	}
 	var sealed []byte

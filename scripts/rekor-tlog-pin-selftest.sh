@@ -133,6 +133,67 @@ else
   printf '  ....  guard cases need docker; skipped the two that do\n'
 fi
 
+# OPS-193 / OPS-194 (#589). A DEV stack's pin goes stale whenever its dev
+# volumes are removed: it names a tree its fresh log database never had, Rekor
+# is pointed at it, and every dev `make start` failed until someone passed
+# INNSEGL_REKOR_TLOG_ID=0 by hand. A dev stack whose own log database is absent
+# or empty holds no tree at all, so it mints and re-pins, and says so. A LIVE
+# stack never does: there a pin naming a missing tree is a lost log, and
+# minting over it would hide that.
+echo "a dev stack re-mints a tree its own database lacks; a live one never does"
+if command -v docker >/dev/null 2>&1; then
+  DEVPIN="${REPO}/deploy/compose/.rekor-tlog-id.innsegl-dev"
+  LIVEPIN="${REPO}/deploy/compose/.rekor-tlog-id"
+  printf '1111111111111111111\n' >"${DEVPIN}"
+  printf '2028999985815895099\n' >"${LIVEPIN}"
+  gone="innsegl-selftest-no-such-dev-log-$$"
+
+  got="$(INNSEGL_STACK_PREFIX=innsegl-dev INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${gone}" \
+    "${REPO}/scripts/rekor-tlog-pin.sh" read "${WT}" 2>/dev/null)"
+  [ "${got}" = "0" ] && ok "OPS-193 a dev pin over an absent dev log database reads as 0 (mint)" \
+    || bad "OPS-193 a dev pin over an absent dev log database reads as 0 (mint)" "got '${got}': Rekor would serve a tree that does not exist"
+  out="$(INNSEGL_STACK_PREFIX=innsegl-dev INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${gone}" \
+    "${REPO}/scripts/rekor-tlog-pin.sh" guard "${WT}" 2>&1)"; rc=$?
+  if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q "1111111111111111111" \
+     && printf '%s' "${out}" | grep -qi "minting a new tree"; then
+    ok "OPS-193 the dev guard passes and says it mints a new tree over the stale pin"
+  else
+    bad "OPS-193 the dev guard passes and says it mints a new tree over the stale pin" "exit ${rc}: ${out}"
+  fi
+
+  empty="innsegl-selftest-empty-dev-log-$$"
+  docker volume create "${empty}" >/dev/null 2>&1
+  got="$(INNSEGL_STACK_PREFIX=innsegl-dev INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${empty}" \
+    "${REPO}/scripts/rekor-tlog-pin.sh" read "${WT}" 2>/dev/null)"
+  [ "${got}" = "0" ] && ok "OPS-193 a dev pin over an empty dev log database reads as 0 (mint)" \
+    || bad "OPS-193 a dev pin over an empty dev log database reads as 0 (mint)" "got '${got}'"
+  docker run --rm --entrypoint sh -v "${empty}:/v" "$("${REPO}/scripts/rekor-tlog-pin.sh" db-image "${WT}")" \
+    -c 'mkdir -p /v/trillian && echo x > /v/trillian/db.opt' >/dev/null 2>&1
+  got="$(INNSEGL_STACK_PREFIX=innsegl-dev INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${empty}" \
+    "${REPO}/scripts/rekor-tlog-pin.sh" read "${WT}" 2>/dev/null)"
+  out="$(INNSEGL_STACK_PREFIX=innsegl-dev INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${empty}" \
+    "${REPO}/scripts/rekor-tlog-pin.sh" guard "${WT}" 2>&1)"; rc=$?
+  docker volume rm "${empty}" >/dev/null 2>&1
+  if [ "${got}" = "1111111111111111111" ] && [ "${rc}" -eq 0 ] && [ -z "${out}" ]; then
+    ok "OPS-193 a dev pin over a dev log database that holds data is kept"
+  else
+    bad "OPS-193 a dev pin over a dev log database that holds data is kept" "read '${got}', guard exit ${rc}: ${out}"
+  fi
+
+  got="$(env -u INNSEGL_STACK_PREFIX INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${gone}" \
+    "${REPO}/scripts/rekor-tlog-pin.sh" read "${WT}" 2>/dev/null)"
+  out="$(env -u INNSEGL_STACK_PREFIX INNSEGL_TRUST_TRILLIAN_DB_VOLUME="${gone}" \
+    "${REPO}/scripts/rekor-tlog-pin.sh" guard "${WT}" 2>&1)"
+  if [ "${got}" = "2028999985815895099" ] && ! printf '%s' "${out}" | grep -qi "minting"; then
+    ok "OPS-194 a LIVE pin over an absent log database is kept: live never mints over its pin"
+  else
+    bad "OPS-194 a LIVE pin over an absent log database is kept: live never mints over its pin" "read '${got}': ${out}"
+  fi
+  rm -f "${DEVPIN}" "${LIVEPIN}"
+else
+  printf '  ....  dev re-mint cases need docker; skipped\n'
+fi
+
 # RM-215 (#345). THE PIN IS RECORDED ONCE THE LOG ANSWERS, AND ONLY THEN.
 #
 # Bring-up recorded the pin right after starting Rekor, without waiting, and

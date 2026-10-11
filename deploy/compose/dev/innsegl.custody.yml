@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Compose overlay: the core's half of CA key custody (innsegl.custody.yml) on
+# a DEVELOPMENT stack (#585; ADR-0072, ADR-0076)
+#
+# Applied after deploy/compose/innsegl.yml, deploy/compose/dev/innsegl.yml and
+# deploy/compose/innsegl.custody.yml when scripts/stack-mode.sh says dev and
+# the compose .env turns custody on. Names only: the unlock network the dev
+# core joins and the sealed material the dev trust backup carries are the dev
+# custody overlay's (deploy/compose/dev/sigstore.keycustody.yml), never a
+# live one.
+# ============================================================================
+
+name: innsegl-dev-core
+
+networks:
+  innsegl-ca-unlock:
+    name: innsegl-dev-ca-unlock
+
+volumes:
+  trust-backup-ca-custody:
+    name: innsegl-dev-trust-ca-custody

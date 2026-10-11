@@ -54,7 +54,7 @@ fi
 # removing the store's: a half reset, a fresh store beside the old store's
 # material. Emptying works whoever has the volume mounted, and leaves each
 # volume where the compose files expect it.
-for v in innsegl-trust-ca-store innsegl-trust-ca-custody "${KMS_VOLUME}"; do
+for v in "${PREFIX}-trust-ca-store" "${PREFIX}-trust-ca-custody" "${KMS_VOLUME}"; do
   "${DOCKER}" run --rm -v "${v}:/v" "${IMAGE}" find /v -mindepth 1 -delete \
     || die 3 "could not empty ${v}; nothing after it was touched. Run the reset again."
 done

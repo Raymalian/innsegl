@@ -65,6 +65,9 @@ import (
 // answers the probes below and is reported healthy. Readiness here means "the
 // dependency is reachable and answering", which is what IP §6.6 asks for.
 // Proving writability requires a write, and the write is not available to us.
+// For the CA the write is made elsewhere, on a schedule rather than per poll:
+// the signing probe (RM-339) asks for one real certificate every five minutes
+// and reaches readiness as a report, below.
 //
 // # What "reachable" means, per dependency, and why
 //
@@ -167,7 +170,9 @@ type HealthLedger interface {
 // row still tells an operator which service to look at.
 type HealthSigstore interface {
 	// ProbeSigning reaches the configured Fulcio. It must not request a
-	// certificate.
+	// certificate. It answers "is Fulcio reachable", never "can the CA sign":
+	// Fulcio serves its root while its CA key is out of reach (RM-339). Whether
+	// the CA signs is the scheduled signing probe's report (internal/signprobe).
 	ProbeSigning(ctx context.Context) error
 	// ProbeTransparency reaches the configured Rekor. It must not write an
 	// entry.
@@ -263,7 +268,8 @@ type HealthConfig struct {
 	// reads as literal.
 	RepoMode string
 	// Reports are scheduled controls whose last result readiness REPORTS and
-	// never gates on: doc 05 §2's WORM canary is the first. Nil reports none.
+	// never gates on: doc 05 §2's WORM canary is the first, the signing probe
+	// (RM-339) the second. Nil reports none.
 	Reports func() []HealthReport
 	// Logger receives the one thing that can go wrong while answering: a
 	// response that could not be written. Nil disables it.
@@ -868,7 +874,9 @@ func (s *SigstoreEndpoints) Endpoints() (fulcio, rekor string) {
 }
 
 // ProbeSigning fetches Fulcio's root certificate. It requests no certificate
-// and presents no token.
+// and presents no token, so it proves Fulcio is reachable and nothing more:
+// the root is a file, served while the CA cannot sign. "Signing works" is the
+// signing probe's report on /readyz (RM-339), not this.
 func (s *SigstoreEndpoints) ProbeSigning(ctx context.Context) error {
 	if err := s.fetch(ctx, s.fulcio, acceptPEMCertificateChain, sigstoreRootCertificate); err != nil {
 		return Errorf(ClassSigningUnavailable, "", "%s: %w", s.fulcio.Redacted(), err)

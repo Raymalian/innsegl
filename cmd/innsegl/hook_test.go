@@ -359,9 +359,10 @@ func TestGitConfigSigningOptions(t *testing.T) {
 
 // TestHookSigningOptionsWinOverTheCommandsOwnGitConfigCount (ENF-012,
 // PROPOSED): a command that carries its own GIT_CONFIG_COUNT entries — here
-// one turning signing off — still gets the hook's `-c` options, and git reads
-// a `-c` over any GIT_CONFIG_* variable, so the commit is signed. Measured
-// off a real git's committed object, not off the command text.
+// one turning signing off — is refused by the hook (CMT-021); the `-c`
+// options placed in it would still win, since git reads a `-c` over any
+// GIT_CONFIG_* variable, so the commit is signed. Measured off a real git's
+// committed object, not off the command text.
 func TestHookSigningOptionsWinOverTheCommandsOwnGitConfigCount(t *testing.T) {
 	git := ghGitOrSkip(t)
 	home := t.TempDir()
@@ -378,12 +379,16 @@ func TestHookSigningOptionsWinOverTheCommandsOwnGitConfigCount(t *testing.T) {
 
 	const toolUseID = "toolu_precount000001"
 	const command = `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false git commit -m x`
-	_, stdout, _ := runHook(t, hookJSON(t, "Bash", command, toolUseID, nil))
-	rewritten := updatedCommand(t, decodeHookOutput(t, stdout))
-	want := hookWantExport(t, toolUseID) +
-		`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false git ` + hookWantSigningOptions(t) + ` commit -m x`
+	// The hook itself now refuses such a command outright (CMT-021, #584);
+	// the options still win where a command carries one past it.
+	if _, stdout, _ := runHook(t, hookJSON(t, "Bash", command, toolUseID, nil)); !strings.Contains(stdout, `"deny"`) {
+		t.Fatalf("the hook did not refuse a command carrying GIT_CONFIG_COUNT: %s", stdout)
+	}
+	rewritten := commitpath.InsertGitOptions(command, gitConfigSigningOptions(hookExpectSelfBinary(t)))
+	want := `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false git ` +
+		hookWantSigningOptions(t) + ` commit -m x`
 	if rewritten != want {
-		t.Fatalf("updatedInput.command = %q, want %q", rewritten, want)
+		t.Fatalf("InsertGitOptions = %q, want %q", rewritten, want)
 	}
 
 	sh := exec.CommandContext(t.Context(), "sh", "-c", rewritten)

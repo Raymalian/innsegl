@@ -35,6 +35,13 @@
 #                                             (a DEV stack's own: ADR-0072)
 #   scripts/rekor-tlog-pin.sh read [repo]     print the pinned id, or 0
 #   scripts/rekor-tlog-pin.sh guard [repo]    refuse a silent mint; exit 3 if unsafe
+#
+# A DEV STACK RE-MINTS A STALE PIN (#589, OPS-193). Removing a dev stack's
+# volumes leaves its pin naming a tree its fresh log database never had, and
+# every dev bring-up failed until someone passed INNSEGL_REKOR_TLOG_ID=0. On a
+# dev stack only, a pin over a log database that is absent or empty is read
+# as 0 (mint), the guard says so, and bring-up pins the new tree. A LIVE pin
+# is never overridden (OPS-194): there a missing tree is a lost log.
 
 set -u
 
@@ -64,6 +71,31 @@ pin_path() { printf '%s/%s' "$(repo_of "${1:-.}")" "${REL}"; }
 db_image() {
   sed -n '/^x-trillian-db-image:/{n;s/^[[:space:]]*//;p;q;}' \
     "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)/deploy/compose/sigstore.yml"
+}
+
+log_db_volume() {
+  printf '%s' "${INNSEGL_TRUST_TRILLIAN_DB_VOLUME:-${INNSEGL_TRUST_VOLUME_PREFIX:-innsegl-trust}-trillian-db}"
+}
+
+# log_db_empty: 0 when the log database's volume is absent, or exists and
+# holds nothing, so it has no tree at all. 1 when it holds data, or when that
+# cannot be told: an answer that cannot be taken never counts as empty.
+log_db_empty() {
+  command -v docker >/dev/null 2>&1 || return 1
+  _v="$(log_db_volume)"
+  docker volume inspect "${_v}" >/dev/null 2>&1 || return 0
+  _img="$(db_image "${1:-.}")"
+  [ -n "${_img}" ] || return 1
+  _held="$(docker run --rm --entrypoint sh -v "${_v}:/v" "${_img}" -c 'ls -A /v | head -n 1' 2>/dev/null)" || return 1
+  [ -z "${_held}" ]
+}
+
+# dev_pin_stale: a DEV stack's pin names a tree its own log database cannot
+# hold, because that database is absent or empty. Never true for live.
+dev_pin_stale() {
+  case "${INNSEGL_STACK_PREFIX:-innsegl}" in innsegl) return 1 ;; esac
+  [ -s "$(pin_path "${1:-.}")" ] || return 1
+  log_db_empty "${1:-.}"
 }
 
 case "${1:-}" in
@@ -101,7 +133,9 @@ case "${1:-}" in
 
   read)
     _p="$(pin_path "${2:-.}")"
-    if [ -s "${_p}" ]; then
+    if dev_pin_stale "${2:-.}"; then
+      printf '0\n'                      # dev, and its log has no tree: mint
+    elif [ -s "${_p}" ]; then
       # One line, digits only. A pin that is anything else is not passed on:
       # Rekor would read it as a tree id and fail somewhere less obvious.
       _id="$(tr -dc '0-9' <"${_p}" | head -c 32)"
@@ -118,12 +152,18 @@ case "${1:-}" in
   guard)
     _repo="$(repo_of "${2:-.}")"
     _p="$(pin_path "${2:-.}")"
+    if dev_pin_stale "${2:-.}"; then
+      printf 'rekor-tlog-pin: DEV stack: %s pins tree %s, and this stack'"'"'s own log database (%s) is absent or empty, so it holds no tree.\n' \
+        "${_p}" "$(tr -dc '0-9' <"${_p}")" "$(log_db_volume)" >&2
+      printf '  Minting a new tree; bring-up pins it once Rekor answers. A live stack never does this.\n' >&2
+      exit 0
+    fi
     [ -s "${_p}" ] && exit 0            # pinned: nothing to guard against
 
     # No pin. That is correct on a machine that has never run this, and
     # dangerous on one that has. The log database is the evidence: bring-up
     # never recreates it, so its presence means a tree already exists.
-    _vol="${INNSEGL_TRUST_TRILLIAN_DB_VOLUME:-${INNSEGL_TRUST_VOLUME_PREFIX:-innsegl-trust}-trillian-db}"
+    _vol="$(log_db_volume)"
     if ! command -v docker >/dev/null 2>&1; then
       exit 0
     fi
@@ -173,7 +213,7 @@ MSG
     ;;
 
   *)
-    sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//' >&2
+    sed -n '3,44p' "$0" | sed 's/^# \{0,1\}//' >&2
     exit 2
     ;;
 esac

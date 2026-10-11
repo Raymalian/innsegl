@@ -29,6 +29,7 @@ scripts/rekor-port.sh
 | `make rekor-tlog-id` | read the tree Rekor serves and pin it |
 | `make rekor-reindex` | backfill the search index from the whole log; the repair |
 | `rekor-tlog-pin.sh guard` | refuse to boot with pin 0 next to an existing log |
+| `rekor-tlog-pin.sh read` on a dev stack | a pin over an absent or empty dev log database reads as 0: the dev stack mints a new tree, the guard says so, and bring-up pins it (OPS-193). A live pin is never overridden (OPS-194) |
 | `rekor-reindex.sh --if-behind` | backfill only when the index holds fewer entries than the log (run by every bring-up) |
 | `rekor-tlog-health.sh` | is the pinned tree still served (run at the end of `make start`) |
 | `rekor-port.sh` | the host port: `INNSEGL_REKOR_PORT`, else Docker's published port, else `23000` |
@@ -81,7 +82,7 @@ could not be reached.
 
 ## Tests
 
-- `scripts/rekor-tlog-pin-selftest.sh` (OPS-055), `rekor-reindex-selftest.sh`,
+- `scripts/rekor-tlog-pin-selftest.sh` (OPS-055, OPS-193, OPS-194), `rekor-reindex-selftest.sh`,
   `rekor-port-selftest.sh`
 - `test/deploy/rekorindex_test.go` (OPS-036), `trustroot_test.go` (OPS-034)
 - `test/smoke/rekorport_test.go` (OPS-006, OPS-014, OPS-015)

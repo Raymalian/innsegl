@@ -116,8 +116,8 @@ func TestOPS141InitLeavesOnlyCiphertextBehind(t *testing.T) {
 	}
 
 	st := f.c.Status(ctx)
-	if !st.Initialized || st.Sealed || !st.TokenPresent {
-		t.Fatalf("after init the custodian reports %+v; want initialised, unsealed, token present", st)
+	if !st.Initialized || st.Sealed || !st.CanSign {
+		t.Fatalf("after init the custodian reports %+v; want initialised, unsealed, able to sign", st)
 	}
 	if err := f.c.Init(ctx); err == nil {
 		t.Fatal("a second init was accepted on an initialised store")
@@ -299,7 +299,7 @@ func TestOPS144TheCustodianSurface(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("the right material answered %d", resp.StatusCode)
 	}
-	if st := f.c.Status(ctx); st.Sealed || !st.TokenPresent {
+	if st := f.c.Status(ctx); st.Sealed || !st.CanSign {
 		t.Fatalf("after the unlock: %+v", st)
 	}
 }

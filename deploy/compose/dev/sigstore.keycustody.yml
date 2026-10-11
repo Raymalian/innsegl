@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ============================================================================
+# Compose overlay: CA key custody (sigstore.keycustody.yml) on a DEVELOPMENT
+# stack (#585; ADR-0072, ADR-0076)
+#
+# Applied after deploy/compose/sigstore.yml, deploy/compose/dev/sigstore.yml
+# and deploy/compose/sigstore.keycustody.yml when scripts/stack-mode.sh says
+# dev and the compose .env turns custody on. Names only: every container,
+# network and volume of the custody overlay, pinned here to the dev prefix so
+# that a dev custodian can never open, unlock or empty a live store or its
+# sealed material, whatever the environment says. The dev trust volumes are
+# created by `make ca-custody-volumes` under the same prefix.
+#
+# Its unlock material is sealed to whatever INNSEGL_CA_CUSTODY_RECIPIENTS
+# names. On a dev stack that is a development age identity made for it,
+# never the operator's own.
+# ============================================================================
+
+name: innsegl-dev-sigstore
+
+services:
+  innsegl-ca-store:
+    container_name: innsegl-dev-ca-store
+  innsegl-ca-export:
+    container_name: innsegl-dev-ca-export
+  innsegl-ca-import:
+    container_name: innsegl-dev-ca-import
+  innsegl-ca-bootstrap:
+    container_name: innsegl-dev-ca-bootstrap
+  innsegl-ca-custodian:
+    container_name: innsegl-dev-ca-custodian
+  innsegl-ca-token-keeper:
+    container_name: innsegl-dev-ca-token-keeper
+
+networks:
+  innsegl-ca-store:
+    name: innsegl-dev-ca-store
+  innsegl-ca-unlock:
+    name: innsegl-dev-ca-unlock
+  innsegl-ca-sign:
+    name: innsegl-dev-ca-sign
+
+volumes:
+  innsegl-ca-import-scratch:
+    name: innsegl-dev-ca-import-scratch
+  innsegl-ca-store-data:
+    name: innsegl-dev-trust-ca-store
+  innsegl-ca-custody-data:
+    name: innsegl-dev-trust-ca-custody
+  innsegl-ca-token:
+    name: innsegl-dev-ca-token

@@ -14,6 +14,7 @@ alone.
 innsegl hook pre-tool-use | post-tool-use | session
 innsegl git-hook prepare-commit-msg <message file> [<source> [<sha>]]
 innsegl git-hook post-commit
+innsegl git-hook reference-transaction prepared|committed|aborted   (run by git; ref updates on stdin)
 innsegl git-hook push-mirror <dir> branch|snapshot <core url> ...   (started by the hooks, detached)
 innsegl sign --status-fd=<fd> -bsau <key>      (run by git as gpg.x509.program)
 innsegl resign <range>                          (run by the agent)
@@ -31,10 +32,11 @@ make link DIR=<path to a git repository>
 | `innsegl hook session` | the harness, on session start, user prompt, subagent start, cwd change, session end | tells the gateway the session's working directory; at session end, also sends a linked repository's branch to the core's mirror |
 | `innsegl git-hook prepare-commit-msg` | git | asks the core for the trailers `Agent-Identity`, `Agent-Run`, `Agent-Task` and writes them into the message |
 | `innsegl git-hook post-commit` | git | after a commit innsegl signed for an agent, sends its branch to the core's mirror (see below); always exits 0 |
+| `innsegl git-hook reference-transaction` | git, on every ref update | in an agent session, refuses a branch update that would add an unsigned commit (see below) |
 | `innsegl git-hook push-mirror` | the two hooks above and `hook session` | the push itself, in a process of its own; not run by hand |
 | `innsegl sign` | git | sends the commit payload to the core and returns the signature; `--verify` is git's verify mode |
 | `innsegl resign` | the agent, as its own Bash command | signs the unsigned commits of a range on the current branch again, through `innsegl sign` (see below) |
-| `innsegl link` | the operator | installs (or with `-remove`, restores) the repository's prepare-commit-msg and post-commit hooks; touches nothing else |
+| `innsegl link` | the operator | installs (or with `-remove`, restores) the repository's prepare-commit-msg, post-commit and reference-transaction hooks; touches nothing else. A repository linked before a hook was added gains it on its next use by an agent |
 | `make link` | the operator | runs `innsegl link` with the binary `make build` wrote; refuses a linked worktree path |
 | `innsegl init` | the operator | the older one-repository path: pins gitsign, chooses a trust root, signs a test commit and verifies it; `--local` git config only |
 
@@ -72,6 +74,53 @@ make link DIR=<path to a git repository>
 
 A linked worktree, the harness's isolated one included, shares its
 repository's hooks, so it counts as linked when the repository is.
+
+### An agent never makes an unsigned commit
+
+Signing fails closed. In a linked repository, an agent session cannot turn
+it off (#584). Two layers do this. The operator's own commits are unchanged.
+
+**The hook refuses the command.** `innsegl hook pre-tool-use` refuses a Bash
+command that turns signing off, and says why:
+
+- `--no-gpg-sign` on any git subcommand (`commit`, `rebase`, `merge`,
+  `cherry-pick`, `revert`, `pull`, `am`)
+- `-c commit.gpgsign=false` (or `0`, `no`, `off`), and any `-c gpg.*`
+- `--config-env` for `commit.gpgsign` or a `gpg.*` key
+- setting or exporting `GIT_CONFIG_COUNT` or `GIT_CONFIG_PARAMETERS`
+- `git commit-tree` without `-S` or `--gpg-sign`
+- `git config` that writes a `gpg.*` key, or sets `commit.gpgsign` off or unsets it
+
+Reading a key (`git config --get`) and text inside a quoted message are not
+refused. Only that one command is refused: the tool call and every other
+command are recorded as usual.
+
+**The ref backstop refuses the branch update.** The hook reads command text,
+so a script file or plumbing passes it. `innsegl link` also installs a
+`reference-transaction` hook. git runs it for every ref update, whatever made
+it, and `--no-verify` does not skip it. In the `prepared` state, for each
+update of a `refs/heads/*` branch, it lists the commits the new value would
+add: reachable from it and from no branch, tag or remote-tracking ref. If any
+has no `gpgsig` header, the whole update is refused and the branch stays
+where it was. This covers commit, rebase, merge, cherry-pick, am,
+`commit-tree` with `update-ref`, and scripts. A new branch at existing
+commits, a reset, and a delete add no commit and pass.
+
+It acts only in an agent session: a shell where the harness set
+`CLAUDECODE`, or a command the hook gave `INNSEGL_TOOL_USE_ID`. The installed
+script checks this itself, so the operator's own git never runs innsegl
+here. In an agent session a missing `innsegl` binary refuses the update.
+A hook the repository already had is moved aside and still runs, with the
+same arguments and input.
+
+**While signing is down**, both refusals say `signing is down since <time>`
+and the reason, then `do not retry with signing off; keep working and commit
+after repair`. The outage comes from the core's signing probe (#583), as the
+client service last read it: the hook asks `GET /_client/status` at the
+address `core.json` names, with a 2-second limit. No client service, no
+reading yet, or a core that does not answer: the refusals carry no outage line.
+Afterwards, commit again with plain `git commit`, or run `innsegl resign` for
+unsigned commits already on a branch.
 
 ### What a hosted client sends to the core's mirror
 
@@ -177,6 +226,7 @@ intent (ADR-0051, ADR-0079). Nobody asks for it.
 |---|---|---|
 | `INNSEGL_CORE_URL` | `hook`, `git-hook`, `sign` | the client service, which forwards to the core (`internal/commitpath/commitpath.go:36`); the mirror pushes go only to a plain `http://` one |
 | `INNSEGL_TOOL_USE_ID` | `git-hook`, `sign` | the tool call id the hook injected |
+| `CLAUDECODE` | `git-hook reference-transaction` | set by the harness in an agent's shell; with it (or `INNSEGL_TOOL_USE_ID`) the ref backstop acts |
 | `INNSEGL_BIN_PATH` | `make link` | the binary to run [`./innsegl`] |
 | `INNSEGL_SIGN_AUTHOR_OPERATORS` | the core (`.env`) | pinned `Name <address>` pairs an agent commit may be authored as; empty by default |
 
@@ -187,7 +237,7 @@ behind the client certificate guard, and never another installation's).
 
 ## Files, volumes, containers
 
-- The repository's `prepare-commit-msg` and `post-commit` hooks, written by `innsegl link`.
+- The repository's `prepare-commit-msg`, `post-commit` and `reference-transaction` hooks, written by `innsegl link`.
 - `<git common dir>/innsegl/snapshots/objects` and `<git dir>/innsegl-snapshot-index`:
   the client's private snapshot store and index. A cache; the core's mirror is
   the evidence.
@@ -247,6 +297,7 @@ left where it was.
 | `hook pre-tool-use` | 0 | always; anything it cannot handle is left alone and refused later by git |
 | `hook session` | 2 | before a user turn only: the client service is unreachable, so the prompt is stopped |
 | `git-hook`, `sign` | 1 | refused (no resolvable tool call id, or the core said no); git aborts the commit |
+| `git-hook reference-transaction` | 1 | an agent session's branch update would add an unsigned commit, or its commits could not be checked; git refuses the whole update |
 | `link` | 2 | usage or a refusal; the message says which |
 | `resign` | 0 | re-signed, or nothing to sign |
 | `resign` | 2 | usage |
@@ -279,6 +330,11 @@ left where it was.
   the run page's step diffs read the mirror
 - `cmd/innsegl/hooklinked_test.go` (CMT-019, CMT-020): an unlinked repository is left alone;
   a linked one and its worktrees are rewritten as before
+- `cmd/innsegl/hookoffswitch_test.go` (CMT-021, JRN-011): every way of turning signing off
+  is refused; the refusal names a signing outage and stops only that command
+- `cmd/innsegl/hookreftx_test.go` (CMT-022): the ref backstop refuses an agent session's
+  unsigned commit from a script and from a rebase with signing off, and passes signed
+  updates and the operator's own commits
 - `cmd/innsegl/init*_test.go` (INIT-001 to INIT-010)
 - `internal/commitpath/*_test.go` (CMT-006, TLS-001, TLS-002)
 - `internal/mcp/signpayload_test.go`, `signpayload_crash_test.go` (CMT-007 to CMT-012)

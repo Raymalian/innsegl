@@ -37,10 +37,12 @@
 #     -f deploy/compose/sigstore.yml -f deploy/compose/sigstore.keycustody.yml up -d
 #                                   per start: bootstrap the root, run Fulcio on it
 #
-# WHY A SEPARATE NETWORK. The store is reachable from the CA and the
+# WHY A SEPARATE NETWORK. The store is reachable from its custodian and the
 # bootstrapper and from nothing else — the same shape doc 05 §1 gives the object
 # store's Filer. A secret store on the network every service shares is a secret
-# store whose token is worth stealing from any of them.
+# store whose token is worth stealing from any of them. The CA itself reaches
+# the store only through the custodian's signing gateway (#585), on a network
+# of its own.
 
 services:
 
@@ -222,19 +224,29 @@ services:
   # the networks, the read-only root, the dropped capabilities — is sigstore.yml's
   # and is not restated here, because an overlay that repeated them would be a
   # second copy to keep in step.
+  #
+  # FULCIO HOLDS NO TOKEN (#585). Its KMS client reads a token once, at start,
+  # and never again, and an unlock writes a new token and revokes the old one:
+  # a CA that held the token kept running on a revoked one until somebody
+  # restarted it. So the CA is not on the store's network at all. It asks the
+  # custodian's signing gateway, on a network the two of them share, and the
+  # gateway forwards only the CA's two calls (sign, read the key's public
+  # half) with the token it holds now. A token change never reaches Fulcio,
+  # and a reader of Fulcio's container finds no token to take away.
   fulcio:
     depends_on:
       innsegl-ca-bootstrap:
         condition: service_completed_successfully
     networks:
-      - innsegl-ca-store
+      - innsegl-ca-sign
     environment:
-      VAULT_ADDR: http://innsegl-ca-store:8200
-      # ADR-0076: the KMS client reads VAULT_TOKEN, then ~/.vault-token, once
-      # at start. HOME is the token volume, where the custodian writes the
-      # token; empty here unless a deployment passes its own.
-      VAULT_TOKEN: ${INNSEGL_CA_STORE_TOKEN:-}
-      HOME: /run/ca-token
+      VAULT_ADDR: http://innsegl-ca-signer:8211
+      # NOT A CREDENTIAL. The pinned KMS client refuses to start with no
+      # token at all ("no Vault token found in env, helper, or
+      # ~/.vault-token"), so it is given this fixed string, which the store
+      # never issued; the gateway drops it and sends the current token
+      # (cacustody.FulcioPlaceholderToken, OPS-187).
+      VAULT_TOKEN: innsegl-ca-custodian-supplies-the-token
     command:
       - "serve"
       - "--host=0.0.0.0"
@@ -254,7 +266,6 @@ services:
       # which is what OPS-049 reads the filesystem for. This volume holds the
       # certificate and the issuer config, both public.
       - sigstore-fulcio-kms:/etc/fulcio:ro
-      - innsegl-ca-token:/run/ca-token:ro
 
   # ADR-0076. The custodian: it initialises a new store once, keeps the unlock
   # material sealed to the operator's recipients (ciphertext only, on a trust
@@ -274,11 +285,26 @@ services:
     depends_on:
       innsegl-ca-store:
         condition: service_healthy
+      # Started first, so the token volume stays mounted while the custodian
+      # is replaced (see innsegl-ca-token-keeper).
+      innsegl-ca-token-keeper:
+        condition: service_started
     networks:
-      - innsegl-ca-store
-      - innsegl-ca-unlock
+      innsegl-ca-store: {}
+      innsegl-ca-unlock: {}
+      # #585: the CA's network. The alias is the gateway's address, and the
+      # name the gateway listens on: resolved inside the custodian it is the
+      # custodian's own address on this network alone, so the core, on the
+      # unlock network, cannot reach the gateway (OPS-188).
+      innsegl-ca-sign:
+        aliases:
+          - innsegl-ca-signer
     labels:
       dev.innsegl.component: ca-custodian
+      # OPS-165: it mounts the CA's chain read-only, so a new chain
+      # recreates it. It also reads the chain on every status, so the label
+      # is the rule's mechanism, not what keeps its check current.
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_CA_CUSTODIAN:-}
     # The CA's uid, so the token it writes 0600 is one the CA can read.
     user: "65532:65532"
     read_only: true
@@ -292,12 +318,20 @@ services:
       INNSEGL_CA_CUSTODY_DIR: /custody
       INNSEGL_CA_TOKEN_PATH: /run/ca-token/.vault-token
       INNSEGL_CA_CUSTODIAN_LISTEN: ":8210"
+      # #585: the CA's signing gateway, bound to the alias above.
+      INNSEGL_CA_SIGN_LISTEN: "innsegl-ca-signer:8211"
       # Who can open the unlock material: the operator's machine. The trust
       # backup's recipients unless set apart (ADR-0074).
       INNSEGL_CA_CUSTODY_RECIPIENTS: ${INNSEGL_CA_CUSTODY_RECIPIENTS:-${INNSEGL_TRUST_BACKUP_RECIPIENTS:-}}
+      # The chain the CA presents (#582, OPS-186): the custodian checks the
+      # store's key is that chain's key, the check Fulcio makes only at
+      # start. Absent until the bootstrap writes it, which skips the check.
+      INNSEGL_CA_CHAIN_PATH: /etc/fulcio/chain.pem
     volumes:
       - innsegl-ca-custody-data:/custody
       - innsegl-ca-token:/run/ca-token
+      # Public: the certificate and the issuer config Fulcio reads.
+      - sigstore-fulcio-kms:/etc/fulcio:ro
     healthcheck:
       # Healthy once the store is initialised and the CA has a token: what
       # the bootstrap needs before it can mint the root.
@@ -306,6 +340,38 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  # #585. Holds the CA's token volume mounted, and does nothing else.
+  #
+  # The token volume is tmpfs, and a local tmpfs volume is mounted only while
+  # some container uses it: when the last one stops, the token is gone
+  # (measured: a file written by one container is absent for the next). Fulcio
+  # used to be that other user. Now that it holds no token, a custodian being
+  # recreated — every image change — would be the volume's only user, and the
+  # new custodian would start with no token: no signing until the operator's
+  # machine unlocked again. This container keeps the mount through any number
+  # of custodian recreations. Its definition is pinned and changes with
+  # nothing, so an update does not recreate it.
+  #
+  # It cannot read the token: it runs as nobody, and the volume is the CA's
+  # uid, mode 0700. No network, no capability, a read-only root.
+  innsegl-ca-token-keeper:
+    image: alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
+    container_name: innsegl-ca-token-keeper
+    restart: unless-stopped
+    entrypoint: ["sh", "-c"]
+    command: ["trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $$!; done"]
+    user: "65534:65534"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    labels:
+      dev.innsegl.component: ca-token-keeper
+    volumes:
+      - innsegl-ca-token:/run/ca-token:ro
 
 configs:
   innsegl-ca-store-config:
@@ -376,6 +442,11 @@ networks:
   innsegl-ca-unlock:
     name: ${INNSEGL_CA_UNLOCK_NETWORK:-innsegl-ca-unlock}
     internal: true
+  # #585. MEMBERS: fulcio and innsegl-ca-custodian, whose signing gateway is
+  # the CA's only way to the store. Internal: it reaches nothing.
+  innsegl-ca-sign:
+    name: ${INNSEGL_CA_SIGN_NETWORK:-innsegl-ca-sign}
+    internal: true
 
 volumes:
   # The plaintext key's only resting place, and it is memory. tmpfs so the
@@ -409,7 +480,9 @@ volumes:
 
   # ADR-0076. The CA's token, in memory only: gone at a reboot, when the store
   # is sealed anyway. Owned by the CA's uid so the custodian, running as it,
-  # can write the token there.
+  # can write the token there. Mounted by the custodian (which reads it for
+  # the signing gateway), the bootstrap, and innsegl-ca-token-keeper, which
+  # keeps it mounted; not by Fulcio (#585).
   innsegl-ca-token:
     name: ${INNSEGL_CA_TOKEN_VOLUME:-innsegl-ca-token}
     driver: local

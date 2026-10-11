@@ -75,12 +75,38 @@ innsegl ca-custody unlock
 
 **Check:** `innsegl ca-custody status` prints `unlocked; the CA can sign`.
 
-Fulcio may take up to a minute to come back after the unlock: it restarts on
-its own once its token is there. While the store is sealed, Fulcio's log
-reads `ecdsa public keys are not equal`.
+The same unlock repairs an unsealed store whose CA token is dead: `status`
+then prints `unlocked, but the CA CANNOT sign` with the reason, and `make
+update` prints `repair: on the operator machine, run: innsegl doctor`,
+which runs the same unlock. Signing resumes at once; no container restarts, because Fulcio
+holds no token (it signs through the custodian).
 
 If you decline the prompt, the service waits 15 minutes before asking again.
 `innsegl ca-custody unlock` asks at once.
+
+## Signing stopped — the operator's machine
+
+Signs: `innsegl status` prints `signing: FAILING since <time>`, the client
+service shows a notification, or a commit is refused with `signing is down`.
+
+1. Mac: run `innsegl doctor`. Approve Touch ID if it asks.
+2. If it prints a line starting `VM:`, run that command on the VM. Then run
+   `innsegl doctor` on the Mac again.
+3. Done when doctor prints `signing: OK (probe passed <time>)` and exits 0.
+4. Then: `innsegl resign` for any commit made unsigned during the outage, and
+   check that the dashboard's unsigned-commit alerts are cleared.
+
+Doctor checks, in order: the client service, the hooks in the repository,
+the core and its clock, the CA key store, the core's readiness, and the
+signing probe. It restarts the client service and unlocks the store itself.
+It never runs anything on the VM, and never removes a volume, resets or
+restores the store, or rotates the CA.
+
+If doctor says `ca custody: DRIFTED`, the store's key is not the key in
+Fulcio's `chain.pem`. Nothing on the Mac repairs that, and an unlock does
+not change it. It comes from a rotation or a restore that did not finish:
+see [trust-rotation.md](trust-rotation.md) and the Restore section below.
+Do not start the store over: Fulcio and the trust history depend on it.
 
 ## Rollback
 

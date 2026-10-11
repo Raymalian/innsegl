@@ -110,6 +110,12 @@ var commands = map[string]command{
 		summary: "sign the unsigned commits of a range on this branch again, through the core",
 		exec:    resignCommand,
 	},
+	// RM-339 (#583): the scheduled signing probe, run once, inside the core,
+	// for `make update`.
+	"signing-probe": {
+		summary: "ask the CA for one certificate now and say whether signing works",
+		exec:    signingProbeCommand,
+	},
 	"retire": {
 		summary: "end a run an operator knows is over",
 		exec:    retireCommand,
@@ -184,6 +190,9 @@ var commands = map[string]command{
 	// `ca-custodian` runs on the core; `ca-custody` on the operator's machine.
 	"ca-custodian": {summary: "keep the CA key store's custody on the core: init, renew, unlock", exec: caCustodianCommand},
 	"ca-custody":   {summary: "say whether the core's CA is sealed, and unlock it (Touch ID)", exec: caCustodyCommand},
+	// RM-344 (#588): the signing chain checked in order from the operator's
+	// machine, with only the repairs that cannot lose data.
+	"doctor": {summary: "check the signing chain to the core's CA and run the safe repairs (Touch ID)", exec: doctorCommand},
 	// ENF-010: which repositories author agent commits as the operator.
 	"author": {summary: "set which repositories author agent commits as the operator (I6)", exec: authorCommand},
 }
