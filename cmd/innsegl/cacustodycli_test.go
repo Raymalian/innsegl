@@ -93,9 +93,9 @@ func TestCLI021StatusOnADeadTokenSaysTheCACannotSign(t *testing.T) {
 	if code == exitOK || !strings.Contains(out.String(), reason) || strings.Contains(out.String(), "the CA can sign") {
 		t.Fatalf("status of an unsealed CA with a dead token: exit %d\n%s%s", code, out.String(), errOut.String())
 	}
-	// The unlock repairs a dead token (#586), and `make update` names it as
-	// the repair (#587): status names the same command.
-	if !strings.Contains(out.String(), "innsegl ca-custody unlock") {
+	// The unlock repairs a dead token (#586), and `make update` names
+	// `innsegl doctor` as the repair (#587, #588): status names both.
+	if !strings.Contains(out.String(), "innsegl doctor") || !strings.Contains(out.String(), "innsegl ca-custody unlock") {
 		t.Fatalf("status of a dead token does not name the repair `make update` names:\n%s", out.String())
 	}
 

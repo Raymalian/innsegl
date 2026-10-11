@@ -77,8 +77,8 @@ innsegl ca-custody unlock
 
 The same unlock repairs an unsealed store whose CA token is dead: `status`
 then prints `unlocked, but the CA CANNOT sign` with the reason, and `make
-update` prints `repair: on the operator machine, run: innsegl ca-custody
-unlock`. Signing resumes at once; no container restarts, because Fulcio
+update` prints `repair: on the operator machine, run: innsegl doctor`,
+which runs the same unlock. Signing resumes at once; no container restarts, because Fulcio
 holds no token (it signs through the custodian).
 
 If you decline the prompt, the service waits 15 minutes before asking again.

@@ -84,7 +84,7 @@ func runCACustody(ctx context.Context, args []string, stdout, stderr io.Writer, 
 				return exitCACustodySealed
 			}
 			fprintf(stdout, "ca custody: unlocked, but the CA CANNOT sign: %s\n", st.Reason)
-			fprintf(stdout, "ca custody: run `innsegl ca-custody unlock` to repair it; no restart\n")
+			fprintf(stdout, "ca custody: repair: run `innsegl doctor`, or `innsegl ca-custody unlock`; no restart\n")
 			return exitCACustodySealed
 		default:
 			fprintf(stdout, "ca custody: unlocked; the CA can sign\n")
