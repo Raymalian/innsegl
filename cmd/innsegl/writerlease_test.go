@@ -18,6 +18,55 @@ import (
 	"innsegl.dev/innsegl/internal/ledger"
 )
 
+// OPS-182, replicas: doc 05 §2 runs N MCP replicas on one ledger, with the
+// loops single-active. The lease is the singletons' (serve -also): a replica
+// with no companions serves beside the core that holds it.
+func TestOPS182AReplicaWithoutCompanionsServesBesideTheCore(t *testing.T) {
+	dsn, _, _ := freshLedgerDB(t)
+	leases := testLeases(t, dsn)
+	if _, err := leases.Acquire(t.Context(), "the-core", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	open := withWriterLease(func(context.Context, serveOptions, *serveLog) (servedMCP, error) {
+		return &fakeServer{}, nil
+	}, writerLeasePoll)
+	o := leaseTestOptions(dsn)
+	o.also = nil
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	s, err := open(ctx, o, newServeLog(&bytes.Buffer{}))
+	if err != nil {
+		t.Fatalf("a replica with no companions waited for the core's lease: %v", err)
+	}
+	s.Close()
+	if held, live, err := leases.Status(t.Context()); err != nil || !live || held.Holder != "the-core" {
+		t.Fatalf("the replica touched the core's lease: %+v live %v %v", held, live, err)
+	}
+}
+
+// OPS-182, fail fast: a core whose role -require-append-only-role refuses
+// is refused at once, naming what the role holds, rather than waiting for a
+// lease another core holds.
+func TestOPS182ARefusedRoleFailsBeforeWaitingForTheLease(t *testing.T) {
+	dsn, _, _ := freshLedgerDB(t) // the owning role: it holds DELETE
+	leases := testLeases(t, dsn)
+	if _, err := leases.Acquire(t.Context(), "the-core", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	open := withWriterLease(func(context.Context, serveOptions, *serveLog) (servedMCP, error) {
+		t.Error("the server was opened under a refused role")
+		return &fakeServer{}, nil
+	}, writerLeasePoll)
+	o := leaseTestOptions(dsn)
+	o.requireRole = true
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	_, err := open(ctx, o, newServeLog(&bytes.Buffer{}))
+	if err == nil || !strings.Contains(err.Error(), "DELETE") {
+		t.Fatalf("open under the owning role with -require-append-only-role = %v; want a refusal naming DELETE, at once", err)
+	}
+}
+
 // OPS-182, a killed core: the next core on the same ledger starts within a
 // poll of the old one's death, not after its lease's TTL (MCP-011 restarts a
 // SIGKILLed core again and again).
@@ -107,7 +156,8 @@ func testLeases(t *testing.T, dsn string) *ledger.Leases {
 }
 
 func leaseTestOptions(dsn string) serveOptions {
-	return serveOptions{dsn: dsn, writerLeaseTTL: 300 * time.Millisecond}
+	// A core: it runs the single-active companions, so it takes the lease.
+	return serveOptions{dsn: dsn, writerLeaseTTL: 300 * time.Millisecond, also: []string{"gateway"}}
 }
 
 func TestOPS182TheCoreServesOnlyUnderTheWriterLease(t *testing.T) {
