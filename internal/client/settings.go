@@ -9,6 +9,8 @@ package client
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -278,6 +281,18 @@ func installKeys(obj *object, cfg SettingsConfig, path string, out io.Writer) er
 	if err != nil {
 		return err
 	}
+	// Every innsegl entry but the one this run writes per event goes: an
+	// entry naming another or a removed binary would still run (RM-347).
+	desired := cfg.hookCommands()
+	written := map[string]bool{}
+	pruneInnseglHooks(hooks, func(event, cmd string) bool {
+		if desired[event] != cmd || written[event] {
+			fmt.Fprintf(out, "innsegl: removed hooks.%s entry %q from %s: connect did not write it; the backup keeps it\n", event, cmd, path)
+			return false
+		}
+		written[event] = true
+		return true
+	})
 	if err = installHook(hooks, "PreToolUse", hookGroup("Bash", cfg.preToolUseCommand()), cfg); err != nil {
 		return err
 	}
@@ -448,6 +463,89 @@ func hookGroup(matcher, command string) *object {
 	return g
 }
 
+// innseglHookArgs are the arguments every hook command connect has ever
+// written ends in.
+var innseglHookArgs = []string{" hook pre-tool-use", " hook post-tool-use", " hook session"}
+
+// isInnseglHookCommand reports whether cmd runs an innsegl binary's hook,
+// at any path, present or not: its program, unquoted, is named innsegl and
+// its arguments are one of innseglHookArgs (RM-347).
+func isInnseglHookCommand(cmd string) bool {
+	for _, args := range innseglHookArgs {
+		prog, ok := strings.CutSuffix(cmd, args)
+		if !ok {
+			continue
+		}
+		prog = strings.TrimSpace(prog)
+		if len(prog) >= 2 && (prog[0] == '\'' || prog[0] == '"') && prog[len(prog)-1] == prog[0] {
+			prog = prog[1 : len(prog)-1]
+		}
+		return prog[strings.LastIndex(prog, "/")+1:] == "innsegl"
+	}
+	return false
+}
+
+// hookCommands is the one command connect writes for each hook event.
+func (c SettingsConfig) hookCommands() map[string]string {
+	m := map[string]string{"PreToolUse": c.preToolUseCommand(), "PostToolUse": c.postToolUseCommand()}
+	for _, event := range sessionHookEvents {
+		m[event] = c.sessionCommand()
+	}
+	return m
+}
+
+// pruneInnseglHooks walks every hook event and drops each innsegl hook
+// entry keep refuses, keeping every other hook in place. A group left with
+// no hooks goes, and so does an event left with no groups.
+func pruneInnseglHooks(hooks *object, keep func(event, cmd string) bool) {
+	for _, event := range append([]string(nil), hooks.keys...) {
+		groups, isList := hooks.vals[event].([]any)
+		if !isList {
+			continue
+		}
+		kept := []any{}
+		for _, g := range groups {
+			inner := groupHooks(g)
+			if inner == nil {
+				kept = append(kept, g)
+				continue
+			}
+			filtered := []any{}
+			for _, h := range inner {
+				if cmd, ok := innseglHookCommand(h); !ok || keep(event, cmd) {
+					filtered = append(filtered, h)
+				}
+			}
+			if len(filtered) == len(inner) {
+				kept = append(kept, g)
+				continue
+			}
+			if o, isObj := g.(*object); isObj && len(filtered) > 0 {
+				o.set("hooks", filtered)
+				kept = append(kept, g)
+			}
+		}
+		if len(kept) == 0 {
+			hooks.del(event)
+		} else if len(kept) != len(groups) {
+			hooks.set(event, kept)
+		}
+	}
+}
+
+// innseglHookCommand returns h's command when h is a command hook that runs
+// an innsegl binary's hook.
+func innseglHookCommand(h any) (string, bool) {
+	o, ok := h.(*object)
+	if !ok {
+		return "", false
+	}
+	typ, _ := o.get("type")
+	v, _ := o.get("command")
+	cmd, isString := v.(string)
+	return cmd, isString && typ == "command" && isInnseglHookCommand(cmd)
+}
+
 func isOurHook(v any, cfg SettingsConfig) bool {
 	h, ok := v.(*object)
 	if !ok {
@@ -556,37 +654,14 @@ func uninstallKeys(obj *object, cfg SettingsConfig, path string, out io.Writer) 
 	}
 
 	if hooks, ok := childIfObject(obj, "hooks"); ok {
-		for _, event := range append([]string{"PreToolUse", "PostToolUse"}, sessionHookEvents...) {
-			groups, isList := hooks.vals[event].([]any)
-			if !isList {
-				continue
+		// Every innsegl entry, wherever its binary is (RM-347).
+		desired := cfg.hookCommands()
+		pruneInnseglHooks(hooks, func(event, cmd string) bool {
+			if desired[event] != cmd {
+				fmt.Fprintf(out, "innsegl: removed hooks.%s entry %q from %s; the backup keeps it\n", event, cmd, path)
 			}
-			kept := []any{}
-			for _, g := range groups {
-				inner := groupHooks(g)
-				if inner == nil {
-					kept = append(kept, g)
-					continue
-				}
-				filtered := []any{}
-				for _, h := range inner {
-					if !isOurHook(h, cfg) {
-						filtered = append(filtered, h)
-					}
-				}
-				if len(filtered) > 0 {
-					if o, isObj := g.(*object); isObj {
-						o.set("hooks", filtered)
-					}
-					kept = append(kept, g)
-				}
-			}
-			if len(kept) > 0 {
-				hooks.set(event, kept)
-			} else {
-				hooks.del(event)
-			}
-		}
+			return false
+		})
 		dropIfEmpty(obj, "hooks", hooks)
 	}
 
@@ -660,9 +735,12 @@ func writable(path string) bool {
 }
 
 // stageForAdmin writes newText to a temporary file and returns the one
-// command that installs it at path. install -m 0644, not cp: the temporary
-// file is 0600, and cp would keep that, leaving settings the harness,
-// running as the user, cannot read.
+// command that installs it at path. The command copies the staged file to a
+// temporary file of root's, checks the copy against the SHA-256 newText had
+// when staged, and installs only that copy (RM-347): a staged file changed
+// after staging, by anything running as the user, is refused. install -m
+// 0644, not cp: the copy is 0600, and the harness, running as the user,
+// must read the settings.
 func stageForAdmin(path string, newText []byte) error {
 	f, err := os.CreateTemp("", "innsegl-managed-settings.*.json")
 	if err != nil {
@@ -675,12 +753,30 @@ func stageForAdmin(path string, newText []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
+	sum := sha256.Sum256(newText)
 	return &NotWritableError{
-		Path:   path,
-		Staged: f.Name(),
-		Command: fmt.Sprintf("sudo mkdir -p %s && sudo install -m 0644 %s %s",
-			shellQuote(filepath.Dir(path)), shellQuote(f.Name()), shellQuote(path)),
+		Path:    path,
+		Staged:  f.Name(),
+		Command: "sudo sh -c " + shellQuote(adminInstallScript(f.Name(), path, hex.EncodeToString(sum[:]))),
 	}
+}
+
+// adminInstallScript is the script stageForAdmin's command runs as root.
+// set -e stops it at the first failure, and the hash check is the last
+// command of its pipeline, so a mismatch installs nothing.
+func adminInstallScript(staged, path, sum string) string {
+	return fmt.Sprintf(`set -e; t=$(mktemp); trap 'rm -f "$t"' EXIT; cat %s > "$t"; echo "%s  $t" | %s; mkdir -p %s; install -m 0644 "$t" %s`,
+		shellQuote(staged), sum, sha256CheckCommand(runtime.GOOS), shellQuote(filepath.Dir(path)), shellQuote(path))
+}
+
+// sha256CheckCommand is the checker each OS ships: shasum on macOS,
+// coreutils' sha256sum elsewhere. Both read "<hash>  <file>" on stdin and
+// exit non-zero on a mismatch.
+func sha256CheckCommand(goos string) string {
+	if goos == "darwin" {
+		return "shasum -a 256 -c -"
+	}
+	return "sha256sum -c -"
 }
 
 // Pause moves the managed settings to <path>.paused, byte for byte, so the

@@ -96,6 +96,26 @@ Default managed-settings path: `/Library/Application Support/ClaudeCode/managed-
 on macOS, `/etc/claude-code/managed-settings.json` elsewhere
 (`cmd/innsegl/connect.go:130`).
 
+An innsegl hook entry is any command hook whose program is named `innsegl`,
+at any path and whether or not the file is still there, followed by `hook
+pre-tool-use`, `hook post-tool-use` or `hook session`. `connect` keeps one
+entry per event, the one it writes for this binary, and removes every other
+innsegl entry, saying each one it removes (an older binary's path, a
+duplicate, an event it no longer uses). `--disconnect` removes every innsegl
+entry. Hooks that are not innsegl's stay in place.
+
+When this user cannot write the managed settings, connect stages the new file
+in the temporary directory and prints one command to run as an administrator:
+
+```sh
+sudo sh -c 'set -e; t=$(mktemp); …; cat <staged> > "$t"; echo "<sha256>  $t" | shasum -a 256 -c -; mkdir -p <dir>; install -m 0644 "$t" <managed-settings>'
+```
+
+It copies the staged file to a temporary file owned by root, checks that copy
+against the SHA-256 the file had when staged, and installs only that copy. A
+staged file changed after staging fails the check and nothing is installed.
+On Linux the check is `sha256sum -c -`.
+
 ## Files, volumes, containers
 
 Under `~/.innsegl/client/` (`internal/client/files.go:50`):
@@ -256,6 +276,10 @@ says to revoke the machine from the Account page.
 - `internal/hostdeps/hostdeps_test.go`, `cmd/innsegl/preflight_test.go`
   (CLI-027, PROPOSED: every missing tool named in one run, with this OS's
   command; connect refuses before writing anything)
+- `internal/client/settingshooks_test.go` (CLI-034, CLI-035, CLI-036,
+  PROPOSED: connect replaces stale innsegl hook entries and keeps foreign
+  ones; disconnect removes every innsegl entry; the administrator command
+  refuses a staged file changed after staging)
 
 ## Decisions
 
