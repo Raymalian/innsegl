@@ -27,7 +27,9 @@ import (
 //     pasted deep link has to be answered with the page that resolves it;
 //   - hashed /assets/ files are cached for a year; index.html never is,
 //     because it names the current hashes; other files are revalidated;
-//   - three security headers on every response (securityHeaders).
+//   - a strict Content-Security-Policy and three hardening headers on
+//     every response (securityHeaders), and an index.html with an inline
+//     script refused at start, because that policy would block it (#612).
 //
 // Files are opened through os.Root, so neither `..` nor a symbolic link
 // reaches anything outside the UI directory.
@@ -86,25 +88,165 @@ func DashboardHandler(apiHandler http.Handler, uiDir string) (http.Handler, erro
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("api: the UI directory's %s is not a file", uiIndex)
 	}
+	page, err := root.ReadFile(uiIndex)
+	if err != nil {
+		return nil, fmt.Errorf("api: read the UI directory's %s: %w", uiIndex, err)
+	}
+	if found := inlineScript(string(page)); found != "" {
+		return nil, fmt.Errorf("api: the UI directory's %s carries an inline script (%s), "+
+			"which the dashboard's Content-Security-Policy blocks; rebuild the UI with web/vite.config.ts", uiIndex, found)
+	}
 	return securityHeaders(&uiHandler{api: apiHandler, root: root}), nil
 }
 
-// securityHeaders sets the three headers the nginx config added to every
-// response, with its values. Set, not Add, so a header the query API also
-// sets (nosniff, server.go) appears once.
+// dashboardCSP is the dashboard's Content-Security-Policy (#612, FE-155).
+// Script, style, image, font and fetch all come from this origin and from
+// nowhere else; nothing inline runs, nothing is evaluated from a string, no
+// plugin loads, no <base> re-points relative URLs, no other site frames the
+// page and no form posts elsewhere. A page that handles unlock material must
+// not run injected script, and this is what stops it.
 //
-// No Content-Security-Policy, as before: index.html carries a blocking
-// inline script (the theme bootstrap, FE-018), so an honest policy needs a
-// nonce, and that is E8's. No Strict-Transport-Security, as before: the
-// plain-HTTP address stays for localhost (ADR-0066's amendment).
+// There is no nonce because there is nothing inline to vouch for: the theme
+// bootstrap is moved to its own file by web/vite.config.ts at build, and
+// DashboardHandler refuses an index.html that still carries one. WebAuthn
+// (navigator.credentials) is not governed by CSP; its requests to
+// /api/v1/auth/ are same-origin fetches, which connect-src allows.
+const dashboardCSP = "default-src 'self'; script-src 'self'; style-src 'self'; " +
+	"img-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; " +
+	"base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+
+// securityHeaders sets the policy and the three headers the nginx config
+// added to every response, with its values. Set, not Add, so a header the
+// query API also sets (nosniff, server.go) appears once. The policy is on
+// the API's JSON too: it costs nothing there and covers any response a
+// browser is tricked into rendering.
+//
+// No Strict-Transport-Security, as before: the plain-HTTP address stays for
+// localhost (ADR-0066's amendment).
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
+		h.Set("Content-Security-Policy", dashboardCSP)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// inlineScript reports the first piece of script in page that dashboardCSP
+// would block — a <script> with a body or without a src, an on* event
+// attribute, a javascript: URL — or "" when there is none. It reads the one
+// file the build writes, not arbitrary HTML: tags and attributes as the HTML
+// tokenizer splits them, comments skipped, script bodies read to </script.
+func inlineScript(page string) string {
+	lower := strings.ToLower(page)
+	for i := 0; i < len(lower); {
+		lt := strings.IndexByte(lower[i:], '<')
+		if lt < 0 {
+			return ""
+		}
+		i += lt
+		if strings.HasPrefix(lower[i:], "<!--") {
+			end := strings.Index(lower[i+4:], "-->")
+			if end < 0 {
+				return ""
+			}
+			i += 4 + end + 3
+			continue
+		}
+		name, attrs, next := scanTag(lower, i+1)
+		i = next
+		for _, a := range attrs {
+			if strings.HasPrefix(a.name, "on") {
+				return "an " + a.name + " attribute"
+			}
+			if strings.HasPrefix(strings.TrimSpace(a.value), "javascript:") {
+				return "a javascript: URL"
+			}
+		}
+		if name != "script" {
+			continue
+		}
+		hasSrc := false
+		for _, a := range attrs {
+			if a.name == "src" {
+				hasSrc = true
+			}
+		}
+		end := strings.Index(lower[i:], "</script")
+		if end < 0 {
+			return "an unterminated <script>"
+		}
+		body := lower[i : i+end]
+		i += end
+		if !hasSrc || strings.TrimSpace(body) != "" {
+			return "a <script> without src"
+		}
+	}
+	return ""
+}
+
+type tagAttr struct{ name, value string }
+
+// scanTag reads the tag whose name starts at i (just after '<') and returns
+// its name, its attributes and the index after its '>'. A closing tag or a
+// declaration has a name starting with '/' or '!' and is skipped whole.
+func scanTag(s string, i int) (string, []tagAttr, int) {
+	isSpace := func(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' }
+	start := i
+	for i < len(s) && !isSpace(s[i]) && s[i] != '>' && s[i] != '/' {
+		i++
+	}
+	if i == start && i < len(s) && s[i] == '/' {
+		// "</name ...>": a closing tag.
+		for i < len(s) && s[i] != '>' {
+			i++
+		}
+		return "", nil, min(i+1, len(s))
+	}
+	name := s[start:i]
+	var attrs []tagAttr
+	for i < len(s) {
+		for i < len(s) && (isSpace(s[i]) || s[i] == '/') {
+			i++
+		}
+		if i >= len(s) || s[i] == '>' {
+			return name, attrs, min(i+1, len(s))
+		}
+		ns := i
+		for i < len(s) && !isSpace(s[i]) && s[i] != '>' && s[i] != '=' && s[i] != '/' {
+			i++
+		}
+		a := tagAttr{name: s[ns:i]}
+		for i < len(s) && isSpace(s[i]) {
+			i++
+		}
+		if i < len(s) && s[i] == '=' {
+			i++
+			for i < len(s) && isSpace(s[i]) {
+				i++
+			}
+			if i < len(s) && (s[i] == '"' || s[i] == '\'') {
+				q := s[i]
+				i++
+				vs := i
+				for i < len(s) && s[i] != q {
+					i++
+				}
+				a.value = s[vs:i]
+				i = min(i+1, len(s))
+			} else {
+				vs := i
+				for i < len(s) && !isSpace(s[i]) && s[i] != '>' {
+					i++
+				}
+				a.value = s[vs:i]
+			}
+		}
+		attrs = append(attrs, a)
+	}
+	return name, attrs, i
 }
 
 type uiHandler struct {
