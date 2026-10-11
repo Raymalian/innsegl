@@ -75,6 +75,16 @@ builds (or loads a matching bundle from `dist/`) and runs
 `up -d --remove-orphans --no-build`. The deployed state is the commit plus a
 checksum of the compose `.env`.
 
+Signing is proved on both sides of the update (OPS-190, OPS-191, #587):
+`scripts/update-signing.sh before` runs the core's `innsegl signing-probe`
+(`docker exec <prefix>-mcp`) first and, if it already fails, says so, so the
+update is not blamed; `scripts/update-signing.sh after` runs it once the
+services are up. A failure exits 1 with the reason and one repair line:
+`innsegl ca-custody unlock` on the operator machine when custody is on, else
+`runbooks/ca-custody.md` section 3. Probe exit 36 (could not be set up) is
+reported as that, not as a signing failure. A stack with no Fulcio
+(`INNSEGL_FULCIO_URL` unset in the core) skips with `signing: not configured`.
+
 Every `up` goes through `scripts/compose-up.py` (OPS-165). Compose recreates
 a service only when its own definition changes; a service that reads a key,
 credential or config file at start would keep the old one. The script:
@@ -207,6 +217,8 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
 | `teardown-guard.sh` | 9 | REFUSED: would have destroyed a trust volume |
 | `image-bundle.sh` | 1 | refused (dirty tree, or a bundle that fails its checks) |
 | `make update` | 2 | SPIRE or Rekor is not running |
+| `update-signing.sh` (`make update`) | 1 | after the update, signing fails or the probe could not be set up; reason and repair line printed |
+| `update-signing.sh before` | 35, 36 | the probe's own code; never stops the update |
 | `compose-up.py` (`make update`, `make start`) | 1 | a service the `up` started did not come up; named, with its last log lines |
 | `codesign-cli.sh` (`make build`) | 1 | the identity asked for is not held, or `codesign` failed |
 | `client-restart.sh` | 1 | not restarted: no service, it runs another binary (named), or the restart failed; or restarted and it did not answer within the timeout |
@@ -219,7 +231,7 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
   `updateenv_test.go` (OPS-135), `buildonce_test.go`, `imagebundle_test.go`,
   `hostports_test.go`, `bindaddress_test.go` (OPS-127), `oneprocess*_test.go`,
   `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134),
-  `startinputs_test.go` (OPS-165 to OPS-167, PROPOSED), `upwait_test.go` (OPS-179, PROPOSED)
+  `startinputs_test.go` (OPS-165 to OPS-167, PROPOSED), `upwait_test.go` (OPS-179, PROPOSED), `updatesigning_test.go` (OPS-190, OPS-191, PROPOSED)
 - `test/deploy/referencedocs_test.go` (DOC-001, PROPOSED)
 - `scripts/stack-mode-selftest.sh` (OPS-129), `innsegl-update-selftest.sh`,
   `image-bundle-selftest.sh`, `install-selftest.sh`, `setup-link-selftest.sh`,
