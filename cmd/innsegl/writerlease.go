@@ -59,6 +59,15 @@ func withWriterLease(open func(context.Context, serveOptions, *serveLog) (served
 		if ttl <= 0 {
 			ttl = defaultWriterLeaseTTL
 		}
+		// With -migrate the core makes its own schema (a fresh clone's
+		// bootstrap): the lease's table is one of the migrations, so they
+		// run first. Migrating twice is a no-op; openServer's own run then
+		// finds nothing to do.
+		if o.migrate {
+			if err := migrateLedger(ctx, o.dsn); err != nil {
+				return nil, err
+			}
+		}
 		leases, err := ledger.OpenLeases(ctx, o.dsn)
 		if err != nil {
 			return nil, fmt.Errorf("open the writer lease: %w", err)
@@ -85,6 +94,19 @@ func withWriterLease(open func(context.Context, serveOptions, *serveLog) (served
 		}
 		return &leasedServer{servedMCP: srv, held: h}, nil
 	}
+}
+
+// migrateLedger applies the shipped migrations through a store of its own.
+func migrateLedger(ctx context.Context, dsn string) error {
+	store, err := ledger.Open(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("open the ledger to migrate it: %w", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		return fmt.Errorf("apply the ledger migrations: %w", err)
+	}
+	return nil
 }
 
 // waitForWriterLease takes the lease, waiting while another core holds it or
@@ -145,8 +167,11 @@ func (h *heldLease) markLost(reason string, err error) {
 }
 
 // renew extends the lease every third of its life until ctx ends. A lease
-// taken over or frozen is lost at once; one that cannot be renewed is lost
-// when it expires, since the database refuses its appends from then on.
+// taken over or frozen is lost at once. One that cannot be renewed because
+// the ledger does not answer is kept trying: nobody else can take it while
+// the ledger is down, the database refuses this core's appends once it has
+// expired, and the next renewal that reaches the ledger either keeps it
+// (nobody took it) or finds it lost.
 func (h *heldLease) renew(ctx context.Context) {
 	tick := time.NewTicker(h.ttl / 3)
 	defer tick.Stop()
@@ -169,9 +194,6 @@ func (h *heldLease) renew(ctx context.Context) {
 			h.markLost("taken", err)
 			return
 		case ctx.Err() != nil:
-			return
-		case time.Now().After(cur.ExpiresAt):
-			h.markLost("expired unrenewed", err)
 			return
 		default:
 			h.log.warn("renewing the writer lease failed; trying again", "err", err)

@@ -6,13 +6,53 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"innsegl.dev/innsegl/internal/ledger"
 )
+
+// OPS-182, fresh database: a core started with -migrate on an empty ledger
+// (the bootstrap OPS-004 drives) migrates before it takes the lease. Taking
+// the lease first asked for a table no migration had made yet, and the core
+// never served (#580, measured in CI on a fresh clone).
+func TestOPS182AFreshLedgerIsMigratedBeforeTheLeaseIsTaken(t *testing.T) {
+	c := requireAPIPG(t)
+	name := fmt.Sprintf("lease_fresh_%d_%d", os.Getpid()%100000, apiDBSeq.Add(1))
+	admin, err := pgx.Connect(t.Context(), c.ownerDSN(apiPGDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(context.Background()) }()
+	if _, cerr := admin.Exec(t.Context(), "CREATE DATABASE "+apiQuoteIdent(name)); cerr != nil {
+		t.Fatal(cerr)
+	}
+	dsn := c.ownerDSN(name)
+	t.Cleanup(func() { ledger.UseProcessWriter("") })
+
+	opened := false
+	open := withWriterLease(func(context.Context, serveOptions, *serveLog) (servedMCP, error) {
+		opened = true
+		return &fakeServer{}, nil
+	}, 20*time.Millisecond)
+	o := leaseTestOptions(dsn)
+	o.migrate = true
+	var logs bytes.Buffer
+	s, err := open(t.Context(), o, newServeLog(&logs))
+	if err != nil || !opened {
+		t.Fatalf("open on a fresh ledger with -migrate = %v (opened %v)\n%s", err, opened, logs.String())
+	}
+	defer s.Close()
+	if _, live, err := testLeases(t, dsn).Status(t.Context()); err != nil || !live {
+		t.Fatalf("after open the lease is live %v (%v); want this core's", live, err)
+	}
+}
 
 // OPS-182 — the core takes the writer lease before it serves, waits while
 // another core or a freeze holds the ledger, stops when it loses the lease,

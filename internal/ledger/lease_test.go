@@ -104,6 +104,34 @@ func TestLED047OneCoreHoldsTheWriterLease(t *testing.T) {
 		}
 	})
 
+	t.Run("an expired lease nobody took is renewed by its holder", func(t *testing.T) {
+		// A core whose ledger was unreachable for longer than its lease
+		// (a Postgres restart) keeps it when nobody took it meanwhile: the
+		// epoch is unchanged, so no other core wrote. Its appends were
+		// refused while it was expired.
+		if err := leases.Release(ctx, a); err != nil {
+			t.Fatalf("Release core-a: %v", err)
+		}
+		x, err := leases.Acquire(ctx, "core-x", 50*time.Millisecond)
+		if err != nil {
+			t.Fatalf("core-x Acquire: %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
+		if _, aerr := openWriter(t, dsn, "core-x").Append(ctx, storeBody(7)); aerr == nil {
+			t.Fatal("core-x appended on an expired lease")
+		}
+		r, err := leases.Renew(ctx, x, time.Minute)
+		if err != nil || r.Epoch != x.Epoch {
+			t.Fatalf("core-x's Renew of its own expired, untaken lease = %+v, %v; want it kept", r, err)
+		}
+		if _, aerr := openWriter(t, dsn, "core-x").Append(ctx, storeBody(8)); aerr != nil {
+			t.Fatalf("core-x's append after renewing: %v", aerr)
+		}
+		if err := leases.Release(ctx, r); err != nil {
+			t.Fatalf("Release core-x: %v", err)
+		}
+	})
+
 	t.Run("an expired lease is taken over", func(t *testing.T) {
 		c, err := leases.Acquire(ctx, "core-c", 50*time.Millisecond)
 		if err != nil {
