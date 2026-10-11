@@ -107,6 +107,34 @@ func TestStatusNamesWhatIsDown(t *testing.T) {
 	}
 }
 
+// SIG-015 (RM-339, #583): a failing signing probe is one line that says
+// since when and why, and it is down.
+func TestSIG015StatusSaysSigningIsFailingSinceWhenAndWhy(t *testing.T) {
+	deps := statusFixture(t, `[{"name":"ledger","up":true},{"name":"signing","up":false,`+
+		`"detail":"FAILING since 2026-10-11T09:00:00Z — the CA refused the certificate: HTTP 500: error communicating with CA backend"}]`, true)
+	var out, errOut bytes.Buffer
+	if code := runStatus(t.Context(), nil, &out, &errOut, deps); code == exitOK {
+		t.Fatalf("exit 0 with signing failing; stdout:\n%s", out.String())
+	}
+	want := "signing: FAILING since 2026-10-11T09:00:00Z — the CA refused the certificate: HTTP 500: error communicating with CA backend\n"
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("stdout lacks %q:\n%s", want, out.String())
+	}
+	if !strings.Contains(errOut.String(), "down: signing") {
+		t.Errorf("stderr does not name signing:\n%s", errOut.String())
+	}
+
+	deps = statusFixture(t, `[{"name":"signing","up":true,"detail":"a certificate was issued at 2026-10-11T09:00:00Z"}]`, true)
+	out.Reset()
+	errOut.Reset()
+	if code := runStatus(t.Context(), nil, &out, &errOut, deps); code != exitOK {
+		t.Fatalf("exit %d with signing up; stderr:\n%s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "FAILING") || !strings.Contains(out.String(), "a certificate was issued at") {
+		t.Errorf("signing up:\n%s", out.String())
+	}
+}
+
 // The client's own status asks the core and waits up to three seconds when
 // the core does not answer. `innsegl status` gave the client those same
 // three seconds, so a core outage read as the client service being down too

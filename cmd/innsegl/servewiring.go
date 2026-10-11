@@ -28,6 +28,7 @@ import (
 	"innsegl.dev/innsegl/internal/mcp"
 	"innsegl.dev/innsegl/internal/rundir"
 	"innsegl.dev/innsegl/internal/signing"
+	"innsegl.dev/innsegl/internal/signprobe"
 	"innsegl.dev/innsegl/internal/spire"
 )
 
@@ -440,6 +441,20 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		return fail("configure the Sigstore readiness probe: %w", err)
 	}
 
+	// ---- the signing probe (RM-339, #583) ----------------------------------
+	//
+	// Fulcio serving its root says it is reachable, not that its CA can sign.
+	// This asks for a real certificate every five minutes, under a probe
+	// identity, with no transparency-log write, and /readyz reports it below.
+	signingProber, err := newSigningProber(o, mcp.NewSPIREMinter(mintConn))
+	if err != nil {
+		return fail("configure the signing probe: %w", err)
+	}
+	signingMonitor := signprobe.NewMonitor(signingProber, signprobe.DefaultInterval, nil)
+	probeCtx, stopProbe := context.WithCancel(ctx)
+	closers = append(closers, stopProbe)
+	go signingMonitor.Run(probeCtx)
+
 	// ---- pseudonymous identity (RM-079, #116) -----------------------------
 	//
 	// ONE pseudonymiser for the process, handed to both register_agent and
@@ -769,8 +784,11 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 		// open" published where a stranger can read it is an invitation.
 		AdminCredentialEnforced: adminCred != nil,
 		// doc 05 §2: the scheduled WORM canary's last run, from the file the
-		// sealer records it in. A report, never a reason to be unready.
-		Reports: canaryHealthReports(os.Getenv(envCanaryStatusFile), time.Now),
+		// sealer records it in; and the signing probe's (RM-339). Reports,
+		// never a reason to be unready.
+		Reports: joinHealthReports(
+			canaryHealthReports(os.Getenv(envCanaryStatusFile), time.Now),
+			signingHealthReports(signingMonitor)),
 	})
 	if err != nil {
 		return fail("build the health endpoints: %w", err)

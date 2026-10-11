@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/client"
+	"innsegl.dev/innsegl/internal/signprobe"
 	"innsegl.dev/innsegl/internal/trustbackup"
 	"innsegl.dev/innsegl/internal/trusthistory"
 	"innsegl.dev/innsegl/internal/version"
@@ -100,6 +101,13 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		} else {
 			line("core", true, st.Version)
 			for _, c := range st.Components {
+				if c.Name == signprobe.ReportName && !c.Up {
+					// RM-339: one line, untabulated, that reads as a
+					// sentence: `signing: FAILING since <time> — <reason>`.
+					down = append(down, c.Name)
+					fmt.Fprintf(tw, "%s: %s\n", c.Name, c.Detail)
+					continue
+				}
 				line(c.Name, c.Up, c.Detail)
 			}
 			// ADR-0073: a CA near expiry, or a sentinel that stopped

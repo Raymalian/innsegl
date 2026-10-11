@@ -89,6 +89,11 @@ Routes on its listener: model traffic, `/_gateway/session-end`,
 (enrol, renew, status, disconnect, journal, git, trust-backup, ca-custody,
 operator-author, unrouted-session).
 
+`/_core/status` lists the core's `/readyz` dependencies and reports as
+components, the signing probe's `signing` among them
+([signing-probe.md](signing-probe.md)); the client service reads it every
+minute.
+
 `/_core/unrouted-session` (RM-319) takes a machine's report of a session
 whose model traffic bypassed innsegl: `POST {"session_id", "last_activity_at"}`,
 behind the client guard, so the machine is the verified installation. It is

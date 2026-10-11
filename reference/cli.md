@@ -35,6 +35,7 @@ dispatch table is `commands` in `cmd/innsegl/cli.go`; a test asserts the set.
 | `innsegl seal` | seal ledger segments and anchor them in the log | [ledger-and-segments.md](ledger-and-segments.md) |
 | `innsegl serve` | run the core: the MCP server (its wire surface deprecated, ADR-0077) and, with `-also`, the gateway and the loops | [identity.md](identity.md), [gateway.md](gateway.md) |
 | `innsegl sign` | git's signing program: ask the core to sign a commit | [commit-path.md](commit-path.md) |
+| `innsegl signing-probe` | ask the CA for one certificate now and say whether signing works; runs on the core | [signing-probe.md](signing-probe.md) |
 | `innsegl status` | what is up and down between this machine and its core | [client-and-connect.md](client-and-connect.md) |
 | `innsegl trust-backup` | write, fetch or test-open the encrypted trust-key backup | [trust-key-backup.md](trust-key-backup.md) |
 | `innsegl trust-history` | read, record and end trust-history entries (for ca-rotate) | [trust-history.md](trust-history.md) |

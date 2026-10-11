@@ -93,6 +93,9 @@ type Server struct {
 	// unrouted is the unrouted-session detector (RM-319, unrouted.go).
 	unrouted *unroutedState
 
+	// signing remembers whether a signing outage was told (RM-339).
+	signing signingWatch
+
 	// The proxy (RM-329, connectproxy.go).
 	proxyCA     *proxyCA
 	passThrough *httputil.ReverseProxy
