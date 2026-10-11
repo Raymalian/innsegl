@@ -5,7 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -143,26 +143,62 @@ func (d *doctor) backupLine(check, noun, dir, rerun string, newest time.Time, fo
 	d.line(check, "ok", "newest "+noun+" is "+dur(age)+" old")
 }
 
-// backups reports the trust-key backup and the ledger backup on this machine.
-func (d *doctor) backups() {
+// backups reports the trust-key backup (the copies this machine fetched from
+// the core, the same source as `innsegl status`) and the ledger backup, which
+// the core reports: its backups are written there, not on this machine.
+func (d *doctor) backups(st coreStatus) {
 	newest, found := stampedNewest(d.paths.TrustBackups, "trust-backup-", ".tar.age", func(string) bool { return true })
 	d.backupLine("trust backup", "backup", d.paths.TrustBackups,
 		"run: innsegl trust-backup fetch", newest, found)
-
-	dir := filepath.Join(d.deps.home, ".innsegl", "backups")
-	// A dump without its verification report may be the remains of a run that
-	// died: it is not counted (the same rule scripts/backup-ledger.sh uses).
-	newest, found = stampedNewest(dir, "innsegl-", ".dump", func(name string) bool {
-		_, err := os.Stat(filepath.Join(dir, name+".verify.txt"))
-		return err == nil
-	})
-	d.backupLine("ledger backup", "verified dump", dir, d.backupRun(), newest, found)
+	d.ledgerBackup(st.LedgerBackup)
 }
 
-// backupRun is the command that takes a ledger backup now, on this OS.
-func (d *doctor) backupRun() string {
-	if d.deps.goos == "darwin" {
-		return "run: launchctl kickstart gui/" + fmt.Sprint(d.deps.uid) + "/dev.innsegl.backup-ledger"
+// ledgerBackup reports the backup service's last run as the core read it from
+// the service's marker. The marker holds the last run, not the last good one,
+// so a failed run is its own finding.
+func (d *doctor) ledgerBackup(b *ledgerBackupStatus) {
+	const check = "ledger backup"
+	switch {
+	case b == nil:
+		d.line(check, "not reported", "the core does not say; update the core")
+		return
+	case b.LastRunAt.IsZero():
+		d.line(check, "NONE", "the core reports no backup has completed")
+		d.vm("docker logs --tail 50 innsegl-backup")
+		return
 	}
-	return "run: scripts/backup-ledger.sh"
+	age := d.now().Sub(b.LastRunAt)
+	switch {
+	case b.Verdict == "failed" || b.Verdict == "mismatch":
+		d.line(check, "FAILING", "the core's last backup run "+b.Verdict+" ("+dur(age)+" ago)")
+		d.vm("docker logs --tail 50 innsegl-backup")
+	case age > doctorBackupWarn:
+		d.line(check, "STALE", "the core's last backup ran "+dur(age)+" ago (more than "+dur(doctorBackupWarn)+")")
+		d.vm("docker kill -s USR1 innsegl-backup")
+	default:
+		d.line(check, "ok", "the core's last backup ran "+dur(age)+" ago")
+	}
+}
+
+// coreLedgerBackup reads the backup service's marker at path, one line
+// "<unix seconds> <verdict>" (deploy/compose/innsegl/backup-loop.sh). An empty
+// path is a core that does not mount it: nil. A missing or unreadable marker is
+// an empty report: no backup has completed.
+func coreLedgerBackup(path string) *ledgerBackupStatus {
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path) //nolint:gosec // G703: the deployment's own marker path, from its environment
+	if err != nil {
+		return &ledgerBackupStatus{}
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) < 2 {
+		return &ledgerBackupStatus{}
+	}
+	secs, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil || secs <= 0 {
+		return &ledgerBackupStatus{}
+	}
+	return &ledgerBackupStatus{LastRunAt: time.Unix(secs, 0).UTC(), Verdict: fields[1]}
 }

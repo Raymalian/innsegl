@@ -54,6 +54,7 @@ type doctorCore struct {
 	unlockFix bool // an unlock makes the CA able to sign and the next probe pass
 	trust     []trusthistory.Expiry
 	server    *serverCertStatus
+	backup    *ledgerBackupStatus
 }
 
 func (c *doctorCore) mount(t *testing.T, f *connectFixture) {
@@ -105,7 +106,8 @@ func (c *doctorCore) mount(t *testing.T, f *connectFixture) {
 			},
 			Installation:      coreInstallation{ID: "inst-1", Repos: []string{"*"}},
 			TrustExpiries:     c.trust,
-			ServerCertificate: c.server})
+			ServerCertificate: c.server,
+			LedgerBackup:      c.backup})
 	})
 }
 

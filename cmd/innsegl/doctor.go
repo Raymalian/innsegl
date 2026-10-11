@@ -234,7 +234,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 	}
 	d.components(st)
 	expired := d.expiries(st)
-	d.backups()
+	d.backups(st)
 	code := d.signing(ctx, st, coreAt, unlocked, custodyOK, *wait)
 	if expired && code == exitOK {
 		return exitDoctorFailing

@@ -204,33 +204,65 @@ func TestCLI050TrustKeyBackupAge(t *testing.T) {
 	}
 }
 
-// CLI-051 — the newest verified ledger dump's age. A dump without its
-// verification report is not protection and is not counted.
-func TestCLI051LedgerBackupAge(t *testing.T) {
-	d := newDoctorRun(t, healthyDoctorCore())
-	dir := filepath.Join(d.f.home, ".innsegl", "backups")
-	old := "innsegl-" + stamp(40*time.Hour) + ".dump"
-	writeStamped(t, dir, old)
-	writeStamped(t, dir, old+".verify.txt")
-	writeStamped(t, dir, "innsegl-"+stamp(time.Hour)+".dump") // truncated: no report
-	_, out := d.run(t)
-	if got := lineStarting(out, "ledger backup:"); !strings.HasPrefix(got, "ledger backup: ok — newest verified dump is 40h old") {
-		t.Fatalf("line %q\n%s", got, out)
+// CLI-051 — the ledger backup line comes from the core, where the backups
+// are written, never from this machine's files. Stale past two days, a failed
+// or disagreeing last run is a finding, and a core with no backup says so.
+func TestCLI051LedgerBackupAgeComesFromTheCore(t *testing.T) {
+	ago := func(d time.Duration) time.Time { return time.Now().Add(-d) }
+	for name, tc := range map[string]struct {
+		backup *ledgerBackupStatus
+		want   string
+	}{
+		"fresh":      {&ledgerBackupStatus{LastRunAt: ago(40 * time.Hour), Verdict: "ok"}, "ledger backup: ok — the core's last backup ran 40h ago"},
+		"stale":      {&ledgerBackupStatus{LastRunAt: ago(5 * 24 * time.Hour), Verdict: "ok"}, "ledger backup: STALE — the core's last backup ran 5d ago"},
+		"failed":     {&ledgerBackupStatus{LastRunAt: ago(time.Hour), Verdict: "failed"}, "ledger backup: FAILING — the core's last backup run failed (1h ago)"},
+		"mismatch":   {&ledgerBackupStatus{LastRunAt: ago(time.Hour), Verdict: "mismatch"}, "ledger backup: FAILING — the core's last backup run mismatch (1h ago)"},
+		"none":       {&ledgerBackupStatus{}, "ledger backup: NONE — the core reports no backup has completed"},
+		"unreported": {nil, "ledger backup: not reported — the core does not say; update the core"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			core := healthyDoctorCore()
+			core.backup = tc.backup
+			d := newDoctorRun(t, core)
+			// Files on this machine say nothing: a fresh local dump must not
+			// hide a stale core.
+			writeStamped(t, filepath.Join(d.f.home, ".innsegl", "backups"), "innsegl-"+stamp(time.Minute)+".dump")
+			code, out := d.run(t)
+			if code != exitOK {
+				t.Fatalf("a backup finding must not fail doctor: exit %d\n%s", code, out)
+			}
+			if got := lineStarting(out, "ledger backup:"); !strings.HasPrefix(got, tc.want) {
+				t.Fatalf("line %q, want prefix %q\n%s", got, tc.want, out)
+			}
+			if strings.Contains(tc.want, "STALE") && !strings.Contains(out, "VM: ") {
+				t.Errorf("a stale backup names no command to take one on the core:\n%s", out)
+			}
+		})
 	}
+}
 
-	d2 := newDoctorRun(t, healthyDoctorCore())
-	dir2 := filepath.Join(d2.f.home, ".innsegl", "backups")
-	stale := "innsegl-" + stamp(5*24*time.Hour) + ".dump"
-	writeStamped(t, dir2, stale)
-	writeStamped(t, dir2, stale+".verify.txt")
-	code, out := d2.run(t)
-	if code != exitOK {
-		t.Fatalf("exit %d\n%s", code, out)
+// CLI-051 (core side) — the core reads the backup service's marker
+// ("<epoch> <verdict>") and reports it; no marker file is no backup, and no
+// configured marker is nothing reported.
+func TestCLI051TheCoreReadsTheBackupMarker(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), ".last-run")
+	if got := coreLedgerBackup(""); got != nil {
+		t.Errorf("no marker configured: %+v, want nil", got)
 	}
-	if got := lineStarting(out, "ledger backup:"); !strings.HasPrefix(got, "ledger backup: STALE — newest verified dump is 5d old") {
-		t.Fatalf("line %q\n%s", got, out)
+	if got := coreLedgerBackup(marker); got == nil || !got.LastRunAt.IsZero() || got.Verdict != "" {
+		t.Errorf("no marker file: %+v, want an empty report (no backup yet)", got)
 	}
-	if !strings.Contains(out, "dev.innsegl.backup-ledger") {
-		t.Errorf("a stale ledger backup names no command to take one:\n%s", out)
+	if err := os.WriteFile(marker, []byte("1700000000 ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := coreLedgerBackup(marker)
+	if got == nil || got.LastRunAt.Unix() != 1700000000 || got.Verdict != "ok" {
+		t.Errorf("marker read as %+v, want 1700000000 ok", got)
+	}
+	if err := os.WriteFile(marker, []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := coreLedgerBackup(marker); got == nil || !got.LastRunAt.IsZero() {
+		t.Errorf("unreadable marker read as %+v, want an empty report", got)
 	}
 }

@@ -50,7 +50,7 @@ The checks, in order:
 | `spire`, `ledger`, `sigstore`, `worm canary`, others | `/readyz` through `/_core/status` | none; prints a `VM:` line |
 | `client certificate`, `server certificate`, `Fulcio root CA`, `SPIRE upstream CA`, `gateway CA` | the service's certificate expiry, and `server_certificate` and `trust_expiries` in `/_core/status`. `EXPIRING` under 7 days (the client certificate lives hours and renews itself, so it is `EXPIRING` under 1 hour: the renewal is stuck); `EXPIRED` fails doctor (exit 37) | none; reports only |
 | `trust backup` | the newest `~/.innsegl/trust-backups/trust-backup-<stamp>.tar.age`: `STALE` past 2 days, `NONE` when there is none | none; prints `innsegl trust-backup fetch` |
-| `ledger backup` | the newest `~/.innsegl/backups/innsegl-<stamp>.dump` that has its `.verify.txt` report (a dump without it is not counted): `STALE` past 2 days, `NONE` | none; prints `launchctl kickstart gui/<uid>/dev.innsegl.backup-ledger` (macOS) or `scripts/backup-ledger.sh` |
+| `ledger backup` | the core's `ledger_backup` in `/_core/status`: the ledger backup service's last run, read from its marker (`INNSEGL_BACKUP_MARKER`; the backups are written on the core, not on this machine). `STALE` past 2 days; `FAILING` when the last run failed or disagreed with a sealed segment; `NONE` when none has completed; `not reported` from a core that does not send it | none; prints a `VM:` line |
 | `signing` | the signing probe's report | after an unlock, waits up to `--wait` for a probe that passed after it |
 
 The last line is `signing: OK (probe passed <time>)` when signing works.
@@ -113,7 +113,7 @@ unlock` does ([ca-custody.md](ca-custody.md)).
 - `cmd/innsegl/doctorexpiry_test.go` (CLI-048 CA token time left, CLI-049
   certificate expiry, CLI-050 trust-key backup age, CLI-051 ledger backup age,
   PROPOSED): each line, the warn thresholds, an expired certificate fails and
-  a stale backup does not, nothing is run, and the token's seconds left pass
+  a stale backup does not, the ledger backup is the core's (a local dump file changes nothing), the core's marker is read, nothing is run, and the token's seconds left pass
   through the core's custody status
 - `cmd/innsegl/doctorincident_test.go` (OPS-192, PROPOSED): a real store;
   custodians recreated faster than renewal keep the token alive; on the old
