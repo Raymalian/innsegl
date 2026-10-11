@@ -20,12 +20,14 @@ import (
 )
 
 // TokenPeriod is how long the CA's token lives without a renewal. The
-// custodian renews it every RenewEvery; a custodian that stops renewing
-// leaves a token that is dead within a day.
+// custodian renews it when it starts and every RenewEvery after; the token
+// dies only when no custodian has run for a whole period.
 const TokenPeriod = 24 * time.Hour
 
-// RenewEvery is how often the custodian renews the CA's token.
-const RenewEvery = 8 * time.Hour
+// RenewEvery is how often a running custodian renews the CA's token. Every
+// custodian also renews once at start, so a custodian recreated more often
+// than this still keeps the token alive (#582).
+const RenewEvery = 15 * time.Minute
 
 // SignerPolicy is the only policy the CA's token carries.
 const SignerPolicy = "innsegl-ca-signer"
@@ -43,6 +45,9 @@ var ErrRefused = errors.New("ca custody: the store refused the credential")
 type Store struct {
 	Addr string
 	HTTP *http.Client
+	// Period is the token period Provision gives both roles. Zero is
+	// TokenPeriod; tests shorten it to watch a token live and die.
+	Period time.Duration
 }
 
 // SealStatus is the store's answer to "is it ready".
@@ -125,6 +130,10 @@ func signerPolicy(key string) string {
 // answers both roles' ids and one secret id each; the caller adds the unseal
 // key. rootToken is the token from Init.
 func (s *Store) Provision(ctx context.Context, rootToken, key string) (Material, error) {
+	period := int(TokenPeriod.Seconds())
+	if s.Period > 0 {
+		period = int(s.Period.Seconds())
+	}
 	steps := []struct {
 		method, path string
 		body         any
@@ -135,7 +144,7 @@ func (s *Store) Provision(ctx context.Context, rootToken, key string) (Material,
 		{http.MethodPost, "/v1/sys/auth/approle", map[string]string{"type": "approle"}},
 		{http.MethodPost, "/v1/auth/approle/role/" + RoleName, map[string]any{
 			"token_policies":     []string{SignerPolicy},
-			"token_period":       int(TokenPeriod.Seconds()),
+			"token_period":       period,
 			"secret_id_num_uses": 0,
 			"secret_id_ttl":      0,
 			"token_type":         "service",
@@ -144,7 +153,7 @@ func (s *Store) Provision(ctx context.Context, rootToken, key string) (Material,
 			"policy": "path \"sys/storage/raft/snapshot\" {\n  capabilities = [\"read\"]\n}\n"}},
 		{http.MethodPost, "/v1/auth/approle/role/" + SnapshotRoleName, map[string]any{
 			"token_policies":     []string{SnapshotPolicy},
-			"token_period":       int(TokenPeriod.Seconds()),
+			"token_period":       period,
 			"secret_id_num_uses": 0,
 			"secret_id_ttl":      0,
 			"token_type":         "service",

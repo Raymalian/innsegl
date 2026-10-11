@@ -24,8 +24,8 @@ import (
 //	serve   initialise it if it is new, then renew the CA's token and serve
 //	        the core: the store's status, the sealed unlock material, and the
 //	        unlock the operator's machine sends back
-//	ready   the container's health: the store unlocked and the CA's token
-//	        written, which is what Fulcio's bootstrap waits for
+//	ready   the container's health: the CA can sign (Status.CanSign), which
+//	        is what Fulcio's bootstrap waits for
 //	restore put a backup's store snapshot into a new store, sealed under the
 //	        original keys, for the operator's machine to unlock
 const (
@@ -35,6 +35,7 @@ const (
 	envCATokenPath  = "INNSEGL_CA_TOKEN_PATH" //nolint:gosec // G101: a variable's name, not its value
 	envCAStoreKey   = "INNSEGL_CA_STORE_KEY"
 	envCAListen     = "INNSEGL_CA_CUSTODIAN_LISTEN"
+	envCAChainPath  = "INNSEGL_CA_CHAIN_PATH"
 )
 
 // exitCACustodyFailed: the custodian could not start, or init failed.
@@ -43,13 +44,13 @@ const exitCACustodyFailed = 27
 const caCustodianUsage = `Usage:
   innsegl ca-custodian init     initialise a new CA key store, once
   innsegl ca-custodian serve    initialise it if new; renew the CA's token; serve the core
-  innsegl ca-custodian ready    exit 0 when the store is unlocked and the CA has a token
+  innsegl ca-custodian ready    exit 0 when the CA can sign: store unlocked, token alive, key readable and matching the chain
   innsegl ca-custodian restore SNAPSHOT
                                 put a backup's store into a new store (runbooks/ca-custody.md)
 
 From the environment: ` + envCAStoreAddr + `, ` + envCARecipients + `,
 ` + envCADir + `, ` + envCATokenPath + `, ` + envCAStoreKey + ` (default innsegl-ca),
-` + envCAListen + ` (serve; default :8210).
+` + envCAListen + ` (serve; default :8210), ` + envCAChainPath + ` (the CA's chain.pem; unset skips the key match).
 `
 
 func caCustodianCommand(args []string, stdout, stderr io.Writer) int {
@@ -85,8 +86,8 @@ func runCACustodian(ctx context.Context, args []string, stdout, stderr io.Writer
 			fprintf(stderr, "innsegl ca-custodian: not ready: the store is not initialised\n")
 		case st.Sealed:
 			fprintf(stderr, "innsegl ca-custodian: not ready: the store is sealed; the operator's machine unlocks it\n")
-		case !st.TokenPresent:
-			fprintf(stderr, "innsegl ca-custodian: not ready: the CA has no token yet\n")
+		case !st.CanSign:
+			fprintf(stderr, "innsegl ca-custodian: not ready: %s\n", st.Reason)
 		default:
 			return exitOK
 		}
@@ -142,6 +143,7 @@ func custodianFromEnv(getenv func(string) string, log io.Writer) (*cacustody.Cus
 		Dir:        dir,
 		TokenPath:  tokenPath,
 		Key:        envOrDefault(getenv, envCAStoreKey, "innsegl-ca"),
+		ChainPath:  getenv(envCAChainPath),
 		Recipients: recipients,
 		Log:        log,
 	}, nil

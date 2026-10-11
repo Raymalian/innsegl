@@ -15,9 +15,11 @@ const (
 // CoreStatus is the core's answer on CorePath. Enabled false is a core that
 // keeps its CA key in a file.
 type CoreStatus struct {
-	Enabled      bool   `json:"enabled"`
-	Initialized  bool   `json:"initialized"`
-	Sealed       bool   `json:"sealed"`
-	TokenPresent bool   `json:"token_present"`
-	Error        string `json:"error,omitempty"`
+	Enabled     bool `json:"enabled"`
+	Initialized bool `json:"initialized"`
+	Sealed      bool `json:"sealed"`
+	// CanSign and Reason are the custodian's Status, passed through.
+	CanSign bool   `json:"can_sign"`
+	Reason  string `json:"reason,omitempty"`
+	Error   string `json:"error,omitempty"`
 }

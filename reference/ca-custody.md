@@ -12,7 +12,7 @@ default: the shipped stack is the file CA (OPS-051).
 ```
 innsegl ca-custodian init                  initialise a new CA key store, once
 innsegl ca-custodian serve                 initialise if new; renew the CA's token; serve the core
-innsegl ca-custodian ready                 exit 0 when the store is unlocked and the CA has a token
+innsegl ca-custodian ready                 exit 0 when the CA can sign: store unlocked, token alive, key readable and matching the chain
 innsegl ca-custodian restore SNAPSHOT      put a backup's store into a new store
 innsegl ca-custody status                  say whether the core's CA can sign
 innsegl ca-custody unlock [--identity F]   unlock it if it is sealed (asks for Touch ID)
@@ -53,12 +53,34 @@ the manual path from before the custodian.
 | `INNSEGL_CA_TOKEN_PATH` | | the CA's token file (memory-backed volume) |
 | `INNSEGL_CA_STORE_KEY` | `innsegl-ca` | the CA key's name in the store |
 | `INNSEGL_CA_CUSTODIAN_LISTEN` | `:8210` | `serve` |
+| `INNSEGL_CA_CHAIN_PATH` | unset | the chain the CA presents; the custodian requires the store's key to match its first certificate. Unset, or not yet written, skips that check |
 | `INNSEGL_CA_CUSTODIAN_URL` | | where the core reaches the custodian |
 | `ca-custody --identity` | `~/.innsegl/trust-backup/identity.txt` | the age identity that opens the material |
 
-The custodian renews the CA token every 8 hours and snapshots the store
-hourly and at every init and unlock. A declined Touch ID prompt is not asked
-again for 15 minutes.
+The custodian renews the CA token when it starts and every 15 minutes after.
+The token period is 24 hours, so the token dies only when no custodian has
+run for a day, however often the custodian is recreated. A refused renewal is
+logged at once. The custodian snapshots the store hourly and at every init
+and unlock. A declined Touch ID prompt is not asked again for 15 minutes.
+
+## Can the CA sign
+
+The custodian's status (`/status`, the core's `/_core/ca-custody`) carries
+`can_sign` and, when false, `reason`. It is tested on every call, in this
+order, and makes no signature:
+
+| Check | Reason when it fails |
+|---|---|
+| the store answers | `the store is not answering` |
+| initialised | `the store is not initialised` |
+| unsealed | `the store is sealed; the operator's machine unlocks it` |
+| a token file | `the CA has no token yet` |
+| the token's lookup succeeds with time left | `the CA's token was refused by the store`, or `has expired` |
+| the token reads the CA key | `the CA's token cannot read the CA key "<key>"` |
+| the key is the one in `INNSEGL_CA_CHAIN_PATH`'s first certificate | `... they have drifted, and Fulcio refuses to start on them` |
+
+`ca-custodian ready` and `ca-custody status` both read `can_sign` and print
+the reason.
 
 ## Files, volumes, containers
 
@@ -83,16 +105,18 @@ the custodian on an internal unlock network and logs none of what it carries.
 | Command | Code | Meaning |
 |---|---|---|
 | `ca-custodian`, `ca-custody` | 27 | the command failed |
-| `ca-custody status` | 28 | SEALED: the CA cannot sign |
+| `ca-custody status` | 28 | the CA cannot sign: SEALED, or unsealed with the reason printed |
+| `ca-custodian ready` | 27 | not ready: the reason is printed |
 | `ca-custody-restore`, `innsegl-ca-custody-init` | 2 | refused: missing `CONFIRM`/`FROM`, or a dev stack |
 | `ca-custody-reset` | 2 | missing `CONFIRM=reset` |
 | `ca-custody-reset` | 3 | refused: Fulcio runs on the store, its root is in the trust history, or the history could not be asked |
 
 ## Tests
 
-- `internal/cacustody/*_test.go` (OPS-136 to OPS-145, OPS-153 to OPS-155)
-- `cmd/innsegl/cacustodiancli_test.go` (OPS-146, OPS-155), `cacustodycli_test.go`
-  (BAK-029), `corecacustody_test.go` (OPS-147)
+- `internal/cacustody/*_test.go` (OPS-136 to OPS-145, OPS-153 to OPS-155,
+  OPS-183 to OPS-186 in `continuity_test.go`)
+- `cmd/innsegl/cacustodiancli_test.go` (OPS-146, OPS-155, OPS-185, OPS-186),
+  `cacustodycli_test.go` (BAK-029, CLI-021), `corecacustody_test.go` (OPS-147)
 - `cmd/ca-bootstrap/*_test.go` (OPS-049, OPS-050, OPS-052, OPS-148)
 - `internal/client/cacustody_test.go` (BAK-026 to BAK-028)
 - `test/deploy/cacustody_test.go` (OPS-051, OPS-149 to OPS-151, OPS-155, BAK-030)

@@ -64,6 +64,7 @@ func TestBAK029TheOperatorUnlocksTheCAFromATerminal(t *testing.T) {
 	}
 
 	fc.status.Sealed = false
+	fc.status.CanSign = true
 	out.Reset()
 	if code := runCACustody(t.Context(), []string{"status"}, &out, &errOut, f.home); code != exitOK ||
 		!strings.Contains(out.String(), "unlocked") {
@@ -72,5 +73,33 @@ func TestBAK029TheOperatorUnlocksTheCAFromATerminal(t *testing.T) {
 
 	if code := runCACustody(t.Context(), []string{"open-sesame"}, &out, &errOut, f.home); code != exitUsage {
 		t.Fatalf("an unknown verb: exit %d", code)
+	}
+}
+
+// CLI-021 (PROPOSED for doc 07's TC-CLI) — `innsegl ca-custody status` on an
+// unsealed store whose CA token is dead says the CA cannot sign, prints the
+// custodian's reason, and exits non-zero (#582). Unsealed is not "can sign".
+func TestCLI021StatusOnADeadTokenSaysTheCACannotSign(t *testing.T) {
+	f := newConnectFixture(t)
+	f.connectServed(t, nil)
+	const reason = "the CA's token was refused by the store"
+	fc := &fakeCustodian{status: cacustody.Status{Initialized: true, Sealed: false, CanSign: false, Reason: reason}}
+	h := caCustodyHandler(fc.server(t).URL, operatorMachine(), newBackupLimiter(nil), newServeLog(os.Stderr))
+	f.core.Mux.Handle(coreCACustodyPath, withInstallation("inst-1", h))
+	f.core.Mux.Handle(coreCACustodyPath+"/", withInstallation("inst-1", h))
+
+	var out, errOut bytes.Buffer
+	code := runCACustody(t.Context(), []string{"status"}, &out, &errOut, f.home)
+	if code == exitOK || !strings.Contains(out.String(), reason) || strings.Contains(out.String(), "the CA can sign") {
+		t.Fatalf("status of an unsealed CA with a dead token: exit %d\n%s%s", code, out.String(), errOut.String())
+	}
+
+	// A core that predates the check reports no answer at all: that is not
+	// a CA that can sign either.
+	fc.status = cacustody.Status{Initialized: true}
+	out.Reset()
+	code = runCACustody(t.Context(), []string{"status"}, &out, &errOut, f.home)
+	if code == exitOK || !strings.Contains(out.String(), "does not say") {
+		t.Fatalf("status from a core that does not report can-sign: exit %d\n%s", code, out.String())
 	}
 }

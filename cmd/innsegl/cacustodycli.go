@@ -18,13 +18,14 @@ import (
 
 // `innsegl ca-custody` (ADR-0076), on the operator's machine:
 //
-//	status   is the core's CA key store sealed?
+//	status   can the core's CA sign? (sealed, or unsealed with the reason it cannot)
 //	unlock   if it is, open its unlock material (Touch ID) and send it back
 //
 // The client service does the same on its own once a minute; this is the
 // terminal's way to it.
 
-// exitCACustodySealed: status found the CA sealed, so it cannot sign.
+// exitCACustodySealed: status found that the CA cannot sign: the store is
+// sealed, or its token or key is not usable (the reason is printed).
 const exitCACustodySealed = 28
 
 const caCustodyUsage = `Usage:
@@ -75,6 +76,13 @@ func runCACustody(ctx context.Context, args []string, stdout, stderr io.Writer, 
 			if st.Error != "" {
 				fprintf(stdout, "ca custody: %s\n", st.Error)
 			}
+			return exitCACustodySealed
+		case !st.CanSign:
+			reason := st.Reason
+			if reason == "" {
+				reason = "the core does not say whether its CA can sign; update the core"
+			}
+			fprintf(stdout, "ca custody: unlocked, but the CA CANNOT sign: %s\n", reason)
 			return exitCACustodySealed
 		default:
 			fprintf(stdout, "ca custody: unlocked; the CA can sign\n")

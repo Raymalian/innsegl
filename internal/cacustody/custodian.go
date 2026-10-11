@@ -5,7 +5,10 @@ package cacustody
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -48,10 +51,15 @@ var errNotAccepted = errors.New("ca custody: the unlock material was not accepte
 
 // Status is the custodian's answer to "can the CA sign".
 type Status struct {
-	Initialized  bool   `json:"initialized"`
-	Sealed       bool   `json:"sealed"`
-	TokenPresent bool   `json:"token_present"`
-	Error        string `json:"error,omitempty"`
+	Initialized bool `json:"initialized"`
+	Sealed      bool `json:"sealed"`
+	// CanSign is the answer, tested rather than assumed: the store is
+	// unsealed, the CA's token is alive, it reads the CA key, and that key is
+	// the one in the certificate the CA presents.
+	CanSign bool `json:"can_sign"`
+	// Reason says why CanSign is false. Empty when it is true.
+	Reason string `json:"reason,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 // Custodian holds the CA key store's custody on the core: it initialises the
@@ -67,6 +75,10 @@ type Custodian struct {
 	TokenPath string
 	// Key is the transit key the CA signs with.
 	Key string
+	// ChainPath is the certificate chain the CA presents (chain.pem). Status
+	// requires the store's key to be the one in its first certificate. Empty
+	// skips that check.
+	ChainPath string
 	// Recipients are who can open the unlock material: the operator's.
 	Recipients []age.Recipient
 	// Log receives one line per event, never a secret.
@@ -182,20 +194,115 @@ func (c *Custodian) Material() ([]byte, error) {
 	return b, nil
 }
 
-// Status reports whether the CA can sign, as far as the custodian can tell.
+// Status reports whether the CA can sign, by testing each thing signing
+// needs, in order: the store unsealed, the CA's token alive, the CA key
+// readable with that token, and that key the one in the certificate the CA
+// presents. It makes no signature. It is computed on every call, so a token
+// the store stops accepting shows at the next call (#582).
 func (c *Custodian) Status(ctx context.Context) Status {
 	var out Status
 	st, err := c.Store.SealStatus(ctx)
 	if err != nil {
 		out.Error = err.Error()
 		out.Sealed = true
-	} else {
-		out.Initialized, out.Sealed = st.Initialized, st.Sealed
+		out.Reason = "the store is not answering"
+		return out
 	}
-	if b, err := os.ReadFile(c.TokenPath); err == nil && len(b) > 0 {
-		out.TokenPresent = true
+	out.Initialized, out.Sealed = st.Initialized, st.Sealed
+	switch {
+	case !st.Initialized:
+		out.Reason = "the store is not initialised"
+	case st.Sealed:
+		out.Reason = "the store is sealed; the operator's machine unlocks it"
+	default:
+		out.Reason = c.signingProblem(ctx)
+		out.CanSign = out.Reason == ""
 	}
 	return out
+}
+
+// signingProblem answers why an unsealed store's CA cannot sign, or "".
+func (c *Custodian) signingProblem(ctx context.Context) string {
+	tok, err := os.ReadFile(c.TokenPath)
+	if err != nil || len(tok) == 0 {
+		return "the CA has no token yet"
+	}
+	ttl, err := c.Store.TTL(ctx, string(tok))
+	switch {
+	case errors.Is(err, ErrRefused):
+		return "the CA's token was refused by the store"
+	case err != nil:
+		return "the store did not answer for the CA's token: " + err.Error()
+	case ttl <= 0:
+		return "the CA's token has expired"
+	}
+	pub, err := c.Store.PublicKey(ctx, string(tok), c.Key)
+	switch {
+	case errors.Is(err, ErrRefused):
+		return fmt.Sprintf("the CA's token cannot read the CA key %q", c.Key)
+	case err != nil:
+		return fmt.Sprintf("reading the CA key %q: %v", c.Key, err)
+	}
+	return c.chainProblem(pub)
+}
+
+// chainProblem compares the store's key, as PEM, with the first certificate
+// of the chain the CA presents: the check Fulcio makes at start, made
+// continuously. No chain yet is no problem: the bootstrap mints it once the
+// custodian is ready.
+func (c *Custodian) chainProblem(storePEM string) string {
+	if c.ChainPath == "" {
+		return ""
+	}
+	chain, err := os.ReadFile(c.ChainPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	if err != nil {
+		return fmt.Sprintf("the CA's certificate chain %s: %v", c.ChainPath, err)
+	}
+	cert, err := firstCertificate(chain)
+	if err != nil {
+		return fmt.Sprintf("the CA's certificate chain %s: %v", c.ChainPath, err)
+	}
+	pub, err := parsePublicKeyPEM(storePEM)
+	if err != nil {
+		return fmt.Sprintf("the CA key %q: %v", c.Key, err)
+	}
+	if !pub.Equal(cert.PublicKey) {
+		return fmt.Sprintf("the CA key %q in the store is not the key in the certificate the CA presents (%s): "+
+			"they have drifted, and Fulcio refuses to start on them", c.Key, c.ChainPath)
+	}
+	return ""
+}
+
+func firstCertificate(chain []byte) (*x509.Certificate, error) {
+	for rest := chain; ; {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			return nil, errors.New("holds no certificate")
+		}
+		if block.Type == "CERTIFICATE" {
+			return x509.ParseCertificate(block.Bytes)
+		}
+	}
+}
+
+func parsePublicKeyPEM(s string) (interface{ Equal(crypto.PublicKey) bool }, error) {
+	block, _ := pem.Decode([]byte(s))
+	if block == nil {
+		return nil, errors.New("the store's public key is not PEM")
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	eq, ok := pub.(interface{ Equal(crypto.PublicKey) bool })
+	if !ok {
+		return nil, fmt.Errorf("the store's public key is a %T", pub)
+	}
+	return eq, nil
 }
 
 // Unlock unseals the store with m, logs the CA in with m, and revokes the
@@ -252,24 +359,30 @@ func (c *Custodian) Renew(ctx context.Context) error {
 	return c.Store.RenewSelf(ctx, snap)
 }
 
-// RunRenewer renews the CA's token every period until ctx ends. A failure
-// is logged once and tried again next time: a sealed store answers nothing
-// until it is unlocked, and the unlock writes a fresh token anyway.
+// RunRenewer renews the CA's token at once, then every period until ctx
+// ends. Renewing at start is what keeps the token alive across custodians
+// recreated more often than every (#582). A failure is logged at once, and
+// again only when it changes: a sealed store answers nothing until it is
+// unlocked, and the unlock writes a fresh token anyway.
 func (c *Custodian) RunRenewer(ctx context.Context, every time.Duration) {
 	last := ""
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(every):
-		}
 		err := c.Renew(ctx)
 		switch {
 		case err == nil:
 			last = ""
 		case err.Error() != last:
 			last = err.Error()
-			c.logf("renewing the CA's token: %v", err)
+			if errors.Is(err, ErrRefused) {
+				c.logf("the CA's token was refused by the store: the CA cannot sign until it has a new token")
+			} else {
+				c.logf("renewing the CA's token: %v", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
 		}
 	}
 }
